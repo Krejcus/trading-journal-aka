@@ -152,6 +152,18 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Claude, companion build 7 — ozubené kolo bez focus ringu)
+
+Uživatel nahlásil modrý rámeček kolem nového tlačítka nastavení. Příčina:
+SwiftUI `Menu(.borderlessButton)` je AppKit pop-up button s vlastním focus
+ringem, který `focusEffectDisabled()` na hostovaném kořeni neovlivní, a po
+otevření popoveru byl prvním fokusovatelným prvkem. Náhrada: `NSViewRepresentable`
+s `NSButton` (`focusRingType = .none`, bordered=false) a nativním `NSMenu`
+se čtyřmi stavovými položkami nad `CompanionSettings`; vzhled i chování
+přepínačů beze změny. Release build 7 + build-for-testing prošly, codesign
+strict OK, build 6 zálohován, appka vyměněna a autostart znovu bootstrapován.
+Jen `macos/` a `docs/`, bez zásahu do serveru, PWA, brokeru či copieru.
+
 ### 2026-09-03 (Claude + uživatel, nasazení companion build 6 s auto-otevřením)
 
 Po dvou kolech Codexu (implementace §11 + opravy z nezávislého review: sekce

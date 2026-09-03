@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct StatusDot: View {
@@ -66,30 +67,75 @@ struct StatusHeader: View {
     }
 }
 
-private struct CompanionSettingsMenu: View {
+/// Ozubené kolo v hlavičce. Záměrně AppKit `NSButton` + `NSMenu` místo SwiftUI
+/// `Menu`: pop-up button pod SwiftUI `Menu` si kreslí vlastní systémový focus
+/// ring, který `focusEffectDisabled()` na kořeni neovlivní, takže po otevření
+/// popoveru dostával modrý rámeček. `NSButton` s `focusRingType = .none` ho
+/// nemá a nativní menu s fajfkami vypadá stejně jako předtím.
+private struct CompanionSettingsMenu: NSViewRepresentable {
     @Environment(\.alphaTradeTheme) private var theme
     @ObservedObject var settings: CompanionSettings
 
-    var body: some View {
-        Menu {
-            Toggle("Auto-otevřít při změně stavu", isOn: $settings.autoOpen)
-            Toggle("I při zlepšení", isOn: $settings.includeImprovements)
-            Divider()
-            Toggle("Nativní notifikace", isOn: $settings.nativeNotifications)
-            Toggle("Zvuk při zhoršení", isOn: $settings.worseningSound)
-        } label: {
-            Image(systemName: "gearshape")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(theme.secondaryText)
-                .frame(width: 22, height: 22)
-                .contentShape(Rectangle())
+    func makeCoordinator() -> Coordinator {
+        Coordinator(settings: settings)
+    }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(frame: NSRect(x: 0, y: 0, width: 22, height: 22))
+        button.bezelStyle = .inline
+        button.isBordered = false
+        button.focusRingType = .none
+        button.setButtonType(.momentaryChange)
+        button.imagePosition = .imageOnly
+        let config = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+        button.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Nastavení upozornění")?
+            .withSymbolConfiguration(config)
+        button.toolTip = "Nastavení upozornění"
+        button.setAccessibilityLabel("Nastavení upozornění")
+        button.setAccessibilityIdentifier("alphaTrade.status.settings")
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.showMenu(_:))
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        button.contentTintColor = NSColor(theme.secondaryText)
+        context.coordinator.settings = settings
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSMenuDelegate {
+        var settings: CompanionSettings
+
+        init(settings: CompanionSettings) {
+            self.settings = settings
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Nastavení upozornění")
-        .accessibilityLabel("Nastavení upozornění")
-        .accessibilityIdentifier("alphaTrade.status.settings")
+
+        @objc func showMenu(_ sender: NSButton) {
+            let menu = NSMenu()
+            menu.autoenablesItems = false
+            menu.addItem(item("Auto-otevřít při změně stavu", on: settings.autoOpen, action: #selector(toggleAutoOpen)))
+            menu.addItem(item("I při zlepšení", on: settings.includeImprovements, action: #selector(toggleImprovements)))
+            menu.addItem(.separator())
+            menu.addItem(item("Nativní notifikace", on: settings.nativeNotifications, action: #selector(toggleNotifications)))
+            menu.addItem(item("Zvuk při zhoršení", on: settings.worseningSound, action: #selector(toggleSound)))
+            let origin = NSPoint(x: 0, y: sender.bounds.maxY + 4)
+            menu.popUp(positioning: nil, at: origin, in: sender)
+        }
+
+        private func item(_ title: String, on: Bool, action: Selector) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.state = on ? .on : .off
+            return item
+        }
+
+        @objc private func toggleAutoOpen() { settings.autoOpen.toggle() }
+        @objc private func toggleImprovements() { settings.includeImprovements.toggle() }
+        @objc private func toggleNotifications() { settings.nativeNotifications.toggle() }
+        @objc private func toggleSound() { settings.worseningSound.toggle() }
     }
 }
 

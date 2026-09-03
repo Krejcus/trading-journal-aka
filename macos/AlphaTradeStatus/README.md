@@ -14,7 +14,7 @@ hardened runtime, App Sandbox + outgoing network only). The Supabase migration
 Mac is paired. Build 5 removes the read-only footer note and the system focus
 ring on footer buttons (`focusEffectDisabled()` at the hosted root).
 
-Version 0.2.0 (build 6) is the installed production client (2026-09-03, backup of build 5 kept under ~/Documents/AlphaTrade-backups). It adds
+Version 0.2.0 (build 7) is the installed production client (2026-09-03; backups of builds 5 and 6 kept under ~/Documents/AlphaTrade-backups). Build 7 replaces the SwiftUI `Menu` gear with an AppKit `NSButton` + `NSMenu` so the header no longer shows a system focus ring. It adds
 three-second transition settling, a 30-second auto-open rate limit, targeted
 section/row emphasis, transient 60/8-second popovers, native notifications,
 and four local `UserDefaults` switches. Notifications have their own
