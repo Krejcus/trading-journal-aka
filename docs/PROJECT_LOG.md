@@ -56,6 +56,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Otevřené otázky
 
+- [ ] **Automatická post-connect recovery selže, když follower chybí v OAuth**
+      (3. 9. 05:45:24 UTC, worker 03d1fc5f): po startu s breached `63338752`, který
+      už není v žádném OAuth adresáři, skončila recovery vlna „nepodařilo se
+      ověřit stav účtů“ bez auditního důvodu, zatímco ruční `reconcile` z CLI
+      (routing předá optional skip) prošel. Podezření: `runConnectionRecovery`
+      volá reconciliation bez `missingOptionalAccountIds`, takže nezpůsobilý
+      chybějící follower je „missing required“. Fix: recovery má použít stejný
+      optional-skip vstup jako CLI/UI cesta a při selhání zapsat audit s důvodem.
+      Delegovat Codexu s regresí.
 - [x] **Násobek 2× „sám“ přeskočil na funded účet při změně leadera** —
       VYŘEŠENO lokálně 3. 9. (zápis níže; změna zatím není commitnutá ani
       nasazená). Původní incident (2. 9.,
