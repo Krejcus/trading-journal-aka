@@ -184,6 +184,7 @@ describe('bootstrapCopierRuntime', () => {
     expect(controller.status().stuckOutbox).toBe(true);
     await expect(controller.reconcile()).resolves.toEqual({
       divergentAccounts: [], workingOrderAccounts: [],
+      authoritativelyClean: true, missingAccounts: [],
     });
     expect(controller.status().stuckOutbox).toBe(false);
     expect((await store.load()).osoOutbox[0]).toMatchObject({
@@ -713,6 +714,7 @@ describe('bootstrapCopierRuntime', () => {
 
     await expect(controller.reconcile()).resolves.toEqual({
       divergentAccounts: [200], workingOrderAccounts: [],
+      authoritativelyClean: false, missingAccounts: [],
     });
     expect(() => controller.arm()).toThrow();
     controller.stop();
@@ -749,7 +751,10 @@ describe('bootstrapCopierRuntime', () => {
     broker.setConnected(true);
     await controller.waitForIdle();
     const reconciliation = await controller.reconcile();
-    expect(reconciliation).toEqual({ divergentAccounts: [200], workingOrderAccounts: [200] });
+    expect(reconciliation).toEqual({
+      divergentAccounts: [200], workingOrderAccounts: [200],
+      authoritativelyClean: false, missingAccounts: [],
+    });
     expect(() => controller.arm()).toThrow();
     controller.stop();
   });
@@ -771,6 +776,7 @@ describe('bootstrapCopierRuntime', () => {
 
     await expect(controller.reconcile()).resolves.toEqual({
       divergentAccounts: [], workingOrderAccounts: [200],
+      authoritativelyClean: false, missingAccounts: [],
     });
     expect(() => controller.arm()).toThrow('bez pracovních příkazů');
     controller.stop();
@@ -794,6 +800,7 @@ describe('bootstrapCopierRuntime', () => {
 
     await expect(controller.reconcile()).resolves.toEqual({
       divergentAccounts: [], workingOrderAccounts: [],
+      authoritativelyClean: true, missingAccounts: [],
     });
     expect(() => controller.arm()).toThrow('všechny zapojené účty flat');
     expect(controller.status().armed).toBe(false);
@@ -1479,6 +1486,7 @@ describe('bootstrapCopierRuntime', () => {
 
     await expect(controller.reconcile({ missingOptionalAccountIds: [200] })).resolves.toEqual({
       divergentAccounts: [], workingOrderAccounts: [],
+      authoritativelyClean: true, missingAccounts: [200],
     });
     expect(controller.status()).toMatchObject({
       armed: false,

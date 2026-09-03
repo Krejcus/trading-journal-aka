@@ -147,6 +147,11 @@ export interface CopierControllerStatus {
     inactiveAccounts: number[];
     readOnlyFollowerAccounts: number[];
   };
+  /** Neukončená durable epocha, ve které může follower stále vlastnit kopii. */
+  unverifiableFollowerOwnership?: Array<{
+    accountId: number;
+    epochIds: string[];
+  }>;
   lastError: string | null;
   /** Poslední odzbrojení v tomto běhu; additivní kvůli starším klientům. */
   lastDisarm?: CopierDisarmRecord;
@@ -210,6 +215,8 @@ export interface CopierGroupReconfigurationOptions {
    * capability + flat + no-working preflightu.
    */
   missingOptionalAccountIds?: readonly number[];
+  /** Explicitní operátorské převzetí odpovědnosti za neověřitelnou kopii. */
+  waiveUnverifiableFollowerOwnership?: true;
 }
 
 export interface CopierAutoClose {
@@ -280,6 +287,8 @@ export interface CopierRuntimeController {
   reconcile(options?: CopierReconciliationOptions): Promise<{
     divergentAccounts: number[];
     workingOrderAccounts: number[];
+    authoritativelyClean: boolean;
+    missingAccounts: number[];
   }>;
   /**
    * Autoritativně ověří jediný účet u brokera bez změny execution skupiny.
@@ -875,6 +884,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   let safetyGeneration = 0;
   let eventTail: Promise<void> = Promise.resolve();
   let reconciliationTail: Promise<void> = Promise.resolve();
+  let reconciliationRequestsPending = 0;
   const admittedLeaderOrders = new Set<string>();
   const admittedFlatExitOrders = new Set<string>();
   const leaderPositions = new Map<string, number>();
@@ -902,6 +912,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   /** Po reconnectu/bootu se má rozhodnout o osudu otevřených kopií. */
   let pendingConnectionRecovery = false;
   let recoveryInFlight = false;
+  let connectionRecoveryMissingOwnership: Array<{
+    accountId: number;
+    epochId: string;
+  }> = [];
   let bootRecoveryChecked = false;
   let lastResumeOffer: { at: number } | null = null;
   const pendingBracketTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1415,6 +1429,43 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       && epoch.leaderAccountId === group.leaderAccountId
       && epoch.symbol === symbol
     )) ?? null;
+
+  const unfinishedLeaderFlatPhase = (phase: LeaderFlatEpoch['phase']) => (
+    phase === 'open'
+    || phase === 'grace'
+    || phase === 'waiting-inflight'
+    || phase === 'closing'
+    || phase === 'blocked'
+  );
+
+  // Guard ukládá jen `confirmed | unproven`, nikoli `none`. Pozitivní
+  // lineage je tedy `confirmed`; `eligibleAtOpen:false + unproven` je známý
+  // neparticipant, který při otevření kopii dostat nemohl.
+  const isLeaderFlatLineageParticipant = (follower: LeaderFlatFollowerOwnership) => (
+    follower.eligibleAtOpen === true || follower.copyLineage === 'confirmed'
+  );
+
+  const unverifiableFollowerOwnership = (
+    accountIds?: ReadonlySet<number>,
+  ): Array<{ accountId: number; epochId: string }> => {
+    const result: Array<{ accountId: number; epochId: string }> = [];
+    for (const epoch of currentRuntime().state.safety.leaderExposureEpochs ?? []) {
+      if (
+        epoch.groupId !== group.id
+        || epoch.leaderAccountId !== group.leaderAccountId
+        || !unfinishedLeaderFlatPhase(epoch.phase)
+      ) continue;
+      for (const follower of epoch.followers) {
+        if (
+          isLeaderFlatLineageParticipant(follower)
+          && (accountIds == null || accountIds.has(follower.accountId))
+        ) result.push({ accountId: follower.accountId, epochId: epoch.id });
+      }
+    }
+    return result.sort((left, right) => (
+      left.accountId - right.accountId || left.epochId.localeCompare(right.epochId)
+    ));
+  };
 
   const persistLeaderExposureEpoch = async (epoch: LeaderFlatEpoch) => {
     const safety = currentRuntime().state.safety;
@@ -2680,47 +2731,105 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    */
   const runConnectionRecovery = async () => {
     if (!pendingConnectionRecovery || stopped) return;
-    pendingConnectionRecovery = false;
     // `armExpiryFlatten: off` vypíná jen automatickou broker akci, nikoli
     // povinnou read-only kontrolu po reconnectu/resyncu.
-    if (gate.killSwitch || group.leaderAccountId == null) return;
+    if (gate.killSwitch || group.leaderAccountId == null) {
+      pendingConnectionRecovery = false;
+      connectionRecoveryMissingOwnership = [];
+      return;
+    }
     if (!gate.connected) {
       pendingConnectionRecovery = true;
       return;
     }
+    connectionRecoveryMissingOwnership = [];
     const wait = options.wait ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
-    // Stejný optional-skip vstup jako ruční Kontrola pozic: follower, který
-    // právě není v žádném OAuth adresáři, se nesmí routovat (router by hodil
-    // chybu), ale jeho absence je pro breached/DLL účet legitimní.
-    let missingOptionalAccountIds: readonly number[] = [];
     let lastRecoveryError: string | null = null;
-    if (options.resolveMissingOptionalAccountIds) {
-      try {
-        const followerIds = new Set(group.followers.map(follower => follower.accountId));
-        missingOptionalAccountIds = [...new Set(await options.resolveMissingOptionalAccountIds(group))]
-          .filter(accountId => followerIds.has(accountId) && accountId !== group.leaderAccountId);
-      } catch (reason) {
-        // Bez optional-skip vstupu pokračujeme s plným routingem; důvod se
-        // nesmí ztratit — jinak je pět tichých pokusů nečitelných (3. 9.).
-        missingOptionalAccountIds = [];
-        lastRecoveryError = `optional-skip resolver: ${errorOf(reason).message}`;
-        options.onAudit?.([{
-          at: clock(), leaderEventId: 'connection-recovery', kind: 'blocked',
-          reason: `connection-recovery: ${lastRecoveryError}`,
-        }]);
-      }
-    }
-    let reconciliation: { divergentAccounts: number[]; workingOrderAccounts: number[] } | null = null;
+    const resolveMissing = async (): Promise<number[]> => {
+      if (!options.resolveMissingOptionalAccountIds) return [];
+      const followerIds = new Set(group.followers.map(follower => follower.accountId));
+      return [...new Set(await options.resolveMissingOptionalAccountIds(group))]
+        .filter(accountId => followerIds.has(accountId) && accountId !== group.leaderAccountId)
+        .sort((left, right) => left - right);
+    };
+    const sameAccounts = (left: readonly number[], right: readonly number[]) => (
+      left.length === right.length && left.every((accountId, index) => accountId === right[index])
+    );
+    let reconciliation: ReconciliationResult | null = null;
     for (let attempt = 0; attempt < 5 && !stopped; attempt += 1) {
       if (attempt > 0) await wait(2_000);
       if (!gate.connected) {
         pendingConnectionRecovery = true;
         return;
       }
+      let missingBefore: number[];
       try {
-        reconciliation = await performReconciliation({
-          missingOptionalAccountIds: [...missingOptionalAccountIds],
+        // Routing/OAuth stav se obnovuje před KAŽDÝM pokusem. Jediný
+        // snapshot callbacku nesmí zestárnout pro celou recovery vlnu.
+        missingBefore = await resolveMissing();
+      } catch (reason) {
+        lastRecoveryError = `optional-skip resolver: ${errorOf(reason).message}`;
+        options.onAudit?.([{
+          at: clock(), leaderEventId: 'connection-recovery', kind: 'blocked',
+          reason: `connection-recovery: ${lastRecoveryError}`,
+        }]);
+        continue;
+      }
+      try {
+        const candidate = await performReconciliation({
+          missingOptionalAccountIds: [...missingBefore],
         });
+        const missingAfter = await resolveMissing();
+        if (!sameAccounts(missingBefore, missingAfter)) {
+          invalidateReconciliation();
+          lastRecoveryError = `optional-skip seznam se změnil (${missingBefore.join(',') || 'none'} -> ${missingAfter.join(',') || 'none'}); snapshot byl zahozen`;
+          options.onAudit?.([{
+            at: clock(), leaderEventId: 'connection-recovery', kind: 'blocked',
+            reason: `connection-recovery: ${lastRecoveryError}`,
+          }]);
+          continue;
+        }
+        if (!candidate.authoritativelyClean) {
+          const missingOwnership = unverifiableFollowerOwnership(
+            new Set(candidate.missingAccounts),
+          );
+          // Kompletní a generation-stable divergence je stále platný
+          // snapshot pro stávající detect-only / leader-flat guard větve.
+          // Nesmí ale shodit pending ani provést clean-recovery úklid.
+          if (
+            missingOwnership.length === 0
+            && candidate.generationUnchanged
+            && candidate.workingOrderAccounts.length === 0
+            && candidate.divergentAccounts.length > 0
+          ) {
+            reconciliation = candidate;
+            break;
+          }
+          connectionRecoveryMissingOwnership = missingOwnership;
+          const details = [
+            missingOwnership.length > 0
+              ? `chybí lineage participants ${missingOwnership.map(item => `${item.accountId} (epocha ${item.epochId})`).join(', ')}`
+              : '',
+            candidate.divergentAccounts.length > 0
+              ? `divergence=${candidate.divergentAccounts.join(',')}`
+              : '',
+            candidate.workingOrderAccounts.length > 0
+              ? `working=${candidate.workingOrderAccounts.join(',')}`
+              : '',
+          ].filter(Boolean);
+          lastRecoveryError = details.join('; ')
+            || 'safety generation se během broker I/O změnila nebo snapshot nebyl kompletní';
+          pendingConnectionRecovery = true;
+          options.onAudit?.([{
+            at: clock(), leaderEventId: 'connection-recovery', kind: 'blocked',
+            reason: `connection-recovery: ${lastRecoveryError}; runtime zůstává DISARMED`,
+          }]);
+          failClosed(new Error(`Connection recovery není autoritativně čistá: ${lastRecoveryError}`), {
+            autoClose: false,
+          });
+          return;
+        }
+        reconciliation = candidate;
         break;
       } catch (reason) {
         // Spojení je čerstvé — pár pokusů, pak poctivé přiznání níže.
@@ -2741,6 +2850,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         + (lastRecoveryError ? ` (${lastRecoveryError})` : ''),
       ));
       return;
+    }
+    if (reconciliation.authoritativelyClean) {
+      pendingConnectionRecovery = false;
+      connectionRecoveryMissingOwnership = [];
+    } else {
+      pendingConnectionRecovery = true;
     }
     const guardedSymbols = await resumeLeaderFlatEpochsAfterSnapshot();
     if (!hasFollowerExposure()) {
@@ -2978,6 +3093,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
                 || epoch.phase === 'grace'
                 || epoch.phase === 'waiting-inflight'
                 || epoch.phase === 'closing'
+                || epoch.phase === 'blocked'
               )
             )) === true;
           if (
@@ -3674,6 +3790,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   type ReconciliationResult = {
     divergentAccounts: number[];
     workingOrderAccounts: number[];
+    authoritativelyClean: boolean;
+    missingAccounts: number[];
+    generationUnchanged: boolean;
   };
 
   /**
@@ -3685,10 +3804,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     reconciliationOptions: CopierReconciliationOptions & { clearLastError?: boolean } = {},
   ): Promise<ReconciliationResult> {
     const requestedGeneration = safetyGeneration;
-    const run = reconciliationTail.then(() => runReconciliation(
+    reconciliationRequestsPending += 1;
+    const reconciliation = reconciliationTail.then(() => runReconciliation(
       reconciliationOptions,
       requestedGeneration,
     ));
+    const run = reconciliation.finally(() => {
+      reconciliationRequestsPending -= 1;
+    });
     reconciliationTail = run.then(() => undefined, () => undefined);
     return run;
   }
@@ -3714,6 +3837,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const accountIds = [group.leaderAccountId, ...group.followers.map(item => item.accountId)];
       const eligibilityNow = clock();
       const followerIds = new Set(group.followers.map(item => item.accountId));
+      const lineageParticipantIds = new Set(
+        unverifiableFollowerOwnership().map(item => item.accountId),
+      );
       const missingOptionalAccountIds = new Set(reconciliationOptions.missingOptionalAccountIds ?? []);
       for (const accountId of missingOptionalAccountIds) {
         if (!Number.isSafeInteger(accountId) || !followerIds.has(accountId)) {
@@ -3780,7 +3906,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // BREACHED a stále platný DLL jsou známé exclusions. Expirující DLL
         // už eligibilityAt převedlo na `unverifiable`, takže se načte a po
         // úspěšném snapshotu může bezpečně vrátit do active.
-        return state !== 'breached' && state !== 'dll-locked';
+        return lineageParticipantIds.has(accountId)
+          || (state !== 'breached' && state !== 'dll-locked');
       });
       const snapshots = await Promise.all(snapshotAccountIds.map(async accountId => {
         const [positions, orders] = await Promise.all([
@@ -3790,6 +3917,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return { accountId, positions, orders };
       }));
       const byAccount = new Map(snapshots.map(item => [item.accountId, item]));
+      const missingAccounts = accountIds.filter(accountId => !byAccount.has(accountId));
+      const missingLineageParticipants = unverifiableFollowerOwnership(
+        new Set(missingAccounts),
+      );
       positionsByAccount.clear();
       for (const snapshot of snapshots) {
         positionsByAccount.set(snapshot.accountId, new Map(
@@ -3848,7 +3979,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // Účet s autoritativní eligibility exclusion není participantem
         // copieru. Jeho chybějící snapshot proto není divergence zdravých
         // participantů; po reaktivaci se automaticky vrátí do této kontroly.
-        if (ineligibleAfterReactivation.has(follower.accountId)) continue;
+        if (
+          ineligibleAfterReactivation.has(follower.accountId)
+          && !lineageParticipantIds.has(follower.accountId)
+        ) continue;
         const followerPositions = new Map(
           (byAccount.get(follower.accountId)?.positions ?? []).map(item => [item.symbol, item.netQuantity]),
         );
@@ -3889,24 +4023,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         }
       }
       gate = { ...gate, divergentAccounts: divergent, sequenceBroken: false, armed: false };
-      const sameSafetyGeneration = safetyGeneration === generationAtStart;
+      const sameSafetyGeneration = requestedGeneration === generationAtStart
+        && safetyGeneration === generationAtStart;
       positionCheckComplete = sameSafetyGeneration
         && divergent.size === 0
-        && workingOrderAccounts.size === 0;
+        && workingOrderAccounts.size === 0
+        && missingLineageParticipants.length === 0;
       if (positionCheckComplete) {
         await acknowledgeTerminalRejectsAfterReconciliation();
-        // Acknowledge může samo čekat na durable commit. Kill switch nebo
-        // nový broker incident během tohoto awaitu musí mít stále přednost.
-        if (safetyGeneration !== generationAtStart) {
-          positionCheckComplete = false;
-        } else {
-          source.acknowledgeReconciliation();
-          if (
-            reconciliationOptions.clearLastError
-            && requestedGeneration === generationAtStart
-            && !gate.killSwitch
-          ) lastError = null;
-        }
       }
       await resolveRejectedExecutions({
         accountIds: group.followers
@@ -3920,9 +4044,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         at: clock(),
         detail: 'autoritativní reconciliation potvrdila followera flat',
       });
+      const generationUnchanged = requestedGeneration === generationAtStart
+        && safetyGeneration === generationAtStart;
+      const authoritativelyClean = positionCheckComplete && generationUnchanged;
+      positionCheckComplete = authoritativelyClean;
+      if (authoritativelyClean) {
+        source.acknowledgeReconciliation();
+        if (reconciliationOptions.clearLastError && !gate.killSwitch) lastError = null;
+      }
       return {
         divergentAccounts: [...divergent],
         workingOrderAccounts: [...workingOrderAccounts],
+        authoritativelyClean,
+        missingAccounts,
+        generationUnchanged,
       };
   }
 
@@ -3974,43 +4109,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ]);
       const topologyChanged = currentTopology.size !== nextTopology.size
         || [...currentTopology].some(accountId => !nextTopology.has(accountId));
-      if (nextGroup.leaderAccountId === group.leaderAccountId && !topologyChanged && !switchOptions.forceEpoch) {
-        group = nextGroup;
-        invalidateReconciliation();
-        return;
-      }
-      if (!gate.connected) {
-        throw new Error(`${operation} nelze potvrdit bez živého broker syncu workeru`);
-      }
-      if (currentStuckOperations().length > 0 || hasBrokerUncertainOutbox()) {
-        throw new Error(`${operation} blokuje nevyřešený durable outbox`);
-      }
-      const pendingReasons = [
-        pendingBracketTimers.size > 0 ? 'bracket correlation' : '',
-        pendingOsoTimers.size > 0 || pendingOsoEvents.size > 0 || pendingOsoFlushes.size > 0
-          ? 'OSO correlation'
-          : '',
-        pendingFollowerTransitions.size > 0 ? 'follower transition' : '',
-        pendingFollowerMagnitudeChecks.size > 0 ? 'follower magnitude check' : '',
-        sweepingProtectiveLegs.size > 0 ? 'protective sweep' : '',
-        leaderFlatGuardTimers.size > 0 ? 'leader-flat guard' : '',
-        autoCloseInFlight ? 'auto-close' : '',
-        recoveryInFlight || pendingConnectionRecovery ? 'connection recovery' : '',
-        cooldownPending ? 'cooldown transition' : '',
-        dayLockPendingReason ? 'day-lock transition' : '',
-      ].filter(Boolean);
-      if (pendingReasons.length > 0) {
-        throw new Error(`${operation} blokuje rozpracovaný lifecycle: ${pendingReasons.join(', ')}`);
-      }
-      // Stejná session-aware statistika jako všude jinde: lot z už skončené
-      // session (po 17:00 CT) je jen historie, ne důkaz otevřené expozice.
-      // Autoritativní flat/no-working preflight následuje níže tak jako tak.
-      const openLots = currentDailyStats(clock()).openLots
-        .filter(lot => lot.netQuantity !== 0);
-      if (openLots.length > 0) {
-        throw new Error(`${operation} blokuje otevřená durable pozice leadera`);
-      }
-
       const accountIds = [...new Set([
         group.leaderAccountId,
         ...group.followers.map(item => item.accountId),
@@ -4031,6 +4129,62 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           throw new Error(`${operation} dostala neplatný chybějící optional follower účet ${accountId}`);
         }
       }
+      if (
+        switchOptions.waiveUnverifiableFollowerOwnership !== undefined
+        && switchOptions.waiveUnverifiableFollowerOwnership !== true
+      ) throw new Error(`${operation} dostala neplatný ownership waiver`);
+      const ownershipRisks = unverifiableFollowerOwnership(optionalFollowerIds);
+      if (ownershipRisks.length > 0 && !switchOptions.waiveUnverifiableFollowerOwnership) {
+        throw new Error(ownershipRisks.map(item => (
+          `Účet ${item.accountId} může držet neověřenou kopii z epochy ${item.epochId}; potvrď převzetí odpovědnosti`
+        )).join('. '));
+      }
+      const waivesBlockedRecovery = switchOptions.waiveUnverifiableFollowerOwnership === true
+        && connectionRecoveryMissingOwnership.length > 0
+        && connectionRecoveryMissingOwnership.every(item => ownershipRisks.some(risk => (
+          risk.accountId === item.accountId && risk.epochId === item.epochId
+        )));
+      if (nextGroup.leaderAccountId === group.leaderAccountId && !topologyChanged && !switchOptions.forceEpoch) {
+        group = nextGroup;
+        invalidateReconciliation();
+        return;
+      }
+      if (!gate.connected) {
+        throw new Error(`${operation} nelze potvrdit bez živého broker syncu workeru`);
+      }
+      if (currentStuckOperations().length > 0 || hasBrokerUncertainOutbox()) {
+        throw new Error(`${operation} blokuje nevyřešený durable outbox`);
+      }
+      const pendingReasons = [
+        pendingBracketTimers.size > 0 ? 'bracket correlation' : '',
+        pendingOsoTimers.size > 0 || pendingOsoEvents.size > 0 || pendingOsoFlushes.size > 0
+          ? 'OSO correlation'
+          : '',
+        pendingFollowerTransitions.size > 0 ? 'follower transition' : '',
+        pendingFollowerMagnitudeChecks.size > 0 ? 'follower magnitude check' : '',
+        sweepingProtectiveLegs.size > 0 ? 'protective sweep' : '',
+        [...leaderFlatGuardTimers.keys()].some(epochId => (
+          !ownershipRisks.some(item => item.epochId === epochId)
+        )) ? 'leader-flat guard' : '',
+        autoCloseInFlight ? 'auto-close' : '',
+        recoveryInFlight || (pendingConnectionRecovery && !waivesBlockedRecovery)
+          ? 'connection recovery'
+          : '',
+        cooldownPending ? 'cooldown transition' : '',
+        dayLockPendingReason ? 'day-lock transition' : '',
+      ].filter(Boolean);
+      if (pendingReasons.length > 0) {
+        throw new Error(`${operation} blokuje rozpracovaný lifecycle: ${pendingReasons.join(', ')}`);
+      }
+      // Stejná session-aware statistika jako všude jinde: lot z už skončené
+      // session (po 17:00 CT) je jen historie, ne důkaz otevřené expozice.
+      // Autoritativní flat/no-working preflight následuje níže tak jako tak.
+      const openLots = currentDailyStats(clock()).openLots
+        .filter(lot => lot.netQuantity !== 0);
+      if (openLots.length > 0) {
+        throw new Error(`${operation} blokuje otevřená durable pozice leadera`);
+      }
+
       const requiredAccountIds = accountIds.filter(accountId => !optionalFollowerIds.has(accountId));
       const capabilities = await withLeaderEpochDeadline(
         'leader capability preflight',
@@ -4063,6 +4217,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             : '',
         ].filter(Boolean).join(' ');
         throw new Error(`${operation} vyžaduje všechny staré i nové účty flat a bez příkazů: ${details}`);
+      }
+
+      if (ownershipRisks.length > 0) {
+        options.onAudit?.(ownershipRisks.map(item => ({
+          at: clock(),
+          leaderEventId: `ownership-waiver:${item.epochId}:${item.accountId}`,
+          kind: 'blocked' as const,
+          accountId: item.accountId,
+          reason: `ownership waived by operator: účet ${item.accountId}, epocha ${item.epochId}`,
+        })));
       }
 
       runtime = await processor.mutate(async current => {
@@ -4113,6 +4277,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       lastResumeOffer = null;
       autoCloseEpisodeAttempts = 0;
       pendingConnectionRecovery = false;
+      connectionRecoveryMissingOwnership = [];
       recoveryInFlight = false;
       bootRecoveryChecked = true;
       invalidateReconciliation();
@@ -4275,6 +4440,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Safety metadata může přijet z webu těsně před ARM/SHADOW. Nikdy
       // nesmí za běžícího dispatchu změnit účast bez fail-safe DISARMu.
       gate = { ...gate, armed: false };
+      if (reconciliationRequestsPending > 0) invalidateReconciliation();
       const members = new Set([
         group.leaderAccountId,
         ...group.followers.map(follower => follower.accountId),
@@ -4339,8 +4505,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // reconnect/terminal-fill kontroly incident uživateli neschovávají.
       const result = await performReconciliation({ ...reconciliationOptions, clearLastError: true });
       if (
-        result.divergentAccounts.length === 0
-        && result.workingOrderAccounts.length === 0
+        result.authoritativelyClean
         && pendingConnectionRecovery
         && !recoveryInFlight
         && gate.connected
@@ -4351,7 +4516,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // shodí až po kompletním doběhu; při selhání zůstává pending.
         scheduleConnectionRecovery();
       }
-      return result;
+      return {
+        divergentAccounts: result.divergentAccounts,
+        workingOrderAccounts: result.workingOrderAccounts,
+        authoritativelyClean: result.authoritativelyClean,
+        missingAccounts: result.missingAccounts,
+      };
     },
     async verifyAccountEligibility(accountId) {
       if (!Number.isSafeInteger(accountId) || accountId <= 0) {
@@ -4428,6 +4598,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     updateGroup(nextGroup) {
       // Jakýkoli pokus o změnu konfigurace nejdřív zavře live dispatch.
       gate = { ...gate, armed: false };
+      if (recoveryInFlight || pendingConnectionRecovery || reconciliationRequestsPending > 0) {
+        throw new Error('Změnu konfigurace blokuje probíhající connection recovery/reconciliation');
+      }
       if (nextGroup.id !== group.id) throw new Error('Nelze změnit runtime na jinou copy group');
       assertRuntimeGroup(nextGroup);
       if (nextGroup.leaderAccountId !== group.leaderAccountId) {
@@ -4544,6 +4717,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             readOnlyFollowerAccounts: [...lastOauthPreflight.readOnlyFollowerAccounts],
           },
         } : {}),
+        unverifiableFollowerOwnership: (() => {
+          const byAccount = new Map<number, string[]>();
+          for (const item of unverifiableFollowerOwnership()) {
+            byAccount.set(item.accountId, [...(byAccount.get(item.accountId) ?? []), item.epochId]);
+          }
+          return [...byAccount].map(([accountId, epochIds]) => ({ accountId, epochIds }));
+        })(),
         lastError: lastError?.message ?? null,
         ...(lastDisarm ? { lastDisarm: { ...lastDisarm } } : {}),
         disarmHistory: disarmHistory.map(record => ({ ...record })),

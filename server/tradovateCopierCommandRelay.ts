@@ -106,7 +106,13 @@ const OPERATION_ID_PATTERN = /^[a-zA-Z0-9:_-]{8,120}$/;
  */
 const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object') throw new Error('invalid-relay-command-payload');
-  const command = value as { type?: unknown; groupId?: unknown; accountId?: unknown; operationId?: unknown };
+  const command = value as {
+    type?: unknown;
+    groupId?: unknown;
+    accountId?: unknown;
+    operationId?: unknown;
+    waiveUnverifiableFollowerOwnership?: unknown;
+  };
   if (typeof command.type !== 'string' || !remoteCopyCommands.has(command.type)) {
     throw new Error('unsupported-remote-copy-command');
   }
@@ -122,6 +128,11 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
       throw new Error('invalid-relay-command-payload');
     }
   }
+  if (
+    command.type === 'update-group'
+    && command.waiveUnverifiableFollowerOwnership !== undefined
+    && command.waiveUnverifiableFollowerOwnership !== true
+  ) throw new Error('invalid-relay-command-payload');
   return command as Record<string, unknown>;
 };
 
@@ -182,7 +193,13 @@ const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknow
     };
   }
   if (command.type === 'activate-group') {
-    return { group: validatedRelayGroup((command as { group?: unknown }).group) };
+    const waiver = (command as { waiveUnverifiableFollowerOwnership?: unknown })
+      .waiveUnverifiableFollowerOwnership;
+    if (waiver !== undefined && waiver !== true) throw new Error('invalid-relay-command-payload');
+    return {
+      group: validatedRelayGroup((command as { group?: unknown }).group),
+      ...(waiver === true ? { waiveUnverifiableFollowerOwnership: true } : {}),
+    };
   }
   if (command.type === 'shadow') {
     return {
@@ -216,7 +233,13 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
     };
   }
   if (row.command_type === 'activate-group') {
-    return { type: 'activate-group', group: validatedRelayGroup(row.payload?.group) };
+    const waiver = row.payload?.waiveUnverifiableFollowerOwnership;
+    if (waiver !== undefined && waiver !== true) throw new Error('invalid-relay-command-payload');
+    return {
+      type: 'activate-group',
+      group: validatedRelayGroup(row.payload?.group),
+      ...(waiver === true ? { waiveUnverifiableFollowerOwnership: true } : {}),
+    };
   }
   if (row.command_type === 'shadow') {
     return {

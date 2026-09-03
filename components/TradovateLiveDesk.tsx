@@ -591,6 +591,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
               cooldownUntil={copierUiDemo ? copierUiDemo.cooldownUntil : agentStatus?.controller.entryCooldownUntil ?? 0}
               stuckOperations={copierUiDemo ? copierUiDemo.stuckOperations : agentStatus?.controller.stuckOperations ?? []}
               accountEligibility={effectiveAccountEligibility}
+              unverifiableFollowerOwnership={agentStatus?.controller.unverifiableFollowerOwnership ?? []}
               lastDisarm={copierUiDemo ? undefined : agentStatus?.controller.lastDisarm}
               disarmHistory={copierUiDemo ? [] : agentStatus?.controller.disarmHistory ?? []}
               onVerifyEligibility={async accountId => {

@@ -281,6 +281,7 @@ interface Props {
   /** Operace čekající na ruční kontrolu — blokují ARM a musí být vidět. */
   stuckOperations?: CopierStuckOperation[];
   accountEligibility?: CopierAccountEligibility[];
+  unverifiableFollowerOwnership?: CopierControllerStatus['unverifiableFollowerOwnership'];
   lastDisarm?: CopierDisarmRecord;
   disarmHistory?: CopierDisarmRecord[];
   /** Read-only broker reconciliation for a currently unverifiable account. */
@@ -312,6 +313,7 @@ export interface UnavailableFollowerRemovalPlan {
    * discovery a předá ho controlleru jako `missingOptionalAccountIds`.
    */
   missingOptionalAccountIds: number[];
+  ownershipWarnings: Array<{ accountId: number; epochIds: string[] }>;
 }
 
 export interface PendingUnavailableFollowerRemoval {
@@ -322,6 +324,7 @@ export interface PendingUnavailableFollowerRemoval {
   leaderUnavailableAccountId: number | null;
   error: string | null;
   savedSuccessfully: boolean;
+  ownershipWaiverStep: boolean;
 }
 
 export interface CopyGroupPowerBlockerInput {
@@ -385,6 +388,7 @@ export function unavailableFollowerRemovalPlan(
   group: CopyGroupConfig,
   availableAccountIds: Iterable<number>,
   requestedAccountIds?: Iterable<number>,
+  ownership: readonly { accountId: number; epochIds: readonly string[] }[] = [],
 ): UnavailableFollowerRemovalPlan | null {
   const unavailable = unavailableCopyGroupAccounts(group, availableAccountIds);
   const requested = requestedAccountIds == null ? null : new Set(requestedAccountIds);
@@ -397,6 +401,9 @@ export function unavailableFollowerRemovalPlan(
       followers: group.followers.filter(follower => !removed.has(follower.accountId)),
     },
     missingOptionalAccountIds: removedIds,
+    ownershipWarnings: ownership
+      .filter(item => removed.has(item.accountId))
+      .map(item => ({ accountId: item.accountId, epochIds: [...item.epochIds] })),
   };
 }
 
@@ -524,6 +531,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   cooldownUntil = 0,
   stuckOperations = [],
   accountEligibility = [],
+  unverifiableFollowerOwnership = [],
   lastDisarm,
   disarmHistory = [],
   onVerifyEligibility,
@@ -737,11 +745,17 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       saved: structuredClone(saved),
       editGroup: structuredClone(draft),
       plan: leaderUnavailableAccountId == null
-        ? unavailableFollowerRemovalPlan(draft, snapshot.accounts.map(account => account.id), requestedAccountIds)
+        ? unavailableFollowerRemovalPlan(
+          draft,
+          snapshot.accounts.map(account => account.id),
+          requestedAccountIds,
+          unverifiableFollowerOwnership,
+        )
         : null,
       leaderUnavailableAccountId,
       error: null,
       savedSuccessfully: false,
+      ownershipWaiverStep: false,
     });
   };
 
@@ -948,7 +962,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     }
   };
 
-  const saveGroup = async (group: CopyGroupConfig, onError?: (message: string) => void): Promise<boolean> => {
+  const saveGroup = async (
+    group: CopyGroupConfig,
+    onError?: (message: string) => void,
+    waiveUnverifiableFollowerOwnership = false,
+  ): Promise<boolean> => {
     const exists = groups.some(candidate => candidate.id === group.id);
     const normalizedGroup = group.id === executionGroupId
       ? group
@@ -967,7 +985,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       return false;
     }
     const command: LiveCopyTradingCommand = exists
-      ? { type: 'update-group', group: normalizedGroup }
+      ? {
+        type: 'update-group',
+        group: normalizedGroup,
+        ...(waiveUnverifiableFollowerOwnership
+          ? { waiveUnverifiableFollowerOwnership: true }
+          : {}),
+      }
       : { type: 'create-group', group: normalizedGroup };
     // Editor se smí přepnout na nový leader až po potvrzení execution
     // runtime. Když broker preflight změnu odmítne, runCommand callback
@@ -1002,10 +1026,18 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
   const confirmUnavailableFollowerRemoval = async (plan: UnavailableFollowerRemovalPlan) => {
     if (busyCommand) return;
+    if (plan.ownershipWarnings.length > 0 && !pendingUnavailableFollowerRemoval?.ownershipWaiverStep) {
+      setPendingUnavailableFollowerRemoval(current => current ? {
+        ...current,
+        error: null,
+        ownershipWaiverStep: true,
+      } : current);
+      return;
+    }
     setPendingUnavailableFollowerRemoval(current => current ? { ...current, error: null } : current);
     const saved = await saveGroup(plan.group, message => {
       setPendingUnavailableFollowerRemoval(current => current ? { ...current, error: message } : current);
-    });
+    }, plan.ownershipWarnings.length > 0);
     if (saved) {
       setPendingUnavailableFollowerRemoval(current => current ? {
         ...current,
@@ -3020,7 +3052,9 @@ export const UnavailableFollowerRemovalDialog = ({ state, accountLabel, busy, on
   onConfirm: (plan: UnavailableFollowerRemovalPlan) => void;
   onArm?: () => void;
 }) => {
-  const title = state.source === 'arm' ? 'Skupinu nelze zapnout' : 'Odebrat nedostupné účty?';
+  const title = state.ownershipWaiverStep
+    ? 'Převzít odpovědnost za neověřenou kopii?'
+    : state.source === 'arm' ? 'Skupinu nelze zapnout' : 'Odebrat nedostupné účty?';
   const removedLabels = state.plan?.missingOptionalAccountIds
     .map(accountId => accountLabel(accountId, 'follower')) ?? [];
   const leaderLabel = state.leaderUnavailableAccountId == null
@@ -3036,6 +3070,10 @@ export const UnavailableFollowerRemovalDialog = ({ state, accountLabel, busy, on
       <p className="mt-1.5 text-sm leading-relaxed text-[var(--text-secondary)]">
         {state.savedSuccessfully
           ? 'Skupina je uložená a copier zůstává VYPNUTÝ. Zapnutí je vždy samostatný krok.'
+          : state.ownershipWaiverStep && state.plan
+            ? state.plan.ownershipWarnings.flatMap(item => item.epochIds.map(epochId => (
+              `Účet ${item.accountId} může držet neověřenou kopii z epochy ${epochId}; potvrď převzetí odpovědnosti.`
+            ))).join(' ')
           : leaderLabel
             ? `Leader ${leaderLabel} není v aktuálním OAuth snapshotu. Leader se jedním klikem nikdy nemění ani nemaže; vyber ho ručně v editoru skupiny.`
             : `Ze skupiny ${state.saved.name} se odebere ${removedLabels.join(', ')}. Žádný náhradní účet se nebude automaticky hledat a copier se nezapne.`}
@@ -3054,8 +3092,10 @@ export const UnavailableFollowerRemovalDialog = ({ state, accountLabel, busy, on
       ) : null}
 
       {!state.savedSuccessfully && state.plan ? (
-        <div className="mt-4 rounded-xl border border-blue-500/15 bg-blue-500/[0.055] px-3 py-2.5 text-[11px] font-bold text-blue-600">
-          Po potvrzení se odešle stejný příkaz Update group jako z editoru. Execution agent chybějící odebírané followery předá do reconfigure jako missingOptionalAccountIds.
+        <div className={`mt-4 rounded-xl border px-3 py-2.5 text-[11px] font-bold ${state.ownershipWaiverStep ? 'border-rose-500/30 bg-rose-500/[0.07] text-rose-600' : 'border-blue-500/15 bg-blue-500/[0.055] text-blue-600'}`}>
+          {state.ownershipWaiverStep
+            ? 'Stav tohoto účtu nelze přes OAuth ověřit. Odebrání ukončí durable ownership marker bez potvrzení, že je broker účet flat. AlphaTrade neodešle žádný obchod.'
+            : 'Po potvrzení se odešle stejný příkaz Update group jako z editoru. Execution agent chybějící odebírané followery předá do reconfigure jako missingOptionalAccountIds.'}
         </div>
       ) : null}
 
@@ -3069,7 +3109,7 @@ export const UnavailableFollowerRemovalDialog = ({ state, accountLabel, busy, on
           <>
             <button type="button" onClick={onClose} disabled={busy} className="h-10 rounded-xl border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Zavřít</button>
             <button type="button" onClick={onEdit} disabled={busy} className="h-10 rounded-xl border border-indigo-500/25 px-4 text-xs font-black text-indigo-600 hover:bg-indigo-500/[0.06] disabled:opacity-50">Otevřít Edit group</button>
-            {state.plan ? <button type="button" onClick={() => onConfirm(state.plan as UnavailableFollowerRemovalPlan)} disabled={busy} className="h-10 rounded-xl bg-indigo-600 px-4 text-xs font-black text-white hover:bg-indigo-500 disabled:opacity-50">{busy ? 'Ukládám…' : 'Odebrat nedostupné účty a uložit'}</button> : null}
+            {state.plan ? <button type="button" onClick={() => onConfirm(state.plan as UnavailableFollowerRemovalPlan)} disabled={busy} className={`h-10 rounded-xl px-4 text-xs font-black text-white disabled:opacity-50 ${state.ownershipWaiverStep ? 'bg-rose-600 hover:bg-rose-500' : 'bg-indigo-600 hover:bg-indigo-500'}`}>{busy ? 'Ukládám…' : state.ownershipWaiverStep ? 'Přebírám odpovědnost a odebírám' : 'Odebrat nedostupné účty a uložit'}</button> : null}
           </>
         )}
       </div>

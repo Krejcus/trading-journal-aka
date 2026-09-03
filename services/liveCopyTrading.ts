@@ -79,7 +79,12 @@ export interface CopyGroupConfig {
 
 export type LiveCopyTradingCommand =
   | { type: 'create-group'; group: CopyGroupConfig }
-  | { type: 'update-group'; group: CopyGroupConfig }
+  | {
+    type: 'update-group';
+    group: CopyGroupConfig;
+    /** UI posílá jen po samostatném potvrzení ownership warningu. */
+    waiveUnverifiableFollowerOwnership?: true;
+  }
   | { type: 'delete-group'; groupId: string }
   | { type: 'set-group-enabled'; groupId: string; enabled: boolean }
   | { type: 'set-replication'; groupId: string; accountId: number; mode: CopyReplicationMode }

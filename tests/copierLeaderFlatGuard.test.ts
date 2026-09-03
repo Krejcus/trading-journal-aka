@@ -460,6 +460,18 @@ describe('leader flat authoritative batch evaluation', () => {
     });
   });
 
+  it('chybějící follower nezpůsobilý při open bez potvrzené lineage batch neblokuje', () => {
+    const result = evaluate(scheduledEpoch([
+      follower(200, { eligibleAtOpen: false, copyLineage: 'unproven' }),
+    ]), [account(LEADER)]);
+
+    expect(result).toMatchObject({
+      kind: 'resolved',
+      blockedAccountIds: [],
+      divergentAccountIds: [],
+    });
+  });
+
   it('working protective SL není exit v letu a orphan zůstane viditelný i zavíratelný', () => {
     const result = evaluate(scheduledEpoch(), [
       account(LEADER),

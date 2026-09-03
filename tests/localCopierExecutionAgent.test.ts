@@ -383,6 +383,35 @@ describe('local copier execution agent', () => {
     expect(running.status().group.followers).toEqual([]);
   });
 
+  it('ownership waiver předá controlleru jen po explicitním UI commandu', async () => {
+    const runtime = controller();
+    const prepareGroupAccounts = vi.fn(async () => ({ missingOptional: [22] }));
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      prepareGroupAccounts,
+    });
+
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: {
+        type: 'update-group',
+        group: { ...group(), followers: [] },
+        waiveUnverifiableFollowerOwnership: true,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(runtime.reconfigureGroup).toHaveBeenCalledWith(
+      expect.objectContaining({ followers: [] }),
+      {
+        missingOptionalAccountIds: [22],
+        waiveUnverifiableFollowerOwnership: true,
+      },
+    );
+  });
+
   it('dovolí nahradit zmizelého followera, ale nový follower zůstává required', async () => {
     const runtime = controller();
     const prepareGroupAccounts = vi.fn(async (request: PrepareGroupAccountsRequest) => {

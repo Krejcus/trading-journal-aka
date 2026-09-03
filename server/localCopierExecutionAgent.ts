@@ -220,6 +220,7 @@ export async function startLocalCopierExecutionAgent(
   const applyGroup = async (
     next: CopyGroupConfig,
     mode: 'update' | 'activate' = 'update',
+    reconfigurationRequest: { waiveUnverifiableFollowerOwnership?: true } = {},
   ): Promise<LiveCopyTradingCommandResult> => {
     const previous = group;
     const leaderChanged = previous.leaderAccountId !== next.leaderAccountId;
@@ -237,6 +238,9 @@ export async function startLocalCopierExecutionAgent(
       }
       const reconfigurationOptions = {
         missingOptionalAccountIds: [...missingOptionalAccountIds],
+        ...(reconfigurationRequest.waiveUnverifiableFollowerOwnership === true
+          ? { waiveUnverifiableFollowerOwnership: true as const }
+          : {}),
       };
       if (mode === 'activate') await options.controller.activateGroup(next, reconfigurationOptions);
       else if (leaderChanged || topologyChanged) {
@@ -264,7 +268,11 @@ export async function startLocalCopierExecutionAgent(
     switch (command.type) {
       case 'update-group': {
         const next = mappedGroup(group, command.group);
-        return applyGroup(next);
+        return applyGroup(next, 'update', {
+          ...(command.waiveUnverifiableFollowerOwnership === true
+            ? { waiveUnverifiableFollowerOwnership: true as const }
+            : {}),
+        });
       }
       case 'set-group-enabled': {
         return applyGroup({ ...group, enabled: command.enabled });
@@ -328,7 +336,11 @@ export async function startLocalCopierExecutionAgent(
           enabled: true,
           localOnly: true,
         };
-        await applyGroup(next, 'activate');
+        await applyGroup(next, 'activate', {
+          ...(command.waiveUnverifiableFollowerOwnership === true
+            ? { waiveUnverifiableFollowerOwnership: true as const }
+            : {}),
+        });
         return;
       }
       case 'arm-live': {

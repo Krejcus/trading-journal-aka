@@ -230,6 +230,35 @@ describe('Tradovate copier command relay', () => {
     expect(claimed.command.command.operationId).toBe('flatten-all-1');
   });
 
+  it('ownership waiver u update-group zachová jen jako explicitní true', async () => {
+    const group = {
+      id: 'group-1', name: 'Hlavní', enabled: false, leaderAccountId: 11,
+      followers: [{ accountId: 22, mode: 'on-submit' as const, multiplier: 1 }],
+    };
+    const command = {
+      type: 'copy-command' as const,
+      command: {
+        type: 'update-group' as const,
+        group,
+        waiveUnverifiableFollowerOwnership: true as const,
+      },
+    };
+    const upsert = vi.fn();
+    await enqueueTradovateCopierCommand({ db: enqueueDb(upsert), userId, connectionId, command });
+    expect(upsert.mock.calls[0][0].payload).toEqual({ command: command.command });
+
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(vi.fn()), userId, connectionId,
+      command: {
+        type: 'copy-command',
+        command: {
+          type: 'update-group', group,
+          waiveUnverifiableFollowerOwnership: 'yes',
+        },
+      } as unknown as LocalCopierAgentCommand,
+    })).rejects.toThrow('invalid-relay-command-payload');
+  });
+
   it('claim odmítne starý nebo ručně vložený cancel-order payload', async () => {
     await expect(claimTradovateCopierCommand({
       db: claimDb({

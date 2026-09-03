@@ -56,15 +56,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Otevřené otázky
 
-- [ ] **Automatická post-connect recovery selže, když follower chybí v OAuth**
-      (3. 9. 05:45:24 UTC, worker 03d1fc5f): po startu s breached `63338752`, který
-      už není v žádném OAuth adresáři, skončila recovery vlna „nepodařilo se
-      ověřit stav účtů“ bez auditního důvodu, zatímco ruční `reconcile` z CLI
-      (routing předá optional skip) prošel. Podezření: `runConnectionRecovery`
-      volá reconciliation bez `missingOptionalAccountIds`, takže nezpůsobilý
-      chybějící follower je „missing required“. Fix: recovery má použít stejný
-      optional-skip vstup jako CLI/UI cesta a při selhání zapsat audit s důvodem.
-      Delegovat Codexu s regresí.
+- [ ] **Automatická post-connect recovery a follower chybějící v OAuth** —
+      optional-skip i konkrétní blocked audit jsou hotové v `5154856d`/`30a48144`.
+      Lokálně 3. 9. doplněno zbývající hardening z obou cross-review: partial
+      snapshot lineage participanta ani generation race už nesmí dokončit recovery
+      nebo smazat durable markery; stale resolver se revaliduje, `updateGroup` se za
+      běhu recovery/reconciliation odmítá a odebrání neověřitelného vlastníka
+      vyžaduje explicitní auditovaný waiver. Zbývá nezávislé review a výslovně
+      schválený commit/push/reinstall; produkční worker tuto lokální změnu nemá.
 - [x] **Násobek 2× „sám“ přeskočil na funded účet při změně leadera** —
       VYŘEŠENO lokálně 3. 9. (zápis níže; změna zatím není commitnutá ani
       nasazená). Původní incident (2. 9.,
@@ -151,6 +150,33 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-09-03 (Codex, recovery partial-snapshot a ownership-waiver hardening)
+
+`ReconciliationResult` nyní rozlišuje `authoritativelyClean` a vypisuje
+nesnímkované účty. Čistota vyžaduje nulovou divergenci i working orders,
+nezměněnou safety generation přes veškeré I/O a žádného přeskočeného
+participanta neukončené leader-flat epochy. Guard má jen lineage hodnoty
+`confirmed | unproven`; participant je proto `eligibleAtOpen` nebo
+`copyLineage: confirmed`, zatímco `eligibleAtOpen:false + unproven` je známý
+neparticipant a jeho OAuth absence je legitimní.
+
+Recovery drží pending a durable markery, dokud tento důkaz není čistý. OAuth
+resolver běží před každým pokusem a po reconciliation znovu; změna množiny
+snapshot zahodí a nově dostupný follower se v dalším pokusu skutečně snímkuje.
+Synchronní `updateGroup` zachová okamžitý DISARM, ale za aktivní recovery nebo
+reconciliation odmítne změnu, takže vstup snapshotu nezestárne.
+
+Odebrání OAuth-missing lineage participanta přes `reconfigureGroup` i
+`activateGroup` bez waiveru vrátí konkrétní účet/epochu. LIVE modal a editor
+zobrazí druhé potvrzení; teprve to pošle
+`waiveUnverifiableFollowerOwnership:true` přes relay/agenta. Controller zapíše
+blocked audit `ownership waived by operator` a až potom zahodí staré markery.
+
+Oveření: kompletní Vitest **227/227 souborů, 1882/1882 testů**; strict TypeScript bez
+výstupu a `git diff --check` čistý. Závislosti nebyly instalovány. Nic nebylo
+commitnuto, pushnuto, deploynuto ani spuštěno/reinstalováno na workeru nebo
+brokeru; neproběhl ARM, DISARM ani Flatten.
 
 ### 2026-09-03 (Codex, odebrání nedostupného followera přímo z blokace)
 
