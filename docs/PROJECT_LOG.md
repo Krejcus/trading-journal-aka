@@ -261,6 +261,27 @@ write, ARM/DISARM ani zásahu do copier workeru.
   beze změny. Beze změny jsou také server/PWA, broker, copier a jeho ARM stav;
   větev není sloučena do `main`.
 
+### 2026-09-03 (Claude, rollout 30a48144 + J; druhé kolo cross-review)
+
+Codex cross-review commitu 5154856d dal „opravit“: čistá ruční Kontrola pozic
+s optional skipem nesmí sama shodit `pendingConnectionRecovery` (přeskočila by
+obnovu leader-flat guardu, úklid exposure markeru a recovery audit; částečný
+snapshot ≠ dokončená recovery). Přepracováno (30a48144): čistý ruční výsledek
+recovery jen znovu naplánuje; vlna si vezme optional-skip a příznak shodí sama
+po kompletním doběhu, při selhání zůstává pending. Chyby resolveru i pěti
+pokusů se auditují a jsou ve fail-closed zprávě. Druhý dnešní blocker „Změnu
+leadera blokuje otevřená durable pozice leadera“ = zbytkový lot MNQ −3 z 2. 9.
+18:44 v denní statistice po hranici session; brána nyní používá session-aware
+`currentDailyStats(now)` jako zbytek controlleru. Regrese: 5 nových testů,
+celá sada 1868, tsc čistý. Worker reinstalován ze 30a48144 (start 07:06:28
+UTC), post-restart reconcile čistý. Codex J sloučen (3699fe12): odebrání
+OAuth-missing followera jedním krokem z ARM modalu, editoru i řádku účtu; ARM
+zůstává samostatný klik. Otevřené z review: stale resolver (routing revision),
+`updateGroup` mimo eventTail, zbytkový lot ve statistice (proč −3 po flat).
+Provozní incident: v 07:06 UTC se vyprázdnil sdílený `node_modules` hlavního
+checkoutu (příčina neprokázána), obnoven `npm ci`; Codex briefy dostanou zákaz
+`npm ci`/`npm install`.
+
 ### 2026-09-03 (Claude, rollout 5154856d — recovery vs. zmizelý follower)
 
 Uživatel nemohl uložit skupinu bez breached `63338752` („Změnu leadera blokuje
