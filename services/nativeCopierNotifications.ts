@@ -59,6 +59,7 @@ function toSnapshot(status: CopierControllerStatus | null): CopierNotificationSn
     reconciliationRequired: status.reconciliationRequired,
     divergentAccounts: [...status.divergentAccounts].sort((a, b) => a - b),
     lastError: status.lastError,
+    ...(status.lastDisarm ? { lastDisarm: { ...status.lastDisarm } } : {}),
     armExpiresAt: status.armExpiresAt ?? 0,
     entryCooldownUntil: status.entryCooldownUntil ?? 0,
     dayLockUntil: status.dayLockUntil ?? 0,

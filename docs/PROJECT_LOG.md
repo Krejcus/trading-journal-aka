@@ -196,6 +196,23 @@ TypeScript prošel bez výstupu. Jeden předchozí full run měl pouze známý
 zátěžový 1s timeout mock CDP testu, který izolovaně prošel 11/11 a následný
 celý běh byl zelený. Nic nebylo commitnuto, pushnuto, deploynuto ani
 instalováno; worker/broker, ARM, DISARM ani Flatten se nespouštěly.
+### 2026-09-03 (Codex, srozumitelné odzbrojení kopírky)
+
+Controller status additivně nese `lastDisarm` a nejvýše 20 odzbrojení aktuální
+session. Čistý klasifikátor převádí známé fail-closed cesty na stabilní kód,
+český důvod a jediný další krok; původní technický text zůstává celý v detailu.
+Výsledek kopií se zpřesní na `guard-flattened`/`auto-closed` až po potvrzeném
+zavření, jinak zůstává konzervativně `unknown`; execution ani fail-closed
+logika se nezměnily.
+
+LIVE karta po DISARM ukáže amber/rose panel vedle dostupného ARM, technický
+detail a historii dne; po novém ARM historii nemaže, jen panel skryje. Nativní
+fail-closed notifikace zachovala stejnou hranu a počet, ale místo raw chyby
+použije lidský titul a výsledek kopií. Cíleně prošlo 4 soubory / 139 testů,
+celá sada 222 / 1843, strict TypeScript, scoped lint bez výstupu a produkční
+build. Plný lint skončil bez chyb, se 353 existujícími warningy mimo změněné
+soubory. Nic nebylo commitnuto, pushnuto ani deploynuto; žádný reálný worker,
+broker, ARM, DISARM ani Flatten se nespouštěl.
 
 ### 2026-09-02 (Claude, večerní review dne — skutečná čísla a replay bug)
 

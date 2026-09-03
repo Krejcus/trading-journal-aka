@@ -91,9 +91,26 @@ describe('okamžité incidenty', () => {
     expect(steady.fireNow).toEqual([]);
   });
 
-  it('nová chyba nese její text; kill switch ji nepřekrývá duplicitně', () => {
+  it('nová fail-closed chyba použije lidský důvod a výsledek kopií; kill switch ji neduplikuje', () => {
     const error = plan(snapshot(), snapshot({ lastError: 'Divergence pozic' }));
     expect(error.fireNow).toEqual([expect.objectContaining({ body: 'Divergence pozic' })]);
+    const structured = plan(snapshot(), snapshot({
+      lastError: 'RAW TECHNICAL DETAIL MUST NOT BE BODY',
+      lastDisarm: {
+        at: NOW,
+        trigger: 'fail-closed',
+        code: 'follower-position-mismatch',
+        title: 'Pozice followera nesouhlasí s očekávaným násobkem leadera.',
+        detail: 'RAW TECHNICAL DETAIL MUST NOT BE BODY',
+        copiesOutcome: 'unknown',
+        nextStep: 'Spusť Kontrolu pozic.',
+      },
+    }));
+    expect(structured.fireNow).toEqual([expect.objectContaining({
+      title: 'Copier: Pozice followera nesouhlasí s očekávaným násobkem leadera',
+      body: 'Výsledek kopií se nepodařilo potvrdit. Další krok: Spusť Kontrolu pozic.',
+    })]);
+    expect(structured.fireNow[0]?.body).not.toContain('RAW TECHNICAL');
     const both = plan(snapshot(), snapshot({ killSwitch: true, lastError: 'Ruční stop' }));
     expect(both.fireNow.map(item => item.title)).toEqual(['Copier: KILL SWITCH']);
   });

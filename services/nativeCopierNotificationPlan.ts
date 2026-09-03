@@ -10,6 +10,11 @@
  * takže celé chování jde pokrýt deterministickými testy.
  */
 
+import {
+  copierCopiesOutcomeText,
+  type CopierDisarmRecord,
+} from '../lib/copierDisarmReason';
+
 export interface CopierNotificationSnapshot {
   armed: boolean;
   shadowMode: boolean;
@@ -19,6 +24,7 @@ export interface CopierNotificationSnapshot {
   reconciliationRequired: boolean;
   divergentAccounts: number[];
   lastError: string | null;
+  lastDisarm?: CopierDisarmRecord;
   armExpiresAt: number;
   entryCooldownUntil: number;
   dayLockUntil: number;
@@ -155,9 +161,14 @@ export function planCopierNotifications(options: {
       });
     }
     if (previous.lastError == null && next.lastError != null && !next.killSwitch) {
+      const disarm = next.lastDisarm;
       fireNow.push({
-        title: 'Copier: bezpečné zastavení',
-        body: next.lastError,
+        title: disarm
+          ? `Copier: ${disarm.title.replace(/[.!?]$/, '')}`
+          : 'Copier: bezpečné zastavení',
+        body: disarm
+          ? `${copierCopiesOutcomeText(disarm.copiesOutcome)} Další krok: ${disarm.nextStep}`
+          : next.lastError,
         kind: 'risk',
       });
     }

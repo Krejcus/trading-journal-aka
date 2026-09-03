@@ -65,6 +65,13 @@ import {
   type ManualFlattenResult,
 } from './copierManualActions';
 import { createExposureCappedBroker } from './exposureCappedBroker';
+import {
+  COPIER_DISARM_HISTORY_LIMIT,
+  createCopierDisarmRecord,
+  type CopierCopiesOutcome,
+  type CopierDisarmRecord,
+  type CopierDisarmTrigger,
+} from '../lib/copierDisarmReason';
 
 export type CopierStuckOperationKind = 'place' | 'bracket' | 'oso' | 'cancel-or-modify';
 
@@ -140,6 +147,10 @@ export interface CopierControllerStatus {
     readOnlyFollowerAccounts: number[];
   };
   lastError: string | null;
+  /** Poslední odzbrojení v tomto běhu; additivní kvůli starším klientům. */
+  lastDisarm?: CopierDisarmRecord;
+  /** Ohraničená historie odzbrojení aktuální runtime session. */
+  disarmHistory?: CopierDisarmRecord[];
   revision: number;
   lastSequence: number;
   /** Celá skupina je podle lokálně známých pozic flat (vhodný moment pro údržbu). */
@@ -789,6 +800,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   let positionCheckComplete = false;
   let workingOrderAccounts = new Set<number>();
   let lastError: Error | null = null;
+  let lastDisarm: CopierDisarmRecord | undefined;
+  const disarmHistory: CopierDisarmRecord[] = [];
   let lastOauthPreflight: NonNullable<CopierControllerStatus['oauthPreflight']> | undefined;
   /**
    * Monotónní verze bezpečnostního stavu. Reconciliation si ji zapamatuje
@@ -1460,6 +1473,51 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const hasFollowerExposure = () => group.followers.some(follower =>
     [...(positionsByAccount.get(follower.accountId)?.values() ?? [])].some(quantity => quantity !== 0));
 
+  const recordDisarm = (
+    trigger: CopierDisarmTrigger,
+    detail: string,
+    copiesOutcome: CopierCopiesOutcome,
+  ): CopierDisarmRecord => {
+    const record = createCopierDisarmRecord({
+      at: clock(), trigger, detail, copiesOutcome,
+    });
+    lastDisarm = record;
+    disarmHistory.push(record);
+    if (disarmHistory.length > COPIER_DISARM_HISTORY_LIMIT) {
+      disarmHistory.splice(0, disarmHistory.length - COPIER_DISARM_HISTORY_LIMIT);
+    }
+    return record;
+  };
+
+  const disarmIndexAt = (recordAt: number): number => {
+    let index = -1;
+    for (let candidate = disarmHistory.length - 1; candidate >= 0; candidate -= 1) {
+      if (disarmHistory[candidate].at === recordAt) {
+        index = candidate;
+        break;
+      }
+    }
+    return index;
+  };
+
+  const updateDisarmOutcome = (
+    recordAt: number | undefined,
+    copiesOutcome: CopierCopiesOutcome,
+  ) => {
+    if (recordAt == null) return;
+    const index = disarmIndexAt(recordAt);
+    if (index < 0) return;
+    const updated = { ...disarmHistory[index], copiesOutcome };
+    disarmHistory[index] = updated;
+    if (lastDisarm?.at === recordAt) lastDisarm = updated;
+  };
+
+  const successfulAutoCloseOutcome = (recordAt: number): CopierCopiesOutcome => (
+    disarmHistory[disarmIndexAt(recordAt)]?.copiesOutcome === 'flat'
+      ? 'flat'
+      : 'auto-closed'
+  );
+
   /** Durable stopa „za živého ARM existují kopie" — podklad boot recovery. */
   const syncLiveCopyExposureFlag = async (reason: 'update' | 'clear') => {
     // Čtení i rozhodnutí musí proběhnout až uvnitř serial processoru. Kdyby
@@ -1679,9 +1737,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       reconcileAfterTerminalFill?: boolean;
     } = {},
   ) => {
+    const wasArmed = gate.armed;
     const wasLiveArmed = gate.armed && !gate.shadowMode;
     invalidateReconciliation();
     lastError = errorOf(reason);
+    const disarm = wasArmed
+      ? recordDisarm(
+          failure.transportLost ? 'transport' : 'fail-closed',
+          lastError.message,
+          groupIsFlat()
+            ? 'flat'
+            : 'unknown',
+        )
+      : undefined;
     gate = {
       ...gate,
       armed: false,
@@ -1700,7 +1768,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (wasLiveArmed && !failure.transportLost && !gate.killSwitch && failure.autoClose !== false) {
       scheduleAutoClose('fail-closed', {
         reconcileAfterTerminalFill: failure.reconcileAfterTerminalFill === true,
-      });
+      }, disarm?.at);
     }
     if (wasLiveArmed && failure.transportLost && hasFollowerExposure()) {
       // Bez transportu zavírat nejde — rozhodne se po reconnectu podle stavu.
@@ -1716,6 +1784,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const scheduleAutoClose = (
     trigger: 'fail-closed',
     recovery: { reconcileAfterTerminalFill?: boolean } = {},
+    disarmAt = lastDisarm?.trigger === 'fail-closed' ? lastDisarm.at : undefined,
   ) => {
     if (autoCloseInFlight || stopped) return;
     autoCloseInFlight = true;
@@ -1724,6 +1793,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       .then(async () => {
         try {
           const autoCloseSafeForRecovery = await autoFlattenCopies(trigger, seed);
+          if (disarmAt != null) {
+            updateDisarmOutcome(
+              disarmAt,
+              autoCloseSafeForRecovery ? successfulAutoCloseOutcome(disarmAt) : 'unknown',
+            );
+          }
           if (
             recovery.reconcileAfterTerminalFill
             && autoCloseSafeForRecovery
@@ -2267,6 +2342,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     failClosed(new Error(
       `Copier fail-closed: leader je autoritativně flat, follower stav se neshoduje (${evaluation.reason})`,
     ), { autoClose: false });
+    const leaderFlatDisarmAt = lastDisarm?.code === 'leader-flat-follower-open'
+      || lastDisarm?.trigger === 'transport'
+      ? lastDisarm.at
+      : undefined;
 
     if (evaluation.kind !== 'close-targets') return;
     const closeSafetyGeneration = safetyGeneration;
@@ -2353,6 +2432,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       symbol: epoch.symbol,
       detail: 'leader-flat guard cíleně zploštil kopii a potvrdil flat stav',
     });
+    updateDisarmOutcome(leaderFlatDisarmAt, 'guard-flattened');
   }
 
   /**
@@ -2557,6 +2637,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     const guardedSymbols = await resumeLeaderFlatEpochsAfterSnapshot();
     if (!hasFollowerExposure()) {
+      if (lastDisarm?.trigger === 'transport') updateDisarmOutcome(lastDisarm.at, 'flat');
       await syncLiveCopyExposureFlag('clear');
       options.onAudit?.([{
         at: clock(), leaderEventId: 'connection-recovery', kind: 'recovered',
@@ -2591,6 +2672,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const leaderOpen = [...(positionsByAccount.get(group.leaderAccountId)?.values() ?? [])]
       .some(quantity => quantity !== 0);
     if (leaderOpen && reconciliation.divergentAccounts.length === 0) {
+      if (lastDisarm?.trigger === 'transport') {
+        updateDisarmOutcome(lastDisarm.at, 'left-open-protected');
+      }
       lastResumeOffer = null;
       options.onAudit?.([{
         at: clock(), leaderEventId: 'connection-recovery', kind: 'blocked',
@@ -2598,7 +2682,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }]);
       return;
     }
-    await autoFlattenCopies('reconnect', clock());
+    const flat = await autoFlattenCopies('reconnect', clock());
+    if (lastDisarm?.trigger === 'transport') {
+      updateDisarmOutcome(lastDisarm.at, flat ? 'auto-closed' : 'unknown');
+    }
   };
 
   const scheduleConnectionRecovery = () => {
@@ -2629,6 +2716,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (now - gate.armedAt <= gate.armTtlMs) return;
     const armedAt = gate.armedAt;
     const wasShadow = gate.shadowMode;
+    const disarm = recordDisarm(
+      'arm-expiry',
+      'ARM TTL vypršel, copier se odzbrojil',
+      groupIsFlat() ? 'flat' : 'unknown',
+    );
     gate = { ...gate, armed: false };
     options.onAudit?.([{
       at: now, leaderEventId: `arm-expiry-${armedAt}`, kind: 'blocked',
@@ -2637,7 +2729,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (wasShadow || autoCloseInFlight) return;
     autoCloseInFlight = true;
     try {
-      await autoFlattenCopies('arm-expiry', armedAt);
+      const flat = await autoFlattenCopies('arm-expiry', armedAt);
+      updateDisarmOutcome(disarm.at, flat ? successfulAutoCloseOutcome(disarm.at) : 'unknown');
     } finally {
       autoCloseInFlight = false;
     }
@@ -2733,10 +2826,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
     if (event.type === 'connection') {
+      const wasArmed = gate.armed;
       // Výpadek za živého ARM s otevřenými kopiemi → po reconnectu se
       // rozhodne „podle stavu" (držet synchronní / zavřít osiřelé).
       if (!event.connected && gate.armed && !gate.shadowMode && hasFollowerExposure()) {
         pendingConnectionRecovery = true;
+      }
+      if (!event.connected && wasArmed) {
+        recordDisarm(
+          'transport',
+          'Spojení k brokerovi bylo přerušeno',
+          groupIsFlat() ? 'flat' : 'unknown',
+        );
       }
       source.connection(event.connected);
       gate = {
@@ -4008,7 +4109,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return shutdownPromise;
     },
     disarm() {
+      const wasArmed = gate.armed;
       gate = { ...gate, armed: false };
+      if (wasArmed) {
+        recordDisarm(
+          'manual',
+          'Uživatel vypnul kopírku ručně',
+          groupIsFlat() ? 'flat' : 'unknown',
+        );
+      }
       lastResumeOffer = null;
       // Ruční DISARM zastaví nové kopie. Starý obecný account-wide boot
       // auto-close vypneme, ale durable leader-flat epocha zůstává: pokud
@@ -4018,8 +4127,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     },
     engageKillSwitch(reason = 'Ruční nouzové zastavení') {
       if (stopped) return;
+      const wasArmed = gate.armed;
       invalidateReconciliation();
       lastError = new Error(reason.trim() || 'Ruční nouzové zastavení');
+      if (wasArmed || !lastDisarm || lastDisarm.trigger !== 'kill-switch') {
+        recordDisarm(
+          'kill-switch',
+          lastError.message,
+          groupIsFlat() ? 'flat' : 'unknown',
+        );
+      }
       // Kill switch se v této runtime session nedá odjistit. Nový bootstrap znovu
       // startuje DISARMED a stále vyžaduje reconciliation před ostrým ARM.
       gate = { ...gate, armed: false, killSwitch: true };
@@ -4302,6 +4419,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           },
         } : {}),
         lastError: lastError?.message ?? null,
+        ...(lastDisarm ? { lastDisarm: { ...lastDisarm } } : {}),
+        disarmHistory: disarmHistory.map(record => ({ ...record })),
         revision: current.revision,
         lastSequence: current.state.lastSequence,
         groupFlat: groupIsFlat(),

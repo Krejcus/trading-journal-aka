@@ -12,6 +12,7 @@ import { createOsoOutboxEntry, markOsoAcknowledged, markOsoRejected } from '../s
 import { createMockBroker } from '../services/mockBroker';
 import { createBrokerRouter } from '../services/brokerRouter';
 import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from '../services/liveCopyTrading';
+import { COPIER_DISARM_HISTORY_LIMIT } from '../lib/copierDisarmReason';
 
 const group: CopyGroupConfig = {
   id: 'g1', name: 'Group', enabled: true, leaderAccountId: 100,
@@ -227,7 +228,70 @@ describe('bootstrapCopierRuntime', () => {
 
     expect(controller.status()).toMatchObject({
       armed: false, connected: false, lastError: 'rate-limit penalty',
+      lastDisarm: {
+        trigger: 'transport',
+        code: 'transport-lost',
+        detail: 'rate-limit penalty',
+      },
     });
+    controller.stop();
+  });
+
+  it('fail-closed vyplní strukturované odzbrojení a ARM ho nemaže', async () => {
+    const broker = createMockBroker({
+      behavior: () => ({ kind: 'reject', reason: 'healthy follower order rejected by broker' }),
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder() });
+    await controller.waitForIdle();
+
+    const disarmed = controller.status();
+    expect(disarmed).toMatchObject({
+      armed: false,
+      lastDisarm: {
+        trigger: 'fail-closed',
+        code: 'order-rejected',
+        detail: expect.stringContaining('healthy follower order rejected'),
+        copiesOutcome: 'flat',
+      },
+    });
+    expect(disarmed.disarmHistory).toHaveLength(1);
+
+    await controller.reconcile();
+    controller.arm();
+    expect(controller.status()).toMatchObject({
+      armed: true,
+      lastDisarm: { code: 'order-rejected' },
+    });
+    expect(controller.status().disarmHistory).toHaveLength(1);
+    controller.stop();
+  });
+
+  it('historie odzbrojení roste v session a drží pevný limit', async () => {
+    const broker = createMockBroker();
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+
+    for (let index = 0; index < COPIER_DISARM_HISTORY_LIMIT + 3; index += 1) {
+      controller.arm();
+      controller.disarm();
+    }
+
+    const status = controller.status();
+    expect(status.disarmHistory).toHaveLength(COPIER_DISARM_HISTORY_LIMIT);
+    expect(status.disarmHistory?.every(record => record.code === 'manual')).toBe(true);
+    expect(status.lastDisarm).toEqual(status.disarmHistory?.at(-1));
     controller.stop();
   });
 
@@ -248,6 +312,7 @@ describe('bootstrapCopierRuntime', () => {
       killSwitch: true,
       reconciliationRequired: true,
       lastError: 'Nouzové zastavení operátorem',
+      lastDisarm: { trigger: 'kill-switch', code: 'kill-switch' },
     });
     expect(() => controller.arm({ shadowMode: true })).toThrow('kill switch je aktivní');
     controller.stop();

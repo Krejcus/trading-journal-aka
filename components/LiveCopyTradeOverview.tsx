@@ -21,6 +21,10 @@ import {
 } from '../lib/copyTradeAccountLabels';
 import { formatSnapshotRepairError } from '../lib/copierBlockerMessages';
 import { translateCopierRejectReason } from '../lib/copierRejectReason';
+import {
+  copierCopiesOutcomeText,
+  type CopierDisarmRecord,
+} from '../lib/copierDisarmReason';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import {
@@ -271,6 +275,8 @@ interface Props {
   /** Operace čekající na ruční kontrolu — blokují ARM a musí být vidět. */
   stuckOperations?: CopierStuckOperation[];
   accountEligibility?: CopierAccountEligibility[];
+  lastDisarm?: CopierDisarmRecord;
+  disarmHistory?: CopierDisarmRecord[];
   /** Read-only broker reconciliation for a currently unverifiable account. */
   onVerifyEligibility?: (accountId: number) => Promise<void> | void;
   executionGroupId?: string | null;
@@ -468,6 +474,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   cooldownUntil = 0,
   stuckOperations = [],
   accountEligibility = [],
+  lastDisarm,
+  disarmHistory = [],
   onVerifyEligibility,
   executionGroupId = null,
   runtimeGroup = null,
@@ -1034,6 +1042,16 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         redaction={redaction}
                         hiddenGroupColumns={hiddenGroupColumns}
                       />
+                      {selected && !armed && lastDisarm ? (
+                        <tr>
+                          <td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">
+                            <CopierDisarmPanel
+                              lastDisarm={lastDisarm}
+                              history={disarmHistory}
+                            />
+                          </td>
+                        </tr>
+                      ) : null}
                       <motion.tr
                         layout="position"
                         data-group-layout-motion="true"
@@ -1759,6 +1777,64 @@ const timeLabel = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hou
 const timeWithSecondsLabel = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', {
   hour: '2-digit', minute: '2-digit', second: '2-digit',
 });
+
+const sameLocalDay = (left: number, right: number) => {
+  const a = new Date(left);
+  const b = new Date(right);
+  return a.getFullYear() === b.getFullYear()
+    && a.getMonth() === b.getMonth()
+    && a.getDate() === b.getDate();
+};
+
+export const CopierDisarmPanel = ({ lastDisarm, history }: {
+  lastDisarm: CopierDisarmRecord;
+  history: readonly CopierDisarmRecord[];
+}) => {
+  const dangerous = lastDisarm.copiesOutcome === 'left-open-unprotected'
+    || lastDisarm.copiesOutcome === 'unknown';
+  const today = history.filter(record => sameLocalDay(record.at, lastDisarm.at));
+  const tone = dangerous
+    ? 'border-rose-500/35 bg-rose-500/[0.07] text-rose-700 dark:text-rose-300'
+    : 'border-amber-500/35 bg-amber-500/[0.07] text-amber-800 dark:text-amber-300';
+
+  return (
+    <section
+      aria-live="polite"
+      data-copier-disarm-panel="true"
+      data-tone={dangerous ? 'rose' : 'amber'}
+      className={`mx-4 my-3 rounded-lg border px-4 py-3 ${tone}`}
+    >
+      <div className="flex items-start gap-2.5">
+        <AlertTriangle aria-hidden="true" size={17} className="mt-0.5 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-bold leading-relaxed">
+            Kopírka se vypnula {timeWithSecondsLabel(lastDisarm.at)} · {lastDisarm.title}
+            {' · '}{copierCopiesOutcomeText(lastDisarm.copiesOutcome)}
+            {' · '}<span className="font-black">Další krok: {lastDisarm.nextStep}</span>
+          </p>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] font-bold">
+            <details>
+              <summary className="cursor-pointer select-none">Technický detail</summary>
+              <p className="mt-1 max-w-4xl break-words font-mono font-normal" title={lastDisarm.detail}>
+                {lastDisarm.detail}
+              </p>
+            </details>
+            <details>
+              <summary className="cursor-pointer select-none">Historie odzbrojení dne ({today.length})</summary>
+              <ol className="mt-1 space-y-1 font-normal">
+                {[...today].reverse().map((record, index) => (
+                  <li key={`${record.at}-${record.code}-${index}`}>
+                    {timeWithSecondsLabel(record.at)} · {record.title} · {copierCopiesOutcomeText(record.copiesOutcome)}
+                  </li>
+                ))}
+              </ol>
+            </details>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+};
 
 type RejectedExecution = NonNullable<CopierAccountEligibility['lastExecution']>;
 
