@@ -152,6 +152,37 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Codex, companion build 8 — plynulá změna výšky sekcí)
+
+Příčina drhnutí buildu 7 byla potvrzena: oba `NSHostingController` používaly
+automatické `preferredContentSize`, takže SwiftUI během 0,25s transition
+posílalo popoveru mezivýšky a AppKit měnil okno mimo jediný společný rytmus.
+Build 8 používá řešení 1: `sizingOptions = []`, kořen měří skutečnou velikost
+přes SwiftUI preference a čistý koordinátor zná cílový rozdíl výšky sekce už
+před animací. `NSPopover.contentSize` dostane jediný cíl v
+`NSAnimationContext` se stejnými 0,25 s ease-in-out; všechny meziměry jsou do
+konce přechodu koalescované. Šířka je vždy 360 pt. Reduce Motion mění velikost
+okamžitě; 0,22s chevron, vstupní pop-in, in-place §11 aktualizace, hover a
+auto-close se nezměnily. Nevznikl nový fokusovatelný AppKit prvek.
+
+Samostatná AppKit sonda na skutečném WindowServeru potvrdila, že řešení 1 na
+tomto macOS skutečně interpoluje frame `146 → 263 → 326 pt` a horní kotva
+zůstává přesně `700 pt`; fallback na přímý frame okna proto nebyl potřeba.
+Deterministický koordinátor i render sada prošly cíleně 10/10 a celá nativní
+sada 48/48 XCTest. Runner-independent CLI probe prošel 73/73, Debug
+`build-for-testing` i arm64 Release build prošly. Build má CFBundleVersion 8;
+dočasný bundle byl ad-hoc podepsán s Hardened Runtime a dodanými App Sandbox +
+outgoing-network entitlements, `codesign --verify --deep --strict` prošel a
+binární SHA-256 je
+`b95efe8cf5e958a597a3bf2023ca703aa60400c9b29e03e9a6888e714f6d3dc2`.
+
+Webový `npx tsc --noEmit` nebylo možné v tomto izolovaném worktree dokončit:
+nemá vlastní `node_modules`, `npx` skončilo na Keychain
+`SecItemCopyMatching failed -50` a přímý sdílený `tsc` nemohl z tohoto kořene
+najít `@types/node`; TypeScript soubory se neměnily. Build 8 nebyl instalován,
+spuštěn jako produkční companion ani mergován; LaunchAgent, server/PWA,
+worker, broker a copier zůstaly beze změny.
+
 ### 2026-09-03 (Codex, odebrání nedostupného followera přímo z blokace)
 
 ARM dialog pro skupinu blokovanou pouze účty chybějícími v aktuálním OAuth
