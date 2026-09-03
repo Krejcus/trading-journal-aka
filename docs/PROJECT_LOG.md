@@ -143,6 +143,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Claude + uživatel, rollout workera 03d1fc5f)
+
+Na výslovné „nasaď“: čtyři opuštěné `cancel-or-modify` z 2. 9. 18:44 (SL modify
+zkřížený s fillem; follower stopy filled, guard 18:44:36 potvrdil flat, od té
+doby flat podle fill pairs) ručně označeny jako vyřešené přes `resolve-stuck`
+s approval stringem — bez broker příkazu. Read-only reconcile → čistý stav →
+`mac-reinstall-safe.sh` z `main` `03d1fc5f` (bundle sha256 `94c29873a97262b5…`).
+Klasifikátor tentokrát reinstall neblokoval. Jediný start 05:45:16 UTC, žádný
+crash-loop, bundle obsahuje B (seenTerminalRejects), D (disarm record), E
+(leader-only label) i I (`WS CONNECT attempt=1` diagnostika obou connections).
+Post-restart read-only reconcile 0/0, `reconciliationRequired=false`,
+`lastError=null`, DISARMED.
+
+Pozorování k ověření uživatelem před ARM: durable skupina má **leader 64310872
+(funded Tradeify)** a všech pět followerů 1× (62364059, 62364055, 62364060,
+63338752, 63338592) — tak ji uživatel včera večer nastavil. Lucid OAuth
+`conn:754e4b5b` nyní vrací jediný účet **64503883**; oba včerejší Lucid účty
+(62364553 leader dopoledne, 63338752 breached) v OAuth nejsou. `63338752` je
+v skupině dál a routing ho správně přeskakuje jako optional (ROUTING OPTIONAL
+SKIP). Automatická post-connect recovery skončila v 05:45:24 „nepodařilo se
+ověřit stav účtů“ (viz Otevřené otázky), ruční read-only reconcile z CLI prošel.
+
 ### 2026-09-03 (Claude, orchestrace šesti Codex agentů — sloučeno do main)
 
 Paralelně v šesti worktree nad `origin/main`, každý výsledek recenzován
