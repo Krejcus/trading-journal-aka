@@ -241,6 +241,30 @@ write, ARM/DISARM ani zásahu do copier workeru.
   beze změny. Beze změny jsou také server/PWA, broker, copier a jeho ARM stav;
   větev není sloučena do `main`.
 
+### 2026-09-03 (Claude, rollout 5154856d — recovery vs. zmizelý follower)
+
+Uživatel nemohl uložit skupinu bez breached `63338752` („Změnu leadera blokuje
+rozpracovaný lifecycle: connection recovery“) ani zapnout ARM („Follower účet
+… není dostupný“). Příčina: recovery vlna po startu routovala i follower, který
+už není v žádném OAuth adresáři, router hodil chybu, po pěti pokusech
+fail-closed a `pendingConnectionRecovery` zůstal zapnutý (záměr z I), přičemž
+ruční Kontrola pozic ho neshazovala. Oprava (Claude, copier core, Codex
+cross-review vyžádán): recovery dostává přes `resolveMissingOptionalAccountIds`
+stejný optional-skip jako CLI/UI, a autoritativně čistá ruční Kontrola pozic
+příznak shodí; divergentní/neúspěšná ne. Regrese
+`tests/copierConnectionRecoveryOptionalFollower.test.ts` (router bez route).
+Celá sada 1866/1866, tsc čistý. Worker reinstalován ze `5154856d` (bundle
+`6bfcf2df0960de08…`, start 06:56:51 UTC, DISARMED), post-restart reconcile
+čistý.
+
+Pozorování: po startu ještě jednou fail-closed „leader je autoritativně flat,
+follower stav se neshoduje (ne všechny follower snapshoty jsou autoritativně
+dostupné)“ s divergencí `[63338752]` — leader-flat guard při obnově durable
+epochy vyžaduje snapshot i zmizelého followera. Fail-closed je zde správný
+(neověřitelná kopie), ruční reconcile stav vyčistil; zmizí s odebráním účtu ze
+skupiny a ukončením epochy. Paralelně Codex J: odebrání nedostupného followera
+jedním krokem přímo z modalu „Skupinu nelze zapnout“.
+
 ### 2026-09-03 (Claude + uživatel, rollout workera 03d1fc5f)
 
 Na výslovné „nasaď“: čtyři opuštěné `cancel-or-modify` z 2. 9. 18:44 (SL modify
