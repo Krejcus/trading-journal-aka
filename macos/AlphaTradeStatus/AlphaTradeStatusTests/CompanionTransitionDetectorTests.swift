@@ -5,10 +5,11 @@ final class CompanionTransitionDetectorTests: XCTestCase {
     private let reference = Date(timeIntervalSince1970: 1_800_000_000)
 
     func testWorseningTriggerMatrix() throws {
-        let clean = reduced(makeStatus(revision: 1))
+        let clean = reduced(makeStatus(revision: 1, copierState: .live))
 
         let reconciliation = reduced(makeStatus(
             revision: 2,
+            copierState: .live,
             reconciliation: .review,
             problems: [.init(kind: .reconciliation, text: "review")]
         ))
@@ -66,7 +67,7 @@ final class CompanionTransitionDetectorTests: XCTestCase {
     }
 
     func testImprovementTriggerMatrix() throws {
-        let clean = reduced(makeStatus(revision: 2))
+        let clean = reduced(makeStatus(revision: 2, copierState: .live))
 
         let divergence = reduced(makeStatus(
             revision: 1,
@@ -84,6 +85,7 @@ final class CompanionTransitionDetectorTests: XCTestCase {
 
         let review = reduced(makeStatus(
             revision: 1,
+            copierState: .live,
             reconciliation: .review,
             problems: [.init(kind: .reconciliation, text: "review")]
         ))
@@ -108,7 +110,7 @@ final class CompanionTransitionDetectorTests: XCTestCase {
         )
     }
 
-    func testModeTriggerMatrixIncludesUnverifiedDisarmedAndKeepsVerifiedShadowDisarmedSilent() throws {
+    func testModeTriggerMatrixUsesVypnutoForBothDisabledPresentations() throws {
         let disarmed = reduced(makeStatus(revision: 1, copierState: .disarmed))
         let disarmedUnverified = reduced(makeStatus(
             revision: 2,
@@ -126,13 +128,30 @@ final class CompanionTransitionDetectorTests: XCTestCase {
         assertTransition(live, shadow, .mode, "leader-tracking", "shadow-mode")
         assertTransition(disarmedUnverified, shadow, .mode, "leader-tracking", "shadow-mode")
         assertTransition(shadow, disarmedUnverified, .mode, "safety", "reconciliation")
-        XCTAssertNil(CompanionTransitionDetector.detect(previous: disarmed, next: shadow, now: reference))
-        XCTAssertNil(CompanionTransitionDetector.detect(previous: shadow, next: disarmed, now: reference))
+        assertTransition(disarmed, shadow, .mode, "leader-tracking", "shadow-mode")
+        assertTransition(shadow, disarmed, .mode, "safety", "reconciliation")
+        XCTAssertFalse(
+            CompanionTransitionDetector.detect(previous: live, next: disarmed, now: reference)?
+                .reason.localizedCaseInsensitiveContains("disarm") ?? true
+        )
         XCTAssertNil(CompanionTransitionDetector.detect(
             previous: disarmed,
             next: disarmedUnverified,
             now: reference
         ), "Losing only flat evidence must not be classified as worsening")
+    }
+
+    func testDeferredPreflightReconciliationDoesNotAutoOpenOrNotify() {
+        let clean = reduced(makeStatus(revision: 1, copierState: .disarmed))
+        let review = reduced(makeStatus(
+            revision: 2,
+            copierState: .disarmed,
+            reconciliation: .review,
+            problems: [.init(kind: .reconciliation, text: "preflight")]
+        ))
+
+        XCTAssertNil(CompanionTransitionDetector.detect(previous: clean, next: review, now: reference))
+        XCTAssertNil(CompanionTransitionDetector.detect(previous: review, next: clean, now: reference))
     }
 
     func testUnknownFreshnessBridgeNeverTriggersAndStaleDataNeverImproves() {

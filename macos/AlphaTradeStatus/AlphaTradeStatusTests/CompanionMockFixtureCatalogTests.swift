@@ -20,6 +20,12 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
     }
 
     func testEveryFixtureHasTheExpectedStateAndMenuBarPill() {
+        XCTAssertEqual(CompanionDisplayState.disarmed.stateName, "VYPNUTO")
+        XCTAssertFalse(
+            CompanionMockFixtureCatalog.presentation(for: .disarmed)
+                .safeDiagnosticText.localizedCaseInsensitiveContains("disarm")
+        )
+
         let expectations: [(
             id: CompanionFixtureID,
             state: CompanionDisplayState,
@@ -31,7 +37,7 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
             (.live, .live(minutesRemaining: 42), "LIVE", nil, .success, "LIVE"),
             (.liveAckUnavailable, .live(minutesRemaining: 42), "LIVE", nil, .success, "LIVE"),
             (.shadow, .shadow, "SHADOW", nil, .muted, "SHADOW"),
-            (.disarmed, .disarmed, nil, nil, .neutral, "DISARMED"),
+            (.disarmed, .disarmed, "VYPNUTO", "power", .neutral, "VYPNUTO"),
             (.disarmedExposure, .intervention(issueCount: 1), "!1", nil, .danger, "ZÁSAH NUTNÝ"),
             (.disarmedUnverified, .disarmedUnverified, "VYPNUTO", "power", .danger, "VYPNUTO"),
             (.intervention, .intervention(issueCount: 2), "!2", nil, .danger, "ZÁSAH NUTNÝ"),
@@ -109,7 +115,7 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
         XCTAssertEqual(presentation.menuBar.tone, .danger)
         XCTAssertEqual(presentation.exposureEvidence, .verifiedExposure(verifiedAt: "12:52:12"))
         XCTAssertFalse(presentation.exposureEvidence.mayClaimFlat)
-        XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("disarmed"))
+        XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("vypnutý"))
         XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("otevřenou expozici"))
     }
 
@@ -245,6 +251,20 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
             )
 
             XCTAssertNil(match, "\(presentation.fixtureID.rawValue) exposes standalone ARM text")
+        }
+    }
+
+    func testNoFixtureExposesDisarmTerminology() throws {
+        let forbidden = try NSRegularExpression(pattern: #"(?i)\bdisarm"#)
+
+        for presentation in CompanionMockFixtureCatalog.all {
+            let visibleText = presentation.allVisibleText.joined(separator: "\n")
+            let match = forbidden.firstMatch(
+                in: visibleText,
+                range: NSRange(visibleText.startIndex..<visibleText.endIndex, in: visibleText)
+            )
+
+            XCTAssertNil(match, "\(presentation.fixtureID.rawValue) exposes DISARM terminology")
         }
     }
 }

@@ -85,10 +85,72 @@ struct CompanionTransitionDetectorProbe {
         expect(divergenceTransition?.category == .worsening, "new divergence must worsen")
         expect(divergenceTransition?.rowID == "divergence-0", "divergence row must be targeted")
 
-        let reconciliation = reduced(status(revision: 2, reconciliation: .review))
+        let deferredReconciliation = reduced(status(revision: 2, reconciliation: .review))
+        expect(deferredReconciliation.issueCount == 0, "disabled clean review must not be an issue")
+        expect(deferredReconciliation.displayState == .disarmed, "disabled clean review must remain VYPNUTO")
+        let deferredPresentation = CompanionRemotePresentationFactory.make(
+            from: deferredReconciliation,
+            now: reference
+        )
+        expect(deferredPresentation.menuBar.pillText == "VYPNUTO", "disabled review must keep VYPNUTO pill")
+        let deferredSafety = deferredPresentation.sections.first { $0.id == "safety" }
+        expect(deferredSafety?.summary == "Kontrola před zapnutím", "disabled review safety summary")
+        expect(deferredSafety?.summaryTone == .warning, "disabled review summary must be amber")
+        expect(deferredSafety?.hasProblem == false, "disabled review must not mark safety as a problem")
+        expect(deferredSafety?.isInitiallyExpanded == false, "disabled review must stay collapsed")
+        expect(
+            deferredSafety?.rows.contains { row in
+                guard case .keyValue(let value) = row else { return false }
+                return value.id == "reconciliation"
+                    && value.value == "Proběhne před zapnutím"
+                    && value.tone == .warning
+            } == true,
+            "disabled review row must describe deferred preflight"
+        )
+        expect(
+            CompanionTransitionDetector.detect(
+                previous: clean,
+                next: deferredReconciliation,
+                now: reference
+            ) == nil,
+            "disabled clean review must not auto-open"
+        )
+
+        let reconciliation = reduced(status(
+            revision: 2,
+            copierState: .live,
+            reconciliation: .review
+        ))
+        expect(reconciliation.displayState == .intervention(issueCount: 1), "LIVE review must require intervention")
         expect(
             CompanionTransitionDetector.detect(previous: clean, next: reconciliation, now: reference)?.rowID == "reconciliation",
-            "reconciliation review must target its row"
+            "LIVE reconciliation review must target its row"
+        )
+
+        let disabledReviewWithDivergence = reduced(status(
+            revision: 2,
+            reconciliation: .review,
+            divergences: [.init(symbol: "MNQ", account: "redacted", detail: "qty")]
+        ))
+        expect(
+            disabledReviewWithDivergence.displayState == .intervention(issueCount: 2),
+            "disabled review with divergence must require intervention"
+        )
+
+        let shadowReview = reduced(status(
+            revision: 2,
+            copierState: .shadow,
+            reconciliation: .review
+        ))
+        expect(shadowReview.displayState == .shadow, "SHADOW clean review must remain SHADOW")
+        let shadowReviewPresentation = CompanionRemotePresentationFactory.make(
+            from: shadowReview,
+            now: reference
+        )
+        expect(shadowReviewPresentation.menuBar.pillText == "SHADOW", "SHADOW review must keep SHADOW pill")
+        expect(
+            shadowReviewPresentation.sections.first { $0.id == "safety" }?.isInitiallyExpanded == false,
+            "SHADOW clean review safety must stay collapsed"
         )
 
         let stuck = reduced(status(revision: 2, stuckOutboxCount: 1))
@@ -140,8 +202,8 @@ struct CompanionTransitionDetectorProbe {
             "LIVE to SHADOW must be a mode transition"
         )
         expect(
-            CompanionTransitionDetector.detect(previous: clean, next: shadow, now: reference) == nil,
-            "DISARMED to SHADOW must stay silent"
+            CompanionTransitionDetector.detect(previous: clean, next: shadow, now: reference)?.category == .mode,
+            "VYPNUTO to SHADOW must be a mode transition"
         )
         expect(
             CompanionTransitionDetector.detect(previous: disarmedUnverified, next: shadow, now: reference)?.category == .mode,

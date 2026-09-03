@@ -156,7 +156,7 @@ final class MacCompanionFunctionalTests: XCTestCase {
         XCTAssertEqual(presentation.hero.title, "VYPNUTO")
         XCTAssertEqual(
             presentation.hero.detail,
-            "Copier je DISARMED · neposílá příkazy · potvrzeno před 0 s"
+            "Copier je vypnutý · neposílá příkazy · potvrzeno před 0 s"
         )
         XCTAssertEqual(
             presentation.hero.supportingText,
@@ -245,6 +245,165 @@ final class MacCompanionFunctionalTests: XCTestCase {
 
         XCTAssertEqual(reduced.displayState, .intervention(issueCount: 1))
         XCTAssertEqual(reduced.issueCount, 1)
+    }
+
+    func testReconciliationReviewMatrixDistinguishesDeferredPreflightFromIncident() throws {
+        let reconciliationProblem = MacCompanionStatusDTO.ProblemDTO(
+            kind: .reconciliation,
+            text: "Kontrola pozic proběhne před dalším zapnutím."
+        )
+        let disabledReview = makeStatus(
+            copierState: .disarmed,
+            reconciliation: .review,
+            problems: [reconciliationProblem]
+        )
+        let disabledReduced = CompanionFreshnessReducer.reduce(disabledReview, now: referenceDate)
+        let disabledPresentation = CompanionRemotePresentationFactory.make(
+            from: disabledReduced,
+            now: referenceDate
+        )
+        let disabledSafety = try XCTUnwrap(
+            disabledPresentation.sections.first { $0.id == "safety" }
+        )
+
+        XCTAssertEqual(disabledReduced.displayState, .disarmedUnverified)
+        XCTAssertEqual(disabledReduced.issueCount, 0)
+        XCTAssertEqual(disabledPresentation.menuBar.pillText, "VYPNUTO")
+        XCTAssertEqual(disabledSafety.summary, "Kontrola před zapnutím")
+        XCTAssertEqual(disabledSafety.summaryTone, .warning)
+        XCTAssertFalse(disabledSafety.hasProblem)
+        XCTAssertFalse(disabledSafety.isInitiallyExpanded)
+        XCTAssertTrue(disabledSafety.rows.contains { row in
+            guard case .keyValue(let value) = row else { return false }
+            return value.id == "reconciliation"
+                && value.value == "Proběhne před zapnutím"
+                && value.tone == .warning
+        })
+
+        let divergence = MacCompanionStatusDTO.DivergenceDTO(
+            symbol: "MNQ",
+            account: "Follower 1",
+            detail: "Pozice se liší od leadera."
+        )
+        let disabledReviewWithDivergence = makeStatus(
+            copierState: .disarmed,
+            reconciliation: .review,
+            divergences: [divergence],
+            problems: [reconciliationProblem, .init(kind: .divergence, text: "Divergence")]
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                disabledReviewWithDivergence,
+                now: referenceDate
+            ).displayState,
+            .intervention(issueCount: 2)
+        )
+
+        let disabledReviewWithAnotherProblem = makeStatus(
+            copierState: .disarmed,
+            reconciliation: .review,
+            problems: [reconciliationProblem, .init(kind: .workerOffline, text: "Worker offline")]
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                disabledReviewWithAnotherProblem,
+                now: referenceDate
+            ).displayState,
+            .intervention(issueCount: 1)
+        )
+
+        let disabledReviewWithStuckOutbox = makeStatus(
+            copierState: .disarmed,
+            reconciliation: .review,
+            stuckOutboxCount: 1,
+            problems: [reconciliationProblem, .init(kind: .stuckOutbox, text: "Stuck outbox")]
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                disabledReviewWithStuckOutbox,
+                now: referenceDate
+            ).displayState,
+            .intervention(issueCount: 2)
+        )
+
+        let disabledReviewWithKillSwitch = makeStatus(
+            copierState: .disarmed,
+            reconciliation: .review,
+            killSwitchTripped: true,
+            problems: [reconciliationProblem]
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                disabledReviewWithKillSwitch,
+                now: referenceDate
+            ).displayState,
+            .intervention(issueCount: 2)
+        )
+
+        let liveReview = makeStatus(
+            copierState: .live,
+            reconciliation: .review,
+            problems: [reconciliationProblem]
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(liveReview, now: referenceDate).displayState,
+            .intervention(issueCount: 1)
+        )
+
+        let shadowReview = makeStatus(
+            copierState: .shadow,
+            reconciliation: .review,
+            problems: [reconciliationProblem]
+        )
+        let shadowReduced = CompanionFreshnessReducer.reduce(shadowReview, now: referenceDate)
+        let shadowPresentation = CompanionRemotePresentationFactory.make(
+            from: shadowReduced,
+            now: referenceDate
+        )
+        let shadowSafety = try XCTUnwrap(
+            shadowPresentation.sections.first { $0.id == "safety" }
+        )
+        XCTAssertEqual(shadowReduced.displayState, .shadow)
+        XCTAssertEqual(shadowReduced.issueCount, 0)
+        XCTAssertEqual(shadowPresentation.menuBar.pillText, "SHADOW")
+        XCTAssertEqual(shadowSafety.summary, "Kontrola před zapnutím")
+        XCTAssertEqual(shadowSafety.summaryTone, .warning)
+        XCTAssertFalse(shadowSafety.hasProblem)
+        XCTAssertFalse(shadowSafety.isInitiallyExpanded)
+    }
+
+    func testAllRemotePresentationsExposeOnlyVypnutoTerminology() throws {
+        let verifiedFlatExposure = MacCompanionStatusDTO.ExposureDTO(
+            verifiedAt: referenceDate,
+            positions: [],
+            followerAck: nil,
+            accountsWithWorkingOrders: 0
+        )
+        let statusesAndNow: [(MacCompanionStatusDTO, Date)] = [
+            (makeStatus(copierState: .live), referenceDate),
+            (makeStatus(copierState: .shadow), referenceDate),
+            (makeStatus(copierState: .disarmed, exposure: verifiedFlatExposure), referenceDate),
+            (makeStatus(copierState: .disarmed), referenceDate),
+            (makeStatus(divergences: [
+                .init(symbol: "MNQ", account: "Follower 1", detail: "Pozice se liší.")
+            ]), referenceDate),
+            (makeStatus(brokerConnected: nil), referenceDate),
+            (makeStatus(copierState: .disarmed), referenceDate.addingTimeInterval(11)),
+            (makeStatus(copierState: .disarmed), referenceDate.addingTimeInterval(91))
+        ]
+        let forbidden = try NSRegularExpression(pattern: #"(?i)\bdisarm"#)
+
+        for (status, now) in statusesAndNow {
+            let reduced = CompanionFreshnessReducer.reduce(status, now: now)
+            let presentation = CompanionRemotePresentationFactory.make(from: reduced, now: now)
+            let visibleText = presentation.allVisibleText.joined(separator: "\n")
+            let match = forbidden.firstMatch(
+                in: visibleText,
+                range: NSRange(visibleText.startIndex..<visibleText.endIndex, in: visibleText)
+            )
+
+            XCTAssertNil(match, "\(presentation.displayState) exposes DISARM terminology")
+        }
     }
 
     func testVerifiedPositionsWithoutWorkingOrderCountNeverClaimsFlat() throws {
@@ -570,6 +729,7 @@ private extension MacCompanionFunctionalTests {
         brokerConnected: Bool? = true,
         reconciliation: MacCompanionStatusDTO.ReconciliationDTO.Status = .clean,
         divergences: [MacCompanionStatusDTO.DivergenceDTO] = [],
+        stuckOutboxCount: Int = 0,
         killSwitchTripped: Bool = false,
         exposure: MacCompanionStatusDTO.ExposureDTO? = nil,
         problems: [MacCompanionStatusDTO.ProblemDTO] = []
@@ -591,7 +751,7 @@ private extension MacCompanionFunctionalTests {
             safety: .init(
                 reconciliation: .init(status: reconciliation, at: nil),
                 divergences: divergences,
-                outbox: .init(stuckCount: 0, oldestStuckMinutes: nil),
+                outbox: .init(stuckCount: stuckOutboxCount, oldestStuckMinutes: nil),
                 cooldownActive: false,
                 dayLockActive: false,
                 killSwitchTripped: killSwitchTripped

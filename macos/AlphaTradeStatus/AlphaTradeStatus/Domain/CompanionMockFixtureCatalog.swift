@@ -200,9 +200,10 @@ private extension CompanionMockFixtureCatalog {
             fixtureID: .disarmed,
             displayState: .disarmed,
             menuBar: .init(
-                pillText: nil,
+                pillText: "VYPNUTO",
+                symbolName: "power",
                 tone: .neutral,
-                accessibilityLabel: "AlphaTrade, DISARMED"
+                accessibilityLabel: "AlphaTrade, copier vypnutý, flat ověřen"
             ),
             freshness: .init(
                 text: "Ověřeno před 5 s",
@@ -210,10 +211,10 @@ private extension CompanionMockFixtureCatalog {
                 accessibilityLabel: "Stav ověřen před pěti sekundami"
             ),
             hero: .init(
-                symbolName: "",
-                title: "DISARMED",
-                badge: nil,
-                detail: "Copier neposílá příkazy · broker ověřil nulové pozice i working orders ve 12:51",
+                symbolName: "power",
+                title: "VYPNUTO",
+                badge: "flat ověřen",
+                detail: "Copier je vypnutý · neposílá příkazy · broker ověřil nulové pozice i working orders ve 12:51",
                 tone: .muted
             ),
             banner: nil,
@@ -233,7 +234,7 @@ private extension CompanionMockFixtureCatalog {
         let safety = StatusSectionPresentation(
             id: "safety",
             title: "Bezpečnost",
-            summary: "Fail-closed · expozice při DISARMED",
+            summary: "Fail-closed · expozice při vypnutém copieru",
             summaryTone: .danger,
             isInitiallyExpanded: true,
             hasProblem: true,
@@ -294,12 +295,12 @@ private extension CompanionMockFixtureCatalog {
                 symbolName: "exclamationmark.triangle.fill",
                 title: "ZÁSAH NUTNÝ",
                 badge: "1 problém",
-                detail: "Copier je DISARMED, ale broker potvrdil otevřenou expozici ve 12:52",
+                detail: "Copier je vypnutý, ale broker potvrdil otevřenou expozici ve 12:52",
                 tone: .danger
             ),
             banner: .init(
                 symbolName: "hand.raised.fill",
-                text: "DISARMED neznamená flat. Expozici vyřeš pouze v LIVE nebo u brokera, nikdy z tohoto panelu.",
+                text: "VYPNUTO neznamená flat. Expozici vyřeš pouze v LIVE nebo u brokera, nikdy z tohoto panelu.",
                 tone: .danger
             ),
             sections: [
@@ -362,7 +363,7 @@ private extension CompanionMockFixtureCatalog {
                 symbolName: "power",
                 title: "VYPNUTO",
                 badge: nil,
-                detail: "Copier je DISARMED · neposílá příkazy · potvrzeno před 5 s",
+                detail: "Copier je vypnutý · neposílá příkazy · potvrzeno před 5 s",
                 supportingText: "Expozice není brokerem ověřena — flat nelze tvrdit",
                 tone: .danger
             ),

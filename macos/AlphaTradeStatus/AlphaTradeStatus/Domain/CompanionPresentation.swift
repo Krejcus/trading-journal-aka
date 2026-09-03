@@ -45,7 +45,7 @@ enum CompanionDisplayState: Equatable, Sendable {
         case .shadow:
             return "SHADOW"
         case .disarmed:
-            return "DISARMED"
+            return "VYPNUTO"
         case .disarmedUnverified:
             return "VYPNUTO"
         case .intervention:
@@ -270,7 +270,9 @@ struct CompanionPresentation: Equatable, Sendable, Identifiable {
     var allVisibleText: [String] {
         var text = [
             menuBar.pillText,
+            menuBar.accessibilityLabel,
             freshness.text,
+            freshness.accessibilityLabel,
             hero.title,
             hero.badge,
             hero.detail,
@@ -283,7 +285,7 @@ struct CompanionPresentation: Equatable, Sendable, Identifiable {
             text.append(section.summary)
             text.append(contentsOf: section.rows.flatMap(\.visibleText))
         }
-        text.append(contentsOf: footer.actions.map(\.title))
+        text.append(contentsOf: footer.actions.flatMap { [$0.title, $0.accessibilityLabel] })
         text.append(footer.sourceNote)
         return text
     }

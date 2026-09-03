@@ -369,7 +369,8 @@ private extension CompanionTransitionDetector {
         }
 
         if previous.safety.reconciliation.status != .review,
-           next.safety.reconciliation.status == .review {
+           next.safety.reconciliation.status == .review,
+           !CompanionSafetyPolicy.isDeferredPreflightReconciliation(next) {
             return .init(
                 category: .worsening,
                 sectionID: "safety",
@@ -382,6 +383,8 @@ private extension CompanionTransitionDetector {
         if let newProblem = next.problems.first(where: {
             Self.transitionProblemKinds.contains($0.kind)
                 && !previousProblems.contains("\($0.kind.rawValue)|\($0.text)")
+                && !($0.kind == .reconciliation
+                    && CompanionSafetyPolicy.isDeferredPreflightReconciliation(next))
         }) {
             let target = target(for: newProblem.kind, status: next)
             return .init(
@@ -417,6 +420,7 @@ private extension CompanionTransitionDetector {
             )
         }
         if previous.safety.reconciliation.status == .review,
+           !CompanionSafetyPolicy.isDeferredPreflightReconciliation(previous),
            next.safety.reconciliation.status == .clean {
             return .init(
                 category: .improvement,
@@ -428,7 +432,10 @@ private extension CompanionTransitionDetector {
 
         let nextKinds = Set(next.problems.map(\.kind))
         if let removed = previous.problems.first(where: {
-            transitionProblemKinds.contains($0.kind) && !nextKinds.contains($0.kind)
+            transitionProblemKinds.contains($0.kind)
+                && !nextKinds.contains($0.kind)
+                && !($0.kind == .reconciliation
+                    && CompanionSafetyPolicy.isDeferredPreflightReconciliation(previous))
         }) {
             let target = target(for: removed.kind, status: next)
             return .init(
@@ -461,9 +468,7 @@ private extension CompanionTransitionDetector {
                 category: .mode,
                 sectionID: "safety",
                 rowID: "reconciliation",
-                reason: isDisarmedUnverified(next.displayState)
-                    ? "Copier přešel do režimu VYPNUTO."
-                    : "Copier přešel do režimu DISARMED."
+                reason: "Copier přešel do režimu VYPNUTO."
             )
         case (.live, .shadow):
             return .init(
@@ -473,7 +478,6 @@ private extension CompanionTransitionDetector {
                 reason: "Copier přešel do režimu SHADOW."
             )
         case (.disarmed, .shadow):
-            guard isDisarmedUnverified(previous.displayState) else { return nil }
             return .init(
                 category: .mode,
                 sectionID: "leader-tracking",
@@ -481,7 +485,6 @@ private extension CompanionTransitionDetector {
                 reason: "Copier přešel z VYPNUTO do režimu SHADOW."
             )
         case (.shadow, .disarmed):
-            guard isDisarmedUnverified(next.displayState) else { return nil }
             return .init(
                 category: .mode,
                 sectionID: "safety",
@@ -565,11 +568,6 @@ private extension CompanionTransitionDetector {
             && status.exposure.verifiedAt != nil
             && (!status.exposure.positions.isEmpty
                 || (status.exposure.accountsWithWorkingOrders ?? 0) > 0)
-    }
-
-    static func isDisarmedUnverified(_ state: CompanionDisplayState) -> Bool {
-        if case .disarmedUnverified = state { return true }
-        return false
     }
 
     static func freshnessKey(_ freshness: CompanionFreshness) -> String {
