@@ -304,6 +304,26 @@ interface PendingAction {
   accountIds?: number[];
 }
 
+export interface UnavailableFollowerRemovalPlan {
+  group: CopyGroupConfig;
+  /**
+   * UI důkaz účtů, které z nové topologie mizí. Samotný command formát se
+   * nemění; execution agent tentýž seznam znovu autoritativně odvodí z OAuth
+   * discovery a předá ho controlleru jako `missingOptionalAccountIds`.
+   */
+  missingOptionalAccountIds: number[];
+}
+
+export interface PendingUnavailableFollowerRemoval {
+  source: 'arm' | 'editor' | 'row';
+  saved: CopyGroupConfig;
+  editGroup: CopyGroupConfig;
+  plan: UnavailableFollowerRemovalPlan | null;
+  leaderUnavailableAccountId: number | null;
+  error: string | null;
+  savedSuccessfully: boolean;
+}
+
 export interface CopyGroupPowerBlockerInput {
   powered: boolean;
   candidateName: string;
@@ -355,6 +375,29 @@ export function copyGroupPowerBlocker({
   }
 
   return null;
+}
+
+/**
+ * Připraví pouze explicitní odebrání followerů, kteří opravdu chybí v
+ * aktuálním OAuth snapshotu. Leader se touto cestou nikdy nemění ani nemaže.
+ */
+export function unavailableFollowerRemovalPlan(
+  group: CopyGroupConfig,
+  availableAccountIds: Iterable<number>,
+  requestedAccountIds?: Iterable<number>,
+): UnavailableFollowerRemovalPlan | null {
+  const unavailable = unavailableCopyGroupAccounts(group, availableAccountIds);
+  const requested = requestedAccountIds == null ? null : new Set(requestedAccountIds);
+  const removedIds = unavailable.followerAccountIds.filter(accountId => requested == null || requested.has(accountId));
+  if (removedIds.length === 0) return null;
+  const removed = new Set(removedIds);
+  return {
+    group: {
+      ...group,
+      followers: group.followers.filter(follower => !removed.has(follower.accountId)),
+    },
+    missingOptionalAccountIds: removedIds,
+  };
 }
 
 /** Kill switch zastaví nové execution akce, ale nesmí odříznout poslední
@@ -507,6 +550,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [groups, setGroups] = useState<CopyGroupConfig[]>(() => loadDraftGroups(snapshot));
   const [editorGroup, setEditorGroup] = useState<CopyGroupConfig | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [pendingUnavailableFollowerRemoval, setPendingUnavailableFollowerRemoval] = useState<PendingUnavailableFollowerRemoval | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [tableSettingsOpen, setTableSettingsOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
@@ -681,6 +725,26 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     return parts.length > 0 ? parts.join(' · ') : null;
   };
 
+  const requestUnavailableFollowerRemoval = (
+    saved: CopyGroupConfig,
+    draft: CopyGroupConfig,
+    requestedAccountIds?: Iterable<number>,
+    leaderUnavailableAccountId: number | null = null,
+    source: PendingUnavailableFollowerRemoval['source'] = 'arm',
+  ) => {
+    setPendingUnavailableFollowerRemoval({
+      source,
+      saved: structuredClone(saved),
+      editGroup: structuredClone(draft),
+      plan: leaderUnavailableAccountId == null
+        ? unavailableFollowerRemovalPlan(draft, snapshot.accounts.map(account => account.id), requestedAccountIds)
+        : null,
+      leaderUnavailableAccountId,
+      error: null,
+      savedSuccessfully: false,
+    });
+  };
+
   const runCopierTransition = async (
     groupId: string,
     connecting: boolean,
@@ -737,6 +801,19 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     const validationErrors = validation
       ? copyGroupValidationMessages(validation, accountId => accountLabel(accountId, candidate.id))
       : [];
+    const validationIssues = validation?.issues ?? [];
+    const onlyUnavailableAccounts = validationIssues.length > 0
+      && validationIssues.every(issue => issue.code === 'leader-unavailable' || issue.code === 'follower-unavailable');
+    if (!powered && validation && onlyUnavailableAccounts) {
+      const unavailable = unavailableCopyGroupAccounts(candidate, snapshot.accounts.map(account => account.id));
+      requestUnavailableFollowerRemoval(
+        candidate,
+        candidate,
+        unavailable.followerAccountIds,
+        unavailable.leaderAccountId,
+      );
+      return;
+    }
     const blocker = copyGroupPowerBlocker({
       powered,
       candidateName: candidate.name,
@@ -804,7 +881,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     }
   } : undefined;
 
-  const runCommand = async (command: LiveCopyTradingCommand, update?: () => void) => {
+  const runCommand = async (
+    command: LiveCopyTradingCommand,
+    update?: () => void,
+    onError?: (message: string) => void,
+  ): Promise<boolean> => {
     const key = command.type === 'flatten-account' || command.type === 'set-replication' || command.type === 'set-multiplier'
       ? `${command.type}-${command.accountId}`
       : 'groupId' in command ? `${command.type}-${command.groupId}` : command.type;
@@ -814,17 +895,17 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       ? command.group.id
       : 'groupId' in command ? command.groupId : null;
     const targetsExecutionRuntime = commandGroupId != null && commandGroupId === executionGroupId;
-    if (busyCommand) return;
+    if (busyCommand) return false;
     setBusyCommand(key);
     try {
       if (brokerWrite && copierKillSwitch && commandBlockedByCopierKillSwitch(command)) {
         setToast({ tone: 'error', text: 'Kill switch je aktivní. Brokerový příkaz byl zablokován.' });
-        return;
+        return false;
       }
       if (brokerWrite && (!commandAdapter || !targetsExecutionRuntime || (requiresArmed && !copierArmed))) {
         update?.();
         setToast({ tone: 'info', text: 'Preview pouze: tato skupina není připojená k připravenému execution runtime.' });
-        return;
+        return true;
       }
       const result = commandAdapter && targetsExecutionRuntime
         ? await commandAdapter.execute(command)
@@ -848,32 +929,42 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           ? successText
           : 'Konfigurace byla uložena pouze lokálně. Tato skupina není připojená k execution runtime.',
       });
+      return true;
     } catch (reason) {
-      setToast({
-        tone: 'error',
-        text: reason instanceof Error ? reason.message : 'Akci se nepodařilo dokončit.',
-        ...('accountId' in command && typeof command.accountId === 'number'
-          ? { accountIds: [command.accountId] }
-          : {}),
-      });
+      const message = reason instanceof Error ? reason.message : 'Akci se nepodařilo dokončit.';
+      if (onError) onError(message);
+      else {
+        setToast({
+          tone: 'error',
+          text: message,
+          ...('accountId' in command && typeof command.accountId === 'number'
+            ? { accountIds: [command.accountId] }
+            : {}),
+        });
+      }
+      return false;
     } finally {
       setBusyCommand(null);
     }
   };
 
-  const saveGroup = async (group: CopyGroupConfig) => {
+  const saveGroup = async (group: CopyGroupConfig, onError?: (message: string) => void): Promise<boolean> => {
     const exists = groups.some(candidate => candidate.id === group.id);
     const normalizedGroup = group.id === executionGroupId
       ? group
       : { ...group, enabled: false };
     const validation = validateCopyGroup(normalizedGroup, snapshot.accounts.map(account => account.id));
     if (!validation.valid) {
-      setToast({
-        tone: 'error',
-        text: copyGroupValidationMessages(validation, accountId => accountLabel(accountId, normalizedGroup.id)).join(' '),
-        accountIds: validation.issues?.flatMap(issue => issue.accountId == null ? [] : [issue.accountId]),
-      });
-      return;
+      const message = copyGroupValidationMessages(validation, accountId => accountLabel(accountId, normalizedGroup.id)).join(' ');
+      if (onError) onError(message);
+      else {
+        setToast({
+          tone: 'error',
+          text: message,
+          accountIds: validation.issues?.flatMap(issue => issue.accountId == null ? [] : [issue.accountId]),
+        });
+      }
+      return false;
     }
     const command: LiveCopyTradingCommand = exists
       ? { type: 'update-group', group: normalizedGroup }
@@ -881,13 +972,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     // Editor se smí přepnout na nový leader až po potvrzení execution
     // runtime. Když broker preflight změnu odmítne, runCommand callback
     // nespustí a UI tak nikdy nelže o jiné topologii než drží worker.
-    await runCommand(command, () => {
+    return runCommand(command, () => {
       setGroups(current => exists
         ? current.map(candidate => candidate.id === normalizedGroup.id ? normalizedGroup : candidate)
         : [...current, normalizedGroup]);
       setExpanded(current => new Set(current).add(normalizedGroup.id));
       setEditorGroup(null);
-    });
+    }, onError);
   };
 
   const updateFollower = (groupId: string, accountId: number, patch: Partial<{ mode: ReplicationMode; multiplier: number }>) => {
@@ -908,6 +999,22 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       else next.add(id);
       return next;
     });
+
+  const confirmUnavailableFollowerRemoval = async (plan: UnavailableFollowerRemovalPlan) => {
+    if (busyCommand) return;
+    setPendingUnavailableFollowerRemoval(current => current ? { ...current, error: null } : current);
+    const saved = await saveGroup(plan.group, message => {
+      setPendingUnavailableFollowerRemoval(current => current ? { ...current, error: message } : current);
+    });
+    if (saved) {
+      setPendingUnavailableFollowerRemoval(current => current ? {
+        ...current,
+        plan,
+        error: null,
+        savedSuccessfully: true,
+      } : current);
+    }
+  };
 
   return (
     <div className="space-y-5" style={{ fontSize: `${density}%` }}>
@@ -1097,6 +1204,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                                   type: 'flatten-account', groupId: group.id, accountId, operationId: manualOperationId(),
                                 },
                               })}
+                              onRemoveUnavailableFollower={accountId => requestUnavailableFollowerRemoval(
+                                group,
+                                group,
+                                [accountId],
+                                null,
+                                'row',
+                              )}
                               onCancelOrder={orderId => setPendingAction({
                                 title: 'Zrušit příkaz?', detail: 'Připraví zrušení tohoto pracovního příkazu.',
                                 confirmLabel: 'Zrušit příkaz', danger: true, command: { type: 'cancel-order', groupId: group.id, orderId },
@@ -1130,6 +1244,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           accountLabel={(accountId, role) => accountLabel(accountId, editorGroup.id, role)}
           onClose={() => setEditorGroup(null)}
           onSave={group => void saveGroup(group)}
+          onRemoveUnavailableFollowers={(draft, accountIds) => requestUnavailableFollowerRemoval(
+            editorGroup,
+            draft,
+            accountIds,
+            null,
+            'editor',
+          )}
           onDelete={groups.some(group => group.id === editorGroup.id) ? () => {
             setEditorGroup(null);
             setPendingAction({
@@ -1138,6 +1259,34 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             });
           } : undefined}
           saving={busyCommand != null}
+        />
+      )}
+      {pendingUnavailableFollowerRemoval && (
+        <UnavailableFollowerRemovalDialogPortal
+          state={pendingUnavailableFollowerRemoval}
+          accountLabel={(accountId, role) => accountLabel(
+            accountId,
+            pendingUnavailableFollowerRemoval.saved.id,
+            role,
+          )}
+          busy={busyCommand != null}
+          onClose={() => setPendingUnavailableFollowerRemoval(null)}
+          onEdit={() => {
+            const editGroup = structuredClone(pendingUnavailableFollowerRemoval.editGroup);
+            setPendingUnavailableFollowerRemoval(null);
+            setEditorGroup(editGroup);
+          }}
+          onConfirm={plan => void confirmUnavailableFollowerRemoval(plan)}
+          onArm={pendingUnavailableFollowerRemoval.source === 'arm'
+            && pendingUnavailableFollowerRemoval.savedSuccessfully
+            && pendingUnavailableFollowerRemoval.plan
+            && (!!onSwitchAndArm || (pendingUnavailableFollowerRemoval.plan.group.id === executionGroupId && !!onArmLive))
+            ? () => {
+                const updatedGroup = pendingUnavailableFollowerRemoval.plan?.group;
+                setPendingUnavailableFollowerRemoval(null);
+                if (updatedGroup) requestGroupPower(updatedGroup);
+              }
+            : undefined}
         />
       )}
       {pendingAction && (
@@ -1980,7 +2129,7 @@ export const AccountEligibilityPill = ({ eligibility, live, unavailable = false,
     <CheckCircle2 aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Aktivní</span>;
 };
 
-const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eligibilityByAccount, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, dailyPnlPending, onMultiplier, onFlattenAccount, onCancelOrder, redactNames, redaction, hiddenOrderColumns }: {
+const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eligibilityByAccount, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, dailyPnlPending, onMultiplier, onFlattenAccount, onRemoveUnavailableFollower, onCancelOrder, redactNames, redaction, hiddenOrderColumns }: {
   rows: Row[];
   tab: 'accounts' | 'orders';
   isLive: (a?: LiveAccount) => boolean;
@@ -1996,6 +2145,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
   dailyPnlPending: boolean;
   onMultiplier: (accountId: number, multiplier: number) => void;
   onFlattenAccount: (accountId: number) => void;
+  onRemoveUnavailableFollower: (accountId: number) => void;
   onCancelOrder: (orderId: number) => void;
   redactNames: boolean;
   redaction: RedactionSettings;
@@ -2072,6 +2222,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
                 onVerifyEligibility={onVerifyEligibility}
                 verifying={row.accountId != null && verifyingAccountId === row.accountId}
                 onMultiplier={onMultiplier} onFlatten={onFlattenAccount}
+                onRemoveUnavailableFollower={onRemoveUnavailableFollower}
                 redactNames={redactNames} redaction={redaction}
               />
             ))}
@@ -2115,7 +2266,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
   );
 };
 
-const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCommand, onVerifyEligibility, verifying, dailyPnlPending, onMultiplier, onFlatten, redactNames, redaction }: {
+const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCommand, onVerifyEligibility, verifying, dailyPnlPending, onMultiplier, onFlatten, onRemoveUnavailableFollower, redactNames, redaction }: {
   row: Row; live: boolean; onAccount?: (a: LiveAccount) => void; columns: ColumnDef[];
   orders: LiveOrder[];
   eligibility?: CopierAccountEligibility;
@@ -2125,6 +2276,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
   dailyPnlPending: boolean;
   onMultiplier: (accountId: number, multiplier: number) => void;
   onFlatten: (accountId: number) => void;
+  onRemoveUnavailableFollower: (accountId: number) => void;
   redactNames: boolean;
   redaction: RedactionSettings;
 }) => {
@@ -2245,6 +2397,13 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
               onClick={event => { event.stopPropagation(); onFlatten(a.id); }}
               className="group flex h-11 items-center whitespace-nowrap text-[10px] font-bold text-[var(--text-secondary)] hover:text-rose-500 disabled:opacity-40"
             ><span className="flex h-7 items-center rounded-md border border-[var(--border-subtle)] px-2.5 group-hover:border-rose-500/25">Flatten</span></button>
+          ) : col.key === 'actions' && !a && !row.isLeader && accountId != null ? (
+            <button
+              type="button"
+              disabled={busyCommand != null}
+              onClick={event => { event.stopPropagation(); onRemoveUnavailableFollower(accountId); }}
+              className="inline-flex min-h-7 items-center rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-2 py-1 text-[9px] font-black leading-tight text-amber-700 hover:bg-amber-500/12 disabled:opacity-40"
+            >Odebrat ze skupiny</button>
           ) : cell(col.key)}
         </td>
       ))}
@@ -2408,7 +2567,7 @@ export const CopyGroupChangePreview = ({ saved, draft, accountLabel }: {
   );
 };
 
-const GroupEditorDialog = ({ group, isNew, accounts, accountLabel, saving, onClose, onSave, onDelete }: {
+const GroupEditorDialog = ({ group, isNew, accounts, accountLabel, saving, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
   group: CopyGroupConfig;
   isNew: boolean;
   accounts: LiveAccount[];
@@ -2416,6 +2575,7 @@ const GroupEditorDialog = ({ group, isNew, accounts, accountLabel, saving, onClo
   saving: boolean;
   onClose: () => void;
   onSave: (group: CopyGroupConfig) => void;
+  onRemoveUnavailableFollowers: (group: CopyGroupConfig, accountIds: number[]) => void;
   onDelete?: () => void;
 }) => {
   const [draft, setDraft] = useState<CopyGroupConfig>(() => ({
@@ -2513,7 +2673,7 @@ const GroupEditorDialog = ({ group, isNew, accounts, accountLabel, saving, onClo
             ><span className={`flex h-9 w-9 items-center justify-center rounded-full ${active ? 'bg-indigo-600 text-white' : 'bg-[var(--bg-page)] text-[var(--text-secondary)]'}`}><Crown size={16} /></span><span className="min-w-0"><b className="block truncate text-xs text-[var(--text-primary)]">{account.name}</b><span className="mt-0.5 block truncate text-[10px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span></span>{active ? <Check size={16} className="ml-auto text-indigo-500" /> : null}</button>;
           })}</div></div> : null}
 
-          {step === 2 ? <div className="space-y-4"><div className="flex items-end justify-between gap-3"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Vyber followery</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Vyber účty, které mají kopírovat leadera. Uložené skupiny se mohou překrývat; současně se spustí jen jedna execution skupina.</p></div><div className="flex items-center gap-3"><button type="button" onClick={toggleAllFollowers} disabled={followerCandidates.length === 0} className="text-xs font-black text-indigo-500 hover:underline disabled:cursor-not-allowed disabled:opacity-40">{allFollowersSelected ? 'Zrušit výběr' : 'Označit vše'}</button><span className="text-xs font-black text-indigo-500">Vybráno: {draft.followers.length}</span></div></div>{unavailableFollowers.length > 0 ? <div className="rounded-lg border border-amber-500/35 bg-amber-500/[0.07] p-3"><div className="flex gap-2.5"><AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" /><div><b className="block text-xs text-amber-700">Nedostupné účty v uložené skupině</b><span className="mt-0.5 block text-[11px] text-amber-700/80">Vyber přesnou náhradu z OAuth snapshotu, nebo starý účet odeber. Nic se nepáruje automaticky.</span></div></div><div className="mt-3 space-y-2">{unavailableFollowers.map(follower => {
+          {step === 2 ? <div className="space-y-4"><div className="flex items-end justify-between gap-3"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Vyber followery</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Vyber účty, které mají kopírovat leadera. Uložené skupiny se mohou překrývat; současně se spustí jen jedna execution skupina.</p></div><div className="flex items-center gap-3"><button type="button" onClick={toggleAllFollowers} disabled={followerCandidates.length === 0} className="text-xs font-black text-indigo-500 hover:underline disabled:cursor-not-allowed disabled:opacity-40">{allFollowersSelected ? 'Zrušit výběr' : 'Označit vše'}</button><span className="text-xs font-black text-indigo-500">Vybráno: {draft.followers.length}</span></div></div>{unavailableFollowers.length > 0 ? <div className="rounded-lg border border-amber-500/35 bg-amber-500/[0.07] p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div className="flex gap-2.5"><AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" /><div><b className="block text-xs text-amber-700">Nedostupné účty v uložené skupině</b><span className="mt-0.5 block text-[11px] text-amber-700/80">Vyber přesnou náhradu z OAuth snapshotu, nebo starý účet odeber. Nic se nepáruje automaticky.</span></div></div><button type="button" disabled={saving} onClick={() => onRemoveUnavailableFollowers(draft, unavailableFollowers.map(follower => follower.accountId))} className="h-9 rounded-md bg-amber-600 px-3 text-xs font-black text-white hover:bg-amber-500 disabled:opacity-50">Odebrat všechny nedostupné</button></div><div className="mt-3 space-y-2">{unavailableFollowers.map(follower => {
             const replacementCandidates = accounts.filter(account => account.id !== draft.leaderAccountId && !draft.followers.some(item => item.accountId === account.id));
             return <div key={follower.accountId} className="grid gap-2 rounded-md border border-amber-500/20 bg-[var(--bg-card)] p-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(190px,1fr)_auto] sm:items-center"><span><b className="block text-xs text-[var(--text-primary)]">{accountLabel(follower.accountId, 'follower')}</b><span className="block text-[10px] text-[var(--text-secondary)]">{follower.mode === 'on-fill' ? 'Při vyplnění' : follower.mode === 'off' ? 'Vypnuto' : 'Při zadání'} · násobek {follower.multiplier}</span></span><select aria-label={`Nahradit nedostupný účet ${follower.accountId}`} defaultValue="" onChange={event => { const replacementId = Number(event.target.value); if (!Number.isSafeInteger(replacementId)) return; setDraft(current => replaceCopyGroupFollowerAccount(current, follower.accountId, replacementId)); if (follower.multiplier !== 1 || follower.maxContracts != null) setReplacementNotice(`Náhradní účet ${accountLabel(replacementId, 'follower')} dostal bezpečný násobek 1× bez Max limitu. Původní nastavení účtu ${accountLabel(follower.accountId, 'follower')} se záměrně nepřeneslo; případnou změnu nastav ručně a zkontroluj v přehledu před uložením.`); }} className="h-9 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)]"><option value="">Vyber náhradu…</option>{replacementCandidates.map(account => <option key={account.id} value={account.id}>{account.name} · {account.firm}</option>)}</select><button type="button" onClick={() => setDraft(current => ({ ...current, followers: current.followers.filter(item => item.accountId !== follower.accountId) }))} className="h-9 rounded-md border border-rose-500/25 px-3 text-xs font-bold text-rose-500 hover:bg-rose-500/10">Odebrat</button></div>;
           })}</div></div> : null}<div className="overflow-hidden rounded-lg border border-[var(--border-subtle)]"><div className="grid grid-cols-[minmax(0,1fr)_130px_84px_64px] gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 py-2 text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]"><span>Účet</span><span>Replikace</span><span className="text-right">Násobek</span><span className="text-right" title="Tvrdý strop expozice; překročení odmítne celý příkaz a odzbrojí copier">Max</span></div>{followerCandidates.map(account => {
@@ -2850,6 +3010,79 @@ const GroupTemplatesDialog = ({ templates, accounts, onChange, onClose }: {
     </div>, document.body,
   );
 };
+
+export const UnavailableFollowerRemovalDialog = ({ state, accountLabel, busy, onClose, onEdit, onConfirm, onArm }: {
+  state: PendingUnavailableFollowerRemoval;
+  accountLabel: (accountId: number, role?: CopyTradeAccountRole) => string;
+  busy: boolean;
+  onClose: () => void;
+  onEdit: () => void;
+  onConfirm: (plan: UnavailableFollowerRemovalPlan) => void;
+  onArm?: () => void;
+}) => {
+  const title = state.source === 'arm' ? 'Skupinu nelze zapnout' : 'Odebrat nedostupné účty?';
+  const removedLabels = state.plan?.missingOptionalAccountIds
+    .map(accountId => accountLabel(accountId, 'follower')) ?? [];
+  const leaderLabel = state.leaderUnavailableAccountId == null
+    ? null
+    : accountLabel(state.leaderUnavailableAccountId, 'leader');
+
+  return (
+    <section role="alertdialog" aria-modal="true" aria-label={title} className="w-full max-w-lg rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-5 shadow-2xl">
+      <div className={`flex h-11 w-11 items-center justify-center rounded-2xl ${state.savedSuccessfully ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'}`}>
+        {state.savedSuccessfully ? <CheckCircle2 size={21} /> : <AlertTriangle size={21} />}
+      </div>
+      <h3 className="mt-4 text-lg font-black text-[var(--text-primary)]">{state.savedSuccessfully ? 'Nedostupné účty byly odebrány' : title}</h3>
+      <p className="mt-1.5 text-sm leading-relaxed text-[var(--text-secondary)]">
+        {state.savedSuccessfully
+          ? 'Skupina je uložená a copier zůstává VYPNUTÝ. Zapnutí je vždy samostatný krok.'
+          : leaderLabel
+            ? `Leader ${leaderLabel} není v aktuálním OAuth snapshotu. Leader se jedním klikem nikdy nemění ani nemaže; vyber ho ručně v editoru skupiny.`
+            : `Ze skupiny ${state.saved.name} se odebere ${removedLabels.join(', ')}. Žádný náhradní účet se nebude automaticky hledat a copier se nezapne.`}
+      </p>
+
+      {state.plan ? (
+        <div className="mt-4">
+          <CopyGroupChangePreview saved={state.saved} draft={state.plan.group} accountLabel={accountLabel} />
+        </div>
+      ) : null}
+
+      {state.error ? (
+        <div role="alert" className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/[0.07] px-3 py-2.5 text-xs font-bold leading-relaxed text-rose-600">
+          {state.error} Změna nebyla uložena. Spusť Kontrolu pozic a zkus znovu.
+        </div>
+      ) : null}
+
+      {!state.savedSuccessfully && state.plan ? (
+        <div className="mt-4 rounded-xl border border-blue-500/15 bg-blue-500/[0.055] px-3 py-2.5 text-[11px] font-bold text-blue-600">
+          Po potvrzení se odešle stejný příkaz Update group jako z editoru. Execution agent chybějící odebírané followery předá do reconfigure jako missingOptionalAccountIds.
+        </div>
+      ) : null}
+
+      <div className="mt-5 flex flex-wrap justify-end gap-2">
+        {state.savedSuccessfully ? (
+          <>
+            <button type="button" onClick={onClose} disabled={busy} className="h-10 rounded-xl border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Zavřít</button>
+            {onArm ? <button type="button" onClick={onArm} disabled={busy} className="h-10 rounded-xl bg-emerald-600 px-4 text-xs font-black text-white hover:bg-emerald-500 disabled:opacity-50">Zapnout</button> : null}
+          </>
+        ) : (
+          <>
+            <button type="button" onClick={onClose} disabled={busy} className="h-10 rounded-xl border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Zavřít</button>
+            <button type="button" onClick={onEdit} disabled={busy} className="h-10 rounded-xl border border-indigo-500/25 px-4 text-xs font-black text-indigo-600 hover:bg-indigo-500/[0.06] disabled:opacity-50">Otevřít Edit group</button>
+            {state.plan ? <button type="button" onClick={() => onConfirm(state.plan as UnavailableFollowerRemovalPlan)} disabled={busy} className="h-10 rounded-xl bg-indigo-600 px-4 text-xs font-black text-white hover:bg-indigo-500 disabled:opacity-50">{busy ? 'Ukládám…' : 'Odebrat nedostupné účty a uložit'}</button> : null}
+          </>
+        )}
+      </div>
+    </section>
+  );
+};
+
+const UnavailableFollowerRemovalDialogPortal = (props: React.ComponentProps<typeof UnavailableFollowerRemovalDialog>) => createPortal(
+  <div className="fixed inset-0 z-[165] flex items-center justify-center bg-slate-950/35 p-4" onMouseDown={event => { if (event.target === event.currentTarget && !props.busy) props.onClose(); }}>
+    <UnavailableFollowerRemovalDialog {...props} />
+  </div>,
+  document.body,
+);
 
 const ConfirmActionDialog = ({ action, busy, apiReady, onClose, onConfirm }: { action: PendingAction; busy: boolean; apiReady: boolean; onClose: () => void; onConfirm: () => void }) => createPortal(
   <div className="fixed inset-0 z-[160] bg-slate-950/35 flex items-center justify-center p-4" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>

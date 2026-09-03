@@ -152,6 +152,26 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Codex, odebrání nedostupného followera přímo z blokace)
+
+ARM dialog pro skupinu blokovanou pouze účty chybějícími v aktuálním OAuth
+snapshotu nově rozlišuje leadera a followery. Chybějící leader nabízí jen
+ruční `Edit group`; chybějící followeři dostanou potvrzení se stejným diffem
+jako editor a akcí „Odebrat nedostupné účty a uložit“. Úspěch nechá copier
+DISARMED a nabídne `Zapnout` až jako samostatný klik. Stejná potvrzovací cesta
+je dostupná hromadně v amber banneru kroku Followeři a jednotlivě v řádku
+nedostupného followera. Selhání reconfigure zůstane viditelné ve stejném modalu
+s doporučením spustit Kontrolu pozic.
+
+UI dál posílá existující `update-group`; lokální agent beze změny odvodí
+odebírané chybějící followery jako optional a volá
+`reconfigureGroup(next, { missingOptionalAccountIds })`. Formát
+`CopyGroupConfig`, runtime/controller a ARM politika se neměnily. Cíleně
+prošlo 3 soubory / 24 testů a agent 38/38; plná sada prošla 225/225 souborů a
+1867/1867 testů, strict TypeScript bez výstupu, cílený ESLint, produkční build
+a `git diff --check`. Nic nebylo commitnuto, pushnuto, deploynuto ani spuštěno
+na workeru/brokeru; neproběhl ARM, DISARM ani Flatten.
+
 ### 2026-09-03 (Claude, companion build 7 — ozubené kolo bez focus ringu)
 
 Uživatel nahlásil modrý rámeček kolem nového tlačítka nastavení. Příčina:

@@ -332,6 +332,7 @@ describe('GroupDetail Positions integrace', () => {
     expect(markup).toContain('1× nedostupný');
     expect(markup).toContain('Nedostupný účet');
     expect(markup).toContain('Účet není v aktuálním OAuth snapshotu. Oprav skupinu přes Edit group.');
+    expect(markup).toContain('Odebrat ze skupiny');
   });
 
   it('u chybějícího OAuth účtu zachová autoritativní BREACHED místo obecného nedostupný', () => {
