@@ -38,23 +38,27 @@ struct StatusPopoverView: View {
     let transitionEvent: CompanionTransitionEvent?
     let onAction: (FooterActionPresentation) -> Void
     let onHoverChanged: (Bool) -> Void
+    let onSectionResize: (PopoverSectionResizeRequest) -> Void
 
     @State private var expandedSectionIDs: Set<String>
     @State private var highlightedRowID: String?
     @State private var highlightCategory: CompanionTransitionCategory?
+    @State private var sectionDetailsHeights: [String: CGFloat] = [:]
 
     init(
         presentation: CompanionPresentation,
         settings: CompanionSettings? = nil,
         transitionEvent: CompanionTransitionEvent? = nil,
         onAction: @escaping (FooterActionPresentation) -> Void = { _ in },
-        onHoverChanged: @escaping (Bool) -> Void = { _ in }
+        onHoverChanged: @escaping (Bool) -> Void = { _ in },
+        onSectionResize: @escaping (PopoverSectionResizeRequest) -> Void = { _ in }
     ) {
         self.presentation = presentation
         self.settings = settings
         self.transitionEvent = transitionEvent
         self.onAction = onAction
         self.onHoverChanged = onHoverChanged
+        self.onSectionResize = onSectionResize
         _expandedSectionIDs = State(
             initialValue: CompanionSectionExpansionPolicy.initialSectionIDs(
                 in: presentation,
@@ -78,13 +82,14 @@ struct StatusPopoverView: View {
             ForEach(presentation.sections) { section in
                 CollapsibleStatusSection(
                     section: section,
-                    isExpanded: binding(for: section.id),
+                    isExpanded: expandedSectionIDs.contains(section.id),
                     highlightedRowID: transitionEvent?.transition.sectionID == section.id
                         ? highlightedRowID
                         : nil,
                     highlightCategory: transitionEvent?.transition.sectionID == section.id
                         ? highlightCategory
-                        : nil
+                        : nil,
+                    onToggle: { toggle(section.id) }
                 )
             }
 
@@ -109,10 +114,16 @@ struct StatusPopoverView: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("alphaTrade.status.popover")
         .onHover(perform: onHoverChanged)
+        .onPreferenceChange(StatusSectionDetailsHeightPreferenceKey.self) {
+            sectionDetailsHeights = $0
+        }
         .onAppear(perform: applyTransition)
         .onChange(of: presentation.fixtureID) { _ in
             guard transitionEvent == nil else { return }
-            expandedSectionIDs = Set(presentation.sections.filter(\.isInitiallyExpanded).map(\.id))
+            updateExpandedSections(
+                Set(presentation.sections.filter(\.isInitiallyExpanded).map(\.id)),
+                animated: false
+            )
         }
         .onChange(of: transitionEvent?.sequence) { _ in
             applyTransition()
@@ -138,26 +149,51 @@ struct StatusPopoverView: View {
         }
     }
 
-    private func binding(for sectionID: String) -> Binding<Bool> {
-        Binding(
-            get: { expandedSectionIDs.contains(sectionID) },
-            set: { isExpanded in
-                if isExpanded {
-                    expandedSectionIDs.insert(sectionID)
-                } else {
-                    expandedSectionIDs.remove(sectionID)
-                }
+    private func toggle(_ sectionID: String) {
+        var next = expandedSectionIDs
+        if next.contains(sectionID) {
+            next.remove(sectionID)
+        } else {
+            next.insert(sectionID)
+        }
+        updateExpandedSections(next, animated: true)
+    }
+
+    private func updateExpandedSections(_ next: Set<String>, animated: Bool) {
+        guard next != expandedSectionIDs else { return }
+
+        let opening = next.subtracting(expandedSectionIDs)
+        let closing = expandedSectionIDs.subtracting(next)
+        let delta = opening.reduce(CGFloat.zero) {
+            $0 + (sectionDetailsHeights[$1] ?? 0)
+        } - closing.reduce(CGFloat.zero) {
+            $0 + (sectionDetailsHeights[$1] ?? 0)
+        }
+
+        if abs(delta) > 0.5 {
+            onSectionResize(.init(
+                heightDelta: delta,
+                reduceMotion: reduceMotion || !animated
+            ))
+        }
+
+        if animated && !reduceMotion {
+            withAnimation(.easeInOut(duration: PopoverResizeCoordinator.sectionAnimationDuration)) {
+                expandedSectionIDs = next
             }
-        )
+        } else {
+            expandedSectionIDs = next
+        }
     }
 
     private func applyTransition() {
         guard let transition = transitionEvent?.transition else { return }
-        expandedSectionIDs = CompanionSectionExpansionPolicy.applying(
+        let next = CompanionSectionExpansionPolicy.applying(
             transition,
             to: expandedSectionIDs,
             in: presentation
         )
+        updateExpandedSections(next, animated: true)
         guard CompanionTransitionMotionPolicy.highlightsChangedRow(
             reduceMotion: reduceMotion
         ) else {
@@ -178,19 +214,22 @@ struct StatusPopoverEntranceView: View {
     let transitionEvent: CompanionTransitionEvent?
     let onAction: (FooterActionPresentation) -> Void
     let onHoverChanged: (Bool) -> Void
+    let onSectionResize: (PopoverSectionResizeRequest) -> Void
 
     init(
         presentation: CompanionPresentation,
         settings: CompanionSettings? = nil,
         transitionEvent: CompanionTransitionEvent? = nil,
         onAction: @escaping (FooterActionPresentation) -> Void,
-        onHoverChanged: @escaping (Bool) -> Void = { _ in }
+        onHoverChanged: @escaping (Bool) -> Void = { _ in },
+        onSectionResize: @escaping (PopoverSectionResizeRequest) -> Void = { _ in }
     ) {
         self.presentation = presentation
         self.settings = settings
         self.transitionEvent = transitionEvent
         self.onAction = onAction
         self.onHoverChanged = onHoverChanged
+        self.onSectionResize = onSectionResize
     }
 
     @State private var isSettled = false
@@ -201,7 +240,8 @@ struct StatusPopoverEntranceView: View {
             settings: settings,
             transitionEvent: transitionEvent,
             onAction: onAction,
-            onHoverChanged: onHoverChanged
+            onHoverChanged: onHoverChanged,
+            onSectionResize: onSectionResize
         )
         .scaleEffect(isVisible ? 1 : 0.985, anchor: .top)
         .opacity(isVisible ? 1 : 0.94)

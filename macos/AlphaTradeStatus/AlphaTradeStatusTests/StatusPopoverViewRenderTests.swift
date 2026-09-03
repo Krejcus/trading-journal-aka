@@ -153,6 +153,24 @@ final class StatusPopoverViewRenderTests: XCTestCase {
         }
     }
 
+    func testCollapsedSectionsExposeTheirTargetDetailHeights() {
+        let presentation = CompanionMockFixtureCatalog.presentation(for: .disarmed)
+        var measuredHeights: [String: CGFloat] = [:]
+        let rootView = StatusPopoverView(presentation: presentation)
+            .environment(\.alphaTradeTheme, AlphaTradeTheme.light)
+            .onPreferenceChange(StatusSectionDetailsHeightPreferenceKey.self) {
+                measuredHeights = $0
+            }
+
+        let hostingView = NSHostingView(rootView: rootView)
+        hostingView.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(Set(measuredHeights.keys), Set(presentation.sections.map(\.id)))
+        XCTAssertTrue(measuredHeights.values.allSatisfy { $0 > 10 })
+    }
+
     func testRendersEveryFixtureToInspectableLightAndDarkPNGs() throws {
         let outputDirectory = try snapshotDirectory(named: "AlphaTradeStatusSnapshots")
         let fileManager = FileManager.default

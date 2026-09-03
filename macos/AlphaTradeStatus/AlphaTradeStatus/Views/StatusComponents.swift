@@ -245,16 +245,15 @@ struct CollapsibleStatusSection: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let section: StatusSectionPresentation
-    @Binding var isExpanded: Bool
+    let isExpanded: Bool
     let highlightedRowID: String?
     let highlightCategory: CompanionTransitionCategory?
+    let onToggle: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
             Button {
-                withAnimation(reduceMotion ? .linear(duration: 0.01) : .easeInOut(duration: 0.25)) {
-                    isExpanded.toggle()
-                }
+                onToggle()
             } label: {
                 sectionHeader
                 .contentShape(Rectangle())
@@ -268,29 +267,7 @@ struct CollapsibleStatusSection: View {
             .accessibilityIdentifier("alphaTrade.status.section.\(section.id)")
 
             if isExpanded {
-                Divider()
-                    .overlay(theme.stroke)
-                    .padding(.top, 9)
-
-                VStack(spacing: 9) {
-                    ForEach(section.rows) { row in
-                        switch row {
-                        case .keyValue(let presentation):
-                            KeyValueStatusRow(row: presentation)
-                                .modifier(TransitionRowHighlightModifier(
-                                    isHighlighted: highlightedRowID == row.id,
-                                    category: highlightCategory
-                                ))
-                        case .position(let presentation):
-                            PositionStatusRow(row: presentation)
-                                .modifier(TransitionRowHighlightModifier(
-                                    isHighlighted: highlightedRowID == row.id,
-                                    category: highlightCategory
-                                ))
-                        }
-                    }
-                }
-                .padding(.top, 9)
+                sectionDetails(highlightsEnabled: true)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
@@ -305,6 +282,49 @@ struct CollapsibleStatusSection: View {
                 .stroke(sectionStroke, lineWidth: 1)
         }
         .clipped()
+        .background(alignment: .topLeading) {
+            sectionDetails(highlightsEnabled: false)
+                .fixedSize(horizontal: false, vertical: true)
+                .hidden()
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: StatusSectionDetailsHeightPreferenceKey.self,
+                            value: [section.id: proxy.size.height]
+                        )
+                    }
+                }
+        }
+    }
+
+    private func sectionDetails(highlightsEnabled: Bool) -> some View {
+        VStack(spacing: 0) {
+            Divider()
+                .overlay(theme.stroke)
+                .padding(.top, 9)
+
+            VStack(spacing: 9) {
+                ForEach(section.rows) { row in
+                    switch row {
+                    case .keyValue(let presentation):
+                        KeyValueStatusRow(row: presentation)
+                            .modifier(TransitionRowHighlightModifier(
+                                isHighlighted: highlightsEnabled && highlightedRowID == row.id,
+                                category: highlightsEnabled ? highlightCategory : nil
+                            ))
+                    case .position(let presentation):
+                        PositionStatusRow(row: presentation)
+                            .modifier(TransitionRowHighlightModifier(
+                                isHighlighted: highlightsEnabled && highlightedRowID == row.id,
+                                category: highlightsEnabled ? highlightCategory : nil
+                            ))
+                    }
+                }
+            }
+            .padding(.top, 9)
+        }
     }
 
     @ViewBuilder
@@ -390,6 +410,17 @@ struct CollapsibleStatusSection: View {
             return theme.card
         }
         return theme.softBackground(for: highlightCategory.statusTone).opacity(0.72)
+    }
+}
+
+struct StatusSectionDetailsHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+
+    static func reduce(
+        value: inout [String: CGFloat],
+        nextValue: () -> [String: CGFloat]
+    ) {
+        value.merge(nextValue(), uniquingKeysWith: max)
     }
 }
 

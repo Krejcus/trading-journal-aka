@@ -7,14 +7,10 @@ ARM/DISARM, Flatten, worker-control, or incoming-network path.
 The native target links neither the Supabase SDK nor Tradovate code; Supabase
 is used only behind the separately deployed server API.
 
-Version 0.2.0 (build 5) is the installed production client in
-`/Users/filipkrejca/Applications/AlphaTrade Status.app` (ad-hoc signed,
-hardened runtime, App Sandbox + outgoing network only). The Supabase migration
-`20260901101932_mac_companion_devices_v1` is applied in production and the
-Mac is paired. Build 5 removes the read-only footer note and the system focus
-ring on footer buttons (`focusEffectDisabled()` at the hosted root).
-
-Version 0.2.0 (build 7) is the installed production client (2026-09-03; backups of builds 5 and 6 kept under ~/Documents/AlphaTrade-backups). Build 7 replaces the SwiftUI `Menu` gear with an AppKit `NSButton` + `NSMenu` so the header no longer shows a system focus ring. It adds
+Version 0.2.0 (build 7) is the installed production client (2026-09-03;
+backups of builds 5 and 6 are kept under `~/Documents/AlphaTrade-backups`).
+Build 7 replaces the SwiftUI `Menu` gear with an AppKit `NSButton` + `NSMenu`
+so the header no longer shows a system focus ring. It adds
 three-second transition settling, a 30-second auto-open rate limit, targeted
 section/row emphasis, transient 60/8-second popovers, native notifications,
 and four local `UserDefaults` switches. Notifications have their own
@@ -22,8 +18,14 @@ and four local `UserDefaults` switches. Notifications have their own
 preserving manual expansion and entrance state; required problem sections stay
 open alongside the transition target. Startup, wake, manual refresh,
 10-90-second UNKNOWN bridges, and lower revisions never auto-open. Wake resets
-only the uptime-based auto-open window. Build 6 replaced build 5 on 2026-09-03; the LaunchAgent plist is unchanged
-and the service was re-bootstrapped.
+only the uptime-based auto-open window.
+
+Version 0.2.0 (build 8) is prepared but not installed. It disables automatic
+`NSHostingController.preferredContentSize` propagation and measures the SwiftUI
+root explicitly. Section target heights are known before their 0.25-second
+transition, so one coordinator drives one matching `NSPopover.contentSize`
+animation and coalesces all intermediate SwiftUI geometry. The width stays
+360 pt and Reduce Motion resizes immediately.
 
 Operational lesson (2026-09-02): the companion API must live in `origin/main`.
 A production deployment promoted from a local source tree is replaced by the
@@ -116,6 +118,8 @@ xcrun swiftc -parse-as-library \
   macos/AlphaTradeStatus/AlphaTradeStatus/Domain/CompanionPresentation.swift \
   macos/AlphaTradeStatus/AlphaTradeStatus/Domain/CompanionFreshnessReducer.swift \
   macos/AlphaTradeStatus/AlphaTradeStatus/Domain/CompanionTransitionDetector.swift \
+  macos/AlphaTradeStatus/AlphaTradeStatus/Design/AlphaTradeTheme.swift \
+  macos/AlphaTradeStatus/AlphaTradeStatus/App/PopoverResizeCoordinator.swift \
   macos/AlphaTradeStatus/IntegrationTests/CompanionTransitionDetectorProbe.swift \
   -o /tmp/CompanionTransitionDetectorProbe
 /tmp/CompanionTransitionDetectorProbe

@@ -8,6 +8,7 @@ struct CompanionRootView: View {
     let onOpenPairing: () -> Void
     let onCopyPairingCode: (String) -> Void
     let onHoverChanged: (Bool) -> Void
+    let onSectionResize: (PopoverSectionResizeRequest) -> Void
 
     var body: some View {
         switch store.state {
@@ -17,7 +18,8 @@ struct CompanionRootView: View {
                 settings: settings,
                 transitionEvent: store.transitionEvent,
                 onAction: onAction,
-                onHoverChanged: onHoverChanged
+                onHoverChanged: onHoverChanged,
+                onSectionResize: onSectionResize
             )
         case .starting:
             CompanionMessagePanel(
@@ -91,6 +93,7 @@ struct CompanionRootEntranceView: View {
     let onOpenPairing: () -> Void
     let onCopyPairingCode: (String) -> Void
     let onHoverChanged: (Bool) -> Void
+    let onSectionResize: (PopoverSectionResizeRequest) -> Void
 
     @State private var isSettled = false
 
@@ -101,7 +104,8 @@ struct CompanionRootEntranceView: View {
             onAction: onAction,
             onOpenPairing: onOpenPairing,
             onCopyPairingCode: onCopyPairingCode,
-            onHoverChanged: onHoverChanged
+            onHoverChanged: onHoverChanged,
+            onSectionResize: onSectionResize
         )
         .scaleEffect(isVisible ? 1 : 0.985, anchor: .top)
         .opacity(isVisible ? 1 : 0.94)

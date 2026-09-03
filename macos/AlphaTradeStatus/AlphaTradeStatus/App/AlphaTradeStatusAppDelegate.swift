@@ -26,6 +26,8 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
     private var isPointerInsidePopover = false
     private var isAutoPresented = false
     private var notificationRateLimiter = CompanionNotificationRateLimiter()
+    private var popoverResizeCoordinator = PopoverResizeCoordinator()
+    private var sectionResizeCompletion: DispatchWorkItem?
 
     override init() {
         let settings = CompanionSettings()
@@ -105,6 +107,7 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
         menuBarCancellable?.cancel()
         transitionCancellable?.cancel()
         cancelAutoCloseTimer()
+        sectionResizeCompletion?.cancel()
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
@@ -173,12 +176,14 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
                 presentation: presentation,
                 settings: settings,
                 onAction: perform,
-                onHoverChanged: handlePopoverHover
+                onHoverChanged: handlePopoverHover,
+                onSectionResize: handleSectionResize
             )
             .alphaTradeTheme()
             .alphaTradeFocusEffectDisabled()
+            .onPopoverContentSizeChange(handleMeasuredPopoverSize)
             let hostingController = NSHostingController(rootView: rootView)
-            hostingController.sizingOptions = [.preferredContentSize]
+            hostingController.sizingOptions = []
             controller = hostingController
         case .cloud(let store):
             let rootView = CompanionRootEntranceView(
@@ -187,19 +192,71 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
                 onAction: perform,
                 onOpenPairing: openPairingPage,
                 onCopyPairingCode: copyPairingCode,
-                onHoverChanged: handlePopoverHover
+                onHoverChanged: handlePopoverHover,
+                onSectionResize: handleSectionResize
             )
             .alphaTradeTheme()
             .alphaTradeFocusEffectDisabled()
+            .onPopoverContentSizeChange(handleMeasuredPopoverSize)
             let hostingController = NSHostingController(rootView: rootView)
-            hostingController.sizingOptions = [.preferredContentSize]
+            hostingController.sizingOptions = []
             controller = hostingController
         }
         controller.view.layoutSubtreeIfNeeded()
         let fittingSize = controller.view.fittingSize
-        controller.preferredContentSize = fittingSize
         popover.contentViewController = controller
-        popover.contentSize = fittingSize
+        applyPopoverResize(popoverResizeCoordinator.reset(initialSize: fittingSize))
+    }
+
+    private func handleMeasuredPopoverSize(_ size: CGSize) {
+        guard let mutation = popoverResizeCoordinator.observeMeasuredSize(
+            size,
+            isPopoverVisible: popover.isShown,
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        ) else { return }
+        applyPopoverResize(mutation)
+    }
+
+    private func handleSectionResize(_ request: PopoverSectionResizeRequest) {
+        sectionResizeCompletion?.cancel()
+        guard let mutation = popoverResizeCoordinator.beginSectionTransition(
+            request,
+            isPopoverVisible: popover.isShown
+        ) else { return }
+        applyPopoverResize(mutation)
+
+        guard case .animate(_, let duration) = mutation else { return }
+        let completion = DispatchWorkItem { [weak self] in
+            guard let self,
+                  let correction = self.popoverResizeCoordinator.completeSectionTransition(
+                    isPopoverVisible: self.popover.isShown,
+                    reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+                  ) else { return }
+            self.applyPopoverResize(correction)
+        }
+        sectionResizeCompletion = completion
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + duration + 0.02,
+            execute: completion
+        )
+    }
+
+    private func applyPopoverResize(_ mutation: PopoverResizeCoordinator.Mutation) {
+        switch mutation {
+        case .setImmediately(let size):
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0
+                context.allowsImplicitAnimation = false
+                popover.contentSize = size
+            }
+        case .animate(let size, let duration):
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = duration
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                context.allowsImplicitAnimation = true
+                popover.contentSize = size
+            }
+        }
     }
 
     func presentTransition(_ event: CompanionTransitionEvent) {
