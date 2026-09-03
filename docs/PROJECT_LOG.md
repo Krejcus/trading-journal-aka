@@ -56,14 +56,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Otevřené otázky
 
-- [ ] **Zápis venue risk limitů / skutečný broker-side day lock** — fáze 1
-      read-only sondy dokončena 3. 9. (zápis níže a
-      `docs/TRADOVATE_RISK_LIMITS_CAPABILITY_20260903.md`). Oba DEMO OAuth
-      tokeny čtou AutoLiq/risk status; user-level position-limit deps jsou pro
-      všech 6 účtů prázdné a `changesLocked` broker neposlal. Read právo je
-      prokázané, write právo ani okamžitý day-lock ne. Fáze 2 vyžaduje nové
-      explicitní schválení a disposable osobní DEMO účet nebo písemné potvrzení
-      Tradovate/prop firmy; pro tyto prop účty se žádný write nepřipravoval.
+- [x] **Zápis venue risk limitů / skutečný broker-side day lock** — UZAVŘENO
+      3. 9. rozhodnutím uživatele: nepokračovat. Fáze 1 (read-only sonda,
+      `docs/TRADOVATE_RISK_LIMITS_CAPABILITY_20260903.md`) prokázala jen read
+      právo; pre-trade zámek žije v RiskCategory/RiskTimePeriod pod správou
+      prop firmy a trader token ho neovlivní — s více firmami se to jen
+      násobí. Pro budoucí komerční produkt by byl broker-side lock závislý na
+      dobré vůli každé firmy zvlášť, tedy děravý. Rozhodnutí: zlepšovat
+      interní day-lock/copier pojistky AlphaTrade (viz zápis 2026-09-03).
 - [ ] **Automatická post-connect recovery a follower chybějící v OAuth** —
       optional-skip i konkrétní blocked audit jsou hotové v `5154856d`/`30a48144`.
       Lokálně 3. 9. doplněno zbývající hardening z obou cross-review: partial
@@ -158,6 +158,16 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-09-03 (Claude + uživatel, rozhodnutí: broker-side day lock se nestaví)
+
+Po read-only sondě práv OAuth tokenu (viz zápis Codexe a capability report)
+uživatel rozhodl fázi 2 nedělat ani se neptát prop firem na lockout: skutečný
+pre-trade zámek by závisel na admin vrstvě každé propky zvlášť, a pro budoucí
+komerční nasazení by to bylo děravé. Směr: vylepšovat vlastní pojistky —
+AlphaTrade day-lock (DISARM + blokace ARM do konce session) zůstává jediný
+okamžitý zámek a je to interní vlastnost copieru, ne brokera. Otevřená
+otázka „Zápis venue risk limitů" je uzavřená. Žádná změna kódu.
 
 ### 2026-09-03 (Codex, read-only Tradovate risk-limit capability probe)
 
