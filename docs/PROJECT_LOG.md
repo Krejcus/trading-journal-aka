@@ -152,6 +152,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Codex, druhé kolo review AlphaTrade Status auto-open)
+
+- Přechod už nesbalí povinně otevřené problémové sekce: výsledná množina je
+  `isInitiallyExpanded` plus cílová sekce a při aktualizaci zachová i ručně
+  rozbalené sekce. Už otevřený popover dostává nový `transitionEvent` přes
+  existující observed store; AppDelegate nevytváří nový hosting controller,
+  takže nezahodí SwiftUI `@State` ani znovu nepřehraje vstupní animaci.
+- Nativní notifikace mají vlastní 30s limiter nezávislý na auto-open bráně.
+  Limiter používá wall clock, který započítá spánek; přechod v už otevřeném
+  popoveru tedy smí notifikovat, ale další během stejného okna ne. Auto-open
+  brána při wake uvolní pouze své 30s okno a zachová revision guard, settled
+  stav i anti-flap kandidáta. Lokální macOS `clock_gettime(3)` potvrdil, že
+  `CLOCK_MONOTONIC` spánek započítává; cílený wake reset byl menší změna bez
+  výměny dosavadního injektovatelného clocku.
+- Čerstvý CLI probe prošel 58/58 kontrolami a `xcodebuild build-for-testing`
+  sestavil app i test target. XCTest runner v sandboxu skončil ještě před
+  assertions na blokovaném `testmanagerd`; mimo sandbox se spustil host, ale
+  zůstal na `waiting for workers to materialize` a po přibližně 60 s byl
+  ohraničeně přerušen. Nebyla provedena žádná XCTest assertion a netvrdíme
+  XCTest PASS.
+- Finální arm64 Release build 6 prošel. Dočasný artefakt byl ad-hoc podepsán
+  s Hardened Runtime a dodanými App Sandbox + outgoing-network entitlements;
+  `codesign --verify --deep --strict` prošel, flags jsou `adhoc,runtime`,
+  TeamIdentifier není nastaven a binární SHA-256 je
+  `1cdca39710e079692670fe6bc14e2fbd19a73129e41caac84ed6cf2594d6c79b`.
+  Nic nebylo instalováno ani spuštěno jako běžná aplikace, LaunchAgent a
+  instalovaný build 5 zůstaly beze změny. Server/PWA, broker i copier se
+  neměnily; větev není sloučená do `main`.
+
 ### 2026-09-03 (Codex, AlphaTrade Status v1.4 auto-open; build 6 pouze připraven)
 
 - Implementována závazná matice §11 nad výstupem stávajícího freshness reduceru:

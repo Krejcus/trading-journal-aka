@@ -17,9 +17,13 @@ ring on footer buttons (`focusEffectDisabled()` at the hosted root).
 Version 0.2.0 (build 6) is the uninstalled feature candidate. It adds
 three-second transition settling, a 30-second auto-open rate limit, targeted
 section/row emphasis, transient 60/8-second popovers, native notifications,
-and four local `UserDefaults` switches. Startup, wake, manual refresh,
-10-90-second UNKNOWN bridges, and lower revisions never auto-open. The
-installed build 5 and its LaunchAgent are intentionally unchanged.
+and four local `UserDefaults` switches. Notifications have their own
+30-second wall-clock limiter. An open popover receives transitions in place,
+preserving manual expansion and entrance state; required problem sections stay
+open alongside the transition target. Startup, wake, manual refresh,
+10-90-second UNKNOWN bridges, and lower revisions never auto-open. Wake resets
+only the uptime-based auto-open window. The installed build 5 and its
+LaunchAgent are intentionally unchanged.
 
 Operational lesson (2026-09-02): the companion API must live in `origin/main`.
 A production deployment promoted from a local source tree is replaced by the
