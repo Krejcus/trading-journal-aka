@@ -33,6 +33,7 @@ enum CompanionDisplayState: Equatable, Sendable {
     case live(minutesRemaining: Int)
     case shadow
     case disarmed
+    case disarmedUnverified
     case intervention(issueCount: Int)
     case unknown
     case offline
@@ -44,7 +45,9 @@ enum CompanionDisplayState: Equatable, Sendable {
         case .shadow:
             return "SHADOW"
         case .disarmed:
-            return "DISARMED"
+            return "VYPNUTO"
+        case .disarmedUnverified:
+            return "VYPNUTO"
         case .intervention:
             return "ZÁSAH NUTNÝ"
         case .unknown:
@@ -57,8 +60,21 @@ enum CompanionDisplayState: Equatable, Sendable {
 
 struct MenuBarStatusPresentation: Equatable, Sendable {
     let pillText: String?
+    let symbolName: String?
     let tone: StatusTone
     let accessibilityLabel: String
+
+    init(
+        pillText: String?,
+        symbolName: String? = nil,
+        tone: StatusTone,
+        accessibilityLabel: String
+    ) {
+        self.pillText = pillText
+        self.symbolName = symbolName
+        self.tone = tone
+        self.accessibilityLabel = accessibilityLabel
+    }
 }
 
 struct FreshnessPresentation: Equatable, Sendable {
@@ -72,7 +88,24 @@ struct HeroPresentation: Equatable, Sendable {
     let title: String
     let badge: String?
     let detail: String
+    let supportingText: String?
     let tone: StatusTone
+
+    init(
+        symbolName: String,
+        title: String,
+        badge: String?,
+        detail: String,
+        supportingText: String? = nil,
+        tone: StatusTone
+    ) {
+        self.symbolName = symbolName
+        self.title = title
+        self.badge = badge
+        self.detail = detail
+        self.supportingText = supportingText
+        self.tone = tone
+    }
 }
 
 struct BannerPresentation: Equatable, Sendable {
@@ -155,6 +188,7 @@ struct StatusSectionPresentation: Equatable, Sendable, Identifiable {
 
 enum CompanionDestination: String, Equatable, Sendable {
     case live = "https://alphatrade-mentor-15.vercel.app/?page=live"
+    case liveOverview = "https://alphatrade-mentor-15.vercel.app/?page=live&tab=overview"
     case journal = "https://alphatrade-mentor-15.vercel.app/?page=journal"
 
     var url: URL? { URL(string: rawValue) }
@@ -236,10 +270,13 @@ struct CompanionPresentation: Equatable, Sendable, Identifiable {
     var allVisibleText: [String] {
         var text = [
             menuBar.pillText,
+            menuBar.accessibilityLabel,
             freshness.text,
+            freshness.accessibilityLabel,
             hero.title,
             hero.badge,
             hero.detail,
+            hero.supportingText,
             banner?.text
         ].compactMap { $0 }
 
@@ -248,7 +285,7 @@ struct CompanionPresentation: Equatable, Sendable, Identifiable {
             text.append(section.summary)
             text.append(contentsOf: section.rows.flatMap(\.visibleText))
         }
-        text.append(contentsOf: footer.actions.map(\.title))
+        text.append(contentsOf: footer.actions.flatMap { [$0.title, $0.accessibilityLabel] })
         text.append(footer.sourceNote)
         return text
     }

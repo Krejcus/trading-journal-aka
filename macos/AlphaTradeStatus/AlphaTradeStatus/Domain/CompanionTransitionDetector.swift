@@ -116,7 +116,7 @@ enum CompanionTransitionDetector {
             )
         }
 
-        if let mode = modeTransition(previous.status.copierState, next.status.copierState) {
+        if let mode = modeTransition(previous, next) {
             return mode
         }
 
@@ -369,7 +369,8 @@ private extension CompanionTransitionDetector {
         }
 
         if previous.safety.reconciliation.status != .review,
-           next.safety.reconciliation.status == .review {
+           next.safety.reconciliation.status == .review,
+           !CompanionSafetyPolicy.isDeferredPreflightReconciliation(next) {
             return .init(
                 category: .worsening,
                 sectionID: "safety",
@@ -382,6 +383,8 @@ private extension CompanionTransitionDetector {
         if let newProblem = next.problems.first(where: {
             Self.transitionProblemKinds.contains($0.kind)
                 && !previousProblems.contains("\($0.kind.rawValue)|\($0.text)")
+                && !($0.kind == .reconciliation
+                    && CompanionSafetyPolicy.isDeferredPreflightReconciliation(next))
         }) {
             let target = target(for: newProblem.kind, status: next)
             return .init(
@@ -417,6 +420,7 @@ private extension CompanionTransitionDetector {
             )
         }
         if previous.safety.reconciliation.status == .review,
+           !CompanionSafetyPolicy.isDeferredPreflightReconciliation(previous),
            next.safety.reconciliation.status == .clean {
             return .init(
                 category: .improvement,
@@ -428,7 +432,10 @@ private extension CompanionTransitionDetector {
 
         let nextKinds = Set(next.problems.map(\.kind))
         if let removed = previous.problems.first(where: {
-            transitionProblemKinds.contains($0.kind) && !nextKinds.contains($0.kind)
+            transitionProblemKinds.contains($0.kind)
+                && !nextKinds.contains($0.kind)
+                && !($0.kind == .reconciliation
+                    && CompanionSafetyPolicy.isDeferredPreflightReconciliation(previous))
         }) {
             let target = target(for: removed.kind, status: next)
             return .init(
@@ -442,11 +449,13 @@ private extension CompanionTransitionDetector {
     }
 
     static func modeTransition(
-        _ previous: MacCompanionStatusDTO.CopierState,
-        _ next: MacCompanionStatusDTO.CopierState
+        _ previous: ReducedCompanionStatus,
+        _ next: ReducedCompanionStatus
     ) -> CompanionTransition? {
-        guard previous != next else { return nil }
-        switch (previous, next) {
+        let previousMode = previous.status.copierState
+        let nextMode = next.status.copierState
+        guard previousMode != nextMode else { return nil }
+        switch (previousMode, nextMode) {
         case (.disarmed, .live), (.shadow, .live):
             return .init(
                 category: .mode,
@@ -459,7 +468,7 @@ private extension CompanionTransitionDetector {
                 category: .mode,
                 sectionID: "safety",
                 rowID: "reconciliation",
-                reason: "Copier přešel do režimu DISARMED."
+                reason: "Copier přešel do režimu VYPNUTO."
             )
         case (.live, .shadow):
             return .init(
@@ -468,8 +477,20 @@ private extension CompanionTransitionDetector {
                 rowID: "shadow-mode",
                 reason: "Copier přešel do režimu SHADOW."
             )
-        case (.disarmed, .shadow), (.shadow, .disarmed):
-            return nil
+        case (.disarmed, .shadow):
+            return .init(
+                category: .mode,
+                sectionID: "leader-tracking",
+                rowID: "shadow-mode",
+                reason: "Copier přešel z VYPNUTO do režimu SHADOW."
+            )
+        case (.shadow, .disarmed):
+            return .init(
+                category: .mode,
+                sectionID: "safety",
+                rowID: "reconciliation",
+                reason: "Copier přešel do režimu VYPNUTO."
+            )
         default:
             return nil
         }
@@ -562,6 +583,7 @@ private extension CompanionTransitionDetector {
         case .live(let minutes): return minutes <= 5 ? "live-urgent" : "live"
         case .shadow: return "shadow"
         case .disarmed: return "disarmed"
+        case .disarmedUnverified: return "disarmed-unverified"
         case .intervention: return "intervention"
         case .unknown: return "unknown"
         case .offline: return "offline"

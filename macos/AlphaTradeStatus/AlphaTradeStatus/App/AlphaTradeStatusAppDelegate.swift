@@ -26,6 +26,8 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
     private var isPointerInsidePopover = false
     private var isAutoPresented = false
     private var notificationRateLimiter = CompanionNotificationRateLimiter()
+    private var popoverResizeCoordinator = PopoverResizeCoordinator()
+    private var sectionResizeCompletion: DispatchWorkItem?
 
     override init() {
         let settings = CompanionSettings()
@@ -63,11 +65,15 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
         UNUserNotificationCenter.current().delegate = self
 
         if case .cloud(let store) = runtime {
+            // `@Published` emits from `willSet`, so inside this sink
+            // `store.menuBarPresentation` still holds the PREVIOUS value.
+            // Render from the emitted value, never by re-reading the store,
+            // otherwise the menu bar pill lags one state behind.
             menuBarCancellable = store.$menuBarPresentation
                 .removeDuplicates()
-                .sink { [weak self] _ in
+                .sink { [weak self] presentation in
                     guard let self else { return }
-                    self.applyAppearance(NSApp.effectiveAppearance)
+                    self.applyAppearance(NSApp.effectiveAppearance, menuBar: presentation)
                 }
             transitionCancellable = store.$transitionEvent
                 .compactMap { $0 }
@@ -105,6 +111,7 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
         menuBarCancellable?.cancel()
         transitionCancellable?.cancel()
         cancelAutoCloseTimer()
+        sectionResizeCompletion?.cancel()
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
@@ -142,12 +149,15 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
         showPopover(relativeTo: sender)
     }
 
-    private func applyAppearance(_ effectiveAppearance: NSAppearance) {
+    private func applyAppearance(
+        _ effectiveAppearance: NSAppearance,
+        menuBar override: MenuBarStatusPresentation? = nil
+    ) {
         guard let statusItem, let button = statusItem.button else {
             return
         }
 
-        let menuBarPresentation = currentMenuBarPresentation
+        let menuBarPresentation = override ?? currentMenuBarPresentation
         button.toolTip = menuBarPresentation.accessibilityLabel
         button.setAccessibilityLabel(menuBarPresentation.accessibilityLabel)
 
@@ -173,12 +183,14 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
                 presentation: presentation,
                 settings: settings,
                 onAction: perform,
-                onHoverChanged: handlePopoverHover
+                onHoverChanged: handlePopoverHover,
+                onSectionResize: handleSectionResize
             )
             .alphaTradeTheme()
             .alphaTradeFocusEffectDisabled()
+            .onPopoverContentSizeChange(handleMeasuredPopoverSize)
             let hostingController = NSHostingController(rootView: rootView)
-            hostingController.sizingOptions = [.preferredContentSize]
+            hostingController.sizingOptions = []
             controller = hostingController
         case .cloud(let store):
             let rootView = CompanionRootEntranceView(
@@ -187,19 +199,78 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
                 onAction: perform,
                 onOpenPairing: openPairingPage,
                 onCopyPairingCode: copyPairingCode,
-                onHoverChanged: handlePopoverHover
+                onHoverChanged: handlePopoverHover,
+                onSectionResize: handleSectionResize
             )
             .alphaTradeTheme()
             .alphaTradeFocusEffectDisabled()
+            .onPopoverContentSizeChange(handleMeasuredPopoverSize)
             let hostingController = NSHostingController(rootView: rootView)
-            hostingController.sizingOptions = [.preferredContentSize]
+            hostingController.sizingOptions = []
             controller = hostingController
         }
         controller.view.layoutSubtreeIfNeeded()
         let fittingSize = controller.view.fittingSize
-        controller.preferredContentSize = fittingSize
         popover.contentViewController = controller
-        popover.contentSize = fittingSize
+        applyPopoverResize(popoverResizeCoordinator.reset(initialSize: fittingSize))
+    }
+
+    private func handleMeasuredPopoverSize(_ size: CGSize) {
+        guard let mutation = popoverResizeCoordinator.observeMeasuredSize(
+            size,
+            isPopoverVisible: popover.isShown,
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        ) else { return }
+        applyPopoverResize(mutation)
+    }
+
+    private func handleSectionResize(_ request: PopoverSectionResizeRequest) {
+        sectionResizeCompletion?.cancel()
+        guard let mutation = popoverResizeCoordinator.beginSectionTransition(
+            request,
+            currentContentSize: popover.contentViewController?.view.bounds.size,
+            isPopoverVisible: popover.isShown
+        ) else { return }
+        applyPopoverResize(mutation)
+
+        guard let duration = mutation.transitionDuration else { return }
+        let completion = DispatchWorkItem { [weak self] in
+            guard let self,
+                  let correction = self.popoverResizeCoordinator.completeSectionTransition(
+                    isPopoverVisible: self.popover.isShown,
+                    reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+                  ) else { return }
+            self.applyPopoverResize(correction)
+        }
+        sectionResizeCompletion = completion
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + duration + 0.02,
+            execute: completion
+        )
+    }
+
+    private func applyPopoverResize(_ mutation: PopoverResizeCoordinator.Mutation) {
+        switch mutation {
+        case .setImmediately(let size):
+            setPopoverContentSizeImmediately(size)
+        case .expandImmediately(let size, _):
+            // Reserve the final space before SwiftUI starts revealing details.
+            // This avoids NSPopover's implicit contentSize animation shrinking
+            // the hosting view to its transient intrinsic height.
+            setPopoverContentSizeImmediately(size)
+        case .collapseAfterContentAnimation:
+            // Keep the full panel while SwiftUI hides the details. Completion
+            // applies the final smaller size in one anchored AppKit update.
+            break
+        }
+    }
+
+    private func setPopoverContentSizeImmediately(_ size: CGSize) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            popover.contentSize = size
+        }
     }
 
     func presentTransition(_ event: CompanionTransitionEvent) {

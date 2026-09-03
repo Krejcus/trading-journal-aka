@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 @main
@@ -19,6 +20,59 @@ struct CompanionTransitionDetectorProbe {
         }
 
         let clean = reduced(status(revision: 1))
+        let disarmedUnverified = reduced(status(revision: 2, exposureVerified: false))
+        expect(
+            disarmedUnverified.displayState == .disarmedUnverified,
+            "fresh clean DISARMED without exposure evidence must be VYPNUTO"
+        )
+        expect(!disarmedUnverified.exposureEvidence.mayClaimFlat, "VYPNUTO must never claim flat")
+        let disarmedPresentation = CompanionRemotePresentationFactory.make(
+            from: disarmedUnverified,
+            now: reference
+        )
+        expect(disarmedPresentation.menuBar.pillText == "VYPNUTO", "VYPNUTO pill text")
+        expect(disarmedPresentation.menuBar.symbolName == "power", "VYPNUTO power symbol")
+        expect(disarmedPresentation.hero.title == "VYPNUTO", "VYPNUTO hero title")
+        expect(
+            disarmedPresentation.hero.supportingText == "Expozice není brokerem ověřena — flat nelze tvrdit",
+            "VYPNUTO must disclose missing exposure evidence"
+        )
+        expect(disarmedPresentation.banner == nil, "VYPNUTO must not use a large warning banner")
+        expect(
+            disarmedPresentation.sections.allSatisfy { !$0.isInitiallyExpanded },
+            "VYPNUTO sections must start collapsed"
+        )
+        expect(
+            disarmedPresentation.footer.actions.map(\.id)
+                == [.openLive, .openJournal, .refresh, .copyDiagnostics],
+            "VYPNUTO footer actions"
+        )
+        expect(
+            disarmedPresentation.footer.actions.first?.title == "Zapnout v LIVE",
+            "VYPNUTO primary action must navigate to LIVE"
+        )
+        expect(
+            disarmedPresentation.footer.actions.first?.symbolName == nil,
+            "VYPNUTO primary action must not show an ARM icon"
+        )
+        expect(
+            CompanionDestination.liveOverview.url?.query == "page=live&tab=overview",
+            "LIVE destination must target the overview copier controls"
+        )
+
+        let staleDisarmed = reduced(
+            status(revision: 2, exposureVerified: false),
+            now: reference.addingTimeInterval(11)
+        )
+        expect(staleDisarmed.displayState == .unknown, "stale DISARMED must remain UNKNOWN")
+        expect(
+            CompanionTransitionDetector.detect(
+                previous: clean,
+                next: disarmedUnverified,
+                now: reference
+            ) == nil,
+            "verified DISARMED to VYPNUTO must not worsen"
+        )
         let divergence = reduced(status(
             revision: 2,
             divergences: [.init(symbol: "MNQ", account: "redacted", detail: "qty")]
@@ -31,10 +85,72 @@ struct CompanionTransitionDetectorProbe {
         expect(divergenceTransition?.category == .worsening, "new divergence must worsen")
         expect(divergenceTransition?.rowID == "divergence-0", "divergence row must be targeted")
 
-        let reconciliation = reduced(status(revision: 2, reconciliation: .review))
+        let deferredReconciliation = reduced(status(revision: 2, reconciliation: .review))
+        expect(deferredReconciliation.issueCount == 0, "disabled clean review must not be an issue")
+        expect(deferredReconciliation.displayState == .disarmed, "disabled clean review must remain VYPNUTO")
+        let deferredPresentation = CompanionRemotePresentationFactory.make(
+            from: deferredReconciliation,
+            now: reference
+        )
+        expect(deferredPresentation.menuBar.pillText == "VYPNUTO", "disabled review must keep VYPNUTO pill")
+        let deferredSafety = deferredPresentation.sections.first { $0.id == "safety" }
+        expect(deferredSafety?.summary == "Kontrola před zapnutím", "disabled review safety summary")
+        expect(deferredSafety?.summaryTone == .warning, "disabled review summary must be amber")
+        expect(deferredSafety?.hasProblem == false, "disabled review must not mark safety as a problem")
+        expect(deferredSafety?.isInitiallyExpanded == false, "disabled review must stay collapsed")
+        expect(
+            deferredSafety?.rows.contains { row in
+                guard case .keyValue(let value) = row else { return false }
+                return value.id == "reconciliation"
+                    && value.value == "Proběhne před zapnutím"
+                    && value.tone == .warning
+            } == true,
+            "disabled review row must describe deferred preflight"
+        )
+        expect(
+            CompanionTransitionDetector.detect(
+                previous: clean,
+                next: deferredReconciliation,
+                now: reference
+            ) == nil,
+            "disabled clean review must not auto-open"
+        )
+
+        let reconciliation = reduced(status(
+            revision: 2,
+            copierState: .live,
+            reconciliation: .review
+        ))
+        expect(reconciliation.displayState == .intervention(issueCount: 1), "LIVE review must require intervention")
         expect(
             CompanionTransitionDetector.detect(previous: clean, next: reconciliation, now: reference)?.rowID == "reconciliation",
-            "reconciliation review must target its row"
+            "LIVE reconciliation review must target its row"
+        )
+
+        let disabledReviewWithDivergence = reduced(status(
+            revision: 2,
+            reconciliation: .review,
+            divergences: [.init(symbol: "MNQ", account: "redacted", detail: "qty")]
+        ))
+        expect(
+            disabledReviewWithDivergence.displayState == .intervention(issueCount: 2),
+            "disabled review with divergence must require intervention"
+        )
+
+        let shadowReview = reduced(status(
+            revision: 2,
+            copierState: .shadow,
+            reconciliation: .review
+        ))
+        expect(shadowReview.displayState == .shadow, "SHADOW clean review must remain SHADOW")
+        let shadowReviewPresentation = CompanionRemotePresentationFactory.make(
+            from: shadowReview,
+            now: reference
+        )
+        expect(shadowReviewPresentation.menuBar.pillText == "SHADOW", "SHADOW review must keep SHADOW pill")
+        expect(
+            shadowReviewPresentation.sections.first { $0.id == "safety" }?.isInitiallyExpanded == false,
+            "SHADOW clean review safety must stay collapsed"
         )
 
         let stuck = reduced(status(revision: 2, stuckOutboxCount: 1))
@@ -64,6 +180,10 @@ struct CompanionTransitionDetectorProbe {
             CompanionTransitionDetector.detect(previous: clean, next: live, now: reference)?.category == .mode,
             "DISARMED to LIVE must be a mode transition"
         )
+        expect(
+            CompanionTransitionDetector.detect(previous: disarmedUnverified, next: live, now: reference)?.category == .mode,
+            "VYPNUTO to LIVE must be a mode transition"
+        )
         let shadow = reduced(status(revision: 4, copierState: .shadow))
         expect(
             CompanionTransitionDetector.detect(previous: shadow, next: live, now: reference)?.category == .mode,
@@ -74,12 +194,24 @@ struct CompanionTransitionDetectorProbe {
             "LIVE to DISARMED must be a mode transition"
         )
         expect(
+            CompanionTransitionDetector.detect(previous: live, next: disarmedUnverified, now: reference)?.category == .mode,
+            "LIVE to VYPNUTO must be a mode transition"
+        )
+        expect(
             CompanionTransitionDetector.detect(previous: live, next: shadow, now: reference)?.category == .mode,
             "LIVE to SHADOW must be a mode transition"
         )
         expect(
-            CompanionTransitionDetector.detect(previous: clean, next: shadow, now: reference) == nil,
-            "DISARMED to SHADOW must stay silent"
+            CompanionTransitionDetector.detect(previous: clean, next: shadow, now: reference)?.category == .mode,
+            "VYPNUTO to SHADOW must be a mode transition"
+        )
+        expect(
+            CompanionTransitionDetector.detect(previous: disarmedUnverified, next: shadow, now: reference)?.category == .mode,
+            "VYPNUTO to SHADOW must be a mode transition"
+        )
+        expect(
+            CompanionTransitionDetector.detect(previous: shadow, next: disarmedUnverified, now: reference)?.category == .mode,
+            "SHADOW to VYPNUTO must be a mode transition"
         )
 
         let expiry = reference.addingTimeInterval(301)
@@ -235,6 +367,75 @@ struct CompanionTransitionDetectorProbe {
         expect(CompanionTransitionMotionPolicy.pulseCount(reduceMotion: true) == 0, "Reduce Motion must not pulse")
         expect(!CompanionTransitionMotionPolicy.highlightsChangedRow(reduceMotion: true), "Reduce Motion must not highlight")
 
+        var expansionResize = PopoverResizeCoordinator()
+        expect(
+            expansionResize.reset(initialSize: CGSize(width: 500, height: 300))
+                == .setImmediately(CGSize(width: 360, height: 300)),
+            "initial popover width must normalize to 360"
+        )
+        expect(
+            expansionResize.beginSectionTransition(
+                .init(heightDelta: 100, reduceMotion: false),
+                isPopoverVisible: true
+            ) == .expandImmediately(CGSize(width: 360, height: 400), duration: 0.25),
+            "section expansion must reserve its final height immediately"
+        )
+        for height in [318.0, 351.5, 383.0, 399.5] {
+            expect(
+                expansionResize.observeMeasuredSize(
+                    CGSize(width: 360, height: height),
+                    isPopoverVisible: true,
+                    reduceMotion: false
+                ) == nil,
+                "intermediate expansion measurements must be coalesced"
+            )
+        }
+        expect(
+            expansionResize.completeSectionTransition(
+                isPopoverVisible: true,
+                reduceMotion: false
+            ) == nil,
+            "final expansion measurement must not cause a second resize"
+        )
+
+        var collapseResize = PopoverResizeCoordinator()
+        _ = collapseResize.reset(initialSize: CGSize(width: 360, height: 400))
+        expect(
+            collapseResize.beginSectionTransition(
+                .init(heightDelta: -100, reduceMotion: false),
+                isPopoverVisible: true
+            ) == .collapseAfterContentAnimation(CGSize(width: 360, height: 300), duration: 0.25),
+            "collapse must defer the smaller height until content is hidden"
+        )
+        for height in [389.0, 366.0, 332.0, 300.4] {
+            expect(
+                collapseResize.observeMeasuredSize(
+                    CGSize(width: 360, height: height),
+                    isPopoverVisible: true,
+                    reduceMotion: false
+                ) == nil,
+                "intermediate collapse measurements must never resize immediately"
+            )
+        }
+        expect(collapseResize.isCoalescingSectionMeasurements, "collapse must stay coalesced until animation completion")
+        expect(
+            collapseResize.completeSectionTransition(
+                isPopoverVisible: true,
+                reduceMotion: false
+            ) == .setImmediately(CGSize(width: 360, height: 300)),
+            "completed collapse must apply its smaller height once"
+        )
+
+        var reducedMotionResize = PopoverResizeCoordinator()
+        _ = reducedMotionResize.reset(initialSize: CGSize(width: 360, height: 300.2))
+        expect(
+            reducedMotionResize.beginSectionTransition(
+                .init(heightDelta: 99.2, reduceMotion: true),
+                isPopoverVisible: true
+            ) == .setImmediately(CGSize(width: 360, height: 401)),
+            "Reduce Motion must resize immediately"
+        )
+
         print("CompanionTransitionDetectorProbe PASS (\(checks) checks)")
     }
 
@@ -271,7 +472,8 @@ struct CompanionTransitionDetectorProbe {
         reconciliation: MacCompanionStatusDTO.ReconciliationDTO.Status = .clean,
         divergences: [MacCompanionStatusDTO.DivergenceDTO] = [],
         stuckOutboxCount: Int = 0,
-        killSwitchTripped: Bool = false
+        killSwitchTripped: Bool = false,
+        exposureVerified: Bool = true
     ) -> MacCompanionStatusDTO {
         .init(
             contractVersion: 1,
@@ -295,12 +497,12 @@ struct CompanionTransitionDetectorProbe {
                 killSwitchTripped: killSwitchTripped
             ),
             exposure: .init(
-                verifiedAt: reference,
+                verifiedAt: exposureVerified ? reference : nil,
                 positions: [],
                 followerAck: copierState == .live
                     ? .init(confirmed: 1, total: 1, failing: [])
                     : nil,
-                accountsWithWorkingOrders: 0
+                accountsWithWorkingOrders: exposureVerified ? 0 : nil
             ),
             snapshots: .init(cdpReady: true, lastEntryAt: nil, lastExitAt: nil),
             problems: []

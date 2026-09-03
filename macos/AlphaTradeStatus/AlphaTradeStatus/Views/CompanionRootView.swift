@@ -8,6 +8,7 @@ struct CompanionRootView: View {
     let onOpenPairing: () -> Void
     let onCopyPairingCode: (String) -> Void
     let onHoverChanged: (Bool) -> Void
+    let onSectionResize: (PopoverSectionResizeRequest) -> Void
 
     var body: some View {
         switch store.state {
@@ -17,7 +18,8 @@ struct CompanionRootView: View {
                 settings: settings,
                 transitionEvent: store.transitionEvent,
                 onAction: onAction,
-                onHoverChanged: onHoverChanged
+                onHoverChanged: onHoverChanged,
+                onSectionResize: onSectionResize
             )
         case .starting:
             CompanionMessagePanel(
@@ -83,6 +85,7 @@ struct CompanionRootView: View {
 }
 
 struct CompanionRootEntranceView: View {
+    @Environment(\.alphaTradeTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @ObservedObject var store: CompanionStore
@@ -91,6 +94,7 @@ struct CompanionRootEntranceView: View {
     let onOpenPairing: () -> Void
     let onCopyPairingCode: (String) -> Void
     let onHoverChanged: (Bool) -> Void
+    let onSectionResize: (PopoverSectionResizeRequest) -> Void
 
     @State private var isSettled = false
 
@@ -101,11 +105,16 @@ struct CompanionRootEntranceView: View {
             onAction: onAction,
             onOpenPairing: onOpenPairing,
             onCopyPairingCode: onCopyPairingCode,
-            onHoverChanged: onHoverChanged
+            onHoverChanged: onHoverChanged,
+            onSectionResize: onSectionResize
         )
         .scaleEffect(isVisible ? 1 : 0.985, anchor: .top)
         .opacity(isVisible ? 1 : 0.94)
         .offset(y: isVisible ? 0 : -4)
+        // Section expansion reserves the final host height first. Pin content
+        // to the top and paint the reserved area with the panel background.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(theme.panel)
         .onAppear(perform: animateEntrance)
     }
 

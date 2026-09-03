@@ -21,6 +21,12 @@ enum CompanionRemotePresentationFactory {
             return shadow(status: status, reduced: reduced, freshness: freshness)
         case .disarmed:
             return disarmed(status: status, reduced: reduced, freshness: freshness)
+        case .disarmedUnverified:
+            return disarmedUnverified(
+                status: status,
+                reduced: reduced,
+                freshness: freshness
+            )
         case .intervention(let issueCount):
             return intervention(
                 status: status,
@@ -68,7 +74,7 @@ private extension CompanionRemotePresentationFactory {
         let copying = StatusSectionPresentation(
             id: "copying",
             title: "Kopírování",
-            summary: acknowledgementSummary,
+            summary: status.exposure.followerAck == nil ? "Expozice neověřena" : acknowledgementSummary,
             summaryTone: status.exposure.followerAck == nil ? .warning : .success,
             isInitiallyExpanded: true,
             hasProblem: false,
@@ -79,7 +85,7 @@ private extension CompanionRemotePresentationFactory {
             fixtureID: status.exposure.followerAck == nil ? .liveAckUnavailable : .live,
             displayState: .live(minutesRemaining: minutesRemaining),
             menuBar: .init(
-                pillText: "LIVE \(minutesRemaining)m",
+                pillText: "LIVE",
                 tone: .success,
                 accessibilityLabel: "AlphaTrade, LIVE, zbývá \(minutesRemaining) minut"
             ),
@@ -183,16 +189,17 @@ private extension CompanionRemotePresentationFactory {
             fixtureID: .disarmed,
             displayState: .disarmed,
             menuBar: .init(
-                pillText: nil,
+                pillText: "VYPNUTO",
+                symbolName: "power",
                 tone: .neutral,
-                accessibilityLabel: "AlphaTrade, DISARMED"
+                accessibilityLabel: "AlphaTrade, copier vypnutý, flat ověřen"
             ),
             freshness: freshness,
             hero: .init(
-                symbolName: "",
-                title: "DISARMED",
-                badge: nil,
-                detail: "Copier neposílá příkazy · flat ověřen v \(verifiedAt)",
+                symbolName: "power",
+                title: "VYPNUTO",
+                badge: "flat ověřen",
+                detail: "Copier je vypnutý · neposílá příkazy · flat ověřen v \(verifiedAt)",
                 tone: .muted
             ),
             banner: nil,
@@ -208,6 +215,47 @@ private extension CompanionRemotePresentationFactory {
             ],
             footer: calmFooter(),
             exposureEvidence: reduced.exposureEvidence,
+            followerAcknowledgementEvidence: .notApplicable,
+            diagnosticSource: "cloud-read-only"
+        )
+    }
+
+    static func disarmedUnverified(
+        status: MacCompanionStatusDTO,
+        reduced: ReducedCompanionStatus,
+        freshness: FreshnessPresentation
+    ) -> CompanionPresentation {
+        CompanionPresentation(
+            fixtureID: .disarmedUnverified,
+            displayState: .disarmedUnverified,
+            menuBar: .init(
+                pillText: "VYPNUTO",
+                symbolName: "power",
+                tone: .danger,
+                accessibilityLabel: "AlphaTrade, copier vypnutý"
+            ),
+            freshness: freshness,
+            hero: .init(
+                symbolName: "power",
+                title: "VYPNUTO",
+                badge: nil,
+                detail: "Copier je vypnutý · neposílá příkazy · potvrzeno před \(reduced.freshness.ageSeconds) s",
+                supportingText: "Expozice není brokerem ověřena — flat nelze tvrdit",
+                tone: .danger
+            ),
+            banner: nil,
+            sections: [
+                safetySection(status, initiallyExpanded: false),
+                exposureSection(
+                    status,
+                    evidence: reduced.exposureEvidence,
+                    initiallyExpanded: false
+                ),
+                runtimeSection(status),
+                snapshotsSection(status)
+            ],
+            footer: disarmedUnverifiedFooter(),
+            exposureEvidence: .unverified,
             followerAcknowledgementEvidence: .notApplicable,
             diagnosticSource: "cloud-read-only"
         )
@@ -267,10 +315,11 @@ private extension CompanionRemotePresentationFactory {
         let lastTime = CompanionDisplayFormatting.time(status.observedAt)
         let title = offline ? "WORKER OFFLINE" : "STAV NEZNÁMÝ"
         let state: CompanionDisplayState = offline ? .offline : .unknown
+        let lastKnownState = copierStateText(status.copierState)
         let lastKnown = StatusSectionPresentation(
             id: "last-known",
             title: "Poslední známé hodnoty · naposledy \(lastTime)",
-            summary: "\(status.copierState.rawValue.uppercased()) · neaktuální",
+            summary: "\(lastKnownState) · neaktuální",
             summaryTone: tone,
             isInitiallyExpanded: offline,
             hasProblem: offline,
@@ -326,7 +375,7 @@ private extension CompanionRemotePresentationFactory {
                 symbolName: offline ? "wifi.slash" : "questionmark",
                 title: title,
                 badge: nil,
-                detail: "Naposledy potvrzeno \(status.copierState.rawValue.uppercased()) v \(lastTime)",
+                detail: "Naposledy potvrzeno \(lastKnownState) v \(lastTime)",
                 tone: tone
             ),
             banner: .init(
@@ -350,9 +399,7 @@ private extension CompanionRemotePresentationFactory {
         freshness: FreshnessPresentation
     ) -> CompanionPresentation {
         let detail: String
-        if status.copierState == .disarmed, status.exposure.verifiedAt == nil {
-            detail = "Copier hlásí DISARMED, ale pozice ani working orders nejsou brokerem ověřeny"
-        } else if status.brokerConnected == nil {
+        if status.brokerConnected == nil {
             detail = "Heartbeat je čerstvý, ale stav broker spojení není ověřen"
         } else if status.safety.reconciliation.status == .unknown {
             detail = "Heartbeat je čerstvý, ale reconciliation nemá autoritativní stav"
@@ -361,7 +408,7 @@ private extension CompanionRemotePresentationFactory {
         }
 
         return CompanionPresentation(
-            fixtureID: status.copierState == .disarmed ? .disarmedUnverified : .unknown,
+            fixtureID: .unknown,
             displayState: .unknown,
             menuBar: .init(
                 pillText: "?",
@@ -426,13 +473,18 @@ private extension CompanionRemotePresentationFactory {
         initiallyExpanded: Bool
     ) -> StatusSectionPresentation {
         var rows: [SectionRowPresentation] = []
+        let isDeferredPreflight = CompanionSafetyPolicy.isDeferredPreflightReconciliation(status)
         let reconciliationTone: StatusTone = status.safety.reconciliation.status == .clean
             ? .success
-            : status.safety.reconciliation.status == .review ? .danger : .warning
+            : isDeferredPreflight || status.safety.reconciliation.status == .unknown
+                ? .warning
+                : .danger
         rows.append(keyValue(
             id: "reconciliation",
             label: "Reconciliation",
-            value: reconciliationText(status.safety.reconciliation.status),
+            value: isDeferredPreflight
+                ? "Proběhne před zapnutím"
+                : reconciliationText(status.safety.reconciliation.status),
             tone: reconciliationTone
         ))
 
@@ -487,7 +539,7 @@ private extension CompanionRemotePresentationFactory {
             }
         }
 
-        let hasProblem = status.safety.reconciliation.status == .review
+        let hasProblem = (status.safety.reconciliation.status == .review && !isDeferredPreflight)
             || !status.safety.divergences.isEmpty
             || status.safety.outbox.stuckCount > 0
             || status.safety.killSwitchTripped
@@ -501,6 +553,9 @@ private extension CompanionRemotePresentationFactory {
         if hasProblem {
             summary = "Vyžaduje kontrolu"
             summaryTone = .danger
+        } else if isDeferredPreflight {
+            summary = "Kontrola před zapnutím"
+            summaryTone = .warning
         } else if isUnverified {
             summary = "Neověřeno"
             summaryTone = .warning
@@ -670,7 +725,7 @@ private extension CompanionRemotePresentationFactory {
         _ acknowledgement: MacCompanionStatusDTO.FollowerAcknowledgementDTO?
     ) -> String {
         guard let acknowledgement else {
-            return "Potvrzení followerů nedostupné"
+            return "Nedostupné"
         }
         return "\(acknowledgement.confirmed)/\(acknowledgement.total) followerů"
     }
@@ -725,6 +780,14 @@ private extension CompanionRemotePresentationFactory {
 
     static func locationText(_ location: MacCompanionStatusDTO.WorkerDTO.Location) -> String {
         location == .mac ? "Mac worker" : "VPS"
+    }
+
+    static func copierStateText(_ state: MacCompanionStatusDTO.CopierState) -> String {
+        switch state {
+        case .live: return "LIVE"
+        case .shadow: return "SHADOW"
+        case .disarmed: return "VYPNUTO"
+        }
     }
 
     static func keyValue(
@@ -841,6 +904,34 @@ private extension CompanionRemotePresentationFactory {
                 diagnosticsAction()
             ],
             sourceNote: "Cloud read-only · heartbeat čerstvý, expozice neověřena"
+        )
+    }
+
+    static func disarmedUnverifiedFooter() -> FooterPresentation {
+        FooterPresentation(
+            actions: [
+                .init(
+                    id: .openLive,
+                    title: "Zapnout v LIVE",
+                    symbolName: nil,
+                    style: .primary,
+                    tone: .danger,
+                    destination: .liveOverview,
+                    accessibilityLabel: "Otevřít LIVE ovládání copieru"
+                ),
+                .init(
+                    id: .openJournal,
+                    title: "Deník",
+                    symbolName: nil,
+                    style: .secondary,
+                    tone: .neutral,
+                    destination: .journal,
+                    accessibilityLabel: "Otevřít deník"
+                ),
+                refreshAction(),
+                diagnosticsAction()
+            ],
+            sourceNote: "Cloud read-only · zapnutí je dostupné pouze v LIVE"
         )
     }
 

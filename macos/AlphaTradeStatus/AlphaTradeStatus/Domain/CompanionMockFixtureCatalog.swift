@@ -95,7 +95,7 @@ private extension CompanionMockFixtureCatalog {
             fixtureID: fixtureID,
             displayState: .live(minutesRemaining: 42),
             menuBar: .init(
-                pillText: "LIVE 42m",
+                pillText: "LIVE",
                 tone: .success,
                 accessibilityLabel: "AlphaTrade, LIVE, zbývá 42 minut"
             ),
@@ -200,9 +200,10 @@ private extension CompanionMockFixtureCatalog {
             fixtureID: .disarmed,
             displayState: .disarmed,
             menuBar: .init(
-                pillText: nil,
+                pillText: "VYPNUTO",
+                symbolName: "power",
                 tone: .neutral,
-                accessibilityLabel: "AlphaTrade, DISARMED"
+                accessibilityLabel: "AlphaTrade, copier vypnutý, flat ověřen"
             ),
             freshness: .init(
                 text: "Ověřeno před 5 s",
@@ -210,10 +211,10 @@ private extension CompanionMockFixtureCatalog {
                 accessibilityLabel: "Stav ověřen před pěti sekundami"
             ),
             hero: .init(
-                symbolName: "",
-                title: "DISARMED",
-                badge: nil,
-                detail: "Copier neposílá příkazy · broker ověřil nulové pozice i working orders ve 12:51",
+                symbolName: "power",
+                title: "VYPNUTO",
+                badge: "flat ověřen",
+                detail: "Copier je vypnutý · neposílá příkazy · broker ověřil nulové pozice i working orders ve 12:51",
                 tone: .muted
             ),
             banner: nil,
@@ -233,7 +234,7 @@ private extension CompanionMockFixtureCatalog {
         let safety = StatusSectionPresentation(
             id: "safety",
             title: "Bezpečnost",
-            summary: "Fail-closed · expozice při DISARMED",
+            summary: "Fail-closed · expozice při vypnutém copieru",
             summaryTone: .danger,
             isInitiallyExpanded: true,
             hasProblem: true,
@@ -294,12 +295,12 @@ private extension CompanionMockFixtureCatalog {
                 symbolName: "exclamationmark.triangle.fill",
                 title: "ZÁSAH NUTNÝ",
                 badge: "1 problém",
-                detail: "Copier je DISARMED, ale broker potvrdil otevřenou expozici ve 12:52",
+                detail: "Copier je vypnutý, ale broker potvrdil otevřenou expozici ve 12:52",
                 tone: .danger
             ),
             banner: .init(
                 symbolName: "hand.raised.fill",
-                text: "DISARMED neznamená flat. Expozici vyřeš pouze v LIVE nebo u brokera, nikdy z tohoto panelu.",
+                text: "VYPNUTO neznamená flat. Expozici vyřeš pouze v LIVE nebo u brokera, nikdy z tohoto panelu.",
                 tone: .danger
             ),
             sections: [
@@ -320,8 +321,8 @@ private extension CompanionMockFixtureCatalog {
             title: "Expozice",
             summary: "Neověřeno · nelze tvrdit flat",
             summaryTone: .warning,
-            isInitiallyExpanded: true,
-            hasProblem: true,
+            isInitiallyExpanded: false,
+            hasProblem: false,
             rows: [
                 keyValue(
                     id: "unverified-positions",
@@ -346,36 +347,34 @@ private extension CompanionMockFixtureCatalog {
 
         return CompanionPresentation(
             fixtureID: .disarmedUnverified,
-            displayState: .unknown,
+            displayState: .disarmedUnverified,
             menuBar: .init(
-                pillText: "?",
-                tone: .warning,
-                accessibilityLabel: "AlphaTrade, stav expozice neznámý"
+                pillText: "VYPNUTO",
+                symbolName: "power",
+                tone: .danger,
+                accessibilityLabel: "AlphaTrade, copier vypnutý"
             ),
             freshness: .init(
-                text: "Heartbeat před 5 s · expozice neověřena",
-                tone: .warning,
-                accessibilityLabel: "Heartbeat je čerstvý, expozice ale nebyla ověřena"
+                text: "Ověřeno před 5 s",
+                tone: .success,
+                accessibilityLabel: "Stav ověřen před pěti sekundami"
             ),
             hero: .init(
-                symbolName: "questionmark",
-                title: "STAV NEZNÁMÝ",
+                symbolName: "power",
+                title: "VYPNUTO",
                 badge: nil,
-                detail: "Copier je DISARMED · nulové pozice ani working orders nebyly brokerem ověřeny",
-                tone: .warning
+                detail: "Copier je vypnutý · neposílá příkazy · potvrzeno před 5 s",
+                supportingText: "Expozice není brokerem ověřena — flat nelze tvrdit",
+                tone: .danger
             ),
-            banner: .init(
-                symbolName: "exclamationmark.triangle.fill",
-                text: "DISARMED neznamená flat. Dokud chybí brokerové ověření, expozice zůstává neznámá.",
-                tone: .warning
-            ),
+            banner: nil,
             sections: [
                 cleanSafetySection(time: "12:51", initiallyExpanded: false),
                 exposure,
                 runtimeSection(heartbeatSeconds: 5, initiallyExpanded: false),
                 snapshotsSection(lastEventLabel: "Poslední EXIT snímek", time: "12:47")
             ],
-            footer: unknownFooter(primaryTone: .warning),
+            footer: disarmedUnverifiedFooter(),
             exposureEvidence: .unverified,
             followerAcknowledgementEvidence: .notApplicable
         )
@@ -746,6 +745,34 @@ private extension CompanionMockFixtureCatalog {
                 diagnosticsAction()
             ],
             sourceNote: "Fáze 1 · ukázková data · panel nic neovládá"
+        )
+    }
+
+    static func disarmedUnverifiedFooter() -> FooterPresentation {
+        FooterPresentation(
+            actions: [
+                .init(
+                    id: .openLive,
+                    title: "Zapnout v LIVE",
+                    symbolName: nil,
+                    style: .primary,
+                    tone: .danger,
+                    destination: .liveOverview,
+                    accessibilityLabel: "Otevřít LIVE ovládání copieru"
+                ),
+                .init(
+                    id: .openJournal,
+                    title: "Deník",
+                    symbolName: nil,
+                    style: .secondary,
+                    tone: .neutral,
+                    destination: .journal,
+                    accessibilityLabel: "Otevřít AlphaTrade deník"
+                ),
+                refreshAction(style: .icon, tone: .neutral),
+                diagnosticsAction()
+            ],
+            sourceNote: "Fáze 1 · ukázková data · zapnutí je dostupné pouze v LIVE"
         )
     }
 

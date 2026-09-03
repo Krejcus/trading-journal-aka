@@ -7,23 +7,27 @@ ARM/DISARM, Flatten, worker-control, or incoming-network path.
 The native target links neither the Supabase SDK nor Tradovate code; Supabase
 is used only behind the separately deployed server API.
 
-Version 0.2.0 (build 5) is the installed production client in
-`/Users/filipkrejca/Applications/AlphaTrade Status.app` (ad-hoc signed,
-hardened runtime, App Sandbox + outgoing network only). The Supabase migration
-`20260901101932_mac_companion_devices_v1` is applied in production and the
-Mac is paired. Build 5 removes the read-only footer note and the system focus
-ring on footer buttons (`focusEffectDisabled()` at the hosted root).
+Version 0.2.0 (build 13) is the currently installed client (2026-09-03).
+It preserves the native `NSPopover.contentSize` animation and pins content to
+the top edge. The popover window frame is never animated manually.
 
-Version 0.2.0 (build 7) is the installed production client (2026-09-03; backups of builds 5 and 6 kept under ~/Documents/AlphaTrade-backups). Build 7 replaces the SwiftUI `Menu` gear with an AppKit `NSButton` + `NSMenu` so the header no longer shows a system focus ring. It adds
-three-second transition settling, a 30-second auto-open rate limit, targeted
-section/row emphasis, transient 60/8-second popovers, native notifications,
-and four local `UserDefaults` switches. Notifications have their own
-30-second wall-clock limiter. An open popover receives transitions in place,
-preserving manual expansion and entrance state; required problem sections stay
-open alongside the transition target. Startup, wake, manual refresh,
-10-90-second UNKNOWN bridges, and lower revisions never auto-open. Wake resets
-only the uptime-based auto-open window. Build 6 replaced build 5 on 2026-09-03; the LaunchAgent plist is unchanged
-and the service was re-bootstrapped.
+Version 0.2.0 (build 16) is prepared on its feature branch but not installed.
+Every user-facing disabled state is named `VYPNUTO`: verified flat uses a
+neutral `power` pill and badge, while missing broker exposure evidence stays
+rose and never claims flat. A clean reconciliation review while VYPNUTO or
+SHADOW is shown in amber as a check that will run before the next enable; it
+does not become an incident unless another safety problem is present. The
+navigation-only „Zapnout v LIVE" action still only opens
+`?page=live&tab=overview`; the companion cannot ARM, DISARM, Flatten, or send
+any copier command.
+
+Build 16 retains the deterministic section-resize fallback from build 15. Expansion reserves
+the final `NSPopover.contentSize` immediately and then reveals the section
+details into the panel-painted space. Collapse hides the details first and
+shrinks `contentSize` after the 0.25-second content animation. It never animates
+the popover window frame and never enables hosting-view autoresizing. The
+AppKit probe `PopoverAnimationProbeTests` samples the real popover every 8 ms
+and requires both the window top edge and the header to stay within 0.5 pt.
 
 Operational lesson (2026-09-02): the companion API must live in `origin/main`.
 A production deployment promoted from a local source tree is replaced by the
@@ -95,7 +99,7 @@ xcodebuild \
   build
 ```
 
-For build 6, re-sign the generated bundle with both the shipped entitlements
+For an ad-hoc release, re-sign the generated bundle with both the shipped entitlements
 and hardened-runtime flag, then verify it:
 
 ```bash
@@ -115,7 +119,10 @@ xcrun swiftc -parse-as-library \
   macos/AlphaTradeStatus/AlphaTradeStatus/Domain/MacCompanionStatusDTO.swift \
   macos/AlphaTradeStatus/AlphaTradeStatus/Domain/CompanionPresentation.swift \
   macos/AlphaTradeStatus/AlphaTradeStatus/Domain/CompanionFreshnessReducer.swift \
+  macos/AlphaTradeStatus/AlphaTradeStatus/Domain/CompanionRemotePresentationFactory.swift \
   macos/AlphaTradeStatus/AlphaTradeStatus/Domain/CompanionTransitionDetector.swift \
+  macos/AlphaTradeStatus/AlphaTradeStatus/Design/AlphaTradeTheme.swift \
+  macos/AlphaTradeStatus/AlphaTradeStatus/App/PopoverResizeCoordinator.swift \
   macos/AlphaTradeStatus/IntegrationTests/CompanionTransitionDetectorProbe.swift \
   -o /tmp/CompanionTransitionDetectorProbe
 /tmp/CompanionTransitionDetectorProbe

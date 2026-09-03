@@ -230,6 +230,214 @@ výstupu a `git diff --check` čistý. Závislosti nebyly instalovány. Nic neby
 commitnuto, pushnuto, deploynuto ani spuštěno/reinstalováno na workeru nebo
 brokeru; neproběhl ARM, DISARM ani Flatten.
 
+### 2026-09-03 (Codex, companion build 16 — jednotné VYPNUTO a odložený preflight)
+
+Uživatelská terminologie companionu je sjednocená na VYPNUTO: hero, menu-bar
+pill, notifikace, accessibility, tooltipy, fixture katalog i diagnostické
+texty už nezobrazují DISARM/DISARMED. Interní enum `.disarmed` a serverový
+kontrakt `copierState: "disarmed"` zůstávají beze změny. Ověřený flat stav má
+neutrální `power` pill VYPNUTO a badge „flat ověřen“, neověřená expozice dál
+zůstává rose VYPNUTO. Regrese pro všechny remote prezentace a všechny fixtures
+prohledává rozšířené `allVisibleText` regulárním výrazem `(?i)\bdisarm`.
+
+Samotná reconciliation `review` ve VYPNUTO/SHADOW je nově považovaná za
+odloženou kontrolu před příštím zapnutím, pouze pokud nejsou divergence,
+zaseknutý outbox, kill switch ani jiný druh problému. Nezvyšuje issue count,
+nepřepíná stav na ZÁSAH NUTNÝ, neotevírá popover a sekce Bezpečnost zůstává
+sbalená s amber souhrnem „Kontrola před zapnutím“ a řádkem „Proběhne před
+zapnutím“. Stejná reconciliation v LIVE nebo spolu s jiným problémem zůstává
+fail-closed incident. Přechodová logika potlačuje i falešné worsening/improved
+notifikace od tohoto odloženého preflightu.
+
+Build číslo bylo zvýšeno na 16. Runner-independent probe prošel 105 kontrolami,
+celý XCTest target 58/58 testy včetně AppKit sondy s rozpětím horní hrany okna
+i hlavičky `0,000 pt` při expand i collapse a samostatný Debug
+`build-for-testing` prošel. Release 0.2.0 (16) je thin arm64; po explicitním
+ad-hoc přepodpisu má hardened runtime a jen app sandbox + network client
+entitlement, `codesign --verify --deep --strict` prošel. SHA-256 Release
+executable je
+`46155847cd1255ab5ddb4961d8dccb50777393247fefa1187cc4cb117ce3fde5`.
+Nic nebylo instalováno ani spuštěno přes LaunchAgent; serverový runtime,
+produkce a hlavní repo se neměnily.
+
+### 2026-09-03 (Codex, companion build 15 — změřená stabilní hlavička popoveru)
+
+Nový AppKit XCTest `PopoverAnimationProbeTests` otevírá skutečný `NSPopover`
+s LIVE fixture, vyvolá rozbalení i sbalení sekce Bezpečnost a po 8 ms po dobu
+0,4 s tiskne `window.frame.maxY`, rám hosting view v okně a obrazovkovou pozici
+kotvy vložené přímo přes title `alphaTrade.status.title`. Baseline buildu 14
+ukázala, že kotva popoveru se nehýbe, ale hosting view se při rozbalení
+přechodně smrští a SwiftUI obsah se v něm přepočítá:
+
+| Fáze | t [ms] | window.maxY | content height | header.maxY |
+| --- | ---: | ---: | ---: | ---: |
+| build 14 expand | 0 | 700,000 | 485 | 671,000 |
+| build 14 expand | ~150 | 700,000 | ~261 | ~815,9 |
+| build 14 expand | ~250 | 700,000 | ~132 | ~910,5 |
+| build 14 expand | ~270 | 700,000 | 615 | 671,000 |
+| build 14 collapse | 0–400 | 700,000 | 615 → 485 | 671,000 |
+
+Naměřený span buildu 14 byl při rozbalení `window.maxY = 0,000 pt`, ale
+`header.maxY ≈ 241,582 pt`; při sbalení byly oba spany 0. Příčinou tedy není
+posun okna vůči arrow/kotvě. Cold-start diagnostika navíc ukázala
+`NSHostingController.fittingSize = 0–1 pt`, i když jeho skutečný zobrazený
+`view.bounds.height` už byl 487 pt. První target se proto mohl na jeden snímek
+spočítat jako `1 + 130 = 131 pt`. Jde o nesoulad hosting view a SwiftUI obsahu
+při souběhu implicitní animace `NSPopover.contentSize` s `withAnimation`
+(kandidát c, s fázovým přesahem kandidáta a). `.move(edge: .top)` pohyb ještě
+zbytečně propagoval do layoutu, ale nebyl zdrojem pohybu `window.maxY`.
+
+Build 15 používá deterministický fallback bez ruční animace rámu a bez
+autoresizing hosting view: rozbalení nejdřív okamžitě rezervuje finální
+`contentSize`, vloží detail bez layoutové animace a až další průchod run loopu
+animuje jen opacity/offset/y-scale; sbalení detail nejdřív vizuálně skryje a
+teprve po 0,25 s bez animace zmenší layout i `contentSize`. Hlavička je
+layoutově izolovaná v top-aligned overlay a rezervovaný prostor je vyplněný
+barvou panelu. Každý přechod bere jako výchozí velikost aktuální
+`contentViewController.view.bounds`, takže není závislý na cold fitting size.
+Koordinátor mezilehlá měření dál slučuje, ale žádný AppKit rám ručně neanimuje.
+
+Finální sonda měla po všech vzorcích rozbalení `window.maxY = 700,000`,
+`content height = 617,000`, `header.maxY = 671,000`; při sbalení zůstal obsah
+617 pt do konce vizuální animace a potom přešel na 487 pt, zatímco
+`window.maxY` i `header.maxY` byly konstantní. Span hlavičky i horní hrany je
+v obou směrech `0,000 pt`, tedy pod limitem 0,5 pt.
+
+Build číslo bylo zvýšeno na 15. Runner-independent probe prošel 91 kontrolami,
+celý XCTest target 54/54 testy včetně AppKit sondy a light/dark renderů a
+samostatný Debug `build-for-testing` prošel. Release 0.2.0 (15) prošel jako
+thin arm64; po explicitním ad-hoc přepodpisu má hardened runtime a pouze app
+sandbox + network client entitlement, `codesign --verify --deep --strict`
+prošel. SHA-256 Release executable je
+`b332d63b81e6c8a1e540052b6d607d4006937a725cb2bc1e2fa01a9613a81131`.
+Nic nebylo instalováno ani spuštěno přes LaunchAgent.
+
+### 2026-09-03 (Codex, companion build 14 — samostatný stav VYPNUTO)
+
+Čerstvý (≤ 10 s), bezpečnostně čistý `copierState: disarmed` bez
+`exposure.verifiedAt` už není prezentován jako porucha STAV NEZNÁMÝ. Reducer
+vrací samostatný `disarmedUnverified`: rose pill se SF `power` a textem
+VYPNUTO, hero výslovně potvrzuje jen to, že copier neposílá příkazy, a muted
+věta říká, že brokerem neověřenou expozici nelze označit za flat. Ověřený flat
+DISARMED zůstal neutrální a neúplný brokerový důkaz se známým `verifiedAt`
+zůstává fail-closed NEZNÁMÝ; stale heartbeat přebíjí i VYPNUTO.
+
+VYPNUTO má všechny sekce sbalené v pořadí Bezpečnost → Expozice → Copier
+runtime → Snímky. Primární „Zapnout v LIVE" pouze naviguje na
+`?page=live&tab=overview`; žádná ARM/DISARM/Flatten ani jiná command cesta
+nepřibyla a scope zůstává `copier.status.read`. Přechody VYPNUTO ↔
+LIVE/SHADOW jsou režimové notifikace bez zvuku, samotná ztráta flat evidence
+z ověřeného DISARMED není zhoršení. Popover dál mění jen
+`NSPopover.contentSize`; rám okna se ručně neanimuje.
+
+Build číslo bylo zvýšeno na 14. Runner-independent probe prošel 91 kontrolami.
+Sandboxovaný XCTest narazil na zákaz přístupu k `testmanagerd`, následné
+spuštění mimo sandbox prošlo 51/51 testy včetně light/dark renderů VYPNUTO.
+Samostatný Debug `build-for-testing` prošel. Release 0.2.0 (14) je thin arm64,
+ad-hoc podepsaný s hardened runtime (`adhoc,runtime`), po opětovném podpisu
+obsahuje jen app sandbox + network client entitlement; `codesign --verify
+--deep --strict` prošel. SHA-256 Release executable je
+`6d53f51788d5ff3543a4fa52d3ca21f97d22c9747483a49d8f0680a13430ac3e`.
+Release aplikace nebyla instalována ani interaktivně spuštěna; LaunchAgent ani
+PWA se neměnily (XCTest spustil pouze Debug test host).
+
+### 2026-09-03 (Claude, companion build 13 — návrat k contentSize animaci, buildy 10–12 zahozeny)
+
+Build 12 (autoresizing hosting view během animace rámu okna) vytvořil
+měřicí smyčku: view hlásilo SwiftUI novou velikost → koordinátor znovu
+animoval okno → dokola; popover zůstal s prázdnou plochou dole a aplikace
+zamrzla. Uživateli byl okamžitě vrácen build 11 ze zálohy. Poučení: rám okna
+NSPopoveru neanimovat ručně — obsahové view mění jen NSPopover při změně
+`contentSize`. Build 13 = Codexova původní implicitní animace
+`popover.contentSize` (build 8, uživatelem potvrzená jako plynulá) + přišpendlení
+obsahu k hornímu okraji (build 11), které samo o sobě řeší „ujetí od shora"
+způsobené vertikálním centrováním. Okenní úpravy z buildů 10 a 12 odstraněny.
+Release build 13 a build-for-testing prošly, build 11 zálohován, appka
+vyměněna, autostart znovu bootstrapován.
+
+### 2026-09-03 (Claude, companion build 12 — obsah sleduje rám okna během rozbalení)
+
+Po buildu 11 zůstalo „ujetí od shora" jen při rozbalení. Příčina: NSPopover
+mění velikost svého content view až při změně `contentSize`; během animace
+rámu okna si hosting view drželo starou velikost ukotvenou vlevo dole,
+sjelo s rostoucím oknem dolů a při závěrečné synchronizaci skočilo zpět.
+Při sbalení se okno zmenšuje až na konci, proto asymetrie. Oprava
+v `animatePopoverWindow`: `autoresizingMask = [.width, .height]` +
+`autoresizesSubviews` na kontejneru a srovnání rámu před animací, takže
+obsah sleduje okno po celou dobu. Release build 12 (sestavený uživatelem
+v terminálu během výpadku klasifikátoru) a build-for-testing prošly,
+build 11 zálohován, appka vyměněna, autostart znovu bootstrapován.
+
+### 2026-09-03 (Claude, companion build 11 — obsah přišpendlený k hornímu okraji)
+
+Build 10 (pevná horní hrana okna) „ujíždění od shora" nevyřešil. Skutečná
+příčina je uvnitř hostovaného view: kořen má pevnou šířku a ideální výšku,
+a když je okno během animace vyšší než obsah, NSHostingView obsah vertikálně
+vycentruje — hlavička se tak během rozbalení posune dolů a zpět. Oprava:
+oba vstupní wrappery (`StatusPopoverEntranceView`, `CompanionRootEntranceView`)
+mají `.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)`,
+takže přebytek výšky zůstává dole a hlavička se nehýbe. Release build 11 a
+build-for-testing prošly, build 10 zálohován, appka vyměněna, autostart
+znovu bootstrapován.
+
+### 2026-09-03 (Claude, companion build 10 — popover při rozbalení „nevytahuje" horní hranu)
+
+Po plynulém rozbalení (build 8) uživatel hlásil, že se při otevření/zavření
+sekce hýbe i horní část popoveru — okno se natáhne nad kotvu a zase zajede.
+Příčina: animovaná větev nastavovala `popover.contentSize` uvnitř
+`NSAnimationContext` s implicitní animací; AppKit rám okna mění kolem
+počátku vlevo dole, takže roste i nahoru, a NSPopover ho až po doběhnutí
+vrátí pod status item. Oprava (`animatePopoverWindow(to:duration:)`):
+animovat přímo `window.animator().setFrame` s pevným `maxY` (výška i posun
+počátku o stejný delta), po doběhnutí zesynchronizovat `contentSize` bez
+animace. Koordinátor beze změny. Release build 10 + build-for-testing
+prošly, build 9 zálohován, appka vyměněna, autostart znovu bootstrapován.
+
+### 2026-09-03 (Claude, companion build 9 — lišta o krok pozadu)
+
+Uživatel hlásil, že pill v liště reaguje se zpožděním o jeden stav (po
+zapnutí LIVE ukazuje DISARMED, po vypnutí teprve LIVE). Příčina: `@Published`
+emituje ve `willSet`, a sink na `store.$menuBarPresentation` volal
+`applyAppearance`, který si hodnotu znovu četl ze store — tedy ještě starou.
+Oprava: kreslit z hodnoty nesené eventem (`applyAppearance(_:menuBar:)`),
+re-render při změně vzhledu dál čte aktuální stav. Zároveň v build 8/9:
+lišta jen `LIVE` (minuty zůstávají v popoveru), sekce Kopírování bez
+ověřených dat říká „Expozice neověřena" / „Nedostupné". Release build 9 a
+build-for-testing prošly, XCTest runner se v této session nespojil
+(Codex měl 48/48 na buildu 8). Build 8 zálohován, appka vyměněna, autostart
+znovu bootstrapován. Jen `macos/` a `docs/`.
+
+### 2026-09-03 (Codex, companion build 8 — plynulá změna výšky sekcí)
+
+Příčina drhnutí buildu 7 byla potvrzena: oba `NSHostingController` používaly
+automatické `preferredContentSize`, takže SwiftUI během 0,25s transition
+posílalo popoveru mezivýšky a AppKit měnil okno mimo jediný společný rytmus.
+Build 8 používá řešení 1: `sizingOptions = []`, kořen měří skutečnou velikost
+přes SwiftUI preference a čistý koordinátor zná cílový rozdíl výšky sekce už
+před animací. `NSPopover.contentSize` dostane jediný cíl v
+`NSAnimationContext` se stejnými 0,25 s ease-in-out; všechny meziměry jsou do
+konce přechodu koalescované. Šířka je vždy 360 pt. Reduce Motion mění velikost
+okamžitě; 0,22s chevron, vstupní pop-in, in-place §11 aktualizace, hover a
+auto-close se nezměnily. Nevznikl nový fokusovatelný AppKit prvek.
+
+Samostatná AppKit sonda na skutečném WindowServeru potvrdila, že řešení 1 na
+tomto macOS skutečně interpoluje frame `146 → 263 → 326 pt` a horní kotva
+zůstává přesně `700 pt`; fallback na přímý frame okna proto nebyl potřeba.
+Deterministický koordinátor i render sada prošly cíleně 10/10 a celá nativní
+sada 48/48 XCTest. Runner-independent CLI probe prošel 73/73, Debug
+`build-for-testing` i arm64 Release build prošly. Build má CFBundleVersion 8;
+dočasný bundle byl ad-hoc podepsán s Hardened Runtime a dodanými App Sandbox +
+outgoing-network entitlements, `codesign --verify --deep --strict` prošel a
+binární SHA-256 je
+`b95efe8cf5e958a597a3bf2023ca703aa60400c9b29e03e9a6888e714f6d3dc2`.
+
+Webový `npx tsc --noEmit` nebylo možné v tomto izolovaném worktree dokončit:
+nemá vlastní `node_modules`, `npx` skončilo na Keychain
+`SecItemCopyMatching failed -50` a přímý sdílený `tsc` nemohl z tohoto kořene
+najít `@types/node`; TypeScript soubory se neměnily. Build 8 nebyl instalován,
+spuštěn jako produkční companion ani mergován; LaunchAgent, server/PWA,
+worker, broker a copier zůstaly beze změny.
+
 ### 2026-09-03 (Codex, odebrání nedostupného followera přímo z blokace)
 
 ARM dialog pro skupinu blokovanou pouze účty chybějícími v aktuálním OAuth

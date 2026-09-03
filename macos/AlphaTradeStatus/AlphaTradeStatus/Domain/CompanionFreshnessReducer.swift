@@ -23,6 +23,22 @@ struct ReducedCompanionStatus: Equatable, Sendable {
     let followerAcknowledgementEvidence: FollowerAcknowledgementEvidence
 }
 
+enum CompanionSafetyPolicy {
+    static func isDeferredPreflightReconciliation(
+        _ status: MacCompanionStatusDTO
+    ) -> Bool {
+        guard status.copierState == .disarmed || status.copierState == .shadow,
+              status.safety.reconciliation.status == .review,
+              status.safety.divergences.isEmpty,
+              status.safety.outbox.stuckCount == 0,
+              !status.safety.killSwitchTripped else {
+            return false
+        }
+
+        return status.problems.allSatisfy { $0.kind == .reconciliation }
+    }
+}
+
 enum CompanionFreshnessReducer {
     static let maximumVerifiedAge: TimeInterval = 10
     static let offlineAfter: TimeInterval = 90
@@ -118,8 +134,11 @@ private extension CompanionFreshnessReducer {
             return .shadow
         case .disarmed:
             // DISARMED is a command state, not proof that every account is flat.
-            // Until a broker-authoritative exposure snapshot exists, keep the
-            // global presentation amber rather than manufacturing reassurance.
+            // A missing snapshot gets its own explicit command-state presentation;
+            // it says only that no commands are sent and never manufactures flat.
+            if status.exposure.verifiedAt == nil {
+                return .disarmedUnverified
+            }
             guard exposureEvidence.mayClaimFlat else {
                 return .unknown
             }
@@ -132,7 +151,8 @@ private extension CompanionFreshnessReducer {
         // from the corresponding structured, confirmed safety signals.
         var issueKeys = Set<String>()
 
-        if status.safety.reconciliation.status == .review {
+        if status.safety.reconciliation.status == .review,
+           !CompanionSafetyPolicy.isDeferredPreflightReconciliation(status) {
             issueKeys.insert(MacCompanionStatusDTO.ProblemDTO.Kind.reconciliation.rawValue)
         }
         if !status.safety.divergences.isEmpty {

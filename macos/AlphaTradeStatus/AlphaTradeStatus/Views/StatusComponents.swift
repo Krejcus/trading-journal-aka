@@ -19,10 +19,16 @@ struct StatusHeader: View {
 
     let freshness: FreshnessPresentation
     let settings: CompanionSettings?
+    let onHeaderAnchorResolved: ((NSView) -> Void)?
 
-    init(freshness: FreshnessPresentation, settings: CompanionSettings? = nil) {
+    init(
+        freshness: FreshnessPresentation,
+        settings: CompanionSettings? = nil,
+        onHeaderAnchorResolved: ((NSView) -> Void)? = nil
+    ) {
         self.freshness = freshness
         self.settings = settings
+        self.onHeaderAnchorResolved = onHeaderAnchorResolved
     }
 
     var body: some View {
@@ -35,6 +41,11 @@ struct StatusHeader: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
                     .accessibilityIdentifier("alphaTrade.status.title")
+                    .overlay {
+                        if let onHeaderAnchorResolved {
+                            PopoverHeaderProbeAnchor(onResolve: onHeaderAnchorResolved)
+                        }
+                    }
             }
 
             Spacer(minLength: 8)
@@ -64,6 +75,21 @@ struct StatusHeader: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(freshness.accessibilityLabel)
         }
+    }
+}
+
+private struct PopoverHeaderProbeAnchor: NSViewRepresentable {
+    let onResolve: (NSView) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.identifier = NSUserInterfaceItemIdentifier("alphaTrade.status.title.probe")
+        onResolve(view)
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        onResolve(view)
     }
 }
 
@@ -245,16 +271,16 @@ struct CollapsibleStatusSection: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let section: StatusSectionPresentation
-    @Binding var isExpanded: Bool
+    let isExpanded: Bool
+    let isDetailsVisible: Bool
     let highlightedRowID: String?
     let highlightCategory: CompanionTransitionCategory?
+    let onToggle: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
             Button {
-                withAnimation(reduceMotion ? .linear(duration: 0.01) : .easeInOut(duration: 0.25)) {
-                    isExpanded.toggle()
-                }
+                onToggle()
             } label: {
                 sectionHeader
                 .contentShape(Rectangle())
@@ -263,35 +289,15 @@ struct CollapsibleStatusSection: View {
             .alphaTradeFocusEffectDisabled()
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(section.title), \(section.summary)")
-            .accessibilityValue(isExpanded ? "rozbaleno" : "sbaleno")
-            .accessibilityHint(isExpanded ? "Sbalí podrobnosti" : "Rozbalí podrobnosti")
+            .accessibilityValue(isDetailsVisible ? "rozbaleno" : "sbaleno")
+            .accessibilityHint(isDetailsVisible ? "Sbalí podrobnosti" : "Rozbalí podrobnosti")
             .accessibilityIdentifier("alphaTrade.status.section.\(section.id)")
 
             if isExpanded {
-                Divider()
-                    .overlay(theme.stroke)
-                    .padding(.top, 9)
-
-                VStack(spacing: 9) {
-                    ForEach(section.rows) { row in
-                        switch row {
-                        case .keyValue(let presentation):
-                            KeyValueStatusRow(row: presentation)
-                                .modifier(TransitionRowHighlightModifier(
-                                    isHighlighted: highlightedRowID == row.id,
-                                    category: highlightCategory
-                                ))
-                        case .position(let presentation):
-                            PositionStatusRow(row: presentation)
-                                .modifier(TransitionRowHighlightModifier(
-                                    isHighlighted: highlightedRowID == row.id,
-                                    category: highlightCategory
-                                ))
-                        }
-                    }
-                }
-                .padding(.top, 9)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                sectionDetails(highlightsEnabled: true)
+                    .opacity(isDetailsVisible ? 1 : 0)
+                    .offset(y: isDetailsVisible ? 0 : -10)
+                    .scaleEffect(y: isDetailsVisible ? 1 : 0.96, anchor: .top)
             }
         }
         .padding(.horizontal, 14)
@@ -305,6 +311,49 @@ struct CollapsibleStatusSection: View {
                 .stroke(sectionStroke, lineWidth: 1)
         }
         .clipped()
+        .background(alignment: .topLeading) {
+            sectionDetails(highlightsEnabled: false)
+                .fixedSize(horizontal: false, vertical: true)
+                .hidden()
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: StatusSectionDetailsHeightPreferenceKey.self,
+                            value: [section.id: proxy.size.height]
+                        )
+                    }
+                }
+        }
+    }
+
+    private func sectionDetails(highlightsEnabled: Bool) -> some View {
+        VStack(spacing: 0) {
+            Divider()
+                .overlay(theme.stroke)
+                .padding(.top, 9)
+
+            VStack(spacing: 9) {
+                ForEach(section.rows) { row in
+                    switch row {
+                    case .keyValue(let presentation):
+                        KeyValueStatusRow(row: presentation)
+                            .modifier(TransitionRowHighlightModifier(
+                                isHighlighted: highlightsEnabled && highlightedRowID == row.id,
+                                category: highlightsEnabled ? highlightCategory : nil
+                            ))
+                    case .position(let presentation):
+                        PositionStatusRow(row: presentation)
+                            .modifier(TransitionRowHighlightModifier(
+                                isHighlighted: highlightsEnabled && highlightedRowID == row.id,
+                                category: highlightsEnabled ? highlightCategory : nil
+                            ))
+                    }
+                }
+            }
+            .padding(.top, 9)
+        }
     }
 
     @ViewBuilder
@@ -353,10 +402,10 @@ struct CollapsibleStatusSection: View {
         Image(systemName: "chevron.down")
             .font(.system(size: 10, weight: .bold))
             .foregroundStyle(theme.sectionText)
-            .rotationEffect(.degrees(isExpanded ? 180 : 0))
+            .rotationEffect(.degrees(isDetailsVisible ? 180 : 0))
             .animation(
                 reduceMotion ? nil : .easeInOut(duration: 0.22),
-                value: isExpanded
+                value: isDetailsVisible
             )
             .accessibilityHidden(true)
     }
@@ -390,6 +439,17 @@ struct CollapsibleStatusSection: View {
             return theme.card
         }
         return theme.softBackground(for: highlightCategory.statusTone).opacity(0.72)
+    }
+}
+
+struct StatusSectionDetailsHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+
+    static func reduce(
+        value: inout [String: CGFloat],
+        nextValue: () -> [String: CGFloat]
+    ) {
+        value.merge(nextValue(), uniquingKeysWith: max)
     }
 }
 

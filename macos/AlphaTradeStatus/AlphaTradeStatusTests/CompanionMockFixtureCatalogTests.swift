@@ -20,28 +20,36 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
     }
 
     func testEveryFixtureHasTheExpectedStateAndMenuBarPill() {
+        XCTAssertEqual(CompanionDisplayState.disarmed.stateName, "VYPNUTO")
+        XCTAssertFalse(
+            CompanionMockFixtureCatalog.presentation(for: .disarmed)
+                .safeDiagnosticText.localizedCaseInsensitiveContains("disarm")
+        )
+
         let expectations: [(
             id: CompanionFixtureID,
             state: CompanionDisplayState,
             pill: String?,
+            symbol: String?,
             tone: StatusTone,
             heroTitle: String
         )] = [
-            (.live, .live(minutesRemaining: 42), "LIVE 42m", .success, "LIVE"),
-            (.liveAckUnavailable, .live(minutesRemaining: 42), "LIVE 42m", .success, "LIVE"),
-            (.shadow, .shadow, "SHADOW", .muted, "SHADOW"),
-            (.disarmed, .disarmed, nil, .neutral, "DISARMED"),
-            (.disarmedExposure, .intervention(issueCount: 1), "!1", .danger, "ZÁSAH NUTNÝ"),
-            (.disarmedUnverified, .unknown, "?", .warning, "STAV NEZNÁMÝ"),
-            (.intervention, .intervention(issueCount: 2), "!2", .danger, "ZÁSAH NUTNÝ"),
-            (.unknown, .unknown, "?", .warning, "STAV NEZNÁMÝ"),
-            (.offline, .offline, "!1", .danger, "WORKER OFFLINE")
+            (.live, .live(minutesRemaining: 42), "LIVE", nil, .success, "LIVE"),
+            (.liveAckUnavailable, .live(minutesRemaining: 42), "LIVE", nil, .success, "LIVE"),
+            (.shadow, .shadow, "SHADOW", nil, .muted, "SHADOW"),
+            (.disarmed, .disarmed, "VYPNUTO", "power", .neutral, "VYPNUTO"),
+            (.disarmedExposure, .intervention(issueCount: 1), "!1", nil, .danger, "ZÁSAH NUTNÝ"),
+            (.disarmedUnverified, .disarmedUnverified, "VYPNUTO", "power", .danger, "VYPNUTO"),
+            (.intervention, .intervention(issueCount: 2), "!2", nil, .danger, "ZÁSAH NUTNÝ"),
+            (.unknown, .unknown, "?", nil, .warning, "STAV NEZNÁMÝ"),
+            (.offline, .offline, "!1", nil, .danger, "WORKER OFFLINE")
         ]
 
         for expectation in expectations {
             let presentation = CompanionMockFixtureCatalog.presentation(for: expectation.id)
             XCTAssertEqual(presentation.displayState, expectation.state, expectation.id.rawValue)
             XCTAssertEqual(presentation.menuBar.pillText, expectation.pill, expectation.id.rawValue)
+            XCTAssertEqual(presentation.menuBar.symbolName, expectation.symbol, expectation.id.rawValue)
             XCTAssertEqual(presentation.menuBar.tone, expectation.tone, expectation.id.rawValue)
             XCTAssertEqual(presentation.hero.title, expectation.heroTitle, expectation.id.rawValue)
         }
@@ -107,20 +115,33 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
         XCTAssertEqual(presentation.menuBar.tone, .danger)
         XCTAssertEqual(presentation.exposureEvidence, .verifiedExposure(verifiedAt: "12:52:12"))
         XCTAssertFalse(presentation.exposureEvidence.mayClaimFlat)
-        XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("disarmed"))
+        XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("vypnutý"))
         XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("otevřenou expozici"))
     }
 
-    func testDisarmedWithoutExposureVerificationIsUnknownRatherThanFlat() {
+    func testDisarmedWithoutExposureVerificationIsVypnutoRatherThanFlat() {
         let presentation = CompanionMockFixtureCatalog.presentation(for: .disarmedUnverified)
 
-        XCTAssertEqual(presentation.displayState, .unknown)
-        XCTAssertEqual(presentation.menuBar.pillText, "?")
-        XCTAssertEqual(presentation.menuBar.tone, .warning)
+        XCTAssertEqual(presentation.displayState, .disarmedUnverified)
+        XCTAssertEqual(presentation.menuBar.pillText, "VYPNUTO")
+        XCTAssertEqual(presentation.menuBar.symbolName, "power")
+        XCTAssertEqual(presentation.menuBar.tone, .danger)
         XCTAssertEqual(presentation.exposureEvidence, .unverified)
         XCTAssertFalse(presentation.exposureEvidence.mayClaimFlat)
-        XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("disarmed"))
-        XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("nebyly brokerem ověřeny"))
+        XCTAssertEqual(presentation.hero.title, "VYPNUTO")
+        XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("neposílá příkazy"))
+        XCTAssertEqual(
+            presentation.hero.supportingText,
+            "Expozice není brokerem ověřena — flat nelze tvrdit"
+        )
+        XCTAssertNil(presentation.banner)
+        XCTAssertTrue(presentation.sections.allSatisfy { !$0.isInitiallyExpanded })
+        XCTAssertEqual(presentation.footer.actions.map(\.id), [
+            .openLive, .openJournal, .refresh, .copyDiagnostics
+        ])
+        XCTAssertEqual(presentation.footer.actions.first?.title, "Zapnout v LIVE")
+        XCTAssertEqual(presentation.footer.actions.first?.symbolName, nil)
+        XCTAssertEqual(presentation.footer.actions.first?.destination, .liveOverview)
     }
 
     func testUnknownAndOfflineOverrideTheLastKnownLiveState() {
@@ -139,7 +160,7 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
         XCTAssertEqual(offline.followerAcknowledgementEvidence, .unavailable)
 
         for presentation in [unknown, offline] {
-            XCTAssertNotEqual(presentation.menuBar.pillText, "LIVE 42m")
+            XCTAssertNotEqual(presentation.menuBar.pillText, "LIVE")
             XCTAssertFalse(presentation.exposureEvidence.mayClaimFlat)
             XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("naposledy potvrzeno live"))
         }
@@ -180,9 +201,14 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
 
     func testFooterDestinationsUseTheCanonicalHTTPSLinks() {
         XCTAssertEqual(CompanionDestination.live.url, AppLinks.live)
+        XCTAssertEqual(CompanionDestination.liveOverview.url, AppLinks.liveOverview)
         XCTAssertEqual(CompanionDestination.journal.url, AppLinks.journal)
         XCTAssertEqual(AppLinks.live.scheme, "https")
         XCTAssertEqual(AppLinks.live.host, "alphatrade-mentor-15.vercel.app")
+        XCTAssertEqual(AppLinks.live.query, "page=live")
+        XCTAssertEqual(AppLinks.liveOverview.scheme, "https")
+        XCTAssertEqual(AppLinks.liveOverview.host, "alphatrade-mentor-15.vercel.app")
+        XCTAssertEqual(AppLinks.liveOverview.query, "page=live&tab=overview")
         XCTAssertEqual(AppLinks.journal.scheme, "https")
         XCTAssertEqual(AppLinks.journal.host, "alphatrade-mentor-15.vercel.app")
         XCTAssertEqual(AppLinks.companionPairing.scheme, "https")
@@ -193,7 +219,10 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
             for action in presentation.footer.actions {
                 switch action.id {
                 case .openLive:
-                    XCTAssertEqual(action.destination, .live, presentation.fixtureID.rawValue)
+                    let expected: CompanionDestination = presentation.fixtureID == .disarmedUnverified
+                        ? .liveOverview
+                        : .live
+                    XCTAssertEqual(action.destination, expected, presentation.fixtureID.rawValue)
                 case .openJournal:
                     XCTAssertEqual(action.destination, .journal, presentation.fixtureID.rawValue)
                 case .refresh, .copyDiagnostics:
@@ -222,6 +251,20 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
             )
 
             XCTAssertNil(match, "\(presentation.fixtureID.rawValue) exposes standalone ARM text")
+        }
+    }
+
+    func testNoFixtureExposesDisarmTerminology() throws {
+        let forbidden = try NSRegularExpression(pattern: #"(?i)\bdisarm"#)
+
+        for presentation in CompanionMockFixtureCatalog.all {
+            let visibleText = presentation.allVisibleText.joined(separator: "\n")
+            let match = forbidden.firstMatch(
+                in: visibleText,
+                range: NSRange(visibleText.startIndex..<visibleText.endIndex, in: visibleText)
+            )
+
+            XCTAssertNil(match, "\(presentation.fixtureID.rawValue) exposes DISARM terminology")
         }
     }
 }
