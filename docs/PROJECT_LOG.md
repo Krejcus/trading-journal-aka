@@ -152,6 +152,18 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Claude, companion build 11 — obsah přišpendlený k hornímu okraji)
+
+Build 10 (pevná horní hrana okna) „ujíždění od shora" nevyřešil. Skutečná
+příčina je uvnitř hostovaného view: kořen má pevnou šířku a ideální výšku,
+a když je okno během animace vyšší než obsah, NSHostingView obsah vertikálně
+vycentruje — hlavička se tak během rozbalení posune dolů a zpět. Oprava:
+oba vstupní wrappery (`StatusPopoverEntranceView`, `CompanionRootEntranceView`)
+mají `.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)`,
+takže přebytek výšky zůstává dole a hlavička se nehýbe. Release build 11 a
+build-for-testing prošly, build 10 zálohován, appka vyměněna, autostart
+znovu bootstrapován.
+
 ### 2026-09-03 (Claude, companion build 10 — popover při rozbalení „nevytahuje" horní hranu)
 
 Po plynulém rozbalení (build 8) uživatel hlásil, že se při otevření/zavření

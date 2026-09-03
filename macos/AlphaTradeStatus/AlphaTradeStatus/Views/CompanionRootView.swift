@@ -110,6 +110,11 @@ struct CompanionRootEntranceView: View {
         .scaleEffect(isVisible ? 1 : 0.985, anchor: .top)
         .opacity(isVisible ? 1 : 0.94)
         .offset(y: isVisible ? 0 : -4)
+        // While the popover window and the content animate to a new height,
+        // the hosting view is briefly taller than the content. Without an
+        // explicit top alignment SwiftUI centres the content vertically, so
+        // the header appears to slide away from the menu bar and back.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear(perform: animateEntrance)
     }
 
