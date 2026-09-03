@@ -52,7 +52,7 @@ LIVE, zeleně). Zbytek AlphaTrade (LIVE desk, log, kód) terminologii nemění.
   canvasu) — slouží jako zdroj barev, textů a struktury
   (inline styly); interaktivní chování ověřuj v artifactu výše. Mapování:
   - `MenuBar*.dc.html` — 5 stavů položky v liště,
-  - `Main*` LIVE · `Disarmed*` DISARMED · `Zasah*` ZÁSAH NUTNÝ ·
+  - `Main*` LIVE · `Disarmed*` VYPNUTO · `Zasah*` ZÁSAH NUTNÝ ·
     `Neznamy*` STAV NEZNÁMÝ · `Shadow*` SHADOW (soubory bez „Light" = tmavý
     režim),
   - `at-logo.png` — ořez `public/logos/at_logo_light_clean.png`.
@@ -100,7 +100,7 @@ odpovědi, ne hardcoduj:
 
 | stáří heartbeatu | prezentace |
 |---|---|
-| ≤ 10 s | ověřený stav — LIVE/SHADOW/DISARMED/VYPNUTO/ZÁSAH podle obsahu |
+| ≤ 10 s | ověřený stav — LIVE/SHADOW/VYPNUTO/ZÁSAH podle obsahu |
 | 10–90 s | **STAV NEZNÁMÝ** (amber `?`) + „Naposledy potvrzeno X ve HH:MM" |
 | > 90 s | **WORKER OFFLINE** — červený problém (ikona `!`, hlavní stav WORKER OFFLINE, jinak layout jako STAV NEZNÁMÝ s červeným rámem) + naposledy potvrzeno |
 
@@ -113,15 +113,16 @@ jen starý widgetový cache limit a companion ho nepřebírá. Zelená/neutráln
 prezentace NIKDY nesmí přežít 10 s bez potvrzení.
 
 Pravidlo č. 1: stará data vždy přebijí poslední známý stav. Neutrální vzhled
-vyžaduje čerstvé potvrzení (heartbeat + čistá reconciliation), ne absenci
+vyžaduje čerstvé potvrzení (heartbeat + čistá reconciliation, případně níže
+popsaný odložený preflight ve vypnutém/SHADOW režimu), ne absenci
 chyby; jakákoli nejistota = amber. Zelená = „kopírování běží", nikdy „je to
-bezpečné"; červená a amber mají vždy přednost. DISARMED ≠ flat — flat se
+bezpečné"; červená a amber mají vždy přednost. VYPNUTO ≠ flat — flat se
 tvrdí jen s časem brokerova ověření.
 
 `VYPNUTO` je čerstvě ověřený stav příkazové části copieru: heartbeat je
-≤ 10 s, `copierState == disarmed`, bezpečnost je čistá, ale
-`exposure.verifiedAt == nil`. Potvrzuje pouze, že copier neposílá příkazy;
-není důkazem nulové brokerové expozice.
+≤ 10 s a interní `copierState == disarmed`. Potvrzuje pouze, že copier
+neposílá příkazy; nulovou brokerovou expozici lze tvrdit až s úplným důkazem
+podle §7.3. Bez něj je VYPNUTO rose, s ověřeným flat je neutrální.
 
 ## 4. Položka v liště
 
@@ -130,8 +131,8 @@ stavech**; stav nese pill a text vedle, nikdy barva loga.
 
 | stav | obsah | pill pozadí (dark / light) | text |
 |---|---|---|---|
-| Neutrální (DISARMED, bez problému) | jen logo | — | — |
-| VYPNUTO (DISARMED, expozice neověřena) | SF `power` + `VYPNUTO` | `rgba(244,63,94,0.26)` / `0.14` | `#fecdd3` / `#be123c` |
+| VYPNUTO · flat ověřen | SF `power` + `VYPNUTO` | `rgba(255,255,255,0.10)` / `rgba(0,0,0,0.07)` | default |
+| VYPNUTO · expozice neověřena | SF `power` + `VYPNUTO` | `rgba(244,63,94,0.26)` / `0.14` | `#fecdd3` / `#be123c` |
 | LIVE | `LIVE 42m` | `rgba(16,185,129,0.22)` / `0.16` | `#a7f3d0` / `#047857` |
 | SHADOW | `SHADOW` | `rgba(255,255,255,0.10)` / `rgba(0,0,0,0.07)` | default |
 | Zásah nutný / WORKER OFFLINE | `!N` | `rgba(244,63,94,0.26)` / `0.14` | `#fecdd3` / `#be123c` |
@@ -155,11 +156,12 @@ Hlavní stavy a pořadí sekcí:
   Sledování leadera (otevřená; pozice „jen sledováno", Poslední signál,
   „Kopie by šla N followerům · nic neodesláno") → Bezpečnost → Runtime →
   Snímky.
-- **DISARMED** (`Disarmed*`): šedý blok + „broker potvrdil flat ve 12:51".
+- **VYPNUTO · flat ověřen** (`Disarmed*`): neutrální šedý blok s ikonou
+  `power`, titulkem `VYPNUTO`, badge `flat ověřen` a časem brokerova ověření.
   Sekce (vše sbalené): Bezpečnost → Expozice → Runtime → Snímky.
-- **VYPNUTO** (`DisarmedUnverified*`): rose blok s ikonou `power`, titulkem
-  „VYPNUTO" a řádkem „Copier je DISARMED · neposílá příkazy · potvrzeno před
-  X s". Pod hero je pouze nenápadná muted věta „Expozice není brokerem
+- **VYPNUTO · expozice neověřena** (`DisarmedUnverified*`): rose blok s ikonou
+  `power`, titulkem „VYPNUTO" a řádkem „Copier je vypnutý · neposílá příkazy ·
+  potvrzeno před X s". Pod hero je pouze nenápadná muted věta „Expozice není brokerem
   ověřena — flat nelze tvrdit", nikoli velký varovný banner. Sekce jsou
   všechny sbalené v pořadí Bezpečnost → Expozice → Copier runtime → Snímky.
   Tento stav potvrzuje jen vypnuté odesílání příkazů a **nikdy netvrdí flat**.
@@ -177,7 +179,8 @@ Hlavní stavy a pořadí sekcí:
 Texty mocků „followeři potvrzeni flat", `20/20` a „broker potvrdil flat" jsou
 fixture/cílové varianty. Cloudový kandidát 0.2 zobrazuje expozici jako
 „neověřeno" a follower ack jako „nedostupné". Čerstvý, bezpečnostně čistý
-DISARMED bez `verifiedAt` se prezentuje jako VYPNUTO, nikdy potvrzené flat.
+interní stav `copierState: "disarmed"` bez `verifiedAt` se prezentuje jako
+VYPNUTO, nikdy potvrzené flat.
 Pokud `verifiedAt` existuje, ale důkazy flat jsou neúplné (například chybí
 `accountsWithWorkingOrders: 0`), zůstává STAV NEZNÁMÝ. Stará data přebijí
 VYPNUTO stejně jako každý jiný poslední stav.
@@ -198,15 +201,26 @@ Rozbalovací sekce — pravidla (klíčové pro 20+ účtů):
 - Snímky TradingView jsou oddělené od zdraví copieru.
 
 Tlačítka (34 pt): primární gradient + stín + odlesk, bez ikony — LIVE/SHADOW/
-DISARMED „Otevřít LIVE" (emerald `#10b981→#059669`), ZÁSAH „Otevřít LIVE —
+VYPNUTO · flat ověřen „Otevřít LIVE" (emerald `#10b981→#059669`), ZÁSAH
+„Otevřít LIVE —
 vyřešit" (rose), NEZNÁMÝ/OFFLINE „Obnovit stav" (amber, refresh ikona);
 sekundární „Deník" jen v klidných stavech; ikonové: refresh, diagnostika.
 Kliknutí otevírá příslušnou stránku PWA.
 
-VYPNUTO má primární rose tlačítko bez ikony „Zapnout v LIVE", které pouze
-otevře `?page=live&tab=overview`, dále „Deník", refresh a diagnostiku.
+VYPNUTO bez brokerového ověření má primární rose tlačítko bez ikony „Zapnout
+v LIVE", které pouze otevře `?page=live&tab=overview`, dále „Deník", refresh
+a diagnostiku.
 Companion nemá žádné ARM/zapínací tlačítko ani command scope; nadále drží jen
 `copier.status.read` a samotné zapnutí je výhradně rozhodnutí v PWA.
+
+Samotné `reconciliation.status: "review"` v interním vypnutém nebo SHADOW
+režimu není incident, pokud jsou `divergences` prázdné,
+`outbox.stuckCount == 0`, `killSwitchTripped == false` a `problems[]`
+neobsahuje nic jiného než
+`reconciliation`. Hlavní stav a pill zůstávají VYPNUTO/SHADOW, Bezpečnost má
+amber souhrn „Kontrola před zapnutím" a amber řádek „Reconciliation — Proběhne
+před zapnutím"; sekce se sama neotevře. V LIVE nebo s kterýmkoli dalším
+problémem zůstává `review` důvodem pro ZÁSAH NUTNÝ.
 
 Animace: výsledná AppKit adaptace kombinuje nativní animaci `NSPopover` se
 vstupem obsahu 0,18 s (opacity 0,94→1, y −4→0, scale 0,985→1, origin nahoře).
@@ -220,7 +234,7 @@ Reduce Motion pohyb vypíná. Rozbalení/sbalení sekcí je obousměrně plynul�
 
 1. **Nový levný endpoint `/api/mac-companion/status`** — čte POUZE cloudový
    heartbeat/stav z DB (žádné broker volání). Kandidát 0.2 polluje nejvýše po
-   5 s při LIVE/problému a po 8 s v klidném SHADOW/DISARMED; stav si lokálně
+   5 s při LIVE/problému a po 8 s v klidném SHADOW/VYPNUTO; stav si lokálně
    přepočítává každou sekundu. Okamžitě obnovuje při otevření popoveru a po
    probuzení Macu. Při wake nejprve synchronně zneplatní časovou důvěru, takže
    předspánkové zelené LIVE nemůže přežít neúspěšný refresh.
@@ -285,6 +299,13 @@ samostatná budoucí práce.
   (`copierRuntimeController.ts`) — „flat ověřen" se smí tvrdit jen při
   neprázdném `exposure.verifiedAt`, prázdném seznamu `positions` **a**
   `accountsWithWorkingOrders === 0`, nikdy z `groupFlat`.
+- Přepnutí LIVE ↔ vypnuto zneplatní preflight a worker provede novou
+  autoritativní kontrolu až před dalším zapnutím. Proto samotné `review` v
+  interním vypnutém/SHADOW režimu při prázdných divergencích, nulovém stuck
+  outboxu, neaktivním kill switchi a bez jiného druhu v `problems[]` znamená
+  „Kontrola před zapnutím", ne incident. V LIVE nebo s dalším problémem je
+  stejné `review` nadále fail-closed ZÁSAH NUTNÝ; přechod do LIVE preflight
+  nijak neobchází ani neoslabuje.
 - Mockupové `20/20` je cílový stav kontraktu, ne dnešní schopnost.
 
 Server parsuje bezpečnostní pole fail-closed. Chybějící, špatně typované nebo
@@ -381,14 +402,15 @@ neovládá, nekrade fokus a nikdy neohlásí zlepšení ze starých dat.
 
 | přechod | kategorie | chování |
 |---|---|---|
-| ověřený stav → ZÁSAH NUTNÝ; nový problém v `problems[]` (divergence, stuck outbox, reconciliation); `brokerConnected` true → false; → WORKER OFFLINE; LIVE session vypršela nebo vyprší za ≤ 5 min | **zhoršení** | auto-otevřít, sekce s problémem rozbalená, zůstane až do zavření (max 60 s), + nativní notifikace, volitelný zvuk, pill 3× zapulzuje |
+| ověřený stav → ZÁSAH NUTNÝ; nový skutečný problém v `problems[]` (divergence, stuck outbox, reconciliation mimo výjimku §5/§7.3); `brokerConnected` true → false; → WORKER OFFLINE; LIVE session vypršela nebo vyprší za ≤ 5 min | **zhoršení** | auto-otevřít, sekce s problémem rozbalená, zůstane až do zavření (max 60 s), + nativní notifikace, volitelný zvuk, pill 3× zapulzuje |
 | problém zmizel; broker reconnect; OFFLINE → ověřeno | **zlepšení** | auto-otevřít jako toast na 8 s (jen když je zapnuto „i zlepšení"), bez notifikace |
-| DISARMED/VYPNUTO/SHADOW → LIVE; LIVE → DISARMED/VYPNUTO/SHADOW; VYPNUTO ↔ SHADOW | **režim** | toast 8 s + notifikace bez zvuku |
+| VYPNUTO/SHADOW → LIVE; LIVE → VYPNUTO/SHADOW; VYPNUTO ↔ SHADOW | **režim** | toast 8 s + notifikace bez zvuku |
 | ověřeno → STAV NEZNÁMÝ (10–90 s) a zpět | — | **nikdy** (síťové zaškobrtnutí) |
 | start aplikace, wake z spánku, ruční refresh | — | nikdy; první snapshot po startu jen nastaví výchozí bod |
 
-Ověřené DISARMED → VYPNUTO při ztrátě pouze brokerového důkazu expozice není
-zhoršení a samo nevyvolá toast ani notifikaci. Skutečný problém nebo offline
+VYPNUTO s ověřeným flat → VYPNUTO bez brokerového důkazu expozice není
+zhoršení a samo nevyvolá toast ani notifikaci. Samotný odložený preflight
+reconciliation podle §5/§7.3 také není zhoršení. Skutečný problém nebo offline
 přechod z VYPNUTO se klasifikuje stejně fail-closed jako z ostatních stavů.
 
 Změna se vyhodnocuje výhradně z výstupu freshness reduceru (§3) porovnáním

@@ -152,6 +152,36 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Codex, companion build 16 — jednotné VYPNUTO a odložený preflight)
+
+Uživatelská terminologie companionu je sjednocená na VYPNUTO: hero, menu-bar
+pill, notifikace, accessibility, tooltipy, fixture katalog i diagnostické
+texty už nezobrazují DISARM/DISARMED. Interní enum `.disarmed` a serverový
+kontrakt `copierState: "disarmed"` zůstávají beze změny. Ověřený flat stav má
+neutrální `power` pill VYPNUTO a badge „flat ověřen“, neověřená expozice dál
+zůstává rose VYPNUTO. Regrese pro všechny remote prezentace a všechny fixtures
+prohledává rozšířené `allVisibleText` regulárním výrazem `(?i)\bdisarm`.
+
+Samotná reconciliation `review` ve VYPNUTO/SHADOW je nově považovaná za
+odloženou kontrolu před příštím zapnutím, pouze pokud nejsou divergence,
+zaseknutý outbox, kill switch ani jiný druh problému. Nezvyšuje issue count,
+nepřepíná stav na ZÁSAH NUTNÝ, neotevírá popover a sekce Bezpečnost zůstává
+sbalená s amber souhrnem „Kontrola před zapnutím“ a řádkem „Proběhne před
+zapnutím“. Stejná reconciliation v LIVE nebo spolu s jiným problémem zůstává
+fail-closed incident. Přechodová logika potlačuje i falešné worsening/improved
+notifikace od tohoto odloženého preflightu.
+
+Build číslo bylo zvýšeno na 16. Runner-independent probe prošel 105 kontrolami,
+celý XCTest target 58/58 testy včetně AppKit sondy s rozpětím horní hrany okna
+i hlavičky `0,000 pt` při expand i collapse a samostatný Debug
+`build-for-testing` prošel. Release 0.2.0 (16) je thin arm64; po explicitním
+ad-hoc přepodpisu má hardened runtime a jen app sandbox + network client
+entitlement, `codesign --verify --deep --strict` prošel. SHA-256 Release
+executable je
+`46155847cd1255ab5ddb4961d8dccb50777393247fefa1187cc4cb117ce3fde5`.
+Nic nebylo instalováno ani spuštěno přes LaunchAgent; serverový runtime,
+produkce a hlavní repo se neměnily.
+
 ### 2026-09-03 (Codex, companion build 15 — změřená stabilní hlavička popoveru)
 
 Nový AppKit XCTest `PopoverAnimationProbeTests` otevírá skutečný `NSPopover`

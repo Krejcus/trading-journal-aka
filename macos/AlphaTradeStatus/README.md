@@ -11,14 +11,17 @@ Version 0.2.0 (build 13) is the currently installed client (2026-09-03).
 It preserves the native `NSPopover.contentSize` animation and pins content to
 the top edge. The popover window frame is never animated manually.
 
-Version 0.2.0 (build 15) is prepared on its feature branch but not installed.
-It presents a fresh, safety-clean DISARMED status without broker exposure
-evidence as `VYPNUTO`: a rose `power` pill and a navigation-only „Zapnout v
-LIVE" action to `?page=live&tab=overview`. It explicitly says exposure is not
-broker-verified and never claims flat. The companion still cannot ARM,
-DISARM, Flatten, or send any copier command.
+Version 0.2.0 (build 16) is prepared on its feature branch but not installed.
+Every user-facing disabled state is named `VYPNUTO`: verified flat uses a
+neutral `power` pill and badge, while missing broker exposure evidence stays
+rose and never claims flat. A clean reconciliation review while VYPNUTO or
+SHADOW is shown in amber as a check that will run before the next enable; it
+does not become an incident unless another safety problem is present. The
+navigation-only „Zapnout v LIVE" action still only opens
+`?page=live&tab=overview`; the companion cannot ARM, DISARM, Flatten, or send
+any copier command.
 
-Build 15 also uses a deterministic section-resize fallback. Expansion reserves
+Build 16 retains the deterministic section-resize fallback from build 15. Expansion reserves
 the final `NSPopover.contentSize` immediately and then reveals the section
 details into the panel-painted space. Collapse hides the details first and
 shrinks `contentSize` after the 0.25-second content animation. It never animates
