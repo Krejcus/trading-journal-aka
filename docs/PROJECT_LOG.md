@@ -151,6 +151,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Claude, rollout 1bb55621 — recovery hardening)
+
+Codex K (zpevnění recovery podle cross-review R1+R2) zrecenzován Claudem a
+sloučen jako `1bb55621`; celá sada 1882/1882, tsc čistý. Worker reinstalován
+z tohoto commitu (start 07:41:06 UTC), post-restart reconcile čistý,
+`unverifiableFollowerOwnership: []`. Dnešní zmizelý breached follower 63338752
+je v durable epoše `eligibleAtOpen:false / copyLineage:unproven`, tedy
+neparticipant — jeho odebrání ze skupiny nevyžaduje waiver. Web deploy
+automaticky. Zbývá na uživateli: odebrat 63338752 (jedním klikem z ARM modalu
+nebo v editoru), případně přidat nový Lucid 64503883, Kontrola pozic, vědomý
+ARM. Otevřené: race opravy z review C (P0 partial-fill-aware guard, P1 settling
+okna), zbytkový lot −3 v denní statistice po flat (proč vznikl).
+
 ### 2026-09-03 (Codex, recovery partial-snapshot a ownership-waiver hardening)
 
 `ReconciliationResult` nyní rozlišuje `authoritativelyClean` a vypisuje
