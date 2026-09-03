@@ -152,6 +152,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Claude, companion build 9 — lišta o krok pozadu)
+
+Uživatel hlásil, že pill v liště reaguje se zpožděním o jeden stav (po
+zapnutí LIVE ukazuje DISARMED, po vypnutí teprve LIVE). Příčina: `@Published`
+emituje ve `willSet`, a sink na `store.$menuBarPresentation` volal
+`applyAppearance`, který si hodnotu znovu četl ze store — tedy ještě starou.
+Oprava: kreslit z hodnoty nesené eventem (`applyAppearance(_:menuBar:)`),
+re-render při změně vzhledu dál čte aktuální stav. Zároveň v build 8/9:
+lišta jen `LIVE` (minuty zůstávají v popoveru), sekce Kopírování bez
+ověřených dat říká „Expozice neověřena" / „Nedostupné". Release build 9 a
+build-for-testing prošly, XCTest runner se v této session nespojil
+(Codex měl 48/48 na buildu 8). Build 8 zálohován, appka vyměněna, autostart
+znovu bootstrapován. Jen `macos/` a `docs/`.
+
 ### 2026-09-03 (Codex, companion build 8 — plynulá změna výšky sekcí)
 
 Příčina drhnutí buildu 7 byla potvrzena: oba `NSHostingController` používaly

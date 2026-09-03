@@ -65,11 +65,15 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
         UNUserNotificationCenter.current().delegate = self
 
         if case .cloud(let store) = runtime {
+            // `@Published` emits from `willSet`, so inside this sink
+            // `store.menuBarPresentation` still holds the PREVIOUS value.
+            // Render from the emitted value, never by re-reading the store,
+            // otherwise the menu bar pill lags one state behind.
             menuBarCancellable = store.$menuBarPresentation
                 .removeDuplicates()
-                .sink { [weak self] _ in
+                .sink { [weak self] presentation in
                     guard let self else { return }
-                    self.applyAppearance(NSApp.effectiveAppearance)
+                    self.applyAppearance(NSApp.effectiveAppearance, menuBar: presentation)
                 }
             transitionCancellable = store.$transitionEvent
                 .compactMap { $0 }
@@ -145,12 +149,15 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
         showPopover(relativeTo: sender)
     }
 
-    private func applyAppearance(_ effectiveAppearance: NSAppearance) {
+    private func applyAppearance(
+        _ effectiveAppearance: NSAppearance,
+        menuBar override: MenuBarStatusPresentation? = nil
+    ) {
         guard let statusItem, let button = statusItem.button else {
             return
         }
 
-        let menuBarPresentation = currentMenuBarPresentation
+        let menuBarPresentation = override ?? currentMenuBarPresentation
         button.toolTip = menuBarPresentation.accessibilityLabel
         button.setAccessibilityLabel(menuBarPresentation.accessibilityLabel)
 
