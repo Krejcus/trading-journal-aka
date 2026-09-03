@@ -7,25 +7,16 @@ ARM/DISARM, Flatten, worker-control, or incoming-network path.
 The native target links neither the Supabase SDK nor Tradovate code; Supabase
 is used only behind the separately deployed server API.
 
-Version 0.2.0 (build 7) is the installed production client (2026-09-03;
-backups of builds 5 and 6 are kept under `~/Documents/AlphaTrade-backups`).
-Build 7 replaces the SwiftUI `Menu` gear with an AppKit `NSButton` + `NSMenu`
-so the header no longer shows a system focus ring. It adds
-three-second transition settling, a 30-second auto-open rate limit, targeted
-section/row emphasis, transient 60/8-second popovers, native notifications,
-and four local `UserDefaults` switches. Notifications have their own
-30-second wall-clock limiter. An open popover receives transitions in place,
-preserving manual expansion and entrance state; required problem sections stay
-open alongside the transition target. Startup, wake, manual refresh,
-10-90-second UNKNOWN bridges, and lower revisions never auto-open. Wake resets
-only the uptime-based auto-open window.
+Version 0.2.0 (build 13) is the currently installed client (2026-09-03).
+It preserves the native `NSPopover.contentSize` animation and pins content to
+the top edge. The popover window frame is never animated manually.
 
-Version 0.2.0 (build 8) is prepared but not installed. It disables automatic
-`NSHostingController.preferredContentSize` propagation and measures the SwiftUI
-root explicitly. Section target heights are known before their 0.25-second
-transition, so one coordinator drives one matching `NSPopover.contentSize`
-animation and coalesces all intermediate SwiftUI geometry. The width stays
-360 pt and Reduce Motion resizes immediately.
+Version 0.2.0 (build 14) is prepared on its feature branch but not installed.
+It presents a fresh, safety-clean DISARMED status without broker exposure
+evidence as `VYPNUTO`: a rose `power` pill and a navigation-only „Zapnout v
+LIVE" action to `?page=live&tab=overview`. It explicitly says exposure is not
+broker-verified and never claims flat. The companion still cannot ARM,
+DISARM, Flatten, or send any copier command.
 
 Operational lesson (2026-09-02): the companion API must live in `origin/main`.
 A production deployment promoted from a local source tree is replaced by the
@@ -97,7 +88,7 @@ xcodebuild \
   build
 ```
 
-For build 6, re-sign the generated bundle with both the shipped entitlements
+For an ad-hoc release, re-sign the generated bundle with both the shipped entitlements
 and hardened-runtime flag, then verify it:
 
 ```bash
@@ -117,6 +108,7 @@ xcrun swiftc -parse-as-library \
   macos/AlphaTradeStatus/AlphaTradeStatus/Domain/MacCompanionStatusDTO.swift \
   macos/AlphaTradeStatus/AlphaTradeStatus/Domain/CompanionPresentation.swift \
   macos/AlphaTradeStatus/AlphaTradeStatus/Domain/CompanionFreshnessReducer.swift \
+  macos/AlphaTradeStatus/AlphaTradeStatus/Domain/CompanionRemotePresentationFactory.swift \
   macos/AlphaTradeStatus/AlphaTradeStatus/Domain/CompanionTransitionDetector.swift \
   macos/AlphaTradeStatus/AlphaTradeStatus/Design/AlphaTradeTheme.swift \
   macos/AlphaTradeStatus/AlphaTradeStatus/App/PopoverResizeCoordinator.swift \

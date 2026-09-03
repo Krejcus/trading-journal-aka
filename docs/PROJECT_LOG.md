@@ -152,6 +152,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Codex, companion build 14 — samostatný stav VYPNUTO)
+
+Čerstvý (≤ 10 s), bezpečnostně čistý `copierState: disarmed` bez
+`exposure.verifiedAt` už není prezentován jako porucha STAV NEZNÁMÝ. Reducer
+vrací samostatný `disarmedUnverified`: rose pill se SF `power` a textem
+VYPNUTO, hero výslovně potvrzuje jen to, že copier neposílá příkazy, a muted
+věta říká, že brokerem neověřenou expozici nelze označit za flat. Ověřený flat
+DISARMED zůstal neutrální a neúplný brokerový důkaz se známým `verifiedAt`
+zůstává fail-closed NEZNÁMÝ; stale heartbeat přebíjí i VYPNUTO.
+
+VYPNUTO má všechny sekce sbalené v pořadí Bezpečnost → Expozice → Copier
+runtime → Snímky. Primární „Zapnout v LIVE" pouze naviguje na
+`?page=live&tab=overview`; žádná ARM/DISARM/Flatten ani jiná command cesta
+nepřibyla a scope zůstává `copier.status.read`. Přechody VYPNUTO ↔
+LIVE/SHADOW jsou režimové notifikace bez zvuku, samotná ztráta flat evidence
+z ověřeného DISARMED není zhoršení. Popover dál mění jen
+`NSPopover.contentSize`; rám okna se ručně neanimuje.
+
+Build číslo bylo zvýšeno na 14. Runner-independent probe prošel 91 kontrolami.
+Sandboxovaný XCTest narazil na zákaz přístupu k `testmanagerd`, následné
+spuštění mimo sandbox prošlo 51/51 testy včetně light/dark renderů VYPNUTO.
+Samostatný Debug `build-for-testing` prošel. Release 0.2.0 (14) je thin arm64,
+ad-hoc podepsaný s hardened runtime (`adhoc,runtime`), po opětovném podpisu
+obsahuje jen app sandbox + network client entitlement; `codesign --verify
+--deep --strict` prošel. SHA-256 Release executable je
+`6d53f51788d5ff3543a4fa52d3ca21f97d22c9747483a49d8f0680a13430ac3e`.
+Release aplikace nebyla instalována ani interaktivně spuštěna; LaunchAgent ani
+PWA se neměnily (XCTest spustil pouze Debug test host).
+
 ### 2026-09-03 (Claude, companion build 13 — návrat k contentSize animaci, buildy 10–12 zahozeny)
 
 Build 12 (autoresizing hosting view během animace rámu okna) vytvořil
