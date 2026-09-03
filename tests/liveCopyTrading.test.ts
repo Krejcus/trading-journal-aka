@@ -178,7 +178,7 @@ describe('liveCopyTrading', () => {
     });
   });
 
-  it('odhalí stale člena skupiny a ručně ho nahradí bez ztráty nastavení', () => {
+  it('odhalí stale člena a náhradnímu účtu nepřenese násobek ani maxContracts', () => {
     const group: CopyGroupConfig = {
       id: 'g', name: 'Test', enabled: false, leaderAccountId: 1,
       followers: [{ accountId: 63338592, mode: 'on-fill', multiplier: 2, maxContracts: 3 }],
@@ -189,7 +189,7 @@ describe('liveCopyTrading', () => {
       followerAccountIds: [63338592],
     });
     expect(replaceCopyGroupFollowerAccount(group, 63338592, 63338752).followers).toEqual([
-      { accountId: 63338752, mode: 'on-fill', multiplier: 2, maxContracts: 3 },
+      { accountId: 63338752, mode: 'on-fill', multiplier: 1 },
     ]);
   });
 

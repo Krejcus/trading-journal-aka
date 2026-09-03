@@ -56,7 +56,9 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Otevřené otázky
 
-- [ ] **Násobek 2× „sám“ přeskočil na funded účet při změně leadera** (2. 9.,
+- [x] **Násobek 2× „sám“ přeskočil na funded účet při změně leadera** —
+      VYŘEŠENO lokálně 3. 9. (zápis níže; změna zatím není commitnutá ani
+      nasazená). Původní incident (2. 9.,
       15:25–15:34 UTC): `changeCopyGroupLeader` dává předchozímu leaderovi
       `{...promotedFollower, accountId: previousLeader}`, tedy zdědí násobek
       povýšeného followera (63338592@2 → leader, Lucid 62364553 dostal @2).
@@ -64,11 +66,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       nastavil; přesný poslední krok (tři copy-command edity 15:25–15:34) se
       bez payloadů z `tradovate_copier_commands` nedá dovodit —
       `replaceCopyGroupFollowerAccount` sice násobek dědí, ale existujícího
-      followera odmítne. Ten účet pak narazil na DLL 1 250. Fix: předchozí leader vždy `multiplier: 1`,
-      náhrada účtu nesmí tiše přenášet násobek >1 bez explicitního potvrzení,
-      a dialog musí zvýrazněně ukázat každý follower, kterému se násobek mění.
-      Regrese: promote follower@2 → nový follower (starý leader) má 1; replace
-      účtu s @2 vyžaduje potvrzení. Delegovat Codexu.
+      followera odmítne. Ten účet pak narazil na DLL 1 250. Lokální oprava:
+      předchozí leader vždy `multiplier: 1`; náhrada účtu resetuje násobek a
+      `maxContracts` s viditelným upozorněním; editor před uložením ukazuje
+      zvýrazněný diff leadera a všech změn followerů. Povinné regrese prošly.
 - [ ] **Frekvence fail-closed při rychlém obchodování velkých velikostí**
       (2. 9. odpoledne, 5× DISARM za 70 min): 16:01 divergence -2 vs -3 uprostřed
       scale-in (pravděpodobně latence fillu followera), 16:30 „Flat sweep
@@ -155,6 +156,24 @@ přechody z freshness reduceru, STAV NEZNÁMÝ do 90 s nikdy; anti-flap 3 s,
 max jedno otevření za 30 s; popover bez krádeže fokusu s auto-zavřením;
 nativní notifikace pro fullscreen; čtyři přepínače v nastavení. Bez
 ovládání copieru, bez nových endpointů. Nic neimplementováno.
+### 2026-09-03 (Codex, násobek followera už nepřeskakuje mezi účty)
+
+Změna leadera nyní vždy vrátí dostupného předchozího leadera jako followera
+`1×`, `on-submit`, bez `maxContracts`; nastavení povýšeného followera zanikne
+s jeho rolí. Ruční náhrada stale follower účtu zachová režim, ale násobek a
+`maxContracts` záměrně resetuje na bezpečné výchozí hodnoty a UI to viditelně
+oznámí. Potvrzovací variantu jsme nezvolili, protože účetní risk parametry
+nemají jedním rutinním kliknutím přecházet na jinou identitu; uživatel je může
+novému účtu znovu nastavit ručně.
+
+Poslední krok editoru před uložením vždy vykreslí diff proti uložené skupině:
+změnu leadera a všechny přidané, odebrané nebo parametricky změněné followery;
+každá zobrazená hodnota násobku nad `1×` je zvýrazněná. Regrese pokrývají oba
+typy povýšení, nedostupného starého leadera, reset náhrady a SSR náhled diffu.
+Celá sada prošla 221 souborů / 1817 testů, strict TypeScript, cílený ESLint,
+produkční build a `git diff --check`. Beze změny zůstal runtime/controller i
+formát `CopyGroupConfig`; nic nebylo commitnuto, pushnuto, deploynuto ani
+spuštěno na workeru/brokeru.
 
 ### 2026-09-02 (Claude, večerní review dne — skutečná čísla a replay bug)
 

@@ -159,7 +159,9 @@ export function unavailableCopyGroupAccounts(
 /**
  * Ruční oprava stale follower ID. Nikdy nehádá náhradu podle názvu nebo
  * podobného čísla; nové ID musí uživatel vybrat z aktuálního OAuth snapshotu.
- * Nastavení replikace, násobek i maxContracts se zachovají.
+ * Režim replikace zůstane zachovaný, ale účetní risk parametry se resetují.
+ * Multiplier a maxContracts patří konkrétnímu účtu; jejich tichý přenos na
+ * jinou identitu je nebezpečnější než vyžádat jejich nové ruční nastavení v UI.
  */
 export function replaceCopyGroupFollowerAccount(
   group: CopyGroupConfig,
@@ -173,7 +175,7 @@ export function replaceCopyGroupFollowerAccount(
   return {
     ...group,
     followers: group.followers.map(follower => follower.accountId === staleAccountId
-      ? { ...follower, accountId: replacementAccountId }
+      ? { accountId: replacementAccountId, mode: follower.mode, multiplier: 1 }
       : follower),
   };
 }
