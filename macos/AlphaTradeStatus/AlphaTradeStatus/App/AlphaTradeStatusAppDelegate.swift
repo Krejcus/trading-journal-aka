@@ -25,6 +25,7 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
     private var autoCloseRemaining: TimeInterval?
     private var isPointerInsidePopover = false
     private var isAutoPresented = false
+    private var notificationRateLimiter = CompanionNotificationRateLimiter()
 
     override init() {
         let settings = CompanionSettings()
@@ -205,7 +206,10 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
         deliverNotificationIfEnabled(for: event.transition)
 
         if popover.isShown {
-            installPopoverContent()
+            // CompanionRootView observes the store, so the existing SwiftUI
+            // tree receives this event in place. Replacing its hosting
+            // controller here would discard manual section state and replay
+            // the entrance animation.
             if isAutoPresented {
                 scheduleAutoClose(for: event.transition.category)
             }
@@ -279,6 +283,9 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
     }
 
     private func pauseAutoCloseTimer() {
+        // Auto-close intentionally uses wall time: unlike the uptime clock
+        // used by the anti-flap gate, sleep must not extend a visible
+        // popover's remaining lifetime after wake.
         if let deadline = autoCloseDeadline {
             autoCloseRemaining = max(0, deadline.timeIntervalSinceNow)
         }
@@ -313,9 +320,15 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
 
     private func deliverNotificationIfEnabled(for transition: CompanionTransition) {
         guard settings.nativeNotifications,
-              (transition.category == .worsening || transition.category == .mode) else {
+              (transition.category == .worsening || transition.category == .mode),
+              notificationRateLimiter.allowsNotification(
+                  at: Date()
+              ) else {
             return
         }
+
+        // Wall time includes sleep on macOS, so a legitimate post-wake
+        // notification is not suppressed by a pre-sleep delivery.
 
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { [weak self] notificationSettings in

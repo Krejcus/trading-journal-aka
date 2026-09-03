@@ -191,6 +191,38 @@ final class CompanionTransitionDetectorTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(observe(&gate, disconnectedAgain, monotonic: 38)).allowsAutoOpen)
     }
 
+    func testWakeRateLimitResetPreservesAntiFlapCandidate() throws {
+        var gate = CompanionTransitionGate()
+        let connected = reduced(makeStatus(revision: 1))
+        let disconnected = reduced(makeStatus(revision: 2, brokerConnected: false))
+        XCTAssertNil(observe(&gate, connected, monotonic: 0))
+        XCTAssertNil(observe(&gate, disconnected, monotonic: 1))
+        XCTAssertTrue(try XCTUnwrap(observe(&gate, disconnected, monotonic: 4)).allowsAutoOpen)
+
+        let reconnected = reduced(makeStatus(revision: 3))
+        XCTAssertNil(observe(&gate, reconnected, monotonic: 5, improvements: true))
+        gate.resetAutoOpenRateLimit()
+
+        let afterWake = try XCTUnwrap(observe(
+            &gate,
+            reconnected,
+            monotonic: 8,
+            improvements: true
+        ))
+        XCTAssertEqual(afterWake.transition.category, .improvement)
+        XCTAssertTrue(afterWake.allowsAutoOpen)
+    }
+
+    func testNotificationsHaveAnIndependentThirtySecondRateLimit() {
+        var limiter = CompanionNotificationRateLimiter()
+        let start = Date(timeIntervalSinceReferenceDate: 100)
+
+        XCTAssertTrue(limiter.allowsNotification(at: start))
+        XCTAssertFalse(limiter.allowsNotification(at: start.addingTimeInterval(29.999)))
+        XCTAssertTrue(limiter.allowsNotification(at: start.addingTimeInterval(30)))
+        XCTAssertFalse(limiter.allowsNotification(at: start.addingTimeInterval(30.001)))
+    }
+
     func testGateRejectsLowerRevisionAndSuppressesStartWakeManualAndDisabledSettings() throws {
         let connectedRevisionTwo = reduced(makeStatus(revision: 2))
         let disconnectedRevisionOne = reduced(makeStatus(revision: 1, brokerConnected: false))

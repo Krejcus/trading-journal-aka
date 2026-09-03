@@ -5,6 +5,29 @@ import XCTest
 
 @MainActor
 final class StatusPopoverViewRenderTests: XCTestCase {
+    func testTransitionExpansionKeepsRequiredAndManuallyExpandedSections() {
+        let presentation = CompanionMockFixtureCatalog.presentation(for: .intervention)
+        let transition = CompanionTransition(
+            category: .worsening,
+            sectionID: "runtime",
+            rowID: "broker-connection",
+            reason: "Brokerové spojení bylo přerušeno."
+        )
+
+        let initial = CompanionSectionExpansionPolicy.initialSectionIDs(
+            in: presentation,
+            transition: transition
+        )
+        XCTAssertEqual(initial, ["safety", "exposure", "runtime"])
+
+        let updated = CompanionSectionExpansionPolicy.applying(
+            transition,
+            to: ["snapshots"],
+            in: presentation
+        )
+        XCTAssertEqual(updated, ["safety", "exposure", "runtime", "snapshots"])
+    }
+
     func testBundledLogoIsAvailableToTheNativeView() {
         XCTAssertNotNil(AlphaTradeLogo.logoImage)
     }

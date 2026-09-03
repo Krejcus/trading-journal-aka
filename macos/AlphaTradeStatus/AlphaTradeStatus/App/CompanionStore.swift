@@ -89,11 +89,15 @@ final class CompanionStore: ObservableObject {
 
     func popoverWillOpen() {
         guard credential?.phase == .active else { return }
+        // This is an observational refresh, not the explicit refresh-button
+        // action. Keeping `.automatic` lets a transition discovered while the
+        // already-open popover is visible update and highlight in place.
         requestImmediateStatusRefresh(origin: .automatic)
     }
 
     func handleWake() {
         guard started else { return }
+        transitionGate.resetAutoOpenRateLimit()
         if credential?.phase == .active {
             invalidateActiveSnapshotForWake()
             restartStatusPolling(firstOrigin: .wake)

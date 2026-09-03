@@ -1,5 +1,34 @@
 import SwiftUI
 
+enum CompanionSectionExpansionPolicy {
+    static func initialSectionIDs(
+        in presentation: CompanionPresentation,
+        transition: CompanionTransition?
+    ) -> Set<String> {
+        var sectionIDs = requiredSectionIDs(in: presentation)
+        if let transition {
+            sectionIDs.insert(transition.sectionID)
+        }
+        return sectionIDs
+    }
+
+    static func applying(
+        _ transition: CompanionTransition,
+        to currentSectionIDs: Set<String>,
+        in presentation: CompanionPresentation
+    ) -> Set<String> {
+        currentSectionIDs
+            .union(requiredSectionIDs(in: presentation))
+            .union([transition.sectionID])
+    }
+
+    private static func requiredSectionIDs(
+        in presentation: CompanionPresentation
+    ) -> Set<String> {
+        Set(presentation.sections.filter(\.isInitiallyExpanded).map(\.id))
+    }
+}
+
 struct StatusPopoverView: View {
     @Environment(\.alphaTradeTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -26,10 +55,11 @@ struct StatusPopoverView: View {
         self.transitionEvent = transitionEvent
         self.onAction = onAction
         self.onHoverChanged = onHoverChanged
-        let targetSection = transitionEvent?.transition.sectionID
         _expandedSectionIDs = State(
-            initialValue: targetSection.map { Set([$0]) }
-                ?? Set(presentation.sections.filter(\.isInitiallyExpanded).map(\.id))
+            initialValue: CompanionSectionExpansionPolicy.initialSectionIDs(
+                in: presentation,
+                transition: transitionEvent?.transition
+            )
         )
         _highlightedRowID = State(initialValue: nil)
         _highlightCategory = State(initialValue: nil)
@@ -123,7 +153,11 @@ struct StatusPopoverView: View {
 
     private func applyTransition() {
         guard let transition = transitionEvent?.transition else { return }
-        expandedSectionIDs = [transition.sectionID]
+        expandedSectionIDs = CompanionSectionExpansionPolicy.applying(
+            transition,
+            to: expandedSectionIDs,
+            in: presentation
+        )
         guard CompanionTransitionMotionPolicy.highlightsChangedRow(
             reduceMotion: reduceMotion
         ) else {

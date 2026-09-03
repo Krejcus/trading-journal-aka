@@ -148,6 +148,14 @@ struct CompanionTransitionGate {
         lastAutoOpenAt = nil
     }
 
+    mutating func resetAutoOpenRateLimit() {
+        // A wake may follow far more than 30 seconds of wall time even though
+        // ProcessInfo.systemUptime barely advanced. Preserve the settled
+        // state, revision guard, and any anti-flap candidate; only the
+        // delivery window is no longer trustworthy after sleep.
+        lastAutoOpenAt = nil
+    }
+
     mutating func observe(
         _ next: ReducedCompanionStatus,
         now: Date,
@@ -221,6 +229,21 @@ struct CompanionTransitionGate {
         settled = status
         settledSignature = signature
         candidate = nil
+    }
+}
+
+struct CompanionNotificationRateLimiter {
+    static let interval = CompanionTransitionGate.autoOpenRateLimit
+
+    private var lastNotificationAt: Date?
+
+    mutating func allowsNotification(at wallClockTime: Date) -> Bool {
+        let outsideRateLimit = lastNotificationAt.map {
+            wallClockTime.timeIntervalSince($0) >= Self.interval
+        } ?? true
+        guard outsideRateLimit else { return false }
+        lastNotificationAt = wallClockTime
+        return true
     }
 }
 

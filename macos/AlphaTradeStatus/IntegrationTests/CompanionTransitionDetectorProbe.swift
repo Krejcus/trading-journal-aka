@@ -168,6 +168,30 @@ struct CompanionTransitionDetectorProbe {
             "30 second rate limit must suppress the second auto-open"
         )
 
+        var wakeRateLimitGate = CompanionTransitionGate()
+        expect(observe(&wakeRateLimitGate, clean, monotonic: 0) == nil, "wake rate-limit baseline setup")
+        expect(observe(&wakeRateLimitGate, disconnected, monotonic: 1) == nil, "wake rate-limit first candidate")
+        expect(
+            observe(&wakeRateLimitGate, disconnected, monotonic: 4)?.allowsAutoOpen == true,
+            "wake rate-limit first transition must open"
+        )
+        expect(
+            observe(&wakeRateLimitGate, reconnected, monotonic: 5, improvements: true) == nil,
+            "wake rate-limit second candidate must begin settling"
+        )
+        wakeRateLimitGate.resetAutoOpenRateLimit()
+        expect(
+            observe(&wakeRateLimitGate, reconnected, monotonic: 8, improvements: true)?.allowsAutoOpen == true,
+            "wake must release only the rate limit and preserve the candidate"
+        )
+
+        var notificationLimiter = CompanionNotificationRateLimiter()
+        let notificationStart = Date(timeIntervalSinceReferenceDate: 100)
+        expect(notificationLimiter.allowsNotification(at: notificationStart), "first notification must be allowed")
+        expect(!notificationLimiter.allowsNotification(at: notificationStart.addingTimeInterval(29.999)), "notification must be limited inside 30 seconds")
+        expect(notificationLimiter.allowsNotification(at: notificationStart.addingTimeInterval(30)), "notification must be allowed at 30 seconds")
+        expect(!notificationLimiter.allowsNotification(at: notificationStart.addingTimeInterval(30.001)), "notification limiter must use its own window")
+
         var rollbackGate = CompanionTransitionGate()
         let revisionTwo = reduced(status(revision: 2))
         let revisionOneDisconnected = reduced(status(revision: 1, brokerConnected: false))
