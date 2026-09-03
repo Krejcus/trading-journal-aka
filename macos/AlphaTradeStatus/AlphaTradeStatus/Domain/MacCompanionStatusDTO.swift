@@ -118,7 +118,7 @@ struct MacCompanionStatusDTO: Decodable, Equatable, Sendable {
         let kind: Kind
         let text: String
 
-        enum Kind: String, Decodable, Equatable, Sendable {
+        enum Kind: String, Decodable, Equatable, Hashable, Sendable {
             case divergence
             case stuckOutbox = "stuck-outbox"
             case reconciliation

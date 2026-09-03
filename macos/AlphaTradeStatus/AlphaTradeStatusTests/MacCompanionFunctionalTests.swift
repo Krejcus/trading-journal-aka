@@ -387,6 +387,7 @@ final class MacCompanionFunctionalTests: XCTestCase {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         XCTAssertTrue(displayedLive, "The first accepted status should establish LIVE")
+        XCTAssertNil(store.transitionEvent, "Startup baseline must never auto-open")
 
         store.handleWake()
 
@@ -399,6 +400,7 @@ final class MacCompanionFunctionalTests: XCTestCase {
         XCTAssertEqual(store.menuBarPresentation.tone, .warning)
         XCTAssertTrue(store.safeDiagnosticText.contains("revision=1"))
         XCTAssertTrue(store.safeDiagnosticText.contains("paired=yes"))
+        XCTAssertNil(store.transitionEvent, "Wake invalidation must never auto-open")
 
         var callCount = await api.statusCallCount
         for _ in 0..<200 where callCount < 2 {
@@ -417,6 +419,7 @@ final class MacCompanionFunctionalTests: XCTestCase {
         XCTAssertFalse(store.safeDiagnosticText.contains("state=live"))
         XCTAssertTrue(store.safeDiagnosticText.contains("revision=1"))
         XCTAssertTrue(store.safeDiagnosticText.contains("paired=yes"))
+        XCTAssertNil(store.transitionEvent, "A failed wake refresh must not auto-open")
     }
 }
 

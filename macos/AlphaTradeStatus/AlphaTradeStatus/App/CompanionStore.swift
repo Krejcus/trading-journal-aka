@@ -25,9 +25,11 @@ final class CompanionStore: ObservableObject {
         accessibilityLabel: "AlphaTrade, načítám stav"
     )
     @Published private(set) var isRefreshing = false
+    @Published private(set) var transitionEvent: CompanionTransitionEvent?
 
     private let api: any MacCompanionAPIServing
     private let credentialStore: any CompanionCredentialStoring
+    private let settings: CompanionSettings
     private let now: @Sendable () -> Date
     private let monotonicNow: @Sendable () -> TimeInterval
     private let deviceName: String
@@ -43,10 +45,13 @@ final class CompanionStore: ObservableObject {
     private var statusPollTask: Task<Void, Never>?
     private var pairingPollTask: Task<Void, Never>?
     private var localTickTask: Task<Void, Never>?
+    private var transitionGate = CompanionTransitionGate()
+    private var transitionSequence: UInt64 = 0
 
     init(
         api: any MacCompanionAPIServing = MacCompanionAPI(),
         credentialStore: any CompanionCredentialStoring = CompanionKeychainCredentialStore(),
+        settings: CompanionSettings? = nil,
         now: @escaping @Sendable () -> Date = { Date() },
         monotonicNow: @escaping @Sendable () -> TimeInterval = {
             ProcessInfo.processInfo.systemUptime
@@ -56,6 +61,7 @@ final class CompanionStore: ObservableObject {
     ) {
         self.api = api
         self.credentialStore = credentialStore
+        self.settings = settings ?? CompanionSettings()
         self.now = now
         self.monotonicNow = monotonicNow
         self.deviceName = String((deviceName ?? Self.defaultDeviceName).prefix(120))
@@ -83,14 +89,14 @@ final class CompanionStore: ObservableObject {
 
     func popoverWillOpen() {
         guard credential?.phase == .active else { return }
-        requestImmediateStatusRefresh()
+        requestImmediateStatusRefresh(origin: .automatic)
     }
 
     func handleWake() {
         guard started else { return }
         if credential?.phase == .active {
             invalidateActiveSnapshotForWake()
-            restartStatusPolling()
+            restartStatusPolling(firstOrigin: .wake)
         } else if credential?.phase == .pending {
             restartPairingPolling()
         }
@@ -99,7 +105,7 @@ final class CompanionStore: ObservableObject {
     func requestManualRefresh() {
         switch credential?.phase {
         case .active:
-            requestImmediateStatusRefresh()
+            requestImmediateStatusRefresh(origin: .manualRefresh)
         case .pending:
             restartPairingPolling()
         case nil:
@@ -170,7 +176,7 @@ extension CompanionStore {
             switch stored.phase {
             case .active:
                 updateMenuBar(for: .starting)
-                restartStatusPolling()
+                restartStatusPolling(firstOrigin: .startup)
             case .pending:
                 // Pairing responses do not carry serverTime. Let the server's
                 // authoritative 410 response expire a pending code instead of
@@ -191,6 +197,8 @@ extension CompanionStore {
         latestStatus = nil
         highestRevision = nil
         serverClockAnchor = nil
+        transitionGate.reset()
+        transitionEvent = nil
 
         do {
             if deleteExisting {
@@ -254,7 +262,7 @@ extension CompanionStore {
                 self.credential = active
                 state = .starting
                 updateMenuBar(for: state)
-                restartStatusPolling()
+                restartStatusPolling(firstOrigin: .startup)
                 return nil
             }
 
@@ -289,12 +297,16 @@ extension CompanionStore {
         }
     }
 
-    func restartStatusPolling() {
+    func restartStatusPolling(
+        firstOrigin: CompanionTransitionObservationSource = .automatic
+    ) {
         statusPollTask?.cancel()
         statusPollTask = Task { [weak self] in
+            var origin = firstOrigin
             while !Task.isCancelled {
                 guard let self else { return }
-                await self.refreshStatus()
+                await self.refreshStatus(origin: origin)
+                origin = .automatic
                 guard !Task.isCancelled else { return }
                 let delay = self.nextStatusPollDelay()
                 try? await Task.sleep(nanoseconds: Self.nanoseconds(delay))
@@ -302,13 +314,17 @@ extension CompanionStore {
         }
     }
 
-    func requestImmediateStatusRefresh() {
+    func requestImmediateStatusRefresh(
+        origin: CompanionTransitionObservationSource = .automatic
+    ) {
         Task { [weak self] in
-            await self?.refreshStatus()
+            await self?.refreshStatus(origin: origin)
         }
     }
 
-    func refreshStatus() async {
+    func refreshStatus(
+        origin: CompanionTransitionObservationSource = .automatic
+    ) async {
         guard !isFetching,
               let credential,
               credential.phase == .active else { return }
@@ -326,7 +342,7 @@ extension CompanionStore {
             let monotonicReceipt = monotonicNow()
             if let highestRevision, response.revision < highestRevision {
                 lastTransportState = "rollback-rejected"
-                renderLatestStatus()
+                renderLatestStatus(evaluateTransition: false)
                 return
             }
             guard let clockAnchor = CompanionServerClock.makeAnchor(
@@ -341,7 +357,7 @@ extension CompanionStore {
             highestRevision = max(highestRevision ?? 0, response.revision)
             serverClockAnchor = clockAnchor
             lastTransportState = "ok"
-            renderLatestStatus()
+            renderLatestStatus(observationSource: origin)
         } catch is CancellationError {
             return
         } catch MacCompanionAPIError.invalidAuthentication {
@@ -351,7 +367,7 @@ extension CompanionStore {
             if latestStatus == nil {
                 setLocalFailure("Cloudový stav zatím není dostupný. Aplikace bude zkoušet obnovení dál.")
             } else {
-                renderLatestStatus()
+                renderLatestStatus(observationSource: origin)
             }
         }
     }
@@ -388,7 +404,10 @@ extension CompanionStore {
         renderLatestStatus()
     }
 
-    func renderLatestStatus() {
+    func renderLatestStatus(
+        observationSource: CompanionTransitionObservationSource = .automatic,
+        evaluateTransition: Bool = true
+    ) {
         guard let latestStatus,
               credential?.phase == .active,
               let adjustedNow = adjustedNow() else { return }
@@ -396,6 +415,22 @@ extension CompanionStore {
         let presentation = CompanionRemotePresentationFactory.make(from: reduced, now: adjustedNow)
         state = .connected(presentation)
         updateMenuBar(for: state)
+        if evaluateTransition,
+           let result = transitionGate.observe(
+               reduced,
+               now: adjustedNow,
+               monotonicNow: monotonicNow(),
+               source: observationSource,
+               autoOpenEnabled: settings.autoOpen,
+               improvementsEnabled: settings.includeImprovements
+           ) {
+            transitionSequence &+= 1
+            transitionEvent = .init(
+                sequence: transitionSequence,
+                transition: result.transition,
+                allowsAutoOpen: result.allowsAutoOpen
+            )
+        }
     }
 
     func invalidateActiveSnapshotForWake() {
@@ -422,6 +457,14 @@ extension CompanionStore {
         )
         state = .connected(presentation)
         updateMenuBar(for: state)
+        _ = transitionGate.observe(
+            reduced,
+            now: invalidatedNow,
+            monotonicNow: monotonicNow(),
+            source: .wake,
+            autoOpenEnabled: settings.autoOpen,
+            improvementsEnabled: settings.includeImprovements
+        )
     }
 
     func handleRevocation() async {
@@ -430,6 +473,8 @@ extension CompanionStore {
         latestStatus = nil
         highestRevision = nil
         serverClockAnchor = nil
+        transitionGate.reset()
+        transitionEvent = nil
         lastTransportState = "revoked"
         do {
             try credentialStore.delete()
@@ -494,6 +539,10 @@ extension CompanionStore {
         credential = nil
         lastTransportState = "pairing-rejected"
         setLocalFailure(message)
+    }
+
+    func clearTransitionPresentation() {
+        transitionEvent = nil
     }
 
     func updateMenuBar(for state: CompanionRootState) {
