@@ -47,18 +47,22 @@ const harness = async (options: {
   // Zmizelý follower nemá route — přesně jako účet, který už není v žádném OAuth.
   const router = createBrokerRouter([{ broker: mock, accountIds: [100, 200, 201] }]);
   const errors: string[] = [];
+  const audit: { kind: string; leaderEventId?: string; reason?: string }[] = [];
   const controller = await bootstrapCopierRuntime({
     broker: router,
     store: createMemoryCopierStore(initial),
     group,
     wait: async () => undefined,
     onError: error => errors.push(error.message),
+    onAudit: entries => audit.push(...entries.map(entry => ({
+      kind: entry.kind, leaderEventId: entry.leaderEventId, reason: entry.reason,
+    }))),
     ...options,
   });
   mock.setConnected(true);
   // Connection event doráží přes router asynchronně; recovery se řadí až po něm.
   await settle(controller);
-  return { controller, errors, mock };
+  return { controller, errors, audit, mock };
 };
 
 const settle = async (controller: Awaited<ReturnType<typeof bootstrapCopierRuntime>>) => {
@@ -69,24 +73,24 @@ const settle = async (controller: Awaited<ReturnType<typeof bootstrapCopierRunti
 };
 
 describe('post-connect recovery a follower chybějící v OAuth', () => {
-  it('bez optional-skip vstupu recovery selže, ale čistá ruční Kontrola pozic odblokuje změnu skupiny', async () => {
+  it('bez optional-skip zdroje recovery selže s auditovaným důvodem a zůstává pending i po čisté ruční Kontrole pozic', async () => {
     const h = await harness();
     expect(h.errors.some(message => message.includes('nepodařilo ověřit stav účtů'))).toBe(true);
+    expect(h.audit.some(entry => entry.kind === 'blocked'
+      && entry.leaderEventId === 'connection-recovery'
+      && entry.reason?.includes('303'))).toBe(true);
     expect(h.controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
-
-    // Stav po včerejšku: příznak recovery blokuje reconfigure i po jejím selhání.
     await expect(h.controller.reconfigureGroup(nextGroup, { missingOptionalAccountIds: [MISSING] }))
       .rejects.toThrow('connection recovery');
 
-    // Ruční Kontrola pozic se stejným optional skipem jako CLI/UI projde…
+    // Ruční Kontrola pozic s optional skipem projde…
     await expect(h.controller.reconcile({ missingOptionalAccountIds: [MISSING] }))
       .resolves.toEqual({ divergentAccounts: [], workingOrderAccounts: [] });
-    expect(h.controller.status()).toMatchObject({ reconciliationRequired: false, lastError: null });
-
-    // …a čistý výsledek recovery příznak shodí: odebrání zmizelého followera už projde.
+    await settle(h.controller);
+    // …ale recovery jen znovu spustí; bez optional-skip zdroje vlna opět selže,
+    // takže částečný ruční snapshot recovery nikdy sám „nedokončí“.
     await expect(h.controller.reconfigureGroup(nextGroup, { missingOptionalAccountIds: [MISSING] }))
-      .resolves.toBeUndefined();
-    expect(h.controller.status().armed).toBe(false);
+      .rejects.toThrow('connection recovery');
     h.controller.stop();
   });
 
@@ -95,7 +99,7 @@ describe('post-connect recovery a follower chybějící v OAuth', () => {
     const h = await harness({
       resolveMissingOptionalAccountIds: async current => {
         seen.push(current);
-        return [MISSING, 999_999];
+        return [MISSING, 999_999, current.leaderAccountId];
       },
     });
     expect(seen.length).toBeGreaterThan(0);
@@ -108,13 +112,29 @@ describe('post-connect recovery a follower chybějící v OAuth', () => {
     h.controller.stop();
   });
 
-  it('neúspěšná ruční Kontrola pozic (chybějící follower bez optional skipu) příznak neshazuje', async () => {
-    const h = await harness();
+  it('když zdroj napoprvé selže, čistá ruční Kontrola pozic spustí novou vlnu, která doběhne celá a odblokuje skupinu', async () => {
+    let calls = 0;
+    const h = await harness({
+      resolveMissingOptionalAccountIds: async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('OAuth adresář dočasně nedostupný');
+        return [MISSING];
+      },
+    });
     expect(h.errors.some(message => message.includes('nepodařilo ověřit stav účtů'))).toBe(true);
-    // Bez optional skipu router pro 303 selže → reconcile hodí chybu → pending zůstává.
-    await expect(h.controller.reconcile()).rejects.toThrow();
+    expect(h.audit.some(entry => entry.reason?.includes('optional-skip resolver'))).toBe(true);
     await expect(h.controller.reconfigureGroup(nextGroup, { missingOptionalAccountIds: [MISSING] }))
       .rejects.toThrow('connection recovery');
+
+    await expect(h.controller.reconcile({ missingOptionalAccountIds: [MISSING] }))
+      .resolves.toEqual({ divergentAccounts: [], workingOrderAccounts: [] });
+    await settle(h.controller);
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(h.audit.some(entry => entry.kind === 'recovered'
+      && entry.leaderEventId === 'connection-recovery')).toBe(true);
+    expect(h.controller.status()).toMatchObject({ reconciliationRequired: false, lastError: null });
+    await expect(h.controller.reconfigureGroup(nextGroup, { missingOptionalAccountIds: [MISSING] }))
+      .resolves.toBeUndefined();
     h.controller.stop();
   });
 });

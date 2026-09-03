@@ -2693,13 +2693,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // právě není v žádném OAuth adresáři, se nesmí routovat (router by hodil
     // chybu), ale jeho absence je pro breached/DLL účet legitimní.
     let missingOptionalAccountIds: readonly number[] = [];
+    let lastRecoveryError: string | null = null;
     if (options.resolveMissingOptionalAccountIds) {
       try {
         const followerIds = new Set(group.followers.map(follower => follower.accountId));
         missingOptionalAccountIds = [...new Set(await options.resolveMissingOptionalAccountIds(group))]
           .filter(accountId => followerIds.has(accountId) && accountId !== group.leaderAccountId);
-      } catch {
+      } catch (reason) {
+        // Bez optional-skip vstupu pokračujeme s plným routingem; důvod se
+        // nesmí ztratit — jinak je pět tichých pokusů nečitelných (3. 9.).
         missingOptionalAccountIds = [];
+        lastRecoveryError = `optional-skip resolver: ${errorOf(reason).message}`;
+        options.onAudit?.([{
+          at: clock(), leaderEventId: 'connection-recovery', kind: 'blocked',
+          reason: `connection-recovery: ${lastRecoveryError}`,
+        }]);
       }
     }
     let reconciliation: { divergentAccounts: number[]; workingOrderAccounts: number[] } | null = null;
@@ -2714,16 +2722,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           missingOptionalAccountIds: [...missingOptionalAccountIds],
         });
         break;
-      } catch {
+      } catch (reason) {
         // Spojení je čerstvé — pár pokusů, pak poctivé přiznání níže.
+        lastRecoveryError = errorOf(reason).message;
       }
     }
     if (!reconciliation) {
       // Pět rychlých pokusů je jen jedna recovery vlna. Příští potvrzený
-      // connected event ji musí smět spustit znovu; stav zůstává DISARMED.
+      // connected event (nebo čistá ruční Kontrola pozic) ji musí smět spustit
+      // znovu; stav zůstává DISARMED.
       pendingConnectionRecovery = true;
+      options.onAudit?.([{
+        at: clock(), leaderEventId: 'connection-recovery', kind: 'blocked',
+        reason: `connection-recovery: reconciliation selhala 5× — ${lastRecoveryError ?? 'bez důvodu'}`,
+      }]);
       failClosed(new Error(
-        'connection=aggregate phase=reconciliation Po obnovení spojení se nepodařilo ověřit stav účtů — kopie zůstávají chráněné brackety, zkontroluj Tradovate',
+        'connection=aggregate phase=reconciliation Po obnovení spojení se nepodařilo ověřit stav účtů — kopie zůstávají chráněné brackety, zkontroluj Tradovate'
+        + (lastRecoveryError ? ` (${lastRecoveryError})` : ''),
       ));
       return;
     }
@@ -3987,8 +4002,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (pendingReasons.length > 0) {
         throw new Error(`${operation} blokuje rozpracovaný lifecycle: ${pendingReasons.join(', ')}`);
       }
-      const openLots = currentRuntime().state.safety.dailyStats?.openLots
-        .filter(lot => lot.netQuantity !== 0) ?? [];
+      // Stejná session-aware statistika jako všude jinde: lot z už skončené
+      // session (po 17:00 CT) je jen historie, ne důkaz otevřené expozice.
+      // Autoritativní flat/no-working preflight následuje níže tak jako tak.
+      const openLots = currentDailyStats(clock()).openLots
+        .filter(lot => lot.netQuantity !== 0);
       if (openLots.length > 0) {
         throw new Error(`${operation} blokuje otevřená durable pozice leadera`);
       }
@@ -4320,12 +4338,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Pouze její čistý výsledek smí odstranit starou chybu; automatické
       // reconnect/terminal-fill kontroly incident uživateli neschovávají.
       const result = await performReconciliation({ ...reconciliationOptions, clearLastError: true });
-      if (result.divergentAccounts.length === 0 && result.workingOrderAccounts.length === 0) {
-        // Autoritativně čistý stav je přesně to, co čekající recovery vlna
-        // hledala; jinak by příznak po neúspěšné automatické vlně blokoval
-        // změnu skupiny („rozpracovaný lifecycle: connection recovery“) až do
-        // dalšího connection eventu. Při divergenci zůstává pending.
-        pendingConnectionRecovery = false;
+      if (
+        result.divergentAccounts.length === 0
+        && result.workingOrderAccounts.length === 0
+        && pendingConnectionRecovery
+        && !recoveryInFlight
+        && gate.connected
+      ) {
+        // Čistý ruční výsledek recovery NEnahrazuje (přeskočil by obnovu
+        // leader-flat guardu, úklid exposure markeru i recovery audit) — jen
+        // ji znovu spustí. Vlna si sama vezme optional-skip vstup a příznak
+        // shodí až po kompletním doběhu; při selhání zůstává pending.
+        scheduleConnectionRecovery();
       }
       return result;
     },
