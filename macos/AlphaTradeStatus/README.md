@@ -14,6 +14,13 @@ hardened runtime, App Sandbox + outgoing network only). The Supabase migration
 Mac is paired. Build 5 removes the read-only footer note and the system focus
 ring on footer buttons (`focusEffectDisabled()` at the hosted root).
 
+Version 0.2.0 (build 6) is the uninstalled feature candidate. It adds
+three-second transition settling, a 30-second auto-open rate limit, targeted
+section/row emphasis, transient 60/8-second popovers, native notifications,
+and four local `UserDefaults` switches. Startup, wake, manual refresh,
+10-90-second UNKNOWN bridges, and lower revisions never auto-open. The
+installed build 5 and its LaunchAgent are intentionally unchanged.
+
 Operational lesson (2026-09-02): the companion API must live in `origin/main`.
 A production deployment promoted from a local source tree is replaced by the
 next automatic Vercel deploy from `main`; that is exactly how the status route
@@ -77,12 +84,41 @@ xcodebuild \
   -configuration Release \
   -destination 'platform=macOS,arch=arm64' \
   -derivedDataPath /tmp/AlphaTradeStatusReleaseDerivedData \
-  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGN_IDENTITY=- \
+  CODE_SIGNING_REQUIRED=YES \
+  CODE_SIGN_STYLE=Manual \
+  DEVELOPMENT_TEAM= \
   build
 ```
 
-The current local gate is 32 XCTest plus a clean Release build. This is not
-a substitute for the post-migration production E2E gate.
+For build 6, re-sign the generated bundle with both the shipped entitlements
+and hardened-runtime flag, then verify it:
+
+```bash
+codesign --force --deep --sign - --options runtime \
+  --entitlements macos/AlphaTradeStatus/AlphaTradeStatus/AlphaTradeStatus.entitlements \
+  /tmp/AlphaTradeStatusReleaseDerivedData/Build/Products/Release/AlphaTradeStatus.app
+codesign --verify --deep --strict --verbose=2 \
+  /tmp/AlphaTradeStatusReleaseDerivedData/Build/Products/Release/AlphaTradeStatus.app
+```
+
+The Xcode test target must still compile even on a Mac where the XCTest worker
+hangs. The transition matrix also has a runner-independent CLI probe:
+
+```bash
+xcrun swiftc -parse-as-library \
+  -module-cache-path /tmp/AlphaTradeStatusSwiftModuleCache \
+  macos/AlphaTradeStatus/AlphaTradeStatus/Domain/MacCompanionStatusDTO.swift \
+  macos/AlphaTradeStatus/AlphaTradeStatus/Domain/CompanionPresentation.swift \
+  macos/AlphaTradeStatus/AlphaTradeStatus/Domain/CompanionFreshnessReducer.swift \
+  macos/AlphaTradeStatus/AlphaTradeStatus/Domain/CompanionTransitionDetector.swift \
+  macos/AlphaTradeStatus/IntegrationTests/CompanionTransitionDetectorProbe.swift \
+  -o /tmp/CompanionTransitionDetectorProbe
+/tmp/CompanionTransitionDetectorProbe
+```
+
+This is not a substitute for a native interactive pass on a host where the
+XCTest worker starts normally.
 
 ## Native menu-bar regression gate
 

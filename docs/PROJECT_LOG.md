@@ -152,6 +152,39 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Codex, AlphaTrade Status v1.4 auto-open; build 6 pouze připraven)
+
+- Implementována závazná matice §11 nad výstupem stávajícího freshness reduceru:
+  čistý `CompanionTransitionDetector` vrací zhoršení, zlepšení nebo změnu režimu
+  s cílovou sekcí/řádkem a bezpečným důvodem bez účtů a P&L. Store přidává
+  třísekundové ustálení, nejvýše jedno povolené auto-otevření za 30 sekund,
+  odmítnutí nižší revize a potlačení startu, wake a ručního refreshu. Zlepšení
+  vzniká jen z ověřeně čerstvé prezentace, nikdy ze stale/UNKNOWN mostu.
+- Popover se otevírá přes `NSPopover.show` bez aktivace aplikace a zůstává
+  `.transient`; zhoršení má 60s timer, toast 8s, hover timer pozastaví. Při už
+  otevřeném ručním popoveru se pouze aktualizuje obsah. Rozbalí se jen cílová
+  sekce, řádek se zvýrazní na 1,2 s a pill třikrát pulzuje; Reduce Motion pohyb
+  i dočasný highlight vypne. Ozubené kolo ukládá čtyři přepínače do
+  `UserDefaults` s defaulty dle specifikace.
+- Zhoršení a změna režimu mohou po prvním souhlasu poslat nativní notifikaci;
+  klik otevře stejný read-only popover, nikdy LIVE ani ovládání copieru. Zvuk
+  je samostatně opt-in pouze pro zhoršení.
+- Ověření: test target prošel `xcodebuild build-for-testing`; samostatný Swift
+  CLI probe prošel 49/49 kontrolami matice, negativních případů, anti-flapu,
+  rate limitu, rollbacku revize, start/wake/manual refresh a vypnutých
+  nastavení. Samotný XCTest runner v sandboxu nenavázal `testmanagerd`; mimo
+  sandbox zůstal na `waiting for workers to materialize` a po přibližně 98 s
+  byl přerušen, takže nebyla provedena žádná XCTest assertion a netvrdíme
+  XCTest PASS.
+- Arm64 Release build 6 prošel. Dočasný artefakt byl znovu ad-hoc podepsán
+  dodanými sandbox/network-client entitlements a Hardened Runtime; `codesign
+  --verify --deep --strict` prošel, flags jsou `adhoc,runtime`, architektura
+  `arm64`, TeamIdentifier není nastaven a binární SHA-256 je
+  `0e0939ab54cdce36ee0f8c6753a897ab131e793429c7ca8bd8cb55c1c853eda5`.
+- Nic nebylo instalováno ani spuštěno, LaunchAgent i instalovaný build 5 zůstaly
+  beze změny. Beze změny jsou také server/PWA, broker, copier a jeho ARM stav;
+  větev není sloučena do `main`.
+
 ### 2026-09-03 (Claude + uživatel, rollout workera 03d1fc5f)
 
 Na výslovné „nasaď“: čtyři opuštěné `cancel-or-modify` z 2. 9. 18:44 (SL modify
