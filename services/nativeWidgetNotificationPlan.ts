@@ -45,10 +45,13 @@ export function planNativeWidgetLocalAlerts(
     .slice()
     .sort((left, right) => left.timestamp - right.timestamp);
   for (const trade of freshTrades) {
+    const dailySummary = next.dailyRealizedPnl == null
+      ? `${next.accountsRealizedPnlLabel} ${signedUsd(next.accountsRealizedPnl)}`
+      : `${next.dailyRealizedPnlLabel} ${signedUsd(next.dailyRealizedPnl)} · ${next.accountsRealizedPnlLabel} ${signedUsd(next.accountsRealizedPnl)}`;
     alerts.push({
       key: `trade-pnl:${trade.id}`,
       title: `${trade.symbol} ${trade.side}: ${signedUsd(trade.pnl)}`,
-      body: `Broker potvrdil výsledek obchodu. Denní realizované PnL ${signedUsd(next.dailyRealizedPnl)}.`,
+      body: `Broker potvrdil výsledek obchodu. ${dailySummary}.`,
       kind: 'trade',
     });
   }

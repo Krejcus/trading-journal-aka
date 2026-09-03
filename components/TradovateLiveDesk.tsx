@@ -584,6 +584,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
               copierArmed={copierUiDemo ? false : agentStatus?.controller.armed === true}
               copierStatusPending={!copierUiDemo && (!agentStatusResolved || live.dataEnrichmentPending)}
               dailyPnlPending={live.dataEnrichmentPending}
+              dailyStats={agentStatus?.controller.dailyStats ?? null}
               copierObservingOnly={!copierUiDemo && agentStatus?.controller.armed === true && agentStatus.controller.shadowMode === true}
               copierKillSwitch={agentStatus?.controller.killSwitch === true}
               dayLockUntil={agentStatus?.controller.dayLockUntil ?? 0}

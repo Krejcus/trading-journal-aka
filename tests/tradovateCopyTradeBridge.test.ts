@@ -32,7 +32,7 @@ const profiles = [{
 describe('Tradovate copy-trade bridge', () => {
   it('feeds the TradeCopia-style UI exclusively from the OAuth account snapshot', () => {
     const snapshot = tradovateCopyTradeSnapshot(data, profiles);
-    expect(snapshot.accounts[0]).toMatchObject({ name: 'Leader 50K', firm: 'Tradeify', dailyLossLimit: 1_200, balance: 49_000, equity: 48_900, realizedPnl: 95, unrealizedPnl: -100, cushion: 900 });
+    expect(snapshot.accounts[0]).toMatchObject({ name: 'Leader 50K', firm: 'Tradeify', dailyLossLimit: 1_200, balance: 49_000, equity: 48_900, realizedPnl: 120, unrealizedPnl: -100, cushion: 900 });
     expect(snapshot.connections).toEqual([expect.objectContaining({ firm: 'Tradeify', connected: true, accountCount: 1 })]);
     expect(snapshot.groups).toEqual([]);
   });

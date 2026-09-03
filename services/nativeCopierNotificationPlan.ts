@@ -14,6 +14,7 @@ import {
   copierCopiesOutcomeText,
   type CopierDisarmRecord,
 } from '../lib/copierDisarmReason';
+import { COPIER_LEADER_DAILY_STATS_LABEL } from '../lib/copierDailyStatsLabels';
 
 export interface CopierNotificationSnapshot {
   armed: boolean;
@@ -229,7 +230,7 @@ export function planCopierNotifications(options: {
       fireNow.push({
         title: 'Copier: DAY-LOCK',
         body: next.dayLockReason
-          ? `${next.dayLockReason}. ARM je blokovaný do konce broker session.`
+          ? `${next.dayLockReason}. ${COPIER_LEADER_DAILY_STATS_LABEL}. ARM je blokovaný do konce broker session.`
           : 'Denní zámek je aktivní. ARM je blokovaný do konce broker session.',
         kind: 'risk',
       });

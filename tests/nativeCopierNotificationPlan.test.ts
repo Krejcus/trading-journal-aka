@@ -183,6 +183,7 @@ describe('day-lock a auto-flatten hrany', () => {
       title: 'Copier: DAY-LOCK',
       body: expect.stringContaining('2. ztrátový obchod'),
     })]);
+    expect(result.fireNow[0].body).toContain('Leader · jen obchody přes kopírku · bez poplatků');
     expect(result.schedule).toEqual([expect.objectContaining({ key: 'daylock-end' })]);
 
     // Stejný zámek podruhé už nic nepálí.

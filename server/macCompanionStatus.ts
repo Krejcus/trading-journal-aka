@@ -8,6 +8,7 @@ import {
   type MacCompanionProblemKind,
   type MacCompanionStatusDTO,
 } from '../lib/macCompanionContract.js';
+import { COPIER_LEADER_DAILY_STATS_LABEL } from '../lib/copierDailyStatsLabels.js';
 
 interface MacCompanionRuntimeRow {
   device_id: string;
@@ -129,6 +130,19 @@ export function buildMacCompanionStatus(options: {
   const cooldownUntil = finite(controller.entryCooldownUntil);
   const dayLockUntil = finite(controller.dayLockUntil);
   const brokerConnected = strictBoolean(controller.connected);
+  const controllerDailyStats = object(controller.dailyStats);
+  const dailyRealizedPnl = finite(controllerDailyStats.realizedPnlUsd);
+  const dailyLosingTrades = finite(controllerDailyStats.losingTrades);
+  const dailyStats: MacCompanionStatusDTO['dailyStats'] = dailyRealizedPnl != null
+    && dailyLosingTrades != null
+    && Number.isSafeInteger(dailyLosingTrades)
+    && dailyLosingTrades >= 0
+    ? {
+      label: COPIER_LEADER_DAILY_STATS_LABEL,
+      realizedPnlUsd: dailyRealizedPnl,
+      losingTrades: dailyLosingTrades,
+    }
+    : null;
   const armExpiresAt = finite(controller.armExpiresAt);
   const state = copierState(controller);
   const divergences = divergentAccounts.map(accountId => ({
@@ -186,6 +200,7 @@ export function buildMacCompanionStatus(options: {
       location: 'mac',
     },
     brokerConnected,
+    dailyStats,
     safety: {
       reconciliation: { status: reconciliation, at: null },
       divergences,

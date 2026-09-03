@@ -336,6 +336,7 @@ describe('day-lock notifikace', () => {
     const dayLock = first.notifications.filter(item => item.incidentKey === 'day-lock');
     expect(dayLock).toHaveLength(1);
     expect(dayLock[0].body).toContain('denní ztráta 120 USD');
+    expect(dayLock[0].body).toContain('Leader · jen obchody přes kopírku · bez poplatků');
     const marker = first.upserts.find(item => item.incidentKey === 'state:day-lock');
     expect(marker).toMatchObject({ detail: String(until), notified: true });
 
@@ -449,6 +450,7 @@ describe('texty lifecycle notifikací', () => {
     const content = copyEventNotification({ ...base, kind: 'exit', exitReason: 'sl', pnlUsd: -400 });
     expect(content.title).toBe('Copier: SL HIT −400 USD');
     expect(content.body).toContain('P&L −400 USD');
+    expect(content.body).toContain('Leader · jen obchody přes kopírku · bez poplatků');
   });
 
   it('TP hit má vlastní titulek s P&L', () => {

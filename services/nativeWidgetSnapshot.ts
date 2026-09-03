@@ -14,6 +14,10 @@ import {
 import type { CopierControllerStatus } from './copierRuntimeController';
 import { scheduleNativeNotification } from './nativeNotifications';
 import { planNativeWidgetLocalAlerts } from './nativeWidgetNotificationPlan';
+import {
+  BROKER_ACCOUNTS_DAILY_PNL_LABEL,
+  COPIER_LEADER_DAILY_STATS_LABEL,
+} from '../lib/copierDailyStatsLabels';
 
 const STORAGE_KEY = 'alphatrade-native-widget-snapshot-v2';
 const MAX_ACCOUNTS = 6;
@@ -70,7 +74,10 @@ export interface NativeWidgetLiveState {
   cooldownUntil: number;
   dayLockUntil: number;
   dayLockReason: string | null;
-  dailyRealizedPnl: number;
+  dailyRealizedPnl: number | null;
+  dailyRealizedPnlLabel: typeof COPIER_LEADER_DAILY_STATS_LABEL;
+  accountsRealizedPnl: number;
+  accountsRealizedPnlLabel: typeof BROKER_ACCOUNTS_DAILY_PNL_LABEL;
   losingTrades: number;
   followerCount: number;
   openPositionCount: number;
@@ -264,7 +271,10 @@ export function buildNativeLiveWidgetState(options: {
     cooldownUntil: options.controller?.entryCooldownUntil ?? 0,
     dayLockUntil: options.controller?.dayLockUntil ?? 0,
     dayLockReason: options.controller?.dayLockReason ?? null,
-    dailyRealizedPnl: options.controller?.dailyStats?.realizedPnlUsd ?? realizedPnl,
+    dailyRealizedPnl: options.controller?.dailyStats?.realizedPnlUsd ?? null,
+    dailyRealizedPnlLabel: COPIER_LEADER_DAILY_STATS_LABEL,
+    accountsRealizedPnl: realizedPnl,
+    accountsRealizedPnlLabel: BROKER_ACCOUNTS_DAILY_PNL_LABEL,
     losingTrades: options.controller?.dailyStats?.losingTrades ?? 0,
     followerCount: Math.max(0, Math.floor(options.followerCount)),
     openPositionCount: positions.length,
@@ -319,8 +329,11 @@ function liveActivityPayload(live: NativeWidgetLiveState): NativeLiveActivityPay
     headline: position
       ? `${position.side.toUpperCase()} ${position.quantity} ${position.symbol}`
       : live.armed ? `ARM · ${live.followerCount} followerů` : live.statusDetail,
-    detail: `${live.openPositionCount} pozic · ${live.workingOrderCount} příkazů${lockText}`,
+    detail: `${live.openPositionCount} pozic · ${live.workingOrderCount} příkazů · ${live.accountsRealizedPnlLabel}${lockText}`,
     pnlText: signedMoney(live.totalPnl),
+    pnlLabel: live.openPositionCount > 0
+      ? 'Účty (broker) · realizované + otevřené P&L'
+      : live.accountsRealizedPnlLabel,
     isPositive: live.totalPnl >= 0,
     progress: live.killSwitch ? 1 : live.armed ? 0.75 : live.connected ? 0.35 : 0.1,
   };

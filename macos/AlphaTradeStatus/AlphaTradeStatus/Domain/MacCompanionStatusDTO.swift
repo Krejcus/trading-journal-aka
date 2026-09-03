@@ -13,6 +13,7 @@ struct MacCompanionStatusDTO: Decodable, Equatable, Sendable {
     let sessionExpiresAt: Date?
     let worker: WorkerDTO
     let brokerConnected: Bool?
+    var dailyStats: DailyStatsDTO? = nil
     let safety: SafetyDTO
     let exposure: ExposureDTO
     let snapshots: SnapshotsDTO
@@ -37,6 +38,12 @@ struct MacCompanionStatusDTO: Decodable, Equatable, Sendable {
             case mac
             case vps
         }
+    }
+
+    struct DailyStatsDTO: Decodable, Equatable, Sendable {
+        let label: String
+        let realizedPnlUsd: Double
+        let losingTrades: Int
     }
 
     struct SafetyDTO: Decodable, Equatable, Sendable {

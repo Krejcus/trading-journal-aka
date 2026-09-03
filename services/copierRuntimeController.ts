@@ -44,6 +44,7 @@ import {
 import { stuckBracketEntries, waiveBracketOutboxEntry } from './copierBracketOutbox';
 import { stuckOsoEntries, waiveOsoOutboxEntry } from './copierOsoOutbox';
 import { applyResolved, type LeaderEvent } from './copierEngine';
+import { COPIER_LEADER_DAILY_STATS_LABEL } from '../lib/copierDailyStatsLabels';
 import { createRiskGateContext, type RiskGateContext } from './copierRiskGate';
 import {
   createCopierMetrics,
@@ -179,6 +180,7 @@ export interface CopierControllerStatus {
   resumeOffer?: { at: number } | null;
   /** Redigované denní risk počítadlo leadera pro UI a watchdog. */
   dailyStats?: {
+    label?: typeof COPIER_LEADER_DAILY_STATS_LABEL;
     sessionEndAt: number;
     realizedPnlUsd: number;
     losingTrades: number;
@@ -670,6 +672,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const leaderTargetOrderIds = new Set<string>();
   /** Poslední leader fill per symbol — spojí flat přechod s objednávkou. */
   const lastLeaderFillOrderId = new Map<string, string>();
+  /**
+   * Krátká reportingová stopa uzavíracího fillu. Tradovate může dodat
+   * fill dřív než order event, ze kterého korelátor teprve pozná SL/TP.
+   */
+  const recentLeaderExitFills = new Map<string, {
+    tradeId: string;
+    symbol: string;
+    observedAt: number;
+  }>();
+  const PROTECTIVE_EXIT_ATTRIBUTION_WINDOW_MS = 2_000;
 
   /** Čekající vstup per symbol — referenční cena pro potenciální P&L,
    *  dokud fill nezaloží skutečný lot. */
@@ -712,7 +724,49 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     && !audit.some(item => item.kind === 'unknown' || item.kind === 'abandoned'
       || item.kind === 'rejected' || item.kind === 'blocked' || item.kind === 'cancel-failed');
 
-  const rememberProtectiveLeg = (stopOrderId: string, targetOrderId: string) => {
+  const reclassifyRecentProtectiveExit = async (
+    brokerOrderId: string,
+    exitReason: 'sl' | 'tp',
+    now: number,
+  ): Promise<void> => {
+    const candidate = recentLeaderExitFills.get(brokerOrderId);
+    if (!candidate || now - candidate.observedAt > PROTECTIVE_EXIT_ATTRIBUTION_WINDOW_MS) return;
+
+    const stats = currentRuntime().state.safety.dailyStats;
+    const closedTrade = stats?.recentClosedTrades?.find(trade => trade.id === candidate.tradeId);
+    if (stats && closedTrade?.exitReason === 'manual') {
+      await persistSafety({
+        ...currentRuntime().state.safety,
+        dailyStats: {
+          ...stats,
+          openLots: stats.openLots.map(lot => ({ ...lot })),
+          recentClosedTrades: (stats.recentClosedTrades ?? []).map(trade =>
+            trade.id === candidate.tradeId ? { ...trade, exitReason } : { ...trade }),
+          unpricedSymbols: [...stats.unpricedSymbols],
+        },
+      });
+    }
+
+    // Position=0 can also precede the late protective order event. Correct
+    // only the matching fresh reporting event; execution state is untouched.
+    for (let index = recentCopyEvents.length - 1; index >= 0; index -= 1) {
+      const event = recentCopyEvents[index];
+      if (event.at < candidate.observedAt) break;
+      if ((event.kind === 'exit' || event.kind === 'flip')
+        && event.symbol === candidate.symbol
+        && event.exitReason === 'manual') {
+        recentCopyEvents[index] = { ...event, exitReason };
+        break;
+      }
+    }
+    recentLeaderExitFills.delete(brokerOrderId);
+  };
+
+  const rememberProtectiveLeg = async (
+    stopOrderId: string,
+    targetOrderId: string,
+    now: number,
+  ): Promise<void> => {
     leaderStopOrderIds.add(stopOrderId);
     leaderTargetOrderIds.add(targetOrderId);
     // Pojistka: sety nesmí růst bez limitu (Set iteruje v pořadí vložení).
@@ -723,6 +777,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         set.delete(oldest);
       }
     }
+    await reclassifyRecentProtectiveExit(stopOrderId, 'sl', now);
+    await reclassifyRecentProtectiveExit(targetOrderId, 'tp', now);
   };
 
   const pushCopyEvent = (
@@ -1663,6 +1719,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           closedTrade,
           ...(stats.recentClosedTrades ?? []).filter(trade => trade.id !== closedTrade.id),
         ].slice(0, 20);
+        recentLeaderExitFills.set(fill.brokerOrderId, {
+          tradeId: fill.fillId,
+          symbol: fill.symbol,
+          observedAt: now,
+        });
+        for (const [orderId, candidate] of recentLeaderExitFills) {
+          if (now - candidate.observedAt > PROTECTIVE_EXIT_ATTRIBUTION_WINDOW_MS) {
+            recentLeaderExitFills.delete(orderId);
+          }
+        }
         stats.openLots = stats.openLots.filter(item => item !== lot);
         lot = undefined;
       }
@@ -3301,8 +3367,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       runtime = result.runtime;
       if (result.audit.length > 0) options.onAudit?.(result.audit);
       failClosedOnCriticalAudit(result.audit);
+      // Reporting attribution depends only on deterministic recognition of
+      // the leader's protective pair, never on follower dispatch success.
+      await rememberProtectiveLeg(bracketPair.stopOrderId, bracketPair.targetOrderId, now);
       if (!result.audit.some(isCriticalAuditEntry)) {
-        rememberProtectiveLeg(bracketPair.stopOrderId, bracketPair.targetOrderId);
         if (auditCleanDispatch(result.audit, 'dispatched')) {
           const stopPotential = levelPnl(bracketPair.symbol, bracketPair.stopPrice);
           const targetPotential = levelPnl(bracketPair.symbol, bracketPair.targetPrice);
@@ -3430,8 +3498,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       runtime = result.runtime;
       if (result.audit.length > 0) options.onAudit?.(result.audit);
       failClosedOnCriticalAudit(result.audit);
+      await rememberProtectiveLeg(pair.stopOrderId, pair.targetOrderId, now);
       if (!result.audit.some(isCriticalAuditEntry)) {
-        rememberProtectiveLeg(pair.stopOrderId, pair.targetOrderId);
         if (auditCleanDispatch(result.audit, 'dispatched')) {
           const entryPrice = pair.entryLimitPrice ?? pair.entryStopPrice;
           const direction = pair.entrySide === 'Buy' ? 1 : -1;
@@ -4434,6 +4502,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         resumeOffer: lastResumeOffer ? { ...lastResumeOffer } : null,
         dailyStats: current.state.safety.dailyStats
           ? {
+            label: COPIER_LEADER_DAILY_STATS_LABEL,
             sessionEndAt: current.state.safety.dailyStats.sessionEndAt,
             realizedPnlUsd: current.state.safety.dailyStats.realizedPnlUsd,
             losingTrades: current.state.safety.dailyStats.losingTrades,

@@ -67,6 +67,9 @@ describe('native widget snapshot', () => {
     expect(state.status).toBe('DAY-LOCK');
     expect(state.dayLockReason).toBe('Denní limit dosažen');
     expect(state.dailyRealizedPnl).toBe(-350);
+    expect(state.dailyRealizedPnlLabel).toBe('Leader · jen obchody přes kopírku · bez poplatků');
+    expect(state.accountsRealizedPnl).toBe(-400);
+    expect(state.accountsRealizedPnlLabel).toBe('Účty (broker, vč. poplatků)');
     expect(state.losingTrades).toBe(2);
     expect(state.openPositionCount).toBe(1);
     expect(state.workingOrderCount).toBe(2);

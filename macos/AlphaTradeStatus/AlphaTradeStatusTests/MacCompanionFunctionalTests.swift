@@ -14,6 +14,7 @@ final class MacCompanionFunctionalTests: XCTestCase {
         XCTAssertEqual(decoded.freshness.offlineAfterSeconds, 90)
         XCTAssertEqual(decoded.exposure.verifiedAt, nil)
         XCTAssertEqual(decoded.exposure.followerAck, nil)
+        XCTAssertEqual(decoded.dailyStats?.label, "Leader · jen obchody přes kopírku · bez poplatků")
 
         let wrongVerified = validStatusJSON()
             .replacingOccurrences(of: "\"verifiedMaxAgeSeconds\":10", with: "\"verifiedMaxAgeSeconds\":9")
@@ -543,6 +544,7 @@ private extension MacCompanionFunctionalTests {
           "sessionExpiresAt":"\(sessionExpiry)",
           "worker":{"lastHeartbeatAt":"\(observed)","location":"mac"},
           "brokerConnected":true,
+          "dailyStats":{"label":"Leader · jen obchody přes kopírku · bez poplatků","realizedPnlUsd":-120,"losingTrades":2},
           "safety":{
             "reconciliation":{"status":"clean","at":null},
             "divergences":[],

@@ -47,6 +47,10 @@ describe('remote native widget snapshot', () => {
     expect(result.live.recentTrades.map(trade => trade.id)).toEqual(['new', 'old']);
     expect(result.live.equity).toHaveLength(3);
     expect(result.live.equity.at(-1)).toBe(50_040);
+    expect(result.live.dailyRealizedPnl).toBe(40);
+    expect(result.live.dailyRealizedPnlLabel).toBe('Leader · jen obchody přes kopírku · bez poplatků');
+    expect(result.live.accountsRealizedPnl).toBe(60);
+    expect(result.live.accountsRealizedPnlLabel).toBe('Účty (broker, vč. poplatků)');
   });
 
   it('reports a genuinely stale worker independently of widget refresh time', () => {

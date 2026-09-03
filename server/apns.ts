@@ -31,6 +31,7 @@ export interface ApnsLiveActivityContentState {
   headline: string;
   detail: string;
   pnlText: string;
+  pnlLabel?: string;
   isPositive: boolean;
   progress: number;
   updatedAt: number;

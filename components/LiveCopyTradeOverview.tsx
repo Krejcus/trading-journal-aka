@@ -9,9 +9,13 @@ import {
 } from 'lucide-react';
 import type { LiveAccount, LiveGroup, LiveOrder, LivePosition, LiveSnapshot } from '../services/tradecopiaLiveService';
 import { futuresSymbolRoot } from '../services/futuresContractSpecs';
+import {
+  BROKER_ACCOUNTS_DAILY_PNL_LABEL,
+  COPIER_LEADER_DAILY_STATS_LABEL,
+} from '../lib/copierDailyStatsLabels';
 import type { TradovateApiTelemetrySnapshot } from '../lib/tradovateApiTelemetry';
 import type { CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
-import type { CopierAccountEligibility, CopierStuckOperation } from '../services/copierRuntimeController';
+import type { CopierAccountEligibility, CopierControllerStatus, CopierStuckOperation } from '../services/copierRuntimeController';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
 import {
   copyTradeAccountName,
@@ -258,6 +262,8 @@ interface Props {
   copierStatusPending?: boolean;
   /** Bootstrap má čerstvé pozice a balance, ale denní ledger se ještě doplňuje. */
   dailyPnlPending?: boolean;
+  /** Durable leader-only copier ledger; never an aggregate of account P&L. */
+  dailyStats?: CopierControllerStatus['dailyStats'];
   copierKillSwitch?: boolean;
   apiTelemetry?: TradovateApiTelemetrySnapshot;
   snapshotHealth?: CopierSnapshotHealth;
@@ -461,6 +467,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   copierObservingOnly = false,
   copierStatusPending = false,
   dailyPnlPending = false,
+  dailyStats = null,
   copierKillSwitch = false,
   apiTelemetry,
   snapshotHealth,
@@ -641,6 +648,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     !!account && (connectionByFirm.get(account.firm)?.connected ?? false);
 
   const anyLive = snapshot.accounts.some(isLive);
+  const brokerAccountsDailyPnl = dailyPnlPending
+    ? null
+    : snapshot.accounts.reduce((sum, account) => sum + account.realizedPnl, 0);
   const activityForGroup = (candidate: CopyGroupConfig) => {
     const accountIds = new Set([
       candidate.leaderAccountId,
@@ -901,6 +911,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
   return (
     <div className="space-y-5" style={{ fontSize: `${density}%` }}>
+      <CopierDailyStatsSummary
+        leaderRealizedPnl={dailyStats?.realizedPnlUsd ?? null}
+        leaderLosingTrades={dailyStats?.losingTrades ?? null}
+        brokerAccountsRealizedPnl={brokerAccountsDailyPnl}
+      />
       <LivePnlPanel
         open={apiPanelOpen}
         onToggle={() => setApiPanelOpen(v => !v)}
@@ -1217,6 +1232,41 @@ const EMPTY_API_TELEMETRY: TradovateApiTelemetrySnapshot = {
   lastUpdatedAt: null,
   rateLimitedUntil: null,
 };
+
+export const CopierDailyStatsSummary = ({
+  leaderRealizedPnl,
+  leaderLosingTrades,
+  brokerAccountsRealizedPnl,
+}: {
+  leaderRealizedPnl: number | null;
+  leaderLosingTrades: number | null;
+  brokerAccountsRealizedPnl: number | null;
+}) => (
+  <section className="grid gap-3 sm:grid-cols-2" aria-label="Denní statistiky kopírky a účtů">
+    <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045] px-4 py-3">
+      <div className="text-[10px] font-black uppercase tracking-wider text-indigo-500">
+        {COPIER_LEADER_DAILY_STATS_LABEL}
+      </div>
+      <div className={`mt-1 text-lg font-black tabular-nums ${leaderRealizedPnl == null ? 'text-[var(--text-secondary)]' : pnlClass(leaderRealizedPnl)}`}>
+        {leaderRealizedPnl == null ? '—' : money.format(leaderRealizedPnl)}
+      </div>
+      <div className="text-[10px] text-[var(--text-secondary)]">
+        {leaderLosingTrades == null ? 'Copier ledger není dostupný.' : `${leaderLosingTrades} ztrátových obchodů leadera`}
+      </div>
+    </div>
+    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/[0.04] px-4 py-3">
+      <div className="text-[10px] font-black uppercase tracking-wider text-emerald-600">
+        {BROKER_ACCOUNTS_DAILY_PNL_LABEL}
+      </div>
+      <div className={`mt-1 text-lg font-black tabular-nums ${brokerAccountsRealizedPnl == null ? 'text-[var(--text-secondary)]' : pnlClass(brokerAccountsRealizedPnl)}`}>
+        {brokerAccountsRealizedPnl == null ? '—' : money.format(brokerAccountsRealizedPnl)}
+      </div>
+      <div className="text-[10px] text-[var(--text-secondary)]">
+        {brokerAccountsRealizedPnl == null ? 'Čeká na denní OAuth enrichment.' : 'Součet dnešního cashBalance.realizedPnL přes OAuth účty.'}
+      </div>
+    </div>
+  </section>
+);
 
 const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry = EMPTY_API_TELEMETRY }: { open: boolean; onToggle: () => void; dataActive: boolean; apiReady: boolean; onHelp: () => void; telemetry?: TradovateApiTelemetrySnapshot }) => {
   const rows = [
@@ -2534,7 +2584,7 @@ const GroupEditorDialog = ({ group, isNew, accounts, accountLabel, saving, onClo
               <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border-subtle)] px-4 py-3">
                 <span>
                   <b className="block text-xs text-[var(--text-primary)]">Auto day-lock: denní ztráta</b>
-                  <span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">Realizovaná denní ztráta leadera, při které se copier po zploštění skupiny sám zamkne do konce session. Nula znamená vypnuto.</span>
+                  <span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">{COPIER_LEADER_DAILY_STATS_LABEL}. Při dosažení limitu se copier po zploštění skupiny sám zamkne do konce session. Nula znamená vypnuto.</span>
                 </span>
                 <span className="flex shrink-0 items-center gap-2">
                   <input
@@ -2552,7 +2602,7 @@ const GroupEditorDialog = ({ group, isNew, accounts, accountLabel, saving, onClo
               <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border-subtle)] px-4 py-3">
                 <span>
                   <b className="block text-xs text-[var(--text-primary)]">Auto day-lock: ztrátové obchody</b>
-                  <span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">Počet ztrátových obchodů leadera za den, po kterém se copier po zploštění zamkne. Nula znamená vypnuto.</span>
+                  <span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">{COPIER_LEADER_DAILY_STATS_LABEL}. Po dosažení počtu ztrátových obchodů se copier po zploštění zamkne. Nula znamená vypnuto.</span>
                 </span>
                 <span className="flex shrink-0 items-center gap-2">
                   <input

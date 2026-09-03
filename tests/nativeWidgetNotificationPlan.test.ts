@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { NativeWidgetLiveState } from '../services/nativeWidgetSnapshot';
 import { planNativeWidgetLocalAlerts } from '../services/nativeWidgetNotificationPlan';
+import {
+  BROKER_ACCOUNTS_DAILY_PNL_LABEL,
+  COPIER_LEADER_DAILY_STATS_LABEL,
+} from '../lib/copierDailyStatsLabels';
 
 const live = (partial: Partial<NativeWidgetLiveState> = {}): NativeWidgetLiveState => ({
   connected: true,
@@ -14,6 +18,9 @@ const live = (partial: Partial<NativeWidgetLiveState> = {}): NativeWidgetLiveSta
   dayLockUntil: 0,
   dayLockReason: null,
   dailyRealizedPnl: 0,
+  dailyRealizedPnlLabel: COPIER_LEADER_DAILY_STATS_LABEL,
+  accountsRealizedPnl: 0,
+  accountsRealizedPnlLabel: BROKER_ACCOUNTS_DAILY_PNL_LABEL,
   losingTrades: 0,
   followerCount: 2,
   openPositionCount: 0,
@@ -42,9 +49,10 @@ describe('lokální live PnL a account-lock notifikace', () => {
     expect(first).toEqual([expect.objectContaining({
       key: 'trade-pnl:t1',
       title: 'MNQ Long: +$125.00',
-      body: expect.stringContaining('Denní realizované PnL +$125.00'),
+      body: expect.stringContaining('Leader · jen obchody přes kopírku · bez poplatků +$125.00'),
       kind: 'trade',
     })]);
+    expect(first[0].body).toContain('Účty (broker, vč. poplatků) +$0.00');
     expect(planNativeWidgetLocalAlerts(
       live({ dailyRealizedPnl: 125, recentTrades: [trade] }),
       live({ dailyRealizedPnl: 125, recentTrades: [trade] }),

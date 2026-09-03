@@ -10,6 +10,7 @@ struct AlphaTradeLiveActivityAttributes: ActivityAttributes {
         let headline: String
         let detail: String
         let pnlText: String
+        var pnlLabel: String? = nil
         let isPositive: Bool
         let progress: Double
         let updatedAt: Double

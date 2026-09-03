@@ -297,6 +297,7 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
             headline: call.getString("headline") ?? "Seance pod kontrolou",
             detail: call.getString("detail") ?? "Risk 38 % · 3 / 3 obchody",
             pnlText: call.getString("pnlText") ?? "+$428.50",
+            pnlLabel: call.getString("pnlLabel"),
             isPositive: call.getBool("isPositive") ?? true,
             progress: min(max(call.getDouble("progress") ?? 0.62, 0), 1),
             updatedAt: Date().timeIntervalSince1970

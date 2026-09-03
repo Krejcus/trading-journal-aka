@@ -213,6 +213,22 @@ celá sada 222 / 1843, strict TypeScript, scoped lint bez výstupu a produkční
 build. Plný lint skončil bez chyb, se 353 existujícími warningy mimo změněné
 soubory. Nic nebylo commitnuto, pushnuto ani deploynuto; žádný reálný worker,
 broker, ARM, DISARM ani Flatten se nespouštěl.
+### 2026-09-03 (Codex, jednoznačné denní P&L a pozdní atribuce SL/TP)
+
+`dailyStats` zůstává beze změny leader-only ledgerem copieru a day-lock dál
+počítá pouze tuto metriku. LIVE, notifikace, Mac companion DTO a iOS
+widget/Live Activity ji nyní označují „Leader · jen obchody přes kopírku · bez
+poplatků“; LIVE a widget vedle ní ukazují samostatný součet OAuth
+`cashBalance.realizedPnL` jako „Účty (broker, vč. poplatků)“. Pozdní leader
+protective order event může do 2 s čistě reportingově opravit již uložené
+`manual` na `sl`/`tp`; execution, routing ani safety rozhodnutí nemění.
+
+Regrese pokrývá stop fill před order eventem i popisky všech DTO/renderů.
+Kompletní Vitest: 220 souborů / 1817 testů; strict TypeScript, web build,
+macOS build a samostatný iOS Simulator build cíle `AlphaTradeWidgets` prošly.
+Celý iOS shell vyžaduje předem vygenerované Capacitor `public/config` soubory,
+které tento worktree nemá. Nic nebylo commitnuto, pushnuto ani deploynuto a
+žádný worker/broker/ARM/DISARM/Flatten nebyl spuštěn.
 
 ### 2026-09-02 (Claude, večerní review dne — skutečná čísla a replay bug)
 

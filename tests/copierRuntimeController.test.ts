@@ -2225,7 +2225,11 @@ describe('auto day-lock z denní ztráty leadera', () => {
     await controller.waitForIdle();
 
     const status = controller.status();
-    expect(status.dailyStats).toMatchObject({ realizedPnlUsd: -120, losingTrades: 1 });
+    expect(status.dailyStats).toMatchObject({
+      label: 'Leader · jen obchody přes kopírku · bez poplatků',
+      realizedPnlUsd: -120,
+      losingTrades: 1,
+    });
     expect(status.dayLockUntil).toBeGreaterThan(0);
     expect(status.dayLockReason).toContain('denní ztráta');
     await controller.reconcile();
@@ -2926,6 +2930,67 @@ describe('order lifecycle notifikace (obchod zadán, SL/TP, atribuce exitu)', ()
       avgEntryPrice: 29_500,
       avgExitPrice: 29_400,
     });
+    controller.stop();
+  });
+
+  it('pozdní stop order event zpětně opraví už zapsaný leader exit na sl', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'reject', reason: 'price-through' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      osoCorrelationWindowMs: 500,
+      episodeIdFactory: () => '22222222-2222-4222-8222-222222222222',
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    // Stop fill přijde dřív než první order event stejného stopu,
+    // stejně jako v incidentu 2. 9. Protective order eventy pak dorazí
+    // až po position=0, ale stále uvnitř úzkého korelačního okna.
+    broker.emitEvent({ type: 'order', order: leaderOrder({ brokerOrderId: 'late-entry' }) });
+    broker.emitEvent({
+      type: 'fill',
+      fill: {
+        fillId: 'late-entry-fill', tag: '', brokerOrderId: 'late-entry', accountId: 100,
+        symbol: 'MNQU6', side: 'Buy', quantity: 2, price: 29_500, filledAt: 500,
+      },
+    });
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 2 } });
+    broker.emitEvent({
+      type: 'fill',
+      fill: {
+        fillId: 'late-stop-fill', tag: '', brokerOrderId: 'late-sl', accountId: 100,
+        symbol: 'MNQU6', side: 'Sell', quantity: 2, price: 29_400, filledAt: 510,
+      },
+    });
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 } });
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({
+        brokerOrderId: 'late-tp', side: 'Sell', orderType: 'Limit', limitPrice: 29_700,
+        sourceVersion: '1:WorkingTP',
+      }),
+    });
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({
+        brokerOrderId: 'late-sl', side: 'Sell', orderType: 'Stop', stopPrice: 29_400,
+        limitPrice: undefined, sourceVersion: '1:WorkingSL',
+      }),
+    });
+    await controller.waitForIdle();
+
+    expect(controller.status().dailyStats?.recentClosedTrades?.[0]).toMatchObject({
+      id: 'late-stop-fill',
+      exitReason: 'sl',
+      realizedPnlUsd: -400,
+    });
+    expect(controller.status().recentCopyEvents?.find(event => event.kind === 'exit'))
+      .toMatchObject({ exitReason: 'sl', pnlUsd: -400 });
     controller.stop();
   });
 });

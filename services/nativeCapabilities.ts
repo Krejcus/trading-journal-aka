@@ -41,6 +41,7 @@ export interface NativeLiveActivityPayload {
   headline: string;
   detail: string;
   pnlText: string;
+  pnlLabel?: string;
   isPositive: boolean;
   progress: number;
   alert?: boolean;

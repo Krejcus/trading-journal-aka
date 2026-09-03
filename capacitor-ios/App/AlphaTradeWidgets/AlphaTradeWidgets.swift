@@ -53,7 +53,10 @@ private struct AlphaTradeSnapshot: Codable, Equatable {
         let cooldownUntil: Double
         let dayLockUntil: Double
         let dayLockReason: String?
-        let dailyRealizedPnl: Double
+        let dailyRealizedPnl: Double?
+        var dailyRealizedPnlLabel: String? = nil
+        var accountsRealizedPnl: Double? = nil
+        var accountsRealizedPnlLabel: String? = nil
         let losingTrades: Int
         let followerCount: Int
         let openPositionCount: Int
@@ -105,7 +108,11 @@ private struct AlphaTradeSnapshot: Codable, Equatable {
             connected: true, armed: true, shadowMode: false, killSwitch: false,
             status: "ARM LIVE", statusDetail: "Kopírování je aktivní.",
             armExpiresAt: 0, cooldownUntil: 0, dayLockUntil: 0, dayLockReason: nil,
-            dailyRealizedPnl: 320, losingTrades: 1, followerCount: 5,
+            dailyRealizedPnl: 320,
+            dailyRealizedPnlLabel: "Leader · jen obchody přes kopírku · bez poplatků",
+            accountsRealizedPnl: 640,
+            accountsRealizedPnlLabel: "Účty (broker, vč. poplatků)",
+            losingTrades: 1, followerCount: 5,
             openPositionCount: 1, workingOrderCount: 2, realizedPnl: 320,
             openPnl: 108.50, totalPnl: 428.50,
             accounts: [], positions: [.init(accountName: "Alpha 50K", symbol: "MNQ", side: "Long", quantity: 2, averagePrice: 22_450.25)],
@@ -532,6 +539,19 @@ private struct CopierStatusView: View {
                         .foregroundStyle(live.totalPnl >= 0 ? ATStyle.green : ATStyle.red)
                         .privacySensitive()
                 }.font(.caption2.bold().monospacedDigit())
+                HStack(alignment: .top, spacing: 8) {
+                    if let leaderPnl = live.dailyRealizedPnl {
+                        copierDailyMetric(
+                            label: live.dailyRealizedPnlLabel
+                                ?? "Leader · jen obchody přes kopírku · bez poplatků",
+                            value: leaderPnl
+                        )
+                    }
+                    copierDailyMetric(
+                        label: live.accountsRealizedPnlLabel ?? "Účty (broker, vč. poplatků)",
+                        value: live.accountsRealizedPnl ?? live.realizedPnl
+                    )
+                }
             } else {
                 ATNoDataView(compact: true)
             }
@@ -543,6 +563,21 @@ private struct CopierStatusView: View {
                 }.font(.caption2.bold())
             }
         }.padding().alphaTradeSurface().widgetURL(URL(string: "alphatrade-native://live"))
+    }
+
+    private func copierDailyMetric(label: String, value: Double) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label)
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(ATStyle.muted)
+                .lineLimit(2)
+                .minimumScaleFactor(0.65)
+            Text(money(value))
+                .font(.caption2.bold().monospacedDigit())
+                .foregroundStyle(value >= 0 ? ATStyle.green : ATStyle.red)
+                .privacySensitive()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -805,10 +840,15 @@ struct AlphaTradeLiveActivityWidget: Widget {
                         .lineLimit(1)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Text(context.state.pnlText)
-                        .font(.caption.bold().monospacedDigit())
-                        .foregroundStyle(context.state.isPositive ? Color.green : Color.red)
-                        .privacySensitive()
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(context.state.pnlText)
+                            .font(.caption.bold().monospacedDigit())
+                            .foregroundStyle(context.state.isPositive ? Color.green : Color.red)
+                            .privacySensitive()
+                        if let label = context.state.pnlLabel {
+                            Text(label).font(.system(size: 7, weight: .semibold)).lineLimit(2)
+                        }
+                    }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 7) {
@@ -942,10 +982,18 @@ private struct AlphaTradeLiveActivityLockScreen: View {
                     .font(.title3.weight(.black))
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Text(context.state.pnlText)
-                    .font(.title2.bold().monospacedDigit())
-                    .foregroundStyle(context.state.isPositive ? LiveActivityPalette.profit : LiveActivityPalette.loss)
-                    .privacySensitive()
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(context.state.pnlText)
+                        .font(.title2.bold().monospacedDigit())
+                        .foregroundStyle(context.state.isPositive ? LiveActivityPalette.profit : LiveActivityPalette.loss)
+                        .privacySensitive()
+                    if let label = context.state.pnlLabel {
+                        Text(label)
+                            .font(.system(size: 7, weight: .semibold))
+                            .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.55) : LiveActivityPalette.muted)
+                            .lineLimit(2)
+                    }
+                }
             }
             if context.state.stopPrice != nil && context.state.targetPrice != nil
                 && context.state.slTpProgress != nil {
@@ -990,10 +1038,18 @@ private struct AlphaTradeLiveActivityLockScreen: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            Text(context.state.pnlText)
-                .font(.title3.bold().monospacedDigit())
-                .foregroundStyle(context.state.isPositive ? LiveActivityPalette.profit : LiveActivityPalette.loss)
-                .privacySensitive()
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(context.state.pnlText)
+                    .font(.title3.bold().monospacedDigit())
+                    .foregroundStyle(context.state.isPositive ? LiveActivityPalette.profit : LiveActivityPalette.loss)
+                    .privacySensitive()
+                if let label = context.state.pnlLabel {
+                    Text(label)
+                        .font(.system(size: 7, weight: .semibold))
+                        .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.55) : LiveActivityPalette.muted)
+                        .lineLimit(2)
+                }
+            }
         }
     }
 

@@ -17,7 +17,9 @@ const dailyRealizedPnl = (
 ) => {
   const capturedDate = capturedAt.slice(0, 10);
   const day = account.daily.find(candidate => candidate.tradeDate === capturedDate);
-  return day ? day.grossTradePnl + day.feeDelta : 0;
+  // This is the broker-reported current trade-date value from the latest
+  // cashBalance.realizedPnL, including fees. Do not substitute copier stats.
+  return day?.reportedRealizedPnl ?? 0;
 };
 
 export function tradovateCopyTradeSnapshot(

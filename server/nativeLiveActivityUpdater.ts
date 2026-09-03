@@ -14,6 +14,10 @@ import {
 import { tradovateApiBaseUrl } from './tradovateOAuth.js';
 import { tradovateValuePerPoint } from '../lib/tradovateLivePnl.js';
 import {
+  BROKER_ACCOUNTS_DAILY_PNL_LABEL,
+  COPIER_LEADER_DAILY_STATS_LABEL,
+} from '../lib/copierDailyStatsLabels.js';
+import {
   getValidTradovateAccessToken,
   type TradovateServerConfig,
 } from './tradovateOAuthStore.js';
@@ -237,8 +241,10 @@ export function planNativeLiveActivityUpdate(options: {
   const headline = position.headline
     ?? (bool(controller.armed) ? `ARM · ${followerCount} followerů` : status.detail);
   const pnlLabel = openPositionCount > 0 && options.broker?.completeOpenPnl === true
-    ? 'Otevřené P&L'
-    : 'Realized P&L';
+    ? 'Účty (broker) · otevřené P&L'
+    : options.broker != null
+      ? BROKER_ACCOUNTS_DAILY_PNL_LABEL
+      : COPIER_LEADER_DAILY_STATS_LABEL;
   const state: ApnsLiveActivityContentState = {
     status: status.status,
     headline,
@@ -248,6 +254,7 @@ export function planNativeLiveActivityUpdate(options: {
       ? status.detail
       : `${openPositionCount} pozic · ${workingOrderCount} příkazů · ${pnlLabel}`,
     pnlText: signedMoney(pnl),
+    pnlLabel,
     isPositive: pnl >= 0,
     progress: bool(controller.killSwitch) ? 1 : bool(controller.armed) ? 0.75 : controller.connected === true ? 0.35 : 0.1,
     updatedAt: options.now / 1_000,

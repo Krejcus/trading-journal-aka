@@ -56,6 +56,12 @@ export interface MacCompanionStatusDTO {
     location: MacCompanionWorkerLocation;
   };
   brokerConnected: boolean | null;
+  /** Leader-only copier ledger. The label is part of the DTO contract. */
+  dailyStats?: {
+    label: 'Leader · jen obchody přes kopírku · bez poplatků';
+    realizedPnlUsd: number;
+    losingTrades: number;
+  } | null;
   safety: {
     reconciliation: {
       status: MacCompanionReconciliationStatus;

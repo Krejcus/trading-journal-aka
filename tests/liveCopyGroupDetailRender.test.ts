@@ -94,6 +94,30 @@ const tableRows = (markup: string): string[] => markup.match(/<tr\b[^>]*>[\s\S]*
 const tableCells = (row: string): string[] => row.match(/<td\b[^>]*>[\s\S]*?<\/td>/g) ?? [];
 
 describe('GroupDetail Positions integrace', () => {
+  it('odděluje leader-only copier statistiku od broker P&L všech účtů', () => {
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot: {
+        ...snapshot,
+        accounts: [
+          { ...snapshot.accounts[0], realizedPnl: -400 },
+          { ...snapshot.accounts[1], realizedPnl: -200 },
+        ],
+      },
+      dailyStats: {
+        label: 'Leader · jen obchody přes kopírku · bez poplatků',
+        sessionEndAt: 10_000,
+        realizedPnlUsd: -100,
+        losingTrades: 1,
+        unpricedSymbols: [],
+      },
+    }));
+
+    expect(markup).toContain('Leader · jen obchody přes kopírku · bez poplatků');
+    expect(markup).toContain('Účty (broker, vč. poplatků)');
+    expect(markup).toContain('-$100.00');
+    expect(markup).toContain('-$600.00');
+  });
+
   it('groupRows používá společnou source-group kaskádu i pro účet mimo OAuth snapshot', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
       snapshot: { ...snapshot, accounts: [snapshot.accounts[0]] },

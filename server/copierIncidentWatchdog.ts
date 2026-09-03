@@ -14,6 +14,8 @@
  * drží `active` v copier_alert_state, dokud podmínka nezmizí.
  */
 
+import { COPIER_LEADER_DAILY_STATS_LABEL } from '../lib/copierDailyStatsLabels.js';
+
 export interface CopierRuntimeRow {
   device_id: string;
   user_id: string;
@@ -155,7 +157,7 @@ export function copyEventNotification(event: CopierCopyEventRow): { title: strin
   if (event.stopPrice != null) parts.push(`SL ${event.stopPrice}${formatPotential(event.stopPnlUsd)}`);
   if (event.targetPrice != null) parts.push(`TP ${event.targetPrice}${formatPotential(event.targetPnlUsd)}`);
   if ((event.kind === 'exit' || event.kind === 'flip') && event.pnlUsd != null) {
-    parts.push(`P&L ${formatUsd(event.pnlUsd)}`);
+    parts.push(`P&L ${formatUsd(event.pnlUsd)} · ${COPIER_LEADER_DAILY_STATS_LABEL}`);
   }
   return {
     title,
@@ -457,7 +459,7 @@ export function evaluateCopierIncidents(options: {
         userId, deviceId, incidentKey: 'day-lock', kind: 'opened',
         title: 'Copier: DAY-LOCK',
         body: reason
-          ? `${reason}. ARM je blokovaný do konce broker session.`
+          ? `${reason}. ${COPIER_LEADER_DAILY_STATS_LABEL}. ARM je blokovaný do konce broker session.`
           : 'Denní zámek je aktivní. ARM je blokovaný do konce broker session.',
       });
       upserts.push({

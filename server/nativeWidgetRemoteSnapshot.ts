@@ -1,4 +1,8 @@
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes.js';
+import {
+  BROKER_ACCOUNTS_DAILY_PNL_LABEL,
+  COPIER_LEADER_DAILY_STATS_LABEL,
+} from '../lib/copierDailyStatsLabels.js';
 import type { NativeLiveActivityBrokerSnapshot } from './nativeLiveActivityBrokerSnapshot.js';
 import type { NativeLiveActivityRuntimeRow } from './nativeLiveActivityUpdater.js';
 
@@ -125,7 +129,13 @@ export function buildNativeWidgetRemoteSnapshot(options: {
       cooldownUntil: finite(controller.entryCooldownUntil),
       dayLockUntil,
       dayLockReason: typeof controller.dayLockReason === 'string' ? controller.dayLockReason : null,
-      dailyRealizedPnl: finite(dailyStats.realizedPnlUsd, options.broker.realizedPnl),
+      dailyRealizedPnl: typeof dailyStats.realizedPnlUsd === 'number'
+        && Number.isFinite(dailyStats.realizedPnlUsd)
+        ? dailyStats.realizedPnlUsd
+        : null,
+      dailyRealizedPnlLabel: COPIER_LEADER_DAILY_STATS_LABEL,
+      accountsRealizedPnl: options.broker.realizedPnl,
+      accountsRealizedPnlLabel: BROKER_ACCOUNTS_DAILY_PNL_LABEL,
       losingTrades: Math.max(0, Math.floor(finite(dailyStats.losingTrades))),
       followerCount: followers.length,
       openPositionCount: options.broker.positions.length,

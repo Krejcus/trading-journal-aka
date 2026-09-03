@@ -240,8 +240,9 @@ describe('remote native Live Activity', () => {
     expect(plan.update.state).toMatchObject({
       status: 'ARM LIVE',
       headline: 'LONG 3 MNQU6 · 2 účtů',
-      detail: '2 pozic · 4 příkazů · Otevřené P&L',
+      detail: '2 pozic · 4 příkazů · Účty (broker) · otevřené P&L',
       pnlText: '+$75.50',
+      pnlLabel: 'Účty (broker) · otevřené P&L',
       isPositive: true,
       mode: 'position',
       symbol: 'MNQU6',
@@ -256,6 +257,26 @@ describe('remote native Live Activity', () => {
       armExpiresAt: (now + 3_600_000) / 1_000,
       followersTotal: 2,
       followersOk: 1,
+    });
+  });
+
+  it('fallback bez broker snapshotu označí leader-only copier P&L', () => {
+    const now = Date.parse('2026-08-20T10:00:30.000Z');
+    const plan = planNativeLiveActivityUpdate({
+      runtime: runtime({
+        armed: true,
+        connected: true,
+        shadowMode: false,
+        dailyStats: { realizedPnlUsd: -125, losingTrades: 1 },
+      }),
+      broker: null,
+      now,
+    });
+
+    expect(plan.update.state).toMatchObject({
+      pnlText: '-$125.00',
+      pnlLabel: 'Leader · jen obchody přes kopírku · bez poplatků',
+      detail: expect.stringContaining('Leader · jen obchody přes kopírku · bez poplatků'),
     });
   });
 

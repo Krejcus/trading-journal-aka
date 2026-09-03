@@ -39,6 +39,7 @@ describe('mac companion cloud status reducer', () => {
         stuckOutbox: false,
         stuckOperations: [],
         killSwitch: false,
+        dailyStats: { realizedPnlUsd: -120, losingTrades: 2 },
         armExpiresAt: NOW + 30 * 60_000,
         groupFlat: true,
         lastError: 'RAW-LAST-ERROR-MUST-NOT-LEAK',
@@ -56,6 +57,11 @@ describe('mac companion cloud status reducer', () => {
       copierState: 'live',
       worker: { location: 'mac', lastHeartbeatAt: HEARTBEAT },
       brokerConnected: true,
+      dailyStats: {
+        label: 'Leader · jen obchody přes kopírku · bez poplatků',
+        realizedPnlUsd: -120,
+        losingTrades: 2,
+      },
       exposure: {
         verifiedAt: null,
         positions: [],
