@@ -152,6 +152,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Claude, companion build 10 — popover při rozbalení „nevytahuje" horní hranu)
+
+Po plynulém rozbalení (build 8) uživatel hlásil, že se při otevření/zavření
+sekce hýbe i horní část popoveru — okno se natáhne nad kotvu a zase zajede.
+Příčina: animovaná větev nastavovala `popover.contentSize` uvnitř
+`NSAnimationContext` s implicitní animací; AppKit rám okna mění kolem
+počátku vlevo dole, takže roste i nahoru, a NSPopover ho až po doběhnutí
+vrátí pod status item. Oprava (`animatePopoverWindow(to:duration:)`):
+animovat přímo `window.animator().setFrame` s pevným `maxY` (výška i posun
+počátku o stejný delta), po doběhnutí zesynchronizovat `contentSize` bez
+animace. Koordinátor beze změny. Release build 10 + build-for-testing
+prošly, build 9 zálohován, appka vyměněna, autostart znovu bootstrapován.
+
 ### 2026-09-03 (Claude, companion build 9 — lišta o krok pozadu)
 
 Uživatel hlásil, že pill v liště reaguje se zpožděním o jeden stav (po

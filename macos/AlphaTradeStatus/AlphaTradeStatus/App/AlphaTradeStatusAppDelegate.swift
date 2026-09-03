@@ -257,13 +257,52 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
                 popover.contentSize = size
             }
         case .animate(let size, let duration):
+            animatePopoverWindow(to: size, duration: duration)
+        }
+    }
+
+    /// Animates the popover's own window frame with the TOP edge pinned.
+    ///
+    /// Letting AppKit implicitly animate `popover.contentSize` grows the window
+    /// around its bottom-left origin, so the top edge visibly rises above the
+    /// status item and NSPopover snaps it back under the anchor when the
+    /// animation ends ("vytáhne a zase zajede"). Driving the window frame
+    /// directly keeps `maxY` constant, so growth only extends downward and
+    /// the popover never detaches from the menu bar. `contentSize` is
+    /// synchronised afterwards without animation so NSPopover's bookkeeping
+    /// matches the frame it already has.
+    private func animatePopoverWindow(to size: CGSize, duration: TimeInterval) {
+        guard popover.isShown,
+              let window = popover.contentViewController?.view.window else {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = duration
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                context.allowsImplicitAnimation = true
+                context.duration = 0
+                context.allowsImplicitAnimation = false
                 popover.contentSize = size
             }
+            return
         }
+
+        let currentContent = popover.contentSize
+        let heightDelta = size.height - currentContent.height
+        let widthDelta = size.width - currentContent.width
+        var target = window.frame
+        target.size.height += heightDelta
+        target.size.width += widthDelta
+        target.origin.y -= heightDelta
+
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.allowsImplicitAnimation = true
+            window.animator().setFrame(target, display: true)
+        }, completionHandler: { [weak self] in
+            guard let self else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0
+                context.allowsImplicitAnimation = false
+                self.popover.contentSize = size
+            }
+        })
     }
 
     func presentTransition(_ event: CompanionTransitionEvent) {
