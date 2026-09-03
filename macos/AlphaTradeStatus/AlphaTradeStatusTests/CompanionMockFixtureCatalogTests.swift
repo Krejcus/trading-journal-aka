@@ -27,8 +27,8 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
             tone: StatusTone,
             heroTitle: String
         )] = [
-            (.live, .live(minutesRemaining: 42), "LIVE 42m", .success, "LIVE"),
-            (.liveAckUnavailable, .live(minutesRemaining: 42), "LIVE 42m", .success, "LIVE"),
+            (.live, .live(minutesRemaining: 42), "LIVE", .success, "LIVE"),
+            (.liveAckUnavailable, .live(minutesRemaining: 42), "LIVE", .success, "LIVE"),
             (.shadow, .shadow, "SHADOW", .muted, "SHADOW"),
             (.disarmed, .disarmed, nil, .neutral, "DISARMED"),
             (.disarmedExposure, .intervention(issueCount: 1), "!1", .danger, "ZÁSAH NUTNÝ"),
@@ -139,7 +139,7 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
         XCTAssertEqual(offline.followerAcknowledgementEvidence, .unavailable)
 
         for presentation in [unknown, offline] {
-            XCTAssertNotEqual(presentation.menuBar.pillText, "LIVE 42m")
+            XCTAssertNotEqual(presentation.menuBar.pillText, "LIVE")
             XCTAssertFalse(presentation.exposureEvidence.mayClaimFlat)
             XCTAssertTrue(presentation.hero.detail.localizedCaseInsensitiveContains("naposledy potvrzeno live"))
         }

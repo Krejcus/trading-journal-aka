@@ -95,7 +95,7 @@ private extension CompanionMockFixtureCatalog {
             fixtureID: fixtureID,
             displayState: .live(minutesRemaining: 42),
             menuBar: .init(
-                pillText: "LIVE 42m",
+                pillText: "LIVE",
                 tone: .success,
                 accessibilityLabel: "AlphaTrade, LIVE, zbývá 42 minut"
             ),

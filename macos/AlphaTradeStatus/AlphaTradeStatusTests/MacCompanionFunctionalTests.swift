@@ -353,7 +353,8 @@ final class MacCompanionFunctionalTests: XCTestCase {
 
         XCTAssertTrue(visibleText.contains("Mac worker"))
         XCTAssertFalse(visibleText.contains("Tento Mac"))
-        XCTAssertTrue(visibleText.localizedCaseInsensitiveContains("potvrzení followerů nedostupné"))
+        XCTAssertTrue(visibleText.contains("Expozice neověřena"))
+        XCTAssertTrue(visibleText.contains("Nedostupné"))
         XCTAssertFalse(visibleText.contains("0/0"))
         XCTAssertFalse(presentation.safeDiagnosticText.contains("Follower"))
         XCTAssertFalse(presentation.safeDiagnosticText.contains("https://"))

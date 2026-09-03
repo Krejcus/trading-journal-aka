@@ -68,7 +68,7 @@ private extension CompanionRemotePresentationFactory {
         let copying = StatusSectionPresentation(
             id: "copying",
             title: "Kopírování",
-            summary: acknowledgementSummary,
+            summary: status.exposure.followerAck == nil ? "Expozice neověřena" : acknowledgementSummary,
             summaryTone: status.exposure.followerAck == nil ? .warning : .success,
             isInitiallyExpanded: true,
             hasProblem: false,
@@ -79,7 +79,7 @@ private extension CompanionRemotePresentationFactory {
             fixtureID: status.exposure.followerAck == nil ? .liveAckUnavailable : .live,
             displayState: .live(minutesRemaining: minutesRemaining),
             menuBar: .init(
-                pillText: "LIVE \(minutesRemaining)m",
+                pillText: "LIVE",
                 tone: .success,
                 accessibilityLabel: "AlphaTrade, LIVE, zbývá \(minutesRemaining) minut"
             ),
@@ -670,7 +670,7 @@ private extension CompanionRemotePresentationFactory {
         _ acknowledgement: MacCompanionStatusDTO.FollowerAcknowledgementDTO?
     ) -> String {
         guard let acknowledgement else {
-            return "Potvrzení followerů nedostupné"
+            return "Nedostupné"
         }
         return "\(acknowledgement.confirmed)/\(acknowledgement.total) followerů"
     }
