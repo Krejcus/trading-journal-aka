@@ -151,6 +151,25 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Claude, „Zamknout den" z produkční PWA — relay příkaz nepropouštěl)
+
+Uživatel hlásil, že „Zamknout den" v LIVE nefunguje. Příčina: produkční HTTPS
+PWA posílá příkazy workerovi přes relay (`tradovateCopierCommandRelay`), jehož
+allowlist `lock-until-session-end` neobsahoval — ingress vracel
+`unsupported-relay-command`, worker se o příkazu nedozvěděl (v agent logu
+žádný pokus). Handler ve workeru existuje (`lockUntil`: `armed=false` +
+persistovaný `dayLockUntil/dayLockReason` do konce Tradovate session) a je
+i v nasazeném bundle `7763bfcd`, takže reinstall workeru není potřeba.
+Bezpečnostní rozhodnutí: denní lock je čistě riziko snižující (DISARM +
+zákaz ARM), patří do stejné vzdálené třídy jako `disarm`/`kill-switch`;
+`resolve-stuck-operation` a broker-write příkazy zůstávají na relay
+zamítnuté. Přidáno do allowlistu s validací `reason` (string, trim 3–200
+znaků, bez řídicích znaků) na enqueue i claim straně; testy round-tripu a
+odmítnutí neplatných payloadů. Cílené sady 72/72, eslint 0 chyb, typecheck
+mimo `extension/` čistý. Codex byl zadán, ale selhal na výpadku OpenAI
+backendu (404), proto opravu udělal Claude. Serverová změna — nasazení až
+po „nasaď".
+
 ### 2026-09-03 (Codex, page deep link funguje i v už otevřené PWA)
 
 Externí `page` intent se už nečte jen při prvním mountu. PWA jej zachytí při

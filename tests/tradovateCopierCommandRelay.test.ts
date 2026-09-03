@@ -428,4 +428,65 @@ describe('ARM přes relay nese konfiguraci skupiny', () => {
     });
     expect(claimed?.command).toMatchObject({ type: 'activate-group', group: skupina });
   });
+
+  it('lock-until-session-end projde relay jako riziko snižující příkaz s očištěným důvodem', async () => {
+    const upsert = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert),
+      userId,
+      connectionId,
+      deviceId,
+      command: { type: 'lock-until-session-end', reason: '  Ruční denní lock z AlphaTrade LIVE UI  ' },
+      idempotencyKey: 'day-lock-1',
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    expect(upsert.mock.calls[0][0]).toMatchObject({
+      command_type: 'lock-until-session-end',
+      payload: { reason: 'Ruční denní lock z AlphaTrade LIVE UI' },
+      device_id: deviceId,
+    });
+
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: '77777777-7777-4777-8777-777777777777',
+        command_type: 'lock-until-session-end',
+        payload: { reason: 'Ruční denní lock z AlphaTrade LIVE UI', extra: 'ignored' },
+        expires_at: '2026-08-21T12:00:30.000Z',
+        status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toEqual({
+      type: 'lock-until-session-end',
+      reason: 'Ruční denní lock z AlphaTrade LIVE UI',
+    });
+  });
+
+  it('lock-until-session-end odmítá chybějící, krátký, dlouhý nebo řídicími znaky znečištěný důvod', async () => {
+    const attempt = (reason: unknown) => enqueueTradovateCopierCommand({
+      db: enqueueDb(vi.fn()),
+      userId,
+      connectionId,
+      deviceId,
+      command: { type: 'lock-until-session-end', reason } as LocalCopierAgentCommand,
+      idempotencyKey: 'day-lock-invalid',
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    await expect(attempt(undefined)).rejects.toThrow('invalid-relay-command-payload');
+    await expect(attempt(42)).rejects.toThrow('invalid-relay-command-payload');
+    await expect(attempt('  ab ')).rejects.toThrow('invalid-relay-command-payload');
+    await expect(attempt('x'.repeat(201))).rejects.toThrow('invalid-relay-command-payload');
+    await expect(attempt('lock\u0000injected')).rejects.toThrow('invalid-relay-command-payload');
+
+    await expect(claimTradovateCopierCommand({
+      db: claimDb({
+        id: '88888888-8888-4888-8888-888888888888',
+        command_type: 'lock-until-session-end',
+        payload: {},
+        expires_at: '2026-08-21T12:00:30.000Z',
+        status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    })).rejects.toThrow('invalid-relay-command-payload');
+  });
 });

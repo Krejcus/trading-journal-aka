@@ -78,7 +78,24 @@ export function closedTradesFromStatus(status: LocalCopierAgentStatus): Persiste
 const allowed = new Set<LocalCopierAgentCommand['type']>([
   'copy-command', 'arm-live', 'activate-group', 'shadow', 'disarm', 'kill-switch',
   'verify-account-eligibility', 'snapshot-test',
+  // Denní lock je čistě riziko snižující: worker DISARMuje a zakáže ARM do
+  // konce broker session. Patří do stejné vzdálené třídy jako disarm a
+  // kill-switch — bez něj „Zamknout den" z produkční PWA nikdy nedorazil.
+  'lock-until-session-end',
 ]);
+
+/**
+ * Důvod denního locku přichází z nevalidovaného JSON. Přenáší se do
+ * `dayLockReason` a zobrazuje v UI, proto jen krátký čistý text.
+ */
+const validatedDayLockReason = (value: unknown): string => {
+  if (typeof value !== 'string') throw new Error('invalid-relay-command-payload');
+  const reason = value.trim();
+  if (reason.length < 3 || reason.length > 200 || /[\u0000-\u001f\u007f]/.test(reason)) {
+    throw new Error('invalid-relay-command-payload');
+  }
+  return reason;
+};
 
 // The browser relay exists to synchronize the already configured group before
 // an explicit ARM — plus the risk-reducing emergency brakes. Flatten only
@@ -217,6 +234,9 @@ const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknow
   if (command.type === 'snapshot-test') {
     return command.repairCamera === true ? { repairCamera: true } : {};
   }
+  if (command.type === 'lock-until-session-end') {
+    return { reason: validatedDayLockReason((command as { reason?: unknown }).reason) };
+  }
   return {};
 };
 
@@ -253,6 +273,9 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
       throw new Error('invalid-relay-command-payload');
     }
     return { type: 'verify-account-eligibility', accountId };
+  }
+  if (row.command_type === 'lock-until-session-end') {
+    return { type: 'lock-until-session-end', reason: validatedDayLockReason(row.payload?.reason) };
   }
   if (row.command_type === 'snapshot-test') {
     return {
