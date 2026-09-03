@@ -152,6 +152,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Claude + uživatel, nasazení companion build 6 s auto-otevřením)
+
+Po dvou kolech Codexu (implementace §11 + opravy z nezávislého review: sekce
+podle §5 zůstávají otevřené, in-place aktualizace otevřeného popoveru,
+samostatný 30s limiter notifikací, reset rate limitu po wake) uživatel řekl
+„nasaď". Build 6 sestaven z `12684fda` (arm64 Release, adhoc+runtime, SHA-256
+`c88ca47cc46935d9d95921583bd016d190d008eb986c8badcdbc725d8c9befad`), build 5
+zálohován v `~/Documents/AlphaTrade-backups/2026-09-03-082833-mac-app-build5-before-build6`,
+aplikace vyměněna a autostart znovu bootstrapován (`state = running`).
+`main` fast-forwardován `731cc0b6..12684fda` — dotčené jen `macos/` a `docs/`,
+PWA/server beze změny. XCTest runner na tomto Macu dál nefunguje; ověřeno CLI
+probe 58/58 + build-for-testing + Release build. Interaktivní kontrola
+(notifikace, hover timer, zachování fokusu) zůstává na uživateli. Bez broker
+write, ARM/DISARM ani zásahu do copier workeru.
+
 ### 2026-09-03 (Codex, druhé kolo review AlphaTrade Status auto-open)
 
 - Přechod už nesbalí povinně otevřené problémové sekce: výsledná množina je

@@ -14,7 +14,7 @@ hardened runtime, App Sandbox + outgoing network only). The Supabase migration
 Mac is paired. Build 5 removes the read-only footer note and the system focus
 ring on footer buttons (`focusEffectDisabled()` at the hosted root).
 
-Version 0.2.0 (build 6) is the uninstalled feature candidate. It adds
+Version 0.2.0 (build 6) is the installed production client (2026-09-03, backup of build 5 kept under ~/Documents/AlphaTrade-backups). It adds
 three-second transition settling, a 30-second auto-open rate limit, targeted
 section/row emphasis, transient 60/8-second popovers, native notifications,
 and four local `UserDefaults` switches. Notifications have their own
@@ -22,8 +22,8 @@ and four local `UserDefaults` switches. Notifications have their own
 preserving manual expansion and entrance state; required problem sections stay
 open alongside the transition target. Startup, wake, manual refresh,
 10-90-second UNKNOWN bridges, and lower revisions never auto-open. Wake resets
-only the uptime-based auto-open window. The installed build 5 and its
-LaunchAgent are intentionally unchanged.
+only the uptime-based auto-open window. Build 6 replaced build 5 on 2026-09-03; the LaunchAgent plist is unchanged
+and the service was re-bootstrapped.
 
 Operational lesson (2026-09-02): the companion API must live in `origin/main`.
 A production deployment promoted from a local source tree is replaced by the
