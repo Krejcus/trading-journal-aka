@@ -2696,8 +2696,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     }
     if (!reconciliation) {
+      // Pět rychlých pokusů je jen jedna recovery vlna. Příští potvrzený
+      // connected event ji musí smět spustit znovu; stav zůstává DISARMED.
+      pendingConnectionRecovery = true;
       failClosed(new Error(
-        'Po obnovení spojení se nepodařilo ověřit stav účtů — kopie zůstávají chráněné brackety, zkontroluj Tradovate',
+        'connection=aggregate phase=reconciliation Po obnovení spojení se nepodařilo ověřit stav účtů — kopie zůstávají chráněné brackety, zkontroluj Tradovate',
       ));
       return;
     }

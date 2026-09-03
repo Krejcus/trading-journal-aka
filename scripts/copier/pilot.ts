@@ -121,6 +121,15 @@ interface PilotContextOptions {
 type ExecutionAccount = Pick<TradovateAccountDataAccount, 'id' | 'name' | 'active' | 'canTrade'>;
 
 const dedicatedChartConfigPath = resolve(homedir(), 'Library/Application Support/AlphaTrade/copier/chart-snapshot.json');
+const connectionLabel = (connectionId: string) => `conn:${connectionId.slice(0, 8)}`;
+const logReconnectDiagnostic = (message: string) => {
+  console.error(`${new Date().toISOString()} ${message}`);
+};
+const logControllerError = (error: Error) => {
+  const connection = error.message.includes('connection=') ? '' : 'connection=aggregate ';
+  const phase = error.message.includes('phase=') ? '' : 'phase=controller ';
+  console.error(`${new Date().toISOString()} FAIL-CLOSED ${connection}${phase}${error.message}`);
+};
 
 async function loadDedicatedChartRef(): Promise<TradingViewDedicatedChartRef> {
   try {
@@ -205,6 +214,8 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
       accountSpec: context.accountSpec,
       accountSpecsByAccountId,
       getAccessToken: context.getAccessToken,
+      connectionLabel: connectionLabel(context.connectionId),
+      onReconnectDiagnostic: logReconnectDiagnostic,
     });
     await runLocalAgent([context], leaderId, followerId, accounts, broker);
     return;
@@ -238,7 +249,8 @@ async function runMultiConnectionAgent(): Promise<void> {
       getAccessToken: context.getAccessToken,
       // Do chybových hlášek: bez štítku nejde z logu poznat, které OAuth
       // spojení (propfirma) vypadlo.
-      connectionLabel: `conn:${entry.connectionId.slice(0, 8)}`,
+      connectionLabel: connectionLabel(entry.connectionId),
+      onReconnectDiagnostic: logReconnectDiagnostic,
     });
     return { context, accounts: data.accounts, broker };
   }));
@@ -619,7 +631,7 @@ async function runLocalAgent(
       onAudit: entries => {
         auditTail = auditTail.then(() => writeAudit(entries));
       },
-      onError: error => console.error(`${new Date().toISOString()} FAIL-CLOSED ${error.message}`),
+      onError: logControllerError,
       // Trade event -> okamžitý poll s příznakem -> server pushne hned.
       onCopyEvent: event => {
         relay?.nudgeCopyEvents();
@@ -1111,6 +1123,8 @@ async function runPreflight(
     accountSpec: context.accountSpec,
     accountSpecsByAccountId,
     getAccessToken: context.getAccessToken,
+    connectionLabel: connectionLabel(context.connectionId),
+    onReconnectDiagnostic: logReconnectDiagnostic,
   });
   let connected = false;
   let transportError: Error | null = null;
@@ -1200,6 +1214,8 @@ async function runRuntime(
     accountSpec: context.accountSpec,
     accountSpecsByAccountId,
     getAccessToken: context.getAccessToken,
+    connectionLabel: connectionLabel(context.connectionId),
+    onReconnectDiagnostic: logReconnectDiagnostic,
   });
   const group: CopyGroupConfig = {
     id: `pilot-${leaderId}-${followerId}`,
@@ -1294,7 +1310,7 @@ async function runRuntime(
       onAudit: entries => {
         auditTail = auditTail.then(() => writeAudit(entries));
       },
-      onError: error => console.error(`${new Date().toISOString()} FAIL-CLOSED ${error.message}`),
+      onError: logControllerError,
     });
     await waitUntil(() => controller?.status().connected === true, 15_000, 'WebSocket sync timeout');
     const reconciliation = await controller.reconcile();

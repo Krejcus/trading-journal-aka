@@ -2364,6 +2364,49 @@ describe('auto day-lock z denní ztráty leadera', () => {
 });
 
 describe('reconciliation vs abandoned cancel/modify', () => {
+  it('po pěti selháních recovery další connected event spustí novou recovery vlnu', async () => {
+    const broker = createMockBroker();
+    const onError = vi.fn();
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      wait: async () => undefined,
+      onError,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    const originalCapabilities = broker.listAccountCapabilities.bind(broker);
+    let reconciliationAttempts = 0;
+    broker.listAccountCapabilities = async accountIds => {
+      reconciliationAttempts += 1;
+      if (reconciliationAttempts <= 5) throw new Error(`rest unavailable ${reconciliationAttempts}`);
+      return originalCapabilities(accountIds);
+    };
+
+    broker.emitEvent({ type: 'connection', connected: true, resynced: true, at: 500 });
+    await controller.waitForIdle();
+    expect(reconciliationAttempts).toBe(5);
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: true,
+    });
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining('phase=reconciliation'),
+    }));
+
+    broker.emitEvent({ type: 'connection', connected: true, at: 600 });
+    await controller.waitForIdle();
+    expect(reconciliationAttempts).toBe(6);
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: false,
+    });
+    controller.stop();
+  });
+
   it('plánovaný resync za LIVE ARM a flat účty skončí čistě DISARMED', async () => {
     const broker = createMockBroker();
     const controller = await bootstrapCopierRuntime({

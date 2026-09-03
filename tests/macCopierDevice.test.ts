@@ -189,4 +189,52 @@ describe('mac copier device', () => {
     ])).resolves.toEqual(['access-token-2', 'access-token-2', 'access-token-2']);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
+
+  it('po selhání refreshe vrátí ještě bezpečně platný token, ale ne token s dvouminutovou rezervou', async () => {
+    root = await mkdtemp(resolve(tmpdir(), 'alphatrade-mac-device-'));
+    const secrets = new Map<string, string>();
+    const secretStore: MacCopierSecretStore = {
+      read: async id => secrets.get(id) ?? Promise.reject(new Error('missing')),
+      write: async (id, value) => { secrets.set(id, value); },
+    };
+    const connectionId = crypto.randomUUID();
+    let now = Date.parse('2026-09-03T05:00:00.000Z');
+    const config = await createMacCopierDevice({
+      configPath: resolve(root, 'device.json'),
+      connectionId,
+      apiOrigin: 'https://alpha.example',
+      secretStore,
+      now,
+    });
+    const publicKey = await readFile(config.publicKeyPath, 'utf8');
+    const fetchImpl = vi.fn(async () => {
+      if (fetchImpl.mock.calls.length > 1) throw new Error('refresh unavailable');
+      return Response.json({
+        envelope: sealTradovatePilotLease({
+          version: 1,
+          environment: 'demo',
+          connectionId,
+          accountSpec: 'demo-user',
+          accessToken: 'still-valid-token',
+          issuedAt: new Date(now).toISOString(),
+          expiresAt: new Date(now + 60 * 60_000).toISOString(),
+        }, publicKey, now),
+      });
+    });
+    const provider = createMacCopierDeviceTokenProvider({
+      config,
+      secretStore,
+      fetchImpl: fetchImpl as typeof fetch,
+      clock: () => now,
+      minimumValidityMs: 45 * 60_000,
+      fallbackMinimumValidityMs: 5 * 60_000,
+    });
+
+    await expect(provider.getAccessToken()).resolves.toBe('still-valid-token');
+    now += 30 * 60_000;
+    await expect(provider.getAccessToken()).resolves.toBe('still-valid-token');
+    now += 28 * 60_000;
+    await expect(provider.getAccessToken()).rejects.toThrow('phase=lease-fetch');
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
 });

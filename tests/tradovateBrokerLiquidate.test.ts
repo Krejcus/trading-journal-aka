@@ -97,7 +97,10 @@ describe('Tradovate native emergency liquidation', () => {
 
     await expect(broker.liquidatePosition?.({
       tag: 'emergency-flat-200', accountId: 200, symbol: 'MNQU6',
-    })).resolves.toMatchObject({ status: 'indeterminate', reason: 'socket lost' });
+    })).resolves.toMatchObject({
+      status: 'indeterminate',
+      reason: expect.stringContaining('phase=rest socket lost'),
+    });
   });
 
   it('preserves an explicit HTTP rejection separately from an indeterminate transport failure', async () => {

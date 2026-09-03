@@ -121,6 +121,13 @@ export interface TradovateBrokerConfig {
   setTimeoutImpl?: typeof setTimeout;
   clearTimeoutImpl?: typeof clearTimeout;
   reconnectDelayMs?: number;
+  reconnectMaxDelayMs?: number;
+  reconnectJitterRatio?: number;
+  random?: () => number;
+  connectTimeoutMs?: number;
+  closeTimeoutMs?: number;
+  disconnectedLogIntervalMs?: number;
+  onReconnectDiagnostic?: (message: string) => void;
   syncTimeoutMs?: number;
   socketIdleTimeoutMs?: number;
   /**
@@ -223,6 +230,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   let socket: WebSocketLike | null = null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let reconnect: ReturnType<typeof setTimeout> | null = null;
+  let reconnectAt = 0;
+  let connectWatchdog: ReturnType<typeof setTimeout> | null = null;
+  let closeWatchdog: ReturnType<typeof setTimeout> | null = null;
+  let closeDeadlineAt = 0;
+  let disconnectedLog: ReturnType<typeof setInterval> | null = null;
   let syncTimeout: ReturnType<typeof setTimeout> | null = null;
   let syncRetry: ReturnType<typeof setTimeout> | null = null;
   let socketMessageTail: Promise<void> = Promise.resolve();
@@ -254,7 +266,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       false,
     );
   };
-  let reconnectBackoffMs: number | null = null;
+  type SocketState = 'idle' | 'connecting' | 'authorizing' | 'syncing' | 'connected' | 'closing' | 'waiting';
+  let socketState: SocketState = 'idle';
+  let reconnectFailures = 0;
+  let lastReconnectReason = 'subscribe';
+  let disconnectedSince = 0;
   let requestId = 2;
   let syncReady = false;
   /**
@@ -268,6 +284,21 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   let renewalHeldEvents: BrokerEvent[] = [];
   const withConnectionLabel = (message: string): string =>
     config.connectionLabel ? `${message} [${config.connectionLabel}]` : message;
+  const diagnosticLabel = config.connectionLabel?.trim() || 'connection:unlabeled';
+  const diagnostic = (message: string) => config.onReconnectDiagnostic?.(
+    `connection=${diagnosticLabel} ${message}`,
+  );
+  const contextualError = (
+    reason: unknown,
+    phase: 'token-lease' | 'rest' | 'websocket' | 'reconciliation',
+  ): Error => {
+    const error = reason instanceof Error ? reason : new Error(String(reason));
+    const prefix = `connection=${diagnosticLabel} phase=${phase}`;
+    if (!error.message.includes('connection=') || !error.message.includes('phase=')) {
+      error.message = `${prefix} ${error.message}`;
+    }
+    return error;
+  };
   const finishRenewal = () => {
     if (renewalDeadline) clearTimeouts(renewalDeadline);
     renewalDeadline = null;
@@ -294,11 +325,15 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   };
 
   const token = async () => {
-    const value = config.getAccessToken ? await config.getAccessToken() : config.accessToken;
-    if (typeof value !== 'string' || value.trim().length === 0) {
-      throw new TradovateTransportError('Tradovate access token is missing');
+    try {
+      const value = config.getAccessToken ? await config.getAccessToken() : config.accessToken;
+      if (typeof value !== 'string' || value.trim().length === 0) {
+        throw new TradovateTransportError('Tradovate access token is missing');
+      }
+      return value.trim();
+    } catch (reason) {
+      throw contextualError(reason, 'token-lease');
     }
-    return value.trim();
   };
 
   const accountSpecFor = (accountId: number): string => {
@@ -309,7 +344,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     return value.trim();
   };
 
-  const request = async <T>(path: string, init: RequestInit = {}, allowNotFound = false): Promise<T | null> => {
+  const requestRaw = async <T>(path: string, init: RequestInit = {}, allowNotFound = false): Promise<T | null> => {
     if (!fetchImpl) throw new TradovateTransportError('fetch is unavailable');
     assertNotRateLimited();
     const accessToken = await token();
@@ -363,6 +398,14 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     } catch (error) {
       if (error instanceof TradovateRateLimitError) throw error;
       throw new TradovateTransportError(`Tradovate ${path} returned malformed JSON`);
+    }
+  };
+
+  const request = async <T>(path: string, init: RequestInit = {}, allowNotFound = false): Promise<T | null> => {
+    try {
+      return await requestRaw<T>(path, init, allowNotFound);
+    } catch (reason) {
+      throw contextualError(reason, 'rest');
     }
   };
 
@@ -718,10 +761,15 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
                   ...syncRequestBody,
                   'p-ticket': penalty['p-ticket'],
                 }, 1);
-                syncTimeout = timeouts(() => socket?.close(), config.syncTimeoutMs ?? 5_000);
+                syncTimeout = timeouts(() => {
+                  const candidate = socket;
+                  if (candidate) closeSocket(candidate, 'sync-retry-timeout');
+                }, config.syncTimeoutMs ?? 5_000);
               } catch (reason) {
-                emitOrHoldError(reason instanceof Error ? reason : new Error(String(reason)));
-                socket?.close();
+                emitOrHoldError(contextualError(reason, 'websocket'));
+                const candidate = socket;
+                if (candidate) closeSocket(candidate, 'sync-retry-error');
+                else scheduleReconnect('sync-retry-error');
               }
             }, delay);
           }
@@ -741,6 +789,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     }
     if (value.i === 0) {
       if (value.s !== 200) throw new TradovateTransportError('WebSocket authorization failed');
+      socketState = 'syncing';
       sendSocketRequest('user/syncrequest', syncRequestBody, 1);
       return;
     }
@@ -758,6 +807,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (syncRetry) clearTimeouts(syncRetry);
         syncRetry = null;
         syncReady = true;
+        socketState = 'connected';
+        reconnectFailures = 0;
+        stopDisconnectedLog();
         // Dokončená plánovaná obměna: controller výpadek nikdy neviděl,
         // redundantní `connected: true` je neškodné a srovná heartbeat.
         const wasRenewal = renewalInProgress;
@@ -776,6 +828,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     lastSocketMessageAt = clock();
     emit({ type: 'heartbeat', at: lastSocketMessageAt });
     if (raw === 'o') {
+      socketState = 'authorizing';
       socket?.send(`authorize\n0\n\n${await token()}`);
       return;
     }
@@ -788,79 +841,242 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     for (const message of messages) await handleMessageObject(message);
   };
 
-  const ensureSocket = () => {
+  const clearSocketTimers = () => {
+    if (connectWatchdog) clearTimeouts(connectWatchdog);
+    connectWatchdog = null;
+    if (closeWatchdog) clearTimeouts(closeWatchdog);
+    closeWatchdog = null;
+    closeDeadlineAt = 0;
+    if (syncTimeout) clearTimeouts(syncTimeout);
+    syncTimeout = null;
+    if (syncRetry) clearTimeouts(syncRetry);
+    syncRetry = null;
+    if (heartbeat) clearIntervals(heartbeat);
+    heartbeat = null;
+  };
+
+  const stopDisconnectedLog = () => {
+    if (disconnectedLog) clearIntervals(disconnectedLog);
+    disconnectedLog = null;
+    disconnectedSince = 0;
+  };
+
+  const startDisconnectedLog = () => {
+    if (!disconnectedSince) disconnectedSince = clock();
+    if (disconnectedLog || listeners.size === 0) return;
+    const intervalMs = Math.min(60_000, Math.max(1_000, config.disconnectedLogIntervalMs ?? 60_000));
+    disconnectedLog = intervals(() => {
+      if (listeners.size === 0 || socketState === 'connected') return;
+      const now = clock();
+      diagnostic([
+        'WS DISCONNECTED',
+        `state=${socketState}`,
+        `attempt=${reconnectFailures + 1}`,
+        `lastReason=${lastReconnectReason}`,
+        `nextAttemptIn=${Math.max(0, Math.ceil((reconnectAt - now) / 1_000))}s`,
+        `disconnectedFor=${Math.max(0, Math.floor((now - disconnectedSince) / 1_000))}s`,
+      ].join(' '));
+    }, intervalMs);
+  };
+
+  const reconnectDelay = (minimumDelayMs: number): number => {
+    const base = Math.max(1, config.reconnectDelayMs ?? 1_000);
+    const cap = Math.max(base, config.reconnectMaxDelayMs ?? 60_000);
+    const exponential = Math.min(cap, base * (2 ** Math.min(reconnectFailures - 1, 30)));
+    const ratio = Math.min(1, Math.max(0, config.reconnectJitterRatio ?? 0.2));
+    const random = Math.min(1, Math.max(0, (config.random ?? Math.random)()));
+    const jittered = Math.round(exponential * (1 - ratio + (2 * ratio * random)));
+    return Math.max(minimumDelayMs, Math.min(cap, Math.max(1, jittered)));
+  };
+
+  const scheduleReconnect = (reason: string, minimumDelayMs = 0) => {
+    lastReconnectReason = reason;
+    startDisconnectedLog();
+    if (listeners.size === 0) return;
+    if (reconnect) {
+      const minimumAt = clock() + minimumDelayMs;
+      if (minimumAt <= reconnectAt) return;
+      clearTimeouts(reconnect);
+      reconnect = null;
+      reconnectAt = 0;
+    } else {
+      reconnectFailures += 1;
+    }
+    const delay = reconnectDelay(minimumDelayMs);
+    reconnectAt = clock() + delay;
+    if (!socket || socketState === 'waiting' || socketState === 'idle') socketState = 'waiting';
+    diagnostic(
+      `WS RECONNECT attempt=${reconnectFailures + 1} reason=${reason} nextAttemptIn=${(delay / 1_000).toFixed(3)}s`,
+    );
+    const run = () => {
+      reconnect = null;
+      reconnectAt = 0;
+      if (listeners.size === 0) return;
+      if (socket) {
+        const waitForClose = Math.max(1, closeDeadlineAt - clock());
+        reconnectAt = clock() + waitForClose;
+        reconnect = timeouts(run, waitForClose);
+        return;
+      }
+      ensureSocket(lastReconnectReason);
+    };
+    reconnect = timeouts(run, delay);
+  };
+
+  const releaseSocket = (candidate: WebSocketLike) => {
+    if (socket !== candidate) return false;
+    candidate.onopen = null;
+    candidate.onmessage = null;
+    candidate.onerror = null;
+    candidate.onclose = null;
+    socket = null;
+    socketState = 'idle';
+    syncReady = false;
+    clearSocketTimers();
+    return true;
+  };
+
+  const closeSocket = (candidate: WebSocketLike, reason: string, minimumDelayMs = 0) => {
+    if (socket !== candidate) return;
+    socketState = 'closing';
+    if (connectWatchdog) clearTimeouts(connectWatchdog);
+    connectWatchdog = null;
+    if (syncTimeout) clearTimeouts(syncTimeout);
+    syncTimeout = null;
+    if (syncRetry) clearTimeouts(syncRetry);
+    syncRetry = null;
+    if (heartbeat) clearIntervals(heartbeat);
+    heartbeat = null;
+    scheduleReconnect(reason, minimumDelayMs);
+    try {
+      candidate.close();
+    } catch (closeReason) {
+      emitOrHoldError(contextualError(closeReason, 'websocket'));
+      if (releaseSocket(candidate)) scheduleReconnect(`${reason}:close-throw`, minimumDelayMs);
+      return;
+    }
+    if (socket !== candidate) return;
+    const closeTimeoutMs = Math.max(1, config.closeTimeoutMs ?? 5_000);
+    closeDeadlineAt = clock() + closeTimeoutMs;
+    closeWatchdog = timeouts(() => {
+      closeWatchdog = null;
+      closeDeadlineAt = 0;
+      if (socket !== candidate) return;
+      diagnostic(`WS CLOSE WATCHDOG state=${socketState} reason=${reason}`);
+      releaseSocket(candidate);
+      scheduleReconnect(`${reason}:close-watchdog`, minimumDelayMs);
+    }, closeTimeoutMs);
+  };
+
+  function ensureSocket(reason = 'subscribe') {
     if (socket || listeners.size === 0) return;
     const factory = config.webSocketFactory ?? ((url: string) => {
       if (typeof WebSocket === 'undefined') throw new TradovateTransportError('WebSocket is unavailable');
       return new WebSocket(url) as unknown as WebSocketLike;
     });
-    socket = factory(hosts.websocket);
+    socketState = 'connecting';
+    diagnostic(`WS CONNECT attempt=${reconnectFailures + 1} reason=${reason}`);
+    let candidate: WebSocketLike;
+    try {
+      candidate = factory(hosts.websocket);
+    } catch (factoryReason) {
+      emitOrHoldError(contextualError(factoryReason, 'websocket'));
+      if (!renewalInProgress) emit({ type: 'connection', connected: false, at: clock() });
+      socketState = 'idle';
+      scheduleReconnect('factory-throw');
+      return;
+    }
+    socket = candidate;
     syncReady = false;
     socketMessageTail = Promise.resolve();
-    socket.onopen = () => {
+    connectWatchdog = timeouts(() => {
+      connectWatchdog = null;
+      if (socket !== candidate || candidate.readyState === 1) return;
+      emitOrHoldError(contextualError(
+        new TradovateTransportError('Tradovate WebSocket connect timeout'),
+        'websocket',
+      ));
+      if (!renewalInProgress) emit({ type: 'connection', connected: false, at: clock() });
+      closeSocket(candidate, 'connect-watchdog');
+    }, Math.max(1, config.connectTimeoutMs ?? 10_000));
+    candidate.onopen = () => {
+      if (socket !== candidate) return;
+      if (connectWatchdog) clearTimeouts(connectWatchdog);
+      connectWatchdog = null;
+      socketState = 'authorizing';
       lastSocketMessageAt = clock();
       lastHeartbeatSentAt = 0;
-      syncTimeout = timeouts(() => socket?.close(), config.syncTimeoutMs ?? 5_000);
+      syncTimeout = timeouts(() => {
+        if (socket !== candidate) return;
+        emitOrHoldError(contextualError(
+          new TradovateTransportError('Tradovate WebSocket sync timeout'),
+          'websocket',
+        ));
+        closeSocket(candidate, 'sync-timeout');
+      }, config.syncTimeoutMs ?? 5_000);
     };
-    socket.onmessage = event => {
+    candidate.onmessage = event => {
+      if (socket !== candidate) return;
       socketMessageTail = socketMessageTail
         .then(() => handleSocketData(event.data))
         .catch(reason => {
-          const error = reason instanceof Error ? reason : new Error(String(reason));
+          if (socket !== candidate) return;
+          const error = contextualError(reason, 'websocket');
+          let minimumDelayMs = 0;
           if (error instanceof TradovateRateLimitError) {
-            reconnectBackoffMs = error.captchaRequired
+            minimumDelayMs = error.captchaRequired
               ? 60 * 60 * 1_000
               : Math.max(error.retryAfterMs ?? 0, config.reconnectDelayMs ?? 1_000);
           }
           emitOrHoldError(error);
-          socket?.close();
+          closeSocket(candidate, 'socket-message-error', minimumDelayMs);
         });
     };
-    socket.onerror = () => {
-      emitOrHoldError(new TradovateTransportError(withConnectionLabel('Tradovate WebSocket transport error')));
+    candidate.onerror = () => {
+      if (socket !== candidate) return;
+      emitOrHoldError(contextualError(
+        new TradovateTransportError(withConnectionLabel('Tradovate WebSocket transport error')),
+        'websocket',
+      ));
       if (!renewalInProgress) emit({ type: 'connection', connected: false, at: clock() });
-      socket?.close();
+      closeSocket(candidate, 'socket-error');
     };
-    socket.onclose = () => {
+    candidate.onclose = () => {
+      if (socket !== candidate) return;
       if (!renewalInProgress) emit({ type: 'connection', connected: false, at: clock() });
-      socket = null;
-      syncReady = false;
-      if (syncTimeout) clearTimeouts(syncTimeout);
-      syncTimeout = null;
-      if (syncRetry) clearTimeouts(syncRetry);
-      syncRetry = null;
-      if (heartbeat) clearIntervals(heartbeat);
-      heartbeat = null;
-      if (listeners.size > 0 && !reconnect) {
-        const delay = reconnectBackoffMs ?? config.reconnectDelayMs ?? 1_000;
-        reconnectBackoffMs = null;
-        reconnect = timeouts(() => {
-          reconnect = null;
-          ensureSocket();
-        }, delay);
-      }
+      releaseSocket(candidate);
+      scheduleReconnect(renewalInProgress ? 'planned-renewal' : 'socket-close');
     };
     heartbeat = intervals(() => {
-      if (socket?.readyState !== 1) return;
+      if (socket !== candidate || candidate.readyState !== 1) return;
       const now = clock();
       if (now - lastSocketMessageAt >= (config.socketIdleTimeoutMs ?? 15_000)) {
         emit({
           type: 'error',
-          error: new TradovateTransportError(withConnectionLabel('Tradovate WebSocket heartbeat timeout')),
+          error: contextualError(
+            new TradovateTransportError(withConnectionLabel('Tradovate WebSocket heartbeat timeout')),
+            'websocket',
+          ),
           at: now,
         });
-        socket.close();
+        closeSocket(candidate, 'heartbeat-timeout');
         return;
       }
       if (
         now - lastSocketMessageAt >= TRADOVATE_HEARTBEAT_MS
         && now - lastHeartbeatSentAt >= TRADOVATE_HEARTBEAT_MS
       ) {
-        socket.send('[]');
-        lastHeartbeatSentAt = now;
+        try {
+          candidate.send('[]');
+          lastHeartbeatSentAt = now;
+        } catch (reason) {
+          emitOrHoldError(contextualError(reason, 'websocket'));
+          if (!renewalInProgress) emit({ type: 'connection', connected: false, at: clock() });
+          closeSocket(candidate, 'heartbeat-send-error');
+        }
       }
     }, 500);
-  };
+  }
 
   return {
     environment: config.environment,
@@ -1037,15 +1253,22 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         for (const heldEvent of held) emit(heldEvent);
         emit({
           type: 'error',
-          error: new TradovateTransportError(withConnectionLabel('Tradovate WebSocket renewal timeout')),
+          error: contextualError(
+            new TradovateTransportError(withConnectionLabel('Tradovate WebSocket renewal timeout')),
+            'websocket',
+          ),
           at: clock(),
         });
         // Flag už je shozený, takže disconnect ohlásí onclose; bez živého
         // socketu (mezera mezi close a reconnectem) ho ohlásíme sami.
-        if (socket && socket.readyState !== 3) socket.close();
-        else emit({ type: 'connection', connected: false, at: clock() });
+        const candidate = socket;
+        if (candidate && candidate.readyState !== 3) closeSocket(candidate, 'renewal-deadline');
+        else {
+          emit({ type: 'connection', connected: false, at: clock() });
+          scheduleReconnect('renewal-deadline');
+        }
       }, config.renewalDeadlineMs ?? 15_000);
-      socket.close();
+      closeSocket(socket, 'planned-renewal');
       return true;
     },
     subscribe(listener) {
@@ -1056,14 +1279,23 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (listeners.size === 0) {
           if (reconnect) clearTimeouts(reconnect);
           reconnect = null;
-          if (syncTimeout) clearTimeouts(syncTimeout);
-          syncTimeout = null;
-          if (syncRetry) clearTimeouts(syncRetry);
-          syncRetry = null;
-          if (heartbeat) clearIntervals(heartbeat);
-          heartbeat = null;
+          reconnectAt = 0;
+          reconnectFailures = 0;
+          stopDisconnectedLog();
+          if (renewalInProgress) finishRenewal();
           orderWaiters.clear();
-          socket?.close();
+          const candidate = socket;
+          if (candidate) {
+            releaseSocket(candidate);
+            try {
+              candidate.close();
+            } catch {
+              // Poslední listener už neexistuje; žádný reconnect se neplánuje.
+            }
+          } else {
+            clearSocketTimers();
+          }
+          socketState = 'idle';
         }
       };
     },

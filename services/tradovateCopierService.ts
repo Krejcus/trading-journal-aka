@@ -94,6 +94,7 @@ export async function startMultiTradovateCopier(
         accountSpecsByAccountId: connection.accountSpecsByAccountId,
         getAccessToken: connection.getAccessToken,
         ...connection.transport,
+        connectionLabel: connection.transport?.connectionLabel ?? `conn:${connection.id.slice(0, 8)}`,
       }),
     };
   });

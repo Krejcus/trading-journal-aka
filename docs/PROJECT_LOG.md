@@ -143,6 +143,34 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-03 (Codex, konečný Tradovate WebSocket reconnect automat)
+
+Tradovate broker má explicitní socket stavy a jediný idempotentní plánovač
+reconnectu. Každý kandidátní socket je identity-guarded; 10s connect watchdog
+a 5s close watchdog jej uvolní i bez `onclose`, synchronní chyba factory i
+chyby authorize/streamu plánují další pokus nezávisle na callbacku. Retry běží
+exponenciálně s jitterem od 1 s do 60 s, rate-limit/captcha zůstává minimální
+delší prodleva a počítadlo se resetuje až po úplném authorization + sync.
+Worker loguje connection, fázi, číslo/důvod pokusu, příští delay a při delším
+výpadku nejméně minutový souhrn; opožděné handlery starého socketu nový socket
+nemohou shodit a poslední unsubscribe ukončí retry i diagnostické timery.
+
+Mac device token provider dál nemá vlastní retry smyčku: neúspěšný refresh
+vrátí poslední payload jen nad oddělenou 5min bezpečnostní rezervou, jinak
+propaguje fázovanou chybu. Controller po pěti neúspěšných post-connect
+reconciliation pokusech zůstane DISARMED/fail-closed, ale znovu nastaví
+`pendingConnectionRecovery`, takže další `connected:true` event spustí novou
+vlnu. Order/fill cesty, `emitOrHoldError`, reconnect reconciliation i zákaz
+automatického ARM zůstaly beze změny.
+
+Deterministické regrese kryjí visící CONNECTING, chybějící `onclose`, factory
+throw, tři chyby tokenu a čtvrtý úspěch, backoff strop/reset/rate minimum,
+pětiminutové souhrny, stale-token rezervu, opožděný starý callback, unsubscribe
+a druhou controller recovery vlnu. Finální sada prošla 222/222 souborů a
+1831/1831 testů, strict TypeScript bez výstupu, produkční Vite/PWA build,
+cílený ESLint a `git diff --check`. Nic nebylo commitnuto, pushnuto,
+deploynuto ani spuštěno na workeru/brokeru; neproběhl ARM, DISARM ani Flatten.
+
 ### 2026-09-03 (Claude + uživatel, návrh auto-otevření companionu při změně stavu)
 
 Companion po merge do `main` běží a ukazuje skutečný stav (ZÁSAH NUTNÝ:

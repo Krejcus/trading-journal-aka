@@ -145,20 +145,36 @@ export function createMacCopierDeviceTokenProvider(options: {
   fetchImpl?: typeof fetch;
   clock?: () => number;
   minimumValidityMs?: number;
+  fallbackMinimumValidityMs?: number;
   requestTimeoutMs?: number;
 }) {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const clock = options.clock ?? Date.now;
-  const minimumValidityMs = Math.max(5 * 60_000, options.minimumValidityMs ?? 10 * 60_000);
+  const fallbackMinimumValidityMs = Math.max(60_000, options.fallbackMinimumValidityMs ?? 5 * 60_000);
+  const minimumValidityMs = Math.max(
+    fallbackMinimumValidityMs,
+    options.minimumValidityMs ?? 10 * 60_000,
+  );
   const requestTimeoutMs = Math.max(1_000, options.requestTimeoutMs ?? 10_000);
   let payload: TradovatePilotLeasePayload | null = null;
   let renewal: Promise<TradovatePilotLeasePayload> | null = null;
+  const providerError = (phase: string, reason: unknown): Error => {
+    const error = reason instanceof Error ? reason : new Error(String(reason));
+    const label = options.config.connectionId.slice(0, 8);
+    if (!error.message.includes('phase=')) error.message = `connection=conn:${label} phase=${phase} ${error.message}`;
+    return error;
+  };
 
   const refresh = async (): Promise<TradovatePilotLeasePayload> => {
     if (renewal) return renewal;
     renewal = (async () => {
-      if (!fetchImpl) throw new Error('mac-copier-fetch-unavailable');
-      const secret = await (options.secretStore ?? macOsKeychainCopierSecretStore).read(options.config.deviceId);
+      if (!fetchImpl) throw providerError('lease-fetch', new Error('mac-copier-fetch-unavailable'));
+      let secret: string;
+      try {
+        secret = await (options.secretStore ?? macOsKeychainCopierSecretStore).read(options.config.deviceId);
+      } catch (reason) {
+        throw providerError('keychain', reason);
+      }
       const requestAbort = new AbortController();
       const timeout = setTimeout(
         () => requestAbort.abort(new Error('mac-copier-lease-timeout')),
@@ -166,44 +182,74 @@ export function createMacCopierDeviceTokenProvider(options: {
       );
       timeout.unref();
       try {
-        const response = await fetchImpl(`${options.config.apiOrigin}/api/tradovate/oauth/pilot-lease`, {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            Authorization: `Device ${options.config.deviceId}.${secret}`,
-            'Content-Type': 'application/json',
-          },
-          body: '{}',
-          signal: requestAbort.signal,
-        });
+        let response: Response;
+        try {
+          response = await fetchImpl(`${options.config.apiOrigin}/api/tradovate/oauth/pilot-lease`, {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json',
+              Authorization: `Device ${options.config.deviceId}.${secret}`,
+              'Content-Type': 'application/json',
+            },
+            body: '{}',
+            signal: requestAbort.signal,
+          });
+        } catch (reason) {
+          throw providerError('lease-fetch', requestAbort.signal.aborted
+            ? requestAbort.signal.reason ?? reason
+            : reason);
+        }
         let body: { envelope?: TradovatePilotLeaseEnvelope; error?: string };
         try {
           body = await response.json() as typeof body;
-        } catch (error) {
-          if (requestAbort.signal.aborted) throw requestAbort.signal.reason ?? error;
-          body = {};
+        } catch (reason) {
+          throw providerError('lease-body', requestAbort.signal.aborted
+            ? requestAbort.signal.reason ?? reason
+            : reason);
         }
-        if (!response.ok || !body.envelope) throw new Error(body.error || `mac-copier-lease-http-${response.status}`);
-        const privateKey = await readFile(resolve(options.config.privateKeyPath), 'utf8');
-        const opened = openTradovatePilotLease(body.envelope, privateKey, clock());
-        if (opened.connectionId !== options.config.connectionId) throw new Error('mac-copier-lease-connection-mismatch');
+        if (!response.ok || !body.envelope) {
+          throw providerError('lease-body', new Error(body.error || `mac-copier-lease-http-${response.status}`));
+        }
+        let opened: TradovatePilotLeasePayload;
+        try {
+          const privateKey = await readFile(resolve(options.config.privateKeyPath), 'utf8');
+          opened = openTradovatePilotLease(body.envelope, privateKey, clock());
+        } catch (reason) {
+          throw providerError('decrypt-or-expiry', reason);
+        }
+        if (opened.connectionId !== options.config.connectionId) {
+          throw providerError('lease-identity', new Error('mac-copier-lease-connection-mismatch'));
+        }
         payload = opened;
         return opened;
       } finally {
         clearTimeout(timeout);
       }
-    })().finally(() => { renewal = null; });
+    })().catch(reason => {
+      if (payload && Date.parse(payload.expiresAt) - clock() > fallbackMinimumValidityMs) return payload;
+      throw reason;
+    }).finally(() => { renewal = null; });
     return renewal;
   };
 
   return {
     refresh,
     async authorizationHeader(): Promise<string> {
-      const secret = await (options.secretStore ?? macOsKeychainCopierSecretStore).read(options.config.deviceId);
-      return `Device ${options.config.deviceId}.${secret}`;
+      try {
+        const secret = await (options.secretStore ?? macOsKeychainCopierSecretStore).read(options.config.deviceId);
+        return `Device ${options.config.deviceId}.${secret}`;
+      } catch (reason) {
+        throw providerError('keychain', reason);
+      }
     },
     async getAccessToken(): Promise<string> {
-      if (!payload || Date.parse(payload.expiresAt) - clock() <= minimumValidityMs) await refresh();
+      if (!payload || Date.parse(payload.expiresAt) - clock() <= minimumValidityMs) {
+        try {
+          await refresh();
+        } catch (reason) {
+          if (!payload || Date.parse(payload.expiresAt) - clock() <= fallbackMinimumValidityMs) throw reason;
+        }
+      }
       if (!payload) throw new Error('mac-copier-lease-unavailable');
       return payload.accessToken;
     },

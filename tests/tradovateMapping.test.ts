@@ -608,7 +608,7 @@ describe('createTradovateBroker WebSocket', () => {
     expect(errors[0]).toMatchObject({ name: 'TradovateRateLimitError', retryAfterMs: 15_000 });
     expect(closed).toBe(1);
     socket.onclose?.();
-    expect(reconnectDelays).toEqual([15_000]);
+    expect(reconnectDelays).toContain(15_000);
     unsubscribe();
   });
 
