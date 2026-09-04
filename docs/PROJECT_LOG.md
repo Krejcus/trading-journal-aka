@@ -31,7 +31,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   ARM expiruje nejpozději v 17:00 America/Chicago a otevřené kopie
   risk-redukčně zavře (`safety.armExpiryFlatten`, default `followers`);
   auto day-lock z denní ztráty leadera (`safety.dailyLossLimitUsd`,
-  `dailyMaxLosingTrades`) — zamyká až po flat, nikdy uprostřed obchodu.
+  `dailyMaxLosingTrades`), počtu uzavřených obchodů (`dailyMaxTrades`) a konce
+  volitelného `tradingWindow` — zamyká až po flat, nikdy uprostřed obchodu.
 - **Další fáze**: přesun runtime na VPS/Fly — plán v `COPIER_VPS_PLAN.md`.
   Fencing lease (`copierWorkerLease.ts` + migrace) a `supabaseCopierStore`
   s fence jsou napsané a ČEKAJÍ na VPS worker entry — vědomě nezapojené,
@@ -158,6 +159,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník (nejnovější nahoře)
+
+### 2026-09-04 (Codex, fáze A pravidel dne a zámku dne)
+
+Dokončena fáze A podle `docs/DAY_LOCK_RULES_SPEC_20260904.md`: safety parser
+na store/relay/controller hranicích doplňuje legacy defaulty, ale explicitně
+neplatné `dailyMaxTrades`/`tradingWindow` odmítá. Worker persistuje trigger,
+čas, snooze, auditované odemknutí, počet uzavřených leader obchodů, stav okna
+a jednorázová varování; všechny automatické i ruční locky používají společnou
+flat-only cestu. Entry mimo okno se pouze auditovaně blokuje, exit se nechává
+proběhnout, LIVE ARM mimo okno je odmítnut a `unlock-day` nikdy neARMuje.
+
+Relay/protocol, additivní companion contract v1, fail-closed server DTO a
+redigované push druhy `daylock-engaged`/`rule-warning` jsou doplněné. DB CHECK
+pro nový relay příkaz je připraven jako verzovaná migrace
+`20260904120000_allow_copier_day_lock_commands.sql`, ale nebyl aplikován na
+vzdálený Supabase; před aplikací je nutný samostatný backup/export a potom
+security/performance advisory. Nebyla měněna PWA fáze B ani Swift fáze C,
+neproběhl worker reinstall, broker akce ani produkční konfigurace.
+
+Ověření: relevantní worker/store/relay/DTO/notifikační sada 237/237 a local
+agent protocol 40/40, scoped ESLint bez nálezů, produkční Vite build prošel.
+Root `tsc --noEmit` dál selhává pouze na již existujícím chybějícím
+`chrome` typings a `@crxjs/vite-plugin` v `extension/`; změněné soubory v jeho
+výstupu nemají chybu. Úmyslně se nespouštěl `npm ci`/`npm install` ani plná
+testovací sada přesahující zadaný časový limit.
 
 ### 2026-09-04 (Claude + uživatel, schválený návrh „Pravidla dne + zámek dne")
 
