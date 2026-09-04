@@ -159,6 +159,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-04 (Claude + uživatel, schválený návrh „Pravidla dne + zámek dne")
+
+Uživatel schválil vizuál (canvas stránka „Zamčený den", `mockups/menubar-companion/Lock*.dc.html`)
+a zadal implementaci bodů 1 (zámek viditelný všude), 3 (automatické zámky
+z pravidel dne) a 5 (notifikace). Závazná specifikace:
+`docs/DAY_LOCK_RULES_SPEC_20260904.md` — nová pravidla `dailyMaxTrades` a
+`tradingWindow`, stav zámku s triggerem/snooze/unlock, příkaz `unlock-day`
+(jen z přihlášené PWA přes relay, nikdy neARMuje, snooze spouštějícího
+pravidla), varování N-1 / 80 % / 10 min před koncem okna, additivní DTO pro
+companion (`dayLock`, `dailyRules`), prezentace ZAMČENO v liště/popoveru,
+LIVE karta Pravidla dne s dialogem odemknutí, push druhy `daylock-engaged`
+a `rule-warning`. Fáze: A worker+relay+server, C companion (paralelně),
+B PWA (po A). Worker reinstall podle deploy politiky.
+
 ### 2026-09-03 (Claude + uživatel, rozhodnutí: broker-side day lock se nestaví)
 
 Po read-only sondě práv OAuth tokenu (viz zápis Codexe a capability report)
