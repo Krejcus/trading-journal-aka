@@ -160,6 +160,33 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-04 (Claude + uživatel, nasazení „Pravidla dne + zámek dne" — fáze A+B+C)
+
+Po uživatelově „kopírka je vyplá, můžeš komplet pokračovat a nasadit":
+1. Release větev `codex/daylock-release-20260904` = A (worker/relay/DTO)
+   + B (PWA karta Pravidla dne, banner, dialog Odemknout) + C (companion
+   build 17, ZAMČENO); ověřeno 105/105 cílených testů, typecheck, PWA build,
+   Swift Release build. Bezpečnostní jádro A prošlo ruční kontrolou:
+   `unlockDay` nikdy neARMuje a snoozuje jen spouštějící pravidlo, lock čeká
+   na flat, ARM i entry mimo okno blokované, relay validuje důvod.
+2. Supabase migrace `allow_copier_day_lock_commands` aplikována přes
+   konektor (CHECK na `command_type` nově obsahuje `lock-until-session-end`
+   a `unlock-day`; původní seznam neobsahoval ani lock — proto je změna
+   nutná pro oba příkazy; všechny existující řádky v novém seznamu).
+3. `main` fast-forward na `dcdac608` → auto-deploy serveru + PWA.
+4. Worker: stav před reinstallem hlásil 5 divergentních followerů +
+   `lastError` (leader flat, orphan kopie) — read-only reconciliation
+   (`copier:mac reconcile`) potvrdila `authoritativelyClean` a flagy vyčistila
+   bez broker příkazu. Záloha bundle+plist+config
+   `~/Documents/AlphaTrade-backups/2026-09-04-101235-copier-worker-before-daylock-reinstall`.
+   Reinstall `copier:mac install --adopt-durable-group` — durable skupina
+   (leader `64310872`, 5 followerů) je autoritativní, CLI followeři z plistu
+   jen fallback. Nový bundle `6eebfa95…`, služba běží, po startu VYPNUTO,
+   druhá read-only reconciliation: 0 divergencí, `lastError=null`.
+5. Companion build 17 nainstalován (záloha buildu 16).
+Žádný ARM, Flatten ani broker write neproběhl. Klasifikátor reinstall
+tentokrát neblokoval.
+
 ### 2026-09-04 (Codex, fáze B PWA Pravidla dne a odemknutí)
 
 LIVE přehled má nad dosavadním obsahem jednotnou kartu Pravidla dne podle
