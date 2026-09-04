@@ -15,6 +15,8 @@ final class MacCompanionFunctionalTests: XCTestCase {
         XCTAssertEqual(decoded.exposure.verifiedAt, nil)
         XCTAssertEqual(decoded.exposure.followerAck, nil)
         XCTAssertEqual(decoded.dailyStats?.label, "Leader · jen obchody přes kopírku · bez poplatků")
+        XCTAssertNil(decoded.dayLock)
+        XCTAssertNil(decoded.dailyRules)
 
         let wrongVerified = validStatusJSON()
             .replacingOccurrences(of: "\"verifiedMaxAgeSeconds\":10", with: "\"verifiedMaxAgeSeconds\":9")
@@ -27,6 +29,24 @@ final class MacCompanionFunctionalTests: XCTestCase {
         XCTAssertThrowsError(try MacCompanionStatusDecoder.decode(Data(wrongOffline.utf8))) { error in
             XCTAssertEqual(error as? MacCompanionStatusDecodingError, .invalidFreshnessPolicy)
         }
+    }
+
+    func testStatusDecoderAcceptsOptionalDayLockAndDailyRules() throws {
+        let decoded = try MacCompanionStatusDecoder.decode(Data(statusJSONWithDayLock().utf8))
+
+        XCTAssertEqual(decoded.contractVersion, 1)
+        XCTAssertEqual(decoded.dayLock?.active, true)
+        XCTAssertEqual(decoded.dayLock?.trigger, .losingTrades)
+        XCTAssertEqual(decoded.dayLock?.reason, "2 ztrátové obchody")
+        XCTAssertNil(decoded.dayLock?.unlocked)
+        XCTAssertEqual(decoded.dailyRules?.lossLimitUsd, 1_000)
+        XCTAssertEqual(decoded.dailyRules?.realizedLossUsd, -620)
+        XCTAssertEqual(decoded.dailyRules?.maxLosingTrades, 2)
+        XCTAssertEqual(decoded.dailyRules?.losingTrades, 2)
+        XCTAssertEqual(decoded.dailyRules?.maxTrades, 10)
+        XCTAssertEqual(decoded.dailyRules?.tradesToday, 4)
+        XCTAssertEqual(decoded.dailyRules?.window?.state, .inside)
+        XCTAssertEqual(decoded.dailyRules?.warnings.first?.rule, .losingTrades)
     }
 
     func testFreshnessUsesExactTenAndNinetySecondBoundaries() {
@@ -228,6 +248,122 @@ final class MacCompanionFunctionalTests: XCTestCase {
             ).menuBar.pillText,
             "?"
         )
+    }
+
+    func testDayLockReducerRequiresFreshVerifiedDisarmedStateAndYieldsToProblems() {
+        let rules = makeDailyRules()
+        let lock = makeDayLock(trigger: .losingTrades)
+        let locked = makeStatus(copierState: .disarmed, dayLock: lock, dailyRules: rules)
+
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(locked, now: referenceDate).displayState,
+            .locked
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                makeStatus(copierState: .disarmed, dailyRules: rules),
+                now: referenceDate
+            ).displayState,
+            .disarmedUnverified
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                makeStatus(copierState: .disarmed, brokerConnected: nil, dayLock: lock, dailyRules: rules),
+                now: referenceDate
+            ).displayState,
+            .unknown
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                makeStatus(
+                    copierState: .disarmed,
+                    divergences: [.init(symbol: "MNQ", account: "Follower 1", detail: "Rozdíl")],
+                    dayLock: lock,
+                    dailyRules: rules
+                ),
+                now: referenceDate
+            ).displayState,
+            .intervention(issueCount: 1)
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                locked,
+                now: referenceDate.addingTimeInterval(11)
+            ).displayState,
+            .unknown
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                locked,
+                now: referenceDate.addingTimeInterval(91)
+            ).displayState,
+            .offline
+        )
+    }
+
+    func testLockedFactoryUsesApprovedTextAndKeepsAmountsInsideDailyRules() throws {
+        let rules = makeDailyRules()
+        let lock = makeDayLock(trigger: .losingTrades)
+        let reduced = CompanionFreshnessReducer.reduce(
+            makeStatus(copierState: .disarmed, dayLock: lock, dailyRules: rules),
+            now: referenceDate
+        )
+        let presentation = CompanionRemotePresentationFactory.make(from: reduced, now: referenceDate)
+        let section = try XCTUnwrap(presentation.sections.first { $0.id == "daily-rules" })
+
+        XCTAssertEqual(presentation.displayState, .locked)
+        XCTAssertEqual(presentation.menuBar.pillText, "ZAMČENO")
+        XCTAssertEqual(presentation.menuBar.symbolName, "lock.fill")
+        XCTAssertEqual(presentation.menuBar.tone, .danger)
+        XCTAssertEqual(presentation.hero.title, "DEN ZAMČENÝ")
+        XCTAssertTrue(presentation.hero.badge?.hasPrefix("do ") == true)
+        XCTAssertTrue(presentation.hero.detail.contains("Automaticky v"))
+        XCTAssertTrue(presentation.hero.detail.contains("2 ztrátové obchody z 2"))
+        XCTAssertTrue(presentation.hero.supportingText?.contains("Odemknout jde jen v LIVE") == true)
+        XCTAssertTrue(section.isInitiallyExpanded)
+        XCTAssertEqual(section.summary, "1 pravidlo spuštěno")
+        XCTAssertTrue(section.rows.contains { row in
+            guard case .progress(let progress) = row else { return false }
+            return progress.id == "rule-losing-trades"
+                && progress.tone == .danger
+                && progress.progress == 1
+        })
+        XCTAssertEqual(presentation.footer.actions.map(\.id), [.openLive, .openJournal, .refresh, .copyDiagnostics])
+        XCTAssertEqual(presentation.footer.actions.first?.title, "Otevřít LIVE")
+        XCTAssertFalse(presentation.menuBar.accessibilityLabel.contains("620"))
+        XCTAssertFalse(presentation.hero.detail.contains("620"))
+        XCTAssertTrue(section.rows.flatMap(\.visibleText).joined(separator: " ").contains("620"))
+    }
+
+    func testManualLockReasonAndDailyRulesVisibilityMatrix() throws {
+        let rules = makeDailyRules()
+        let manual = makeDayLock(trigger: .manual, reason: "Dnes už ne, cítím tilt")
+        let lockedStatus = makeStatus(copierState: .disarmed, dayLock: manual, dailyRules: rules)
+        let lockedPresentation = CompanionRemotePresentationFactory.make(
+            from: CompanionFreshnessReducer.reduce(lockedStatus, now: referenceDate),
+            now: referenceDate
+        )
+        XCTAssertEqual(
+            lockedPresentation.hero.detail,
+            "Ručně v \(CompanionDisplayFormatting.shortTime(manual.at)) · „Dnes už ne, cítím tilt“"
+        )
+
+        let withoutRules = makeStatus(copierState: .disarmed, dayLock: manual)
+        let withoutRulesPresentation = CompanionRemotePresentationFactory.make(
+            from: CompanionFreshnessReducer.reduce(withoutRules, now: referenceDate),
+            now: referenceDate
+        )
+        XCTAssertFalse(withoutRulesPresentation.sections.contains { $0.id == "daily-rules" })
+
+        for state in [MacCompanionStatusDTO.CopierState.live, .disarmed] {
+            let status = makeStatus(copierState: state, dailyRules: rules)
+            let presentation = CompanionRemotePresentationFactory.make(
+                from: CompanionFreshnessReducer.reduce(status, now: referenceDate),
+                now: referenceDate
+            )
+            let dailyRules = try XCTUnwrap(presentation.sections.first { $0.id == "daily-rules" })
+            XCTAssertFalse(dailyRules.isInitiallyExpanded)
+        }
     }
 
     func testProblemProjectionDoesNotDoubleCountStructuredDivergence() {
@@ -732,7 +868,9 @@ private extension MacCompanionFunctionalTests {
         stuckOutboxCount: Int = 0,
         killSwitchTripped: Bool = false,
         exposure: MacCompanionStatusDTO.ExposureDTO? = nil,
-        problems: [MacCompanionStatusDTO.ProblemDTO] = []
+        problems: [MacCompanionStatusDTO.ProblemDTO] = [],
+        dayLock: MacCompanionStatusDTO.DayLockDTO? = nil,
+        dailyRules: MacCompanionStatusDTO.DailyRulesDTO? = nil
     ) -> MacCompanionStatusDTO {
         let observedAt = observedAt ?? referenceDate
         return MacCompanionStatusDTO(
@@ -748,12 +886,14 @@ private extension MacCompanionFunctionalTests {
                 : nil,
             worker: .init(lastHeartbeatAt: observedAt, location: .mac),
             brokerConnected: brokerConnected,
+            dayLock: dayLock,
+            dailyRules: dailyRules,
             safety: .init(
                 reconciliation: .init(status: reconciliation, at: nil),
                 divergences: divergences,
                 outbox: .init(stuckCount: stuckOutboxCount, oldestStuckMinutes: nil),
                 cooldownActive: false,
-                dayLockActive: false,
+                dayLockActive: dayLock?.active == true,
                 killSwitchTripped: killSwitchTripped
             ),
             exposure: exposure ?? .init(
@@ -803,5 +943,53 @@ private extension MacCompanionFunctionalTests {
           "ignoredFutureField":"allowed"
         }
         """
+    }
+
+    func statusJSONWithDayLock() -> String {
+        let at = CompanionISO8601.string(from: referenceDate.addingTimeInterval(-60))
+        let until = CompanionISO8601.string(from: referenceDate.addingTimeInterval(8 * 60 * 60))
+        let sessionEnds = CompanionISO8601.string(from: referenceDate.addingTimeInterval(8 * 60 * 60))
+        let warningAt = CompanionISO8601.string(from: referenceDate.addingTimeInterval(-120))
+        let fields = """
+          "dayLock":{"active":true,"until":"\(until)","at":"\(at)","trigger":"losing-trades","reason":"2 ztrátové obchody","unlocked":null},
+          "dailyRules":{"lossLimitUsd":1000,"realizedLossUsd":-620,"maxLosingTrades":2,"losingTrades":2,"maxTrades":10,"tradesToday":4,"window":{"enabled":true,"from":"15:30","to":"22:00","state":"inside"},"cooldownMinutes":15,"cooldownUntil":null,"sessionEndsAt":"\(sessionEnds)","warnings":[{"rule":"losing-trades","current":1,"limit":2,"at":"\(warningAt)"}]},
+        """
+        return validStatusJSON().replacingOccurrences(
+            of: "\"safety\":{",
+            with: fields + "\n  \"safety\":{"
+        )
+    }
+
+    func makeDayLock(
+        trigger: MacCompanionStatusDTO.DayLockTrigger,
+        reason: String = "Pravidlo dne"
+    ) -> MacCompanionStatusDTO.DayLockDTO {
+        .init(
+            active: true,
+            until: referenceDate.addingTimeInterval(8 * 60 * 60),
+            at: referenceDate.addingTimeInterval(-60),
+            trigger: trigger,
+            reason: reason,
+            unlocked: nil
+        )
+    }
+
+    func makeDailyRules(
+        sessionEndsAt: Date? = nil,
+        warnings: [MacCompanionStatusDTO.RuleWarningDTO] = []
+    ) -> MacCompanionStatusDTO.DailyRulesDTO {
+        .init(
+            lossLimitUsd: 1_000,
+            realizedLossUsd: -620,
+            maxLosingTrades: 2,
+            losingTrades: 2,
+            maxTrades: 10,
+            tradesToday: 4,
+            window: .init(enabled: true, from: "15:30", to: "22:00", state: .inside),
+            cooldownMinutes: 15,
+            cooldownUntil: referenceDate.addingTimeInterval(3 * 60),
+            sessionEndsAt: sessionEndsAt ?? referenceDate.addingTimeInterval(8 * 60 * 60),
+            warnings: warnings
+        )
     }
 }

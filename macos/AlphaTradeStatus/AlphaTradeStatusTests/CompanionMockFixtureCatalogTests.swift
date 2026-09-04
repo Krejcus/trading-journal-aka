@@ -3,7 +3,7 @@ import XCTest
 @testable import AlphaTradeStatus
 
 final class CompanionMockFixtureCatalogTests: XCTestCase {
-    func testCatalogContainsAllNineFixturesInStableOrder() {
+    func testCatalogContainsAllTenFixturesInStableOrder() {
         XCTAssertEqual(CompanionMockFixtureCatalog.orderedIDs, [
             .live,
             .liveAckUnavailable,
@@ -11,12 +11,13 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
             .disarmed,
             .disarmedExposure,
             .disarmedUnverified,
+            .locked,
             .intervention,
             .unknown,
             .offline
         ])
         XCTAssertEqual(CompanionMockFixtureCatalog.all.map(\.fixtureID), CompanionMockFixtureCatalog.orderedIDs)
-        XCTAssertEqual(Set(CompanionMockFixtureCatalog.orderedIDs.map(\.rawValue)).count, 9)
+        XCTAssertEqual(Set(CompanionMockFixtureCatalog.orderedIDs.map(\.rawValue)).count, 10)
     }
 
     func testEveryFixtureHasTheExpectedStateAndMenuBarPill() {
@@ -40,6 +41,7 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
             (.disarmed, .disarmed, "VYPNUTO", "power", .neutral, "VYPNUTO"),
             (.disarmedExposure, .intervention(issueCount: 1), "!1", nil, .danger, "ZÁSAH NUTNÝ"),
             (.disarmedUnverified, .disarmedUnverified, "VYPNUTO", "power", .danger, "VYPNUTO"),
+            (.locked, .locked, "ZAMČENO", "lock.fill", .danger, "DEN ZAMČENÝ"),
             (.intervention, .intervention(issueCount: 2), "!2", nil, .danger, "ZÁSAH NUTNÝ"),
             (.unknown, .unknown, "?", nil, .warning, "STAV NEZNÁMÝ"),
             (.offline, .offline, "!1", nil, .danger, "WORKER OFFLINE")
@@ -53,6 +55,29 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
             XCTAssertEqual(presentation.menuBar.tone, expectation.tone, expectation.id.rawValue)
             XCTAssertEqual(presentation.hero.title, expectation.heroTitle, expectation.id.rawValue)
         }
+    }
+
+    func testLockedFixtureKeepsDailyRulesOpenAndNeverOffersUnlock() throws {
+        let presentation = CompanionMockFixtureCatalog.presentation(for: .locked)
+        let rules = try XCTUnwrap(presentation.sections.first { $0.id == "daily-rules" })
+
+        XCTAssertTrue(rules.isInitiallyExpanded)
+        XCTAssertTrue(rules.hasProblem)
+        XCTAssertEqual(rules.summary, "1 pravidlo spuštěno")
+        XCTAssertTrue(rules.rows.contains { row in
+            guard case .progress(let progress) = row else { return false }
+            return progress.id == "rule-losing-trades"
+                && progress.progress == 1
+                && progress.tone == .danger
+        })
+        XCTAssertEqual(presentation.footer.actions.map(\.id), [
+            .openLive, .openJournal, .refresh, .copyDiagnostics
+        ])
+        XCTAssertEqual(presentation.footer.actions.first?.title, "Otevřít LIVE")
+        XCTAssertFalse(
+            presentation.allVisibleText.joined(separator: "\n")
+                .localizedCaseInsensitiveContains("odemknout…")
+        )
     }
 
     func testEveryProblemSectionIsInitiallyExpanded() {

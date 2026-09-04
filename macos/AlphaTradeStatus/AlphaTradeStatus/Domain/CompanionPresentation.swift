@@ -7,6 +7,7 @@ enum CompanionFixtureID: String, CaseIterable, Identifiable, Sendable {
     case disarmed
     case disarmedExposure = "disarmed-exposure"
     case disarmedUnverified = "disarmed-unverified"
+    case locked
     case intervention
     case unknown
     case offline
@@ -34,6 +35,7 @@ enum CompanionDisplayState: Equatable, Sendable {
     case shadow
     case disarmed
     case disarmedUnverified
+    case locked
     case intervention(issueCount: Int)
     case unknown
     case offline
@@ -48,6 +50,8 @@ enum CompanionDisplayState: Equatable, Sendable {
             return "VYPNUTO"
         case .disarmedUnverified:
             return "VYPNUTO"
+        case .locked:
+            return "ZAMČENO"
         case .intervention:
             return "ZÁSAH NUTNÝ"
         case .unknown:
@@ -153,15 +157,26 @@ struct PositionRowPresentation: Equatable, Sendable, Identifiable {
     let detailTone: StatusTone
 }
 
+struct ProgressRowPresentation: Equatable, Sendable, Identifiable {
+    let id: String
+    let label: String
+    let value: String
+    let progress: Double
+    let tone: StatusTone
+}
+
 enum SectionRowPresentation: Equatable, Sendable, Identifiable {
     case keyValue(KeyValueRowPresentation)
     case position(PositionRowPresentation)
+    case progress(ProgressRowPresentation)
 
     var id: String {
         switch self {
         case .keyValue(let row):
             return row.id
         case .position(let row):
+            return row.id
+        case .progress(let row):
             return row.id
         }
     }
@@ -172,6 +187,8 @@ enum SectionRowPresentation: Equatable, Sendable, Identifiable {
             return [row.label, row.value, row.detail].compactMap { $0 }
         case .position(let row):
             return [row.symbol, row.side.rawValue, "×\(row.quantity)", row.detail]
+        case .progress(let row):
+            return [row.label, row.value]
         }
     }
 }

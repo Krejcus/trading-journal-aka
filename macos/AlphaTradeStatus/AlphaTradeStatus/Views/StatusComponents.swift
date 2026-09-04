@@ -349,6 +349,12 @@ struct CollapsibleStatusSection: View {
                                 isHighlighted: highlightsEnabled && highlightedRowID == row.id,
                                 category: highlightsEnabled ? highlightCategory : nil
                             ))
+                    case .progress(let presentation):
+                        ProgressStatusRow(row: presentation)
+                            .modifier(TransitionRowHighlightModifier(
+                                isHighlighted: highlightsEnabled && highlightedRowID == row.id,
+                                category: highlightsEnabled ? highlightCategory : nil
+                            ))
                     }
                 }
             }
@@ -475,9 +481,9 @@ private struct TransitionRowHighlightModifier: ViewModifier {
 private extension CompanionTransitionCategory {
     var statusTone: StatusTone {
         switch self {
-        case .worsening: return .danger
+        case .worsening, .lock: return .danger
         case .improvement: return .success
-        case .mode: return .warning
+        case .mode, .ruleWarning, .lockExpired: return .warning
         }
     }
 }
@@ -586,5 +592,47 @@ private struct PositionStatusRow: View {
 
     private var sideFill: Color {
         row.side == .long ? theme.emeraldSoft : theme.roseSoft
+    }
+}
+
+private struct ProgressStatusRow: View {
+    @Environment(\.alphaTradeTheme) private var theme
+
+    let row: ProgressRowPresentation
+
+    var body: some View {
+        VStack(spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(row.label)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(theme.secondaryText)
+
+                Spacer(minLength: 8)
+
+                HStack(spacing: 6) {
+                    if row.tone == .danger {
+                        StatusDot(tone: row.tone)
+                    }
+                    Text(row.value)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(theme.text(for: row.tone))
+                        .multilineTextAlignment(.trailing)
+                }
+            }
+
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule(style: .continuous)
+                        .fill(theme.stroke.opacity(0.82))
+                    Capsule(style: .continuous)
+                        .fill(theme.accent(for: row.tone))
+                        .frame(width: proxy.size.width * min(max(row.progress, 0), 1))
+                }
+            }
+            .frame(height: 4)
+            .accessibilityHidden(true)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(row.label), \(row.value)")
     }
 }

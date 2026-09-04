@@ -4,6 +4,9 @@ enum CompanionTransitionCategory: String, Equatable, Sendable {
     case worsening
     case improvement
     case mode
+    case lock
+    case ruleWarning
+    case lockExpired
 }
 
 struct CompanionTransition: Equatable, Sendable {
@@ -11,6 +14,53 @@ struct CompanionTransition: Equatable, Sendable {
     let sectionID: String
     let rowID: String?
     let reason: String
+    let notificationTitle: String?
+    let notificationBody: String?
+    let ruleWarningKey: String?
+
+    init(
+        category: CompanionTransitionCategory,
+        sectionID: String,
+        rowID: String?,
+        reason: String,
+        notificationTitle: String? = nil,
+        notificationBody: String? = nil,
+        ruleWarningKey: String? = nil
+    ) {
+        self.category = category
+        self.sectionID = sectionID
+        self.rowID = rowID
+        self.reason = reason
+        self.notificationTitle = notificationTitle
+        self.notificationBody = notificationBody
+        self.ruleWarningKey = ruleWarningKey
+    }
+}
+
+extension CompanionTransitionCategory {
+    var shouldNotify: Bool {
+        switch self {
+        case .worsening, .mode, .lock, .ruleWarning, .lockExpired:
+            return true
+        case .improvement:
+            return false
+        }
+    }
+
+    var allowsSound: Bool {
+        self == .worsening || self == .lock
+    }
+
+    var autoCloseDuration: TimeInterval? {
+        switch self {
+        case .worsening, .lock:
+            return 60
+        case .improvement, .mode, .lockExpired:
+            return 8
+        case .ruleWarning:
+            return nil
+        }
+    }
 }
 
 struct CompanionTransitionEvent: Equatable, Sendable {
@@ -30,7 +80,8 @@ enum CompanionTransitionDetector {
     static func detect(
         previous: ReducedCompanionStatus,
         next: ReducedCompanionStatus,
-        now: Date
+        now: Date,
+        excludingRuleWarningKeys: Set<String> = []
     ) -> CompanionTransition? {
         if becameOffline(previous, next) {
             return .init(
@@ -59,6 +110,33 @@ enum CompanionTransitionDetector {
         // Every remaining positive transition requires current verified data.
         // In particular, no improvement may be inferred from stale snapshots.
         guard isVerified(next) else { return nil }
+
+        if !isLocked(previous.displayState), isLocked(next.displayState),
+           let lock = next.status.dayLock {
+            let until = CompanionDisplayFormatting.shortTime(lock.until)
+            let rule = notificationRuleText(lock.trigger, rules: next.status.dailyRules)
+            return .init(
+                category: .lock,
+                sectionID: next.status.dailyRules == nil ? "safety" : "daily-rules",
+                rowID: rowID(for: lock.trigger),
+                reason: "Den byl zamčen do \(until) pravidlem \(rule).",
+                notificationTitle: "Den zamčen do \(until)",
+                notificationBody: lockNotificationBody(lock: lock, rules: next.status.dailyRules)
+            )
+        }
+
+        if isLocked(previous.displayState),
+           isDisabled(next.displayState),
+           sessionChanged(previous.status.dailyRules, next.status.dailyRules) {
+            return .init(
+                category: .lockExpired,
+                sectionID: next.status.dailyRules == nil ? "safety" : "daily-rules",
+                rowID: nil,
+                reason: "Nová session — zámek vypršel.",
+                notificationTitle: "Nová session — zámek vypršel",
+                notificationBody: "Copier je vypnutý. Pravidla dne začínají od nuly; zapnout v LIVE."
+            )
+        }
 
         if let problem = newlyWorsenedProblem(previous.status, next.status) {
             return problem
@@ -116,6 +194,14 @@ enum CompanionTransitionDetector {
             )
         }
 
+        if let warning = newlyAddedRuleWarning(
+            previous: previous.status,
+            next: next.status,
+            excluding: excludingRuleWarningKeys
+        ) {
+            return warning
+        }
+
         if let mode = modeTransition(previous, next) {
             return mode
         }
@@ -139,6 +225,7 @@ struct CompanionTransitionGate {
     private var candidate: Candidate?
     private var highestRevision: UInt64?
     private var lastAutoOpenAt: TimeInterval?
+    private var seenRuleWarningKeys = Set<String>()
 
     mutating func reset() {
         settled = nil
@@ -146,6 +233,7 @@ struct CompanionTransitionGate {
         candidate = nil
         highestRevision = nil
         lastAutoOpenAt = nil
+        seenRuleWarningKeys = []
     }
 
     mutating func resetAutoOpenRateLimit() {
@@ -183,7 +271,16 @@ struct CompanionTransitionGate {
         if signature == previousSignature {
             settled = next
             candidate = nil
-            return nil
+            guard let warning = CompanionTransitionDetector.currentRuleWarning(
+                in: next.status,
+                excluding: seenRuleWarningKeys
+            ) else { return nil }
+            return result(
+                for: warning,
+                monotonicNow: monotonicNow,
+                autoOpenEnabled: autoOpenEnabled,
+                improvementsEnabled: improvementsEnabled
+            )
         }
 
         if candidate?.signature != signature {
@@ -204,13 +301,38 @@ struct CompanionTransitionGate {
         guard let transition = CompanionTransitionDetector.detect(
             previous: previous,
             next: candidate.status,
-            now: now
+            now: now,
+            excludingRuleWarningKeys: seenRuleWarningKeys
         ) else {
             return nil
         }
 
+        if transition.category == .lock {
+            seenRuleWarningKeys.formUnion(
+                CompanionTransitionDetector.ruleWarningKeys(in: candidate.status.status)
+            )
+        }
+
+        return result(
+            for: transition,
+            monotonicNow: monotonicNow,
+            autoOpenEnabled: autoOpenEnabled,
+            improvementsEnabled: improvementsEnabled
+        )
+    }
+
+    private mutating func result(
+        for transition: CompanionTransition,
+        monotonicNow: TimeInterval,
+        autoOpenEnabled: Bool,
+        improvementsEnabled: Bool
+    ) -> CompanionTransitionGateResult {
+        if let warningKey = transition.ruleWarningKey {
+            seenRuleWarningKeys.insert(warningKey)
+        }
         let settingAllowsAutoOpen = autoOpenEnabled
             && (transition.category != .improvement || improvementsEnabled)
+            && transition.category.autoCloseDuration != nil
         let outsideRateLimit = lastAutoOpenAt.map {
             monotonicNow - $0 >= Self.autoOpenRateLimit
         } ?? true
@@ -229,6 +351,7 @@ struct CompanionTransitionGate {
         settled = status
         settledSignature = signature
         candidate = nil
+        seenRuleWarningKeys.formUnion(CompanionTransitionDetector.ruleWarningKeys(in: status.status))
     }
 }
 
@@ -274,6 +397,9 @@ private struct StableSignature: Equatable {
     let followerAcknowledgementProblem: Bool
     let disarmedExposure: Bool
     let problems: [String]
+    let dayLock: String
+    let ruleWarnings: [String]
+    let sessionEndsAt: Date?
 
     init(status reduced: ReducedCompanionStatus, now _: Date) {
         let status = reduced.status
@@ -290,6 +416,11 @@ private struct StableSignature: Equatable {
         followerAcknowledgementProblem = CompanionTransitionDetector.hasFollowerProblem(status)
         disarmedExposure = CompanionTransitionDetector.hasDisarmedExposure(status)
         problems = status.problems.map { "\($0.kind.rawValue)|\($0.text)" }.sorted()
+        dayLock = status.dayLock.map {
+            "\($0.active)|\($0.trigger.rawValue)|\(CompanionISO8601.string(from: $0.until))|\(CompanionISO8601.string(from: $0.at))"
+        } ?? "none"
+        ruleWarnings = CompanionTransitionDetector.ruleWarningKeys(in: status).sorted()
+        sessionEndsAt = status.dailyRules?.sessionEndsAt
     }
 }
 
@@ -312,6 +443,145 @@ private extension CompanionTransitionDetector {
     static func isIntervention(_ state: CompanionDisplayState) -> Bool {
         if case .intervention = state { return true }
         return false
+    }
+
+    static func isLocked(_ state: CompanionDisplayState) -> Bool {
+        state == .locked
+    }
+
+    static func isDisabled(_ state: CompanionDisplayState) -> Bool {
+        state == .disarmed || state == .disarmedUnverified
+    }
+
+    static func sessionChanged(
+        _ previous: MacCompanionStatusDTO.DailyRulesDTO?,
+        _ next: MacCompanionStatusDTO.DailyRulesDTO?
+    ) -> Bool {
+        guard let previous, let next else { return false }
+        return previous.sessionEndsAt != next.sessionEndsAt
+    }
+
+    static func rowID(for trigger: MacCompanionStatusDTO.DayLockTrigger) -> String? {
+        switch trigger {
+        case .manual: return nil
+        case .dailyLoss: return "rule-daily-loss"
+        case .losingTrades: return "rule-losing-trades"
+        case .maxTrades: return "rule-max-trades"
+        case .windowEnd: return "rule-window"
+        }
+    }
+
+    static func notificationRuleText(
+        _ trigger: MacCompanionStatusDTO.DayLockTrigger,
+        rules: MacCompanionStatusDTO.DailyRulesDTO?
+    ) -> String {
+        switch trigger {
+        case .manual:
+            return "ruční zámek"
+        case .dailyLoss:
+            return "denní ztrátový limit"
+        case .losingTrades:
+            if let current = rules?.losingTrades, let limit = rules?.maxLosingTrades {
+                return "\(current) ztrátové obchody z \(limit)"
+            }
+            return "limit ztrátových obchodů"
+        case .maxTrades:
+            if let current = rules?.tradesToday, let limit = rules?.maxTrades {
+                return "\(current) obchodů z \(limit)"
+            }
+            return "maximální počet obchodů"
+        case .windowEnd:
+            if let window = rules?.window, window.enabled {
+                return "konec obchodního okna \(window.to)"
+            }
+            return "konec obchodního okna"
+        }
+    }
+
+    static func lockNotificationBody(
+        lock: MacCompanionStatusDTO.DayLockDTO,
+        rules: MacCompanionStatusDTO.DailyRulesDTO?
+    ) -> String {
+        let prefix = lock.trigger == .manual
+            ? "Den byl zamčen ručně."
+            : "Pravidlo: \(notificationRuleText(lock.trigger, rules: rules))."
+        return "\(prefix) Copier vypnutý, zapnutí blokované do konce session."
+    }
+
+    static func ruleWarningKeys(in status: MacCompanionStatusDTO) -> Set<String> {
+        guard let rules = status.dailyRules else { return [] }
+        return Set(rules.warnings.map {
+            ruleWarningKey(rule: $0.rule, sessionEndsAt: rules.sessionEndsAt)
+        })
+    }
+
+    static func currentRuleWarning(
+        in status: MacCompanionStatusDTO,
+        excluding excludedKeys: Set<String>
+    ) -> CompanionTransition? {
+        guard let rules = status.dailyRules else { return nil }
+        guard let warning = rules.warnings.first(where: {
+            !excludedKeys.contains(ruleWarningKey(rule: $0.rule, sessionEndsAt: rules.sessionEndsAt))
+        }) else { return nil }
+        return ruleWarningTransition(warning, rules: rules)
+    }
+
+    static func newlyAddedRuleWarning(
+        previous: MacCompanionStatusDTO,
+        next: MacCompanionStatusDTO,
+        excluding excludedKeys: Set<String>
+    ) -> CompanionTransition? {
+        let excluded = excludedKeys.union(ruleWarningKeys(in: previous))
+        return currentRuleWarning(in: next, excluding: excluded)
+    }
+
+    static func ruleWarningTransition(
+        _ warning: MacCompanionStatusDTO.RuleWarningDTO,
+        rules: MacCompanionStatusDTO.DailyRulesDTO
+    ) -> CompanionTransition {
+        let key = ruleWarningKey(rule: warning.rule, sessionEndsAt: rules.sessionEndsAt)
+        let title: String
+        let body: String
+        switch warning.rule {
+        case .losingTrades:
+            title = "Blíží se limit: ztrátové obchody \(wholeNumber(warning.current)) / \(wholeNumber(warning.limit))"
+            body = "Ještě jedna ztráta dnes zamkne den."
+        case .maxTrades:
+            title = "Blíží se limit: obchody dnes \(wholeNumber(warning.current)) / \(wholeNumber(warning.limit))"
+            body = "Další uzavřený obchod může zamknout den."
+        case .dailyLoss:
+            let percent = warning.limit > 0
+                ? min(100, Int((abs(warning.current) / warning.limit * 100).rounded()))
+                : 0
+            title = "Blíží se limit: denní ztráta \(percent) % limitu"
+            body = "Denní ztrátový limit je blízko."
+        case .windowEnd:
+            title = "Blíží se limit: obchodní okno"
+            body = "Do konce obchodního okna zbývá 10 min."
+        case .manual:
+            title = "Blíží se limit: pravidlo dne"
+            body = "Zkontroluj pravidla dne v LIVE."
+        }
+        return .init(
+            category: .ruleWarning,
+            sectionID: "daily-rules",
+            rowID: rowID(for: warning.rule),
+            reason: title,
+            notificationTitle: title,
+            notificationBody: body,
+            ruleWarningKey: key
+        )
+    }
+
+    static func ruleWarningKey(
+        rule: MacCompanionStatusDTO.DayLockTrigger,
+        sessionEndsAt: Date
+    ) -> String {
+        "\(rule.rawValue)|\(CompanionISO8601.string(from: sessionEndsAt))"
+    }
+
+    static func wholeNumber(_ value: Double) -> String {
+        String(Int(value.rounded()))
     }
 
     static func becameOffline(
@@ -584,6 +854,7 @@ private extension CompanionTransitionDetector {
         case .shadow: return "shadow"
         case .disarmed: return "disarmed"
         case .disarmedUnverified: return "disarmed-unverified"
+        case .locked: return "locked"
         case .intervention: return "intervention"
         case .unknown: return "unknown"
         case .offline: return "offline"

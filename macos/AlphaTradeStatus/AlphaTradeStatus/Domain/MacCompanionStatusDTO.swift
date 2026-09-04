@@ -14,6 +14,8 @@ struct MacCompanionStatusDTO: Decodable, Equatable, Sendable {
     let worker: WorkerDTO
     let brokerConnected: Bool?
     var dailyStats: DailyStatsDTO? = nil
+    var dayLock: DayLockDTO? = nil
+    var dailyRules: DailyRulesDTO? = nil
     let safety: SafetyDTO
     let exposure: ExposureDTO
     let snapshots: SnapshotsDTO
@@ -44,6 +46,61 @@ struct MacCompanionStatusDTO: Decodable, Equatable, Sendable {
         let label: String
         let realizedPnlUsd: Double
         let losingTrades: Int
+    }
+
+    enum DayLockTrigger: String, Decodable, Equatable, Hashable, Sendable {
+        case manual
+        case dailyLoss = "daily-loss"
+        case losingTrades = "losing-trades"
+        case maxTrades = "max-trades"
+        case windowEnd = "window-end"
+    }
+
+    struct DayLockDTO: Decodable, Equatable, Sendable {
+        let active: Bool
+        let until: Date
+        let at: Date
+        let trigger: DayLockTrigger
+        let reason: String
+        let unlocked: DayUnlockDTO?
+    }
+
+    struct DayUnlockDTO: Decodable, Equatable, Sendable {
+        let at: Date
+    }
+
+    struct DailyRulesDTO: Decodable, Equatable, Sendable {
+        let lossLimitUsd: Double?
+        let realizedLossUsd: Double?
+        let maxLosingTrades: Int?
+        let losingTrades: Int
+        let maxTrades: Int?
+        let tradesToday: Int
+        let window: TradingWindowDTO?
+        let cooldownMinutes: Int
+        let cooldownUntil: Date?
+        let sessionEndsAt: Date
+        let warnings: [RuleWarningDTO]
+    }
+
+    struct TradingWindowDTO: Decodable, Equatable, Sendable {
+        let enabled: Bool
+        let from: String
+        let to: String
+        let state: State
+
+        enum State: String, Decodable, Equatable, Sendable {
+            case inside
+            case outside
+            case off
+        }
+    }
+
+    struct RuleWarningDTO: Decodable, Equatable, Sendable {
+        let rule: DayLockTrigger
+        let current: Double
+        let limit: Double
+        let at: Date
     }
 
     struct SafetyDTO: Decodable, Equatable, Sendable {
@@ -168,6 +225,17 @@ enum MacCompanionStatusDecoder {
                       && ack.failing.allSatisfy { $0.sinceMinutes >= 0 }
               }) ?? true else {
             throw MacCompanionStatusDecodingError.invalidCounts
+        }
+        if let rules = status.dailyRules {
+            guard rules.losingTrades >= 0,
+                  rules.tradesToday >= 0,
+                  rules.cooldownMinutes >= 0,
+                  rules.maxLosingTrades.map({ $0 > 0 }) ?? true,
+                  rules.maxTrades.map({ $0 > 0 }) ?? true,
+                  rules.lossLimitUsd.map({ $0 > 0 }) ?? true,
+                  rules.warnings.allSatisfy({ $0.limit > 0 }) else {
+                throw MacCompanionStatusDecodingError.invalidCounts
+            }
         }
         return status
     }

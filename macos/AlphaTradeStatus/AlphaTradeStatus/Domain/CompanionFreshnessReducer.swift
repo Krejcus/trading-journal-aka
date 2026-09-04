@@ -136,6 +136,9 @@ private extension CompanionFreshnessReducer {
             // DISARMED is a command state, not proof that every account is flat.
             // A missing snapshot gets its own explicit command-state presentation;
             // it says only that no commands are sent and never manufactures flat.
+            if status.dayLock?.active == true {
+                return .locked
+            }
             if status.exposure.verifiedAt == nil {
                 return .disarmedUnverified
             }
@@ -217,6 +220,10 @@ enum CompanionDisplayFormatting {
         timeFormatter.string(from: date)
     }
 
+    static func shortTime(_ date: Date) -> String {
+        shortTimeFormatter.string(from: date)
+    }
+
     static func duration(_ seconds: Int) -> String {
         if seconds < 60 {
             return "\(seconds) s"
@@ -231,6 +238,14 @@ enum CompanionDisplayFormatting {
         formatter.locale = Locale(identifier: "cs_CZ")
         formatter.timeZone = .current
         formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+
+    private static let shortTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "cs_CZ")
+        formatter.timeZone = .current
+        formatter.dateFormat = "HH:mm"
         return formatter
     }()
 }

@@ -336,7 +336,7 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
     }
 
     private func scheduleAutoClose(for category: CompanionTransitionCategory) {
-        let duration: TimeInterval = category == .worsening ? 60 : 8
+        guard let duration = category.autoCloseDuration else { return }
         cancelAutoCloseTimer()
         autoCloseRemaining = duration
         guard !isPointerInsidePopover else { return }
@@ -391,7 +391,7 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
 
     private func deliverNotificationIfEnabled(for transition: CompanionTransition) {
         guard settings.nativeNotifications,
-              (transition.category == .worsening || transition.category == .mode),
+              transition.category.shouldNotify,
               notificationRateLimiter.allowsNotification(
                   at: Date()
               ) else {
@@ -426,9 +426,10 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
         Task { @MainActor [weak self] in
             guard let self, self.settings.nativeNotifications else { return }
             let content = UNMutableNotificationContent()
-            content.title = "AlphaTrade Status · \(self.currentStatusHeadline)"
-            content.body = transition.reason
-            if transition.category == .worsening, self.settings.worseningSound {
+            content.title = transition.notificationTitle
+                ?? "AlphaTrade Status · \(self.currentStatusHeadline)"
+            content.body = transition.notificationBody ?? transition.reason
+            if transition.category.allowsSound, self.settings.worseningSound {
                 content.sound = .default
             }
             try? await UNUserNotificationCenter.current().add(
@@ -472,7 +473,10 @@ final class AlphaTradeStatusAppDelegate: NSObject, NSApplicationDelegate, NSPopo
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner, .sound])
+        let options: UNNotificationPresentationOptions = notification.request.content.sound == nil
+            ? [.banner]
+            : [.banner, .sound]
+        completionHandler(options)
     }
 
     private func perform(_ action: FooterActionPresentation) {
