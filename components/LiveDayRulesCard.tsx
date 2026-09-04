@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CheckCircle2, Clock3, Lock, Save, Unlock, X } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Clock3, Lock, Save, Unlock, X } from 'lucide-react';
 import type { CopierControllerStatus } from '../services/copierRuntimeController';
 import {
   DEFAULT_COPY_GROUP_SAFETY,
@@ -182,7 +182,7 @@ const duration = (milliseconds: number): string => {
 };
 
 const TriggerPill = ({ count }: { count: number }) => (
-  <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold ${count > 0
+  <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-bold ${count > 0
     ? 'border-rose-500/30 bg-rose-500/10 text-rose-500'
     : 'border-emerald-500/25 bg-emerald-500/[0.07] text-emerald-600'}`}>
     <span className={`h-1.5 w-1.5 rounded-full ${count > 0 ? 'bg-rose-500' : 'bg-emerald-500'}`} />
@@ -201,15 +201,17 @@ const RuleToggle = ({ checked, label, onChange }: {
     aria-checked={checked}
     aria-label={`${label}: ${checked ? 'zapnuto' : 'vypnuto'}`}
     onClick={() => onChange(!checked)}
-    className={`relative h-5 w-[34px] shrink-0 rounded-full transition-colors ${checked ? 'bg-emerald-500' : 'bg-[var(--border-subtle)] ring-1 ring-inset ring-white/10'}`}
+    className={`relative h-[18px] w-[30px] shrink-0 rounded-full transition-colors ${checked ? 'bg-emerald-500' : 'bg-[var(--border-subtle)] ring-1 ring-inset ring-white/10'}`}
   >
-    <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-4' : 'translate-x-0.5'}`} />
+    <span className="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow transition-[left] duration-150" style={{ left: checked ? 14 : 2 }} />
   </button>
 );
 
+type ProgressTone = 'emerald' | 'amber' | 'rose' | 'indigo' | 'muted';
+
 const Progress = ({ value, tone = 'emerald', label }: {
   value: number;
-  tone?: 'emerald' | 'amber' | 'rose' | 'indigo' | 'muted';
+  tone?: ProgressTone;
   label: string;
 }) => {
   const color = tone === 'rose' ? 'bg-rose-500'
@@ -225,40 +227,76 @@ const Progress = ({ value, tone = 'emerald', label }: {
       aria-valuemax={100}
       aria-valuenow={Math.round(clampPercent(value))}
       data-progress-value={Math.round(clampPercent(value))}
-      className="h-[5px] overflow-hidden rounded-full bg-[var(--border-subtle)]"
+      className="h-1 overflow-hidden rounded-full bg-[var(--border-subtle)]"
     >
-      <span className={`block h-full rounded-full ${color}`} style={{ width: `${clampPercent(value)}%` }} />
+      <span className={`block h-full rounded-full ${color} transition-[width] duration-300`} style={{ width: `${clampPercent(value)}%` }} />
     </div>
   );
 };
 
-const Rule = ({ title, detail, enabled, triggered, onToggle, children }: {
+const statusToneClass: Record<ProgressTone, string> = {
+  rose: 'text-rose-500',
+  amber: 'text-amber-500',
+  indigo: 'text-indigo-500',
+  muted: 'text-[var(--text-muted)]',
+  emerald: 'text-[var(--text-primary)]',
+};
+
+/**
+ * Jeden řádek pravidla: přepínač · název + detail · průběh (text + lišta) ·
+ * ovládací prvek. Na úzké obrazovce se průběh zalomí pod řádek.
+ */
+const Rule = ({ title, detail, enabled, triggered, onToggle, control, status, statusTone = 'emerald', progress, progressTone, progressLabel }: {
   title: string;
   detail: string;
   enabled: boolean;
   triggered: boolean;
   onToggle: (checked: boolean) => void;
-  children: React.ReactNode;
+  control: React.ReactNode;
+  status: React.ReactNode;
+  statusTone?: ProgressTone;
+  progress: number;
+  progressTone: ProgressTone;
+  progressLabel: string;
 }) => (
   <article
     data-rule-triggered={triggered ? 'true' : 'false'}
-    className={`flex min-w-0 flex-col gap-3 rounded-lg border p-3 ${triggered
+    className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 rounded-md border px-2.5 py-1.5 sm:grid-cols-[auto_minmax(0,1fr)_minmax(96px,132px)_auto] ${triggered
       ? 'border-rose-500/35 bg-rose-500/[0.045]'
       : 'border-[var(--border-subtle)] bg-[var(--bg-input)]'}`}
   >
-    <div className="flex items-start justify-between gap-3">
-      <div className="min-w-0">
-        <h4 className="text-xs font-extrabold text-[var(--text-primary)]">{title}</h4>
-        <p className="mt-0.5 text-[11px] leading-[15px] text-[var(--text-secondary)]">{detail}</p>
-      </div>
-      <RuleToggle checked={enabled} label={title} onChange={onToggle} />
+    <RuleToggle checked={enabled} label={title} onChange={onToggle} />
+    <div className="min-w-0" title={detail}>
+      <h4 className={`truncate text-[11.5px] font-extrabold leading-4 ${enabled ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}>{title}</h4>
+      <p className="truncate text-[10px] leading-[13px] text-[var(--text-muted)]">{detail}</p>
     </div>
-    {children}
+    <div className="order-3 col-span-3 flex flex-col gap-1 sm:order-none sm:col-span-1">
+      <b className={`truncate text-right text-[10.5px] font-bold leading-3 tabular-nums ${statusToneClass[statusTone]}`}>{status}</b>
+      <Progress label={progressLabel} value={progress} tone={progressTone} />
+    </div>
+    <div className="flex shrink-0 items-center gap-1.5">{control}</div>
   </article>
 );
 
-const numericInputClass = 'h-8 w-24 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2.5 text-right text-xs font-bold tabular-nums text-[var(--text-primary)] outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-45';
-const timeInputClass = 'h-8 w-[78px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-center font-mono text-xs font-bold text-[var(--text-primary)] outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-45';
+const numericInputClass = 'h-7 w-[68px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-right text-[11px] font-bold tabular-nums text-[var(--text-primary)] outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-45';
+const timeInputClass = 'h-7 w-[70px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-1.5 text-center font-mono text-[11px] font-bold text-[var(--text-primary)] outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-45';
+const unitClass = 'text-[9.5px] font-bold text-[var(--text-muted)]';
+
+const COLLAPSED_STORAGE_KEY = 'at:live:day-rules-collapsed';
+const readCollapsed = (): boolean => {
+  try {
+    return typeof window !== 'undefined' && window.localStorage.getItem(COLLAPSED_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+const writeCollapsed = (collapsed: boolean) => {
+  try {
+    window.localStorage.setItem(COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0');
+  } catch {
+    // localStorage může být nedostupné (private mode) — sbalení je jen pohodlí.
+  }
+};
 
 export interface DayLockBannerProps {
   until: number;
@@ -282,8 +320,8 @@ export const DayLockBanner = ({ until, at = null, trigger = null, reason = null,
     <section data-day-lock-banner="true" className="flex flex-col gap-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 sm:flex-row sm:items-center">
       <Lock size={18} className="shrink-0 text-rose-400" />
       <div className="min-w-0 flex-1">
-        <h2 className="text-[13px] font-black text-rose-400">Den je zamčený do {time.format(until)}</h2>
-        <p className="mt-0.5 text-xs leading-relaxed text-rose-300">{detail} Copier je VYPNUTO a zapnutí je blokované do konce session.</p>
+        <h2 className="text-[13px] font-black text-rose-500">Den je zamčený do {time.format(until)}</h2>
+        <p className="mt-0.5 text-xs leading-relaxed text-rose-400">{detail} Copier je VYPNUTO a zapnutí je blokované do konce session.</p>
       </div>
       <button type="button" onClick={onUnlock} className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border border-rose-500/40 px-3 text-[11px] font-extrabold text-rose-400 hover:bg-rose-500/10">
         <Unlock size={13} /> Odemknout…
@@ -377,18 +415,29 @@ export const LiveDayRulesCard = ({
   onUnlockDay,
 }: LiveDayRulesCardProps) => {
   const effectiveSafety = safety ?? DEFAULT_COPY_GROUP_SAFETY;
+  // Parent posílá při každém pollu nový objekt safety se stejným obsahem.
+  // Draft se proto resetuje jen při skutečné změně hodnot, jinak by
+  // rozepsané přepínače po pár sekundách skočily zpět.
+  const safetyKey = JSON.stringify(effectiveSafety);
+  const appliedSafetyKey = useRef(safetyKey);
   const [draft, setDraft] = useState(() => dailyRulesDraftFromSafety(effectiveSafety));
   const [now, setNow] = useState(() => Date.now());
   const [saving, setSaving] = useState(false);
   const [saveErrors, setSaveErrors] = useState<string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState(readCollapsed);
   const [unlockOpen, setUnlockOpen] = useState(false);
   const [unlockReason, setUnlockReason] = useState('');
   const [unlockSeconds, setUnlockSeconds] = useState(10);
   const [unlockBusy, setUnlockBusy] = useState(false);
   const [unlockError, setUnlockError] = useState<string | null>(null);
 
-  useEffect(() => setDraft(dailyRulesDraftFromSafety(effectiveSafety)), [effectiveSafety]);
+  useEffect(() => {
+    if (appliedSafetyKey.current === safetyKey) return;
+    appliedSafetyKey.current = safetyKey;
+    setDraft(dailyRulesDraftFromSafety(effectiveSafety));
+    setSaveErrors([]);
+  }, [safetyKey, effectiveSafety]);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
@@ -409,6 +458,7 @@ export const LiveDayRulesCard = ({
   // cooldown a průběh LIVE expirace jsou průběhové stavy, ne další locky.
   const triggeredCount = [losingTriggered, lossTriggered, tradesTriggered, windowTriggered].filter(Boolean).length;
   const warnedRules = useMemo(() => new Set(dailyStats?.warnedRules?.map(warning => warning.rule) ?? []), [dailyStats?.warnedRules]);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(dailyRulesDraftFromSafety(effectiveSafety));
 
   const losingCurrent = dailyStats?.losingTrades ?? 0;
   const lossCurrent = Math.max(0, -(dailyStats?.realizedPnlUsd ?? 0));
@@ -431,10 +481,44 @@ export const LiveDayRulesCard = ({
     ? progressPercent(now - armedAt, armExpiresAt - armedAt)
     : 0;
 
+  // Barva lišty: červená = zámek nebo limit dosažen, oranžová = varování
+  // workeru nebo ≥ 80 % limitu, zelená = běžný průběh, šedá = pravidlo vypnuté.
+  const ruleTone = (triggered: boolean, enabled: boolean, warned: boolean, percent = 0): ProgressTone => (
+    !enabled ? 'muted' : triggered || percent >= 100 ? 'rose' : warned || percent >= 80 ? 'amber' : 'emerald'
+  );
+  const losingPercent = progressPercent(losingCurrent, losingLimit);
+  const lossPercent = progressPercent(lossCurrent, lossLimit);
+  const tradesPercent = progressPercent(tradesCurrent, tradesLimit);
+  const losingTone = ruleTone(losingTriggered, draft.losingTradesEnabled, warnedRules.has('losing-trades'), losingPercent);
+  const lossTone = ruleTone(lossTriggered, draft.lossLimitEnabled, warnedRules.has('daily-loss'), lossPercent);
+  const tradesTone = ruleTone(tradesTriggered, draft.maxTradesEnabled, warnedRules.has('max-trades'), tradesPercent);
+  const windowTone = ruleTone(windowTriggered, draft.tradingWindowEnabled, warnedRules.has('window-end'));
+  const windowStatus = !draft.tradingWindowEnabled || dailyStats?.windowState === 'off'
+    ? 'vypnuto'
+    : dailyStats?.windowState === 'inside' ? 'uvnitř okna'
+      : dailyStats?.windowState === 'outside' ? 'mimo okno'
+        : 'stav nedostupný';
+
+  // Jednořádkový souhrn pro sbalenou kartu — čísla musí jít přečíst i bez rozbalení.
+  const summary = [
+    draft.losingTradesEnabled ? `ztrátové ${losingCurrent}/${losingLimit}` : null,
+    draft.lossLimitEnabled ? `ztráta −${number.format(lossCurrent)}/${number.format(lossLimit)} USD` : null,
+    draft.maxTradesEnabled ? `obchody ${tradesCurrent}/${tradesLimit}` : null,
+    draft.tradingWindowEnabled ? `okno ${draft.tradingWindowFrom}–${draft.tradingWindowTo}` : null,
+    draft.cooldownEnabled ? `cooldown ${draft.entryCooldownMinutes} min` : null,
+    draft.sessionExpiryEnabled ? `expirace: ${draft.armExpiryFlatten === 'group' ? 'skupina' : 'followeři'}` : null,
+  ].filter((item): item is string => item != null);
+
   const set = <K extends keyof DailyRulesDraft>(key: K, value: DailyRulesDraft[K]) => {
     setDraft(current => ({ ...current, [key]: value }));
     setSaveErrors([]);
     setNotice(null);
+  };
+  const toggleCollapsed = () => {
+    setCollapsed(current => {
+      writeCollapsed(!current);
+      return !current;
+    });
   };
   const openUnlock = () => {
     setUnlockReason('');
@@ -493,114 +577,155 @@ export const LiveDayRulesCard = ({
         onUnlock={openUnlock}
       />
 
-      <section data-live-day-rules="true" className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4">
-        <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h3 className="text-sm font-black text-[var(--text-primary)]">Pravidla dne</h3>
-            <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--text-secondary)]">
-              Když pravidlo platí, copier se vypne a zamkne do konce session. Odemknutí je možné jen tady, s důvodem.
-              {groupName ? ` Skupina: ${groupName}.` : ''}
-            </p>
-          </div>
+      <section data-live-day-rules="true" data-collapsed={collapsed ? 'true' : 'false'} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2.5">
+        <header className="flex items-center gap-2.5">
+          <button
+            type="button"
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? 'Rozbalit pravidla dne' : 'Sbalit pravidla dne'}
+            onClick={toggleCollapsed}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-input)] hover:text-[var(--text-primary)]"
+          >
+            <ChevronDown size={14} style={{ transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 200ms' }} />
+          </button>
+          <h3 className="shrink-0 text-[13px] font-black text-[var(--text-primary)]">Pravidla dne</h3>
+          {groupName ? <span className="hidden shrink-0 text-[10.5px] font-bold text-[var(--text-muted)] sm:inline">· {groupName}</span> : null}
+          {collapsed ? (
+            <span className="min-w-0 flex-1 truncate text-[10.5px] text-[var(--text-secondary)]" title={summary.join(' · ')}>
+              {summary.length > 0 ? summary.join(' · ') : 'žádné pravidlo není zapnuté'}
+            </span>
+          ) : <span className="flex-1" />}
+          {dirty && !collapsed ? <span className="shrink-0 text-[10px] font-bold text-amber-500">neuloženo</span> : null}
           <TriggerPill count={triggeredCount} />
         </header>
 
-        <div className="mt-3 grid gap-2.5 md:grid-cols-2">
-          <Rule title="Max ztrátových obchodů za den" detail="Anti-revenge: po N ztrátách dnes už ne." enabled={draft.losingTradesEnabled} triggered={losingTriggered} onToggle={checked => set('losingTradesEnabled', checked)}>
-            <div className="flex items-center gap-3">
-              <label className="flex shrink-0 items-center gap-1.5">
-                <input aria-label="Max ztrátových obchodů za den" type="number" min="1" max="50" step="1" disabled={!draft.losingTradesEnabled} value={draft.dailyMaxLosingTrades} onChange={event => set('dailyMaxLosingTrades', event.target.value)} className={numericInputClass} />
-                <span className="text-[10px] font-bold text-[var(--text-muted)]">obchody</span>
-              </label>
-              <div className="min-w-0 flex-1">
-                <div className="mb-1 flex items-center justify-between gap-2 text-[11px] text-[var(--text-secondary)]"><span>Dnes</span><b className={losingTriggered ? 'text-rose-500' : 'text-[var(--text-primary)]'}>{losingCurrent} / {draft.losingTradesEnabled ? losingLimit : '—'}{losingTriggered && dayLockAt ? ` · lock ${time.format(dayLockAt)}` : ''}</b></div>
-                <Progress label="Průběh ztrátových obchodů" value={draft.losingTradesEnabled ? progressPercent(losingCurrent, losingLimit) : 0} tone={losingTriggered ? 'rose' : warnedRules.has('losing-trades') ? 'amber' : draft.losingTradesEnabled ? 'emerald' : 'muted'} />
-              </div>
+        {collapsed ? null : (
+          <>
+            <div className="mt-2 grid gap-1.5 md:grid-cols-2">
+              <Rule
+                title="Ztrátové obchody / den"
+                detail="Max ztrátových obchodů za den — anti-revenge: po N ztrátách dnes už ne."
+                enabled={draft.losingTradesEnabled}
+                triggered={losingTriggered}
+                onToggle={checked => set('losingTradesEnabled', checked)}
+                status={<>{losingCurrent} / {draft.losingTradesEnabled ? losingLimit : '—'}{losingTriggered && dayLockAt ? ` · lock ${time.format(dayLockAt)}` : ''}</>}
+                statusTone={losingTone}
+                progress={draft.losingTradesEnabled ? losingPercent : 0}
+                progressTone={losingTone}
+                progressLabel="Průběh ztrátových obchodů"
+                control={<>
+                  <input aria-label="Max ztrátových obchodů za den" type="number" min="1" max="50" step="1" disabled={!draft.losingTradesEnabled} value={draft.dailyMaxLosingTrades} onChange={event => set('dailyMaxLosingTrades', event.target.value)} className={numericInputClass} />
+                  <span className={unitClass}>obch.</span>
+                </>}
+              />
+
+              <Rule
+                title="Denní ztráta (USD)"
+                detail="Denní ztrátový limit — realizovaná ztráta leadera za den."
+                enabled={draft.lossLimitEnabled}
+                triggered={lossTriggered}
+                onToggle={checked => set('lossLimitEnabled', checked)}
+                status={<>−{number.format(lossCurrent)} · {draft.lossLimitEnabled ? `${Math.round(lossPercent)} %` : 'vypnuto'}</>}
+                statusTone={lossTone}
+                progress={draft.lossLimitEnabled ? lossPercent : 0}
+                progressTone={lossTone}
+                progressLabel="Průběh denní ztráty"
+                control={<>
+                  <input aria-label="Denní ztrátový limit v USD" type="number" min="0.01" max="1000000" step="0.01" disabled={!draft.lossLimitEnabled} value={draft.dailyLossLimitUsd} onChange={event => set('dailyLossLimitUsd', event.target.value)} className={numericInputClass} />
+                  <span className={unitClass}>USD</span>
+                </>}
+              />
+
+              <Rule
+                title="Obchody / den"
+                detail="Max obchodů za den — overtrading brzda, uzavřené obchody leadera."
+                enabled={draft.maxTradesEnabled}
+                triggered={tradesTriggered}
+                onToggle={checked => set('maxTradesEnabled', checked)}
+                status={<>{tradesCurrent} / {draft.maxTradesEnabled ? tradesLimit : '—'}</>}
+                statusTone={tradesTone}
+                progress={draft.maxTradesEnabled ? tradesPercent : 0}
+                progressTone={tradesTone}
+                progressLabel="Průběh obchodů za den"
+                control={<>
+                  <input aria-label="Max obchodů za den" type="number" min="1" max="200" step="1" disabled={!draft.maxTradesEnabled} value={draft.dailyMaxTrades} onChange={event => set('dailyMaxTrades', event.target.value)} className={numericInputClass} />
+                  <span className={unitClass}>obch.</span>
+                </>}
+              />
+
+              <Rule
+                title="Obchodní okno"
+                detail="Europe/Prague. Mimo okno se kopie neposílá; po konci okna se den zamkne."
+                enabled={draft.tradingWindowEnabled}
+                triggered={windowTriggered}
+                onToggle={checked => set('tradingWindowEnabled', checked)}
+                status={<>{time.format(now)} · {windowStatus}</>}
+                statusTone={windowTriggered ? 'rose' : draft.tradingWindowEnabled && dailyStats?.windowState === 'inside' ? 'emerald' : draft.tradingWindowEnabled ? 'amber' : 'muted'}
+                progress={draft.tradingWindowEnabled ? windowProgress : 0}
+                progressTone={windowTone}
+                progressLabel="Průběh obchodního okna"
+                control={<>
+                  <input aria-label="Obchodní okno od" type="time" disabled={!draft.tradingWindowEnabled} value={draft.tradingWindowFrom} onChange={event => set('tradingWindowFrom', event.target.value)} className={timeInputClass} />
+                  <span className="text-[10px] text-[var(--text-muted)]">–</span>
+                  <input aria-label="Obchodní okno do" type="time" disabled={!draft.tradingWindowEnabled} value={draft.tradingWindowTo} onChange={event => set('tradingWindowTo', event.target.value)} className={timeInputClass} />
+                </>}
+              />
+
+              <Rule
+                title="Cooldown po flat"
+                detail="Cooldown po uzavření — po flat leadera blokuje nové zapnutí na N minut."
+                enabled={draft.cooldownEnabled}
+                triggered={false}
+                onToggle={checked => set('cooldownEnabled', checked)}
+                status={cooldownActive ? `do ${time.format(cooldownUntil)} · ${duration(cooldownRemaining)}` : !draft.cooldownEnabled ? 'vypnuto' : 'připraven'}
+                statusTone={cooldownActive ? 'amber' : draft.cooldownEnabled ? 'emerald' : 'muted'}
+                progress={cooldownProgress}
+                progressTone={cooldownActive ? 'amber' : draft.cooldownEnabled ? 'emerald' : 'muted'}
+                progressLabel="Průběh cooldownu"
+                control={<>
+                  <input aria-label="Cooldown po uzavření v minutách" type="number" min="1" max="720" step="1" disabled={!draft.cooldownEnabled} value={draft.entryCooldownMinutes} onChange={event => set('entryCooldownMinutes', event.target.value)} className={numericInputClass} />
+                  <span className={unitClass}>min</span>
+                </>}
+              />
+
+              <Rule
+                title="Expirace LIVE"
+                detail="Expirace LIVE session — nejpozději 17:00 Chicago; podle scope zavře otevřené kopie."
+                enabled={draft.sessionExpiryEnabled}
+                triggered={false}
+                onToggle={checked => set('sessionExpiryEnabled', checked)}
+                status={!draft.sessionExpiryEnabled ? 'vypnuto' : armExpiresAt > now ? `${time.format(armExpiresAt)} · zbývá ${duration(armExpiresAt - now)}` : armExpiresAt > 0 ? 'session vypršela' : 'od příštího LIVE'}
+                statusTone={draft.sessionExpiryEnabled ? (armExpiresAt > now ? 'indigo' : 'emerald') : 'muted'}
+                progress={expiryProgress}
+                progressTone={draft.sessionExpiryEnabled ? 'indigo' : 'muted'}
+                progressLabel="Průběh LIVE session"
+                control={
+                  <select aria-label="Scope po expiraci LIVE session" disabled={!draft.sessionExpiryEnabled} value={draft.armExpiryFlatten} onChange={event => set('armExpiryFlatten', event.target.value as DailyRulesDraft['armExpiryFlatten'])} className="h-7 w-[118px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-1.5 text-[10.5px] font-bold text-[var(--text-primary)] outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-45">
+                    <option value="followers">Zavřít followery</option>
+                    <option value="group">Zavřít skupinu</option>
+                  </select>
+                }
+              />
             </div>
-          </Rule>
 
-          <Rule title="Denní ztrátový limit" detail="Realizovaná ztráta leadera za den (USD)." enabled={draft.lossLimitEnabled} triggered={lossTriggered} onToggle={checked => set('lossLimitEnabled', checked)}>
-            <div className="flex items-center gap-3">
-              <label className="flex shrink-0 items-center gap-1.5">
-                <input aria-label="Denní ztrátový limit v USD" type="number" min="0.01" max="1000000" step="0.01" disabled={!draft.lossLimitEnabled} value={draft.dailyLossLimitUsd} onChange={event => set('dailyLossLimitUsd', event.target.value)} className={numericInputClass} />
-                <span className="text-[10px] font-bold text-[var(--text-muted)]">USD</span>
-              </label>
-              <div className="min-w-0 flex-1">
-                <div className="mb-1 flex items-center justify-between gap-2 text-[11px] text-[var(--text-secondary)]"><span>Dnes</span><b className={lossTriggered ? 'text-rose-500' : 'text-[var(--text-primary)]'}>−{number.format(lossCurrent)} · {draft.lossLimitEnabled ? `${Math.round(progressPercent(lossCurrent, lossLimit))} %` : 'vypnuto'}</b></div>
-                <Progress label="Průběh denní ztráty" value={draft.lossLimitEnabled ? progressPercent(lossCurrent, lossLimit) : 0} tone={lossTriggered ? 'rose' : warnedRules.has('daily-loss') ? 'amber' : draft.lossLimitEnabled ? 'emerald' : 'muted'} />
+            {saveErrors.length > 0 ? (
+              <div role="alert" className="mt-2 rounded-md border border-rose-500/25 bg-rose-500/[0.07] px-3 py-1.5 text-[11px] font-bold text-rose-500">
+                {saveErrors.map(error => <div key={error}>{error}</div>)}
+                <div className="mt-0.5">Pravidla nebyla uložena.</div>
               </div>
-            </div>
-          </Rule>
+            ) : null}
+            {notice ? <div role="status" className="mt-2 flex items-center gap-2 rounded-md border border-emerald-500/25 bg-emerald-500/[0.06] px-3 py-1.5 text-[11px] font-bold text-emerald-600"><CheckCircle2 size={13} />{notice}</div> : null}
 
-          <Rule title="Max obchodů za den" detail="Overtrading brzda — uzavřené obchody leadera." enabled={draft.maxTradesEnabled} triggered={tradesTriggered} onToggle={checked => set('maxTradesEnabled', checked)}>
-            <div className="flex items-center gap-3">
-              <label className="flex shrink-0 items-center gap-1.5">
-                <input aria-label="Max obchodů za den" type="number" min="1" max="200" step="1" disabled={!draft.maxTradesEnabled} value={draft.dailyMaxTrades} onChange={event => set('dailyMaxTrades', event.target.value)} className={numericInputClass} />
-                <span className="text-[10px] font-bold text-[var(--text-muted)]">obchodů</span>
-              </label>
-              <div className="min-w-0 flex-1">
-                <div className="mb-1 flex items-center justify-between gap-2 text-[11px] text-[var(--text-secondary)]"><span>Dnes</span><b className={tradesTriggered ? 'text-rose-500' : 'text-[var(--text-primary)]'}>{tradesCurrent} / {draft.maxTradesEnabled ? tradesLimit : '—'}</b></div>
-                <Progress label="Průběh obchodů za den" value={draft.maxTradesEnabled ? progressPercent(tradesCurrent, tradesLimit) : 0} tone={tradesTriggered ? 'rose' : warnedRules.has('max-trades') ? 'amber' : draft.maxTradesEnabled ? 'emerald' : 'muted'} />
-              </div>
-            </div>
-          </Rule>
-
-          <Rule title="Obchodní okno" detail="Mimo okno se kopie neposílá; po konci okna se den zamkne." enabled={draft.tradingWindowEnabled} triggered={windowTriggered} onToggle={checked => set('tradingWindowEnabled', checked)}>
-            <div className="flex flex-wrap items-center gap-2">
-              <input aria-label="Obchodní okno od" type="time" disabled={!draft.tradingWindowEnabled} value={draft.tradingWindowFrom} onChange={event => set('tradingWindowFrom', event.target.value)} className={timeInputClass} />
-              <span className="text-xs text-[var(--text-muted)]">–</span>
-              <input aria-label="Obchodní okno do" type="time" disabled={!draft.tradingWindowEnabled} value={draft.tradingWindowTo} onChange={event => set('tradingWindowTo', event.target.value)} className={timeInputClass} />
-              <span className="rounded bg-indigo-500/10 px-1.5 py-1 text-[9px] font-black text-indigo-500">Europe/Prague</span>
-              <div className="min-w-[150px] flex-1">
-                <div className="mb-1 flex items-center justify-between gap-2 text-[11px] text-[var(--text-secondary)]"><span>Nyní <span className="font-mono">{time.format(now)}</span></span><b className={windowTriggered ? 'text-rose-500' : dailyStats?.windowState === 'inside' ? 'text-emerald-500' : 'text-[var(--text-primary)]'}>{!draft.tradingWindowEnabled || dailyStats?.windowState === 'off' ? 'vypnuto' : dailyStats?.windowState === 'inside' ? 'uvnitř okna' : dailyStats?.windowState === 'outside' ? 'mimo okno' : 'stav nedostupný'}</b></div>
-                <Progress label="Průběh obchodního okna" value={draft.tradingWindowEnabled ? windowProgress : 0} tone={windowTriggered ? 'rose' : warnedRules.has('window-end') ? 'amber' : draft.tradingWindowEnabled ? 'emerald' : 'muted'} />
-              </div>
-            </div>
-          </Rule>
-
-          <Rule title="Cooldown po uzavření" detail="Po flat leadera blokuje nové zapnutí na N minut." enabled={draft.cooldownEnabled} triggered={false} onToggle={checked => set('cooldownEnabled', checked)}>
-            <div className="flex items-center gap-3">
-              <label className="flex shrink-0 items-center gap-1.5">
-                <input aria-label="Cooldown po uzavření v minutách" type="number" min="1" max="720" step="1" disabled={!draft.cooldownEnabled} value={draft.entryCooldownMinutes} onChange={event => set('entryCooldownMinutes', event.target.value)} className={numericInputClass} />
-                <span className="text-[10px] font-bold text-[var(--text-muted)]">min</span>
-              </label>
-              <div className="min-w-0 flex-1">
-                <div className="mb-1 flex items-center justify-between gap-2 text-[11px] text-[var(--text-secondary)]"><span>Dnes</span><b className={cooldownActive ? 'text-amber-500' : 'text-[var(--text-primary)]'}>{cooldownActive ? `do ${time.format(cooldownUntil)} · ${duration(cooldownRemaining)}` : !draft.cooldownEnabled ? 'vypnuto' : 'připraven'}</b></div>
-                <Progress label="Průběh cooldownu" value={cooldownProgress} tone={cooldownActive ? 'amber' : draft.cooldownEnabled ? 'emerald' : 'muted'} />
-              </div>
-            </div>
-          </Rule>
-
-          <Rule title="Expirace LIVE session" detail="Nejpozději 17:00 Chicago; podle scope zavře otevřené kopie." enabled={draft.sessionExpiryEnabled} triggered={false} onToggle={checked => set('sessionExpiryEnabled', checked)}>
-            <div className="flex items-center gap-3">
-              <select aria-label="Scope po expiraci LIVE session" disabled={!draft.sessionExpiryEnabled} value={draft.armExpiryFlatten} onChange={event => set('armExpiryFlatten', event.target.value as DailyRulesDraft['armExpiryFlatten'])} className="h-8 w-36 shrink-0 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-[11px] font-bold text-[var(--text-primary)] outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-45">
-                <option value="followers">Zavřít followery</option>
-                <option value="group">Zavřít celou skupinu</option>
-              </select>
-              <div className="min-w-0 flex-1">
-                <div className="mb-1 flex items-center justify-between gap-2 text-[11px] text-[var(--text-secondary)]"><span>Dnes</span><b className="text-[var(--text-primary)]">{!draft.sessionExpiryEnabled ? 'vypnuto' : armExpiresAt > now ? `${time.format(armExpiresAt)} · zbývá ${duration(armExpiresAt - now)}` : armExpiresAt > 0 ? 'session vypršela' : 'od příštího LIVE'}</b></div>
-                <Progress label="Průběh LIVE session" value={expiryProgress} tone={draft.sessionExpiryEnabled ? 'indigo' : 'muted'} />
-              </div>
-            </div>
-          </Rule>
-        </div>
-
-        {saveErrors.length > 0 ? (
-          <div role="alert" className="mt-3 rounded-md border border-rose-500/25 bg-rose-500/[0.07] px-3 py-2 text-xs font-bold text-rose-500">
-            {saveErrors.map(error => <div key={error}>{error}</div>)}
-            <div className="mt-1">Pravidla nebyla uložena.</div>
-          </div>
-        ) : null}
-        {notice ? <div role="status" className="mt-3 flex items-center gap-2 rounded-md border border-emerald-500/25 bg-emerald-500/[0.06] px-3 py-2 text-xs font-bold text-emerald-600"><CheckCircle2 size={14} />{notice}</div> : null}
-
-        <footer className="mt-3 flex flex-col gap-3 border-t border-[var(--border-subtle)] pt-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="max-w-3xl text-[11px] leading-relaxed text-[var(--text-muted)]">
-            Pravidla vyhodnocuje worker ze svého fill ledgeru a session — ne broker. Změna platí od příštího zapnutí.
-          </p>
-          <button type="button" disabled={disabled || saving || !onSave} onClick={() => void save()} className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md bg-indigo-600 px-3.5 text-xs font-black text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-45">
-            {saving ? <Clock3 size={13} className="animate-spin" /> : <Save size={13} />}{saving ? 'Ukládám…' : 'Uložit pravidla'}
-          </button>
-        </footer>
+            <footer className="mt-2 flex items-center justify-between gap-3">
+              <p className="min-w-0 truncate text-[10px] text-[var(--text-muted)]" title="Pravidla vyhodnocuje worker ze svého fill ledgeru a session — ne broker. Když pravidlo platí, copier se vypne a zamkne do konce session; odemknout jde jen tady, s důvodem.">
+                Vyhodnocuje worker, ne broker · při zásahu se den zamkne · změna platí od příštího zapnutí.
+              </p>
+              <button type="button" disabled={disabled || saving || !onSave} onClick={() => void save()} className={`inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-[11px] font-black text-white disabled:cursor-not-allowed disabled:opacity-45 ${dirty ? 'bg-indigo-600 hover:bg-indigo-500' : 'bg-indigo-600/60 hover:bg-indigo-500/70'}`}>
+                {saving ? <Clock3 size={12} className="animate-spin" /> : <Save size={12} />}{saving ? 'Ukládám…' : 'Uložit pravidla'}
+              </button>
+            </footer>
+          </>
+        )}
       </section>
 
       {unlockOpen && typeof document !== 'undefined' ? createPortal(
