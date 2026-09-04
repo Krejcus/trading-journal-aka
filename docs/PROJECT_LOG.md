@@ -160,6 +160,33 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-04 (Codex, fáze B PWA Pravidla dne a odemknutí)
+
+LIVE přehled má nad dosavadním obsahem jednotnou kartu Pravidla dne podle
+schváleného `LockRules` vizuálu: šest group-safety pravidel, jejich hodnoty,
+autoritativní průběh z controller statusu, stavový pill a zvýraznění pravidla,
+které skutečně spustilo denní zámek. Staré denní safety vstupy byly z editoru
+skupiny a šablon odstraněny; použití topologické šablony je už také nesmí tiše
+přepsat. Uložení dál používá existující `update-group` cestu a neplatný číselný
+limit, čas ani okno přes půlnoc se fail-closed neodešlou. Text v kartě
+výslovně říká, že změna začne platit od příštího zapnutí.
+
+Aktivní `dayLockUntil` zobrazuje rose banner s časem, ručním/automatickým
+triggerem, worker důvodem a tlačítkem Odemknout. Dialog vyžaduje důvod 3–200
+znaků bez řídicích znaků a desetisekundovou prodlevu; potom předá výhradně
+existující relay příkaz `unlock-day`. Úspěch i chyba workeru zůstávají čitelně
+v UI a úspěch výslovně potvrzuje VYPNUTO — nevznikla žádná ARM cesta. Ruční
+„Zamknout den“ zůstal zachovaný a související PWA texty používají terminologii
+VYPNUTO/ZAMČENO. Worker, server, push plán, companion ani broker se neměnily.
+
+Ověření: všechny `tests/liveCopy*.test.ts` plus LIVE tab a relay sada prošly
+13/13 souborů a 99/99 testů; loopback `localCopierExecutionAgent` po povolení
+lokálního listen prošel 40/40. Scoped ESLint a `git diff --check` jsou čisté,
+produkční Vite/PWA build prošel. `npm run typecheck` hlásí jen předexistující
+chyby v `extension/` kvůli chybějícím Chrome typům a `@crxjs/vite-plugin`,
+žádný změněný soubor. Karta a unlock dialog byly navíc vizuálně ověřeny v
+reálném Chrome v dark i light PWA tokenech. Závislosti nebyly instalovány.
+
 ### 2026-09-04 (Codex, fáze A pravidel dne a zámku dne)
 
 Dokončena fáze A podle `docs/DAY_LOCK_RULES_SPEC_20260904.md`: safety parser
