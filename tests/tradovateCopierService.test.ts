@@ -9,6 +9,7 @@ const group: CopyGroupConfig = {
   followers: [{ accountId: 200, mode: 'on-submit', multiplier: 1 }],
 };
 
+let fakeRevision = 0;
 const emptySupabase = {
   from: () => ({
     select: () => ({
@@ -17,7 +18,9 @@ const emptySupabase = {
       }),
     }),
   }),
-  rpc: async () => ({ data: 1, error: null }),
+  // Každý CAS commit musí vrátit novou revizi; runtime od day-lock pravidel
+  // commituje při startu víc než jednou.
+  rpc: async () => ({ data: ++fakeRevision, error: null }),
 } as unknown as SupabaseClient;
 
 describe('startTradovateCopier', () => {

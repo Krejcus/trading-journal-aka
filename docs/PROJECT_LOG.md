@@ -160,6 +160,18 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-04 (Claude, main měl po day-lock merge 3 červené testy)
+
+Při deployi opravy snímků (bec78536) měla celá sada 3 pády, které na `main`
+přinesl už merge day-lock pravidel (`efd9bf43` → `fa2674e4`): `cloneSafety`
+vyráběla `dayLockSnoozedRules: []` a `dayUnlock: null` i do prázdného snapshotu
+(test „prázdný store vrací prázdný snapshot“) a fake Supabase `rpc` v testu
+služby vracel stále revizi 1, zatímco runtime od day-lock pravidel commituje
+při startu vícekrát („invalid revision“). Oprava: volitelná pole se klonují,
+ale nevyrábějí (runtime si defaulty doplní sám), fake `rpc` vrací rostoucí
+revizi. Můj push bec78536 prošel přes červenou sadu, protože řetězení v shellu
+použilo `;` místo `&&` — poučení zapsáno. Sada 1915/1915, tsc čistý.
+
 ### 2026-09-04 (Claude, snímky grafu k obchodům nikdy nedorazily)
 
 Uživatel: včerejší ani dnešní obchody nemají v notifikaci ani v journalu
