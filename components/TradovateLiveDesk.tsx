@@ -322,7 +322,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     const leaderEligibility = effectiveAccountEligibility.find(entry =>
       entry.accountId === targetGroup.leaderAccountId && entry.state !== 'active');
     if (leaderEligibility) {
-      throw new Error(`ARM blokován: leader není způsobilý (${leaderEligibility.state}: ${leaderEligibility.reason ?? 'bez důvodu'}).`);
+      throw new Error(`Zapnutí blokováno: leader není způsobilý (${leaderEligibility.state}: ${leaderEligibility.reason ?? 'bez důvodu'}).`);
     }
     const enabledFollowers = targetGroup.followers.filter(follower => follower.mode !== 'off');
     const enabledFollowerIds = new Set(enabledFollowers.map(follower => follower.accountId));
@@ -330,7 +330,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       entry.state !== 'active' && enabledFollowerIds.has(entry.accountId));
     const participating = enabledFollowers.length - ineligible.length;
     if (participating <= 0) {
-      throw new Error('ARM blokován: skupina nemá žádný způsobilý follower účet.');
+      throw new Error('Zapnutí blokováno: skupina nemá žádný způsobilý follower účet.');
     }
     const memberIds = new Set([
       targetGroup.leaderAccountId,
@@ -450,7 +450,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         publicKey: decoded.publicKey,
         deviceName: decoded.deviceName,
       });
-      setPairingNotice('Mac worker je spárovaný. Po bezpečném restartu zůstane DISARMED.');
+      setPairingNotice('Mac worker je spárovaný. Po bezpečném restartu zůstane VYPNUTO.');
     })().catch(error => {
       live.setError(error instanceof Error ? error.message : String(error));
     });
@@ -600,6 +600,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
               copierObservingOnly={!copierUiDemo && agentStatus?.controller.armed === true && agentStatus.controller.shadowMode === true}
               copierKillSwitch={agentStatus?.controller.killSwitch === true}
               dayLockUntil={agentStatus?.controller.dayLockUntil ?? 0}
+              dayLockReason={agentStatus?.controller.dayLockReason ?? null}
+              dayLockTrigger={agentStatus?.controller.dayLockTrigger ?? null}
+              dayLockAt={agentStatus?.controller.dayLockAt ?? null}
+              armedAt={agentStatus?.controller.armedAt ?? 0}
+              armExpiresAt={agentStatus?.controller.armExpiresAt ?? 0}
               cooldownUntil={copierUiDemo ? copierUiDemo.cooldownUntil : agentStatus?.controller.entryCooldownUntil ?? 0}
               stuckOperations={copierUiDemo ? copierUiDemo.stuckOperations : agentStatus?.controller.stuckOperations ?? []}
               accountEligibility={effectiveAccountEligibility}
@@ -623,16 +628,20 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
               onArmLive={executionGroup ? async () => armLiveGroup(executionGroup) : undefined}
               onDisarm={async () => setAgentStatus((await executeAgent({ type: 'disarm' })).status)}
               onEmergencyStop={async () => setAgentStatus((await executeAgent({ type: 'kill-switch' })).status)}
+              onUnlockDay={async reason => {
+                const result = await executeAgent({ type: 'unlock-day', reason });
+                setAgentStatus(result.status);
+              }}
               onDayLock={async () => {
                 if (!(await confirmAction({
                   title: 'Zamknout den',
-                  message: 'Opravdu zablokovat ostrý ARM až do konce aktuální broker session? Restart Mac workeru tento lock nezruší.',
+                  message: 'Opravdu zablokovat zapnutí LIVE až do konce aktuální broker session? Restart Mac workeru tento zámek nezruší.',
                   confirmLabel: 'Zamknout den',
                   tone: 'danger',
                 }))) return;
                 setAgentStatus((await executeAgent({
                   type: 'lock-until-session-end',
-                  reason: 'Ruční denní lock z AlphaTrade LIVE UI',
+                  reason: 'Ruční zámek dne z AlphaTrade LIVE UI',
                 })).status);
               }}
             />
@@ -780,7 +789,7 @@ async function downloadPilotLease(connectionId: string): Promise<void> {
   setTimeout(() => URL.revokeObjectURL(href), 0);
 }
 
-const SafetyBanner = () => <section className="overflow-hidden rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045]"><div className="flex items-center gap-2.5 border-b border-indigo-500/15 px-4 py-3"><ShieldAlert size={16} className="text-indigo-500" /><h2 className="text-sm font-black text-[var(--text-primary)]">Bezpečné připojení účtů</h2></div><div className="grid gap-2 px-4 py-3 text-xs leading-5 text-[var(--text-secondary)] lg:grid-cols-3 lg:gap-5"><p><b className="text-[var(--text-primary)]">Přihlášení probíhá u Tradovate.</b> AlphaTrade nevidí ani neukládá tvoje heslo.</p><p><b className="text-[var(--text-primary)]">LIVE je zatím read-only.</b> Copier zůstává DISARMED a nic neodesílá.</p><p><b className="text-[var(--text-primary)]">Jeden vlastní datový tok.</b> Všechny LIVE záložky používají stejné OAuth spojení.</p></div></section>;
+const SafetyBanner = () => <section className="overflow-hidden rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045]"><div className="flex items-center gap-2.5 border-b border-indigo-500/15 px-4 py-3"><ShieldAlert size={16} className="text-indigo-500" /><h2 className="text-sm font-black text-[var(--text-primary)]">Bezpečné připojení účtů</h2></div><div className="grid gap-2 px-4 py-3 text-xs leading-5 text-[var(--text-secondary)] lg:grid-cols-3 lg:gap-5"><p><b className="text-[var(--text-primary)]">Přihlášení probíhá u Tradovate.</b> AlphaTrade nevidí ani neukládá tvoje heslo.</p><p><b className="text-[var(--text-primary)]">LIVE je zatím read-only.</b> Copier zůstává VYPNUTO a nic neodesílá.</p><p><b className="text-[var(--text-primary)]">Jeden vlastní datový tok.</b> Všechny LIVE záložky používají stejné OAuth spojení.</p></div></section>;
 
 const EmptyConnection = ({ onAdd }: { onAdd: () => void }) => <div className="flex min-h-52 flex-col items-center justify-center px-6 py-10 text-center"><span className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-500"><Link2 size={22} /></span><h3 className="mt-4 text-sm font-black text-[var(--text-primary)]">Žádné připojení</h3><p className="mt-1 max-w-sm text-xs leading-5 text-[var(--text-secondary)]">Přidej Tradovate přes OAuth. Po návratu načteme dostupné účty.</p><button type="button" onClick={onAdd} className="mt-4 flex h-9 items-center gap-2 rounded-md bg-indigo-600 px-4 text-xs font-black text-white"><Plus size={15} /> Add connection</button></div>;
 

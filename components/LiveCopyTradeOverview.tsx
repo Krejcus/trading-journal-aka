@@ -25,6 +25,7 @@ import {
 } from '../lib/copyTradeAccountLabels';
 import { formatSnapshotRepairError } from '../lib/copierBlockerMessages';
 import { translateCopierRejectReason } from '../lib/copierRejectReason';
+import LiveDayRulesCard from './LiveDayRulesCard';
 import {
   copierCopiesOutcomeText,
   type CopierDisarmRecord,
@@ -275,7 +276,13 @@ interface Props {
   onDisarm?: () => Promise<void> | void;
   onEmergencyStop?: () => Promise<void> | void;
   onDayLock?: () => Promise<void> | void;
+  onUnlockDay?: (reason: string) => Promise<void> | void;
   dayLockUntil?: number;
+  dayLockReason?: string | null;
+  dayLockTrigger?: CopierControllerStatus['dayLockTrigger'];
+  dayLockAt?: number | null;
+  armedAt?: number;
+  armExpiresAt?: number;
   /** Konec anti-revenge cooldownu (epoch ms); 0 = neběží. */
   cooldownUntil?: number;
   /** Operace čekající na ruční kontrolu — blokují ARM a musí být vidět. */
@@ -527,7 +534,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   onDisarm,
   onEmergencyStop,
   onDayLock,
+  onUnlockDay,
   dayLockUntil = 0,
+  dayLockReason = null,
+  dayLockTrigger = null,
+  dayLockAt = null,
+  armedAt = 0,
+  armExpiresAt = 0,
   cooldownUntil = 0,
   stuckOperations = [],
   accountEligibility = [],
@@ -688,6 +701,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     runtimeGroup?.leaderAccountId,
     ...(runtimeGroup?.followers.map(follower => follower.accountId) ?? []),
   ].filter((accountId): accountId is number => accountId != null))], [groups, runtimeGroup]);
+  const rulesGroup = groups.find(group => group.id === executionGroupId)
+    ?? runtimeGroup
+    ?? groups[0]
+    ?? null;
   const renderAccountMessage = (message: string, accountIds: Iterable<number> = knownAccountIds) =>
     formatKnownCopyTradeAccountIds(message, accountIds, accountId => accountLabel(accountId));
   const connectionByFirm = useMemo(
@@ -867,7 +884,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     if (!armAction) {
       setPendingAction({
         title: 'Copier nelze zapnout',
-        detail: 'Execution runtime není dostupný. AlphaTrade nemůže provést autoritativní preflight ani ARM LIVE.',
+        detail: 'Execution runtime není dostupný. AlphaTrade nemůže provést autoritativní kontrolu ani zapnutí LIVE.',
         confirmLabel: 'Rozumím',
         danger: true,
         blocked: true,
@@ -933,9 +950,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       const successText = result && result.type === 'flatten'
         ? `Flatten potvrzen: ${result.accountIds.length} účtů je flat, zrušeno ${result.canceledOrders} příkazů, odesláno ${result.submittedClosures} close příkazů.`
         : command.type === 'resolve-stuck-operation'
-          ? 'Operace označena za vyřešenou. Runtime je DISARMED; před ARM proběhne nová reconciliation.'
+          ? 'Operace označena za vyřešenou. Runtime je VYPNUTO; před zapnutím proběhne nová kontrola pozic.'
           : command.type === 'set-multiplier'
-          ? `Násobek ${normalizeMultiplier(command.multiplier)} byl potvrzen lokálním execution runtime. Runtime zůstává DISARMED do nového ARM.`
+          ? `Násobek ${normalizeMultiplier(command.multiplier)} byl potvrzen lokálním execution runtime. Runtime zůstává VYPNUTO do nového zapnutí.`
           : 'Změna byla potvrzena přes execution adaptér.';
       setToast({
         tone: commandAdapter && targetsExecutionRuntime ? 'success' : 'info',
@@ -1005,6 +1022,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     }, onError);
   };
 
+  const saveDayRules = async (safety: CopyGroupSafetySettings): Promise<void> => {
+    if (!rulesGroup) throw new Error('Nejdřív vytvoř kopírovací skupinu.');
+    let failure = '';
+    const saved = await saveGroup({ ...rulesGroup, safety }, message => { failure = message; });
+    if (!saved) throw new Error(failure || 'Pravidla dne se nepodařilo uložit.');
+  };
+
   const updateFollower = (groupId: string, accountId: number, patch: Partial<{ mode: ReplicationMode; multiplier: number }>) => {
     setGroups(current => current.map(group => group.id !== groupId ? group : {
       ...group,
@@ -1050,6 +1074,21 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
   return (
     <div className="space-y-5" style={{ fontSize: `${density}%` }}>
+      <LiveDayRulesCard
+        groupName={rulesGroup?.name}
+        safety={rulesGroup?.safety ?? DEFAULT_COPY_GROUP_SAFETY}
+        dailyStats={dailyStats}
+        dayLockUntil={dayLockUntil}
+        dayLockReason={dayLockReason}
+        dayLockTrigger={dayLockTrigger}
+        dayLockAt={dayLockAt}
+        cooldownUntil={cooldownUntil}
+        armedAt={armedAt}
+        armExpiresAt={armExpiresAt}
+        disabled={busyCommand != null || !rulesGroup}
+        onSave={rulesGroup ? saveDayRules : undefined}
+        onUnlockDay={onUnlockDay}
+      />
       <CopierDailyStatsSummary
         leaderRealizedPnl={dailyStats?.realizedPnlUsd ?? null}
         leaderLosingTrades={dailyStats?.losingTrades ?? null}
@@ -1177,11 +1216,22 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         onEdit={() => setEditorGroup(structuredClone(group))}
                         templates={templates}
                         onApplyTemplate={template => {
+                          const currentSafety = group.safety ?? DEFAULT_COPY_GROUP_SAFETY;
                           const updated: CopyGroupConfig = {
                             ...group,
                             leaderAccountId: template.leaderAccountId ?? group.leaderAccountId,
                             followers: template.followers.filter(follower => follower.accountId !== (template.leaderAccountId ?? group.leaderAccountId)),
-                            safety: { ...template.safety },
+                            // Pravidla dne mají jediný editor v LIVE kartě a
+                            // aplikace topologické šablony je proto nesmí tiše přepsat.
+                            safety: {
+                              ...template.safety,
+                              entryCooldownMinutes: currentSafety.entryCooldownMinutes,
+                              armExpiryFlatten: currentSafety.armExpiryFlatten,
+                              dailyLossLimitUsd: currentSafety.dailyLossLimitUsd,
+                              dailyMaxLosingTrades: currentSafety.dailyMaxLosingTrades,
+                              dailyMaxTrades: currentSafety.dailyMaxTrades,
+                              tradingWindow: { ...currentSafety.tradingWindow },
+                            },
                           };
                           void saveGroup(updated);
                         }}
@@ -1370,10 +1420,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
               if (command.type === 'flatten-group' && confirmRearmAfterFlatten && onArmLive && !copierKillSwitch) {
                 setPendingAction({
                   title: 'Pokračovat v kopírování?',
-                  detail: 'Flatten je potvrzen: všechny účty jsou flat. ARM spustí novou reconciliation a kopírování pojede dál.',
-                  confirmLabel: 'ARM & pokračovat',
+                  detail: 'Flatten je potvrzen: všechny účty jsou flat. Zapnutí spustí novou kontrolu pozic a kopírování pojede dál.',
+                  confirmLabel: 'Zapnout a pokračovat',
                   run: async () => { await onArmLive(); },
-                  successText: 'Copier je znovu ARMED — kopírování pokračuje.',
+                  successText: 'Copier je znovu zapnutý — kopírování pokračuje.',
                 });
               } else {
                 setPendingAction(null);
@@ -1483,7 +1533,7 @@ const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry 
           </p>
           <p className="text-[11px] text-[var(--text-secondary)] mt-1.5 leading-snug">
             {dataActive
-              ? apiReady ? 'Read-only broker data i execution adaptér jsou připojené.' : 'Read-only broker snapshot je dostupný. Copier zůstává DISARMED.'
+              ? apiReady ? 'Read-only broker data i execution adaptér jsou připojené.' : 'Read-only broker snapshot je dostupný. Copier zůstává VYPNUTO.'
               : 'Po připojení účtů se zobrazí read-only broker snapshot pro všechny skupiny.'}
           </p>
         </div>
@@ -1538,7 +1588,7 @@ const StuckOperationsPanel = ({ operations, busy, onResolve }: {
       <div className="flex items-center gap-2">
         <ShieldAlert size={15} className="shrink-0 text-amber-600" />
         <b className="text-xs text-[var(--text-primary)]">Operace čekající na ruční kontrolu ({operations.length})</b>
-        <span className="hidden text-[10px] text-[var(--text-secondary)] sm:block">Blokují ARM. Ověř stav v Tradovate a teprve pak označ za vyřešené.</span>
+        <span className="hidden text-[10px] text-[var(--text-secondary)] sm:block">Blokují zapnutí. Ověř stav v Tradovate a teprve pak označ za vyřešené.</span>
       </div>
       <div className="mt-2 divide-y divide-amber-500/15">
         {operations.map(operation => (
@@ -1654,7 +1704,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
       ? 'Execution runtime není pro tuto skupinu dostupný.'
       : !connected && connectBlocked
         ? 'Connect blokuje kill switch, denní zámek nebo anti-revenge cooldown.'
-        : connected ? 'Kliknutím bezpečně DISARMovat copier.' : 'Kliknutím ARMovat copier naostro.';
+        : connected ? 'Kliknutím bezpečně vypnout copier.' : 'Kliknutím zapnout copier naostro.';
 
   // Dokud stav neznáme, nesmí přepínač tvrdit OFF — armovaný copier by se
   // tvářil jako odpojený. Neutrální „?" místo toho přiznává, že se ptáme.
@@ -2738,83 +2788,18 @@ const GroupEditorDialog = ({ group, isNew, accounts, accountLabel, saving, onClo
                   );
                 })}
               </div>
-              <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border-subtle)] px-4 py-3">
+              <div className="flex items-start gap-3 rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045] px-4 py-3">
+                <Clock3 size={16} className="mt-0.5 shrink-0 text-indigo-500" />
                 <span>
-                  <b className="block text-xs text-[var(--text-primary)]">Pauza po uzavření pozice</b>
-                  <span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">Po potvrzeném zploštění celé skupiny zablokuje ostrý ARM. Nula znamená vypnuto.</span>
+                  <b className="block text-xs text-[var(--text-primary)]">Pravidla dne jsou v LIVE přehledu</b>
+                  <span className="mt-0.5 block text-[11px] leading-relaxed text-[var(--text-secondary)]">Denní limity, obchodní okno, cooldown a expiraci LIVE session nastavíš na jedné kartě Pravidla dne. Jejich změna začne platit od příštího zapnutí.</span>
                 </span>
-                <span className="flex shrink-0 items-center gap-2">
-                  <input
-                    aria-label="Cooldown po uzavření v minutách"
-                    type="number"
-                    min="0"
-                    max="720"
-                    step="1"
-                    value={safety.entryCooldownMinutes}
-                    onChange={event => updateSafety('entryCooldownMinutes', Math.min(720, Math.max(0, Math.floor(Number(event.target.value) || 0))))}
-                    className="h-9 w-20 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-right text-xs font-bold text-[var(--text-primary)]"
-                  />
-                  <span className="text-[11px] font-bold text-[var(--text-secondary)]">min</span>
-                </span>
-              </label>
-              <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border-subtle)] px-4 py-3">
-                <span>
-                  <b className="block text-xs text-[var(--text-primary)]">Auto-zavření kopií</b>
-                  <span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">Když copier přestane kopírovat s otevřenou pozicí (vypršení ARM nebo fail-closed chyba), risk-redukčně zavře kopie. Nikdy nezvětší pozici ani neotočí směr.</span>
-                </span>
-                <select
-                  aria-label="Akce po vypršení ARM"
-                  value={safety.armExpiryFlatten}
-                  onChange={event => updateSafety('armExpiryFlatten', event.target.value as CopyGroupSafetySettings['armExpiryFlatten'])}
-                  className="h-9 shrink-0 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)]"
-                >
-                  <option value="followers">Zavřít followery</option>
-                  <option value="group">Zavřít celou skupinu</option>
-                  <option value="off">Nezavírat (jen DISARM)</option>
-                </select>
-              </label>
-              <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border-subtle)] px-4 py-3">
-                <span>
-                  <b className="block text-xs text-[var(--text-primary)]">Auto day-lock: denní ztráta</b>
-                  <span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">{COPIER_LEADER_DAILY_STATS_LABEL}. Při dosažení limitu se copier po zploštění skupiny sám zamkne do konce session. Nula znamená vypnuto.</span>
-                </span>
-                <span className="flex shrink-0 items-center gap-2">
-                  <input
-                    aria-label="Denní ztrátový limit v USD"
-                    type="number"
-                    min="0"
-                    step="50"
-                    value={safety.dailyLossLimitUsd}
-                    onChange={event => updateSafety('dailyLossLimitUsd', Math.min(1_000_000, Math.max(0, Number(event.target.value) || 0)))}
-                    className="h-9 w-24 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-right text-xs font-bold text-[var(--text-primary)]"
-                  />
-                  <span className="text-[11px] font-bold text-[var(--text-secondary)]">USD</span>
-                </span>
-              </label>
-              <label className="flex items-center justify-between gap-4 rounded-lg border border-[var(--border-subtle)] px-4 py-3">
-                <span>
-                  <b className="block text-xs text-[var(--text-primary)]">Auto day-lock: ztrátové obchody</b>
-                  <span className="mt-0.5 block text-[11px] text-[var(--text-secondary)]">{COPIER_LEADER_DAILY_STATS_LABEL}. Po dosažení počtu ztrátových obchodů se copier po zploštění zamkne. Nula znamená vypnuto.</span>
-                </span>
-                <span className="flex shrink-0 items-center gap-2">
-                  <input
-                    aria-label="Max ztrátových obchodů za den"
-                    type="number"
-                    min="0"
-                    max="50"
-                    step="1"
-                    value={safety.dailyMaxLosingTrades}
-                    onChange={event => updateSafety('dailyMaxLosingTrades', Math.min(50, Math.max(0, Math.floor(Number(event.target.value) || 0))))}
-                    className="h-9 w-20 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-right text-xs font-bold text-[var(--text-primary)]"
-                  />
-                  <span className="text-[11px] font-bold text-[var(--text-secondary)]">obchodů</span>
-                </span>
-              </label>
+              </div>
               <div className="flex items-start gap-3 rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045] px-4 py-3">
                 <ShieldCheck size={16} className="mt-0.5 shrink-0 text-indigo-500" />
                 <span>
                   <b className="block text-xs text-[var(--text-primary)]">Uložený profil skupiny</b>
-                  <span className="mt-0.5 block text-[11px] leading-relaxed text-[var(--text-secondary)]">Skupinu uložíš bez automatické aktivace. Z menu skupiny ji můžeš bezpečně zvolit jako jedinou execution skupinu; runtime po přepnutí zůstane DISARMED až do samostatného ARM.</span>
+                  <span className="mt-0.5 block text-[11px] leading-relaxed text-[var(--text-secondary)]">Skupinu uložíš bez automatického zapnutí. Z menu skupiny ji můžeš bezpečně zvolit jako jedinou execution skupinu; runtime po přepnutí zůstane VYPNUTO až do samostatného zapnutí.</span>
                 </span>
               </div>
               <CopyGroupChangePreview saved={group} draft={draft} accountLabel={accountLabel} />
@@ -2866,7 +2851,7 @@ const TableSettingsDialog = ({ hiddenColumns, hiddenGroupColumns, hiddenOrderCol
             <label className="space-y-1.5"><span className="block text-[10px] font-bold text-[var(--text-secondary)]">Visible last characters</span><input aria-label="Visible last account characters" type="number" min="0" max="12" value={redaction.visibleEnd} onChange={event => onRedaction({ ...redaction, visibleEnd: Math.max(0, Number(event.target.value)) })} className="h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)]" /></label>
           </div>
         </div>
-        <label className="flex items-center gap-2.5 text-xs font-bold text-[var(--text-primary)]"><input type="checkbox" checked={confirmRearmAfterFlatten} onChange={event => onConfirmRearmAfterFlatten(event.target.checked)} className="accent-indigo-600" />Po Flatten All nabídnout ARM &amp; pokračovat</label>
+        <label className="flex items-center gap-2.5 text-xs font-bold text-[var(--text-primary)]"><input type="checkbox" checked={confirmRearmAfterFlatten} onChange={event => onConfirmRearmAfterFlatten(event.target.checked)} className="accent-indigo-600" />Po Flatten All nabídnout zapnutí a pokračovat</label>
       </div>
       <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] px-5 py-4"><button onClick={onReset} className="flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-[var(--text-secondary)] hover:bg-[var(--bg-page)]"><RotateCcw size={13} /> Reset to default</button><button onClick={onClose} className="h-9 rounded-lg bg-indigo-600 px-5 text-xs font-bold text-white">Done</button></footer>
     </section>
@@ -3013,22 +2998,9 @@ const GroupTemplatesDialog = ({ templates, accounts, onChange, onClose }: {
                     </label>
                   ))}
                 </div>
-                <label className="mt-3 flex items-center justify-between gap-4 rounded-lg border border-[var(--border-subtle)] px-3 py-2.5">
-                  <span className="text-xs font-bold text-[var(--text-primary)]">Cooldown po uzavření</span>
-                  <span className="flex items-center gap-2">
-                    <input
-                      aria-label="Cooldown šablony v minutách"
-                      type="number"
-                      min="0"
-                      max="720"
-                      step="1"
-                      value={draft.safety.entryCooldownMinutes}
-                      onChange={event => updateSafety('entryCooldownMinutes', Math.min(720, Math.max(0, Math.floor(Number(event.target.value) || 0))))}
-                      className="h-8 w-20 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-right text-xs font-bold text-[var(--text-primary)]"
-                    />
-                    <span className="text-[10px] font-bold text-[var(--text-secondary)]">min</span>
-                  </span>
-                </label>
+                <p className="mt-3 rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045] px-3 py-2.5 text-[11px] leading-relaxed text-[var(--text-secondary)]">
+                  Pravidla dne nejsou součástí topologické šablony. Upravují se pouze v kartě Pravidla dne, aby je použití šablony tiše nepřepsalo.
+                </p>
               </div>
               {error ? <p className="text-xs font-bold text-rose-500">{error}</p> : null}
               <div className="flex justify-end gap-2">
@@ -3154,7 +3126,7 @@ const CopyTradingHelpDialog = ({ onClose, apiReady }: { onClose: () => void; api
       <header className="p-5 border-b border-[var(--border-subtle)] flex items-center justify-between"><div><div className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">LIVE CONTROL</div><h3 className="text-lg font-black text-[var(--text-primary)] mt-1">Připravenost funkcí</h3></div><button onClick={onClose} className="w-9 h-9 rounded-xl text-[var(--text-secondary)] hover:bg-[var(--bg-page)] flex items-center justify-center"><X size={18} /></button></header>
       <div className="p-5 space-y-3">
         {[['Skupiny a účty', 'Vytvoření, leader, followeři, režim On Submit / On Fill a multiplier.'], ['Řízení rizika', 'Enable/Disable, Flatten účtu a Flatten All s povinným potvrzením.'], ['Příkazy', 'Skupinové ordery, refresh a příprava zrušení pracovního příkazu.'], ['Pohled', 'Skrývání sloupců, offline skupin, rozbalení a lokální uložení konfigurace.']].map(([title, detail]) => <div key={title} className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] p-3.5 flex gap-3"><CheckCircle2 size={17} className="text-emerald-500 shrink-0 mt-0.5" /><div><div className="text-xs font-black text-[var(--text-primary)]">{title}</div><div className="text-[11px] text-[var(--text-secondary)] mt-1 leading-relaxed">{detail}</div></div></div>)}
-        <div className={`rounded-md border p-3.5 flex gap-3 ${apiReady ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-amber-500/20 bg-amber-500/5'}`}><SlidersHorizontal size={17} className={apiReady ? 'text-emerald-500' : 'text-amber-500'} /><div><div className="text-xs font-black text-[var(--text-primary)]">{apiReady ? 'Execution adapter připojen' : 'Lokální přípravný režim'}</div><div className="text-[11px] text-[var(--text-secondary)] mt-1">{apiReady ? 'Příkazy lze předat připojenému broker adaptéru až po explicitním ARM.' : 'UI je kompletní, ale žádné akce se neposílají brokerovi.'}</div></div></div>
+        <div className={`rounded-md border p-3.5 flex gap-3 ${apiReady ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-amber-500/20 bg-amber-500/5'}`}><SlidersHorizontal size={17} className={apiReady ? 'text-emerald-500' : 'text-amber-500'} /><div><div className="text-xs font-black text-[var(--text-primary)]">{apiReady ? 'Execution adapter připojen' : 'Lokální přípravný režim'}</div><div className="text-[11px] text-[var(--text-secondary)] mt-1">{apiReady ? 'Příkazy lze předat připojenému broker adaptéru až po explicitním zapnutí.' : 'UI je kompletní, ale žádné akce se neposílají brokerovi.'}</div></div></div>
       </div>
     </section>
   </div>, document.body,
