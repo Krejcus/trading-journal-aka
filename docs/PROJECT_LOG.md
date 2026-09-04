@@ -212,6 +212,30 @@ Root `tsc --noEmit` dál selhává pouze na již existujícím chybějícím
 výstupu nemají chybu. Úmyslně se nespouštěl `npm ci`/`npm install` ani plná
 testovací sada přesahující zadaný časový limit.
 
+### 2026-09-04 (Codex, fáze C — Pravidla dne a ZAMČENO v macOS companionu)
+- Build 17 ve větvi `codex/daylock-companion-20260904` dekóduje nová pole
+  contract-v1 `dayLock` a `dailyRules` jako volitelná; jejich absence zachová
+  dosavadní prezentaci. Reducer ukáže ZAMČENO jen pro čerstvě ověřený
+  DISARMED lock bez problému; stale/unknown/offline a `!N` zůstávají nadřazené.
+- Native UI podle `Lock*` mocků přidává rose `lock.fill` pill, DEN ZAMČENÝ,
+  read-only cestu Otevřít LIVE a autoritativní sekci Pravidla dne. Sekce se bez
+  `dailyRules` nevyrábí; `realizedLossUsd` se renderuje jen uvnitř ní. Nebyl
+  přidán unlock/ARM command ani ruční animace rámu `NSPopover`.
+- Detektor zachovává 3s anti-flap a 30s rate limit: lock je 60s zhoršení s
+  notifikací a volitelným zvukem, warning je tichý nejvýš jednou pro
+  `rule + sessionEndsAt`, nová session dá tichý 8s expiry toast a copier nikdy
+  sama nezapne. Lock/warning notifikace neobsahují účty ani dolarové částky.
+- Oveření: `build-for-testing` pro macOS arm64 prošel; plný systémový XCTest
+  runner mimo sandbox prošel 68/68 včetně popover probe (span horní hrany a
+  headeru 0,000 pt) a 20 light/dark snapshotů. CLI transition/resize probe
+  prošel 126 kontrolami. Release arm64 0.2.0 (17) prošel, binár byl znovu
+  ad-hoc podepsán s hardened runtime (`flags=adhoc,runtime`), strict codesign
+  verification prošla; SHA-256 bináru
+  `fd37612815f3578dbb9803dbdd1a5273ebd861bbd6ff46ef6966eb227f57e94b`.
+- Aplikace nebyla instalována ani spuštěna jako uživatelský companion,
+  LaunchAgent se neměnil a nic se nemergovalo. Serverová fáze A musí dodat
+  DTO pole z autoritativního heartbeatu; do té doby build 17 funguje jako dnes.
+
 ### 2026-09-04 (Claude + uživatel, schválený návrh „Pravidla dne + zámek dne")
 
 Uživatel schválil vizuál (canvas stránka „Zamčený den", `mockups/menubar-companion/Lock*.dc.html`)

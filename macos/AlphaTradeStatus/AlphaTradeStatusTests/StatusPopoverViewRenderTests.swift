@@ -167,8 +167,31 @@ final class StatusPopoverViewRenderTests: XCTestCase {
         XCTAssertGreaterThan(color.redComponent, color.blueComponent + 0.04)
     }
 
+    func testZamcenoMenuBarPillRendersRoseLockSymbolAndText() throws {
+        let presentation = CompanionMockFixtureCatalog.presentation(for: .locked)
+        XCTAssertEqual(presentation.menuBar.symbolName, "lock.fill")
+        XCTAssertEqual(presentation.menuBar.pillText, "ZAMČENO")
+
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let button = NSStatusBarButton(frame: .zero)
+            let size = MenuBarStatusButtonStyle.apply(
+                to: button,
+                presentation: presentation.menuBar,
+                appearance: appearance == .darkAqua ? .dark : .light
+            )
+            XCTAssertEqual(size.height, 28, accuracy: 0.01)
+            XCTAssertGreaterThan(size.width, 95)
+            XCTAssertNotNil(button.image)
+
+            let background = try XCTUnwrap(button.layer?.backgroundColor)
+            let color = try XCTUnwrap(NSColor(cgColor: background)?.usingColorSpace(.sRGB))
+            XCTAssertGreaterThan(color.redComponent, color.greenComponent)
+            XCTAssertGreaterThan(color.redComponent, color.blueComponent)
+        }
+    }
+
     func testStatusPopoverCompletesLayoutInLightAndDarkModes() {
-        let fixtures: [CompanionFixtureID] = [.live, .disarmedUnverified, .intervention]
+        let fixtures: [CompanionFixtureID] = [.live, .disarmedUnverified, .locked, .intervention]
         let schemes: [(name: String, value: ColorScheme)] = [
             ("light", .light),
             ("dark", .dark)
@@ -187,6 +210,14 @@ final class StatusPopoverViewRenderTests: XCTestCase {
 
     func testVypnutoPopoverRendersInLightAndDarkModes() throws {
         let presentation = CompanionMockFixtureCatalog.presentation(for: .disarmedUnverified)
+        for scheme in [ColorScheme.light, .dark] {
+            let data = try renderPNG(presentation: presentation, colorScheme: scheme)
+            XCTAssertGreaterThan(data.count, 15_000)
+        }
+    }
+
+    func testZamcenoPopoverRendersInLightAndDarkModes() throws {
+        let presentation = CompanionMockFixtureCatalog.presentation(for: .locked)
         for scheme in [ColorScheme.light, .dark] {
             let data = try renderPNG(presentation: presentation, colorScheme: scheme)
             XCTAssertGreaterThan(data.count, 15_000)
@@ -233,7 +264,7 @@ final class StatusPopoverViewRenderTests: XCTestCase {
         }
 
         let renderedNames = try fileManager.contentsOfDirectory(atPath: outputDirectory.path)
-        XCTAssertEqual(renderedNames.filter { $0.hasSuffix(".png") }.count, 18)
+        XCTAssertEqual(renderedNames.filter { $0.hasSuffix(".png") }.count, 20)
     }
 
     private func assertLayoutCompletes(
@@ -290,10 +321,7 @@ final class StatusPopoverViewRenderTests: XCTestCase {
     }
 
     private func snapshotDirectory(named name: String) throws -> URL {
-        let cachesDirectory = try XCTUnwrap(
-            FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-        )
-        return cachesDirectory.appendingPathComponent(name, isDirectory: true)
+        FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
     }
 
     private func renderPNG(

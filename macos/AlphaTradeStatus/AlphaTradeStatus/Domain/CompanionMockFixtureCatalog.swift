@@ -8,6 +8,7 @@ enum CompanionMockFixtureCatalog {
         .disarmed,
         .disarmedExposure,
         .disarmedUnverified,
+        .locked,
         .intervention,
         .unknown,
         .offline
@@ -31,6 +32,8 @@ enum CompanionMockFixtureCatalog {
             return disarmedExposure()
         case .disarmedUnverified:
             return disarmedUnverified()
+        case .locked:
+            return locked()
         case .intervention:
             return intervention()
         case .unknown:
@@ -375,6 +378,87 @@ private extension CompanionMockFixtureCatalog {
                 snapshotsSection(lastEventLabel: "Poslední EXIT snímek", time: "12:47")
             ],
             footer: disarmedUnverifiedFooter(),
+            exposureEvidence: .unverified,
+            followerAcknowledgementEvidence: .notApplicable
+        )
+    }
+
+    static func locked() -> CompanionPresentation {
+        let dailyRules = StatusSectionPresentation(
+            id: "daily-rules",
+            title: "Pravidla dne",
+            summary: "1 pravidlo spuštěno",
+            summaryTone: .danger,
+            isInitiallyExpanded: true,
+            hasProblem: true,
+            rows: [
+                progress(
+                    id: "rule-losing-trades",
+                    label: "Ztrátové obchody",
+                    value: "2 / 2 · spustilo lock",
+                    progress: 1,
+                    tone: .danger
+                ),
+                progress(
+                    id: "rule-daily-loss",
+                    label: "Denní ztráta",
+                    value: "−620 / 1 000 USD",
+                    progress: 0.62,
+                    tone: .warning
+                ),
+                progress(
+                    id: "rule-max-trades",
+                    label: "Obchody dnes",
+                    value: "4 / 10",
+                    progress: 0.4,
+                    tone: .success
+                ),
+                keyValue(
+                    id: "rule-window",
+                    label: "Obchodní okno",
+                    value: "15:30–22:00",
+                    tone: .success,
+                    usesMonospacedValue: true
+                ),
+                keyValue(
+                    id: "rule-cooldown",
+                    label: "Cooldown po uzavření",
+                    value: "do 16:07 · 3 min",
+                    tone: .warning
+                )
+            ]
+        )
+
+        return CompanionPresentation(
+            fixtureID: .locked,
+            displayState: .locked,
+            menuBar: .init(
+                pillText: "ZAMČENO",
+                symbolName: "lock.fill",
+                tone: .danger,
+                accessibilityLabel: "AlphaTrade, den zamčený do 00:00"
+            ),
+            freshness: .init(
+                text: "Ověřeno před 3 s",
+                tone: .success,
+                accessibilityLabel: "Stav ověřen před třemi sekundami"
+            ),
+            hero: .init(
+                symbolName: "lock.fill",
+                title: "DEN ZAMČENÝ",
+                badge: "do 00:00",
+                detail: "Automaticky v 15:52 · pravidlo 2 ztrátové obchody z 2",
+                supportingText: "Copier vypnutý, zapnutí blokované do konce session. Odemknout jde jen v LIVE s potvrzením a důvodem.",
+                tone: .danger
+            ),
+            banner: nil,
+            sections: [
+                dailyRules,
+                cleanSafetySection(time: "15:52", initiallyExpanded: false),
+                runtimeSection(heartbeatSeconds: 3, initiallyExpanded: false),
+                snapshotsSection(lastEventLabel: "Poslední EXIT snímek", time: "15:52")
+            ],
+            footer: calmFooter(),
             exposureEvidence: .unverified,
             followerAcknowledgementEvidence: .notApplicable
         )
@@ -834,6 +918,22 @@ private extension CompanionMockFixtureCatalog {
             detail: detail,
             tone: tone,
             usesMonospacedValue: usesMonospacedValue
+        ))
+    }
+
+    static func progress(
+        id: String,
+        label: String,
+        value: String,
+        progress: Double,
+        tone: StatusTone
+    ) -> SectionRowPresentation {
+        .progress(.init(
+            id: id,
+            label: label,
+            value: value,
+            progress: progress,
+            tone: tone
         ))
     }
 }

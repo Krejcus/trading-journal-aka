@@ -186,6 +186,117 @@ final class CompanionTransitionDetectorTests: XCTestCase {
         ))
     }
 
+    func testLockTransitionBehavesLikeWorseningWithoutAmountsOrAccounts() throws {
+        let unlocked = reduced(makeStatus(revision: 1))
+        let locked = reduced(makeStatus(
+            revision: 2,
+            dayLock: makeDayLock(trigger: .losingTrades),
+            dailyRules: makeDailyRules()
+        ))
+
+        let transition = try XCTUnwrap(CompanionTransitionDetector.detect(
+            previous: unlocked,
+            next: locked,
+            now: reference
+        ))
+        XCTAssertEqual(transition.category, .lock)
+        XCTAssertEqual(transition.sectionID, "daily-rules")
+        XCTAssertEqual(transition.rowID, "rule-losing-trades")
+        XCTAssertEqual(transition.category.autoCloseDuration, 60)
+        XCTAssertTrue(transition.category.allowsSound)
+        XCTAssertEqual(
+            transition.notificationTitle,
+            "Den zamčen do \(CompanionDisplayFormatting.shortTime(try XCTUnwrap(locked.status.dayLock).until))"
+        )
+        XCTAssertTrue(transition.notificationBody?.contains("2 ztrátové obchody z 2") == true)
+
+        let notification = [transition.notificationTitle, transition.notificationBody]
+            .compactMap { $0 }
+            .joined(separator: "\n")
+        XCTAssertFalse(notification.contains("620"))
+        XCTAssertFalse(notification.contains("1 000"))
+        XCTAssertFalse(notification.localizedCaseInsensitiveContains("account"))
+
+        var gate = CompanionTransitionGate()
+        XCTAssertNil(observe(&gate, unlocked, monotonic: 0))
+        XCTAssertNil(observe(&gate, locked, monotonic: 1))
+        let event = try XCTUnwrap(observe(&gate, locked, monotonic: 4))
+        XCTAssertEqual(event.transition.category, .lock)
+        XCTAssertTrue(event.allowsAutoOpen)
+    }
+
+    func testRuleWarningIsSilentAndEmittedOncePerRuleAndSession() throws {
+        let initial = reduced(makeStatus(
+            revision: 1,
+            dailyRules: makeDailyRules(warnings: [])
+        ))
+        let warning = MacCompanionStatusDTO.RuleWarningDTO(
+            rule: .losingTrades,
+            current: 1,
+            limit: 2,
+            at: reference
+        )
+        let warned = reduced(makeStatus(
+            revision: 2,
+            dailyRules: makeDailyRules(warnings: [warning])
+        ))
+
+        var gate = CompanionTransitionGate()
+        XCTAssertNil(observe(&gate, initial, monotonic: 0))
+        XCTAssertNil(observe(&gate, warned, monotonic: 1))
+        let first = try XCTUnwrap(observe(&gate, warned, monotonic: 4))
+        XCTAssertEqual(first.transition.category, .ruleWarning)
+        XCTAssertFalse(first.transition.category.allowsSound)
+        XCTAssertNil(first.transition.category.autoCloseDuration)
+        XCTAssertFalse(first.allowsAutoOpen)
+        XCTAssertEqual(
+            first.transition.notificationTitle,
+            "Blíží se limit: ztrátové obchody 1 / 2"
+        )
+        XCTAssertNil(observe(&gate, warned, monotonic: 5))
+
+        let laterRevision = reduced(makeStatus(
+            revision: 3,
+            dailyRules: makeDailyRules(warnings: [warning])
+        ))
+        XCTAssertNil(observe(&gate, laterRevision, monotonic: 6))
+
+        let nextSession = reference.addingTimeInterval(24 * 60 * 60)
+        let warningNextSession = reduced(makeStatus(
+            revision: 4,
+            dailyRules: makeDailyRules(sessionEndsAt: nextSession, warnings: [warning])
+        ))
+        XCTAssertNil(observe(&gate, warningNextSession, monotonic: 7))
+        let second = try XCTUnwrap(observe(&gate, warningNextSession, monotonic: 10))
+        XCTAssertEqual(second.transition.category, .ruleWarning)
+    }
+
+    func testNewSessionExpiresLockAsSilentToastWithoutEnablingCopier() throws {
+        let locked = reduced(makeStatus(
+            revision: 1,
+            dayLock: makeDayLock(trigger: .manual),
+            dailyRules: makeDailyRules()
+        ))
+        let newSessionEnd = reference.addingTimeInterval(24 * 60 * 60)
+        let expired = reduced(makeStatus(
+            revision: 2,
+            copierState: .disarmed,
+            dailyRules: makeDailyRules(sessionEndsAt: newSessionEnd)
+        ))
+
+        let transition = try XCTUnwrap(CompanionTransitionDetector.detect(
+            previous: locked,
+            next: expired,
+            now: reference
+        ))
+        XCTAssertEqual(transition.category, .lockExpired)
+        XCTAssertEqual(transition.notificationTitle, "Nová session — zámek vypršel")
+        XCTAssertFalse(transition.category.allowsSound)
+        XCTAssertEqual(transition.category.autoCloseDuration, 8)
+        XCTAssertEqual(expired.status.copierState, .disarmed)
+        XCTAssertEqual(expired.displayState, .disarmed)
+    }
+
     func testGateRequiresThreeStableSecondsAndCancelsFlaps() throws {
         var gate = CompanionTransitionGate()
         let connected = reduced(makeStatus(revision: 1))
@@ -358,6 +469,8 @@ final class CompanionTransitionDetectorTests: XCTestCase {
         stuckOutboxCount: Int = 0,
         killSwitchTripped: Bool = false,
         exposureVerified: Bool = true,
+        dayLock: MacCompanionStatusDTO.DayLockDTO? = nil,
+        dailyRules: MacCompanionStatusDTO.DailyRulesDTO? = nil,
         problems: [MacCompanionStatusDTO.ProblemDTO] = []
     ) -> MacCompanionStatusDTO {
         let observedAt = observedAt ?? reference
@@ -374,12 +487,14 @@ final class CompanionTransitionDetectorTests: XCTestCase {
                 : nil,
             worker: .init(lastHeartbeatAt: observedAt, location: .mac),
             brokerConnected: brokerConnected,
+            dayLock: dayLock,
+            dailyRules: dailyRules,
             safety: .init(
                 reconciliation: .init(status: reconciliation, at: observedAt),
                 divergences: divergences,
                 outbox: .init(stuckCount: stuckOutboxCount, oldestStuckMinutes: nil),
                 cooldownActive: false,
-                dayLockActive: false,
+                dayLockActive: dayLock?.active ?? false,
                 killSwitchTripped: killSwitchTripped
             ),
             exposure: .init(
@@ -392,6 +507,38 @@ final class CompanionTransitionDetectorTests: XCTestCase {
             ),
             snapshots: .init(cdpReady: true, lastEntryAt: nil, lastExitAt: nil),
             problems: problems
+        )
+    }
+
+    private func makeDayLock(
+        trigger: MacCompanionStatusDTO.DayLockTrigger
+    ) -> MacCompanionStatusDTO.DayLockDTO {
+        .init(
+            active: true,
+            until: reference.addingTimeInterval(60 * 60),
+            at: reference.addingTimeInterval(-60),
+            trigger: trigger,
+            reason: trigger == .manual ? "Dnes končím" : "Limit dosažen",
+            unlocked: nil
+        )
+    }
+
+    private func makeDailyRules(
+        sessionEndsAt: Date? = nil,
+        warnings: [MacCompanionStatusDTO.RuleWarningDTO] = []
+    ) -> MacCompanionStatusDTO.DailyRulesDTO {
+        .init(
+            lossLimitUsd: 1_000,
+            realizedLossUsd: -620,
+            maxLosingTrades: 2,
+            losingTrades: 2,
+            maxTrades: 10,
+            tradesToday: 4,
+            window: .init(enabled: true, from: "15:30", to: "22:00", state: .inside),
+            cooldownMinutes: 15,
+            cooldownUntil: reference.addingTimeInterval(15 * 60),
+            sessionEndsAt: sessionEndsAt ?? reference.addingTimeInterval(60 * 60),
+            warnings: warnings
         )
     }
 }

@@ -20,13 +20,16 @@ enum CompanionRemotePresentationFactory {
         case .shadow:
             return shadow(status: status, reduced: reduced, freshness: freshness)
         case .disarmed:
-            return disarmed(status: status, reduced: reduced, freshness: freshness)
+            return disarmed(status: status, reduced: reduced, freshness: freshness, now: now)
         case .disarmedUnverified:
             return disarmedUnverified(
                 status: status,
                 reduced: reduced,
-                freshness: freshness
+                freshness: freshness,
+                now: now
             )
+        case .locked:
+            return locked(status: status, reduced: reduced, freshness: freshness, now: now)
         case .intervention(let issueCount):
             return intervention(
                 status: status,
@@ -98,12 +101,13 @@ private extension CompanionRemotePresentationFactory {
                 tone: .success
             ),
             banner: liveEvidenceBanner(status),
-            sections: [
+            sections: compactSections(
                 copying,
+                dailyRulesSection(status, initiallyExpanded: false, now: now),
                 safetySection(status, initiallyExpanded: false),
                 runtimeSection(status),
                 snapshotsSection(status)
-            ],
+            ),
             footer: calmFooter(),
             exposureEvidence: reduced.exposureEvidence,
             followerAcknowledgementEvidence: reduced.followerAcknowledgementEvidence,
@@ -176,7 +180,8 @@ private extension CompanionRemotePresentationFactory {
     static func disarmed(
         status: MacCompanionStatusDTO,
         reduced: ReducedCompanionStatus,
-        freshness: FreshnessPresentation
+        freshness: FreshnessPresentation,
+        now: Date
     ) -> CompanionPresentation {
         let verifiedAt: String
         if case .verifiedFlat(let value) = reduced.exposureEvidence {
@@ -203,7 +208,8 @@ private extension CompanionRemotePresentationFactory {
                 tone: .muted
             ),
             banner: nil,
-            sections: [
+            sections: compactSections(
+                dailyRulesSection(status, initiallyExpanded: false, now: now),
                 safetySection(status, initiallyExpanded: false),
                 exposureSection(
                     status,
@@ -212,7 +218,7 @@ private extension CompanionRemotePresentationFactory {
                 ),
                 runtimeSection(status),
                 snapshotsSection(status)
-            ],
+            ),
             footer: calmFooter(),
             exposureEvidence: reduced.exposureEvidence,
             followerAcknowledgementEvidence: .notApplicable,
@@ -223,7 +229,8 @@ private extension CompanionRemotePresentationFactory {
     static func disarmedUnverified(
         status: MacCompanionStatusDTO,
         reduced: ReducedCompanionStatus,
-        freshness: FreshnessPresentation
+        freshness: FreshnessPresentation,
+        now: Date
     ) -> CompanionPresentation {
         CompanionPresentation(
             fixtureID: .disarmedUnverified,
@@ -244,7 +251,8 @@ private extension CompanionRemotePresentationFactory {
                 tone: .danger
             ),
             banner: nil,
-            sections: [
+            sections: compactSections(
+                dailyRulesSection(status, initiallyExpanded: false, now: now),
                 safetySection(status, initiallyExpanded: false),
                 exposureSection(
                     status,
@@ -253,9 +261,64 @@ private extension CompanionRemotePresentationFactory {
                 ),
                 runtimeSection(status),
                 snapshotsSection(status)
-            ],
+            ),
             footer: disarmedUnverifiedFooter(),
             exposureEvidence: .unverified,
+            followerAcknowledgementEvidence: .notApplicable,
+            diagnosticSource: "cloud-read-only"
+        )
+    }
+
+    static func locked(
+        status: MacCompanionStatusDTO,
+        reduced: ReducedCompanionStatus,
+        freshness: FreshnessPresentation,
+        now: Date
+    ) -> CompanionPresentation {
+        guard let lock = status.dayLock else {
+            return disarmedUnverified(
+                status: status,
+                reduced: reduced,
+                freshness: freshness,
+                now: now
+            )
+        }
+        let until = CompanionDisplayFormatting.shortTime(lock.until)
+        let lockedAt = CompanionDisplayFormatting.shortTime(lock.at)
+        let detail: String
+        if lock.trigger == .manual {
+            detail = "Ručně v \(lockedAt) · „\(lock.reason)“"
+        } else {
+            detail = "Automaticky v \(lockedAt) · pravidlo \(dayLockRuleText(lock.trigger, rules: status.dailyRules))"
+        }
+
+        return CompanionPresentation(
+            fixtureID: .locked,
+            displayState: .locked,
+            menuBar: .init(
+                pillText: "ZAMČENO",
+                symbolName: "lock.fill",
+                tone: .danger,
+                accessibilityLabel: "AlphaTrade, den zamčený do \(until)"
+            ),
+            freshness: freshness,
+            hero: .init(
+                symbolName: "lock.fill",
+                title: "DEN ZAMČENÝ",
+                badge: "do \(until)",
+                detail: detail,
+                supportingText: "Copier vypnutý, zapnutí blokované do konce session. Odemknout jde jen v LIVE s potvrzením a důvodem.",
+                tone: .danger
+            ),
+            banner: nil,
+            sections: compactSections(
+                dailyRulesSection(status, initiallyExpanded: true, now: now),
+                safetySection(status, initiallyExpanded: false),
+                runtimeSection(status),
+                snapshotsSection(status)
+            ),
+            footer: calmFooter(),
+            exposureEvidence: reduced.exposureEvidence,
             followerAcknowledgementEvidence: .notApplicable,
             diagnosticSource: "cloud-read-only"
         )
@@ -466,6 +529,134 @@ private extension CompanionRemotePresentationFactory {
                 accessibilityLabel: "Worker je offline"
             )
         }
+    }
+
+    static func dailyRulesSection(
+        _ status: MacCompanionStatusDTO,
+        initiallyExpanded: Bool,
+        now: Date
+    ) -> StatusSectionPresentation? {
+        guard let rules = status.dailyRules else { return nil }
+
+        let triggeredRule: MacCompanionStatusDTO.DayLockTrigger? = {
+            guard status.dayLock?.active == true,
+                  let trigger = status.dayLock?.trigger,
+                  trigger != .manual else { return nil }
+            return trigger
+        }()
+        let triggeredCount = triggeredRule == nil ? 0 : 1
+        var rows: [SectionRowPresentation] = []
+
+        if let limit = rules.maxLosingTrades {
+            rows.append(progressRow(
+                id: "rule-losing-trades",
+                label: "Ztrátové obchody",
+                value: "\(rules.losingTrades) / \(limit)" + (triggeredRule == .losingTrades ? " · spustilo lock" : ""),
+                current: Double(rules.losingTrades),
+                limit: Double(limit),
+                tone: ruleTone(
+                    trigger: .losingTrades,
+                    triggeredRule: triggeredRule,
+                    rules: rules,
+                    progress: ratio(Double(rules.losingTrades), Double(limit))
+                )
+            ))
+        } else {
+            rows.append(keyValue(id: "rule-losing-trades", label: "Ztrátové obchody", value: "Vypnuto", tone: .muted))
+        }
+
+        if let limit = rules.lossLimitUsd {
+            if let realized = rules.realizedLossUsd {
+                let progress = ratio(abs(realized), limit)
+                rows.append(progressRow(
+                    id: "rule-daily-loss",
+                    label: "Denní ztráta",
+                    value: "\(formatAmount(realized)) / \(formatUsd(limit))" + (triggeredRule == .dailyLoss ? " · spustilo lock" : ""),
+                    current: abs(realized),
+                    limit: limit,
+                    tone: ruleTone(
+                        trigger: .dailyLoss,
+                        triggeredRule: triggeredRule,
+                        rules: rules,
+                        progress: progress
+                    )
+                ))
+            } else {
+                rows.append(keyValue(
+                    id: "rule-daily-loss",
+                    label: "Denní ztráta",
+                    value: "Průběh nedostupný · limit \(formatUsd(limit))",
+                    tone: .warning
+                ))
+            }
+        } else {
+            rows.append(keyValue(id: "rule-daily-loss", label: "Denní ztráta", value: "Vypnuto", tone: .muted))
+        }
+
+        if let limit = rules.maxTrades {
+            rows.append(progressRow(
+                id: "rule-max-trades",
+                label: "Obchody dnes",
+                value: "\(rules.tradesToday) / \(limit)" + (triggeredRule == .maxTrades ? " · spustilo lock" : ""),
+                current: Double(rules.tradesToday),
+                limit: Double(limit),
+                tone: ruleTone(
+                    trigger: .maxTrades,
+                    triggeredRule: triggeredRule,
+                    rules: rules,
+                    progress: ratio(Double(rules.tradesToday), Double(limit))
+                )
+            ))
+        } else {
+            rows.append(keyValue(id: "rule-max-trades", label: "Obchody dnes", value: "Vypnuto", tone: .muted))
+        }
+
+        if let window = rules.window, window.enabled {
+            let isWindowTrigger = triggeredRule == .windowEnd
+            let windowTone: StatusTone = isWindowTrigger
+                ? .danger
+                : window.state == .inside ? .success : .warning
+            rows.append(keyValue(
+                id: "rule-window",
+                label: "Obchodní okno",
+                value: "\(window.from)–\(window.to)" + (isWindowTrigger ? " · spustilo lock" : ""),
+                tone: windowTone,
+                usesMonospacedValue: true
+            ))
+        } else {
+            rows.append(keyValue(id: "rule-window", label: "Obchodní okno", value: "Vypnuto", tone: .muted))
+        }
+
+        if rules.cooldownMinutes > 0 {
+            if let cooldownUntil = rules.cooldownUntil, cooldownUntil > now {
+                let remaining = max(1, Int(ceil(cooldownUntil.timeIntervalSince(now) / 60)))
+                rows.append(keyValue(
+                    id: "rule-cooldown",
+                    label: "Cooldown po uzavření",
+                    value: "do \(CompanionDisplayFormatting.shortTime(cooldownUntil)) · \(remaining) min",
+                    tone: .warning
+                ))
+            } else {
+                rows.append(keyValue(
+                    id: "rule-cooldown",
+                    label: "Cooldown po uzavření",
+                    value: "\(rules.cooldownMinutes) min · neaktivní",
+                    tone: .muted
+                ))
+            }
+        } else {
+            rows.append(keyValue(id: "rule-cooldown", label: "Cooldown po uzavření", value: "Vypnuto", tone: .muted))
+        }
+
+        return StatusSectionPresentation(
+            id: "daily-rules",
+            title: "Pravidla dne",
+            summary: triggeredRulesSummary(triggeredCount),
+            summaryTone: triggeredCount > 0 ? .danger : .success,
+            isInitiallyExpanded: initiallyExpanded,
+            hasProblem: triggeredCount > 0,
+            rows: rows
+        )
     }
 
     static func safetySection(
@@ -804,6 +995,111 @@ private extension CompanionRemotePresentationFactory {
             tone: tone,
             usesMonospacedValue: usesMonospacedValue
         ))
+    }
+
+    static func progressRow(
+        id: String,
+        label: String,
+        value: String,
+        current: Double,
+        limit: Double,
+        tone: StatusTone
+    ) -> SectionRowPresentation {
+        .progress(.init(
+            id: id,
+            label: label,
+            value: value,
+            progress: ratio(current, limit),
+            tone: tone
+        ))
+    }
+
+    static func compactSections(
+        _ sections: StatusSectionPresentation?...
+    ) -> [StatusSectionPresentation] {
+        sections.compactMap { $0 }
+    }
+
+    static func ratio(_ current: Double, _ limit: Double) -> Double {
+        guard current.isFinite, limit.isFinite, limit > 0 else { return 0 }
+        return min(max(current / limit, 0), 1)
+    }
+
+    static func ruleTone(
+        trigger: MacCompanionStatusDTO.DayLockTrigger,
+        triggeredRule: MacCompanionStatusDTO.DayLockTrigger?,
+        rules: MacCompanionStatusDTO.DailyRulesDTO,
+        progress: Double
+    ) -> StatusTone {
+        if triggeredRule == trigger { return .danger }
+        if rules.warnings.contains(where: { $0.rule == trigger }) || progress >= 0.5 {
+            return .warning
+        }
+        return .success
+    }
+
+    static func triggeredRulesSummary(_ count: Int) -> String {
+        switch count {
+        case 0: return "Žádné nespuštěno"
+        case 1: return "1 pravidlo spuštěno"
+        case 2...4: return "\(count) pravidla spuštěna"
+        default: return "\(count) pravidel spuštěno"
+        }
+    }
+
+    static func dayLockRuleText(
+        _ trigger: MacCompanionStatusDTO.DayLockTrigger,
+        rules: MacCompanionStatusDTO.DailyRulesDTO?
+    ) -> String {
+        switch trigger {
+        case .manual:
+            return "ruční zámek"
+        case .dailyLoss:
+            return "denní ztrátový limit"
+        case .losingTrades:
+            if let current = rules?.losingTrades, let limit = rules?.maxLosingTrades {
+                return "\(current) ztrátové obchody z \(limit)"
+            }
+            return "limit ztrátových obchodů"
+        case .maxTrades:
+            if let current = rules?.tradesToday, let limit = rules?.maxTrades {
+                return "\(current) obchodů z \(limit)"
+            }
+            return "maximální počet obchodů"
+        case .windowEnd:
+            if let window = rules?.window, window.enabled {
+                return "konec obchodního okna \(window.to)"
+            }
+            return "konec obchodního okna"
+        }
+    }
+
+    static func formatUsd(_ value: Double) -> String {
+        "\(formatAmount(value)) USD"
+    }
+
+    static func formatAmount(_ value: Double) -> String {
+        let sign = value < 0 ? "−" : ""
+        let magnitude = abs(value)
+        let rendered: String
+        if magnitude.rounded() == magnitude {
+            rendered = groupedInteger(Int(magnitude))
+        } else {
+            rendered = String(format: "%.2f", magnitude).replacingOccurrences(of: ".", with: ",")
+        }
+        return "\(sign)\(rendered)"
+    }
+
+    static func groupedInteger(_ value: Int) -> String {
+        let digits = String(value)
+        var result = ""
+        for (index, character) in digits.reversed().enumerated() {
+            if index > 0, index.isMultiple(of: 3) {
+                result.append(" ")
+            }
+            result.append(character)
+        }
+        return String(result.reversed())
     }
 
     static func calmFooter() -> FooterPresentation {

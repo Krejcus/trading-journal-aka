@@ -65,6 +65,41 @@ struct CompanionTransitionDetectorProbe {
             now: reference.addingTimeInterval(11)
         )
         expect(staleDisarmed.displayState == .unknown, "stale DISARMED must remain UNKNOWN")
+
+        let rules = dailyRules()
+        let lock = dayLock(trigger: .losingTrades)
+        let locked = reduced(status(revision: 3, dayLock: lock, dailyRules: rules))
+        expect(locked.displayState == .locked, "verified DISARMED day lock must be ZAMČENO")
+        let lockedPresentation = CompanionRemotePresentationFactory.make(from: locked, now: reference)
+        expect(lockedPresentation.menuBar.pillText == "ZAMČENO", "ZAMČENO pill text")
+        expect(lockedPresentation.menuBar.symbolName == "lock.fill", "ZAMČENO lock symbol")
+        expect(lockedPresentation.hero.title == "DEN ZAMČENÝ", "ZAMČENO hero title")
+        expect(
+            lockedPresentation.sections.first { $0.id == "daily-rules" }?.isInitiallyExpanded == true,
+            "locked daily rules must start expanded"
+        )
+        expect(
+            lockedPresentation.footer.actions.first?.title == "Otevřít LIVE",
+            "locked primary action must only open LIVE"
+        )
+        let staleLocked = reduced(
+            status(revision: 3, dayLock: lock, dailyRules: rules),
+            now: reference.addingTimeInterval(11)
+        )
+        expect(staleLocked.displayState == .unknown, "stale lock must be UNKNOWN")
+        let lockTransition = CompanionTransitionDetector.detect(
+            previous: clean,
+            next: locked,
+            now: reference
+        )
+        expect(lockTransition?.category == .lock, "entering ZAMČENO must be a lock transition")
+        expect(lockTransition?.category.autoCloseDuration == 60, "lock transition must stay open for 60 seconds")
+        expect(lockTransition?.category.allowsSound == true, "lock transition may use optional sound")
+        let lockNotification = [lockTransition?.notificationTitle, lockTransition?.notificationBody]
+            .compactMap { $0 }
+            .joined(separator: "\n")
+        expect(!lockNotification.contains("620"), "lock notification must omit dollar amounts")
+        expect(!lockNotification.localizedCaseInsensitiveContains("account"), "lock notification must omit accounts")
         expect(
             CompanionTransitionDetector.detect(
                 previous: clean,
@@ -324,6 +359,45 @@ struct CompanionTransitionDetectorProbe {
         expect(notificationLimiter.allowsNotification(at: notificationStart.addingTimeInterval(30)), "notification must be allowed at 30 seconds")
         expect(!notificationLimiter.allowsNotification(at: notificationStart.addingTimeInterval(30.001)), "notification limiter must use its own window")
 
+        let warning = MacCompanionStatusDTO.RuleWarningDTO(
+            rule: .losingTrades,
+            current: 1,
+            limit: 2,
+            at: reference
+        )
+        let withoutWarning = reduced(status(
+            revision: 10,
+            exposureVerified: false,
+            dailyRules: dailyRules(warnings: [])
+        ))
+        let withWarning = reduced(status(
+            revision: 11,
+            exposureVerified: false,
+            dailyRules: dailyRules(warnings: [warning])
+        ))
+        var warningGate = CompanionTransitionGate()
+        expect(observe(&warningGate, withoutWarning, monotonic: 0) == nil, "warning baseline")
+        expect(observe(&warningGate, withWarning, monotonic: 1) == nil, "warning anti-flap")
+        let warningEvent = observe(&warningGate, withWarning, monotonic: 4)
+        expect(warningEvent?.transition.category == .ruleWarning, "new warning must notify")
+        expect(warningEvent?.transition.category.allowsSound == false, "warning must be silent")
+        expect(warningEvent?.allowsAutoOpen == false, "warning must not auto-open")
+        expect(observe(&warningGate, withWarning, monotonic: 5) == nil, "warning must emit only once in session")
+
+        let expiredLock = reduced(status(
+            revision: 12,
+            exposureVerified: false,
+            dailyRules: dailyRules(sessionEndsAt: reference.addingTimeInterval(24 * 60 * 60))
+        ))
+        let expiryTransition = CompanionTransitionDetector.detect(
+            previous: locked,
+            next: expiredLock,
+            now: reference
+        )
+        expect(expiryTransition?.category == .lockExpired, "new session must expire the lock")
+        expect(expiryTransition?.category.allowsSound == false, "lock expiry must be silent")
+        expect(expiredLock.status.copierState == .disarmed, "lock expiry must never enable copier")
+
         var rollbackGate = CompanionTransitionGate()
         let revisionTwo = reduced(status(revision: 2))
         let revisionOneDisconnected = reduced(status(revision: 1, brokerConnected: false))
@@ -473,7 +547,9 @@ struct CompanionTransitionDetectorProbe {
         divergences: [MacCompanionStatusDTO.DivergenceDTO] = [],
         stuckOutboxCount: Int = 0,
         killSwitchTripped: Bool = false,
-        exposureVerified: Bool = true
+        exposureVerified: Bool = true,
+        dayLock: MacCompanionStatusDTO.DayLockDTO? = nil,
+        dailyRules: MacCompanionStatusDTO.DailyRulesDTO? = nil
     ) -> MacCompanionStatusDTO {
         .init(
             contractVersion: 1,
@@ -488,12 +564,14 @@ struct CompanionTransitionDetectorProbe {
                 : nil,
             worker: .init(lastHeartbeatAt: reference, location: .mac),
             brokerConnected: brokerConnected,
+            dayLock: dayLock,
+            dailyRules: dailyRules,
             safety: .init(
                 reconciliation: .init(status: reconciliation, at: reference),
                 divergences: divergences,
                 outbox: .init(stuckCount: stuckOutboxCount, oldestStuckMinutes: nil),
                 cooldownActive: false,
-                dayLockActive: false,
+                dayLockActive: dayLock?.active ?? false,
                 killSwitchTripped: killSwitchTripped
             ),
             exposure: .init(
@@ -506,6 +584,38 @@ struct CompanionTransitionDetectorProbe {
             ),
             snapshots: .init(cdpReady: true, lastEntryAt: nil, lastExitAt: nil),
             problems: []
+        )
+    }
+
+    static func dayLock(
+        trigger: MacCompanionStatusDTO.DayLockTrigger
+    ) -> MacCompanionStatusDTO.DayLockDTO {
+        .init(
+            active: true,
+            until: reference.addingTimeInterval(60 * 60),
+            at: reference.addingTimeInterval(-60),
+            trigger: trigger,
+            reason: "Limit dosažen",
+            unlocked: nil
+        )
+    }
+
+    static func dailyRules(
+        sessionEndsAt: Date? = nil,
+        warnings: [MacCompanionStatusDTO.RuleWarningDTO] = []
+    ) -> MacCompanionStatusDTO.DailyRulesDTO {
+        .init(
+            lossLimitUsd: 1_000,
+            realizedLossUsd: -620,
+            maxLosingTrades: 2,
+            losingTrades: 2,
+            maxTrades: 10,
+            tradesToday: 4,
+            window: .init(enabled: true, from: "15:30", to: "22:00", state: .inside),
+            cooldownMinutes: 15,
+            cooldownUntil: reference.addingTimeInterval(15 * 60),
+            sessionEndsAt: sessionEndsAt ?? reference.addingTimeInterval(60 * 60),
+            warnings: warnings
         )
     }
 }

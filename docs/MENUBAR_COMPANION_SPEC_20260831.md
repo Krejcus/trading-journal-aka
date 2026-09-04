@@ -133,6 +133,7 @@ stavech**; stav nese pill a text vedle, nikdy barva loga.
 |---|---|---|---|
 | VYPNUTO · flat ověřen | SF `power` + `VYPNUTO` | `rgba(255,255,255,0.10)` / `rgba(0,0,0,0.07)` | default |
 | VYPNUTO · expozice neověřena | SF `power` + `VYPNUTO` | `rgba(244,63,94,0.26)` / `0.14` | `#fecdd3` / `#be123c` |
+| ZAMČENO | SF `lock.fill` + `ZAMČENO` | `rgba(244,63,94,0.26)` / `0.14` | `#fecdd3` / `#be123c` |
 | LIVE | `LIVE 42m` | `rgba(16,185,129,0.22)` / `0.16` | `#a7f3d0` / `#047857` |
 | SHADOW | `SHADOW` | `rgba(255,255,255,0.10)` / `rgba(0,0,0,0.07)` | default |
 | Zásah nutný / WORKER OFFLINE | `!N` | `rgba(244,63,94,0.26)` / `0.14` | `#fecdd3` / `#be123c` |
@@ -165,6 +166,14 @@ Hlavní stavy a pořadí sekcí:
   ověřena — flat nelze tvrdit", nikoli velký varovný banner. Sekce jsou
   všechny sbalené v pořadí Bezpečnost → Expozice → Copier runtime → Snímky.
   Tento stav potvrzuje jen vypnuté odesílání příkazů a **nikdy netvrdí flat**.
+- **ZAMČENO** (`Lock*`): pouze při čerstvě `verified`,
+  `copierState == disarmed`, `dayLock.active == true` a bez problému. Rose blok
+  s `lock.fill`, titulkem `DEN ZAMČENÝ`, badge `do HH:MM` a řádkem
+  `Automaticky v HH:MM · pravidlo …` nebo `Ručně v HH:MM · „důvod“`.
+  Muted text vysvětluje, že odemknout lze jen v LIVE s potvrzením a důvodem.
+  Primární akce je pouze `Otevřít LIVE`; companion nemá odemykací ani
+  zapínací command. Sekce: Pravidla dne (otevřená) → Bezpečnost → Runtime
+  → Snímky. Problém `!N`, STAV NEZNÁMÝ a WORKER OFFLINE mají přednost.
 - **ZÁSAH NUTNÝ** (`Zasah*`): rose blok + počet problémů + čas fail-closed.
   Sekce: Bezpečnost (auto-otevřená, červená) → Expozice (auto-otevřená,
   `19/20` + řádek selhavšího účtu) → Runtime → Snímky; nad tlačítky červený
@@ -199,6 +208,15 @@ Rozbalovací sekce — pravidla (klíčové pro 20+ účtů):
   JEN při selhání (`APEX-2 · ENTRY nepotvrzeno · 4 min`);
 - řádek pozice: `SYMBOL` (mono) + chip `LONG`/`SHORT` + `×kontrakty`;
 - Snímky TradingView jsou oddělené od zdraví copieru.
+
+Sekce **Pravidla dne** se zobrazuje v LIVE, VYPNUTO a ZAMČENO pouze tehdy,
+když status DTO obsahuje `dailyRules`; při chybějícím poli se nezobrazuje a
+companion nic neodhaduje. Obsahuje progress řádky ztrátových obchodů, denní
+ztráty proti limitu a obchodů dnes a stavové řádky obchodního okna a
+cooldownu. Autoritativně spuštěné automatické pravidlo je rose/červené;
+sbalený souhrn je `N pravidel spuštěno` nebo `Žádné nespuštěno`.
+V ZAMČENO začíná otevřená, jinak sbalená. `realizedLossUsd` se smí objevit
+jen uvnitř této sekce, nikdy v pillu, hero ani notifikaci.
 
 Tlačítka (34 pt): primární gradient + stín + odlesk, bez ikony — LIVE/SHADOW/
 VYPNUTO · flat ověřen „Otevřít LIVE" (emerald `#10b981→#059669`), ZÁSAH
@@ -405,6 +423,9 @@ neovládá, nekrade fokus a nikdy neohlásí zlepšení ze starých dat.
 | ověřený stav → ZÁSAH NUTNÝ; nový skutečný problém v `problems[]` (divergence, stuck outbox, reconciliation mimo výjimku §5/§7.3); `brokerConnected` true → false; → WORKER OFFLINE; LIVE session vypršela nebo vyprší za ≤ 5 min | **zhoršení** | auto-otevřít, sekce s problémem rozbalená, zůstane až do zavření (max 60 s), + nativní notifikace, volitelný zvuk, pill 3× zapulzuje |
 | problém zmizel; broker reconnect; OFFLINE → ověřeno | **zlepšení** | auto-otevřít jako toast na 8 s (jen když je zapnuto „i zlepšení"), bez notifikace |
 | VYPNUTO/SHADOW → LIVE; LIVE → VYPNUTO/SHADOW; VYPNUTO ↔ SHADOW | **režim** | toast 8 s + notifikace bez zvuku |
+| ověřený nezamčený stav → ZAMČENO | **lock** | jako zhoršení: auto-otevřít Pravidla dne na max 60 s, nativní notifikace, volitelný zvuk a 3× pulz pillu |
+| nové `dailyRules.warnings[]` | **rule-warning** | tichá nativní notifikace nejvýš 1× pro klíč pravidlo + `sessionEndsAt`; bez auto-otevření |
+| ZAMČENO → VYPNUTO při změně `dailyRules.sessionEndsAt` | **lock-expired** | tichý toast na 8 s `Nová session — zámek vypršel`; nikdy nezapíná copier |
 | ověřeno → STAV NEZNÁMÝ (10–90 s) a zpět | — | **nikdy** (síťové zaškobrtnutí) |
 | start aplikace, wake z spánku, ruční refresh | — | nikdy; první snapshot po startu jen nastaví výchozí bod |
 
@@ -435,8 +456,10 @@ změny v tom okně se jen zapíší do už otevřeného popoveru. Snapshot s ni�
 ### 11.3 Nativní notifikace
 
 `UNUserNotificationCenter` s jednorázovým souhlasem (sandbox je v pořádku).
-Posílá se jen pro kategorii zhoršení a režim, s textem hlavního stavu a
-jednou větou důvodu, bez čísel účtů a bez P&L. Klik na notifikaci otevře
+Posílá se pro kategorie zhoršení, režim, lock, rule-warning a lock-expired.
+Lock může použít volitelný zvuk; warning a expirace jsou vždy tiché. Text
+obsahuje stav/pravidlo, ale nikdy čísla účtů, `realizedLossUsd` ani jinou
+P&L částku. Klik na notifikaci otevře
 popover (ne LIVE — rozhodnutí zůstává na uživateli). Notifikace řeší
 fullscreen TradingView, kde je lišta skrytá; respektuje Focus režimy macOS.
 

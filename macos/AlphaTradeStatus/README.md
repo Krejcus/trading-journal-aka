@@ -21,6 +21,13 @@ navigation-only „Zapnout v LIVE" action still only opens
 `?page=live&tab=overview`; the companion cannot ARM, DISARM, Flatten, or send
 any copier command.
 
+Version 0.2.0 (build 17) adds the optional contract-v1 `dayLock` and
+`dailyRules` presentation. A fresh verified disabled copier can render the
+rose `ZAMČENO` state and the companion-only daily-rules progress section;
+missing optional fields preserve build-16 behavior. Lock, per-session rule
+warning, and new-session expiry transitions remain read-only and never ARM,
+unlock, or otherwise command the copier.
+
 Build 16 retains the deterministic section-resize fallback from build 15. Expansion reserves
 the final `NSPopover.contentSize` immediately and then reveals the section
 details into the panel-painted space. Collapse hides the details first and
@@ -168,6 +175,7 @@ Only Debug builds honor an explicitly supplied `ALPHATRADE_STATUS_FIXTURE`:
 - `disarmed`
 - `disarmed-exposure`
 - `disarmed-unverified`
+- `locked`
 - `intervention`
 - `unknown`
 - `offline`
