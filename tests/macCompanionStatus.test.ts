@@ -39,10 +39,35 @@ describe('mac companion cloud status reducer', () => {
         stuckOutbox: false,
         stuckOperations: [],
         killSwitch: false,
-        dailyStats: { realizedPnlUsd: -120, losingTrades: 2 },
+        dailyStats: {
+          sessionEndAt: NOW + 60 * 60_000,
+          realizedPnlUsd: -120,
+          losingTrades: 2,
+          tradesToday: 4,
+          windowState: 'inside',
+          warnedRules: [{ rule: 'max-trades', current: 4, limit: 5, at: NOW - 1_000 }],
+        },
+        entryCooldownUntil: NOW + 5 * 60_000,
+        dayLockUntil: NOW + 60 * 60_000,
+        dayLockAt: NOW - 2_000,
+        dayLockTrigger: 'losing-trades',
+        dayLockReason: 'auto day-lock: ztrátové obchody',
+        dayUnlock: null,
         armExpiresAt: NOW + 30 * 60_000,
         groupFlat: true,
         lastError: 'RAW-LAST-ERROR-MUST-NOT-LEAK',
+      }, {
+        group: {
+          leaderAccountId: 123456,
+          followers: [{ accountId: 222222 }, { accountId: 333333 }],
+          safety: {
+            dailyLossLimitUsd: 500,
+            dailyMaxLosingTrades: 3,
+            dailyMaxTrades: 5,
+            entryCooldownMinutes: 15,
+            tradingWindow: { enabled: true, from: '15:30', to: '22:00', timeZone: 'Europe/Prague' },
+          },
+        },
       }),
       snapshots: [
         { kind: 'entry', at: '2026-09-01T09:58:00.000Z' },
@@ -61,6 +86,23 @@ describe('mac companion cloud status reducer', () => {
         label: 'Leader · jen obchody přes kopírku · bez poplatků',
         realizedPnlUsd: -120,
         losingTrades: 2,
+      },
+      dayLock: {
+        active: true,
+        trigger: 'losing-trades',
+        reason: 'auto day-lock: ztrátové obchody',
+        unlocked: null,
+      },
+      dailyRules: {
+        lossLimitUsd: 500,
+        realizedLossUsd: -120,
+        maxLosingTrades: 3,
+        losingTrades: 2,
+        maxTrades: 5,
+        tradesToday: 4,
+        window: { enabled: true, from: '15:30', to: '22:00', state: 'inside' },
+        cooldownMinutes: 15,
+        warnings: [{ rule: 'max-trades', current: 4, limit: 5 }],
       },
       exposure: {
         verifiedAt: null,
@@ -117,6 +159,32 @@ describe('mac companion cloud status reducer', () => {
       kind: 'reconciliation',
       text: 'Stav reconciliation není potvrzený.',
     });
+    expect(dto.dayLock).toBeNull();
+    expect(dto.dailyRules).toBeNull();
+  });
+
+  it('fails closed to null when a new worker DTO field is incomplete', () => {
+    const dto = buildMacCompanionStatus({
+      runtime: runtime({
+        armed: false,
+        shadowMode: false,
+        connected: true,
+        reconciliationRequired: false,
+        divergentAccounts: [],
+        workingOrderAccounts: [],
+        stuckOutbox: false,
+        stuckOperations: [],
+        killSwitch: false,
+        dayLockUntil: NOW + 60_000,
+        dayLockTrigger: 'max-trades',
+        // dayLockAt intentionally missing
+        dayLockReason: 'limit',
+        dailyStats: { realizedPnlUsd: -10, losingTrades: 0 },
+      }),
+      now: NOW,
+    });
+    expect(dto.dayLock).toBeNull();
+    expect(dto.dailyRules).toBeNull();
   });
 
   it.each([

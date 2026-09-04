@@ -21,6 +21,8 @@ const snapshot = (partial: Partial<CopierNotificationSnapshot> = {}): CopierNoti
   entryCooldownUntil: 0,
   dayLockUntil: 0,
   dayLockReason: null,
+  dayLockTrigger: null,
+  ruleWarnings: [],
   resumeOffer: null,
   autoClose: null,
   copyEvents: [],
@@ -177,19 +179,33 @@ describe('day-lock a auto-flatten hrany', () => {
     const next = snapshot({
       dayLockUntil: NOW + 2 * HOUR,
       dayLockReason: 'auto day-lock: 2. ztrátový obchod dne (limit 2)',
+      dayLockTrigger: 'losing-trades',
     });
     const result = plan(snapshot(), next);
     expect(result.fireNow).toEqual([expect.objectContaining({
-      title: 'Copier: DAY-LOCK',
-      body: expect.stringContaining('2. ztrátový obchod'),
+      title: 'Copier: DEN ZAMČENÝ',
+      body: expect.stringContaining('Max. ztrátových obchodů'),
+      kind: 'daylock-engaged',
     })]);
-    expect(result.fireNow[0].body).toContain('Leader · jen obchody přes kopírku · bez poplatků');
+    expect(result.fireNow[0].body).toContain('do');
+    expect(result.fireNow[0].body).not.toMatch(/USD|účet|\$|limit 2/i);
     expect(result.schedule).toEqual([expect.objectContaining({ key: 'daylock-end' })]);
 
     // Stejný zámek podruhé už nic nepálí.
     const repeat = plan(next, next, [{ key: 'daylock-end', at: NOW + 2 * HOUR, id: 7 }]);
     expect(repeat.fireNow).toHaveLength(0);
     expect(repeat.schedule).toHaveLength(0);
+  });
+
+  it('nové varování je tichý rule-warning a stejný durable záznam se neopakuje', () => {
+    const warning = { rule: 'max-trades' as const, current: 9, limit: 10, at: NOW };
+    const next = snapshot({ ruleWarnings: [warning] });
+    expect(plan(snapshot(), next).fireNow).toEqual([{
+      title: 'Copier: pravidlo dne',
+      body: 'Max. obchodů se blíží limitu.',
+      kind: 'rule-warning',
+    }]);
+    expect(plan(next, next).fireNow).toEqual([]);
   });
 
   it('výsledek auto-flatten se hlásí právě jednou per operationId, selhání křičí', () => {

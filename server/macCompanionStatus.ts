@@ -5,6 +5,8 @@ import {
   MAC_COMPANION_OFFLINE_AFTER_SECONDS,
   MAC_COMPANION_VERIFIED_MAX_AGE_SECONDS,
   type MacCompanionCopierState,
+  type MacCompanionDailyRule,
+  type MacCompanionDayLockTrigger,
   type MacCompanionProblemKind,
   type MacCompanionStatusDTO,
 } from '../lib/macCompanionContract.js';
@@ -34,6 +36,36 @@ const strictBoolean = (value: unknown): boolean | null =>
 
 const finite = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+const nonNegativeInteger = (value: unknown): number | null => {
+  const number = finite(value);
+  return number != null && Number.isSafeInteger(number) && number >= 0 ? number : null;
+};
+
+const isoEpoch = (value: unknown): string | null => {
+  const number = finite(value);
+  return number != null && number > 0 ? new Date(number).toISOString() : null;
+};
+
+const DAY_LOCK_TRIGGERS = new Set<MacCompanionDayLockTrigger>([
+  'manual', 'daily-loss', 'losing-trades', 'max-trades', 'window-end',
+]);
+const DAILY_RULES = new Set<MacCompanionDailyRule>([
+  'daily-loss', 'losing-trades', 'max-trades', 'window-end',
+]);
+const HH_MM = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+const hhmmMinutes = (value: string) => {
+  const [hour, minute] = value.split(':').map(Number);
+  return hour * 60 + minute;
+};
+const validTimeZone = (value: string) => {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 const positiveIntegerArray = (value: unknown): { known: boolean; values: number[] } => {
   if (!Array.isArray(value)) return { known: false, values: [] };
@@ -131,6 +163,7 @@ export function buildMacCompanionStatus(options: {
   const dayLockUntil = finite(controller.dayLockUntil);
   const brokerConnected = strictBoolean(controller.connected);
   const controllerDailyStats = object(controller.dailyStats);
+  const groupSafety = object(group.safety);
   const dailyRealizedPnl = finite(controllerDailyStats.realizedPnlUsd);
   const dailyLosingTrades = finite(controllerDailyStats.losingTrades);
   const dailyStats: MacCompanionStatusDTO['dailyStats'] = dailyRealizedPnl != null
@@ -150,6 +183,94 @@ export function buildMacCompanionStatus(options: {
     account: redactedAccountLabel(accountId, group),
     detail: 'Pozice se liší od leadera.',
   }));
+
+  const dayLock = (() => {
+    if (dayLockUntil == null || dayLockUntil <= now) return null;
+    const until = isoEpoch(dayLockUntil);
+    const lockAtEpoch = finite(controller.dayLockAt);
+    const at = isoEpoch(lockAtEpoch);
+    const trigger = controller.dayLockTrigger;
+    const reason = typeof controller.dayLockReason === 'string'
+      ? controller.dayLockReason.trim()
+      : '';
+    const rawUnlock = controller.dayUnlock;
+    let unlocked: { at: string } | null = null;
+    if (rawUnlock != null) {
+      const unlockedAt = isoEpoch(object(rawUnlock).at);
+      if (!unlockedAt) return null;
+      unlocked = { at: unlockedAt };
+    }
+    if (!until || !at || lockAtEpoch == null || lockAtEpoch > dayLockUntil || typeof trigger !== 'string'
+      || !DAY_LOCK_TRIGGERS.has(trigger as MacCompanionDayLockTrigger) || !reason) return null;
+    return {
+      active: true,
+      until,
+      at,
+      trigger: trigger as MacCompanionDayLockTrigger,
+      reason,
+      unlocked,
+    };
+  })();
+
+  const dailyRules = (() => {
+    const lossLimit = finite(groupSafety.dailyLossLimitUsd);
+    const maxLosingTrades = nonNegativeInteger(groupSafety.dailyMaxLosingTrades);
+    const maxTrades = nonNegativeInteger(groupSafety.dailyMaxTrades);
+    const cooldownMinutes = nonNegativeInteger(groupSafety.entryCooldownMinutes);
+    const realizedPnl = finite(controllerDailyStats.realizedPnlUsd);
+    const losingTrades = nonNegativeInteger(controllerDailyStats.losingTrades);
+    const tradesToday = nonNegativeInteger(controllerDailyStats.tradesToday);
+    const sessionEndsAt = isoEpoch(controllerDailyStats.sessionEndAt);
+    const windowState = controllerDailyStats.windowState;
+    const rawWindow = object(groupSafety.tradingWindow);
+    const rawWarnings = controllerDailyStats.warnedRules;
+    if (lossLimit == null || lossLimit < 0 || lossLimit > 1_000_000
+      || maxLosingTrades == null || maxLosingTrades > 50
+      || maxTrades == null || maxTrades > 200
+      || cooldownMinutes == null || cooldownMinutes > 720
+      || realizedPnl == null || losingTrades == null
+      || tradesToday == null || !sessionEndsAt
+      || (windowState !== 'inside' && windowState !== 'outside' && windowState !== 'off')
+      || typeof rawWindow.enabled !== 'boolean'
+      || typeof rawWindow.from !== 'string' || typeof rawWindow.to !== 'string'
+      || typeof rawWindow.timeZone !== 'string'
+      || !HH_MM.test(rawWindow.from) || !HH_MM.test(rawWindow.to)
+      || hhmmMinutes(rawWindow.from) >= hhmmMinutes(rawWindow.to)
+      || !validTimeZone(rawWindow.timeZone)
+      || !Array.isArray(rawWarnings)) return null;
+    const validWindowState = windowState as 'inside' | 'outside' | 'off';
+    const warnings: NonNullable<MacCompanionStatusDTO['dailyRules']>['warnings'] = [];
+    for (const candidate of rawWarnings) {
+      const warning = object(candidate);
+      const rule = warning.rule;
+      const current = finite(warning.current);
+      const limit = finite(warning.limit);
+      const warningAt = isoEpoch(warning.at);
+      if (typeof rule !== 'string' || !DAILY_RULES.has(rule as MacCompanionDailyRule)
+        || current == null || limit == null || !warningAt) return null;
+      warnings.push({ rule: rule as MacCompanionDailyRule, current, limit, at: warningAt });
+    }
+    const cooldownAt = finite(controller.entryCooldownUntil);
+    if (cooldownAt == null || cooldownAt < 0) return null;
+    return {
+      lossLimitUsd: lossLimit > 0 ? lossLimit : null,
+      realizedLossUsd: lossLimit > 0 ? Math.min(0, realizedPnl) : null,
+      maxLosingTrades: maxLosingTrades > 0 ? maxLosingTrades : null,
+      losingTrades,
+      maxTrades: maxTrades > 0 ? maxTrades : null,
+      tradesToday,
+      window: {
+        enabled: rawWindow.enabled,
+        from: rawWindow.from,
+        to: rawWindow.to,
+        state: validWindowState,
+      },
+      cooldownMinutes,
+      cooldownUntil: cooldownAt > now ? new Date(cooldownAt).toISOString() : null,
+      sessionEndsAt,
+      warnings,
+    };
+  })();
 
   const problems: MacCompanionStatusDTO['problems'] = [];
   if (now - observedAt > MAC_COMPANION_OFFLINE_AFTER_SECONDS * 1_000) {
@@ -201,6 +322,8 @@ export function buildMacCompanionStatus(options: {
     },
     brokerConnected,
     dailyStats,
+    dayLock,
+    dailyRules,
     safety: {
       reconciliation: { status: reconciliation, at: null },
       divergences,

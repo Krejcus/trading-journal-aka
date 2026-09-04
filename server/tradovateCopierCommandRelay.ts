@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { LocalCopierAgentCommand, LocalCopierAgentCommandResult, LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol.js';
+import type { LocalCopierAgentCommand, LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol.js';
 import type { CopyGroupConfig } from '../services/liveCopyTrading.js';
 import { sanitizeCopyGroups } from '../services/liveCopyTrading.js';
 
@@ -82,6 +82,7 @@ const allowed = new Set<LocalCopierAgentCommand['type']>([
   // konce broker session. Patří do stejné vzdálené třídy jako disarm a
   // kill-switch — bez něj „Zamknout den" z produkční PWA nikdy nedorazil.
   'lock-until-session-end',
+  'unlock-day',
 ]);
 
 /**
@@ -234,7 +235,7 @@ const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknow
   if (command.type === 'snapshot-test') {
     return command.repairCamera === true ? { repairCamera: true } : {};
   }
-  if (command.type === 'lock-until-session-end') {
+  if (command.type === 'lock-until-session-end' || command.type === 'unlock-day') {
     return { reason: validatedDayLockReason((command as { reason?: unknown }).reason) };
   }
   return {};
@@ -274,8 +275,8 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
     }
     return { type: 'verify-account-eligibility', accountId };
   }
-  if (row.command_type === 'lock-until-session-end') {
-    return { type: 'lock-until-session-end', reason: validatedDayLockReason(row.payload?.reason) };
+  if (row.command_type === 'lock-until-session-end' || row.command_type === 'unlock-day') {
+    return { type: row.command_type, reason: validatedDayLockReason(row.payload?.reason) };
   }
   if (row.command_type === 'snapshot-test') {
     return {

@@ -15,6 +15,7 @@ import { msUntilTradovateSessionEnd } from '../services/copierArmSession.js';
 import type { CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
   normalizeMultiplier,
+  sanitizeCopyGroups,
   type CopyGroupConfig,
   type LiveCopyTradingCommand,
   type LiveCopyTradingCommandResult,
@@ -174,7 +175,11 @@ export async function startLocalCopierExecutionAgent(
   const allowedOrigins = options.allowedOrigins ?? DEFAULT_ALLOWED_ORIGINS;
   const nonce = randomUUID();
   const startedAt = options.startedAt ?? new Date().toISOString();
-  let group = structuredClone(options.group);
+  const normalizedGroups = sanitizeCopyGroups([options.group]);
+  if (!normalizedGroups || normalizedGroups.length !== 1) {
+    throw new Error('Lokální execution agent dostal neplatná pravidla copy group');
+  }
+  let group = structuredClone(normalizedGroups[0]);
   const devices = (options.devices ?? (options.device ? [options.device] : [])).map(item => structuredClone(item));
   if (new Set(devices.map(item => item.deviceId)).size !== devices.length) {
     throw new Error('Lokální execution agent dostal duplicitní deviceId');
@@ -222,6 +227,11 @@ export async function startLocalCopierExecutionAgent(
     mode: 'update' | 'activate' = 'update',
     reconfigurationRequest: { waiveUnverifiableFollowerOwnership?: true } = {},
   ): Promise<LiveCopyTradingCommandResult> => {
+    const normalized = sanitizeCopyGroups([next]);
+    if (!normalized || normalized.length !== 1) {
+      throw new Error('Copy group obsahuje neplatná pravidla dne');
+    }
+    next = normalized[0];
     const previous = group;
     const leaderChanged = previous.leaderAccountId !== next.leaderAccountId;
     const topologyChanged = !sameAccountTopology(previous, next);
@@ -459,6 +469,9 @@ export async function startLocalCopierExecutionAgent(
           Date.now() + msUntilTradovateSessionEnd(Date.now()),
           command.reason,
         );
+        return;
+      case 'unlock-day':
+        await options.controller.unlockDay(command.reason);
         return;
       case 'device-paired': {
         const index = devices.findIndex(item => item.deviceId === command.deviceId);

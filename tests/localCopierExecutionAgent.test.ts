@@ -45,6 +45,8 @@ const controller = (overrides: Partial<CopierControllerStatus> = {}) => {
     beginShutdown: vi.fn(async () => { status = { ...status, armed: false }; }),
     disarm: vi.fn(() => { status = { ...status, armed: false }; }),
     engageKillSwitch: vi.fn(() => { status = { ...status, armed: false, killSwitch: true }; }),
+    lockUntil: vi.fn(async () => { status = { ...status, armed: false }; }),
+    unlockDay: vi.fn(async () => { status = { ...status, armed: false }; }),
     applyAccountEligibilityExclusions: vi.fn(async () => undefined),
     reconcile: vi.fn(async () => ({ divergentAccounts: [], workingOrderAccounts: [] })),
     verifyAccountEligibility: vi.fn(async accountId => ({
@@ -561,11 +563,15 @@ describe('local copier execution agent', () => {
       .toBeLessThan(prepareGroupAccounts.mock.invocationCallOrder[0]);
     expect(prepareGroupAccounts.mock.invocationCallOrder[0])
       .toBeLessThan(vi.mocked(runtime.activateGroup).mock.invocationCallOrder[0]);
-    expect(runtime.activateGroup).toHaveBeenCalledWith({
+    expect(runtime.activateGroup).toHaveBeenCalledWith(expect.objectContaining({
       ...next,
       enabled: true,
       localOnly: true,
-    }, { missingOptionalAccountIds: [] });
+      safety: expect.objectContaining({
+        dailyMaxTrades: 0,
+        tradingWindow: expect.objectContaining({ timeZone: 'Europe/Prague' }),
+      }),
+    }), { missingOptionalAccountIds: [] });
     expect(runtime.arm).not.toHaveBeenCalled();
     expect(running.status().controller.armed).toBe(false);
     expect(running.status().group).toMatchObject({ id: 'lucid-profile', enabled: true });
@@ -675,6 +681,16 @@ describe('local copier execution agent', () => {
     expect(result.status.controller).toMatchObject({ armed: true, shadowMode: true });
     expect(runtime.reconcile).toHaveBeenCalledTimes(1);
     expect(runtime.arm).toHaveBeenCalledWith({ shadowMode: true });
+  });
+
+  it('předá unlock-day controlleru bez jakéhokoli následného ARMu', async () => {
+    const runtime = controller({ armed: false, dayLockUntil: Date.now() + 60_000 });
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    const result = await running.execute({ type: 'unlock-day', reason: 'Vědomé odemknutí dne' });
+    expect(result.ok).toBe(true);
+    expect(runtime.unlockDay).toHaveBeenCalledWith('Vědomé odemknutí dne');
+    expect(runtime.arm).not.toHaveBeenCalled();
+    expect(result.status.controller.armed).toBe(false);
   });
 
   it('exposes read-only reconciliation and audited stuck resolution as separate commands', async () => {

@@ -7,6 +7,13 @@ export const MAC_COMPANION_OFFLINE_AFTER_SECONDS = 90 as const;
 export type MacCompanionCopierState = 'live' | 'shadow' | 'disarmed';
 export type MacCompanionWorkerLocation = 'mac' | 'vps';
 export type MacCompanionReconciliationStatus = 'clean' | 'review' | 'unknown';
+export type MacCompanionDayLockTrigger =
+  | 'manual'
+  | 'daily-loss'
+  | 'losing-trades'
+  | 'max-trades'
+  | 'window-end';
+export type MacCompanionDailyRule = Exclude<MacCompanionDayLockTrigger, 'manual'>;
 export type MacCompanionProblemKind =
   | 'divergence'
   | 'stuck-outbox'
@@ -61,6 +68,38 @@ export interface MacCompanionStatusDTO {
     label: 'Leader · jen obchody přes kopírku · bez poplatků';
     realizedPnlUsd: number;
     losingTrades: number;
+  } | null;
+  /** Additive v1 fields; optional so older payloads remain contract-valid. */
+  dayLock?: {
+    active: boolean;
+    until: string;
+    at: string;
+    trigger: MacCompanionDayLockTrigger;
+    reason: string;
+    unlocked: { at: string } | null;
+  } | null;
+  dailyRules?: {
+    lossLimitUsd: number | null;
+    realizedLossUsd: number | null;
+    maxLosingTrades: number | null;
+    losingTrades: number;
+    maxTrades: number | null;
+    tradesToday: number;
+    window: {
+      enabled: boolean;
+      from: string;
+      to: string;
+      state: 'inside' | 'outside' | 'off';
+    } | null;
+    cooldownMinutes: number;
+    cooldownUntil: string | null;
+    sessionEndsAt: string;
+    warnings: Array<{
+      rule: MacCompanionDailyRule;
+      current: number;
+      limit: number;
+      at: string;
+    }>;
   } | null;
   safety: {
     reconciliation: {

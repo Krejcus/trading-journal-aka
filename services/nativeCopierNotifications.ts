@@ -64,6 +64,8 @@ function toSnapshot(status: CopierControllerStatus | null): CopierNotificationSn
     entryCooldownUntil: status.entryCooldownUntil ?? 0,
     dayLockUntil: status.dayLockUntil ?? 0,
     dayLockReason: status.dayLockReason ?? null,
+    dayLockTrigger: status.dayLockTrigger ?? null,
+    ruleWarnings: status.dailyStats?.warnedRules?.map(warning => ({ ...warning })) ?? [],
     resumeOffer: status.resumeOffer ? { at: status.resumeOffer.at } : null,
     autoClose: status.autoClose
       ? {
@@ -118,13 +120,16 @@ export async function syncCopierNativeNotifications(
       kept.push({ key: planned.key, at: planned.at, id });
     }
     for (const immediate of plan.fireNow) {
+      const silentWarning = immediate.kind === 'rule-warning';
+      const risk = immediate.kind === 'risk' || immediate.kind === 'daylock-engaged';
       await scheduleNativeNotification({
         title: immediate.title,
         body: immediate.body,
         delayMs: 1_000,
         route: 'live',
         threadIdentifier: immediate.kind === 'trade' ? 'alphatrade-copier-trades' : 'alphatrade-copier',
-        actionType: immediate.kind,
+        actionType: risk ? 'risk' : immediate.kind === 'trade' ? 'trade' : 'general',
+        ...(silentWarning ? { interruptionLevel: 'passive' as const } : {}),
       });
     }
   } catch {

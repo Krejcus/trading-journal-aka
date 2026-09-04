@@ -14,7 +14,9 @@ import {
   copierCopiesOutcomeText,
   type CopierDisarmRecord,
 } from '../lib/copierDisarmReason';
-import { COPIER_LEADER_DAILY_STATS_LABEL } from '../lib/copierDailyStatsLabels';
+import { dayLockRuleLabel } from './copierDailyRules';
+import type { CopierRuleWarning } from './copierEngine';
+import type { DayLockTrigger } from './liveCopyTrading';
 
 export interface CopierNotificationSnapshot {
   armed: boolean;
@@ -30,6 +32,8 @@ export interface CopierNotificationSnapshot {
   entryCooldownUntil: number;
   dayLockUntil: number;
   dayLockReason: string | null;
+  dayLockTrigger: DayLockTrigger | null;
+  ruleWarnings: CopierRuleWarning[];
   /** Connection recovery: kopie drženy, čeká se na ruční ARM. */
   resumeOffer: { at: number } | null;
   /** Výsledek posledního auto-flatten (expirace ARM / fail-closed). */
@@ -70,7 +74,7 @@ export interface CopierPlannedNotification {
 export interface CopierImmediateNotification {
   title: string;
   body: string;
-  kind: 'trade' | 'risk';
+  kind: 'trade' | 'risk' | 'daylock-engaged' | 'rule-warning';
 }
 
 export interface CopierNotificationPlan {
@@ -87,6 +91,12 @@ const RESCHEDULE_TOLERANCE_MS = 60_000;
 
 /** Cíl v minulosti nebo příliš blízko nemá smysl plánovat. */
 const MIN_LEAD_MS = 15_000;
+
+const pragueTime = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', {
+  hour: '2-digit',
+  minute: '2-digit',
+  timeZone: 'Europe/Prague',
+});
 
 const SLOT_CONTENT: Record<CopierSlotKey, { title: string; body: string }> = {
   'arm-expiry': {
@@ -225,14 +235,22 @@ export function planCopierNotifications(options: {
         kind: 'risk',
       });
     }
-    // Auto day-lock: hlásí se nová hodnota dayLockUntil, která je v budoucnu.
+    // Day-lock text nikdy neobsahuje účty ani částky.
     if (next.dayLockUntil > now && previous.dayLockUntil !== next.dayLockUntil) {
+      const rule = next.dayLockTrigger ? dayLockRuleLabel(next.dayLockTrigger) : 'Denní zámek';
       fireNow.push({
-        title: 'Copier: DAY-LOCK',
-        body: next.dayLockReason
-          ? `${next.dayLockReason}. ${COPIER_LEADER_DAILY_STATS_LABEL}. ARM je blokovaný do konce broker session.`
-          : 'Denní zámek je aktivní. ARM je blokovaný do konce broker session.',
-        kind: 'risk',
+        title: 'Copier: DEN ZAMČENÝ',
+        body: `${rule} · do ${pragueTime(next.dayLockUntil)}`,
+        kind: 'daylock-engaged',
+      });
+    }
+    const knownWarnings = new Set(previous.ruleWarnings.map(warning => `${warning.rule}:${warning.at}`));
+    for (const warning of next.ruleWarnings) {
+      if (knownWarnings.has(`${warning.rule}:${warning.at}`)) continue;
+      fireNow.push({
+        title: 'Copier: pravidlo dne',
+        body: `${dayLockRuleLabel(warning.rule)} se blíží limitu.`,
+        kind: 'rule-warning',
       });
     }
     // Resume nabídka po výpadku — jednou per `at`.

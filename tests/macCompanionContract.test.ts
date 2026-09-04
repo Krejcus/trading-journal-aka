@@ -40,6 +40,14 @@ const status = (overrides: Partial<MacCompanionStatusDTO> = {}): MacCompanionSta
 });
 
 describe('mac companion contract reducer', () => {
+  it('keeps additive dayLock and dailyRules fields optional in contract v1', () => {
+    const legacy = status();
+    expect(legacy.contractVersion).toBe(1);
+    expect('dayLock' in legacy).toBe(false);
+    expect('dailyRules' in legacy).toBe(false);
+    expect(reduceMacCompanionPresentation(legacy, OBSERVED)).toBe('unknown');
+  });
+
   it('uses the exact 10 second and 90 second freshness boundaries', () => {
     const dto = status();
     expect(macCompanionFreshness(dto, OBSERVED + 10_000)).toBe('verified');

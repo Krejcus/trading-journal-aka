@@ -285,6 +285,8 @@ describe('ARM přes relay nese konfiguraci skupiny', () => {
     safety: {
       dailyLossLimitUsd: 500,
       dailyMaxLosingTrades: 0,
+      dailyMaxTrades: 10,
+      tradingWindow: { enabled: true, from: '15:30', to: '22:00', timeZone: 'Europe/Prague' },
       entryCooldownMinutes: 15,
       armExpiryFlatten: 'followers' as const,
       positionReconciler: true,
@@ -319,7 +321,13 @@ describe('ARM přes relay nese konfiguraci skupiny', () => {
       accountEligibilityExclusions?: unknown[];
     };
     expect(upsert.mock.calls[0][0].command_type).toBe('arm-live');
-    expect(payload.group?.safety).toMatchObject({ dailyLossLimitUsd: 500, entryCooldownMinutes: 15, armExpiryFlatten: 'followers' });
+    expect(payload.group?.safety).toMatchObject({
+      dailyLossLimitUsd: 500,
+      dailyMaxTrades: 10,
+      tradingWindow: { enabled: true, from: '15:30', to: '22:00', timeZone: 'Europe/Prague' },
+      entryCooldownMinutes: 15,
+      armExpiryFlatten: 'followers',
+    });
     expect(payload.accountEligibilityExclusions).toEqual([{
       accountId: 62364057,
       state: 'dll-locked',
@@ -483,6 +491,44 @@ describe('ARM přes relay nese konfiguraci skupiny', () => {
         id: '88888888-8888-4888-8888-888888888888',
         command_type: 'lock-until-session-end',
         payload: {},
+        expires_at: '2026-08-21T12:00:30.000Z',
+        status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    })).rejects.toThrow('invalid-relay-command-payload');
+  });
+
+  it('unlock-day projde enqueue i claim a používá stejnou striktní validaci důvodu', async () => {
+    const upsert = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert), userId, connectionId, deviceId,
+      command: { type: 'unlock-day', reason: '  Vědomé odemknutí po pauze  ' },
+    });
+    expect(upsert.mock.calls[0][0]).toMatchObject({
+      command_type: 'unlock-day',
+      payload: { reason: 'Vědomé odemknutí po pauze' },
+    });
+
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: '99999999-9999-4999-8999-999999999999',
+        command_type: 'unlock-day',
+        payload: { reason: 'Vědomé odemknutí po pauze' },
+        expires_at: '2026-08-21T12:00:30.000Z',
+        status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toEqual({ type: 'unlock-day', reason: 'Vědomé odemknutí po pauze' });
+
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(vi.fn()), userId, connectionId, deviceId,
+      command: { type: 'unlock-day', reason: 'x\nARM' },
+    })).rejects.toThrow('invalid-relay-command-payload');
+    await expect(claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        command_type: 'unlock-day', payload: { reason: 'ab' },
         expires_at: '2026-08-21T12:00:30.000Z',
         status: 'claimed', result: null, error: null,
       }),
