@@ -39,4 +39,24 @@ describe('file copy group store', () => {
     await import('node:fs/promises').then(fs => fs.writeFile(path, '{"id":"broken"}'));
     await expect(store.load()).rejects.toThrow('Invalid persisted copy group');
   });
+
+  it('defaults missing legacy day rules but rejects explicit invalid values', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'copy-group-rules-'));
+    const path = join(root, 'group.json');
+    const store = createFileCopyGroupStore(path);
+    await import('node:fs/promises').then(fs => fs.writeFile(path, JSON.stringify({
+      id: 'legacy', name: 'Legacy', enabled: true, leaderAccountId: 11,
+      followers: [{ accountId: 22, mode: 'on-submit', multiplier: 1 }],
+      safety: { entryCooldownMinutes: 5 },
+    })));
+    expect((await store.load())?.safety).toMatchObject({
+      dailyMaxTrades: 0,
+      tradingWindow: { enabled: false, from: '15:30', to: '22:00', timeZone: 'Europe/Prague' },
+    });
+
+    await import('node:fs/promises').then(fs => fs.writeFile(path, JSON.stringify({
+      ...group(), safety: { ...DEFAULT_COPY_GROUP_SAFETY, dailyMaxTrades: 201 },
+    })));
+    await expect(store.load()).rejects.toThrow('Invalid persisted copy group');
+  });
 });

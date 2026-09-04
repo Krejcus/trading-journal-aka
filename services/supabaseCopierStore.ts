@@ -24,6 +24,8 @@ const atomicOutboxStatuses = new Set(['planned', 'sending', 'unknown', 'acknowle
 const placeOutboxStatuses = new Set([...atomicOutboxStatuses, 'confirmed-by-state']);
 const cancelStatuses = new Set(['planned', 'sending', 'unknown', 'confirmed', 'abandoned', 'waived']);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const dayLockTriggers = new Set(['manual', 'daily-loss', 'losing-trades', 'max-trades', 'window-end']);
+const dailyRules = new Set(['daily-loss', 'losing-trades', 'max-trades', 'window-end']);
 
 function validRequest(value: unknown): boolean {
   if (!isRecord(value)) return false;
@@ -182,6 +184,32 @@ function validSeenTerminalReject(value: unknown): boolean {
     && finite(value.at) && Number(value.at) >= 0;
 }
 
+function validDayRuleState(value: Record<string, unknown>): boolean {
+  const snoozed = value.dayLockSnoozedRules;
+  const unlock = value.dayUnlock;
+  const stats = value.dailyStats;
+  return (value.dayLockTrigger == null || dayLockTriggers.has(String(value.dayLockTrigger)))
+    && (value.dayLockAt == null || (finite(value.dayLockAt) && value.dayLockAt >= 0))
+    && (snoozed == null || (Array.isArray(snoozed)
+      && snoozed.every(trigger => dayLockTriggers.has(String(trigger)))
+      && unique(snoozed.map(String))))
+    && (unlock == null || (isRecord(unlock)
+      && finite(unlock.at) && unlock.at >= 0
+      && string(unlock.reason) && unlock.reason.length >= 3 && unlock.reason.length <= 200
+      && !/[\u0000-\u001f\u007f]/.test(unlock.reason)))
+    && (stats == null || (isRecord(stats)
+      && (stats.tradesToday == null
+        || (integer(stats.tradesToday) && stats.tradesToday >= 0))
+      && (stats.windowState == null
+        || stats.windowState === 'inside' || stats.windowState === 'outside' || stats.windowState === 'off')
+      && (stats.warnedRules == null || (Array.isArray(stats.warnedRules)
+        && stats.warnedRules.every(warning => isRecord(warning)
+          && dailyRules.has(String(warning.rule))
+          && finite(warning.current) && finite(warning.limit) && finite(warning.at)
+          && warning.at >= 0)
+        && unique(stats.warnedRules.map(warning => String((warning as Record<string, unknown>).rule)))))));
+}
+
 function validSafety(value: unknown): boolean {
   if (value == null) return true;
   if (!isRecord(value)) return false;
@@ -207,6 +235,7 @@ function validSafety(value: unknown): boolean {
   return finite(value.entryCooldownUntil) && Number(value.entryCooldownUntil) >= 0
     && finite(value.dayLockUntil) && Number(value.dayLockUntil) >= 0
     && optionalString(value.dayLockReason)
+    && validDayRuleState(value)
     && (value.leaderExposureEpochs == null || (Array.isArray(value.leaderExposureEpochs)
       && value.leaderExposureEpochs.every(validLeaderExposureEpoch)))
     && validEligibility

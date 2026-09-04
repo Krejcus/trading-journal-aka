@@ -1,7 +1,7 @@
 import type { BrokerOrderRequest, BrokerPosition, OrderSide, OrderType } from './brokerPort';
 import { brokerTag, replicationKey } from './copierKeys';
 import type { LeaderFlatEpoch } from './copierLeaderFlatGuard';
-import type { CopyGroupConfig, CopyReplicationMode } from './liveCopyTrading';
+import type { CopyGroupConfig, CopyReplicationMode, DayLockTrigger } from './liveCopyTrading';
 
 /**
  * Deterministické jádro replikace.
@@ -177,6 +177,11 @@ export interface CopierState {
     entryCooldownUntil: number;
     dayLockUntil: number;
     dayLockReason?: string;
+    /** Optional in the persisted type for legacy snapshots; new workers persist all four. */
+    dayLockTrigger?: DayLockTrigger | null;
+    dayLockAt?: number | null;
+    dayLockSnoozedRules?: DayLockTrigger[];
+    dayUnlock?: { at: number; reason: string } | null;
     /**
      * Denní risk počítadlo leadera pro auto day-lock. Je součástí stejného
      * CAS snapshotu jako outbox — restart workeru nesmí zapomenout ranní
@@ -246,11 +251,25 @@ export interface CopierDailyStats {
   /** Realizovaný denní P&L leadera v USD (jen symboly se známou point value). */
   realizedPnlUsd: number;
   losingTrades: number;
+  /** Closed leader trades in this broker session. */
+  tradesToday?: number;
+  windowState?: 'inside' | 'outside' | 'off';
+  /** Durable one-shot warning records for this broker session. */
+  warnedRules?: CopierRuleWarning[];
   openLots: CopierDailyLot[];
   /** Poslední brokerem potvrzené closes; server je idempotentně ukládá. */
   recentClosedTrades?: CopierClosedTrade[];
   /** Symboly bez známé point value — USD limit je nepočítá (audit varuje). */
   unpricedSymbols: string[];
+}
+
+export type CopierDailyRule = Exclude<DayLockTrigger, 'manual'>;
+
+export interface CopierRuleWarning {
+  rule: CopierDailyRule;
+  current: number;
+  limit: number;
+  at: number;
 }
 
 export function createCopierState(
@@ -283,9 +302,12 @@ export function createCopierState(
             openLots: safety.dailyStats.openLots.map(lot => ({ ...lot })),
             recentClosedTrades: safety.dailyStats.recentClosedTrades?.map(trade => ({ ...trade })) ?? [],
             unpricedSymbols: [...safety.dailyStats.unpricedSymbols],
+            warnedRules: safety.dailyStats.warnedRules?.map(warning => ({ ...warning })) ?? [],
           },
         }
         : {}),
+      dayLockSnoozedRules: [...(safety.dayLockSnoozedRules ?? [])],
+      dayUnlock: safety.dayUnlock ? { ...safety.dayUnlock } : null,
     },
   };
 }

@@ -24,7 +24,9 @@ export function createFileCopyGroupStore(path: string): FileCopyGroupStore {
       }
     },
     async save(group) {
-      const operation = tail.then(() => writeAtomic(file, group));
+      const normalized = sanitizeCopyGroups([group]);
+      if (!normalized || normalized.length !== 1) throw new Error('Invalid persisted copy group');
+      const operation = tail.then(() => writeAtomic(file, normalized[0]));
       tail = operation.catch(() => undefined);
       return operation;
     },

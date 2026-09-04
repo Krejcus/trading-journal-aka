@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -36,5 +36,36 @@ describe('file copier store', () => {
 
     expect(attempts.filter(item => item.status === 'fulfilled')).toHaveLength(1);
     expect(attempts.filter(item => item.status === 'rejected')).toHaveLength(1);
+  });
+
+  it('persists day-lock metadata and rejects malformed durable rule state', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'at-copier-store-rules-'));
+    const path = join(folder, 'runtime.json');
+    const store = createFileCopierStore(path);
+    const snapshot = emptySnapshot();
+    snapshot.safety = {
+      ...snapshot.safety!,
+      dayLockTrigger: 'max-trades',
+      dayLockAt: 100,
+      dayLockSnoozedRules: ['daily-loss'],
+      dayUnlock: { at: 90, reason: 'Vědomé odemknutí dne' },
+      dailyStats: {
+        sessionEndAt: 1_000,
+        realizedPnlUsd: -50,
+        losingTrades: 1,
+        tradesToday: 4,
+        windowState: 'inside',
+        warnedRules: [{ rule: 'max-trades', current: 4, limit: 5, at: 80 }],
+        openLots: [],
+        unpricedSymbols: [],
+      },
+    };
+    await store.commit(snapshot, 0);
+    await expect(store.load()).resolves.toMatchObject({ safety: snapshot.safety });
+
+    const malformed = JSON.parse(await readFile(path, 'utf8'));
+    malformed.safety.dayLockTrigger = 'unknown-rule';
+    await writeFile(path, JSON.stringify(malformed));
+    await expect(store.load()).rejects.toThrow('Invalid file copier snapshot');
   });
 });

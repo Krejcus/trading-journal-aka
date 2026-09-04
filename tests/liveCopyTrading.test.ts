@@ -264,5 +264,34 @@ describe('sanitizeCopyGroups', () => {
       safety: { positionReconciler: true, disableReplicationOnBreach: false, autoCloseFollowerPositions: true, preventHedging: true },
     }]);
     expect(groups?.[0].safety?.disableReplicationOnBreach).toBe(true);
+    expect(groups?.[0].safety).toMatchObject({
+      dailyMaxTrades: 0,
+      tradingWindow: { enabled: false, from: '15:30', to: '22:00', timeZone: 'Europe/Prague' },
+    });
+  });
+
+  it('accepts rule boundaries and rejects malformed explicit daily rules fail-closed', () => {
+    const base = {
+      id: 'rules', name: 'Rules', enabled: true, leaderAccountId: 1,
+      followers: [{ accountId: 2, mode: 'on-submit', multiplier: 1 }],
+    };
+    expect(sanitizeCopyGroups([{
+      ...base,
+      safety: {
+        ...DEFAULT_COPY_GROUP_SAFETY,
+        dailyMaxTrades: 200,
+        tradingWindow: { enabled: true, from: '15:30', to: '22:00', timeZone: 'Europe/Prague' },
+      },
+    }])?.[0].safety).toMatchObject({ dailyMaxTrades: 200 });
+
+    for (const safety of [
+      { ...DEFAULT_COPY_GROUP_SAFETY, dailyMaxTrades: -1 },
+      { ...DEFAULT_COPY_GROUP_SAFETY, dailyMaxTrades: 201 },
+      { ...DEFAULT_COPY_GROUP_SAFETY, dailyMaxTrades: 1.5 },
+      { ...DEFAULT_COPY_GROUP_SAFETY, tradingWindow: { enabled: true, from: '22:00', to: '15:30', timeZone: 'Europe/Prague' } },
+      { ...DEFAULT_COPY_GROUP_SAFETY, tradingWindow: { enabled: true, from: '15:30', to: '15:30', timeZone: 'Europe/Prague' } },
+      { ...DEFAULT_COPY_GROUP_SAFETY, tradingWindow: { enabled: true, from: '15:60', to: '22:00', timeZone: 'Europe/Prague' } },
+      { ...DEFAULT_COPY_GROUP_SAFETY, tradingWindow: { enabled: true, from: '15:30', to: '22:00', timeZone: 'Invalid/Zone' } },
+    ]) expect(sanitizeCopyGroups([{ ...base, safety }])).toBeNull();
   });
 });

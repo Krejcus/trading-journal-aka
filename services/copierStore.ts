@@ -147,6 +147,8 @@ function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapsh
   const { leaderExposureEpochs, ...rest } = base;
   return {
     ...rest,
+    dayLockSnoozedRules: [...(base.dayLockSnoozedRules ?? [])],
+    dayUnlock: base.dayUnlock ? { ...base.dayUnlock } : null,
     ...(leaderExposureEpochs
       ? {
         leaderExposureEpochs: leaderExposureEpochs.map(epoch => ({
@@ -178,6 +180,7 @@ function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapsh
           openLots: base.dailyStats.openLots.map(lot => ({ ...lot })),
           recentClosedTrades: base.dailyStats.recentClosedTrades?.map(trade => ({ ...trade })) ?? [],
           unpricedSymbols: [...base.dailyStats.unpricedSymbols],
+          warnedRules: base.dailyStats.warnedRules?.map(warning => ({ ...warning })) ?? [],
         },
       }
       : {}),

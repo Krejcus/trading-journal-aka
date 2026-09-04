@@ -78,6 +78,7 @@ function parseSnapshot(value: unknown): CopierSnapshot {
     || !Array.isArray(raw.links)
     || !Array.isArray(raw.leaderCumQty)
     || !Array.isArray(raw.followerFillTargets)
+    || !validDayRuleSafety(raw.safety)
   ) {
     throw new Error('Invalid file copier snapshot shape');
   }
@@ -86,6 +87,50 @@ function parseSnapshot(value: unknown): CopierSnapshot {
     bracketOutbox: raw.bracketOutbox ?? [],
     osoOutbox: raw.osoOutbox ?? [],
   })) as CopierSnapshot;
+}
+
+const DAY_LOCK_TRIGGERS = new Set(['manual', 'daily-loss', 'losing-trades', 'max-trades', 'window-end']);
+const DAILY_RULES = new Set(['daily-loss', 'losing-trades', 'max-trades', 'window-end']);
+
+function validDayRuleSafety(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value !== 'object' || Array.isArray(value)) return false;
+  const safety = value as Record<string, unknown>;
+  if (safety.dayLockTrigger != null && !DAY_LOCK_TRIGGERS.has(String(safety.dayLockTrigger))) return false;
+  if (safety.dayLockAt != null
+    && (typeof safety.dayLockAt !== 'number' || !Number.isFinite(safety.dayLockAt) || safety.dayLockAt < 0)) return false;
+  if (safety.dayLockSnoozedRules != null) {
+    if (!Array.isArray(safety.dayLockSnoozedRules)
+      || !safety.dayLockSnoozedRules.every(trigger => DAY_LOCK_TRIGGERS.has(String(trigger)))
+      || new Set(safety.dayLockSnoozedRules).size !== safety.dayLockSnoozedRules.length) return false;
+  }
+  if (safety.dayUnlock != null) {
+    if (typeof safety.dayUnlock !== 'object' || Array.isArray(safety.dayUnlock)) return false;
+    const unlock = safety.dayUnlock as Record<string, unknown>;
+    if (typeof unlock.at !== 'number' || !Number.isFinite(unlock.at) || unlock.at < 0
+      || typeof unlock.reason !== 'string' || unlock.reason.length < 3 || unlock.reason.length > 200
+      || /[\u0000-\u001f\u007f]/.test(unlock.reason)) return false;
+  }
+  if (safety.dailyStats == null) return true;
+  if (typeof safety.dailyStats !== 'object' || Array.isArray(safety.dailyStats)) return false;
+  const stats = safety.dailyStats as Record<string, unknown>;
+  if (stats.tradesToday != null
+    && (!Number.isSafeInteger(stats.tradesToday) || Number(stats.tradesToday) < 0)) return false;
+  if (stats.windowState != null
+    && stats.windowState !== 'inside' && stats.windowState !== 'outside' && stats.windowState !== 'off') return false;
+  if (stats.warnedRules == null) return true;
+  if (!Array.isArray(stats.warnedRules)) return false;
+  const rules = stats.warnedRules.map(warning => {
+    if (!warning || typeof warning !== 'object' || Array.isArray(warning)) return null;
+    const record = warning as Record<string, unknown>;
+    return DAILY_RULES.has(String(record.rule))
+      && typeof record.current === 'number' && Number.isFinite(record.current)
+      && typeof record.limit === 'number' && Number.isFinite(record.limit)
+      && typeof record.at === 'number' && Number.isFinite(record.at) && record.at >= 0
+      ? String(record.rule)
+      : null;
+  });
+  return rules.every(rule => rule != null) && new Set(rules).size === rules.length;
 }
 
 function isMissingFile(error: unknown): boolean {

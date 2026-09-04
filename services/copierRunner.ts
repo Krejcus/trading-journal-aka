@@ -108,7 +108,9 @@ export type CopierAuditKind =
   /** Noha skončila vyplněná, ne zrušená — audit to nesmí zaměňovat. */
   | 'filled'
   | 'cancel-failed'
-  | 'sequence-broken';
+  | 'sequence-broken'
+  | 'rule-warning'
+  | 'day-unlock';
 
 export interface CopierAuditEntry {
   at: number;
@@ -118,6 +120,10 @@ export interface CopierAuditEntry {
   key?: string;
   brokerOrderId?: string;
   reason?: string;
+  /** Strukturovaný payload pro `rule-warning`; legacy konzumenti jej ignorují. */
+  rule?: 'daily-loss' | 'losing-trades' | 'max-trades' | 'window-end';
+  current?: number;
+  limit?: number;
 }
 
 /**

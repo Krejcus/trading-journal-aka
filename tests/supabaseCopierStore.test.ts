@@ -131,6 +131,40 @@ describe('createSupabaseCopierStore', () => {
     await expect(oversizedStore.load()).rejects.toThrow('Invalid copier snapshot');
   });
 
+  it('validuje additivní day-lock, snooze a warning metadata fail-closed', async () => {
+    const valid = emptySnapshot();
+    valid.safety = {
+      ...valid.safety!,
+      dayLockTrigger: 'losing-trades',
+      dayLockAt: 10,
+      dayLockSnoozedRules: ['max-trades'],
+      dayUnlock: { at: 9, reason: 'Vědomé odemknutí dne' },
+      dailyStats: {
+        sessionEndAt: 100,
+        realizedPnlUsd: -20,
+        losingTrades: 1,
+        tradesToday: 2,
+        windowState: 'inside',
+        warnedRules: [{ rule: 'losing-trades', current: 1, limit: 2, at: 8 }],
+        openLots: [],
+        unpricedSymbols: [],
+      },
+    };
+    await expect(createSupabaseCopierStore(fakeClient({
+      row: { revision: 1, snapshot: valid },
+    }), crypto.randomUUID(), () => 1).load()).resolves.toMatchObject({ safety: valid.safety });
+
+    const invalid = structuredClone(valid);
+    if (!invalid.safety?.dailyStats) throw new Error('missing-test-stats');
+    invalid.safety.dailyStats.warnedRules = [
+      { rule: 'max-trades', current: 1, limit: 2, at: 8 },
+      { rule: 'max-trades', current: 2, limit: 2, at: 9 },
+    ];
+    await expect(createSupabaseCopierStore(fakeClient({
+      row: { revision: 1, snapshot: invalid },
+    }), crypto.randomUUID(), () => 1).load()).rejects.toThrow('Invalid copier snapshot');
+  });
+
   it('přeloží databázový CAS konflikt na doménovou chybu', async () => {
     const store = createSupabaseCopierStore(fakeClient({
       rpcError: { message: 'COPIER_REVISION_CONFLICT expected=2 actual=3' },

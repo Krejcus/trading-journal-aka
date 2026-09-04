@@ -23,6 +23,20 @@ export interface CopyFollowerConfig {
  */
 export type ArmExpiryFlattenScope = 'off' | 'followers' | 'group';
 
+export type DayLockTrigger =
+  | 'manual'
+  | 'daily-loss'
+  | 'losing-trades'
+  | 'max-trades'
+  | 'window-end';
+
+export interface CopyGroupTradingWindow {
+  enabled: boolean;
+  from: string;
+  to: string;
+  timeZone: string;
+}
+
 export interface CopyGroupSafetySettings {
   positionReconciler: boolean;
   disableReplicationOnBreach: boolean;
@@ -49,6 +63,10 @@ export interface CopyGroupSafetySettings {
   dailyLossLimitUsd: number;
   /** Auto day-lock po N ztrátových obchodech leadera za den. 0 = vypnuto. */
   dailyMaxLosingTrades: number;
+  /** Auto day-lock po N uzavřených obchodech leadera za session. 0 = vypnuto. */
+  dailyMaxTrades: number;
+  /** Denní vstupní okno. Přes půlnoc se záměrně nepodporuje. */
+  tradingWindow: CopyGroupTradingWindow;
 }
 
 export const DEFAULT_COPY_GROUP_SAFETY: CopyGroupSafetySettings = {
@@ -64,6 +82,13 @@ export const DEFAULT_COPY_GROUP_SAFETY: CopyGroupSafetySettings = {
   armExpiryFlatten: 'followers',
   dailyLossLimitUsd: 0,
   dailyMaxLosingTrades: 0,
+  dailyMaxTrades: 0,
+  tradingWindow: {
+    enabled: false,
+    from: '15:30',
+    to: '22:00',
+    timeZone: 'Europe/Prague',
+  },
 };
 
 export interface CopyGroupConfig {
@@ -128,7 +153,8 @@ export type CopyGroupValidationIssueCode =
   | 'leader-is-follower'
   | 'duplicate-follower'
   | 'invalid-multiplier'
-  | 'invalid-max-contracts';
+  | 'invalid-max-contracts'
+  | 'invalid-safety';
 
 export interface CopyGroupValidationIssue {
   code: CopyGroupValidationIssueCode;
@@ -311,6 +337,9 @@ export function validateCopyGroup(
       add({ code: 'invalid-max-contracts', accountId: follower.accountId, message: 'Max kontrakty musí být celé číslo alespoň 1.' });
     }
   }
+  if (sanitizeSafety(group.safety) == null) {
+    add({ code: 'invalid-safety', message: 'Pravidla dne obsahují neplatnou hodnotu.' });
+  }
   const uniqueIssues = issues.filter((issue, index) => issues.findIndex(candidate => (
     candidate.code === issue.code
     && candidate.accountId === issue.accountId
@@ -412,6 +441,8 @@ export function sanitizeCopyGroups(value: unknown): CopyGroupConfig[] | null {
         ...(maxContracts != null ? { maxContracts } : {}),
       });
     }
+    const safety = sanitizeSafety(raw.safety);
+    if (!safety) return null;
     groups.push({
       id: raw.id,
       name: raw.name,
@@ -419,16 +450,73 @@ export function sanitizeCopyGroups(value: unknown): CopyGroupConfig[] | null {
       leaderAccountId: raw.leaderAccountId,
       followers,
       ...(typeof raw.color === 'string' ? { color: raw.color } : {}),
-      safety: sanitizeSafety(raw.safety),
+      safety,
       ...(raw.localOnly === true ? { localOnly: true } : {}),
     });
   }
   return groups;
 }
 
-function sanitizeSafety(value: unknown): CopyGroupSafetySettings {
-  if (!value || typeof value !== 'object') return { ...DEFAULT_COPY_GROUP_SAFETY };
+const HH_MM = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+
+const validTimeZone = (value: string): boolean => {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const minutesOfDay = (value: string): number => {
+  const [hour, minute] = value.split(':').map(Number);
+  return hour * 60 + minute;
+};
+
+/**
+ * Safety parser used by local storage, relay and worker boundaries.
+ * Missing fields are legacy and receive defaults. Present malformed new
+ * fields are rejected instead of silently disabling a safety rule.
+ */
+export function sanitizeCopyGroupSafety(value: unknown): CopyGroupSafetySettings | null {
+  if (value == null) {
+    return {
+      ...DEFAULT_COPY_GROUP_SAFETY,
+      tradingWindow: { ...DEFAULT_COPY_GROUP_SAFETY.tradingWindow },
+    };
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) return null;
   const raw = value as Partial<CopyGroupSafetySettings>;
+  const dailyMaxTrades = raw.dailyMaxTrades == null
+    ? DEFAULT_COPY_GROUP_SAFETY.dailyMaxTrades
+    : raw.dailyMaxTrades;
+  if (!Number.isSafeInteger(dailyMaxTrades) || dailyMaxTrades < 0 || dailyMaxTrades > 200) {
+    return null;
+  }
+  const windowRaw = raw.tradingWindow;
+  let tradingWindow: CopyGroupTradingWindow;
+  if (windowRaw == null) {
+    tradingWindow = { ...DEFAULT_COPY_GROUP_SAFETY.tradingWindow };
+  } else {
+    if (typeof windowRaw !== 'object' || Array.isArray(windowRaw)) return null;
+    const candidate = windowRaw as Partial<CopyGroupTradingWindow>;
+    if (
+      typeof candidate.enabled !== 'boolean'
+      || typeof candidate.from !== 'string'
+      || typeof candidate.to !== 'string'
+      || typeof candidate.timeZone !== 'string'
+      || !HH_MM.test(candidate.from)
+      || !HH_MM.test(candidate.to)
+      || minutesOfDay(candidate.from) >= minutesOfDay(candidate.to)
+      || !validTimeZone(candidate.timeZone)
+    ) return null;
+    tradingWindow = {
+      enabled: candidate.enabled,
+      from: candidate.from,
+      to: candidate.to,
+      timeZone: candidate.timeZone,
+    };
+  }
   return {
     positionReconciler: typeof raw.positionReconciler === 'boolean' ? raw.positionReconciler : DEFAULT_COPY_GROUP_SAFETY.positionReconciler,
     // Migruj i dříve uložené skupiny s nebezpečným `false`. Dokud nemáme
@@ -458,7 +546,13 @@ function sanitizeSafety(value: unknown): CopyGroupSafetySettings {
         && raw.dailyMaxLosingTrades >= 0
         ? Math.min(50, raw.dailyMaxLosingTrades)
         : DEFAULT_COPY_GROUP_SAFETY.dailyMaxLosingTrades,
+    dailyMaxTrades,
+    tradingWindow,
   };
+}
+
+function sanitizeSafety(value: unknown): CopyGroupSafetySettings | null {
+  return sanitizeCopyGroupSafety(value);
 }
 
 export function createLocalCopyGroupId(now = Date.now()): string {

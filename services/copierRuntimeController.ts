@@ -13,6 +13,8 @@ import {
   type CopierAccountEligibility,
   type CopierClosedTrade,
   type CopierDailyStats,
+  type CopierDailyRule,
+  type CopierRuleWarning,
   type CopierExecutionResolutionKind,
   type CopierRejectedExecution,
   type CopierSeenTerminalReject,
@@ -59,7 +61,18 @@ import {
 } from './copierRunner';
 import type { CopierStore } from './copierStore';
 import { COPIER_SEEN_TERMINAL_REJECT_LIMIT, toSnapshot } from './copierStore';
-import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from './liveCopyTrading';
+import {
+  DEFAULT_COPY_GROUP_SAFETY,
+  sanitizeCopyGroupSafety,
+  type CopyGroupConfig,
+  type DayLockTrigger,
+} from './liveCopyTrading';
+import {
+  clockMinutes,
+  isTradingWindowWarningAt,
+  tradingWindowStateAt,
+  zonedMinuteOfDay,
+} from './copierDailyRules';
 import {
   processManualFlatten,
   processTargetedLiquidation,
@@ -164,6 +177,10 @@ export interface CopierControllerStatus {
   entryCooldownUntil?: number;
   dayLockUntil?: number;
   dayLockReason?: string | null;
+  dayLockTrigger?: DayLockTrigger | null;
+  dayLockAt?: number | null;
+  dayLockSnoozedRules?: DayLockTrigger[];
+  dayUnlock?: { at: number; reason: string } | null;
   /**
    * Kdy aktuální ARM vyprší (epoch ms); 0 = neARMováno. Klient z něj
    * plánuje deterministickou lokální notifikaci „ARM vypršel".
@@ -189,6 +206,9 @@ export interface CopierControllerStatus {
     sessionEndAt: number;
     realizedPnlUsd: number;
     losingTrades: number;
+    tradesToday?: number;
+    windowState?: 'inside' | 'outside' | 'off';
+    warnedRules?: CopierRuleWarning[];
     unpricedSymbols: string[];
     recentClosedTrades?: CopierClosedTrade[];
   } | null;
@@ -278,6 +298,8 @@ export interface CopierRuntimeController {
   engageKillSwitch(reason?: string): void;
   /** Trvalý lock do zadaného času; restart workeru ho nesmí obejít. */
   lockUntil(until: number, reason: string): Promise<void>;
+  /** Odemkne aktivní denní lock, ale nikdy znovu neARMuje. */
+  unlockDay(reason: string): Promise<void>;
   /**
    * Zpřísní eligibility podle čerstvého LIVE broker snapshotu. Tato cesta
    * umí pouze vyřazovat účty; `active` se obnovuje výhradně reconciliací.
@@ -417,7 +439,17 @@ function assertRuntimeGroup(group: CopyGroupConfig): void {
       throw new Error('Follower maxContracts musí být kladné celé číslo');
     }
   }
+  if (!sanitizeCopyGroupSafety(group.safety)) {
+    throw new Error('Copy group obsahuje neplatná pravidla dne');
+  }
 }
+
+const normalizedRuntimeGroup = (group: CopyGroupConfig): CopyGroupConfig => {
+  assertRuntimeGroup(group);
+  const safety = sanitizeCopyGroupSafety(group.safety);
+  if (!safety) throw new Error('Copy group obsahuje neplatná pravidla dne');
+  return { ...group, safety };
+};
 
 /**
  * Bezpečný bootstrap jednoho copy group runtime.
@@ -428,7 +460,7 @@ function assertRuntimeGroup(group: CopyGroupConfig): void {
 export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): Promise<CopierRuntimeController> {
   assertRuntimeGroup(options.group);
   const clock = options.clock ?? Date.now;
-  let group = options.group;
+  let group = normalizedRuntimeGroup(options.group);
   options.broker.setCriticalAccounts?.([group.leaderAccountId]);
   const broker = createExposureCappedBroker(
     options.broker,
@@ -890,8 +922,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const leaderPositions = new Map<string, number>();
   const positionsByAccount = new Map<number, Map<string, number>>();
   let cooldownPending = false;
-  /** Důvod čekajícího auto day-locku; zamyká se až po zploštění skupiny. */
-  let dayLockPendingReason: string | null = null;
+  /** Čekající auto day-lock; zamyká se výhradně existující cestou po flat. */
+  let dayLockPending: { trigger: DayLockTrigger; reason: string; until?: number } | null = null;
   /**
    * Symboly, jejichž obchod běžel už před startem počítadla (restart workeru
    * uprostřed pozice). Bez známé průměrné ceny by se P&L spočítal špatně —
@@ -1691,6 +1723,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     sessionEndAt: at + msUntilTradovateSessionEnd(at),
     realizedPnlUsd: 0,
     losingTrades: 0,
+    tradesToday: 0,
+    windowState: tradingWindowStateAt(
+      group.safety?.tradingWindow ?? DEFAULT_COPY_GROUP_SAFETY.tradingWindow,
+      at,
+    ),
+    warnedRules: [],
     openLots: [],
     recentClosedTrades: [],
     unpricedSymbols: [],
@@ -1702,10 +1740,154 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (!stored || at >= stored.sessionEndAt) return emptyDailyStats(at);
     return {
       ...stored,
+      tradesToday: stored.tradesToday ?? stored.recentClosedTrades?.length ?? 0,
+      windowState: tradingWindowStateAt(
+        group.safety?.tradingWindow ?? DEFAULT_COPY_GROUP_SAFETY.tradingWindow,
+        at,
+      ),
+      warnedRules: stored.warnedRules?.map(warning => ({ ...warning })) ?? [],
       openLots: stored.openLots.map(lot => ({ ...lot })),
       recentClosedTrades: stored.recentClosedTrades?.map(trade => ({ ...trade })) ?? [],
       unpricedSymbols: [...stored.unpricedSymbols],
     };
+  };
+
+  const resetDayLockForNewSession = (
+    safety: CopierRuntime['state']['safety'],
+  ): CopierRuntime['state']['safety'] => ({
+    ...safety,
+    dayLockUntil: 0,
+    dayLockReason: undefined,
+    dayLockTrigger: null,
+    dayLockAt: null,
+    dayLockSnoozedRules: [],
+    dayUnlock: null,
+  });
+
+  /** Persistuje legacy defaulty i úplný reset na hranici broker session. */
+  const ensureDailySession = async (at: number): Promise<CopierDailyStats> => {
+    const safety = currentRuntime().state.safety;
+    const stored = safety.dailyStats;
+    const newSession = stored != null && at >= stored.sessionEndAt;
+    const stats = currentDailyStats(at);
+    const needsNormalization = stored == null
+      || newSession
+      || stored.tradesToday == null
+      || stored.windowState !== stats.windowState
+      || stored.warnedRules == null
+      || safety.dayLockTrigger === undefined
+      || safety.dayLockAt === undefined
+      || safety.dayLockSnoozedRules === undefined
+      || safety.dayUnlock === undefined;
+    if (!needsNormalization) return stats;
+    if (newSession) {
+      dayLockPending = null;
+      untrackedTradeSymbols.clear();
+    }
+    const normalizedSafety = newSession ? resetDayLockForNewSession(safety) : safety;
+    await persistSafety({
+      ...normalizedSafety,
+      dayLockTrigger: normalizedSafety.dayLockTrigger ?? null,
+      dayLockAt: normalizedSafety.dayLockAt ?? null,
+      dayLockSnoozedRules: [...(normalizedSafety.dayLockSnoozedRules ?? [])],
+      dayUnlock: normalizedSafety.dayUnlock ? { ...normalizedSafety.dayUnlock } : null,
+      dailyStats: stats,
+    });
+    return stats;
+  };
+
+  const warningAlreadyRecorded = (stats: CopierDailyStats, rule: CopierDailyRule) =>
+    stats.warnedRules?.some(warning => warning.rule === rule) === true;
+
+  const warningAudit = (warning: CopierRuleWarning): CopierAuditEntry => ({
+    at: warning.at,
+    leaderEventId: `rule-warning:${warning.rule}:${warning.at}`,
+    kind: 'rule-warning',
+    reason: `rule=${warning.rule} current=${warning.current} limit=${warning.limit}`,
+    rule: warning.rule,
+    current: warning.current,
+    limit: warning.limit,
+  });
+
+  /** Vyhodnotí všechny denní prahy; snooze platí jen pro konkrétní trigger. */
+  const evaluateDailyRules = async (at: number): Promise<void> => {
+    const stats = await ensureDailySession(at);
+    const safety = group.safety ?? DEFAULT_COPY_GROUP_SAFETY;
+    const warnings = stats.warnedRules?.map(warning => ({ ...warning })) ?? [];
+    const addWarning = (rule: CopierDailyRule, current: number, limit: number) => {
+      if (warningAlreadyRecorded({ ...stats, warnedRules: warnings }, rule)) return;
+      warnings.push({ rule, current, limit, at });
+    };
+
+    if (safety.dailyMaxLosingTrades > 0
+      && stats.losingTrades === safety.dailyMaxLosingTrades - 1) {
+      addWarning('losing-trades', stats.losingTrades, safety.dailyMaxLosingTrades);
+    }
+    if (safety.dailyMaxTrades > 0
+      && (stats.tradesToday ?? 0) === safety.dailyMaxTrades - 1) {
+      addWarning('max-trades', stats.tradesToday ?? 0, safety.dailyMaxTrades);
+    }
+    if (safety.dailyLossLimitUsd > 0
+      && stats.realizedPnlUsd <= -0.8 * safety.dailyLossLimitUsd) {
+      addWarning('daily-loss', Math.abs(stats.realizedPnlUsd), safety.dailyLossLimitUsd);
+    }
+    if (isTradingWindowWarningAt(safety.tradingWindow, at)) {
+      addWarning(
+        'window-end',
+        zonedMinuteOfDay(at, safety.tradingWindow.timeZone) ?? 0,
+        clockMinutes(safety.tradingWindow.to),
+      );
+    }
+    if (warnings.length !== (stats.warnedRules?.length ?? 0)) {
+      const added = warnings.slice(stats.warnedRules?.length ?? 0);
+      stats.warnedRules = warnings;
+      await persistSafety({ ...currentRuntime().state.safety, dailyStats: stats });
+      options.onAudit?.(added.map(warningAudit));
+    }
+
+    const currentSafety = currentRuntime().state.safety;
+    if (currentSafety.dayLockUntil > at || dayLockPending) return;
+    const snoozed = new Set(currentSafety.dayLockSnoozedRules ?? []);
+    let pending: typeof dayLockPending = null;
+    if (!snoozed.has('daily-loss')
+      && safety.dailyLossLimitUsd > 0
+      && stats.realizedPnlUsd <= -safety.dailyLossLimitUsd) {
+      pending = {
+        trigger: 'daily-loss',
+        reason: `denní ztráta dosáhla limitu ${safety.dailyLossLimitUsd} USD`,
+      };
+    } else if (!snoozed.has('losing-trades')
+      && safety.dailyMaxLosingTrades > 0
+      && stats.losingTrades >= safety.dailyMaxLosingTrades) {
+      pending = {
+        trigger: 'losing-trades',
+        reason: `${stats.losingTrades}. ztrátový obchod dne (limit ${safety.dailyMaxLosingTrades})`,
+      };
+    } else if (!snoozed.has('max-trades')
+      && safety.dailyMaxTrades > 0
+      && (stats.tradesToday ?? 0) >= safety.dailyMaxTrades) {
+      pending = {
+        trigger: 'max-trades',
+        reason: `${stats.tradesToday ?? 0}. uzavřený obchod dne (limit ${safety.dailyMaxTrades})`,
+      };
+    } else if (!snoozed.has('window-end')
+      && gate.armed
+      && !gate.shadowMode
+      && stats.windowState === 'outside') {
+      pending = {
+        trigger: 'window-end',
+        reason: `obchodní okno skončilo v ${safety.tradingWindow.to} (${safety.tradingWindow.timeZone})`,
+      };
+    }
+    if (!pending) return;
+    dayLockPending = pending;
+    options.onAudit?.([{
+      at,
+      leaderEventId: `auto-day-lock:${pending.trigger}`,
+      kind: 'blocked',
+      reason: `auto day-lock trigger=${pending.trigger} čeká na flat: ${pending.reason}`,
+    }]);
+    await maybeEngageDayLock(at);
   };
 
   /**
@@ -1716,7 +1898,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    */
   const trackLeaderFill = async (fill: BrokerFill, now: number) => {
     const limitUsd = group.safety?.dailyLossLimitUsd ?? 0;
-    const maxLosing = group.safety?.dailyMaxLosingTrades ?? 0;
     const at = fill.filledAt > 0 ? fill.filledAt : now;
     const stored = currentRuntime().state.safety.dailyStats;
     if (stored && at >= stored.sessionEndAt) untrackedTradeSymbols.clear();
@@ -1758,6 +1939,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       remaining -= Math.sign(remaining) * closing;
       if (lot.netQuantity === 0) {
         if (lot.tradePnlPoints < 0) stats.losingTrades += 1;
+        stats.tradesToday = (stats.tradesToday ?? 0) + 1;
         const closedTrade: CopierClosedTrade = {
           id: fill.fillId,
           ...(lot.episodeId ? { episodeId: lot.episodeId } : {}),
@@ -1811,35 +1993,30 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
 
     await persistSafety({ ...currentRuntime().state.safety, dailyStats: stats });
-
-    if (dayLockPendingReason) return;
-    if (limitUsd > 0 && stats.realizedPnlUsd <= -limitUsd) {
-      dayLockPendingReason = `denní ztráta ${Math.abs(Math.round(stats.realizedPnlUsd))} USD dosáhla limitu ${limitUsd} USD`;
-    } else if (maxLosing > 0 && stats.losingTrades >= maxLosing) {
-      dayLockPendingReason = `${stats.losingTrades}. ztrátový obchod dne (limit ${maxLosing})`;
-    }
-    if (dayLockPendingReason) {
-      options.onAudit?.([{
-        at: now, leaderEventId: 'auto-day-lock', kind: 'blocked',
-        reason: `auto day-lock čeká na flat: ${dayLockPendingReason}`,
-      }]);
-    }
+    await evaluateDailyRules(at);
   };
 
   /** Zamkne den do konce broker session — až když je celá skupina flat. */
   const maybeEngageDayLock = async (now: number) => {
-    if (!dayLockPendingReason || !groupIsFlat()) return;
-    const reason = `auto day-lock: ${dayLockPendingReason}`;
-    dayLockPendingReason = null;
-    const until = now + msUntilTradovateSessionEnd(now);
+    if (!dayLockPending || !groupIsFlat()) return;
+    const pending = dayLockPending;
+    const automatic = pending.trigger !== 'manual';
+    const reason = automatic ? `auto day-lock: ${pending.reason}` : pending.reason;
+    dayLockPending = null;
+    const until = pending.until ?? (now + msUntilTradovateSessionEnd(now));
     gate = { ...gate, armed: false };
     await persistSafety({
       ...currentRuntime().state.safety,
       dayLockUntil: Math.max(currentRuntime().state.safety.dayLockUntil, until),
       dayLockReason: reason,
+      dayLockTrigger: pending.trigger,
+      dayLockAt: now,
     });
     options.onAudit?.([{
-      at: now, leaderEventId: 'auto-day-lock', kind: 'blocked', reason,
+      at: now,
+      leaderEventId: automatic ? `auto-day-lock:${pending.trigger}` : 'manual-day-lock',
+      kind: 'blocked',
+      reason: `day-lock trigger=${pending.trigger}: ${reason}`,
     }]);
   };
 
@@ -3035,12 +3212,40 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
   };
 
+  const leaderEventIncreasesExposure = (event: LeaderEvent): boolean => {
+    if (event.kind !== 'submitted' && event.kind !== 'filled') return false;
+    const net = leaderPositions.get(event.symbol) ?? 0;
+    const signedQuantity = event.side === 'Buy' ? event.quantity : -event.quantity;
+    if (net === 0) return true;
+    if (Math.sign(net) === Math.sign(signedQuantity)) return true;
+    return Math.abs(signedQuantity) > Math.abs(net);
+  };
+
+  const blockOutsideTradingWindow = async (event: LeaderEvent): Promise<boolean> => {
+    const window = group.safety?.tradingWindow ?? DEFAULT_COPY_GROUP_SAFETY.tradingWindow;
+    if (!window.enabled
+      || gate.shadowMode
+      || tradingWindowStateAt(window, event.receivedAt) === 'inside'
+      || !leaderEventIncreasesExposure(event)) return false;
+    const recorded = await processor.record({ event, group, clock, store: options.store });
+    runtime = recorded.runtime;
+    if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
+    options.onAudit?.([{
+      at: event.receivedAt,
+      leaderEventId: event.id,
+      kind: 'blocked',
+      reason: `trading-window-outside ${window.from}-${window.to} ${window.timeZone}`,
+    }]);
+    return true;
+  };
+
   const handleBrokerEvent = async (event: BrokerEvent) => {
     if (stopped) return;
     const now = clock();
     if (event.type === 'heartbeat') {
       gate = { ...gate, lastHeartbeatAt: event.at };
       await maybeHandleArmExpiry(now);
+      await evaluateDailyRules(now);
       return;
     }
     if (event.type === 'error') {
@@ -3107,6 +3312,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     await maybeHandleArmExpiry(now);
     if (rollEligibilityToNewSession(now)) await persistEligibility();
+    await evaluateDailyRules(now);
     if (event.type === 'fill' && event.fill.accountId !== group.leaderAccountId) {
       rememberFollowerFillCause(event.fill, now);
       const cachedNet = positionsByAccount.get(event.fill.accountId)?.get(event.fill.symbol) ?? 0;
@@ -3596,6 +3802,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           await flushStandaloneOsoEntry(pendingEntryOrderId);
         }
       }
+      if (await blockOutsideTradingWindow(leaderEvent)) return;
       if (
         options.maxLeaderOrders != null
         && !admittedLeaderOrders.has(leaderEvent.orderId)
@@ -3679,6 +3886,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       return;
     }
+    if (await blockOutsideTradingWindow(leaderEvent)) return;
     if (leaderEvent.kind === 'replaced' && leaderEvent.executionShapeChanged === true) {
       const hasFollowerLink = (currentRuntime().state.links.get(leaderEvent.orderId)?.length ?? 0) > 0;
       const needsSubmitLifecycle = group.followers.some(follower => (
@@ -4092,6 +4300,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       forceEpoch?: boolean;
     } = {},
   ): Promise<void> => {
+    nextGroup = normalizedRuntimeGroup(nextGroup);
     const operation = switchOptions.forceEpoch ? 'Aktivaci skupiny' : 'Změnu leadera';
     const run = eventTail.then(async () => {
       if (stopped) throw new Error('Copier runtime is stopped');
@@ -4171,7 +4380,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           ? 'connection recovery'
           : '',
         cooldownPending ? 'cooldown transition' : '',
-        dayLockPendingReason ? 'day-lock transition' : '',
+        dayLockPending ? 'day-lock transition' : '',
       ].filter(Boolean);
       if (pendingReasons.length > 0) {
         throw new Error(`${operation} blokuje rozpracovaný lifecycle: ${pendingReasons.join(', ')}`);
@@ -4305,6 +4514,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
   };
 
+  // Staré snapshoty dostanou additivní defaulty ještě před prvním heartbeatem;
+  // žádná chybějící metadata se pak v DTO nesmějí odhadovat na serveru.
+  await ensureDailySession(clock());
+
   const unsubscribe = broker.subscribe(event => {
     eventTail = eventTail.then(() => handleBrokerEvent(event)).catch(failClosed);
   });
@@ -4326,6 +4539,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const safety = currentRuntime().state.safety;
       if (!shadowMode && now < safety.dayLockUntil) {
         throw new Error(`ARM blokován denním lockem: ${safety.dayLockReason ?? 'risk lock'}`);
+      }
+      const tradingWindow = group.safety?.tradingWindow ?? DEFAULT_COPY_GROUP_SAFETY.tradingWindow;
+      if (!shadowMode && tradingWindow.enabled
+        && tradingWindowStateAt(tradingWindow, now) !== 'inside') {
+        throw new Error(
+          `ARM blokován mimo obchodní okno ${tradingWindow.from}–${tradingWindow.to} (${tradingWindow.timeZone})`,
+        );
       }
       if (!shadowMode && now < safety.entryCooldownUntil) {
         const remainingMin = Math.ceil((safety.entryCooldownUntil - now) / 60_000);
@@ -4424,17 +4644,54 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       options.onError?.(lastError);
     },
     async lockUntil(until, reason) {
-      if (!Number.isFinite(until) || until <= clock()) {
+      const now = clock();
+      if (!Number.isFinite(until) || until <= now) {
         throw new Error('Denní lock musí končit v budoucnosti');
       }
       const explanation = reason.trim();
-      if (explanation.length < 3) throw new Error('Denní lock vyžaduje důvod');
+      if (explanation.length < 3 || explanation.length > 200
+        || /[\u0000-\u001f\u007f]/.test(explanation)) {
+        throw new Error('Denní lock vyžaduje platný důvod (3–200 znaků)');
+      }
+      dayLockPending = { trigger: 'manual', reason: explanation, until };
+      options.onAudit?.([{
+        at: now,
+        leaderEventId: 'manual-day-lock',
+        kind: 'blocked',
+        reason: `day-lock trigger=manual čeká na flat: ${explanation}`,
+      }]);
+      await maybeEngageDayLock(now);
+    },
+    async unlockDay(reason) {
+      const now = clock();
+      const explanation = reason.trim();
+      if (explanation.length < 3 || explanation.length > 200
+        || /[\u0000-\u001f\u007f]/.test(explanation)) {
+        throw new Error('Odemknutí dne vyžaduje platný důvod (3–200 znaků)');
+      }
+      const safety = currentRuntime().state.safety;
+      if (!(safety.dayLockUntil > now)) throw new Error('Den není zamčený');
+      const trigger = safety.dayLockTrigger ?? null;
+      const snoozed = new Set(safety.dayLockSnoozedRules ?? []);
+      if (trigger && trigger !== 'manual') snoozed.add(trigger);
       gate = { ...gate, armed: false };
+      dayLockPending = null;
       await persistSafety({
-        ...currentRuntime().state.safety,
-        dayLockUntil: until,
-        dayLockReason: explanation,
+        ...safety,
+        dayLockUntil: 0,
+        dayLockTrigger: null,
+        dayLockSnoozedRules: [...snoozed],
+        dayUnlock: { at: now, reason: explanation },
       });
+      options.onAudit?.([{
+        at: now,
+        leaderEventId: `day-unlock:${now}`,
+        kind: 'day-unlock',
+        reason: `day-unlock rule=${trigger ?? 'unknown'} reason=${explanation}`,
+      }]);
+      // Stejný trigger je snoozed, ale jiný již porušený limit smí okamžitě
+      // znovu založit lock. Ani tato cesta nikdy sama neARMuje.
+      await evaluateDailyRules(now);
     },
     async applyAccountEligibilityExclusions(exclusions) {
       // Safety metadata může přijet z webu těsně před ARM/SHADOW. Nikdy
@@ -4602,7 +4859,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         throw new Error('Změnu konfigurace blokuje probíhající connection recovery/reconciliation');
       }
       if (nextGroup.id !== group.id) throw new Error('Nelze změnit runtime na jinou copy group');
-      assertRuntimeGroup(nextGroup);
+      nextGroup = normalizedRuntimeGroup(nextGroup);
       if (nextGroup.leaderAccountId !== group.leaderAccountId) {
         throw new Error('Změna leadera vyžaduje bezpečný reconfigureGroup preflight');
       }
@@ -4733,6 +4990,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         entryCooldownUntil: current.state.safety.entryCooldownUntil,
         dayLockUntil: current.state.safety.dayLockUntil,
         dayLockReason: current.state.safety.dayLockReason ?? null,
+        dayLockTrigger: current.state.safety.dayLockTrigger ?? null,
+        dayLockAt: current.state.safety.dayLockAt ?? null,
+        dayLockSnoozedRules: [...(current.state.safety.dayLockSnoozedRules ?? [])],
+        dayUnlock: current.state.safety.dayUnlock ? { ...current.state.safety.dayUnlock } : null,
         armExpiresAt: gate.armed && gate.armTtlMs > 0 ? gate.armedAt + gate.armTtlMs : 0,
         armedAt: gate.armed ? gate.armedAt : 0,
         recentCopyEvents: [...recentCopyEvents],
@@ -4744,6 +5005,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             sessionEndAt: current.state.safety.dailyStats.sessionEndAt,
             realizedPnlUsd: current.state.safety.dailyStats.realizedPnlUsd,
             losingTrades: current.state.safety.dailyStats.losingTrades,
+            tradesToday: current.state.safety.dailyStats.tradesToday ?? 0,
+            windowState: current.state.safety.dailyStats.windowState ?? 'off',
+            warnedRules: current.state.safety.dailyStats.warnedRules?.map(warning => ({ ...warning })) ?? [],
             recentClosedTrades: current.state.safety.dailyStats.recentClosedTrades?.map(trade => ({ ...trade })) ?? [],
             unpricedSymbols: [...current.state.safety.dailyStats.unpricedSymbols],
           }
