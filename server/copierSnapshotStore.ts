@@ -51,7 +51,8 @@ export function validateCopierSnapshotPayload(value: unknown): CopierSnapshotInp
       || typeof notifyDeadlineAt !== 'number'
       || !Number.isSafeInteger(notifyDeadlineAt)
       || notifyDeadlineAt < at
-      || notifyDeadlineAt > at + 5_000
+      // Upload 1–2 MB PNG s retry potřebuje desítky sekund; 5 s bylo nesplnitelné.
+      || notifyDeadlineAt > at + 60_000
     ))
     // TradingView tickery nesou '!' (kontinuální futures MNQ1!) a ':'
     // (prefix burzy CME_MINI:MNQ1!) — do storage cesty symbol nevstupuje.

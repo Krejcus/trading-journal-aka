@@ -160,6 +160,24 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-04 (Claude, snímky grafu k obchodům nikdy nedorazily)
+
+Uživatel: včerejší ani dnešní obchody nemají v notifikaci ani v journalu
+screenshot, přestože `snapshotHealth` hlásí `ready`. Worker log: každý pokus
+3. 9. (14:01–15:24 UTC) i 4. 9. (07:09–07:30 UTC) skončil
+`SNAPSHOT copier-relay-request-timeout`, `lastSuccessAt` nikdy nenastaveno.
+Příčina v návrhu z `ba0551e6` („obrázek v první notifikaci“): celý capture +
+upload musel stihnout `COPY_EVENT_IMAGE_PUSH_DEADLINE_MS = 1,5 s` od události,
+capture sám směl 1,2 s → na upload 1–2 MB PNG zbývaly stovky ms a klient request
+sám přerušil. Server navíc přijímal `notifyDeadlineAt` nejvýš 5 s po události.
+Oprava: capture do 2,5 s, upload deadline 45 s (8 s na pokus, 3 pokusy),
+server přijímá deadline do 60 s; textová notifikace odchází dál po 1,8 s a
+obrázek ji nahradí přes stejný `collapseId` (text i image push ho sdílejí).
+Úspěšný upload se nově loguje (`SNAPSHOT uploaded … kB, +ms`). Serverová část
+je nasazena pushem; **worker část platí až po reinstallu** (obchodní den →
+čeká na „nasaď“). Journal snímek dostane přes `copier_trade_snapshots`, jakmile
+upload projde; staré obchody zpětně nedoplní.
+
 ### 2026-09-04 (Claude + uživatel, nasazení „Pravidla dne + zámek dne" — fáze A+B+C)
 
 Po uživatelově „kopírka je vyplá, můžeš komplet pokračovat a nasadit":

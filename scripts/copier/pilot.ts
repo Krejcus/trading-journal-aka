@@ -661,9 +661,10 @@ async function runLocalAgent(
         void withSnapshotCamera(async () => {
           const remaining = notifyDeadlineAt - Date.now();
           if (remaining <= 0) return null;
+          // Capture má vlastní strop; zbytek deadline patří uploadu s retry.
           return captureTradingViewCopierSnapshot({
             dedicated: dedicatedChartRef,
-            timeoutMs: Math.min(1_200, remaining),
+            timeoutMs: Math.min(2_500, remaining),
             onDedicatedResolved: persistResolvedChart,
           });
         }).then(async png => {
@@ -687,6 +688,7 @@ async function runLocalAgent(
               notifyDeadlineAt,
             }, { deadlineAt: notifyDeadlineAt });
             snapshotHealth = { ...snapshotHealth, state: 'ready', lastSuccessAt: Date.now() };
+            console.log(`${new Date().toISOString()} SNAPSHOT uploaded ${event.symbol} ${event.kind} (${Math.round(png.byteLength / 1024)} kB, +${Date.now() - event.at} ms)`);
           } catch (error) {
             snapshotHealth = { ...snapshotHealth, state: 'upload-failed' };
             throw error;

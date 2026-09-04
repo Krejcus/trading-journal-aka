@@ -91,8 +91,14 @@ export const COPY_EVENTS_MARKER_KEY = 'state:copy-events';
  */
 export const COPY_EVENT_IMAGE_GRACE_MS = 1_800;
 
-/** Nechá rezervu na zápis markeru dřív, než v 1,8 s vyběhne textový fallback. */
-export const COPY_EVENT_IMAGE_PUSH_DEADLINE_MS = 1_500;
+/**
+ * Do kdy po události má ještě smysl doručit obrázek. Původní 1,5 s (obrázek
+ * „v první notifikaci“) nestačilo ani na capture, natož na upload 1–2 MB PNG:
+ * 3.–4. 9. 2026 skončil každý snímek `copier-relay-request-timeout` a journal
+ * i notifikace zůstaly bez grafu. Textová notifikace odchází po
+ * `COPY_EVENT_IMAGE_GRACE_MS`; obrázek ji díky stejnému `collapseId` nahradí.
+ */
+export const COPY_EVENT_IMAGE_PUSH_DEADLINE_MS = 45_000;
 
 /** První čerstvý event po založení markeru není historie k replayi. */
 const COPY_EVENT_FIRST_RUN_WINDOW_MS = 5_000;

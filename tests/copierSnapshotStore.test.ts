@@ -64,7 +64,8 @@ describe('copier relay snapshot validation', () => {
   });
 
   it('odmítne neomezený nebo TV-alert notification deadline', () => {
-    expect(() => validateCopierSnapshotPayload(payload({ notifyDeadlineAt: 1_777_000_006_000 })))
+    expect(validateCopierSnapshotPayload(payload({ notifyDeadlineAt: 1_777_000_045_000 })).notifyDeadlineAt).toBe(1_777_000_045_000);
+    expect(() => validateCopierSnapshotPayload(payload({ notifyDeadlineAt: 1_777_000_061_000 })))
       .toThrow('invalid-snapshot-payload');
     expect(() => validateCopierSnapshotPayload(payload({
       kind: 'tv-alert', notifyDeadlineAt: 1_777_000_001_800,
