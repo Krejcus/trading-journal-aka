@@ -17,6 +17,14 @@ enum CompanionRemotePresentationFactory {
                 minutesRemaining: minutesRemaining,
                 now: now
             )
+        case .paused(let minutesRemaining):
+            return paused(
+                status: status,
+                reduced: reduced,
+                freshness: freshness,
+                minutesRemaining: minutesRemaining,
+                now: now
+            )
         case .shadow:
             return shadow(status: status, reduced: reduced, freshness: freshness)
         case .disarmed:
@@ -112,6 +120,60 @@ private extension CompanionRemotePresentationFactory {
             exposureEvidence: reduced.exposureEvidence,
             followerAcknowledgementEvidence: reduced.followerAcknowledgementEvidence,
             diagnosticSource: "cloud-read-only"
+        )
+    }
+
+    static func paused(
+        status: MacCompanionStatusDTO,
+        reduced: ReducedCompanionStatus,
+        freshness: FreshnessPresentation,
+        minutesRemaining: Int,
+        now: Date
+    ) -> CompanionPresentation {
+        guard let pause = status.pause else {
+            return live(
+                status: status,
+                reduced: reduced,
+                freshness: freshness,
+                minutesRemaining: minutesRemaining,
+                now: now
+            )
+        }
+
+        let base = live(
+            status: status,
+            reduced: reduced,
+            freshness: freshness,
+            minutesRemaining: minutesRemaining,
+            now: now
+        )
+        let until = CompanionDisplayFormatting.shortTime(pause.until)
+        let rule = pauseRuleText(pause.rule)
+
+        return CompanionPresentation(
+            fixtureID: .paused,
+            displayState: .paused(minutesRemaining: minutesRemaining),
+            menuBar: .init(
+                pillText: "PAUZA",
+                symbolName: "pause.fill",
+                tone: .warning,
+                accessibilityLabel: "AlphaTrade, pauza do \(until)"
+            ),
+            freshness: freshness,
+            hero: .init(
+                symbolName: "pause.fill",
+                title: "PAUZA",
+                badge: nil,
+                detail: "Pauza do \(until) · \(rule)",
+                supportingText: "Copier zůstává LIVE. Nové vstupy se nekopírují; exity pokračují.",
+                tone: .warning
+            ),
+            banner: base.banner,
+            sections: base.sections,
+            footer: base.footer,
+            exposureEvidence: base.exposureEvidence,
+            followerAcknowledgementEvidence: base.followerAcknowledgementEvidence,
+            diagnosticSource: base.diagnosticSource
         )
     }
 
@@ -307,7 +369,7 @@ private extension CompanionRemotePresentationFactory {
                 title: "DEN ZAMČENÝ",
                 badge: "do \(until)",
                 detail: detail,
-                supportingText: "Copier vypnutý, zapnutí blokované do konce session. Odemknout jde jen v LIVE s potvrzením a důvodem.",
+                supportingText: "Copier vypnutý, zapnutí blokované do konce session. Zámek skončí s koncem session (00:00 Chicago)",
                 tone: .danger
             ),
             banner: nil,
@@ -703,6 +765,13 @@ private extension CompanionRemotePresentationFactory {
             value: status.safety.cooldownActive || status.safety.dayLockActive ? "Aktivní" : "Neaktivní",
             tone: status.safety.cooldownActive || status.safety.dayLockActive ? .warning : .neutral
         ))
+        let accountCuts = status.accountCuts ?? 0
+        rows.append(keyValue(
+            id: "account-cuts",
+            label: "Vyřazené účty",
+            value: String(accountCuts),
+            tone: accountCuts > 0 ? .danger : .neutral
+        ))
         rows.append(keyValue(
             id: "kill-switch",
             label: "Kill switch",
@@ -1070,6 +1139,19 @@ private extension CompanionRemotePresentationFactory {
             if let window = rules?.window, window.enabled {
                 return "konec obchodního okna \(window.to)"
             }
+            return "konec obchodního okna"
+        }
+    }
+
+    static func pauseRuleText(_ rule: MacCompanionStatusDTO.DailyRule) -> String {
+        switch rule {
+        case .dailyLoss:
+            return "denní ztráta"
+        case .losingTrades:
+            return "ztrátové obchody"
+        case .maxTrades:
+            return "počet obchodů"
+        case .windowEnd:
             return "konec obchodního okna"
         }
     }

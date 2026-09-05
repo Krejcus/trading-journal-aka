@@ -37,14 +37,20 @@ const strictBoolean = (value: unknown): boolean | null =>
 const finite = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
 
+const positiveEpoch = (value: unknown): number | null => {
+  const number = finite(value);
+  if (number == null || !Number.isSafeInteger(number) || number <= 0) return null;
+  return Number.isFinite(new Date(number).getTime()) ? number : null;
+};
+
 const nonNegativeInteger = (value: unknown): number | null => {
   const number = finite(value);
   return number != null && Number.isSafeInteger(number) && number >= 0 ? number : null;
 };
 
 const isoEpoch = (value: unknown): string | null => {
-  const number = finite(value);
-  return number != null && number > 0 ? new Date(number).toISOString() : null;
+  const number = positiveEpoch(value);
+  return number == null ? null : new Date(number).toISOString();
 };
 
 const DAY_LOCK_TRIGGERS = new Set<MacCompanionDayLockTrigger>([
@@ -65,6 +71,31 @@ const validTimeZone = (value: string) => {
   } catch {
     return false;
   }
+};
+
+const followerCutCount = (value: unknown, now: number): number => {
+  if (!Array.isArray(value)) return 0;
+  const accountIds = new Set<number>();
+  for (const candidate of value) {
+    const cut = object(candidate);
+    const accountId = nonNegativeInteger(cut.accountId);
+    const at = positiveEpoch(cut.at);
+    const until = positiveEpoch(cut.until);
+    const realizedPnlUsd = finite(cut.realizedPnlUsd);
+    const cutUsd = finite(cut.cutUsd);
+    const closed = cut.closed;
+    const closedValid = closed === null
+      || closed === false
+      || positiveEpoch(closed) != null;
+    // Vadný záznam se přeskočí, ale platné cuts se počítají dál — schovat
+    // skutečně vyřazený účet za jednu poškozenou položku by bylo fail-open.
+    if (accountId == null || accountId <= 0 || at == null || until == null
+      || at > until || until <= now || realizedPnlUsd == null || cutUsd == null || cutUsd <= 0
+      || (cut.source !== 'broker' && cut.source !== 'ledger') || !closedValid
+      || accountIds.has(accountId)) continue;
+    accountIds.add(accountId);
+  }
+  return accountIds.size;
 };
 
 const positiveIntegerArray = (value: unknown): { known: boolean; values: number[] } => {
@@ -272,6 +303,22 @@ export function buildMacCompanionStatus(options: {
     };
   })();
 
+  const pause = (() => {
+    if (controller.pause == null) return null;
+    const rawPause = object(controller.pause);
+    const untilEpoch = positiveEpoch(rawPause.until);
+    const atEpoch = positiveEpoch(rawPause.at);
+    const rule = rawPause.rule;
+    if (untilEpoch == null || atEpoch == null || atEpoch > untilEpoch || untilEpoch <= now
+      || typeof rule !== 'string' || !DAILY_RULES.has(rule as MacCompanionDailyRule)) return null;
+    return {
+      until: new Date(untilEpoch).toISOString(),
+      rule: rule as MacCompanionDailyRule,
+    };
+  })();
+  const accountCuts = followerCutCount(controller.followerCuts, now);
+  const tightenOnly = positiveEpoch(controller.sessionArmedAt) != null;
+
   const problems: MacCompanionStatusDTO['problems'] = [];
   if (now - observedAt > MAC_COMPANION_OFFLINE_AFTER_SECONDS * 1_000) {
     problems.push(fixedProblem('worker-offline', 'Worker neposlal heartbeat déle než 90 sekund.'));
@@ -324,6 +371,9 @@ export function buildMacCompanionStatus(options: {
     dailyStats,
     dayLock,
     dailyRules,
+    pause,
+    accountCuts,
+    tightenOnly,
     safety: {
       reconciliation: { status: reconciliation, at: null },
       divergences,

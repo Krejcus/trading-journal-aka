@@ -129,6 +129,9 @@ private extension CompanionFreshnessReducer {
                 return .unknown
             }
             let minutesRemaining = max(0, Int(ceil(expiresAt.timeIntervalSince(now) / 60)))
+            if let pause = status.pause, pause.until > now {
+                return .paused(minutesRemaining: minutesRemaining)
+            }
             return .live(minutesRemaining: minutesRemaining)
         case .shadow:
             return .shadow

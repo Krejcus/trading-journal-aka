@@ -382,7 +382,7 @@ extension CompanionStore {
         let reduced = CompanionFreshnessReducer.reduce(latestStatus, now: adjustedNow)
         let baseInterval: TimeInterval
         switch reduced.displayState {
-        case .live, .locked, .intervention, .unknown, .offline:
+        case .live, .paused, .locked, .intervention, .unknown, .offline:
             baseInterval = 5
         case .shadow, .disarmed, .disarmedUnverified:
             baseInterval = 8

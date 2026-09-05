@@ -17,6 +17,9 @@ final class MacCompanionFunctionalTests: XCTestCase {
         XCTAssertEqual(decoded.dailyStats?.label, "Leader · jen obchody přes kopírku · bez poplatků")
         XCTAssertNil(decoded.dayLock)
         XCTAssertNil(decoded.dailyRules)
+        XCTAssertNil(decoded.pause)
+        XCTAssertNil(decoded.accountCuts)
+        XCTAssertNil(decoded.tightenOnly)
 
         let wrongVerified = validStatusJSON()
             .replacingOccurrences(of: "\"verifiedMaxAgeSeconds\":10", with: "\"verifiedMaxAgeSeconds\":9")
@@ -47,6 +50,22 @@ final class MacCompanionFunctionalTests: XCTestCase {
         XCTAssertEqual(decoded.dailyRules?.tradesToday, 4)
         XCTAssertEqual(decoded.dailyRules?.window?.state, .inside)
         XCTAssertEqual(decoded.dailyRules?.warnings.first?.rule, .losingTrades)
+    }
+
+    func testStatusDecoderAcceptsOptionalPauseCutsAndTightenOnlyInContractV1() throws {
+        let decoded = try MacCompanionStatusDecoder.decode(Data(statusJSONWithRiskFields().utf8))
+
+        XCTAssertEqual(decoded.contractVersion, 1)
+        XCTAssertEqual(decoded.pause?.rule, .dailyLoss)
+        XCTAssertEqual(decoded.pause?.until, referenceDate.addingTimeInterval(20 * 60))
+        XCTAssertEqual(decoded.accountCuts, 2)
+        XCTAssertEqual(decoded.tightenOnly, true)
+
+        let invalidCuts = statusJSONWithRiskFields()
+            .replacingOccurrences(of: "\"accountCuts\":2", with: "\"accountCuts\":-1")
+        XCTAssertThrowsError(try MacCompanionStatusDecoder.decode(Data(invalidCuts.utf8))) { error in
+            XCTAssertEqual(error as? MacCompanionStatusDecodingError, .invalidCounts)
+        }
     }
 
     func testFreshnessUsesExactTenAndNinetySecondBoundaries() {
@@ -301,6 +320,123 @@ final class MacCompanionFunctionalTests: XCTestCase {
         )
     }
 
+    func testPauseReducerRequiresFreshVerifiedLiveStateAndYieldsToProblemsAndLock() {
+        let pause = makePause(rule: .dailyLoss)
+        let paused = makeStatus(copierState: .live, pause: pause)
+
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(paused, now: referenceDate).displayState,
+            .paused(minutesRemaining: 42)
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                makeStatus(copierState: .live, pause: .init(until: referenceDate, rule: .dailyLoss)),
+                now: referenceDate
+            ).displayState,
+            .live(minutesRemaining: 42),
+            "An expired pause must not replace the current LIVE state"
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                makeStatus(copierState: .live, brokerConnected: nil, pause: pause),
+                now: referenceDate
+            ).displayState,
+            .unknown
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                makeStatus(
+                    copierState: .live,
+                    divergences: [.init(symbol: "MNQ", account: "Follower 1", detail: "Rozdíl")],
+                    pause: pause
+                ),
+                now: referenceDate
+            ).displayState,
+            .intervention(issueCount: 1)
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                makeStatus(
+                    copierState: .disarmed,
+                    dayLock: makeDayLock(trigger: .losingTrades),
+                    dailyRules: makeDailyRules(),
+                    pause: pause
+                ),
+                now: referenceDate
+            ).displayState,
+            .locked
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                paused,
+                now: referenceDate.addingTimeInterval(11)
+            ).displayState,
+            .unknown
+        )
+        XCTAssertEqual(
+            CompanionFreshnessReducer.reduce(
+                paused,
+                now: referenceDate.addingTimeInterval(91)
+            ).displayState,
+            .offline
+        )
+    }
+
+    func testPausedFactoryUsesAmberPauseWithoutMinutesInMenuAndShowsAccountCuts() throws {
+        let pause = makePause(rule: .dailyLoss)
+        let reduced = CompanionFreshnessReducer.reduce(
+            makeStatus(
+                copierState: .live,
+                dailyRules: makeDailyRules(),
+                pause: pause,
+                accountCuts: 2,
+                tightenOnly: true
+            ),
+            now: referenceDate
+        )
+        let presentation = CompanionRemotePresentationFactory.make(from: reduced, now: referenceDate)
+        let safety = try XCTUnwrap(presentation.sections.first { $0.id == "safety" })
+        let cuts = try XCTUnwrap(safety.rows.first { $0.id == "account-cuts" })
+
+        XCTAssertEqual(presentation.fixtureID, .paused)
+        XCTAssertEqual(presentation.displayState, .paused(minutesRemaining: 42))
+        XCTAssertEqual(presentation.menuBar.pillText, "PAUZA")
+        XCTAssertEqual(presentation.menuBar.symbolName, "pause.fill")
+        XCTAssertEqual(presentation.menuBar.tone, .warning)
+        XCTAssertFalse(presentation.menuBar.pillText?.localizedCaseInsensitiveContains("min") ?? true)
+        XCTAssertEqual(presentation.hero.title, "PAUZA")
+        XCTAssertEqual(
+            presentation.hero.detail,
+            "Pauza do \(CompanionDisplayFormatting.shortTime(pause.until)) · denní ztráta"
+        )
+        guard case .keyValue(let cutsRow) = cuts else {
+            XCTFail("Account cuts must be rendered as a safety key/value row")
+            return
+        }
+        XCTAssertEqual(cutsRow.label, "Vyřazené účty")
+        XCTAssertEqual(cutsRow.value, "2")
+        XCTAssertEqual(cutsRow.tone, .danger)
+
+        let withoutFields = CompanionRemotePresentationFactory.make(
+            from: CompanionFreshnessReducer.reduce(
+                makeStatus(copierState: .live),
+                now: referenceDate
+            ),
+            now: referenceDate
+        )
+        let defaultCuts = try XCTUnwrap(
+            withoutFields.sections
+                .first { $0.id == "safety" }?
+                .rows.first { $0.id == "account-cuts" }
+        )
+        guard case .keyValue(let defaultCutsRow) = defaultCuts else {
+            XCTFail("Missing accountCuts must render fail-closed as zero")
+            return
+        }
+        XCTAssertEqual(defaultCutsRow.value, "0")
+        XCTAssertEqual(defaultCutsRow.tone, .neutral)
+    }
+
     func testLockedFactoryUsesApprovedTextAndKeepsAmountsInsideDailyRules() throws {
         let rules = makeDailyRules()
         let lock = makeDayLock(trigger: .losingTrades)
@@ -319,7 +455,11 @@ final class MacCompanionFunctionalTests: XCTestCase {
         XCTAssertTrue(presentation.hero.badge?.hasPrefix("do ") == true)
         XCTAssertTrue(presentation.hero.detail.contains("Automaticky v"))
         XCTAssertTrue(presentation.hero.detail.contains("2 ztrátové obchody z 2"))
-        XCTAssertTrue(presentation.hero.supportingText?.contains("Odemknout jde jen v LIVE") == true)
+        XCTAssertEqual(
+            presentation.hero.supportingText,
+            "Copier vypnutý, zapnutí blokované do konce session. Zámek skončí s koncem session (00:00 Chicago)"
+        )
+        XCTAssertFalse(presentation.allVisibleText.joined(separator: "\n").contains("Odemknout jde jen v LIVE"))
         XCTAssertTrue(section.isInitiallyExpanded)
         XCTAssertEqual(section.summary, "1 pravidlo spuštěno")
         XCTAssertTrue(section.rows.contains { row in
@@ -517,6 +657,7 @@ final class MacCompanionFunctionalTests: XCTestCase {
         )
         let statusesAndNow: [(MacCompanionStatusDTO, Date)] = [
             (makeStatus(copierState: .live), referenceDate),
+            (makeStatus(copierState: .live, pause: makePause(rule: .dailyLoss)), referenceDate),
             (makeStatus(copierState: .shadow), referenceDate),
             (makeStatus(copierState: .disarmed, exposure: verifiedFlatExposure), referenceDate),
             (makeStatus(copierState: .disarmed), referenceDate),
@@ -870,7 +1011,10 @@ private extension MacCompanionFunctionalTests {
         exposure: MacCompanionStatusDTO.ExposureDTO? = nil,
         problems: [MacCompanionStatusDTO.ProblemDTO] = [],
         dayLock: MacCompanionStatusDTO.DayLockDTO? = nil,
-        dailyRules: MacCompanionStatusDTO.DailyRulesDTO? = nil
+        dailyRules: MacCompanionStatusDTO.DailyRulesDTO? = nil,
+        pause: MacCompanionStatusDTO.PauseDTO? = nil,
+        accountCuts: Int? = nil,
+        tightenOnly: Bool? = nil
     ) -> MacCompanionStatusDTO {
         let observedAt = observedAt ?? referenceDate
         return MacCompanionStatusDTO(
@@ -888,6 +1032,9 @@ private extension MacCompanionFunctionalTests {
             brokerConnected: brokerConnected,
             dayLock: dayLock,
             dailyRules: dailyRules,
+            pause: pause,
+            accountCuts: accountCuts,
+            tightenOnly: tightenOnly,
             safety: .init(
                 reconciliation: .init(status: reconciliation, at: nil),
                 divergences: divergences,
@@ -960,6 +1107,19 @@ private extension MacCompanionFunctionalTests {
         )
     }
 
+    func statusJSONWithRiskFields() -> String {
+        let until = CompanionISO8601.string(from: referenceDate.addingTimeInterval(20 * 60))
+        let fields = """
+          "pause":{"until":"\(until)","rule":"daily-loss"},
+          "accountCuts":2,
+          "tightenOnly":true,
+        """
+        return validStatusJSON().replacingOccurrences(
+            of: "\"safety\":{",
+            with: fields + "\n  \"safety\":{"
+        )
+    }
+
     func makeDayLock(
         trigger: MacCompanionStatusDTO.DayLockTrigger,
         reason: String = "Pravidlo dne"
@@ -971,6 +1131,15 @@ private extension MacCompanionFunctionalTests {
             trigger: trigger,
             reason: reason,
             unlocked: nil
+        )
+    }
+
+    func makePause(
+        rule: MacCompanionStatusDTO.DailyRule
+    ) -> MacCompanionStatusDTO.PauseDTO {
+        .init(
+            until: referenceDate.addingTimeInterval(20 * 60),
+            rule: rule
         )
     }
 

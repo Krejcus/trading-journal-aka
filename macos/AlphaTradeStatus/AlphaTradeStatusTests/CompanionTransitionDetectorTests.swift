@@ -225,6 +225,137 @@ final class CompanionTransitionDetectorTests: XCTestCase {
         XCTAssertTrue(event.allowsAutoOpen)
     }
 
+    func testPauseTransitionAutoOpensAfterSettlingAndYieldsToCriticalProblems() throws {
+        let live = reduced(makeStatus(revision: 1, copierState: .live))
+        let pause = makePause(rule: .dailyLoss)
+        let paused = reduced(makeStatus(
+            revision: 2,
+            copierState: .live,
+            dailyRules: makeDailyRules(),
+            pause: pause
+        ))
+
+        let transition = try XCTUnwrap(CompanionTransitionDetector.detect(
+            previous: live,
+            next: paused,
+            now: reference
+        ))
+        XCTAssertEqual(transition.category, .pause)
+        XCTAssertEqual(transition.sectionID, "daily-rules")
+        XCTAssertEqual(transition.rowID, "rule-daily-loss")
+        XCTAssertEqual(transition.category.autoCloseDuration, 8)
+        XCTAssertFalse(transition.category.allowsSound)
+        XCTAssertEqual(
+            transition.notificationTitle,
+            "Pauza do \(CompanionDisplayFormatting.shortTime(pause.until))"
+        )
+        XCTAssertTrue(transition.notificationBody?.contains("denní ztráta") == true)
+
+        var gate = CompanionTransitionGate()
+        XCTAssertNil(observe(&gate, live, monotonic: 0, source: .startup))
+        XCTAssertNil(observe(&gate, paused, monotonic: 1))
+        let event = try XCTUnwrap(observe(&gate, paused, monotonic: 4))
+        XCTAssertEqual(event.transition.category, .pause)
+        XCTAssertTrue(event.allowsAutoOpen)
+
+        let extendedPause = reduced(makeStatus(
+            revision: 3,
+            copierState: .live,
+            dailyRules: makeDailyRules(),
+            pause: .init(until: pause.until.addingTimeInterval(5 * 60), rule: .dailyLoss)
+        ))
+        XCTAssertNil(CompanionTransitionDetector.detect(
+            previous: paused,
+            next: extendedPause,
+            now: reference
+        ), "Extending an active pause must not be treated as a new transition into pause")
+
+        let critical = reduced(makeStatus(
+            revision: 4,
+            copierState: .live,
+            divergences: [.init(symbol: "MNQ", account: "hidden", detail: "qty")],
+            pause: pause,
+            problems: [.init(kind: .divergence, text: "divergence")]
+        ))
+        let criticalTransition = try XCTUnwrap(CompanionTransitionDetector.detect(
+            previous: live,
+            next: critical,
+            now: reference
+        ))
+        XCTAssertEqual(critical.displayState, .intervention(issueCount: 1))
+        XCTAssertEqual(criticalTransition.category, .worsening)
+        XCTAssertEqual(criticalTransition.rowID, "divergence-0")
+
+        let recoveredFromCritical = reduced(makeStatus(
+            revision: 5,
+            copierState: .live,
+            pause: pause
+        ))
+        XCTAssertEqual(
+            CompanionTransitionDetector.detect(
+                previous: critical,
+                next: recoveredFromCritical,
+                now: reference
+            )?.category,
+            .improvement,
+            "Resolving a problem that masked an existing pause must not re-announce the pause"
+        )
+
+        let unknownWithSamePause = reduced(makeStatus(
+            revision: 6,
+            copierState: .live,
+            brokerConnected: nil,
+            pause: pause
+        ))
+        let recoveredFromUnknown = reduced(makeStatus(
+            revision: 7,
+            copierState: .live,
+            pause: pause
+        ))
+        XCTAssertNil(
+            CompanionTransitionDetector.detect(
+                previous: unknownWithSamePause,
+                next: recoveredFromUnknown,
+                now: reference
+            ),
+            "UNKNOWN to the same active pause is only freshness recovery, not a new pause"
+        )
+
+        let offlineWithSamePause = reduced(
+            makeStatus(revision: 8, copierState: .live, pause: pause),
+            now: reference.addingTimeInterval(91)
+        )
+        let recoveredAt = reference.addingTimeInterval(92)
+        let recoveredFromOffline = reduced(
+            makeStatus(
+                revision: 9,
+                observedAt: recoveredAt,
+                copierState: .live,
+                pause: pause
+            ),
+            now: recoveredAt
+        )
+        XCTAssertEqual(
+            CompanionTransitionDetector.detect(
+                previous: offlineWithSamePause,
+                next: recoveredFromOffline,
+                now: recoveredAt
+            )?.category,
+            .improvement,
+            "OFFLINE recovery must keep its existing category instead of re-announcing PAUZA"
+        )
+
+        let stalePaused = reduced(
+            makeStatus(revision: 10, copierState: .live, pause: pause),
+            now: reference.addingTimeInterval(11)
+        )
+        XCTAssertNil(CompanionTransitionDetector.detect(
+            previous: live,
+            next: stalePaused,
+            now: reference.addingTimeInterval(11)
+        ))
+    }
+
     func testRuleWarningIsSilentAndEmittedOncePerRuleAndSession() throws {
         let initial = reduced(makeStatus(
             revision: 1,
@@ -471,6 +602,7 @@ final class CompanionTransitionDetectorTests: XCTestCase {
         exposureVerified: Bool = true,
         dayLock: MacCompanionStatusDTO.DayLockDTO? = nil,
         dailyRules: MacCompanionStatusDTO.DailyRulesDTO? = nil,
+        pause: MacCompanionStatusDTO.PauseDTO? = nil,
         problems: [MacCompanionStatusDTO.ProblemDTO] = []
     ) -> MacCompanionStatusDTO {
         let observedAt = observedAt ?? reference
@@ -489,6 +621,7 @@ final class CompanionTransitionDetectorTests: XCTestCase {
             brokerConnected: brokerConnected,
             dayLock: dayLock,
             dailyRules: dailyRules,
+            pause: pause,
             safety: .init(
                 reconciliation: .init(status: reconciliation, at: observedAt),
                 divergences: divergences,
@@ -520,6 +653,15 @@ final class CompanionTransitionDetectorTests: XCTestCase {
             trigger: trigger,
             reason: trigger == .manual ? "Dnes končím" : "Limit dosažen",
             unlocked: nil
+        )
+    }
+
+    private func makePause(
+        rule: MacCompanionStatusDTO.DailyRule
+    ) -> MacCompanionStatusDTO.PauseDTO {
+        .init(
+            until: reference.addingTimeInterval(20 * 60),
+            rule: rule
         )
     }
 

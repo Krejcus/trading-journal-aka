@@ -101,6 +101,13 @@ export interface MacCompanionStatusDTO {
       at: string;
     }>;
   } | null;
+  /** Additive v1 risk fields; optional so older companion payloads remain valid. */
+  pause?: {
+    until: string;
+    rule: MacCompanionDailyRule;
+  } | null;
+  accountCuts?: number;
+  tightenOnly?: boolean;
   safety: {
     reconciliation: {
       status: MacCompanionReconciliationStatus;

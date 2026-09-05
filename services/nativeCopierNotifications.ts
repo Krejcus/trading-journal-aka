@@ -48,7 +48,9 @@ function saveSlots(slots: readonly CopierScheduledSlot[]): void {
   }
 }
 
-function toSnapshot(status: CopierControllerStatus | null): CopierNotificationSnapshot | null {
+export function toCopierNotificationSnapshot(
+  status: CopierControllerStatus | null,
+): CopierNotificationSnapshot | null {
   if (!status) return null;
   return {
     armed: status.armed,
@@ -66,6 +68,8 @@ function toSnapshot(status: CopierControllerStatus | null): CopierNotificationSn
     dayLockReason: status.dayLockReason ?? null,
     dayLockTrigger: status.dayLockTrigger ?? null,
     ruleWarnings: status.dailyStats?.warnedRules?.map(warning => ({ ...warning })) ?? [],
+    pause: status.pause ? { ...status.pause } : null,
+    followerCuts: status.followerCuts?.map(cut => ({ ...cut })) ?? [],
     resumeOffer: status.resumeOffer ? { at: status.resumeOffer.at } : null,
     autoClose: status.autoClose
       ? {
@@ -89,7 +93,7 @@ export async function syncCopierNativeNotifications(
   status: CopierControllerStatus | null,
 ): Promise<void> {
   if (!isNativeBuild) return;
-  const next = toSnapshot(status);
+  const next = toCopierNotificationSnapshot(status);
   // Výpadek statusu (poll hiccup) není DISARM — sloty nechat být.
   if (next == null) return;
 
@@ -121,7 +125,10 @@ export async function syncCopierNativeNotifications(
     }
     for (const immediate of plan.fireNow) {
       const silentWarning = immediate.kind === 'rule-warning';
-      const risk = immediate.kind === 'risk' || immediate.kind === 'daylock-engaged';
+      const risk = immediate.kind === 'risk'
+        || immediate.kind === 'daylock-engaged'
+        || immediate.kind === 'follower-cut'
+        || immediate.kind === 'follower-cut-critical';
       await scheduleNativeNotification({
         title: immediate.title,
         body: immediate.body,

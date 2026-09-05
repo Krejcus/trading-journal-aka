@@ -3,8 +3,9 @@
  *
  * Události se ZNÁMÝM časem (konec ARM, konec cooldownu, konec day-locku)
  * plánujeme jako lokální fallback přímo v iOS. Nepředvídatelné incidenty
- * plán hlásí okamžitě při živém pollu; serverová APNs cesta kryje zavřenou
- * aplikaci. Obě větve sdílejí stejné hrany a nesmějí vykonat broker akci.
+ * plán hlásí okamžitě při živém pollu; doručení mimo běžící LIVE poll musí
+ * mít vlastní serverovou APNs větev. Obě větve sdílejí stejné hrany a nesmějí
+ * vykonat broker akci.
  *
  * Tenhle modul NIC neplánuje — vrací akce. Side effects dělá exekutor,
  * takže celé chování jde pokrýt deterministickými testy.
@@ -15,7 +16,8 @@ import {
   type CopierDisarmRecord,
 } from '../lib/copierDisarmReason';
 import { dayLockRuleLabel } from './copierDailyRules';
-import type { CopierRuleWarning } from './copierEngine';
+import type { CopierDailyRule, CopierRuleWarning } from './copierEngine';
+import type { CopierFollowerCut } from './copierRuntimeController';
 import type { DayLockTrigger } from './liveCopyTrading';
 
 export interface CopierNotificationSnapshot {
@@ -34,6 +36,10 @@ export interface CopierNotificationSnapshot {
   dayLockReason: string | null;
   dayLockTrigger: DayLockTrigger | null;
   ruleWarnings: CopierRuleWarning[];
+  /** Autoritativní pauza pravidla dne z worker statusu. */
+  pause: { until: number; rule: CopierDailyRule; at: number } | null;
+  /** Autoritativní vyřazení followerů z worker statusu. */
+  followerCuts: CopierFollowerCut[];
   /** Connection recovery: kopie drženy, čeká se na ruční ARM. */
   resumeOffer: { at: number } | null;
   /** Výsledek posledního auto-flatten (expirace ARM / fail-closed). */
@@ -74,7 +80,14 @@ export interface CopierPlannedNotification {
 export interface CopierImmediateNotification {
   title: string;
   body: string;
-  kind: 'trade' | 'risk' | 'daylock-engaged' | 'rule-warning';
+  kind:
+    | 'trade'
+    | 'risk'
+    | 'daylock-engaged'
+    | 'rule-warning'
+    | 'rule-pause'
+    | 'follower-cut'
+    | 'follower-cut-critical';
 }
 
 export interface CopierNotificationPlan {
@@ -97,6 +110,17 @@ const pragueTime = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', {
   minute: '2-digit',
   timeZone: 'Europe/Prague',
 });
+
+const usdMagnitude = new Intl.NumberFormat('cs-CZ', {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
+});
+
+const followerCutKey = (cut: CopierFollowerCut): string => `${cut.accountId}:${cut.until}`;
+
+// Frozen worker status carries no display name. A stable ID is an honest,
+// distinguishable fallback; never manufacture an account name in the client.
+const followerAccountLabel = (accountId: number): string => `Účet ${accountId}`;
 
 const SLOT_CONTENT: Record<CopierSlotKey, { title: string; body: string }> = {
   'arm-expiry': {
@@ -253,6 +277,45 @@ export function planCopierNotifications(options: {
         kind: 'rule-warning',
       });
     }
+    // Pauza je autoritativní stav workeru. Další pravidlo smí tutéž souvislou
+    // pauzu prodloužit a přepsat její rule/at; notifikujeme proto jen hranu
+    // neaktivní -> aktivní, ne změnu identity uvnitř běžící pauzy.
+    const previousPauseActive = previous.pause != null && previous.pause.until > now;
+    if (next.pause
+      && next.pause.until > now
+      && !previousPauseActive) {
+      fireNow.push({
+        title: 'Copier: PAUZA',
+        body: `Pauza do ${pragueTime(next.pause.until)} — ${dayLockRuleLabel(next.pause.rule)}`,
+        kind: 'rule-pause',
+      });
+    }
+    // Vyřazení je durable po celou broker session. `until` je konec session,
+    // takže accountId + until hlásí účet nejvýš jednou za session, i když se
+    // později pouze doplní výsledek zavření kopie.
+    const previousCuts = new Map(previous.followerCuts.map(cut => [followerCutKey(cut), cut]));
+    const handledCuts = new Set<string>();
+    for (const cut of next.followerCuts) {
+      const key = followerCutKey(cut);
+      if (handledCuts.has(key)) continue;
+      handledCuts.add(key);
+      const previousCut = previousCuts.get(key);
+      const account = followerAccountLabel(cut.accountId);
+      if (!previousCut) {
+        fireNow.push({
+          title: `Copier: ${account} vyřazen`,
+          body: `Ztráta −${usdMagnitude.format(Math.abs(cut.realizedPnlUsd))} USD, limit ${usdMagnitude.format(Math.abs(cut.cutUsd))} USD.`,
+          kind: 'follower-cut',
+        });
+      }
+      if (cut.closed === false && previousCut?.closed !== false) {
+        fireNow.push({
+          title: 'Copier: Kopii se nepodařilo zavřít',
+          body: `Zkontroluj účet ${cut.accountId}.`,
+          kind: 'follower-cut-critical',
+        });
+      }
+    }
     // Resume nabídka po výpadku — jednou per `at`.
     if (next.resumeOffer && next.resumeOffer.at !== previous.resumeOffer?.at) {
       fireNow.push({
@@ -286,7 +349,13 @@ export function planCopierNotifications(options: {
     for (const event of next.copyEvents) {
       // ENTRY/EXIT vlastní serverová APNs větev: buď jediný push s obrázkem,
       // nebo po krátkém grace textový fallback. Lokální kopie by ji duplikovala.
-      if ((event.kind === 'entry' || event.kind === 'exit') || known.has(event.id)) continue;
+      // Pauzu a cut vlastní autoritativní `pause`/`followerCuts` status pole;
+      // případná zrcadlená audit událost se také nesmí ohlásit podruhé.
+      if ((event.kind === 'entry'
+        || event.kind === 'exit'
+        || event.kind === 'rule-pause'
+        || event.kind === 'follower-cut')
+        || known.has(event.id)) continue;
       fireNow.push({ title: event.title, body: event.body, kind: 'trade' });
     }
   }

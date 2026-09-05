@@ -3,10 +3,11 @@ import XCTest
 @testable import AlphaTradeStatus
 
 final class CompanionMockFixtureCatalogTests: XCTestCase {
-    func testCatalogContainsAllTenFixturesInStableOrder() {
+    func testCatalogContainsAllElevenFixturesInStableOrder() {
         XCTAssertEqual(CompanionMockFixtureCatalog.orderedIDs, [
             .live,
             .liveAckUnavailable,
+            .paused,
             .shadow,
             .disarmed,
             .disarmedExposure,
@@ -17,7 +18,7 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
             .offline
         ])
         XCTAssertEqual(CompanionMockFixtureCatalog.all.map(\.fixtureID), CompanionMockFixtureCatalog.orderedIDs)
-        XCTAssertEqual(Set(CompanionMockFixtureCatalog.orderedIDs.map(\.rawValue)).count, 10)
+        XCTAssertEqual(Set(CompanionMockFixtureCatalog.orderedIDs.map(\.rawValue)).count, 11)
     }
 
     func testEveryFixtureHasTheExpectedStateAndMenuBarPill() {
@@ -37,6 +38,7 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
         )] = [
             (.live, .live(minutesRemaining: 42), "LIVE", nil, .success, "LIVE"),
             (.liveAckUnavailable, .live(minutesRemaining: 42), "LIVE", nil, .success, "LIVE"),
+            (.paused, .paused(minutesRemaining: 30), "PAUZA", "pause.fill", .warning, "PAUZA"),
             (.shadow, .shadow, "SHADOW", nil, .muted, "SHADOW"),
             (.disarmed, .disarmed, "VYPNUTO", "power", .neutral, "VYPNUTO"),
             (.disarmedExposure, .intervention(issueCount: 1), "!1", nil, .danger, "ZÁSAH NUTNÝ"),
@@ -74,10 +76,36 @@ final class CompanionMockFixtureCatalogTests: XCTestCase {
             .openLive, .openJournal, .refresh, .copyDiagnostics
         ])
         XCTAssertEqual(presentation.footer.actions.first?.title, "Otevřít LIVE")
+        XCTAssertTrue(
+            presentation.allVisibleText.joined(separator: "\n")
+                .contains("Zámek skončí s koncem session (00:00 Chicago)")
+        )
+        XCTAssertFalse(
+            presentation.allVisibleText.joined(separator: "\n")
+                .contains("Odemknout jde jen v LIVE")
+        )
         XCTAssertFalse(
             presentation.allVisibleText.joined(separator: "\n")
                 .localizedCaseInsensitiveContains("odemknout…")
         )
+    }
+
+    func testPausedFixtureShowsAmberPauseAndRoseAccountCuts() throws {
+        let presentation = CompanionMockFixtureCatalog.presentation(for: .paused)
+        let safety = try XCTUnwrap(presentation.sections.first { $0.id == "safety" })
+        let cuts = try XCTUnwrap(safety.rows.first { $0.id == "account-cuts" })
+
+        XCTAssertEqual(presentation.menuBar.pillText, "PAUZA")
+        XCTAssertEqual(presentation.menuBar.symbolName, "pause.fill")
+        XCTAssertEqual(presentation.menuBar.tone, .warning)
+        XCTAssertEqual(presentation.hero.detail, "Pauza do 16:20 · denní ztráta")
+        guard case .keyValue(let row) = cuts else {
+            XCTFail("Expected the account cut safety row")
+            return
+        }
+        XCTAssertEqual(row.label, "Vyřazené účty")
+        XCTAssertEqual(row.value, "2")
+        XCTAssertEqual(row.tone, .danger)
     }
 
     func testEveryProblemSectionIsInitiallyExpanded() {
