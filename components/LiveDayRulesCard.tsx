@@ -3,9 +3,23 @@ import { CheckCircle2, ChevronDown, Clock3, Lock, Save } from 'lucide-react';
 import type { CopierControllerStatus } from '../services/copierRuntimeController';
 import {
   DEFAULT_COPY_GROUP_SAFETY,
+  DEFAULT_DAY_RULE_ACTIONS,
+  cloneDayRuleActions,
+  sanitizeDayRuleActions,
   type CopierRuleAction,
   type CopyGroupSafetySettings,
 } from '../services/liveCopyTrading';
+
+/**
+ * Skupina z běžícího workeru nebo ze starého localStorage nemusí mít
+ * `dayRuleActions` (přidané 2026-09-05). Chybějící pole = DEFAULT podle spec
+ * §1; neplatné = DEFAULT také, protože UI jen zobrazuje — worker validuje
+ * fail-closed při uložení.
+ */
+export const withDayRuleActions = (safety: CopyGroupSafetySettings): CopyGroupSafetySettings => ({
+  ...safety,
+  dayRuleActions: sanitizeDayRuleActions(safety.dayRuleActions) ?? cloneDayRuleActions(DEFAULT_DAY_RULE_ACTIONS),
+});
 
 type DayLockTrigger = NonNullable<CopierControllerStatus['dayLockTrigger']>;
 
@@ -567,7 +581,7 @@ export const LiveDayRulesCard = ({
   disabled = false,
   onSave,
 }: LiveDayRulesCardProps) => {
-  const effectiveSafety = safety ?? DEFAULT_COPY_GROUP_SAFETY;
+  const effectiveSafety = useMemo(() => withDayRuleActions(safety ?? DEFAULT_COPY_GROUP_SAFETY), [safety]);
   const tightenOnly = sessionArmedAt > 0;
   // Parent posílá při každém pollu nový objekt safety se stejným obsahem.
   // Draft se proto resetuje jen při skutečné změně hodnot, jinak by
