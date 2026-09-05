@@ -922,6 +922,56 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
+  it('current-runtime working entry neschová manuální follower pozici jako pending expozici', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      maxLeaderOrders: 1,
+      allowSingleFlatExit: true,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-entry-with-manual-follower',
+      quantity: 1,
+      orderType: 'Market',
+      limitPrice: undefined,
+    }) });
+    broker.emitEvent({ type: 'position', position: {
+      accountId: 100, symbol: 'MNQU6', netQuantity: 1,
+    } });
+    await controller.waitForIdle();
+    expect(broker.placedRequests()).toHaveLength(1);
+
+    // Copier-owned Buy1 je stále working. Ruční +1 proto nesmí být
+    // považována za jeho fill: po budoucím fillu by účet skončil +2.
+    broker.emitEvent({ type: 'position', position: {
+      accountId: 200, symbol: 'MNQU6', netQuantity: 1,
+    } });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-exit-after-manual-follower',
+      side: 'Sell',
+      quantity: 1,
+      orderType: 'Market',
+      limitPrice: undefined,
+    }) });
+    await controller.waitForIdle();
+
+    expect(broker.placedRequests()).toHaveLength(1);
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: true,
+    });
+    expect(controller.status().lastError).toContain('nevysvětlená divergence');
+    controller.stop();
+  });
+
   it('protective TP+SL nepočítá jako nové entry a odešle je jedním OCO', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const controller = await bootstrapCopierRuntime({
@@ -2322,7 +2372,7 @@ describe('auto day-lock z denní ztráty leadera', () => {
     controller.stop();
   });
 
-  it('max obchodů varuje na N-1, zamkne na N a unlock snoozne jen spouštějící pravidlo', async () => {
+  it('max obchodů varuje na N-1, na N pauzne a unlock-day je nepodporovaný', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const store = createMemoryCopierStore();
     const audits: CopierAuditEntry[] = [];
@@ -2357,24 +2407,27 @@ describe('auto day-lock z denní ztráty leadera', () => {
     broker.emitEvent(leaderFill('Sell', 1, 20_001, 630));
     broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 } });
     await controller.waitForIdle();
-    expect(controller.status()).toMatchObject({ dayLockTrigger: 'max-trades', armed: false });
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      dayLockTrigger: null,
+      pause: { rule: 'max-trades' },
+    });
 
-    await controller.unlockDay('Vědomé pokračování podle plánu');
+    await expect(controller.unlockDay('Vědomé pokračování podle plánu')).rejects.toThrow(
+      'unlock-day není podporován: den se odemyká jen koncem session',
+    );
     expect(controller.status()).toMatchObject({
       armed: false,
       dayLockUntil: 0,
       dayLockTrigger: null,
-      dayLockSnoozedRules: ['max-trades'],
-      dayUnlock: { reason: 'Vědomé pokračování podle plánu' },
+      dayLockSnoozedRules: [],
+      dayUnlock: null,
+      pause: { rule: 'max-trades' },
     });
-    expect((await store.load()).safety?.dayLockSnoozedRules).toEqual(['max-trades']);
-    expect(audits).toContainEqual(expect.objectContaining({
-      kind: 'day-unlock',
-      reason: expect.stringContaining('rule=max-trades'),
-    }));
-    await expect(controller.unlockDay('Druhý pokus bez locku')).rejects.toThrow('Den není zamčený');
+    expect((await store.load()).safety?.dayLockSnoozedRules).toEqual([]);
+    expect(audits.some(entry => entry.kind === 'day-unlock')).toBe(false);
 
-    // Max-trades zůstává snoozed, ale samostatný denní loss limit dál platí.
+    // Běžící pauza neoslabí samostatný denní loss lock — lock má přednost.
     broker.emitEvent(leaderFill('Buy', 1, 20_000, 640));
     broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
     broker.emitEvent(leaderFill('Sell', 1, 19_990, 650));
@@ -2448,7 +2501,7 @@ describe('auto day-lock z denní ztráty leadera', () => {
     await controller.waitForIdle();
     expect(broker.placedRequests()).toHaveLength(0);
     expect(audits).toContainEqual(expect.objectContaining({
-      kind: 'blocked', reason: expect.stringContaining('trading-window-outside'),
+      kind: 'blocked', reason: 'day-lock-pending:window-end',
     }));
 
     broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 } });
@@ -2459,9 +2512,11 @@ describe('auto day-lock z denní ztráty leadera', () => {
       dayLockTrigger: 'window-end',
       dayLockAt: now,
     });
-    await controller.unlockDay('Okno vědomě prodlouženo');
+    await expect(controller.unlockDay('Okno vědomě prodlouženo')).rejects.toThrow(
+      'unlock-day není podporován: den se odemyká jen koncem session',
+    );
     await controller.reconcile();
-    expect(() => controller.arm()).toThrow('mimo obchodní okno');
+    expect(() => controller.arm()).toThrow('denním lockem');
     controller.stop();
   });
 

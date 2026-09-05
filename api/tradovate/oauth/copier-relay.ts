@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { authorizeTradovateCopierDevice } from '../../../server/tradovateCopierDevice.js';
 import {
   claimTradovateCopierCommand, completeTradovateCopierCommand, enqueueTradovateCopierCommand,
+  copierRelayValidationErrorStatus,
   heartbeatTradovateCopierDevice, readTradovateCopierCommand, readTradovateCopierDeviceRuntime,
 } from '../../../server/tradovateCopierCommandRelay.js';
 import { createTradovateAdminClient, readTradovateServerConfig, requireSupabaseUserId } from '../../../server/tradovateOAuthStore.js';
@@ -278,9 +279,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     // Odmítnutý příkaz je validační chyba klienta — generické 502 „copier
     // relay failed" by maskovalo skutečný důvod (viz Flatten ze Safari).
-    if (message === 'unsupported-relay-command' || message === 'unsupported-remote-copy-command' || message === 'invalid-relay-command-payload') {
-      return res.status(400).json({ error: message });
-    }
+    const validationStatus = copierRelayValidationErrorStatus(message);
+    if (validationStatus != null) return res.status(validationStatus).json({ error: message });
     console.error('[copier-relay]', message);
     return res.status(502).json({ error: 'copier-relay-failed' });
   }

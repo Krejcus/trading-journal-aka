@@ -108,7 +108,7 @@ export interface CopierCopyEventRow {
   at: number;
   kind: 'entry' | 'scale-in' | 'scale-out' | 'exit' | 'flip'
     | 'order-placed' | 'bracket-placed' | 'order-canceled' | 'order-moved'
-    | 'sl-moved' | 'tp-moved';
+    | 'sl-moved' | 'tp-moved' | 'follower-cut';
   symbol: string;
   side: 'Long' | 'Short';
   quantity: number;
@@ -122,6 +122,11 @@ export interface CopierCopyEventRow {
   levelPnlUsd?: number;
   stopPnlUsd?: number;
   targetPnlUsd?: number;
+  accountId?: number;
+  cutUsd?: number;
+  realizedPnlUsd?: number;
+  source?: 'broker' | 'ledger';
+  closed?: number | null | false;
 }
 
 const COPY_KIND_TITLE: Record<CopierCopyEventRow['kind'], string> = {
@@ -136,6 +141,7 @@ const COPY_KIND_TITLE: Record<CopierCopyEventRow['kind'], string> = {
   'order-moved': 'Copier: objednávka posunuta',
   'sl-moved': 'Copier: SL posunut',
   'tp-moved': 'Copier: TP posunut',
+  'follower-cut': 'Copier: účet vyřazen',
 };
 
 const formatUsd = (value: number): string =>
@@ -150,6 +156,15 @@ const formatPotential = (value: number | undefined): string => {
 };
 
 export function copyEventNotification(event: CopierCopyEventRow): { title: string; body: string } {
+  if (event.kind === 'follower-cut') {
+    const account = event.accountId != null ? ` ${event.accountId}` : '';
+    const loss = event.realizedPnlUsd != null ? formatUsd(event.realizedPnlUsd) : 'neověřeno';
+    const limit = event.cutUsd != null ? `${event.cutUsd} USD` : 'neověřen';
+    return {
+      title: `Copier: účet${account} vyřazen`,
+      body: `Ztráta ${loss}, limit ${limit}${event.closed === false ? ' · kopii se nepodařilo zavřít' : ''}.`,
+    };
+  }
   // Exit s atribucí: SL/TP hit má vlastní titulek, P&L jde do těla.
   const title = event.kind === 'exit' || event.kind === 'flip'
     ? event.exitReason === 'sl'

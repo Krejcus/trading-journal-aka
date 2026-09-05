@@ -11,6 +11,7 @@ import {
   type LocalCopierAgentCommandResult,
   type LocalCopierAgentStatus,
 } from '../lib/localCopierAgentProtocol.js';
+import { isWeakerRiskConfig } from '../lib/copierRiskConfig.js';
 import { msUntilTradovateSessionEnd } from '../services/copierArmSession.js';
 import type { CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
@@ -235,14 +236,26 @@ export async function startLocalCopierExecutionAgent(
     const previous = group;
     const leaderChanged = previous.leaderAccountId !== next.leaderAccountId;
     const topologyChanged = !sameAccountTopology(previous, next);
-    let runtimeChanged = false;
+    let persistedNext = false;
+
+    // Každá změna konfigurace zavře live dispatch ještě před jakýmkoli
+    // durable zápisem nebo async preflightem. Lokální precheck chrání stejnou
+    // tighten-only hranici jako controller, ale bez nutnosti vracet runtime z
+    // nové (přísnější) konfigurace na starou (mírnější).
+    options.controller.disarm();
+    if ((options.controller.status().sessionArmedAt ?? 0) > 0) {
+      const weaker = isWeakerRiskConfig(previous, next);
+      if (weaker.length > 0) {
+        throw new Error(`Pravidla jdou dnes jen zpřísnit: ${weaker.join(', ')} (reset po konci session)`);
+      }
+    }
+
     try {
       let missingOptionalAccountIds: readonly number[] = [];
       if (mode === 'activate' || topologyChanged) {
         // Routing se nikdy nemění za běžícího ARM. Nejdřív odzbrojit, potom
         // read-only discovery; teprve controller provede flat/no-working
         // preflight nad sjednocením staré a nové topologie.
-        options.controller.disarm();
         const prepared = await prepareAccounts(accountsForRoutingChange(previous, next));
         missingOptionalAccountIds = prepared.missingOptional;
       }
@@ -252,22 +265,22 @@ export async function startLocalCopierExecutionAgent(
           ? { waiveUnverifiableFollowerOwnership: true as const }
           : {}),
       };
+      if (options.onGroupChanged) {
+        await options.onGroupChanged(structuredClone(next));
+        persistedNext = true;
+      }
       if (mode === 'activate') await options.controller.activateGroup(next, reconfigurationOptions);
       else if (leaderChanged || topologyChanged) {
         await options.controller.reconfigureGroup(next, reconfigurationOptions);
       }
       else options.controller.updateGroup(next);
-      runtimeChanged = true;
-      await options.onGroupChanged?.(structuredClone(next));
       group = next;
     } catch (error) {
-      // Po úspěšném runtime přepnutí, ale neúspěšném durable zápisu, vrať
-      // původní epochu stejnou bezpečnou cestou. Když selhal už preflight,
-      // controller původní skupinu vůbec nezměnil.
-      if (runtimeChanged) {
-        if (mode === 'activate') await options.controller.activateGroup(previous);
-        else if (leaderChanged || topologyChanged) await options.controller.reconfigureGroup(previous);
-        else options.controller.updateGroup(previous);
+      // Controller se mění až po durable zápisu. Selže-li jeho validace nebo
+      // preflight, vrací se pouze uložená konfigurace; runtime je stále
+      // DISARMED a není potřeba obcházet tighten-only návratem na mírnější stav.
+      if (persistedNext && options.onGroupChanged) {
+        await options.onGroupChanged(structuredClone(previous));
       }
       throw error;
     }
@@ -391,6 +404,11 @@ export async function startLocalCopierExecutionAgent(
         // ARM tak nepřežije do dalšího dne; otevřené kopie expirace
         // risk-redukčně zavře podle `safety.armExpiryFlatten`.
         options.controller.arm({ shadowMode: false, ttlMs: msUntilTradovateSessionEnd(Date.now()) });
+        await options.controller.waitForIdle();
+        const armedStatus = options.controller.status();
+        if (!armedStatus.armed || armedStatus.shadowMode || !(armedStatus.sessionArmedAt && armedStatus.sessionArmedAt > 0)) {
+          throw new Error(armedStatus.lastError ?? 'ARM nebyl durable potvrzen');
+        }
         return;
       }
       case 'shadow': {
@@ -404,6 +422,11 @@ export async function startLocalCopierExecutionAgent(
           throw new Error('SHADOW odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
         }
         options.controller.arm({ shadowMode: true });
+        await options.controller.waitForIdle();
+        const shadowStatus = options.controller.status();
+        if (!shadowStatus.armed || !shadowStatus.shadowMode) {
+          throw new Error(shadowStatus.lastError ?? 'SHADOW nebyl durable potvrzen');
+        }
         return;
       }
       case 'disarm':

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createExposureCappedBroker } from '../services/exposureCappedBroker';
 import { createMockBroker } from '../services/mockBroker';
 
@@ -7,6 +7,25 @@ const request = (side: 'Buy' | 'Sell', quantity: number) => ({
 });
 
 describe('exposure capped broker', () => {
+  it('forwards read-only risk snapshots without applying the exposure gate', async () => {
+    const snapshot = {
+      accountId: 22,
+      at: 123,
+      realizedPnlUsd: -50,
+      netLiq: 49_950,
+      minNetLiq: 48_750,
+      dailyLossAutoLiq: 1_250,
+      trailingMaxDrawdown: 2_000,
+    };
+    const base = createMockBroker({ accountRiskSnapshots: [snapshot] });
+    const lookup = vi.spyOn(base, 'listAccountRiskSnapshots');
+    const broker = createExposureCappedBroker(base, () => 1);
+
+    await expect(broker.listAccountRiskSnapshots([22])).resolves.toEqual([snapshot]);
+    expect(lookup).toHaveBeenCalledWith([22]);
+    expect(base.placedRequests()).toEqual([]);
+  });
+
   it('blocks a second order that would exceed total position cap', async () => {
     const base = createMockBroker({ behavior: () => ({ kind: 'fill', price: 31_000 }) });
     const broker = createExposureCappedBroker(base, () => 2);

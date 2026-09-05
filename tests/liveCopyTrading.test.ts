@@ -294,4 +294,17 @@ describe('sanitizeCopyGroups', () => {
       { ...DEFAULT_COPY_GROUP_SAFETY, tradingWindow: { enabled: true, from: '15:30', to: '22:00', timeZone: 'Invalid/Zone' } },
     ]) expect(sanitizeCopyGroups([{ ...base, safety }])).toBeNull();
   });
+
+  it('vyžaduje u follower daily-loss cutu nejvýše dvě desetinná místa', () => {
+    const base = {
+      id: 'cut-precision', name: 'Cut precision', enabled: true, leaderAccountId: 1,
+      followers: [{ accountId: 2, mode: 'on-submit' as const, multiplier: 1, dailyLossCutUsd: 10.01 }],
+    };
+
+    expect(sanitizeCopyGroups([base])?.[0].followers[0].dailyLossCutUsd).toBe(10.01);
+    expect(sanitizeCopyGroups([{
+      ...base,
+      followers: [{ ...base.followers[0], dailyLossCutUsd: 10.001 }],
+    }])).toBeNull();
+  });
 });

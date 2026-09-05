@@ -40,7 +40,12 @@ const controller = (overrides: Partial<CopierControllerStatus> = {}) => {
   };
   const value = {
     arm: vi.fn(({ shadowMode = false }: { shadowMode?: boolean } = {}) => {
-      status = { ...status, armed: true, shadowMode };
+      status = {
+        ...status,
+        armed: true,
+        shadowMode,
+        ...(!shadowMode ? { sessionArmedAt: status.sessionArmedAt && status.sessionArmedAt > 0 ? status.sessionArmedAt : 1 } : {}),
+      };
     }),
     beginShutdown: vi.fn(async () => { status = { ...status, armed: false }; }),
     disarm: vi.fn(() => { status = { ...status, armed: false }; }),
@@ -578,35 +583,63 @@ describe('local copier execution agent', () => {
     expect(onGroupChanged).toHaveBeenCalledWith(expect.objectContaining({ id: 'lucid-profile' }));
   });
 
-  it('rolls configuration back and remains disarmed when persistence fails', async () => {
-    const runtime = controller();
+  it('keeps the previous runtime config when a tighter durable save fails mid-session', async () => {
+    const runtime = controller({ sessionArmedAt: 1_788_595_200_000 });
+    const onGroupChanged = vi.fn(async () => { throw new Error('disk-full'); });
     running = await startLocalCopierExecutionAgent({
       controller: runtime,
       group: group(),
       port: 0,
-      onGroupChanged: async () => { throw new Error('disk-full'); },
+      onGroupChanged,
     });
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: { type: 'set-multiplier', groupId: 'runtime-test', accountId: 22, multiplier: 0.5 },
+    });
+    expect(response.status).toBe(409);
+    expect(running.status().group.followers[0].multiplier).toBe(1);
+    expect(runtime.disarm).toHaveBeenCalled();
+    expect(onGroupChanged).toHaveBeenCalledOnce();
+    expect(onGroupChanged).toHaveBeenCalledWith(expect.objectContaining({
+      followers: [expect.objectContaining({ multiplier: 0.5 })],
+    }));
+    expect(runtime.updateGroup).not.toHaveBeenCalled();
+  });
+
+  it('rejects a weaker mid-session config before persistence or runtime mutation', async () => {
+    const runtime = controller({ sessionArmedAt: 1_788_595_200_000 });
+    const onGroupChanged = vi.fn(async () => undefined);
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      onGroupChanged,
+    });
+
     const response = await post(running, running.status().nonce, {
       type: 'copy-command',
       command: { type: 'set-multiplier', groupId: 'runtime-test', accountId: 22, multiplier: 2 },
     });
+
     expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining('followers.22.multiplier'),
+    });
+    expect(runtime.disarm).toHaveBeenCalled();
+    expect(onGroupChanged).not.toHaveBeenCalled();
+    expect(runtime.updateGroup).not.toHaveBeenCalled();
     expect(running.status().group.followers[0].multiplier).toBe(1);
-    expect(runtime.updateGroup).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      followers: [expect.objectContaining({ multiplier: 2 })],
-    }));
-    expect(runtime.updateGroup).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      followers: [expect.objectContaining({ multiplier: 1 })],
-    }));
   });
 
-  it('rolls a leader epoch back through the same safe path when persistence fails', async () => {
+  it('rolls durable config back when the leader preflight fails without a reverse runtime transition', async () => {
     const runtime = controller();
+    vi.mocked(runtime.reconfigureGroup).mockRejectedValueOnce(new Error('working=22'));
+    const persisted: CopyGroupConfig[] = [];
     running = await startLocalCopierExecutionAgent({
       controller: runtime,
       group: group(),
       port: 0,
-      onGroupChanged: async () => { throw new Error('disk-full'); },
+      onGroupChanged: async changed => { persisted.push(changed); },
     });
     const response = await post(running, running.status().nonce, {
       type: 'copy-command',
@@ -622,12 +655,12 @@ describe('local copier execution agent', () => {
 
     expect(response.status).toBe(409);
     expect(running.status().group.leaderAccountId).toBe(11);
-    expect(runtime.reconfigureGroup).toHaveBeenNthCalledWith(
-      1,
+    expect(persisted.map(saved => saved.leaderAccountId)).toEqual([22, 11]);
+    expect(runtime.reconfigureGroup).toHaveBeenCalledOnce();
+    expect(runtime.reconfigureGroup).toHaveBeenCalledWith(
       expect.objectContaining({ leaderAccountId: 22 }),
       { missingOptionalAccountIds: [] },
     );
-    expect(runtime.reconfigureGroup).toHaveBeenNthCalledWith(2, expect.objectContaining({ leaderAccountId: 11 }));
   });
 
   it('reconciles before ARM and remains disarmed when reconciliation fails', async () => {
@@ -653,6 +686,52 @@ describe('local copier execution agent', () => {
       .toBeLessThan(vi.mocked(runtime.reconcile).mock.invocationCallOrder[0]);
     expect(vi.mocked(runtime.reconcile).mock.invocationCallOrder[0])
       .toBeLessThan(vi.mocked(runtime.arm).mock.invocationCallOrder[0]);
+  });
+
+  it.each(['arm-live', 'shadow'] as const)(
+    '%s nepotvrdí příkaz před durable dokončením controller fronty',
+    async commandType => {
+      const runtime = controller();
+      let releaseDurability!: () => void;
+      const durability = new Promise<void>(resolve => { releaseDurability = resolve; });
+      vi.mocked(runtime.waitForIdle).mockReturnValueOnce(durability);
+      running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+
+      let completed = false;
+      const pending = running.execute({ type: commandType }).then(result => {
+        completed = true;
+        return result;
+      });
+      try {
+        await vi.waitFor(() => {
+          expect(runtime.arm).toHaveBeenCalledOnce();
+          expect(runtime.waitForIdle).toHaveBeenCalledOnce();
+        });
+        expect(vi.mocked(runtime.arm).mock.invocationCallOrder[0])
+          .toBeLessThan(vi.mocked(runtime.waitForIdle).mock.invocationCallOrder[0]);
+        expect(completed).toBe(false);
+      } finally {
+        releaseDurability();
+      }
+
+      await expect(pending).resolves.toMatchObject({ ok: true });
+      expect(completed).toBe(true);
+    },
+  );
+
+  it.each([
+    ['arm-live', false],
+    ['shadow', true],
+  ] as const)('%s nehlásí úspěch, když durable ARM fronta skončí fail-closed', async (commandType, shadowMode) => {
+    const runtime = controller();
+    vi.mocked(runtime.waitForIdle).mockImplementationOnce(async () => {
+      (vi.mocked(runtime.disarm).getMockImplementation() as (() => unknown) | undefined)?.();
+    });
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+
+    await expect(running.execute({ type: commandType })).rejects.toThrow(
+      shadowMode ? 'SHADOW nebyl durable potvrzen' : 'ARM nebyl durable potvrzen',
+    );
   });
 
   it('cíleně ověří účet bez změny execution skupiny nebo ARM', async () => {
@@ -918,7 +997,7 @@ describe('local copier execution agent', () => {
 });
 
 describe('atomický arm-live s konfigurací', () => {
-  it('arm-live s group nejdřív synchronizuje konfiguraci, pak reconcile a ARM', async () => {
+  it('arm-live před prvním session ARM přijme i mírnější group, pak reconcile a ARM', async () => {
     const runtime = controller();
     const saved: CopyGroupConfig[] = [];
     const agent = await startLocalCopierExecutionAgent({
@@ -931,6 +1010,7 @@ describe('atomický arm-live s konfigurací', () => {
         ...group(),
         followers: [{ accountId: 22, mode: 'on-submit', multiplier: 2 }],
       };
+      expect(runtime.status().sessionArmedAt).toBeUndefined();
       const result = await agent.execute({ type: 'arm-live', group: next });
       expect(result.ok).toBe(true);
       // Konfigurace prošla před ARMem a durable persist proběhl.
@@ -940,6 +1020,48 @@ describe('atomický arm-live s konfigurací', () => {
       expect(runtime.reconcile).toHaveBeenCalled();
       expect(runtime.arm).toHaveBeenCalledWith(expect.objectContaining({ shadowMode: false }));
       expect(agent.status().group.followers[0].multiplier).toBe(2);
+    } finally {
+      await agent.close();
+    }
+  });
+
+  it('arm-live po sessionArmedAt odmítne mírnější group 409 před persistem, reconfigure a ARM', async () => {
+    const sessionArmedAt = 1_788_595_200_000;
+    const runtime = controller({ sessionArmedAt });
+    const onGroupChanged = vi.fn(async () => undefined);
+    const prepareGroupAccounts = vi.fn(async () => ({ missingOptional: [] }));
+    const agent = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      onGroupChanged,
+      prepareGroupAccounts,
+    });
+    try {
+      const response = await post(agent, agent.status().nonce, {
+        type: 'arm-live',
+        group: {
+          ...group(),
+          followers: [{ accountId: 22, mode: 'on-submit', multiplier: 2 }],
+        },
+      });
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({
+        error: expect.stringContaining('followers.22.multiplier'),
+      });
+      // DISARM je fail-safe první krok; po tighten-only odmítnutí už nesmí
+      // nastat žádný durable zápis, routing preflight ani runtime/ARM změna.
+      expect(runtime.disarm).toHaveBeenCalledOnce();
+      expect(onGroupChanged).not.toHaveBeenCalled();
+      expect(prepareGroupAccounts).not.toHaveBeenCalled();
+      expect(runtime.updateGroup).not.toHaveBeenCalled();
+      expect(runtime.reconfigureGroup).not.toHaveBeenCalled();
+      expect(runtime.activateGroup).not.toHaveBeenCalled();
+      expect(runtime.applyAccountEligibilityExclusions).not.toHaveBeenCalled();
+      expect(runtime.reconcile).not.toHaveBeenCalled();
+      expect(runtime.arm).not.toHaveBeenCalled();
+      expect(runtime.status()).toMatchObject({ armed: false, sessionArmedAt });
+      expect(agent.status().group.followers[0].multiplier).toBe(1);
     } finally {
       await agent.close();
     }

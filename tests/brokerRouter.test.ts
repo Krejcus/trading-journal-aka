@@ -21,6 +21,34 @@ describe('broker router', () => {
     expect(second.placedRequests().map(item => item.accountId)).toEqual([22]);
   });
 
+  it('groups read-only risk snapshots by the OAuth connection that owns each account', async () => {
+    const first = createMockBroker({
+      accountRiskSnapshots: [
+        { accountId: 11, at: 101, realizedPnlUsd: -10, netLiq: 49_990, minNetLiq: 48_750, dailyLossAutoLiq: 1_250, trailingMaxDrawdown: 2_000 },
+        { accountId: 12, at: 102, realizedPnlUsd: -20, netLiq: 49_980, minNetLiq: 48_750, dailyLossAutoLiq: 1_250, trailingMaxDrawdown: 2_000 },
+      ],
+    });
+    const second = createMockBroker({
+      accountRiskSnapshots: [
+        { accountId: 22, at: 202, realizedPnlUsd: -30, netLiq: 49_970, minNetLiq: 48_750, dailyLossAutoLiq: 1_250, trailingMaxDrawdown: 2_000 },
+      ],
+    });
+    const firstLookup = vi.spyOn(first, 'listAccountRiskSnapshots');
+    const secondLookup = vi.spyOn(second, 'listAccountRiskSnapshots');
+    const router = createBrokerRouter([
+      { broker: first, accountIds: [11, 12] },
+      { broker: second, accountIds: [22] },
+    ]);
+
+    const snapshots = await router.listAccountRiskSnapshots([11, 22, 12]);
+
+    expect(firstLookup).toHaveBeenCalledWith([11, 12]);
+    expect(secondLookup).toHaveBeenCalledWith([22]);
+    expect(snapshots.map(snapshot => snapshot.accountId).sort((a, b) => a - b)).toEqual([11, 12, 22]);
+    expect(first.placedRequests()).toEqual([]);
+    expect(second.placedRequests()).toEqual([]);
+  });
+
   it('reports connected only when every OAuth connection is connected', () => {
     const first = createMockBroker();
     const second = createMockBroker();

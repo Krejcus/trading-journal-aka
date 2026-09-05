@@ -97,6 +97,24 @@ export interface BrokerAccountCapability {
   canTrade: boolean;
 }
 
+/**
+ * Read-only risk snapshot jednoho broker účtu.
+ *
+ * `null` vždy znamená, že broker hodnotu neposkytl nebo ji neposkytl v
+ * použitelném číselném tvaru. Adaptér ji nikdy nesmí nahrazovat nulou.
+ */
+export interface BrokerAccountRiskSnapshot {
+  accountId: number;
+  /** Čas dokončení dotazu podle hodin broker adaptéru. */
+  at: number;
+  /** Brokerem vykázané dnešní realized P&L včetně poplatků. */
+  realizedPnlUsd: number | null;
+  netLiq: number | null;
+  minNetLiq: number | null;
+  dailyLossAutoLiq: number | null;
+  trailingMaxDrawdown: number | null;
+}
+
 export type BrokerEvent =
   | { type: 'order'; order: BrokerOrder }
   | { type: 'fill'; fill: BrokerFill }
@@ -230,6 +248,8 @@ export interface BrokerPort {
   ): Promise<void>;
   /** Autoritativní OAuth/account preflight před reconciliation a ARM. */
   listAccountCapabilities(accountIds: readonly number[]): Promise<BrokerAccountCapability[]>;
+  /** Read-only broker risk data; nesmí provést žádnou změnu účtu. */
+  listAccountRiskSnapshots(accountIds: readonly number[]): Promise<BrokerAccountRiskSnapshot[]>;
   listPositions(accountId: number): Promise<BrokerPosition[]>;
   /** Autoritativní seznam objednávek účtu pro pre-arm kontrolu. */
   listOrders(accountId: number): Promise<BrokerOrder[]>;

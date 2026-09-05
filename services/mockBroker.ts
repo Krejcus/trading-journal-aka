@@ -1,6 +1,7 @@
 import {
   isOpenOrderStatus,
   type BrokerAccountCapability,
+  type BrokerAccountRiskSnapshot,
   type BrokerEnvironment,
   type BrokerEvent,
   type BrokerOrder,
@@ -64,6 +65,8 @@ export interface MockBrokerOptions {
   /** Simuluje Tradovate: změna ceny OSO parentu relativně posune i child SL/TP. */
   osoChildrenFollowParentReprice?: boolean;
   accountCapabilities?: readonly BrokerAccountCapability[];
+  /** Volitelné statické risk snapshoty; chybějící účet simuluje chybějící snapshot. */
+  accountRiskSnapshots?: readonly BrokerAccountRiskSnapshot[];
   /** Zapne stavovou broker-native likvidaci; default drží legacy fallback testy. */
   nativeLiquidate?: boolean;
 }
@@ -395,6 +398,27 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
         return options.accountCapabilities.filter(item => accountIds.includes(item.accountId));
       }
       return accountIds.map(accountId => ({ accountId, active: true, canTrade: true }));
+    },
+
+    async listAccountRiskSnapshots(accountIds: readonly number[]): Promise<BrokerAccountRiskSnapshot[]> {
+      const uniqueAccountIds = [...new Set(accountIds)];
+      if (options.accountRiskSnapshots) {
+        const configured = new Map(options.accountRiskSnapshots.map(snapshot => [snapshot.accountId, snapshot]));
+        return uniqueAccountIds.flatMap(accountId => {
+          const snapshot = configured.get(accountId);
+          return snapshot ? [{ ...snapshot }] : [];
+        });
+      }
+      const at = clock();
+      return uniqueAccountIds.map(accountId => ({
+        accountId,
+        at,
+        realizedPnlUsd: null,
+        netLiq: null,
+        minNetLiq: null,
+        dailyLossAutoLiq: null,
+        trailingMaxDrawdown: null,
+      }));
     },
 
     async listOrders(accountId: number): Promise<BrokerOrder[]> {

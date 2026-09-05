@@ -91,6 +91,17 @@ function fakeBroker(options: FakeBrokerOptions = {}): BrokerPort & {
     async listAccountCapabilities(accountIds) {
       return accountIds.map(accountId => ({ accountId, active: true, canTrade: true }));
     },
+    async listAccountRiskSnapshots(accountIds) {
+      return accountIds.map(accountId => ({
+        accountId,
+        at: 1,
+        realizedPnlUsd: null,
+        netLiq: null,
+        minNetLiq: null,
+        dailyLossAutoLiq: null,
+        trailingMaxDrawdown: null,
+      }));
+    },
     async listPositions(accountId) {
       return [...positions.values()].filter(position => position.accountId === accountId).map(position => ({ ...position }));
     },

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { isWeakerRiskConfig } from '../lib/copierRiskConfig.js';
 import type { LocalCopierAgentCommand, LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol.js';
 import type { CopyGroupConfig } from '../services/liveCopyTrading.js';
 import { sanitizeCopyGroups } from '../services/liveCopyTrading.js';
@@ -82,8 +83,17 @@ const allowed = new Set<LocalCopierAgentCommand['type']>([
   // konce broker session. Patří do stejné vzdálené třídy jako disarm a
   // kill-switch — bez něj „Zamknout den" z produkční PWA nikdy nedorazil.
   'lock-until-session-end',
-  'unlock-day',
 ]);
+
+/** Sdílené HTTP mapování validačních chyb relay vrstvy. */
+export const copierRelayValidationErrorStatus = (message: string): 400 | 409 | null => {
+  if (message === 'tighten-only') return 409;
+  if (message === 'unsupported-command'
+    || message === 'unsupported-relay-command'
+    || message === 'unsupported-remote-copy-command'
+    || message === 'invalid-relay-command-payload') return 400;
+  return null;
+};
 
 /**
  * Důvod denního locku přichází z nevalidovaného JSON. Přenáší se do
@@ -194,6 +204,10 @@ const validatedEligibilityExclusions = (value: unknown) => {
 };
 
 const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknown> => {
+  // Risk tab v1 ruší odemčení dne bez náhrady. Držíme pro něj
+  // samostatný stabilní token, aby HTTP vrstva mohla vrátit přesný
+  // `400 unsupported-command`; ostatní legacy typy zachovávají svůj token.
+  if (command.type === 'unlock-day') throw new Error('unsupported-command');
   if (!allowed.has(command.type) || command.type === 'device-paired') throw new Error('unsupported-relay-command');
   if (command.type === 'copy-command') {
     return { command: validatedRemoteCopyCommand((command as { command?: unknown }).command) };
@@ -235,13 +249,14 @@ const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknow
   if (command.type === 'snapshot-test') {
     return command.repairCamera === true ? { repairCamera: true } : {};
   }
-  if (command.type === 'lock-until-session-end' || command.type === 'unlock-day') {
+  if (command.type === 'lock-until-session-end') {
     return { reason: validatedDayLockReason((command as { reason?: unknown }).reason) };
   }
   return {};
 };
 
 const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
+  if (row.command_type === 'unlock-day') throw new Error('unsupported-command');
   if (!allowed.has(row.command_type) || row.command_type === 'device-paired') throw new Error('unsupported-relay-command');
   if (row.command_type === 'copy-command') {
     return { type: 'copy-command', command: validatedRemoteCopyCommand(row.payload?.command) as never };
@@ -275,7 +290,7 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
     }
     return { type: 'verify-account-eligibility', accountId };
   }
-  if (row.command_type === 'lock-until-session-end' || row.command_type === 'unlock-day') {
+  if (row.command_type === 'lock-until-session-end') {
     return { type: row.command_type, reason: validatedDayLockReason(row.payload?.reason) };
   }
   if (row.command_type === 'snapshot-test') {
@@ -286,6 +301,57 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
     };
   }
   return { type: row.command_type } as LocalCopierAgentCommand;
+};
+
+/**
+ * Vrátí sanitizovanou konfiguraci pouze pro tři cesty, které mohou
+ * změnit denní risk. Flatten/brzdy ani ostatní příkazy touto bránou
+ * neprocházejí. Worker tutéž kontrolu provádí autoritativně z durable
+ * stavu; relay jen odmítne známé oslabení dřív, než ho zařadí do fronty.
+ */
+const relayRiskGroup = (
+  command: LocalCopierAgentCommand,
+  payload: Record<string, unknown>,
+): CopyGroupConfig | null => {
+  if (command.type === 'arm-live' || command.type === 'activate-group') {
+    return payload.group as CopyGroupConfig;
+  }
+  if (command.type !== 'copy-command') return null;
+  const nested = payload.command as { type?: unknown; group?: unknown } | undefined;
+  return nested?.type === 'update-group' ? validatedRelayGroup(nested.group) : null;
+};
+
+const enforceRelayTightenOnly = async (options: {
+  db: SupabaseClient;
+  deviceId: string;
+  userId: string;
+  connectionId: string;
+  nextGroup: CopyGroupConfig;
+}): Promise<void> => {
+  const { data, error } = await options.db.from('tradovate_copier_device_runtime')
+    .select('status')
+    .eq('device_id', options.deviceId)
+    .eq('user_id', options.userId)
+    .eq('connection_id', options.connectionId)
+    .maybeSingle<{ status: LocalCopierAgentStatus }>();
+  if (error) throw new Error(`copier-relay-runtime-risk-lookup-failed: ${error.message}`);
+  if (!data) return;
+
+  const sessionArmedAt = data.status?.controller?.sessionArmedAt;
+  if (typeof sessionArmedAt !== 'number' || !Number.isFinite(sessionArmedAt) || sessionArmedAt <= 0) return;
+
+  // Jakmile worker oznámí tighten-only session, nečitelná poslední
+  // konfigurace není důvod povolit změnu. Worker by ji sice znovu hlídal,
+  // ale relay nesmí tvrdit, že oslabení bezpečně vyloučil.
+  let previousGroup: CopyGroupConfig;
+  try {
+    previousGroup = validatedRelayGroup(data.status.group);
+  } catch {
+    throw new Error('tighten-only');
+  }
+  if (isWeakerRiskConfig(previousGroup, options.nextGroup).length > 0) {
+    throw new Error('tighten-only');
+  }
 };
 
 export async function enqueueTradovateCopierCommand(options: {
@@ -300,6 +366,8 @@ export async function enqueueTradovateCopierCommand(options: {
 }): Promise<{ id: string; status: string; expiresAt: string; deviceId: string }> {
   const now = options.now ?? Date.now();
   const idempotencyKey = options.idempotencyKey?.trim() || randomUUID();
+  const payload = commandPayload(options.command);
+  const nextRiskGroup = relayRiskGroup(options.command, payload);
   let deviceQuery = options.db
     .from('tradovate_copier_devices')
     .select('id')
@@ -314,13 +382,23 @@ export async function enqueueTradovateCopierCommand(options: {
   if (deviceError) throw new Error(`copier-relay-device-lookup-failed: ${deviceError.message}`);
   if (!device) throw new Error('copier-relay-device-not-found');
 
+  if (nextRiskGroup) {
+    await enforceRelayTightenOnly({
+      db: options.db,
+      deviceId: device.id,
+      userId: options.userId,
+      connectionId: options.connectionId,
+      nextGroup: nextRiskGroup,
+    });
+  }
+
   const expiresAt = new Date(now + 30_000).toISOString();
   const { data, error } = await options.db.from('tradovate_copier_commands').upsert({
     user_id: options.userId,
     device_id: device.id,
     connection_id: options.connectionId,
     command_type: options.command.type,
-    payload: commandPayload(options.command),
+    payload,
     idempotency_key: idempotencyKey,
     status: 'pending',
     created_at: new Date(now).toISOString(),

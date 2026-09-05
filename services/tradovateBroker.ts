@@ -3,6 +3,7 @@ import type {
   BrokerEvent,
   BrokerFill,
   BrokerAccountCapability,
+  BrokerAccountRiskSnapshot,
   BrokerOrder,
   BrokerOrderAck,
   BrokerOrderRequest,
@@ -33,6 +34,22 @@ import {
 
 interface TradovateContractEntity { id: number; name: string }
 interface TradovateAccountEntity { id: number; name?: string; active: boolean; readonly?: boolean }
+interface TradovateCashBalanceEntity {
+  accountId?: number;
+  /** Některé transportní vrstvy mohou propustit bohatší cash snapshot. */
+  netLiq?: number;
+  realizedPnL?: number;
+}
+interface TradovateAccountRiskStatusEntity {
+  accountId?: number;
+  maxNetLiq?: number;
+  minNetLiq?: number;
+}
+interface TradovateUserAccountAutoLiqEntity {
+  accountId?: number;
+  dailyLossAutoLiq?: number;
+  trailingMaxDrawdown?: number;
+}
 interface TradovatePositionEntity { accountId: number; contractId: number; netPos: number }
 interface TradovateRawOrderEntity {
   id: number;
@@ -171,6 +188,25 @@ const numberId = (value: string): number => {
 const supportedOrderType = (value: string): OrderType => {
   if (value === 'Market' || value === 'Limit' || value === 'Stop' || value === 'StopLimit') return value;
   throw new TradovateTransportError(`Unsupported Tradovate order type: ${value}`);
+};
+
+const finiteNumber = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+// Prop/evaluation providers use very large sentinels for a disabled limit.
+// Keep this aligned with server/tradovateAccountData.ts.
+const activeRiskThreshold = (value: unknown): number | null => {
+  const parsed = finiteNumber(value);
+  return parsed != null && Math.abs(parsed) < 100_000_000 ? parsed : null;
+};
+
+const firstAccountDependent = <T extends { accountId?: number }>(
+  value: T[] | null,
+  accountId: number,
+): T | null => {
+  if (!Array.isArray(value)) return null;
+  const exact = value.find(item => item != null && item.accountId === accountId);
+  return exact ?? value.find(item => item != null && item.accountId == null) ?? null;
 };
 
 export interface TradovateBrokerPort extends BrokerPort {
@@ -1196,6 +1232,44 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         accountId: item.id,
         active: item.active === true,
         canTrade: item.active === true && item.readonly !== true,
+      }));
+    },
+    async listAccountRiskSnapshots(accountIds): Promise<BrokerAccountRiskSnapshot[]> {
+      const uniqueAccountIds = [...new Set(accountIds)];
+      return Promise.all(uniqueAccountIds.map(async accountId => {
+        const encodedId = encodeURIComponent(String(accountId));
+        const [cashBalances, riskStatuses, autoLiqSettings] = await Promise.all([
+          request<TradovateCashBalanceEntity[]>(
+            `/cashBalance/deps?masterid=${encodedId}`,
+            { method: 'GET' },
+          ),
+          request<TradovateAccountRiskStatusEntity[]>(
+            `/accountRiskStatus/deps?masterid=${encodedId}`,
+            { method: 'GET' },
+          ),
+          request<TradovateUserAccountAutoLiqEntity[]>(
+            `/userAccountAutoLiq/deps?masterid=${encodedId}`,
+            { method: 'GET' },
+          ),
+        ]);
+        const cashBalance = firstAccountDependent(cashBalances, accountId);
+        const riskStatus = firstAccountDependent(riskStatuses, accountId);
+        const autoLiq = firstAccountDependent(autoLiqSettings, accountId);
+        return {
+          accountId,
+          at: clock(),
+          realizedPnlUsd: finiteNumber(cashBalance?.realizedPnL),
+          // Prop risk status vrací dvojici maxNetLiq/minNetLiq; jejich rozdíl
+          // je nakonfigurovaný trailing limit. Ve sdíleném broker portu se
+          // horní hodnota normalizuje jako `netLiq` podle Risk spec. Bohatší
+          // cash snapshot je jen kompatibilní fallback — běžné GET /deps
+          // entity obsahují `amount`, které za net liquidation nevydáváme.
+          netLiq: activeRiskThreshold(riskStatus?.maxNetLiq)
+            ?? finiteNumber(cashBalance?.netLiq),
+          minNetLiq: activeRiskThreshold(riskStatus?.minNetLiq),
+          dailyLossAutoLiq: activeRiskThreshold(autoLiq?.dailyLossAutoLiq),
+          trailingMaxDrawdown: activeRiskThreshold(autoLiq?.trailingMaxDrawdown),
+        };
       }));
     },
     async listPositions(accountId): Promise<BrokerPosition[]> {

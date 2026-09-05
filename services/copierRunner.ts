@@ -110,7 +110,10 @@ export type CopierAuditKind =
   | 'cancel-failed'
   | 'sequence-broken'
   | 'rule-warning'
-  | 'day-unlock';
+  | 'day-unlock'
+  | 'rule-pause'
+  | 'rule-pause-end'
+  | 'follower-cut';
 
 export interface CopierAuditEntry {
   at: number;
@@ -124,6 +127,10 @@ export interface CopierAuditEntry {
   rule?: 'daily-loss' | 'losing-trades' | 'max-trades' | 'window-end';
   current?: number;
   limit?: number;
+  /** Konec pauzy/cutu; additivní metadata pro nové auditní druhy. */
+  until?: number;
+  source?: 'broker' | 'ledger';
+  cutUsd?: number;
 }
 
 /**

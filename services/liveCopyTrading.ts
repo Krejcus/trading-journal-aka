@@ -128,7 +128,8 @@ const sanitizeRuleAction = (value: unknown, allowNull: boolean): CopierRuleActio
 
 /** Chybějící pole = DEFAULT (staré skupiny), neplatná hodnota = null (fail-closed). */
 export function sanitizeDayRuleActions(value: unknown): CopyGroupDayRuleActions | null {
-  if (value == null) return cloneDayRuleActions(DEFAULT_DAY_RULE_ACTIONS);
+  if (value === undefined) return cloneDayRuleActions(DEFAULT_DAY_RULE_ACTIONS);
+  if (value === null) return null;
   if (typeof value !== 'object' || Array.isArray(value)) return null;
   const raw = value as Partial<Record<keyof CopyGroupDayRuleActions, Record<string, unknown>>>;
   const pick = (group: Record<string, unknown> | undefined, key: string, fallback: CopierRuleAction | null, allowNull: boolean) => {
@@ -424,7 +425,7 @@ export function validateCopyGroup(
       add({ code: 'invalid-max-contracts', accountId: follower.accountId, message: 'Max kontrakty musí být celé číslo alespoň 1.' });
     }
     if (follower.dailyLossCutUsd != null && follower.dailyLossCutUsd !== 0 && !validDailyLossCut(follower.dailyLossCutUsd)) {
-      add({ code: 'invalid-daily-loss-cut', accountId: follower.accountId, message: '„Vypnout při" musí být od 0,01 do 1 000 000 USD.' });
+      add({ code: 'invalid-daily-loss-cut', accountId: follower.accountId, message: '„Vypnout při“ musí být od 0,01 do 1 000 000 USD a mít nejvýše 2 desetinná místa.' });
     }
     if (follower.onCut != null && !validFollowerCutAction(follower.onCut)) {
       add({ code: 'invalid-cut-action', accountId: follower.accountId, message: 'Akce při vyřazení musí být „zavřít kopii" nebo „nechat dojet".' });
@@ -656,7 +657,11 @@ export function sanitizeCopyGroupSafety(value: unknown): CopyGroupSafetySettings
 
 /** Sdílená validace follower limitů (UI, store, relay, worker). */
 export const validDailyLossCut = (value: unknown): value is number => (
-  typeof value === 'number' && Number.isFinite(value) && value >= 0.01 && value <= 1_000_000
+  typeof value === 'number'
+  && Number.isFinite(value)
+  && value >= 0.01
+  && value <= 1_000_000
+  && Math.abs((value * 100) - Math.round(value * 100)) < 1e-9
 );
 export const validFollowerCutAction = (value: unknown): value is CopyFollowerCutAction => (
   value === 'close-copy' || value === 'let-run'

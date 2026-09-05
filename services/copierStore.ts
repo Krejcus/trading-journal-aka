@@ -144,7 +144,7 @@ function cloneSnapshot(snapshot: CopierSnapshot): CopierSnapshot {
 
 function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapshot['safety']> {
   const base = safety ?? { entryCooldownUntil: 0, dayLockUntil: 0 };
-  const { leaderExposureEpochs, ...rest } = base;
+  const { leaderExposureEpochs, followerCuts, accountRisk, ...rest } = base;
   return {
     ...rest,
     // Volitelná pole se klonují, ale nevyrábějí: prázdný snapshot zůstává
@@ -160,6 +160,12 @@ function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapsh
           leaderExitOrderIds: [...epoch.leaderExitOrderIds],
         })),
       }
+      : {}),
+    ...(followerCuts
+      ? { followerCuts: Object.fromEntries(Object.entries(followerCuts).map(([key, value]) => [key, { ...value }])) }
+      : {}),
+    ...(accountRisk
+      ? { accountRisk: Object.fromEntries(Object.entries(accountRisk).map(([key, value]) => [key, { ...value }])) }
       : {}),
     accountEligibility: base.accountEligibility?.map(entry => ({
       ...entry,

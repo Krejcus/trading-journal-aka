@@ -182,6 +182,34 @@ export interface CopierState {
     dayLockAt?: number | null;
     dayLockSnoozedRules?: DayLockTrigger[];
     dayUnlock?: { at: number; reason: string } | null;
+    /** Aktivní časově omezená pauza pravidla dne; nikdy sama neodzbrojuje. */
+    pauseUntil?: number;
+    pauseRule?: CopierDailyRule | null;
+    pauseAt?: number;
+    /** První úspěšný ostrý ARM aktuální broker session (tighten-only epoch). */
+    sessionArmedAt?: number;
+    /** Vyřazení jednotlivých followerů do konce broker session. */
+    followerCuts?: Record<string, {
+      accountId: number;
+      at: number;
+      until: number;
+      realizedPnlUsd: number;
+      cutUsd: number;
+      source: 'broker' | 'ledger';
+      closed: number | null | false;
+    }>;
+    /** Poslední read-only broker risk snapshot per účet. */
+    accountRisk?: Record<string, {
+      accountId: number;
+      verifiedAt: number;
+      realizedPnlUsd: number | null;
+      netLiq: number | null;
+      minNetLiq: number | null;
+      dailyLossAutoLiq: number | null;
+      trailingMaxDrawdown: number | null;
+      propLimitUsd: number | null;
+      error?: string | null;
+    }>;
     /**
      * Denní risk počítadlo leadera pro auto day-lock. Je součástí stejného
      * CAS snapshotu jako outbox — restart workeru nesmí zapomenout ranní
@@ -308,6 +336,12 @@ export function createCopierState(
         : {}),
       dayLockSnoozedRules: [...(safety.dayLockSnoozedRules ?? [])],
       dayUnlock: safety.dayUnlock ? { ...safety.dayUnlock } : null,
+      ...(safety.followerCuts
+        ? { followerCuts: Object.fromEntries(Object.entries(safety.followerCuts).map(([key, value]) => [key, { ...value }])) }
+        : {}),
+      ...(safety.accountRisk
+        ? { accountRisk: Object.fromEntries(Object.entries(safety.accountRisk).map(([key, value]) => [key, { ...value }])) }
+        : {}),
     },
   };
 }

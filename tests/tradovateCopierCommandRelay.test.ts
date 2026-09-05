@@ -1,10 +1,12 @@
 import { DEFAULT_COPY_GROUP_SAFETY } from '../services/liveCopyTrading';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
-import type { LocalCopierAgentCommand } from '../lib/localCopierAgentProtocol';
+import type { LocalCopierAgentCommand, LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
 import {
   claimTradovateCopierCommand,
+  copierRelayValidationErrorStatus,
   enqueueTradovateCopierCommand,
+  heartbeatTradovateCopierDevice,
 } from '../server/tradovateCopierCommandRelay';
 
 const userId = '11111111-1111-4111-8111-111111111111';
@@ -12,7 +14,10 @@ const connectionId = '22222222-2222-4222-8222-222222222222';
 const deviceId = '33333333-3333-4333-8333-333333333333';
 type CopyCommand = Extract<LocalCopierAgentCommand, { type: 'copy-command' }>;
 
-function enqueueDb(upsert: (row: unknown, options: unknown) => void): SupabaseClient {
+function enqueueDb(
+  upsert: (row: unknown, options: unknown) => void,
+  runtimeStatus: LocalCopierAgentStatus | null = null,
+): SupabaseClient {
   const deviceQuery = {
     eq: () => deviceQuery,
     is: () => deviceQuery,
@@ -24,6 +29,13 @@ function enqueueDb(upsert: (row: unknown, options: unknown) => void): SupabaseCl
     select: () => upsertQuery,
     maybeSingle: async () => ({
       data: { id: 'command-id', status: 'pending', expires_at: '2026-08-21T12:00:30.000Z' },
+      error: null,
+    }),
+  };
+  const runtimeQuery = {
+    eq: () => runtimeQuery,
+    maybeSingle: async () => ({
+      data: runtimeStatus ? { status: runtimeStatus } : null,
       error: null,
     }),
   };
@@ -39,6 +51,9 @@ function enqueueDb(upsert: (row: unknown, options: unknown) => void): SupabaseCl
           return upsertQuery;
         } };
       }
+      if (table === 'tradovate_copier_device_runtime') {
+        return { select: () => runtimeQuery };
+      }
       throw new Error(`unexpected-table:${table}`);
     },
   } as unknown as SupabaseClient;
@@ -49,6 +64,18 @@ function claimDb(row: Record<string, unknown>): SupabaseClient {
     rpc: async () => ({ data: [row], error: null }),
   } as unknown as SupabaseClient;
 }
+
+const workerStatus = (
+  group: LocalCopierAgentStatus['group'],
+  sessionArmedAt: number,
+): LocalCopierAgentStatus => ({
+  version: 1,
+  environment: 'demo',
+  nonce: 'device-secret-must-not-persist',
+  group,
+  controller: { sessionArmedAt } as LocalCopierAgentStatus['controller'],
+  startedAt: '2026-09-05T08:00:00.000Z',
+});
 
 describe('Tradovate copier command relay', () => {
   it('snapshot-test ukládá prázdný neobchodní payload a při claimu dostane ID commandu', async () => {
@@ -500,18 +527,15 @@ describe('ARM přes relay nese konfiguraci skupiny', () => {
     })).rejects.toThrow('invalid-relay-command-payload');
   });
 
-  it('unlock-day projde enqueue i claim a používá stejnou striktní validaci důvodu', async () => {
+  it('unlock-day odmítne enqueue i ručně vložený claim jako unsupported-command', async () => {
     const upsert = vi.fn();
-    await enqueueTradovateCopierCommand({
+    await expect(enqueueTradovateCopierCommand({
       db: enqueueDb(upsert), userId, connectionId, deviceId,
       command: { type: 'unlock-day', reason: '  Vědomé odemknutí po pauze  ' },
-    });
-    expect(upsert.mock.calls[0][0]).toMatchObject({
-      command_type: 'unlock-day',
-      payload: { reason: 'Vědomé odemknutí po pauze' },
-    });
+    })).rejects.toThrow('unsupported-command');
+    expect(upsert).not.toHaveBeenCalled();
 
-    const claimed = await claimTradovateCopierCommand({
+    await expect(claimTradovateCopierCommand({
       db: claimDb({
         id: '99999999-9999-4999-8999-999999999999',
         command_type: 'unlock-day',
@@ -520,21 +544,102 @@ describe('ARM přes relay nese konfiguraci skupiny', () => {
         status: 'claimed', result: null, error: null,
       }),
       deviceId,
+    })).rejects.toThrow('unsupported-command');
+
+    expect(copierRelayValidationErrorStatus('unsupported-command')).toBe(400);
+  });
+
+  it('mapuje tighten-only na HTTP 409 a neznámou serverovou chybu nemaskuje', () => {
+    expect(copierRelayValidationErrorStatus('tighten-only')).toBe(409);
+    expect(copierRelayValidationErrorStatus('store-unavailable')).toBeNull();
+  });
+
+  it('heartbeat/report zachová poslední group + sessionArmedAt pro relay bránu', async () => {
+    const runtimeUpsert = vi.fn();
+    const status = workerStatus(skupina, 1_788_595_200_000);
+    const db = {
+      from: (table: string) => {
+        if (table !== 'tradovate_copier_device_runtime') throw new Error(`unexpected-table:${table}`);
+        return {
+          upsert: async (row: unknown, options: unknown) => {
+            runtimeUpsert(row, options);
+            return { error: null };
+          },
+        };
+      },
+    } as unknown as SupabaseClient;
+
+    await heartbeatTradovateCopierDevice({ db, deviceId, userId, connectionId, status });
+
+    expect(runtimeUpsert).toHaveBeenCalledOnce();
+    expect(runtimeUpsert.mock.calls[0][0]).toMatchObject({
+      device_id: deviceId,
+      user_id: userId,
+      connection_id: connectionId,
+      status: {
+        nonce: '',
+        group: skupina,
+        controller: { sessionArmedAt: 1_788_595_200_000 },
+      },
     });
-    expect(claimed?.command).toEqual({ type: 'unlock-day', reason: 'Vědomé odemknutí po pauze' });
+  });
+
+  it.each([
+    ['update-group', (group: typeof skupina): LocalCopierAgentCommand => ({
+      type: 'copy-command', command: { type: 'update-group', group },
+    })],
+    ['activate-group', (group: typeof skupina): LocalCopierAgentCommand => ({ type: 'activate-group', group })],
+    ['arm-live', (group: typeof skupina): LocalCopierAgentCommand => ({ type: 'arm-live', group })],
+  ] as const)('tighten-only odmítne mírnější %s ještě před enqueue', async (_type, commandFor) => {
+    const upsert = vi.fn();
+    const weaker = {
+      ...skupina,
+      safety: { ...skupina.safety, dailyMaxTrades: skupina.safety.dailyMaxTrades + 1 },
+    };
 
     await expect(enqueueTradovateCopierCommand({
-      db: enqueueDb(vi.fn()), userId, connectionId, deviceId,
-      command: { type: 'unlock-day', reason: 'x\nARM' },
-    })).rejects.toThrow('invalid-relay-command-payload');
-    await expect(claimTradovateCopierCommand({
-      db: claimDb({
-        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-        command_type: 'unlock-day', payload: { reason: 'ab' },
-        expires_at: '2026-08-21T12:00:30.000Z',
-        status: 'claimed', result: null, error: null,
-      }),
+      db: enqueueDb(upsert, workerStatus(skupina, 1_788_595_200_000)),
+      userId,
+      connectionId,
       deviceId,
-    })).rejects.toThrow('invalid-relay-command-payload');
+      command: commandFor(weaker),
+    })).rejects.toThrow('tighten-only');
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('před prvním ARM relay dovolí i zmírnění a worker zůstává autoritou', async () => {
+    const upsert = vi.fn();
+    const weaker = {
+      ...skupina,
+      safety: { ...skupina.safety, dailyMaxTrades: skupina.safety.dailyMaxTrades + 1 },
+    };
+
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert, workerStatus(skupina, 0)),
+      userId,
+      connectionId,
+      deviceId,
+      command: { type: 'arm-live', group: weaker },
+    });
+
+    expect(upsert).toHaveBeenCalledOnce();
+  });
+
+  it('za tighten-only session povolí skutečné zpřísnění', async () => {
+    const upsert = vi.fn();
+    const tighter = {
+      ...skupina,
+      safety: { ...skupina.safety, dailyMaxTrades: skupina.safety.dailyMaxTrades - 1 },
+    };
+
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert, workerStatus(skupina, 1_788_595_200_000)),
+      userId,
+      connectionId,
+      deviceId,
+      command: { type: 'arm-live', group: tighter },
+    });
+
+    expect(upsert).toHaveBeenCalledOnce();
   });
 });

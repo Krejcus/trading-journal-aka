@@ -1,5 +1,6 @@
 import type {
   BrokerAccountCapability,
+  BrokerAccountRiskSnapshot,
   BrokerEvent,
   BrokerPort,
 } from './brokerPort';
@@ -137,6 +138,15 @@ export function createBrokerRouter(
       }
       return (await Promise.all([...grouped].map(([broker, ids]) =>
         broker.listAccountCapabilities(ids)))).flat();
+    },
+    async listAccountRiskSnapshots(accountIds): Promise<BrokerAccountRiskSnapshot[]> {
+      const grouped = new Map<BrokerPort, number[]>();
+      for (const accountId of accountIds) {
+        const broker = brokerFor(accountId);
+        grouped.set(broker, [...(grouped.get(broker) ?? []), accountId]);
+      }
+      return (await Promise.all([...grouped].map(([broker, ids]) =>
+        broker.listAccountRiskSnapshots(ids)))).flat();
     },
     listPositions: accountId => brokerFor(accountId).listPositions(accountId),
     listOrders: accountId => brokerFor(accountId).listOrders(accountId),
