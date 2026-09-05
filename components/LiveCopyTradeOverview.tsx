@@ -25,7 +25,7 @@ import {
 } from '../lib/copyTradeAccountLabels';
 import { formatSnapshotRepairError } from '../lib/copierBlockerMessages';
 import { translateCopierRejectReason } from '../lib/copierRejectReason';
-import LiveDayRulesCard from './LiveDayRulesCard';
+import LiveRiskSummaryCard from './LiveRiskSummaryCard';
 import {
   copierCopiesOutcomeText,
   type CopierDisarmRecord,
@@ -263,6 +263,8 @@ interface Props {
   copierStatusPending?: boolean;
   /** Bootstrap má čerstvé pozice a balance, ale denní ledger se ještě doplňuje. */
   dailyPnlPending?: boolean;
+  /** Přesné current-day broker P&L; null znamená, že broker hodnotu nepotvrdil. */
+  brokerDailyPnlByAccount?: Readonly<Record<string, number | null>>;
   /** Durable leader-only copier ledger; never an aggregate of account P&L. */
   dailyStats?: CopierControllerStatus['dailyStats'];
   copierKillSwitch?: boolean;
@@ -276,13 +278,12 @@ interface Props {
   onDisarm?: () => Promise<void> | void;
   onEmergencyStop?: () => Promise<void> | void;
   onDayLock?: () => Promise<void> | void;
-  onUnlockDay?: (reason: string) => Promise<void> | void;
   dayLockUntil?: number;
-  dayLockReason?: string | null;
-  dayLockTrigger?: CopierControllerStatus['dayLockTrigger'];
-  dayLockAt?: number | null;
-  armedAt?: number;
-  armExpiresAt?: number;
+  pause?: CopierControllerStatus['pause'];
+  sessionArmedAt?: number;
+  followerCuts?: CopierControllerStatus['followerCuts'];
+  accountRisk?: CopierControllerStatus['accountRisk'];
+  onOpenRisk?: () => void;
   /** Konec anti-revenge cooldownu (epoch ms); 0 = neběží. */
   cooldownUntil?: number;
   /** Operace čekající na ruční kontrolu — blokují ARM a musí být vidět. */
@@ -524,6 +525,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   copierObservingOnly = false,
   copierStatusPending = false,
   dailyPnlPending = false,
+  brokerDailyPnlByAccount,
   dailyStats = null,
   copierKillSwitch = false,
   apiTelemetry,
@@ -534,13 +536,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   onDisarm,
   onEmergencyStop,
   onDayLock,
-  onUnlockDay,
   dayLockUntil = 0,
-  dayLockReason = null,
-  dayLockTrigger = null,
-  dayLockAt = null,
-  armedAt = 0,
-  armExpiresAt = 0,
+  pause = null,
+  sessionArmedAt = 0,
+  followerCuts = [],
+  accountRisk = [],
+  onOpenRisk,
   cooldownUntil = 0,
   stuckOperations = [],
   accountEligibility = [],
@@ -568,7 +569,14 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [hiddenColumns, setHiddenColumns] = useState<Set<AccountColumnKey>>(loadHiddenColumns);
   const [hiddenGroupColumns, setHiddenGroupColumns] = useState<Set<GroupColumnKey>>(() => loadHiddenColumnSet<GroupColumnKey>(GROUP_COLUMNS_STORAGE_KEY));
   const [hiddenOrderColumns, setHiddenOrderColumns] = useState<Set<OrderColumnKey>>(() => loadHiddenColumnSet<OrderColumnKey>(ORDER_COLUMNS_STORAGE_KEY));
-  const [groups, setGroups] = useState<CopyGroupConfig[]>(() => loadDraftGroups(snapshot));
+  const [groups, setGroups] = useState<CopyGroupConfig[]>(() => {
+    const initial = loadDraftGroups(snapshot);
+    // Effects běží až po prvním interaktivním renderu. Runtime skupinu proto
+    // adoptujeme už zde, aby rychlý ARM po návratu z Risk neposlal starý draft.
+    return runtimeGroup
+      ? adoptRuntimeCopyGroup(initial, snapshot.accounts.map(account => account.id), runtimeGroup)
+      : initial;
+  });
   const [editorGroup, setEditorGroup] = useState<CopyGroupConfig | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [pendingUnavailableFollowerRemoval, setPendingUnavailableFollowerRemoval] = useState<PendingUnavailableFollowerRemoval | null>(null);
@@ -701,10 +709,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     runtimeGroup?.leaderAccountId,
     ...(runtimeGroup?.followers.map(follower => follower.accountId) ?? []),
   ].filter((accountId): accountId is number => accountId != null))], [groups, runtimeGroup]);
-  const rulesGroup = groups.find(group => group.id === executionGroupId)
-    ?? runtimeGroup
+  const rulesGroup = runtimeGroup
+    ?? groups.find(group => group.id === executionGroupId)
     ?? groups[0]
     ?? null;
+  const tightenOnly = sessionArmedAt > 0;
   const renderAccountMessage = (message: string, accountIds: Iterable<number> = knownAccountIds) =>
     formatKnownCopyTradeAccountIds(message, accountIds, accountId => accountLabel(accountId));
   const connectionByFirm = useMemo(
@@ -1022,13 +1031,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     }, onError);
   };
 
-  const saveDayRules = async (safety: CopyGroupSafetySettings): Promise<void> => {
-    if (!rulesGroup) throw new Error('Nejdřív vytvoř kopírovací skupinu.');
-    let failure = '';
-    const saved = await saveGroup({ ...rulesGroup, safety }, message => { failure = message; });
-    if (!saved) throw new Error(failure || 'Pravidla dne se nepodařilo uložit.');
-  };
-
   const updateFollower = (groupId: string, accountId: number, patch: Partial<{ mode: ReplicationMode; multiplier: number }>) => {
     setGroups(current => current.map(group => group.id !== groupId ? group : {
       ...group,
@@ -1074,20 +1076,17 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
   return (
     <div className="space-y-5" style={{ fontSize: `${density}%` }}>
-      <LiveDayRulesCard
-        groupName={rulesGroup?.name}
-        safety={rulesGroup?.safety ?? DEFAULT_COPY_GROUP_SAFETY}
+      <LiveRiskSummaryCard
+        group={rulesGroup}
         dailyStats={dailyStats}
         dayLockUntil={dayLockUntil}
-        dayLockReason={dayLockReason}
-        dayLockTrigger={dayLockTrigger}
-        dayLockAt={dayLockAt}
-        cooldownUntil={cooldownUntil}
-        armedAt={armedAt}
-        armExpiresAt={armExpiresAt}
-        disabled={busyCommand != null || !rulesGroup}
-        onSave={rulesGroup ? saveDayRules : undefined}
-        onUnlockDay={onUnlockDay}
+        pause={pause}
+        followerCuts={followerCuts}
+        accountRisk={accountRisk}
+        accounts={snapshot.accounts}
+        brokerDailyPnlByAccount={brokerDailyPnlByAccount}
+        brokerDailyPnlPending={dailyPnlPending}
+        onOpenRisk={onOpenRisk}
       />
       <CopierDailyStatsSummary
         leaderRealizedPnl={dailyStats?.realizedPnlUsd ?? null}
@@ -1215,14 +1214,25 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         onToggle={() => toggleGroup(group.id)}
                         onEdit={() => setEditorGroup(structuredClone(group))}
                         templates={templates}
+                        tightenOnly={tightenOnly}
                         onApplyTemplate={template => {
                           const currentSafety = group.safety ?? DEFAULT_COPY_GROUP_SAFETY;
+                          const currentFollowers = new Map(group.followers.map(follower => [follower.accountId, follower]));
                           const updated: CopyGroupConfig = {
                             ...group,
                             leaderAccountId: template.leaderAccountId ?? group.leaderAccountId,
-                            followers: template.followers.filter(follower => follower.accountId !== (template.leaderAccountId ?? group.leaderAccountId)),
-                            // Pravidla dne mají jediný editor v LIVE kartě a
-                            // aplikace topologické šablony je proto nesmí tiše přepsat.
+                            followers: template.followers
+                              .filter(follower => follower.accountId !== (template.leaderAccountId ?? group.leaderAccountId))
+                              .map(follower => {
+                                const current = currentFollowers.get(follower.accountId);
+                                return current ? {
+                                  ...follower,
+                                  ...(current.dailyLossCutUsd == null ? {} : { dailyLossCutUsd: current.dailyLossCutUsd }),
+                                  onCut: current.onCut ?? 'close-copy',
+                                } : follower;
+                              }),
+                            // Pravidla dne a existující per-account cuty mají jediný
+                            // editor v Risk; topologická šablona je nesmí tiše přepsat.
                             safety: {
                               ...template.safety,
                               entryCooldownMinutes: currentSafety.entryCooldownMinutes,
@@ -1231,6 +1241,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               dailyMaxLosingTrades: currentSafety.dailyMaxLosingTrades,
                               dailyMaxTrades: currentSafety.dailyMaxTrades,
                               tradingWindow: { ...currentSafety.tradingWindow },
+                              dayRuleActions: structuredClone(
+                                currentSafety.dayRuleActions ?? DEFAULT_COPY_GROUP_SAFETY.dayRuleActions,
+                              ),
                             },
                           };
                           void saveGroup(updated);
@@ -1301,6 +1314,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               redactNames={redactNames}
                               redaction={redaction}
                               hiddenOrderColumns={hiddenOrderColumns}
+                              tightenOnly={tightenOnly}
                             /></div>
                           </div>
                         </td>
@@ -1322,6 +1336,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         <GroupEditorDialog
           group={editorGroup}
           isNew={!groups.some(group => group.id === editorGroup.id)}
+          tightenOnly={tightenOnly}
           accounts={snapshot.accounts}
           accountLabel={(accountId, role) => accountLabel(accountId, editorGroup.id, role)}
           onClose={() => setEditorGroup(null)}
@@ -1764,7 +1779,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
   );
 };
 
-const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, onApplyTemplate, hiddenGroupColumns, reduceMotion }: {
+const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, tightenOnly, onApplyTemplate, hiddenGroupColumns, reduceMotion }: {
   group: CopyGroupConfig; rows: Row[]; armed: boolean; open: boolean; onToggle: () => void;
   reduceMotion: boolean;
   dailyPnlPending: boolean;
@@ -1781,6 +1796,7 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingO
   redactNames: boolean;
   redaction: RedactionSettings;
   templates: CopyGroupTemplate[];
+  tightenOnly: boolean;
   onApplyTemplate: (template: CopyGroupTemplate) => void;
   hiddenGroupColumns: Set<GroupColumnKey>;
 }) => {
@@ -1864,18 +1880,19 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingO
             className="group flex h-11 items-center whitespace-nowrap text-[10px] font-bold text-rose-500">
             <span className="flex h-7 items-center rounded-md border border-rose-500/25 bg-rose-500/[0.06] px-2.5 transition-colors group-hover:border-rose-500/40 group-hover:bg-rose-500/12">Flatten All</span>
           </button>
-          <GroupActionMenu active={armed} onToggleEnabled={onToggleEnabled} onEdit={onEdit} templates={templates} onApplyTemplate={onApplyTemplate} />
+          <GroupActionMenu active={armed} onToggleEnabled={onToggleEnabled} onEdit={onEdit} templates={templates} tightenOnly={tightenOnly} onApplyTemplate={onApplyTemplate} />
         </div>
       </td>
     </motion.tr>
   );
 };
 
-const GroupActionMenu = ({ active, onToggleEnabled, onEdit, templates, onApplyTemplate }: {
+const GroupActionMenu = ({ active, onToggleEnabled, onEdit, templates, tightenOnly, onApplyTemplate }: {
   active: boolean;
   onToggleEnabled: () => void;
   onEdit: () => void;
   templates: CopyGroupTemplate[];
+  tightenOnly: boolean;
   onApplyTemplate: (template: CopyGroupTemplate) => void;
 }) => {
   const [open, setOpen] = useState(false);
@@ -1898,7 +1915,7 @@ const GroupActionMenu = ({ active, onToggleEnabled, onEdit, templates, onApplyTe
         {templates.length ? <>
           <div className="my-1 border-t border-[var(--border-subtle)]" />
           <div className="px-3 pb-1 pt-1 text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">Apply template</div>
-          {templates.map(template => <button key={template.id} onClick={() => { setOpen(false); onApplyTemplate(template); }} className="w-full truncate px-3 py-2 text-left text-xs font-bold text-[var(--text-primary)] hover:bg-[var(--bg-page)]">{template.name}</button>)}
+          {templates.map(template => <button key={template.id} disabled={tightenOnly} title={tightenOnly ? 'dnes jen zpřísnit' : undefined} onClick={() => { setOpen(false); onApplyTemplate(template); }} className="w-full truncate px-3 py-2 text-left text-xs font-bold text-[var(--text-primary)] hover:bg-[var(--bg-page)] disabled:cursor-not-allowed disabled:opacity-45">{template.name}</button>)}
         </> : null}
       </div>
     </>, document.body) : null}
@@ -2211,7 +2228,7 @@ export const AccountEligibilityPill = ({ eligibility, live, unavailable = false,
     <CheckCircle2 aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Aktivní</span>;
 };
 
-const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eligibilityByAccount, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, dailyPnlPending, onMultiplier, onFlattenAccount, onRemoveUnavailableFollower, onCancelOrder, redactNames, redaction, hiddenOrderColumns }: {
+const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eligibilityByAccount, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, dailyPnlPending, onMultiplier, onFlattenAccount, onRemoveUnavailableFollower, onCancelOrder, redactNames, redaction, hiddenOrderColumns, tightenOnly }: {
   rows: Row[];
   tab: 'accounts' | 'orders';
   isLive: (a?: LiveAccount) => boolean;
@@ -2232,6 +2249,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
   redactNames: boolean;
   redaction: RedactionSettings;
   hiddenOrderColumns: Set<OrderColumnKey>;
+  tightenOnly: boolean;
 }) => {
   const accountIds = new Set(rows.flatMap(row => row.accountId != null ? [row.accountId] : []));
   const groupOrders = orders.filter(order => order.accountId != null && accountIds.has(order.accountId));
@@ -2306,6 +2324,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
                 onMultiplier={onMultiplier} onFlatten={onFlattenAccount}
                 onRemoveUnavailableFollower={onRemoveUnavailableFollower}
                 redactNames={redactNames} redaction={redaction}
+                tightenOnly={tightenOnly}
               />
             ))}
           </tbody>
@@ -2348,7 +2367,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
   );
 };
 
-const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCommand, onVerifyEligibility, verifying, dailyPnlPending, onMultiplier, onFlatten, onRemoveUnavailableFollower, redactNames, redaction }: {
+const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCommand, onVerifyEligibility, verifying, dailyPnlPending, onMultiplier, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, tightenOnly }: {
   row: Row; live: boolean; onAccount?: (a: LiveAccount) => void; columns: ColumnDef[];
   orders: LiveOrder[];
   eligibility?: CopierAccountEligibility;
@@ -2361,6 +2380,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
   onRemoveUnavailableFollower: (accountId: number) => void;
   redactNames: boolean;
   redaction: RedactionSettings;
+  tightenOnly: boolean;
 }) => {
   const a = row.account;
   const accountId = row.accountId;
@@ -2454,9 +2474,17 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
               <input
                 aria-label={`Násobek ${row.name}`}
                 key={`${accountId}-${row.scale}`}
-                type="number" min="0.01" max="100" step="0.25" defaultValue={row.scale}
+                type="number" min="0.01" max={tightenOnly ? row.scale : 100} step="0.25" defaultValue={row.scale}
                 disabled={busyCommand != null}
-                onBlur={event => onMultiplier(accountId, Number(event.target.value))}
+                title={tightenOnly ? 'dnes jen zpřísnit' : undefined}
+                onBlur={event => {
+                  const next = Number(event.target.value);
+                  if (!Number.isFinite(next) || (tightenOnly && next > row.scale)) {
+                    event.currentTarget.value = String(row.scale);
+                    return;
+                  }
+                  onMultiplier(accountId, next);
+                }}
                 onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}
                 className="w-14 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-1.5 py-1 text-center tabular-nums outline-none focus:border-indigo-500"
               />
@@ -2649,9 +2677,10 @@ export const CopyGroupChangePreview = ({ saved, draft, accountLabel }: {
   );
 };
 
-const GroupEditorDialog = ({ group, isNew, accounts, accountLabel, saving, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
+const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, accountLabel, saving, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
   group: CopyGroupConfig;
   isNew: boolean;
+  tightenOnly: boolean;
   accounts: LiveAccount[];
   accountLabel: (accountId: number, role?: CopyTradeAccountRole) => string;
   saving: boolean;
@@ -2668,6 +2697,14 @@ const GroupEditorDialog = ({ group, isNew, accounts, accountLabel, saving, onClo
   const [step, setStep] = useState(0);
   const [errors, setErrors] = useState<string[]>([]);
   const [replacementNotice, setReplacementNotice] = useState<string | null>(null);
+  const baselineFollowers = useMemo(
+    () => new Map(group.followers.map(follower => [follower.accountId, follower])),
+    [group.followers],
+  );
+  const baselineHasFollowerCut = useMemo(
+    () => group.followers.some(follower => (follower.dailyLossCutUsd ?? 0) > 0),
+    [group.followers],
+  );
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !saving) onClose(); };
@@ -2680,26 +2717,36 @@ const GroupEditorDialog = ({ group, isNew, accounts, accountLabel, saving, onClo
   const unavailable = unavailableCopyGroupAccounts(draft, availableAccountIds);
   const unavailableFollowers = draft.followers.filter(follower => unavailable.followerAccountIds.includes(follower.accountId));
   const followerCandidates = accounts.filter(account => account.id !== draft.leaderAccountId);
-  const allFollowersSelected = followerCandidates.length > 0
-    && followerCandidates.every(account => followerById.has(account.id));
+  const followerAdditionBlocked = (accountId: number) => (
+    tightenOnly && baselineHasFollowerCut && !baselineFollowers.has(accountId)
+  );
+  const selectableFollowerCandidates = followerCandidates.filter(account => !followerAdditionBlocked(account.id));
+  const allFollowersSelected = selectableFollowerCandidates.length > 0
+    && selectableFollowerCandidates.every(account => followerById.has(account.id));
   const toggleFollower = (accountId: number) => {
+    if (!followerById.has(accountId) && followerAdditionBlocked(accountId)) return;
     setDraft(current => ({
       ...current,
       followers: current.followers.some(follower => follower.accountId === accountId)
         ? current.followers.filter(follower => follower.accountId !== accountId)
-        : [...current.followers, { accountId, mode: 'on-submit', multiplier: 1 }],
+        : [
+            ...current.followers,
+            structuredClone(baselineFollowers.get(accountId)
+              ?? { accountId, mode: 'on-submit' as const, multiplier: 1 }),
+          ],
     }));
   };
   const toggleAllFollowers = () => {
-    const candidateIds = new Set(followerCandidates.map(account => account.id));
+    const candidateIds = new Set(selectableFollowerCandidates.map(account => account.id));
     setDraft(current => ({
       ...current,
       followers: allFollowersSelected
         ? current.followers.filter(follower => !candidateIds.has(follower.accountId))
         : [
             ...current.followers.filter(follower => !candidateIds.has(follower.accountId)),
-            ...followerCandidates.map(account => current.followers.find(follower => follower.accountId === account.id)
-              ?? { accountId: account.id, mode: 'on-submit' as const, multiplier: 1 }),
+            ...selectableFollowerCandidates.map(account => current.followers.find(follower => follower.accountId === account.id)
+              ?? structuredClone(baselineFollowers.get(account.id)
+                ?? { accountId: account.id, mode: 'on-submit' as const, multiplier: 1 })),
           ],
     }));
   };
@@ -2734,7 +2781,10 @@ const GroupEditorDialog = ({ group, isNew, accounts, accountLabel, saving, onClo
     <div className="fixed inset-0 z-[150] bg-slate-950/35 flex items-center justify-center p-4" onMouseDown={event => { if (event.target === event.currentTarget && !saving) onClose(); }}>
       <section role="dialog" aria-modal="true" aria-label="Nastavení kopírovací skupiny" className="w-full max-w-3xl max-h-[92vh] overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl flex flex-col">
         <header className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[var(--border-subtle)]">
-          <h3 className="text-lg font-black text-[var(--text-primary)]">{isNew ? 'Vytvořit kopírovací skupinu' : 'Upravit kopírovací skupinu'}</h3>
+          <div className="flex min-w-0 items-center gap-2">
+            <h3 className="truncate text-lg font-black text-[var(--text-primary)]">{isNew ? 'Vytvořit kopírovací skupinu' : 'Upravit kopírovací skupinu'}</h3>
+            {tightenOnly ? <span title="dnes jen zpřísnit" className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/[0.07] px-2 py-0.5 text-[10px] font-bold text-amber-600"><Lock size={10} /> jen zpřísnit</span> : null}
+          </div>
           <button onClick={onClose} disabled={saving} className="w-9 h-9 rounded-xl text-[var(--text-secondary)] hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)] flex items-center justify-center disabled:opacity-40"><X size={18} /></button>
         </header>
 
@@ -2750,18 +2800,64 @@ const GroupEditorDialog = ({ group, isNew, accounts, accountLabel, saving, onClo
             return <button
               key={account.id}
               type="button"
+              disabled={tightenOnly && baselineHasFollowerCut && !active}
+              title={tightenOnly && baselineHasFollowerCut && !active ? 'dnes jen zpřísnit' : undefined}
               onClick={() => setDraft(current => changeCopyGroupLeader(current, account.id, availableAccountIds))}
-              className={`flex items-center gap-3 rounded-lg border p-3 text-left ${active ? 'border-indigo-500 bg-indigo-500/[0.06]' : 'border-[var(--border-subtle)] hover:bg-[var(--bg-page)]'}`}
+              className={`flex items-center gap-3 rounded-lg border p-3 text-left disabled:cursor-not-allowed disabled:opacity-45 ${active ? 'border-indigo-500 bg-indigo-500/[0.06]' : 'border-[var(--border-subtle)] hover:bg-[var(--bg-page)]'}`}
             ><span className={`flex h-9 w-9 items-center justify-center rounded-full ${active ? 'bg-indigo-600 text-white' : 'bg-[var(--bg-page)] text-[var(--text-secondary)]'}`}><Crown size={16} /></span><span className="min-w-0"><b className="block truncate text-xs text-[var(--text-primary)]">{account.name}</b><span className="mt-0.5 block truncate text-[10px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span></span>{active ? <Check size={16} className="ml-auto text-indigo-500" /> : null}</button>;
           })}</div></div> : null}
 
-          {step === 2 ? <div className="space-y-4"><div className="flex items-end justify-between gap-3"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Vyber followery</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Vyber účty, které mají kopírovat leadera. Uložené skupiny se mohou překrývat; současně se spustí jen jedna execution skupina.</p></div><div className="flex items-center gap-3"><button type="button" onClick={toggleAllFollowers} disabled={followerCandidates.length === 0} className="text-xs font-black text-indigo-500 hover:underline disabled:cursor-not-allowed disabled:opacity-40">{allFollowersSelected ? 'Zrušit výběr' : 'Označit vše'}</button><span className="text-xs font-black text-indigo-500">Vybráno: {draft.followers.length}</span></div></div>{unavailableFollowers.length > 0 ? <div className="rounded-lg border border-amber-500/35 bg-amber-500/[0.07] p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div className="flex gap-2.5"><AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" /><div><b className="block text-xs text-amber-700">Nedostupné účty v uložené skupině</b><span className="mt-0.5 block text-[11px] text-amber-700/80">Vyber přesnou náhradu z OAuth snapshotu, nebo starý účet odeber. Nic se nepáruje automaticky.</span></div></div><button type="button" disabled={saving} onClick={() => onRemoveUnavailableFollowers(draft, unavailableFollowers.map(follower => follower.accountId))} className="h-9 rounded-md bg-amber-600 px-3 text-xs font-black text-white hover:bg-amber-500 disabled:opacity-50">Odebrat všechny nedostupné</button></div><div className="mt-3 space-y-2">{unavailableFollowers.map(follower => {
+          {step === 2 ? <div className="space-y-4"><div className="flex items-end justify-between gap-3"><div><h4 className="text-xl font-black text-[var(--text-primary)]">Vyber followery</h4><p className="mt-1.5 text-sm text-[var(--text-secondary)]">Vyber účty, které mají kopírovat leadera. Uložené skupiny se mohou překrývat; současně se spustí jen jedna execution skupina.</p></div><div className="flex items-center gap-3"><button type="button" onClick={toggleAllFollowers} disabled={selectableFollowerCandidates.length === 0} title={tightenOnly && baselineHasFollowerCut ? 'dnes jen zpřísnit' : undefined} className="text-xs font-black text-indigo-500 hover:underline disabled:cursor-not-allowed disabled:opacity-40">{allFollowersSelected ? 'Zrušit výběr' : 'Označit vše'}</button><span className="text-xs font-black text-indigo-500">Vybráno: {draft.followers.length}</span></div></div>{unavailableFollowers.length > 0 ? <div className="rounded-lg border border-amber-500/35 bg-amber-500/[0.07] p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div className="flex gap-2.5"><AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" /><div><b className="block text-xs text-amber-700">Nedostupné účty v uložené skupině</b><span className="mt-0.5 block text-[11px] text-amber-700/80">Vyber přesnou náhradu z OAuth snapshotu, nebo starý účet odeber. Nic se nepáruje automaticky.</span></div></div><button type="button" disabled={saving} onClick={() => onRemoveUnavailableFollowers(draft, unavailableFollowers.map(follower => follower.accountId))} className="h-9 rounded-md bg-amber-600 px-3 text-xs font-black text-white hover:bg-amber-500 disabled:opacity-50">Odebrat všechny nedostupné</button></div><div className="mt-3 space-y-2">{unavailableFollowers.map(follower => {
             const replacementCandidates = accounts.filter(account => account.id !== draft.leaderAccountId && !draft.followers.some(item => item.accountId === account.id));
-            return <div key={follower.accountId} className="grid gap-2 rounded-md border border-amber-500/20 bg-[var(--bg-card)] p-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(190px,1fr)_auto] sm:items-center"><span><b className="block text-xs text-[var(--text-primary)]">{accountLabel(follower.accountId, 'follower')}</b><span className="block text-[10px] text-[var(--text-secondary)]">{follower.mode === 'on-fill' ? 'Při vyplnění' : follower.mode === 'off' ? 'Vypnuto' : 'Při zadání'} · násobek {follower.multiplier}</span></span><select aria-label={`Nahradit nedostupný účet ${follower.accountId}`} defaultValue="" onChange={event => { const replacementId = Number(event.target.value); if (!Number.isSafeInteger(replacementId)) return; setDraft(current => replaceCopyGroupFollowerAccount(current, follower.accountId, replacementId)); if (follower.multiplier !== 1 || follower.maxContracts != null) setReplacementNotice(`Náhradní účet ${accountLabel(replacementId, 'follower')} dostal bezpečný násobek 1× bez Max limitu. Původní nastavení účtu ${accountLabel(follower.accountId, 'follower')} se záměrně nepřeneslo; případnou změnu nastav ručně a zkontroluj v přehledu před uložením.`); }} className="h-9 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)]"><option value="">Vyber náhradu…</option>{replacementCandidates.map(account => <option key={account.id} value={account.id}>{account.name} · {account.firm}</option>)}</select><button type="button" onClick={() => setDraft(current => ({ ...current, followers: current.followers.filter(item => item.accountId !== follower.accountId) }))} className="h-9 rounded-md border border-rose-500/25 px-3 text-xs font-bold text-rose-500 hover:bg-rose-500/10">Odebrat</button></div>;
-          })}</div></div> : null}<div className="overflow-hidden rounded-lg border border-[var(--border-subtle)]"><div className="grid grid-cols-[minmax(0,1fr)_130px_84px_64px] gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 py-2 text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]"><span>Účet</span><span>Replikace</span><span className="text-right">Násobek</span><span className="text-right" title="Tvrdý strop expozice; překročení odmítne celý příkaz a odzbrojí copier">Max</span></div>{followerCandidates.map(account => {
-            const follower = followerById.get(account.id);
-            return <div key={account.id} className={`grid grid-cols-[minmax(0,1fr)_130px_84px_64px] items-center gap-3 border-b border-[var(--border-subtle)] px-3 py-2.5 last:border-0 ${follower ? 'bg-indigo-500/[0.035]' : ''}`}><label className="flex min-w-0 cursor-pointer items-center gap-2.5"><input type="checkbox" checked={!!follower} onChange={() => toggleFollower(account.id)} className="accent-indigo-600" /><span className="min-w-0"><b className="block truncate text-xs text-[var(--text-primary)]">{account.name}</b><span className="block truncate text-[10px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span></span></label><select disabled={!follower} value={follower?.mode ?? 'on-submit'} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, mode: event.target.value as ReplicationMode } : item) }))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35"><option value="off">Vypnuto</option><option value="on-submit">Při zadání</option><option value="on-fill">Při vyplnění</option></select><input aria-label={`Násobek ${account.name}`} disabled={!follower} type="number" min="0.01" max="100" step="0.25" value={follower?.multiplier ?? 1} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, multiplier: Number(event.target.value) } : item) }))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-right text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35" /><input aria-label={`Max kontrakty ${account.name}`} title="Tvrdý strop expozice na symbol; překročení odmítne celý příkaz a odzbrojí copier; prázdné = bez limitu" disabled={!follower} type="number" min="1" step="1" placeholder="∞" value={follower?.maxContracts ?? ''} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, maxContracts: event.target.value ? Math.max(1, Math.floor(Number(event.target.value))) : undefined } : item) }))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-right text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35" /></div>;
-          })}</div></div> : null}
+            return <div key={follower.accountId} className="grid gap-2 rounded-md border border-amber-500/20 bg-[var(--bg-card)] p-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(190px,1fr)_auto] sm:items-center"><span><b className="block text-xs text-[var(--text-primary)]">{accountLabel(follower.accountId, 'follower')}</b><span className="block text-[10px] text-[var(--text-secondary)]">{follower.mode === 'on-fill' ? 'Při vyplnění' : follower.mode === 'off' ? 'Vypnuto' : 'Při zadání'} · násobek {follower.multiplier}</span></span><select aria-label={`Nahradit nedostupný účet ${follower.accountId}`} defaultValue="" disabled={tightenOnly && baselineHasFollowerCut} title={tightenOnly && baselineHasFollowerCut ? 'dnes jen zpřísnit' : undefined} onChange={event => { const replacementId = Number(event.target.value); if (!Number.isSafeInteger(replacementId)) return; setDraft(current => replaceCopyGroupFollowerAccount(current, follower.accountId, replacementId)); if (follower.multiplier !== 1 || follower.maxContracts != null) setReplacementNotice(`Náhradní účet ${accountLabel(replacementId, 'follower')} dostal bezpečný násobek 1× bez Max limitu. Původní nastavení účtu ${accountLabel(follower.accountId, 'follower')} se záměrně nepřeneslo; případnou změnu nastav ručně a zkontroluj v přehledu před uložením.`); }} className="h-9 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-45"><option value="">Vyber náhradu…</option>{replacementCandidates.map(account => <option key={account.id} value={account.id}>{account.name} · {account.firm}</option>)}</select><button type="button" onClick={() => setDraft(current => ({ ...current, followers: current.followers.filter(item => item.accountId !== follower.accountId) }))} className="h-9 rounded-md border border-rose-500/25 px-3 text-xs font-bold text-rose-500 hover:bg-rose-500/10">Odebrat</button></div>;
+          })}</div></div> : null}<div className="overflow-hidden rounded-lg border border-[var(--border-subtle)]">
+            <div className="grid grid-cols-[minmax(0,1fr)_130px_84px_64px] gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 py-2 text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">
+              <span>Účet</span><span>Replikace</span><span className="text-right">Násobek</span><span className="text-right" title="Tvrdý strop expozice; překročení odmítne celý příkaz a odzbrojí copier">Max</span>
+            </div>
+            {followerCandidates.map(account => {
+              const follower = followerById.get(account.id);
+              const baselineFollower = baselineFollowers.get(account.id);
+              const addBlocked = !follower && followerAdditionBlocked(account.id);
+              const multiplierMax = tightenOnly && baselineFollower ? baselineFollower.multiplier : 100;
+              const contractsMax = tightenOnly ? baselineFollower?.maxContracts : undefined;
+              return (
+                <div key={account.id} className={`grid grid-cols-[minmax(0,1fr)_130px_84px_64px] items-center gap-3 border-b border-[var(--border-subtle)] px-3 py-2.5 last:border-0 ${follower ? 'bg-indigo-500/[0.035]' : ''}`}>
+                  <label title={addBlocked ? 'dnes jen zpřísnit' : undefined} className={`flex min-w-0 items-center gap-2.5 ${addBlocked ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'}`}>
+                    <input type="checkbox" checked={!!follower} disabled={addBlocked} onChange={() => toggleFollower(account.id)} className="accent-indigo-600" />
+                    <span className="min-w-0"><b className="block truncate text-xs text-[var(--text-primary)]">{account.name}</b><span className="block truncate text-[10px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span></span>
+                  </label>
+                  <select disabled={!follower} value={follower?.mode ?? 'on-submit'} onChange={event => setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, mode: event.target.value as ReplicationMode } : item) }))} className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35"><option value="off">Vypnuto</option><option value="on-submit">Při zadání</option><option value="on-fill">Při vyplnění</option></select>
+                  <input
+                    aria-label={`Násobek ${account.name}`}
+                    disabled={!follower}
+                    title={tightenOnly && baselineFollower ? 'dnes jen zpřísnit' : undefined}
+                    type="number" min="0.01" max={multiplierMax} step="0.25"
+                    value={follower?.multiplier ?? 1}
+                    onChange={event => {
+                      const multiplier = Number(event.target.value);
+                      if (tightenOnly && baselineFollower && multiplier > baselineFollower.multiplier) return;
+                      setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, multiplier } : item) }));
+                    }}
+                    className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-right text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35"
+                  />
+                  <input
+                    aria-label={`Max kontrakty ${account.name}`}
+                    title={tightenOnly && baselineFollower?.maxContracts != null ? 'dnes jen zpřísnit' : 'Tvrdý strop expozice na symbol; překročení odmítne celý příkaz a odzbrojí copier; prázdné = bez limitu'}
+                    disabled={!follower}
+                    type="number" min="1" max={contractsMax} step="1" placeholder="∞"
+                    value={follower?.maxContracts ?? ''}
+                    onChange={event => {
+                      const maxContracts = event.target.value ? Math.max(1, Math.floor(Number(event.target.value))) : undefined;
+                      if (tightenOnly && baselineFollower?.maxContracts != null
+                        && (maxContracts == null || maxContracts > baselineFollower.maxContracts)) return;
+                      setDraft(current => ({ ...current, followers: current.followers.map(item => item.accountId === account.id ? { ...item, maxContracts } : item) }));
+                    }}
+                    className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 text-right text-[11px] font-bold text-[var(--text-primary)] disabled:opacity-35"
+                  />
+                </div>
+              );
+            })}
+          </div></div> : null}
 
           {step === 3 ? (
             <div className="space-y-4">
@@ -2791,8 +2887,8 @@ const GroupEditorDialog = ({ group, isNew, accounts, accountLabel, saving, onClo
               <div className="flex items-start gap-3 rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045] px-4 py-3">
                 <Clock3 size={16} className="mt-0.5 shrink-0 text-indigo-500" />
                 <span>
-                  <b className="block text-xs text-[var(--text-primary)]">Pravidla dne jsou v LIVE přehledu</b>
-                  <span className="mt-0.5 block text-[11px] leading-relaxed text-[var(--text-secondary)]">Denní limity, obchodní okno, cooldown a expiraci LIVE session nastavíš na jedné kartě Pravidla dne. Jejich změna začne platit od příštího zapnutí.</span>
+                  <b className="block text-xs text-[var(--text-primary)]">Pravidla dne jsou v záložce Risk</b>
+                  <span className="mt-0.5 block text-[11px] leading-relaxed text-[var(--text-secondary)]">Denní limity, akce pravidel, obchodní okno, cooldown a expiraci LIVE session nastavíš na jedné kartě. Po prvním ARM v session jdou pravidla už jen zpřísnit.</span>
                 </span>
               </div>
               <div className="flex items-start gap-3 rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045] px-4 py-3">
@@ -2999,7 +3095,7 @@ const GroupTemplatesDialog = ({ templates, accounts, onChange, onClose }: {
                   ))}
                 </div>
                 <p className="mt-3 rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045] px-3 py-2.5 text-[11px] leading-relaxed text-[var(--text-secondary)]">
-                  Pravidla dne nejsou součástí topologické šablony. Upravují se pouze v kartě Pravidla dne, aby je použití šablony tiše nepřepsalo.
+                  Pravidla dne nejsou součástí topologické šablony. Upravují se pouze v záložce Risk, aby je použití šablony tiše nepřepsalo.
                 </p>
               </div>
               {error ? <p className="text-xs font-bold text-rose-500">{error}</p> : null}

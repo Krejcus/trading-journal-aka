@@ -160,6 +160,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-05 (Codex, Risk záložka PWA — fáze B)
+
+LIVE PWA má samostatnou sdílitelnou záložku `?page=live&tab=risk`: kompaktní
+kartu Pravidla dne s akcemi pauza/zámek a tighten-only ovládáním, tabulku osmi
+sloupců Účty a propky s per-follower cut/max/onCut validací a Dashboard souhrn
+se čtyřmi průběhy. Odemknutí dne bylo z PWA odstraněno; aktivní zámek nemá
+zadní vrátka a vysvětluje konec v 00:00 Chicago. Neznámý původ zámku, safety,
+broker P&L i výsledek otevřené kopie se zobrazují neutrálně jako neověřené,
+nikdy jako odhadnutý bezpečný stav.
+
+Risk zápisy posílají celý `update-group` přímo workeru a UI je přijme až z ACK;
+společný mutex serializuje konfiguraci z Dashboardu, Risku i ARM. Generační
+bariéra zahazuje status poll zahájený před/během zápisu, takže starší snapshot
+nemůže ACK přepsat. Čerstvý (< 90 s), bezchybný worker `accountRisk` má pro
+P&L přednost; stale/error/null nebo chybějící účet v existujícím worker feedu
+zůstane neověřený. Broker fallback se používá jen při zcela prázdném Phase-A
+feedu. Po Risk ACK se synchronizuje parent cache a Dashboard už v prvním
+renderu adoptuje runtime skupinu, aby následující ARM neposlal starý draft.
+
+Ověření: 8 cílených souborů / 63 testů zeleně; produkční Vite + PWA build
+zelený. `npx tsc --noEmit -p tsconfig.json` nemá novou chybu a končí pouze na
+známých chybějících Chrome typech a `@crxjs/vite-plugin` v `extension/`.
+Bez push/deploy/broker akce; worker, relay, native companion a notifikace jsou
+záměrně ponechané paralelním fázím A/C.
+
 ### 2026-09-05 (Claude, rollout workera e018c3bb — snímky s reálným deadline)
 
 Mac byl 4. 9. večer restartován (všechny worktree v /private/tmp zanikly,

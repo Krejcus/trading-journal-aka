@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { TradovateAccountDataResult } from '../lib/tradovateAccountDataTypes';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
-import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
+import {
+  tradovateBrokerDailyPnlByAccount,
+  tradovateCopyTradeOrders,
+  tradovateCopyTradeSnapshot,
+} from '../lib/tradovateCopyTradeBridge';
 
 const coverage = { availability: 'available' as const, count: 1, httpStatus: 200 };
 
@@ -41,6 +45,19 @@ describe('Tradovate copy-trade bridge', () => {
     const withoutCurrentDay = structuredClone(data);
     withoutCurrentDay.accounts[0].daily[0].tradeDate = '2026-08-14';
     expect(tradovateCopyTradeSnapshot(withoutCurrentDay, profiles).accounts[0].realizedPnl).toBe(0);
+  });
+
+  it('preserves confirmed zero versus missing current-day P&L for Risk UI', () => {
+    const confirmedZero = structuredClone(data);
+    confirmedZero.accounts[0].daily[0].reportedRealizedPnl = 0;
+    const unavailable = structuredClone(data);
+    unavailable.accounts[0].daily[0].reportedRealizedPnl = null;
+    const withoutCurrentDay = structuredClone(data);
+    withoutCurrentDay.accounts[0].daily[0].tradeDate = '2026-08-14';
+
+    expect(tradovateBrokerDailyPnlByAccount(confirmedZero)).toEqual({ 42: 0 });
+    expect(tradovateBrokerDailyPnlByAccount(unavailable)).toEqual({ 42: null });
+    expect(tradovateBrokerDailyPnlByAccount(withoutCurrentDay)).toEqual({ 42: null });
   });
 
   it('maps broker orders without changing their working state', () => {

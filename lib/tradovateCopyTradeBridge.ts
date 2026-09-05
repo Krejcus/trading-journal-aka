@@ -22,6 +22,21 @@ const dailyRealizedPnl = (
   return day?.reportedRealizedPnl ?? 0;
 };
 
+/**
+ * Risk UI potřebuje rozlišit potvrzenou nulu od chybějícího broker dne.
+ * Obecný LiveAccount model je historicky numerický a neznámou hodnotu v něm
+ * převádí na 0, proto sem posíláme samostatnou nullable mapu.
+ */
+export const tradovateBrokerDailyPnlByAccount = (
+  data: TradovateAccountDataResult,
+): Readonly<Record<string, number | null>> => {
+  const currentTradeDate = data.capturedAt.slice(0, 10);
+  return Object.fromEntries(data.accounts.map(account => [
+    String(account.id),
+    account.daily.find(day => day.tradeDate === currentTradeDate)?.reportedRealizedPnl ?? null,
+  ]));
+};
+
 export function tradovateCopyTradeSnapshot(
   data: TradovateAccountDataResult,
   profiles: TradovateAccountProfile[],

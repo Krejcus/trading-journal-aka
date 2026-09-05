@@ -38,6 +38,10 @@ describe('PWA page deep link', () => {
       page: 'live',
       tab: 'overview',
     });
+    expect(appDeepLinkIntentFromSearch('?page=live&tab=risk')).toEqual({
+      page: 'live',
+      tab: 'risk',
+    });
     expect(appDeepLinkIntentFromSearch('?page=live&tab=broker-controls')).toEqual({
       page: 'live',
       tab: 'overview',

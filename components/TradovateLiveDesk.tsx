@@ -21,6 +21,7 @@ import {
   RefreshCw,
   RotateCcw,
   Settings2,
+  Shield,
   ShieldAlert,
   WalletCards,
   X,
@@ -45,20 +46,30 @@ import {
   type TradovatePreflightResult,
 } from '../services/tradovateOAuthConnection';
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
-import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
+import {
+  tradovateBrokerDailyPnlByAccount,
+  tradovateCopyTradeOrders,
+  tradovateCopyTradeSnapshot,
+} from '../lib/tradovateCopyTradeBridge';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import {
   createCopyTradeAccountLabelResolver,
   formatKnownCopyTradeAccountIds,
 } from '../lib/copyTradeAccountLabels';
 import LiveCopyTradeOverview from './LiveCopyTradeOverview';
+import LiveRiskTab from './LiveRiskTab';
 import MacCompanionSettings from './MacCompanionSettings';
 import TradovateAccountProfileSetup from './TradovateAccountProfileSetup';
 import TradovateAddConnectionModal from './TradovateAddConnectionModal';
 import type { TradovateLiveData } from './useTradovateLiveData';
 import type { TradovateConnectionSummary } from '../lib/tradovateLiveConnectionCache';
 import { tradovateAccountProfileNeedsPlan } from '../lib/tradovateAccountOnboarding';
-import { tradovateLiveTabFromSearch, type TradovateLiveTab } from '../lib/tradovateLiveTab';
+import {
+  tradovateLiveTabFromSearch,
+  tradovateLiveTabHref,
+  type TradovateLiveTab,
+} from '../lib/tradovateLiveTab';
+import { CopierStatusPollFence } from '../lib/copierStatusPollFence';
 import {
   resolveLocalExecutionGroup,
   type LocalCopierAgentStatus,
@@ -67,6 +78,7 @@ import { canUseDirectLocalCopierAgent, createLocalCopierAgentClient } from '../s
 import {
   type CopyGroupConfig,
   type LiveCopyTradingAdapter,
+  type LiveCopyTradingCommand,
 } from '../services/liveCopyTrading';
 
 interface TradovateLiveDeskProps {
@@ -86,6 +98,17 @@ const signedMoney = (value: number) => `${value > 0 ? '+' : ''}${money.format(va
 const optionalMoney = (value: number | null) => value == null ? 'nedostupné' : money.format(value);
 const pnlColor = (value: number | null) => value == null ? 'text-[var(--text-secondary)]' : value > 0 ? 'text-emerald-500' : value < 0 ? 'text-rose-500' : 'text-[var(--text-secondary)]';
 const TRADOVATE_OFFICIAL_LOGO = 'https://www.tradovate.com/favicon-48.png';
+// Přežije i odmountování LIVE stránky během čekajícího relay requestu. Žádný
+// další full-group zápis nesmí před potvrzením prvního vytvořit lost update.
+const copyGroupStatusPollFence = new CopierStatusPollFence();
+const COPY_GROUP_CONFIG_COMMANDS = new Set<LiveCopyTradingCommand['type']>([
+  'create-group',
+  'update-group',
+  'delete-group',
+  'set-group-enabled',
+  'set-replication',
+  'set-multiplier',
+]);
 
 const TradovateCircleLogo = () => (
   <span className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white shadow-sm" title="Tradovate">
@@ -149,6 +172,15 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // Než doběhne první dotaz, `agentStatus` je null a armovaný copier by se
   // v přepínači ukázal jako OFF. Do té doby se stav zobrazuje jako neznámý.
   const [agentStatusResolved, setAgentStatusResolved] = useState(false);
+  const configMutationPendingRef = useRef(false);
+  const [configMutationPending, setConfigMutationPending] = useState(false);
+  const navigateToTab = useCallback((nextTab: TradovateLiveTab) => {
+    if (configMutationPending || copyGroupStatusPollFence.inFlight) return;
+    setTab(nextTab);
+    const href = tradovateLiveTabHref(window.location.href, nextTab);
+    const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (href !== current) window.history.replaceState(null, '', href);
+  }, [configMutationPending]);
   // Dev háček (konvence at:dev:*): `localStorage['at:dev:copier-ui-demo']='1'`
   // podstrčí běžící cooldown a dvě stuck operace, aby šly stavové UI prvky
   // vidět bez čekání na reálnou situaci. Jen v dev buildu, prod ho neobsahuje.
@@ -189,12 +221,14 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
 
   useEffect(() => {
     if (!requestedTab) return;
+    if (configMutationPending || copyGroupStatusPollFence.inFlight) return;
     setTab(requestedTab);
     onRequestedTabHandled?.();
-  }, [onRequestedTabHandled, requestedTab]);
+  }, [configMutationPending, onRequestedTabHandled, requestedTab]);
 
   useEffect(() => {
     if (!macCompanionPairingIntent) return;
+    if (configMutationPending || copyGroupStatusPollFence.inFlight) return;
 
     setTab('connections');
     let secondFrame = 0;
@@ -215,7 +249,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       window.cancelAnimationFrame(firstFrame);
       if (secondFrame) window.cancelAnimationFrame(secondFrame);
     };
-  }, [macCompanionPairingIntent, onMacCompanionPairingIntentHandled]);
+  }, [configMutationPending, macCompanionPairingIntent, onMacCompanionPairingIntentHandled]);
   // Nativní window.confirm ve WKWebView (iOS shell) tiše vrací false;
   // potvrzení execution akcí proto kreslí aplikace sama.
   const [confirmState, setConfirmState] = useState<(ConfirmActionOptions & { resolve: (confirmed: boolean) => void }) | null>(null);
@@ -247,6 +281,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     () => live.data ? tradovateCopyTradeSnapshot(live.data, live.profiles) : null,
     [live.data, live.profiles],
   );
+  const brokerDailyPnlByAccount = useMemo<Readonly<Record<string, number | null>>>(() => {
+    if (!live.data) return {};
+    return tradovateBrokerDailyPnlByAccount(live.data);
+  }, [live.data]);
   const accountLabel = useMemo(() => createCopyTradeAccountLabelResolver({
     accountsById: new Map(copyTradeSnapshot?.accounts.map(account => [account.id, account]) ?? []),
     profilesById: new Map(live.profiles.flatMap(profile => {
@@ -315,6 +353,30 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     setAgentStatus(result.status);
     return result;
   }, [agentClient, agentTransport, relayConnectionId]);
+  const acceptConfigAck = useCallback((status: LocalCopierAgentStatus) => {
+    setAgentStatus(status);
+    // Parent cache smí po konfiguračním zápisu převzít jen potvrzený worker
+    // snapshot. Jinak by následný ARM mohl sáhnout po starší same-id skupině.
+    setCopyGroups(current => {
+      const match = resolveLocalExecutionGroup(current, status.group);
+      if (!match) return current;
+      return current.map(group => group.id === match.id ? status.group : group);
+    });
+  }, []);
+  const runConfigMutation = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
+    if (configMutationPendingRef.current || !copyGroupStatusPollFence.beginMutation()) {
+      throw new Error('Jiná změna konfigurace skupiny čeká na potvrzení workeru.');
+    }
+    configMutationPendingRef.current = true;
+    setConfigMutationPending(true);
+    try {
+      return await operation();
+    } finally {
+      configMutationPendingRef.current = false;
+      copyGroupStatusPollFence.endMutation();
+      setConfigMutationPending(false);
+    }
+  }, []);
   const armLiveGroup = useCallback(async (targetGroup: CopyGroupConfig) => {
     if (!targetGroup.enabled) {
       targetGroup = { ...targetGroup, enabled: true, localOnly: true };
@@ -337,12 +399,15 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       ...targetGroup.followers.map(follower => follower.accountId),
     ]);
     const exclusions = accountEligibilityExclusions.filter(entry => memberIds.has(entry.accountId));
-    setAgentStatus((await executeAgent({
-      type: 'arm-live',
-      group: targetGroup,
-      accountEligibilityExclusions: exclusions,
-    })).status);
-  }, [accountEligibilityExclusions, effectiveAccountEligibility, executeAgent]);
+    await runConfigMutation(async () => {
+      const result = await executeAgent({
+        type: 'arm-live',
+        group: targetGroup,
+        accountEligibilityExclusions: exclusions,
+      });
+      acceptConfigAck(result.status);
+    });
+  }, [acceptConfigAck, accountEligibilityExclusions, effectiveAccountEligibility, executeAgent, runConfigMutation]);
   const commandAdapter = useMemo<LiveCopyTradingAdapter | undefined>(() => {
     if (!executionGroup) return undefined;
     return {
@@ -353,11 +418,35 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         if (groupId !== executionGroup.id) {
           throw new Error('Příkaz nemíří na skupinu připojenou k lokálnímu execution agentovi');
         }
-        const payload = await executeAgent({ type: 'copy-command', command });
+        const execute = async () => {
+          const payload = await executeAgent({ type: 'copy-command', command });
+          // Lokální loopback na rozdíl od relay větve stav sám nenastavuje.
+          // Před uvolněním zámku proto vždy přijmeme workerův ACK snapshot.
+          acceptConfigAck(payload.status);
+          return payload;
+        };
+        const payload = COPY_GROUP_CONFIG_COMMANDS.has(command.type)
+          ? await runConfigMutation(execute)
+          : await execute();
         return payload.result;
       },
     };
-  }, [executeAgent, executionGroup]);
+  }, [acceptConfigAck, executeAgent, executionGroup, runConfigMutation]);
+  const saveRiskGroup = useCallback(async (group: CopyGroupConfig) => {
+    if (!agentStatus) throw new Error('Worker není dostupný pro uložení Risk nastavení.');
+    if (group.id !== agentStatus.group.id) {
+      throw new Error('Risk nastavení nemíří na skupinu připojenou k execution workeru.');
+    }
+    await runConfigMutation(async () => {
+      const result = await executeAgent({
+        type: 'copy-command',
+        command: { type: 'update-group', group },
+      });
+      // Relay větev status nastavuje už uvnitř executeAgent, lokální loopback ne.
+      // Vždy proto použijeme autoritativní odpověď a nic neměníme před worker ACK.
+      acceptConfigAck(result.status);
+    });
+  }, [acceptConfigAck, agentStatus, executeAgent, runConfigMutation]);
 
   // Přímý loopback agent zkoušíme i z produkčního HTTPS webu: na Macu
   // s běžícím workerem to sráží ARM/Flatten z relay sekund na stovky ms
@@ -369,15 +458,19 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     let stopped = false;
     let timer: number | undefined;
     const poll = async () => {
+      const pollGeneration = copyGroupStatusPollFence.beginPoll();
       if (canUseDirectLocalCopierAgent(window.location) || directAgentProbe.current !== 'unavailable') {
         try {
           const next = await agentClient.status();
-          if (!stopped) {
+          if (!stopped && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
             directAgentProbe.current = 'available';
             setAgentStatus(next);
             setAgentStatusResolved(true);
             setAgentTransport('local');
             setRelayConnectionId(next.device?.connectionId ?? next.devices?.[0]?.connectionId ?? null);
+            timer = window.setTimeout(poll, 2_000);
+          }
+          if (!stopped && !copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
             timer = window.setTimeout(poll, 2_000);
           }
           return;
@@ -395,16 +488,22 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
           remote: await loadTradovateCopierRelayStatus(connectionId).catch(() => null),
         })));
         const active = candidates.find(candidate => candidate.remote?.connected) ?? null;
-        if (!stopped) {
+        if (!stopped && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
           setAgentStatus(active?.remote?.status ?? null);
           setAgentTransport(active ? 'relay' : null);
           setRelayConnectionId(active?.connectionId ?? null);
         }
       } catch {
-        if (!stopped) { setAgentStatus(null); setAgentTransport(null); setRelayConnectionId(null); }
+        if (!stopped && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
+          setAgentStatus(null);
+          setAgentTransport(null);
+          setRelayConnectionId(null);
+        }
       } finally {
         if (!stopped) {
-          setAgentStatusResolved(true);
+          if (copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
+            setAgentStatusResolved(true);
+          }
           timer = window.setTimeout(poll, 2_000);
         }
       }
@@ -460,6 +559,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const tabs: Array<{ id: TradovateLiveTab; label: string; icon: React.ElementType }> = [
     { id: 'connections', label: 'Connections', icon: Link2 },
     { id: 'overview', label: 'Live Dashboard', icon: Gauge },
+    { id: 'risk', label: 'Risk', icon: Shield },
     { id: 'accounts', label: 'Účty', icon: WalletCards },
     { id: 'orders', label: 'Pozice a příkazy', icon: ListRestart },
     { id: 'events', label: 'Události', icon: Clock3 },
@@ -473,7 +573,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       <nav className="flex items-center gap-1 overflow-x-auto border-b border-[var(--border-subtle)] no-scrollbar" aria-label="LIVE navigace">
         {tabs.map(item => {
           const Icon = item.icon;
-          return <button key={item.id} type="button" onClick={() => setTab(item.id)} className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-3.5 py-2.5 text-xs font-bold transition-colors ${tab === item.id ? 'border-indigo-500 text-indigo-500' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}><Icon size={14} />{item.label}</button>;
+          const blockedByConfigMutation = (configMutationPending || copyGroupStatusPollFence.inFlight) && item.id !== tab;
+          return <button key={item.id} type="button" disabled={blockedByConfigMutation} title={blockedByConfigMutation ? 'Čekám na potvrzení změny konfigurace workerem' : undefined} onClick={() => navigateToTab(item.id)} className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-3.5 py-2.5 text-xs font-bold transition-colors disabled:cursor-wait disabled:opacity-40 ${tab === item.id ? 'border-indigo-500 text-indigo-500' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}><Icon size={14} />{item.label}</button>;
         })}
       </nav>
 
@@ -596,15 +697,16 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
               copierArmed={copierUiDemo ? false : agentStatus?.controller.armed === true}
               copierStatusPending={!copierUiDemo && (!agentStatusResolved || live.dataEnrichmentPending)}
               dailyPnlPending={live.dataEnrichmentPending}
+              brokerDailyPnlByAccount={brokerDailyPnlByAccount}
               dailyStats={agentStatus?.controller.dailyStats ?? null}
               copierObservingOnly={!copierUiDemo && agentStatus?.controller.armed === true && agentStatus.controller.shadowMode === true}
               copierKillSwitch={agentStatus?.controller.killSwitch === true}
               dayLockUntil={agentStatus?.controller.dayLockUntil ?? 0}
-              dayLockReason={agentStatus?.controller.dayLockReason ?? null}
-              dayLockTrigger={agentStatus?.controller.dayLockTrigger ?? null}
-              dayLockAt={agentStatus?.controller.dayLockAt ?? null}
-              armedAt={agentStatus?.controller.armedAt ?? 0}
-              armExpiresAt={agentStatus?.controller.armExpiresAt ?? 0}
+              pause={agentStatus?.controller.pause ?? null}
+              sessionArmedAt={agentStatus?.controller.sessionArmedAt ?? 0}
+              followerCuts={agentStatus?.controller.followerCuts ?? []}
+              accountRisk={agentStatus?.controller.accountRisk ?? []}
+              onOpenRisk={() => navigateToTab('risk')}
               cooldownUntil={copierUiDemo ? copierUiDemo.cooldownUntil : agentStatus?.controller.entryCooldownUntil ?? 0}
               stuckOperations={copierUiDemo ? copierUiDemo.stuckOperations : agentStatus?.controller.stuckOperations ?? []}
               accountEligibility={effectiveAccountEligibility}
@@ -628,10 +730,6 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
               onArmLive={executionGroup ? async () => armLiveGroup(executionGroup) : undefined}
               onDisarm={async () => setAgentStatus((await executeAgent({ type: 'disarm' })).status)}
               onEmergencyStop={async () => setAgentStatus((await executeAgent({ type: 'kill-switch' })).status)}
-              onUnlockDay={async reason => {
-                const result = await executeAgent({ type: 'unlock-day', reason });
-                setAgentStatus(result.status);
-              }}
               onDayLock={async () => {
                 if (!(await confirmAction({
                   title: 'Zamknout den',
@@ -644,6 +742,18 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
                   reason: 'Ruční zámek dne z AlphaTrade LIVE UI',
                 })).status);
               }}
+            />
+          ) : null}
+          {tab === 'risk' && copyTradeSnapshot ? (
+            <LiveRiskTab
+              snapshot={copyTradeSnapshot}
+              accountProfiles={live.profiles}
+              group={agentStatus?.group ?? null}
+              status={agentStatus?.controller ?? null}
+              brokerDailyPnlByAccount={brokerDailyPnlByAccount}
+              brokerDailyPnlPending={live.dataEnrichmentPending}
+              disabled={configMutationPending || copyGroupStatusPollFence.inFlight || !agentStatusResolved || agentStatus == null || agentTransport == null}
+              onSaveGroup={agentStatus ? saveRiskGroup : undefined}
             />
           ) : null}
           {tab === 'accounts' ? <Accounts data={live.data} profiles={live.profiles} onAccount={setSelectedAccountId} /> : null}
