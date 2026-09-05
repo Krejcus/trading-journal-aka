@@ -191,6 +191,12 @@ denní souhrn je jeden dvousloupcový řádek (`compact`), panel Live P&L & API
 Usage se na telefonu neukazuje a banner snímků je až pod skupinami. Kritické
 prvky (StuckOperations, DayLockBanner, DisarmPanel) zůstávají nahoře.
 
+Ladění bez telefonu: dev háček `localStorage['at:dev:live-copy-fixture']='1'`
+(`lib/devLiveCopyFixture.ts`, jen `import.meta.env.DEV`) podstrčí do LIVE
+Dashboardu ukázkovou skupinu (leader, 3 followeři, pozice, 3 working příkazy,
+reject/DLL/BREACHED), takže jde vizuál ladit v Browser panelu na šířce
+iPhonu přes `npm run dev:live` + `?native=1`. Prod build větev neobsahuje.
+
 Ověření: `tsc` bez chyb mimo předexistující `extension/`; vitest 232 souborů /
 1929 testů + nové `nativeShellTabs.test.ts`, `liveCopyCompactRender.test.ts`
 a rozšířený `nativeShellBridge.test.ts`; iOS Debug build z CLI, čistá

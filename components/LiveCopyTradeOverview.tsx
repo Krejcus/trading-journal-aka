@@ -76,6 +76,7 @@ const DEFAULT_REDACTION: RedactionSettings = { visibleStart: 4, visibleEnd: 4 };
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
 const plain = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+const moneyWhole = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
 /** Režim replikace follower účtu — hodnoty přebírají chování Tradecopie. */
 export type ReplicationMode = CopyReplicationMode;
@@ -1975,7 +1976,7 @@ const CompactStat = ({ label, value, className = 'text-[var(--text-primary)]' }:
 }) => (
   <div className="min-w-0 px-3 py-2.5">
     <div className="text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">{label}</div>
-    <div className={`mt-0.5 truncate text-sm font-black tabular-nums ${className}`}>{value}</div>
+    <div className={`mt-0.5 truncate text-[13px] font-black tabular-nums ${className}`}>{value}</div>
   </div>
 );
 
@@ -2007,7 +2008,7 @@ const CompactAccountRow = ({ row, live, eligibility, orders, dailyPnlPending, bu
       >
         <span className="flex min-w-0 items-center gap-2">
           <span className={`h-2 w-2 shrink-0 rounded-full ${live ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-          <span className={`truncate text-sm font-bold ${live ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
+          <span className={`min-w-0 break-all text-[13px] font-bold leading-tight tracking-tight ${live ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
             {redactAccountName(row.name, redactNames, redaction)}
           </span>
           {row.isLeader ? (
@@ -2175,7 +2176,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
       </header>
 
       <div className="grid grid-cols-3 divide-x divide-[var(--border-subtle)] border-y border-[var(--border-subtle)] bg-[var(--bg-page)]/60">
-        <CompactStat label="Kapitál" value={money.format(capital)} />
+        <CompactStat label="Kapitál" value={moneyWhole.format(capital)} />
         <CompactStat
           label="Denní P&L"
           value={dailyPnlPending ? '—' : money.format(daily)}

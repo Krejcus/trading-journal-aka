@@ -109,7 +109,7 @@ describe('LIVE kompaktní karty (telefon)', () => {
 
     // Souhrn skupiny.
     expect(markup).toContain('Kapitál');
-    expect(markup).toContain('$100,000.00');
+    expect(markup).toContain('$100,000');
     expect(markup).toContain('-$225.00');
     expect(markup).toContain('$40.00');
 
