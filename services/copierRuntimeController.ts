@@ -181,6 +181,14 @@ export interface CopierControllerStatus {
   dayLockAt?: number | null;
   dayLockSnoozedRules?: DayLockTrigger[];
   dayUnlock?: { at: number; reason: string } | null;
+  /** Běžící pauza pravidla dne (blokuje jen vstupy leadera); null/undefined = žádná. */
+  pause?: { until: number; rule: CopierDailyRule; at: number } | null;
+  /** První ostrý ARM v aktuální session; > 0 = pravidla i limity jdou jen zpřísnit. */
+  sessionArmedAt?: number;
+  /** Followeři vyřazení z kopírování do konce session (limit účtu). */
+  followerCuts?: CopierFollowerCut[];
+  /** Poslední broker risk snapshot per účet (vč. limitu propky). */
+  accountRisk?: CopierAccountRiskSnapshot[];
   /**
    * Kdy aktuální ARM vyprší (epoch ms); 0 = neARMováno. Klient z něj
    * plánuje deterministickou lokální notifikaci „ARM vypršel".
@@ -212,6 +220,32 @@ export interface CopierControllerStatus {
     unpricedSymbols: string[];
     recentClosedTrades?: CopierClosedTrade[];
   } | null;
+}
+
+export interface CopierFollowerCut {
+  accountId: number;
+  at: number;
+  /** Konec broker session, do kdy je účet mimo kopírování. */
+  until: number;
+  realizedPnlUsd: number;
+  cutUsd: number;
+  source: 'broker' | 'ledger';
+  /** null = kopie nebyla otevřená / `let-run`; číslo = čas zavření; false = zavření selhalo (fail-closed). */
+  closed: number | null | false;
+}
+
+export interface CopierAccountRiskSnapshot {
+  accountId: number;
+  /** Čas broker dotazu; snapshot starší než 90 s je „neověřeno". */
+  verifiedAt: number;
+  realizedPnlUsd: number | null;
+  netLiq: number | null;
+  minNetLiq: number | null;
+  dailyLossAutoLiq: number | null;
+  trailingMaxDrawdown: number | null;
+  /** dailyLossAutoLiq ?? (netLiq - minNetLiq); null = neznámý. */
+  propLimitUsd: number | null;
+  error?: string | null;
 }
 
 export interface CopierAccountEligibilityExclusion {

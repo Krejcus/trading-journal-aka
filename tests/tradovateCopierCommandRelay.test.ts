@@ -1,3 +1,4 @@
+import { DEFAULT_COPY_GROUP_SAFETY } from '../services/liveCopyTrading';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 import type { LocalCopierAgentCommand } from '../lib/localCopierAgentProtocol';
@@ -283,6 +284,7 @@ describe('ARM přes relay nese konfiguraci skupiny', () => {
     leaderAccountId: 62364058,
     followers: [{ accountId: 62364057, mode: 'on-submit' as const, multiplier: 2 }],
     safety: {
+      dayRuleActions: DEFAULT_COPY_GROUP_SAFETY.dayRuleActions,
       dailyLossLimitUsd: 500,
       dailyMaxLosingTrades: 0,
       dailyMaxTrades: 10,

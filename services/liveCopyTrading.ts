@@ -11,7 +11,17 @@ export interface CopyFollowerConfig {
    * Multiplier škáluje, strop řeže. Bez hodnoty se nic neomezuje.
    */
   maxContracts?: number;
+  /**
+   * „Vypnout při": realizovaná denní ztráta účtu v USD (vč. poplatků, z broker
+   * snapshotu), při které účet vypadne z kopírování do konce session.
+   * 0/undefined = vypnuto. Skupina se nezamyká, ostatní followeři jedou dál.
+   */
+  dailyLossCutUsd?: number;
+  /** Co s otevřenou kopií účtu při vyřazení. Default `close-copy`. */
+  onCut?: CopyFollowerCutAction;
 }
+
+export type CopyFollowerCutAction = 'close-copy' | 'let-run';
 
 /**
  * Co udělat s otevřenými kopiemi, když copier přestane kopírovat —
@@ -35,6 +45,24 @@ export interface CopyGroupTradingWindow {
   from: string;
   to: string;
   timeZone: string;
+}
+
+/**
+ * Akce pravidla dne: pauza vyprší sama a blokuje jen nové vstupy leadera
+ * (exity se kopírují), zámek dne drží do konce broker session a čeká na flat.
+ * Viz docs/RISK_TAB_SPEC_20260905.md §1–§2.
+ */
+export type CopierRuleAction =
+  | { kind: 'pause'; minutes: number }
+  | { kind: 'lock' };
+
+export interface CopyGroupDayRuleActions {
+  /** `beforeLimit` se spouští při `losingTrades === max - 1` (jen pro max >= 2). */
+  losingTrades: { beforeLimit: CopierRuleAction | null; atLimit: CopierRuleAction };
+  /** `at80Percent` při realizované ztrátě <= -0.8 × limit. */
+  dailyLoss: { at80Percent: CopierRuleAction | null; atLimit: CopierRuleAction };
+  maxTrades: { atLimit: CopierRuleAction };
+  windowEnd: { atEnd: CopierRuleAction };
 }
 
 export interface CopyGroupSafetySettings {
@@ -67,6 +95,62 @@ export interface CopyGroupSafetySettings {
   dailyMaxTrades: number;
   /** Denní vstupní okno. Přes půlnoc se záměrně nepodporuje. */
   tradingWindow: CopyGroupTradingWindow;
+  /** Akce jednotlivých pravidel dne (pauza / zámek). Staré skupiny dostanou DEFAULT. */
+  dayRuleActions: CopyGroupDayRuleActions;
+}
+
+export const DEFAULT_DAY_RULE_ACTIONS: CopyGroupDayRuleActions = {
+  losingTrades: { beforeLimit: { kind: 'pause', minutes: 20 }, atLimit: { kind: 'lock' } },
+  dailyLoss: { at80Percent: { kind: 'pause', minutes: 30 }, atLimit: { kind: 'lock' } },
+  maxTrades: { atLimit: { kind: 'pause', minutes: 30 } },
+  windowEnd: { atEnd: { kind: 'lock' } },
+};
+
+export const cloneDayRuleActions = (actions: CopyGroupDayRuleActions): CopyGroupDayRuleActions => ({
+  losingTrades: { beforeLimit: actions.losingTrades.beforeLimit ? { ...actions.losingTrades.beforeLimit } : null, atLimit: { ...actions.losingTrades.atLimit } },
+  dailyLoss: { at80Percent: actions.dailyLoss.at80Percent ? { ...actions.dailyLoss.at80Percent } : null, atLimit: { ...actions.dailyLoss.atLimit } },
+  maxTrades: { atLimit: { ...actions.maxTrades.atLimit } },
+  windowEnd: { atEnd: { ...actions.windowEnd.atEnd } },
+});
+
+const sanitizeRuleAction = (value: unknown, allowNull: boolean): CopierRuleAction | null | undefined => {
+  if (value == null) return allowNull ? null : undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Partial<{ kind: string; minutes: number }>;
+  if (raw.kind === 'lock') return { kind: 'lock' };
+  if (raw.kind === 'pause'
+    && typeof raw.minutes === 'number'
+    && Number.isSafeInteger(raw.minutes)
+    && raw.minutes >= 1
+    && raw.minutes <= 720) return { kind: 'pause', minutes: raw.minutes };
+  return undefined;
+};
+
+/** Chybějící pole = DEFAULT (staré skupiny), neplatná hodnota = null (fail-closed). */
+export function sanitizeDayRuleActions(value: unknown): CopyGroupDayRuleActions | null {
+  if (value == null) return cloneDayRuleActions(DEFAULT_DAY_RULE_ACTIONS);
+  if (typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Partial<Record<keyof CopyGroupDayRuleActions, Record<string, unknown>>>;
+  const pick = (group: Record<string, unknown> | undefined, key: string, fallback: CopierRuleAction | null, allowNull: boolean) => {
+    if (group === undefined) return fallback;
+    if (typeof group !== 'object' || group === null || Array.isArray(group)) return undefined;
+    return key in group ? sanitizeRuleAction(group[key], allowNull) : fallback;
+  };
+  const d = DEFAULT_DAY_RULE_ACTIONS;
+  const losingBefore = pick(raw.losingTrades, 'beforeLimit', d.losingTrades.beforeLimit, true);
+  const losingAt = pick(raw.losingTrades, 'atLimit', d.losingTrades.atLimit, false);
+  const loss80 = pick(raw.dailyLoss, 'at80Percent', d.dailyLoss.at80Percent, true);
+  const lossAt = pick(raw.dailyLoss, 'atLimit', d.dailyLoss.atLimit, false);
+  const tradesAt = pick(raw.maxTrades, 'atLimit', d.maxTrades.atLimit, false);
+  const windowEnd = pick(raw.windowEnd, 'atEnd', d.windowEnd.atEnd, false);
+  if (losingBefore === undefined || loss80 === undefined
+    || !losingAt || !lossAt || !tradesAt || !windowEnd) return null;
+  return {
+    losingTrades: { beforeLimit: losingBefore, atLimit: losingAt },
+    dailyLoss: { at80Percent: loss80, atLimit: lossAt },
+    maxTrades: { atLimit: tradesAt },
+    windowEnd: { atEnd: windowEnd },
+  };
 }
 
 export const DEFAULT_COPY_GROUP_SAFETY: CopyGroupSafetySettings = {
@@ -89,6 +173,7 @@ export const DEFAULT_COPY_GROUP_SAFETY: CopyGroupSafetySettings = {
     to: '22:00',
     timeZone: 'Europe/Prague',
   },
+  dayRuleActions: cloneDayRuleActions(DEFAULT_DAY_RULE_ACTIONS),
 };
 
 export interface CopyGroupConfig {
@@ -154,6 +239,8 @@ export type CopyGroupValidationIssueCode =
   | 'duplicate-follower'
   | 'invalid-multiplier'
   | 'invalid-max-contracts'
+  | 'invalid-daily-loss-cut'
+  | 'invalid-cut-action'
   | 'invalid-safety';
 
 export interface CopyGroupValidationIssue {
@@ -336,6 +423,12 @@ export function validateCopyGroup(
       && (!Number.isSafeInteger(follower.maxContracts) || follower.maxContracts < 1)) {
       add({ code: 'invalid-max-contracts', accountId: follower.accountId, message: 'Max kontrakty musí být celé číslo alespoň 1.' });
     }
+    if (follower.dailyLossCutUsd != null && follower.dailyLossCutUsd !== 0 && !validDailyLossCut(follower.dailyLossCutUsd)) {
+      add({ code: 'invalid-daily-loss-cut', accountId: follower.accountId, message: '„Vypnout při" musí být od 0,01 do 1 000 000 USD.' });
+    }
+    if (follower.onCut != null && !validFollowerCutAction(follower.onCut)) {
+      add({ code: 'invalid-cut-action', accountId: follower.accountId, message: 'Akce při vyřazení musí být „zavřít kopii" nebo „nechat dojet".' });
+    }
   }
   if (sanitizeSafety(group.safety) == null) {
     add({ code: 'invalid-safety', message: 'Pravidla dne obsahují neplatnou hodnotu.' });
@@ -434,11 +527,17 @@ export function sanitizeCopyGroups(value: unknown): CopyGroupConfig[] | null {
       if (typeof follower.multiplier !== 'number') return null;
       const maxContracts = follower.maxContracts;
       if (maxContracts != null && (!Number.isSafeInteger(maxContracts) || maxContracts < 1)) return null;
+      const dailyLossCutUsd = follower.dailyLossCutUsd;
+      if (dailyLossCutUsd != null && dailyLossCutUsd !== 0 && !validDailyLossCut(dailyLossCutUsd)) return null;
+      const onCut = follower.onCut;
+      if (onCut != null && !validFollowerCutAction(onCut)) return null;
       followers.push({
         accountId: follower.accountId,
         mode: follower.mode,
         multiplier: normalizeMultiplier(follower.multiplier),
         ...(maxContracts != null ? { maxContracts } : {}),
+        ...(dailyLossCutUsd != null && dailyLossCutUsd !== 0 ? { dailyLossCutUsd: Math.round(dailyLossCutUsd * 100) / 100 } : {}),
+        ...(onCut != null ? { onCut } : {}),
       });
     }
     const safety = sanitizeSafety(raw.safety);
@@ -483,10 +582,13 @@ export function sanitizeCopyGroupSafety(value: unknown): CopyGroupSafetySettings
     return {
       ...DEFAULT_COPY_GROUP_SAFETY,
       tradingWindow: { ...DEFAULT_COPY_GROUP_SAFETY.tradingWindow },
+      dayRuleActions: cloneDayRuleActions(DEFAULT_DAY_RULE_ACTIONS),
     };
   }
   if (typeof value !== 'object' || Array.isArray(value)) return null;
   const raw = value as Partial<CopyGroupSafetySettings>;
+  const dayRuleActions = sanitizeDayRuleActions(raw.dayRuleActions);
+  if (!dayRuleActions) return null;
   const dailyMaxTrades = raw.dailyMaxTrades == null
     ? DEFAULT_COPY_GROUP_SAFETY.dailyMaxTrades
     : raw.dailyMaxTrades;
@@ -548,8 +650,17 @@ export function sanitizeCopyGroupSafety(value: unknown): CopyGroupSafetySettings
         : DEFAULT_COPY_GROUP_SAFETY.dailyMaxLosingTrades,
     dailyMaxTrades,
     tradingWindow,
+    dayRuleActions,
   };
 }
+
+/** Sdílená validace follower limitů (UI, store, relay, worker). */
+export const validDailyLossCut = (value: unknown): value is number => (
+  typeof value === 'number' && Number.isFinite(value) && value >= 0.01 && value <= 1_000_000
+);
+export const validFollowerCutAction = (value: unknown): value is CopyFollowerCutAction => (
+  value === 'close-copy' || value === 'let-run'
+);
 
 function sanitizeSafety(value: unknown): CopyGroupSafetySettings | null {
   return sanitizeCopyGroupSafety(value);
