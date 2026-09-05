@@ -121,8 +121,8 @@ const weakerCases: WeakerCase[] = [
   },
   {
     name: 'akce pravidla pause odebraná na null',
-    field: 'safety.dayRuleActions.dailyLoss.at80Percent',
-    mutate: group => { group.safety!.dayRuleActions.dailyLoss.at80Percent = null; },
+    field: 'safety.dayRuleActions.losingTrades.beforeLimit',
+    mutate: group => { group.safety!.dayRuleActions.losingTrades.beforeLimit = null; },
   },
   {
     name: 'zkrácená pauza pravidla',

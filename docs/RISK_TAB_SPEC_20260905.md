@@ -48,7 +48,7 @@ export interface CopyGroupDayRuleActions {
 }
 // CopyGroupSafetySettings.dayRuleActions: CopyGroupDayRuleActions
 // DEFAULT: losingTrades { beforeLimit: pause 20, atLimit: lock },
-//          dailyLoss    { at80Percent: pause 30, atLimit: lock },
+//          dailyLoss    { at80Percent: null, atLimit: lock },   // 80 % = jen varování, UI nabízí jednu akci
 //          maxTrades    { atLimit: pause 30 }, windowEnd { atEnd: lock }.
 // Staré uložené skupiny bez pole dostanou DEFAULT (sanitizer). Neplatná hodnota = null (fail-closed).
 
@@ -60,6 +60,16 @@ export interface CopyFollowerConfig {
   onCut?: 'close-copy' | 'let-run';
 }
 ```
+
+`tradingWindow.additional?: Array<{ from; to }>` (max 2 další okna, celkem 3;
+seřazená, bez překryvu; sanitizer fail-closed). Inside = uvnitř kteréhokoli
+okna; mezera mezi okny jen blokuje vstupy (není konec dne); varování před
+koncem a akce `windowEnd` se řídí koncem POSLEDNÍHO okna. Tighten-only: nové
+okno nebo okno mimo původní pokrytí je zmírnění.
+
+UI popisky (2026-09-05): „Denní ztráta" (jedna akce), „Cooldown po obchodu",
+„Konec session" (dřív Expirace LIVE; select „Zavřít followery / Zavřít i
+leadera", vypnuto = nechat otevřené), „Max ztráta" u účtů.
 
 `beforeLimit` u ztrátových obchodů platí jen pro `dailyMaxLosingTrades >= 2`
 (spouští se při `losingTrades === max - 1`). `at80Percent` při

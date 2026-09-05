@@ -1,4 +1,4 @@
-import type { CopyGroupTradingWindow, DayLockTrigger } from './liveCopyTrading';
+import { tradingWindowSlotsOf, type CopyGroupTradingWindow, type DayLockTrigger } from './liveCopyTrading';
 
 export type CopierTradingWindowState = 'inside' | 'outside' | 'off';
 
@@ -36,7 +36,17 @@ export function zonedMinuteOfDay(at: number, timeZone: string): number | null {
   }
 }
 
-/** Start is inclusive, end is exclusive. Invalid zone evidence is outside. */
+/** Konec posledního okna dne (minuta dne). */
+export const lastTradingWindowEnd = (window: CopyGroupTradingWindow): number => (
+  Math.max(...tradingWindowSlotsOf(window).map(slot => clockMinutes(slot.to)))
+);
+
+/** „15:30–22:00, 23:00–23:30" — pro audit, chyby ARM a UI. */
+export const formatTradingWindows = (window: CopyGroupTradingWindow): string => (
+  tradingWindowSlotsOf(window).map(slot => `${slot.from}–${slot.to}`).join(', ')
+);
+
+/** Start is inclusive, end is exclusive; inside = uvnitř kteréhokoli okna. Invalid zone evidence is outside. */
 export function tradingWindowStateAt(
   window: CopyGroupTradingWindow,
   at: number,
@@ -44,9 +54,22 @@ export function tradingWindowStateAt(
   if (!window.enabled) return 'off';
   const minute = zonedMinuteOfDay(at, window.timeZone);
   if (minute == null) return 'outside';
-  return minute >= clockMinutes(window.from) && minute < clockMinutes(window.to)
+  return tradingWindowSlotsOf(window).some(slot => (
+    minute >= clockMinutes(slot.from) && minute < clockMinutes(slot.to)
+  ))
     ? 'inside'
     : 'outside';
+}
+
+/** Po konci POSLEDNÍHO okna dne (mezera mezi okny není konec). */
+export function isAfterTradingWindowsAt(
+  window: CopyGroupTradingWindow,
+  at: number,
+): boolean {
+  if (!window.enabled) return false;
+  const minute = zonedMinuteOfDay(at, window.timeZone);
+  if (minute == null) return false;
+  return minute >= lastTradingWindowEnd(window);
 }
 
 export function isTradingWindowWarningAt(
@@ -56,7 +79,7 @@ export function isTradingWindowWarningAt(
   if (!window.enabled) return false;
   const minute = zonedMinuteOfDay(at, window.timeZone);
   if (minute == null) return false;
-  const end = clockMinutes(window.to);
+  const end = lastTradingWindowEnd(window);
   return minute >= end - 10 && minute < end;
 }
 

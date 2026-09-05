@@ -8,6 +8,7 @@ import {
   DEFAULT_COPY_GROUP_SAFETY,
   normalizeMultiplier,
   replaceCopyGroupFollowerAccount,
+  sanitizeCopyGroupSafety,
   sanitizeCopyGroups,
   unavailableCopyGroupAccounts,
   validateCopyGroup,
@@ -306,5 +307,19 @@ describe('sanitizeCopyGroups', () => {
       ...base,
       followers: [{ ...base.followers[0], dailyLossCutUsd: 10.001 }],
     }])).toBeNull();
+  });
+});
+
+describe('sanitizeCopyGroupSafety — více obchodních oken', () => {
+  const base = { ...DEFAULT_COPY_GROUP_SAFETY, tradingWindow: { enabled: true, from: '15:30', to: '22:00', timeZone: 'Europe/Prague' } };
+
+  it('seřadí další okna, odmítne překryv, špatný čas a víc než 3 okna', () => {
+    expect(sanitizeCopyGroupSafety({ ...base, tradingWindow: { ...base.tradingWindow, additional: [{ from: '23:00', to: '23:30' }, { from: '09:00', to: '10:00' }] } })?.tradingWindow.additional)
+      .toEqual([{ from: '09:00', to: '10:00' }, { from: '23:00', to: '23:30' }]);
+    expect(sanitizeCopyGroupSafety({ ...base, tradingWindow: { ...base.tradingWindow, additional: [{ from: '21:00', to: '23:00' }] } })).toBeNull();
+    expect(sanitizeCopyGroupSafety({ ...base, tradingWindow: { ...base.tradingWindow, additional: [{ from: '23:00', to: '22:00' }] } })).toBeNull();
+    expect(sanitizeCopyGroupSafety({ ...base, tradingWindow: { ...base.tradingWindow, additional: [{ from: '25:00', to: '26:00' }] } })).toBeNull();
+    expect(sanitizeCopyGroupSafety({ ...base, tradingWindow: { ...base.tradingWindow, additional: [{ from: '01:00', to: '02:00' }, { from: '03:00', to: '04:00' }, { from: '05:00', to: '06:00' }] } })).toBeNull();
+    expect(sanitizeCopyGroupSafety({ ...base, tradingWindow: { ...base.tradingWindow, additional: [] } })?.tradingWindow.additional).toBeUndefined();
   });
 });

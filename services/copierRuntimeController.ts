@@ -75,6 +75,9 @@ import { isWeakerRiskConfig } from '../lib/copierRiskConfig';
 import {
   clockMinutes,
   isTradingWindowWarningAt,
+  isAfterTradingWindowsAt,
+  lastTradingWindowEnd,
+  formatTradingWindows,
   tradingWindowStateAt,
   zonedMinuteOfDay,
 } from './copierDailyRules';
@@ -2344,7 +2347,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       addWarning(
         'window-end',
         zonedMinuteOfDay(at, safety.tradingWindow.timeZone) ?? 0,
-        clockMinutes(safety.tradingWindow.to),
+        lastTradingWindowEnd(safety.tradingWindow),
       );
     }
 
@@ -2399,11 +2402,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         `${stats.tradesToday ?? 0}. uzavřený obchod dne (limit ${safety.dailyMaxTrades})`, true,
         stats.tradesToday ?? 0, safety.dailyMaxTrades);
     }
-    if (gate.armed && !gate.shadowMode && stats.windowState === 'outside') {
-      const minute = zonedMinuteOfDay(at, safety.tradingWindow.timeZone) ?? clockMinutes(safety.tradingWindow.to);
+    // Mezera mezi dvěma okny není konec dne: vstupy se jen nekopírují.
+    if (gate.armed && !gate.shadowMode && stats.windowState === 'outside'
+      && isAfterTradingWindowsAt(safety.tradingWindow, at)) {
+      const lastEnd = lastTradingWindowEnd(safety.tradingWindow);
+      const minute = zonedMinuteOfDay(at, safety.tradingWindow.timeZone) ?? lastEnd;
       addCandidate('window-end', safety.dayRuleActions.windowEnd.atEnd,
-        `obchodní okno skončilo v ${safety.tradingWindow.to} (${safety.tradingWindow.timeZone})`, true,
-        minute, clockMinutes(safety.tradingWindow.to));
+        `obchodní okno skončilo (${formatTradingWindows(safety.tradingWindow)}, ${safety.tradingWindow.timeZone})`, true,
+        minute, lastEnd);
     }
     if (safety.dailyLossLimitUsd > 0
       && stats.realizedPnlUsd <= -0.8 * safety.dailyLossLimitUsd
@@ -7325,7 +7331,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (!shadowMode && tradingWindow.enabled
         && tradingWindowStateAt(tradingWindow, now) !== 'inside') {
         throw new Error(
-          `ARM blokován mimo obchodní okno ${tradingWindow.from}–${tradingWindow.to} (${tradingWindow.timeZone})`,
+          `ARM blokován mimo obchodní okno ${formatTradingWindows(tradingWindow)} (${tradingWindow.timeZone})`,
         );
       }
       if (!shadowMode && now < safety.entryCooldownUntil) {

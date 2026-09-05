@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, ChevronDown, Clock3, Lock, Save } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Clock3, Lock, Plus, Save, X } from 'lucide-react';
 import type { CopierControllerStatus } from '../services/copierRuntimeController';
 import {
   DEFAULT_COPY_GROUP_SAFETY,
   DEFAULT_DAY_RULE_ACTIONS,
+  MAX_TRADING_WINDOW_SLOTS,
+  tradingWindowSlotsValid,
   cloneDayRuleActions,
   sanitizeDayRuleActions,
   type CopierRuleAction,
@@ -50,6 +52,8 @@ export interface DailyRulesDraft {
   tradingWindowEnabled: boolean;
   tradingWindowFrom: string;
   tradingWindowTo: string;
+  /** Další okna dne (max 2). */
+  tradingWindowExtra: Array<{ from: string; to: string }>;
   cooldownEnabled: boolean;
   entryCooldownMinutes: string;
   sessionExpiryEnabled: boolean;
@@ -88,6 +92,7 @@ export const dailyRulesDraftFromSafety = (safety: CopyGroupSafetySettings): Dail
   tradingWindowEnabled: safety.tradingWindow.enabled,
   tradingWindowFrom: safety.tradingWindow.from,
   tradingWindowTo: safety.tradingWindow.to,
+  tradingWindowExtra: (safety.tradingWindow.additional ?? []).map(slot => ({ from: slot.from, to: slot.to })),
   cooldownEnabled: safety.entryCooldownMinutes > 0,
   entryCooldownMinutes: String(safety.entryCooldownMinutes || 15),
   sessionExpiryEnabled: safety.armExpiryFlatten !== 'off',
@@ -96,8 +101,9 @@ export const dailyRulesDraftFromSafety = (safety: CopyGroupSafetySettings): Dail
   losingTradesBeforeMinutes: actionMinutes(safety.dayRuleActions.losingTrades.beforeLimit, 20),
   losingTradesAtAction: actionKind(safety.dayRuleActions.losingTrades.atLimit),
   losingTradesAtMinutes: actionMinutes(safety.dayRuleActions.losingTrades.atLimit, 20),
-  dailyLoss80Action: actionKind(safety.dayRuleActions.dailyLoss.at80Percent),
-  dailyLoss80Minutes: actionMinutes(safety.dayRuleActions.dailyLoss.at80Percent, 30),
+  // Denní ztráta má v UI jednu akci (na limitu); 80 % je jen varování.
+  dailyLoss80Action: null,
+  dailyLoss80Minutes: '30',
   dailyLossAtAction: actionKind(safety.dayRuleActions.dailyLoss.atLimit),
   dailyLossAtMinutes: actionMinutes(safety.dayRuleActions.dailyLoss.atLimit, 30),
   maxTradesAtAction: actionKind(safety.dayRuleActions.maxTrades.atLimit),
@@ -217,13 +223,6 @@ export function validateDailyRulesDraft(
     'Ztrátové obchody na limitu',
     errors,
   );
-  const loss80 = ruleActionFromDraft(
-    draft.dailyLoss80Action,
-    draft.dailyLoss80Minutes,
-    'Denní ztráta na 80 %',
-    errors,
-    true,
-  );
   const lossAt = ruleActionFromDraft(
     draft.dailyLossAtAction,
     draft.dailyLossAtMinutes,
@@ -252,6 +251,15 @@ export function validateDailyRulesDraft(
   } else if (fromMinutes >= toMinutes) {
     errors.push('Začátek obchodního okna musí být před jeho koncem; okno přes půlnoc není podporované.');
   }
+  const extraSlots = draft.tradingWindowExtra;
+  if (extraSlots.length > MAX_TRADING_WINDOW_SLOTS - 1) {
+    errors.push(`Obchodních oken může být nejvýše ${MAX_TRADING_WINDOW_SLOTS}.`);
+  } else if (extraSlots.some(slot => clockMinutes(slot.from) == null || clockMinutes(slot.to) == null)) {
+    errors.push('Další obchodní okno musí používat platný čas HH:MM.');
+  } else if (fromMinutes != null && toMinutes != null
+    && !tradingWindowSlotsValid([{ from: draft.tradingWindowFrom, to: draft.tradingWindowTo }, ...extraSlots])) {
+    errors.push('Obchodní okna se nesmí překrývat a každé musí začínat před svým koncem.');
+  }
 
   if (errors.length > 0
     || dailyMaxLosingTrades == null
@@ -277,11 +285,14 @@ export function validateDailyRulesDraft(
         from: draft.tradingWindowFrom,
         to: draft.tradingWindowTo,
         timeZone: PRAGUE_TIME_ZONE,
+        ...(draft.tradingWindowExtra.length > 0
+          ? { additional: draft.tradingWindowExtra.map(slot => ({ from: slot.from, to: slot.to })) }
+          : {}),
       },
       armExpiryFlatten: draft.sessionExpiryEnabled ? draft.armExpiryFlatten : 'off',
       dayRuleActions: {
         losingTrades: { beforeLimit: losingBefore, atLimit: losingAt },
-        dailyLoss: { at80Percent: loss80, atLimit: lossAt },
+        dailyLoss: { at80Percent: null, atLimit: lossAt },
         maxTrades: { atLimit: tradesAt },
         windowEnd: { atEnd: windowEnd },
       },
@@ -632,7 +643,6 @@ export const LiveDayRulesCard = ({
   const configuredLockCount = [
     draft.losingTradesBeforeAction,
     draft.losingTradesAtAction,
-    draft.dailyLoss80Action,
     draft.dailyLossAtAction,
     draft.maxTradesAtAction,
     draft.windowEndAction,
@@ -650,9 +660,17 @@ export const LiveDayRulesCard = ({
   const from = clockMinutes(draft.tradingWindowFrom);
   const to = clockMinutes(draft.tradingWindowTo);
   const currentMinute = minuteOfDay(now);
-  const windowProgress = dailyStatsKnown && from != null && to != null && currentMinute >= from
-    ? progressPercent(currentMinute - from, to - from)
+  const windowSlots = [{ from: draft.tradingWindowFrom, to: draft.tradingWindowTo }, ...draft.tradingWindowExtra]
+    .map(slot => ({ from: clockMinutes(slot.from), to: clockMinutes(slot.to) }))
+    .filter((slot): slot is { from: number; to: number } => slot.from != null && slot.to != null)
+    .sort((a, b) => a.from - b.from);
+  const activeWindow = windowSlots.find(slot => currentMinute >= slot.from && currentMinute < slot.to)
+    ?? [...windowSlots].reverse().find(slot => currentMinute >= slot.to)
+    ?? null;
+  const windowProgress = dailyStatsKnown && activeWindow
+    ? progressPercent(currentMinute - activeWindow.from, activeWindow.to - activeWindow.from)
     : dailyStatsKnown ? 0 : null;
+  void from; void to;
   const cooldownDuration = Math.max(0, Number(draft.entryCooldownMinutes) * 60_000);
   const cooldownRemaining = Math.max(0, cooldownUntil - now);
   const cooldownProgress = !runtimeAvailable
@@ -671,7 +689,10 @@ export const LiveDayRulesCard = ({
   const losingActionDetail = losingLimit >= 2
     ? `${losingBeforeLabel} ${actionSummary(draft.losingTradesBeforeAction, draft.losingTradesBeforeMinutes)} · ${losingAtLabel} ${actionSummary(draft.losingTradesAtAction, draft.losingTradesAtMinutes)}`
     : `Před limitem se nespouští · ${losingAtLabel} ${actionSummary(draft.losingTradesAtAction, draft.losingTradesAtMinutes)}`;
-  const lossActionDetail = `80 % ${actionSummary(draft.dailyLoss80Action, draft.dailyLoss80Minutes)} · 100 % ${actionSummary(draft.dailyLossAtAction, draft.dailyLossAtMinutes)}`;
+  const lossActionDetail = `Realizovaná ztráta leadera za den · na limitu ${actionSummary(draft.dailyLossAtAction, draft.dailyLossAtMinutes)}`;
+  const windowSlotsLabel = [{ from: draft.tradingWindowFrom, to: draft.tradingWindowTo }, ...draft.tradingWindowExtra]
+    .map(slot => `${slot.from}–${slot.to}`).join(', ');
+  const windowDetail = `Europe/Prague · ${windowSlotsLabel} · mimo okno se nekopíruje, po konci posledního okna akce`;
 
   // Barva lišty: červená = zámek nebo limit dosažen, oranžová = varování
   // workeru nebo ≥ 80 % limitu, zelená = běžný průběh, šedá = pravidlo vypnuté.
@@ -696,9 +717,9 @@ export const LiveDayRulesCard = ({
     draft.losingTradesEnabled ? `ztrátové ${losingCurrent ?? '—'}/${losingLimit}` : null,
     draft.lossLimitEnabled ? `ztráta ${lossCurrent == null ? '—' : `−${number.format(lossCurrent)}`}/${number.format(lossLimit)} USD` : null,
     draft.maxTradesEnabled ? `obchody ${tradesCurrent ?? '—'}/${tradesLimit}` : null,
-    draft.tradingWindowEnabled ? `okno ${draft.tradingWindowFrom}–${draft.tradingWindowTo}` : null,
+    draft.tradingWindowEnabled ? `okno ${windowSlotsLabel}` : null,
     draft.cooldownEnabled ? `cooldown ${draft.entryCooldownMinutes} min` : null,
-    draft.sessionExpiryEnabled ? `expirace: ${draft.armExpiryFlatten === 'group' ? 'skupina' : 'followeři'}` : null,
+    draft.sessionExpiryEnabled ? `konec session: ${draft.armExpiryFlatten === 'group' ? 'zavřít i leadera' : 'zavřít followery'}` : 'konec session: nechat otevřené',
   ].filter((item): item is string => item != null);
 
   const set = <K extends keyof DailyRulesDraft>(key: K, value: DailyRulesDraft[K]) => {
@@ -733,6 +754,27 @@ export const LiveDayRulesCard = ({
     );
     if (tightenOnly && effectiveSafety.tradingWindow.enabled && weaker) return;
     set(key, value);
+  };
+  const setExtraWindow = (index: number, key: 'from' | 'to', value: string) => {
+    if (tightenOnly && effectiveSafety.tradingWindow.enabled) return;
+    setDraft(current => ({
+      ...current,
+      tradingWindowExtra: current.tradingWindowExtra.map((slot, i) => (i === index ? { ...slot, [key]: value } : slot)),
+    }));
+    setSaveErrors([]);
+    setNotice(null);
+  };
+  const addExtraWindow = () => {
+    if (tightenOnly && effectiveSafety.tradingWindow.enabled) return;
+    setDraft(current => current.tradingWindowExtra.length >= MAX_TRADING_WINDOW_SLOTS - 1 ? current : ({
+      ...current,
+      tradingWindowExtra: [...current.tradingWindowExtra, { from: '', to: '' }],
+    }));
+  };
+  const removeExtraWindow = (index: number) => {
+    setDraft(current => ({ ...current, tradingWindowExtra: current.tradingWindowExtra.filter((_, i) => i !== index) }));
+    setSaveErrors([]);
+    setNotice(null);
   };
   const toggleCollapsed = () => {
     setCollapsed(current => {
@@ -847,7 +889,7 @@ export const LiveDayRulesCard = ({
               />
 
               <Rule
-                title="Denní ztráta (USD)"
+                title="Denní ztráta"
                 detail={lossActionDetail}
                 enabled={draft.lossLimitEnabled}
                 triggered={lossTriggered}
@@ -863,10 +905,7 @@ export const LiveDayRulesCard = ({
                   <input aria-label="Denní ztrátový limit v USD" type="number" min="0.01" max={tightenOnly && effectiveSafety.dailyLossLimitUsd > 0 ? effectiveSafety.dailyLossLimitUsd : 1_000_000} step="0.01" disabled={!draft.lossLimitEnabled} title={tightenOnly ? 'dnes jen zpřísnit' : undefined} value={draft.dailyLossLimitUsd} onChange={event => setUpperBound('dailyLossLimitUsd', event.target.value, effectiveSafety.dailyLossLimitUsd)} className={numericInputClass} />
                   <span className={unitClass}>USD</span>
                 </>}
-                action={<div className="flex min-w-0 flex-col gap-1">
-                  <ActionEditor label="80 %" kind={draft.dailyLoss80Action} minutes={draft.dailyLoss80Minutes} base={effectiveSafety.dayRuleActions.dailyLoss.at80Percent} enabled={draft.lossLimitEnabled} allowNone tightenOnly={tightenOnly} onKind={value => set('dailyLoss80Action', value)} onMinutes={value => set('dailyLoss80Minutes', value)} />
-                  <ActionEditor label="100 %" kind={draft.dailyLossAtAction} minutes={draft.dailyLossAtMinutes} base={effectiveSafety.dayRuleActions.dailyLoss.atLimit} enabled={draft.lossLimitEnabled} tightenOnly={tightenOnly} onKind={value => set('dailyLossAtAction', value)} onMinutes={value => set('dailyLossAtMinutes', value)} />
-                </div>}
+                action={<ActionEditor label="Na limitu" kind={draft.dailyLossAtAction} minutes={draft.dailyLossAtMinutes} base={effectiveSafety.dayRuleActions.dailyLoss.atLimit} enabled={draft.lossLimitEnabled} tightenOnly={tightenOnly} onKind={value => set('dailyLossAtAction', value)} onMinutes={value => set('dailyLossAtMinutes', value)} />}
               />
 
               <Rule
@@ -891,7 +930,7 @@ export const LiveDayRulesCard = ({
 
               <Rule
                 title="Obchodní okno"
-                detail="Europe/Prague. Mimo okno se kopie neposílá; po konci okna se den zamkne."
+                detail={windowDetail}
                 enabled={draft.tradingWindowEnabled}
                 triggered={windowTriggered}
                 tightenOnly={tightenOnly}
@@ -902,17 +941,30 @@ export const LiveDayRulesCard = ({
                 progress={draft.tradingWindowEnabled ? windowProgress : 0}
                 progressTone={windowTone}
                 progressLabel="Průběh obchodního okna"
-                control={<>
+                control={<div className="flex flex-col items-end gap-1" data-risk-windows={1 + draft.tradingWindowExtra.length}>
+                  <div className="flex items-center gap-1.5">
                   <input aria-label="Obchodní okno od" type="time" min={tightenOnly && effectiveSafety.tradingWindow.enabled ? effectiveSafety.tradingWindow.from : undefined} disabled={!draft.tradingWindowEnabled} title={tightenOnly ? 'dnes jen zpřísnit' : undefined} value={draft.tradingWindowFrom} onChange={event => setWindowTime('tradingWindowFrom', event.target.value)} className={timeInputClass} />
                   <span className="text-[10px] text-[var(--text-muted)]">–</span>
                   <input aria-label="Obchodní okno do" type="time" max={tightenOnly && effectiveSafety.tradingWindow.enabled ? effectiveSafety.tradingWindow.to : undefined} disabled={!draft.tradingWindowEnabled} title={tightenOnly ? 'dnes jen zpřísnit' : undefined} value={draft.tradingWindowTo} onChange={event => setWindowTime('tradingWindowTo', event.target.value)} className={timeInputClass} />
-                </>}
+                  </div>
+                  {draft.tradingWindowExtra.map((slot, index) => (
+                    <div key={index} className="flex items-center gap-1.5" data-risk-extra-window={index + 1}>
+                      <input aria-label={`Obchodní okno ${index + 2} od`} type="time" disabled={!draft.tradingWindowEnabled || (tightenOnly && effectiveSafety.tradingWindow.enabled)} title={tightenOnly ? 'dnes jen zpřísnit' : undefined} value={slot.from} onChange={event => setExtraWindow(index, 'from', event.target.value)} className={timeInputClass} />
+                      <span className="text-[10px] text-[var(--text-muted)]">–</span>
+                      <input aria-label={`Obchodní okno ${index + 2} do`} type="time" disabled={!draft.tradingWindowEnabled || (tightenOnly && effectiveSafety.tradingWindow.enabled)} title={tightenOnly ? 'dnes jen zpřísnit' : undefined} value={slot.to} onChange={event => setExtraWindow(index, 'to', event.target.value)} className={timeInputClass} />
+                      <button type="button" aria-label={`Odebrat obchodní okno ${index + 2}`} disabled={!draft.tradingWindowEnabled} onClick={() => removeExtraWindow(index)} className="flex h-7 w-5 items-center justify-center rounded text-[var(--text-muted)] hover:text-rose-500 disabled:opacity-45"><X size={11} /></button>
+                    </div>
+                  ))}
+                  {draft.tradingWindowEnabled && draft.tradingWindowExtra.length < MAX_TRADING_WINDOW_SLOTS - 1 && !(tightenOnly && effectiveSafety.tradingWindow.enabled) ? (
+                    <button type="button" onClick={addExtraWindow} className="inline-flex items-center gap-1 text-[9.5px] font-bold text-indigo-500 hover:text-indigo-400"><Plus size={10} /> další okno</button>
+                  ) : null}
+                </div>}
                 action={<ActionEditor label="Na konci" kind={draft.windowEndAction} minutes={draft.windowEndMinutes} base={effectiveSafety.dayRuleActions.windowEnd.atEnd} enabled={draft.tradingWindowEnabled} tightenOnly={tightenOnly} onKind={value => set('windowEndAction', value)} onMinutes={value => set('windowEndMinutes', value)} />}
               />
 
               <Rule
-                title="Cooldown po flat"
-                detail="Cooldown po uzavření — po flat leadera blokuje nové zapnutí na N minut."
+                title="Cooldown po obchodu"
+                detail="Po uzavření obchodu leadera blokuje nový vstup na N minut — chvíle na nadechnutí, ne zámek."
                 enabled={draft.cooldownEnabled}
                 triggered={false}
                 tightenOnly={tightenOnly}
@@ -927,12 +979,12 @@ export const LiveDayRulesCard = ({
                   <input aria-label="Cooldown po uzavření v minutách" type="number" min={tightenOnly && effectiveSafety.entryCooldownMinutes > 0 ? effectiveSafety.entryCooldownMinutes : 1} max="720" step="1" disabled={!draft.cooldownEnabled} title={tightenOnly ? 'dnes jen zpřísnit' : undefined} value={draft.entryCooldownMinutes} onChange={event => setCooldown(event.target.value)} className={numericInputClass} />
                   <span className={unitClass}>min</span>
                 </>}
-                action={<FixedAction label="Po flat" text={`Pauza ${draft.entryCooldownMinutes} min`} tone="amber" />}
+                action={<FixedAction label="Po obchodu" text={`Pauza ${draft.entryCooldownMinutes} min`} tone="amber" />}
               />
 
               <Rule
-                title="Expirace LIVE"
-                detail="Expirace LIVE session — nejpozději 17:00 Chicago; podle scope zavře otevřené kopie."
+                title="Konec session"
+                detail="V 00:00 (17:00 Chicago) se copier sám vypne. Co s otevřenými kopiemi: zavřít followery, nebo i leadera. Vypnuto = nechat otevřené (riziko)."
                 enabled={draft.sessionExpiryEnabled}
                 triggered={false}
                 tightenOnly={tightenOnly}
@@ -949,10 +1001,10 @@ export const LiveDayRulesCard = ({
                     if (!(tightenOnly && effectiveSafety.armExpiryFlatten === 'group' && next === 'followers')) set('armExpiryFlatten', next);
                   }} className="h-7 w-[118px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-1.5 text-[10.5px] font-bold text-[var(--text-primary)] outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-45">
                     <option value="followers" disabled={tightenOnly && effectiveSafety.armExpiryFlatten === 'group'}>Zavřít followery</option>
-                    <option value="group">Zavřít skupinu</option>
+                    <option value="group">Zavřít i leadera</option>
                   </select>
                 }
-                action={<FixedAction label="Na konci" text="Zavřít podle scope" tone="indigo" />}
+                action={<FixedAction label="V 00:00" text={draft.sessionExpiryEnabled ? 'Vypnout copier' : 'Nechat otevřené'} tone="indigo" />}
               />
             </div>
 

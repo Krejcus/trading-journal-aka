@@ -40,12 +40,44 @@ export type DayLockTrigger =
   | 'max-trades'
   | 'window-end';
 
+export interface CopyGroupTradingWindowSlot {
+  from: string;
+  to: string;
+}
+
 export interface CopyGroupTradingWindow {
   enabled: boolean;
   from: string;
   to: string;
   timeZone: string;
+  /**
+   * Další obchodní okna téhož dne (max 2, celkem 3), seřazená podle začátku,
+   * bez překryvu s hlavním oknem i mezi sebou. Mezi okny se nekopíruje,
+   * zámek dne se spouští až po konci posledního okna.
+   */
+  additional?: CopyGroupTradingWindowSlot[];
 }
+
+export const MAX_TRADING_WINDOW_SLOTS = 3;
+
+/** Všechna okna (hlavní + další) seřazená chronologicky. */
+export const tradingWindowSlotsOf = (window: Pick<CopyGroupTradingWindow, 'from' | 'to' | 'additional'>): CopyGroupTradingWindowSlot[] => (
+  [{ from: window.from, to: window.to }, ...(window.additional ?? [])]
+    .map(slot => ({ from: slot.from, to: slot.to }))
+    .sort((a, b) => minutesOfDay(a.from) - minutesOfDay(b.from))
+);
+
+/** Platné jen když žádná dvě okna nekolidují a je jich nejvýše MAX_TRADING_WINDOW_SLOTS. */
+export const tradingWindowSlotsValid = (slots: readonly CopyGroupTradingWindowSlot[]): boolean => {
+  if (slots.length === 0 || slots.length > MAX_TRADING_WINDOW_SLOTS) return false;
+  const sorted = [...slots].sort((a, b) => minutesOfDay(a.from) - minutesOfDay(b.from));
+  for (let index = 0; index < sorted.length; index += 1) {
+    const slot = sorted[index];
+    if (!HH_MM.test(slot.from) || !HH_MM.test(slot.to) || minutesOfDay(slot.from) >= minutesOfDay(slot.to)) return false;
+    if (index > 0 && minutesOfDay(slot.from) < minutesOfDay(sorted[index - 1].to)) return false;
+  }
+  return true;
+};
 
 /**
  * Akce pravidla dne: pauza vyprší sama a blokuje jen nové vstupy leadera
@@ -101,7 +133,8 @@ export interface CopyGroupSafetySettings {
 
 export const DEFAULT_DAY_RULE_ACTIONS: CopyGroupDayRuleActions = {
   losingTrades: { beforeLimit: { kind: 'pause', minutes: 20 }, atLimit: { kind: 'lock' } },
-  dailyLoss: { at80Percent: { kind: 'pause', minutes: 30 }, atLimit: { kind: 'lock' } },
+  // Denní ztráta má jednu akci (na limitu); 80 % zůstává jen varováním.
+  dailyLoss: { at80Percent: null, atLimit: { kind: 'lock' } },
   maxTrades: { atLimit: { kind: 'pause', minutes: 30 } },
   windowEnd: { atEnd: { kind: 'lock' } },
 };
@@ -613,11 +646,27 @@ export function sanitizeCopyGroupSafety(value: unknown): CopyGroupSafetySettings
       || minutesOfDay(candidate.from) >= minutesOfDay(candidate.to)
       || !validTimeZone(candidate.timeZone)
     ) return null;
+    let additional: CopyGroupTradingWindowSlot[] | undefined;
+    if (candidate.additional !== undefined) {
+      if (!Array.isArray(candidate.additional)) return null;
+      const slots: CopyGroupTradingWindowSlot[] = [];
+      for (const raw of candidate.additional) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+        const slot = raw as Partial<CopyGroupTradingWindowSlot>;
+        if (typeof slot.from !== 'string' || typeof slot.to !== 'string') return null;
+        slots.push({ from: slot.from, to: slot.to });
+      }
+      if (!tradingWindowSlotsValid([{ from: candidate.from, to: candidate.to }, ...slots])) return null;
+      additional = slots.length > 0
+        ? slots.sort((a, b) => minutesOfDay(a.from) - minutesOfDay(b.from))
+        : undefined;
+    }
     tradingWindow = {
       enabled: candidate.enabled,
       from: candidate.from,
       to: candidate.to,
       timeZone: candidate.timeZone,
+      ...(additional ? { additional } : {}),
     };
   }
   return {

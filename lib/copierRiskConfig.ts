@@ -76,6 +76,14 @@ export function isWeakerRiskConfig(previous: CopierRiskConfig, next: CopierRiskC
     // Sanitized HH:MM values are zero-padded, so lexical order is chronological.
     if (nextWindow.from < previousWindow.from) add('safety.tradingWindow.from');
     if (nextWindow.to > previousWindow.to) add('safety.tradingWindow.to');
+    // Každé okno v nové konfiguraci musí ležet uvnitř některého okna té
+    // předchozí — nové okno nebo rozšířené okno je zmírnění.
+    const previousSlots = [{ from: previousWindow.from, to: previousWindow.to }, ...(previousWindow.additional ?? [])];
+    const nextSlots = nextWindow.additional ?? [];
+    const uncovered = nextSlots.some(slot => !previousSlots.some(previous => (
+      previous.from <= slot.from && slot.to <= previous.to
+    )));
+    if (uncovered) add('safety.tradingWindow.additional');
   }
 
   const flattenStrength: Record<CopyGroupSafetySettings['armExpiryFlatten'], number> = {

@@ -107,6 +107,18 @@ describe('isWeakerRiskConfig — pravidla skupiny', () => {
     ]);
   });
 
+  it('přidání dalšího okna je zmírnění, další okno uvnitř původního je v pořádku', () => {
+    const previous = riskConfig();
+    previous.safety!.tradingWindow = { enabled: true, from: '15:30', to: '22:00', timeZone: 'Europe/Prague' };
+    const added = riskConfig();
+    added.safety!.tradingWindow = { ...previous.safety!.tradingWindow, additional: [{ from: '23:00', to: '23:30' }] };
+    expect(isWeakerRiskConfig(previous, added)).toEqual(['safety.tradingWindow.additional']);
+
+    const split = riskConfig();
+    split.safety!.tradingWindow = { enabled: true, from: '15:30', to: '17:00', timeZone: 'Europe/Prague', additional: [{ from: '20:00', to: '22:00' }] };
+    expect(isWeakerRiskConfig(previous, split)).toEqual([]);
+  });
+
   it('dovolí zapnout nebo zúžit obchodní okno', () => {
     const disabled = riskConfig();
     disabled.safety!.tradingWindow.enabled = false;

@@ -58,7 +58,7 @@ describe('LIVE Pravidla dne', () => {
     expect(markup).toContain('Max obchodů za den');
     expect(markup).toContain('Obchodní okno');
     expect(markup).toContain('Cooldown po uzavření');
-    expect(markup).toContain('Expirace LIVE session');
+    expect(markup).toContain('Konec session');
     expect(markup).toContain('value="1000"');
     expect(markup).toContain('value="10"');
     expect(markup).toContain('2 / 2');
@@ -71,7 +71,8 @@ describe('LIVE Pravidla dne', () => {
     expect(markup).toContain('Akce');
     expect(markup).toContain('data-risk-rule-action="1. ztráta"');
     expect(markup).toContain('1. ztráta pauza 20 min · 2. ztráta zámek dne');
-    expect(markup).toContain('80 % pauza 30 min · 100 % zámek dne');
+    expect(markup).toContain('Realizovaná ztráta leadera za den · na limitu zámek dne');
+    expect(markup).toContain('další okno');
     expect(markup).toContain('3 zámky');
   });
 
@@ -125,11 +126,26 @@ describe('LIVE Pravidla dne', () => {
 
     const invalidPause = validateDailyRulesDraft({
       ...draft,
-      dailyLoss80Action: 'pause',
-      dailyLoss80Minutes: '0',
+      windowEndAction: 'pause',
+      windowEndMinutes: '0',
     }, nullableSafety);
     expect(invalidPause.safety).toBeNull();
-    expect(invalidPause.errors).toContain('Denní ztráta na 80 %: pauza musí být celé číslo od 1 do 720 minut.');
+    expect(invalidPause.errors).toContain('Konec obchodního okna: pauza musí být celé číslo od 1 do 720 minut.');
+
+    const overlapping = validateDailyRulesDraft({
+      ...draft,
+      tradingWindowExtra: [{ from: '21:00', to: '23:00' }],
+    }, nullableSafety);
+    expect(overlapping.safety).toBeNull();
+    expect(overlapping.errors).toContain('Obchodní okna se nesmí překrývat a každé musí začínat před svým koncem.');
+
+    const twoWindows = validateDailyRulesDraft({
+      ...draft,
+      tradingWindowExtra: [{ from: '22:30', to: '23:30' }],
+    }, nullableSafety);
+    expect(twoWindows.errors).toEqual([]);
+    expect(twoWindows.safety?.tradingWindow.additional).toEqual([{ from: '22:30', to: '23:30' }]);
+    expect(twoWindows.safety?.dayRuleActions.dailyLoss.at80Percent).toBeNull();
   });
 
   it('bez dailyStats ukáže neověřený průběh místo falešných nul', () => {
