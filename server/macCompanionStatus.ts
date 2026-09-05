@@ -87,10 +87,12 @@ const followerCutCount = (value: unknown, now: number): number => {
     const closedValid = closed === null
       || closed === false
       || positiveEpoch(closed) != null;
+    // Vadný záznam se přeskočí, ale platné cuts se počítají dál — schovat
+    // skutečně vyřazený účet za jednu poškozenou položku by bylo fail-open.
     if (accountId == null || accountId <= 0 || at == null || until == null
       || at > until || until <= now || realizedPnlUsd == null || cutUsd == null || cutUsd <= 0
       || (cut.source !== 'broker' && cut.source !== 'ledger') || !closedValid
-      || accountIds.has(accountId)) return 0;
+      || accountIds.has(accountId)) continue;
     accountIds.add(accountId);
   }
   return accountIds.size;
