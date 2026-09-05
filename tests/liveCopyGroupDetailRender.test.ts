@@ -287,6 +287,36 @@ describe('GroupDetail Positions integrace', () => {
     expect(markup).not.toContain('Execution aktivní');
   });
 
+  it('po prvním ARM dovolí inline násobek jen snížit', () => {
+    const runtimeGroup = {
+      id: 'group-main',
+      name: 'Hlavni',
+      enabled: false,
+      leaderAccountId: leaderId,
+      followers: [{ accountId: followerId, mode: 'on-submit' as const, multiplier: 2 }],
+      localOnly: true,
+    };
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot: {
+        ...snapshot,
+        groups: [{
+          ...snapshot.groups[0],
+          // Starý browser draft je mírnější; už první render musí převzít
+          // autoritativní worker multiplier 2.
+          followers: [{ ...snapshot.groups[0].followers[0], scale: 3 }],
+        }],
+      },
+      executionGroupId: 'group-main',
+      runtimeGroup,
+      sessionArmedAt: 1,
+    }));
+    const followerRow = tableRows(markup).find(row => row.includes('Follower DEMO'));
+
+    expect(followerRow).toContain(`aria-label="Násobek Follower DEMO"`);
+    expect(followerRow).toContain('max="2"');
+    expect(followerRow).toContain('title="dnes jen zpřísnit"');
+  });
+
   it('jedinou ZAPNUTOU skupinu řadí před ostatní vypnuté profily', () => {
     const second = {
       ...snapshot.groups[0],
