@@ -401,7 +401,7 @@ const Rule = ({ title, detail, enabled, triggered, onToggle, toggleDisabled, tig
 }) => (
   <article
     data-rule-triggered={triggered ? 'true' : 'false'}
-    className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 rounded-md border px-2.5 py-1.5 sm:grid-cols-[auto_minmax(0,1fr)_minmax(96px,132px)_auto_minmax(118px,auto)] ${triggered
+    className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 rounded-md border px-2.5 py-1.5 sm:grid-cols-[auto_minmax(0,300px)_minmax(120px,1fr)_auto_auto] ${triggered
       ? 'border-rose-500/35 bg-rose-500/[0.045]'
       : 'border-[var(--border-subtle)] bg-[var(--bg-input)]'}`}
   >
@@ -455,7 +455,7 @@ const ActionEditor = ({ label, kind, minutes, base, enabled, allowNone = false, 
   const title = tightenOnly ? 'dnes jen zpřísnit' : undefined;
   return (
     <div className="flex min-w-0 items-center justify-end gap-1" data-risk-rule-action={label}>
-      <span className="hidden text-[9px] font-bold text-[var(--text-muted)] xl:inline">{label}</span>
+      <span className="text-[9px] font-bold text-[var(--text-muted)]">{label}</span>
       <select
         aria-label={`${label} – akce`}
         value={kind ?? ''}
@@ -805,14 +805,14 @@ export const LiveDayRulesCard = ({
 
         {collapsed ? null : (
           <>
-            <div className="mt-1 hidden grid-cols-[auto_minmax(0,1fr)_minmax(96px,132px)_auto_minmax(118px,auto)] gap-x-3 px-2.5 text-[9px] font-black uppercase tracking-[0.08em] text-[var(--text-muted)] sm:grid">
+            <div className="mt-1 hidden grid-cols-[auto_minmax(0,300px)_minmax(120px,1fr)_auto_auto] gap-x-4 px-2.5 text-[9px] font-black uppercase tracking-[0.08em] text-[var(--text-muted)] sm:grid">
               <span />
               <span>Pravidlo</span>
               <span className="text-right">Dnešní průběh</span>
               <span className="text-right">Hodnota</span>
               <span className="text-right">Akce</span>
             </div>
-            <div className="mt-2 grid gap-1.5 md:grid-cols-2">
+            <div className="mt-2 flex flex-col gap-1.5">
               <Rule
                 title="Ztrátové obchody / den"
                 detail={losingActionDetail}
@@ -830,7 +830,7 @@ export const LiveDayRulesCard = ({
                   <input aria-label="Max ztrátových obchodů za den" type="number" min="1" max={tightenOnly && effectiveSafety.dailyMaxLosingTrades > 0 ? effectiveSafety.dailyMaxLosingTrades : 50} step="1" disabled={!draft.losingTradesEnabled} title={tightenOnly ? 'dnes jen zpřísnit' : undefined} value={draft.dailyMaxLosingTrades} onChange={event => setUpperBound('dailyMaxLosingTrades', event.target.value, effectiveSafety.dailyMaxLosingTrades)} className={numericInputClass} />
                   <span className={unitClass}>obch.</span>
                 </>}
-                action={<div className="flex min-w-0 flex-col items-end gap-1">
+                action={<div className="flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">
                   <b className="text-[9.5px] font-black text-indigo-500">Stupňovitě</b>
                   <ActionEditor label={losingBeforeLabel} kind={draft.losingTradesBeforeAction} minutes={draft.losingTradesBeforeMinutes} base={effectiveSafety.dayRuleActions.losingTrades.beforeLimit} enabled={losingBeforeApplies} allowNone tightenOnly={tightenOnly} onKind={value => set('losingTradesBeforeAction', value)} onMinutes={value => set('losingTradesBeforeMinutes', value)} />
                   <ActionEditor label={losingAtLabel} kind={draft.losingTradesAtAction} minutes={draft.losingTradesAtMinutes} base={effectiveSafety.dayRuleActions.losingTrades.atLimit} enabled={draft.losingTradesEnabled} tightenOnly={tightenOnly} onKind={value => set('losingTradesAtAction', value)} onMinutes={value => set('losingTradesAtMinutes', value)} />
@@ -854,7 +854,7 @@ export const LiveDayRulesCard = ({
                   <input aria-label="Denní ztrátový limit v USD" type="number" min="0.01" max={tightenOnly && effectiveSafety.dailyLossLimitUsd > 0 ? effectiveSafety.dailyLossLimitUsd : 1_000_000} step="0.01" disabled={!draft.lossLimitEnabled} title={tightenOnly ? 'dnes jen zpřísnit' : undefined} value={draft.dailyLossLimitUsd} onChange={event => setUpperBound('dailyLossLimitUsd', event.target.value, effectiveSafety.dailyLossLimitUsd)} className={numericInputClass} />
                   <span className={unitClass}>USD</span>
                 </>}
-                action={<div className="flex min-w-0 flex-col items-end gap-1">
+                action={<div className="flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">
                   <b className="text-[9.5px] font-black text-indigo-500">Stupňovitě</b>
                   <ActionEditor label="80 %" kind={draft.dailyLoss80Action} minutes={draft.dailyLoss80Minutes} base={effectiveSafety.dayRuleActions.dailyLoss.at80Percent} enabled={draft.lossLimitEnabled} allowNone tightenOnly={tightenOnly} onKind={value => set('dailyLoss80Action', value)} onMinutes={value => set('dailyLoss80Minutes', value)} />
                   <ActionEditor label="100 %" kind={draft.dailyLossAtAction} minutes={draft.dailyLossAtMinutes} base={effectiveSafety.dayRuleActions.dailyLoss.atLimit} enabled={draft.lossLimitEnabled} tightenOnly={tightenOnly} onKind={value => set('dailyLossAtAction', value)} onMinutes={value => set('dailyLossAtMinutes', value)} />
