@@ -111,7 +111,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       constraintu; registrace, push i push-triggered reload fyzicky ověřeny.
 - [x] ActivityKit push-to-start — FYZICKY OVĚŘENO 21. 8.: Live Activity se
       vytvořila ze serveru při force-quit appce (ARM z Mac Safari).
-- [x] Kabel rebuild — 21. 8. nainstalován build shodný s repem (devicectl).
+- [x] Kabel rebuild — 5. 9. čistá reinstalace z `origin/main` 3b88dfb8
+      (devicectl uninstall + install); přihlášení přežilo.
 - [ ] Pairing flow (ikona klíče v LIVE Connections) — nasazený, ale
       neproklikaný na produkci.
 - [x] Multi-follower DEMO test — 18. 8. potvrzen OCO/SL lifecycle na čtyřech
@@ -229,6 +230,28 @@ zelený. `npx tsc --noEmit -p tsconfig.json` nemá novou chybu a končí pouze n
 známých chybějících Chrome typech a `@crxjs/vite-plugin` v `extension/`.
 Bez push/deploy/broker akce; worker, relay, native companion a notifikace jsou
 záměrně ponechané paralelním fázím A/C.
+
+### 2026-09-05 (Claude + uživatel, čistá reinstalace iOS appky z `origin/main` 3b88dfb8)
+
+Telefon (iPhone 13 Pro Max) měl stále bundle z 28. 8. (`e5ed71d3`), tedy
+91 commitů za `origin/main` — chyběla mu karta pravidel dne / day-lock, unlock
+flow i snapshoty v první notifikaci. Postup bez otevřeného Xcode: čistý
+worktree nad `origin/main` (`3b88dfb8`), `npm run ios:sync` (doctor OK),
+`xcodebuild -scheme App -configuration Debug -allowProvisioningUpdates` pro
+zařízení, `codesign --verify --deep --strict` OK, obsah `App.app/public`
+shodný s `dist-native` (navíc jen Capacitor `cordova*.js`). Poté záměrně
+**`devicectl device uninstall` + čistá `install`** (ne upgrade přes běžící
+appku), protože upgrade instalace podle zápisu z 21. 8. rozbíjí vykreslování
+Live Activity. Appka po spuštění naběhla rovnou do Dashboardu s daty —
+**přihlášení přežilo reinstalaci** (session je v Keychainu), nové přihlášení
+nebylo potřeba.
+
+Poznámky: (1) `cap sync` se symlinkovaným `node_modules` přepíše
+`CapApp-SPM/Package.swift` na absolutní cesty — změna vrácena, nekomitovat.
+(2) Screenshot telefonu bez Xcode: `python3 -m pymobiledevice3 developer dvt
+screenshot out.png`. (3) Live Activity po čisté reinstalaci zatím fyzicky
+neověřena — ověřit při příštím reálném ARM/obchodu. Copier runtime nedotčen,
+žádný broker příkaz, ARM ani Flatten neproběhl.
 
 ### 2026-09-05 (Claude, rollout workera e018c3bb — snímky s reálným deadline)
 
