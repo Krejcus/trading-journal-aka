@@ -88,6 +88,7 @@ import {
 } from '../services/nativeCapabilities';
 import { shareTextNative } from '../services/nativeShare';
 import TradingViewAlertSettings from './TradingViewAlertSettings';
+import NativeShellTabsSettings from './NativeShellTabsSettings';
 
 export type SettingsTab = 'psychology' | 'strategy' | 'market' | 'notifications' | 'system';
 
@@ -1659,6 +1660,7 @@ const Settings: React.FC<SettingsProps> = ({
                 <Card isDark={isDark} className="border-blue-500/25">
                   <SectionHeader icon={Smartphone} title="Nativní iOS funkce" subtitle="Face ID · Live Activity · Kalendář · Diktování · Haptika · Sdílení" color="bg-gradient-to-br from-blue-600 to-cyan-600" isDark={isDark} />
                   <div className="space-y-5">
+                    <NativeShellTabsSettings />
                     <div className="rounded-2xl border border-[var(--border-subtle)] p-4">
                       <div className="flex items-center justify-between gap-3">
                         <div>

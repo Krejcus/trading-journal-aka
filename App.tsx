@@ -108,7 +108,7 @@ import type { Session } from '@supabase/supabase-js';
 import type { BacktestRun } from './services/backtestTypes';
 import { playNativeHapticIfAvailable, type NativeTradeDraft } from './services/nativeCapabilities';
 import MorningBriefBanner from './components/MorningBriefBanner';
-import { isNativeShell, registerNativeShellBridge, reportNativeRefreshComplete, reportNativeShellTheme, reportNativeShellWorld } from './utils/nativeShell';
+import { isNativeShell, registerNativeShellBridge, reportNativeRefreshComplete, reportNativeShellTheme, reportNativeShellWorld, reportNativeShellPage } from './utils/nativeShell';
 import { syncNativeSessionReminders } from './services/nativeSessionReminders';
 import {
   deactivateNativeRemoteNotifications,
@@ -1253,6 +1253,9 @@ const App: React.FC = () => {
   useEffect(() => {
     reportNativeShellWorld(dashboardMode === 'backtesting' ? 'backtest' : 'live');
   }, [dashboardMode]);
+  useEffect(() => {
+    if (inNativeShell) reportNativeShellPage(activePage);
+  }, [inNativeShell, activePage]);
   const [isClearTradesModalOpen, setIsClearTradesModalOpen] = useState(false);
   const [theme, setTheme] = useState<'dark' | 'light' | 'oled'>(() => {
     try {

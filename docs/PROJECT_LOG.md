@@ -161,6 +161,43 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-05 (Claude + uživatel, iOS: volitelné karty spodního menu + mobilní LIVE)
+
+Spodní lišta nativní appky je **nativní `UITabBar`** (ne webová `BottomNav`),
+proto konfigurace karet žije ve Swiftu: `AlphaTradeTabCatalog` v
+`AlphaTradeShellViewController.swift` má 10 cílů (dashboard, history, journal,
+live, ai, lab, business, network, accounts, settings); uživatel volí **tři**,
+„Zapsat" a „Více" jsou pevné (pořadí slot, slot, Zapsat, slot, Více). Volba se
+ukládá do `UserDefaults` (`AlphaTradeShellTabSlots`), validace = přesně tři
+různé známé cíle, jinak výchozí Dashboard/Historie/Deník. Menu Více zobrazuje
+jen cíle mimo lištu (v Backtestu skrývá LIVE/Byznys/Síť, Účty = Session).
+Plugin `AlphaTradeNative` dostal `getShellTabs`, `setShellTabs`
+a `setShellPage`; web hlásí každou změnu `activePage`, takže lišta zvýrazní
+skutečnou stránku, nebo nic, když stránka žije jen v menu Více (ověřeno deep
+linkem `alphatrade-native://live`). Web strana: `lib/nativeShellTabs.ts`
+(katalog + normalizace, zrcadlí Swift), `utils/nativeShell.ts`
+(`reportNativeShellPage`, `loadNativeShellTabs`, `saveNativeShellTabs`),
+nová karta „Karty spodního menu" v Nastavení → Nativní iOS funkce
+(`components/NativeShellTabsSettings.tsx`, jen v nativním buildu).
+
+**LIVE na telefonu** (`useCompactViewport`, pod `lg` = 1024 px; desktop se
+nemění, v testech bez `window` vždy desktop): místo 900px tabulky skupin se
+vykreslí `CompactGroupCard` — hlavička skupiny + přepínač ZAPNUTÁ/VYPNUTÁ
+(44 px), řádek Kapitál / Denní P&L / Otevřený P&L, účty jako řádky s pilulkou
+stavu, denním a otevřeným P&L, pozicemi, důvodem odmítnutí a tlačítky
+Flatten účet / Odebrat, seznam příkazů se Zrušit, patička Flatten All /
+Upravit / menu. „Pravidla dne" jsou na telefonu sbalitelná (`collapsible`),
+denní souhrn je jeden dvousloupcový řádek (`compact`), panel Live P&L & API
+Usage se na telefonu neukazuje a banner snímků je až pod skupinami. Kritické
+prvky (StuckOperations, DayLockBanner, DisarmPanel) zůstávají nahoře.
+
+Ověření: `tsc` bez chyb mimo předexistující `extension/`; vitest 232 souborů /
+1929 testů + nové `nativeShellTabs.test.ts`, `liveCopyCompactRender.test.ts`
+a rozšířený `nativeShellBridge.test.ts`; iOS Debug build z CLI, čistá
+reinstalace do iPhonu (login přežil), screenshoty Dashboard/LIVE přes
+`pymobiledevice3`. Copier runtime nedotčen, žádný broker příkaz, ARM ani
+Flatten. Nasazení webu na main zatím neproběhlo (čeká na kontrolu uživatele).
+
 ### 2026-09-05 (Claude + uživatel, čistá reinstalace iOS appky z `origin/main` 3b88dfb8)
 
 Telefon (iPhone 13 Pro Max) měl stále bundle z 28. 8. (`e5ed71d3`), tedy

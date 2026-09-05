@@ -9,6 +9,11 @@
 import { isNativeBuild } from './runtimeConfig';
 import type { NativeTradeDraft } from '../services/nativeCapabilities';
 import { alphaTradeNativePlugin } from '../services/alphaTradeNativePlugin';
+import {
+  normalizeNativeShellTabSlots,
+  readStoredNativeShellTabSlots,
+  writeStoredNativeShellTabSlots,
+} from '../lib/nativeShellTabs';
 
 export interface NativeShellBridge {
   navigate: (page: string) => void;
@@ -55,6 +60,46 @@ export function reportNativeShellWorld(world: 'live' | 'backtest'): void {
   void alphaTradeNativePlugin.setShellWorld({ world }).catch(error => {
     console.warn('[Native shell] World sync failed:', error instanceof Error ? error.message : error);
   });
+}
+
+/**
+ * Ohlásí aktivní stránku, aby nativní lišta zvýraznila skutečnou kartu (nebo
+ * nic, když stránka žije jen v menu Více). Mimo shell je to no-op.
+ */
+export function reportNativeShellPage(page: string): void {
+  if (!isNativeShell()) return;
+  void alphaTradeNativePlugin.setShellPage({ page }).catch(error => {
+    console.warn('[Native shell] Page sync failed:', error instanceof Error ? error.message : error);
+  });
+}
+
+/**
+ * Načte volbu tří karet spodního menu. Autoritou je nativní UserDefaults;
+ * když plugin není dostupný (web s `?native=1`), použije se lokální kopie.
+ */
+export async function loadNativeShellTabs(): Promise<string[]> {
+  if (!isNativeShell()) return readStoredNativeShellTabSlots();
+  try {
+    const result = await alphaTradeNativePlugin.getShellTabs();
+    const slots = normalizeNativeShellTabSlots(result?.slots);
+    writeStoredNativeShellTabSlots(slots);
+    return slots;
+  } catch {
+    return readStoredNativeShellTabSlots();
+  }
+}
+
+/**
+ * Uloží volbu karet do nativního shellu (lišta se přestaví okamžitě) i do
+ * lokální kopie. Neplatný výběr se normalizuje na výchozí trojici.
+ */
+export async function saveNativeShellTabs(slots: readonly string[]): Promise<string[]> {
+  const normalized = normalizeNativeShellTabSlots(slots);
+  writeStoredNativeShellTabSlots(normalized);
+  if (isNativeShell()) {
+    await alphaTradeNativePlugin.setShellTabs({ slots: normalized });
+  }
+  return normalized;
 }
 
 /**

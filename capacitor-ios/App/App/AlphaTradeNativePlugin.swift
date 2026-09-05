@@ -42,6 +42,9 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
         CAPPluginMethod(name: "presentCalendarEvent", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setShellTheme", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setShellWorld", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setShellPage", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getShellTabs", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setShellTabs", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "reportRefreshComplete", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getPushEnvironment", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "updateWidgetSnapshot", returnType: CAPPluginReturnPromise),
@@ -188,6 +191,49 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
             }
             shell.applyWorldFromWeb(world)
             call.resolve(["world": world])
+        }
+    }
+
+    @objc public func setShellPage(_ call: CAPPluginCall) {
+        guard let page = call.getString("page"), !page.isEmpty else {
+            call.reject("Chybí název stránky.")
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let shell = self?.shellController else {
+                call.reject("Nativní shell není připravený.")
+                return
+            }
+            shell.applyPageFromWeb(page)
+            call.resolve(["page": page])
+        }
+    }
+
+    @objc public func getShellTabs(_ call: CAPPluginCall) {
+        DispatchQueue.main.async { [weak self] in
+            let slots = self?.shellController?.currentTabSlots() ?? AlphaTradeTabCatalog.loadSlots()
+            call.resolve([
+                "slots": slots,
+                "destinations": AlphaTradeTabCatalog.destinations.map { ["id": $0.id, "title": $0.title] },
+            ])
+        }
+    }
+
+    @objc public func setShellTabs(_ call: CAPPluginCall) {
+        guard let slots = call.getArray("slots", String.self) else {
+            call.reject("Chybí pole slots.")
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let shell = self?.shellController else {
+                call.reject("Nativní shell není připravený.")
+                return
+            }
+            guard shell.applyTabSlots(slots) else {
+                call.reject("Neplatná volba karet: potřebuji tři různé známé cíle.")
+                return
+            }
+            call.resolve(["slots": slots])
         }
     }
 

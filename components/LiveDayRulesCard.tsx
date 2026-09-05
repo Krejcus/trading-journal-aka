@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CheckCircle2, Clock3, Lock, Save, Unlock, X } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Clock3, Lock, Save, Unlock, X } from 'lucide-react';
 import type { CopierControllerStatus } from '../services/copierRuntimeController';
 import {
   DEFAULT_COPY_GROUP_SAFETY,
@@ -359,6 +359,8 @@ export interface LiveDayRulesCardProps {
   disabled?: boolean;
   onSave?: (safety: CopyGroupSafetySettings) => Promise<void> | void;
   onUnlockDay?: (reason: string) => Promise<void> | void;
+  /** Telefon: karta začíná sbalená na hlavičku + stav pravidel; rozbalí se klepnutím. */
+  collapsible?: boolean;
 }
 
 export const LiveDayRulesCard = ({
@@ -375,7 +377,9 @@ export const LiveDayRulesCard = ({
   disabled = false,
   onSave,
   onUnlockDay,
+  collapsible = false,
 }: LiveDayRulesCardProps) => {
+  const [expanded, setExpanded] = useState(!collapsible);
   const effectiveSafety = safety ?? DEFAULT_COPY_GROUP_SAFETY;
   const [draft, setDraft] = useState(() => dailyRulesDraftFromSafety(effectiveSafety));
   const [now, setNow] = useState(() => Date.now());
@@ -495,16 +499,36 @@ export const LiveDayRulesCard = ({
 
       <section data-live-day-rules="true" className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4">
         <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
+          <div className="min-w-0 flex-1">
             <h3 className="text-sm font-black text-[var(--text-primary)]">Pravidla dne</h3>
-            <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--text-secondary)]">
-              Když pravidlo platí, copier se vypne a zamkne do konce session. Odemknutí je možné jen tady, s důvodem.
-              {groupName ? ` Skupina: ${groupName}.` : ''}
-            </p>
+            {expanded ? (
+              <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--text-secondary)]">
+                Když pravidlo platí, copier se vypne a zamkne do konce session. Odemknutí je možné jen tady, s důvodem.
+                {groupName ? ` Skupina: ${groupName}.` : ''}
+              </p>
+            ) : (
+              <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--text-secondary)]">
+                {groupName ? `Skupina: ${groupName}. ` : ''}Klepnutím rozbalíš a upravíš pravidla.
+              </p>
+            )}
           </div>
-          <TriggerPill count={triggeredCount} />
+          <div className="flex items-center gap-2">
+            <TriggerPill count={triggeredCount} />
+            {collapsible ? (
+              <button
+                type="button"
+                aria-expanded={expanded}
+                aria-label={expanded ? 'Sbalit pravidla dne' : 'Rozbalit pravidla dne'}
+                onClick={() => setExpanded(value => !value)}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)]"
+              >
+                <ChevronDown size={16} className={`transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />
+              </button>
+            ) : null}
+          </div>
         </header>
 
+        {expanded ? (<>
         <div className="mt-3 grid gap-2.5 md:grid-cols-2">
           <Rule title="Max ztrátových obchodů za den" detail="Anti-revenge: po N ztrátách dnes už ne." enabled={draft.losingTradesEnabled} triggered={losingTriggered} onToggle={checked => set('losingTradesEnabled', checked)}>
             <div className="flex items-center gap-3">
@@ -601,6 +625,7 @@ export const LiveDayRulesCard = ({
             {saving ? <Clock3 size={13} className="animate-spin" /> : <Save size={13} />}{saving ? 'Ukládám…' : 'Uložit pravidla'}
           </button>
         </footer>
+        </>) : null}
       </section>
 
       {unlockOpen && typeof document !== 'undefined' ? createPortal(
