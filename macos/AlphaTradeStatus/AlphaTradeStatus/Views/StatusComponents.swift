@@ -483,7 +483,7 @@ private extension CompanionTransitionCategory {
         switch self {
         case .worsening, .lock: return .danger
         case .improvement: return .success
-        case .mode, .ruleWarning, .lockExpired: return .warning
+        case .mode, .pause, .ruleWarning, .lockExpired: return .warning
         }
     }
 }

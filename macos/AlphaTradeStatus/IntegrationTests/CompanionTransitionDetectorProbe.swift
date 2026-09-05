@@ -82,6 +82,12 @@ struct CompanionTransitionDetectorProbe {
             lockedPresentation.footer.actions.first?.title == "Otevřít LIVE",
             "locked primary action must only open LIVE"
         )
+        expect(
+            lockedPresentation.hero.supportingText?.contains(
+                "Zámek skončí s koncem session (00:00 Chicago)"
+            ) == true,
+            "locked copy must explain session-end expiry"
+        )
         let staleLocked = reduced(
             status(revision: 3, dayLock: lock, dailyRules: rules),
             now: reference.addingTimeInterval(11)
@@ -248,6 +254,79 @@ struct CompanionTransitionDetectorProbe {
             CompanionTransitionDetector.detect(previous: shadow, next: disarmedUnverified, now: reference)?.category == .mode,
             "SHADOW to VYPNUTO must be a mode transition"
         )
+
+        let pause = MacCompanionStatusDTO.PauseDTO(
+            until: reference.addingTimeInterval(20 * 60),
+            rule: .dailyLoss
+        )
+        let paused = reduced(status(
+            revision: 5,
+            copierState: .live,
+            dailyRules: rules,
+            pause: pause,
+            accountCuts: 2,
+            tightenOnly: true
+        ))
+        expect(
+            paused.displayState == .paused(minutesRemaining: 42),
+            "fresh verified LIVE pause must become PAUZA"
+        )
+        let pausedPresentation = CompanionRemotePresentationFactory.make(
+            from: paused,
+            now: reference
+        )
+        expect(pausedPresentation.menuBar.pillText == "PAUZA", "PAUZA pill text")
+        expect(pausedPresentation.menuBar.symbolName == "pause.fill", "PAUZA pause symbol")
+        expect(pausedPresentation.menuBar.tone == .warning, "PAUZA must be amber")
+        expect(
+            pausedPresentation.hero.detail
+                == "Pauza do \(CompanionDisplayFormatting.shortTime(pause.until)) · denní ztráta",
+            "PAUZA popover detail"
+        )
+        expect(
+            pausedPresentation.sections.first { $0.id == "safety" }?.rows.contains { row in
+                guard case .keyValue(let value) = row else { return false }
+                return value.id == "account-cuts" && value.value == "2" && value.tone == .danger
+            } == true,
+            "account cuts must be shown in rose in Safety"
+        )
+        let pauseTransition = CompanionTransitionDetector.detect(
+            previous: live,
+            next: paused,
+            now: reference
+        )
+        expect(pauseTransition?.category == .pause, "entering PAUZA must be a pause transition")
+        expect(pauseTransition?.category.autoCloseDuration == 8, "PAUZA must auto-open as a toast")
+        expect(pauseTransition?.category.allowsSound == false, "PAUZA must stay silent")
+
+        var pauseGate = CompanionTransitionGate()
+        expect(observe(&pauseGate, live, monotonic: 0, source: .startup) == nil, "pause baseline")
+        expect(observe(&pauseGate, paused, monotonic: 1) == nil, "pause anti-flap")
+        expect(
+            observe(&pauseGate, paused, monotonic: 4)?.allowsAutoOpen == true,
+            "settled PAUZA must auto-open"
+        )
+
+        let unknownWithSamePause = reduced(status(
+            revision: 4,
+            copierState: .live,
+            brokerConnected: nil,
+            pause: pause
+        ))
+        expect(
+            CompanionTransitionDetector.detect(
+                previous: unknownWithSamePause,
+                next: paused,
+                now: reference
+            ) == nil,
+            "UNKNOWN recovery must not re-announce the same PAUZA"
+        )
+
+        let stalePaused = reduced(
+            status(revision: 5, copierState: .live, pause: pause),
+            now: reference.addingTimeInterval(11)
+        )
+        expect(stalePaused.displayState == .unknown, "stale PAUZA must be UNKNOWN")
 
         let expiry = reference.addingTimeInterval(301)
         let expiringStatus = status(
@@ -549,7 +628,10 @@ struct CompanionTransitionDetectorProbe {
         killSwitchTripped: Bool = false,
         exposureVerified: Bool = true,
         dayLock: MacCompanionStatusDTO.DayLockDTO? = nil,
-        dailyRules: MacCompanionStatusDTO.DailyRulesDTO? = nil
+        dailyRules: MacCompanionStatusDTO.DailyRulesDTO? = nil,
+        pause: MacCompanionStatusDTO.PauseDTO? = nil,
+        accountCuts: Int? = nil,
+        tightenOnly: Bool? = nil
     ) -> MacCompanionStatusDTO {
         .init(
             contractVersion: 1,
@@ -566,6 +648,9 @@ struct CompanionTransitionDetectorProbe {
             brokerConnected: brokerConnected,
             dayLock: dayLock,
             dailyRules: dailyRules,
+            pause: pause,
+            accountCuts: accountCuts,
+            tightenOnly: tightenOnly,
             safety: .init(
                 reconciliation: .init(status: reconciliation, at: reference),
                 divergences: divergences,

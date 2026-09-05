@@ -4,6 +4,8 @@ import {
   type CopierNotificationSnapshot,
   type CopierScheduledSlot,
 } from '../services/nativeCopierNotificationPlan';
+import { toCopierNotificationSnapshot } from '../services/nativeCopierNotifications';
+import type { CopierControllerStatus } from '../services/copierRuntimeController';
 
 const NOW = 1_000_000_000;
 const HOUR = 60 * 60 * 1000;
@@ -23,6 +25,8 @@ const snapshot = (partial: Partial<CopierNotificationSnapshot> = {}): CopierNoti
   dayLockReason: null,
   dayLockTrigger: null,
   ruleWarnings: [],
+  pause: null,
+  followerCuts: [],
   resumeOffer: null,
   autoClose: null,
   copyEvents: [],
@@ -34,6 +38,52 @@ const plan = (
   next: CopierNotificationSnapshot | null,
   slots: CopierScheduledSlot[] = [],
 ) => planCopierNotifications({ previous, next, slots, now: NOW });
+
+const controllerStatus = (
+  partial: Partial<CopierControllerStatus> = {},
+): CopierControllerStatus => ({
+  started: true,
+  armed: false,
+  killSwitch: false,
+  shadowMode: false,
+  connected: true,
+  reconciliationRequired: false,
+  divergentAccounts: [],
+  workingOrderAccounts: [],
+  stuckOutbox: false,
+  stuckOperations: [],
+  lastError: null,
+  revision: 1,
+  lastSequence: 0,
+  ...partial,
+});
+
+describe('snapshot worker statusu', () => {
+  it('mapuje pause a followerCuts a starší status bezpečně normalizuje na null/prázdno', () => {
+    expect(toCopierNotificationSnapshot(controllerStatus())).toMatchObject({
+      pause: null,
+      followerCuts: [],
+    });
+
+    const pause = { rule: 'daily-loss' as const, at: NOW, until: NOW + HOUR };
+    const cut = {
+      accountId: 42,
+      at: NOW,
+      until: NOW + 2 * HOUR,
+      realizedPnlUsd: -500,
+      cutUsd: 450,
+      source: 'broker' as const,
+      closed: null,
+    };
+    const mapped = toCopierNotificationSnapshot(controllerStatus({
+      pause,
+      followerCuts: [cut],
+    }));
+    expect(mapped).toMatchObject({ pause, followerCuts: [cut] });
+    expect(mapped?.pause).not.toBe(pause);
+    expect(mapped?.followerCuts[0]).not.toBe(cut);
+  });
+});
 
 describe('plánované sloty', () => {
   it('ostrý ARM naplánuje notifikaci na armExpiresAt', () => {
@@ -144,6 +194,14 @@ describe('okamžité incidenty', () => {
     expect(plan(snapshot(), snapshot({ copyEvents: [entry, exit] })).fireNow).toEqual([]);
   });
 
+  it('pauzu a cut nečte podruhé z obecného copyEvents deníku', () => {
+    const mirrored = [
+      { id: 'pause-1', kind: 'rule-pause', title: 'duplicitní pauza', body: 'duplicitní pauza' },
+      { id: 'cut-1', kind: 'follower-cut', title: 'duplicitní cut', body: 'duplicitní cut' },
+    ];
+    expect(plan(snapshot(), snapshot({ copyEvents: mirrored })).fireNow).toEqual([]);
+  });
+
   it('pád i bezpečný návrat spojení hlásí', () => {
     const down = plan(snapshot(), snapshot({ connected: false }));
     expect(down.fireNow).toEqual([expect.objectContaining({ title: 'Copier: Tradovate odpojen' })]);
@@ -238,6 +296,104 @@ describe('day-lock a auto-flatten hrany', () => {
       autoClose: { operationId: 'arm-expiry:9', trigger: 'arm-expiry' as const, flat: true, canceledOrders: 0, submittedClosures: 1 },
     });
     expect(plan(null, next).fireNow).toHaveLength(0);
+  });
+});
+
+describe('pauza pravidla a vyřazení followera', () => {
+  it('aktivní pauzu hlásí amber událostí jen na hraně neaktivní -> aktivní', () => {
+    const pause = { rule: 'max-trades' as const, at: NOW - 1_000, until: NOW + HOUR };
+    const next = snapshot({ pause });
+
+    expect(plan(snapshot(), next).fireNow).toEqual([{
+      title: 'Copier: PAUZA',
+      body: expect.stringMatching(/^Pauza do \d{2}:\d{2} — Max\. obchodů$/),
+      kind: 'rule-pause',
+    }]);
+    expect(plan(next, next).fireNow).toEqual([]);
+
+    // Prodloužení ani nové pravidlo/at uvnitř stejné souvislé pauzy není nová pauza.
+    expect(plan(next, snapshot({ pause: { ...pause, until: NOW + 2 * HOUR } })).fireNow).toEqual([]);
+    expect(plan(next, snapshot({
+      pause: { rule: 'daily-loss', at: NOW + 1, until: NOW + 2 * HOUR },
+    })).fireNow).toEqual([]);
+
+    // Po skutečném vypršení je další aktivní záznam novou pauzou.
+    const expiredPrevious = snapshot({
+      pause: { ...pause, until: NOW },
+    });
+    expect(plan(expiredPrevious, snapshot({ pause: { ...pause, at: NOW + 1 } })).fireNow)
+      .toEqual([expect.objectContaining({ kind: 'rule-pause' })]);
+    // První sync po startu dál respektuje stávající no-replay policy.
+    expect(plan(null, next).fireNow).toEqual([]);
+  });
+
+  it('prošlou pauzu nehlásí', () => {
+    const expired = snapshot({
+      pause: { rule: 'daily-loss', at: NOW - HOUR, until: NOW - 1 },
+    });
+    expect(plan(snapshot(), expired).fireNow).toEqual([]);
+  });
+
+  it('vyřazení hlásí jednou za účet a session a nový session konec vytvoří novou hranu', () => {
+    const cut = {
+      accountId: 42,
+      at: NOW,
+      until: NOW + 2 * HOUR,
+      realizedPnlUsd: -625.5,
+      cutUsd: 500,
+      source: 'broker' as const,
+      closed: null,
+    };
+    const next = snapshot({ followerCuts: [cut] });
+
+    expect(plan(snapshot(), next).fireNow).toEqual([{
+      title: 'Copier: Účet 42 vyřazen',
+      body: 'Ztráta −625,5 USD, limit 500 USD.',
+      kind: 'follower-cut',
+    }]);
+    expect(plan(next, next).fireNow).toEqual([]);
+    expect(plan(null, next).fireNow).toEqual([]);
+
+    const closed = snapshot({ followerCuts: [{ ...cut, closed: NOW + 5_000 }] });
+    expect(plan(next, closed).fireNow).toEqual([]);
+    const nextSession = snapshot({ followerCuts: [{ ...cut, until: NOW + 26 * HOUR }] });
+    expect(plan(next, nextSession).fireNow)
+      .toEqual([expect.objectContaining({ kind: 'follower-cut' })]);
+  });
+
+  it('selhání zavření přidá právě jednu critical zprávu, i když se zjistí až po cutu', () => {
+    const cut = {
+      accountId: 77,
+      at: NOW,
+      until: NOW + 2 * HOUR,
+      realizedPnlUsd: -400,
+      cutUsd: 350,
+      source: 'ledger' as const,
+      closed: null,
+    };
+    const previous = snapshot({ followerCuts: [cut] });
+    const failed = snapshot({ followerCuts: [{ ...cut, closed: false }] });
+
+    expect(plan(previous, failed).fireNow).toEqual([{
+      title: 'Copier: Kopii se nepodařilo zavřít',
+      body: 'Zkontroluj účet 77.',
+      kind: 'follower-cut-critical',
+    }]);
+    expect(plan(failed, failed).fireNow).toEqual([]);
+  });
+
+  it('už první stav failed po živé hraně vyšle cut i critical, duplicitní řádek jen jednou', () => {
+    const cut = {
+      accountId: 88,
+      at: NOW,
+      until: NOW + 2 * HOUR,
+      realizedPnlUsd: -300,
+      cutUsd: 250,
+      source: 'broker' as const,
+      closed: false as const,
+    };
+    expect(plan(snapshot(), snapshot({ followerCuts: [cut, cut] })).fireNow.map(item => item.kind))
+      .toEqual(['follower-cut', 'follower-cut-critical']);
   });
 });
 

@@ -160,6 +160,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-05 (Codex, Risk tab — závazná specifikace a fáze C)
+
+`docs/RISK_TAB_SPEC_20260905.md` sjednotila risk řízení copieru do samostatné
+záložky Risk a rozdělila dodání na A (autoritativní worker + relay), B (PWA) a
+C (read-only Mac companion, nativní notifikace a dokumentace). Tento worktree
+řeší fázi C; fáze A/B zůstávají oddělené, aby UI ani companion nikdy
+nevyhodnocovaly pravidla místo workeru.
+
+`unlock-day` je zrušený: denní zámek lze ukončit jen novou broker session
+(00:00 Chicago). Pauza je naopak dočasný stav rodiny LIVE — neDISARMuje,
+nezavírá pozice, blokuje jen vstupy leadera zvyšující expozici, dál propouští
+exity a sama vyprší; současný zámek má vždy přednost. Od prvního ostrého ARM v
+session lze pravidla i limity už jen zpřísnit, nová session omezení resetuje.
+
+Limity účtů jsou per follower: `dailyLossCutUsd` smí být nejvýš 95 %
+`propLimitUsd`; po zásahu se vyřadí pouze dotčený účet do konce session, skupina
+se nezamkne a účet se v téže session automaticky nevrací. Chybějící nebo starý
+snapshot není důkaz bezpečí. Companion proto pouze promítá autoritativní PAUZA,
+počet vyřazených účtů a tighten-only stav v additivním contractu v1; notifikace
+hlídají jednu pauzu a jeden cut na účet/session, selhání `close-copy` je
+samostatný critical incident.
+
 ### 2026-09-05 (Claude, rollout workera e018c3bb — snímky s reálným deadline)
 
 Mac byl 4. 9. večer restartován (všechny worktree v /private/tmp zanikly,

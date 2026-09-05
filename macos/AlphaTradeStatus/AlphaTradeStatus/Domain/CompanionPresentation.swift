@@ -3,6 +3,7 @@ import Foundation
 enum CompanionFixtureID: String, CaseIterable, Identifiable, Sendable {
     case live
     case liveAckUnavailable = "live-ack-unavailable"
+    case paused
     case shadow
     case disarmed
     case disarmedExposure = "disarmed-exposure"
@@ -32,6 +33,7 @@ enum StatusTone: String, Equatable, Sendable {
 
 enum CompanionDisplayState: Equatable, Sendable {
     case live(minutesRemaining: Int)
+    case paused(minutesRemaining: Int)
     case shadow
     case disarmed
     case disarmedUnverified
@@ -44,6 +46,8 @@ enum CompanionDisplayState: Equatable, Sendable {
         switch self {
         case .live:
             return "LIVE"
+        case .paused:
+            return "PAUZA"
         case .shadow:
             return "SHADOW"
         case .disarmed:

@@ -4,6 +4,7 @@ enum CompanionMockFixtureCatalog {
     static let orderedIDs: [CompanionFixtureID] = [
         .live,
         .liveAckUnavailable,
+        .paused,
         .shadow,
         .disarmed,
         .disarmedExposure,
@@ -24,6 +25,8 @@ enum CompanionMockFixtureCatalog {
             return live(acknowledgementsAvailable: true)
         case .liveAckUnavailable:
             return live(acknowledgementsAvailable: false)
+        case .paused:
+            return paused()
         case .shadow:
             return shadow()
         case .disarmed:
@@ -130,6 +133,40 @@ private extension CompanionMockFixtureCatalog {
             followerAcknowledgementEvidence: acknowledgementsAvailable
                 ? .verified(confirmed: 20, total: 20, verifiedAt: "12:52:44")
                 : .unavailable
+        )
+    }
+
+    static func paused() -> CompanionPresentation {
+        let base = live(acknowledgementsAvailable: false)
+        let sections = base.sections.map { section in
+            section.id == "safety"
+                ? cleanSafetySection(time: "15:57", initiallyExpanded: true, accountCuts: 2)
+                : section
+        }
+
+        return CompanionPresentation(
+            fixtureID: .paused,
+            displayState: .paused(minutesRemaining: 30),
+            menuBar: .init(
+                pillText: "PAUZA",
+                symbolName: "pause.fill",
+                tone: .warning,
+                accessibilityLabel: "AlphaTrade, pauza do 16:20"
+            ),
+            freshness: base.freshness,
+            hero: .init(
+                symbolName: "pause.fill",
+                title: "PAUZA",
+                badge: nil,
+                detail: "Pauza do 16:20 · denní ztráta",
+                supportingText: "Copier zůstává LIVE. Nové vstupy se nekopírují; exity pokračují.",
+                tone: .warning
+            ),
+            banner: base.banner,
+            sections: sections,
+            footer: base.footer,
+            exposureEvidence: base.exposureEvidence,
+            followerAcknowledgementEvidence: base.followerAcknowledgementEvidence
         )
     }
 
@@ -448,7 +485,7 @@ private extension CompanionMockFixtureCatalog {
                 title: "DEN ZAMČENÝ",
                 badge: "do 00:00",
                 detail: "Automaticky v 15:52 · pravidlo 2 ztrátové obchody z 2",
-                supportingText: "Copier vypnutý, zapnutí blokované do konce session. Odemknout jde jen v LIVE s potvrzením a důvodem.",
+                supportingText: "Copier vypnutý, zapnutí blokované do konce session. Zámek skončí s koncem session (00:00 Chicago)",
                 tone: .danger
             ),
             banner: nil,
@@ -685,7 +722,11 @@ private extension CompanionMockFixtureCatalog {
         )
     }
 
-    static func cleanSafetySection(time: String, initiallyExpanded: Bool) -> StatusSectionPresentation {
+    static func cleanSafetySection(
+        time: String,
+        initiallyExpanded: Bool,
+        accountCuts: Int = 0
+    ) -> StatusSectionPresentation {
         StatusSectionPresentation(
             id: "safety",
             title: "Bezpečnost",
@@ -698,6 +739,12 @@ private extension CompanionMockFixtureCatalog {
                 keyValue(id: "divergence", label: "Divergence", value: "Žádná", tone: .success),
                 keyValue(id: "outbox", label: "Outbox", value: "Prázdný", tone: .success),
                 keyValue(id: "cooldown", label: "Cooldown / Day-lock", value: "Neaktivní"),
+                keyValue(
+                    id: "account-cuts",
+                    label: "Vyřazené účty",
+                    value: String(accountCuts),
+                    tone: accountCuts > 0 ? .danger : .neutral
+                ),
                 keyValue(id: "kill-switch", label: "Kill switch", value: "Připraven")
             ]
         )

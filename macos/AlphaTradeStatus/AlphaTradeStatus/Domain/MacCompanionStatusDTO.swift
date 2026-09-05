@@ -16,6 +16,9 @@ struct MacCompanionStatusDTO: Decodable, Equatable, Sendable {
     var dailyStats: DailyStatsDTO? = nil
     var dayLock: DayLockDTO? = nil
     var dailyRules: DailyRulesDTO? = nil
+    var pause: PauseDTO? = nil
+    var accountCuts: Int? = nil
+    var tightenOnly: Bool? = nil
     let safety: SafetyDTO
     let exposure: ExposureDTO
     let snapshots: SnapshotsDTO
@@ -46,6 +49,18 @@ struct MacCompanionStatusDTO: Decodable, Equatable, Sendable {
         let label: String
         let realizedPnlUsd: Double
         let losingTrades: Int
+    }
+
+    enum DailyRule: String, Decodable, Equatable, Hashable, Sendable {
+        case dailyLoss = "daily-loss"
+        case losingTrades = "losing-trades"
+        case maxTrades = "max-trades"
+        case windowEnd = "window-end"
+    }
+
+    struct PauseDTO: Decodable, Equatable, Sendable {
+        let until: Date
+        let rule: DailyRule
     }
 
     enum DayLockTrigger: String, Decodable, Equatable, Hashable, Sendable {
@@ -219,6 +234,7 @@ enum MacCompanionStatusDecoder {
             throw MacCompanionStatusDecodingError.invalidTimeline
         }
         guard status.safety.outbox.stuckCount >= 0,
+              status.accountCuts.map({ $0 >= 0 }) ?? true,
               status.exposure.positions.allSatisfy({ $0.qty > 0 }),
               status.exposure.followerAck.map({ ack in
                   ack.confirmed >= 0 && ack.total >= 0 && ack.confirmed <= ack.total

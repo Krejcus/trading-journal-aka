@@ -26,6 +26,19 @@ const runtime = (controller: Record<string, unknown>, extras: Record<string, unk
   },
 });
 
+const healthyController = (extras: Record<string, unknown> = {}) => ({
+  armed: false,
+  shadowMode: false,
+  connected: true,
+  reconciliationRequired: false,
+  divergentAccounts: [],
+  workingOrderAccounts: [],
+  stuckOutbox: false,
+  stuckOperations: [],
+  killSwitch: false,
+  ...extras,
+});
+
 describe('mac companion cloud status reducer', () => {
   it('builds a strict allowlist DTO without inventing exposure or follower acknowledgements', () => {
     const dto = buildMacCompanionStatus({
@@ -120,6 +133,92 @@ describe('mac companion cloud status reducer', () => {
     expect(JSON.stringify(dto)).not.toContain('RAW-LAST-ERROR');
     expect(JSON.stringify(dto)).not.toContain('123456');
     expect(JSON.stringify(dto)).not.toContain('groupFlat');
+  });
+
+  it('maps active pause, follower cuts and tighten-only without changing contract v1', () => {
+    const pauseUntil = NOW + 10 * 60_000;
+    const dto = buildMacCompanionStatus({
+      runtime: runtime(healthyController({
+        pause: { until: pauseUntil, rule: 'daily-loss', at: NOW - 2_000 },
+        sessionArmedAt: NOW - 60_000,
+        followerCuts: [
+          {
+            accountId: 222222,
+            at: NOW - 30_000,
+            until: NOW + 60 * 60_000,
+            realizedPnlUsd: -510,
+            cutUsd: 500,
+            source: 'broker',
+            closed: null,
+          },
+          {
+            accountId: 333333,
+            at: NOW - 20_000,
+            until: NOW + 60 * 60_000,
+            realizedPnlUsd: -450,
+            cutUsd: 400,
+            source: 'ledger',
+            closed: false,
+          },
+        ],
+      })),
+      now: NOW,
+    });
+
+    expect(dto.contractVersion).toBe(1);
+    expect(dto.pause).toEqual({
+      until: new Date(pauseUntil).toISOString(),
+      rule: 'daily-loss',
+    });
+    expect(dto.accountCuts).toBe(2);
+    expect(dto.tightenOnly).toBe(true);
+    expect(JSON.stringify(dto)).not.toContain('222222');
+    expect(JSON.stringify(dto)).not.toContain('333333');
+  });
+
+  it('defaults missing risk status fields to null, zero and false', () => {
+    const dto = buildMacCompanionStatus({
+      runtime: runtime(healthyController()),
+      now: NOW,
+    });
+
+    expect(dto.pause).toBeNull();
+    expect(dto.accountCuts).toBe(0);
+    expect(dto.tightenOnly).toBe(false);
+  });
+
+  it('fails closed when risk status fields are malformed', () => {
+    const dto = buildMacCompanionStatus({
+      runtime: runtime(healthyController({
+        pause: { until: NOW + 60_000, rule: 'manual' },
+        sessionArmedAt: 'not-an-epoch',
+        followerCuts: [{
+          accountId: 222222,
+          at: NOW,
+          until: NOW + 60 * 60_000,
+          realizedPnlUsd: -510,
+          cutUsd: 500,
+          source: 'unknown',
+          closed: null,
+        }],
+      })),
+      now: NOW,
+    });
+
+    expect(dto.pause).toBeNull();
+    expect(dto.accountCuts).toBe(0);
+    expect(dto.tightenOnly).toBe(false);
+  });
+
+  it('does not expose an expired worker pause as active', () => {
+    const dto = buildMacCompanionStatus({
+      runtime: runtime(healthyController({
+        pause: { until: NOW, rule: 'max-trades', at: NOW - 60_000 },
+      })),
+      now: NOW,
+    });
+
+    expect(dto.pause).toBeNull();
   });
 
   it('redacts divergent account ids and surfaces fixed, non-executable problems', () => {

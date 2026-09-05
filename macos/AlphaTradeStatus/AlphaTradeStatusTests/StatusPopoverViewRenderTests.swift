@@ -190,8 +190,32 @@ final class StatusPopoverViewRenderTests: XCTestCase {
         }
     }
 
+    func testPauzaMenuBarPillRendersAmberPauseSymbolAndTextWithoutMinutes() throws {
+        let presentation = CompanionMockFixtureCatalog.presentation(for: .paused)
+        XCTAssertEqual(presentation.menuBar.symbolName, "pause.fill")
+        XCTAssertEqual(presentation.menuBar.pillText, "PAUZA")
+        XCTAssertFalse(presentation.menuBar.pillText?.localizedCaseInsensitiveContains("min") ?? true)
+
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let button = NSStatusBarButton(frame: .zero)
+            let size = MenuBarStatusButtonStyle.apply(
+                to: button,
+                presentation: presentation.menuBar,
+                appearance: appearance == .darkAqua ? .dark : .light
+            )
+            XCTAssertEqual(size.height, 28, accuracy: 0.01)
+            XCTAssertGreaterThan(size.width, 85)
+            XCTAssertNotNil(button.image)
+
+            let background = try XCTUnwrap(button.layer?.backgroundColor)
+            let color = try XCTUnwrap(NSColor(cgColor: background)?.usingColorSpace(.sRGB))
+            XCTAssertGreaterThan(color.redComponent, color.blueComponent)
+            XCTAssertGreaterThan(color.greenComponent, color.blueComponent)
+        }
+    }
+
     func testStatusPopoverCompletesLayoutInLightAndDarkModes() {
-        let fixtures: [CompanionFixtureID] = [.live, .disarmedUnverified, .locked, .intervention]
+        let fixtures: [CompanionFixtureID] = [.live, .paused, .disarmedUnverified, .locked, .intervention]
         let schemes: [(name: String, value: ColorScheme)] = [
             ("light", .light),
             ("dark", .dark)
@@ -218,6 +242,14 @@ final class StatusPopoverViewRenderTests: XCTestCase {
 
     func testZamcenoPopoverRendersInLightAndDarkModes() throws {
         let presentation = CompanionMockFixtureCatalog.presentation(for: .locked)
+        for scheme in [ColorScheme.light, .dark] {
+            let data = try renderPNG(presentation: presentation, colorScheme: scheme)
+            XCTAssertGreaterThan(data.count, 15_000)
+        }
+    }
+
+    func testPauzaPopoverRendersInLightAndDarkModes() throws {
+        let presentation = CompanionMockFixtureCatalog.presentation(for: .paused)
         for scheme in [ColorScheme.light, .dark] {
             let data = try renderPNG(presentation: presentation, colorScheme: scheme)
             XCTAssertGreaterThan(data.count, 15_000)
@@ -264,7 +296,7 @@ final class StatusPopoverViewRenderTests: XCTestCase {
         }
 
         let renderedNames = try fileManager.contentsOfDirectory(atPath: outputDirectory.path)
-        XCTAssertEqual(renderedNames.filter { $0.hasSuffix(".png") }.count, 20)
+        XCTAssertEqual(renderedNames.filter { $0.hasSuffix(".png") }.count, 22)
     }
 
     private func assertLayoutCompletes(

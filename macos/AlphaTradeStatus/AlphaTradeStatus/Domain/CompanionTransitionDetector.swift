@@ -4,6 +4,7 @@ enum CompanionTransitionCategory: String, Equatable, Sendable {
     case worsening
     case improvement
     case mode
+    case pause
     case lock
     case ruleWarning
     case lockExpired
@@ -40,7 +41,7 @@ struct CompanionTransition: Equatable, Sendable {
 extension CompanionTransitionCategory {
     var shouldNotify: Bool {
         switch self {
-        case .worsening, .mode, .lock, .ruleWarning, .lockExpired:
+        case .worsening, .mode, .pause, .lock, .ruleWarning, .lockExpired:
             return true
         case .improvement:
             return false
@@ -55,7 +56,7 @@ extension CompanionTransitionCategory {
         switch self {
         case .worsening, .lock:
             return 60
-        case .improvement, .mode, .lockExpired:
+        case .improvement, .mode, .pause, .lockExpired:
             return 8
         case .ruleWarning:
             return nil
@@ -159,6 +160,21 @@ enum CompanionTransitionDetector {
                 sectionID: target.sectionID,
                 rowID: target.rowID,
                 reason: "Stav copieru nově vyžaduje kontrolu."
+            )
+        }
+
+        if !isPaused(previous.displayState), isPaused(next.displayState),
+           previous.status.pause != next.status.pause,
+           let pause = next.status.pause, pause.until > now {
+            let until = CompanionDisplayFormatting.shortTime(pause.until)
+            let rule = pauseRuleText(pause.rule)
+            return .init(
+                category: .pause,
+                sectionID: next.status.dailyRules == nil ? "safety" : "daily-rules",
+                rowID: rowID(for: pause.rule),
+                reason: "Pauza do \(until) · \(rule).",
+                notificationTitle: "Pauza do \(until)",
+                notificationBody: "Pravidlo: \(rule). Nové vstupy se nekopírují; exity pokračují."
             )
         }
 
@@ -398,6 +414,7 @@ private struct StableSignature: Equatable {
     let disarmedExposure: Bool
     let problems: [String]
     let dayLock: String
+    let pause: String
     let ruleWarnings: [String]
     let sessionEndsAt: Date?
 
@@ -418,6 +435,9 @@ private struct StableSignature: Equatable {
         problems = status.problems.map { "\($0.kind.rawValue)|\($0.text)" }.sorted()
         dayLock = status.dayLock.map {
             "\($0.active)|\($0.trigger.rawValue)|\(CompanionISO8601.string(from: $0.until))|\(CompanionISO8601.string(from: $0.at))"
+        } ?? "none"
+        pause = status.pause.map {
+            "\($0.rule.rawValue)|\(CompanionISO8601.string(from: $0.until))"
         } ?? "none"
         ruleWarnings = CompanionTransitionDetector.ruleWarningKeys(in: status).sorted()
         sessionEndsAt = status.dailyRules?.sessionEndsAt
@@ -449,6 +469,11 @@ private extension CompanionTransitionDetector {
         state == .locked
     }
 
+    static func isPaused(_ state: CompanionDisplayState) -> Bool {
+        if case .paused = state { return true }
+        return false
+    }
+
     static func isDisabled(_ state: CompanionDisplayState) -> Bool {
         state == .disarmed || state == .disarmedUnverified
     }
@@ -468,6 +493,24 @@ private extension CompanionTransitionDetector {
         case .losingTrades: return "rule-losing-trades"
         case .maxTrades: return "rule-max-trades"
         case .windowEnd: return "rule-window"
+        }
+    }
+
+    static func rowID(for rule: MacCompanionStatusDTO.DailyRule) -> String {
+        switch rule {
+        case .dailyLoss: return "rule-daily-loss"
+        case .losingTrades: return "rule-losing-trades"
+        case .maxTrades: return "rule-max-trades"
+        case .windowEnd: return "rule-window"
+        }
+    }
+
+    static func pauseRuleText(_ rule: MacCompanionStatusDTO.DailyRule) -> String {
+        switch rule {
+        case .dailyLoss: return "denní ztráta"
+        case .losingTrades: return "ztrátové obchody"
+        case .maxTrades: return "počet obchodů"
+        case .windowEnd: return "konec obchodního okna"
         }
     }
 
@@ -601,6 +644,8 @@ private extension CompanionTransitionDetector {
         let previousWasUrgent: Bool
         if case .live(let minutes) = previous.displayState {
             previousWasUrgent = minutes <= 5
+        } else if case .paused(let minutes) = previous.displayState {
+            previousWasUrgent = minutes <= 5
         } else {
             previousWasUrgent = false
         }
@@ -609,6 +654,9 @@ private extension CompanionTransitionDetector {
             return previous.status.copierState == .live && !isIntervention(previous.displayState)
         }
         if case .live(let minutes) = next.displayState {
+            return minutes <= 5 && !previousWasUrgent
+        }
+        if case .paused(let minutes) = next.displayState {
             return minutes <= 5 && !previousWasUrgent
         }
         return false
@@ -851,6 +899,7 @@ private extension CompanionTransitionDetector {
     static func displayKey(_ state: CompanionDisplayState) -> String {
         switch state {
         case .live(let minutes): return minutes <= 5 ? "live-urgent" : "live"
+        case .paused(let minutes): return minutes <= 5 ? "paused-urgent" : "paused"
         case .shadow: return "shadow"
         case .disarmed: return "disarmed"
         case .disarmedUnverified: return "disarmed-unverified"
