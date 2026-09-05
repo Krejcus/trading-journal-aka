@@ -160,6 +160,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-05 (Claude, Risk záložka — sloučení fází A/B/C a review workeru)
+
+Fáze A (worker + relay) Codex nedokončil — vyčerpal usage limit 1,74 M tokenů
+před commitem; zbytek (tsc oprava testu agenta, review, commit) dodělal Claude.
+Sloučeno do `claude/risk-tab-20260905` (A `93d27f3d`, B `7f6a3cd2` + opravy
+`f6a3c8ec` (skupina bez `dayRuleActions` shazovala kartu) a `e035793d` (jeden
+řádek na pravidlo), C `9a88f9ef` + `4b6bf282` (počítadlo vyřazených účtů
+přeskočí vadný záznam místo nuly)). Celá sada 2090+ testů zeleně, tsc bez
+nových chyb.
+
+Nezávislé review workeru (code-reviewer) našlo blocker: selhání `close-copy`
+při vyřazení účtu volalo `failClosed` a odzbrojilo celou skupinu, proti spec
+§0 („vyřazení nikdy nezamyká skupinu"). Konečné řešení rozlišuje stav
+brokeru: odmítnutí před odesláním (cizí symbol, neověřitelná kopie, cancel
+u let-run) je per účet — `closed=false`, audit, skupina zůstává ARM,
+neuzavřená kopie je exit-eligible jako let-run; neznámý výsledek liquidate
+(outbox `unknown`) zůstává fail-closed pro skupinu, protože mock i Tradovate
+transport hlásí výjimku jako neznámý stav a druhý pokus je zakázaný. Recovery
+a update-group cesty (runtime DISARMED) zůstaly beze změny — pokus o scoped
+chování i tam rozbil restart testy (reconnect auto-close). Dále: validace
+`followerCuts`/`accountRisk` při načtení durable stavu. Nepřidáno: claim-side
+tighten-only kontrola v relay (worker je autoritativní, enqueue kontrola stačí).
+
 ### 2026-09-05 (Codex, Risk tab — závazná specifikace a fáze C)
 
 `docs/RISK_TAB_SPEC_20260905.md` sjednotila risk řízení copieru do samostatné

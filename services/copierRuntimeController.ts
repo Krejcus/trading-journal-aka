@@ -618,8 +618,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
   const processor = createSerialCopierProcessor(runtime);
   let sessionArmedAt = runtime.state.safety.sessionArmedAt ?? 0;
+  // Durable záznamy prošly vlastním zápisem, ale při načtení se validují
+  // stejně přísně jako provenance níže: poškozený cut/snapshot se zahodí,
+  // nikdy se nevydává za platný.
   const followerCuts = new Map<number, CopierFollowerCut>(
-    Object.values(runtime.state.safety.followerCuts ?? {}).map(cut => [cut.accountId, { ...cut }]),
+    Object.values(runtime.state.safety.followerCuts ?? {}).flatMap(cut => {
+      if (!cut
+        || !Number.isSafeInteger(cut.accountId) || cut.accountId <= 0
+        || !Number.isFinite(cut.at) || !Number.isFinite(cut.until) || cut.until < cut.at
+        || !Number.isFinite(cut.realizedPnlUsd)
+        || !Number.isFinite(cut.cutUsd) || cut.cutUsd <= 0
+        || (cut.source !== 'broker' && cut.source !== 'ledger')
+        || !(cut.closed === null || cut.closed === false || (Number.isFinite(cut.closed) && cut.closed > 0))
+      ) return [];
+      return [[cut.accountId, { ...cut }] as const];
+    }),
   );
   const followerCutExecutionProvenance = new Map<number, CopierFollowerCutExecutionProvenance>(
     Object.values(
@@ -654,8 +667,27 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }] as const];
     }),
   );
+  const finiteOrNullField = (value: unknown): number | null => (
+    typeof value === 'number' && Number.isFinite(value) ? value : null
+  );
   const accountRisk = new Map<number, CopierAccountRiskSnapshot>(
-    Object.values(runtime.state.safety.accountRisk ?? {}).map(snapshot => [snapshot.accountId, { ...snapshot }]),
+    Object.values(runtime.state.safety.accountRisk ?? {}).flatMap(snapshot => {
+      if (!snapshot
+        || !Number.isSafeInteger(snapshot.accountId) || snapshot.accountId <= 0
+        || !Number.isFinite(snapshot.verifiedAt) || snapshot.verifiedAt <= 0
+      ) return [];
+      return [[snapshot.accountId, {
+        accountId: snapshot.accountId,
+        verifiedAt: snapshot.verifiedAt,
+        realizedPnlUsd: finiteOrNullField(snapshot.realizedPnlUsd),
+        netLiq: finiteOrNullField(snapshot.netLiq),
+        minNetLiq: finiteOrNullField(snapshot.minNetLiq),
+        dailyLossAutoLiq: finiteOrNullField(snapshot.dailyLossAutoLiq),
+        trailingMaxDrawdown: finiteOrNullField(snapshot.trailingMaxDrawdown),
+        propLimitUsd: finiteOrNullField(snapshot.propLimitUsd),
+        ...(typeof snapshot.error === 'string' ? { error: snapshot.error } : {}),
+      }] as const];
+    }),
   );
   const source = new CopierLeaderEventSource();
   let bracketCorrelator = new CopierBracketCorrelator();
@@ -907,11 +939,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const ineligible = new Map(currentIneligibleAccounts(now));
     for (const follower of group.followers) {
       const cut = activeFollowerCut(follower.accountId, now);
-      if (cut && (follower.onCut ?? 'close-copy') === 'close-copy') {
+      if (cut && (follower.onCut ?? 'close-copy') === 'close-copy' && cut.closed !== false) {
         // `close-copy` už vlastní vlastní liquidation lifecycle. Jakýkoli
         // pozdější leader exit/protective příkaz by po úspěšném flat
         // mohl na tomto followerovi otevřít opačnou pozici. `let-run` se
         // naopak záměrně nevyřazuje, aby jeho existující kopie směla dojet.
+        // Po SELHANÉM zavření (closed=false) kopie stále žije, proto se
+        // chová jako let-run: exity leadera ji smějí zavřít.
         ineligible.set(follower.accountId, `follower-cut-close-copy:${cut.source}:${cut.until}`);
       }
     }
@@ -3005,8 +3039,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const flatten = async (
     accountIds: readonly number[],
     operationId: string,
-    { preserveArm = false }: { preserveArm?: boolean } = {},
+    { preserveArm = false, scopedFailure = false }: { preserveArm?: boolean; scopedFailure?: boolean } = {},
   ) => {
+    // `scopedFailure`: selhání se vrací volajícímu jako výjimka a NEodzbrojí
+    // celou skupinu — používá follower cut, který smí ovlivnit jen svůj účet
+    // (spec RISK_TAB §0/§3.3: vyřazení účtu nikdy nezamyká skupinu).
     if (!preserveArm) {
       gate = { ...gate, armed: false };
       invalidateReconciliation();
@@ -3035,7 +3072,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return processed.runtime;
       });
     } catch (error) {
-      failClosed(error, preserveArm ? { autoClose: false } : undefined);
+      if (!scopedFailure) failClosed(error, preserveArm ? { autoClose: false } : undefined);
       throw error;
     }
     if (!result) throw new Error('Flatten nedokončil žádný výsledek');
@@ -3053,7 +3090,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const error = new Error(
         `Flatten selhal: zavřeno ${result.accounts.length - failed.length}/${result.accounts.length} účtů; selhaly ${detail || 'neznámé účty'}`,
       );
-      failClosed(error, preserveArm ? { autoClose: false } : undefined);
+      if (!scopedFailure) failClosed(error, preserveArm ? { autoClose: false } : undefined);
       throw error;
     }
     if (preserveArm) {
@@ -3573,6 +3610,35 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return { cut, follower };
   };
 
+  /**
+   * Selhání zásahu na jednom followerovi: durable closed=false + audit.
+   * Nikdy neodzbrojuje skupinu; selhání durable zápisu je jediná výjimka
+   * (stav workeru by lhal), ta zůstává fail-closed.
+   */
+  const recordFollowerCutFailure = async (cut: CopierFollowerCut, detail: string): Promise<void> => {
+    const failed = { ...cut, closed: false as const };
+    followerCuts.set(cut.accountId, failed);
+    options.onAudit?.([{
+      at: clock(),
+      leaderEventId: `follower-cut:${cut.accountId}:${cut.until}:close-failed`,
+      kind: 'follower-cut',
+      accountId: cut.accountId,
+      until: cut.until,
+      source: cut.source,
+      cutUsd: cut.cutUsd,
+      current: Math.abs(cut.realizedPnlUsd),
+      limit: cut.cutUsd,
+      reason: `follower ${cut.accountId} cut: kopii se nepodařilo zavřít — ${detail}`,
+    }]);
+    try {
+      await persistRiskSafety();
+    } catch (persistReason) {
+      failClosed(new Error(
+        `Selhání follower cut ${cut.accountId} nelze durable uložit: ${errorOf(persistReason).message}`,
+      ), { autoClose: false });
+    }
+  };
+
   const executeFollowerCutAction = async (
     cut: CopierFollowerCut,
     follower: CopyGroupConfig['followers'][number],
@@ -3580,6 +3646,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     emitCopyEvent = true,
   ): Promise<void> => {
     const { accountId, at } = cut;
+    // Živý cut (spuštěný daty za ARM, emitCopyEvent=true) drží selhání per
+    // účet a skupinu neodzbrojuje (spec §0/§3.3). Recovery/restart a
+    // update-group cesty (emitCopyEvent=false) běží už DISARMED a nechávají
+    // si původní fail-closed chování, aby se nic neobnovovalo naslepo.
+    const scopedFailure = emitCopyEvent;
     if (!liveSideEffects) {
       // Shadow ARM smí risk data i cut stav pozorovat, nikdy však nesmí
       // vytvořit cancel/liquidation side effect.
@@ -3593,11 +3664,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (!liveRecoveryAuthorized) {
       // sessionArmedAt dokazuje jen, že v této session někdy proběhl live
       // ARM. Nikdy nesmí povýšit pozdější shadow cut na oprávnění
-      // poslat cancel/liquidate po restartu.
-      failClosed(new Error(
-        `Follower cut ${accountId}: chybí durable live provenance konkrétního cutu; `
-        + 'cancel/close zůstává observe-only',
-      ), { autoClose: false });
+      // poslat cancel/liquidate po restartu. Cut zůstává observe-only
+      // (closed=null: žádný pokus o zavření).
+      if (!scopedFailure) {
+        failClosed(new Error(
+          `Follower cut ${accountId}: chybí durable live provenance konkrétního cutu; `
+          + 'cancel/close zůstává observe-only',
+        ), { autoClose: false });
+      }
       if (emitCopyEvent) pushFollowerCutEvent(cut);
       return;
     }
@@ -3607,30 +3681,31 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // ale copier-owned waiting entry/scale-in už po cutu nesmí fillnout.
         await cancelOwnedOpeningOrdersForLetRunCut(accountId, follower, cut);
       } catch (reason) {
-        failClosed(new Error(
-          `Follower cut ${accountId}: ${errorOf(reason).message}`,
-        ), { autoClose: false });
+        if (scopedFailure) await recordFollowerCutFailure(cut, errorOf(reason).message);
+        else failClosed(new Error(`Follower cut ${accountId}: ${errorOf(reason).message}`), { autoClose: false });
       }
-      if (emitCopyEvent) pushFollowerCutEvent(cut);
+      if (emitCopyEvent) pushFollowerCutEvent(followerCuts.get(accountId) ?? cut);
       return;
     }
     let hasKnownCopy: boolean;
     try {
       hasKnownCopy = await followerHasCopyToClose(accountId);
     } catch (reason) {
-      const failed = { ...cut, closed: false as const };
-      followerCuts.set(accountId, failed);
-      try {
-        await persistRiskSafety();
-      } catch {
-        // Níže stejně přejdeme fail-closed; chybu nelze vydávat za
-        // dokončený cut ani zkoušet znovu naslepo.
+      // Neověřitelný stav kopie = closed:false (žádný slepý liquidation pokus).
+      const detail = `stav kopie nelze autoritativně ověřit: ${errorOf(reason).message}`;
+      if (scopedFailure) {
+        await recordFollowerCutFailure(cut, detail);
+      } else {
+        const failed = { ...cut, closed: false as const };
+        followerCuts.set(accountId, failed);
+        try {
+          await persistRiskSafety();
+        } catch {
+          // Níže stejně přejdeme fail-closed; chybu nelze vydávat za dokončený cut.
+        }
+        failClosed(new Error(`Follower cut ${accountId}: ${detail}`), { autoClose: false });
       }
-      const error = new Error(
-        `Follower cut ${accountId}: stav kopie nelze autoritativně ověřit: ${errorOf(reason).message}`,
-      );
-      failClosed(error, { autoClose: false });
-      if (emitCopyEvent) pushFollowerCutEvent(failed);
+      if (emitCopyEvent) pushFollowerCutEvent(followerCuts.get(accountId) ?? cut);
       return;
     }
     if (!hasKnownCopy) {
@@ -3641,21 +3716,41 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       await flatten(
         [accountId],
         `cut-${accountId}-${Math.floor(cut.until / 86_400_000)}`,
-        { preserveArm: true },
+        { preserveArm: true, scopedFailure },
       );
     } catch (reason) {
-      const failed = { ...cut, closed: false as const };
-      followerCuts.set(accountId, failed);
-      try {
-        await persistRiskSafety();
-      } catch (persistReason) {
-        failClosed(new Error(
-          `Selhání follower cut ${accountId} nelze durable uložit: ${errorOf(persistReason).message}`,
-        ), { autoClose: false });
+      // Jediný pokus, žádný druhý liquidation. Živě: když broker liquidate
+      // ODMÍTL (nic neletí, stav účtu je známý), selhání se drží per účet
+      // (closed=false, vstupy blokované, exity leadera se kopírují dál, aby
+      // se kopie mohla zavřít s leaderem) a skupina zůstává ARM — ostatní
+      // followeři nesmí přijít o kopírování kvůli jednomu účtu. Když je ale
+      // výsledek liquidate NEZNÁMÝ (odeslán, flat nepotvrzen), platí obecný
+      // invariant: neznámý broker stav = fail-closed celé skupiny.
+      // Recovery: `flatten` už nastavil fail-closed stav i lastError.
+      const unknownBrokerState = currentStuckOperations().some(operation => operation.accountId === accountId);
+      if (scopedFailure && !unknownBrokerState) {
+        await recordFollowerCutFailure(cut, errorOf(reason).message);
+      } else if (scopedFailure) {
+        const failed = { ...cut, closed: false as const };
+        followerCuts.set(accountId, failed);
+        try {
+          await persistRiskSafety();
+        } catch {
+          // Níže stejně přejdeme fail-closed.
+        }
+        failClosed(reason, { autoClose: false });
+      } else {
+        const failed = { ...cut, closed: false as const };
+        followerCuts.set(accountId, failed);
+        try {
+          await persistRiskSafety();
+        } catch (persistReason) {
+          failClosed(new Error(
+            `Selhání follower cut ${accountId} nelze durable uložit: ${errorOf(persistReason).message}`,
+          ), { autoClose: false });
+        }
       }
-      if (emitCopyEvent) pushFollowerCutEvent(failed);
-      // `flatten` už fail-closed stav i lastError nastavil. Zde se pouze
-      // zachová explicitní výsledek cutu; žádný druhý liquidation pokus.
+      if (emitCopyEvent) pushFollowerCutEvent(followerCuts.get(accountId) ?? cut);
       return;
     }
     const closed = { ...cut, closed: at };

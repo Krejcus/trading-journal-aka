@@ -473,7 +473,7 @@ describe('CopierRuntimeController — follower account cuts', () => {
     }
   });
 
-  it('selhání close-copy zůstane jedním pokusem, nastaví closed=false a viditelný lastError', async () => {
+  it('close-copy s nepotvrzeným liquidate zůstane jedním pokusem, nastaví closed=false a fail-closed (neznámý broker stav)', async () => {
     const time = manualClock();
     let breached = false;
     const broker = createMockBroker({
@@ -517,7 +517,11 @@ describe('CopierRuntimeController — follower account cuts', () => {
         source: 'broker',
         closed: false,
       });
+      // Liquidate byl odeslán a broker flat nepotvrdil: neznámý broker stav
+      // je fail-closed pro celou skupinu (stuck outbox), ne jen pro účet.
       expect(runtime.controller.status().lastError).toContain('Flatten selhal');
+      expect(runtime.controller.status().armed).toBe(false);
+      expect(runtime.controller.status().stuckOutbox).toBe(true);
       expect(runtime.controller.status().dayLockUntil).toBe(0);
       expect(await broker.listPositions(200)).toEqual([
         expect.objectContaining({ netQuantity: 1 }),
@@ -891,7 +895,37 @@ describe('CopierRuntimeController — follower account cuts', () => {
 
       expect(followerCut(runtime.controller)).toMatchObject({ closed: false });
       expect(broker.liquidateRequests().filter(request => request.accountId === 200)).toHaveLength(0);
-      expect(runtime.controller.status().lastError).toContain('expozici bez potvrzené copier lineage');
+      // Odmítnutí account-wide flattenu je per účet (closed=false); skupina
+      // zůstává ARM a bez lastError — nic neletí, stav účtu je známý.
+      expect(runtime.controller.status()).toMatchObject({ armed: true, lastError: null, stuckOutbox: false });
+      expect(runtime.audits).toContainEqual(expect.objectContaining({
+        kind: 'follower-cut',
+        accountId: 200,
+        reason: expect.stringContaining('kopii se nepodařilo zavřít'),
+      }));
+
+      // Druhý follower kopíruje dál; vyřazený účet nedostane nový vstup.
+      time.advance(1_000);
+      const placedBefore = broker.placedRequests().length;
+      await emitLeaderFill({
+        ...runtime, time, side: 'Buy', price: 20_010, netQuantity: 2,
+      });
+      expect(broker.placedRequests().slice(placedBefore)).toEqual([
+        expect.objectContaining({ accountId: 201, side: 'Buy', quantity: 1 }),
+      ]);
+      expect(runtime.controller.status().armed).toBe(true);
+
+      // Exit leadera se do neuzavřené kopie kopíruje (chová se jako let-run),
+      // aby se mohla zavřít s leaderem — žádný liquidation pokus navíc.
+      time.advance(1_000);
+      await emitLeaderFill({
+        ...runtime, time, side: 'Sell', quantity: 2, price: 20_020, netQuantity: 0,
+      });
+      expect(broker.placedRequests().slice(placedBefore + 1)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ accountId: 200, side: 'Sell' }),
+        expect.objectContaining({ accountId: 201, side: 'Sell' }),
+      ]));
+      expect(broker.liquidateRequests().filter(request => request.accountId === 200)).toHaveLength(0);
     } finally {
       runtime.controller.stop();
     }

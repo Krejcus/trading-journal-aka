@@ -179,8 +179,18 @@ Pro followera s `dailyLossCutUsd > 0`:
   pouze runtime override; po nové session se obnoví), audit `follower-cut`,
   `recentCopyEvents`/notifikační plán dostane událost (§6).
 - `onCut === 'close-copy'` a účet drží kopii → existující `flattenAccount(accountId, 'cut-<accountId>-<sessionDate>')`.
-  Úspěch → `closed = at`; selhání → `closed = false`, `lastError` (toto JE
-  fail-closed stav: otevřená kopie bez dozoru), follower zůstává off.
+  Úspěch → `closed = at`. Selhání → `closed = false`, follower zůstává off,
+  audit `follower-cut` s důvodem, a dál platí (upřesněno 2026-09-05 po review):
+  - **odmítnutí před odesláním** (worker sám flatten odmítl, např. cizí
+    symbol na účtu, neověřitelný stav kopie, chyba cancelu u let-run) →
+    stav účtu je známý, nic neletí: skupina **zůstává ARM bez `lastError`**,
+    ostatní followeři kopírují dál; neuzavřená kopie se chová jako let-run
+    (leader exit se do ní kopíruje, aby se zavřela s leaderem, nový vstup ne);
+  - **neznámý výsledek broker příkazu** (liquidate odeslán, flat nepotvrzen,
+    outbox `unknown`) → obecný invariant copieru má přednost: `lastError`,
+    fail-closed celé skupiny bez auto-close (`autoClose:false`); žádný retry.
+  - Recovery/restart a update-group cesty (runtime už DISARMED) drží
+    původní fail-closed chování, nic se neobnovuje naslepo.
 - `let-run` → kopie zůstává, exit leadera se do ní **kopíruje dál** (snižování
   expozice není blokováno), nové vstupy ne.
 - Skupina se **nezamyká**, ostatní followeři nedotčeni. Nikdy se v téže session
