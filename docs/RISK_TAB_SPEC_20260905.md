@@ -31,7 +31,7 @@ Neměnné zásady (navíc k DLR §0):
   „neověřeno" v UI; vyřazení proběhne jen na ověřených datech nebo na vlastním
   ledgeru (fast path §3.3). Nikdy se neodhaduje.
 - Terminologie UI: „Pauza do HH:MM", „Zámek dne", „Vyřazen do konce session",
-  „Limit propky", „Vypnout při", „jen zpřísnit". Bez slova „tvrdý režim".
+  „Limit propky", „Max ztráta", „jen zpřísnit". Bez slova „tvrdý režim".
 
 ## 1. Datový model (`services/liveCopyTrading.ts`) — sdílené typy jsou už v základní větvi
 
@@ -54,7 +54,7 @@ export interface CopyGroupDayRuleActions {
 
 export interface CopyFollowerConfig {
   accountId: number; mode: CopyReplicationMode; multiplier: number; maxContracts?: number;
-  /** „Vypnout při": realizovaná denní ztráta účtu (USD, vč. poplatků), při které účet vypadne z kopírování. 0/undefined = vypnuto. */
+  /** „Max ztráta": realizovaná denní ztráta účtu (USD, vč. poplatků), při které účet vypadne z kopírování. 0/undefined = vypnuto. */
   dailyLossCutUsd?: number;          // 0.01..1_000_000, 2 desetinná místa
   /** Co s otevřenou kopií účtu při vyřazení. Default 'close-copy'. */
   onCut?: 'close-copy' | 'let-run';
@@ -241,8 +241,8 @@ contractVersion zůstává 1, pole volitelná): `pause: { until, rule } | null`,
   **Účty a propky** (`components/LiveAccountRiskTable.tsx`, nová: sloupce Účet
   (název z `accountProfiles`/`snapshot.accounts`, pod ním id a role), Propka
   (firma + fáze), Limit propky (read-only, štít = ověřeno < 90 s, jinak „neověřeno"),
-  Vypnout při (input USD), Max kontr. (input), Dnes vč. poplatků (hodnota + lišta
-  vůči „Vypnout při"), Při dosažení (select Zavřít kopii / Nechat dojet), Stav
+  Max ztráta (input USD), Max kontr. (input), Dnes vč. poplatků (hodnota + lišta
+  vůči „Max ztráta"), Při dosažení (select Zavřít kopii / Nechat dojet), Stav
   (Kopíruje / Kopíruje · blízko limitu ≥ 80 % / Vyřazen do konce session + „vypnout
   při X · kopie zavřena HH:MM" / Obchoduje pro leadera); banner vyřazení nad
   tabulkou; tlačítko Uložit limity = `update-group` s followery).

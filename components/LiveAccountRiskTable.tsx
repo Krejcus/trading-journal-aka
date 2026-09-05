@@ -151,13 +151,13 @@ export function validateAccountRiskLimits({
     const accountLabel = `Účet ${follower.accountId}`;
 
     if (!cut.valid) {
-      errors.push(`${accountLabel}: „Vypnout při“ musí být 0 nebo částka 0,01–1 000 000 USD, nejvýše se dvěma desetinnými místy.`);
+      errors.push(`${accountLabel}: „Max ztráta“ musí být 0 nebo částka 0,01–1 000 000 USD, nejvýše se dvěma desetinnými místy.`);
     }
     if (!maxContracts.valid) {
       errors.push(`${accountLabel}: Max kontr. musí být celé číslo alespoň 1, nebo prázdné.`);
     }
     if (follower.accountId === group.leaderAccountId && cut.valid && cut.value != null) {
-      errors.push(`${accountLabel}: leader nemůže mít limit „Vypnout při“; řídí ho Pravidla dne.`);
+      errors.push(`${accountLabel}: leader nemůže mít limit „Max ztráta“; řídí ho Pravidla dne.`);
     }
     if (draft.onCut !== 'close-copy' && draft.onCut !== 'let-run') {
       errors.push(`${accountLabel}: Při dosažení musí být „Zavřít kopii“ nebo „Nechat dojet“.`);
@@ -168,7 +168,7 @@ export function validateAccountRiskLimits({
       && risk?.propLimitUsd != null
       && Number.isFinite(risk.propLimitUsd)
       && cut.value > risk.propLimitUsd * 0.95 + Number.EPSILON) {
-      errors.push(`${accountLabel}: „Vypnout při“ musí být nejvýše 95 % limitu propky (${money.format(risk.propLimitUsd * 0.95)}).`);
+      errors.push(`${accountLabel}: „Max ztráta“ musí být nejvýše 95 % limitu propky (${money.format(risk.propLimitUsd * 0.95)}).`);
     }
 
     if (sessionArmedAt > 0 && cut.valid && maxContracts.valid) {
@@ -177,7 +177,7 @@ export function validateAccountRiskLimits({
         : undefined;
       const currentOnCut = follower.onCut ?? 'close-copy';
       if (currentCut != null && (cut.value == null || cut.value > currentCut)) {
-        errors.push(`${accountLabel}: Pravidla jdou dnes jen zpřísnit — „Vypnout při“ nelze zvýšit ani vypnout.`);
+        errors.push(`${accountLabel}: Pravidla jdou dnes jen zpřísnit — „Max ztráta“ nelze zvýšit ani vypnout.`);
       }
       if (follower.maxContracts != null
         && (maxContracts.value == null || maxContracts.value > follower.maxContracts)) {
@@ -423,7 +423,7 @@ export const LiveAccountRiskTable = ({
               <th data-risk-column="account" className="px-3 py-2">Účet</th>
               <th data-risk-column="prop" className="px-3 py-2">Propka</th>
               <th data-risk-column="prop-limit" className="px-3 py-2">Limit propky</th>
-              <th data-risk-column="cut" className="px-3 py-2">Vypnout při</th>
+              <th data-risk-column="cut" className="px-3 py-2">Max ztráta</th>
               <th data-risk-column="contracts" className="px-3 py-2">Max kontr.</th>
               <th data-risk-column="pnl" className="px-3 py-2">Dnes vč. poplatků</th>
               <th data-risk-column="cut-action" className="px-3 py-2">Při dosažení</th>
@@ -495,7 +495,7 @@ export const LiveAccountRiskTable = ({
                   ? {
                     key: 'cut',
                     title: 'Vyřazen do konce session',
-                    detail: `vypnout při ${money.format(cut.cutUsd)} · ${cut.closed === false
+                    detail: `max ztráta ${money.format(cut.cutUsd)} · ${cut.closed === false
                       ? 'kopii se nepodařilo zavřít'
                       : typeof cut.closed === 'number'
                         ? `kopie zavřena ${time.format(cut.closed)}`
@@ -534,7 +534,7 @@ export const LiveAccountRiskTable = ({
                     {draft ? (
                       <label className="inline-flex items-center gap-1" title={tightenCutTitle}>
                         <input
-                          aria-label={`Vypnout při pro účet ${row.accountId}`}
+                          aria-label={`Max ztráta pro účet ${row.accountId}`}
                           type="number"
                           min="0.01"
                           max={numericAttribute(cutMax)}

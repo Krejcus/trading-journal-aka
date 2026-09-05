@@ -69,7 +69,7 @@ describe('LIVE Pravidla dne', () => {
     expect(markup).toContain('data-progress-value="40"');
     expect(markup).toContain('data-rule-triggered="true"');
     expect(markup).toContain('Akce');
-    expect(markup).toContain('Stupňovitě');
+    expect(markup).toContain('data-risk-rule-action="1. ztráta"');
     expect(markup).toContain('1. ztráta pauza 20 min · 2. ztráta zámek dne');
     expect(markup).toContain('80 % pauza 30 min · 100 % zámek dne');
     expect(markup).toContain('3 zámky');

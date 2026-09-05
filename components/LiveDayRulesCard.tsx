@@ -423,6 +423,8 @@ const numericInputClass = 'h-7 w-[68px] rounded-md border border-[var(--border-s
 const timeInputClass = 'h-7 w-[70px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-1.5 text-center font-mono text-[11px] font-bold text-[var(--text-primary)] outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-45';
 const unitClass = 'text-[9.5px] font-bold text-[var(--text-muted)]';
 const actionSelectClass = 'h-7 min-w-[102px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-1.5 text-[10.5px] font-bold text-[var(--text-primary)] outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-45';
+const actionGridClass = 'grid grid-cols-[60px_108px_50px_22px] items-center gap-x-1.5';
+const actionLabelClass = 'truncate text-right text-[9px] font-bold text-[var(--text-muted)]';
 const actionMinutesClass = 'h-7 w-[50px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-1.5 text-right text-[10.5px] font-bold tabular-nums text-[var(--text-primary)] outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-45';
 
 const isWeakerAction = (
@@ -454,8 +456,8 @@ const ActionEditor = ({ label, kind, minutes, base, enabled, allowNone = false, 
   const minimum = tightenOnly && base?.kind === 'pause' ? base.minutes : 1;
   const title = tightenOnly ? 'dnes jen zpřísnit' : undefined;
   return (
-    <div className="flex min-w-0 items-center justify-end gap-1" data-risk-rule-action={label}>
-      <span className="text-[9px] font-bold text-[var(--text-muted)]">{label}</span>
+    <div className={actionGridClass} data-risk-rule-action={label}>
+      <span className={actionLabelClass}>{label}</span>
       <select
         aria-label={`${label} – akce`}
         value={kind ?? ''}
@@ -491,10 +493,18 @@ const ActionEditor = ({ label, kind, minutes, base, enabled, allowNone = false, 
           />
           <span className={unitClass}>min</span>
         </>
-      ) : null}
+      ) : <><span /><span /></>}
     </div>
   );
 };
+
+/** Pevná (needitovatelná) akce ve stejné mřížce jako ActionEditor, aby sloupec Akce lícoval. */
+const FixedAction = ({ label, text, tone }: { label: string; text: string; tone: 'amber' | 'indigo' }) => (
+  <div className={actionGridClass} data-risk-rule-action={label}>
+    <span className={actionLabelClass}>{label}</span>
+    <span className={`col-span-3 inline-flex h-7 items-center rounded-md border border-dashed px-2 text-[10.5px] font-bold ${tone === 'amber' ? 'border-amber-500/30 text-amber-600' : 'border-indigo-500/30 text-indigo-500'}`}>{text}</span>
+  </div>
+);
 
 const actionSummary = (kind: CopierRuleAction['kind'] | null, minutes: string): string => (
   kind == null ? 'bez akce' : kind === 'lock' ? 'zámek dne' : `pauza ${minutes || '—'} min`
@@ -830,8 +840,7 @@ export const LiveDayRulesCard = ({
                   <input aria-label="Max ztrátových obchodů za den" type="number" min="1" max={tightenOnly && effectiveSafety.dailyMaxLosingTrades > 0 ? effectiveSafety.dailyMaxLosingTrades : 50} step="1" disabled={!draft.losingTradesEnabled} title={tightenOnly ? 'dnes jen zpřísnit' : undefined} value={draft.dailyMaxLosingTrades} onChange={event => setUpperBound('dailyMaxLosingTrades', event.target.value, effectiveSafety.dailyMaxLosingTrades)} className={numericInputClass} />
                   <span className={unitClass}>obch.</span>
                 </>}
-                action={<div className="flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">
-                  <b className="text-[9.5px] font-black text-indigo-500">Stupňovitě</b>
+                action={<div className="flex min-w-0 flex-col gap-1">
                   <ActionEditor label={losingBeforeLabel} kind={draft.losingTradesBeforeAction} minutes={draft.losingTradesBeforeMinutes} base={effectiveSafety.dayRuleActions.losingTrades.beforeLimit} enabled={losingBeforeApplies} allowNone tightenOnly={tightenOnly} onKind={value => set('losingTradesBeforeAction', value)} onMinutes={value => set('losingTradesBeforeMinutes', value)} />
                   <ActionEditor label={losingAtLabel} kind={draft.losingTradesAtAction} minutes={draft.losingTradesAtMinutes} base={effectiveSafety.dayRuleActions.losingTrades.atLimit} enabled={draft.losingTradesEnabled} tightenOnly={tightenOnly} onKind={value => set('losingTradesAtAction', value)} onMinutes={value => set('losingTradesAtMinutes', value)} />
                 </div>}
@@ -854,8 +863,7 @@ export const LiveDayRulesCard = ({
                   <input aria-label="Denní ztrátový limit v USD" type="number" min="0.01" max={tightenOnly && effectiveSafety.dailyLossLimitUsd > 0 ? effectiveSafety.dailyLossLimitUsd : 1_000_000} step="0.01" disabled={!draft.lossLimitEnabled} title={tightenOnly ? 'dnes jen zpřísnit' : undefined} value={draft.dailyLossLimitUsd} onChange={event => setUpperBound('dailyLossLimitUsd', event.target.value, effectiveSafety.dailyLossLimitUsd)} className={numericInputClass} />
                   <span className={unitClass}>USD</span>
                 </>}
-                action={<div className="flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">
-                  <b className="text-[9.5px] font-black text-indigo-500">Stupňovitě</b>
+                action={<div className="flex min-w-0 flex-col gap-1">
                   <ActionEditor label="80 %" kind={draft.dailyLoss80Action} minutes={draft.dailyLoss80Minutes} base={effectiveSafety.dayRuleActions.dailyLoss.at80Percent} enabled={draft.lossLimitEnabled} allowNone tightenOnly={tightenOnly} onKind={value => set('dailyLoss80Action', value)} onMinutes={value => set('dailyLoss80Minutes', value)} />
                   <ActionEditor label="100 %" kind={draft.dailyLossAtAction} minutes={draft.dailyLossAtMinutes} base={effectiveSafety.dayRuleActions.dailyLoss.atLimit} enabled={draft.lossLimitEnabled} tightenOnly={tightenOnly} onKind={value => set('dailyLossAtAction', value)} onMinutes={value => set('dailyLossAtMinutes', value)} />
                 </div>}
@@ -919,7 +927,7 @@ export const LiveDayRulesCard = ({
                   <input aria-label="Cooldown po uzavření v minutách" type="number" min={tightenOnly && effectiveSafety.entryCooldownMinutes > 0 ? effectiveSafety.entryCooldownMinutes : 1} max="720" step="1" disabled={!draft.cooldownEnabled} title={tightenOnly ? 'dnes jen zpřísnit' : undefined} value={draft.entryCooldownMinutes} onChange={event => setCooldown(event.target.value)} className={numericInputClass} />
                   <span className={unitClass}>min</span>
                 </>}
-                action={<span className="text-[10px] font-bold text-amber-600">Pauza {draft.entryCooldownMinutes} min</span>}
+                action={<FixedAction label="Po flat" text={`Pauza ${draft.entryCooldownMinutes} min`} tone="amber" />}
               />
 
               <Rule
@@ -944,7 +952,7 @@ export const LiveDayRulesCard = ({
                     <option value="group">Zavřít skupinu</option>
                   </select>
                 }
-                action={<span className="text-[10px] font-bold text-indigo-500">Bezpečný konec session</span>}
+                action={<FixedAction label="Na konci" text="Zavřít podle scope" tone="indigo" />}
               />
             </div>
 

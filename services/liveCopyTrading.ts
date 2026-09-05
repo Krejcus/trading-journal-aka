@@ -12,7 +12,7 @@ export interface CopyFollowerConfig {
    */
   maxContracts?: number;
   /**
-   * „Vypnout při": realizovaná denní ztráta účtu v USD (vč. poplatků, z broker
+   * „Max ztráta": realizovaná denní ztráta účtu v USD (vč. poplatků, z broker
    * snapshotu), při které účet vypadne z kopírování do konce session.
    * 0/undefined = vypnuto. Skupina se nezamyká, ostatní followeři jedou dál.
    */
@@ -425,7 +425,7 @@ export function validateCopyGroup(
       add({ code: 'invalid-max-contracts', accountId: follower.accountId, message: 'Max kontrakty musí být celé číslo alespoň 1.' });
     }
     if (follower.dailyLossCutUsd != null && follower.dailyLossCutUsd !== 0 && !validDailyLossCut(follower.dailyLossCutUsd)) {
-      add({ code: 'invalid-daily-loss-cut', accountId: follower.accountId, message: '„Vypnout při“ musí být od 0,01 do 1 000 000 USD a mít nejvýše 2 desetinná místa.' });
+      add({ code: 'invalid-daily-loss-cut', accountId: follower.accountId, message: '„Max ztráta“ musí být od 0,01 do 1 000 000 USD a mít nejvýše 2 desetinná místa.' });
     }
     if (follower.onCut != null && !validFollowerCutAction(follower.onCut)) {
       add({ code: 'invalid-cut-action', accountId: follower.accountId, message: 'Akce při vyřazení musí být „zavřít kopii" nebo „nechat dojet".' });

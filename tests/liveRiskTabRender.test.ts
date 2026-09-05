@@ -189,7 +189,7 @@ describe('LIVE Risk — Účty a propky', () => {
       'Účet',
       'Propka',
       'Limit propky',
-      'Vypnout při',
+      'Max ztráta',
       'Max kontr.',
       'Dnes vč. poplatků',
       'Při dosažení',
@@ -231,13 +231,13 @@ describe('LIVE Risk — Účty a propky', () => {
 
     expect(markup).toContain('title="dnes jen zpřísnit"');
     expect(markup).toContain('jen zpřísnit');
-    expect(normal).toContain('aria-label="Vypnout při pro účet 2"');
+    expect(normal).toContain('aria-label="Max ztráta pro účet 2"');
     expect(normal).toContain('max="500"');
     expect(normal).toContain('aria-label="Max kontraktů pro účet 2"');
     expect(normal).toContain('max="2"');
     expect(normal).toContain('<option value="let-run" disabled="">Nechat dojet</option>');
-    expect(normal).not.toContain('aria-label="Vypnout při pro účet 2" type="number" min="0.01" max="500" step="0.01" placeholder="vypnuto" value="500" disabled=""');
-    expect(noExistingLimit).toContain('aria-label="Vypnout při pro účet 5"');
+    expect(normal).not.toContain('aria-label="Max ztráta pro účet 2" type="number" min="0.01" max="500" step="0.01" placeholder="vypnuto" value="500" disabled=""');
+    expect(noExistingLimit).toContain('aria-label="Max ztráta pro účet 5"');
   });
 
   it('fail-closed odmítne více než dvě desetinná místa i překročení 95 % prop limitu', () => {
@@ -278,7 +278,7 @@ describe('LIVE Risk — Účty a propky', () => {
     expect(aboveKnownStalePropLimit.errors.join(' ')).toContain('nejvýše 95 % limitu propky');
   });
 
-  it('odmítne limit Vypnout při na leader účtu i v poškozené topologii', () => {
+  it('odmítne limit Max ztráta na leader účtu i v poškozené topologii', () => {
     const malformedGroup: CopyGroupConfig = {
       ...group,
       followers: [
@@ -294,7 +294,7 @@ describe('LIVE Risk — Účty a propky', () => {
     });
 
     expect(result.followers).toBeNull();
-    expect(result.errors.join(' ')).toContain('leader nemůže mít limit „Vypnout při“');
+    expect(result.errors.join(' ')).toContain('leader nemůže mít limit „Max ztráta“');
   });
 
   it('tighten-only validace odmítne vypnutí/zvýšení, ale vytvoří pouze přísnější payload', () => {
