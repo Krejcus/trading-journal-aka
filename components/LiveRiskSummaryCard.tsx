@@ -11,9 +11,14 @@ import {
 } from '../services/liveCopyTrading';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
 import { verifiedAccountDailyPnl } from './LiveAccountRiskTable';
+import { copierRuntimePresentation } from '../lib/copierRuntimePresentation';
+import { copierAccountEligibilityPresentation } from '../lib/copierAccountEligibilityPresentation';
 
 export interface LiveRiskSummaryCardProps {
   group: CopyGroupConfig | null;
+  status?: CopierControllerStatus | null;
+  runtimeAvailable?: boolean;
+  riskConfigSupported?: boolean;
   dailyStats?: CopierControllerStatus['dailyStats'];
   pause?: CopierControllerStatus['pause'];
   dayLockUntil?: number;
@@ -53,12 +58,13 @@ const valueColor: Record<MetricTone, string> = {
   indigo: 'text-indigo-500',
 };
 
-const MiniBar = ({ label, value, detail, percent, tone }: {
+const MiniBar = ({ label, value, detail, percent, tone, disabled = false }: {
   label: string;
   value: string;
   detail: string;
   percent: number | null;
   tone: MetricTone;
+  disabled?: boolean;
 }) => {
   const known = percent != null;
   const width = known ? clampPercent(percent) : 0;
@@ -67,6 +73,7 @@ const MiniBar = ({ label, value, detail, percent, tone }: {
     <div
       data-risk-summary-metric={label}
       data-metric-known={known ? 'true' : 'false'}
+      data-rule-disabled={disabled ? 'true' : 'false'}
       className="min-w-0 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-input)] px-2.5 py-2"
     >
       <div className="flex min-w-0 items-baseline justify-between gap-2">
@@ -80,7 +87,7 @@ const MiniBar = ({ label, value, detail, percent, tone }: {
         aria-valuemax={100}
         {...(known
           ? { 'aria-valuenow': Math.round(width), 'aria-valuetext': `${Math.round(width)} %` }
-          : { 'aria-valuetext': 'neověřeno' })}
+          : { 'aria-valuetext': disabled ? 'vypnuto' : 'neověřeno' })}
         className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--border-subtle)]"
       >
         <span className={`block h-full rounded-full ${barColor[tone]}`} style={{ width: `${width}%` }} />
@@ -92,20 +99,21 @@ const MiniBar = ({ label, value, detail, percent, tone }: {
 
 const lockActionCount = (group: CopyGroupConfig | null): number | null => {
   const actions = group?.safety?.dayRuleActions;
-  if (!actions) return null;
+  const safety = group?.safety;
+  if (!actions || !safety) return null;
   const configured: Array<CopierRuleAction | null> = [
-    actions.losingTrades.beforeLimit,
-    actions.losingTrades.atLimit,
-    actions.dailyLoss.at80Percent,
-    actions.dailyLoss.atLimit,
-    actions.maxTrades.atLimit,
-    actions.windowEnd.atEnd,
+    safety.dailyMaxLosingTrades > 0 ? actions.losingTrades.beforeLimit : null,
+    safety.dailyMaxLosingTrades > 0 ? actions.losingTrades.atLimit : null,
+    safety.dailyLossLimitUsd > 0 ? actions.dailyLoss.at80Percent : null,
+    safety.dailyLossLimitUsd > 0 ? actions.dailyLoss.atLimit : null,
+    safety.dailyMaxTrades > 0 ? actions.maxTrades.atLimit : null,
+    safety.tradingWindow.enabled ? actions.windowEnd.atEnd : null,
   ];
   return configured.filter(action => action?.kind === 'lock').length;
 };
 
 const lockCountLabel = (count: number | null): string => {
-  if (count == null) return '— zámků';
+  if (count == null) return 'Pravidla neověřena';
   if (count === 1) return '1 zámek';
   if (count >= 2 && count <= 4) return `${count} zámky`;
   return `${count} zámků`;
@@ -117,6 +125,9 @@ const percentOf = (current: number | null, limit: number): number | null => (
 
 export const LiveRiskSummaryCard = ({
   group,
+  status = null,
+  runtimeAvailable = false,
+  riskConfigSupported = false,
   dailyStats = null,
   pause = null,
   dayLockUntil = 0,
@@ -128,11 +139,12 @@ export const LiveRiskSummaryCard = ({
   now = Date.now(),
   onOpenRisk,
 }: LiveRiskSummaryCardProps) => {
-  const safety = group?.safety ?? null;
-  const activePause = pause != null && pause.until > now;
-  const activeDayLock = dayLockUntil > now;
+  const safety = riskConfigSupported ? group?.safety ?? null : null;
+  const runtime = copierRuntimePresentation(status, runtimeAvailable, now);
+  const activePause = runtimeAvailable && pause != null && pause.until > now;
+  const activeDayLock = runtimeAvailable && dayLockUntil > now;
   const currentCuts = new Set(
-    followerCuts.filter(cut => cut.until > now).map(cut => cut.accountId),
+    (runtimeAvailable ? followerCuts : []).filter(cut => cut.until > now).map(cut => cut.accountId),
   );
   // Worker může vyřazenému followerovi držet runtime mode=off, cut ale pořád
   // patří do jmenovatele původně kopírujících účtů až do konce session.
@@ -141,21 +153,27 @@ export const LiveRiskSummaryCard = ({
   )) ?? [];
   const copyingFollowers = participatingFollowers.filter(follower => (
     follower.mode !== 'off' && !currentCuts.has(follower.accountId)
+      && copierAccountEligibilityPresentation(status, follower.accountId).active
   ));
+  const eligibilityKnown = Array.isArray(status?.accountEligibility);
   const followerCount = group
-    ? `${copyingFollowers.length}/${participatingFollowers.length} účtů kopíruje`
-    : '—/— účtů kopíruje';
+    ? runtime.copying && group.enabled
+      ? eligibilityKnown
+        ? `${copyingFollowers.length}/${participatingFollowers.length} účtů kopíruje`
+        : `Nastavené účty: ${participatingFollowers.length} · Způsobilost účtů neověřena`
+      : `Nastavené účty: ${participatingFollowers.length} · ${!runtime.copying || group.enabled ? runtime.label : 'Skupina vypnutá'}`
+    : 'Účty nejsou ověřené';
 
-  const lossCurrent = dailyStats == null ? null : Math.max(0, -dailyStats.realizedPnlUsd);
+  const lossCurrent = !runtimeAvailable || dailyStats == null ? null : Math.max(0, -dailyStats.realizedPnlUsd);
   const lossPercent = safety ? percentOf(lossCurrent, safety.dailyLossLimitUsd) : null;
-  const losingCurrent = dailyStats == null ? null : dailyStats.losingTrades;
+  const losingCurrent = !runtimeAvailable || dailyStats == null ? null : dailyStats.losingTrades;
   const losingPercent = safety ? percentOf(losingCurrent, safety.dailyMaxLosingTrades) : null;
-  const tradesCurrent = dailyStats?.tradesToday ?? null;
+  const tradesCurrent = runtimeAvailable ? dailyStats?.tradesToday ?? null : null;
   const tradesPercent = safety ? percentOf(tradesCurrent, safety.dailyMaxTrades) : null;
 
   const accountsById = new Map(accounts.map(account => [account.id, account]));
   const accountRiskById = new Map(accountRisk.map(snapshot => [snapshot.accountId, snapshot]));
-  const limitedCopyingFollowers = copyingFollowers.filter(follower => (follower.dailyLossCutUsd ?? 0) > 0);
+  const limitedCopyingFollowers = (riskConfigSupported ? copyingFollowers : []).filter(follower => (follower.dailyLossCutUsd ?? 0) > 0);
   const pnlForAccount = (accountId: number): number | null => {
     return verifiedAccountDailyPnl({
       workerRisk: accountRiskById.get(accountId),
@@ -189,18 +207,21 @@ export const LiveRiskSummaryCard = ({
           : nearest;
       }, null);
 
-  const lossValue = safety == null || lossPercent == null || lossCurrent == null
+  const lossDisabled = safety?.dailyLossLimitUsd === 0;
+  const losingDisabled = safety?.dailyMaxLosingTrades === 0;
+  const tradesDisabled = safety?.dailyMaxTrades === 0;
+  const lossValue = lossDisabled ? 'Vypnuto' : safety == null || lossPercent == null || lossCurrent == null
     ? '—'
     : `−${number.format(lossCurrent)} / ${number.format(safety.dailyLossLimitUsd)} USD`;
-  const losingValue = safety == null || losingPercent == null || losingCurrent == null
+  const losingValue = losingDisabled ? 'Vypnuto' : safety == null || losingPercent == null || losingCurrent == null
     ? '—'
     : `${losingCurrent} / ${safety.dailyMaxLosingTrades}`;
-  const tradesValue = safety == null || tradesPercent == null || tradesCurrent == null
+  const tradesValue = tradesDisabled ? 'Vypnuto' : safety == null || tradesPercent == null || tradesCurrent == null
     ? '—'
     : `${tradesCurrent} / ${safety.dailyMaxTrades}`;
 
   return (
-    <section data-live-risk-summary="true" className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2.5">
+    <section data-live-risk-summary="true" data-copier-runtime-state={runtime.key} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2.5">
       <header className="flex flex-wrap items-center gap-2.5">
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-indigo-500/10 text-indigo-500"><Shield size={14} /></span>
         <div className="min-w-0 flex-1">
@@ -213,29 +234,32 @@ export const LiveRiskSummaryCard = ({
           <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-black text-amber-600"><Pause size={10} /> Pauza</span>
         ) : null}
         <span className="shrink-0 text-[10.5px] font-bold text-[var(--text-secondary)]">
-          {lockCountLabel(lockActionCount(group))} · {followerCount}
+          {riskConfigSupported ? lockCountLabel(lockActionCount(group)) : 'Pravidla worker nepotvrdil'} · {followerCount}
         </span>
       </header>
 
-      <div className="mt-2 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-2 grid gap-1.5 sm:grid-cols-2 md:grid-cols-4">
         <MiniBar
           label="Denní ztráta"
           value={lossValue}
-          detail={lossPercent == null ? 'Limit nebo průběh není ověřený' : `${Math.round(lossPercent)} % limitu leadera`}
+          disabled={lossDisabled}
+          detail={lossDisabled ? 'Denní ztrátový limit je vypnutý' : lossPercent == null ? 'Limit nebo průběh není ověřený' : `${Math.round(lossPercent)} % limitu leadera`}
           percent={lossPercent}
           tone={metricTone(lossPercent, 'emerald')}
         />
         <MiniBar
           label="Ztrátové obchody"
           value={losingValue}
-          detail={losingPercent == null ? 'Limit nebo průběh není ověřený' : `${Math.round(losingPercent)} % limitu leadera`}
+          disabled={losingDisabled}
+          detail={losingDisabled ? 'Limit ztrátových obchodů je vypnutý' : losingPercent == null ? 'Limit nebo průběh není ověřený' : `${Math.round(losingPercent)} % limitu leadera`}
           percent={losingPercent}
           tone={metricTone(losingPercent, 'emerald')}
         />
         <MiniBar
           label="Obchody"
           value={tradesValue}
-          detail={tradesPercent == null ? 'Limit nebo průběh není ověřený' : `${Math.round(tradesPercent)} % denního limitu`}
+          disabled={tradesDisabled}
+          detail={tradesDisabled ? 'Denní limit obchodů je vypnutý' : tradesPercent == null ? 'Limit nebo průběh není ověřený' : `${Math.round(tradesPercent)} % denního limitu`}
           percent={tradesPercent}
           tone={metricTone(tradesPercent, 'indigo')}
         />
@@ -244,7 +268,9 @@ export const LiveRiskSummaryCard = ({
           value={nearestFollower?.account.name ?? '—'}
           detail={nearestFollower
             ? `${Math.round(nearestFollower.percent)} % · −${number.format(nearestFollower.lossUsd)} / ${number.format(nearestFollower.limitUsd)} USD`
-            : brokerDailyPnlPending && accountRisk.length === 0
+            : !riskConfigSupported
+              ? runtimeAvailable ? 'Risk vyžaduje aktualizaci workeru' : 'Podpora Risk pravidel není ověřená'
+              : brokerDailyPnlPending && accountRisk.length === 0
               ? 'Denní P&L se načítá'
               : limitedCopyingFollowers.length === 0
                 ? 'Účet s aktivním limitem není dostupný'

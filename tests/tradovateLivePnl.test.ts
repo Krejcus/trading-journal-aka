@@ -75,6 +75,7 @@ describe('Tradovate lightweight live P&L reader', () => {
       connectionId: 'connection',
       environment: 'demo',
       capturedAt: '2026-08-27T20:00:00.000Z',
+      requestedAt: '2026-08-27T20:00:00.000Z',
       anchor: { accountId: 10, contractId: 7, openPnl: 25, netLiq: 50_025, totalCashValue: 50_000 },
     });
     expect(fetchImpl).toHaveBeenCalledOnce();

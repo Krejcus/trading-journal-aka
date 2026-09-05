@@ -165,9 +165,27 @@ interface Probe<T> {
   value: T | null;
   status: number | null;
   partial?: boolean;
+  retryAfterMs?: number;
 }
 
 export type TradovateAccountDataDetail = 'bootstrap' | 'full';
+
+export class TradovateAccountDataError extends Error {
+  constructor(message: string, public readonly status: number | null, public readonly retryAfterMs: number | null = null) {
+    super(message);
+    this.name = 'TradovateAccountDataError';
+  }
+}
+
+const retryAfterMs = (header: string | null): number => {
+  if (header != null && header.trim() !== '') {
+    const seconds = Number(header);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.max(1_000, seconds * 1_000);
+    const at = Date.parse(header);
+    if (Number.isFinite(at)) return Math.max(1_000, at - Date.now());
+  }
+  return 3_600_000;
+};
 
 const skippedProbe = <T>(): Probe<T> => ({ ok: false, value: null, status: null });
 
@@ -187,6 +205,7 @@ const coverage = (probe: Probe<unknown>, count: number): TradovateSourceCoverage
     : probe.status === 401 || probe.status === 403 ? 'denied' : 'unavailable',
   count,
   httpStatus: probe.status,
+  ...(probe.retryAfterMs != null ? { retryAfterMs: probe.retryAfterMs } : {}),
 });
 
 const getTimestampRange = (values: Array<string | undefined>) => {
@@ -368,7 +387,9 @@ const request = async <T>(options: {
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
       signal: AbortSignal.timeout(10_000),
     });
-    if (!response.ok) return { ok: false, value: null, status: response.status };
+    if (!response.ok) return { ok: false, value: null, status: response.status,
+      ...(response.status === 429 ? { retryAfterMs: retryAfterMs(response.headers.get('Retry-After')) } : {}),
+    };
     return { ok: true, value: await response.json() as T, status: response.status };
   } catch {
     return { ok: false, value: null, status: null };
@@ -409,12 +430,15 @@ const requireList = <T>(probe: Probe<T[]>): T[] => probe.ok && Array.isArray(pro
 const mergeListProbes = <T>(probes: Probe<T[]>[]): Probe<T[]> => {
   if (probes.length === 0) return { ok: true, value: [], status: 200 };
   const successful = probes.filter(probe => probe.ok && Array.isArray(probe.value));
-  if (successful.length === 0) return probes[0];
+  const limited = probes.filter(probe => probe.status === 429);
+  const retry = limited.length > 0 ? Math.max(...limited.map(probe => probe.retryAfterMs ?? 3_600_000)) : null;
+  if (successful.length === 0) return limited.length > 0 ? { ...limited[0], retryAfterMs: retry! } : probes[0];
   return {
     ok: true,
     value: successful.flatMap(probe => probe.value ?? []),
-    status: successful.length === probes.length ? 200 : null,
+    status: limited.length > 0 ? 429 : successful.length === probes.length ? 200 : null,
     partial: successful.length !== probes.length,
+    ...(retry != null ? { retryAfterMs: retry } : {}),
   };
 };
 
@@ -550,10 +574,54 @@ export async function loadTradovateAccountData(options: {
   detail?: TradovateAccountDataDetail;
 }): Promise<TradovateAccountDataResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const call = <T>(path: string) => request<T>({ ...options, path, fetchImpl });
+  // Requests already in flight settle normally; once auth/limit failure is
+  // observed, queued accounts and contract reads do not start more HTTP work.
+  // A 403 on optional risk/history scopes is expected and must not stop other reads.
+  let stopped: Probe<unknown> | null = null;
+  const currentStop = () => stopped;
+  const read = async <T>(path: string, init: { method?: 'GET' | 'POST'; body?: unknown } = {}): Promise<Probe<T>> => {
+    if (stopped) return { ...stopped, value: null };
+    const probe = await request<T>({ ...options, ...init, path, fetchImpl });
+    if (probe.status === 429) {
+      stopped = { ok: false, value: null, status: 429,
+        retryAfterMs: Math.max(currentStop()?.retryAfterMs ?? 0, probe.retryAfterMs ?? 3_600_000),
+      };
+    } else if (probe.status === 401 && !stopped) {
+      stopped = { ok: false, value: null, status: probe.status };
+    }
+    return probe;
+  };
+  const call = <T>(path: string) => read<T>(path);
   const bootstrap = options.detail === 'bootstrap';
+  const requestedAt = new Date(options.now ?? Date.now()).toISOString();
+  const accountsPromise = call<AccountEntity[]>('/account/list');
+  // Cash/history do not depend on contract metadata. Start them as soon as
+  // account IDs arrive, while the other global lists and contracts load.
+  const enrichmentPromise = accountsPromise.then(async probe => {
+    const accounts = requireList(probe);
+    const results = new Map<number, {
+      cashAsOf: string;
+      probes: [Probe<CashBalanceSnapshot>, Probe<CashBalanceLogEntity[]>, Probe<AccountRiskStatus[]>, Probe<UserAccountAutoLiq[]>];
+    }>();
+    let cursor = 0;
+    await Promise.all(Array.from({ length: Math.min(3, accounts.length) }, async () => {
+      while (cursor < accounts.length) {
+        const account = accounts[cursor++];
+        const encodedId = encodeURIComponent(String(account.id));
+        const cashAsOf = new Date(options.now ?? Date.now()).toISOString();
+        const probes = await Promise.all([
+          read<CashBalanceSnapshot>('/cashBalance/getcashbalancesnapshot', { method: 'POST', body: { accountId: account.id } }),
+          bootstrap ? skippedProbe<CashBalanceLogEntity[]>() : call<CashBalanceLogEntity[]>(`/cashBalanceLog/deps?masterid=${encodedId}`),
+          bootstrap ? skippedProbe<AccountRiskStatus[]>() : call<AccountRiskStatus[]>(`/accountRiskStatus/deps?masterid=${encodedId}`),
+          bootstrap ? skippedProbe<UserAccountAutoLiq[]>() : call<UserAccountAutoLiq[]>(`/userAccountAutoLiq/deps?masterid=${encodedId}`),
+        ]);
+        results.set(account.id, { cashAsOf, probes });
+      }
+    }));
+    return results;
+  });
   const [accountsProbe, positionsProbe, ordersProbe, orderVersionsProbe, fillsProbe, fillPairsProbe, fillFeesProbe, cashBalancesProbe] = await Promise.all([
-    call<AccountEntity[]>('/account/list'),
+    accountsPromise,
     call<PositionEntity[]>('/position/list'),
     call<OrderEntity[]>('/order/list'),
     call<TradovateOrderVersionEntity[]>('/orderVersion/list'),
@@ -565,8 +633,12 @@ export async function loadTradovateAccountData(options: {
 
   const accounts = requireList(accountsProbe);
   if (!accountsProbe.ok || !Array.isArray(accountsProbe.value)) {
-    throw new Error(`Tradovate /account/list failed (${accountsProbe.status ?? 'network'})`);
+    throw new TradovateAccountDataError(`Tradovate /account/list failed (${accountsProbe.status ?? 'network'})`, accountsProbe.status, accountsProbe.retryAfterMs ?? null);
   }
+  if (!Array.isArray(positionsProbe.value) || !positionsProbe.value.every(position =>
+    position && finite(position.accountId) != null && finite(position.contractId) != null && finite(position.netPos) != null)) positionsProbe.ok = false;
+  if (!Array.isArray(ordersProbe.value) || !ordersProbe.value.every(order =>
+    order && finite(order.id) != null && finite(order.accountId) != null)) ordersProbe.ok = false;
   const positions = requireList(positionsProbe);
   const orders = requireList(ordersProbe);
   const orderVersionsByOrderId = latestTradovateOrderVersionsByOrderId(requireList(orderVersionsProbe));
@@ -597,21 +669,10 @@ export async function loadTradovateAccountData(options: {
     .filter((fee): fee is FillFeeEntity & { id: number } => typeof fee.id === 'number')
     .map(fee => [fee.id, fee]));
 
-  const accountData = await Promise.all(accounts.map(async account => {
+  const enrichment = await enrichmentPromise;
+  const accountData = accounts.map(account => {
     const accountId = account.id;
-    const encodedId = encodeURIComponent(String(accountId));
-    const [snapshotProbe, historyProbe, riskStatusProbe, riskLimitsProbe] = await Promise.all([
-      request<CashBalanceSnapshot>({
-        ...options,
-        path: '/cashBalance/getcashbalancesnapshot',
-        fetchImpl,
-        method: 'POST',
-        body: { accountId },
-      }),
-      bootstrap ? skippedProbe<CashBalanceLogEntity[]>() : call<CashBalanceLogEntity[]>(`/cashBalanceLog/deps?masterid=${encodedId}`),
-      bootstrap ? skippedProbe<AccountRiskStatus[]>() : call<AccountRiskStatus[]>(`/accountRiskStatus/deps?masterid=${encodedId}`),
-      bootstrap ? skippedProbe<UserAccountAutoLiq[]>() : call<UserAccountAutoLiq[]>(`/userAccountAutoLiq/deps?masterid=${encodedId}`),
-    ]);
+    const { cashAsOf, probes: [snapshotProbe, historyProbe, riskStatusProbe, riskLimitsProbe] } = enrichment.get(accountId)!;
 
     const snapshot = snapshotProbe.ok && snapshotProbe.value && !snapshotProbe.value.errorText
       ? snapshotProbe.value
@@ -647,8 +708,18 @@ export async function loadTradovateAccountData(options: {
       canTrade: account.readonly !== true,
       netPositionCount: accountPositions.filter(position => position.netPos !== 0).length,
       workingOrderCount: accountOrders.filter(order => isTradovateWorkingStatus(order.ordStatus)).length,
+      readState: {
+        positions: coverage(positionsProbe, accountPositions.length),
+        orders: coverage(ordersProbe, accountOrders.length),
+        positionsAsOf: positionsProbe.ok ? requestedAt : null,
+        ordersAsOf: ordersProbe.ok ? requestedAt : null,
+        cashAsOf: snapshot ? cashAsOf : null,
+        requestedAt,
+      },
       balance: {
-        coverage: coverage(snapshotProbe, snapshot ? 1 : 0),
+        openPnlSource: snapshot && finite(snapshot.openPnL) != null ? 'broker' : 'stale',
+        openPnlAsOf: snapshot && finite(snapshot.openPnL) != null ? cashAsOf : null,
+        coverage: coverage(snapshot ? snapshotProbe : { ...snapshotProbe, ok: false }, snapshot ? 1 : 0),
         totalCashValue: finite(snapshot?.totalCashValue),
         totalCashValueSOD: finite(snapshot?.totalCashValueSOD),
         totalPnL: finite(snapshot?.totalPnL),
@@ -731,9 +802,10 @@ export async function loadTradovateAccountData(options: {
         .map(normalizeLedgerEntry)
         .sort((a, b) => Date.parse(b.timestamp ?? '') - Date.parse(a.timestamp ?? '')),
     } satisfies TradovateAccountDataAccount;
-  }));
+  });
 
   return {
+    requestedAt,
     capturedAt: new Date(options.now ?? Date.now()).toISOString(),
     accounts: accountData,
     contracts,

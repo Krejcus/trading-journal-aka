@@ -38,14 +38,24 @@ const targetResponse = () => new Response(JSON.stringify([{
 describe('copier TradingView CDP snapshot', () => {
   it('pošle pouze pasivní Page.captureScreenshot s fromSurface false', async () => {
     const socket = new FakeSocket();
-    const promise = captureTradingViewChartSnapshot({
-      fetchImpl: vi.fn(async () => targetResponse()) as typeof fetch,
-      webSocketFactory: () => socket,
-      timeoutMs: 100,
+    // This case verifies the passive command, not scheduler timing. Observe
+    // listener registration directly instead of polling against a 100ms budget.
+    const response = targetResponse();
+    let signalReady!: () => void;
+    const ready = new Promise<void>(resolve => { signalReady = resolve; });
+    const register = socket.addEventListener.bind(socket);
+    vi.spyOn(socket, 'addEventListener').mockImplementation((type, listener) => {
+      register(type, listener);
+      if (type === 'open') signalReady();
     });
-    await vi.waitUntil(() => socket.listeners.has('open'), { timeout: 1_000 });
+    const promise = captureTradingViewChartSnapshot({
+      fetchImpl: vi.fn(async () => response) as typeof fetch,
+      webSocketFactory: () => socket,
+      timeoutMs: 1_000,
+    });
+    await ready;
     socket.emit('open');
-    await vi.waitUntil(() => socket.sent.length > 0, { timeout: 1_000 });
+    expect(socket.sent).toHaveLength(1);
     const command = JSON.parse(socket.sent[0]);
     expect(command).toEqual({
       id: 1,

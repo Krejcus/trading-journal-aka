@@ -42,6 +42,7 @@ export async function loadTradovateLivePnlAnchor(options: {
   if (!Number.isSafeInteger(options.contractId) || options.contractId <= 0) {
     throw new TradovateLivePnlError('Tradovate live P&L anchor has invalid contractId');
   }
+  const requestedAt = new Date(options.now ?? Date.now()).toISOString();
   const snapshot = await tradovateRequest<SnapshotEntity>({
     ...options,
     path: '/cashBalance/getcashbalancesnapshot',
@@ -53,6 +54,7 @@ export async function loadTradovateLivePnlAnchor(options: {
   return {
     connectionId: options.connectionId,
     environment: options.environment,
+    requestedAt,
     capturedAt: new Date(options.now ?? Date.now()).toISOString(),
     anchor: snapshot.errorText || openPnl == null ? null : {
       accountId: options.accountId,
@@ -122,12 +124,12 @@ async function tradovateRequest<T>(options: {
 const normalizePositions = (value: unknown): TradovateLivePnlPosition[] => {
   if (!Array.isArray(value)) throw new TradovateLivePnlError('Tradovate returned invalid positions');
   return value.flatMap((candidate): TradovateLivePnlPosition[] => {
-    if (!candidate || typeof candidate !== 'object') return [];
+    if (!candidate || typeof candidate !== 'object') throw new TradovateLivePnlError('Tradovate returned invalid position/order row');
     const raw = candidate as PositionEntity;
     const accountId = finite(raw.accountId);
     const contractId = finite(raw.contractId);
     const netPosition = finite(raw.netPos);
-    if (accountId == null || contractId == null || netPosition == null) return [];
+    if (accountId == null || contractId == null || netPosition == null) throw new TradovateLivePnlError('Tradovate returned incomplete position row');
     return [{
       id: finite(raw.id),
       accountId,
@@ -145,11 +147,11 @@ const normalizeOrders = (
 ): TradovateLiveOrder[] => {
   if (!Array.isArray(value)) throw new TradovateLivePnlError('Tradovate returned invalid orders');
   return value.flatMap((candidate): TradovateLiveOrder[] => {
-    if (!candidate || typeof candidate !== 'object') return [];
+    if (!candidate || typeof candidate !== 'object') throw new TradovateLivePnlError('Tradovate returned invalid position/order row');
     const raw = candidate as OrderEntity;
     const id = finite(raw.id);
     const accountId = finite(raw.accountId);
-    if (id == null || accountId == null) return [];
+    if (id == null || accountId == null) throw new TradovateLivePnlError('Tradovate returned incomplete order row');
     const version = versionsByOrderId.get(id);
     return [{
       id,
@@ -187,6 +189,7 @@ export async function loadTradovateLivePnlTick(options: {
   now?: number;
 }): Promise<TradovateLivePnlTick> {
   const fetchImpl = options.fetchImpl ?? fetch;
+  const requestedAt = new Date(options.now ?? Date.now()).toISOString();
   const [positions, rawOrders] = await Promise.all([
     tradovateRequest<PositionEntity[]>({
       ...options,
@@ -230,29 +233,44 @@ export async function loadTradovateLivePnlTick(options: {
     : eligible.find(position => position.contractId === selectedContractId) ?? null;
 
   let anchor: TradovateLivePnlAnchor | null = null;
+  let anchorError: string | null = null;
+  let anchorErrorStatus: number | null = null;
+  let anchorAsOf: string | undefined;
   if (anchorPosition) {
-    const snapshot = await tradovateRequest<SnapshotEntity>({
-      ...options,
-      path: '/cashBalance/getcashbalancesnapshot',
-      method: 'POST',
-      body: { accountId: anchorPosition.accountId },
-      fetchImpl,
-    });
-    const openPnl = finite(snapshot.openPnL);
-    if (!snapshot.errorText && openPnl != null) {
-      anchor = {
-        accountId: anchorPosition.accountId,
-        contractId: anchorPosition.contractId,
-        openPnl,
-        netLiq: finite(snapshot.netLiq),
-        totalCashValue: finite(snapshot.totalCashValue),
-      };
+    anchorAsOf = new Date(options.now ?? Date.now()).toISOString();
+    try {
+      const snapshot = await tradovateRequest<SnapshotEntity>({
+        ...options,
+        path: '/cashBalance/getcashbalancesnapshot',
+        method: 'POST',
+        body: { accountId: anchorPosition.accountId },
+        fetchImpl,
+      });
+      const openPnl = finite(snapshot.openPnL);
+      if (!snapshot.errorText && openPnl != null) {
+        anchor = {
+          accountId: anchorPosition.accountId,
+          contractId: anchorPosition.contractId,
+          openPnl,
+          netLiq: finite(snapshot.netLiq),
+          totalCashValue: finite(snapshot.totalCashValue),
+        };
+      } else {
+        anchorError = 'cash-snapshot-unavailable';
+      }
+    } catch (error) {
+      anchorError = error instanceof Error ? error.message : 'cash-snapshot-unavailable';
+      anchorErrorStatus = error instanceof TradovateLivePnlError ? error.status : null;
     }
   }
 
   return {
     connectionId: options.connectionId,
     environment: options.environment,
+    requestedAt,
+    anchorError,
+    anchorErrorStatus,
+    anchorAsOf,
     capturedAt: new Date(options.now ?? Date.now()).toISOString(),
     positions,
     orders,

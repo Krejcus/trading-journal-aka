@@ -39,9 +39,17 @@ export function createLocalCopierAgentClient(baseUrl = LOCAL_COPIER_AGENT_BASE_U
   };
 
   const status = async () => {
-    const response = await fetch(`${baseUrl}/v1/status`, { cache: 'no-store' });
-    current = await readJson(response) as LocalCopierAgentStatus;
-    return current;
+    // A blocked loopback/PNA probe must not hold the cloud fallback indefinitely.
+    // This deadline is read-only; execution POSTs retain their existing semantics.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1_500);
+    try {
+      const response = await fetch(`${baseUrl}/v1/status`, { cache: 'no-store', signal: controller.signal });
+      current = await readJson(response) as LocalCopierAgentStatus;
+      return current;
+    } finally {
+      clearTimeout(timeout);
+    }
   };
 
   const execute = async (command: LocalCopierAgentCommand) => {

@@ -136,9 +136,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       if (action === 'poll') {
         if (req.body?.status) await heartbeatTradovateCopierDevice({ db, deviceId: device.id, userId: device.userId, connectionId: device.connectionId, status: req.body.status });
+        // A queued control command takes priority over APNs and screenshots.
+        // The heartbeat above durably retains events; when a command is ready,
+        // the existing watchdog delivers them using the same dedup marker.
+        const command = await claimTradovateCopierCommand({ db, deviceId: device.id });
         // Worker hlásí nové trade eventy -> okamžitý push místo čekání na
         // minutový cron (sdílený marker, cron je jen záloha).
-        if (req.body?.copyEvents === true && req.body?.status) {
+        if (!command && req.body?.copyEvents === true && req.body?.status) {
           try {
             await sendImmediateCopyEventPushes({
               db, userId: device.userId, deviceId: device.id,
@@ -151,7 +155,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         // Broker/UI command má přednost: pokud nějaký čeká, poll nečeká ani na
         // levný snapshot dotaz. Obrázek si worker vyzvedne až v dalším kole.
-        const command = await claimTradovateCopierCommand({ db, deviceId: device.id });
         let snapshotRequests: Awaited<ReturnType<typeof loadPendingTvAlertSnapshotRequests>> = [];
         if (!command) {
           try {

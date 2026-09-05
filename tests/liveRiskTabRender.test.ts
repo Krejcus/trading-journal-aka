@@ -132,6 +132,9 @@ const followerCuts: CopierFollowerCut[] = [{
 
 const render = (patch: Partial<Parameters<typeof LiveAccountRiskTable>[0]> = {}) => renderToStaticMarkup(
   React.createElement(LiveAccountRiskTable, {
+    runtimeAvailable: true,
+    riskConfigSupported: true,
+    status: controller(),
     group,
     accounts,
     accountProfiles: profiles,
@@ -172,6 +175,7 @@ const controller = (patch: Partial<CopierControllerStatus> = {}): CopierControll
   lastError: null,
   revision: 1,
   lastSequence: 1,
+  accountEligibility: [],
   ...patch,
 });
 
@@ -180,6 +184,33 @@ const row = (markup: string, accountId: number): string => (
 );
 
 describe('LIVE Risk — Účty a propky', () => {
+  it.each([
+    ['disarmed', controller({ armed: false }), true, 'Kopírka vypnutá'],
+    ['offline', controller({ connected: false }), true, 'Odpojeno'],
+    ['paused', controller({ pause: { until: NOW + 60_000, at: NOW, rule: 'daily-loss' } }), true, 'Pauza'],
+    ['locked', controller({ dayLockUntil: NOW + 60_000 }), true, 'Zámek dne'],
+    ['unknown', null, true, 'Stav neověřen'],
+    ['unknown', controller(), false, 'Stav neověřen'],
+    ['shadow', controller({ shadowMode: true }), true, 'Simulace'],
+    ['blocked', controller({ reconciliationRequired: true }), true, 'Kopírování blokováno'],
+  ] as const)('u followera zobrazí %s místo kopírování', (key, status, runtimeAvailable, label) => {
+    const markup = render({ status, runtimeAvailable });
+    expect(row(markup, 2)).toContain(`data-account-risk-state="${key}"`);
+    expect(row(markup, 2)).toContain(label);
+    expect(row(markup, 2)).not.toContain('>Kopíruje');
+    expect(row(markup, 3)).not.toContain('>Kopíruje');
+  });
+
+  it('bez podpory workeru skryje editory a nevydává fallback akci za potvrzenou', () => {
+    const markup = render({ riskConfigSupported: false });
+    expect(markup).toContain('Risk limity vyžadují aktualizaci workeru');
+    expect(markup).toContain('nepodporováno');
+    expect(markup).not.toContain('<input');
+    expect(markup).not.toContain('<select');
+    expect(markup).not.toContain('Zavřít kopii');
+    expect(markup.match(/<button[^>]*disabled=""[^>]*>/g)).toHaveLength(1);
+  });
+
   it('vykreslí přesně osm sloupců, identity fallback a všechny požadované stavy', () => {
     const markup = render();
     const headers = markup.match(/<th\b[^>]*>/g) ?? [];
@@ -197,7 +228,7 @@ describe('LIVE Risk — Účty a propky', () => {
     ]) expect(markup).toContain(label);
 
     expect(row(markup, 1)).toContain('Profil Leader');
-    expect(row(markup, 1)).toContain('Obchoduje pro leadera');
+    expect(row(markup, 1)).toContain('Leader skupiny');
     expect(row(markup, 1)).not.toContain('<input');
     expect(row(markup, 1)).not.toContain('<select');
     expect(row(markup, 2)).toContain('Snapshot normal');
@@ -425,8 +456,49 @@ describe('LIVE Risk — Účty a propky', () => {
 });
 
 describe('LIVE Risk záložka', () => {
+  it('přenese nepodporovaný worker do obou editorů bez aktivních výchozích pravidel', () => {
+    const markup = renderToStaticMarkup(React.createElement(LiveRiskTab, {
+      snapshot,
+      group,
+      status: controller({ armed: false }),
+      runtimeAvailable: true,
+      riskConfigSupported: false,
+      onSaveGroup: () => undefined,
+      now: NOW,
+    }));
+    expect(markup).toContain('data-rules-known="false"');
+    expect(markup).toContain('data-risk-unsupported="true"');
+    expect(markup).not.toContain('<input');
+    expect(markup).not.toContain('<select');
+    expect(markup).not.toContain('pauza 20 min');
+    expect(markup).not.toContain('>Kopíruje');
+  });
+
+  it('starý ARM snapshot bez čerstvého transportu nezobrazuje jako aktuální stav', () => {
+    const markup = renderToStaticMarkup(React.createElement(LiveRiskTab, {
+      snapshot,
+      group,
+      status: controller({
+        dayLockUntil: NOW + 60_000,
+        pause: { until: NOW + 60_000, at: NOW, rule: 'daily-loss' },
+      }),
+      runtimeAvailable: false,
+      riskConfigSupported: true,
+      onSaveGroup: () => undefined,
+      now: NOW,
+    }));
+    expect(row(markup, 2)).toContain('Stav neověřen');
+    expect(markup).not.toContain('data-day-lock-banner="true"');
+    expect(markup).not.toContain('data-rule-pause-banner="true"');
+    expect(markup).not.toContain('>Kopíruje');
+    expect(markup).toContain('<fieldset disabled=""');
+    expect(row(markup, 2).match(/<input[^>]*disabled=""[^>]*>/g)).toHaveLength(2);
+  });
+
   it('propojí worker pauzu, chybu, tighten-only, pravidla i účty', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveRiskTab, {
+      runtimeAvailable: true,
+      riskConfigSupported: true,
       snapshot,
       accountProfiles: profiles,
       group,
@@ -464,6 +536,8 @@ describe('LIVE Risk záložka', () => {
 
   it('zámek má přednost před pauzou a nikdy nenabídne odemknutí', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveRiskTab, {
+      runtimeAvailable: true,
+      riskConfigSupported: true,
       snapshot,
       group,
       status: controller({
@@ -482,6 +556,8 @@ describe('LIVE Risk záložka', () => {
 
   it('bez autoritativní skupiny neukáže výchozí pravidla jako potvrzená', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveRiskTab, {
+      runtimeAvailable: true,
+      riskConfigSupported: true,
       snapshot,
       group: null,
       status: null,

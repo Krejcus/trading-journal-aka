@@ -1,12 +1,12 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import LiveRiskSummaryCard from '../components/LiveRiskSummaryCard';
+import LiveRiskSummaryCard, { type LiveRiskSummaryCardProps } from '../components/LiveRiskSummaryCard';
 import {
   DEFAULT_COPY_GROUP_SAFETY,
   type CopyGroupConfig,
 } from '../services/liveCopyTrading';
-import type { CopierAccountRiskSnapshot } from '../services/copierRuntimeController';
+import type { CopierAccountRiskSnapshot, CopierControllerStatus } from '../services/copierRuntimeController';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
 
 const NOW = Date.UTC(2026, 8, 5, 14, 0);
@@ -68,9 +68,67 @@ const group: CopyGroupConfig = {
   },
 };
 
+const controller = (patch: Partial<CopierControllerStatus> = {}): CopierControllerStatus => ({
+  started: true, armed: true, killSwitch: false, shadowMode: false, connected: true,
+  reconciliationRequired: false, divergentAccounts: [], workingOrderAccounts: [],
+  stuckOutbox: false, stuckOperations: [], lastError: null, revision: 1, lastSequence: 1,
+  accountEligibility: [],
+  ...patch,
+});
+
+const summary = (props: LiveRiskSummaryCardProps) => React.createElement(LiveRiskSummaryCard, {
+  runtimeAvailable: true,
+  riskConfigSupported: true,
+  status: controller({ pause: props.pause, dayLockUntil: props.dayLockUntil }),
+  ...props,
+});
+
 describe('LiveRiskSummaryCard', () => {
+  it.each([
+    ['disarmed', controller({ armed: false }), true, 'Kopírka vypnutá'],
+    ['offline', controller({ connected: false }), true, 'Odpojeno'],
+    ['paused', controller({ pause: { until: NOW + 60_000, at: NOW, rule: 'daily-loss' } }), true, 'Pauza'],
+    ['locked', controller({ dayLockUntil: NOW + 60_000 }), true, 'Zámek dne'],
+    ['unknown', null, true, 'Stav neověřen'],
+    ['unknown', controller(), false, 'Stav neověřen'],
+  ] as const)('stav %s nezamění za běžící kopírování', (key, status, runtimeAvailable, label) => {
+    const markup = renderToStaticMarkup(summary({ group, status, runtimeAvailable, now: NOW }));
+    expect(markup).toContain(`data-copier-runtime-state="${key}"`);
+    expect(markup).toContain(`Nastavené účty: 2 · ${label}`);
+    expect(markup).not.toContain('účtů kopíruje');
+  });
+
+  it('potvrzené vypnuté pravidlo odliší od chybějícího průběhu a nepočítá jeho zámek', () => {
+    const disabled = renderToStaticMarkup(summary({
+      group: { ...group, safety: { ...group.safety!, dailyLossLimitUsd: 0, dailyMaxLosingTrades: 0, dailyMaxTrades: 0 } },
+      now: NOW,
+    }));
+    const unknown = renderToStaticMarkup(summary({ group, now: NOW }));
+    expect(disabled.match(/data-rule-disabled="true"/g)).toHaveLength(3);
+    expect(disabled.match(/aria-valuetext="vypnuto"/g)).toHaveLength(3);
+    expect(disabled).toContain('0 zámků');
+    expect(unknown).toContain('Limit nebo průběh není ověřený');
+    expect(unknown).not.toContain('data-rule-disabled="true"');
+  });
+
+  it('starému workeru nepřipíše potvrzené akce ani aktivní Risk limity', () => {
+    const markup = renderToStaticMarkup(summary({ group, riskConfigSupported: false, now: NOW }));
+    expect(markup).toContain('Pravidla worker nepotvrdil');
+    expect(markup).toContain('Risk vyžaduje aktualizaci workeru');
+    expect(markup).not.toContain('zámky');
+    expect(markup.match(/data-metric-known="false"/g)).toHaveLength(4);
+  });
+
+  it('počet kopírujících účtů ukáže až s potvrzeným ostrým runtime', () => {
+    const active = renderToStaticMarkup(summary({ group, now: NOW }));
+    const shadow = renderToStaticMarkup(summary({ group, status: controller({ shadowMode: true }), now: NOW }));
+    expect(active).toContain('2/2 účtů kopíruje');
+    expect(shadow).toContain('Simulace');
+    expect(shadow).not.toContain('účtů kopíruje');
+  });
+
   it('shrne konfiguraci, aktivní pauzu, účty a všechny čtyři mini-lišty', () => {
-    const markup = renderToStaticMarkup(React.createElement(LiveRiskSummaryCard, {
+    const markup = renderToStaticMarkup(summary({
       group: {
         ...group,
         // Worker může cut followera držet v runtime mode=off; v souhrnu má
@@ -108,9 +166,10 @@ describe('LiveRiskSummaryCard', () => {
     }));
 
     expect(markup).toContain('data-live-risk-summary="true"');
-    expect(markup).toContain('3 zámky');
+    expect(markup).toContain('2 zámky');
     expect(markup).toContain('Pauza');
-    expect(markup).toContain('1/2 účtů kopíruje');
+    expect(markup).toContain('Nastavené účty: 2 · Pauza');
+    expect(markup).not.toContain('účtů kopíruje');
     expect(markup).toContain('Denní ztráta');
     expect(markup).toContain('Ztrátové obchody');
     expect(markup).toContain('>Obchody<');
@@ -123,14 +182,14 @@ describe('LiveRiskSummaryCard', () => {
   });
 
   it('neznámý worker a broker stav nevydává za nulu', () => {
-    const markup = renderToStaticMarkup(React.createElement(LiveRiskSummaryCard, {
+    const markup = renderToStaticMarkup(summary({
       group: null,
       brokerDailyPnlPending: true,
       now: NOW,
     }));
 
-    expect(markup).toContain('— zámků');
-    expect(markup).toContain('—/— účtů kopíruje');
+    expect(markup).toContain('Pravidla neověřena');
+    expect(markup).toContain('Účty nejsou ověřené');
     expect(markup.match(/data-metric-known="false"/g)).toHaveLength(4);
     expect(markup).not.toContain('aria-valuenow="0"');
     expect(markup).toContain('Denní P&amp;L se načítá');
@@ -138,7 +197,7 @@ describe('LiveRiskSummaryCard', () => {
   });
 
   it('skupinu bez potvrzené safety konfigurace nevydává za defaultní pravidla', () => {
-    const markup = renderToStaticMarkup(React.createElement(LiveRiskSummaryCard, {
+    const markup = renderToStaticMarkup(summary({
       group: { ...group, safety: undefined },
       dailyStats: {
         sessionEndAt: NOW + 8 * 60 * 60_000,
@@ -150,14 +209,14 @@ describe('LiveRiskSummaryCard', () => {
       now: NOW,
     }));
 
-    expect(markup).toContain('— zámků');
+    expect(markup).toContain('Pravidla neověřena');
     expect(markup).not.toContain('3 zámky');
     expect(markup.match(/data-metric-known="false"/g)?.length).toBeGreaterThanOrEqual(3);
     expect(markup).not.toContain('62 % limitu leadera');
   });
 
   it('bez callbacku ponechá odkaz jako běžnou navigaci', () => {
-    const markup = renderToStaticMarkup(React.createElement(LiveRiskSummaryCard, {
+    const markup = renderToStaticMarkup(summary({
       group,
       now: NOW,
     }));
@@ -167,7 +226,7 @@ describe('LiveRiskSummaryCard', () => {
   });
 
   it('při částečném broker P&L neurčí nejbližší účet z neúplné množiny', () => {
-    const markup = renderToStaticMarkup(React.createElement(LiveRiskSummaryCard, {
+    const markup = renderToStaticMarkup(summary({
       group,
       accounts: [
         account(200, 'Známý follower', -900),
@@ -185,7 +244,7 @@ describe('LiveRiskSummaryCard', () => {
   });
 
   it('preferuje novější worker P&L před starší broker mapou', () => {
-    const markup = renderToStaticMarkup(React.createElement(LiveRiskSummaryCard, {
+    const markup = renderToStaticMarkup(summary({
       group,
       accounts: [
         account(200, 'Worker nejblíž', -950),
@@ -209,14 +268,14 @@ describe('LiveRiskSummaryCard', () => {
       ...group,
       followers: [group.followers[0]],
     };
-    const stale = renderToStaticMarkup(React.createElement(LiveRiskSummaryCard, {
+    const stale = renderToStaticMarkup(summary({
       group: singleFollowerGroup,
       accounts: [account(200, 'Stale worker', -950)],
       accountRisk: [risk(200, -950, { verifiedAt: NOW - 90_000 })],
       brokerDailyPnlByAccount: { 200: -950 },
       now: NOW,
     }));
-    const missing = renderToStaticMarkup(React.createElement(LiveRiskSummaryCard, {
+    const missing = renderToStaticMarkup(summary({
       group: singleFollowerGroup,
       accounts: [account(200, 'Chybějící worker hodnota', -950)],
       accountRisk: [risk(200, null)],

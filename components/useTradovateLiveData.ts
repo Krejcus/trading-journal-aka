@@ -1,3 +1,5 @@
+import { createTradovateIntentPrefetch } from '../lib/tradovateIntentPrefetch';
+import { consumeTradovateReads } from '../lib/tradovateReadCoordinator';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { TradovateAccountProfile, TradovateAccountProfilesResult } from '../lib/tradovateAccountProfileTypes';
 import type { Account } from '../types';
@@ -62,6 +64,9 @@ interface TradovateLiveCacheEntry {
 // memory, keyed by AlphaTrade user, so remounting never flashes a false
 // disconnected state. Nothing sensitive (OAuth tokens) is stored here.
 const tradovateLiveCache = new Map<string, TradovateLiveCacheEntry>();
+const EMPTY_CONNECTION_DATA: Record<string, TradovatePreflightResult> = {};
+const EMPTY_PROFILES: TradovateAccountProfile[] = [];
+const EMPTY_HISTORY_SNAPSHOTS: Record<string, TradovateHistorySnapshot> = {};
 
 const mergeCoverage = (values: TradovateSourceCoverage[]): TradovateSourceCoverage => {
   const rank = { unavailable: 0, denied: 1, empty: 2, partial: 3, available: 4 } as const;
@@ -123,10 +128,18 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     [userId],
   );
   const cached = userId ? tradovateLiveCache.get(userId) : undefined;
-  const [status, setStatus] = useState<TradovateOAuthStatus | null>(() => cached?.status ?? persisted?.status ?? null);
-  const [connectionData, setConnectionData] = useState<Record<string, TradovatePreflightResult>>(() => cached?.connectionData ?? {});
-  const [profiles, setProfiles] = useState<TradovateAccountProfile[]>(() => cached?.profiles ?? []);
-  const [historySnapshots, setHistorySnapshots] = useState<Record<string, TradovateHistorySnapshot>>(() => cached?.historySnapshots ?? {});
+  const [stateUserId, setStateUserId] = useState(userId);
+  const [storedStatus, setStatus] = useState<TradovateOAuthStatus | null>(() => cached?.status ?? persisted?.status ?? null);
+  const [storedConnectionData, setConnectionData] = useState<Record<string, TradovatePreflightResult>>(() => cached?.connectionData ?? {});
+  const [storedProfiles, setProfiles] = useState<TradovateAccountProfile[]>(() => cached?.profiles ?? []);
+  const [storedHistorySnapshots, setHistorySnapshots] = useState<Record<string, TradovateHistorySnapshot>>(() => cached?.historySnapshots ?? {});
+  // Identity changes must be safe during render, before reset effects run.
+  // Otherwise both children and the new user's cache can receive old data.
+  const identityReady = stateUserId === userId;
+  const status = identityReady ? storedStatus : cached?.status ?? persisted?.status ?? null;
+  const connectionData = identityReady ? storedConnectionData : cached?.connectionData ?? EMPTY_CONNECTION_DATA;
+  const profiles = identityReady ? storedProfiles : cached?.profiles ?? EMPTY_PROFILES;
+  const historySnapshots = identityReady ? storedHistorySnapshots : cached?.historySnapshots ?? EMPTY_HISTORY_SNAPSHOTS;
   const [historyError, setHistoryError] = useState<string | null>(null);
   const historyBusyRef = useRef(false);
   const profileOnboardingBusyRef = useRef(false);
@@ -141,15 +154,57 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   const journalLinkAttemptsRef = useRef(new Set<string>());
   const previousUserIdRef = useRef(userId);
   const activeUserIdRef = useRef(userId);
+  const identityEpochRef = useRef({ userId, epoch: 0 });
+  const connectionEpochRef = useRef(0);
+  if (identityEpochRef.current.userId !== userId) {
+    identityEpochRef.current = { userId, epoch: identityEpochRef.current.epoch + 1 };
+    connectionEpochRef.current += 1;
+    statusRef.current = status;
+    connectionDataRef.current = connectionData;
+  }
   activeUserIdRef.current = userId;
+  const intentPrefetchRef = useRef<ReturnType<typeof createTradovateIntentPrefetch> | null>(null);
+  if (!intentPrefetchRef.current) {
+    intentPrefetchRef.current = createTradovateIntentPrefetch({
+      status: loadTradovateOAuthStatus,
+      bootstrap: connectionId => runTradovateReadOnlyPreflight(connectionId, 'bootstrap'),
+      profiles: loadTradovateAccountProfiles,
+      blocked: () => Date.now() < rateLimitUntilRef.current,
+      onError: reason => {
+        if (reason instanceof TradovateRequestError && reason.status === 429) {
+          rateLimitUntilRef.current = Date.now() + (reason.retryAfterMs ?? 3_600_000);
+        }
+      },
+    });
+  }
+  intentPrefetchRef.current.setUser(userId);
+  const refreshStatusInFlightRef = useRef<{ userId: string; epoch: number; promise: Promise<TradovateOAuthStatus | null> } | null>(null);
+  const prefetch = useCallback(() => {
+    if (enabled || !userId || activeUserIdRef.current !== userId || Object.keys(connectionDataRef.current).length > 0) return;
+    if (refreshStatusInFlightRef.current?.userId === userId && refreshStatusInFlightRef.current.epoch === identityEpochRef.current.epoch) return;
+    intentPrefetchRef.current?.prefetch((statusRef.current?.connections ?? [])
+      .filter(connection => connection.connected).map(connection => connection.id));
+  }, [enabled, userId]);
   const [busy, setBusy] = useState<BusyState>('status');
   const [error, setError] = useState<string | null>(null);
   const [dataEnrichmentPending, setDataEnrichmentPending] = useState(false);
   const [profileSetupOpen, setProfileSetupOpen] = useState(false);
 
   useEffect(() => {
+    activeUserIdRef.current = userId;
+    return () => {
+      // Revoke continuations before they can publish or start onboarding after
+      // unmount (also covers StrictMode effect teardown and identity changes).
+      identityEpochRef.current.epoch += 1;
+      activeUserIdRef.current = '';
+      intentPrefetchRef.current?.clear();
+    };
+  }, [userId]);
+
+  useEffect(() => {
     if (previousUserIdRef.current === userId) return;
     previousUserIdRef.current = userId;
+    setStateUserId(userId);
     journalLinkAttemptsRef.current.clear();
     livePnlCursorsRef.current = {};
     livePnlAnchorCursorsRef.current = {};
@@ -158,7 +213,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     rateLimitUntilRef.current = 0;
     setStatus(cached?.status ?? persisted?.status ?? null);
     statusRef.current = cached?.status ?? persisted?.status ?? null;
-    setConnectionData(cached?.connectionData ?? {});
+    connectionDataRef.current = cached?.connectionData ?? {};
+    setConnectionData(connectionDataRef.current);
     setProfiles(cached?.profiles ?? []);
     setHistorySnapshots(cached?.historySnapshots ?? {});
     setHistoryError(null);
@@ -166,10 +222,6 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     setDataEnrichmentPending(false);
     setProfileSetupOpen(false);
   }, [cached, persisted, userId]);
-
-  useEffect(() => {
-    connectionDataRef.current = connectionData;
-  }, [connectionData]);
 
   useEffect(() => {
     statusRef.current = status;
@@ -210,13 +262,15 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       connectionData,
     });
     if (!plan.changed) return;
+    const epoch = identityEpochRef.current.epoch;
+    const isCurrent = () => activeUserIdRef.current === userId && identityEpochRef.current.epoch === epoch;
     void storageService.saveAccounts(plan.accounts).then(async savedAccounts => {
-      if (activeUserIdRef.current !== userId) return;
+      if (!isCurrent()) return;
       journalOptions.onAccountsChanged(savedAccounts);
       const savedProfiles = await saveTradovateAccountProfiles(plan.profiles);
-      if (activeUserIdRef.current === userId) setProfiles(savedProfiles.profiles);
+      if (isCurrent()) setProfiles(savedProfiles.profiles);
     }).catch(reason => {
-      if (activeUserIdRef.current === userId) {
+      if (isCurrent()) {
         setError(reason instanceof Error ? reason.message : 'OAuth účet se nepodařilo propojit s journalem.');
       }
     });
@@ -242,7 +296,11 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   }, [connectionSummaries, status, userId]);
 
   const advanceHistoricalBackfill = useCallback(async (datasets: TradovatePreflightResult[]) => {
-    if (historyBusyRef.current || datasets.length === 0) return;
+    if (historyBusyRef.current || datasets.length === 0 || Date.now() < rateLimitUntilRef.current) return;
+    const user = activeUserIdRef.current;
+    const epoch = identityEpochRef.current.epoch;
+    const connectionEpoch = connectionEpochRef.current;
+    const isCurrent = () => activeUserIdRef.current === user && identityEpochRef.current.epoch === epoch && connectionEpochRef.current === connectionEpoch;
     historyBusyRef.current = true;
     try {
       const results = await Promise.allSettled(datasets.flatMap(dataset => dataset.accounts.map(account =>
@@ -251,6 +309,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
           accountId: account.id,
         }),
       )));
+      if (!isCurrent()) return;
       const successful = results
         .filter((result): result is PromiseFulfilledResult<TradovateHistorySnapshot> => result.status === 'fulfilled')
         .map(result => result.value);
@@ -280,6 +339,17 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     prestarted?: PrestartedTradovatePreflights,
     prestartedProfiles?: Promise<TradovateAccountProfilesResult | null>,
   ) => {
+    const requestedUserId = activeUserIdRef.current;
+    const requestedEpoch = identityEpochRef.current.epoch;
+    const requestedConnectionEpoch = connectionEpochRef.current;
+    const isCurrent = () => activeUserIdRef.current === requestedUserId && identityEpochRef.current.epoch === requestedEpoch && connectionEpochRef.current === requestedConnectionEpoch;
+    if (!requestedUserId || Date.now() < rateLimitUntilRef.current) return false;
+    connectionIds = connectionIds.filter(id => statusRef.current?.connections.some(connection => connection.id === id && connection.connected));
+    const recordRateLimit = (reason: unknown) => {
+      if (isCurrent() && reason instanceof TradovateRequestError && reason.status === 429) {
+        rateLimitUntilRef.current = Math.max(rateLimitUntilRef.current, Date.now() + Math.max(1_000, reason.retryAfterMs ?? 3_600_000));
+      }
+    };
     if (!quiet) setBusy('data');
     setError(null);
     try {
@@ -287,18 +357,16 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       if (mode === 'replace') {
         // Fresh status may invalidate a cached connection. Remove only inactive
         // IDs; valid active data can remain visible until its replacement lands.
-        setConnectionData(current => {
-          const next = Object.fromEntries(Object.entries(current)
-            .filter(([connectionId]) => activeIds.has(connectionId)));
-          connectionDataRef.current = next;
-          return next;
-        });
+        const next = Object.fromEntries(Object.entries(connectionDataRef.current)
+          .filter(([connectionId]) => activeIds.has(connectionId)));
+        connectionDataRef.current = next;
+        setConnectionData(next);
       }
 
       const profilesPromise = prestartedProfiles
         ?? loadTradovateAccountProfiles().catch(() => null);
       void profilesPromise.then(stored => {
-        if (stored) setProfiles(stored.profiles);
+        if (stored && isCurrent()) setProfiles(stored.profiles);
       });
 
       // Every connection is applied as soon as it completes. A slow prop firm
@@ -307,14 +375,28 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         connectionIds,
         connectionId => runTradovateReadOnlyPreflight(connectionId, detail),
         dataset => {
-          setConnectionData(current => {
-            const next = applyTradovateConnectionDataRefresh(current, [dataset], 'merge');
-            connectionDataRef.current = next;
-            return next;
-          });
+          if (!isCurrent() || !statusRef.current?.connections.some(connection => connection.id === dataset.connectionId && connection.connected)) return;
+          const coverage = [
+            ...Object.values(dataset.coverage),
+            ...dataset.accounts.flatMap(account => [account.balance.coverage, account.history.coverage, account.risk.statusCoverage, account.risk.limitsCoverage]),
+          ];
+          const limitedSources = coverage.filter(source => source?.httpStatus === 429);
+          if (limitedSources.length > 0) recordRateLimit(new TradovateRequestError(
+            'Tradovate rate limited a partial read.', 429,
+            Math.max(...limitedSources.map(source => source.retryAfterMs ?? 3_600_000)),
+          ));
+          // Update the shared read model synchronously before publishing to
+          // React; a tick resolving in the same batch must see this refresh.
+          const next = applyTradovateConnectionDataRefresh(connectionDataRef.current, [dataset], 'merge');
+          connectionDataRef.current = next;
+          setConnectionData(next);
         },
         prestarted,
       );
+      if (!isCurrent()) return false;
+      for (const result of preflights) {
+        if (result.status === 'rejected') recordRateLimit(result.reason);
+      }
       const datasets = preflights.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
       if (datasets.length === 0 && connectionIds.length > 0) {
         const failed = preflights.find((result): result is PromiseRejectedResult => result.status === 'rejected');
@@ -324,7 +406,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       // Profiles and onboarding are deliberately outside the first-paint path.
       // They may enrich labels later but never delay fresh broker values.
       void profilesPromise.then(async stored => {
-        if (!stored || profileOnboardingBusyRef.current) return;
+        if (!stored || !isCurrent() || profileOnboardingBusyRef.current) return;
         const storedIds = new Set(stored.profiles.map(profile => profile.externalAccountId));
         const hasMissingProfiles = datasets.flatMap(dataset => dataset.accounts)
           .some(account => !storedIds.has(String(account.id)));
@@ -338,6 +420,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
             });
             if (missing.length > 0) {
               const saved = await saveTradovateAccountProfiles([...stored.profiles, ...missing]);
+              if (!isCurrent()) return;
               setProfiles(saved.profiles);
               setProfileSetupOpen(false);
             }
@@ -348,78 +431,114 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
           profileOnboardingBusyRef.current = false;
         }
       }).catch(reason => {
-        setError(reason instanceof Error ? reason.message : 'Profily Tradovate účtů se nepodařilo načíst.');
+        if (isCurrent()) setError(reason instanceof Error ? reason.message : 'Profily Tradovate účtů se nepodařilo načíst.');
       });
       const complete = datasets.length === connectionIds.length;
       if (detail === 'full' && complete) setDataEnrichmentPending(false);
       return complete;
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Tradovate data se nepodařilo načíst.');
+      recordRateLimit(reason);
+      if (isCurrent()) setError(reason instanceof Error ? reason.message : 'Tradovate data se nepodařilo načíst.');
       return false;
     } finally {
-      if (!quiet) setBusy(null);
+      if (!quiet && isCurrent()) setBusy(null);
     }
   }, []);
 
-  const refreshStatus = useCallback(async () => {
-    if (!userId) return null;
-    setBusy('status');
-    setError(null);
-    const hasConfirmedData = Object.keys(connectionDataRef.current).length > 0;
-    const cachedConnectionIds = hasConfirmedData
-      ? []
-      : (statusRef.current?.connections ?? [])
-        .filter(connection => connection.connected)
-        .map(connection => connection.id);
-    // The cached shell contains IDs only. Start read-only work immediately,
-    // but do not apply any result until fresh OAuth status confirms the ID.
-    const prestartedBootstrap = startTradovatePreflights(
-      cachedConnectionIds,
-      connectionId => runTradovateReadOnlyPreflight(connectionId, 'bootstrap'),
-    );
-    const profilesPromise = loadTradovateAccountProfiles().catch(() => null);
-    try {
-      const nextStatus = await loadTradovateOAuthStatus();
-      setStatus(nextStatus);
-      statusRef.current = nextStatus;
-      const activeConnectionIds = nextStatus.connections.filter(connection => connection.connected).map(connection => connection.id);
-      if (activeConnectionIds.length > 0) {
-        if (Object.keys(connectionDataRef.current).length > 0) {
-          // Návrat v rámci SPA má už potvrzený in-memory snapshot, takže ho
-          // nemažeme ani nepřepínáme do bootstrap stavu.
-          void refreshData(activeConnectionIds, true, 'merge', 'full', undefined, profilesPromise);
-        } else {
-          setDataEnrichmentPending(true);
-          const bootstrapped = await refreshData(
-            activeConnectionIds,
-            true,
-            'replace',
-            'bootstrap',
-            prestartedBootstrap,
-            profilesPromise,
-          );
-          if (bootstrapped) {
-            // Historie, fees a risk detail se doplní bez blokování první karty.
-            void refreshData(activeConnectionIds, true, 'merge', 'full', undefined, profilesPromise)
-              .then(complete => { if (complete) setDataEnrichmentPending(false); });
-          } else {
-            const complete = await refreshData(activeConnectionIds, true, 'replace', 'full', undefined, profilesPromise);
-            if (complete) setDataEnrichmentPending(false);
-          }
+  const refreshStatus = useCallback((): Promise<TradovateOAuthStatus | null> => {
+    if (!userId || activeUserIdRef.current !== userId) return Promise.resolve(null);
+    const epoch = identityEpochRef.current.epoch;
+    const isCurrent = () => activeUserIdRef.current === userId && identityEpochRef.current.epoch === epoch;
+    if (refreshStatusInFlightRef.current?.userId === userId && refreshStatusInFlightRef.current.epoch === epoch) return refreshStatusInFlightRef.current.promise;
+    const run = async () => {
+      setBusy('status');
+      setError(null);
+      const warmed = await intentPrefetchRef.current?.claim(userId);
+      if (!isCurrent()) return null;
+      const hasConfirmedData = Object.keys(connectionDataRef.current).length > 0;
+      const cachedConnectionIds = hasConfirmedData
+        ? []
+        : (statusRef.current?.connections ?? [])
+          .filter(connection => connection.connected)
+          .map(connection => connection.id);
+      // The cached shell contains IDs only. Start read-only work immediately,
+      // but do not apply any result until fresh OAuth status confirms the ID.
+      const prestartedBootstrap = warmed?.bootstrap ?? startTradovatePreflights(
+        Date.now() < rateLimitUntilRef.current ? [] : cachedConnectionIds,
+        connectionId => runTradovateReadOnlyPreflight(connectionId, 'bootstrap'),
+      );
+      const profilesPromise = warmed?.profiles ?? loadTradovateAccountProfiles().catch(() => null);
+      try {
+        const nextStatus = warmed?.status ?? await loadTradovateOAuthStatus();
+        if (!isCurrent()) return null;
+        const activeConnectionIds = nextStatus.connections.filter(connection => connection.connected).map(connection => connection.id);
+        const previousIds = (statusRef.current?.connections ?? []).filter(connection => connection.connected).map(connection => connection.id);
+        if (JSON.stringify([...previousIds].sort()) !== JSON.stringify([...activeConnectionIds].sort())) connectionEpochRef.current += 1;
+        setStatus(nextStatus);
+        statusRef.current = nextStatus;
+        // Fresh authorization revokes removed connections even on warm returns
+        // and during backoff, before any new read is allowed to publish.
+        const activeIds = new Set(activeConnectionIds);
+        const retained = Object.fromEntries(Object.entries(connectionDataRef.current).filter(([id]) => activeIds.has(id)));
+        connectionDataRef.current = retained;
+        setConnectionData(retained);
+        if (activeConnectionIds.length > 0 && Date.now() < rateLimitUntilRef.current) {
+          setError('Tradovate omezuje četnost požadavků. Další načtení počká na konec limitu.');
+          return nextStatus;
         }
-      } else {
-        setConnectionData({});
-        setDataEnrichmentPending(false);
-        const stored = await profilesPromise;
-        setProfiles(stored?.profiles ?? []);
+        if (activeConnectionIds.length > 0) {
+          if (Object.keys(connectionDataRef.current).length > 0) {
+            // Návrat v rámci SPA má už potvrzený in-memory snapshot, takže ho
+            // nemažeme ani nepřepínáme do bootstrap stavu.
+            void refreshData(activeConnectionIds, true, 'merge', 'full', undefined, profilesPromise);
+          } else {
+            setDataEnrichmentPending(true);
+            const bootstrapped = await refreshData(
+              activeConnectionIds,
+              true,
+              'replace',
+              'bootstrap',
+              prestartedBootstrap,
+              profilesPromise,
+            );
+            if (!isCurrent()) return null;
+            if (Date.now() < rateLimitUntilRef.current) {
+              setError('Tradovate omezuje četnost požadavků. Další načtení počká na konec limitu.');
+              return nextStatus;
+            }
+            if (bootstrapped) {
+              // Historie, fees a risk detail se doplní bez blokování první karty.
+              void refreshData(activeConnectionIds, true, 'merge', 'full', undefined, profilesPromise)
+                .then(complete => { if (complete && isCurrent()) setDataEnrichmentPending(false); });
+            } else {
+              const complete = await refreshData(activeConnectionIds, true, 'replace', 'full', undefined, profilesPromise);
+              if (complete && isCurrent()) setDataEnrichmentPending(false);
+            }
+          }
+        } else {
+          connectionDataRef.current = {};
+          setConnectionData({});
+          setDataEnrichmentPending(false);
+          const stored = await profilesPromise;
+          if (isCurrent()) setProfiles(stored?.profiles ?? []);
+        }
+        return nextStatus;
+      } catch (reason) {
+        if (isCurrent()) setError(reason instanceof Error ? reason.message : 'Stav Tradovate OAuth se nepodařilo načíst.');
+        return null;
+      } finally {
+        if (isCurrent()) {
+          setBusy(null);
+          intentPrefetchRef.current?.clear();
+        }
       }
-      return nextStatus;
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Stav Tradovate OAuth se nepodařilo načíst.');
-      return null;
-    } finally {
-      setBusy(null);
-    }
+    };
+    const promise = run();
+    refreshStatusInFlightRef.current = { userId, epoch, promise };
+    void promise.finally(() => {
+      if (refreshStatusInFlightRef.current?.promise === promise) refreshStatusInFlightRef.current = null;
+    }).catch(() => {});
+    return promise;
   }, [refreshData, userId]);
 
   const connect = useCallback(async (connectionId?: string) => {
@@ -472,13 +591,14 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     const ids = status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [];
     if (ids.length === 0) return;
     let cancelled = false;
+    const pollUserId = activeUserIdRef.current;
     let timer: number | null = null;
 
     const schedule = (delay: number) => {
       if (!cancelled) timer = window.setTimeout(() => void poll(), delay);
     };
     const poll = async () => {
-      if (cancelled) return;
+      if (cancelled || activeUserIdRef.current !== pollUserId) return;
       if (document.visibilityState === 'hidden') {
         schedule(IDLE_POSITION_INTERVAL_MS);
         return;
@@ -505,83 +625,62 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
           || Date.now() - livePnlLastFullTickAtRef.current >= ACTIVE_PNL_INTERVAL_MS;
         let rateLimitResults: PromiseSettledResult<unknown>[];
         if (runFullTick) {
-          const results = await Promise.allSettled(available.map(async connectionId => ({
-              connectionId,
-              tick: await runTradovateLivePnlTick(connectionId, livePnlCursorsRef.current[connectionId] ?? 0),
-            })));
-          rateLimitResults = results;
-          livePnlLastFullTickAtRef.current = Date.now();
-          const successful = results.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
-          const becameFlat = successful
-            .filter(({ connectionId, tick }) => {
-              const previous = connectionDataRef.current[connectionId];
-              return previous ? tradovateLiveTickClosedLastPosition(previous, tick) : false;
-            })
-            .map(({ connectionId }) => connectionId);
-          if (successful.length > 0) {
-            setConnectionData(current => {
-              const next = { ...current };
-              for (const { connectionId, tick } of successful) {
-                const dataset = next[connectionId];
-                if (!dataset) continue;
-                const applied = applyTradovateLivePnlTick(
-                  dataset,
-                  tick,
-                  livePnlMarksRef.current[connectionId] ?? {},
-                );
-                next[connectionId] = applied.data as TradovatePreflightResult;
-                livePnlMarksRef.current[connectionId] = applied.marks;
-                livePnlCursorsRef.current[connectionId] = tick.nextContractCursor;
-              }
+          const becameFlat: string[] = [];
+          rateLimitResults = await consumeTradovateReads(
+            available,
+            connectionId => runTradovateLivePnlTick(connectionId, livePnlCursorsRef.current[connectionId] ?? 0),
+            (connectionId, tick) => {
+              if (cancelled || activeUserIdRef.current !== pollUserId) return;
+              // Partial success must still honor the broker's rate-limit signal.
+              if (tick.anchorErrorStatus === 429) rateLimitUntilRef.current = Date.now() + 3_600_000;
+              const current = connectionDataRef.current;
+              const dataset = current[connectionId];
+              if (!dataset) return;
+              const applied = applyTradovateLivePnlTick(dataset, tick, livePnlMarksRef.current[connectionId] ?? {});
+              if (applied.data === dataset) return;
+              if (tradovateLiveTickClosedLastPosition(dataset, tick)) becameFlat.push(connectionId);
+              const next = { ...current, [connectionId]: applied.data as TradovatePreflightResult };
               connectionDataRef.current = next;
-              return next;
-            });
-          }
-          // A flat live tick has no cash anchor by design. Refresh exactly once
-          // after the close so balance, realized daily P&L, fills and orders do
-          // not remain stale until the ten-minute reconciliation or page reload.
+              livePnlMarksRef.current[connectionId] = applied.marks;
+              livePnlCursorsRef.current[connectionId] = tick.nextContractCursor;
+              setConnectionData(next);
+            },
+          );
+          if (cancelled || activeUserIdRef.current !== pollUserId) return;
+          livePnlLastFullTickAtRef.current = Date.now();
           if (becameFlat.length > 0) await refreshData(becameFlat, true, 'merge');
         } else {
-          const results = await Promise.allSettled(available.flatMap(connectionId => {
+          const candidatesByConnection = new Map(available.flatMap(connectionId => {
             const dataset = connectionDataRef.current[connectionId];
             if (!dataset) return [];
             const candidates = tradovateLivePnlAnchorCandidates(dataset);
             if (candidates.length === 0) return [];
             const cursor = livePnlAnchorCursorsRef.current[connectionId] ?? 0;
-            const candidate = candidates[cursor % candidates.length];
-            return [runTradovateLivePnlAnchor(
-              connectionId,
-              candidate.accountId,
-              candidate.contractId,
-            ).then(tick => ({ connectionId, tick, candidateCount: candidates.length }))];
+            return [[connectionId, { candidate: candidates[cursor % candidates.length], count: candidates.length }] as const];
           }));
-          rateLimitResults = results;
-          const successful = results.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
-          if (successful.length > 0) {
-            setConnectionData(current => {
-              const next = { ...current };
-              let changed = false;
-              for (const { connectionId, tick, candidateCount } of successful) {
-                const dataset = next[connectionId];
-                if (!dataset) continue;
-                const applied = applyTradovateLivePnlAnchorTick(
-                  dataset,
-                  tick,
-                  livePnlMarksRef.current[connectionId] ?? {},
-                );
-                livePnlAnchorCursorsRef.current[connectionId]
-                  = ((livePnlAnchorCursorsRef.current[connectionId] ?? 0) + 1) % candidateCount;
-                if (applied.data === dataset) continue;
-                next[connectionId] = applied.data as TradovatePreflightResult;
-                livePnlMarksRef.current[connectionId] = applied.marks;
-                changed = true;
-              }
-              if (!changed) return current;
+          rateLimitResults = await consumeTradovateReads(
+            [...candidatesByConnection.keys()],
+            connectionId => {
+              const { candidate } = candidatesByConnection.get(connectionId)!;
+              return runTradovateLivePnlAnchor(connectionId, candidate.accountId, candidate.contractId);
+            },
+            (connectionId, tick) => {
+              if (cancelled || activeUserIdRef.current !== pollUserId) return;
+              const current = connectionDataRef.current;
+              const dataset = current[connectionId];
+              if (!dataset) return;
+              const applied = applyTradovateLivePnlAnchorTick(dataset, tick, livePnlMarksRef.current[connectionId] ?? {});
+              livePnlAnchorCursorsRef.current[connectionId] = ((livePnlAnchorCursorsRef.current[connectionId] ?? 0) + 1)
+                % candidatesByConnection.get(connectionId)!.count;
+              if (applied.data === dataset) return;
+              const next = { ...current, [connectionId]: applied.data as TradovatePreflightResult };
               connectionDataRef.current = next;
-              return next;
-            });
-          }
+              livePnlMarksRef.current[connectionId] = applied.marks;
+              setConnectionData(next);
+            },
+          );
         }
+        if (cancelled || activeUserIdRef.current !== pollUserId) return;
         const rateLimited = rateLimitResults.find(result =>
           result.status === 'rejected'
           && result.reason instanceof TradovateRequestError
@@ -623,6 +722,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   }, [advanceHistoricalBackfill, connectionData, enabled, historyError, historySnapshots]);
 
   return {
+    prefetch,
     status,
     data,
     connectionData,

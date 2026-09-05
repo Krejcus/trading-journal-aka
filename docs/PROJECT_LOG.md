@@ -161,6 +161,298 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-05 (Codex, podrobný lokální audit celé kopírky)
+
+Pouze pracovní kopie `codex/live-reliability-20260905` na localhostu.
+Bez push/deploy, reinstalu workeru, ARM/Flatten či skutečného broker zápisu.
+Přibylo 75 regresí v šesti souborech `*DetailedReview.test.ts`; původní
+červené reprodukce a finální logy jsou v
+`/private/tmp/alphatrade-copier-detail-20260905/`.
+
+Nejzávažnější potvrzená chyba: controller mohl po DISARM/kill, který
+přišel během durable `sending` commitu, ještě odeslat nový follower vstup.
+Broker wrapper nyní kontroluje aktuální gate a generaci přijaté události
+přímo před raw write, po preflight I/O i při jeho selhání. Starý úkol
+neoživí nový ARM; generace přežívá frontu i odložené OSO. Prokazatelně
+neodeslané revokované operace končí durable waived/skipped bez retry či
+nového auto-close. Již zahájený raw write si zachovává ACK/unknown.
+20 nových exekučních testů pokrývá standard/OCO/OSO, modify, ochranný
+cancel, fanout, re-ARM, obnovu a chybové lookupy včetně OSO cascade.
+
+Další opravy: tighten-only již nelze obejít změnou časové zóny aktivního
+okna; Risk nezapočítá nezpůsobilé followery mezi kopírující a progress
+ukazuje účinný, nikoli rozepsaný limit. Načtená data se při odebrání
+připojení prořezávají a při změně uživatele nepřetečou ani v prvním renderu;
+opožděné odpovědi chrání identity/connection epochy. Bootstrap/full/manual
+refresh respektují 429 i uvnitř částečného výsledku a Retry-After. Server
+po 401/429 nezačíná další čtení účtů; volitelné scope403 dál izoluje.
+Preflight zachová broker429 místo obecné502 a vrátí Retry-After.
+
+Relay odmítne neplatnou expiraci před exekucí, neztratí druhou událost
+přijatou během event heartbeatu a nepotvrzený výsledek neoznačuje za
+prokazatelnou expiraci. Již zařazený příkaz má přednost před APNs;
+durable eventy v takovém pollu převezme existující watchdog se stejným
+dedup markerem. Nový příkaz přicházející až během běžícího APNs pollu
+může nadále čekat — úplné oddělení notifikací vyžaduje samostatnou cestu.
+
+Ověření: celá sada **2265/2265 ve 250 souborech**, `tsc --noEmit`,
+produkční build a diff check prošly; scoped ESLint 0 chyb, 4 stávající
+warnings. První souběžný full run byl zastaven po timeoutu tří testů;
+finální běh s dvěma workery a infrastrukturním timeoutem15s prošel celý.
+Assertiony bezpečnosti a časování se neměnily. První typecheck zachytil
+nevhodný `Probe<never>` pro null marker; opraven na `Probe<unknown>`.
+
+Browser: po zaseknutém auth-locku v testovací kartě se nový náhled načetl;
+read-only prošlo všech šest LIVE záložek, dva účty a jedna skupina.
+Stávající worker stále hlásí WebSocket error a nepotvrzuje nové Risk
+capabilities, UI správně blokuje jejich uložení. Seznam Mac companion
+zařízení není v omezeném localhost proxy dostupný; externí měnové kurzy
+hlásí fetch error. Auth-lock se po obnově neopakoval, jeho původní příčina
+není potvrzená. Lokální serverové změny ověřují mock testy — produkční
+read-only proxy je nespouští. Zelené lokální testy nejsou real-broker proof.
+
+### 2026-09-05 (Codex, klientské záseky LIVE — Monte Carlo, skupiny a Tailwind)
+
+Pouze localhost, bez push/deploy. Přímý React profil odhalil opakované
+přepočty Monte Carlo při Realtime UPDATE celých trade záznamů. Widget nyní
+memoizuje své skutečné vstupy (pořadí non-Missed PnL + počáteční kapitál),
+algoritmus 600 simulací zůstal identický; metadata a všechny realtime změny
+se dál propisují. Ve stejných prvních 14,647 s klesl součet render práce
+widgetu 1816,2 → 384,9 ms (78,8 %), nikoli celého načtení. Neúčinný pokus
+s porovnáváním celých trade snapshotů byl odstraněn, App je přesně obnoven
+na stav před tímto profilováním. Konfigurace kopírovacích skupin se při
+nezměněném snapshot/runtime merge stabilizuje úplným porovnáním polí;
+ceny, runtime a capturedAt tím nejsou filtrovány.
+
+Odstraněn duplicitní runtime Tailwind CDN (Vite už generuje CSS). CDN nebylo
+prokázáno jako hlavní zdroj sekundových záseků. Zachovány theme/fonty,
+54 konkrétních dynamických utilit, dark variant podle app theme a opraveny
+kolize CSS vrstev pro polohu hlavičky/spodní lišty i focus/hover theme stylů.
+Vizuálně zkontrolováno light/dark/OLED a úzké rozložení, dočasný viewport
+resetován. Testy: 2190/2190 ve 244 souborech, tsc, build, cílený lint bez
+chyb (27 existujících unused warnings), CSS kompilace a diff-check prošly.
+
+Finální 3 první vstupy: oba účty 1571 / 987 / 1126 ms (medián 1126 ms),
+full 2153 / 1683 / 1780 ms; od posledního nutného API responseEnd zbývalo
+179 / 201 / 60 ms. Jeden návrat ukázal cache za 87 ms a fresh full za
+1310 ms. Všechny úvodní status/bootstrap/full HTTP 200 a ověřeny oba
+konkrétní datasety, coverage a viditelné řádky. Nejde o produkční percentily
+ani server A/B; API latence a doba před kliknutím kolísaly. Dosavadní proxy
+používá produkční loader, ne lokální serverovou optimalizaci. Report + data:
+LIVE-CLIENT-PROFILE-20260905.md/json ve visualization složce tasku.
+Veškerá dočasná instrumentace odstraněna; žádné brokerové ovládání,
+reinstall ani práce s přihlašovacími klíči.
+
+### 2026-09-05 (Codex, browser měření prvního vstupu a návratu na LIVE)
+
+Na explicitní žádost změřeny 3 první vstupy a 3 návraty na localhostu se
+skutečnou produkční read API proxy: oba účty 1,529 / 1,842 / 3,179 s
+(medián 1,842 s), full 2,165 / 2,626 / 4,133 s; návrat s cache
+0,185 / 0,378 / 0,394 s, nový full refresh na pozadí 1,632 / 1,784 / 2,334 s.
+Všechny úvodní status/bootstrap/full HTTP 200, dva konkrétní datasety
+s úplnou coverage a validním cash, dva viditelné řádky a skupina.
+Po posledním potřebném responseEnd zbývalo 134 / 402 / 1389 ms do
+pozorovaného vykreslení; u pomalého běhu 936 ms už mezi responseEnd
+a fetch.then callbackem. Není to jen API; přesnou klientskou příčinu má
+určit CPU profil (runtime Tailwind/statistiky/mount Overview jsou zatím
+jen kandidáti). Nejde o A/B nového serveru ani produkční percentily.
+Vzorky měly různou dobu usazení hlavního Dashboardu a nová náhradní karta
+používala postranní navigaci.
+
+Kalibrace s DOM diagnostikou a následný pád původní karty jsou vyřazené;
+platné vzorky mají pouze console instrumentaci. Ve třetím vzorku nastal
+timeout browser ovládání ještě před zachyceným kliknutím. Report/data:
+LIVE-BROWSER-MEASUREMENT-20260905.md/json ve visualization složce tasku.
+Dočasná měření index.html a TradovateLiveDesk jsou přesně odstraněná,
+SHA-256 obou souborů odpovídá aktuální záloze před měřením. Bez push/deploy,
+reinstalu, brokerových příkazů či přístupu ke klíčům. Úspěšné HTTP čtení
+není důkaz ready workeru (broker stream offline).
+
+### 2026-09-05 (Codex, serverový benchmark — Vercel odmítl přístup)
+
+Po dalším explicitním „potvrzuji“ uživatel autorizoval existující Vercel
+přihlášení a čtení pouze produkční TRADOVATE_TOKEN_ENCRYPTION_KEY tohoto
+projektu. Úprava runneru i spuštění prošly automatickou kontrolou. Vercel
+API však odmítlo už GET metadat proměnných: HTTP 403, code forbidden,
+kategorie permission-denied; jedno diagnostické opakování stejného GET
+potvrdilo výsledek. Nejde o další chybějící souhlas a není doložena expirace
+přihlášení. Produkční klíč nebyl načten a reálné Tradovate A/B se nespustilo.
+Pokračování vyžaduje funkční oprávnění existujícího přihlášení nebo správný
+klíč bezpečně dostupný lokální serverové konfiguraci. Report aktualizován;
+syntetické výsledky nejsou skutečné síťové časy. Bez push/deploy, worker
+zásahu, brokerového příkazu či obnovy tokenů. Předchozí zápisy níže jsou
+historie již vyřešených požadavků na souhlas.
+
+### 2026-09-05 (Codex, serverový benchmark — neplatná lokální konfigurace)
+
+Po explicitním „ano potvrzuji“ pro existující serverový klíč a tokeny dvou
+připojení vytvořen a spuštěn jednorázový `run-authorized.mjs`. Omezený read
+Supabase záznamů fungoval, ale lokální TRADOVATE_TOKEN_ENCRYPTION_KEY
+nemá platný 32bajtový formát. Pokus skončil před jakýmkoli Tradovate
+požadavkem, tokeny nebyly obnovené ani ukládané. Doplněn pouze benchmark
+agregát complete pro HTTP/content/coverage/cash validitu; offline sanity
+prošla. Žádná produktová změna.
+
+Projekt ověřen přes Vercel connector. Návrh získat existující produkční
+klíč přes lokální Vercel přihlášení automatická kontrola zamítla jako nový
+credential access mimo dosavadní souhlas; patch nebyl aplikován. Vyžádán
+konkrétní doplňující souhlas pro tento jediný klíč/projekt. Skutečné časy
+zatím nemáme; nesmějí být nahrazeny syntetickými výsledky. Aktuální stav
+v `LIVE-API-BENCHMARK-20260905.md`. Bez deploy/push nebo změny workeru.
+
+### 2026-09-05 (Codex, připravené A/B měření serverového bootstrapu)
+
+Na souhlas se změřením serverové úpravy připraven samostatný harness
+`/private/tmp/alphatrade-api-benchmark-20260905`, skutečný loader z HEAD
+08bf59eb a aktuálního worktree, source hashes, ABBA, allowlist pouze čtecích
+Tradovate cest, stop při 401/403/429 a výstup bez payloadů/tokenů/ID.
+Žádná aplikační změna. Existující lokální serverový config je přítomný,
+ale automatická kontrola zamítla vytvoření auth-provider skriptu: měření
+podle ní samo neautorizuje service-role přístup k encrypted access tokenům.
+Skript nebyl vytvořen/spuštěn; požádáno o explicitní jednorázový souhlas
+pro dvě connection ID z aktuálního worker manifestu, bez obnovování tokenů.
+
+Dokončeno pouze syntetické srovnání s virtuálními latencemi: dominuje-li
+account/list bez kontraktů 240→240 ms, malý překryv 130→120 ms, pomalé
+seznamy+kontrakty 180→140 ms. Všech 6 párů vrací shodná data a sanity checks
+prošly včetně nezávislého opakování rootem. Nejde o skutečné Tradovate
+měření ani predikci produkční úspory. Další krok po souhlasu: přesně
+omezený read-only přístup a přímé lokální A/B; auth/DB/Vercel/UI režii
+vykázat zvlášť. Report `LIVE-API-BENCHMARK-20260905.md`, data výslovně
+`LIVE-API-SYNTHETIC-20260905.json`. Žádný push/deploy/worker zásah.
+
+### 2026-09-05 (Codex, kontrola domnělého zpomalení po animaci)
+
+Na dotaz uživatele znovu změřené první vstupy, potvrzená data obou účtů
+za 1,154 / 1,382 / 1,829 s, full za 2,262 / 1,982 / 2,649 s. Dřívější
+medián účtů 1,221 s, nyní 1,382 s: vzorky tedy opravdu mohou být pomalejší.
+Základní API odpovídalo za 646–1230 ms, v každém běhu jeden OAuth status
+a dva bootstrapy. Samotné zobrazení při návratu s existujícími daty 155 ms.
+Malé sekvenční vzorky neprokazují příčinu v odstranění animace. App/datový
+hook/navigace obsahově totožné se zálohou před animací; v renderování není
+nové načítání ani dodatečný podstrom. Možný jednorázový Fast Refresh remount
+po editaci není doklad regresní chyby. Přesná metodika a omezení v Codex
+artifactu `LIVE-MOTION-CHECK-20260905.md`. Instrumentace přesně odstraněna;
+žádná další produktová změna, push, deploy nebo brokerová akce.
+
+### 2026-09-05 (Codex, klidné zobrazení LIVE tabulek — pouze localhost)
+
+Uživatel popsal dojíždění skupiny a účtů při přepnutí jako zaseknutý obsah.
+Oba pružinové `motion.tr layout="position"` nahrazené běžnými řádky,
+odstraněné 300ms rozbalování detailu i úvodní fade LIVE. Počáteční rozbalení
+se nyní odvozuje ze skutečných draft/runtime skupin už při prvním renderu,
+aby následný efekt nemusel nejprve zavřené účty otevírat. Datové načítání
+a brokerové/runtime příkazy se nemění. Odstraněna jen zastaralá testová
+podmínka vyžadující motion atribut.
+
+CUA ověřil vstup z Dashboardu a návrat Připojení → Live Dashboard: skupina
+i oba účty vykreslené, řádky bez transformace/animace a detail s přechodem
+0 s. TypeScript, scoped lint a 26 existujících render/interakčních testů
+prošly. Změna zůstává v lokálním worktree, bez push/deploy.
+
+### 2026-09-05 (Codex, přednačtení a priorita prvního vstupu LIVE — pouze localhost)
+
+Na schválené „udělej to“ desktopové i mobilní menu přednačítá LIVE kód
+a read-only status/bootstrap při pointerenter, focus a pointerdown. Následný
+vstup převezme stejnou práci; 3s TTL omezuje přijetí, nikoliv dokončení již
+převzatého požadavku. Kontroluje se uživatel/identity epoch, potvrzené
+connection ID i rate-limit backoff. Původní capturedAt zůstává zachované;
+prefetch sám nepublikuje stav ani nespouští polling či worker.
+
+LIVE odkládá sekundární moduly a obnovu business metadat na Dashboardu.
+Uložená metadata se hydratují hned; bez payout cache se vzdálené čtení
+neodkládá. Účty/Byznys mají okamžitý refresh a sdílí rozběhnutý požadavek.
+Payout obrázky se stahují až v Byznysu, s cache podle uživatele/metadat
+a možností retry po chybě. Review opravilo invalidaci, finanční cache
+a pomalý status překračující TTL, aby optimalizace nezhoršovala spolehlivost.
+
+Kontrolní tři kliky původního kódu ve stejném prostředí: účty za
+2,073 / 1,218 / 1,389 s; nový běžný klik 1,185 / 1,313 / 1,221 s
+(medián přibližně −12 %). Při přednačtení 1,34–1,46 s před otevřením
+účty po kliknutí za 0,138–0,387 s. Jde o malý lokální vzorek s produkční
+read proxy, nikoliv produkční percentily. Přímý URL start se touto změnou
+prokazatelně nezrychlil. Žádné duplicitní startup požadavky při čerstvém
+prefetch; expirace v browseru ověřena novým načtením. Pozdější background
+live-pnl měl jednou 502 až po úspěšném full načtení; backend se neměnil.
+Podrobnosti: Codex artifact `LIVE-STARTUP-20260905.md/json`.
+
+Měřicí instrumentace je odstraněna. Stabilizovaný existující test pasivního
+CDP snímku čeká na registraci listeneru místo pollingu proti 100ms deadline;
+produkční timeout ani samostatné deadline testy se nemění. Bez push/deploy,
+reinstalu workeru nebo brokerového ovládání.
+
+Ověření: celá sada 2164/2164 prošla se čtyřmi souběžnými test workery,
+včetně 13 nových prefetch a 4 payout-image testů. TypeScript a produkční
+Vite/PWA build prošly, scoped lint bez chyb (32 stávajících warningů),
+diff check čistý.
+První souběžný běh s buildem měl dva časovací pády; targeted retry a finální
+celá sada jsou zelené. Logy `/private/tmp/alphatrade-startup-final-*`.
+
+### 2026-09-05 (Codex, měření prvního vstupu LIVE — pouze localhost)
+
+Tři první kliky LIVE po novém dokumentu: oba účty a skupina za
+0,921 / 2,520 / 2,317 s; full data za 1,577 / 3,592 / 3,400 s.
+Tři přímé vstupy přes deep link: účty 1,150 / 1,175 / 1,483 s, full
+2,601 / 2,182 / 2,727 s. Tři návraty v SPA: již načtené účty za
+0,120 / 0,062 / 0,038 s. Měřeno performance značkami a kontrolou UI,
+přihlášený uživatel, dva účty, zachovaná běžná cache. Vite klient stále
+čte produkční API; nové serverové zrychlení se v těchto číslech neprovádí.
+První klik po dokončení hlavního Dashboardu byl rychlejší než během jeho
+startu; z kódu je potvrzena souběžná nepotřebná práce, ale její podíl proti
+kolísání API zatím není izolovaně změřený. Cíl k A/B ověření: 1–1,5 s
+účty a 2–3 s denní doplnění za podobné odezvy služeb. Dočasná instrumentace
+odstraněna; žádné produktové změny, push, deploy ani zásahy do workeru.
+Podrobná metodika a čísla: Codex artifact `LIVE-LOAD-20260905.md/json`.
+
+
+### 2026-09-05 (Codex, celá aplikace na localhostu)
+
+Na „celkově zapni localhost“ běží `npm run dev:live -- --host 127.0.0.1
+--port 3000 --strictPort` ze stejného izolovaného worktree. Ignorovaná
+`.env.local` obsahuje pouze existující veřejný Supabase URL a anon key.
+CUA ověřil `http://localhost:3000/`, zachované lokální přihlášení, skutečný
+dashboard a oba účty v LIVE s novým rozložením. Jde o lokální frontend se
+stávajícím Supabase úložištěm a existující Tradovate read proxy na produkční
+API, nikoliv izolovanou kopii databáze ani místní Vercel API backend.
+Běžící worker i produkční nasazení zůstaly beze změny.
+
+
+### 2026-09-05 (Codex, LIVE review opravy — pouze localhost)
+
+Na souhlas uživatele s review 08bf59eb a explicitní „zatím pouze localhost“
+vznikl izolovaný worktree `/private/tmp/alphatrade-live-fixes-20260905`, větev
+`codex/live-reliability-20260905`. Původní dirty checkout zůstal nedotčený.
+Nic není commitnuté, pushnuté, nasazené ani instalované do běžícího workeru.
+
+Opraven extensionless import v `copierRiskConfig`, který na produkci shazoval
+cloudový relay. Nová regrese emituje a cold-importuje všech 33 API přímo Node
+ESM. Nový worker deklaruje capability `risk-config-v1`; UI u starého workeru
+neukazuje domyšlené akce a neumožní uložit nové Risk parametry. Úspěšný ACK se
+porovnává s požadovanou konfigurací. Bez změn pravidel exekuce/order cesty.
+
+Datová oprava rozlišuje unavailable od potvrzeného prázdna, zachovává poslední
+údaje a původní časy per účet, odmítá starší refresh/anchor i po souběžném cash
+enrichmentu. Přesný úspěšný snapshot obnoví cash coverage; selhání cash nezahodí
+pozice. Stará cena nedostane nový čas (TTL odhadu 15 s). Cache publikuje stav
+konzistentně přes ref před React renderem. Cash běží už po account/list vedle
+kontraktů, nejvýše pro tři účty současně; polling zobrazuje firmy průběžně.
+Stav workeru nečeká na historii, status read má 1,5 s deadline a UI expiruje
+nepotvrzený worker snapshot po 15 s. GET OAuth má 20 s deadline; write beze změny.
+
+Z dashboardu odstraněny uživatelem označené statistiky leadera/účtů a banner
+TradingView snímků. Diagnostika je pod skupinami, kompaktní tabulka nabízí
+základní i všechny sloupce. Risk rozlišuje nastavení od skutečného kopírování,
+vypnutá pravidla od neověřených a stav offline/pauza/shadow/lock/unknown.
+
+Finální lokální sada 2147/2147 testů, tsc čistý po připojení existujících
+extension závislostí, Vite/PWA build úspěšný. Cílený lint bez chyb; zůstává
+předchozí warning journalOptions v hooku. Nezávislé review datových závodů
+uzavřeno. CUA vizuálně ověřil dashboard, vypnutý Risk, pauzu a starý worker.
+Náhled `http://127.0.0.1:4387/copytrade-preview.html` používá pouze ukázková data,
+žádný broker ani produkční přihlašovací údaje. Rychlost na reálném brokerovi
+nebyla měřena. Produkční cloud relay i starý Mac worker čekají na zvláštní rollout.
+
+
 ### 2026-09-05 (Claude, Risk záložka — sloučení fází A/B/C a review workeru)
 
 Fáze A (worker + relay) Codex nedokončil — vyčerpal usage limit 1,74 M tokenů

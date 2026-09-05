@@ -442,6 +442,14 @@ const LoadingFallback = () => (
   </div>
 );
 
+// Shared by navigations while the same user's metadata read is in flight.
+const readBusinessMetadata = () => Promise.all([
+  storageService.getBusinessExpenses(),
+  storageService.getBusinessPayouts(),
+  storageService.getBusinessGoals(),
+  storageService.getBusinessResources(),
+]);
+
 const App: React.FC = () => {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1079,6 +1087,21 @@ const App: React.FC = () => {
     },
     tradovateLiveEnabled,
   );
+  const [liveIntentPending, setLiveIntentPending] = useState(false);
+  const prefetchLiveData = tradovateLive.prefetch;
+  const prepareLiveNavigation = useCallback(() => {
+    if (tradovateLiveEnabled || !canAccess('live', currentUser.role)) return;
+    void loadLiveDesk().catch(() => { /* Normal navigation handles a failed chunk load. */ });
+    prefetchLiveData();
+    if (!tradovateLive.data) setLiveIntentPending(true);
+  }, [currentUser.role, prefetchLiveData, tradovateLive.data, tradovateLiveEnabled]);
+  useEffect(() => {
+    if (!liveIntentPending) return;
+    const timeout = window.setTimeout(() => setLiveIntentPending(false), 3_000);
+    return () => window.clearTimeout(timeout);
+  }, [liveIntentPending]);
+  const deferSecondaryReads = activePage === 'live' || liveIntentPending;
+
   const oauthAccountLiveStates = useMemo(() => buildOAuthAccountLiveStates({
     accounts,
     status: tradovateLive.status,
@@ -2031,26 +2054,22 @@ const App: React.FC = () => {
     }
   }, [isInitialLoadDone, trades, dailyReviews]);
 
-  // --- SMART PREFETCHING ---
-  // Preload critical secondary modules immediately after dashboard loads
+  // LIVE code is small enough to warm independently of other page prefetches.
   useEffect(() => {
-    if (isInitialLoadDone) {
-      // DailyJournal is frequently accessed - preload immediately
-      import('./components/DailyJournal');
-      // LIVE has a latency-sensitive first interaction. Fetch its code while
-      // the initial dashboard is already usable, before the user clicks it.
-      void loadLiveDesk();
-
-      // Screenshots now come with the RPC response — no separate prefetch needed
-
-      // Less critical modules - prefetch after small delay
-      const prefetchTimer = setTimeout(() => {
-        import('./components/Settings');
-        import('./components/BusinessHub');
-      }, 2000);
-      return () => clearTimeout(prefetchTimer);
-    }
+    if (isInitialLoadDone) void loadLiveDesk().catch(() => {});
   }, [isInitialLoadDone]);
+
+  // Secondary modules yield while LIVE is being opened or displayed. A page
+  // change cancels the timer before these optional imports have been started.
+  useEffect(() => {
+    if (!isInitialLoadDone || deferSecondaryReads) return;
+    const timer = window.setTimeout(() => {
+      void import('./components/DailyJournal').catch(() => {});
+      void import('./components/Settings').catch(() => {});
+      void import('./components/BusinessHub').catch(() => {});
+    }, 2_000);
+    return () => window.clearTimeout(timer);
+  }, [activePage, deferSecondaryReads, isInitialLoadDone]);
 
   // --- LAZY LOADING: Archived Accounts ---
   const [archivedAccounts, setArchivedAccounts] = useState<Account[]>([]);
@@ -2099,77 +2118,126 @@ const App: React.FC = () => {
     });
   }, [activePage, session, isLabExpLoaded]);
 
-  // --- LAZY LOADING: Business Hub Data ---
-  // Load expenses, goals, resources only when user enters BusinessHub section
-  const [isBusinessDataLoaded, setIsBusinessDataLoaded] = useState(false);
+  // Metadata affects account balances, so cached payouts stay immediately
+  // available. Only their background refresh on Dashboard may be deferred.
+  const [businessLoadedUserId, setBusinessLoadedUserId] = useState<string | null>(null);
+  const businessUserId = session?.user.id ?? null;
+  const isBusinessDataLoaded = businessUserId != null && businessLoadedUserId === businessUserId;
+  const businessUserRef = useRef(businessUserId);
+  businessUserRef.current = businessUserId;
+  const businessReadRef = useRef<{
+    userId: string;
+    promise: ReturnType<typeof readBusinessMetadata>;
+  } | null>(null);
 
   useEffect(() => {
-    // Payouty potřebuje i stránka Účty (odečítají balance účtu a plní byznys řádek
-    // firmy) a Dashboard (equity křivka je ukazuje jako výběr). Dokud se načítaly
-    // jen v Byznysu, vypadala výplata jako „nepropsala se do účtu".
     const needsBusinessData = activePage === 'business' || activePage === 'accounts' || activePage === 'dashboard';
-    if (needsBusinessData && session && !isBusinessDataLoaded) {
-      const userId = session.user.id;
+    if (!needsBusinessData || !businessUserId || isBusinessDataLoaded) return;
+    const userId = businessUserId;
+    let cancelled = false;
+    let hasCachedPayouts = false;
+    const isCurrent = () => !cancelled && businessUserRef.current === userId;
 
-      // Cache-first: show cached data instantly, then refresh in background
-      try {
-        const ce = localStorage.getItem(`alphatrade_biz_expenses_${userId}`);
-        const cp = localStorage.getItem(`alphatrade_biz_payouts_${userId}`);
-        const cg = localStorage.getItem(`alphatrade_biz_goals_${userId}`);
-        const cr = localStorage.getItem(`alphatrade_biz_resources_${userId}`);
-        if (ce) {
-          setBusinessExpenses(JSON.parse(ce));
-          setBusinessPayouts(cp ? JSON.parse(cp) : []);
-          setBusinessGoals(cg ? JSON.parse(cg) : []);
-          setBusinessResources(cr ? JSON.parse(cr) : []);
-          setIsBusinessDataLoaded(true);
-        }
-      } catch {}
+    // Hydrating the cache does not mark the remote refresh as complete, which
+    // would cancel our own delayed request on the next render.
+    try {
+      const readArray = (key: string) => {
+        const raw = localStorage.getItem(`alphatrade_biz_${key}_${userId}`);
+        if (!raw) return null;
+        const value = JSON.parse(raw);
+        return Array.isArray(value) ? value : null;
+      };
+      const payouts = readArray('payouts');
+      if (payouts) {
+        setBusinessPayouts(prev => businessDataFingerprint(payouts) === businessDataFingerprint(prev) ? prev : mergePayoutImages(payouts, prev));
+        hasCachedPayouts = true;
+      }
+      const expenses = readArray('expenses');
+      const goals = readArray('goals');
+      const resources = readArray('resources');
+      if (expenses) setBusinessExpenses(prev => businessDataFingerprint(expenses) === businessDataFingerprint(prev) ? prev : expenses);
+      if (goals) setBusinessGoals(prev => businessDataFingerprint(goals) === businessDataFingerprint(prev) ? prev : goals);
+      if (resources) setBusinessResources(prev => businessDataFingerprint(resources) === businessDataFingerprint(prev) ? prev : resources);
+    } catch { /* Missing or malformed cache falls back to an immediate read. */ }
 
-      // Always fetch fresh data (background if cache hit, blocking if not)
-      Promise.all([
-        storageService.getBusinessExpenses(),
-        storageService.getBusinessPayouts(),
-        storageService.getBusinessGoals(),
-        storageService.getBusinessResources()
-      ]).then(([expenses, payouts, goals, resources]) => {
-        // Guard: porovnej všechna metadata, ale ignoruj těžké base64 obrázky.
-        // Původní fingerprint kontroloval jen id+amount a chybně `updatedAt`
-        // místo DB pole `updated_at`. Změna accountId tak po reloadu zůstala
-        // schovaná za starou cache a výplata se dál tvářila jako „Neznámý“.
+    // An intent to visit LIVE may defer only Dashboard's background refresh.
+    // Accounts/Business still hydrate cache and request required metadata now.
+    if (activePage === 'dashboard' && deferSecondaryReads) return;
+
+    const load = () => {
+      if (!isCurrent()) return;
+      let request = businessReadRef.current;
+      if (!request || request.userId !== userId) {
+        request = { userId, promise: readBusinessMetadata() };
+        businessReadRef.current = request;
+        const clear = () => {
+          if (businessReadRef.current === request) businessReadRef.current = null;
+        };
+        void request.promise.then(clear, clear);
+      }
+      void request.promise.then(([expenses, payouts, goals, resources]) => {
+        if (!isCurrent()) return;
         const stableSet = <T,>(setter: React.Dispatch<React.SetStateAction<T[]>>, next: T[]) => {
           setter(prev => businessDataFingerprint(next) === businessDataFingerprint(prev) ? prev : next);
         };
-        stableSet(setBusinessExpenses, expenses || []);
-        stableSet(setBusinessPayouts, payouts || []);
-        stableSet(setBusinessGoals, goals || []);
-        stableSet(setBusinessResources, resources || []);
-        setIsBusinessDataLoaded(true);
-
-        // Cache for next visit
-        try {
-          safeSetItem(`alphatrade_biz_expenses_${userId}`, JSON.stringify(expenses || []));
-          safeSetItem(`alphatrade_biz_payouts_${userId}`, JSON.stringify(stripPayoutImagesForCache(payouts || [])));
-          safeSetItem(`alphatrade_biz_goals_${userId}`, JSON.stringify(goals || []));
-          safeSetItem(`alphatrade_biz_resources_${userId}`, JSON.stringify(resources || []));
-        } catch {}
-
-        // Prefetch payout images in background
-        if (payouts && payouts.length > 0) {
-          storageService.prefetchPayoutImages().then(imageMap => {
-            if (imageMap.size > 0) {
-              setBusinessPayouts(prev => prev.map(p => {
-                const image = imageMap.get(String(p.id));
-                return image ? { ...p, image } : p;
-              }));
-            }
-          }).catch(() => {});
-        }
+        stableSet(setBusinessExpenses, expenses);
+        setBusinessPayouts(prev => {
+          const next = mergePayoutImages(payouts, prev);
+          return businessDataFingerprint(next) === businessDataFingerprint(prev) ? prev : next;
+        });
+        stableSet(setBusinessGoals, goals);
+        stableSet(setBusinessResources, resources);
+        setBusinessLoadedUserId(userId);
+        safeSetItem(`alphatrade_biz_expenses_${userId}`, JSON.stringify(expenses));
+        safeSetItem(`alphatrade_biz_payouts_${userId}`, JSON.stringify(stripPayoutImagesForCache(payouts)));
+        safeSetItem(`alphatrade_biz_goals_${userId}`, JSON.stringify(goals));
+        safeSetItem(`alphatrade_biz_resources_${userId}`, JSON.stringify(resources));
       }).catch(err => {
-        console.error("[LazyLoad] Failed to load Business Hub data:", err);
+        if (isCurrent()) console.error('[LazyLoad] Failed to load Business Hub data:', err);
       });
+    };
+
+    // Accounts/Business and a missing payout cache must fetch immediately.
+    // A navigation before the timer expires cancels this optional refresh.
+    const timer = activePage === 'dashboard' && hasCachedPayouts
+      ? window.setTimeout(load, 1_500)
+      : null;
+    if (timer == null) load();
+    return () => {
+      cancelled = true;
+      if (timer != null) window.clearTimeout(timer);
+    };
+  }, [activePage, businessUserId, deferSecondaryReads, isBusinessDataLoaded]);
+
+  // Proof images are only displayed in Business Hub. Preserve the same read
+  // across navigation, and invalidate it only when user or metadata changes.
+  const businessImagesKey = `${businessUserId ?? ''}:${businessDataFingerprint(businessPayouts)}`;
+  const businessImagesKeyRef = useRef(businessImagesKey);
+  businessImagesKeyRef.current = businessImagesKey;
+  const businessImagesAppliedRef = useRef<string | null>(null);
+  const businessImagesReadRef = useRef<{ key: string; promise: Promise<Map<string, string>> } | null>(null);
+  useEffect(() => {
+    if (activePage !== 'business' || !businessUserId || !isBusinessDataLoaded
+      || businessImagesAppliedRef.current === businessImagesKey) return;
+    let cancelled = false;
+    let request = businessImagesReadRef.current;
+    if (!request || request.key !== businessImagesKey) {
+      request = { key: businessImagesKey, promise: storageService.prefetchPayoutImages() };
+      businessImagesReadRef.current = request;
     }
-  }, [activePage, session, isBusinessDataLoaded]);
+    void request.promise.then(imageMap => {
+      if (cancelled || businessImagesKeyRef.current !== businessImagesKey) return;
+      businessImagesAppliedRef.current = businessImagesKey;
+      if (imageMap.size === 0) return;
+      setBusinessPayouts(prev => prev.map(payout => {
+        const image = imageMap.get(String(payout.id));
+        return image ? { ...payout, image } : payout;
+      }));
+    }).catch(() => {
+      if (businessImagesReadRef.current === request) businessImagesReadRef.current = null;
+    });
+    return () => { cancelled = true; };
+  }, [activePage, businessUserId, businessImagesKey, isBusinessDataLoaded]);
 
   // Cross-device sync: refresh stale data when user returns to tab after 30+ seconds
   const lastVisibleAt = useRef(Date.now());
@@ -3757,6 +3825,7 @@ const App: React.FC = () => {
             navigateTo(page);
             setIsSidebarOpen(false);
           }}
+          onLiveIntent={prepareLiveNavigation}
           onLockedFeature={(featureId) => setLockedFeatureModal(featureId)}
           enrichCount={enrichCount}
           dashboardMode={dashboardMode}
@@ -3769,6 +3838,7 @@ const App: React.FC = () => {
       <BottomNav
         activePage={activePage}
         onNavigate={navigateTo}
+        onLiveIntent={prepareLiveNavigation}
         onAddTrade={handleTryAddTrade}
         theme={theme}
         userRole={currentUser.role}

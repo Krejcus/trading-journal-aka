@@ -1,3 +1,5 @@
+import { tradovateAccountReadState, hasCompleteTradovateRead } from '../lib/tradovateLiveReadState';
+import { LIVE_READ_MAX_AGE_MS } from '../lib/liveReadFreshness';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ConfirmActionDialog, { type ConfirmActionOptions } from './ConfirmActionDialog';
 import { syncCopierNativeNotifications } from '../services/nativeCopierNotifications';
@@ -58,6 +60,7 @@ import {
 } from '../lib/copyTradeAccountLabels';
 import LiveCopyTradeOverview from './LiveCopyTradeOverview';
 import LiveRiskTab from './LiveRiskTab';
+import LiveRuntimeStatus from './LiveRuntimeStatus';
 import MacCompanionSettings from './MacCompanionSettings';
 import TradovateAccountProfileSetup from './TradovateAccountProfileSetup';
 import TradovateAddConnectionModal from './TradovateAddConnectionModal';
@@ -69,6 +72,7 @@ import {
   tradovateLiveTabHref,
   type TradovateLiveTab,
 } from '../lib/tradovateLiveTab';
+import { supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { CopierStatusPollFence } from '../lib/copierStatusPollFence';
 import {
   resolveLocalExecutionGroup,
@@ -172,6 +176,13 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // Než doběhne první dotaz, `agentStatus` je null a armovaný copier by se
   // v přepínači ukázal jako OFF. Do té doby se stav zobrazuje jako neznámý.
   const [agentStatusResolved, setAgentStatusResolved] = useState(false);
+  const [agentStatusFresh, setAgentStatusFresh] = useState(false);
+  useEffect(() => {
+    setAgentStatusFresh(agentStatus != null);
+    if (!agentStatus) return;
+    const timeout = window.setTimeout(() => setAgentStatusFresh(false), 15_000);
+    return () => window.clearTimeout(timeout);
+  }, [agentStatus]);
   const configMutationPendingRef = useRef(false);
   const [configMutationPending, setConfigMutationPending] = useState(false);
   const navigateToTab = useCallback((nextTab: TradovateLiveTab) => {
@@ -218,6 +229,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const [agentTransport, setAgentTransport] = useState<'local' | 'relay' | null>(null);
   const [relayConnectionId, setRelayConnectionId] = useState<string | null>(null);
   const [pairingNotice, setPairingNotice] = useState<string | null>(null);
+  const runtimeAvailable = agentStatusFresh && agentTransport != null && agentStatus != null;
 
   useEffect(() => {
     if (!requestedTab) return;
@@ -434,6 +446,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   }, [acceptConfigAck, executeAgent, executionGroup, runConfigMutation]);
   const saveRiskGroup = useCallback(async (group: CopyGroupConfig) => {
     if (!agentStatus) throw new Error('Worker není dostupný pro uložení Risk nastavení.');
+    if (!supportsCopierRiskConfig(agentStatus)) throw new Error('Risk nastavení vyžaduje aktualizaci Mac workeru.');
     if (group.id !== agentStatus.group.id) {
       throw new Error('Risk nastavení nemíří na skupinu připojenou k execution workeru.');
     }
@@ -442,6 +455,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         type: 'copy-command',
         command: { type: 'update-group', group },
       });
+      assertCopierRiskConfigAcknowledged(group, result.status);
       // Relay větev status nastavuje už uvnitř executeAgent, lokální loopback ne.
       // Vždy proto použijeme autoritativní odpověď a nic neměníme před worker ACK.
       acceptConfigAck(result.status);
@@ -557,7 +571,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   }, [confirmAction]);
 
   const tabs: Array<{ id: TradovateLiveTab; label: string; icon: React.ElementType }> = [
-    { id: 'connections', label: 'Connections', icon: Link2 },
+    { id: 'connections', label: 'Připojení', icon: Link2 },
     { id: 'overview', label: 'Live Dashboard', icon: Gauge },
     { id: 'risk', label: 'Risk', icon: Shield },
     { id: 'accounts', label: 'Účty', icon: WalletCards },
@@ -569,7 +583,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const requiresConnection = tab !== 'connections' && live.status != null && !live.status.connected;
 
   return (
-    <div className="mx-auto max-w-[1500px] space-y-4 animate-in fade-in duration-300">
+    <div className="mx-auto max-w-[1500px] space-y-4">
       <nav className="flex items-center gap-1 overflow-x-auto border-b border-[var(--border-subtle)] no-scrollbar" aria-label="LIVE navigace">
         {tabs.map(item => {
           const Icon = item.icon;
@@ -577,6 +591,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
           return <button key={item.id} type="button" disabled={blockedByConfigMutation} title={blockedByConfigMutation ? 'Čekám na potvrzení změny konfigurace workerem' : undefined} onClick={() => navigateToTab(item.id)} className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-3.5 py-2.5 text-xs font-bold transition-colors disabled:cursor-wait disabled:opacity-40 ${tab === item.id ? 'border-indigo-500 text-indigo-500' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}><Icon size={14} />{item.label}</button>;
         })}
       </nav>
+
+      <LiveRuntimeStatus status={agentStatus?.controller ?? null} available={runtimeAvailable} pending={!agentStatusResolved} transport={agentTransport} />
 
       {renderedLiveError && (
         <div className="flex items-center gap-3 rounded-md border border-rose-500/30 bg-rose-500/10 p-4 text-rose-500">
@@ -694,8 +710,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
                 })).status);
               }}
               commandAdapter={commandAdapter}
+              runtimeStatus={agentStatus?.controller ?? null}
+              runtimeAvailable={runtimeAvailable}
+              riskConfigSupported={supportsCopierRiskConfig(agentStatus)}
               copierArmed={copierUiDemo ? false : agentStatus?.controller.armed === true}
-              copierStatusPending={!copierUiDemo && (!agentStatusResolved || live.dataEnrichmentPending)}
+              copierStatusPending={!copierUiDemo && (!agentStatusResolved || !runtimeAvailable)}
               dailyPnlPending={live.dataEnrichmentPending}
               brokerDailyPnlByAccount={brokerDailyPnlByAccount}
               dailyStats={agentStatus?.controller.dailyStats ?? null}
@@ -746,13 +765,15 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
           ) : null}
           {tab === 'risk' && copyTradeSnapshot ? (
             <LiveRiskTab
+              runtimeAvailable={runtimeAvailable}
+              riskConfigSupported={supportsCopierRiskConfig(agentStatus)}
               snapshot={copyTradeSnapshot}
               accountProfiles={live.profiles}
               group={agentStatus?.group ?? null}
               status={agentStatus?.controller ?? null}
               brokerDailyPnlByAccount={brokerDailyPnlByAccount}
               brokerDailyPnlPending={live.dataEnrichmentPending}
-              disabled={configMutationPending || copyGroupStatusPollFence.inFlight || !agentStatusResolved || agentStatus == null || agentTransport == null}
+              disabled={configMutationPending || copyGroupStatusPollFence.inFlight || !runtimeAvailable || !supportsCopierRiskConfig(agentStatus)}
               onSaveGroup={agentStatus ? saveRiskGroup : undefined}
             />
           ) : null}
@@ -850,7 +871,7 @@ const Connections = ({ status, connectionData, connectionSummaries, profiles, bu
               <div className="flex flex-nowrap items-center justify-end gap-1 px-4 py-2 lg:px-0 lg:pr-4">
                 {connection.connected ? <>
                   <button type="button" onClick={() => onDisconnect(connection.id)} disabled={busy != null} className="h-7 shrink-0 whitespace-nowrap rounded-md border border-[var(--border-subtle)] px-2 text-[10px] font-bold leading-none text-[var(--text-primary)] disabled:opacity-50">Disconnect</button>
-                  <button type="button" disabled title="Flatten All bude aktivní až po samostatném schválení DEMO execution testu." className="h-7 shrink-0 cursor-not-allowed whitespace-nowrap rounded-md bg-rose-500 px-2 text-[10px] font-black leading-none text-white opacity-45">Flatten All</button>
+                  <button type="button" disabled title="Uzavření pozic je dostupné u skupiny na Live Dashboardu." className="h-7 shrink-0 cursor-not-allowed whitespace-nowrap rounded-md bg-rose-500 px-2 text-[10px] font-black leading-none text-white opacity-45">Flatten All</button>
                   <IconButton
                     label={pilotDevice?.state === 'pairing-required' && pilotDevice.connectionId === connection.id ? 'Spárovat tento Mac worker' : 'Připravit lokální pilot lease'}
                     onClick={() => onPilotLease(connection.id)}
@@ -899,7 +920,7 @@ async function downloadPilotLease(connectionId: string): Promise<void> {
   setTimeout(() => URL.revokeObjectURL(href), 0);
 }
 
-const SafetyBanner = () => <section className="overflow-hidden rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045]"><div className="flex items-center gap-2.5 border-b border-indigo-500/15 px-4 py-3"><ShieldAlert size={16} className="text-indigo-500" /><h2 className="text-sm font-black text-[var(--text-primary)]">Bezpečné připojení účtů</h2></div><div className="grid gap-2 px-4 py-3 text-xs leading-5 text-[var(--text-secondary)] lg:grid-cols-3 lg:gap-5"><p><b className="text-[var(--text-primary)]">Přihlášení probíhá u Tradovate.</b> AlphaTrade nevidí ani neukládá tvoje heslo.</p><p><b className="text-[var(--text-primary)]">LIVE je zatím read-only.</b> Copier zůstává VYPNUTO a nic neodesílá.</p><p><b className="text-[var(--text-primary)]">Jeden vlastní datový tok.</b> Všechny LIVE záložky používají stejné OAuth spojení.</p></div></section>;
+const SafetyBanner = () => <section className="overflow-hidden rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045]"><div className="flex items-center gap-2.5 border-b border-indigo-500/15 px-4 py-3"><ShieldAlert size={16} className="text-indigo-500" /><h2 className="text-sm font-black text-[var(--text-primary)]">Bezpečné připojení účtů</h2></div><div className="grid gap-2 px-4 py-3 text-xs leading-5 text-[var(--text-secondary)] lg:grid-cols-3 lg:gap-5"><p><b className="text-[var(--text-primary)]">Přihlášení probíhá u Tradovate.</b> AlphaTrade nevidí ani neukládá tvoje heslo.</p><p><b className="text-[var(--text-primary)]">Připojení účtu nezapíná kopírku.</b> Její skutečný stav a ovládání najdeš na Live Dashboardu.</p><p><b className="text-[var(--text-primary)]">Jeden vlastní datový tok.</b> Všechny LIVE záložky používají stejné OAuth spojení.</p></div></section>;
 
 const EmptyConnection = ({ onAdd }: { onAdd: () => void }) => <div className="flex min-h-52 flex-col items-center justify-center px-6 py-10 text-center"><span className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-500"><Link2 size={22} /></span><h3 className="mt-4 text-sm font-black text-[var(--text-primary)]">Žádné připojení</h3><p className="mt-1 max-w-sm text-xs leading-5 text-[var(--text-secondary)]">Přidej Tradovate přes OAuth. Po návratu načteme dostupné účty.</p><button type="button" onClick={onAdd} className="mt-4 flex h-9 items-center gap-2 rounded-md bg-indigo-600 px-4 text-xs font-black text-white"><Plus size={15} /> Add connection</button></div>;
 
@@ -920,9 +941,16 @@ const AccountsTable = ({ accounts, profilesById, onAccount, compact = false }: {
 
 const PositionsAndOrders = ({ data, profiles }: { data: TradovatePreflightResult; profiles: TradovateAccountProfile[] }) => {
   const profilesById = profileMap(profiles);
+  const readVerified = (account: TradovateAccountDataAccount, source: 'positions' | 'orders') => {
+    const state = tradovateAccountReadState(account, data);
+    const asOf = Date.parse(state[source === 'positions' ? 'positionsAsOf' : 'ordersAsOf'] ?? '');
+    return hasCompleteTradovateRead(state[source]) && Number.isFinite(asOf) && Date.now() - asOf <= LIVE_READ_MAX_AGE_MS;
+  };
+  const positionsVerified = data.accounts.every(account => readVerified(account, 'positions'));
+  const ordersVerified = data.accounts.every(account => readVerified(account, 'orders'));
   const positions = data.accounts.flatMap(account => account.positions.filter(position => position.netPosition !== 0).map(position => ({ account, position })));
   const orders = data.accounts.flatMap(account => account.orders.map(order => ({ account, order }))).sort((a, b) => Number(isWorkingTradovateOrder(b.order)) - Number(isWorkingTradovateOrder(a.order)) || Date.parse(b.order.timestamp ?? '') - Date.parse(a.order.timestamp ?? ''));
-  return <div className="space-y-4"><div className="grid gap-3 md:grid-cols-3"><MetricCard label="Otevřené pozice" value={String(positions.length)} sub="Napříč Tradovate účty" icon={Layers3} /><MetricCard label="Pracující příkazy" value={String(orders.filter(item => isWorkingTradovateOrder(item.order)).length)} sub="Dle order statusu" icon={Activity} /><MetricCard label="Načtené příkazy" value={String(orders.length)} sub={`Coverage: ${data.coverage.orders.availability}`} icon={Database} /></div><section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-5"><h3 className="font-black text-[var(--text-primary)]">OTEVŘENÉ POZICE</h3><p className="mt-1 text-xs text-[var(--text-secondary)]">Net pozice z Tradovate /position/list</p><div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{positions.map(({ account, position }) => <div key={`${account.id}-${position.id ?? position.contractId}`} className="rounded-md border border-indigo-500/20 bg-indigo-500/[0.045] p-4"><div className="flex justify-between gap-3"><div><b>{position.symbol ?? `Contract ${position.contractId}`}</b><div className="mt-1 text-xs text-[var(--text-secondary)]">{accountDisplayName(account, profilesById)}</div></div><span className={`h-fit rounded-md px-2 py-1 text-[10px] font-black ${position.netPosition > 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>{position.netPosition > 0 ? 'LONG' : 'SHORT'} {Math.abs(position.netPosition)}</span></div><div className="mt-4 grid grid-cols-2 gap-3"><DetailMetric label="Průměrná cena" value={position.averagePrice == null ? '—' : number.format(position.averagePrice)} /><DetailMetric label="Trade date" value={position.tradeDate ?? '—'} /></div></div>)}{positions.length === 0 ? <Empty text="Všechny účty jsou aktuálně flat." /> : null}</div></section><section className="overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)]"><div className="border-b border-[var(--border-subtle)] px-5 py-4"><h3 className="font-black text-[var(--text-primary)]">PŘÍKAZY</h3><p className="mt-1 text-xs text-[var(--text-secondary)]">Pracující příkazy jsou nahoře</p></div><div className="divide-y divide-[var(--border-subtle)]">{orders.map(({ account, order }) => { const working = isWorkingTradovateOrder(order); return <div key={`${account.id}-${order.id}`} className={`grid gap-3 px-5 py-3 text-xs md:grid-cols-[1.5fr_.7fr_.7fr_.7fr_.8fr] ${working ? 'bg-indigo-500/[0.045]' : ''}`}><div><b>{accountDisplayName(account, profilesById)}</b><div className="mt-1 text-[var(--text-secondary)]">{order.symbol ?? 'Kontrakt'} · {order.action ?? '—'} {order.quantity ?? ''}</div></div><MobileMetric label="Typ"><b>{order.orderType ?? '—'}</b></MobileMetric><MobileMetric label="Cena"><b>{order.stopPrice ?? order.price ?? '—'}</b></MobileMetric><MobileMetric label="Stav"><span className={`inline-flex rounded-md px-2 py-1 text-[10px] font-black uppercase ${working ? 'bg-indigo-500/10 text-indigo-500' : (order.status ?? '').toLowerCase() === 'filled' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-slate-500/10 text-[var(--text-secondary)]'}`}>{order.status ?? '—'}</span></MobileMetric><MobileMetric label="Čas"><span className="text-[var(--text-secondary)]">{order.timestamp ? dateTime.format(new Date(order.timestamp)) : '—'}</span></MobileMetric></div>; })}{orders.length === 0 ? <Empty text="Žádné příkazy nebyly načteny." /> : null}</div></section></div>;
+  return <div className="space-y-4"><div className="grid gap-3 md:grid-cols-3"><MetricCard label="Otevřené pozice" value={positionsVerified ? String(positions.length) : 'Neověřeno'} sub="Napříč Tradovate účty" icon={Layers3} /><MetricCard label="Pracující příkazy" value={ordersVerified ? String(orders.filter(item => isWorkingTradovateOrder(item.order)).length) : 'Neověřeno'} sub="Dle order statusu" icon={Activity} /><MetricCard label="Načtené příkazy" value={String(orders.length)} sub={ordersVerified ? 'Ověřeno u brokera' : 'Stav příkazů není ověřený'} icon={Database} /></div><section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-5"><h3 className="font-black text-[var(--text-primary)]">OTEVŘENÉ POZICE</h3><p className="mt-1 text-xs text-[var(--text-secondary)]">Pozice potvrzené brokerem</p><div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{positions.map(({ account, position }) => <div key={`${account.id}-${position.id ?? position.contractId}`} className="rounded-md border border-indigo-500/20 bg-indigo-500/[0.045] p-4"><div className="flex justify-between gap-3"><div><b>{position.symbol ?? `Contract ${position.contractId}`}</b><div className="mt-1 text-xs text-[var(--text-secondary)]">{accountDisplayName(account, profilesById)}</div></div><span className={`h-fit rounded-md px-2 py-1 text-[10px] font-black ${position.netPosition > 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>{position.netPosition > 0 ? 'LONG' : 'SHORT'} {Math.abs(position.netPosition)}</span></div><div className="mt-4 grid grid-cols-2 gap-3"><DetailMetric label="Průměrná cena" value={position.averagePrice == null ? '—' : number.format(position.averagePrice)} /><DetailMetric label="Trade date" value={position.tradeDate ?? '—'} /></div></div>)}{positions.length === 0 ? <Empty text={positionsVerified ? "Broker potvrdil, že účty nemají otevřené pozice." : "Aktuální pozice se nepodařilo ověřit. Prázdný seznam nepotvrzuje flat stav."} /> : null}</div></section><section className="overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)]"><div className="border-b border-[var(--border-subtle)] px-5 py-4"><h3 className="font-black text-[var(--text-primary)]">PŘÍKAZY</h3><p className="mt-1 text-xs text-[var(--text-secondary)]">Pracující příkazy jsou nahoře</p></div><div className="divide-y divide-[var(--border-subtle)]">{orders.map(({ account, order }) => { const working = isWorkingTradovateOrder(order); return <div key={`${account.id}-${order.id}`} className={`grid gap-3 px-5 py-3 text-xs md:grid-cols-[1.5fr_.7fr_.7fr_.7fr_.8fr] ${working ? 'bg-indigo-500/[0.045]' : ''}`}><div><b>{accountDisplayName(account, profilesById)}</b><div className="mt-1 text-[var(--text-secondary)]">{order.symbol ?? 'Kontrakt'} · {order.action ?? '—'} {order.quantity ?? ''}</div></div><MobileMetric label="Typ"><b>{order.orderType ?? '—'}</b></MobileMetric><MobileMetric label="Cena"><b>{order.stopPrice ?? order.price ?? '—'}</b></MobileMetric><MobileMetric label="Stav"><span className={`inline-flex rounded-md px-2 py-1 text-[10px] font-black uppercase ${working ? 'bg-indigo-500/10 text-indigo-500' : (order.status ?? '').toLowerCase() === 'filled' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-slate-500/10 text-[var(--text-secondary)]'}`}>{order.status ?? '—'}</span></MobileMetric><MobileMetric label="Čas"><span className="text-[var(--text-secondary)]">{order.timestamp ? dateTime.format(new Date(order.timestamp)) : '—'}</span></MobileMetric></div>; })}{orders.length === 0 ? <Empty text={ordersVerified ? "Broker nevrátil žádné příkazy." : "Aktuální příkazy se nepodařilo ověřit."} /> : null}</div></section></div>;
 };
 
 const ActivityView = ({ data, profiles }: { data: TradovatePreflightResult; profiles: TradovateAccountProfile[] }) => {

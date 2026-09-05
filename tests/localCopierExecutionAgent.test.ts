@@ -95,6 +95,8 @@ describe('local copier execution agent', () => {
     const statusResponse = await fetch(`${running.origin}/v1/status`, { headers: { Origin: origin } });
     expect(statusResponse.status).toBe(200);
     const status = await statusResponse.json();
+    expect(status.version).toBe(1);
+    expect(status.capabilities).toContain('risk-config-v1');
     const response = await post(running, status.nonce, {
       type: 'copy-command',
       command: { type: 'set-multiplier', groupId: 'ui-test', accountId: 22, multiplier: 1.5 },

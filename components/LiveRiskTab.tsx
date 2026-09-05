@@ -35,6 +35,8 @@ export interface LiveRiskTabProps {
   brokerDailyPnlByAccount?: Readonly<Record<string, number | null>>;
   brokerDailyPnlPending?: boolean;
   disabled?: boolean;
+  runtimeAvailable?: boolean;
+  riskConfigSupported?: boolean;
   now?: number;
   onSaveGroup?: (group: CopyGroupConfig) => Promise<void> | void;
 }
@@ -47,20 +49,25 @@ export const LiveRiskTab = ({
   brokerDailyPnlByAccount,
   brokerDailyPnlPending = false,
   disabled = false,
+  runtimeAvailable = false,
+  riskConfigSupported = false,
   now = Date.now(),
   onSaveGroup,
 }: LiveRiskTabProps) => {
   const savePendingRef = useRef(false);
   const [savePending, setSavePending] = useState(false);
-  const dayLockUntil = status?.dayLockUntil ?? 0;
+  const dayLockUntil = runtimeAvailable ? status?.dayLockUntil ?? 0 : 0;
   const dayLocked = dayLockUntil > now;
-  const pause = !dayLocked && status?.pause && status.pause.until > now
+  const pause = runtimeAvailable && !dayLocked && status?.pause && status.pause.until > now
     ? status.pause
     : null;
-  const writesDisabled = disabled || savePending || status == null || group == null || onSaveGroup == null;
+  const writesDisabled = disabled || !runtimeAvailable || !riskConfigSupported || savePending || status == null || group == null || onSaveGroup == null;
 
   const saveAuthoritativeGroup = group && onSaveGroup
     ? async (nextGroup: CopyGroupConfig) => {
+      if (!runtimeAvailable || !riskConfigSupported || disabled) {
+        throw new Error('Worker nepotvrdil podporu Risk nastavení nebo není dostupný.');
+      }
       if (savePendingRef.current) {
         throw new Error('Jiná změna Risk nastavení čeká na potvrzení workeru.');
       }
@@ -108,7 +115,7 @@ export const LiveRiskTab = ({
         </section>
       ) : null}
 
-      {status?.lastError ? (
+      {runtimeAvailable && status?.lastError ? (
         <section
           role="alert"
           data-copier-status-error="true"
@@ -135,13 +142,17 @@ export const LiveRiskTab = ({
         cooldownUntil={status?.entryCooldownUntil ?? 0}
         armedAt={status?.armedAt ?? 0}
         armExpiresAt={status?.armExpiresAt ?? 0}
-        runtimeAvailable={status != null}
+        runtimeAvailable={runtimeAvailable}
+        riskConfigSupported={riskConfigSupported}
         disabled={writesDisabled}
         onSave={saveSafety}
       />
 
       <LiveAccountRiskTable
         group={group}
+        status={status}
+        runtimeAvailable={runtimeAvailable}
+        riskConfigSupported={riskConfigSupported}
         accounts={snapshot.accounts}
         accountProfiles={accountProfiles}
         accountRisk={status?.accountRisk ?? []}

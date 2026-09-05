@@ -7,6 +7,7 @@ import { isLocked } from '../utils/featureGating';
 interface BottomNavProps {
   activePage: string;
   onNavigate: (page: string) => void;
+  onLiveIntent?: () => void;
   onAddTrade: () => void;
   theme: 'dark' | 'light' | 'oled';
   userRole?: UserRole;
@@ -19,7 +20,7 @@ interface BottomNavProps {
   onToggleBacktest?: () => void;
 }
 
-const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrade, theme, userRole, onLockedFeature, enrichCount = 0, dashboardMode, onToggleBacktest }) => {
+const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onLiveIntent, onAddTrade, theme, userRole, onLockedFeature, enrichCount = 0, dashboardMode, onToggleBacktest }) => {
   const [moreOpen, setMoreOpen] = useState(false);
   const isDark = theme !== 'light';
   const isBacktest = dashboardMode === 'backtesting';
@@ -102,6 +103,9 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onAddTrad
                   <button
                     key={item.id}
                     onClick={() => handleNavigate(item.id)}
+                    onPointerEnter={item.id === 'live' && !locked && !isActive ? onLiveIntent : undefined}
+                    onFocus={item.id === 'live' && !locked && !isActive ? onLiveIntent : undefined}
+                    onPointerDown={item.id === 'live' && !locked && !isActive ? onLiveIntent : undefined}
                     className={`flex items-center gap-3 w-full px-5 py-4 text-sm font-bold uppercase tracking-wider transition-colors ${locked ? 'opacity-50' : ''} ${
                       isActive && !locked
                         ? isDark ? 'text-white bg-white/10' : 'text-slate-900 bg-slate-100'

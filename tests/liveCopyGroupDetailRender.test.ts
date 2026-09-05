@@ -94,30 +94,6 @@ const tableRows = (markup: string): string[] => markup.match(/<tr\b[^>]*>[\s\S]*
 const tableCells = (row: string): string[] => row.match(/<td\b[^>]*>[\s\S]*?<\/td>/g) ?? [];
 
 describe('GroupDetail Positions integrace', () => {
-  it('odděluje leader-only copier statistiku od broker P&L všech účtů', () => {
-    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
-      snapshot: {
-        ...snapshot,
-        accounts: [
-          { ...snapshot.accounts[0], realizedPnl: -400 },
-          { ...snapshot.accounts[1], realizedPnl: -200 },
-        ],
-      },
-      dailyStats: {
-        label: 'Leader · jen obchody přes kopírku · bez poplatků',
-        sessionEndAt: 10_000,
-        realizedPnlUsd: -100,
-        losingTrades: 1,
-        unpricedSymbols: [],
-      },
-    }));
-
-    expect(markup).toContain('Leader · jen obchody přes kopírku · bez poplatků');
-    expect(markup).toContain('Účty (broker, vč. poplatků)');
-    expect(markup).toContain('-$100.00');
-    expect(markup).toContain('-$600.00');
-  });
-
   it('groupRows používá společnou source-group kaskádu i pro účet mimo OAuth snapshot', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
       snapshot: { ...snapshot, accounts: [snapshot.accounts[0]] },
@@ -143,62 +119,6 @@ describe('GroupDetail Positions integrace', () => {
     expect(markup).toContain('DLL zbývá');
     expect(markup).toContain('DLL $1,250.00 · dnešní realizovaný + otevřený P&amp;L -$250.00');
     expect(markup).toContain('>1,000<');
-  });
-
-  it('nabídne bezpečnou opravu pouze když TradingView běží bez CDP', () => {
-    const health = {
-      enabled: true,
-      repairSupported: true,
-      state: 'cdp-offline' as const,
-      layoutName: 'AlphaTrade Snapshoty',
-      chartIdConfigured: true,
-      cdpReachable: false,
-      targetFound: false,
-      lastCheckedAt: 1,
-      lastAttemptAt: null,
-      lastSuccessAt: null,
-    };
-    const offline = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
-      snapshot,
-      snapshotHealth: health,
-      onRepairSnapshots: () => undefined,
-    }));
-    expect(offline).toContain('Obnovit snímky');
-    expect(offline).toContain('Obchod proběhne, ale graf se neuloží.');
-
-    const ready = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
-      snapshot,
-      snapshotHealth: {
-        ...health,
-        state: 'ready',
-        cdpReachable: true,
-        targetFound: true,
-      },
-      onRepairSnapshots: () => undefined,
-    }));
-    expect(ready).not.toContain('Obnovit snímky');
-    expect(ready).toContain('je připravený pro ENTRY/EXIT');
-  });
-
-  it('u staršího workeru nevystaví nefunkční opravu snímků', () => {
-    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
-      snapshot,
-      snapshotHealth: {
-        enabled: true,
-        state: 'cdp-offline',
-        layoutName: 'AlphaTrade Snapshoty',
-        chartIdConfigured: true,
-        cdpReachable: false,
-        targetFound: false,
-        lastCheckedAt: 1,
-        lastAttemptAt: null,
-        lastSuccessAt: null,
-      },
-      onRepairSnapshots: () => undefined,
-    }));
-
-    expect(markup).not.toContain('Obnovit snímky');
-    expect(markup).toContain('Mac worker je starší a neumí automatickou opravu.');
   });
 
   it('během fresh bootstrapu nevydává chybějící denní ledger za nulu', () => {
@@ -341,7 +261,6 @@ describe('GroupDetail Positions integrace', () => {
     expect(markup.match(/ZAPNUTÁ/g)).toHaveLength(1);
     expect(markup.match(/VYPNUTÁ/g)).toHaveLength(1);
     expect(markup.indexOf('Druhy profil')).toBeLessThan(markup.indexOf('Hlavni'));
-    expect(markup).toContain('data-group-layout-motion="true"');
   });
 
   it('zobrazí stale followera jako nedostupného a nepočítá ho mezi aktivní', () => {
@@ -358,7 +277,7 @@ describe('GroupDetail Positions integrace', () => {
       snapshot: { ...snapshot, groups: [staleGroup] },
     }));
 
-    expect(markup).toContain('0/1 aktivních');
+    expect(markup).toContain('0/1 zařazených');
     expect(markup).toContain('1× nedostupný');
     expect(markup).toContain('Nedostupný účet');
     expect(markup).toContain('Účet není v aktuálním OAuth snapshotu. Oprav skupinu přes Edit group.');
@@ -385,7 +304,7 @@ describe('GroupDetail Positions integrace', () => {
       }],
     }));
 
-    expect(markup).toContain('0/1 aktivních');
+    expect(markup).toContain('0/1 zařazených');
     expect(markup).toContain('1× BREACHED');
     expect(markup).not.toContain('1× nedostupný');
     expect(markup).toContain('LIVE equity dosáhla drawdown flooru · účet není v aktuálním OAuth snapshotu');
@@ -420,7 +339,7 @@ describe('GroupDetail Positions integrace', () => {
       accountEligibility: [],
     }));
 
-    expect(markup).toContain('0/2 aktivních');
+    expect(markup).toContain('0/2 zařazených');
     expect(markup).toContain('1× DLL');
     expect(markup).toContain('1× BREACHED');
     expect(markup).toContain('DLL · do konce session');

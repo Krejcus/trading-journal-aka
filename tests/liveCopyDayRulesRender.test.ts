@@ -29,9 +29,49 @@ const safety: CopyGroupSafetySettings = {
 };
 
 describe('LIVE Pravidla dne', () => {
+  it('nepodporovaný worker nemá editory ani domyšlené akce pravidel', () => {
+    const markup = renderToStaticMarkup(React.createElement(LiveDayRulesCard, {
+      safety,
+      runtimeAvailable: true,
+      riskConfigSupported: false,
+      onSave: () => undefined,
+    }));
+    expect(markup).toContain('data-rules-known="false"');
+    expect(markup).toContain('Pravidla Risk vyžadují aktualizaci workeru');
+    expect(markup).not.toContain('<input');
+    expect(markup).not.toContain('pauza 20 min');
+    expect(markup).not.toContain('3 zámky');
+  });
+
+  it('ani capability bez autoritativních akcí nezobrazí náhradní výchozí hodnoty', () => {
+    const markup = renderToStaticMarkup(React.createElement(LiveDayRulesCard, {
+      safety: { ...safety, dayRuleActions: undefined } as unknown as CopyGroupSafetySettings,
+      runtimeAvailable: true,
+      riskConfigSupported: true,
+      onSave: () => undefined,
+    }));
+    expect(markup).toContain('Worker nepotvrdil aktuální pravidla a jejich akce');
+    expect(markup).not.toContain('pauza 20 min');
+    expect(markup).not.toContain('<input');
+  });
+
+  it('nedostupný runtime zablokuje všechna pravidla včetně přepínačů a akcí', () => {
+    const markup = renderToStaticMarkup(React.createElement(LiveDayRulesCard, {
+      safety,
+      runtimeAvailable: false,
+      riskConfigSupported: true,
+      onSave: () => undefined,
+    }));
+    expect(markup).toContain('<fieldset disabled=""');
+    expect(markup).toContain('stav nedostupný');
+    expect(markup).not.toContain('aria-valuenow=');
+  });
+
   it('vykreslí všech šest hodnot, autoritativní průběh a spuštěné pravidlo červeně', () => {
     const now = Date.now();
     const markup = renderToStaticMarkup(React.createElement(LiveDayRulesCard, {
+      riskConfigSupported: true,
+      runtimeAvailable: true,
       groupName: 'Hlavní',
       safety,
       dailyStats: {
@@ -150,6 +190,8 @@ describe('LIVE Pravidla dne', () => {
 
   it('bez dailyStats ukáže neověřený průběh místo falešných nul', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveDayRulesCard, {
+      riskConfigSupported: true,
+      runtimeAvailable: true,
       safety,
       dayLockUntil: Date.now() + 60_000,
       dayLockTrigger: 'losing-trades',
@@ -174,6 +216,8 @@ describe('LIVE Pravidla dne', () => {
 
   it('popíše předlimitní akci podle skutečného nastaveného limitu', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveDayRulesCard, {
+      riskConfigSupported: true,
+      runtimeAvailable: true,
       safety: { ...safety, dailyMaxLosingTrades: 5 },
       onSave: () => undefined,
     }));
@@ -234,6 +278,8 @@ describe('LIVE Pravidla dne', () => {
 
   it('po prvním ARM zakáže oslabující směry a ponechá zpřísnění dostupné', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveDayRulesCard, {
+      riskConfigSupported: true,
+      runtimeAvailable: true,
       safety,
       sessionArmedAt: Date.UTC(2026, 8, 5, 13, 0),
       pause: { until: Date.now() + 60_000, rule: 'daily-loss', at: Date.now() },

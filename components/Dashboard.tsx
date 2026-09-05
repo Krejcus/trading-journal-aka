@@ -57,6 +57,7 @@ import DailyFocusWidget from './DailyFocusWidget';
 import EquityIncidentModal from './EquityIncidentModal';
 import PayoutDetailModal from './PayoutDetailModal';
 import type { AccountDrawdownSummary } from '../services/propDrawdown';
+import { reuseMonteCarloInput, type MonteCarloInput } from '../lib/monteCarloInput';
 
 interface DashboardProps {
   stats: TradeStats;
@@ -603,12 +604,15 @@ const _money = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(Math.round(n))
 const BtMonteCarloWidget: React.FC<{ stats: TradeStats; theme: any; onExpand?: () => void }> = ({ stats, theme, onExpand }) => {
   const isDark = theme !== 'light';
   const SIMS = 600, PATHS = 36;
+  const previousSimulationInput = useRef<MonteCarloInput | null>(null);
+  const simulationInput = reuseMonteCarloInput(previousSimulationInput.current, stats.trades, stats.initialBalance);
+  previousSimulationInput.current = simulationInput;
   const sim = useMemo(() => {
-    const pnls = stats.trades.filter(t => t.executionStatus !== 'Missed').map(t => t.pnl || 0);
+    const pnls = simulationInput.pnls;
     const n = pnls.length;
     if (n < 10) return null;
     const len = n;
-    const startBalance = stats.initialBalance || 0;
+    const startBalance = simulationInput.initialBalance;
     const BANDS = Math.min(len, 60);
     const stepIdx: number[] = [];
     for (let b = 0; b <= BANDS; b++) stepIdx.push(Math.round((b / BANDS) * len));
@@ -643,7 +647,7 @@ const BtMonteCarloWidget: React.FC<{ stats: TradeStats; theme: any; onExpand?: (
       b5: band(0.05), b25: band(0.25), b50: band(0.5), b75: band(0.75), b95: band(0.95),
       paths,
     };
-  }, [stats.trades, stats.initialBalance]);
+  }, [simulationInput]);
 
   if (!sim) {
     return (

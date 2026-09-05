@@ -46,6 +46,8 @@ export interface CopierSnapshotHealth {
 
 export interface LocalCopierAgentStatus {
   version: 1;
+  /** Additive feature negotiation. Older version-1 workers omit this field. */
+  capabilities?: string[];
   environment: 'demo';
   nonce: string;
   group: CopyGroupConfig;

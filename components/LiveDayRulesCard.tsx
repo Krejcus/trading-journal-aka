@@ -14,9 +14,8 @@ import {
 
 /**
  * Skupina z běžícího workeru nebo ze starého localStorage nemusí mít
- * `dayRuleActions` (přidané 2026-09-05). Chybějící pole = DEFAULT podle spec
- * §1; neplatné = DEFAULT také, protože UI jen zobrazuje — worker validuje
- * fail-closed při uložení.
+ * `dayRuleActions` (přidané 2026-09-05). Fallback slouží pouze internímu
+ * draftu. Nepotvrzené akce se nesmějí vykreslit jako konfigurace workeru.
  */
 export const withDayRuleActions = (safety: CopyGroupSafetySettings): CopyGroupSafetySettings => ({
   ...safety,
@@ -581,6 +580,7 @@ export interface LiveDayRulesCardProps {
   armedAt?: number;
   armExpiresAt?: number;
   runtimeAvailable?: boolean;
+  riskConfigSupported?: boolean;
   disabled?: boolean;
   onSave?: (safety: CopyGroupSafetySettings) => Promise<void> | void;
 }
@@ -598,7 +598,8 @@ export const LiveDayRulesCard = ({
   cooldownUntil = 0,
   armedAt = 0,
   armExpiresAt = 0,
-  runtimeAvailable = true,
+  runtimeAvailable = false,
+  riskConfigSupported = false,
   disabled = false,
   onSave,
 }: LiveDayRulesCardProps) => {
@@ -638,14 +639,14 @@ export const LiveDayRulesCard = ({
   const tradesTriggered = lockActive && dayLockTrigger === 'max-trades';
   const windowTriggered = lockActive && dayLockTrigger === 'window-end';
   const cooldownActive = cooldownUntil > now;
-  // Header počítá pravidla, která skutečně spustila denní zámek. Běžící
-  // cooldown a průběh LIVE expirace jsou průběhové stavy, ne další locky.
+  // Header počítá zapnutá pravidla s nastavenou akcí zámku.
+  // Cooldown a průběh LIVE expirace nejsou další akce zámku.
   const configuredLockCount = [
-    draft.losingTradesBeforeAction,
-    draft.losingTradesAtAction,
-    draft.dailyLossAtAction,
-    draft.maxTradesAtAction,
-    draft.windowEndAction,
+    draft.losingTradesEnabled ? draft.losingTradesBeforeAction : null,
+    draft.losingTradesEnabled ? draft.losingTradesAtAction : null,
+    draft.lossLimitEnabled ? draft.dailyLossAtAction : null,
+    draft.maxTradesEnabled ? draft.maxTradesAtAction : null,
+    draft.tradingWindowEnabled ? draft.windowEndAction : null,
   ].filter(kind => kind === 'lock').length;
   const warnedRules = useMemo(() => new Set(dailyStats?.warnedRules?.map(warning => warning.rule) ?? []), [dailyStats?.warnedRules]);
   const dirty = JSON.stringify(draft) !== JSON.stringify(dailyRulesDraftFromSafety(effectiveSafety));
@@ -783,6 +784,7 @@ export const LiveDayRulesCard = ({
     });
   };
   const save = async () => {
+    if (disabled || !runtimeAvailable || !riskConfigSupported || saving) return;
     const validated = validateDailyRulesDraft(draft, effectiveSafety);
     if (!validated.safety) {
       setSaveErrors(validated.errors);
@@ -810,14 +812,18 @@ export const LiveDayRulesCard = ({
     }
   };
 
-  if (safety == null) {
+  if (safety == null || !riskConfigSupported || !safety.dayRuleActions || !sanitizeDayRuleActions(safety.dayRuleActions)) {
     return (
-      <section data-live-day-rules="true" data-rules-known="false" className="rounded-lg border border-amber-500/25 bg-[var(--bg-card)] px-3 py-2.5">
+      <section data-live-day-rules="true" data-rules-known="false" data-risk-supported={riskConfigSupported ? 'true' : 'false'} className="rounded-lg border border-amber-500/25 bg-[var(--bg-card)] px-3 py-2.5">
         <header className="flex items-center gap-2.5">
           <h3 className="flex-1 text-[13px] font-black text-[var(--text-primary)]">Pravidla dne</h3>
-          <span className="rounded-full border border-amber-500/25 bg-amber-500/[0.07] px-2 py-0.5 text-[10px] font-bold text-amber-600">neověřeno</span>
+          <span className="rounded-full border border-amber-500/25 bg-amber-500/[0.07] px-2 py-0.5 text-[10px] font-bold text-amber-600">{!riskConfigSupported && runtimeAvailable ? 'aktualizace workeru' : 'neověřeno'}</span>
         </header>
-        <p className="mt-2 text-[11px] font-semibold text-[var(--text-secondary)]">Worker nevrátil autoritativní konfiguraci skupiny. Pravidla nelze zobrazit ani uložit.</p>
+        <p className="mt-2 text-[11px] font-semibold text-[var(--text-secondary)]">{safety == null
+          ? 'Worker nevrátil autoritativní konfiguraci skupiny. Pravidla nelze zobrazit ani uložit.'
+          : !riskConfigSupported && runtimeAvailable
+            ? 'Pravidla Risk vyžadují aktualizaci workeru. Aktuální worker jejich podporu nepotvrdil.'
+            : 'Worker nepotvrdil aktuální pravidla a jejich akce. Pravidla nelze zobrazit ani uložit.'}</p>
       </section>
     );
   }
@@ -856,7 +862,7 @@ export const LiveDayRulesCard = ({
         </header>
 
         {collapsed ? null : (
-          <>
+          <fieldset disabled={disabled || !runtimeAvailable || saving || !onSave} className="min-w-0">
             <div className="mt-1 hidden grid-cols-[auto_minmax(0,300px)_minmax(120px,1fr)_auto_auto] gap-x-4 px-2.5 text-[9px] font-black uppercase tracking-[0.08em] text-[var(--text-muted)] sm:grid">
               <span />
               <span>Pravidlo</span>
@@ -1024,7 +1030,7 @@ export const LiveDayRulesCard = ({
                 {saving ? <Clock3 size={12} className="animate-spin" /> : <Save size={12} />}{saving ? 'Ukládám…' : 'Uložit pravidla'}
               </button>
             </footer>
-          </>
+          </fieldset>
         )}
       </section>
   );

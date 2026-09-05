@@ -1,3 +1,4 @@
+import { isOlderTradovateRead, mergeTradovateAccountRead } from './tradovateLiveReadState';
 import type { TradovateAccountProfile } from './tradovateAccountProfileTypes';
 import type {
   TradovateOAuthStatus,
@@ -33,7 +34,28 @@ export const applyTradovateConnectionDataRefresh = (
   datasets: TradovatePreflightResult[],
   mode: TradovateConnectionDataRefreshMode,
 ): Record<string, TradovatePreflightResult> => {
-  const incoming = Object.fromEntries(datasets.map(dataset => [dataset.connectionId, dataset]));
+  const incoming = Object.fromEntries(datasets.map(dataset => {
+    const previous = current[dataset.connectionId];
+    if (!previous?.coverage || !dataset.coverage) return [dataset.connectionId, dataset];
+    const older = isOlderTradovateRead(dataset.requestedAt ?? dataset.capturedAt, previous.requestedAt ?? previous.capturedAt);
+    const oldAccounts = new Map(previous.accounts.map(account => [account.id, account]));
+    const nextAccounts = new Map(dataset.accounts.map(account => [account.id, account]));
+    const accounts = (older ? previous.accounts : dataset.accounts).map(account => {
+      const before = oldAccounts.get(account.id);
+      const after = nextAccounts.get(account.id);
+      return before && after ? mergeTradovateAccountRead(before, after, previous, dataset) : after ?? before!;
+    });
+    return [dataset.connectionId, {
+      ...dataset,
+      accounts,
+      ...(older ? {
+        requestedAt: previous.requestedAt ?? previous.capturedAt,
+        capturedAt: previous.capturedAt,
+        contracts: [...new Map([...dataset.contracts, ...previous.contracts].map(contract => [contract.id, contract])).values()],
+        coverage: { ...dataset.coverage, positions: previous.coverage.positions, orders: previous.coverage.orders },
+      } : {}),
+    }];
+  }));
   return mode === 'merge' ? { ...current, ...incoming } : incoming;
 };
 

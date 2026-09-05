@@ -1,3 +1,4 @@
+import { hasCompleteTradovateRead, tradovateAccountReadState } from './tradovateLiveReadState';
 import type { TradovateAccountDataResult } from './tradovateAccountDataTypes';
 import type { TradovateAccountProfile } from './tradovateAccountProfileTypes';
 import {
@@ -44,6 +45,7 @@ export function tradovateCopyTradeSnapshot(
   const profilesById = profileMap(profiles);
   const accounts: LiveAccount[] = data.accounts.map(account => {
     const profile = profilesById.get(String(account.id));
+    const readState = tradovateAccountReadState(account, data);
     const positions = account.positions
       .filter(position => position.netPosition !== 0)
       .map(position => ({
@@ -70,13 +72,21 @@ export function tradovateCopyTradeSnapshot(
       realizedPnl: dailyRealizedPnl(account, data.capturedAt),
       weekRealizedPnl: account.balance.weekRealizedPnL ?? 0,
       unrealizedPnl: account.balance.openPnL ?? 0,
-      unrealizedPnlSource: account.balance.openPnlSource ?? 'broker',
-      unrealizedPnlUpdatedAt: account.balance.openPnlAsOf ?? data.capturedAt,
+      unrealizedPnlSource: account.balance.openPnlSource
+        ?? (account.balance.openPnL != null && hasCompleteTradovateRead(account.balance.coverage) ? 'broker' : 'stale'),
+      unrealizedPnlUpdatedAt: account.balance.openPnlAsOf ?? readState.cashAsOf,
+      positionsAvailability: readState.positions.availability,
+      ordersAvailability: readState.orders.availability,
+      cashAvailability: account.balance.totalCashValue != null && account.balance.netLiq != null
+        ? account.balance.coverage?.availability ?? 'unavailable' : 'unavailable',
+      positionsUpdatedAt: readState.positionsAsOf,
+      ordersUpdatedAt: readState.ordersAsOf,
+      cashUpdatedAt: readState.cashAsOf,
       peakEquity: accountRiskPeak(account, profile),
       drawdownFloor: accountRiskFloor(account, profile),
       cushion: accountRiskCushion(account, profile),
       positions,
-      updatedAt: data.capturedAt,
+      updatedAt: readState.positionsAsOf,
       mapRowId: null,
       mappedAccountId: null,
       mappedAccountName: null,

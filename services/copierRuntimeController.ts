@@ -49,7 +49,7 @@ import { stuckBracketEntries, waiveBracketOutboxEntry } from './copierBracketOut
 import { stuckOsoEntries, waiveOsoOutboxEntry } from './copierOsoOutbox';
 import { applyResolved, type LeaderEvent } from './copierEngine';
 import { COPIER_LEADER_DAILY_STATS_LABEL } from '../lib/copierDailyStatsLabels';
-import { createRiskGateContext, type RiskGateContext } from './copierRiskGate';
+import { cancelLifecycleHaltReason, createRiskGateContext, haltReason, type RiskGateContext } from './copierRiskGate';
 import {
   createCopierMetrics,
   createRuntime,
@@ -86,7 +86,7 @@ import {
   processTargetedLiquidation,
   type ManualFlattenResult,
 } from './copierManualActions';
-import { createExposureCappedBroker } from './exposureCappedBroker';
+import { CopierDispatchRevokedError, createExposureCappedBroker } from './exposureCappedBroker';
 import {
   COPIER_DISARM_HISTORY_LIMIT,
   createCopierDisarmRecord,
@@ -1166,6 +1166,27 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * čtení nevznikl novější incident, reconnect ani jiná invalidace.
    */
   let safetyGeneration = 0;
+
+  // Capture admission once, but read live safety again after every async preflight,
+  // immediately before the raw broker write. Re-ARM cannot revive an older job.
+  const dispatchBroker = (generation: number, event?: LeaderEvent): BrokerPort => createExposureCappedBroker(
+    options.broker,
+    accountId => group.followers.find(follower => follower.accountId === accountId)?.maxContracts,
+    operation => {
+      const terminalCancel = operation === 'cancel'
+        && (event?.kind === 'canceled' || event?.kind === 'rejected')
+        && ![...runtime.bracketOutbox.values(), ...runtime.osoOutbox.values()]
+          .some(entry => entry.leaderStopOrderId === event.orderId || entry.leaderTargetOrderId === event.orderId);
+      const current = { ...gate, now: clock() };
+      const reason = stopped ? 'stopped'
+        : terminalCancel ? cancelLifecycleHaltReason(current)
+        : shutdownRequested ? 'shutdown'
+        : generation !== safetyGeneration ? 'safety-generation-changed'
+        : current.shadowMode ? 'shadow-mode'
+        : haltReason(current);
+      if (reason) throw new CopierDispatchRevokedError(reason);
+    },
+  );
   let eventTail: Promise<void> = Promise.resolve();
   let accountRiskPollTail: Promise<void> = Promise.resolve();
   const accountRiskLastRequestedAt = new Map<number, number>();
@@ -1271,6 +1292,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const pendingBracketTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingOsoTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingOsoEvents = new Map<string, LeaderEvent>();
+  const pendingOsoGenerations = new Map<string, number>();
   const blockedOsoEntries = new Set<string>();
   /**
    * Účty, které z mixed reversal OSO dostaly pouze zavírací standalone
@@ -3468,7 +3490,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
           ineligibleAccounts: new Map(),
         },
-        broker,
+        broker: dispatchBroker(safetyGeneration, cancelEvent),
         clock,
         store: options.store,
         metrics,
@@ -4695,6 +4717,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (timer) clearTimeout(timer);
     pendingOsoTimers.delete(entryOrderId);
     const pending = pendingOsoEvents.get(entryOrderId);
+    const admissionGeneration = pendingOsoGenerations.get(entryOrderId) ?? safetyGeneration;
+    pendingOsoGenerations.delete(entryOrderId);
     pendingOsoEvents.delete(entryOrderId);
     const openingExcludedAccounts = osoOpeningExcludedAccounts.get(entryOrderId) ?? new Set<number>();
     osoOpeningExcludedAccounts.delete(entryOrderId);
@@ -4764,7 +4788,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
           ineligibleAccounts: adjustedDispatch.ineligibleAccounts,
         },
-        broker,
+        broker: dispatchBroker(admissionGeneration, pending),
         clock,
         store: options.store,
         metrics,
@@ -5514,7 +5538,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
   };
 
-  const handleBrokerEvent = async (event: BrokerEvent) => {
+  const handleBrokerEvent = async (event: BrokerEvent, admissionGeneration: number) => {
     if (stopped) return;
     const now = clock();
     if (event.type === 'heartbeat') {
@@ -6219,7 +6243,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
           ineligibleAccounts: currentBracketIneligibleAccounts(bracketPair.entryOrderId),
         },
-        broker,
+        broker: dispatchBroker(admissionGeneration, leaderEvent),
         clock,
         store: options.store,
         metrics,
@@ -6309,9 +6333,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         blockedOsoEntries.add(leaderEvent.orderId);
         rememberBlockedLeaderEntryOrder(leaderEvent.orderId);
         pendingOsoEvents.set(leaderEvent.orderId, leaderEvent);
+        pendingOsoGenerations.set(leaderEvent.orderId, admissionGeneration);
         const timer = setTimeout(() => {
           pendingOsoTimers.delete(leaderEvent.orderId);
           pendingOsoEvents.delete(leaderEvent.orderId);
+          pendingOsoGenerations.delete(leaderEvent.orderId);
           blockedOsoEntries.delete(leaderEvent.orderId);
           osoCorrelator.release(leaderEvent.orderId);
         }, osoCorrelator.pendingWindowMs() + 50);
@@ -6331,9 +6357,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       admittedLeaderOrders.add(leaderEvent.orderId);
       pendingOsoEvents.set(leaderEvent.orderId, leaderEvent);
+      pendingOsoGenerations.set(leaderEvent.orderId, admissionGeneration);
       const adjustedDispatch = cutAwareDispatchFor(leaderEvent, eventIncreasesExposure);
       if (adjustedDispatch.unsafeDivergenceAccounts.length > 0) {
         pendingOsoEvents.delete(leaderEvent.orderId);
+        pendingOsoGenerations.delete(leaderEvent.orderId);
         const accounts = adjustedDispatch.unsafeDivergenceAccounts.join(', ');
         failClosed(new Error(
           `Copier fail-closed: nevysvětlená divergence účtů ${accounts} před OSO leader exitem ${leaderEvent.symbol}`,
@@ -6367,7 +6395,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
             ineligibleAccounts: adjustedDispatch.ineligibleAccounts,
           },
-          broker,
+          broker: dispatchBroker(admissionGeneration, leaderEvent),
           clock,
           store: options.store,
           metrics,
@@ -6405,6 +6433,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (osoObservation.kind === 'pair') {
       const pair = osoObservation.pair;
       const pendingEntry = pendingOsoEvents.get(pair.entryOrderId);
+      const entryAdmissionGeneration = pendingOsoGenerations.get(pair.entryOrderId) ?? admissionGeneration;
+      pendingOsoGenerations.delete(pair.entryOrderId);
       const previouslyExcluded = osoOpeningExcludedAccounts.get(pair.entryOrderId) ?? new Set<number>();
       osoOpeningExcludedAccounts.delete(pair.entryOrderId);
       const entryWasBlocked = blockedOsoEntries.delete(pair.entryOrderId);
@@ -6462,7 +6492,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
             ineligibleAccounts: adjustedEntryDispatch.ineligibleAccounts,
           },
-          broker,
+          broker: dispatchBroker(entryAdmissionGeneration, pendingEntry),
           clock,
           store: options.store,
           metrics,
@@ -6504,7 +6534,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
           ineligibleAccounts: currentEntryIneligibleAccounts(),
         },
-        broker,
+        broker: dispatchBroker(entryAdmissionGeneration, leaderEvent),
         clock,
         store: options.store,
         metrics,
@@ -6619,7 +6649,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
         ineligibleAccounts: cutAwareDispatch.ineligibleAccounts,
       },
-      broker,
+      broker: dispatchBroker(admissionGeneration, leaderEvent),
       clock,
       store: options.store,
       metrics,
@@ -7304,7 +7334,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   assertCutsWithinKnownPropLimits(group);
 
   const unsubscribe = broker.subscribe(event => {
-    eventTail = eventTail.then(() => handleBrokerEvent(event)).catch(failClosed);
+    const admissionGeneration = safetyGeneration;
+    eventTail = eventTail.then(() => handleBrokerEvent(event, admissionGeneration)).catch(failClosed);
   });
 
   return {
@@ -7373,6 +7404,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       // Kratší z limitů vyhrává: session TTL nesmí ARM prodloužit za výchozí strop.
       const armTtlMs = ttlMs != null ? Math.min(ttlMs, defaultArmTtlMs) : defaultArmTtlMs;
+      safetyGeneration += 1;
       gate = { ...gate, armed: true, armedAt: now, now, shadowMode, armTtlMs };
       if (!shadowMode && sessionArmedAt <= 0) {
         sessionArmedAt = now;
@@ -7423,6 +7455,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return shutdownPromise;
     },
     disarm() {
+      safetyGeneration += 1;
       const wasArmed = gate.armed;
       gate = { ...gate, armed: false };
       if (wasArmed) {
@@ -7871,6 +7904,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       for (const timer of pendingOsoTimers.values()) clearTimeout(timer);
       pendingOsoTimers.clear();
       pendingOsoEvents.clear();
+      pendingOsoGenerations.clear();
       blockedOsoEntries.clear();
       osoOpeningExcludedAccounts.clear();
       blockedLeaderEntryOrderIds.clear();

@@ -120,6 +120,9 @@ export const parseTradovateOAuthStatus = (value: unknown): TradovateOAuthStatus 
 const authenticatedRequest = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
   const telemetry = beginTradovateApiRequest();
   let completed = false;
+  // Only reads get a deadline: never reinterpret an uncertain execution write.
+  const readController = (!init.method || init.method.toUpperCase() === 'GET') && !init.signal ? new AbortController() : null;
+  const readTimeout = readController ? setTimeout(() => readController.abort(), 20_000) : null;
   try {
     // V Capacitor buildu je origin capacitor://localhost — relativní /api/
     // cesta by skončila v bundlu (vrátí index.html místo API odpovědi).
@@ -127,6 +130,7 @@ const authenticatedRequest = async <T>(path: string, init: RequestInit = {}): Pr
     const response = await fetch(apiUrl(path), {
       ...init,
       credentials: 'same-origin',
+      signal: init.signal ?? readController?.signal,
       headers: {
         Accept: 'application/json',
         Authorization: await authorization(),
@@ -153,6 +157,8 @@ const authenticatedRequest = async <T>(path: string, init: RequestInit = {}): Pr
         message.includes('přihlas') ? 'auth' : 'network');
     }
     throw reason;
+  } finally {
+    if (readTimeout != null) clearTimeout(readTimeout);
   }
 };
 
@@ -276,7 +282,7 @@ export async function executeTradovateCopierRelayCommand(
     }
     await new Promise(resolve => window.setTimeout(resolve, 400));
   }
-  throw new Error('Mac worker příkaz včas nepotvrdil. Příkaz expiroval a nebude automaticky opakován.');
+  throw new Error('Mac worker příkaz včas nepotvrdil. Výsledek není ověřený; zkontroluj stav kopírky a účtů. Příkaz nebude automaticky opakován.');
 }
 
 export function runTradovateLivePnlTick(

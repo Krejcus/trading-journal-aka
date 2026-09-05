@@ -12,6 +12,7 @@ import {
   type LocalCopierAgentStatus,
 } from '../lib/localCopierAgentProtocol.js';
 import { isWeakerRiskConfig } from '../lib/copierRiskConfig.js';
+import { COPIER_RISK_CONFIG_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd } from '../services/copierArmSession.js';
 import type { CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
@@ -208,6 +209,7 @@ export async function startLocalCopierExecutionAgent(
 
   const status = (): LocalCopierAgentStatus => ({
     version: 1,
+    capabilities: [COPIER_RISK_CONFIG_CAPABILITY],
     environment: 'demo',
     nonce,
     group: structuredClone(group),

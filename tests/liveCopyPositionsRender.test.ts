@@ -47,6 +47,18 @@ const renderCell = ({
 }));
 
 describe('Positions sloupec copy tradingu', () => {
+  it('does not call a failed positions read flat or infer missing protection from failed orders', () => {
+    const unknownPositions = renderToStaticMarkup(React.createElement(CopyTradePositionsCell, {
+      accountId: 7, positions: [], orders: [], positionsVerified: false,
+    }));
+    expect(unknownPositions).toContain('Pozice neověřené');
+    expect(unknownPositions).not.toContain('flat');
+    const unknownOrders = renderToStaticMarkup(React.createElement(CopyTradePositionsCell, {
+      accountId: 7, positions: [livePosition()], orders: [], ordersVerified: false,
+    }));
+    expect(unknownOrders).toContain('Příkazy neověřené');
+    expect(unknownOrders).not.toContain('bez working stop lossu');
+  });
   it('vykreslí long pill se zkráceným symbolem a štítem jen při working SL i targetu', () => {
     const markup = renderCell({
       positions: [livePosition()],

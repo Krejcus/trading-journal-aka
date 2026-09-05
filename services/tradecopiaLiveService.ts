@@ -57,6 +57,12 @@ export interface LiveAccount {
   unrealizedPnl: number;
   unrealizedPnlSource?: 'broker' | 'estimated' | 'stale';
   unrealizedPnlUpdatedAt?: string | null;
+  positionsAvailability?: 'available' | 'partial' | 'empty' | 'denied' | 'unavailable';
+  ordersAvailability?: 'available' | 'partial' | 'empty' | 'denied' | 'unavailable';
+  cashAvailability?: 'available' | 'partial' | 'empty' | 'denied' | 'unavailable';
+  positionsUpdatedAt?: string | null;
+  ordersUpdatedAt?: string | null;
+  cashUpdatedAt?: string | null;
   peakEquity: number | null;
   drawdownFloor: number | null;
   cushion: number | null;

@@ -3,6 +3,7 @@ import type {
   TradovateLivePnlAnchorTick,
   TradovateLivePnlTick,
 } from './tradovateLivePnlTypes.js';
+import { hasCompleteTradovateRead, isOlderTradovateRead, tradovateAccountReadState } from './tradovateLiveReadState.js';
 import { isTradovateWorkingStatus } from './tradovateOrderReadModel.js';
 
 export interface TradovateContractMark {
@@ -13,6 +14,15 @@ export interface TradovateContractMark {
 }
 
 export type TradovateContractMarkMap = Record<string, TradovateContractMark>;
+
+/** Display estimate budget, never an execution/preflight authority. */
+export const TRADOVATE_MARK_TTL_MS = 15_000;
+const freshMark = (mark: TradovateContractMark | undefined, now: string) => {
+  const age = Date.parse(now) - Date.parse(mark?.observedAt ?? '');
+  return mark && Number.isFinite(age) && age >= 0 && age <= TRADOVATE_MARK_TTL_MS ? mark : null;
+};
+const estimateAsOf = (positions: TradovateAccountPosition[], marks: TradovateContractMarkMap): string | null =>
+  positions.length ? positions.map(position => marks[String(position.contractId)]?.observedAt).filter((value): value is string => !!value).sort()[0] ?? null : null;
 
 export interface TradovateLivePnlAnchorCandidate {
   accountId: number;
@@ -46,6 +56,7 @@ export const tradovateLivePnlAnchorCandidates = (
 ): TradovateLivePnlAnchorCandidate[] => {
   const byContract = new Map<number, TradovateLivePnlAnchorCandidate>();
   for (const account of data.accounts) {
+    if (!hasCompleteTradovateRead(tradovateAccountReadState(account, data).positions)) continue;
     const open = account.positions.filter(position => position.netPosition !== 0);
     if (open.length !== 1 || open[0].averagePrice == null) continue;
     if (tradovateValuePerPoint(open[0].symbol) == null) continue;
@@ -62,7 +73,13 @@ export function applyTradovateLivePnlAnchorTick(
   previousMarks: TradovateContractMarkMap = {},
 ): { data: TradovateAccountDataResult; marks: TradovateContractMarkMap } {
   if (!tick.anchor) return { data, marks: previousMarks };
+  const observedAt = tick.requestedAt ?? tick.capturedAt;
   const exactAccount = data.accounts.find(account => account.id === tick.anchor!.accountId);
+  if (exactAccount && (!hasCompleteTradovateRead(tradovateAccountReadState(exactAccount, data).positions)
+    || isOlderTradovateRead(observedAt, tradovateAccountReadState(exactAccount, data).positionsAsOf)
+    || isOlderTradovateRead(observedAt, tradovateAccountReadState(exactAccount, data).cashAsOf)
+    || isOlderTradovateRead(observedAt, exactAccount.balance.openPnlAsOf)
+    || isOlderTradovateRead(observedAt, previousMarks[String(tick.anchor.contractId)]?.observedAt))) return { data, marks: previousMarks };
   const exactOpen = exactAccount?.positions.filter(position => position.netPosition !== 0) ?? [];
   const exactPosition = exactOpen.length === 1 && exactOpen[0].contractId === tick.anchor.contractId
     ? exactOpen[0]
@@ -79,33 +96,40 @@ export function applyTradovateLivePnlAnchorTick(
       price: exactPosition.averagePrice
         + tick.anchor.openPnl / (exactPosition.netPosition * valuePerPoint),
       valuePerPoint,
-      observedAt: tick.capturedAt,
+      observedAt,
     },
   };
   const accounts = data.accounts.map(account => {
+    if (!hasCompleteTradovateRead(tradovateAccountReadState(account, data).positions)) {
+      return { ...account, balance: { ...account.balance, openPnlSource: 'stale' as const } };
+    }
     const openPositions = account.positions.filter(position => position.netPosition !== 0);
     const exact = account.id === tick.anchor!.accountId ? tick.anchor : null;
     const estimatedParts = openPositions.map(position => {
-      const mark = marks[String(position.contractId)];
+      const mark = freshMark(marks[String(position.contractId)], tick.capturedAt);
       if (!mark || position.averagePrice == null) return null;
       return (mark.price - position.averagePrice) * position.netPosition * mark.valuePerPoint;
     });
     const canEstimate = estimatedParts.every((value): value is number => value != null);
     const openPnl = exact?.openPnl
       ?? (openPositions.length === 0 ? 0 : canEstimate ? estimatedParts.reduce((sum, value) => sum + value, 0) : null);
-    if (openPnl == null) return account;
+    if (openPnl == null) return { ...account, balance: { ...account.balance, openPnlSource: 'stale' as const } };
+    const pnlAsOf = exact ? observedAt : openPositions.length === 0 ? tradovateAccountReadState(account, data).positionsAsOf : estimateAsOf(openPositions, marks);
+    if (isOlderTradovateRead(pnlAsOf, account.balance.openPnlAsOf)) return account;
     const totalCashValue = exact?.totalCashValue ?? account.balance.totalCashValue;
     return {
       ...account,
+      readState: { ...tradovateAccountReadState(account, data), ...(exact ? { cashAsOf: observedAt } : {}) },
       balance: {
         ...account.balance,
+        ...(exact ? { coverage: { availability: 'available' as const, count: 1, httpStatus: 200 } } : {}),
         ...(exact?.totalCashValue != null ? { totalCashValue: exact.totalCashValue } : {}),
         openPnL: openPnl,
         ...(exact?.netLiq != null
           ? { netLiq: exact.netLiq }
           : totalCashValue != null ? { netLiq: totalCashValue + openPnl } : {}),
         openPnlSource: exact ? 'broker' as const : 'estimated' as const,
-        openPnlAsOf: tick.capturedAt,
+        openPnlAsOf: pnlAsOf,
       },
     };
   });
@@ -151,6 +175,14 @@ export function applyTradovateLivePnlTick(
   tick: TradovateLivePnlTick,
   previousMarks: TradovateContractMarkMap = {},
 ): { data: TradovateAccountDataResult; marks: TradovateContractMarkMap } {
+  const observedAt = tick.requestedAt ?? tick.capturedAt;
+  if (isOlderTradovateRead(observedAt, data.requestedAt ?? data.capturedAt)) return { data, marks: previousMarks };
+  const anchorObservedAt = tick.anchorAsOf ?? observedAt;
+  const anchorAccount = data.accounts.find(account => account.id === tick.anchor?.accountId);
+  const usableAnchor = tick.anchor && anchorAccount
+    && !isOlderTradovateRead(anchorObservedAt, tradovateAccountReadState(anchorAccount, data).cashAsOf)
+    && !isOlderTradovateRead(anchorObservedAt, anchorAccount.balance.openPnlAsOf)
+    && !isOlderTradovateRead(anchorObservedAt, previousMarks[String(tick.anchor.contractId)]?.observedAt) ? tick.anchor : null;
   const contractSymbols = new Map(data.contracts.map(contract => [contract.id, contract.name]));
   const positionsByAccount = new Map<number, TradovateLivePnlTick['positions']>();
   for (const position of tick.positions) {
@@ -166,20 +198,20 @@ export function applyTradovateLivePnlTick(
   }
 
   const marks = { ...previousMarks };
-  if (tick.anchor) {
+  if (usableAnchor) {
     const anchorPosition = tick.positions.find(position =>
-      position.accountId === tick.anchor!.accountId
-      && position.contractId === tick.anchor!.contractId
+      position.accountId === usableAnchor.accountId
+      && position.contractId === usableAnchor.contractId
       && position.netPosition !== 0);
-    const symbol = contractSymbols.get(tick.anchor.contractId) ?? null;
+    const symbol = contractSymbols.get(usableAnchor.contractId) ?? null;
     const valuePerPoint = tradovateValuePerPoint(symbol);
     if (anchorPosition?.averagePrice != null && valuePerPoint != null) {
-      marks[String(tick.anchor.contractId)] = {
-        contractId: tick.anchor.contractId,
+      marks[String(usableAnchor.contractId)] = {
+        contractId: usableAnchor.contractId,
         price: anchorPosition.averagePrice
-          + tick.anchor.openPnl / (anchorPosition.netPosition * valuePerPoint),
+          + usableAnchor.openPnl / (anchorPosition.netPosition * valuePerPoint),
         valuePerPoint,
-        observedAt: tick.capturedAt,
+        observedAt: anchorObservedAt,
       };
     }
   }
@@ -210,21 +242,31 @@ export function applyTradovateLivePnlTick(
     })).sort((a, b) => Date.parse(b.timestamp ?? '') - Date.parse(a.timestamp ?? ''));
     const workingOrderCount = orders.filter(order => isTradovateWorkingStatus(order.status)).length;
     const openPositions = positions.filter(position => position.netPosition !== 0);
-    const exact = tick.anchor?.accountId === account.id ? tick.anchor : null;
+    const exact = usableAnchor?.accountId === account.id ? usableAnchor : null;
     const estimatedParts = openPositions.map(position => {
-      const mark = marks[String(position.contractId)];
+      const mark = freshMark(marks[String(position.contractId)], tick.capturedAt);
       if (!mark || position.averagePrice == null) return null;
       return (mark.price - position.averagePrice) * position.netPosition * mark.valuePerPoint;
     });
     const canEstimate = estimatedParts.every((value): value is number => value != null);
     const openPnl = exact?.openPnl
       ?? (openPositions.length === 0 ? 0 : canEstimate ? estimatedParts.reduce((sum, value) => sum + value, 0) : account.balance.openPnL);
+    const pnlAsOf = exact ? anchorObservedAt : openPositions.length === 0 ? observedAt : canEstimate ? estimateAsOf(openPositions, marks) : account.balance.openPnlAsOf ?? null;
+    const keepPnl = isOlderTradovateRead(pnlAsOf, account.balance.openPnlAsOf);
     const source = exact
       ? 'broker' as const
       : openPositions.length === 0 || canEstimate ? 'estimated' as const : 'stale' as const;
     const totalCashValue = exact?.totalCashValue ?? account.balance.totalCashValue;
     return {
       ...account,
+      readState: {
+        positions: { availability: positions.length ? 'available' as const : 'empty' as const, count: positions.length, httpStatus: 200 },
+        orders: { availability: orders.length ? 'available' as const : 'empty' as const, count: orders.length, httpStatus: 200 },
+        positionsAsOf: observedAt,
+        ordersAsOf: observedAt,
+        cashAsOf: exact ? anchorObservedAt : tradovateAccountReadState(account, data).cashAsOf,
+        requestedAt: observedAt,
+      },
       netPositionCount: openPositions.length,
       workingOrderCount,
       positions,
@@ -236,13 +278,15 @@ export function applyTradovateLivePnlTick(
       },
       balance: {
         ...account.balance,
+        ...(exact ? { coverage: { availability: 'available' as const, count: 1, httpStatus: 200 } } : {}),
         ...(exact?.totalCashValue != null ? { totalCashValue: exact.totalCashValue } : {}),
         ...(openPnl != null ? { openPnL: openPnl } : {}),
         ...(exact?.netLiq != null
           ? { netLiq: exact.netLiq }
           : openPnl != null && totalCashValue != null ? { netLiq: totalCashValue + openPnl } : {}),
         openPnlSource: source,
-        openPnlAsOf: tick.capturedAt,
+        openPnlAsOf: pnlAsOf,
+        ...(keepPnl ? { openPnL: account.balance.openPnL, netLiq: account.balance.netLiq, openPnlSource: account.balance.openPnlSource, openPnlAsOf: account.balance.openPnlAsOf } : {}),
       },
     };
   });
@@ -251,9 +295,11 @@ export function applyTradovateLivePnlTick(
     data: {
       ...data,
       capturedAt: tick.capturedAt,
+      requestedAt: observedAt,
       accounts,
       coverage: {
         ...data.coverage,
+        positions: { availability: tick.positions.length > 0 ? 'available' : 'empty', count: tick.positions.length, httpStatus: 200 },
         orders: { availability: tick.orders.length > 0 ? 'available' : 'empty', count: tick.orders.length, httpStatus: 200 },
       },
     },

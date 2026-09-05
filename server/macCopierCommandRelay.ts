@@ -62,7 +62,8 @@ export function startMacCopierCommandRelay(options: {
   /** Kick přišel mimo spánek (během poll requestu) — nesmí se ztratit. */
   let kickPending = false;
   /** Nové trade eventy čekají na okamžité odeslání serverem. */
-  let copyEventsPending = false;
+  let copyEventsRevision = 0;
+  let acknowledgedCopyEventsRevision = 0;
   let unsubscribeKick: (() => Promise<void> | void) | null = null;
   let kickTopic: string | null = null;
   const loopAbort = new AbortController();
@@ -162,14 +163,17 @@ export function startMacCopierCommandRelay(options: {
     let failures = 0;
     while (!stopped) {
       try {
-        const notifyCopyEvents = copyEventsPending;
+        const sentCopyEventsRevision = copyEventsRevision;
+        const notifyCopyEvents = sentCopyEventsRevision !== acknowledgedCopyEventsRevision;
         const response = await request({
           action: 'poll',
           status: options.agent.status(),
           ...(notifyCopyEvents ? { copyEvents: true } : {}),
         }, 10_000, loopAbort.signal);
         failures = 0;
-        if (notifyCopyEvents) copyEventsPending = false;
+        // ACK covers only the heartbeat just sent. A newer event may have
+        // arrived while its HTTP response was pending and needs another poll.
+        acknowledgedCopyEventsRevision = sentCopyEventsRevision;
         await maybeSubscribeKick(response.realtime);
         if (Array.isArray(response.snapshotRequests) && options.onSnapshotRequests) {
           const requests = response.snapshotRequests.flatMap(value => {
@@ -188,13 +192,14 @@ export function startMacCopierCommandRelay(options: {
         if (remote?.id && remote.command) {
           // Telemetrie: enqueue čas = expiresAt - 30 s (server TTL). Čekání
           // ve frontě přímo ukazuje, jestli realtime kick funguje (<300 ms).
-          if (remote.expiresAt) {
-            const queuedAt = Date.parse(remote.expiresAt) - 30_000;
+          const expiresAt = typeof remote.expiresAt === 'string' ? Date.parse(remote.expiresAt) : NaN;
+          if (Number.isFinite(expiresAt)) {
+            const queuedAt = expiresAt - 30_000;
             if (Number.isFinite(queuedAt)) {
               console.log(`${new Date().toISOString()} RELAY CMD ${remote.command.type} čekal ve frontě ${Math.max(0, Date.now() - queuedAt)} ms`);
             }
           }
-          if (!remote.expiresAt || Date.parse(remote.expiresAt) <= Date.now()) {
+          if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
             await complete(remote.id, undefined, 'command-expired-before-execution');
           } else {
             let result: unknown;
@@ -226,7 +231,7 @@ export function startMacCopierCommandRelay(options: {
   running = loop();
   return {
     nudgeCopyEvents() {
-      copyEventsPending = true;
+      copyEventsRevision += 1;
       kickPending = true;
       wake?.();
     },

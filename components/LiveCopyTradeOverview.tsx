@@ -1,6 +1,6 @@
+import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { motion, useReducedMotion } from 'framer-motion';
 import {
   ChevronDown, ChevronRight, Crown, Plus, HelpCircle, Settings2, Eye, MoreVertical,
   RefreshCw, Inbox, Check, RotateCcw, X, Save, Trash2, Power,
@@ -9,10 +9,6 @@ import {
 } from 'lucide-react';
 import type { LiveAccount, LiveGroup, LiveOrder, LivePosition, LiveSnapshot } from '../services/tradecopiaLiveService';
 import { futuresSymbolRoot } from '../services/futuresContractSpecs';
-import {
-  BROKER_ACCOUNTS_DAILY_PNL_LABEL,
-  COPIER_LEADER_DAILY_STATS_LABEL,
-} from '../lib/copierDailyStatsLabels';
 import type { TradovateApiTelemetrySnapshot } from '../lib/tradovateApiTelemetry';
 import type { CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
 import type { CopierAccountEligibility, CopierControllerStatus, CopierStuckOperation } from '../services/copierRuntimeController';
@@ -23,7 +19,6 @@ import {
   formatKnownCopyTradeAccountIds,
   type CopyTradeAccountRole,
 } from '../lib/copyTradeAccountLabels';
-import { formatSnapshotRepairError } from '../lib/copierBlockerMessages';
 import { translateCopierRejectReason } from '../lib/copierRejectReason';
 import LiveRiskSummaryCard from './LiveRiskSummaryCard';
 import {
@@ -31,6 +26,7 @@ import {
   type CopierDisarmRecord,
 } from '../lib/copierDisarmReason';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
+import { stabilizeCopyGroups } from '../lib/stabilizeCopyGroups';
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import {
   adoptRuntimeCopyGroup,
@@ -98,26 +94,26 @@ interface ColumnDef {
 type GroupColumnKey = 'status' | 'leader' | 'firm' | 'followers' | 'capital' | 'daily' | 'unreal';
 type OrderColumnKey = 'account' | 'broker' | 'symbol' | 'action' | 'type' | 'qty' | 'limit' | 'stop' | 'status' | 'timestamp' | 'orderId';
 const GROUP_COLUMN_OPTIONS: Array<{ key: GroupColumnKey; label: string }> = [
-  { key: 'status', label: 'Status' }, { key: 'leader', label: 'Leader' }, { key: 'firm', label: 'Firm' },
-  { key: 'followers', label: 'Followers' }, { key: 'capital', label: 'Capital' }, { key: 'daily', label: 'Daily P&L' }, { key: 'unreal', label: 'Unreal P&L' },
+  { key: 'status', label: 'Stav' }, { key: 'leader', label: 'Leader' }, { key: 'firm', label: 'Firma' },
+  { key: 'followers', label: 'Followeři' }, { key: 'capital', label: 'Kapitál' }, { key: 'daily', label: 'Denní P&L' }, { key: 'unreal', label: 'Otevřený P&L' },
 ];
 const ORDER_COLUMN_OPTIONS: Array<{ key: OrderColumnKey; label: string }> = [
-  { key: 'account', label: 'Account' }, { key: 'broker', label: 'Broker' }, { key: 'symbol', label: 'Symbol' }, { key: 'action', label: 'Action' },
+  { key: 'account', label: 'Účet' }, { key: 'broker', label: 'Broker' }, { key: 'symbol', label: 'Symbol' }, { key: 'action', label: 'Action' },
   { key: 'type', label: 'Type' }, { key: 'qty', label: 'Qty' }, { key: 'limit', label: 'Limit Price' },
-  { key: 'stop', label: 'Stop Price' }, { key: 'status', label: 'Status' }, { key: 'timestamp', label: 'Timestamp' }, { key: 'orderId', label: 'Order ID' },
+  { key: 'stop', label: 'Stop Price' }, { key: 'status', label: 'Stav' }, { key: 'timestamp', label: 'Timestamp' }, { key: 'orderId', label: 'Order ID' },
 ];
 
 const ACCOUNT_COLUMNS: ColumnDef[] = [
-  { key: 'account', label: 'Account', locked: true, widthPx: 220 },
-  { key: 'status', label: 'Status', widthPx: 170 },
+  { key: 'account', label: 'Účet', locked: true, widthPx: 220 },
+  { key: 'status', label: 'Stav', widthPx: 170 },
   { key: 'broker', label: 'Broker', widthPx: 72 },
-  { key: 'firm', label: 'Firm', widthPx: 120 },
-  { key: 'balance', label: 'Balance', align: 'right', widthPx: 112 },
-  { key: 'positions', label: 'Positions', align: 'right', widthPx: 260 },
-  { key: 'daily', label: 'Daily P&L', align: 'right', widthPx: 96 },
+  { key: 'firm', label: 'Firma', widthPx: 120 },
+  { key: 'balance', label: 'Zůstatek', align: 'right', widthPx: 112 },
+  { key: 'positions', label: 'Pozice', align: 'right', widthPx: 260 },
+  { key: 'daily', label: 'Denní P&L', align: 'right', widthPx: 96 },
   { key: 'dllRemaining', label: 'DLL zbývá', align: 'right', widthPx: 96 },
-  { key: 'unreal', label: 'Unreal P&L', align: 'right', widthPx: 104 },
-  { key: 'distDd', label: 'Dist DD', align: 'right', widthPx: 76 },
+  { key: 'unreal', label: 'Otevřený P&L', align: 'right', widthPx: 104 },
+  { key: 'distDd', label: 'Rezerva DD', align: 'right', widthPx: 76 },
   { key: 'execLimit', label: 'Exec/Limit', align: 'right', widthPx: 88 },
   { key: 'qtyMult', label: 'Násobek', align: 'right', widthPx: 96 },
   { key: 'actions', label: 'Akce', align: 'right', widthPx: 92 },
@@ -268,6 +264,9 @@ interface Props {
   /** Durable leader-only copier ledger; never an aggregate of account P&L. */
   dailyStats?: CopierControllerStatus['dailyStats'];
   copierKillSwitch?: boolean;
+  runtimeStatus?: CopierControllerStatus | null;
+  runtimeAvailable?: boolean;
+  riskConfigSupported?: boolean;
   apiTelemetry?: TradovateApiTelemetrySnapshot;
   snapshotHealth?: CopierSnapshotHealth;
   /** Bezpečný uživatelský restart TradingView, pouze pro opravu snapshot CDP. */
@@ -420,77 +419,6 @@ export function unavailableFollowerRemovalPlan(
 export const commandBlockedByCopierKillSwitch = (command: LiveCopyTradingCommand) =>
   command.type !== 'flatten-account' && command.type !== 'flatten-group';
 
-const snapshotHealthMessage = (health: CopierSnapshotHealth): string => {
-  if (!health.enabled || health.state === 'disabled') return 'Automatické snímky jsou vypnuté.';
-  if (health.state === 'checking') return 'Kontroluji TradingView a vyhrazený layout…';
-  if (health.state === 'cdp-offline') return 'TradingView není připojené přes CDP. Obchod proběhne, ale graf se neuloží.';
-  if (health.state === 'layout-missing') {
-    return health.chartIdConfigured
-      ? `Otevři v TradingView vyhrazený layout „${health.layoutName}“.`
-      : `Vyhrazený layout „${health.layoutName}“ ještě není spárovaný.`;
-  }
-  if (health.state === 'capture-failed') return 'Layout je dostupný, poslední pořízení snímku ale selhalo.';
-  if (health.state === 'upload-failed') return 'Graf se podařilo vyfotit, ale poslední nahrání selhalo.';
-  return `Layout „${health.layoutName}“ je připravený pro ENTRY/EXIT.`;
-};
-
-const SnapshotHealthBanner: React.FC<{
-  health: CopierSnapshotHealth;
-  onRepair?: () => Promise<void> | void;
-  accountLabel: (accountId: number) => string;
-}> = ({ health, onRepair, accountLabel }) => {
-  const ready = health.state === 'ready';
-  const checking = health.state === 'checking';
-  const [repairBusy, setRepairBusy] = useState(false);
-  const [repairError, setRepairError] = useState<string | null>(null);
-  const repairAvailable = health.state === 'cdp-offline'
-    && health.repairSupported === true
-    && onRepair;
-  const workerUpdateRequired = health.state === 'cdp-offline'
-    && health.repairSupported !== true;
-  const lastSuccess = health.lastSuccessAt
-    ? new Date(health.lastSuccessAt).toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })
-    : null;
-  return (
-    <div className={`flex items-start gap-3 rounded-lg border px-4 py-3 ${
-      ready
-        ? 'border-emerald-500/30 bg-emerald-500/[0.07] text-emerald-700'
-        : checking
-          ? 'border-slate-500/25 bg-slate-500/[0.06] text-[var(--text-secondary)]'
-          : 'border-amber-500/35 bg-amber-500/[0.08] text-amber-700'
-    }`}>
-      {ready ? <CheckCircle2 size={17} className="mt-0.5 shrink-0" /> : <AlertTriangle size={17} className="mt-0.5 shrink-0" />}
-      <div className="min-w-0 flex-1">
-        <p className="text-xs font-black">TradingView snímky</p>
-        <p className="mt-0.5 text-[11px] font-semibold opacity-90">{snapshotHealthMessage(health)}</p>
-        {workerUpdateRequired ? (
-          <p className="mt-1 text-[10px] font-bold text-amber-800 dark:text-amber-300">
-            Mac worker je starší a neumí automatickou opravu. Je potřeba jej aktualizovat.
-          </p>
-        ) : null}
-        {lastSuccess ? <p className="mt-1 text-[10px] opacity-70">Poslední uložený snímek: {lastSuccess}</p> : null}
-        {repairError ? <p className="mt-1 text-[10px] font-bold text-rose-600">{repairError}</p> : null}
-      </div>
-      {repairAvailable ? (
-        <button
-          type="button"
-          disabled={repairBusy}
-          onClick={() => {
-            setRepairBusy(true);
-            setRepairError(null);
-            void Promise.resolve(onRepair()).catch(error => {
-              setRepairError(formatSnapshotRepairError(error, accountLabel));
-            }).finally(() => setRepairBusy(false));
-          }}
-          className="shrink-0 rounded-md border border-amber-500/40 bg-white/60 px-3 py-2 text-[10px] font-black text-amber-800 transition hover:bg-white disabled:cursor-wait disabled:opacity-50 dark:bg-black/15 dark:text-amber-300"
-        >
-          {repairBusy ? 'Spouštím…' : 'Obnovit snímky'}
-        </button>
-      ) : null}
-    </div>
-  );
-};
-
 const TERMINAL_LIVE_ORDER_STATUSES = new Set([
   'filled', 'canceled', 'cancelled', 'rejected', 'expired',
 ]);
@@ -528,9 +456,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   brokerDailyPnlByAccount,
   dailyStats = null,
   copierKillSwitch = false,
+  runtimeStatus = null,
+  runtimeAvailable = false,
+  riskConfigSupported = false,
   apiTelemetry,
-  snapshotHealth,
-  onRepairSnapshots,
   onSwitchAndArm,
   onArmLive,
   onDisarm,
@@ -562,8 +491,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     () => new Map(effectiveEligibility.map(entry => [entry.accountId, entry])),
     [effectiveEligibility],
   );
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(snapshot.groups.map(g => g.id)));
-  const didAutoExpandGroups = useRef(false);
   const [groupTab, setGroupTab] = useState<Record<string, 'accounts' | 'orders'>>({});
   const [apiPanelOpen, setApiPanelOpen] = useState(false);
   const [hiddenColumns, setHiddenColumns] = useState<Set<AccountColumnKey>>(loadHiddenColumns);
@@ -577,6 +504,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       ? adoptRuntimeCopyGroup(initial, snapshot.accounts.map(account => account.id), runtimeGroup)
       : initial;
   });
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(groups.map(group => group.id)));
+  const didAutoExpandGroups = useRef(groups.length > 0);
   const [editorGroup, setEditorGroup] = useState<CopyGroupConfig | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [pendingUnavailableFollowerRemoval, setPendingUnavailableFollowerRemoval] = useState<PendingUnavailableFollowerRemoval | null>(null);
@@ -593,7 +522,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [copierTransition, setCopierTransition] = useState<'connecting' | 'disconnecting' | null>(null);
   const [transitionGroupId, setTransitionGroupId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ tone: 'success' | 'info' | 'error'; text: string; accountIds?: number[] } | null>(null);
-  const reduceMotion = useReducedMotion() === true;
 
   // Volba sloupců přežívá reload — je to nastavení pohledu, ne stav relace.
   useEffect(() => {
@@ -613,9 +541,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   useEffect(() => {
     setGroups(current => {
       const merged = mergeCopyGroups(current, snapshot);
-      return runtimeGroup
+      const next = runtimeGroup
         ? adoptRuntimeCopyGroup(merged, snapshot.accounts.map(account => account.id), runtimeGroup)
         : merged;
+      return stabilizeCopyGroups(current, next);
     });
   }, [runtimeGroup, snapshot]);
 
@@ -624,12 +553,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   // uložené skupiny musí zůstat neaktivní i když sdílejí stejné účty.
   useEffect(() => {
     if (!executionGroupId) return;
-    setGroups(current => current.map(group => {
+    setGroups(current => stabilizeCopyGroups(current, current.map(group => {
       const enabled = group.id === executionGroupId
         ? (runtimeGroup?.enabled ?? group.enabled)
         : false;
       return group.enabled === enabled ? group : { ...group, enabled };
-    }));
+    })));
   }, [executionGroupId, runtimeGroup?.enabled]);
 
   useEffect(() => {
@@ -657,10 +586,20 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const visibleColumns = useMemo(
-    () => ACCOUNT_COLUMNS.filter(c => !hiddenColumns.has(c.key)),
-    [hiddenColumns],
-  );
+  const [narrowTable, setNarrowTable] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 1100px)').matches);
+  const [showAllColumns, setShowAllColumns] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 1100px)');
+    const update = () => setNarrowTable(query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+  const visibleColumns = useMemo(() => {
+    const columns = ACCOUNT_COLUMNS.filter(c => !hiddenColumns.has(c.key));
+    if (!narrowTable || showAllColumns) return columns;
+    const widths: Partial<Record<AccountColumnKey, number>> = { account: 180, status: 100, positions: 155, daily: 90, unreal: 95, qtyMult: 80, actions: 70 };
+    return columns.filter(c => widths[c.key] != null).map(c => ({ ...c, widthPx: widths[c.key]! }));
+  }, [hiddenColumns, narrowTable, showAllColumns]);
 
   const verifyAccountEligibility = async (accountId: number) => {
     if (!onVerifyEligibility || verifyingAccountId != null) return;
@@ -726,9 +665,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     !!account && (connectionByFirm.get(account.firm)?.connected ?? false);
 
   const anyLive = snapshot.accounts.some(isLive);
-  const brokerAccountsDailyPnl = dailyPnlPending
-    ? null
-    : snapshot.accounts.reduce((sum, account) => sum + account.realizedPnl, 0);
   const activityForGroup = (candidate: CopyGroupConfig) => {
     const accountIds = new Set([
       candidate.leaderAccountId,
@@ -1077,6 +1013,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   return (
     <div className="space-y-5" style={{ fontSize: `${density}%` }}>
       <LiveRiskSummaryCard
+        status={runtimeStatus}
+        runtimeAvailable={runtimeAvailable}
+        riskConfigSupported={riskConfigSupported}
         group={rulesGroup}
         dailyStats={dailyStats}
         dayLockUntil={dayLockUntil}
@@ -1088,24 +1027,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         brokerDailyPnlPending={dailyPnlPending}
         onOpenRisk={onOpenRisk}
       />
-      <CopierDailyStatsSummary
-        leaderRealizedPnl={dailyStats?.realizedPnlUsd ?? null}
-        leaderLosingTrades={dailyStats?.losingTrades ?? null}
-        brokerAccountsRealizedPnl={brokerAccountsDailyPnl}
-      />
-      <LivePnlPanel
-        open={apiPanelOpen}
-        onToggle={() => setApiPanelOpen(v => !v)}
-        dataActive={anyLive}
-        apiReady={!!commandAdapter}
-        onHelp={() => setHelpOpen(true)}
-        telemetry={apiTelemetry}
-      />
-
-      {snapshotHealth ? (
-        <SnapshotHealthBanner health={snapshotHealth} onRepair={onRepairSnapshots} accountLabel={accountId => accountLabel(accountId)} />
-      ) : null}
-
       {stuckOperations.length > 0 && commandAdapter ? (
         <StuckOperationsPanel
           operations={stuckOperations}
@@ -1134,7 +1055,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
               <Plus size={14} /> Přidat skupinu
             </button>
             <button onClick={() => setHelpOpen(true)} title="Nápověda" className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><HelpCircle size={14} /></button>
-            <button onClick={() => setTableSettingsOpen(true)} title="Table settings" className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><Settings2 size={14} /></button>
+            {narrowTable ? <button onClick={() => setShowAllColumns(value => !value)} className="rounded-md border border-[var(--border-subtle)] px-2 py-2 text-[10px] font-bold text-[var(--text-secondary)]">{showAllColumns ? 'Základní sloupce' : 'Všechny sloupce'}</button> : null}
+            <button onClick={() => setTableSettingsOpen(true)} title="Nastavení tabulky" className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><Settings2 size={14} /></button>
             <button onClick={() => setRedactNames(value => !value)} title={redactNames ? 'No redaction' : 'Redact account names'} className={`flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] ${redactNames ? 'bg-indigo-500/10 text-indigo-500' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}>{redactNames ? <EyeOff size={14} /> : <Eye size={14} />}</button>
             <TopActionsMenu
               onTemplates={() => setTemplatesOpen(true)}
@@ -1161,19 +1083,19 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           <div className="overflow-x-auto">
             <table
               className="w-full text-left"
-              style={{ minWidth: `${Math.max(900, visibleColumns.reduce((total, column) => total + column.widthPx, 0))}px` }}
+              style={{ minWidth: '900px' }}
             >
               <thead>
                 <tr className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)] border-y border-[var(--border-subtle)]">
                   <th className="w-8" />
-                  <th className="px-3 py-2.5">Group</th>
-                  {!hiddenGroupColumns.has('status') && <th className="px-3 py-2.5">Status</th>}
+                  <th className="px-3 py-2.5">Skupina</th>
+                  {!hiddenGroupColumns.has('status') && <th className="px-3 py-2.5">Stav</th>}
                   {!hiddenGroupColumns.has('leader') && <th className="px-3 py-2.5">Leader</th>}
-                  {!hiddenGroupColumns.has('firm') && <th className="px-3 py-2.5">Firm</th>}
-                  {!hiddenGroupColumns.has('followers') && <th className="px-3 py-2.5 text-right">Followers</th>}
-                  {!hiddenGroupColumns.has('capital') && <th className="px-3 py-2.5 text-right">Capital</th>}
-                  {!hiddenGroupColumns.has('daily') && <th className="px-3 py-2.5 text-right">Daily P&amp;L</th>}
-                  {!hiddenGroupColumns.has('unreal') && <th className="px-3 py-2.5 text-right">Unreal P&amp;L</th>}
+                  {!hiddenGroupColumns.has('firm') && <th className="px-3 py-2.5">Firma</th>}
+                  {!hiddenGroupColumns.has('followers') && <th className="px-3 py-2.5 text-right">Followeři</th>}
+                  {!hiddenGroupColumns.has('capital') && <th className="px-3 py-2.5 text-right">Kapitál</th>}
+                  {!hiddenGroupColumns.has('daily') && <th className="px-3 py-2.5 text-right">Denní P&amp;L</th>}
+                  {!hiddenGroupColumns.has('unreal') && <th className="px-3 py-2.5 text-right">Otevřený P&amp;L</th>}
                   <th className="px-3 py-2.5" />
                 </tr>
               </thead>
@@ -1198,7 +1120,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                       <GroupRow
                         group={group} rows={rows} armed={armed}
                         dailyPnlPending={dailyPnlPending}
-                        reduceMotion={reduceMotion}
                         eligibility={group.followers
                           .filter(follower => follower.mode !== 'off')
                           .map(follower => eligibilityByAccount.get(follower.accountId))}
@@ -1269,16 +1190,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                           </td>
                         </tr>
                       ) : null}
-                      <motion.tr
-                        layout="position"
-                        data-group-layout-motion="true"
-                        transition={reduceMotion
-                          ? { duration: 0 }
-                          : { type: 'spring', stiffness: 360, damping: 34, mass: 0.7 }}
+                      <tr
                         aria-hidden={!expanded.has(group.id)}
                       >
                         <td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">
-                          <div className={`grid overflow-hidden transition-all duration-300 ease-out ${expanded.has(group.id) ? 'grid-rows-[1fr] opacity-100' : 'pointer-events-none grid-rows-[0fr] opacity-0'}`}>
+                          <div className={`grid overflow-hidden ${expanded.has(group.id) ? 'grid-rows-[1fr] opacity-100' : 'pointer-events-none grid-rows-[0fr] opacity-0'}`}>
                             <div className="min-h-0 overflow-hidden"><GroupDetail
                               rows={rows} tab={tab} isLive={isLive} onAccount={onAccount}
                               dailyPnlPending={dailyPnlPending}
@@ -1318,7 +1234,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                             /></div>
                           </div>
                         </td>
-                      </motion.tr>
+                      </tr>
                     </React.Fragment>
                   );
                 })}
@@ -1328,9 +1244,18 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         )}
 
         <footer className="px-5 lg:px-6 py-3 border-t border-[var(--border-subtle)] text-[11px] font-bold text-[var(--text-secondary)]">
-          Total Groups: <span className="text-[var(--text-primary)]">{groups.length}</span>
+          Celkem skupin: <span className="text-[var(--text-primary)]">{groups.length}</span>
         </footer>
       </section>
+
+      <LivePnlPanel
+        open={apiPanelOpen}
+        onToggle={() => setApiPanelOpen(v => !v)}
+        dataActive={anyLive}
+        apiReady={!!commandAdapter}
+        onHelp={() => setHelpOpen(true)}
+        telemetry={apiTelemetry}
+      />
 
       {editorGroup && (
         <GroupEditorDialog
@@ -1479,41 +1404,6 @@ const EMPTY_API_TELEMETRY: TradovateApiTelemetrySnapshot = {
   rateLimitedUntil: null,
 };
 
-export const CopierDailyStatsSummary = ({
-  leaderRealizedPnl,
-  leaderLosingTrades,
-  brokerAccountsRealizedPnl,
-}: {
-  leaderRealizedPnl: number | null;
-  leaderLosingTrades: number | null;
-  brokerAccountsRealizedPnl: number | null;
-}) => (
-  <section className="grid gap-3 sm:grid-cols-2" aria-label="Denní statistiky kopírky a účtů">
-    <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045] px-4 py-3">
-      <div className="text-[10px] font-black uppercase tracking-wider text-indigo-500">
-        {COPIER_LEADER_DAILY_STATS_LABEL}
-      </div>
-      <div className={`mt-1 text-lg font-black tabular-nums ${leaderRealizedPnl == null ? 'text-[var(--text-secondary)]' : pnlClass(leaderRealizedPnl)}`}>
-        {leaderRealizedPnl == null ? '—' : money.format(leaderRealizedPnl)}
-      </div>
-      <div className="text-[10px] text-[var(--text-secondary)]">
-        {leaderLosingTrades == null ? 'Copier ledger není dostupný.' : `${leaderLosingTrades} ztrátových obchodů leadera`}
-      </div>
-    </div>
-    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/[0.04] px-4 py-3">
-      <div className="text-[10px] font-black uppercase tracking-wider text-emerald-600">
-        {BROKER_ACCOUNTS_DAILY_PNL_LABEL}
-      </div>
-      <div className={`mt-1 text-lg font-black tabular-nums ${brokerAccountsRealizedPnl == null ? 'text-[var(--text-secondary)]' : pnlClass(brokerAccountsRealizedPnl)}`}>
-        {brokerAccountsRealizedPnl == null ? '—' : money.format(brokerAccountsRealizedPnl)}
-      </div>
-      <div className="text-[10px] text-[var(--text-secondary)]">
-        {brokerAccountsRealizedPnl == null ? 'Čeká na denní OAuth enrichment.' : 'Součet dnešního cashBalance.realizedPnL přes OAuth účty.'}
-      </div>
-    </div>
-  </section>
-);
-
 const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry = EMPTY_API_TELEMETRY }: { open: boolean; onToggle: () => void; dataActive: boolean; apiReady: boolean; onHelp: () => void; telemetry?: TradovateApiTelemetrySnapshot }) => {
   const rows = [
     { label: 'Za minutu', usage: telemetry.minute },
@@ -1523,12 +1413,12 @@ const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry 
   return (
   <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden">
     <header className="flex items-center justify-between px-5 lg:px-6 py-4">
-      <h3 className="font-black text-[var(--text-primary)]">Live P&amp;L &amp; API Usage</h3>
+      <h3 className="font-black text-[var(--text-primary)]">Diagnostika dat a API</h3>
       <div className="flex items-center gap-2">
         <button onClick={onHelp} title="Jak funguje Live P&L" className="w-8 h-8 rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center">
           <HelpCircle size={14} />
         </button>
-        <button onClick={onToggle} className="w-8 h-8 rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center transition-colors">
+        <button onClick={onToggle} aria-label={open ? 'Sbalit diagnostiku' : 'Rozbalit diagnostiku'} aria-expanded={open} className="w-8 h-8 rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center justify-center transition-colors">
           <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
         </button>
       </div>
@@ -1731,7 +1621,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
         className="flex h-7 w-[108px] items-center justify-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] text-[9px] font-black uppercase tracking-[0.08em] text-[var(--text-secondary)]"
       >
         <RefreshCw size={12} className="animate-spin" />
-        ?
+        Neověřeno
       </span>
     );
   }
@@ -1779,9 +1669,8 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
   );
 };
 
-const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, tightenOnly, onApplyTemplate, hiddenGroupColumns, reduceMotion }: {
+const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, tightenOnly, onApplyTemplate, hiddenGroupColumns }: {
   group: CopyGroupConfig; rows: Row[]; armed: boolean; open: boolean; onToggle: () => void;
-  reduceMotion: boolean;
   dailyPnlPending: boolean;
   eligibility: (CopierAccountEligibility | undefined)[];
   observingOnly: boolean;
@@ -1800,6 +1689,7 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingO
   onApplyTemplate: (template: CopyGroupTemplate) => void;
   hiddenGroupColumns: Set<GroupColumnKey>;
 }) => {
+  const cashKnown = rows.every(row => row.account && isLiveAccountReadVerified(row.account, 'cash'));
   const capital = rows.reduce((s, r) => s + (r.account?.balance || 0), 0);
   const daily = rows.reduce((s, r) => s + (r.account?.realizedPnl || 0), 0);
   const unreal = rows.reduce((s, r) => s + (r.account?.unrealizedPnl || 0), 0);
@@ -1819,12 +1709,7 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingO
   const breachedCount = eligibility.filter(entry => entry?.state === 'breached').length;
 
   return (
-    <motion.tr
-      layout="position"
-      data-group-layout-motion="true"
-      transition={reduceMotion
-        ? { duration: 0 }
-        : { type: 'spring', stiffness: 360, damping: 34, mass: 0.7 }}
+    <tr
       onClick={onToggle}
       className="h-10 cursor-pointer border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--bg-page)]"
     >
@@ -1837,8 +1722,8 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingO
         <span className="flex flex-wrap items-center gap-1.5 text-xs font-bold" style={{ color: group.color ?? GROUP_COLORS[0] }}>
           <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: group.color ?? GROUP_COLORS[0] }} />
           {group.name}
-          <span className="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-black text-emerald-600">
-            {activeFollowerCount}/{enabledFollowerCount} aktivních
+          <span className="whitespace-nowrap rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-black text-emerald-600">
+            {activeFollowerCount}/{enabledFollowerCount} zařazených
           </span>
           {dllCount > 0 ? <span className="rounded-full bg-amber-500/12 px-1.5 py-0.5 text-[9px] font-black text-amber-600">{dllCount}× DLL</span> : null}
           {breachedCount > 0 ? <span className="rounded-full bg-rose-500/12 px-1.5 py-0.5 text-[9px] font-black text-rose-600">{breachedCount}× BREACHED</span> : null}
@@ -1871,8 +1756,8 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingO
       </td>}
       {!hiddenGroupColumns.has('firm') && <td className="max-w-[150px] px-3 py-1.5 text-[11px] text-[var(--text-secondary)]">{firm ? <FirmMark firm={firm} withLabel /> : '—'}</td>}
       {!hiddenGroupColumns.has('followers') && <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]">{group.followers.length}</td>}
-      {!hiddenGroupColumns.has('capital') && <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]">{money.format(capital)}</td>}
-      {!hiddenGroupColumns.has('daily') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${dailyPnlPending ? 'text-[var(--text-secondary)]' : pnlClass(daily)}`}>{dailyPnlPending ? '—' : money.format(daily)}</td>}
+      {!hiddenGroupColumns.has('capital') && <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]">{cashKnown ? money.format(capital) : '—'}</td>}
+      {!hiddenGroupColumns.has('daily') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${dailyPnlPending ? 'text-[var(--text-secondary)]' : pnlClass(daily)}`}>{dailyPnlPending || !cashKnown ? '—' : money.format(daily)}</td>}
       {!hiddenGroupColumns.has('unreal') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(unreal)}`} title={unrealSource === 'estimated' ? 'Součet obsahuje live odhady.' : unrealSource === 'stale' ? 'Některý účet čeká na nový snapshot.' : 'Potvrzeno broker snapshotem.'}><span className="inline-flex items-center justify-end gap-1.5">{money.format(unreal)}{unrealSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> : null}</span></td>}
       <td className="px-3 py-0">
         <div className="flex items-center justify-end gap-1.5" onClick={event => event.stopPropagation()}>
@@ -1883,7 +1768,7 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingO
           <GroupActionMenu active={armed} onToggleEnabled={onToggleEnabled} onEdit={onEdit} templates={templates} tightenOnly={tightenOnly} onApplyTemplate={onApplyTemplate} />
         </div>
       </td>
-    </motion.tr>
+    </tr>
   );
 };
 
@@ -1991,11 +1876,14 @@ const hasProtectiveAction = (order: LiveOrder, netPosition: number) => {
  * conservative: only a working opposite-side order on the exact contract can
  * protect a position. The shortened futures root is display-only.
  */
-export const CopyTradePositionsCell = ({ accountId, positions, orders }: {
+export const CopyTradePositionsCell = ({ accountId, positions, orders, positionsVerified = true, ordersVerified = true }: {
   accountId: number | null;
   positions: LivePosition[];
   orders: LiveOrder[];
+  positionsVerified?: boolean;
+  ordersVerified?: boolean;
 }) => {
+  if (!positionsVerified || !ordersVerified) return <span className="text-[11px] font-semibold text-amber-600">{!positionsVerified ? 'Pozice neověřené' : 'Příkazy neověřené'}</span>;
   const openPositions = positions.filter(position => position.netPosition !== 0);
   const workingOrders = accountId == null
     ? []
@@ -2264,7 +2152,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
               ? 'border-indigo-500 text-indigo-500'
               : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}
           >
-            {t === 'accounts' ? 'Accounts' : 'Orders'}
+            {t === 'accounts' ? 'Účty' : 'Příkazy'}
           </button>
         ))}
       </div>
@@ -2279,7 +2167,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
               <span className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${excluded > 0
                 ? 'border border-amber-500/40 bg-amber-500/15 text-amber-600'
                 : 'border border-emerald-500/25 bg-emerald-500/10 text-emerald-600'}`}>
-                Followeři {active.length}/{followers.length} aktivní
+                Followeři {active.length}/{followers.length} zařazení
               </span>
               {excluded > 0 ? <span className="text-[10px] font-bold text-amber-600">{excluded}× vyřazen z kopírování</span> : null}
             </span>;
@@ -2341,7 +2229,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
         <div className="pt-2">
           <table className="w-full min-w-[760px] text-left">
             <thead><tr className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)] border-b border-[var(--border-subtle)]">
-              {!hiddenOrderColumns.has('account') && <th className="px-3 py-2">Account</th>}{!hiddenOrderColumns.has('broker') && <th className="px-3 py-2">Broker</th>}{!hiddenOrderColumns.has('symbol') && <th className="px-3 py-2">Symbol</th>}{!hiddenOrderColumns.has('action') && <th className="px-3 py-2">Action</th>}{!hiddenOrderColumns.has('type') && <th className="px-3 py-2">Type</th>}{!hiddenOrderColumns.has('qty') && <th className="px-3 py-2 text-right">Qty</th>}{!hiddenOrderColumns.has('limit') && <th className="px-3 py-2 text-right">Limit Price</th>}{!hiddenOrderColumns.has('stop') && <th className="px-3 py-2 text-right">Stop Price</th>}{!hiddenOrderColumns.has('status') && <th className="px-3 py-2">Status</th>}{!hiddenOrderColumns.has('timestamp') && <th className="px-3 py-2">Timestamp</th>}{!hiddenOrderColumns.has('orderId') && <th className="px-3 py-2 text-right">Order ID</th>}<th className="px-3 py-2" />
+              {!hiddenOrderColumns.has('account') && <th className="px-3 py-2">Account</th>}{!hiddenOrderColumns.has('broker') && <th className="px-3 py-2">Broker</th>}{!hiddenOrderColumns.has('symbol') && <th className="px-3 py-2">Symbol</th>}{!hiddenOrderColumns.has('action') && <th className="px-3 py-2">Action</th>}{!hiddenOrderColumns.has('type') && <th className="px-3 py-2">Type</th>}{!hiddenOrderColumns.has('qty') && <th className="px-3 py-2 text-right">Qty</th>}{!hiddenOrderColumns.has('limit') && <th className="px-3 py-2 text-right">Limit Price</th>}{!hiddenOrderColumns.has('stop') && <th className="px-3 py-2 text-right">Stop Price</th>}{!hiddenOrderColumns.has('status') && <th className="px-3 py-2">Stav</th>}{!hiddenOrderColumns.has('timestamp') && <th className="px-3 py-2">Timestamp</th>}{!hiddenOrderColumns.has('orderId') && <th className="px-3 py-2 text-right">Order ID</th>}<th className="px-3 py-2" />
             </tr></thead>
             <tbody>{groupOrders.map(order => (
               <tr key={`${order.accountId}-${order.id}`} className="border-b border-[var(--border-subtle)] last:border-0 text-xs">
@@ -2385,7 +2273,8 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
   const a = row.account;
   const accountId = row.accountId;
   const cushion = a?.cushion ?? null;
-  const dllRemaining = a ? copyTradeDailyLossRemaining(a) : null;
+  const cashKnown = !!a && isLiveAccountReadVerified(a, 'cash');
+  const dllRemaining = a && cashKnown && a.unrealizedPnlSource !== 'stale' ? copyTradeDailyLossRemaining(a) : null;
 
   const cell = (key: AccountColumnKey): React.ReactNode => {
     switch (key) {
@@ -2434,13 +2323,13 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
       case 'firm':
         return row.firm ? <FirmMark firm={row.firm} withLabel /> : <span className="text-[11px] text-[var(--text-secondary)]">—</span>;
       case 'balance':
-        return <span className="text-xs tabular-nums text-[var(--text-primary)]">{a ? money.format(a.balance) : '—'}</span>;
+        return <span className="text-xs tabular-nums text-[var(--text-primary)]">{a && cashKnown ? money.format(a.balance) : '—'}</span>;
       case 'positions':
         return a
-          ? <CopyTradePositionsCell accountId={accountId} positions={a.positions} orders={orders} />
+          ? <CopyTradePositionsCell accountId={accountId} positions={a.positions} orders={orders} positionsVerified={isLiveAccountReadVerified(a, 'positions')} ordersVerified={isLiveAccountReadVerified(a, 'orders')} />
           : <span className="text-xs tabular-nums text-[var(--text-secondary)]">—</span>;
       case 'daily':
-        return <span className={`text-xs tabular-nums ${a && !dailyPnlPending ? pnlClass(a.realizedPnl) : 'text-[var(--text-secondary)]'}`}>{a && !dailyPnlPending ? money.format(a.realizedPnl) : '—'}</span>;
+        return <span className={`text-xs tabular-nums ${a && cashKnown && !dailyPnlPending ? pnlClass(a.realizedPnl) : 'text-[var(--text-secondary)]'}`}>{a && cashKnown && !dailyPnlPending ? money.format(a.realizedPnl) : '—'}</span>;
       case 'dllRemaining': {
         if (!a || dailyPnlPending || dllRemaining == null) {
           return <span className="text-xs tabular-nums text-[var(--text-secondary)]">—</span>;
@@ -2458,7 +2347,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
           className={`inline-flex items-center justify-end gap-1.5 text-xs tabular-nums ${pnlClass(a.unrealizedPnl)}`}
           title={a.unrealizedPnlSource === 'estimated'
             ? 'Live odhad podle skutečné vstupní ceny účtu a posledního broker snapshotu.'
-            : a.unrealizedPnlSource === 'stale' ? 'Čeká na nový broker snapshot.' : 'Potvrzeno broker snapshotem.'}
+            : a.unrealizedPnlSource === 'stale' ? `Poslední známý údaj${a.unrealizedPnlUpdatedAt ? ' · ' + new Date(a.unrealizedPnlUpdatedAt).toLocaleTimeString('cs-CZ') : ''}. Čeká na ověření.` : 'Potvrzeno broker snapshotem.'}
         >
           {money.format(a.unrealizedPnl)}
           {a.unrealizedPnlSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}

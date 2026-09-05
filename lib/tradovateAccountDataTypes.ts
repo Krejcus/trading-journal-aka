@@ -4,6 +4,7 @@ export interface TradovateSourceCoverage {
   availability: TradovateDataAvailability;
   count: number;
   httpStatus: number | null;
+  retryAfterMs?: number;
 }
 
 export interface TradovateFeeBreakdown {
@@ -130,6 +131,16 @@ export interface TradovateAccountDataAccount {
   canTrade: boolean;
   netPositionCount: number;
   workingOrderCount: number;
+  /** Per-account evidence survives merging connections and slow enrichment. */
+  readState?: {
+    positions: TradovateSourceCoverage;
+    orders: TradovateSourceCoverage;
+    positionsAsOf: string | null;
+    ordersAsOf: string | null;
+    cashAsOf: string | null;
+    /** Request start orders snapshots; completion time cannot do that. */
+    requestedAt: string;
+  };
   balance: {
     coverage: TradovateSourceCoverage;
     totalCashValue: number | null;
@@ -203,6 +214,7 @@ export interface TradovateAccountDataAccount {
 
 export interface TradovateAccountDataResult {
   capturedAt: string;
+  requestedAt?: string;
   accounts: TradovateAccountDataAccount[];
   contracts: TradovateContractSummary[];
   coverage: {

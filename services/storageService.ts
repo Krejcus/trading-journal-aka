@@ -1975,7 +1975,9 @@ export const storageService = {
       .select('id, description')
       .eq('user_id', userId);
 
-    if (error || !data) return result;
+    // Callers cache successful reads; a failed read must remain retryable.
+    if (error) throw new Error('Failed to fetch payout images');
+    if (!data) return result;
 
     data.forEach((row: any) => {
       try {

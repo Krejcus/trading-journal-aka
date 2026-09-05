@@ -3,7 +3,7 @@ import {
   type CopierRuleAction,
   type CopyFollowerConfig,
   type CopyGroupSafetySettings,
-} from '../services/liveCopyTrading';
+} from '../services/liveCopyTrading.js';
 
 /**
  * Minimal shared shape available both on a copy-group command and in the
@@ -73,6 +73,13 @@ export function isWeakerRiskConfig(previous: CopierRiskConfig, next: CopierRiskC
   if (previousWindow.enabled && !nextWindow.enabled) {
     add('safety.tradingWindow.enabled');
   } else if (previousWindow.enabled && nextWindow.enabled) {
+    // Equal clock times in another zone can extend the real trading window.
+    // Only accept known aliases (e.g. UTC / Etc/UTC); otherwise fail closed.
+    const canonicalZone = (timeZone: string) => new Intl.DateTimeFormat('en-US', { timeZone }).resolvedOptions().timeZone;
+    if (previousWindow.timeZone !== nextWindow.timeZone
+      && canonicalZone(previousWindow.timeZone) !== canonicalZone(nextWindow.timeZone)) {
+      add('safety.tradingWindow.timeZone');
+    }
     // Sanitized HH:MM values are zero-padded, so lexical order is chronological.
     if (nextWindow.from < previousWindow.from) add('safety.tradingWindow.from');
     if (nextWindow.to > previousWindow.to) add('safety.tradingWindow.to');

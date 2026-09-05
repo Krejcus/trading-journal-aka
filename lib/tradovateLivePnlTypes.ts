@@ -24,6 +24,7 @@ export interface TradovateLivePnlAnchorTick {
   connectionId: string;
   environment: 'demo' | 'live';
   capturedAt: string;
+  requestedAt?: string;
   anchor: TradovateLivePnlAnchor | null;
 }
 
@@ -48,6 +49,11 @@ export interface TradovateLivePnlTick {
   connectionId: string;
   environment: 'demo' | 'live';
   capturedAt: string;
+  requestedAt?: string;
+  /** Cash failure does not invalidate successful position/order reads. */
+  anchorError?: string | null;
+  anchorErrorStatus?: number | null;
+  anchorAsOf?: string;
   positions: TradovateLivePnlPosition[];
   /** Cheap /order/list snapshot used by the live Orders tab. */
   orders: TradovateLiveOrder[];

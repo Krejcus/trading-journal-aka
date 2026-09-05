@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Lock, Save, ShieldCheck } from 'lucide-react';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
-import type { CopierAccountRiskSnapshot, CopierFollowerCut } from '../services/copierRuntimeController';
+import type { CopierAccountRiskSnapshot, CopierFollowerCut, CopierControllerStatus } from '../services/copierRuntimeController';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
+import { copierRuntimePresentation } from '../lib/copierRuntimePresentation';
+import { copierAccountEligibilityPresentation } from '../lib/copierAccountEligibilityPresentation';
 import {
   type CopyFollowerConfig,
   type CopyFollowerCutAction,
@@ -222,6 +224,9 @@ export async function submitAccountRiskLimits(
 
 export interface LiveAccountRiskTableProps {
   group: CopyGroupConfig | null;
+  status?: CopierControllerStatus | null;
+  runtimeAvailable?: boolean;
+  riskConfigSupported?: boolean;
   accounts: LiveAccount[];
   accountProfiles?: TradovateAccountProfile[];
   accountRisk?: CopierAccountRiskSnapshot[];
@@ -297,6 +302,9 @@ const cellClass = 'px-3 py-2 align-middle text-[11px]';
 
 export const LiveAccountRiskTable = ({
   group,
+  status: controllerStatus = null,
+  runtimeAvailable = false,
+  riskConfigSupported = false,
   accounts,
   accountProfiles = [],
   accountRisk = [],
@@ -330,8 +338,10 @@ export const LiveAccountRiskTable = ({
   })), [accountProfiles]);
   const riskById = useMemo(() => new Map(accountRisk.map(snapshot => [snapshot.accountId, snapshot])), [accountRisk]);
   const followerIds = useMemo(() => new Set(group?.followers.map(follower => follower.accountId) ?? []), [group]);
-  const cutsById = useMemo(() => activeCutMap(followerCuts, followerIds, now), [followerCuts, followerIds, now]);
+  const cutsById = useMemo(() => activeCutMap(runtimeAvailable ? followerCuts : [], followerIds, now), [followerCuts, followerIds, now, runtimeAvailable]);
   const tightenOnly = sessionArmedAt > 0;
+  const runtime = copierRuntimePresentation(controllerStatus, runtimeAvailable, now);
+  const writesDisabled = disabled || !riskConfigSupported || !runtimeAvailable || saving || !onSave;
 
   const setDraft = <K extends keyof AccountRiskLimitDraft>(
     accountId: number,
@@ -350,6 +360,7 @@ export const LiveAccountRiskTable = ({
   };
 
   const save = async () => {
+    if (writesDisabled) return;
     setSaving(true);
     setErrors([]);
     setNotice(null);
@@ -390,12 +401,18 @@ export const LiveAccountRiskTable = ({
         <button
           type="button"
           onClick={() => void save()}
-          disabled={disabled || saving || !group || !onSave}
+          disabled={writesDisabled || !group}
           className="inline-flex h-7 items-center gap-1.5 rounded-md bg-indigo-600 px-3 text-[11px] font-black text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-45"
         >
           <Save size={12} /> {saving ? 'Ukládám…' : 'Uložit limity'}
         </button>
       </header>
+
+      {!riskConfigSupported ? (
+        <p data-risk-unsupported="true" className="border-b border-amber-500/25 px-3 py-2 text-[11px] font-semibold text-amber-600">{runtimeAvailable
+          ? 'Risk limity vyžadují aktualizaci workeru. Aktuální worker jejich podporu nepotvrdil.'
+          : 'Aktuální stav workeru není dostupný. Podporu Risk limitů nelze ověřit.'}</p>
+      ) : null}
 
       {cutsById.size > 0 ? (
         <div data-follower-cut-banner="true" className="flex items-start gap-2 border-b border-rose-500/25 bg-rose-500/[0.07] px-3 py-2 text-[11px] font-bold text-rose-500">
@@ -417,7 +434,7 @@ export const LiveAccountRiskTable = ({
       ) : null}
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1180px] border-collapse">
+        <table className="w-full min-w-[980px] border-collapse [&_th:last-child]:sticky [&_th:last-child]:right-0 [&_th:last-child]:bg-[var(--bg-card)] [&_td:last-child]:sticky [&_td:last-child]:right-0 [&_td:last-child]:bg-[var(--bg-card)]">
           <thead className="bg-[var(--bg-page)] text-left text-[9px] font-black uppercase tracking-[0.1em] text-[var(--text-secondary)]">
             <tr>
               <th data-risk-column="account" className="px-3 py-2">Účet</th>
@@ -450,6 +467,7 @@ export const LiveAccountRiskTable = ({
                 now,
               });
               const follower = row.role === 'follower' ? row.follower : null;
+              const eligibility = copierAccountEligibilityPresentation(controllerStatus, row.accountId);
               const draft = follower ? (drafts[String(row.accountId)] ?? {
                 dailyLossCutUsd: follower.dailyLossCutUsd == null ? '' : String(follower.dailyLossCutUsd),
                 maxContracts: follower.maxContracts == null ? '' : String(follower.maxContracts),
@@ -458,11 +476,10 @@ export const LiveAccountRiskTable = ({
               const currentCut = follower?.dailyLossCutUsd && follower.dailyLossCutUsd > 0
                 ? follower.dailyLossCutUsd
                 : undefined;
-              const draftCut = draft ? optionalDailyLossCut(draft.dailyLossCutUsd).value : undefined;
               const loss = pnl == null ? null : Math.max(0, -pnl);
-              const progress = loss != null && draftCut != null ? (loss / draftCut) * 100 : 0;
+              const progress = loss != null && currentCut != null ? (loss / currentCut) * 100 : 0;
               const cut = cutsById.get(row.accountId);
-              const nearLimit = !cut && follower?.mode !== 'off' && currentCut != null && loss != null
+              const nearLimit = riskConfigSupported && !cut && follower?.mode !== 'off' && currentCut != null && loss != null
                 && loss / currentCut >= 0.8;
               const currentOnCut = follower?.onCut ?? 'close-copy';
               const propMax = knownPropLimit == null ? undefined : knownPropLimit * 0.95;
@@ -490,7 +507,7 @@ export const LiveAccountRiskTable = ({
               };
 
               const status = row.role === 'leader'
-                ? { key: 'leader', title: 'Obchoduje pro leadera', detail: '', tone: 'text-indigo-500' }
+                ? { key: 'leader', title: 'Leader skupiny', detail: '', tone: 'text-indigo-500' }
                 : cut
                   ? {
                     key: 'cut',
@@ -502,11 +519,15 @@ export const LiveAccountRiskTable = ({
                         : 'stav otevřené kopie neověřen'}`,
                     tone: 'text-rose-500',
                   }
-                  : follower?.mode === 'off'
-                    ? { key: 'off', title: 'Nekopíruje', detail: '', tone: 'text-[var(--text-secondary)]' }
-                    : nearLimit
-                      ? { key: 'near', title: 'Kopíruje · blízko limitu', detail: `${Math.round((loss! / currentCut!) * 100)} % limitu`, tone: 'text-amber-500' }
-                      : { key: 'copying', title: 'Kopíruje', detail: '', tone: 'text-emerald-500' };
+                  : !runtime.copying
+                    ? { key: runtime.key, title: runtime.label, detail: runtime.detail, tone: 'text-[var(--text-secondary)]' }
+                    : follower?.mode === 'off' || group?.enabled === false
+                      ? { key: 'off', title: 'Nekopíruje', detail: '', tone: 'text-[var(--text-secondary)]' }
+                      : !eligibility.active
+                        ? { ...eligibility, tone: 'text-amber-600' }
+                        : nearLimit
+                          ? { key: 'near', title: 'Kopíruje · blízko limitu', detail: `${Math.round((loss! / currentCut!) * 100)} % limitu`, tone: 'text-amber-500' }
+                          : { key: 'copying', title: 'Kopíruje', detail: '', tone: 'text-emerald-500' };
 
               return (
                 <tr key={`${row.role}-${row.accountId}`} data-account-id={row.accountId} data-account-risk-state={status.key}>
@@ -531,7 +552,7 @@ export const LiveAccountRiskTable = ({
                     )}
                   </td>
                   <td className={cellClass}>
-                    {draft ? (
+                    {draft && riskConfigSupported ? (
                       <label className="inline-flex items-center gap-1" title={tightenCutTitle}>
                         <input
                           aria-label={`Max ztráta pro účet ${row.accountId}`}
@@ -541,16 +562,16 @@ export const LiveAccountRiskTable = ({
                           step="0.01"
                           placeholder="vypnuto"
                           value={draft.dailyLossCutUsd}
-                          disabled={disabled}
+                          disabled={writesDisabled}
                           onChange={event => setCut(event.target.value)}
                           className={inputClass}
                         />
                         <span className="text-[9.5px] font-bold text-[var(--text-muted)]">USD</span>
                       </label>
-                    ) : <span className="text-[var(--text-muted)]">—</span>}
+                    ) : <span className="text-[var(--text-muted)]">{draft && !riskConfigSupported ? 'nepodporováno' : '—'}</span>}
                   </td>
                   <td className={cellClass}>
-                    {draft ? (
+                    {draft && riskConfigSupported ? (
                       <input
                         aria-label={`Max kontraktů pro účet ${row.accountId}`}
                         title={tightenContractsTitle}
@@ -560,17 +581,17 @@ export const LiveAccountRiskTable = ({
                         step="1"
                         placeholder="bez limitu"
                         value={draft.maxContracts}
-                        disabled={disabled}
+                        disabled={writesDisabled}
                         onChange={event => setMaxContracts(event.target.value)}
                         className={inputClass}
                       />
-                    ) : <span className="text-[var(--text-muted)]">—</span>}
+                    ) : <span className="text-[var(--text-muted)]">{draft && !riskConfigSupported ? 'nepodporováno' : '—'}</span>}
                   </td>
                   <td className={cellClass}>
                     <b className={`block tabular-nums ${pnl == null ? 'text-[var(--text-muted)]' : pnl < 0 ? 'text-rose-500' : pnl > 0 ? 'text-emerald-500' : 'text-[var(--text-primary)]'}`}>
                       {pnl == null ? 'neověřeno' : signedMoney(pnl)}
                     </b>
-                    {draftCut != null && pnl != null ? (
+                    {riskConfigSupported && currentCut != null && pnl != null ? (
                       <Progress
                         percent={progress}
                         tone={cut ? 'rose' : progress >= 80 ? 'amber' : 'emerald'}
@@ -579,19 +600,19 @@ export const LiveAccountRiskTable = ({
                     ) : null}
                   </td>
                   <td className={cellClass}>
-                    {draft ? (
+                    {draft && riskConfigSupported ? (
                       <select
                         aria-label={`Při dosažení limitu účtu ${row.accountId}`}
                         title={tightenActionTitle}
                         value={draft.onCut}
-                        disabled={disabled}
+                        disabled={writesDisabled}
                         onChange={event => setDraft(row.accountId, 'onCut', event.target.value as CopyFollowerCutAction)}
                         className={selectClass}
                       >
                         <option value="close-copy">Zavřít kopii</option>
                         <option value="let-run" disabled={tightenOnly && currentOnCut === 'close-copy'}>Nechat dojet</option>
                       </select>
-                    ) : <span className="text-[var(--text-muted)]">—</span>}
+                    ) : <span className="text-[var(--text-muted)]">{draft && !riskConfigSupported ? 'nepodporováno' : '—'}</span>}
                   </td>
                   <td className={cellClass}>
                     <b className={`block ${status.tone}`}>{status.title}</b>

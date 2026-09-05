@@ -42,6 +42,7 @@ interface SidebarProps {
     onLogout: () => void;
     onOpenProfile: () => void;
     onNavigate?: (page: string) => void;
+    onLiveIntent?: () => void;
     onLockedFeature?: (featureId: string) => void;
     /** Počet importovaných obchodů k doplnění — malý glass badge u Historie. */
     enrichCount?: number;
@@ -64,6 +65,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     onLogout,
     onOpenProfile,
     onNavigate,
+    onLiveIntent,
     onLockedFeature,
     enrichCount = 0,
     dashboardMode,
@@ -214,6 +216,9 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 {isFirstSecondary && <div className="h-2" />}
                                 <button
                                     onClick={() => handleNavClick(item.id)}
+                                    onPointerEnter={item.id === 'live' && !locked && !isActive ? onLiveIntent : undefined}
+                                    onFocus={item.id === 'live' && !locked && !isActive ? onLiveIntent : undefined}
+                                    onPointerDown={item.id === 'live' && !locked && !isActive ? onLiveIntent : undefined}
                                     className={`${navItemClass(isActive)} ${!isExpanded ? 'justify-center w-10 mx-auto rounded-lg' : 'w-[calc(100%_-_1rem)] px-6 mx-2 rounded-lg'} ${locked ? 'opacity-40 hover:opacity-60' : ''}`}
                                     title={!isExpanded ? item.label + (locked ? ' (uzamčeno)' : '') : ''}
                                 >

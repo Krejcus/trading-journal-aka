@@ -224,6 +224,8 @@ export interface BrokerOrderStateLookup {
 }
 
 export interface BrokerPort {
+  /** Optional local admission assertion; throws only before a copier write is attempted. */
+  assertDispatchAllowed?: (operation: 'place' | 'oco' | 'oso' | 'modify' | 'cancel') => void;
   readonly environment: BrokerEnvironment;
   /**
    * Router více OAuth spojení může za běhu přesunout kritickou roli na

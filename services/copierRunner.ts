@@ -1,3 +1,4 @@
+import { CopierDispatchRevokedError } from './exposureCappedBroker';
 import {
   isOpenOrderStatus,
   type BrokerEvent,
@@ -33,6 +34,7 @@ import {
   nextAction,
   resolveLookup,
   stuckEntries,
+  waiveOutboxEntry,
   type OutboxEntry,
 } from './copierOutbox';
 import { recoverLiquidationEntryByState } from './copierLiquidationRecovery';
@@ -57,6 +59,7 @@ import {
   resolveBracketLookup,
   secondBracketTag,
   stuckBracketEntries,
+  waiveBracketOutboxEntry,
   type BracketOutboxEntry,
 } from './copierBracketOutbox';
 import type { LeaderBracketPair } from './copierBracketCorrelator';
@@ -69,6 +72,7 @@ import {
   nextOsoAction,
   resolveOsoLookup,
   stuckOsoEntries,
+  waiveOsoOutboxEntry,
   type OsoOutboxEntry,
 } from './copierOsoOutbox';
 import type { LeaderOsoPair } from './copierOsoCorrelator';
@@ -477,7 +481,9 @@ async function processStagedLifecycleCommands(options: {
         const changes = { ...entry.changes };
         let live: BrokerOrder | undefined;
         try {
+          broker.assertDispatchAllowed?.('modify');
           const lookup = await broker.findOrderById(entry.accountId, entry.brokerOrderId);
+          broker.assertDispatchAllowed?.('modify');
           if (lookup.completeness !== 'authoritative') {
             cancelOutbox.set(entry.key, markCancelRefused(
               entry, 'modify neodeslán: stav objednávky není autoritativní', clock(),
@@ -486,6 +492,7 @@ async function processStagedLifecycleCommands(options: {
           }
           live = lookup.order;
         } catch (error) {
+          broker.assertDispatchAllowed?.('modify');
           cancelOutbox.set(entry.key, markCancelRefused(
             entry,
             `modify neodeslán: autoritativní stav nedostupný (${error instanceof Error ? error.message : String(error)})`,
@@ -529,11 +536,9 @@ async function processStagedLifecycleCommands(options: {
       entry = markCancelUnknown(entry, 'čeká na potvrzení order streamem', clock());
       cancelOutbox.set(entry.key, entry);
     } catch (error) {
-      cancelOutbox.set(entry.key, markCancelUnknown(
-        entry,
-        error instanceof Error ? error.message : String(error),
-        clock(),
-      ));
+      cancelOutbox.set(entry.key, error instanceof CopierDispatchRevokedError
+        ? waiveCancelEntry({ ...entry, neverSent: true }, error.message, clock())
+        : markCancelUnknown(entry, error instanceof Error ? error.message : String(error), clock()));
     }
   };
 
@@ -550,6 +555,15 @@ async function processStagedLifecycleCommands(options: {
     ));
     for (const { command } of stageItems) {
       if (!eligible.some(item => item.command.key === command.key)) {
+        const revoked = [...cancelOutbox.values()].find(entry => entry.leaderEventId === event.id
+          && entry.accountId === command.accountId && entry.status === 'waived' && entry.neverSent);
+        if (revoked) {
+          const entry = cancelOutbox.get(command.key)!;
+          cancelOutbox.set(command.key, waiveCancelEntry({ ...entry, neverSent: true }, revoked.reason!, clock()));
+          audit.push({ at: clock(), leaderEventId: event.id, kind: 'skipped',
+            accountId: command.accountId, key: command.key, reason: revoked.reason });
+          continue;
+        }
         allConfirmed = false;
         stageSuccess.set(`${command.accountId}:${stage}`, false);
       }
@@ -580,6 +594,12 @@ async function processStagedLifecycleCommands(options: {
     const currentStageSuccess = new Map<number, boolean>();
     for (const { command, entry: originalEntry } of eligible) {
       const entry = cancelOutbox.get(originalEntry.key) ?? originalEntry;
+      if (entry.status === 'waived') {
+        currentStageSuccess.set(command.accountId, false);
+        audit.push({ at: clock(), leaderEventId: event.id, kind: 'skipped',
+          accountId: entry.accountId, key: entry.key, reason: entry.reason });
+        continue;
+      }
       let resolved = entry;
       if (entry.status !== 'confirmed') {
         try {
@@ -908,11 +928,9 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
         return { entry, at };
       } catch (error) {
         const at = clock();
-        entry = markBracketUnknown(
-          entry,
-          error instanceof Error ? error.message : String(error),
-          at,
-        );
+        entry = error instanceof CopierDispatchRevokedError
+          ? waiveBracketOutboxEntry(entry, error.message, at)
+          : markBracketUnknown(entry, error instanceof Error ? error.message : String(error), at);
         return { entry, at };
       }
     },
@@ -943,6 +961,10 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
         key: entry.key, brokerOrderId: `${entry.firstBrokerOrderId},${entry.secondBrokerOrderId}`,
         reason: 'native-oco',
       });
+    } else if (entry.status === 'waived') {
+      resolvedKeys.push(entry.key);
+      audit.push({ at: result.at, leaderEventId: event.id, kind: 'skipped',
+        accountId: entry.request.accountId, key: entry.key, reason: entry.reason });
     } else if (entry.status === 'rejected') {
       metrics.rejected += 1;
       resolvedKeys.push(entry.key);
@@ -1126,7 +1148,9 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
       return { entry, at };
     } catch (error) {
       const at = clock();
-      return { entry: markOsoUnknown(entry, error instanceof Error ? error.message : String(error), at), at };
+      return { entry: error instanceof CopierDispatchRevokedError
+        ? waiveOsoOutboxEntry(entry, error.message, at)
+        : markOsoUnknown(entry, error instanceof Error ? error.message : String(error), at), at };
     }
   });
 
@@ -1150,6 +1174,10 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
       });
       audit.push({ at, leaderEventId: event.id, kind: 'dispatched', accountId: entry.request.accountId, key: entry.key,
         brokerOrderId: `${entry.entryBrokerOrderId},${entry.firstBrokerOrderId},${entry.secondBrokerOrderId}`, reason: 'native-oso' });
+    } else if (entry.status === 'waived') {
+      resolvedKeys.push(entry.key);
+      audit.push({ at, leaderEventId: event.id, kind: 'skipped',
+        accountId: entry.request.accountId, key: entry.key, reason: entry.reason });
     } else if (entry.status === 'rejected') {
       metrics.rejected += 1;
       resolvedKeys.push(entry.key);
@@ -1325,6 +1353,16 @@ export async function processLeaderEvent(
     // třífázový dispatch. Ostatní cancel/modify lifecycle zůstává na původní
     // cestě níže, aby oprava neměnila širší execution chování.
     const cascade = await planOsoModifyCascade({ event, group, modifications, osoOutbox, broker });
+    try {
+      broker.assertDispatchAllowed?.(isTerminalCancel ? 'cancel' : 'modify');
+    } catch (error) {
+      if (!(error instanceof CopierDispatchRevokedError)) throw error;
+      // A revoked parent never needs child reassertions. Let the ordinary
+      // write-ahead path durably waive the original commands below; a stale
+      // leader lookup failure must not fail-close a newly armed session.
+      cascade.commands = [];
+      cascade.error = undefined;
+    }
     if (cascade.error) {
       for (const command of modifications) {
         audit.push({
@@ -1424,8 +1462,11 @@ export async function processLeaderEvent(
           // právě zastaralý total pozici otočil. Bez odpovědi se neodesílá nic.
           let live: BrokerOrder | undefined;
           try {
+            broker.assertDispatchAllowed?.('modify');
             live = (await broker.findOrderById(entry.accountId, entry.brokerOrderId)).order;
+            broker.assertDispatchAllowed?.('modify');
           } catch (error) {
+            broker.assertDispatchAllowed?.('modify');
             cancelOutbox.set(entry.key, markCancelRefused(
               entry,
               `modify neodeslán: autoritativní stav nedostupný (${error instanceof Error ? error.message : String(error)})`,
@@ -1477,17 +1518,20 @@ export async function processLeaderEvent(
         }
         cancelOutbox.set(entry.key, markCancelUnknown(entry, 'čeká na potvrzení order streamem', clock()));
       } catch (error) {
-        cancelOutbox.set(entry.key, markCancelUnknown(
-          entry,
-          error instanceof Error ? error.message : String(error),
-          clock(),
-        ));
+        cancelOutbox.set(entry.key, error instanceof CopierDispatchRevokedError
+          ? waiveCancelEntry({ ...entry, neverSent: true }, error.message, clock())
+          : markCancelUnknown(entry, error instanceof Error ? error.message : String(error), clock()));
       }
     }));
 
     // HTTP/command ack není potvrzení zrušení. Ověříme stav objednávky.
     let allConfirmed = true;
     for (const entry of [...cancelOutbox.values()].filter(item => item.leaderEventId === event.id)) {
+      if (entry.status === 'waived') {
+        audit.push({ at: clock(), leaderEventId: event.id, kind: 'skipped',
+          accountId: entry.accountId, key: entry.key, reason: entry.reason });
+        continue;
+      }
       // Výpadek sítě nebo expirace tokenu uprostřed ověřování nesmí vyhodit
       // výjimku ven z cyklu: write-ahead zápis už posunul revizi ve storu,
       // ale serial processor si při chybě podrží tu starou — od té chvíle
@@ -1748,6 +1792,14 @@ export async function processLeaderEvent(
         // Nevíme, jestli objednávka dorazila. Retry by mohl založit druhý
         // obchod, takže tady končíme a osud se dohledá zvlášť.
         const failedAt = clock();
+        if (error instanceof CopierDispatchRevokedError) {
+          entry = waiveOutboxEntry(entry, error.message, failedAt);
+          return {
+            entry, resolvedKey: entry.key,
+            audit: { at: failedAt, leaderEventId: event.id, kind: 'skipped' as CopierAuditKind,
+              accountId: request.accountId, key: entry.key, reason: entry.reason },
+          };
+        }
         metrics.unknown += 1;
         entry = markUnknown(entry, error instanceof Error ? error.message : String(error), failedAt);
         return {

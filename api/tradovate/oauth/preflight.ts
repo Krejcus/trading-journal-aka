@@ -6,7 +6,7 @@ import {
   requireSupabaseUserId,
 } from '../../../server/tradovateOAuthStore.js';
 import { tradovateApiBaseUrl } from '../../../server/tradovateOAuth.js';
-import { loadTradovateAccountData } from '../../../server/tradovateAccountData.js';
+import { loadTradovateAccountData, TradovateAccountDataError } from '../../../server/tradovateAccountData.js';
 import {
   probeTradovateHistoricalSync,
   unavailableTradovateHistoricalSync,
@@ -49,6 +49,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ...result,
     });
   } catch (error) {
+    if (error instanceof TradovateAccountDataError && error.status === 429) {
+      const retryAfterMs = Math.max(1_000, error.retryAfterMs ?? 3_600_000);
+      res.setHeader('Retry-After', String(Math.ceil(retryAfterMs / 1_000)));
+      return res.status(429).json({ error: 'tradovate-rate-limited', retryAfterMs });
+    }
+    if (error instanceof TradovateAccountDataError && (error.status === 401 || error.status === 403)) {
+      return res.status(error.status).json({ error: 'tradovate-read-denied' });
+    }
     const message = error instanceof Error ? error.message : String(error);
     if (message === 'missing-auth-token' || message === 'invalid-auth-token') {
       return res.status(401).json({ error: message });
