@@ -160,6 +160,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník (nejnovější nahoře)
 
+### 2026-09-05 (Claude, rollout workera e018c3bb — snímky s reálným deadline)
+
+Mac byl 4. 9. večer restartován (všechny worktree v /private/tmp zanikly,
+`git worktree prune`), worker se přes launchd sám nastartoval 22:16 UTC a
+zůstal s `lastError` transport chyby z doby restartu. Na „nasaď“ (sobota):
+read-only reconcile → `mac-reinstall-safe.sh` z nového worktree na `main`
+`e018c3bb` (bundle `1fa7f7f92e020090…`) → reconcile čistý, DISARMED, flat.
+Bundle obsahuje 45 s deadline pro upload snímku a log `SNAPSHOT uploaded`;
+`snapshotHealth: ready` (CDP i cílový graf dostupné). První ostrý důkaz přijde
+s prvním vstupem/výstupem: očekávaný řádek `SNAPSHOT uploaded <symbol> <kind>
+(N kB, +M ms)` a obrázek v notifikaci nahrazující text přes stejný
+`collapseId`. Serverová část (validace deadline do 60 s) běží na Vercelu od
+bec78536.
+
 ### 2026-09-04 (Claude, main měl po day-lock merge 3 červené testy)
 
 Při deployi opravy snímků (bec78536) měla celá sada 3 pády, které na `main`
