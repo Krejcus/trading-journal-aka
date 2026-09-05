@@ -1167,6 +1167,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   let accountRiskPollTail: Promise<void> = Promise.resolve();
   const accountRiskLastRequestedAt = new Map<number, number>();
   const ACCOUNT_RISK_POLL_MS = 30_000;
+  /** VYPNUTO/shadow: limity propek a PnL účtů chceme vidět vždy, jen pomaleji. */
+  const ACCOUNT_RISK_IDLE_POLL_MS = 60_000;
   const ACCOUNT_RISK_STALE_MS = 90_000;
   const ACCOUNT_RISK_REQUEST_TIMEOUT_MS = 10_000;
   const restoredRiskLedger = restoredFollowerRiskLedger(runtime.state.safety);
@@ -3892,11 +3894,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     accountIds: readonly number[],
     force = false,
   ): void => {
-    if (stopped || !gate.armed) return;
+    // Čtení je read-only a limity propek musí být vidět i s vypnutou
+    // kopírkou (spec RISK_TAB §3.4); za ARM častěji, jinak pomaleji.
+    if (stopped || !gate.connected) return;
     const now = clock();
+    const interval = gate.armed ? ACCOUNT_RISK_POLL_MS : ACCOUNT_RISK_IDLE_POLL_MS;
     const requested = [...new Set(accountIds)].filter(accountId => {
       if (!Number.isSafeInteger(accountId) || accountId <= 0) return false;
-      return force || now - (accountRiskLastRequestedAt.get(accountId) ?? -Infinity) >= ACCOUNT_RISK_POLL_MS;
+      return force || now - (accountRiskLastRequestedAt.get(accountId) ?? -Infinity) >= interval;
     });
     if (requested.length === 0) return;
     const requestedSessionEndAt = currentDailyStats(now).sessionEndAt;

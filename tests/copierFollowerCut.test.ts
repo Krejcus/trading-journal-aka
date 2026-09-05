@@ -531,6 +531,59 @@ describe('CopierRuntimeController — follower account cuts', () => {
     }
   });
 
+  it('limity propek se čtou i ve VYPNUTO: připojený neARMovaný worker po heartbeatu doplní accountRisk', async () => {
+    const time = manualClock();
+    const broker = createMockBroker({
+      clock: time.clock,
+      behavior: () => ({ kind: 'fill', price: 20_000 }),
+    });
+    const provider = installRiskProvider(broker, accountId => riskSnapshot({
+      accountId,
+      at: time.now(),
+      realizedPnlUsd: -40,
+      netLiq: 50_000,
+      minNetLiq: 47_500,
+    }));
+    const runtime = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: riskGroup(),
+      clock: time.clock,
+    });
+    try {
+      broker.setConnected(true);
+      await runtime.waitForIdle();
+      expect(runtime.status().armed).toBe(false);
+
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await runtime.waitForIdle();
+
+      expect(provider).toHaveBeenCalled();
+      expect(accountRisk(runtime, 200)).toMatchObject({
+        accountId: 200,
+        realizedPnlUsd: -40,
+        propLimitUsd: 2_500,
+      });
+      // Nic se nevyřazuje ani neobchoduje — čtení je jen ke čtení.
+      expect(followerCut(runtime)).toBeUndefined();
+      expect(broker.placedRequests()).toHaveLength(0);
+      expect(broker.liquidateRequests()).toHaveLength(0);
+
+      // Ve VYPNUTO se poluje pomaleji než za ARM: do 60 s se nový dotaz neposílá.
+      const calls = provider.mock.calls.length;
+      time.advance(45_000);
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await runtime.waitForIdle();
+      expect(provider.mock.calls.length).toBe(calls);
+      time.advance(20_000);
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await runtime.waitForIdle();
+      expect(provider.mock.calls.length).toBeGreaterThan(calls);
+    } finally {
+      runtime.stop();
+    }
+  });
+
   it('ledger cut s let-run ponechá kopii dojet, zablokuje další entry a neomezí druhého followera', async () => {
     const time = manualClock();
     const broker = createMockBroker({

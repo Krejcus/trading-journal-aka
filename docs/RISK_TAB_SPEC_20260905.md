@@ -159,8 +159,10 @@ Tradovate: `GET /cashBalance/deps?masterid=`, `GET /accountRiskStatus/deps?maste
 
 ### 3.2 Poll
 
-Za ARM (i shadow) každých 30 s pro leader + followery; navíc ihned po každém
-vlastním fillu na daném účtu. Výsledek do `state.safety.accountRisk[accountId]`
+Kdykoli je worker připojený k brokeru: za ARM (i shadow) každých 30 s, ve
+VYPNUTO každých 60 s (limity propek a PnL účtů musí být vidět i s vypnutou
+kopírkou; čtení je read-only); navíc ihned po každém vlastním fillu na daném
+účtu. Výsledek do `state.safety.accountRisk[accountId]`
 (+ `verifiedAt = at`). Snapshot starší než 90 s = **neověřeno** (status to hlásí,
 UI ukazuje amber „neověřeno"). Chyba pollu = `lastError` se NEnastavuje (není to
 fail-closed stav copieru), jen `accountRisk[id].error`.
