@@ -243,6 +243,10 @@ DB retry. Platí pro grid i tabulku (obě čtou `getScreenshot`). Testy služby
 `…/exit-*.png`, obchody jen se vstupem `entry-*.png`, GET 200 image/png.
 Při plné sadě jednou spadl `tradovateCopierDevice` na 5s timeoutu generování
 RSA klíče pod zátěží, samostatně prošel.
+Doplněk: copier náhled (TradingView auto-foto) se na kartě i v tabulce ořezává
+na 80 % šířky (`object-[80%_50%]`, po zkoušce úplného pravého okraje); ruční screenshot zůstává
+na středu, protože kompozici určil uživatel. Ověřeno: computed
+`object-position` 80% 50% u copier náhledů, 50% 50% u ručních.
 
 ### 2026-09-06 (Claude, LIVE detail skupiny — vodorovný posuvník)
 

@@ -659,6 +659,14 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
       || undefined;
   };
 
+  // Náhled pochází z copier snapshotu (TradingView auto-foto) — ne z ručního screenshotu.
+  // Takový obrázek ořezáváme na 80 % šířky (poslední cenová akce bez celé cenové osy); ruční screenshot má
+  // kompozici od uživatele a nechává se na středu.
+  const isCopierThumb = (trade: Trade): boolean => {
+    const id = String(trade.id);
+    return !screenshotCache.get(id)?.screenshot && !trade.screenshot && copierThumbs.has(id);
+  };
+
   const getScreenshots = (trade: Trade): string[] | undefined => {
     const cached = screenshotCache.get(String(trade.id))?.screenshots;
     if (cached && cached.length > 0) return cached;
@@ -1212,7 +1220,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         onLoad={() => handleImageLoad(String(trade.id))}
                         onError={() => handleImageError(String(trade.id))}
                         loading="lazy"
-                        className={`w-full h-full object-cover transition-opacity duration-300 group-hover/img:scale-105 ${isImageLoaded ? 'opacity-100' : 'opacity-0'}`}
+                        className={`w-full h-full object-cover ${isCopierThumb(trade) ? 'object-[80%_50%]' : ''} transition-opacity duration-300 group-hover/img:scale-105 ${isImageLoaded ? 'opacity-100' : 'opacity-0'}`}
                       />
 
                       <div className={`absolute inset-0 bg-gradient-to-r ${theme !== 'light' ? 'from-[var(--bg-card)] via-transparent' : 'from-white via-transparent'} to-transparent md:block hidden z-20`}></div>
@@ -1324,7 +1332,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                                   onLoad={() => handleImageLoad(String(trade.id))}
                                   onError={() => handleImageError(String(trade.id))}
                                   loading="lazy"
-                                  className={`w-full h-full object-cover group-hover:opacity-100 transition-all duration-700 animate-in fade-in ${loadedImages.has(String(trade.id)) ? 'opacity-60 scale-100' : 'opacity-0 scale-90'}`}
+                                  className={`w-full h-full object-cover ${isCopierThumb(trade) ? 'object-[80%_50%]' : ''} group-hover:opacity-100 transition-all duration-700 animate-in fade-in ${loadedImages.has(String(trade.id)) ? 'opacity-60 scale-100' : 'opacity-0 scale-90'}`}
                                 />
                               )}
                             </>
