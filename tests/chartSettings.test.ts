@@ -33,6 +33,15 @@ describe('model nastavení grafu', () => {
     expect(merged.trading.executionMarkerSize).toBe('large');
     expect(merged.trading.quickOrderButton).toBe(true);
     expect(merged.trading.positionBoxes).toBe(true);
+    expect(merged.trading.orderPriceLabels).toBe(true);
+  });
+
+  it.each([true, false])('retains hidden order prices independently of boxes=%s after a JSON round trip', positionBoxes => {
+    const saved = defaultChartSettings(false);
+    saved.trading.positionBoxes = positionBoxes;
+    saved.trading.orderPriceLabels = false;
+    const restored = mergeChartSettings(JSON.parse(JSON.stringify(saved)), false);
+    expect(restored.trading).toMatchObject({ positionBoxes, orderPriceLabels: false, orderLines: true });
   });
 
   it('poškozené nebo chybějící nastavení vrátí výchozí', () => {

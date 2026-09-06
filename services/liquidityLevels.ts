@@ -1,4 +1,4 @@
-import type { LevelsIndicatorSettings } from '../components/ChartIndicatorSettingsDialog';
+import type { LevelsIndicatorSettings } from './chartIndicatorSettings';
 import type { IndicatorPoint, MarketCandle } from './marketData';
 
 export type LiquidityLineStyle = 'solid' | 'dashed' | 'dotted';

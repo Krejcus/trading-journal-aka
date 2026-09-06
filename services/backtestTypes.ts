@@ -222,8 +222,6 @@ export interface BacktestOrderEvent {
 export interface BacktestRuntimeState {
   /** Greatest revealed cursor (UTC seconds); 0 = fresh, missing = unknown legacy history. */
   maxRevealedTime?: number;
-  /** Research observations are not trades and never change account P&L. */
-  researchJournal?: import('./backtestResearchJournal').BacktestResearchJournal;
   balance: number;
   equity: number;
   realizedPnl: number;

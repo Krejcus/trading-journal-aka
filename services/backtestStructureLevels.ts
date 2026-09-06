@@ -1,5 +1,5 @@
 import { backtestContiguousWindow, evaluateBacktestBracket, type BacktestExitModel } from './backtestExecutionModel';
-import { calculateMarketStructure, type MarketCandle, type MarketStructureEvent } from './marketData';
+import { calculateMarketStructure, type MarketCandle, type MarketStructureEvent } from './marketDataCalculations';
 
 /**
  * Struktura a tři SL úrovně ze stejného zdroje, který kreslí replay graf.

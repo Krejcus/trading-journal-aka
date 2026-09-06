@@ -517,8 +517,13 @@ export const ChartSettingsDialog: React.FC<ChartSettingsDialogProps> = ({
                     onChange={positionBoxes => update('trading', { positionBoxes })}
                     label="Zobrazit automatický position box"
                   />
+                  <Check
+                    checked={trading.orderPriceLabels}
+                    onChange={orderPriceLabels => update('trading', { orderPriceLabels })}
+                    label="Zobrazit ceny obchodů na cenové ose"
+                  />
                   <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                    Blesk okamžitě vytvoří Market, Limit nebo Stop objednávku podle position boxu. Box lze skrýt a ponechat jen fill markery.
+                    Blesk okamžitě vytvoří Market, Limit nebo Stop objednávku podle position boxu. Box a ceny vstupu, SL a TP na ose lze skrýt samostatně.
                   </p>
                 </Section>
 

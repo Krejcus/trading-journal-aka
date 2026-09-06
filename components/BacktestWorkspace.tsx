@@ -1,9 +1,7 @@
-import BacktestResearchPanel from './BacktestResearchPanel';
-import { appendBacktestResearch, captureBacktestResearchContext, reviseBacktestResearch, type BacktestResearchDraft } from '../services/backtestResearchJournal';
 import BacktestEvidenceDialog from './BacktestEvidenceDialog';
 import { buildBacktestStoreEvidence } from '../services/backtestStoreEvidence';
 import { backtestResearchRecordedAt } from '../services/backtestResearchClock';
-import { planBacktestAnalyticsRefresh, type BacktestAnalyticsRefreshCandidate } from '../services/backtestAnalyticsRefresh';
+import { type BacktestAnalyticsRefreshCandidate } from '../services/backtestAnalyticsRefresh';
 import { buildBacktestTradeRecalculationUpdates } from '../services/backtestTradeRecalculation';
 import type { BacktestTagSuggestions } from '../services/backtestTagCatalog';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -25,9 +23,12 @@ import {
   updatePositionBracket,
 } from '../services/backtestEngine';
 import { createBacktestCandleStore } from '../services/backtestCandleStore';
-import { backtestClosedTradeToTrade } from '../services/backtestIntel';
+import { createBacktestAnalyticsWorkerClient } from '../services/backtestAnalyticsWorkerClient';
+import { createBacktestClosedTradeEmitter } from '../services/backtestClosedTradeEmission';
+import type { BacktestClosedTradeIdentity } from '../services/backtestTradeOutbox';
 import {
   createBacktestLedgerCursor,
+  getBacktestRunOwnerId,
   getBacktestCloudRevision,
   BacktestRunConflictError,
   BacktestRunSyncError,
@@ -37,6 +38,7 @@ import {
   syncBacktestRunToCloud,
 } from '../services/backtestRunService';
 import type {
+  BacktestClosedTrade,
   BacktestOrderType,
   BacktestRun,
   BacktestRuntimeState,
@@ -95,6 +97,7 @@ interface Props {
   isDark: boolean;
   onClose: (run: BacktestRun) => void;
   onTradeClosed?: (trade: Trade) => Promise<void>;
+  onResolveClosedTrades?: (identities: readonly BacktestClosedTradeIdentity[], signal: AbortSignal) => Promise<{ durableIds: ReadonlySet<string> }>;
   onTradeAnalyticsRefresh?: (candidates: BacktestAnalyticsRefreshCandidate[]) => Promise<void>;
   analyticsSyncState?: { pending: number; error?: string | null };
   journalSyncState?: { pending: number; error?: string | null };
@@ -108,6 +111,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
   isDark,
   onClose,
   onTradeClosed,
+  onResolveClosedTrades,
   onReloadRun,
   onTradeAnalyticsRefresh,
   analyticsSyncState,
@@ -120,12 +124,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     `backtest:${initialRun.id}`, initialRun.workspaceState?.appearance, inheritGlobalAppearance,
   ));
   const [evidenceOpen, setEvidenceOpen] = useState(false);
-  const [researchOpen, setResearchOpen] = useState(false);
-  const researchCaptureRef = useRef<(() => Promise<string>) | null>(null);
-  const registerResearchCapture = useCallback((capture: () => Promise<string>) => {
-    researchCaptureRef.current = capture;
-    return () => { if (researchCaptureRef.current === capture) researchCaptureRef.current = null; };
-  }, []);
+  const [sessionInfoOpen, setSessionInfoOpen] = useState(false);
   const [appearanceReady, setAppearanceReady] = useState(false);
   useLayoutEffect(() => {
     appearanceSession.activate();
@@ -174,8 +173,30 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
   const lastCloudSyncRef = useRef(cloudDirtyRef.current ? 0 : Date.now());
   const ledgerCursorRef = useRef(createBacktestLedgerCursor());
   const saveChainRef = useRef<Promise<boolean>>(Promise.resolve(true));
-  const emittedTradesRef = useRef(new Set<string>());
-  const emittingTradesRef = useRef(new Map<string, Promise<void>>());
+  const workerRef = useRef<ReturnType<typeof createBacktestAnalyticsWorkerClient> | null>(null);
+  const sessionGenerationRef = useRef(0);
+  const sessionAliveRef = useRef(true);
+  type ClosedTradeJob = { closed: BacktestClosedTrade; runtime: BacktestRuntimeState; config: BacktestRun['config'] };
+  const emitterRef = useRef<ReturnType<typeof createBacktestClosedTradeEmitter<ClosedTradeJob>> | null>(null);
+  const emissionCallbacksRef = useRef({ onTradeClosed, onResolveClosedTrades });
+  emissionCallbacksRef.current = { onTradeClosed, onResolveClosedTrades };
+  const analyticsWorker = useCallback(() => {
+    if (!sessionAliveRef.current) throw new DOMException('Session byla zavřena.', 'AbortError');
+    const worker = workerRef.current ??= createBacktestAnalyticsWorkerClient({ scopeKey: `${getBacktestRunOwnerId(initialRun)}:${initialRun.id}` });
+    const snapshot = candleStore.getSnapshot();
+    worker.setSources({ candlesByInstrument: snapshot.candles,
+      htfCandlesByInstrument: Object.fromEntries(Object.entries(snapshot.history).map(([root, schemas]) => [root, schemas?.['ohlcv-1h']])) });
+    return worker;
+  }, [candleStore, initialRun]);
+  useEffect(() => {
+    sessionAliveRef.current = true;
+    return () => {
+      sessionAliveRef.current = false;
+      sessionGenerationRef.current++;
+      emitterRef.current?.dispose(); emitterRef.current = null;
+      workerRef.current?.dispose(); workerRef.current = null;
+    };
+  }, []);
   const lastProcessedCursorRef = useRef<number | null>(initialRun.runtimeState.replay.cursorTime);
   const lastRuntimeRenderRef = useRef(0);
   const trailingRenderRef = useRef<number | null>(null);
@@ -263,6 +284,10 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
           if (reason instanceof BacktestRunConflictError) { conflictRef.current = true; setCloudConflict(true); }
         }
       }
+      // Local persistence clones the exact snapshot but changes only metadata.
+      // Keep its immutable arrays so checkpoint ACKs do not invalidate chart/worker caches.
+      // Cloud responses retain their own data, including any server normalization.
+      if (!wantsCloud) saved = { ...saved, config: snapshot.config, workspaceState: snapshot.workspaceState, runtimeState: snapshot.runtimeState };
       // Wall clocks can tie or move backwards; only this exact mutation generation may replace the draft.
       if (mutationGenerationRef.current === snapshotGeneration) {
         runRef.current = saved;
@@ -313,6 +338,8 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
   const syncCandles = useCallback(() => {
     const snapshot = candleStore.getSnapshot();
     loadedUntilRef.current = snapshot.loadedUntilMs;
+    workerRef.current?.setSources({ candlesByInstrument: snapshot.candles,
+      htfCandlesByInstrument: Object.fromEntries(Object.entries(snapshot.history).map(([root, schemas]) => [root, schemas?.['ohlcv-1h']])) });
     setCandlesByRoot(snapshot.candles);
     setHistoryCandlesByRoot(snapshot.history);
   }, [candleStore]);
@@ -401,35 +428,37 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
   }, [candlesByRoot, loading, error, loadSegment, maybePrefetch, run.endAt, run.executionSymbol, run.runtimeState.replay]);
 
   const emitClosedTrades = useCallback(async (runtime: BacktestRuntimeState) => {
-    if (!onTradeClosed) return;
+    if (!emissionCallbacksRef.current.onTradeClosed || !sessionAliveRef.current || restoringRef.current) return;
     const current = runRef.current;
-    const snapshot = candleStore.getSnapshot();
-    const tasks = runtime.closedTrades.filter(closed => !emittedTradesRef.current.has(closed.id)).map(closed => {
-      const active = emittingTradesRef.current.get(closed.id);
-      if (active) return active;
-      const task = Promise.resolve().then(() => {
-        return onTradeClosed({ ...backtestClosedTradeToTrade(closed, {
-          accountId: current.accountId, candles: snapshot.candles[closed.instrument] ?? [],
-          htfCandles: snapshot.history[closed.instrument]?.['ohlcv-1h'],
-          orderEvents: runtime.orderEvents ?? [], timeZone: current.config.timezone,
-          flatTimeZone: current.config.flatTimeZone, flatByMinute: current.config.flatByMinute,
-          strategy: current.config.strategy,
-          researchBinding: current.config.researchBinding,
-          replayHorizonTime: runtime.replay.cursorTime ?? closed.exitTime,
-          slippageTicks: current.config.slippageTicks[closed.instrument],
-        }), recordedAt: backtestResearchRecordedAt(closed, runtime.orderEvents ?? []) ?? null });
-      }).then(() => {
-        // The parent resolves only once the original snapshot is durable locally.
-        emittedTradesRef.current.add(closed.id);
-      }).finally(() => emittingTradesRef.current.delete(closed.id));
-      emittingTradesRef.current.set(closed.id, task);
-      return task;
-    });
-    const results = await Promise.allSettled(tasks);
-    const failed = results.find(result => result.status === 'rejected');
-    setJournalQueueError(failed?.status === 'rejected'
-      ? `Zápis obchodu čeká na opakování. ${failed.reason instanceof Error ? failed.reason.message : String(failed.reason)}` : null);
-  }, [candleStore, onTradeClosed]);
+    if (!emitterRef.current) {
+      const generation = sessionGenerationRef.current;
+      const isCurrent = () => sessionAliveRef.current && !restoringRef.current && sessionGenerationRef.current === generation;
+      emitterRef.current = createBacktestClosedTradeEmitter<ClosedTradeJob>({
+        ownerId: getBacktestRunOwnerId(current) ?? '', runId: current.id, accountId: current.accountId, isCurrent,
+        identity: ({ closed }) => ({ tradeId: closed.id, runId: closed.runId, accountId: current.accountId, instrument: closed.instrument }),
+        preflight: (identities, signal) => emissionCallbacksRef.current.onResolveClosedTrades?.(identities, signal)
+          ?? Promise.resolve({ durableIds: new Set<string>() }),
+        mapTrade: async ({ closed, runtime: captured, config }, signal) => {
+          const mapped = await analyticsWorker().mapClosedTrade(closed, {
+            accountId: current.accountId, orderEvents: captured.orderEvents ?? [], timeZone: config.timezone,
+            flatTimeZone: config.flatTimeZone, flatByMinute: config.flatByMinute, strategy: config.strategy,
+            researchBinding: config.researchBinding, replayHorizonTime: captured.replay.cursorTime ?? closed.exitTime,
+            slippageTicks: config.slippageTicks[closed.instrument],
+          }, { signal });
+          return { ...mapped, recordedAt: backtestResearchRecordedAt(closed, captured.orderEvents ?? []) ?? null };
+        },
+        persist: trade => {
+          if (!isCurrent() || !emissionCallbacksRef.current.onTradeClosed) throw new DOMException('Session byla změněna.', 'AbortError');
+          return emissionCallbacksRef.current.onTradeClosed(trade);
+        },
+      });
+    }
+    const generation = sessionGenerationRef.current;
+    const result = await emitterRef.current.emit(runtime.closedTrades.map(closed => ({ closed, runtime, config: current.config })));
+    if (sessionAliveRef.current && generation === sessionGenerationRef.current && !result.cancelled) {
+      setJournalQueueError(result.error ? `Zápis obchodu čeká na opakování. ${result.error}` : null);
+    }
+  }, [analyticsWorker]);
 
   // Recover closed rows after reopening, and retry failed local enqueue operations.
   useEffect(() => {
@@ -441,11 +470,16 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
 
   // Expensive analytics run in bounded batches after UI work. Local durable ACKs
   // advance the planning stamps even while cloud sync is unavailable.
-  const refreshInputsRef = useRef({ journalTrades, analyticsPreview, onTradeAnalyticsRefresh });
-  refreshInputsRef.current = { journalTrades, analyticsPreview, onTradeAnalyticsRefresh };
+  const sessionJournalTrades = useMemo(() => {
+    const ids = new Set(run.runtimeState.closedTrades.map(trade => trade.id));
+    return journalTrades.filter(trade => trade.accountId === run.accountId && (trade.backtestRunId === run.id || ids.has(String(trade.id))));
+  }, [journalTrades, run.accountId, run.id, run.runtimeState.closedTrades]);
+  const refreshInputsRef = useRef({ journalTrades: sessionJournalTrades, analyticsPreview, onTradeAnalyticsRefresh });
+  refreshInputsRef.current = { journalTrades: sessionJournalTrades, analyticsPreview, onTradeAnalyticsRefresh };
   const refreshBusyRef = useRef(false);
   useEffect(() => {
     let disposed = false;
+    const controller = new AbortController();
     const refresh = async () => {
       const inputs = refreshInputsRef.current;
       const current = runRef.current;
@@ -453,37 +487,38 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
       if (disposed || refreshBusyRef.current || restoringRef.current || loading || !inputs.onTradeAnalyticsRefresh || horizon === null) return;
       refreshBusyRef.current = true;
       try {
-        const snapshot = candleStore.getSnapshot();
+        const generation = sessionGenerationRef.current;
         const trades = inputs.journalTrades.map(trade => {
           const preview = inputs.analyticsPreview[trade.id];
           return preview && preview.stamp.horizonTime <= horizon
             ? { ...trade, backtestAnalyticsRefresh: preview.stamp } : trade;
         });
-        const candidates = planBacktestAnalyticsRefresh({ trades,
-          closedTrades: [...current.runtimeState.closedTrades].sort((a, b) => (trades.find(trade => trade.id === a.id)?.backtestAnalyticsRefresh?.horizonTime ?? -Infinity) - (trades.find(trade => trade.id === b.id)?.backtestAnalyticsRefresh?.horizonTime ?? -Infinity)),
-          candlesByInstrument: snapshot.candles,
-          htfCandlesByInstrument: Object.fromEntries(Object.entries(snapshot.history).map(([root, schemas]) => [root, schemas?.['ohlcv-1h']])),
+        const candidates = await analyticsWorker().plan({ trades,
+          closedTrades: current.runtimeState.closedTrades,
           replayHorizonTime: horizon, slippageTicks: current.config.slippageTicks,
           mappingOptions: { accountId: current.accountId, orderEvents: current.runtimeState.orderEvents ?? [],
             timeZone: current.config.timezone, flatTimeZone: current.config.flatTimeZone,
             flatByMinute: current.config.flatByMinute, strategy: current.config.strategy }, maxTrades: 4,
-        });
-        if (!candidates.length) return;
+        }, { signal: controller.signal });
+        if (!candidates.length || disposed || restoringRef.current || generation !== sessionGenerationRef.current
+          || (runRef.current.runtimeState.replay.cursorTime ?? -Infinity) < horizon) return;
         await inputs.onTradeAnalyticsRefresh(candidates);
-        if (!disposed) {
+        if (!disposed && !restoringRef.current && generation === sessionGenerationRef.current
+          && (runRef.current.runtimeState.replay.cursorTime ?? -Infinity) >= horizon) {
           setAnalyticsPreview(previous => ({ ...previous, ...Object.fromEntries(candidates.map(item => [item.tradeId, item])) }));
           setAnalyticsQueueError(null);
         }
       } catch (reason) {
+        if (reason instanceof Error && reason.name === 'AbortError') return;
         if (!disposed) setAnalyticsQueueError(reason instanceof Error ? reason.message : 'Dopočet analýz čeká na opakování.');
       } finally { refreshBusyRef.current = false; }
     };
     const first = window.setTimeout(() => void refresh(), 250);
     const timer = window.setInterval(() => void refresh(), 2_000);
-    return () => { disposed = true; window.clearTimeout(first); window.clearInterval(timer); };
-  }, [candleStore, loading]);
+    return () => { disposed = true; controller.abort(); window.clearTimeout(first); window.clearInterval(timer); };
+  }, [analyticsWorker, loading]);
 
-  const revealedJournalTrades = useMemo(() => journalTrades.map(trade => {
+  const revealedJournalTrades = useMemo(() => sessionJournalTrades.map(trade => {
     const preview = analyticsPreview[trade.id];
     const horizon = run.runtimeState.replay.cursorTime;
     if (preview && horizon !== null && preview.stamp.horizonTime <= horizon) {
@@ -496,7 +531,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         excursionAvailable: false, excursionComplete: false, executionPathComplete: false };
     }
     return trade;
-  }), [journalTrades, analyticsPreview, run.id, run.runtimeState.replay.cursorTime]);
+  }), [sessionJournalTrades, analyticsPreview, run.id, run.runtimeState.replay.cursorTime]);
 
   const handleReplayChange = useCallback((replay: ChartReplayState) => {
     if (restoringRef.current) return;
@@ -841,16 +876,14 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     [run.runtimeState],
   );
 
-  const recalculateTrade = useCallback((tradeId: string): Trade => {
+  const recalculateTrade = useCallback(async (tradeId: string): Promise<Trade> => {
     const current = runRef.current;
     const closed = current.runtimeState.closedTrades.find(candidate => candidate.id === tradeId);
     if (!closed) throw new Error('Původní replay obchod už v této session není dostupný.');
     const candles = candlesByRoot[closed.instrument] ?? [];
     if (!candles.length) throw new Error(`Pro ${closed.instrument} nejsou načtené replay svíčky.`);
-    return backtestClosedTradeToTrade(closed, {
+    return analyticsWorker().mapClosedTrade(closed, {
       accountId: current.accountId,
-      candles,
-      htfCandles: historyCandlesByRoot[closed.instrument]?.['ohlcv-1h'],
       orderEvents: current.runtimeState.orderEvents ?? [],
       timeZone: current.config.timezone,
       flatTimeZone: current.config.flatTimeZone,
@@ -860,35 +893,12 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
       replayHorizonTime: current.runtimeState.replay.cursorTime ?? closed.exitTime,
       slippageTicks: current.config.slippageTicks[closed.instrument],
     });
-  }, [candlesByRoot, historyCandlesByRoot]);
+  }, [analyticsWorker, candlesByRoot]);
 
   const loadEvidence = useCallback(() => {
     const current = runRef.current;
     return buildBacktestStoreEvidence({ snapshot: candleStore.getSnapshot(), run: current, replayHorizonTime: current.runtimeState.replay.cursorTime });
   }, [candleStore]);
-
-  const researchContext = useCallback(() => {
-    const current = runRef.current;
-    return captureBacktestResearchContext({ runId: current.id, instrument: current.executionSymbol,
-      runtime: current.runtimeState, candles: candleStore.getSnapshot().candles[current.executionSymbol] ?? [],
-      runCompleted: current.status === 'completed' });
-  }, [candleStore]);
-  const saveResearch = useCallback(async (draft: BacktestResearchDraft, operation: { id: string; recordedAt: number }, edit?: { id: string; expectedRevisionId: string; archived?: boolean }) => {
-    if (restoringRef.current || conflictRef.current) throw new Error('Nejdřív vyřeš konflikt session. Rozepsaný text zůstává otevřený.');
-    const current = runRef.current;
-    const context = researchContext();
-    const result = edit ? reviseBacktestResearch({ journal: current.runtimeState.researchJournal!,
-      id: edit.id, expectedRevisionId: edit.expectedRevisionId, patch: { title: draft.title, text: draft.text, tags: draft.tags, action: draft.action, archived: edit.archived },
-      context, recordedAt: operation.recordedAt, opId: operation.id })
-      : appendBacktestResearch(current.runtimeState.researchJournal, draft, context, operation.recordedAt, operation.id);
-    updateRun(value => ({ ...value, runtimeState: { ...value.runtimeState, researchJournal: result.journal }, updatedAt: Date.now() }));
-    const localSaved = await flush({ cloud: true });
-    return { localSaved, cloudSaved: localSaved && !cloudDirtyRef.current && !conflictRef.current };
-  }, [flush, researchContext, updateRun]);
-  const captureResearch = useCallback(async () => {
-    if (!researchCaptureRef.current) throw new Error('Graf ještě není připravený.');
-    return researchCaptureRef.current();
-  }, []);
 
   // Množství drží workspace, ne jen obchodní panel: objednávka z pravého kliku
   // do grafu musí použít přesně to číslo, které uživatel vidí vedle typu.
@@ -915,9 +925,8 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     onReplayChange: handleReplayChange,
     onWorkspaceChange: handleWorkspaceChange,
     registerWorkspaceCheckpoint,
-    registerResearchCapture,
     maxRevealedTime: run.runtimeState.maxRevealedTime,
-    pauseReplayForDialog: researchOpen || evidenceOpen,
+    pauseReplayForDialog: evidenceOpen || sessionInfoOpen,
     onSaveWorkspace: async () => ({ localSaved: await flush({ cloud: true }), cloudSaved: !cloudDirtyRef.current && !conflictRef.current }),
     onQuickOrder: ({ drawing, candle, instrument }) => executeQuickOrder(drawing, candle, instrument),
     chartOrderQuantity: orderQuantity,
@@ -949,9 +958,13 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         onCancel={cancelOrder}
         onClosePosition={closePosition}
         onChangeBracket={changeBracket}
+        onOpenSessionInfo={() => {
+          updateRun(current => ({ ...current, runtimeState: { ...current.runtimeState, replay: { ...current.runtimeState.replay, playing: false } } }));
+          setSessionInfoOpen(true);
+        }}
       />
     ),
-  }), [addPositionBracketLine, candleStore, ensureReplayData, candlesByRoot, cancelOrder, cancelOrderLine, changeBracket, changeOrderLine, closePosition, executeOrder, executeQuickOrder, flush, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, isDark, revealedJournalTrades, tagSuggestions, loadOlderHistory, managedBoxes, onTradeReviewSave, orderLines, orderQuantity, recalculateTrade, registerResearchCapture, registerWorkspaceCheckpoint, researchOpen, evidenceOpen, run.config.instruments, run.endAt, run.executionSymbol, run.id, run.runtimeState, run.startAt, run.workspaceState]);
+  }), [addPositionBracketLine, candleStore, ensureReplayData, candlesByRoot, cancelOrder, cancelOrderLine, changeBracket, changeOrderLine, closePosition, executeOrder, executeQuickOrder, flush, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, isDark, revealedJournalTrades, tagSuggestions, loadOlderHistory, managedBoxes, onTradeReviewSave, orderLines, orderQuantity, recalculateTrade, registerWorkspaceCheckpoint, evidenceOpen, sessionInfoOpen, updateRun, run.config.instruments, run.endAt, run.executionSymbol, run.id, run.runtimeState, run.startAt, run.workspaceState]);
 
   const syntheticTrade = useMemo<Trade>(() => ({
     id: `backtest-${run.id}`,
@@ -984,6 +997,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     }));
     await emitClosedTrades(runRef.current.runtimeState);
     if (await flush({ cloud: true })) onClose(runRef.current);
+    else setSessionInfoOpen(true);
   }, [emitClosedTrades, flush, onClose, updateRun]);
 
   const restoreCloud = useCallback(async () => {
@@ -994,6 +1008,9 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
     }
     updateRun(current => ({ ...current, runtimeState: { ...current.runtimeState, replay: { ...current.runtimeState.replay, playing: false } }, updatedAt: Date.now() }));
     restoringRef.current = true;
+    sessionGenerationRef.current++;
+    emitterRef.current?.dispose(); emitterRef.current = null;
+    workerRef.current?.stop();
     setRestoring(true);
     try {
       if (!await flush()) return;
@@ -1023,22 +1040,30 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
   return (
     <>
       {restoring && <div className="fixed inset-0 z-[600] flex items-center justify-center bg-black/60 text-white" role="status">Uchovávám lokální kopii a načítám cloud…</div>}
-      <div className="fixed right-4 top-14 z-[550] max-w-md rounded-lg border border-slate-500/30 bg-slate-950/90 px-3 py-2 text-[11px] text-slate-200 shadow-lg" role="status">
-        <p>{saving ? 'Ukládám session…' : localSaveError ? 'Lokální uložení selhalo' : 'Průběžné ukládání do tohoto zařízení'}</p>
-        {localSaveError && <p className="text-rose-400">{localSaveError}</p>}
-        {cloudSaveError && <p className="mt-1 text-amber-400">{cloudSaveError}</p>}
-        {journalQueueError && <p className="mt-1 text-rose-400">{journalQueueError}</p>}
-        <button className="pointer-events-auto mt-1 text-violet-400 underline" onClick={() => { updateRun(current => ({ ...current, runtimeState: { ...current.runtimeState, replay: { ...current.runtimeState.replay, playing: false } } })); setEvidenceOpen(true); }}>Kvalita dat a exekuce</button>
-        <button className="pointer-events-auto ml-3 mt-1 text-violet-400 underline" onClick={() => { updateRun(current => ({ ...current, runtimeState: { ...current.runtimeState, replay: { ...current.runtimeState.replay, playing: false } } })); setResearchOpen(true); }}>Rozhodovací deník</button>
-        {run.config.researchBinding && <details className="mt-2"><summary className="cursor-pointer text-violet-300">Pravidla session · {run.config.researchBinding.role === 'validation' ? 'plánované ověření' : 'vývoj'}</summary><p className="mt-1 whitespace-pre-wrap">{run.config.researchBinding.definition.rule}</p><p className="mt-1">Vyvrácení: {run.config.researchBinding.definition.falsification}</p><p className="mt-1 break-all text-slate-400">Verze {run.config.researchBinding.revisionId} · {run.config.researchBinding.revisionHash}</p><p className="mt-1 text-amber-400">{run.config.researchBinding.exposureAtBinding === 'already-observed' ? 'Toto období už bylo pozorované.' : 'Úplná nepozorovanost období není potvrzená.'}</p></details>}
-        {analyticsQueueError && <p className="mt-1 text-amber-400">{analyticsQueueError}</p>}
-        {analyticsSyncState?.pending ? <p className="mt-1 text-amber-400">Analýzy: {analyticsSyncState.pending} dopočtů čeká na cloud.</p> : null}
-        {analyticsSyncState?.error && <p className="mt-1 text-amber-400">{analyticsSyncState.error}</p>}
-        {journalSyncState?.pending ? <p className="mt-1 text-amber-400">Deník: {journalSyncState.pending} obchodů čeká na cloud.</p> : null}
-        {journalSyncState?.error && <p className="mt-1 text-amber-400">{journalSyncState.error}</p>}
-        {(localSaveError || (cloudSaveError && !cloudConflict)) && <button className="mt-1 font-bold text-blue-400" onClick={() => void flush({ cloud: true })}>Zkusit uložení znovu</button>}
-        {cloudConflict && <button disabled={restoring} className="mt-1 font-bold text-blue-400" onClick={() => void restoreCloud()}>{restoring ? 'Načítám…' : 'Uchovat lokální kopii a načíst cloud'}</button>}
-      </div>
+      {sessionInfoOpen && <div
+        className="fixed inset-0 z-[550] flex items-center justify-center bg-black/60 p-4"
+        onKeyDown={event => { event.stopPropagation(); if (event.key === 'Escape') setSessionInfoOpen(false); }}
+      >
+        <section role="dialog" aria-modal="true" aria-label="Stav session" className={`max-h-[85vh] w-full max-w-md overflow-auto rounded-xl border p-5 text-xs shadow-xl ${isDark ? 'border-slate-700 bg-[#11161f] text-slate-100' : 'border-slate-200 bg-white text-slate-900'}`}>
+          <header className="mb-4 flex items-center justify-between">
+            <h2 className="text-base font-bold">Stav session</h2>
+            <button autoFocus aria-label="Zavřít stav session" onClick={() => setSessionInfoOpen(false)}><X size={18} /></button>
+          </header>
+          <p>{saving ? 'Ukládám session…' : localSaveError ? 'Lokální uložení selhalo' : 'Průběžné ukládání do tohoto zařízení'}</p>
+          {localSaveError && <p className="text-rose-400">{localSaveError}</p>}
+          {cloudSaveError && <p className="mt-1 text-amber-400">{cloudSaveError}</p>}
+          {journalQueueError && <p className="mt-1 text-rose-400">{journalQueueError}</p>}
+          <button className="pointer-events-auto mt-1 text-violet-400 underline" onClick={() => { updateRun(current => ({ ...current, runtimeState: { ...current.runtimeState, replay: { ...current.runtimeState.replay, playing: false } } })); setSessionInfoOpen(false); setEvidenceOpen(true); }}>Kvalita dat a exekuce</button>
+          {run.config.researchBinding && <details className="mt-2"><summary className="cursor-pointer text-violet-300">Pravidla session · {run.config.researchBinding.role === 'validation' ? 'plánované ověření' : 'vývoj'}</summary><p className="mt-1 whitespace-pre-wrap">{run.config.researchBinding.definition.rule}</p><p className="mt-1">Vyvrácení: {run.config.researchBinding.definition.falsification}</p><p className="mt-1 break-all text-slate-400">Verze {run.config.researchBinding.revisionId} · {run.config.researchBinding.revisionHash}</p><p className="mt-1 text-amber-400">{run.config.researchBinding.exposureAtBinding === 'already-observed' ? 'Toto období už bylo pozorované.' : 'Úplná nepozorovanost období není potvrzená.'}</p></details>}
+          {analyticsQueueError && <p className="mt-1 text-amber-400">{analyticsQueueError}</p>}
+          {analyticsSyncState?.pending ? <p className="mt-1 text-amber-400">Analýzy: {analyticsSyncState.pending} dopočtů čeká na cloud.</p> : null}
+          {analyticsSyncState?.error && <p className="mt-1 text-amber-400">{analyticsSyncState.error}</p>}
+          {journalSyncState?.pending ? <p className="mt-1 text-amber-400">Deník: {journalSyncState.pending} obchodů čeká na cloud.</p> : null}
+          {journalSyncState?.error && <p className="mt-1 text-amber-400">{journalSyncState.error}</p>}
+          {(localSaveError || (cloudSaveError && !cloudConflict)) && <button className="mt-1 font-bold text-blue-400" onClick={() => void flush({ cloud: true })}>Zkusit uložení znovu</button>}
+          {cloudConflict && <button disabled={restoring} className="mt-1 font-bold text-blue-400" onClick={() => void restoreCloud()}>{restoring ? 'Načítám…' : 'Uchovat lokální kopii a načíst cloud'}</button>}
+        </section>
+      </div>}
       <AlphaTradeChartWorkspace
         trade={syntheticTrade}
         entryMs={run.startAt}
@@ -1060,10 +1085,6 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
           <span className="text-[11px] font-bold text-blue-400">Načítám další data…</span>
         </div>
       )}
-      <BacktestResearchPanel open={researchOpen} isDark={isDark} runId={run.id}
-        journal={run.runtimeState.researchJournal} onSave={saveResearch} onCapture={captureResearch}
-        onClose={() => setResearchOpen(false)} persistenceError={localSaveError || cloudSaveError}
-        cursorTime={run.runtimeState.replay.cursorTime} />
       {evidenceOpen && <BacktestEvidenceDialog load={loadEvidence} isDark={isDark} onClose={() => setEvidenceOpen(false)} />}
       {error && initialCandles.length > 0 && (
         <div className="native-fixed-above-tab-bar fixed bottom-4 left-1/2 z-[500] flex -translate-x-1/2 items-center gap-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 backdrop-blur">
@@ -1093,9 +1114,10 @@ interface TradingPanelProps {
   onCancel: (id: string, candle: MarketCandle | null) => void;
   onClosePosition: (quantity: number, candle: MarketCandle | null) => void;
   onChangeBracket: (stopLoss?: number, takeProfit?: number) => void;
+  onOpenSessionInfo: () => void;
 }
 
-const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark, quantity, onQuantityChange, onOrder, onCancel, onClosePosition, onChangeBracket }) => {
+const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark, quantity, onQuantityChange, onOrder, onCancel, onClosePosition, onChangeBracket, onOpenSessionInfo }) => {
   const [type, setType] = useState<BacktestOrderType>('market');
   const [price, setPrice] = useState('');
   const [stopLoss, setStopLoss] = useState('');
@@ -1149,7 +1171,10 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
         <div className={`h-12 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
         <div className="min-w-[190px] space-y-1">{pending.slice(0, 3).map(order => <div key={order.id} className="flex items-center gap-2"><span className="font-bold">{order.side.toUpperCase()} {order.quantity} {order.type} @{order.limitPrice ?? order.stopPrice}</span><button onClick={() => onCancel(order.id, candle)} className="text-rose-500">×</button></div>)}</div>
       </>}
-      <div className="ml-auto whitespace-nowrap text-slate-500">{candle ? `${run.executionSymbol} ${candle.close.toFixed(2)}` : 'Bez ceny'}</div>
+      <div className="ml-auto flex shrink-0 items-center gap-3 whitespace-nowrap text-slate-500">
+        <button type="button" onClick={onOpenSessionInfo} className="rounded px-2 py-1 hover:bg-slate-500/10 hover:text-blue-500">Stav session</button>
+        <span>{candle ? `${run.executionSymbol} ${candle.close.toFixed(2)}` : 'Bez ceny'}</span>
+      </div>
     </div>
   );
 };

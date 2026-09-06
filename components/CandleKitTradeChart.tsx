@@ -1,3 +1,4 @@
+import { retainEqualNumbers, uniqueStructureEvents } from '../services/chartReplayPaint';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Drawing } from '@getcandlekit/charts';
@@ -163,7 +164,8 @@ import {
   canvasLineDash,
   previousDayClosePrice,
   secondsToBarClose,
-  sessionBreakTimes,
+  updateSessionBreakAccumulator,
+  type SessionBreakAccumulator,
   shortenedPriceLines,
   syncManagedPriceLine,
   visibleHighLow,
@@ -2513,7 +2515,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // session, takže čtvrtsekundové zpoždění není vidět, ale tik kurzoru
   // přestane platit plný průchod v každém panelu. Mimo replay se epoch bumpá
   // synchronně a chování je stejné jako dřív.
-  const levelsEpoch = useThrottledEpoch(candles, replayActive, REPLAY_LEVELS_THROTTLE_MS);
+  const levelsEpoch = useThrottledEpoch(candles, replayActive && visibleLevels, REPLAY_LEVELS_THROTTLE_MS);
   const liquidityLevels = useMemo(
     () => {
       if (!visibleLevels) return EMPTY_LIQUIDITY_LEVELS;
@@ -2634,17 +2636,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   renderedFvgsRef.current = renderedFvgs;
   const structureOverlayEvents = useMemo(() => {
     const style = indicatorSettings.structure;
-    const events = [
+    const events = uniqueStructureEvents([
       ...(visibleStructure ? structureEvents : []),
       ...(showEntryStructure && entryStructure ? [entryStructure] : []),
-    ].filter((event, index, all) => (
-      all.findIndex(candidate => (
-        candidate.pivotTime === event.pivotTime
-        && candidate.breakTime === event.breakTime
-        && candidate.price === event.price
-        && candidate.type === event.type
-      )) === index
-    )).filter(event => (
+    ]).filter(event => (
       (event.type === 'BOS' && style.showBos)
       || (event.type === 'CHoCH' && style.showChoch)
     ));
@@ -3831,24 +3826,33 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           box,
           Number(latestTime) + MARKET_TIMEFRAME_MINUTES[timeframe] * 60 * 5,
           MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
+          chartSettings.trading.orderPriceLabels,
         ))
       : [];
     const desiredIds = new Set(desired.map(drawing => drawing.id));
 
-    // Refresh the protection snapshot around our own point updates. This lets
-    // the managed box move with replay without ever becoming user-draggable.
-    protectedDrawingsUnsubscribeRef.current?.();
-    engine.getDrawings()
-      .filter(drawing => drawing.id.startsWith(prefix) && !desiredIds.has(drawing.id))
-      .forEach(drawing => engine.remove(drawing.id));
-    desired.forEach(drawing => {
+    const obsolete = engine.getDrawings()
+      .filter(drawing => drawing.id.startsWith(prefix) && !desiredIds.has(drawing.id));
+    const changed = desired.flatMap(drawing => {
       const current = engine.getById(drawing.id);
-      if (!current) {
-        engine.commit(drawing);
-        return;
-      }
-      if (JSON.stringify(current.points) !== JSON.stringify(drawing.points)) {
-        engine.setPoints(drawing.id, drawing.points);
+      const pointsChanged = !current || current.points.length !== drawing.points.length
+        || current.points.some((point, index) => point.time !== drawing.points[index].time
+          || point.price !== drawing.points[index].price);
+      const labelsChanged = (current && isPositionDrawing(current) ? current.style.position?.priceLabels : undefined)
+        !== drawing.style.position?.priceLabels;
+      return pointsChanged || labelsChanged ? [{ drawing, pointsChanged, labelsChanged }] : [];
+    });
+    // An unchanged HTF timestamp (or no open position) needs no mutation and
+    // no new snapshot/listener over every protected drawing in the workspace.
+    if (!obsolete.length && !changed.length) return;
+    protectedDrawingsUnsubscribeRef.current?.();
+    obsolete.forEach(drawing => engine.remove(drawing.id));
+    changed.forEach(({ drawing, pointsChanged, labelsChanged }) => {
+      if (!engine.getById(drawing.id)) engine.commit(drawing);
+      else {
+        if (pointsChanged) engine.setPoints(drawing.id, drawing.points);
+        // setStyle repaints the existing primitive, including while replay is paused.
+        if (labelsChanged) engine.setStyle(drawing.id, { position: drawing.style.position });
       }
     });
     protectedDrawingsUnsubscribeRef.current = protectGeneratedDrawings(engine);
@@ -3859,7 +3863,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const selectedId = engine.getSelectedId();
     if (selectedId && selectedId.startsWith(prefix)) engine.select(null);
     positionProgressPrimitiveRequestUpdateRef.current?.();
-  }, [managedPositionBoxes, replayActive, replayCursorTime, timeframe, visibleCandles]);
+  }, [chartApiEpoch, chartSettings.trading.orderPriceLabels, managedPositionBoxes, replayActive, replayCursorTime, timeframe, visibleCandles]);
 
   useEffect(() => {
     if (!replayActive) return;
@@ -3987,15 +3991,16 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const { scales, symbol } = chartSettingsRef.current;
     const candlesNow = candlesRef.current;
     const range = api.controller.getChart().timeScale().getVisibleRange();
-    const extremes = visibleHighLow(
+    const extremes = scales.highAndLow.line || scales.highAndLow.value ? visibleHighLow(
       candlesNow,
       range ? { from: Number(range.from), to: Number(range.to) } : null,
-    );
+    ) : null;
     previousDayCloseLineRef.current = syncManagedPriceLine({
       series,
       previous: previousDayCloseLineRef.current,
       settings: scales.previousDayClose,
-      price: previousDayClosePrice(candlesNow, symbol.timeZone),
+      price: scales.previousDayClose.line || scales.previousDayClose.value
+        ? previousDayClosePrice(candlesNow, symbol.timeZone) : null,
       title: 'PDC',
     });
     highLineRef.current = syncManagedPriceLine({
@@ -4067,11 +4072,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     };
   }, [chartApiEpoch]);
 
+  const futureAxisLastTime = visibleCandles.at(-1)?.time;
   useEffect(() => {
     const series = futureAxisSeriesRef.current;
     if (!series) return;
     const times = futureAxisTimes(
-      visibleCandles.at(-1)?.time,
+      futureAxisLastTime,
       MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
       FUTURE_AXIS_BARS,
     );
@@ -4083,7 +4089,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       // shazoval celý panel do error boundary; nový graf si osu budoucnosti
       // založí sám v efektu nad tím.
     }
-  }, [timeframe, visibleCandles]);
+  }, [chartApiEpoch, futureAxisLastTime, timeframe]);
 
   /**
    * Pozice zrcadlené z jiného panelu si nesou jeho `intervalSeconds`, takže se
@@ -4216,31 +4222,39 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 
   // Předěly seancí i zamčený poměr ceny ke svíčce reagují na posun grafu,
   // takže se přepočítávají při každé změně výřezu.
-  const sessionBreakTimesValue = useMemo(
-    () => (chartSettings.canvas.sessionBreaks
-      ? sessionBreakTimes(visibleCandles, chartSettings.symbol.timeZone)
-      : []),
-    [chartSettings.canvas.sessionBreaks, chartSettings.symbol.timeZone, visibleCandles],
-  );
+  const sessionBreakAccumulatorRef = useRef<SessionBreakAccumulator | null>(null);
+  const sessionBreakTimesValue = useMemo(() => {
+    if (!chartSettings.canvas.sessionBreaks) {
+      sessionBreakAccumulatorRef.current = null;
+      return [];
+    }
+    const next = updateSessionBreakAccumulator(sessionBreakAccumulatorRef.current, visibleCandles, chartSettings.symbol.timeZone);
+    sessionBreakAccumulatorRef.current = next;
+    return next.breaks;
+  }, [chartSettings.canvas.sessionBreaks, chartSettings.symbol.timeZone, visibleCandles]);
   // Vše, co závisí na aktuálním výřezu, visí na jediném odběru: předěly seancí,
   // zamčený poměr, čáry extrémů i zapamatovaný levý okraj.
   const leftEdgeRef = useRef<{ time: number; span: number } | null>(null);
+  const sessionBreakTimesRef = useRef(sessionBreakTimesValue);
+  sessionBreakTimesRef.current = sessionBreakTimesValue;
+  const refreshViewportRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     const api = apiRef.current;
     if (!api) return;
     const chart = api.controller.getChart();
     const timeScale = chart.timeScale();
-    const { lockPriceToBarRatio, priceToBarRatio, placement, keepLeftEdgeOnIntervalChange } = chartSettings.scales;
     let frame: number | null = null;
     const refresh = () => {
       frame = null;
+      const { lockPriceToBarRatio, priceToBarRatio, placement, keepLeftEdgeOnIntervalChange } = chartSettingsRef.current.scales;
       // Odběr i rAF můžou doběhnout na grafu, který layout/timeframe switch
       // právě ruší — každé čtení by pak vyhodilo výjimku a shodilo panel.
       try {
-        setSessionBreakOffsets(sessionBreakTimesValue
+        const offsets = sessionBreakTimesRef.current
           .map(time => timeScale.timeToCoordinate(time as UTCTimestamp))
           .filter((coordinate): coordinate is NonNullable<typeof coordinate> => coordinate !== null)
-          .map(Number));
+          .map(Number);
+        setSessionBreakOffsets(previous => retainEqualNumbers(previous, offsets));
         applyManagedPriceLines();
         const range = timeScale.getVisibleRange();
         const logical = timeScale.getVisibleLogicalRange();
@@ -4265,13 +4279,18 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       if (frame !== null) return;
       frame = window.requestAnimationFrame(refresh);
     };
-    refresh();
+    refreshViewportRef.current = schedule;
+    schedule();
     timeScale.subscribeVisibleLogicalRangeChange(schedule);
     return () => {
+      refreshViewportRef.current = null;
       if (frame !== null) window.cancelAnimationFrame(frame);
       timeScale.unsubscribeVisibleLogicalRangeChange(schedule);
     };
-  }, [applyManagedPriceLines, chartApiEpoch, chartSettings.scales, sessionBreakTimesValue, visibleCandles]);
+  }, [applyManagedPriceLines, chartApiEpoch]);
+  useEffect(() => {
+    refreshViewportRef.current?.();
+  }, [chartSettings.scales, sessionBreakTimesValue, visibleCandles]);
 
   // Po přepnutí intervalu vrátí graf na zapamatovaný levý okraj místo na
   // výchozí výřez. Rozestup svíček se nemění, posouvá se jen pozice.

@@ -29,6 +29,26 @@ const order: BacktestOrder = {
 };
 
 describe('managed position box', () => {
+  it.each(['pending', 'active', 'closed'] as const)('hides axis prices for a %s box without altering the plan, geometry or later restoration', state => {
+    const plan = createManagedPositionPlan(drawing, order);
+    const box = { ...plan, terminalTime: state === 'closed' ? 600 : null, state };
+    const original = structuredClone(box);
+    const visible = managedPositionDrawing(box, 900, 60);
+    const hidden = managedPositionDrawing(box, 900, 60, false);
+    expect(hidden.style.position?.priceLabels).toBe(false);
+    expect(hidden.points).toEqual(visible.points);
+    expect(hidden.style.position?.targetColor).toBe(visible.style.position?.targetColor);
+    expect(managedPositionDrawing(box, 900, 60, true)).toEqual(visible);
+    expect(box).toEqual(original);
+  });
+
+  it('does not re-enable prices disabled in the original position drawing style', () => {
+    const plan = createManagedPositionPlan(drawing, order);
+    plan.style.position = { ...plan.style.position, priceLabels: false };
+    const box = { ...plan, terminalTime: null, state: 'pending' as const };
+    expect(managedPositionDrawing(box, 900, 60, true).style.position?.priceLabels).toBe(false);
+  });
+
   it('keeps the armed position box visible at its original width while entry is pending', () => {
     const runtime = createBacktestRuntime(50_000);
     runtime.orders = [{ ...order }];

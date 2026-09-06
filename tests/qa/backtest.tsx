@@ -68,7 +68,7 @@ function Harness() {
           appearance: qaState.savedRun.workspaceState?.appearance,
           panels: qaState.savedRun.workspaceState?.panels,
           cursor: new Date(qaState.savedRun.cursorAt ?? 0).toISOString(),
-          researchJournal: qaState.savedRun.runtimeState.researchJournal ? { ...qaState.savedRun.runtimeState.researchJournal, revisions: qaState.savedRun.runtimeState.researchJournal.revisions.map(item => ({ ...item, screenshotDataUrl: item.screenshotDataUrl ? `[snapshot ${item.screenshotDataUrl.length} characters]` : undefined })) } : undefined, maxRevealedTime: qaState.savedRun.runtimeState.maxRevealedTime,
+          maxRevealedTime: qaState.savedRun.runtimeState.maxRevealedTime,
           balance: qaState.savedRun.runtimeState.balance, equity: qaState.savedRun.runtimeState.equity,
           positions: qaState.savedRun.runtimeState.positions,
           fills: qaState.savedRun.runtimeState.fills.length, closedTrades: qaState.savedRun.runtimeState.closedTrades.length,

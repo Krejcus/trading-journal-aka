@@ -129,11 +129,14 @@ export const managedPositionDrawing = (
    * pozice z 1m na 5m panelu roztáhne pětkrát.
    */
   intervalSeconds?: number,
+  showPriceLabels = true,
 ): PositionDrawing => {
   const pendingEndTime = box.initialEndTime ?? box.startTime + 5 * 60;
   const endTime = box.terminalTime
     ?? (box.state === 'pending' ? pendingEndTime : rightTime);
   const style = clone(box.style);
+  // Presentation only: never overwrite the saved plan or its original preference.
+  style.position = { ...style.position, priceLabels: showPriceLabels && style.position?.priceLabels !== false };
   if (Number.isFinite(intervalSeconds as number) && (intervalSeconds as number) > 0) {
     style.position = { ...style.position, intervalSeconds };
   }

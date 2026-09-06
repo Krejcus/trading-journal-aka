@@ -1,0 +1,59 @@
+{
+  "scenario": {
+    "charts": [
+      "1m",
+      "5m",
+      "15m"
+    ],
+    "indicators": "all",
+    "journalTrades": 80,
+    "bars": 16561,
+    "playbackSpeed": 10,
+    "transport": "synthetic",
+    "measurement": "DOM rAF intervals and PerformanceObserver Long Tasks; one sample per variant"
+  },
+  "baseline": {
+    "commit": "cf7f98bf239edca9f704ffa465fb1b44ead9b62c",
+    "paused": {
+      "seconds": 30.2,
+      "frames": 1686,
+      "frameP95Ms": 17.5,
+      "frameMaxMs": 466.6,
+      "longTasks": 14,
+      "blockingMs": 1476,
+      "maxTaskMs": 489
+    },
+    "playback": {
+      "seconds": 40,
+      "frames": 297,
+      "frameP95Ms": 349.1,
+      "frameMaxMs": 583.3,
+      "longTasks": 179,
+      "blockingMs": 27792,
+      "maxTaskMs": 576
+    },
+    "existingTradeCloseCallbacks": 80
+  },
+  "improved": {
+    "paused": {
+      "seconds": 49.9,
+      "frames": 2991,
+      "frameP95Ms": 17.6,
+      "frameMaxMs": 18.6,
+      "longTasks": 0,
+      "blockingMs": 0,
+      "maxTaskMs": 0
+    },
+    "playback": {
+      "seconds": 56.9,
+      "frames": 3208,
+      "frameP95Ms": 17.7,
+      "frameMaxMs": 166.9,
+      "longTasks": 21,
+      "blockingMs": 421,
+      "maxTaskMs": 120
+    },
+    "existingTradeCloseCallbacks": 0,
+    "initialPreflightCalls": 1
+  }
+}

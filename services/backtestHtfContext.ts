@@ -18,7 +18,7 @@ import {
   findFairValueGaps,
   type MarketCandle,
   type MarketStructureEvent,
-} from './marketData';
+} from './marketDataCalculations';
 import { tradingDayKey, wilderAverageTrueRange } from './liquidityLevels';
 
 /** Kolik HTF zón se ukládá k obchodu — stejný strop jako v AlphaBridge. */

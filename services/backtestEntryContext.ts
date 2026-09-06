@@ -1,10 +1,10 @@
-import { DEFAULT_INDICATOR_SETTINGS, type LevelsIndicatorSettings } from '../components/ChartIndicatorSettingsDialog';
+import { DEFAULT_INDICATOR_SETTINGS, type LevelsIndicatorSettings } from './chartIndicatorSettings';
 import {
   calculateIndicators,
   calculateMarketStructure,
   type MarketCandle,
   type MarketStructureEvent,
-} from './marketData';
+} from './marketDataCalculations';
 import {
   calculateLiquidityLevels,
   type LiquidityDayContext,

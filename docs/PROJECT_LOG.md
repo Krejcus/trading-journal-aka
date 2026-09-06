@@ -208,6 +208,38 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-06 (Claude, záchrana rozdělané práce Codexu v backtestu)
+
+Codex předplatné skončilo; uživatel: „Codexovi už nic nezadávej.“ Jeho poslední
+backtest práce nebyla v `main`: (1) worktree
+`/private/tmp/alphatrade-backtest-performance-20260906` nad `cf7f98bf` se 44
+necommitnutými soubory (worker pro analytiku, bounded cache, hydratace, FVG/
+viewport úspory, odstranění rozhodovacího deníku; viz dva zápisy Codexu níže),
+(2) hlavní checkout v Documents, kam Codex přenášel „canonical“ patche a kde
+navíc udělal dialog „Stav session“ místo pevného horního panelu (přání uživatele)
+a funkci „ceny obchodů na cenové ose“ (`trading.orderPriceLabels`, 7 souborů).
+Kopie v `~/Downloads/alphatrade-mentor-15` už není repozitář (jen zálohy).
+Obnova na čisté větvi nad `main a999862e`: tracked diff worktree (bez logu) +
+nové soubory, potom pouze štítkové a Stav-session hunky z Documents; App.tsx
+z Documents záměrně NE (je tam starší než main). Ověření: tsc čistý, celá sada
+a produkční build viz commit. Zbytek 303 necommitnutých souborů v Documents
+zůstává nedotčený (mix starých a nových změn, vyžaduje samostatné třídění).
+
+### 2026-09-06 — Codex: odstranění rozhodovacího deníku z backtestu
+
+- Na žádost uživatele odstraněn celý rozhodovací deník: tlačítko, panel, zápisy/revize/export rozhodnutí, registry pro snímky grafu a samostatná služba s jejími testy. Z backtest runtime typu odstraněn aktivní model tohoto deníku.
+- Poznámky/tagy/historie poznámek/screenshoty u skutečných obchodů, kvalita dat, strategy research binding a záznam času vstupu zachovány. Starý JSON při načtení/uložení zůstává průchozí; žádné mazání uložených uživatelských dat ani DB migrace.
+- Ověřeno:554testů/49souborů, úplný TypeScript, produkční build a izolovaný browser se3grafy: tlačítko pryč, krok replaye a zavření/uložení fungují, konzole bez error/warn.
+- Pouze localhost3001; bez push/deploy. Předchozí soubory jsou pro návrat v `/private/tmp/backtest-decision-removal-20260906/original`.
+
+
+### 2026-09-06 — Codex: lokální plynulost backtestu
+
+- Po výslovném souhlasu lokální výkonové opravy: worker pro analytiku a mapování, persistentní bounded cache se zachovanými hashi, identity preflight před recovery, samostatná opakovatelná hydratace chybějících UI obchodů, levnější FVG/viewport/cenové čáry a stabilní checkpoint/reference. Poznámky a ruční review zůstávají chráněné.
+- Stejná syntetická fixture (3grafy1m/5m/15m,80obchodů,16 561barů,10×): rAFp95 349,1→17,7ms; průměr7,4→56,4rAF/s. Pauza:14longtasks/30,2s→0/49,9s. Jde o jednotlivé lokální vzorky, nikoli garanci všech zařízení/dat.
+- BUY→krok→close→reopen ověřen:81řádků, jediný nový closecallback, správný zůstatek po cenovém pohybu a komisích. Celý hlavní projekt2463testů/278souborů, tsc a build PASS.
+- Ověřený patch přenesen pod SHA stráží do canonical projektu; další rozpracované App změny zachovány. Localhost3001 aktualizovaný; žádný deploy/push/SQL/broker akce. Důkazy: `docs/reviews/backtest-performance-20260906/README.md`.
+
 ### 2026-09-06 (Claude, LIVE detail skupiny — vodorovný posuvník)
 
 Uživatel: v kartě Kopírovací skupiny nešlo v rozbaleném detailu účtů skrolovat

@@ -39,13 +39,17 @@ export const previousDayCloseAnchor = (
   const last = candles.at(-1);
   if (!last) return null;
   const currentDay = zonedDayKey(last.time, timeZone);
-  for (let index = candles.length - 1; index >= 0; index -= 1) {
-    const candle = candles[index];
-    if (zonedDayKey(candle.time, timeZone) !== currentDay) {
-      return { price: candle.close, time: candle.time };
-    }
+  // Candle inputs are chronological. Find the beginning of the latest local
+  // calendar day instead of formatting every minute since midnight per paint.
+  let low = 0;
+  let high = candles.length - 1;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if (zonedDayKey(candles[middle].time, timeZone) === currentDay) high = middle;
+    else low = middle + 1;
   }
-  return null;
+  const previous = candles[low - 1];
+  return previous ? { price: previous.close, time: previous.time } : null;
 };
 
 /** Maximum a minimum ve viditelném úseku; mimo data vrací `null`. */
@@ -68,11 +72,21 @@ export const visibleHighLowAnchors = (
   if (!candles.length) return null;
   let high = { price: Number.NEGATIVE_INFINITY, time: 0 };
   let low = { price: Number.POSITIVE_INFINITY, time: 0 };
-  candles.forEach(candle => {
-    if (range && (candle.time < range.from || candle.time > range.to)) return;
+  let start = 0;
+  if (range) {
+    let end = candles.length;
+    while (start < end) {
+      const middle = start + Math.floor((end - start) / 2);
+      if (candles[middle].time < range.from) start = middle + 1;
+      else end = middle;
+    }
+  }
+  for (let index = start; index < candles.length; index += 1) {
+    const candle = candles[index];
+    if (range && candle.time > range.to) break;
     if (candle.high > high.price) high = { price: candle.high, time: candle.time };
     if (candle.low < low.price) low = { price: candle.low, time: candle.time };
-  });
+  }
   return Number.isFinite(high.price) && Number.isFinite(low.price) ? { high, low } : null;
 };
 
@@ -160,6 +174,37 @@ export const sessionBreakTimes = (
     previousDay = day;
   });
   return breaks;
+};
+
+export interface SessionBreakAccumulator {
+  firstTime: number | null;
+  lastTime: number | null;
+  count: number;
+  timeZone: string;
+  lastDay: string | null;
+  breaks: number[];
+}
+
+/** Calendar boundaries depend on timestamps, not the changing OHLC of an open bar. */
+export const updateSessionBreakAccumulator = (
+  previous: SessionBreakAccumulator | null,
+  candles: readonly MarketCandle[],
+  timeZone: string,
+): SessionBreakAccumulator => {
+  const firstTime = candles[0]?.time ?? null;
+  const lastTime = candles.at(-1)?.time ?? null;
+  const sameSource = previous?.timeZone === timeZone && previous.firstTime === firstTime;
+  if (sameSource && previous.count === candles.length && previous.lastTime === lastTime) return previous;
+  const append = sameSource && candles.length > previous.count
+    && candles[previous.count - 1]?.time === previous.lastTime;
+  let lastDay = append ? previous.lastDay : null;
+  const breaks = append ? previous.breaks.slice() : [];
+  for (let index = append ? previous.count : 0; index < candles.length; index += 1) {
+    const day = zonedDayKey(candles[index].time, timeZone);
+    if (lastDay !== null && day !== lastDay) breaks.push(candles[index].time);
+    lastDay = day;
+  }
+  return { firstTime, lastTime, count: candles.length, timeZone, lastDay, breaks };
 };
 
 /** Kolik sekund zbývá do konce svíčky, která začala v `barTime`. */

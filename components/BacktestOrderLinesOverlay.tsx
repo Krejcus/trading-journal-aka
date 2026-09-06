@@ -5,6 +5,7 @@ import type { BacktestChartOrderLine, BacktestChartOrderLineKind } from '../serv
 interface Props {
   api: ChartViewApi;
   lines: BacktestChartOrderLine[];
+  showPriceLabels?: boolean;
   onChange: (line: BacktestChartOrderLine, kind: BacktestChartOrderLineKind, price: number) => void;
   onCancel: (line: BacktestChartOrderLine) => void;
   onAddBracket?: (
@@ -19,7 +20,7 @@ const sameCoordinates = (left: Record<string, number>, right: Record<string, num
   return leftKeys.length === Object.keys(right).length && leftKeys.every(key => left[key] === right[key]);
 };
 
-const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, onChange, onCancel, onAddBracket }) => {
+const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, showPriceLabels = true, onChange, onCancel, onAddBracket }) => {
   const rootRef = useRef<HTMLDivElement>(null);
   const linesRef = useRef(lines);
   const lineElementsRef = useRef(new Map<string, HTMLDivElement>());
@@ -252,7 +253,7 @@ const BacktestOrderLinesOverlay: React.FC<Props> = ({ api, lines, onChange, onCa
                 )}
               </div>
             </div>
-            {line.kind !== 'entry' && (
+            {showPriceLabels && line.kind !== 'entry' && (
               <div
                 className="absolute top-0 flex h-[20px] -translate-y-1/2 items-center justify-center px-1 text-[9px] font-black text-white"
                 style={{ left: '100%', width: priceScaleWidth, backgroundColor: line.color }}

@@ -182,6 +182,8 @@ export interface ChartTradingSettings {
   quickOrderButton: boolean;
   /** Automatický position box vytvořený rychlou objednávkou. */
   positionBoxes: boolean;
+  /** Ceny automatických position boxů a SL/TP na cenové ose. */
+  orderPriceLabels: boolean;
   /** Čekající objednávky, otevřená pozice a její SL/TP čáry. */
   orderLines: boolean;
   /** Spojnice mezi vstupem a výstupem uzavřeného obchodu. */
@@ -286,6 +288,7 @@ export const defaultChartSettings = (isDark: boolean): ChartSettings => ({
   trading: {
     quickOrderButton: true,
     positionBoxes: true,
+    orderPriceLabels: true,
     orderLines: true,
     tradeLines: true,
     executionMarkers: true,

@@ -1,3 +1,4 @@
+import { createBacktestAnalyticsSourceCache } from './backtestAnalyticsSourceCache';
 import { researchTradeReference, type BacktestResearchBinding } from './backtestResearchCases';
 import { backtestContiguousWindow, evaluateBacktestBracket, type BacktestExitModel } from './backtestExecutionModel';
 import type { Trade } from '../types';
@@ -890,17 +891,19 @@ export interface BacktestIntelOptions {
 }
 
 /** Vše odvozené k jednomu uzavřenému obchodu, spočítané z jednoho průchodu daty. */
-export const backtestTradeIntel = (
+interface PreparedBacktestContext { candles: readonly MarketCandle[]; htfCandles?: readonly MarketCandle[]; context: BacktestContextSource }
+const calculateBacktestTradeIntel = (
   trade: BacktestClosedTrade,
   options: BacktestIntelOptions,
+  prepared?: PreparedBacktestContext,
 ): BacktestTradeIntel => {
   const bounded = options.replayHorizonTime !== undefined;
-  const candles = bounded ? options.candles.filter(candle => candle.time <= Number(options.replayHorizonTime)) : options.candles;
-  const htfCandles = bounded ? options.htfCandles?.filter(candle => candle.time <= Number(options.replayHorizonTime)) : options.htfCandles;
+  const candles = prepared?.candles ?? (bounded ? options.candles.filter(candle => candle.time <= Number(options.replayHorizonTime)) : options.candles);
+  const htfCandles = prepared ? prepared.htfCandles : bounded ? options.htfCandles?.filter(candle => candle.time <= Number(options.replayHorizonTime)) : options.htfCandles;
   const pointValue = backtestPointValue(trade.instrument);
   const cashKnown = trade.actualExcursionQuality !== 'legacy-unknown' && typeof trade.mfeAmount === 'number' && Number.isFinite(trade.mfeAmount) && typeof trade.maeAmount === 'number' && Number.isFinite(trade.maeAmount);
   const actualExcursionQuality = cashKnown ? trade.actualExcursionQuality ?? 'cash-ledger' : 'legacy-unknown';
-  const context = (!bounded && options.contextSource) || createBacktestContextSource({
+  const context = prepared?.context || (!bounded && options.contextSource) || createBacktestContextSource({
     candles,
     htfCandles,
     timeZone: options.timeZone,
@@ -941,6 +944,8 @@ export const backtestTradeIntel = (
   };
 };
 
+export const backtestTradeIntel = (trade: BacktestClosedTrade, options: BacktestIntelOptions): BacktestTradeIntel => calculateBacktestTradeIntel(trade, options);
+
 export interface BacktestTradeMappingOptions extends BacktestIntelOptions {
   researchBinding?: BacktestResearchBinding;
   accountId: string;
@@ -972,11 +977,12 @@ const clockTime = (unixSeconds: number, timeZone: string): string => {
  * všechno, co engine i journal vědí, včetně polí, která historicky plnil
  * AlphaBridge (`excursion`, `executionPath`, `management`).
  */
-export const backtestClosedTradeToTrade = (
+const mapBacktestClosedTrade = (
   closed: BacktestClosedTrade,
   options: BacktestTradeMappingOptions,
+  prepared?: PreparedBacktestContext,
 ): Trade => {
-  const intel = backtestTradeIntel(closed, options);
+  const intel = calculateBacktestTradeIntel(closed, options, prepared);
   const durationMinutes = Math.max(0, Math.round((closed.exitTime - closed.entryTime) / 60));
   const bias = options.sessionBias ?? null;
   const direction = closed.direction;
@@ -1053,5 +1059,33 @@ export const backtestClosedTradeToTrade = (
     sessionPostNotes: options.sessionPostNotes ?? null,
     schemaVersion: BACKTEST_TRADE_SCHEMA_VERSION,
     source: 'backtest-replay',
+  };
+};
+
+/** Stateless compatibility API. Untrusted full contexts never bypass a replay horizon. */
+export const backtestClosedTradeToTrade = (closed: BacktestClosedTrade, options: BacktestTradeMappingOptions): Trade => mapBacktestClosedTrade(closed, options);
+
+/** Reuse only internally prepared, horizon-bounded contexts. The factory is
+ * scoped to a session; callers must supply immutable candle snapshots. */
+export const createBacktestTradeMapper = (options: { maxCachedSources?: number } = {}) => {
+  const limit = Math.max(1, options.maxCachedSources ?? 8);
+  const sources = createBacktestAnalyticsSourceCache(4, limit);
+  let contexts: Array<{ source: object; timeZone: string; instrument: BacktestInstrument; prepared: PreparedBacktestContext }> = [];
+  const diagnostics = { contextBuilds: 0 };
+  return {
+    diagnostics,
+    clear() { contexts = []; sources.clear(); },
+    map(closed: BacktestClosedTrade, mapping: BacktestTradeMappingOptions): Trade {
+      if (mapping.replayHorizonTime !== undefined && !Number.isFinite(mapping.replayHorizonTime)) throw new Error('Invalid replay analytics horizon.');
+      const source = sources.get(mapping.candles, mapping.htfCandles, mapping.replayHorizonTime ?? Infinity);
+      let item = contexts.find(value => value.source === source && value.timeZone === mapping.timeZone && value.instrument === closed.instrument);
+      if (!item) {
+        item = { source, timeZone: mapping.timeZone, instrument: closed.instrument, prepared: { candles: source.candles, htfCandles: source.htfCandles,
+          context: createBacktestContextSource({ candles: source.candles, htfCandles: source.htfCandles, timeZone: mapping.timeZone }) } };
+        contexts.push(item); diagnostics.contextBuilds++;
+        if (contexts.length > limit) contexts.shift();
+      } else { contexts = contexts.filter(value => value !== item); contexts.push(item); }
+      return mapBacktestClosedTrade(closed, mapping, item.prepared);
+    },
   };
 };

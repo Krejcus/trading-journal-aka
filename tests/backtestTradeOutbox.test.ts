@@ -13,6 +13,7 @@ vi.mock('../services/storageService', () => ({ getUserId: async () => h.userId }
 import {
   BacktestTradeOutboxError, enqueueBacktestTrade, flushBacktestTradeOutbox,
   getPendingBacktestTrades, reconcileBacktestClosedTrades,
+  resolveBacktestClosedTradeDurability, getPendingBacktestTradeCount, BacktestTradeIdentityError,
   type BacktestTradeOutboxStorage,
 } from '../services/backtestTradeOutbox';
 
@@ -24,6 +25,112 @@ const trade = (id: string = crypto.randomUUID(), notes = 'generated'): Trade => 
 const storage = (): BacktestTradeOutboxStorage => ({
   findExistingIds: vi.fn(async () => []),
   saveTrades: vi.fn(async items => items),
+});
+
+describe('identity-only closed trade preflight', () => {
+  const key = 'alphatrade:backtest-trade-outbox:user-a:v1';
+  const identity = (item: Trade) => ({ tradeId: String(item.id), runId: item.backtestRunId!, accountId: item.accountId, instrument: item.instrument });
+  const request = (items: Trade[]) => ({ ownerId: 'user-a', runId: 'run-a', accountId: 'account-a', identities: items.map(identity) });
+
+  it('finds durable pending and acknowledged IDs without server reads or replacing their snapshot', async () => {
+    const queued = trade(), acknowledged = trade();
+    await enqueueBacktestTrade(acknowledged);
+    await flushBacktestTradeOutbox(storage());
+    const count = await enqueueBacktestTrade(queued);
+    expect(count).toEqual({ pendingCount: 1, durability: 'pending' });
+    expect(await getPendingBacktestTradeCount('user-a')).toBe(1);
+    const lookup = vi.fn(async () => []);
+    const result = await resolveBacktestClosedTradeDurability(request([queued, acknowledged]), lookup);
+    expect([...result.durableIds].sort()).toEqual([queued.id, acknowledged.id].sort());
+    expect(lookup).not.toHaveBeenCalled();
+    expect(await getPendingBacktestTrades()).toEqual([queued]);
+    expect(h.local.get(key).acknowledged[acknowledged.id]).toMatchObject(identity(acknowledged));
+  });
+
+  it('keeps legacy owner UUID receipts after a deliberate journal deletion', async () => {
+    const item = trade();
+    h.local.set(key, { pending: {}, acknowledged: { [item.id]: 1 } });
+    const lookup = vi.fn(async () => []);
+    const result = await resolveBacktestClosedTradeDurability(request([item]), lookup);
+    expect(result.durableIds.has(String(item.id))).toBe(true);
+    expect(lookup).not.toHaveBeenCalled();
+    expect(h.local.get(key).acknowledged[item.id]).toBe(1);
+  });
+
+  it('checks unknown identities in batches and persists authoritative receipts before returning', async () => {
+    const items = Array.from({ length: 205 }, () => trade());
+    const calls: number[] = [];
+    const result = await resolveBacktestClosedTradeDurability(request(items), async (ids, owner) => {
+      expect(owner).toBe('user-a'); calls.push(ids.length); return ids;
+    });
+    expect(calls).toEqual([100, 100, 5]);
+    expect(result.durableIds.size).toBe(205);
+    expect(Object.keys(h.local.get(key).acknowledged)).toHaveLength(205);
+    expect(await getPendingBacktestTrades()).toEqual([]);
+    expect(await enqueueBacktestTrade(items[0])).toEqual({ pendingCount: 0, durability: 'acknowledged' });
+  });
+
+  it('does not treat lookup failure, missing or partial server results as a receipt', async () => {
+    const items = [trade(), trade()];
+    const partial = await resolveBacktestClosedTradeDurability(request(items), async () => [identity(items[0])]);
+    expect([...partial.durableIds]).toEqual([items[0].id]);
+    const offline = await resolveBacktestClosedTradeDurability(request(items), async () => { throw new Error('offline'); });
+    expect([...offline.durableIds]).toEqual([items[0].id]);
+    expect(offline.lookupError).toBe('offline');
+    await enqueueBacktestTrade(items[1]);
+    expect(await getPendingBacktestTrades()).toEqual([items[1]]);
+  });
+
+  it('rejects wrong run/account/instrument identities and unsolicited server IDs without writing receipts', async () => {
+    const item = trade();
+    for (const wrong of [{ ...identity(item), runId: 'other-run' }, { ...identity(item), accountId: 'other-account' },
+      { ...identity(item), instrument: 'NQ' }, identity(trade())]) {
+      await expect(resolveBacktestClosedTradeDurability(request([item]), async () => [wrong])).rejects.toThrow('identit');
+      expect(h.local.get(key)).toBeUndefined();
+    }
+    await expect(resolveBacktestClosedTradeDurability({ ...request([item]), accountId: 'other' })).rejects.toThrow('účtu');
+  });
+
+  it('does not downgrade an authoritative identity conflict to an offline fallback', async () => {
+    const item = trade();
+    await expect(resolveBacktestClosedTradeDurability(request([item]), async () => {
+      throw new BacktestTradeIdentityError('identity collision');
+    })).rejects.toThrow('identity collision');
+    expect(h.local.get(key)).toBeUndefined();
+  });
+
+  it('refuses a raced local identity collision even if the server lookup succeeded', async () => {
+    const item = trade();
+    await expect(resolveBacktestClosedTradeDurability(request([item]), async ids => {
+      await enqueueBacktestTrade({ ...item, accountId: 'other-account' }); return ids;
+    })).rejects.toThrow('účtu');
+    expect(h.local.get(key).acknowledged).toEqual({});
+    expect((await getPendingBacktestTrades())[0].accountId).toBe('other-account');
+  });
+
+  it('never returns a cloud receipt when its IndexedDB write fails', async () => {
+    const item = trade(); h.failLocal = true;
+    await expect(resolveBacktestClosedTradeDurability(request([item]), async ids => ids)).rejects.toThrow('quota');
+    expect(h.local.get(key)).toBeUndefined();
+  });
+
+  it('cancels stale generations, including A -> B -> A, before receipts become durable', async () => {
+    const item = trade(); let generation = 1;
+    await expect(resolveBacktestClosedTradeDurability({ ...request([item]), isCurrent: () => generation === 1 }, async ids => {
+      generation = 3; return ids;
+    })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(h.local.get(key)).toBeUndefined();
+    await expect(resolveBacktestClosedTradeDurability(request([item]), async ids => { h.userId = 'user-b'; return ids; })).rejects.toThrow('uživatel se změnil');
+    expect(h.local.get(key)).toBeUndefined();
+  });
+
+  it('rejects aborted and malformed local reads instead of silently assuming an empty queue', async () => {
+    const item = trade(); const controller = new AbortController(); controller.abort();
+    await expect(resolveBacktestClosedTradeDurability({ ...request([item]), signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    h.local.set(key, { pending: null, acknowledged: {} });
+    await expect(resolveBacktestClosedTradeDurability(request([item]))).rejects.toThrow('nelze přečíst');
+    expect(h.local.get(key).pending).toBeNull();
+  });
 });
 beforeEach(() => { h.userId = 'user-a'; h.local.clear(); h.failLocal = false; });
 

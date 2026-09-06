@@ -14,7 +14,10 @@ import { storageService, getUserId } from './services/storageService';
 import { persistBacktestTradeReview } from './services/backtestTradeReview';
 import {
   BacktestTradeOutboxError, enqueueBacktestTrade, flushBacktestTradeOutbox, getPendingBacktestTrades,
+  resolveBacktestClosedTradeDurability, type BacktestClosedTradeIdentity,
 } from './services/backtestTradeOutbox';
+import { createBacktestTradeHydrator } from './services/backtestTradeHydration';
+import { lookupBacktestTradeIdentities } from './services/backtestTradeIdentityLookup';
 import { getBacktestRunOwnerId } from './services/backtestRunService';
 import { safeSetItem } from './utils/safeStorage';
 import { businessDataFingerprint, mergePayoutImages, stripPayoutImagesForCache } from './utils/businessPayoutSync';
@@ -1571,7 +1574,7 @@ const App: React.FC = () => {
       });
       await assertOwner(owner);
       mergeConfirmed();
-      setJournalSyncState({ pending: result.pendingCount, error: null });
+      setJournalSyncState(previous => previous.pending === result.pendingCount && previous.error === null ? previous : { pending: result.pendingCount, error: null });
       setSyncError(previous => previous?.startsWith('Backtest obchody čekají na uložení;') ? null : previous);
     } catch (reason) {
       if (backtestJournalOwnerRef.current !== owner || await getUserId() !== owner) return;
@@ -1582,7 +1585,7 @@ const App: React.FC = () => {
         try { pending = (await getPendingBacktestTrades()).length; } catch { /* The error below also reports an unavailable local store. */ }
       }
       const message = reason instanceof Error ? reason.message : 'Backtest obchody čekají na uložení; další pokus proběhne automaticky.';
-      setJournalSyncState({ pending, error: message });
+      setJournalSyncState(previous => previous.pending === pending && previous.error === message ? previous : { pending, error: message });
       setSyncError(message);
     } finally {
       if (backtestJournalBusyRef.current === owner) backtestJournalBusyRef.current = null;
@@ -1591,7 +1594,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!isInitialLoadDone || !loadedUserId || loadedUserId !== session?.user?.id) {
-      setJournalSyncState({ pending: 0, error: null });
+      setJournalSyncState(previous => !previous.pending && previous.error === null ? previous : { pending: 0, error: null });
       return;
     }
     void flushBacktestJournal();
@@ -1601,19 +1604,60 @@ const App: React.FC = () => {
     return () => { window.clearInterval(timer); window.removeEventListener('online', retry); };
   }, [flushBacktestJournal, isInitialLoadDone, loadedUserId, session?.user?.id]);
 
+  const backtestJournalRowsRef = useRef(trades);
+  backtestJournalRowsRef.current = trades;
+  const backtestHydratorRef = useRef<{ isCurrent: () => boolean; instance: ReturnType<typeof createBacktestTradeHydrator> } | null>(null);
+  const activeBacktestScopeRef = useRef(activeBacktestRun);
+  activeBacktestScopeRef.current = activeBacktestRun;
+  useEffect(() => () => { backtestHydratorRef.current?.instance.dispose(); backtestHydratorRef.current = null; },
+    [activeBacktestRun?.id, activeBacktestRun?.accountId, loadedUserId, session?.user?.id]);
+  const handleResolveBacktestClosedTrades = useCallback(async (identities: readonly BacktestClosedTradeIdentity[], signal: AbortSignal) => {
+    const owner = backtestJournalOwnerRef.current;
+    const currentRun = activeBacktestScopeRef.current;
+    if (!owner || !currentRun || getBacktestRunOwnerId(currentRun) !== owner) throw new Error('Replay session nepatří přihlášenému uživateli.');
+    const isCurrentSession = captureSessionRequest(owner);
+    const isCurrent = () => !signal.aborted && isCurrentSession() && backtestJournalOwnerRef.current === owner
+      && activeBacktestScopeRef.current?.id === currentRun.id && activeBacktestScopeRef.current?.accountId === currentRun.accountId;
+    const result = await resolveBacktestClosedTradeDurability({ ownerId: owner, runId: currentRun.id,
+      accountId: currentRun.accountId, identities, signal, isCurrent },
+      (batch, expectedOwner, abortSignal) => lookupBacktestTradeIdentities(batch, expectedOwner, abortSignal, isCurrent));
+    if (!isCurrent()) throw new DOMException('Session byla změněna.', 'AbortError');
+    setJournalSyncState(previous => previous.pending === result.pendingCount && previous.error === result.lookupError
+      ? previous : { pending: result.pendingCount, error: result.lookupError });
+    // Missing journal rows hydrate separately from mapping, with independent retries.
+    if (!backtestHydratorRef.current?.isCurrent()) {
+      backtestHydratorRef.current?.instance.dispose();
+      backtestHydratorRef.current = { isCurrent, instance: createBacktestTradeHydrator({
+        ownerId: owner, runId: currentRun.id, accountId: currentRun.accountId, isCurrent, signal,
+        hasTrade: id => backtestJournalRowsRef.current.some(trade => String(trade.id) === id),
+        load: id => storageService.getTradeById(id),
+        onTrade: row => setTrades(previous => !isCurrent() || previous.some(trade => String(trade.id) === String(row.id)) ? previous : [...previous, row]),
+        onError: message => {
+          if (!isCurrent()) return;
+          setJournalSyncState(previous => {
+            const error = message ? `Obnova deníku: ${message}` : previous.error?.startsWith('Obnova deníku:') ? null : previous.error;
+            return error === previous.error ? previous : { ...previous, error };
+          });
+        },
+      }) };
+    }
+    backtestHydratorRef.current.instance.enqueue(identities.filter(identity => result.durableIds.has(identity.tradeId)));
+    return result;
+  }, [captureSessionRequest]);
+
   const handleBacktestTradeClosed = useCallback(async (trade: Trade): Promise<void> => {
     const owner = backtestJournalOwnerRef.current;
     if (!owner) throw new Error('Pro uložení backtest obchodu se přihlas.');
     if (!activeBacktestRun || getBacktestRunOwnerId(activeBacktestRun) !== owner || trade.backtestRunId !== activeBacktestRun.id) {
       throw new Error('Replay session nepatří aktuálně přihlášenému uživateli.');
     }
-    await enqueueBacktestTrade(trade, owner);
-    if (backtestJournalOwnerRef.current === owner) {
-      const pending = (await getPendingBacktestTrades()).length;
-      setJournalSyncState(current => ({ ...current, pending }));
+    const isCurrentSession = captureSessionRequest(owner);
+    const { pendingCount: pending } = await enqueueBacktestTrade(trade, owner);
+    if (isCurrentSession() && backtestJournalOwnerRef.current === owner) {
+      setJournalSyncState(current => current.pending === pending ? current : ({ ...current, pending }));
       void flushBacktestJournal();
     }
-  }, [activeBacktestRun, flushBacktestJournal]);
+  }, [activeBacktestRun, captureSessionRequest, flushBacktestJournal]);
 
   const [analyticsSyncState, setAnalyticsSyncState] = useState<{ pending: number; error: string | null }>({ pending: 0, error: null });
   const flushAnalytics = useCallback(async () => {
@@ -1622,7 +1666,7 @@ const App: React.FC = () => {
     try {
       const result = await flushBacktestAnalytics(storageService);
       if (backtestJournalOwnerRef.current !== owner || await getUserId() !== owner) return;
-      setAnalyticsSyncState({ pending: result.pendingCount, error: result.error });
+      setAnalyticsSyncState(previous => previous.pending === result.pendingCount && previous.error === result.error ? previous : { pending: result.pendingCount, error: result.error });
       if (result.confirmed.length) setTrades(previous => {
         if (backtestJournalOwnerRef.current !== owner) return previous;
         const confirmed = new Map(result.confirmed.map(item => [item.tradeId, item]));
@@ -1639,7 +1683,7 @@ const App: React.FC = () => {
   }, []);
   useEffect(() => {
     if (!isInitialLoadDone || !loadedUserId || loadedUserId !== session?.user?.id) {
-      setAnalyticsSyncState({ pending: 0, error: null }); return;
+      setAnalyticsSyncState(previous => !previous.pending && previous.error === null ? previous : { pending: 0, error: null }); return;
     }
     void flushAnalytics();
     const timer = window.setInterval(() => void flushAnalytics(), 5_000);
@@ -4098,6 +4142,7 @@ const App: React.FC = () => {
               window.dispatchEvent(new CustomEvent('alphatrade:backtest-run-saved', { detail: savedRun.id }));
             }}
             onTradeClosed={handleBacktestTradeClosed}
+            onResolveClosedTrades={handleResolveBacktestClosedTrades}
             onTradeAnalyticsRefresh={handleBacktestAnalyticsRefresh}
             analyticsSyncState={analyticsSyncState}
             journalTrades={trades}

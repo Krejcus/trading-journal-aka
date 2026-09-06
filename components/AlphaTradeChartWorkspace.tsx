@@ -1,3 +1,4 @@
+import { sharedRevealedCandles } from '../services/chartReplayPaint';
 import { ChartWorkspaceLibraryDialog, WorkspaceImportPreview } from './ChartWorkspaceLibraryDialog';
 import { saveWorkspaceTemplate } from '../services/chartWorkspaceLibrary';
 import type { BacktestTagSuggestions } from '../services/backtestTagCatalog';
@@ -190,7 +191,6 @@ export interface BacktestChartSessionBridge {
   };
   onReplayChange: (replay: ChartReplayState) => void;
   registerWorkspaceCheckpoint?: (checkpoint: () => void) => (() => void);
-  registerResearchCapture?: (capture: () => Promise<string>) => (() => void);
   maxRevealedTime?: number;
   pauseReplayForDialog?: boolean;
   onSaveWorkspace?: () => Promise<{ localSaved: boolean; cloudSaved: boolean }>;
@@ -443,9 +443,31 @@ class ResilientWorkspacePanel extends React.Component<WorkspacePanelProps, Resil
   }
 }
 
+const EMPTY_SESSION_HISTORY: MarketCandle[] = [];
+
 const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, updateConfig }) => {
   const context = useContext(WorkspaceDataContext);
   if (!context) throw new Error('AlphaTrade workspace panel is missing its data context.');
+
+  // Axis labels follow this panel's setting, even when another panel is active.
+  const [showOrderPriceLabels, setShowOrderPriceLabels] = useState(
+    () => loadChartSettings(context.isDark, instance.id).trading.orderPriceLabels,
+  );
+  useEffect(() => {
+    const reload = () => setShowOrderPriceLabels(loadChartSettings(context.isDark, instance.id).trading.orderPriceLabels);
+    reload();
+    const sync = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        settings?: ChartSettings; target?: PanelSettingsTarget; reload?: boolean;
+      }>).detail;
+      if (detail?.reload) reload();
+      else if (detail?.settings && panelSettingsTargetMatches(detail.target, instance.id)) {
+        setShowOrderPriceLabels(detail.settings.trading.orderPriceLabels);
+      }
+    };
+    window.addEventListener(CHART_SETTINGS_EVENT, sync);
+    return () => window.removeEventListener(CHART_SETTINGS_EVENT, sync);
+  }, [context.isDark, instance.id]);
 
   const config = { ...panelConfig(), ...instance.config };
   const backtestSession = context.backtestSession;
@@ -453,7 +475,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     ?? (config.root === context.initialRoot ? context.initialCandles : undefined);
   const historySchema = marketDataSchemaForTimeframe(config.timeframe);
   const historyLoadingKey = `${config.root}:${historySchema}`;
-  const sessionHistoryCandles = backtestSession?.historyCandlesByRoot?.[config.root]?.[historySchema] ?? [];
+  const sessionHistoryCandles = backtestSession?.historyCandlesByRoot?.[config.root]?.[historySchema] ?? EMPTY_SESSION_HISTORY;
   const sessionHistoryLoading = backtestSession?.historyLoadingKeys?.[historyLoadingKey] === true;
   const requestSessionHistory = backtestSession?.onNeedOlderHistory;
   const [rawCandles, setRawCandles] = useState<MarketCandle[]>(
@@ -548,9 +570,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     return replayCandleCountAt(rawCandles, context.replay.cursorTime ?? sessionStartSeconds);
   }, [backtestSession?.startMs, context.replay.cursorTime, context.replay.phase, rawCandles]);
   const replayRawCandles = useMemo(
-    () => replayRevealedCount === rawCandles.length
-      ? rawCandles
-      : rawCandles.slice(0, replayRevealedCount),
+    () => sharedRevealedCandles(rawCandles, replayRevealedCount),
     [rawCandles, replayRevealedCount],
   );
   const replayAnalysisAccumulatorRef = useRef<ReplayAnalysisAccumulator | null>(null);
@@ -667,6 +687,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             <BacktestOrderLinesOverlay
               api={chartApi}
               lines={context.backtestSession.orderLines}
+              showPriceLabels={showOrderPriceLabels}
               onChange={context.backtestSession.onOrderLineChange}
               onCancel={context.backtestSession.onOrderLineCancel}
               onAddBracket={context.backtestSession.onOrderLineAddBracket}
@@ -1114,8 +1135,6 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     }
     return captureChartWorkspaceSnapshotDataUrl(workspaceElement, isDark);
   }, [isDark]);
-  const registerResearchCapture = backtestSession?.registerResearchCapture;
-  useEffect(() => registerResearchCapture?.(captureVisibleCharts), [captureVisibleCharts, registerResearchCapture]);
   const activeIndicatorCount = activeControl ? countChartIndicators(
     [
       activeControl.config.showFvg,
