@@ -161,6 +161,8 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
     const [fullTrade, setFullTrade] = useState<Trade>(trade);
     const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+    // Id obchodu, pro který už doběhl lazy-load detailu (screenshoty z DB).
+    const [detailsLoadedTradeId, setDetailsLoadedTradeId] = useState<string | null>(null);
 
     // Scroll Lock
     useEffect(() => {
@@ -182,10 +184,17 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     useEffect(() => {
         setFullTrade(trade);
         // If parent trade already has screenshot data, use it directly (no extra DB call)
-        if (trade.screenshot || (trade.screenshots && trade.screenshots.length > 0)) return;
+        if (trade.screenshot || (trade.screenshots && trade.screenshots.length > 0)) {
+            // Předchozí (zrušený) lazy-load mohl nechat spinner zapnutý — vypni ho,
+            // jinak by screenshot z props zůstal schovaný za spinnerem.
+            setIsLoadingDetails(false);
+            setDetailsLoadedTradeId(String(trade.id));
+            return;
+        }
         let cancelled = false;
         const loadFull = async () => {
-            if (isLoadingDetails) return;
+            // Bez guardu na isLoadingDetails: hodnota v closure je stále z prvního renderu
+            // a při rychlém přepínání obchodů by načtení detailu úplně přeskočila.
             setIsLoadingDetails(true);
             try {
                 if (trade.id) {
@@ -208,13 +217,15 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
             } catch (e) {
                 console.error("Failed to load full trade details", e);
             } finally {
-                if (!cancelled) setIsLoadingDetails(false);
+                if (!cancelled) {
+                    setIsLoadingDetails(false);
+                    setDetailsLoadedTradeId(String(trade.id));
+                }
             }
         };
         loadFull();
         return () => { cancelled = true; };
     // Sync na CELÝ trade objekt — když edit upraví jakékoliv pole, sync fullTrade.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [trade]);
 
     const groupTrades = useMemo(() => {
@@ -273,7 +284,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     const [isZoomed, setIsZoomed] = useState(false);
     const [accountsExpanded, setAccountsExpanded] = useState(false);
     const [activeImageIndex, setActiveImageIndex] = useState(0);
-    const [visualMode, setVisualMode] = useState<'chart' | 'screenshots'>('chart');
+    const [visualMode, setVisualMode] = useState<'chart' | 'screenshots'>('screenshots');
     const [signedCopierSnapshots, setSignedCopierSnapshots] = useState<Array<{
         kind: string; at: number; path: string; url: string;
     }>>([]);
@@ -411,7 +422,16 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     useEffect(() => { setImageLoadError(false); }, [activeImageIndex]);
     // Reset error state when trade changes
     useEffect(() => { setImageLoadError(false); }, [activeTrade.id]);
-    useEffect(() => { setVisualMode('chart'); }, [activeTrade.id]);
+    // Screenshot obchodu je výchozí pohled; graf je druhá záložka.
+    useEffect(() => { setVisualMode('screenshots'); }, [activeTrade.id]);
+    // Obchod bez jediného screenshotu (ani copier snapshotu): po dohrání detailu
+    // přepni na graf, ať se místo prázdné plochy „BEZ SCREENSHOTU" hned ukáže něco užitečného.
+    const copierSnapshotCount = activeTrade.copierSnapshots?.length ?? 0;
+    useEffect(() => {
+        if (detailsLoadedTradeId !== String(activeTrade.id)) return;
+        if (images.length > 0 || copierSnapshotCount > 0) return;
+        setVisualMode('chart');
+    }, [detailsLoadedTradeId, activeTrade.id, images.length, copierSnapshotCount]);
 
 
     const handleShare = async () => {
@@ -481,8 +501,8 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                 </p>
                             </div>
                             <div className={`hidden lg:flex p-1 rounded-xl border shrink-0 ${isDark ? 'bg-black/30 border-white/10' : 'bg-white/80 border-slate-200 shadow-sm'}`}>
-                                <button onClick={() => setVisualMode('chart')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all ${visualMode === 'chart' ? 'bg-emerald-500 text-white' : 'text-slate-500'}`}>Graf</button>
                                 <button onClick={() => setVisualMode('screenshots')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all ${visualMode === 'screenshots' ? 'bg-blue-500 text-white' : 'text-slate-500'}`}>Screenshoty {images.length ? `(${images.length})` : ''}</button>
+                                <button onClick={() => setVisualMode('chart')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all ${visualMode === 'chart' ? 'bg-emerald-500 text-white' : 'text-slate-500'}`}>Graf</button>
                             </div>
                         </div>
 
@@ -697,11 +717,11 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             Na desktop: flex-1 (zabere prostor v row layoutu). */}
                         <div className="order-1 lg:order-2 flex-none lg:flex-1 flex flex-col overflow-hidden">
 
-                            {/* TOP: interaktivní CME graf je výchozí; screenshoty zůstávají jako evidence. */}
+                            {/* TOP: screenshot obchodu je výchozí; interaktivní CME graf je druhá záložka. */}
                             <div className="relative group flex-none h-[420px] lg:flex-[3_3_0] lg:h-auto lg:min-h-0 lg:overflow-hidden">
                                 <div className={`absolute top-3 left-1/2 -translate-x-1/2 z-40 flex lg:hidden p-1 rounded-xl border backdrop-blur-xl ${isDark ? 'bg-black/70 border-white/10' : 'bg-white/80 border-slate-200 shadow-sm'}`}>
-                                    <button onClick={() => setVisualMode('chart')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all ${visualMode === 'chart' ? 'bg-emerald-500 text-white' : 'text-slate-500'}`}>Graf</button>
                                     <button onClick={() => setVisualMode('screenshots')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all ${visualMode === 'screenshots' ? 'bg-blue-500 text-white' : 'text-slate-500'}`}>Screenshoty {images.length ? `(${images.length})` : ''}</button>
+                                    <button onClick={() => setVisualMode('chart')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all ${visualMode === 'chart' ? 'bg-emerald-500 text-white' : 'text-slate-500'}`}>Graf</button>
                                 </div>
 
                                 {visualMode === 'chart' ? (
