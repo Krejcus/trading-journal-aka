@@ -223,6 +223,18 @@ vnořená dělení; ostatní panely si šířku drží). Ověřeno reálným dvo
 středu i na hranu (332/734 → 533/533, 779/287 → 533/533); tsc čistý, chart
 workspace testy 49/49.
 
+Doplněk (problik): uživatel hlásil při dvojkliku „zvláštní problik“. Příčina:
+`workspace.importLayout(next)` hydratuje nový FlexLayout `Model`, takže se oba
+panely s grafy odmontují a namontují znovu. Oprava: `patches/@getcandlekit+
+charts+0.1.0.patch` přidává do driveru adaptéru `getModel: () => modelRef.current`
+(index.js i index.cjs) a `centerSplitter` nejdřív zkusí živý model —
+rodiče splitteru najde přes `Model.visitNodes` (kořen = řada bez rodiče) a
+zavolá `Actions.adjustWeights(parentId, weights)` se zprůměrovanými vahami
+dvou sousedů. JSON export/import zůstává jen jako fallback bez živého modelu.
+Ověřeno v náhledu: reálný dvojklik do středu 733/333 → 533/533 a označené
+DOM prvky `.flexlayout__tabset` si zachovaly identitu (žádný remount).
+tsc 0, chart workspace testy 49/49.
+
 ### 2026-09-06 (Claude + uživatel, Documents checkout přepnut na main)
 
 Po výslovném souhlasu („udělej to bezpečně“): záloha špinavého stromu do

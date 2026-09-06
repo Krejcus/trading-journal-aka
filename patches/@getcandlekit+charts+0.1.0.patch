@@ -2360,3 +2360,31 @@ index 6dcc3f6..d1332fb 100644
      private unproject;
      private project;
      private hitTest;
+diff --git a/node_modules/@getcandlekit/charts/dist/react/workspace/index.cjs b/node_modules/@getcandlekit/charts/dist/react/workspace/index.cjs
+index a578177..c26f745 100644
+--- a/node_modules/@getcandlekit/charts/dist/react/workspace/index.cjs
++++ b/node_modules/@getcandlekit/charts/dist/react/workspace/index.cjs
+@@ -473,6 +473,9 @@ function FlexLayoutAdapterInner({
+     let cancelled = false;
+     const unregister = workspace._registerDriver({
+       getTree: () => modelRef.current ? modelToJson(modelRef.current) : {},
++      // AlphaTrade patch: live FlexLayout model for in-place actions
++      // (e.g. Actions.adjustWeights) without re-hydrating the whole tree.
++      getModel: () => modelRef.current,
+       setTree: (tree2) => {
+         if (!cancelled) hydrate(tree2);
+       },
+diff --git a/node_modules/@getcandlekit/charts/dist/react/workspace/index.js b/node_modules/@getcandlekit/charts/dist/react/workspace/index.js
+index 32a3f95..8167607 100644
+--- a/node_modules/@getcandlekit/charts/dist/react/workspace/index.js
++++ b/node_modules/@getcandlekit/charts/dist/react/workspace/index.js
+@@ -471,6 +471,9 @@ function FlexLayoutAdapterInner({
+     let cancelled = false;
+     const unregister = workspace._registerDriver({
+       getTree: () => modelRef.current ? modelToJson(modelRef.current) : {},
++      // AlphaTrade patch: live FlexLayout model for in-place actions
++      // (e.g. Actions.adjustWeights) without re-hydrating the whole tree.
++      getModel: () => modelRef.current,
+       setTree: (tree2) => {
+         if (!cancelled) hydrate(tree2);
+       },

@@ -15,6 +15,7 @@ import {
 import { IndicatorController, createBuiltinRegistry, type ChartViewApi } from '@getcandlekit/charts/react';
 import type { Drawing } from '@getcandlekit/charts';
 import 'flexlayout-react/style/light.css';
+import { Actions as FlexLayoutActions, type Model as FlexLayoutModel, type Node as FlexLayoutNode } from 'flexlayout-react';
 import {
   Download,
   GripVertical,
@@ -1626,6 +1627,39 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
    * sourozenci si váhu ponechají.
    */
   const centerSplitter = useCallback((splitterPath: string | null) => {
+    const segments = (splitterPath ?? '/s0').split('/').filter(Boolean);
+    const splitterSegment = segments.pop();
+    const splitterIndex = Number(splitterSegment?.replace(/^s/, ''));
+    const parentPath = segments.length > 0 ? `/${segments.join('/')}` : '';
+    // Preferovaná cesta: akce na živém FlexLayout modelu (přes záplatu
+    // `driver.getModel`). Panely zůstanou namontované — žádný problik grafů.
+    const liveModel = (workspace as unknown as { driver?: { getModel?: () => FlexLayoutModel | null } })
+      .driver?.getModel?.() ?? null;
+    if (liveModel) {
+      let parentNode: FlexLayoutNode | undefined;
+      liveModel.visitNodes(node => {
+        if (parentNode) return;
+        // Kořenová řada nemá rodiče a splitter na ní má cestu jen `/s<i>`.
+        if (parentPath === '' ? node.getParent() === undefined && node.getType() === 'row' : node.getPath() === parentPath) {
+          parentNode = node;
+        }
+      });
+      const liveChildren = parentNode?.getChildren() ?? [];
+      if (parentNode && liveChildren.length >= 2) {
+        const weights = liveChildren.map(child => (child as { getWeight?: () => number }).getWeight?.() ?? 100);
+        if (Number.isInteger(splitterIndex) && splitterIndex >= 0 && splitterIndex < weights.length - 1) {
+          const half = (weights[splitterIndex] + weights[splitterIndex + 1]) / 2;
+          weights[splitterIndex] = half;
+          weights[splitterIndex + 1] = half;
+        } else {
+          weights.fill(100 / weights.length);
+        }
+        liveModel.doAction(FlexLayoutActions.adjustWeights(parentNode.getId(), weights));
+        setStatus('Grafy vycentrovány');
+        return;
+      }
+    }
+    // Fallback bez živého modelu: úprava JSON stromu a import (remount panelů).
     const exported = workspace.exportLayout() as {
       tree?: { layout?: { children?: Array<{ weight?: number; children?: unknown[] }> } };
     };
@@ -1633,9 +1667,6 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       ? structuredClone(exported)
       : JSON.parse(JSON.stringify(exported));
     let parent: { children?: Array<{ weight?: number; children?: unknown[] }> } | undefined = next.tree?.layout;
-    const segments = (splitterPath ?? '/s0').split('/').filter(Boolean);
-    const splitterSegment = segments.pop();
-    const splitterIndex = Number(splitterSegment?.replace(/^s/, ''));
     for (const segment of segments) {
       const index = Number(segment.replace(/^[a-z]+/, ''));
       const child = parent?.children?.[index] as { weight?: number; children?: unknown[] } | undefined;
