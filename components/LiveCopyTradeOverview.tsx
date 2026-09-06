@@ -115,11 +115,11 @@ const ORDER_COLUMN_OPTIONS: Array<{ key: OrderColumnKey; label: string }> = [
 
 const ACCOUNT_COLUMNS: ColumnDef[] = [
   { key: 'account', label: 'Účet', locked: true, widthPx: 220 },
-  { key: 'status', label: 'Stav', widthPx: 170 },
+  { key: 'status', label: 'Stav', widthPx: 150 },
   { key: 'broker', label: 'Broker', widthPx: 72 },
   { key: 'firm', label: 'Firma', widthPx: 120 },
   { key: 'balance', label: 'Zůstatek', align: 'right', widthPx: 112 },
-  { key: 'positions', label: 'Pozice', align: 'right', widthPx: 260 },
+  { key: 'positions', label: 'Pozice', align: 'right', widthPx: 200 },
   { key: 'daily', label: 'Denní P&L', align: 'right', widthPx: 96 },
   { key: 'dllRemaining', label: 'DLL zbývá', align: 'right', widthPx: 96 },
   { key: 'unreal', label: 'Otevřený P&L', align: 'right', widthPx: 104 },
@@ -2801,8 +2801,10 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
       // vodorovného posuvníku by se širší tabulka jen ořízla (3.–6. 9. 2026).
       <div className="overflow-x-auto">
         <table
-          className="w-full table-fixed text-left"
-          style={{ minWidth: `${columns.reduce((total, column) => total + column.widthPx, 0)}px` }}
+          // Kompaktní šířka = součet sloupců: roztažení na celou kartu
+          // rozhazovalo Stav/Broker/Firma daleko od sebe (uživatel 6. 9. 2026).
+          className="table-fixed text-left"
+          style={{ width: `${columns.reduce((total, column) => total + column.widthPx, 0)}px` }}
         >
           <colgroup>
             {columns.map(column => <col key={column.key} style={{ width: `${column.widthPx}px` }} />)}
