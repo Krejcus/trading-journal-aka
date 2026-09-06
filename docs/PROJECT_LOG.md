@@ -208,6 +208,18 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-06 (Claude + uživatel, Documents checkout přepnut na main)
+
+Po výslovném souhlasu („udělej to bezpečně“): záloha špinavého stromu do
+`~/Documents/AlphaTrade-backups/2026-09-06-203817-documents-dirty-tree/`
+(tarball 481 souborů, `tracked-changes.diff` 1,3 MB, `git-status.txt`,
+`HEAD.txt`) a druhá pojistka `git stash@{0}` „documents-dirty-tree-20260906“.
+`git cherry origin/main` potvrdil, že tři lokální commity větve
+`codex/ios-native-checkpoint-20260814` už jsou v main patch-ekvivalentně.
+Pak `git checkout -B main origin/main`: strom čistý, HEAD = origin/main,
+`.env.local` a `node_modules` nedotčené. Hlavní checkout je od teď
+plnohodnotný `main`; stará větev zůstává lokálně jako historie.
+
 ### 2026-09-06 (Claude, triáž ~300 necommitnutých souborů v Documents checkoutu)
 
 Trojcestné porovnání (společný základ 479a5c3d, origin/main, pracovní strom):
