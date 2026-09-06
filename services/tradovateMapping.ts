@@ -1,4 +1,5 @@
 import type {
+  BrokerLiquidateResult,
   BrokerEnvironment,
   BrokerOrder,
   BrokerOrderAck,
@@ -111,6 +112,28 @@ export function fromPlaceOrderResult(result: TradovatePlaceOrderResult): BrokerO
     definitive: reason != null,
     rejectReason: reason ?? 'nejednoznačná odpověď bez orderId a failure reason',
   };
+}
+
+/**
+ * `liquidateposition` má stejný wire tvar jako PlaceOrderResult, ale jinou
+ * sémantiku. Chybějící orderId proto nesmí být ani falešné odmítnutí, ani
+ * falešný úspěch; caller vždy dokončí stavové ověření pozice.
+ */
+export function fromLiquidatePositionResult(
+  result: TradovatePlaceOrderResult | null | undefined,
+): BrokerLiquidateResult {
+  if (result?.orderId != null) {
+    return { status: 'submitted', brokerOrderId: String(result.orderId) };
+  }
+  const failureText = result?.failureText?.trim();
+  const failureReason = result?.failureReason && result.failureReason !== 'Success'
+    ? result.failureReason
+    : undefined;
+  const reason = failureText || failureReason;
+  if (reason) return { status: 'rejected', reason };
+  // Úspěšný HTTP návrat bez business rejectu je pouze přijetí požadavku
+  // ke stavovému ověření. Neříká nic o fillu ani o výsledné pozici.
+  return { status: 'submitted' };
 }
 
 export interface TradovatePlaceOcoPayload {

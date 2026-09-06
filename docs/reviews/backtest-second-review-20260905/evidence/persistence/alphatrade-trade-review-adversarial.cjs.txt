@@ -1,0 +1,50 @@
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const esbuild = require('/Users/filipkrejca/Documents/trading-journal-aka/node_modules/esbuild');
+const root = '/Users/filipkrejca/Documents/trading-journal-aka';
+const source = fs.readFileSync(root + '/services/storageService.ts', 'utf8');
+const update = source.slice(source.indexOf('  async updateTrade('), source.indexOf('  async saveTrades('));
+const gallery = source.slice(source.indexOf('  async getTradeScreenshots('), source.indexOf('  /** Privátní copier artefakty'));
+const helper = esbuild.buildSync({ entryPoints: [root + '/services/backtestTradeReview.ts'], bundle: true, format: 'cjs', platform: 'node', write: false });
+const helperCtx = { module: { exports: {} } }; vm.runInNewContext(helper.outputFiles[0].text, helperCtx);
+const persist = helperCtx.module.exports.persistBacktestTradeReview;
+const create = () => {
+  let row = { id: 'trade-id', user_id: 'A', data: { notes: 'old notes', tags: ['old tag'], screenshot: 'https://mock.invalid/old-primary.jpg', screenshots: ['https://mock.invalid/old-primary.jpg', 'https://mock.invalid/second.jpg'] } };
+  let failGallery = false;
+  const supabase = { from() {
+    const q = { op: 'select', projection: '*', payload: null,
+      select(value) { this.projection = value; return this; }, eq() { return this; }, in() { return this; },
+      update(payload) { this.op = 'update'; this.payload = payload; return this; },
+      execute(single = false) {
+        if (this.op === 'update') { row = { ...row, ...this.payload }; return { data: { id: row.id }, error: null }; }
+        if (this.projection.includes('screenshots:')) return failGallery ? { data: null, error: { message: 'synthetic transient read failure' } } : { data: [{ id: row.id, ...row.data }], error: null };
+        return { data: single ? structuredClone(row) : [structuredClone(row)], error: null };
+      },
+      single() { return Promise.resolve(this.execute(true)); }, maybeSingle() { return Promise.resolve(this.execute(true)); },
+      then(resolve, reject) { return Promise.resolve(this.execute()).then(resolve, reject); },
+    }; return q;
+  } };
+  const ctx = { supabase, getUserId: async () => 'A', get: async () => [], set: async () => undefined, console: { error() {} } };
+  vm.runInNewContext(esbuild.transformSync(`globalThis.storage={${update}${gallery}}`, { loader: 'ts' }).code, ctx);
+  ctx.storage.uploadScreenshot = async () => 'https://mock.invalid/new.jpg';
+  return { storage: ctx.storage, read: () => row, failGallery: () => { failGallery = true; } };
+};
+(async () => {
+  const result = {};
+  {
+    const h = create(); h.failGallery();
+    await persist(h.storage, 'trade-id', { notes: 'new review' }, 'data:image/png;base64,synthetic');
+    assert.equal(h.read().data.screenshot, 'https://mock.invalid/new.jpg');
+    assert.equal(h.read().data.screenshots.length, 1);
+    result.galleryReadFailure = { oldPrimaryAndSecondLinkLost: true, finalGallerySize: 1, operationReportedSuccess: true };
+  }
+  {
+    const h = create();
+    await Promise.all([h.storage.updateTrade('trade-id', { notes: 'new review A' }), h.storage.updateTrade('trade-id', { tags: ['new tag B'] })]);
+    assert.equal(h.read().data.notes, 'old notes');
+    assert.equal(h.read().data.tags[0], 'new tag B');
+    result.concurrentReviewFields = { twoSavesConfirmed: true, newerNoteLost: true, finalNote: h.read().data.notes };
+  }
+  console.log(JSON.stringify({ source: 'canonical storage methods + review helper, mocked all network/cache/upload dependencies', ...result }, null, 2));
+})().catch(error => { console.error(error); process.exitCode = 1; });

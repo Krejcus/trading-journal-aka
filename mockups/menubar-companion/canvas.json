@@ -1,0 +1,219 @@
+{
+  "pages": [
+    {
+      "id": "page-dark",
+      "name": "Tmavý režim"
+    },
+    {
+      "id": "page-light",
+      "name": "Světlý režim"
+    },
+    {
+      "id": "page-lock",
+      "name": "Zamčený den"
+    }
+  ],
+  "artboards": [
+    {
+      "file": "MenuBar.dc.html",
+      "title": "Horní lišta — 5 stavů ikony",
+      "page": "page-dark",
+      "x": 0,
+      "y": 0,
+      "w": 940,
+      "h": 480
+    },
+    {
+      "file": "Main.dc.html",
+      "title": "Popover — LIVE",
+      "page": "page-dark",
+      "x": 0,
+      "y": 620,
+      "w": 400,
+      "h": 900,
+      "is_interactive": true
+    },
+    {
+      "file": "Disarmed.dc.html",
+      "title": "Popover — DISARMED",
+      "page": "page-dark",
+      "x": 490,
+      "y": 620,
+      "w": 400,
+      "h": 900,
+      "is_interactive": true
+    },
+    {
+      "file": "Zasah.dc.html",
+      "title": "Popover — ZÁSAH NUTNÝ",
+      "page": "page-dark",
+      "x": 980,
+      "y": 620,
+      "w": 400,
+      "h": 940,
+      "is_interactive": true
+    },
+    {
+      "file": "Neznamy.dc.html",
+      "title": "Popover — STAV NEZNÁMÝ",
+      "page": "page-dark",
+      "x": 1470,
+      "y": 620,
+      "w": 400,
+      "h": 900,
+      "is_interactive": true
+    },
+    {
+      "file": "Shadow.dc.html",
+      "title": "Popover — SHADOW",
+      "page": "page-dark",
+      "x": 1960,
+      "y": 620,
+      "w": 400,
+      "h": 900,
+      "is_interactive": true
+    },
+    {
+      "file": "MenuBarLight.dc.html",
+      "title": "Horní lišta — 5 stavů ikony (světlá)",
+      "page": "page-light",
+      "x": 0,
+      "y": 0,
+      "w": 940,
+      "h": 480
+    },
+    {
+      "file": "MainLight.dc.html",
+      "title": "Popover — LIVE (světlý)",
+      "page": "page-light",
+      "x": 0,
+      "y": 620,
+      "w": 400,
+      "h": 900,
+      "is_interactive": true
+    },
+    {
+      "file": "DisarmedLight.dc.html",
+      "title": "Popover — DISARMED (světlý)",
+      "page": "page-light",
+      "x": 490,
+      "y": 620,
+      "w": 400,
+      "h": 900,
+      "is_interactive": true
+    },
+    {
+      "file": "ZasahLight.dc.html",
+      "title": "Popover — ZÁSAH NUTNÝ (světlý)",
+      "page": "page-light",
+      "x": 980,
+      "y": 620,
+      "w": 400,
+      "h": 940,
+      "is_interactive": true
+    },
+    {
+      "file": "NeznamyLight.dc.html",
+      "title": "Popover — STAV NEZNÁMÝ (světlý)",
+      "page": "page-light",
+      "x": 1470,
+      "y": 620,
+      "w": 400,
+      "h": 900,
+      "is_interactive": true
+    },
+    {
+      "file": "ShadowLight.dc.html",
+      "title": "Popover — SHADOW (světlý)",
+      "page": "page-light",
+      "x": 1960,
+      "y": 620,
+      "w": 400,
+      "h": 900,
+      "is_interactive": true
+    },
+    {
+      "file": "LockMenuBar.dc.html",
+      "title": "Lišta — ZAMČENO (tmavá + světlá)",
+      "page": "page-lock",
+      "x": 0,
+      "y": 0,
+      "w": 940,
+      "h": 400
+    },
+    {
+      "file": "Lock.dc.html",
+      "title": "Popover — DEN ZAMČENÝ (automaticky, pravidlo)",
+      "page": "page-lock",
+      "x": 0,
+      "y": 540,
+      "w": 400,
+      "h": 900
+    },
+    {
+      "file": "LockLight.dc.html",
+      "title": "Popover — DEN ZAMČENÝ (ručně, světlý)",
+      "page": "page-lock",
+      "x": 490,
+      "y": 540,
+      "w": 400,
+      "h": 900
+    },
+    {
+      "file": "LockRules.dc.html",
+      "title": "LIVE — Pravidla dne + banner + odemknutí",
+      "page": "page-lock",
+      "x": 980,
+      "y": 540,
+      "w": 780,
+      "h": 900
+    },
+    {
+      "file": "LockNotify.dc.html",
+      "title": "Notifikace a deník",
+      "page": "page-lock",
+      "x": 1850,
+      "y": 540,
+      "w": 460,
+      "h": 700
+    }
+  ],
+  "annotations": [
+    {
+      "id": "pravidla",
+      "page": "page-dark",
+      "x": 1000,
+      "y": 40,
+      "w": 320,
+      "text": "Pravidlo č. 1: stará data přebijí poslední známý stav.\nSTAV NEZNÁMÝ nikdy neukazuje staré DISARMED jako platné — vždy jen „naposledy potvrzeno X v HH:MM“.\n\nBarva ikony znamená „podívej se“, nikdy „obchodování je bezpečné“ — zelené LIVE říká jen „kopírování běží“. Konkrétní text + čas potvrzení je vždy v panelu.\n\nPanel je read-only: žádné zapínání ani vypínání copieru, flatten, kill switch ani rušení příkazů. Zdroj: /api/native-widget-snapshot (dnes Mac worker, později VPS)."
+    },
+    {
+      "id": "rozbalovani",
+      "page": "page-dark",
+      "x": 1350,
+      "y": 40,
+      "w": 320,
+      "text": "Sekce jsou ROZBALOVACÍ — vyzkoušej kliknutím na hlavičku sekce v popoveru.\n\nPravidla škálování na 20+ účtů:\n· sbalená sekce vždy ukazuje jednořádkový souhrn s tečkou a časem, takže problém nejde přehlédnout;\n· sekce s problémem se otevře automaticky (viz ZÁSAH NUTNÝ);\n· followeři se agregují (20/20) — jednotlivě se vypíše jen ten, kdo selže (APEX-2)."
+    },
+    {
+      "id": "pravidla-light",
+      "page": "page-light",
+      "x": 1000,
+      "y": 40,
+      "w": 320,
+      "text": "Světlý režim = tokeny .light-theme z aplikace (Premium Slate): karta #ffffff na #f8fafc, text #0f172a/#475569, border #e2e8f0.\n\nStatusové barvy drží stejný význam jako v tmavém režimu, jen v tmavších odstínech kvůli kontrastu na bílé: emerald #059669 (LIVE / potvrzené OK), rose #e11d48/#be123c, amber #d97706/#b45309.\n\nPravidla jsou shodná: read-only, stará data přebijí poslední známý stav, zelená = „běží“, ne „bezpečné“. Sekce jsou rozbalovací stejně jako v tmavém režimu."
+    },
+    {
+      "id": "lock-pravidla",
+      "page": "page-lock",
+      "x": 1000,
+      "y": 40,
+      "w": 340,
+      "text": "ZAMČENO = rodina „copier neposílá“ jako VYPNUTO, ale se zámkem: dnes už se nezapne (ruční lock nebo pravidlo dne).\n\nPravidla vyhodnocuje worker ze svých dat (fill ledger, session) — žádný broker zápis. Odemknout jde JEN v LIVE, s povinným důvodem, 10s prodlevou a zápisem do deníku; nikdy z lišty ani z telefonu.\n\nNotifikace: zámek (banner + volitelný zvuk), varování před limitem (1× na pravidlo a den), vypršení zámku (tiché, nic nezapíná)."
+    }
+  ],
+  "launch": {
+    "view": "canvas",
+    "page": "page-lock"
+  }
+}

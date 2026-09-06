@@ -1,0 +1,28 @@
+{
+  "case": "Go To through unloaded target hit",
+  "cursorIso": "2026-08-04T10:03:59.000Z",
+  "actual": {
+    "closed": 0,
+    "positions": 1,
+    "balance": 50000
+  },
+  "expected": {
+    "closed": 1,
+    "positions": 0,
+    "balance": 50004,
+    "reason": "take-profit"
+  }
+}
+{
+  "case": "1d step before loaded chunk edge",
+  "next": null,
+  "remainingBars": 800,
+  "prefetchCondition": false,
+  "hasMoreSessionData": true
+}
+{
+  "case": "resume history missing in-session prefix",
+  "initialSegmentStart": "2026-07-18T00:00:00.000Z",
+  "historyFetchEnd": "2026-07-01T00:00:00.000Z",
+  "missingDays": 17
+}

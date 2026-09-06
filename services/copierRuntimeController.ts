@@ -15,9 +15,22 @@ import {
   type CopierDailyStats,
 } from './copierEngine';
 import { CopierLeaderEventSource } from './copierLeaderEventSource';
+import {
+  createLeaderFlatEpoch,
+  evaluateLeaderFlatBatch,
+  invalidateLeaderFlatEpoch,
+  isLeaderFlatGuardTokenCurrent,
+  mergeLeaderFlatEpochLineage,
+  planLeaderPositionTransition,
+  type LeaderFlatAccountBatchSnapshot,
+  type LeaderFlatEpoch,
+  type LeaderFlatExitEvidence,
+  type LeaderFlatFollowerOwnership,
+  type LeaderFlatGuardToken,
+} from './copierLeaderFlatGuard';
 import { CopierBracketCorrelator, type LeaderBracketPair } from './copierBracketCorrelator';
 import { CopierOsoCorrelator } from './copierOsoCorrelator';
-import { stuckCancelEntries } from './copierCancelOutbox';
+import { stuckCancelEntries, type CancelOutboxEntry } from './copierCancelOutbox';
 import { waiveCancelEntry } from './copierCancelOutbox';
 import { markRejected as markOutboxRejected, stuckEntries, waiveOutboxEntry } from './copierOutbox';
 import { stuckBracketEntries, waiveBracketOutboxEntry } from './copierBracketOutbox';
@@ -38,10 +51,41 @@ import {
 import type { CopierStore } from './copierStore';
 import { toSnapshot } from './copierStore';
 import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from './liveCopyTrading';
-import { processManualFlatten, type ManualFlattenResult } from './copierManualActions';
+import {
+  processManualFlatten,
+  processTargetedLiquidation,
+  type ManualFlattenResult,
+} from './copierManualActions';
 import { createExposureCappedBroker } from './exposureCappedBroker';
 
 export type CopierStuckOperationKind = 'place' | 'bracket' | 'oso' | 'cancel-or-modify';
+
+const isCriticalAuditEntry = (item: CopierAuditEntry) => (
+  item.kind === 'unknown'
+  || item.kind === 'abandoned'
+  || item.kind === 'rejected'
+  || item.kind === 'cancel-failed'
+  || item.kind === 'sequence-broken'
+  || item.kind === 'blocked'
+);
+
+/**
+ * Optimistická terminal-fill recovery je bezpečná pouze tehdy, když KAŽDÁ
+ * kritická položka stejné dávky znamená tentýž autoritativně terminální modify.
+ */
+export function criticalAuditAllowsTerminalFillRecovery(
+  entries: readonly CopierAuditEntry[],
+  cancelOutbox: ReadonlyMap<string, CancelOutboxEntry>,
+): boolean {
+  const critical = entries.filter(isCriticalAuditEntry);
+  return critical.length > 0 && critical.every(item => {
+    const lifecycle = item.key ? cancelOutbox.get(item.key) : undefined;
+    return item.kind === 'cancel-failed'
+      && lifecycle?.operation === 'modify'
+      && lifecycle.status === 'abandoned'
+      && lifecycle.outcome === 'filled';
+  });
+}
 
 /**
  * Způsobilost účtu k NOVÝM vstupům. Oddělená od broker connection statusu
@@ -262,6 +306,12 @@ export interface BootstrapCopierOptions {
    * kontrola; nikdy nejde o autorizaci k automatickému zavření nejasné pozice.
    */
   followerTransitionCorrelationWindowMs?: number;
+  /** Grace pro normální opožděný follower exit po známém leader open -> flat. */
+  leaderFlatGraceMs?: number;
+  /** Krátké čekání na projekci Position po potvrzeném exit fillu. */
+  leaderFlatExitSettlementGraceMs?: number;
+  /** Interval dalšího read-only batch ověření rozpracovaného copier exitu. */
+  leaderFlatInflightRetryMs?: number;
 }
 
 const errorOf = (reason: unknown) => reason instanceof Error ? reason : new Error(String(reason));
@@ -574,7 +624,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   let positionCheckComplete = false;
   let workingOrderAccounts = new Set<number>();
   let lastError: Error | null = null;
+  /**
+   * Monotónní verze bezpečnostního stavu. Reconciliation si ji zapamatuje
+   * před broker I/O a čistý výsledek smí potvrdit pouze tehdy, když během
+   * čtení nevznikl novější incident, reconnect ani jiná invalidace.
+   */
+  let safetyGeneration = 0;
   let eventTail: Promise<void> = Promise.resolve();
+  let reconciliationTail: Promise<void> = Promise.resolve();
   const admittedLeaderOrders = new Set<string>();
   const admittedFlatExitOrders = new Set<string>();
   const leaderPositions = new Map<string, number>();
@@ -624,10 +681,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   }
   const recentFollowerFillCauses = new Map<string, RecentFollowerFillCause>();
   const pendingFollowerTransitions = new Map<string, PendingFollowerTransition>();
+  const pendingFollowerMagnitudeChecks = new Map<string, ReturnType<typeof setTimeout>>();
+  const leaderFlatGuardTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const followerTransitionCorrelationWindowMs = options.followerTransitionCorrelationWindowMs ?? 2_000;
+  const leaderFlatGraceMs = options.leaderFlatGraceMs ?? 2_000;
+  const leaderFlatExitSettlementGraceMs = options.leaderFlatExitSettlementGraceMs ?? 1_500;
+  const leaderFlatInflightRetryMs = options.leaderFlatInflightRetryMs ?? 1_000;
 
   if (!Number.isFinite(followerTransitionCorrelationWindowMs) || followerTransitionCorrelationWindowMs < 1) {
     throw new Error('followerTransitionCorrelationWindowMs musí být kladné číslo');
+  }
+  for (const [label, value] of [
+    ['leaderFlatGraceMs', leaderFlatGraceMs],
+    ['leaderFlatExitSettlementGraceMs', leaderFlatExitSettlementGraceMs],
+    ['leaderFlatInflightRetryMs', leaderFlatInflightRetryMs],
+  ] as const) {
+    if (!Number.isFinite(value) || value < 0) throw new Error(`${label} musí být nezáporné číslo`);
   }
 
   if (
@@ -1056,6 +1125,126 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     });
   };
 
+  const leaderExposureEpoch = (symbol: string): LeaderFlatEpoch | null =>
+    currentRuntime().state.safety.leaderExposureEpochs?.find(epoch => (
+      epoch.groupId === group.id
+      && epoch.leaderAccountId === group.leaderAccountId
+      && epoch.symbol === symbol
+    )) ?? null;
+
+  const persistLeaderExposureEpoch = async (epoch: LeaderFlatEpoch) => {
+    const safety = currentRuntime().state.safety;
+    const others = (safety.leaderExposureEpochs ?? []).filter(item => !(
+      item.groupId === epoch.groupId
+      && item.leaderAccountId === epoch.leaderAccountId
+      && item.symbol === epoch.symbol
+    ));
+    await persistSafety({
+      ...safety,
+      leaderExposureEpochs: [...others, epoch].slice(-20),
+    });
+  };
+
+  const copiedEntryLineage = (
+    accountId: number,
+    symbol: string,
+    netQuantity: number,
+  ): boolean => {
+    if (netQuantity === 0) return false;
+    const cause = recentFollowerFillCauses.get(`${accountId}:${symbol}`);
+    if (
+      !cause
+      || cause.role !== 'copied-entry'
+      || cause.sign !== Math.sign(netQuantity)
+      || clock() - cause.observedAt > followerTransitionCorrelationWindowMs
+    ) return false;
+    const live = currentRuntime();
+    const links = [...live.state.links.values()].flat().filter(link => link.accountId === accountId);
+    if (!links.some(link => link.brokerOrderId === cause.brokerOrderId)) return false;
+    const standard = [...live.outbox.values()].some(entry => (
+      entry.status === 'acknowledged'
+      && entry.operationKind !== 'liquidate-position'
+      && entry.request.accountId === accountId
+      && entry.request.symbol === symbol
+      && entry.brokerOrderId === cause.brokerOrderId
+    ));
+    if (standard) return true;
+    return [...live.osoOutbox.values()].some(entry => (
+      entry.status === 'acknowledged'
+      && entry.request.accountId === accountId
+      && entry.request.symbol === symbol
+      && entry.entryBrokerOrderId === cause.brokerOrderId
+    ));
+  };
+
+  const leaderFlatFollowersAt = (symbol: string, leaderNet: number): LeaderFlatFollowerOwnership[] =>
+    group.followers.map(follower => {
+      const eligibleAtOpen = follower.mode !== 'off'
+        && !currentIneligibleAccounts().has(follower.accountId);
+      const followerNet = positionsByAccount.get(follower.accountId)?.get(symbol);
+      const expectedNet = Math.trunc(leaderNet * follower.multiplier);
+      const exactManagedNet = followerNet != null
+        && followerNet !== 0
+        && followerNet === expectedNet
+        && copiedEntryLineage(follower.accountId, symbol, followerNet);
+      return {
+        accountId: follower.accountId,
+        replicationModeAtOpen: follower.mode,
+        eligibleAtOpen,
+        copyLineage: exactManagedNet ? 'confirmed' : 'unproven',
+        ...(exactManagedNet ? { confirmedNetQuantity: followerNet } : {}),
+      };
+    });
+
+  const strengthenLeaderFlatLineage = async (
+    accountId: number,
+    symbol: string,
+    netQuantity: number,
+  ) => {
+    const epoch = leaderExposureEpoch(symbol);
+    if (!epoch || epoch.phase !== 'open' || netQuantity === 0) return;
+    const follower = group.followers.find(item => item.accountId === accountId);
+    if (!follower || follower.mode === 'off') return;
+    const leaderNet = leaderPositions.get(symbol);
+    if (leaderNet == null || leaderNet === 0) return;
+    const expectedNet = Math.trunc(leaderNet * follower.multiplier);
+    if (
+      netQuantity !== expectedNet
+      || !copiedEntryLineage(accountId, symbol, netQuantity)
+    ) return;
+    const participant = epoch.followers.find(item => item.accountId === accountId);
+    if (!participant || !participant.eligibleAtOpen) return;
+    if (
+      participant.copyLineage === 'confirmed'
+      && participant.confirmedNetQuantity === netQuantity
+    ) return;
+    await persistLeaderExposureEpoch(mergeLeaderFlatEpochLineage(epoch, {
+      followers: [{
+        ...participant,
+        copyLineage: 'confirmed',
+        confirmedNetQuantity: netQuantity,
+      }],
+    }));
+  };
+
+  const scheduleLeaderFlatEpochVerification = (
+    epoch: LeaderFlatEpoch,
+    token: LeaderFlatGuardToken,
+    expectedSafetyGeneration = safetyGeneration,
+  ) => {
+    const existing = leaderFlatGuardTimers.get(epoch.id);
+    if (existing) clearTimeout(existing);
+    const scheduledAt = clock();
+    const delay = Math.max(0, (epoch.graceUntil ?? scheduledAt) - scheduledAt);
+    const timer = setTimeout(() => {
+      leaderFlatGuardTimers.delete(epoch.id);
+      eventTail = eventTail
+        .then(() => verifyLeaderFlatEpoch(token, expectedSafetyGeneration))
+        .catch(reason => failClosed(reason, { autoClose: false }));
+    }, delay);
+    leaderFlatGuardTimers.set(epoch.id, timer);
+  };
+
   const groupIsFlat = () => [group.leaderAccountId, ...group.followers.map(item => item.accountId)]
     .filter((accountId): accountId is number => accountId != null)
     .every(accountId => [...(positionsByAccount.get(accountId)?.values() ?? [])]
@@ -1245,6 +1434,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }]);
   };
 
+  /**
+   * Zneplatní poslední autoritativní preflight bez vytváření falešného
+   * incidentu. Používá se hlavně v DISARMED, kde nová leader anomálie nic
+   * neposílá followerům, ale další ARM musí nejdřív znovu načíst broker stav.
+   */
+  const invalidateReconciliation = () => {
+    safetyGeneration += 1;
+    positionCheckComplete = false;
+    source.requireReconciliation();
+  };
+
   const failClosed = (
     reason: unknown,
     failure: {
@@ -1254,6 +1454,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     } = {},
   ) => {
     const wasLiveArmed = gate.armed && !gate.shadowMode;
+    invalidateReconciliation();
     lastError = errorOf(reason);
     gate = {
       ...gate,
@@ -1264,7 +1465,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // Interní nejistota odzbrojí copier a vynutí novou autoritativní kontrolu,
     // ale nesmí předstírat fyzický disconnect. Živé spojení je potřeba právě
     // proto, aby mohly doběhnout risk-redukující cancely už známých objednávek.
-    positionCheckComplete = false;
     if (failure.transportLost) source.connection(false);
     options.onError?.(lastError);
     // Fail-closed uprostřed živého obchodu nesmí nechat kopie viset bez
@@ -1297,8 +1497,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     eventTail = eventTail
       .then(async () => {
         try {
-          await autoFlattenCopies(trigger, seed);
-          if (recovery.reconcileAfterTerminalFill && gate.connected && !gate.killSwitch) {
+          const autoCloseSafeForRecovery = await autoFlattenCopies(trigger, seed);
+          if (
+            recovery.reconcileAfterTerminalFill
+            && autoCloseSafeForRecovery
+            && gate.connected
+            && !gate.killSwitch
+          ) {
             try {
               const reconciliation = await performReconciliation();
               const clean = reconciliation.divergentAccounts.length === 0
@@ -1401,6 +1606,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Bez přesného fill orderId nevíme, zda jde o cizí pozici, opožděný
       // legitimní vstup, nebo ztracenou událost. Automatický market close by
       // byl neodůvodněný side effect — bezpečně odzbrojíme a eskalujeme.
+      gate = {
+        ...gate,
+        divergentAccounts: new Set([...gate.divergentAccounts, pending.accountId]),
+      };
       failClosed(new Error(
         `Copier fail-closed: follower ${pending.accountId} má autoritativně pozici ${brokerFollowerNet} `
         + `na ${pending.symbol}, leader ${brokerLeaderNet}; příčinu nelze bezpečně přiřadit ke konkrétnímu fillu`,
@@ -1428,6 +1637,62 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     pendingFollowerTransitions.set(key, { accountId, symbol, netQuantity, timer });
   };
 
+  const clearPendingFollowerMagnitudeCheck = (accountId: number, symbol: string) => {
+    const key = followerTransitionKey(accountId, symbol);
+    const timer = pendingFollowerMagnitudeChecks.get(key);
+    if (timer) clearTimeout(timer);
+    pendingFollowerMagnitudeChecks.delete(key);
+  };
+
+  const verifyFollowerMagnitude = async (accountId: number, symbol: string) => {
+    const key = followerTransitionKey(accountId, symbol);
+    if (!pendingFollowerMagnitudeChecks.has(key) || stopped) return;
+    pendingFollowerMagnitudeChecks.delete(key);
+    const follower = group.followers.find(item => item.accountId === accountId);
+    if (!follower || follower.mode === 'off' || currentIneligibleAccounts().has(accountId)) return;
+
+    try {
+      const [leaderSnapshot, followerSnapshot] = await Promise.all([
+        broker.listPositions(group.leaderAccountId),
+        broker.listPositions(accountId),
+      ]);
+      const leaderNet = leaderSnapshot.find(item => item.symbol === symbol)?.netQuantity ?? 0;
+      const followerNet = followerSnapshot.find(item => item.symbol === symbol)?.netQuantity ?? 0;
+      const expectedFollowerNet = Math.trunc(leaderNet * follower.multiplier);
+
+      leaderPositions.set(symbol, leaderNet);
+      const followerPositions = positionsByAccount.get(accountId) ?? new Map<string, number>();
+      followerPositions.set(symbol, followerNet);
+      positionsByAccount.set(accountId, followerPositions);
+
+      if (followerNet === expectedFollowerNet) return;
+      gate = {
+        ...gate,
+        divergentAccounts: new Set([...gate.divergentAccounts, accountId]),
+      };
+      failClosed(new Error(
+        `Copier fail-closed: follower ${accountId} má autoritativně pozici ${followerNet} na ${symbol}, `
+        + `očekáváno ${expectedFollowerNet} podle leadera ${leaderNet} × ${follower.multiplier}`,
+      ), { autoClose: false });
+    } catch (error) {
+      failClosed(new Error(
+        `Copier fail-closed: autoritativní kontrola expozice followera ${accountId} `
+        + `na ${symbol} selhala: ${errorOf(error).message}`,
+      ), { autoClose: false });
+    }
+  };
+
+  const scheduleFollowerMagnitudeCheck = (accountId: number, symbol: string) => {
+    const key = followerTransitionKey(accountId, symbol);
+    clearPendingFollowerMagnitudeCheck(accountId, symbol);
+    const timer = setTimeout(() => {
+      eventTail = eventTail
+        .then(() => verifyFollowerMagnitude(accountId, symbol))
+        .catch(reason => failClosed(reason, { autoClose: false }));
+    }, followerTransitionCorrelationWindowMs);
+    pendingFollowerMagnitudeChecks.set(key, timer);
+  };
+
   const rememberFollowerFillCause = (fill: BrokerFill, observedAt: number) => {
     const role = followerFillRole(fill.accountId, fill.brokerOrderId);
     if (!role) return;
@@ -1441,8 +1706,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const pending = pendingFollowerTransitions.get(key);
     if (!pending || Math.sign(pending.netQuantity) !== sign) return;
     clearPendingFollowerTransition(key);
-    recentFollowerFillCauses.delete(key);
     if (role === 'protective') {
+      recentFollowerFillCauses.delete(key);
       failOnExactProtectiveReversal(
         pending.accountId, pending.symbol, pending.netQuantity, fill.brokerOrderId,
       );
@@ -1450,33 +1715,109 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
 
   const failClosedOnCriticalAudit = (entries: readonly CopierAuditEntry[]) => {
-    if (!gate.armed) return;
-    const critical = entries.find(item => (
-      item.kind === 'unknown'
-      || item.kind === 'abandoned'
-      || item.kind === 'rejected'
-      || item.kind === 'cancel-failed'
-      || item.kind === 'sequence-broken'
-      || item.kind === 'blocked'
-    ));
-    if (!critical) return;
-    const lifecycle = critical.key
-      ? currentRuntime().cancelOutbox.get(critical.key)
-      : undefined;
-    const reconcileAfterTerminalFill = critical.kind === 'cancel-failed'
-      && lifecycle?.operation === 'modify'
-      && lifecycle.status === 'abandoned'
-      && lifecycle.outcome === 'filled';
+    const critical = entries.filter(isCriticalAuditEntry);
+    if (critical.length === 0) return;
+    if (!gate.armed) {
+      invalidateReconciliation();
+      return;
+    }
+    const reconcileAfterTerminalFill = criticalAuditAllowsTerminalFillRecovery(
+      entries,
+      currentRuntime().cancelOutbox,
+    );
+    const primary = critical[0];
     failClosed(new Error(
-      critical.reason
-        ? `Copier fail-closed: ${critical.reason}`
-        : `Copier fail-closed: ${critical.kind}`,
+      primary.reason
+        ? `Copier fail-closed: ${primary.reason}`
+        : `Copier fail-closed: ${primary.kind}`,
     ), { reconcileAfterTerminalFill });
+  };
+
+  const handleLeaderPositionTransition = async (
+    symbol: string,
+    previousKnown: boolean,
+    previousNet: number,
+    nextNet: number,
+    observedAt: number,
+  ) => {
+    if (!previousKnown || previousNet === nextNet) return;
+    let epoch = leaderExposureEpoch(symbol);
+    const exitOrderId = previousNet !== 0 && nextNet === 0
+      ? lastLeaderFillOrderId.get(symbol)
+      : undefined;
+    const entryOrderId = nextNet !== 0 ? lastLeaderFillOrderId.get(symbol) : undefined;
+
+    // Restart/legacy obchod nebo první známý scale-in může mít autoritativně
+    // známou otevřenou pozici, ale ještě ne durable epochu. Založíme pouze
+    // detect-only ownership; bez důkazu z opening epochy nesmí pozdější guard
+    // automaticky obchodovat.
+    let legacyFollowers: LeaderFlatFollowerOwnership[] | null = null;
+    if (previousNet !== 0 && !epoch) {
+      legacyFollowers = group.followers.map(follower => ({
+        accountId: follower.accountId,
+        replicationModeAtOpen: follower.mode,
+        eligibleAtOpen: false,
+        copyLineage: 'unproven',
+      }));
+      epoch = createLeaderFlatEpoch({
+        id: globalThis.crypto.randomUUID(),
+        groupId: group.id,
+        leaderAccountId: group.leaderAccountId!,
+        symbol,
+        openedAt: currentRuntime().state.safety.liveCopyOpenSince ?? observedAt,
+        leaderNet: previousNet,
+        followers: legacyFollowers,
+      });
+    }
+
+    const plan = planLeaderPositionTransition({
+      epoch,
+      previousKnown,
+      previousNet,
+      nextNet,
+      observedAt,
+      graceMs: leaderFlatGraceMs,
+      nextEpochId: globalThis.crypto.randomUUID(),
+      groupId: group.id,
+      leaderAccountId: group.leaderAccountId!,
+      symbol,
+      followersAtOpen: legacyFollowers
+        ?? leaderFlatFollowersAt(symbol, nextNet !== 0 ? nextNet : previousNet),
+      ...(entryOrderId ? { leaderEntryOrderIds: [entryOrderId] } : {}),
+      ...(exitOrderId ? { leaderExitOrderIds: [exitOrderId] } : {}),
+    });
+
+    if (plan.kind === 'opened' || plan.kind === 'updated') {
+      if (plan.kind === 'opened' && epoch) {
+        const staleTimer = leaderFlatGuardTimers.get(epoch.id);
+        if (staleTimer) clearTimeout(staleTimer);
+        leaderFlatGuardTimers.delete(epoch.id);
+      }
+      await persistLeaderExposureEpoch(plan.epoch);
+      return;
+    }
+    if (plan.kind === 'scheduled') {
+      await persistLeaderExposureEpoch(plan.epoch);
+      scheduleLeaderFlatEpochVerification(plan.epoch, plan.token);
+      return;
+    }
+    if (plan.kind === 'blocked') {
+      if (plan.epoch) {
+        await persistLeaderExposureEpoch(invalidateLeaderFlatEpoch(
+          plan.epoch,
+          `leader-flat transition blocked: ${plan.reason}`,
+          observedAt,
+        ));
+      }
+      failClosed(new Error(
+        `Copier fail-closed: leader-flat guard nelze bezpečně založit (${plan.reason})`,
+      ), { autoClose: false });
+    }
   };
 
   const flatten = async (accountIds: readonly number[], operationId: string) => {
     gate = { ...gate, armed: false };
-    positionCheckComplete = false;
+    invalidateReconciliation();
     // Flatten je poslední risk-redukční brzda. Kill switch, shozený WS gate
     // ani starý sending/unknown outbox nesmí zabránit ani pokusu o čerstvou
     // autoritativní REST likvidaci. Skutečný transport/rate-limit/broker
@@ -1520,6 +1861,260 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return result;
   };
 
+  const leaderFlatExitEvidence = (
+    epoch: LeaderFlatEpoch,
+    accountId: number,
+    orders: readonly BrokerOrder[],
+  ): LeaderFlatExitEvidence[] => {
+    const evidence: LeaderFlatExitEvidence[] = [];
+    const orderById = new Map(orders.map(order => [order.brokerOrderId, order]));
+    for (const entry of currentRuntime().outbox.values()) {
+      if (entry.request.accountId !== accountId || entry.request.symbol !== epoch.symbol) continue;
+      const guardLiquidation = entry.operationKind === 'liquidate-position'
+        && entry.leaderEventId?.includes(`leader-flat:${epoch.id}`) === true;
+      const copiedExit = epoch.leaderExitOrderIds.includes(entry.leaderOrderId);
+      if (!guardLiquidation && !copiedExit) continue;
+      const brokerOrder = entry.brokerOrderId ? orderById.get(entry.brokerOrderId) : undefined;
+      const status = entry.status === 'sending' || entry.status === 'unknown'
+        ? entry.status
+        : brokerOrder?.status;
+      if (!status || status === 'canceled' || status === 'rejected') continue;
+      evidence.push({
+        accountId,
+        symbol: epoch.symbol,
+        role: guardLiquidation ? 'guard-liquidation' : 'copied-exit',
+        status,
+        ...(guardLiquidation ? { epochId: epoch.id } : {}),
+        ...(copiedExit ? { leaderOrderId: entry.leaderOrderId } : {}),
+        ...(entry.brokerOrderId ? { brokerOrderId: entry.brokerOrderId } : {}),
+        updatedAt: brokerOrder?.updatedAt ?? entry.updatedAt,
+      });
+    }
+    const protectiveIds = new Set<string>();
+    for (const entry of [...currentRuntime().osoOutbox.values(), ...currentRuntime().bracketOutbox.values()]) {
+      if (entry.request.accountId !== accountId || entry.request.symbol !== epoch.symbol) continue;
+      for (const id of [entry.firstBrokerOrderId, entry.secondBrokerOrderId]) {
+        if (id) protectiveIds.add(id);
+      }
+    }
+    for (const order of orders) {
+      if (!protectiveIds.has(order.brokerOrderId) || order.symbol !== epoch.symbol) continue;
+      evidence.push({
+        accountId,
+        symbol: epoch.symbol,
+        role: 'protective',
+        status: order.status,
+        brokerOrderId: order.brokerOrderId,
+        updatedAt: order.updatedAt,
+      });
+    }
+    return evidence;
+  };
+
+  async function verifyLeaderFlatEpoch(
+    token: LeaderFlatGuardToken,
+    expectedSafetyGeneration: number,
+  ): Promise<void> {
+    if (stopped) return;
+    const storedEpoch = currentRuntime().state.safety.leaderExposureEpochs
+      ?.find(item => item.id === token.epochId) ?? null;
+    const epoch = storedEpoch
+      && storedEpoch.groupId === group.id
+      && storedEpoch.leaderAccountId === group.leaderAccountId
+      ? storedEpoch
+      : null;
+    if (
+      !isLeaderFlatGuardTokenCurrent(epoch, token)
+      || safetyGeneration !== expectedSafetyGeneration
+      || !gate.connected
+    ) return;
+
+    const accountIds = [...new Set([
+      epoch.leaderAccountId,
+      ...epoch.followers.map(follower => follower.accountId),
+    ])];
+    const rows = await Promise.all(accountIds.map(async accountId => {
+      try {
+        const [positions, orders] = await Promise.all([
+          broker.listPositions(accountId),
+          broker.listOrders(accountId),
+        ]);
+        return { accountId, ok: true as const, positions, orders };
+      } catch (reason) {
+        return { accountId, ok: false as const, error: errorOf(reason).message };
+      }
+    }));
+
+    const current = leaderExposureEpoch(epoch.symbol);
+    if (
+      !isLeaderFlatGuardTokenCurrent(current, token)
+      || safetyGeneration !== expectedSafetyGeneration
+      || !gate.connected
+    ) return;
+
+    // Cache aktualizujeme až po ověření tokenu; pozdní snapshot staré epochy
+    // nesmí přepsat novější obchod ani autorizovat jeho zavření.
+    for (const row of rows) {
+      if (!row.ok) continue;
+      const map = positionsByAccount.get(row.accountId) ?? new Map<string, number>();
+      for (const position of row.positions) map.set(position.symbol, position.netQuantity);
+      positionsByAccount.set(row.accountId, map);
+      if (row.accountId === epoch.leaderAccountId) {
+        const leaderNet = row.positions
+          .filter(position => position.symbol === epoch.symbol)
+          .reduce((sum, position) => sum + position.netQuantity, 0);
+        leaderPositions.set(epoch.symbol, leaderNet);
+      }
+    }
+
+    const batchAccounts: LeaderFlatAccountBatchSnapshot[] = rows.map(row => row.ok
+      ? {
+        accountId: row.accountId,
+        ok: true,
+        positions: row.positions.map(position => ({
+          symbol: position.symbol,
+          netQuantity: position.netQuantity,
+        })),
+        exitEvidence: leaderFlatExitEvidence(epoch, row.accountId, row.orders),
+      }
+      : { accountId: row.accountId, ok: false, error: row.error });
+    const evaluation = evaluateLeaderFlatBatch({
+      epoch,
+      snapshot: { observedAt: clock(), accounts: batchAccounts },
+      autoCloseFollowerPositions: (
+        group.safety?.autoCloseFollowerPositions
+        ?? DEFAULT_COPY_GROUP_SAFETY.autoCloseFollowerPositions
+      ) && !gate.killSwitch,
+      exitSettlementGraceMs: leaderFlatExitSettlementGraceMs,
+      inflightRetryMs: leaderFlatInflightRetryMs,
+    });
+    await persistLeaderExposureEpoch(evaluation.epoch);
+
+    if (evaluation.kind === 'resolved') {
+      options.onAudit?.([{
+        at: clock(), leaderEventId: `leader-flat:${epoch.id}`, kind: 'recovered',
+        reason: 'leader-flat guard: leader i všichni účastníci jsou autoritativně flat',
+      }]);
+      await syncLiveCopyExposureFlag('clear');
+      return;
+    }
+
+    if (evaluation.kind === 'wait-inflight') {
+      const afterGrace = evaluation.waitingInflightAccountIds.length > 0
+        || evaluation.divergentAccountIds.length > 0;
+      if (afterGrace) {
+        gate = {
+          ...gate,
+          divergentAccounts: new Set([
+            ...gate.divergentAccounts,
+            ...evaluation.divergentAccountIds,
+            ...evaluation.blockedAccountIds,
+          ]),
+        };
+        failClosed(new Error(
+          `Copier fail-closed: leader je flat, follower exit stále čeká (${evaluation.reason})`,
+        ), { autoClose: false });
+      }
+      scheduleLeaderFlatEpochVerification(
+        evaluation.epoch,
+        { epochId: evaluation.epoch.id, generation: evaluation.epoch.generation },
+        safetyGeneration,
+      );
+      return;
+    }
+
+    const affected = [
+      ...evaluation.divergentAccountIds,
+      ...evaluation.blockedAccountIds,
+    ];
+    gate = {
+      ...gate,
+      divergentAccounts: new Set([...gate.divergentAccounts, ...affected]),
+    };
+    failClosed(new Error(
+      `Copier fail-closed: leader je autoritativně flat, follower stav se neshoduje (${evaluation.reason})`,
+    ), { autoClose: false });
+
+    if (evaluation.kind !== 'close-targets') return;
+    const closeSafetyGeneration = safetyGeneration;
+    const closeToken = {
+      epochId: evaluation.epoch.id,
+      generation: evaluation.epoch.generation,
+    };
+    if (
+      !isLeaderFlatGuardTokenCurrent(leaderExposureEpoch(epoch.symbol), closeToken)
+      || closeSafetyGeneration !== safetyGeneration
+      || gate.killSwitch
+      || !gate.connected
+    ) return;
+
+    let closeResult: ManualFlattenResult | null = null;
+    try {
+      await processor.mutate(async runtimeBeforeClose => {
+        // Poslední fencing kontrola bezprostředně před durable write-ahead a
+        // případným POSTem. Novější epocha ani safety incident nesmí proklouznout.
+        if (
+          !isLeaderFlatGuardTokenCurrent(leaderExposureEpoch(epoch.symbol), closeToken)
+          || safetyGeneration !== closeSafetyGeneration
+        ) return runtimeBeforeClose;
+        const processed = await processTargetedLiquidation({
+          runtime: runtimeBeforeClose,
+          broker,
+          store: options.store,
+          groupId: group.id,
+          targets: evaluation.targets,
+          operationId: `leader-flat:${epoch.id}`,
+          clock,
+          confirmationAttempts: options.flattenConfirmationAttempts,
+          confirmationPollMs: options.flattenConfirmationPollMs,
+          accountConcurrency: options.flattenAccountConcurrency,
+          wait: options.wait,
+        });
+        closeResult = processed.result;
+        return processed.runtime;
+      });
+    } catch (reason) {
+      failClosed(new Error(
+        `Leader-flat cílené zavření selhalo: ${errorOf(reason).message}`,
+      ), { autoClose: false });
+      return;
+    }
+
+    const result = closeResult as ManualFlattenResult | null;
+    const finalEpoch = leaderExposureEpoch(epoch.symbol);
+    if (
+      !result
+      || !result.flat
+      || !finalEpoch
+      || !isLeaderFlatGuardTokenCurrent(finalEpoch, closeToken)
+    ) {
+      failClosed(new Error('Leader-flat cílené zavření není autoritativně potvrzené'), {
+        autoClose: false,
+      });
+      return;
+    }
+    const fullyResolved = evaluation.blockedAccountIds.length === 0
+      && evaluation.detectOnlyAccountIds.length === 0
+      && evaluation.waitingInflightAccountIds.length === 0;
+    await persistLeaderExposureEpoch({
+      ...finalEpoch,
+      generation: finalEpoch.generation + 1,
+      phase: fullyResolved ? 'resolved' : 'blocked',
+      terminalAt: clock(),
+      terminalReason: fullyResolved
+        ? 'orphan kopie byly stavově zploštěny; explicitní reconciliation je stále povinná'
+        : 'bezpečně vlastněné orphan kopie byly zploštěny, ale část batch snapshotu zůstala neověřená nebo detect-only',
+    });
+    if (fullyResolved) await syncLiveCopyExposureFlag('clear');
+    options.onAudit?.([{
+      at: clock(), leaderEventId: `leader-flat:${epoch.id}`,
+      kind: fullyResolved ? 'recovered' : 'blocked',
+      reason: fullyResolved
+        ? `leader-flat guard cíleně zploštil ${evaluation.targets.length} account/symbol expozic; runtime zůstává DISARMED`
+        : `leader-flat guard zploštil ${evaluation.targets.length} bezpečně vlastněných expozic, ale neověřený zbytek vyžaduje ruční reconciliation`,
+    }]);
+  }
+
   /**
    * Risk-redukující zavření kopií — jediná automatická broker akce copieru.
    * Ruší working příkazy a zavírá pozice k nule; nikdy nezvětší |pozici|
@@ -1528,21 +2123,26 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * hranici session nesmí vyrábět falešné FAIL-CLOSED poplachy z flattenu
    * naprázdno (working day-orders ruší burza sama).
    */
-  const autoFlattenCopies = async (trigger: CopierAutoClose['trigger'], seed: number) => {
+  const autoFlattenCopies = async (
+    trigger: CopierAutoClose['trigger'],
+    seed: number,
+  ): Promise<boolean> => {
     const scope = group.safety?.armExpiryFlatten ?? DEFAULT_COPY_GROUP_SAFETY.armExpiryFlatten;
-    if (scope === 'off' || group.leaderAccountId == null || gate.killSwitch) return;
+    if (scope === 'off' || group.leaderAccountId == null || gate.killSwitch) return false;
     const accountIds = scope === 'group'
       ? [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]
       : group.followers.map(follower => follower.accountId);
     const hasExposure = accountIds.some(accountId =>
       [...(positionsByAccount.get(accountId)?.values() ?? [])].some(quantity => quantity !== 0));
-    if (!hasExposure) return;
+    // Nulová lokální expozice nevyžaduje broker side effect; následující
+    // reconciliation je právě autoritativní důkaz, že stav zůstal flat.
+    if (!hasExposure) return true;
     if (autoCloseEpisodeAttempts >= AUTO_CLOSE_MAX_ATTEMPTS_PER_EPISODE) {
       options.onAudit?.([{
         at: clock(), leaderEventId: `auto-close-limit:${trigger}:${seed}`, kind: 'blocked',
         reason: `auto-close vyčerpal ${AUTO_CLOSE_MAX_ATTEMPTS_PER_EPISODE} pokusů v epizodě — nutný ruční zásah`,
       }]);
-      return;
+      return false;
     }
     autoCloseEpisodeAttempts += 1;
     const operationId = `auto-close:${trigger}:${seed}`;
@@ -1561,13 +2161,112 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         autoCloseEpisodeAttempts = 0;
         await syncLiveCopyExposureFlag('clear');
       }
+      return result.flat;
     } catch (error) {
       lastAutoClose = {
         at, operationId, trigger, scope, accountIds, flat: false,
         canceledOrders: 0, submittedClosures: 0, error: errorOf(error).message,
       };
       failClosed(new Error(`Auto-close kopií (${trigger}) selhal: ${errorOf(error).message}`));
+      return false;
     }
+  };
+
+  /**
+   * Obnoví durable leader-flat epochy po autoritativním snapshotu. Tato
+   * funkce pouze plánuje stejný symbolově cílený guard; sama neposílá broker
+   * write. Legacy/restart expozice bez opening ownership zůstává detect-only.
+   */
+  const resumeLeaderFlatEpochsAfterSnapshot = async (): Promise<Set<string>> => {
+    const leaderAccountId = group.leaderAccountId;
+    if (leaderAccountId == null) return new Set();
+    const matching = currentRuntime().state.safety.leaderExposureEpochs?.filter(epoch => (
+      epoch.groupId === group.id && epoch.leaderAccountId === leaderAccountId
+    )) ?? [];
+    const latestBySymbol = new Map<string, LeaderFlatEpoch>();
+    for (const epoch of matching) latestBySymbol.set(epoch.symbol, epoch);
+
+    const guardedSymbols = new Set<string>();
+    for (const epoch of latestBySymbol.values()) {
+      const leaderNet = positionsByAccount.get(leaderAccountId)?.get(epoch.symbol) ?? 0;
+      if (epoch.phase === 'open') {
+        if (leaderNet === 0) {
+          const observedAt = clock();
+          const plan = planLeaderPositionTransition({
+            epoch,
+            previousKnown: true,
+            previousNet: epoch.lastLeaderNet,
+            nextNet: 0,
+            observedAt,
+            graceMs: leaderFlatGraceMs,
+            nextEpochId: globalThis.crypto.randomUUID(),
+            groupId: group.id,
+            leaderAccountId,
+            symbol: epoch.symbol,
+            // Ownership pochází výhradně z opening epochy; reconnect ji
+            // nesmí rozšířit odhadem z právě nalezené pozice.
+            followersAtOpen: epoch.followers,
+          });
+          if (plan.kind === 'scheduled') {
+            await persistLeaderExposureEpoch(plan.epoch);
+            scheduleLeaderFlatEpochVerification(plan.epoch, plan.token);
+            guardedSymbols.add(epoch.symbol);
+          } else {
+            await persistLeaderExposureEpoch(invalidateLeaderFlatEpoch(
+              epoch,
+              `connection-recovery nedokázala obnovit leader-flat guard (${plan.kind})`,
+              observedAt,
+            ));
+          }
+          continue;
+        }
+
+        if (Math.sign(leaderNet) !== Math.sign(epoch.lastLeaderNet)) {
+          // Směrový flip proběhl během mezery streamu. Novou expozici jsme
+          // neviděli vzniknout, proto založíme pouze detect-only ownership.
+          await persistLeaderExposureEpoch(createLeaderFlatEpoch({
+            id: globalThis.crypto.randomUUID(),
+            groupId: group.id,
+            leaderAccountId,
+            symbol: epoch.symbol,
+            openedAt: clock(),
+            leaderNet,
+            generation: epoch.generation + 1,
+            followers: epoch.followers.map(follower => ({
+              ...follower,
+              eligibleAtOpen: false,
+              copyLineage: 'unproven',
+              confirmedNetQuantity: undefined,
+            })),
+          }));
+        } else if (leaderNet !== epoch.lastLeaderNet) {
+          // Same-sign změna zachová jen dříve prokázaný quantity ceiling.
+          await persistLeaderExposureEpoch({ ...epoch, lastLeaderNet: leaderNet });
+        }
+        continue;
+      }
+
+      if (
+        epoch.phase === 'grace'
+        || epoch.phase === 'waiting-inflight'
+        || epoch.phase === 'closing'
+      ) {
+        if (leaderNet === 0) {
+          scheduleLeaderFlatEpochVerification(epoch, {
+            epochId: epoch.id,
+            generation: epoch.generation,
+          });
+          guardedSymbols.add(epoch.symbol);
+        } else {
+          await persistLeaderExposureEpoch(invalidateLeaderFlatEpoch(
+            epoch,
+            `leader během connection-recovery už není flat (${leaderNet})`,
+            clock(),
+          ));
+        }
+      }
+    }
+    return guardedSymbols;
   };
 
   /**
@@ -1580,8 +2279,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const runConnectionRecovery = async () => {
     if (!pendingConnectionRecovery || stopped) return;
     pendingConnectionRecovery = false;
-    const scope = group.safety?.armExpiryFlatten ?? DEFAULT_COPY_GROUP_SAFETY.armExpiryFlatten;
-    if (scope === 'off' || gate.killSwitch || group.leaderAccountId == null) return;
+    // `armExpiryFlatten: off` vypíná jen automatickou broker akci, nikoli
+    // povinnou read-only kontrolu po reconnectu/resyncu.
+    if (gate.killSwitch || group.leaderAccountId == null) return;
     if (!gate.connected) {
       pendingConnectionRecovery = true;
       return;
@@ -1607,8 +2307,37 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ));
       return;
     }
+    const guardedSymbols = await resumeLeaderFlatEpochsAfterSnapshot();
     if (!hasFollowerExposure()) {
       await syncLiveCopyExposureFlag('clear');
+      options.onAudit?.([{
+        at: clock(), leaderEventId: 'connection-recovery', kind: 'recovered',
+        reason: 'connection-recovery: autoritativní reconciliation potvrdila flat/no-active stav; runtime zůstává DISARMED',
+      }]);
+      return;
+    }
+    const orphanSymbols = new Set<string>();
+    for (const follower of group.followers) {
+      for (const [symbol, quantity] of positionsByAccount.get(follower.accountId) ?? []) {
+        if (quantity !== 0 && (leaderPositions.get(symbol) ?? 0) === 0) orphanSymbols.add(symbol);
+      }
+    }
+    const unguardedOrphanSymbols = [...orphanSymbols].filter(symbol => !guardedSymbols.has(symbol));
+    if (unguardedOrphanSymbols.length > 0) {
+      failClosed(new Error(
+        `Copier fail-closed: po reconnectu je leader flat a follower má neověřenou expozici (${unguardedOrphanSymbols.join(', ')}); bez opening ownership se automaticky nezavírá`,
+      ), { autoClose: false });
+      options.onAudit?.([{
+        at: clock(), leaderEventId: 'connection-recovery', kind: 'blocked',
+        reason: `connection-recovery: detect-only orphan expozice bez durable opening epochy (${unguardedOrphanSymbols.join(', ')}); žádný broker write`,
+      }]);
+      return;
+    }
+    if (orphanSymbols.size > 0) {
+      options.onAudit?.([{
+        at: clock(), leaderEventId: 'connection-recovery', kind: 'blocked',
+        reason: `connection-recovery: leader-flat guard obnoven pro ${[...orphanSymbols].join(', ')}; runtime zůstává DISARMED`,
+      }]);
       return;
     }
     const leaderOpen = [...(positionsByAccount.get(group.leaderAccountId)?.values() ?? [])]
@@ -1697,7 +2426,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           `Entry ${entryOrderId} dorazil jen s jedním ochranným příkazem (SL bez TP, nebo TP dorazil pozdě). `
           + 'Entry nebyl zkopírován — zadej SL i TP společně.',
         ));
-      }
+      } else invalidateReconciliation();
       settleOsoFlush(entryOrderId);
       return;
     }
@@ -1774,16 +2503,31 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // stihnout celý tržní příkaz a ten se pak nezkopíruje. Při zavírání
       // by se ale zkopíroval a follower by otevřel opačnou pozici. Po
       // obnově proto vždy vynutíme kontrolu pozic; když jsou účty
-      // synchronní, ARM pokračuje a uživatel nic nepozná.
-      if (event.connected && (source.needsReconciliation() || event.resynced)) {
-        positionCheckComplete = false;
+      // synchronní, runtime je bezpečně drží DISARMED. Nový LIVE ARM je navíc
+      // povolen jen z autoritativně flat stavu.
+      if (!event.connected || source.needsReconciliation() || event.resynced) {
+        invalidateReconciliation();
         if (event.resynced) pendingConnectionRecovery = true;
       }
       if (event.connected) {
         // Boot po pádu: durable stopa říká, že kopie vznikly za živého ARM.
         if (!bootRecoveryChecked) {
           bootRecoveryChecked = true;
-          if (currentRuntime().state.safety.liveCopyOpenSince != null) pendingConnectionRecovery = true;
+          const hasRecoverableLeaderFlatEpoch = currentRuntime().state.safety.leaderExposureEpochs
+            ?.some(epoch => (
+              epoch.groupId === group.id
+              && epoch.leaderAccountId === group.leaderAccountId
+              && (
+                epoch.phase === 'open'
+                || epoch.phase === 'grace'
+                || epoch.phase === 'waiting-inflight'
+                || epoch.phase === 'closing'
+              )
+            )) === true;
+          if (
+            currentRuntime().state.safety.liveCopyOpenSince != null
+            || hasRecoverableLeaderFlatEpoch
+          ) pendingConnectionRecovery = true;
         }
         if (pendingConnectionRecovery) scheduleConnectionRecovery();
       }
@@ -1793,6 +2537,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (rollEligibilityToNewSession(now)) await persistEligibility();
     if (event.type === 'fill' && event.fill.accountId !== group.leaderAccountId) {
       rememberFollowerFillCause(event.fill, now);
+      const cachedNet = positionsByAccount.get(event.fill.accountId)?.get(event.fill.symbol) ?? 0;
+      if (
+        cachedNet !== 0
+        && Math.sign(cachedNet) === (event.fill.side === 'Buy' ? 1 : -1)
+        && followerFillRole(event.fill.accountId, event.fill.brokerOrderId) === 'copied-entry'
+      ) {
+        // Kryje opačné pořadí streamu: Position dorazila před Fillem. Teprve
+        // přesný brokerOrderId copier-issued entry smí posílit ownership.
+        await strengthenLeaderFlatLineage(
+          event.fill.accountId,
+          event.fill.symbol,
+          cachedNet,
+        );
+      }
     }
     // Asynchronní reject: REST ack s orderId NENÍ úspěch. Broker může
     // příkaz odmítnout až následným eventem (incident TDFYG: DLL reject
@@ -1995,6 +2753,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           },
         );
       }
+      if (
+        event.position.accountId !== group.leaderAccountId
+        && event.position.netQuantity !== 0
+      ) {
+        await strengthenLeaderFlatLineage(
+          event.position.accountId,
+          event.position.symbol,
+          event.position.netQuantity,
+        );
+      }
       // Follower může legitimně dostat fill kopie dřív, než websocket doručí
       // position event leadera. Historické „existuje někde ochranná noha se
       // stejným znaménkem“ tady způsobilo incident 25. 8.: validní vstup všech
@@ -2018,8 +2786,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           && cause.sign === sign
           && now - cause.observedAt <= followerTransitionCorrelationWindowMs
         ) {
-          recentFollowerFillCauses.delete(transitionKey);
           if (cause.role === 'protective') {
+            recentFollowerFillCauses.delete(transitionKey);
             failOnExactProtectiveReversal(
               event.position.accountId,
               event.position.symbol,
@@ -2033,9 +2801,41 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           );
         }
       }
+      if (event.position.accountId !== group.leaderAccountId) {
+        const follower = group.followers.find(item => item.accountId === event.position.accountId);
+        if (follower && follower.mode !== 'off' && !currentIneligibleAccounts().has(follower.accountId)) {
+          const expected = Math.trunc(
+            (leaderPositions.get(event.position.symbol) ?? 0) * follower.multiplier,
+          );
+          const leaderNet = leaderPositions.get(event.position.symbol) ?? 0;
+          if (leaderNet !== 0 && event.position.netQuantity !== expected) {
+            scheduleFollowerMagnitudeCheck(follower.accountId, event.position.symbol);
+          } else {
+            clearPendingFollowerMagnitudeCheck(follower.accountId, event.position.symbol);
+          }
+        }
+      }
       if (event.position.accountId === group.leaderAccountId) {
+        const previousKnown = leaderPositions.has(event.position.symbol);
         const previousNet = leaderPositions.get(event.position.symbol) ?? 0;
+        await handleLeaderPositionTransition(
+          event.position.symbol,
+          previousKnown,
+          previousNet,
+          event.position.netQuantity,
+          now,
+        );
         leaderPositions.set(event.position.symbol, event.position.netQuantity);
+        for (const follower of group.followers) {
+          if (follower.mode === 'off' || currentIneligibleAccounts().has(follower.accountId)) continue;
+          const followerNet = positionsByAccount.get(follower.accountId)?.get(event.position.symbol) ?? 0;
+          const expected = Math.trunc(event.position.netQuantity * follower.multiplier);
+          if (event.position.netQuantity !== 0 && followerNet !== expected) {
+            scheduleFollowerMagnitudeCheck(follower.accountId, event.position.symbol);
+          } else {
+            clearPendingFollowerMagnitudeCheck(follower.accountId, event.position.symbol);
+          }
+        }
         if (event.position.netQuantity !== 0) {
           for (const [key, pending] of pendingFollowerTransitions) {
             if (
@@ -2073,6 +2873,25 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Atribuce exitu (SL/TP/ručně): flat přechod se páruje s objednávkou
       // posledního fillu daného symbolu.
       lastLeaderFillOrderId.set(event.fill.symbol, event.fill.brokerOrderId);
+      const flatEpoch = leaderExposureEpoch(event.fill.symbol);
+      if (
+        flatEpoch
+        && (leaderPositions.get(event.fill.symbol) ?? 0) === 0
+        && (
+          flatEpoch.phase === 'grace'
+          || flatEpoch.phase === 'waiting-inflight'
+          || flatEpoch.phase === 'closing'
+        )
+        && !flatEpoch.leaderExitOrderIds.includes(event.fill.brokerOrderId)
+      ) {
+        // WebSocket smí doručit Position=0 před závěrečným Fillem. Pozdní
+        // fill doplní exit lineage do už naplánované epochy bez změny jejího
+        // generation tokenu, aby guard poznal rozjetý follower exit a
+        // nevytvořil druhý.
+        await persistLeaderExposureEpoch(mergeLeaderFlatEpochLineage(flatEpoch, {
+          leaderExitOrderIds: [event.fill.brokerOrderId],
+        }));
+      }
       // Denní risk počítadlo čte leader filly; event pak normálně pokračuje
       // do leader event source (on-fill replikace se nemění).
       await trackLeaderFill(event.fill, now);
@@ -2084,6 +2903,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const leaderEvent = source.observe(event, group.leaderAccountId, sequence, now);
     if (!leaderEvent) return;
     options.onLeaderEvent?.(leaderEvent);
+    const bracketPendingUpdated = bracketCorrelator.updatePending(leaderEvent);
+    if (bracketPendingUpdated) {
+      const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+      runtime = recorded.runtime;
+      if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
+      if (recorded.audit.some(item => item.kind === 'sequence-broken')) {
+        failClosed(new Error('Pending bracket replace přišel mimo pořadí'));
+      }
+      return;
+    }
     const bracketPair = bracketCorrelator.observe(leaderEvent);
     const bracketEntryOrderId = bracketCorrelator.entryOrderIdForLeg(leaderEvent.orderId);
     if (leaderEvent.kind === 'submitted' && bracketEntryOrderId) {
@@ -2099,13 +2928,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           const timer = setTimeout(() => {
             pendingBracketTimers.delete(bracketEntryOrderId);
             if (!bracketCorrelator.hasPendingPair(bracketEntryOrderId)) return;
+            bracketCorrelator.abandonPendingPair(bracketEntryOrderId);
             options.onAudit?.([{
               at: clock(), leaderEventId: leaderEvent.id, kind: 'blocked',
               reason: 'incomplete-bracket-pair',
             }]);
             if (gate.armed) {
               failClosed(new Error(`Bracket ${bracketEntryOrderId} nemá bezpečně spárovaný SL i TP`));
-            }
+            } else invalidateReconciliation();
           }, bracketCorrelator.pendingTimeoutMs() + 250);
           pendingBracketTimers.set(bracketEntryOrderId, timer);
         }
@@ -2135,15 +2965,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       });
       runtime = result.runtime;
       if (result.audit.length > 0) options.onAudit?.(result.audit);
-      const criticalBracketAudit = result.audit.some(item => (
-        item.kind === 'unknown'
-        || item.kind === 'abandoned'
-        || item.kind === 'blocked'
-        || item.kind === 'rejected'
-      ));
-      if (criticalBracketAudit) {
-        failClosedOnCriticalAudit(result.audit);
-      } else {
+      failClosedOnCriticalAudit(result.audit);
+      if (!result.audit.some(isCriticalAuditEntry)) {
         rememberProtectiveLeg(bracketPair.stopOrderId, bracketPair.targetOrderId);
         if (auditCleanDispatch(result.audit, 'dispatched')) {
           const stopPotential = levelPnl(bracketPair.symbol, bracketPair.stopPrice);
@@ -2161,7 +2984,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
     // Modify/cancel nesmí předběhnout entry, který čeká v krátkém OSO okně.
     // Nejdřív bezpečně dokončíme samostatné entry a až potom zpracujeme změnu.
-    if (leaderEvent.kind !== 'submitted' && pendingOsoEvents.has(leaderEvent.orderId)) {
+    if (
+      leaderEvent.kind !== 'submitted'
+      && !(
+        leaderEvent.kind === 'replaced'
+        && leaderEvent.executionShapeChanged === true
+      )
+      && pendingOsoEvents.has(leaderEvent.orderId)
+    ) {
       await flushStandaloneOsoEntry(leaderEvent.orderId);
     }
 
@@ -2171,6 +3001,31 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         at: now, leaderEventId: leaderEvent.id, kind: 'blocked', reason: osoObservation.reason,
       }]);
       if (gate.armed) failClosed(new Error(osoObservation.reason));
+      else invalidateReconciliation();
+      return;
+    }
+    if (osoObservation.kind === 'updated') {
+      const pendingEntry = pendingOsoEvents.get(osoObservation.entryOrderId);
+      if (pendingEntry && pendingEntry.orderId === leaderEvent.orderId) {
+        // Entry se může posunout během korelačního okna. Až se okno dokončí,
+        // musí se případný standalone follower entry vytvořit z nejnovější
+        // ceny i uživatelsky změněné quantity, ale stále pod původním
+        // submitted eventem. Protective leg quantity se zde nemění, protože
+        // jeho orderId se entry orderId neshoduje.
+        pendingOsoEvents.set(osoObservation.entryOrderId, {
+          ...pendingEntry,
+          orderType: leaderEvent.orderType,
+          quantity: leaderEvent.quantity,
+          limitPrice: leaderEvent.limitPrice,
+          stopPrice: leaderEvent.stopPrice,
+        });
+      }
+      const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+      runtime = recorded.runtime;
+      if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
+      if (recorded.audit.some(item => item.kind === 'sequence-broken')) {
+        failClosed(new Error('Pending OSO replace přišel mimo pořadí'));
+      }
       return;
     }
     if (osoObservation.kind === 'entry') {
@@ -2239,13 +3094,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       });
       runtime = result.runtime;
       if (result.audit.length > 0) options.onAudit?.(result.audit);
-      const criticalOsoAudit = result.audit.some(item => (
-        item.kind === 'unknown' || item.kind === 'abandoned'
-        || item.kind === 'blocked' || item.kind === 'rejected'
-      ));
-      if (criticalOsoAudit) {
-        failClosedOnCriticalAudit(result.audit);
-      } else {
+      failClosedOnCriticalAudit(result.audit);
+      if (!result.audit.some(isCriticalAuditEntry)) {
         rememberProtectiveLeg(pair.stopOrderId, pair.targetOrderId);
         if (auditCleanDispatch(result.audit, 'dispatched')) {
           const entryPrice = pair.entryLimitPrice ?? pair.entryStopPrice;
@@ -2268,6 +3118,26 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         }
       }
       return;
+    }
+    if (leaderEvent.kind === 'replaced' && leaderEvent.executionShapeChanged === true) {
+      const hasFollowerLink = (currentRuntime().state.links.get(leaderEvent.orderId)?.length ?? 0) > 0;
+      const needsSubmitLifecycle = group.followers.some(follower => (
+        follower.mode === 'on-submit' && !currentIneligibleAccounts().has(follower.accountId)
+      ));
+      if (!hasFollowerLink && needsSubmitLifecycle) {
+        const error = new Error(
+          `Copier fail-closed: leader replace ${leaderEvent.orderId} nemá pending korelaci ani follower link`,
+        );
+        options.onAudit?.([{
+          at: now,
+          leaderEventId: leaderEvent.id,
+          kind: 'blocked',
+          reason: 'unmapped-leader-replace',
+        }]);
+        if (gate.armed) failClosed(error);
+        else invalidateReconciliation();
+        return;
+      }
     }
     if (leaderEvent.kind === 'submitted' && !admittedLeaderOrders.has(leaderEvent.orderId)) {
       if (
@@ -2357,11 +3227,34 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
   };
 
-  /** Autoritativní reconciliation — sdílí ji veřejné API i connection recovery. */
-  async function performReconciliation(): Promise<{
+  type ReconciliationResult = {
     divergentAccounts: number[];
     workingOrderAccounts: number[];
-  }> {
+  };
+
+  /**
+   * Všechny reconciliation běhy sdílejí jednu frontu. Novější požadavek tak
+   * vždy čte broker až po starším a starý snapshot nemůže doběhnout jako
+   * poslední a přepsat novější bezpečnostní stav.
+   */
+  async function performReconciliation(
+    reconciliationOptions: { clearLastError?: boolean } = {},
+  ): Promise<ReconciliationResult> {
+    const requestedGeneration = safetyGeneration;
+    const run = reconciliationTail.then(() => runReconciliation(
+      reconciliationOptions,
+      requestedGeneration,
+    ));
+    reconciliationTail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  /** Autoritativní reconciliation — sdílí ji veřejné API i connection recovery. */
+  async function runReconciliation(
+    reconciliationOptions: { clearLastError?: boolean },
+    requestedGeneration: number,
+  ): Promise<ReconciliationResult> {
+      const generationAtStart = safetyGeneration;
       if (!gate.connected) {
         // Holé „bez broker spojení" mate: uživatel vidí v kartě Připojení
         // platné OAuth a myslí si, že spojení stojí. Padá ale živý WebSocket
@@ -2398,7 +3291,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ).map(follower => follower.accountId);
       if (missing.length > 0 || inactive.length > 0 || readOnlyFollowers.length > 0) {
         gate = { ...gate, armed: false };
-        positionCheckComplete = false;
+        invalidateReconciliation();
         const details = [
           missing.length > 0 ? `missing=${missing.join(',')}` : '',
           inactive.length > 0 ? `inactive=${inactive.join(',')}` : '',
@@ -2522,12 +3415,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         }
       }
       gate = { ...gate, divergentAccounts: divergent, sequenceBroken: false, armed: false };
-      positionCheckComplete = divergent.size === 0 && workingOrderAccounts.size === 0;
+      const sameSafetyGeneration = safetyGeneration === generationAtStart;
+      positionCheckComplete = sameSafetyGeneration
+        && divergent.size === 0
+        && workingOrderAccounts.size === 0;
       if (positionCheckComplete) {
         await acknowledgeTerminalRejectsAfterReconciliation();
-        source.acknowledgeReconciliation();
-        lastError = null;
-        gate = { ...gate, shadowMode: true };
+        // Acknowledge může samo čekat na durable commit. Kill switch nebo
+        // nový broker incident během tohoto awaitu musí mít stále přednost.
+        if (safetyGeneration !== generationAtStart) {
+          positionCheckComplete = false;
+        } else {
+          source.acknowledgeReconciliation();
+          if (
+            reconciliationOptions.clearLastError
+            && requestedGeneration === generationAtStart
+            && !gate.killSwitch
+          ) lastError = null;
+        }
       }
       return {
         divergentAccounts: [...divergent],
@@ -2582,8 +3487,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         || [...currentTopology].some(accountId => !nextTopology.has(accountId));
       if (nextGroup.leaderAccountId === group.leaderAccountId && !topologyChanged && !switchOptions.forceEpoch) {
         group = nextGroup;
-        positionCheckComplete = false;
-        source.requireReconciliation();
+        invalidateReconciliation();
         return;
       }
       if (!gate.connected) {
@@ -2598,7 +3502,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           ? 'OSO correlation'
           : '',
         pendingFollowerTransitions.size > 0 ? 'follower transition' : '',
+        pendingFollowerMagnitudeChecks.size > 0 ? 'follower magnitude check' : '',
         sweepingProtectiveLegs.size > 0 ? 'protective sweep' : '',
+        leaderFlatGuardTimers.size > 0 ? 'leader-flat guard' : '',
         autoCloseInFlight ? 'auto-close' : '',
         recoveryInFlight || pendingConnectionRecovery ? 'connection recovery' : '',
         cooldownPending ? 'cooldown transition' : '',
@@ -2661,7 +3567,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
 
       runtime = await processor.mutate(async current => {
-        const { liveCopyOpenSince: _dropOpenFlag, ...preservedSafety } = current.state.safety;
+        const {
+          liveCopyOpenSince: _dropOpenFlag,
+          leaderExposureEpochs: _dropLeaderExposureEpochs,
+          ...preservedSafety
+        } = current.state.safety;
         const cleanState = createCopierState([], 0, [], [], [], preservedSafety);
         const committed = await options.store.commit(
           toSnapshot(cleanState, [], [], current.revision, [], []),
@@ -2693,6 +3603,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       untrackedTradeSymbols.clear();
       recentFollowerFillCauses.clear();
+      for (const timer of pendingFollowerMagnitudeChecks.values()) clearTimeout(timer);
+      pendingFollowerMagnitudeChecks.clear();
+      for (const timer of leaderFlatGuardTimers.values()) clearTimeout(timer);
+      leaderFlatGuardTimers.clear();
       sweptProtectiveLegs.clear();
       sweepingProtectiveLegs.clear();
       workingOrderAccounts = new Set();
@@ -2702,9 +3616,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       pendingConnectionRecovery = false;
       recoveryInFlight = false;
       bootRecoveryChecked = true;
-      positionCheckComplete = false;
+      invalidateReconciliation();
       lastError = null;
-      source.requireReconciliation();
       gate = {
         ...gate,
         armed: false,
@@ -2742,7 +3655,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const now = clock();
       if (!group.enabled) throw new Error('Copier nelze armovat: skupina je vypnutá');
       if (!gate.connected) throw new Error('Copier nelze armovat bez dokončeného broker syncu');
-      if (source.needsReconciliation()) throw new Error('Po reconnectu je nutná kontrola pozic');
+      if (source.needsReconciliation()) {
+        throw new Error('Po reconnectu je nutná kontrola pozic; před ARM proveď kontrolu pozic');
+      }
       const safety = currentRuntime().state.safety;
       if (!shadowMode && now < safety.dayLockUntil) {
         throw new Error(`ARM blokován denním lockem: ${safety.dayLockReason ?? 'risk lock'}`);
@@ -2793,16 +3708,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     disarm() {
       gate = { ...gate, armed: false };
       lastResumeOffer = null;
-      // Ruční DISARM = vědomé „drž pozice" — boot recovery je nesmí zavřít.
+      // Ruční DISARM zastaví nové kopie. Starý obecný account-wide boot
+      // auto-close vypneme, ale durable leader-flat epocha zůstává: pokud
+      // leader později zavře, smí dokončit jen prokázanou existující kopii
+      // přes přesný account/symbol guard.
       void syncLiveCopyExposureFlag('clear').catch(() => undefined);
     },
     engageKillSwitch(reason = 'Ruční nouzové zastavení') {
       if (stopped) return;
+      invalidateReconciliation();
       lastError = new Error(reason.trim() || 'Ruční nouzové zastavení');
       // Kill switch se v této runtime session nedá odjistit. Nový bootstrap znovu
       // startuje DISARMED a stále vyžaduje reconciliation před ostrým ARM.
       gate = { ...gate, armed: false, killSwitch: true };
-      positionCheckComplete = false;
       lastResumeOffer = null;
       pendingConnectionRecovery = false;
       // Kill switch = explicitní freeze; žádná pozdější automatika.
@@ -2885,7 +3803,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (changed) await persistEligibility();
     },
     async reconcile() {
-      return performReconciliation();
+      // Veřejná Kontrola pozic je explicitní uživatelská recovery akce.
+      // Pouze její čistý výsledek smí odstranit starou chybu; automatické
+      // reconnect/terminal-fill kontroly incident uživateli neschovávají.
+      return performReconciliation({ clearLastError: true });
     },
     async verifyAccountEligibility(accountId) {
       if (!Number.isSafeInteger(accountId) || accountId <= 0) {
@@ -2945,14 +3866,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     async reconfigureGroup(nextGroup) {
       // UI dostane okamžitě fail-safe DISARM ještě před čekáním na eventTail.
       gate = { ...gate, armed: false };
-      positionCheckComplete = false;
+      invalidateReconciliation();
       await reconfigureLeaderEpoch(nextGroup);
     },
     async activateGroup(nextGroup) {
       // Aktivace není ARM. Nejprve fail-safe DISARM, potom plný preflight
       // staré i nové topologie a nová durable epocha.
       gate = { ...gate, armed: false };
-      positionCheckComplete = false;
+      invalidateReconciliation();
       await reconfigureLeaderEpoch(nextGroup, { allowGroupChange: true, forceEpoch: true });
     },
     updateGroup(nextGroup) {
@@ -2964,8 +3885,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         throw new Error('Změna leadera vyžaduje bezpečný reconfigureGroup preflight');
       }
       group = nextGroup;
-      positionCheckComplete = false;
-      source.requireReconciliation();
+      invalidateReconciliation();
     },
     async flattenAccount(accountId, operationId) {
       const allowed = new Set([
@@ -2986,7 +3906,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const explanation = reason.trim();
       if (explanation.length < 5) throw new Error('Ruční resolution vyžaduje konkrétní důvod');
       gate = { ...gate, armed: false };
-      positionCheckComplete = false;
+      invalidateReconciliation();
       await processor.mutate(async current => {
         const outbox = new Map(current.outbox);
         const bracketOutbox = new Map(current.bracketOutbox);
@@ -3106,6 +4026,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       pendingOsoEvents.clear();
       for (const pending of pendingFollowerTransitions.values()) clearTimeout(pending.timer);
       pendingFollowerTransitions.clear();
+      for (const timer of pendingFollowerMagnitudeChecks.values()) clearTimeout(timer);
+      pendingFollowerMagnitudeChecks.clear();
+      for (const timer of leaderFlatGuardTimers.values()) clearTimeout(timer);
+      leaderFlatGuardTimers.clear();
       recentFollowerFillCauses.clear();
       for (const entryOrderId of [...pendingOsoResolvers.keys()]) settleOsoFlush(entryOrderId);
       unsubscribe();

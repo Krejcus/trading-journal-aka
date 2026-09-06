@@ -13,6 +13,7 @@
  *  - každý agregát nese `n` a pokrytí — UI nikdy nepředstírá data, která nejsou
  */
 import { Trade, Account } from '../types';
+import { selectExperimentCohorts, type ExperimentCohortConfig } from './experimentCohorts';
 
 // ============================================================================
 // TYPES
@@ -22,6 +23,8 @@ export type LabUnit = 'R' | '$';
 export type LabWorld = 'live' | 'backtest';
 
 export interface CfVariantValue {
+    fixedExcluded?: string | null;
+    trailExcluded?: string | null;
     /** Realizované R s fixním TP pro tento SL placement (null = varianta pro obchod nevalidní). */
     fixedR: number | null;
     /** Realizované R se strukturním trailingem místo fixního TP. */
@@ -65,12 +68,13 @@ export interface LabTrade {
      *  'prep' = odvozený z ranní přípravy (live), null = žádný. */
     biasSource: 'trade' | 'prep' | null;
     /** Counterfactual SL varianty — jen když AlphaBridge data existují. */
-    cf: { swing: CfVariantValue; ote: CfVariantValue; fvg: CfVariantValue; tpBest: { label: string; r: number } | null } | null;
+    cf: { swing: CfVariantValue; ote: CfVariantValue; fvg: CfVariantValue; tpBest: { label: string; r: number } | null; management?: Array<{ label: string; r: number | null; excluded: string | null }> } | null;
+    analyticsExclusions?: { counterfactual: boolean; excursion: string | null; path: string | null };
     /** Excursion do konce dne — kolik zbylo na stole. */
     exc: { mfePotR: number | null; tpR: number | null; leftR: number | null; topReached: string | null } | null;
     /** Prvních max. 30 kompletních 1m barů po vstupu (AlphaBridge executionPath v1). */
     path: {
-        complete: boolean; maxAdverseR: number | null; maxFavorableR: number | null;
+        complete: boolean; confirmed?: boolean; maxAdverseR: number | null; maxFavorableR: number | null;
         timeToSl: Record<string, number | null>; timeToTp: Record<string, number | null>;
         entryTouchBars: number | null; minutesNearEntry: number | null; closeCrossCount: number | null;
         firstStop: { outcome: string; realizedR: number | null } | null;
@@ -88,6 +92,10 @@ export interface LabCoverage {
     rawCount: number;
     /** Rozhodnutí po dedupu fan-out kopií — základ všech agregátů. */
     total: number;
+    /** Records with at least one explicitly excluded analytic estimate, not all-or-nothing trade exclusions. */
+    excludedCf?: number;
+    excludedExc?: number;
+    excludedPath?: number;
     withR: number;
     withCf: number;
     withExc: number;
@@ -135,7 +143,7 @@ const isMissed = (t: Trade) => t.executionStatus === 'Missed';
 const toNum = (v: any): number | null => {
     if (v == null) return null;
     const n = Number(v);
-    return Number.isNaN(n) ? null : n;
+    return Number.isFinite(n) ? n : null;
 };
 
 const normDirection = (d: any): 'Long' | 'Short' =>
@@ -154,13 +162,33 @@ const dayKeyOf = (d: Date): string => {
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
 
-const cfVariantOf = (raw: any): CfVariantValue => {
+/** Explicit unknown/partial outcomes cannot enter confirmed paired comparisons.
+ * A terminal child may precede a gap affecting a different parent variant. */
+const analyticsFailure = (raw: any, parent?: any): string | null => {
+    if (!raw) return null;
+    if (raw.hasGaps === true) return 'gaps';
+    if (raw.ambiguous === true || raw.outcomeAmbiguous === true || raw.terminalAmbiguous === true) return 'ambiguous';
+    if (raw.complete === false || raw.stopReason === 'end' || String(raw.outcome || '').toUpperCase() === 'OPEN') return 'incomplete';
+    if (raw.valid === false || raw.ok === false || raw.available === false) return 'unavailable';
+    return raw.complete !== true && parent ? analyticsFailure(parent) : null;
+};
+const normalizedVariantR = (raw: any, originalRisk: number | null): number | null => {
+    const value = toNum(raw?.netRealizedR ?? raw?.realizedR);
+    const variantRisk = toNum(raw?.riskAmount);
+    // New placement variants state their own denominator; compare at fixed
+    // quantity using original-trade R, so multiplying by original risk yields cash.
+    return value === null ? null : value * (originalRisk && variantRisk && variantRisk > 0 ? variantRisk / originalRisk : 1);
+};
+const cfVariantOf = (raw: any, parent: any, originalRisk: number | null, actualAmbiguous: boolean): CfVariantValue => {
     if (!raw) return { fixedR: null, trailR: null, outcome: null, rr: null };
+    const fixedExcluded = actualAmbiguous ? 'ambiguous-actual' : analyticsFailure(raw, parent);
+    const trailExcluded = !raw.trail ? null : actualAmbiguous ? 'ambiguous-actual' : raw.valid === false || raw.ok === false ? 'unavailable' : analyticsFailure(raw.trail, parent);
     return {
-        fixedR: toNum(raw.realizedR),
-        trailR: toNum(raw.trail?.realizedR),
-        outcome: raw.outcome ?? null,
-        rr: toNum(raw.rr),
+        fixedR: fixedExcluded ? null : normalizedVariantR(raw, originalRisk),
+        trailR: trailExcluded ? null : normalizedVariantR(raw.trail, originalRisk),
+        outcome: fixedExcluded ? null : raw.outcome ?? null,
+        rr: fixedExcluded ? null : toNum(raw.rr),
+        fixedExcluded, trailExcluded,
     };
 };
 
@@ -212,58 +240,52 @@ const normalizeLabTrade = (t: Trade, prepByDay?: Map<string, PrepBiasDay>): LabT
         }
     }
 
-    // Counterfactual — jen když AlphaBridge blob existuje a je aspoň 1 varianta.
+    const actualAmbiguous = t.outcomeAmbiguous === true;
     const cfRaw: any = t.counterfactual;
     let cf: LabTrade['cf'] = null;
+    let cfExcluded = Boolean(cfRaw && cfRaw.reason !== 'no-initial-stop' && cfRaw.available === false && analyticsFailure(cfRaw));
     if (cfRaw && cfRaw.available) {
-        const swing = cfVariantOf(cfRaw.swing);
-        const ote = cfVariantOf(cfRaw.ote);
-        const fvg = cfVariantOf(cfRaw.fvg);
-        if (swing.fixedR != null || ote.fixedR != null || fvg.fixedR != null) {
-            // Nejlepší TP target zpětně (nejvyšší realizované R přes tpTargets).
-            let tpBest: { label: string; r: number } | null = null;
-            if (Array.isArray(cfRaw.tpTargets)) {
-                for (const tgt of cfRaw.tpTargets) {
-                    const rv = toNum(tgt?.realizedR);
-                    if (rv == null) continue;
-                    if (!tpBest || rv > tpBest.r) tpBest = { label: String(tgt.label || '?').replace(/\s*\[.*?\]\s*$/, ''), r: rv };
-                }
-            }
-            cf = { swing, ote, fvg, tpBest };
+        const swing = cfVariantOf(cfRaw.swing, cfRaw, risk, actualAmbiguous);
+        const ote = cfVariantOf(cfRaw.ote, cfRaw, risk, actualAmbiguous);
+        const fvg = cfVariantOf(cfRaw.fvg, cfRaw, risk, actualAmbiguous);
+        cfExcluded = [swing, ote, fvg].some(v => Boolean(v.fixedExcluded || v.trailExcluded));
+        let tpBest: { label: string; r: number } | null = null;
+        for (const target of Array.isArray(cfRaw.tpTargets) ? cfRaw.tpTargets : []) {
+            const excluded = actualAmbiguous ? 'ambiguous-actual' : analyticsFailure(target, cfRaw);
+            if (excluded) { cfExcluded = true; continue; }
+            const value = normalizedVariantR(target, risk);
+            if (value != null && (!tpBest || value > tpBest.r)) tpBest = { label: String(target.label || '?').replace(/\s*\[.*?\]\s*$/, ''), r: value };
         }
+        const management = (Array.isArray(cfRaw.variants) ? cfRaw.variants : []).map((variant: any) => {
+            const excluded = actualAmbiguous ? 'ambiguous-actual' : analyticsFailure(variant, cfRaw);
+            if (excluded) cfExcluded = true;
+            return { label: String(variant.label || '?'), r: excluded ? null : normalizedVariantR(variant, risk), excluded };
+        });
+        cf = { swing, ote, fvg, tpBest, management };
     }
-
     const excRaw: any = t.excursion;
+    const excExcluded = excRaw && excRaw.reason !== 'no-initial-stop'
+        ? t.excursionComplete === false ? 'incomplete' : analyticsFailure(excRaw) : null;
     let exc: LabTrade['exc'] = null;
-    if (excRaw && excRaw.available) {
-        const reached = Array.isArray(excRaw.levels) ? excRaw.levels.filter((l: any) => l?.reached) : [];
-        const top = reached.length ? reached.reduce((m: any, l: any) => (toNum(l.r) ?? -Infinity) > (toNum(m.r) ?? -Infinity) ? l : m, reached[0]) : null;
-        exc = {
-            mfePotR: toNum(excRaw.mfePotentialR),
-            tpR: toNum(excRaw.tpR),
-            leftR: toNum(excRaw.leftOnTableR),
-            topReached: top ? String(top.label || '').replace(/\s*\[.*?\]\s*$/, '') : null,
-        };
+    if (excRaw?.available && !excExcluded) {
+        const reached = Array.isArray(excRaw.levels) ? excRaw.levels.filter((level: any) => level?.reached && !level.possible) : [];
+        const top = reached.length ? reached.reduce((best: any, level: any) => (toNum(level.r) ?? -Infinity) > (toNum(best.r) ?? -Infinity) ? level : best, reached[0]) : null;
+        exc = { mfePotR: toNum(excRaw.mfePotentialR), tpR: toNum(excRaw.tpR), leftR: toNum(excRaw.leftOnTableR),
+            topReached: top ? String(top.label || '').replace(/\s*\[.*?\]\s*$/, '') : null };
     }
-
     const pathRaw: any = t.executionPath;
-    const variant = (v: any) => v && typeof v.outcome === 'string'
-        ? { outcome: v.outcome, realizedR: toNum(v.realizedR) }
-        : null;
-    const path: LabTrade['path'] = pathRaw && pathRaw.available && pathRaw.version === 1
-        ? {
-            complete: pathRaw.complete === true,
-            maxAdverseR: toNum(pathRaw.maxAdverseR),
-            maxFavorableR: toNum(pathRaw.maxFavorableR),
-            timeToSl: pathRaw.timeToSlPct || {},
-            timeToTp: pathRaw.timeToTpPct || {},
-            entryTouchBars: toNum(pathRaw.entryTouchBars),
-            minutesNearEntry: toNum(pathRaw.minutesNearEntry),
-            closeCrossCount: toNum(pathRaw.closeCrossCount),
-            firstStop: variant(pathRaw.candleStops?.firstComplete),
-            twoStop: variant(pathRaw.candleStops?.firstTwoComplete),
-        }
-        : null;
+    const pathExcluded = pathRaw && pathRaw.reason !== 'no-initial-stop'
+        ? analyticsFailure(pathRaw) ?? (pathRaw.maeAmbiguous === true || (pathRaw.maeAmbiguous === undefined && pathRaw.terminalBarOrderingUnknown === true) ? 'intrabar-excursion-bound' : null) : null;
+    const variant = (value: any) => value && typeof value.outcome === 'string'
+        && !actualAmbiguous && !analyticsFailure(value, pathRaw)
+        ? { outcome: value.outcome, realizedR: normalizedVariantR(value, risk) } : null;
+    const path: LabTrade['path'] = pathRaw?.available && pathRaw.version === 1
+        ? { complete: pathRaw.complete === true && pathRaw.hasGaps !== true,
+            confirmed: !pathExcluded && !actualAmbiguous,
+            maxAdverseR: toNum(pathRaw.maxAdverseR), maxFavorableR: pathRaw.mfeAmbiguous ? null : toNum(pathRaw.maxFavorableR),
+            timeToSl: pathRaw.timeToSlPct || {}, timeToTp: pathRaw.timeToTpPct || {},
+            entryTouchBars: toNum(pathRaw.entryTouchBars), minutesNearEntry: toNum(pathRaw.minutesNearEntry), closeCrossCount: toNum(pathRaw.closeCrossCount),
+            firstStop: variant(pathRaw.candleStops?.firstComplete), twoStop: variant(pathRaw.candleStops?.firstTwoComplete) } : null;
 
     return {
         id: t.id,
@@ -280,8 +302,8 @@ const normalizeLabTrade = (t: Trade, prepByDay?: Map<string, PrepBiasDay>): LabT
         pnl,
         risk,
         r: risk ? pnl / risk : null,
-        mfeR: toNum(t.mfeR),
-        maeR: toNum(t.maeR),
+        mfeR: t.excursionAmbiguous ? null : toNum(t.mfeR),
+        maeR: t.excursionAmbiguous ? null : toNum(t.maeR),
         durationMinutes: t.durationMinutes || null,
         slPlacement: t.slPlacement || null,
         targetType: t.targetType || null,
@@ -291,6 +313,7 @@ const normalizeLabTrade = (t: Trade, prepByDay?: Map<string, PrepBiasDay>): LabT
         biasAligned,
         biasSource,
         cf,
+        analyticsExclusions: { counterfactual: cfExcluded, excursion: excExcluded, path: pathExcluded },
         exc,
         path,
         emotions: t.emotions || [],
@@ -371,10 +394,13 @@ export const buildLabDatasetFromTrades = (raw: Trade[], world: LabWorld = 'live'
             rawCount: clean.length,
             total: lab.length,
             withR: lab.filter(t => t.r != null).length,
-            withCf: lab.filter(t => t.cf != null).length,
+            withCf: lab.filter(t => t.cf && ([t.cf.swing, t.cf.ote, t.cf.fvg].some(v => v.fixedR != null || v.trailR != null) || t.cf.tpBest || t.cf.management?.some(v => v.r != null))).length,
+            excludedCf: lab.filter(t => t.analyticsExclusions?.counterfactual).length,
+            excludedExc: lab.filter(t => t.analyticsExclusions?.excursion).length,
+            excludedPath: lab.filter(t => t.analyticsExclusions?.path).length,
             withExc: lab.filter(t => t.exc != null).length,
             withPath: lab.filter(t => t.path != null).length,
-            withCompletePath: lab.filter(t => t.path?.complete).length,
+            withCompletePath: lab.filter(t => t.path?.complete && t.path.confirmed !== false).length,
             withBias: lab.filter(t => t.biasAligned != null).length,
         },
     };
@@ -473,9 +499,14 @@ export interface VariantAgg {
     realUsd: number;
     n: number;
     wins: number;
+    excluded?: number;
 }
 
 export interface CfSummary {
+    excluded?: number;
+    excursionCovered?: number;
+    excursionExcluded?: number;
+    managementVariants?: Array<{ label: string; n: number; excluded: number; r: number; realR: number; deltaR: number }>;
     /** Obchodů s cf datovým blobem A riskem (základ srovnání). */
     covered: number;
     total: number;
@@ -503,7 +534,7 @@ const VARIANT_DEFS: Array<{ key: VariantAgg['key']; label: string; sub: string; 
 
 export const computeCfSummary = (ds: LabDataset): CfSummary => {
     // Základ: obchody, kde cf existuje A známe risk (jinak nejde R→$ ani fér srovnání).
-    const base = ds.trades.filter(t => t.cf != null && t.risk != null);
+    const base = ds.trades.filter(t => t.cf != null && t.risk != null && [t.cf.swing, t.cf.ote, t.cf.fvg].some(v => v.fixedR != null || v.trailR != null));
 
     const realTotR = base.reduce((a, t) => a + (t.r as number), 0);
     const realTotUsd = base.reduce((a, t) => a + t.pnl, 0);
@@ -530,7 +561,8 @@ export const computeCfSummary = (ds: LabDataset): CfSummary => {
             n++;
             if (val > 0) wins++;
         }
-        return { key: def.key, label: def.label, sub: def.sub, isTrail: def.trail, isReal: false, r, usd, realR, realUsd, n, wins };
+        return { key: def.key, label: def.label, sub: def.sub, isTrail: def.trail, isReal: false, r, usd, realR, realUsd, n, wins,
+            excluded: ds.trades.filter(t => def.trail ? t.cf?.[def.slKey].trailExcluded : t.cf?.[def.slKey].fixedExcluded).length };
     });
 
     // Nejlepší fixní varianta dle PÁROVÉ delty (varianta − realita na stejných
@@ -554,7 +586,21 @@ export const computeCfSummary = (ds: LabDataset): CfSummary => {
         .map(t => ({ t, gapR: t.exc!.leftR as number }));
     const leftOnTable = leftAll.filter(x => x.gapR > 0.3).sort((a, b) => b.gapR - a.gapR).slice(0, 3);
 
+    const managementLabels = [...new Set(ds.trades.flatMap(t => t.cf?.management?.map(v => v.label) ?? []))];
+    const managementVariants = managementLabels.map(label => {
+        const pairs = ds.trades.flatMap(t => {
+            const value = t.cf?.management?.find(v => v.label === label);
+            return value?.r != null && t.r != null ? [{ actual: t.r, variant: value.r }] : [];
+        });
+        const r = pairs.reduce((sum, value) => sum + value.variant, 0);
+        const realR = pairs.reduce((sum, value) => sum + value.actual, 0);
+        return { label, n: pairs.length, r, realR, deltaR: r - realR,
+            excluded: ds.trades.filter(t => t.cf?.management?.find(v => v.label === label)?.excluded).length };
+    });
     return {
+        excluded: ds.coverage.excludedCf ?? 0,
+        excursionCovered: ds.coverage.withExc, excursionExcluded: ds.coverage.excludedExc ?? 0,
+        managementVariants,
         covered: base.length,
         total: ds.trades.length,
         real,
@@ -589,7 +635,7 @@ export const buildTrailInsight = (cf: CfSummary): string | null => {
 
 /** Deterministický insight — kde utekl zisk (top obchody dle leftOnTableR). */
 export const buildLeftInsight = (cf: CfSummary): string | null => {
-    if (cf.covered === 0) return null;
+    if (cf.excursionCovered === 0 || (cf.excursionCovered === undefined && cf.covered === 0)) return null;
     if (!cf.leftOnTable.length) return 'Zisky jsi bral blízko maxima dosahu (MFE) — na stole toho moc nezůstávalo.';
     const items = cf.leftOnTable.map(x => `${fmtDayTime(x.t.date)} (+${r1(x.gapR)}R do MFE)`).join(', ');
     return `Vítězné obchody často zašly dál, než kde jsi vybral zisk — např. ${items}. Celkem zůstalo na stole ${fmtR(cf.leftTotalR)} potenciálu.`;
@@ -1178,7 +1224,7 @@ export const computePsychoSummary = (
 // ============================================================================
 
 export const computeExecutionSummary = (ds: LabDataset) => {
-    const covered = ds.trades.filter(t => t.path?.complete && t.path.maxAdverseR != null);
+    const covered = ds.trades.filter(t => t.path?.complete && t.path.confirmed !== false && t.path.maxAdverseR != null);
     const bucketDefs = [
         { key: '0_25', label: '0–25 % SL', min: 0, max: 0.25 },
         { key: '25_50', label: '25–50 % SL', min: 0.25, max: 0.5 },
@@ -1214,14 +1260,18 @@ export const computeExecutionSummary = (ds: LabDataset) => {
         };
     };
     const variant = (key: 'firstStop' | 'twoStop') => {
-        const pairs = covered.filter(t => {
+        const pairs = ds.trades.filter(t => {
+            if (!t.path?.complete) return false;
             const v = t.path?.[key];
             return v && v.realizedR != null && v.outcome !== 'OPEN' && t.r != null;
         });
         const variantR = pairs.reduce((a, t) => a + (t.path![key]!.realizedR as number), 0);
         const actualR = pairs.reduce((a, t) => a + (t.r as number), 0);
-        const wins = pairs.filter(t => t.path![key]!.outcome === 'WIN').length;
-        return { n: pairs.length, variantR, actualR, deltaR: variantR - actualR, winratePct: pairs.length ? wins / pairs.length * 100 : null };
+        const wins = pairs.filter(t => Number(t.path![key]!.realizedR) > 0).length;
+        return { n: pairs.length, excluded: ds.trades.filter(t => {
+            const raw = (t.raw.executionPath as any)?.candleStops?.[key === 'firstStop' ? 'firstComplete' : 'firstTwoComplete'];
+            return raw && (t.raw.outcomeAmbiguous || analyticsFailure(raw, t.raw.executionPath));
+        }).length, variantR, actualR, deltaR: variantR - actualR, winratePct: pairs.length ? wins / pairs.length * 100 : null };
     };
     const avg = (pick: (t: LabTrade) => number | null) => {
         const xs = covered.map(pick).filter((x): x is number => x != null && Number.isFinite(x));
@@ -1229,6 +1279,7 @@ export const computeExecutionSummary = (ds: LabDataset) => {
     };
     return {
         covered: covered.length,
+        excluded: ds.coverage.excludedPath ?? 0,
         buckets,
         thresholds: { sl25: threshold('25'), sl50: threshold('50'), sl75: threshold('75'), sl100: threshold('100') },
         behavior: {
@@ -1351,6 +1402,9 @@ export const buildLabReport = (ds: LabDataset, section: string = 'all', prepDays
             obchodu_po_dedupu: ds.coverage.total,
             s_riskem_R: ds.coverage.withR,
             s_counterfactual: ds.coverage.withCf,
+            s_vyrazenou_cf_variantou: ds.coverage.excludedCf ?? 0,
+            vyrazena_excursion: ds.coverage.excludedExc ?? 0,
+            vyrazeny_execution_path: ds.coverage.excludedPath ?? 0,
             s_excursion: ds.coverage.withExc,
             s_execution_path: ds.coverage.withPath,
             s_execution_path_kompletni: ds.coverage.withCompletePath,
@@ -1375,14 +1429,17 @@ export const buildLabReport = (ds: LabDataset, section: string = 'all', prepDays
     if (want('counterfactual')) {
         const cf = computeCfSummary(ds);
         out.counterfactual = cf.covered === 0
-            ? { _pozn: 'Žádný obchod nemá counterfactual data (sbírá je AlphaBridge).' }
+            ? { _pozn: 'Žádné potvrzené párové SL srovnání. Neúplné/neurčité odhady nejsou potvrzené výsledky.', vyrazene_zaznamy: cf.excluded, management_varianty: cf.managementVariants, excursion_pokryti: cf.excursionCovered, excursion_vyrazeno: cf.excursionExcluded }
             : {
-                _pozn: 'Každá varianta je PÁROVÉ srovnání: R varianty vs. skutečné R na TĚCH SAMÝCH obchodech (n se u variant liší — varianta nemusí být u všech obchodů validní). Winrate varianty = podíl obchodů s kladným R varianty.',
+                _pozn: 'Každá varianta je PÁROVÉ srovnání: R varianty vs. skutečné R na TĚCH SAMÝCH obchodech (n se u variant liší — varianta nemusí být u všech obchodů validní). Winrate varianty = podíl obchodů s kladným R varianty. Nové varianty používají čisté R po poplatcích normalizované na původní risk; starší záznamy bez net polí zachovávají uloženou metodiku. Vyřazená N označují explicitně neúplné, mezerovité nebo neurčité odhady.',
                 zaklad_obchodu: cf.covered,
+                zaznamy_s_vyrazenou_variantou: cf.excluded,
+                management_varianty: cf.managementVariants,
+                excursion_pokryti: cf.excursionCovered, excursion_vyrazeno: cf.excursionExcluded,
                 realita: { R: round2(cf.real.r), usd: round2(cf.real.usd), n: cf.real.n, winrate_pct: cf.real.n ? Math.round(cf.real.wins / cf.real.n * 100) : null },
                 varianty: cf.variants.map(v => ({
                     varianta: `${v.label} · ${v.sub}`,
-                    R: round2(v.r), usd: round2(v.usd), n: v.n,
+                    R: round2(v.r), usd: round2(v.usd), n: v.n, vyrazeno: v.excluded ?? 0,
                     realita_stejne_obchody_R: round2(v.realR),
                     delta_R: round2(v.r - v.realR),
                     winrate_pct: v.n ? Math.round(v.wins / v.n * 100) : null,
@@ -1398,10 +1455,10 @@ export const buildLabReport = (ds: LabDataset, section: string = 'all', prepDays
     if (want('execution')) {
         const ex = computeExecutionSummary(ds);
         out.execution = ex.covered === 0
-            ? { _pozn: 'Žádný obchod zatím nemá kompletní 1m executionPath v1.' }
+            ? { _pozn: 'Žádný obchod zatím nemá potvrzenou kompletní 1m executionPath v1.', vyrazeno: ex.excluded, sl_za_svickou: ex.candleStops }
             : {
                 _pozn: 'MAE pásma jsou procenta PŮVODNÍ vzdálenosti entry–SL. Vstupní rozpracovaný bar je vyloučen; cesta začíná první kompletní 1m svíčkou po vstupu. Candle-stop výsledky jsou párové a jen pro varianty uzavřené během uloženého 30barového okna.',
-                n: ex.covered,
+                n: ex.covered, vyrazeno: ex.excluded,
                 mae_pasmo: ex.buckets.map(b => ({ pasmo: b.label, n: b.n, wins: b.wins, losses: b.losses, winrate_pct: round2(b.winratePct), avg_R: round2(b.avgR) })),
                 dosazeni_sl: Object.fromEntries(Object.entries(ex.thresholds).map(([k, v]) => [k, { n: v.reached, podil_pct: round2(v.sharePct), prumerna_minuta: round2(v.avgMinute), wins: v.wins, losses: v.losses, winrate_pct: round2(v.winratePct), avg_R: round2(v.avgR) }])),
                 okoli_entry: {
@@ -1514,6 +1571,9 @@ export interface ExperimentSideStats {
 }
 
 export interface ExperimentReport {
+    cohort: { clock: 'market' | 'recorded'; beforeTradeIds: string[]; afterTradeIds: string[]; unknownTradeIds: string[]; unlinkedTradeIds: string[] };
+    sampleUnit: 'position' | 'exit';
+    targetProgressN: number | null;
     before: ExperimentSideStats;
     after: ExperimentSideStats;
     /** after.n / targetTrades, 0–1 (capnuté). */
@@ -1545,6 +1605,7 @@ export const classifyExperimentLeakTrades = (
     leakId: string | undefined,
     prepDays?: PrepDayInfo[],
     startTs?: number,
+    baselineIds?: ReadonlySet<string>,
 ): Set<string | number> | null => {
     if (!leakId) return null;
     const T = ds.trades;
@@ -1565,7 +1626,7 @@ export const classifyExperimentLeakTrades = (
         });
     } else if (leakId === 'martingale') {
         // Prah zmrazíme z baseline před startem, aby se během experimentu neposouval.
-        const baseline = T.filter(t => startTs == null || t.ts < startTs);
+        const baseline = T.filter(t => baselineIds ? baselineIds.has(String(t.id)) : startTs == null || t.ts < startTs);
         const risks = baseline.map(t => t.risk).filter((r): r is number => r != null).sort((a, b) => a - b);
         if (!risks.length) return null;
         const median = risks[Math.floor(risks.length / 2)];
@@ -1614,17 +1675,20 @@ const sideStats = (arr: LabTrade[]): ExperimentSideStats => {
 
 export const computeExperimentReport = (
     ds: LabDataset,
-    exp: { startTs: number; targetTrades: number; sourceLeakId?: string },
+    exp: ExperimentCohortConfig & { targetTrades: number; sourceLeakId?: string },
     prepDays?: PrepDayInfo[],
 ): ExperimentReport => {
-    const beforeTrades = ds.trades.filter(t => t.ts < exp.startTs);
-    const afterTrades = ds.trades.filter(t => t.ts >= exp.startTs);
+    const selected = selectExperimentCohorts(ds.trades, exp, ds.world);
+    const beforeTrades = selected.before;
+    const afterTrades = selected.after;
     const before = sideStats(beforeTrades);
     const after = sideStats(afterTrades);
-    const ready = after.n >= exp.targetTrades;
+    const targetProgressN = exp.research ? selected.completePositionN : after.n;
+    const validTarget = Number.isSafeInteger(exp.targetTrades) && exp.targetTrades >= (exp.research ? 5 : 1) && exp.targetTrades <= 100000;
+    const ready = validTarget && targetProgressN !== null && targetProgressN >= exp.targetTrades;
     const deltaAvgPnl = before.n > 0 && after.n > 0 ? after.avgPnl - before.avgPnl : null;
 
-    const classified = classifyExperimentLeakTrades(ds, exp.sourceLeakId, prepDays, exp.startTs);
+    const classified = classifyExperimentLeakTrades({ ...ds, trades: [...beforeTrades, ...afterTrades] }, exp.sourceLeakId, prepDays, exp.startTs, new Set(beforeTrades.map(t => String(t.id))));
     const pattern = classified && exp.sourceLeakId ? (() => {
         const beforeCount = beforeTrades.filter(t => classified.has(t.id)).length;
         const afterCount = afterTrades.filter(t => classified.has(t.id)).length;
@@ -1633,10 +1697,12 @@ export const computeExperimentReport = (
         return { leakId: exp.sourceLeakId!, beforeCount, afterCount, beforeRate, afterRate, deltaPercentagePoints: afterRate - beforeRate };
     })() : null;
 
-    const sampleQuality: ExperimentReport['sampleQuality'] = !ready || before.n < 5
+    const independentBeforeN = exp.research ? selected.completeBeforePositionN ?? 0 : before.n;
+    const independentAfterN = exp.research ? selected.completePositionN ?? 0 : after.n;
+    const sampleQuality: ExperimentReport['sampleQuality'] = !ready || independentBeforeN < 5
         ? 'insufficient'
-        : before.n >= 50 && after.n >= 50 ? 'high'
-            : before.n >= 20 && after.n >= 20 ? 'medium' : 'low';
+        : independentBeforeN >= 50 && independentAfterN >= 50 ? 'high'
+            : independentBeforeN >= 20 && independentAfterN >= 20 ? 'medium' : 'low';
 
     let verdict: string | null = null;
     if (before.n >= 3 && after.n >= 3) {
@@ -1650,15 +1716,30 @@ export const computeExperimentReport = (
 
     return {
         before, after,
-        progress: exp.targetTrades > 0 ? Math.min(1, after.n / exp.targetTrades) : 1,
+        cohort: {
+            clock: selected.clock,
+            beforeTradeIds: beforeTrades.map(t => String(t.id)),
+            afterTradeIds: afterTrades.map(t => String(t.id)),
+            unknownTradeIds: selected.unknown.map(t => String(t.id)),
+            unlinkedTradeIds: selected.unlinked.map(t => String(t.id)),
+        },
+        sampleUnit: exp.research ? 'position' : 'exit', targetProgressN,
+        progress: validTarget ? Math.min(1, (targetProgressN ?? 0) / exp.targetTrades) : 0,
         ready,
         verdict,
         deltaAvgPnl,
         sampleQuality,
         pattern,
-        limitation: pattern
+        limitation: (pattern
             ? 'Observační before/after: výskyt source patternu je měřen z dat, ale změnu nelze bez kontrolní skupiny považovat za kauzální důkaz pravidla.'
-            : 'Observační before/after: aplikace neví, zda bylo obecné pravidlo u každého obchodu skutečně dodrženo. Výsledek není kauzální důkaz.',
+            : 'Observační before/after: aplikace neví, zda bylo obecné pravidlo u každého obchodu skutečně dodrženo. Výsledek není kauzální důkaz.')
+            + (selected.clock === 'recorded' ? ' Řazení podle času zápisu, nikoli historického data trhu.' : '')
+            + (exp.research ? ' P&L a WR jsou popisné statistiky výstupních záznamů; pokrok k cíli počítá pouze celé doložené pozice dané verze a účelu. Baseline je původní vzorek při založení případu.' : '')
+            + (exp.research ? ' Účel plánované ověření nepotvrzuje neviděný OOS vzorek ani úplnou historii jeho předchozího zobrazení.' : '')
+            + (!validTarget ? ' Cílový vzorek není platný; dokončení nelze potvrdit.' : '')
+            + (exp.research && targetProgressN === null ? ' Bez historie pozic nelze potvrdit velikost vzorku ani dokončení cíle.' : '')
+            + (selected.unlinked.length ? ` ${selected.unlinked.length} záznamů nemá vazbu na vybranou verzi a účel; jsou vyřazené.` : '')
+            + (selected.unknown.length ? ` U ${selected.unknown.length} záznamů chybí čas zápisu; nejsou zařazeny před ani po.` : ''),
     };
 };
 
@@ -1669,7 +1750,7 @@ export const buildExperimentCoachPrompt = (
 ): string =>
     `V Labu běží můj experiment „${exp.title}".\n` +
     `- Hypotéza: ${exp.hypothesis}\n- Pravidlo: ${exp.rule}\n` +
-    `- Stav: ${report.after.n}/${exp.targetTrades} obchodů po startu\n` +
+    `- Stav: ${report.targetProgressN ?? 'neznámý počet'}/${exp.targetTrades} ${report.sampleUnit === 'position' ? 'úplných pozic vybrané verze' : 'výstupních záznamů po startu'}\n` +
     `- Před: ${report.before.n} obchodů, Ø ${fmtUsd(report.before.avgPnl)}/obchod, WR ${Math.round(report.before.winRate)} %${report.before.avgR != null ? `, Ø ${fmtR(report.before.avgR)}` : ''}\n` +
     `- Po: ${report.after.n} obchodů, Ø ${fmtUsd(report.after.avgPnl)}/obchod, WR ${Math.round(report.after.winRate)} %${report.after.avgR != null ? `, Ø ${fmtR(report.after.avgR)}` : ''}\n` +
     (report.verdict ? `- Deterministický verdikt: ${report.verdict}\n` : '') +

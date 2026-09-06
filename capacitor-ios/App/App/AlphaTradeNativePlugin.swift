@@ -116,35 +116,55 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
             call.reject("Neplatný nebo příliš velký widget snapshot.")
             return
         }
-        guard let defaults = UserDefaults(suiteName: widgetSuiteName) else {
+        guard AlphaTradeWidgetStore.withDefaults({ defaults -> Bool in
+            guard let token = call.getString("widgetToken"),
+                  defaults.string(forKey: widgetAccessTokenKey) == token else { return false }
+            defaults.set(snapshotJSON, forKey: widgetSnapshotKey)
+            return true
+        }) == true else {
             call.reject("Sdílené úložiště widgetů není dostupné.")
             return
         }
-        defaults.set(snapshotJSON, forKey: widgetSnapshotKey)
         WidgetCenter.shared.reloadAllTimelines()
         call.resolve(["bytes": snapshotJSON.utf8.count])
     }
 
     @objc public func clearWidgetSnapshot(_ call: CAPPluginCall) {
-        UserDefaults(suiteName: widgetSuiteName)?.removeObject(forKey: widgetSnapshotKey)
+        guard AlphaTradeWidgetStore.withDefaults({ AlphaTradeWidgetStore.invalidate($0) }) != nil else {
+            call.reject("Sdílené úložiště widgetů se nepodařilo vymazat.")
+            return
+        }
         WidgetCenter.shared.reloadAllTimelines()
         call.resolve()
     }
 
     @objc public func setWidgetAccessToken(_ call: CAPPluginCall) {
         guard let token = call.getString("widgetToken"),
-              token.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil,
-              let defaults = UserDefaults(suiteName: widgetSuiteName) else {
+              token.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil else {
             call.reject("Neplatný widgetový token nebo nedostupné sdílené úložiště.")
             return
         }
-        defaults.set(token, forKey: widgetAccessTokenKey)
+        guard AlphaTradeWidgetStore.withDefaults({ defaults -> Void in
+            if defaults.string(forKey: widgetAccessTokenKey) != token {
+                AlphaTradeWidgetStore.invalidate(defaults)
+            }
+            defaults.set(token, forKey: widgetAccessTokenKey)
+        }) != nil else {
+            call.reject("Sdílené úložiště widgetů není dostupné.")
+            return
+        }
         WidgetCenter.shared.reloadAllTimelines()
         call.resolve()
     }
 
     @objc public func clearWidgetAccessToken(_ call: CAPPluginCall) {
-        UserDefaults(suiteName: widgetSuiteName)?.removeObject(forKey: widgetAccessTokenKey)
+        guard AlphaTradeWidgetStore.withDefaults({ defaults -> Void in
+            defaults.removeObject(forKey: widgetAccessTokenKey)
+            AlphaTradeWidgetStore.invalidate(defaults)
+        }) != nil else {
+            call.reject("Sdílené úložiště widgetů se nepodařilo vymazat.")
+            return
+        }
         WidgetCenter.shared.reloadAllTimelines()
         call.resolve()
     }
@@ -215,10 +235,14 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
 
         Task { @MainActor in
             let state = self.liveActivityContentState(from: call)
-            let content = ActivityContent(state: state, staleDate: .now.addingTimeInterval(15 * 60), relevanceScore: 50)
+            let content = ActivityContent(state: state, staleDate: self.liveActivityStaleDate(from: call), relevanceScore: 50)
             do {
                 let activity: Activity<AlphaTradeLiveActivityAttributes>
                 if let current = Activity<AlphaTradeLiveActivityAttributes>.activities.first {
+                    if call.getBool("automatic") == true && self.isRemoteLiveActivity(current) {
+                        call.resolve(["supported": true, "enabled": true, "activeCount": 1, "activityID": current.id])
+                        return
+                    }
                     await current.update(content)
                     activity = current
                 } else {
@@ -246,9 +270,13 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
                 call.reject("Žádná testovací Live Activity není aktivní.")
                 return
             }
+            if call.getBool("automatic") == true && self.isRemoteLiveActivity(activity) {
+                call.resolve(["supported": true, "enabled": true, "activeCount": 1, "activityID": activity.id])
+                return
+            }
             let content = ActivityContent(
                 state: self.liveActivityContentState(from: call),
-                staleDate: .now.addingTimeInterval(15 * 60),
+                staleDate: self.liveActivityStaleDate(from: call),
                 relevanceScore: call.getBool("alert") == true ? 100 : 50
             )
             if call.getBool("alert") == true {
@@ -273,6 +301,7 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
         Task { @MainActor in
             let activities = Activity<AlphaTradeLiveActivityAttributes>.activities
             for activity in activities {
+                if call.getBool("automatic") == true && self.isRemoteLiveActivity(activity) { continue }
                 await activity.end(nil, dismissalPolicy: .immediate)
                 self.notifyListeners(
                     "liveActivityEnded",
@@ -285,9 +314,21 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
             call.resolve([
                 "supported": true,
                 "enabled": ActivityAuthorizationInfo().areActivitiesEnabled,
-                "activeCount": 0,
+                "activeCount": Activity<AlphaTradeLiveActivityAttributes>.activities.count,
             ])
         }
+    }
+
+    @available(iOS 16.2, *)
+    private func isRemoteLiveActivity(_ activity: Activity<AlphaTradeLiveActivityAttributes>) -> Bool {
+        activity.attributes.sessionID.hasPrefix("remote-") || activity.content.state.mode != nil
+    }
+
+    @available(iOS 16.2, *)
+    private func liveActivityStaleDate(from call: CAPPluginCall) -> Date {
+        let maximum = Date().addingTimeInterval(180)
+        guard let validUntil = call.getDouble("validUntilMs") else { return maximum }
+        return min(maximum, Date(timeIntervalSince1970: validUntil / 1_000))
     }
 
     @available(iOS 16.2, *)
@@ -299,7 +340,7 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
             pnlText: call.getString("pnlText") ?? "+$428.50",
             isPositive: call.getBool("isPositive") ?? true,
             progress: min(max(call.getDouble("progress") ?? 0.62, 0), 1),
-            updatedAt: Date().timeIntervalSince1970
+            updatedAt: call.getDouble("updatedAtMs").map { $0 / 1_000 } ?? Date().timeIntervalSince1970
         )
     }
 
@@ -311,6 +352,12 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
     @MainActor
     private func observeLiveActivityPushToken(_ activity: Activity<AlphaTradeLiveActivityAttributes>) {
         if liveActivityTokenTasks[activity.id] == nil {
+            if let tokenData = activity.pushToken {
+                notifyListeners("liveActivityPushToken", data: [
+                    "activityId": activity.id,
+                    "pushToken": tokenData.map { String(format: "%02x", $0) }.joined(),
+                ], retainUntilConsumed: true)
+            }
             liveActivityTokenTasks[activity.id] = Task { @MainActor [weak self] in
                 for await tokenData in activity.pushTokenUpdates {
                     guard !Task.isCancelled else { return }
@@ -411,14 +458,16 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
     @objc public func shareFile(_ call: CAPPluginCall) {
         guard let encoded = call.getString("base64"),
               let data = Data(base64Encoded: encoded) else {
-            call.reject("Obrázek ke sdílení se nepodařilo načíst.")
+            call.reject("Soubor ke sdílení se nepodařilo načíst.")
             return
         }
         let requestedName = call.getString("fileName") ?? "alphatrade-trade.png"
         let safeName = requestedName
             .components(separatedBy: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.")).inverted)
             .joined(separator: "_")
-        let fileName = safeName.lowercased().hasSuffix(".png") ? safeName : "\(safeName).png"
+        let shareExtensions = ["png", "m4a", "webm", "mp3", "wav", "ogg", "flac"]
+        let fileName = shareExtensions.contains((safeName as NSString).pathExtension.lowercased())
+            ? safeName : "\(safeName).png"
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("alphatrade-share-\(UUID().uuidString)", isDirectory: true)
         let fileURL = folder.appendingPathComponent(fileName)
@@ -604,28 +653,33 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
     }
 
     @objc public func authenticate(_ call: CAPPluginCall) {
-        let context = LAContext()
-        context.localizedCancelTitle = "Zrušit"
-        var policyError: NSError?
-        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &policyError) else {
-            call.resolve(["success": false, "available": false])
-            return
-        }
-
-        let reason = call.getString("reason") ?? "Odemknout finanční data v AlphaTrade"
-        context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { success, error in
-            DispatchQueue.main.async {
-                // Po zrušení/neúspěchu zůstává citlivý obsah zakrytý React
-                // privacy gate, ale jeho tlačítko pro opakování musí být
-                // dostupné. hide() odstraní jen privacyLock; ochranu při
-                // screen recordingu ponechá beze změny.
-                AlphaTradePrivacyShield.shared.hide()
-                var result: JSObject = [
-                    "success": success,
-                    "available": true,
-                ]
-                if let error { result["error"] = error.localizedDescription }
-                call.resolve(result)
+        DispatchQueue.main.async {
+            let shield = AlphaTradePrivacyShield.shared
+            guard !shield.isAuthenticating else {
+                call.resolve(["success": false, "available": true])
+                return
+            }
+            let generation = shield.lockGeneration
+            shield.isAuthenticating = true
+            let context = LAContext()
+            context.localizedCancelTitle = "Zrušit"
+            var policyError: NSError?
+            guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &policyError) else {
+                shield.isAuthenticating = false
+                shield.hide(ifGeneration: generation)
+                call.resolve(["success": false, "available": false])
+                return
+            }
+            let reason = call.getString("reason") ?? "Odemknout finanční data v AlphaTrade"
+            context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { success, _ in
+                DispatchQueue.main.async {
+                    shield.isAuthenticating = false
+                    // A real background transition during authentication creates a
+                    // newer lock. Its content must never be uncovered by this result.
+                    let current = shield.lockGeneration == generation
+                    shield.hide(ifGeneration: generation)
+                    call.resolve(["success": success && current, "available": true])
+                }
             }
         }
     }
@@ -838,13 +892,18 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
     }
 
     @objc public func getPrivacyState(_ call: CAPPluginCall) {
-        call.resolve(["enabled": AlphaTradePrivacyShield.shared.isEnabled])
+        DispatchQueue.main.async {
+            call.resolve(["enabled": AlphaTradePrivacyShield.shared.isEnabled,
+                          "generation": AlphaTradePrivacyShield.shared.lockGeneration])
+        }
     }
 
     @objc public func setPrivacyEnabled(_ call: CAPPluginCall) {
-        let enabled = call.getBool("enabled") ?? false
-        AlphaTradePrivacyShield.shared.setEnabled(enabled)
-        call.resolve(["enabled": enabled])
+        DispatchQueue.main.async {
+            let enabled = call.getBool("enabled") ?? false
+            AlphaTradePrivacyShield.shared.setEnabled(enabled)
+            call.resolve(["enabled": enabled])
+        }
     }
 
     @objc public func lockPrivacy(_ call: CAPPluginCall) {
@@ -863,6 +922,8 @@ final class AlphaTradePrivacyShield: NSObject {
     private var detailLabel: UILabel?
     private var reasons = Set<ShieldReason>()
     private var captureObserver: NSObjectProtocol?
+    private(set) var lockGeneration = 0
+    var isAuthenticating = false
 
     private enum ShieldReason: Hashable {
         case privacyLock
@@ -872,6 +933,7 @@ final class AlphaTradePrivacyShield: NSObject {
     var isEnabled: Bool { UserDefaults.standard.bool(forKey: defaultsKey) }
 
     func setEnabled(_ enabled: Bool) {
+        if enabled && !isEnabled { lockGeneration += 1 }
         UserDefaults.standard.set(enabled, forKey: defaultsKey)
         if !enabled {
             DispatchQueue.main.async {
@@ -881,12 +943,15 @@ final class AlphaTradePrivacyShield: NSObject {
         }
     }
 
-    func showIfEnabled() {
-        guard isEnabled else { return }
-        DispatchQueue.main.async {
+    func showIfEnabled(force: Bool = false) {
+        let show = {
+            guard self.isEnabled, force || !self.isAuthenticating else { return }
+            self.lockGeneration += 1
             self.reasons.insert(.privacyLock)
             self.reconcileShield()
         }
+        if Thread.isMainThread { show() }
+        else { DispatchQueue.main.async(execute: show) }
     }
 
     func startScreenCaptureProtection() {
@@ -973,8 +1038,9 @@ final class AlphaTradePrivacyShield: NSObject {
         detailLabel = detail
     }
 
-    func hide() {
+    func hide(ifGeneration expected: Int? = nil) {
         DispatchQueue.main.async {
+            if let expected, expected != self.lockGeneration { return }
             self.reasons.remove(.privacyLock)
             self.reconcileShield()
         }

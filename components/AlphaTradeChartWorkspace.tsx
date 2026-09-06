@@ -1,4 +1,9 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { ChartWorkspaceLibraryDialog, WorkspaceImportPreview } from './ChartWorkspaceLibraryDialog';
+import { saveWorkspaceTemplate } from '../services/chartWorkspaceLibrary';
+import type { BacktestTagSuggestions } from '../services/backtestTagCatalog';
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createBacktestWorkspaceCheckpoint, mergeWorkspacePanelSnapshots, workspaceLayoutPanelIds, workspacePanelsReady } from '../services/backtestWorkspaceCheckpoint';
+import { storeWorkspaceRecovery, chartWorkspaceDocumentStorageKey, createChartWorkspaceDocument, parseChartWorkspaceDocument, type CompleteChartWorkspaceState } from '../services/chartWorkspaceDocument';
 import {
   FlexLayoutAdapter,
   LocalStoragePersistence,
@@ -97,6 +102,7 @@ import {
   type ChartReplayStepMinutes,
 } from '../services/chartReplay';
 import ReplayGoToMenu from './ReplayGoToMenu';
+import { prepareBacktestReplayGoTo, prepareBacktestReplayStep, ReplayDataRequestCoordinator } from '../services/backtestReplayData';
 import {
   CHART_SETTINGS_EVENT,
   CHART_TIME_ZONES,
@@ -104,7 +110,7 @@ import {
   type ChartSettings,
   type ChartTradingSettings,
 } from '../services/chartSettings';
-import { chartAppearanceSnapshot, type ChartAppearanceState } from '../services/chartAppearanceScope';
+import { CHART_APPEARANCE_SLOTS, chartAppearanceSnapshot, chartAppearanceUserId, inheritGlobalAppearance, replaceChartAppearance, type ChartAppearanceState } from '../services/chartAppearanceScope';
 import { panelSettingsTargetMatches, type PanelSettingsTarget } from '../services/chartPanelSettings';
 import { installDevDragProfiler, recordDragProfilerCommit } from '../services/devDragProfiler';
 import {
@@ -162,6 +168,13 @@ export interface BacktestChartSessionBridge {
   startMs: number;
   endMs: number;
   candlesByRoot: Partial<Record<MarketRoot, MarketCandle[]>>;
+  /** Exclusive end of continuous forward execution-data coverage. */
+  loadedUntilMs?: number;
+  /** Loads every crossed bar before resolving, returning the fresh execution source. */
+  onEnsureReplayData?: (endMs: number) => Promise<MarketCandle[]>;
+  /** A run with an execution ledger cannot rewind its account state. Seconds. */
+  minimumReplayCursorTime?: number;
+  replayHasExecutionHistory?: boolean;
   historyCandlesByRoot?: Partial<Record<MarketRoot, Partial<Record<MarketDataSchema, MarketCandle[]>>>>;
   historyLoadingKeys?: Partial<Record<string, boolean>>;
   onNeedOlderHistory?: (root: MarketRoot, schema: MarketDataSchema, beforeMs: number) => Promise<void>;
@@ -176,6 +189,11 @@ export interface BacktestChartSessionBridge {
     syncSettings?: Partial<ChartWorkspaceSyncSettings>;
   };
   onReplayChange: (replay: ChartReplayState) => void;
+  registerWorkspaceCheckpoint?: (checkpoint: () => void) => (() => void);
+  registerResearchCapture?: (capture: () => Promise<string>) => (() => void);
+  maxRevealedTime?: number;
+  pauseReplayForDialog?: boolean;
+  onSaveWorkspace?: () => Promise<{ localSaved: boolean; cloudSaved: boolean }>;
   onWorkspaceChange: (state: {
     layout: unknown;
     panels: WorkspaceSnapshot;
@@ -201,8 +219,9 @@ export interface BacktestChartSessionBridge {
   closedTrades?: BacktestClosedTrade[];
   fills?: BacktestFill[];
   journalTrades?: Trade[];
+  tagSuggestions?: BacktestTagSuggestions;
   onTradeRecalculate?: (tradeId: string) => Trade | Promise<Trade>;
-  onTradeReviewSave?: (tradeId: string, updates: Partial<Trade>, snapshotDataUrl?: string) => Promise<void>;
+  onTradeReviewSave?: (tradeId: string, updates: Partial<Trade>, snapshotDataUrl?: string, expected?: Partial<Trade>) => Promise<void>;
   onOrderLineChange?: (line: BacktestChartOrderLine, kind: BacktestChartOrderLineKind, price: number) => void;
   onOrderLineCancel?: (line: BacktestChartOrderLine) => void;
   onOrderLineAddBracket?: (
@@ -710,10 +729,28 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   );
   const nextPanelNumberRef = useRef(getChartWorkspaceLayout(initialLayoutIdRef.current).panelCount + 1);
   const [status, setStatus] = useState('Layout je možné přetahovat a měnit jeho velikost');
+  const [workspaceLibraryMode, setWorkspaceLibraryMode] = useState<'save' | 'load' | null>(null);
+  const [workspacePreview, setWorkspacePreview] = useState<{ input: unknown; owner: string | null | undefined; sessionId?: string; error?: string } | null>(null);
+  const [workspaceApplying, setWorkspaceApplying] = useState(false);
+
   const [activePanelId, setActivePanelId] = useState(backtestSession?.workspaceState?.activePanelId || 'alphatrade-chart-1');
   const [reviewTradeId, setReviewTradeId] = useState<string | null>(null);
   const [replay, setReplay] = useState<ChartReplayState>(backtestSession?.initialReplay ?? DEFAULT_CHART_REPLAY_STATE);
   const [replaySelectionTime, setReplaySelectionTime] = useState<number | null>(null);
+  const [replayDataLoading, setReplayDataLoading] = useState(false);
+  const replayRef = useRef(replay);
+  const replayInteractionPaused = Boolean(backtestSession?.pauseReplayForDialog || reviewTradeId);
+  const replayInteractionPausedRef = useRef(replayInteractionPaused);
+  replayInteractionPausedRef.current = replayInteractionPaused;
+  const backtestSessionRef = useRef(backtestSession);
+  const replayDataRequestsRef = useRef(new ReplayDataRequestCoordinator());
+  replayRef.current = replay;
+  backtestSessionRef.current = backtestSession;
+  useEffect(() => {
+    replayDataRequestsRef.current.cancel();
+    setReplayDataLoading(false);
+    return () => replayDataRequestsRef.current.cancel();
+  }, [backtestSession?.id]);
   // Pásmo bere z nastavení grafu, aby Go To ukazovalo stejná čísla jako časová
   // osa. Sleduje i změnu v Nastavení grafu, jinak by po přepnutí zóny nabízelo
   // časy z jiného světa.
@@ -763,7 +800,11 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const [panelControls, setPanelControls] = useState<Map<string, WorkspacePanelControl>>(panelControlsRef.current);
   const [workspaceHistory] = useState(() => new ChartWorkspaceHistory());
   const restoredSessionLayoutRef = useRef(false);
-  const restoredSessionPanelsRef = useRef(false);
+  const pendingSessionPanelsRef = useRef<WorkspaceSnapshot>({ ...backtestSession?.workspaceState?.panels });
+  const captureOverrideRef = useRef<CompleteChartWorkspaceState | null>(null);
+  const pendingActivePanelRef = useRef<string | null>(null);
+  const [workspaceMountVersion, setWorkspaceMountVersion] = useState(0);
+  useLayoutEffect(() => { captureOverrideRef.current = null; }, [workspaceMountVersion]);
   const replayChangeRef = useRef(backtestSession?.onReplayChange);
   const workspaceChangeRef = useRef(backtestSession?.onWorkspaceChange);
   replayChangeRef.current = backtestSession?.onReplayChange;
@@ -822,7 +863,11 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     next.set(id, control);
     panelControlsRef.current = next;
     setPanelControls(next);
-    setActivePanelId(current => current || id);
+    setActivePanelId(current => {
+      const requested = pendingActivePanelRef.current;
+      if (requested && next.has(requested)) { pendingActivePanelRef.current = null; return requested; }
+      return current || id;
+    });
   }, []);
   const openBacktestTradeReview = useCallback((tradeId: string) => setReviewTradeId(tradeId), []);
   const unregisterPanel = useCallback((id: string) => {
@@ -833,9 +878,12 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     setActivePanelId(active => active === id ? (next.keys().next().value || '') : active);
   }, []);
   const beginReplaySelection = useCallback(() => {
+    if (replayInteractionPausedRef.current) return;
+    replayDataRequestsRef.current.cancel();
+    setReplayDataLoading(false);
     setReplaySelectionTime(null);
     setReplay(current => current.phase === 'selecting'
-      ? DEFAULT_CHART_REPLAY_STATE
+      ? backtestSessionRef.current ? { ...current, phase: 'active', playing: false } : DEFAULT_CHART_REPLAY_STATE
       : { ...current, phase: 'selecting', playing: false });
     setStatus('Klikni do libovolného grafu na svíčku, od které chceš replay spustit');
   }, []);
@@ -844,7 +892,18 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     // to one of its own candles. Trust that value here: activePanelId is
     // intentionally updated by the same pointer event and React state would
     // otherwise still point at the previously active pane for this one tick.
-    if (!Number.isFinite(requestedTime)) return;
+    if (replayInteractionPausedRef.current || !Number.isFinite(requestedTime)) return;
+    const session = backtestSessionRef.current;
+    const minimum = Math.max(
+      session?.minimumReplayCursorTime ?? (session ? session.startMs / 1_000 : -Infinity),
+      session?.replayHasExecutionHistory ? replayRef.current.cursorTime ?? -Infinity : -Infinity,
+    );
+    if (requestedTime < minimum) {
+      setStatus('Tuto session nelze vrátit před zpracované obchody. Pro nový průchod vytvoř kopii session.');
+      return;
+    }
+    replayDataRequestsRef.current.cancel();
+    setReplayDataLoading(false);
     const cursorTime = requestedTime;
     setReplaySelectionTime(null);
     setReplay(current => ({
@@ -857,49 +916,101 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     setStatus('Bar Replay spuštěn');
   }, []);
   const advanceReplayBy = useCallback((steps: number) => {
-    setReplay(current => {
-      if (current.phase !== 'active') return current;
-      const source = backtestSession?.candlesByRoot.MNQ
-        ?? panelControlsRef.current.get(activePanelId)?.rawCandles
-        ?? [];
-      const nextTime = advanceReplayTimeByInterval(
-        source,
-        current.cursorTime,
-        current.stepMinutes ?? 1,
-        steps,
-      );
-      if (nextTime === null) return { ...current, playing: false };
-      return { ...current, cursorTime: nextTime };
-    });
-  }, [activePanelId, backtestSession?.candlesByRoot.MNQ]);
+    const current = replayRef.current;
+    if (replayInteractionPausedRef.current || current.phase !== 'active' || replayDataRequestsRef.current.pending) return;
+    const session = backtestSessionRef.current;
+    const source = session?.candlesByRoot[session.executionInstrument]
+      ?? panelControlsRef.current.get(activePanelId)?.rawCandles
+      ?? [];
+    const nextTime = advanceReplayTimeByInterval(source, current.cursorTime, current.stepMinutes ?? 1, steps);
+    if (nextTime !== null || !session?.onEnsureReplayData) {
+      setReplay(value => {
+        if (replayInteractionPausedRef.current || value.phase !== 'active') return value;
+        const next = advanceReplayTimeByInterval(source, value.cursorTime, value.stepMinutes ?? 1, steps);
+        return next === null ? { ...value, playing: false } : { ...value, cursorTime: next };
+      });
+      return;
+    }
+    const cursor = current.cursorTime;
+    const stepMinutes = current.stepMinutes ?? 1;
+    setReplayDataLoading(true);
+    setStatus('Načítám data pro další replay krok…');
+    void replayDataRequestsRef.current.run(
+      `${session.id}:step:${cursor}:${stepMinutes}:${steps}`,
+      isCurrent => prepareBacktestReplayStep({
+        candles: source,
+        loadedUntilMs: session.loadedUntilMs ?? ((source.at(-1)?.time ?? 0) + 60) * 1_000,
+        endMs: session.endMs,
+        ensure: session.onEnsureReplayData!,
+        isCurrent,
+      }, cursor, stepMinutes, steps),
+      next => {
+        setReplay(value => replayInteractionPausedRef.current || value.phase !== 'active' || value.cursorTime !== cursor || (value.stepMinutes ?? 1) !== stepMinutes
+          ? value
+          : next === null ? { ...value, playing: false } : { ...value, cursorTime: next });
+        setStatus(next === null ? 'Replay dosáhl konce session' : 'Replay data načtena');
+      },
+      reason => {
+        setReplay(value => ({ ...value, playing: false }));
+        setStatus(reason instanceof Error ? `Replay: ${reason.message}` : 'Další replay data se nepodařilo načíst. Zkus krok znovu.');
+      },
+      () => setReplayDataLoading(false),
+    );
+  }, [activePanelId]);
   const advanceReplay = useCallback(() => advanceReplayBy(1), [advanceReplayBy]);
   /** Koalescence držené šipky: kroky se sbírají a aplikují jednou za snímek. */
   const pendingStepsRef = useRef(0);
   const stepFrameRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (!replayInteractionPaused) return;
+    replayDataRequestsRef.current.cancel();
+    pendingStepsRef.current = 0;
+    if (stepFrameRef.current !== null) { window.cancelAnimationFrame(stepFrameRef.current); stepFrameRef.current = null; }
+    setReplayDataLoading(false);
+    setReplay(current => current.playing ? { ...current, playing: false } : current);
+  }, [replayInteractionPaused]);
   const replayGoTo = useCallback((request: ReplayGoToRequest) => {
-    if (replay.phase !== 'active') return;
-    const source = backtestSession?.candlesByRoot.MNQ
+    const current = replayRef.current;
+    if (replayInteractionPausedRef.current || current.phase !== 'active') return;
+    const session = backtestSessionRef.current;
+    const source = session?.candlesByRoot[session.executionInstrument]
       ?? panelControlsRef.current.get(activePanelId)?.rawCandles
       ?? [];
-    const result = resolveReplayGoTo(request, {
-      candles: source,
-      cursorTime: replay.cursorTime,
-      settings: goToSettings,
-      timeZone: chartTimeZone,
-      // Konec session, ne konec už načtených svíček — backtest dotahuje data po
-      // blocích a cíl skoro vždy leží až za posledním načteným barem.
-      dataEndTime: backtestSession ? Math.floor(backtestSession.endMs / 1_000) : null,
-    });
-    if (result.kind === 'error') {
-      setStatus(`Go To: ${REPLAY_GO_TO_FAILURE_MESSAGES[result.reason]}`);
+    const options = { cursorTime: current.cursorTime, settings: goToSettings, timeZone: chartTimeZone };
+    const commit = (result: ReturnType<typeof resolveReplayGoTo>) => {
+      if (result.kind === 'error') {
+        setStatus(`Go To: ${REPLAY_GO_TO_FAILURE_MESSAGES[result.reason]}`);
+        return;
+      }
+      setReplay(value => !replayInteractionPausedRef.current && value.phase === 'active' && value.cursorTime === current.cursorTime
+        ? { ...value, cursorTime: result.value.cursorTime, playing: false }
+        : value);
+      setStatus(`Go To: ${goToTimeLabel(result.value.targetTime, chartTimeZone)}`);
+    };
+    if (!session?.onEnsureReplayData) {
+      commit(resolveReplayGoTo(request, { ...options, candles: source }));
       return;
     }
-    // Pauza je záměr: po skoku má uživatel rozhodnout, kdy se trh rozjede.
-    setReplay(current => ({ ...current, cursorTime: result.value.cursorTime, playing: false }));
-    setStatus(`Go To: ${goToTimeLabel(result.value.targetTime, chartTimeZone)}`);
-  }, [activePanelId, backtestSession, chartTimeZone, goToSettings, replay.cursorTime, replay.phase]);
+    // Stop playback but preserve the cursor while the whole skipped interval loads.
+    setReplay(value => value.playing ? { ...value, playing: false } : value);
+    setReplayDataLoading(true);
+    setStatus('Načítám data pro Go To…');
+    void replayDataRequestsRef.current.run(
+      `${session.id}:goto:${current.cursorTime}:${JSON.stringify({ request, settings: goToSettings, timeZone: chartTimeZone })}`,
+      isCurrent => prepareBacktestReplayGoTo({
+        candles: source,
+        loadedUntilMs: session.loadedUntilMs ?? ((source.at(-1)?.time ?? 0) + 60) * 1_000,
+        endMs: session.endMs,
+        ensure: session.onEnsureReplayData!,
+        isCurrent,
+      }, request, options),
+      commit,
+      reason => setStatus(reason instanceof Error ? `Go To: ${reason.message}` : 'Data pro Go To se nepodařilo načíst. Zkus skok znovu.'),
+      () => setReplayDataLoading(false),
+    );
+  }, [activePanelId, chartTimeZone, goToSettings]);
   useEffect(() => {
-    if (replay.phase !== 'active' || !replay.playing) return;
+    if (replay.phase !== 'active' || !replay.playing || replayDataLoading) return;
     const delay = chartReplayDelayMs(replay.speed);
     let lastAdvanceAt = performance.now();
     const tick = () => {
@@ -911,7 +1022,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     };
     const timer = window.setInterval(tick, Math.min(delay, 50));
     return () => window.clearInterval(timer);
-  }, [advanceReplayBy, replay.phase, replay.playing, replay.speed]);
+  }, [advanceReplayBy, replay.phase, replay.playing, replay.speed, replayDataLoading]);
   useEffect(() => {
     if (!replayToolbarPosition) return;
     const clampToolbarPosition = () => {
@@ -1003,6 +1114,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     }
     return captureChartWorkspaceSnapshotDataUrl(workspaceElement, isDark);
   }, [isDark]);
+  const registerResearchCapture = backtestSession?.registerResearchCapture;
+  useEffect(() => registerResearchCapture?.(captureVisibleCharts), [captureVisibleCharts, registerResearchCapture]);
   const activeIndicatorCount = activeControl ? countChartIndicators(
     [
       activeControl.config.showFvg,
@@ -1128,17 +1241,14 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   useEffect(() => workspaceHistory.subscribe(setWorkspaceHistoryState), [workspaceHistory]);
 
   useEffect(() => {
-    if (!backtestSession || restoredSessionPanelsRef.current) return;
-    const snapshot = backtestSession.workspaceState?.panels;
-    if (!snapshot || Object.keys(snapshot).length === 0) {
-      restoredSessionPanelsRef.current = true;
-      return;
-    }
-    if (panelControls.size < Object.keys(snapshot).length) return;
+    if (Object.keys(pendingSessionPanelsRef.current).length === 0) return;
     const frame = window.requestAnimationFrame(() => {
-      workspaceHistory.importSnapshot(snapshot);
-      restoredSessionPanelsRef.current = true;
-      setStatus('Session obnovena včetně kreseb, indikátorů a měřítek');
+      const ready = Object.fromEntries(Object.entries(pendingSessionPanelsRef.current)
+        .filter(([id, saved]) => workspacePanelsReady({ [id]: saved }, panelControlsRef.current)));
+      if (!Object.keys(ready).length) return;
+      workspaceHistory.importSnapshot({ ...workspaceHistory.exportSnapshot(), ...ready });
+      Object.keys(ready).forEach(id => { delete pendingSessionPanelsRef.current[id]; });
+      if (!Object.keys(pendingSessionPanelsRef.current).length) setStatus('Session obnovena včetně kreseb, indikátorů a měřítek');
     });
     return () => window.cancelAnimationFrame(frame);
   }, [backtestSession, panelControls, workspaceHistory]);
@@ -1150,39 +1260,47 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
 
   useEffect(() => {
     if (!backtestSession || replay.phase !== 'off') return;
-    const first = backtestSession.candlesByRoot.MNQ?.[0];
+    const first = backtestSession.candlesByRoot[backtestSession.executionInstrument]?.[0];
     if (!first) return;
     setReplay({ phase: 'active', cursorTime: first.time, startTime: first.time, playing: false, speed: 1 });
   }, [backtestSession, replay.phase]);
 
-  useEffect(() => {
-    if (!backtestSession) return;
-    let lastFingerprint = '';
-    const checkpoint = () => {
-      const state = {
-        layout: workspace.exportLayout(),
-        panels: workspaceHistory.exportSnapshot(),
+  const readWorkspaceState = useCallback((): CompleteChartWorkspaceState | undefined => {
+      if (captureOverrideRef.current) return captureOverrideRef.current;
+      if (backtestSessionRef.current && !restoredSessionLayoutRef.current) return undefined;
+      const scopedAppearance = chartAppearanceSnapshot();
+      if (backtestSessionRef.current && scopedAppearance === undefined) return undefined;
+      const layout = workspace.exportLayout();
+      const panelIds = workspaceLayoutPanelIds(layout);
+      if (!panelIds.size) return undefined;
+      return {
+        layout,
+        panels: mergeWorkspacePanelSnapshots(workspaceHistory.exportSnapshot(), pendingSessionPanelsRef.current, panelIds),
         layoutId,
         activePanelId,
         syncSettings,
         // Vzhled musí být součástí otisku, jinak by se změna barvy levelu
         // uložila až s příští úpravou layoutu nebo kresby.
-        appearance: chartAppearanceSnapshot(),
+        appearance: scopedAppearance ?? Object.fromEntries(CHART_APPEARANCE_SLOTS
+          .map(slot => [slot, inheritGlobalAppearance(slot)])
+          .filter(([, value]) => value !== undefined)),
       };
-      const fingerprint = JSON.stringify(state);
-      if (fingerprint === lastFingerprint) return;
-      lastFingerprint = fingerprint;
-      workspaceChangeRef.current?.(state);
-    };
-    const timer = window.setInterval(checkpoint, 1_200);
-    const handleVisibility = () => { if (document.visibilityState === 'hidden') checkpoint(); };
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', handleVisibility);
-      checkpoint();
-    };
-  }, [activePanelId, backtestSession?.id, layoutId, syncSettings, workspace, workspaceHistory]);
+  }, [activePanelId, layoutId, syncSettings, workspace, workspaceHistory]);
+
+  const checkpointWorkspace = useMemo(() => createBacktestWorkspaceCheckpoint(
+    readWorkspaceState,
+    state => workspaceChangeRef.current?.(state),
+  ), [readWorkspaceState]);
+
+  useLayoutEffect(() => backtestSession?.registerWorkspaceCheckpoint?.(checkpointWorkspace), [backtestSession?.registerWorkspaceCheckpoint, checkpointWorkspace]);
+
+  useEffect(() => {
+    if (!backtestSession) return;
+    const timer = window.setInterval(checkpointWorkspace, 1_200);
+    // Parent flush captures synchronously before persistence, including Close,
+    // visibility/pagehide and cloud restore. An unmount capture is too late.
+    return () => window.clearInterval(timer);
+  }, [backtestSession?.id, checkpointWorkspace]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1209,6 +1327,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   useEffect(() => {
     if (replay.phase !== 'active') return;
     const handleReplayKey = (event: KeyboardEvent) => {
+      if (replayInteractionPausedRef.current) return;
       // `instanceof Element` není zbytečné: cílem může být i window (událost
       // poslaná programově), a ten `closest` nemá — výjimka by zkratku shodila.
       const target = event.target;
@@ -1340,45 +1459,145 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     setStatus('Výchozí rozložení obnoveno');
   }, [initialRoot, workspace]);
 
-  const saveWorkspace = useCallback(async () => {
-    await workspace.saveLayout(SAVED_LAYOUT_NAME);
-    setStatus('Rozložení uloženo');
-  }, [workspace]);
+  const persistWorkspaceStatus = useCallback(async (message: string) => {
+    const result = await backtestSessionRef.current?.onSaveWorkspace?.();
+    if (result && !result.localSaved) { setStatus(`${message}; uložení session do tohoto zařízení selhalo — zkus uložení znovu`); return; }
+    setStatus(`${message}${result ? result.cloudSaved ? ' · session uložena i v cloudu' : ' · session uložená lokálně, cloud čeká na synchronizaci' : ' · v tomto zařízení'}`);
+  }, []);
 
-  const loadWorkspace = useCallback(async () => {
-    const layouts = await workspace.listLayouts();
-    if (!layouts.some(layout => layout.name === SAVED_LAYOUT_NAME)) {
-      setStatus('Zatím není uložené žádné rozložení');
-      return;
+  const applyWorkspaceState = useCallback((next: CompleteChartWorkspaceState) => {
+    const before = readWorkspaceState();
+    if (!before) throw new Error('Počkej na dokončení načítání grafů.');
+    // This remount is structural: panel configs and all saved drawings/indicators
+    // are replaced together. A paint-only appearance edit never takes this path.
+    try {
+      replaceChartAppearance(next.appearance);
+      workspace.importLayout(next.layout);
+    } catch (reason) {
+      replaceChartAppearance(before.appearance);
+      workspace.importLayout(before.layout);
+      throw reason;
     }
-    await workspace.loadLayout(SAVED_LAYOUT_NAME);
-    setActivePanelId('');
-    setStatus('Uložené rozložení načteno');
-  }, [workspace]);
+    captureOverrideRef.current = structuredClone(next);
+    pendingSessionPanelsRef.current = structuredClone(next.panels);
+    pendingActivePanelRef.current = next.activePanelId;
+    panelControlsRef.current = new Map();
+    setPanelControls(new Map());
+    workspaceHistory.updatePanels(new Map());
+    setLayoutId(next.layoutId);
+    setActivePanelId(next.activePanelId);
+    setSyncSettings(next.syncSettings);
+    setWorkspaceMountVersion(version => version + 1);
+    workspaceChangeRef.current?.(next);
+  }, [readWorkspaceState, workspace, workspaceHistory]);
+
+  const applyWorkspaceInput = useCallback(async (input: unknown) => {
+    const parsed = parseChartWorkspaceDocument(input, { allowedRoots: backtestSessionRef.current?.allowedRoots });
+    const before = readWorkspaceState();
+    if (!before) throw new Error('Počkej na dokončení načítání grafů.');
+    const ids = parsed.kind === 'legacy' ? workspaceLayoutPanelIds(parsed.layout) : null;
+    const next = parsed.kind === 'complete' ? parsed.document.state : {
+      ...before, layout: parsed.layout,
+      panels: mergeWorkspacePanelSnapshots(before.panels, {}, ids!),
+      activePanelId: ids!.has(before.activePanelId) ? before.activePanelId : [...ids!][0],
+    };
+    // Fail before mutation when quota prevents keeping a recoverable prior state.
+    storeWorkspaceRecovery(chartAppearanceUserId(), backtestSessionRef.current?.id, before, window.localStorage);
+    applyWorkspaceState(next);
+    await persistWorkspaceStatus(parsed.kind === 'complete' ? 'Workspace obnoven včetně kreseb, indikátorů a vzhledu' : 'Starší rozložení načteno; soubor neobsahuje kresby ani vzhled');
+  }, [applyWorkspaceState, persistWorkspaceStatus, readWorkspaceState]);
+
+  const previewWorkspace = useCallback((input: unknown) => {
+    // Validate structural and nested data before rendering even a preview.
+    const parsed = parseChartWorkspaceDocument(input);
+    const valid = parsed.kind === 'complete' ? parsed.document : parsed.layout;
+    let error: string | undefined;
+    try { parseChartWorkspaceDocument(valid, { allowedRoots: backtestSessionRef.current?.allowedRoots }); }
+    catch (reason) { error = reason instanceof Error ? reason.message : 'Nekompatibilní workspace.'; }
+    setReplay(current => ({ ...current, playing: false }));
+    setWorkspacePreview({ input: valid, owner: chartAppearanceUserId(), sessionId: backtestSessionRef.current?.id, error });
+    setWorkspaceLibraryMode(null);
+  }, []);
+
+  const saveWorkspace = useCallback(() => { setReplay(current => ({ ...current, playing: false })); setWorkspaceLibraryMode('save'); }, []);
+  const saveNamedWorkspace = useCallback(async (input: { id?: string; name: string; makeDefault: boolean }) => {
+    const state = readWorkspaceState();
+    if (!state) throw new Error('Počkej na dokončení načítání grafů.');
+    const owner = chartAppearanceUserId();
+    const document = createChartWorkspaceDocument(state, { allowedRoots: backtestSessionRef.current?.allowedRoots });
+    window.localStorage.setItem(chartWorkspaceDocumentStorageKey(owner, backtestSessionRef.current?.id), JSON.stringify(document));
+    saveWorkspaceTemplate(owner, { ...input, state: document.state });
+    setWorkspaceLibraryMode(null);
+    await persistWorkspaceStatus(`Šablona „${input.name.trim()}“ uložena v tomto prohlížeči`);
+  }, [persistWorkspaceStatus, readWorkspaceState]);
+
+  const loadWorkspaceCheckpoint = useCallback(async () => {
+    const owner = chartAppearanceUserId();
+    const sessionId = backtestSessionRef.current?.id;
+    try {
+      const saved = window.localStorage.getItem(chartWorkspaceDocumentStorageKey(owner, sessionId));
+      if (saved) { previewWorkspace(saved); return; }
+      if (!sessionId && owner !== null) { setStatus('Zatím není uložený žádný checkpoint'); return; }
+      const storage = new LocalStoragePersistence(window.localStorage, sessionId ? `alphatrade.candlekit.backtest.${sessionId}` : 'alphatrade.candlekit');
+      const legacy = (await storage.list()).find(layout => layout.name === SAVED_LAYOUT_NAME);
+      if (!legacy) { setStatus('Zatím není uložený žádný checkpoint'); return; }
+      const input = await storage.get(legacy.id);
+      if (owner !== chartAppearanceUserId() || sessionId !== backtestSessionRef.current?.id) throw new Error('Uživatel nebo session se změnili. Načtení zrušeno.');
+      previewWorkspace(input);
+    } catch (reason) { setStatus(reason instanceof Error ? reason.message : 'Workspace se nepodařilo načíst.'); }
+  }, [previewWorkspace]);
+  const loadWorkspace = useCallback(() => { setReplay(current => ({ ...current, playing: false })); setWorkspaceLibraryMode('load'); }, []);
+
+  const applyWorkspacePreview = useCallback(async () => {
+    if (!workspacePreview || workspaceApplying) return;
+    if (workspacePreview.owner !== chartAppearanceUserId() || workspacePreview.sessionId !== backtestSessionRef.current?.id) {
+      setWorkspacePreview(null); setStatus('Uživatel nebo session se změnili. Otevři náhled znovu.'); return;
+    }
+    setWorkspaceApplying(true);
+    try { await applyWorkspaceInput(workspacePreview.input); setWorkspacePreview(null); }
+    catch (reason) { setStatus(reason instanceof Error ? reason.message : 'Workspace se nepodařilo obnovit.'); }
+    finally { setWorkspaceApplying(false); }
+  }, [applyWorkspaceInput, workspaceApplying, workspacePreview]);
+
+  const recoverWorkspace = useCallback(() => {
+    try {
+      const saved = window.localStorage.getItem(`${chartWorkspaceDocumentStorageKey(chartAppearanceUserId(), backtestSessionRef.current?.id)}:recovery`);
+      if (!saved) { setStatus('Zatím není návratová kopie. Vznikne před načtením nebo importem workspace.'); return; }
+      previewWorkspace(saved);
+    } catch (reason) { setStatus(reason instanceof Error ? reason.message : 'Návratovou kopii nelze načíst.'); }
+  }, [previewWorkspace]);
 
   const exportWorkspace = useCallback(() => {
-    const blob = new Blob([JSON.stringify(workspace.exportLayout(), null, 2)], { type: 'application/json' });
+    try {
+    const state = readWorkspaceState();
+    if (!state) throw new Error('Počkej na dokončení načítání grafů.');
+    const blob = new Blob([JSON.stringify(createChartWorkspaceDocument(state), null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.download = 'alphatrade-workspace.json';
     anchor.click();
     URL.revokeObjectURL(url);
-    setStatus('Rozložení exportováno');
-  }, [workspace]);
+    setStatus('Úplný workspace exportován včetně kreseb a vzhledu');
+    } catch (reason) { setStatus(reason instanceof Error ? reason.message : 'Export workspace selhal.'); }
+  }, [readWorkspaceState]);
 
   const importWorkspace = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    const input = event.target;
+    const owner = chartAppearanceUserId();
+    const sessionId = backtestSessionRef.current?.id;
     try {
-      workspace.importLayout(JSON.parse(await file.text()));
-      setStatus('Rozložení importováno');
-    } catch {
-      setStatus('Soubor neobsahuje platné rozložení');
+      const contents = await file.text();
+      if (owner !== chartAppearanceUserId() || sessionId !== backtestSessionRef.current?.id) throw new Error('Uživatel nebo session se změnili. Import zrušen.');
+      previewWorkspace(contents);
+    } catch (reason) {
+      setStatus(reason instanceof Error ? reason.message : 'Soubor neobsahuje platný workspace.');
     } finally {
-      event.target.value = '';
+      input.value = '';
     }
-  }, [workspace]);
+  }, [previewWorkspace]);
 
   const centerMainSplit = useCallback(() => {
     const exported = workspace.exportLayout() as {
@@ -1427,8 +1646,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
 
   const topButton = `h-8 inline-flex items-center gap-1.5 px-2 rounded-md text-[9px] font-bold transition-colors ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'}`;
   const topDivider = `h-6 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`;
-  const replaySource = backtestSession?.candlesByRoot.MNQ ?? activeControl?.rawCandles ?? [];
-  const replayAtEnd = isReplayAtLatestCandle(replaySource, replay.cursorTime);
+  const replaySource = backtestSession?.candlesByRoot[backtestSession.executionInstrument] ?? activeControl?.rawCandles ?? [];
+  const replayAtEnd = isReplayAtLatestCandle(replaySource, replay.cursorTime)
+    && (!backtestSession?.onEnsureReplayData || (backtestSession.loadedUntilMs ?? 0) >= backtestSession.endMs);
   // Poslední odhalená svíčka. Dřív se tu při každém renderu kopírovalo
   // a otáčelo celé pole svíček a hledalo se lineárně — na delší historii
   // to byly tři průchody tisíci prvky na jedno překreslení. Svíčky jsou
@@ -1445,7 +1665,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     }
     return found;
   }, [replaySource, replay.cursorTime]);
-  const tradingPanel = backtestSession?.renderTradingPanel?.({ replay, candle: replayCandle, instrument: 'MNQ' });
+  const tradingPanel = backtestSession?.renderTradingPanel?.({ replay, candle: replayCandle, instrument: backtestSession.executionInstrument });
   const selectedPositionInstrument = activeControl?.config.root ?? initialRoot;
   const quickOrderDisabledReason = !replayCandle
     ? 'Quick Order není dostupný bez aktuální replay ceny'
@@ -1568,6 +1788,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         <span className={`${topDivider} hidden md:block`} />
         <button type="button" className={`${topButton} hidden md:inline-flex`} onClick={exportWorkspace} title="Exportovat workspace"><Download size={14} /></button>
         <button type="button" className={`${topButton} hidden md:inline-flex`} onClick={() => fileInputRef.current?.click()} title="Importovat workspace"><Upload size={14} /></button>
+        <button type="button" className={`${topButton} hidden md:inline-flex`} onClick={recoverWorkspace} title="Vrátit workspace před posledním načtením nebo importem"><RotateCcw size={13} /><span className="hidden 2xl:inline">Předchozí workspace</span></button>
+        {workspaceLibraryMode && <ChartWorkspaceLibraryDialog mode={workspaceLibraryMode} isDark={isDark} onClose={() => setWorkspaceLibraryMode(null)} onSave={saveNamedWorkspace} onLoad={template => previewWorkspace(template.document)} onLoadCheckpoint={() => void loadWorkspaceCheckpoint()} />}
+        {workspacePreview && <WorkspaceImportPreview input={workspacePreview.input} error={workspacePreview.error} isDark={isDark} busy={workspaceApplying} onCancel={() => setWorkspacePreview(null)} onApply={() => void applyWorkspacePreview()} />}
         <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={importWorkspace} />
         <span className={topDivider} />
         <button
@@ -1631,7 +1854,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
             ref={workspaceShellRef}
             className={`alphatrade-candlekit-workspace absolute top-0 left-[52px] right-0 ${tradingPanel ? 'bottom-[88px]' : 'bottom-0'} ${isDark ? 'is-dark' : ''}`}
           >
-            <FlexLayoutAdapter workspace={workspace} hideToolbar />
+            <FlexLayoutAdapter key={workspaceMountVersion} workspace={workspace} hideToolbar />
           </div>
           {tradingPanel && (
             <div className={`absolute bottom-0 left-[52px] right-0 z-40 h-[88px] border-t ${isDark ? 'border-white/10 bg-[#0d1219]' : 'border-slate-200 bg-white'}`}>
@@ -1682,6 +1905,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
                 timeZoneLabel={chartTimeZoneLabel}
                 buttonClassName={topButton}
               />
+              {replayDataLoading && <span role="status" className="whitespace-nowrap px-2 text-[10px] text-blue-400">Načítám data…</span>}
               <select
                 value={replay.speed}
                 onChange={event => setReplay(current => ({ ...current, speed: Number(event.target.value) as ChartReplaySpeed }))}
@@ -1710,13 +1934,20 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           {reviewTrade && backtestSession?.onTradeReviewSave ? (
             <BacktestTradeReviewDialog
               trade={reviewTrade}
+              noteCaptureContext={{ marketTime: replay.cursorTime,
+                maxRevealedMarketTime: typeof backtestSession.maxRevealedTime === 'number' && Number.isFinite(backtestSession.maxRevealedTime)
+                  ? Math.max(backtestSession.maxRevealedTime, replay.cursorTime ?? 0) : null,
+                entryMarketTime: typeof reviewTrade.entryTime === 'number' ? reviewTrade.entryTime / 1000 : null,
+                exitMarketTime: Number.isFinite(reviewTrade.timestamp) ? reviewTrade.timestamp / 1000 : null,
+                closedTradeReview: true }}
+              tagSuggestions={backtestSession?.tagSuggestions}
               isDark={isDark}
               onClose={() => setReviewTradeId(null)}
               onCaptureSnapshot={captureVisibleCharts}
               onRecalculate={backtestSession.onTradeRecalculate
                 ? () => backtestSession.onTradeRecalculate!(String(reviewTrade.id))
                 : undefined}
-              onSave={(updates, snapshotDataUrl) => backtestSession.onTradeReviewSave!(String(reviewTrade.id), updates, snapshotDataUrl)}
+              onSave={(updates, snapshotDataUrl, expected) => backtestSession.onTradeReviewSave!(String(reviewTrade.id), updates, snapshotDataUrl, expected)}
             />
           ) : null}
           {selectedFib && fibSettingsOpen && <FibDrawingSettingsDialog

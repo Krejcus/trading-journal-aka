@@ -26,6 +26,45 @@ describe('CopierBracketCorrelator', () => {
     });
   });
 
+  it('před dokončením post-fill páru převezme novou cenu nohy bez transient quantity', () => {
+    const correlator = new CopierBracketCorrelator();
+    correlator.observe(event({ quantity: 11, cumulativeQuantity: 11 }));
+    correlator.observe(event({
+      id: 'sl', orderId: 'sl', kind: 'submitted', side: 'Buy', orderType: 'Stop',
+      quantity: 11, stopPrice: 30_313.5, cumulativeQuantity: undefined, receivedAt: 1_150,
+    }));
+
+    expect(correlator.updatePending(event({
+      id: 'sl-move', orderId: 'sl', kind: 'replaced', side: 'Buy', orderType: 'Stop',
+      quantity: 6, stopPrice: 30_320, cumulativeQuantity: undefined, receivedAt: 1_175,
+      executionShapeChanged: true,
+    }))).toBe(true);
+
+    expect(correlator.observe(event({
+      id: 'tp', orderId: 'tp', kind: 'submitted', side: 'Buy', orderType: 'Limit',
+      quantity: 11, limitPrice: 30_272, cumulativeQuantity: undefined, receivedAt: 1_195,
+    }))).toMatchObject({ quantity: 11, stopPrice: 30_320, targetPrice: 30_272 });
+  });
+
+  it('po emitování páru pending updater normální follower modify nespolkne', () => {
+    const correlator = new CopierBracketCorrelator();
+    correlator.observe(event({}));
+    correlator.observe(event({
+      id: 'sl', orderId: 'sl', kind: 'submitted', side: 'Buy', orderType: 'Stop',
+      stopPrice: 30_313.5, cumulativeQuantity: undefined, receivedAt: 1_150,
+    }));
+    expect(correlator.observe(event({
+      id: 'tp', orderId: 'tp', kind: 'submitted', side: 'Buy', orderType: 'Limit',
+      limitPrice: 30_272, cumulativeQuantity: undefined, receivedAt: 1_195,
+    }))).not.toBeNull();
+
+    expect(correlator.updatePending(event({
+      id: 'sl-move', orderId: 'sl', kind: 'replaced', side: 'Buy', orderType: 'Stop',
+      stopPrice: 30_320, executionShapeChanged: true,
+      cumulativeQuantity: undefined, receivedAt: 1_210,
+    }))).toBe(false);
+  });
+
   it('upřednostní explicitní parentId', () => {
     const correlator = new CopierBracketCorrelator();
     correlator.observe(event({ orderId: 'entry-a' }));
@@ -82,6 +121,20 @@ describe('CopierBracketCorrelator', () => {
       stopPrice: 30_313.5, cumulativeQuantity: undefined, receivedAt: 1_327,
     }))).not.toBeNull();
     expect(correlator.hasPendingPair('entry')).toBe(false);
+  });
+
+  it('po vypršení controller timeru uvolní nekompletní pár z paměti', () => {
+    const correlator = new CopierBracketCorrelator();
+    correlator.observe(event({}));
+    correlator.observe(event({
+      id: 'sl', orderId: 'sl', kind: 'submitted', side: 'Buy', orderType: 'Stop',
+      stopPrice: 30_300, cumulativeQuantity: undefined, receivedAt: 1_200,
+    }));
+    expect(correlator.hasPendingPair('entry')).toBe(true);
+
+    correlator.abandonPendingPair('entry');
+    expect(correlator.hasPendingPair('entry')).toBe(false);
+    expect(correlator.entryOrderIdForLeg('sl')).toBeNull();
   });
 
   it('mimo krátké okno nic nekoreluje', () => {

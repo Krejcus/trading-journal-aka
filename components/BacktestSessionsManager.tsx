@@ -1,51 +1,23 @@
-import React, { useCallback, useEffect, useState, useMemo } from 'react';
+import { bindResearchRule, type BacktestResearchBinding } from '../services/backtestResearchCases';
+import { useWorkspaceLibrary } from '../hooks/useWorkspaceLibrary';
+import { workspaceTemplateForNewSession } from '../services/chartWorkspaceLibrary';
+import { chartAppearanceUserId } from '../services/chartAppearanceScope';
+import { summarizeWorkspaceDocument } from '../services/chartWorkspaceDocument';
+import { buildBacktestAiExport } from '../services/backtestAiExport';
+import React, { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import { Layers, Plus, FlaskConical, Download, Play, Archive, RefreshCw, CheckCircle2, Copy } from 'lucide-react';
-import { Account, Trade } from '../types';
+import { Account, Trade, LabExperiment } from '../types';
 import { storageService } from '../services/storageService';
-import { pointValueFor } from '../services/tradovateImport';
 import {
   archiveBacktestRun,
   createBacktestRun,
   listBacktestRuns,
+  listBacktestRunConflictCopies,
+  type BacktestRunConflictCopy,
   saveBacktestRun,
 } from '../services/backtestRunService';
 import type { BacktestRun } from '../services/backtestTypes';
 import type { ChartWorkspaceLayoutId } from '../services/chartWorkspaceLayouts';
-
-const SAVED_CHART_LAYOUT_KEY = 'alphatrade.candlekit.layout.alphatrade-market-workspace';
-const CHART_LAYOUT_ID_KEY = 'alphatrade:chart-workspace-layout';
-
-const readSavedChartLayout = (): { layout?: unknown; layoutId?: ChartWorkspaceLayoutId } => {
-  if (typeof window === 'undefined') return {};
-  try {
-    const raw = window.localStorage.getItem(SAVED_CHART_LAYOUT_KEY);
-    const layoutId = window.localStorage.getItem(CHART_LAYOUT_ID_KEY) as ChartWorkspaceLayoutId | null;
-    return { layout: raw ? JSON.parse(raw) : undefined, layoutId: layoutId ?? undefined };
-  } catch {
-    return {};
-  }
-};
-
-const sanitizeSavedLayout = (value: unknown, allowNq: boolean): unknown => {
-  if (allowNq || value == null) return value;
-  if (Array.isArray(value)) return value.map(item => sanitizeSavedLayout(item, allowNq));
-  if (typeof value !== 'object') return value;
-  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [
-    key,
-    key === 'root' && item === 'NQ' ? 'MNQ' : sanitizeSavedLayout(item, allowNq),
-  ]));
-};
-
-// positionSize (počet kontraktů): z uloženého pole, jinak dopočet z risku: riskAmount / (SL vzdálenost × $/bod).
-const derivePositionSize = (t: any): number | null => {
-  if (t.positionSize != null) return Number(t.positionSize);
-  if (t.quantity != null) return Number(t.quantity);
-  const risk = Number(t.riskAmount), e = Number(t.entryPrice), s = Number(t.stopLoss);
-  const pv = pointValueFor(t.instrument || t.symbol || '');
-  const slDist = Math.abs(e - s);
-  if (risk > 0 && slDist > 0 && pv > 0) return Math.round(risk / (slDist * pv));
-  return null;
-};
 
 interface Props {
   theme: 'dark' | 'light' | 'oled';
@@ -55,48 +27,6 @@ interface Props {
   onDelete?: (id: string) => void;
   onOpenRun: (run: BacktestRun) => void;
 }
-
-// ── Export backtest obchodů do JSON pro AI analýzu (Claude Opus 4.8) ──────────
-const EXPORT_LEGEND = {
-  _o_souboru: "Export backtest obchodů z AlphaTrade. Každý obchod = 1 reálně zapsaný trade + 'counterfactual' (co by se stalo při jiném SL / TP / managementu, dopočítáno z barů). Slouží k AI analýze: najít edge, porovnat SL/TP/BE varianty, ověřit držení biasu, projít poznámky.",
-  pole: {
-    direction: "Long / Short",
-    outcome: "Win / Loss / BE — reálný výsledek",
-    pnl: "reálný PnL v $",
-    slPlacement: "kam reálně dal SL: fvg (pod FVG) | swing (pod strukturní swing) | ote (pod 0.79 OTE) | other",
-    targetType: "kam cílil TP: deviation (VWAP ±1σ/±2σ) | liquidity (nejbližší level) | session_close (EOD) | other",
-    management: "řízení pozice: trail_bos (trail za strukturou) | fixed (set&forget) | partial_runner | be_runner",
-    sessionBias: "bias session (Long/Short/Neutral) zadaný PŘED obchodováním",
-    biasAligned: "true = obchod ve směru biasu, false = proti biasu, null = Neutral/nezadáno",
-    mfeR: "Max Favorable Excursion v R (kam až cena došla ve prospěch)",
-    maeR: "Max Adverse Excursion v R (kam až proti)",
-    counterfactual: "CO KDYBY. swing/ote/fvg = 3 varianty SL: každá má fixní-TP výsledek (outcome/rr/realizedR) i 'trail' (strukturní trailing: reason tp/trail+/trail/open, realizedR). tpTargets = co kdyby cílil na různé likviditní úrovně (label/price/outcome/realizedR), risk base = swing SL. realizedR = výsledek v R-násobcích.",
-    excursion: "KAM BY TO DOŠLO DO KONCE DNE (Filip nesmí držet přes noc, vystupuje limitem na levelech). mfePotentialR=max favorable (může >TP), tpR, leftOnTableR=co zbylo na stole, levels[]=likvidní levely ve směru (reached/r/bars), trail=strukturní trailing.",
-    entryMap: "VSTUPNÍ MODEL: structureType (CHoCH=reverzal / BoS=pokračování) + structureOrder, odrazLevels=od jakého levelu se cena odrazila, entryFvg=entry na hraně FVG.",
-    htfConfluence_ltfConfluence: "ručně zvolené konfluence (tagy); SL/TP/entry jsou i tady jako tagy (SL Swing, TP VWAP, Odraz …, Entry FVG)",
-    notes: "poznámky k obchodu · sessionPreNotes/PostNotes = poznámky k celé session",
-  },
-};
-
-const buildTradeRecord = (t: any) => ({
-  date: t.date, entryDate: t.entryDate, entryTime: t.entryTime,
-  instrument: t.instrument || t.symbol, direction: t.direction, session: t.session,
-  outcome: t.outcome, pnl: t.pnl, riskAmount: t.riskAmount, positionSize: derivePositionSize(t),
-  entryPrice: t.entryPrice, stopLoss: t.stopLoss, takeProfit: t.takeProfit, exitPrice: t.exitPrice,
-  durationMinutes: t.durationMinutes, executionStatus: t.executionStatus,
-  slPlacement: t.slPlacement ?? null, targetType: t.targetType ?? null, targetLevel: t.targetLevel ?? null, management: t.management ?? null,
-  sessionBias: t.sessionBias ?? null, biasAligned: t.biasAligned ?? null,
-  htfConfluence: t.htfConfluence ?? [], ltfConfluence: t.ltfConfluence ?? [],
-  emotions: t.emotions ?? [], mistakes: t.mistakes ?? [],
-  notes: t.notes ?? null, sessionPreNotes: t.sessionPreNotes ?? null, sessionPostNotes: t.sessionPostNotes ?? null,
-  mfeR: t.mfeR ?? null, maeR: t.maeR ?? null, mfePoints: t.mfePoints ?? null, maePoints: t.maePoints ?? null,
-  runUp: t.runUp ?? null, drawdown: t.drawdown ?? null,
-  excursionAvailable: t.excursionAvailable ?? null,
-  excursion: t.excursion ?? null,
-  entryMap: t.entryMap ?? null,
-  counterfactual: t.counterfactual ?? null,
-  schemaVersion: t.schemaVersion ?? null, source: t.source ?? null,
-});
 
 const downloadJSON = (filename: string, data: any) => {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -121,14 +51,22 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
   const [startDate, setStartDate] = useState(monthAgo);
   const [endDate, setEndDate] = useState(latestHistoricalDate);
   const [includeNq, setIncludeNq] = useState(true);
+  const [researchCases, setResearchCases] = useState<LabExperiment[]>([]);
+  const [researchError, setResearchError] = useState<string>();
+  const [researchLoading, setResearchLoading] = useState(false);
+  const [researchCaseId, setResearchCaseId] = useState('');
+  const [researchRevisionId, setResearchRevisionId] = useState('');
+  const [researchRole, setResearchRole] = useState<BacktestResearchBinding['role']>('development');
+  const creatingRef = useRef(false);
   const [strategy, setStrategy] = useState('');
   const [commission, setCommission] = useState('0.37');
   const [slippage, setSlippage] = useState('0');
   const [timezone, setTimezone] = useState('Europe/Prague');
   const [startingLayout, setStartingLayout] = useState<ChartWorkspaceLayoutId>('2h');
-  const [useSavedLayout, setUseSavedLayout] = useState(() => Boolean(readSavedChartLayout().layout));
-  const savedLayoutAvailable = useMemo(() => Boolean(readSavedChartLayout().layout), []);
+  const workspaceLibrary = useWorkspaceLibrary();
+  const [selectedTemplate, setSelectedTemplate] = useState('default');
   const [runs, setRuns] = useState<BacktestRun[]>([]);
+  const [conflictCopies, setConflictCopies] = useState<BacktestRunConflictCopy[]>([]);
   const [loadingRuns, setLoadingRuns] = useState(true);
   const [creating, setCreating] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -136,7 +74,10 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
 
   const loadRuns = useCallback(async () => {
     setLoadingRuns(true);
-    try { setRuns(await listBacktestRuns()); }
+    try {
+      const [nextRuns, copies] = await Promise.all([listBacktestRuns(), listBacktestRunConflictCopies()]);
+      setRuns(nextRuns); setConflictCopies(copies); setError(null);
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Session se nepodařilo načíst.'); }
     finally { setLoadingRuns(false); }
   }, []);
@@ -147,6 +88,19 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
     window.addEventListener('alphatrade:backtest-run-saved', refresh);
     return () => window.removeEventListener('alphatrade:backtest-run-saved', refresh);
   }, [loadRuns]);
+
+  useEffect(() => {
+    if (!showCreateForm) return;
+    const owner = chartAppearanceUserId(); let active = true;
+    setResearchLoading(true); setResearchError(undefined); setResearchCases([]);
+    void storageService.getLabExperiments().then(items => {
+      if (active && owner === chartAppearanceUserId()) setResearchCases(items.filter(item => item.world === 'backtest' && item.research));
+    }).catch(reason => { if (active) setResearchError(reason instanceof Error ? reason.message : 'Pravidla se nepodařilo načíst.'); })
+      .finally(() => { if(active) setResearchLoading(false); });
+    return () => { active = false; };
+  }, [showCreateForm]);
+  const selectedResearch = researchCases.find(item => item.id === researchCaseId);
+  const selectedRevision = selectedResearch?.research?.revisions.find(item => item.id === researchRevisionId);
 
   const sessions = useMemo(() => accounts.filter(a => a.type === 'Backtest' && a.status === 'Active'), [accounts]);
 
@@ -167,21 +121,19 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
   const [exporting, setExporting] = useState(false);
   const exportSessions = async (sess: Account[], single?: boolean) => {
     const ids = sess.map(s => String(s.id));
+    const owner = chartAppearanceUserId();
     setExporting(true);
     try {
       // Dotáhni PLNÝ blob z DB (in-memory trades mají blob stržený → counterfactual/excursion null).
-      const full = await storageService.getTradesWithDataByAccounts(ids);
+      const full = await storageService.getTradesWithDataByAccounts(ids, undefined, { strict:true, ...(typeof owner === 'string' ? { expectedOwnerId:owner } : {}) });
       if (full.length === 0) return;
-      const out = {
-        _legenda: EXPORT_LEGEND,
-        exportovano: new Date().toISOString(),
-        sessions: sess.map(s => ({ id: s.id, name: s.name, initialBalance: s.initialBalance })),
-        pocetObchodu: full.length,
-        obchody: full.map(buildTradeRecord),
-      };
+      if (owner !== chartAppearanceUserId()) throw new Error('Uživatel se změnil. Export zrušen.');
+      const out = buildBacktestAiExport(sess, full, runs);
       const stamp = new Date().toISOString().slice(0, 10);
       const namePart = single && sess[0] ? sess[0].name.replace(/[^\w-]+/g, '_') : 'vse';
       downloadJSON(`backtest-${namePart}-${stamp}.json`, out);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Export se nepodařil.');
     } finally {
       setExporting(false);
     }
@@ -200,6 +152,7 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
   } as unknown as Account);
 
   const create = async () => {
+    if (creatingRef.current) return;
     const n = name.trim();
     const s = Number(size);
     const startAt = new Date(`${startDate}T00:00:00`).getTime();
@@ -208,12 +161,24 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
       setError('Zkontroluj název, kapitál a rozsah datumů.');
       return;
     }
-    setCreating(true);
+    creatingRef.current = true; setCreating(true);
     setError(null);
+    const owner = chartAppearanceUserId();
     const account = createAccount(n, s);
-    onUpdate([...accounts, account]);
     try {
-      const savedWorkspace = useSavedLayout ? readSavedChartLayout() : {};
+      if (workspaceLibrary.owner !== chartAppearanceUserId()) throw new Error('Uživatel se změnil. Znovu vyber workspace šablonu.');
+      const savedWorkspace = workspaceTemplateForNewSession(chartAppearanceUserId(), selectedTemplate, includeNq ? ['MNQ', 'NQ'] : ['MNQ']) ?? { layoutId: selectedTemplate === 'default' ? '2h' as const : startingLayout };
+      let researchBinding: BacktestResearchBinding | undefined;
+      if (researchCaseId) {
+        const currentCases = await storageService.getLabExperiments();
+        if (owner !== chartAppearanceUserId()) throw new Error('Uživatel se změnil. Session nebyla vytvořená.');
+        const experiment = currentCases.find(item => item.id === researchCaseId);
+        if (!experiment) throw new Error('Výzkumný případ již není dostupný. Obnov jeho seznam.');
+        researchBinding = await bindResearchRule({ experiment, revisionId:researchRevisionId, role:researchRole, marketStart:startAt, marketEnd:endAt,
+          recordedAt:Date.now(), operationId:crypto.randomUUID(), runs, trades, historyComplete:false });
+      }
+      if (owner !== chartAppearanceUserId()) throw new Error('Uživatel se změnil. Session nebyla vytvořená.');
+      onUpdate([...accounts, account]);
       const run = await createBacktestRun({
         accountId: account.id,
         name: n,
@@ -224,14 +189,12 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
           instruments: includeNq ? ['MNQ', 'NQ'] : ['MNQ'],
           executionInstrument: 'MNQ',
           strategy: strategy.trim() || undefined,
+          researchBinding,
           timezone,
           commissionPerSide: { MNQ: Math.max(0, Number(commission) || 0), NQ: 1.4 },
           slippageTicks: { MNQ: Math.max(0, Number(slippage) || 0), NQ: Math.max(0, Number(slippage) || 0) },
         },
-        workspaceState: {
-          layout: sanitizeSavedLayout(savedWorkspace.layout, includeNq),
-          layoutId: savedWorkspace.layoutId ?? startingLayout,
-        },
+        workspaceState: savedWorkspace,
       });
       setRuns(current => [run, ...current]);
       setName('');
@@ -240,12 +203,13 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Session se nepodařilo vytvořit.');
     } finally {
-      setCreating(false);
+      creatingRef.current = false; setCreating(false);
     }
   };
 
   const duplicateRun = async (source: BacktestRun) => {
-    setCreating(true);
+    if (creatingRef.current) return;
+    creatingRef.current = true; setCreating(true);
     setError(null);
     try {
       const duplicateName = `${source.name} – kopie`;
@@ -257,14 +221,17 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
         initialCapital: source.initialCapital,
         startAt: source.startAt,
         endAt: source.endAt,
-        config: source.config,
+        config: { ...source.config, ...(source.config.researchBinding ? { researchBinding: { ...structuredClone(source.config.researchBinding),
+          id:crypto.randomUUID(), boundAt:Date.now(), exposureAtBinding:'already-observed' as const,
+          exposureReasons:['Kopie existující výzkumné session; nejde o nový neviděný vzorek.'],
+          priorRunIds:[...new Set([...source.config.researchBinding.priorRunIds,source.id])] } } : {}) },
         workspaceState: { ...source.workspaceState, panels: undefined },
       });
       setRuns(current => [duplicated, ...current]);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Session se nepodařilo duplikovat.');
     } finally {
-      setCreating(false);
+      creatingRef.current = false; setCreating(false);
     }
   };
 
@@ -290,8 +257,9 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
           <p className="text-[11px] font-bold text-slate-500 tracking-wide">{runs.filter(run => run.status !== 'archived').length} replay session{runs.length === 1 ? '' : 's'}</p>
         </div>
         <div className="flex items-center gap-2">
+          {conflictCopies.length > 0 && <button onClick={() => downloadJSON(`backtest-lokalni-kopie-${new Date().toISOString().slice(0, 10)}.json`, conflictCopies)} title="Export lokálního postupu uchovaného při konfliktu s cloudem" className="rounded-lg border border-amber-500/30 px-3 py-2 text-[11px] font-bold text-amber-500">Lokální kopie ({conflictCopies.length})</button>}
           {totalTrades > 0 && (
-            <button onClick={() => exportSessions(sessions)} title="Export všech backtest obchodů do JSON (pro AI analýzu)"
+            <button disabled={exporting} onClick={() => exportSessions(sessions)} title="Export všech backtest obchodů do JSON (pro AI analýzu)"
               className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-black transition-all ${isDark ? 'bg-violet-500/15 text-violet-300 hover:bg-violet-500/25' : 'bg-violet-100 text-violet-700 hover:bg-violet-200'}`}>
               <Download size={14} /> Export vše
             </button>
@@ -313,33 +281,62 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="sm:col-span-2">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Název session</label>
-            <input value={name} onChange={e => setName(e.target.value)} placeholder="např. NQ Silver Bullet" className={inputCls}
+            <input aria-label="Název session" value={name} onChange={e => setName(e.target.value)} placeholder="např. NQ Silver Bullet" className={inputCls}
               onKeyDown={e => { if (e.key === 'Enter') void create(); }} />
           </div>
           <div>
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Velikost účtu ($)</label>
-            <input type="number" value={size} onChange={e => setSize(e.target.value)} placeholder="50000" className={inputCls}
+            <input type="number" aria-label="Velikost účtu" value={size} onChange={e => setSize(e.target.value)} placeholder="50000" className={inputCls}
               onKeyDown={e => { if (e.key === 'Enter') void create(); }} />
           </div>
-          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Strategie / playbook</label><input value={strategy} onChange={event => setStrategy(event.target.value)} placeholder="volitelné" className={inputCls} /></div>
-          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Od</label><input type="date" value={startDate} onChange={event => setStartDate(event.target.value)} className={inputCls} /></div>
-          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Do</label><input type="date" value={endDate} max={latestHistoricalDate} onChange={event => setEndDate(event.target.value)} className={inputCls} /></div>
-          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Komise MNQ / strana</label><input type="number" step="0.01" min="0" value={commission} onChange={event => setCommission(event.target.value)} className={inputCls} /></div>
-          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Slippage (ticky)</label><input type="number" step="1" min="0" value={slippage} onChange={event => setSlippage(event.target.value)} className={inputCls} /></div>
-          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Timezone</label><select value={timezone} onChange={event => setTimezone(event.target.value)} className={inputCls}><option value="Europe/Prague">Praha</option><option value="America/New_York">New York</option><option value="UTC">UTC</option></select></div>
+          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Strategie / playbook</label><input aria-label="Strategie / playbook" value={strategy} onChange={event => setStrategy(event.target.value)} placeholder="volitelné" className={inputCls} /></div>
+          <div className="sm:col-span-2 rounded-lg border border-violet-500/20 p-3 space-y-2">
+            <label className="block text-xs font-semibold">Výzkumný případ
+              <select aria-label="Výzkumný případ" className={`${inputCls} mt-1`} value={researchCaseId} disabled={researchLoading} onChange={event=>{
+                const item=researchCases.find(candidate=>candidate.id===event.target.value); setResearchCaseId(event.target.value);
+                setResearchRevisionId(item?.research?.revisions.at(-1)?.id??''); setResearchRole('development');
+              }}><option value="">Volný replay bez výzkumného případu</option>{researchCases.map(item=><option key={item.id} value={item.id}>{item.title}</option>)}</select>
+            </label>
+            {researchLoading && <p className="text-xs text-slate-500">Načítám uložená pravidla…</p>}
+            {researchError && <p role="alert" className="text-xs text-amber-500">{researchError}</p>}
+            {selectedResearch && <div className="grid gap-2 sm:grid-cols-2">
+              <label className="text-xs">Verze pravidel<select aria-label="Verze pravidel" className={`${inputCls} mt-1`} value={researchRevisionId} onChange={event=>setResearchRevisionId(event.target.value)}>
+                {selectedResearch.research?.revisions.map(revision=><option key={revision.id} value={revision.id} disabled={revision.recordedAt===null}>v{revision.version} · {revision.reason}</option>)}
+              </select></label>
+              <label className="text-xs">Účel session<select aria-label="Účel výzkumné session" className={`${inputCls} mt-1`} value={researchRole} onChange={event=>setResearchRole(event.target.value as BacktestResearchBinding['role'])}>
+                <option value="development">Vývoj pravidla</option><option value="validation" disabled={!selectedRevision?.definition.validation}>Plánované ověření</option>
+              </select></label>
+              {selectedRevision && <div className="sm:col-span-2 text-xs text-slate-500"><p className="whitespace-pre-wrap">{selectedRevision.definition.rule}</p><p className="mt-1">Vyvrácení: {selectedRevision.definition.falsification}</p>
+                <p className="mt-1">{selectedRevision.definition.timeZone} · vývoj {selectedRevision.definition.development ? `${selectedRevision.definition.development.from} až ${selectedRevision.definition.development.through}` : 'bez omezení'} · ověření {selectedRevision.definition.validation ? `${selectedRevision.definition.validation.from} až ${selectedRevision.definition.validation.through}` : 'nenaplánováno'}</p>
+              </div>}
+              <p className="sm:col-span-2 text-xs text-amber-500">Uloží se tato konkrétní verze. Plánované ověření zatím není uzamčený neviděný vzorek; úplná historie předchozího zobrazení není doložená.</p>
+            </div>}
+          </div>
+          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Od</label><input type="date" aria-label="Od" value={startDate} onChange={event => setStartDate(event.target.value)} className={inputCls} /></div>
+          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Do</label><input type="date" aria-label="Do" value={endDate} max={latestHistoricalDate} onChange={event => setEndDate(event.target.value)} className={inputCls} /></div>
+          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Komise MNQ / strana</label><input type="number" step="0.01" min="0" aria-label="Komise MNQ / strana" value={commission} onChange={event => setCommission(event.target.value)} className={inputCls} /></div>
+          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Slippage (ticky)</label><input type="number" step="1" min="0" aria-label="Slippage v ticích" value={slippage} onChange={event => setSlippage(event.target.value)} className={inputCls} /></div>
+          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Timezone</label><select aria-label="Timezone" value={timezone} onChange={event => setTimezone(event.target.value)} className={inputCls}><option value="Europe/Prague">Praha</option><option value="America/New_York">New York</option><option value="UTC">UTC</option></select></div>
           <div>
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Výchozí layout</label>
             <select
-              value={useSavedLayout ? 'saved' : startingLayout}
+              value={selectedTemplate === 'preset' ? startingLayout : selectedTemplate}
               onChange={event => {
-                if (event.target.value === 'saved') setUseSavedLayout(true);
-                else { setUseSavedLayout(false); setStartingLayout(event.target.value as ChartWorkspaceLayoutId); }
+                const value = event.target.value;
+                if (value === 'default' || value.startsWith('template:')) setSelectedTemplate(value);
+                else { setSelectedTemplate('preset'); setStartingLayout(value as ChartWorkspaceLayoutId); }
               }}
               className={inputCls}
             >
-              <option value="saved" disabled={!savedLayoutAvailable}>Můj uložený layout{savedLayoutAvailable ? '' : ' (není uložený)'}</option>
+              <option value="default">{workspaceLibrary.library.defaultId ? `Výchozí: ${workspaceLibrary.library.templates.find(item => item.id === workspaceLibrary.library.defaultId)?.name}` : 'Výchozí · 2 grafy'}</option>
+              {workspaceLibrary.library.templates.map(template => {
+                const summary = summarizeWorkspaceDocument(template.document);
+                const incompatible = !includeNq && summary.roots.includes('NQ');
+                return <option key={template.id} value={`template:${template.id}`} disabled={incompatible}>{template.name}{incompatible ? ' · vyžaduje NQ' : ` · ${summary.panels} grafy`}</option>;
+              })}
               <option value="1">1 graf</option><option value="2h">2 vedle sebe</option><option value="2v">2 nad sebou</option><option value="4">4 grafy</option>
             </select>
+            <p className="mt-1 text-[10px] text-slate-500">{workspaceLibrary.error || 'Šablony uložené v grafu obsahují i kresby, indikátory a vzhled. Knihovna je lokální pro tento účet.'}</p>
           </div>
           <div className={`sm:col-span-2 flex items-center justify-between rounded-lg border px-3 py-2 ${isDark ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-slate-50'}`}><div><p className="text-xs font-black">Instrumenty</p><p className="text-[10px] text-slate-500">Entry vždy MNQ · společný 1m replay clock</p></div><div className="flex gap-2"><span className="rounded-lg bg-violet-500/15 px-2 py-1 text-[10px] font-black text-violet-500">MNQ</span><label className="flex cursor-pointer items-center gap-1 text-[10px] font-black"><input type="checkbox" checked={includeNq} onChange={event => setIncludeNq(event.target.checked)} /> NQ</label></div></div>
           <button onClick={() => void create()} disabled={!name.trim() || !Number(size) || creating}
@@ -350,6 +347,7 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
         {error && <p className="mt-3 text-xs font-bold text-rose-500">{error}</p>}
       </div>}
 
+      {error && !showCreateForm && <p role="alert" className="mb-3 text-xs font-bold text-rose-500">{error}</p>}
       {/* Nové replay sessions */}
       {loadingRuns ? <div className="py-10 text-center text-xs text-slate-500">Načítám sessions…</div> : runs.filter(run => run.status !== 'archived').length === 0 ? (
         <div className={`text-center py-14 px-6 rounded-lg border border-dashed ${isDark ? 'border-slate-700 text-slate-500' : 'border-slate-300 text-slate-400'}`}>

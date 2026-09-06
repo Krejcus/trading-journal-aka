@@ -59,7 +59,8 @@ describe('mergeChartTemplates', () => {
       [template({ id: 'cloud', updatedAt: '2026-08-01T00:00:00.000Z' })],
     );
     expect(merged).toHaveLength(1);
-    expect(merged[0].id).toBe('local');
+    expect(merged[0].id).toBe('cloud');
+    expect(merged[0].value).toEqual({ showVwap: false });
   });
 
   it('starší lokální kopie cloudovou nepřepíše', () => {

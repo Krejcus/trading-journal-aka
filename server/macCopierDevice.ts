@@ -9,7 +9,7 @@ import {
   openTradovatePilotLease,
   type TradovatePilotLeaseEnvelope,
   type TradovatePilotLeasePayload,
-} from './tradovatePilotLease';
+} from './tradovatePilotLease.js';
 
 const execFileAsync = promisify(execFile);
 const KEYCHAIN_SERVICE = 'com.alphatrade.copier-device';

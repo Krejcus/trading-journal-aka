@@ -48,10 +48,11 @@ const scenario = (): { candles: MarketCandle[]; orders: Array<{ atIndex: number;
 /** Id a časy jsou generované (uuid); pro porovnání je normalizujeme. */
 const comparable = (runtime: BacktestRuntimeState) => JSON.parse(JSON.stringify({
   ...runtime,
-  orders: runtime.orders.map(({ id, ...rest }) => rest),
-  fills: runtime.fills.map(({ id, orderId, ...rest }) => rest),
-  closedTrades: runtime.closedTrades.map(({ id, ...rest }) => rest),
-  orderEvents: (runtime.orderEvents ?? []).map(({ id, orderId, ...rest }) => rest),
+  orders: runtime.orders.map(({ id: _id, ...rest }) => rest),
+  fills: runtime.fills.map(({ id: _id, orderId: _orderId, positionId: _positionId, closedPositionId: _closedPositionId, ...rest }) => rest),
+  closedTrades: runtime.closedTrades.map(({ id: _id, positionId: _positionId, exitOrderId: _exitOrderId, ...rest }) => rest),
+  positions: runtime.positions.map(({ positionId: _positionId, entryFillIds: _entryFillIds, ...rest }) => rest),
+  orderEvents: (runtime.orderEvents ?? []).map(({ id: _id, orderId: _orderId, positionId: _positionId, closedPositionId: _closedPositionId, ...rest }) => rest),
 }));
 
 const runScenario = (

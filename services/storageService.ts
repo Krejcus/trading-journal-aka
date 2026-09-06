@@ -1,3 +1,5 @@
+import { hydrateLegacyTradeNotes, stripLegacyTradeNotes, tradeNotesStorageReady, privateNotesFromSavedRow, readConnectionTradeNoteConsent, confirmConnectionTradeNotes } from './tradeLegacyNotes';
+import { loadLabExperiments, persistLabExperiment, removeLabExperiment } from './labExperimentPersistence';
 
 import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, WeeklyFocus, DrawingTemplate, AIConversation, LabExperiment } from '../types';
 import { supabase } from './supabase';
@@ -7,6 +9,8 @@ import { resizeImageDataUrl, dataUrlSizeKB } from './imageResize';
 import { stripAndUploadBase64Images, hasBase64Images } from './stripBase64';
 import { clearAppStorage } from '../utils/appStorage';
 import { parseOptionalTradeValidity } from './tradeValidity';
+import { containsTradeNoteHistory, hydrateOwnedTradeNoteHistories, publicTradeNotes, stripTradeNoteHistory } from './tradeNotePrivacy';
+import { backtestReviewDataFromRow, backtestReviewPatch, requestBacktestReviewPatch, type BacktestReviewSnapshot } from './backtestReviewPersistence';
 
 const embedTrade = (trade: Trade) => void import('./embeddingService').then(module => module.embedTrade(trade));
 const embedPrep = (prep: DailyPrep) => void import('./embeddingService').then(module => module.embedPrep(prep));
@@ -18,9 +22,11 @@ const isUUID = (id: any) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-
 // Helper to get current user ID with caching
 let cachedUserId: string | null = null;
 let lastSessionCheck = 0;
+let authStateVersion = 0;
 
 // Invalidate cache on auth state changes (logout, user switch) to prevent stale userId
 supabase.auth.onAuthStateChange((event, session) => {
+  authStateVersion += 1;
   if (event === 'SIGNED_OUT' || event === 'USER_UPDATED' || !session) {
     cachedUserId = null;
     lastSessionCheck = 0;
@@ -37,10 +43,21 @@ export const getUserId = async () => {
     return cachedUserId;
   }
 
+  const requestVersion = authStateVersion;
   const { data: { session } } = await supabase.auth.getSession();
+  // Never reinstate a stale identity after logout or an account switch.
+  if (requestVersion !== authStateVersion) return null;
   cachedUserId = session?.user?.id || null;
   lastSessionCheck = Date.now();
   return cachedUserId;
+};
+
+const hydratePrivateTradeNotes = async <T extends Pick<Trade, 'id'>>(trades: T[], targetOwnerId: string | null): Promise<T[]> => {
+  const version = authStateVersion;
+  const owner = await getUserId();
+  const stillCurrent = async () => version === authStateVersion && await getUserId() === owner;
+  const legacy = owner ? await hydrateLegacyTradeNotes(supabase, trades, owner === targetOwnerId ? 'owner' : 'connection', stillCurrent) : trades.map(stripLegacyTradeNotes);
+  return hydrateOwnedTradeNoteHistories(supabase, legacy, owner, targetOwnerId, stillCurrent);
 };
 
 // Safe LocalStorage helper to prevent QuotaExceededError from crashing the app
@@ -114,7 +131,7 @@ export const storageService = {
     if (error) { console.error('[RPC] get_dashboard_data error:', error); throw error; }
     const raw = data as any;
 
-    const trades = (raw.trades || []).map((t: any) => {
+    let trades = (raw.trades || []).map((t: any) => {
       const d = t.data || {};
       return {
         id: t.id, userId: t.user_id, accountId: t.account_id, instrument: t.instrument,
@@ -139,6 +156,7 @@ export const storageService = {
         isValid: parseOptionalTradeValidity(d.isValid),
         groupId: d.groupId, phase: d.phase,
         htfConfluence: d.htfConfluence, ltfConfluence: d.ltfConfluence,
+        autoConfluence: d.autoConfluence,
         mistakes: d.mistakes, emotions: d.emotions,
         planAdherence: d.planAdherence, executionStatus: d.executionStatus,
         needsReview: d.needsReview === true,
@@ -178,6 +196,7 @@ export const storageService = {
         executionPath: d.executionPath || undefined,
         executionPathComplete: d.executionPathComplete == null ? undefined : (d.executionPathComplete === true || d.executionPathComplete === 'true'),
         outcomeAmbiguous: d.outcomeAmbiguous === true || d.outcomeAmbiguous === 'true',
+        excursionAmbiguous: d.excursionAmbiguous === true || d.excursionAmbiguous === 'true',
         slPlacement: d.slPlacement || undefined,
         targetType: d.targetType || undefined,
         targetLevel: d.targetLevel || undefined,
@@ -226,6 +245,7 @@ export const storageService = {
     // full dashboard refreshes. Cache failures must never turn a successful
     // server response into an application error.
     const userId = raw.user?.id;
+    trades = await hydratePrivateTradeNotes(trades, userId ?? null);
     if (userId && user) {
       const cachedAt = Date.now();
       const snapshot: DashboardSnapshot = {
@@ -289,8 +309,10 @@ export const storageService = {
       const preferences = prefsRaw ? JSON.parse(prefsRaw) : (validSnapshot?.preferences || null);
       const timestampRaw = localStorage.getItem(`alphatrade_cache_timestamp_${userId}`);
       const timestamp = timestampRaw ? Number(timestampRaw) : NaN;
+      const cachedTrades = (trades || validSnapshot?.trades || []) as Trade[];
+      const activeOwner = await getUserId();
       return {
-        trades: (trades || validSnapshot?.trades || []) as Trade[],
+        trades: activeOwner === userId ? cachedTrades : cachedTrades.map(t => stripLegacyTradeNotes(stripTradeNoteHistory(t))),
         accounts: accounts as Account[],
         preps: (preps || validSnapshot?.preps || []) as DailyPrep[],
         reviews: (reviews || validSnapshot?.reviews || []) as DailyReview[],
@@ -399,6 +421,7 @@ export const storageService = {
     // Fast IndexedDB fallback
     const localKey = userId ? `alphatrade_trades_${userId}` : 'alphatrade_trades';
     let localTrades: Trade[] = await get(localKey) || [];
+    if (!userId || userId !== await getUserId()) localTrades = localTrades.map(t => stripLegacyTradeNotes(stripTradeNoteHistory(t)));
 
     if (!userId) return localTrades;
 
@@ -441,6 +464,7 @@ export const storageService = {
         phase:data->>phase,
         htfConfluence:data->htfConfluence,
         ltfConfluence:data->ltfConfluence,
+        autoConfluence:data->autoConfluence,
         mistakes:data->mistakes,
         emotions:data->emotions,
         planAdherence:data->>planAdherence,
@@ -480,6 +504,7 @@ export const storageService = {
         executionPath:data->executionPath,
         executionPathComplete:data->>executionPathComplete,
         outcomeAmbiguous:data->>outcomeAmbiguous,
+        excursionAmbiguous:data->>excursionAmbiguous,
         slPlacement:data->>slPlacement,
         targetType:data->>targetType,
         targetLevel:data->>targetLevel,
@@ -503,10 +528,10 @@ export const storageService = {
 
     if (error) {
       console.error("Supabase getTrades error:", error);
-      return localTrades; // Fallback to local on error
+      return userId === await getUserId() ? localTrades : localTrades.map(t => stripLegacyTradeNotes(stripTradeNoteHistory(t))); // Owner may change during the request
     }
 
-    const trades = rawData.map((t: any) => ({
+    let trades = rawData.map((t: any) => ({
       id: t.id,
       userId: t.user_id,
       accountId: t.account_id,
@@ -545,6 +570,7 @@ export const storageService = {
       phase: t.phase,
       htfConfluence: t.htfConfluence,
       ltfConfluence: t.ltfConfluence,
+      autoConfluence: t.autoConfluence,
       mistakes: t.mistakes,
       emotions: t.emotions,
       planAdherence: t.planAdherence,
@@ -589,6 +615,7 @@ export const storageService = {
       executionPath: t.executionPath || undefined,
       executionPathComplete: t.executionPathComplete == null ? undefined : (t.executionPathComplete === 'true' || t.executionPathComplete === true),
       outcomeAmbiguous: t.outcomeAmbiguous === 'true' || t.outcomeAmbiguous === true,
+      excursionAmbiguous: t.excursionAmbiguous === 'true' || t.excursionAmbiguous === true,
       slPlacement: t.slPlacement || undefined,
       targetType: t.targetType || undefined,
       targetLevel: t.targetLevel || undefined,
@@ -607,6 +634,7 @@ export const storageService = {
       data: {}
     })) as Trade[];
 
+    trades = await hydratePrivateTradeNotes(trades, userId);
     // Cache to IndexedDB (fire-and-forget, don't block return)
     set(localKey, trades);
     return trades;
@@ -614,7 +642,8 @@ export const storageService = {
 
   async updateTradeDrawings(tradeId: string | number, drawings: any[]): Promise<void> {
     const userId = await getUserId();
-    if (!userId) return;
+    if (!userId) throw new Error('K uložení kresby je potřeba přihlášení.');
+    const drawingsAuthVersion = authStateVersion;
 
     // Synchronizujeme drawings na DVOU místech:
     //   1. root sloupec `drawings` — primární source of truth
@@ -625,7 +654,7 @@ export const storageService = {
     // Načti aktuální data blob ať můžeme drawings do něj merge-nout
     const { data: current, error: getErr } = await supabase
       .from('trades')
-      .select('data')
+      .select('*')
       .eq('id', tradeId)
       .eq('user_id', userId)
       .single();
@@ -634,7 +663,14 @@ export const storageService = {
       throw getErr;
     }
 
-    const mergedData = { ...(current?.data || {}), drawings };
+    if (!current) throw new Error('Obchod pro uložení kresby nebyl nalezen.');
+    if (current.backtest_run_id || current.data?.backtestRunId) {
+      await this.updateBacktestTradeReview(tradeId, { drawings },
+        { ownerId: userId, authVersion: drawingsAuthVersion, data: backtestReviewDataFromRow(current) });
+      return;
+    }
+
+    const mergedData = stripTradeNoteHistory({ ...(current?.data || {}), drawings });
 
     const { error } = await supabase
       .from('trades')
@@ -659,9 +695,41 @@ export const storageService = {
     await set(localKey, updatedTrades);
   },
 
-  async updateTrade(tradeId: string | number, updates: Partial<Trade>): Promise<void> {
+  async prepareBacktestTradeReview(tradeId: string | number, updates?: Partial<Trade>): Promise<BacktestReviewSnapshot> {
+    const ownerId = await getUserId();
+    if (!ownerId) throw new Error('Obchod nelze uložit bez přihlášení.');
+    const snapshot: BacktestReviewSnapshot = { ownerId, authVersion: authStateVersion, data: {} };
+    const data = await requestBacktestReviewPatch(supabase, tradeId, snapshot, {}, undefined, updates?.noteHistory !== undefined);
+    if (snapshot.authVersion !== authStateVersion || await getUserId() !== ownerId) throw new Error('Účet se během ukládání změnil.');
+    return { ...snapshot, data };
+  },
+
+  async updateBacktestTradeReview(
+    tradeId: string | number, updates: Partial<Trade>, snapshot: BacktestReviewSnapshot,
+    appendScreenshot?: string, expected?: Partial<Trade>,
+  ): Promise<Partial<Trade>> {
+    if (snapshot.authVersion !== authStateVersion || await getUserId() !== snapshot.ownerId) throw new Error('Účet se během ukládání změnil.');
+    const confirmed = await requestBacktestReviewPatch(supabase, tradeId,
+      expected ? { ...snapshot, data: expected } : snapshot, updates, appendScreenshot);
+    if (snapshot.authVersion !== authStateVersion || await getUserId() !== snapshot.ownerId) throw new Error('Účet se během ukládání změnil. Obnovte data původního účtu.');
+    // Return/cache only this operation's fields; a delayed acknowledgement must
+    // not replace unrelated fields just confirmed by another local request.
+    const committed: Partial<Trade> = Object.fromEntries(Object.keys(backtestReviewPatch(updates))
+      .map(key => [key, (confirmed as Record<string, unknown>)[key]]));
+    if (appendScreenshot) { committed.screenshot = confirmed.screenshot; committed.screenshots = confirmed.screenshots; }
+    const localKey = `alphatrade_trades_${snapshot.ownerId}`;
+    // The database acknowledgement remains success if the disposable cache fails.
+    try {
+      const cached: Trade[] = await get(localKey) || [];
+      await set(localKey, cached.map(t => String(t.id) === String(tradeId) ? { ...t, ...committed } : t));
+    } catch (error) { console.warn('[BacktestReview] Confirmed in database; local cache unavailable:', error); }
+    return committed;
+  },
+
+  async updateTrade(tradeId: string | number, updates: Partial<Trade>, expected?: Partial<Trade>): Promise<void> {
     const userId = await getUserId();
-    if (!userId || !tradeId) return;
+    if (!userId || !tradeId) throw new Error('Obchod nelze uložit bez přihlášení a platného ID.');
+    const reviewAuthVersion = authStateVersion;
 
     // Fetch the current trade to merge the 'data' blob correctly
     const { data: current, error: getErr } = await supabase
@@ -677,10 +745,21 @@ export const storageService = {
       throw new Error(`Nepodařilo se načíst obchod před uložením: ${msg}`);
     }
 
-    const updatedData = {
+    // All backtest edit/recalculation callers use the atomic path. Live/copier
+    // edits retain their existing contract until a separately scoped migration.
+    if (current.backtest_run_id || current.data?.backtestRunId) {
+      const needsPrivateSnapshot = ['notes', 'sessionPreNotes', 'sessionPostNotes', 'noteHistory'].some(key => Object.hasOwn(updates, key));
+      const snapshot = needsPrivateSnapshot ? await this.prepareBacktestTradeReview(tradeId, updates)
+        : { ownerId: userId, authVersion: reviewAuthVersion, data: backtestReviewDataFromRow(current) };
+      await this.updateBacktestTradeReview(tradeId, updates, snapshot, undefined, expected);
+      return;
+    }
+
+    if (Object.hasOwn(updates, 'noteHistory')) throw new Error('Historii poznámek lze uložit pouze privátní cestou backtest review.');
+    const updatedData = stripTradeNoteHistory({
       ...current.data,
       ...updates
-    };
+    });
 
     // Only sync specific known root columns — spreading arbitrary fields causes Supabase 400 errors
     const ROOT_COLUMN_MAP: Record<string, string> = {
@@ -696,16 +775,19 @@ export const storageService = {
       }
     });
 
-    const { error } = await supabase
+    const { data: confirmed, error } = await supabase
       .from('trades')
       .update(rootUpdate)
       .eq('id', tradeId)
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      .select('id')
+      .maybeSingle();
 
     if (error) {
       console.error("Failed to update trade:", error);
       throw error;
     }
+    if (!confirmed) throw new Error('Uložení obchodu nebylo potvrzeno. Obnovte data a zkuste to znovu.');
 
     // Update IndexedDB cache
     const localKey = `alphatrade_trades_${userId}`;
@@ -716,26 +798,12 @@ export const storageService = {
     await set(localKey, updatedTrades);
   },
 
-  async saveTrades(trades: Trade[]): Promise<Trade[]> {
+  async saveTrades(trades: Trade[], options?: { insertOnly?: boolean }): Promise<Trade[]> {
     const userId = await getUserId();
     if (!userId || trades.length === 0) return [];
 
     // NOTE: Cache is written AFTER successful DB upsert (not before) to prevent phantom data.
     // If DB fails, cache stays consistent with what's actually persisted.
-
-    let { data: dbAccounts } = await supabase.from('accounts').select('id, name').eq('user_id', userId);
-
-    if (!dbAccounts || dbAccounts.length === 0) {
-      const { data: newAcc, error: accErr } = await supabase.from('accounts').insert({
-        user_id: userId,
-        name: 'Hlavní účet',
-        initial_balance: 10000,
-        created_at: Date.now()
-      }).select().single();
-
-      if (accErr) return [];
-      dbAccounts = [newAcc];
-    }
 
     // CRITICAL SAFEGUARD: u EXISTUJÍCÍCH obchodů (UUID už v DB) zachovej CELÝ data blob.
     // getTrades() blob strhne (`data:{}` + whitelist polí), takže in-memory obchod nenese
@@ -766,6 +834,32 @@ export const storageService = {
       }
     }
 
+    // New/imported history needs a private append after a confirmed trade ID.
+    // Fail before any account/trade write rather than silently dropping it.
+    if (trades.some(t => containsTradeNoteHistory(t) && !existingDataMap.has(String(t.id)))) {
+      throw new Error('Import nového obchodu s historií poznámek zatím není podporovaný. Původní soubor zůstal zachovaný; žádný obchod nebyl uložen.');
+    }
+    // Bulk edits may carry an already hydrated ledger. Preserve the confirmed
+    // private value, never an incoming draft, in returned records and the cache.
+    const privateExisting = await hydratePrivateTradeNotes(
+      trades.filter(t => t.noteHistory !== undefined && existingDataMap.has(String(t.id))), userId);
+    const confirmedHistories = new Map(privateExisting.map(t => [String(t.id), t.noteHistory]));
+
+    const legacyNotesReady = await tradeNotesStorageReady(supabase);
+    let { data: dbAccounts } = await supabase.from('accounts').select('id, name').eq('user_id', userId);
+
+    if (!dbAccounts || dbAccounts.length === 0) {
+      const { data: newAcc, error: accErr } = await supabase.from('accounts').insert({
+        user_id: userId,
+        name: 'Hlavní účet',
+        initial_balance: 10000,
+        created_at: Date.now()
+      }).select().single();
+
+      if (accErr) return [];
+      dbAccounts = [newAcc];
+    }
+
     const tradesToUpsert = trades.map(t => {
       // Nelze ověřit existující blob → radši přeskoč než riskovat přepsání rich dat.
       if (fetchFailedIds.has(String(t.id))) {
@@ -777,6 +871,9 @@ export const storageService = {
       if (!realAccId) return null;
 
       const existingData = existingDataMap.get(String(t.id));
+      // Replay outbox retries create missing rows only. Never overwrite a
+      // confirmed trade's subsequent review, even when another tab saved it.
+      if (options?.insertOnly && existingDataMap.has(String(t.id))) return null;
       // Drawings: prázdné z načteného obchodu NESMÍ přepsat reálné kresby v DB.
       const mergedDrawings = (t.drawings && t.drawings.length) ? t.drawings : ((existingData && existingData.drawings) || []);
       // Screenshoty: getTrades() strhne POUZE base64 (data:) z read-pathu → in-memory obchod může nést
@@ -806,7 +903,7 @@ export const storageService = {
         date: t.date || new Date().toISOString(),
         timestamp: t.timestamp || Date.now(),
         drawings: mergedDrawings,
-        data: dataBlob
+        data: stripTradeNoteHistory(dataBlob)
       };
 
       if (isUUID(t.id)) {
@@ -816,11 +913,19 @@ export const storageService = {
       return obj;
     }).filter(Boolean);
 
-    const { data, error } = await supabase.from('trades').upsert(tradesToUpsert).select();
+    if (tradesToUpsert.length === 0) return [];
+    const query = options?.insertOnly
+      ? supabase.from('trades').upsert(tradesToUpsert, { onConflict: 'id', ignoreDuplicates: true })
+      : supabase.from('trades').upsert(tradesToUpsert);
+    const { data, error } = await query.select(legacyNotesReady ? '*, privateNotes:trade_private_notes(notes)' : '*');
     if (error) throw error;
 
-    const results = (data || []).map(d => ({
-      ...d.data,
+    // Dynamic owner-only relation selection has no generated Supabase schema type.
+    const savedRows = (data ?? []) as unknown as Array<Record<string, any>>;
+    const results = savedRows.map(d => ({
+      ...stripTradeNoteHistory(d.data),
+      ...(legacyNotesReady ? privateNotesFromSavedRow(d) : {}),
+      ...(confirmedHistories.get(String(d.id)) ? { noteHistory: confirmedHistories.get(String(d.id)) } : {}),
       id: d.id,
       accountId: d.account_id,
       instrument: d.instrument,
@@ -917,23 +1022,27 @@ export const storageService = {
 
   async markTradeAsPublic(id: string, shareNotes = false): Promise<void> {
     const userId = await getUserId();
-    if (!userId) return;
-    // share_notes řídí, jestli veřejný link smí ukázat poznámku (default false).
-    await supabase.from('trades').update({ is_public: true, share_notes: shareNotes }).eq('id', id).eq('user_id', userId);
+    if (!userId) throw new Error('Ke změně sdílení obchodu je potřeba přihlášení.');
+    // The server projection applies this explicit public-sharing choice.
+    const { data, error } = await supabase.from('trades').update({ is_public: true, share_notes: shareNotes })
+      .eq('id', id).eq('user_id', userId).select('id').maybeSingle();
+    if (error || !data) throw new Error('Nastavení veřejného sdílení nebylo uloženo. Zkuste to znovu.');
   },
 
   async getTradeById(id: string): Promise<Trade | null> {
     const userId = await getUserId();
     if (!userId) return null;
+    const detailAuthVersion = authStateVersion;
 
     // Filter by user_id to ensure user can only fetch their own trades in detail
     // RLS also protects this, but defense-in-depth is important for full data access
     const { data, error } = await supabase.from('trades').select('*').eq('id', id).eq('user_id', userId).single();
-    if (error || !data) return null;
-    return {
-      ...data.data,
+    if (error || !data || detailAuthVersion !== authStateVersion || await getUserId() !== userId) return null;
+    const trade = {
+      ...stripTradeNoteHistory(data.data),
       id: data.id,
       accountId: data.account_id,
+      backtestRunId: data.backtest_run_id ?? data.data?.backtestRunId,
       instrument: data.instrument,
       pnl: data.pnl,
       direction: data.direction,
@@ -943,6 +1052,9 @@ export const storageService = {
       isPublic: data.is_public,
       createdAt: data.created_at
     };
+    const [hydrated] = await hydratePrivateTradeNotes([trade], userId);
+    if (detailAuthVersion !== authStateVersion || await getUserId() !== userId) return null;
+    return hydrated;
   },
 
   /**
@@ -951,9 +1063,8 @@ export const storageService = {
    * Vrací trade + ownerName + ownerAvatar pro SharedTradeView.
    */
   async getPublicTradeById(id: string): Promise<{ trade: Trade; ownerName?: string; ownerAvatar?: string } | null> {
-    // SECURITY DEFINER RPC: vrátí veřejný trade s `data.notes` ODSTŘIŽENÝM na serveru,
-    // pokud `share_notes` není true. Důležité pro soukromí — přes `select('*')` by poznámka
-    // tekla v payloadu i bez zobrazení. RLS dál chrání (vrací jen is_public=true).
+    // Public RPC plus defensive projection. This does not replace server-side
+    // field privacy: legacy trades visibility policies require a separate fix.
     const { data: tradeRow, error: tradeErr } = await supabase
       .rpc('get_public_trade', { p_id: id });
     if (tradeErr || !tradeRow) return null;
@@ -974,7 +1085,7 @@ export const storageService = {
     }
 
     const trade: Trade = {
-      ...tradeRow.data,
+      ...publicTradeNotes(tradeRow.data, tradeRow.share_notes === true),
       id: tradeRow.id,
       accountId: tradeRow.account_id,
       instrument: tradeRow.instrument,
@@ -1013,9 +1124,9 @@ export const storageService = {
 
       if (error) {
         console.error('[Screenshots] Supabase fetch error:', error.message);
-        return result;
+        throw new Error(error.message || 'Galerii obchodu se nepodařilo načíst.');
       }
-      if (!data) return result;
+      if (!data) throw new Error('Načtení galerie obchodu nebylo potvrzeno.');
 
       data.forEach((row: any) => {
         const screenshot: string | undefined = row.screenshot || undefined;
@@ -1030,6 +1141,7 @@ export const storageService = {
       });
     } catch (err) {
       console.error('[Screenshots] Unexpected error during fetch:', err);
+      throw err;
     }
 
     return result;
@@ -1238,8 +1350,15 @@ export const storageService = {
       .filter(a => a.isArchived === true || a.status === 'Inactive');
   },
 
-  async saveAccounts(accounts: Account[]): Promise<Account[]> {
+  async saveAccounts(accounts: Account[], expectedUserId?: string): Promise<Account[]> {
+    const requestVersion = authStateVersion;
     const userId = await getUserId();
+    const requireCurrentSession = () => {
+      if (expectedUserId !== undefined && (userId !== expectedUserId || requestVersion !== authStateVersion)) {
+        throw new Error('Session changed before account sync completed');
+      }
+    };
+    requireCurrentSession();
     const localKey = userId ? `alphatrade_accounts_${userId}` : 'alphatrade_accounts';
 
     // If not logged in, save locally and return (no DB)
@@ -1285,6 +1404,7 @@ export const storageService = {
       }
 
       // 2. Process new accounts (Insert without ID)
+      requireCurrentSession();
       if (newAccounts.length > 0) {
         const toInsert = newAccounts.map(a => ({
           user_id: userId,
@@ -1313,10 +1433,15 @@ export const storageService = {
         }
       }
 
+      requireCurrentSession();
       const finalResults = results.length > 0 ? results : accounts;
       // Update cache with server results (which have real IDs)
       safeSetItem(localKey, finalResults);
-      await updateCacheTimestamp(); // Mark cache as fresh
+      if (expectedUserId !== undefined) {
+        localStorage.setItem(`alphatrade_cache_timestamp_${userId}`, Date.now().toString());
+      } else {
+        await updateCacheTimestamp();
+      } // Mark cache as fresh
       return finalResults;
 
     } catch (err: any) {
@@ -1477,22 +1602,81 @@ export const storageService = {
    * mfeR/slPlacement…) pro export do AI. getTrades blob strhne (`data:{}`), takže pro
    * export se musí dotáhnout napřímo z DB. Vrací zploštělé objekty (blob + klíčové sloupce).
    */
-  async getTradesWithDataByAccounts(accountIds: string[], targetUserId?: string): Promise<any[]> {
-    const userId = targetUserId || await getUserId();
-    if (!userId || !accountIds || accountIds.length === 0) return [];
-    const { data, error } = await supabase
-      .from('trades')
-      .select('*')
-      .eq('user_id', userId)
-      .in('account_id', accountIds);
-    if (error || !data) { if (error) console.error('getTradesWithDataByAccounts error:', error); return []; }
-    return data.map((r: any) => ({
-      ...(r.data || {}),
+  async getTradesWithDataByAccounts(
+    accountIds: string[], targetUserId?: string,
+    options?: { strict: true; expectedOwnerId?: string; signal?: AbortSignal; onProgress?: (loaded: number) => void },
+  ): Promise<any[]> {
+    const requestVersion = authStateVersion;
+    const assertNotAborted = () => {
+      if (options?.signal?.aborted) throw new DOMException('Načítání obchodů bylo zrušeno.', 'AbortError');
+    };
+    assertNotAborted();
+    const ownerId = await getUserId();
+    const userId = targetUserId || ownerId;
+    const assertCurrent = async () => {
+      assertNotAborted();
+      if (requestVersion !== authStateVersion || await getUserId() !== ownerId || requestVersion !== authStateVersion) {
+        throw new Error('Účet se během načítání obchodů změnil. Obnovte data a zkuste to znovu.');
+      }
+      assertNotAborted();
+    };
+    const rows: any[] = [];
+    try {
+      await assertCurrent();
+      if (options?.strict && (!ownerId || userId !== ownerId || (options.expectedOwnerId !== undefined && options.expectedOwnerId !== ownerId))) {
+        throw new Error('Úplné načtení obchodů vyžaduje původní přihlášený účet.');
+      }
+      if (!userId || !accountIds?.length) return [];
+      const seenIds = new Set<string>();
+      // Order by the unique ID. Advance by actual rows received (rather than the
+      // requested page size), so a lower server row cap cannot truncate exports.
+      // Multiple requests are not an atomic DB snapshot; reject repeated IDs.
+      for (let offset = 0; ; ) {
+        await assertCurrent();
+        let query = supabase.from('trades').select('*').eq('user_id', userId)
+          .in('account_id', [...new Set(accountIds)]).order('id', { ascending: true }).range(offset, offset + 999);
+        if (options?.signal) query = query.abortSignal(options.signal);
+        const { data, error } = await query;
+        await assertCurrent();
+        if (error) throw new Error(`Úplné načtení obchodů selhalo: ${error.message || 'chyba databáze'}`);
+        if (!Array.isArray(data)) throw new Error('Server nepotvrdil úplné načtení obchodů.');
+        if (!data.length) break;
+        for (const row of data) {
+          if (options?.strict && (row.user_id !== userId || !accountIds.includes(row.account_id))) {
+            throw new Error('Server vrátil obchod mimo požadovaný účet. Načtení nebylo potvrzeno.');
+          }
+          if (typeof row.id !== 'string' || !row.id || seenIds.has(row.id)) {
+            throw new Error('Data obchodů se během stránkování změnila. Obnovte načtení.');
+          }
+          seenIds.add(row.id);
+          rows.push(row);
+        }
+        offset += data.length;
+        options?.onProgress?.(rows.length);
+      }
+    } catch (error) {
+      if (options?.strict) throw error;
+      console.error('getTradesWithDataByAccounts error:', error);
+      return [];
+    }
+    const trades = rows.map((r: any) => ({
+      ...stripTradeNoteHistory(r.data || {}),
       id: r.id, accountId: r.account_id, instrument: r.instrument, pnl: r.pnl,
       direction: r.direction, date: r.date, timestamp: r.timestamp,
+      backtestRunId: r.backtest_run_id ?? r.data?.backtestRunId,
+      signal: r.signal ?? r.data?.signal,
+      drawings: r.drawings ?? r.data?.drawings,
+      isPublic: r.is_public ?? r.data?.isPublic,
+      shareNotes: r.share_notes ?? r.data?.shareNotes,
+      createdAt: r.created_at ?? r.data?.createdAt,
       screenshot: r.screenshot_url || (r.data || {}).screenshot,
       screenshots: r.screenshots_urls || (r.data || {}).screenshots,
     }));
+    const hydrated = await hydratePrivateTradeNotes(trades, userId);
+    // Hydration may involve more network pages; a late auth change or cancellation
+    // must not return the previous owner's fully hydrated private records.
+    await assertCurrent();
+    return hydrated;
   },
 
   async getBacktestSessions(accountIds?: string[], targetUserId?: string): Promise<Array<{ id: string; accountId: string; date: string; block: string; bias?: string; preNotes?: string; postNotes?: string }>> {
@@ -1775,43 +1959,25 @@ export const storageService = {
   // Dřív žily v preferences blobu → last-write-wins z druhého zařízení je umělo
   // tiše smazat i s baseline startTs. Celý experiment se ukládá jako jsonb `data`.
   async getLabExperiments(): Promise<LabExperiment[]> {
-    const userId = await getUserId();
-    if (!userId) return [];
-    const { data, error } = await supabase
-      .from('lab_experiments')
-      .select('id, data')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: true });
-    if (error) {
-      console.error('[Storage] Error fetching lab experiments:', error);
-      // Throw, ne [] — App rozlišuje „prázdno" (spustí legacy migraci z prefs)
-      // vs. „chyba" (setIsLabExpLoaded(false) → retry při příštím otevření Labu).
-      throw error;
-    }
-    return (data || []).map((d: any) => ({ ...(d.data || {}), id: d.id }));
+    const ownerId = await getUserId(); const version = authStateVersion;
+    if (!ownerId) return [];
+    return loadLabExperiments(supabase, ownerId, async () => version === authStateVersion && await getUserId() === ownerId);
   },
 
-  async upsertLabExperiment(exp: LabExperiment): Promise<void> {
-    const userId = await getUserId();
-    if (!userId) throw new Error('Not authenticated');
-    const { error } = await supabase
-      .from('lab_experiments')
-      .upsert(
-        { id: exp.id, user_id: userId, data: exp, updated_at: new Date().toISOString() },
-        { onConflict: 'user_id,id' }
-      );
-    if (error) throw error;
+  async upsertLabExperiment(exp: LabExperiment, expectedOwnerId?: string): Promise<LabExperiment> {
+    const version = authStateVersion; const ownerId = await getUserId();
+    if (version !== authStateVersion || (expectedOwnerId && ownerId !== expectedOwnerId)) throw new Error('Účet se změnil. Návrh experimentu nebyl uložen.');
+    if (!ownerId) throw new Error('Not authenticated');
+    return persistLabExperiment(supabase, exp, ownerId, async () => version === authStateVersion && await getUserId() === ownerId);
   },
 
-  async deleteLabExperiment(id: string): Promise<void> {
-    const userId = await getUserId();
-    if (!userId) throw new Error('Not authenticated');
-    const { error } = await supabase
-      .from('lab_experiments')
-      .delete()
-      .eq('user_id', userId)
-      .eq('id', id);
-    if (error) throw error;
+  async deleteLabExperiment(id: string, expected?: LabExperiment): Promise<void> {
+    const ownerId = await getUserId(); const version = authStateVersion;
+    if (!ownerId) throw new Error('Not authenticated');
+    const stillOwner = async () => version === authStateVersion && await getUserId() === ownerId;
+    const target = expected ?? (await loadLabExperiments(supabase, ownerId, stillOwner)).find(item => item.id === id);
+    if (!target) throw new Error('Experiment už není dostupný.');
+    return removeLabExperiment(supabase, target, ownerId, stillOwner);
   },
 
   // Business Hub
@@ -2299,6 +2465,24 @@ export const storageService = {
     }));
   },
 
+  async getConnectionTradeNoteConsent(connectionId: string, permissions?: Record<string, unknown>) {
+    const version = authStateVersion; const ownerId = await getUserId();
+    if (version !== authStateVersion) throw new Error('Účet se během ověřování změnil.');
+    if (!ownerId) throw new Error('Pro ověření sdílení je potřeba přihlášení.');
+    const result = await readConnectionTradeNoteConsent(supabase, connectionId, permissions);
+    if (version !== authStateVersion || await getUserId() !== ownerId) throw new Error('Účet se během ověřování změnil.');
+    return result;
+  },
+
+  async confirmConnectionTradeNotes(connectionId: string, permissions: Record<string, unknown>, accept = false) {
+    const version = authStateVersion; const ownerId = await getUserId();
+    if (version !== authStateVersion) throw new Error('Účet se během potvrzování změnil.');
+    if (!ownerId) throw new Error('Pro potvrzení sdílení je potřeba přihlášení.');
+    const confirmed = await confirmConnectionTradeNotes(supabase, connectionId, permissions, accept);
+    if (version !== authStateVersion || await getUserId() !== ownerId) throw new Error('Účet se během potvrzování změnil. Obnovte spojení.');
+    return confirmed;
+  },
+
   async updateConnectionStatus(connectionId: string, status: 'accepted' | 'rejected'): Promise<void> {
     const userId = await getUserId();
     if (!userId) throw new Error('Not authenticated');
@@ -2313,8 +2497,9 @@ export const storageService = {
         // Don't throw - the status update already ensures the connection won't block search
       }
     } else {
-      // Only receiver can accept
-      await supabase.from('connections').update({ status }).eq('id', connectionId);
+      const { data, error } = await supabase.from('connections').select('permissions').eq('id', connectionId).eq('receiver_id', userId).single();
+      if (error || !data) throw new Error('Žádost se nepodařilo ověřit.');
+      await this.confirmConnectionTradeNotes(connectionId, data.permissions ?? {}, true);
     }
   },
 
@@ -2331,10 +2516,10 @@ export const storageService = {
       .select('id');
 
     if (error) {
-      console.error('[Permissions] Update failed:', error.message);
+      throw new Error('Oprávnění se nepodařilo uložit. Obnovte spojení a zkuste to znovu.');
     }
     if (!updatedRows || updatedRows.length === 0) {
-      console.warn('[Permissions] No rows updated - you may not be the receiver of this connection');
+      throw new Error('Změnu oprávnění může potvrdit pouze vlastník sdílených dat.');
     }
   },
 
@@ -2351,6 +2536,8 @@ export const storageService = {
     if (followingIds.length === 0) return [];
 
     const currentUserId = await getUserId();
+    if (!currentUserId) return [];
+    const feedAuthVersion = authStateVersion;
 
     // Fetch connections where WE are the sender (follower) to check what permissions we have
     const { data: connections, error: connErr } = await supabase
@@ -2378,7 +2565,7 @@ export const storageService = {
     (profilesData || []).forEach(p => { profileMap[p.id] = { full_name: p.full_name || 'Neznámý', avatar_url: p.avatar_url, ironRules: (p.preferences as any)?.ironRules }; });
 
     // Fetch recent trades
-    const { data: trades } = await supabase
+    let { data: trades } = await supabase
       .from('trades')
       .select('*')
       .in('user_id', followingIds)
@@ -2401,13 +2588,15 @@ export const storageService = {
       .order('date', { ascending: false })
       .limit(10);
 
+    trades = await hydrateLegacyTradeNotes(supabase, trades ?? [], 'connection',
+      async () => feedAuthVersion === authStateVersion && await getUserId() === currentUserId);
     const activity = [
       ...(trades || []).filter(t => {
         // Filter by allowed accounts
         const rawPerms = String(t.user_id) === String(currentUserId) ? null : (permissionMap[t.user_id] as any);
         const allowed = rawPerms?.allowedAccountIds;
-        if (allowed && allowed.length > 0 && t.accountId) {
-          return allowed.includes(t.accountId);
+        if (allowed && allowed.length > 0 && t.account_id) {
+          return allowed.includes(t.account_id);
         }
         return true;
       }).map(t => {
@@ -2441,8 +2630,8 @@ export const storageService = {
           date: t.date,
           user: { name: profileMap[t.user_id]?.full_name || 'Neznámý', avatar: profileMap[t.user_id]?.avatar_url },
           data: {
-            ...jsonb,
-            ...t,
+            ...publicTradeNotes(jsonb, perms.canSeeReviewNotes),
+            ...publicTradeNotes(t, perms.canSeeReviewNotes),
             pnl: perms.pnlFormat !== 'hidden' ? displayPnl : 0,
             riskAmount: perms.pnlFormat === 'rr' ? 1 : rawRisk,
             entryPrice: jsonb.entryPrice ?? t.entryPrice,
@@ -2664,7 +2853,7 @@ export const storageService = {
       canSeePrep: isSelf || (rawPerms?.canSeePrep ?? false),
       canSeePrepRituals: isSelf || (rawPerms?.canSeePrepRituals ?? false),
       canSeeReviewStats: isSelf || (rawPerms?.canSeeReviewStats ?? false),
-      canSeeReviewNotes: isSelf || (rawPerms?.canSeeReviewNotes ?? false),
+      canSeeReviewNotes: isSelf || (rawPerms?.canSeeReviewNotes ?? rawPerms?.canSeeNotes ?? false),
       canSeeScreenshots: isSelf || (rawPerms?.canSeeScreenshots ?? false),
       allowedAccountIds: isSelf ? [] : (rawPerms?.allowedAccountIds || []) as string[]
     };
@@ -2716,7 +2905,7 @@ export const storageService = {
       }
 
       return {
-        ...t,
+        ...publicTradeNotes(t, perms.canSeeReviewNotes),
         pnl: displayPnl,
         riskAmount: perms.pnlFormat === 'rr' ? 1 : t.riskAmount,
         notes: perms.canSeeReviewNotes ? t.notes : null,
@@ -2932,9 +3121,10 @@ export const storageService = {
   /** Upload a base64 data URL to Supabase Storage and return the public URL.
    *  Client-side resize na max 1600px wide JPEG q85 PŘED uploadem — šetří
    *  Image Transformations quotu, bandwidth a storage. Vizuálně neznatelný rozdíl. */
-  async uploadScreenshot(base64DataUrl: string, tradeId: string | number): Promise<string> {
+  async uploadScreenshot(base64DataUrl: string, tradeId: string | number, expectedOwner?: string): Promise<string> {
     const userId = await getUserId();
-    if (!userId) throw new Error('Not authenticated');
+    if (!userId || (expectedOwner && expectedOwner !== userId)) throw new Error('Účet pro uložení obrázku se změnil.');
+    const uploadAuthVersion = authStateVersion;
     const isBase64 = base64DataUrl.startsWith('data:');
     if (!isBase64) return base64DataUrl; // Already a URL — return as-is
 
@@ -2962,7 +3152,9 @@ export const storageService = {
     for (let i = 0; i < byteChars.length; i++) buffer[i] = byteChars.charCodeAt(i);
     // Po resize je výstup vždy JPEG (kromě skip-malé který může být PNG)
     const ext = resized.includes('image/png') ? 'png' : 'jpg';
-    const fileName = `${userId}/${tradeId}_${Date.now()}.${ext}`;
+    const reviewSuffix = expectedOwner ? `_${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}` : '';
+    const fileName = `${userId}/${tradeId}_${Date.now()}${reviewSuffix}.${ext}`;
+    if (expectedOwner && (uploadAuthVersion !== authStateVersion || await getUserId() !== expectedOwner)) throw new Error('Účet pro uložení obrázku se změnil.');
     const { error } = await supabase.storage.from('trade-images').upload(fileName, buffer, {
       contentType: `image/${ext}`, upsert: true
     });
@@ -2980,7 +3172,7 @@ export const storageService = {
     // Fetch ALL trades with full data (including screenshots)
     const { data, error } = await supabase
       .from('trades')
-      .select('id, data')
+      .select('id, data, backtest_run_id')
       .eq('user_id', userId);
     if (error) throw error;
 
@@ -2993,28 +3185,33 @@ export const storageService = {
 
     for (let i = 0; i < toMigrate.length; i++) {
       const row = toMigrate[i];
-      const tradeData = { ...row.data };
+      let tradeData = { ...row.data };
       onProgress?.(i, toMigrate.length, String(row.id));
       try {
+        const reviewSnapshot = row.backtest_run_id || row.data?.backtestRunId
+          ? await storageService.prepareBacktestTradeReview(row.id) : undefined;
+        if (reviewSnapshot) tradeData = { ...reviewSnapshot.data };
         // Migrate primary screenshot
         if (tradeData.screenshot?.startsWith('data:')) {
-          tradeData.screenshot = await storageService.uploadScreenshot(tradeData.screenshot, row.id);
+          tradeData.screenshot = await storageService.uploadScreenshot(tradeData.screenshot, row.id, reviewSnapshot?.ownerId);
         }
         // Migrate screenshots array
         if (tradeData.screenshots?.length) {
           tradeData.screenshots = await Promise.all(
             tradeData.screenshots.map((s: string) =>
-              s.startsWith('data:') ? storageService.uploadScreenshot(s, row.id) : Promise.resolve(s)
+              s.startsWith('data:') ? storageService.uploadScreenshot(s, row.id, reviewSnapshot?.ownerId) : Promise.resolve(s)
             )
           );
         }
         // Update DB row with URLs instead of base64
-        const { error: updateErr } = await supabase
-          .from('trades')
-          .update({ data: tradeData })
-          .eq('id', row.id)
-          .eq('user_id', userId);
-        if (updateErr) throw updateErr;
+        if (reviewSnapshot) {
+          await storageService.updateBacktestTradeReview(row.id,
+            { screenshot: tradeData.screenshot, screenshots: tradeData.screenshots }, reviewSnapshot);
+        } else {
+          const { error: updateErr } = await supabase
+            .from('trades').update({ data: stripTradeNoteHistory(tradeData) }).eq('id', row.id).eq('user_id', userId);
+          if (updateErr) throw updateErr;
+        }
         migrated++;
       } catch (e) {
         console.error(`[Migration] Failed for trade ${row.id}:`, e);

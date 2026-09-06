@@ -1,7 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { DEFAULT_STYLE } from '@getcandlekit/charts';
+import { normalizeDrawingStyle } from '../services/chartDrawingStyleDefaults';
 import { Check, ChevronDown, ChevronUp, Save, Trash2 } from 'lucide-react';
 import {
   chartTemplateId,
+  chartTemplateSyncStatus,
+  importLegacyChartTemplates,
+  legacyChartTemplates,
+  syncChartTemplates,
   chartTemplates,
   deleteChartTemplate,
   saveChartTemplate,
@@ -14,13 +20,15 @@ export type IndicatorTemplateRecord = ChartTemplateRecord;
 export { upsertChartTemplate as upsertIndicatorTemplate } from '../services/chartTemplateStore';
 
 const comparableTemplateValue = (value: unknown): string | null => {
-  try {
-    return JSON.stringify(value, (key, current) => (
-      key === 'runtimeTimeframeMinutes' ? undefined : current
-    ));
-  } catch {
-    return null;
-  }
+  const stable = (input: unknown, parentKey = ''): unknown => {
+    if (Array.isArray(input)) return input.map(item => stable(item));
+    if (!input || typeof input !== 'object') return input;
+    return Object.fromEntries(Object.keys(input).sort().filter(key => (
+      key !== 'runtimeTimeframeMinutes'
+      && !(parentKey === 'position' && ['pointValue', 'tickSize', 'intervalSeconds'].includes(key))
+    )).map(key => [key, stable((input as Record<string, unknown>)[key], key)]));
+  };
+  try { return JSON.stringify(stable(value)); } catch { return null; }
 };
 
 export const matchingIndicatorTemplateName = (
@@ -28,11 +36,15 @@ export const matchingIndicatorTemplateName = (
   indicator: string,
   value: unknown,
 ): string | null => {
-  const signature = comparableTemplateValue(value);
+  const comparable = (candidate: unknown) => comparableTemplateValue(
+    indicator.startsWith('drawing:') && indicator !== 'drawing:fib-retracement'
+      ? normalizeDrawingStyle(candidate, DEFAULT_STYLE) : candidate,
+  );
+  const signature = comparable(value);
   if (signature === null) return null;
   return records.find(record => (
     record.indicator === indicator
-    && comparableTemplateValue(record.value) === signature
+    && comparable(record.value) === signature
   ))?.name ?? null;
 };
 
@@ -64,6 +76,8 @@ const IndicatorTemplateMenu: React.FC<{
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState('');
   const [templates, setTemplates] = useState<IndicatorTemplateRecord[]>(() => typeof window === 'undefined' ? [] : chartTemplates());
+  const [syncStatus, setSyncStatus] = useState(chartTemplateSyncStatus);
+  const [legacyCount, setLegacyCount] = useState(() => legacyChartTemplates().length);
   const visibleTemplates = templates
     .filter(template => template.indicator === indicator)
     .sort((a, b) => a.name.localeCompare(b.name, 'cs'));
@@ -88,7 +102,11 @@ const IndicatorTemplateMenu: React.FC<{
 
   // Šablony žijí v cloudu, takže se sada může doplnit až po dorovnání z jiného
   // zařízení. Odběr drží všechna otevřená menu na stejném seznamu.
-  useEffect(() => subscribeChartTemplates(setTemplates), []);
+  useEffect(() => subscribeChartTemplates(records => {
+    setTemplates(records);
+    setSyncStatus(chartTemplateSyncStatus());
+    setLegacyCount(legacyChartTemplates().length);
+  }), []);
 
   const save = () => {
     const trimmed = name.trim();
@@ -113,7 +131,7 @@ const IndicatorTemplateMenu: React.FC<{
       type="button"
       aria-haspopup="menu"
       aria-expanded={open}
-      onClick={() => { setOpen(current => !current); setNaming(false); }}
+      onClick={() => { setOpen(current => !current); setNaming(false); if (!open) void syncChartTemplates(); }}
       title={activeTemplateName ?? undefined}
       className={`flex items-center justify-between rounded-md border font-medium ${compact ? 'h-7 min-w-[76px] max-w-[126px] gap-1 px-2 text-[11px]' : 'h-9 min-w-[108px] max-w-[190px] gap-3 px-3 text-[13px]'} ${open ? 'border-[#2962ff]' : 'border-slate-300 hover:bg-slate-50'}`}
     >
@@ -129,7 +147,7 @@ const IndicatorTemplateMenu: React.FC<{
           <button type="submit" disabled={!name.trim()} className="flex h-8 items-center gap-1 rounded bg-[#2962ff] px-2.5 text-xs font-semibold text-white disabled:opacity-40"><Save size={13} /> Save</button>
         </div>
       </form> : <>
-        <button type="button" role="menuitem" onClick={() => setNaming(true)} className={menuItem}><Save size={15} /> Save as…</button>
+        <button type="button" role="menuitem" disabled={syncStatus === 'signed-out'} onClick={() => setNaming(true)} className={menuItem}><Save size={15} /> Save as…</button>
         <button type="button" role="menuitem" onClick={() => { onApply(structuredClone(defaultValue)); setOpen(false); }} className={menuItem}><Check size={15} /> Apply defaults</button>
         {visibleTemplates.length > 0 && <div className="my-1 border-t border-slate-200" />}
         <div className="max-h-44 overflow-y-auto">
@@ -144,6 +162,14 @@ const IndicatorTemplateMenu: React.FC<{
           </div>)}
         </div>
       </>}
+      {legacyCount > 0 && <div className="border-t border-slate-200 px-3 py-2">
+        <p className="text-[11px] text-slate-500">Starší šablony tohoto prohlížeče nemají přiřazený účet.</p>
+        <button type="button" disabled={syncStatus === 'signed-out'} onClick={() => { void importLegacyChartTemplates(); }} className="mt-1 text-left text-xs text-blue-700 disabled:opacity-40">Importovat {legacyCount} do přihlášeného účtu</button>
+      </div>}
+      <div role="status" className="border-t border-slate-200 px-3 py-2 text-[11px] text-slate-500">
+        {syncStatus === 'loading' ? 'Synchronizuji šablony…' : syncStatus === 'memory-only' ? 'Změny zatím nejsou trvale uložené. Úložiště i cloud jsou nedostupné.' : syncStatus === 'offline' ? 'Změny jsou uložené v tomto prohlížeči. Cloud není dostupný.' : syncStatus === 'signed-out' ? 'Pro ukládání šablon se přihlas.' : 'Šablony jsou synchronizované s účtem.'}
+        {(syncStatus === 'offline' || syncStatus === 'memory-only') && <button type="button" onClick={() => { void syncChartTemplates(); }} className="mt-1 block text-blue-700">Zkusit znovu</button>}
+      </div>
     </div>}
   </div>;
 };

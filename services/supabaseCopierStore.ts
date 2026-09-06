@@ -19,7 +19,8 @@ const string = (value: unknown): value is string => typeof value === 'string';
 const optionalString = (value: unknown) => value == null || string(value);
 const orderTypes = new Set(['Market', 'Limit', 'Stop', 'StopLimit']);
 const sides = new Set(['Buy', 'Sell']);
-const outboxStatuses = new Set(['planned', 'sending', 'unknown', 'acknowledged', 'rejected', 'abandoned', 'waived']);
+const atomicOutboxStatuses = new Set(['planned', 'sending', 'unknown', 'acknowledged', 'rejected', 'abandoned', 'waived']);
+const placeOutboxStatuses = new Set([...atomicOutboxStatuses, 'confirmed-by-state']);
 const cancelStatuses = new Set(['planned', 'sending', 'unknown', 'confirmed', 'abandoned', 'waived']);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -34,12 +35,39 @@ function validRequest(value: unknown): boolean {
 
 function validOutbox(value: unknown): boolean {
   if (!isRecord(value)) return false;
+  const liquidationAttempt = value.liquidationAttempt;
+  const validLiquidationAttempt = liquidationAttempt == null || (
+    isRecord(liquidationAttempt)
+    && ['already-flat', 'submitted', 'rejected', 'indeterminate', 'legacy-unknown']
+      .includes(String(liquidationAttempt.status))
+    && finite(liquidationAttempt.observedAt)
+    && optionalString(liquidationAttempt.brokerOrderId)
+    && optionalString(liquidationAttempt.reason)
+  );
+  const confirmation = value.confirmationEvidence;
+  const validConfirmation = confirmation == null || (
+    isRecord(confirmation)
+    && confirmation.kind === 'flat-no-active'
+    && integer(confirmation.accountId) && Number(confirmation.accountId) > 0
+    && string(confirmation.symbol)
+    && confirmation.netQuantity === 0
+    && confirmation.workingOrders === 0
+    && finite(confirmation.observedAt)
+    && ['post-submit', 'restart-recovery', 'final-check'].includes(String(confirmation.source))
+    && confirmation.causality === 'not-proven'
+  );
   return string(value.key) && string(value.tag) && string(value.leaderOrderId)
     && (value.leaderEventId == null || string(value.leaderEventId))
     && (value.leaderSequence == null || (integer(value.leaderSequence) && Number(value.leaderSequence) >= 0))
-    && validRequest(value.request) && outboxStatuses.has(String(value.status))
+    && validRequest(value.request) && placeOutboxStatuses.has(String(value.status))
     && integer(value.attempts) && Number(value.attempts) >= 0
-    && optionalString(value.brokerOrderId) && optionalString(value.reason) && finite(value.updatedAt);
+    && optionalString(value.brokerOrderId) && optionalString(value.reason)
+    && (value.operationKind == null || value.operationKind === 'place-order' || value.operationKind === 'liquidate-position')
+    && (value.liquidationPhase == null || [
+      'submitting', 'awaiting-state', 'awaiting-cleanup', 'confirmed-by-state',
+    ].includes(String(value.liquidationPhase)))
+    && validLiquidationAttempt && validConfirmation
+    && finite(value.updatedAt);
 }
 
 function validOcoLeg(value: unknown): boolean {
@@ -59,7 +87,7 @@ function validBracketOutbox(value: unknown): boolean {
     && string(request.tag) && integer(request.accountId) && string(request.symbol)
     && integer(request.quantity) && Number(request.quantity) > 0
     && validOcoLeg(request.first) && validOcoLeg(request.second)
-    && outboxStatuses.has(String(value.status))
+    && atomicOutboxStatuses.has(String(value.status))
     && integer(value.attempts) && Number(value.attempts) >= 0
     && optionalString(value.firstBrokerOrderId) && optionalString(value.secondBrokerOrderId)
     && optionalString(value.reason) && finite(value.updatedAt);
@@ -101,11 +129,36 @@ function validNumberTuple(value: unknown): boolean {
   return Array.isArray(value) && value.length === 2 && string(value[0]) && finite(value[1]) && value[1] >= 0;
 }
 
+function validLeaderExposureEpoch(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return string(value.id) && string(value.groupId)
+    && integer(value.leaderAccountId) && Number(value.leaderAccountId) > 0
+    && string(value.symbol) && finite(value.openedAt) && finite(value.lastLeaderNet)
+    && integer(value.generation) && Number(value.generation) > 0
+    && ['open', 'grace', 'waiting-inflight', 'closing', 'resolved', 'blocked', 'invalidated']
+      .includes(String(value.phase))
+    && Array.isArray(value.followers)
+    && value.followers.every(follower => isRecord(follower)
+      && integer(follower.accountId) && Number(follower.accountId) > 0
+      && ['off', 'on-submit', 'on-fill'].includes(String(follower.replicationModeAtOpen))
+      && typeof follower.eligibleAtOpen === 'boolean'
+      && ['confirmed', 'unproven'].includes(String(follower.copyLineage))
+      && (follower.confirmedNetQuantity == null || finite(follower.confirmedNetQuantity)))
+    && Array.isArray(value.leaderEntryOrderIds) && value.leaderEntryOrderIds.every(string)
+    && Array.isArray(value.leaderExitOrderIds) && value.leaderExitOrderIds.every(string)
+    && (value.flatObservedAt == null || finite(value.flatObservedAt))
+    && (value.graceUntil == null || finite(value.graceUntil))
+    && (value.terminalAt == null || finite(value.terminalAt))
+    && optionalString(value.terminalReason);
+}
+
 function validSafety(value: unknown): boolean {
   return value == null || (isRecord(value)
     && finite(value.entryCooldownUntil) && Number(value.entryCooldownUntil) >= 0
     && finite(value.dayLockUntil) && Number(value.dayLockUntil) >= 0
     && optionalString(value.dayLockReason)
+    && (value.leaderExposureEpochs == null || (Array.isArray(value.leaderExposureEpochs)
+      && value.leaderExposureEpochs.every(validLeaderExposureEpoch)))
     && (value.accountEligibility == null || (Array.isArray(value.accountEligibility)
       && value.accountEligibility.every(entry => isRecord(entry)
         && integer(entry.accountId) && Number(entry.accountId) > 0

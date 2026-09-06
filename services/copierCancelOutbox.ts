@@ -80,6 +80,12 @@ export function resolveCancelLookup(
       : markCancelUnknown(entry, 'prázdný lookup z eventual streamu', now);
   }
   if (entry.operation === 'modify') {
+    const changes = entry.changes;
+    const matches = changes != null
+      && order.quantity === changes.quantity
+      && order.orderType === changes.orderType
+      && order.limitPrice === changes.limitPrice
+      && order.stopPrice === changes.stopPrice;
     if (order.status === 'canceled') {
       // Závod lifecycle při rychlém ručním ovládání: leader objednávku
       // mezitím zrušil a mirror cancelu jde vlastní cestou. Modify je
@@ -90,7 +96,13 @@ export function resolveCancelLookup(
       };
     }
     if (order.status === 'pending') {
-      return markCancelUnknown(entry, entry.reason ?? 'modify čeká, objednávka je stále pending', now);
+      // Pending/Suspended protective leg ještě není aktivní ochrana, ale
+      // autoritativní broker snapshot se shodným OrderVersion je dostatečný
+      // důkaz, že změna její budoucí execution ceny byla přijata. Coverage UI
+      // ji dál nesmí vydávat za Working; tady potvrzujeme pouze modify intent.
+      return completeness === 'authoritative' && matches
+        ? { ...entry, status: 'confirmed', outcome: 'pending', reason: undefined, updatedAt: now }
+        : markCancelUnknown(entry, entry.reason ?? 'pending modify zatím nemá autoritativně potvrzený shape', now);
     }
     if (!isOpenOrderStatus(order.status)) {
       // `rejected` u Tradovate cancel-replace znamená, že objednávka ZEMŘELA
@@ -101,12 +113,6 @@ export function resolveCancelLookup(
         reason: `modify nebyl potvrzen; objednávka skončila jako ${order.status}`, updatedAt: now,
       };
     }
-    const changes = entry.changes;
-    const matches = changes != null
-      && order.quantity === changes.quantity
-      && order.orderType === changes.orderType
-      && order.limitPrice === changes.limitPrice
-      && order.stopPrice === changes.stopPrice;
     return matches
       ? { ...entry, status: 'confirmed', outcome: 'working', reason: undefined, updatedAt: now }
       : markCancelUnknown(entry, entry.reason ?? 'změna zatím není potvrzena order streamem', now);

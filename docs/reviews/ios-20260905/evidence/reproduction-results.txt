@@ -1,0 +1,6 @@
+2026-09-05 root independently executed four harnesses; all returned exit 0.
+Notification: expiry at T-14s canceled; SL event local=1/server=1; failed APNs sent=0 marker advanced retry=0; two parallel sends=2; test cleanup canceled real risk timer; denied->granted permission checks=1 registers=0; OPEN_JOURNAL routed LIVE; same-ms second event skipped (not counted as separate finding).
+Privacy: cancel->resume authenticationCalls=1 locked=true nativeShield=true; success->resume calls=2 locked=false nativeShield=false.
+Cache: trade metadata edit and account content edit have unchanged production fingerprints.
+Widgets: offline source retains armed/connected and new updatedAt; missing account/lock/balance becomes unlocked $0; profitable long SL 20010 above entry 20000 omitted.
+No network, broker orders or production fault injection in these harnesses.

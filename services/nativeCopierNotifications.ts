@@ -1,6 +1,7 @@
 import { isNativeBuild } from '../utils/runtimeConfig';
 import {
   cancelNativeNotification,
+  listPendingNativeNotifications,
   scheduleNativeNotification,
 } from './nativeNotifications';
 import {
@@ -23,6 +24,8 @@ import { copyEventNotification } from '../server/copierIncidentWatchdog';
 const SLOTS_STORAGE_KEY = 'alphatrade-copier-notification-slots';
 
 let previousSnapshot: CopierNotificationSnapshot | null = null;
+let synchronization: Promise<void> = Promise.resolve();
+let generation = 0;
 
 function loadSlots(): CopierScheduledSlot[] {
   try {
@@ -82,15 +85,24 @@ function toSnapshot(status: CopierControllerStatus | null): CopierNotificationSn
   };
 }
 
-export async function syncCopierNativeNotifications(
+async function syncNow(
   status: CopierControllerStatus | null,
+  epoch: number,
 ): Promise<void> {
-  if (!isNativeBuild) return;
+  if (!isNativeBuild || epoch !== generation) return;
   const next = toSnapshot(status);
   // Výpadek statusu (poll hiccup) není DISARM — sloty nechat být.
   if (next == null) return;
 
-  const slots = loadSlots();
+  let slots = loadSlots();
+  try {
+    const pendingIds = new Set((await listPendingNativeNotifications()).map(item => item.id));
+    if (epoch !== generation) return;
+    slots = slots.filter(slot => pendingIds.has(slot.id));
+  } catch {
+    // A failed pending read is not proof that a timer disappeared.
+  }
+  if (epoch !== generation) return;
   const plan = planCopierNotifications({
     previous: previousSnapshot,
     next,
@@ -98,7 +110,7 @@ export async function syncCopierNativeNotifications(
     now: Date.now(),
   });
   previousSnapshot = next;
-  if (plan.cancel.length === 0 && plan.schedule.length === 0 && plan.fireNow.length === 0) return;
+  if (plan.cancel.length === 0 && plan.schedule.length === 0 && plan.fireNow.length === 0) { saveSlots(slots); return; }
 
   const kept = slots.filter(slot => !plan.cancel.includes(slot.id));
   try {
@@ -106,7 +118,9 @@ export async function syncCopierNativeNotifications(
       await cancelNativeNotification(id).catch(() => undefined);
     }
     for (const planned of plan.schedule) {
+      if (epoch !== generation) return;
       const id = await scheduleNativeNotification({
+        source: 'copierTimer',
         title: planned.title,
         body: planned.body,
         delayMs: Math.max(1_000, planned.at - Date.now()),
@@ -114,6 +128,7 @@ export async function syncCopierNativeNotifications(
         threadIdentifier: 'alphatrade-copier',
         actionType: 'risk',
       });
+      if (epoch !== generation) { await cancelNativeNotification(id).catch(() => undefined); return; }
       kept.push({ key: planned.key, at: planned.at, id });
     }
     for (const immediate of plan.fireNow) {
@@ -129,6 +144,22 @@ export async function syncCopierNativeNotifications(
   } catch {
     // Zamítnuté oprávnění nebo plugin chyba nesmí shodit LIVE UI.
   } finally {
-    saveSlots(kept);
+    if (epoch === generation) saveSlots(kept);
   }
+}
+
+/** Serialize status polls so they cannot create the same slot concurrently. */
+export function syncCopierNativeNotifications(status: CopierControllerStatus | null): Promise<void> {
+  const epoch = generation;
+  const run = synchronization.then(() => syncNow(status, epoch));
+  synchronization = run.catch(() => undefined);
+  return run;
+}
+
+/** Logout invalidates queued work and forgets the old user's timer identities. */
+export function clearCopierNativeNotificationState(): void {
+  generation++;
+  previousSnapshot = null;
+  synchronization = Promise.resolve();
+  try { localStorage.removeItem(SLOTS_STORAGE_KEY); } catch { /* in-memory state still invalidated */ }
 }

@@ -1,6 +1,7 @@
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { storageService } from '../services/storageService';
+import { supabase } from '../services/supabase';
 import {
   getProfile as getCoachProfile,
   listMemories as listCoachMemories,
@@ -24,7 +25,7 @@ import ImportQueue from './ImportQueue';
 import { CustomEmotion, SessionConfig, IronRule, WeeklyFocus, SystemSettings, Account, DailyReview } from '../types';
 import { getPushDiagnostics } from '../utils/notificationHelper';
 import { enablePush, disablePush, listPushDevices, sendTestPush, type PushDevice } from '../services/pushSubscriptionService';
-import { sendNativeRemoteTestPush } from '../services/nativePushNotifications';
+import { initializeNativeRemoteNotifications, sendNativeRemoteTestPush } from '../services/nativePushNotifications';
 import {
   mergeTradecopiaNotificationPreferences,
   type TradecopiaNotificationPreferences,
@@ -89,6 +90,10 @@ import TradingViewAlertSettings from './TradingViewAlertSettings';
 export type SettingsTab = 'psychology' | 'strategy' | 'market' | 'notifications' | 'system';
 
 interface SettingsProps {
+  accountEmail?: string;
+  onLogout?: () => Promise<void>;
+  logoutBusy?: boolean;
+  logoutError?: string | null;
   theme: 'dark' | 'light' | 'oled';
   userEmotions: CustomEmotion[];
   setUserEmotions: React.Dispatch<React.SetStateAction<CustomEmotion[]>>;
@@ -340,6 +345,7 @@ const AddBar = ({ value, onChange, onAdd, placeholder, accent = 'blue', isDark }
 };
 
 const Settings: React.FC<SettingsProps> = ({
+  accountEmail, onLogout, logoutBusy, logoutError,
   theme, userEmotions, setUserEmotions,
   userMistakes, setUserMistakes,
   htfOptions, setHtfOptions, ltfOptions, setLtfOptions,
@@ -381,7 +387,9 @@ const Settings: React.FC<SettingsProps> = ({
 
   const [itemToDelete, setItemToDelete] = useState<{ id: string | number, type: 'rule' | 'emotion' | 'mistake' | 'session' | 'goal' } | null>(null);
   const [toast, setToast] = useState<{ message: string, id: number } | null>(null);
+  const [nativeRemoteRegistered, setNativeRemoteRegistered] = useState(false);
   const [localAlertBusyKey, setLocalAlertBusyKey] = useState<string | null>(null);
+  const alertTestInFlightRef = useRef(false);
 
   // Screenshot migration state
 
@@ -553,8 +561,13 @@ const Settings: React.FC<SettingsProps> = ({
           setNativeReminderSync(await syncNativeSessionReminders(sessions, systemSettings));
         }
         await refreshNativePermissionStatus();
-        showToast(permission === 'granted'
-          ? 'Nativní iOS notifikace jsou zapnuté'
+        const { data: { session } } = await supabase.auth.getSession();
+        const registered = permission === 'granted' && !!session
+          && await initializeNativeRemoteNotifications(session.user.id);
+        setNativeRemoteRegistered(registered);
+        window.dispatchEvent(new Event('alphatrade:native-push-retry'));
+        showToast(registered ? 'Lokální i serverové notifikace jsou připravené'
+          : permission === 'granted' ? 'Lokální upozornění jsou povolená. Serverovou registraci se nepodařilo ověřit; zkus Obnovit registraci.'
           : 'Notifikace nejsou v Nastavení iOS povolené');
         return;
       }
@@ -621,6 +634,8 @@ const Settings: React.FC<SettingsProps> = ({
   };
 
   const handleNativeAlertGallery = async () => {
+    if (pushBusy || localAlertBusyKey !== null || alertTestInFlightRef.current) return;
+    alertTestInFlightRef.current = true;
     setPushBusy(true);
     try {
       const permission = await requestNativeNotificationPermission();
@@ -637,6 +652,7 @@ const Settings: React.FC<SettingsProps> = ({
           ? await createTradeNotificationAttachment(event)
           : undefined;
         await scheduleNativeNotification({
+          source: 'test',
           title: formatted.title,
           body: formatted.body,
           route: event.type === 'trade_closed' ? 'journal' : 'live',
@@ -651,6 +667,7 @@ const Settings: React.FC<SettingsProps> = ({
         + LOCAL_ALERT_SAMPLES.length * NATIVE_ALERT_GALLERY_INTERVAL_MS;
       for (const [index, sample] of NATIVE_COPIER_ALERT_SAMPLES.entries()) {
         await scheduleNativeNotification({
+          source: 'test',
           title: sample.title,
           body: sample.body,
           route: 'live',
@@ -665,6 +682,7 @@ const Settings: React.FC<SettingsProps> = ({
     } catch (error) {
       showToast(`Galerie selhala: ${error instanceof Error ? error.message : 'neznámá chyba'}`);
     } finally {
+      alertTestInFlightRef.current = false;
       setPushBusy(false);
     }
   };
@@ -676,7 +694,7 @@ const Settings: React.FC<SettingsProps> = ({
       await refreshPushState();
       showToast(cancelledCount > 0
         ? `Zrušeno ${cancelledCount} čekajících testů; session plán zůstal aktivní`
-        : 'Doručené testy byly vyčištěny; session plán zůstal aktivní');
+        : 'Žádné čekající testy nebyly nalezeny; session plán zůstal aktivní');
     } finally {
       setPushBusy(false);
     }
@@ -964,6 +982,8 @@ const Settings: React.FC<SettingsProps> = ({
   );
 
   const handleLocalAlertTest = async (event: TradecopiaFastEvent) => {
+    if (pushBusy || localAlertBusyKey !== null || alertTestInFlightRef.current) return;
+    alertTestInFlightRef.current = true;
     setLocalAlertBusyKey(event.key);
     try {
       if (isNativeBuild) {
@@ -973,6 +993,7 @@ const Settings: React.FC<SettingsProps> = ({
           ? await createTradeNotificationAttachment(event)
           : undefined;
         await scheduleNativeNotification({
+          source: 'test',
           title: formatted.title,
           body: formatted.body,
           route: event.type === 'trade_closed' ? 'journal' : 'live',
@@ -1008,6 +1029,7 @@ const Settings: React.FC<SettingsProps> = ({
     } catch (error) {
       showToast(`Push selhal: ${error instanceof Error ? error.message : 'neznámá chyba'}`);
     } finally {
+      alertTestInFlightRef.current = false;
       setLocalAlertBusyKey(null);
     }
   };
@@ -1061,6 +1083,11 @@ const Settings: React.FC<SettingsProps> = ({
 
       <main className="min-w-0">
         <div className="space-y-6">
+          {onLogout && <section aria-label="Přihlášený účet" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--border-subtle)] p-4">
+            <div className="min-w-0"><p className="text-xs font-bold">Přihlášený účet</p><p className="break-all text-xs text-[var(--text-muted)]">{accountEmail}</p></div>
+            <button type="button" disabled={logoutBusy} onClick={() => void onLogout()} className="min-h-11 rounded-xl border border-[var(--border-subtle)] px-4 text-sm font-bold disabled:opacity-50">{logoutBusy ? 'Odhlašuji…' : 'Odhlásit se'}</button>
+            {logoutError && <p role="alert" className="w-full text-sm text-rose-500">{logoutError}</p>}
+          </section>}
           {activeTab === 'psychology' && (
             <div className="space-y-6">
               <Card isDark={isDark}>
@@ -1464,7 +1491,7 @@ const Settings: React.FC<SettingsProps> = ({
                         <span className="px-2 py-1 rounded-md bg-violet-600 text-white text-[8px] font-black uppercase tracking-[0.18em]">{isNativeBuild ? 'iOS Lab' : 'Pouze localhost'}</span>
                         <h3 className="text-sm font-black uppercase tracking-tight text-[var(--text-primary)]">Alert test lab</h3>
                       </div>
-                      <p className="mt-1.5 text-[10px] font-bold text-[var(--text-muted)]">Dočasný panel · nic neposílá na server ani do Supabase.</p>
+                      <p className="mt-1.5 text-[10px] font-bold text-[var(--text-muted)]">{isNativeBuild ? 'Vyber jednu ukázku. Každý test naplánuje jeden alert pouze na tomto iPhonu.' : 'Vyber jednu ukázku pro odeslání na registrovaná zařízení.'}</p>
                     </div>
                     <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-[var(--text-muted)]">
                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
@@ -1472,70 +1499,29 @@ const Settings: React.FC<SettingsProps> = ({
                     </div>
                   </div>
 
-                  {isNativeBuild && (
-                    <div className="px-5 py-4 border-b border-[var(--border-subtle)]">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        disabled={pushBusy || localAlertBusyKey !== null}
-                        onClick={() => void handleNativeAlertGallery()}
-                        className="py-3 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-[9px] font-black uppercase tracking-widest disabled:opacity-50"
-                      >
-                        {pushBusy ? 'Plánuji galerii…' : `Naplánovat všech ${NATIVE_ALERT_GALLERY_COUNT} scénářů`}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={pushBusy || nativePendingNotifications.every(notification => notification.source === 'sessionReminder')}
-                        onClick={() => void handleCancelNativeAlerts()}
-                        className="py-3 rounded-xl border border-[var(--border-subtle)] text-[9px] font-black uppercase tracking-widest text-[var(--text-primary)] disabled:opacity-40"
-                      >
-                        Zrušit čekající testy ({nativePendingNotifications.filter(notification => notification.source !== 'sessionReminder').length})
-                      </button>
-                      </div>
-                      {nativePendingNotifications.length > 0 && (
-                        <div className="mt-4 space-y-2">
-                          <p className="text-[8px] font-black uppercase tracking-[0.18em] text-[var(--text-muted)]">Skutečně čeká v iOS</p>
-                          {nativePendingNotifications.map(notification => (
-                            <div key={notification.id} className="flex items-start gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-page)] p-3">
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="truncate text-[10px] font-black text-[var(--text-primary)]">{notification.title}</p>
-                                  <span className={`rounded px-1.5 py-0.5 text-[7px] font-black uppercase ${notification.kind === 'risk' ? 'bg-red-500/10 text-red-500' : notification.kind === 'trade' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-blue-500/10 text-blue-500'}`}>{notification.source === 'sessionReminder' ? 'plán' : notification.kind}</span>
-                                </div>
-                                <p className="mt-1 line-clamp-2 text-[9px] font-semibold text-[var(--text-muted)]">{notification.body}</p>
-                                <p className="mt-1 text-[8px] font-black uppercase tracking-wider text-[var(--text-muted)]">{notification.scheduledAt ? new Date(notification.scheduledAt).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Čas řídí iOS'}{notification.route ? ` · otevře ${notification.route}` : ''}</p>
-                              </div>
-                              {notification.source !== 'sessionReminder' && <button type="button" disabled={pushBusy} onClick={() => void handleCancelNativeAlert(notification.id)} aria-label={`Zrušit ${notification.title}`} className="shrink-0 rounded-lg border border-red-500/20 p-2 text-red-500 disabled:opacity-40"><X size={13} /></button>}
-                            </div>
-                          ))}
+                  <div className="grid min-w-0 gap-3 p-4 sm:hidden" aria-label="Jednotlivé testy notifikací">
+                    {localAlertSamples.map(({ label, event, formatted }) => (
+                      <article key={event.key} className="min-w-0 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-page)] p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <h4 className="text-sm font-black text-[var(--text-primary)]">{label}</h4>
+                          <span className={`rounded-md px-2 py-1 text-[9px] font-black uppercase ${event.severity === 'critical' ? 'bg-rose-500/10 text-rose-500' : event.severity === 'warning' ? 'bg-amber-500/10 text-amber-500' : 'bg-blue-500/10 text-blue-500'}`}>{event.severity}</span>
                         </div>
-                      )}
-                      {nativeDeliveredNotifications.length > 0 && (
-                        <div className="mt-4 space-y-2 border-t border-[var(--border-subtle)] pt-4">
-                          <div className="flex items-center justify-between gap-3">
-                            <p className="text-[8px] font-black uppercase tracking-[0.18em] text-[var(--text-muted)]">Doručeno do centra iOS</p>
-                            <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[8px] font-black text-emerald-500">{nativeDeliveredNotifications.length}</span>
-                          </div>
-                          {nativeDeliveredNotifications.map(notification => (
-                            <div key={notification.id} className="flex items-start gap-3 rounded-xl border border-emerald-500/15 bg-emerald-500/[0.04] p-3">
-                              <button type="button" onClick={() => handleOpenDeliveredNativeAlert(notification)} className="min-w-0 flex-1 text-left">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="truncate text-[10px] font-black text-[var(--text-primary)]">{notification.title}</p>
-                                  <span className={`rounded px-1.5 py-0.5 text-[7px] font-black uppercase ${notification.kind === 'risk' ? 'bg-red-500/10 text-red-500' : notification.kind === 'trade' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-blue-500/10 text-blue-500'}`}>{notification.kind}</span>
-                                  {notification.hasAttachment && <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[7px] font-black uppercase text-violet-500">screen</span>}
-                                </div>
-                                <p className="mt-1 line-clamp-2 text-[9px] font-semibold text-[var(--text-muted)]">{notification.body}</p>
-                                <p className="mt-1 text-[8px] font-black uppercase tracking-wider text-[var(--text-muted)]">{notification.deliveredAt ? new Date(notification.deliveredAt).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Doručeno systémem'} · klepnutím otevřít {notification.route || 'dashboard'}</p>
-                              </button>
-                              <button type="button" disabled={pushBusy} onClick={() => void handleRemoveDeliveredNativeAlert(notification.id)} aria-label={`Odstranit doručenou notifikaci ${notification.title}`} className="shrink-0 rounded-lg border border-red-500/20 p-2 text-red-500 disabled:opacity-40"><Trash2 size={13} /></button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                        <p className="mt-3 break-words text-xs font-black text-[var(--text-primary)]">{formatted.title}</p>
+                        <p className="mt-1 whitespace-pre-line break-words text-xs leading-relaxed text-[var(--text-muted)]">{formatted.body}</p>
+                        <button
+                          type="button"
+                          aria-label={`Otestovat: ${label}`}
+                          disabled={pushBusy || localAlertBusyKey !== null}
+                          onClick={() => void handleLocalAlertTest(event)}
+                          className="mt-4 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-xs font-black text-white active:scale-[0.98] disabled:opacity-40"
+                        >
+                          <Bell size={16} /> {localAlertBusyKey === event.key ? 'Plánuji…' : (isNativeBuild ? 'Test na iPhone' : 'Odeslat push')}
+                        </button>
+                      </article>
+                    ))}
+                  </div>
 
-                  <div className="overflow-x-auto">
+                  <div className="hidden overflow-x-auto sm:block">
                     <table className="w-full min-w-[760px] text-left">
                       <thead>
                         <tr className="border-b border-[var(--border-subtle)] text-[8px] font-black uppercase tracking-[0.18em] text-[var(--text-muted)]">
@@ -1568,7 +1554,7 @@ const Settings: React.FC<SettingsProps> = ({
                               <td className="px-5 py-4 align-top text-right">
                                 <button
                                   type="button"
-                                  disabled={localAlertBusyKey !== null}
+                                  disabled={pushBusy || localAlertBusyKey !== null}
                                   onClick={() => void handleLocalAlertTest(event)}
                                   className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-violet-600 hover:bg-violet-500 text-white text-[9px] font-black uppercase tracking-wider transition-colors active:scale-95 disabled:opacity-50 disabled:cursor-wait"
                                 >
@@ -1581,6 +1567,75 @@ const Settings: React.FC<SettingsProps> = ({
                       </tbody>
                     </table>
                   </div>
+                  {isNativeBuild && (
+                    <details className="border-t border-[var(--border-subtle)] px-5 py-4">
+                      <summary className="cursor-pointer text-xs font-bold text-[var(--text-muted)]">Hromadný test · {NATIVE_ALERT_GALLERY_COUNT} scénářů</summary>
+                      <p className="mt-3 text-xs leading-relaxed text-[var(--text-muted)]">Tato volba naplánuje všechny ukázky během dvou minut. Pro jeden alert použij tlačítko u konkrétní ukázky výše.</p>
+                      <button
+                        type="button"
+                        disabled={pushBusy || localAlertBusyKey !== null}
+                        onClick={() => void handleNativeAlertGallery()}
+                        className="mt-3 min-h-11 rounded-xl border border-[var(--border-subtle)] px-4 py-3 text-xs font-bold text-[var(--text-primary)] disabled:opacity-40"
+                      >
+                        {pushBusy ? 'Plánuji galerii…' : `Naplánovat všech ${NATIVE_ALERT_GALLERY_COUNT} scénářů`}
+                      </button>
+                    </details>
+                  )}
+                  {isNativeBuild && (
+                    <div className="px-5 py-4 border-b border-[var(--border-subtle)]">
+                      <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={pushBusy || localAlertBusyKey !== null || !nativePendingNotifications.some(notification => notification.source === 'test')}
+                        onClick={() => void handleCancelNativeAlerts()}
+                        className="px-4 py-3 rounded-xl border border-[var(--border-subtle)] text-[9px] font-black uppercase tracking-widest text-[var(--text-primary)] disabled:opacity-40"
+                      >
+                        Zrušit čekající testy ({nativePendingNotifications.filter(notification => notification.source === 'test').length})
+                      </button>
+                      </div>
+                      {nativePendingNotifications.length > 0 && (
+                        <div className="mt-4 space-y-2">
+                          <p className="text-[8px] font-black uppercase tracking-[0.18em] text-[var(--text-muted)]">Skutečně čeká v iOS</p>
+                          {nativePendingNotifications.map(notification => (
+                            <div key={notification.id} className="flex items-start gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-page)] p-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="truncate text-[10px] font-black text-[var(--text-primary)]">{notification.title}</p>
+                                  <span className={`rounded px-1.5 py-0.5 text-[7px] font-black uppercase ${notification.kind === 'risk' ? 'bg-red-500/10 text-red-500' : notification.kind === 'trade' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-blue-500/10 text-blue-500'}`}>{notification.source === 'sessionReminder' ? 'plán' : notification.kind}</span>
+                                </div>
+                                <p className="mt-1 line-clamp-2 text-[9px] font-semibold text-[var(--text-muted)]">{notification.body}</p>
+                                <p className="mt-1 text-[8px] font-black uppercase tracking-wider text-[var(--text-muted)]">{notification.scheduledAt ? new Date(notification.scheduledAt).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Čas řídí iOS'}{notification.route ? ` · otevře ${notification.route}` : ''}</p>
+                              </div>
+                              {notification.source === 'test' && <button type="button" disabled={pushBusy} onClick={() => void handleCancelNativeAlert(notification.id)} aria-label={`Zrušit ${notification.title}`} className="shrink-0 rounded-lg border border-red-500/20 p-2 text-red-500 disabled:opacity-40"><X size={13} /></button>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {nativeDeliveredNotifications.length > 0 && (
+                        <div className="mt-4 space-y-2 border-t border-[var(--border-subtle)] pt-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-[8px] font-black uppercase tracking-[0.18em] text-[var(--text-muted)]">Doručeno do centra iOS</p>
+                            <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[8px] font-black text-emerald-500">{nativeDeliveredNotifications.length}</span>
+                          </div>
+                          {nativeDeliveredNotifications.map(notification => (
+                            <div key={notification.id} className="flex items-start gap-3 rounded-xl border border-emerald-500/15 bg-emerald-500/[0.04] p-3">
+                              <button type="button" onClick={() => handleOpenDeliveredNativeAlert(notification)} className="min-w-0 flex-1 text-left">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="truncate text-[10px] font-black text-[var(--text-primary)]">{notification.title}</p>
+                                  <span className={`rounded px-1.5 py-0.5 text-[7px] font-black uppercase ${notification.kind === 'risk' ? 'bg-red-500/10 text-red-500' : notification.kind === 'trade' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-blue-500/10 text-blue-500'}`}>{notification.kind}</span>
+                                  {notification.hasAttachment && <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[7px] font-black uppercase text-violet-500">screen</span>}
+                                </div>
+                                <p className="mt-1 line-clamp-2 text-[9px] font-semibold text-[var(--text-muted)]">{notification.body}</p>
+                                <p className="mt-1 text-[8px] font-black uppercase tracking-wider text-[var(--text-muted)]">{notification.deliveredAt ? new Date(notification.deliveredAt).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Doručeno systémem'} · klepnutím otevřít {notification.route || 'dashboard'}</p>
+                              </button>
+                              <button type="button" disabled={pushBusy} onClick={() => void handleRemoveDeliveredNativeAlert(notification.id)} aria-label={`Odstranit doručenou notifikaci ${notification.title}`} className="shrink-0 rounded-lg border border-red-500/20 p-2 text-red-500 disabled:opacity-40"><Trash2 size={13} /></button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                 </Card>
               )}
 
@@ -1597,8 +1652,8 @@ const Settings: React.FC<SettingsProps> = ({
                   </div>
                 )}
                 <div className="flex gap-2">
-                  <button onClick={handleEnablePush} disabled={pushBusy || (isNativeBuild ? nativeNotificationPermission === 'granted' : !!pushDiag?.ready)} className="flex-1 py-3 rounded-xl bg-[var(--text-secondary)] text-[var(--bg-page)] text-[10px] font-black uppercase tracking-widest disabled:opacity-40">
-                    {(isNativeBuild ? nativeNotificationPermission === 'granted' : pushDiag?.ready) ? 'Notifikace aktivní' : (pushBusy ? 'Zapínám…' : 'Zapnout notifikace')}
+                  <button onClick={handleEnablePush} disabled={pushBusy || (!isNativeBuild && !!pushDiag?.ready)} className="flex-1 py-3 rounded-xl bg-[var(--text-secondary)] text-[var(--bg-page)] text-[10px] font-black uppercase tracking-widest disabled:opacity-40">
+                    {pushBusy ? 'Ověřuji…' : isNativeBuild && nativeNotificationPermission === 'granted' ? (nativeRemoteRegistered ? 'Ověřit registraci' : 'Obnovit registraci') : pushDiag?.ready ? 'Notifikace aktivní' : 'Zapnout notifikace'}
                   </button>
                   {!isNativeBuild && pushDiag?.hasActiveSubscription && <button onClick={handleDisablePush} disabled={pushBusy} className="px-4 py-3 rounded-xl border border-[var(--border-subtle)] text-[10px] font-black uppercase text-[var(--text-muted)]">Vypnout</button>}
                 </div>

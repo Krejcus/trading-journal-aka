@@ -5,6 +5,7 @@ import {
   type BrokerEvent,
   type BrokerOrder,
   type BrokerOrderAck,
+  type BrokerLiquidateResult,
   type BrokerLiquidateRequest,
   type BrokerOrderRequest,
   type BrokerOcoRequest,
@@ -230,7 +231,7 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
     },
 
     liquidatePosition: options.nativeLiquidate
-      ? async (request: BrokerLiquidateRequest): Promise<BrokerOrderAck> => {
+      ? async (request: BrokerLiquidateRequest): Promise<BrokerLiquidateResult> => {
         if (!connected) throw new MockBrokerTimeoutError('mock broker: disconnected');
         liquidated.push({ ...request });
         for (const order of ordersById.values()) {
@@ -251,11 +252,7 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
           emit({ type: 'position', position: next });
         }
         orderSequence += 1;
-        return {
-          brokerOrderId: `liquidate-${orderSequence}`,
-          accepted: true,
-          definitive: true,
-        };
+        return { status: 'submitted', brokerOrderId: `liquidate-${orderSequence}` };
       }
       : undefined,
 
@@ -359,7 +356,7 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
       if (outcome === 'timeout-before-modify') {
         throw new MockBrokerTimeoutError('mock broker: modify timed out before reaching broker');
       }
-      if (!order || order.status !== 'working') return;
+      if (!order || !isOpenOrderStatus(order.status)) return;
       modified.push({ accountId, brokerOrderId, changes: { ...changes } });
       const oldReferencePrice = order.limitPrice ?? order.stopPrice;
       const newReferencePrice = changes.limitPrice ?? changes.stopPrice;

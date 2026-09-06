@@ -188,3 +188,16 @@ describe('computePatternSummary — důkazní vrstva Coache', () => {
     expect(report.patterns.nejlepsi_jednotlive_faktory[0]).toHaveProperty('trade_ids');
   });
 });
+
+
+describe('OHLC excursion bounds', () => {
+  it('keeps realized PnL but excludes uncertain MFE/MAE from exact distributions', () => {
+    const ds = buildLabDatasetFromTrades([
+      mk({ pnl: 200, mfeR: 2, maeR: 0.5, excursionAmbiguous: true }),
+      mk({ pnl: 100, mfeR: 3, maeR: 0.75, excursionAmbiguous: false }),
+    ]);
+    expect(ds.trades[0]).toMatchObject({ pnl: 200, r: 2, mfeR: null, maeR: null });
+    expect(ds.trades[0].raw.excursionAmbiguous).toBe(true);
+    expect(ds.trades[1]).toMatchObject({ mfeR: 3, maeR: 0.75 });
+  });
+});

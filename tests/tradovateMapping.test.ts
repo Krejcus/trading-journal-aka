@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BrokerOrderRequest, BrokerOsoRequest } from '../services/brokerPort';
 import {
   fillIncrement,
+  fromLiquidatePositionResult,
   fromOrderEntity,
   fromPlaceOcoResult,
   fromPlaceOsoResult,
@@ -119,6 +120,17 @@ describe('mapping výsledků a entit', () => {
   it('Success bez orderId není falešné potvrzení ani definitivní reject', () => {
     expect(fromPlaceOrderResult({ failureReason: 'Success', failureText: '' }))
       .toMatchObject({ accepted: false, definitive: false });
+  });
+  it('liquidate bez orderId je pouze submitted ke stavovému ověření', () => {
+    expect(fromLiquidatePositionResult({ failureReason: 'Success' }))
+      .toEqual({ status: 'submitted' });
+    expect(fromLiquidatePositionResult(null)).toEqual({ status: 'submitted' });
+  });
+  it('liquidate zachová explicitní reject a volitelné orderId', () => {
+    expect(fromLiquidatePositionResult({ orderId: 91 }))
+      .toEqual({ status: 'submitted', brokerOrderId: '91' });
+    expect(fromLiquidatePositionResult({ failureReason: 'Margin', failureText: 'Blocked' }))
+      .toEqual({ status: 'rejected', reason: 'Blocked' });
   });
   it('mapuje stavy konzervativně', () => {
     expect(toOrderStatus('Working')).toBe('working');
@@ -746,6 +758,58 @@ describe('createTradovateBroker WebSocket', () => {
       order: { status: 'canceled', brokerOrderId: '42' },
       completeness: 'authoritative',
     });
+    unsubscribe();
+  });
+
+  it('modify potvrdí přesný nový shape i když ochranná noha zůstává Suspended', async () => {
+    const socket: WebSocketLike = {
+      readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+      send() {}, close() {},
+    };
+    const fetchImpl: typeof fetch = async input => {
+      const url = String(input);
+      if (url.endsWith('/order/modifyorder')) {
+        return jsonResponse({ commandId: 17, failureReason: 'Success' });
+      }
+      if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
+      if (
+        url.includes('/order/list')
+        || url.includes('/orderVersion/list')
+        || url.includes('/command/list')
+        || url.includes('/fill/list')
+      ) return jsonResponse([]);
+      throw new Error(`unexpected url ${url}`);
+    };
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123', fetchImpl,
+      webSocketFactory: () => socket,
+      setIntervalImpl: (() => 1) as unknown as typeof setInterval,
+      clearIntervalImpl: (() => undefined) as unknown as typeof clearInterval,
+      commandConfirmationTimeoutMs: 500,
+    });
+    let connected = false;
+    const unsubscribe = broker.subscribe(event => {
+      if (event.type === 'connection') connected = event.connected;
+    });
+    socket.onmessage?.({ data: 'a[{"i":1,"s":200,"d":[]}]' });
+    await expect.poll(() => connected).toBe(true);
+
+    const modifying = broker.modifyOrder(200, '42', {
+      quantity: 6,
+      orderType: 'Stop',
+      stopPrice: 29_391,
+    });
+    await Promise.resolve();
+    socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [
+      { entityType: 'OrderVersion', entity: {
+        id: 18, orderId: 42, orderQty: 6, orderType: 'Stop', stopPrice: 29_391,
+      } },
+      { entityType: 'Order', entity: {
+        id: 42, accountId: 200, contractId: 7, action: 'Sell', ordStatus: 'Suspended',
+      } },
+    ] })}]` });
+
+    await expect(modifying).resolves.toBeUndefined();
     unsubscribe();
   });
 

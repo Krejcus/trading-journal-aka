@@ -4,7 +4,10 @@
     "node_modules",
     "dist",
     "scripts",
-    "supabase/functions"
+    "supabase/functions",
+    "dist-native",
+    "capacitor-ios/App/App/public",
+    "docs/reviews"
   ],
   "compilerOptions": {
     "target": "ES2022",

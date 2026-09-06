@@ -1,5 +1,6 @@
 import type { Drawing, DrawingEngine, DrawingStyle } from '@getcandlekit/charts';
 import type { MarketTimeframe } from './marketData';
+import { rememberDrawingStyleDefault } from './chartDrawingStyleDefaults';
 
 export type FibLineStyle = 'solid' | 'dashed' | 'dotted';
 export type FibExtendMode = 'none' | 'left' | 'right' | 'both';
@@ -255,13 +256,25 @@ export const installFibDrawingDefaults = (
   };
 };
 
+export const rememberFibDrawingDefault = (engine: DrawingEngine, id: string) => {
+  const drawing = engine.getById(id);
+  if (!drawing || drawing.tool !== 'FibRetracement') return;
+  const { runtimeTimeframeMinutes: _runtime, ...settings } = getFibSettings(drawing);
+  rememberDrawingStyleDefault('FibRetracement', {
+    ...drawing.style,
+    fib: { ...settings, locked: false, hidden: false },
+  } as DrawingStyle);
+};
+
 export const updateFibDrawing = (
   engine: DrawingEngine,
   id: string,
   settings: FibRetracementSettings,
+  rememberDefault = false,
 ) => {
   const current = getFibSettings(engine.getById(id));
   const next = normalizeFibSettings(settings);
-  if (next.runtimeTimeframeMinutes === undefined) next.runtimeTimeframeMinutes = current.runtimeTimeframeMinutes;
+  next.runtimeTimeframeMinutes = current.runtimeTimeframeMinutes;
   engine.setStyle(id, { fib: next } as Partial<DrawingStyle>);
+  if (rememberDefault) rememberFibDrawingDefault(engine, id);
 };

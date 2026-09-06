@@ -69,6 +69,7 @@ export interface NativeLiveActivityBrokerAccount {
   /** False zabrání persistenci syntetické nuly při neúplné broker odpovědi. */
   balanceAvailable?: boolean;
   openPnlAvailable?: boolean;
+  realizedPnlAvailable?: boolean;
 }
 
 export interface NativeLiveActivityBrokerPosition {
@@ -99,6 +100,7 @@ export interface NativeLiveActivityBrokerSnapshot {
   totalPnl: number;
   /** False means the display must label the amount as realized-only. */
   completeOpenPnl: boolean;
+  completeRealizedPnl?: boolean;
   /** False means account/list failed and lock transitions must not be inferred. */
   accountStatusComplete?: boolean;
   /** False means userAccountAutoLiq/list failed and unlocks must not be inferred. */
@@ -278,6 +280,7 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
       autoLiqLevel: openResult?.autoLiqLevel ?? finite(autoLiqByAccount.get(accountId)?.autoLiqLevel),
       balanceAvailable: openResult?.balance != null || finite(balance?.amount) != null,
       openPnlAvailable: openResult == null || openResult.value != null,
+      realizedPnlAvailable: finite(balance?.realizedPnL) != null,
     };
   });
 
@@ -319,34 +322,6 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
     : null;
   const dominantSymbol = dominantContractId == null ? null : symbols.get(dominantContractId) ?? null;
 
-  let stopPrice: number | null = null;
-  let targetPrice: number | null = null;
-  if (rawOrderVersions.complete && dominantContractId != null && dominantEntryPrice != null && sameDirection) {
-    const protectiveAction = dominantDirection > 0 ? 'sell' : 'buy';
-    const candidates = leaderWorkingOrders.flatMap(order => {
-      const orderId = finite(order.id);
-      if (orderId == null || finite(order.contractId) !== dominantContractId
-        || (order.action ?? '').toLowerCase() !== protectiveAction) return [];
-      const version = latestVersionByOrderId.get(orderId);
-      return version ? [version] : [];
-    });
-    const stops = candidates.flatMap(version => {
-      const kind = (version.orderType ?? '').toLowerCase();
-      const price = finite(version.stopPrice);
-      const correctSide = price != null
-        && (dominantDirection > 0 ? price <= dominantEntryPrice : price >= dominantEntryPrice);
-      return (kind === 'stop' || kind === 'stoplimit') && correctSide ? [price] : [];
-    });
-    const targets = candidates.flatMap(version => {
-      const price = finite(version.price);
-      const correctSide = price != null
-        && (dominantDirection > 0 ? price >= dominantEntryPrice : price <= dominantEntryPrice);
-      return (version.orderType ?? '').toLowerCase() === 'limit' && correctSide ? [price] : [];
-    });
-    stopPrice = stops.sort((a, b) => Math.abs(a - dominantEntryPrice) - Math.abs(b - dominantEntryPrice))[0] ?? null;
-    targetPrice = targets.sort((a, b) => Math.abs(a - dominantEntryPrice) - Math.abs(b - dominantEntryPrice))[0] ?? null;
-  }
-
   let currentPrice: number | null = null;
   if (completeOpenPnl && allExposureIsDominant && sameDirection && dominantEntryPrice != null
     && dominantSymbol != null && dominantQuantity > 0) {
@@ -379,22 +354,38 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
 
   return {
     accounts,
-    positions: open.map(position => ({
+    positions: open.map(position => {
+      // Do not copy the leader's stop to followers. A whole-position stop must
+      // actually exist on this account before its protection/risk is reported.
+      const protectiveAction = position.netPosition > 0 ? 'sell' : 'buy';
+      const protection = workingOrders.flatMap(order => {
+        if (order.accountId !== position.accountId || order.contractId !== position.contractId
+          || order.action?.toLowerCase() !== protectiveAction || order.id == null) return [];
+        const version = latestVersionByOrderId.get(order.id);
+        return version && (finite(version.orderQty) ?? 0) >= Math.abs(position.netPosition) ? [version] : [];
+      });
+      const accountStops = [...new Set(protection.flatMap(version =>
+        ['stop', 'stoplimit'].includes(version.orderType?.toLowerCase() ?? '') && finite(version.stopPrice) != null ? [version.stopPrice!] : []))];
+      const accountTargets = [...new Set(protection.flatMap(version =>
+        version.orderType?.toLowerCase() === 'limit' && finite(version.price) != null ? [version.price!] : []))];
+      return {
       accountId: position.accountId,
       symbol: symbols.get(position.contractId) ?? null,
-      side: position.netPosition > 0 ? 'Long' : 'Short',
+      side: position.netPosition > 0 ? 'Long' as const : 'Short' as const,
       quantity: Math.abs(position.netPosition),
       entryPrice: position.entryPrice,
       currentPrice: position.contractId === dominantContractId ? currentPrice : null,
-      stopPrice: position.contractId === dominantContractId ? stopPrice : null,
-      targetPrice: position.contractId === dominantContractId ? targetPrice : null,
-    })),
+      stopPrice: accountStops.length === 1 ? accountStops[0] : null,
+      targetPrice: accountTargets.length === 1 ? accountTargets[0] : null,
+    };
+    }).sort((a, b) => Number(b.accountId === leaderAccountId) - Number(a.accountId === leaderAccountId)),
     pendingOrder,
     workingOrderCount: workingOrders.length,
     realizedPnl,
     openPnl,
     totalPnl: realizedPnl + openPnl,
     completeOpenPnl,
+    completeRealizedPnl: accounts.length > 0 && accounts.every(account => account.realizedPnlAvailable),
     accountStatusComplete: rawAccounts.complete,
     accountLockStatusComplete: rawAutoLiq.complete,
     capturedAt: options.now ?? Date.now(),

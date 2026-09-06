@@ -211,6 +211,13 @@ export interface Trade {
   id: number | string;
   accountId: string;
   backtestRunId?: string;
+  backtestResearch?: import('./services/backtestResearchCases').BacktestResearchTradeReference;
+  /** Wall-clock time this replay trade was recorded; never the historical market timestamp. */
+  actualExcursionQuality?: 'cash-ledger' | 'reconstructed' | 'legacy-unknown';
+  backtestAnalyticsRefresh?: import('./services/backtestAnalyticsRefresh').BacktestAnalyticsRefreshStamp;
+  recordedAt?: number;
+  /** Original persisted row creation time, used for legacy research cohorts. */
+  createdAt?: string | number;
   instrument?: string;
   signal: string;
   pnl: number;
@@ -241,6 +248,8 @@ export interface Trade {
   /** Privátní auto-snapshoty copier epizody; `path` není veřejná URL. */
   copierSnapshots?: Array<{ kind: string; at: number; path: string }>;
   notes?: string;
+  /** Private owner-only history, hydrated separately; never store in public Trade JSON. */
+  noteHistory?: import('./services/tradeNoteHistory').TradeNoteHistory;
   shareNotes?: boolean; // Při sdílení veřejného linku: smí se zobrazit poznámka? (default false)
   drawings?: DrawingObject[]; // Array of drawing objects (lines, rects, text, fib, etc.)
   entryPrice?: number;
@@ -269,6 +278,8 @@ export interface Trade {
   session?: string;
   htfConfluence?: string[];
   ltfConfluence?: string[];
+  /** Exact generated capsules still owned by replay; unknown/legacy tags stay manual. */
+  autoConfluence?: { htf: string[]; ltf: string[] };
   groupId?: string;
   isMaster?: boolean; // If this is the source trade for a copy group
   masterTradeId?: string | number; // ID of the master trade if this is a copy
@@ -312,8 +323,10 @@ export interface Trade {
   maePoints?: number;
   /** false = MFE/MAE se nepodařilo z grafu načíst (ne že jsou 0). */
   excursionAvailable?: boolean;
-  /** true = SL i TP v jednom baru (auto-výsledek nejistý, default LOSS). */
+  /** true = OHLC neurčuje pořadí vstupu/výstupu; použit konzervativní výsledek. */
   outcomeAmbiguous?: boolean;
+  /** MFE/MAE jsou pouze prokazatelné dolní meze, nikoli přesná intrabarová maxima. */
+  excursionAmbiguous?: boolean;
   /** Kam reálně dal SL: fvg | swing | ote | other. */
   slPlacement?: string;
   /** Kam cílil TP: deviation | daily | fixed_rr | liquidity | other. */
@@ -683,9 +696,13 @@ export interface BusinessGoal {
 }
 
 /** Lab experiment — uzavřená smyčka „leak → změna pravidla → měření efektu".
- *  Obchody PŘED startTs = baseline, PO startTs = běh experimentu; po targetTrades
+ *  Baseline je při vytvoření zmrazená; nové replay záznamy se řadí podle času zápisu,
+ *  live obchody podle tržního času; po targetTrades
  *  obchodech Lab nabídne vyhodnocení. Čísla počítá labAnalytics (deterministicky). */
 export interface LabExperiment {
+    research?: import('./services/backtestResearchCases').BacktestResearchCase;
+    /** Read-only persistence token, excluded from stored JSON. */
+    storageToken?: { ownerId: string; updatedAt: string | null };
     id: string;
     createdAt: number;
     world: 'live' | 'backtest';
@@ -699,8 +716,16 @@ export interface LabExperiment {
     sourceLeakId?: string;
     /** Po kolika obchodech vyhodnotit. */
     targetTrades: number;
-    /** Obchody s ts >= startTs se počítají do běhu experimentu. */
+    /** Počátek experimentu v ms; clock určuje, který druh času se porovnává. */
     startTs: number;
+    /** Research records use recorded time; live experiments retain market time. */
+    clock?: 'market' | 'recorded';
+    /** Frozen membership of the known baseline at experiment creation. */
+    baselineTradeIds?: string[];
+    /** Omitted = all accounts in the experiment world, including subsequent runs. */
+    accountIds?: string[];
+    /** Freeze observation after evaluation/cancellation. */
+    endTs?: number;
     status: 'running' | 'evaluated' | 'cancelled';
     /** Závěr po vyhodnocení (předvyplní deterministický verdikt, jde přepsat). */
     conclusion?: string;

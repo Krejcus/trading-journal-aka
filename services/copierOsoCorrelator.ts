@@ -40,6 +40,8 @@ export type OsoObservation =
   | { kind: 'unrelated' }
   | { kind: 'entry'; entryOrderId: string }
   | { kind: 'leg'; entryOrderId: string }
+  /** Replace dorazil dřív, než vznikly follower linky; kandidát drží nový execution shape. */
+  | { kind: 'updated'; entryOrderId: string }
   | { kind: 'pair'; pair: LeaderOsoPair }
   | { kind: 'ambiguous'; reason: string };
 
@@ -68,6 +70,32 @@ export class CopierOsoCorrelator {
 
   observe(event: LeaderEvent): OsoObservation {
     this.prune(event.receivedAt);
+    if (
+      event.kind === 'replaced'
+      && event.executionShapeChanged === true
+      && isEntryType(event.orderType)
+    ) {
+      const pendingEntry = this.entries.get(event.orderId);
+      if (pendingEntry && !this.emitted.has(event.orderId)) {
+        pendingEntry.event = this.updatedPendingEvent(pendingEntry.event, event, false);
+        return { kind: 'updated', entryOrderId: event.orderId };
+      }
+
+      for (const [entryOrderId, byOrder] of this.legs) {
+        if (this.emitted.has(entryOrderId)) continue;
+        const leg = byOrder.get(event.orderId);
+        if (!leg) continue;
+        const nextType = event.orderType === 'Limit' ? 'target' : 'stop';
+        const nextPrice = nextType === 'target' ? event.limitPrice : event.stopPrice;
+        if (nextType !== leg.type || nextPrice == null || !Number.isFinite(nextPrice)) {
+          return { kind: 'ambiguous', reason: 'OSO replace změnil protective roli nebo nemá platnou cenu' };
+        }
+        leg.event = this.updatedPendingEvent(leg.event, event, true);
+        leg.price = nextPrice;
+        return { kind: 'updated', entryOrderId };
+      }
+      return { kind: 'unrelated' };
+    }
     if (event.kind !== 'submitted' || !isEntryType(event.orderType)) return { kind: 'unrelated' };
     const submittedEvent = event as LeaderEvent & {
       kind: 'submitted';
@@ -165,6 +193,31 @@ export class CopierOsoCorrelator {
   }
 
   pendingWindowMs(): number { return this.windowMs; }
+
+  /**
+   * Pending replace smí změnit execution parametry, nikoli transient quantity
+   * nativní OSO nohy. `kind: submitted` zachovává kandidáta jako dosud
+   * neodeslanou část páru; skutečný replace event se zvlášť durable zaznamená.
+   */
+  private updatedPendingEvent(
+    current: EntryCandidate['event'] | LegCandidate['event'],
+    update: LeaderEvent,
+    preserveQuantity: boolean,
+  ): EntryCandidate['event'] {
+    return {
+      ...current,
+      kind: 'submitted',
+      orderType: update.orderType as Extract<OrderType, 'Limit' | 'Stop' | 'StopLimit'>,
+      limitPrice: update.limitPrice,
+      stopPrice: update.stopPrice,
+      // Identita/sekvence/čas zůstávají na původním submitted eventu. Replace
+      // se durable zaznamenává samostatně a nesmí změnit deferred replay key.
+      // Protective child drží venue-managed quantity. Samotný čekající entry
+      // ale smí uživatel legitimně zvětšit/zmenšit spolu s cenou ještě před
+      // dokončením OSO inference okna.
+      quantity: preserveQuantity ? current.quantity : update.quantity,
+    };
+  }
 
   private prune(now: number): void {
     for (const [id, candidate] of this.entries) {

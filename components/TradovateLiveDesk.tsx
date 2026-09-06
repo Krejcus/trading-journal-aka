@@ -48,10 +48,12 @@ import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import { tradovateCopyTradeOrders, tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import LiveCopyTradeOverview from './LiveCopyTradeOverview';
+import MacCompanionSettings from './MacCompanionSettings';
 import TradovateAccountProfileSetup from './TradovateAccountProfileSetup';
 import TradovateAddConnectionModal from './TradovateAddConnectionModal';
 import type { TradovateLiveData } from './useTradovateLiveData';
 import type { TradovateConnectionSummary } from '../lib/tradovateLiveConnectionCache';
+import { tradovateLiveTabFromSearch, type TradovateLiveTab } from '../lib/tradovateLiveTab';
 import {
   resolveLocalExecutionGroup,
   type LocalCopierAgentStatus,
@@ -62,13 +64,13 @@ import {
   type LiveCopyTradingAdapter,
 } from '../services/liveCopyTrading';
 
-type LiveTab = 'connections' | 'overview' | 'accounts' | 'orders' | 'events';
-
 interface TradovateLiveDeskProps {
   userId: string;
   theme: 'dark' | 'light' | 'oled';
   live: TradovateLiveData;
   onCopierJournalRefresh?: (group: CopyGroupConfig | null) => void;
+  macCompanionPairingIntent?: boolean;
+  onMacCompanionPairingIntentHandled?: () => void;
 }
 
 const money = new Intl.NumberFormat('cs-CZ', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
@@ -121,12 +123,21 @@ const LiveDashboardSkeleton = () => (
   </div>
 );
 
-const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId, live, onCopierJournalRefresh }) => {
-  const [tab, setTab] = useState<LiveTab>('overview');
+const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
+  userId,
+  live,
+  onCopierJournalRefresh,
+  macCompanionPairingIntent = false,
+  onMacCompanionPairingIntentHandled,
+}) => {
+  const [tab, setTab] = useState<TradovateLiveTab>(() => tradovateLiveTabFromSearch(
+    typeof window === 'undefined' ? '' : window.location.search,
+  ));
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [copyGroups, setCopyGroups] = useState<CopyGroupConfig[]>([]);
   const [agentStatus, setAgentStatus] = useState<LocalCopierAgentStatus | null>(null);
+  const [agentStatusObservedAt, setAgentStatusObservedAt] = useState<number | null>(null);
   // Než doběhne první dotaz, `agentStatus` je null a armovaný copier by se
   // v přepínači ukázal jako OFF. Do té doby se stav zobrazuje jako neznámý.
   const [agentStatusResolved, setAgentStatusResolved] = useState(false);
@@ -167,6 +178,30 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId, live, onC
   const [agentTransport, setAgentTransport] = useState<'local' | 'relay' | null>(null);
   const [relayConnectionId, setRelayConnectionId] = useState<string | null>(null);
   const [pairingNotice, setPairingNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!macCompanionPairingIntent) return;
+
+    setTab('connections');
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        const section = document.getElementById('mac-companion-pairing');
+        const input = document.getElementById('mac-companion-pairing-code') as HTMLInputElement | null;
+        section?.scrollIntoView({
+          behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+          block: 'start',
+        });
+        input?.focus({ preventScroll: true });
+        onMacCompanionPairingIntentHandled?.();
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [macCompanionPairingIntent, onMacCompanionPairingIntentHandled]);
   // Nativní window.confirm ve WKWebView (iOS shell) tiše vrací false;
   // potvrzení execution akcí proto kreslí aplikace sama.
   const [confirmState, setConfirmState] = useState<(ConfirmActionOptions & { resolve: (confirmed: boolean) => void }) | null>(null);
@@ -226,9 +261,13 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId, live, onC
       profiles: live.profiles,
       controller: agentStatus?.controller ?? null,
       followerCount: agentStatus?.group.followers.length ?? 0,
+      workerObservedAtMs: agentStatusObservedAt,
+      brokerCapturedAtMs: Date.parse(live.data.capturedAt),
+      positionsAvailable: ['available', 'empty'].includes(live.data.coverage.positions.availability),
+      ordersAvailable: ['available', 'empty'].includes(live.data.coverage.orders.availability),
     });
     void syncNativeLiveWidgetSnapshot(state);
-  }, [agentStatus, live.data, live.profiles]);
+  }, [agentStatus, agentStatusObservedAt, live.data, live.profiles]);
   const executionGroup = useMemo(() => {
     if (!agentStatus) return null;
     return resolveLocalExecutionGroup(copyGroups, agentStatus.group);
@@ -303,6 +342,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId, live, onC
           if (!stopped) {
             directAgentProbe.current = 'available';
             setAgentStatus(next);
+            setAgentStatusObservedAt(Date.now());
             setAgentStatusResolved(true);
             setAgentTransport('local');
             setRelayConnectionId(next.device?.connectionId ?? next.devices?.[0]?.connectionId ?? null);
@@ -325,11 +365,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId, live, onC
         const active = candidates.find(candidate => candidate.remote?.connected) ?? null;
         if (!stopped) {
           setAgentStatus(active?.remote?.status ?? null);
+          setAgentStatusObservedAt(active ? Date.parse(active.remote!.lastSeenAt) : null);
           setAgentTransport(active ? 'relay' : null);
           setRelayConnectionId(active?.connectionId ?? null);
         }
       } catch {
-        if (!stopped) { setAgentStatus(null); setAgentTransport(null); setRelayConnectionId(null); }
+        if (!stopped) { setAgentStatus(null); setAgentStatusObservedAt(null); setAgentTransport(null); setRelayConnectionId(null); }
       } finally {
         if (!stopped) {
           setAgentStatusResolved(true);
@@ -385,7 +426,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId, live, onC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [confirmAction]);
 
-  const tabs: Array<{ id: LiveTab; label: string; icon: React.ElementType }> = [
+  const tabs: Array<{ id: TradovateLiveTab; label: string; icon: React.ElementType }> = [
     { id: 'connections', label: 'Connections', icon: Link2 },
     { id: 'overview', label: 'Live Dashboard', icon: Gauge },
     { id: 'accounts', label: 'Účty', icon: WalletCards },
@@ -426,53 +467,56 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({ userId, live, onC
       )}
 
       {tab === 'connections' ? (
-        <Connections
-          status={live.status}
-          connectionData={live.connectionData}
-          connectionSummaries={live.connectionSummaries}
-          profiles={live.profiles}
-          busy={live.busy}
-          onAdd={() => setAddConnectionOpen(true)}
-          onRefreshStatus={() => void live.refreshStatus()}
-          onProfiles={() => live.setProfileSetupOpen(true)}
-          onDisconnect={connectionId => void (async () => {
-            if (await confirmAction({
-              title: 'Odpojit Tradovate připojení',
-              message: 'Odpojit toto Tradovate připojení? Uložené názvy a pravidla účtů zůstanou zachované.',
-              confirmLabel: 'Odpojit',
-              tone: 'danger',
-            })) {
-              void live.disconnect(connectionId);
-            }
-          })()}
-          onReconnect={connectionId => void live.connect(connectionId)}
-          pilotDevices={pilotDevices}
-          onPilotLease={connectionId => void (async () => {
-            const device = pilotDevices.find(item => item.connectionId === connectionId);
-            if (device?.state === 'pairing-required') {
-              if (device.connectionId !== connectionId || !device.deviceSecret || !device.publicKey) {
-                throw new Error('Mac worker čeká na jiné Tradovate připojení nebo má neúplnou pairing žádost.');
+        <>
+          <Connections
+            status={live.status}
+            connectionData={live.connectionData}
+            connectionSummaries={live.connectionSummaries}
+            profiles={live.profiles}
+            busy={live.busy}
+            onAdd={() => setAddConnectionOpen(true)}
+            onRefreshStatus={() => void live.refreshStatus()}
+            onProfiles={() => live.setProfileSetupOpen(true)}
+            onDisconnect={connectionId => void (async () => {
+              if (await confirmAction({
+                title: 'Odpojit Tradovate připojení',
+                message: 'Odpojit toto Tradovate připojení? Uložené názvy a pravidla účtů zůstanou zachované.',
+                confirmLabel: 'Odpojit',
+                tone: 'danger',
+              })) {
+                void live.disconnect(connectionId);
               }
-              if (!(await confirmAction({
-                title: 'Spárovat Mac worker',
-                message: `Spárovat ${device.deviceName} s tímto DEMO připojením? Zařízení dostane pouze odvolatelný přístup k obnově krátkého copier lease.`,
-                confirmLabel: 'Spárovat',
-              }))) return;
-              await pairTradovateCopierDevice({
-                connectionId,
-                deviceId: device.deviceId,
-                deviceSecret: device.deviceSecret,
-                publicKey: device.publicKey,
-                deviceName: device.deviceName,
-              });
-              setAgentStatus((await agentClient.execute({ type: 'device-paired', deviceId: device.deviceId })).status);
-              return;
-            }
-            await downloadPilotLease(connectionId);
-          })().catch(error => {
-            live.setError(error instanceof Error ? error.message : String(error));
-          })}
-        />
+            })()}
+            onReconnect={connectionId => void live.connect(connectionId)}
+            pilotDevices={pilotDevices}
+            onPilotLease={connectionId => void (async () => {
+              const device = pilotDevices.find(item => item.connectionId === connectionId);
+              if (device?.state === 'pairing-required') {
+                if (device.connectionId !== connectionId || !device.deviceSecret || !device.publicKey) {
+                  throw new Error('Mac worker čeká na jiné Tradovate připojení nebo má neúplnou pairing žádost.');
+                }
+                if (!(await confirmAction({
+                  title: 'Spárovat Mac worker',
+                  message: `Spárovat ${device.deviceName} s tímto DEMO připojením? Zařízení dostane pouze odvolatelný přístup k obnově krátkého copier lease.`,
+                  confirmLabel: 'Spárovat',
+                }))) return;
+                await pairTradovateCopierDevice({
+                  connectionId,
+                  deviceId: device.deviceId,
+                  deviceSecret: device.deviceSecret,
+                  publicKey: device.publicKey,
+                  deviceName: device.deviceName,
+                });
+                setAgentStatus((await agentClient.execute({ type: 'device-paired', deviceId: device.deviceId })).status);
+                return;
+              }
+              await downloadPilotLease(connectionId);
+            })().catch(error => {
+              live.setError(error instanceof Error ? error.message : String(error));
+            })}
+          />
+          <MacCompanionSettings confirmAction={confirmAction} />
+        </>
       ) : checkingConnection ? (
         <LiveDashboardSkeleton />
       ) : requiresConnection ? (

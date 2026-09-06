@@ -1,5 +1,37 @@
 import ActivityKit
 import Foundation
+import Darwin
+
+/// Serializes app/extension mutations across processes. Identity validation and
+/// snapshot persistence must share a lock so logout cannot be followed by a
+/// late response restoring the previous user's data.
+enum AlphaTradeWidgetStore {
+    static let suite = "group.app.alphatrade.native"
+    static let generationKey = "AlphaTradeWidgetSessionGenerationV1"
+    static let tokenKey = "AlphaTradeWidgetAccessTokenV1"
+    static let snapshotKey = "AlphaTradeWidgetSnapshotV2"
+    static let signatureKey = "AlphaTradeWidgetPushRegisteredSignatureV1"
+
+    static func withDefaults<T>(_ body: (UserDefaults) -> T) -> T? {
+        guard let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: suite),
+              let defaults = UserDefaults(suiteName: suite) else { return nil }
+        let descriptor = open(directory.appendingPathComponent("widget-store.lock").path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else { return nil }
+        defer { close(descriptor) }
+        guard flock(descriptor, LOCK_EX) == 0 else { return nil }
+        defer { flock(descriptor, LOCK_UN) }
+        defaults.synchronize()
+        let result = body(defaults)
+        defaults.synchronize()
+        return result
+    }
+
+    static func invalidate(_ defaults: UserDefaults) {
+        defaults.set(UUID().uuidString, forKey: generationKey)
+        defaults.removeObject(forKey: snapshotKey)
+        defaults.removeObject(forKey: signatureKey)
+    }
+}
 
 /// Shared schema compiled into both the app and its WidgetKit extension.
 /// State is a redacted read-only monitoring snapshot. No auth token or broker

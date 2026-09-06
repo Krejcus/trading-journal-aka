@@ -29,6 +29,69 @@ describe('CopierOsoCorrelator', () => {
     });
   });
 
+  it('před dokončením páru převezme novou SL cenu, ale ne transient quantity', () => {
+    const correlator = new CopierOsoCorrelator(500);
+    expect(correlator.observe(submitted({ quantity: 11 })))
+      .toEqual({ kind: 'entry', entryOrderId: 'entry' });
+    expect(correlator.observe(submitted({
+      id: 's1', sequence: 2, orderId: 'stop', side: 'Sell', orderType: 'Stop',
+      quantity: 11, limitPrice: undefined, stopPrice: 29_379, receivedAt: 120,
+    }))).toEqual({ kind: 'leg', entryOrderId: 'entry' });
+
+    expect(correlator.observe(submitted({
+      id: 's2', sequence: 3, kind: 'replaced', orderId: 'stop', side: 'Sell', orderType: 'Stop',
+      quantity: 6, limitPrice: undefined, stopPrice: 29_391, receivedAt: 130,
+      executionShapeChanged: true,
+    }))).toEqual({ kind: 'updated', entryOrderId: 'entry' });
+
+    expect(correlator.observe(submitted({
+      id: 't1', sequence: 4, orderId: 'target', side: 'Sell', orderType: 'Limit',
+      quantity: 11, limitPrice: 30_100, receivedAt: 140,
+    }))).toMatchObject({
+      kind: 'pair',
+      pair: { quantity: 11, stopPrice: 29_391, targetPrice: 30_100 },
+    });
+  });
+
+  it('před dokončením páru použije nejnovější cenu i quantity pending entry', () => {
+    const correlator = new CopierOsoCorrelator(500);
+    correlator.observe(submitted({ limitPrice: 30_000, quantity: 5 }));
+    expect(correlator.observe(submitted({
+      id: 'entry-move', sequence: 2, kind: 'replaced', quantity: 3,
+      limitPrice: 30_010, receivedAt: 110,
+      executionShapeChanged: true,
+    }))).toEqual({ kind: 'updated', entryOrderId: 'entry' });
+    correlator.observe(submitted({
+      id: 'target', sequence: 3, orderId: 'target', side: 'Sell',
+      quantity: 3, limitPrice: 30_100, receivedAt: 120,
+    }));
+    expect(correlator.observe(submitted({
+      id: 'stop', sequence: 4, orderId: 'stop', side: 'Sell', orderType: 'Stop',
+      quantity: 3, limitPrice: undefined, stopPrice: 29_950, receivedAt: 130,
+    }))).toMatchObject({
+      kind: 'pair', pair: { quantity: 3, entryLimitPrice: 30_010 },
+    });
+  });
+
+  it('po emitování páru už replace nespolkne a předá ho durable link lifecycle', () => {
+    const correlator = new CopierOsoCorrelator(500);
+    correlator.observe(submitted({}));
+    correlator.observe(submitted({
+      id: 'target', sequence: 2, orderId: 'target', side: 'Sell',
+      limitPrice: 30_100, receivedAt: 120,
+    }));
+    expect(correlator.observe(submitted({
+      id: 'stop', sequence: 3, orderId: 'stop', side: 'Sell', orderType: 'Stop',
+      limitPrice: undefined, stopPrice: 29_950, receivedAt: 130,
+    }))).toMatchObject({ kind: 'pair' });
+
+    expect(correlator.observe(submitted({
+      id: 'stop-move', sequence: 4, kind: 'replaced', orderId: 'stop', side: 'Sell',
+      orderType: 'Stop', limitPrice: undefined, stopPrice: 29_960,
+      executionShapeChanged: true, receivedAt: 140,
+    }))).toEqual({ kind: 'unrelated' });
+  });
+
   it('samostatný limit zůstane pending pouze po omezené okno', () => {
     const correlator = new CopierOsoCorrelator(100);
     correlator.observe(submitted({}));

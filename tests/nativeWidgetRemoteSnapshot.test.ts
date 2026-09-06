@@ -56,5 +56,27 @@ describe('remote native widget snapshot', () => {
     });
     expect(result.live.status).toBe('WORKER OFFLINE');
     expect(result.updatedAt).toBe(Date.parse('2026-08-20T10:00:00Z'));
+    expect(result.live.workerValidUntil).toBeLessThan(result.updatedAt);
+  });
+
+  it('does not reassert ARM merely because an offline worker snapshot was fetched now', () => {
+    const stale = runtime('2026-08-20T09:00:00Z');
+    (stale.status.controller as Record<string, unknown>).armed = true;
+    const result = buildNativeWidgetRemoteSnapshot({ runtime: stale, broker, profiles: [], trades: [], now: Date.parse('2026-08-20T10:00:00Z') });
+    expect(result.live).toMatchObject({ status: 'WORKER OFFLINE', armed: false, connected: false });
+    expect(result.live.workerObservedAt).toBe(Date.parse(stale.last_seen_at));
+    expect(result.live.brokerUpdatedAt).toBe(broker.capturedAt);
+  });
+
+  it('retains unknown finance and lock coverage instead of presenting them as verified zeros/unlocks', () => {
+    const incomplete = {
+      ...broker, completeOpenPnl: false, completeRealizedPnl: false,
+      accountStatusComplete: false, accountLockStatusComplete: false,
+      accounts: [{ ...broker.accounts[0], balance: 0, openPnl: 0, canTrade: true, changesLocked: false,
+        balanceAvailable: false, realizedPnlAvailable: false, openPnlAvailable: false }],
+    };
+    const result = buildNativeWidgetRemoteSnapshot({ runtime: runtime('2026-08-20T10:00:00Z'), broker: incomplete, profiles: [], trades: [], now: broker.capturedAt });
+    expect(result.live).toMatchObject({ realizedPnlAvailable: false, openPnlAvailable: false, totalPnlAvailable: false, equity: [] });
+    expect(result.live.accounts[0]).toMatchObject({ balanceAvailable: false, pnlAvailable: false, openPnlAvailable: false, lockStatusAvailable: false });
   });
 });

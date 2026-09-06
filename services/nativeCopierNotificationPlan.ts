@@ -3,8 +3,8 @@
  *
  * Události se ZNÁMÝM časem (konec ARM, konec cooldownu, konec day-locku)
  * plánujeme jako lokální fallback přímo v iOS. Nepředvídatelné incidenty
- * plán hlásí okamžitě při živém pollu; serverová APNs cesta kryje zavřenou
- * aplikaci. Obě větve sdílejí stejné hrany a nesmějí vykonat broker akci.
+ * doručuje výhradně serverová APNs cesta i při otevřené aplikaci. Lokální
+ * časové připomínky nepotvrzují aktuální stav brokera a nic nevykonávají.
  *
  * Tenhle modul NIC neplánuje — vrací akce. Side effects dělá exekutor,
  * takže celé chování jde pokrýt deterministickými testy.
@@ -83,16 +83,16 @@ const MIN_LEAD_MS = 15_000;
 
 const SLOT_CONTENT: Record<CopierSlotKey, { title: string; body: string }> = {
   'arm-expiry': {
-    title: 'Copier: ARM vypršel',
-    body: 'Ostrý ARM právě skončil (konec broker session). Kopírování stojí; nový ARM je ruční.',
+    title: 'Copier: plánovaný konec ARM',
+    body: 'Nastal poslední známý termín konce ARM. Otevři LIVE a ověř stav kopírování i pozic.',
   },
   'cooldown-end': {
-    title: 'Copier: cooldown skončil',
-    body: 'Anti-revenge cooldown doběhl. ARM je zase možný — rozhodni s chladnou hlavou.',
+    title: 'Copier: termín kontroly cooldownu',
+    body: 'Nastal poslední známý konec cooldownu. Před případným ARM ověř aktuální blokace v LIVE.',
   },
   'daylock-end': {
-    title: 'Copier: denní zámek skončil',
-    body: 'Day-lock doběhl s koncem broker session. Nový ARM je zase možný.',
+    title: 'Copier: termín kontroly denního zámku',
+    body: 'Nastal poslední známý konec denního zámku. Ověř aktuální stav účtů v LIVE; dostupnost ARM není potvrzená.',
   },
 };
 
@@ -102,13 +102,13 @@ function desiredSlotTimes(
 ): Map<CopierSlotKey, number> {
   const desired = new Map<CopierSlotKey, number>();
   if (!snapshot) return desired;
-  if (snapshot.armed && !snapshot.shadowMode && snapshot.armExpiresAt > now + MIN_LEAD_MS) {
+  if (snapshot.armed && !snapshot.shadowMode && snapshot.armExpiresAt > now) {
     desired.set('arm-expiry', snapshot.armExpiresAt);
   }
-  if (snapshot.entryCooldownUntil > now + MIN_LEAD_MS) {
+  if (snapshot.entryCooldownUntil > now) {
     desired.set('cooldown-end', snapshot.entryCooldownUntil);
   }
-  if (snapshot.dayLockUntil > now + MIN_LEAD_MS) {
+  if (snapshot.dayLockUntil > now) {
     desired.set('daylock-end', snapshot.dayLockUntil);
   }
   return desired;
@@ -119,6 +119,8 @@ export function planCopierNotifications(options: {
   next: CopierNotificationSnapshot | null;
   slots: readonly CopierScheduledSlot[];
   now: number;
+  /** Legacy/offline planner inspection only; production dynamic alerts belong to APNs. */
+  localDynamicAlerts?: boolean;
 }): CopierNotificationPlan {
   const { previous, next, slots, now } = options;
   const cancel: number[] = [];
@@ -135,18 +137,18 @@ export function planCopierNotifications(options: {
       cancel.push(slot.id);
     } else if (Math.abs(target - slot.at) > RESCHEDULE_TOLERANCE_MS) {
       cancel.push(slot.id);
-      schedule.push({ key: slot.key, at: target, ...SLOT_CONTENT[slot.key] });
+      if (target > now + MIN_LEAD_MS) schedule.push({ key: slot.key, at: target, ...SLOT_CONTENT[slot.key] });
     }
     desired.delete(slot.key);
   }
   for (const [key, at] of desired) {
-    schedule.push({ key, at, ...SLOT_CONTENT[key] });
+    if (at > now + MIN_LEAD_MS) schedule.push({ key, at, ...SLOT_CONTENT[key] });
   }
 
   // --- Okamžité incidenty: jen skutečné hrany prev -> next ----------------
   // Bez prev (první sync po startu appky) nehlásíme nic — stavy mohly
   // vzniknout dávno a PWA watchdog je už ohlásil.
-  if (previous && next) {
+  if (options.localDynamicAlerts === true && previous && next) {
     if (!previous.killSwitch && next.killSwitch) {
       fireNow.push({
         title: 'Copier: KILL SWITCH',
@@ -158,6 +160,20 @@ export function planCopierNotifications(options: {
       fireNow.push({
         title: 'Copier: bezpečné zastavení',
         body: next.lastError,
+        kind: 'risk',
+      });
+    }
+    if (
+      previous.connected
+      && next.connected
+      && !previous.reconciliationRequired
+      && next.reconciliationRequired
+      && next.lastError == null
+      && next.divergentAccounts.length === 0
+    ) {
+      fireNow.push({
+        title: 'Copier: nutná kontrola',
+        body: 'Během DISARMED vznikla nová bezpečnostní událost. Před dalším ARM proveď Kontrolu pozic.',
         kind: 'risk',
       });
     }

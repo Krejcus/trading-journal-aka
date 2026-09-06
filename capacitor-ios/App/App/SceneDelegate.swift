@@ -52,6 +52,10 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         AlphaTradePrivacyShield.shared.showIfEnabled()
     }
 
+    func sceneDidEnterBackground(_ scene: UIScene) {
+        AlphaTradePrivacyShield.shared.showIfEnabled(force: true)
+    }
+
     func sceneDidBecomeActive(_ scene: UIScene) {
         AlphaTradeKeepAwake.shared.applicationDidBecomeActive()
         AlphaTradePrivacyShield.shared.refreshScreenCaptureState()

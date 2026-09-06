@@ -1,0 +1,13 @@
+{
+  "database": "PGlite (real PostgreSQL WASM)",
+  "disjointEditsPreserved": true,
+  "staleEditedFieldRejected": true,
+  "idempotentRetry": true,
+  "concurrentGalleryAppendPreserved": true,
+  "ownerMismatchRejected": true,
+  "rlsOtherOwnerDenied": true,
+  "rootColumnsSynchronized": true,
+  "anonExecuteDenied": true,
+  "canonicalSnapshotIdentityAndFacts": true,
+  "checks": 10
+}

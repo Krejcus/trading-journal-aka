@@ -1,4 +1,4 @@
-import type { ApnsEnvironment } from './apns';
+import type { ApnsEnvironment } from './apns.js';
 
 export interface NativeLiveActivityRegistration {
   activityId: string;

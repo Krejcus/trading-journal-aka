@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { Trade } from '../types';
-import { Zap, Monitor, Waves, ChevronDown } from 'lucide-react';
+import { Zap, Monitor, Waves, ChevronDown, Tags } from 'lucide-react';
 
 interface Props {
   trade: Trade;
@@ -148,10 +148,14 @@ const TradeConfluence: React.FC<Props> = ({ trade, isDark = true }) => {
   const mins = ec?.entryMinutes;
   const timeStr = mins != null ? `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}` : null;
 
-  if (!uniqueEntryTags.length && !htfChips.length && !hasLevels) return null;
+  if (!uniqueEntryTags.length && !htfChips.length && !hasLevels && !trade.tags?.length) return null;
 
   return (
     <>
+      {Boolean(trade.tags?.length) && <div className={sectionCls}>
+        {heading(Tags, 'Vlastní tagy')}
+        <div className="flex flex-wrap gap-1.5">{trade.tags!.map((tag, index) => chip(tag, 'violet', `tag${index}`))}</div>
+      </div>}
       {/* 1 · Entry Confluence — všechno o tomhle vstupu (auto z AlphaBridge + ruční tagy) */}
       {uniqueEntryTags.length > 0 && (
         <div className={sectionCls}>
@@ -250,7 +254,7 @@ const TradeConfluence: React.FC<Props> = ({ trade, isDark = true }) => {
             {anchorChip('DO', ec.aboveDO, 'aDO')}
             {anchorChip('WO', ec.aboveWO, 'aWO')}
             {anchorChip('pdVWAP', ec.abovePdVWAP, 'aPdV')}
-            {ec.vwapDistSigma != null && chip(`VWAP ${ec.vwapDistSigma > 0 ? '+' : ''}${ec.vwapDistSigma}σ`, 'sky', 'sig')}
+            {ec.vwapDistSigma != null && chip(`VWAP ${ec.vwapDistSigma > 0 ? '+' : ''}${Number(ec.vwapDistSigma).toFixed(2)}σ`, 'sky', 'sig')}
             {ec.londonVsAsia && chip(`LON ${ec.londonVsAsia === 'above' ? 'nad Asií ↑' : ec.londonVsAsia === 'below' ? 'pod Asií ↓' : 'v Asii'}`, 'slate', 'lon')}
             {timeStr && chip(timeStr, 'slate', 'time')}
           </div>

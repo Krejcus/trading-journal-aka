@@ -87,7 +87,7 @@ const CRITICAL_STATUSES = new Set(['DIVERGENCE', 'KILL SWITCH', 'STUCK OUTBOX'])
 function statusText(runtime: NativeLiveActivityRuntimeRow, now: number): { status: string; detail: string } {
   const controller = controllerOf(runtime);
   const lastSeen = Date.parse(runtime.last_seen_at);
-  if (!Number.isFinite(lastSeen) || now - lastSeen > 90_000) {
+  if (!Number.isFinite(lastSeen) || lastSeen > now + 30_000 || now - lastSeen > 90_000) {
     return { status: 'WORKER OFFLINE', detail: 'Heartbeat je starší než 90 sekund.' };
   }
   if (bool(controller.killSwitch)) return { status: 'KILL SWITCH', detail: String(controller.lastError || 'Runtime je zastavený.') };
@@ -152,6 +152,10 @@ export function planNativeLiveActivityUpdate(options: {
   const brokerPnl = openPositionCount > 0 && options.broker?.completeOpenPnl === true
     ? options.broker.openPnl
     : options.broker?.realizedPnl;
+  const pnlAvailable = options.broker != null
+    ? (openPositionCount > 0 && options.broker.completeOpenPnl
+      ? true : options.broker.completeRealizedPnl !== false)
+    : optionalFinite(dailyStats.realizedPnlUsd) != null;
   const pnl = brokerPnl ?? finite(dailyStats.realizedPnlUsd);
   const workingOrderCount = options.broker?.workingOrderCount
     ?? (Array.isArray(controller.workingOrderAccounts) ? controller.workingOrderAccounts.length : 0);
@@ -195,13 +199,15 @@ export function planNativeLiveActivityUpdate(options: {
     if (!homogeneousPosition || stopPrice == null) return null;
     const valuePerPoint = tradovateValuePerPoint(firstPosition.symbol ?? null);
     if (valuePerPoint == null) return null;
-    const total = (options.broker?.positions ?? []).reduce((sum, item) => {
+    const positions = options.broker?.positions ?? [];
+    if (positions.some(item => optionalFinite(item.entryPrice) == null || optionalFinite(item.stopPrice) == null)) return null;
+    const total = positions.reduce((sum, item) => {
       const entry = optionalFinite(item.entryPrice) ?? entryPrice;
       const stop = optionalFinite(item.stopPrice) ?? stopPrice;
       if (entry == null || stop == null || !(item.quantity > 0)) return sum;
-      return sum + Math.abs(entry - stop) * item.quantity * valuePerPoint;
+      return sum + (stop - entry) * (item.side === 'Short' ? -1 : 1) * item.quantity * valuePerPoint;
     }, 0);
-    return total > 0 ? total : null;
+    return total;
   })();
   const pending = openPositionCount === 0 ? options.broker?.pendingOrder : null;
   const displayEntryPrice = entryPrice ?? pending?.price ?? null;
@@ -247,7 +253,7 @@ export function planNativeLiveActivityUpdate(options: {
     detail: CRITICAL_STATUSES.has(status.status)
       ? status.detail
       : `${openPositionCount} pozic · ${workingOrderCount} příkazů · ${pnlLabel}`,
-    pnlText: signedMoney(pnl),
+    pnlText: pnlAvailable ? signedMoney(pnl) : '—',
     isPositive: pnl >= 0,
     progress: bool(controller.killSwitch) ? 1 : bool(controller.armed) ? 0.75 : controller.connected === true ? 0.35 : 0.1,
     updatedAt: options.now / 1_000,
@@ -264,7 +270,7 @@ export function planNativeLiveActivityUpdate(options: {
       ? { armExpiresAt: armExpiresAtMs / 1_000 } : {}),
     followersTotal: followerCount,
     ...(followersOk != null ? { followersOk } : {}),
-    ...(riskAtStop != null ? { riskAtStopText: `−$${riskAtStop.toFixed(0)} na SL` } : {}),
+    ...(riskAtStop != null ? { riskAtStopText: `${riskAtStop < 0 ? '−' : '+'}$${Math.abs(riskAtStop).toFixed(0)} na SL` } : {}),
   };
   const fingerprint = {
     event: shouldEnd ? 'end' : 'update',

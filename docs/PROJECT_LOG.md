@@ -20,7 +20,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - **Copier**: jádro ověřené na Tradovate DEMO (limit, market, OCO, OSO,
   Flatten, multiplikátory i fan-out na 5 followerů napříč Tradeify + Lucid).
   Mac runtime: launchd agent + Supabase command relay + device pairing.
-  Poslední úplné automatické ověření: 1563 testů, typecheck, lint a build čisté.
+  Poslední úplné automatické ověření: 1705 testů, typecheck a build čisté;
+  plný lint má 0 chyb (352 starších warningů mimo tuto změnu).
 - **Bezpečnostní model**: DISARMED default; fail-closed všude; durable
   outboxy (standard/cancel/bracket/OSO); žádný blind retry — po nejistém
   výsledku vždy lookup podle `clOrdId`; divergence = halt-group, nikdy se
@@ -50,10 +51,43 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   drží jen odchozí spojení. Kill switch z mobilu funguje přes relay.
 - **Žádný stav na disku VPS** — snapshot v `copier_runtime_state`,
   box je vyměnitelný; obnova = nový deploy, ne restore zálohy.
-- **Menu bar Mac aplikace zamítnuta** — leštila by kokpit letadla, které
-  nahradí VPS; stejná investice jako celý VPS přechod.
+- **Samostatný menu-bar kokpit Mac workeru zůstává zamítnutý** — leštil by
+  řídicí plochu dočasného stroje, který má nahradit VPS. Povolená odbočka je
+  pouze oddělený read-only cloud companion bez execution schopností. Jeho
+  verze 0.2 (status API/DTO, pairing/revokace, Keychain a PWA správa zařízení)
+  byla 1. 9. po samostatném souhlasu aktivována v produkci a nainstalována jako
+  build 3. Scope zůstává pevně `copier.status.read`; companion nesmí získat
+  broker write, execution příkazy ani řízení workeru.
 
 ## Otevřené otázky
+
+- [ ] **Backtest audit a roadmapa 5. 9.** — lokální opravy B01–B15 a označení neznámých legacy metrik ověřené; zbývá aktivace RPC, skutečné cloudové ověření a rozvoj 48 bodů. Podrobnosti v implementačním zápisu a `docs/reviews/backtest-second-review-20260905/IMPLEMENTATION.md`.
+
+- [x] **AlphaTrade Status — produkční aktivace** — VYŘEŠENO 1. 9. (zápis
+      „produkční aktivace read-only companionu“): záloha, izolovaná migrace,
+      RLS/limiter, API/PWA deploy, skutečný pairing/status, instalace buildu 3,
+      Keychain persistence a restart LaunchAgentu jsou ověřené. Aktivní zařízení
+      zůstalo schválně nerevokované; revoke cesta je krytá automatickými testy.
+- [ ] **Rotace diagnosticky zobrazených Vercel secretů** — při preflightu se
+      hodnoty některých environment secrets objevily v interním výstupu nástroje.
+      Hodnoty sem nezapisovat; naplánovat cílenou rotaci. Samostatně odstranit a
+      rotovat `VITE_GROQ_API_KEY`, protože každá `VITE_*` hodnota je součástí
+      klientského bundle.
+- [ ] **Cross-firm copy Tradeify + Lucid** — policy-blocked do písemného potvrzení
+      od Tradeify (§6.6 zakazuje bota napříč firmami). Nerozhodnuto, jestli
+      AlphaTrade s ručním leaderem vůbec spadá pod „bot/algo". Detaily v
+      `COPIER_PROPSHIELD_REVIEW_20260831.md` §0.
+- [ ] **Leader model** — zůstává technický signal account (risk-bearing jsou
+      followery), nebo leaderless webhook executor s `entry+SL+TP` v payloadu?
+      Rozhoduje o tom, jestli má admitted-exposure ledger vůbec smysl. Pine/webhook
+      není zjednodušení zdarma — ruční klik webhook nevytvoří.
+- [ ] **Zápis venue risk limitů** — dovolují Tradeify/Lucid OAuth tokeny update
+      `userAccountAutoLiq` / `userAccountPositionLimit`? `changesLocked:false`
+      nedokazuje právo na update a AutoLiq je post-trade, ne pre-trade contract cap.
+      Read-only capability matice až po výslovném schválení uživatelem.
+- [ ] **Rezerva nad floorem u `drawdownType: 'trailing'`** — 8 z 35 presetů
+      (LucidDaily), kde se floor hýbe během obchodu. Funded presety v katalogu
+      dnes nejsou žádné.
 
 - [x] iOS 26 WidgetKit APNs registrace — VYŘEŠENO 21. 8. (zápis „widgety a
       notifikace dokončeny"): příčinou byl Postgres regex limit v CHECK
@@ -61,10 +95,17 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - [x] ActivityKit push-to-start — FYZICKY OVĚŘENO 21. 8.: Live Activity se
       vytvořila ze serveru při force-quit appce (ARM z Mac Safari).
 - [x] Kabel rebuild — 21. 8. nainstalován build shodný s repem (devicectl).
-- [ ] Pairing flow (ikona klíče v LIVE Connections) — nasazený, ale
-      neproklikaný na produkci.
+- [x] Pairing flow (AlphaTrade Status v LIVE Connections) — 1. 9. skutečně
+      proklikaný v produkci; deep-link otevře a zaměří kartu i v běžící PWA.
 - [x] Multi-follower DEMO test — 18. 8. potvrzen OCO/SL lifecycle na čtyřech
       Tradeify followerech a jednom Lucid followerovi; všichni skončili flat.
+- [ ] Incident 31. 8. „pending SL 29379 → 29391 se followerům nepropsal,
+      leader skončil flat a šest kopií zůstalo otevřených; Flatten fyzicky
+      zavřel, ale UI hlásilo unknown" — oprava všech tří příčin je lokálně
+      commitnutá jako `416e9042` a nainstalovaná v Mac workeru. Šest legacy
+      unknown bylo autoritativně uzavřeno read-only stavem. Kód není pushnutý
+      ani nasazený na Vercel; před dalším ARM chybí řízený DEMO conformance
+      test nové pending-SL/leader-flat cesty.
 - [ ] Incident 25. 8. „validní follower vstup okamžitě zploštěn“ — lokální
       kauzální oprava a deterministické regrese jsou hotové (zápis níže), ale
       před dalším LIVE ARM chybí explicitně schválený push, reinstall workeru
@@ -98,7 +139,859 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       prošel 18. 8.; kill uprostřed odesílání a výpadek WS zůstávají ověřené
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
-## Deník (nejnovější nahoře)
+## Deník
+
+### 2026-09-05 — Codex: verze výzkumných pravidel, odolnost výsledků a B16
+
+Rozšířil jsem Lab o skutečné revize pravidel, snapshot vazby session/trade a report konkrétní verze/účelu. Cíl i kvalita vzorku používají celé pozice; partial výstupy nezvyšují důkaz. Odolnost počítá citlivost bez top ziskových pozic/dní a blokový bootstrap. Lokálně byla připravena také oprava B16 legacy notes/receiver consent a atomický tag katalog; tag wrapper a strict paginated reader následně dokončené v47 a28 cílených testech. Hlavní integrace katalogu a browser ještě čekají.
+
+Root238 testů/14files, typecheck a build prošly; rule SQL15 invariantů. Browser ověřil změnu verze→failed save→retry bez ztráty/duplikace, oddělení development/validation a uloženou session vazbu. Neviděný OOS není zatím implementovaný. Podrobnosti: `docs/reviews/backtest-second-review-20260905/rule-robustness-validation.md`. Připravených migrací je nyní5; žádná vzdálená aktivace, push, deploy, broker nebo externí AI požadavek neproběhly. Aktivace nadále vyžaduje samostatnou zálohu a potvrzení. Celý48bodový cíl zůstává nedokončený.
+ (nejnovější nahoře)
+
+### 2026-09-05 — Codex: jednotlivé mobilní testy notifikací a instalace buildu 3
+
+- Uživatel nemohl posílat testy jednotlivě. Fyzický snímek prokázal tlačítka mimo viewport v min760px tabulce. Settings nyní pod640px zobrazuje osm samostatných karet, desktopovou tabulku zachovává a galerii22 schovává do sekundárního sbaleného detailu. Shared ref blokuje dvojklik a souběh s galerií.
+- Za uživatele byl spuštěn jediný lokální rich DEBUG test: iOS potvrdil konkrétní ID s jednou přílohou, doručený počet23→24 a zachování všech30 session připomínek. Předchozí uživatelské „ano“ bylo následně upřesněno jako galerie a není důkazem řízeného jednotlivého UI testu. Textová akce/Face ID/APNs ještě fyzicky neověřeny; Zrcadlení iPhonu systém odmítl jako nedostupné v regionu.
+- Skutečný JSX+nové CSS prošly vizuální kontrolou430px/1100px bez horizontálního přesahu; cílené handlery a syntax PASS, scoped lint0errors/5existing warnings, nezávislé review bez blockeru. Nový úplný tsc byl přerušen kvůli RAM, neprohlašuje se za PASS. Native build+scanner/copy, signed Xcode a codesign PASS. **1.0 (3) nainstalováno a spuštěno na telefonu.**
+- Canonical Settings integrován pod SHA stráží, ostatní rozpracovaný backtest a jeho výstupy zachovány; phone build vychází z předchozího otestovaného iOS snapshotu + této opravy. Bez simulatoru, produkčního deploye, migrace, klíčů a broker akcí. QA server/tab zavřeny. Důkazy: `docs/reviews/ios-20260905/FIXES.md`, `evidence/mobile-alert-fix.json`.
+
+
+### 2026-09-05 — Codex: rozhodovací deník a soukromé revize backtest poznámek
+
+- Navazuje na schválenou roadmapu. Přidán deník decisions/prep/note/bookmark/debrief, známý replay kontext, monotónní exposure horizon (legacy unknown), snapshot jednou, revize/opId a export; počty ručních pozorování nikdy nemění obchodní ledger/P&L.
+- Review má fázované poznámky s historií a hindsight. Nová historie jde přes připravenou owner-only tabulku/private_v1 RPC; veřejné trades.data ji neobsahuje. Missing capability zastaví save před uploadem. Coach aplikace dostává phase/revision provenance; vzdálené MCP hydration zatím chybí.
+- Browser odhalil/final check ověřil pause child replaye, snapshot time mismatch a ochranu draftu. Checkpoint ACK nyní používá mutation generation proti ztrátě změn při stejné milisekundě. Model40tests + notes29 + storage/privacy/Coach46 passed; PostgreSQL WASM11 invariants. Finální integrační156tests/10files, tsc a build passed; scoped lint0errors/11 starších warnings. Důkazy v `docs/reviews/backtest-second-review-20260905/research-validation.md`.
+- Nový otevřený B16/P1: původní notes mohou být dostupné v síťové odpovědi public/connection trades přes stávající grants/RLS. Nová private history tuto cestu nepoužívá; legacy serverovou mezeru klientský stripping neopravuje.
+- Migrace `20260905173116` a `20260905190446` nejsou aktivované; čeká souhlas se zálohou a cílenou DB změnou. Žádný push/deploy/broker akce/externí AI požadavek. Celá roadmapa zůstává aktivní a nedokončená.
+
+### 2026-09-05 — Codex: opravený iOS build 2 na fyzickém telefonu
+
+- Uživatel připojil iPhone pro pokračování fyzického ověření. Na iPhone 13 Pro Max / iOS 26.6.1 byla instalována aktualizace AlphaTrade **1.0 (2)**, bez odinstalování; systémový dotaz potvrdil nový build. Simulátor zůstal vypnutý.
+- Podepsané sestavení s jedinou úlohou a nízkou prioritou, hluboká kontrola podpisu, development APNs/App Group profily a shoda zabalených assetů: PASS. Build vychází z přesného 63souborového manifestu předchozích 19 iOS oprav. Novější rozpracované backtest úpravy zůstaly v repozitáři zachovány a nebyly míchány do otestovaného telefonního buildu.
+- Po odemčení uživatelem **spuštění PASS**: fyzický snímek ukazuje dashboard s existujícími daty a spodní navigací; stejný proces zůstal přítomen přibližně minutu po startu. Předchozí blokace `Locked` je vyřešená. Uživatel odpovědí „ano“ nejprve potvrdil doručení/otevření Deníku; následně upřesnil, že přišly všechny testy společně. Jde proto o report galerie, nikoli průkazný test jediného scénáře. Poznámková akce a serverové APNs tím ověřeny nejsou. Face ID a widgetové UI zatím neověřeny. Bez deploye, migrace, rotace klíčů a broker akcí.
+- Důkaz a navazující krátký postup: `docs/reviews/ios-20260905/FIXES.md`, `evidence/phone-install.json`. Provedený alert byl pouze lokální na tomto iPhonu; serverový test posílá na všechna zařízení uživatele a neověřuje nový outbox.
+
+
+### 2026-09-05 — Codex: implementace backtest oprav a první základ roadmapy
+
+- Po schválení „dobře, udělej to“ pokračuje celý plán 48 rozšíření. Přesný stav je v `docs/reviews/backtest-second-review-20260905/IMPLEMENTATION.md`; hotový je první lokální blok, nikoli celá roadmapa.
+- B01–B06: analýzy respektují odhalený čas replaye a postupně se doplňují přes trvalou frontu. Opravené pokrytí svíček, gapy, cutoff, slippage, MFE/MAE podle tehdejšího množství, meze nejistoty a čisté R. Lab i lokální MCP používají správný rizikový základ a počty vyřazených záznamů. Staré nedoložené cash metriky mají `legacy-unknown` a null.
+- B07–B11: atomické změny jednotlivých polí review a append galerie; šablony chrání vlastník a podmíněný zápis. App posílá skutečné změny s původními hodnotami a při chybě vrací pouze neúspěšná pole, včetně editoru spojených obchodů. Save, Load a Nová session mají společnou lokální knihovnu s výchozí šablonou, náhledem a návratovou kopií.
+- B12–B15: úplný JSON pro AI, validace vnořeného importu a povolených instrumentů, experimenty podle času výzkumného zápisu s pevnou výchozí skupinou. Explicitně neznámý recordedAt se při pozdějším uploadu nenahradí createdAt. Mapper dostává načtené HTF svíčky i při ručním přepočtu.
+- Základ F01/F03: uchování metadat úspěšných požadavků, SHA-256 manifest, popis exekuce a dialog kvality dat s JSON exportem omezeným na kurzor. Chybějící kalendář, kontrakt nebo revize feedu zůstávají neznámé.
+- Ověření: celý Vitest 256 souborů / 2133 testů prošel; po posledních změnách dalších 36 integračních testů, typecheck a Vite build. Scoped lint bez chyb. PGlite ověřil skutečný SQL v 10 scénářích. Browser QA potvrdilo vstup/výstup, časově omezený dopočet 14:03 → 14:04, Save/Load/obnovu a přehled kvality dat. Hlavní Dashboard a Lab se načetly; externí currencyService fetch selhal.
+- **Produkční podmínka:** migrace `20260905173116_backtest_review_atomic_patch.sql` je pouze lokální. Před aktivací je potřeba samostatná záloha a výslovný souhlas podle AGENTS; postup je v `DEPLOYMENT.md`. Bez RPC nové backtest ukládání hlásí nedostupnost bezpečného zápisu a zachová draft/frontu. Žádný deploy, push nebo broker akce neproběhly.
+- Další práce: verze výzkumných pravidel s vazbou na run/obchod, rozhodovací deník, fázované poznámky a historie odhalení OOS; potom ostatní priority roadmapy. Vedlejší agenti narazili na limit účtu, finální integraci a ověření převzal root.
+
+### 2026-09-05 — Codex: druhý backtest audit a návrh 48 rozšíření
+
+- Uživatel požádal o další kompletní kontrolu a precizní brainstorm. Tento průchod mění pouze dokumentaci/evidenci; nové aplikační opravy ani funkce nebyly implementované.
+- Canonical localhost:3001 read-only navigace; izolované syntetické QA:4184 ověřilo market entry/close, komise, lokální obnovení, poznámku a vlastní tag. Testovací server a tab uzavřeny, hlavní localhost ponechán na Backtest Lab.
+- Nové nálezy: prefetched budoucnost v journal analytics (browser cursor14:03, path až14:28), neúplná první hodina jako complete, scale-in MFE/MAE, odlišná CF exekuce gap/cutoff a ztracená nejistota, parametrické MC náklady/insolvence. Dále screenshot read failure, souběžný notes/tags JSON overwrite, legacy cleanup při auth/quota, Save→New Session kontrakt, cloud template race, neúplný AI export a dvě importní validační mezery. Lab experiment směšuje čas založení s historickým market timestampem. Podrobnosti/limity důkazu v reportu.
+- Validace: 127/127 existujících cílených testů (7 files), 10 diagnostických testů potvrzujících současné chyby, 3 skutečné-module/mock persistence skripty exit0. SHA-256 20 unikátních auditovaných zdrojů při finalizaci shodné. Žádný nový full build/full suite, produkční roundtrip dvou zařízení ani reálný AI/MCP požadavek.
+- Výstup: `docs/reviews/backtest-second-review-20260905/README.md`, `ROADMAP.md` (48 možností, priority, velikosti, akceptace), detailní nálezy a evidence. Priorita nejdřív zachování dat a správná analytika; poté příprava→rozhodnutí→review→verze experimentu, OOS a cílený AI trénink. Existující Lab/Monte Carlo/Coach se rozšiřují, neduplikují.
+- Aplikační, iOS/copier a jiné rozpracované soubory ostatních nebyly měněny. Žádný commit/push/deploy ani broker action.
+
+
+### 2026-09-05 — Codex: opravy 19 nálezů iOS review
+
+- Implementované opravy Face ID, mobilního logoutu, oddělení cache podle session, APNs registrace/akcí, časovačů a vlastnictví upozornění. Server má durable per-device outbox s retry/CAS a monotónní discovery hranicí; widgety/Live Activities rozlišují neověřená data a chrání identitu při logoutu. Profitabilní trailing SL zůstává viditelný.
+- Groq přesunut na autentizovaný serverový endpoint; nahrávka po chybě zůstává pro retry/export. Rebuilt lokální web/native assets procházejí kontrolou klíčů. Výměna již zveřejněného klíče stále vyžaduje produkční aktivaci.
+- Finální integrace zachovala další současné úpravy grafů/backtestu. PASS: 2 000 testů / 241 souborů, úplný TypeScript, lint bez chyb (33 warningů), web/native build, unsigned generic iOS kompilace App + widgetů, ios:doctor. SQL/RLS/CAS ověřené skutečným lokálním PostgreSQL/PGlite. Simulátor se znovu nespouštěl.
+- Před serverovým nasazením je NUTNÁ migrace `20260905155220_notification_delivery_outbox.sql`, samostatný export/záloha produkce a serverový `GROQ_API_KEY` s revokací starého klientského klíče. Nebyl push/deploy, vzdálená migrace, rotace tajemství, broker akce ani instalace na telefon. APNs end-to-end ověření vyžaduje nový podepsaný build na fyzickém iPhone.
+- Přehled a hranice ověření: `docs/reviews/ios-20260905/FIXES.md`; otisky a výsledky: `docs/reviews/ios-20260905/evidence/fix-validation.json`. Lokální návratové soubory v `/private/tmp/alphatrade-ios-fix-backup-20260905` nejsou zálohou živé databáze.
+
+### 2026-09-05 — backtest layouty, šablony, poznámky a vlastní tagy (Codex)
+
+- Po auditu opraveno zachycení posledního workspace při Close, StrictMode/cloud remount a lazy obnova kreseb. Uložit/Načíst/export/import nyní přenáší kompletní workspace snapshot s validací vstupu a pravdivým local/cloud stavem. Named kopie je lokální per-account/session, run se zároveň flushne svou cloudovou cestou.
+- Defaults vzhledu i cache šablon oddělené podle uživatele; serializovaný sync a tombstones brání ztrátě či návratu smazaných šablon. Nepřiřazené staré šablony se importují pouze explicitně. Position šablona zachová pointValue/tickSize cílového instrumentu; opraveny Fib/Position defaults.
+- Review má Vlastní tagy s nabídkou z uložených obchodů a HTF/LTF z nastavení. Auto konfluence mají explicitní provenance; přepočet nemaže ruční hodnocení. Same-ID refresh nemaže draft, save blokuje souběžné editace a chyby zachovají formulář. Coach dohledává aktuální poznámky a tagy ve správném live/backtest světě.
+- Ověřeno: fullsuite 1895 passed / 1 timing failure (renewal40ms; samostatně3/3passed), finální cílené49/49 + document11/11, full typecheck a Vite/PWA build, scoped lint0errors. Browser synteticky ověřil poznámky/tagy/recalc/retry a Close/Reopen i Save/Load kresby+indikátoru.
+- Žádný deploy/push/remote write/broker akce. Automatická kontrola odmítla nové automatické embedding odesílání i MCP předávání poznámek do ChatGPT bez konkrétního souhlasu; embeddingService/MCP zdroj beze změn. MCP zdroj má dál60s cache a30kJSON truncation, nasazená verze neověřena. Detaily: docs/reviews/backtest-layout-tags-20260905.md.
+
+
+### 2026-09-05 — Review hlavní iOS aplikace (Codex)
+
+Review současného Capacitor pracovního stromu je v
+`docs/reviews/ios-20260905/README.md`: 19 doložených nálezů (2 P1, 17 P2),
+podrobné dílčí reporty a reprodukční harnessy. Priority: Groq secret v již
+vytvořených native assets, neověřené ARM ve widgetu, ztracené/duplicitní
+notifikace, rušení timerů před doručením, remote akce, privacy cancel/resume,
+mobilní logout a konzistence lokální/remote Live Activity. Cache nález platí
+pro cold start; další focus/pull refresh má vlastní obnovu.
+
+Prošlo ios:doctor, kontrola existujícího native HTML, Swift simulator build
+a 152 cílených testů. Mock reprodukce běžely bez produkčních volání.
+Simulátor nástrojově potvrdil instalaci/launch, nikoli použitelný průchod UI.
+Uživatel jej vypnul kvůli zpomalení Macu; vlastní zbývající typecheck a nový
+native JS build byly zastaveny a nemají PASS. Přesný instalovaný iPhone build,
+APNs doručení a fyzické scénáře nebyly v tomto review ověřeny. Žádné opravy
+zdrojů, push test, deploy, instalace telefonu ani broker akce.
+
+
+
+### 2026-09-05 — Kompletní review backtestingu (Codex)
+
+Review aktuálního pracovního stromu je v `docs/reviews/backtest-20260905/README.md`
+včetně izolovaných reprodukcí a výstupů v `evidence/`. Nalezeno 17 technických
+chyb (6 P1, 11 P2) a dvě UI připomínky. Priorita: entry-bar SL/TP, opakované
+zpracování aktuální svíčky při market akci, Go To přes nenačtená data, spolehlivý
+zápis closed trade do deníku, konflikt cloud revizí a user-scoped IndexedDB.
+MFE/MAE, management a Monte Carlo mají další konkrétní nepřesnosti. Staré
+performance návrhy už jsou zčásti implementované; rozhodovat podle tohoto
+čerstvého review, nepřebírat starý audit jako seznam současných vad.
+
+Ověřeno v browseru na localhost:3001: session testovka, tři replay grafy,
+Go To nastavení, historie a detail obchodu. 343 cílených testů prošlo,
+typecheck prošel s 4GB heap (výchozí 2GB běh OOM), Vite/PWA build prošel
+do /private/tmp. Repro cloudových chyb používá mock transport, žádné produkční
+fault injection. Žádné opravy zdrojů, nové obchody, deploy ani broker akce.
+Rozsah dopadu chyb na existující sessions není rekonstruován.
+
+### 2026-09-02 (Codex, předem známý nezpůsobilý follower už neodzbrojí kopírku)
+
+Runner nyní vykazuje `account-ineligible` jako `skipped` pouze tehdy, když byl
+konkrétní follower už ve vstupním `context.ineligibleAccounts`. Risk gate ani
+globální halt logika se nezměnily a každý jiný `blocked`, stejně jako reject,
+unknown a rozbitá sekvence, zůstává kritický a fail-closed. Standardní,
+deferred, OCO i OSO controller větev používají jeden společný kritický filtr;
+duplicitní inline OCO/OSO filtry byly odstraněny. `leader-replace-unmapped`
+all-or-none dál vynechává pouze známé nezpůsobilé účty a jinak zůstává tvrdý
+`blocked`.
+
+Regrese pokrývají pokračující ARMED stav, prázdný `lastError`, nulový auto-close
+a žádný nový order pro DLL/BREACHED followera; OCO i OSO navíc prokazují, že
+následný reject zdravého followera skupinu stále odzbrojí. Zadaná sada prošla
+7/7 souborů a 217/217 testů; `npx tsc --noEmit -p .` prošel s 4GB Node heapem
+(výchozí přibližně 2GB běh skončil pouze OOM). Nic nebylo commitnuto, pushnuto,
+deploynuto ani spuštěno/reinstalováno; neproběhl broker příkaz, ARM ani Flatten.
+
+### 2026-09-02 (Claude, review incidentu „breached follower odzbrojil kopírku“)
+
+Ověření Codexovy diagnózy incidentu z 15:37/15:40 v kódu. Spouštěč souhlasí:
+Lucid účet byl `BREACHED`, risk gate ho správně vrátil jako `account-ineligible`
+a pět zdravých followerů dostalo OSO. Kořenová příčina je ale obecnější než
+„OSO cesta“: `isCriticalAuditEntry` v `copierRuntimeController.ts` považuje
+KAŽDÝ audit `kind: 'blocked'` za kritický a všechny čtyři cesty (standardní,
+deferred replay, bracket i OSO) mu předávají celý audit bez filtru. Předem
+známé vyřazení followera (`account-ineligible`) tak vyvolá `failClosed` stejně
+jako skutečné selhání. Reprodukováno na standardní cestě: stávající test
+„async DLL reject: 4 aktivní / 1 dll-locked … skupina jede dál“ po druhém
+leader vstupu ověřuje jen počty objednávek, ne `armed`; po dočasném doplnění
+aserce `status().armed === true` test padá (`armed: false`). Test má tedy díru
+a chování je shodné pro limit/market i OSO.
+
+Druhý důsledek: `failClosed` za živého ARM (bez transportLost/kill switche)
+volá `scheduleAutoClose('fail-closed')`, takže pouhé přeskočení breached účtu
+může zdravým followerům risk-redukčně zavřít právě otevřené kopie. To je horší
+než samotný DISARM a je to důvod, proč se incident opakuje při každém ARM se
+známým breached členem.
+
+Doporučená oprava (neimplementováno, jen review): blokace s důvodem
+`account-ineligible` pro follower účet, který je v `ineligibleAccounts` už při
+plánování, se má vykazovat jako `skipped` (nebo být z kritického filtru
+vyjmutá) ve všech čtyřech cestách; jakékoli jiné `blocked` (quantity-limit,
+symbol-not-allowed, divergence, halt) zůstává fail-closed. Doplnit regresi
+`armed` po skipu pro standardní i OSO cestu a scénář „ARM se známým breached
+followerem → dva leader vstupy → skupina zůstává ARMED, breached účet bez
+objednávky“. Kód, účty ani broker se při tomto review neměnily.
+
+### 2026-09-01 (Codex, AlphaTrade Status build 4 — bez modrého focus ringu)
+
+Systémový modrý focus ring na rozbalené sekci `DISARMED` byl odstraněn přes
+availability-gated SwiftUI `focusEffectDisabled()` (macOS 14+). Sekce zůstává
+nativní `Button`, takže kliknutí, animace, VoiceOver i klávesová focus
+sémantika zůstaly zachované; deployment target macOS 13 se nezvýšil. Release
+build 0.2.0 (4) pro arm64 prošel sestavením a strict codesign kontrolou a byl
+nainstalován do `/Users/filipkrejca/Applications/AlphaTrade Status.app`.
+Předchozí build 3 a LaunchAgent plist jsou v návratové záloze
+`mac-install-before-0.2-build4-2026-09-01-153247` uvnitř produkčního backup
+balíčku. Build 4 běží; plist automatického spuštění zůstal na místě a není
+disabled, ale okamžitý re-bootstrap této relace launchd odmítl oprávněním
+volajícího Codexu. Při příštím přihlášení jej má načíst macOS. Copier worker,
+broker ani ARM/DISARM stav se neměnily. Samostatný produkční regres status API
+(404 po pozdějším deployi) tímto čistě vizuálním buildem řešen nebyl.
+
+### 2026-09-01 (Codex + uživatel, produkční aktivace read-only companionu)
+
+Po výslovném souhlasu uživatele byla před změnou ověřena aktuální fyzická
+Supabase záloha a vytvořen lokální návratový balíček v
+`/Users/filipkrejca/Documents/AlphaTrade-backups/2026-09-01-121202-before-mac-companion-prod`.
+Additivní migrace `20260901101932_mac_companion_devices_v1` byla aplikována na
+projekt `kopinlpdvjfgmvxydohk`. Tabulka je server-only: RLS je zapnuté bez
+browser policies, `anon`/`authenticated` nemají práva a skutečné souběžné testy
+potvrdily atomické per-IP i globální limity. Testovací řádky byly uklizeny.
+
+První webový kandidát byl omylem sestaven lokálně přes `--prebuilt`, takže nový
+frontend neměl produkční `VITE_SUPABASE_*`. Hlavní doména byla okamžitě vrácena
+na známý zdravý deployment `dpl_7vSAKC4PaGwbF4h5LkA9qAiDjojY`; žádná databázová
+nebo brokerová změna z tohoto vadného bundle nevznikla. Opravený source build
+`dpl_CAJCKx5JcYXm89u9C6UTBmnS1y9Z` byl nejdřív ověřen jako staging a potom
+promován na `https://alphatrade-mentor-15.vercel.app`. Nový jednorázový marker
+`?open=mac-companion-pairing` přežije login, počká na autoritativní owner roli,
+otevře LIVE/Connections, posune a zaměří párovací formulář a po použití se z URL
+odstraní. Zůstává kompatibilní se starým odkazem a `launch_handler` řeší už
+otevřenou PWA. Čistý i přihlášený produkční browser tento tok potvrdily.
+
+Uživatel skutečně potvrdil pairing zařízení `MacBook Air`. Server po potvrzení
+vymazal pairing hash i expiraci, aktivní credential má pouze scope
+`copier.status.read` a `/api/mac-companion/status` od té doby opakovaně vrací
+HTTP 200. Žádný nový pending kód po aktualizaci nevznikl. Reálnou revokaci jsme
+záměrně neprovedli, aby funkční zařízení zůstalo připojené; endpoint i UI jsou
+kryté automatickými testy.
+
+Finální nativní `AlphaTrade Status` 0.2.0 build 3 byl arm64 Release, ad-hoc
+podepsán s hardened runtime a přesně dvěma oprávněními: App Sandbox a odchozí
+síť. Nainstalovaný executable má SHA-256
+`28727706a37856c33320b6419daa33664bf9e4607ce8ae27f881c8fd4f18fca7`.
+Předchozí build 2 i LaunchAgent jsou v návratovém balíčku. LaunchAgent nyní
+spouští build 3 z `/Users/filipkrejca/Applications/AlphaTrade Status.app`, bez
+fixture nebo secretu v prostředí; kontrolní `kickstart -k` změnil PID a aplikace
+po restartu dál načetla stejné párování z Keychainu. Databázové `last_used_at`
+i nové produkční status requesty 200 to potvrzují.
+
+Přesná kanonická web/server sada prošla 13 soubory / 56 testy, TypeScript a
+cílený lint s 0 chybami. Při nativním běhu prošlo 30/32 funkčních testů; dvě
+renderovací aserce původně selhaly pouze kvůli sandboxovanému zápisu testovacího
+PNG do `/tmp`, proto test harness používá cache adresář uživatele. Izolovaný
+retry obou dotčených sad se sestavil, ale Xcode zůstal na `waiting for workers
+to materialize` a byl ohraničeně ukončen ještě před spuštěním assertions (0
+skutečných test failures); produkční proces zůstal nedotčený. Žádný broker
+write, ARM, Flatten, worker reinstall ani zásah do copier runtime neproběhl.
+
+### 2026-09-01 (Codex, lokální read-only companion 0.2 — produkce HOLD)
+
+Po uživatelově výslovném schválení byla lokálně dokončena druhá verze
+`AlphaTrade Status`: AppKit `NSStatusItem` + animovaný `NSPopover`, světlý i
+tmavý vzhled, serverem korigovaný 10/90s freshness reducer, HTTPS klient s
+pevným AlphaTrade hostem, Keychain credential, jednorázový pairing a revokace.
+PWA má v LIVE Connections kartu pro potvrzení kódu, přejmenování a revokaci
+Maců. Nové `/api/mac-companion/status` čte jen cloudové runtime tabulky; nemá
+Tradovate/fetch/broker/command cestu a současnou expozici poctivě vrací jako
+neověřenou. Scope je pevně `copier.status.read`; databáze ukládá jen SHA-256
+digesty. Veřejný pairing start má atomický Postgres limit 10/10 min na HMAC IP
+bucket a 120/10 min globálně, se server-only RLS/granty a bounded cleanupem.
+
+Safety review doplnilo fail-closed zacházení s neplatnými runtime poli,
+neúplným follower ack, neověřenými working orders a probuzením Macu: po wake se
+před síťovým refreshem okamžitě zahodí časová důvěra, takže staré zelené LIVE
+nemůže přežít nefunkční síť. Cílená web/server sada prošla 12 soubory / 52
+testy, TypeScript a cílený lint jsou čisté; nativní sada prošla 29/29 XCTest a
+Release buildem. PWA karta i menu/popover prošly lokální vizuální kontrolou.
+
+**Nic nebylo nasazeno ani aplikováno na produkční databázi.** Kandidát 0.2
+nebyl spuštěn ani nainstalován, stávající mock 0.1 a jeho LaunchAgent zůstaly
+beze změny, stejně jako broker, worker a copier runtime. Před produkčním krokem
+je závazná záloha a další explicitní souhlas; lokální SQL test nenahrazuje
+skutečný souběžný test rate limitu a E2E pairing/revokace po migraci.
+
+### 2026-09-01 (Codex, trvalá instalace mock menu-bar companionu)
+
+Po uživatelově samostatném výslovném souhlasu byl mock-only prototyp
+`AlphaTrade Status` 0.1.0 sestaven v Release pro arm64, lokálně ad-hoc podepsán
+s hardened runtime a nainstalován do
+`/Users/filipkrejca/Applications/AlphaTrade Status.app`. `LSUIElement=true`
+zachovává provoz pouze v horní liště. Nainstalovaný executable má SHA-256
+`6b709d32f03b77c94cb7c40fb7ad2ff98ba39da2cc3965066a8b9b847108cfda` a
+`codesign --verify --deep --strict` prošel.
+
+Autostart zajišťuje uživatelský LaunchAgent
+`app.alphatrade.status.autostart` v `~/Library/LaunchAgents`; `RunAtLoad`
+spouští nainstalovaný executable v Aqua session s deterministickou fixture
+`live`. Kontrolní `kickstart -k` změnil PID a druhá instance zůstala ve stavu
+`running`, takže byl ověřen restart z trvalé cesty. Komponentová a renderovací
+sada znovu prošla **16/16**.
+
+Toto schválení se týkalo jen lokálního mock prototypu. Neproběhlo napojení na
+status endpoint, pairing, Keychain, Developer ID distribuce, síťové volání,
+Vercel deploy, broker příkaz, ARM/Flatten ani zásah do copier workeru.
+
+### 2026-09-01 (Codex, instalace incidentní opravy a stavové uzavření legacy Flatten)
+
+Po ukončení uživatelova obchodu čerstvá read-only reconciliation potvrdila
+`armed=false`, všech sedm účtů flat, žádné working orders/divergence a
+`lastError=null`; jediným blockerem zůstalo šest `manual-flatten` položek ve
+stavu `unknown`. Incidentní změny byly bez konfliktu složeny nad aktuálním
+`origin/main` `7932c6ae`, aby reinstall zachoval opravený persistentní worker
+lifecycle. Výsledkem je lokální větev `codex/incident-20260901-worker-fix` a
+commit `416e9042`. Cílená sada prošla 14 soubory / 313 testy; plná sada 203
+soubory / 1705 testy. TypeScript, lint s 0 errors, produkční Vite/PWA build,
+samostatný Node worker bundle a `git diff --check` prošly.
+
+Mac LaunchAgent byl po uživatelově výslovném pokynu reinstalován se stejným
+leaderem `62364553`, šesti followery a `--service-lifetime persistent`.
+Nainstalovaný bundle má SHA-256
+`4fdb3bbe756f0faf0615abdb53671a2fffb4fd7a34b91c74704f90c45681f8bd`, přesně
+shodný s předem ověřeným bundlem. Restart recovery všech šest starých položek
+uzavřel jako `confirmed-by-state` z důkazu `flat-no-active`, `netQuantity=0`,
+`workingOrders=0`, `causality=not-proven`; neposlal lookup retry ani nový
+liquidation POST. Závěrečná reconciliation potvrdila `connected=true`,
+`armed=false`, `groupFlat=true`, `reconciliationRequired=false`, prázdný stuck
+outbox, žádné working orders/divergence a `lastError=null`.
+
+Neproběhl ARM, Flatten ani jiný broker write a nebyl proveden Vercel deploy ani
+push. TradingView snapshot health zůstal samostatně `cdp-offline`; execution
+neblokuje. Před dalším ostrým ARM stále chybí řízený DEMO conformance důkaz
+nové pending-SL propagace a leader-flat guardu.
+
+### 2026-09-01 (Codex, skutečný NSStatusItem + animovaný popover)
+
+Uživatelská kontrola potvrdila limit `MenuBarExtra`: SwiftUI label měnil část
+vzhledu, ale systém samostatně cacheoval obal a při kliknutí kreslil druhý
+vnější highlight. Negativní padding proto nemohl zaručit jediný pill ani
+spolehlivou změnu light/dark po startu v opačném režimu.
+
+App shell byl přepojen na skutečný `NSStatusItem` řízený AppKit delegate.
+Barevný stav je teď pozadí přímo `NSStatusBarButton`, jeho content má nativní
+3pt inset a výsledný button přesně `28 pt`; vestavěné `highlightsBy` a
+`showsStateBy` jsou vypnuté, takže kliknutí už nemá přidat druhou pilulku.
+KVO na `NSApplication.effectiveAppearance` podle doporučení AppKit překreslí
+současně background i text/logo a přenese nový appearance také do otevřeného
+`NSPopover`. Light podklad je pale emerald složený nad `#fafafc`, dark podklad
+nad `#121624`.
+
+Popover se při každém otevření vytvoří s novým SwiftUI rootem a má jemný
+180ms nástup (`scale 0.985 → 1`, `opacity 0.94 → 1`, `y -4 → 0`) společně
+s nativní NSPopover animací. První frame zůstává z 94 % viditelný, takže ani
+při selhání lifecycle callbacku nevznikne prázdný panel; Reduce Motion pohyb
+vypne. Komponentová/renderovací sada prošla **16/16** a kontroluje jediný
+system-sized button, zakázaný highlight, rozdílné light/dark barvy i layout
+produkční entrance wrapper cesty. Běží právě jedna čerstvá lokální LIVE fixture
+instance. Neproběhl deploy, podpis, instalace, síťové volání, broker příkaz ani
+změna workeru.
+
+### 2026-08-31 (Codex, systémový menu-bar pill a dynamický vzhled)
+
+Další kontrola na skutečné liště ukázala dvě nativní odchylky, které samotný
+Claude HTML mock nemohl zachytit: `MenuBarExtra` přidává kolem labelu vlastní
+3pt content inset, takže 22pt artwork vypadal při systémovém highlightu jako
+„pill v pillu“, a natvrdo zapečený light podklad nereagoval na změnu vzhledu.
+Artwork má proto nově 28pt vnější systémový tvar s radiusem 7 pt; SwiftUI
+label záporným 3pt insetem vyplní přesně status button a vlastní i macOS
+highlight se při kliknutí překryjí. Logo a text uvnitř zachovávají původní
+17pt / 12pt / 6pt rozměry.
+
+Label čte aktuální `colorScheme` a pro každý render volí samostatnou light/dark
+paletu z Claude mockupů. Light emerald `16 %` je složený nad `#fafafc`, aby
+zůstal skutečně světlý i nad barevným wallpaperem; dark emerald `22 %` je
+složený nad `#121624` a používá text `#a7f3d0`. Stejná pravidla platí pro
+SHADOW, warning a danger. Komponentová a renderovací sada prošla **16/16**
+a explicitně porovnává light/dark výstup i finální velikost po započtení
+systémového insetu. Běží právě jedna čerstvá lokální LIVE fixture instance;
+žádný deploy, síťové volání, broker příkaz ani změna workeru neproběhly.
+
+### 2026-08-31 (Codex, přesná korekce LIVE pillu podle Claude mockupu)
+
+Uživatelský screenshot odhalil, že první trvale viditelná varianta sice vyřešila
+mizení podkladu, ale nebyla vizuálně věrná: AppKit kreslil logo v převrácené
+souřadné soustavě, LIVE výplň míchal 22 % emerald s tmavým panelem, přidával
+neexistující obrys a používal 11pt mono-black písmo. Artwork nyní přebírá
+světlé tokeny přímo z `MenuBarLight.dc.html`: pill 22 pt, radius 5 pt, logo
+17 pt, mezera 6 pt, horizontální padding 7 pt, nativní SF Pro 12 semibold,
+text `#047857`, emerald 16 % nad světlým menu-bar podkladem a bez obrysu či
+stínu. Logo respektuje flipped AppKit kontext a celý label je na skutečné
+liště posunutý o 1 pt nahoru. Pale emerald se zapeče do non-template obrazu,
+aby barvu znovu nezměnil wallpaper-tinted macOS menu bar.
+
+Komponentová a renderovací sada prošla **16/16**; kontroluje rozměry, světlý
+emerald kontejner i všech 18 popover PNG. Stará Debug instance byla ukončena
+a spuštěn nový lokální LIVE fixture build. Neproběhl deploy, podpis, instalace,
+autostart, síťové volání, broker příkaz ani zásah do copier workeru.
+
+### 2026-08-31 (Codex, oprava skutečného menu-bar runtime po uživatelské kontrole)
+
+Uživatel při kontrole skutečné lišty viděl obří AT logo a po otevření prázdný
+panel. Předchozí závěr z offscreen PNG renderů byl nedostatečný: všechny render
+testy obcházely produkční `onAppear` větev parametrem `animateOnAppear:false`.
+Současně zůstala v systému běžet stará Debug instance z 19:33, zatímco novější
+bundle vznikl až později; rebuild běžící `LSUIElement` proces sám nenahradí.
+
+Kód je nyní fail-visible i v prvním frame. Celokořenový `opacity(0)` / scale /
+offset gate byl odstraněn; rozbalovací animace zůstaly lokální. Pro horní lištu
+vznikl samostatný AppKit obraz se skutečnou logickou velikostí přibližně
+`21,64 × 17 pt`, explicitním SwiftUI frame v obou osách a zachovanými barvami
+čistého skleněného loga. Nativní `NSStatusBarButton` regresní test hlídá, že se
+intrinsic velikost původního PNG `112 × 88 pt` už nemůže propsat do lišty.
+
+Vznikl také samostatný `AlphaTradeStatusUITests` target: má přes reálný
+Accessibility strom najít status item, ověřit jeho frame, otevřít panel,
+zkontrolovat LIVE obsah a tlačítko, rozbalit Bezpečnost, zavřít a znovu otevřít
+panel a přiložit screenshoty. Target i `build-for-testing` prošly. Runtime UI
+test ale na tomto hostu nebyl proveden: Xcode nevytvořil test worker a zůstal
+čekat na `waiting for workers to materialize`; běh byl po 144 s ukončen bez
+spuštěné assertion. Tento stav se výslovně **nepočítá jako PASS**.
+
+Komponentová sada po opravě prošla **15/15** a znovu vytvořila všech 18 light/
+dark PNG. Stará instance byla přesně ukončena a běží jediný čerstvý Debug build
+z opraveného stromu. Neproběhl deploy, podpis, instalace, autostart, síťové
+volání, broker příkaz, ARM, Flatten ani změna workeru; fáze 2/3 zůstávají HOLD.
+
+Následná uživatelská kontrola skutečného buildu potvrdila správnou velikost
+ikony i kompletní obsah panelu; poslední rozdíl proti mockupu byl příliš slabý
+LIVE podklad v liště. První oprava přes SwiftUI background nefungovala: uživatel
+ověřil, že zelená byla vidět jen během kliknutí, tedy jako systémový selected
+stav. Finální label proto není složený SwiftUI layout; logo, neprůhledná zelená
+výplň, stroke a `LIVE 42m` jsou zapečené do jediného barevného, non-template
+`NSImage` o výšce 22 pt. macOS tak nemůže klidový podklad zahodit. Pixelová
+regrese kontroluje přímo tento nativní artwork a komponentová sada zůstává
+**16/16**. Unit a nativní UI testy jsou oddělené do schémat `AlphaTradeStatus`
+a `AlphaTradeStatusUI`, aby blokovaný UI runner nebránil běžným testům.
+Uživatel následně screenshotem v 21:39 fyzicky potvrdil, že zelený zaoblený
+LIVE kontejner zůstává viditelný i v neaktivním stavu bez kliknutí.
+
+### 2026-08-31 (Codex, AlphaTrade Status fáze 1 — nativní mock prototyp)
+
+Vznikla izolovaná macOS aplikace `macos/AlphaTradeStatus`: skutečný SwiftUI
+`MenuBarExtra` ve window stylu, `LSUIElement` bez ikony v Docku a bez hlavního
+okna. Vzhled převádí Claude mockupy do nativních komponent a drží jejich
+hranatější karty, světlý režim, emerald CTA a čisté skleněné AT logo. Sekce jsou
+interaktivně rozbalovací, respektují Reduce Motion a problémový blok se ve
+výchozím stavu otevře sám.
+
+Prototyp má devět deterministických fixture stavů: LIVE, LIVE bez dostupného
+follower acku, SHADOW, DISARMED flat, DISARMED s expozicí, DISARMED bez
+ověření, VYŽADUJE ZÁSAH, STAV NEZNÁMÝ a WORKER OFFLINE. Doménová prezentace
+záměrně nesmí vyrobit nepravdivé `N/N`, tvrdit flat bez čerstvého ověření ani
+překrýt problém starou poslední známou hodnotou. SHADOW jasně říká, že nic
+neodeslalo; freshness je oddělená od safety stavu.
+
+**Safety hranice:** fáze 1 používá jen lokální mock data. Aplikace nemá síťové
+entitlementy ani implementaci pro API, Supabase, Tradovate, auth, pairing,
+Keychain, ServiceManagement, ARM nebo Flatten. Odkazy pouze otevírají existující
+PWA; refresh animuje lokální mock. Diagnostika kopíruje allowlistovaný text bez
+account aliasů a secretů. V panelu je trvale viditelné označení „FÁZE 1 ·
+UKÁZKOVÁ DATA“, takže render nelze vydávat za živý stav.
+
+**Ověření:** Debug i Release build prošly, celé XCTest schéma prošlo **14/14**.
+Testy pokrývají všech devět fixtures, stale precedence, flat/ack invariants,
+bezpečný diagnostický text, URL a light/dark layout; render test vytvořil 18 PNG
+náhledů (každý stav ve světlém i tmavém režimu). Nesignovaný Debug build byl
+lokálně spuštěn a zůstal stabilně běžet jako menu-bar-only proces. Neproběhl
+commit, deploy, podpis, instalace, autostart, síťové volání, broker příkaz, ARM,
+Flatten ani změna workeru. Fáze 2 a 3 zůstávají HOLD podle otevřené otázky výše.
+
+### 2026-08-31 (Codex, lokální oprava fatálního SL / leader-flat / Flatten incidentu — NENASAZENO)
+
+Forenzní časová osa z broker/worker logů (lokální čas diagnostiky
+Europe/Prague) potvrdila tři samostatné chyby. V 15:37:46 vznikl leader SL
+29379 a šest follower bracketů také na 29379. V 15:37:55 se stejný čekající
+leader SL posunul na 29391, ale copier neposlal followerům ani jeden Modify.
+V 15:38:44 vstoupil leader i všech šest followerů za 29404; leader ochrana
+pracovala na 29391, všech šest follower SL zůstalo brokerem potvrzených na
+29379. V 15:39:12 leader SL vyplnil 5 kontraktů průměrně 29390,5. Follower
+SL proto neměly důvod fillnout (ležely o 12 bodů níž); copier zrušil follower
+TP, ale otevřené follower pozice nezavřel. Ruční Flatten v 15:40:30 fyzicky
+zavřel všech šest kopií za 29427,50–29427,75. UI přesto ukázalo chybu a šest
+durable položek zůstalo `unknown`, protože odpověď `liquidateposition`
+neobsahovala `orderId`.
+
+**1. Pending/pre-link SL/TP lifecycle je opravený.** Event source nyní sleduje
+execution shape (typ/cena) odděleně od plného venue shape: cenový/type replace
+emituje i ve stavu Pending/Suspended, zatímco čistý venue-managed quantity
+resize ochranné nohy zůstává šum. Když replace přijde před vznikem follower
+linku, OSO/bracket korelátor přepíše čekající execution shape; samostatný
+čekající entry převezme i uživatelsky změněnou quantity, protective child si
+naopak drží venue quantity. Po vzniku linků se execution replace provede jen
+all-or-none pro všechny způsobilé followery. Přesný nový shape lze potvrdit
+ve stavu Pending/Suspended i Working a potvrzený modify aktualizuje durable
+link v běžné i restart recovery cestě. Přesná regrese incidentu ověřuje
+SL `29379 → 29391` na všech followerech ještě před entry fillem.
+
+**2. Leader open → flat je nově durable post-condition celé copy epochy.**
+`LeaderFlatGuard` zachytí při otevření pouze způsobilé followery a posiluje
+ownership jen čerstvým, přesným broker `orderId` copier-issued fillu; historický
+link stejného účtu/symbolu nestačí. Quantity ownership je strop a nesmí se
+pozdější same-sign změnou rozšířit. Po leader flat následuje grace a jeden
+autoritativní batch `positions + orders`; stale working SL se nepovažuje za
+probíhající exit. Copier DISARMuje a podle policy smí zavřít pouze prokázaný
+orphan target `{accountId, symbol}` nativním liquidation endpointem. Nikdy
+account-wide, nikdy Market fallback. Copier-issued exit nebo unknown/sending
+liquidation stejné epochy blokuje druhý exit. Pozdní Fill po dřívějším
+Position=0 doplní exit lineage bez zneplatnění generation tokenu. Restart a
+reconnect obnoví jen durable epochu; orphan bez opening ownership je
+detect-only + DISARM a **žádný broker write**. Kill switch auto-close zakazuje.
+
+**3. Flatten se potvrzuje stavem, ne existencí `orderId`.** Nativní
+`liquidatePosition` má vlastní výsledek `already-flat | submitted | rejected |
+indeterminate`; HTTP úspěch bez orderId znamená jen „přijato ke stavovému
+ověření". Úspěch je až přesný důkaz `position → orders → position` = flat a
+žádný aktivní příkaz. Outbox končí `confirmed-by-state` s evidencí a netvrdí
+kauzalitu konkrétního POSTu. Stejné nejasné operationId se nikdy neposílá
+znovu. Restart umí nové i šest legacy `manual-flatten:*` unknown položky
+uzavřít pouze read-only snapshotem, bez tag lookupu, POSTu nebo blind retry.
+Ruční Flatten dál funguje i při DISARM, kill switchi a jiném stuck outboxu;
+symbolově cílenou variantu používá LeaderFlatGuard.
+
+**Ověření:** související sada 14 files / 300 tests prošla; celý projekt
+202 files / **1673/1673 tests** prošel. TypeScript prošel s 4GB Node heapem,
+task-scoped ESLint i `git diff --check` jsou čisté, plný lint skončil 0 chybami
+(353 starších warningů) a lokální produkční Vite/PWA build prošel. Mezi
+regresemi je policy-off detect-only, follower flat během grace, restart bez
+opening epochy bez write, unknown liquidation bez retry, opačné pořadí
+Position=0 → Fill, částečný batch a přesné zachování jiného NQ symbolu/SL na
+stejném follower účtu.
+
+**Hranice oprávnění:** neproběhl žádný broker příkaz, ARM, Flatten, deploy,
+push ani restart/reinstall workeru. Běžící worker bundle se tímto zápisem
+nezměnil a oprava proto zatím není LIVE. Copier musí zůstat vypnutý, dokud
+nebude samostatně schválený a dokončený push/deploy + reinstall stejného
+commitu, následný read-only reconcile a řízený DEMO conformance důkaz.
+
+### 2026-08-31 (Claude, potvrzení příčin incidentu „ztracený SL modify před fillem")
+Živý DEMO incident (15:37–15:40 CT): uživatel posunul SL čekajícího leader
+příkazu z 29379 na 29391 PŘED entry fillem; copier změnu followerům neposlal.
+Leader vystoupil na SL 29390,5, šest followerů zůstalo otevřených se starým SL
+29379 a bez TP (copier je zrušil); uživatel je zavřel ručním Flatten
+(29427,50–29427,75). Codex diagnózu určil z logů, Claude ji potvrdil v kódu —
+tři samostatné díry:
+1. **Ztracený modify v pending stavu** — `copierLeaderEventSource.orderEvent`
+   ukládá signature/shape do cache VŽDY (řádky 74–77), ale u `pending` statusu
+   emituje event jen při prvním spatření; komentář mylně předpokládá, že změny
+   v pending jsou „venue tranzice, nikdy replace". Při přechodu do `working` už
+   `previousShape === shape` (cache má novou cenu), takže `replaced` nevznikne.
+2. **Chybí kontrola followerů při flat leadera** — `verifyPendingFollowerTransition`
+   se spouští jen z follower transition; když leader zplatní přes SL a follower
+   fill nepřijde (jeho SL je jinde), žádná kontrola neběží a stav „leader flat,
+   followeři open" projde bez detekce.
+3. **Flatten `unknown` kvůli chybějícímu orderId** — `liquidatePosition` sdílí
+   `fromPlaceOrderResult` (tradovateMapping.ts:99), který bez `orderId` vrací
+   nedefinitivní výsledek → `markUnknown`; Tradovate ale `liquidateposition`
+   dokumentuje jako žádost bez garance, potvrzení musí přijít z autoritativního
+   position snapshotu, ne z odpovědi na příkaz.
+Ověřený stav po incidentu: všech 6 účtů flat, žádné working orders, copier
+DISARMED, v outboxu 6 `unknown` Flatten záznamů. **Copier se NESMÍ zapnout,
+dokud běžící worker bundle (build 30. 8.) nedostane opravu všech tří bodů.**
+Nic se zatím neopravovalo — jen potvrzení diagnózy v kódu.
+
+### 2026-08-31 (Claude + uživatel, návrh macOS menu-bar companionu „AlphaTrade Status")
+Revize dřívějšího zamítnutí menu-bar aplikace: zamítnutí platilo pro kokpit
+svázaný s dočasným Mac workerem; nová varianta je čistě read-only klient
+CLOUDOVÉHO stavu (vzor `/api/native-widget-snapshot`), takže přežije přesun
+na VPS beze změny — proto dává smysl. Vznikl kompletní interaktivní vizuální
+návrh (tmavý + světlý režim, 5 stavů ikony, 4 stavy popoveru s rozbalovacími
+sekcemi a animacemi) a předávací specifikace pro implementaci Codexem:
+`docs/MENUBAR_COMPANION_SPEC_20260831.md`; zdrojové mockupy
+v `mockups/menubar-companion/`. Klíčová rozhodnutí: stav ARM přejmenován na
+zelené LIVE (slovo ARM se v UI nepoužívá); stará data vždy přebijí poslední
+známý stav (STAV NEZNÁMÝ ≠ staré DISARMED); followeři se agregují (20/20)
+a jednotlivě se vypisuje jen selhavší účet; panel je read-only vynucený
+serverovým token scope (`copier.status.read`), žádné ovládání copieru.
+Nic se neimplementovalo — jen návrh a specifikace.
+
+Doplněk téhož dne: Codex udělal review specifikace (GO jen pro vizuální
+fázi) a Claude zapracoval **v1.1**: závazný freshness model sladěný s relay
+(≤10 s ověřeno / 10–90 s NEZNÁMÝ / >90 s WORKER OFFLINE; žádná 30min zelená),
+zákaz pollování `/api/native-widget-snapshot` (drahý broker snapshot) →
+nový levný `/api/mac-companion/status` + broker ověření jen na otevření
+panelu, verzovaný allowlist DTO s poctivými limity (followerAck může být
+null — dnešní runtime neumí per-follower ack; „flat" jen z `verifiedAt`,
+ne z groupFlat), Mac pairing s vlastním scope a revokací (iOS widget flow
+nelze převzít — vázaný na iOS bundle), doplněný SHADOW popover do mockupů
+a kontrastní korekce světlého režimu. Otevřené body pro uživatele: barva
+primárního tlačítka (emerald vs. indigo) a čitelnost skleněného loga na
+světlé liště.
+
+### 2026-08-31 (Claude + Codex, tříkolové review návrhu „PropShield" — ADR a opravené invarianty)
+Codex navrhl bezpečnostní funkci PropShield (per-follower risk admission, durable
+risk reservation, stav PROTECTED, „no SL no copy", Stop Sovereignty, Safety Receipt,
+Prop Rule Passport). Claude na to pustil adversariální review, Codex napsal
+protikritiku, Claude sporné body ověřil v kódu. Výsledek je
+`docs/COPIER_PROPSHIELD_REVIEW_20260831.md`. **Nic se neimplementovalo, žádné volání
+broker API neproběhlo.** Sem jen to, co mění rozhodování.
+
+**Policy gate rozhoduje dřív než technika.** Tradeify Funded Trader Agreement §6.6
+zakazuje použití stejného bota/alga napříč firmami a Help Center uvádí, že skenují
+podobné objednávky napříč účty a mohou požadovat video se spuštěním kódu na vlastním
+PC. Kopírování mezi vlastními Tradeify účty je naopak výslovně povolené. Lucid
+copiery povoluje, ale zakazuje hedging i mezi vlastními účty a napříč korelovanými
+produkty. **Cross-firm fan-out Tradeify + Lucid je proto policy-blocked do písemného
+potvrzení od Tradeify.** Neuzavřená nuance: zda AlphaTrade s ručním leaderem vůbec
+spadá pod „bot/algo" dle §6.6.
+
+**Jedna skutečná runtime díra, dvě technické cesty.** Pending Limit/Stop s JEDNOU
+ochrannou nohou je chráněný (`oso-lone-leg`, controller:1798), ale se ŽÁDNOU nohou
+propadne do `processor.process()` a zkopíruje se. Market OSO okno obchází úplně —
+`isEntryType` v `copierOsoCorrelator.ts:47` zná jen Limit/Stop/StopLimit.
+`copierBracketCorrelator.prune()` navíc entry kandidáta bez legu tiše zahodí.
+Invariant je jeden (žádný entry bez známého ochranného plánu), opravy jsou dvě.
+MVP: pending jen jako ověřené nativní OSO, Market bez plánu blokovat, podmínkou je
+SL (TP až jako přísnější „Full Bracket Mode"), a první verze pouze alarmuje a
+DISARMuje — nic nepřepisuje ani nevymýšlí.
+
+**Katalog prop plánů: 35 presetů, ale všech 35 je `evaluation`** (funded účty
+nepokryté) a `drawdownType` není jednotný — 27× `eod_trailing`, 8× `trailing`.
+Právě tahle veličina určuje, jestli je rezerva nad floorem během dne statická, nebo
+pohyblivý cíl; každý výpočet dostupného risku na ní stojí. `verifiedAt` je jedna
+hardcoded konstanta pro všechny a nikdo ji nečte. Rozhodnutí: passport jako data
+ano, `verifiedAt` jako blokující západka NE (brána, která trestá za neaktualizovanou
+vlastní dokumentaci, se vypne při prvním výskytu).
+
+**Dvě dřívější tvrzení Clauda byla ověřena jako NEPLATNÁ a jsou opravená v ADR:**
+(1) „zombie worker může odeslat order, který nebude v outboxu" — persist je
+write-ahead, `copierRunner.ts:1611` předchází `:1620`, takže objednávka zůstane jako
+`sending` a dohledá se; skutečný problém je pozdní broker write po takeoveru a hard
+fencing vyžaduje gateway. (2) „žádná větev nesmí sáhnout na SL, dokud neexistuje
+regrese incidentu 27. 8." — ta regrese existuje:
+`tests/copierReviewRegressions.test.ts:583` (partial fill 6→11, sekvence
+`suspended-6` → `working-11`). Správné pravidlo je proto užší: nikdy autonomně
+neoslabit ani nezrušit platný SL, ale risk-redukující zásahy a prokazatelně doložené
+leader lifecycle změny zůstávají povolené.
+
+**Závazné invarianty z ADR:** admitted quantity musí být autoritou pro entry, SL, TP,
+partial filly, modify, scale-in, exit i reconciliation — bez durable admission
+ledgeru se REDUCED nesmí zapnout vůbec (jinak zmenšené entry s nezmenšeným SL otočí
+followera do nechráněné opačné pozice, protože ochranné nohy se dnes sizují z leadera
+— `copierRunner.ts:739`, `:1008`); `maxContracts` zůstává poslední fail-closed brána a
+nikdy nevstupuje do `min()`, protože započítává i cizí pozice, a je tak zároveň
+detektor cizí aktivity na účtu; ledger smí být jen druhá, přísnější podmínka vedle
+`trunc(leader × multiplier)`, nikdy jeho náhrada (test
+`copierRuntimeController.test.ts:438` se nemaže); protection proof je negativní alarm,
+žádná zelená; žádné nové synchronní broker cally na horké cestě (cap už dnes dělá
+10 callů na vstup při pěti followerech, limit je 5 000/h a při 429 neprojde ani
+emergency flatten); zamítnuto „všichni bezpeční, nebo žádný vstup" — eval účet by
+dostal právo veta nad funded účtem.
+
+**Dohodnuté pořadí:** ADR → zero-leg oprava (pending a Market zvlášť) → shadow Safety
+Receipt + admitted-exposure ledger → read-only capability matice (jen po výslovném
+schválení; jeden GET nerozhodne, `changesLocked:false` nedokazuje právo na update a
+AutoLiq je post-trade, ne pre-trade cap) → jeden VPS worker v DEMO → gateway před HA.
+Mimo pořadí a zadarmo: multipliery podle poměru `maxLoss` — `multiplier` je durable a
+reconciler už dnes očekává `trunc(leader × multiplier)`, takže asymetrické velikosti
+nativně podporuje.
+
+
+### 2026-08-28 (Codex, spolehlivé ENTRY/EXIT snímky z layoutu `AlphaTrade Snapshoty`)
+Copier už nefotí první náhodný TradingView target. ENTRY a EXIT používají pouze
+vyhrazený layout s uloženým `chartId`; při capture jej srovnají na jeden panel,
+provedou `chartReset`, dynamický bar spacing, 28% místo vpravo, skryjí plovoucí
+lištu a oříznou výsledek na graf. Symbol a timeframe nemění — přebírá je
+TradingView synchronizace mezi pracovním layoutem a layoutem
+`AlphaTrade Snapshoty`, takže zůstávají kresby, levely a position box. Když
+vyhrazená karta chybí, snímek se raději nepořídí; pracovní graf se nikdy
+nepoužije jako tichý fallback.
+
+Mac instalátor nově zapíná bezpečný auto-start TradingView s CDP pouze tehdy,
+když aplikace neběží. Už spuštěné TradingView bez portu 9222 worker nikdy
+násilně neukončuje ani nerestartuje. Lehký 30s health probe se propisuje do
+statusu workera a LIVE UI rozlišuje připraveno, CDP offline, chybějící layout,
+capture chybu a upload chybu včetně času posledního úspěchu. Diagnostika je
+oddělená od controlleru a nijak neblokuje broker execution.
+
+Journal master nově uchovává stabilní `copierEpisodeId`, takže pozdě nahraný
+ENTRY/EXIT obrázek se při dalším syncu doplní k existujícímu obchodu bez
+duplikace a bez přepsání reflexe. Starší mastery za 30 dní dostanou jednorázový
+backfill vazby z ledgeru. Obrázkový APNs follow-up už není závislý na tom, zda
+původní event ještě zůstal ve volatilním `recentCopyEvents`; při jeho absenci
+odešle bezpečný obecný text. Privátní Storage bucket, podepsané URL a existující
+RLS zůstaly beze změny; nevznikla žádná migrace ani produkční DB operace.
+
+Ověření: cíleně 6 souborů / 58 testů, celkem 199 souborů / 1603 testů,
+TypeScript, produkční Vite/PWA build, samostatný esbuild Mac workeru a
+`git diff --check` prošly. ESLint změněných souborů má 0 errors (jen existující
+warningy ve `storageService` a dva ignorované worker skripty).
+
+Po následném explicitním schválení uživatele byl Mac worker z kanonického
+checkoutu přebalen a LaunchAgent restartován se stejným leaderem, šesti
+followery a multipliery. TradingView bylo po potvrzení uloženého stavu jednou
+ukončeno a worker je automaticky spustil s CDP na `127.0.0.1:9222`. Živá UI
+kontrola ukázala, že správný layout se jmenuje `AlphaTrade Snapshoty` a má
+stabilní `chartId=JLtpkCHq`; po otevření jeho karty worker sám obnovil nový
+session `targetId`. Lokální capture bez uploadu vytvořil čistý PNG o 560 104 B
+v `/tmp/alphatrade-tv-snapshot-test.png`; vizuálně je v něm jeden MNQ 1m graf,
+kresby/levely, dynamické svíčky a místo vpravo. Finální status: CDP i target
+ready, broker socket read-only connected, runtime `armed=false`,
+`reconciliationRequired=true`, kill switch false a bez chyby. Nebyl odeslán
+žádný broker write, ARM ani Flatten; testovací PNG nešel do Storage,
+notifikací ani journalu. Kód nebyl commitnut, pushnut ani nasazen a produkční
+DB/RLS se neměnily.
+
+### 2026-08-28 (Codex, cloudová knihovna kopírovacích skupin)
+Lokálně je připravena per-user synchronizace všech uložených copy-group profilů
+přes novou Supabase tabulku `copy_groups`; web i zabalená aplikace používají
+uživatelsky oddělený `localStorage` jen jako rychlou cache. Prázdný cloud nikdy
+automaticky nepřevezme náhodná stará data zařízení: UI nabídne explicitní
+jednorázový import lokální knihovny, poté je cloud autoritativní a při návratu
+do popředí se znovu načte. Databáze i klient vynucují `enabled=false` a
+odstraňují `localOnly`; skutečný ARMED stav a jediná aktivní execution skupina
+zůstávají výhradně na copier workeru. RLS dovoluje CRUD pouze vlastníkovi.
+Cloudové profily se při live refreshi zachovají, i když právě neběží, a chyba
+cloudového zápisu po úspěšném runtime příkazu nesmí vrátit UI do nepravdivého
+starého stavu. TypeScript, cílený lint, 198 test souborů / 1593 testů a
+produkční build prošly. Před databázovou změnou byla přes CLI ověřena poslední
+fyzická záloha `COMPLETED` z 27. 8. 22:14 UTC (Supabase drží 7 denních bodů).
+Obě verzované migrace byly aplikovány: tabulka je prázdná, má zapnuté RLS a
+čtyři vlastnické CRUD politiky. Nový nepotřebný index hlášený performance
+advisorem byl následnou migrací odstraněn; opakovaný security i performance
+advisor nemá pro `copy_groups` žádný nález. Aplikace zatím nebyla pushnuta ani
+nasazena a zabalená iOS aplikace nebyla přestavěna.
+
+### 2026-08-28 (Codex, odstranění vodopádu při prvním otevření LIVE)
+První otevření LIVE po reloadu už nestahuje 171kB lazy bundle až po kliknutí:
+po dokončení úvodního dashboardu se modul přednačte na pozadí. Čerstvý OAuth
+status, profily a bootstrap známých read-only připojení se nyní spouštějí
+souběžně; cached shell slouží pouze k předstartování ID a žádná brokerová data
+se nezobrazí, dokud připojení nepotvrdí aktuální status. Každý úspěšný
+preflight se promítne samostatně, takže rychlá prop firma už nečeká na
+nejpomalejší připojení ani na profily/onboarding. Historický backfill se posunul
+z 1,5 s na 5 s po ustálení flat snapshotu, aby nebral request budget prvnímu
+renderu. Copier runtime ani polling živých pozic se neměnily. Nové
+deterministické testy kryjí reuse předstartu, průběžné vykreslení a odmítnutí
+nepotvrzeného cached ID; přesný čistý commit prošel 195 soubory / 1575 testy,
+typecheckem a produkčním buildem, lint změněných souborů je bez chyb. Commit
+`58dbc35c` byl pushnut na `main`; Vercel deployment
+`dpl_3taLRxQwh4cxCh6xCpQJMKgNimBa` skončil READY a produkční alias na něj míří.
+Zabalená iOS aplikace zůstala beze změny.
+
+### 2026-08-28 (Codex, aktualizace zabalené iOS aplikace na produkční commit)
+iOS Capacitor aplikace nepoužívá vzdálenou `server.url`; spouští lokální
+`dist-native` bundle uvnitř instalace. Samotný Vercel push proto web v telefonu
+neaktualizuje. Z přesného `origin/main` commitu `e5ed71d3` byl v odděleném
+dočasném worktree vytvořen a ověřen nový native bundle (`npm run ios:sync`),
+podepsán Debug device build včetně widget a notification extensions a přes
+`devicectl` nainstalován přes existující `app.alphatrade.native` do připojeného
+iPhonu 13 Pro Max. Podpis prošel `codesign --verify --deep --strict` a aplikace
+byla po instalaci úspěšně spuštěna. Do copier runtime nebylo zasaženo a žádný
+brokerový příkaz nebyl odeslán. Budoucí webové změny dál vyžadují nový native
+bundle a instalaci/TestFlight build, dokud se vědomě nezmění architektura
+na vzdáleně načítaný produkční web.
+
+### 2026-08-28 (Codex, fresh-only dvoufázový start LIVE dashboardu)
+Studený start LIVE po reloadu už nečeká na celý Tradovate preflight. UI ihned
+vykreslí strukturální skeleton bez starých broker hodnot a serverový bootstrap
+načte jen čerstvé účty, pozice, příkazy, jejich kontrakty a cash balance
+snapshoty. Fill/fee historie, cash ledger, risk detail a osmivteřinový report
+capability probe se doplní druhým plným preflightem na pozadí. Pro jeden účet
+má bootstrap šest read-only broker requestů; denní P&L zůstane do doplnění
+ledgeru jako pomlčka, nikdy jako falešná nula. Copier přepínač je během této
+krátké neúplné fáze pending a eligibility se neinferuje z chybějícího denního
+ledgeru. Návrat v rámci SPA dál použije okamžitě poslední potvrzený in-memory
+snapshot a do bootstrap režimu se nepřepíná.
+
+Více OAuth/prop připojení se načítá přes `allSettled`: chyba jednoho už
+nezahodí úspěšný snapshot druhého. Plný snapshot se neukládá do
+sessionStorage, takže nevznikají synchronní zápisy při 1s P&L ticku ani riziko
+tichého zobrazení starých pozic. Copier runtime, polling intervaly a brokerové
+write endpointy se nezměnily; při implementaci nebyl broker kontaktován.
+Ověření: 195 test souborů / 1585 testů, TypeScript, produkční Vite/PWA build a
+`git diff --check` čisté; lint změněných souborů 0 errors (1 existující hook
+warning). Produkční subset byl následně oddělen od rozpracovaných copier změn,
+ověřen v čistém worktree (194 souborů / 1572 testů, TypeScript a build),
+commitnut jako `e5ed71d3` a pushnut na `main`. Vercel deployment
+`dpl_E1mFQX3xLm6BQXDE7ReTQ7XX9jeY` je `READY`; hlavní alias vrací HTTP 200,
+neautentizovaný bootstrap preflight správně 401 a desetiminutový error scan je
+prázdný. Mac copier worker nebyl měněn ani reinstalován.
+
+### 2026-08-27 (Codex, reálný probe Tradovate quote WebSocket oprávnění)
+Krátký read-only probe přes oba existující spárované Mac device lease otevřel
+produkční i legacy DEMO market-data WebSocket, autorizoval OAuth token a zkusil
+`md/subscribeQuote` pro aktuální `MNQU6`. U obou připojení a obou hostů
+autorizace socketu prošla, ale samotný odběr quote skončil `401`; nepřišla
+žádná `md` událost. REST `marketDataSubscription/list` současně vrátil `200`
+a aktivní platformní subscriptions (4 a 3), takže problém není absence běžných
+dat v Tradovate UI, ale oddělené API/non-display quote oprávnění současných
+prop OAuth tokenů. Oficiální OAuth response ukládá pouze `access_token`;
+samostatný `mdAccessToken` je dokumentovaný u přímého API-key přihlášení, ne
+v našem OAuth response.
+
+Probe je uložený v `scripts/market-data/quoteAccessProbe.ts` pro opakování po
+změně oprávnění. Nevypisuje tokeny ani ceny a posílá pouze authorize,
+subscribeQuote a best-effort unsubscribeQuote. Nebyl použit žádný order
+endpoint, copier runtime se nezměnil a žádná objednávka nevznikla. Přihlášené
+webové rozhraní bylo prop prostředí a nezpřístupnilo osobní `Application
+Settings → API Access`; oprávnění retail API klíče placeného účtu proto zatím
+není ověřené. TypeScript, lint probe skriptu a `git diff --check` jsou čisté.
+
+Následná kontrola v osobním Tradovate účtu odhalila u používaného OAuth klíče
+`Market Data: Denied`. Po explicitním schválení uživatele bylo změněno pouze
+na `Read only`; UI potvrdilo úspěšné uložení. Nový probe tím odstranil vnější
+`401`, ale odpověď subscription obsahuje `mode: None` a `UnknownSymbol`, takže
+reálný odběr nevznikne. Stejný výsledek vrací název `MNQU6` i jeho číselné
+contract ID, oba prop OAuth lease a oba market-data hosty. Aktivní platformní
+subscriptions tedy nestačí pro API/non-display entitlement; žádný quote paket
+nepřišel. Probe nově správně nepovažuje status `200` s vloženou chybou za
+úspěšné přihlášení a posílá klientský heartbeat každých 2,5 s. Nebyl použit
+žádný order endpoint a žádná objednávka nevznikla.
+
+### 2026-08-27 (Codex, bezplatný 1s mezitick LIVE ceny/P&L)
+LIVE karta při otevřené NQ/MNQ pozici nově střídá autoritativní 2s
+position/order tick s levným 1s balance-only mezitikem. Mezitick udělá na
+každé připojení nejvýše jeden read-only
+`cashBalance/getcashbalancesnapshot`; brokerovo `openPnL` použije jako kotvu
+jen pro účet s právě jednou odpovídající otevřenou pozicí a z ní dopočítá
+mark a P&L dalších účtů na stejném kontraktu podle jejich vlastní vstupní
+ceny. Pozice a objednávky dál mění pouze plný 2s tick. Nejednoznačné pozice,
+nepodporovaný kontrakt, skrytá záložka a HTTP 429 zůstávají fail-safe; flat
+režim zůstává na 5 s. Řešení nepotřebuje další market-data předplatné, ale
+není tick-by-tick burzovní feed.
+
+Copier runtime ani jeho příkazy se nezměnily a Tradovate/broker nebyl při
+implementaci kontaktován. Ověření: cíleně 13/13 live-P&L testů, celkem
+195 souborů / 1583 testů, TypeScript a `git diff --check` čisté, lint změněných
+souborů 0 errors (1 pre-existing hook warning), produkční Vite/PWA build
+prošel. Změny byly spolu s fresh-only bootstrapem nasazeny v produkčním
+commitu `e5ed71d3`; produkční chování proti reálnému DEMO snapshotu zatím
+nebylo interaktivně ověřeno.
+
+### 2026-08-27 (Codex, oprava hloubkového review copieru — race, drift a recovery)
+Nálezy z `docs/REVIEW_COPIER_FINDINGS_20260827.md` jsou lokálně opravené bez
+brokerového side effectu. Všechny reconciliation call-sites sdílejí jednu
+frontu a monotónní safety generation; starší clean snapshot proto nemůže
+přepsat novější kill switch, incident ani reconnect invalidaci. Automatická
+reconciliation už nemaže `lastError`; odstranit starou chybu smí jen čistá,
+explicitní uživatelská Kontrola pozic stejné generace. Kill-switch race má
+deterministickou regresi včetně zachování důvodu a blokovaného ARM.
+
+Terminal-fill recovery pokračuje jen po prokazatelně úspěšném auto-flattenu
+a jen když KAŽDÁ kritická položka dávky je tentýž abandoned/filled modify.
+Selhání flattenu zachová FAIL-CLOSED a nikdy nevydá `recovered`. Same-sign
+follower drift se po krátkém kauzálním okně ověřuje čerstvým leader/follower
+broker snapshotem proti přesnému multiplieru; persistentní `2 → 5` odzbrojí,
+označí divergenci a nic automaticky neobchoduje, zatímco legitimní follower
+scale-in event před leader position eventem zůstává bez falešného poplachu.
+DISARMED bracket/OSO anomálie dál nevyrábějí falešný incident, ale vždy
+zneplatní ARM preflight a vynutí novou reconciliation.
+
+Další opravy: `armExpiryFlatten: off` už nevypíná povinnou read-only reconnect
+reconciliation; flat recovery má audit; nekompletní bracket po timeru uvolní
+`awaitingPair`; všechny relativní statické importy v `server/**` mají `.js`
+a globální ESM regrese brání návratu extensionless importu. DISARMED invalidace
+preflightu má vlastní neduplicitní notifikační hranu a mrtvý, nikde
+neimportovaný `components/LiveDesk.tsx` byl odstraněn; aktivní LIVE zůstává
+`components/TradovateLiveDesk.tsx`. Ověření: 46 copier test souborů / 538 testů
+a celkem 195 souborů / 1579 testů čistě, TypeScript
+čistý, globální lint 0 errors (353 pre-existing warnings), produkční Vite/PWA
+build a `git diff --check` čisté. Nic nebylo commitnuto, pushnuto, nasazeno ani
+nainstalováno do Mac workeru; runtime/broker nebyl kontaktován a neproběhl ARM
+ani Flatten. Před LIVE dál platí explicitní schválení push + reinstall stejného
+commitu + řízený DEMO test.
+
+### 2026-08-27 (Claude, hloubkové review incident fixů z 27. 8. — nálezy před dalším LIVE ARM)
+Read-only review commitů `de93fd3a`→`cf316f37` (4 paralelní průchody + vlastní
+verifikace; 1566/1566 testů a typecheck čisté, žádný brokerový side effect).
+Plný report: `docs/REVIEW_COPIER_FINDINGS_20260827.md`. Klíčové nálezy:
+(1) CRITICAL — `performReconciliation` po čisté kontrole bezpodmínečně maže
+`lastError` (nové v `cf316f37`); souběžný `engageKillSwitch` tak může přijít
+o svůj důvod ve `status()` a tři volací body reconciliace nesdílí zámek.
+(2) HIGH — plošné `lastError = null` umlčuje hranovou push notifikaci
+i watchdog dřív, než incident zachytí. (3) HIGH — po `6d0caefb` není same-sign
+navýšení follower pozice při leaderovi v pozici detekováno ničím do příští
+(neperiodické) reconciliace. (4) HIGH — `if (gate.armed)` guardy v DISARMED
+ztratily eskalaci (žádný `lastError`/push) a nevynucují `positionCheckComplete
+= false`. Dále: `shadowMode: true` v reconciliaci je mrtvý kód, komentář „ARM
+pokračuje po resyncu" neodpovídá chování (resync vždy DISARMuje — řádek 2524
+z 17. 8.), dva extensionless ESM importy zbývají v `server/`. Doporučení:
+opravit 1–4 před push/reinstalací workeru a dalším LIVE ARM. Nezávislá
+oponentura (Opus, týž den) všechny nálezy potvrdila a zpřesnila: CRITICAL je
+jen race souběžných reconciliací (starší clean běh přepíše novější špinavý
+stav → ARM nad divergencí); smazání důvodu kill switche je „jen" auditní
+chyba (západka drží). Sjednocený návrh opravy = monotónní incidentGeneration
++ jediný in-flight běh reconciliace + mazání pouze chyby vlastní epizody;
+D.2 řešit kauzálním oknem s broker snapshotem, ne slepým fail-closed
+(scale-in ordering). Shoda: DEMO/LIVE ARM no-go do oprav. Detaily v dodatku
+reportu. Konkurenční
+průzkum (v reportu): fail-closed/DISARMED default a durable outbox nemá žádný
+konkurent; bracket sync na Tradovate je slabina celé kategorie — doložené
+breache účtů u PickMyTrade/TradeSyncer kvůli tichým výpadkům.
 
 ### 2026-08-27 (Codex, falešný FAIL-CLOSED po pravidelném socket reconnectu)
 V `13:09:14Z` pravidelná obnova Tradovate socketu znovu přehrála dvě staré
@@ -2011,3 +2904,11 @@ Nativní `/order/placeoco` a `/order/placeoso` + durable outboxy + bracket
 correlator (Tradovate posílá nohy 200–330 ms od sebe, někdy bez vazeb).
 Attached ATM detekován a správně fail-closed. Mac runtime: launchd,
 Keychain, device pairing, Supabase command relay. p95 162–269 ms.
+
+
+## 2026-09-05 — Opravy kompletního review backtestingu
+
+- Opraveny nálezy 1–17 a obě UI připomínky: kauzální market/limit/stop a SL/TP exekuce, partial/scale-in/reversal identita, MFE/MAE dolní meze, Monte Carlo ruin; souvislý Go To/denní krok a historie po reopen; durable journal outbox, izolace uživatele, CAS konflikty a viditelný retry.
+- Přenos z izolovaného snapshotu s porovnáním původních bajtů; rozpracované změny copieru zachovány. Žádný push, deploy, DB migrace ani broker akce.
+- Ověření: kompletní 221 souborů / 1 834 testů passed; finální cílené 26 souborů / 330 testů passed; typecheck 4 GB a standardní produkční build passed; browser market/partial/final/pending-limit, denní krok+výpadek/retry, reopen bez duplicit. Podrobnosti: docs/reviews/backtest-20260905/FIXES.md.
+- Po přenosu do hlavního adresáře: 330/330 cílených testů passed, typecheck exit 0, diff --check exit 0, localhost:3001 spuštěn a Dashboard načten.

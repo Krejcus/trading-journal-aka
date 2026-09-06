@@ -1,9 +1,11 @@
 import type { Drawing, DrawingEngine, DrawingStyle, DrawingToolId } from '@getcandlekit/charts';
 import {
   CHART_APPEARANCE_STORAGE_KEYS,
+  inheritGlobalAppearance,
   onChartAppearanceScopeReset,
   readChartAppearance,
   writeChartAppearance,
+  writeGlobalChartAppearance,
 } from './chartAppearanceScope';
 
 const STORAGE_KEY = CHART_APPEARANCE_STORAGE_KEYS.drawingStyleDefaults;
@@ -76,11 +78,9 @@ const isRecord = (value: unknown): value is DrawingStyleDefaults => (
 // backtest session se do nich neplete.
 const readDefaults = (storage?: StorageLike | null): DrawingStyleDefaults => {
   if (storage === undefined) {
-    const scoped = readChartAppearance('drawingStyleDefaults');
-    if (isRecord(scoped)) {
-      memoryDefaults = scoped;
-      return memoryDefaults;
-    }
+    const persisted = readChartAppearance('drawingStyleDefaults') ?? inheritGlobalAppearance('drawingStyleDefaults');
+    memoryDefaults = isRecord(persisted) ? persisted : {};
+    return memoryDefaults;
   }
   const target = resolveStorage(storage);
   if (!target) return memoryDefaults;
@@ -96,7 +96,10 @@ const readDefaults = (storage?: StorageLike | null): DrawingStyleDefaults => {
 
 const writeDefaults = (defaults: DrawingStyleDefaults, storage?: StorageLike | null) => {
   memoryDefaults = defaults;
-  if (storage === undefined && writeChartAppearance('drawingStyleDefaults', defaults)) return;
+  if (storage === undefined) {
+    if (!writeChartAppearance('drawingStyleDefaults', defaults)) writeGlobalChartAppearance('drawingStyleDefaults', defaults);
+    return;
+  }
   try { resolveStorage(storage)?.setItem(STORAGE_KEY, JSON.stringify(defaults)); } catch { /* private storage */ }
 };
 

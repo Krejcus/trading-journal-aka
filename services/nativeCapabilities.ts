@@ -44,6 +44,10 @@ export interface NativeLiveActivityPayload {
   isPositive: boolean;
   progress: number;
   alert?: boolean;
+  /** Marks the safe automatic fallback; it must not replace server content. */
+  automatic?: boolean;
+  updatedAtMs?: number;
+  validUntilMs?: number;
 }
 
 export interface NativeCalendarEventPayload {
@@ -81,13 +85,13 @@ interface AlphaTradeNativePlugin {
   setKeepAwakeEnabled(options: { enabled: boolean }): Promise<NativeKeepAwakeState>;
   startDictation(): Promise<{ text: string }>;
   stopDictation(): Promise<{ recording: boolean }>;
-  getPrivacyState(): Promise<{ enabled: boolean }>;
+  getPrivacyState(): Promise<{ enabled: boolean; generation?: number }>;
   setPrivacyEnabled(options: { enabled: boolean }): Promise<{ enabled: boolean }>;
   lockPrivacy(): Promise<void>;
   getLiveActivityState(): Promise<NativeLiveActivityState>;
   startLiveActivity(options: NativeLiveActivityPayload): Promise<NativeLiveActivityState>;
   updateLiveActivity(options: NativeLiveActivityPayload): Promise<NativeLiveActivityState>;
-  endLiveActivity(): Promise<NativeLiveActivityState>;
+  endLiveActivity(options?: { automatic?: boolean }): Promise<NativeLiveActivityState>;
   presentCalendarEvent(options: NativeCalendarEventPayload): Promise<NativeCalendarEventResult>;
 }
 
@@ -103,6 +107,12 @@ export async function authenticateNativePrivacy(): Promise<boolean> {
     reason: 'Odemknout finanční data v AlphaTrade',
   });
   return result.success;
+}
+
+export async function getNativePrivacyState(): Promise<{ enabled: boolean; generation: number }> {
+  assertNativeBuild();
+  const state = await AlphaTradeNative.getPrivacyState();
+  return { enabled: state.enabled, generation: state.generation ?? 0 };
 }
 
 export async function getNativePrivacyEnabled(): Promise<boolean> {
@@ -135,9 +145,9 @@ export async function updateNativeLiveActivity(payload: NativeLiveActivityPayloa
   return AlphaTradeNative.updateLiveActivity(payload);
 }
 
-export async function endNativeLiveActivity(): Promise<NativeLiveActivityState> {
+export async function endNativeLiveActivity(options?: { automatic?: boolean }): Promise<NativeLiveActivityState> {
   assertNativeBuild();
-  return AlphaTradeNative.endLiveActivity();
+  return options ? AlphaTradeNative.endLiveActivity(options) : AlphaTradeNative.endLiveActivity();
 }
 
 export async function presentNativeCalendarEvent(payload: NativeCalendarEventPayload): Promise<NativeCalendarEventResult> {

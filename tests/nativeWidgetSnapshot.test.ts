@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   buildNativeJournalWidgetState,
   buildNativeLiveWidgetState,
+  nativeLiveActivityFallbackPayload,
+  planNativeLiveActivityFallback,
+  type NativeWidgetLiveState,
 } from '../services/nativeWidgetSnapshot';
 import type { Account, Trade } from '../types';
 
@@ -20,6 +23,32 @@ const trade = (overrides: Partial<Trade>): Trade => ({
 });
 
 describe('native widget snapshot', () => {
+  const fallbackState = (overrides: Partial<NativeWidgetLiveState> = {}): NativeWidgetLiveState => ({
+    ...buildNativeLiveWidgetState({ accounts: [], profiles: [], controller: null, followerCount: 0, now: 1_000_000 }),
+    armed: true, status: 'ARM LIVE', connected: true, workerObservedAt: 1_000_000, workerValidUntil: 1_090_000,
+    brokerUpdatedAt: 1_000_000, brokerValidUntil: 2_800_000, positionsAvailable: true, ordersAvailable: true,
+    openPositionCount: 1, realizedPnl: 250, openPnl: 100, totalPnl: 350, realizedPnlAvailable: true, openPnlAvailable: true,
+    ...overrides,
+  });
+
+  it('local fallback uses the same open-only position P&L as the remote activity', () => {
+    expect(nativeLiveActivityFallbackPayload(fallbackState(), 1_000_000)).toMatchObject({
+      automatic: true, pnlText: '+$100.00', validUntilMs: 1_090_000,
+    });
+    expect(nativeLiveActivityFallbackPayload(fallbackState({ openPnlAvailable: false }), 1_000_000)).toMatchObject({ pnlText: '+$250.00' });
+    expect(nativeLiveActivityFallbackPayload(fallbackState({ openPnlAvailable: false, realizedPnlAvailable: false }), 1_000_000).pnlText).toBe('—');
+  });
+
+  it('does not renew worker health from a fresh broker response', () => {
+    const payload = nativeLiveActivityFallbackPayload(fallbackState({ workerValidUntil: 999_999 }), 1_000_000);
+    expect(payload.status).toBe('STAV NEOVĚŘEN');
+    expect(payload.validUntilMs).toBeLessThan(1_000_000);
+  });
+
+  it('preserves pending entries and refuses to end on partial exposure coverage', () => {
+    expect(planNativeLiveActivityFallback(fallbackState({ armed: false, openPositionCount: 0, workingOrderCount: 1 }), 1_000_000).shouldBeActive).toBe(true);
+    expect(planNativeLiveActivityFallback(fallbackState({ armed: false, openPositionCount: 0, ordersAvailable: false }), 1_000_000).canEnd).toBe(false);
+  });
   it('staví journal widget pouze ze skutečných live účtů a dnešních obchodů', () => {
     const state = buildNativeJournalWidgetState({
       now: new Date(2026, 7, 20, 12),

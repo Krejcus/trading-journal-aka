@@ -1,11 +1,16 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import BacktestResearchPanel from './BacktestResearchPanel';
+import { appendBacktestResearch, captureBacktestResearchContext, reviseBacktestResearch, type BacktestResearchDraft } from '../services/backtestResearchJournal';
+import BacktestEvidenceDialog from './BacktestEvidenceDialog';
+import { buildBacktestStoreEvidence } from '../services/backtestStoreEvidence';
+import { backtestResearchRecordedAt } from '../services/backtestResearchClock';
+import { planBacktestAnalyticsRefresh, type BacktestAnalyticsRefreshCandidate } from '../services/backtestAnalyticsRefresh';
+import { buildBacktestTradeRecalculationUpdates } from '../services/backtestTradeRecalculation';
+import type { BacktestTagSuggestions } from '../services/backtestTagCatalog';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 import type { Trade } from '../types';
 import AlphaTradeChartWorkspace, { type BacktestChartSessionBridge, type MarketRoot } from './AlphaTradeChartWorkspace';
 import {
-  completedHistoricalCandles,
-  loadMarketCandles,
-  resolveMarketSymbol,
   type MarketCandle,
   type MarketDataSchema,
 } from '../services/marketData';
@@ -14,29 +19,32 @@ import {
   clearPendingBacktestOrderBracket,
   createBacktestOrder,
   enqueueBacktestOrder,
-  processBacktestCandle,
+  executeBacktestMarketOrder,
   processBacktestCandles,
   updatePendingBacktestOrder,
   updatePositionBracket,
 } from '../services/backtestEngine';
+import { createBacktestCandleStore } from '../services/backtestCandleStore';
 import { backtestClosedTradeToTrade } from '../services/backtestIntel';
-import { createBacktestContextSource } from '../services/backtestEntryContext';
 import {
   createBacktestLedgerCursor,
+  getBacktestCloudRevision,
+  BacktestRunConflictError,
+  BacktestRunSyncError,
+  withBacktestCloudRevision,
+  loadBacktestRunFromCloud,
   saveBacktestRunLocal,
   syncBacktestRunToCloud,
 } from '../services/backtestRunService';
 import type {
-  BacktestInstrument,
   BacktestOrderType,
   BacktestRun,
   BacktestRuntimeState,
   BacktestWorkspaceState,
 } from '../services/backtestTypes';
 import {
-  closeChartAppearanceScope,
+  createChartAppearanceSession,
   inheritGlobalAppearance,
-  openChartAppearanceScope,
 } from '../services/chartAppearanceScope';
 import type { ChartReplayState } from '../services/chartReplay';
 import { backtestQuickOrderLabel, createBacktestQuickOrderDraft } from '../services/backtestQuickOrder';
@@ -67,15 +75,6 @@ const CLOUD_SYNC_INTERVAL_MS = 60_000;
 const RUNTIME_RENDER_INTERVAL_MS = 500;
 /** Trailing doběh po tiché sérii kroků — poslední stav vždy dorazí. */
 const RUNTIME_RENDER_TRAILING_MS = 180;
-// Deep context is requested in the native provider resolution needed by the
-// panel. Intraday charts stay on bounded 1m chunks; HTF charts can jump a year
-// at a time with hourly bars instead of downloading and aggregating hundreds
-// of thousands of minutes in the browser.
-const HISTORY_SEGMENT_MS: Record<MarketDataSchema, number> = {
-  'ohlcv-1m': 7 * 24 * 60 * 60 * 1_000,
-  'ohlcv-1h': 365 * 24 * 60 * 60 * 1_000,
-};
-
 type HistoricalCandlesByRoot = Partial<Record<MarketRoot, Partial<Record<MarketDataSchema, MarketCandle[]>>>>;
 
 /** První index svíčky s časem > `time` (pole je seřazené podle času). */
@@ -90,62 +89,93 @@ const candleIndexAfter = (candles: MarketCandle[], time: number): number => {
   return low;
 };
 
-const mergeCandles = (current: MarketCandle[], incoming: MarketCandle[]) => {
-  const byTime = new Map(current.map(candle => [candle.time, candle]));
-  incoming.forEach(candle => byTime.set(candle.time, candle));
-  return [...byTime.values()].sort((left, right) => left.time - right.time);
-};
 
 interface Props {
   run: BacktestRun;
   isDark: boolean;
   onClose: (run: BacktestRun) => void;
-  onTradeClosed?: (trade: Trade) => void;
+  onTradeClosed?: (trade: Trade) => Promise<void>;
+  onTradeAnalyticsRefresh?: (candidates: BacktestAnalyticsRefreshCandidate[]) => Promise<void>;
+  analyticsSyncState?: { pending: number; error?: string | null };
+  journalSyncState?: { pending: number; error?: string | null };
   journalTrades?: Trade[];
-  onTradeReviewSave?: (tradeId: string, updates: Partial<Trade>, snapshotDataUrl?: string) => Promise<void>;
+  tagSuggestions?: BacktestTagSuggestions;
+  onTradeReviewSave?: (tradeId: string, updates: Partial<Trade>, snapshotDataUrl?: string, expected?: Partial<Trade>) => Promise<void>;
 }
 
-const BacktestWorkspace: React.FC<Props> = ({
+const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRun) => void }> = ({
   run: initialRun,
   isDark,
   onClose,
   onTradeClosed,
+  onReloadRun,
+  onTradeAnalyticsRefresh,
+  analyticsSyncState,
+  journalSyncState,
   journalTrades = [],
+  tagSuggestions,
   onTradeReviewSave,
 }) => {
-  // Scope se musí otevřít dřív, než se namontuje první graf — proto v těle
-  // komponenty, ne v efektu. Sloty, které session ještě nemá, zdědí globální
-  // nastavení, takže se existující sessions vizuálně nezmění. Rozhoduje uložený
-  // stav při otevření; pozdější checkpointy scope znovu neotevírají.
-  const savedAppearance = useRef(initialRun.workspaceState?.appearance).current;
-  useMemo(
-    () => openChartAppearanceScope(`backtest:${initialRun.id}`, savedAppearance, inheritGlobalAppearance),
-    [initialRun.id, savedAppearance],
-  );
-  useEffect(() => () => closeChartAppearanceScope(`backtest:${initialRun.id}`), [initialRun.id]);
+  const [appearanceSession] = useState(() => createChartAppearanceSession(
+    `backtest:${initialRun.id}`, initialRun.workspaceState?.appearance, inheritGlobalAppearance,
+  ));
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const [researchOpen, setResearchOpen] = useState(false);
+  const researchCaptureRef = useRef<(() => Promise<string>) | null>(null);
+  const registerResearchCapture = useCallback((capture: () => Promise<string>) => {
+    researchCaptureRef.current = capture;
+    return () => { if (researchCaptureRef.current === capture) researchCaptureRef.current = null; };
+  }, []);
+  const [appearanceReady, setAppearanceReady] = useState(false);
+  useLayoutEffect(() => {
+    appearanceSession.activate();
+    setAppearanceReady(true);
+    return appearanceSession.deactivate;
+  }, [appearanceSession]);
 
   const [run, setRun] = useState(initialRun);
   const runRef = useRef(initialRun);
+  const [candleStore] = useState(() => createBacktestCandleStore(initialRun));
+  const candleRequestsRef = useRef(0);
+  const marketLoadFailedRef = useRef(false);
   const [candlesByRoot, setCandlesByRoot] = useState<Partial<Record<MarketRoot, MarketCandle[]>>>({});
   const [historyCandlesByRoot, setHistoryCandlesByRoot] = useState<HistoricalCandlesByRoot>({});
   const [historyLoadingKeys, setHistoryLoadingKeys] = useState<Partial<Record<string, boolean>>>({});
-  const historyLoadedFromRef = useRef<Record<string, number>>({});
   const historyLoadingRef = useRef(new Set<string>());
   const loadedUntilRef = useRef(initialRun.startAt);
   const [loading, setLoading] = useState(true);
   /** Dotahování dalších dat za běhu — pill místo tichého ztuhnutí na hraně. */
   const [loadingAhead, setLoadingAhead] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const loadingSegmentRef = useRef(false);
   const dirtyRef = useRef(false);
-  const cloudDirtyRef = useRef(false);
+  const mutationGenerationRef = useRef(0);
+  const workspaceCheckpointRef = useRef<(() => void) | null>(null);
+  const registerWorkspaceCheckpoint = useCallback((checkpoint: () => void) => {
+    workspaceCheckpointRef.current = checkpoint;
+    return () => {
+      if (workspaceCheckpointRef.current === checkpoint) workspaceCheckpointRef.current = null;
+    };
+  }, []);
+  const cloudDirtyRef = useRef(initialRun.revision !== getBacktestCloudRevision(initialRun));
+  const [localSaveError, setLocalSaveError] = useState<string | null>(null);
+  const [cloudSaveError, setCloudSaveError] = useState<string | null>(null);
+  const [analyticsQueueError, setAnalyticsQueueError] = useState<string | null>(null);
+  const [analyticsPreview, setAnalyticsPreview] = useState<Record<string, BacktestAnalyticsRefreshCandidate>>({});
+  const [journalQueueError, setJournalQueueError] = useState<string | null>(null);
+  const [cloudConflict, setCloudConflict] = useState(false);
+  const conflictRef = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const restoringRef = useRef(false);
+  const lastCloudAttemptRef = useRef(0);
   const persistedRevisionRef = useRef(initialRun.revision);
   /** Revize, kterou má cloudový řádek — lokální mezitím běží napřed. */
-  const cloudRevisionRef = useRef(initialRun.revision);
-  const lastCloudSyncRef = useRef(Date.now());
+  const cloudRevisionRef = useRef(getBacktestCloudRevision(initialRun));
+  const lastCloudSyncRef = useRef(cloudDirtyRef.current ? 0 : Date.now());
   const ledgerCursorRef = useRef(createBacktestLedgerCursor());
-  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
-  const emittedTradesRef = useRef(new Set(initialRun.runtimeState.closedTrades.map(trade => trade.id)));
+  const saveChainRef = useRef<Promise<boolean>>(Promise.resolve(true));
+  const emittedTradesRef = useRef(new Set<string>());
+  const emittingTradesRef = useRef(new Map<string, Promise<void>>());
   const lastProcessedCursorRef = useRef<number | null>(initialRun.runtimeState.replay.cursorTime);
   const lastRuntimeRenderRef = useRef(0);
   const trailingRenderRef = useRef<number | null>(null);
@@ -163,8 +193,10 @@ const BacktestWorkspace: React.FC<Props> = ({
     updater: (current: BacktestRun) => BacktestRun,
     options?: { render?: boolean },
   ) => {
+    if (restoringRef.current) return;
     const next = updater(runRef.current);
     runRef.current = next;
+    mutationGenerationRef.current += 1;
     dirtyRef.current = true;
     cloudDirtyRef.current = true;
     if (options?.render !== false) {
@@ -181,16 +213,27 @@ const BacktestWorkspace: React.FC<Props> = ({
    * do Supabase každých 1,5 s — ~1 GB uploadu za hodinu přehrávání.
    */
   const flush = useCallback((options?: { cloud?: boolean }) => {
-    const wantsCloud = cloudDirtyRef.current
-      && (options?.cloud === true || Date.now() - lastCloudSyncRef.current >= CLOUD_SYNC_INTERVAL_MS);
+    try { workspaceCheckpointRef.current?.(); }
+    catch (reason) {
+      setLocalSaveError(reason instanceof Error ? reason.message : 'Zachycení rozložení selhalo.');
+      return Promise.resolve(false);
+    }
+    const wantsCloud = cloudDirtyRef.current && !conflictRef.current
+      && (options?.cloud === true || (Date.now() - lastCloudSyncRef.current >= CLOUD_SYNC_INTERVAL_MS
+        && Date.now() - lastCloudAttemptRef.current >= 5_000));
     if (!dirtyRef.current && !wantsCloud) return saveChainRef.current;
     const locallyDirty = dirtyRef.current;
     dirtyRef.current = false;
     if (wantsCloud) cloudDirtyRef.current = false;
     const snapshot = runRef.current;
+    const snapshotGeneration = mutationGenerationRef.current;
     saveChainRef.current = saveChainRef.current.then(async () => {
+      setSaving(true);
+      const checkpoint = withBacktestCloudRevision(
+        { ...snapshot, revision: persistedRevisionRef.current }, cloudRevisionRef.current,
+      );
       let saved = locallyDirty
-        ? await saveBacktestRunLocal({ ...snapshot, revision: persistedRevisionRef.current }, {
+        ? await saveBacktestRunLocal(checkpoint, {
           status: snapshot.status,
           cursorAt: snapshot.cursorAt,
           config: snapshot.config,
@@ -198,30 +241,44 @@ const BacktestWorkspace: React.FC<Props> = ({
           runtimeState: snapshot.runtimeState,
           lastOpenedAt: snapshot.lastOpenedAt,
         })
-        : { ...snapshot, revision: persistedRevisionRef.current };
+        : checkpoint;
       persistedRevisionRef.current = saved.revision;
-      if (wantsCloud) {
+      setLocalSaveError(null);
+      if (wantsCloud && !conflictRef.current) {
         try {
+          lastCloudAttemptRef.current = Date.now();
           saved = await syncBacktestRunToCloud(saved, cloudRevisionRef.current, ledgerCursorRef.current);
           persistedRevisionRef.current = saved.revision;
           cloudRevisionRef.current = saved.revision;
           lastCloudSyncRef.current = Date.now();
+          setCloudSaveError(null);
         } catch (reason) {
+          if (reason instanceof BacktestRunSyncError) {
+            saved = reason.confirmedRun;
+            persistedRevisionRef.current = saved.revision;
+            cloudRevisionRef.current = saved.revision;
+          }
           cloudDirtyRef.current = true;
-          console.error('[Backtest] cloud checkpoint failed, local checkpoint is safe:', reason);
+          setCloudSaveError(reason instanceof Error ? reason.message : 'Cloud je nedostupný. Postup je uložený v tomto zařízení.');
+          if (reason instanceof BacktestRunConflictError) { conflictRef.current = true; setCloudConflict(true); }
         }
       }
-      if (runRef.current.updatedAt <= snapshot.updatedAt) {
+      // Wall clocks can tie or move backwards; only this exact mutation generation may replace the draft.
+      if (mutationGenerationRef.current === snapshotGeneration) {
         runRef.current = saved;
         setRun(saved);
       } else {
-        runRef.current = { ...runRef.current, revision: saved.revision };
+        runRef.current = withBacktestCloudRevision(
+          { ...runRef.current, revision: saved.revision }, cloudRevisionRef.current,
+        );
       }
+      return true;
     }).catch(reason => {
-      console.error('[Backtest] checkpoint failed:', reason);
+      setLocalSaveError(reason instanceof Error ? reason.message : 'Lokální uložení selhalo.');
       dirtyRef.current = true;
       cloudDirtyRef.current = true;
-    });
+      return false;
+    }).finally(() => setSaving(false));
     return saveChainRef.current;
   }, []);
 
@@ -236,8 +293,12 @@ const BacktestWorkspace: React.FC<Props> = ({
     const handleVisibility = () => {
       if (document.visibilityState === 'hidden') void flush({ cloud: true });
     };
+    const handleOnline = () => void flush({ cloud: true });
+    const handlePageHide = () => void flush();
     document.addEventListener('visibilitychange', handleVisibility);
-    return () => document.removeEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('pagehide', handlePageHide);
+    return () => { document.removeEventListener('visibilitychange', handleVisibility); window.removeEventListener('online', handleOnline); window.removeEventListener('pagehide', handlePageHide); };
   }, [flush]);
 
   // Pauza přehrávání = přirozený commit point: uživatel se zastavil, stav je
@@ -249,79 +310,59 @@ const BacktestWorkspace: React.FC<Props> = ({
     wasPlayingRef.current = playing;
   }, [flush, run.runtimeState.replay.playing]);
 
-  /**
-   * Dotáhne svíčky od `requestedStart`. Standardně jeden segment; `targetEndMs`
-   * okno natáhne — po Go To skoku se tak celá mezera stáhne jedním voláním
-   * (denní kbelíky uvnitř chybějící dny stejně paralelizují a platí se jen ty).
-   */
-  const loadSegment = useCallback(async (requestedStart: number, targetEndMs?: number) => {
-    if (loadingSegmentRef.current || requestedStart >= runRef.current.endAt) return;
-    loadingSegmentRef.current = true;
+  const syncCandles = useCallback(() => {
+    const snapshot = candleStore.getSnapshot();
+    loadedUntilRef.current = snapshot.loadedUntilMs;
+    setCandlesByRoot(snapshot.candles);
+    setHistoryCandlesByRoot(snapshot.history);
+  }, [candleStore]);
+
+  const ensureReplayData = useCallback(async (endMs: number): Promise<MarketCandle[]> => {
+    candleRequestsRef.current++;
+    marketLoadFailedRef.current = false;
     setLoadingAhead(true);
     setError(null);
-    const start = Math.max(runRef.current.startAt, requestedStart);
-    const end = Math.min(runRef.current.endAt, Math.max(start + SEGMENT_MS, targetEndMs ?? 0));
     try {
-      const roots = runRef.current.config.instruments;
-      const responses = await Promise.all(roots.map(async root => ({
-        root,
-        response: await loadMarketCandles({ symbol: resolveMarketSymbol(root), start: new Date(start), end: new Date(end) }),
-      })));
-      setCandlesByRoot(current => {
-        const next = { ...current };
-        responses.forEach(({ root, response }) => { next[root] = mergeCandles(next[root] ?? [], response.candles); });
-        return next;
-      });
-      loadedUntilRef.current = end;
+      await candleStore.ensureThrough(endMs);
+      return candleStore.getSnapshot().candles[runRef.current.executionSymbol] ?? [];
     } catch (reason) {
+      marketLoadFailedRef.current = true;
       setError(reason instanceof Error ? reason.message : 'Tržní data se nepodařilo načíst.');
+      throw reason;
     } finally {
-      loadingSegmentRef.current = false;
+      // The ref/store is current before the child commits its awaited cursor.
+      syncCandles();
+      candleRequestsRef.current--;
       setLoading(false);
-      setLoadingAhead(false);
+      setLoadingAhead(candleRequestsRef.current > 0);
     }
-  }, []);
+  }, [candleStore, syncCandles]);
 
-  const loadOlderHistory = useCallback(async (root: MarketRoot, schema: MarketDataSchema, requestedBeforeMs: number) => {
+  const loadSegment = useCallback(async (requestedStart: number, targetEndMs?: number) => {
+    try {
+      await ensureReplayData(Math.min(runRef.current.endAt, Math.max(requestedStart + SEGMENT_MS, targetEndMs ?? 0)));
+    } catch { /* The data error and retry action remain visible. */ }
+  }, [ensureReplayData]);
+
+  const loadOlderHistory = useCallback(async (root: MarketRoot, schema: MarketDataSchema, beforeMs: number) => {
     const key = `${root}:${schema}`;
     if (historyLoadingRef.current.has(key)) return;
-    const loadedFrom = historyLoadedFromRef.current[key] ?? runRef.current.startAt;
-    const end = Math.min(requestedBeforeMs, loadedFrom, runRef.current.startAt);
-    if (!Number.isFinite(end)) return;
-    const start = end - HISTORY_SEGMENT_MS[schema];
     historyLoadingRef.current.add(key);
     setHistoryLoadingKeys(current => ({ ...current, [key]: true }));
     try {
-      const response = await loadMarketCandles({
-        symbol: resolveMarketSymbol(root),
-        start: new Date(start),
-        end: new Date(end),
-        schema,
-      });
-      const safeCandles = completedHistoricalCandles({
-        candles: response.candles,
-        schema,
-        endMs: end,
-        replayStartMs: runRef.current.startAt,
-      });
-      setHistoryCandlesByRoot(current => ({
-        ...current,
-        [root]: {
-          ...current[root],
-          [schema]: mergeCandles(current[root]?.[schema] ?? [], safeCandles),
-        },
-      }));
-      historyLoadedFromRef.current[key] = start;
+      await candleStore.loadOlder(root, schema, beforeMs);
+      syncCandles();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Starší historii se nepodařilo načíst.');
     } finally {
       historyLoadingRef.current.delete(key);
       setHistoryLoadingKeys(current => ({ ...current, [key]: false }));
     }
-  }, []);
+  }, [candleStore, syncCandles]);
 
   useEffect(() => {
-    const cursorMs = initialRun.cursorAt ?? initialRun.startAt;
-    const contextStart = Math.max(initialRun.startAt, cursorMs - SEGMENT_MS + PREFETCH_MS);
-    void loadSegment(contextStart);
+    const start = Math.max(initialRun.startAt, (initialRun.cursorAt ?? initialRun.startAt) - SEGMENT_MS + PREFETCH_MS);
+    void loadSegment(start);
   }, [initialRun.cursorAt, initialRun.startAt, loadSegment]);
 
   /**
@@ -331,7 +372,7 @@ const BacktestWorkspace: React.FC<Props> = ({
    * do zdi — a po Go To skoku se celá mezera stáhne jedním voláním.
    */
   const maybePrefetch = useCallback((cursorTime: number | null, executionCandles: MarketCandle[]) => {
-    if (cursorTime === null || loadedUntilRef.current >= runRef.current.endAt) return;
+    if (candleRequestsRef.current > 0 || marketLoadFailedRef.current || cursorTime === null || loadedUntilRef.current >= runRef.current.endAt) return;
     const lastLoaded = executionCandles[executionCandles.length - 1];
     if (!lastLoaded || cursorTime >= lastLoaded.time) {
       void loadSegment(loadedUntilRef.current, cursorTime * 1_000 + PREFETCH_MS);
@@ -351,55 +392,135 @@ const BacktestWorkspace: React.FC<Props> = ({
   // session s kurzorem přímo na hraně dat nebo obnova po chybě načítání.
   useEffect(() => {
     const replay = run.runtimeState.replay;
+    if (!loading && !error && candleRequestsRef.current === 0 && !(candlesByRoot[run.executionSymbol]?.length) && loadedUntilRef.current < run.endAt) {
+      void loadSegment(loadedUntilRef.current);
+      return;
+    }
     if (replay.phase !== 'active' || replay.cursorTime === null) return;
     maybePrefetch(replay.cursorTime, candlesByRoot[run.executionSymbol] ?? []);
-  }, [candlesByRoot, maybePrefetch, run.executionSymbol, run.runtimeState.replay]);
+  }, [candlesByRoot, loading, error, loadSegment, maybePrefetch, run.endAt, run.executionSymbol, run.runtimeState.replay]);
 
-  const emitClosedTrades = useCallback((runtime: BacktestRuntimeState) => {
-    const pending = runtime.closedTrades.filter(closed => !emittedTradesRef.current.has(closed.id));
-    if (pending.length === 0) return;
+  const emitClosedTrades = useCallback(async (runtime: BacktestRuntimeState) => {
+    if (!onTradeClosed) return;
     const current = runRef.current;
-    // Jeden zdroj kontextu na celou dávku: levely a struktura se počítají přes
-    // celé pole svíček, takže per-obchod by to byl zbytečně násobený průchod.
-    const contextSources = new Map<BacktestInstrument, ReturnType<typeof createBacktestContextSource>>();
-    const contextFor = (instrument: BacktestInstrument) => {
-      const cached = contextSources.get(instrument);
-      if (cached) return cached;
-      const source = createBacktestContextSource({
-        candles: candlesByRoot[instrument] ?? [],
-        htfCandles: historyCandlesByRoot[instrument]?.['ohlcv-1h'],
-        timeZone: current.config.timezone,
-      });
-      contextSources.set(instrument, source);
-      return source;
-    };
-    pending.forEach(closed => {
-      emittedTradesRef.current.add(closed.id);
-      onTradeClosed?.(backtestClosedTradeToTrade(closed, {
-        accountId: current.accountId,
-        // Excursion i counterfactual potřebují bary za výstupem. Prefetch je
-        // v tu chvíli většinou má; když ne, metriky se označí jako nedostupné
-        // místo aby se počítaly z useknutých dat.
-        candles: candlesByRoot[closed.instrument] ?? [],
-        orderEvents: runtime.orderEvents ?? [],
-        timeZone: current.config.timezone,
-        flatTimeZone: current.config.flatTimeZone,
-        flatByMinute: current.config.flatByMinute,
-        strategy: current.config.strategy,
-        contextSource: contextFor(closed.instrument),
-      }));
+    const snapshot = candleStore.getSnapshot();
+    const tasks = runtime.closedTrades.filter(closed => !emittedTradesRef.current.has(closed.id)).map(closed => {
+      const active = emittingTradesRef.current.get(closed.id);
+      if (active) return active;
+      const task = Promise.resolve().then(() => {
+        return onTradeClosed({ ...backtestClosedTradeToTrade(closed, {
+          accountId: current.accountId, candles: snapshot.candles[closed.instrument] ?? [],
+          htfCandles: snapshot.history[closed.instrument]?.['ohlcv-1h'],
+          orderEvents: runtime.orderEvents ?? [], timeZone: current.config.timezone,
+          flatTimeZone: current.config.flatTimeZone, flatByMinute: current.config.flatByMinute,
+          strategy: current.config.strategy,
+          researchBinding: current.config.researchBinding,
+          replayHorizonTime: runtime.replay.cursorTime ?? closed.exitTime,
+          slippageTicks: current.config.slippageTicks[closed.instrument],
+        }), recordedAt: backtestResearchRecordedAt(closed, runtime.orderEvents ?? []) ?? null });
+      }).then(() => {
+        // The parent resolves only once the original snapshot is durable locally.
+        emittedTradesRef.current.add(closed.id);
+      }).finally(() => emittingTradesRef.current.delete(closed.id));
+      emittingTradesRef.current.set(closed.id, task);
+      return task;
     });
-  }, [candlesByRoot, historyCandlesByRoot, onTradeClosed]);
+    const results = await Promise.allSettled(tasks);
+    const failed = results.find(result => result.status === 'rejected');
+    setJournalQueueError(failed?.status === 'rejected'
+      ? `Zápis obchodu čeká na opakování. ${failed.reason instanceof Error ? failed.reason.message : String(failed.reason)}` : null);
+  }, [candleStore, onTradeClosed]);
+
+  // Recover closed rows after reopening, and retry failed local enqueue operations.
+  useEffect(() => {
+    if (loading || !candlesByRoot[run.executionSymbol]?.length) return;
+    void emitClosedTrades(runRef.current.runtimeState);
+    const timer = window.setInterval(() => void emitClosedTrades(runRef.current.runtimeState), 5_000);
+    return () => window.clearInterval(timer);
+  }, [loading, candlesByRoot, run.executionSymbol, emitClosedTrades]);
+
+  // Expensive analytics run in bounded batches after UI work. Local durable ACKs
+  // advance the planning stamps even while cloud sync is unavailable.
+  const refreshInputsRef = useRef({ journalTrades, analyticsPreview, onTradeAnalyticsRefresh });
+  refreshInputsRef.current = { journalTrades, analyticsPreview, onTradeAnalyticsRefresh };
+  const refreshBusyRef = useRef(false);
+  useEffect(() => {
+    let disposed = false;
+    const refresh = async () => {
+      const inputs = refreshInputsRef.current;
+      const current = runRef.current;
+      const horizon = current.runtimeState.replay.cursorTime;
+      if (disposed || refreshBusyRef.current || restoringRef.current || loading || !inputs.onTradeAnalyticsRefresh || horizon === null) return;
+      refreshBusyRef.current = true;
+      try {
+        const snapshot = candleStore.getSnapshot();
+        const trades = inputs.journalTrades.map(trade => {
+          const preview = inputs.analyticsPreview[trade.id];
+          return preview && preview.stamp.horizonTime <= horizon
+            ? { ...trade, backtestAnalyticsRefresh: preview.stamp } : trade;
+        });
+        const candidates = planBacktestAnalyticsRefresh({ trades,
+          closedTrades: [...current.runtimeState.closedTrades].sort((a, b) => (trades.find(trade => trade.id === a.id)?.backtestAnalyticsRefresh?.horizonTime ?? -Infinity) - (trades.find(trade => trade.id === b.id)?.backtestAnalyticsRefresh?.horizonTime ?? -Infinity)),
+          candlesByInstrument: snapshot.candles,
+          htfCandlesByInstrument: Object.fromEntries(Object.entries(snapshot.history).map(([root, schemas]) => [root, schemas?.['ohlcv-1h']])),
+          replayHorizonTime: horizon, slippageTicks: current.config.slippageTicks,
+          mappingOptions: { accountId: current.accountId, orderEvents: current.runtimeState.orderEvents ?? [],
+            timeZone: current.config.timezone, flatTimeZone: current.config.flatTimeZone,
+            flatByMinute: current.config.flatByMinute, strategy: current.config.strategy }, maxTrades: 4,
+        });
+        if (!candidates.length) return;
+        await inputs.onTradeAnalyticsRefresh(candidates);
+        if (!disposed) {
+          setAnalyticsPreview(previous => ({ ...previous, ...Object.fromEntries(candidates.map(item => [item.tradeId, item])) }));
+          setAnalyticsQueueError(null);
+        }
+      } catch (reason) {
+        if (!disposed) setAnalyticsQueueError(reason instanceof Error ? reason.message : 'Dopočet analýz čeká na opakování.');
+      } finally { refreshBusyRef.current = false; }
+    };
+    const first = window.setTimeout(() => void refresh(), 250);
+    const timer = window.setInterval(() => void refresh(), 2_000);
+    return () => { disposed = true; window.clearTimeout(first); window.clearInterval(timer); };
+  }, [candleStore, loading]);
+
+  const revealedJournalTrades = useMemo(() => journalTrades.map(trade => {
+    const preview = analyticsPreview[trade.id];
+    const horizon = run.runtimeState.replay.cursorTime;
+    if (preview && horizon !== null && preview.stamp.horizonTime <= horizon) {
+      return { ...trade, ...buildBacktestTradeRecalculationUpdates(trade, preview.recalculated), backtestAnalyticsRefresh: preview.stamp };
+    }
+    // Historical pre-fix analytics may contain prefetched future. Keep the review
+    // visible, but withhold those derived paths until a bounded refresh arrives.
+    if (trade.backtestRunId === run.id && (!trade.backtestAnalyticsRefresh || horizon === null || trade.backtestAnalyticsRefresh.horizonTime > horizon)) {
+      return { ...trade, counterfactual: undefined, excursion: undefined, executionPath: undefined,
+        excursionAvailable: false, excursionComplete: false, executionPathComplete: false };
+    }
+    return trade;
+  }), [journalTrades, analyticsPreview, run.id, run.runtimeState.replay.cursorTime]);
 
   const handleReplayChange = useCallback((replay: ChartReplayState) => {
+    if (restoringRef.current) return;
+    const currentRuntime = runRef.current.runtimeState;
+    const hasExecution = currentRuntime.orders.length || currentRuntime.fills.length || currentRuntime.positions.length || currentRuntime.closedTrades.length;
+    if (hasExecution && replay.cursorTime !== null && currentRuntime.replay.cursorTime !== null && replay.cursorTime < currentRuntime.replay.cursorTime) {
+      setError('Po zadání objednávky nelze vrátit kurzor zpět. Pro nové přehrání otevři novou session.');
+      return;
+    }
     const executionInstrument = runRef.current.executionSymbol;
-    const executionCandles = candlesByRoot[executionInstrument] ?? [];
-    let runtime: BacktestRuntimeState = { ...runRef.current.runtimeState, replay: { ...replay, playing: replay.playing } };
+    const snapshot = candleStore.getSnapshot();
+    const executionCandles = snapshot.candles[executionInstrument] ?? [];
+    if (replay.cursorTime !== null && replay.cursorTime * 1000 >= snapshot.loadedUntilMs) return;
+    // Missing legacy history stays unknown; rewinding never erases prior exposure.
+    const knownHorizon = currentRuntime.maxRevealedTime;
+    let runtime: BacktestRuntimeState = { ...currentRuntime,
+      ...(typeof knownHorizon === 'number' && Number.isFinite(knownHorizon) && knownHorizon >= 0
+        ? { maxRevealedTime: Math.max(knownHorizon, replay.cursorTime ?? 0, currentRuntime.replay.cursorTime ?? 0) } : {}),
+      replay: { ...replay, playing: replay.playing } };
     const previous = lastProcessedCursorRef.current;
     if (replay.phase === 'active' && replay.cursorTime !== null && (previous === null || replay.cursorTime > previous)) {
       // Binary search místo filtru: filtr skenoval celé pole načtených svíček
       // (po delší session desítky tisíc) při každém kroku kurzoru.
-      const fromIndex = candleIndexAfter(executionCandles, previous ?? replay.cursorTime - 1);
+      const fromIndex = candleIndexAfter(executionCandles, previous ?? Math.floor(runRef.current.startAt / 1000) - 1);
       const toIndex = candleIndexAfter(executionCandles, replay.cursorTime);
       const revealed = executionCandles.slice(fromIndex, toIndex);
       runtime = processBacktestCandles(runtime, runRef.current.id, executionInstrument, revealed, runRef.current.config);
@@ -444,8 +565,8 @@ const BacktestWorkspace: React.FC<Props> = ({
       }, RUNTIME_RENDER_TRAILING_MS);
     }
     maybePrefetch(replay.cursorTime, executionCandles);
-    emitClosedTrades(runtime);
-  }, [candlesByRoot, emitClosedTrades, maybePrefetch, updateRun]);
+    void emitClosedTrades(runtime);
+  }, [candleStore, emitClosedTrades, maybePrefetch, updateRun]);
 
   const handleWorkspaceChange = useCallback((workspaceState: BacktestWorkspaceState) => {
     updateRun(current => ({ ...current, workspaceState, updatedAt: Date.now() }));
@@ -454,7 +575,7 @@ const BacktestWorkspace: React.FC<Props> = ({
   const executeOrder = useCallback((input: {
     side: 'buy' | 'sell'; type: BacktestOrderType; quantity: number; price?: number; stopLoss?: number; takeProfit?: number; reduceOnly?: boolean;
   }, candle: MarketCandle | null, sourceDrawing?: PositionDrawing) => {
-    if (!candle || candle.time * 1_000 < runRef.current.startAt) return null;
+    if (restoringRef.current || !candle || candle.time * 1_000 < runRef.current.startAt) return null;
     const order = createBacktestOrder({
       runId: runRef.current.id,
       instrument: runRef.current.executionSymbol,
@@ -479,8 +600,8 @@ const BacktestWorkspace: React.FC<Props> = ({
           ],
         };
       }
-      if (input.type === 'market') runtime = processBacktestCandle(runtime, current.id, current.executionSymbol, candle, current.config);
-      emitClosedTrades(runtime);
+      if (input.type === 'market') runtime = executeBacktestMarketOrder(runtime, order.id, candle, current.config);
+      void emitClosedTrades(runtime);
       return { ...current, runtimeState: runtime, updatedAt: Date.now() };
     });
     return order;
@@ -671,6 +792,8 @@ const BacktestWorkspace: React.FC<Props> = ({
           position.instrument,
           kind === 'stopLoss' ? bracketPrice : position.stopLoss,
           kind === 'takeProfit' ? bracketPrice : position.takeProfit,
+          current.runtimeState.replay.cursorTime ?? Math.floor(current.startAt / 1000),
+          Date.now(),
         ),
         updatedAt: Date.now(),
       };
@@ -724,22 +847,48 @@ const BacktestWorkspace: React.FC<Props> = ({
     if (!closed) throw new Error('Původní replay obchod už v této session není dostupný.');
     const candles = candlesByRoot[closed.instrument] ?? [];
     if (!candles.length) throw new Error(`Pro ${closed.instrument} nejsou načtené replay svíčky.`);
-    const contextSource = createBacktestContextSource({
-      candles,
-      htfCandles: historyCandlesByRoot[closed.instrument]?.['ohlcv-1h'],
-      timeZone: current.config.timezone,
-    });
     return backtestClosedTradeToTrade(closed, {
       accountId: current.accountId,
       candles,
+      htfCandles: historyCandlesByRoot[closed.instrument]?.['ohlcv-1h'],
       orderEvents: current.runtimeState.orderEvents ?? [],
       timeZone: current.config.timezone,
       flatTimeZone: current.config.flatTimeZone,
       flatByMinute: current.config.flatByMinute,
       strategy: current.config.strategy,
-      contextSource,
+          researchBinding: current.config.researchBinding,
+      replayHorizonTime: current.runtimeState.replay.cursorTime ?? closed.exitTime,
+      slippageTicks: current.config.slippageTicks[closed.instrument],
     });
   }, [candlesByRoot, historyCandlesByRoot]);
+
+  const loadEvidence = useCallback(() => {
+    const current = runRef.current;
+    return buildBacktestStoreEvidence({ snapshot: candleStore.getSnapshot(), run: current, replayHorizonTime: current.runtimeState.replay.cursorTime });
+  }, [candleStore]);
+
+  const researchContext = useCallback(() => {
+    const current = runRef.current;
+    return captureBacktestResearchContext({ runId: current.id, instrument: current.executionSymbol,
+      runtime: current.runtimeState, candles: candleStore.getSnapshot().candles[current.executionSymbol] ?? [],
+      runCompleted: current.status === 'completed' });
+  }, [candleStore]);
+  const saveResearch = useCallback(async (draft: BacktestResearchDraft, operation: { id: string; recordedAt: number }, edit?: { id: string; expectedRevisionId: string; archived?: boolean }) => {
+    if (restoringRef.current || conflictRef.current) throw new Error('Nejdřív vyřeš konflikt session. Rozepsaný text zůstává otevřený.');
+    const current = runRef.current;
+    const context = researchContext();
+    const result = edit ? reviseBacktestResearch({ journal: current.runtimeState.researchJournal!,
+      id: edit.id, expectedRevisionId: edit.expectedRevisionId, patch: { title: draft.title, text: draft.text, tags: draft.tags, action: draft.action, archived: edit.archived },
+      context, recordedAt: operation.recordedAt, opId: operation.id })
+      : appendBacktestResearch(current.runtimeState.researchJournal, draft, context, operation.recordedAt, operation.id);
+    updateRun(value => ({ ...value, runtimeState: { ...value.runtimeState, researchJournal: result.journal }, updatedAt: Date.now() }));
+    const localSaved = await flush({ cloud: true });
+    return { localSaved, cloudSaved: localSaved && !cloudDirtyRef.current && !conflictRef.current };
+  }, [flush, researchContext, updateRun]);
+  const captureResearch = useCallback(async () => {
+    if (!researchCaptureRef.current) throw new Error('Graf ještě není připravený.');
+    return researchCaptureRef.current();
+  }, []);
 
   // Množství drží workspace, ne jen obchodní panel: objednávka z pravého kliku
   // do grafu musí použít přesně to číslo, které uživatel vidí vedle typu.
@@ -753,12 +902,23 @@ const BacktestWorkspace: React.FC<Props> = ({
     historyCandlesByRoot,
     historyLoadingKeys,
     onNeedOlderHistory: loadOlderHistory,
+    loadedUntilMs: candleStore.getSnapshot().loadedUntilMs,
+    onEnsureReplayData: ensureReplayData,
+    replayHasExecutionHistory: Boolean(run.runtimeState.orders.length || run.runtimeState.fills.length || run.runtimeState.positions.length || run.runtimeState.closedTrades.length),
+    minimumReplayCursorTime: run.runtimeState.orders.length || run.runtimeState.fills.length
+      ? run.runtimeState.replay.cursorTime ?? Math.floor(run.startAt / 1000)
+      : Math.floor(run.startAt / 1000),
     allowedRoots: run.config.instruments,
     executionInstrument: run.executionSymbol,
     initialReplay: run.runtimeState.replay,
     workspaceState: run.workspaceState,
     onReplayChange: handleReplayChange,
     onWorkspaceChange: handleWorkspaceChange,
+    registerWorkspaceCheckpoint,
+    registerResearchCapture,
+    maxRevealedTime: run.runtimeState.maxRevealedTime,
+    pauseReplayForDialog: researchOpen || evidenceOpen,
+    onSaveWorkspace: async () => ({ localSaved: await flush({ cloud: true }), cloudSaved: !cloudDirtyRef.current && !conflictRef.current }),
     onQuickOrder: ({ drawing, candle, instrument }) => executeQuickOrder(drawing, candle, instrument),
     chartOrderQuantity: orderQuantity,
     onChartOrder: (input, candle) => {
@@ -768,7 +928,8 @@ const BacktestWorkspace: React.FC<Props> = ({
     managedPositionBoxes: managedBoxes,
     fills: run.runtimeState.fills.filter(fill => fill.instrument === run.executionSymbol),
     closedTrades: run.runtimeState.closedTrades.filter(trade => trade.instrument === run.executionSymbol),
-    journalTrades: journalTrades.filter(trade => (
+    tagSuggestions,
+    journalTrades: revealedJournalTrades.filter(trade => (
       trade.backtestRunId === run.id
       || run.runtimeState.closedTrades.some(closed => closed.id === String(trade.id))
     )),
@@ -790,7 +951,7 @@ const BacktestWorkspace: React.FC<Props> = ({
         onChangeBracket={changeBracket}
       />
     ),
-  }), [addPositionBracketLine, candlesByRoot, cancelOrderLine, changeBracket, changeOrderLine, closePosition, executeOrder, executeQuickOrder, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, isDark, journalTrades, loadOlderHistory, managedBoxes, onTradeReviewSave, orderLines, orderQuantity, recalculateTrade, run.endAt, run.executionSymbol, run.id, run.runtimeState, run.startAt, run.workspaceState]);
+  }), [addPositionBracketLine, candleStore, ensureReplayData, candlesByRoot, cancelOrder, cancelOrderLine, changeBracket, changeOrderLine, closePosition, executeOrder, executeQuickOrder, flush, handleReplayChange, handleWorkspaceChange, historyCandlesByRoot, historyLoadingKeys, isDark, revealedJournalTrades, tagSuggestions, loadOlderHistory, managedBoxes, onTradeReviewSave, orderLines, orderQuantity, recalculateTrade, registerResearchCapture, registerWorkspaceCheckpoint, researchOpen, evidenceOpen, run.config.instruments, run.endAt, run.executionSymbol, run.id, run.runtimeState, run.startAt, run.workspaceState]);
 
   const syntheticTrade = useMemo<Trade>(() => ({
     id: `backtest-${run.id}`,
@@ -821,11 +982,30 @@ const BacktestWorkspace: React.FC<Props> = ({
       runtimeState: { ...current.runtimeState, replay: { ...current.runtimeState.replay, playing: false } },
       updatedAt: Date.now(),
     }));
-    await flush();
-    onClose(runRef.current);
-  }, [flush, onClose, updateRun]);
+    await emitClosedTrades(runRef.current.runtimeState);
+    if (await flush({ cloud: true })) onClose(runRef.current);
+  }, [emitClosedTrades, flush, onClose, updateRun]);
+
+  const restoreCloud = useCallback(async () => {
+    try { workspaceCheckpointRef.current?.(); }
+    catch (reason) {
+      setLocalSaveError(reason instanceof Error ? reason.message : 'Zachycení rozložení selhalo.');
+      return;
+    }
+    updateRun(current => ({ ...current, runtimeState: { ...current.runtimeState, replay: { ...current.runtimeState.replay, playing: false } }, updatedAt: Date.now() }));
+    restoringRef.current = true;
+    setRestoring(true);
+    try {
+      if (!await flush()) return;
+      const remote = await loadBacktestRunFromCloud(runRef.current.id);
+      onReloadRun(remote);
+    } catch (reason) { setCloudSaveError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { restoringRef.current = false; setRestoring(false); }
+  }, [flush, onReloadRun, updateRun]);
 
   const initialCandles = candlesByRoot.MNQ ?? [];
+  if (!appearanceReady) return null;
+  const noData = !loading && initialCandles.length === 0 && candleStore.getSnapshot().loadedUntilMs >= run.endAt;
   if (loading && initialCandles.length === 0) return (
     <div className={`fixed inset-0 z-[400] flex flex-col items-center justify-center gap-4 ${isDark ? 'bg-[#070a0f] text-white' : 'bg-white text-slate-900'}`}>
       <Loader2 className="animate-spin text-blue-500" size={30} />
@@ -833,15 +1013,32 @@ const BacktestWorkspace: React.FC<Props> = ({
       <button onClick={() => void closeWorkspace()} className="absolute right-4 top-4 rounded-lg p-2 text-slate-500 hover:bg-slate-500/10"><X size={20} /></button>
     </div>
   );
-  if (error && initialCandles.length === 0) return (
+  if ((error || noData) && initialCandles.length === 0) return (
     <div className={`fixed inset-0 z-[400] flex flex-col items-center justify-center gap-4 p-6 ${isDark ? 'bg-[#070a0f] text-white' : 'bg-white text-slate-900'}`}>
-      <p className="max-w-lg text-center text-sm font-bold text-rose-500">{error}</p>
+      <p className="max-w-lg text-center text-sm font-bold text-rose-500">{error ?? 'Ve zvoleném období nejsou dostupné svíčky.'}</p>
       <div className="flex gap-2"><button onClick={() => void loadSegment(run.cursorAt ?? run.startAt)} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-black text-white">Zkusit znovu</button><button onClick={() => void closeWorkspace()} className="rounded-lg border px-4 py-2 text-xs font-black">Zavřít</button></div>
     </div>
   );
 
   return (
     <>
+      {restoring && <div className="fixed inset-0 z-[600] flex items-center justify-center bg-black/60 text-white" role="status">Uchovávám lokální kopii a načítám cloud…</div>}
+      <div className="fixed right-4 top-14 z-[550] max-w-md rounded-lg border border-slate-500/30 bg-slate-950/90 px-3 py-2 text-[11px] text-slate-200 shadow-lg" role="status">
+        <p>{saving ? 'Ukládám session…' : localSaveError ? 'Lokální uložení selhalo' : 'Průběžné ukládání do tohoto zařízení'}</p>
+        {localSaveError && <p className="text-rose-400">{localSaveError}</p>}
+        {cloudSaveError && <p className="mt-1 text-amber-400">{cloudSaveError}</p>}
+        {journalQueueError && <p className="mt-1 text-rose-400">{journalQueueError}</p>}
+        <button className="pointer-events-auto mt-1 text-violet-400 underline" onClick={() => { updateRun(current => ({ ...current, runtimeState: { ...current.runtimeState, replay: { ...current.runtimeState.replay, playing: false } } })); setEvidenceOpen(true); }}>Kvalita dat a exekuce</button>
+        <button className="pointer-events-auto ml-3 mt-1 text-violet-400 underline" onClick={() => { updateRun(current => ({ ...current, runtimeState: { ...current.runtimeState, replay: { ...current.runtimeState.replay, playing: false } } })); setResearchOpen(true); }}>Rozhodovací deník</button>
+        {run.config.researchBinding && <details className="mt-2"><summary className="cursor-pointer text-violet-300">Pravidla session · {run.config.researchBinding.role === 'validation' ? 'plánované ověření' : 'vývoj'}</summary><p className="mt-1 whitespace-pre-wrap">{run.config.researchBinding.definition.rule}</p><p className="mt-1">Vyvrácení: {run.config.researchBinding.definition.falsification}</p><p className="mt-1 break-all text-slate-400">Verze {run.config.researchBinding.revisionId} · {run.config.researchBinding.revisionHash}</p><p className="mt-1 text-amber-400">{run.config.researchBinding.exposureAtBinding === 'already-observed' ? 'Toto období už bylo pozorované.' : 'Úplná nepozorovanost období není potvrzená.'}</p></details>}
+        {analyticsQueueError && <p className="mt-1 text-amber-400">{analyticsQueueError}</p>}
+        {analyticsSyncState?.pending ? <p className="mt-1 text-amber-400">Analýzy: {analyticsSyncState.pending} dopočtů čeká na cloud.</p> : null}
+        {analyticsSyncState?.error && <p className="mt-1 text-amber-400">{analyticsSyncState.error}</p>}
+        {journalSyncState?.pending ? <p className="mt-1 text-amber-400">Deník: {journalSyncState.pending} obchodů čeká na cloud.</p> : null}
+        {journalSyncState?.error && <p className="mt-1 text-amber-400">{journalSyncState.error}</p>}
+        {(localSaveError || (cloudSaveError && !cloudConflict)) && <button className="mt-1 font-bold text-blue-400" onClick={() => void flush({ cloud: true })}>Zkusit uložení znovu</button>}
+        {cloudConflict && <button disabled={restoring} className="mt-1 font-bold text-blue-400" onClick={() => void restoreCloud()}>{restoring ? 'Načítám…' : 'Uchovat lokální kopii a načíst cloud'}</button>}
+      </div>
       <AlphaTradeChartWorkspace
         trade={syntheticTrade}
         entryMs={run.startAt}
@@ -863,6 +1060,11 @@ const BacktestWorkspace: React.FC<Props> = ({
           <span className="text-[11px] font-bold text-blue-400">Načítám další data…</span>
         </div>
       )}
+      <BacktestResearchPanel open={researchOpen} isDark={isDark} runId={run.id}
+        journal={run.runtimeState.researchJournal} onSave={saveResearch} onCapture={captureResearch}
+        onClose={() => setResearchOpen(false)} persistenceError={localSaveError || cloudSaveError}
+        cursorTime={run.runtimeState.replay.cursorTime} />
+      {evidenceOpen && <BacktestEvidenceDialog load={loadEvidence} isDark={isDark} onClose={() => setEvidenceOpen(false)} />}
       {error && initialCandles.length > 0 && (
         <div className="native-fixed-above-tab-bar fixed bottom-4 left-1/2 z-[500] flex -translate-x-1/2 items-center gap-3 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 backdrop-blur">
           <span className="text-xs font-bold text-rose-500">{error}</span>
@@ -901,6 +1103,10 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
   const [orderError, setOrderError] = useState<string | null>(null);
   const runtime = run.runtimeState;
   const position = runtime.positions.find(item => item.instrument === run.executionSymbol);
+  const [positionStop, setPositionStop] = useState('');
+  const [positionTarget, setPositionTarget] = useState('');
+  useEffect(() => { setPositionStop(position?.stopLoss?.toString() ?? ''); }, [position?.positionId, position?.stopLoss]);
+  useEffect(() => { setPositionTarget(position?.takeProfit?.toString() ?? ''); }, [position?.positionId, position?.takeProfit]);
   const pending = runtime.orders.filter(order => order.status === 'pending');
   const field = `h-7 rounded border px-2 text-[10px] outline-none ${isDark ? 'border-white/10 bg-white/5 text-white' : 'border-slate-200 bg-white text-slate-900'}`;
   const num = (value: string) => value.trim() && Number.isFinite(Number(value)) ? Number(value) : undefined;
@@ -937,7 +1143,7 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
       </div>
       {position && <>
         <div className={`h-12 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
-        <div className="min-w-[260px]"><div className="mb-1 font-black"><span className={position.side === 'long' ? 'text-emerald-500' : 'text-rose-500'}>{position.side.toUpperCase()} {position.quantity}×</span> @ {position.averagePrice.toFixed(2)}</div><div className="flex gap-1"><input className={`${field} w-16`} defaultValue={position.stopLoss ?? ''} placeholder="SL" onBlur={event => onChangeBracket(num(event.target.value), position.takeProfit)} /><input className={`${field} w-16`} defaultValue={position.takeProfit ?? ''} placeholder="TP" onBlur={event => onChangeBracket(position.stopLoss, num(event.target.value))} />{position.quantity > 1 && <button onClick={() => onClosePosition(Math.floor(position.quantity / 2), candle)} className={`${field} font-bold`}>½ ven</button>}<button onClick={() => onClosePosition(position.quantity, candle)} className="h-7 rounded bg-slate-700 px-2 font-black text-white">Zavřít</button></div></div>
+        <div className="min-w-[260px]"><div className="mb-1 font-black"><span className={position.side === 'long' ? 'text-emerald-500' : 'text-rose-500'}>{position.side.toUpperCase()} {position.quantity}×</span> @ {position.averagePrice.toFixed(2)}</div><div className="flex gap-1"><input className={`${field} w-16`} value={positionStop} onChange={event => setPositionStop(event.target.value)} placeholder="SL" onBlur={event => onChangeBracket(num(event.target.value), position.takeProfit)} /><input className={`${field} w-16`} value={positionTarget} onChange={event => setPositionTarget(event.target.value)} placeholder="TP" onBlur={event => onChangeBracket(position.stopLoss, num(event.target.value))} />{position.quantity > 1 && <button onClick={() => onClosePosition(Math.floor(position.quantity / 2), candle)} className={`${field} font-bold`}>½ ven</button>}<button onClick={() => onClosePosition(position.quantity, candle)} className="h-7 rounded bg-slate-700 px-2 font-black text-white">Zavřít</button></div></div>
       </>}
       {pending.length > 0 && <>
         <div className={`h-12 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
@@ -946,6 +1152,13 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
       <div className="ml-auto whitespace-nowrap text-slate-500">{candle ? `${run.executionSymbol} ${candle.close.toFixed(2)}` : 'Bez ceny'}</div>
     </div>
   );
+};
+
+const BacktestWorkspace: React.FC<Props> = props => {
+  const [restored, setRestored] = useState<{ sourceId: string; run: BacktestRun; version: number } | null>(null);
+  const current = restored?.sourceId === props.run.id ? restored : null;
+  return <BacktestWorkspaceSession {...props} key={`${props.run.id}:${current?.version ?? 0}`} run={current?.run ?? props.run}
+    onReloadRun={next => setRestored(previous => ({ sourceId: props.run.id, run: next, version: (previous?.version ?? 0) + 1 }))} />;
 };
 
 export default BacktestWorkspace;

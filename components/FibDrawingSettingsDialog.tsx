@@ -7,6 +7,7 @@ import {
   DEFAULT_FIB_SETTINGS,
   getFibSettings,
   normalizeFibSettings,
+  rememberFibDrawingDefault,
   updateFibDrawing,
   type FibDrawing,
   type FibLevelStyle,
@@ -277,7 +278,7 @@ export const FibDrawingSettingsDialog: React.FC<FibDrawingSettingsDialogProps> =
         <IndicatorTemplateMenu indicator="drawing:fib-retracement" value={settings} defaultValue={DEFAULT_FIB_SETTINGS} onApply={value => update(normalizeFibSettings(value as FibRetracementSettings))} />
         <div className="ml-auto flex gap-2">
           <button type="button" onClick={cancel} className="h-9 rounded-md border border-slate-300 px-5 text-[13px] font-semibold hover:bg-slate-50">Cancel</button>
-          <button type="button" onClick={onClose} className="h-9 rounded-md bg-[#2962ff] px-5 text-[13px] font-semibold text-white hover:bg-[#1e53d8]">Ok</button>
+          <button type="button" onClick={() => { rememberFibDrawingDefault(engine, drawing.id); onClose(); }} className="h-9 rounded-md bg-[#2962ff] px-5 text-[13px] font-semibold text-white hover:bg-[#1e53d8]">Ok</button>
         </div>
       </footer>
     </section>
@@ -290,6 +291,7 @@ export const FibDrawingFloatingToolbar: React.FC<{
   onOpenSettings: () => void;
 }> = ({ engine, drawing, onOpenSettings }) => {
   const settings = getFibSettings(drawing);
+  const update = (next: FibRetracementSettings) => updateFibDrawing(engine, drawing.id, next, true);
   const [moreOpen, setMoreOpen] = useState(false);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const toolbarDragRef = useRef<{
@@ -363,23 +365,23 @@ export const FibDrawingFloatingToolbar: React.FC<{
   };
   return <div ref={toolbarRef} className={`absolute z-[120] flex items-center gap-0 rounded-md border border-slate-300 bg-white p-0.5 shadow-md ${toolbarPosition ? '' : 'left-1/2 top-1 -translate-x-1/2'}`} style={toolbarPosition ?? undefined} role="toolbar" aria-label="Nástroje Fibonacci">
     <button type="button" aria-label="Přesunout nástroje Fibonacci" title="Přesunout" onPointerDown={startToolbarDrag} className="flex h-7 w-5 shrink-0 cursor-move touch-none items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-700"><GripVertical size={13} strokeWidth={1.5} /></button>
-    <IndicatorTemplateMenu compact placement="bottom" indicator="drawing:fib-retracement" value={settings} defaultValue={DEFAULT_FIB_SETTINGS} onApply={value => updateFibDrawing(engine, drawing.id, normalizeFibSettings(value as FibRetracementSettings))} />
-    <TradingViewColorPicker compact value={settings.oneColor ? settings.oneColorValue : settings.levels.find(level => level.visible)?.color ?? '#2962ff'} opacity={settings.oneColor ? settings.oneColorOpacity : 100} onChange={(color, opacity) => updateFibDrawing(engine, drawing.id, { ...settings, oneColor: true, oneColorValue: color, oneColorOpacity: opacity })} label="Barva Fibonacci" />
-    <Select className="h-7 px-1 text-[11px]" aria-label="Tloušťka Fibonacci čar" value={settings.levelLineWidth} onChange={event => updateFibDrawing(engine, drawing.id, { ...settings, levelLineWidth: Number(event.target.value) })}>{[1, 2, 3, 4].map(value => <option key={value} value={value}>{value}px</option>)}</Select>
+    <IndicatorTemplateMenu compact placement="bottom" indicator="drawing:fib-retracement" value={settings} defaultValue={DEFAULT_FIB_SETTINGS} onApply={value => update(normalizeFibSettings(value as FibRetracementSettings))} />
+    <TradingViewColorPicker compact value={settings.oneColor ? settings.oneColorValue : settings.levels.find(level => level.visible)?.color ?? '#2962ff'} opacity={settings.oneColor ? settings.oneColorOpacity : 100} onChange={(color, opacity) => update({ ...settings, oneColor: true, oneColorValue: color, oneColorOpacity: opacity })} label="Barva Fibonacci" />
+    <Select className="h-7 px-1 text-[11px]" aria-label="Tloušťka Fibonacci čar" value={settings.levelLineWidth} onChange={event => update({ ...settings, levelLineWidth: Number(event.target.value) })}>{[1, 2, 3, 4].map(value => <option key={value} value={value}>{value}px</option>)}</Select>
     <button type="button" className={toolbarButton} onClick={onOpenSettings} title="Settings" aria-label="Nastavení Fibonacci"><Settings size={14} /></button>
     <button type="button" className={toolbarButton} onClick={() => {
       const next = { ...settings, locked: !settings.locked };
-      updateFibDrawing(engine, drawing.id, next);
+      update(next);
     }} title={settings.locked ? 'Unlock' : 'Lock'}>{settings.locked ? <Lock size={14} /> : <Unlock size={14} />}</button>
     <button type="button" className={toolbarButton} onClick={() => engine.remove(drawing.id)} title="Remove"><Trash2 size={14} /></button>
     <div className="relative">
       <button type="button" className={toolbarButton} title="More" aria-expanded={moreOpen} onClick={() => setMoreOpen(open => !open)}><MoreHorizontal size={14} /></button>
       {moreOpen && <div role="menu" className="absolute right-0 top-8 w-48 overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-xl">
-        <button type="button" role="menuitem" onClick={() => { updateFibDrawing(engine, drawing.id, { ...settings, hidden: !settings.hidden }); setMoreOpen(false); }} className="flex h-9 w-full items-center gap-2 px-3 text-left text-[13px] hover:bg-slate-100">{settings.hidden ? <Eye size={15} /> : <EyeOff size={15} />} {settings.hidden ? 'Show' : 'Hide'}</button>
+        <button type="button" role="menuitem" onClick={() => { update({ ...settings, hidden: !settings.hidden }); setMoreOpen(false); }} className="flex h-9 w-full items-center gap-2 px-3 text-left text-[13px] hover:bg-slate-100">{settings.hidden ? <Eye size={15} /> : <EyeOff size={15} />} {settings.hidden ? 'Show' : 'Hide'}</button>
         <button type="button" role="menuitem" onClick={() => { duplicate(); setMoreOpen(false); }} className="flex h-9 w-full items-center gap-2 px-3 text-left text-[13px] hover:bg-slate-100"><Copy size={15} /> Duplicate</button>
         <button type="button" role="menuitem" onClick={() => moveLayer('front')} className="flex h-9 w-full items-center gap-2 px-3 text-left text-[13px] hover:bg-slate-100"><ArrowUpToLine size={15} /> Bring to front</button>
         <button type="button" role="menuitem" onClick={() => moveLayer('back')} className="flex h-9 w-full items-center gap-2 px-3 text-left text-[13px] hover:bg-slate-100"><ArrowDownToLine size={15} /> Send to back</button>
-        <button type="button" role="menuitem" onClick={() => { updateFibDrawing(engine, drawing.id, DEFAULT_FIB_SETTINGS); setMoreOpen(false); }} className="flex h-9 w-full items-center gap-2 px-3 text-left text-[13px] hover:bg-slate-100"><RotateCcw size={15} /> Apply defaults</button>
+        <button type="button" role="menuitem" onClick={() => { update(DEFAULT_FIB_SETTINGS); setMoreOpen(false); }} className="flex h-9 w-full items-center gap-2 px-3 text-left text-[13px] hover:bg-slate-100"><RotateCcw size={15} /> Apply defaults</button>
       </div>}
     </div>
   </div>;

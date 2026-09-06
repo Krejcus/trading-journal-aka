@@ -145,15 +145,39 @@ async function loadAllUserRows(
 const groupKey = (t: Trade): string | null =>
   t.groupId ? `g:${t.groupId}` : (t.masterTradeId ? `m:${t.masterTradeId}` : (t.isMaster ? `m:${t.id}` : null));
 
+// Prepared privacy migration moves legacy notes out of trades.data. This
+// server already scopes every read to its configured journal owner; do the same
+// for the private sidecar. This does not load the separate revision-history table.
+async function loadOwnerLegacyTradeNotes(): Promise<{ supported: boolean; rows: Map<string, any> }> {
+  const rows = new Map<string, any>();
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await db.from('trade_private_notes').select('trade_id, notes')
+      .eq('user_id', USER_ID).order('trade_id').range(offset, offset + 999);
+    if (error) {
+      if (['42P01', 'PGRST205'].includes(String(error.code))) return { supported: false, rows };
+      throw new Error(`Private trade notes: ${error.message}`);
+    }
+    for (const row of data ?? []) rows.set(String(row.trade_id), row.notes ?? {});
+    if (!data || data.length < 1000) return { supported: true, rows };
+  }
+}
+
 async function loadCore(): Promise<Core> {
   if (coreCache && Date.now() - coreCache.at < 60_000) return coreCache.data;
-  const [tr, ac, pr, rv] = await Promise.all([
+  const [tr, ac, pr, rv, privateNotes] = await Promise.all([
     loadAllUserRows('trades', 'id, date, timestamp, instrument, direction, pnl, data, account_id', 'date'),
     loadAllUserRows('accounts', 'id, name, status, type, initial_balance, currency, meta'),
     loadAllUserRows('daily_preps', 'id, date, data', 'date'),
     loadAllUserRows('daily_reviews', 'id, date, data', 'date'),
+    loadOwnerLegacyTradeNotes(),
   ]);
-  const trades = tr.map(mapTrade);
+  const trades = tr.map(row => {
+    const publicData = Object.fromEntries(Object.entries(row.data ?? {}).filter(([key]) => key !== 'noteHistory'
+      && (!privateNotes.supported || !['notes', 'sessionPreNotes', 'sessionPostNotes'].includes(key))));
+    const allowedNotes = Object.fromEntries(Object.entries(privateNotes.rows.get(String(row.id)) ?? {})
+      .filter(([key]) => ['notes', 'sessionPreNotes', 'sessionPostNotes'].includes(key)));
+    return mapTrade({ ...row, data: { ...publicData, ...allowedNotes } });
+  });
   const groupSizes = new Map<string, number>();
   for (const t of trades) {
     const k = groupKey(t);

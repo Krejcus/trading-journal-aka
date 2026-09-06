@@ -1,6 +1,6 @@
 /* global console, process */
 
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, readdir } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -24,6 +24,22 @@ try {
 } catch {
   // Expected: a native WKWebView must have only the IndexedDB data cache.
 }
+
+// Scan the complete client output without ever printing a matched secret.
+// A clean index.html alone cannot detect credentials embedded in lazy chunks.
+async function scanClientFiles(directory) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const file = resolve(directory, entry.name);
+    if (entry.isDirectory()) await scanClientFiles(file);
+    else if (/\.(?:js|html|json|map)$/.test(entry.name)) {
+      const source = await readFile(file, 'utf8');
+      if (/gsk_[A-Za-z0-9]{20,}|-----BEGIN (?:RSA |EC )?PRIVATE KEY-----/.test(source)) {
+        errors.push('Nativní bundle obsahuje soukromý klíč; distribuce je zablokovaná.');
+      }
+    }
+  }
+}
+await scanClientFiles(resolve(root, 'dist-native'));
 
 if (errors.length > 0) {
   console.error('Kontrola nativního bundle selhala:');

@@ -1,0 +1,29 @@
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const esbuild = require('/Users/filipkrejca/Documents/trading-journal-aka/node_modules/esbuild');
+const source = fs.readFileSync('/Users/filipkrejca/Documents/trading-journal-aka/supabase/functions/mcp-server/index.ts', 'utf8');
+const start = source.indexOf("mcp.tool('get_trade',");
+const end = source.indexOf("mcp.tool('get_journal_day',", start);
+const block = esbuild.transformSync(source.slice(start, end), { loader: 'ts' }).code;
+let handler;
+let current;
+const schema = new Proxy(() => schema, { get: () => schema, apply: () => schema });
+vm.runInNewContext(block, {
+  mcp: { tool: (_, config) => { handler = config.handler; } },
+  z: schema, guard: fn => fn, text: value => value,
+  loadCore: async () => ({ trades: [current], accounts: [], groupSizes: new Map() }),
+  groupKey: () => null,
+});
+(async () => {
+  current = { id: 'synthetic-backtest', entryContext: { history: 'x'.repeat(35000) }, notes: 'IMPORTANT LATE REVIEW', tags: ['My tag'] };
+  const large = await handler({ id: current.id });
+  assert.equal(large.length, 30000);
+  assert.equal(large.includes('IMPORTANT LATE REVIEW'), false);
+  assert.throws(() => JSON.parse(large));
+  current = { id: 'synthetic-backtest', notes: 'Ordinary review is available', tags: ['My tag'] };
+  const small = JSON.parse(await handler({ id: current.id }));
+  assert.equal(small.notes, current.notes);
+  assert.deepEqual(small.tags, ['My tag']);
+  console.log(JSON.stringify({ source: 'canonical get_trade handler, dependencies mocked; no network', smallDetailNotesAndTags: 'preserved', largeDetailChars: large.length, largeDetailValidJson: false, largeDetailLateNotesPresent: false }, null, 2));
+})().catch(error => { console.error(error); process.exitCode = 1; });

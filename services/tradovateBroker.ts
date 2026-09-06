@@ -13,9 +13,11 @@ import type {
   OrderSide,
   OrderType,
 } from './brokerPort';
+import { isOpenOrderStatus } from './brokerPort';
 import {
   TRADOVATE_HEARTBEAT_MS,
   TRADOVATE_HOSTS,
+  fromLiquidatePositionResult,
   fromOrderEntity,
   fromPlaceOcoResult,
   fromPlaceOsoResult,
@@ -893,19 +895,31 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       await hydrateContracts(accountPositions.map(item => item.contractId));
       const position = accountPositions.find(item => contracts.get(item.contractId) === requestBody.symbol);
       if (!position) {
+        return { status: 'already-flat' as const };
+      }
+      try {
+        const result = await post<TradovatePlaceOrderResult>('/order/liquidateposition', {
+          accountId: requestBody.accountId,
+          contractId: position.contractId,
+          admin: false,
+          isAutomated: true,
+        });
+        return fromLiquidatePositionResult(result);
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        if (
+          reason instanceof TradovateTransportError
+          && reason.status != null
+          && reason.status >= 400
+          && reason.status < 500
+        ) {
+          return { status: 'rejected' as const, reason: message };
+        }
         return {
-          brokerOrderId: `already-flat:${requestBody.accountId}:${requestBody.symbol}`,
-          accepted: true,
-          definitive: true,
+          status: 'indeterminate' as const,
+          reason: message,
         };
       }
-      const result = await post<TradovatePlaceOrderResult>('/order/liquidateposition', {
-        accountId: requestBody.accountId,
-        contractId: position.contractId,
-        admin: false,
-        isAutomated: true,
-      });
-      return fromPlaceOrderResult(result ?? {});
     },
     async placeOco(requestBody: BrokerOcoRequest) {
       const result = await post<TradovatePlaceOcoResult>(
@@ -948,7 +962,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       });
       const commandId = assertCommandAccepted(result, 'modifyOrder');
       const confirmed = await waitForOrder(orderId, order =>
-        order.status === 'working'
+        isOpenOrderStatus(order.status)
         && order.quantity === changes.quantity
         && order.orderType === changes.orderType
         && order.limitPrice === changes.limitPrice

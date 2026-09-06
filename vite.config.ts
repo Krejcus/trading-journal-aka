@@ -155,6 +155,9 @@ export default defineConfig(({ mode }) => {
           name: 'Alpha Trade',
           short_name: 'Alpha Trade',
           description: 'Professional Trading Journal & Mentor',
+          launch_handler: {
+            client_mode: 'navigate-existing',
+          },
           theme_color: '#0f172a',
           background_color: '#0f172a',
           display: 'standalone',

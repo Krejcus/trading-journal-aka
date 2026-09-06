@@ -16,8 +16,10 @@ const signedUsd = (value: number): string => `${value >= 0 ? '+' : '-'}$${Math.a
 export function planNativeWidgetLocalAlerts(
   previous: NativeWidgetLiveState | null,
   next: NativeWidgetLiveState,
+  owner: 'server' | 'local' = 'server',
 ): NativeWidgetLocalAlert[] {
-  if (!previous) return [];
+  // Server APNs owns financial/account state alerts, including foreground delivery.
+  if (owner !== 'local' || !previous) return [];
   const alerts: NativeWidgetLocalAlert[] = [];
   const beforeAccounts = new Map(previous.accounts.map(account => [account.id, account]));
 

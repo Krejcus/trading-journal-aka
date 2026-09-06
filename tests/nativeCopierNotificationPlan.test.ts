@@ -31,13 +31,13 @@ const plan = (
   previous: CopierNotificationSnapshot | null,
   next: CopierNotificationSnapshot | null,
   slots: CopierScheduledSlot[] = [],
-) => planCopierNotifications({ previous, next, slots, now: NOW });
+) => planCopierNotifications({ previous, next, slots, now: NOW, localDynamicAlerts: true });
 
 describe('plánované sloty', () => {
   it('ostrý ARM naplánuje notifikaci na armExpiresAt', () => {
     const result = plan(null, snapshot({ armed: true, armExpiresAt: NOW + 8 * HOUR }));
     expect(result.schedule).toEqual([expect.objectContaining({
-      key: 'arm-expiry', at: NOW + 8 * HOUR, title: 'Copier: ARM vypršel',
+      key: 'arm-expiry', at: NOW + 8 * HOUR, title: 'Copier: plánovaný konec ARM',
     })]);
     expect(result.cancel).toEqual([]);
   });
@@ -96,6 +96,22 @@ describe('okamžité incidenty', () => {
     expect(error.fireNow).toEqual([expect.objectContaining({ body: 'Divergence pozic' })]);
     const both = plan(snapshot(), snapshot({ killSwitch: true, lastError: 'Ruční stop' }));
     expect(both.fireNow.map(item => item.title)).toEqual(['Copier: KILL SWITCH']);
+  });
+
+  it('DISARMED invalidace preflightu je viditelná bez falešného FAIL-CLOSED', () => {
+    const result = plan(snapshot(), snapshot({ reconciliationRequired: true }));
+    expect(result.fireNow).toEqual([expect.objectContaining({
+      title: 'Copier: nutná kontrola',
+      body: expect.stringContaining('Před dalším ARM'),
+    })]);
+
+    // Reconnect má vlastní lifecycle notifikaci a nemá přidat duplicitní
+    // bezpečnostní zprávu za stav vzniklý během odpojení.
+    const reconnect = plan(
+      snapshot({ connected: false }),
+      snapshot({ connected: true, reconciliationRequired: true }),
+    );
+    expect(reconnect.fireNow.map(item => item.title)).toEqual(['Copier: Tradovate připojen']);
   });
 
   it('první sync po startu appky nehlásí staré stavy', () => {
@@ -216,5 +232,30 @@ describe('resume nabídka po výpadku', () => {
     })]);
     expect(plan(next, next).fireNow).toHaveLength(0);
     expect(plan(null, next).fireNow).toHaveLength(0);
+  });
+});
+
+
+describe('native production notification ownership and timer boundaries', () => {
+  it('leaves every dynamic event and incident to server APNs by default', () => {
+    const next = snapshot({ killSwitch: true, reconciliationRequired: true, copyEvents: [
+      {id: 'sl', kind: 'sl-moved', title: 'SL changed', body: 'server owned'},
+    ] });
+    expect(planCopierNotifications({previous: snapshot(), next, slots: [], now: NOW}).fireNow).toEqual([]);
+  });
+
+  it.each(['arm-expiry', 'cooldown-end', 'daylock-end'] as const)('keeps an existing %s in its final 15 seconds', key => {
+    const next = snapshot({armed: true, armExpiresAt: NOW + 14_000, entryCooldownUntil: NOW + 14_000, dayLockUntil: NOW + 14_000});
+    const result = planCopierNotifications({previous: next, next, slots: [{key, at: NOW + 14_000, id: 42}], now: NOW});
+    expect(result.cancel).toEqual([]);
+    expect(result.schedule).toEqual([]);
+  });
+
+  it('does not create late new slots or claim broker state from a timer', () => {
+    const tooLate = plan(null, snapshot({armed: true, armExpiresAt: NOW + 10_000}));
+    expect(tooLate.schedule).toEqual([]);
+    const result = plan(null, snapshot({armed: true, armExpiresAt: NOW + HOUR}));
+    expect(result.schedule[0].body).toContain('ověř');
+    expect(result.schedule[0].body).not.toContain('Kopírování stojí');
   });
 });

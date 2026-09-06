@@ -1,3 +1,4 @@
+import ConnectionTradeNoteConsent from './ConnectionTradeNoteConsent';
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -108,6 +109,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
    // střelil setToastMsg na odmontované komponentě.
    useEffect(() => () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); }, []);
    const [editingPermissions, setEditingPermissions] = useState<{ connectionId: string, permissions: { canSeePnl: boolean; pnlFormat?: 'usd' | 'rr' | 'hidden'; canSeePrep?: boolean; canSeePrepRituals?: boolean; canSeeReviewStats?: boolean; canSeeReviewNotes?: boolean; canSeeNotes: boolean; canSeeScreenshots: boolean; allowedAccountIds?: string[] }, name: string, isAccepting?: boolean } | null>(null);
+   const [acceptingRequest, setAcceptingRequest] = useState(false);
    const [modalPnlFormat, setModalPnlFormat] = useState<'usd' | 'rr' | 'hidden' | undefined>(undefined);
 
    // Safe wrapper: optimistic update + rollback on failure
@@ -121,8 +123,11 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
      } catch (err) {
        console.error('[NetworkHub] Failed to update permissions, rolling back:', err);
        setConnections(prevConnections);
+       const previous = prevConnections.find(c => c.id === connectionId);
+       if (previous?.permissions) setEditingPermissions(current => current?.connectionId === connectionId ? { ...current, permissions: previous.permissions as typeof current.permissions } : current);
+       showToast('Změnu oprávnění se nepodařilo potvrdit. Obnovte spojení a nastavení zkontrolujte.', 'error');
      }
-   }, []);
+   }, [showToast]);
 
    const loadConnections = useCallback(async () => {
       let mounted = true;
@@ -953,23 +958,26 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                      </div>
                   </div>
 
+                  <div className="mt-4">
+                     {!editingPermissions.isAccepting && <ConnectionTradeNoteConsent connectionId={editingPermissions.connectionId} permissions={editingPermissions.permissions} />}
+                  </div>
                   <div className="mt-6 pt-6 border-t border-slate-100 dark:border-white/5">
                      {editingPermissions.isAccepting ? (
-                        <button
+                        <button disabled={acceptingRequest}
                            onClick={async () => {
+                              setAcceptingRequest(true);
                               try {
-                                 await storageService.updateConnectionStatus(editingPermissions.connectionId, 'accepted');
-                                 await storageService.updateConnectionPermissions(editingPermissions.connectionId, editingPermissions.permissions);
+                                 await storageService.confirmConnectionTradeNotes(editingPermissions.connectionId, editingPermissions.permissions, true);
                                  setConnections(prev => prev.map(c => c.id === editingPermissions.connectionId ? { ...c, status: 'accepted', permissions: editingPermissions.permissions } : c));
                                  loadConnections();
                                  setEditingPermissions(null);
                               } catch (err) {
-                                 console.error("Accept failed", err);
-                              }
+                                 showToast(err instanceof Error ? err.message : 'Žádost nebyla přijata.', 'error');
+                              } finally { setAcceptingRequest(false); }
                            }}
                            className="w-full py-3 rounded-xl bg-emerald-600 text-white font-black text-xs uppercase tracking-widest hover:bg-emerald-500 transition-all hover:scale-[1.02] shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2"
                         >
-                           <CheckCircle2 size={16} /> Potvrdit a přijmout
+                           <CheckCircle2 size={16} /> {acceptingRequest ? 'Potvrzuji…' : 'Potvrdit a přijmout'}
                         </button>
                      ) : (
                         <button onClick={() => setEditingPermissions(null)} className="w-full py-3 rounded-xl bg-slate-900 text-white font-black text-xs uppercase tracking-widest hover:bg-slate-800 transition-all dark:bg-white dark:text-slate-900 hover:scale-[1.02]">

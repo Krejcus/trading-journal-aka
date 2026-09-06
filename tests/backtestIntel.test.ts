@@ -19,7 +19,7 @@ const longTrade = (partial: Partial<BacktestClosedTrade> = {}): BacktestClosedTr
   entryPrice: 100, exitPrice: 102, entryTime: 1_000, exitTime: 1_180,
   grossPnl: 4, commission: 0.74, pnl: 3.26, reason: 'take-profit',
   stopLoss: 98, takeProfit: 102, initialStopLoss: 98, initialTakeProfit: 102,
-  riskAmount: 4, mfePoints: 2, maePoints: 1, mfeR: 1, maeR: 0.5,
+  riskAmount: 4, mfeAmount: 4, maeAmount: 2, mfePoints: 2, maePoints: 1, mfeR: 1, maeR: 0.5,
   ...partial,
 });
 
@@ -274,13 +274,20 @@ describe('backtestClosedTradeToTrade', () => {
     expect(trade.stopLoss).toBe(98);
     expect(trade.mfeR).toBe(1);
     expect(trade.maeR).toBe(0.5);
+    expect(trade.autoConfluence).toEqual({ htf: trade.htfConfluence, ltf: trade.ltfConfluence });
+    expect(trade.autoConfluence?.htf).not.toBe(trade.htfConfluence);
   });
 
-  it('převede body excursion na dolary přes hodnotu bodu instrumentu', () => {
+  it('zachová doložené cash extremy bez přenásobení pozdější velikostí pozice', () => {
     // MNQ = $2/bod, 3 kontrakty → MFE 2 body = $12.
-    const trade = map({ quantity: 3, mfePoints: 2, maePoints: 1 });
+    const trade = map({ quantity: 3, mfePoints: 2, maePoints: 1, mfeAmount: 12, maeAmount: 6 });
     expect(trade.runUp).toBe(12);
     expect(trade.drawdown).toBe(6);
+  });
+
+  it('neoznačí legacy cenové extrémy za doložený cash průběh', () => {
+    expect(map({ mfeAmount: undefined, maeAmount: undefined })).toMatchObject({ runUp: null, drawdown: null, mfeR: null, maeR: null, actualExcursionQuality: 'legacy-unknown' });
+    expect(map({ actualExcursionQuality: 'legacy-unknown' })).toMatchObject({ runUp: null, drawdown: null });
   });
 
   it('bias vyhodnotí jen když je směrový', () => {
@@ -293,7 +300,8 @@ describe('backtestClosedTradeToTrade', () => {
   it('nese blob pole, která historicky plnil AlphaBridge', () => {
     const trade = map();
     expect(trade.excursionAvailable).toBe(true);
-    expect(trade.excursionComplete).toBe(true);
+    // Twenty supplied minutes without stop/cutoff do not complete the day.
+    expect(trade.excursionComplete).toBe(false);
     expect(trade.executionPath?.version).toBe(1);
     expect(trade.executionPathComplete).toBe(true);
     expect(trade.counterfactual?.available).toBe(true);
@@ -341,7 +349,7 @@ describe('backtestClosedTradeToTrade — parita s AlphaBridge', () => {
 
   it('doplní pole, která AlphaBridge plní u každého obchodu', () => {
     const trade = map();
-    expect(trade.schemaVersion).toBe(7);
+    expect(trade.schemaVersion).toBe(8);
     expect(trade.source).toBe('backtest-replay');
     expect(trade.outcomeAmbiguous).toBe(false);
     // 1970-01-01 01:16 UTC → Praha je UTC+1 v zimě.
@@ -356,4 +364,14 @@ describe('backtestClosedTradeToTrade — parita s AlphaBridge', () => {
     expect(map({ pnl: 0 }).isBE).toBe(true);
     expect(map().isBE).toBeUndefined();
   });
+});
+
+it('journal trade keeps its exact rule reference without exporting private rule text', () => {
+  const binding = { version:1 as const,id:'binding-1',experimentId:'case-1',revisionId:'rule-1',revisionHash:'sha256:rule-1',role:'development' as const,
+    definition:{hypothesis:'private hypothesis',rule:'private rule',falsification:'private criterion',targetPositions:20,timeZone:'UTC'},
+    boundAt:1000,marketStart:1000000,marketEnd:2000000,exposureAtBinding:'unknown' as const,exposureReasons:['private exposure reason'],priorRunIds:[] };
+  const mapped=backtestClosedTradeToTrade(longTrade(),{accountId:'owner-account',candles:risingSeries(5),orderEvents:[],timeZone:'UTC',researchBinding:binding});
+  expect(mapped.backtestResearch).toEqual({id:'binding-1',experimentId:'case-1',revisionId:'rule-1',revisionHash:'sha256:rule-1',role:'development'});
+  expect(JSON.stringify(mapped)).not.toContain('private');
+  expect(binding.definition.rule).toBe('private rule');
 });

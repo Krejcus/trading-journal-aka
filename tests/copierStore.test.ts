@@ -28,7 +28,9 @@ describe('createMemoryCopierStore', () => {
   });
 
   it('prázdný store vrací prázdný snapshot', async () => {
-    expect(await createMemoryCopierStore().load()).toEqual(emptySnapshot());
+    const loaded = await createMemoryCopierStore().load();
+    expect(loaded).toEqual(emptySnapshot());
+    expect(loaded.safety).not.toHaveProperty('leaderExposureEpochs');
   });
 
   it('uložený stav nejde změnit zvenčí', async () => {

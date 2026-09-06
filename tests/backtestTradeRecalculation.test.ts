@@ -4,6 +4,7 @@ import {
   buildBacktestTradeRecalculationUpdates,
   describeBacktestTradeRecalculation,
   mergeManualAndGeneratedConfluences,
+  reconcileBacktestConfluenceProvenance,
 } from '../services/backtestTradeRecalculation';
 
 const trade = (partial: Partial<Trade> = {}): Trade => ({
@@ -28,13 +29,13 @@ describe('backtest trade recalculation', () => {
     expect(mergeManualAndGeneratedConfluences(
       ['1m BoS (1 bar zpět)', 'vstup ve FVG', 'Moje potvrzení'],
       ['1m CHoCH (2 bary zpět)', 'pod VWAP'],
-      'ltf',
+      ['1m BoS (1 bar zpět)', 'vstup ve FVG'],
     )).toEqual(['Moje potvrzení', '1m CHoCH (2 bary zpět)', 'pod VWAP']);
 
     expect(mergeManualAndGeneratedConfluences(
       ['1h BoS bullish', 'u PDH', 'Ruční HTF poznámka'],
       ['1h CHoCH bearish', 'pod Day Open'],
-      'htf',
+      ['1h BoS bullish', 'u PDH'],
     )).toEqual(['Ruční HTF poznámka', '1h CHoCH bearish', 'pod Day Open']);
   });
 
@@ -47,6 +48,7 @@ describe('backtest trade recalculation', () => {
       setupType: 'reaction',
       ltfConfluence: ['1m BoS', 'Ruční LTF'],
       htfConfluence: ['1h BoS bullish', 'Ruční HTF'],
+      autoConfluence: { htf: ['1h BoS bullish'], ltf: ['1m BoS'] },
       entryMap: { structureType: 'BoS' },
       targetLevel: 'stará chybná úroveň',
     });
@@ -77,6 +79,30 @@ describe('backtest trade recalculation', () => {
     expect(updates).not.toHaveProperty('executionStatus');
     expect(updates).not.toHaveProperty('screenshots');
     expect(updates).not.toHaveProperty('setupType');
+  });
+
+  it('preserves unknown legacy tags, even when their text looks automatically generated', () => {
+    const current = trade({ htfConfluence: ['u silné rezistence', '1h BoS bullish'], ltfConfluence: ['odraz od mé zóny', 'pod VWAP'] });
+    const updates = buildBacktestTradeRecalculationUpdates(current, trade({ htfConfluence: ['u PDH'], ltfConfluence: ['nad VWAP'] }));
+    expect(updates.htfConfluence).toEqual(['u silné rezistence', '1h BoS bullish', 'u PDH']);
+    expect(updates.ltfConfluence).toEqual(['odraz od mé zóny', 'pod VWAP', 'nad VWAP']);
+    expect(updates.autoConfluence).toEqual({ htf: ['u PDH'], ltf: ['nad VWAP'] });
+  });
+
+  it('never takes ownership of manual tags that match new indicator output', () => {
+    const current = trade({ htfConfluence: ['u PDH'], autoConfluence: { htf: [], ltf: [] } });
+    const once = { ...current, ...buildBacktestTradeRecalculationUpdates(current, trade({ htfConfluence: ['u PDH', 'pod Day Open'] })) };
+    expect(once.autoConfluence?.htf).toEqual(['pod Day Open']);
+    const twice = buildBacktestTradeRecalculationUpdates(once, trade({ htfConfluence: [] }));
+    expect(twice.htfConfluence).toEqual(['u PDH']);
+  });
+
+  it('retains only selected generated tags, allowing an explicit manual takeover', () => {
+    expect(reconcileBacktestConfluenceProvenance(
+      { autoConfluence: { htf: ['u PDH', 'pod Day Open'], ltf: ['nad VWAP'] } },
+      { htf: ['u PDH', 'Moje HTF'], ltf: ['nad VWAP'] },
+      { htf: ['u PDH'] },
+    )).toEqual({ htf: [], ltf: ['nad VWAP'] });
   });
 
   it('creates a readable before/after preview', () => {

@@ -1,4 +1,5 @@
-import type { Drawing, DrawingEngine, DrawingStyle, DrawingToolId } from '@getcandlekit/charts';
+import { DEFAULT_STYLE, type Drawing, type DrawingEngine, type DrawingStyle, type DrawingToolId } from '@getcandlekit/charts';
+import { normalizeDrawingStyle } from './chartDrawingStyleDefaults';
 import type { NasdaqFuturesRoot } from './chartInstrumentLegend';
 
 export type PositionToolId = 'LongPosition' | 'ShortPosition';
@@ -156,6 +157,29 @@ export const normalizePositionSettings = (
       : Math.max(0, Math.min(8, Math.round(finite(candidate.qtyPrecision, 0)))),
   };
 };
+
+/** A named style carries appearance/risk preferences, not the target chart’s
+ * instrument economics or timeframe. Preserve these when applying old templates. */
+export const normalizePositionStyleTemplate = (
+  value: unknown,
+  current: PositionDrawingStyle,
+): PositionDrawingStyle => {
+  const runtime = normalizePositionSettings(current.position);
+  const candidate = normalizeDrawingStyle(value, DEFAULT_STYLE) as PositionDrawingStyle;
+  return {
+    ...candidate,
+    position: {
+      ...normalizePositionSettings(candidate.position),
+      pointValue: runtime.pointValue,
+      tickSize: runtime.tickSize,
+      intervalSeconds: runtime.intervalSeconds,
+    },
+  };
+};
+
+export const positionStyleDefaults = (current: PositionDrawingStyle): PositionDrawingStyle => (
+  normalizePositionStyleTemplate({ ...DEFAULT_STYLE, position: positionDefaultsForRoot(undefined) }, current)
+);
 
 export interface PositionMetrics {
   entry: number;

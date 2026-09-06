@@ -144,6 +144,44 @@ export class CopierBracketCorrelator {
     };
   }
 
+  /**
+   * Aktualizuje protective leg, který už patří k vyplněnému entry, ale druhá
+   * noha páru ještě nedorazila. Po vytvoření páru přebírá vlastnictví změny
+   * běžný `planModify()` přes durable follower link.
+   *
+   * Quantity zůstává původní: Suspended resize je venue-managed šum, zatímco
+   * nová cena se musí propsat do právě vznikajícího follower bracketu.
+   */
+  updatePending(event: LeaderEvent): boolean {
+    if (event.kind !== 'replaced' || event.executionShapeChanged !== true) return false;
+    this.prune(event.receivedAt);
+    for (const [entryOrderId, legs] of this.legsByEntry) {
+      if (this.emittedEntries.has(entryOrderId)) continue;
+      const leg = legs.get(event.orderId);
+      if (!leg) continue;
+      const type = event.orderType === 'Limit'
+        ? 'target'
+        : event.orderType === 'Stop' || event.orderType === 'StopLimit'
+          ? 'stop'
+          : null;
+      const price = type === 'target' ? event.limitPrice : event.stopPrice;
+      if (!type || type !== leg.type || price == null || !Number.isFinite(price)) {
+        throw new Error('Bracket replace změnil protective roli nebo nemá platnou cenu');
+      }
+      legs.set(event.orderId, {
+        ...leg,
+        type,
+        price,
+        // Korelační stáří zůstává od prvního submitted legu. Opakovaný
+        // replace nesmí prodlužovat inference okno ani fail-closed timer.
+        receivedAt: leg.receivedAt,
+        // `quantity` záměrně zachováváme z prvního bezpečně korelovaného legu.
+      });
+      return true;
+    }
+    return false;
+  }
+
   /** Vrátí entry, ke kterému už byl order bezpečně zařazen jako protective leg. */
   entryOrderIdForLeg(orderId: string): string | null {
     for (const [entryOrderId, legs] of this.legsByEntry) {
@@ -154,6 +192,14 @@ export class CopierBracketCorrelator {
 
   hasPendingPair(entryOrderId: string): boolean {
     return this.awaitingPair.has(entryOrderId);
+  }
+
+  /** Controller volá po vypršení fail-closed timeru; čekající pár už poté
+   * nesmí zůstat v paměti až do restartu workeru. */
+  abandonPendingPair(entryOrderId: string): void {
+    this.awaitingPair.delete(entryOrderId);
+    this.legsByEntry.delete(entryOrderId);
+    this.entries.delete(entryOrderId);
   }
 
   pendingTimeoutMs(): number {

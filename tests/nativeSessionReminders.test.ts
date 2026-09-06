@@ -65,3 +65,20 @@ describe('native session reminder planner', () => {
     expect(plan.notifications.filter(item => item.kind === 'audit')).toHaveLength(5);
   });
 });
+
+
+it('shifts calendar weekday when a session offset crosses midnight', () => {
+  const plan = buildNativeSessionReminderPlan([
+    {id:'late', name:'Late', startTime:'00:05', endTime:'23:55', color:'#fff'},
+  ], {...settings, eveningAuditAlertEnabled:false, sessionStartAlertExact:false, sessionEndAlertExact:false, sessionEndAlert10m:true});
+  expect(plan.notifications.filter(item => item.kind === 'start15').map(item => item.weekday)).toEqual([1,2,3,4,5]);
+  expect(plan.notifications.filter(item => item.kind === 'end10').map(item => item.weekday)).toEqual([3,4,5,6,7]);
+});
+
+it('keeps recurring audit prompts conditional on whether the user has finished', () => {
+  const plan = buildNativeSessionReminderPlan(sessions, {...settings, sessionEndAlert10m:true});
+  for (const item of plan.notifications.filter(item => item.kind === 'audit' || item.kind === 'end10')) {
+    expect(item.title).not.toContain('čeká');
+    expect(item.body).toContain('Pokud už máš audit hotový');
+  }
+});

@@ -6,11 +6,13 @@ import IndicatorTemplateMenu from './IndicatorTemplateMenu';
 import {
   calculatePositionMetrics,
   normalizePositionSettings,
+  normalizePositionStyleTemplate,
+  positionStyleDefaults,
   type PositionDrawing,
   type PositionDrawingSettings,
   type PositionDrawingStyle,
 } from '../services/chartPositionDrawing';
-import { rememberDrawingStyleDefault } from '../services/chartDrawingStyleDefaults';
+import { rememberDrawingStyleDefault, updateDrawingStyleAndDefault } from '../services/chartDrawingStyleDefaults';
 
 type Tab = 'inputs' | 'style' | 'visibility';
 const DIALOG_WIDTH = 500;
@@ -42,7 +44,7 @@ export const PositionDrawingFloatingToolbar: React.FC<Props & {
   const [labelsOpen, setLabelsOpen] = useState(false);
   const labelsRef = useRef<HTMLDivElement>(null);
   const settings = normalizePositionSettings(drawing.style.position);
-  const setPosition = (patch: Partial<PositionDrawingSettings>) => engine.setStyle(drawing.id, {
+  const setPosition = (patch: Partial<PositionDrawingSettings>) => updateDrawingStyleAndDefault(engine, drawing, {
     position: { ...settings, ...patch },
   } as Partial<DrawingStyle>);
   useEffect(() => {
@@ -78,8 +80,8 @@ export const PositionDrawingFloatingToolbar: React.FC<Props & {
       placement="bottom"
       indicator={`drawing:${drawing.tool}`}
       value={drawing.style}
-      defaultValue={drawing.style}
-      onApply={value => engine.setStyle(drawing.id, value as DrawingStyle)}
+      defaultValue={positionStyleDefaults(drawing.style)}
+      onApply={value => updateDrawingStyleAndDefault(engine, drawing, normalizePositionStyleTemplate(value, drawing.style))}
     />
     <TradingViewColorPicker compact value={splitColorAlpha(settings.targetColor).color} opacity={splitColorAlpha(settings.targetColor).opacity} label="Target color" onChange={(color, opacity) => setPosition({ targetColor: colorWithAlpha(color, opacity) })} />
     <TradingViewColorPicker compact value={splitColorAlpha(settings.stopColor).color} opacity={splitColorAlpha(settings.stopColor).opacity} label="Stop color" onChange={(color, opacity) => setPosition({ stopColor: colorWithAlpha(color, opacity) })} />
@@ -213,7 +215,7 @@ const PositionDrawingSettingsDialog: React.FC<Props> = ({ engine, drawing, onClo
         </>}
         {tab === 'visibility' && <div className="space-y-3"><label className="flex items-center gap-3 text-[13px] text-slate-800"><input type="checkbox" checked readOnly className="h-4 w-4 accent-[#2962ff]" />All intervals</label><p className="text-[12px] text-slate-500">Position je viditelná na všech timeframes uloženého layoutu.</p></div>}
       </div>
-      <footer className="flex h-16 shrink-0 items-center border-t border-slate-200 px-4"><IndicatorTemplateMenu indicator={`drawing:${drawing.tool}`} value={style} defaultValue={originalStyle.current} onApply={value => { setStyleState(value as PositionDrawingStyle); engine.setStyle(drawing.id, value as DrawingStyle); }} /><button type="button" onClick={cancel} className="ml-auto h-10 rounded-md border border-slate-300 px-5 text-[13px] font-semibold">Cancel</button><button type="button" onClick={apply} className="ml-2 h-10 rounded-md bg-[#2962ff] px-5 text-[13px] font-semibold text-white">Ok</button></footer>
+      <footer className="flex h-16 shrink-0 items-center border-t border-slate-200 px-4"><IndicatorTemplateMenu indicator={`drawing:${drawing.tool}`} value={style} defaultValue={positionStyleDefaults(originalStyle.current)} onApply={value => { const next = normalizePositionStyleTemplate(value, originalStyle.current); setStyleState(next); engine.setStyle(drawing.id, next); }} /><button type="button" onClick={cancel} className="ml-auto h-10 rounded-md border border-slate-300 px-5 text-[13px] font-semibold">Cancel</button><button type="button" onClick={apply} className="ml-2 h-10 rounded-md bg-[#2962ff] px-5 text-[13px] font-semibold text-white">Ok</button></footer>
     </section>
   </div>;
 };
