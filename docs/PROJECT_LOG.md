@@ -208,6 +208,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-06 (Claude, triáž ~300 necommitnutých souborů v Documents checkoutu)
+
+Trojcestné porovnání (společný základ 479a5c3d, origin/main, pracovní strom):
+86 souborů shodných s main, 257 untracked shodných s main, 21 s lokální změnou
+už obsaženou v main, 19 „konfliktních“ — u nich kontrola identifikátorů ukázala,
+že strana Documents je starší forma toho, co main už má jinak (copier core
+z 2. 9., iOS/LIVE review z 5. 9.; v main chybí jen zbytky staršího business
+loadingu v App.tsx, které se brát nemají). 36 untracked lišících se = macOS
+companion, lib/macCompanion*, notificationDelivery, leaderFlatGuard — ve všech
+je main novější (3.–6. 9.) než Documents (31. 8.–1. 9.). Jediné unikátní a
+hodné zachování: novější design canvas menubar companionu (17 vs 12 artboardů)
+a launch konfigurace `alphatrade-main` — commit 832fab6b (jeho zpráva zmiňuje
+i 24 evidence logů; ty jsou gitignorované `*.log`/evidence a v repu záměrně
+nejsou). Závěr: Documents checkout už nenese žádnou nezachráněnou práci a lze
+ho bezpečně přepnout na `main` — čeká na výslovný souhlas uživatele (destruktivní
+krok, ~300 souborů). Podrobná tabulka: scratchpad `documents-triage.md`.
+
 ### 2026-09-06 (Claude, záchrana rozdělané práce Codexu v backtestu)
 
 Codex předplatné skončilo; uživatel: „Codexovi už nic nezadávej.“ Jeho poslední
