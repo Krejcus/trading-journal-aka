@@ -228,6 +228,22 @@ Další a 6× Zpět nechá správný stav bez zaseknutého spinneru. tsc čisté
 (mimo předexistující `extension/` chyby z chybějících chrome typů v
 symlinkovaných node_modules), lint souboru beze změny (10 starších warningů).
 
+Navazující požadavek: karta v historii ukazovala pro obchody jen s copier
+snapshoty ikonu procesoru, protože náhled bral pouze ruční screenshoty a
+privátní snapshoty se podepisovaly až v detailu. Nová služba
+`services/copierSnapshotThumbs.ts`: `pickCopierThumbSnapshot` vybere snapshot
+po uzavření (`exit`, při více nejnovější), bez něj nejnovější podle `at`;
+`getCopierThumbUrl` podepíše jen ten jeden, deduplikuje souběžné požadavky a
+drží module-level cache s TTL 50 min (signed URL platí 60 min, do localStorage
+se záměrně neukládá). `TradeHistory` podepisuje jen pro vykreslené karty bez
+ručního screenshotu, po pěti; ruční screenshot má vždy přednost; chyba
+načtení `<img>` copier náhledu ho jednou invaliduje a podepíše znovu místo
+DB retry. Platí pro grid i tabulku (obě čtou `getScreenshot`). Testy služby
+(8) + ověření na localhost:3000: karty z 2. 9. dostaly signed URL
+`…/exit-*.png`, obchody jen se vstupem `entry-*.png`, GET 200 image/png.
+Při plné sadě jednou spadl `tradovateCopierDevice` na 5s timeoutu generování
+RSA klíče pod zátěží, samostatně prošel.
+
 ### 2026-09-06 (Claude, LIVE detail skupiny — vodorovný posuvník)
 
 Uživatel: v kartě Kopírovací skupiny nešlo v rozbaleném detailu účtů skrolovat
