@@ -208,6 +208,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-06 (Claude, dvojklik na splitter grafů vrací dělení doprostřed)
+
+Uživatel: dvojklik funguje jen na hraně čáry, ne uprostřed. Reprodukováno v
+náhledu: druhý klik dvojkliku dopadne na dočasný překryv
+`flexlayout__splitter_drag` (dítě `flexlayout__layout`, ne splitteru), takže
+původní `closest('.flexlayout__splitter')` neuspěl; syntetický dblclick
+fungoval, myší ne. Oprava v `AlphaTradeChartWorkspace`: capture `pointerdown`
+si pamatuje poslední splitter (`data-layout-path`), dvojklik na překryv do
+700 ms se k němu přiřadí a vyrovnání běží po `setTimeout(0)`, aby ho flexlayout
+drag-end nepřepsal. `centerMainSplit` nahrazeno `centerSplitter(path)`: parsuje
+`<rodič>/s<i>` a vyrovná váhy jen dvou sousedů daného splitteru (funguje i pro
+vnořená dělení; ostatní panely si šířku drží). Ověřeno reálným dvojklikem do
+středu i na hranu (332/734 → 533/533, 779/287 → 533/533); tsc čistý, chart
+workspace testy 49/49.
+
 ### 2026-09-06 (Claude + uživatel, Documents checkout přepnut na main)
 
 Po výslovném souhlasu („udělej to bezpečně“): záloha špinavého stromu do

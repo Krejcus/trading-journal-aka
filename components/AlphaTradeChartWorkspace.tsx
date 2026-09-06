@@ -1618,17 +1618,45 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     }
   }, [previewWorkspace]);
 
-  const centerMainSplit = useCallback(() => {
+  /**
+   * Dvojklik na splitter vrátí dělící čáru doprostřed mezi oba sousední
+   * panely. `data-layout-path` splitteru má tvar `<cesta rodiče>/s<i>`, kde
+   * `i` je index prvního ze dvou sousedů; cesta rodiče je posloupnost segmentů
+   * `r<n>` / `ts<n>` (index dítěte). Funguje i pro vnořená dělení; ostatní
+   * sourozenci si váhu ponechají.
+   */
+  const centerSplitter = useCallback((splitterPath: string | null) => {
     const exported = workspace.exportLayout() as {
-      tree?: { layout?: { children?: Array<Record<string, unknown>> } };
+      tree?: { layout?: { children?: Array<{ weight?: number; children?: unknown[] }> } };
     };
     const next = typeof structuredClone === 'function'
       ? structuredClone(exported)
       : JSON.parse(JSON.stringify(exported));
-    const children = next.tree?.layout?.children;
+    let parent: { children?: Array<{ weight?: number; children?: unknown[] }> } | undefined = next.tree?.layout;
+    const segments = (splitterPath ?? '/s0').split('/').filter(Boolean);
+    const splitterSegment = segments.pop();
+    const splitterIndex = Number(splitterSegment?.replace(/^s/, ''));
+    for (const segment of segments) {
+      const index = Number(segment.replace(/^[a-z]+/, ''));
+      const child = parent?.children?.[index] as { weight?: number; children?: unknown[] } | undefined;
+      if (!child) { parent = undefined; break; }
+      parent = child;
+    }
+    const children = parent?.children as Array<{ weight?: number }> | undefined;
     if (!Array.isArray(children) || children.length < 2) return;
-    const equalWeight = 100 / children.length;
-    children.forEach(child => { child.weight = equalWeight; });
+    const left = Number.isInteger(splitterIndex) && splitterIndex >= 0 && splitterIndex < children.length - 1
+      ? splitterIndex
+      : null;
+    if (left == null) {
+      const equalWeight = 100 / children.length;
+      children.forEach(child => { child.weight = equalWeight; });
+    } else {
+      const a = children[left];
+      const b = children[left + 1];
+      const half = ((a.weight ?? 100) + (b.weight ?? 100)) / 2;
+      a.weight = half;
+      b.weight = half;
+    }
     workspace.importLayout(next);
     setStatus('Grafy vycentrovány');
   }, [workspace]);
@@ -1636,11 +1664,27 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   useEffect(() => {
     const shell = workspaceShellRef.current;
     if (!shell) return;
+    // Druhý klik dvojkliku dopadne na dočasný překryv `flexlayout__splitter_drag`,
+    // který není potomkem splitteru — cíl dvojkliku proto nestačí. Pamatujeme si
+    // poslední pointerdown na splitteru a dvojklik k němu přiřadíme.
+    let lastSplitter: { path: string | null; at: number } | null = null;
+    const handlePointerDown = (event: PointerEvent) => {
+      const splitter = (event.target as Element).closest?.('.flexlayout__splitter') as HTMLElement | null;
+      lastSplitter = splitter ? { path: splitter.dataset.layoutPath ?? null, at: event.timeStamp } : null;
+    };
     const handleDoubleClick = (event: MouseEvent) => {
-      if ((event.target as Element).closest('.flexlayout__splitter')) {
+      const target = event.target as Element;
+      const splitter = target.closest?.('.flexlayout__splitter') as HTMLElement | null;
+      const viaOverlay = !splitter
+        && lastSplitter != null
+        && event.timeStamp - lastSplitter.at < 700
+        && (target.classList.contains('flexlayout__splitter_drag') || target.classList.contains('flexlayout__layout'));
+      if (splitter || viaOverlay) {
         event.preventDefault();
         event.stopPropagation();
-        centerMainSplit();
+        const path = splitter?.dataset.layoutPath ?? lastSplitter?.path ?? null;
+        // Až po doběhnutí flexlayout pointerup/drag-end, aby import vah nepřepsal.
+        window.setTimeout(() => centerSplitter(path), 0);
         return;
       }
       if (selectedFib || selectedPosition || selectedDrawing) {
@@ -1653,15 +1697,17 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     };
     const handleWheel = () => workspaceHistory.captureAfterEvent('změnu měřítka grafu');
     const handlePointerUp = () => workspaceHistory.captureAfterEvent('posun nebo změnu měřítka grafu');
+    shell.addEventListener('pointerdown', handlePointerDown, true);
     shell.addEventListener('dblclick', handleDoubleClick, true);
     shell.addEventListener('wheel', handleWheel, true);
     shell.addEventListener('pointerup', handlePointerUp, true);
     return () => {
+      shell.removeEventListener('pointerdown', handlePointerDown, true);
       shell.removeEventListener('dblclick', handleDoubleClick, true);
       shell.removeEventListener('wheel', handleWheel, true);
       shell.removeEventListener('pointerup', handlePointerUp, true);
     };
-  }, [centerMainSplit, selectedDrawing, selectedFib, selectedPosition, workspaceHistory]);
+  }, [centerSplitter, selectedDrawing, selectedFib, selectedPosition, workspaceHistory]);
 
   const topButton = `h-8 inline-flex items-center gap-1.5 px-2 rounded-md text-[9px] font-bold transition-colors ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'}`;
   const topDivider = `h-6 w-px shrink-0 ${isDark ? 'bg-white/10' : 'bg-slate-200'}`;
