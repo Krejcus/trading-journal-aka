@@ -208,6 +208,40 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-06 (Claude, volitelné karty nativní lišty + mobilní LIVE karty, přenesené nad iOS release)
+
+Práce z 5. 9. (větev `claude/native-tabs-live-mobile`) byla po Codexově
+release iOS oprav (`cf7f98bf`) znovu nanesena nad aktuální `origin/main`,
+protože upstream mezitím přepsal `LiveDayRulesCard` (vlastní sbalení s
+`at:live:day-rules-collapsed`) a zrušil `CopierDailyStatsSummary`. Rebase
+původních commitů byl zahozen, změny se nanesly soubor po souboru.
+
+**Nativní lišta (Swift):** `AlphaTradeTabCatalog` v
+`AlphaTradeShellViewController.swift` — tři volitelné sloty z deseti cílů,
+pevné Zapsat/Více, volba v UserDefaults (`AlphaTradeShellTabSlots`), menu
+Více ukazuje jen cíle mimo lištu, v backtestu jsou LIVE-only položky
+disabled. Plugin `getShellTabs` / `setShellTabs` / `setShellPage`; web hlásí
+`activePage`, takže lišta zvýrazní skutečnou stránku nebo nic. Volba v
+Nastavení → Nativní iOS funkce → „Karty spodního menu"
+(`components/NativeShellTabsSettings.tsx`, čistá logika v
+`lib/nativeShellTabs.ts`). Výchozí zůstává Dashboard / Historie / Deník.
+
+**LIVE pod 1024 px** (`useCompactViewport`, desktop beze změny):
+`CompactGroupCard` místo 900px tabulky — hlavička s přepínačem, řádek
+Kapitál / Denní / Otevřený P&L, účty pod sebou s pilulkou stavu, P&L,
+pozicemi a důvodem odmítnutí, seznam příkazů se Zrušit, Flatten All /
+Upravit / menu; panel Diagnostika dat a API se na telefonu neukazuje;
+Pravidla dne začínají na telefonu sbalená, dokud uživatel volbu neuloží.
+Dev háček `at:dev:live-copy-fixture` (`lib/devLiveCopyFixture.ts`, jen DEV
+build) podstrčí ukázkovou skupinu pro ladění v Browser panelu přes
+`npm run dev:live` + `?native=1`.
+
+Ověření: `tsc` bez chyb mimo předexistující `extension/`; vitest 313 souborů /
+2982 testů; iOS Debug build z CLI. Instalace do telefonu = čistá reinstalace
+(uninstall + install; resetuje oprávnění k oznámením → potvrdit „Povolit").
+Telefon do té doby nese Codexův build 1.0 (3) z checkoutu 110 commitů za
+mainem, nainstalovaný jako upgrade (riziko rozbité Live Activity z 21. 8.).
+
 ### 2026-09-06 (Claude, rollout workeru a companion 18 po sloučení Risk záložky)
 
 Po ranním sloučení celého rozpracovaného checkoutu do `main` (`cf7f98bf`,

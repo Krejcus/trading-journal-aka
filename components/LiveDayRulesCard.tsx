@@ -523,7 +523,12 @@ const actionSummary = (kind: CopierRuleAction['kind'] | null, minutes: string): 
 const COLLAPSED_STORAGE_KEY = 'at:live:day-rules-collapsed';
 const readCollapsed = (): boolean => {
   try {
-    return typeof window !== 'undefined' && window.localStorage.getItem(COLLAPSED_STORAGE_KEY) === '1';
+    if (typeof window === 'undefined') return false;
+    const stored = window.localStorage.getItem(COLLAPSED_STORAGE_KEY);
+    if (stored === '1') return true;
+    if (stored === '0') return false;
+    // Bez uložené volby: na telefonu začíná karta sbalená, ať je skupina hned vidět.
+    return typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 1023px)').matches;
   } catch {
     return false;
   }

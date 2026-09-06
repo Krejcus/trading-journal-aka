@@ -3,27 +3,63 @@ import UIKit
 import UserNotifications
 import WebKit
 
-private enum AlphaTradeTab: String, CaseIterable {
-    case dashboard, history, capture, journal, more
+/// One destination the shell can show as a bottom tab or inside the More menu.
+struct AlphaTradeTabDestination: Equatable {
+    let id: String
+    let title: String
+    let symbol: String
+    /// LIVE-only surfaces have no meaning in the Backtest world and stay disabled there.
+    let liveOnly: Bool
+}
 
-    var title: String {
-        switch self {
-        case .dashboard: "Dashboard"
-        case .history: "Historie"
-        case .capture: "Zapsat"
-        case .journal: "Deník"
-        case .more: "Více"
-        }
+/// The user picks three destinations for the bottom bar; „Zapsat" and „Více"
+/// are fixed. The choice lives in UserDefaults so it survives relaunches and
+/// is mirrored to the web app through the AlphaTradeNative plugin.
+enum AlphaTradeTabCatalog {
+    static let destinations: [AlphaTradeTabDestination] = [
+        .init(id: "dashboard", title: "Dashboard", symbol: "square.grid.2x2", liveOnly: false),
+        .init(id: "history", title: "Historie", symbol: "clock.arrow.circlepath", liveOnly: false),
+        .init(id: "journal", title: "Deník", symbol: "book", liveOnly: false),
+        .init(id: "live", title: "LIVE", symbol: "dot.radiowaves.left.and.right", liveOnly: true),
+        .init(id: "ai", title: "AI Coach", symbol: "brain.head.profile", liveOnly: false),
+        .init(id: "lab", title: "Lab", symbol: "flask", liveOnly: false),
+        .init(id: "business", title: "Byznys", symbol: "briefcase", liveOnly: true),
+        .init(id: "network", title: "Síť", symbol: "globe", liveOnly: true),
+        .init(id: "accounts", title: "Účty", symbol: "wallet.pass", liveOnly: false),
+        .init(id: "settings", title: "Nastavení", symbol: "gearshape", liveOnly: false),
+    ]
+    static let capture = AlphaTradeTabDestination(id: "capture", title: "Zapsat", symbol: "plus.circle.fill", liveOnly: false)
+    static let more = AlphaTradeTabDestination(id: "more", title: "Více", symbol: "ellipsis", liveOnly: false)
+    static let defaultSlots = ["dashboard", "history", "journal"]
+    static let slotCount = 3
+    static let barItemCount = slotCount + 2
+    static let storageKey = "AlphaTradeShellTabSlots"
+
+    static func destination(_ id: String) -> AlphaTradeTabDestination? {
+        destinations.first { $0.id == id }
     }
 
-    var symbol: String {
-        switch self {
-        case .dashboard: "square.grid.2x2"
-        case .history: "clock.arrow.circlepath"
-        case .capture: "plus.circle.fill"
-        case .journal: "book"
-        case .more: "ellipsis"
-        }
+    /// Exactly three distinct known destinations; anything else is the default.
+    static func normalizedSlots(_ candidate: [String]?) -> [String] {
+        guard let candidate,
+              candidate.count == slotCount,
+              Set(candidate).count == slotCount,
+              candidate.allSatisfy({ destination($0) != nil }) else { return defaultSlots }
+        return candidate
+    }
+
+    static func loadSlots() -> [String] {
+        normalizedSlots(UserDefaults.standard.stringArray(forKey: storageKey))
+    }
+
+    static func saveSlots(_ slots: [String]) {
+        UserDefaults.standard.set(slots, forKey: storageKey)
+    }
+
+    /// Bar order keeps the capture action in the middle: slot, slot, Zapsat, slot, Více.
+    static func barLayout(for slots: [String]) -> [AlphaTradeTabDestination] {
+        let resolved = normalizedSlots(slots).compactMap(destination)
+        return [resolved[0], resolved[1], capture, resolved[2], more]
     }
 }
 
@@ -77,7 +113,8 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
     private let bridgeController = AlphaTradeBridgeViewController()
     private let shellTabBar = UITabBar()
     private var shellTabBarHeight: NSLayoutConstraint?
-    private var activeTab: AlphaTradeTab = .dashboard
+    private var tabSlots = AlphaTradeTabCatalog.loadSlots()
+    private var activePage = "dashboard"
     private var activeTheme = "dark"
     private var activeWorld = "live"
     private var systemRouteObserver: NSObjectProtocol?
@@ -140,17 +177,8 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
         shellTabBar.isTranslucent = true
         shellTabBar.delegate = self
         shellTabBar.translatesAutoresizingMaskIntoConstraints = false
-        shellTabBar.items = AlphaTradeTab.allCases.enumerated().map { index, tab in
-            let item = UITabBarItem(
-                title: tab.title,
-                image: UIImage(systemName: tab.symbol),
-                selectedImage: UIImage(systemName: tab.symbol)
-            )
-            item.tag = index
-            item.accessibilityIdentifier = "alphatrade.tab.\(tab.rawValue)"
-            return item
-        }
-        shellTabBar.selectedItem = shellTabBar.items?.first
+        shellTabBar.items = makeTabItems()
+        shellTabBar.selectedItem = tabItem(for: activePage)
         configureTabBarAppearance(for: activeTheme)
         view.addSubview(shellTabBar)
         let height = shellTabBar.heightAnchor.constraint(equalToConstant: 49 + view.safeAreaInsets.bottom)
@@ -377,7 +405,7 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
                 guard let self else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                     let expectedStyle: UIUserInterfaceStyle = theme == "light" ? .light : .dark
-                    let hasItems = self.shellTabBar.items?.count == AlphaTradeTab.allCases.count
+                    let hasItems = self.shellTabBar.items?.count == AlphaTradeTabCatalog.barItemCount
                     let isVisible = !self.shellTabBar.isHidden && self.shellTabBar.window != nil
                     let appearanceReady = self.shellTabBar.standardAppearance.stackedLayoutAppearance.selected.iconColor != nil
                     let passed = delivered && self.activeTheme == theme
@@ -542,36 +570,65 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
         view.bringSubviewToFront(shellTabBar)
     }
 
+    private var barLayout: [AlphaTradeTabDestination] {
+        AlphaTradeTabCatalog.barLayout(for: tabSlots)
+    }
+
+    private func makeTabItems() -> [UITabBarItem] {
+        barLayout.enumerated().map { index, destination in
+            let image = UIImage(systemName: destination.symbol) ?? UIImage(systemName: "circle")
+            let item = UITabBarItem(title: destination.title, image: image, selectedImage: image)
+            item.tag = index
+            item.accessibilityIdentifier = "alphatrade.tab.\(destination.id)"
+            item.isEnabled = activeWorld == "live" || !destination.liveOnly
+            return item
+        }
+    }
+
+    /// The bar item that represents a web page, or nil when the page lives in More.
+    private func tabItem(for page: String) -> UITabBarItem? {
+        guard let index = barLayout.firstIndex(where: { $0.id == page }),
+              let items = shellTabBar.items,
+              items.indices.contains(index) else { return nil }
+        return items[index]
+    }
+
+    private func refreshTabAvailability() {
+        let layout = barLayout
+        shellTabBar.items?.enumerated().forEach { index, item in
+            guard layout.indices.contains(index) else { return }
+            item.isEnabled = activeWorld == "live" || !layout[index].liveOnly
+        }
+    }
+
     func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
-        guard AlphaTradeTab.allCases.indices.contains(item.tag) else { return }
-        let destination = AlphaTradeTab.allCases[item.tag]
-        if !handle(destination),
-           let activeIndex = AlphaTradeTab.allCases.firstIndex(of: activeTab),
-           let items = tabBar.items,
-           items.indices.contains(activeIndex) {
+        let layout = barLayout
+        guard layout.indices.contains(item.tag) else { return }
+        if !handle(layout[item.tag]) {
             // UIKit commits the tapped selection after this delegate callback.
             // Action-only tabs (capture/more) therefore restore the real page
             // on the next main-loop turn instead of appearing as destinations.
-            let activeItem = items[activeIndex]
+            // A page that only lives in More keeps the bar without selection.
+            let restore = tabItem(for: activePage)
             DispatchQueue.main.async { [weak tabBar] in
-                tabBar?.selectedItem = activeItem
+                tabBar?.selectedItem = restore
             }
         }
     }
 
-    private func handle(_ tab: AlphaTradeTab) -> Bool {
+    private func handle(_ destination: AlphaTradeTabDestination) -> Bool {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
 
-        switch tab {
-        case .capture:
+        switch destination.id {
+        case AlphaTradeTabCatalog.capture.id:
             evaluate("window.__alphaTradeNative?.addTrade()")
             return false
-        case .more:
+        case AlphaTradeTabCatalog.more.id:
             presentMoreMenu()
             return false
-        case .dashboard, .history, .journal:
-            activeTab = tab
-            evaluate("window.__alphaTradeNative?.navigate('\(tab.rawValue)')")
+        default:
+            activePage = destination.id
+            evaluate("window.__alphaTradeNative?.navigate('\(destination.id)')")
             return true
         }
     }
@@ -627,12 +684,14 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
             self?.evaluate("window.__alphaTradeNative?.toggleWorld()")
         })
 
-        let destinations: [(String, String)] = isBacktest
-            ? [("AI Coach", "ai"), ("Lab", "lab"), ("Session", "accounts"),
-               ("iOS funkce", "native-system"), ("Nastavení", "settings")]
-            : [("AI Coach", "ai"), ("Lab", "lab"), ("LIVE", "live"), ("Byznys", "business"),
-               ("Síť", "network"), ("Účty", "accounts"),
-               ("iOS funkce", "native-system"), ("Nastavení", "settings")]
+        // Everything the bar does not show. Backtest hides LIVE-only surfaces
+        // and, like the web sidebar, presents Účty as the backtest Session.
+        let inBar = Set(tabSlots)
+        var destinations: [(String, String)] = AlphaTradeTabCatalog.destinations
+            .filter { !inBar.contains($0.id) && (!isBacktest || !$0.liveOnly) }
+            .map { ($0.id == "accounts" && isBacktest ? "Session" : $0.title, $0.id) }
+        let settingsIndex = destinations.firstIndex { $0.1 == "settings" } ?? destinations.endIndex
+        destinations.insert(("iOS funkce", "native-system"), at: settingsIndex)
         for (title, page) in destinations {
             sheet.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
                 self?.evaluate("window.__alphaTradeNative?.navigate('\(page)')")
@@ -680,5 +739,29 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
         guard world == "live" || world == "backtest" else { return }
         activeWorld = world
         AlphaTradeKeepAwake.shared.setWorld(world)
+        refreshTabAvailability()
+    }
+
+    func currentTabSlots() -> [String] { tabSlots }
+
+    /// Replaces the three configurable bar slots. Rejects anything that is not
+    /// three distinct known destinations so a broken web payload cannot leave
+    /// the bar empty.
+    @discardableResult
+    func applyTabSlots(_ candidate: [String]) -> Bool {
+        let normalized = AlphaTradeTabCatalog.normalizedSlots(candidate)
+        guard normalized == candidate else { return false }
+        tabSlots = normalized
+        AlphaTradeTabCatalog.saveSlots(normalized)
+        shellTabBar.items = makeTabItems()
+        shellTabBar.selectedItem = tabItem(for: activePage)
+        return true
+    }
+
+    /// The web app reports every page change (deep links, More menu, in-app
+    /// links) so the bar highlights the real page or nothing at all.
+    func applyPageFromWeb(_ page: String) {
+        activePage = page
+        shellTabBar.selectedItem = tabItem(for: page)
     }
 }

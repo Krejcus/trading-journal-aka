@@ -59,6 +59,13 @@ import {
   formatKnownCopyTradeAccountIds,
 } from '../lib/copyTradeAccountLabels';
 import LiveCopyTradeOverview from './LiveCopyTradeOverview';
+import {
+  devLiveCopyFixtureDailyStats,
+  devLiveCopyFixtureEligibility,
+  devLiveCopyFixtureEnabled,
+  devLiveCopyFixtureOrders,
+  devLiveCopyFixtureSnapshot,
+} from '../lib/devLiveCopyFixture';
 import LiveRiskTab from './LiveRiskTab';
 import LiveRuntimeStatus from './LiveRuntimeStatus';
 import MacCompanionSettings from './MacCompanionSettings';
@@ -590,6 +597,29 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   ];
 
   const checkingConnection = live.status == null;
+
+  // Dev háček (at:dev:live-copy-fixture): ukázková skupina bez Tradovate dat,
+  // jen pro ladění vizuálu LIVE přehledu. Prod build větev neobsahuje.
+  if (devLiveCopyFixtureEnabled()) {
+    return (
+      <div className="mx-auto max-w-[1500px] space-y-4">
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] font-bold text-amber-600">
+          DEV fixture LIVE přehledu — ukázková data, nic se neodesílá.
+        </div>
+        <LiveCopyTradeOverview
+          snapshot={devLiveCopyFixtureSnapshot}
+          orders={devLiveCopyFixtureOrders}
+          accountEligibility={devLiveCopyFixtureEligibility}
+          dailyStats={devLiveCopyFixtureDailyStats}
+          copierArmed={false}
+          copierStatusPending={false}
+          executionGroupId="group-main"
+          cooldownUntil={Date.now() + 6 * 60_000}
+          sessionArmedAt={0}
+        />
+      </div>
+    );
+  }
   const requiresConnection = tab !== 'connections' && live.status != null && !live.status.connected;
 
   return (

@@ -28,6 +28,7 @@ import {
 } from '../lib/copierDisarmReason';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import { stabilizeCopyGroups } from '../lib/stabilizeCopyGroups';
+import { useCompactViewport } from '../utils/useCompactViewport';
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import {
   adoptRuntimeCopyGroup,
@@ -78,6 +79,7 @@ const DEFAULT_REDACTION: RedactionSettings = { visibleStart: 4, visibleEnd: 4 };
 // tlumené a akce neaktivní; po připojení se rozsvítí bez dalších zásahů do UI.
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
+const moneyWhole = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const plain = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 
 /** Režim replikace follower účtu — hodnoty přebírají chování Tradecopie. */
@@ -529,6 +531,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     [effectiveEligibility],
   );
   const [groupTab, setGroupTab] = useState<Record<string, 'accounts' | 'orders'>>({});
+  // Telefon a úzký viewport dostanou karty místo 900px tabulky; desktop se nemění.
+  const compact = useCompactViewport();
   const [apiPanelOpen, setApiPanelOpen] = useState(false);
   const [hiddenColumns, setHiddenColumns] = useState<Set<AccountColumnKey>>(loadHiddenColumns);
   const [hiddenGroupColumns, setHiddenGroupColumns] = useState<Set<GroupColumnKey>>(() => loadHiddenColumnSet<GroupColumnKey>(GROUP_COLUMNS_STORAGE_KEY));
@@ -1167,6 +1171,67 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     }
   };
 
+  const orderedGroups = [...groups].sort((left, right) => {
+    const leftPowered = copierArmed && left.id === executionGroupId;
+    const rightPowered = copierArmed && right.id === executionGroupId;
+    return leftPowered === rightPowered ? 0 : leftPowered ? -1 : 1;
+  });
+
+  // Stejné akce jako v desktopové tabulce, jen bez vazby na buňky <td>.
+  const compactGroupActions = (group: CopyGroupConfig) => ({
+    onFlatten: () => setPendingAction({
+      title: 'Flatten All?', detail: `Připraví uzavření všech otevřených pozic ve skupině ${group.name}.`,
+      confirmLabel: 'Flatten All', danger: true, command: {
+        type: 'flatten-group', groupId: group.id, operationId: manualOperationId(),
+      },
+    }),
+    onApplyTemplate: (template: CopyGroupTemplate) => {
+      const currentSafety = group.safety ?? DEFAULT_COPY_GROUP_SAFETY;
+      const currentFollowers = new Map(group.followers.map(follower => [follower.accountId, follower]));
+      const updated: CopyGroupConfig = {
+        ...group,
+        leaderAccountId: template.leaderAccountId ?? group.leaderAccountId,
+        followers: template.followers
+          .filter(follower => follower.accountId !== (template.leaderAccountId ?? group.leaderAccountId))
+          .map(follower => {
+            const current = currentFollowers.get(follower.accountId);
+            return current ? {
+              ...follower,
+              ...(current.dailyLossCutUsd == null ? {} : { dailyLossCutUsd: current.dailyLossCutUsd }),
+              onCut: current.onCut ?? 'close-copy',
+            } : follower;
+          }),
+        // Pravidla dne a existující per-account cuty mají jediný
+        // editor v Risk; topologická šablona je nesmí tiše přepsat.
+        safety: {
+          ...template.safety,
+          entryCooldownMinutes: currentSafety.entryCooldownMinutes,
+          armExpiryFlatten: currentSafety.armExpiryFlatten,
+          dailyLossLimitUsd: currentSafety.dailyLossLimitUsd,
+          dailyMaxLosingTrades: currentSafety.dailyMaxLosingTrades,
+          dailyMaxTrades: currentSafety.dailyMaxTrades,
+          tradingWindow: { ...currentSafety.tradingWindow },
+          dayRuleActions: structuredClone(
+            currentSafety.dayRuleActions ?? DEFAULT_COPY_GROUP_SAFETY.dayRuleActions,
+          ),
+        },
+      };
+      void saveGroup(updated);
+    },
+    onFlattenAccount: (accountId: number) => setPendingAction({
+      title: 'Flatten účet?', detail: 'Připraví uzavření všech otevřených pozic pouze na tomto účtu.',
+      accountIds: [accountId],
+      confirmLabel: 'Flatten', danger: true, command: {
+        type: 'flatten-account', groupId: group.id, accountId, operationId: manualOperationId(),
+      },
+    }),
+    onCancelOrder: (orderId: number) => setPendingAction({
+      title: 'Zrušit příkaz?', detail: 'Připraví zrušení tohoto pracovního příkazu.',
+      confirmLabel: 'Zrušit příkaz', danger: true, command: { type: 'cancel-order', groupId: group.id, orderId },
+    }),
+    onRemoveUnavailableFollower: (accountId: number) => requestUnavailableFollowerRemoval(group, group, [accountId], null, 'row'),
+  });
+
   return (
     <div className="space-y-5" style={{ fontSize: `${density}%` }}>
       <LiveRiskSummaryCard
@@ -1239,10 +1304,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             >
               <Plus size={14} /> Přidat skupinu
             </button>
+            {!compact ? (<>
             <button onClick={() => setHelpOpen(true)} title="Nápověda" className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><HelpCircle size={14} /></button>
             {narrowTable ? <button onClick={() => setShowAllColumns(value => !value)} className="rounded-md border border-[var(--border-subtle)] px-2 py-2 text-[10px] font-bold text-[var(--text-secondary)]">{showAllColumns ? 'Základní sloupce' : 'Všechny sloupce'}</button> : null}
             <button onClick={() => setTableSettingsOpen(true)} title="Nastavení tabulky" className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><Settings2 size={14} /></button>
             <button onClick={() => setRedactNames(value => !value)} title={redactNames ? 'No redaction' : 'Redact account names'} className={`flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border-subtle)] ${redactNames ? 'bg-indigo-500/10 text-indigo-500' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}>{redactNames ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+            </>) : null}
             <TopActionsMenu
               onTemplates={() => setTemplatesOpen(true)}
               onKillSwitch={triggerKillSwitch}
@@ -1263,6 +1330,50 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             <p className="text-xs text-[var(--text-secondary)] mt-1 max-w-md mx-auto">
               Přidej skupinu, vyber leader účet, followery a bezpečnostní pravidla.
             </p>
+          </div>
+        ) : compact ? (
+          <div className="space-y-3 px-3 pb-3" data-testid="compact-group-list">
+            {orderedGroups.map(group => {
+              const rows = groupRows(group, accountsById, sourceGroupsById.get(group.id), profilesById);
+              const selected = group.id === executionGroupId;
+              const armed = selected && copierArmed;
+              return (
+                <CompactGroupCard
+                  key={group.id}
+                  group={group}
+                  rows={rows}
+                  armed={armed}
+                  observingOnly={selected && copierObservingOnly}
+                  statusPending={copierStatusPending && (executionGroupId == null || selected)}
+                  runtimeReady={!!onSwitchAndArm || (!!commandAdapter && selected)}
+                  transition={transitionGroupId === group.id ? copierTransition : null}
+                  connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || cooldownUntil > Date.now()}
+                  dailyPnlPending={dailyPnlPending}
+                  eligibility={group.followers
+                    .filter(follower => follower.mode !== 'off')
+                    .map(follower => eligibilityByAccount.get(follower.accountId))}
+                  eligibilityByAccount={eligibilityByAccount}
+                  orders={orders}
+                  isLive={isLive}
+                  onAccount={onAccount}
+                  busyCommand={busyCommand}
+                  onVerifyEligibility={verifyAccountEligibility}
+                  verifyingAccountId={verifyingAccountId}
+                  onConnectionToggle={() => requestGroupPower(group)}
+                  onEdit={() => setEditorGroup(structuredClone(group))}
+                  onToggleEnabled={() => requestGroupPower(group)}
+                  onRefreshOrders={onRefreshOrders}
+                  redactNames={redactNames}
+                  redaction={redaction}
+                  templates={templates}
+                  tightenOnly={tightenOnly}
+                  disarmPanel={selected && !armed && lastDisarm
+                    ? <CopierDisarmPanel lastDisarm={lastDisarm} history={disarmHistory} />
+                    : null}
+                  {...compactGroupActions(group)}
+                />
+              );
+            })}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -1285,11 +1396,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                 </tr>
               </thead>
               <tbody>
-                {[...groups].sort((left, right) => {
-                  const leftPowered = copierArmed && left.id === executionGroupId;
-                  const rightPowered = copierArmed && right.id === executionGroupId;
-                  return leftPowered === rightPowered ? 0 : leftPowered ? -1 : 1;
-                }).map(group => {
+                {orderedGroups.map(group => {
                   const rows = groupRows(group, accountsById, sourceGroupsById.get(group.id), profilesById);
                   const selected = group.id === executionGroupId;
                   // `groups` se po mountu synchronizují efektem, ale už první
@@ -1433,14 +1540,16 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         </footer>
       </section>
 
-      <LivePnlPanel
-        open={apiPanelOpen}
-        onToggle={() => setApiPanelOpen(v => !v)}
-        dataActive={anyLive}
-        apiReady={!!commandAdapter}
-        onHelp={() => setHelpOpen(true)}
-        telemetry={apiTelemetry}
-      />
+      {!compact ? (
+        <LivePnlPanel
+          open={apiPanelOpen}
+          onToggle={() => setApiPanelOpen(v => !v)}
+          dataActive={anyLive}
+          apiReady={!!commandAdapter}
+          onHelp={() => setHelpOpen(true)}
+          telemetry={apiTelemetry}
+        />
+      ) : null}
 
       {editorGroup && (
         <GroupEditorDialog
@@ -1973,6 +2082,311 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingO
         </div>
       </td>
     </tr>
+  );
+};
+
+// ─── Kompaktní karty skupin (telefon / úzký viewport) ───────────────────────
+
+const CompactStat = ({ label, value, className = 'text-[var(--text-primary)]' }: {
+  label: string; value: React.ReactNode; className?: string;
+}) => (
+  <div className="min-w-0 px-3 py-2.5">
+    <div className="text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">{label}</div>
+    <div className={`mt-0.5 truncate text-[13px] font-black tabular-nums ${className}`}>{value}</div>
+  </div>
+);
+
+const CompactAccountRow = ({ row, live, eligibility, orders, dailyPnlPending, busyCommand, verifying, onVerifyEligibility, onAccount, onFlatten, onRemoveUnavailableFollower, redactNames, redaction }: {
+  row: Row;
+  live: boolean;
+  eligibility?: CopierAccountEligibility;
+  orders: LiveOrder[];
+  dailyPnlPending: boolean;
+  busyCommand: string | null;
+  verifying: boolean;
+  onVerifyEligibility?: (accountId: number) => void;
+  onAccount?: (a: LiveAccount) => void;
+  onFlatten: (accountId: number) => void;
+  onRemoveUnavailableFollower: (accountId: number) => void;
+  redactNames: boolean;
+  redaction: RedactionSettings;
+}) => {
+  const a = row.account;
+  const accountId = row.accountId;
+  const hasOpenPositions = a?.positions.some(position => position.netPosition !== 0) ?? false;
+  const unavailableFollower = !a && accountId != null && !row.isLeader;
+  return (
+    <li className="px-4 py-3">
+      <div
+        role={a ? 'button' : undefined}
+        onClick={() => a && onAccount?.(a)}
+        className="flex items-center justify-between gap-3"
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <span className={`h-2 w-2 shrink-0 rounded-full ${live ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+          <span className={`min-w-0 break-all text-[13px] font-bold leading-tight tracking-tight ${live ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
+            {redactAccountName(row.name, redactNames, redaction)}
+          </span>
+          {row.isLeader ? (
+            <span title="Leader účet" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-amber-400/35 bg-amber-400/12 text-amber-500">
+              <Crown size={13} strokeWidth={2.4} />
+            </span>
+          ) : (
+            <span title="Násobek množství" className="shrink-0 rounded-md bg-[var(--bg-page)] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[var(--text-secondary)]">×{row.scale}</span>
+          )}
+          {!row.synced && <span title="Nesedí s leaderem" className="text-amber-500">⚠</span>}
+        </span>
+        <AccountEligibilityPill
+          eligibility={eligibility}
+          live={live}
+          unavailable={!a && accountId != null}
+          verifying={verifying}
+          onVerify={eligibility?.state === 'unverifiable' && accountId != null && onVerifyEligibility
+            ? () => onVerifyEligibility(accountId)
+            : undefined}
+        />
+      </div>
+      <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] tabular-nums">
+        <div className="min-w-0">
+          <span className="block text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Denní</span>
+          <span className={`font-bold ${a && !dailyPnlPending ? pnlClass(a.realizedPnl) : 'text-[var(--text-secondary)]'}`}>
+            {a && !dailyPnlPending ? money.format(a.realizedPnl) : '—'}
+          </span>
+        </div>
+        <div className="min-w-0">
+          <span className="block text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Otevřený</span>
+          <span className={`inline-flex items-center gap-1 font-bold ${a ? pnlClass(a.unrealizedPnl) : 'text-[var(--text-secondary)]'}`}>
+            {a ? money.format(a.unrealizedPnl) : '—'}
+            {a?.unrealizedPnlSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
+          </span>
+        </div>
+        <div className="min-w-0 overflow-hidden">
+          <span className="block text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Pozice</span>
+          {a
+            ? <CopyTradePositionsCell accountId={accountId} positions={a.positions} orders={orders} />
+            : <span className="text-[var(--text-secondary)]">—</span>}
+        </div>
+      </div>
+      {eligibility?.lastExecution ? (
+        <div className="mt-1.5">
+          <RejectedExecutionStatus
+            execution={eligibility.lastExecution}
+            accountAuthoritativelyFlat={live && a != null && a.positions.every(position => position.netPosition === 0)}
+          />
+        </div>
+      ) : eligibility && eligibility.state !== 'active' && eligibility.reason ? (
+        <p className="mt-1.5 text-[10px] leading-tight text-[var(--text-muted)]">
+          {eligibility.reason}{!a ? ' · účet není v aktuálním OAuth snapshotu' : ''}
+        </p>
+      ) : unavailableFollower ? (
+        <p className="mt-1.5 text-[10px] font-bold leading-tight text-slate-500">Účet není v aktuálním OAuth snapshotu.</p>
+      ) : null}
+      {(hasOpenPositions && a) || unavailableFollower ? (
+        <div className="mt-2 flex items-center gap-2">
+          {hasOpenPositions && a ? (
+            <button
+              type="button"
+              disabled={busyCommand != null}
+              onClick={() => onFlatten(a.id)}
+              className="h-9 rounded-lg border border-rose-500/25 bg-rose-500/[0.04] px-3 text-[11px] font-bold text-rose-500 disabled:opacity-40"
+            >
+              Flatten účet
+            </button>
+          ) : null}
+          {unavailableFollower && accountId != null ? (
+            <button
+              type="button"
+              disabled={busyCommand != null}
+              onClick={() => onRemoveUnavailableFollower(accountId)}
+              className="h-9 rounded-lg border border-[var(--border-subtle)] px-3 text-[11px] font-bold text-[var(--text-secondary)] disabled:opacity-40"
+            >
+              Odebrat ze skupiny
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </li>
+  );
+};
+
+const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, dailyPnlPending, eligibility, eligibilityByAccount, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel }: {
+  group: CopyGroupConfig;
+  rows: Row[];
+  armed: boolean;
+  observingOnly: boolean;
+  statusPending: boolean;
+  runtimeReady: boolean;
+  transition: 'connecting' | 'disconnecting' | null;
+  connectBlocked: boolean;
+  dailyPnlPending: boolean;
+  eligibility: (CopierAccountEligibility | undefined)[];
+  eligibilityByAccount: Map<number, CopierAccountEligibility>;
+  orders: LiveOrder[];
+  isLive: (a?: LiveAccount) => boolean;
+  onAccount?: (a: LiveAccount) => void;
+  busyCommand: string | null;
+  onVerifyEligibility?: (accountId: number) => void;
+  verifyingAccountId: number | null;
+  onConnectionToggle: () => void;
+  onEdit: () => void;
+  onToggleEnabled: () => void;
+  onFlatten: () => void;
+  onFlattenAccount: (accountId: number) => void;
+  onCancelOrder: (orderId: number) => void;
+  onRefreshOrders?: () => Promise<void> | void;
+  onRemoveUnavailableFollower: (accountId: number) => void;
+  onApplyTemplate: (template: CopyGroupTemplate) => void;
+  redactNames: boolean;
+  redaction: RedactionSettings;
+  templates: CopyGroupTemplate[];
+  tightenOnly: boolean;
+  disarmPanel?: React.ReactNode;
+}) => {
+  const capital = rows.reduce((sum, row) => sum + (row.account?.balance || 0), 0);
+  const daily = rows.reduce((sum, row) => sum + (row.account?.realizedPnl || 0), 0);
+  const unreal = rows.reduce((sum, row) => sum + (row.account?.unrealizedPnl || 0), 0);
+  const enabledFollowerRows = rows.filter(row => !row.isLeader && row.mode !== 'off');
+  const inactiveFollowerCount = enabledFollowerRows.filter((row, index) =>
+    !row.account || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')).length;
+  const activeFollowerCount = Math.max(0, enabledFollowerRows.length - inactiveFollowerCount);
+  const dllCount = eligibility.filter(entry => entry?.state === 'dll-locked').length;
+  const breachedCount = eligibility.filter(entry => entry?.state === 'breached').length;
+  const unavailableLeader = rows.some(row => row.isLeader && row.accountId != null && !row.account);
+  const accountIds = new Set(rows.flatMap(row => row.accountId != null ? [row.accountId] : []));
+  const groupOrders = orders.filter(order => order.accountId != null && accountIds.has(order.accountId));
+  const workingCount = groupOrders.filter(order => order.working).length;
+  const color = group.color ?? GROUP_COLORS[0];
+
+  return (
+    <article
+      data-testid="compact-group-card"
+      className={`overflow-hidden rounded-xl border bg-[var(--bg-card)] ${armed ? 'border-emerald-500/40' : 'border-[var(--border-subtle)]'}`}
+    >
+      <header className="flex items-start justify-between gap-3 px-4 pb-3 pt-4">
+        <div className="min-w-0 flex-1">
+          <h4 className="flex items-center gap-2 text-base font-black" style={{ color }}>
+            <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+            <span className="truncate">{group.name}</span>
+          </h4>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-black text-emerald-600">
+              {activeFollowerCount}/{enabledFollowerRows.length} aktivních
+            </span>
+            {dllCount > 0 ? <span className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[10px] font-black text-amber-600">{dllCount}× DLL</span> : null}
+            {breachedCount > 0 ? <span className="rounded-full bg-rose-500/12 px-2 py-0.5 text-[10px] font-black text-rose-600">{breachedCount}× BREACHED</span> : null}
+            {unavailableLeader ? <span className="rounded-full bg-rose-500/12 px-2 py-0.5 text-[10px] font-black text-rose-600">leader nedostupný</span> : null}
+            {observingOnly ? (
+              <span title="Shadow režim pouze sleduje a nic neodesílá." className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-black uppercase text-amber-600">
+                <ShieldAlert size={10} /> Shadow
+              </span>
+            ) : null}
+          </div>
+        </div>
+        <CopierConnectionSwitch
+          connected={armed}
+          statusPending={statusPending}
+          runtimeReady={runtimeReady}
+          transition={transition}
+          connectBlocked={connectBlocked}
+          onToggle={onConnectionToggle}
+        />
+      </header>
+
+      <div className="grid grid-cols-3 divide-x divide-[var(--border-subtle)] border-y border-[var(--border-subtle)] bg-[var(--bg-page)]/60">
+        <CompactStat label="Kapitál" value={moneyWhole.format(capital)} />
+        <CompactStat
+          label="Denní P&L"
+          value={dailyPnlPending ? '—' : money.format(daily)}
+          className={dailyPnlPending ? 'text-[var(--text-secondary)]' : pnlClass(daily)}
+        />
+        <CompactStat label="Otevřený P&L" value={money.format(unreal)} className={pnlClass(unreal)} />
+      </div>
+
+      {disarmPanel}
+
+      <ul className="divide-y divide-[var(--border-subtle)]">
+        {rows.map((row, index) => (
+          <CompactAccountRow
+            key={`${row.name}-${index}`}
+            row={row}
+            live={isLive(row.account)}
+            eligibility={row.accountId != null ? eligibilityByAccount.get(row.accountId) : undefined}
+            orders={groupOrders}
+            dailyPnlPending={dailyPnlPending}
+            busyCommand={busyCommand}
+            verifying={row.accountId != null && verifyingAccountId === row.accountId}
+            onVerifyEligibility={onVerifyEligibility}
+            onAccount={onAccount}
+            onFlatten={onFlattenAccount}
+            onRemoveUnavailableFollower={onRemoveUnavailableFollower}
+            redactNames={redactNames}
+            redaction={redaction}
+          />
+        ))}
+      </ul>
+
+      {groupOrders.length > 0 ? (
+        <section className="border-t border-[var(--border-subtle)]">
+          <div className="flex items-center justify-between px-4 py-2">
+            <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Příkazy · {workingCount} working</span>
+            <button
+              type="button"
+              onClick={() => void onRefreshOrders?.()}
+              title="Obnovit příkazy"
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)]"
+            >
+              <RefreshCw size={13} />
+            </button>
+          </div>
+          <ul className="divide-y divide-[var(--border-subtle)]">
+            {groupOrders.map(order => (
+              <li key={`${order.accountId}-${order.id}`} className="flex items-center gap-3 px-4 py-2 text-xs">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <b className={order.action.toLowerCase().includes('buy') ? 'text-emerald-500' : 'text-rose-500'}>{order.action}</b>
+                    <span className="font-bold text-[var(--text-primary)]">{order.symbol}</span>
+                    <span className="text-[var(--text-secondary)]">{order.orderType} × {order.quantity}</span>
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-1.5 truncate text-[10px] text-[var(--text-secondary)]">
+                    <span className="truncate">{redactAccountName(order.accountName, redactNames, redaction)}</span>
+                    <span>·</span>
+                    <span className="tabular-nums">{order.price ?? order.stopPrice ?? '—'}</span>
+                    <span className={`rounded-md px-1.5 py-0.5 text-[9px] font-black uppercase ${order.working ? 'bg-blue-500/10 text-blue-500' : 'bg-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>{order.status}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={!order.working || busyCommand != null}
+                  onClick={() => onCancelOrder(order.id)}
+                  className="h-9 rounded-lg border border-rose-500/20 px-3 font-bold text-rose-500 disabled:opacity-35"
+                >
+                  Zrušit
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      <footer className="flex items-center gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
+        <button
+          type="button"
+          onClick={onFlatten}
+          title="Uzavřít všechny pozice ve skupině"
+          className="flex h-11 flex-1 items-center justify-center rounded-lg border border-rose-500/30 bg-rose-500/[0.06] text-xs font-black text-rose-500"
+        >
+          Flatten All
+        </button>
+        <button
+          type="button"
+          onClick={onEdit}
+          className="flex h-11 items-center justify-center rounded-lg border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]"
+        >
+          Upravit
+        </button>
+        <GroupActionMenu active={armed} onToggleEnabled={onToggleEnabled} onEdit={onEdit} templates={templates} tightenOnly={tightenOnly} onApplyTemplate={onApplyTemplate} />
+      </footer>
+    </article>
   );
 };
 
