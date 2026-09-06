@@ -208,6 +208,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-06 (Claude, rollout workeru a companion 18 po sloučení Risk záložky)
+
+Po ranním sloučení celého rozpracovaného checkoutu do `main` (`cf7f98bf`,
+350 souborů) ověřeno na čistém worktree: Risk záložka a worker změny přežily,
+tsc bez chyb, 2969 testů zeleně. Produkce bundle nový, cron bez nových chyb.
+Migrace: pět aplikováno 06.09. 05:18–05:20 přes MCP pod automatickými
+verzemi (`20260906051859…052039`), takže `supabase migration list` je
+neukazuje pod názvy souborů; přítomnost ověřena přes REST/RPC (outbox,
+review patch, historie poznámek, legacy notes privacy, tag library). Trigger
+`guard_backtest_research_rule_history_v1` („prepared only") zřejmě
+neaplikován — jen ochrana, ne runtime chyba.
+
+Worker: záloha `~/Documents/AlphaTrade-backups/2026-09-06-*-copier-worker-before-risk-reinstall`,
+read-only reconciliation `authoritativelyClean`, ARM/disarm v 07:51–07:52 byl
+přímý zásah z appky (bez relay záznamu), ne reconciliation. Reinstall
+`copier:mac install --adopt-durable-group` z `cf7f98bf` → bundle
+`e6451212…`, capabilities `risk-config-v1`, po startu VYPNUTO, `lastError=null`,
+druhá reconciliation 0 divergencí. Worker nově čte limity propek i ve VYPNUTO
+(leader 64310872: 1 250 USD, 64503883: 1 200 USD). Runtime skupina je
+`localOnly` s jedním followerem (64503883) — stav po uživatelově ARM testu,
+durable pětice zůstává fallback. Companion build 18 nainstalován (záloha
+buildu 17 v `AlphaTrade-backups/2026-09-06-companion-build17`), LaunchAgent
+běží. Žádný broker příkaz, ARM ani Flatten z této session.
+
 ### 2026-09-06 — Codex: společná release backtestingu, iOS a LIVE oprav
 
 - Do izolované release větve sloučeny rozpracované změny backtestingu/iOS a samostatného LIVE review nad aktuálním produkčním main. Zachováno novější copier jádro, Risk/day-lock a Mac companion; původní pracovní adresáře zůstaly zachované.
