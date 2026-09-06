@@ -208,6 +208,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-06 (Claude, LIVE detail skupiny — vodorovný posuvník)
+
+Uživatel: v kartě Kopírovací skupiny nešlo v rozbaleném detailu účtů skrolovat
+do strany (sloupce Rezerva DD, Exec/Limit, Násobek, Flatten mimo obraz při
+~1200 px). Příčina ověřená v DOM: detail leží v animačním obalu
+`grid overflow-hidden` + `min-h-0 overflow-hidden` a vnitřní `<table>` (min
+šířka 1602 px ze součtu sloupců) neměl žádný vlastní `overflow-x-auto`; vnější
+posuvník patří jen tabulce skupin. Oprava: obal tabulky účtů i tabulky příkazů
+v `GroupDetail` dostal `overflow-x-auto`. Ověřeno v náhledu (dev:live worktree
+na main, viewport 1200 px): scrollWidth 1602 / clientWidth 1040, scrollLeft se
+posune. Render testy detailu a tsc čisté. Při 800 px komponenta sloupce sama
+redukuje (770 px), posuvník se tam neobjeví, což je správně.
+
 ### 2026-09-06 (Claude, volitelné karty nativní lišty + mobilní LIVE karty, přenesené nad iOS release)
 
 Práce z 5. 9. (větev `claude/native-tabs-live-mobile`) byla po Codexově

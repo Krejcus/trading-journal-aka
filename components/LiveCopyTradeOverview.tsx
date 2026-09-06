@@ -2797,7 +2797,9 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
     </div>
 
     {tab === 'accounts' ? (
-      <div>
+      // Rozbalený detail leží v animačním obalu `overflow-hidden`; bez vlastního
+      // vodorovného posuvníku by se širší tabulka jen ořízla (3.–6. 9. 2026).
+      <div className="overflow-x-auto">
         <table
           className="w-full table-fixed text-left"
           style={{ minWidth: `${columns.reduce((total, column) => total + column.widthPx, 0)}px` }}
@@ -2844,7 +2846,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
           <p className="text-xs text-[var(--text-secondary)] mt-1 max-w-sm mx-auto leading-snug">Ordery se objeví, jakmile leader zadá obchod, který se replikuje na followery.</p>
         </div>
       ) : (
-        <div className="pt-2">
+        <div className="pt-2 overflow-x-auto">
           <table className="w-full min-w-[760px] text-left">
             <thead><tr className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)] border-b border-[var(--border-subtle)]">
               {!hiddenOrderColumns.has('account') && <th className="px-3 py-2">Account</th>}{!hiddenOrderColumns.has('broker') && <th className="px-3 py-2">Broker</th>}{!hiddenOrderColumns.has('symbol') && <th className="px-3 py-2">Symbol</th>}{!hiddenOrderColumns.has('action') && <th className="px-3 py-2">Action</th>}{!hiddenOrderColumns.has('type') && <th className="px-3 py-2">Type</th>}{!hiddenOrderColumns.has('qty') && <th className="px-3 py-2 text-right">Qty</th>}{!hiddenOrderColumns.has('limit') && <th className="px-3 py-2 text-right">Limit Price</th>}{!hiddenOrderColumns.has('stop') && <th className="px-3 py-2 text-right">Stop Price</th>}{!hiddenOrderColumns.has('status') && <th className="px-3 py-2">Stav</th>}{!hiddenOrderColumns.has('timestamp') && <th className="px-3 py-2">Timestamp</th>}{!hiddenOrderColumns.has('orderId') && <th className="px-3 py-2 text-right">Order ID</th>}<th className="px-3 py-2" />
