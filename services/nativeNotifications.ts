@@ -3,6 +3,7 @@ import type { PermissionState } from '@capacitor/core';
 
 import { isNativeBuild } from '../utils/runtimeConfig';
 import { navigateNativeShell, openNativeTradeCapture } from '../utils/nativeShell';
+import type { NativeTradeDraft } from './nativeCapabilities';
 import { clearNativeBadgeCount, setNativeBadgeCount } from './nativeCapabilities';
 
 export const NATIVE_NOTIFICATION_ACTIONS = {
@@ -16,8 +17,12 @@ export const NATIVE_NOTIFICATION_ACTIONS = {
 const ACTION_TYPE_GENERAL = 'ALPHATRADE_GENERAL';
 const ACTION_TYPE_TRADE = 'ALPHATRADE_TRADE';
 const ACTION_TYPE_RISK = 'ALPHATRADE_RISK';
+let notificationGeneration = 0;
+
+export type NativeNotificationSource = 'test' | 'app' | 'copierTimer' | 'sessionReminder';
 
 export interface NativeNotificationInput {
+  source?: NativeNotificationSource;
   title: string;
   body: string;
   route?: string;
@@ -35,7 +40,7 @@ export interface NativePendingNotification {
   scheduledAt?: number;
   route?: string;
   kind: 'general' | 'trade' | 'risk';
-  source?: 'test' | 'sessionReminder';
+  source?: NativeNotificationSource;
 }
 
 export interface NativeDeliveredNotification {
@@ -71,7 +76,8 @@ export function normalizeNativePendingNotification(notification: PendingNotifica
   const rawAt = notification.schedule?.at;
   const parsedAt = rawAt instanceof Date ? rawAt.getTime() : rawAt ? new Date(rawAt).getTime() : NaN;
   const rawKind = extra.kind;
-  const source = extra.source === 'sessionReminder' ? 'sessionReminder' : extra.source === 'test' ? 'test' : undefined;
+  const source = ['test', 'app', 'copierTimer', 'sessionReminder'].includes(String(extra.source))
+    ? extra.source as NativeNotificationSource : undefined;
   return {
     id: notification.id,
     title: notification.title,
@@ -120,11 +126,22 @@ export async function getPendingNativeNotificationCount(): Promise<number> {
   return pending.notifications.length;
 }
 
+function trackedCopierNotificationIds(): Set<number> {
+  try {
+    const slots = JSON.parse(localStorage.getItem('alphatrade-copier-notification-slots') || '[]');
+    return new Set(Array.isArray(slots) ? slots.map(slot => slot?.id).filter(id => typeof id === 'number') : []);
+  } catch { return new Set(); }
+}
+
 export async function listPendingNativeNotifications(): Promise<NativePendingNotification[]> {
   assertNativeBuild();
   const pending = await LocalNotifications.getPending();
+  const copierIds = trackedCopierNotificationIds();
   return pending.notifications
-    .map(normalizeNativePendingNotification)
+    .map(notification => {
+      const normalized = normalizeNativePendingNotification(notification);
+      return copierIds.has(notification.id) ? { ...normalized, source: 'copierTimer' as const } : normalized;
+    })
     .sort((a, b) => (a.scheduledAt ?? Number.MAX_SAFE_INTEGER) - (b.scheduledAt ?? Number.MAX_SAFE_INTEGER));
 }
 
@@ -157,32 +174,37 @@ export function openDeliveredNativeNotification(notification: NativeDeliveredNot
 
 export async function cancelAllNativeNotifications(): Promise<void> {
   assertNativeBuild();
-  const pending = await LocalNotifications.getPending();
-  if (pending.notifications.length > 0) {
-    await LocalNotifications.cancel({
-      notifications: pending.notifications.map(notification => ({ id: notification.id })),
-    });
-  }
-  await LocalNotifications.removeAllDeliveredNotifications();
-  await clearNativeBadgeCount();
+  notificationGeneration++;
+  const results = await Promise.allSettled([
+    (async () => {
+      const pending = await LocalNotifications.getPending();
+      if (pending.notifications.length > 0) {
+        await LocalNotifications.cancel({ notifications: pending.notifications.map(notification => ({ id: notification.id })) });
+      }
+    })(),
+    LocalNotifications.removeAllDeliveredNotifications(),
+    clearNativeBadgeCount(),
+  ]);
+  if (results.some(result => result.status === 'rejected')) throw new Error('Vyčištění všech iOS notifikací nebylo potvrzené.');
 }
 
 export async function cancelPendingNativeTestNotifications(): Promise<number> {
   assertNativeBuild();
   const pending = await LocalNotifications.getPending();
+  const copierIds = trackedCopierNotificationIds();
   const testNotifications = pending.notifications.filter(notification => {
     const extra = notification.extra && typeof notification.extra === 'object'
       ? notification.extra as Record<string, unknown>
       : {};
-    return extra.source !== 'sessionReminder';
+    // Older app versions incorrectly labelled copier timers as tests. Keep
+    // those legacy slots until the copier reconciles them with iOS pending IDs.
+    return extra.source === 'test' && !copierIds.has(notification.id);
   });
   if (testNotifications.length > 0) {
     await LocalNotifications.cancel({
       notifications: testNotifications.map(notification => ({ id: notification.id })),
     });
   }
-  await LocalNotifications.removeAllDeliveredNotifications();
-  await clearNativeBadgeCount();
   return testNotifications.length;
 }
 
@@ -197,8 +219,9 @@ export async function requestNativeNotificationPermission(): Promise<PermissionS
 
 export async function scheduleNativeNotification(input: NativeNotificationInput): Promise<number> {
   assertNativeBuild();
-
+  const generation = notificationGeneration;
   const permission = await requestNativeNotificationPermission();
+  if (generation !== notificationGeneration) throw new Error('Plánování bylo zrušeno odhlášením.');
   if (permission !== 'granted') {
     throw new Error('Notifikace nejsou v Nastavení iOS povolené.');
   }
@@ -217,7 +240,7 @@ export async function scheduleNativeNotification(input: NativeNotificationInput)
       schedule: { at: new Date(scheduledAt) },
       sound: 'default',
       threadIdentifier: input.threadIdentifier ?? 'alphatrade',
-      extra: { route: input.route, kind: input.actionType ?? 'general', source: 'test', scheduledAt },
+      extra: { route: input.route, kind: input.actionType ?? 'general', source: input.source ?? 'app', scheduledAt },
       actionTypeId: input.actionType === 'risk'
         ? ACTION_TYPE_RISK
         : input.actionType === 'trade'
@@ -235,11 +258,16 @@ export async function scheduleNativeNotification(input: NativeNotificationInput)
     }],
   });
 
+  if (generation !== notificationGeneration) {
+    await LocalNotifications.cancel({ notifications: [{ id }] });
+    throw new Error('Plánování bylo zrušeno odhlášením.');
+  }
   return id;
 }
 
 export async function scheduleNativeTestNotification(): Promise<number> {
   const id = await scheduleNativeNotification({
+    source: 'test',
     title: 'AlphaTrade · Test',
     body: 'Nativní iOS notifikace fungují. Klepnutím otevřeš deník.',
     route: 'journal',
@@ -294,31 +322,45 @@ export async function registerNativeNotificationActions(): Promise<() => void> {
 
   const listener = await LocalNotifications.addListener(
     'localNotificationActionPerformed',
-    action => {
-      if (action.actionId === 'dismiss') return;
-      void clearNativeBadgeCount();
-      if (action.actionId === NATIVE_NOTIFICATION_ACTIONS.captureTrade) {
-        openNativeTradeCapture();
-        return;
-      }
-      if (action.actionId === NATIVE_NOTIFICATION_ACTIONS.addNote) {
-        const note = action.inputValue?.trim();
-        openNativeTradeCapture(note ? { notes: `Poznámka z iOS notifikace:\n${note}` } : undefined);
-        return;
-      }
-      const actionRoutes: Record<string, string> = {
-        [NATIVE_NOTIFICATION_ACTIONS.openLive]: 'live',
-        [NATIVE_NOTIFICATION_ACTIONS.openJournal]: 'journal',
-        [NATIVE_NOTIFICATION_ACTIONS.openCoach]: 'ai',
-      };
-      const explicitRoute = actionRoutes[action.actionId];
-      const payloadRoute = action.notification.extra?.route;
-      const route = explicitRoute || (typeof payloadRoute === 'string' ? payloadRoute : 'dashboard');
-      navigateNativeShell(route);
-    },
+    action => dispatchNativeNotificationAction({
+      actionId: action.actionId, inputValue: action.inputValue, data: action.notification.extra,
+    }),
   );
 
   return () => {
     void listener.remove();
   };
+}
+
+/** One dispatcher for local notifications and APNs category actions. */
+export function dispatchNativeNotificationAction(action: {
+  actionId: string;
+  inputValue?: string;
+  data?: unknown;
+}): void {
+  if (!isNativeBuild || action.actionId === 'dismiss') return;
+  void clearNativeBadgeCount().catch(() => undefined);
+  const data = action.data && typeof action.data === 'object' ? action.data as Record<string, unknown> : {};
+  const rawDraft = data.draft && typeof data.draft === 'object' ? data.draft as Record<string, unknown> : {};
+  const draft: NativeTradeDraft = {};
+  if (rawDraft.instrument === 'NQ' || rawDraft.instrument === 'MNQ') draft.instrument = rawDraft.instrument;
+  for (const key of ['entryPrice', 'stopLoss', 'takeProfit', 'positionSize', 'pnl', 'notes'] as const) {
+    if (typeof rawDraft[key] === 'string') draft[key] = rawDraft[key];
+  }
+  if (action.actionId === NATIVE_NOTIFICATION_ACTIONS.captureTrade) {
+    openNativeTradeCapture(Object.keys(draft).length ? draft : undefined);
+    return;
+  }
+  if (action.actionId === NATIVE_NOTIFICATION_ACTIONS.addNote) {
+    const note = action.inputValue?.trim();
+    if (note) draft.notes = [draft.notes, `Poznámka z iOS notifikace:\n${note}`].filter(Boolean).join('\n\n');
+    openNativeTradeCapture(Object.keys(draft).length ? draft : undefined);
+    return;
+  }
+  const actionRoutes: Record<string, string> = {
+    [NATIVE_NOTIFICATION_ACTIONS.openLive]: 'live',
+    [NATIVE_NOTIFICATION_ACTIONS.openJournal]: 'journal',
+    [NATIVE_NOTIFICATION_ACTIONS.openCoach]: 'ai',
+  };
+  navigateNativeShell(actionRoutes[action.actionId] || (typeof data.route === 'string' ? data.route : 'dashboard'));
 }

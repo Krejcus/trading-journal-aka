@@ -8,7 +8,7 @@ interface Props {
 }
 
 // R-multiple formát: +1.8R / −1R / — (null = nedostupné).
-const fmtR = (r?: number | null): string => (r == null || Number.isNaN(Number(r))) ? '—' : `${Number(r) > 0 ? '+' : ''}${Number(r)}R`;
+const fmtR = (r?: number | null): string => (r == null || !Number.isFinite(Number(r))) ? '—' : `${Number(r) > 0 ? '+' : ''}${Number(r).toFixed(2)}R`;
 const rColor = (r?: number | null): string => (r == null) ? 'text-slate-400' : (Number(r) > 0 ? 'text-emerald-500' : Number(r) < 0 ? 'text-rose-500' : 'text-slate-400');
 
 // Execution tagy, entry model a kontext se přesunuly do TradeConfluence (sekce Entry/HTF/Levely).
@@ -40,7 +40,7 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
   const hasTags = !!trade.slPlacement || !!trade.targetLevel || !!trade.management;
 
   // Nic z AlphaBridge → panel se vůbec nevykreslí (manuální / importované obchody).
-  if (!hasMetrics && !hasCf && !hasExc && !hasEm && !hasTags && !pathAttempted && trade.sessionBias == null) return null;
+  if (trade.actualExcursionQuality !== 'legacy-unknown' && !hasMetrics && !hasCf && !hasExc && !hasEm && !hasTags && !pathAttempted && trade.sessionBias == null) return null;
 
   const chip = (label: string, tone: 'sky' | 'amber' | 'violet' | 'emerald' | 'rose' | 'slate') => {
     const tones: Record<string, string> = {
@@ -75,21 +75,24 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
         <ChevronDown size={14} className={`text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
+      {trade.actualExcursionQuality === 'legacy-unknown' && <p className="px-3 pb-2 text-[10px] text-amber-500">Starší záznam nemá doložený průběh velikosti pozice. Skutečné MFE/MAE nejsou dostupné; P&amp;L zůstává podle uložených fillů.</p>}
       {/* Vždy viditelné summary: MFE/MAE v R (max favorable / adverse excursion) */}
       {hasMetrics && (
         <div className="grid grid-cols-2 gap-2 mb-2">
           <div className={`p-2.5 rounded-xl border ${cardBg}`}>
             <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">MFE (dosah ve prospěch)</p>
-            <p className={`text-lg font-black font-mono tracking-tighter leading-none ${rColor(trade.mfeR)}`}>{fmtR(trade.mfeR)}</p>
+            <p className={`text-lg font-black font-mono tracking-tighter leading-none ${rColor(trade.mfeR)}`}>{trade.excursionAmbiguous && trade.mfeR != null ? '≥ ' : ''}{fmtR(trade.mfeR)}</p>
           </div>
           <div className={`p-2.5 rounded-xl border ${cardBg}`}>
             <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">MAE (dosah proti)</p>
             <p className={`text-lg font-black font-mono tracking-tighter leading-none ${trade.maeR != null ? 'text-rose-500' : 'text-slate-400'}`}>
-              {trade.maeR != null ? `−${Math.abs(Number(trade.maeR))}R` : '—'}
+              {trade.maeR != null ? `${trade.excursionAmbiguous ? '≥ ' : ''}${Math.abs(Number(trade.maeR)).toFixed(2)}R` : '—'}
             </p>
           </div>
         </div>
       )}
+
+      {hasMetrics && trade.excursionAmbiguous && <p className="mb-2 text-[10px] text-amber-500">MFE/MAE jsou dolní meze. Pořadí cen uvnitř vstupní či výstupní svíčky není známé.</p>}
 
       {hasPath && (
         <div className={`p-2.5 rounded-xl border ${cardBg} grid grid-cols-3 gap-2 text-center mb-2`}>
@@ -152,14 +155,15 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
           {hasExc && (
             <div>
               {label('Excursion (do konce dne)')}
+              {exc.ambiguous && <p className="mb-1.5 text-[10px] text-amber-500">Pořadí cen na stopové svíčce není známé. Potenciál je v intervalu {fmtR(exc.mfePotentialR)} až {fmtR(exc.mfePotentialUpperR)}; cíle ukazují pouze prokázaný zásah.</p>}
               {excPending && (
                 <div className={`mb-1.5 px-2.5 py-1.5 rounded-lg border text-[9px] font-bold leading-snug ${isDark ? 'bg-amber-500/10 border-amber-500/20 text-amber-400' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
-                  ⚠️ Neúplné — den ještě nedojel do konce (22:00). Hodnoty jsou podhodnocené; dopočítají se, až graf pokryje celé okno.
+                  Neúplné okno — replay ještě neodhalil potřebný průběh nebo v datech chybí svíčky. Zobrazený potenciál je dolní mez.
                 </div>
               )}
               <div className={`p-2.5 rounded-xl border ${cardBg} grid grid-cols-3 gap-2 text-center`}>
                 <div>
-                  <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">Realizováno</p>
+                  <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">Původní cíl</p>
                   <p className={`text-sm font-black font-mono ${rColor(exc.tpR)}`}>{fmtR(exc.tpR)}</p>
                 </div>
                 <div>
@@ -192,8 +196,10 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
                   <div key={key} className={`flex items-center justify-between px-2.5 py-1.5 ${i > 0 ? (isDark ? 'border-t border-white/5' : 'border-t border-slate-100') : ''}`}>
                     <span className="text-[10px] font-black uppercase tracking-wide text-slate-400 flex items-center gap-1.5"><Crosshair size={10} /> {name}</span>
                     <div className="flex items-center gap-2">
+                      {v.ambiguous && <span className="text-[8px] text-amber-500">Neurčité pořadí</span>}
+                      {v.complete === false && <span className="text-[8px] text-amber-500">Neúplné</span>}
                       {v.outcome && <span className={`text-[8px] font-black uppercase tracking-widest ${v.outcome === 'WIN' ? 'text-emerald-500' : v.outcome === 'LOSS' ? 'text-rose-500' : 'text-slate-500'}`}>{OUTCOME_LABEL[v.outcome] || v.outcome}</span>}
-                      <span className={`text-xs font-black font-mono ${rColor(v.realizedR != null ? v.realizedR : v.rr)}`}>{fmtR(v.realizedR != null ? v.realizedR : v.rr)}</span>
+                      <span className={`text-xs font-black font-mono ${rColor(v.netRealizedR ?? (v.realizedR != null ? v.realizedR : v.rr))}`}>{fmtR(v.netRealizedR ?? (v.realizedR != null ? v.realizedR : v.rr))}</span>
                     </div>
                   </div>
                 ))}

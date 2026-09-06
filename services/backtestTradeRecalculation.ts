@@ -1,8 +1,5 @@
 import type { Trade } from '../types';
 
-const GENERATED_LTF_TAG = /^(?:1m (?:BoS|CHoCH)(?: \(|$)|vstup(?:: (?:untouched FVG|ihned po potvrzení)| ve FVG)$|odraz od |(?:nad|pod) VWAP$|VWAP [+-]?\d+(?:\.\d+)?σ$)/i;
-const GENERATED_HTF_TAG = /^(?:(?:1h|15m) (?:BoS|CHoCH)(?: |$)|u |v (?:15m|1h) FVG$|(?:nad|pod) (?:Day|Week) Open$)/i;
-
 const DERIVED_FIELDS = [
   // Obchody odehrané před zavedením vstupního bracketu mají v deníku prázdné
   // SL/TP, i když je engine v session drží. Přepočet je proto musí umět
@@ -10,8 +7,10 @@ const DERIVED_FIELDS = [
   'stopLoss',
   'takeProfit',
   'outcomeAmbiguous',
+  'excursionAmbiguous',
   'time',
   'schemaVersion',
+  'actualExcursionQuality',
   'riskAmount',
   'targetAmount',
   'runUp',
@@ -40,11 +39,25 @@ const unique = (values: readonly string[]) => [...new Set(values.map(value => va
 export const mergeManualAndGeneratedConfluences = (
   current: readonly string[] | undefined,
   generated: readonly string[] | undefined,
-  kind: 'ltf' | 'htf',
+  previousGenerated: readonly string[] = [],
 ) => {
-  const generatedPattern = kind === 'ltf' ? GENERATED_LTF_TAG : GENERATED_HTF_TAG;
-  const manual = (current ?? []).filter(tag => !generatedPattern.test(tag));
+  const generatedSet = new Set(unique(previousGenerated));
+  const manual = unique(current ?? []).filter(tag => !generatedSet.has(tag));
   return unique([...manual, ...(generated ?? [])]);
+};
+
+/** Retain provenance on review edits, while an explicit manual choice takes ownership. */
+export const reconcileBacktestConfluenceProvenance = (
+  current: Pick<Trade, 'autoConfluence'>,
+  selected: { htf: readonly string[]; ltf: readonly string[] },
+  explicitlyManual: { htf?: readonly string[]; ltf?: readonly string[] } = {},
+): NonNullable<Trade['autoConfluence']> => {
+  const retain = (kind: 'htf' | 'ltf') => {
+    const selectedSet = new Set(unique(selected[kind]));
+    const manualSet = new Set(unique(explicitlyManual[kind] ?? []));
+    return unique(current.autoConfluence?.[kind] ?? []).filter(tag => selectedSet.has(tag) && !manualSet.has(tag));
+  };
+  return { htf: retain('htf'), ltf: retain('ltf') };
 };
 
 /**
@@ -66,13 +79,22 @@ export const buildBacktestTradeRecalculationUpdates = (
   updates.ltfConfluence = mergeManualAndGeneratedConfluences(
     current.ltfConfluence,
     recalculated.ltfConfluence,
-    'ltf',
+    current.autoConfluence?.ltf,
   );
   updates.htfConfluence = mergeManualAndGeneratedConfluences(
     current.htfConfluence,
     recalculated.htfConfluence,
-    'htf',
+    current.autoConfluence?.htf,
   );
+  const nextGenerated = (kind: 'htf' | 'ltf') => {
+    const field = kind === 'htf' ? 'htfConfluence' : 'ltfConfluence';
+    const oldGenerated = new Set(unique(current.autoConfluence?.[kind] ?? []));
+    const manual = new Set(unique(current[field] ?? []).filter(tag => !oldGenerated.has(tag)));
+    // An existing manual tag may have exactly the same text as a fresh indicator tag.
+    // It must remain user-owned through this and every later recalculation.
+    return unique(recalculated[field] ?? []).filter(tag => !manual.has(tag));
+  };
+  updates.autoConfluence = { htf: nextGenerated('htf'), ltf: nextGenerated('ltf') };
   return updates;
 };
 

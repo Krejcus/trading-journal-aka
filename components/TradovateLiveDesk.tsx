@@ -86,6 +86,7 @@ import {
 } from '../services/liveCopyTrading';
 
 interface TradovateLiveDeskProps {
+  userId: string;
   theme: 'dark' | 'light' | 'oled';
   live: TradovateLiveData;
   onCopierJournalRefresh?: (group: CopyGroupConfig | null) => void;
@@ -157,6 +158,7 @@ const LiveDashboardSkeleton = () => (
 );
 
 const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
+  userId,
   live,
   onCopierJournalRefresh,
   requestedTab = null,
@@ -173,6 +175,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [copyGroups, setCopyGroups] = useState<CopyGroupConfig[]>([]);
   const [agentStatus, setAgentStatus] = useState<LocalCopierAgentStatus | null>(null);
+  const [agentStatusObservedAt, setAgentStatusObservedAt] = useState<number | null>(null);
   // Než doběhne první dotaz, `agentStatus` je null a armovaný copier by se
   // v přepínači ukázal jako OFF. Do té doby se stav zobrazuje jako neznámý.
   const [agentStatusResolved, setAgentStatusResolved] = useState(false);
@@ -348,9 +351,13 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       profiles: live.profiles,
       controller: agentStatus?.controller ?? null,
       followerCount: agentStatus?.group.followers.length ?? 0,
+      workerObservedAtMs: agentStatusObservedAt,
+      brokerCapturedAtMs: Date.parse(live.data.capturedAt),
+      positionsAvailable: ['available', 'empty'].includes(live.data.coverage.positions.availability),
+      ordersAvailable: ['available', 'empty'].includes(live.data.coverage.orders.availability),
     });
     void syncNativeLiveWidgetSnapshot(state);
-  }, [agentStatus, live.data, live.profiles]);
+  }, [agentStatus, agentStatusObservedAt, live.data, live.profiles]);
   const executionGroup = useMemo(() => {
     if (!agentStatus) return null;
     return resolveLocalExecutionGroup(copyGroups, agentStatus.group);
@@ -479,6 +486,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
           if (!stopped && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
             directAgentProbe.current = 'available';
             setAgentStatus(next);
+            setAgentStatusObservedAt(Date.now());
             setAgentStatusResolved(true);
             setAgentTransport('local');
             setRelayConnectionId(next.device?.connectionId ?? next.devices?.[0]?.connectionId ?? null);
@@ -504,12 +512,14 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         const active = candidates.find(candidate => candidate.remote?.connected) ?? null;
         if (!stopped && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
           setAgentStatus(active?.remote?.status ?? null);
+          setAgentStatusObservedAt(active ? Date.parse(active.remote!.lastSeenAt) : null);
           setAgentTransport(active ? 'relay' : null);
           setRelayConnectionId(active?.connectionId ?? null);
         }
       } catch {
         if (!stopped && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
           setAgentStatus(null);
+          setAgentStatusObservedAt(null);
           setAgentTransport(null);
           setRelayConnectionId(null);
         }
@@ -690,6 +700,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         <>
           {tab === 'overview' && copyTradeSnapshot ? (
             <LiveCopyTradeOverview
+              userId={userId}
               snapshot={copyTradeSnapshot}
               accountProfiles={live.profiles}
               orders={copyTradeOrders}

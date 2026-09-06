@@ -13,6 +13,7 @@ export type BacktestOrderType = 'market' | 'limit' | 'stop';
 export type BacktestOrderStatus = 'pending' | 'filled' | 'cancelled' | 'rejected';
 
 export interface BacktestRunConfig {
+  researchBinding?: import('./backtestResearchCases').BacktestResearchBinding;
   instruments: BacktestInstrument[];
   executionInstrument: BacktestInstrument;
   timezone: string;
@@ -70,9 +71,16 @@ export interface BacktestFill {
   realizedPnl: number;
   filledAt: number;
   reason: 'entry' | 'manual' | 'stop-loss' | 'take-profit' | 'session-close' | 'order';
+  /** Exposure opened/increased by this fill; reversals may also close another. */
+  positionId?: string;
+  closedPositionId?: string;
 }
 
 export interface BacktestPosition {
+  /** Historical quantity-aware cash path was absent when this position resumed. */
+  cashExcursionLegacy?: boolean;
+  /** Stable for the entire flat-to-flat position, including scale-ins. */
+  positionId?: string;
   instrument: BacktestInstrument;
   side: 'long' | 'short';
   quantity: number;
@@ -86,12 +94,19 @@ export interface BacktestPosition {
    */
   initialStopLoss?: number;
   initialTakeProfit?: number;
-  /** Nejlepší a nejhorší cena, kterou pozice viděla (bez vstupní svíčky). */
+  /** Prokazatelné extrémy otevřené pozice; intrabar nejistotu označuje excursionAmbiguous. */
   maxFavorablePrice?: number;
   maxAdversePrice?: number;
+  /** Gross open P&L extrema sampled with the quantity/average valid at that instant. */
+  maxUnrealizedProfit?: number;
+  maxUnrealizedLoss?: number;
   openedAt: number;
   entryFillIds: string[];
   entryCommission: number;
+  /** A prior entry-bar touch could not be ordered from OHLC alone. */
+  outcomeAmbiguous?: boolean;
+  /** Intrabar exits leave only a provable lower bound on MFE/MAE. */
+  excursionAmbiguous?: boolean;
 }
 
 /**
@@ -114,6 +129,9 @@ export interface BacktestManagedPositionPlan {
 }
 
 export interface BacktestClosedTrade {
+  actualExcursionQuality?: 'cash-ledger' | 'reconstructed' | 'legacy-unknown';
+  positionId?: string;
+  exitOrderId?: string;
   id: string;
   runId: string;
   instrument: BacktestInstrument;
@@ -136,6 +154,9 @@ export interface BacktestClosedTrade {
   /** 1R v dolarech = |entry − initialStopLoss| × point value × množství. */
   riskAmount?: number;
   /** Maximální pohyb ve prospěch / proti pozici v bodech (vždy ≥ 0). */
+  /** Cash extrema allocated proportionally to this realized exit. */
+  mfeAmount?: number;
+  maeAmount?: number;
   mfePoints?: number;
   maePoints?: number;
   /** Totéž v R — jen když je známý `riskAmount`. */
@@ -147,6 +168,8 @@ export interface BacktestClosedTrade {
    * musí vědět.
    */
   outcomeAmbiguous?: boolean;
+  /** MFE/MAE are lower bounds when the path before the exit is unknown. */
+  excursionAmbiguous?: boolean;
 }
 
 export type BacktestOrderEventKind =
@@ -175,6 +198,8 @@ export type BacktestOrderEventKind =
  * v replay se dá nad jednou svíčkou strávit vteřina i deset minut.
  */
 export interface BacktestOrderEvent {
+  positionId?: string;
+  closedPositionId?: string;
   id: string;
   runId: string;
   orderId: string;
@@ -188,9 +213,17 @@ export interface BacktestOrderEvent {
   quantity?: number;
   price?: number;
   previousPrice?: number;
+  /** Actual reduction, absent in legacy journals; zero for entry/scale-in. */
+  closedQuantity?: number;
+  /** Exposure after this fill, used to distinguish partial and final exits. */
+  positionQuantityAfter?: number;
 }
 
 export interface BacktestRuntimeState {
+  /** Greatest revealed cursor (UTC seconds); 0 = fresh, missing = unknown legacy history. */
+  maxRevealedTime?: number;
+  /** Research observations are not trades and never change account P&L. */
+  researchJournal?: import('./backtestResearchJournal').BacktestResearchJournal;
   balance: number;
   equity: number;
   realizedPnl: number;

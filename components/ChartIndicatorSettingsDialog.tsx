@@ -310,6 +310,31 @@ const VisibilityEditor: React.FC<{ value: IndicatorVisibilitySettings; onChange:
   return <div className="space-y-1">{row('minutes', 'Minutes', 'minuteFrom', 'minuteTo')}{row('hours', 'Hours', 'hourFrom', 'hourTo')}{row('days', 'Days', 'dayFrom', 'dayTo')}</div>;
 };
 
+/** Older templates may lack fields added later (notably visibility). Keep
+ * every current default and accept only values of the corresponding type. */
+export const normalizeIndicatorTemplate = <K extends keyof AlphaTradeIndicatorSettings>(
+  indicator: K, value: unknown,
+): AlphaTradeIndicatorSettings[K] => {
+  const merge = (fallback: Record<string, unknown>, input: unknown): Record<string, unknown> => {
+    const candidate = input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : {};
+    return Object.fromEntries(Object.entries(fallback).map(([key, defaultValue]) => {
+      const saved = candidate[key];
+      if (defaultValue && typeof defaultValue === 'object') return [key, merge(defaultValue as Record<string, unknown>, saved)];
+      const valid = typeof saved === typeof defaultValue && (typeof saved !== 'number' || Number.isFinite(saved));
+      return [key, valid ? saved : defaultValue];
+    }));
+  };
+  const normalized = merge(DEFAULT_INDICATOR_SETTINGS[indicator] as unknown as Record<string, unknown>, value);
+  if (indicator === 'fvg' && value && typeof value === 'object') {
+    const legacy = value as Partial<FvgIndicatorSettings>;
+    if (Number.isFinite(legacy.fillOpacity)) {
+      if (legacy.bullOpacity === undefined) normalized.bullOpacity = legacy.fillOpacity;
+      if (legacy.bearOpacity === undefined) normalized.bearOpacity = legacy.fillOpacity;
+    }
+  }
+  return normalized as unknown as AlphaTradeIndicatorSettings[K];
+};
+
 export const ChartIndicatorSettingsDialog: React.FC<{
   indicator: IndicatorId;
   settings: AlphaTradeIndicatorSettings;
@@ -329,7 +354,7 @@ export const ChartIndicatorSettingsDialog: React.FC<{
     onPreview(value);
   };
   const applyIndicatorTemplate = (indicatorValue: unknown) => {
-    const value = { ...draft, [indicator]: structuredClone(indicatorValue) } as AlphaTradeIndicatorSettings;
+    const value = { ...draft, [indicator]: normalizeIndicatorTemplate(indicator, indicatorValue) } as AlphaTradeIndicatorSettings;
     setDraft(value);
     onPreview(value);
   };

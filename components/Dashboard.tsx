@@ -7,6 +7,7 @@ import { currencyService, ExchangeRates } from '../services/currencyService';
 import { t } from '../services/translations';
 import { getTradeEntryMinuteOfDay, getTradeEntryDate } from '../services/tradeTime';
 import Charts from './Charts';
+import { simulateBacktestMonteCarlo } from '../services/backtestMonteCarlo';
 import DashboardCalendar from './DashboardCalendar';
 import DisciplineDashboard from './DisciplineDashboard';
 import {
@@ -598,56 +599,17 @@ const BtSampleSizeWidget: React.FC<{ stats: TradeStats; theme: any }> = ({ stats
 
 // Monte Carlo simulace — bootstrap resampling existujících obchodů.
 // Odpovídá na otázku „je edge reálná, nebo klika?": rozdělení výsledků, max DD, riziko ztráty.
-const _percentile = (sorted: number[], p: number) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * p)))];
 const _money = (n: number) => `${n >= 0 ? '+' : '−'}$${Math.abs(Math.round(n)).toLocaleString('en-US')}`;
 
 const BtMonteCarloWidget: React.FC<{ stats: TradeStats; theme: any; onExpand?: () => void }> = ({ stats, theme, onExpand }) => {
   const isDark = theme !== 'light';
-  const SIMS = 600, PATHS = 36;
+  const SIMS = 600;
   const previousSimulationInput = useRef<MonteCarloInput | null>(null);
   const simulationInput = reuseMonteCarloInput(previousSimulationInput.current, stats.trades, stats.initialBalance);
   previousSimulationInput.current = simulationInput;
-  const sim = useMemo(() => {
-    const pnls = simulationInput.pnls;
-    const n = pnls.length;
-    if (n < 10) return null;
-    const len = n;
-    const startBalance = simulationInput.initialBalance;
-    const BANDS = Math.min(len, 60);
-    const stepIdx: number[] = [];
-    for (let b = 0; b <= BANDS; b++) stepIdx.push(Math.round((b / BANDS) * len));
-    const cols: number[][] = stepIdx.map(() => new Array(SIMS));
-    const paths: number[][] = Array.from({ length: PATHS }, () => new Array(stepIdx.length));
-    const finals = new Array<number>(SIMS);
-    const maxDDs = new Array<number>(SIMS);
-    for (let s = 0; s < SIMS; s++) {
-      let eq = 0, peak = 0, maxdd = 0, bi = 0;
-      if (stepIdx[0] === 0) { cols[0][s] = 0; if (s < PATHS) paths[s][0] = 0; bi = 1; }
-      for (let i = 0; i < len; i++) {
-        eq += pnls[(Math.random() * n) | 0];
-        if (eq > peak) peak = eq;
-        const dd = peak - eq;
-        if (dd > maxdd) maxdd = dd;
-        if (bi < stepIdx.length && i + 1 === stepIdx[bi]) { cols[bi][s] = eq; if (s < PATHS) paths[s][bi] = eq; bi++; }
-      }
-      finals[s] = eq;
-      maxDDs[s] = maxdd;
-    }
-    const fSorted = [...finals].sort((a, b) => a - b);
-    const ddSorted = [...maxDDs].sort((a, b) => a - b);
-    const band = (p: number) => cols.map(c => _percentile([...c].sort((a, b) => a - b), p));
-    const expectancy = pnls.reduce((a, b) => a + b, 0) / n;
-    return {
-      len, startBalance, expectancy,
-      p5: _percentile(fSorted, 0.05), p25: _percentile(fSorted, 0.25), p50: _percentile(fSorted, 0.5),
-      p75: _percentile(fSorted, 0.75), p95: _percentile(fSorted, 0.95),
-      ddMed: _percentile(ddSorted, 0.5), ddP95: _percentile(ddSorted, 0.95),
-      pLoss: (finals.filter(f => f < 0).length / SIMS) * 100,
-      ruinPct: startBalance > 0 ? (maxDDs.filter(d => d >= startBalance).length / SIMS) * 100 : null,
-      b5: band(0.05), b25: band(0.25), b50: band(0.5), b75: band(0.75), b95: band(0.95),
-      paths,
-    };
-  }, [simulationInput]);
+  const sim = useMemo(() => simulateBacktestMonteCarlo(
+    simulationInput.pnls, simulationInput.initialBalance, { simulations: SIMS },
+  ), [simulationInput]);
 
   if (!sim) {
     return (

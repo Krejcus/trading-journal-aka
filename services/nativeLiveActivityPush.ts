@@ -20,6 +20,32 @@ interface StartRegistration {
 
 let listeners: PluginListenerHandle[] = [];
 let listeningUserId: string | null = null;
+let listenerGeneration = 0;
+const acceptedActivities = new Set<string>();
+let acceptedStart = false;
+const pendingPosts = new Set<Promise<Response>>();
+const uncertainPosts = new Set<string>();
+
+async function subscriptionFetch(url: string, init: RequestInit, token: string): Promise<Response> {
+  const pending = fetch(url, init);
+  const isPost = init.method === 'POST';
+  if (isPost) pendingPosts.add(pending);
+  try {
+    const response = await pending;
+    if (isPost && !response.ok) uncertainPosts.add(token);
+    return response;
+  } catch (error) {
+    if (isPost) uncertainPosts.add(token);
+    throw error;
+  } finally {
+    pendingPosts.delete(pending);
+  }
+}
+
+/** A successful subscription makes the server the content/lifecycle owner. */
+export function isNativeLiveActivityRemoteManaged(): boolean {
+  return listeningUserId != null && (acceptedStart || acceptedActivities.size > 0);
+}
 
 function loadRegistrations(): ActivityRegistration[] {
   try {
@@ -82,13 +108,16 @@ async function sendRegistration(
   method: 'POST' | 'DELETE',
   expectedUserId: string,
 ): Promise<boolean> {
+  const epoch = listenerGeneration;
   const { data: { session } } = await supabase.auth.getSession();
   if (!session || session.user.id !== expectedUserId) return false;
   const environment = await alphaTradeNativePlugin.getPushEnvironment() as {
     environment: 'development' | 'production';
   };
-  const response = await fetch(apiUrl('/api/native-live-activity-subscription'), {
+  if (method === 'POST' && epoch !== listenerGeneration) return false;
+  const response = await subscriptionFetch(apiUrl('/api/native-live-activity-subscription'), {
     method,
+    signal: AbortSignal.timeout(8_000),
     headers: {
       Authorization: `Bearer ${session.access_token}`,
       'Content-Type': 'application/json',
@@ -98,7 +127,11 @@ async function sendRegistration(
       environment: environment.environment,
       bundleId: 'app.alphatrade.native',
     }),
-  });
+  }, registration.pushToken);
+  if (response.ok && epoch === listenerGeneration && listeningUserId === expectedUserId) {
+    if (method === 'POST') acceptedActivities.add(registration.activityId);
+    else acceptedActivities.delete(registration.activityId);
+  }
   return response.ok;
 }
 
@@ -107,13 +140,16 @@ async function sendStartRegistration(
   method: 'POST' | 'DELETE',
   expectedUserId: string,
 ): Promise<boolean> {
+  const epoch = listenerGeneration;
   const { data: { session } } = await supabase.auth.getSession();
   if (!session || session.user.id !== expectedUserId) return false;
   const environment = await alphaTradeNativePlugin.getPushEnvironment() as {
     environment: 'development' | 'production';
   };
-  const response = await fetch(apiUrl('/api/native-live-activity-start-subscription'), {
+  if (method === 'POST' && epoch !== listenerGeneration) return false;
+  const response = await subscriptionFetch(apiUrl('/api/native-live-activity-start-subscription'), {
     method,
+    signal: AbortSignal.timeout(8_000),
     headers: {
       Authorization: `Bearer ${session.access_token}`,
       'Content-Type': 'application/json',
@@ -123,21 +159,32 @@ async function sendStartRegistration(
       environment: environment.environment,
       bundleId: 'app.alphatrade.native',
     }),
-  });
+  }, registration.pushToken);
+  if (response.ok && epoch === listenerGeneration && listeningUserId === expectedUserId) acceptedStart = method === 'POST';
   return response.ok;
 }
 
 /** Register the ActivityKit push-token stream after the user is authenticated. */
 export async function initializeNativeLiveActivityPush(userId: string): Promise<void> {
   if (!isNativeBuild) return;
-  if (listeners.length > 0 && listeningUserId === userId) return;
+  if (listeners.length > 0 && listeningUserId === userId) {
+    await Promise.all(loadRegistrations().map(registration => sendRegistration(registration, 'POST', userId).catch(() => false)));
+    const start = loadStartRegistration();
+    if (start) await sendStartRegistration(start, 'POST', userId).catch(() => false);
+    return;
+  }
+  const epoch = ++listenerGeneration;
   await Promise.all(listeners.map(listener => listener.remove()));
+  if (epoch !== listenerGeneration) return;
   listeners = [];
+  acceptedActivities.clear();
+  acceptedStart = false;
   listeningUserId = userId;
-  listeners = [
+  const pendingListeners = [
     await alphaTradeNativePlugin.addListener(
       'liveActivityPushToken',
       (registration: ActivityRegistration) => {
+        if (epoch !== listenerGeneration || listeningUserId !== userId) return;
         // Persist first, then sync. A temporary endpoint/network failure must
         // not lose the only token emission for the lifetime of an activity.
         saveRegistration(registration);
@@ -151,6 +198,8 @@ export async function initializeNativeLiveActivityPush(userId: string): Promise<
     await alphaTradeNativePlugin.addListener(
       'liveActivityEnded',
       ({ activityId }: { activityId: string }) => {
+        if (epoch !== listenerGeneration || listeningUserId !== userId) return;
+        acceptedActivities.delete(activityId);
         const registration = registrationFor(activityId);
         if (!registration) return;
         void sendRegistration(registration, 'DELETE', userId)
@@ -163,6 +212,7 @@ export async function initializeNativeLiveActivityPush(userId: string): Promise<
     await alphaTradeNativePlugin.addListener(
       'liveActivityPushToStartToken',
       ({ pushToken }: { pushToken: string }) => {
+        if (epoch !== listenerGeneration || listeningUserId !== userId) return;
         const registration = saveStartRegistration(pushToken);
         void sendStartRegistration(registration, 'POST', userId).then(ok => {
           if (!ok) console.warn('[Native Live Activity] Push-to-start registration was not accepted; it will retry.');
@@ -172,6 +222,11 @@ export async function initializeNativeLiveActivityPush(userId: string): Promise<
       },
     ) as PluginListenerHandle,
   ];
+  if (epoch !== listenerGeneration) {
+    await Promise.allSettled(pendingListeners.map(listener => listener.remove()));
+    return;
+  }
+  listeners = pendingListeners;
 
   // Retry any token captured while the endpoint or network was unavailable.
   await Promise.all(loadRegistrations().map(registration =>
@@ -180,21 +235,42 @@ export async function initializeNativeLiveActivityPush(userId: string): Promise<
   if (startRegistration) await sendStartRegistration(startRegistration, 'POST', userId).catch(() => false);
 }
 
-export async function deactivateNativeLiveActivityPush(userId: string): Promise<void> {
+export async function deactivateNativeLiveActivityPush(userId: string): Promise<{ revoked: boolean }> {
+  ++listenerGeneration;
+  const registrationsInFlight = [...pendingPosts];
+  listeningUserId = null;
+  acceptedActivities.clear();
+  acceptedStart = false;
   const registrations = loadRegistrations();
   const startRegistration = loadStartRegistration();
-  await Promise.all(registrations.map(registration =>
-    sendRegistration(registration, 'DELETE', userId).catch(() => false)));
-  if (startRegistration) await sendStartRegistration(startRegistration, 'DELETE', userId).catch(() => false);
   localStorage.removeItem(STORAGE_KEY);
   localStorage.removeItem(START_STORAGE_KEY);
-  await Promise.all(listeners.map(listener => listener.remove()));
+  const removing = listeners;
   listeners = [];
-  listeningUserId = null;
+  const localResults = await Promise.allSettled([
+    ...removing.map(listener => listener.remove()),
+    ...(isNativeBuild ? [alphaTradeNativePlugin.endLiveActivity()] : []),
+  ]);
+  await Promise.allSettled(registrationsInFlight);
+  const results = await Promise.all([
+    ...registrations.map(registration => sendRegistration(registration, 'DELETE', userId).catch(() => false)),
+    ...(startRegistration ? [sendStartRegistration(startRegistration, 'DELETE', userId).catch(() => false)] : []),
+  ]);
+  const revoked = results.every(Boolean)
+    && registrations.every(registration => !uncertainPosts.has(registration.pushToken))
+    && (!startRegistration || !uncertainPosts.has(startRegistration.pushToken));
+  if (!revoked) console.warn('[Native Live Activity] Local registrations were cleared; server revocation was not confirmed.');
+  const localFailure = localResults.find(result => result.status === 'rejected');
+  if (localFailure?.status === 'rejected') throw localFailure.reason;
+  return { revoked };
 }
 
 export async function resetNativeLiveActivityPushListener(): Promise<void> {
-  await Promise.all(listeners.map(listener => listener.remove()));
+  ++listenerGeneration;
+  const removing = listeners;
   listeners = [];
   listeningUserId = null;
+  acceptedActivities.clear();
+  acceptedStart = false;
+  await Promise.allSettled(removing.map(listener => listener.remove()));
 }

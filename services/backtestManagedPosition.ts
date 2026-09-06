@@ -34,9 +34,45 @@ export const createManagedPositionPlan = (
   };
 };
 
+interface LegacyPositionLife {
+  openedAt: number;
+  terminalTime: number | null;
+}
+
+/** Recover old scale-in links from fill order, without rewriting saved data. */
+const legacyPositionLives = (runtime: BacktestRuntimeState): Map<string, LegacyPositionLife> => {
+  const lives = new Map<string, LegacyPositionLife>();
+  const state = new Map<string, { quantity: number; life: LegacyPositionLife }>();
+  const orders = new Map(runtime.orders.map(order => [order.id, order]));
+  for (const fill of runtime.fills) {
+    const previous = state.get(fill.instrument);
+    const before = previous?.quantity ?? 0;
+    const reducing = orders.get(fill.orderId ?? '')?.reduceOnly === true;
+    const signed = fill.side === 'buy' ? fill.quantity : -fill.quantity;
+    if (reducing && (!before || Math.sign(before) === Math.sign(signed))) continue;
+    const quantity = reducing ? Math.sign(signed) * Math.min(Math.abs(before), Math.abs(signed)) : signed;
+    const after = before + quantity;
+    if (previous && before && Math.sign(before) !== Math.sign(after)) previous.life.terminalTime = fill.filledAt;
+    if (!after) {
+      state.delete(fill.instrument);
+    } else if (!before || Math.sign(before) !== Math.sign(after)) {
+      const life: LegacyPositionLife = { openedAt: fill.filledAt, terminalTime: null };
+      state.set(fill.instrument, { quantity: after, life });
+      lives.set(fill.id, life);
+    } else if (previous) {
+      state.set(fill.instrument, { quantity: after, life: previous.life });
+      if (Math.sign(before) === Math.sign(quantity)) lives.set(fill.id, previous.life);
+    }
+  }
+  return lives;
+};
+
 export const managedPositionBoxes = (
   runtime: BacktestRuntimeState,
-): BacktestManagedPositionBox[] => (runtime.managedPositionPlans ?? []).flatMap((plan): BacktestManagedPositionBox[] => {
+): BacktestManagedPositionBox[] => {
+  const legacyLives = runtime.fills.some(fill => !fill.positionId && !fill.closedPositionId)
+    ? legacyPositionLives(runtime) : new Map<string, LegacyPositionLife>();
+  return (runtime.managedPositionPlans ?? []).flatMap((plan): BacktestManagedPositionBox[] => {
   const order = runtime.orders.find(candidate => candidate.id === plan.orderId);
   if (!order) return [];
   const entryFill = runtime.fills.find(fill => fill.orderId === order.id && !order.reduceOnly);
@@ -52,19 +88,35 @@ export const managedPositionBoxes = (
       state: 'pending',
     }];
   }
+  // An opposite-side order may only reduce a pre-existing position. It never
+  // created the position represented by this drawing.
+  if (!entryFill.positionId && entryFill.closedPositionId) return [];
+  const legacyLife = legacyLives.get(entryFill.id);
+  if (!entryFill.positionId && !legacyLife) return [];
   const direction = order.side === 'buy' ? 'Long' : 'Short';
-  const closedTrade = runtime.closedTrades.find(trade => (
+  const active = runtime.positions.some(position => position.instrument === plan.instrument
+    && position.side === (order.side === 'buy' ? 'long' : 'short')
+    && (entryFill.positionId
+      ? position.positionId === entryFill.positionId
+      : (legacyLife?.terminalTime == null && position.openedAt === (legacyLife?.openedAt ?? entryFill.filledAt))
+        || position.entryFillIds.includes(entryFill.id)));
+  const closedTrades = runtime.closedTrades.filter(trade => (
     trade.instrument === plan.instrument
     && trade.direction === direction
-    && trade.entryTime === entryFill.filledAt
+    && (entryFill.positionId ? trade.positionId === entryFill.positionId : trade.entryTime === (legacyLife?.openedAt ?? entryFill.filledAt))
   ));
+  // A partial realization is not terminal. All scale-in drawings share the
+  // same position identity and freeze only when its final contract exits.
+  const terminalTime = active ? null : legacyLife?.terminalTime
+    ?? (closedTrades.length ? Math.max(...closedTrades.map(trade => trade.exitTime)) : null);
   return [{
     ...plan,
     startTime: entryFill.filledAt,
-    terminalTime: closedTrade?.exitTime ?? null,
-    state: closedTrade ? 'closed' : 'active',
+    terminalTime,
+    state: terminalTime === null ? 'active' : 'closed',
   }];
-});
+  });
+};
 
 export const managedPositionDrawing = (
   box: BacktestManagedPositionBox,

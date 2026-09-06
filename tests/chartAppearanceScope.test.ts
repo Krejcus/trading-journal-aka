@@ -3,6 +3,7 @@ import {
   activeChartAppearanceScope,
   chartAppearanceSnapshot,
   closeChartAppearanceScope,
+  createChartAppearanceSession,
   onChartAppearanceScopeBroadcast,
   onChartAppearanceScopeReset,
   openChartAppearanceScope,
@@ -19,6 +20,57 @@ afterEach(() => {
 });
 
 describe('chartAppearanceScope', () => {
+  it('StrictMode setup/cleanup/setup keeps the mounted session scoped and retains its edits', () => {
+    const session = createChartAppearanceSession('backtest:strict', { chartSettings: { grid: 'both' } }, inheritNothing);
+    expect(activeChartAppearanceScope()).toBeNull();
+    session.activate();
+    writeChartAppearance('chartSettings', { grid: 'none' });
+    session.deactivate();
+    session.activate();
+    expect(activeChartAppearanceScope()).toBe('backtest:strict');
+    expect(chartAppearanceSnapshot()).toEqual({ chartSettings: { grid: 'none' } });
+    expect(writeChartAppearance('indicatorSettings', { color: 'blue' })).toBe(true);
+  });
+
+  it('cloud replacement with the same run id restores remote appearance and ignores stale cleanup', () => {
+    const old = createChartAppearanceSession('backtest:same', { chartSettings: { grid: 'both' } }, inheritNothing);
+    const replacement = createChartAppearanceSession('backtest:same', { chartSettings: { grid: 'none' } }, inheritNothing);
+    old.activate();
+    replacement.activate();
+    old.deactivate();
+    expect(activeChartAppearanceScope()).toBe('backtest:same');
+    expect(chartAppearanceSnapshot()).toEqual({ chartSettings: { grid: 'none' } });
+    replacement.deactivate();
+    expect(activeChartAppearanceScope()).toBeNull();
+  });
+
+  it('normal cleanup before same-id replacement also restores the saved remote state', () => {
+    const old = createChartAppearanceSession('backtest:same', undefined, inheritNothing);
+    old.activate();
+    writeChartAppearance('chartSettings', { grid: 'both' });
+    old.deactivate();
+    const replacement = createChartAppearanceSession('backtest:same', { chartSettings: { grid: 'none' } }, inheritNothing);
+    replacement.activate();
+    expect(chartAppearanceSnapshot()).toEqual({ chartSettings: { grid: 'none' } });
+  });
+
+  it('reopening another session restores its own appearance without changing global defaults', () => {
+    const global = { grid: 'both' };
+    const first = createChartAppearanceSession('backtest:first', undefined, slot => slot === 'chartSettings' ? global : undefined);
+    first.activate();
+    writeChartAppearance('chartSettings', { grid: 'none' });
+    const saved = chartAppearanceSnapshot();
+    first.deactivate();
+    const second = createChartAppearanceSession('backtest:second', undefined, slot => slot === 'chartSettings' ? global : undefined);
+    second.activate();
+    expect(readChartAppearance('chartSettings')).toEqual(global);
+    second.deactivate();
+    const reopened = createChartAppearanceSession('backtest:first', saved, inheritNothing);
+    reopened.activate();
+    expect(readChartAppearance('chartSettings')).toEqual({ grid: 'none' });
+    expect(global).toEqual({ grid: 'both' });
+  });
+
   it('bez otevřené session nic nedrží a zápis odmítne', () => {
     expect(activeChartAppearanceScope()).toBeNull();
     expect(readChartAppearance('indicatorSettings')).toBeUndefined();

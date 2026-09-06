@@ -1,0 +1,223 @@
+[
+  {
+    "case": "limit ignores certain stop on entry bar",
+    "actual": {
+      "positions": [
+        {
+          "instrument": "MNQ",
+          "side": "long",
+          "quantity": 1,
+          "averagePrice": 99,
+          "stopLoss": 98,
+          "takeProfit": 104,
+          "initialStopLoss": 98,
+          "initialTakeProfit": 104,
+          "maxFavorablePrice": 99,
+          "maxAdversePrice": 99,
+          "openedAt": 1786363260,
+          "entryFillIds": [
+            "81eade10-6ae4-4bc3-bf17-2bb17300d1fe"
+          ],
+          "entryCommission": 0.37
+        }
+      ],
+      "closed": 0
+    },
+    "expected": "closed stop-loss at 98 on t+60"
+  },
+  {
+    "case": "the ignored stop becomes a profitable trade",
+    "actual": {
+      "id": "19d07218-6ed3-42b4-88ef-d5857b2eb981",
+      "runId": "audit",
+      "instrument": "MNQ",
+      "direction": "Long",
+      "quantity": 1,
+      "entryPrice": 99,
+      "exitPrice": 104,
+      "entryTime": 1786363260,
+      "exitTime": 1786363320,
+      "grossPnl": 10,
+      "commission": 0.74,
+      "pnl": 9.26,
+      "reason": "take-profit",
+      "stopLoss": 98,
+      "takeProfit": 104,
+      "initialStopLoss": 98,
+      "initialTakeProfit": 104,
+      "riskAmount": 2,
+      "mfePoints": 5,
+      "maePoints": 0,
+      "mfeR": 5,
+      "maeR": 0
+    },
+    "expected": "loss at 98 on previous bar"
+  },
+  {
+    "case": "stop entry ignores certain same-bar TP",
+    "actual": {
+      "positions": 1,
+      "closed": 0
+    },
+    "expected": "closed take-profit at 102"
+  },
+  {
+    "case": "market click fills fresh limit retroactively",
+    "actual": {
+      "orders": [
+        {
+          "type": "limit",
+          "status": "filled"
+        },
+        {
+          "type": "market",
+          "status": "filled"
+        }
+      ],
+      "position": {
+        "instrument": "MNQ",
+        "side": "long",
+        "quantity": 2,
+        "averagePrice": 99.5,
+        "maxFavorablePrice": 99,
+        "maxAdversePrice": 99,
+        "openedAt": 1786363200,
+        "entryFillIds": [
+          "c104b3eb-c31e-426d-85bf-4dea21b34f5c",
+          "ae35bb03-2c4b-484b-84d5-1bc1857892b2"
+        ],
+        "entryCommission": 0.74
+      }
+    },
+    "expected": "fresh limit stays pending; only market order fills at close"
+  },
+  {
+    "case": "manual close replays pre-entry stop and charges ghost exit",
+    "actual": {
+      "closed": {
+        "id": "09d29766-75d9-472c-8a60-0855e3a94b33",
+        "runId": "audit",
+        "instrument": "MNQ",
+        "direction": "Long",
+        "quantity": 1,
+        "entryPrice": 100,
+        "exitPrice": 99,
+        "entryTime": 1786363200,
+        "exitTime": 1786363200,
+        "grossPnl": -2,
+        "commission": 0.74,
+        "pnl": -2.74,
+        "reason": "stop-loss",
+        "stopLoss": 99,
+        "takeProfit": 104,
+        "initialStopLoss": 99,
+        "initialTakeProfit": 104,
+        "riskAmount": 2,
+        "mfePoints": 0,
+        "maePoints": 1,
+        "mfeR": 0,
+        "maeR": 1
+      },
+      "fillCount": 3,
+      "commissions": 1.1099999999999999,
+      "balance": 9996.889999999998
+    },
+    "expected": "one manual exit at 100; 2 fills, commission 0.74, balance 9999.26"
+  },
+  {
+    "case": "MFE contains price after position was closed",
+    "actual": {
+      "id": "175fda21-cec0-4477-ae69-81c7e03597fc",
+      "runId": "audit",
+      "instrument": "MNQ",
+      "direction": "Long",
+      "quantity": 1,
+      "entryPrice": 100,
+      "exitPrice": 104,
+      "entryTime": 1786363200,
+      "exitTime": 1786363260,
+      "grossPnl": 8,
+      "commission": 0.74,
+      "pnl": 7.26,
+      "reason": "take-profit",
+      "stopLoss": 98,
+      "takeProfit": 104,
+      "initialStopLoss": 98,
+      "initialTakeProfit": 104,
+      "riskAmount": 4,
+      "mfePoints": 20,
+      "maePoints": 0,
+      "mfeR": 10,
+      "maeR": 0
+    },
+    "expected": "live-position MFE 4 points = 2R, not 20 points = 10R"
+  },
+  {
+    "case": "partial close freezes managed position box",
+    "actual": {
+      "remaining": 1,
+      "boxes": [
+        {
+          "id": "plan",
+          "orderId": "ea52f2c7-f69e-4cb9-a40d-51acbbd27e2d",
+          "instrument": "MNQ",
+          "tool": "LongPosition",
+          "startTime": 1786363200,
+          "entryPrice": 100,
+          "targetPrice": 104,
+          "stopPrice": 98,
+          "style": {},
+          "terminalTime": 1786363260,
+          "state": "closed"
+        }
+      ]
+    },
+    "expected": "box stays active for remaining contract"
+  },
+  {
+    "case": "oversized reduce-only fill and fees exceed closed quantity",
+    "actual": {
+      "fill": {
+        "id": "a203734e-8a0e-42e1-9188-01736334a461",
+        "runId": "audit",
+        "orderId": "2bfdc4e4-34a1-46ec-9807-43f8e070b5ef",
+        "instrument": "MNQ",
+        "side": "sell",
+        "quantity": 5,
+        "price": 101,
+        "commission": 1.85,
+        "realizedPnl": 2,
+        "filledAt": 1786363260,
+        "reason": "manual"
+      },
+      "closed": {
+        "id": "0cc9641a-e41d-49a7-ba00-65f857965b3d",
+        "runId": "audit",
+        "instrument": "MNQ",
+        "direction": "Long",
+        "quantity": 1,
+        "entryPrice": 100,
+        "exitPrice": 101,
+        "entryTime": 1786363200,
+        "exitTime": 1786363260,
+        "grossPnl": 2,
+        "commission": 0.74,
+        "pnl": 1.26,
+        "reason": "manual",
+        "mfePoints": 1,
+        "maePoints": 0
+      },
+      "balance": 9999.779999999999,
+      "commissions": 2.22
+    },
+    "expected": "fill quantity 1, exit fee .37, balance 10001.26"
+  },
+  {
+    "case": "take-profit limit fills worse than its limit",
+    "actual": {
+      "exit": 103.75,
+      "target": 104
+    },
+    "expected": "sell limit TP at least 104"
+  }
+]

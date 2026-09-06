@@ -1,3 +1,5 @@
+import TradeNoteHistoryEditor from './TradeNoteHistoryEditor';
+import { buildTradeNoteHistoryPatch, createTradeNoteDrafts, type TradeNoteCaptureContext, type TradeNoteHistoryPatch } from '../services/tradeNoteHistory';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownRight,
@@ -13,30 +15,34 @@ import {
   RefreshCw,
   Save,
   Target,
+  Tags,
   Waves,
   X,
   Zap,
 } from 'lucide-react';
+import { changedTradeFields } from '../services/tradePatch';
 import type { Trade } from '../types';
 import {
   buildBacktestTradeRecalculationUpdates,
   describeBacktestTradeRecalculation,
+  reconcileBacktestConfluenceProvenance,
   type BacktestTradeRecalculationChange,
 } from '../services/backtestTradeRecalculation';
+
+import { normalizeTradeTags, type BacktestTagSuggestions } from '../services/backtestTagCatalog';
 
 interface Props {
   trade: Trade;
   isDark: boolean;
+  tagSuggestions?: BacktestTagSuggestions;
+  noteCaptureContext?: TradeNoteCaptureContext;
   onClose: () => void;
   onCaptureSnapshot: () => string | Promise<string>;
   onRecalculate?: () => Trade | Promise<Trade>;
-  onSave: (updates: Partial<Trade>, snapshotDataUrl?: string) => Promise<void>;
+  onSave: (updates: Partial<Trade>, snapshotDataUrl?: string, expected?: Partial<Trade>) => Promise<void>;
 }
 
-const splitTags = (value: string) => value
-  .split(',')
-  .map(item => item.trim())
-  .filter(Boolean);
+const splitTags = (value: string) => normalizeTradeTags(value.split(','));
 
 const joinTags = (values?: string[]) => (values ?? []).join(', ');
 
@@ -67,46 +73,68 @@ const ConfluenceCapsuleEditor: React.FC<{
   onChange: (value: string) => void;
   isDark: boolean;
   addLabel: string;
-}> = ({ value, onChange, isDark, addLabel }) => {
+  disabled?: boolean;
+  suggestions?: readonly string[];
+  autoTags?: readonly string[];
+  onManualAdd?: (tags: string[]) => void;
+}> = ({ value, onChange, isDark, addLabel, disabled = false, suggestions = [], autoTags = [], onManualAdd }) => {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState('');
+  const cancelled = useRef(false);
   const tags = splitTags(value);
-
-  const commitDraft = () => {
-    const additions = splitTags(draft);
-    if (additions.length) onChange([...new Set([...tags, ...additions])].join(', '));
+  const selected = new Set(tags.map(tag => tag.toLocaleLowerCase('cs')));
+  const choices = normalizeTradeTags(suggestions).filter(tag => !selected.has(tag.toLocaleLowerCase('cs'))
+    && tag.toLocaleLowerCase('cs').includes(draft.trim().toLocaleLowerCase('cs')));
+  const addTags = (additions: string[]) => {
+    if (additions.length) {
+      onManualAdd?.(additions);
+      onChange(normalizeTradeTags([...tags, ...additions]).join(', '));
+    }
     setDraft('');
     setAdding(false);
+  };
+  const commitDraft = () => {
+    if (!cancelled.current) addTags(splitTags(draft));
   };
 
   return (
     <div className="mt-2 flex min-h-8 flex-wrap items-center gap-1.5">
-      {tags.map((tag, index) => (
-        <span key={`${tag}-${index}`} className={`inline-flex items-center gap-1 rounded-lg border py-1 pl-2 pr-1 text-[9px] font-black uppercase tracking-wide ${getConfluenceTone(tag, isDark)}`}>
+      {tags.map(tag => (
+        <span key={tag} className={`inline-flex items-center gap-1 rounded-lg border py-1 pl-2 pr-1 text-[9px] font-black uppercase tracking-wide ${getConfluenceTone(tag, isDark)}`}>
           {tag}
-          <button type="button" onClick={() => onChange(tags.filter((_, itemIndex) => itemIndex !== index).join(', '))} className="flex h-4 w-4 items-center justify-center rounded hover:bg-black/10" aria-label={`Odebrat ${tag}`}><X size={10} /></button>
+          {autoTags.includes(tag) && <span className="text-[7px] opacity-60" title="Automaticky z indikátoru">Auto</span>}
+          <button disabled={disabled} type="button" onClick={() => onChange(tags.filter(item => item !== tag).join(', '))} className="flex h-4 w-4 items-center justify-center rounded hover:bg-black/10" aria-label={`Odebrat ${tag}`}><X size={10} /></button>
         </span>
       ))}
       {adding ? (
-        <input
-          autoFocus
-          value={draft}
-          onChange={event => setDraft(event.target.value)}
-          onBlur={commitDraft}
-          onKeyDown={event => {
-            if (event.key === 'Enter' || event.key === ',') {
-              event.preventDefault();
-              commitDraft();
-            } else if (event.key === 'Escape') {
-              setDraft('');
-              setAdding(false);
-            }
-          }}
-          placeholder="Název confluence"
-          className={`h-7 min-w-40 flex-1 rounded-lg border px-2 text-[10px] font-bold outline-none focus:border-blue-500 ${isDark ? 'border-white/10 bg-white/[0.04]' : 'border-slate-200 bg-white'}`}
-        />
+        <div className="min-w-40 flex-1">
+          <input
+            disabled={disabled}
+            autoFocus
+            value={draft}
+            onChange={event => setDraft(event.target.value)}
+            onBlur={commitDraft}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === ',') {
+                event.preventDefault();
+                commitDraft();
+              } else if (event.key === 'Escape') {
+                event.preventDefault();
+                cancelled.current = true;
+                setDraft('');
+                setAdding(false);
+              }
+            }}
+            aria-label={addLabel}
+            placeholder="Napiš vlastní tag nebo vyber níže"
+            className={`h-8 w-full rounded-lg border px-2 text-[10px] font-bold outline-none focus:border-blue-500 ${isDark ? 'border-white/10 bg-white/[0.04]' : 'border-slate-200 bg-white'}`}
+          />
+          {choices.length > 0 && <div className="mt-1 flex max-h-24 flex-wrap gap-1 overflow-y-auto" aria-label="Dříve použité tagy">
+            {choices.map(tag => <button disabled={disabled} key={tag} type="button" onMouseDown={event => event.preventDefault()} onClick={() => addTags([tag])} className={`rounded border px-2 py-1 text-[10px] ${getConfluenceTone(tag, isDark)}`}>{tag}</button>)}
+          </div>}
+        </div>
       ) : (
-        <button type="button" onClick={() => setAdding(true)} className={`inline-flex h-7 items-center gap-1 rounded-lg border border-dashed px-2 text-[9px] font-black uppercase tracking-wide ${isDark ? 'border-white/15 text-slate-400 hover:border-white/30' : 'border-slate-300 text-slate-500 hover:border-slate-400'}`}><Plus size={11} /> {addLabel}</button>
+        <button disabled={disabled} type="button" onClick={() => { cancelled.current = false; setAdding(true); }} className={`inline-flex h-7 items-center gap-1 rounded-lg border border-dashed px-2 text-[9px] font-black uppercase tracking-wide ${isDark ? 'border-white/15 text-slate-400 hover:border-white/30' : 'border-slate-300 text-slate-500 hover:border-slate-400'}`}><Plus size={11} /> {addLabel}</button>
       )}
     </div>
   );
@@ -114,18 +142,21 @@ const ConfluenceCapsuleEditor: React.FC<{
 
 export const buildBacktestTradeReviewUpdates = ({
   notes,
+  tags,
   htfConfluence,
   ltfConfluence,
   isValid,
   setupType,
 }: {
   notes: string;
+  tags?: string;
   htfConfluence: string;
   ltfConfluence: string;
   isValid: boolean;
   setupType: NonNullable<Trade['setupType']>;
 }): Partial<Trade> => ({
   notes: notes.trim(),
+  ...(tags !== undefined ? { tags: splitTags(tags) } : {}),
   htfConfluence: splitTags(htfConfluence),
   ltfConfluence: splitTags(ltfConfluence),
   isValid,
@@ -134,15 +165,31 @@ export const buildBacktestTradeReviewUpdates = ({
   setupType,
 });
 
-const BacktestTradeReviewDialog: React.FC<Props> = ({
+const BacktestTradeReviewContent: React.FC<Props> = ({
   trade,
   isDark,
+  tagSuggestions,
+  noteCaptureContext,
   onClose,
   onCaptureSnapshot,
   onRecalculate,
   onSave,
 }) => {
+  const [originalTrade] = useState(() => structuredClone(trade));
   const [notes, setNotes] = useState(trade.notes ?? '');
+  const [noteDrafts, setNoteDrafts] = useState(() => {
+    try { return createTradeNoteDrafts(trade.noteHistory); }
+    catch { return { before: '', during: '', after: '' }; }
+  });
+  const noteOperationRef = useRef<TradeNoteHistoryPatch | undefined>(undefined);
+  const noteContext: TradeNoteCaptureContext = noteCaptureContext ?? {
+    marketTime: null, maxRevealedMarketTime: null,
+    entryMarketTime: Number.isFinite(trade.entryTime) ? trade.entryTime! / 1000 : null,
+    exitMarketTime: Number.isFinite(trade.timestamp) ? trade.timestamp / 1000 : null,
+    closedTradeReview: true,
+  };
+  const [tags, setTags] = useState(joinTags(trade.tags));
+  const manualTags = useRef<{ htf: string[]; ltf: string[] }>({ htf: [], ltf: [] });
   const [htfConfluence, setHtfConfluence] = useState(joinTags(trade.htfConfluence));
   const [ltfConfluence, setLtfConfluence] = useState(joinTags(trade.ltfConfluence));
   const [isValid, setIsValid] = useState(trade.isValid !== false && trade.executionStatus !== 'Invalid');
@@ -157,21 +204,6 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
   const [error, setError] = useState<string>();
   const captureRequestRef = useRef(0);
 
-  useEffect(() => {
-    captureRequestRef.current += 1;
-    setNotes(trade.notes ?? '');
-    setHtfConfluence(joinTags(trade.htfConfluence));
-    setLtfConfluence(joinTags(trade.ltfConfluence));
-    setIsValid(trade.isValid !== false && trade.executionStatus !== 'Invalid');
-    setSetupType(trade.setupType ?? 'unclear');
-    setSnapshot(undefined);
-    setSnapshotZoomOpen(false);
-    setCapturing(false);
-    setRecalculating(false);
-    setRecalculatedUpdates({});
-    setRecalculationChanges(undefined);
-    setError(undefined);
-  }, [trade]);
 
   useEffect(() => () => {
     captureRequestRef.current += 1;
@@ -187,12 +219,14 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
   }, [snapshotZoomOpen]);
 
   const displayTrade = useMemo(() => ({ ...trade, ...recalculatedUpdates }), [recalculatedUpdates, trade]);
+  const selectedProvenance = () => reconcileBacktestConfluenceProvenance(displayTrade, { htf: splitTags(htfConfluence), ltf: splitTags(ltfConfluence) }, manualTags.current);
+  const autoTags = selectedProvenance();
   const collectedValues = useMemo(() => [
     displayTrade.session ? { label: 'Session', value: displayTrade.session } : null,
     displayTrade.riskAmount != null ? { label: 'Riziko', value: `$${displayTrade.riskAmount.toFixed(2)}` } : null,
     displayTrade.riskAmount ? { label: 'Výsledek v R', value: `${(displayTrade.pnl / displayTrade.riskAmount).toFixed(2)}R` } : null,
-    displayTrade.mfeR != null ? { label: 'MFE', value: `${displayTrade.mfeR.toFixed(2)}R` } : null,
-    displayTrade.maeR != null ? { label: 'MAE', value: `${displayTrade.maeR.toFixed(2)}R` } : null,
+    displayTrade.mfeR != null ? { label: 'MFE', value: `${displayTrade.excursionAmbiguous ? '≥ ' : ''}${displayTrade.mfeR.toFixed(2)}R` } : null,
+    displayTrade.maeR != null ? { label: 'MAE', value: `${displayTrade.excursionAmbiguous ? '≥ ' : ''}${displayTrade.maeR.toFixed(2)}R` } : null,
     displayTrade.management ? { label: 'Management', value: displayTrade.management } : null,
     displayTrade.targetLevel ? { label: 'Target', value: displayTrade.targetLevel } : null,
   ].filter((item): item is { label: string; value: string } => Boolean(item)), [displayTrade]);
@@ -342,6 +376,7 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
       const current = {
         ...trade,
         ...recalculatedUpdates,
+        autoConfluence: selectedProvenance(),
         htfConfluence: splitTags(htfConfluence),
         ltfConfluence: splitTags(ltfConfluence),
       };
@@ -378,16 +413,31 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
     setSaving(true);
     setError(undefined);
     try {
-      await onSave({
+      const baseline = originalTrade;
+      const phasedPatch = noteOperationRef.current ?? buildTradeNoteHistoryPatch(noteDrafts, baseline.noteHistory, noteContext,
+        { operationId: crypto.randomUUID(), clientCapturedAt: Date.now() });
+      noteOperationRef.current = phasedPatch;
+      const normalizedBaseline = {
+        ...baseline,
+        ...buildBacktestTradeReviewUpdates({ notes: baseline.notes ?? '', tags: joinTags(baseline.tags),
+          htfConfluence: joinTags(baseline.htfConfluence), ltfConfluence: joinTags(baseline.ltfConfluence),
+          isValid: baseline.isValid !== false && baseline.executionStatus !== 'Invalid', setupType: baseline.setupType ?? 'unclear' }),
+        autoConfluence: baseline.autoConfluence ?? { htf: [], ltf: [] },
+      };
+      const patch = changedTradeFields(normalizedBaseline, {
         ...recalculatedUpdates,
+        ...(phasedPatch.changed ? { noteHistory: phasedPatch.history } : {}),
+        autoConfluence: selectedProvenance(),
         ...buildBacktestTradeReviewUpdates({
           notes,
+          tags,
           htfConfluence,
           ltfConfluence,
           isValid,
           setupType,
         }),
-      }, snapshot);
+      });
+      await onSave({ ...patch, needsReview: false }, snapshot, baseline);
       onClose();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Review obchodu se nepodařilo uložit.');
@@ -405,7 +455,7 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
 
   return (
     <div className="fixed inset-0 z-[900] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]" role="presentation" onMouseDown={event => {
-      if (event.target === event.currentTarget) onClose();
+      if (!saving && event.target === event.currentTarget) onClose();
     }}>
       <section data-backtest-trade-review role="dialog" aria-modal="true" aria-labelledby="backtest-trade-review-title" className={`flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border shadow-2xl ${panel}`}>
         <header className={`border-b px-5 py-4 ${isDark ? 'border-white/10 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/70'}`}>
@@ -425,7 +475,7 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
               <p className="text-[8px] font-black uppercase tracking-[0.18em] text-slate-500">Výsledek</p>
               <p className={`mt-0.5 text-xl font-black tabular-nums ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{trade.pnl >= 0 ? '+' : '−'}${Math.abs(trade.pnl).toFixed(2)}</p>
             </div>
-            <button type="button" onClick={onClose} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-100'}`} aria-label="Zavřít review"><X size={17} /></button>
+            <button type="button" disabled={saving} onClick={onClose} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-100'}`} aria-label="Zavřít review"><X size={17} /></button>
           </div>
         </header>
 
@@ -444,6 +494,8 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
                   </div>
                 ))}
               </dl>
+              {displayTrade.excursionAmbiguous && <p className="mb-2 text-xs text-amber-500">MFE/MAE jsou prokazatelné dolní meze; pořadí cen uvnitř svíčky není známé.</p>}
+              {displayTrade.outcomeAmbiguous && <p className="mb-2 text-xs text-amber-500">Pořadí vstupu a zásahů SL/TP není z OHLC jisté. Engine použil konzervativní výsledek.</p>}
               {collectedValues.length ? (
                 <dl className={`grid grid-cols-2 gap-px border-t ${isDark ? 'border-white/10 bg-white/10' : 'border-slate-200 bg-slate-200'}`}>
                   {collectedValues.map(item => (
@@ -459,12 +511,12 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
             <section className={`rounded border p-3 ${isDark ? 'border-white/10 bg-white/[0.02]' : 'border-slate-200 bg-white'}`}>
               <div className="mb-2 flex items-center gap-2"><Check size={14} className="text-emerald-500" /><h3 className="text-[10px] font-black uppercase tracking-[0.14em]">Vyhodnocení plánu</h3></div>
               <div className="grid grid-cols-2 gap-2">
-                <button type="button" onClick={() => setIsValid(true)} className={`h-10 rounded border text-[10px] font-black uppercase tracking-wide ${isValid ? 'border-emerald-500 bg-emerald-500 text-white' : field}`}>Validní / podle plánu</button>
-                <button type="button" onClick={() => setIsValid(false)} className={`h-10 rounded border text-[10px] font-black uppercase tracking-wide ${!isValid ? 'border-rose-500 bg-rose-500 text-white' : field}`}>Nevalidní / mimo plán</button>
+                <button type="button" disabled={saving} onClick={() => setIsValid(true)} className={`h-10 rounded border text-[10px] font-black uppercase tracking-wide ${isValid ? 'border-emerald-500 bg-emerald-500 text-white' : field}`}>Validní / podle plánu</button>
+                <button type="button" disabled={saving} onClick={() => setIsValid(false)} className={`h-10 rounded border text-[10px] font-black uppercase tracking-wide ${!isValid ? 'border-rose-500 bg-rose-500 text-white' : field}`}>Nevalidní / mimo plán</button>
               </div>
               <div className={`my-3 border-t ${isDark ? 'border-white/10' : 'border-slate-200'}`} />
               <div className="mb-2 flex items-center gap-2"><Waves size={14} className="text-blue-500" /><h3 className="text-[10px] font-black uppercase tracking-[0.14em]">Typ setupu — ručně</h3></div>
-              <p className="mb-2 text-[9px] font-semibold text-slate-500">Jediná ruční interpretace. Přepočet ji nikdy nepřepíše.</p>
+              <p className="mb-2 text-[9px] font-semibold text-slate-500">Tvoje interpretace setupu. Přepočet ji nikdy nepřepíše.</p>
               <div className="grid grid-cols-3 gap-2" data-backtest-setup-type>
                 {([
                   ['reaction', 'Odraz'],
@@ -474,6 +526,7 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
                   <button
                     key={value}
                     type="button"
+                    disabled={saving}
                     onClick={() => setSetupType(value)}
                     aria-pressed={setupType === value}
                     className={`h-9 rounded border text-[9px] font-black uppercase tracking-wide ${setupType === value ? 'border-blue-600 bg-blue-600 text-white' : field}`}
@@ -483,8 +536,19 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
             </section>
 
             <section className={`rounded border p-3 ${isDark ? 'border-white/10 bg-white/[0.02]' : 'border-slate-200 bg-white'}`}>
+              <div className="flex items-center gap-2"><Tags size={14} className="text-violet-500" /><h3 className="text-[10px] font-black uppercase tracking-[0.14em]">Vlastní tagy</h3></div>
+              <p className="mt-1 text-[10px] text-slate-500">Setup, chyba nebo vlastní téma. Uložené tagy se nabídnou i u dalších obchodů.</p>
+              <ConfluenceCapsuleEditor disabled={saving || recalculating} value={tags} onChange={setTags} isDark={isDark} addLabel="Přidat vlastní tag" suggestions={tagSuggestions?.tags} />
+            </section>
+
+            <section className={`rounded border p-3 ${isDark ? 'border-white/10 bg-white/[0.02]' : 'border-slate-200 bg-white'}`}>
               <div className="mb-2 flex items-center gap-2"><FileText size={14} className="text-slate-400" /><label htmlFor="backtest-review-notes" className="text-[10px] font-black uppercase tracking-[0.14em]">Poznámka k obchodu</label></div>
-              <textarea id="backtest-review-notes" value={notes} onChange={event => setNotes(event.target.value)} rows={5} placeholder="Co jsem viděl, proč jsem vstoupil, co bych příště změnil…" className={`w-full resize-y rounded border px-3 py-2.5 text-sm outline-none focus:border-blue-500 ${field}`} />
+              <textarea disabled={saving} id="backtest-review-notes" value={notes} onChange={event => setNotes(event.target.value)} rows={5} placeholder="Co jsem viděl, proč jsem vstoupil, co bych příště změnil…" className={`w-full resize-y rounded border px-3 py-2.5 text-sm outline-none focus:border-blue-500 ${field}`} />
+            </section>
+            <section className={`rounded border p-3 ${isDark ? 'border-white/10 bg-white/[0.02]' : 'border-slate-200 bg-white'}`}>
+              <TradeNoteHistoryEditor baseHistory={originalTrade.noteHistory} legacyNotes={originalTrade.notes}
+                captureContext={noteContext} drafts={noteDrafts} disabled={saving} isDark={isDark}
+                onChange={next => { setNoteDrafts(next); noteOperationRef.current = undefined; }} />
             </section>
           </div>
 
@@ -496,7 +560,7 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
                     <div className="flex items-center gap-2"><RefreshCw size={14} className="text-blue-500" /><h3 className="text-[10px] font-black uppercase tracking-[0.14em]">Data z indikátoru</h3></div>
                     <p className="mt-1 text-[10px] font-semibold text-slate-500">Znovu načte strukturu, FVG, levely a metriky ze stejných replay dat.</p>
                   </div>
-                  <button type="button" onClick={() => void recalculate()} disabled={recalculating} className="flex h-9 shrink-0 items-center gap-2 rounded border border-blue-500 px-3 text-[10px] font-black uppercase tracking-wide text-blue-500 hover:bg-blue-500 hover:text-white disabled:opacity-50">
+                  <button type="button" onClick={() => void recalculate()} disabled={saving || recalculating} className="flex h-9 shrink-0 items-center gap-2 rounded border border-blue-500 px-3 text-[10px] font-black uppercase tracking-wide text-blue-500 hover:bg-blue-500 hover:text-white disabled:opacity-50">
                     {recalculating ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                     Přepočítat
                   </button>
@@ -525,7 +589,7 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
             <section className={`rounded border ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
               <div className={`border-b px-3 py-3 ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
                 <div className="flex items-center gap-2"><Zap size={14} className="text-violet-500" /><h3 className="text-[10px] font-black uppercase tracking-[0.14em]">Entry Confluence</h3></div>
-                <ConfluenceCapsuleEditor value={ltfConfluence} onChange={setLtfConfluence} isDark={isDark} addLabel="Přidat Entry Confluence" />
+                <ConfluenceCapsuleEditor disabled={saving || recalculating} value={ltfConfluence} onChange={setLtfConfluence} isDark={isDark} addLabel="Přidat Entry Confluence" suggestions={tagSuggestions?.ltf} autoTags={autoTags.ltf} onManualAdd={added => { manualTags.current.ltf.push(...added); }} />
                 <div className="mt-3 grid gap-2 sm:grid-cols-2" data-backtest-entry-audit>
                   {entryAudit.map(item => {
                     const tone = item.tone === 'pass'
@@ -553,7 +617,7 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
               </div>
               <div className={`px-3 py-3 ${levelTags.length ? (isDark ? 'border-b border-white/10' : 'border-b border-slate-200') : ''}`}>
                 <div className="flex items-center gap-2"><Layers3 size={14} className="text-sky-500" /><h3 className="text-[10px] font-black uppercase tracking-[0.14em]">HTF Confluence</h3></div>
-                <ConfluenceCapsuleEditor value={htfConfluence} onChange={setHtfConfluence} isDark={isDark} addLabel="Přidat HTF Confluence" />
+                <ConfluenceCapsuleEditor disabled={saving || recalculating} value={htfConfluence} onChange={setHtfConfluence} isDark={isDark} addLabel="Přidat HTF Confluence" suggestions={tagSuggestions?.htf} autoTags={autoTags.htf} onManualAdd={added => { manualTags.current.htf.push(...added); }} />
               </div>
               {levelTags.length ? (
                 <div className="px-3 py-3">
@@ -574,7 +638,7 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
                     <span className="pointer-events-none absolute left-2 top-2 rounded bg-slate-950/75 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-white">{snapshot ? 'Nový náhled · všechny grafy' : 'Uložený snapshot'}</span>
                     <span className="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1 rounded bg-slate-950/75 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-white opacity-80 transition-opacity group-hover:opacity-100"><Maximize2 size={12} /> Zvětšit</span>
                   </button>
-                  {snapshot ? <button type="button" onClick={() => { setSnapshot(undefined); setSnapshotZoomOpen(false); }} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded bg-slate-950/75 text-white" aria-label="Zahodit nový snapshot"><X size={14} /></button> : null}
+                  {snapshot ? <button type="button" disabled={saving} onClick={() => { setSnapshot(undefined); setSnapshotZoomOpen(false); }} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded bg-slate-950/75 text-white" aria-label="Zahodit nový snapshot"><X size={14} /></button> : null}
                 </div>
               ) : (
                 <div className={`flex aspect-video flex-col items-center justify-center gap-2 ${isDark ? 'bg-white/[0.025]' : 'bg-slate-50'}`}>
@@ -582,15 +646,15 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
                   <p className="text-center text-[11px] font-semibold text-slate-500">Vyfotí se celý viditelný layout se všemi grafy.<br />Nahraje se až při uložení review.</p>
                 </div>
               )}
-              <button type="button" onClick={() => void captureSnapshot()} disabled={capturing} className={`flex h-10 w-full items-center justify-center gap-2 border-t text-xs font-black disabled:cursor-wait disabled:opacity-60 ${isDark ? 'border-white/10 hover:bg-white/[0.05]' : 'border-slate-200 hover:bg-slate-50'}`}>{capturing ? <Loader2 size={15} className="animate-spin" /> : <Camera size={15} />}{capturing ? 'Pořizuji všechny grafy…' : snapshotPreview ? 'Vyfotit nový snapshot všech grafů' : 'Snapshot všech grafů'}</button>
+              <button type="button" onClick={() => void captureSnapshot()} disabled={saving || capturing} className={`flex h-10 w-full items-center justify-center gap-2 border-t text-xs font-black disabled:cursor-wait disabled:opacity-60 ${isDark ? 'border-white/10 hover:bg-white/[0.05]' : 'border-slate-200 hover:bg-slate-50'}`}>{capturing ? <Loader2 size={15} className="animate-spin" /> : <Camera size={15} />}{capturing ? 'Pořizuji všechny grafy…' : snapshotPreview ? 'Vyfotit nový snapshot všech grafů' : 'Snapshot všech grafů'}</button>
             </section>
           </div>
         </div>
 
         <footer className={`flex items-center gap-3 border-t px-5 py-3 ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
           {error ? <p role="alert" className="mr-auto text-xs font-bold text-rose-500">{error}</p> : <p className="mr-auto text-[10px] font-semibold text-slate-500">Manuální režim · žádný automatický snapshot</p>}
-          <button type="button" onClick={onClose} className={`h-9 rounded-md px-4 text-xs font-black ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-100'}`}>Zrušit</button>
-          <button type="button" onClick={() => void save()} disabled={saving} className="flex h-9 items-center gap-2 rounded-md bg-blue-600 px-4 text-xs font-black text-white hover:bg-blue-500 disabled:opacity-50">{saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Uložit review</button>
+          <button type="button" disabled={saving} onClick={onClose} className={`h-9 rounded-md px-4 text-xs font-black ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-100'}`}>Zrušit</button>
+          <button type="button" onClick={() => void save()} disabled={saving || capturing || recalculating} className="flex h-9 items-center gap-2 rounded-md bg-blue-600 px-4 text-xs font-black text-white hover:bg-blue-500 disabled:opacity-50">{saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Uložit review</button>
         </footer>
       </section>
       {snapshotZoomOpen && snapshotPreview ? (
@@ -612,5 +676,8 @@ const BacktestTradeReviewDialog: React.FC<Props> = ({
     </div>
   );
 };
+
+// Same-trade background refresh must not reset an unfinished review. A different trade starts a fresh draft.
+const BacktestTradeReviewDialog: React.FC<Props> = props => <BacktestTradeReviewContent key={String(props.trade.id)} {...props} />;
 
 export default BacktestTradeReviewDialog;

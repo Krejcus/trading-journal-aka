@@ -1,3 +1,4 @@
+import { formatTradeNoteHistoryForAI } from './tradeNoteAiContext';
 import type { Trade, Account, IronRule, PlaybookItem, DailyPrep, DailyReview } from '../types';
 import { COACH_TOOLS, executeTool, describeToolCall, collapseCopies } from './coachTools';
 import { coachMediaToAnthropicContent, isCoachMediaPayload, type AnthropicToolResultContent } from './coachMedia';
@@ -354,6 +355,7 @@ export function formatTradesForAI(trades: Trade[], limit = 100): string {
           t.entryContext.londonVsAsia ? `LON:${t.entryContext.londonVsAsia}` : '',
         ].filter(Boolean).join(',')}` : '',
         t.notes ? `Note:${t.notes}` : '',
+        formatTradeNoteHistoryForAI(t.noteHistory),
       ];
       return fields.filter(Boolean).join(' | ');
     })
@@ -383,10 +385,19 @@ export function buildTradeWindow(allTrades: Trade[], opts: { allTime?: boolean }
   // mimo 90 dní), datasety jsou malé → dej coachovi VŠECHNY v plném detailu,
   // ať umí říct rozmezí, první/poslední obchod i jednotlivé záznamy.
   if (opts.allTime) {
+    const shown = sorted.slice(0, 500);
+    const omittedCount = sorted.length - shown.length;
     const windowText = sorted.length > 0
-      ? formatTradesForAI(sorted, Math.min(sorted.length, 500))
+      ? formatTradesForAI(shown, shown.length)
       : 'Žádné obchody.';
-    return { windowText, rollupText: 'Žádné starší obchody.', windowCount: sorted.length, olderCount: 0 };
+    return {
+      windowText,
+      rollupText: omittedCount > 0
+        ? `${omittedCount} starších backtest obchodů není v tomto výpisu. Pro jejich poznámky a tagy použij search_history nebo get_recent_context s filtrem účtu; nepovažuj výpis za celou historii.`
+        : 'Žádné starší obchody.',
+      windowCount: shown.length,
+      olderCount: omittedCount,
+    };
   }
 
   const cutoff = Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000;

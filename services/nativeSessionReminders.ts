@@ -15,6 +15,11 @@ const WEEKDAYS = [
   Weekday.Friday,
 ] as const;
 
+let reminderGeneration = 0;
+let reminderSynchronization: Promise<unknown> = Promise.resolve();
+
+export function clearNativeSessionReminderState(): void { reminderGeneration++; }
+
 type ReminderKind = 'audit' | 'start15' | 'start' | 'end' | 'end10';
 
 export interface NativeSessionReminderPlanItem {
@@ -52,12 +57,13 @@ function parseTime(value: string): { hour: number; minute: number } | null {
   return { hour, minute };
 }
 
-function offsetTime(value: string, offsetMinutes: number): { hour: number; minute: number } | null {
+function offsetTime(value: string, offsetMinutes: number): { hour: number; minute: number; dayOffset: number } | null {
   const parsed = parseTime(value);
   if (!parsed) return null;
   const minutesInDay = 24 * 60;
-  const total = (parsed.hour * 60 + parsed.minute + offsetMinutes + minutesInDay) % minutesInDay;
-  return { hour: Math.floor(total / 60), minute: total % 60 };
+  const raw = parsed.hour * 60 + parsed.minute + offsetMinutes;
+  const total = (raw + minutesInDay) % minutesInDay;
+  return { hour: Math.floor(total / 60), minute: total % 60, dayOffset: Math.floor(raw / minutesInDay) };
 }
 
 function stableHash(value: string): number {
@@ -81,10 +87,12 @@ function assignStableIds(items: Omit<NativeSessionReminderPlanItem, 'id'>[]): Na
 
 function addWeekdayReminders(
   target: Omit<NativeSessionReminderPlanItem, 'id'>[],
-  input: Omit<NativeSessionReminderPlanItem, 'id' | 'key' | 'weekday'> & { key: string },
+  input: Omit<NativeSessionReminderPlanItem, 'id' | 'key' | 'weekday'> & { key: string; dayOffset?: number },
 ): void {
-  for (const weekday of WEEKDAYS) {
-    target.push({ ...input, key: `${input.key}:${weekday}`, weekday });
+  const { dayOffset = 0, ...content } = input;
+  for (const sessionWeekday of WEEKDAYS) {
+    const weekday = ((sessionWeekday - 1 + dayOffset + 7) % 7 + 1) as Weekday;
+    target.push({ ...content, key: `${input.key}:${sessionWeekday}`, weekday });
   }
 }
 
@@ -102,8 +110,8 @@ export function buildNativeSessionReminderPlan(
     if (time) {
       addWeekdayReminders(candidates, {
         key: 'audit',
-        title: 'Večerní audit čeká',
-        body: 'Uzavři obchodní den, doplň deník a zkontroluj dodržení plánu.',
+        title: 'Připomínka večerního auditu',
+        body: 'Čas na kontrolu obchodního dne. Pokud už máš audit hotový, další zápis není potřeba.',
         ...time,
         route: 'journal',
         kind: 'audit',
@@ -116,7 +124,7 @@ export function buildNativeSessionReminderPlan(
       const reminders: Array<{
         enabled: boolean;
         kind: ReminderKind;
-        time: { hour: number; minute: number } | null;
+        time: { hour: number; minute: number; dayOffset?: number } | null;
         title: string;
         body: string;
       }> = [
@@ -145,8 +153,8 @@ export function buildNativeSessionReminderPlan(
           enabled: settings.sessionEndAlert10m,
           kind: 'end10',
           time: offsetTime(session.endTime, 10),
-          title: `Audit po session ${session.name} čeká`,
-          body: 'Od konce session uběhlo 10 minut. Doplň deník a audit.',
+          title: `Připomínka auditu po session ${session.name}`,
+          body: 'Od plánovaného konce session uběhlo 10 minut. Pokud už máš audit hotový, další zápis není potřeba.',
         },
       ];
 
@@ -196,10 +204,12 @@ function toLocalNotification(item: NativeSessionReminderPlanItem): LocalNotifica
   };
 }
 
-export async function syncNativeSessionReminders(
+async function syncRemindersNow(
   sessions: SessionConfig[],
   settings: SystemSettings,
+  generation: number,
 ): Promise<NativeSessionReminderSyncResult> {
+  if (generation !== reminderGeneration) return { status: 'disabled', scheduledCount: 0, omittedCount: 0 };
   if (!isNativeBuild) {
     return { status: 'not-native', scheduledCount: 0, omittedCount: 0 };
   }
@@ -210,6 +220,7 @@ export async function syncNativeSessionReminders(
   }
 
   const pending = await LocalNotifications.getPending();
+  if (generation !== reminderGeneration) return { status: 'disabled', scheduledCount: 0, omittedCount: 0 };
   const previous = pending.notifications.filter(notification => (
     notification.extra
     && typeof notification.extra === 'object'
@@ -219,16 +230,22 @@ export async function syncNativeSessionReminders(
     await LocalNotifications.cancel({ notifications: previous.map(notification => ({ id: notification.id })) });
   }
 
+  if (generation !== reminderGeneration) return { status: 'disabled', scheduledCount: 0, omittedCount: 0 };
   const otherPendingCount = pending.notifications.length - previous.length;
   const availableSlots = Math.max(0, NATIVE_SESSION_REMINDER_LIMIT - otherPendingCount);
   const plan = buildNativeSessionReminderPlan(sessions, settings, availableSlots);
   if (plan.notifications.length > 0) {
     await LocalNotifications.schedule({ notifications: plan.notifications.map(toLocalNotification) });
+    if (generation !== reminderGeneration) {
+      await LocalNotifications.cancel({ notifications: plan.notifications.map(item => ({ id: item.id })) });
+      return { status: 'disabled', scheduledCount: 0, omittedCount: 0 };
+    }
   }
 
   // Capacitor resolving schedule() only proves that iOS accepted the call. Read
   // UNUserNotificationCenter back and verify the exact stable IDs that remain.
   const verifiedPending = await LocalNotifications.getPending();
+  if (generation !== reminderGeneration) return { status: 'disabled', scheduledCount: 0, omittedCount: 0 };
   const verifiedIds = new Set(verifiedPending.notifications.map(notification => notification.id));
   const scheduledCount = plan.notifications.filter(notification => verifiedIds.has(notification.id)).length;
   const rejectedCount = plan.notifications.length - scheduledCount;
@@ -240,5 +257,13 @@ export async function syncNativeSessionReminders(
   };
   console.info(`[Native reminders] verified ${result.scheduledCount} pending, ${result.omittedCount} omitted`);
   window.dispatchEvent(new CustomEvent(NATIVE_SESSION_REMINDERS_SYNCED_EVENT, { detail: result }));
+  return result;
+}
+
+/** Serialize reconciliation; stale user work is invalidated during logout. */
+export function syncNativeSessionReminders(sessions: SessionConfig[], settings: SystemSettings): Promise<NativeSessionReminderSyncResult> {
+  const generation = reminderGeneration;
+  const result = reminderSynchronization.then(() => syncRemindersNow(sessions, settings, generation));
+  reminderSynchronization = result.catch(() => undefined);
   return result;
 }

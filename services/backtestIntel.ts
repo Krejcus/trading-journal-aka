@@ -1,3 +1,5 @@
+import { researchTradeReference, type BacktestResearchBinding } from './backtestResearchCases';
+import { backtestContiguousWindow, evaluateBacktestBracket, type BacktestExitModel } from './backtestExecutionModel';
 import type { Trade } from '../types';
 import type { MarketCandle } from './marketData';
 import { backtestPointValue, backtestTickSize } from './backtestEngine';
@@ -19,21 +21,8 @@ import {
 } from './backtestSessionClose';
 import type { BacktestClosedTrade, BacktestInstrument, BacktestOrderEvent } from './backtestTypes';
 
-/**
- * Odvozená analytika nad uzavřeným backtest obchodem.
- *
- * Rozdíl proti AlphaBridge je v tom, co je k dispozici: extension četla graf
- * v okamžiku obchodu a budoucí bary jí prostě chyběly, takže excursion i
- * execution path zůstávaly rozpracované a dopočítávaly se později. Tady jsou
- * všechny svíčky po ruce hned, takže se každá metrika spočítá napoprvé a
- * úplně — a hlavně se dá skutečně přehrát „co kdyby", ne odhadovat.
- *
- * Tvary `excursion` a `executionPath` schválně kopírují AlphaBridge, protože
- * je Lab už umí číst (`normalizeLabTrade`). Counterfactual kopírovat nejde:
- * swing/OTE/FVG placementy vycházejí ze struktury, kterou backtest nedetekuje.
- * Místo předstírání má vlastní tvar s variantami, které jsou v přehrávání
- * exaktní.
- */
+/** Derived analytics use only the supplied replay horizon. OHLC ambiguity and
+ * incomplete windows remain explicit; end-of-data is not a completed session. */
 
 /** Klasifikace session podle UTC hodiny — shodná s AlphaBridge `detectSession`. */
 export const detectBacktestSession = (unixSeconds: number): string => {
@@ -94,6 +83,8 @@ export interface BacktestExecutionPath {
   terminalAmbiguous?: boolean;
   /** Terminální bar existuje → pořadí zásahů uvnitř něj je neznámé. */
   terminalBarOrderingUnknown?: boolean;
+  mfeAmbiguous?: boolean;
+  maeAmbiguous?: boolean;
   hasGaps?: boolean;
   complete?: boolean;
   candleStops?: {
@@ -103,6 +94,7 @@ export interface BacktestExecutionPath {
 }
 
 export interface BacktestCandleStopVariant {
+  netRealizedR?: number | null;
   formedBars: number;
   stop: number;
   stopDistanceR: number;
@@ -141,22 +133,41 @@ const roundToTick = (price: number, tickSize: number) =>
  * takže tamní pohyb do `maxFavorableR` nepatří — a na baru se stopkou se
  * příznivý knot nepočítá vůbec, protože pořadí uvnitř baru z OHLC nepoznáš.
  */
+export interface BacktestAnalysisExecutionOptions {
+  flatByMinute?: number;
+  flatTimeZone?: string;
+  slippageTicks?: number;
+}
+const analysisWindow = (candles: readonly MarketCandle[], trade: BacktestClosedTrade, options: BacktestAnalysisExecutionOptions = {}) => {
+  const cutoffTime = backtestSessionCutoffSeconds(trade.entryTime,
+    options.flatTimeZone ?? DEFAULT_BACKTEST_FLAT_TIME_ZONE,
+    options.flatByMinute ?? DEFAULT_BACKTEST_FLAT_BY_MINUTE);
+  const window = backtestContiguousWindow(candles, trade.entryTime, cutoffTime);
+  return { ...window, cutoffTime,
+    candles: [...candles.filter(candle => candle.time <= trade.entryTime), ...window.following],
+    slippagePoints: (options.slippageTicks ?? 0) * backtestTickSize(trade.instrument),
+    tickSize: backtestTickSize(trade.instrument),
+    feePoints: trade.commission / (trade.quantity * backtestPointValue(trade.instrument)),
+  };
+};
+
 export const backtestExecutionPath = (
   candles: readonly MarketCandle[],
   trade: BacktestClosedTrade,
+  options: BacktestAnalysisExecutionOptions = {},
 ): BacktestExecutionPath => {
   const risk = riskDistanceOf(trade);
   if (risk === null) {
     return { available: false, version: EXECUTION_PATH_VERSION, reason: 'no-initial-stop' };
   }
-  const available = barsAfterEntry(candles, trade.entryTime);
+  const window = analysisWindow(candles, trade, options);
+  const available = window.following;
   if (available.length === 0) {
-    return { available: false, version: EXECUTION_PATH_VERSION, reason: 'no-bars-after-entry' };
+    return { available: false, version: EXECUTION_PATH_VERSION, reason: window.hasGaps ? 'missing-initial-bars' : 'no-bars-after-entry', hasGaps: window.hasGaps, complete: false };
   }
   const long = trade.direction === 'Long';
   const toR = (price: number) => round2((long ? price - trade.entryPrice : trade.entryPrice - price) / risk);
   const target = Number.isFinite(trade.initialTakeProfit as number) ? Number(trade.initialTakeProfit) : null;
-  const targetR = target === null ? null : Math.abs(target - trade.entryPrice) / risk;
 
   const bars: BacktestExecutionPathBar[] = [];
   const timeToSlPct: Record<string, number | null> = {};
@@ -170,18 +181,16 @@ export const backtestExecutionPath = (
   let minutesNearEntry = 0;
   let closeCrossCount = 0;
   let priorCloseSide = 0;
-  let hasGaps = false;
+  const hasGaps = window.hasGaps;
   let terminal: string | null = null;
   let terminalMinute: number | null = null;
   let terminalAmbiguous = false;
+  let terminalOrderingUnknown = false;
+  let mfeAmbiguous = false;
+  let maeAmbiguous = false;
 
   for (let index = 0; index < available.length && bars.length < EXECUTION_PATH_MAX_BARS; index += 1) {
     const candle = available[index];
-    const previous = index > 0 ? available[index - 1] : null;
-    // Díra v datech znamená, že další bary nenavazují po minutě — cesta se
-    // radši utne, než aby minuty přeskakovaly.
-    if (previous && Math.abs((candle.time - previous.time) - 60) > 2) { hasGaps = true; break; }
-
     const openR = toR(candle.open);
     const closeR = toR(candle.close);
     const bestR = toR(long ? candle.high : candle.low);
@@ -189,14 +198,16 @@ export const backtestExecutionPath = (
     const minute = Math.max(1, Math.round((candle.time - trade.entryTime) / 60));
     bars.push({ minute, time: candle.time, openR, bestR, worstR, closeR });
 
-    const hitStop = worstR <= -1;
-    const hitTarget = targetR !== null && bestR >= targetR;
-    // Na baru se stopkou nevíme, jestli příznivý knot přišel dřív než zásah,
-    // takže se z něj nebere nic. Na baru s cílem se ořízne na cíl — dál už
-    // obchod neběžel.
-    if (!hitStop) maxFavorableR = Math.max(maxFavorableR, hitTarget ? Math.min(bestR, targetR as number) : bestR);
-    // Ztratit se dá nejvýš 1R; hlubší knot po zásahu stopky už pozice nenesla.
-    maxAdverseR = Math.max(maxAdverseR, hitStop ? 1 : -worstR);
+    const fill = evaluateBacktestBracket(candle, { ...window, long, stop: Number(trade.initialStopLoss), target: target ?? undefined });
+    const exitR = fill ? toR(fill.price) : null;
+    const knownBestR = fill ? Math.max(openR, exitR as number) : bestR;
+    const knownWorstR = fill ? Math.min(openR, exitR as number) : worstR;
+    maxFavorableR = Math.max(maxFavorableR, knownBestR);
+    maxAdverseR = Math.max(maxAdverseR, -knownWorstR);
+    if (fill && !fill.atOpen) {
+      if (fill.reason === 'sl' && bestR > maxFavorableR) mfeAmbiguous = true;
+      if (fill.reason === 'tp' && -worstR > maxAdverseR) maeAmbiguous = true;
+    }
     if (worstR <= 0 && bestR >= 0) entryTouchBars += 1;
     if (worstR <= ENTRY_ZONE_R && bestR >= -ENTRY_ZONE_R) minutesNearEntry += 1;
 
@@ -206,15 +217,16 @@ export const backtestExecutionPath = (
       priorCloseSide = closeSide;
     }
     SL_PROGRESS_KEYS.forEach(pct => {
-      if (timeToSlPct[String(pct)] === null && worstR <= -(pct / 100)) timeToSlPct[String(pct)] = minute;
+      if (timeToSlPct[String(pct)] === null && knownWorstR <= -(pct / 100)) timeToSlPct[String(pct)] = minute;
     });
     TP_PROGRESS_KEYS.forEach(pct => {
-      if (timeToTpPct[String(pct)] === null && bestR >= pct / 100) timeToTpPct[String(pct)] = minute;
+      if (timeToTpPct[String(pct)] === null && knownBestR >= pct / 100) timeToTpPct[String(pct)] = minute;
     });
 
-    if (hitStop || hitTarget) {
-      terminal = hitStop ? 'sl' : 'tp';
-      terminalAmbiguous = hitStop && hitTarget;
+    if (fill) {
+      terminal = fill.reason;
+      terminalAmbiguous = fill.ambiguous;
+      terminalOrderingUnknown = !fill.atOpen;
       terminalMinute = minute;
       break;
     }
@@ -240,13 +252,14 @@ export const backtestExecutionPath = (
     terminal,
     terminalMinute,
     terminalAmbiguous,
-    terminalBarOrderingUnknown: terminal !== null,
-    hasGaps,
+    terminalBarOrderingUnknown: terminalOrderingUnknown,
+    mfeAmbiguous, maeAmbiguous,
+    hasGaps: terminal === null && bars.length < EXECUTION_PATH_MAX_BARS && hasGaps,
     // Kompletní = buď obchod v okně skončil, nebo okno doběhlo do plné délky.
     complete: terminal !== null || bars.length >= EXECUTION_PATH_MAX_BARS,
     candleStops: {
-      firstComplete: candleStopVariant(candles, trade, risk, 1, bars.length),
-      firstTwoComplete: candleStopVariant(candles, trade, risk, 2, bars.length),
+      firstComplete: candleStopVariant(window.following, trade, risk, 1, bars.length, window),
+      firstTwoComplete: candleStopVariant(window.following, trade, risk, 2, bars.length, window),
     },
   };
 };
@@ -271,31 +284,22 @@ const candleStopVariant = (
   risk: number,
   formedBars: number,
   pathLength: number,
+  model: Pick<BacktestExitModel, 'cutoffTime' | 'slippagePoints' | 'tickSize' | 'feePoints'> = {},
 ): BacktestCandleStopVariant | null => {
   const following = barsAfterEntry(candles, trade.entryTime);
   if (following.length < formedBars || pathLength < formedBars) return null;
   const long = trade.direction === 'Long';
   const originalStop = Number(trade.initialStopLoss);
   const target = Number.isFinite(trade.initialTakeProfit as number) ? Number(trade.initialTakeProfit) : undefined;
-  const originalTargetR = target === undefined ? null : round2(Math.abs(target - trade.entryPrice) / risk);
   const toR = (price: number) => round2((long ? price - trade.entryPrice : trade.entryPrice - price) / risk);
 
   for (let index = 0; index < formedBars; index += 1) {
-    const candle = following[index];
-    if (!candle) return null;
-    const hitOriginal = long ? candle.low <= originalStop : candle.high >= originalStop;
-    const hitTarget = target !== undefined && (long ? candle.high >= target : candle.low <= target);
-    if (!hitOriginal && !hitTarget) continue;
-    return {
-      formedBars,
-      stop: originalStop,
-      stopDistanceR: 1,
-      outcome: hitOriginal ? 'LOSS' : 'WIN',
-      barsToOutcome: index + 1,
-      realizedR: hitOriginal ? -1 : originalTargetR,
-      ambiguous: hitOriginal && hitTarget,
-      activated: false,
-    };
+    const fill = evaluateBacktestBracket(following[index], { ...model, long, stop: originalStop, target });
+    if (!fill) continue;
+    return { formedBars, stop: originalStop, stopDistanceR: 1,
+      outcome: fill.reason === 'sl' ? 'LOSS' : fill.reason === 'tp' ? 'WIN' : 'CUTOFF',
+      barsToOutcome: index + 1, realizedR: toR(fill.price),
+      netRealizedR: ((long ? fill.price - trade.entryPrice : trade.entryPrice - fill.price) - (model.feePoints ?? 0)) / risk, ambiguous: fill.ambiguous, activated: false };
   }
 
   const formed = following.slice(0, formedBars);
@@ -306,35 +310,18 @@ const candleStopVariant = (
   const rawStop = roundToTick(protective + (long ? -tickSize : tickSize), tickSize);
   const stop = long ? Math.max(originalStop, rawStop) : Math.min(originalStop, rawStop);
 
-  let outcome = 'OPEN';
-  let barsToOutcome: number | null = null;
-  let ambiguous = false;
-  const scanLast = Math.min(following.length, pathLength);
-  for (let index = formedBars; index < scanLast; index += 1) {
-    const candle = following[index];
-    if (!candle) continue;
-    const hitStop = long ? candle.low <= stop : candle.high >= stop;
-    const hitTarget = target !== undefined && (long ? candle.high >= target : candle.low <= target);
-    if (!hitStop && !hitTarget) continue;
-    ambiguous = hitStop && hitTarget;
-    outcome = hitStop ? 'LOSS' : 'WIN';
-    barsToOutcome = index + 1;
-    break;
-  }
-
-  return {
-    formedBars,
-    stop,
-    stopDistanceR: round2(Math.abs(trade.entryPrice - stop) / risk),
-    outcome,
-    barsToOutcome,
-    realizedR: outcome === 'LOSS' ? toR(stop) : outcome === 'WIN' ? originalTargetR : null,
-    ambiguous,
-    activated: true,
+  const result = simulateBracket(following.slice(formedBars, pathLength), { ...model, entryPrice: trade.entryPrice, long, stop, target });
+  const closed = result.outcome !== 'open';
+  return { formedBars, stop, stopDistanceR: round2(Math.abs(trade.entryPrice - stop) / risk),
+    outcome: result.outcome === 'sl' ? 'LOSS' : result.outcome === 'tp' ? 'WIN' : result.outcome === 'cutoff' ? 'CUTOFF' : 'OPEN',
+    barsToOutcome: closed ? formedBars + Number(result.bars) : null,
+    realizedR: closed && result.exitPrice !== null ? toR(result.exitPrice) : null,
+    netRealizedR: closed && result.exitPrice !== null ? ((long ? result.exitPrice - trade.entryPrice : trade.entryPrice - result.exitPrice) - (model.feePoints ?? 0)) / risk : null,
+    ambiguous: result.ambiguous, activated: true,
   };
 };
 
-interface BracketSimulation {
+interface BracketSimulation extends BacktestExitModel {
   entryPrice: number;
   long: boolean;
   stop?: number;
@@ -346,7 +333,7 @@ interface BracketSimulation {
 }
 
 interface BracketOutcome {
-  outcome: 'sl' | 'tp' | 'breakeven' | 'open';
+  outcome: 'sl' | 'tp' | 'breakeven' | 'cutoff' | 'open';
   exitPrice: number | null;
   exitTime: number | null;
   bars: number | null;
@@ -367,21 +354,11 @@ export const simulateBracket = (
   for (let index = 0; index < candles.length; index += 1) {
     const candle = candles[index];
     const favorable = setup.long ? candle.high : candle.low;
-    const adverse = setup.long ? candle.low : candle.high;
-    const hitStop = stop !== undefined && (setup.long ? adverse <= stop : adverse >= stop);
-    const hitTarget = setup.target !== undefined && (setup.long ? favorable >= setup.target : favorable <= setup.target);
-    if (hitStop) {
-      return {
-        outcome: movedToBreakeven && stop === setup.entryPrice ? 'breakeven' : 'sl',
-        exitPrice: stop as number,
-        exitTime: candle.time,
-        bars: index + 1,
-        ambiguous: hitTarget,
-      };
-    }
-    if (hitTarget) {
-      return { outcome: 'tp', exitPrice: setup.target as number, exitTime: candle.time, bars: index + 1, ambiguous: false };
-    }
+    const fill = evaluateBacktestBracket(candle, { ...setup, stop });
+    if (fill) return {
+      outcome: fill.reason === 'sl' && movedToBreakeven && fill.price === setup.entryPrice ? 'breakeven' : fill.reason,
+      exitPrice: fill.price, exitTime: candle.time, bars: index + 1, ambiguous: fill.ambiguous,
+    };
     if (
       !movedToBreakeven
       && setup.breakevenAfterR !== undefined
@@ -397,6 +374,7 @@ export const simulateBracket = (
 };
 
 export interface BacktestCounterfactualVariant {
+  riskAmount?: number;
   label: string;
   description: string;
   stop: number | null;
@@ -406,6 +384,11 @@ export interface BacktestCounterfactualVariant {
   realizedR: number | null;
   /** Rozdíl proti skutečně realizovanému R. Kladné = varianta byla lepší. */
   deltaR: number | null;
+  ambiguous: boolean;
+  complete: boolean;
+  /** Same quantity and recorded round-trip fees; legacy realizedR remains gross. */
+  netRealizedR: number | null;
+  netDeltaR: number | null;
 }
 
 /**
@@ -417,6 +400,10 @@ export interface BacktestCounterfactualVariant {
  * proto v původním R.
  */
 export interface BacktestSlVariant {
+  riskAmount?: number;
+  netRealizedR?: number | null;
+  ambiguous?: boolean;
+  complete?: boolean;
   ok: boolean;
   valid?: boolean;
   sl?: number;
@@ -424,10 +411,14 @@ export interface BacktestSlVariant {
   outcome?: string | null;
   bars?: number | null;
   realizedR?: number | null;
-  trail?: { exit: number; reason: string; bars: number | null; realizedR: number | null; trailSteps: number; trailFinal: number; trailStart: number } | null;
+  trail?: { exit: number; riskAmount?: number; reason: string; bars: number | null; realizedR: number | null; netRealizedR?: number | null; complete?: boolean; hasGaps?: boolean; ambiguous?: boolean; trailSteps: number; trailFinal: number; trailStart: number } | null;
 }
 
 export interface BacktestTpTarget {
+  riskAmount?: number;
+  netRealizedR?: number | null;
+  ambiguous?: boolean;
+  complete?: boolean;
   label: string;
   price: number;
   kind?: 'static' | 'dynamic';
@@ -440,6 +431,9 @@ export interface BacktestTpTarget {
 }
 
 export interface BacktestCounterfactual {
+  complete?: boolean;
+  hasGaps?: boolean;
+  ambiguous?: boolean;
   available: boolean;
   reason?: string;
   isLong?: boolean;
@@ -471,6 +465,7 @@ const scanSlVariant = (
   level: number | null,
   long: boolean,
   target: number | undefined,
+  model: Pick<BacktestExitModel, 'cutoffTime' | 'slippagePoints' | 'tickSize' | 'feePoints'> = {},
 ): BacktestSlVariant => {
   if (level === null) return { ok: false };
   const valid = long ? level < trade.entryPrice : level > trade.entryPrice;
@@ -480,36 +475,21 @@ const scanSlVariant = (
   const rr = target === undefined
     ? null
     : round2((long ? target - trade.entryPrice : trade.entryPrice - target) / riskDistance);
-  let outcome = 'OPEN';
-  let held: number | null = null;
-  for (let index = 0; index < following.length; index += 1) {
-    const candle = following[index];
-    const hitStop = long ? candle.low <= level : candle.high >= level;
-    const hitTarget = target !== undefined && (long ? candle.high >= target : candle.low <= target);
-    if (!hitStop && !hitTarget) continue;
-    // Stejná konzervativní konvence jako engine: stopka vyhrává.
-    outcome = hitStop ? 'LOSS' : 'WIN';
-    held = index + 1;
-    break;
-  }
-  const trail = backtestStructuralTrail(
-    candles, trade.entryTime, trade.entryPrice, long, level, target,
-    backtestTickSize(trade.instrument),
-  );
-  return {
-    ok: true,
-    valid: true,
-    sl: round2(level),
-    rr,
-    outcome,
-    bars: held,
-    realizedR: outcome === 'WIN' ? rr : outcome === 'LOSS' ? -1 : null,
-    trail,
+  const result = simulateBracket(following, { ...model, entryPrice: trade.entryPrice, long, stop: level, target });
+  const trail = backtestStructuralTrail(candles, trade.entryTime, trade.entryPrice, long, level, target,
+    backtestTickSize(trade.instrument), model);
+  const riskAmount = riskDistance * trade.quantity * backtestPointValue(trade.instrument);
+  return { ok: true, valid: true, sl: round2(level), rr, riskAmount,
+    outcome: result.outcome === 'sl' ? 'LOSS' : result.outcome === 'tp' ? 'WIN' : result.outcome === 'cutoff' ? 'CUTOFF' : 'OPEN',
+    bars: result.outcome === 'open' ? null : result.bars,
+    realizedR: result.outcome === 'open' || result.exitPrice === null ? null : round2((long ? result.exitPrice - trade.entryPrice : trade.entryPrice - result.exitPrice) / riskDistance),
+    netRealizedR: result.outcome === 'open' || result.exitPrice === null ? null : ((long ? result.exitPrice - trade.entryPrice : trade.entryPrice - result.exitPrice) - (model.feePoints ?? 0)) / riskDistance,
+    ambiguous: result.ambiguous, complete: result.outcome !== 'open', trail: trail ? { ...trail, riskAmount } : null,
   };
 };
 
 /**
- * Co kdyby — exaktní, ne odhadnuté.
+ * Co kdyby podle společného OHLC modelu s explicitní nejistotou.
  *
  * Dvě rodiny vedle sebe. `swing`/`ote`/`fvg` mění **umístění stopky** a jsou
  * spočítané stejným postupem jako v AlphaBridge, aby Lab mohl backtest a živé
@@ -529,6 +509,7 @@ const backtestTpTargets = (
   long: boolean,
   stop: number,
   levels: readonly { label: string; price: number }[],
+  model: Pick<BacktestExitModel, 'cutoffTime' | 'slippagePoints' | 'tickSize' | 'feePoints'> = {},
 ): BacktestTpTarget[] => {
   const riskDistance = long ? trade.entryPrice - stop : stop - trade.entryPrice;
   if (!(riskDistance > 0)) return [];
@@ -537,27 +518,15 @@ const backtestTpTargets = (
     .filter(level => long ? level.price > trade.entryPrice : level.price < trade.entryPrice)
     .map(level => {
       const rr = round2(Math.abs(level.price - trade.entryPrice) / riskDistance);
-      let outcome = 'OPEN';
-      let bars: number | null = null;
-      for (let index = 0; index < following.length; index += 1) {
-        const candle = following[index];
-        const hitStop = long ? candle.low <= stop : candle.high >= stop;
-        const hitTarget = long ? candle.high >= level.price : candle.low <= level.price;
-        if (!hitStop && !hitTarget) continue;
-        outcome = hitStop ? 'LOSS' : 'WIN';
-        bars = index + 1;
-        break;
-      }
-      return {
-        label: level.label,
-        price: level.price,
-        kind: 'static' as const,
-        exitTargetPrice: level.price,
-        updates: 0,
-        outcome,
-        bars,
-        rr,
-        realizedR: outcome === 'WIN' ? rr : outcome === 'LOSS' ? -1 : null,
+      const result = simulateBracket(following, { ...model, entryPrice: trade.entryPrice, long, stop, target: level.price });
+      return { label: level.label, price: level.price, kind: 'static' as const,
+        riskAmount: riskDistance * trade.quantity * backtestPointValue(trade.instrument),
+        exitTargetPrice: result.outcome === 'tp' ? result.exitPrice : null, updates: 0,
+        outcome: result.outcome === 'sl' ? 'LOSS' : result.outcome === 'tp' ? 'WIN' : result.outcome === 'cutoff' ? 'CUTOFF' : 'OPEN',
+        bars: result.outcome === 'open' ? null : result.bars, rr,
+        realizedR: result.outcome === 'open' || result.exitPrice === null ? null : round2((long ? result.exitPrice - trade.entryPrice : trade.entryPrice - result.exitPrice) / riskDistance),
+        netRealizedR: result.outcome === 'open' || result.exitPrice === null ? null : ((long ? result.exitPrice - trade.entryPrice : trade.entryPrice - result.exitPrice) - (model.feePoints ?? 0)) / riskDistance,
+        ambiguous: result.ambiguous, complete: result.outcome !== 'open',
       };
     })
     .sort((left, right) => (left.rr ?? 0) - (right.rr ?? 0));
@@ -575,6 +544,7 @@ const backtestDynamicTpTarget = (
   long: boolean,
   stop: number,
   curve: BacktestDynamicTargetCurve,
+  model: Pick<BacktestExitModel, 'cutoffTime' | 'slippagePoints' | 'tickSize' | 'feePoints'> = {},
 ): BacktestTpTarget | null => {
   const riskDistance = long ? trade.entryPrice - stop : stop - trade.entryPrice;
   if (!(riskDistance > 0)) return null;
@@ -592,15 +562,16 @@ const backtestDynamicTpTarget = (
   let outcome = 'OPEN';
   let bars: number | null = null;
   let exitTargetPrice: number | null = null;
+  let exitPrice: number | null = null;
+  let ambiguous = false;
   for (let index = 0; index < candles.length; index += 1) {
     const candle = candles[index];
     const targetIsValid = long ? activeTarget > trade.entryPrice : activeTarget < trade.entryPrice;
-    const hitStop = long ? candle.low <= stop : candle.high >= stop;
-    const hitTarget = targetIsValid && (long ? candle.high >= activeTarget : candle.low <= activeTarget);
-    if (hitStop || hitTarget) {
-      outcome = hitStop ? 'LOSS' : 'WIN';
-      bars = index + 1;
-      exitTargetPrice = hitTarget && !hitStop ? activeTarget : null;
+    const fill = evaluateBacktestBracket(candle, { ...model, long, stop, target: targetIsValid ? activeTarget : undefined });
+    if (fill) {
+      outcome = fill.reason === 'sl' ? 'LOSS' : fill.reason === 'tp' ? 'WIN' : 'CUTOFF';
+      bars = index + 1; exitPrice = fill.price; ambiguous = fill.ambiguous;
+      exitTargetPrice = fill.reason === 'tp' ? fill.price : null;
       break;
     }
     // Teprve po vyhodnocení celého baru se aktivuje jeho nová hodnota.
@@ -616,6 +587,7 @@ const backtestDynamicTpTarget = (
   const rr = exitTargetPrice === null ? null : round2(Math.abs(exitTargetPrice - trade.entryPrice) / riskDistance);
   return {
     label: curve.label,
+    riskAmount: riskDistance * trade.quantity * backtestPointValue(trade.instrument),
     price: initialTarget,
     kind: 'dynamic',
     exitTargetPrice,
@@ -623,11 +595,13 @@ const backtestDynamicTpTarget = (
     outcome,
     bars,
     rr,
-    realizedR: outcome === 'WIN' ? rr : outcome === 'LOSS' ? -1 : null,
+    realizedR: exitPrice === null ? null : round2((long ? exitPrice - trade.entryPrice : trade.entryPrice - exitPrice) / riskDistance),
+    netRealizedR: exitPrice === null ? null : ((long ? exitPrice - trade.entryPrice : trade.entryPrice - exitPrice) - (model.feePoints ?? 0)) / riskDistance,
+    ambiguous, complete: outcome !== 'OPEN',
   };
 };
 
-export interface BacktestCounterfactualOptions {
+export interface BacktestCounterfactualOptions extends BacktestAnalysisExecutionOptions {
   dynamicTargets?: readonly BacktestDynamicTargetCurve[];
   flatByMinute?: number;
   flatTimeZone?: string;
@@ -641,13 +615,10 @@ export const backtestCounterfactual = (
 ): BacktestCounterfactual => {
   const risk = riskDistanceOf(trade);
   if (risk === null) return { available: false, reason: 'no-initial-stop' };
-  const cutoff = backtestSessionCutoffSeconds(
-    trade.entryTime,
-    options.flatTimeZone ?? DEFAULT_BACKTEST_FLAT_TIME_ZONE,
-    options.flatByMinute ?? DEFAULT_BACKTEST_FLAT_BY_MINUTE,
-  );
-  const following = barsAfterEntry(candles, trade.entryTime).filter(candle => candle.time <= cutoff);
-  if (following.length === 0) return { available: false, reason: 'no-bars-after-entry' };
+  const window = analysisWindow(candles, trade, options);
+  const following = window.following;
+  if (following.length === 0) return { available: false, reason: window.hasGaps ? 'missing-initial-bars' : 'no-bars-after-entry', complete: false, hasGaps: window.hasGaps };
+  candles = window.candles;
 
   const long = trade.direction === 'Long';
   const pointValue = backtestPointValue(trade.instrument);
@@ -662,12 +633,13 @@ export const backtestCounterfactual = (
     description: string,
     setup: Omit<BracketSimulation, 'entryPrice' | 'long'>,
   ): BacktestCounterfactualVariant => {
-    const result = simulateBracket(following, { entryPrice: trade.entryPrice, long, ...setup });
+    const result = simulateBracket(following, { ...window, entryPrice: trade.entryPrice, long, ...setup });
     const variantR = result.exitPrice === null
       ? null
       : (long ? result.exitPrice - trade.entryPrice : trade.entryPrice - result.exitPrice) / risk;
     return {
       label,
+      riskAmount: risk * trade.quantity * pointValue,
       description,
       stop: setup.stop ?? null,
       target: setup.target ?? null,
@@ -675,6 +647,10 @@ export const backtestCounterfactual = (
       bars: result.bars,
       realizedR: variantR,
       deltaR: variantR !== null && realizedR !== null ? variantR - realizedR : null,
+      ambiguous: result.ambiguous,
+      complete: result.outcome !== 'open',
+      netRealizedR: variantR === null ? null : variantR - trade.commission / (pointValue * trade.quantity * risk),
+      netDeltaR: variantR === null ? null : (variantR - trade.commission / (pointValue * trade.quantity * risk)) - trade.pnl / (pointValue * trade.quantity * risk),
     };
   };
 
@@ -703,16 +679,19 @@ export const backtestCounterfactual = (
 
   return {
     available: true,
+    complete: variants.every(variant => variant.complete),
+    hasGaps: window.hasGaps && variants.some(variant => !variant.complete),
+    ambiguous: variants.some(variant => variant.ambiguous),
     isLong: long,
     entry: trade.entryPrice,
     tp: initialTarget,
-    swing: scanSlVariant(candles, trade, structure.swing, long, initialTarget),
-    ote: scanSlVariant(candles, trade, structure.ote, long, initialTarget),
-    fvg: scanSlVariant(candles, trade, structure.fvg, long, initialTarget),
+    swing: scanSlVariant(candles, trade, structure.swing, long, initialTarget, window),
+    ote: scanSlVariant(candles, trade, structure.ote, long, initialTarget, window),
+    fvg: scanSlVariant(candles, trade, structure.fvg, long, initialTarget, window),
     tpTargets: [
-      ...backtestTpTargets(following, trade, long, structure.swing ?? initialStop, namedLevels),
+      ...backtestTpTargets(following, trade, long, structure.swing ?? initialStop, namedLevels, window),
       ...(options.dynamicTargets ?? []).flatMap(curve => {
-        const result = backtestDynamicTpTarget(following, trade, long, structure.swing ?? initialStop, curve);
+        const result = backtestDynamicTpTarget(following, trade, long, structure.swing ?? initialStop, curve, window);
         return result ? [result] : [];
       }),
     ],
@@ -723,6 +702,8 @@ export const backtestCounterfactual = (
 };
 
 export interface BacktestExcursionLevel {
+  /** Reached only on an unresolved part of the stop bar. */
+  possible?: boolean;
   label: string;
   price: number;
   reached: boolean;
@@ -731,6 +712,11 @@ export interface BacktestExcursionLevel {
 }
 
 export interface BacktestExcursion {
+  actualQuality?: Trade['actualExcursionQuality'];
+  complete?: boolean;
+  hasGaps?: boolean;
+  ambiguous?: boolean;
+  mfePotentialUpperR?: number;
   available: boolean;
   reason?: string;
   flatByMin?: number;
@@ -742,7 +728,7 @@ export interface BacktestExcursion {
   leftOnTableR?: number | null;
   levels?: BacktestExcursionLevel[];
   topReached?: { label: string; r: number } | null;
-  trail?: { exit: number; exitR: number | null; reason: string; bars: number | null } | null;
+  trail?: { exit: number; exitR: number | null; netRealizedR?: number | null; ambiguous?: boolean; complete?: boolean; hasGaps?: boolean; reason: string; bars: number | null } | null;
 }
 
 /** Náhradní cíle, když nejsou k dispozici pojmenované likviditní úrovně. */
@@ -750,7 +736,7 @@ const FALLBACK_EXCURSION_R_LEVELS = [1, 2, 3, 5] as const;
 /** Kolik nejbližších úrovní se ukládá do blobu. */
 const EXCURSION_LEVEL_LIMIT = 10;
 
-export interface BacktestExcursionOptions {
+export interface BacktestExcursionOptions extends BacktestAnalysisExecutionOptions {
   timeZone: string;
   flatByMinute?: number;
   flatTimeZone?: string;
@@ -761,14 +747,8 @@ export interface BacktestExcursionOptions {
   namedLevels?: readonly { label: string; price: number }[];
 }
 
-/**
- * Kam by obchod došel, kdyby se nechal běžet do konce dne.
- *
- * Sken končí na původní stopce (dál by pozice neexistovala) nebo v `flatByMin`
- * podle časové zóny session. Na rozdíl od AlphaBridge nemá „pending" stav:
- * bary do konce dne v backtestu vždycky existují, takže `leftOnTableR` je
- * konečné číslo hned.
- */
+/** Counterfactual potential until the original stop/cutoff. Values are provable
+ * lower bounds; any possible pre-stop wick is kept separately as an upper bound. */
 export const backtestExcursion = (
   candles: readonly MarketCandle[],
   trade: BacktestClosedTrade,
@@ -777,32 +757,32 @@ export const backtestExcursion = (
   const risk = riskDistanceOf(trade);
   if (risk === null) return { available: false, reason: 'no-initial-stop' };
   const flatByMin = options.flatByMinute ?? DEFAULT_BACKTEST_FLAT_BY_MINUTE;
-  const flatTimeZone = options.flatTimeZone ?? DEFAULT_BACKTEST_FLAT_TIME_ZONE;
-  const cutoff = backtestSessionCutoffSeconds(trade.entryTime, flatTimeZone, flatByMin);
-  const all = barsAfterEntry(candles, trade.entryTime);
-  const following = all.filter(candle => candle.time <= cutoff);
-  if (following.length === 0) return { available: false, reason: 'no-bars-after-entry' };
-
+  const window = analysisWindow(candles, trade, options);
+  const following = window.following;
+  if (following.length === 0) return { available: false, reason: window.hasGaps ? 'missing-initial-bars' : 'no-bars-after-entry', complete: false, hasGaps: window.hasGaps };
+  candles = window.candles;
   const long = trade.direction === 'Long';
   const initialStop = Number(trade.initialStopLoss);
   let best = trade.entryPrice;
+  let upper = trade.entryPrice;
   let stopReason: BacktestExcursion['stopReason'] = 'end';
-  let scanned = 0;
+  const knownPrices: number[] = [];
+  const possiblePrices: number[] = [];
   for (const candle of following) {
-    scanned += 1;
+    const fill = evaluateBacktestBracket(candle, { ...window, long, stop: initialStop });
     const favorable = long ? candle.high : candle.low;
-    const adverse = long ? candle.low : candle.high;
-    best = long ? Math.max(best, favorable) : Math.min(best, favorable);
-    if (long ? adverse <= initialStop : adverse >= initialStop) { stopReason = 'sl'; break; }
+    const known = fill ? candle.open : favorable;
+    const possible = fill?.atOpen ? candle.open : favorable;
+    knownPrices.push(known); possiblePrices.push(possible);
+    best = long ? Math.max(best, known) : Math.min(best, known);
+    upper = long ? Math.max(upper, possible) : Math.min(upper, possible);
+    if (fill) { stopReason = fill.reason === 'cutoff' ? 'cutoff' : 'sl'; break; }
   }
-  if (stopReason === 'end' && scanned === following.length) {
-    // Okno doběhlo na konec dat, nebo na cutoff — rozlišuje se podle toho,
-    // jestli za posledním barem ještě nějaké byly.
-    stopReason = all.length > following.length ? 'cutoff' : 'end';
-  }
-
+  const complete = stopReason !== 'end';
+  const ambiguous = upper !== best;
   const mfePotential = long ? best - trade.entryPrice : trade.entryPrice - best;
   const mfePotentialR = round2(mfePotential / risk);
+  const mfePotentialUpperR = round2((long ? upper - trade.entryPrice : trade.entryPrice - upper) / risk);
   const tpR = Number.isFinite(trade.initialTakeProfit as number)
     ? round2(Math.abs(Number(trade.initialTakeProfit) - trade.entryPrice) / risk)
     : 0;
@@ -818,13 +798,14 @@ export const backtestExcursion = (
 
   const levels: BacktestExcursionLevel[] = candidates
     .map(candidate => {
-      const index = following.findIndex(candle =>
-        long ? candle.high >= candidate.price : candle.low <= candidate.price);
-      const reached = index >= 0 && index < scanned;
+      const index = knownPrices.findIndex(price => long ? price >= candidate.price : price <= candidate.price);
+      const reached = index >= 0;
+      const possible = !reached && possiblePrices.some(price => long ? price >= candidate.price : price <= candidate.price);
       return {
         label: candidate.label,
         price: candidate.price,
         reached,
+        possible,
         bars: reached ? index + 1 : null,
         r: round2(Math.abs(candidate.price - trade.entryPrice) / risk),
       };
@@ -844,16 +825,15 @@ export const backtestExcursion = (
   const trail = backtestStructuralTrail(
     candles, trade.entryTime, trade.entryPrice, long, initialStop,
     Number.isFinite(trade.initialTakeProfit as number) ? Number(trade.initialTakeProfit) : undefined,
-    backtestTickSize(trade.instrument),
+    backtestTickSize(trade.instrument), window,
   );
 
   return {
     available: true,
+    complete, hasGaps: !complete && window.hasGaps, ambiguous, mfePotentialUpperR,
     flatByMin,
     stopReason,
-    // Přežil = nezemřel na stopce. Dojezd na cutoff i na konec dat jsou obojí
-    // „ještě žil", takže se nesmí rozlišovat jen podle cutoffu.
-    survivedToCutoff: stopReason !== 'sl',
+    survivedToCutoff: complete ? stopReason === 'cutoff' : undefined,
     mfePotential,
     mfePotentialR,
     tpR,
@@ -863,7 +843,7 @@ export const backtestExcursion = (
     leftOnTableR: Math.max(0, round2(achievableR - tpR)),
     levels: levels.slice(0, EXCURSION_LEVEL_LIMIT),
     topReached,
-    trail: trail ? { exit: trail.exit, exitR: trail.realizedR, reason: trail.reason, bars: trail.bars } : null,
+    trail: trail ? { exit: trail.exit, exitR: trail.realizedR, netRealizedR: trail.netRealizedR, ambiguous: trail.ambiguous, complete: trail.complete, hasGaps: trail.hasGaps, reason: trail.reason, bars: trail.bars } : null,
   };
 };
 
@@ -873,8 +853,9 @@ export interface BacktestTradeIntel {
   session: string;
   riskAmount?: number;
   targetAmount?: number;
-  runUp: number;
-  drawdown: number;
+  actualExcursionQuality: NonNullable<Trade['actualExcursionQuality']>;
+  runUp: number | null;
+  drawdown: number | null;
   mfeR?: number;
   maeR?: number;
   management: TradeManagementStats;
@@ -890,6 +871,10 @@ export interface BacktestTradeIntel {
 }
 
 export interface BacktestIntelOptions {
+  /** Last revealed candle timestamp (seconds). Omit only for an explicit offline/full review. */
+  replayHorizonTime?: number;
+  /** Exit slippage for this instrument; entry price already includes its entry fill. */
+  slippageTicks?: number;
   candles: readonly MarketCandle[];
   orderEvents: readonly BacktestOrderEvent[];
   timeZone: string;
@@ -909,12 +894,15 @@ export const backtestTradeIntel = (
   trade: BacktestClosedTrade,
   options: BacktestIntelOptions,
 ): BacktestTradeIntel => {
+  const bounded = options.replayHorizonTime !== undefined;
+  const candles = bounded ? options.candles.filter(candle => candle.time <= Number(options.replayHorizonTime)) : options.candles;
+  const htfCandles = bounded ? options.htfCandles?.filter(candle => candle.time <= Number(options.replayHorizonTime)) : options.htfCandles;
   const pointValue = backtestPointValue(trade.instrument);
-  const dollars = (points: number | undefined) =>
-    Number.isFinite(points as number) ? Number(points) * pointValue * trade.quantity : 0;
-  const context = options.contextSource ?? createBacktestContextSource({
-    candles: options.candles,
-    htfCandles: options.htfCandles,
+  const cashKnown = trade.actualExcursionQuality !== 'legacy-unknown' && typeof trade.mfeAmount === 'number' && Number.isFinite(trade.mfeAmount) && typeof trade.maeAmount === 'number' && Number.isFinite(trade.maeAmount);
+  const actualExcursionQuality = cashKnown ? trade.actualExcursionQuality ?? 'cash-ledger' : 'legacy-unknown';
+  const context = (!bounded && options.contextSource) || createBacktestContextSource({
+    candles,
+    htfCandles,
     timeZone: options.timeZone,
   });
   const confluence = context.confluence(trade);
@@ -924,22 +912,25 @@ export const backtestTradeIntel = (
     targetAmount: Number.isFinite(trade.initialTakeProfit as number)
       ? Math.abs(Number(trade.initialTakeProfit) - trade.entryPrice) * pointValue * trade.quantity
       : undefined,
-    runUp: dollars(trade.mfePoints),
-    drawdown: dollars(trade.maePoints),
-    mfeR: trade.mfeR,
-    maeR: trade.maeR,
+    actualExcursionQuality,
+    runUp: cashKnown ? trade.mfeAmount! : null,
+    drawdown: cashKnown ? trade.maeAmount! : null,
+    mfeR: cashKnown ? trade.mfeR : null,
+    maeR: cashKnown ? trade.maeR : null,
     management: tradeManagementStats(options.orderEvents, trade),
-    excursion: backtestExcursion(options.candles, trade, {
+    excursion: backtestExcursion(candles, trade, {
       timeZone: options.timeZone,
       flatByMinute: options.flatByMinute,
       flatTimeZone: options.flatTimeZone,
+      slippageTicks: options.slippageTicks,
       namedLevels: context.favorableLevels(trade),
     }),
-    executionPath: backtestExecutionPath(options.candles, trade),
-    counterfactual: backtestCounterfactual(options.candles, trade, context.favorableLevels(trade), {
+    executionPath: backtestExecutionPath(candles, trade, options),
+    counterfactual: backtestCounterfactual(candles, trade, context.favorableLevels(trade), {
       dynamicTargets: context.dynamicTargets(trade),
       flatByMinute: options.flatByMinute,
       flatTimeZone: options.flatTimeZone,
+      slippageTicks: options.slippageTicks,
     }),
     entryContext: context.entryContext(trade),
     entryMap: context.entryMap(trade),
@@ -951,6 +942,7 @@ export const backtestTradeIntel = (
 };
 
 export interface BacktestTradeMappingOptions extends BacktestIntelOptions {
+  researchBinding?: BacktestResearchBinding;
   accountId: string;
   sessionBias?: 'Long' | 'Short' | 'Neutral' | null;
   sessionPreNotes?: string | null;
@@ -959,7 +951,7 @@ export interface BacktestTradeMappingOptions extends BacktestIntelOptions {
 }
 
 /** Verze data blobu; drží krok s AlphaBridge, ať AI ví, co kde čekat. */
-export const BACKTEST_TRADE_SCHEMA_VERSION = 7;
+export const BACKTEST_TRADE_SCHEMA_VERSION = 8;
 
 /** HH:MM v zóně session — AlphaBridge i importy tohle pole plní. */
 const clockTime = (unixSeconds: number, timeZone: string): string => {
@@ -992,12 +984,14 @@ export const backtestClosedTradeToTrade = (
     id: closed.id,
     accountId: options.accountId,
     backtestRunId: closed.runId,
+    backtestResearch: researchTradeReference(options.researchBinding),
     instrument: closed.instrument,
     symbol: closed.instrument,
     signal: options.strategy || 'Bar Replay',
     pnl: closed.pnl,
     riskAmount: intel.riskAmount,
     targetAmount: intel.targetAmount,
+    actualExcursionQuality: intel.actualExcursionQuality,
     runUp: intel.runUp,
     drawdown: intel.drawdown,
     date: new Date(closed.exitTime * 1_000).toISOString(),
@@ -1024,11 +1018,11 @@ export const backtestClosedTradeToTrade = (
     biasAligned: bias === 'Long' || bias === 'Short' ? direction === bias : null,
     mfeR: intel.mfeR,
     maeR: intel.maeR,
-    mfePoints: closed.mfePoints,
-    maePoints: closed.maePoints,
+    mfePoints: intel.actualExcursionQuality === 'legacy-unknown' ? null : closed.mfePoints,
+    maePoints: intel.actualExcursionQuality === 'legacy-unknown' ? null : closed.maePoints,
     excursionAvailable: intel.excursion.available,
-    excursionComplete: intel.excursion.available ? true : null,
-    excursion: intel.excursion,
+    excursionComplete: intel.excursion.available ? intel.excursion.complete === true : null,
+    excursion: { ...intel.excursion, actualQuality: intel.actualExcursionQuality },
     executionPath: intel.executionPath,
     executionPathComplete: intel.executionPath.available ? intel.executionPath.complete === true : null,
     counterfactual: intel.counterfactual,
@@ -1038,6 +1032,7 @@ export const backtestClosedTradeToTrade = (
     entryContext: { ...intel.entryContext, htf: intel.htfContext, placement: intel.placement },
     htfConfluence: intel.htfConfluence,
     ltfConfluence: intel.ltfConfluence,
+    autoConfluence: { htf: [...intel.htfConfluence], ltf: [...intel.ltfConfluence] },
     slPlacement: intel.placement.slPlacement ?? undefined,
     targetType: intel.placement.targetType ?? undefined,
     targetLevel: intel.placement.targetLevel ?? undefined,
@@ -1050,6 +1045,7 @@ export const backtestClosedTradeToTrade = (
     // žádná read-path ho nečte a replay obchod jiný stav ani mít nemůže.
     time: clockTime(closed.entryTime, options.timeZone),
     outcomeAmbiguous: closed.outcomeAmbiguous ?? false,
+    excursionAmbiguous: closed.excursionAmbiguous ?? false,
     isBE: closed.pnl === 0 ? true : undefined,
     // `phase` AlphaBridge do obchodu kopíruje, ale aplikace ho ignoruje —
     // TradeHistory bere fázi z účtu jako ze zdroje pravdy.

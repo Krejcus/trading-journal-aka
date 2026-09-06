@@ -1,15 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import webpush from 'web-push';
 import { createClient } from '@supabase/supabase-js';
 import {
     evaluateCopierIncidents,
     planCopyEventNotifications,
-    type CopierAlertStateRow,
     type CopierRuntimeRow,
 } from '../../server/copierIncidentWatchdog.js';
 import {
-    sendApnsNotification,
     type ApnsDevice,
 } from '../../server/apns.js';
 import {
@@ -27,6 +25,8 @@ import {
     type NativeFinancialMarker,
     type NativeFinancialNotification,
 } from '../../server/nativeFinancialAlertPlanner.js';
+import { copierEventDeliveryKey, drainNotificationDeliveries, enqueueNotificationDelivery, incidentDeliveryKey, markerForIncident, notificationEventKey, persistNotificationMarkers, type NotificationPayload, type VersionedAlertState } from '../../server/notificationDelivery.js';
+import { shouldSendNativeScheduledAlert, isSessionEndAuditTime } from '../../server/notificationSchedule.js';
 import { updateNativeWidgetPushes } from '../../server/nativeWidgetPushUpdater.js';
 import { readTradovateServerConfig } from '../../server/tradovateOAuthStore.js';
 import { collectConnectedAccountSnapshots } from '../../server/copierAccountSnapshotStore.js';
@@ -104,7 +104,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                             <p class="text-[9px] text-zinc-500 font-bold tracking-[0.3em] uppercase mt-1">Version 1.4.8 FINAL</p>
                         </div>
                     </div>
-                    
+
                     <div class="space-y-6">
                         <!-- SECTION: REAL SEANCE -->
                         <div>
@@ -345,8 +345,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                         if (settings.sessionStartAlertExact && Math.abs(currentMinutesTotal - startM) <= 1) {
                             alerts.push({ title: `${emoji} ${session.name} začíná`, body: dailyTip, type: `session-start-${session.id || session.name}` });
                         }
-                        if (settings.sessionEndAlert10m && Math.abs(currentMinutesTotal - (endM - 10)) <= 1) {
-                            alerts.push({ title: `⏰ ${session.name} končí za 10 minut`, body: 'Uzavři otevřené pozice a dodržuj plán.', type: `session-end10-${session.id || session.name}` });
+                        if (settings.sessionEndAlert10m && isSessionEndAuditTime(currentMinutesTotal, endM)) {
+                            alerts.push({ title: `📊 Audit po session ${session.name} čeká`, body: 'Od konce session uběhlo 10 minut. Doplň deník a audit.', type: `session-end10-${session.id || session.name}` });
                         }
                         if (settings.sessionEndAlertExact && Math.abs(currentMinutesTotal - endM) <= 1) {
                             alerts.push({ title: `🏁 ${session.name} skončila`, body: 'Ruce pryč od klávesnice. Čas na review.', type: `session-end-${session.id || session.name}` });
@@ -469,141 +469,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     pushJobs.push({ device, title: alert.title, body: alert.body, type: alert.type, profileId: profile.id });
                 }
                 for (const device of nativeDevices) {
+                    if (!mockType && !shouldSendNativeScheduledAlert(alert.type)) continue;
                     nativePushJobs.push({ device, title: alert.title, body: alert.body, type: alert.type, profileId: profile.id });
                 }
             }
         }
 
-        // --- PARALLEL PUSH SENDING (batches of 10) ---
+        // Durable per-device jobs survive transient failures and the ±1 minute schedule window.
+        const debugRun = mockType ? randomUUID() : '';
         let sentCount = 0;
-        let duplicateCount = 0;
-        const expiredDevices = new Set<string>();
-
-        for (let i = 0; i < pushJobs.length; i += 10) {
-            const batch = pushJobs.slice(i, i + 10);
-            const results = await Promise.allSettled(
-                batch.map(async (job) => {
-                    if (expiredDevices.has(job.device.id)) return 'skip';
-
-                    // IDEMPOTENCE: okna alertů jsou ±1 min a cron běží každou
-                    // minutu, takže bez tohohle claimu odejde stejný alert 3×.
-                    // Vloží se PŘED odesláním; konflikt = někdo (dřívější běh)
-                    // ho už poslal. V debug režimu se přeskakuje, ať jde testovat
-                    // opakovaně.
-                    let deliveryId: number | null = null;
-                    if (!mockType) {
-                        const claim = await supabase
-                            .from('alert_deliveries')
-                            .upsert(
-                                {
-                                    user_id: job.profileId,
-                                    alert_type: job.type,
-                                    alert_date: todayStr,
-                                    subscription_id: job.device.id,
-                                    status: 'sent',
-                                    title: job.title,
-                                    body: job.body,
-                                },
-                                { onConflict: 'user_id,alert_type,alert_date,subscription_id', ignoreDuplicates: true }
-                            )
-                            .select('id');
-
-                        if (claim.error) {
-                            console.error('[Cron] Claim selhal:', claim.error.message);
-                            return 'failed';
-                        }
-                        if (!claim.data || claim.data.length === 0) return 'duplicate';
-                        deliveryId = claim.data[0].id;
-                    }
-
-                    const result = await sendPush(job.device.subscription, job.title, job.body, job.type);
-
-                    if (result.status !== 'sent') {
-                        if (deliveryId !== null) {
-                            await supabase
-                                .from('alert_deliveries')
-                                .update({ status: result.status, status_code: result.statusCode ?? null, error: result.error ?? null })
-                                .eq('id', deliveryId);
-                        }
-                        if (result.status === 'expired') {
-                            // Cílený zápis na JEDNO zařízení. Dřív se tu přepisoval
-                            // celý preferences blob snapshotem z počátku běhu, což
-                            // uživateli mohlo vrátit stará nastavení.
-                            expiredDevices.add(job.device.id);
-                            await supabase
-                                .from('push_subscriptions')
-                                .update({ expired_at: new Date().toISOString(), last_error: result.error ?? null })
-                                .eq('id', job.device.id);
-                            console.log(`[Cleanup] Expired device ${job.device.id.slice(0, 8)} (user ${job.profileId.slice(0, 8)})`);
-                        }
-                    }
-
-                    return result.status;
-                })
-            );
-            for (const r of results) {
-                if (r.status !== 'fulfilled') continue;
-                if (r.value === 'sent') sentCount++;
-                else if (r.value === 'duplicate') duplicateCount++;
-            }
-        }
-
-        // Native APNs jobs use a separate unique key in alert_deliveries so a
-        // user can keep both PWA and native AlphaTrade during the transition.
         let nativeSentCount = 0;
-        const expiredNativeDevices = new Set<string>();
-        for (let i = 0; i < nativePushJobs.length; i += 10) {
-            const batch = nativePushJobs.slice(i, i + 10);
-            const results = await Promise.allSettled(batch.map(async job => {
-                if (expiredNativeDevices.has(job.device.id)) return 'skip';
-                let deliveryId: number | null = null;
-                if (!mockType) {
-                    const claim = await supabase.from('alert_deliveries').upsert({
-                        user_id: job.profileId,
-                        alert_type: job.type,
-                        alert_date: todayStr,
-                        native_subscription_id: job.device.id,
-                        status: 'sent',
-                        title: job.title,
-                        body: job.body,
-                    }, {
-                        onConflict: 'user_id,alert_type,alert_date,native_subscription_id',
-                        ignoreDuplicates: true,
-                    }).select('id');
-                    if (claim.error) return 'failed';
-                    if (!claim.data?.length) return 'duplicate';
-                    deliveryId = claim.data[0].id;
-                }
-
-                const result = await sendApnsNotification(job.device, {
-                    title: job.title,
-                    body: job.body,
-                    route: job.type.startsWith('copier-') ? 'live' : 'dashboard',
-                    threadId: job.type.startsWith('copier-') ? 'alphatrade-copier' : 'alphatrade',
-                    category: job.type.startsWith('copier-') ? 'ALPHATRADE_RISK' : 'ALPHATRADE_GENERAL',
-                    interruptionLevel: job.type.startsWith('copier-') ? 'time-sensitive' : 'active',
-                    collapseId: `alpha-${job.type}`,
-                });
-                if (result.status !== 'sent' && deliveryId !== null) {
-                    await supabase.from('alert_deliveries').update({
-                        status: result.status,
-                        status_code: result.statusCode ?? null,
-                        error: result.error ?? null,
-                    }).eq('id', deliveryId);
-                }
-                if (result.status === 'expired') {
-                    expiredNativeDevices.add(job.device.id);
-                    await supabase.from('native_push_subscriptions').update({
-                        expired_at: new Date().toISOString(),
-                        last_error: result.error ?? null,
-                    }).eq('id', job.device.id);
-                }
-                return result.status;
-            }));
-            for (const result of results) {
-                if (result.status === 'fulfilled' && result.value === 'sent') nativeSentCount++;
-            }
+        const duplicateCount = 0;
+        for (const job of pushJobs) {
+            await enqueueNotificationDelivery({ db: supabase, userId: job.profileId, channel: 'web',
+                subscriptionId: job.device.id, eventKey: notificationEventKey('scheduled', todayStr, job.type, debugRun),
+                payload: { title: job.title, body: job.body, route: 'dashboard' } });
         }
+        for (const job of nativePushJobs) {
+            await enqueueNotificationDelivery({ db: supabase, userId: job.profileId, channel: 'apns',
+                subscriptionId: job.device.id, eventKey: notificationEventKey('scheduled', todayStr, job.type, debugRun),
+                payload: { title: job.title, body: job.body, route: 'dashboard', threadId: 'alphatrade',
+                    category: 'ALPHATRADE_GENERAL', interruptionLevel: 'active' } });
+        }
+        // Drain before optional broker snapshot work too: its outage cannot prevent retries.
+        sentCount += (await drainNotificationDeliveries({ db: supabase, channel: 'web', sendWebPush: sendPush })).sent;
+        nativeSentCount += (await drainNotificationDeliveries({ db: supabase, channel: 'apns' })).sent;
 
         if (mockType) {
             return res.status(200).send(`
@@ -634,7 +524,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     .select('device_id, user_id, connection_id, status, last_seen_at, started_at'),
                 supabase
                     .from('copier_alert_state')
-                    .select('device_id, user_id, incident_key, active, detail'),
+                    .select('device_id, user_id, incident_key, active, detail, updated_at, notification_version'),
                 supabase
                     .from('tradovate_copier_trades')
                     .select('user_id,device_id,trade_id,symbol,side,quantity,realized_pnl_usd,follower_count,closed_at,created_at')
@@ -645,7 +535,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             if (alertStatesResult.error) throw new Error(alertStatesResult.error.message);
             if (closedTradesResult.error) throw new Error(closedTradesResult.error.message);
             const runtimes = (runtimesResult.data ?? []) as NativeLiveActivityRuntimeRow[];
-            const alertStates = (alertStatesResult.data ?? []) as CopierAlertStateRow[];
+            const alertStates = (alertStatesResult.data ?? []) as VersionedAlertState[];
             const tradovateConfig = readTradovateServerConfig();
             const brokerSnapshot = createNativeBrokerSnapshotLoader({
                 db: supabase,
@@ -667,43 +557,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 now: now.getTime(),
             });
 
-            for (const notification of evaluation.notifications) {
-                const devices = devicesByUser.get(notification.userId) ?? [];
-                for (const device of devices) {
-                    const result = await sendPush(
-                        device.subscription,
-                        notification.title,
-                        notification.body,
-                        `copier-${notification.incidentKey}`,
-                    );
-                    if (result.status === 'sent') copierAlertsSent++;
-                    if (result.status === 'expired') {
-                        await supabase
-                            .from('push_subscriptions')
-                            .update({ expired_at: new Date().toISOString(), last_error: result.error ?? null })
-                            .eq('id', device.id);
-                        }
-                    }
-                const nativeDevices = nativeDevicesByUser.get(notification.userId) ?? [];
-                for (const device of nativeDevices) {
-                    const result = await sendApnsNotification(device, {
-                        title: notification.title,
-                        body: notification.body,
-                        route: 'live',
-                        threadId: 'alphatrade-copier',
-                        category: 'ALPHATRADE_RISK',
-                        interruptionLevel: 'time-sensitive',
-                        collapseId: `copier-${notification.incidentKey}`,
-                        badge: notification.kind === 'opened' ? 1 : 0,
-                    });
-                    if (result.status === 'sent') copierAlertsSent++;
-                    if (result.status === 'expired') {
-                        await supabase.from('native_push_subscriptions').update({
-                            expired_at: new Date().toISOString(),
-                            last_error: result.error ?? null,
-                        }).eq('id', device.id);
-                    }
+            const enqueueForUser = async (userId: string, eventKey: string, payload: NotificationPayload) => {
+                for (const device of devicesByUser.get(userId) ?? []) {
+                    await enqueueNotificationDelivery({ db: supabase, userId, eventKey, channel: 'web', subscriptionId: device.id, payload });
                 }
+                for (const device of nativeDevicesByUser.get(userId) ?? []) {
+                    await enqueueNotificationDelivery({ db: supabase, userId, eventKey, channel: 'apns', subscriptionId: device.id, payload });
+                }
+            };
+            for (const notification of evaluation.notifications) {
+                const previous = alertStates.find(row => row.user_id === notification.userId && row.device_id === notification.deviceId
+                    && row.incident_key === markerForIncident(notification.incidentKey));
+                const eventKey = incidentDeliveryKey({ deviceId: notification.deviceId, key: notification.incidentKey, kind: notification.kind }, previous);
+                await enqueueForUser(notification.userId, eventKey, { title: notification.title, body: notification.body,
+                    route: 'live', threadId: 'alphatrade-copier', category: 'ALPHATRADE_RISK',
+                    interruptionLevel: 'time-sensitive', badge: notification.kind === 'opened' ? 1 : 0 });
             }
 
             const closedPnl = planClosedTradePnlNotifications({
@@ -718,42 +586,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 runtimes: runtimes as CopierRuntimeRow[],
                 alertStates,
                 now: now.getTime(),
+                replayBoundary: true,
             });
             for (const notification of copyEvents.notifications) {
                 // Přesný broker-confirmed P&L nahrazuje obecné „výstup
                 // zkopírován“, aby jeden close neposlal dvě zprávy.
                 if ((notification.kind === 'exit' || notification.kind === 'flip') && closedPnl.notifications.some(item =>
                     item.userId === notification.userId && item.deviceId === notification.deviceId)) continue;
-                const devices = devicesByUser.get(notification.userId) ?? [];
-                for (const device of devices) {
-                    const result = await sendPush(device.subscription, notification.title, notification.body, 'copier-trade');
-                    if (result.status === 'sent') copierAlertsSent++;
-                    if (result.status === 'expired') {
-                        await supabase
-                            .from('push_subscriptions')
-                            .update({ expired_at: new Date().toISOString(), last_error: result.error ?? null })
-                            .eq('id', device.id);
-                        }
-                    }
-                const nativeDevices = nativeDevicesByUser.get(notification.userId) ?? [];
-                for (const device of nativeDevices) {
-                    const result = await sendApnsNotification(device, {
-                        title: notification.title,
-                        body: notification.body,
-                        route: 'live',
-                        threadId: 'alphatrade-copier-trades',
-                        category: 'ALPHATRADE_TRADE',
-                        interruptionLevel: 'active',
-                        collapseId: notification.collapseId,
-                    });
-                    if (result.status === 'sent') copierAlertsSent++;
-                    if (result.status === 'expired') {
-                        await supabase.from('native_push_subscriptions').update({
-                            expired_at: new Date().toISOString(),
-                            last_error: result.error ?? null,
-                        }).eq('id', device.id);
-                    }
-                }
+                await enqueueForUser(notification.userId, copierEventDeliveryKey(notification), {
+                    title: notification.title, body: notification.body, route: 'live', threadId: 'alphatrade-copier-trades',
+                    category: 'ALPHATRADE_TRADE', interruptionLevel: 'active', collapseId: notification.collapseId,
+                });
             }
 
             // Přesné uzavřené P&L a broker lock/unlock hrany. Na rozdíl od
@@ -786,59 +629,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 if (accountLocks.marker) financialMarkers.push(accountLocks.marker);
             }
             for (const notification of financialNotifications) {
-                const webDevices = devicesByUser.get(notification.userId) ?? [];
-                for (const device of webDevices) {
-                    const result = await sendPush(
-                        device.subscription,
-                        notification.title,
-                        notification.body,
-                        notification.kind === 'trade' ? 'copier-closed-pnl' : 'copier-account-lock',
-                    );
-                    if (result.status === 'sent') copierAlertsSent++;
-                    if (result.status === 'expired') {
-                        await supabase.from('push_subscriptions').update({
-                            expired_at: new Date().toISOString(),
-                            last_error: result.error ?? null,
-                        }).eq('id', device.id);
-                    }
-                }
-                const nativeDevices = nativeDevicesByUser.get(notification.userId) ?? [];
-                for (const device of nativeDevices) {
-                    const result = await sendApnsNotification(device, {
-                        title: notification.title,
-                        body: notification.body,
-                        route: 'live',
-                        threadId: notification.kind === 'trade'
-                            ? 'alphatrade-live-pnl'
-                            : 'alphatrade-account-locks',
-                        category: notification.kind === 'trade' ? 'ALPHATRADE_TRADE' : 'ALPHATRADE_RISK',
-                        interruptionLevel: notification.kind === 'risk' ? 'time-sensitive' : 'active',
-                        collapseId: `financial-${createHash('sha256').update(notification.key).digest('hex').slice(0, 32)}`,
-                        badge: notification.kind === 'risk' ? 1 : undefined,
-                    });
-                    if (result.status === 'sent') copierAlertsSent++;
-                    if (result.status === 'expired') {
-                        await supabase.from('native_push_subscriptions').update({
-                            expired_at: new Date().toISOString(),
-                            last_error: result.error ?? null,
-                        }).eq('id', device.id);
-                    }
-                }
+                const previous = alertStates.find(row => row.user_id === notification.userId && row.device_id === notification.deviceId
+                    && row.incident_key === 'state:broker-account-locks');
+                const eventKey = notification.kind === 'trade'
+                    ? notificationEventKey('financial-trade', notification.deviceId, notification.key)
+                    : incidentDeliveryKey({ deviceId: notification.deviceId, key: notification.key, kind: notification.kind }, previous);
+                await enqueueForUser(notification.userId, eventKey, { title: notification.title, body: notification.body, route: 'live',
+                    threadId: notification.kind === 'trade' ? 'alphatrade-live-pnl' : 'alphatrade-account-locks',
+                    category: notification.kind === 'trade' ? 'ALPHATRADE_TRADE' : 'ALPHATRADE_RISK',
+                    interruptionLevel: notification.kind === 'risk' ? 'time-sensitive' : 'active',
+                    badge: notification.kind === 'risk' ? 1 : undefined });
             }
-
-            for (const upsert of [...evaluation.upserts, ...copyEvents.markers, ...financialMarkers]) {
-                const nowIso = new Date().toISOString();
-                await supabase.from('copier_alert_state').upsert({
-                    user_id: upsert.userId,
-                    device_id: upsert.deviceId,
-                    incident_key: upsert.incidentKey,
-                    active: upsert.active,
-                    detail: upsert.detail,
-                    updated_at: nowIso,
-                    ...(upsert.active ? { detected_at: nowIso, resolved_at: null } : { resolved_at: nowIso }),
-                    ...(upsert.notified ? { notified_at: nowIso } : {}),
-                }, { onConflict: 'user_id,device_id,incident_key' });
-            }
+            // A marker means all targets were durably enqueued. It never means a failed send succeeded.
+            await persistNotificationMarkers(supabase, [...evaluation.upserts, ...copyEvents.markers, ...financialMarkers], alertStates);
+            copierAlertsSent += (await drainNotificationDeliveries({ db: supabase, sendWebPush: sendPush })).sent;
 
             // Silent ActivityKit updates use the same read-only heartbeat plus
             // a bounded Tradovate snapshot. No broker command exists on this path.
@@ -909,7 +713,7 @@ async function sendPush(sub: any, title: string, body: string, alertType: string
             timeout: 5000,
             TTL: 3600,
             headers: {
-                'Topic': `alpha-${alertType}`,
+                'Topic': createHash('sha256').update(alertType).digest('base64url').slice(0, 32),
                 'Urgency': 'high'
             }
         });

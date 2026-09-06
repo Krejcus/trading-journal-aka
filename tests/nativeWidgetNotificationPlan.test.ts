@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { NativeWidgetLiveState } from '../services/nativeWidgetSnapshot';
-import { planNativeWidgetLocalAlerts } from '../services/nativeWidgetNotificationPlan';
-import {
-  BROKER_ACCOUNTS_DAILY_PNL_LABEL,
-  COPIER_LEADER_DAILY_STATS_LABEL,
-} from '../lib/copierDailyStatsLabels';
+import { planNativeWidgetLocalAlerts as productionPlan } from '../services/nativeWidgetNotificationPlan';
+import { BROKER_ACCOUNTS_DAILY_PNL_LABEL, COPIER_LEADER_DAILY_STATS_LABEL } from '../lib/copierDailyStatsLabels';
+const planNativeWidgetLocalAlerts = (previous: NativeWidgetLiveState | null, next: NativeWidgetLiveState) => productionPlan(previous, next, 'local');
 
 const live = (partial: Partial<NativeWidgetLiveState> = {}): NativeWidgetLiveState => ({
   connected: true,
@@ -67,4 +65,12 @@ describe('lokální live PnL a account-lock notifikace', () => {
     expect(planNativeWidgetLocalAlerts(live({ accounts: [locked] }), live({ accounts: [open] })))
       .toEqual([expect.objectContaining({ key: 'account-unlocked:a1', kind: 'risk' })]);
   });
+});
+
+
+it('does not duplicate server-owned financial/account alerts in production', () => {
+  const account = {id: 'a', name: 'Account', balance: 50_000, pnl: 0, openPnl: 0, locked: false, lockReason: null};
+  expect(productionPlan(live({accounts: [account]}), live({accounts: [{...account, locked: true}], recentTrades: [
+    {id:'new', symbol:'MNQ', side:'Long', pnl:125, quantity:1, timestamp:20},
+  ]}))).toEqual([]);
 });

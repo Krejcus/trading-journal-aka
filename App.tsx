@@ -1,3 +1,9 @@
+import { combinedTradeChanges } from './services/combinedTradePatch';
+import { enqueueBacktestAnalytics, flushBacktestAnalytics } from './services/backtestAnalyticsOutbox';
+import type { BacktestAnalyticsRefreshCandidate } from './services/backtestAnalyticsRefresh';
+import { buildBacktestTradeRecalculationUpdates } from './services/backtestTradeRecalculation';
+import { changedTradeFields, rollbackTradePatch } from './services/tradePatch';
+import { collectBacktestTagSuggestions } from './services/backtestTagCatalog';
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -6,9 +12,16 @@ import { buildLabDataset, detectLeaks, prepBiasFromPreps, prepDaysFromPreps, typ
 import { tradeNeedsEnrichment } from './services/tradovateImport';
 import { storageService, getUserId } from './services/storageService';
 import { persistBacktestTradeReview } from './services/backtestTradeReview';
+import {
+  BacktestTradeOutboxError, enqueueBacktestTrade, flushBacktestTradeOutbox, getPendingBacktestTrades,
+} from './services/backtestTradeOutbox';
+import { getBacktestRunOwnerId } from './services/backtestRunService';
 import { safeSetItem } from './utils/safeStorage';
 import { businessDataFingerprint, mergePayoutImages, stripPayoutImagesForCache } from './utils/businessPayoutSync';
 import { clearAppStorage } from './utils/appStorage';
+import { reconcileDashboardRows } from './utils/dashboardRefresh';
+import { createSessionRequestGuard } from './utils/sessionRequestGuard';
+import { clearNativeSessionSurfaces, waitForNativeSessionCleanup } from './services/nativeSessionCleanup';
 import { firmOf } from './utils/accountFirm';
 import { adjustmentTotal, getFinancialAdjustments } from './services/tradingIncidents';
 import { calculateAccountDrawdown, portfolioFloorForDate } from './services/propDrawdown';
@@ -111,22 +124,18 @@ import MorningBriefBanner from './components/MorningBriefBanner';
 import { isNativeShell, registerNativeShellBridge, reportNativeRefreshComplete, reportNativeShellTheme, reportNativeShellWorld } from './utils/nativeShell';
 import { syncNativeSessionReminders } from './services/nativeSessionReminders';
 import {
-  deactivateNativeRemoteNotifications,
   initializeNativeRemoteNotifications,
   resetNativeRemoteNotificationListeners,
 } from './services/nativePushNotifications';
 import {
   buildNativeJournalWidgetState,
-  clearNativeWidgetSnapshot,
   syncNativeJournalWidgetSnapshot,
 } from './services/nativeWidgetSnapshot';
 import {
-  deactivateNativeLiveActivityPush,
   initializeNativeLiveActivityPush,
   resetNativeLiveActivityPushListener,
 } from './services/nativeLiveActivityPush';
 import {
-  deactivateNativeWidgetRemote,
   initializeNativeWidgetRemote,
 } from './services/nativeWidgetRemote';
 
@@ -452,6 +461,49 @@ const readBusinessMetadata = () => Promise.all([
 
 const App: React.FC = () => {
   const [session, setSession] = useState<Session | null>(null);
+  const sessionRef = useRef<Session | null>(null);
+  const authEpochRef = useRef(0);
+  const captureSessionRequest = useCallback((userId: string) => createSessionRequestGuard(userId, () => ({
+    userId: sessionRef.current?.user.id ?? null,
+    epoch: authEpochRef.current,
+  })), []);
+  const logoutInProgressRef = useRef(false);
+  const [logoutBusy, setLogoutBusy] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+  const handleLogout = useCallback(async () => {
+    if (logoutInProgressRef.current) return;
+    const current = sessionRef.current;
+    logoutInProgressRef.current = true;
+    authEpochRef.current += 1;
+    sessionRef.current = null;
+    setSession(null); // Unmount producers before clearing their native surfaces.
+    setLogoutBusy(true);
+    setLogoutError(null);
+    let signedOut = false;
+    try {
+      if (current) await clearNativeSessionSurfaces(current.user.id);
+      const { error } = await supabase.auth.signOut({ scope: 'local' });
+      if (error) throw error;
+      clearAppStorage();
+      signedOut = true;
+    } catch {
+      // A failed sign-out leaves auth valid; resume the captured account and
+      // allow its producers to initialize only after cleanup has completed.
+      authEpochRef.current += 1;
+      sessionRef.current = current;
+      isFetchingRef.current = false;
+      setSession(current);
+      setLogoutError('Odhlášení se nepodařilo dokončit. Zkus to prosím znovu.');
+    } finally {
+      if (!signedOut) {
+        logoutInProgressRef.current = false;
+        setLogoutBusy(false);
+      }
+    }
+    // A fresh document closes every old async closure before the next login.
+    // Keep the busy gate mounted until navigation replaces this document.
+    if (signedOut) window.location.reload();
+  }, []);
   const [loading, setLoading] = useState(true);
   const [appError, setAppError] = useState<string | null>(null);
   const [isInitialLoadDone, setIsInitialLoadDone] = useState(false);
@@ -483,8 +535,12 @@ const App: React.FC = () => {
   useEffect(() => {
 
     setInitStatus("Kontrola přihlášení...");
+    const initialAuthEpoch = authEpochRef.current;
     supabase.auth.getSession().then(({ data: { session: activeSession } }) => {
+      if (authEpochRef.current !== initialAuthEpoch) return;
       if (activeSession) {
+        if (sessionRef.current?.user.id !== activeSession.user.id) authEpochRef.current += 1;
+        sessionRef.current = activeSession;
         setSession(activeSession);
         // INSTANT user z cached snapshot předchozí session — žádný flash avatara/jména/role.
         // Cache obsahuje plný User objekt z posledního DB loadu.
@@ -514,14 +570,18 @@ const App: React.FC = () => {
         setLoading(false);
       }
     }).catch(err => {
+      if (authEpochRef.current !== initialAuthEpoch) return;
       console.error("[Auth] Session check failed:", err);
       setLoading(false);
       setAppError("Nepodařilo se ověřit přihlášení. Zkus obnovit stránku.");
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, activeSession) => {
+      if (logoutInProgressRef.current && activeSession) return;
 
       if (activeSession) {
+        if (sessionRef.current?.user.id !== activeSession.user.id) authEpochRef.current += 1;
+        sessionRef.current = activeSession;
         // Only trigger session update if it's actually different to avoid loops
         setSession(prev => {
           if (prev?.user?.id === activeSession.user.id && prev?.access_token === activeSession.access_token) {
@@ -534,6 +594,13 @@ const App: React.FC = () => {
       }
 
       if (event === 'SIGNED_OUT') {
+        const signedOutUserId = sessionRef.current?.user.id;
+        sessionRef.current = null;
+        authEpochRef.current += 1;
+        // Do not call async auth methods from inside Supabase's auth callback.
+        if (signedOutUserId && !logoutInProgressRef.current) {
+          void clearNativeSessionSurfaces(signedOutUserId);
+        }
         setSession(null);
         setLoading(false);
         setIsInitialLoadDone(false);
@@ -554,6 +621,18 @@ const App: React.FC = () => {
         setBusinessGoals([]);
         setBusinessResources([]);
         setPlaybookItems([]);
+        setArchivedAccounts([]);
+        setIsArchivedLoaded(false);
+        setBusinessLoadedUserId(null);
+        setLabExperiments([]);
+        setIsLabExpLoaded(false);
+        setTradeToast(null);
+        setPendingCopierTrades([]);
+        copierJournalLastSyncRef.current = 0;
+        copierJournalSyncBusyRef.current = false;
+        setOfflineSnapshotAt(null);
+        setSyncError(null);
+        setAppError(null);
 
         // Reset flags
         isPrepsDirty.current = false;
@@ -561,6 +640,10 @@ const App: React.FC = () => {
         isWeeklyFocusDirty.current = false;
         isPreferencesDirty.current = false;
         isSyncedWithDbRef.current = false;
+        isFetchingRef.current = false;
+        isSyncingAccounts.current = false;
+        prefsAppliedRef.current = false;
+        isApplyingPrefsRef.current = false;
 
         clearAppStorage();
       }
@@ -666,6 +749,8 @@ const App: React.FC = () => {
     const userId = session?.user?.id;
     const leaderAccountId = group?.leaderAccountId ?? null;
     if (!userId || leaderAccountId == null || copierJournalSyncBusyRef.current) return;
+    const isCurrentSession = captureSessionRequest(userId);
+    if (!isCurrentSession()) return;
     const now = Date.now();
     if (!options?.force && now - copierJournalLastSyncRef.current < 60_000) return;
     copierJournalSyncBusyRef.current = true;
@@ -679,9 +764,11 @@ const App: React.FC = () => {
           .map(follower => ({ accountId: follower.accountId, multiplier: follower.multiplier })),
         accountIdOverride: options?.accountIdOverride,
       });
+      if (!isCurrentSession()) return;
       setPendingCopierTrades(result.pending);
       if (result.created.length > 0 || result.updated.length > 0) {
         setTrades(current => {
+          if (!isCurrentSession()) return current;
           const byId = new Map(current.map(trade => [String(trade.id), trade]));
           const copierIds = new Set(current.map(trade => trade.copierTradeId).filter(Boolean));
           for (const trade of result.updated) byId.set(String(trade.id), trade);
@@ -697,10 +784,12 @@ const App: React.FC = () => {
       // Throttle se musí posunout i po chybě. Dřív seděl uvnitř `try` za
       // awaitem, takže neúspěšný sync ho nechal na staré hodnotě a
       // dvousekundový poll pak spouštěl tentýž plný fetch pořád dokola.
-      copierJournalLastSyncRef.current = now;
-      copierJournalSyncBusyRef.current = false;
+      if (isCurrentSession()) {
+        copierJournalLastSyncRef.current = now;
+        copierJournalSyncBusyRef.current = false;
+      }
     }
-  }, [accounts, session?.user?.id]);
+  }, [accounts, session?.user?.id, captureSessionRequest]);
 
   // Start po přihlášení: použij poslední webovou konfiguraci skupiny. LIVE
   // stránka níže dodá autoritativní runtime group při každém svém refreshi.
@@ -738,7 +827,7 @@ const App: React.FC = () => {
   // Home/Lock Screen widgety používají poslední potvrzený snapshot skutečných
   // journal dat. Výchozí placeholder se nikdy nezapíše do App Group.
   useEffect(() => {
-    if (!isUserFromDb || currentUser.id === 'default_user') return;
+    if (!isUserFromDb || currentUser.id === 'default_user' || sessionRef.current?.user.id !== currentUser.id || logoutInProgressRef.current) return;
     const state = buildNativeJournalWidgetState({ trades, accounts });
     void syncNativeJournalWidgetSnapshot(state);
   }, [accounts, currentUser.id, isUserFromDb, trades]);
@@ -746,7 +835,7 @@ const App: React.FC = () => {
   // Persist celý user objekt do localStorage při každé změně z DB — další reload pak má
   // instant rendering (žádný flash avatara/jména/role). Cache klíč per-user.
   useEffect(() => {
-    if (isUserFromDb && currentUser.id !== 'default_user') {
+    if (isUserFromDb && currentUser.id !== 'default_user' && sessionRef.current?.user.id === currentUser.id && !logoutInProgressRef.current) {
       try {
         localStorage.setItem(`alphatrade_user_cache_${currentUser.id}`, JSON.stringify(currentUser));
       } catch { /* localStorage full nebo blocked */ }
@@ -767,6 +856,7 @@ const App: React.FC = () => {
   const [userMistakes, setUserMistakes] = useState<string[]>(['Early Exit', 'Chase', 'No Stop Loss', 'Overrisking', 'Impulsive Entry']);
   const [htfOptions, setHtfOptions] = useState<string[]>(['4H Demand', '4H Supply', 'Daily Level', 'Weekly High/Low']);
   const [ltfOptions, setLtfOptions] = useState<string[]>(['M5 BoS', 'M1 Choch', 'Liquidity Sweep', 'FVG Entry']);
+  const backtestTagSuggestions = useMemo(() => collectBacktestTagSuggestions(trades, { htf: htfOptions, ltf: ltfOptions }), [trades, htfOptions, ltfOptions]);
   const [standardGoals, setStandardGoals] = useState<string[]>(['Dodržet max risk 1%', 'Žádný obchod po 11:00', 'Počkat na setup A+']);
   // Init `{}` ne DEFAULT_LAYOUTS — zabraní flashe defaultních widgetů před DB loadem.
   // applyPreferences pak nastaví buď DB layout nebo DEFAULT_LAYOUTS (pro nového usera).
@@ -895,17 +985,36 @@ const App: React.FC = () => {
     }
 
     let cancelled = false;
+    const isCurrentSession = captureSessionRequest(userId);
     if (isNativeShell()) {
-      void initializeNativeLiveActivityPush(userId);
-      void initializeNativeWidgetRemote(userId);
-      void initializeNativeRemoteNotifications(userId).then(active => {
-        if (!cancelled) setIsPushActive(active);
-      });
-      return () => { cancelled = true; };
+      const refreshNative = async () => {
+        if (cancelled || logoutInProgressRef.current || !isCurrentSession()) return;
+        await waitForNativeSessionCleanup();
+        if (cancelled || logoutInProgressRef.current || !isCurrentSession()) return;
+        const [, , pushResult] = await Promise.allSettled([
+          initializeNativeLiveActivityPush(userId),
+          initializeNativeWidgetRemote(userId),
+          initializeNativeRemoteNotifications(userId),
+        ]);
+        if (!cancelled && !logoutInProgressRef.current && isCurrentSession()) setIsPushActive(pushResult.status === 'fulfilled' && pushResult.value);
+      };
+      const onVisible = () => { if (document.visibilityState === 'visible') void refreshNative(); };
+      const onOnline = () => { void refreshNative(); };
+      void refreshNative();
+      document.addEventListener('visibilitychange', onVisible);
+      window.addEventListener('online', onOnline);
+      window.addEventListener('alphatrade:native-push-retry', onOnline);
+      return () => {
+        cancelled = true;
+        document.removeEventListener('visibilitychange', onVisible);
+        window.removeEventListener('online', onOnline);
+        window.removeEventListener('alphatrade:native-push-retry', onOnline);
+      };
     }
     const check = () => {
+      if (cancelled || logoutInProgressRef.current || !isCurrentSession()) return;
       syncPushSubscription().then(active => {
-        if (!cancelled) setIsPushActive(active);
+        if (!cancelled && !logoutInProgressRef.current && isCurrentSession()) setIsPushActive(active);
       });
     };
 
@@ -916,19 +1025,22 @@ const App: React.FC = () => {
       cancelled = true;
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [session?.user?.id]);
+  }, [session?.user?.id, captureSessionRequest]);
 
   useEffect(() => {
+    if (!session?.user.id || !isInitialLoadDone) return;
+    const isCurrentSession = captureSessionRequest(session.user.id);
     // Push aktivní → alerty doručuje cron (a dojdou i při zavřené appce).
     // Lokální notifikace by je jen zdvojily, takže se v tom případě přeskočí.
     // Když push aktivní není (nepovolený, nebo iOS bez PWA na ploše), zůstávají
     // jediným kanálem — proto se nemažou.
     const notifyLocal = (title: string, body: string, icon?: string) => {
-      if (isPushActive) return;
+      if (!isCurrentSession() || isPushActive || isNativeShell()) return;
       sendLocalNotification(title, body, icon);
     };
 
     const checkGuardian = () => {
+      if (!isCurrentSession()) return;
       const state = getGuardianState(systemSettings, sessions, dailyPreps, dailyReviews);
       setGuardian(state);
 
@@ -997,10 +1109,10 @@ const App: React.FC = () => {
     const timer = setInterval(checkGuardian, 30000);
     checkGuardian();
     return () => clearInterval(timer);
-  }, [systemSettings, sessions, dailyPreps, dailyReviews, isInitialLoadDone, isPushActive]);
+  }, [systemSettings, sessions, dailyPreps, dailyReviews, isInitialLoadDone, isPushActive, session?.user.id, captureSessionRequest]);
 
   useEffect(() => {
-    if (!isNativeShell() || !isInitialLoadDone || !session?.user?.id) return;
+    if (!isNativeShell() || !isInitialLoadDone || !session?.user?.id || logoutInProgressRef.current || sessionRef.current?.user.id !== session.user.id) return;
     void syncNativeSessionReminders(sessions, systemSettings).catch(error => {
       console.warn('[Native reminders] Sync failed:', error instanceof Error ? error.message : error);
     });
@@ -1398,6 +1510,150 @@ const App: React.FC = () => {
   const lastLoadedSessionId = React.useRef<string | null>(null);
   const [loadedUserId, setLoadedUserId] = useState<string | null>(null);
 
+  const [journalSyncState, setJournalSyncState] = useState<{ pending: number; error: string | null }>({ pending: 0, error: null });
+  useEffect(() => {
+    if (activeBacktestRun && getBacktestRunOwnerId(activeBacktestRun) !== session?.user?.id) setActiveBacktestRun(null);
+  }, [activeBacktestRun, session?.user?.id]);
+  const backtestJournalOwnerRef = useRef<string | null>(null);
+  backtestJournalOwnerRef.current = loadedUserId === session?.user?.id ? loadedUserId : null;
+  const backtestJournalBusyRef = useRef<string | null>(null);
+  const flushBacktestJournal = useCallback(async () => {
+    const owner = backtestJournalOwnerRef.current;
+    if (!owner || backtestJournalBusyRef.current === owner) return;
+    backtestJournalBusyRef.current = owner;
+    const confirmed = new Map<string, Trade>();
+    const assertOwner = async (expected: string) => {
+      if (backtestJournalOwnerRef.current !== expected || await getUserId() !== expected) throw new Error('Přihlášený uživatel se změnil.');
+    };
+    const mergeConfirmed = () => {
+      if (backtestJournalOwnerRef.current !== owner || !confirmed.size) return;
+      setTrades(current => {
+        if (backtestJournalOwnerRef.current !== owner) return current;
+        const existing = new Set(current.map(trade => String(trade.id)));
+        // The current UI can already contain a newer review from Realtime.
+        // Reconciliation adds missing rows; it never replaces existing edits.
+        const added = [...confirmed.values()].filter(trade => !existing.has(String(trade.id)));
+        return added.length ? [...current, ...added] : current;
+      });
+    };
+    try {
+      await assertOwner(owner);
+      const result = await flushBacktestTradeOutbox({
+        findExistingIds: async (ids, expectedUserId) => {
+          const found: string[] = [];
+          for (let offset = 0; offset < ids.length; offset += 100) {
+            await assertOwner(expectedUserId);
+            const { data, error } = await supabase.from('trades').select('*')
+              .eq('user_id', expectedUserId).in('id', ids.slice(offset, offset + 100));
+            if (error) throw error;
+            await assertOwner(expectedUserId);
+            for (const row of data ?? []) {
+              found.push(String(row.id));
+              confirmed.set(String(row.id), {
+                ...row.data, id: row.id, accountId: row.account_id, instrument: row.instrument,
+                pnl: row.pnl, direction: row.direction, date: row.date, timestamp: row.timestamp,
+                signal: row.signal, drawings: row.drawings,
+              } as Trade);
+            }
+          }
+          return found;
+        },
+        saveTrades: async (items, expectedUserId) => {
+          await assertOwner(expectedUserId);
+          const saved = await storageService.saveTrades(items, { insertOnly: true });
+          await assertOwner(expectedUserId);
+          saved.forEach(trade => confirmed.set(String(trade.id), trade));
+          return saved;
+        },
+      });
+      await assertOwner(owner);
+      mergeConfirmed();
+      setJournalSyncState({ pending: result.pendingCount, error: null });
+      setSyncError(previous => previous?.startsWith('Backtest obchody čekají na uložení;') ? null : previous);
+    } catch (reason) {
+      if (backtestJournalOwnerRef.current !== owner || await getUserId() !== owner) return;
+      if (reason instanceof BacktestTradeOutboxError) reason.result.savedTrades.forEach(trade => confirmed.set(String(trade.id), trade));
+      mergeConfirmed();
+      let pending = reason instanceof BacktestTradeOutboxError ? reason.result.pendingCount : 0;
+      if (!(reason instanceof BacktestTradeOutboxError)) {
+        try { pending = (await getPendingBacktestTrades()).length; } catch { /* The error below also reports an unavailable local store. */ }
+      }
+      const message = reason instanceof Error ? reason.message : 'Backtest obchody čekají na uložení; další pokus proběhne automaticky.';
+      setJournalSyncState({ pending, error: message });
+      setSyncError(message);
+    } finally {
+      if (backtestJournalBusyRef.current === owner) backtestJournalBusyRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isInitialLoadDone || !loadedUserId || loadedUserId !== session?.user?.id) {
+      setJournalSyncState({ pending: 0, error: null });
+      return;
+    }
+    void flushBacktestJournal();
+    const timer = window.setInterval(() => void flushBacktestJournal(), 5_000);
+    const retry = () => void flushBacktestJournal();
+    window.addEventListener('online', retry);
+    return () => { window.clearInterval(timer); window.removeEventListener('online', retry); };
+  }, [flushBacktestJournal, isInitialLoadDone, loadedUserId, session?.user?.id]);
+
+  const handleBacktestTradeClosed = useCallback(async (trade: Trade): Promise<void> => {
+    const owner = backtestJournalOwnerRef.current;
+    if (!owner) throw new Error('Pro uložení backtest obchodu se přihlas.');
+    if (!activeBacktestRun || getBacktestRunOwnerId(activeBacktestRun) !== owner || trade.backtestRunId !== activeBacktestRun.id) {
+      throw new Error('Replay session nepatří aktuálně přihlášenému uživateli.');
+    }
+    await enqueueBacktestTrade(trade, owner);
+    if (backtestJournalOwnerRef.current === owner) {
+      const pending = (await getPendingBacktestTrades()).length;
+      setJournalSyncState(current => ({ ...current, pending }));
+      void flushBacktestJournal();
+    }
+  }, [activeBacktestRun, flushBacktestJournal]);
+
+  const [analyticsSyncState, setAnalyticsSyncState] = useState<{ pending: number; error: string | null }>({ pending: 0, error: null });
+  const flushAnalytics = useCallback(async () => {
+    const owner = backtestJournalOwnerRef.current;
+    if (!owner) return;
+    try {
+      const result = await flushBacktestAnalytics(storageService);
+      if (backtestJournalOwnerRef.current !== owner || await getUserId() !== owner) return;
+      setAnalyticsSyncState({ pending: result.pendingCount, error: result.error });
+      if (result.confirmed.length) setTrades(previous => {
+        if (backtestJournalOwnerRef.current !== owner) return previous;
+        const confirmed = new Map(result.confirmed.map(item => [item.tradeId, item]));
+        return previous.map(trade => {
+          const item = confirmed.get(String(trade.id));
+          if (!item || item.runId !== trade.backtestRunId || item.recalculated.accountId !== trade.accountId) return trade;
+          return { ...trade, ...buildBacktestTradeRecalculationUpdates(trade, item.recalculated), backtestAnalyticsRefresh: item.stamp };
+        });
+      });
+    } catch (reason) {
+      if (backtestJournalOwnerRef.current === owner) setAnalyticsSyncState(previous => ({ ...previous,
+        error: reason instanceof Error ? reason.message : 'Dopočet analýz čeká na uložení.' }));
+    }
+  }, []);
+  useEffect(() => {
+    if (!isInitialLoadDone || !loadedUserId || loadedUserId !== session?.user?.id) {
+      setAnalyticsSyncState({ pending: 0, error: null }); return;
+    }
+    void flushAnalytics();
+    const timer = window.setInterval(() => void flushAnalytics(), 5_000);
+    const retry = () => void flushAnalytics();
+    window.addEventListener('online', retry);
+    return () => { window.clearInterval(timer); window.removeEventListener('online', retry); };
+  }, [flushAnalytics, isInitialLoadDone, loadedUserId, session?.user?.id]);
+  const handleBacktestAnalyticsRefresh = useCallback(async (candidates: BacktestAnalyticsRefreshCandidate[]) => {
+    const owner = backtestJournalOwnerRef.current;
+    if (!owner || !activeBacktestRun || getBacktestRunOwnerId(activeBacktestRun) !== owner
+      || candidates.some(item => item.runId !== activeBacktestRun.id || item.recalculated.accountId !== activeBacktestRun.accountId)) {
+      throw new Error('Analýza nepatří aktuální replay session.');
+    }
+    await enqueueBacktestAnalytics(candidates, owner);
+    void flushAnalytics();
+  }, [activeBacktestRun, flushAnalytics]);
+
   // Track in-flight saves + pending queue to prevent race conditions
   const savingPrepDate = useRef<string | null>(null);
   const savingReviewDate = useRef<string | null>(null);
@@ -1492,6 +1748,8 @@ const App: React.FC = () => {
   }, [saveWithRetry]);
 
   const applyPreferences = useCallback((prefs: Partial<UserPreferences>) => {
+    const isCurrentSession = captureSessionRequest(sessionRef.current?.user.id ?? '');
+    if (!isCurrentSession()) return;
     isApplyingPrefsRef.current = true;
     
     // DIAGNOSTIC: track what fields are present in incoming prefs
@@ -1600,9 +1858,9 @@ const App: React.FC = () => {
     
     // Zámek uvolníme až po dokončení re-renderů a inicializace v Reactu (zabraňuje samovolnému znečištění refs)
     setTimeout(() => {
-      isApplyingPrefsRef.current = false;
+      if (isCurrentSession()) isApplyingPrefsRef.current = false;
     }, 1500);
-  }, []);
+  }, [captureSessionRequest]);
 
   const [filters, setFilters] = useState<TradeFilters>({
     days: ['Po', 'Út', 'St', 'Čt', 'Pá'],
@@ -1628,8 +1886,10 @@ const App: React.FC = () => {
     if (sharedTrade) return;
     if (!session) return;
 
+    // Capture before the cache await; logout/login can happen while IndexedDB is busy.
+    const isCurrentSession = captureSessionRequest(session.user.id);
     const load = async () => {
-      if (isFetchingRef.current) return;
+      if (!isCurrentSession() || isFetchingRef.current) return;
 
       // Avoid redundant loads if the session is the same
       if (session?.user?.id === lastLoadedSessionId.current && isInitialLoadDone) {
@@ -1643,7 +1903,7 @@ const App: React.FC = () => {
 
       // Safety timeout in case everything hangs
       const safetyTimer = setTimeout(() => {
-        if (loading && !isInitialLoadDone) {
+        if (isCurrentSession() && loading && !isInitialLoadDone) {
           console.warn("[Load] Safety timeout reached. Forcing dashboard display.");
           setLoading(false);
           setIsInitialLoadDone(true);
@@ -1668,7 +1928,11 @@ const App: React.FC = () => {
       safeSetItem('alphatrade_last_session_user', session.user.id);
 
       // --- CACHE-FIRST LOADING: Instant from IndexedDB, then background refresh ---
-      const cached = await storageService.getCachedDashboardData(session.user.id);
+      const cached = await storageService.getCachedDashboardData(session.user.id).catch(() => null);
+      if (!isCurrentSession()) {
+        clearTimeout(safetyTimer);
+        return;
+      }
 
       // Načteme preferences z IndexedDB cache ihned při startu (i když jsou starší než 24h),
       // abychom zabránili probliknutí výchozího nastavení. DB reload na pozadí je tiše přepíše, pokud se liší.
@@ -1706,20 +1970,12 @@ const App: React.FC = () => {
         // obrázků ~desítky MB na každé otevření) — načte si je až TradeHistory při mountu.
         storageService.getConversations().catch(() => { /* silent */ });
 
-        // Background refresh — silently sync with server, only update if data actually changed
-        // Fingerprint checks both count AND content (catches edits without add/delete)
-        const fingerprintTrades = (t: Trade[]) => t.map(x => `${x.id}:${x.pnl}:${x.timestamp}`).join('|');
-        const fingerprintSimple = (arr: any[]) => arr.map(x => x.id ?? x.date).join('|');
+        // Refresh complete contents, including edits that preserve row identity.
         storageService.getDashboardData().then(fresh => {
-          setTrades(prev =>
-            fingerprintTrades(fresh.trades) !== fingerprintTrades(prev) ? (fresh.trades || []) : prev
-          );
-          if (fresh.accounts && fresh.accounts.length > 0) {
-            setAccounts(prev =>
-              fingerprintSimple(fresh.accounts) !== fingerprintSimple(prev) ? fresh.accounts : prev
-            );
-          }
-          if (fresh.user) { setCurrentUser(fresh.user); setIsUserFromDb(true); }
+          if (!isCurrentSession()) return;
+          setTrades(prev => reconcileDashboardRows(prev, fresh.trades));
+          setAccounts(prev => reconcileDashboardRows(prev, fresh.accounts));
+          if (fresh.user?.id === session.user.id) { setCurrentUser(fresh.user); setIsUserFromDb(true); }
           if (fresh.preferences) {
             console.log('[BG-Refresh] received fresh prefs, dirty=', isPreferencesDirty.current, 'fields:', {
               sessions: fresh.preferences.sessions?.length,
@@ -1731,18 +1987,13 @@ const App: React.FC = () => {
             console.log('[BG-Refresh] received null/empty fresh prefs, dirty=', isPreferencesDirty.current);
             if (!isPreferencesDirty.current) applyPreferences({});
           }
-          setDailyPreps(prev =>
-            fingerprintSimple(fresh.preps) !== fingerprintSimple(prev) ? (fresh.preps || []) : prev
-          );
-          setDailyReviews(prev =>
-            fingerprintSimple(fresh.reviews) !== fingerprintSimple(prev) ? (fresh.reviews || []) : prev
-          );
-          setWeeklyFocusList(prev =>
-            fingerprintSimple(fresh.weeklyFocus) !== fingerprintSimple(prev) ? (fresh.weeklyFocus || []) : prev
-          );
+          setDailyPreps(prev => reconcileDashboardRows(prev, fresh.preps, isPrepsDirty.current));
+          setDailyReviews(prev => reconcileDashboardRows(prev, fresh.reviews, isReviewsDirty.current));
+          setWeeklyFocusList(prev => reconcileDashboardRows(prev, fresh.weeklyFocus, isWeeklyFocusDirty.current));
           setOfflineSnapshotAt(null);
           isSyncedWithDbRef.current = true; // Mark as synced
         }).catch(err => {
+          if (!isCurrentSession()) return;
           console.warn('[Load] Background refresh failed:', err);
           setOfflineSnapshotAt(cached.cachedAt || -1);
           isSyncedWithDbRef.current = true; // Fallback
@@ -1770,6 +2021,7 @@ const App: React.FC = () => {
             new Promise<never>((_, rej) => setTimeout(() => rej(new Error('RPC timeout')), 15000))
           ]);
 
+          if (!isCurrentSession()) return;
           dbTrades = result.trades;
           dbAccounts = result.accounts;
           dbPreps = result.preps;
@@ -1778,8 +2030,10 @@ const App: React.FC = () => {
           dbUser = result.user;
           dbWeeklyFocus = result.weeklyFocus;
         } catch (rpcErr) {
+          if (!isCurrentSession()) return;
           console.warn('[Load] RPC failed, falling back to parallel queries:', rpcErr);
           await getUserId();
+          if (!isCurrentSession()) return;
           const fb = async <T,>(n: string, fn: () => Promise<T>, d: T): Promise<T> => {
             try {
               return await Promise.race([fn(), new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`${n} timeout`)), 15000))]);
@@ -1797,6 +2051,7 @@ const App: React.FC = () => {
         }
 
 
+        if (!isCurrentSession()) return;
         // OCHRANA: nepřepisuj prázdným polem pokud RPC selhal a fb fallback vrátil [].
         // Bez tohoto cache z předchozí session zmizí při dočasné chybě sítě.
         setTrades(prev => (dbTrades && dbTrades.length > 0) ? dbTrades : (prev.length > 0 ? prev : []));
@@ -1810,7 +2065,7 @@ const App: React.FC = () => {
           setActiveAccountId(DEFAULT_ACCOUNT.id);
         }
 
-        if (dbUser) { setCurrentUser(dbUser); setIsUserFromDb(true); }
+        if (dbUser?.id === session.user.id) { setCurrentUser(dbUser); setIsUserFromDb(true); }
         if (dbPrefs) {
           applyPreferences(dbPrefs);
         } else {
@@ -1828,6 +2083,7 @@ const App: React.FC = () => {
 
         // Deferred: cleanup legacy localStorage data (not blocking initial render)
         setTimeout(() => {
+          if (!isCurrentSession()) return;
           const legacyKeys = Object.keys(localStorage).filter(k =>
             k.includes('alphatrade_trades') ||
             k.includes('alphatrade_daily_preps') ||
@@ -1838,13 +2094,14 @@ const App: React.FC = () => {
         }, 0);
 
       } catch (error: any) {
+        if (!isCurrentSession()) return;
         console.error("[Load] Server fetch error:", error);
         setAppError(error.message || "Nepodařilo se načíst data ze serveru");
         setLoading(false);
         setIsInitialLoadDone(true);
         isSyncedWithDbRef.current = true; // Fallback
       } finally {
-        isFetchingRef.current = false;
+        if (isCurrentSession()) isFetchingRef.current = false;
         clearTimeout(safetyTimer);
       }
     };
@@ -1864,7 +2121,7 @@ const App: React.FC = () => {
     }
     // Full server load is keyed only by identity/share mode; adding loaded state would refetch-loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sharedTrade, session]);
+  }, [sharedTrade, session, captureSessionRequest]);
 
   // Realtime channel ref for cleanup
   const realtimeChannelRef = useRef<any>(null);
@@ -1872,9 +2129,11 @@ const App: React.FC = () => {
   // START REALTIME SYNC - Delayed until after initial load to prevent WebSocket blocking REST API
   useEffect(() => {
     if (!session || !isInitialLoadDone) return;
+    const isCurrentSession = captureSessionRequest(session.user.id);
 
     // Delay Realtime subscription to avoid WebSocket connection attempts blocking initial REST calls
     const realtimeTimer = setTimeout(() => {
+      if (!isCurrentSession()) return;
 
       const tradesChannel = supabase
         .channel('public:trades')
@@ -1887,6 +2146,7 @@ const App: React.FC = () => {
             filter: `user_id=eq.${session.user.id}`
           },
           async (payload) => {
+            if (!isCurrentSession()) return;
 
             // Helper: parse raw DB row into Trade (same mapping as getTradeById)
             const parseRealtimeTrade = (raw: any): Trade => ({
@@ -1907,6 +2167,7 @@ const App: React.FC = () => {
               const fullTrade = parseRealtimeTrade(payload.new);
               let isNew = false;
               setTrades(prev => {
+                if (!isCurrentSession()) return prev;
                 if (prev.some(t => t.id === fullTrade.id)) return prev;
                 isNew = true;
                 return [fullTrade, ...prev].sort((a, b) => b.timestamp - a.timestamp);
@@ -1916,12 +2177,13 @@ const App: React.FC = () => {
 
               // Refresh accounts so balance/stats stay current after new trade
               storageService.getAccounts().then(freshAccounts => {
-                if (freshAccounts.length > 0) setAccounts(freshAccounts);
+                if (isCurrentSession() && freshAccounts.length > 0) setAccounts(freshAccounts);
               }).catch(() => {});
 
               try {
                 const { addTradeToCache } = await import('./services/cacheHelper');
-                await addTradeToCache(fullTrade);
+                if (!isCurrentSession()) return;
+                await addTradeToCache(fullTrade, session.user.id, isCurrentSession);
               } catch (err) {
                 console.error('[Realtime] Failed to update cache:', err);
               }
@@ -1933,10 +2195,10 @@ const App: React.FC = () => {
               const hasFullPayload = raw && raw.account_id && raw.data && typeof raw.data === 'object';
               if (hasFullPayload) {
                 const fullTrade = parseRealtimeTrade(raw);
-                setTrades(prev => prev.map(t => t.id === fullTrade.id ? fullTrade : t));
+                setTrades(prev => !isCurrentSession() ? prev : prev.map(t => t.id === fullTrade.id ? fullTrade : t));
               } else {
                 // Částečný payload — mergni jen pole co dorazila do existujícího trade
-                setTrades(prev => prev.map(t => {
+                setTrades(prev => !isCurrentSession() ? prev : prev.map(t => {
                   if (t.id !== raw?.id) return t;
                   const partial: any = {};
                   if (raw.account_id) partial.accountId = raw.account_id;
@@ -1950,7 +2212,7 @@ const App: React.FC = () => {
                 }));
               }
             } else if (payload.eventType === 'DELETE') {
-              setTrades(prev => prev.filter(t => t.id !== payload.old.id));
+              setTrades(prev => !isCurrentSession() ? prev : prev.filter(t => t.id !== payload.old.id));
             }
           }
         )
@@ -1970,16 +2232,17 @@ const App: React.FC = () => {
         realtimeChannelRef.current = null;
       }
     };
-  }, [session, isInitialLoadDone]);
+  }, [session, isInitialLoadDone, captureSessionRequest]);
 
   // Cross-tab synchronization for preferences
   // When user edits business data in Tab A, Tab B will auto-sync
   useEffect(() => {
     if (!session) return;
+    const isCurrentSession = captureSessionRequest(session.user.id);
 
     const handleStorageChange = async (e: StorageEvent) => {
       // Only react to preferences changes
-      if (!e.key?.includes('alphatrade_preferences_')) return;
+      if (!isCurrentSession() || e.key !== `alphatrade_preferences_${session.user.id}`) return;
 
       // Ignore if we're currently editing (dirty state)
       if (isPreferencesDirty.current) {
@@ -1988,9 +2251,10 @@ const App: React.FC = () => {
 
       // Debounce to avoid multiple rapid syncs
       setTimeout(async () => {
+        if (!isCurrentSession() || isPreferencesDirty.current) return;
         try {
           const freshPrefs = await storageService.getPreferences();
-          if (freshPrefs) {
+          if (isCurrentSession() && !isPreferencesDirty.current && freshPrefs) {
             applyPreferences(freshPrefs);
           }
         } catch (err) {
@@ -2001,7 +2265,7 @@ const App: React.FC = () => {
 
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
-  }, [session, applyPreferences]);
+  }, [session, applyPreferences, captureSessionRequest]);
 
   // --- AUTO-TRIGGER: Daily Start Ritual ---
   // Pokud user nemá prep pro dnešek + je obchodní den + jsme v okně 6-12 PRG, otevři modal.
@@ -2086,12 +2350,15 @@ const App: React.FC = () => {
     // Combined ("Vše") na dashboardu chce zahrnout i archivované obchody → musíme načíst.
     const needsArchived = (dashboardMode === 'archive' || dashboardMode === 'combined' || activePage === 'accounts' || activePage === 'history' || activePage === 'journal' || activePage === 'ai' || activePage === 'lab' || activePage === 'business');
     if (needsArchived && session && !isArchivedLoaded) {
+      const isCurrentSession = captureSessionRequest(session.user.id);
+      if (!isCurrentSession()) return;
       storageService.getArchivedAccounts().then(archived => {
+        if (!isCurrentSession()) return;
         setArchivedAccounts(archived || []);
         setIsArchivedLoaded(true);
       }).catch(err => console.error("[LazyLoad] Failed to load archived accounts:", err));
     }
-  }, [dashboardMode, activePage, session, isArchivedLoaded]);
+  }, [dashboardMode, activePage, session, isArchivedLoaded, captureSessionRequest]);
 
   // --- LAZY LOADING: Lab experimenty (vlastní tabulka, zdroj pravdy) ---
   const [isLabExpLoaded, setIsLabExpLoaded] = useState(false);
@@ -2099,13 +2366,17 @@ const App: React.FC = () => {
     // Coach needs the same experiment state as Lab so it can avoid duplicates,
     // report progress and create a new measured experiment safely.
     if ((activePage !== 'lab' && activePage !== 'ai') || !session || isLabExpLoaded) return;
+    const isCurrentSession = captureSessionRequest(session.user.id);
+    if (!isCurrentSession()) return;
     setIsLabExpLoaded(true);
     storageService.getLabExperiments().then(rows => {
+      if (!isCurrentSession()) return;
       if (rows.length > 0) {
         setLabExperiments(rows);
       } else {
         // Jednorázová migrace legacy dat z preferences blobu do tabulky.
         setLabExperiments(prev => {
+          if (!isCurrentSession()) return prev;
           if (prev.length > 0) {
             prev.forEach(e => storageService.upsertLabExperiment(e).catch(() => {}));
           }
@@ -2113,10 +2384,11 @@ const App: React.FC = () => {
         });
       }
     }).catch(err => {
+      if (!isCurrentSession()) return;
       console.error('[Lab] load experiments failed:', err);
       setIsLabExpLoaded(false); // retry při příštím otevření
     });
-  }, [activePage, session, isLabExpLoaded]);
+  }, [activePage, session, isLabExpLoaded, captureSessionRequest]);
 
   // Metadata affects account balances, so cached payouts stay immediately
   // available. Only their background refresh on Dashboard may be deferred.
@@ -2127,6 +2399,7 @@ const App: React.FC = () => {
   businessUserRef.current = businessUserId;
   const businessReadRef = useRef<{
     userId: string;
+    authEpoch: number;
     promise: ReturnType<typeof readBusinessMetadata>;
   } | null>(null);
 
@@ -2134,9 +2407,11 @@ const App: React.FC = () => {
     const needsBusinessData = activePage === 'business' || activePage === 'accounts' || activePage === 'dashboard';
     if (!needsBusinessData || !businessUserId || isBusinessDataLoaded) return;
     const userId = businessUserId;
+    const authEpoch = authEpochRef.current;
     let cancelled = false;
     let hasCachedPayouts = false;
-    const isCurrent = () => !cancelled && businessUserRef.current === userId;
+    const isCurrentSession = captureSessionRequest(userId);
+    const isCurrent = () => !cancelled && businessUserRef.current === userId && isCurrentSession();
 
     // Hydrating the cache does not mark the remote refresh as complete, which
     // would cancel our own delayed request on the next render.
@@ -2164,11 +2439,11 @@ const App: React.FC = () => {
     // Accounts/Business still hydrate cache and request required metadata now.
     if (activePage === 'dashboard' && deferSecondaryReads) return;
 
-    const load = () => {
+    const loadBusinessMetadata = () => {
       if (!isCurrent()) return;
       let request = businessReadRef.current;
-      if (!request || request.userId !== userId) {
-        request = { userId, promise: readBusinessMetadata() };
+      if (!request || request.userId !== userId || request.authEpoch !== authEpoch) {
+        request = { userId, authEpoch, promise: readBusinessMetadata() };
         businessReadRef.current = request;
         const clear = () => {
           if (businessReadRef.current === request) businessReadRef.current = null;
@@ -2178,10 +2453,11 @@ const App: React.FC = () => {
       void request.promise.then(([expenses, payouts, goals, resources]) => {
         if (!isCurrent()) return;
         const stableSet = <T,>(setter: React.Dispatch<React.SetStateAction<T[]>>, next: T[]) => {
-          setter(prev => businessDataFingerprint(next) === businessDataFingerprint(prev) ? prev : next);
+          setter(prev => !isCurrent() ? prev : businessDataFingerprint(next) === businessDataFingerprint(prev) ? prev : next);
         };
         stableSet(setBusinessExpenses, expenses);
         setBusinessPayouts(prev => {
+          if (!isCurrent()) return prev;
           const next = mergePayoutImages(payouts, prev);
           return businessDataFingerprint(next) === businessDataFingerprint(prev) ? prev : next;
         });
@@ -2200,18 +2476,18 @@ const App: React.FC = () => {
     // Accounts/Business and a missing payout cache must fetch immediately.
     // A navigation before the timer expires cancels this optional refresh.
     const timer = activePage === 'dashboard' && hasCachedPayouts
-      ? window.setTimeout(load, 1_500)
+      ? window.setTimeout(loadBusinessMetadata, 1_500)
       : null;
-    if (timer == null) load();
+    if (timer == null) loadBusinessMetadata();
     return () => {
       cancelled = true;
       if (timer != null) window.clearTimeout(timer);
     };
-  }, [activePage, businessUserId, deferSecondaryReads, isBusinessDataLoaded]);
+  }, [activePage, businessUserId, deferSecondaryReads, isBusinessDataLoaded, captureSessionRequest]);
 
   // Proof images are only displayed in Business Hub. Preserve the same read
   // across navigation, and invalidate it only when user or metadata changes.
-  const businessImagesKey = `${businessUserId ?? ''}:${businessDataFingerprint(businessPayouts)}`;
+  const businessImagesKey = `${businessUserId ?? ''}:${authEpochRef.current}:${businessDataFingerprint(businessPayouts)}`;
   const businessImagesKeyRef = useRef(businessImagesKey);
   businessImagesKeyRef.current = businessImagesKey;
   const businessImagesAppliedRef = useRef<string | null>(null);
@@ -2220,16 +2496,17 @@ const App: React.FC = () => {
     if (activePage !== 'business' || !businessUserId || !isBusinessDataLoaded
       || businessImagesAppliedRef.current === businessImagesKey) return;
     let cancelled = false;
+    const isCurrentSession = captureSessionRequest(businessUserId);
     let request = businessImagesReadRef.current;
     if (!request || request.key !== businessImagesKey) {
       request = { key: businessImagesKey, promise: storageService.prefetchPayoutImages() };
       businessImagesReadRef.current = request;
     }
     void request.promise.then(imageMap => {
-      if (cancelled || businessImagesKeyRef.current !== businessImagesKey) return;
+      if (cancelled || !isCurrentSession() || businessImagesKeyRef.current !== businessImagesKey) return;
       businessImagesAppliedRef.current = businessImagesKey;
       if (imageMap.size === 0) return;
-      setBusinessPayouts(prev => prev.map(payout => {
+      setBusinessPayouts(prev => !isCurrentSession() ? prev : prev.map(payout => {
         const image = imageMap.get(String(payout.id));
         return image ? { ...payout, image } : payout;
       }));
@@ -2237,15 +2514,17 @@ const App: React.FC = () => {
       if (businessImagesReadRef.current === request) businessImagesReadRef.current = null;
     });
     return () => { cancelled = true; };
-  }, [activePage, businessUserId, businessImagesKey, isBusinessDataLoaded]);
+  }, [activePage, businessUserId, businessImagesKey, isBusinessDataLoaded, captureSessionRequest]);
 
   // Cross-device sync: refresh stale data when user returns to tab after 30+ seconds
   const lastVisibleAt = useRef(Date.now());
 
   useEffect(() => {
     if (!session || !isInitialLoadDone) return;
+    const isCurrentSession = captureSessionRequest(session.user.id);
 
     const handleFocusSync = async () => {
+      if (!isCurrentSession()) return;
       if (document.visibilityState !== 'visible') {
         lastVisibleAt.current = Date.now();
         return;
@@ -2260,12 +2539,14 @@ const App: React.FC = () => {
             storageService.getDailyPreps(),
             storageService.getDailyReviews(),
           ]);
-          setDailyPreps(freshPreps || []);
-          setDailyReviews(freshReviews || []);
+          if (!isCurrentSession()) return;
+          if (!isPrepsDirty.current) setDailyPreps(freshPreps || []);
+          if (!isReviewsDirty.current) setDailyReviews(freshReviews || []);
         }
 
         if (!isPreferencesDirty.current) {
           const freshPrefs = await storageService.getPreferences();
+          if (!isCurrentSession()) return;
           if (freshPrefs) {
             console.log('[FocusSync] applying fresh prefs from DB:', {
               sessions: freshPrefs.sessions?.length,
@@ -2283,10 +2564,12 @@ const App: React.FC = () => {
         }
 
         const freshAccounts = await storageService.getAccounts();
+        if (!isCurrentSession()) return;
         if (freshAccounts?.length) setAccounts(freshAccounts);
 
         // Trades taky — záloha, kdyby Realtime websocket spadl/se nepřipojil; po návratu na tab dožene.
         const freshTrades = await storageService.getTrades();
+        if (!isCurrentSession()) return;
         if (freshTrades?.length) setTrades(freshTrades);
 
         if (isBusinessDataLoaded) {
@@ -2295,6 +2578,7 @@ const App: React.FC = () => {
             storageService.getBusinessGoals(),
             storageService.getBusinessResources(),
           ]);
+          if (!isCurrentSession()) return;
           setBusinessExpenses(expenses || []);
           setBusinessGoals(goals || []);
           setBusinessResources(resources || []);
@@ -2307,7 +2591,7 @@ const App: React.FC = () => {
 
     document.addEventListener('visibilitychange', handleFocusSync);
     return () => document.removeEventListener('visibilitychange', handleFocusSync);
-  }, [session, isInitialLoadDone, applyPreferences, isBusinessDataLoaded]);
+  }, [session, isInitialLoadDone, applyPreferences, isBusinessDataLoaded, captureSessionRequest]);
 
   // Phase B: Startup Global Sync (Incremental) - DISABLED
   // Trade Replay was removed for performance optimization.
@@ -2329,9 +2613,12 @@ const App: React.FC = () => {
       return;
     }
     if (!sharedTrade && session && isInitialLoadDone && accounts.length > 0 && !isSyncingAccounts.current) {
+      const isCurrentSession = captureSessionRequest(session.user.id);
       const timer = setTimeout(() => {
+        if (!isCurrentSession()) return;
         isSyncingAccounts.current = true;
-        storageService.saveAccounts(accounts).then(updatedAccounts => {
+        storageService.saveAccounts(accounts, session.user.id).then(updatedAccounts => {
+          if (!isCurrentSession()) return;
           // If any accounts were just archived, remove them from active state
           const justArchived = accounts.filter(a => a.isArchived);
           if (justArchived.length > 0) {
@@ -2358,15 +2645,16 @@ const App: React.FC = () => {
           }
           setSyncError(null);
         }).catch(err => {
+          if (!isCurrentSession()) return;
           console.error("Account sync failed", err);
           setSyncError(`Chyba synchronizace účtů: ${err.message || 'Neznámá chyba'}`);
         }).finally(() => {
-          isSyncingAccounts.current = false;
+          if (isCurrentSession()) isSyncingAccounts.current = false;
         });
       }, 5000); // 5s debounce for accounts
       return () => clearTimeout(timer);
     }
-  }, [accounts, sharedTrade, session, isInitialLoadDone, activeAccountId]);
+  }, [accounts, sharedTrade, session, isInitialLoadDone, activeAccountId, captureSessionRequest]);
 
   // Security check: Ensure we don't save if there's a session mismatch or no session
   // loadedUserId mirrors lastLoadedSessionId.current as proper state so useMemo recalculates on change
@@ -2836,6 +3124,8 @@ const App: React.FC = () => {
   // Global refresh handler for Pull-to-Refresh
   const handleRefreshData = useCallback(async () => {
     if (!session) return;
+    const isCurrentSession = captureSessionRequest(session.user.id);
+    if (!isCurrentSession()) return;
 
     try {
 
@@ -2853,11 +3143,12 @@ const App: React.FC = () => {
         storageService.getBusinessResources()
       ]);
 
-      if (dbUser) { setCurrentUser(dbUser); setIsUserFromDb(true); }
+      if (!isCurrentSession()) return;
+      if (dbUser?.id === session.user.id) { setCurrentUser(dbUser); setIsUserFromDb(true); }
 
       // OCHRANA: nepřepisuj trades prázdným polem pokud DB call selhal/timeoutoval.
       // Bez tohoto bliká dashboard na 0pnl/0RR při dočasné chybě sítě nebo Supabase glitch.
-      setTrades(prev => (dbTrades && dbTrades.length > 0) ? dbTrades : prev);
+      setTrades(prev => !isCurrentSession() ? prev : (dbTrades && dbTrades.length > 0) ? dbTrades : prev);
 
       if (dbAccounts && dbAccounts.length > 0) {
         setAccounts(dbAccounts);
@@ -2865,7 +3156,7 @@ const App: React.FC = () => {
 
       if (!isPrepsDirty.current) setDailyPreps(dbPreps || []);
       if (!isReviewsDirty.current) setDailyReviews(dbReviews || []);
-      setWeeklyFocusList(dbWeeklyFocus || []);
+      if (!isWeeklyFocusDirty.current) setWeeklyFocusList(dbWeeklyFocus || []);
 
       // Refresh Business Hub data
       setBusinessPayouts(dbPayouts || []);
@@ -2881,10 +3172,11 @@ const App: React.FC = () => {
       setOfflineSnapshotAt(null);
 
     } catch (error) {
+      if (!isCurrentSession()) return;
       console.error('[Refresh] Error:', error);
       throw error; // Re-throw to show error in Pull-to-Refresh
     }
-  }, [session, isPrepsDirty, isReviewsDirty, isPreferencesDirty, applyPreferences]);
+  }, [session, isPrepsDirty, isReviewsDirty, isPreferencesDirty, applyPreferences, captureSessionRequest]);
 
   useEffect(() => {
     if (!inNativeShell) return;
@@ -3348,16 +3640,24 @@ const App: React.FC = () => {
   };
 
   const handleUpdateTrades = useCallback((updatedTrades: Trade[]) => {
-    const snapshot = trades;
-    setTrades(updatedTrades);
-    // Use per-trade updateTrade to avoid bulk saveTrades overwriting screenshot data
-    Promise.all(updatedTrades.map(t => storageService.updateTrade(t.id as string, t)))
-      
-      .catch(err => {
-        console.error("Failed to force-save trades", err);
-        setTrades(snapshot);
-        setSyncError("Nepodařilo se uložit změny obchodů.");
-      });
+    const previous = new Map(trades.map(trade => [String(trade.id), trade]));
+    const changes = updatedTrades.flatMap(trade => {
+      const before = previous.get(String(trade.id));
+      if (!before) return [];
+      const patch = changedTradeFields(before, trade);
+      return Object.keys(patch).length ? [{ id: String(trade.id), before, patch }] : [];
+    });
+    if (!changes.length) return;
+    const patches = new Map(changes.map(change => [change.id, change.patch]));
+    setTrades(current => current.map(trade => patches.has(String(trade.id)) ? { ...trade, ...patches.get(String(trade.id)) } : trade));
+    void Promise.all(changes.map(async ({ id, before, patch }) => {
+      try { await storageService.updateTrade(id, patch, before); }
+      catch (error) {
+        console.error('Failed to save trade changes', error);
+        setTrades(current => current.map(trade => String(trade.id) === id ? rollbackTradePatch(trade, before, patch) : trade));
+        setSyncError(error instanceof Error ? error.message : 'Nepodařilo se uložit změny obchodu.');
+      }
+    }));
   }, [trades]);
 
   const handleUpdateTrade = useCallback((tradeId: string | number, updates: Partial<Trade>) => {
@@ -3370,87 +3670,49 @@ const App: React.FC = () => {
     // masterovi. Dřív se stripovaly úplně → změna objemu se propsala, pnl zůstalo staré.
     if (typeof tradeId === 'string' && tradeId.startsWith('combined_')) {
       const groupId = tradeId.slice('combined_'.length);
-      const { pnl: newPnl, riskAmount: newRisk, targetAmount: newTarget, positionSize: newSize, id: _id, ...rest } = reviewedUpdates as any;
-      const safe: Partial<Trade> = { ...rest };
-      // notes v combined nesou suffix "(Kombinováno z N účtů)" — při zápisu ho odstraň.
-      if (typeof (safe as any).notes === 'string') {
-        (safe as any).notes = (safe as any).notes.replace(/\s*\(Kombinováno z \d+ účtů\)\s*$/, '').trim();
-      }
-      const hasEconomics = newPnl != null || newRisk != null || newTarget != null || newSize != null;
-      if (Object.keys(safe).length === 0 && !hasEconomics) return; // nic k propsání
-
-      const round2 = (v: number) => Math.round(v * 100) / 100;
-      let memberSnapshots: Trade[] = [];
-      const memberPayloads = new Map<string, Partial<Trade>>();
-      setTrades(prev => {
-        const members = prev.filter(t => t.groupId === groupId);
-        memberSnapshots = members.map(m => ({ ...m }));
-        const master = members.find(m => m.isMaster) || members[0];
-        // Podíl kopie na masterovi — z pnl (nejspolehlivější), fallback risk → objem → 1.
-        const factorOf = (m: Trade): number => {
-          if (!master) return 1;
-          const safeRatio = (a?: number | null, b?: number | null) =>
-            a != null && b != null && Math.abs(b) > 0.009 && Number.isFinite(a / b) ? a / b : null;
-          return safeRatio(m.pnl, master.pnl)
-            ?? safeRatio(m.riskAmount, master.riskAmount)
-            ?? safeRatio(m.positionSize, master.positionSize)
-            ?? 1;
-        };
-        memberPayloads.clear();
-        for (const m of members) {
-          const f = factorOf(m);
-          const payload: Partial<Trade> = { ...safe };
-          if (newPnl != null) payload.pnl = round2(newPnl * f);
-          if (newRisk != null) payload.riskAmount = round2(newRisk * f);
-          if (newTarget != null) payload.targetAmount = round2(newTarget * f);
-          // Kontrakty jsou celé číslo — škáluj a zaokrouhli (pnl nese přesný podíl).
-          if (newSize != null) payload.positionSize = Math.max(1, Math.round(newSize * f));
-          memberPayloads.set(String(m.id), payload);
+      const changes = combinedTradeChanges(trades.filter(trade => trade.groupId === groupId), reviewedUpdates);
+      if (!changes.length) return;
+      const patches = new Map(changes.map(change => [change.id, change.patch]));
+      setTrades(current => current.map(trade => patches.has(String(trade.id))
+        ? { ...trade, ...patches.get(String(trade.id)) } : trade));
+      void Promise.all(changes.map(async ({ id, before, patch }) => {
+        try { await storageService.updateTrade(id, patch, before); }
+        catch (error) {
+          console.error('Failed to persist combined trade update:', error);
+          setSyncError(error instanceof Error ? error.message : 'Nepodařilo se uložit změnu kopie obchodu.');
+          setTrades(current => current.map(trade => String(trade.id) === id
+            ? rollbackTradePatch(trade, before, patch) : trade));
         }
-        return prev.map(t => {
-          const p = memberPayloads.get(String(t.id));
-          return p ? { ...t, ...p } : t;
-        });
-      });
-      const persistable = Array.from(memberPayloads.keys()).filter(id => id.includes('-'));
-      Promise.all(persistable.map(id => storageService.updateTrade(id, memberPayloads.get(id)!))).catch(err => {
-        console.error("Failed to persist combined trade update:", err);
-        setSyncError("Nepodařilo se uložit změny obchodu. Změny byly vráceny zpět.");
-        setTrades(prev => prev.map(t => memberSnapshots.find(s => s.id === t.id) || t));
-      });
+      }));
       return;
     }
 
-    // Snapshot stavu před optimistickou aktualizací pro případ rollbacku
-    let snapshot: Trade | undefined;
-    setTrades(prev => {
-      snapshot = prev.find(t => t.id === tradeId);
-      return prev.map(t => t.id === tradeId ? { ...t, ...reviewedUpdates } : t);
-    });
-
-    // Persist only the changed trade to DB (not ALL trades — prevents screenshot data loss)
+    const snapshot = trades.find(trade => trade.id === tradeId);
+    if (!snapshot) return;
+    const patch = changedTradeFields(snapshot, reviewedUpdates);
+    if (!Object.keys(patch).length) return;
+    setTrades(current => current.map(trade => trade.id === tradeId ? { ...trade, ...patch } : trade));
     if (typeof tradeId === 'string' && tradeId.includes('-')) {
-      storageService.updateTrade(tradeId, reviewedUpdates).catch(err => {
-        console.error("Failed to persist trade update:", err);
-        setSyncError("Nepodařilo se uložit změny obchodu. Změny byly vráceny zpět.");
-        // Rollback optimistické aktualizace — vrať původní data
-        if (snapshot) {
-          setTrades(prev => prev.map(t => t.id === tradeId ? snapshot! : t));
-        }
+      void storageService.updateTrade(tradeId, patch, snapshot).catch(error => {
+        console.error('Failed to persist trade update:', error);
+        setSyncError(error instanceof Error ? error.message : 'Nepodařilo se uložit změny obchodu.');
+        setTrades(current => current.map(trade => trade.id === tradeId ? rollbackTradePatch(trade, snapshot, patch) : trade));
       });
     }
-  }, []);
+  }, [trades]);
 
   const handleBacktestTradeReviewSave = useCallback(async (
     tradeId: string,
     updates: Partial<Trade>,
     snapshotDataUrl?: string,
+    expected?: Partial<Trade>,
   ) => {
     const payload = await persistBacktestTradeReview(
       storageService,
       tradeId,
       updates,
       snapshotDataUrl,
+      expected,
     );
     setTrades(current => current.map(trade => (
       String(trade.id) === tradeId ? { ...trade, ...payload } : trade
@@ -3571,6 +3833,8 @@ const App: React.FC = () => {
   const isUUID = (id: any) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
   const handleUpdateExpenses = useCallback(async (newExpenses: BusinessExpense[]) => {
+    const isCurrentSession = captureSessionRequest(session?.user.id ?? '');
+    if (!isCurrentSession()) return;
     const prev = businessExpenses;
     setBusinessExpenses(newExpenses);
 
@@ -3586,28 +3850,36 @@ const App: React.FC = () => {
       });
 
       for (const exp of added) {
+        if (!isCurrentSession()) return;
         await storageService.saveBusinessExpense(exp);
       }
       for (const exp of removed) {
+        if (!isCurrentSession()) return;
         if (isUUID(exp.id)) await storageService.deleteBusinessExpense(exp.id);
       }
       for (const exp of updated) {
+        if (!isCurrentSession()) return;
         if (isUUID(exp.id)) await storageService.updateBusinessExpense(exp.id, exp);
       }
 
       // Reload from DB to get proper UUIDs for newly added items
       if (added.length > 0) {
+        if (!isCurrentSession()) return;
         const fresh = await storageService.getBusinessExpenses();
+        if (!isCurrentSession()) return;
         setBusinessExpenses(fresh);
       }
     } catch (err) {
+      if (!isCurrentSession()) return;
       console.error('[BusinessHub] Failed to sync expenses:', err);
       setBusinessExpenses(prev); // Rollback on failure
       setSyncError("Nepodařilo se uložit výdaje.");
     }
-  }, [businessExpenses]);
+  }, [businessExpenses, session?.user.id, captureSessionRequest]);
 
   const handleUpdatePayouts = useCallback(async (newPayouts: BusinessPayout[]) => {
+    const isCurrentSession = captureSessionRequest(session?.user.id ?? '');
+    if (!isCurrentSession()) return false;
     const prev = businessPayouts;
     setBusinessPayouts(newPayouts);
 
@@ -3634,17 +3906,22 @@ const App: React.FC = () => {
       });
 
       for (const p of added) {
+        if (!isCurrentSession()) return false;
         await storageService.saveBusinessPayout(p);
       }
       for (const p of removed) {
+        if (!isCurrentSession()) return false;
         if (isUUID(p.id)) await storageService.deleteBusinessPayout(p.id);
       }
       for (const p of updated) {
+        if (!isCurrentSession()) return false;
         if (isUUID(p.id)) await storageService.updateBusinessPayout(p.id, p);
       }
 
       if (added.length > 0 || updated.length > 0 || removed.length > 0) {
+        if (!isCurrentSession()) return false;
         const fresh = await storageService.getBusinessPayouts();
+        if (!isCurrentSession()) return false;
         // Kanonický stav vždy znovu načti i po EDITACI/SMAZÁNÍ, ne jen po insertu.
         // Cache ukládá metadata bez obrázků; screenshoty se doplní z lokálního stavu.
         setBusinessPayouts(mergePayoutImages(fresh, newPayouts));
@@ -3652,16 +3929,20 @@ const App: React.FC = () => {
           safeSetItem(`alphatrade_biz_payouts_${session.user.id}`, JSON.stringify(stripPayoutImagesForCache(fresh)));
         }
       }
+      if (!isCurrentSession()) return false;
       return true;
     } catch (err) {
+      if (!isCurrentSession()) return false;
       console.error('[BusinessHub] Failed to sync payouts:', err);
       setBusinessPayouts(prev); // Rollback on failure
       setSyncError("Nepodařilo se uložit výplaty.");
       return false;
     }
-  }, [businessPayouts, session]);
+  }, [businessPayouts, session, captureSessionRequest]);
 
   const handleUpdateGoals = useCallback(async (newGoals: BusinessGoal[]) => {
+    const isCurrentSession = captureSessionRequest(session?.user.id ?? '');
+    if (!isCurrentSession()) return;
     const prev = businessGoals;
     setBusinessGoals(newGoals);
 
@@ -3674,27 +3955,35 @@ const App: React.FC = () => {
       });
 
       for (const g of added) {
+        if (!isCurrentSession()) return;
         await storageService.saveBusinessGoal(g);
       }
       for (const g of removed) {
+        if (!isCurrentSession()) return;
         if (isUUID(g.id)) await storageService.deleteBusinessGoal(g.id);
       }
       for (const g of updated) {
+        if (!isCurrentSession()) return;
         if (isUUID(g.id)) await storageService.updateBusinessGoal(g.id, g);
       }
 
       if (added.length > 0) {
+        if (!isCurrentSession()) return;
         const fresh = await storageService.getBusinessGoals();
+        if (!isCurrentSession()) return;
         setBusinessGoals(fresh);
       }
     } catch (err) {
+      if (!isCurrentSession()) return;
       console.error('[BusinessHub] Failed to sync goals:', err);
       setBusinessGoals(prev); // Rollback on failure
       setSyncError("Nepodařilo se uložit cíle.");
     }
-  }, [businessGoals]);
+  }, [businessGoals, session?.user.id, captureSessionRequest]);
 
   const handleUpdateResources = useCallback(async (newResources: BusinessResource[]) => {
+    const isCurrentSession = captureSessionRequest(session?.user.id ?? '');
+    if (!isCurrentSession()) return;
     const prev = businessResources;
     setBusinessResources(newResources);
 
@@ -3707,37 +3996,49 @@ const App: React.FC = () => {
       });
 
       for (const r of added) {
+        if (!isCurrentSession()) return;
         await storageService.saveBusinessResource(r);
       }
       for (const r of removed) {
+        if (!isCurrentSession()) return;
         if (isUUID(r.id)) await storageService.deleteBusinessResource(r.id);
       }
       for (const r of updated) {
+        if (!isCurrentSession()) return;
         if (isUUID(r.id)) await storageService.updateBusinessResource(r.id, r);
       }
 
       if (added.length > 0) {
+        if (!isCurrentSession()) return;
         const fresh = await storageService.getBusinessResources();
+        if (!isCurrentSession()) return;
         setBusinessResources(fresh);
       }
     } catch (err) {
+      if (!isCurrentSession()) return;
       console.error('[BusinessHub] Failed to sync resources:', err);
       setBusinessResources(prev); // Rollback on failure
       setSyncError("Nepodařilo se uložit zdroje.");
     }
-  }, [businessResources]);
+  }, [businessResources, session?.user.id, captureSessionRequest]);
 
   // Single expense add handler (used by AccountsManager)
   const handleAddSingleExpense = useCallback(async (exp: BusinessExpense) => {
+    const isCurrentSession = captureSessionRequest(session?.user.id ?? '');
+    if (!isCurrentSession()) return;
     setBusinessExpenses(prev => [...prev, exp]);
     try {
+      if (!isCurrentSession()) return;
       await storageService.saveBusinessExpense(exp);
+      if (!isCurrentSession()) return;
       const fresh = await storageService.getBusinessExpenses();
+      if (!isCurrentSession()) return;
       setBusinessExpenses(fresh);
     } catch (err) {
+      if (!isCurrentSession()) return;
       console.error('[BusinessHub] Failed to save expense:', err);
     }
-  }, []);
+  }, [session?.user.id, captureSessionRequest]);
 
   // GATE pro shared trade — pokud je v URL ?shareId nebo ?share, NEZOBRAZUJEME
   // ani login ani app UI dokud se shared trade nenačte. Předchází to flashe
@@ -3746,6 +4047,10 @@ const App: React.FC = () => {
     const p = new URLSearchParams(window.location.search);
     return !!p.get('shareId') || !!p.get('share');
   })();
+
+  if (logoutBusy) {
+    return <div role="status" aria-live="polite" className="min-h-screen flex items-center justify-center bg-[var(--bg-page)] text-[var(--text-primary)]">Odhlašuji…</div>;
+  }
 
   if (hasShareInUrl && !sharedTrade) {
     // Stále načítáme — držet loader bez ohledu na session/loading stav
@@ -3789,8 +4094,12 @@ const App: React.FC = () => {
               setActiveAccountId(savedRun.accountId);
               window.dispatchEvent(new CustomEvent('alphatrade:backtest-run-saved', { detail: savedRun.id }));
             }}
-            onTradeClosed={handleManualTrade}
+            onTradeClosed={handleBacktestTradeClosed}
+            onTradeAnalyticsRefresh={handleBacktestAnalyticsRefresh}
+            analyticsSyncState={analyticsSyncState}
             journalTrades={trades}
+            tagSuggestions={backtestTagSuggestions}
+            journalSyncState={journalSyncState}
             onTradeReviewSave={handleBacktestTradeReviewSave}
           />
         </React.Suspense>
@@ -3808,18 +4117,7 @@ const App: React.FC = () => {
           theme={theme}
           onAddTrade={handleTryAddTrade}
           user={currentUser}
-          onLogout={async () => {
-            if (isNativeShell()) {
-              await deactivateNativeRemoteNotifications(session.user.id);
-              await deactivateNativeLiveActivityPush(session.user.id);
-              await deactivateNativeWidgetRemote(session.user.id);
-              await clearNativeWidgetSnapshot();
-            }
-            clearAppStorage();
-            await supabase.auth.signOut();
-            setSession(null);
-            window.location.reload();
-          }}
+          onLogout={handleLogout}
           onOpenProfile={() => setIsProfileOpen(true)}
           onNavigate={(page) => {
             navigateTo(page);
@@ -4356,8 +4654,8 @@ const App: React.FC = () => {
                         setViewMode={setHistoryLayoutMode}
                         enrichSignal={enrichSignal}
                         userMistakes={userMistakes}
-                        pendingCopierTrades={pendingCopierTrades}
-                        onResolvePendingCopier={accountId => void resolvePendingCopierAccount(accountId)}
+                        pendingCopierTrades={dashboardMode === 'backtesting' ? [] : pendingCopierTrades}
+                        onResolvePendingCopier={dashboardMode === 'backtesting' ? undefined : accountId => void resolvePendingCopierAccount(accountId)}
                         onImportTradovate={() => {
                           setTradovateImportAccount(viewMode === 'individual' ? activeAccountId : undefined);
                           setTradovateImportOpen(true);
@@ -4417,24 +4715,29 @@ const App: React.FC = () => {
                         preps={dailyPreps}
                         reviews={dailyReviews}
                         experiments={labExperiments}
-                        onUpdateExperiments={(next) => {
-                          const prev = labExperiments;
-                          setLabExperiments(next);
-                          // Persist do vlastní tabulky (ne preferences blob — ten dělal
-                          // last-write-wins ztráty). Diff: změněné/nové upsert, chybějící delete.
-                          const nextIds = new Set(next.map(e => e.id));
-                          const prevById = new Map(prev.map(e => [e.id, e]));
-                          for (const e of next) {
-                            const old = prevById.get(e.id);
-                            if (!old || JSON.stringify(old) !== JSON.stringify(e)) {
-                              storageService.upsertLabExperiment(e).catch(err => console.error('[Lab] upsert experiment failed:', err));
+                        onUpdateExperiments={async (next) => {
+                          const owner = await getUserId();
+                          if (!owner) throw new Error('Nejdřív se přihlas.');
+                          const previous = labExperiments;
+                          const previousById = new Map(previous.map(item => [item.id,item]));
+                          const nextIds = new Set(next.map(item => item.id));
+                          const changes = next.filter(item => JSON.stringify(previousById.get(item.id)) !== JSON.stringify(item));
+                          const removals = previous.filter(item => !nextIds.has(item.id));
+                          const results = await Promise.allSettled([
+                            ...changes.map(async item => ({ kind: 'saved' as const, item: await storageService.upsertLabExperiment(item, owner) })),
+                            ...removals.map(async item => { await storageService.deleteLabExperiment(item.id,item); return { kind: 'removed' as const, id:item.id }; }),
+                          ]);
+                          if (await getUserId() !== owner) throw new Error('Účet se změnil. Obnov seznam experimentů.');
+                          setLabExperiments(current => {
+                            const map = new Map(current.map(item => [item.id,item]));
+                            for (const result of results) if (result.status === 'fulfilled') {
+                              if (result.value.kind === 'saved') map.set(result.value.item.id,result.value.item);
+                              else map.delete(result.value.id);
                             }
-                          }
-                          for (const e of prev) {
-                            if (!nextIds.has(e.id)) {
-                              storageService.deleteLabExperiment(e.id).catch(err => console.error('[Lab] delete experiment failed:', err));
-                            }
-                          }
+                            return [...map.values()];
+                          });
+                          const failed = results.find(result => result.status === 'rejected');
+                          if (failed?.status === 'rejected') throw failed.reason;
                         }}
                         onAskAI={(prompt) => {
                           setAiInitialPrompt(prompt);
@@ -4555,6 +4858,7 @@ const App: React.FC = () => {
                   {activePage === 'live' && (
                     <LiveDesk
                       key={currentUser.id}
+                      userId={currentUser.id}
                       theme={theme}
                       live={tradovateLive}
                       onCopierJournalRefresh={handleCopierJournalRefresh}
@@ -4568,6 +4872,10 @@ const App: React.FC = () => {
                   {activePage === 'settings' && (
                     <Settings
                       theme={theme}
+                      accountEmail={session.user.email}
+                      onLogout={handleLogout}
+                      logoutBusy={logoutBusy}
+                      logoutError={logoutError}
                       activeTab={settingsActiveTab}
                       onTabChange={setSettingsActiveTab}
                       userEmotions={userEmotions} setUserEmotions={(v) => { setUserEmotions(v); markPreferencesDirty(); }}

@@ -14,10 +14,8 @@ import {
 import type { CopierControllerStatus } from './copierRuntimeController';
 import { scheduleNativeNotification } from './nativeNotifications';
 import { planNativeWidgetLocalAlerts } from './nativeWidgetNotificationPlan';
-import {
-  BROKER_ACCOUNTS_DAILY_PNL_LABEL,
-  COPIER_LEADER_DAILY_STATS_LABEL,
-} from '../lib/copierDailyStatsLabels';
+import { BROKER_ACCOUNTS_DAILY_PNL_LABEL, COPIER_LEADER_DAILY_STATS_LABEL } from '../lib/copierDailyStatsLabels';
+import { isNativeLiveActivityRemoteManaged } from './nativeLiveActivityPush';
 
 const STORAGE_KEY = 'alphatrade-native-widget-snapshot-v2';
 const MAX_ACCOUNTS = 6;
@@ -33,6 +31,10 @@ export interface NativeWidgetAccount {
   openPnl: number;
   locked: boolean;
   lockReason: string | null;
+  balanceAvailable?: boolean;
+  pnlAvailable?: boolean;
+  openPnlAvailable?: boolean;
+  lockStatusAvailable?: boolean;
 }
 
 export interface NativeWidgetTrade {
@@ -53,6 +55,8 @@ export interface NativeWidgetPosition {
 }
 
 export interface NativeWidgetJournalState {
+  dayKey?: string;
+  updatedAt?: number;
   dayPnl: number;
   dayR: number;
   tradeCount: number;
@@ -64,6 +68,15 @@ export interface NativeWidgetJournalState {
 }
 
 export interface NativeWidgetLiveState {
+  workerObservedAt?: number;
+  workerValidUntil?: number;
+  brokerUpdatedAt?: number;
+  brokerValidUntil?: number;
+  realizedPnlAvailable?: boolean;
+  openPnlAvailable?: boolean;
+  totalPnlAvailable?: boolean;
+  positionsAvailable?: boolean;
+  ordersAvailable?: boolean;
   connected: boolean;
   armed: boolean;
   shadowMode: boolean;
@@ -176,6 +189,8 @@ export function buildNativeJournalWidgetState(options: {
   }));
 
   return {
+    dayKey: today,
+    updatedAt: now.getTime(),
     dayPnl,
     dayR,
     tradeCount: todayTrades.length,
@@ -194,6 +209,7 @@ export function buildNativeJournalWidgetState(options: {
 function liveStatus(controller: CopierControllerStatus | null, now: number): Pick<NativeWidgetLiveState, 'status' | 'statusDetail'> {
   if (!controller) return { status: 'ČEKÁ NA WORKER', statusDetail: 'Otevři LIVE a ověř spojení.' };
   if (controller.killSwitch) return { status: 'KILL SWITCH', statusDetail: controller.lastError || 'Runtime je bezpečně zastavený.' };
+  if (controller.divergentAccounts?.length > 0) return { status: 'DIVERGENCE', statusDetail: 'Pozice účtů se rozcházejí; ověř LIVE.' };
   if (!controller.connected) return { status: 'BROKER OFFLINE', statusDetail: 'Tradovate spojení není dostupné.' };
   if (controller.stuckOutbox) return { status: 'STUCK OUTBOX', statusDetail: 'Nejasná operace blokuje další ARM.' };
   if ((controller.dayLockUntil ?? 0) > now) return { status: 'DAY-LOCK', statusDetail: controller.dayLockReason || 'ARM je zablokovaný do konce session.' };
@@ -208,6 +224,10 @@ export function buildNativeLiveWidgetState(options: {
   profiles: readonly TradovateAccountProfile[];
   controller: CopierControllerStatus | null;
   followerCount: number;
+  workerObservedAtMs?: number | null;
+  brokerCapturedAtMs?: number | null;
+  positionsAvailable?: boolean;
+  ordersAvailable?: boolean;
   now?: number;
 }): NativeWidgetLiveState {
   const now = options.now ?? Date.now();
@@ -225,6 +245,11 @@ export function buildNativeLiveWidgetState(options: {
       pnl,
       openPnl,
       locked,
+      balanceAvailable: Number.isFinite(account.balance.netLiq ?? account.balance.totalCashValue),
+      pnlAvailable: Number.isFinite(account.balance.realizedPnL) && (account.positions.length === 0 || Number.isFinite(account.balance.openPnL)),
+      openPnlAvailable: account.positions.length === 0 || (Number.isFinite(account.balance.openPnL) && account.balance.openPnlSource !== 'stale'),
+      lockStatusAvailable: locked || (account.risk.statusCoverage?.availability === 'available'
+        && account.risk.changesLocked != null),
       lockReason: dayLocked
         ? options.controller?.dayLockReason || 'DAY-LOCK'
         : account.risk.changesLocked === true
@@ -233,7 +258,7 @@ export function buildNativeLiveWidgetState(options: {
     };
   }).sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl)).slice(0, MAX_ACCOUNTS);
 
-  const positions = options.accounts.flatMap(account => account.positions
+  const allPositions = options.accounts.flatMap(account => account.positions
     .filter(position => position.netPosition !== 0)
     .map(position => ({
       accountName: accountDisplayName(account, names),
@@ -241,7 +266,8 @@ export function buildNativeLiveWidgetState(options: {
       side: position.netPosition > 0 ? 'Long' as const : 'Short' as const,
       quantity: Math.abs(position.netPosition),
       averagePrice: position.averagePrice,
-    }))).slice(0, MAX_ACCOUNTS);
+    })));
+  const positions = allPositions.slice(0, MAX_ACCOUNTS);
   // Widget P&L and its edge-triggered notification must only use a fully
   // paired, broker-confirmed close. Raw entry/exit fills are useful in LIVE,
   // but treating them as completed trades would create a misleading $0 P&L
@@ -260,6 +286,11 @@ export function buildNativeLiveWidgetState(options: {
   const realizedPnl = options.accounts.reduce((sum, account) => sum + finite(account.balance.realizedPnL), 0);
   const openPnl = options.accounts.reduce((sum, account) => sum + finite(account.balance.openPnL), 0);
   const status = liveStatus(options.controller, now);
+  const workerObservedAt = finite(options.workerObservedAtMs);
+  const brokerUpdatedAt = finite(options.brokerCapturedAtMs);
+  const realizedPnlAvailable = options.accounts.length > 0 && options.accounts.every(account => Number.isFinite(account.balance.realizedPnL));
+  const openPnlAvailable = options.accounts.every(account => account.positions.length === 0
+    || (Number.isFinite(account.balance.openPnL) && account.balance.openPnlSource !== 'stale'));
 
   return {
     connected: options.controller?.connected === true,
@@ -267,6 +298,15 @@ export function buildNativeLiveWidgetState(options: {
     shadowMode: options.controller?.shadowMode === true,
     killSwitch: options.controller?.killSwitch === true,
     ...status,
+    workerObservedAt,
+    workerValidUntil: workerObservedAt > 0 && workerObservedAt <= now + 30_000 ? workerObservedAt + 90_000 : 0,
+    brokerUpdatedAt,
+    brokerValidUntil: brokerUpdatedAt > 0 && brokerUpdatedAt <= now + 30_000 ? brokerUpdatedAt + 30 * 60_000 : 0,
+    realizedPnlAvailable,
+    openPnlAvailable,
+    totalPnlAvailable: realizedPnlAvailable && openPnlAvailable,
+    positionsAvailable: options.positionsAvailable === true,
+    ordersAvailable: options.ordersAvailable === true,
     armExpiresAt: options.controller?.armExpiresAt ?? 0,
     cooldownUntil: options.controller?.entryCooldownUntil ?? 0,
     dayLockUntil: options.controller?.dayLockUntil ?? 0,
@@ -277,7 +317,7 @@ export function buildNativeLiveWidgetState(options: {
     accountsRealizedPnlLabel: BROKER_ACCOUNTS_DAILY_PNL_LABEL,
     losingTrades: options.controller?.dailyStats?.losingTrades ?? 0,
     followerCount: Math.max(0, Math.floor(options.followerCount)),
-    openPositionCount: positions.length,
+    openPositionCount: allPositions.length,
     workingOrderCount: options.accounts.reduce((sum, account) => sum + account.workingOrderCount, 0),
     realizedPnl,
     openPnl,
@@ -298,61 +338,88 @@ function loadSnapshot(): NativeWidgetSnapshotV2 {
   return { version: 2, updatedAt: 0, journal: null, live: null };
 }
 
-async function persistSnapshot(snapshot: NativeWidgetSnapshotV2): Promise<void> {
-  if (!isNativeBuild) return;
+async function persistSnapshot(snapshot: NativeWidgetSnapshotV2): Promise<boolean> {
+  if (!isNativeBuild || !localStorage.getItem('alphatrade-native-widget-owner-v1')) return false;
   const snapshotJson = JSON.stringify(snapshot);
   localStorage.setItem(STORAGE_KEY, snapshotJson);
-  await alphaTradeNativePlugin.updateWidgetSnapshot({ snapshotJson });
+  const widgetToken = localStorage.getItem('alphatrade-native-widget-access-token-v1');
+  if (!widgetToken) return false;
+  try {
+    await alphaTradeNativePlugin.updateWidgetSnapshot({ snapshotJson, widgetToken });
+    return true;
+  } catch {
+    // Registration may still be pending. Its successful handshake publishes
+    // this cached snapshot; an old identity cannot repopulate native storage.
+    return false;
+  }
 }
 
 export async function syncNativeJournalWidgetSnapshot(state: NativeWidgetJournalState): Promise<void> {
   if (!isNativeBuild) return;
   const fingerprint = JSON.stringify(state);
   if (fingerprint === lastJournalSnapshotFingerprint) return;
-  await persistSnapshot({ ...loadSnapshot(), updatedAt: Date.now(), journal: state });
-  lastJournalSnapshotFingerprint = fingerprint;
+  if (await persistSnapshot({ ...loadSnapshot(), updatedAt: Date.now(), journal: state })) lastJournalSnapshotFingerprint = fingerprint;
 }
 
 let lastJournalSnapshotFingerprint = '';
 let lastLiveSnapshotFingerprint = '';
 let lastLiveActivityFingerprint = '';
 let liveActivityBusy = false;
+let snapshotGeneration = 0;
 
 const signedMoney = (value: number): string => `${value >= 0 ? '+' : '-'}$${Math.abs(value).toFixed(2)}`;
 
-function liveActivityPayload(live: NativeWidgetLiveState): NativeLiveActivityPayload {
+export function nativeLiveActivityFallbackPayload(live: NativeWidgetLiveState, now = Date.now()): NativeLiveActivityPayload {
   const position = live.positions[0];
-  const lockText = live.dayLockUntil > Date.now() ? ' · DAY-LOCK' : '';
+  const workerFresh = (live.workerValidUntil ?? 0) > now;
+  const brokerFresh = (live.brokerUpdatedAt ?? 0) > 0 && now - (live.brokerUpdatedAt ?? 0) <= 180_000;
+  const useOpen = live.openPositionCount > 0 && live.openPnlAvailable === true;
+  const pnl = useOpen ? live.openPnl : live.realizedPnl;
+  const available = brokerFresh && (useOpen || live.realizedPnlAvailable === true);
+  const status = workerFresh ? live.status : 'STAV NEOVĚŘEN';
+  const lockText = live.dayLockUntil > now ? ' · DAY-LOCK' : '';
+  const pnlLabel = useOpen ? 'Účty (broker) · otevřené P&L' : live.accountsRealizedPnlLabel;
   return {
+    automatic: true,
+    updatedAtMs: Math.min(live.workerObservedAt ?? 0, live.brokerUpdatedAt ?? 0),
+    validUntilMs: Math.min(live.workerValidUntil ?? 0, (live.brokerUpdatedAt ?? 0) + 180_000),
     symbol: position?.symbol.toUpperCase().startsWith('MNQ') ? 'MNQ' : 'NQ',
-    status: live.status,
+    status,
     headline: position
       ? `${position.side.toUpperCase()} ${position.quantity} ${position.symbol}`
-      : live.armed ? `ARM · ${live.followerCount} followerů` : live.statusDetail,
-    detail: `${live.openPositionCount} pozic · ${live.workingOrderCount} příkazů · ${live.accountsRealizedPnlLabel}${lockText}`,
-    pnlText: signedMoney(live.totalPnl),
-    pnlLabel: live.openPositionCount > 0
-      ? 'Účty (broker) · realizované + otevřené P&L'
-      : live.accountsRealizedPnlLabel,
-    isPositive: live.totalPnl >= 0,
+      : workerFresh && live.armed ? `ARM · ${live.followerCount} followerů` : live.statusDetail,
+    detail: `${live.openPositionCount} pozic · ${live.workingOrderCount} příkazů · ${pnlLabel}${lockText}`,
+    pnlText: available ? signedMoney(pnl) : '—',
+    pnlLabel,
+    isPositive: available && pnl >= 0,
     progress: live.killSwitch ? 1 : live.armed ? 0.75 : live.connected ? 0.35 : 0.1,
   };
 }
 
+export function planNativeLiveActivityFallback(live: NativeWidgetLiveState, now = Date.now()) {
+  return {
+    shouldBeActive: live.armed || live.openPositionCount > 0 || live.workingOrderCount > 0 || live.dayLockUntil > now || live.killSwitch,
+    canEnd: live.positionsAvailable === true && live.ordersAvailable === true
+      && (live.brokerUpdatedAt ?? 0) > now - 90_000 && (live.workerValidUntil ?? 0) > now,
+    payload: nativeLiveActivityFallbackPayload(live, now),
+  };
+}
+
 async function syncLiveActivity(live: NativeWidgetLiveState): Promise<void> {
-  if (liveActivityBusy) return;
-  const shouldBeActive = live.armed || live.openPositionCount > 0 || live.dayLockUntil > Date.now() || live.killSwitch;
-  const payload = liveActivityPayload(live);
+  if (liveActivityBusy || isNativeLiveActivityRemoteManaged()) return;
+  const epoch = snapshotGeneration;
+  const { shouldBeActive, canEnd, payload } = planNativeLiveActivityFallback(live);
   const fingerprint = JSON.stringify({ shouldBeActive, payload });
   if (fingerprint === lastLiveActivityFingerprint) return;
   liveActivityBusy = true;
   try {
     const state = await getNativeLiveActivityState();
+    if (epoch !== snapshotGeneration || isNativeLiveActivityRemoteManaged()) return;
     if (shouldBeActive) {
       if (state.activeCount > 0) await updateNativeLiveActivity(payload);
       else await startNativeLiveActivity(payload);
-    } else if (state.activeCount > 0) {
-      await endNativeLiveActivity();
+    } else if (state.activeCount > 0 && canEnd) {
+      await endNativeLiveActivity({ automatic: true });
     }
     lastLiveActivityFingerprint = fingerprint;
   } catch {
@@ -363,14 +430,15 @@ async function syncLiveActivity(live: NativeWidgetLiveState): Promise<void> {
 }
 
 export async function syncNativeLiveWidgetSnapshot(state: NativeWidgetLiveState): Promise<void> {
-  if (!isNativeBuild) return;
+  if (!isNativeBuild || !localStorage.getItem('alphatrade-native-widget-owner-v1')) return;
+  const epoch = snapshotGeneration;
   const stored = loadSnapshot();
   const previous = stored.live;
   const fingerprint = JSON.stringify(state);
   if (fingerprint !== lastLiveSnapshotFingerprint || Date.now() - stored.updatedAt >= SNAPSHOT_HEARTBEAT_MS) {
-    await persistSnapshot({ ...stored, updatedAt: Date.now(), live: state });
-    lastLiveSnapshotFingerprint = fingerprint;
+    if (await persistSnapshot({ ...stored, updatedAt: Date.now(), live: state })) lastLiveSnapshotFingerprint = fingerprint;
   }
+  if (epoch !== snapshotGeneration || !localStorage.getItem('alphatrade-native-widget-owner-v1')) return;
   for (const alert of planNativeWidgetLocalAlerts(previous, state)) {
     await scheduleNativeNotification({
       title: alert.title,
@@ -387,6 +455,10 @@ export async function syncNativeLiveWidgetSnapshot(state: NativeWidgetLiveState)
 
 export async function clearNativeWidgetSnapshot(): Promise<void> {
   if (!isNativeBuild) return;
+  ++snapshotGeneration;
+  lastJournalSnapshotFingerprint = '';
+  lastLiveSnapshotFingerprint = '';
+  lastLiveActivityFingerprint = '';
   localStorage.removeItem(STORAGE_KEY);
   await alphaTradeNativePlugin.clearWidgetSnapshot();
   await endNativeLiveActivity().catch(() => undefined);

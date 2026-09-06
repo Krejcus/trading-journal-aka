@@ -1,3 +1,4 @@
+import { backtestContiguousWindow, evaluateBacktestBracket, type BacktestExitModel } from './backtestExecutionModel';
 import { calculateMarketStructure, type MarketCandle, type MarketStructureEvent } from './marketData';
 
 /**
@@ -289,9 +290,13 @@ export const readBacktestStructure = (
 
 export interface BacktestTrailResult {
   exit: number;
-  reason: 'tp' | 'trail+' | 'trail' | 'open';
+  reason: 'tp' | 'trail+' | 'trail' | 'cutoff' | 'open';
+  ambiguous?: boolean;
+  complete?: boolean;
+  hasGaps?: boolean;
   bars: number | null;
   realizedR: number | null;
+  netRealizedR?: number | null;
   trailSteps: number;
   trailFinal: number;
   trailStart: number;
@@ -313,7 +318,10 @@ export const backtestStructuralTrail = (
   start: number,
   takeProfit: number | undefined,
   tickSize: number,
+  model: Pick<BacktestExitModel, 'cutoffTime' | 'slippagePoints' | 'tickSize' | 'feePoints'> = {},
 ): BacktestTrailResult | null => {
+  const window = backtestContiguousWindow(candles, entryTime, model.cutoffTime);
+  candles = [...candles.filter(candle => candle.time <= entryTime), ...window.following];
   const entryIndex = backtestEntryIndex(candles, entryTime);
   if (entryIndex < 1 || entryIndex >= candles.length - 1) return null;
   const risk = long ? entryPrice - start : start - entryPrice;
@@ -341,16 +349,17 @@ export const backtestStructuralTrail = (
   let exitPrice: number | null = null;
   let exitIndex = -1;
   let reason: BacktestTrailResult['reason'] = 'open';
+  let ambiguous = false;
 
   for (let index = entryIndex + 1; index < candles.length; index += 1) {
     const candle = candles[index];
     if (!candle) continue;
-    if (long) {
-      if (candle.low <= trail) { exitPrice = trail; exitIndex = index; reason = trail > entryPrice ? 'trail+' : 'trail'; break; }
-      if (takeProfit !== undefined && candle.high >= takeProfit) { exitPrice = takeProfit; exitIndex = index; reason = 'tp'; break; }
-    } else {
-      if (candle.high >= trail) { exitPrice = trail; exitIndex = index; reason = trail < entryPrice ? 'trail+' : 'trail'; break; }
-      if (takeProfit !== undefined && candle.low <= takeProfit) { exitPrice = takeProfit; exitIndex = index; reason = 'tp'; break; }
+    const fill = evaluateBacktestBracket(candle, { ...model, tickSize, long, stop: trail, target: takeProfit });
+    if (fill) {
+      exitPrice = fill.price; exitIndex = index; ambiguous = fill.ambiguous;
+      reason = fill.reason === 'tp' ? 'tp' : fill.reason === 'cutoff' ? 'cutoff'
+        : (long ? trail > entryPrice : trail < entryPrice) ? 'trail+' : 'trail';
+      break;
     }
     const high = latestBefore(pivotHighs, index - 1);
     const low = latestBefore(pivotLows, index - 1);
@@ -373,9 +382,11 @@ export const backtestStructuralTrail = (
   const realized = long ? (exitPrice - entryPrice) / risk : (entryPrice - exitPrice) / risk;
   return {
     exit: roundTick(exitPrice),
+    ambiguous, complete: reason !== 'open', hasGaps: reason === 'open' && window.hasGaps,
     reason,
     bars: exitIndex > 0 ? exitIndex - entryIndex : null,
     realizedR: Math.round(realized * 100) / 100,
+    netRealizedR: realized - (model.feePoints ?? 0) / risk,
     trailSteps: steps,
     trailFinal: roundTick(trail),
     trailStart: roundTick(start),

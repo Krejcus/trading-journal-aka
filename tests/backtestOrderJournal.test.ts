@@ -85,10 +85,10 @@ describe('tradeManagementStats', () => {
     expect(tradeManagementStats([], trade()).label).toBe('fixed');
   });
 
-  it('fill uvnitř okna obchodu počítá jako částečný výstup', () => {
+  it('protisměrný fill uvnitř okna obchodu počítá jako částečný výstup', () => {
     const events = [
       event({ kind: 'filled', marketTime: 1_000 }),
-      event({ kind: 'filled', marketTime: 1_500, orderId: 'order-2' }),
+      event({ kind: 'filled', marketTime: 1_500, orderId: 'order-2', side: 'sell' }),
       event({ kind: 'filled', marketTime: 2_000, orderId: 'order-3' }),
     ];
     expect(tradeManagementStats(events, trade()).partialExits).toBe(1);

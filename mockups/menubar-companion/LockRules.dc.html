@@ -1,0 +1,185 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    a { color: #6366f1; } a:hover { color: #818cf8; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .rule { display: flex; flex-direction: column; gap: 8px; border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; background: rgba(15,23,42,0.4); padding: 12px; }
+    .rule-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .rule-title { font-size: 12px; font-weight: 800; color: #f8fafc; }
+    .rule-sub { font-size: 11px; line-height: 15px; color: #94a3b8; }
+    .input { display: flex; align-items: center; height: 32px; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; background: #020617; padding: 0 10px; font-size: 12px; font-weight: 700; color: #f8fafc; }
+    .unit { font-size: 11px; font-weight: 600; color: #475569; margin-left: 6px; }
+    .toggle { position: relative; width: 34px; height: 20px; border-radius: 999px; flex-shrink: 0; }
+    .toggle::after { content: ''; position: absolute; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #ffffff; }
+    .toggle.on { background: #10b981; } .toggle.on::after { right: 2px; }
+    .toggle.off { background: rgba(255,255,255,0.14); } .toggle.off::after { left: 2px; }
+    .bar { height: 5px; border-radius: 999px; background: rgba(255,255,255,0.07); overflow: hidden; }
+    .bar > span { display: block; height: 100%; border-radius: 999px; }
+    .stat { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #94a3b8; }
+    .stat b { color: #f8fafc; font-weight: 700; }
+  </style>
+</helmet>
+<div style="display: flex; flex-direction: column; gap: 14px; width: 780px; min-height: 900px; box-sizing: border-box; background: #020617; padding: 24px;">
+
+  <div style="display: flex; align-items: center; gap: 12px; border: 1px solid rgba(244,63,94,0.30); border-radius: 8px; background: rgba(244,63,94,0.10); padding: 12px 14px;">
+    <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="#fb7185" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><rect x="3" y="7" width="10" height="7" rx="1.6"></rect><path d="M5.5 7 V5 a2.5 2.5 0 0 1 5 0 V7"></path></svg>
+    <div style="display: flex; flex-direction: column; gap: 2px; flex-grow: 1;">
+      <div style="font-size: 13px; font-weight: 900; color: #fb7185;">Den je zamčený do 00:00</div>
+      <div style="font-size: 12px; line-height: 16px; color: #fda4af;">Automaticky v <span class="mono">15:52</span> — pravidlo „2 ztrátové obchody z 2“. Copier vypnutý, zapnutí blokované do konce session.</div>
+    </div>
+    <button type="button" style="display: flex; align-items: center; gap: 6px; height: 32px; border: 1px solid rgba(244,63,94,0.40); border-radius: 6px; background: transparent; padding: 0 12px; font-family: inherit; font-size: 11px; font-weight: 800; color: #fb7185; cursor: pointer; flex-shrink: 0;">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="10" height="7" rx="1.6"></rect><path d="M10.5 7 V5 a2.5 2.5 0 0 0 -5 0"></path></svg>
+      Odemknout…
+    </button>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 12px; border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; background: #0a0f1d; padding: 16px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+      <div style="display: flex; flex-direction: column; gap: 2px;">
+        <div style="font-size: 14px; font-weight: 900; color: #f8fafc;">Pravidla dne</div>
+        <div style="font-size: 11px; color: #94a3b8;">Když pravidlo platí, copier se vypne a zamkne do konce session. Odemknutí jen tady, s důvodem.</div>
+      </div>
+      <span style="display: flex; align-items: center; gap: 6px; border-radius: 999px; background: rgba(244,63,94,0.12); border: 1px solid rgba(244,63,94,0.30); padding: 3px 9px; font-size: 11px; font-weight: 700; color: #fb7185;"><span style="width: 7px; height: 7px; border-radius: 50%; background: #f43f5e;"></span>1 z 6 pravidel spuštěno</span>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;">
+
+      <div class="rule" style="border-color: rgba(244,63,94,0.35);">
+        <div class="rule-head">
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <span class="rule-title">Max ztrátových obchodů za den</span>
+            <span class="rule-sub">Anti-revenge: po N ztrátách dnes už ne.</span>
+          </div>
+          <span class="toggle on"></span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="input" style="width: 80px;">2<span class="unit">obchody</span></span>
+          <div style="display: flex; flex-direction: column; gap: 5px; flex-grow: 1;">
+            <div class="stat"><span>Dnes</span><b style="color: #fb7185;">2 / 2 · spustilo lock 15:52</b></div>
+            <div class="bar"><span style="width: 100%; background: #f43f5e;"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rule">
+        <div class="rule-head">
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <span class="rule-title">Denní ztrátový limit</span>
+            <span class="rule-sub">Realizovaná ztráta leadera za den (USD).</span>
+          </div>
+          <span class="toggle on"></span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="input" style="width: 96px;">1 000<span class="unit">USD</span></span>
+          <div style="display: flex; flex-direction: column; gap: 5px; flex-grow: 1;">
+            <div class="stat"><span>Dnes</span><b><span class="mono" style="color: #fbbf24;">−620</span> · 62 %</b></div>
+            <div class="bar"><span style="width: 62%; background: #f59e0b;"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rule">
+        <div class="rule-head">
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <span class="rule-title">Max obchodů za den</span>
+            <span class="rule-sub">Overtrading brzda — počítá uzavřené obchody leadera.</span>
+          </div>
+          <span class="toggle on"></span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="input" style="width: 80px;">10<span class="unit">obchodů</span></span>
+          <div style="display: flex; flex-direction: column; gap: 5px; flex-grow: 1;">
+            <div class="stat"><span>Dnes</span><b>4 / 10</b></div>
+            <div class="bar"><span style="width: 40%; background: #10b981;"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rule">
+        <div class="rule-head">
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <span class="rule-title">Obchodní okno</span>
+            <span class="rule-sub">Mimo okno se kopie neposílá; po konci okna lock do 00:00.</span>
+          </div>
+          <span class="toggle on"></span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="input" style="width: 74px;">15:30</span>
+          <span style="font-size: 12px; color: #475569;">–</span>
+          <span class="input" style="width: 74px;">22:00</span>
+          <div style="display: flex; flex-direction: column; gap: 5px; flex-grow: 1;">
+            <div class="stat"><span>Nyní <span class="mono">16:04</span></span><b style="color: #34d399;">uvnitř okna</b></div>
+            <div class="bar"><span style="width: 8%; background: #10b981;"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rule">
+        <div class="rule-head">
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <span class="rule-title">Cooldown po uzavření</span>
+            <span class="rule-sub">Po flat leadera blokovaný re-ARM na N minut.</span>
+          </div>
+          <span class="toggle on"></span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="input" style="width: 80px;">15<span class="unit">min</span></span>
+          <div style="display: flex; flex-direction: column; gap: 5px; flex-grow: 1;">
+            <div class="stat"><span>Poslední flat <span class="mono">15:52</span></span><b>do <span class="mono">16:07</span> · 3 min</b></div>
+            <div class="bar"><span style="width: 80%; background: #f59e0b;"></span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rule">
+        <div class="rule-head">
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <span class="rule-title">Expirace LIVE session</span>
+            <span class="rule-sub">Nejpozději 17:00 Chicago; otevřené kopie followerů se zavřou.</span>
+          </div>
+          <span class="toggle on"></span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="input" style="width: 132px;">Zavřít followery</span>
+          <div style="display: flex; flex-direction: column; gap: 5px; flex-grow: 1;">
+            <div class="stat"><span>Dnes</span><b><span class="mono">00:00</span> CET · zbývá 7 h 56 min</b></div>
+            <div class="bar"><span style="width: 45%; background: #6366f1;"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 12px;">
+      <div style="font-size: 11px; color: #475569;">Pravidla vyhodnocuje worker z vlastních dat (fill ledger, session) — ne broker. Změna platí od příštího zapnutí.</div>
+      <button type="button" style="display: flex; align-items: center; justify-content: center; height: 32px; border: none; border-radius: 6px; background: #4f46e5; padding: 0 14px; font-family: inherit; font-size: 12px; font-weight: 900; color: #ffffff; cursor: pointer;">Uložit pravidla</button>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px; border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; background: #0a0f1d; padding: 14px 16px;">
+    <div style="font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: #475569;">Dialog „Odemknout den“ (jen v LIVE)</div>
+    <div style="display: flex; flex-direction: column; gap: 10px; border: 1px solid rgba(244,63,94,0.30); border-radius: 8px; background: #050811; padding: 14px; max-width: 420px;">
+      <div style="font-size: 13px; font-weight: 900; color: #f8fafc;">Opravdu odemknout den?</div>
+      <div style="font-size: 12px; line-height: 17px; color: #94a3b8;">Lock spustilo pravidlo <b style="color: #f8fafc;">2 ztrátové obchody z 2</b> v 15:52. Odemknutí se zapíše do deníku i s důvodem a pravidlo dnes už znovu nezasáhne.</div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <span style="font-size: 10px; font-weight: 700; color: #94a3b8;">Důvod (povinné)</span>
+        <span class="input" style="height: 34px; color: #475569; font-weight: 500;">Proč chci dnes pokračovat…</span>
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 8px;">
+        <button type="button" style="height: 32px; border: 1px solid rgba(255,255,255,0.10); border-radius: 6px; background: rgba(15,23,42,0.4); padding: 0 12px; font-family: inherit; font-size: 12px; font-weight: 800; color: #f8fafc;">Nechat zamčené</button>
+        <button type="button" style="height: 32px; border: none; border-radius: 6px; background: rgba(244,63,94,0.20); padding: 0 12px; font-family: inherit; font-size: 12px; font-weight: 800; color: #fda4af; opacity: 0.6;">Odemknout (za 10 s)</button>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

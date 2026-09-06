@@ -34,10 +34,13 @@ const groupOf = (runtime: NativeLiveActivityRuntimeRow): Record<string, unknown>
 const runtimeStatus = (runtime: NativeLiveActivityRuntimeRow, now: number) => {
   const controller = controllerOf(runtime);
   const lastSeen = Date.parse(runtime.last_seen_at);
-  if (!Number.isFinite(lastSeen) || now - lastSeen > 90_000) {
+  if (!Number.isFinite(lastSeen) || lastSeen > now + 30_000 || now - lastSeen > 90_000) {
     return { status: 'WORKER OFFLINE', statusDetail: 'Heartbeat je starší než 90 sekund.' };
   }
   if (bool(controller.killSwitch)) return { status: 'KILL SWITCH', statusDetail: String(controller.lastError || 'Runtime je zastavený.') };
+  if (Array.isArray(controller.divergentAccounts) && controller.divergentAccounts.length > 0) {
+    return { status: 'DIVERGENCE', statusDetail: 'Pozice účtů se rozcházejí; ověř LIVE.' };
+  }
   if (controller.connected === false) return { status: 'BROKER OFFLINE', statusDetail: 'Tradovate spojení není dostupné.' };
   if (bool(controller.stuckOutbox)) return { status: 'STUCK OUTBOX', statusDetail: 'Nejasná operace blokuje další ARM.' };
   if (finite(controller.dayLockUntil) > now) return { status: 'DAY-LOCK', statusDetail: String(controller.dayLockReason || 'Denní zámek je aktivní.') };
@@ -62,12 +65,23 @@ export function buildNativeWidgetRemoteSnapshot(options: {
   ]));
   const dayLockUntil = finite(controller.dayLockUntil);
   const dayLocked = dayLockUntil > options.now;
+  const workerObservedAt = Date.parse(options.runtime.last_seen_at);
+  const workerValidUntil = Number.isFinite(workerObservedAt) && workerObservedAt <= options.now + 30_000
+    ? workerObservedAt + 90_000 : 0;
+  const workerFresh = workerValidUntil > options.now;
+  const realizedPnlAvailable = options.broker.completeRealizedPnl !== false;
+  const openPnlAvailable = options.broker.completeOpenPnl;
   const accounts = options.broker.accounts.map(account => ({
     id: String(account.accountId),
     name: profileNames.get(String(account.accountId)) || account.accountName,
     balance: account.balance,
     pnl: account.totalPnl,
     openPnl: account.openPnl,
+    balanceAvailable: account.balanceAvailable !== false,
+    pnlAvailable: account.realizedPnlAvailable !== false && account.openPnlAvailable !== false,
+    openPnlAvailable: account.openPnlAvailable !== false,
+    lockStatusAvailable: dayLocked || account.changesLocked || !account.canTrade
+      || (options.broker.accountStatusComplete !== false && options.broker.accountLockStatusComplete !== false),
     locked: dayLocked || account.changesLocked || !account.canTrade,
     lockReason: dayLocked
       ? String(controller.dayLockReason || 'DAY-LOCK')
@@ -103,11 +117,11 @@ export function buildNativeWidgetRemoteSnapshot(options: {
   // curve; multiplying or summing follower equity would invent fills/slippage
   // that this source does not know.
   const leaderAccountId = finite(group.leaderAccountId, NaN);
-  const currentEquity = accounts.find(account => account.id === String(leaderAccountId))?.balance
-    ?? accounts.reduce((sum, account) => sum + account.balance, 0);
+  const leaderAccount = options.broker.accounts.find(account => account.accountId === leaderAccountId);
+  const currentEquity = leaderAccount?.balanceAvailable !== false ? leaderAccount?.balance : undefined;
   const chronological = [...validTrades].reverse();
   const tradePnl = chronological.reduce((sum, trade) => sum + trade.pnl, 0);
-  let runningEquity = currentEquity - tradePnl;
+  let runningEquity = (currentEquity ?? 0) - tradePnl;
   const equity = [runningEquity];
   for (const trade of chronological) {
     runningEquity += trade.pnl;
@@ -120,11 +134,20 @@ export function buildNativeWidgetRemoteSnapshot(options: {
     updatedAt: options.now,
     journal: null,
     live: {
-      connected: controller.connected === true,
-      armed: bool(controller.armed),
+      connected: workerFresh && controller.connected === true,
+      armed: workerFresh && bool(controller.armed),
       shadowMode: bool(controller.shadowMode),
       killSwitch: bool(controller.killSwitch),
       ...runtimeStatus(options.runtime, options.now),
+      workerObservedAt: Number.isFinite(workerObservedAt) ? workerObservedAt : 0,
+      workerValidUntil,
+      brokerUpdatedAt: options.broker.capturedAt,
+      brokerValidUntil: options.broker.capturedAt + 30 * 60_000,
+      realizedPnlAvailable,
+      openPnlAvailable,
+      totalPnlAvailable: realizedPnlAvailable && openPnlAvailable,
+      positionsAvailable: true,
+      ordersAvailable: true,
       armExpiresAt: finite(controller.armExpiresAt),
       cooldownUntil: finite(controller.entryCooldownUntil),
       dayLockUntil,
@@ -146,7 +169,7 @@ export function buildNativeWidgetRemoteSnapshot(options: {
       accounts,
       positions,
       recentTrades: validTrades.slice(0, 5),
-      equity: equity.slice(-30),
+      equity: currentEquity == null ? [] : equity.slice(-30),
     },
   };
 }

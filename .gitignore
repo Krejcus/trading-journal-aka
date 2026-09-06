@@ -52,3 +52,7 @@ analyzy/
 supabase/.temp/
 .env*
 .copier-pilot/
+
+# Private physical-device verification remains local.
+docs/reviews/ios-20260905/evidence/phone-install.json
+docs/reviews/ios-20260905/evidence/mobile-alert-fix.json

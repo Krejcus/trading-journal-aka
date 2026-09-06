@@ -1,8 +1,7 @@
-// Voice memo transcription via Groq Whisper API
-// Free tier covers thousands of minutes per month — see https://console.groq.com
+import { apiUrl } from '../utils/runtimeConfig';
+import { supabase } from './supabase';
 
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
-const MODEL = 'whisper-large-v3';
+const MAX_VOICE_BYTES = 3 * 1024 * 1024;
 
 // Bias Whisper toward correct spelling of trading terms it might otherwise mis-hear in Czech speech.
 // Whisper uses this as a "previous context" hint — it does NOT have to appear in the output.
@@ -20,32 +19,26 @@ export async function transcribeAudio(
   language: string = 'cs',
   prompt: string = TRADING_PROMPT
 ): Promise<string> {
-  const apiKey = (import.meta.env.VITE_GROQ_API_KEY as string | undefined)?.trim();
-  if (!apiKey) {
-    throw new Error('Chybí VITE_GROQ_API_KEY v .env.local. Získej zdarma na https://console.groq.com');
+  if (!audioBlob.size || audioBlob.size > MAX_VOICE_BYTES) {
+    throw new Error('Hlasová poznámka musí být menší než 3 MB. Zkrať nahrávku.');
   }
-
-  // Whisper accepts: flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm
-  // We use audio/webm from MediaRecorder, send as .webm file
-  const formData = new FormData();
-  const filename = audioBlob.type.includes('mp4') ? 'memo.m4a' : 'memo.webm';
-  formData.append('file', audioBlob, filename);
-  formData.append('model', MODEL);
-  formData.append('language', language);
-  formData.append('response_format', 'json');
-  // temperature=0 → deterministic, no creative interpretation
-  formData.append('temperature', '0');
-  if (prompt) formData.append('prompt', prompt);
-
-  const res = await fetch(GROQ_API_URL, {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Pro přepis hlasové poznámky se přihlas.');
+  const bytes = new Uint8Array(await audioBlob.arrayBuffer());
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+  }
+  const res = await fetch(apiUrl('/api/voice-transcription'), {
     method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: formData,
+    headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ audio: btoa(binary), mimeType: audioBlob.type || 'audio/webm', language, prompt }),
+    signal: AbortSignal.timeout(55_000),
   });
-
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Groq Whisper error ${res.status}: ${text || res.statusText}`);
+    throw new Error(res.status === 401 ? 'Přihlášení vypršelo. Přihlas se znovu.'
+      : res.status === 429 ? 'Přepis je právě vytížený. Zkus to za chvíli.'
+      : 'Přepis hlasu se nepodařil. Nahrávku můžeš zkusit odeslat znovu.');
   }
 
   const data = await res.json() as { text?: string };

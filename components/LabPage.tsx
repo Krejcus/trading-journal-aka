@@ -1,3 +1,10 @@
+import BacktestRobustnessPanel from './BacktestRobustnessPanel';
+import { buildBacktestPositionEvidence } from '../services/backtestRobustness';
+import { listBacktestRuns } from '../services/backtestRunService';
+import type { BacktestRun } from '../services/backtestTypes';
+import { chartAppearanceUserId } from '../services/chartAppearanceScope';
+import ResearchRuleEditor from './ResearchRuleEditor';
+import { appendResearchRule } from '../services/backtestResearchCases';
 /**
  * LabPage — analytická laboratoř nad obchody.
  *
@@ -7,7 +14,7 @@
  * Datová poctivost: counterfactual/excursion sbírá AlphaBridge — u manuálních
  * a importovaných obchodů chybí. UI vždy ukazuje pokrytí („X z Y obchodů").
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     FlaskConical, Table2, Compass, Scale, ChevronRight, Sparkles, Database,
@@ -33,18 +40,18 @@ interface LabPageProps {
     dashboardMode?: string;
     preps: DailyPrep[];
     reviews: DailyReview[];
-    /** Lab experimenty (persistované v UserPreferences). */
+    /** Lab experimenty (persistované v owner-only lab_experiments). */
     experiments: LabExperiment[];
-    onUpdateExperiments: (next: LabExperiment[]) => void;
+    onUpdateExperiments: (next: LabExperiment[]) => void | Promise<void>;
     /** Otevře AI Coach s předpřipraveným promptem (čísla už dosazená — AI je nepočítá). */
     onAskAI?: (prompt: string) => void;
     /** Otevře TradeDetailModal pro konkrétní obchod. */
     onOpenTrade?: (trade: Trade) => void;
 }
 
-type LabTab = 'prehled' | 'stole' | 'bias' | 'leaky' | 'psycho' | 'experimenty' | 'obchody';
+type LabTab = 'prehled' | 'stole' | 'bias' | 'leaky' | 'psycho' | 'experimenty' | 'odolnost' | 'obchody';
 
-interface ExperimentDraft { title: string; hypothesis: string; rule: string; targetTrades: string; sourceLeakId?: string }
+interface ExperimentDraft { title: string; hypothesis: string; rule: string; targetTrades: string; sourceLeakId?: string; falsification?: string }
 const EMPTY_DRAFT: ExperimentDraft = { title: '', hypothesis: '', rule: '', targetTrades: '20' };
 
 const LEAK_CATEGORY_LABEL: Record<LeakFinding['category'], string> = {
@@ -60,6 +67,11 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
     const isDark = theme !== 'light';
     const world = dashboardMode === 'backtesting' ? 'backtest' as const : 'live' as const;
 
+    const [evidenceRuns, setEvidenceRuns] = useState<BacktestRun[]>([]);
+    const [evidenceError, setEvidenceError] = useState<string>();
+    const [evidenceLoading, setEvidenceLoading] = useState(false);
+    const [robustnessTimeZone, setRobustnessTimeZone] = useState('America/Chicago');
+    const [robustnessDayStart, setRobustnessDayStart] = useState('17:00');
     const [tab, setTab] = useState<LabTab>('prehled');
     const [accountSel, setAccountSel] = useState<string>('all');
     const [unit, setUnit] = useState<LabUnit>('$');
@@ -70,16 +82,49 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
     const [expanded, setExpanded] = useState<string | number | null>(null);
 
     // Experimenty tab
-    const [draft, setDraft] = useState<ExperimentDraft | null>(null);
+    const [draft, setDraftState] = useState<ExperimentDraft | null>(null);
+    const draftOperation = useRef<{ id: string; operationId: string; recordedAt: number } | undefined>(undefined);
+    const draftBusy = useRef(false);
+    const setDraft = (value: React.SetStateAction<ExperimentDraft | null>) => { if(draftBusy.current)return; draftOperation.current = undefined; setDraftState(value); };
+    const [experimentError, setExperimentError] = useState<string>();
+    const [savingExperiment, setSavingExperiment] = useState(false);
+    const [researchSelection, setResearchSelection] = useState<Record<string,{revisionId:string;role:'development'|'validation'}>>({});
+    const [versioningExperiment, setVersioningExperiment] = useState<LabExperiment | null>(null);
+    const commitBusy = useRef(false);
+    const commitExperiments = async (next: LabExperiment[]) => {
+      if (commitBusy.current) return false;
+      commitBusy.current = true;
+      setSavingExperiment(true); setExperimentError(undefined);
+      try { await onUpdateExperiments(next); return true; }
+      catch(reason) { setExperimentError(reason instanceof Error ? reason.message : 'Experiment se nepodařilo uložit.'); return false; }
+      finally { commitBusy.current = false; setSavingExperiment(false); }
+    };
 
     // Přepnutí světa (live ↔ backtest): vybraný účet z minulého světa neexistuje
     // v novém → reset na „vše", jinak by dataset spadl na 0 obchodů.
     useEffect(() => {
         setAccountSel('all');
+        setTab(current => current === 'odolnost' ? 'prehled' : current);
         setFilters({ session: 'all', dir: 'all', outcome: 'all', bias: 'all' });
         setExpanded(null);
         setDraft(null);
     }, [world]);
+
+    useEffect(() => {
+      if (world !== 'backtest' || (tab !== 'odolnost' && tab !== 'experimenty')) return;
+      let active = true; const owner = chartAppearanceUserId();
+      setEvidenceLoading(true); setEvidenceError(undefined); setEvidenceRuns([]);
+      void listBacktestRuns().then(runs => { if(active && owner === chartAppearanceUserId()) setEvidenceRuns(runs); })
+        .catch(reason => { if(active) setEvidenceError(reason instanceof Error ? reason.message : 'Session nelze načíst.'); })
+        .finally(() => { if(active) setEvidenceLoading(false); });
+      return () => { active = false; };
+    }, [world, tab]);
+    const positionEvidence = useMemo(() => buildBacktestPositionEvidence(evidenceRuns), [evidenceRuns]);
+    const robustnessOptions = useMemo(() => ({ timeZone: robustnessTimeZone,
+      dayStartMinute: Number(robustnessDayStart.split(':')[0])*60 + Number(robustnessDayStart.split(':')[1]),
+      currencyByAccount: Object.fromEntries(accounts.map(account => [String(account.id), account.currency])), positionEvidence }),
+      [accounts, positionEvidence, robustnessTimeZone, robustnessDayStart]);
+
 
     const isUsd = unit === '$';
     const cardCls = isDark ? 'bg-white/[0.03] border-white/5' : 'bg-white border-slate-200';
@@ -90,6 +135,9 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
         () => accounts.filter(a => world === 'backtest' ? a.type === 'Backtest' : a.type !== 'Backtest'),
         [accounts, world]
     );
+
+    const robustnessTrades = useMemo(() => trades.filter(trade => worldAccounts.some(account => String(account.id) === String(trade.accountId))
+      && (accountSel === 'all' || String(trade.accountId) === accountSel)), [trades, worldAccounts, accountSel]);
 
     // Live: bias per den z ranního prepu (denní market bias + per-session karty).
     // Backtest má bias zapsaný přímo u obchodů (AlphaBridge), prep se nepoužije.
@@ -173,6 +221,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
         { key: 'leaky', label: 'Leaky', sub: `${leaks.length} detektorů zabralo`, icon: Droplets },
         { key: 'psycho', label: 'Psychologie', sub: 'emoce & rituály v číslech', icon: Brain },
         { key: 'experimenty', label: 'Experimenty', sub: `${experiments.filter(e => e.world === world && e.status === 'running').length} běží`, icon: TestTubes },
+        ...(world === 'backtest' ? [{ key: 'odolnost' as const, label: 'Odolnost', sub: 'nejistota & výjimečné zisky', icon: Scale }] : []),
         { key: 'obchody', label: 'Obchody', sub: `${ds.trades.length} záznamů`, icon: Table2 },
     ];
 
@@ -192,29 +241,42 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
         setTab('experimenty');
     };
 
-    const saveDraft = () => {
-        if (!draft || !draft.title.trim() || !draft.rule.trim()) return;
+    const saveDraft = async () => {
+        if (!draft || draftBusy.current || savingExperiment || !draft.title.trim() || !draft.rule.trim()) return;
         const target = Math.max(5, parseInt(draft.targetTrades, 10) || 20);
-        onUpdateExperiments([
+        draftBusy.current = true;
+        const operation = draftOperation.current ??= { id: `exp_${crypto.randomUUID()}`, operationId: crypto.randomUUID(), recordedAt: Date.now() };
+        const now = operation.recordedAt;
+        let research: LabExperiment['research'];
+        try {
+          if (world === 'backtest') research = await appendResearchRule({ definition: { hypothesis:draft.hypothesis,rule:draft.rule,falsification:draft.falsification??'',targetPositions:target,timeZone:'Europe/Prague' },
+            reason:'Založení výzkumného případu.',recordedAt:now,operationId:operation.operationId });
+        } catch(reason) { setExperimentError(reason instanceof Error ? reason.message : 'Pravidlo není platné.'); draftBusy.current = false; return; }
+        const saved = await commitExperiments([
             ...experiments,
             {
-                id: `exp_${Date.now()}`,
-                createdAt: Date.now(),
+                id: operation.id,
+                createdAt: now,
                 world,
                 title: draft.title.trim(),
                 hypothesis: draft.hypothesis.trim(),
                 rule: draft.rule.trim(),
                 sourceLeakId: draft.sourceLeakId,
                 targetTrades: target,
-                startTs: Date.now(),
+                startTs: now,
+                clock: world === 'backtest' ? 'recorded' : 'market',
+                baselineTradeIds: ds.trades.map(t => String(t.id)),
+                accountIds: accountSel === 'all' ? undefined : [accountSel],
                 status: 'running',
+                ...(research ? { research } : {}),
             },
         ]);
-        setDraft(null);
+        draftBusy.current = false;
+        if (saved) setDraft(null);
     };
 
     // ── Empty state (žádné obchody ve světě) ────────────────────────────────
-    if (ds.trades.length === 0) {
+    if (ds.trades.length === 0 && tab !== 'experimenty' && tab !== 'odolnost') {
         return (
             <div className={`p-10 rounded-3xl border text-center ${cardCls}`}>
                 <FlaskConical size={32} className="text-slate-400 mx-auto mb-3" />
@@ -223,9 +285,12 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                 </h3>
                 <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
                     {world === 'backtest'
-                        ? 'V backtest světě nejsou žádné obchody. Zapiš obchody do backtest session a Lab je rozebere.'
+                        ? 'V backtest světě nejsou žádné obchody. Hypotézu můžeš zapsat ještě před prvním replay obchodem.'
                         : 'Na live účtech nejsou žádné obchody k analýze.'}
                 </p>
+                <button onClick={() => { setDraft({ ...EMPTY_DRAFT }); setTab('experimenty'); }} className="mt-4 px-4 py-2 rounded-md bg-violet-500/15 text-violet-500 text-xs font-bold">
+                    Vytvořit experiment před prvním obchodem
+                </button>
             </div>
         );
     }
@@ -370,6 +435,11 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                     );
                 })}
             </div>
+
+            {tab === 'odolnost' && world === 'backtest' && <div className={`space-y-4 rounded-xl border p-5 ${cardCls}`}>
+              <div className="flex flex-wrap gap-3 text-xs"><label>Časové pásmo dne <select aria-label="Časové pásmo obchodního dne" value={robustnessTimeZone} onChange={event=>setRobustnessTimeZone(event.target.value)} className="ml-2 rounded border border-slate-500/30 bg-transparent p-2"><option>America/Chicago</option><option>America/New_York</option><option>Europe/Prague</option><option>UTC</option></select></label><label>Začátek dne <input aria-label="Začátek obchodního dne" type="time" value={robustnessDayStart} onChange={event=>setRobustnessDayStart(event.target.value)} className="ml-2 rounded border border-slate-500/30 bg-transparent p-2" /></label></div>
+              {evidenceLoading ? <p>Načítám historii pozic…</p> : evidenceError ? <p role="alert">{evidenceError}</p> : <BacktestRobustnessPanel trades={robustnessTrades} options={robustnessOptions} isDark={isDark} />}
+            </div>}
 
             {/* ══════════ PŘEHLED ══════════ */}
             {tab === 'prehled' && (
@@ -854,7 +924,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
             {tab === 'experimenty' && (
                 <motion.div {...fadeIn} className="space-y-4">
                     <div className={`px-4 py-2.5 rounded-xl border text-[11px] flex items-center justify-between gap-3 flex-wrap ${isDark ? 'bg-white/[0.02] border-white/5 text-slate-500' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
-                        <span>Uzavřená smyčka: leak → pravidlo → měření. Obchody před startem = baseline, po startu = běh experimentu.</span>
+                        <span>{world === 'backtest' ? 'Baseline tvoří nyní známé obchody. Nový replay se zařadí podle času zápisu, i když přehráváš starší trh.' : 'Známé obchody tvoří baseline; nové obchody po startu měří průběh experimentu.'}</span>
                         {!draft && (
                             <button
                                 onClick={() => setDraft({ ...EMPTY_DRAFT })}
@@ -865,10 +935,14 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                         )}
                     </div>
 
+                    {experimentError && <p role="alert" className="rounded border border-rose-500/30 p-3 text-sm text-rose-500">{experimentError}</p>}
+                    {versioningExperiment && <ResearchRuleEditor key={versioningExperiment.id} experiment={versioningExperiment} isDark={isDark}
+                      onClose={() => setVersioningExperiment(null)} onSave={async next => { if (!await commitExperiments(experiments.map(item=>item.id===next.id?next:item))) throw new Error('Verzi se nepodařilo uložit. Návrh zůstal zachovaný; podrobnosti jsou v Labu.'); }} />}
                     {/* Formulář */}
                     {draft && (
                         <div className={`p-5 rounded-2xl border border-violet-500/30 ${isDark ? 'bg-violet-500/[0.04]' : 'bg-violet-50/50'}`}>
                             <p className={`${eyebrow} mb-3`}>Nový experiment{draft.sourceLeakId ? ' (z leak detektoru)' : ''}</p>
+                            <p className="text-xs text-slate-500 mb-3">Baseline: {ds.trades.length} známých obchodů · {accountSel === 'all' ? 'všechny účty tohoto světa' : worldAccounts.find(account => account.id === accountSel)?.name}</p>
                             <div className="space-y-3">
                                 <div>
                                     <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1">Název</p>
@@ -898,6 +972,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                         className={`w-full rounded-xl px-3 py-2.5 text-sm outline-none border transition-all resize-none ${isDark ? 'bg-white/5 border-white/10 text-white placeholder:text-slate-500 focus:border-violet-500/50' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400 focus:border-violet-400'}`}
                                     />
                                 </div>
+                                {world === 'backtest' && <label className="block text-xs text-slate-500">Co by hypotézu vyvrátilo<textarea value={draft.falsification??''} onChange={event=>setDraft({...draft,falsification:event.target.value})} rows={2} placeholder="Předem stanov, jaký výsledek povede k odmítnutí pravidla." className={`mt-1 w-full rounded border px-3 py-2 text-sm ${isDark?'bg-white/5 border-white/10 text-white':'bg-white border-slate-300 text-slate-900'}`} /></label>}
                                 <div className="flex items-end gap-3 flex-wrap">
                                     <div>
                                         <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1">Vyhodnotit po (obchodů)</p>
@@ -910,8 +985,8 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                         />
                                     </div>
                                     <button
-                                        onClick={saveDraft}
-                                        disabled={!draft.title.trim() || !draft.rule.trim()}
+                                        onClick={() => void saveDraft()}
+                                        disabled={savingExperiment || !draft.title.trim() || !draft.rule.trim() || (world === 'backtest' && (!draft.hypothesis.trim() || !draft.falsification?.trim()))}
                                         className={`px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed ${isDark ? 'bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 border border-violet-500/40' : 'bg-violet-500 text-white hover:bg-violet-600'}`}
                                     >
                                         Spustit experiment
@@ -942,7 +1017,12 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                     ) : (
                         <div className="space-y-3.5">
                             {worldExperiments.map(exp => {
-                                const report = computeExperimentReport(dsWorld, exp, world === 'live' ? prepDaysFromPreps(preps) : undefined);
+                                const selection = researchSelection[exp.id];
+                                const revision = exp.research?.revisions.find(item=>item.id===selection?.revisionId) ?? exp.research?.revisions.at(-1);
+                                const reportExperiment = { ...exp, researchRevisionId:revision?.id, researchRole:selection?.role??'development' as const,
+                                  researchPositionEvidence: evidenceLoading || evidenceError ? undefined : positionEvidence,
+                                  ...(revision ? { hypothesis:revision.definition.hypothesis, rule:revision.definition.rule, targetTrades:revision.definition.targetPositions } : {}) };
+                                const report = computeExperimentReport(dsWorld, reportExperiment, world === 'live' ? prepDaysFromPreps(preps) : undefined);
                                 const running = exp.status === 'running';
                                 const statusChip = exp.status === 'running'
                                     ? { label: 'Běží', cls: 'bg-violet-500/10 text-violet-400 border-violet-500/25' }
@@ -972,12 +1052,12 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                                     <span className="text-[9px] font-bold text-slate-500">od {new Date(exp.startTs).toLocaleDateString('cs-CZ')}</span>
                                                 </div>
                                                 <h4 className={`text-sm font-black uppercase tracking-tight ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{exp.title}</h4>
-                                                <p className="text-[11px] text-slate-500 mt-1"><b>Pravidlo:</b> {exp.rule}</p>
-                                                {exp.hypothesis && <p className="text-[11px] text-slate-500 mt-0.5"><b>Hypotéza:</b> {exp.hypothesis}</p>}
+                                                <p className="text-[11px] text-slate-500 mt-1"><b>Pravidlo{revision ? ` v${revision.version}` : ''}:</b> {reportExperiment.rule}</p>
+                                                {reportExperiment.hypothesis && <p className="text-[11px] text-slate-500 mt-0.5"><b>Hypotéza:</b> {reportExperiment.hypothesis}</p>}
                                             </div>
                                             <div className="text-right shrink-0">
-                                                <p className={`font-mono text-lg font-black tabular-nums ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>{report.after.n}<span className="text-slate-500 text-sm">/{exp.targetTrades}</span></p>
-                                                <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">obchodů po startu</p>
+                                                <p className={`font-mono text-lg font-black tabular-nums ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>{report.targetProgressN ?? '—'}<span className="text-slate-500 text-sm">/{reportExperiment.targetTrades}</span></p>
+                                                <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">{exp.research ? 'úplných pozic vybrané verze' : 'obchodů po startu'}</p>
                                             </div>
                                         </div>
 
@@ -991,9 +1071,13 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                             </div>
                                         )}
 
+                                        {exp.world === 'backtest' && <div className="mt-3 rounded border border-violet-500/20 p-3">
+                                          <div className="flex items-center justify-between gap-3"><p className="text-xs font-semibold">{exp.research ? `Pravidla · nejnovější verze ${exp.research.revisions.at(-1)?.version}` : 'Starší experiment bez verzí pravidel'}</p><button disabled={savingExperiment} onClick={()=>setVersioningExperiment(exp)} className="text-xs text-violet-500 underline">{exp.research ? 'Nová verze pravidel' : 'Zavést verze pravidel'}</button></div>
+                                          {exp.research && <><div className="mt-2 flex flex-wrap gap-2 text-xs"><label>Vyhodnocovaná verze <select aria-label={`Vyhodnocovaná verze ${exp.title}`} value={revision?.id??''} onChange={event=>setResearchSelection(current=>({...current,[exp.id]:{revisionId:event.target.value,role:selection?.role??'development'}}))} className="rounded border border-slate-500/30 bg-transparent p-1">{exp.research.revisions.map(item=><option key={item.id} value={item.id}>v{item.version}</option>)}</select></label><label>Vzorek <select aria-label={`Vyhodnocovaný vzorek ${exp.title}`} value={selection?.role??'development'} onChange={event=>setResearchSelection(current=>({...current,[exp.id]:{revisionId:revision!.id,role:event.target.value as 'development'|'validation'}}))} className="rounded border border-slate-500/30 bg-transparent p-1"><option value="development">Vývoj</option><option value="validation">Plánované ověření</option></select></label></div><p className="mt-2 text-xs text-slate-500">Novou session svaž s konkrétní verzí v Účtech → Nová session. Vzorek po startu zahrnuje jen navázané výstupy vybrané verze a účelu; původní baseline zůstává.</p><details className="mt-2 text-xs"><summary className="cursor-pointer">Historie pravidel</summary>{exp.research.revisions.map(revision=><div key={revision.id} className="mt-2 border-l border-slate-500/20 pl-3"><p>v{revision.version} · {revision.recordedAt === null ? 'čas změny neznámý' : new Date(revision.recordedAt).toLocaleString('cs-CZ')} · {revision.reason}</p><p className="mt-1 whitespace-pre-wrap">{revision.definition.rule}</p><p className="mt-1 text-slate-500">Vyvrácení: {revision.definition.falsification}</p></div>)}</details></>}
+                                        </div>}
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3.5">
                                             {sideCell('Před (baseline)', report.before)}
-                                            {sideCell('Po startu', report.after)}
+                                            {sideCell(exp.research ? `Vybraná verze v${revision?.version} · výstupy` : 'Po startu', report.after)}
                                         </div>
 
                                         {exp.status === 'evaluated' && exp.conclusion && (
@@ -1013,8 +1097,8 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                         <div className="flex items-center gap-2 mt-3.5 flex-wrap">
                                             {running && (
                                                 <button
-                                                    onClick={() => onUpdateExperiments(experiments.map(e => e.id === exp.id
-                                                        ? { ...e, status: 'evaluated' as const, evaluatedAt: Date.now(), conclusion: report.verdict || `Vyhodnoceno ručně po ${report.after.n} obchodech.` }
+                                                    onClick={() => void commitExperiments(experiments.map(e => e.id === exp.id
+                                                        ? { ...e, status: 'evaluated' as const, endTs: Date.now(), evaluatedAt: Date.now(), conclusion: report.verdict || `Vyhodnoceno ručně po ${report.after.n} obchodech.` }
                                                         : e))}
                                                     className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${
                                                         report.ready
@@ -1027,7 +1111,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                             )}
                                             {running && (
                                                 <button
-                                                    onClick={() => onUpdateExperiments(experiments.map(e => e.id === exp.id ? { ...e, status: 'cancelled' as const } : e))}
+                                                    onClick={() => void commitExperiments(experiments.map(e => e.id === exp.id ? { ...e, status: 'cancelled' as const, endTs: Date.now() } : e))}
                                                     className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
                                                 >
                                                     <XCircle size={10} strokeWidth={2.5} /> Zrušit
@@ -1035,15 +1119,15 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                             )}
                                             {onAskAI && (
                                                 <button
-                                                    onClick={() => onAskAI(buildExperimentCoachPrompt(exp, report))}
+                                                    onClick={() => onAskAI(buildExperimentCoachPrompt(reportExperiment, report))}
                                                     className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${isDark ? 'bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25' : 'bg-cyan-500 text-white hover:bg-cyan-600'}`}
                                                 >
                                                     <Sparkles size={10} strokeWidth={2.5} /> Probrat s coachem
                                                 </button>
                                             )}
-                                            {!running && (
+                                            {!running && !exp.research && (
                                                 <button
-                                                    onClick={() => onUpdateExperiments(experiments.filter(e => e.id !== exp.id))}
+                                                    onClick={() => void commitExperiments(experiments.filter(e => e.id !== exp.id))}
                                                     className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${isDark ? 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/20' : 'bg-rose-50 text-rose-500 hover:bg-rose-100'}`}
                                                 >
                                                     <Trash2 size={10} strokeWidth={2.5} /> Smazat

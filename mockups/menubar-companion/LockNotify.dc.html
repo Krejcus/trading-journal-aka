@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    a { color: #6366f1; } a:hover { color: #818cf8; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .notif { display: flex; align-items: flex-start; gap: 12px; width: 360px; box-sizing: border-box; border-radius: 14px; padding: 12px 14px; }
+    .notif-app { font-size: 11px; font-weight: 700; letter-spacing: 0.02em; }
+    .notif-title { font-size: 13px; font-weight: 800; }
+    .notif-body { font-size: 12px; line-height: 16px; }
+    .label { font-size: 12px; line-height: 17px; color: #94a3b8; }
+    .label b { color: #f8fafc; font-weight: 700; }
+  </style>
+</helmet>
+<div style="display: flex; flex-direction: column; gap: 22px; width: 460px; min-height: 700px; box-sizing: border-box; background: #020617; padding: 24px 28px;">
+  <div style="display: flex; flex-direction: column; gap: 4px;">
+    <div style="font-size: 15px; font-weight: 900; color: #f8fafc;">Notifikace o zámku</div>
+    <div style="font-size: 12px; color: #94a3b8;">macOS banner z companionu (funguje i ve fullscreen TradingView) + push do PWA/iPhone. Bez účtů, bez P&amp;L.</div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <div class="notif" style="background: rgba(28, 32, 44, 0.96); border: 1px solid rgba(255,255,255,0.10); box-shadow: 0 12px 30px -12px rgba(0,0,0,0.6);">
+      <img src="at-logo.png" alt="AlphaTrade" style="height: 30px; width: auto; display: block; margin-top: 2px;">
+      <div style="display: flex; flex-direction: column; gap: 2px; flex-grow: 1;">
+        <div style="display: flex; align-items: center; justify-content: space-between;"><span class="notif-app" style="color: rgba(255,255,255,0.55);">ALPHATRADE STATUS</span><span style="font-size: 11px; color: rgba(255,255,255,0.45);">teď</span></div>
+        <div class="notif-title" style="color: #ffffff;">Den zamčen do 00:00</div>
+        <div class="notif-body" style="color: rgba(255,255,255,0.75);">Pravidlo: 2 ztrátové obchody z 2. Copier vypnutý, zapnutí blokované do konce session.</div>
+      </div>
+    </div>
+    <div class="label"><b>Zhoršení / zámek</b> — banner + volitelný zvuk; klik otevře popover, ne LIVE.</div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <div class="notif" style="background: rgba(28, 32, 44, 0.96); border: 1px solid rgba(255,255,255,0.10); box-shadow: 0 12px 30px -12px rgba(0,0,0,0.6);">
+      <img src="at-logo.png" alt="AlphaTrade" style="height: 30px; width: auto; display: block; margin-top: 2px;">
+      <div style="display: flex; flex-direction: column; gap: 2px; flex-grow: 1;">
+        <div style="display: flex; align-items: center; justify-content: space-between;"><span class="notif-app" style="color: rgba(255,255,255,0.55);">ALPHATRADE STATUS</span><span style="font-size: 11px; color: rgba(255,255,255,0.45);">před 5 min</span></div>
+        <div class="notif-title" style="color: #ffffff;">Blíží se limit: ztrátové obchody 1 / 2</div>
+        <div class="notif-body" style="color: rgba(255,255,255,0.75);">Ještě jedna ztráta dnes zamkne den.</div>
+      </div>
+    </div>
+    <div class="label"><b>Varování před zámkem</b> — tiché, jen banner; posílá se jednou na pravidlo a den.</div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <div class="notif" style="background: rgba(28, 32, 44, 0.96); border: 1px solid rgba(255,255,255,0.10); box-shadow: 0 12px 30px -12px rgba(0,0,0,0.6);">
+      <img src="at-logo.png" alt="AlphaTrade" style="height: 30px; width: auto; display: block; margin-top: 2px;">
+      <div style="display: flex; flex-direction: column; gap: 2px; flex-grow: 1;">
+        <div style="display: flex; align-items: center; justify-content: space-between;"><span class="notif-app" style="color: rgba(255,255,255,0.55);">ALPHATRADE STATUS</span><span style="font-size: 11px; color: rgba(255,255,255,0.45);">00:00</span></div>
+        <div class="notif-title" style="color: #ffffff;">Nová session — zámek vypršel</div>
+        <div class="notif-body" style="color: rgba(255,255,255,0.75);">Copier je vypnutý. Pravidla dne začínají od nuly; zapnout v LIVE.</div>
+      </div>
+    </div>
+    <div class="label"><b>Vypršení zámku</b> — tiché; nikdy sám nezapíná, jen informuje.</div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <div style="display: flex; align-items: center; gap: 10px; width: 360px; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; background: #0a0f1d; padding: 10px 12px;">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#fb7185" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="10" height="7" rx="1.6"></rect><path d="M5.5 7 V5 a2.5 2.5 0 0 1 5 0 V7"></path></svg>
+      <div style="display: flex; flex-direction: column; gap: 1px;">
+        <span style="font-size: 12px; font-weight: 800; color: #f8fafc;">Deník · 15:52 · Den zamčen automaticky</span>
+        <span style="font-size: 11px; color: #94a3b8;">Pravidlo „2 ztrátové obchody z 2“ · odemknuto: ne</span>
+      </div>
+    </div>
+    <div class="label"><b>Záznam v deníku</b> — každý lock i odemknutí s důvodem; z toho se pak dá učit (kolikrát pravidlo zasáhlo, kolikrát jsem ho obešel).</div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

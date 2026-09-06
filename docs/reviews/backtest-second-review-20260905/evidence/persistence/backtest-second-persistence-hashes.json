@@ -1,0 +1,54 @@
+{
+  "captured_at_utc": "2026-09-05T16:45:49.974094+00:00",
+  "canonical_root": "/Users/filipkrejca/Documents/trading-journal-aka",
+  "algorithm": "SHA-256",
+  "source_sha256_before": {
+    "services/chartTemplateStore.ts": "ad99a3c361852af382cf4dfe3f6977a9449dd065b13a0d1b041d724961391ef5",
+    "services/chartWorkspaceDocument.ts": "3dae5c8775581c5db818fca8dfcd37aeb693b41bf839218e55654dafb6535240",
+    "services/chartWorkspaceLayouts.ts": "b9b71d8fd0e602b39de9e2e398b93c32e5201d985728404dd08a5cac72e0cdd8",
+    "services/chartSettings.ts": "c8d97b89ef5a0ebb53aded0014a98ab91fcfb019eb7f90639acd6ad8befdadb8",
+    "services/chartTimeAxisFormat.ts": "68415aae4fb8497176f672b5d85231a357bd0e12fb5c9b1f9976b14ed7fd3f63",
+    "services/storageService.ts": "cf42c89b2c6dcc557996c28d26cc4e927935a7864cc2f6c684ef30916a40a16e",
+    "services/backtestTradeReview.ts": "be877e9e59b52fe588ad3b0608bbbdf01763c5113cf3524446ad9796a2efa3b9",
+    "components/BacktestSessionsManager.tsx": "ea47447760d69ac9185634dde11ac6a33b3f773a989e42d0338b6743a666ceb8",
+    "components/AlphaTradeChartWorkspace.tsx": "bac511218a201f57602891d4fedfd88b7b16b9683b9e76ca66c7988fc8f31d36",
+    "supabase/functions/mcp-server/index.ts": "2335f6f8fb4435ab1af5c70fcec6685ce3f3ebeb93ca89477dbe843495741541",
+    "supabase/migrations/20260811050000_add_chart_templates.sql": "80714b42a63dff9468d27ebfe327f7e976748131048495a7648d5ac95e97d935"
+  },
+  "source_sha256_after": {
+    "services/chartTemplateStore.ts": "ad99a3c361852af382cf4dfe3f6977a9449dd065b13a0d1b041d724961391ef5",
+    "services/chartWorkspaceDocument.ts": "3dae5c8775581c5db818fca8dfcd37aeb693b41bf839218e55654dafb6535240",
+    "services/chartWorkspaceLayouts.ts": "b9b71d8fd0e602b39de9e2e398b93c32e5201d985728404dd08a5cac72e0cdd8",
+    "services/chartSettings.ts": "c8d97b89ef5a0ebb53aded0014a98ab91fcfb019eb7f90639acd6ad8befdadb8",
+    "services/chartTimeAxisFormat.ts": "68415aae4fb8497176f672b5d85231a357bd0e12fb5c9b1f9976b14ed7fd3f63",
+    "services/storageService.ts": "cf42c89b2c6dcc557996c28d26cc4e927935a7864cc2f6c684ef30916a40a16e",
+    "services/backtestTradeReview.ts": "be877e9e59b52fe588ad3b0608bbbdf01763c5113cf3524446ad9796a2efa3b9",
+    "components/BacktestSessionsManager.tsx": "ea47447760d69ac9185634dde11ac6a33b3f773a989e42d0338b6743a666ceb8",
+    "components/AlphaTradeChartWorkspace.tsx": "bac511218a201f57602891d4fedfd88b7b16b9683b9e76ca66c7988fc8f31d36",
+    "supabase/functions/mcp-server/index.ts": "2335f6f8fb4435ab1af5c70fcec6685ce3f3ebeb93ca89477dbe843495741541",
+    "supabase/migrations/20260811050000_add_chart_templates.sql": "80714b42a63dff9468d27ebfe327f7e976748131048495a7648d5ac95e97d935"
+  },
+  "source_unchanged_during_reproductions": true,
+  "script_sha256": {
+    "/private/tmp/alphatrade-template-adversarial-audit.cjs": "584a7c39c0e5c9da51b9c2c005389cad7e08d74fb5d82f2fbb77a7fc9245a4e6",
+    "/private/tmp/alphatrade-layout-review-adversarial.cjs": "ca25da4823f39ddaae6d89c297be494a3f62c8b61e2277db6dd55557d17351d1",
+    "/private/tmp/alphatrade-trade-review-adversarial.cjs": "6a2b6976af64e558884b50efedcc3e4925637b5a2445d930f8f689e49913a9cc"
+  },
+  "runs": [
+    {
+      "script": "/private/tmp/alphatrade-template-adversarial-audit.cjs",
+      "exit_code": 0,
+      "duration_seconds": 0.111
+    },
+    {
+      "script": "/private/tmp/alphatrade-layout-review-adversarial.cjs",
+      "exit_code": 0,
+      "duration_seconds": 0.144
+    },
+    {
+      "script": "/private/tmp/alphatrade-trade-review-adversarial.cjs",
+      "exit_code": 0,
+      "duration_seconds": 0.073
+    }
+  ]
+}

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom';
 import { X, Activity, Sparkles } from 'lucide-react';
 import { Trade } from '../types';
+import { runSim, type SimResult } from '../services/monteCarloRiskModel';
 
 interface Props {
   theme: 'dark' | 'light' | 'oled' | string;
@@ -18,88 +19,6 @@ const BEST = '#22c55e', MOST = '#3b82f6', WORST = '#f97316';
 const moneyK = (v: number) => { const a = Math.abs(v); if (a >= 1e6) return `$${(v / 1e6).toFixed(a >= 1e7 ? 0 : 1)}m`; if (a >= 1000) return `$${Math.round(v / 1000)}k`; return `$${Math.round(v)}`; };
 function niceNum(x: number) { if (x <= 0) return 1; const exp = Math.floor(Math.log10(x)); const f = x / Math.pow(10, exp); const nf = f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10; return nf * Math.pow(10, exp); }
 function niceTicks(max: number, count = 4) { const step = niceNum(max / count); const ticks: number[] = []; for (let v = 0; v <= max + step * 0.5; v += step) ticks.push(v); return ticks; }
-
-// Seedovaný PRNG (mulberry32) — umožní přesně zrekonstruovat konkrétní běhy (best/median/worst).
-function mulberry32(a: number) { return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
-const seedFor = (s: number) => ((s + 1) * 2654435761) >>> 0;
-
-function simPath(seed: number, start: number, wr: number, rr: number, riskP: number, cost: number, N: number, idx: number[] | null, full: boolean) {
-  const rng = mulberry32(seed);
-  let bal = start, peak = start, dd = 0, ls = 0, mls = 0, ws = 0, mws = 0, wins = 0, bi = 0;
-  const sampled = idx ? new Array<number>(idx.length) : null;
-  const fullArr = full ? new Float64Array(N + 1) : null;
-  if (fullArr) fullArr[0] = start;
-  if (idx && idx[0] === 0 && sampled) { sampled[0] = start; bi = 1; }
-  for (let i = 0; i < N; i++) {
-    const risk = bal * riskP;
-    if (rng() < wr) { bal += risk * rr - cost; ls = 0; ws++; if (ws > mws) mws = ws; wins++; }
-    else { bal -= risk + cost; ls++; if (ls > mls) mls = ls; ws = 0; }
-    if (bal > peak) peak = bal;
-    const d = peak > 0 ? ((peak - bal) / peak) * 100 : 0; if (d > dd) dd = d;
-    if (fullArr) fullArr[i + 1] = bal;
-    if (idx && sampled && bi < idx.length && i + 1 === idx[bi]) { sampled[bi] = bal; bi++; }
-  }
-  return { final: bal, maxdd: dd, streak: mls, winStreak: mws, wins, sampled, full: fullArr };
-}
-
-interface ScenStat { result: number; totalRet: number; maxDD: number; maxLoss: number; maxWin: number; winPct: number; path: number[]; }
-interface SimResult {
-  start: number; N: number; ruinT: number;
-  p5: number; p50: number; p95: number;
-  pProfit: number; ruin: number; ddMed: number; ddP95: number;
-  stMed: number; stMax: number; expR: number; avgRet: number; sd: number;
-  finals: number[]; bandIdx: number[]; b5: number[]; b95: number[];
-  best: number[]; med: number[]; worst: number[];
-  ddDist: { label: string; prob: number }[];
-  scen: { med: ScenStat; worst: ScenStat; best: ScenStat };
-}
-
-function runSim(start: number, wrPct: number, rr: number, riskPct: number, N: number, cost: number, SIMS: number, ruinT: number): SimResult {
-  const wr = wrPct / 100, riskP = riskPct / 100;
-  const SAMP = Math.min(N, 60); const idx: number[] = [];
-  for (let b = 0; b <= SAMP; b++) idx.push(Math.round((b / SAMP) * N));
-  const cols: Float64Array[] = idx.map(() => new Float64Array(SIMS));
-  const finals = new Float64Array(SIMS), maxdd = new Float64Array(SIMS), streaks = new Float64Array(SIMS);
-  let ruinCount = 0, bestIdx = 0, worstIdx = 0;
-  for (let s = 0; s < SIMS; s++) {
-    const r = simPath(seedFor(s), start, wr, rr, riskP, cost, N, idx, false);
-    for (let k = 0; k < idx.length; k++) cols[k][s] = r.sampled![k];
-    finals[s] = r.final; maxdd[s] = r.maxdd; streaks[s] = r.streak; if (r.maxdd >= ruinT) ruinCount++;
-    if (r.final > finals[bestIdx]) bestIdx = s;
-    if (r.final < finals[worstIdx]) worstIdx = s;
-  }
-  const order = Array.from({ length: SIMS }, (_, i) => i).sort((a, b) => finals[a] - finals[b]);
-  const medIdx = order[Math.floor((SIMS - 1) * 0.5)];
-  const scenOf = (s: number): ScenStat => {
-    const r = simPath(seedFor(s), start, wr, rr, riskP, cost, N, null, true);
-    return { result: r.final, totalRet: ((r.final - start) / start) * 100, maxDD: r.maxdd, maxLoss: r.streak, maxWin: r.winStreak, winPct: (r.wins / N) * 100, path: Array.from(r.full!) };
-  };
-  const sBest = scenOf(bestIdx), sMed = scenOf(medIdx), sWorst = scenOf(worstIdx);
-  // Drawdown distribuce — pravděpodobnost dosažení daného DD pásma
-  const bounds = [5, 10, 15, 20, 25, 30, 40, 50, 60, 75, Infinity];
-  const dlabels = ['5%', '10%', '15%', '20%', '25%', '30%', '40%', '50%', '60%', '75%', '>75%'];
-  const dcnt = new Array(bounds.length).fill(0);
-  for (let s = 0; s < SIMS; s++) { for (let j = 0; j < bounds.length; j++) { if (maxdd[s] <= bounds[j]) { dcnt[j]++; break; } } }
-  const ddDist = dlabels.map((label, j) => ({ label, prob: (dcnt[j] / SIMS) * 100 })).filter((_, j) => j < 6 || dcnt[j] > 0);
-  const fS = Array.from(finals).sort((a, b) => a - b);
-  const ddS = Array.from(maxdd).sort((a, b) => a - b);
-  const stS = Array.from(streaks).sort((a, b) => a - b);
-  const band = (p: number) => cols.map(c => pct(Array.from(c).sort((a, b) => a - b), p));
-  const mean = fS.reduce((a, b) => a + b, 0) / fS.length;
-  const sd = Math.sqrt(fS.reduce((a, b) => a + (b - mean) * (b - mean), 0) / fS.length);
-  return {
-    start, N, ruinT,
-    p5: pct(fS, 0.05), p50: pct(fS, 0.5), p95: pct(fS, 0.95),
-    pProfit: (fS.filter(v => v > start).length / SIMS) * 100,
-    ruin: (ruinCount / SIMS) * 100,
-    ddMed: pct(ddS, 0.5), ddP95: pct(ddS, 0.95),
-    stMed: pct(stS, 0.5), stMax: stS[stS.length - 1],
-    expR: wr * rr - (1 - wr), avgRet: ((pct(fS, 0.5) - start) / start) * 100, sd,
-    finals: fS, bandIdx: idx, b5: band(0.05), b95: band(0.95),
-    best: sBest.path, med: sMed.path, worst: sWorst.path,
-    ddDist, scen: { med: sMed, worst: sWorst, best: sBest },
-  };
-}
 
 function setupCanvas(cv: HTMLCanvasElement) {
   const dpr = window.devicePixelRatio || 1; const r = cv.getBoundingClientRect();
@@ -384,12 +303,16 @@ const MonteCarloLab: React.FC<Props> = ({ theme, trades, initialBalance, onClose
             <Stat label="Nepříznivý · P5" value={money(result.p5)} sub="1 z 20 horší" cls={result.p5 >= result.start ? 'text-emerald-400' : 'text-rose-400'} />
             <Stat label="Příznivý · P95" value={money(result.p95)} sub="1 z 20 lepší" cls="text-emerald-400" />
             <Stat label="Pravděpodobnost zisku" value={`${result.pProfit.toFixed(0)} %`} sub="sim. nad startem" cls={result.pProfit >= 70 ? 'text-emerald-400' : result.pProfit >= 50 ? '' : 'text-rose-400'} />
-            <Stat label="Riziko ruinu" value={`${result.ruin.toFixed(result.ruin < 10 ? 1 : 0)} %`} sub={`pokles ≥ ${result.ruinT} %`} cls={result.ruin <= 1 ? 'text-emerald-400' : result.ruin <= 5 ? 'text-amber-400' : 'text-rose-400'} />
-            <Stat label="Max drawdown" value={`${result.ddMed.toFixed(1)} %`} sub={`nejhorší ${result.ddP95.toFixed(1)} %`} cls="text-rose-400" />
+            <Stat label="Dosažení DD limitu" value={`${result.ruin.toFixed(result.ruin < 10 ? 1 : 0)} %`} sub={`pokles ≥ ${result.ruinT} %`} cls={result.ruin <= 1 ? 'text-emerald-400' : result.ruin <= 5 ? 'text-amber-400' : 'text-rose-400'} />
+            <Stat label="Max drawdown" value={`${result.ddMed.toFixed(1)} %`} sub={`P95 ${result.ddP95.toFixed(1)} %`} cls="text-rose-400" />
             <Stat label="Nejdelší série proher" value={`${result.stMed.toFixed(0)}×`} sub={`nejhorší ${result.stMax.toFixed(0)}×`} />
-            <Stat label="Expectancy" value={`${result.expR.toFixed(2)} R`} sub="na obchod" cls={result.expR >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
+            <Stat label="Čistá expectancy · start" value={`${result.expR.toFixed(2)} R`} sub={`hrubá ${result.grossExpR.toFixed(2)} R · při počátečním risku`} cls={result.expR >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
           </div>
 
+          <p className="text-[10px] text-slate-500 leading-relaxed">
+            Model: nezávislé výsledky, procentní risk a pevné náklady na obchod. Čistá expectancy je pro počáteční velikost rizika; s účtem se mění.
+            {' '}Vyčerpání kapitálu: {result.insolvency.toFixed(1)} % simulací. Po nule účet dále neobchoduje; série a win rate používají čisté výsledky.
+          </p>
           {/* Dvě distribuce — interaktivní s hoverem */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className={`rounded-2xl p-4 border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>

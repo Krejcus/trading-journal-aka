@@ -1,0 +1,8 @@
+CROSS_USER_LIST {"currentUser":"user-B","cloudOwnedRuns":0,"returnedNames":["private-A"]}
+COLD_HYDRATION_INDEX {"onlineCount":3,"offlineCount":1,"index":["run-3"],"savedBlobs":3}
+CONCURRENT_CLOUD_EDIT {"beforeRevision":10,"beforeTrades":1,"afterRevision":4,"afterTrades":0}
+SYNC_ERROR_SIGNAL {"cloudRevision":4,"requestedRevision":5,"promiseRejected":false}
+SAME_CANDLE_LEDGER_CHANGE {"runtimeStatus":"cancelled","ledgerStatus":"pending","sameUpdatedAt":true}
+SCALE_IN_MANAGEMENT {"actualPartialExits":0,"reportedPartialExits":1,"label":"partial_runner"}
+BRACKET_ADD_WITHOUT_EVENT {"stop":98,"target":104,"events":0}
+RUIN_FALSE_POSITIVE {"startBalance":100,"allPaths":[100,300,150,150,150,150,150,150,150,150,150],"actualRuinPct":0,"reportedRuinPct":100}

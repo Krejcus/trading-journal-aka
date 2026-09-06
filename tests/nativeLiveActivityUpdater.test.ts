@@ -355,7 +355,7 @@ describe('remote native Live Activity', () => {
       { accountId: 10, symbol: 'MNQU6', side: 'Long', quantity: 1, entryPrice: 20_000,
         currentPrice: 20_000 + 50 / 6, stopPrice: 19_990, targetPrice: 20_020 },
       { accountId: 11, symbol: 'MNQU6', side: 'Long', quantity: 2, entryPrice: 20_000,
-        currentPrice: 20_000 + 50 / 6, stopPrice: 19_990, targetPrice: 20_020 },
+        currentPrice: 20_000 + 50 / 6, stopPrice: null, targetPrice: null },
     ]);
     expect(snapshot.pendingOrder).toBeNull();
   });
@@ -490,5 +490,35 @@ describe('Live Activity: divergence a riziko ke stopu', () => {
       now,
     });
     expect(plan.update.state.riskAtStopText).toBeUndefined();
+  });
+
+  it.each(['Long', 'Short'] as const)('keeps a %s protective stop after it has moved into profit', async side => {
+    const long = side === 'Long';
+    const stop = long ? 20_010 : 19_990;
+    const responses: Record<string, unknown> = {
+      '/position/list': [{ accountId: 10, contractId: 99, netPos: long ? 1 : -1, netPrice: 20_000 }],
+      '/order/list': [{ id: 20, accountId: 10, contractId: 99, action: long ? 'Sell' : 'Buy', ordStatus: 'Working' }],
+      '/cashBalance/list': [{ accountId: 10, amount: 50_000, realizedPnL: 0 }],
+      '/account/list': [{ id: 10, canTrade: true }],
+      '/userAccountAutoLiq/list': [],
+      '/orderVersion/list': [{ id: 1, orderId: 20, orderQty: 1, orderType: 'Stop', stopPrice: stop }],
+      '/contract/items': [{ id: 99, name: 'MNQU6' }],
+      '/cashBalance/getcashbalancesnapshot': { openPnL: 100, netLiq: 50_100 },
+    };
+    const snapshot = await loadNativeLiveActivityBrokerSnapshot({
+      baseUrl: 'https://review.invalid', accessToken: 'mock', accountIds: [10], now,
+      fetchImpl: async input => new Response(JSON.stringify(responses[new URL(String(input)).pathname])),
+    });
+    expect(snapshot.positions[0].stopPrice).toBe(stop);
+    const plan = planNativeLiveActivityUpdate({ runtime: runtime({ armed: true, connected: true }), broker: snapshot, now });
+    expect(plan.update.state.riskAtStopText).toBe('+$20 na SL');
+  });
+
+  it('does not label incomplete realized P&L as a known dollar amount', () => {
+    const plan = planNativeLiveActivityUpdate({
+      runtime: runtime({ armed: true, connected: true }),
+      broker: { ...broker, completeOpenPnl: false, completeRealizedPnl: false }, now,
+    });
+    expect(plan.update.state.pnlText).toBe('—');
   });
 });

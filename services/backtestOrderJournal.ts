@@ -66,17 +66,25 @@ const emptyManagement = (): TradeManagementStats => ({
  */
 export const tradeJournalEvents = (
   events: readonly BacktestOrderEvent[],
-  trade: Pick<BacktestClosedTrade, 'instrument' | 'entryTime' | 'exitTime'>,
+  trade: Pick<BacktestClosedTrade, 'instrument' | 'entryTime' | 'exitTime' | 'positionId' | 'exitOrderId'>,
 ): BacktestOrderEvent[] => {
-  const sameInstrument = events.filter(event => event.instrument === trade.instrument);
+  const exitIndex = trade.exitOrderId
+    ? events.findIndex(event => event.kind === 'filled' && event.orderId === trade.exitOrderId)
+    : -1;
+  const sameInstrument = (exitIndex >= 0 ? events.slice(0, exitIndex + 1) : events)
+    .filter(event => event.instrument === trade.instrument);
   const entryOrderIds = new Set(
     sameInstrument
-      .filter(event => event.kind === 'filled' && event.marketTime === trade.entryTime)
+      .filter(event => event.kind === 'filled' && (trade.positionId
+        ? event.positionId === trade.positionId
+        : event.marketTime === trade.entryTime))
       .map(event => event.orderId),
   );
   return sameInstrument
     .filter(event => entryOrderIds.has(event.orderId)
-      || (event.marketTime >= trade.entryTime && event.marketTime <= trade.exitTime))
+      || (event.marketTime >= trade.entryTime && event.marketTime <= trade.exitTime
+        && (!trade.positionId || event.positionId === trade.positionId || event.closedPositionId === trade.positionId
+          || (!event.positionId && !event.closedPositionId && event.orderId === positionEventOwnerId(trade.instrument)))))
     .sort((left, right) => left.marketTime - right.marketTime);
 };
 
@@ -84,7 +92,7 @@ const BREAKEVEN_TOLERANCE = 0.25;
 
 export const tradeManagementStats = (
   events: readonly BacktestOrderEvent[],
-  trade: Pick<BacktestClosedTrade, 'instrument' | 'entryTime' | 'exitTime' | 'entryPrice' | 'direction'>,
+  trade: Pick<BacktestClosedTrade, 'instrument' | 'entryTime' | 'exitTime' | 'entryPrice' | 'direction' | 'positionId' | 'exitOrderId'>,
 ): TradeManagementStats => {
   const scoped = tradeJournalEvents(events, trade);
   const stats = emptyManagement();
@@ -92,8 +100,15 @@ export const tradeManagementStats = (
   let lastStopPrice: number | undefined;
 
   scoped.forEach(event => {
-    // Fill uvnitř okna obchodu (ne vstupní ani výstupní) = odebrání části pozice.
-    if (event.kind === 'filled' && event.marketTime > trade.entryTime && event.marketTime < trade.exitTime) {
+    // Entry/scale-in fills are not management exits. New journals identify
+    // actual reductions and remaining exposure, including same-minute exits.
+    const reduces = event.side === (long ? 'sell' : 'buy');
+    const partial = event.closedQuantity !== undefined
+      ? event.closedQuantity > 0 && Number(event.positionQuantityAfter) > 0
+        && (!event.positionId || event.positionId === event.closedPositionId)
+        && (!trade.positionId || event.closedPositionId === trade.positionId)
+      : event.marketTime > trade.entryTime && event.marketTime < trade.exitTime;
+    if (event.kind === 'filled' && reduces && partial) {
       stats.partialExits += 1;
     }
     if (event.kind === 'entry-moved') stats.entryMoves += 1;

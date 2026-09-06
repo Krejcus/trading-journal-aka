@@ -19,7 +19,7 @@ function requireMatch(value, pattern, label) {
   if (!pattern.test(value)) errors.push(label);
 }
 
-const [config, plist, project, shell, plugin, scene, appDelegate, nativeStorage, packageJson, appSource, widgetSource, widgetPlist, appEntitlements, widgetEntitlements, privacyGate, stylesheet, tradeDetail, controlIntents, systemActions] = await Promise.all([
+const [config, plist, project, shell, plugin, scene, appDelegate, nativeStorage, packageJson, appSource, widgetSource, widgetPlist, appEntitlements, widgetEntitlements, privacyGate, stylesheet, tradeDetail, controlIntents, systemActions, privacyController, activityAttributes] = await Promise.all([
   text('capacitor.config.ts'),
   text('capacitor-ios/App/App/Info.plist'),
   text('capacitor-ios/App/App.xcodeproj/project.pbxproj'),
@@ -39,6 +39,8 @@ const [config, plist, project, shell, plugin, scene, appDelegate, nativeStorage,
   text('components/TradeDetailModal.tsx'),
   text('capacitor-ios/App/App/AlphaTradeControlIntents.swift'),
   text('capacitor-ios/App/App/AlphaTradeSystemActions.swift'),
+  text('services/nativePrivacyController.ts'),
+  text('capacitor-ios/App/App/AlphaTradeLiveActivityAttributes.swift'),
 ]);
 
 requireMatch(config, /appId:\s*['"]app\.alphatrade\.native['"]/, 'Capacitor appId není app.alphatrade.native');
@@ -60,7 +62,8 @@ for (const method of ['getLiveActivityState', 'startLiveActivity', 'updateLiveAc
 for (const method of ['updateWidgetSnapshot', 'clearWidgetSnapshot', 'setWidgetAccessToken', 'clearWidgetAccessToken']) {
   requireMatch(plugin, new RegExp(`CAPPluginMethod\\(name: "${method}"`), `Swift plugin neregistruje ${method}`);
 }
-requireMatch(plugin, /UserDefaults\(suiteName: widgetSuiteName\)/, 'Widget snapshot se neukládá do sdílené App Group');
+requireMatch(activityAttributes, /UserDefaults\(suiteName: suite\)/, 'Widget snapshot se neukládá do sdílené App Group');
+requireMatch(plugin, /AlphaTradeWidgetStore\.withDefaults/, 'Widget plugin musí sdílet zámek s WidgetKit čtenářem');
 requireMatch(plugin, /WidgetCenter\.shared\.reloadAllTimelines\(\)/, 'Zápis widget snapshotu neobnoví WidgetKit timeline');
 requireMatch(plugin, /ActivityAuthorizationInfo\(\)\.areActivitiesEnabled/, 'Live Activity musí respektovat systémové povolení iOS');
 requireMatch(plugin, /Activity<AlphaTradeLiveActivityAttributes>\.activities/, 'Live Activity nemá autoritativní ActivityKit stav');
@@ -70,10 +73,12 @@ requireMatch(plugin, /"liveActivityEnded"/, 'Live Activity nehlásí ukončení 
 requireMatch(plugin, /CAPPluginMethod\(name: "presentCalendarEvent"/, 'Swift plugin neregistruje systémový editor Kalendáře');
 requireMatch(plugin, /EKEventEditViewController\(\)/, 'Kalendářní událost musí otevřít systémový editor');
 requireMatch(plugin, /eventEditViewController[\s\S]*didCompleteWith/, 'Swift plugin nevrací výsledek systémového editoru Kalendáře');
-requireMatch(plugin, /Po zrušení\/neúspěchu[\s\S]*AlphaTradePrivacyShield\.shared\.hide\(\)/, 'Zrušené Face ID nesmí nechat nedostupný nativní štít nad retry tlačítkem');
-requireMatch(plugin, /var result: JSObject = \[[\s\S]*"success": success[\s\S]*if let error/, 'Face ID výsledek nesmí posílat Swift Optional přes Capacitor most');
-requireMatch(privacyGate, /autoAttemptedRef\.current = true[\s\S]*authenticateNativePrivacy\(\)/, 'Privacy gate musí automatický Face ID pokus spustit nejvýše jednou na jedno zamknutí');
-requireMatch(privacyGate, /if \(!locked\) \{[\s\S]*autoAttemptedRef\.current = false/, 'Privacy gate musí nový automatický Face ID pokus povolit až po skutečném odemknutí');
+requireMatch(plugin, /shield\.hide\(ifGeneration: generation\)/, 'Face ID musí uvolnit jen štít vlastního zamknutí');
+requireMatch(plugin, /"success": success && current/, 'Face ID nesmí odemknout novější zamknutí');
+requireMatch(privacyController, /attemptedGeneration !== generation/, 'Privacy gate musí automatický pokus omezit na jedno zamknutí');
+requireMatch(privacyController, /success && generation === attempt/, 'Privacy gate musí ověřit generaci úspěšného odemknutí');
+requireMatch(privacyGate, /appStateChange/, 'Privacy gate musí zkontrolovat nové zamknutí při návratu do aplikace');
+requireMatch(scene, /sceneDidEnterBackground[\s\S]*showIfEnabled\(force: true\)/, 'Skutečný odchod do pozadí musí zamknout i během Face ID');
 requireMatch(plugin, /applyWorldFromWeb\(world\)/, 'Swift plugin nepředává LIVE/BACKTEST svět shellu');
 requireMatch(shell, /__alphaTradeNative\?\.toggleWorld\(\)/, 'Nativní menu neumí přepnout LIVE/BACKTEST svět');
 requireMatch(shell, /\("iOS funkce", "native-system"\)/, 'Nativní menu nemá přímou cestu k iOS funkcím');
@@ -117,14 +122,14 @@ for (const route of widgetRoutes) {
 }
 requireMatch(widgetSource, /AlphaTradeLockLive[\s\S]*alphatrade-native:\/\/live/, 'Lock Screen LIVE widget neotevírá LIVE route');
 requireMatch(widgetSource, /ActivityConfiguration\(for: AlphaTradeLiveActivityAttributes\.self\)/, 'Widget extension nemá Live Activity konfiguraci');
-requireMatch(widgetSource, /DynamicIsland[\s\S]*Read-only monitoring · žádná broker akce/, 'Live Activity nemá Dynamic Island nebo read-only bezpečnostní označení');
+requireMatch(widgetSource, /DynamicIsland[\s\S]*context\.isStale/, 'Dynamic Island musí respektovat zastaralý stav');
 requireMatch(widgetSource, /AlphaTradeWidgetSnapshotV2/, 'Widget extension nečte živý snapshot z App Group');
-requireMatch(widgetSource, /isLiveStale[\s\S]*30 \* 60_000/, 'LIVE widgety nemají nouzové varování při dlouho neobnoveném snapshotu');
+requireMatch(widgetSource, /isLiveStale[\s\S]{0,240}workerValidUntil[\s\S]{0,120}hasCurrentBroker/, 'LIVE widgety musí odvozovat čerstvost z workeru i brokeru');
 requireMatch(widgetSource, /forHTTPHeaderField: "Authorization"/, 'WidgetKit neposílá autorizační hlavičku');
 requireMatch(widgetSource, /Widget \\\(token\)/, 'WidgetKit neposílá omezený read-only token');
 requireMatch(widgetSource, /native-widget-snapshot/, 'WidgetKit nemá serverový endpoint pro obnovu na pozadí');
 requireMatch(widgetSource, /mergingRemote/, 'Vzdálená LIVE obnova nezachovává lokální deník');
-requireMatch(widgetSource, /DATA ZASTARALÁ/, 'Copier widget nemá viditelné stale-data varování');
+requireMatch(widgetSource, /STAV NEOVĚŘEN/, 'Copier widget nemá viditelné stale-data varování');
 for (const kind of ['AlphaTradeControlLive', 'AlphaTradeControlCapture']) {
   requireMatch(widgetSource, new RegExp(`kind: "${kind}"`), `Chybí ovladač Ovládacího centra ${kind}`);
 }

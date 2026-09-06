@@ -2,7 +2,7 @@ import { PushNotifications, type Token } from '@capacitor/push-notifications';
 import type { PluginListenerHandle } from '@capacitor/core';
 
 import { apiUrl, isNativeBuild } from '../utils/runtimeConfig';
-import { navigateNativeShell } from '../utils/nativeShell';
+import { dispatchNativeNotificationAction } from './nativeNotifications';
 import { supabase } from './supabase';
 import { alphaTradeNativePlugin } from './alphaTradeNativePlugin';
 
@@ -10,33 +10,67 @@ let listenerHandles: PluginListenerHandle[] = [];
 let initialization: Promise<boolean> | null = null;
 let initializedUserId: string | null = null;
 let registeredToken: Token | null = null;
+let generation = 0;
+let cancelRegistrationWait: (() => void) | null = null;
+const pendingTokenWrites = new Set<Promise<boolean>>();
+const REGISTRATION_TIMEOUT_MS = 12_000;
+const tokenStorageKey = (userId: string) => `alphatrade_native_apns_token_${userId}`;
+
+function saveToken(userId: string, token: Token): void {
+  try { localStorage.setItem(tokenStorageKey(userId), token.value); } catch { /* in-memory still available */ }
+}
+
+function storedToken(userId: string): Token | null {
+  try {
+    const value = localStorage.getItem(tokenStorageKey(userId));
+    return value ? { value } : null;
+  } catch { return null; }
+}
+
+async function bounded<T>(run: (signal: AbortSignal) => Promise<T>, timeoutMs = REGISTRATION_TIMEOUT_MS): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      run(controller.signal),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => { controller.abort(); reject(new Error('Native APNs request timed out')); }, timeoutMs);
+      }),
+    ]);
+  } finally { if (timer !== undefined) clearTimeout(timer); }
+}
 
 async function removeListenerHandles(): Promise<void> {
-  await Promise.all(listenerHandles.map(handle => handle.remove()));
+  const oldHandles = listenerHandles;
   listenerHandles = [];
+  await Promise.allSettled(oldHandles.map(handle => handle.remove()));
 }
 
 async function registrationRequest(token: Token, method: 'POST' | 'DELETE', expectedUserId: string): Promise<boolean> {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session || session.user.id !== expectedUserId) return false;
-  const environmentResult = await alphaTradeNativePlugin.getPushEnvironment() as {
-    environment: 'development' | 'production';
-  };
-  const response = await fetch(apiUrl('/api/native-push-subscription'), {
-    method,
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      deviceToken: token.value,
-      environment: environmentResult.environment,
-      bundleId: 'app.alphatrade.native',
-      appVersion: null,
-      deviceModel: typeof navigator === 'undefined' ? null : navigator.userAgent.slice(0, 120),
-    }),
+  return bounded(async signal => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session || session.user.id !== expectedUserId) return false;
+    const environmentResult = await alphaTradeNativePlugin.getPushEnvironment() as {
+      environment: 'development' | 'production';
+    };
+    if (signal.aborted) throw new Error('Native APNs request timed out');
+    const response = await fetch(apiUrl('/api/native-push-subscription'), {
+      method,
+      signal,
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        deviceToken: token.value,
+        environment: environmentResult.environment,
+        bundleId: 'app.alphatrade.native',
+        appVersion: null,
+        deviceModel: typeof navigator === 'undefined' ? null : navigator.userAgent.slice(0, 120),
+      }),
+    });
+    return response.ok;
   });
-  return response.ok;
 }
 
 /**
@@ -46,80 +80,115 @@ async function registrationRequest(token: Token, method: 'POST' | 'DELETE', expe
 export function initializeNativeRemoteNotifications(userId: string): Promise<boolean> {
   if (!isNativeBuild) return Promise.resolve(false);
   if (initialization && initializedUserId === userId) return initialization;
-  initialization = (async () => {
+  const epoch = ++generation;
+  initializedUserId = userId;
+  cancelRegistrationWait?.();
+  const task = (async () => {
     await removeListenerHandles();
-    initializedUserId = userId;
+    if (epoch !== generation) return false;
     const current = await PushNotifications.checkPermissions();
     const permission = current.receive === 'granted'
       ? current.receive
       : (await PushNotifications.requestPermissions()).receive;
-    if (permission !== 'granted') return false;
+    if (epoch !== generation || permission !== 'granted') return false;
 
     let settleRegistration: (active: boolean) => void = () => undefined;
     const registrationResult = new Promise<boolean>(resolve => {
       let settled = false;
-      const timeout = window.setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          resolve(false);
-        }
-      }, 15_000);
+      const timeout = setTimeout(() => settleRegistration(false), 15_000);
       settleRegistration = active => {
         if (settled) return;
         settled = true;
-        window.clearTimeout(timeout);
+        clearTimeout(timeout);
+        if (epoch === generation) cancelRegistrationWait = null;
         resolve(active);
       };
+      cancelRegistrationWait = () => settleRegistration(false);
     });
-
-    listenerHandles = [
-      await PushNotifications.addListener('registration', token => {
+    const handles: PluginListenerHandle[] = [];
+    try {
+      handles.push(await PushNotifications.addListener('registration', token => {
+        if (epoch !== generation) return;
         registeredToken = token;
-        void registrationRequest(token, 'POST', userId)
-          .then(settleRegistration)
+        saveToken(userId, token);
+        const write = registrationRequest(token, 'POST', userId);
+        pendingTokenWrites.add(write);
+        void write.finally(() => pendingTokenWrites.delete(write)).catch(() => undefined);
+        void write
+          .then(active => settleRegistration(epoch === generation && active))
           .catch(error => {
             console.warn('[Native APNs] Token registration failed:', error instanceof Error ? error.message : error);
             settleRegistration(false);
           });
-      }),
-      await PushNotifications.addListener('registrationError', error => {
+      }));
+      handles.push(await PushNotifications.addListener('registrationError', error => {
+        if (epoch !== generation) return;
         console.warn('[Native APNs] APNs registration failed:', error.error);
         settleRegistration(false);
-      }),
-      await PushNotifications.addListener('pushNotificationActionPerformed', action => {
-        const route = action.notification.data?.route;
-        navigateNativeShell(typeof route === 'string' ? route : 'dashboard');
-      }),
-    ];
-    await PushNotifications.register();
-    return registrationResult;
+      }));
+      handles.push(await PushNotifications.addListener('pushNotificationActionPerformed', action => {
+        if (epoch !== generation) return;
+        dispatchNativeNotificationAction({
+          actionId: action.actionId, inputValue: action.inputValue, data: action.notification.data,
+        });
+      }));
+      if (epoch !== generation) {
+        await Promise.allSettled(handles.map(handle => handle.remove()));
+        settleRegistration(false);
+        return false;
+      }
+      listenerHandles = handles;
+      await PushNotifications.register();
+      return await registrationResult;
+    } catch (error) {
+      settleRegistration(false);
+      await Promise.allSettled(handles.map(handle => handle.remove()));
+      throw error;
+    }
   })().catch(error => {
-    initialization = null;
-    initializedUserId = null;
     console.warn('[Native APNs] Initialization failed:', error instanceof Error ? error.message : error);
     return false;
+  }).finally(() => {
+    // Cache only in-flight work. A foreground/Settings retry must recheck iOS
+    // permission and persist the token again after denial or a transient outage.
+    if (epoch === generation) initialization = null;
   });
-  return initialization;
+  initialization = task;
+  return task;
 }
 
 export async function resetNativeRemoteNotificationListeners(): Promise<void> {
-  await removeListenerHandles();
+  generation++;
+  cancelRegistrationWait?.();
+  cancelRegistrationWait = null;
   initialization = null;
   initializedUserId = null;
+  await removeListenerHandles();
 }
 
-/** Remove this installation from the signed-in user's server-side APNs registry. */
+/** Local delivery is disabled even when remote revocation cannot be confirmed. */
 export async function deactivateNativeRemoteNotifications(userId: string): Promise<void> {
-  const token = registeredToken;
-  if (token) {
-    try {
-      await registrationRequest(token, 'DELETE', userId);
-    } catch (error) {
-      console.warn('[Native APNs] Token removal failed:', error instanceof Error ? error.message : error);
+  const token = registeredToken ?? storedToken(userId);
+  // Invalidate callbacks before awaiting network work; an in-flight register
+  // callback must not reattach the departing user's local listeners.
+  await bounded(() => resetNativeRemoteNotificationListeners(), 3_000).catch(() => undefined);
+  let revokeError: Error | null = null;
+  try {
+    // A token POST already dispatched before logout must finish before DELETE,
+    // otherwise its late completion can recreate the just-revoked subscription.
+    await Promise.allSettled([...pendingTokenWrites]);
+    if (token && !await registrationRequest(token, 'DELETE', userId)) {
+      revokeError = new Error('Odstranění APNs odběru na serveru nebylo potvrzené.');
     }
+  } catch (error) {
+    revokeError = error instanceof Error ? error : new Error('Odstranění APNs odběru selhalo.');
+  } finally {
+    registeredToken = null;
+    try { localStorage.removeItem(tokenStorageKey(userId)); } catch { /* no-op */ }
+    try { await bounded(() => PushNotifications.unregister()); }
+    catch (error) { revokeError ??= error instanceof Error ? error : new Error('Vypnutí APNs na zařízení selhalo.'); }
   }
-  registeredToken = null;
-  await resetNativeRemoteNotificationListeners();
+  if (revokeError) throw revokeError;
 }
 
 export async function sendNativeRemoteTestPush(): Promise<{

@@ -1,3 +1,4 @@
+import { formatTradeNoteHistoryForAI, tradeNoteAiEvidence } from './tradeNoteAiContext';
 // Coach Tools — agentic tool definitions and handlers.
 //
 // Each tool exposes a schema that Anthropic's tool-use API understands, plus a
@@ -534,6 +535,26 @@ export const normalizeSearchText = (value: unknown): string => String(value ?? '
 const searchTokens = (query: string): string[] => [...new Set(normalizeSearchText(query)
   .split(/\s+/).filter(token => token.length >= 3))];
 
+// Embeddings rank candidates; the record currently loaded in the user's selected
+// world is the evidence. Review edits must never be replaced by an old vector's text.
+const tradeHistoryContent = (trade: Trade): string => [
+  trade.instrument, trade.direction, trade.session, trade.signal,
+  `PnL: ${trade.pnl}`, trade.notes, formatTradeNoteHistoryForAI(trade.noteHistory), trade.planAdherence, trade.outcome,
+  ...(trade.tags || []), ...(trade.mistakes || []), ...(trade.emotions || []),
+  ...(trade.htfConfluence || []), ...(trade.ltfConfluence || []),
+].filter(value => value !== undefined && value !== null && value !== '').join(' | ');
+
+const currentTradeEvidence = (trade: Trade) => ({
+  content: tradeHistoryContent(trade), date: trade.date,
+  metadata: {
+    instrument: trade.instrument, direction: trade.direction, pnl: trade.pnl,
+    accountId: trade.accountId, signal: trade.signal, session: trade.session,
+    tags: trade.tags || [], noteHistory: tradeNoteAiEvidence(trade.noteHistory),
+    htfConfluence: trade.htfConfluence || [], ltfConfluence: trade.ltfConfluence || [],
+    autoConfluence: trade.autoConfluence || null,
+  },
+});
+
 export function lexicalHistoryCandidates(
   args: SearchHistoryArgs,
   trades: Trade[],
@@ -559,12 +580,7 @@ export function lexicalHistoryCandidates(
   if (requested.has('trade')) for (const trade of trades) {
     if (accountId && String(trade.accountId) !== accountId) continue;
     if (!withinDate(trade.date)) continue;
-    const content = [
-      trade.instrument, trade.direction, trade.session, trade.signal,
-      trade.notes, trade.planAdherence, trade.outcome, ...(trade.tags || []),
-      ...(trade.mistakes || []), ...(trade.emotions || []),
-      ...(trade.htfConfluence || []), ...(trade.ltfConfluence || []),
-    ].filter(Boolean).join(' | ');
+    const content = tradeHistoryContent(trade);
     const lexicalScore = score(content);
     if (lexicalScore > 0) docs.push({ source_type: 'trade', source_id: String(trade.id), date: trade.date, content, lexical_score: lexicalScore });
   }
@@ -598,19 +614,25 @@ async function searchHistory(args: SearchHistoryArgs, accounts: Account[] = [], 
   // Při account filtru načteme víc kandidátů (overscan), pak ořežeme.
   const accId = args.account ? resolveAccountId(args.account, accounts) : null;
   const matchCount = accId ? Math.min(limit * 4, 40) : limit;
-  const embedding = await embedQueryViaEdge(args.query);
+  let embedding: number[] | null = null;
   let semanticResults: any[] = [];
-  if (embedding) {
-    const { data, error } = await supabase.rpc('match_embeddings', {
-      query_embedding: embedding,
-      match_count: Math.max(matchCount, limit * 3),
-      similarity_threshold: 0.2,
-      filter_source_types: args.source_types || null,
-      filter_date_from: args.date_from || null,
-      filter_date_to: args.date_to || null,
-    });
-    if (error) console.warn('[coachTools] search_history rpc error, using lexical fallback:', error);
-    else semanticResults = data || [];
+  try {
+    embedding = await embedQueryViaEdge(args.query);
+    if (embedding) {
+      const { data, error } = await supabase.rpc('match_embeddings', {
+        query_embedding: embedding,
+        match_count: Math.max(matchCount, limit * 3),
+        similarity_threshold: 0.2,
+        filter_source_types: args.source_types || null,
+        filter_date_from: args.date_from || null,
+        filter_date_to: args.date_to || null,
+      });
+      if (error) { embedding = null; console.warn('[coachTools] search_history rpc error, using lexical fallback:', error); }
+      else semanticResults = data || [];
+    }
+  } catch (error) {
+    embedding = null;
+    console.warn('[coachTools] Semantic search unavailable, using current local history:', error);
   }
   let results = semanticResults;
   // SCOPE PŘEPÁŽKA: RAG hledá přes embeddings VŠECH obchodů v DB (i backtest).
@@ -619,8 +641,9 @@ async function searchHistory(args: SearchHistoryArgs, accounts: Account[] = [], 
   // obchody. Tím backtest obchody nikdy neprolezou do live mentora přes RAG.
   // (prep/review nejsou per-account → procházejí; backtest session poznámky budou
   //  v samostatné entitě, ne v preps/reviews, takže neleakují.)
-  const knownTradeIds = new Set(trades.map(t => String(t.id)));
-  results = results.filter((r: any) => r.source_type !== 'trade' || knownTradeIds.has(String(r.source_id)));
+  const knownTrades = new Map(trades.map(t => [String(t.id), t]));
+  results = results.filter((r: any) => r.source_type !== 'trade' || knownTrades.has(String(r.source_id)))
+    .map((r: any) => r.source_type === 'trade' ? { ...r, ...currentTradeEvidence(knownTrades.get(String(r.source_id))!) } : r);
   // V backtest scope zahoď live deník (prep/review) — backtest poznámky nejsou v embeddings.
   if (scope === 'backtest') {
     results = results.filter((r: any) => r.source_type !== 'prep' && r.source_type !== 'review');
@@ -641,7 +664,7 @@ async function searchHistory(args: SearchHistoryArgs, accounts: Account[] = [], 
   for (const item of lexical) {
     const key = `${item.source_type}:${item.source_id}`;
     const existing = merged.get(key);
-    merged.set(key, existing ? { ...existing, lexical_score: item.lexical_score, content: existing.content || item.content, date: existing.date || item.date } : item);
+    merged.set(key, existing ? { ...existing, lexical_score: item.lexical_score, content: item.content, date: item.date } : item);
   }
   results = [...merged.values()]
     .map(item => ({
@@ -830,6 +853,7 @@ function listTrades(args: ListTradesArgs = {}, ctx: ToolContext) {
       riskAmount: Number.isFinite(riskAmount) && riskAmount > 0 ? riskAmount : null,
       r,
       mfeR: t.mfeR ?? null,
+      excursionAmbiguous: t.excursionAmbiguous ?? false,
       maeR: t.maeR ?? null,
       signal: t.signal || null,
       session: t.session || null,
@@ -1029,12 +1053,12 @@ async function findSimilarTrades(
   if (error) return { results: [], count: 0 };
 
   // Filter out the reference trade itself if trade_id was provided
+  const tradeById = new Map(allTrades.map(t => [String(t.id), t]));
   let filtered = (data || []).filter((r: any) =>
-    !args.trade_id || r.source_id !== String(args.trade_id),
-  );
+    tradeById.has(String(r.source_id)) && (!args.trade_id || String(r.source_id) !== String(args.trade_id)),
+  ).map((r: any) => ({ ...r, ...currentTradeEvidence(tradeById.get(String(r.source_id))!) }));
   // Account post-filter — match returned source_id back to local trades to read accountId.
   if (accId) {
-    const tradeById = new Map(allTrades.map(t => [String(t.id), t]));
     filtered = filtered.filter((r: any) => {
       const t = tradeById.get(String(r.source_id));
       return t && String(t.accountId) === accId;
@@ -1073,6 +1097,12 @@ function getRecentContext(
       mistakes: t.mistakes || [],
       session: t.session,
       executionStatus: t.executionStatus,
+      notes: t.notes || '',
+      noteHistory: tradeNoteAiEvidence(t.noteHistory),
+      tags: t.tags || [],
+      htfConfluence: t.htfConfluence || [],
+      ltfConfluence: t.ltfConfluence || [],
+      autoConfluence: t.autoConfluence || null,
     })),
     recentPreps: sortedPreps.map((p) => ({
       id: p.id,
@@ -1444,6 +1474,7 @@ async function getCoachRecords(args: CoachRecordsArgs, ctx: ToolContext): Promis
         direction: trade.direction,
         riskAmount: trade.riskAmount ?? null,
         mfeR: trade.mfeR ?? null,
+        excursionAmbiguous: trade.excursionAmbiguous ?? false,
         maeR: trade.maeR ?? null,
         counterfactual: trade.counterfactual ?? null,
         executionPath: trade.executionPath ?? null,
@@ -1800,8 +1831,8 @@ async function getExperiments(
     count: experiments.length,
     experiments: experiments.map(exp => {
       const report = computeExperimentReport(ds, exp, world === 'live' ? prepDaysFromPreps(ctx.preps || []) : undefined);
-      const beforeIds = ds.trades.filter(trade => trade.ts < exp.startTs).map(trade => String(trade.id));
-      const afterIds = ds.trades.filter(trade => trade.ts >= exp.startTs).map(trade => String(trade.id));
+      const beforeIds = report.cohort.beforeTradeIds;
+      const afterIds = report.cohort.afterTradeIds;
       return {
         id: exp.id,
         title: exp.title,

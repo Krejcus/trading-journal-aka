@@ -113,12 +113,16 @@ import GenericDrawingFloatingToolbar from './GenericDrawingFloatingToolbar';
 import GenericDrawingSettingsDialog from './GenericDrawingSettingsDialog';
 import { installDrawingStyleDefaults } from '../services/chartDrawingStyleDefaults';
 import {
-  CHART_APPEARANCE_STORAGE_KEYS,
+  chartAppearanceUserId,
+  inheritGlobalAppearance,
   onChartAppearanceScopeBroadcast,
   onChartAppearanceScopeReset,
   readChartAppearance,
   writeChartAppearance,
+  writeGlobalChartAppearance,
 } from '../services/chartAppearanceScope';
+import { bindChartAppearanceAuth } from '../services/chartAppearanceAuth';
+import { supabase } from '../services/supabase';
 import {
   DEFAULT_CHART_PANEL_ID,
   panelSettingsTargetMatches,
@@ -1583,7 +1587,8 @@ const colorWithOpacity = (hex: string, opacity: number): string => {
   return `rgba(${red},${green},${blue},${Math.max(0, Math.min(1, opacity))})`;
 };
 
-const SHARED_INDICATOR_SETTINGS_KEY = CHART_APPEARANCE_STORAGE_KEYS.indicatorSettings;
+const releaseAppearanceAuth = bindChartAppearanceAuth(supabase.auth);
+if (import.meta.hot) import.meta.hot.dispose(releaseAppearanceAuth);
 const SHARED_INDICATOR_SETTINGS_EVENT = 'alphatrade:chart-indicators-change';
 const sharedIndicatorSettingsCache = new Map<string, AlphaTradeIndicatorSettings>();
 
@@ -1621,9 +1626,11 @@ const mergeIndicatorSettings = (saved: string | null): AlphaTradeIndicatorSettin
 const storedIndicatorEnvelope = (legacyKey: string): unknown => {
   const scoped = readChartAppearance('indicatorSettings');
   if (scoped !== undefined) return scoped;
+  const shared = inheritGlobalAppearance('indicatorSettings');
+  if (shared !== undefined) return shared;
+  // Unowned per-chart legacy settings are available only in explicit guest mode.
+  if (chartAppearanceUserId() !== null) return undefined;
   try {
-    const shared = window.localStorage.getItem(SHARED_INDICATOR_SETTINGS_KEY);
-    if (shared) return JSON.parse(shared) as unknown;
     const legacy = window.localStorage.getItem(legacyKey);
     return legacy ? JSON.parse(legacy) as unknown : undefined;
   } catch {
@@ -1651,7 +1658,7 @@ const persistPanelIndicatorSettings = (
   if (target.allPanels) sharedIndicatorSettingsCache.clear();
   sharedIndicatorSettingsCache.set(target.panelId, structuredClone(settings));
   if (writeChartAppearance('indicatorSettings', envelope)) return;
-  try { window.localStorage.setItem(SHARED_INDICATOR_SETTINGS_KEY, JSON.stringify(envelope)); } catch { /* private storage */ }
+  writeGlobalChartAppearance('indicatorSettings', envelope);
 };
 
 // Otevření i zavření session mění platný zdroj nastavení. Cache musí padnout a

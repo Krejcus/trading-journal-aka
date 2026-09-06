@@ -209,6 +209,7 @@ export function planCopyEventNotifications(options: {
   alertStates: readonly CopierAlertStateRow[];
   now: number;
   staleAfterMs?: number;
+  replayBoundary?: boolean;
 }): { notifications: Array<{
   userId: string;
   deviceId: string;
@@ -267,7 +268,12 @@ export function planCopyEventNotifications(options: {
         .filter(event => event.at <= options.now - COPY_EVENT_FIRST_RUN_WINDOW_MS)
         .reduce((latest, event) => Math.max(latest, event.at), 0);
     }
-    const fresh = chronological.filter(event => event.at > nextBoundary);
+    // Durable callers can rediscover equal timestamps: the outbox deduplicates
+    // existing IDs, while a later heartbeat can add another event in that ms.
+    // Keep the first-run historical baseline silent.
+    const fresh = chronological.filter(event => event.at > nextBoundary || (
+      options.replayBoundary && marker && !marker.active && event.at === nextBoundary
+    ));
     const notificationStart = notifications.length;
     for (const event of fresh) {
       const waitsForImage = imagePipelineEnabled && Boolean(event.episodeId)
@@ -304,7 +310,9 @@ export function planCopyEventNotifications(options: {
         userId: runtime.user_id,
         deviceId: runtime.device_id,
         incidentKey: COPY_EVENTS_MARKER_KEY,
-        active: false,
+        // Only this copy cursor uses active to denote a silent historical
+        // bootstrap. Once newer events are durably enqueued it becomes false.
+        active: !marker && fresh.length === 0,
         detail: String(nextBoundary),
         notified: notifications.length > notificationStart,
       });

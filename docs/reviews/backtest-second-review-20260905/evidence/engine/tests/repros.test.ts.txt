@@ -1,0 +1,69 @@
+import { describe, it, expect } from '/Users/filipkrejca/Documents/trading-journal-aka/node_modules/vitest/dist/index.js';
+import { createBacktestOrder, createBacktestRuntime, enqueueBacktestOrder, executeBacktestMarketOrder, processBacktestCandle } from '/Users/filipkrejca/Documents/trading-journal-aka/services/backtestEngine';
+import { DEFAULT_BACKTEST_CONFIG, type BacktestRuntimeState } from '/Users/filipkrejca/Documents/trading-journal-aka/services/backtestTypes';
+import { backtestTradeIntel, backtestExecutionPath, backtestExcursion, backtestCounterfactual, simulateBracket } from '/Users/filipkrejca/Documents/trading-journal-aka/services/backtestIntel';
+const T = Date.UTC(2026,8,4,12)/1000;
+const config = {...DEFAULT_BACKTEST_CONFIG, commissionPerSide:{MNQ:0,NQ:0},slippageTicks:{MNQ:0,NQ:0}};
+const bar=(index:number,open:number,high:number,low:number,close:number)=>({time:T+index*60,open,high,low,close,volume:100});
+function market(runtime:BacktestRuntimeState, side:'buy'|'sell', quantity:number, quote:ReturnType<typeof bar>, stopLoss?:number, reduceOnly=false){
+ const order=createBacktestOrder({runId:'r',instrument:'MNQ',side,type:'market',quantity,now:quote.time,stopLoss,reduceOnly});
+ return executeBacktestMarketOrder(enqueueBacktestOrder(runtime,order),order.id,quote,config);
+}
+function baseTrade(){return {id:'t',runId:'r',instrument:'MNQ' as const,direction:'Long' as const,quantity:1,entryPrice:100,exitPrice:102,entryTime:T,exitTime:T+60,grossPnl:4,commission:0,pnl:4,reason:'manual' as const,initialStopLoss:99,initialTakeProfit:102,riskAmount:2};}
+describe('confirmed current behavior, not expected-fix assertions',()=>{
+ it('scale-in can manufacture historical dollar MFE with no ambiguity flag',()=>{
+  let runtime=market(createBacktestRuntime(10000),'buy',1,bar(0,100,100,100,100));
+  runtime=processBacktestCandle(runtime,'r','MNQ',bar(1,100,120,100,120),config);
+  runtime=processBacktestCandle(runtime,'r','MNQ',bar(2,120,120,80,80),config);
+  runtime=market(runtime,'buy',1,bar(2,120,120,80,80));
+  runtime=market(runtime,'sell',2,bar(3,90,90,90,90),undefined,true);
+  const trade=runtime.closedTrades[0];
+  const intel=backtestTradeIntel(trade,{candles:[],orderEvents:runtime.orderEvents??[],timeZone:'UTC'});
+  expect(trade.entryPrice).toBe(90);expect(intel.runUp).toBe(120);expect(trade.excursionAmbiguous).toBeUndefined();
+  console.log('SCALE_IN',JSON.stringify({actualRunUp:intel.runUp,actualDrawdown:intel.drawdown,actualMfe:trade.mfePoints,actualMae:trade.maePoints,excursionAmbiguous:trade.excursionAmbiguous??false,expectedMaximumGrossOpenPnl:40,expectedMaximumAdverseGrossOpenPnl:40}));
+ });
+ it('scale-in at a profitable high manufactures MAE although equity was never underwater',()=>{
+  let runtime=market(createBacktestRuntime(10000),'buy',1,bar(0,100,100,100,100));
+  runtime=processBacktestCandle(runtime,'r','MNQ',bar(1,100,120,100,120),config);
+  runtime=market(runtime,'buy',1,bar(1,100,120,100,120));
+  runtime=market(runtime,'sell',2,bar(1,100,120,100,120),undefined,true);
+  const intel=backtestTradeIntel(runtime.closedTrades[0],{candles:[],orderEvents:runtime.orderEvents??[],timeZone:'UTC'});
+  expect(intel.drawdown).toBe(40);console.log('SCALE_UP_MAE',JSON.stringify({actualDrawdown:intel.drawdown,expected:0}));
+ });
+ it('engine gap and same-bracket counterfactual diverge',()=>{
+  let runtime=market(createBacktestRuntime(10000),'buy',1,bar(0,100,100,100,100),99);
+  const gap=bar(1,95,96,94,95);runtime=processBacktestCandle(runtime,'r','MNQ',gap,config);
+  const cf=simulateBracket([gap],{entryPrice:100,long:true,stop:99,target:102});
+  expect(runtime.closedTrades[0].exitPrice).toBe(95);expect(cf.exitPrice).toBe(99);
+  console.log('GAP',JSON.stringify({engine:runtime.closedTrades[0].exitPrice,counterfactual:cf.exitPrice,engineGrossR:runtime.closedTrades[0].grossPnl/2,cfGrossR:(cf.exitPrice!-100)}));
+ });
+ it('a missing first hour is marked as a complete execution path',()=>{
+  const path=backtestExecutionPath([bar(60,100,103,100,102)],baseTrade());
+  expect(path.complete).toBe(true);expect(path.hasGaps).toBe(false);console.log('INITIAL_GAP',JSON.stringify(path));
+ });
+ it('potential excursion credits full favorable wick on stop candle without uncertainty',()=>{
+  const value=backtestExcursion([bar(1,100,110,98,98)],baseTrade(),{timeZone:'UTC'});
+  expect(value.mfePotentialR).toBe(10);console.log('POTENTIAL',JSON.stringify(value));
+ });
+ it('counterfactual uses the cutoff candle high after actual engine flattened at its open',()=>{
+  const cutoffConfig={...config,flatTimeZone:'UTC',flatByMinute:12*60+2};
+  let runtime=market(createBacktestRuntime(10000),'buy',1,bar(0,100,100,100,100),99);
+  const candles=[bar(1,100,100,100,100),bar(2,100,110,100,110)];
+  for(const candle of candles) runtime=processBacktestCandle(runtime,'r','MNQ',candle,cutoffConfig);
+  const cf=backtestCounterfactual(candles,baseTrade(),[],{flatTimeZone:'UTC',flatByMinute:12*60+2});
+  expect(runtime.closedTrades[0].exitPrice).toBe(100);
+  expect(cf.variants?.find(v=>v.label==='initial')?.realizedR).toBe(2);
+  console.log('CUTOFF',JSON.stringify({engineExit:runtime.closedTrades[0].exitPrice,engineReason:runtime.closedTrades[0].reason,cfInitial:cf.variants?.find(v=>v.label==='initial'),cfNoTarget:cf.variants?.find(v=>v.label==='no_target')}));
+ });
+ it('post-trade intel changes when only unrevealed future candles are supplied',()=>{
+  const known=[bar(1,100,101,100,101)];const future=bar(10,101,110,101,110);
+  const before=backtestTradeIntel(baseTrade(),{candles:known,orderEvents:[],timeZone:'UTC'});
+  const after=backtestTradeIntel(baseTrade(),{candles:[...known,future],orderEvents:[],timeZone:'UTC'});
+  expect(before.excursion.mfePotentialR).toBe(1);expect(after.excursion.mfePotentialR).toBe(10);
+  console.log('UNREVEALED_INTEL',JSON.stringify({cursorMinute:1,futureBarMinute:10,potentialWithoutFuture:before.excursion.mfePotentialR,potentialWithPrefetchedFuture:after.excursion.mfePotentialR}));
+ });
+ it('counterfactual variants omit ambiguous flag returned by evaluator',()=>{
+  const candle=bar(1,100,103,98,100);const raw=simulateBracket([candle],{entryPrice:100,long:true,stop:99,target:102});const cf=backtestCounterfactual([candle],baseTrade());
+  expect(raw.ambiguous).toBe(true);expect(cf.variants?.find(v=>v.label==='initial')).not.toHaveProperty('ambiguous');console.log('AMBIGUITY',JSON.stringify({raw,variant:cf.variants?.find(v=>v.label==='initial')}));
+ });
+});

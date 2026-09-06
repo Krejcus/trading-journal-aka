@@ -1,0 +1,11 @@
+{
+  "services/backtestEngine.ts": "cbc7e97c2bf0602a33190463a8d2786413b858adbcfc8f6fe4c2ebdff0341b1b",
+  "services/backtestIntel.ts": "89a33c51da82a0e25459b824e555a902ce69573bbbd81466cf9fa3982d5c1e69",
+  "services/backtestCandleStore.ts": "6bf83a2ced62bd7121b5ae74efda103eb31dbb8907c6a833a9debd7446139d80",
+  "services/backtestReplayData.ts": "21e6f2e41f7811a7d47df27ef17ab66136dc524dcaf2c550d9db9f025f194ebc",
+  "services/backtestMonteCarlo.ts": "bc1223e76c8b4e5c8d581b34ba48a5d4cdc16cad7559ccdd31a3cdd829af53ea",
+  "services/labAnalytics.ts": "86682578dabab7ea304c813ac8ad0cf7fb8f191ec068caf948c5c6b84491742c",
+  "components/MonteCarloLab.tsx": "559812d4ac9746b57334d95a6575b91cb800dd52a35a48e426cc5554ec262446",
+  "components/Dashboard.tsx": "ae1e26350a2b5f8507006b78a6351b69d620b6304e5d4bbb6abf508c859d51a3",
+  "components/BacktestWorkspace.tsx": "2a1eb047d83187609a5450004d4fc52bedb728546ff28d30e7567964d48ee432"
+}

@@ -1,5 +1,6 @@
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import { CopyGroupLibraryRequestFence } from '../lib/copyGroupLibraryRequestFence';
+import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ChevronDown, ChevronRight, Crown, Plus, HelpCircle, Settings2, Eye, MoreVertical,
@@ -37,7 +38,6 @@ import {
   mergeCopyGroups,
   normalizeMultiplier,
   replaceCopyGroupFollowerAccount,
-  sanitizeCopyGroups,
   unavailableCopyGroupAccounts,
   validateCopyGroup,
   type CopyGroupConfig,
@@ -47,6 +47,14 @@ import {
   type LiveCopyTradingAdapter,
   type LiveCopyTradingCommand,
 } from '../services/liveCopyTrading';
+import {
+  deleteCopyGroup,
+  importCopyGroups,
+  loadCopyGroupLibrary,
+  readCopyGroupCache,
+  saveCopyGroup,
+  writeCopyGroupCache,
+} from '../services/copyGroupLibrary';
 
 const GROUP_COLORS = ['#4f6df5', '#f97316', '#d946ef', '#84cc16', '#06b6d4', '#ec4899', '#8b5cf6', '#64748b'];
 
@@ -123,7 +131,6 @@ const COLUMNS_STORAGE_KEY = 'alphatrade_live_copytrade_columns';
 const GROUP_COLUMNS_STORAGE_KEY = 'alphatrade_live_copytrade_group_columns';
 const ORDER_COLUMNS_STORAGE_KEY = 'alphatrade_live_copytrade_order_columns';
 const VIEW_SETTINGS_STORAGE_KEY = 'alphatrade_live_copytrade_view_settings';
-const GROUPS_STORAGE_KEY = 'alphatrade_live_copytrade_draft_groups';
 const TEMPLATES_STORAGE_KEY = 'alphatrade_live_copytrade_templates';
 const TRADOVATE_OFFICIAL_LOGO = 'https://www.tradovate.com/favicon-48.png';
 const manualOperationId = () => typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -246,6 +253,7 @@ function loadViewSettings(): { density: number; redaction: RedactionSettings; co
 }
 
 interface Props {
+  userId?: string;
   snapshot: LiveSnapshot;
   accountProfiles?: TradovateAccountProfile[];
   orders?: LiveOrder[];
@@ -419,6 +427,44 @@ export function unavailableFollowerRemovalPlan(
 export const commandBlockedByCopierKillSwitch = (command: LiveCopyTradingCommand) =>
   command.type !== 'flatten-account' && command.type !== 'flatten-group';
 
+const snapshotHealthMessage = (health: CopierSnapshotHealth): string => {
+  if (!health.enabled || health.state === 'disabled') return 'Automatické snímky jsou vypnuté.';
+  if (health.state === 'checking') return 'Kontroluji TradingView a vyhrazený layout…';
+  if (health.state === 'cdp-offline') return 'TradingView není připojené přes CDP. Obchod proběhne, ale graf se neuloží.';
+  if (health.state === 'layout-missing') {
+    return health.chartIdConfigured
+      ? `Otevři v TradingView vyhrazený layout „${health.layoutName}“.`
+      : `Vyhrazený layout „${health.layoutName}“ ještě není spárovaný.`;
+  }
+  if (health.state === 'capture-failed') return 'Layout je dostupný, poslední pořízení snímku ale selhalo.';
+  if (health.state === 'upload-failed') return 'Graf se podařilo vyfotit, ale poslední nahrání selhalo.';
+  return `Layout „${health.layoutName}“ je připravený pro ENTRY/EXIT.`;
+};
+
+const SnapshotHealthBanner: React.FC<{ health: CopierSnapshotHealth }> = ({ health }) => {
+  const ready = health.state === 'ready';
+  const checking = health.state === 'checking';
+  const lastSuccess = health.lastSuccessAt
+    ? new Date(health.lastSuccessAt).toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : null;
+  return (
+    <div className={`flex items-start gap-3 rounded-lg border px-4 py-3 ${
+      ready
+        ? 'border-emerald-500/30 bg-emerald-500/[0.07] text-emerald-700'
+        : checking
+          ? 'border-slate-500/25 bg-slate-500/[0.06] text-[var(--text-secondary)]'
+          : 'border-amber-500/35 bg-amber-500/[0.08] text-amber-700'
+    }`}>
+      {ready ? <CheckCircle2 size={17} className="mt-0.5 shrink-0" /> : <AlertTriangle size={17} className="mt-0.5 shrink-0" />}
+      <div className="min-w-0">
+        <p className="text-xs font-black">TradingView snímky</p>
+        <p className="mt-0.5 text-[11px] font-semibold opacity-90">{snapshotHealthMessage(health)}</p>
+        {lastSuccess ? <p className="mt-1 text-[10px] opacity-70">Poslední uložený snímek: {lastSuccess}</p> : null}
+      </div>
+    </div>
+  );
+};
+
 const TERMINAL_LIVE_ORDER_STATUSES = new Set([
   'filled', 'canceled', 'cancelled', 'rejected', 'expired',
 ]);
@@ -431,18 +477,8 @@ const TERMINAL_LIVE_ORDER_STATUSES = new Set([
 export const liveOrderIsOpenForSafety = (order: Pick<LiveOrder, 'status'>): boolean =>
   !TERMINAL_LIVE_ORDER_STATUSES.has(order.status.trim().toLowerCase());
 
-function loadDraftGroups(snapshot: LiveSnapshot): CopyGroupConfig[] {
-  try {
-    const raw = localStorage.getItem(GROUPS_STORAGE_KEY);
-    if (!raw) return copyGroupsFromSnapshot(snapshot);
-    const parsed = JSON.parse(raw);
-    return sanitizeCopyGroups(parsed) ?? copyGroupsFromSnapshot(snapshot);
-  } catch {
-    return copyGroupsFromSnapshot(snapshot);
-  }
-}
-
 export const LiveCopyTradeOverview: React.FC<Props> = ({
+  userId = '',
   snapshot,
   accountProfiles = [],
   orders = [],
@@ -460,6 +496,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   runtimeAvailable = false,
   riskConfigSupported = false,
   apiTelemetry,
+  snapshotHealth,
   onSwitchAndArm,
   onArmLive,
   onDisarm,
@@ -497,7 +534,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [hiddenGroupColumns, setHiddenGroupColumns] = useState<Set<GroupColumnKey>>(() => loadHiddenColumnSet<GroupColumnKey>(GROUP_COLUMNS_STORAGE_KEY));
   const [hiddenOrderColumns, setHiddenOrderColumns] = useState<Set<OrderColumnKey>>(() => loadHiddenColumnSet<OrderColumnKey>(ORDER_COLUMNS_STORAGE_KEY));
   const [groups, setGroups] = useState<CopyGroupConfig[]>(() => {
-    const initial = loadDraftGroups(snapshot);
+    const initial = readCopyGroupCache(userId, copyGroupsFromSnapshot(snapshot));
     // Effects běží až po prvním interaktivním renderu. Runtime skupinu proto
     // adoptujeme už zde, aby rychlý ARM po návratu z Risk neposlal starý draft.
     return runtimeGroup
@@ -506,6 +543,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   });
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(groups.map(group => group.id)));
   const didAutoExpandGroups = useRef(groups.length > 0);
+  const [groupLibraryState, setGroupLibraryState] = useState<'loading' | 'ready' | 'needs-import' | 'error'>(userId ? 'loading' : 'ready');
+  const [groupLibraryError, setGroupLibraryError] = useState<string | null>(null);
+  const [groupLibraryBusy, setGroupLibraryBusy] = useState(false);
   const [editorGroup, setEditorGroup] = useState<CopyGroupConfig | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [pendingUnavailableFollowerRemoval, setPendingUnavailableFollowerRemoval] = useState<PendingUnavailableFollowerRemoval | null>(null);
@@ -522,6 +562,38 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [copierTransition, setCopierTransition] = useState<'connecting' | 'disconnecting' | null>(null);
   const [transitionGroupId, setTransitionGroupId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ tone: 'success' | 'info' | 'error'; text: string; accountIds?: number[] } | null>(null);
+  const groupLibraryFence = useRef(new CopyGroupLibraryRequestFence(userId)).current;
+  groupLibraryFence.setOwner(userId);
+  const runtimeGroupRef = useRef(runtimeGroup);
+  const availableAccountIdsRef = useRef(snapshot.accounts.map(account => account.id));
+  runtimeGroupRef.current = runtimeGroup;
+  availableAccountIdsRef.current = snapshot.accounts.map(account => account.id);
+
+  const refreshGroupLibrary = useCallback(async (showLoading = false) => {
+    const token = groupLibraryFence.beginRead();
+    if (!token) return;
+    if (!userId) {
+      setGroupLibraryState('ready');
+      setGroupLibraryError(null);
+      return;
+    }
+    if (showLoading) setGroupLibraryState('loading');
+    try {
+      const loaded = await loadCopyGroupLibrary(userId, [], () => groupLibraryFence.canAcceptRead(token));
+      if (!groupLibraryFence.canAcceptRead(token)) return;
+      const currentRuntime = runtimeGroupRef.current;
+      const next = currentRuntime
+        ? adoptRuntimeCopyGroup(loaded.groups, availableAccountIdsRef.current, currentRuntime)
+        : loaded.groups;
+      setGroups(next);
+      setGroupLibraryState(loaded.needsLegacyImport ? 'needs-import' : 'ready');
+      setGroupLibraryError(null);
+    } catch (reason) {
+      if (!groupLibraryFence.canAcceptRead(token)) return;
+      setGroupLibraryState('error');
+      setGroupLibraryError(reason instanceof Error ? reason.message : 'Cloudovou knihovnu skupin se nepodařilo načíst.');
+    }
+  }, [groupLibraryFence, userId]);
 
   // Volba sloupců přežívá reload — je to nastavení pohledu, ne stav relace.
   useEffect(() => {
@@ -537,6 +609,20 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       localStorage.setItem(VIEW_SETTINGS_STORAGE_KEY, JSON.stringify({ density, redaction, confirmRearmAfterFlatten }));
     } catch { /* private mode */ }
   }, [confirmRearmAfterFlatten, density, hiddenGroupColumns, hiddenOrderColumns, redaction]);
+
+  useEffect(() => {
+    void refreshGroupLibrary(true);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refreshGroupLibrary();
+    };
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      groupLibraryFence.invalidate();
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [groupLibraryFence, refreshGroupLibrary]);
 
   useEffect(() => {
     setGroups(current => {
@@ -568,11 +654,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   }, [groups]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(groups));
-    } catch { /* private mode */ }
+    writeCopyGroupCache(userId, groups);
     onGroupsChange?.(groups);
-  }, [groups, onGroupsChange]);
+  }, [groups, onGroupsChange, userId]);
 
   useEffect(() => {
     try {
@@ -859,7 +943,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
   const runCommand = async (
     command: LiveCopyTradingCommand,
-    update?: () => void,
+    update?: () => void | Promise<void>,
     onError?: (message: string) => void,
   ): Promise<boolean> => {
     const key = command.type === 'flatten-account' || command.type === 'set-replication' || command.type === 'set-multiplier'
@@ -879,7 +963,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         return false;
       }
       if (brokerWrite && (!commandAdapter || !targetsExecutionRuntime || (requiresArmed && !copierArmed))) {
-        update?.();
+        await update?.();
         setToast({ tone: 'info', text: 'Preview pouze: tato skupina není připojená k připravenému execution runtime.' });
         return true;
       }
@@ -891,7 +975,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           `Flatten není potvrzen jako flat: positions=${result.remainingPositionAccounts.join(',') || 'none'} working=${result.workingOrderAccounts.join(',') || 'none'}`,
         );
       }
-      update?.();
+      await update?.();
       const successText = result && result.type === 'flatten'
         ? `Flatten potvrzen: ${result.accountIds.length} účtů je flat, zrušeno ${result.canceledOrders} příkazů, odesláno ${result.submittedClosures} close příkazů.`
         : command.type === 'resolve-stuck-operation'
@@ -958,24 +1042,97 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     // Editor se smí přepnout na nový leader až po potvrzení execution
     // runtime. Když broker preflight změnu odmítne, runCommand callback
     // nespustí a UI tak nikdy nelže o jiné topologii než drží worker.
-    return runCommand(command, () => {
-      setGroups(current => exists
-        ? current.map(candidate => candidate.id === normalizedGroup.id ? normalizedGroup : candidate)
-        : [...current, normalizedGroup]);
-      setExpanded(current => new Set(current).add(normalizedGroup.id));
-      setEditorGroup(null);
-    }, onError);
+    if (groupLibraryState !== 'ready') {
+      const message = groupLibraryState === 'needs-import'
+        ? 'Nejdřív potvrď jednorázový import lokálních skupin do cloudu.'
+        : 'Cloudová knihovna skupin zatím není připravená.';
+      if (onError) onError(message); else setToast({ tone: 'error', text: message });
+      return false;
+    }
+    const write = groupLibraryFence.beginWrite();
+    try {
+      const saved = await runCommand(command, async () => {
+        if (!groupLibraryFence.canAcceptWrite(write)) return;
+        setGroups(current => exists
+          ? current.map(candidate => candidate.id === normalizedGroup.id ? normalizedGroup : candidate)
+          : [...current, normalizedGroup]);
+        setExpanded(current => new Set(current).add(normalizedGroup.id));
+        try {
+          await saveCopyGroup(userId, normalizedGroup);
+          if (groupLibraryFence.canAcceptWrite(write)) setEditorGroup(null);
+        } catch (reason) {
+          if (groupLibraryFence.canAcceptWrite(write)) {
+            const message = reason instanceof Error ? reason.message : 'Copy group se nepodařilo synchronizovat.';
+            setGroupLibraryState('error');
+            setGroupLibraryError(message);
+          }
+          throw reason;
+        }
+      }, message => {
+        if (!groupLibraryFence.canAcceptWrite(write)) return;
+        if (onError) onError(message); else setToast({ tone: 'error', text: message });
+      });
+      return saved && groupLibraryFence.canAcceptWrite(write);
+    } finally {
+      groupLibraryFence.endWrite(write);
+    }
   };
 
-  const updateFollower = (groupId: string, accountId: number, patch: Partial<{ mode: ReplicationMode; multiplier: number }>) => {
-    setGroups(current => current.map(group => group.id !== groupId ? group : {
-      ...group,
-      followers: group.followers.map(follower => follower.accountId !== accountId ? follower : {
+  const updateFollower = async (groupId: string, accountId: number, patch: Partial<{ mode: ReplicationMode; multiplier: number }>) => {
+    if (groupLibraryState === 'loading' || groupLibraryState === 'error') {
+      throw new Error('Počkej na načtení cloudové knihovny skupin.');
+    }
+    const previous = groups.find(group => group.id === groupId);
+    if (!previous) return;
+    const updated = {
+      ...previous,
+      followers: previous.followers.map(follower => follower.accountId !== accountId ? follower : {
         ...follower,
         ...(patch.mode ? { mode: patch.mode } : {}),
         ...(patch.multiplier != null ? { multiplier: normalizeMultiplier(patch.multiplier) } : {}),
       }),
-    }));
+    };
+    const write = groupLibraryFence.beginWrite();
+    try {
+      setGroups(current => current.map(group => group.id === groupId ? updated : group));
+      if (groupLibraryState === 'ready') await saveCopyGroup(userId, updated);
+    } catch (reason) {
+      if (groupLibraryFence.canAcceptWrite(write)) {
+        const message = reason instanceof Error ? reason.message : 'Změnu skupiny se nepodařilo synchronizovat.';
+        // The worker already acknowledged this change. Preserve its state and
+        // expose the failed cloud write instead of restoring stale settings.
+        setGroupLibraryState('error');
+        setGroupLibraryError(message);
+        setToast({ tone: 'error', text: message });
+      }
+      throw reason;
+    } finally {
+      groupLibraryFence.endWrite(write);
+    }
+  };
+
+  const importLocalGroupLibrary = async () => {
+    if (groupLibraryBusy || groupLibraryState !== 'needs-import') return;
+    const write = groupLibraryFence.beginWrite();
+    setGroupLibraryBusy(true);
+    try {
+      const saved = await importCopyGroups(userId, groups);
+      if (!groupLibraryFence.canAcceptWrite(write)) return;
+      const currentRuntime = runtimeGroupRef.current;
+      setGroups(currentRuntime
+        ? adoptRuntimeCopyGroup(saved, availableAccountIdsRef.current, currentRuntime)
+        : saved);
+      setGroupLibraryState('ready');
+      setGroupLibraryError(null);
+      setToast({ tone: 'success', text: `${saved.length} skupin je nyní synchronizovaných mezi zařízeními.` });
+    } catch (reason) {
+      if (groupLibraryFence.canAcceptWrite(write)) {
+        setGroupLibraryError(reason instanceof Error ? reason.message : 'Lokální skupiny se nepodařilo nahrát do cloudu.');
+      }
+    } finally {
+      if (groupLibraryFence.canAcceptWrite(write)) setGroupLibraryBusy(false);
+      groupLibraryFence.endWrite(write);
+    }
   };
 
   const toggleGroup = (id: string) =>
@@ -1041,16 +1198,44 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         />
       ) : null}
 
+      {groupLibraryState === 'needs-import' ? (
+        <div className="flex flex-col gap-3 rounded-lg border border-indigo-500/30 bg-indigo-500/[0.08] p-4 sm:flex-row sm:items-center">
+          <div className="flex-1">
+            <p className="text-sm font-black text-[var(--text-primary)]">Přenést lokální skupiny do cloudu</p>
+            <p className="mt-1 text-xs text-[var(--text-secondary)]">
+              Na tomto zařízení je {groups.length} lokálních skupin. Potvrď je jako výchozí knihovnu pro PC, iPhone a Mac.
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={groupLibraryBusy}
+            onClick={() => void importLocalGroupLibrary()}
+            className="h-9 rounded-md bg-indigo-600 px-4 text-xs font-black text-white disabled:opacity-50"
+          >
+            {groupLibraryBusy ? 'Přenáším…' : `Synchronizovat ${groups.length} skupin`}
+          </button>
+        </div>
+      ) : null}
+
+      {groupLibraryState === 'error' ? (
+        <div className="flex items-center gap-3 rounded-lg border border-rose-500/30 bg-rose-500/[0.08] p-4 text-rose-500">
+          <AlertTriangle size={16} className="shrink-0" />
+          <span className="flex-1 text-xs font-bold">{groupLibraryError ?? 'Cloudová knihovna skupin není dostupná.'}</span>
+          <button type="button" onClick={() => void refreshGroupLibrary(true)} className="text-xs font-black uppercase">Zkusit znovu</button>
+        </div>
+      ) : null}
+
       <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden">
         <header className="flex items-center justify-between gap-3 px-5 lg:px-6 py-4 flex-wrap">
           <h3 className="text-lg font-black text-[var(--text-primary)]">Kopírovací skupiny</h3>
           <div className="flex items-center gap-2">
             <button
+              disabled={groupLibraryState !== 'ready'}
               onClick={() => setEditorGroup({
                 id: createLocalCopyGroupId(), name: '', enabled: false, leaderAccountId: null,
                 followers: [], color: GROUP_COLORS[0], safety: { ...DEFAULT_COPY_GROUP_SAFETY }, localOnly: true,
               })}
-              className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-2 text-xs font-bold text-[var(--text-secondary)] transition-colors hover:border-indigo-500/30 hover:bg-indigo-500/[0.06] hover:text-indigo-500"
+              className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-2 text-xs font-bold text-[var(--text-secondary)] transition-colors hover:border-indigo-500/30 hover:bg-indigo-500/[0.06] hover:text-indigo-500 disabled:cursor-not-allowed disabled:opacity-45"
             >
               <Plus size={14} /> Přidat skupinu
             </button>
@@ -1349,13 +1534,32 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             }
             const command = action.command;
             if (!command) return;
-            void runCommand(command, () => {
+            if (command.type === 'delete-group' && (groupLibraryState === 'loading' || groupLibraryState === 'error')) {
+              setToast({ tone: 'error', text: 'Cloudová knihovna skupin není připravená pro smazání.' });
+              return;
+            }
+            const write = command.type === 'delete-group' ? groupLibraryFence.beginWrite() : null;
+            void runCommand(command, async () => {
+              if (write && !groupLibraryFence.canAcceptWrite(write)) return;
               if (command.type === 'set-group-enabled') {
                 const { groupId, enabled } = command;
                 setGroups(current => current.map(group => group.id === groupId ? { ...group, enabled } : group));
               } else if (command.type === 'delete-group') {
                 const { groupId } = command;
                 setGroups(current => current.filter(group => group.id !== groupId));
+                if (groupLibraryState === 'ready') {
+                  try {
+                    await deleteCopyGroup(userId, groupId);
+                  } catch (reason) {
+                    if (write && groupLibraryFence.canAcceptWrite(write)) {
+                      const message = reason instanceof Error ? reason.message : 'Smazání skupiny se nepodařilo synchronizovat.';
+                      setGroupLibraryState('error');
+                      setGroupLibraryError(message);
+                    }
+                    throw reason;
+                  }
+                }
+                if (write && !groupLibraryFence.canAcceptWrite(write)) return;
               }
               if (command.type === 'flatten-group' && confirmRearmAfterFlatten && onArmLive && !copierKillSwitch) {
                 setPendingAction({
@@ -1368,7 +1572,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
               } else {
                 setPendingAction(null);
               }
-            });
+            }).finally(() => { if (write) groupLibraryFence.endWrite(write); });
           }}
         />
       )}

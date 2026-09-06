@@ -1,9 +1,12 @@
 import type { Trade } from '../types';
 
 export interface BacktestTradeReviewStorage {
-  getTradeScreenshots: (tradeIds: string[]) => Promise<Map<string, { screenshot?: string; screenshots?: string[] }>>;
-  uploadScreenshot: (dataUrl: string, tradeId: string) => Promise<string>;
-  updateTrade: (tradeId: string, updates: Partial<Trade>) => Promise<void>;
+  prepareBacktestTradeReview: (tradeId: string, updates?: Partial<Trade>) => Promise<import('./backtestReviewPersistence').BacktestReviewSnapshot>;
+  uploadScreenshot: (dataUrl: string, tradeId: string, expectedOwner?: string) => Promise<string>;
+  updateBacktestTradeReview: (
+    tradeId: string, updates: Partial<Trade>, snapshot: import('./backtestReviewPersistence').BacktestReviewSnapshot,
+    appendScreenshot?: string, expected?: Partial<Trade>,
+  ) => Promise<Partial<Trade>>;
 }
 
 export const mergeTradeSnapshotUrls = (
@@ -26,13 +29,12 @@ export const persistBacktestTradeReview = async (
   tradeId: string,
   updates: Partial<Trade>,
   snapshotDataUrl?: string,
+  expected?: Partial<Trade>,
 ): Promise<Partial<Trade>> => {
-  let payload: Partial<Trade> = { ...updates };
-  if (snapshotDataUrl) {
-    const existing = (await storage.getTradeScreenshots([tradeId])).get(tradeId);
-    const uploadedUrl = await storage.uploadScreenshot(snapshotDataUrl, tradeId);
-    payload = { ...payload, ...mergeTradeSnapshotUrls(existing, uploadedUrl) };
-  }
-  await storage.updateTrade(tradeId, payload);
-  return payload;
+  // A failed/missing database prerequisite stops before upload or any write.
+  const snapshot = await storage.prepareBacktestTradeReview(tradeId, updates);
+  const uploadedUrl = snapshotDataUrl
+    ? await storage.uploadScreenshot(snapshotDataUrl, tradeId, snapshot.ownerId)
+    : undefined;
+  return storage.updateBacktestTradeReview(tradeId, updates, snapshot, uploadedUrl, expected);
 };

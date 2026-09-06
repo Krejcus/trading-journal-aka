@@ -1,0 +1,13 @@
+import {it,expect} from '/Users/filipkrejca/Documents/trading-journal-aka/node_modules/vitest/dist/index.js';
+import {runSim,simPath} from '../monte-carlo-extracted';
+it('MonteCarloLab reports a positive expectancy even though per-trade fees make both outcomes negative',()=>{
+ const r=runSim(1000,90,0.3,0.1,20,100,250,50);
+ expect(r.expR).toBeCloseTo(0.17);expect(r.pProfit).toBe(0);expect(r.p50).toBeLessThan(0);
+ console.log('MC_COST',JSON.stringify({reportedExpR:r.expR,probabilityProfit:r.pProfit,medianFinal:r.p50,minFinal:r.p5,ruin:r.ruin}));
+});
+it('simulator continues calculating negative risk after the account is exhausted',()=>{
+ const r=simPath(1,1000,0.5,2,0.01,100,20,null,true);
+ const path=Array.from(r.full!);const firstInsolvent=path.findIndex(v=>v<=0);
+ expect(firstInsolvent).toBeGreaterThan(0);expect(firstInsolvent).toBeLessThan(path.length-1);
+ console.log('MC_BANKRUPTCY',JSON.stringify({firstInsolvent,tail:path.slice(firstInsolvent,firstInsolvent+4),negativeRiskNext:path[firstInsolvent]*0.01}));
+});

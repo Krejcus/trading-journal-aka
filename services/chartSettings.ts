@@ -25,6 +25,7 @@ import {
   onChartAppearanceScopeReset,
   readChartAppearance,
   writeChartAppearance,
+  writeGlobalChartAppearance,
 } from './chartAppearanceScope';
 import {
   DEFAULT_CHART_PANEL_ID,
@@ -580,9 +581,7 @@ const storedEnvelope = (): unknown => {
 
 const persistEnvelope = (envelope: unknown) => {
   if (writeChartAppearance('chartSettings', envelope)) return;
-  try {
-    window.localStorage.setItem(CHART_SETTINGS_STORAGE_KEY, JSON.stringify(envelope));
-  } catch { /* private storage */ }
+  writeGlobalChartAppearance('chartSettings', envelope);
 };
 
 export const loadChartSettings = (isDark: boolean, panelId = DEFAULT_CHART_PANEL_ID): ChartSettings => {

@@ -54,9 +54,9 @@ describe('backtestEngine', () => {
         unrealizedPnl: runtime.unrealizedPnl,
         commissions: runtime.commissions,
         orders: runtime.orders.map(({ id: _id, ...order }) => order),
-        fills: runtime.fills.map(({ id: _id, orderId: _orderId, ...fill }) => fill),
-        positions: runtime.positions.map(({ entryFillIds: _entryFillIds, ...position }) => position),
-        closedTrades: runtime.closedTrades.map(({ id: _id, ...trade }) => trade),
+        fills: runtime.fills.map(({ id: _id, orderId: _orderId, positionId: _positionId, closedPositionId: _closedPositionId, ...fill }) => fill),
+        positions: runtime.positions.map(({ entryFillIds: _entryFillIds, positionId: _positionId, ...position }) => position),
+        closedTrades: runtime.closedTrades.map(({ id: _id, positionId: _positionId, exitOrderId: _exitOrderId, ...trade }) => trade),
       };
     };
 
@@ -243,13 +243,15 @@ describe('excursion a riziko uzavřeného obchodu', () => {
     // proběhl ještě před vstupem.
     runtime = processBacktestCandle(runtime, 'run', 'MNQ', bar(1, 100, 100, 95, 100), DEFAULT_BACKTEST_CONFIG);
     runtime = processBacktestCandle(runtime, 'run', 'MNQ', bar(2, 100, 104, 99, 104), DEFAULT_BACKTEST_CONFIG);
-    expect(runtime.closedTrades[0].maePoints).toBe(1);
+    // The target bar's low could follow the exit too; only the lower bound
+    // is known. Neither that unknown low nor the pre-entry low becomes MAE.
+    expect(runtime.closedTrades[0]).toMatchObject({ maePoints: 0, excursionAmbiguous: true });
   });
 
-  it('svíčka, která trefí stopku, se do MAE ještě promítne', () => {
+  it('stop fill se do MAE promítne, pohyb za stopkou už nikoli', () => {
     let runtime = longWithStop();
     runtime = processBacktestCandle(runtime, 'run', 'MNQ', bar(2, 100, 100.5, 97, 98), DEFAULT_BACKTEST_CONFIG);
-    expect(runtime.closedTrades[0]).toMatchObject({ reason: 'stop-loss', maePoints: 3, maeR: 1.5 });
+    expect(runtime.closedTrades[0]).toMatchObject({ reason: 'stop-loss', maePoints: 2, maeR: 1 });
   });
 
   it('bez stop lossu zůstane riziko i R metriky nedostupné', () => {

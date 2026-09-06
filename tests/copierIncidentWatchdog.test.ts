@@ -483,3 +483,24 @@ describe('potenciální P&L v textech', () => {
     expect(content.body).toContain('@ 29500 (BE)');
   });
 });
+
+it('durable callers rediscover another event arriving in a later heartbeat at the same millisecond', () => {
+  const at = NOW - 5_000;
+  const events = [{ id: 'evt-1', at, kind: 'sl-moved', episodeId: 'episode', symbol: 'NQ', side: 'long', qty: 1 },
+    { id: 'evt-2', at, kind: 'sl-moved', episodeId: 'episode', symbol: 'NQ', side: 'long', qty: 1 }];
+  const result = planCopyEventNotifications({
+    runtimes: [runtime({ status: { recentCopyEvents: events } })],
+    alertStates: [{ ...state('state:copy-events', false), detail: String(at) }],
+    now: NOW, replayBoundary: true,
+  });
+  expect(result.notifications.map(event => event.eventId)).toEqual(['evt-1', 'evt-2']);
+});
+it('durable boundary replay preserves silence for a historical bootstrap baseline', () => {
+  const at = NOW - 3_600_000;
+  const result = planCopyEventNotifications({
+    runtimes: [runtime({ status: { recentCopyEvents: [{ id: 'old', at, kind: 'entry' }] } })],
+    alertStates: [{ ...state('state:copy-events'), detail: String(at) }],
+    now: NOW, replayBoundary: true,
+  });
+  expect(result.notifications).toEqual([]);
+});

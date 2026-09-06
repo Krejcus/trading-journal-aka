@@ -1,13 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { sendApnsNotification, type ApnsDevice } from './apns.js';
 import {
-  COPY_EVENTS_MARKER_KEY,
   copierSnapshotCollapseId,
   copyEventNotification,
   type CopierCopyEventRow,
 } from './copierIncidentWatchdog.js';
 import { loadTvAlertWebhookSettings, tvAlertNotification } from './tvAlertNotifications.js';
 import type { CopierSnapshotInput } from './copierSnapshotStore.js';
+import { copierEventDeliveryKey, drainNotificationDeliveries, enqueueNotificationDelivery } from './notificationDelivery.js';
 
 interface ImagePushContent {
   title: string;
@@ -32,17 +32,24 @@ const controllerStatus = (status: Record<string, unknown>): Record<string, unkno
     : status;
 };
 
+function matchingSnapshotEvent(status: Record<string, unknown>, input: Pick<CopierSnapshotInput, 'episodeId' | 'kind' | 'at'>): CopierCopyEventRow | undefined {
+  const events = controllerStatus(status).recentCopyEvents;
+  const matches = Array.isArray(events) ? (events as CopierCopyEventRow[]).filter(candidate => (
+    candidate?.episodeId?.toLowerCase() === input.episodeId.toLowerCase()
+    && candidate.kind === input.kind && candidate.at === input.at
+  )) : [];
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 export function findCopierSnapshotPushContent(
   status: Record<string, unknown>,
   input: Pick<CopierSnapshotInput, 'episodeId' | 'kind' | 'at' | 'symbol'>,
 ): ImagePushContent | null {
   if (input.kind === 'tv-alert') return null;
-  const events = controllerStatus(status).recentCopyEvents;
-  const event = Array.isArray(events) ? (events as CopierCopyEventRow[]).find(candidate => (
-    candidate?.episodeId?.toLowerCase() === input.episodeId.toLowerCase()
-    && candidate.kind === input.kind
-    && Math.floor(candidate.at / 1_000) === Math.floor(input.at / 1_000)
-  )) : undefined;
+  const event = matchingSnapshotEvent(status, input);
+  // Current workers only capture ENTRY/EXIT. A legacy SL image may correlate to
+  // its exact move, but must never fabricate a second generic exit notification.
+  if (input.kind === 'sl-moved' && !event) return null;
   const collapseId = copierSnapshotCollapseId({ episodeId: input.episodeId, kind: input.kind, at: input.at });
   if (!event) {
     const symbol = input.symbol.trim().toUpperCase();
@@ -113,39 +120,6 @@ async function sendImagePushes(options: {
   return { devices: devices.length, sent: results.filter(result => result.status === 'sent').length };
 }
 
-/**
- * Obrázek byl APNs přijat — posuň společnou hranici, aby textová záloha už
- * stejný ENTRY/EXIT neposlala. Read-before-upsert drží hranici monotónní i při
- * souběhu s minutovým watchdogem.
- */
-export async function markCopierSnapshotNotificationSent(options: {
-  db: SupabaseClient;
-  userId: string;
-  deviceId: string;
-  at: number;
-}): Promise<void> {
-  const { data, error } = await options.db.from('copier_alert_state')
-    .select('detail')
-    .eq('user_id', options.userId)
-    .eq('device_id', options.deviceId)
-    .eq('incident_key', COPY_EVENTS_MARKER_KEY)
-    .maybeSingle<{ detail: string | null }>();
-  if (error) throw new Error(`snapshot-marker-query-failed: ${error.message}`);
-  const stored = Number(data?.detail ?? 0);
-  if (Number.isFinite(stored) && stored >= options.at) return;
-  const nowIso = new Date().toISOString();
-  const { error: upsertError } = await options.db.from('copier_alert_state').upsert({
-    user_id: options.userId,
-    device_id: options.deviceId,
-    incident_key: COPY_EVENTS_MARKER_KEY,
-    active: false,
-    detail: String(options.at),
-    updated_at: nowIso,
-    notified_at: nowIso,
-  }, { onConflict: 'user_id,device_id,incident_key' });
-  if (upsertError) throw new Error(`snapshot-marker-upsert-failed: ${upsertError.message}`);
-}
-
 export async function sendCopierSnapshotFollowUp(options: {
   db: SupabaseClient;
   userId: string;
@@ -154,43 +128,39 @@ export async function sendCopierSnapshotFollowUp(options: {
   storagePath: string;
 }): Promise<{ devices: number; sent: number } | null> {
   if (options.input.kind === 'tv-alert') return null;
+  if (options.input.notifyDeadlineAt != null && Date.now() >= options.input.notifyDeadlineAt) return null;
   const { data, error } = await options.db.from('tradovate_copier_device_runtime')
     .select('status').eq('device_id', options.deviceId)
     .maybeSingle<{ status: Record<string, unknown> }>();
   if (error) throw new Error(`snapshot-runtime-query-failed: ${error.message}`);
   const content = findCopierSnapshotPushContent(data?.status ?? {}, options.input);
   if (!content) return null;
-  const result = await sendImagePushes({
-    db: options.db,
-    userId: options.userId,
-    storagePath: options.storagePath,
-    content,
-    deadlineAt: options.input.notifyDeadlineAt,
-  });
-  if (result.sent > 0) {
-    await markCopierSnapshotNotificationSent({
-      db: options.db,
-      userId: options.userId,
-      deviceId: options.deviceId,
-      at: options.input.at,
-    });
+  if (options.input.notifyDeadlineAt != null && Date.now() >= options.input.notifyDeadlineAt) return null;
+  const eventKey = copierEventDeliveryKey({ deviceId: options.deviceId, episodeId: options.input.episodeId,
+    kind: options.input.kind, at: options.input.at,
+    eventId: matchingSnapshotEvent(data?.status ?? {}, options.input)?.id });
+  const targets = await options.db.from('native_push_subscriptions').select('id')
+    .eq('user_id', options.userId).is('expired_at', null);
+  if (targets.error) throw new Error(`snapshot-push-devices-failed: ${targets.error.message}`);
+  for (const device of targets.data ?? []) {
+    if (options.input.notifyDeadlineAt != null && Date.now() >= options.input.notifyDeadlineAt) break;
+    await enqueueNotificationDelivery({ db: options.db, userId: options.userId, eventKey, channel: 'apns',
+      subscriptionId: device.id, payload: { ...content, route: 'live', category: 'ALPHATRADE_TRADE',
+        interruptionLevel: 'time-sensitive', imageStoragePath: options.storagePath,
+        ...(options.input.notifyDeadlineAt != null ? { imageDeadlineAt: options.input.notifyDeadlineAt } : {}) } });
   }
+  // Never move the global cursor here: an image can overtake other unsent events.
+  const delivered = await drainNotificationDeliveries({ db: options.db, userId: options.userId, channel: 'apns', eventKey });
+  const result = { devices: targets.data?.length ?? 0, sent: delivered.sent };
   return result;
 }
 
-/** Test celé obrázkové cesty bez trade eventu, markeru a journal zápisu. */
+/** Explicit test image: no trade event, journal row, or trade cursor change. */
 export async function sendCopierSnapshotTestPush(options: {
-  db: SupabaseClient;
-  userId: string;
-  requestId: string;
-  storagePath: string;
+  db: SupabaseClient; userId: string; requestId: string; storagePath: string;
 }): Promise<{ devices: number; sent: number }> {
-  return sendImagePushes({
-    db: options.db,
-    userId: options.userId,
-    storagePath: options.storagePath,
-    content: snapshotTestPushContent(options.requestId),
-  });
+  return sendImagePushes({ db: options.db, userId: options.userId, storagePath: options.storagePath,
+    content: snapshotTestPushContent(options.requestId) });
 }
 
 export async function sendTvAlertSnapshotFollowUp(options: {
