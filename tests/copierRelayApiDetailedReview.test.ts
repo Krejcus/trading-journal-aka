@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(), heartbeat: vi.fn(), claim: vi.fn(), push: vi.fn(),
-  requireUser: vi.fn(), enqueue: vi.fn(), read: vi.fn(), snapshots: vi.fn(),
+  requireUser: vi.fn(), enqueue: vi.fn(), read: vi.fn(), snapshots: vi.fn(), tick: vi.fn(),
 }));
 vi.mock('../server/tradovateOAuthStore', () => ({
   readTradovateServerConfig: () => ({ environment: 'demo', supabaseUrl: 'https://mock.invalid', supabaseAnonKey: 'mock-public' }),
@@ -18,6 +18,7 @@ vi.mock('../server/tradovateCopierCommandRelay', () => ({
 vi.mock('../server/nativeCopierStatePush', () => ({ sendImmediateCopyEventPushes: mocks.push }));
 vi.mock('../server/tvAlertNotifications', () => ({ loadPendingTvAlertSnapshotRequests: mocks.snapshots }));
 vi.mock('../server/nativeCors', () => ({ handleNativeCors: () => false }));
+vi.mock('../server/nativeLiveActivityTick', () => ({ tickNativeLiveActivitiesWithinBudget: mocks.tick }));
 import handler from '../api/tradovate/oauth/copier-relay';
 
 const response = () => {
@@ -36,6 +37,7 @@ describe('copier relay API fault review', () => {
     mocks.claim.mockResolvedValue(null);
     mocks.push.mockResolvedValue({ notifications: 0, sent: 0 });
     mocks.snapshots.mockResolvedValue([]);
+    mocks.tick.mockResolvedValue({ sent: 0, skipped: 0, failed: 0, reason: 'not-armed' });
   });
 
   it('delivers a queued control command before optional push notifications', async () => {
@@ -47,6 +49,7 @@ describe('copier relay API fault review', () => {
     expect(mocks.claim).toHaveBeenCalledOnce();
     expect(mocks.push).not.toHaveBeenCalled();
     expect(mocks.snapshots).not.toHaveBeenCalled();
+    expect(mocks.tick).not.toHaveBeenCalled();
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ command }));
   });
 
@@ -55,6 +58,19 @@ describe('copier relay API fault review', () => {
     await handler(poll(), res as unknown as VercelResponse);
     expect(mocks.push).toHaveBeenCalledOnce();
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('ticks the Live Activity on polls without a queued command and survives a tick failure', async () => {
+    const res = response();
+    await handler(poll(), res as unknown as VercelResponse);
+    expect(mocks.tick).toHaveBeenCalledOnce();
+    expect(mocks.tick.mock.calls[0][0]).toMatchObject({ userId: 'user', deviceId: 'device', connectionId: 'connection' });
+    expect(res.status).toHaveBeenCalledWith(200);
+
+    mocks.tick.mockRejectedValueOnce(new Error('apns down'));
+    const again = response();
+    await handler(poll(), again as unknown as VercelResponse);
+    expect(again.status).toHaveBeenCalledWith(200);
   });
 
   it('rejects invalid device authorization before heartbeat or command claim', async () => {

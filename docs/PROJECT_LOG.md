@@ -208,6 +208,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-07 (Claude, Live Activity na zamčené obrazovce: 5s tik z relay pollu)
+
+Live Activity dostávala P&L jen z minutového cronu, takže na zamčené
+obrazovce bývalo číslo 1–2 minuty staré. Nový modul
+`server/nativeLiveActivityTick.ts` běží uvnitř `poll` akce copier relay
+(worker volá každých ~750 ms) a při **armovaném** copieru pošle ActivityKit
+update nejvýše jednou za **5 s** ze stejného read-only Tradovate snapshotu a
+stejného plánovače (`planNativeLiveActivityUpdate`) jako cron — význam P&L,
+SL/TP a stavů se nemění, žádný broker příkaz na této cestě nevzniká.
+
+Pravidla tiku: pokus se zapisuje do `updated_at` odběru i při skipu (nezměněný
+obsah nevyvolá snapshot při každém pollu); push jde při změně hashe, při
+`end`, nebo jako heartbeat po 20 s při otevřené pozici; `stale-date` je
+30 s při otevřené pozici, jinak zůstává 180 s cronu. Tik má rozpočet 2,5 s
+(`Promise.race`), po něm poll odpoví bez čekání, ať kick/příkazy nezpozdí;
+chyba tiku se jen zaloguje. Bez ARM tik neběží — DISARM/konec aktivity dál
+řeší cron do minuty. Info.plist už má `NSSupportsLiveActivitiesFrequentUpdates`.
+Worker se nemění (žádná reinstalace), stačí deploy webu/API.
+
+Ověření: `tests/nativeLiveActivityTick.test.ts` (throttle, heartbeat,
+stale-date, chybějící snapshot, timeout), rozšířený
+`copierRelayApiDetailedReview` (tik jen bez příkazu, přežije selhání);
+`tsc` čistý mimo `extension/`; celá sada vitest zelená. Fyzicky ověřit při
+příští otevřené pozici: P&L na zamčené obrazovce se má hýbat po ~5 s.
+
 ### 2026-09-07 (Claude, breach jednoho followera odzbrojil celou kopírku — izolace místo DISARMu)
 
 Incident 16:01 (14:01Z): leader 64503883 short 15 MNQ, tři followeři po 15.

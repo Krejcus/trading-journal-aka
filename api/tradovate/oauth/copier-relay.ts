@@ -8,6 +8,7 @@ import {
 import { createTradovateAdminClient, readTradovateServerConfig, requireSupabaseUserId } from '../../../server/tradovateOAuthStore.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
 import { sendImmediateCopierArmPush, sendImmediateCopyEventPushes, type CopierArmTransition } from '../../../server/nativeCopierStatePush.js';
+import { tickNativeLiveActivitiesWithinBudget } from '../../../server/nativeLiveActivityTick.js';
 import type { LocalCopierAgentStatus } from '../../../lib/localCopierAgentProtocol.js';
 import {
   CopierSnapshotRateLimiter,
@@ -150,6 +151,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             });
           } catch (reason) {
             console.warn('[copier-relay] immediate copy-event push failed',
+              reason instanceof Error ? reason.message : String(reason));
+          }
+        }
+        // Live Activity na zamčené obrazovce: při armovaném copieru pošle
+        // update nejvýše jednou za 5 s ze stejného read-only snapshotu jako
+        // cron. Časový rozpočet chrání latenci příkazů; cron zůstává záloha.
+        if (!command && req.body?.status) {
+          try {
+            await tickNativeLiveActivitiesWithinBudget({
+              db, userId: device.userId, deviceId: device.id, connectionId: device.connectionId,
+              status: req.body.status as Record<string, unknown>, config,
+            });
+          } catch (reason) {
+            console.warn('[copier-relay] live activity tick failed',
               reason instanceof Error ? reason.message : String(reason));
           }
         }
