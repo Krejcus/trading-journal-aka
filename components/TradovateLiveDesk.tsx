@@ -86,6 +86,7 @@ import {
   type LocalCopierAgentStatus,
 } from '../lib/localCopierAgentProtocol';
 import { canUseDirectLocalCopierAgent, createLocalCopierAgentClient } from '../services/localCopierAgentClient';
+import { snapshotArmOffer } from '../services/copierSnapshotArmOffer';
 import {
   type CopyGroupConfig,
   type LiveCopyTradingAdapter,
@@ -403,6 +404,30 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       setConfigMutationPending(false);
     }
   }, []);
+  /** Po opravě kamery počká, až worker ohlásí připravený snapshot layout (max ~30 s). */
+  const waitForSnapshotReady = useCallback(async (): Promise<boolean> => {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      await new Promise(resolve => window.setTimeout(resolve, 1_000));
+      let next: LocalCopierAgentStatus | null = null;
+      try {
+        if (agentTransport === 'local') {
+          next = await agentClient.status();
+        } else if (relayConnectionId) {
+          next = (await loadTradovateCopierRelayStatus(relayConnectionId))?.status ?? null;
+        }
+      } catch {
+        continue;
+      }
+      if (!next) continue;
+      setAgentStatus(next);
+      const state = next.snapshotHealth?.state;
+      if (state === 'ready') return true;
+      // Worker během restartu hlásí `checking`; jiný konečný stav = oprava selhala.
+      if (state && state !== 'checking') return false;
+    }
+    return false;
+  }, [agentClient, agentTransport, relayConnectionId]);
   const armLiveGroup = useCallback(async (targetGroup: CopyGroupConfig) => {
     if (!targetGroup.enabled) {
       targetGroup = { ...targetGroup, enabled: true, localOnly: true };
@@ -425,6 +450,33 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       ...targetGroup.followers.map(follower => follower.accountId),
     ]);
     const exclusions = accountEligibilityExclusions.filter(entry => memberIds.has(entry.accountId));
+    // Kontrola ENTRY/EXIT snímků před ARM: čte se už napollovaný stav workeru,
+    // žádný nový round-trip. Ve zdravém stavu se ARM nezdrží ani o milisekundu;
+    // jen když snímky nejsou připravené, dostane uživatel volbu opravit
+    // TradingView (ještě DISARMED, jak vyžaduje brána workeru) nebo zapnout bez nich.
+    const armOffer = snapshotArmOffer(agentStatus?.snapshotHealth);
+    if (armOffer) {
+      const repair = await confirmAction({
+        title: 'Snímky obchodů nejsou připravené',
+        message: armOffer.repairable
+          ? `${armOffer.reason} Kopírka půjde zapnout hned bez snímků, nebo nejdřív obnovím TradingView (ukončí ho a spustí znovu, zhruba 20 s) a zapnu ji hned potom. Ulož si předtím rozdělané změny v TradingView.`
+          : `${armOffer.reason} Kopírka půjde zapnout hned; obchody se ale uloží bez grafu, dokud to nenapravíš.`,
+        confirmLabel: armOffer.repairable ? 'Obnovit TradingView a zapnout' : 'Zapnout bez snímků',
+        cancelLabel: armOffer.repairable ? 'Zapnout bez snímků' : 'Zrušit',
+      });
+      if (!armOffer.repairable && !repair) return;
+      if (armOffer.repairable && repair) {
+        setAgentStatus((await executeAgent({
+          type: 'snapshot-test',
+          requestId: crypto.randomUUID(),
+          repairCamera: true,
+        })).status);
+        const ready = await waitForSnapshotReady();
+        if (!ready) {
+          throw new Error('TradingView se nepodařilo obnovit včas. Kopírka zůstala vypnutá; zkus ARM znovu a případně zvol zapnutí bez snímků.');
+        }
+      }
+    }
     await runConfigMutation(async () => {
       const result = await executeAgent({
         type: 'arm-live',
@@ -433,7 +485,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       });
       acceptConfigAck(result.status);
     });
-  }, [acceptConfigAck, accountEligibilityExclusions, effectiveAccountEligibility, executeAgent, runConfigMutation]);
+  }, [acceptConfigAck, accountEligibilityExclusions, agentStatus?.snapshotHealth, confirmAction, effectiveAccountEligibility, executeAgent, runConfigMutation, waitForSnapshotReady]);
   const commandAdapter = useMemo<LiveCopyTradingAdapter | undefined>(() => {
     if (!executionGroup) return undefined;
     return {

@@ -208,6 +208,45 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-07 (Claude, ARM LIVE bez připravených snímků — varování a nabídka opravy)
+
+Uživatel: dnes se zase nepořídil ENTRY/EXIT snímek. Diagnóza z agenta a logu:
+TradingView bylo 6. 9. ve 21:37 spuštěné ručně bez CDP (`snapshotHealth.state
+= cdp-offline`, worker to zalogoval hned a znovu při obchodu), banner v LIVE si
+uživatel nevšiml. Požadavek: při zapnutí kopírky to zkontrolovat, ale zapnutí
+nezpomalit; když je to rozbité, dostat notifikaci a případně hned opravit.
+
+Řešení bez zásahu do workeru a bez zásahu do brány `snapshot-repair-blocked`:
+
+- **Notifikace:** `server/copierArmNotification.ts` (vyčleněno z
+  `nativeCopierStatePush`, aby ho bez kruhového importu sdílel relay push i
+  incident watchdog). `copierSnapshotArmWarning(snapshotHealth)` doplní k ARM
+  pushi větu podle stavu (cdp-offline / layout-missing / capture- a
+  upload-failed); titulek „Copier: ARM aktivní bez snímků". Relay bere
+  `snapshotHealth` z ACK statusu workeru (`copier-relay.ts`, action
+  `complete`), watchdog z celého runtime statusu (leží mimo `controller`).
+  Starší worker bez `snapshotHealth` = původní text.
+- **Kontrola před ARM v LIVE (`TradovateLiveDesk.armLiveGroup`):** čte jen už
+  napollovaný `agentStatus.snapshotHealth` (žádný round-trip). Ve zdravém
+  stavu, při `checking` nebo bez stavu se ARM nezdrží. Když snímky nejsou
+  připravené, dialog: u `cdp-offline` s `repairSupported` nabídne „Obnovit
+  TradingView a zapnout" (spustí existující `snapshot-test` + `repairCamera`
+  ještě v DISARMED, tj. přesně jak vyžaduje brána workeru, počká až 30 s na
+  `ready` a teprve pak pošle `arm-live`) nebo „Zapnout bez snímků"; u
+  ostatních stavů jen „Zapnout bez snímků" / „Zrušit". Restart TradingView
+  zůstává na potvrzení uživatele kvůli neuloženým změnám layoutu.
+  Rozhodovací logika je čistá funkce `services/copierSnapshotArmOffer.ts`.
+- Vědomě nezvoleno: automatický restart TradingView po ARM (brána vyžaduje
+  DISARMED a restart může narazit na dialog o neuložených změnách) a nový hook
+  do `localCopierExecutionAgent` (ARM cesta je bezpečnostně kritická, 30s
+  periodický health check stačí).
+
+Ověření: tsc čisté, lint změněných souborů 0 problémů, nové testy
+(`copierArmNotification.test.ts`: warning, notifikace, arm offer) + rozšířený
+watchdog test; cílená sada 131 testů zelená. Dialog v desku nebyl klikán
+naživo, protože ARM posílá skutečný příkaz workeru. Nasazení: jen web/API
+(Vercel), Mac worker se nemění.
+
 ### 2026-09-07 (Claude, breach jednoho followera odzbrojil celou kopírku — izolace místo DISARMu)
 
 Incident 16:01 (14:01Z): leader 64503883 short 15 MNQ, tři followeři po 15.

@@ -133,6 +133,20 @@ describe('hrany DISARMED <-> ARMED', () => {
     }));
   });
 
+  it('ARM bez připravených snímků nese varování ze snapshotHealth mimo controller část', () => {
+    const result = evaluate([
+      runtime({ status: {
+        controller: { armed: true, shadowMode: false, connected: true },
+        snapshotHealth: { enabled: true, state: 'cdp-offline', layoutName: 'AlphaTrade Snapshoty' },
+      } }),
+    ], [state('state:armed', false)]);
+    expect(result.notifications).toEqual([expect.objectContaining({
+      incidentKey: 'arm-started',
+      title: 'Copier: ARM aktivní bez snímků',
+      body: expect.stringContaining('TradingView běží bez CDP'),
+    })]);
+  });
+
   it('produkční nested stav po hraně DISARMED -> ARM pošle zprávu právě jednou', () => {
     const first = evaluate([
       runtime({ status: { controller: { armed: true, shadowMode: false, connected: true } } }),

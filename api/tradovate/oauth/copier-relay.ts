@@ -208,6 +208,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           try {
             immediatePush = await sendImmediateCopierArmPush({
               db, userId: device.userId, deviceId: device.id, transition,
+              // ACK status nese snapshotHealth: ARM bez připravených snímků
+              // se hned ohlásí v téže notifikaci, bez další cesty.
+              snapshotHealth: status?.snapshotHealth,
             });
           } catch (pushError) {
             // Notifikace nikdy nesmí změnit potvrzený výsledek copier příkazu.
