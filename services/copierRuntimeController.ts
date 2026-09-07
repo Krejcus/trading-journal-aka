@@ -2888,6 +2888,88 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     pendingFollowerMagnitudeChecks.delete(key);
   };
 
+  /**
+   * Autoritativní důkaz, že followera zlikvidovala propka/broker (denní
+   * auto-liq, drawdown floor, účet už nesmí obchodovat). Jen čtení; při
+   * jakékoli chybě vrací null a volající zůstává fail-closed.
+   */
+  const classifyFollowerBrokerBreach = async (accountId: number): Promise<string | null> => {
+    try {
+      const [capabilities, snapshots] = await Promise.all([
+        broker.listAccountCapabilities([accountId]),
+        broker.listAccountRiskSnapshots([accountId]),
+      ]);
+      const capability = capabilities.find(item => item.accountId === accountId);
+      if (capability && (!capability.active || !capability.canTrade)) {
+        return `broker účet už nepovoluje obchodování (active=${capability.active}, canTrade=${capability.canTrade})`;
+      }
+      const risk = snapshots.find(item => item.accountId === accountId);
+      if (!risk) return null;
+      if (
+        risk.realizedPnlUsd != null && risk.dailyLossAutoLiq != null && risk.dailyLossAutoLiq > 0
+        && risk.realizedPnlUsd <= -risk.dailyLossAutoLiq
+      ) {
+        return `realizovaná ztráta ${risk.realizedPnlUsd.toFixed(2)} USD dosáhla daily loss auto-liq ${risk.dailyLossAutoLiq} USD`;
+      }
+      if (risk.netLiq != null && risk.minNetLiq != null && risk.netLiq <= risk.minNetLiq) {
+        return `net liq ${risk.netLiq.toFixed(2)} USD dosáhla drawdown flooru ${risk.minNetLiq.toFixed(2)} USD`;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * Follower, kterého zlikvidovala propka, přestává být účastníkem kopie:
+   * durable `breached`, úklid vlastních ochranných noh, audit. Skupina
+   * zůstává ARMED — ostatní followeři dál drží stejnou expozici jako leader
+   * a odzbrojení by jim jen sebralo synchronizaci SL/TP (incident 7. 9.).
+   */
+  const isolateBreachedFollower = async (accountId: number, symbol: string, reason: string): Promise<boolean> => {
+    const now = clock();
+    const current = accountEligibility.get(accountId);
+    const next = new Map(accountEligibility);
+    setEligibilityIn(next, accountId, {
+      accountId,
+      state: 'breached',
+      reason: `propka zlikvidovala účet: ${reason}`,
+      at: now,
+      ...(current?.lastExecution ? { lastExecution: cloneRejectedExecution(current.lastExecution) } : {}),
+    });
+    const previous = new Map(accountEligibility);
+    accountEligibility.clear();
+    for (const [id, entry] of next) accountEligibility.set(id, entry);
+    try {
+      await persistEligibility();
+    } catch (error) {
+      accountEligibility.clear();
+      for (const [id, entry] of previous) accountEligibility.set(id, entry);
+      failClosed(new Error(
+        `Copier fail-closed: breach followera ${accountId} nelze durable uložit: ${errorOf(error).message}`,
+      ), { autoClose: false });
+      return false;
+    }
+    for (const [key, timer] of pendingFollowerMagnitudeChecks) {
+      if (!key.startsWith(`${accountId}:`)) continue;
+      clearTimeout(timer);
+      pendingFollowerMagnitudeChecks.delete(key);
+    }
+    for (const [key, pending] of pendingFollowerTransitions) {
+      if (pending.accountId !== accountId) continue;
+      clearPendingFollowerTransition(key);
+    }
+    options.onAudit?.([{
+      at: now,
+      leaderEventId: `follower-breach-isolated:${accountId}:${now}`,
+      kind: 'skipped',
+      accountId,
+      reason: `follower ${accountId} vyřazen z kopie — ${reason}; kopírka pokračuje pro ostatní followery`,
+    }]);
+    await sweepFollowerProtectiveLegs(accountId, symbol, now);
+    return true;
+  };
+
   const verifyFollowerMagnitude = async (accountId: number, symbol: string) => {
     const key = followerTransitionKey(accountId, symbol);
     if (!pendingFollowerMagnitudeChecks.has(key) || stopped) return;
@@ -2917,6 +2999,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         intentionalSuppressionKey(accountId, symbol),
       );
       if (suppression && followerNet === suppression.allowedNet) return;
+      if (followerNet === 0 && leaderNet !== 0) {
+        // Follower zmizel z trhu za otevřeného leadera. Než skupinu
+        // odzbrojíme, ověříme u brokera, zda ho nezlikvidovala propka —
+        // pak je to jeho konec dne, ne rozbitý model reality skupiny.
+        const breach = await classifyFollowerBrokerBreach(accountId);
+        if (breach) {
+          await isolateBreachedFollower(accountId, symbol, breach);
+          return;
+        }
+      }
       gate = {
         ...gate,
         divergentAccounts: new Set([...gate.divergentAccounts, accountId]),
@@ -6972,9 +7064,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const symbols = new Set([...reconciledLeaderPositions.keys(), ...followerPositions.keys()]);
         const cut = activeFollowerCut(follower.accountId);
         const expectsFlatAfterCut = cut != null && (follower.onCut ?? 'close-copy') === 'close-copy';
+        // Účastník lineage, kterého mezitím zlikvidovala propka (breached),
+        // má být flat; pozice na něm je dál divergence.
+        const isolatedBreach = ineligibleAfterReactivation.has(follower.accountId)
+          && accountEligibility.get(follower.accountId)?.state === 'breached';
         for (const symbol of symbols) {
           const leaderNet = reconciledLeaderPositions.get(symbol) ?? 0;
-          const expected = expectsFlatAfterCut
+          const expected = expectsFlatAfterCut || isolatedBreach
             ? 0
             : Math.trunc(leaderNet * follower.multiplier);
           const actual = followerPositions.get(symbol) ?? 0;

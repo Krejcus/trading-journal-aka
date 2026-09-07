@@ -208,6 +208,37 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-07 (Claude, breach jednoho followera odzbrojil celou kopírku — izolace místo DISARMu)
+
+Incident 16:01 (14:01Z): leader 64503883 short 15 MNQ, tři followeři po 15.
+Tradeify účet 64310872 narazil na daily loss auto-liq a propka ho zlikvidovala
+→ follower flat, leader dál −15. `verifyFollowerMagnitude` to vyhodnotil jako
+nesoulad pozic a `failClosed` odzbrojil **celou** skupinu: zbylí dva followeři
+(64832671, 64832689) zůstali short 15 s SL/TP z 13:59:45Z a tři následné posuny
+SL leadera skončily `blocked leader-replace-unmapped`. Uživatel dojel obchod
+ručně. Fail-closed byl formálně správný, ale sebral synchronizaci zdravým
+účtům přesně ve chvíli, kdy ji potřebovaly.
+
+Oprava (`copierRuntimeController.ts`): když follower za otevřeného leadera
+skončí autoritativně na 0, controller **před** DISARMem provede read-only
+`classifyFollowerBrokerBreach` — `listAccountCapabilities` (účet už
+nesmí obchodovat) a `listAccountRiskSnapshots` (realizovaná ztráta ≤
+−dailyLossAutoLiq, nebo netLiq ≤ minNetLiq). Důkaz → `isolateBreachedFollower`:
+durable eligibility `breached` („propka zlikvidovala účet: …“), zrušení
+čekajících kontrol daného účtu, audit `skipped` („kopírka pokračuje pro ostatní
+followery“), sweep vlastních ochranných noh; skupina zůstává ARMED. Bez důkazu
+(chyba čtení, zdravý snapshot) zůstává původní fail-closed. Reconciliace bere
+breached účastníka lineage jako očekávaně flat (pozice na něm je dál
+divergence). Testy: dva nové v `copierRuntimeController.test.ts` (likvidace →
+breached + ARMED; flat bez důkazu → fail-closed), mock broker dostal
+`setPosition`. Copier sady 253/253, tsc 0. **Worker zatím na starém bundlu**,
+reinstall spolu s fixem zombie socketu na „nasaď“.
+
+Poznámky k limitům: `netLiq` z `accountRiskStatus.maxNetLiq` je trailing
+high-water, ne aktuální equity, takže rozhoduje hlavně realizovaná ztráta vs.
+auto-liq; Tradovate `adminAction`/`liquidateOnly` zatím nečteme — kandidát
+na další, ještě přímější důkaz.
+
 ### 2026-09-07 (Claude, kopírka nešla zapnout — zombie WebSocket po spánku Macu)
 
 Uživatel 15:33: „Copier se nepodařilo zapnout … worker nemá živé spojení

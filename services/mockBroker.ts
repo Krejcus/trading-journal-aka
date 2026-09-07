@@ -81,6 +81,8 @@ export class MockBrokerTimeoutError extends Error {
 export interface MockBroker extends BrokerPort {
   /** Simuluje ztrátu a obnovení spojení. */
   setConnected(connected: boolean): void;
+  /** Testovací helper: autoritativní pozice bez fillu (externí/leader expozice). */
+  setPosition(accountId: number, symbol: string, netQuantity: number): void;
   /** Vstříkne broker event pro integrační test runtime controlleru. */
   emitEvent(event: BrokerEvent): void;
   /** Vše, co bylo skutečně odesláno — pro kontrolu duplicit v testech. */
@@ -452,6 +454,9 @@ export function createMockBroker(options: MockBrokerOptions = {}): MockBroker {
     setConnected(next: boolean): void {
       connected = next;
       emit({ type: 'connection', connected: next, at: clock() });
+    },
+    setPosition(accountId: number, symbol: string, netQuantity: number) {
+      positions.set(positionKey(accountId, symbol), { accountId, symbol, netQuantity });
     },
 
     emitEvent: emit,

@@ -2911,6 +2911,87 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     controller.stop();
   });
 
+  const propLiquidationHarness = async (riskSnapshot: {
+    realizedPnlUsd: number | null; dailyLossAutoLiq: number | null;
+  }) => {
+    const audit = vi.fn();
+    const broker = createMockBroker({
+      behavior: () => ({ kind: 'fill', price: 29_500 }),
+      nativeLiquidate: true,
+      accountRiskSnapshots: [{
+        accountId: 200, at: 1, netLiq: 50_000, minNetLiq: 48_046.18, trailingMaxDrawdown: 2_000,
+        ...riskSnapshot,
+      }],
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      onAudit: audit,
+      followerTransitionCorrelationWindowMs: 20,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    // Leader vstoupí Market Buy 1 (autoritativně drží +1); copier zkopíruje na 200 a mock fill vyplní.
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-entry-prop-liq', quantity: 1, orderType: 'Market', limitPrice: undefined,
+    }) });
+    broker.setPosition(100, 'MNQU6', 1);
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
+    await controller.waitForIdle();
+    expect(broker.placedRequests().some(request => request.accountId === 200 && request.side === 'Buy')).toBe(true);
+    expect((await broker.listPositions(200))[0]?.netQuantity).toBe(1);
+    expect(controller.status().armed).toBe(true);
+
+    // Propka zlikviduje followera (daily loss auto-liq): pozice 0, leader dál drží 1.
+    await broker.liquidatePosition!({ tag: 'prop-auto-liq', accountId: 200, symbol: 'MNQU6' });
+    await controller.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 60));
+    await controller.waitForIdle();
+    return { broker, controller, audit };
+  };
+
+  it('followera zlikvidovaného propkou vyřadí jako breached a skupinu nechá ARMED', async () => {
+    const { controller, audit } = await propLiquidationHarness({ realizedPnlUsd: -1_312.5, dailyLossAutoLiq: 1_250 });
+
+    expect(controller.status()).toMatchObject({
+      armed: true,
+      connected: true,
+      divergentAccounts: [],
+      lastError: null,
+    });
+    expect(controller.status().accountEligibility).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        accountId: 200,
+        state: 'breached',
+        reason: expect.stringContaining('daily loss auto-liq 1250'),
+      }),
+    ]));
+    expect(audit.mock.calls.flat(2)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'skipped', accountId: 200,
+        reason: expect.stringContaining('kopírka pokračuje pro ostatní followery'),
+      }),
+    ]));
+    controller.stop();
+  });
+
+  it('nečekaný flat followera bez důkazu o likvidaci zůstává fail-closed', async () => {
+    const { controller } = await propLiquidationHarness({ realizedPnlUsd: -120, dailyLossAutoLiq: 1_250 });
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      divergentAccounts: [200],
+      lastError: expect.stringContaining('má autoritativně pozici 0 na MNQU6, očekáváno 1'),
+    });
+    expect(controller.status().accountEligibility.some(entry => entry.accountId === 200 && entry.state === 'breached')).toBe(false);
+    controller.stop();
+  });
+
   it('modify→filled s autoritativní divergencí zůstane fail-closed a stuck', async () => {
     const broker = createMockBroker({
       behavior: request => request.tag === 'external-exposure'
