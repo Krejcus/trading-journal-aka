@@ -3,6 +3,7 @@ import { toPng } from 'html-to-image';
 import {
   captureChartSnapshotDataUrl,
   captureChartWorkspaceSnapshotDataUrl,
+  CHART_WORKSPACE_SNAPSHOT_TIMEOUT_MS,
 } from '../services/chartSnapshot';
 
 vi.mock('html-to-image', () => ({ toPng: vi.fn() }));
@@ -58,5 +59,18 @@ describe('captureChartSnapshotDataUrl', () => {
       skipAutoScale: true,
       skipFonts: true,
     }));
+  });
+
+  it('fails with a readable error instead of spinning forever when rasterisation never settles', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(toPng).mockImplementationOnce(() => new Promise(() => {}));
+      const pending = captureChartWorkspaceSnapshotDataUrl({} as HTMLElement, false);
+      const outcome = expect(pending).rejects.toThrow(/Snapshot grafů se nepodařilo vykreslit do 30 s/);
+      await vi.advanceTimersByTimeAsync(CHART_WORKSPACE_SNAPSHOT_TIMEOUT_MS + 1);
+      await outcome;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

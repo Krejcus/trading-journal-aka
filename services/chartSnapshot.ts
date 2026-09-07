@@ -21,6 +21,8 @@ export const captureChartSnapshotDataUrl = (
   return output.toDataURL('image/png');
 };
 
+export const CHART_WORKSPACE_SNAPSHOT_TIMEOUT_MS = 30_000;
+
 /**
  * Capture the complete visible chart workspace in its current layout. Unlike
  * the panel API screenshot this includes every open graph, FlexLayout chrome,
@@ -35,7 +37,16 @@ export const captureChartWorkspaceSnapshotDataUrl = async (
   const pixelRatio = typeof window === 'undefined'
     ? 1
     : Math.min(2, Math.max(1, window.devicePixelRatio || 1));
-  return toPng(workspace, {
+  // html-to-image čeká na decode()/requestAnimationFrame každého obrázku;
+  // záplata v patches/ oba háčky ošetřuje, ale tlačítko nesmí točit donekonečna
+  // ani při jiné neočekávané prodlevě — po limitu vrátíme srozumitelnou chybu.
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    deadline = setTimeout(() => reject(new Error(
+      'Snapshot grafů se nepodařilo vykreslit do 30 s. Zkus to znovu, případně zmenši okno nebo zavři nepotřebné panely.',
+    )), CHART_WORKSPACE_SNAPSHOT_TIMEOUT_MS);
+  });
+  return Promise.race([toPng(workspace, {
     backgroundColor: isDark ? '#070a0f' : '#ffffff',
     cacheBust: false,
     pixelRatio,
@@ -44,5 +55,5 @@ export const captureChartWorkspaceSnapshotDataUrl = async (
     // jejich znovuvložení čte cross-origin Google CSS a v localhostu zbytečně
     // vyhazuje SecurityError, i když samotný snapshot následně uspěje.
     skipFonts: true,
-  });
+  }), timeout]).finally(() => { if (deadline !== undefined) clearTimeout(deadline); });
 };

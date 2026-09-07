@@ -208,6 +208,57 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-07 (Claude, kopírka nešla zapnout — zombie WebSocket po spánku Macu)
+
+Uživatel 15:33: „Copier se nepodařilo zapnout … worker nemá živé spojení
+s Tradovate“. Diagnóza z lokálního agenta a logů: proces workeru běžel
+(start 6. 9. 21:37, PID 781), internet i Tradovate API dostupné, ale poslední
+WS záznam byl 6. 9. 21:42:23 „WS CONNECT attempt=2“ — 24 s po zavření víka
+(`pmset` Sleep 21:41:59, Wake 7. 9. 06:06). Pak 18 hodin ticho: žádný
+heartbeat-timeout, žádný „WS DISCONNECTED“ (ten mlčí při stavu `connected`),
+controller `connected=false`, `lastError` z pokusu o ARM. Příčina v
+`services/tradovateBroker.ts`: heartbeat začínal
+`if (socket !== candidate || candidate.readyState !== 1) return;` — socket,
+který po spánku spadl do CLOSING/CLOSED bez `onclose` (undici čeká na TCP,
+které už neexistuje), tak každý tik tiše přeskočil a nikdo ho nikdy neuvolnil
+ani nepřipojil znovu. Fail-closed zafungoval správně (ARM odmítnut), ale bez
+ručního zásahu se stream neobnovil.
+
+Okamžitá náprava: `launchctl kickstart -k gui/$(id -u)/com.alphatrade.copier`
+z DISARMED/flat stavu (13:35:25Z); do 10 s `connected=true`, do 3 min
+reconciliace hotová a uživatel kopírku ARMoval. Oprava v kódu: heartbeat
+u `readyState >= 2` po `closeTimeoutMs` (5 s) zaloguje
+`WS ZOMBIE state=… readyState=… reason=no-close-event`, emituje chybu
++ `connection:false`, uvolní socket a naplánuje reconnect `zombie-socket`;
+CONNECTING (0) dál hlídá connect watchdog. Test v
+`tradovateBrokerReconnect.test.ts` (handshake → readyState=2 bez onclose →
+po 4 s nic, po 6 s zombie + reconnect + druhý socket). Broker testy 17/17,
+tsc 0. **Worker běží stále na starém bundlu** — reinstall až na „nasaď“
+(obchodní den).
+
+### 2026-09-07 (Claude, backtest review: snapshot se točil donekonečna; nůžky replay „neustřihly“)
+
+Snapshot: `html-to-image` 1.11.13 v `createImage` čeká na `img.decode()`
+(bez catch — Chromium ho u velkých SVG/foreignObject odmítá `EncodingError`)
+a pak na `requestAnimationFrame` (v neviditelném tabu nikdy nepřijde). Obojí
+znamená promise, která se nikdy nevyřeší → tlačítko „Pořizuji všechny grafy…“
+točí navždy a Uložit je disabled. Reprodukováno v náhledu (skrytý panel:
+i `toPng` na 50px divu neskončil). Oprava: `patches/html-to-image+1.11.13.patch`
+(es i lib) — decode() `then(after, after)`, rAF závodí se `setTimeout(120)`;
+plus `captureChartWorkspaceSnapshotDataUrl` má 30 s deadline se srozumitelnou
+chybou (`CHART_WORKSPACE_SNAPSHOT_TIMEOUT_MS`, test s fake timery).
+
+Nůžky: kliknutí před aktuální kurzor je v session s obchody záměrně blokované
+(`selectReplayStart`, engine je forward-only; BacktestWorkspace to hlásí
+„Po zadání objednávky nelze vrátit kurzor zpět“), ale hláška šla jen do
+stavového řádku lišty, který je `hidden 2xl:block` — pod 1536 px uživatel
+neviděl nic. Teď: workspace zobrazí toast uprostřed (sdílený
+`quickOrderFeedback`, přesunutý nad replay callbacky) a graf dostane
+`replaySelectionMinimumTime`: náhled nůžek před hranicí je červený s textem
+„Nelze vrátit před zpracované obchody“. Otevřená otázka: povolit návrat až k
+poslednímu fillu, když je skupina flat a bez pracovních příkazů (bezpečné
+přepočítání je no-op) — zatím neimplementováno.
+
 ### 2026-09-06 (Claude, dvojklik na splitter grafů vrací dělení doprostřed)
 
 Uživatel: dvojklik funguje jen na hraně čáry, ne uprostřed. Reprodukováno v

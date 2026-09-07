@@ -225,6 +225,8 @@ interface CandleKitTradeChartProps {
   replaySelecting?: boolean;
   replaySelectionCandles?: MarketCandle[];
   replaySelectionTime?: number | null;
+  /** Před tímto časem (unix s) session návrat nedovolí — náhled nůžek to ukáže. */
+  replaySelectionMinimumTime?: number | null;
   onReplaySelectionTimeChange?: (time: number | null) => void;
   onReplayStart?: (time: number) => void;
   managedPositionBoxes?: BacktestManagedPositionBox[];
@@ -1704,6 +1706,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   replayActive = false,
   replayCursorTime = null,
   replaySelecting = false,
+  replaySelectionMinimumTime = null,
   replaySelectionCandles = [],
   replaySelectionTime = null,
   onReplaySelectionTimeChange,
@@ -4534,40 +4537,45 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             }
           }}
         >
-          {replaySelectionPreview && (
-            <>
-              <span
-                className="pointer-events-none absolute inset-y-0"
-                style={{
-                  left: replaySelectionPreview.x,
-                  width: Math.max(0, replaySelectionPreview.plotWidth - replaySelectionPreview.x),
-                  background: isDark ? 'rgba(9, 13, 18, 0.76)' : 'rgba(255, 255, 255, 0.76)',
-                }}
-              />
-              <span
-                className="pointer-events-none absolute inset-y-0 w-px bg-[#2962ff]"
-                style={{ left: replaySelectionPreview.x }}
-              />
-              {replaySelectionPreview.y !== null && (
+          {replaySelectionPreview && (() => {
+            const blocked = replaySelectionMinimumTime !== null && replaySelectionPreview.time < replaySelectionMinimumTime;
+            const accent = blocked ? 'bg-rose-500' : 'bg-[#2962ff]';
+            return (
+              <>
                 <span
-                  className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-1/2 text-slate-950 drop-shadow-[0_1px_0_rgba(255,255,255,0.9)]"
-                  style={{ left: replaySelectionPreview.x, top: replaySelectionPreview.y }}
+                  className="pointer-events-none absolute inset-y-0"
+                  style={{
+                    left: replaySelectionPreview.x,
+                    width: Math.max(0, replaySelectionPreview.plotWidth - replaySelectionPreview.x),
+                    background: isDark ? 'rgba(9, 13, 18, 0.76)' : 'rgba(255, 255, 255, 0.76)',
+                  }}
+                />
+                <span
+                  className={`pointer-events-none absolute inset-y-0 w-px ${accent}`}
+                  style={{ left: replaySelectionPreview.x }}
+                />
+                {replaySelectionPreview.y !== null && (
+                  <span
+                    className={`pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-1/2 drop-shadow-[0_1px_0_rgba(255,255,255,0.9)] ${blocked ? 'text-rose-500 opacity-60' : 'text-slate-950'}`}
+                    style={{ left: replaySelectionPreview.x, top: replaySelectionPreview.y }}
+                  >
+                    <Scissors size={19} strokeWidth={2.4} />
+                  </span>
+                )}
+                <span
+                  className={`pointer-events-none absolute bottom-7 -translate-x-1/2 whitespace-nowrap rounded px-2 py-1 text-[10px] font-bold text-white shadow ${accent}`}
+                  style={{ left: replaySelectionPreview.x }}
                 >
-                  <Scissors size={19} strokeWidth={2.4} />
+                  {blocked ? 'Nelze vrátit před zpracované obchody · ' : ''}
+                  {new Date(replaySelectionPreview.time * 1_000).toLocaleString('cs-CZ', {
+                    timeZone: 'Europe/Prague',
+                    day: '2-digit', month: '2-digit', year: '2-digit',
+                    hour: '2-digit', minute: '2-digit',
+                  })}
                 </span>
-              )}
-              <span
-                className="pointer-events-none absolute bottom-7 -translate-x-1/2 rounded bg-[#2962ff] px-2 py-1 text-[10px] font-bold text-white shadow"
-                style={{ left: replaySelectionPreview.x }}
-              >
-                {new Date(replaySelectionPreview.time * 1_000).toLocaleString('cs-CZ', {
-                  timeZone: 'Europe/Prague',
-                  day: '2-digit', month: '2-digit', year: '2-digit',
-                  hour: '2-digit', minute: '2-digit',
-                })}
-              </span>
-            </>
-          )}
+              </>
+            );
+          })()}
         </div>
       )}
       {!hideDrawingToolbar && selectedFib && <FibDrawingFloatingToolbar

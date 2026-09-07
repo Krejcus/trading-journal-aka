@@ -267,6 +267,8 @@ interface WorkspaceDataContextValue {
   activePanelId: string;
   replay: ChartReplayState;
   replaySelectionTime: number | null;
+  /** Nejstarší čas, kam lze v session vrátit replay (po obchodech = aktuální kurzor); null = bez omezení. */
+  replaySelectionMinimumTime: number | null;
   setReplaySelectionTime: (time: number | null) => void;
   selectReplayStart: (time: number) => void;
   activatePanel: (id: string) => void;
@@ -665,6 +667,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             replaySelecting={context.replay.phase === 'selecting'}
             replaySelectionCandles={rawCandles}
             replaySelectionTime={context.replaySelectionTime}
+            replaySelectionMinimumTime={context.replaySelectionMinimumTime}
             managedPositionBoxes={context.tradingSettings.positionBoxes && config.root === context.backtestSession?.executionInstrument
               ? context.backtestSession.managedPositionBoxes
               : undefined}
@@ -760,6 +763,15 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const [replay, setReplay] = useState<ChartReplayState>(backtestSession?.initialReplay ?? DEFAULT_CHART_REPLAY_STATE);
   const [replaySelectionTime, setReplaySelectionTime] = useState<number | null>(null);
   const [replayDataLoading, setReplayDataLoading] = useState(false);
+  // Krátká hláška uprostřed workspace (rychlá objednávka, odmítnutý návrat
+  // replay). Stavový řádek v liště je viditelný až od šířky 2xl, takže sám
+  // o sobě zpětnou vazbu nezaručí.
+  const [quickOrderFeedback, setQuickOrderFeedback] = useState<{ ok: boolean; message: string } | null>(null);
+  useEffect(() => {
+    if (!quickOrderFeedback) return;
+    const timer = window.setTimeout(() => setQuickOrderFeedback(null), 3_200);
+    return () => window.clearTimeout(timer);
+  }, [quickOrderFeedback]);
   const replayRef = useRef(replay);
   const replayInteractionPaused = Boolean(backtestSession?.pauseReplayForDialog || reviewTradeId);
   const replayInteractionPausedRef = useRef(replayInteractionPaused);
@@ -921,7 +933,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       session?.replayHasExecutionHistory ? replayRef.current.cursorTime ?? -Infinity : -Infinity,
     );
     if (requestedTime < minimum) {
-      setStatus('Tuto session nelze vrátit před zpracované obchody. Pro nový průchod vytvoř kopii session.');
+      const message = 'Replay nelze vrátit před zpracované obchody. Pro nový průchod vytvoř kopii session.';
+      setStatus(message);
+      setQuickOrderFeedback({ ok: false, message });
       return;
     }
     replayDataRequestsRef.current.cancel();
@@ -1102,6 +1116,15 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     restoredSessionLayoutRef.current = true;
   }, [backtestSession, workspace]);
 
+  // Stejné pravidlo jako v selectReplayStart — graf podle něj ukáže, že nůžky
+  // v dané oblasti nic neustřihnou, místo tichého odmítnutí.
+  const replaySelectionMinimumTime = useMemo(() => {
+    if (!backtestSession) return null;
+    return Math.max(
+      backtestSession.minimumReplayCursorTime ?? backtestSession.startMs / 1_000,
+      backtestSession.replayHasExecutionHistory ? replay.cursorTime ?? -Infinity : -Infinity,
+    );
+  }, [backtestSession, replay.cursorTime]);
   const context = useMemo<WorkspaceDataContextValue>(() => ({
     trade,
     entryMs,
@@ -1113,6 +1136,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     activePanelId,
     replay,
     replaySelectionTime,
+    replaySelectionMinimumTime,
     setReplaySelectionTime,
     selectReplayStart,
     activatePanel,
@@ -1124,7 +1148,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       : undefined,
     tradingSettings: chartTradingSettings,
     openBacktestTradeReview,
-  }), [activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
+  }), [activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
   const activeControl = panelControls.get(activePanelId) ?? null;
   const reviewTrade = reviewTradeId
     ? backtestSession?.journalTrades?.find(candidate => String(candidate.id) === reviewTradeId)
@@ -1167,14 +1191,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const [fibSettingsOpen, setFibSettingsOpen] = useState(false);
   const [positionSettingsOpen, setPositionSettingsOpen] = useState(false);
   const [drawingSettingsOpen, setDrawingSettingsOpen] = useState(false);
-  const [quickOrderFeedback, setQuickOrderFeedback] = useState<{ ok: boolean; message: string } | null>(null);
   const positionQuickOrderRef = useRef<() => void>(() => {});
-
-  useEffect(() => {
-    if (!quickOrderFeedback) return;
-    const timer = window.setTimeout(() => setQuickOrderFeedback(null), 2_600);
-    return () => window.clearTimeout(timer);
-  }, [quickOrderFeedback]);
 
   // Engine mutuje kresby na místě a při tažení emituje change na každý pohyb
   // myši. Tenhle stav sedí na kořeni workspace — nový wrapper objekt za emit by
