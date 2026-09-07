@@ -1,4 +1,5 @@
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
+import { formatSnapshotRepairError } from '../lib/copierBlockerMessages';
 import { CopyGroupLibraryRequestFence } from '../lib/copyGroupLibraryRequestFence';
 import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
@@ -443,9 +444,26 @@ const snapshotHealthMessage = (health: CopierSnapshotHealth): string => {
   return `Layout „${health.layoutName}“ je připravený pro ENTRY/EXIT.`;
 };
 
-const SnapshotHealthBanner: React.FC<{ health: CopierSnapshotHealth }> = ({ health }) => {
+/**
+ * Karta stavu ENTRY/EXIT snímků. Tlačítko obnovy vrací po regresi z 5. 9.
+ * (merge e54e2806 nechal komponentu bez renderu a bez `onRepair`). Restart
+ * TradingView provádí worker jen v DISARMED/flat stavu, chybu brány ukáže
+ * `formatSnapshotRepairError`.
+ */
+const SnapshotHealthBanner: React.FC<{
+  health: CopierSnapshotHealth;
+  onRepair?: () => Promise<void> | void;
+  accountLabel: (accountId: number) => string;
+}> = ({ health, onRepair, accountLabel }) => {
   const ready = health.state === 'ready';
   const checking = health.state === 'checking';
+  const [repairBusy, setRepairBusy] = useState(false);
+  const [repairError, setRepairError] = useState<string | null>(null);
+  const repairAvailable = health.state === 'cdp-offline'
+    && health.repairSupported === true
+    && onRepair;
+  const workerUpdateRequired = health.state === 'cdp-offline'
+    && health.repairSupported !== true;
   const lastSuccess = health.lastSuccessAt
     ? new Date(health.lastSuccessAt).toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })
     : null;
@@ -458,11 +476,33 @@ const SnapshotHealthBanner: React.FC<{ health: CopierSnapshotHealth }> = ({ heal
           : 'border-amber-500/35 bg-amber-500/[0.08] text-amber-700'
     }`}>
       {ready ? <CheckCircle2 size={17} className="mt-0.5 shrink-0" /> : <AlertTriangle size={17} className="mt-0.5 shrink-0" />}
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <p className="text-xs font-black">TradingView snímky</p>
         <p className="mt-0.5 text-[11px] font-semibold opacity-90">{snapshotHealthMessage(health)}</p>
+        {workerUpdateRequired ? (
+          <p className="mt-1 text-[10px] font-bold text-amber-800 dark:text-amber-300">
+            Mac worker je starší a neumí automatickou opravu. Je potřeba jej aktualizovat.
+          </p>
+        ) : null}
         {lastSuccess ? <p className="mt-1 text-[10px] opacity-70">Poslední uložený snímek: {lastSuccess}</p> : null}
+        {repairError ? <p className="mt-1 text-[10px] font-bold text-rose-600">{repairError}</p> : null}
       </div>
+      {repairAvailable ? (
+        <button
+          type="button"
+          disabled={repairBusy}
+          onClick={() => {
+            setRepairBusy(true);
+            setRepairError(null);
+            void Promise.resolve(onRepair()).catch(error => {
+              setRepairError(formatSnapshotRepairError(error, accountLabel));
+            }).finally(() => setRepairBusy(false));
+          }}
+          className="shrink-0 rounded-md border border-amber-500/40 bg-white/60 px-3 py-2 text-[10px] font-black text-amber-800 transition hover:bg-white disabled:cursor-wait disabled:opacity-50 dark:bg-black/15 dark:text-amber-300"
+        >
+          {repairBusy ? 'Spouštím…' : 'Obnovit snímky'}
+        </button>
+      ) : null}
     </div>
   );
 };
@@ -499,6 +539,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   riskConfigSupported = false,
   apiTelemetry,
   snapshotHealth,
+  onRepairSnapshots,
   onSwitchAndArm,
   onArmLive,
   onDisarm,
@@ -1249,6 +1290,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         brokerDailyPnlPending={dailyPnlPending}
         onOpenRisk={onOpenRisk}
       />
+      {snapshotHealth ? (
+        <SnapshotHealthBanner health={snapshotHealth} onRepair={onRepairSnapshots} accountLabel={accountId => accountLabel(accountId)} />
+      ) : null}
       {stuckOperations.length > 0 && commandAdapter ? (
         <StuckOperationsPanel
           operations={stuckOperations}
