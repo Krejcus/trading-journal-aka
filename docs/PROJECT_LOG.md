@@ -417,6 +417,46 @@ zůstává nedotčený (mix starých a nových změn, vyžaduje samostatné tř�
 - BUY→krok→close→reopen ověřen:81řádků, jediný nový closecallback, správný zůstatek po cenovém pohybu a komisích. Celý hlavní projekt2463testů/278souborů, tsc a build PASS.
 - Ověřený patch přenesen pod SHA stráží do canonical projektu; další rozpracované App změny zachovány. Localhost3001 aktualizovaný; žádný deploy/push/SQL/broker akce. Důkazy: `docs/reviews/backtest-performance-20260906/README.md`.
 
+### 2026-09-06 (Claude, detail obchodu — screenshot jako výchozí pohled)
+
+Uživatel: v historii obchodů se v detailu ukazoval nejdřív graf a screenshot
+až jako druhý; chce to obráceně. Změna v `TradeDetailModal`: výchozí
+`visualMode` je `screenshots`, přepínač má pořadí Screenshoty | Graf (desktop
+hlavička i mobilní overlay) a při přechodu na další obchod se resetuje na
+screenshoty. Aby importované obchody bez jediného screenshotu (a bez copier
+snapshotu) neotvíraly prázdnou plochu „BEZ SCREENSHOTU", přepne se po dohrání
+lazy-loadu detailu (`detailsLoadedTradeId`) automaticky na graf; ruční klik
+na Screenshoty tím není dotčen. Při ověřování se ukázala starší závada:
+guard `if (isLoadingDetails) return` v lazy-loadu četl hodnotu ze zastaralé
+closure a po zrušeném fetchu (rychlé Další/Předchozí) zůstal spinner zapnutý
+a další obchody se už nenačítaly — dříve neviditelné, protože default byl
+graf. Guard odstraněn a větev „screenshot už je v props" spinner vypíná.
+Ověřeno v náhledu na main (port 5274): obchod s 2 copier snapshoty se otevře
+rovnou na obrázku (1 / 2), obchod bez snapshotů skončí na grafu, 6× rychle
+Další a 6× Zpět nechá správný stav bez zaseknutého spinneru. tsc čisté
+(mimo předexistující `extension/` chyby z chybějících chrome typů v
+symlinkovaných node_modules), lint souboru beze změny (10 starších warningů).
+
+Navazující požadavek: karta v historii ukazovala pro obchody jen s copier
+snapshoty ikonu procesoru, protože náhled bral pouze ruční screenshoty a
+privátní snapshoty se podepisovaly až v detailu. Nová služba
+`services/copierSnapshotThumbs.ts`: `pickCopierThumbSnapshot` vybere snapshot
+po uzavření (`exit`, při více nejnovější), bez něj nejnovější podle `at`;
+`getCopierThumbUrl` podepíše jen ten jeden, deduplikuje souběžné požadavky a
+drží module-level cache s TTL 50 min (signed URL platí 60 min, do localStorage
+se záměrně neukládá). `TradeHistory` podepisuje jen pro vykreslené karty bez
+ručního screenshotu, po pěti; ruční screenshot má vždy přednost; chyba
+načtení `<img>` copier náhledu ho jednou invaliduje a podepíše znovu místo
+DB retry. Platí pro grid i tabulku (obě čtou `getScreenshot`). Testy služby
+(8) + ověření na localhost:3000: karty z 2. 9. dostaly signed URL
+`…/exit-*.png`, obchody jen se vstupem `entry-*.png`, GET 200 image/png.
+Při plné sadě jednou spadl `tradovateCopierDevice` na 5s timeoutu generování
+RSA klíče pod zátěží, samostatně prošel.
+Doplněk: copier náhled (TradingView auto-foto) se na kartě i v tabulce ořezává
+na 80 % šířky (`object-[80%_50%]`, po zkoušce úplného pravého okraje); ruční screenshot zůstává
+na středu, protože kompozici určil uživatel. Ověřeno: computed
+`object-position` 80% 50% u copier náhledů, 50% 50% u ručních.
+
 ### 2026-09-06 (Claude, LIVE detail skupiny — vodorovný posuvník)
 
 Uživatel: v kartě Kopírovací skupiny nešlo v rozbaleném detailu účtů skrolovat
