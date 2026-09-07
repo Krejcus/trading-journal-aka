@@ -109,6 +109,30 @@ describe('Tradovate WebSocket konečný reconnect automat', () => {
     harness.unsubscribe();
   });
 
+  it('socket, který po spánku opustil OPEN bez onclose, heartbeat označí jako zombie a reconnectuje', async () => {
+    const harness = createHarness({ socketFactory: () => new FakeSocket(false) });
+    await completeHandshake(harness.sockets[0]);
+    // Mac se probudil: undici drží CLOSING, TCP je mrtvé, onclose nikdy nepřijde.
+    harness.sockets[0].readyState = 2;
+    const eventsBefore = harness.events.length;
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(harness.sockets).toHaveLength(1);
+    expect(harness.diagnostics.some(line => line.includes('WS ZOMBIE'))).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(harness.diagnostics.some(line => line.includes('WS ZOMBIE state=connected readyState=2'))).toBe(true);
+    expect(harness.diagnostics.some(line => line.includes('reason=zombie-socket'))).toBe(true);
+    expect(harness.events.slice(eventsBefore).some(event => event.type === 'connection' && event.connected === false)).toBe(true);
+    expect(harness.events.slice(eventsBefore).some(event => event.type === 'error' && event.error.message.includes('closed without close event'))).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(harness.sockets).toHaveLength(2);
+    harness.sockets[1].open();
+    expect(harness.sockets[1].readyState).toBe(1);
+    harness.unsubscribe();
+  });
+
   it('close bez onclose ručně uvolní stav a reconnectuje', async () => {
     const harness = createHarness({ socketFactory: () => new FakeSocket(false) });
     harness.sockets[0].open();

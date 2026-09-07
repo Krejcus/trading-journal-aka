@@ -1083,8 +1083,30 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       releaseSocket(candidate);
       scheduleReconnect(renewalInProgress ? 'planned-renewal' : 'socket-close');
     };
+    let notOpenSince = 0;
     heartbeat = intervals(() => {
-      if (socket !== candidate || candidate.readyState !== 1) return;
+      if (socket !== candidate) return;
+      // CONNECTING (0) hlídá connect watchdog; tady jde jen o CLOSING/CLOSED.
+      if (candidate.readyState >= 2) {
+        // Socket, který už není OPEN, ale neohlásil onclose (po spánku Macu
+        // zemře TCP a undici zůstane v CLOSING). Dřív heartbeat takový tik
+        // jen tiše přeskočil a stream se už nikdy neobnovil — bez logu, bez
+        // reconnectu, controller zůstal fail-closed až do ručního restartu.
+        const now = clock();
+        if (!notOpenSince) { notOpenSince = now; return; }
+        if (now - notOpenSince < Math.max(1, config.closeTimeoutMs ?? 5_000)) return;
+        diagnostic(`WS ZOMBIE state=${socketState} readyState=${candidate.readyState} reason=no-close-event`);
+        emitOrHoldError(contextualError(
+          new TradovateTransportError(withConnectionLabel('Tradovate WebSocket closed without close event')),
+          'websocket',
+        ));
+        if (!renewalInProgress) emit({ type: 'connection', connected: false, at: now });
+        releaseSocket(candidate);
+        scheduleReconnect('zombie-socket');
+        return;
+      }
+      notOpenSince = 0;
+      if (candidate.readyState !== 1) return;
       const now = clock();
       if (now - lastSocketMessageAt >= (config.socketIdleTimeoutMs ?? 15_000)) {
         emit({
