@@ -48,6 +48,11 @@ export interface ApnsLiveActivityContentState {
   followersTotal?: number;
   followersOk?: number;
   riskAtStopText?: string;
+  /** Celé dolary pro hero číslo na zámku („+$145"); pnlText zůstává s centy. */
+  pnlCompactText?: string;
+  /** P&L při zásahu SL / TP napříč všemi účty skupiny („−$129", „+$231"). */
+  stopPnlText?: string;
+  targetPnlText?: string;
 }
 
 export interface ApnsLiveActivityUpdate {

@@ -61,6 +61,11 @@ struct AlphaTradeLiveActivityAttributes: ActivityAttributes {
         /// Kolik stojí zásah stopu napříč všemi účty skupiny. Server ho počítá
         /// z hodnoty bodu kontraktu, kterou widget nezná.
         var riskAtStopText: String? = nil
+        /// Celé dolary pro hero číslo („+$145"); `pnlText` zůstává s centy.
+        var pnlCompactText: String? = nil
+        /// P&L při zásahu SL / TP napříč všemi účty skupiny; server zná hodnotu bodu.
+        var stopPnlText: String? = nil
+        var targetPnlText: String? = nil
     }
 
     let sessionID: String

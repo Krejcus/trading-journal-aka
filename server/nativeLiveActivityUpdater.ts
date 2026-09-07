@@ -199,20 +199,25 @@ export function planNativeLiveActivityUpdate(options: {
   // Progress bar ukazuje, KDE cena je; tohle ukazuje, CO to stojí. Sčítá se
   // přes všechny účty skupiny, protože v sázce je celá expozice, ne jen
   // leaderova pozice, kterou karta zobrazuje jako velikost obchodu.
-  const riskAtStop = (() => {
-    if (!homogeneousPosition || stopPrice == null) return null;
+  const pnlAtLevel = (level: 'stop' | 'target'): number | null => {
+    const levelPrice = level === 'stop' ? stopPrice : targetPrice;
+    if (!homogeneousPosition || levelPrice == null) return null;
     const valuePerPoint = tradovateValuePerPoint(firstPosition.symbol ?? null);
     if (valuePerPoint == null) return null;
     const positions = options.broker?.positions ?? [];
-    if (positions.some(item => optionalFinite(item.entryPrice) == null || optionalFinite(item.stopPrice) == null)) return null;
-    const total = positions.reduce((sum, item) => {
+    const levelOf = (item: { stopPrice?: number | null; targetPrice?: number | null }) =>
+      optionalFinite(level === 'stop' ? item.stopPrice : item.targetPrice);
+    if (positions.some(item => optionalFinite(item.entryPrice) == null || levelOf(item) == null)) return null;
+    return positions.reduce((sum, item) => {
       const entry = optionalFinite(item.entryPrice) ?? entryPrice;
-      const stop = optionalFinite(item.stopPrice) ?? stopPrice;
-      if (entry == null || stop == null || !(item.quantity > 0)) return sum;
-      return sum + (stop - entry) * (item.side === 'Short' ? -1 : 1) * item.quantity * valuePerPoint;
+      const price = levelOf(item) ?? levelPrice;
+      if (entry == null || price == null || !(item.quantity > 0)) return sum;
+      return sum + (price - entry) * (item.side === 'Short' ? -1 : 1) * item.quantity * valuePerPoint;
     }, 0);
-    return total;
-  })();
+  };
+  const riskAtStop = pnlAtLevel('stop');
+  const pnlAtTarget = pnlAtLevel('target');
+  const signedWhole = (value: number): string => `${value < 0 ? '−' : '+'}$${Math.abs(Math.round(value))}`;
   const pending = openPositionCount === 0 ? options.broker?.pendingOrder : null;
   const displayEntryPrice = entryPrice ?? pending?.price ?? null;
   const mode: 'idle' | 'pending' | 'position' | undefined = options.broker == null
@@ -277,7 +282,9 @@ export function planNativeLiveActivityUpdate(options: {
       ? { armExpiresAt: armExpiresAtMs / 1_000 } : {}),
     followersTotal: followerCount,
     ...(followersOk != null ? { followersOk } : {}),
-    ...(riskAtStop != null ? { riskAtStopText: `${riskAtStop < 0 ? '−' : '+'}$${Math.abs(riskAtStop).toFixed(0)} na SL` } : {}),
+    ...(riskAtStop != null ? { riskAtStopText: `${riskAtStop < 0 ? '−' : '+'}$${Math.abs(riskAtStop).toFixed(0)} na SL`, stopPnlText: signedWhole(riskAtStop) } : {}),
+    ...(pnlAtTarget != null ? { targetPnlText: signedWhole(pnlAtTarget) } : {}),
+    pnlCompactText: pnlAvailable ? signedWhole(pnl) : '—',
   };
   const fingerprint = {
     event: shouldEnd ? 'end' : 'update',

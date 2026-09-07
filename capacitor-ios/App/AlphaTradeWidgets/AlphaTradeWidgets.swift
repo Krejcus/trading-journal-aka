@@ -953,7 +953,7 @@ struct AlphaTradeLiveActivityWidget: Widget {
                         if context.isStale {
                             Text("Data jsou zastaralá. Otevři LIVE pro ověření.").font(.caption)
                         } else if context.state.mode == "position", context.state.slTpProgress != nil {
-                            LiveActivitySlTpBar(state: context.state, compact: true)
+                            LiveActivityLevelBar(state: context.state, compact: true)
                         } else {
                             Text(context.state.headline).font(.caption.bold()).lineLimit(1)
                         }
@@ -1017,25 +1017,48 @@ private struct AlphaTradeLiveActivityLockScreen: View {
         colorScheme == .dark ? .white : LiveActivityPalette.slate
     }
 
+    private var muted: Color {
+        colorScheme == .dark ? Color.white.opacity(0.58) : LiveActivityPalette.muted
+    }
+
+    private var state: AlphaTradeLiveActivityAttributes.ContentState { context.state }
+
+    private var pnlColor: Color {
+        state.isPositive ? LiveActivityPalette.profit : LiveActivityPalette.loss(colorScheme)
+    }
+
+    // Návrh J5D: velké P&L a pozice vlevo, stav a čerstvost vpravo, pod tím
+    // přechodová lišta SL→TP zhasnutá za aktuální cenou a dvě buňky s body
+    // a P&L při zásahu SL / TP. Žádný ARM odpočet ani řádek followerů —
+    // počet kopírujících účtů je součástí řádku s pozicí.
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 8) {
-                Image(systemName: "waveform.path.ecg")
-                    .foregroundStyle(LiveActivityPalette.indigo)
-                Text("ALPHATRADE")
-                    .font(.caption.weight(.black))
-                    .tracking(0.7)
-                Spacer()
-                // Po vypršení stale-date už nemáme čerstvá data. Zelené
-                // „ARM LIVE" by pak tvrdilo, že se kopíruje, i když je worker
-                // dávno mrtvý — fail-closed proto přepíše stav na neověřený.
-                LiveActivityStatusPill(status: context.isStale ? "STAV NEOVĚŘEN" : context.state.status)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(context.isStale ? "—" : liveActivityCompactPnl(state))
+                        .font(.system(size: 34, weight: .heavy, design: .rounded).monospacedDigit())
+                        .tracking(-0.5)
+                        .foregroundStyle(context.isStale ? Color.orange : pnlColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .privacySensitive()
+                    subtitle
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 6) {
+                    // Po vypršení stale-date už nemáme čerstvá data. Zelené
+                    // „LIVE" by pak tvrdilo, že se kopíruje, i když je worker
+                    // dávno mrtvý — fail-closed proto přepíše stav na neověřený.
+                    LiveActivityStatusPill(status: context.isStale ? "STAV NEOVĚŘEN" : state.status)
+                    freshness
+                }
             }
 
             if context.isStale {
                 Text("Data jsou zastaralá. Otevři LIVE pro ověření.")
-                    .font(.headline).foregroundStyle(.secondary)
-            } else { switch context.state.mode {
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(muted)
+            } else { switch state.mode {
             case "position":
                 positionContent
             case "pending":
@@ -1045,32 +1068,6 @@ private struct AlphaTradeLiveActivityLockScreen: View {
             default:
                 legacyContent
             } }
-
-            HStack(alignment: .center, spacing: 12) {
-                // Bez followersOk (neúplné čtení účtů) řádek schovat — „0/5"
-                // by vypadalo jako výpadek followerů, ne jako chybějící data.
-                if !context.isStale, let total = context.state.followersTotal, total > 0,
-                   let ok = context.state.followersOk {
-                    LiveActivityFollowersRow(total: total, ok: ok)
-                }
-                Spacer(minLength: 4)
-                armCountdown
-            }
-
-            // Dřív tu stálo „Read-only monitoring · žádná broker akce" — celý
-            // řádek jen na dvojznačnou poznámku, kterou šlo číst jako „kopírka
-            // nic nedělá". Místo toho ukazuje, co stojí zásah stopu.
-            if let risk = context.state.riskAtStopText, !context.isStale {
-                Text(risk)
-                    .font(.system(size: 10, weight: .bold).monospacedDigit())
-                    .foregroundStyle(risk.hasPrefix("+") ? LiveActivityPalette.profit : LiveActivityPalette.loss(colorScheme))
-                    .privacySensitive()
-            } else {
-                Text(context.isStale ? "Poslední aktualizace není aktuálním stavem účtů." : context.state.detail)
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.55) : LiveActivityPalette.muted)
-                    .lineLimit(1)
-            }
         }
         .padding(16)
         .foregroundStyle(ink)
@@ -1078,44 +1075,77 @@ private struct AlphaTradeLiveActivityLockScreen: View {
         .activitySystemActionForegroundColor(ink)
     }
 
-    private var positionContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(liveActivityPositionLabel(context.state, fallback: context.attributes.symbol))
-                    .font(.title3.weight(.black))
+    @ViewBuilder private var subtitle: some View {
+        let label = state.mode == "position"
+            ? liveActivityPositionLabel(state, fallback: context.attributes.symbol)
+            : state.headline
+        HStack(spacing: 0) {
+            Text(label)
+                .font(.system(size: 13, weight: .bold))
+                .lineLimit(1)
+            // Bez followersOk (neúplné čtení účtů) počet schovat — „0/3" by
+            // vypadalo jako výpadek followerů, ne jako chybějící data.
+            if !context.isStale, let total = state.followersTotal, total > 0, let ok = state.followersOk {
+                Text(" · kopíruje se \(min(max(ok, 0), total))/\(total)")
+                    .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(muted)
                     .lineLimit(1)
+            }
+        }
+    }
+
+    /// „před X s" tiká lokálně bez pushe; s 5s tikem serveru hned prozradí,
+    /// když aktualizace stojí, ještě před 30s stale-date.
+    @ViewBuilder private var freshness: some View {
+        if !context.isStale {
+            HStack(spacing: 3) {
+                Text("před")
+                Text(Date(timeIntervalSince1970: state.updatedAt), style: .relative)
+                    .monospacedDigit()
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(muted)
+            .lineLimit(1)
+        }
+    }
+
+    private var positionContent: some View {
+        let distances = liveActivityLevelDistances(state)
+        return VStack(alignment: .leading, spacing: 8) {
+            LiveActivityLevelBar(state: state, compact: false)
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(distances.toStop.map { "\(liveActivityPoints($0)) b k SL" } ?? "SL —")
+                        .font(.system(size: 10, weight: .heavy).monospacedDigit())
+                        .tracking(0.4)
+                    Text(state.stopPnlText ?? "—")
+                        .font(.system(size: 13, weight: .heavy).monospacedDigit())
+                        .privacySensitive()
+                }
+                .foregroundStyle(LiveActivityPalette.loss(colorScheme))
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text(context.state.pnlText)
-                        .font(.title2.bold().monospacedDigit())
-                        .foregroundStyle(context.state.isPositive ? LiveActivityPalette.profit : LiveActivityPalette.loss)
+                    Text(distances.toTarget.map { "\(liveActivityPoints($0)) b k TP" } ?? "TP —")
+                        .font(.system(size: 10, weight: .heavy).monospacedDigit())
+                        .tracking(0.4)
+                    Text(state.targetPnlText ?? "—")
+                        .font(.system(size: 13, weight: .heavy).monospacedDigit())
                         .privacySensitive()
-                    if let label = context.state.pnlLabel {
-                        Text(label)
-                            .font(.system(size: 7, weight: .semibold))
-                            .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.55) : LiveActivityPalette.muted)
-                            .lineLimit(2)
-                    }
                 }
-            }
-            if context.state.stopPrice != nil && context.state.targetPrice != nil
-                && context.state.slTpProgress != nil {
-                LiveActivitySlTpBar(state: context.state, compact: false)
-            } else {
-                LiveActivityAvailableLevels(state: context.state)
+                .foregroundStyle(LiveActivityPalette.profit)
             }
         }
     }
 
     private var pendingContent: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("LIMIT \(context.state.side == "Short" ? "SELL" : "BUY") \(liveActivityQuantity(context.state.quantity)) \(context.state.symbol ?? context.attributes.symbol) @ \(liveActivityPrice(context.state.entryPrice ?? context.state.currentPrice))")
-                .font(.headline.weight(.black).monospacedDigit())
+            Text("LIMIT \(state.side == "Short" ? "SELL" : "BUY") \(liveActivityQuantity(state.quantity)) \(state.symbol ?? context.attributes.symbol) @ \(liveActivityPrice(state.entryPrice ?? state.currentPrice))")
+                .font(.system(size: 14, weight: .heavy).monospacedDigit())
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
-            Text("Čeká na fill · \(context.state.detail)")
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.65) : LiveActivityPalette.muted)
+            Text("Čeká na fill · \(state.detail)")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(muted)
                 .lineLimit(1)
         }
     }
@@ -1123,54 +1153,19 @@ private struct AlphaTradeLiveActivityLockScreen: View {
     private var idleContent: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text("Čeká na obchod")
-                .font(.headline.weight(.black))
-            Text(context.state.detail)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.65) : LiveActivityPalette.muted)
+                .font(.system(size: 14, weight: .heavy))
+            Text(state.detail)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(muted)
                 .lineLimit(1)
         }
     }
 
     private var legacyContent: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(context.state.headline).font(.headline).lineLimit(1)
-                Text(context.state.detail)
-                    .font(.caption2)
-                    .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.65) : LiveActivityPalette.muted)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 1) {
-                Text(context.state.pnlText)
-                    .font(.title3.bold().monospacedDigit())
-                    .foregroundStyle(context.state.isPositive ? LiveActivityPalette.profit : LiveActivityPalette.loss)
-                    .privacySensitive()
-                if let label = context.state.pnlLabel {
-                    Text(label)
-                        .font(.system(size: 7, weight: .semibold))
-                        .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.55) : LiveActivityPalette.muted)
-                        .lineLimit(2)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder private var armCountdown: some View {
-        // Bez čerstvých dat neodpočítáváme — ARM mohl mezitím skončit.
-        if let seconds = context.state.armExpiresAt, !context.isStale {
-            let expiry = Date(timeIntervalSince1970: seconds)
-            if expiry > Date() {
-                HStack(spacing: 4) {
-                    Text("ARM končí za")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.55) : LiveActivityPalette.muted)
-                    Text(timerInterval: Date()...expiry, countsDown: true)
-                        .font(.caption2.bold().monospacedDigit())
-                        .foregroundStyle(LiveActivityPalette.indigo(colorScheme))
-                }
-            }
-        }
+        Text(state.detail)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(muted)
+            .lineLimit(2)
     }
 }
 
@@ -1212,87 +1207,129 @@ private struct LiveActivityStatusPill: View {
         }
     }
 
+    /// Na zámku stačí „LIVE"; význam „armed" nese barva a to, že aktivita existuje.
+    private var label: String {
+        status == "ARM LIVE" ? "LIVE" : status
+    }
+
     var body: some View {
-        Text(status)
-            .font(.system(size: 9, weight: .black))
+        Text(label)
+            .font(.system(size: 11, weight: .black))
+            .tracking(0.8)
             .foregroundStyle(color)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
             .background(color.opacity(0.13), in: Capsule())
     }
 }
 
-private struct LiveActivityFollowersRow: View {
-    let total: Int
-    let ok: Int
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<max(0, total), id: \.self) { index in
-                Circle()
-                    .fill(index < ok ? LiveActivityPalette.profit : LiveActivityPalette.muted.opacity(0.35))
-                    .frame(width: 6, height: 6)
-            }
-            Text("\(min(max(ok, 0), max(total, 0)))/\(max(total, 0))")
-                .font(.caption2.bold().monospacedDigit())
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Followeři \(ok) z \(total) připraveni")
-    }
-}
-
-private struct LiveActivitySlTpBar: View {
+/// Přechodová lišta SL→TP (J5D): svítí jen od SL po aktuální cenu, zbytek
+/// k TP je zhasnutý; bílá čárka jen přes lištu, bílá cena nad ní, zářez na
+/// vstupu a ceny SL / vstup / TP pod lištou.
+private struct LiveActivityLevelBar: View {
     let state: AlphaTradeLiveActivityAttributes.ContentState
     let compact: Bool
 
+    private var progress: CGFloat {
+        if let value = state.slTpProgress { return CGFloat(min(max(value, 0), 1)) }
+        guard let stop = state.stopPrice, let target = state.targetPrice, let current = state.currentPrice,
+              stop != target else { return 0.5 }
+        return CGFloat(min(max((current - stop) / (target - stop), 0), 1))
+    }
+
+    private var entryProgress: CGFloat? {
+        guard let stop = state.stopPrice, let target = state.targetPrice, let entry = state.entryPrice,
+              stop != target else { return nil }
+        return CGFloat(min(max((entry - stop) / (target - stop), 0), 1))
+    }
+
+    private var barHeight: CGFloat { compact ? 7 : 10 }
+    private var labelSize: CGFloat { compact ? 9 : 10 }
+    private let priceLabelHalfWidth: CGFloat = 34
+
     var body: some View {
-        VStack(spacing: compact ? 3 : 4) {
+        VStack(spacing: compact ? 2 : 4) {
+            // Aktuální cena nad čárkou, u krajů přitažená dovnitř.
             GeometryReader { geometry in
-                let progress = min(max(state.slTpProgress ?? 0, 0), 1)
+                let x = min(max(progress * geometry.size.width, priceLabelHalfWidth), geometry.size.width - priceLabelHalfWidth)
+                Text(liveActivityPrice(state.currentPrice))
+                    .font(.system(size: compact ? 10 : 12, weight: .heavy).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .position(x: x, y: geometry.size.height / 2)
+            }
+            .frame(height: compact ? 12 : 14)
+
+            GeometryReader { geometry in
+                let width = geometry.size.width
+                let gradient = LinearGradient(
+                    colors: [LiveActivityPalette.loss, LiveActivityPalette.warning, LiveActivityPalette.profit],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
                 ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.10))
                     Capsule()
-                        .fill(LinearGradient(
-                            colors: [LiveActivityPalette.loss, LiveActivityPalette.warning, LiveActivityPalette.profit],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        ))
-                    Circle()
+                        .fill(gradient)
+                        .mask(alignment: .leading) {
+                            Rectangle().frame(width: max(0, width * progress))
+                        }
+                    if let entry = entryProgress {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.85))
+                            .frame(width: 2, height: barHeight + 8)
+                            .offset(x: entry * width - 1)
+                    }
+                    Rectangle()
                         .fill(Color.white)
-                        .overlay(Circle().stroke(LiveActivityPalette.slate.opacity(0.75), lineWidth: 1))
-                        .shadow(color: .black.opacity(0.2), radius: 2)
-                        .frame(width: compact ? 9 : 12, height: compact ? 9 : 12)
-                        .offset(x: max(0, min(geometry.size.width - (compact ? 9 : 12),
-                            progress * geometry.size.width - (compact ? 4.5 : 6))))
+                        .frame(width: 2, height: barHeight)
+                        .offset(x: min(max(progress * width - 1, 0), width - 2))
                 }
             }
-            .frame(height: compact ? 7 : 9)
-            HStack {
-                Text("SL \(liveActivityPrice(state.stopPrice))")
-                Spacer()
-                Text("TP \(liveActivityPrice(state.targetPrice))")
+            .frame(height: barHeight)
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    HStack {
+                        Text("SL \(liveActivityPrice(state.stopPrice))")
+                            .foregroundStyle(LiveActivityPalette.lossOnDark)
+                        Spacer(minLength: 4)
+                        Text("TP \(liveActivityPrice(state.targetPrice))")
+                            .foregroundStyle(LiveActivityPalette.profit)
+                    }
+                    if !compact, let entry = entryProgress, let entryPrice = state.entryPrice {
+                        Text("vstup \(liveActivityPrice(entryPrice))")
+                            .foregroundStyle(Color.white.opacity(0.58))
+                            .position(x: min(max(entry * geometry.size.width, 46), geometry.size.width - 46), y: geometry.size.height / 2)
+                    }
+                }
+                .font(.system(size: labelSize, weight: .bold).monospacedDigit())
+                .lineLimit(1)
             }
-            .font(.system(size: compact ? 8 : 9, weight: .bold, design: .monospaced))
-            .foregroundStyle(.secondary)
+            .frame(height: compact ? 11 : 12)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Vzdálenost mezi stop loss a take profit")
     }
 }
 
-private struct LiveActivityAvailableLevels: View {
-    let state: AlphaTradeLiveActivityAttributes.ContentState
+/// Hero číslo bez centů; server posílá `pnlCompactText`, starší payload se ořízne.
+private func liveActivityCompactPnl(_ state: AlphaTradeLiveActivityAttributes.ContentState) -> String {
+    if let compact = state.pnlCompactText, !compact.isEmpty { return compact }
+    let text = state.pnlText
+    return text.hasSuffix(".00") ? String(text.dropLast(3)) : text
+}
 
-    var body: some View {
-        HStack(spacing: 12) {
-            if let stop = state.stopPrice {
-                Text("SL \(liveActivityPrice(stop))").foregroundStyle(LiveActivityPalette.loss)
-            }
-            if let target = state.targetPrice {
-                Text("TP \(liveActivityPrice(target))").foregroundStyle(LiveActivityPalette.profit)
-            }
-        }
-        .font(.caption2.bold().monospacedDigit())
-    }
+/// Body k SL / TP ve směru P&L: k SL vždy záporné, k TP kladné (long i short).
+private func liveActivityLevelDistances(
+    _ state: AlphaTradeLiveActivityAttributes.ContentState
+) -> (toStop: Double?, toTarget: Double?) {
+    guard let current = state.currentPrice else { return (nil, nil) }
+    let direction: Double = (state.side ?? "Long") == "Short" ? -1 : 1
+    return (state.stopPrice.map { ($0 - current) * direction }, state.targetPrice.map { ($0 - current) * direction })
+}
+
+private func liveActivityPoints(_ value: Double) -> String {
+    let magnitude = abs(value).formatted(.number.precision(.fractionLength(0...2)))
+    return "\(value < 0 ? "−" : "+")\(magnitude)"
 }
 
 private func liveActivityPositionLabel(

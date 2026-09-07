@@ -208,6 +208,26 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-07 (Claude + uživatel, nový vzhled Live Activity „J5D")
+
+Vzhled zamčené obrazovky vybrán z živých mockupů (artefakt „Live Activity
+návrhy", varianty A–J): **velké P&L** (34 pt, celé dolary) a pod ním
+„LONG 2 MNQ · kopíruje se 3/3", vpravo pilulka **LIVE** (místo „ARM LIVE")
+a „před X s" tikající lokálně; **přechodová lišta SL→TP** svítí jen od SL
+po aktuální cenu, zbytek zhasnutý, bílá čárka jen přes lištu, bílá cena nad
+ní, zářez na vstupu, ceny SL / vstup / TP pod lištou; dole dvě buňky
+„−68 b k SL / −$129" a „+22 b k TP / +$231". Spodní řádek s ARM odpočtem a
+followery zrušen. Rozbalený Dynamic Island má stejnou lištu v kompaktní
+podobě; kompaktní ostrůvek beze změny.
+
+Server (`planNativeLiveActivityUpdate`) nově posílá `pnlCompactText`,
+`stopPnlText`, `targetPnlText` (P&L při zásahu úrovně přes všechny účty,
+hodnota bodu ze serveru); body k SL/TP počítá widget z cen. Starší payload
+bez nových polí se ořízne z `pnlText`. Testy
+`tests/nativeLiveActivityLevels.test.ts`; tsc čistý; celá sada zelená; iOS
+build z CLI, čistá reinstalace. Vizuál se fyzicky ukáže až při příští
+aktivitě (po reinstalaci se aktivita nespustí sama, až s dalším ARM).
+
 ### 2026-09-07 (Claude, Live Activity na zamčené obrazovce: 5s tik z relay pollu)
 
 Live Activity dostávala P&L jen z minutového cronu, takže na zamčené
