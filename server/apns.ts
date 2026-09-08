@@ -35,7 +35,7 @@ export interface ApnsLiveActivityContentState {
   isPositive: boolean;
   progress: number;
   updatedAt: number;
-  mode?: 'idle' | 'pending' | 'position';
+  mode?: 'idle' | 'pending' | 'position' | 'summary';
   symbol?: string;
   side?: 'Long' | 'Short';
   quantity?: number;
@@ -53,6 +53,20 @@ export interface ApnsLiveActivityContentState {
   /** P&L při zásahu SL / TP napříč všemi účty skupiny („−$129", „+$231"). */
   stopPnlText?: string;
   targetPnlText?: string;
+  /** Denní přehled pro obrazovky mimo pozici (po obchodu, zapnuto, shrnutí, cooldown, zámek). */
+  dayTrades?: Array<{ pnl: number; exit: 'SL' | 'TP' | 'M'; closedAt: number }>;
+  tradesToday?: number;
+  losingTrades?: number;
+  dayPnlText?: string;
+  dayLossUsd?: number;
+  maxLosingTrades?: number;
+  dailyLossLimitUsd?: number;
+  maxTrades?: number;
+  armedAt?: number;
+  sessionEndAt?: number;
+  cooldownUntil?: number;
+  dayLockUntil?: number;
+  dayLockReason?: string;
 }
 
 export interface ApnsLiveActivityUpdate {

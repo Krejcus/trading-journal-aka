@@ -228,6 +228,25 @@ bez nových polí se ořízne z `pnlText`. Testy
 build z CLI, čistá reinstalace. Vizuál se fyzicky ukáže až při příští
 aktivitě (po reinstalaci se aktivita nespustí sama, až s dalším ARM).
 
+**Obrazovky mimo pozici (2026-09-08, vybrané L2 / L4 / L5 z mockupů):**
+rozvržení karty se řídí stavem — kritický (DIVERGENCE / KILL SWITCH /
+STUCK OUTBOX: celá karta červená, stav jako hero, důvod, pozice dole),
+pozice (J5D), **shrnutí dne** po DISARM+flat (`mode: 'summary'`, hero denní
+P&L z copier ledgeru, „Den uzavřen · n obchodů · k ztrátových", obchody
+jako čipy SL/TP/M, nejlepší / nejhorší / podle plánu; `dismissal-date`
+15 min místo 30 s), **zámek / cooldown** (hero = lokální odpočet, důvod,
+poslední obchod + denní P&L, limity), čekající limit (hero LIMIT BUY/SELL),
+**po obchodu** (hero denní P&L, „Dnes · 3 obchody · 1 ztrátový · kopíruje se
+3/3", čipy, řádek limitů Ztrátové / Ztráta / Obchody — blízko limitu
+oranžově, spuštěno červeně, vypnuté pravidlo se neukazuje) a **zapnuto bez
+obchodu** (hero LIVE bez pilulky, „Kopíruje se 3/3 · zapnuto HH:mm",
+„Čeká na první obchod · session končí HH:mm", nulové limity). Server posílá
+`dayTrades` (≤8, chronologicky, z `dailyStats.recentClosedTrades`),
+`tradesToday`, `losingTrades`, `dayPnlText`, `dayLossUsd`, limity ze safety
+skupiny (0 = vypnuto → neposílá se), `armedAt`, `sessionEndAt`,
+`cooldownUntil`, `dayLockUntil` + `dayLockReason`. Testy rozšířeny (38 v LA
+sadě, celkem 3020 zelených), tsc čistý, iOS build z CLI, čistá reinstalace.
+
 ### 2026-09-07 (Claude, Live Activity na zamčené obrazovce: 5s tik z relay pollu)
 
 Live Activity dostávala P&L jen z minutového cronu, takže na zamčené

@@ -218,6 +218,51 @@ export function planNativeLiveActivityUpdate(options: {
   const riskAtStop = pnlAtLevel('stop');
   const pnlAtTarget = pnlAtLevel('target');
   const signedWhole = (value: number): string => `${value < 0 ? '−' : '+'}$${Math.abs(Math.round(value))}`;
+  // Denní přehled pro obrazovky mimo pozici: uzavřené obchody dne z copier
+  // ledgeru workeru, limity ze safety skupiny (0 = pravidlo vypnuté),
+  // cooldown / zámek / zapnutí jako epoch sekundy pro lokální odpočty.
+  const safety = object(group.safety);
+  const closedToday = (Array.isArray(dailyStats.recentClosedTrades) ? dailyStats.recentClosedTrades : [])
+    .map(candidate => object(candidate))
+    .filter(trade => optionalFinite(trade.closedAt) != null && optionalFinite(trade.realizedPnlUsd) != null)
+    .sort((left, right) => finite(left.closedAt) - finite(right.closedAt))
+    .slice(-8)
+    .map(trade => ({
+      pnl: Math.round(finite(trade.realizedPnlUsd) * 100) / 100,
+      exit: trade.exitReason === 'sl' ? 'SL' as const : trade.exitReason === 'tp' ? 'TP' as const : 'M' as const,
+      closedAt: finite(trade.closedAt) / 1_000,
+    }));
+  const tradesToday = optionalFinite(dailyStats.tradesToday) ?? (closedToday.length > 0 ? closedToday.length : null);
+  const losingTrades = optionalFinite(dailyStats.losingTrades);
+  const dayPnl = optionalFinite(dailyStats.realizedPnlUsd);
+  const limitOf = (value: unknown): number | null => {
+    const parsed = optionalFinite(value);
+    return parsed != null && parsed > 0 ? parsed : null;
+  };
+  const maxLosingTrades = limitOf(safety.dailyMaxLosingTrades);
+  const dailyLossLimitUsd = limitOf(safety.dailyLossLimitUsd);
+  const maxTrades = limitOf(safety.dailyMaxTrades);
+  const armedAtMs = bool(controller.armed) ? optionalFinite(controller.armedAt) : null;
+  const sessionEndAtMs = optionalFinite(dailyStats.sessionEndAt);
+  const cooldownUntilMs = finite(controller.entryCooldownUntil) > options.now ? finite(controller.entryCooldownUntil) : null;
+  const dayLockUntilMs = finite(controller.dayLockUntil) > options.now ? finite(controller.dayLockUntil) : null;
+  const daySummary: Partial<ApnsLiveActivityContentState> = {
+    ...(closedToday.length > 0 ? { dayTrades: closedToday } : {}),
+    ...(tradesToday != null ? { tradesToday } : {}),
+    ...(losingTrades != null ? { losingTrades } : {}),
+    ...(dayPnl != null ? { dayPnlText: signedWhole(dayPnl), dayLossUsd: Math.max(0, -dayPnl) } : {}),
+    ...(maxLosingTrades != null ? { maxLosingTrades } : {}),
+    ...(dailyLossLimitUsd != null ? { dailyLossLimitUsd } : {}),
+    ...(maxTrades != null ? { maxTrades } : {}),
+    ...(armedAtMs != null && armedAtMs > 0 ? { armedAt: armedAtMs / 1_000 } : {}),
+    ...(sessionEndAtMs != null && sessionEndAtMs > 0 ? { sessionEndAt: sessionEndAtMs / 1_000 } : {}),
+    ...(cooldownUntilMs != null ? { cooldownUntil: cooldownUntilMs / 1_000 } : {}),
+    ...(dayLockUntilMs != null ? {
+      dayLockUntil: dayLockUntilMs / 1_000,
+      ...(typeof controller.dayLockReason === 'string' && controller.dayLockReason.trim()
+        ? { dayLockReason: controller.dayLockReason.trim().slice(0, 120) } : {}),
+    } : {}),
+  };
   const pending = openPositionCount === 0 ? options.broker?.pendingOrder : null;
   const displayEntryPrice = entryPrice ?? pending?.price ?? null;
   const mode: 'idle' | 'pending' | 'position' | undefined = options.broker == null
@@ -269,7 +314,8 @@ export function planNativeLiveActivityUpdate(options: {
     isPositive: pnlAvailable && pnl >= 0,
     progress: bool(controller.killSwitch) ? 1 : bool(controller.armed) ? 0.75 : controller.connected === true ? 0.35 : 0.1,
     updatedAt: options.now / 1_000,
-    ...(mode ? { mode } : {}),
+    // Po DISARM a flat aktivita končí shrnutím dne (L5) místo prázdné karty.
+    ...(shouldEnd ? { mode: 'summary' as const } : mode ? { mode } : {}),
     ...(stateSymbol ? { symbol: stateSymbol } : {}),
     ...(stateSide ? { side: stateSide } : {}),
     ...(stateQuantity != null ? { quantity: stateQuantity } : {}),
@@ -285,6 +331,7 @@ export function planNativeLiveActivityUpdate(options: {
     ...(riskAtStop != null ? { riskAtStopText: `${riskAtStop < 0 ? '−' : '+'}$${Math.abs(riskAtStop).toFixed(0)} na SL`, stopPnlText: signedWhole(riskAtStop) } : {}),
     ...(pnlAtTarget != null ? { targetPnlText: signedWhole(pnlAtTarget) } : {}),
     pnlCompactText: pnlAvailable ? signedWhole(pnl) : '—',
+    ...daySummary,
   };
   const fingerprint = {
     event: shouldEnd ? 'end' : 'update',
@@ -295,7 +342,8 @@ export function planNativeLiveActivityUpdate(options: {
       state,
       event: shouldEnd ? 'end' : 'update',
       staleAt: options.now / 1_000 + 180,
-      ...(shouldEnd ? { dismissalAt: options.now / 1_000 + 30 } : {}),
+      // Shrnutí dne zůstane na zámku 15 minut, pak se sklidí samo.
+      ...(shouldEnd ? { dismissalAt: options.now / 1_000 + 15 * 60 } : {}),
     },
     payloadHash: createHash('sha256').update(JSON.stringify(fingerprint)).digest('hex'),
     shouldEnd,
