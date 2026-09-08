@@ -300,7 +300,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 : { transformOrigin: 'bottom center' }
             }
             ref={panelRef}
-            className={`fixed inset-x-0 bottom-0 top-auto sm:relative sm:inset-auto w-full sm:w-[320px] md:w-[400px] overflow-hidden border-t sm:border z-[1000] backdrop-blur-2xl rounded-t-lg sm:rounded-lg max-h-[85vh] sm:max-h-[80vh] flex flex-col ${isDark
+            className={`native-bottom-sheet fixed inset-x-0 bottom-0 top-auto sm:relative sm:inset-auto w-full sm:w-[320px] md:w-[400px] overflow-hidden border-t sm:border z-[1000] backdrop-blur-2xl rounded-t-lg sm:rounded-lg max-h-[85vh] sm:max-h-[80vh] flex flex-col ${isDark
               ? 'bg-[rgba(15,18,28,0.06)] border-[rgba(255,255,255,0.04)] shadow-[0_-20px_50px_-12px_rgba(0,0,0,0.5)] sm:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)]'
               : 'bg-[rgba(255,255,255,0.06)] border-[rgba(255,255,255,0.18)] shadow-[0_-20px_50px_-12px_rgba(0,0,0,0.05)] sm:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.1)]'
               }`}

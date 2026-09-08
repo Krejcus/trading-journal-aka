@@ -281,6 +281,11 @@ jeho test v `liveCompactHeaderRender` přepsán na `LiveStatusStrip`.
   lištu s ikonami, barvy podle tématu (navy / paper / oled). Žádná broker akce.
 - Ověření: 324 souborů / 3040 testů, tsc čistý, iOS build z CLI, čistá
   reinstalace do telefonu.
+- Doladění (tentýž den): v tmavém režimu je vybraná karta lišty bílá a
+  ostatní tlumené (jako webová BottomNav), světlý režim zůstává indigo.
+  Spodní panely (filtry `FilterDropdown`, „Upravit dashboard") se v
+  Capacitoru vysouvaly pod nativní lištu — třída `native-bottom-sheet`
+  (`html.native-shell` → `bottom: var(--native-shell-tab-bar-height)`).
 
 ### 2026-09-07 (Claude + uživatel, nový vzhled Live Activity „J5D")
 
