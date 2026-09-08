@@ -196,13 +196,14 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
 
     private func configureTabBarAppearance(for theme: String) {
         let isLight = theme == "light"
-        // Vybraná karta v indigu, stejný akcent jako web (indigo-600 / indigo-400).
+        // Světlý režim: indigo jako akcent webu. Tmavý režim: jako webová
+        // BottomNav — vybraná karta plně bílá, ostatní tlumené, bez barvy.
         let selectedColor = isLight
             ? UIColor(red: 79 / 255, green: 70 / 255, blue: 229 / 255, alpha: 1)
-            : UIColor(red: 129 / 255, green: 140 / 255, blue: 248 / 255, alpha: 1)
+            : UIColor.white
         let normalColor = isLight
             ? UIColor(red: 51 / 255, green: 65 / 255, blue: 85 / 255, alpha: 0.82)
-            : UIColor(white: 1, alpha: 0.72)
+            : UIColor(white: 1, alpha: 0.48)
 
         let itemAppearance = UITabBarItemAppearance()
         itemAppearance.normal.iconColor = normalColor

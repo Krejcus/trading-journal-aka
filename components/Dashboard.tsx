@@ -2280,7 +2280,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', stiffness: 350, damping: 30 }}
-              className={`fixed bottom-0 left-0 right-0 z-[110] rounded-t-3xl border-t max-h-[85vh] flex flex-col lg:hidden ${isDark ? 'bg-[#0d0d14] border-white/10' : 'bg-white border-slate-200'}`}
+              className={`native-bottom-sheet fixed bottom-0 left-0 right-0 z-[110] rounded-t-3xl border-t max-h-[85vh] flex flex-col lg:hidden ${isDark ? 'bg-[#0d0d14] border-white/10' : 'bg-white border-slate-200'}`}
             >
               {/* Header */}
               <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-white/5 shrink-0">
