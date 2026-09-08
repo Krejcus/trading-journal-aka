@@ -1056,10 +1056,13 @@ private struct AlphaTradeLiveActivityLockScreen: View {
                     subtitle
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // Text(timerInterval:) si rezervuje šířku pro nejdelší možný čas a
+                // bral by půl karty; pravý sloupec proto dostane pevný strop.
                 VStack(alignment: .trailing, spacing: 6) {
                     pill
                     freshness
                 }
+                .frame(maxWidth: 132, alignment: .trailing)
             }
             content
         }
@@ -1202,6 +1205,8 @@ private struct AlphaTradeLiveActivityLockScreen: View {
                 Text("před")
                 Text(timerInterval: updated...updated.addingTimeInterval(24 * 3_600), countsDown: false, showsHours: false)
                     .monospacedDigit()
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 44, alignment: .trailing)
             }
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(muted)
