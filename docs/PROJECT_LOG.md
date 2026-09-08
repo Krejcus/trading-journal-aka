@@ -208,6 +208,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-08 (Claude, Live Activity: heartbeat mimo pozici a start z tiku; diagnóza „prodlevy")
+
+Diagnóza z DB (read-only přes service key): aktivita po zapnutí 09:39 běží,
+odběr aktualizací je registrovaný a tik ho každých 5 s obsluhuje, ale mimo
+pozici tik neposílal žádný heartbeat (jen při změně obsahu), takže „před X s"
+na zámku rostlo až do 110s heartbeatu cronu — to uživatel vnímal jako
+zpoždění. Start aktivity dělal jen cron (až 60 s po ARM). Buy limit se
+neukázal, protože v tu chvíli aktivita po čisté reinstalaci neběžela (appka
+nebyla spuštěná → bez registrace tokenů).
+
+Změny v `server/nativeLiveActivityTick.ts`: heartbeat 45 s i mimo pozici
+(20 s v pozici zůstává); bez aktivního odběru tik zavolá
+`startNativeLiveActivities` pro daný runtime (dedup podle session triggeru,
+throttle 15 s per instance), takže aktivita naskočí do ~5 s po ARM místo
+cronu. Testy rozšířeny. Poznámka: v DB zůstává 6 aktivních push-to-start
+řádků z předchozích instalací (APNs je zatím nevrací jako Unregistered) —
+neškodí, staré instalace nic nezobrazí.
 ### 2026-09-08 (Claude, LIVE: jedna stavová lišta místo tří informačních karet)
 
 Uživatel chtěl tři informační prvky nad skupinami (karta stavu workeru s

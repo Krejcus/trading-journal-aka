@@ -119,8 +119,9 @@ describe('Live Activity tik z relay pollu', () => {
     const plan = { payloadHash: 'same', shouldEnd: false };
     expect(liveActivityTickShouldSend({ plan, subscription: { last_payload_hash: 'same', last_payload_at: iso(-10_000) }, positionsOpen: true, now })).toBe(false);
     expect(liveActivityTickShouldSend({ plan, subscription: { last_payload_hash: 'same', last_payload_at: iso(-21_000) }, positionsOpen: true, now })).toBe(true);
-    // Bez pozice heartbeat nedělá tik, ale cron (180 s).
-    expect(liveActivityTickShouldSend({ plan, subscription: { last_payload_hash: 'same', last_payload_at: iso(-60_000) }, positionsOpen: false, now })).toBe(false);
+    // Bez pozice heartbeat po 45 s, aby „před X s“ na zámku nerostlo do minuty cronu.
+    expect(liveActivityTickShouldSend({ plan, subscription: { last_payload_hash: 'same', last_payload_at: iso(-30_000) }, positionsOpen: false, now })).toBe(false);
+    expect(liveActivityTickShouldSend({ plan, subscription: { last_payload_hash: 'same', last_payload_at: iso(-60_000) }, positionsOpen: false, now })).toBe(true);
     expect(liveActivityTickShouldSend({ plan: { payloadHash: 'same', shouldEnd: true }, subscription: { last_payload_hash: 'same', last_payload_at: iso(0) }, positionsOpen: false, now })).toBe(true);
 
     // Stejný obsah do 20 s: druhý tik jen zapíše pokus, nepošle.
@@ -172,5 +173,46 @@ describe('Live Activity tik z relay pollu', () => {
       send: okSend(),
     });
     expect(result).toEqual({ reason: 'timeout' });
+  });
+});
+
+describe('Live Activity tik: push-to-start bez běžící aktivity', () => {
+  it('bez odběru aktualizací zavolá starter (dedup podle session triggeru) a vrátí started', async () => {
+    const updates: Array<{ table: string; id: string; payload: Record<string, unknown> }> = [];
+    const startRow = {
+      id: 'start-1', user_id: 'user-start', installation_id: 'inst', push_token: 'cd'.repeat(32),
+      environment: 'development', bundle_id: 'app.alphatrade.native', last_start_trigger: null, last_started_at: null,
+    };
+    const db = {
+      from(table: string) {
+        return {
+          select() {
+            return {
+              eq() { return { is: async () => ({ data: [], error: null }) }; },
+              is: async () => ({ data: table === 'native_live_activity_start_subscriptions' ? [startRow] : [], error: null }),
+            };
+          },
+          update(payload: Record<string, unknown>) {
+            return { eq: async (_c: string, id: string) => { updates.push({ table, id, payload }); return { error: null }; } };
+          },
+        };
+      },
+    };
+    const sendStart = vi.fn(async () => ({ status: 'sent' as const, statusCode: 200 }));
+    const result = await tickNativeLiveActivities({
+      db: db as never, userId: 'user-start', deviceId: 'device', connectionId: 'connection',
+      status: status({}), config: {} as never, now, brokerSnapshot: async () => broker, send: okSend(), sendStart,
+    });
+    expect(result.reason).toBe('started');
+    expect(sendStart).toHaveBeenCalledOnce();
+    expect(updates).toContainEqual(expect.objectContaining({ table: 'native_live_activity_start_subscriptions', id: 'start-1' }));
+
+    // Do 15 s se starter nevolá znovu (throttle per instance).
+    const again = await tickNativeLiveActivities({
+      db: db as never, userId: 'user-start', deviceId: 'device', connectionId: 'connection',
+      status: status({}), config: {} as never, now: now + 5_000, brokerSnapshot: async () => broker, send: okSend(), sendStart,
+    });
+    expect(again.reason).toBe('no-subscription');
+    expect(sendStart).toHaveBeenCalledOnce();
   });
 });

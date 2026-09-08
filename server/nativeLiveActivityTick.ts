@@ -24,12 +24,17 @@ import {
   type NativeLiveActivityRuntimeRow,
   type NativeLiveActivitySubscriptionRow,
 } from './nativeLiveActivityUpdater.js';
+import { startNativeLiveActivities } from './nativeLiveActivityStarter.js';
 import type { TradovateServerConfig } from './tradovateOAuthStore.js';
 
 /** Nejkratší rozestup mezi dvěma pokusy o tik (a tedy i Tradovate snapshoty). */
 export const LIVE_ACTIVITY_TICK_INTERVAL_MS = 5_000;
 /** Při otevřené pozici pošleme beze změny obsahu aspoň jednou za 20 s. */
 export const LIVE_ACTIVITY_TICK_HEARTBEAT_MS = 20_000;
+/** Mimo pozici (armováno, flat / čekající limit) stačí heartbeat po 45 s — „před X s“ na zámku pak neroste do minuty cronu. */
+export const LIVE_ACTIVITY_TICK_IDLE_HEARTBEAT_MS = 45_000;
+/** Bez aktivní aktivity zkusí tik push-to-start nejvýše jednou za 15 s (jinak čeká na cron). */
+export const LIVE_ACTIVITY_TICK_START_INTERVAL_MS = 15_000;
 /** Při otevřené pozici iOS označí aktivitu jako zastaralou po 30 s bez pushe. */
 export const LIVE_ACTIVITY_TICK_STALE_S = 30;
 /** Bez otevřené pozice zůstává původní tolerance minutového cronu. */
@@ -45,8 +50,11 @@ export interface NativeLiveActivityTickResult {
   sent: number;
   skipped: number;
   failed: number;
-  reason: 'not-armed' | 'no-subscription' | 'throttled' | 'no-broker' | 'ticked';
+  reason: 'not-armed' | 'no-subscription' | 'throttled' | 'no-broker' | 'ticked' | 'started';
 }
+
+/** Poslední pokus o push-to-start per uživatel v rámci instance (best effort). */
+const startAttemptByUser = new Map<string, number>();
 
 const finiteDate = (value: string | null | undefined): number => {
   const parsed = Date.parse(value ?? '');
@@ -85,8 +93,8 @@ export const liveActivityTickShouldSend = (options: {
 }): boolean => {
   if (options.plan.shouldEnd) return true;
   if (options.subscription.last_payload_hash !== options.plan.payloadHash) return true;
-  if (!options.positionsOpen) return false;
-  return options.now - finiteDate(options.subscription.last_payload_at) >= LIVE_ACTIVITY_TICK_HEARTBEAT_MS;
+  const heartbeat = options.positionsOpen ? LIVE_ACTIVITY_TICK_HEARTBEAT_MS : LIVE_ACTIVITY_TICK_IDLE_HEARTBEAT_MS;
+  return options.now - finiteDate(options.subscription.last_payload_at) >= heartbeat;
 };
 
 /** Stale-date podle toho, jestli tik reálně běží (otevřená pozice) nebo ne. */
@@ -104,6 +112,7 @@ export async function tickNativeLiveActivities(options: {
   fetchImpl?: typeof fetch;
   brokerSnapshot?: NativeBrokerSnapshotLoader;
   send?: (device: ApnsDevice, update: ApnsLiveActivityUpdate) => Promise<ApnsResult>;
+  sendStart?: Parameters<typeof startNativeLiveActivities>[0]['send'];
 }): Promise<NativeLiveActivityTickResult> {
   const now = options.now ?? Date.now();
   if (!liveActivityTickArmed(options.status)) return { sent: 0, skipped: 0, failed: 0, reason: 'not-armed' };
@@ -114,11 +123,6 @@ export async function tickNativeLiveActivities(options: {
     .is('expires_at', null);
   if (error) throw new Error(`native-live-activity-tick-query-failed: ${error.message}`);
   const subscriptions = (data ?? []) as NativeLiveActivityTickSubscriptionRow[];
-  if (subscriptions.length === 0) return { sent: 0, skipped: 0, failed: 0, reason: 'no-subscription' };
-  if (!liveActivityTickDue(subscriptions, now)) {
-    return { sent: 0, skipped: subscriptions.length, failed: 0, reason: 'throttled' };
-  }
-
   const nowIso = new Date(now).toISOString();
   const runtime: NativeLiveActivityRuntimeRow = {
     device_id: options.deviceId,
@@ -134,6 +138,28 @@ export async function tickNativeLiveActivities(options: {
     now,
     fetchImpl: options.fetchImpl,
   });
+  if (subscriptions.length === 0) {
+    // Žádná běžící aktivita: push-to-start hned z tiku místo čekání na cron.
+    // Starter sám deduplikuje podle triggeru session, takže opakované volání
+    // nezakládá duplicitní aktivity; throttle jen šetří DB a Tradovate.
+    const lastStart = startAttemptByUser.get(options.userId) ?? 0;
+    if (now - lastStart < LIVE_ACTIVITY_TICK_START_INTERVAL_MS) {
+      return { sent: 0, skipped: 0, failed: 0, reason: 'no-subscription' };
+    }
+    startAttemptByUser.set(options.userId, now);
+    const started = await startNativeLiveActivities({
+      db: options.db,
+      runtimes: [runtime],
+      now,
+      brokerSnapshot: loader,
+      ...(options.sendStart ? { send: options.sendStart } : {}),
+    });
+    return { sent: started.sent, skipped: started.skipped, failed: started.failed, reason: started.sent > 0 ? 'started' : 'no-subscription' };
+  }
+  if (!liveActivityTickDue(subscriptions, now)) {
+    return { sent: 0, skipped: subscriptions.length, failed: 0, reason: 'throttled' };
+  }
+
   const broker = await loader(runtime);
   if (!broker) {
     // Bez snapshotu nic neposíláme; zapíšeme pokus, ať se hned neopakuje.
