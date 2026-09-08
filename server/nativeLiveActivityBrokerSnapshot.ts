@@ -137,22 +137,51 @@ async function requestJson<T>(options: {
   return payload;
 }
 
+interface OpenPosition {
+  accountId: number;
+  contractId: number;
+  netPosition: number;
+  entryPrice: number | null;
+}
+
+interface OpenPnlResult {
+  accountId: number;
+  value: number | null;
+  balance: number | null;
+  autoLiqLevel: number | null;
+}
+
+interface OptionalList<T> {
+  values: T[];
+  complete: boolean;
+}
+
 /**
- * Minimal broker read model for a remote Live Activity. It does not persist
- * financial values. Base lists are one request each; cash snapshots are only
- * requested for accounts that currently have exposure.
+ * Everything one OAuth identity (one access token) can see, already limited to
+ * the allowed accounts. A copier group may span several Tradovate logins (one
+ * per prop firm), so a Live Activity merges one bundle per connection.
  */
-export async function loadNativeLiveActivityBrokerSnapshot(options: {
+interface BrokerRawBundle {
+  allowedAccounts: number[];
+  open: OpenPosition[];
+  workingOrders: OrderEntity[];
+  balances: CashBalanceEntity[];
+  accounts: OptionalList<AccountEntity>;
+  autoLiq: OptionalList<UserAccountAutoLiqEntity>;
+  orderVersions: OptionalList<OrderVersionEntity>;
+  symbols: Map<number, string>;
+  openPnlResults: OpenPnlResult[];
+}
+
+async function loadBrokerRawBundle(options: {
   baseUrl: string;
   accessToken: string;
-  /** Null načte všechny účty vrácené stejnými broker listy. */
   accountIds: readonly number[] | null;
-  leaderAccountId?: number | null;
-  fetchImpl?: typeof fetch;
-  now?: number;
-}): Promise<NativeLiveActivityBrokerSnapshot> {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const optionalList = async <T>(path: string): Promise<{ values: T[]; complete: boolean }> => {
+  leaderAccountId: number | null;
+  fetchImpl: typeof fetch;
+}): Promise<BrokerRawBundle> {
+  const { fetchImpl } = options;
+  const optionalList = async <T>(path: string): Promise<OptionalList<T>> => {
     try {
       const value = await requestJson<T[]>({ ...options, path, fetchImpl });
       return { values: Array.isArray(value) ? value : [], complete: Array.isArray(value) };
@@ -188,14 +217,11 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
       || !allowedAccounts.has(accountId)) return [];
     return [{ accountId, contractId, netPosition, entryPrice: finite(position.netPrice) }];
   });
-  const leaderAccountId = options.leaderAccountId
-    ?? options.accountIds?.find(Number.isSafeInteger)
-    ?? null;
   const workingOrders = rawOrders.filter(order => {
     const accountId = finite(order.accountId);
     return accountId != null && allowedAccounts.has(accountId) && working(order);
   });
-  const leaderWorkingOrders = workingOrders.filter(order => finite(order.accountId) === leaderAccountId);
+  const leaderWorkingOrders = workingOrders.filter(order => finite(order.accountId) === options.leaderAccountId);
   const contractIds = [...new Set([
     ...open.map(position => position.contractId),
     ...leaderWorkingOrders.flatMap(order => finite(order.contractId) ?? []),
@@ -219,20 +245,8 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
     }
   }
 
-  const latestBalance = new Map<number, CashBalanceEntity>();
-  for (const balance of rawBalances) {
-    const accountId = finite(balance.accountId);
-    if (accountId == null || !allowedAccounts.has(accountId)) continue;
-    const current = latestBalance.get(accountId);
-    if (!current || Date.parse(balance.timestamp ?? '') > Date.parse(current.timestamp ?? '')) {
-      latestBalance.set(accountId, balance);
-    }
-  }
-  const realizedPnl = [...latestBalance.values()]
-    .reduce((sum, balance) => sum + (finite(balance.realizedPnL) ?? 0), 0);
-
   const openAccountIds = [...new Set(open.map(position => position.accountId))];
-  const openPnlResults = await Promise.all(openAccountIds.map(async accountId => {
+  const openPnlResults = await Promise.all(openAccountIds.map(async (accountId): Promise<OpenPnlResult> => {
     try {
       const snapshot = await requestJson<CashBalanceSnapshot>({
         ...options,
@@ -252,14 +266,134 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
       return { accountId, value: null, balance: null, autoLiqLevel: null };
     }
   }));
+
+  return {
+    allowedAccounts: [...allowedAccounts],
+    open,
+    workingOrders,
+    balances: rawBalances.filter(balance => {
+      const accountId = finite(balance.accountId);
+      return accountId != null && allowedAccounts.has(accountId);
+    }),
+    accounts: rawAccounts,
+    autoLiq: rawAutoLiq,
+    orderVersions: rawOrderVersions,
+    symbols,
+    openPnlResults,
+  };
+}
+
+/** Sloučí bundly více OAuth připojení; stejný účet z více tokenů se počítá jen jednou. */
+function mergeBrokerRawBundles(bundles: readonly BrokerRawBundle[]): BrokerRawBundle {
+  const seenPositions = new Set<string>();
+  const seenOrders = new Set<number>();
+  const seenVersions = new Set<number>();
+  const seenPnl = new Set<number>();
+  const merged: BrokerRawBundle = {
+    allowedAccounts: [...new Set(bundles.flatMap(bundle => bundle.allowedAccounts))],
+    open: [],
+    workingOrders: [],
+    balances: bundles.flatMap(bundle => bundle.balances),
+    accounts: { values: [], complete: bundles.every(bundle => bundle.accounts.complete) },
+    autoLiq: { values: [], complete: bundles.every(bundle => bundle.autoLiq.complete) },
+    orderVersions: { values: [], complete: bundles.every(bundle => bundle.orderVersions.complete) },
+    symbols: new Map(),
+    openPnlResults: [],
+  };
+  for (const bundle of bundles) {
+    for (const position of bundle.open) {
+      const key = `${position.accountId}:${position.contractId}`;
+      if (seenPositions.has(key)) continue;
+      seenPositions.add(key);
+      merged.open.push(position);
+    }
+    for (const order of bundle.workingOrders) {
+      const id = finite(order.id);
+      if (id != null) {
+        if (seenOrders.has(id)) continue;
+        seenOrders.add(id);
+      }
+      merged.workingOrders.push(order);
+    }
+    for (const version of bundle.orderVersions.values) {
+      const id = finite(version.id);
+      if (id != null) {
+        if (seenVersions.has(id)) continue;
+        seenVersions.add(id);
+      }
+      merged.orderVersions.values.push(version);
+    }
+    merged.accounts.values.push(...bundle.accounts.values);
+    merged.autoLiq.values.push(...bundle.autoLiq.values);
+    for (const [id, name] of bundle.symbols) merged.symbols.set(id, name);
+    for (const result of bundle.openPnlResults) {
+      if (seenPnl.has(result.accountId)) continue;
+      seenPnl.add(result.accountId);
+      merged.openPnlResults.push(result);
+    }
+  }
+  return merged;
+}
+
+/**
+ * Minimal broker read model for a remote Live Activity. It does not persist
+ * financial values. Base lists are one request each per access token; cash
+ * snapshots are only requested for accounts that currently have exposure.
+ * Pass `accessTokens` when the copier group spans several OAuth connections —
+ * Tradovate lists only return the accounts of the token's own login.
+ */
+export async function loadNativeLiveActivityBrokerSnapshot(options: {
+  baseUrl: string;
+  accessToken?: string;
+  accessTokens?: readonly string[];
+  /** Null načte všechny účty vrácené stejnými broker listy. */
+  accountIds: readonly number[] | null;
+  leaderAccountId?: number | null;
+  fetchImpl?: typeof fetch;
+  now?: number;
+}): Promise<NativeLiveActivityBrokerSnapshot> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const accessTokens = [...new Set([
+    ...(options.accessTokens ?? []),
+    ...(options.accessToken ? [options.accessToken] : []),
+  ])].filter(token => token.trim() !== '');
+  if (accessTokens.length === 0) throw new Error('tradovate-live-activity-missing-token');
+  const leaderAccountId = options.leaderAccountId
+    ?? options.accountIds?.find(Number.isSafeInteger)
+    ?? null;
+
+  const bundles = await Promise.all(accessTokens.map(accessToken => loadBrokerRawBundle({
+    baseUrl: options.baseUrl,
+    accessToken,
+    accountIds: options.accountIds,
+    leaderAccountId,
+    fetchImpl,
+  })));
+  const raw = bundles.length === 1 ? bundles[0] : mergeBrokerRawBundles(bundles);
+  const allowedAccounts = new Set(raw.allowedAccounts);
+  const { open, workingOrders, symbols, openPnlResults } = raw;
+  const leaderWorkingOrders = workingOrders.filter(order => finite(order.accountId) === leaderAccountId);
+
+  const latestBalance = new Map<number, CashBalanceEntity>();
+  for (const balance of raw.balances) {
+    const accountId = finite(balance.accountId);
+    if (accountId == null || !allowedAccounts.has(accountId)) continue;
+    const current = latestBalance.get(accountId);
+    if (!current || Date.parse(balance.timestamp ?? '') > Date.parse(current.timestamp ?? '')) {
+      latestBalance.set(accountId, balance);
+    }
+  }
+  const realizedPnl = [...latestBalance.values()]
+    .reduce((sum, balance) => sum + (finite(balance.realizedPnL) ?? 0), 0);
+
   const completeOpenPnl = openPnlResults.every(result => result.value != null);
   const openPnl = openPnlResults.reduce((sum, result) => sum + (result.value ?? 0), 0);
   const openByAccount = new Map(openPnlResults.map(result => [result.accountId, result]));
-  const accountById = new Map(rawAccounts.values.flatMap(account => {
+  const accountById = new Map(raw.accounts.values.flatMap(account => {
     const id = finite(account.id);
     return id == null || !allowedAccounts.has(id) ? [] : [[id, account] as const];
   }));
-  const autoLiqByAccount = new Map(rawAutoLiq.values.flatMap(row => {
+  const autoLiqByAccount = new Map(raw.autoLiq.values.flatMap(row => {
     const id = finite(row.accountId);
     return id == null || !allowedAccounts.has(id) ? [] : [[id, row] as const];
   }));
@@ -285,8 +419,8 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
   });
 
   const latestVersionByOrderId = new Map<number, OrderVersionEntity>();
-  if (rawOrderVersions.complete) {
-    for (const version of rawOrderVersions.values) {
+  if (raw.orderVersions.complete) {
+    for (const version of raw.orderVersions.values) {
       const orderId = finite(version.orderId);
       const versionId = finite(version.id);
       if (orderId == null) continue;
@@ -332,7 +466,7 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
   }
 
   let pendingOrder: NativeLiveActivityBrokerPendingOrder | null = null;
-  if (open.length === 0 && rawOrderVersions.complete) {
+  if (open.length === 0 && raw.orderVersions.complete) {
     const candidate = leaderWorkingOrders.flatMap(order => {
       const orderId = finite(order.id);
       const contractId = finite(order.contractId);
@@ -351,32 +485,13 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
     }).sort((a, b) => a.orderId - b.orderId)[0];
     pendingOrder = candidate?.pending ?? null;
   }
-  // Diagnostika: leader má pracovní příkaz, ale režim „čekající limit" nevznikl.
   if (open.length === 0 && pendingOrder == null && workingOrders.length > 0) {
     console.warn('[Native Broker Snapshot] pending order not recognized', JSON.stringify({
       leaderAccountId,
-      leaderAllowed: leaderAccountId != null && allowedAccounts.has(leaderAccountId),
-      accountIdsRequested: options.accountIds ?? null,
-      versionsComplete: rawOrderVersions.complete,
-      workingAccounts: [...new Set(workingOrders.map(order => finite(order.accountId)))],
-      rawOrderAccounts: [...new Set(rawOrders.map(order => finite(order.accountId)))],
-      leaderRawOrders: rawOrders
-        .filter(order => finite(order.accountId) === leaderAccountId)
-        .slice(-5)
-        .map(order => ({ id: finite(order.id), action: order.action ?? null, status: order.ordStatus ?? null })),
-      leaderWorking: leaderWorkingOrders.map(order => {
-        const orderId = finite(order.id);
-        const version = orderId == null ? undefined : latestVersionByOrderId.get(orderId);
-        return {
-          action: order.action ?? null,
-          status: order.ordStatus ?? null,
-          kind: version?.orderType ?? null,
-          price: finite(version?.price),
-          stop: finite(version?.stopPrice),
-          qty: finite(version?.orderQty),
-          symbolKnown: finite(order.contractId) != null && symbols.has(finite(order.contractId) as number),
-        };
-      }),
+      tokens: accessTokens.length,
+      versionsComplete: raw.orderVersions.complete,
+      workingAccounts: [...new Set(workingOrders.map(order => order.accountId))],
+      leaderWorking: leaderWorkingOrders.map(order => ({ id: order.id, action: order.action, status: order.ordStatus })),
     }));
   }
 
@@ -414,8 +529,8 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
     totalPnl: realizedPnl + openPnl,
     completeOpenPnl,
     completeRealizedPnl: accounts.length > 0 && accounts.every(account => account.realizedPnlAvailable),
-    accountStatusComplete: rawAccounts.complete,
-    accountLockStatusComplete: rawAutoLiq.complete,
+    accountStatusComplete: raw.accounts.complete,
+    accountLockStatusComplete: raw.autoLiq.complete,
     capturedAt: options.now ?? Date.now(),
   };
 }

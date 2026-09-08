@@ -19,6 +19,7 @@ import {
 } from '../lib/copierDailyStatsLabels.js';
 import {
   getValidTradovateAccessToken,
+  listConnectedTradovateConnectionIds,
   type TradovateServerConfig,
 } from './tradovateOAuthStore.js';
 
@@ -367,6 +368,20 @@ export const latestNativeRuntimeByUser = (runtimes: readonly NativeLiveActivityR
  * returned loader is shared by Live Activities and financial APNs alerts so
  * adding alert coverage does not double broker traffic.
  */
+/** Připojení runtime zařízení první, ostatní připojená připojení uživatele za ním. */
+async function liveActivityConnectionIds(options: {
+  db: SupabaseClient;
+  config: TradovateServerConfig;
+  runtime: NativeLiveActivityRuntimeRow;
+}): Promise<string[]> {
+  const others = await listConnectedTradovateConnectionIds({
+    db: options.db,
+    userId: options.runtime.user_id,
+    environment: options.config.environment,
+  });
+  return [...new Set([options.runtime.connection_id, ...others])];
+}
+
 export function createNativeBrokerSnapshotLoader(options: {
   db: SupabaseClient;
   config: TradovateServerConfig;
@@ -378,27 +393,36 @@ export function createNativeBrokerSnapshotLoader(options: {
     // Rozsah musí být součástí klíče: sběrač účtů si bere `allAccounts`, a bez
     // něj by Live Activity dostala z cache i pozice účtů mimo copier skupinu —
     // započetly by se do jejího P&L a bránily ukončení prázdné aktivity.
+    // Sběr účtů (`allAccounts`) je per připojení — cron ho volá pro každé
+    // zvlášť. Skupina Live Activity naopak může ležet na více Tradovate
+    // loginech (leader u jedné propky, followeři u jiné) a každý token vidí
+    // jen své účty, proto se čte přes všechna připojená OAuth připojení.
     const scope = loadOptions?.allAccounts
-      ? 'all'
-      : liveActivityAccountIds(runtime).slice().sort().join(',');
-    const key = `${runtime.user_id}:${runtime.connection_id}:${scope}`;
+      ? `${runtime.connection_id}:all`
+      : `group:${liveActivityAccountIds(runtime).slice().sort().join(',')}`;
+    const key = `${runtime.user_id}:${scope}`;
     let pending = brokerByConnection.get(key);
     if (!pending) {
       pending = (async () => {
         const runtimeAccountIds = liveActivityAccountIds(runtime);
         const accountIds = loadOptions?.allAccounts ? null : runtimeAccountIds;
         if (accountIds?.length === 0) return null;
-        const { accessToken } = await getValidTradovateAccessToken({
+        const connectionIds = loadOptions?.allAccounts
+          ? [runtime.connection_id]
+          : await liveActivityConnectionIds({ db: options.db, config: options.config, runtime });
+        // Fail-closed: chybějící token kteréhokoli připojení znamená neúplný
+        // obraz skupiny, a ten se nesmí tvářit jako celkové P&L.
+        const tokens = await Promise.all(connectionIds.map(connectionId => getValidTradovateAccessToken({
           db: options.db,
           config: options.config,
           userId: runtime.user_id,
-          connectionId: runtime.connection_id,
+          connectionId,
           minimumValidityMs: 180_000,
           fetchImpl: options.fetchImpl,
-        });
+        })));
         return loadNativeLiveActivityBrokerSnapshot({
           baseUrl: tradovateApiBaseUrl(options.config.environment),
-          accessToken,
+          accessTokens: tokens.map(token => token.accessToken),
           accountIds,
           leaderAccountId: runtimeAccountIds[0] ?? null,
           fetchImpl: options.fetchImpl,

@@ -167,6 +167,28 @@ async function connectionRow(db: SupabaseClient, userId: string, connectionId?: 
   return data;
 }
 
+/**
+ * Every connected OAuth identity of a user in one environment, oldest first.
+ * A copier group can span several Tradovate logins (one per prop firm), and
+ * each login only lists its own accounts, so multi-connection readers need
+ * one token per connection.
+ */
+export async function listConnectedTradovateConnectionIds(options: {
+  db: SupabaseClient;
+  userId: string;
+  environment: TradovateEnvironment;
+}): Promise<string[]> {
+  const { data, error } = await options.db
+    .from('tradovate_oauth_connections')
+    .select('id,connected_at')
+    .eq('user_id', options.userId)
+    .eq('environment', options.environment)
+    .eq('connection_status', 'connected')
+    .order('connected_at', { ascending: true });
+  if (error) throw new Error(`Tradovate connection list failed: ${error.message}`);
+  return ((data ?? []) as { id: string }[]).map(row => String(row.id)).filter(Boolean);
+}
+
 const sanitizedStatus = (
   row: ConnectionRow | null,
   environment: TradovateEnvironment,

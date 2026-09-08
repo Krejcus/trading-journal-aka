@@ -389,6 +389,47 @@ describe('remote native Live Activity', () => {
     expect(incomplete).toMatchObject({ workingOrderCount: 1, pendingOrder: null });
   });
 
+  it('merges several OAuth connections so a leader on another Tradovate login is seen', async () => {
+    // Leader (10) lives on the second login; the first login only sees followers (11).
+    const byToken: Record<string, Record<string, unknown>> = {
+      followers: {
+        '/position/list': [], '/cashBalance/list': [{ accountId: 11, timestamp: '2026-09-08T08:00:00Z', amount: 50_000, realizedPnL: -20 }],
+        '/order/list': [{ id: 77, accountId: 11, contractId: 99, action: 'Buy', ordStatus: 'Working' }],
+        '/orderVersion/list': [{ id: 2, orderId: 77, orderQty: 2, orderType: 'Limit', price: 23_400 }],
+        '/account/list': [{ id: 11, name: 'Follower', canTrade: true }], '/userAccountAutoLiq/list': [],
+        '/contract/items': [],
+      },
+      leader: {
+        '/position/list': [], '/cashBalance/list': [{ accountId: 10, timestamp: '2026-09-08T08:00:00Z', amount: 50_000, realizedPnL: 30 }],
+        '/order/list': [{ id: 42, accountId: 10, contractId: 99, action: 'Buy', ordStatus: 'Working' }],
+        '/orderVersion/list': [{ id: 1, orderId: 42, orderQty: 1, orderType: 'Limit', price: 23_400 }],
+        '/account/list': [{ id: 10, name: 'Leader', canTrade: true }], '/userAccountAutoLiq/list': [],
+        '/contract/items': [{ id: 99, name: 'MNQU6' }],
+      },
+    };
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const token = String((init?.headers as Record<string, string>)?.Authorization ?? '').replace('Bearer ', '');
+      const path = new URL(String(input)).pathname.replace('/v1', '');
+      const body = byToken[token]?.[path];
+      return body == null ? new Response('{}', { status: 404 }) : new Response(JSON.stringify(body));
+    }) as unknown as typeof fetch;
+
+    const snapshot = await loadNativeLiveActivityBrokerSnapshot({
+      baseUrl: 'https://demo.tradovateapi.com/v1', accessTokens: ['followers', 'leader'], accountIds: [10, 11],
+      leaderAccountId: 10, fetchImpl,
+    });
+    expect(snapshot.pendingOrder).toEqual({ symbol: 'MNQU6', side: 'Buy', quantity: 1, price: 23_400 });
+    expect(snapshot).toMatchObject({ workingOrderCount: 2, realizedPnl: 10, accountStatusComplete: true });
+    expect(snapshot.accounts.map(account => [account.accountId, account.accountName])).toEqual([[10, 'Leader'], [11, 'Follower']]);
+
+    // Single-token reader stays blind to the leader: the same limit is not a pending entry.
+    const followersOnly = await loadNativeLiveActivityBrokerSnapshot({
+      baseUrl: 'https://demo.tradovateapi.com/v1', accessToken: 'followers', accountIds: [10, 11],
+      leaderAccountId: 10, fetchImpl,
+    });
+    expect(followersOnly).toMatchObject({ workingOrderCount: 1, pendingOrder: null });
+  });
+
   it('keeps a pending entry activity alive and publishes its display fields', () => {
     const now = Date.parse('2026-08-20T10:00:30.000Z');
     const pendingBroker = {

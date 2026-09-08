@@ -208,6 +208,41 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-08 (Claude, Live Activity: broker snapshot přes všechna OAuth připojení)
+
+**Problém:** limit buy zadaný na leaderovi se v Live Activity nikdy neukázal jako
+„LIMIT BUY" (pending). Diagnostika z `nativeLiveActivityBrokerSnapshot` ukázala
+`leaderRawOrders: []` při `leaderAllowed: true` — token, kterým tick četl, vůbec
+neviděl účet leadera. Příčina: uživatel má **dvě** Tradovate OAuth připojení
+(Lucid = leader, Tradeify = followeři), Mac worker běží se dvěma copier
+zařízeními (jedno na připojení, `connections.json` manifest) a Tradovate listy
+(`/order/list`, `/position/list`, `/cashBalance/list`…) vrací jen účty
+vlastního loginu. `createNativeBrokerSnapshotLoader` bral token jen z
+`runtime.connection_id` zařízení, které zrovna pollovalo → snapshot skupiny byl
+poloviční (bez leadera), takže chyběl pending, P&L leadera i jeho SL/TP.
+
+**Řešení:**
+- `server/nativeLiveActivityBrokerSnapshot.ts`: fetch rozdělen na per-token
+  `loadBrokerRawBundle` (listy, kontrakty, cash snapshoty otevřených účtů) a
+  `mergeBrokerRawBundles` (dedupe pozic podle účet+kontrakt, příkazů a verzí
+  podle id, cash snapshotů podle účtu; `complete` flagy AND). Výpočet zůstal
+  stejný nad sloučenými daty. `loadNativeLiveActivityBrokerSnapshot` přijímá
+  `accessTokens[]` (`accessToken` zůstává kompatibilní).
+- `server/tradovateOAuthStore.ts`: `listConnectedTradovateConnectionIds`.
+- `server/nativeLiveActivityUpdater.ts`: pro rozsah skupiny (Live Activity)
+  loader tahá tokeny všech připojených OAuth připojení uživatele (runtime
+  připojení první); cache klíč `user:group:<účty>`. Rozsah `allAccounts` (cron
+  sběr účtů) zůstává per připojení, jinak by se účty duplikovaly. Fail-closed:
+  když token kteréhokoli připojení chybí, snapshot je null (bez pushe), ne
+  poloviční P&L.
+- Test v `tests/nativeLiveActivityUpdater.test.ts`: leader na druhém loginu →
+  pending rozpoznán a účty sloučené; jednotokenové čtení zůstává slepé.
+
+**Poučení:** „copier skupina = jedno Tradovate připojení" byl tichý předpoklad
+na serverové straně; worker s ním nikdy nepracoval (manifest hlídá, že účet
+patří právě jednomu připojení). Každý serverový čtenář broker dat pro skupinu
+musí iterovat připojení.
+
 ### 2026-09-08 (Claude, Live Activity: duplicitní aktivity, jedna na uživatele, lokální fallback)
 
 Z logu telefonu (syslog přes USB, `App{ActivityKit}`, `liveactivitiesd`,
