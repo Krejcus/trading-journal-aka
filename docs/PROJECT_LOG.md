@@ -208,6 +208,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-08 (Claude, Live Activity: cooldown svítí i po ručním DISARM)
+
+Uživatel: „nesvítí cooldown". Worker měl `entryCooldownUntil` platný (15 min
+po SL exitu), ale `armed: false` po ručním vypnutí. Po DISARM + flat server
+aktivitu ukončil souhrnem L5 a starter startoval jen při ARM nebo otevřené
+pozici, takže K3 odpočet neměl kde svítit.
+
+- `planNativeLiveActivityUpdate.shouldEnd` navíc čeká na vypršení
+  `entryCooldownUntil` (stejně jako u day-locku); stav je `COOLDOWN`,
+  `mode: idle` → widget vybere layout `.cooldown` (K3).
+- `planNativeLiveActivityStart`: odzbrojený a flat runtime dostane trigger
+  `daylock:<device>:<until>` nebo `cooldown:<device>:<until>` (identita =
+  konec odpočtu, po ručním zavření se do dalšího cooldownu nevrací); push-to-
+  start titulky „Denní zámek" / „Cooldown běží". Cron (1 min) to pokryje bez
+  tiku, ten zůstává jen pro ARM.
+- Po vypršení cooldownu při DISARM následuje souhrn L5 jako dřív.
+
 ### 2026-09-08 (Claude, cena pro čekající limit z TradingView CDP — postaveno)
 
 Navazuje na sondu výše. Bezplatný zdroj ceny mimo pozici: grafy TradingView

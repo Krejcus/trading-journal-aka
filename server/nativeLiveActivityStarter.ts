@@ -27,7 +27,7 @@ export interface NativeLiveActivityStartSubscriptionRow {
 
 export interface NativeLiveActivityStartPlan {
   trigger: string | null;
-  reason: 'armed' | 'position' | 'inactive' | 'stale';
+  reason: 'armed' | 'position' | 'day-lock' | 'cooldown' | 'inactive' | 'stale';
 }
 
 const object = (value: unknown): Record<string, unknown> =>
@@ -59,6 +59,13 @@ export function planNativeLiveActivityStart(options: {
     return { trigger: `arm:${options.runtime.device_id}:${startedAt}`, reason: 'armed' };
   }
   if (!options.broker || options.broker.positions.length === 0) {
+    // Odzbrojený a flat: aktivita má smysl jen jako odpočet zámku dne nebo
+    // anti-revenge cooldownu (K3). Identita = konec odpočtu, takže se po
+    // ručním zavření znovu nespustí, dokud nezačne další cooldown.
+    const dayLockUntil = finite(controller.dayLockUntil);
+    if (dayLockUntil > options.now) return { trigger: `daylock:${options.runtime.device_id}:${dayLockUntil}`, reason: 'day-lock' };
+    const cooldownUntil = finite(controller.entryCooldownUntil);
+    if (cooldownUntil > options.now) return { trigger: `cooldown:${options.runtime.device_id}:${cooldownUntil}`, reason: 'cooldown' };
     return { trigger: null, reason: 'inactive' };
   }
   const events = Array.isArray(controller.recentCopyEvents) ? controller.recentCopyEvents.map(object) : [];
@@ -139,7 +146,10 @@ export async function startNativeLiveActivities(options: {
       },
       state: live.update.state,
       alert: {
-        title: startPlan.reason === 'armed' ? 'Copier je ARM' : 'Otevřená kopie',
+        title: startPlan.reason === 'armed' ? 'Copier je ARM'
+          : startPlan.reason === 'day-lock' ? 'Denní zámek'
+            : startPlan.reason === 'cooldown' ? 'Cooldown běží'
+              : 'Otevřená kopie',
         body: live.update.state.headline,
       },
       staleAt: now / 1_000 + 180,

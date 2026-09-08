@@ -135,6 +135,26 @@ describe('remote native Live Activity', () => {
     })).toEqual({ trigger: null, reason: 'inactive' });
   });
 
+  it('starts a K3 countdown for cooldown or day-lock even when DISARMED and flat', () => {
+    const now = Date.parse('2026-08-20T10:00:30.000Z');
+    const flat = { ...broker, positions: [], pendingOrder: null, workingOrderCount: 0 };
+    expect(planNativeLiveActivityStart({
+      runtime: runtime({ armed: false, connected: true, entryCooldownUntil: now + 600_000 }), broker: flat, now,
+    })).toEqual({ trigger: `cooldown:device:${now + 600_000}`, reason: 'cooldown' });
+    expect(planNativeLiveActivityStart({
+      runtime: runtime({ armed: false, connected: true, entryCooldownUntil: now + 600_000, dayLockUntil: now + 3_600_000 }),
+      broker: flat, now,
+    })).toEqual({ trigger: `daylock:device:${now + 3_600_000}`, reason: 'day-lock' });
+    // Cooldown, který už vypršel, aktivitu nestartuje.
+    expect(planNativeLiveActivityStart({
+      runtime: runtime({ armed: false, connected: true, entryCooldownUntil: now - 1 }), broker: flat, now,
+    })).toEqual({ trigger: null, reason: 'inactive' });
+    // Bez broker snapshotu se start neodvozuje z pozic, ale cooldown stačí.
+    expect(planNativeLiveActivityStart({
+      runtime: runtime({ armed: false, connected: true, entryCooldownUntil: now + 1_000 }), broker: null, now,
+    })).toEqual({ trigger: `cooldown:device:${now + 1_000}`, reason: 'cooldown' });
+  });
+
   it('sends one remote start and persists the session trigger', async () => {
     const now = Date.parse('2026-08-20T10:00:30.000Z');
     const updates: Array<{ table: string; payload: Record<string, unknown>; id: string }> = [];
@@ -286,6 +306,15 @@ describe('remote native Live Activity', () => {
     const flat = { ...broker, positions: [], pendingOrder: null, workingOrderCount: 0, openPnl: 0, totalPnl: 250 };
     expect(planNativeLiveActivityUpdate({ runtime: runtime(controller), broker: flat, now }).shouldEnd).toBe(true);
     expect(planNativeLiveActivityUpdate({ runtime: runtime(controller), broker: null, now }).shouldEnd).toBe(false);
+    // Běžící cooldown drží aktivitu (K3) i po ručním DISARM; po vypršení končí souhrnem.
+    const cooling = planNativeLiveActivityUpdate({
+      runtime: runtime({ ...controller, entryCooldownUntil: now + 600_000 }), broker: flat, now,
+    });
+    expect(cooling.shouldEnd).toBe(false);
+    expect(cooling.update.state).toMatchObject({ status: 'COOLDOWN', mode: 'idle', cooldownUntil: (now + 600_000) / 1_000 });
+    expect(planNativeLiveActivityUpdate({
+      runtime: runtime({ ...controller, entryCooldownUntil: now - 1 }), broker: flat, now,
+    }).shouldEnd).toBe(true);
   });
 
   it('loads bounded broker state and aggregates current PnL', async () => {

@@ -341,11 +341,14 @@ export function planNativeLiveActivityUpdate(options: {
   const armExpiresAtMs = bool(controller.armed) ? optionalFinite(controller.armExpiresAt) : null;
   // A failed broker read must never be interpreted as "flat". End remotely
   // only after an authoritative snapshot confirms zero open positions.
+  // Cooldown drží aktivitu i po ručním DISARM: odpočet (K3) je disciplinární
+  // pomůcka pro leadera bez ohledu na to, jestli kopírka běží.
   const shouldEnd = options.broker != null
     && !bool(controller.armed)
     && openPositionCount === 0
     && workingOrderCount === 0
     && finite(controller.dayLockUntil) <= options.now
+    && finite(controller.entryCooldownUntil) <= options.now
     && !bool(controller.killSwitch);
   const headline = position.headline
     ?? (bool(controller.armed) ? `ARM · ${followerCount} followerů` : status.detail);
