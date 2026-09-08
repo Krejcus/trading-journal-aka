@@ -67,7 +67,8 @@ import {
   devLiveCopyFixtureSnapshot,
 } from '../lib/devLiveCopyFixture';
 import LiveRiskTab from './LiveRiskTab';
-import LiveRuntimeStatus from './LiveRuntimeStatus';
+import LiveStatusStrip from './LiveStatusStrip';
+import CopierEventsPanel from './CopierEventsPanel';
 import MacCompanionSettings from './MacCompanionSettings';
 import TradovateAccountProfileSetup from './TradovateAccountProfileSetup';
 import TradovateAddConnectionModal from './TradovateAddConnectionModal';
@@ -639,6 +640,20 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [confirmAction]);
 
+  /** Bezpečný restart TradingView s CDP; worker ho pustí jen v DISARMED a flat stavu. */
+  const repairSnapshots = useCallback(async () => {
+if (!(await confirmAction({
+  title: 'Obnovit TradingView snímky',
+  message: 'Ulož nejdřív případné změny v TradingView. AlphaTrade aplikaci standardně ukončí a znovu spustí s připojením pro ENTRY/EXIT snímky. Kopírka ani brokerové příkazy se nezmění.',
+  confirmLabel: 'Ukončit a znovu spustit',
+}))) return;
+setAgentStatus((await executeAgent({
+  type: 'snapshot-test',
+  requestId: crypto.randomUUID(),
+  repairCamera: true,
+})).status);
+  }, [confirmAction, executeAgent]);
+
   const tabs: Array<{ id: TradovateLiveTab; label: string; icon: React.ElementType }> = [
     { id: 'connections', label: 'Připojení', icon: Link2 },
     { id: 'overview', label: 'Live Dashboard', icon: Gauge },
@@ -684,7 +699,14 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         })}
       </nav>
 
-      <LiveRuntimeStatus status={agentStatus?.controller ?? null} available={runtimeAvailable} pending={!agentStatusResolved} transport={agentTransport} />
+      <LiveStatusStrip
+        status={agentStatus?.controller ?? null}
+        available={runtimeAvailable}
+        pending={!agentStatusResolved}
+        transport={agentTransport}
+        snapshotHealth={agentStatus?.snapshotHealth}
+        onRepairSnapshots={repairSnapshots}
+      />
 
       {renderedLiveError && (
         <div className="flex items-center gap-3 rounded-md border border-rose-500/30 bg-rose-500/10 p-4 text-rose-500">
@@ -789,19 +811,6 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
               onRefreshOrders={async () => { await live.refreshData(); }}
               onAccount={account => setSelectedAccountId(account.id)}
               apiTelemetry={live.apiTelemetry}
-              snapshotHealth={agentStatus?.snapshotHealth}
-              onRepairSnapshots={async () => {
-                if (!(await confirmAction({
-                  title: 'Obnovit TradingView snímky',
-                  message: 'Ulož nejdřív případné změny v TradingView. AlphaTrade aplikaci standardně ukončí a znovu spustí s připojením pro ENTRY/EXIT snímky. Kopírka ani brokerové příkazy se nezmění.',
-                  confirmLabel: 'Ukončit a znovu spustit',
-                }))) return;
-                setAgentStatus((await executeAgent({
-                  type: 'snapshot-test',
-                  requestId: crypto.randomUUID(),
-                  repairCamera: true,
-                })).status);
-              }}
               commandAdapter={commandAdapter}
               runtimeStatus={agentStatus?.controller ?? null}
               runtimeAvailable={runtimeAvailable}
@@ -824,7 +833,6 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
               accountEligibility={effectiveAccountEligibility}
               unverifiableFollowerOwnership={agentStatus?.controller.unverifiableFollowerOwnership ?? []}
               lastDisarm={copierUiDemo ? undefined : agentStatus?.controller.lastDisarm}
-              disarmHistory={copierUiDemo ? [] : agentStatus?.controller.disarmHistory ?? []}
               onVerifyEligibility={async accountId => {
                 const result = await executeAgent({ type: 'verify-account-eligibility', accountId });
                 setAgentStatus(result.status);
@@ -872,7 +880,17 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
           ) : null}
           {tab === 'accounts' ? <Accounts data={live.data} profiles={live.profiles} onAccount={setSelectedAccountId} /> : null}
           {tab === 'orders' ? <PositionsAndOrders data={live.data} profiles={live.profiles} /> : null}
-          {tab === 'events' ? <ActivityView data={live.data} profiles={live.profiles} /> : null}
+          {tab === 'events' ? (
+            <>
+              <CopierEventsPanel
+                status={agentStatus?.controller ?? null}
+                transport={agentTransport}
+                snapshotHealth={agentStatus?.snapshotHealth}
+                disarmHistory={agentStatus?.controller.disarmHistory ?? []}
+              />
+              <ActivityView data={live.data} profiles={live.profiles} />
+            </>
+          ) : null}
         </>
       )}
 

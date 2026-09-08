@@ -208,6 +208,43 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-08 (Claude, LIVE: jedna stavová lišta místo tří informačních karet)
+
+Uživatel chtěl tři informační prvky nad skupinami (karta stavu workeru s
+„Worker hlásí problém", zelená karta TradingView snímků a panel odzbrojení
+ve skupině) sjednotit a zminimalizovat: „jen když TradingView snímky vypadnou,
+nějaké tlačítko, jinak čisto", detaily přesunout do Událostí.
+
+- **`LiveStatusStrip` + čistý model `services/liveStatusStrip.ts`:** čtyři
+  chipy Worker · Broker · Kopírka · Snímky (tečka + slovo). Zdravý stav je
+  šedý; problém zbarví jen svůj chip a vysvětlení nese tooltip. Jediné
+  tlačítko „Obnovit TradingView" jen při `cdp-offline` s `repairSupported`.
+  Jediná věta pod chipy jen pro automatické odzbrojení s nepotvrzeným
+  výsledkem kopií (`left-open-unprotected` / `unknown`) — to nesmí zapadnout.
+  `lastError` workeru se v liště neukazuje vůbec: po reconnectu zůstával viset
+  („Worker hlásí problém" vedle „Broker stream Připojený"), takže by oranžová
+  ztratila význam. Chip Worker při `reconciliationRequired` říká „Čeká na
+  ověření účtů", ne jen barvu.
+- **Panel odzbrojení ve skupině** (`CopierDisarmPanel`) jen pro
+  `trigger !== 'manual'`, bez rozbalovacího technického detailu a historie
+  (detail zůstává v tooltipu). Ruční vypnutí = čistě vypnutá kopírka.
+- **Záložka Události** dostala nahoře `CopierEventsPanel`: worker, broker,
+  ověření účtů, poslední chyba workeru, stav snímků s časy kontroly a
+  posledního uloženého snímku, a celá historie odzbrojení (ruční šedě,
+  automatické s dalším krokem a technickým textem).
+- Smazán `LiveRuntimeStatus.tsx`, z `LiveCopyTradeOverview` odešly
+  `SnapshotHealthBanner`, `snapshotHealthMessage` (přesunuto do
+  `liveStatusStrip.ts`), props `snapshotHealth`/`onRepairSnapshots`/
+  `disarmHistory`; oprava snímků se volá z desku (`repairSnapshots`).
+  `copytrade-preview.tsx` přepnut na lištu.
+
+Ověření: tsc čisté, lint změněných souborů beze změny, testy
+`liveStatusStrip.test.ts` (model + render lišty a panelu Událostí) a upravený
+`liveCopyDisarmPanelRender.test.ts` (ruční vypnutí bez panelu), celá sada
+3030 zelená. Na localhost:3000 s reálným workerem: lišta „Worker · Broker
+Připojený · Kopírka Vypnutá · Snímky Připravené", žádná karta, žádný panel po
+ručním vypnutí; Události nesou lastError, časy snímků i 4 odzbrojení dne.
+
 ### 2026-09-07 (Claude, ARM LIVE bez připravených snímků — varování a nabídka opravy)
 
 Uživatel: dnes se zase nepořídil ENTRY/EXIT snímek. Diagnóza z agenta a logu:

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import LiveCopyTradeOverview from './components/LiveCopyTradeOverview';
 import LiveRiskTab from './components/LiveRiskTab';
-import LiveRuntimeStatus from './components/LiveRuntimeStatus';
+import LiveStatusStrip from './components/LiveStatusStrip';
 import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from './services/liveCopyTrading';
 import type { CopierControllerStatus } from './services/copierRuntimeController';
 import type { LiveAccount, LiveSnapshot } from './services/tradecopiaLiveService';
@@ -50,7 +50,7 @@ function Preview() {
       </select></label>
     </header>
     <nav aria-label="LIVE navigace" className="flex gap-1 border-b border-[var(--border-subtle)]">{(['overview', 'risk'] as const).map(value => <button key={value} onClick={() => setTab(value)} className={`border-b-2 px-4 py-3 text-xs font-bold ${value === tab ? 'border-indigo-500 text-indigo-500' : 'border-transparent'}`}>{value === 'overview' ? 'Live Dashboard' : 'Risk'}</button>)}</nav>
-    <LiveRuntimeStatus status={status} available={available} pending={false} transport="local" />
+    <LiveStatusStrip status={status} available={available} pending={false} transport="local" />
     {notice && <p className="text-xs text-indigo-500">{notice}</p>}
     {tab === 'overview' ? <LiveCopyTradeOverview key={scenario} snapshot={snapshot} runtimeGroup={group} executionGroupId={group.id}
       runtimeStatus={status} runtimeAvailable={available} riskConfigSupported={supported} copierArmed={status.armed}
