@@ -43,8 +43,27 @@ async function subscriptionFetch(url: string, init: RequestInit, token: string):
 }
 
 /** A successful subscription makes the server the content/lifecycle owner. */
+const REMOTE_MANAGED_KEY = 'alphatrade_native_live_activity_remote_managed';
+
+const readRemoteManagedFlag = (): boolean => {
+  try { return localStorage.getItem(REMOTE_MANAGED_KEY) === '1'; } catch { return false; }
+};
+const writeRemoteManagedFlag = (value: boolean): void => {
+  try {
+    if (value) localStorage.setItem(REMOTE_MANAGED_KEY, '1');
+    else localStorage.removeItem(REMOTE_MANAGED_KEY);
+  } catch { /* private mode */ }
+};
+
+/**
+ * Server (tik + cron) je autoritou pro Live Activity, jakmile jednou přijal
+ * registraci. Trvalý příznak brání tomu, aby lokální záložní sync po restartu
+ * appky (než doběhne nová registrace) přepsal bohatší serverový obsah nebo
+ * založil duplicitní aktivitu.
+ */
 export function isNativeLiveActivityRemoteManaged(): boolean {
-  return listeningUserId != null && (acceptedStart || acceptedActivities.size > 0);
+  if (listeningUserId != null && (acceptedStart || acceptedActivities.size > 0)) return true;
+  return isNativeBuild && readRemoteManagedFlag();
 }
 
 function loadRegistrations(): ActivityRegistration[] {
@@ -129,7 +148,7 @@ async function sendRegistration(
     }),
   }, registration.pushToken);
   if (response.ok && epoch === listenerGeneration && listeningUserId === expectedUserId) {
-    if (method === 'POST') acceptedActivities.add(registration.activityId);
+    if (method === 'POST') { acceptedActivities.add(registration.activityId); writeRemoteManagedFlag(true); }
     else acceptedActivities.delete(registration.activityId);
   }
   return response.ok;
@@ -160,7 +179,10 @@ async function sendStartRegistration(
       bundleId: 'app.alphatrade.native',
     }),
   }, registration.pushToken);
-  if (response.ok && epoch === listenerGeneration && listeningUserId === expectedUserId) acceptedStart = method === 'POST';
+  if (response.ok && epoch === listenerGeneration && listeningUserId === expectedUserId) {
+    acceptedStart = method === 'POST';
+    if (acceptedStart) writeRemoteManagedFlag(true);
+  }
   return response.ok;
 }
 
@@ -236,6 +258,7 @@ export async function initializeNativeLiveActivityPush(userId: string): Promise<
 }
 
 export async function deactivateNativeLiveActivityPush(userId: string): Promise<{ revoked: boolean }> {
+  writeRemoteManagedFlag(false);
   ++listenerGeneration;
   const registrationsInFlight = [...pendingPosts];
   listeningUserId = null;

@@ -208,6 +208,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-08 (Claude, Live Activity: duplicitní aktivity, jedna na uživatele, lokální fallback)
+
+Z logu telefonu (syslog přes USB, `App{ActivityKit}`, `liveactivitiesd`,
+`WidgetRenderer_Activities`): každý push-to-start založí NOVOU aktivitu, i když
+už jedna běží — po opakovaných startech (reinstalace, ruční resety triggeru)
+běžely na zámku 3+ aktivity a zámek ukazoval tu nejstarší (s rozbitou
+hlavičkou ze staršího buildu). Vykreslování samotné je v pořádku
+(„Evaluated inner view with result: LIVE"). Zároveň appka lokálním záložním
+syncem (`nativeWidgetSnapshot.syncLiveActivity`) přepisovala aktivity
+vlastním, chudším payloadem — `isNativeLiveActivityRemoteManaged()` bylo po
+restartu appky chvíli false.
+
+Opravy: (1) tik drží **jednu aktivitu na uživatele** — starší odběry dostanou
+`end` (dismissal 2 s) a `expires_at`; test v `nativeLiveActivityTick.test.ts`.
+(2) Příznak „remote managed" je trvalý v localStorage (nastaví se po první
+přijaté registraci, smaže při odhlášení), takže lokální fallback po startu
+appky neběží. (3) Hlavička zámku: levý sloupec `frame(maxWidth: .infinity)`
+místo `layoutPriority`, `privacySensitive` jen u peněz (na zamčeném zámku se
+„LIVE" a titulek ztrácely). Poznámka: `.env.vercel.txt` nemá APNs klíče,
+lokální „end" se poslat nedá — dělá to nasazený tik. Ruční expirace odběrů
+„expired-by-reinstall" byla omyl (aktivity žily), vráceno.
 ### 2026-09-08 (Claude, Live Activity: heartbeat mimo pozici a start z tiku; diagnóza „prodlevy")
 
 Diagnóza z DB (read-only přes service key): aktivita po zapnutí 09:39 běží,

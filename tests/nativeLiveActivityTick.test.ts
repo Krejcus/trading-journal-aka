@@ -216,3 +216,21 @@ describe('Live Activity tik: push-to-start bez běžící aktivity', () => {
     expect(sendStart).toHaveBeenCalledOnce();
   });
 });
+
+describe('Live Activity tik: jedna aktivita na uživatele', () => {
+  it('starší odběry ukončí (end + expires_at) a aktualizuje jen nejnovější', async () => {
+    const older = subscription({ id: 'sub-old', activity_id: 'old', last_payload_at: iso(-7_000), created_at: iso(-600_000) });
+    const newest = subscription({ id: 'sub-new', activity_id: 'new', last_payload_at: iso(-7_000), last_payload_hash: 'stale', created_at: iso(-30_000) });
+    const { db, updates } = fakeDb([older, newest]);
+    const send = vi.fn(async (_device: ApnsDevice, _update: ApnsLiveActivityUpdate): Promise<ApnsResult> => ({ status: 'sent', statusCode: 200 }));
+    const result = await tickNativeLiveActivities({
+      db: db as never, userId: 'user', deviceId: 'device', connectionId: 'connection',
+      status: status({}), config: {} as never, now, brokerSnapshot: async () => broker, send,
+    });
+    expect(result.sent).toBe(2);
+    const endCall = send.mock.calls.find(call => call[0].id === 'old');
+    expect(endCall?.[1].event).toBe('end');
+    expect(send.mock.calls.find(call => call[0].id === 'new')?.[1].event).toBe('update');
+    expect(updates).toContainEqual(expect.objectContaining({ id: 'sub-old', payload: expect.objectContaining({ last_error: 'ended-duplicate:sent' }) }));
+  });
+});

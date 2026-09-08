@@ -44,6 +44,7 @@ export const LIVE_ACTIVITY_TICK_BUDGET_MS = 2_500;
 
 export interface NativeLiveActivityTickSubscriptionRow extends NativeLiveActivitySubscriptionRow {
   updated_at: string | null;
+  created_at?: string | null;
 }
 
 export interface NativeLiveActivityTickResult {
@@ -118,7 +119,7 @@ export async function tickNativeLiveActivities(options: {
   if (!liveActivityTickArmed(options.status)) return { sent: 0, skipped: 0, failed: 0, reason: 'not-armed' };
 
   const { data, error } = await options.db.from('native_live_activity_subscriptions')
-    .select('id,user_id,activity_id,push_token,environment,bundle_id,last_payload_hash,last_payload_at,updated_at')
+    .select('id,user_id,activity_id,push_token,environment,bundle_id,last_payload_hash,last_payload_at,updated_at,created_at')
     .eq('user_id', options.userId)
     .is('expires_at', null);
   if (error) throw new Error(`native-live-activity-tick-query-failed: ${error.message}`);
@@ -177,7 +178,25 @@ export async function tickNativeLiveActivities(options: {
   let sent = 0;
   let skipped = 0;
   let failed = 0;
-  for (const subscription of subscriptions) {
+  // Jedna aktivita na uživatele: když se jich na zámku sejde víc (opakované
+  // starty, reinstalace), starší ukončit hned a nechat jen nejnovější.
+  const ordered = [...subscriptions].sort((left, right) => finiteDate(right.created_at) - finiteDate(left.created_at));
+  const duplicates = ordered.slice(1);
+  for (const duplicate of duplicates) {
+    const result = await send({
+      id: duplicate.activity_id,
+      deviceToken: duplicate.push_token,
+      environment: duplicate.environment,
+      bundleId: duplicate.bundle_id,
+    } as ApnsDevice, { state: plan.update.state, event: 'end', staleAt: now / 1_000 + 60, dismissalAt: now / 1_000 + 2 });
+    await options.db.from('native_live_activity_subscriptions').update({
+      expires_at: nowIso,
+      last_error: `ended-duplicate:${result.status}`,
+      updated_at: nowIso,
+    }).eq('id', duplicate.id);
+    if (result.status === 'sent') sent++; else failed++;
+  }
+  for (const subscription of ordered.slice(0, 1)) {
     if (!liveActivityTickShouldSend({ plan, subscription, positionsOpen, now })) {
       skipped++;
       await options.db.from('native_live_activity_subscriptions')

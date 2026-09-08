@@ -1048,21 +1048,22 @@ private struct AlphaTradeLiveActivityLockScreen: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
+            // Levý sloupec dostane celou zbývající šířku explicitně; s layoutPriority
+            // se na zamčeném zámku (redakce citlivého textu) smrskl na nulu.
             HStack(alignment: .top, spacing: 10) {
                 VStack(alignment: .leading, spacing: 6) {
                     hero
                     subtitle
                 }
-                .layoutPriority(1)
-                Spacer(minLength: 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 VStack(alignment: .trailing, spacing: 6) {
                     pill
                     freshness
                 }
-                .fixedSize()
             }
             content
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .foregroundStyle(ink)
         .activityBackgroundTint(background)
@@ -1071,29 +1072,30 @@ private struct AlphaTradeLiveActivityLockScreen: View {
 
     // MARK: hlavička
 
-    private func heroText(_ text: String, color: Color, size: CGFloat = 34) -> some View {
+    private func heroText(_ text: String, color: Color, size: CGFloat = 34, sensitive: Bool = true) -> some View {
         Text(text)
             .font(.system(size: size, weight: .heavy, design: .rounded).monospacedDigit())
             .tracking(-0.5)
             .foregroundStyle(color)
             .lineLimit(1)
             .minimumScaleFactor(0.7)
-            .privacySensitive()
+            // Jen peníze jsou citlivé; „LIVE" nebo název stavu musí být vidět i na zamčeném zámku.
+            .privacySensitive(sensitive)
     }
 
     @ViewBuilder private var hero: some View {
         switch layout {
         case .stale:
-            heroText("—", color: .orange)
+            heroText("—", color: .orange, sensitive: false)
         case .critical:
-            heroText(state.status, color: .white, size: 26)
+            heroText(state.status, color: .white, size: 26, sensitive: false)
         case .position, .legacy:
             heroText(liveActivityCompactPnl(state), color: pnlColor)
         case .summary, .dayTrades:
             let text = state.dayPnlText ?? liveActivityCompactPnl(state)
             heroText(text, color: text.hasPrefix("−") || text.hasPrefix("-") ? LiveActivityPalette.loss(colorScheme) : LiveActivityPalette.profit)
         case .armedIdle:
-            heroText("LIVE", color: LiveActivityPalette.profit)
+            heroText("LIVE", color: LiveActivityPalette.profit, sensitive: false)
         case .locked:
             // Odpočet tiká lokálně; po vypršení se karta sama přepne na další stav.
             Text(timerInterval: Date()...Date(timeIntervalSince1970: state.dayLockUntil ?? nowSeconds), countsDown: true)
@@ -1108,7 +1110,7 @@ private struct AlphaTradeLiveActivityLockScreen: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         case .pending:
-            heroText("LIMIT \(state.side == "Short" ? "SELL" : "BUY")", color: LiveActivityPalette.indigo(colorScheme), size: 26)
+            heroText("LIMIT \(state.side == "Short" ? "SELL" : "BUY")", color: LiveActivityPalette.indigo(colorScheme), size: 26, sensitive: false)
         }
     }
 
