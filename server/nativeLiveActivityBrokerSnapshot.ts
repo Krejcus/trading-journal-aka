@@ -355,8 +355,15 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
   if (open.length === 0 && pendingOrder == null && workingOrders.length > 0) {
     console.warn('[Native Broker Snapshot] pending order not recognized', JSON.stringify({
       leaderAccountId,
+      leaderAllowed: leaderAccountId != null && allowedAccounts.has(leaderAccountId),
+      accountIdsRequested: options.accountIds ?? null,
       versionsComplete: rawOrderVersions.complete,
       workingAccounts: [...new Set(workingOrders.map(order => finite(order.accountId)))],
+      rawOrderAccounts: [...new Set(rawOrders.map(order => finite(order.accountId)))],
+      leaderRawOrders: rawOrders
+        .filter(order => finite(order.accountId) === leaderAccountId)
+        .slice(-5)
+        .map(order => ({ id: finite(order.id), action: order.action ?? null, status: order.ordStatus ?? null })),
       leaderWorking: leaderWorkingOrders.map(order => {
         const orderId = finite(order.id);
         const version = orderId == null ? undefined : latestVersionByOrderId.get(orderId);
