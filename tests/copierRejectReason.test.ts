@@ -30,6 +30,19 @@ describe('translateCopierRejectReason', () => {
     },
   );
 
+  it('přeloží limit množství i s čísly a neplatnou cenu', () => {
+    const quantity = 'Your maximum order quantity has been met. Please change your quantity to place the order. If you would like to request an increase, please submit a risk change request in the Account Settings Limit: 2 Current: 3.0. Scope: all Rule #3968';
+    expect(translateCopierRejectReason(quantity)).toMatchObject({
+      category: 'quantity-limit',
+      message: 'Broker odmítl: limit množství (max 2, požadováno 3)',
+      original: quantity,
+    });
+    expect(translateCopierRejectReason('InvalidPrice')).toMatchObject({
+      category: 'invalid-price',
+      message: 'Broker odmítl: neplatná cena příkazu',
+    });
+  });
+
   it('neznámý důvod zkrátí jen v prezentaci a neztratí originál', () => {
     const original = `Unexpected  broker\nrejection ${'x'.repeat(220)}`;
     const translated = translateCopierRejectReason(original);

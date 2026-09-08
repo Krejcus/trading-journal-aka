@@ -208,6 +208,63 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-08 (Claude, LIVE: jedna stavová lišta místo tří informačních karet)
+
+Uživatel chtěl tři informační prvky nad skupinami (karta stavu workeru s
+„Worker hlásí problém", zelená karta TradingView snímků a panel odzbrojení
+ve skupině) sjednotit a zminimalizovat: „jen když TradingView snímky vypadnou,
+nějaké tlačítko, jinak čisto", detaily přesunout do Událostí.
+
+- **`LiveStatusStrip` + čistý model `services/liveStatusStrip.ts`:** čtyři
+  chipy Worker · Broker · Kopírka · Snímky (tečka + slovo). Zdravý stav je
+  šedý; problém zbarví jen svůj chip a vysvětlení nese tooltip. Jediné
+  tlačítko „Obnovit TradingView" jen při `cdp-offline` s `repairSupported`.
+  Jediná věta pod chipy jen pro automatické odzbrojení s nepotvrzeným
+  výsledkem kopií (`left-open-unprotected` / `unknown`) — to nesmí zapadnout.
+  `lastError` workeru se v liště neukazuje vůbec: po reconnectu zůstával viset
+  („Worker hlásí problém" vedle „Broker stream Připojený"), takže by oranžová
+  ztratila význam. Chip Worker při `reconciliationRequired` říká „Čeká na
+  ověření účtů", ne jen barvu.
+- **Panel odzbrojení ve skupině** (`CopierDisarmPanel`) jen pro
+  `trigger !== 'manual'`, bez rozbalovacího technického detailu a historie
+  (detail zůstává v tooltipu). Ruční vypnutí = čistě vypnutá kopírka.
+- **Záložka Události** dostala nahoře `CopierEventsPanel`: worker, broker,
+  ověření účtů, poslední chyba workeru, stav snímků s časy kontroly a
+  posledního uloženého snímku, a celá historie odzbrojení (ruční šedě,
+  automatické s dalším krokem a technickým textem).
+- Smazán `LiveRuntimeStatus.tsx`, z `LiveCopyTradeOverview` odešly
+  `SnapshotHealthBanner`, `snapshotHealthMessage` (přesunuto do
+  `liveStatusStrip.ts`), props `snapshotHealth`/`onRepairSnapshots`/
+  `disarmHistory`; oprava snímků se volá z desku (`repairSnapshots`).
+  `copytrade-preview.tsx` přepnut na lištu.
+
+Ověření: tsc čisté, lint změněných souborů beze změny, testy
+`liveStatusStrip.test.ts` (model + render lišty a panelu Událostí) a upravený
+`liveCopyDisarmPanelRender.test.ts` (ruční vypnutí bez panelu), celá sada
+3030 zelená. Na localhost:3000 s reálným workerem: lišta „Worker · Broker
+Připojený · Kopírka Vypnutá · Snímky Připravené", žádná karta, žádný panel po
+ručním vypnutí; Události nesou lastError, časy snímků i 4 odzbrojení dne.
+
+Navazující: řádek „odmítnutý příkaz" pod účtem visel dny (limit množství z
+3. 9., InvalidPrice). Pravidlo v `services/rejectedExecutionVisibility.ts`:
+nevyřešené odmítnutí (follower není potvrzeně flat) je vidět vždy;
+vyřešené zmizí s koncem Tradovate session (`sameTradovateSession`, hranice
+17:00 CT, nová v `copierArmSession.ts`) nebo dřív křížkem. Zavření je jen
+na tomto zařízení, v localStorage `at:live:rejection-dismissed` s expirací
+na konci session, přes `useSyncExternalStore` bez prop drillingu; worker
+se nemění. Překlad rejectů rozšířen o `quantity-limit` („Broker odmítl:
+limit množství (max 2, požadováno 3)") a `invalid-price`; originál zůstává
+v tooltipu. Testy: pravidlo + úložiště, překlad, render křížku.
+
+Doladění po zpětné vazbě: Live Dashboard je úplně čistý — lišta chipů se tam
+vykreslí jen v tichém režimu (`quiet`): chip Snímky s tlačítkem obnovy při
+CDP offline, nebo bezpečnostní věta po automatickém vypnutí; jinak nic.
+Plná lišta je nahoře v Událostech nad `CopierEventsPanel`. Risk je i na
+desktopu jeden klepnutelný řádek (varianta `compact` z mobilního commitu
+65a894bb) až pod skupinami, aby byly obchody vidět hned. Při sloučení
+s `origin/main` (mobilní layout) zůstal `LiveRuntimeStatus.tsx` smazaný;
+jeho test v `liveCompactHeaderRender` přepsán na `LiveStatusStrip`.
+
 ### 2026-09-08 (Claude, telefon: pozice první, kompaktní Risk a stav, indigo lišta, vlastní menu Více)
 
 - **LIVE na telefonu** (`useCompactViewport`): skupiny s pozicemi jsou hned

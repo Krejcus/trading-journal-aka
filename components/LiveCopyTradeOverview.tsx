@@ -1,7 +1,6 @@
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
-import { formatSnapshotRepairError } from '../lib/copierBlockerMessages';
 import { CopyGroupLibraryRequestFence } from '../lib/copyGroupLibraryRequestFence';
-import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
+import React, { useSyncExternalStore, useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ChevronDown, ChevronRight, Crown, Plus, HelpCircle, Settings2, Eye, MoreVertical,
@@ -12,7 +11,6 @@ import {
 import type { LiveAccount, LiveGroup, LiveOrder, LivePosition, LiveSnapshot } from '../services/tradecopiaLiveService';
 import { futuresSymbolRoot } from '../services/futuresContractSpecs';
 import type { TradovateApiTelemetrySnapshot } from '../lib/tradovateApiTelemetry';
-import type { CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
 import type { CopierAccountEligibility, CopierControllerStatus, CopierStuckOperation } from '../services/copierRuntimeController';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
 import {
@@ -22,6 +20,14 @@ import {
   type CopyTradeAccountRole,
 } from '../lib/copyTradeAccountLabels';
 import { translateCopierRejectReason } from '../lib/copierRejectReason';
+import {
+  dismissRejection,
+  getDismissedRejections,
+  rejectedExecutionDismissKey,
+  rejectedExecutionResolved,
+  rejectedExecutionVisibility,
+  subscribeDismissedRejections,
+} from '../services/rejectedExecutionVisibility';
 import LiveRiskSummaryCard from './LiveRiskSummaryCard';
 import {
   copierCopiesOutcomeText,
@@ -279,9 +285,6 @@ interface Props {
   runtimeAvailable?: boolean;
   riskConfigSupported?: boolean;
   apiTelemetry?: TradovateApiTelemetrySnapshot;
-  snapshotHealth?: CopierSnapshotHealth;
-  /** Bezpečný uživatelský restart TradingView, pouze pro opravu snapshot CDP. */
-  onRepairSnapshots?: () => Promise<void> | void;
   /** Atomicky vybere čistou skupinu, provede reconciliation a ARM LIVE. */
   onSwitchAndArm?: (group: CopyGroupConfig) => Promise<void> | void;
   onArmLive?: () => Promise<void> | void;
@@ -301,7 +304,6 @@ interface Props {
   accountEligibility?: CopierAccountEligibility[];
   unverifiableFollowerOwnership?: CopierControllerStatus['unverifiableFollowerOwnership'];
   lastDisarm?: CopierDisarmRecord;
-  disarmHistory?: CopierDisarmRecord[];
   /** Read-only broker reconciliation for a currently unverifiable account. */
   onVerifyEligibility?: (accountId: number) => Promise<void> | void;
   executionGroupId?: string | null;
@@ -430,83 +432,6 @@ export function unavailableFollowerRemovalPlan(
 export const commandBlockedByCopierKillSwitch = (command: LiveCopyTradingCommand) =>
   command.type !== 'flatten-account' && command.type !== 'flatten-group';
 
-const snapshotHealthMessage = (health: CopierSnapshotHealth): string => {
-  if (!health.enabled || health.state === 'disabled') return 'Automatické snímky jsou vypnuté.';
-  if (health.state === 'checking') return 'Kontroluji TradingView a vyhrazený layout…';
-  if (health.state === 'cdp-offline') return 'TradingView není připojené přes CDP. Obchod proběhne, ale graf se neuloží.';
-  if (health.state === 'layout-missing') {
-    return health.chartIdConfigured
-      ? `Otevři v TradingView vyhrazený layout „${health.layoutName}“.`
-      : `Vyhrazený layout „${health.layoutName}“ ještě není spárovaný.`;
-  }
-  if (health.state === 'capture-failed') return 'Layout je dostupný, poslední pořízení snímku ale selhalo.';
-  if (health.state === 'upload-failed') return 'Graf se podařilo vyfotit, ale poslední nahrání selhalo.';
-  return `Layout „${health.layoutName}“ je připravený pro ENTRY/EXIT.`;
-};
-
-/**
- * Karta stavu ENTRY/EXIT snímků. Tlačítko obnovy vrací po regresi z 5. 9.
- * (merge e54e2806 nechal komponentu bez renderu a bez `onRepair`). Restart
- * TradingView provádí worker jen v DISARMED/flat stavu, chybu brány ukáže
- * `formatSnapshotRepairError`.
- */
-const SnapshotHealthBanner: React.FC<{
-  health: CopierSnapshotHealth;
-  onRepair?: () => Promise<void> | void;
-  accountLabel: (accountId: number) => string;
-}> = ({ health, onRepair, accountLabel }) => {
-  const ready = health.state === 'ready';
-  const checking = health.state === 'checking';
-  const [repairBusy, setRepairBusy] = useState(false);
-  const [repairError, setRepairError] = useState<string | null>(null);
-  const repairAvailable = health.state === 'cdp-offline'
-    && health.repairSupported === true
-    && onRepair;
-  const workerUpdateRequired = health.state === 'cdp-offline'
-    && health.repairSupported !== true;
-  const lastSuccess = health.lastSuccessAt
-    ? new Date(health.lastSuccessAt).toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })
-    : null;
-  return (
-    <div className={`flex items-start gap-3 rounded-lg border px-4 py-3 ${
-      ready
-        ? 'border-emerald-500/30 bg-emerald-500/[0.07] text-emerald-700'
-        : checking
-          ? 'border-slate-500/25 bg-slate-500/[0.06] text-[var(--text-secondary)]'
-          : 'border-amber-500/35 bg-amber-500/[0.08] text-amber-700'
-    }`}>
-      {ready ? <CheckCircle2 size={17} className="mt-0.5 shrink-0" /> : <AlertTriangle size={17} className="mt-0.5 shrink-0" />}
-      <div className="min-w-0 flex-1">
-        <p className="text-xs font-black">TradingView snímky</p>
-        <p className="mt-0.5 text-[11px] font-semibold opacity-90">{snapshotHealthMessage(health)}</p>
-        {workerUpdateRequired ? (
-          <p className="mt-1 text-[10px] font-bold text-amber-800 dark:text-amber-300">
-            Mac worker je starší a neumí automatickou opravu. Je potřeba jej aktualizovat.
-          </p>
-        ) : null}
-        {lastSuccess ? <p className="mt-1 text-[10px] opacity-70">Poslední uložený snímek: {lastSuccess}</p> : null}
-        {repairError ? <p className="mt-1 text-[10px] font-bold text-rose-600">{repairError}</p> : null}
-      </div>
-      {repairAvailable ? (
-        <button
-          type="button"
-          disabled={repairBusy}
-          onClick={() => {
-            setRepairBusy(true);
-            setRepairError(null);
-            void Promise.resolve(onRepair()).catch(error => {
-              setRepairError(formatSnapshotRepairError(error, accountLabel));
-            }).finally(() => setRepairBusy(false));
-          }}
-          className="shrink-0 rounded-md border border-amber-500/40 bg-white/60 px-3 py-2 text-[10px] font-black text-amber-800 transition hover:bg-white disabled:cursor-wait disabled:opacity-50 dark:bg-black/15 dark:text-amber-300"
-        >
-          {repairBusy ? 'Spouštím…' : 'Obnovit snímky'}
-        </button>
-      ) : null}
-    </div>
-  );
-};
-
 const TERMINAL_LIVE_ORDER_STATUSES = new Set([
   'filled', 'canceled', 'cancelled', 'rejected', 'expired',
 ]);
@@ -538,8 +463,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   runtimeAvailable = false,
   riskConfigSupported = false,
   apiTelemetry,
-  snapshotHealth,
-  onRepairSnapshots,
   onSwitchAndArm,
   onArmLive,
   onDisarm,
@@ -556,7 +479,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   accountEligibility = [],
   unverifiableFollowerOwnership = [],
   lastDisarm,
-  disarmHistory = [],
   onVerifyEligibility,
   executionGroupId = null,
   runtimeGroup = null,
@@ -1275,26 +1197,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
   return (
     <div className="space-y-5" style={{ fontSize: `${density}%` }}>
-      {!compact ? (
-        <LiveRiskSummaryCard
-          status={runtimeStatus}
-          runtimeAvailable={runtimeAvailable}
-          riskConfigSupported={riskConfigSupported}
-          group={rulesGroup}
-          dailyStats={dailyStats}
-          dayLockUntil={dayLockUntil}
-          pause={pause}
-          followerCuts={followerCuts}
-          accountRisk={accountRisk}
-          accounts={snapshot.accounts}
-          brokerDailyPnlByAccount={brokerDailyPnlByAccount}
-          brokerDailyPnlPending={dailyPnlPending}
-          onOpenRisk={onOpenRisk}
-        />
-      ) : null}
-      {snapshotHealth && !compact ? (
-        <SnapshotHealthBanner health={snapshotHealth} onRepair={onRepairSnapshots} accountLabel={accountId => accountLabel(accountId)} />
-      ) : null}
       {stuckOperations.length > 0 && commandAdapter ? (
         <StuckOperationsPanel
           operations={stuckOperations}
@@ -1413,8 +1315,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   redaction={redaction}
                   templates={templates}
                   tightenOnly={tightenOnly}
-                  disarmPanel={selected && !armed && lastDisarm
-                    ? <CopierDisarmPanel lastDisarm={lastDisarm} history={disarmHistory} />
+                  disarmPanel={selected && !armed && lastDisarm && lastDisarm.trigger !== 'manual'
+                    ? <CopierDisarmPanel lastDisarm={lastDisarm} />
                     : null}
                   {...compactGroupActions(group)}
                 />
@@ -1518,13 +1420,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         redaction={redaction}
                         hiddenGroupColumns={hiddenGroupColumns}
                       />
-                      {selected && !armed && lastDisarm ? (
+                      {selected && !armed && lastDisarm && lastDisarm.trigger !== 'manual' ? (
                         <tr>
                           <td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">
-                            <CopierDisarmPanel
-                              lastDisarm={lastDisarm}
-                              history={disarmHistory}
-                            />
+                            <CopierDisarmPanel lastDisarm={lastDisarm} />
                           </td>
                         </tr>
                       ) : null}
@@ -1586,8 +1485,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         </footer>
       </section>
 
-      {/* Telefon: pozice jsou hlavní, Risk jako jeden řádek a snímky až pod nimi. */}
-      {compact ? (
+      {/* Pozice jsou hlavní i na desktopu: Risk je jeden klepnutelný řádek až pod
+          skupinami, detail má vlastní záložku. Stav workeru a snímků je v Událostech. */}
+      {(
         <LiveRiskSummaryCard
           status={runtimeStatus}
           runtimeAvailable={runtimeAvailable}
@@ -1604,10 +1504,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           onOpenRisk={onOpenRisk}
           compact
         />
-      ) : null}
-      {snapshotHealth && compact ? (
-        <SnapshotHealthBanner health={snapshotHealth} onRepair={onRepairSnapshots} accountLabel={accountId => accountLabel(accountId)} />
-      ) : null}
+      )}
       {!compact ? (
         <LivePnlPanel
           open={apiPanelOpen}
@@ -2181,6 +2078,9 @@ const CompactAccountRow = ({ row, live, eligibility, orders, dailyPnlPending, bu
 }) => {
   const a = row.account;
   const accountId = row.accountId;
+  const dismissedRejections = useDismissedRejections();
+  const compactFlat = live && a != null && a.positions.every(position => position.netPosition === 0);
+  const compactRejection = visibleRejectedExecution(accountId, eligibility, compactFlat, dismissedRejections);
   const hasOpenPositions = a?.positions.some(position => position.netPosition !== 0) ?? false;
   const unavailableFollower = !a && accountId != null && !row.isLeader;
   return (
@@ -2235,13 +2135,13 @@ const CompactAccountRow = ({ row, live, eligibility, orders, dailyPnlPending, bu
             : <span className="text-[var(--text-secondary)]">—</span>}
         </div>
       </div>
-      {eligibility?.lastExecution ? (
-        <div className="mt-1.5">
-          <RejectedExecutionStatus
-            execution={eligibility.lastExecution}
-            accountAuthoritativelyFlat={live && a != null && a.positions.every(position => position.netPosition === 0)}
-          />
-        </div>
+      {compactRejection ? (
+        <RejectedExecutionStatus
+          execution={compactRejection}
+          accountAuthoritativelyFlat={compactFlat}
+          onDismiss={accountId != null ? () => dismissRejection(rejectedExecutionDismissKey(accountId, compactRejection)) : undefined}
+          className="mt-1.5"
+        />
       ) : eligibility && eligibility.state !== 'active' && eligibility.reason ? (
         <p className="mt-1.5 text-[10px] leading-tight text-[var(--text-muted)]">
           {eligibility.reason}{!a ? ' · účet není v aktuálním OAuth snapshotu' : ''}
@@ -2650,21 +2550,15 @@ const timeWithSecondsLabel = (at: number) => new Date(at).toLocaleTimeString('cs
   hour: '2-digit', minute: '2-digit', second: '2-digit',
 });
 
-const sameLocalDay = (left: number, right: number) => {
-  const a = new Date(left);
-  const b = new Date(right);
-  return a.getFullYear() === b.getFullYear()
-    && a.getMonth() === b.getMonth()
-    && a.getDate() === b.getDate();
-};
 
-export const CopierDisarmPanel = ({ lastDisarm, history }: {
-  lastDisarm: CopierDisarmRecord;
-  history: readonly CopierDisarmRecord[];
-}) => {
+/**
+ * Panel jen pro automatické odzbrojení (fail-closed, expirace, kill switch,
+ * výpadek): jedna věta co se stalo, výsledek kopií a další krok. Ruční
+ * vypnutí panel nemá; technický detail i historie jsou v záložce Události.
+ */
+export const CopierDisarmPanel = ({ lastDisarm }: { lastDisarm: CopierDisarmRecord }) => {
   const dangerous = lastDisarm.copiesOutcome === 'left-open-unprotected'
     || lastDisarm.copiesOutcome === 'unknown';
-  const today = history.filter(record => sameLocalDay(record.at, lastDisarm.at));
   const tone = dangerous
     ? 'border-rose-500/35 bg-rose-500/[0.07] text-rose-700 dark:text-rose-300'
     : 'border-amber-500/35 bg-amber-500/[0.07] text-amber-800 dark:text-amber-300';
@@ -2674,35 +2568,15 @@ export const CopierDisarmPanel = ({ lastDisarm, history }: {
       aria-live="polite"
       data-copier-disarm-panel="true"
       data-tone={dangerous ? 'rose' : 'amber'}
-      className={`mx-4 my-3 rounded-lg border px-4 py-3 ${tone}`}
+      className={`mx-4 my-3 rounded-lg border px-4 py-2.5 ${tone}`}
     >
       <div className="flex items-start gap-2.5">
-        <AlertTriangle aria-hidden="true" size={17} className="mt-0.5 shrink-0" />
-        <div className="min-w-0 flex-1">
-          <p className="text-xs font-bold leading-relaxed">
-            Kopírka se vypnula {timeWithSecondsLabel(lastDisarm.at)} · {lastDisarm.title}
-            {' · '}{copierCopiesOutcomeText(lastDisarm.copiesOutcome)}
-            {' · '}<span className="font-black">Další krok: {lastDisarm.nextStep}</span>
-          </p>
-          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] font-bold">
-            <details>
-              <summary className="cursor-pointer select-none">Technický detail</summary>
-              <p className="mt-1 max-w-4xl break-words font-mono font-normal" title={lastDisarm.detail}>
-                {lastDisarm.detail}
-              </p>
-            </details>
-            <details>
-              <summary className="cursor-pointer select-none">Historie odzbrojení dne ({today.length})</summary>
-              <ol className="mt-1 space-y-1 font-normal">
-                {[...today].reverse().map((record, index) => (
-                  <li key={`${record.at}-${record.code}-${index}`}>
-                    {timeWithSecondsLabel(record.at)} · {record.title} · {copierCopiesOutcomeText(record.copiesOutcome)}
-                  </li>
-                ))}
-              </ol>
-            </details>
-          </div>
-        </div>
+        <AlertTriangle aria-hidden="true" size={15} className="mt-0.5 shrink-0" />
+        <p className="min-w-0 flex-1 text-xs font-bold leading-relaxed" title={lastDisarm.detail}>
+          Kopírka se vypnula {timeWithSecondsLabel(lastDisarm.at)} · {lastDisarm.title}
+          {' · '}{copierCopiesOutcomeText(lastDisarm.copiesOutcome)}
+          {' · '}<span className="font-black">Další krok: {lastDisarm.nextStep}</span>
+        </p>
       </div>
     </section>
   );
@@ -2719,14 +2593,40 @@ const rejectedOrderLabel = (execution: RejectedExecution): string | null => {
   return parts.length > 0 ? parts.join(' ') : null;
 };
 
-export const RejectedExecutionStatus = ({ execution, accountAuthoritativelyFlat }: {
+/** Zavřená odmítnutí (jen toto zařízení, do konce session) pro řádky účtů. */
+const useDismissedRejections = () => useSyncExternalStore(subscribeDismissedRejections, getDismissedRejections, getDismissedRejections);
+
+/**
+ * Odmítnutí k zobrazení pod účtem, nebo null, když už nemá být vidět
+ * (vyřešené a zavřené křížkem / z minulé session). Nevyřešené se vrací vždy.
+ */
+const visibleRejectedExecution = (
+  accountId: number | null | undefined,
+  eligibility: CopierAccountEligibility | undefined,
+  accountAuthoritativelyFlat: boolean,
+  dismissed: ReadonlySet<string>,
+): RejectedExecution | null => {
+  const execution = eligibility?.lastExecution;
+  if (!execution) return null;
+  if (accountId == null) return execution;
+  const visibility = rejectedExecutionVisibility({
+    accountId, execution, accountAuthoritativelyFlat, dismissed, now: Date.now(),
+  });
+  return visibility === 'visible' ? execution : null;
+};
+
+export const RejectedExecutionStatus = ({ execution, accountAuthoritativelyFlat, onDismiss, className = '' }: {
   execution: RejectedExecution;
   accountAuthoritativelyFlat: boolean;
+  /** Křížek: zavřít vyřešené odmítnutí do konce session. Nevyřešené křížek nemá. */
+  onDismiss?: () => void;
+  className?: string;
 }) => {
   const translated = translateCopierRejectReason(execution.reason);
   const order = rejectedOrderLabel(execution);
   const resolution = execution.resolution;
   const dangerous = (!resolution || resolution.kind === 'unresolved') && !accountAuthoritativelyFlat;
+  const dismissible = Boolean(onDismiss) && rejectedExecutionResolved(execution, accountAuthoritativelyFlat);
   const rejection = translated.category === 'price-through' && order
     ? `${order} odmítnut: cena už byla za zadanou úrovní`
     : [order, translated.message].filter(Boolean).join(' · ');
@@ -2742,11 +2642,23 @@ export const RejectedExecutionStatus = ({ execution, accountAuthoritativelyFlat 
   return (
     <span
       title={`Původní broker důvod: ${translated.original}`}
-      className={`block pl-3.5 text-[10px] leading-tight ${dangerous
+      data-rejected-execution={dangerous ? 'unresolved' : 'resolved'}
+      className={`flex items-start gap-1 pl-3.5 text-[10px] leading-tight ${dangerous
         ? 'text-rose-500/90'
-        : 'text-[var(--text-muted)]'}`}
+        : 'text-[var(--text-muted)]'} ${className}`}
     >
-      {rejection} · {resolutionLabel ?? timeLabel(execution.at)}
+      <span className="min-w-0 flex-1">{rejection} · {resolutionLabel ?? timeLabel(execution.at)}</span>
+      {dismissible ? (
+        <button
+          type="button"
+          aria-label="Skrýt odmítnutí do konce session"
+          title="Skrýt do konce session (jen na tomto zařízení)"
+          onClick={event => { event.stopPropagation(); onDismiss?.(); }}
+          className="-my-0.5 shrink-0 rounded px-1 text-[11px] leading-none text-[var(--text-muted)] transition hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)]"
+        >
+          ×
+        </button>
+      ) : null}
     </span>
   );
 };
@@ -2962,6 +2874,9 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
 }) => {
   const a = row.account;
   const accountId = row.accountId;
+  const dismissedRejections = useDismissedRejections();
+  const rowFlat = live && a != null && a.positions.every(position => position.netPosition === 0);
+  const rowRejection = visibleRejectedExecution(accountId, eligibility, rowFlat, dismissedRejections);
   const cushion = a?.cushion ?? null;
   const cashKnown = !!a && isLiveAccountReadVerified(a, 'cash');
   const dllRemaining = a && cashKnown && a.unrealizedPnlSource !== 'stale' ? copyTradeDailyLossRemaining(a) : null;
@@ -2981,11 +2896,11 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
             )}
             {!row.synced && <span title="Nesedí s leaderem" className="text-amber-500">⚠</span>}
             </span>
-            {eligibility?.lastExecution ? (
+            {rowRejection ? (
               <RejectedExecutionStatus
-                execution={eligibility.lastExecution}
-                accountAuthoritativelyFlat={live && a != null
-                  && a.positions.every(position => position.netPosition === 0)}
+                execution={rowRejection}
+                accountAuthoritativelyFlat={rowFlat}
+                onDismiss={accountId != null ? () => dismissRejection(rejectedExecutionDismissKey(accountId, rowRejection)) : undefined}
               />
             ) : eligibility && eligibility.state !== 'active' && eligibility.reason ? (
               <span className="block pl-3.5 text-[10px] leading-tight text-[var(--text-muted)]">

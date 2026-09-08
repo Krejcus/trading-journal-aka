@@ -2,7 +2,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import LiveRiskSummaryCard from '../components/LiveRiskSummaryCard';
-import LiveRuntimeStatus from '../components/LiveRuntimeStatus';
+import LiveStatusStrip from '../components/LiveStatusStrip';
 import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from '../services/liveCopyTrading';
 import type { CopierControllerStatus } from '../services/copierRuntimeController';
 
@@ -42,13 +42,18 @@ describe('LIVE hlavička na telefonu', () => {
     expect(markup).toContain('Otevřít Risk');
   });
 
-  it('stav workeru na telefonu je jeden řádek s tečkami', () => {
-    const markup = renderToStaticMarkup(React.createElement(LiveRuntimeStatus, {
-      status, available: true, pending: false, transport: 'relay', compact: true,
+  it('stav workeru je jeden řádek s tečkami, na dashboardu v tichém režimu bez akce nic', () => {
+    const markup = renderToStaticMarkup(React.createElement(LiveStatusStrip, {
+      status, available: true, pending: false, transport: 'relay',
     }));
-    expect(markup).toContain('data-live-runtime-compact="true"');
+    expect(markup).toContain('data-live-status-strip="true"');
     expect(markup).toContain('bg-emerald-500');
     expect(markup).toContain('Zapnutá');
     expect(markup).not.toContain('Broker stream');
+
+    const quiet = renderToStaticMarkup(React.createElement(LiveStatusStrip, {
+      status, available: true, pending: false, transport: 'relay', quiet: true,
+    }));
+    expect(quiet).toBe('');
   });
 });

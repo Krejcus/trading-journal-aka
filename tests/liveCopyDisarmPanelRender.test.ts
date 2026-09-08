@@ -54,47 +54,34 @@ const snapshot: LiveSnapshot = {
 };
 
 describe('CopierDisarmPanel', () => {
-  it('unknown výsledek je rose a zachová shrnutí, další krok, detail i historii dne', () => {
-    const older = createCopierDisarmRecord({
-      at: at - 60_000,
-      trigger: 'manual',
-      detail: 'Uživatel vypnul kopírku ručně',
-      copiesOutcome: 'flat',
-    });
-    const markup = renderToStaticMarkup(React.createElement(CopierDisarmPanel, {
-      lastDisarm: disarm,
-      history: [older, disarm],
-    }));
+  it('unknown výsledek je rose: shrnutí, výsledek a další krok; detail jen v tooltipu, historie v Událostech', () => {
+    const markup = renderToStaticMarkup(React.createElement(CopierDisarmPanel, { lastDisarm: disarm }));
 
     expect(markup).toContain('data-tone="rose"');
     expect(markup).toContain('Kopírka se vypnula');
     expect(markup).toContain('Pozice followera nesouhlasí');
     expect(markup).toContain('Výsledek kopií se nepodařilo potvrdit.');
     expect(markup).toContain('Další krok:');
-    expect(markup).toContain('Technický detail');
-    expect(markup).toContain('očekáváno -3 podle leadera -3 × 1');
-    expect(markup).toContain('Historie odzbrojení dne (2)');
+    expect(markup).toContain('title="Copier fail-closed: follower 200');
+    expect(markup).not.toContain('Technický detail');
+    expect(markup).not.toContain('Historie odzbrojení');
   });
 
   it('potvrzené zavření guardem je amber', () => {
     const guarded = { ...disarm, copiesOutcome: 'guard-flattened' as const };
-    const markup = renderToStaticMarkup(React.createElement(CopierDisarmPanel, {
-      lastDisarm: guarded,
-      history: [guarded],
-    }));
+    const markup = renderToStaticMarkup(React.createElement(CopierDisarmPanel, { lastDisarm: guarded }));
 
     expect(markup).toContain('data-tone="amber"');
     expect(markup).toContain('Kopie byly guardem potvrzeně zavřené.');
     expect(markup).not.toContain('data-tone="rose"');
   });
 
-  it('karta skupiny panel po DISARM ukáže vedle dostupného ARM, po ARM ho skryje', () => {
+  it('karta skupiny panel po automatickém DISARM ukáže vedle dostupného ARM, po ARM ho skryje', () => {
     const props = {
       snapshot,
       runtimeGroup,
       executionGroupId: runtimeGroup.id,
       lastDisarm: disarm,
-      disarmHistory: [disarm],
       onSwitchAndArm: () => undefined,
     };
     const disarmed = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
@@ -110,5 +97,24 @@ describe('CopierDisarmPanel', () => {
     }));
     expect(armed).not.toContain('data-copier-disarm-panel="true"');
     expect(armed).toContain('aria-label="Vypnout kopírovací skupinu"');
+  });
+
+  it('ruční vypnutí žádný panel nemá — kopírka je čistě vypnutá', () => {
+    const manual = createCopierDisarmRecord({
+      at,
+      trigger: 'manual',
+      detail: 'Uživatel vypnul kopírku ručně',
+      copiesOutcome: 'flat',
+    });
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot,
+      runtimeGroup,
+      executionGroupId: runtimeGroup.id,
+      lastDisarm: manual,
+      copierArmed: false,
+      onSwitchAndArm: () => undefined,
+    }));
+    expect(markup).not.toContain('data-copier-disarm-panel="true"');
+    expect(markup).toContain('aria-label="Zapnout kopírovací skupinu"');
   });
 });
