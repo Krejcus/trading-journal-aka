@@ -366,9 +366,18 @@ describe('remote native Live Activity', () => {
       if (path.endsWith('/position/list') || path.endsWith('/cashBalance/list')) return new Response('[]');
       if (path.endsWith('/order/list')) return new Response(JSON.stringify([
         { id: 42, accountId: 10, contractId: 99, action: 'Buy', ordStatus: 'Working' },
+        // OSO bracket leadera čeká jako Suspended; follower má vlastní kopii vstupu.
+        { id: 43, accountId: 10, contractId: 99, action: 'Sell', ordStatus: 'Suspended' },
+        { id: 44, accountId: 10, contractId: 99, action: 'Sell', ordStatus: 'Suspended' },
+        { id: 45, accountId: 11, contractId: 99, action: 'Buy', ordStatus: 'Working' },
       ]));
       if (path.endsWith('/orderVersion/list')) return versionsOk
-        ? new Response(JSON.stringify([{ id: 1, orderId: 42, orderQty: 12, orderType: 'Limit', price: 23_400 }]))
+        ? new Response(JSON.stringify([
+          { id: 1, orderId: 42, orderQty: 12, orderType: 'Limit', price: 23_400 },
+          { id: 2, orderId: 43, orderQty: 12, orderType: 'Stop', stopPrice: 23_350 },
+          { id: 3, orderId: 44, orderQty: 12, orderType: 'Limit', price: 23_500 },
+          { id: 4, orderId: 45, orderQty: 24, orderType: 'Limit', price: 23_400 },
+        ]))
         : new Response('{}', { status: 503 });
       if (path.endsWith('/contract/items')) return new Response(JSON.stringify([{ id: 99, name: 'MNQU6' }]));
       if (path.endsWith('/account/list')) return new Response(JSON.stringify([{ id: 10, canTrade: true }]));
@@ -377,16 +386,19 @@ describe('remote native Live Activity', () => {
     }) as unknown as typeof fetch;
 
     const complete = await loadNativeLiveActivityBrokerSnapshot({
-      baseUrl: 'https://demo.tradovateapi.com/v1', accessToken: 'secret', accountIds: [10],
+      baseUrl: 'https://demo.tradovateapi.com/v1', accessToken: 'secret', accountIds: [10, 11],
       fetchImpl: responseFor(true),
     });
-    expect(complete.pendingOrder).toEqual({ symbol: 'MNQU6', side: 'Buy', quantity: 12, price: 23_400 });
+    expect(complete.pendingOrder).toEqual({
+      symbol: 'MNQU6', side: 'Buy', quantity: 12, price: 23_400,
+      stopPrice: 23_350, targetPrice: 23_500, groupQuantity: 36,
+    });
 
     const incomplete = await loadNativeLiveActivityBrokerSnapshot({
-      baseUrl: 'https://demo.tradovateapi.com/v1', accessToken: 'secret', accountIds: [10],
+      baseUrl: 'https://demo.tradovateapi.com/v1', accessToken: 'secret', accountIds: [10, 11],
       fetchImpl: responseFor(false),
     });
-    expect(incomplete).toMatchObject({ workingOrderCount: 1, pendingOrder: null });
+    expect(incomplete).toMatchObject({ workingOrderCount: 4, pendingOrder: null });
   });
 
   it('merges several OAuth connections so a leader on another Tradovate login is seen', async () => {
@@ -418,7 +430,9 @@ describe('remote native Live Activity', () => {
       baseUrl: 'https://demo.tradovateapi.com/v1', accessTokens: ['followers', 'leader'], accountIds: [10, 11],
       leaderAccountId: 10, fetchImpl,
     });
-    expect(snapshot.pendingOrder).toEqual({ symbol: 'MNQU6', side: 'Buy', quantity: 1, price: 23_400 });
+    expect(snapshot.pendingOrder).toEqual({
+      symbol: 'MNQU6', side: 'Buy', quantity: 1, price: 23_400, stopPrice: null, targetPrice: null, groupQuantity: 3,
+    });
     expect(snapshot).toMatchObject({ workingOrderCount: 2, realizedPnl: 10, accountStatusComplete: true });
     expect(snapshot.accounts.map(account => [account.accountId, account.accountName])).toEqual([[10, 'Leader'], [11, 'Follower']]);
 
@@ -447,6 +461,23 @@ describe('remote native Live Activity', () => {
     expect(plan.update.state).toMatchObject({
       mode: 'pending', symbol: 'MNQU6', side: 'Long', quantity: 12, entryPrice: 23_400,
     });
+    expect(plan.update.state.stopPrice).toBeUndefined();
+    expect(plan.update.state.stopPnlText).toBeUndefined();
+
+    // K2: s bracketem jde na zámek příčka SL → limit → TP a riziko / cíl přes
+    // celou skupinu (MNQ $2/bod: −50 × 36 × 2 = −$3600, +100 × 36 × 2 = +$7200).
+    const bracketed = planNativeLiveActivityUpdate({
+      runtime: runtime({ armed: true, connected: true }), now,
+      broker: { ...pendingBroker, pendingOrder: {
+        ...pendingBroker.pendingOrder, stopPrice: 23_350, targetPrice: 23_500, groupQuantity: 36,
+      } },
+    });
+    expect(bracketed.update.state).toMatchObject({
+      mode: 'pending', entryPrice: 23_400, stopPrice: 23_350, targetPrice: 23_500,
+      stopPnlText: '−$3600', targetPnlText: '+$7200',
+    });
+    expect(bracketed.update.state.currentPrice).toBeUndefined();
+    expect(bracketed.update.state.slTpProgress).toBeUndefined();
   });
 
   it('mirrors SL to TP progress for a short position', () => {

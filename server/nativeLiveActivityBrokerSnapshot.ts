@@ -86,8 +86,14 @@ export interface NativeLiveActivityBrokerPosition {
 export interface NativeLiveActivityBrokerPendingOrder {
   symbol: string;
   side: 'Buy' | 'Sell';
+  /** Leaderovo množství (uživatel myslí ve „2 MNQ", ne v součtu přes followery). */
   quantity: number;
   price: number;
+  /** Bracket čekajícího vstupu (OSO děti leadera), pokud je jednoznačný. */
+  stopPrice?: number | null;
+  targetPrice?: number | null;
+  /** Součet stejných čekajících vstupů přes všechny účty skupiny — v sázce je celá expozice. */
+  groupQuantity?: number;
 }
 
 export interface NativeLiveActivityBrokerSnapshot {
@@ -480,10 +486,44 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
       const symbol = symbols.get(contractId);
       return price == null || quantity == null || quantity <= 0 || !symbol ? [] : [{
         orderId,
+        contractId,
+        action,
         pending: { symbol, side: action === 'buy' ? 'Buy' as const : 'Sell' as const, quantity, price },
       }];
     }).sort((a, b) => a.orderId - b.orderId)[0];
-    pendingOrder = candidate?.pending ?? null;
+    if (candidate) {
+      // Bracket = leaderovy pracovní příkazy opačného směru na stejném kontraktu
+      // (Tradovate OSO děti jsou před fillem „Suspended", tedy stále ne-terminální).
+      // Musí krýt celé množství vstupu a být jednoznačné, jinak se úroveň neukáže.
+      const exitAction = candidate.action === 'buy' ? 'sell' : 'buy';
+      const bracket = leaderWorkingOrders.flatMap(order => {
+        const orderId = finite(order.id);
+        if (orderId == null || orderId === candidate.orderId || finite(order.contractId) !== candidate.contractId
+          || (order.action ?? '').toLowerCase() !== exitAction) return [];
+        const version = latestVersionByOrderId.get(orderId);
+        return version && (finite(version.orderQty) ?? 0) >= candidate.pending.quantity ? [version] : [];
+      });
+      const stops = [...new Set(bracket.flatMap(version =>
+        ['stop', 'stoplimit'].includes((version.orderType ?? '').toLowerCase()) && finite(version.stopPrice) != null ? [version.stopPrice!] : []))];
+      const targets = [...new Set(bracket.flatMap(version =>
+        (version.orderType ?? '').toLowerCase() === 'limit' && finite(version.price) != null ? [version.price!] : []))];
+      const groupQuantity = workingOrders.reduce((sum, order) => {
+        const orderId = finite(order.id);
+        if (orderId == null || finite(order.contractId) !== candidate.contractId
+          || (order.action ?? '').toLowerCase() !== candidate.action) return sum;
+        const version = latestVersionByOrderId.get(orderId);
+        const kind = (version?.orderType ?? '').toLowerCase();
+        const entryPrice = kind === 'limit' ? finite(version?.price)
+          : (kind === 'stop' || kind === 'stoplimit') ? finite(version?.stopPrice) : null;
+        return entryPrice == null ? sum : sum + (finite(version?.orderQty) ?? 0);
+      }, 0);
+      pendingOrder = {
+        ...candidate.pending,
+        stopPrice: stops.length === 1 ? stops[0] : null,
+        targetPrice: targets.length === 1 ? targets[0] : null,
+        groupQuantity: groupQuantity > 0 ? groupQuantity : candidate.pending.quantity,
+      };
+    }
   }
   if (open.length === 0 && pendingOrder == null && workingOrders.length > 0) {
     console.warn('[Native Broker Snapshot] pending order not recognized', JSON.stringify({

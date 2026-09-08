@@ -1236,10 +1236,7 @@ private struct AlphaTradeLiveActivityLockScreen: View {
                 LiveActivityLimitsLine(state: state, muted: muted, colorScheme: colorScheme)
             }
         case .pending:
-            Text("Čeká na fill · \(state.detail)")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(muted)
-                .lineLimit(1)
+            pendingContent
         case .dayTrades:
             VStack(alignment: .leading, spacing: 8) {
                 if let trades = state.dayTrades, !trades.isEmpty {
@@ -1306,6 +1303,52 @@ private struct AlphaTradeLiveActivityLockScreen: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(muted)
             }
+        }
+    }
+
+    /// K2: čekající limit s bracketem — příčka SL → limit → TP, pod ní riziko
+    /// při SL a plánovaný cíl (body, dolary, R). Bez bracketu jen řádek stavu.
+    @ViewBuilder private var pendingContent: some View {
+        if state.stopPrice != nil || state.targetPrice != nil {
+            let limit = state.entryPrice
+            let direction: Double = (state.side ?? "Long") == "Short" ? -1 : 1
+            let toStop = liveActivityBoth(state.stopPrice, limit).map { ($0.0 - $0.1) * direction }
+            let toTarget = liveActivityBoth(state.targetPrice, limit).map { ($0.0 - $0.1) * direction }
+            let rMultiple: Double? = liveActivityBoth(toStop, toTarget).flatMap { pair in
+                abs(pair.0) > 0 ? abs(pair.1) / abs(pair.0) : nil
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                LiveActivityPendingBar(state: state, colorScheme: colorScheme, muted: muted)
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(toStop.map { "SL \(liveActivityPoints($0)) b" } ?? "SL —")
+                            .font(.system(size: 10, weight: .heavy).monospacedDigit())
+                            .tracking(0.4)
+                        Text(state.stopPnlText.map { "riziko \($0)" } ?? "—")
+                            .font(.system(size: 13, weight: .heavy).monospacedDigit())
+                            .privacySensitive()
+                    }
+                    .foregroundStyle(LiveActivityPalette.loss(colorScheme))
+                    Spacer(minLength: 8)
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(toTarget.map { "TP \(liveActivityPoints($0)) b" } ?? "TP —")
+                            .font(.system(size: 10, weight: .heavy).monospacedDigit())
+                            .tracking(0.4)
+                        Text([
+                            state.targetPnlText.map { "cíl \($0)" },
+                            rMultiple.map { "\($0.formatted(.number.precision(.fractionLength(1))))R" },
+                        ].compactMap { $0 }.joined(separator: " · "))
+                            .font(.system(size: 13, weight: .heavy).monospacedDigit())
+                            .privacySensitive()
+                    }
+                    .foregroundStyle(LiveActivityPalette.profit)
+                }
+            }
+        } else {
+            Text("Čeká na fill · \(state.detail)")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(muted)
+                .lineLimit(1)
         }
     }
 
@@ -1598,6 +1641,96 @@ private struct LiveActivityLevelBar: View {
             .frame(height: compact ? 11 : 12)
         }
     }
+}
+
+/// Příčka čekajícího limitu (K2): tlumená dráha od SL k TP, fialový zářez na
+/// limitu s popiskem, aktuální cena jako bílá čárka jen když ji server zná
+/// (bez pozice Tradovate cenu nedává, takže obvykle chybí).
+private struct LiveActivityPendingBar: View {
+    let state: AlphaTradeLiveActivityAttributes.ContentState
+    let colorScheme: ColorScheme
+    let muted: Color
+
+    private func fraction(_ price: Double?) -> CGFloat? {
+        guard let stop = state.stopPrice, let target = state.targetPrice, let price, stop != target else { return nil }
+        return CGFloat(min(max((price - stop) / (target - stop), 0), 1))
+    }
+
+    private var limitFraction: CGFloat? { fraction(state.entryPrice) }
+    private var currentFraction: CGFloat? { fraction(state.currentPrice) }
+    private let barHeight: CGFloat = 10
+    private let priceLabelHalfWidth: CGFloat = 34
+
+    var body: some View {
+        let indigo = LiveActivityPalette.indigo(colorScheme)
+        VStack(spacing: 4) {
+            if let current = currentFraction {
+                GeometryReader { geometry in
+                    let x = min(max(current * geometry.size.width, priceLabelHalfWidth), geometry.size.width - priceLabelHalfWidth)
+                    Text(liveActivityPrice(state.currentPrice))
+                        .font(.system(size: 12, weight: .heavy).monospacedDigit())
+                        .lineLimit(1)
+                        .position(x: x, y: geometry.size.height / 2)
+                }
+                .frame(height: 14)
+            }
+
+            GeometryReader { geometry in
+                let width = geometry.size.width
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.10))
+                    if let limit = limitFraction, let current = currentFraction {
+                        // Fialová výplň = cesta od aktuální ceny k fillu.
+                        let from = min(limit, current)
+                        let to = max(limit, current)
+                        Capsule()
+                            .fill(indigo.opacity(0.55))
+                            .frame(width: max(0, (to - from) * width))
+                            .offset(x: from * width)
+                    }
+                    if let limit = limitFraction {
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(indigo)
+                            .frame(width: 3, height: barHeight + 8)
+                            .offset(x: min(max(limit * width - 1.5, 0), width - 3))
+                    }
+                    if let current = currentFraction {
+                        Rectangle()
+                            .fill(Color.white)
+                            .frame(width: 2, height: barHeight)
+                            .offset(x: min(max(current * width - 1, 0), width - 2))
+                    }
+                }
+            }
+            .frame(height: barHeight)
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    HStack {
+                        Text("SL \(liveActivityPrice(state.stopPrice))")
+                            .foregroundStyle(LiveActivityPalette.loss(colorScheme))
+                        Spacer(minLength: 4)
+                        Text("TP \(liveActivityPrice(state.targetPrice))")
+                            .foregroundStyle(LiveActivityPalette.profit)
+                    }
+                    if let limit = limitFraction {
+                        Text("limit \(liveActivityPrice(state.entryPrice))")
+                            .foregroundStyle(indigo)
+                            .position(x: min(max(limit * geometry.size.width, 46), geometry.size.width - 46), y: geometry.size.height / 2)
+                    }
+                }
+                .font(.system(size: 10, weight: .bold).monospacedDigit())
+                .lineLimit(1)
+            }
+            .frame(height: 12)
+        }
+    }
+}
+
+/// Oba volitelné najednou, nebo nic (Swift `zip` je jen pro sekvence).
+private func liveActivityBoth<A, B>(_ first: A?, _ second: B?) -> (A, B)? {
+    guard let first, let second else { return nil }
+    return (first, second)
 }
 
 /// Hero číslo bez centů; server posílá `pnlCompactText`, starší payload se ořízne.

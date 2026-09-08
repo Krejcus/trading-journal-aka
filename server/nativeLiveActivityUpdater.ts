@@ -187,12 +187,15 @@ export function planNativeLiveActivityUpdate(options: {
   const currentPrice = homogeneousPosition
     ? optionalFinite(firstPosition.currentPrice)
     : null;
+  // Čekající vstup leadera (K2): příčka SL → limit → TP a riziko / cíl
+  // z bracketu, ještě než je pozice.
+  const pending = openPositionCount === 0 ? options.broker?.pendingOrder : null;
   const stopPrice = homogeneousPosition
     ? optionalFinite(firstPosition.stopPrice)
-    : null;
+    : optionalFinite(pending?.stopPrice);
   const targetPrice = homogeneousPosition
     ? optionalFinite(firstPosition.targetPrice)
-    : null;
+    : optionalFinite(pending?.targetPrice);
   const slTpProgress = currentPrice != null && stopPrice != null && targetPrice != null
     && stopPrice !== targetPrice
     ? Math.min(1, Math.max(0, (currentPrice - stopPrice) / (targetPrice - stopPrice)))
@@ -202,7 +205,14 @@ export function planNativeLiveActivityUpdate(options: {
   // leaderova pozice, kterou karta zobrazuje jako velikost obchodu.
   const pnlAtLevel = (level: 'stop' | 'target'): number | null => {
     const levelPrice = level === 'stop' ? stopPrice : targetPrice;
-    if (!homogeneousPosition || levelPrice == null) return null;
+    if (levelPrice == null) return null;
+    if (!homogeneousPosition) {
+      if (!pending) return null;
+      const valuePerPoint = tradovateValuePerPoint(pending.symbol);
+      const quantity = pending.groupQuantity ?? pending.quantity;
+      if (valuePerPoint == null || !(quantity > 0)) return null;
+      return (levelPrice - pending.price) * (pending.side === 'Sell' ? -1 : 1) * quantity * valuePerPoint;
+    }
     const valuePerPoint = tradovateValuePerPoint(firstPosition.symbol ?? null);
     if (valuePerPoint == null) return null;
     const positions = options.broker?.positions ?? [];
@@ -264,7 +274,6 @@ export function planNativeLiveActivityUpdate(options: {
         ? { dayLockReason: controller.dayLockReason.trim().slice(0, 120) } : {}),
     } : {}),
   };
-  const pending = openPositionCount === 0 ? options.broker?.pendingOrder : null;
   const displayEntryPrice = entryPrice ?? pending?.price ?? null;
   const mode: 'idle' | 'pending' | 'position' | undefined = options.broker == null
     ? undefined

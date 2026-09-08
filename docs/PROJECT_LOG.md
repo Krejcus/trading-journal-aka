@@ -208,6 +208,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-08 (Claude, Live Activity K2: čekající limit s bracketem)
+
+Uživatel po opravě dvou připojení viděl „LIMIT BUY", ale jen hlavičku — widget
+měl pro pending jediný řádek „Čeká na fill". Předloha K2 z mockupů má příčku
+SL → limit → TP a buňky s rizikem a cílem.
+
+- `nativeLiveActivityBrokerSnapshot.ts`: `pendingOrder` nese `stopPrice`,
+  `targetPrice` (leaderovy pracovní příkazy opačného směru na stejném kontraktu,
+  qty ≥ vstup, jednoznačné; OSO děti jsou před fillem „Suspended", tedy
+  ne-terminální) a `groupQuantity` (součet stejných čekajících vstupů přes
+  účty skupiny).
+- `nativeLiveActivityUpdater.ts`: v pending režimu jdou do stavu `stopPrice`,
+  `targetPrice`, `stopPnlText`, `targetPnlText` z bracketu × skupinové množství
+  × hodnota bodu. `currentPrice` mimo pozici není (Tradovate REST kotace
+  nedává, worker cenu neposílá) → příčka bez čárky, buňky ukazují body od
+  limitu, riziko, cíl a R.
+- Widget: `pendingContent` + `LiveActivityPendingBar` (tlumená dráha, fialový
+  zářez + popisek „limit", SL/TP popisky; bílá čárka a cena jen když
+  `currentPrice` přijde). Bez bracketu zůstává původní řádek.
+- Kompilace `xcodebuild … generic/platform=iOS CODE_SIGNING_ALLOWED=NO` prošla;
+  do telefonu se nasadí s příští čistou instalací (spolu s restartem po
+  ručním Ukončit v Nastavení).
+
 ### 2026-09-08 (Claude, Live Activity: broker snapshot přes všechna OAuth připojení)
 
 **Problém:** limit buy zadaný na leaderovi se v Live Activity nikdy neukázal jako
