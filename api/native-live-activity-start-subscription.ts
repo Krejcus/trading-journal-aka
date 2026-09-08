@@ -13,8 +13,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!supabaseUrl || !anonKey || !serviceRoleKey) return res.status(500).json({ error: 'server-not-configured' });
   const authorization = req.headers.authorization;
   if (!authorization?.startsWith('Bearer ')) return res.status(401).json({ error: 'missing-token' });
-  const registration = normalizeNativeLiveActivityStartRegistration(req.body);
-  if (!registration) return res.status(400).json({ error: 'invalid-registration' });
+  const restart = req.method === 'POST' && req.body?.restart === true;
+  const registration = restart ? null : normalizeNativeLiveActivityStartRegistration(req.body);
+  if (!restart && !registration) return res.status(400).json({ error: 'invalid-registration' });
 
   const auth = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authorization } },
@@ -27,22 +28,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   });
   const now = new Date().toISOString();
 
+  // Ruční ukončení aktivity v appce: uvolní session trigger, aby tik / cron
+  // mohl při armované kopírce aktivitu znovu nastartovat (jinak zůstane
+  // „pokrytá" do příštího ARM). Uživatelské odmítnutí swipem tímto neprochází.
+  if (restart) {
+    const { error } = await db.from('native_live_activity_start_subscriptions').update({
+      last_start_trigger: null,
+      updated_at: now,
+    }).eq('user_id', userData.user.id).is('expires_at', null);
+    if (error) return res.status(500).json({ error: 'restart-failed' });
+    return res.status(200).json({ ok: true, restarted: true });
+  }
+
   if (req.method === 'DELETE') {
     const { error } = await db.from('native_live_activity_start_subscriptions').update({
       expires_at: now,
       updated_at: now,
     }).eq('user_id', userData.user.id)
-      .eq('installation_id', registration.installationId);
+      .eq('installation_id', registration!.installationId);
     if (error) return res.status(500).json({ error: 'delete-failed' });
     return res.status(200).json({ ok: true });
   }
 
   const { error } = await db.from('native_live_activity_start_subscriptions').upsert({
     user_id: userData.user.id,
-    installation_id: registration.installationId,
-    push_token: registration.pushToken,
-    environment: registration.environment,
-    bundle_id: registration.bundleId,
+    installation_id: registration!.installationId,
+    push_token: registration!.pushToken,
+    environment: registration!.environment,
+    bundle_id: registration!.bundleId,
     expires_at: null,
     last_error: null,
     updated_at: now,

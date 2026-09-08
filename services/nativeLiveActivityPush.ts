@@ -257,6 +257,27 @@ export async function initializeNativeLiveActivityPush(userId: string): Promise<
   if (startRegistration) await sendStartRegistration(startRegistration, 'POST', userId).catch(() => false);
 }
 
+/**
+ * Po ručním ukončení aktivity v appce uvolní na serveru session trigger, aby
+ * tik / cron mohl aktivitu při armované kopírce znovu nastartovat.
+ */
+export async function requestNativeLiveActivityRestart(): Promise<boolean> {
+  if (!isNativeBuild) return false;
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return false;
+  try {
+    const response = await fetch(apiUrl('/api/native-live-activity-start-subscription'), {
+      method: 'POST',
+      signal: AbortSignal.timeout(8_000),
+      headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ restart: true }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function deactivateNativeLiveActivityPush(userId: string): Promise<{ revoked: boolean }> {
   writeRemoteManagedFlag(false);
   ++listenerGeneration;

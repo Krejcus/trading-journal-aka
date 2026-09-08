@@ -351,6 +351,27 @@ export async function loadNativeLiveActivityBrokerSnapshot(options: {
     }).sort((a, b) => a.orderId - b.orderId)[0];
     pendingOrder = candidate?.pending ?? null;
   }
+  // Diagnostika: leader má pracovní příkaz, ale režim „čekající limit" nevznikl.
+  if (open.length === 0 && pendingOrder == null && workingOrders.length > 0) {
+    console.warn('[Native Broker Snapshot] pending order not recognized', JSON.stringify({
+      leaderAccountId,
+      versionsComplete: rawOrderVersions.complete,
+      workingAccounts: [...new Set(workingOrders.map(order => finite(order.accountId)))],
+      leaderWorking: leaderWorkingOrders.map(order => {
+        const orderId = finite(order.id);
+        const version = orderId == null ? undefined : latestVersionByOrderId.get(orderId);
+        return {
+          action: order.action ?? null,
+          status: order.ordStatus ?? null,
+          kind: version?.orderType ?? null,
+          price: finite(version?.price),
+          stop: finite(version?.stopPrice),
+          qty: finite(version?.orderQty),
+          symbolKnown: finite(order.contractId) != null && symbols.has(finite(order.contractId) as number),
+        };
+      }),
+    }));
+  }
 
   return {
     accounts,
