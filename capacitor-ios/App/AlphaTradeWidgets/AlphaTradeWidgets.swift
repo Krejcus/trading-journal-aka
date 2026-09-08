@@ -1053,11 +1053,13 @@ private struct AlphaTradeLiveActivityLockScreen: View {
                     hero
                     subtitle
                 }
+                .layoutPriority(1)
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 6) {
                     pill
                     freshness
                 }
+                .fixedSize()
             }
             content
         }
@@ -1193,9 +1195,10 @@ private struct AlphaTradeLiveActivityLockScreen: View {
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
                 .foregroundStyle(muted)
         } else if !context.isStale {
+            let updated = Date(timeIntervalSince1970: state.updatedAt)
             HStack(spacing: 3) {
                 Text("před")
-                Text(Date(timeIntervalSince1970: state.updatedAt), style: .relative)
+                Text(timerInterval: updated...updated.addingTimeInterval(24 * 3_600), countsDown: false, showsHours: false)
                     .monospacedDigit()
             }
             .font(.system(size: 11, weight: .semibold))
