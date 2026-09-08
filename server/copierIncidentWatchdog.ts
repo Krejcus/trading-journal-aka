@@ -15,6 +15,7 @@
  */
 
 import { COPIER_LEADER_DAILY_STATS_LABEL } from '../lib/copierDailyStatsLabels.js';
+import { copierArmNotification } from './copierArmNotification.js';
 
 export interface CopierRuntimeRow {
   device_id: string;
@@ -570,10 +571,11 @@ export function evaluateCopierIncidents(options: {
     const liveArmed = asBool(status.armed) && status.shadowMode !== true;
     const marker = activeState(userId, deviceId, ARMED_MARKER_KEY);
     if (marker && marker.active === false && liveArmed) {
+      // Stejný text jako okamžitý relay push; snapshotHealth leží mimo
+      // controller část heartbeatu, proto se bere z celého runtime statusu.
       notifications.push({
         userId, deviceId, incidentKey: 'arm-started', kind: 'opened',
-        title: 'Copier: ARM aktivní',
-        body: 'Ostrý ARM je aktivní. Kopírování je povolené do expirace session nebo ručního DISARM.',
+        ...copierArmNotification('arm-started', runtime.status?.snapshotHealth),
       });
     }
     if (marker?.active === true && !liveArmed) {

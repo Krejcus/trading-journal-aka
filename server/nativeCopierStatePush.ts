@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { copierArmNotification, type CopierArmTransition } from './copierArmNotification.js';
 import { sendApnsWidgetUpdate, type ApnsDevice } from './apns.js';
 import {
   COPY_EVENTS_MARKER_KEY,
@@ -43,19 +44,11 @@ export async function sendImmediateCopyEventPushes(options: {
   return { notifications: evaluation.notifications.length, sent: result.sent };
 }
 
-export type CopierArmTransition = 'arm-started' | 'arm-ended';
-
-export function copierArmNotification(transition: CopierArmTransition): { title: string; body: string } {
-  return transition === 'arm-started'
-    ? {
-      title: 'Copier: ARM aktivní',
-      body: 'Ostrý ARM je aktivní. Kopírování je povolené do expirace session nebo ručního DISARM.',
-    }
-    : {
-      title: 'Copier: ARM skončil',
-      body: 'Ostrý ARM už neplatí. Kopírování stojí.',
-    };
-}
+export {
+  copierArmNotification,
+  copierSnapshotArmWarning,
+  type CopierArmTransition,
+} from './copierArmNotification.js';
 
 /**
  * Okamžitý APNs fan-out po autoritativním potvrzení workeru. Minutový
@@ -66,6 +59,8 @@ export async function sendImmediateCopierArmPush(options: {
   userId: string;
   deviceId: string;
   transition: CopierArmTransition;
+  /** `snapshotHealth` z workerova ACK statusu; chybí u starších workerů. */
+  snapshotHealth?: unknown;
 }): Promise<{ devices: number; sent: number }> {
   const { data, error } = await options.db.from('native_push_subscriptions')
     .select('id,device_token,environment,bundle_id')
@@ -90,7 +85,7 @@ export async function sendImmediateCopierArmPush(options: {
   if (!old || old.active !== armed) {
     for (const device of devices) {
       await enqueueNotificationDelivery({ db: options.db, userId: options.userId, eventKey, channel: 'apns',
-        subscriptionId: device.id, payload: { ...copierArmNotification(options.transition), route: 'live',
+        subscriptionId: device.id, payload: { ...copierArmNotification(options.transition, options.snapshotHealth), route: 'live',
           threadId: 'alphatrade-copier', category: 'ALPHATRADE_RISK', interruptionLevel: 'time-sensitive',
           badge: armed ? 1 : 0 } });
     }
@@ -98,7 +93,7 @@ export async function sendImmediateCopierArmPush(options: {
     if (webTargets.error) throw new Error(`native-arm-web-devices-query-failed: ${webTargets.error.message}`);
     for (const target of webTargets.data ?? []) {
       await enqueueNotificationDelivery({ db: options.db, userId: options.userId, eventKey, channel: 'web',
-        subscriptionId: target.id, payload: { ...copierArmNotification(options.transition), route: 'live' } });
+        subscriptionId: target.id, payload: { ...copierArmNotification(options.transition, options.snapshotHealth), route: 'live' } });
     }
     await persistNotificationMarkers(options.db, [{ userId: options.userId, deviceId: options.deviceId,
       incidentKey: 'state:armed', active: armed, detail: null, notified: false }], previous);

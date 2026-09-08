@@ -271,6 +271,44 @@ stale-date, chybějící snapshot, timeout), rozšířený
 `copierRelayApiDetailedReview` (tik jen bez příkazu, přežije selhání);
 `tsc` čistý mimo `extension/`; celá sada vitest zelená. Fyzicky ověřit při
 příští otevřené pozici: P&L na zamčené obrazovce se má hýbat po ~5 s.
+### 2026-09-07 (Claude, ARM LIVE bez připravených snímků — varování a nabídka opravy)
+
+Uživatel: dnes se zase nepořídil ENTRY/EXIT snímek. Diagnóza z agenta a logu:
+TradingView bylo 6. 9. ve 21:37 spuštěné ručně bez CDP (`snapshotHealth.state
+= cdp-offline`, worker to zalogoval hned a znovu při obchodu), banner v LIVE si
+uživatel nevšiml. Požadavek: při zapnutí kopírky to zkontrolovat, ale zapnutí
+nezpomalit; když je to rozbité, dostat notifikaci a případně hned opravit.
+
+Řešení bez zásahu do workeru a bez zásahu do brány `snapshot-repair-blocked`:
+
+- **Notifikace:** `server/copierArmNotification.ts` (vyčleněno z
+  `nativeCopierStatePush`, aby ho bez kruhového importu sdílel relay push i
+  incident watchdog). `copierSnapshotArmWarning(snapshotHealth)` doplní k ARM
+  pushi větu podle stavu (cdp-offline / layout-missing / capture- a
+  upload-failed); titulek „Copier: ARM aktivní bez snímků". Relay bere
+  `snapshotHealth` z ACK statusu workeru (`copier-relay.ts`, action
+  `complete`), watchdog z celého runtime statusu (leží mimo `controller`).
+  Starší worker bez `snapshotHealth` = původní text.
+- **Kontrola před ARM v LIVE (`TradovateLiveDesk.armLiveGroup`):** čte jen už
+  napollovaný `agentStatus.snapshotHealth` (žádný round-trip). Ve zdravém
+  stavu, při `checking` nebo bez stavu se ARM nezdrží. Když snímky nejsou
+  připravené, dialog: u `cdp-offline` s `repairSupported` nabídne „Obnovit
+  TradingView a zapnout" (spustí existující `snapshot-test` + `repairCamera`
+  ještě v DISARMED, tj. přesně jak vyžaduje brána workeru, počká až 30 s na
+  `ready` a teprve pak pošle `arm-live`) nebo „Zapnout bez snímků"; u
+  ostatních stavů jen „Zapnout bez snímků" / „Zrušit". Restart TradingView
+  zůstává na potvrzení uživatele kvůli neuloženým změnám layoutu.
+  Rozhodovací logika je čistá funkce `services/copierSnapshotArmOffer.ts`.
+- Vědomě nezvoleno: automatický restart TradingView po ARM (brána vyžaduje
+  DISARMED a restart může narazit na dialog o neuložených změnách) a nový hook
+  do `localCopierExecutionAgent` (ARM cesta je bezpečnostně kritická, 30s
+  periodický health check stačí).
+
+Ověření: tsc čisté, lint změněných souborů 0 problémů, nové testy
+(`copierArmNotification.test.ts`: warning, notifikace, arm offer) + rozšířený
+watchdog test; cílená sada 131 testů zelená. Dialog v desku nebyl klikán
+naživo, protože ARM posílá skutečný příkaz workeru. Nasazení: jen web/API
+(Vercel), Mac worker se nemění.
 
 ### 2026-09-07 (Claude, breach jednoho followera odzbrojil celou kopírku — izolace místo DISARMu)
 
@@ -441,6 +479,46 @@ zůstává nedotčený (mix starých a nových změn, vyžaduje samostatné tř�
 - Stejná syntetická fixture (3grafy1m/5m/15m,80obchodů,16 561barů,10×): rAFp95 349,1→17,7ms; průměr7,4→56,4rAF/s. Pauza:14longtasks/30,2s→0/49,9s. Jde o jednotlivé lokální vzorky, nikoli garanci všech zařízení/dat.
 - BUY→krok→close→reopen ověřen:81řádků, jediný nový closecallback, správný zůstatek po cenovém pohybu a komisích. Celý hlavní projekt2463testů/278souborů, tsc a build PASS.
 - Ověřený patch přenesen pod SHA stráží do canonical projektu; další rozpracované App změny zachovány. Localhost3001 aktualizovaný; žádný deploy/push/SQL/broker akce. Důkazy: `docs/reviews/backtest-performance-20260906/README.md`.
+
+### 2026-09-06 (Claude, detail obchodu — screenshot jako výchozí pohled)
+
+Uživatel: v historii obchodů se v detailu ukazoval nejdřív graf a screenshot
+až jako druhý; chce to obráceně. Změna v `TradeDetailModal`: výchozí
+`visualMode` je `screenshots`, přepínač má pořadí Screenshoty | Graf (desktop
+hlavička i mobilní overlay) a při přechodu na další obchod se resetuje na
+screenshoty. Aby importované obchody bez jediného screenshotu (a bez copier
+snapshotu) neotvíraly prázdnou plochu „BEZ SCREENSHOTU", přepne se po dohrání
+lazy-loadu detailu (`detailsLoadedTradeId`) automaticky na graf; ruční klik
+na Screenshoty tím není dotčen. Při ověřování se ukázala starší závada:
+guard `if (isLoadingDetails) return` v lazy-loadu četl hodnotu ze zastaralé
+closure a po zrušeném fetchu (rychlé Další/Předchozí) zůstal spinner zapnutý
+a další obchody se už nenačítaly — dříve neviditelné, protože default byl
+graf. Guard odstraněn a větev „screenshot už je v props" spinner vypíná.
+Ověřeno v náhledu na main (port 5274): obchod s 2 copier snapshoty se otevře
+rovnou na obrázku (1 / 2), obchod bez snapshotů skončí na grafu, 6× rychle
+Další a 6× Zpět nechá správný stav bez zaseknutého spinneru. tsc čisté
+(mimo předexistující `extension/` chyby z chybějících chrome typů v
+symlinkovaných node_modules), lint souboru beze změny (10 starších warningů).
+
+Navazující požadavek: karta v historii ukazovala pro obchody jen s copier
+snapshoty ikonu procesoru, protože náhled bral pouze ruční screenshoty a
+privátní snapshoty se podepisovaly až v detailu. Nová služba
+`services/copierSnapshotThumbs.ts`: `pickCopierThumbSnapshot` vybere snapshot
+po uzavření (`exit`, při více nejnovější), bez něj nejnovější podle `at`;
+`getCopierThumbUrl` podepíše jen ten jeden, deduplikuje souběžné požadavky a
+drží module-level cache s TTL 50 min (signed URL platí 60 min, do localStorage
+se záměrně neukládá). `TradeHistory` podepisuje jen pro vykreslené karty bez
+ručního screenshotu, po pěti; ruční screenshot má vždy přednost; chyba
+načtení `<img>` copier náhledu ho jednou invaliduje a podepíše znovu místo
+DB retry. Platí pro grid i tabulku (obě čtou `getScreenshot`). Testy služby
+(8) + ověření na localhost:3000: karty z 2. 9. dostaly signed URL
+`…/exit-*.png`, obchody jen se vstupem `entry-*.png`, GET 200 image/png.
+Při plné sadě jednou spadl `tradovateCopierDevice` na 5s timeoutu generování
+RSA klíče pod zátěží, samostatně prošel.
+Doplněk: copier náhled (TradingView auto-foto) se na kartě i v tabulce ořezává
+na 80 % šířky (`object-[80%_50%]`, po zkoušce úplného pravého okraje); ruční screenshot zůstává
+na středu, protože kompozici určil uživatel. Ověřeno: computed
+`object-position` 80% 50% u copier náhledů, 50% 50% u ručních.
 
 ### 2026-09-06 (Claude, LIVE detail skupiny — vodorovný posuvník)
 

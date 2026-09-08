@@ -5,6 +5,7 @@ import { formatPnL } from '../utils/formatPnL';
 import { ExchangeRates } from '../services/currencyService';
 import { storageService } from '../services/storageService';
 import { thumbMedium, thumbLarge, fullSize } from '../services/imageUrlService';
+import { getCopierThumbUrl, getCachedCopierThumbs, invalidateCopierThumb } from '../services/copierSnapshotThumbs';
 import {
   Trash2, TrendingUp, TrendingDown, X, Edit3, Calendar,
   Tag, DollarSign, FileText, Image as ImageIcon,
@@ -210,6 +211,10 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     () => new Set(storageService.getLoadedImageIds())
   );
   const [errorImages, setErrorImages] = useState<Set<string>>(new Set());
+  // Náhledy z copier snapshotů (podepsané URL) pro obchody bez ručního screenshotu.
+  // Init z module-level cache, ať se při návratu na záložku nepodepisuje znovu.
+  const [copierThumbs, setCopierThumbs] = useState<Map<string, string>>(() => getCachedCopierThumbs());
+  const copierThumbRetriedRef = useRef<Set<string>>(new Set());
 
   // Keep ref in sync with state (synchronously inside setState so ref is always current)
   const updateScreenshotCache = useCallback((updater: (prev: Map<string, { screenshot?: string; screenshots?: string[] }>) => Map<string, { screenshot?: string; screenshots?: string[] }>) => {
@@ -235,6 +240,15 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
       next.add(id);
       return next;
     });
+    // Copier náhled: podepsaná URL mohla vypršet — jednou ji zahodíme a podepíšeme znovu.
+    if (copierThumbs.has(id)) {
+      invalidateCopierThumb(id);
+      setCopierThumbs(prev => { const next = new Map(prev); next.delete(id); return next; });
+      if (copierThumbRetriedRef.current.has(id)) return;
+      copierThumbRetriedRef.current.add(id);
+      setErrorImages(prev => { const next = new Set(prev); next.delete(id); return next; });
+      return;
+    }
     // Retry: fetch fresh screenshot from DB — may have been a transient error or expired URL
     if (loadingScreenshotsRef.current.has(id)) return;
     loadingScreenshotsRef.current.add(id);
@@ -573,6 +587,42 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     return () => clearTimeout(retryTimer);
   }, [visibleTrades, loadScreenshots]);
 
+  // Copier snapshoty jsou v privátním bucketu — podepisujeme jen pro právě vykreslené
+  // karty bez ručního screenshotu (po 5, ať to při načtení seznamu nespustí desítky
+  // požadavků naráz). Ruční screenshot má vždy přednost, viz getScreenshot.
+  useEffect(() => {
+    const candidates = visibleTrades.filter(t =>
+      (t.copierSnapshots?.length ?? 0) > 0 &&
+      !t.screenshot &&
+      !screenshotCache.get(String(t.id))?.screenshot &&
+      !copierThumbs.has(String(t.id))
+    );
+    if (candidates.length === 0) return;
+    let cancelled = false;
+    const run = async () => {
+      for (let i = 0; i < candidates.length; i += SCREENSHOT_BATCH) {
+        const batch = candidates.slice(i, i + SCREENSHOT_BATCH);
+        const signed = await Promise.all(batch.map(async t => {
+          const url = await getCopierThumbUrl(String(t.id), t.copierSnapshots, snaps => storageService.createCopierSnapshotSignedUrls(snaps));
+          return [String(t.id), url] as const;
+        }));
+        if (cancelled) return;
+        const found = signed.filter((item): item is readonly [string, string] => typeof item[1] === 'string');
+        if (found.length === 0) continue;
+        setCopierThumbs(prev => {
+          const next = new Map(prev);
+          found.forEach(([id, url]) => next.set(id, url));
+          return next;
+        });
+      }
+    };
+    void run();
+    return () => { cancelled = true; };
+    // copierThumbs záměrně mimo deps: efekt spouští změna viditelných karet nebo ručních
+    // screenshotů, ne vlastní zápis; cache ve službě dedupuje případné opakované podpisy.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleTrades, screenshotCache]);
+
   // PREFETCH ALL screenshoty jedním query při mountu — eliminate flash při scroll/lazy load.
   // Po dokončení má každý visible trade screenshot okamžitě z cache, žádný per-batch query.
   useEffect(() => {
@@ -603,7 +653,18 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   // Helper: get screenshot for a trade (prefer cache over inline field)
   // Uses screenshotCache STATE (not ref) so React re-renders when cache updates
   const getScreenshot = (trade: Trade): string | undefined => {
-    return screenshotCache.get(String(trade.id))?.screenshot || trade.screenshot || undefined;
+    return screenshotCache.get(String(trade.id))?.screenshot
+      || trade.screenshot
+      || copierThumbs.get(String(trade.id))
+      || undefined;
+  };
+
+  // Náhled pochází z copier snapshotu (TradingView auto-foto) — ne z ručního screenshotu.
+  // Takový obrázek ořezáváme na 80 % šířky (poslední cenová akce bez celé cenové osy); ruční screenshot má
+  // kompozici od uživatele a nechává se na středu.
+  const isCopierThumb = (trade: Trade): boolean => {
+    const id = String(trade.id);
+    return !screenshotCache.get(id)?.screenshot && !trade.screenshot && copierThumbs.has(id);
   };
 
   const getScreenshots = (trade: Trade): string[] | undefined => {
@@ -1159,7 +1220,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         onLoad={() => handleImageLoad(String(trade.id))}
                         onError={() => handleImageError(String(trade.id))}
                         loading="lazy"
-                        className={`w-full h-full object-cover transition-opacity duration-300 group-hover/img:scale-105 ${isImageLoaded ? 'opacity-100' : 'opacity-0'}`}
+                        className={`w-full h-full object-cover ${isCopierThumb(trade) ? 'object-[80%_50%]' : ''} transition-opacity duration-300 group-hover/img:scale-105 ${isImageLoaded ? 'opacity-100' : 'opacity-0'}`}
                       />
 
                       <div className={`absolute inset-0 bg-gradient-to-r ${theme !== 'light' ? 'from-[var(--bg-card)] via-transparent' : 'from-white via-transparent'} to-transparent md:block hidden z-20`}></div>
@@ -1271,7 +1332,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                                   onLoad={() => handleImageLoad(String(trade.id))}
                                   onError={() => handleImageError(String(trade.id))}
                                   loading="lazy"
-                                  className={`w-full h-full object-cover group-hover:opacity-100 transition-all duration-700 animate-in fade-in ${loadedImages.has(String(trade.id)) ? 'opacity-60 scale-100' : 'opacity-0 scale-90'}`}
+                                  className={`w-full h-full object-cover ${isCopierThumb(trade) ? 'object-[80%_50%]' : ''} group-hover:opacity-100 transition-all duration-700 animate-in fade-in ${loadedImages.has(String(trade.id)) ? 'opacity-60 scale-100' : 'opacity-0 scale-90'}`}
                                 />
                               )}
                             </>
