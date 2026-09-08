@@ -1197,21 +1197,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
   return (
     <div className="space-y-5" style={{ fontSize: `${density}%` }}>
-      <LiveRiskSummaryCard
-        status={runtimeStatus}
-        runtimeAvailable={runtimeAvailable}
-        riskConfigSupported={riskConfigSupported}
-        group={rulesGroup}
-        dailyStats={dailyStats}
-        dayLockUntil={dayLockUntil}
-        pause={pause}
-        followerCuts={followerCuts}
-        accountRisk={accountRisk}
-        accounts={snapshot.accounts}
-        brokerDailyPnlByAccount={brokerDailyPnlByAccount}
-        brokerDailyPnlPending={dailyPnlPending}
-        onOpenRisk={onOpenRisk}
-      />
       {stuckOperations.length > 0 && commandAdapter ? (
         <StuckOperationsPanel
           operations={stuckOperations}
@@ -1500,6 +1485,26 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         </footer>
       </section>
 
+      {/* Pozice jsou hlavní i na desktopu: Risk je jeden klepnutelný řádek až pod
+          skupinami, detail má vlastní záložku. Stav workeru a snímků je v Událostech. */}
+      {(
+        <LiveRiskSummaryCard
+          status={runtimeStatus}
+          runtimeAvailable={runtimeAvailable}
+          riskConfigSupported={riskConfigSupported}
+          group={rulesGroup}
+          dailyStats={dailyStats}
+          dayLockUntil={dayLockUntil}
+          pause={pause}
+          followerCuts={followerCuts}
+          accountRisk={accountRisk}
+          accounts={snapshot.accounts}
+          brokerDailyPnlByAccount={brokerDailyPnlByAccount}
+          brokerDailyPnlPending={dailyPnlPending}
+          onOpenRisk={onOpenRisk}
+          compact
+        />
+      )}
       {!compact ? (
         <LivePnlPanel
           open={apiPanelOpen}

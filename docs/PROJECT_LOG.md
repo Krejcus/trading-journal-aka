@@ -256,6 +256,95 @@ se nemění. Překlad rejectů rozšířen o `quantity-limit` („Broker odmítl
 limit množství (max 2, požadováno 3)") a `invalid-price`; originál zůstává
 v tooltipu. Testy: pravidlo + úložiště, překlad, render křížku.
 
+Doladění po zpětné vazbě: Live Dashboard je úplně čistý — lišta chipů se tam
+vykreslí jen v tichém režimu (`quiet`): chip Snímky s tlačítkem obnovy při
+CDP offline, nebo bezpečnostní věta po automatickém vypnutí; jinak nic.
+Plná lišta je nahoře v Událostech nad `CopierEventsPanel`. Risk je i na
+desktopu jeden klepnutelný řádek (varianta `compact` z mobilního commitu
+65a894bb) až pod skupinami, aby byly obchody vidět hned. Při sloučení
+s `origin/main` (mobilní layout) zůstal `LiveRuntimeStatus.tsx` smazaný;
+jeho test v `liveCompactHeaderRender` přepsán na `LiveStatusStrip`.
+
+### 2026-09-08 (Claude, telefon: pozice první, kompaktní Risk a stav, indigo lišta, vlastní menu Více)
+
+- **LIVE na telefonu** (`useCompactViewport`): skupiny s pozicemi jsou hned
+  pod stavem workeru; karta Risk je jeden klepnutelný řádek
+  (`LiveRiskSummaryCard compact`: Ztráta / Ztrátové / Obchody / Nejblíž,
+  zámek či pauza jako pilulka, odkaz do záložky Risk) a stav workeru je jeden
+  řádek s tečkami (`LiveRuntimeStatus compact`). Banner snímků až pod
+  skupinami. Desktop beze změny. Testy `tests/liveCompactHeaderRender.test.ts`.
+- **Nativní lišta**: vybraná karta v indigu (indigo-400 v tmavém, indigo-600 ve
+  světlém) místo azurové — stejný akcent jako web.
+- **Menu Více**: místo systémového `UIAlertController` vlastní spodní panel
+  (`AlphaTradeMoreMenuView`, SwiftUI přes `UIHostingController` s custom
+  detentem, iOS <16 fallback `.medium()`): přepínač světa nahoře, cíle mimo
+  lištu s ikonami, barvy podle tématu (navy / paper / oled). Žádná broker akce.
+- Ověření: 324 souborů / 3040 testů, tsc čistý, iOS build z CLI, čistá
+  reinstalace do telefonu.
+
+### 2026-09-07 (Claude + uživatel, nový vzhled Live Activity „J5D")
+
+Vzhled zamčené obrazovky vybrán z živých mockupů (artefakt „Live Activity
+návrhy", varianty A–J): **velké P&L** (34 pt, celé dolary) a pod ním
+„LONG 2 MNQ · kopíruje se 3/3", vpravo pilulka **LIVE** (místo „ARM LIVE")
+a „před X s" tikající lokálně; **přechodová lišta SL→TP** svítí jen od SL
+po aktuální cenu, zbytek zhasnutý, bílá čárka jen přes lištu, bílá cena nad
+ní, zářez na vstupu, ceny SL / vstup / TP pod lištou; dole dvě buňky
+„−68 b k SL / −$129" a „+22 b k TP / +$231". Spodní řádek s ARM odpočtem a
+followery zrušen. Rozbalený Dynamic Island má stejnou lištu v kompaktní
+podobě; kompaktní ostrůvek beze změny.
+
+Server (`planNativeLiveActivityUpdate`) nově posílá `pnlCompactText`,
+`stopPnlText`, `targetPnlText` (P&L při zásahu úrovně přes všechny účty,
+hodnota bodu ze serveru); body k SL/TP počítá widget z cen. Starší payload
+bez nových polí se ořízne z `pnlText`. Testy
+`tests/nativeLiveActivityLevels.test.ts`; tsc čistý; celá sada zelená; iOS
+build z CLI, čistá reinstalace. Vizuál se fyzicky ukáže až při příští
+aktivitě (po reinstalaci se aktivita nespustí sama, až s dalším ARM).
+
+**Obrazovky mimo pozici (2026-09-08, vybrané L2 / L4 / L5 z mockupů):**
+rozvržení karty se řídí stavem — kritický (DIVERGENCE / KILL SWITCH /
+STUCK OUTBOX: celá karta červená, stav jako hero, důvod, pozice dole),
+pozice (J5D), **shrnutí dne** po DISARM+flat (`mode: 'summary'`, hero denní
+P&L z copier ledgeru, „Den uzavřen · n obchodů · k ztrátových", obchody
+jako čipy SL/TP/M, nejlepší / nejhorší / podle plánu; `dismissal-date`
+15 min místo 30 s), **zámek / cooldown** (hero = lokální odpočet, důvod,
+poslední obchod + denní P&L, limity), čekající limit (hero LIMIT BUY/SELL),
+**po obchodu** (hero denní P&L, „Dnes · 3 obchody · 1 ztrátový · kopíruje se
+3/3", čipy, řádek limitů Ztrátové / Ztráta / Obchody — blízko limitu
+oranžově, spuštěno červeně, vypnuté pravidlo se neukazuje) a **zapnuto bez
+obchodu** (hero LIVE bez pilulky, „Kopíruje se 3/3 · zapnuto HH:mm",
+„Čeká na první obchod · session končí HH:mm", nulové limity). Server posílá
+`dayTrades` (≤8, chronologicky, z `dailyStats.recentClosedTrades`),
+`tradesToday`, `losingTrades`, `dayPnlText`, `dayLossUsd`, limity ze safety
+skupiny (0 = vypnuto → neposílá se), `armedAt`, `sessionEndAt`,
+`cooldownUntil`, `dayLockUntil` + `dayLockReason`. Testy rozšířeny (38 v LA
+sadě, celkem 3020 zelených), tsc čistý, iOS build z CLI, čistá reinstalace.
+
+### 2026-09-07 (Claude, Live Activity na zamčené obrazovce: 5s tik z relay pollu)
+
+Live Activity dostávala P&L jen z minutového cronu, takže na zamčené
+obrazovce bývalo číslo 1–2 minuty staré. Nový modul
+`server/nativeLiveActivityTick.ts` běží uvnitř `poll` akce copier relay
+(worker volá každých ~750 ms) a při **armovaném** copieru pošle ActivityKit
+update nejvýše jednou za **5 s** ze stejného read-only Tradovate snapshotu a
+stejného plánovače (`planNativeLiveActivityUpdate`) jako cron — význam P&L,
+SL/TP a stavů se nemění, žádný broker příkaz na této cestě nevzniká.
+
+Pravidla tiku: pokus se zapisuje do `updated_at` odběru i při skipu (nezměněný
+obsah nevyvolá snapshot při každém pollu); push jde při změně hashe, při
+`end`, nebo jako heartbeat po 20 s při otevřené pozici; `stale-date` je
+30 s při otevřené pozici, jinak zůstává 180 s cronu. Tik má rozpočet 2,5 s
+(`Promise.race`), po něm poll odpoví bez čekání, ať kick/příkazy nezpozdí;
+chyba tiku se jen zaloguje. Bez ARM tik neběží — DISARM/konec aktivity dál
+řeší cron do minuty. Info.plist už má `NSSupportsLiveActivitiesFrequentUpdates`.
+Worker se nemění (žádná reinstalace), stačí deploy webu/API.
+
+Ověření: `tests/nativeLiveActivityTick.test.ts` (throttle, heartbeat,
+stale-date, chybějící snapshot, timeout), rozšířený
+`copierRelayApiDetailedReview` (tik jen bez příkazu, přežije selhání);
+`tsc` čistý mimo `extension/`; celá sada vitest zelená. Fyzicky ověřit při
+příští otevřené pozici: P&L na zamčené obrazovce se má hýbat po ~5 s.
 ### 2026-09-07 (Claude, ARM LIVE bez připravených snímků — varování a nabídka opravy)
 
 Uživatel: dnes se zase nepořídil ENTRY/EXIT snímek. Diagnóza z agenta a logu:

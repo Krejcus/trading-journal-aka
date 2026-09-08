@@ -24,7 +24,7 @@ const TEXT: Record<LiveStatusTone, string> = {
  * zdravý stav je tichý, jediné tlačítko je bezpečná obnova TradingView, když
  * vypadlo CDP. Vše ostatní (lastError, historie odzbrojení, časy) je v Událostech.
  */
-export default function LiveStatusStrip({ status, available, pending, transport, snapshotHealth, onRepairSnapshots, accountLabel }: {
+export default function LiveStatusStrip({ status, available, pending, transport, snapshotHealth, onRepairSnapshots, accountLabel, quiet = false }: {
   status: CopierControllerStatus | null;
   available: boolean;
   pending: boolean;
@@ -32,15 +32,23 @@ export default function LiveStatusStrip({ status, available, pending, transport,
   snapshotHealth?: CopierSnapshotHealth | null;
   onRepairSnapshots?: () => Promise<void> | void;
   accountLabel?: (accountId: number) => string;
+  /**
+   * Dashboard režim: nic, dokud není co udělat. Vykreslí se jen chip snímků
+   * s tlačítkem obnovy (CDP offline) nebo bezpečnostní věta po automatickém
+   * vypnutí; plná lišta patří do Událostí.
+   */
+  quiet?: boolean;
 }) {
   const model = buildLiveStatusStrip({ status, available, pending, transport, snapshotHealth });
   const [repairBusy, setRepairBusy] = useState(false);
   const [repairError, setRepairError] = useState<string | null>(null);
   const repair = model.repairSnapshots && onRepairSnapshots;
+  if (quiet && !repair && !model.notice) return null;
+  const chips = quiet ? model.chips.filter(chip => chip.id === 'snapshots' && model.repairSnapshots) : model.chips;
   return (
-    <section aria-label="Aktuální stav kopírky" data-live-status-strip="true" className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-2.5">
+    <section aria-label="Aktuální stav kopírky" data-live-status-strip={quiet ? 'quiet' : 'true'} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-2.5">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs">
-        {model.chips.map(chip => (
+        {chips.map(chip => (
           <span key={chip.id} data-chip={chip.id} data-tone={chip.tone} title={chip.title} className="inline-flex items-center gap-1.5">
             <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT[chip.tone]}`} />
             <span className="text-[var(--text-secondary)]">{chip.label}</span>

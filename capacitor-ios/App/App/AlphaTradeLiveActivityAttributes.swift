@@ -61,6 +61,32 @@ struct AlphaTradeLiveActivityAttributes: ActivityAttributes {
         /// Kolik stojí zásah stopu napříč všemi účty skupiny. Server ho počítá
         /// z hodnoty bodu kontraktu, kterou widget nezná.
         var riskAtStopText: String? = nil
+        /// Celé dolary pro hero číslo („+$145"); `pnlText` zůstává s centy.
+        var pnlCompactText: String? = nil
+        /// P&L při zásahu SL / TP napříč všemi účty skupiny; server zná hodnotu bodu.
+        var stopPnlText: String? = nil
+        var targetPnlText: String? = nil
+        /// Denní přehled pro obrazovky mimo pozici; časy jsou epoch sekundy.
+        var dayTrades: [DayTrade]? = nil
+        var tradesToday: Int? = nil
+        var losingTrades: Int? = nil
+        var dayPnlText: String? = nil
+        var dayLossUsd: Double? = nil
+        var maxLosingTrades: Int? = nil
+        var dailyLossLimitUsd: Double? = nil
+        var maxTrades: Int? = nil
+        var armedAt: Double? = nil
+        var sessionEndAt: Double? = nil
+        var cooldownUntil: Double? = nil
+        var dayLockUntil: Double? = nil
+        var dayLockReason: String? = nil
+
+        struct DayTrade: Codable, Hashable {
+            let pnl: Double
+            /// "SL" | "TP" | "M" (ruční / jiný výstup)
+            let exit: String
+            let closedAt: Double
+        }
     }
 
     let sessionID: String

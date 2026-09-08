@@ -699,6 +699,8 @@ setAgentStatus((await executeAgent({
         })}
       </nav>
 
+      {/* Dashboard: čisto. Lišta se ukáže jen s akcí (snímky bez CDP) nebo
+          bezpečnostní větou; plná lišta je v Událostech. */}
       <LiveStatusStrip
         status={agentStatus?.controller ?? null}
         available={runtimeAvailable}
@@ -706,6 +708,7 @@ setAgentStatus((await executeAgent({
         transport={agentTransport}
         snapshotHealth={agentStatus?.snapshotHealth}
         onRepairSnapshots={repairSnapshots}
+        quiet
       />
 
       {renderedLiveError && (
@@ -882,6 +885,14 @@ setAgentStatus((await executeAgent({
           {tab === 'orders' ? <PositionsAndOrders data={live.data} profiles={live.profiles} /> : null}
           {tab === 'events' ? (
             <>
+              <LiveStatusStrip
+                status={agentStatus?.controller ?? null}
+                available={runtimeAvailable}
+                pending={!agentStatusResolved}
+                transport={agentTransport}
+                snapshotHealth={agentStatus?.snapshotHealth}
+                onRepairSnapshots={repairSnapshots}
+              />
               <CopierEventsPanel
                 status={agentStatus?.controller ?? null}
                 transport={agentTransport}

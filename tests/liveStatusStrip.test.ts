@@ -81,6 +81,18 @@ describe('LiveStatusStrip + CopierEventsPanel render', () => {
     expect(broken).toContain('Obnovit TradingView');
   });
 
+  it('tichý režim na dashboardu: nic, dokud snímky nevypadnou; pak jen chip snímků s tlačítkem', () => {
+    const quiet = renderToStaticMarkup(React.createElement(LiveStatusStrip, { status: status(), available: true, pending: false, transport: 'local', snapshotHealth: health(), onRepairSnapshots: () => undefined, quiet: true }));
+    expect(quiet).toBe('');
+    const offline = renderToStaticMarkup(React.createElement(LiveStatusStrip, { status: status(), available: true, pending: false, transport: 'local', snapshotHealth: health({ state: 'cdp-offline' }), onRepairSnapshots: () => undefined, quiet: true }));
+    expect(offline).toContain('data-live-status-strip="quiet"');
+    expect(offline).toContain('data-chip="snapshots"');
+    expect(offline).not.toContain('data-chip="worker"');
+    expect(offline).toContain('Obnovit TradingView');
+    const danger = renderToStaticMarkup(React.createElement(LiveStatusStrip, { status: status({ lastDisarm: failClosed }), available: true, pending: false, transport: 'local', quiet: true }));
+    expect(danger).toContain('Kopírka se vypnula automaticky');
+  });
+
   it('Události nesou lastError, časy snímků i historii včetně technického detailu', () => {
     const markup = renderToStaticMarkup(React.createElement(CopierEventsPanel, {
       status: status({ lastError: 'Tradovate WebSocket transport error [conn:1]' }),

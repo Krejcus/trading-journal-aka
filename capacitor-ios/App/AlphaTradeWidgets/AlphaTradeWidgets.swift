@@ -953,7 +953,7 @@ struct AlphaTradeLiveActivityWidget: Widget {
                         if context.isStale {
                             Text("Data jsou zastaralá. Otevři LIVE pro ověření.").font(.caption)
                         } else if context.state.mode == "position", context.state.slTpProgress != nil {
-                            LiveActivitySlTpBar(state: context.state, compact: true)
+                            LiveActivityLevelBar(state: context.state, compact: true)
                         } else {
                             Text(context.state.headline).font(.caption.bold()).lineLimit(1)
                         }
@@ -1009,68 +1009,57 @@ private struct AlphaTradeLiveActivityLockScreen: View {
     let context: ActivityViewContext<AlphaTradeLiveActivityAttributes>
     @Environment(\.colorScheme) private var colorScheme
 
+    /// Které rozvržení karta dostane. Pořadí je důležité: zastaralá data a
+    /// kritické stavy přebíjejí všechno, pozice má přednost před zámkem.
+    private enum Layout { case stale, critical, position, summary, locked, cooldown, pending, dayTrades, armedIdle, legacy }
+
+    private var state: AlphaTradeLiveActivityAttributes.ContentState { context.state }
+    private var nowSeconds: TimeInterval { Date().timeIntervalSince1970 }
+
+    private var layout: Layout {
+        if context.isStale { return .stale }
+        if ["DIVERGENCE", "KILL SWITCH", "STUCK OUTBOX"].contains(state.status) { return .critical }
+        if state.mode == "position" { return .position }
+        if state.mode == "summary" { return .summary }
+        if let until = state.dayLockUntil, until > nowSeconds { return .locked }
+        if let until = state.cooldownUntil, until > nowSeconds { return .cooldown }
+        if state.mode == "pending" { return .pending }
+        if state.mode == "idle" { return (state.tradesToday ?? 0) > 0 ? .dayTrades : .armedIdle }
+        return .legacy
+    }
+
+    private var isCritical: Bool { layout == .critical }
+
     private var background: Color {
-        colorScheme == .dark ? LiveActivityPalette.navy : LiveActivityPalette.paper
+        isCritical ? LiveActivityPalette.critical : (colorScheme == .dark ? LiveActivityPalette.navy : LiveActivityPalette.paper)
     }
 
     private var ink: Color {
-        colorScheme == .dark ? .white : LiveActivityPalette.slate
+        isCritical || colorScheme == .dark ? .white : LiveActivityPalette.slate
+    }
+
+    private var muted: Color {
+        isCritical ? Color.white.opacity(0.75) : (colorScheme == .dark ? Color.white.opacity(0.58) : LiveActivityPalette.muted)
+    }
+
+    private var pnlColor: Color {
+        state.isPositive ? LiveActivityPalette.profit : LiveActivityPalette.loss(colorScheme)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 8) {
-                Image(systemName: "waveform.path.ecg")
-                    .foregroundStyle(LiveActivityPalette.indigo)
-                Text("ALPHATRADE")
-                    .font(.caption.weight(.black))
-                    .tracking(0.7)
-                Spacer()
-                // Po vypršení stale-date už nemáme čerstvá data. Zelené
-                // „ARM LIVE" by pak tvrdilo, že se kopíruje, i když je worker
-                // dávno mrtvý — fail-closed proto přepíše stav na neověřený.
-                LiveActivityStatusPill(status: context.isStale ? "STAV NEOVĚŘEN" : context.state.status)
-            }
-
-            if context.isStale {
-                Text("Data jsou zastaralá. Otevři LIVE pro ověření.")
-                    .font(.headline).foregroundStyle(.secondary)
-            } else { switch context.state.mode {
-            case "position":
-                positionContent
-            case "pending":
-                pendingContent
-            case "idle":
-                idleContent
-            default:
-                legacyContent
-            } }
-
-            HStack(alignment: .center, spacing: 12) {
-                // Bez followersOk (neúplné čtení účtů) řádek schovat — „0/5"
-                // by vypadalo jako výpadek followerů, ne jako chybějící data.
-                if !context.isStale, let total = context.state.followersTotal, total > 0,
-                   let ok = context.state.followersOk {
-                    LiveActivityFollowersRow(total: total, ok: ok)
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 6) {
+                    hero
+                    subtitle
                 }
-                Spacer(minLength: 4)
-                armCountdown
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 6) {
+                    pill
+                    freshness
+                }
             }
-
-            // Dřív tu stálo „Read-only monitoring · žádná broker akce" — celý
-            // řádek jen na dvojznačnou poznámku, kterou šlo číst jako „kopírka
-            // nic nedělá". Místo toho ukazuje, co stojí zásah stopu.
-            if let risk = context.state.riskAtStopText, !context.isStale {
-                Text(risk)
-                    .font(.system(size: 10, weight: .bold).monospacedDigit())
-                    .foregroundStyle(risk.hasPrefix("+") ? LiveActivityPalette.profit : LiveActivityPalette.loss(colorScheme))
-                    .privacySensitive()
-            } else {
-                Text(context.isStale ? "Poslední aktualizace není aktuálním stavem účtů." : context.state.detail)
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.55) : LiveActivityPalette.muted)
-                    .lineLimit(1)
-            }
+            content
         }
         .padding(16)
         .foregroundStyle(ink)
@@ -1078,99 +1067,378 @@ private struct AlphaTradeLiveActivityLockScreen: View {
         .activitySystemActionForegroundColor(ink)
     }
 
-    private var positionContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(liveActivityPositionLabel(context.state, fallback: context.attributes.symbol))
-                    .font(.title3.weight(.black))
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text(context.state.pnlText)
-                        .font(.title2.bold().monospacedDigit())
-                        .foregroundStyle(context.state.isPositive ? LiveActivityPalette.profit : LiveActivityPalette.loss)
-                        .privacySensitive()
-                    if let label = context.state.pnlLabel {
-                        Text(label)
-                            .font(.system(size: 7, weight: .semibold))
-                            .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.55) : LiveActivityPalette.muted)
-                            .lineLimit(2)
+    // MARK: hlavička
+
+    private func heroText(_ text: String, color: Color, size: CGFloat = 34) -> some View {
+        Text(text)
+            .font(.system(size: size, weight: .heavy, design: .rounded).monospacedDigit())
+            .tracking(-0.5)
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .privacySensitive()
+    }
+
+    @ViewBuilder private var hero: some View {
+        switch layout {
+        case .stale:
+            heroText("—", color: .orange)
+        case .critical:
+            heroText(state.status, color: .white, size: 26)
+        case .position, .legacy:
+            heroText(liveActivityCompactPnl(state), color: pnlColor)
+        case .summary, .dayTrades:
+            let text = state.dayPnlText ?? liveActivityCompactPnl(state)
+            heroText(text, color: text.hasPrefix("−") || text.hasPrefix("-") ? LiveActivityPalette.loss(colorScheme) : LiveActivityPalette.profit)
+        case .armedIdle:
+            heroText("LIVE", color: LiveActivityPalette.profit)
+        case .locked:
+            // Odpočet tiká lokálně; po vypršení se karta sama přepne na další stav.
+            Text(timerInterval: Date()...Date(timeIntervalSince1970: state.dayLockUntil ?? nowSeconds), countsDown: true)
+                .font(.system(size: 34, weight: .heavy, design: .rounded).monospacedDigit())
+                .foregroundStyle(LiveActivityPalette.loss(colorScheme))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        case .cooldown:
+            Text(timerInterval: Date()...Date(timeIntervalSince1970: state.cooldownUntil ?? nowSeconds), countsDown: true)
+                .font(.system(size: 34, weight: .heavy, design: .rounded).monospacedDigit())
+                .foregroundStyle(LiveActivityPalette.warning)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        case .pending:
+            heroText("LIMIT \(state.side == "Short" ? "SELL" : "BUY")", color: LiveActivityPalette.indigo(colorScheme), size: 26)
+        }
+    }
+
+    private var copyingSuffix: String {
+        guard let total = state.followersTotal, total > 0, let ok = state.followersOk else { return "" }
+        return " · kopíruje se \(min(max(ok, 0), total))/\(total)"
+    }
+
+    private func dayCountsText(prefix: String) -> String {
+        var parts: [String] = [prefix]
+        if let trades = state.tradesToday { parts.append(liveActivityPlural(trades, "obchod", "obchody", "obchodů")) }
+        if let losing = state.losingTrades, losing > 0 { parts.append(losing == 1 ? "1 ztrátový" : "\(losing) ztrátových") }
+        return parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder private var subtitle: some View {
+        HStack(spacing: 0) {
+            switch layout {
+            case .stale:
+                Text("Data jsou zastaralá").font(.system(size: 13, weight: .bold))
+            case .critical:
+                Text(state.detail).font(.system(size: 13, weight: .bold)).lineLimit(2)
+            case .position:
+                Text(liveActivityPositionLabel(state, fallback: context.attributes.symbol)).font(.system(size: 13, weight: .bold))
+                Text(copyingSuffix).font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(muted)
+            case .dayTrades:
+                Text("Dnes").font(.system(size: 13, weight: .bold))
+                Text(" · " + dayCountsText(prefix: "").trimmingCharacters(in: CharacterSet(charactersIn: " ·")) + copyingSuffix)
+                    .font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(muted)
+            case .armedIdle:
+                Text(copyingSuffix.isEmpty ? "Kopírka je zapnutá" : String(copyingSuffix.dropFirst(3)).prefix(1).uppercased() + String(copyingSuffix.dropFirst(4)))
+                    .font(.system(size: 13, weight: .bold).monospacedDigit())
+                if let armedAt = state.armedAt {
+                    Text(" · zapnuto \(liveActivityClock(armedAt))").font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(muted)
+                }
+            case .summary:
+                Text("Den uzavřen").font(.system(size: 13, weight: .bold))
+                Text(" · " + dayCountsText(prefix: "").trimmingCharacters(in: CharacterSet(charactersIn: " ·")))
+                    .font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(muted)
+            case .locked:
+                Text("Zamčeno do \(liveActivityClock(state.dayLockUntil ?? nowSeconds))").font(.system(size: 13, weight: .bold).monospacedDigit())
+                if let reason = state.dayLockReason, !reason.isEmpty {
+                    Text(" · \(reason)").font(.system(size: 13, weight: .semibold)).foregroundStyle(muted)
+                }
+            case .cooldown:
+                Text("Cooldown po obchodu").font(.system(size: 13, weight: .bold))
+                Text(" · do \(liveActivityClock(state.cooldownUntil ?? nowSeconds))").font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(muted)
+            case .pending:
+                Text("\(liveActivityQuantity(state.quantity)) \(state.symbol ?? context.attributes.symbol) @ \(liveActivityPrice(state.entryPrice ?? state.currentPrice))")
+                    .font(.system(size: 13, weight: .bold).monospacedDigit())
+                Text(copyingSuffix).font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(muted)
+            case .legacy:
+                Text(state.headline).font(.system(size: 13, weight: .bold))
+            }
+        }
+        .lineLimit(1)
+    }
+
+    @ViewBuilder private var pill: some View {
+        switch layout {
+        case .stale:
+            LiveActivityStatusPill(status: "STAV NEOVĚŘEN")
+        case .critical:
+            Text("VYPNUTO")
+                .font(.system(size: 11, weight: .black)).tracking(0.8)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(Color.white.opacity(0.22), in: Capsule())
+        case .armedIdle:
+            EmptyView() // hero už říká LIVE
+        case .summary:
+            LiveActivityStatusPill(status: "DISARMED")
+        default:
+            LiveActivityStatusPill(status: state.status)
+        }
+    }
+
+    /// „před X s" tiká lokálně bez pushe; s 5s tikem serveru hned prozradí,
+    /// když aktualizace stojí, ještě před 30s stale-date. Shrnutí dne ukazuje
+    /// čas vypnutí místo stárnoucího „před".
+    @ViewBuilder private var freshness: some View {
+        if layout == .summary {
+            Text(liveActivityClock(state.updatedAt))
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundStyle(muted)
+        } else if !context.isStale {
+            HStack(spacing: 3) {
+                Text("před")
+                Text(Date(timeIntervalSince1970: state.updatedAt), style: .relative)
+                    .monospacedDigit()
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(muted)
+            .lineLimit(1)
+        }
+    }
+
+    // MARK: obsah
+
+    @ViewBuilder private var content: some View {
+        switch layout {
+        case .stale:
+            Text("Data jsou zastaralá. Otevři LIVE pro ověření.")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(muted)
+        case .critical:
+            criticalContent
+        case .position:
+            positionContent
+        case .summary:
+            summaryContent
+        case .locked, .cooldown:
+            VStack(alignment: .leading, spacing: 8) {
+                if let last = state.dayTrades?.last {
+                    LiveActivityLastTradeRow(trade: last, dayPnlText: state.dayPnlText, colorScheme: colorScheme, muted: muted)
+                }
+                LiveActivityLimitsLine(state: state, muted: muted, colorScheme: colorScheme)
+            }
+        case .pending:
+            Text("Čeká na fill · \(state.detail)")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(muted)
+                .lineLimit(1)
+        case .dayTrades:
+            VStack(alignment: .leading, spacing: 8) {
+                if let trades = state.dayTrades, !trades.isEmpty {
+                    LiveActivityTradeChips(trades: trades, colorScheme: colorScheme)
+                }
+                LiveActivityLimitsLine(state: state, muted: muted, colorScheme: colorScheme)
+            }
+        case .armedIdle:
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 0) {
+                    Text("Čeká na první obchod")
+                    if let end = state.sessionEndAt {
+                        Text(" · session končí ").foregroundStyle(muted)
+                        Text(liveActivityClock(end)).monospacedDigit()
                     }
                 }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(muted)
+                .lineLimit(1)
+                LiveActivityLimitsLine(state: state, muted: muted, colorScheme: colorScheme)
             }
-            if context.state.stopPrice != nil && context.state.targetPrice != nil
-                && context.state.slTpProgress != nil {
-                LiveActivitySlTpBar(state: context.state, compact: false)
-            } else {
-                LiveActivityAvailableLevels(state: context.state)
+        case .legacy:
+            Text(state.detail)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(muted)
+                .lineLimit(2)
+        }
+    }
+
+    private var criticalContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Kopírka se odzbrojila a nic neposílá. Otevři LIVE a srovnej účty ručně.")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.85))
+                .lineLimit(2)
+            if state.side != nil, state.quantity != nil {
+                HStack {
+                    Text("\(liveActivityPositionLabel(state, fallback: context.attributes.symbol)) · otevřeno")
+                    Spacer(minLength: 8)
+                    Text(liveActivityCompactPnl(state)).privacySensitive()
+                }
+                .font(.system(size: 11, weight: .bold).monospacedDigit())
+                .foregroundStyle(Color.white.opacity(0.85))
+                .padding(.top, 8)
+                .overlay(alignment: .top) { Rectangle().fill(Color.white.opacity(0.15)).frame(height: 1) }
             }
         }
     }
 
-    private var pendingContent: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text("LIMIT \(context.state.side == "Short" ? "SELL" : "BUY") \(liveActivityQuantity(context.state.quantity)) \(context.state.symbol ?? context.attributes.symbol) @ \(liveActivityPrice(context.state.entryPrice ?? context.state.currentPrice))")
-                .font(.headline.weight(.black).monospacedDigit())
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-            Text("Čeká na fill · \(context.state.detail)")
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.65) : LiveActivityPalette.muted)
-                .lineLimit(1)
-        }
-    }
-
-    private var idleContent: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text("Čeká na obchod")
-                .font(.headline.weight(.black))
-            Text(context.state.detail)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.65) : LiveActivityPalette.muted)
-                .lineLimit(1)
-        }
-    }
-
-    private var legacyContent: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(context.state.headline).font(.headline).lineLimit(1)
-                Text(context.state.detail)
-                    .font(.caption2)
-                    .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.65) : LiveActivityPalette.muted)
+    private var summaryContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let trades = state.dayTrades, !trades.isEmpty {
+                LiveActivityTradeChips(trades: trades, colorScheme: colorScheme)
+                let best = trades.map(\.pnl).max() ?? 0
+                let worst = trades.map(\.pnl).min() ?? 0
+                let planned = trades.filter { $0.exit == "SL" || $0.exit == "TP" }.count
+                Text("Nejlepší \(liveActivitySignedWhole(best)) · nejhorší \(liveActivitySignedWhole(worst)) · \(planned)/\(trades.count) podle plánu")
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(muted)
                     .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 1) {
-                Text(context.state.pnlText)
-                    .font(.title3.bold().monospacedDigit())
-                    .foregroundStyle(context.state.isPositive ? LiveActivityPalette.profit : LiveActivityPalette.loss)
                     .privacySensitive()
-                if let label = context.state.pnlLabel {
-                    Text(label)
-                        .font(.system(size: 7, weight: .semibold))
-                        .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.55) : LiveActivityPalette.muted)
-                        .lineLimit(2)
-                }
+            } else {
+                Text("Dnes bez obchodu přes kopírku.")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(muted)
             }
         }
     }
 
-    @ViewBuilder private var armCountdown: some View {
-        // Bez čerstvých dat neodpočítáváme — ARM mohl mezitím skončit.
-        if let seconds = context.state.armExpiresAt, !context.isStale {
-            let expiry = Date(timeIntervalSince1970: seconds)
-            if expiry > Date() {
-                HStack(spacing: 4) {
-                    Text("ARM končí za")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(colorScheme == .dark ? Color.white.opacity(0.55) : LiveActivityPalette.muted)
-                    Text(timerInterval: Date()...expiry, countsDown: true)
-                        .font(.caption2.bold().monospacedDigit())
-                        .foregroundStyle(LiveActivityPalette.indigo(colorScheme))
+    private var positionContent: some View {
+        let distances = liveActivityLevelDistances(state)
+        return VStack(alignment: .leading, spacing: 8) {
+            LiveActivityLevelBar(state: state, compact: false)
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(distances.toStop.map { "\(liveActivityPoints($0)) b k SL" } ?? "SL —")
+                        .font(.system(size: 10, weight: .heavy).monospacedDigit())
+                        .tracking(0.4)
+                    Text(state.stopPnlText ?? "—")
+                        .font(.system(size: 13, weight: .heavy).monospacedDigit())
+                        .privacySensitive()
                 }
+                .foregroundStyle(LiveActivityPalette.loss(colorScheme))
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(distances.toTarget.map { "\(liveActivityPoints($0)) b k TP" } ?? "TP —")
+                        .font(.system(size: 10, weight: .heavy).monospacedDigit())
+                        .tracking(0.4)
+                    Text(state.targetPnlText ?? "—")
+                        .font(.system(size: 13, weight: .heavy).monospacedDigit())
+                        .privacySensitive()
+                }
+                .foregroundStyle(LiveActivityPalette.profit)
             }
         }
+    }
+}
+
+/// Obchody dne jako čipy (L2 / L5): posledních pět, v pořadí, jak přišly.
+private struct LiveActivityTradeChips: View {
+    let trades: [AlphaTradeLiveActivityAttributes.ContentState.DayTrade]
+    let colorScheme: ColorScheme
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(Array(trades.suffix(5).enumerated()), id: \.offset) { _, trade in
+                let positive = trade.pnl >= 0
+                Text("\(trade.exit == "M" ? "M" : trade.exit) \(liveActivitySignedWhole(trade.pnl))")
+                    .font(.system(size: 11, weight: .heavy).monospacedDigit())
+                    .foregroundStyle(positive ? LiveActivityPalette.profit : LiveActivityPalette.loss(colorScheme))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background((positive ? LiveActivityPalette.profit : LiveActivityPalette.loss).opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+                    .lineLimit(1)
+                    .privacySensitive()
+            }
+        }
+    }
+}
+
+/// Poslední obchod v jednom řádku (K3): značka výstupu, výsledek, denní P&L.
+private struct LiveActivityLastTradeRow: View {
+    let trade: AlphaTradeLiveActivityAttributes.ContentState.DayTrade
+    let dayPnlText: String?
+    let colorScheme: ColorScheme
+    let muted: Color
+
+    var body: some View {
+        let positive = trade.pnl >= 0
+        HStack(spacing: 8) {
+            Text(trade.exit == "M" ? "M" : trade.exit)
+                .font(.system(size: 9, weight: .black)).tracking(0.6)
+                .foregroundStyle(positive ? LiveActivityPalette.profit : LiveActivityPalette.loss(colorScheme))
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .background((positive ? LiveActivityPalette.profit : LiveActivityPalette.loss).opacity(0.14), in: Capsule())
+            Text(liveActivitySignedWhole(trade.pnl))
+                .font(.system(size: 15, weight: .heavy).monospacedDigit())
+                .foregroundStyle(positive ? LiveActivityPalette.profit : LiveActivityPalette.loss(colorScheme))
+                .privacySensitive()
+            Text(liveActivityClock(trade.closedAt))
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundStyle(muted)
+            Spacer(minLength: 4)
+            if let day = dayPnlText {
+                Text("dnes \(day)")
+                    .font(.system(size: 13, weight: .heavy).monospacedDigit())
+                    .foregroundStyle(day.hasPrefix("−") || day.hasPrefix("-") ? LiveActivityPalette.loss(colorScheme) : LiveActivityPalette.profit)
+                    .privacySensitive()
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+/// Limity dne v jednom řádku (L2 / L4 / K3); pravidlo blízko limitu oranžově,
+/// spuštěné červeně. Vypnutá pravidla (bez limitu) se nezobrazují.
+private struct LiveActivityLimitsLine: View {
+    let state: AlphaTradeLiveActivityAttributes.ContentState
+    let muted: Color
+    let colorScheme: ColorScheme
+
+    private func tone(current: Double, limit: Double) -> Color {
+        if current >= limit { return LiveActivityPalette.loss(colorScheme) }
+        if limit > 1 && current >= limit - 1 || current >= limit * 0.8 { return LiveActivityPalette.warning }
+        return .white
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if let max = state.maxLosingTrades {
+                let losing = state.losingTrades ?? 0
+                item("Ztrátové", "\(losing)/\(max)", tone(current: Double(losing), limit: Double(max)))
+            }
+            if let limit = state.dailyLossLimitUsd {
+                let loss = state.dayLossUsd ?? 0
+                item("Ztráta", "$\(Int(loss.rounded())) / \(Int(limit.rounded()))", tone(current: loss, limit: limit))
+            }
+            if let max = state.maxTrades {
+                let trades = state.tradesToday ?? 0
+                item("Obchody", "\(trades) / \(max)", tone(current: Double(trades), limit: Double(max)))
+            }
+        }
+        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+        .lineLimit(1)
+        .minimumScaleFactor(0.85)
+    }
+
+    private func item(_ label: String, _ value: String, _ color: Color) -> some View {
+        HStack(spacing: 3) {
+            Text(label).foregroundStyle(muted)
+            Text(value).font(.system(size: 11, weight: .heavy).monospacedDigit()).foregroundStyle(color)
+        }
+    }
+}
+
+private func liveActivityClock(_ seconds: Double) -> String {
+    Date(timeIntervalSince1970: seconds).formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
+}
+
+private func liveActivitySignedWhole(_ value: Double) -> String {
+    "\(value < 0 ? "−" : "+")$\(Int(abs(value).rounded()))"
+}
+
+private func liveActivityPlural(_ count: Int, _ one: String, _ few: String, _ many: String) -> String {
+    switch count {
+    case 1: return "1 \(one)"
+    case 2...4: return "\(count) \(few)"
+    default: return "\(count) \(many)"
     }
 }
 
@@ -1183,6 +1451,8 @@ private enum LiveActivityPalette {
     static let profit = Color(red: 5 / 255, green: 150 / 255, blue: 105 / 255)
     static let loss = Color(red: 220 / 255, green: 38 / 255, blue: 38 / 255)
     static let warning = Color(red: 217 / 255, green: 119 / 255, blue: 6 / 255)
+    /// Celá karta při DIVERGENCE / KILL SWITCH / STUCK OUTBOX.
+    static let critical = Color(red: 127 / 255, green: 29 / 255, blue: 29 / 255)
 
     /// Na tmavém pozadí (zamčená obrazovka je skoro vždy tmavá) mají tyhle
     /// akcenty kontrast pod 4 : 1 a drobný text je špatně čitelný. Světlejší
@@ -1206,93 +1476,139 @@ private struct LiveActivityStatusPill: View {
         switch status {
         case "ARM LIVE": return LiveActivityPalette.profit
         case "KILL SWITCH", "DAY-LOCK", "DIVERGENCE": return LiveActivityPalette.loss
-        case "WORKER OFFLINE", "BROKER OFFLINE", "STUCK OUTBOX", "ARM NEOVĚŘEN", "STAV NEOVĚŘEN": return LiveActivityPalette.warning
+        case "WORKER OFFLINE", "BROKER OFFLINE", "STUCK OUTBOX", "ARM NEOVĚŘEN", "STAV NEOVĚŘEN", "COOLDOWN": return LiveActivityPalette.warning
         case "SHADOW": return Color.blue
         default: return LiveActivityPalette.muted
         }
     }
 
+    /// Na zámku stačí „LIVE"; význam „armed" nese barva a to, že aktivita existuje.
+    private var label: String {
+        switch status {
+        case "ARM LIVE": return "LIVE"
+        case "DISARMED": return "VYPNUTO"
+        default: return status
+        }
+    }
+
     var body: some View {
-        Text(status)
-            .font(.system(size: 9, weight: .black))
+        Text(label)
+            .font(.system(size: 11, weight: .black))
+            .tracking(0.8)
             .foregroundStyle(color)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
             .background(color.opacity(0.13), in: Capsule())
     }
 }
 
-private struct LiveActivityFollowersRow: View {
-    let total: Int
-    let ok: Int
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<max(0, total), id: \.self) { index in
-                Circle()
-                    .fill(index < ok ? LiveActivityPalette.profit : LiveActivityPalette.muted.opacity(0.35))
-                    .frame(width: 6, height: 6)
-            }
-            Text("\(min(max(ok, 0), max(total, 0)))/\(max(total, 0))")
-                .font(.caption2.bold().monospacedDigit())
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Followeři \(ok) z \(total) připraveni")
-    }
-}
-
-private struct LiveActivitySlTpBar: View {
+/// Přechodová lišta SL→TP (J5D): svítí jen od SL po aktuální cenu, zbytek
+/// k TP je zhasnutý; bílá čárka jen přes lištu, bílá cena nad ní, zářez na
+/// vstupu a ceny SL / vstup / TP pod lištou.
+private struct LiveActivityLevelBar: View {
     let state: AlphaTradeLiveActivityAttributes.ContentState
     let compact: Bool
 
+    private var progress: CGFloat {
+        if let value = state.slTpProgress { return CGFloat(min(max(value, 0), 1)) }
+        guard let stop = state.stopPrice, let target = state.targetPrice, let current = state.currentPrice,
+              stop != target else { return 0.5 }
+        return CGFloat(min(max((current - stop) / (target - stop), 0), 1))
+    }
+
+    private var entryProgress: CGFloat? {
+        guard let stop = state.stopPrice, let target = state.targetPrice, let entry = state.entryPrice,
+              stop != target else { return nil }
+        return CGFloat(min(max((entry - stop) / (target - stop), 0), 1))
+    }
+
+    private var barHeight: CGFloat { compact ? 7 : 10 }
+    private var labelSize: CGFloat { compact ? 9 : 10 }
+    private let priceLabelHalfWidth: CGFloat = 34
+
     var body: some View {
-        VStack(spacing: compact ? 3 : 4) {
+        VStack(spacing: compact ? 2 : 4) {
+            // Aktuální cena nad čárkou, u krajů přitažená dovnitř.
             GeometryReader { geometry in
-                let progress = min(max(state.slTpProgress ?? 0, 0), 1)
+                let x = min(max(progress * geometry.size.width, priceLabelHalfWidth), geometry.size.width - priceLabelHalfWidth)
+                Text(liveActivityPrice(state.currentPrice))
+                    .font(.system(size: compact ? 10 : 12, weight: .heavy).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .position(x: x, y: geometry.size.height / 2)
+            }
+            .frame(height: compact ? 12 : 14)
+
+            GeometryReader { geometry in
+                let width = geometry.size.width
+                let gradient = LinearGradient(
+                    colors: [LiveActivityPalette.loss, LiveActivityPalette.warning, LiveActivityPalette.profit],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
                 ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.10))
                     Capsule()
-                        .fill(LinearGradient(
-                            colors: [LiveActivityPalette.loss, LiveActivityPalette.warning, LiveActivityPalette.profit],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        ))
-                    Circle()
+                        .fill(gradient)
+                        .mask(alignment: .leading) {
+                            Rectangle().frame(width: max(0, width * progress))
+                        }
+                    if let entry = entryProgress {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.85))
+                            .frame(width: 2, height: barHeight + 8)
+                            .offset(x: entry * width - 1)
+                    }
+                    Rectangle()
                         .fill(Color.white)
-                        .overlay(Circle().stroke(LiveActivityPalette.slate.opacity(0.75), lineWidth: 1))
-                        .shadow(color: .black.opacity(0.2), radius: 2)
-                        .frame(width: compact ? 9 : 12, height: compact ? 9 : 12)
-                        .offset(x: max(0, min(geometry.size.width - (compact ? 9 : 12),
-                            progress * geometry.size.width - (compact ? 4.5 : 6))))
+                        .frame(width: 2, height: barHeight)
+                        .offset(x: min(max(progress * width - 1, 0), width - 2))
                 }
             }
-            .frame(height: compact ? 7 : 9)
-            HStack {
-                Text("SL \(liveActivityPrice(state.stopPrice))")
-                Spacer()
-                Text("TP \(liveActivityPrice(state.targetPrice))")
+            .frame(height: barHeight)
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    HStack {
+                        Text("SL \(liveActivityPrice(state.stopPrice))")
+                            .foregroundStyle(LiveActivityPalette.lossOnDark)
+                        Spacer(minLength: 4)
+                        Text("TP \(liveActivityPrice(state.targetPrice))")
+                            .foregroundStyle(LiveActivityPalette.profit)
+                    }
+                    if !compact, let entry = entryProgress, let entryPrice = state.entryPrice {
+                        Text("vstup \(liveActivityPrice(entryPrice))")
+                            .foregroundStyle(Color.white.opacity(0.58))
+                            .position(x: min(max(entry * geometry.size.width, 46), geometry.size.width - 46), y: geometry.size.height / 2)
+                    }
+                }
+                .font(.system(size: labelSize, weight: .bold).monospacedDigit())
+                .lineLimit(1)
             }
-            .font(.system(size: compact ? 8 : 9, weight: .bold, design: .monospaced))
-            .foregroundStyle(.secondary)
+            .frame(height: compact ? 11 : 12)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Vzdálenost mezi stop loss a take profit")
     }
 }
 
-private struct LiveActivityAvailableLevels: View {
-    let state: AlphaTradeLiveActivityAttributes.ContentState
+/// Hero číslo bez centů; server posílá `pnlCompactText`, starší payload se ořízne.
+private func liveActivityCompactPnl(_ state: AlphaTradeLiveActivityAttributes.ContentState) -> String {
+    if let compact = state.pnlCompactText, !compact.isEmpty { return compact }
+    let text = state.pnlText
+    return text.hasSuffix(".00") ? String(text.dropLast(3)) : text
+}
 
-    var body: some View {
-        HStack(spacing: 12) {
-            if let stop = state.stopPrice {
-                Text("SL \(liveActivityPrice(stop))").foregroundStyle(LiveActivityPalette.loss)
-            }
-            if let target = state.targetPrice {
-                Text("TP \(liveActivityPrice(target))").foregroundStyle(LiveActivityPalette.profit)
-            }
-        }
-        .font(.caption2.bold().monospacedDigit())
-    }
+/// Body k SL / TP ve směru P&L: k SL vždy záporné, k TP kladné (long i short).
+private func liveActivityLevelDistances(
+    _ state: AlphaTradeLiveActivityAttributes.ContentState
+) -> (toStop: Double?, toTarget: Double?) {
+    guard let current = state.currentPrice else { return (nil, nil) }
+    let direction: Double = (state.side ?? "Long") == "Short" ? -1 : 1
+    return (state.stopPrice.map { ($0 - current) * direction }, state.targetPrice.map { ($0 - current) * direction })
+}
+
+private func liveActivityPoints(_ value: Double) -> String {
+    let magnitude = abs(value).formatted(.number.precision(.fractionLength(0...2)))
+    return "\(value < 0 ? "−" : "+")\(magnitude)"
 }
 
 private func liveActivityPositionLabel(
