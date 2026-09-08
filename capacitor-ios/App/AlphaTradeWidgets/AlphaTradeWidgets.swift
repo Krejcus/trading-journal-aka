@@ -1321,7 +1321,12 @@ private struct AlphaTradeLiveActivityLockScreen: View {
                 LiveActivityPendingBar(state: state, colorScheme: colorScheme, muted: muted)
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(toStop.map { "SL \(liveActivityPoints($0)) b" } ?? "SL —")
+                        // S cenou z grafu: kolik bodů zbývá k fillu; bez ní vzdálenost k SL.
+                        Text(
+                            liveActivityBoth(state.currentPrice, limit).map { "\(liveActivityPoints(abs($0.0 - $0.1))) b k fillu" }
+                                ?? toStop.map { "SL \(liveActivityPoints($0)) b" }
+                                ?? "SL —"
+                        )
                             .font(.system(size: 10, weight: .heavy).monospacedDigit())
                             .tracking(0.4)
                         Text(state.stopPnlText.map { "riziko \($0)" } ?? "—")

@@ -59,6 +59,22 @@ export interface LocalCopierAgentStatus {
   devices?: LocalCopierAgentDevice[];
   /** Diagnostika obrázků je read-only a nikdy neblokuje broker execution. */
   snapshotHealth?: CopierSnapshotHealth;
+  /**
+   * Aktuální ceny z otevřených grafů TradingView (lokální CDP), jen pro
+   * zobrazení (Live Activity čekajícího limitu). Nikdy nevstupují do
+   * rozhodování copieru; chybí, když TradingView neběží.
+   */
+  marketPrices?: CopierMarketPrice[];
+}
+
+export interface CopierMarketPrice {
+  /** Symbol bez burzovního prefixu (`MNQ1!`, `MNQU6`). */
+  symbol: string;
+  price: number;
+  /** Epoch ms čtení na workeru. */
+  at: number;
+  /** Kontinuální `1!` kontrakt; v rollover týdnu se může lišit od obchodovaného. */
+  continuous?: boolean;
 }
 
 /**

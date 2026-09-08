@@ -478,6 +478,31 @@ describe('remote native Live Activity', () => {
     });
     expect(bracketed.update.state.currentPrice).toBeUndefined();
     expect(bracketed.update.state.slTpProgress).toBeUndefined();
+
+    // Cena z TradingView ve statusu workeru: přesný kontrakt má přednost před
+    // kontinuálním, zastaralá nebo cizí se ignoruje; v pozici se nepoužije.
+    const withPrices = (marketPrices: unknown[], armed = true) => planNativeLiveActivityUpdate({
+      runtime: { ...runtime({ armed, connected: true }), status: { ...runtime({ armed, connected: true }).status, marketPrices } },
+      now,
+      broker: { ...pendingBroker, pendingOrder: {
+        ...pendingBroker.pendingOrder, stopPrice: 23_350, targetPrice: 23_500, groupQuantity: 36,
+      } },
+    }).update.state;
+    expect(withPrices([
+      { symbol: 'MNQ1!', price: 23_420, at: now - 800, continuous: true },
+      { symbol: 'MNQU6', price: 23_430, at: now - 800 },
+      { symbol: 'MESU6', price: 6_500, at: now - 800 },
+    ])).toMatchObject({ mode: 'pending', currentPrice: 23_430, slTpProgress: (23_430 - 23_350) / 150 });
+    expect(withPrices([{ symbol: 'CME_MINI:MNQ1!', price: 23_420, at: now - 800, continuous: true }]).currentPrice).toBe(23_420);
+    expect(withPrices([{ symbol: 'MNQ1!', price: 23_420, at: now - 11_000 }]).currentPrice).toBeUndefined();
+    expect(withPrices([{ symbol: 'MESU6', price: 6_500, at: now }]).currentPrice).toBeUndefined();
+
+    const inPosition = planNativeLiveActivityUpdate({
+      runtime: { ...runtime({ armed: true, connected: true }), status: { ...runtime({ armed: true, connected: true }).status,
+        marketPrices: [{ symbol: 'MNQU6', price: 1, at: now }] } },
+      broker, now,
+    }).update.state;
+    expect(inPosition.currentPrice).toBe(broker.positions[0].currentPrice);
   });
 
   it('mirrors SL to TP progress for a short position', () => {

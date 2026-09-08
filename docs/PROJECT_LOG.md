@@ -208,6 +208,34 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-08 (Claude, cena pro čekající limit z TradingView CDP — postaveno)
+
+Navazuje na sondu výše. Bezplatný zdroj ceny mimo pozici: grafy TradingView
+Desktop přes lokální CDP, které worker už používá pro snímky.
+
+- `services/tradingViewMarketPrice.ts`: `readTradingViewMarketPrices` přečte
+  přes `Runtime.evaluate` (read-only výraz, jen `symbolExt()` + poslední
+  svíčka hlavní série) VŠECHNY otevřené chart targety (obchodní graf i
+  snímkový layout), vrátí `{ symbol bez prefixu, price, at, continuous }`.
+  `startTradingViewMarketPriceFeed` = 1 s smyčka bez překrývání, hodnoty
+  starší 5 s se nehlásí; nedostupné CDP = prázdný seznam, žádný hluk.
+- Protokol `LocalCopierAgentStatus.marketPrices?: CopierMarketPrice[]`
+  (jen když je co hlásit); pilot feed spouští při zapnutých snapshotech,
+  vypnout jde `ALPHATRADE_MARKET_PRICE=off`; `stop()` ve shutdownu. Ceny
+  NIKDY nevstupují do rozhodování copieru, jsou jen pro zobrazení.
+- Server `pickNativeLiveActivityMarketPrice`: stejný kořen kontraktu
+  (`marketSymbolRoot`: `CME_MINI:MNQ1!` → `MNQ`), stáří ≤ 10 s, přesný
+  kontrakt má přednost před kontinuálním `1!` (rollover spread). Použije se
+  jen v pending režimu; v pozici zůstává broker P&L cena.
+- Widget K2: s cenou ukáže bílou čárku, cenu nad příčkou, fialovou výplň
+  k limitu a levou buňku „+18 b k fillu" místo „SL −50 b".
+- Testy: `tests/tradingViewMarketPrice.test.ts` (čtení, offline, smyčka),
+  updater (výběr ceny, stáří, cizí symbol, pozice beze změny). Celá sada
+  3063 testů, tsc, lint, `xcodebuild` widgetu.
+- Nasazení: server automaticky (push na main). Worker se instaluje až na
+  „nasaď" z čistého stavu (worker deploy politika), widget na „nainstaluj".
+  Do té doby pending zůstává bez čárky ceny.
+
 ### 2026-09-08 (Claude, sonda: aktuální cena pro čekající limit z TradingView CDP)
 
 Otázka: může worker posílat aktuální cenu, aby K2 ukázalo čárku ceny a body

@@ -52,6 +52,17 @@ export function futuresSymbolRoot(symbol: string): string {
   return match ? match[1] : normalized;
 }
 
+/**
+ * Kořen i pro TradingView zápis: `CME_MINI:MNQ1!` → `MNQ`, `MNQU6` → `MNQ`.
+ * Kontinuální `1!`/`2!` suffix se odstraní před rozpoznáním měsíce.
+ */
+export function marketSymbolRoot(symbol: string): string {
+  const trimmed = symbol.trim().toUpperCase();
+  const withoutExchange = trimmed.includes(':') ? trimmed.slice(trimmed.lastIndexOf(':') + 1) : trimmed;
+  const withoutContinuous = withoutExchange.replace(/\d!$/, '');
+  return futuresSymbolRoot(withoutContinuous);
+}
+
 /** USD za jeden celý bod ceny, nebo `null` pro neznámý kontrakt. */
 export function pointValueUsd(symbol: string): number | null {
   return POINT_VALUE_USD[futuresSymbolRoot(symbol)] ?? null;

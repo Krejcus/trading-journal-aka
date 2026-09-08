@@ -65,6 +65,7 @@ import {
   markMacCopierDevicePaired,
 } from '../../server/macCopierDevice';
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
+import { startTradingViewMarketPriceFeed, type TradingViewMarketPriceFeed } from '../../services/tradingViewMarketPrice';
 import { ensureTradingViewCdp, restartTradingViewWithCdp } from '../../server/tradingViewCdpLifecycle';
 import { loadMacCopierConnectionManifest } from '../../server/macCopierConnectionManifest';
 import {
@@ -433,6 +434,14 @@ async function runLocalAgent(
       console.warn(`${new Date().toISOString()} SNAPSHOT TradingView se nepodařilo automaticky spustit.`);
     }
   }
+  // Cena z grafů TradingView jen pro zobrazení (Live Activity čekajícího
+  // limitu); read-only CDP, výpadek = žádná cena, nikdy nezasahuje do copieru.
+  const marketPriceFeedEnabled = snapshotsEnabled
+    && process.env.ALPHATRADE_MARKET_PRICE?.trim().toLowerCase() !== 'off';
+  const marketPriceFeed: TradingViewMarketPriceFeed | null = marketPriceFeedEnabled
+    ? startTradingViewMarketPriceFeed({ intervalMs: 1_000 })
+    : null;
+  if (marketPriceFeed) console.log(`${new Date().toISOString()} MARKET PRICE čtení ceny z grafů TradingView zapnuto (1 s, jen zobrazení).`);
   const persistResolvedChart = (resolved: TradingViewDedicatedChartRef) => {
     dedicatedChartRef = { ...dedicatedChartRef, ...resolved };
     snapshotHealth = {
@@ -521,6 +530,7 @@ async function runLocalAgent(
     if (pairingProbeTimer) clearInterval(pairingProbeTimer);
     if (pairingRestartTimer) clearTimeout(pairingRestartTimer);
     if (snapshotHealthTimer) clearInterval(snapshotHealthTimer);
+    marketPriceFeed?.stop();
     const cancelShutdownWatchdog = startAgentShutdownWatchdog({
       timeoutMs: 20_000,
       onTimeout: () => {
@@ -712,6 +722,7 @@ async function runLocalAgent(
       port: Number(portValue),
       devices: contexts.flatMap(candidate => candidate.device ? [candidate.device] : []),
       snapshotHealth: () => snapshotHealth,
+      marketPrices: () => marketPriceFeed?.current() ?? [],
       onSnapshotTest: (requestId, options) => {
         if (!snapshotsEnabled) throw new Error('snapshot-test-unavailable');
         if (snapshotTestInFlight) throw new Error('snapshot-test-already-running');

@@ -12,6 +12,7 @@ import {
   type NativeLiveActivityBrokerSnapshot,
 } from './nativeLiveActivityBrokerSnapshot.js';
 import { tradovateApiBaseUrl } from './tradovateOAuth.js';
+import { marketSymbolRoot } from '../services/futuresContractSpecs.js';
 import { tradovateValuePerPoint } from '../lib/tradovateLivePnl.js';
 import {
   BROKER_ACCOUNTS_DAILY_PNL_LABEL,
@@ -64,6 +65,44 @@ const signedMoney = (value: number): string =>
   `${value >= 0 ? '+' : '-'}$${Math.abs(value).toFixed(2)}`;
 const optionalFinite = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+export interface NativeLiveActivityMarketPrice {
+  symbol: string;
+  price: number;
+  at: number;
+  continuous?: boolean;
+}
+
+/** Nejvyšší přijatelné stáří ceny z workeru (hodiny Macu vs. serveru, poll ≤ 1 s). */
+export const LIVE_ACTIVITY_MARKET_PRICE_MAX_AGE_MS = 10_000;
+
+/**
+ * Cena z grafů TradingView pro čekající limit: stejný kořen kontraktu jako
+ * vstup leadera, čerstvá; přesný kontrakt (`MNQU6`) má přednost před
+ * kontinuálním `MNQ1!`, který se v rollover týdnu může lišit o spread.
+ */
+export function pickNativeLiveActivityMarketPrice(
+  candidates: readonly unknown[],
+  symbol: string,
+  now: number,
+): number | null {
+  const root = marketSymbolRoot(symbol);
+  const exact = symbol.trim().toUpperCase();
+  const fresh = candidates.flatMap(candidate => {
+    const row = object(candidate);
+    const price = optionalFinite(row.price);
+    const at = optionalFinite(row.at);
+    if (typeof row.symbol !== 'string' || price == null || price <= 0 || at == null) return [];
+    if (Math.abs(now - at) > LIVE_ACTIVITY_MARKET_PRICE_MAX_AGE_MS) return [];
+    const candidateSymbol = row.symbol.trim().toUpperCase();
+    if (marketSymbolRoot(candidateSymbol) !== root) return [];
+    return [{ symbol: candidateSymbol, price, continuous: row.continuous === true || /\d!$/.test(candidateSymbol) }];
+  });
+  if (fresh.length === 0) return null;
+  return (fresh.find(entry => entry.symbol === exact)
+    ?? fresh.find(entry => !entry.continuous)
+    ?? fresh[0]).price;
+}
 
 const controllerOf = (runtime: NativeLiveActivityRuntimeRow): Record<string, unknown> => {
   const root = object(runtime.status);
@@ -184,12 +223,16 @@ export function planNativeLiveActivityUpdate(options: {
   const entryPrice = homogeneousPosition
     ? optionalFinite(firstPosition.entryPrice)
     : null;
+  // Čekající vstup leadera (K2): příčka SL → limit → TP a riziko / cíl
+  // z bracketu, ještě než je pozice. Cena před fillem je jen z TradingView
+  // (worker status), v pozici zůstává autoritativní broker P&L.
+  const pending = openPositionCount === 0 ? options.broker?.pendingOrder : null;
+  const marketPrices = Array.isArray(object(options.runtime.status).marketPrices)
+    ? object(options.runtime.status).marketPrices as unknown[]
+    : [];
   const currentPrice = homogeneousPosition
     ? optionalFinite(firstPosition.currentPrice)
-    : null;
-  // Čekající vstup leadera (K2): příčka SL → limit → TP a riziko / cíl
-  // z bracketu, ještě než je pozice.
-  const pending = openPositionCount === 0 ? options.broker?.pendingOrder : null;
+    : pending ? pickNativeLiveActivityMarketPrice(marketPrices, pending.symbol, options.now) : null;
   const stopPrice = homogeneousPosition
     ? optionalFinite(firstPosition.stopPrice)
     : optionalFinite(pending?.stopPrice);
