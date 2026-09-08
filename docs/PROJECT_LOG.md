@@ -286,6 +286,13 @@ jeho test v `liveCompactHeaderRender` přepsán na `LiveStatusStrip`.
   Spodní panely (filtry `FilterDropdown`, „Upravit dashboard") se v
   Capacitoru vysouvaly pod nativní lištu — třída `native-bottom-sheet`
   (`html.native-shell` → `bottom: var(--native-shell-tab-bar-height)`).
+- Průšvih a poučení: `ios:doctor` po změně menu Více selhal (kontrola
+  starého literálu), a protože byl `npm run ios:sync` řetězený přes `| grep`,
+  chyba prošla a telefon dostal dvakrát starý web bundle (08:07) → „filtry
+  jsou stále pod lištou". Oprava: doctor přijímá nový tvar položky menu,
+  řetězení přes `set -o pipefail` + `&&` s logem do souboru. Lišta je nově
+  bez systémového materiálu, jen lehký tón (uživatel chce vidět obsah pod
+  ní); doctor to připouští výslovně.
 
 ### 2026-09-07 (Claude + uživatel, nový vzhled Live Activity „J5D")
 
