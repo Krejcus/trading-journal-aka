@@ -81,7 +81,7 @@ requireMatch(privacyGate, /appStateChange/, 'Privacy gate musí zkontrolovat nov
 requireMatch(scene, /sceneDidEnterBackground[\s\S]*showIfEnabled\(force: true\)/, 'Skutečný odchod do pozadí musí zamknout i během Face ID');
 requireMatch(plugin, /applyWorldFromWeb\(world\)/, 'Swift plugin nepředává LIVE/BACKTEST svět shellu');
 requireMatch(shell, /__alphaTradeNative\?\.toggleWorld\(\)/, 'Nativní menu neumí přepnout LIVE/BACKTEST svět');
-requireMatch(shell, /\("iOS funkce", "native-system"\)/, 'Nativní menu nemá přímou cestu k iOS funkcím');
+requireMatch(shell, /id: "native-system", title: "iOS funkce"/, 'Nativní menu nemá přímou cestu k iOS funkcím');
 requireMatch(appSource, /alphatrade:open-native-system/, 'Webový most neumí otevřít testovací sekci iOS funkcí');
 requireMatch(shell, /AlphaTradeKeepAwake\.shared\.setWorld\(world\)/, 'Nativní shell nepředává LIVE/BACKTEST stav keep-awake vrstvě');
 requireMatch(scene, /isEnabled && isApplicationActive && activeWorld == "live"/, 'Keep-awake musí být účinný pouze v aktivním LIVE světě');
@@ -158,7 +158,8 @@ if (/messageHandlers\?\.alphaTradeShell|add\(self, name: "alphaTradeShell"\)/.te
   errors.push('Shell nesmí znovu použít nespolehlivý ruční WKScriptMessageHandler pro téma');
 }
 requireMatch(shell, /configureWithTransparentBackground\(\)/, 'Spodní lišta musí zůstat průhledná nad obsahem aplikace');
-requireMatch(shell, /UIBlurEffect\(style: \.systemUltraThinMaterial\)/, 'Spodní lišta musí používat systémový materiál Liquid Glass');
+// 2026-09-08: uživatel chce vidět obsah pod lištou → místo materiálu jen lehký tón (backgroundEffect = nil).
+requireMatch(shell, /appearance\.backgroundEffect = (UIBlurEffect\(style: \.systemUltraThinMaterial\)|nil)/, 'Spodní lišta musí být buď Liquid Glass materiál, nebo záměrně průhledný tón');
 requireMatch(shell, /view\.window\?\.backgroundColor = color/, 'Status-bar safe area musí sledovat aktivní téma');
 requireMatch(shell, /bridgeController\.view\.bottomAnchor\.constraint\(equalTo: view\.bottomAnchor\)/, 'Webový obsah musí pokračovat pod průhlednou spodní lištu');
 requireMatch(shell, /bridgeController\.view\.topAnchor\.constraint\(equalTo: view\.topAnchor\)/, 'WebView musí pokračovat pod status bar kvůli fullscreen přechodům');

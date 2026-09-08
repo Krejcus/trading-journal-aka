@@ -212,11 +212,13 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
         itemAppearance.selected.titleTextAttributes = [.foregroundColor: selectedColor]
 
         let appearance = UITabBarAppearance()
+        // Bez systémového materiálu: jen lehký tón, ať je obsah pod lištou
+        // opravdu vidět (filtry, spodní panely). Čitelnost drží stín textu níže.
         appearance.configureWithTransparentBackground()
-        appearance.backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterial)
+        appearance.backgroundEffect = nil
         appearance.backgroundColor = isLight
-            ? UIColor.white.withAlphaComponent(0.08)
-            : UIColor.black.withAlphaComponent(theme == "oled" ? 0.08 : 0.04)
+            ? UIColor.white.withAlphaComponent(0.55)
+            : UIColor.black.withAlphaComponent(theme == "oled" ? 0.35 : 0.28)
         appearance.shadowColor = .clear
         appearance.stackedLayoutAppearance = itemAppearance
         appearance.inlineLayoutAppearance = itemAppearance
