@@ -59,6 +59,7 @@ import {
   formatKnownCopyTradeAccountIds,
 } from '../lib/copyTradeAccountLabels';
 import LiveCopyTradeOverview from './LiveCopyTradeOverview';
+import { useCompactViewport } from '../utils/useCompactViewport';
 import {
   devLiveCopyFixtureDailyStats,
   devLiveCopyFixtureEligibility,
@@ -648,6 +649,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     { id: 'events', label: 'Události', icon: Clock3 },
   ];
 
+  const compactViewport = useCompactViewport();
   const checkingConnection = live.status == null;
 
   // Dev háček (at:dev:live-copy-fixture): ukázková skupina bez Tradovate dat,
@@ -684,7 +686,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         })}
       </nav>
 
-      <LiveRuntimeStatus status={agentStatus?.controller ?? null} available={runtimeAvailable} pending={!agentStatusResolved} transport={agentTransport} />
+      <LiveRuntimeStatus status={agentStatus?.controller ?? null} available={runtimeAvailable} pending={!agentStatusResolved} transport={agentTransport} compact={compactViewport} />
 
       {renderedLiveError && (
         <div className="flex items-center gap-3 rounded-md border border-rose-500/30 bg-rose-500/10 p-4 text-rose-500">

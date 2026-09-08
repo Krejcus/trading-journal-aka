@@ -1275,22 +1275,24 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
   return (
     <div className="space-y-5" style={{ fontSize: `${density}%` }}>
-      <LiveRiskSummaryCard
-        status={runtimeStatus}
-        runtimeAvailable={runtimeAvailable}
-        riskConfigSupported={riskConfigSupported}
-        group={rulesGroup}
-        dailyStats={dailyStats}
-        dayLockUntil={dayLockUntil}
-        pause={pause}
-        followerCuts={followerCuts}
-        accountRisk={accountRisk}
-        accounts={snapshot.accounts}
-        brokerDailyPnlByAccount={brokerDailyPnlByAccount}
-        brokerDailyPnlPending={dailyPnlPending}
-        onOpenRisk={onOpenRisk}
-      />
-      {snapshotHealth ? (
+      {!compact ? (
+        <LiveRiskSummaryCard
+          status={runtimeStatus}
+          runtimeAvailable={runtimeAvailable}
+          riskConfigSupported={riskConfigSupported}
+          group={rulesGroup}
+          dailyStats={dailyStats}
+          dayLockUntil={dayLockUntil}
+          pause={pause}
+          followerCuts={followerCuts}
+          accountRisk={accountRisk}
+          accounts={snapshot.accounts}
+          brokerDailyPnlByAccount={brokerDailyPnlByAccount}
+          brokerDailyPnlPending={dailyPnlPending}
+          onOpenRisk={onOpenRisk}
+        />
+      ) : null}
+      {snapshotHealth && !compact ? (
         <SnapshotHealthBanner health={snapshotHealth} onRepair={onRepairSnapshots} accountLabel={accountId => accountLabel(accountId)} />
       ) : null}
       {stuckOperations.length > 0 && commandAdapter ? (
@@ -1584,6 +1586,28 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         </footer>
       </section>
 
+      {/* Telefon: pozice jsou hlavní, Risk jako jeden řádek a snímky až pod nimi. */}
+      {compact ? (
+        <LiveRiskSummaryCard
+          status={runtimeStatus}
+          runtimeAvailable={runtimeAvailable}
+          riskConfigSupported={riskConfigSupported}
+          group={rulesGroup}
+          dailyStats={dailyStats}
+          dayLockUntil={dayLockUntil}
+          pause={pause}
+          followerCuts={followerCuts}
+          accountRisk={accountRisk}
+          accounts={snapshot.accounts}
+          brokerDailyPnlByAccount={brokerDailyPnlByAccount}
+          brokerDailyPnlPending={dailyPnlPending}
+          onOpenRisk={onOpenRisk}
+          compact
+        />
+      ) : null}
+      {snapshotHealth && compact ? (
+        <SnapshotHealthBanner health={snapshotHealth} onRepair={onRepairSnapshots} accountLabel={accountId => accountLabel(accountId)} />
+      ) : null}
       {!compact ? (
         <LivePnlPanel
           open={apiPanelOpen}

@@ -1,4 +1,5 @@
 import Capacitor
+import SwiftUI
 import UIKit
 import UserNotifications
 import WebKit
@@ -195,9 +196,10 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
 
     private func configureTabBarAppearance(for theme: String) {
         let isLight = theme == "light"
+        // Vybraná karta v indigu, stejný akcent jako web (indigo-600 / indigo-400).
         let selectedColor = isLight
-            ? UIColor(red: 2 / 255, green: 80 / 255, blue: 140 / 255, alpha: 1)
-            : UIColor(red: 103 / 255, green: 232 / 255, blue: 249 / 255, alpha: 1)
+            ? UIColor(red: 79 / 255, green: 70 / 255, blue: 229 / 255, alpha: 1)
+            : UIColor(red: 129 / 255, green: 140 / 255, blue: 248 / 255, alpha: 1)
         let normalColor = isLight
             ? UIColor(red: 51 / 255, green: 65 / 255, blue: 85 / 255, alpha: 0.82)
             : UIColor(white: 1, alpha: 0.72)
@@ -677,30 +679,44 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
     }
 
     private func presentMoreMenu() {
-        let sheet = UIAlertController(title: "Více", message: nil, preferredStyle: .actionSheet)
         let isBacktest = activeWorld == "backtest"
-        let worldTitle = isBacktest ? "Zpět na LIVE" : "Přejít do Backtestu"
-        sheet.addAction(UIAlertAction(title: worldTitle, style: .default) { [weak self] _ in
-            self?.evaluate("window.__alphaTradeNative?.toggleWorld()")
-        })
-
         // Everything the bar does not show. Backtest hides LIVE-only surfaces
         // and, like the web sidebar, presents Účty as the backtest Session.
         let inBar = Set(tabSlots)
-        var destinations: [(String, String)] = AlphaTradeTabCatalog.destinations
+        var items: [AlphaTradeMoreMenuItem] = AlphaTradeTabCatalog.destinations
             .filter { !inBar.contains($0.id) && (!isBacktest || !$0.liveOnly) }
-            .map { ($0.id == "accounts" && isBacktest ? "Session" : $0.title, $0.id) }
-        let settingsIndex = destinations.firstIndex { $0.1 == "settings" } ?? destinations.endIndex
-        destinations.insert(("iOS funkce", "native-system"), at: settingsIndex)
-        for (title, page) in destinations {
-            sheet.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
-                self?.evaluate("window.__alphaTradeNative?.navigate('\(page)')")
-            })
+            .map { AlphaTradeMoreMenuItem(id: $0.id, title: $0.id == "accounts" && isBacktest ? "Session" : $0.title, symbol: $0.symbol) }
+        let settingsIndex = items.firstIndex { $0.id == "settings" } ?? items.endIndex
+        items.insert(AlphaTradeMoreMenuItem(id: "native-system", title: "iOS funkce", symbol: "iphone.gen3"), at: settingsIndex)
+
+        let menu = AlphaTradeMoreMenuView(theme: activeTheme, isBacktest: isBacktest, items: items) { [weak self] action in
+            guard let self else { return }
+            self.dismiss(animated: true) {
+                switch action {
+                case .toggleWorld:
+                    self.evaluate("window.__alphaTradeNative?.toggleWorld()")
+                case .navigate(let page):
+                    self.evaluate("window.__alphaTradeNative?.navigate('\(page)')")
+                }
+            }
         }
-        sheet.addAction(UIAlertAction(title: "Zrušit", style: .cancel))
-        sheet.popoverPresentationController?.sourceView = shellTabBar
-        sheet.popoverPresentationController?.sourceRect = shellTabBar.bounds
-        present(sheet, animated: true)
+        let host = UIHostingController(rootView: menu)
+        host.view.backgroundColor = .clear
+        host.overrideUserInterfaceStyle = activeTheme == "light" ? .light : .dark
+        if let sheet = host.sheetPresentationController {
+            // Výška podle počtu položek; nad ~9 položek se panel posouvá.
+            let height = CGFloat(items.count + 1) * 54 + 64
+            if #available(iOS 16.0, *) {
+                sheet.detents = [.custom(identifier: .init("alphatrade.more")) { context in
+                    min(height, context.maximumDetentValue)
+                }]
+            } else {
+                sheet.detents = [.medium()]
+            }
+            sheet.prefersGrabberVisible = true
+            sheet.preferredCornerRadius = 30
+        }
+        present(host, animated: true)
     }
 
     #if DEBUG
@@ -763,5 +779,101 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
     func applyPageFromWeb(_ page: String) {
         activePage = page
         shellTabBar.selectedItem = tabItem(for: page)
+    }
+}
+
+// MARK: - Menu Více
+
+struct AlphaTradeMoreMenuItem: Identifiable {
+    let id: String
+    let title: String
+    let symbol: String
+}
+
+enum AlphaTradeMoreMenuAction {
+    case toggleWorld
+    case navigate(String)
+}
+
+/// Vlastní spodní panel místo systémového action sheetu: stejné barvy jako
+/// web (navy / paper), ikony cílů, přepínač světa nahoře. Žádná broker akce.
+struct AlphaTradeMoreMenuView: View {
+    let theme: String
+    let isBacktest: Bool
+    let items: [AlphaTradeMoreMenuItem]
+    let onAction: (AlphaTradeMoreMenuAction) -> Void
+
+    private var isLight: Bool { theme == "light" }
+    private var background: Color {
+        isLight ? Color(red: 248 / 255, green: 250 / 255, blue: 252 / 255)
+            : theme == "oled" ? .black : Color(red: 2 / 255, green: 6 / 255, blue: 23 / 255)
+    }
+    private var card: Color { isLight ? .white : Color.white.opacity(0.06) }
+    private var ink: Color { isLight ? Color(red: 15 / 255, green: 23 / 255, blue: 42 / 255) : .white }
+    private var muted: Color { isLight ? Color(red: 100 / 255, green: 116 / 255, blue: 139 / 255) : Color.white.opacity(0.55) }
+    private var accent: Color { isLight ? Color(red: 79 / 255, green: 70 / 255, blue: 229 / 255) : Color(red: 165 / 255, green: 160 / 255, blue: 250 / 255) }
+    private var worldColor: Color {
+        isBacktest ? Color(red: 52 / 255, green: 211 / 255, blue: 153 / 255) : Color(red: 167 / 255, green: 139 / 255, blue: 250 / 255)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Více")
+                .font(.system(size: 13, weight: .black))
+                .tracking(1.2)
+                .foregroundStyle(muted)
+                .padding(.horizontal, 6)
+
+            Button { onAction(.toggleWorld) } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: isBacktest ? "dot.radiowaves.left.and.right" : "flask")
+                        .font(.system(size: 15, weight: .bold))
+                        .frame(width: 34, height: 34)
+                        .background(worldColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 10))
+                        .foregroundStyle(worldColor)
+                    Text(isBacktest ? "Zpět na LIVE" : "Přejít do Backtestu")
+                        .font(.system(size: 15, weight: .heavy))
+                        .foregroundStyle(worldColor)
+                    Spacer()
+                    Image(systemName: "arrow.left.arrow.right").font(.system(size: 12, weight: .bold)).foregroundStyle(muted)
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 52)
+                .background(card, in: RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+
+            VStack(spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    Button { onAction(.navigate(item.id)) } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: item.symbol)
+                                .font(.system(size: 15, weight: .semibold))
+                                .frame(width: 34, height: 34)
+                                .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                                .foregroundStyle(accent)
+                            Text(item.title)
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(ink)
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(muted)
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(height: 52)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if index < items.count - 1 {
+                        Rectangle().fill(muted.opacity(0.18)).frame(height: 1).padding(.leading, 58)
+                    }
+                }
+            }
+            .background(card, in: RoundedRectangle(cornerRadius: 14))
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 18)
+        .padding(.bottom, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(background.ignoresSafeArea())
     }
 }

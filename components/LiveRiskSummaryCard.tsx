@@ -29,6 +29,8 @@ export interface LiveRiskSummaryCardProps {
   brokerDailyPnlPending?: boolean;
   now?: number;
   onOpenRisk?: () => void;
+  /** Telefon: jeden klepnutelný řádek místo čtyř dlaždic; detail je v záložce Risk. */
+  compact?: boolean;
 }
 
 type MetricTone = 'emerald' | 'amber' | 'rose' | 'indigo';
@@ -138,6 +140,7 @@ export const LiveRiskSummaryCard = ({
   brokerDailyPnlPending = false,
   now = Date.now(),
   onOpenRisk,
+  compact = false,
 }: LiveRiskSummaryCardProps) => {
   const safety = riskConfigSupported ? group?.safety ?? null : null;
   const runtime = copierRuntimePresentation(status, runtimeAvailable, now);
@@ -219,6 +222,49 @@ export const LiveRiskSummaryCard = ({
   const tradesValue = tradesDisabled ? 'Vypnuto' : safety == null || tradesPercent == null || tradesCurrent == null
     ? '—'
     : `${tradesCurrent} / ${safety.dailyMaxTrades}`;
+
+  if (compact) {
+    const compactTone = (percent: number | null, disabled: boolean): string => disabled
+      ? 'text-[var(--text-muted)]'
+      : percent == null ? 'text-[var(--text-secondary)]' : percent >= 100 ? 'text-rose-500' : percent >= 80 ? 'text-amber-500' : 'text-[var(--text-primary)]';
+    const compactValue = (value: string): string => value === 'Vypnuto' ? 'vyp.' : value.replace(' USD', '');
+    return (
+      <a
+        href="?page=live&tab=risk"
+        onClick={event => {
+          if (!onOpenRisk) return;
+          event.preventDefault();
+          onOpenRisk();
+        }}
+        data-live-risk-summary="true"
+        data-live-risk-compact="true"
+        data-copier-runtime-state={runtime.key}
+        className="flex items-center gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2.5 text-left"
+      >
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-indigo-500/10 text-indigo-500"><Shield size={15} /></span>
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="text-[12px] font-black text-[var(--text-primary)]">Risk</span>
+            {activeDayLock ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/30 bg-rose-500/10 px-1.5 py-0.5 text-[9px] font-black text-rose-500"><Lock size={9} /> Zámek</span>
+            ) : activePause ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-black text-amber-600"><Pause size={9} /> Pauza</span>
+            ) : null}
+            <span className="truncate text-[10.5px] font-semibold text-[var(--text-secondary)]">{followerCount}</span>
+          </span>
+          <span className="mt-0.5 flex min-w-0 items-center gap-x-3 text-[11px] font-bold tabular-nums">
+            <span className="whitespace-nowrap"><span className="text-[var(--text-muted)]">Ztráta </span><span className={compactTone(lossPercent, lossDisabled)}>{compactValue(lossValue)}</span></span>
+            <span className="whitespace-nowrap"><span className="text-[var(--text-muted)]">Ztrátové </span><span className={compactTone(losingPercent, losingDisabled)}>{compactValue(losingValue)}</span></span>
+            <span className="whitespace-nowrap"><span className="text-[var(--text-muted)]">Obchody </span><span className={compactTone(tradesPercent, tradesDisabled)}>{compactValue(tradesValue)}</span></span>
+            {nearestFollower ? (
+              <span className="truncate"><span className="text-[var(--text-muted)]">Nejblíž </span><span className={compactTone(nearestFollower.percent, false)}>{Math.round(nearestFollower.percent)} %</span></span>
+            ) : null}
+          </span>
+        </span>
+        <ArrowRight size={14} className="shrink-0 text-indigo-500" />
+      </a>
+    );
+  }
 
   return (
     <section data-live-risk-summary="true" data-copier-runtime-state={runtime.key} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2.5">

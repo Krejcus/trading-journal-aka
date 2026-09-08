@@ -208,6 +208,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-08 (Claude, telefon: pozice první, kompaktní Risk a stav, indigo lišta, vlastní menu Více)
+
+- **LIVE na telefonu** (`useCompactViewport`): skupiny s pozicemi jsou hned
+  pod stavem workeru; karta Risk je jeden klepnutelný řádek
+  (`LiveRiskSummaryCard compact`: Ztráta / Ztrátové / Obchody / Nejblíž,
+  zámek či pauza jako pilulka, odkaz do záložky Risk) a stav workeru je jeden
+  řádek s tečkami (`LiveRuntimeStatus compact`). Banner snímků až pod
+  skupinami. Desktop beze změny. Testy `tests/liveCompactHeaderRender.test.ts`.
+- **Nativní lišta**: vybraná karta v indigu (indigo-400 v tmavém, indigo-600 ve
+  světlém) místo azurové — stejný akcent jako web.
+- **Menu Více**: místo systémového `UIAlertController` vlastní spodní panel
+  (`AlphaTradeMoreMenuView`, SwiftUI přes `UIHostingController` s custom
+  detentem, iOS <16 fallback `.medium()`): přepínač světa nahoře, cíle mimo
+  lištu s ikonami, barvy podle tématu (navy / paper / oled). Žádná broker akce.
+- Ověření: 324 souborů / 3040 testů, tsc čistý, iOS build z CLI, čistá
+  reinstalace do telefonu.
+
 ### 2026-09-07 (Claude + uživatel, nový vzhled Live Activity „J5D")
 
 Vzhled zamčené obrazovky vybrán z živých mockupů (artefakt „Live Activity
