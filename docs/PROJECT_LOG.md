@@ -208,6 +208,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-08 (Claude, sonda: aktuální cena pro čekající limit z TradingView CDP)
+
+Otázka: může worker posílat aktuální cenu, aby K2 ukázalo čárku ceny a body
+k fillu? Tradovate API kotace jsou pro prop tokeny zavřené (probe 27. 8.,
+`mode: None`). Sonda read-only přes stávající TradingView most:
+
+- TradingView Desktop běží s `--remote-debugging-port=9222` (spouští ho
+  `server/tradingViewCdpLifecycle.ts`); worker už přes CDP dělá snímky grafu
+  (`services/copierChartSnapshot.ts`), takže kanál i lifecycle existují.
+- Cena se čte z poslední svíčky aktivního grafu:
+  `window.TradingViewApi._activeChartWidgetWV.value()._chartWidget.model().mainSeries().bars()`
+  → `valueAt(lastIndex())[4]`. Aktualizuje se v reálném čase, žádný zásah do
+  grafu (health check před/po: symbol i rozlišení beze změny).
+- Most argument symbolu ignoruje: kotace pro `MESU6` vrátila MNQ data. Cena
+  je tedy vždy cena AKTIVNÍHO grafu; worker ji musí přijmout jen když
+  `symbolExt()` odpovídá kořenu kontraktu leadera (MNQ).
+- Riziko rollover: graf `MNQ1!` (typespecs continuous/synthetic) neprozradí
+  podkladový kontrakt; v týdnu před expirací může leader obchodovat Z6,
+  zatímco `1!` ještě ukazuje U6 (rozdíl = kalendářní spread). Bez konkrétního
+  kontraktu na grafu se cena musí brát jako orientační, nebo přijmout jen
+  když je na grafu přímo `MNQU6`/`MNQZ6`.
+- Bez TradingView / bez CDP: `/json/version` neodpoví → cena chybí → K2 bez
+  čárky (dnešní stav). Žádný pád.
+
+Návrh (neimplementováno): worker 1× za sekundu `Runtime.evaluate` na
+aktivní graf, do `status` přidat `{ marketPrice, marketSymbol, marketAt }`;
+server propustí `currentPrice` jen při shodě kořene symbolu a stáří ≤ 5 s;
+widget už čárku, výplň i „b k fillu" umí.
+
 ### 2026-09-08 (Claude, Live Activity K2: čekající limit s bracketem)
 
 Uživatel po opravě dvou připojení viděl „LIMIT BUY", ale jen hlavičku — widget
