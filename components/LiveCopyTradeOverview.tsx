@@ -1,6 +1,6 @@
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
 import { CopyGroupLibraryRequestFence } from '../lib/copyGroupLibraryRequestFence';
-import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
+import React, { useSyncExternalStore, useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ChevronDown, ChevronRight, Crown, Plus, HelpCircle, Settings2, Eye, MoreVertical,
@@ -20,6 +20,14 @@ import {
   type CopyTradeAccountRole,
 } from '../lib/copyTradeAccountLabels';
 import { translateCopierRejectReason } from '../lib/copierRejectReason';
+import {
+  dismissRejection,
+  getDismissedRejections,
+  rejectedExecutionDismissKey,
+  rejectedExecutionResolved,
+  rejectedExecutionVisibility,
+  subscribeDismissedRejections,
+} from '../services/rejectedExecutionVisibility';
 import LiveRiskSummaryCard from './LiveRiskSummaryCard';
 import {
   copierCopiesOutcomeText,
@@ -2065,6 +2073,9 @@ const CompactAccountRow = ({ row, live, eligibility, orders, dailyPnlPending, bu
 }) => {
   const a = row.account;
   const accountId = row.accountId;
+  const dismissedRejections = useDismissedRejections();
+  const compactFlat = live && a != null && a.positions.every(position => position.netPosition === 0);
+  const compactRejection = visibleRejectedExecution(accountId, eligibility, compactFlat, dismissedRejections);
   const hasOpenPositions = a?.positions.some(position => position.netPosition !== 0) ?? false;
   const unavailableFollower = !a && accountId != null && !row.isLeader;
   return (
@@ -2119,13 +2130,13 @@ const CompactAccountRow = ({ row, live, eligibility, orders, dailyPnlPending, bu
             : <span className="text-[var(--text-secondary)]">—</span>}
         </div>
       </div>
-      {eligibility?.lastExecution ? (
-        <div className="mt-1.5">
-          <RejectedExecutionStatus
-            execution={eligibility.lastExecution}
-            accountAuthoritativelyFlat={live && a != null && a.positions.every(position => position.netPosition === 0)}
-          />
-        </div>
+      {compactRejection ? (
+        <RejectedExecutionStatus
+          execution={compactRejection}
+          accountAuthoritativelyFlat={compactFlat}
+          onDismiss={accountId != null ? () => dismissRejection(rejectedExecutionDismissKey(accountId, compactRejection)) : undefined}
+          className="mt-1.5"
+        />
       ) : eligibility && eligibility.state !== 'active' && eligibility.reason ? (
         <p className="mt-1.5 text-[10px] leading-tight text-[var(--text-muted)]">
           {eligibility.reason}{!a ? ' · účet není v aktuálním OAuth snapshotu' : ''}
@@ -2577,14 +2588,40 @@ const rejectedOrderLabel = (execution: RejectedExecution): string | null => {
   return parts.length > 0 ? parts.join(' ') : null;
 };
 
-export const RejectedExecutionStatus = ({ execution, accountAuthoritativelyFlat }: {
+/** Zavřená odmítnutí (jen toto zařízení, do konce session) pro řádky účtů. */
+const useDismissedRejections = () => useSyncExternalStore(subscribeDismissedRejections, getDismissedRejections, getDismissedRejections);
+
+/**
+ * Odmítnutí k zobrazení pod účtem, nebo null, když už nemá být vidět
+ * (vyřešené a zavřené křížkem / z minulé session). Nevyřešené se vrací vždy.
+ */
+const visibleRejectedExecution = (
+  accountId: number | null | undefined,
+  eligibility: CopierAccountEligibility | undefined,
+  accountAuthoritativelyFlat: boolean,
+  dismissed: ReadonlySet<string>,
+): RejectedExecution | null => {
+  const execution = eligibility?.lastExecution;
+  if (!execution) return null;
+  if (accountId == null) return execution;
+  const visibility = rejectedExecutionVisibility({
+    accountId, execution, accountAuthoritativelyFlat, dismissed, now: Date.now(),
+  });
+  return visibility === 'visible' ? execution : null;
+};
+
+export const RejectedExecutionStatus = ({ execution, accountAuthoritativelyFlat, onDismiss, className = '' }: {
   execution: RejectedExecution;
   accountAuthoritativelyFlat: boolean;
+  /** Křížek: zavřít vyřešené odmítnutí do konce session. Nevyřešené křížek nemá. */
+  onDismiss?: () => void;
+  className?: string;
 }) => {
   const translated = translateCopierRejectReason(execution.reason);
   const order = rejectedOrderLabel(execution);
   const resolution = execution.resolution;
   const dangerous = (!resolution || resolution.kind === 'unresolved') && !accountAuthoritativelyFlat;
+  const dismissible = Boolean(onDismiss) && rejectedExecutionResolved(execution, accountAuthoritativelyFlat);
   const rejection = translated.category === 'price-through' && order
     ? `${order} odmítnut: cena už byla za zadanou úrovní`
     : [order, translated.message].filter(Boolean).join(' · ');
@@ -2600,11 +2637,23 @@ export const RejectedExecutionStatus = ({ execution, accountAuthoritativelyFlat 
   return (
     <span
       title={`Původní broker důvod: ${translated.original}`}
-      className={`block pl-3.5 text-[10px] leading-tight ${dangerous
+      data-rejected-execution={dangerous ? 'unresolved' : 'resolved'}
+      className={`flex items-start gap-1 pl-3.5 text-[10px] leading-tight ${dangerous
         ? 'text-rose-500/90'
-        : 'text-[var(--text-muted)]'}`}
+        : 'text-[var(--text-muted)]'} ${className}`}
     >
-      {rejection} · {resolutionLabel ?? timeLabel(execution.at)}
+      <span className="min-w-0 flex-1">{rejection} · {resolutionLabel ?? timeLabel(execution.at)}</span>
+      {dismissible ? (
+        <button
+          type="button"
+          aria-label="Skrýt odmítnutí do konce session"
+          title="Skrýt do konce session (jen na tomto zařízení)"
+          onClick={event => { event.stopPropagation(); onDismiss?.(); }}
+          className="-my-0.5 shrink-0 rounded px-1 text-[11px] leading-none text-[var(--text-muted)] transition hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)]"
+        >
+          ×
+        </button>
+      ) : null}
     </span>
   );
 };
@@ -2820,6 +2869,9 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
 }) => {
   const a = row.account;
   const accountId = row.accountId;
+  const dismissedRejections = useDismissedRejections();
+  const rowFlat = live && a != null && a.positions.every(position => position.netPosition === 0);
+  const rowRejection = visibleRejectedExecution(accountId, eligibility, rowFlat, dismissedRejections);
   const cushion = a?.cushion ?? null;
   const cashKnown = !!a && isLiveAccountReadVerified(a, 'cash');
   const dllRemaining = a && cashKnown && a.unrealizedPnlSource !== 'stale' ? copyTradeDailyLossRemaining(a) : null;
@@ -2839,11 +2891,11 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
             )}
             {!row.synced && <span title="Nesedí s leaderem" className="text-amber-500">⚠</span>}
             </span>
-            {eligibility?.lastExecution ? (
+            {rowRejection ? (
               <RejectedExecutionStatus
-                execution={eligibility.lastExecution}
-                accountAuthoritativelyFlat={live && a != null
-                  && a.positions.every(position => position.netPosition === 0)}
+                execution={rowRejection}
+                accountAuthoritativelyFlat={rowFlat}
+                onDismiss={accountId != null ? () => dismissRejection(rejectedExecutionDismissKey(accountId, rowRejection)) : undefined}
               />
             ) : eligibility && eligibility.state !== 'active' && eligibility.reason ? (
               <span className="block pl-3.5 text-[10px] leading-tight text-[var(--text-muted)]">

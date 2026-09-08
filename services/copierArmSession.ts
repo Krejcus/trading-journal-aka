@@ -81,3 +81,13 @@ export function msUntilTradovateSessionEnd(
   }
   return end - nowMs;
 }
+
+/** Epoch konce Tradovate session, do které `nowMs` patří. */
+export function tradovateSessionEndAt(nowMs: number, timeZone?: string, endHour?: number): number {
+  return nowMs + msUntilTradovateSessionEnd(nowMs, timeZone, endHour);
+}
+
+/** Dva okamžiky patří do téže Tradovate session (hranice 17:00 CT). */
+export function sameTradovateSession(leftMs: number, rightMs: number, timeZone?: string, endHour?: number): boolean {
+  return tradovateSessionEndAt(leftMs, timeZone, endHour) === tradovateSessionEndAt(rightMs, timeZone, endHour);
+}

@@ -1,4 +1,4 @@
-export type CopierRejectCategory = 'price-through' | 'dll' | 'tag' | 'unknown';
+export type CopierRejectCategory = 'price-through' | 'dll' | 'tag' | 'quantity-limit' | 'invalid-price' | 'unknown';
 
 export interface CopierRejectReasonTranslation {
   category: CopierRejectCategory;
@@ -45,6 +45,17 @@ export function translateCopierRejectReason(reason?: string): CopierRejectReason
       message: 'Interní značka příkazu nebyla brokerem přijata',
       original,
     };
+  }
+  if (/maximum\s+order\s+quantity/i.test(normalized)) {
+    const limit = /Limit:\s*(\d+(?:\.\d+)?)/i.exec(normalized)?.[1];
+    const current = /Current:\s*(\d+(?:\.\d+)?)/i.exec(normalized)?.[1];
+    const detail = limit && current
+      ? ` (max ${Number(limit)}, požadováno ${Number(current)})`
+      : limit ? ` (max ${Number(limit)})` : '';
+    return { category: 'quantity-limit', message: `Broker odmítl: limit množství${detail}`, original };
+  }
+  if (/^invalid\s*price\b/i.test(normalized)) {
+    return { category: 'invalid-price', message: 'Broker odmítl: neplatná cena příkazu', original };
   }
   return { category: 'unknown', message: shorten(normalized), original };
 }

@@ -245,6 +245,17 @@ Ověření: tsc čisté, lint změněných souborů beze změny, testy
 Připojený · Kopírka Vypnutá · Snímky Připravené", žádná karta, žádný panel po
 ručním vypnutí; Události nesou lastError, časy snímků i 4 odzbrojení dne.
 
+Navazující: řádek „odmítnutý příkaz" pod účtem visel dny (limit množství z
+3. 9., InvalidPrice). Pravidlo v `services/rejectedExecutionVisibility.ts`:
+nevyřešené odmítnutí (follower není potvrzeně flat) je vidět vždy;
+vyřešené zmizí s koncem Tradovate session (`sameTradovateSession`, hranice
+17:00 CT, nová v `copierArmSession.ts`) nebo dřív křížkem. Zavření je jen
+na tomto zařízení, v localStorage `at:live:rejection-dismissed` s expirací
+na konci session, přes `useSyncExternalStore` bez prop drillingu; worker
+se nemění. Překlad rejectů rozšířen o `quantity-limit` („Broker odmítl:
+limit množství (max 2, požadováno 3)") a `invalid-price`; originál zůstává
+v tooltipu. Testy: pravidlo + úložiště, překlad, render křížku.
+
 ### 2026-09-07 (Claude, ARM LIVE bez připravených snímků — varování a nabídka opravy)
 
 Uživatel: dnes se zase nepořídil ENTRY/EXIT snímek. Diagnóza z agenta a logu:
