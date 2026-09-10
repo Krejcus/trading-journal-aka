@@ -1,4 +1,5 @@
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
+import { liveBalanceDisplay, liveCapitalDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
 import { CopyGroupLibraryRequestFence } from '../lib/copyGroupLibraryRequestFence';
 import React, { useSyncExternalStore, useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
@@ -1968,7 +1969,7 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingO
   hiddenGroupColumns: Set<GroupColumnKey>;
 }) => {
   const cashKnown = rows.every(row => row.account && isLiveAccountReadVerified(row.account, 'cash'));
-  const capital = rows.reduce((s, r) => s + (r.account?.balance || 0), 0);
+  const capital = liveCapitalDisplay(rows.map(row => row.account));
   const daily = rows.reduce((s, r) => s + (r.account?.realizedPnl || 0), 0);
   const unreal = rows.reduce((s, r) => s + (r.account?.unrealizedPnl || 0), 0);
   const unrealSource = rows.some(row => row.account?.unrealizedPnlSource === 'stale')
@@ -2034,7 +2035,7 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingO
       </td>}
       {!hiddenGroupColumns.has('firm') && <td className="max-w-[150px] px-3 py-1.5 text-[11px] text-[var(--text-secondary)]">{firm ? <FirmMark firm={firm} withLabel /> : '—'}</td>}
       {!hiddenGroupColumns.has('followers') && <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]">{group.followers.length}</td>}
-      {!hiddenGroupColumns.has('capital') && <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]">{cashKnown ? money.format(capital) : '—'}</td>}
+      {!hiddenGroupColumns.has('capital') && <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]"><BalanceValue display={capital} /></td>}
       {!hiddenGroupColumns.has('daily') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${dailyPnlPending ? 'text-[var(--text-secondary)]' : pnlClass(daily)}`}>{dailyPnlPending || !cashKnown ? '—' : money.format(daily)}</td>}
       {!hiddenGroupColumns.has('unreal') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(unreal)}`} title={unrealSource === 'estimated' ? 'Součet obsahuje live odhady.' : unrealSource === 'stale' ? 'Některý účet čeká na nový snapshot.' : 'Potvrzeno broker snapshotem.'}><span className="inline-flex items-center justify-end gap-1.5">{money.format(unreal)}{unrealSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> : null}</span></td>}
       <td className="px-3 py-0">
@@ -2051,6 +2052,19 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingO
 };
 
 // ─── Kompaktní karty skupin (telefon / úzký viewport) ───────────────────────
+
+export const BalanceValue = ({ display, compact = false }: { display: LiveBalanceDisplay; compact?: boolean }) => {
+  if (display.value == null) return <span className="text-xs text-[var(--text-secondary)]">—</span>;
+  const confirmation = display.confirmedAt ? ` · poslední potvrzení ${new Date(display.confirmedAt).toLocaleString('cs-CZ')}` : '';
+  return <span
+    data-balance-state={display.stale ? 'last-known' : 'confirmed'}
+    title={display.stale ? `Poslední známý zůstatek${confirmation}. Čeká na ověření, není aktuálním podkladem pro risk.` : `Potvrzený zůstatek${confirmation}`}
+    className="inline-flex flex-wrap items-center justify-end gap-x-1.5 text-xs tabular-nums text-[var(--text-primary)]"
+  >
+    {(compact ? moneyWhole : money).format(display.value)}
+    {display.stale ? <span className="text-[9px] font-medium text-amber-600 dark:text-amber-400">čeká na ověření</span> : null}
+  </span>;
+};
 
 const CompactStat = ({ label, value, className = 'text-[var(--text-primary)]' }: {
   label: string; value: React.ReactNode; className?: string;
@@ -2210,7 +2224,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   tightenOnly: boolean;
   disarmPanel?: React.ReactNode;
 }) => {
-  const capital = rows.reduce((sum, row) => sum + (row.account?.balance || 0), 0);
+  const capital = liveCapitalDisplay(rows.map(row => row.account));
   const daily = rows.reduce((sum, row) => sum + (row.account?.realizedPnl || 0), 0);
   const unreal = rows.reduce((sum, row) => sum + (row.account?.unrealizedPnl || 0), 0);
   const enabledFollowerRows = rows.filter(row => !row.isLeader && row.mode !== 'off');
@@ -2261,7 +2275,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
       </header>
 
       <div className="grid grid-cols-3 divide-x divide-[var(--border-subtle)] border-y border-[var(--border-subtle)] bg-[var(--bg-page)]/60">
-        <CompactStat label="Kapitál" value={moneyWhole.format(capital)} />
+        <CompactStat label="Kapitál" value={<BalanceValue display={capital} compact />} />
         <CompactStat
           label="Denní P&L"
           value={dailyPnlPending ? '—' : money.format(daily)}
@@ -2928,7 +2942,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
       case 'firm':
         return row.firm ? <FirmMark firm={row.firm} withLabel /> : <span className="text-[11px] text-[var(--text-secondary)]">—</span>;
       case 'balance':
-        return <span className="text-xs tabular-nums text-[var(--text-primary)]">{a && cashKnown ? money.format(a.balance) : '—'}</span>;
+        return <BalanceValue display={liveBalanceDisplay(a)} />;
       case 'positions':
         return a
           ? <CopyTradePositionsCell accountId={accountId} positions={a.positions} orders={orders} positionsVerified={isLiveAccountReadVerified(a, 'positions')} ordersVerified={isLiveAccountReadVerified(a, 'orders')} />

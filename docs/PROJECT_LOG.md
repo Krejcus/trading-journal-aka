@@ -208,6 +208,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-10 — Izolované nasazení opravy zůstatků (Codex)
+
+- Na výslovné „pushni to“ připravena pouze prezentace cash: poslední potvrzená hodnota zůstává vidět po zastarání/failed read a nese „čeká na ověření“ i čas potvrzení. Nový broker údaj ji nahradí; chybějící/denied evidence není vymyšlená nula. Stejné pravidlo pro účet i kapitál desktop/mobile.
+- Risk freshness, DLL, pozice, execution a Mac worker beze změny. Ostatní rozpracované změny jiné session nejsou součástí tohoto commitu.
+- Přesný staged strom ověřen v izolované kopii: 31/31 cílených testů, TypeScript a web/PWA build prošly. První typecheck postrádal závislosti extensionu; po připojení stávajících závislostí prošel beze změny kódu. Produkční READY/alias je nutné ověřit až po pushi; žádný restart workeru ani broker akce.
+
 ### 2026-09-08 (Claude, Live Activity: cooldown svítí i po ručním DISARM)
 
 Uživatel: „nesvítí cooldown". Worker měl `entryCooldownUntil` platný (15 min
