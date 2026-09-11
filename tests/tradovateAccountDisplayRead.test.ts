@@ -21,7 +21,7 @@ describe('cash display adapter', () => {
       {accountId:10,currencyId:3,tradeDate:{year:2026,month:9,day:11},timestamp:'2026-09-11T11:59:00Z',realizedPnL:999},
       {accountId:11,currencyId:2,tradeDate:{year:2026,month:9,day:11},timestamp:'2026-09-11T11:59:00Z',realizedPnL:888},
     ];
-    const fetcher=vi.fn(async (url: string | URL | Request) => Response.json(String(url).includes('/currency/') ? [{id:2,symbol:'USD'},{id:3,symbol:'EUR'}] : String(url).includes('/deps?') ? rows : {totalCashValue:51000,realizedPnL:1000}));
+    const fetcher=vi.fn(async (url: string | URL | Request) => Response.json(String(url).includes('/currency/') ? [{id:2,name:'USD',symbol:'$'},{id:3,name:'CAD',symbol:'$'}] : String(url).includes('/deps?') ? rows : {totalCashValue:51000,realizedPnL:1000}));
     const result=await readTradovateAccountDisplay({baseUrl:'https://demo.tradovateapi.com/v1',accessToken:'test',accountId:10,signal:new AbortController().signal,fetchImpl:fetcher,now});
     expect(result).toMatchObject({totalCashValue:51000,realizedPnL:1000,dailyRealizedPnL:0});
     rows[0].tradeDate.day=10;

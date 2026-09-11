@@ -33,7 +33,7 @@ export async function readTradovateAccountDisplay(options: {
   // snapshot's realizedPnL has neither and is never relabelled as daily.
   const balances = await request(`/cashBalance/deps?masterid=${options.accountId}`);
   const currencies = await request('/currency/list');
-  const usdIds = new Set(Array.isArray(currencies) ? currencies.filter(c => c?.symbol === 'USD' && Number.isSafeInteger(c.id)).map(c => c.id) : []);
+  const usdIds = new Set(Array.isArray(currencies) ? currencies.filter(c => c?.name === 'USD' && Number.isSafeInteger(c.id)).map(c => c.id) : []);
   const tradeDate = tradovateDisplayTradeDate(requestedAt);
   if (tradeDate === tradovateDisplayTradeDate(options.now ?? Date.now()) && Array.isArray(balances)) {
     const candidates = balances.filter(row => row?.accountId === options.accountId && usdIds.has(row.currencyId)
