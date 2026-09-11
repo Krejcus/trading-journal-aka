@@ -70,6 +70,9 @@ export function tradovateCopyTradeSnapshot(
       // Copy Trade's Daily P&L must not reuse the lifetime/cumulative balance
       // snapshot. Use only the current captured trade date and include fees.
       realizedPnl: dailyRealizedPnl(account, data.capturedAt),
+      dailyPnlTradeDate: data.capturedAt.slice(0, 10),
+      dailyPnlUpdatedAt: account.readState?.dailyAsOf ?? null,
+      dailyPnlAvailable: account.daily.some(day => day.tradeDate === data.capturedAt.slice(0, 10) && day.reportedRealizedPnl != null),
       weekRealizedPnl: account.balance.weekRealizedPnL ?? 0,
       unrealizedPnl: account.balance.openPnL ?? 0,
       unrealizedPnlSource: account.balance.openPnlSource

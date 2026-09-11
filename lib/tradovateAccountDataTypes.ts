@@ -138,6 +138,8 @@ export interface TradovateAccountDataAccount {
     positionsAsOf: string | null;
     ordersAsOf: string | null;
     cashAsOf: string | null;
+    /** Daily ledger confirmation; position/cash ticks must not renew it. */
+    dailyAsOf?: string | null;
     /** Request start orders snapshots; completion time cannot do that. */
     requestedAt: string;
   };

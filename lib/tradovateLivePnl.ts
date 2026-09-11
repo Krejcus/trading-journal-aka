@@ -124,6 +124,8 @@ export function applyTradovateLivePnlAnchorTick(
         ...account.balance,
         ...(exact ? { coverage: { availability: 'available' as const, count: 1, httpStatus: 200 } } : {}),
         ...(exact?.totalCashValue != null ? { totalCashValue: exact.totalCashValue } : {}),
+        ...(exact?.realizedPnL != null ? { realizedPnL: exact.realizedPnL } : {}),
+        ...(exact?.totalCashValueSOD != null ? { totalCashValueSOD: exact.totalCashValueSOD } : {}),
         openPnL: openPnl,
         ...(exact?.netLiq != null
           ? { netLiq: exact.netLiq }
@@ -262,6 +264,7 @@ export function applyTradovateLivePnlTick(
       readState: {
         positions: { availability: positions.length ? 'available' as const : 'empty' as const, count: positions.length, httpStatus: 200 },
         orders: { availability: orders.length ? 'available' as const : 'empty' as const, count: orders.length, httpStatus: 200 },
+        dailyAsOf: account.readState?.dailyAsOf ?? null,
         positionsAsOf: observedAt,
         ordersAsOf: observedAt,
         cashAsOf: exact ? anchorObservedAt : tradovateAccountReadState(account, data).cashAsOf,
@@ -280,6 +283,8 @@ export function applyTradovateLivePnlTick(
         ...account.balance,
         ...(exact ? { coverage: { availability: 'available' as const, count: 1, httpStatus: 200 } } : {}),
         ...(exact?.totalCashValue != null ? { totalCashValue: exact.totalCashValue } : {}),
+        ...(exact?.realizedPnL != null ? { realizedPnL: exact.realizedPnL } : {}),
+        ...(exact?.totalCashValueSOD != null ? { totalCashValueSOD: exact.totalCashValueSOD } : {}),
         ...(openPnl != null ? { openPnL: openPnl } : {}),
         ...(exact?.netLiq != null
           ? { netLiq: exact.netLiq }

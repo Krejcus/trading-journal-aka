@@ -1,3 +1,5 @@
+import { createTradovateAccountDisplayFeed } from '../../server/tradovateAccountDisplayFeed';
+import { readTradovateAccountDisplay } from '../../server/tradovateAccountDisplayRead';
 import { access, appendFile, chmod, copyFile, mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -98,6 +100,7 @@ interface ConnectionRow {
 }
 
 interface PilotContext {
+  displayFeed?: ReturnType<typeof createTradovateAccountDisplayFeed>;
   environment: 'demo';
   connectionId: string;
   accountSpec?: string;
@@ -210,6 +213,7 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
   }
 
   if (selected === 'agent') {
+    context.displayFeed = makeDisplayFeed(context, Object.keys(accountSpecsByAccountId).map(Number));
     const broker = createTradovateBroker({
       environment: 'demo',
       accountSpec: context.accountSpec,
@@ -217,6 +221,8 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
       getAccessToken: context.getAccessToken,
       connectionLabel: connectionLabel(context.connectionId),
       onReconnectDiagnostic: logReconnectDiagnostic,
+      onAccountDataChange: change => context.displayFeed?.invalidate(change.accountId),
+      onAccountDataConnectionChange: connected => context.displayFeed?.setStreamConnected(connected),
     });
     await runLocalAgent([context], leaderId, followerId, accounts, broker);
     return;
@@ -243,6 +249,7 @@ async function runMultiConnectionAgent(): Promise<void> {
       accessToken: await context.getAccessToken(),
     });
     const accountSpecsByAccountId = Object.fromEntries(data.accounts.map(account => [account.id, account.name]));
+    context.displayFeed = makeDisplayFeed(context, data.accounts.map(account => account.id));
     const broker = createTradovateBroker({
       environment: 'demo',
       accountSpec: context.accountSpec,
@@ -252,6 +259,8 @@ async function runMultiConnectionAgent(): Promise<void> {
       // spojení (propfirma) vypadlo.
       connectionLabel: connectionLabel(entry.connectionId),
       onReconnectDiagnostic: logReconnectDiagnostic,
+      onAccountDataChange: change => context.displayFeed?.invalidate(change.accountId),
+      onAccountDataConnectionChange: connected => context.displayFeed?.setStreamConnected(connected),
     });
     return { context, accounts: data.accounts, broker };
   }));
@@ -296,6 +305,15 @@ async function runMultiConnectionAgent(): Promise<void> {
       return { missingOptional: refreshed.missingOptional };
     },
   );
+}
+
+function makeDisplayFeed(context: PilotContext, accountIds: number[]) {
+  return createTradovateAccountDisplayFeed({
+    connectionId: context.connectionId, environment: context.environment, accountIds: () => accountIds,
+    read: async (accountId, signal) => readTradovateAccountDisplay({
+      baseUrl: tradovateApiBaseUrl(context.environment), accessToken: await context.getAccessToken(), accountId, signal,
+    }),
+  });
 }
 
 async function runLocalAgent(
@@ -531,6 +549,7 @@ async function runLocalAgent(
     if (pairingRestartTimer) clearTimeout(pairingRestartTimer);
     if (snapshotHealthTimer) clearInterval(snapshotHealthTimer);
     marketPriceFeed?.stop();
+    contexts.forEach(item => item.displayFeed?.close());
     const cancelShutdownWatchdog = startAgentShutdownWatchdog({
       timeoutMs: 20_000,
       onTimeout: () => {
@@ -723,6 +742,7 @@ async function runLocalAgent(
       devices: contexts.flatMap(candidate => candidate.device ? [candidate.device] : []),
       snapshotHealth: () => snapshotHealth,
       marketPrices: () => marketPriceFeed?.current() ?? [],
+      accountDisplay: () => contexts.flatMap(item => item.displayFeed ? [item.displayFeed.state()] : []),
       onSnapshotTest: (requestId, options) => {
         if (!snapshotsEnabled) throw new Error('snapshot-test-unavailable');
         if (snapshotTestInFlight) throw new Error('snapshot-test-already-running');

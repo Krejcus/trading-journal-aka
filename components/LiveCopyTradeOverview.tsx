@@ -1,5 +1,5 @@
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
-import { liveBalanceDisplay, liveCapitalDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
+import { liveBalanceDisplay, liveCapitalDisplay, liveDailyPnlDisplay, liveGroupDailyPnlDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
 import { useCopierDisarmNotice } from '../hooks/useCopierDisarmNotice';
 import { CopyGroupLibraryRequestFence } from '../lib/copyGroupLibraryRequestFence';
 import React, { useSyncExternalStore, useCallback, useMemo, useState, useEffect, useRef } from 'react';
@@ -1993,9 +1993,8 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingO
   onApplyTemplate: (template: CopyGroupTemplate) => void;
   hiddenGroupColumns: Set<GroupColumnKey>;
 }) => {
-  const cashKnown = rows.every(row => row.account && isLiveAccountReadVerified(row.account, 'cash'));
   const capital = liveCapitalDisplay(rows.map(row => row.account));
-  const daily = rows.reduce((s, r) => s + (r.account?.realizedPnl || 0), 0);
+  const daily = liveGroupDailyPnlDisplay(rows.map(row => row.account), Date.now(), dailyPnlPending);
   const unreal = rows.reduce((s, r) => s + (r.account?.unrealizedPnl || 0), 0);
   const unrealSource = rows.some(row => row.account?.unrealizedPnlSource === 'stale')
     ? 'stale'
@@ -2061,7 +2060,7 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingO
       {!hiddenGroupColumns.has('firm') && <td className="max-w-[150px] px-3 py-1.5 text-[11px] text-[var(--text-secondary)]">{firm ? <FirmMark firm={firm} withLabel /> : '—'}</td>}
       {!hiddenGroupColumns.has('followers') && <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]">{group.followers.length}</td>}
       {!hiddenGroupColumns.has('capital') && <td className="px-3 py-1.5 text-right text-xs tabular-nums text-[var(--text-primary)]"><BalanceValue display={capital} /></td>}
-      {!hiddenGroupColumns.has('daily') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${dailyPnlPending ? 'text-[var(--text-secondary)]' : pnlClass(daily)}`}>{dailyPnlPending || !cashKnown ? '—' : money.format(daily)}</td>}
+      {!hiddenGroupColumns.has('daily') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${daily == null ? 'text-[var(--text-secondary)]' : pnlClass(daily)}`}>{daily == null ? '—' : money.format(daily)}</td>}
       {!hiddenGroupColumns.has('unreal') && <td className={`px-3 py-1.5 text-right text-xs tabular-nums font-bold ${pnlClass(unreal)}`} title={unrealSource === 'estimated' ? 'Součet obsahuje live odhady.' : unrealSource === 'stale' ? 'Některý účet čeká na nový snapshot.' : 'Potvrzeno broker snapshotem.'}><span className="inline-flex items-center justify-end gap-1.5">{money.format(unreal)}{unrealSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> : null}</span></td>}
       <td className="px-3 py-0">
         <div className="flex items-center justify-end gap-1.5" onClick={event => event.stopPropagation()}>
@@ -2087,7 +2086,6 @@ export const BalanceValue = ({ display, compact = false }: { display: LiveBalanc
     className="inline-flex flex-wrap items-center justify-end gap-x-1.5 text-xs tabular-nums text-[var(--text-primary)]"
   >
     {(compact ? moneyWhole : money).format(display.value)}
-    {display.stale ? <span className="text-[9px] font-medium text-amber-600 dark:text-amber-400">čeká na ověření</span> : null}
   </span>;
 };
 
@@ -2156,8 +2154,8 @@ const CompactAccountRow = ({ row, live, eligibility, orders, dailyPnlPending, bu
       <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] tabular-nums">
         <div className="min-w-0">
           <span className="block text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Denní</span>
-          <span className={`font-bold ${a && !dailyPnlPending ? pnlClass(a.realizedPnl) : 'text-[var(--text-secondary)]'}`}>
-            {a && !dailyPnlPending ? money.format(a.realizedPnl) : '—'}
+          <span className={`font-bold ${a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? pnlClass(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : 'text-[var(--text-secondary)]'}`}>
+            {a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? money.format(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : '—'}
           </span>
         </div>
         <div className="min-w-0">
@@ -2251,7 +2249,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   cooldownPanel?: React.ReactNode;
 }) => {
   const capital = liveCapitalDisplay(rows.map(row => row.account));
-  const daily = rows.reduce((sum, row) => sum + (row.account?.realizedPnl || 0), 0);
+  const daily = liveGroupDailyPnlDisplay(rows.map(row => row.account), Date.now(), dailyPnlPending);
   const unreal = rows.reduce((sum, row) => sum + (row.account?.unrealizedPnl || 0), 0);
   const enabledFollowerRows = rows.filter(row => !row.isLeader && row.mode !== 'off');
   const inactiveFollowerCount = enabledFollowerRows.filter((row, index) =>
@@ -2304,8 +2302,8 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
         <CompactStat label="Kapitál" value={<BalanceValue display={capital} compact />} />
         <CompactStat
           label="Denní P&L"
-          value={dailyPnlPending ? '—' : money.format(daily)}
-          className={dailyPnlPending ? 'text-[var(--text-secondary)]' : pnlClass(daily)}
+          value={daily == null ? '—' : money.format(daily)}
+          className={daily == null ? 'text-[var(--text-secondary)]' : pnlClass(daily)}
         />
         <CompactStat label="Otevřený P&L" value={money.format(unreal)} className={pnlClass(unreal)} />
       </div>
@@ -2977,7 +2975,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
           ? <CopyTradePositionsCell accountId={accountId} positions={a.positions} orders={orders} positionsVerified={isLiveAccountReadVerified(a, 'positions')} ordersVerified={isLiveAccountReadVerified(a, 'orders')} />
           : <span className="text-xs tabular-nums text-[var(--text-secondary)]">—</span>;
       case 'daily':
-        return <span className={`text-xs tabular-nums ${a && cashKnown && !dailyPnlPending ? pnlClass(a.realizedPnl) : 'text-[var(--text-secondary)]'}`}>{a && cashKnown && !dailyPnlPending ? money.format(a.realizedPnl) : '—'}</span>;
+        return <span className={`text-xs tabular-nums ${a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? pnlClass(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : 'text-[var(--text-secondary)]'}`}>{a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? money.format(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : '—'}</span>;
       case 'dllRemaining': {
         if (!a || dailyPnlPending || dllRemaining == null) {
           return <span className="text-xs tabular-nums text-[var(--text-secondary)]">—</span>;

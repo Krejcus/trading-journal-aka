@@ -169,7 +169,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       status: loadTradovateOAuthStatus,
       bootstrap: connectionId => runTradovateReadOnlyPreflight(connectionId, 'bootstrap'),
       profiles: loadTradovateAccountProfiles,
-      blocked: () => Date.now() < rateLimitUntilRef.current,
+      blocked: () => Date.now() < Math.max(rateLimitUntilRef.current, getTradovateApiTelemetrySnapshot().rateLimitedUntil ?? 0),
       onError: reason => {
         if (reason instanceof TradovateRequestError && reason.status === 429) {
           rateLimitUntilRef.current = Date.now() + (reason.retryAfterMs ?? 3_600_000);
@@ -296,7 +296,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   }, [connectionSummaries, status, userId]);
 
   const advanceHistoricalBackfill = useCallback(async (datasets: TradovatePreflightResult[]) => {
-    if (historyBusyRef.current || datasets.length === 0 || Date.now() < rateLimitUntilRef.current) return;
+    if (historyBusyRef.current || datasets.length === 0 || Date.now() < Math.max(rateLimitUntilRef.current, getTradovateApiTelemetrySnapshot().rateLimitedUntil ?? 0)) return;
     const user = activeUserIdRef.current;
     const epoch = identityEpochRef.current.epoch;
     const connectionEpoch = connectionEpochRef.current;
@@ -343,7 +343,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     const requestedEpoch = identityEpochRef.current.epoch;
     const requestedConnectionEpoch = connectionEpochRef.current;
     const isCurrent = () => activeUserIdRef.current === requestedUserId && identityEpochRef.current.epoch === requestedEpoch && connectionEpochRef.current === requestedConnectionEpoch;
-    if (!requestedUserId || Date.now() < rateLimitUntilRef.current) return false;
+    if (!requestedUserId || Date.now() < Math.max(rateLimitUntilRef.current, getTradovateApiTelemetrySnapshot().rateLimitedUntil ?? 0)) return false;
     connectionIds = connectionIds.filter(id => statusRef.current?.connections.some(connection => connection.id === id && connection.connected));
     const recordRateLimit = (reason: unknown) => {
       if (isCurrent() && reason instanceof TradovateRequestError && reason.status === 429) {
@@ -464,7 +464,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       // The cached shell contains IDs only. Start read-only work immediately,
       // but do not apply any result until fresh OAuth status confirms the ID.
       const prestartedBootstrap = warmed?.bootstrap ?? startTradovatePreflights(
-        Date.now() < rateLimitUntilRef.current ? [] : cachedConnectionIds,
+        Date.now() < Math.max(rateLimitUntilRef.current, getTradovateApiTelemetrySnapshot().rateLimitedUntil ?? 0) ? [] : cachedConnectionIds,
         connectionId => runTradovateReadOnlyPreflight(connectionId, 'bootstrap'),
       );
       const profilesPromise = warmed?.profiles ?? loadTradovateAccountProfiles().catch(() => null);
@@ -482,7 +482,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         const retained = Object.fromEntries(Object.entries(connectionDataRef.current).filter(([id]) => activeIds.has(id)));
         connectionDataRef.current = retained;
         setConnectionData(retained);
-        if (activeConnectionIds.length > 0 && Date.now() < rateLimitUntilRef.current) {
+        if (activeConnectionIds.length > 0 && Date.now() < Math.max(rateLimitUntilRef.current, getTradovateApiTelemetrySnapshot().rateLimitedUntil ?? 0)) {
           setError('Tradovate omezuje četnost požadavků. Další načtení počká na konec limitu.');
           return nextStatus;
         }
@@ -502,7 +502,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
               profilesPromise,
             );
             if (!isCurrent()) return null;
-            if (Date.now() < rateLimitUntilRef.current) {
+            if (Date.now() < Math.max(rateLimitUntilRef.current, getTradovateApiTelemetrySnapshot().rateLimitedUntil ?? 0)) {
               setError('Tradovate omezuje četnost požadavků. Další načtení počká na konec limitu.');
               return nextStatus;
             }
@@ -603,8 +603,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         schedule(IDLE_POSITION_INTERVAL_MS);
         return;
       }
-      if (Date.now() < rateLimitUntilRef.current) {
-        schedule(Math.min(IDLE_POSITION_INTERVAL_MS, rateLimitUntilRef.current - Date.now()));
+      if (Date.now() < Math.max(rateLimitUntilRef.current, getTradovateApiTelemetrySnapshot().rateLimitedUntil ?? 0)) {
+        schedule(Math.min(IDLE_POSITION_INTERVAL_MS, Math.max(rateLimitUntilRef.current, getTradovateApiTelemetrySnapshot().rateLimitedUntil ?? 0) - Date.now()));
         return;
       }
       if (livePnlBusyRef.current) {

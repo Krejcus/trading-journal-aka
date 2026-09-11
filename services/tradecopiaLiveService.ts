@@ -1,3 +1,4 @@
+import type { AccountDisplayValues } from '../lib/tradovateAccountDisplayMerge';
 import { supabase } from './supabase';
 import {
   ensureAccountMapRows,
@@ -42,6 +43,8 @@ export interface LivePosition {
 }
 
 export interface LiveAccount {
+  /** Presentation only; never consumed as risk/execution evidence. */
+  displayValues?: AccountDisplayValues;
   id: number;
   entityId: string | null;
   name: string;
@@ -53,6 +56,9 @@ export interface LiveAccount {
   balance: number;
   equity: number;
   realizedPnl: number;
+  dailyPnlAvailable?: boolean;
+  dailyPnlTradeDate?: string;
+  dailyPnlUpdatedAt?: string | null;
   weekRealizedPnl: number;
   unrealizedPnl: number;
   unrealizedPnlSource?: 'broker' | 'estimated' | 'stale';
