@@ -285,6 +285,8 @@ export interface CopierDailyStats {
   /** Durable one-shot warning records for this broker session. */
   warnedRules?: CopierRuleWarning[];
   openLots: CopierDailyLot[];
+  /** Broker potvrdil flat, ale chybí close fill/P&L. Není to otevřená expozice. */
+  unconfirmedFlatLots?: Array<CopierDailyLot & { confirmedFlatAt: number; leaderAccountId: number }>;
   /** Poslední brokerem potvrzené closes; server je idempotentně ukládá. */
   recentClosedTrades?: CopierClosedTrade[];
   /** Symboly bez známé point value — USD limit je nepočítá (audit varuje). */
@@ -328,6 +330,7 @@ export function createCopierState(
           dailyStats: {
             ...safety.dailyStats,
             openLots: safety.dailyStats.openLots.map(lot => ({ ...lot })),
+            ...(safety.dailyStats.unconfirmedFlatLots ? { unconfirmedFlatLots: safety.dailyStats.unconfirmedFlatLots.map(lot => ({ ...lot })) } : {}),
             recentClosedTrades: safety.dailyStats.recentClosedTrades?.map(trade => ({ ...trade })) ?? [],
             unpricedSymbols: [...safety.dailyStats.unpricedSymbols],
             warnedRules: safety.dailyStats.warnedRules?.map(warning => ({ ...warning })) ?? [],

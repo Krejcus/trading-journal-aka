@@ -503,11 +503,13 @@ export function copyGroupValidationMessages(
  * Ověří durable skupinu při startu lokálního execution runtime.
  *
  * Účet, který zmizel z aktuálního OAuth snapshotu, běžně znamená chybnou
- * topologii a worker musí fail-closed skončit. Jediná výjimka je follower,
+ * topologii a worker musí fail-closed skončit. Výjimka je follower,
  * kterého durable eligibility už před restartem označila jako neaktivního
  * (DLL/BREACHED/unverifiable). Takový účet runtime stejně nesmí dispatchovat,
  * ale worker musí naběhnout DISARMED, aby ho uživatel mohl z UI bezpečně
- * odebrat. Leader zůstává povinný vždy.
+ * odebrat. Výslovně vypnutá skupina smí také naběhnout pro opravu konfigurace
+ * s chybějícím followerem; ARM i ownership kontroly se tím neobcházejí.
+ * Leader zůstává povinný vždy.
  */
 export function validateStoredCopyGroupForStartup(
   group: CopyGroupConfig,
@@ -524,6 +526,10 @@ export function validateStoredCopyGroupForStartup(
   const validation = validateCopyGroup(group, [
     ...available,
     ...knownIneligibleFollowers,
+    // Disabled groups may start for configuration repair. This does not grant
+    // eligibility: ARM still requires enabled + fresh broker preflight, and
+    // removal of unresolved ownership still requires explicit confirmation.
+    ...(!group.enabled ? group.followers.map(follower => follower.accountId) : []),
   ]);
   const errors = [...validation.errors];
   for (const accountId of [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]) {

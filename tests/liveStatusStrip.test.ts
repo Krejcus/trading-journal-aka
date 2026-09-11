@@ -1,6 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { COPIER_DISARM_NOTICE_MS, isRecentCopierDisarm } from '../lib/copierDisarmNotice';
 import { buildLiveStatusStrip } from '../services/liveStatusStrip';
 import LiveStatusStrip from '../components/LiveStatusStrip';
 import CopierEventsPanel from '../components/CopierEventsPanel';
@@ -9,6 +10,8 @@ import type { CopierControllerStatus } from '../services/copierRuntimeController
 import type { CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
 
 const now = Date.UTC(2026, 8, 8, 12, 0, 0);
+beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(now); });
+afterEach(() => vi.useRealTimers());
 const status = (patch: Partial<CopierControllerStatus> = {}): CopierControllerStatus => ({
   armed: false, killSwitch: false, shadowMode: false, connected: true,
   reconciliationRequired: false, divergentAccounts: [], workingOrderAccounts: [],
@@ -26,6 +29,18 @@ const failClosed = createCopierDisarmRecord({
 });
 
 describe('buildLiveStatusStrip', () => {
+  it('historii po 15 minutách odstraní z upozornění, nikoli z Událostí nebo bezpečnostního stavu', () => {
+    expect(isRecentCopierDisarm(now, now + COPIER_DISARM_NOTICE_MS - 1)).toBe(true);
+    expect(isRecentCopierDisarm(now, now + COPIER_DISARM_NOTICE_MS)).toBe(false);
+    const old = { ...failClosed, at: now - 12 * 60 * 60_000 };
+    const model = buildLiveStatusStrip({ status: status({ lastDisarm: old, reconciliationRequired: true, killSwitch: true }), available: true, pending: false, transport: 'local', now });
+    expect(model.notice).toBeNull();
+    expect(model.chips.find(chip => chip.id === 'copier')?.value).toBe('Nouzově zastavená');
+    expect(model.chips.find(chip => chip.id === 'worker')?.value).toBe('Čeká na ověření účtů');
+    const history = renderToStaticMarkup(React.createElement(CopierEventsPanel, { status: status({ lastDisarm: old }), transport: 'local', disarmHistory: [old] }));
+    expect(history).toContain('Historie odzbrojení (1)');
+    expect(history).toContain('Copier fail-closed: follower 200');
+  });
   it('zdravý stav jsou čtyři tiché chipy bez věty a bez tlačítka', () => {
     const model = buildLiveStatusStrip({ status: status({ lastDisarm: manualDisarm }), available: true, pending: false, transport: 'local', snapshotHealth: health(), now });
     expect(model.chips.map(chip => [chip.id, chip.value, chip.tone])).toEqual([
@@ -65,7 +80,9 @@ describe('buildLiveStatusStrip', () => {
   it('automatické vypnutí s nepotvrzeným výsledkem je jediný důvod pro větu pod chipy', () => {
     const model = buildLiveStatusStrip({ status: status({ lastDisarm: failClosed }), available: true, pending: false, transport: 'local', now });
     expect(model.chips.find(chip => chip.id === 'copier')).toMatchObject({ value: 'Vypnuta automaticky', tone: 'warn' });
-    expect(model.notice).toContain('Kopírka se vypnula automaticky');
+    expect(model.notice).toContain('Poslední zaznamenané vypnutí');
+    expect(model.notice).toContain(new Date(failClosed.at).toLocaleString('cs-CZ'));
+    expect(model.notice).toContain('nejde o ověření aktuálních pozic');
     const armed = buildLiveStatusStrip({ status: status({ armed: true, lastDisarm: failClosed }), available: true, pending: false, transport: 'local', now });
     expect(armed.chips.find(chip => chip.id === 'copier')).toMatchObject({ value: 'Zapnutá', tone: 'ok' });
     expect(armed.notice).toBeNull();
@@ -90,7 +107,12 @@ describe('LiveStatusStrip + CopierEventsPanel render', () => {
     expect(offline).not.toContain('data-chip="worker"');
     expect(offline).toContain('Obnovit TradingView');
     const danger = renderToStaticMarkup(React.createElement(LiveStatusStrip, { status: status({ lastDisarm: failClosed }), available: true, pending: false, transport: 'local', quiet: true }));
-    expect(danger).toContain('Kopírka se vypnula automaticky');
+    expect(danger).toContain('Poslední zaznamenané vypnutí');
+    const duplicate = renderToStaticMarkup(React.createElement(LiveStatusStrip, { status: status({ lastDisarm: failClosed }), available: true, pending: false, transport: 'local', quiet: true, hideDisarmNotice: true }));
+    expect(duplicate).toBe('');
+    const snapshotsStillVisible = renderToStaticMarkup(React.createElement(LiveStatusStrip, { status: status({ lastDisarm: failClosed }), available: true, pending: false, transport: 'local', quiet: true, hideDisarmNotice: true, snapshotHealth: health({ state: 'cdp-offline' }), onRepairSnapshots: () => undefined }));
+    expect(snapshotsStillVisible).toContain('Obnovit TradingView');
+    expect(snapshotsStillVisible).not.toContain('Poslední zaznamenané vypnutí');
   });
 
   it('Události nesou lastError, časy snímků i historii včetně technického detailu', () => {

@@ -1,5 +1,6 @@
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
 import { liveBalanceDisplay, liveCapitalDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
+import { useCopierDisarmNotice } from '../hooks/useCopierDisarmNotice';
 import { CopyGroupLibraryRequestFence } from '../lib/copyGroupLibraryRequestFence';
 import React, { useSyncExternalStore, useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
@@ -30,6 +31,8 @@ import {
   subscribeDismissedRejections,
 } from '../services/rejectedExecutionVisibility';
 import LiveRiskSummaryCard from './LiveRiskSummaryCard';
+import CopierCooldownPanel, { useCopierPauseActive } from './CopierCooldownPanel';
+import { copierPauseDeadline } from '../services/copierCooldownDisplay';
 import {
   copierCopiesOutcomeText,
   type CopierDisarmRecord,
@@ -486,6 +489,16 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   onGroupsChange,
 }) => {
   const [initialViewSettings] = useState(loadViewSettings);
+  const showDisarmNotice = useCopierDisarmNotice(lastDisarm?.at);
+  const pauseActive = useCopierPauseActive(copierPauseDeadline(cooldownUntil, pause?.until));
+  const cooldownPanel = <CopierCooldownPanel
+    key={executionGroupId}
+    cooldownUntil={cooldownUntil}
+    cooldownMinutes={runtimeGroup?.safety?.entryCooldownMinutes ?? 0}
+    pause={pause}
+    status={runtimeStatus}
+    known={runtimeAvailable && !copierStatusPending}
+  />;
   const effectiveEligibility = useMemo(
     () => effectiveCopyTradeAccountEligibility(snapshot.accounts, accountProfiles, accountEligibility),
     [accountEligibility, accountProfiles, snapshot.accounts],
@@ -817,6 +830,16 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const requestGroupPower = (candidate: CopyGroupConfig) => {
     if (copierTransition || copierStatusPending) return;
     const powered = copierArmed && candidate.id === executionGroupId;
+    if (!powered && pauseActive) {
+      setPendingAction({
+        title: 'Kopírování je pozastavené',
+        detail: 'Ještě běží cooldown nebo pauza pravidel dne. Vyčkej na konec obou pauz; samotný odpočet kopírku nezapne.',
+        confirmLabel: 'Rozumím',
+        danger: true,
+        blocked: true,
+      });
+      return;
+    }
     const currentGroup = runtimeGroup
       ?? groups.find(group => group.id === executionGroupId)
       ?? null;
@@ -1296,7 +1319,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   statusPending={copierStatusPending && (executionGroupId == null || selected)}
                   runtimeReady={!!onSwitchAndArm || (!!commandAdapter && selected)}
                   transition={transitionGroupId === group.id ? copierTransition : null}
-                  connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || cooldownUntil > Date.now()}
+                  connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || pauseActive}
                   dailyPnlPending={dailyPnlPending}
                   eligibility={group.followers
                     .filter(follower => follower.mode !== 'off')
@@ -1316,7 +1339,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   redaction={redaction}
                   templates={templates}
                   tightenOnly={tightenOnly}
-                  disarmPanel={selected && !armed && lastDisarm && lastDisarm.trigger !== 'manual'
+                  cooldownPanel={selected ? cooldownPanel : null}
+                  disarmPanel={selected && !armed && showDisarmNotice && lastDisarm && lastDisarm.trigger !== 'manual'
                     ? <CopierDisarmPanel lastDisarm={lastDisarm} />
                     : null}
                   {...compactGroupActions(group)}
@@ -1370,7 +1394,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         statusPending={copierStatusPending && (executionGroupId == null || selected)}
                         runtimeReady={!!onSwitchAndArm || (!!commandAdapter && selected)}
                         transition={transitionGroupId === group.id ? copierTransition : null}
-                        connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || cooldownUntil > Date.now()}
+                        connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || pauseActive}
                         onConnectionToggle={() => requestGroupPower(group)}
                         open={expanded.has(group.id)}
                         onToggle={() => toggleGroup(group.id)}
@@ -1421,13 +1445,14 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         redaction={redaction}
                         hiddenGroupColumns={hiddenGroupColumns}
                       />
-                      {selected && !armed && lastDisarm && lastDisarm.trigger !== 'manual' ? (
+                      {selected && !armed && showDisarmNotice && lastDisarm && lastDisarm.trigger !== 'manual' ? (
                         <tr>
                           <td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">
                             <CopierDisarmPanel lastDisarm={lastDisarm} />
                           </td>
                         </tr>
                       ) : null}
+                      {selected ? <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">{cooldownPanel}</td></tr> : null}
                       <tr
                         aria-hidden={!expanded.has(group.id)}
                       >
@@ -1887,7 +1912,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
     : !runtimeReady
       ? 'Execution runtime není pro tuto skupinu dostupný.'
       : !connected && connectBlocked
-        ? 'Connect blokuje kill switch, denní zámek nebo anti-revenge cooldown.'
+        ? 'Zapnutí blokuje kill switch, denní zámek, cooldown nebo pauza pravidel dne.'
         : connected ? 'Kliknutím bezpečně vypnout copier.' : 'Kliknutím zapnout copier naostro.';
 
   // Dokud stav neznáme, nesmí přepínač tvrdit OFF — armovaný copier by se
@@ -2191,7 +2216,7 @@ const CompactAccountRow = ({ row, live, eligibility, orders, dailyPnlPending, bu
   );
 };
 
-const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, dailyPnlPending, eligibility, eligibilityByAccount, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel }: {
+const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, dailyPnlPending, eligibility, eligibilityByAccount, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel }: {
   group: CopyGroupConfig;
   rows: Row[];
   armed: boolean;
@@ -2223,6 +2248,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   templates: CopyGroupTemplate[];
   tightenOnly: boolean;
   disarmPanel?: React.ReactNode;
+  cooldownPanel?: React.ReactNode;
 }) => {
   const capital = liveCapitalDisplay(rows.map(row => row.account));
   const daily = rows.reduce((sum, row) => sum + (row.account?.realizedPnl || 0), 0);
@@ -2285,6 +2311,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
       </div>
 
       {disarmPanel}
+      {cooldownPanel}
 
       <ul className="divide-y divide-[var(--border-subtle)]">
         {rows.map((row, index) => (
@@ -2587,9 +2614,11 @@ export const CopierDisarmPanel = ({ lastDisarm }: { lastDisarm: CopierDisarmReco
       <div className="flex items-start gap-2.5">
         <AlertTriangle aria-hidden="true" size={15} className="mt-0.5 shrink-0" />
         <p className="min-w-0 flex-1 text-xs font-bold leading-relaxed" title={lastDisarm.detail}>
-          Kopírka se vypnula {timeWithSecondsLabel(lastDisarm.at)} · {lastDisarm.title}
-          {' · '}{copierCopiesOutcomeText(lastDisarm.copiesOutcome)}
+          <span className="block text-[var(--text-secondary)]">Poslední zaznamenané vypnutí · {new Date(lastDisarm.at).toLocaleDateString('cs-CZ')} {timeWithSecondsLabel(lastDisarm.at)}</span>
+          {lastDisarm.title}
+          {' · '}Výsledek při incidentu: {copierCopiesOutcomeText(lastDisarm.copiesOutcome)}
           {' · '}<span className="font-black">Další krok: {lastDisarm.nextStep}</span>
+          <span className="block font-medium text-[var(--text-secondary)]">Historický záznam — neověřuje aktuální stav pozic. Podrobnosti najdeš v Událostech.</span>
         </p>
       </div>
     </section>

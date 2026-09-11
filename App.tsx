@@ -23,6 +23,7 @@ import { safeSetItem } from './utils/safeStorage';
 import { businessDataFingerprint, mergePayoutImages, stripPayoutImagesForCache } from './utils/businessPayoutSync';
 import { clearAppStorage } from './utils/appStorage';
 import { reconcileDashboardRows } from './utils/dashboardRefresh';
+import { createDashboardRecovery } from './services/dashboardRecovery';
 import { createSessionRequestGuard } from './utils/sessionRequestGuard';
 import { clearNativeSessionSurfaces, waitForNativeSessionCleanup } from './services/nativeSessionCleanup';
 import { firmOf } from './utils/accountFirm';
@@ -518,13 +519,18 @@ const App: React.FC = () => {
   const prefsAppliedRef = useRef(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [offlineSnapshotAt, setOfflineSnapshotAt] = useState<number | null>(null);
+  const [cloudRefreshing, setCloudRefreshing] = useState(false);
+  const retryCloudRef = useRef<() => void>(() => {});
   const [networkOnline, setNetworkOnline] = useState(() => navigator.onLine !== false);
   const [initStatus, setInitStatus] = useState<string>("Inicializace...");
   const [showRetry, setShowRetry] = useState(false);
 
   useEffect(() => {
 
-    const handleOffline = () => setNetworkOnline(false);
+    const handleOffline = () => {
+      setNetworkOnline(false);
+      setOfflineSnapshotAt(previous => previous ?? -1);
+    };
     const handleOnline = () => setNetworkOnline(true);
     window.addEventListener('offline', handleOffline);
     window.addEventListener('online', handleOnline);
@@ -1930,6 +1936,51 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    setCloudRefreshing(false);
+    if (!session || offlineSnapshotAt === null) return;
+    const isCurrentSession = captureSessionRequest(session.user.id);
+    const recovery = createDashboardRecovery({
+      // Complete paginated history plus private notes spans multiple requests.
+      timeoutMs: 60_000,
+      available: () => isCurrentSession() && navigator.onLine !== false && document.visibilityState === 'visible',
+      load: signal => storageService.getDashboardData(signal, true),
+      apply: fresh => {
+        if (!isCurrentSession()) return;
+        setTrades(previous => reconcileDashboardRows(previous, fresh.trades));
+        setAccounts(previous => reconcileDashboardRows(previous, fresh.accounts));
+        if (fresh.user?.id === session.user.id) {
+          setCurrentUser(fresh.user);
+          setIsUserFromDb(true);
+        }
+        if (!isPreferencesDirty.current) applyPreferences(fresh.preferences || {});
+        setDailyPreps(previous => reconcileDashboardRows(previous, fresh.preps, isPrepsDirty.current));
+        setDailyReviews(previous => reconcileDashboardRows(previous, fresh.reviews, isReviewsDirty.current));
+        setWeeklyFocusList(previous => reconcileDashboardRows(previous, fresh.weeklyFocus, isWeeklyFocusDirty.current));
+        isSyncedWithDbRef.current = true;
+        setCloudRefreshing(false);
+        setOfflineSnapshotAt(null);
+      },
+      onBusy: busy => { if (isCurrentSession()) setCloudRefreshing(busy); },
+      onError: error => {
+        console.warn('[Dashboard recovery] Refresh failed; retry scheduled:', error instanceof Error ? error.message : 'cloud-read-failed');
+      },
+    });
+    const retry = () => { void recovery.retry(); };
+    retryCloudRef.current = retry;
+    recovery.start();
+    window.addEventListener('online', retry);
+    window.addEventListener('focus', retry);
+    document.addEventListener('visibilitychange', retry);
+    return () => {
+      recovery.stop();
+      retryCloudRef.current = () => {};
+      window.removeEventListener('online', retry);
+      window.removeEventListener('focus', retry);
+      document.removeEventListener('visibilitychange', retry);
+    };
+  }, [session, offlineSnapshotAt, captureSessionRequest, applyPreferences]);
+
+  useEffect(() => {
     if (sharedTrade) return;
     if (!session) return;
 
@@ -3216,7 +3267,7 @@ const App: React.FC = () => {
         if (!isPreferencesDirty.current) applyPreferences(dbPrefs);
       }
 
-      setOfflineSnapshotAt(null);
+      retryCloudRef.current();
 
     } catch (error) {
       if (!isCurrentSession()) return;
@@ -4579,12 +4630,16 @@ const App: React.FC = () => {
                 </div>
               )}
               {(!networkOnline || offlineSnapshotAt !== null) && !syncError && (
-                <div className="mb-4 bg-amber-500/10 border border-amber-500/25 text-amber-500 p-3 rounded-xl flex items-center gap-2 text-xs font-bold">
+                <div role="status" className="mb-4 bg-amber-500/10 border border-amber-500/25 text-amber-500 p-3 rounded-xl flex flex-wrap items-center gap-2 text-xs font-bold">
                   <WifiOff size={16} />
                   <span>
-                    {networkOnline ? 'Cloudová synchronizace není dostupná' : 'Offline režim'} — zobrazuji poslední známá data{offlineSnapshotAt && offlineSnapshotAt > 0 ? ` z ${new Date(offlineSnapshotAt).toLocaleString('cs-CZ')}` : ' z lokální cache'}.
-                    Změny vyžadující cloud teď nemusí být synchronizované.
+                    {networkOnline ? 'Data deníku čekají na obnovení' : 'Offline režim deníku'} — zobrazuji poslední známá data{offlineSnapshotAt && offlineSnapshotAt > 0 ? ` z ${new Date(offlineSnapshotAt).toLocaleString('cs-CZ')}` : ' z lokální cache'}.
+                    {' '}{activePage === 'live' ? 'Toto není ukazatel spojení brokeru ani workeru. ' : ''}
+                    {cloudRefreshing ? 'Ověřuji čerstvá data…' : 'Po obnovení spojení se načtení automaticky zopakuje.'}
                   </span>
+                  <button type="button" disabled={!networkOnline || cloudRefreshing} onClick={() => retryCloudRef.current()} className="shrink-0 rounded-lg border border-amber-500/30 px-3 py-2 disabled:opacity-50">
+                    {cloudRefreshing ? 'Obnovuji…' : 'Zkusit znovu'}
+                  </button>
                 </div>
               )}
               {appError ? (

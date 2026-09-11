@@ -118,7 +118,7 @@ describe('chaos: pád workeru uprostřed odeslání', () => {
 });
 
 describe('chaos: výpadek WebSocket spojení', () => {
-  it('disconnect uprostřed ARMED okamžitě odzbrojí; reconnect bez reconciliation nic nepustí', async () => {
+  it('disconnect uprostřed ARMED okamžitě odzbrojí; reconnect ověří flat, ale sám neARMuje', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group, clock: stepClock(), osoCorrelationWindowMs: 5,
@@ -134,15 +134,14 @@ describe('chaos: výpadek WebSocket spojení', () => {
     expect(controller.status()).toMatchObject({ armed: false, connected: false });
 
     // Reconnect sám o sobě ARM nevrací a leader event nesmí nic odeslat.
+    // Flat/no-working snapshot se ale bezpečně obnoví automaticky.
     broker.setConnected(true);
     broker.emitEvent({ type: 'order', order: leaderOrder({ brokerOrderId: 'leader-2', sourceVersion: '2:Working' }) });
     await controller.waitForIdle();
     expect(broker.placedRequests()).toHaveLength(0);
-    expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
-    expect(() => controller.arm()).toThrow();
+    expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: false });
 
-    // Teprve autoritativní reconciliation otevírá cestu k novému ARM.
-    await controller.reconcile();
+    // Nový ARM je pořád výhradně explicitní akce operátora.
     controller.arm();
     expect(controller.status().armed).toBe(true);
     controller.stop();
@@ -271,6 +270,119 @@ describe('connection recovery podle stavu (výpadek spojení / pád Macu)', () =
     await controller.waitForIdle();
     expect(broker.placedRequests().filter(request => request.accountId === 200)).toHaveLength(1);
   };
+
+  it('DISARMED flat reconnect automaticky obnoví pre-ARM kontrolu bez broker write', async () => {
+    const audit = vi.fn();
+    const broker = createMockBroker();
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: recoveryGroup,
+      clock: stepClock(),
+      onAudit: audit,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    expect(controller.status().reconciliationRequired).toBe(false);
+
+    broker.setConnected(false);
+    await controller.waitForIdle();
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      connected: true,
+      reconciliationRequired: false,
+      divergentAccounts: [],
+      workingOrderAccounts: [],
+      lastError: null,
+    });
+    expect(broker.placedRequests()).toEqual([]);
+    expect(broker.liquidateRequests()).toEqual([]);
+    const audits = audit.mock.calls.flatMap(call => call[0] as CopierAuditEntry[]);
+    expect(audits).toEqual(expect.arrayContaining([expect.objectContaining({
+      leaderEventId: 'connection-preflight',
+      kind: 'recovered',
+      reason: expect.stringContaining('read-only'),
+    })]));
+
+    controller.arm();
+    expect(controller.status().armed).toBe(true);
+    controller.stop();
+  });
+
+  it('DISARMED reconnect se synchronní otevřenou pozicí zůstane blokovaný bez broker write', async () => {
+    const broker = createMockBroker();
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: recoveryGroup,
+      clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    broker.setPosition(100, 'MNQU6', 2);
+    broker.setPosition(200, 'MNQU6', 2);
+
+    broker.setConnected(false);
+    await controller.waitForIdle();
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: true,
+      divergentAccounts: [],
+    });
+    expect(controller.status().lastError).toBeNull();
+    expect(broker.placedRequests()).toEqual([]);
+    expect(broker.liquidateRequests()).toEqual([]);
+    expect(() => controller.arm()).toThrow();
+    controller.stop();
+  });
+
+  it('DISARMED reconnect s working order pouze blokuje a nic neruší', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: recoveryGroup,
+      clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    const seeded = await broker.placeOrder({
+      tag: 'external-working',
+      accountId: 200,
+      symbol: 'MNQU6',
+      side: 'Buy',
+      quantity: 1,
+      orderType: 'Limit',
+      limitPrice: 19_000,
+    });
+    await controller.waitForIdle();
+    const placedBeforeReconnect = broker.placedRequests().length;
+
+    broker.setConnected(false);
+    await controller.waitForIdle();
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: true,
+      workingOrderAccounts: [200],
+    });
+    expect(broker.placedRequests()).toHaveLength(placedBeforeReconnect);
+    expect(broker.cancelRequestCount(seeded.brokerOrderId!)).toBe(0);
+    expect(broker.liquidateRequests()).toEqual([]);
+    expect(() => controller.arm()).toThrow();
+    controller.stop();
+  });
 
   it('synchronní kopie po reconnectu DRŽÍ DISARMED a nový ARM do flat odmítne', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 20_000 }) });

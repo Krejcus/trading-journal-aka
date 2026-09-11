@@ -29,6 +29,7 @@ const fields = (value: unknown): Partial<LegacyTradeNotes> => {
  * owner's existing note remains readable; foreign note caches are never trusted. */
 export const hydrateLegacyTradeNotes = async <T extends { id: string | number }>(
   client: RpcClient, trades: T[], context: 'owner' | 'connection', stillCurrent: () => boolean | Promise<boolean>,
+  signal?: AbortSignal,
 ): Promise<T[]> => {
   if (!trades.length) return trades;
   const clean = trades.map(stripLegacyTradeNotes);
@@ -37,7 +38,10 @@ export const hydrateLegacyTradeNotes = async <T extends { id: string | number }>
   for (let index = 0; index < ids.length; index += 100) {
     if (!await stillCurrent()) throw new Error('Účet se během načítání poznámek změnil.');
     const batch = ids.slice(index,index+100);
-    const { data, error } = await client.rpc(TRADE_NOTE_PROJECTION_RPC, { p_trade_ids: batch, p_context: context });
+    if (signal?.aborted) throw new Error('dashboard-read-aborted');
+    const query = client.rpc(TRADE_NOTE_PROJECTION_RPC, { p_trade_ids: batch, p_context: context });
+    const { data, error } = await (signal ? query.abortSignal(AbortSignal.any([signal, AbortSignal.timeout(20_000)])) : query);
+    if (signal?.aborted) throw new Error('dashboard-read-aborted');
     if (!await stillCurrent()) throw new Error('Účet se během načítání poznámek změnil.');
     if (error) {
       if (missing(error)) return context === 'owner' ? trades : clean;

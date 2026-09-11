@@ -456,6 +456,42 @@ describe('LIVE Risk — Účty a propky', () => {
 });
 
 describe('LIVE Risk záložka', () => {
+  it('samotná poslední chyba nepředstírá aktuální poruchu workeru', () => {
+    const markup = renderToStaticMarkup(React.createElement(LiveRiskTab, {
+      snapshot, group, status: controller({ lastError: 'OLD WebSocket transport error' }),
+      runtimeAvailable: true, riskConfigSupported: true, now: NOW,
+    }));
+    expect(markup).not.toContain('OLD WebSocket');
+    expect(markup).not.toContain('data-copier-current-blocker');
+  });
+
+  it.each([
+    [{ connected: false }, 'Worker není připojený k brokerovi'],
+    [{ reconciliationRequired: true }, 'Worker vyžaduje kontrolu stavu účtů'],
+    [{ killSwitch: true }, 'Je aktivní nouzové zastavení'],
+    [{ divergentAccounts: [2] }, 'Pozice účtů nejsou v souladu'],
+    [{ stuckOutbox: true }, 'Výsledek odeslaných příkazů není potvrzený'],
+    [{ started: false }, 'Worker nemá spuštěný běh kopírky'],
+    [{ unverifiableFollowerOwnership: [{ accountId: 2, epochIds: ['epoch'] }] }, 'Vlastnictví kopií není ověřené'],
+  ] as const)('aktuální blokaci vykreslí i bez lastError: %j', (patch, message) => {
+    const markup = renderToStaticMarkup(React.createElement(LiveRiskTab, {
+      snapshot, group, status: controller(patch as Partial<CopierControllerStatus>),
+      runtimeAvailable: true, riskConfigSupported: true, now: NOW,
+    }));
+    expect(markup).toContain('data-copier-current-blocker="true"');
+    expect(markup).toContain(message);
+    expect(markup).toContain('Událostech');
+  });
+
+  it('staré runtime příznaky bez spojení nevydává za aktuální blokaci', () => {
+    const markup = renderToStaticMarkup(React.createElement(LiveRiskTab, {
+      snapshot, group, status: controller({ killSwitch: true, lastError: 'OLD transport error' }),
+      runtimeAvailable: false, now: NOW,
+    }));
+    expect(markup).toContain('Stav workeru není ověřený');
+    expect(markup).not.toContain('Je aktivní nouzové zastavení');
+    expect(markup).not.toContain('OLD transport error');
+  });
   it('přenese nepodporovaný worker do obou editorů bez aktivních výchozích pravidel', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveRiskTab, {
       snapshot,
@@ -527,7 +563,7 @@ describe('LIVE Risk záložka', () => {
     expect(markup).toContain('Pauza do');
     expect(markup).toContain('Denní ztrátový limit');
     expect(markup).toContain('vstupy se nekopírují');
-    expect(markup).toContain('Relay přesně vrátil tighten-only chybu');
+    expect(markup).not.toContain('Relay přesně vrátil tighten-only chybu');
     expect(markup).toContain('data-tighten-only="true"');
     expect(markup).toContain('data-live-day-rules="true"');
     expect(markup).toContain('data-live-account-risk-table="true"');

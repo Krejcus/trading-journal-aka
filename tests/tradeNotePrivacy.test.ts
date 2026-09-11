@@ -51,6 +51,21 @@ describe('private note cloud boundary', () => {
 });
 
 describe('owner private history hydration', () => {
+  it('cancels private history batches and rejects a late response after dashboard abort', async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const query: any = { select: () => query, eq: () => query, in: () => query,
+      abortSignal: async (signal: AbortSignal) => {
+        receivedSignal = signal;
+        controller.abort();
+        return { data: [], error: null };
+      },
+    };
+    const from = vi.fn(() => query);
+    await expect(hydrateOwnedTradeNoteHistories({ from }, Array.from({ length: 101 }, (_, i) => ({ id: String(i) })), 'a', 'a', () => true, controller.signal)).rejects.toThrow('dashboard-read-aborted');
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(from).toHaveBeenCalledTimes(1);
+  });
   it('hydrates owner rows from the owner-only table and filters both user and ids', async () => {
     const client = privateClient({ data: [{ trade_id: 't', history }], error: null });
     expect(await hydrateOwnedTradeNoteHistories(client, [{ id: 't' }], 'a', 'a', () => true)).toEqual([{ id: 't', noteHistory: history }]);

@@ -34,6 +34,7 @@ const missingPrivateTable = (error: { code?: string }) => ['42P01', 'PGRST205'].
 export const hydrateOwnedTradeNoteHistories = async <T extends Pick<Trade, 'id'>>(
   client: { from: (table: string) => any }, trades: T[], ownerId: string | null,
   targetOwnerId: string | null, stillOwner: () => boolean | Promise<boolean>,
+  signal?: AbortSignal,
 ): Promise<T[]> => {
   const clean = trades.map(stripTradeNoteHistory);
   if (!ownerId || ownerId !== targetOwnerId || !trades.length) return clean;
@@ -43,8 +44,11 @@ export const hydrateOwnedTradeNoteHistories = async <T extends Pick<Trade, 'id'>
   const ids = [...new Set(trades.map(trade => String(trade.id)))];
   const idSet = new Set(ids);
   for (let index = 0; index < ids.length; index += 100) {
-    const { data, error } = await client.from(PRIVATE_TRADE_NOTES_TABLE)
+    if (signal?.aborted) throw new Error('dashboard-read-aborted');
+    const query = client.from(PRIVATE_TRADE_NOTES_TABLE)
       .select('trade_id, history').eq('user_id', ownerId).in('trade_id', ids.slice(index, index + 100));
+    const { data, error } = await (signal ? query.abortSignal(AbortSignal.any([signal, AbortSignal.timeout(20_000)])) : query);
+    if (signal?.aborted) throw new Error('dashboard-read-aborted');
     if (!await stillOwner()) throw new Error('Účet se během načítání soukromých poznámek změnil.');
     if (error) {
       // Feature is intentionally unavailable before the approved migration.

@@ -8,14 +8,28 @@ const h = vi.hoisted(() => ({
   accountId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
   legacyNotesReady: false, legacyNotes: new Map<string, any>(), privateHistories: new Map<string, any>(), rows: new Map<string, any>(), cache: new Map<string, any>(),
   insertRace: null as any, selected: [] as string[], writes: [] as any[],
+  querySignals: new Map<string, AbortSignal>(), beforeQuery: null as null | ((resource: string) => void),
   tradeReadError: false, switchOwnerOnRead: false, updateError: null as any, skipUpdate: false, galleryError: null as any, rpcMissing: false, rpcCalls: 0, auth: null as null | ((event: string, session: any) => void),
 }));
 vi.mock('idb-keyval', () => ({ get: async (key: string) => h.cache.get(key), set: async (key: string, value: any) => { h.cache.set(key, value); } }));
 vi.mock('../services/coachMemoryService', () => ({ maybeDetectEpisodes: async () => undefined }));
 vi.mock('../services/embeddingService', () => ({ embedTrade: async () => undefined }));
-vi.mock('../services/supabase', () => ({ supabase: {
+vi.mock('../services/supabase', () => {
+  // PostgREST requests are lazy, chainable thenables, not eager promises.
+  const query = (resource: string, execute: () => any) => ({
+    signal: undefined as AbortSignal | undefined,
+    abortSignal(signal: AbortSignal) { this.signal = signal; h.querySignals.set(resource, signal); return this; },
+    then(resolve: any, reject: any) {
+      return Promise.resolve().then(() => {
+        h.beforeQuery?.(resource);
+        if (this.signal?.aborted) return { data: null, error: { code: '', message: 'AbortError: request aborted' } };
+        return execute();
+      }).then(resolve, reject);
+    },
+  });
+  return { supabase: {
   auth: { onAuthStateChange: (callback: typeof h.auth) => { h.auth = callback; }, getSession: async () => ({ data: { session: { user: { id: h.userId } } } }) },
-  rpc: async (name: string, args: any) => {
+  rpc: (name: string, args: any) => query(name, () => {
     if (name === 'get_trade_note_projection_v1') return h.legacyNotesReady
       ? { data: { version: 1, rows: args.p_context === 'owner' ? args.p_trade_ids.filter((id: string) => h.rows.get(id)?.user_id === h.userId).map((id: string) => ({ tradeId: id, notes: h.legacyNotes.get(id) ?? {} })) : [] }, error: null }
       : { data: null, error: { code: 'PGRST202' } };
@@ -33,7 +47,7 @@ vi.mock('../services/supabase', () => ({ supabase: {
     if (h.legacyNotesReady) h.legacyNotes.set(current.id, Object.fromEntries(Object.entries(data).filter(([key]) => ['notes','sessionPreNotes','sessionPostNotes'].includes(key))));
     h.rows.set(current.id, { ...current, data: h.legacyNotesReady ? stripLegacyTradeNotes(data) : data });
     return { data: { id: current.id, data }, error: null };
-  },
+  }),
   from: (table: string) => {
     const q = {
       op: 'select', payload: [] as any[], opts: undefined as any, projection: '', filters: [] as Array<[string, any]>, bounds: null as [number, number] | null,
@@ -80,9 +94,9 @@ vi.mock('../services/supabase', () => ({ supabase: {
       },
       single() { return Promise.resolve(this.execute(true)); }, maybeSingle() { return Promise.resolve(this.execute(true)); },
       then(resolve: any, reject: any) { return Promise.resolve(this.execute()).then(resolve, reject); },
-    }; return q;
+    }; return Object.assign(q, query(table, () => q.execute()));
   },
-} }));
+} }; });
 
 import { storageService } from '../services/storageService';
 const trade = (): Trade => ({ id: crypto.randomUUID(), accountId: h.accountId, backtestRunId: crypto.randomUUID(), instrument: 'MNQ', pnl: 100, direction: 'Long', date: '2026-01-01T10:00:00.000Z', timestamp: Date.UTC(2026, 0, 1, 10), notes: 'generated', excursionAmbiguous: true } as Trade);
@@ -90,6 +104,7 @@ const row = (item: Trade) => ({ id: item.id, account_id: item.accountId, user_id
 beforeEach(() => {
   h.legacyNotesReady = false; h.legacyNotes.clear(); h.tradeReadError = false; h.switchOwnerOnRead = false; h.privateHistories.clear(); h.rows.clear(); h.cache.clear(); h.insertRace = null; h.selected = []; h.writes = [];
   h.galleryError = null; h.updateError = null; h.skipUpdate = false; h.rpcMissing = false; h.rpcCalls = 0;
+  h.querySignals.clear(); h.beforeQuery = null;
   h.auth?.('SIGNED_IN', { user: { id: h.userId } });
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
 });
@@ -127,6 +142,41 @@ describe('backtest excursion ambiguity read parity', () => {
     expect((await storageService.getTradeById(String(item.id)))?.excursionAmbiguous).toBe(true);
     expect(h.selected.some(projection => projection.includes('excursionAmbiguous:data->>excursionAmbiguous'))).toBe(true);
   });
+});
+
+describe('dashboard request cancellation', () => {
+  it('attaches a deadline when the caller supplies no signal', async () => {
+    await storageService.getDashboardData();
+    expect(h.querySignals.get('get_dashboard_data')).toBeInstanceOf(AbortSignal);
+    expect(h.querySignals.get('get_dashboard_data')?.aborted).toBe(false);
+  });
+
+  it('forwards the caller signal through dashboard and private-note reads', async () => {
+    const item = trade(); h.rows.set(String(item.id), row(item));
+    const controller = new AbortController();
+    expect((await storageService.getDashboardData(controller.signal)).trades[0].id).toBe(item.id);
+    const signals = ['get_dashboard_data', 'get_trade_note_projection_v1', 'backtest_trade_note_histories']
+      .map(resource => h.querySignals.get(resource));
+    for (const signal of signals) expect(signal?.aborted).toBe(false);
+    // Private reads combine caller cancellation with their own deadline.
+    controller.abort();
+    for (const signal of signals) expect(signal?.aborted).toBe(true);
+  });
+
+  it.each(['get_dashboard_data', 'get_trade_note_projection_v1', 'backtest_trade_note_histories'])(
+    'preserves the previous cache when aborted during %s', async resource => {
+      const item = trade(); h.rows.set(String(item.id), row(item));
+      const cached = [{ ...item, notes: 'last confirmed value' }];
+      h.cache.set(`alphatrade_trades_${h.userId}`, cached);
+      const before = new Map(h.cache);
+      const controller = new AbortController();
+      h.beforeQuery = name => { if (name === resource) controller.abort(); };
+      await expect(storageService.getDashboardData(controller.signal)).rejects.toBeDefined();
+      expect(controller.signal.aborted).toBe(true);
+      expect(h.cache).toEqual(before);
+      expect(h.writes).toEqual([]);
+    },
+  );
 });
 
 describe('backtest review persistence', () => {

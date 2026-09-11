@@ -153,6 +153,10 @@ describe('liveCopyTrading', () => {
       .toEqual({ valid: true, errors: [] });
     expect(validateStoredCopyGroupForStartup(group, accounts, []))
       .toMatchObject({ valid: false, errors: ['Follower účet 3 není dostupný.'] });
+    expect(validateStoredCopyGroupForStartup({ ...group, enabled: false }, accounts, []))
+      .toEqual({ valid: true, errors: [] });
+    expect(validateStoredCopyGroupForStartup({ ...group, enabled: false }, accounts.slice(1), []))
+      .toMatchObject({ valid: false });
   });
 
   it('nikdy nepovolí chybějícího leadera ani neaktivního běžného followera', () => {

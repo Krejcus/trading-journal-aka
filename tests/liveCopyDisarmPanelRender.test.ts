@@ -1,6 +1,6 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CopierDisarmPanel,
   LiveCopyTradeOverview,
@@ -9,6 +9,8 @@ import { createCopierDisarmRecord } from '../lib/copierDisarmReason';
 import type { LiveSnapshot } from '../services/tradecopiaLiveService';
 
 const at = Date.UTC(2026, 8, 3, 16, 7, 3);
+beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(at + 1000); });
+afterEach(() => vi.useRealTimers());
 const disarm = createCopierDisarmRecord({
   at,
   trigger: 'fail-closed',
@@ -54,11 +56,22 @@ const snapshot: LiveSnapshot = {
 };
 
 describe('CopierDisarmPanel', () => {
+  it('12 hodin starý incident nezobrazuje v dashboardu ani při unknown výsledku', () => {
+    vi.setSystemTime(at + 12 * 60 * 60_000);
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot, runtimeGroup, executionGroupId: runtimeGroup.id, lastDisarm: disarm,
+      copierArmed: false,
+    }));
+    expect(markup).not.toContain('data-copier-disarm-panel');
+    expect(disarm.copiesOutcome).toBe('unknown');
+  });
   it('unknown výsledek je rose: shrnutí, výsledek a další krok; detail jen v tooltipu, historie v Událostech', () => {
     const markup = renderToStaticMarkup(React.createElement(CopierDisarmPanel, { lastDisarm: disarm }));
 
     expect(markup).toContain('data-tone="rose"');
-    expect(markup).toContain('Kopírka se vypnula');
+    expect(markup).toContain('Poslední zaznamenané vypnutí');
+    expect(markup).toContain(new Date(at).toLocaleDateString('cs-CZ'));
+    expect(markup).toContain('Historický záznam — neověřuje aktuální stav pozic.');
     expect(markup).toContain('Pozice followera nesouhlasí');
     expect(markup).toContain('Výsledek kopií se nepodařilo potvrdit.');
     expect(markup).toContain('Další krok:');

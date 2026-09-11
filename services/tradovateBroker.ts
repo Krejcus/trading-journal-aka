@@ -975,6 +975,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const closeSocket = (candidate: WebSocketLike, reason: string, minimumDelayMs = 0) => {
     if (socket !== candidate) return;
     socketState = 'closing';
+    // A dead transport may never deliver onclose (e.g. after Mac sleep).
+    // Invalidate the router's connection state now so a later successful
+    // sync is not suppressed as a duplicate connected=true notification.
+    if (!renewalInProgress) emit({ type: 'connection', connected: false, at: clock() });
     if (connectWatchdog) clearTimeouts(connectWatchdog);
     connectWatchdog = null;
     if (syncTimeout) clearTimeouts(syncTimeout);
@@ -1079,7 +1083,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     };
     candidate.onclose = () => {
       if (socket !== candidate) return;
-      if (!renewalInProgress) emit({ type: 'connection', connected: false, at: clock() });
+      // closeSocket already reports an intentional close immediately;
+      // unsolicited remote closes still need their own disconnect event.
+      if (!renewalInProgress && socketState !== 'closing') {
+        emit({ type: 'connection', connected: false, at: clock() });
+      }
       releaseSocket(candidate);
       scheduleReconnect(renewalInProgress ? 'planned-renewal' : 'socket-close');
     };

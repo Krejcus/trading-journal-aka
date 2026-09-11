@@ -11,9 +11,32 @@ function authFixture() {
   } };
   const snippet = source.slice(source.indexOf('// Helper to get current user ID with caching'), source.indexOf('// Safe LocalStorage helper')).replace('export const getUserId', 'const getUserId');
   const js = ts.transpile(snippet, { target: ts.ScriptTarget.ES2022 });
-  const getUserId = new Function('supabase', `${js}; return getUserId;`)(supabase) as () => Promise<string | null>;
-  return { getUserId, authChanged: (event: string, session: any) => authChanged(event, session), resolve: (session: any) => resolve(session), supabase };
+  const runtime = new Function('supabase', `${js}; return { getUserId, version: () => authStateVersion };`)(supabase) as { getUserId: () => Promise<string | null>; version: () => number };
+  return { ...runtime, authChanged: (event: string, session: any) => authChanged(event, session), resolve: (session: any) => resolve(session), supabase };
 }
+it.each(['SIGNED_IN', 'TOKEN_REFRESHED', 'INITIAL_SESSION'])('same-user %s does not invalidate paginated dashboard reads', async event => {
+  const f = authFixture();
+  f.authChanged('SIGNED_IN', { user: { id: 'A' } });
+  const version = f.version();
+  f.authChanged(event, { user: { id: 'A' } });
+  expect(f.version()).toBe(version);
+  expect(await f.getUserId()).toBe('A');
+});
+it('logout then login as the same user still invalidates old reads', () => {
+  const f = authFixture();
+  f.authChanged('SIGNED_IN', { user: { id: 'A' } });
+  const version = f.version();
+  f.authChanged('SIGNED_OUT', null);
+  f.authChanged('SIGNED_IN', { user: { id: 'A' } });
+  expect(f.version()).toBeGreaterThan(version);
+});
+it.each(['USER_UPDATED', 'PASSWORD_RECOVERY'])('%s still invalidates old reads', event => {
+  const f = authFixture();
+  f.authChanged('SIGNED_IN', { user: { id: 'A' } });
+  const version = f.version();
+  f.authChanged(event, { user: { id: 'A' } });
+  expect(f.version()).toBeGreaterThan(version);
+});
 it('a stale getSession cannot reinstall A identity after B authenticates', async () => {
   const f = authFixture(); const old = f.getUserId();
   f.authChanged('SIGNED_IN', { user: { id: 'B' } });

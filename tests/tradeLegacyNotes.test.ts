@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { confirmConnectionTradeNotes, hydrateLegacyTradeNotes, privateNotesFromSavedRow, readConnectionTradeNoteConsent, stripLegacyTradeNotes, tradeNotesStorageReady } from '../services/tradeLegacyNotes';
 
 describe('server-authorized legacy note projection', () => {
+  it('aborts note batches with the enclosing dashboard and rejects late data', async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const rpc = vi.fn(() => ({ abortSignal: async (signal: AbortSignal) => {
+      receivedSignal = signal;
+      controller.abort();
+      return { data: { version: 1, rows: [] }, error: null };
+    } }));
+    await expect(hydrateLegacyTradeNotes({ rpc }, Array.from({ length: 101 }, (_, i) => ({ id: String(i) })), 'owner', () => true, controller.signal)).rejects.toThrow('dashboard-read-aborted');
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(rpc).toHaveBeenCalledTimes(1);
+  });
   it('replaces cached/private-looking fields with only fields explicitly returned by the server', async () => {
     const rpc = vi.fn(async () => ({ data: { version: 1, rows: [{ tradeId: 'a', notes: { notes: 'approved', noteHistory: { secret: true }, unsafe: 'ignored' } }] }, error: null }));
     const rows = await hydrateLegacyTradeNotes({ rpc }, [{ id: 'a', notes: 'old', data: { notes: 'nested' } }, { id: 'b', notes: 'denied' }], 'connection', () => true);

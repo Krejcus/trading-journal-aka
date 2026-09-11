@@ -1,4 +1,5 @@
 import type { CopierControllerStatus } from './copierRuntimeController';
+import { isRecentCopierDisarm } from '../lib/copierDisarmNotice';
 import type { CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
 
 export type LiveStatusTone = 'muted' | 'ok' | 'warn' | 'danger';
@@ -52,7 +53,7 @@ const copierValue = (current: CopierControllerStatus, now: number): { value: str
   if ((current.dayLockUntil ?? 0) > now) return { value: 'Zámek dne', tone: 'warn' };
   if (!current.armed) {
     const last = current.lastDisarm;
-    if (last && last.trigger !== 'manual') {
+    if (last && last.trigger !== 'manual' && isRecentCopierDisarm(last.at, now)) {
       return { value: 'Vypnuta automaticky', tone: 'warn', title: `${last.title} ${last.nextStep}` };
     }
     return { value: 'Vypnutá', tone: 'muted' };
@@ -129,10 +130,10 @@ export function buildLiveStatusStrip(input: LiveStatusStripInput): LiveStatusStr
   }
 
   const last = current?.lastDisarm;
-  const dangerous = Boolean(current && !current.armed && last && last.trigger !== 'manual'
+  const dangerous = Boolean(current && !current.armed && last && isRecentCopierDisarm(last.at, now) && last.trigger !== 'manual'
     && (last.copiesOutcome === 'left-open-unprotected' || last.copiesOutcome === 'unknown'));
   const notice = dangerous && last
-    ? `Kopírka se vypnula automaticky (${last.title}) a výsledek kopií není potvrzený. ${last.nextStep}`
+    ? `Poslední zaznamenané vypnutí · ${new Date(last.at).toLocaleString('cs-CZ')} · ${last.title} Výsledek kopií při tomto incidentu nebyl potvrzený; nejde o ověření aktuálních pozic. ${last.nextStep}`
     : null;
 
   return { chips, repairSnapshots, notice };

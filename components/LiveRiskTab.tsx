@@ -62,6 +62,20 @@ export const LiveRiskTab = ({
     ? status.pause
     : null;
   const writesDisabled = disabled || !runtimeAvailable || !riskConfigSupported || savePending || status == null || group == null || onSaveGroup == null;
+  // lastError is diagnostic history, not evidence that a fault is still active.
+  // Only fresh runtime flags describe the current blocker; stale flags are unknown.
+  const runtimeKnown = runtimeAvailable && status != null;
+  const blockers = !runtimeKnown
+    ? ['Aktuální stav workeru není ověřený. Počkej na obnovení spojení; poslední uložená chyba nemusí být aktuální.']
+    : [
+      status.killSwitch ? 'Je aktivní nouzové zastavení.' : null,
+      status.started === false ? 'Worker nemá spuštěný běh kopírky.' : null,
+      !status.connected ? 'Worker není připojený k brokerovi. Počkej na obnovení spojení.' : null,
+      status.reconciliationRequired ? `Worker vyžaduje kontrolu stavu účtů. ${status.connected ? 'Spusť Kontrolu pozic.' : 'Po obnovení spojení spusť Kontrolu pozic.'}` : null,
+      status.divergentAccounts?.length ? 'Pozice účtů nejsou v souladu. Před dalším kopírováním je potřeba ověření.' : null,
+      status.stuckOutbox ? 'Výsledek odeslaných příkazů není potvrzený. Je potřeba prověřit nevyřešené operace.' : null,
+      status.unverifiableFollowerOwnership?.length ? 'Vlastnictví kopií není ověřené. Je potřeba kontrola účtů.' : null,
+    ].filter((message): message is string => message !== null);
 
   const saveAuthoritativeGroup = group && onSaveGroup
     ? async (nextGroup: CopyGroupConfig) => {
@@ -115,16 +129,17 @@ export const LiveRiskTab = ({
         </section>
       ) : null}
 
-      {runtimeAvailable && status?.lastError ? (
+      {blockers.length > 0 ? (
         <section
-          role="alert"
-          data-copier-status-error="true"
-          className="flex items-start gap-3 rounded-lg border border-rose-500/30 bg-rose-500/[0.08] px-4 py-3 text-rose-500"
+          role={runtimeKnown ? 'alert' : 'status'}
+          data-copier-current-blocker="true"
+          className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/[0.08] px-4 py-3 text-amber-700 dark:text-amber-300"
         >
           <AlertTriangle size={18} className="mt-0.5 shrink-0" />
           <div className="min-w-0">
-            <b className="block text-xs font-black">Chyba workeru</b>
-            <p className="mt-0.5 break-words text-[11px] font-semibold leading-relaxed">{status.lastError}</p>
+            <b className="block text-xs font-black">{runtimeKnown ? 'Kopírování blokováno' : 'Stav workeru není ověřený'}</b>
+            {blockers.map(message => <p key={message} className="mt-0.5 text-[11px] font-semibold leading-relaxed">{message}</p>)}
+            <p className="mt-1 text-[11px] text-[var(--text-secondary)]">Technické podrobnosti a poslední chyby najdeš v Událostech.</p>
           </div>
         </section>
       ) : null}

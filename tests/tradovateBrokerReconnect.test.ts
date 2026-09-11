@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrokerEvent } from '../services/brokerPort';
+import { createBrokerRouter } from '../services/brokerRouter';
 import {
   createTradovateBroker,
   type WebSocketLike,
@@ -92,6 +93,39 @@ describe('Tradovate WebSocket konečný reconnect automat', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('po heartbeat timeoutu bez onclose obnoví agregovaný stav obou OAuth spojení', async () => {
+    const first = createHarness({ socketFactory: () => new FakeSocket(false) });
+    const second = createHarness({ socketFactory: () => new FakeSocket(false) });
+    const router = createBrokerRouter([
+      { broker: first.broker, accountIds: [11] },
+      { broker: second.broker, accountIds: [22] },
+    ]);
+    const connections: boolean[] = [];
+    let controllerConnected = false;
+    const unsubscribe = router.subscribe(event => {
+      if (event.type === 'error') controllerConnected = false;
+      if (event.type === 'connection') {
+        controllerConnected = event.connected;
+        connections.push(event.connected);
+      }
+    });
+    await completeHandshake(first.sockets[0]);
+    await completeHandshake(second.sockets[0]);
+    expect(controllerConnected).toBe(true);
+    await vi.advanceTimersByTimeAsync(21_000);
+    expect(controllerConnected).toBe(false);
+    expect(first.sockets).toHaveLength(2);
+    expect(second.sockets).toHaveLength(2);
+    await completeHandshake(first.sockets[1]);
+    expect(controllerConnected).toBe(false);
+    await completeHandshake(second.sockets[1]);
+    expect(controllerConnected).toBe(true);
+    expect(connections).toEqual([true, false, true]);
+    unsubscribe();
+    first.unsubscribe();
+    second.unsubscribe();
   });
 
   it('CONNECTING navždy watchdog zavře a po close watchdogu otevře druhý socket', async () => {

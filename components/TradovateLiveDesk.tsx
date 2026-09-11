@@ -708,6 +708,8 @@ setAgentStatus((await executeAgent({
         transport={agentTransport}
         snapshotHealth={agentStatus?.snapshotHealth}
         onRepairSnapshots={repairSnapshots}
+        hideDisarmNotice={tab === 'overview' && !checkingConnection && !requiresConnection
+          && !!live.data && !!copyTradeSnapshot && !!executionGroup?.id && !copierUiDemo}
         quiet
       />
 

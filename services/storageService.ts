@@ -3,6 +3,7 @@ import { loadLabExperiments, persistLabExperiment, removeLabExperiment } from '.
 
 import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, WeeklyFocus, DrawingTemplate, AIConversation, LabExperiment } from '../types';
 import { supabase } from './supabase';
+import { dashboardTables, loadDashboardFallback, type DashboardRawRow } from './dashboardFallback';
 import { get, set } from 'idb-keyval';
 import { maybeDetectEpisodes } from './coachMemoryService';
 import { resizeImageDataUrl, dataUrlSizeKB } from './imageResize';
@@ -26,7 +27,12 @@ let authStateVersion = 0;
 
 // Invalidate cache on auth state changes (logout, user switch) to prevent stale userId
 supabase.auth.onAuthStateChange((event, session) => {
-  authStateVersion += 1;
+  // Supabase can emit SIGNED_IN again on tab focus, and TOKEN_REFRESHED
+  // routinely renews the same identity. Neither invalidates an in-flight read.
+  // Logout, a different user and profile/security updates still fence old work.
+  const sameUserRefresh = session?.user?.id === cachedUserId && cachedUserId !== null
+    && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION');
+  if (!sameUserRefresh) authStateVersion += 1;
   if (event === 'SIGNED_OUT' || event === 'USER_UPDATED' || !session) {
     cachedUserId = null;
     lastSessionCheck = 0;
@@ -52,12 +58,12 @@ export const getUserId = async () => {
   return cachedUserId;
 };
 
-const hydratePrivateTradeNotes = async <T extends Pick<Trade, 'id'>>(trades: T[], targetOwnerId: string | null): Promise<T[]> => {
+const hydratePrivateTradeNotes = async <T extends Pick<Trade, 'id'>>(trades: T[], targetOwnerId: string | null, signal?: AbortSignal): Promise<T[]> => {
   const version = authStateVersion;
   const owner = await getUserId();
-  const stillCurrent = async () => version === authStateVersion && await getUserId() === owner;
-  const legacy = owner ? await hydrateLegacyTradeNotes(supabase, trades, owner === targetOwnerId ? 'owner' : 'connection', stillCurrent) : trades.map(stripLegacyTradeNotes);
-  return hydrateOwnedTradeNoteHistories(supabase, legacy, owner, targetOwnerId, stillCurrent);
+  const stillCurrent = async () => !signal?.aborted && version === authStateVersion && await getUserId() === owner;
+  const legacy = owner ? await hydrateLegacyTradeNotes(supabase, trades, owner === targetOwnerId ? 'owner' : 'connection', stillCurrent, signal) : trades.map(stripLegacyTradeNotes);
+  return hydrateOwnedTradeNoteHistories(supabase, legacy, owner, targetOwnerId, stillCurrent, signal);
 };
 
 // Safe LocalStorage helper to prevent QuotaExceededError from crashing the app
@@ -122,14 +128,34 @@ type DashboardSnapshot = {
 export const storageService = {
 
   // Single RPC call to load all dashboard data at once (replaces 7 parallel HTTP requests)
-  async getDashboardData(): Promise<{
+  async getDashboardData(signal?: AbortSignal, preferPaged = false): Promise<{
     trades: Trade[]; accounts: Account[]; preps: DailyPrep[];
     reviews: DailyReview[]; preferences: UserPreferences | null;
     user: User | null; weeklyFocus: WeeklyFocus[];
   }> {
-    const { data, error } = await supabase.rpc('get_dashboard_data');
-    if (error) { console.error('[RPC] get_dashboard_data error:', error); throw error; }
-    const raw = data as any;
+    const result = preferPaged ? null : await supabase.rpc('get_dashboard_data')
+      .abortSignal(signal ?? AbortSignal.timeout(20_000));
+    const data = result?.data;
+    const error = result?.error;
+    if (error) console.error('[RPC] get_dashboard_data error:', error.code, error.message);
+    if (error && error.code !== '57014') throw error;
+    let raw = data as any;
+    if (preferPaged || error) {
+      const ownerId = await getUserId();
+      const ownerVersion = authStateVersion;
+      if (!ownerId || signal?.aborted) throw new Error('dashboard-read-invalidated');
+      raw = await loadDashboardFallback(async (table, offset, limit) => {
+        if (ownerVersion !== authStateVersion || signal?.aborted) throw new Error('dashboard-read-invalidated');
+        const result = await supabase.from(table).select(dashboardTables[table])
+          .eq(table === 'profiles' ? 'id' : 'user_id', ownerId)
+          .order('id').range(offset, offset + limit - 1)
+          .abortSignal(signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000));
+        if (result.error) throw new Error(`dashboard-read-failed:${table}:${result.error.code || 'request-error'}:${result.error.message}`);
+        if (ownerVersion !== authStateVersion || signal?.aborted || result.data === null) throw new Error('dashboard-read-invalidated');
+        return result.data as unknown as DashboardRawRow[];
+      });
+      console.info('[Dashboard] Base pages loaded; loading private notes');
+    }
 
     let trades = (raw.trades || []).map((t: any) => {
       const d = t.data || {};
@@ -245,7 +271,8 @@ export const storageService = {
     // full dashboard refreshes. Cache failures must never turn a successful
     // server response into an application error.
     const userId = raw.user?.id;
-    trades = await hydratePrivateTradeNotes(trades, userId ?? null);
+    trades = await hydratePrivateTradeNotes(trades, userId ?? null, signal);
+    if (signal?.aborted) throw new Error('dashboard-read-invalidated');
     if (userId && user) {
       const cachedAt = Date.now();
       const snapshot: DashboardSnapshot = {
@@ -277,6 +304,7 @@ export const storageService = {
       if (preferences) safeSetItem(`alphatrade_preferences_${userId}`, preferences);
     }
 
+    console.info('[Dashboard] Complete refresh finished');
     return { trades, accounts, preps, reviews, preferences, user, weeklyFocus };
   },
 

@@ -108,7 +108,7 @@ describe('bootstrapCopierRuntime', () => {
     expect(broker.placedRequests()).toHaveLength(0);
   });
 
-  it('ignoruje historický sync, startuje DISARMED a live event pustí až po kontrole pozic a ARM', async () => {
+  it('ignoruje historický sync, po startu ověří flat a live event pustí až po explicitním ARM', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group, clock: stepClock(),
@@ -118,10 +118,8 @@ describe('bootstrapCopierRuntime', () => {
     broker.setConnected(true);
     await controller.waitForIdle();
     expect(broker.placedRequests()).toHaveLength(0);
-    expect(controller.status()).toMatchObject({ armed: false, connected: true, reconciliationRequired: true });
-    expect(() => controller.arm()).toThrow('kontrolu pozic');
+    expect(controller.status()).toMatchObject({ armed: false, connected: true, reconciliationRequired: false });
 
-    await controller.reconcile();
     controller.arm();
     broker.emitEvent({ type: 'order', order: leaderOrder({ brokerOrderId: 'leader-2', sourceVersion: '2:Working' }) });
     await controller.waitForIdle();
@@ -216,7 +214,7 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
-  it('disconnect okamžitě zruší ARM a reconnect vyžaduje novou reconciliation', async () => {
+  it('disconnect okamžitě zruší ARM a flat reconnect obnoví kontrolu bez auto-ARM', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group, clock: stepClock(),
@@ -230,8 +228,8 @@ describe('bootstrapCopierRuntime', () => {
     broker.setConnected(false);
     broker.setConnected(true);
     await controller.waitForIdle();
-    expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
-    expect(() => controller.arm()).toThrow('kontrola pozic');
+    expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: false });
+    expect(() => controller.arm()).not.toThrow();
     controller.stop();
   });
 
@@ -2655,7 +2653,7 @@ describe('reconciliation vs abandoned cancel/modify', () => {
       reconciliationRequired: true,
     });
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('phase=reconciliation'),
+      message: expect.stringContaining('Po reconnectu se nepodařilo automaticky potvrdit'),
     }));
 
     broker.emitEvent({ type: 'connection', connected: true, at: 600 });
@@ -4073,7 +4071,7 @@ describe('order-stream quantity guard po reconnectu', () => {
 
     expect(controller.status()).toMatchObject({
       armed: false,
-      reconciliationRequired: true,
+      reconciliationRequired: false,
       lastError: null,
     });
     expect(broker.cancelRequestCount('reconnect-stop')).toBe(0);

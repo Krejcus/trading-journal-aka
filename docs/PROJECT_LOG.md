@@ -208,11 +208,287 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-11 — Schválené nasazení oprav této session (Codex)
+
+- Uživatel schválil nasazení všech oprav session. Izolovaný balíček zahrnuje
+  obnovu/paginaci dat deníku, auth-session a abort ochrany, skutečný cooldown,
+  expiraci/odstranění duplicitních DISARM upozornění, aktuální Risk blokace
+  a opravy stale leader expozice, výměny followerů a reconnectu workeru.
+- Rozpracovaný TradovateAccountProfileSetup a lokální review artefakty jsou
+  výslovně mimo balíček; nejsou přibaleny změny jiného agenta. Žádná změna DB,
+  RLS, secrets, účtů, ARM, obchodních příkazů ani restart Mac workeru.
+- Ověřen izolovaný strom na základě a3d7ef7f: 332 souborů / 3154 testů,
+  TypeScript a produkční web/PWA build prošly. Scoped lint: 0 errors,
+  30 existujících warnings. První testovací běh omezil sandbox u listen;
+  kompletní opakování s lokálním testovacím HTTP serverem prošlo.
+- Worker sestavený z tohoto stromu je bajtově shodný s již nainstalovaným:
+  SHA-256 a6756eb925065c6da0ad80e1b9b321cad978c6fa5a193cedff40143a50fcf94a.
+  Web deploy tedy nevyžaduje přeinstalaci ani přerušení kopírky.
+- Předchozí produkční deployment pro případ návratu:
+  dpl_DYjCQQFBRT7dnP8uqPToLHcsBEha (a3d7ef7f). Finální READY/alias a browser
+  se ověřují až po pushi; tento přednasazovací zápis je sám nepotvrzuje.
+
+### 2026-09-11 — Obnovené sockety zůstávaly pro controller odpojené (Codex)
+
+- Incident 13:37 CEST: oba sockety ztratily heartbeat; close watchdog je
+  uvolnil bez onclose a založil nové. Kritický error přepnul controller na
+  disconnected, ale router bez connection=false dál držel true a potlačil
+  následné úspěšné sync true. Nová regrese se dvěma reálnými broker adaptéry
+  nad FakeSocket a brokerRouter před opravou selhala přesně po druhém syncu.
+- Úzká oprava tradovateBroker.closeSocket oznamuje neplánovaný disconnect
+  ihned, i když onclose nikdy nedorazí. Onclose pro takto zavřený socket
+  nezdvojuje zprávu; plánovaná renewal si zachovává dosavadní chování.
+- Ověření: finálních 26 transport/router/renewal/rate-limit testů prošlo,
+  103 controller testů prošlo v širším běhu; scoped ESLint, TypeScript,
+  diff whitespace a syntax sestaveného workeru ověřeny. Původní širší běh
+  odhalil duplicitní false při renewal deadline; opraveno a renewal zopakována.
+- Přímé GET čtení všech 7 účtů v 14:08 a znovu 14:10 CEST potvrdilo aktivní
+  účty, flat a žádné aktivní příkazy. Backup do
+  /private/tmp/alphatrade-reconnect-backup-LPcVXO. Nový bundle se od dosud
+  instalovaného liší jen dvěma místy této opravy; SHA-256
+  a6756eb925065c6da0ad80e1b9b321cad978c6fa5a193cedff40143a50fcf94a.
+- Mac worker restartován 14:10 CEST se zachovanou durable skupinou všech
+  6 followerů a původním plist. Automatická kontrola potvrdila flat/no-active;
+  status 14:10:42 connected=true, armed=false, reconciliationRequired=false,
+  lastError=null, bez divergence, stuck outboxu či neověřených kopií.
+  Žádný ruční ARM, broker write, ruční přepis evidence, push ani web deploy.
+- Dynamic API Hosts je samostatná kompatibilitní mezera. Přímé čtení Tradeify
+  i Lucid v 13:42 CEST vrátilo HTTP 200 ze sdíleného demo.tradovateapi.com
+  s redirect:manual, bez 307. Tato routovací migrace není potvrzenou příčinou
+  incidentu. OAuth host-discovery kontrakt zůstává dokumentačně nevyjasněný.
+
+### 2026-09-11 — Automatické read-only ověření po startu/reconnectu (Codex)
+
+- Opravena příčina, kvůli které zůstal flat a DISARMED worker po startu nebo
+  běžném WebSocket reconnectu trvale v `reconciliationRequired=true` a LIVE UI
+  proto odmítalo ARM. Controller nyní po startu/reconnectu naplánuje úzký
+  snapshot-only preflight; při autoritativním flat/no-working výsledku u všech
+  účastníků obnoví pouze ověřený runtime stav a zůstane DISARMED.
+- Automatická cesta nic neposílá brokerovi, neruší příkazy, nelikviduje pozice,
+  neřeší durable historii/eligibility a nikdy sama neARMuje. Pozice, working
+  order, divergence, OAuth/capability problém, stuck outbox, follower cut,
+  durable open-copy marker, nedokončená leader epocha nebo rozběhnutý lifecycle
+  dál zůstávají fail-closed a vyžadují explicitní kontrolu.
+- Planned resync za běžícího ARM nyní nejdřív explicitně DISARMuje. ARM preflight
+  zároveň ukáže konkrétní blocker (working order/divergence/stuck stav) před
+  obecným `reconciliation-required` hlášením.
+- Doplněny regrese pro startup, DISARMED reconnect, synchronní otevřené pozice,
+  working order a ARMED disconnect. Celá sada: **332 souborů / 3153 testů**;
+  TypeScript, scoped ESLint (jen tři již existující warningy) a `diff --check`
+  prošly.
+- Aktuální funded sestava obnovena v LaunchAgentu s leaderem **64503883** a
+  followery **65333343 / 65333277**. Čerstvý a instalovaný bundle mají shodné
+  SHA-256 `f6ea5d4f9321990529cb38c32fa927c0adbbbdd39f7e8c60b452290d2fa6455b`.
+  Worker je connected, `groupFlat=true`, `reconciliationRequired=false`, bez
+  working orders, divergence, stuck outboxu a `lastError`; zůstává záměrně
+  `armed=false`. Žádný broker příkaz ani ARM nebyl odeslán.
+- Při prvním reinstallu odhalen installer fallback na výchozí skupinu po změně
+  leader-key. Worker zůstal DISARMED, přesná konfigurace `Hlavní` včetně safety
+  byla obnovena a před finálním restartem byly všechny tři účty znovu read-only
+  ověřeny jako flat/no-working.
+- Localhost běží přes Vercel dev s polling watcherem (obejití macOS `EMFILE`).
+  Preview secret hodnoty Vercel z bezpečnostních důvodů nestahuje a vrací jen
+  `[SENSITIVE]`, takže lokální serverové Tradovate API vyžaduje samostatné
+  lokální secret hodnoty; worker ani produkční Vercel tím nejsou dotčeny.
+
+### 2026-09-10 — Worker aktualizován, funded followeři úspěšně nahrazeni (Codex)
+
+- Na výslovný souhlas proveden backup starého bundlu, plist, group, snapshotu
+  a auditu do `/private/tmp/alphatrade-worker-upgrade.3DfJ5e/`; původní worker
+  se korektně ukončil DISARMED. LaunchAgent parametry/instalační slot zachovány.
+- Start narazil na další bránu: chybějící followeři dosud nebyli durable
+  ineligible, takže se API vůbec nespustilo. Automatické opakování zastaveno.
+  Úzká oprava `validateStoredCopyGroupForStartup` dovoluje chybějící followery
+  pouze ve výslovně vypnuté skupině (ne chybějící leader). Při zastaveném workeru
+  změněno pouze `group.enabled=false`; žádné ruční mazání snapshotu/ownership.
+  87 souvisejících testů, TypeScript a scoped lint prošly.
+- Finální worker spuštěn **2026-09-10T19:38:09.611Z**. Instalovaný bundle má
+  SHA-256 `1d52c8e3f6dc332b5e55a7605aceadb1b281910c4a33172ec178f9c6360828cb`,
+  shodný se sestavením `/private/tmp/alphatrade-funded-recovery-final.mjs`.
+- **19:38:38 UTC:** jeden potvrzený `update-group` s již schválenou ownership
+  výjimkou vrátil HTTP 200. Worker i durable group obsahují leadera **64503883**,
+  followery **65333343 / FTDFYG50719650896** a **65333277 / FTDFYG50488642119**,
+  on-submit, **1×**, `enabled=false`, `armed=false`, connected, bez stuck outboxu,
+  `lastError=null`. Výměna je dokončena; nejde o povolení/ověření ostrého ARM.
+- Durable stale short lot -15 MNQU6 archivován do `unconfirmedFlatLots` s
+  broker-flat timestampem, `openLots=[]`, dosavadní P&L -507 beze změny.
+  Neověřený výsledek uzavření dále blokuje ostrý ARM ve stejné session.
+  ReconciliationRequired zůstává true po změně topologie, nebylo obcházeno.
+- Nezávislá broker čtení před i po výměně: všechny tři aktuální účty dostupné,
+  aktivní, bez pozic a aktivních příkazů. Žádný ARM, ruční controller reconcile,
+  obchodní příkaz nebo web deploy/push. Startup recovery proběhla automaticky
+  a před výměnou detekovala staré chybějící lineage; nedělala orphan close.
+
+### 2026-09-10 — Lokální oprava stale leader lotu při změně skupiny (Codex)
+
+- Odstraněno předčasné odmítnutí topology switch pouze podle `dailyStats.openLots`.
+  Změna nyní nejdřív vyžaduje capability a úspěšný flat/no-working snapshot
+  všech požadovaných starých/nových účtů. Missing follower ownership stále
+  vyžaduje původní samostatné potvrzení; outbox/lifecycle brány se neobcházejí.
+- Broker event nebo změna safety generation během preflightu zneplatní důkaz;
+  kontrola se opakuje i před durable mutací. Generická chyba už říká změna
+  skupiny, nikoli změna leadera při pouhé výměně followerů.
+- Po potvrzení flat se zbytkové loty atomicky přesunou do
+  `dailyStats.unconfirmedFlatLots` včetně původního leader accountId a času
+  ověření. Nejde o vymyšlený fill: P&L, losingTrades ani tradesToday se nemění.
+  Evidence přežije serializaci/restart. Ostrý ARM v této session se při
+  nepotvrzeném výsledku uzavření odmítne; nová session má vlastní statistiky.
+- Ověření: 11 cílených regresí (včetně skutečných pozic, working příkazu,
+  neúspěšného read/write, příchodu eventu a restartu); širší sada 52 souborů /
+  **845 testů** prošla. TypeScript a scoped ESLint exit 0, bundle sestaven
+  do `/private/tmp/alphatrade-funded-recovery-check.mjs`, `node --check` prošel.
+- Změny nejsou instalované ani pushnuté. Žádný ARM, broker write nebo ruční
+  přepis snapshotu. Uživatel byl požádán o souhlas s aktualizací/restartem
+  workeru před dokončením už schválené výměny followerů.
+
+### 2026-09-10 — Funded výměna po potvrzení ownership: další blokace durable leader lotem (Codex)
+
+- Uživatel výslovně potvrdil uzavřený stav starých challenge účtů a odpojení
+  přes ownership warning. Jeden nový `update-group` proto obsahoval pouze
+  schválený `waiveUnverifiableFollowerOwnership: true`, nové followery
+  **65333343/65333277**, násobek 1 a `enabled=false`; ostatní nastavení zachována.
+- V 21:24 CEST nezávislý broker inventář znovu potvrdil leadera **64503883** i
+  oba funded účty active/canTrade, bez pozic a aktivních příkazů. Aktuální
+  group/snapshot/audit zazálohovány do `/private/tmp/alphatrade-funded-confirmed.beLjjn/`.
+- Pokus 21:25 CEST odmítnut HTTP 409: `Změnu leadera blokuje otevřená durable
+  pozice leadera`. Zpráva je generická pro topology switch; leader se neměnil.
+  Ownership výjimka tuto jinou kontrolu neobchází. Status po pokusu
+  `armed=false`, původní followeři; group soubor je shodný se zálohou.
+- Žádné ruční mazání lotů, nový waiver, restart, ARM ani broker příkaz.
+  Controller reconcile nebyl spuštěn: navzdory komentáři read-only jeho cesta
+  může provádět follower cut / protective cancel. Další práce vyžaduje opravu
+  rozporu durable leader evidence proti čerstvému broker flat stavu, ne další
+  slepý update ani vypnutí bezpečnostní kontroly.
+
 ### 2026-09-10 — Izolované nasazení opravy zůstatků (Codex)
 
+- Nasazení následně ověřeno: `a3d7ef7f662a56cd346d0df1fec115e25ca68f83` na origin/main, Vercel `dpl_DYjCQQFBRT7dnP8uqPToLHcsBEha` production READY a hlavní alias na stejném commitu. Veřejné HTML i LIVE chunk HTTP 200; chunk obsahuje `data-balance-state` a tooltip posledního známého zůstatku. Časná kontrola runtime logů 19:01:50–19:03:15 UTC bez error/fatal záznamů; nejde o broker conformance ani dlouhodobý monitoring.
 - Na výslovné „pushni to“ připravena pouze prezentace cash: poslední potvrzená hodnota zůstává vidět po zastarání/failed read a nese „čeká na ověření“ i čas potvrzení. Nový broker údaj ji nahradí; chybějící/denied evidence není vymyšlená nula. Stejné pravidlo pro účet i kapitál desktop/mobile.
 - Risk freshness, DLL, pozice, execution a Mac worker beze změny. Ostatní rozpracované změny jiné session nejsou součástí tohoto commitu.
 - Přesný staged strom ověřen v izolované kopii: 31/31 cílených testů, TypeScript a web/PWA build prošly. První typecheck postrádal závislosti extensionu; po připojení stávajících závislostí prošel beze změny kódu. Produkční READY/alias je nutné ověřit až po pushi; žádný restart workeru ani broker akce.
+
+### 2026-09-10 — Schválená výměna challenge → funded: zastavena ownership kontrolou (Codex)
+
+- Uživatel potvrdil pass challenge a schválil náhradu followerů za funded
+  **65333343 / FTDFYG50719650896**, **65333277 / FTDFYG50488642119**, 1×, bez ARM.
+- Read-only broker kontrola 17:13 CEST: oba nové účty i leader **64503883**
+  active/canTrade, bez pozic a aktivních příkazů. Záloha group/snapshot/audit:
+  `/private/tmp/alphatrade-funded-change.f5bHf9/`.
+- Jeden `update-group` přes lokální agent API v 17:15 CEST odmítnut HTTP 409:
+  původní **64832671/64832689** mají neověřenou kopii z epochy
+  `9cf68829-e70d-47e3-8c4a-170254602e7f`. Nedostupnost u brokera neprokazuje flat;
+  nebyl přidán `waiveUnverifiableFollowerOwnership` ani proveden další pokus.
+- Status po pokusu: `armed=false`, původní konfigurace obnovena; durable group
+  soubor bajtově shodný se zálohou. Žádný broker příkaz, restart ani deploy.
+  Před dalším pokusem je třeba explicitně potvrdit odpojení neověřitelných
+  starých účtů (a jejich externě ověřený uzavřený stav); jiné kontroly zůstávají.
+
+### 2026-09-10 — Oprava Supabase testovacího mocku; vysvětlení chybějících followerů (Codex)
+
+- Opraveny dvě deterministické chyby posledního plného běhu: mock v
+  `tests/storageBacktestPersistence.test.ts` nyní odpovídá lazy PostgREST
+  builderu včetně `.abortSignal()`. Produkční timeouty nebyly oslabeny.
+  Pět nových regresí ověřuje propagaci zrušení a nezměněnou cache bez zápisů;
+  s testy recovery/fallback/session identity prošlo **48/48**, lint bez errors.
+- Čerstvý read-only broker adresář v 17:02 CEST: Tradeify připojení je dostupné,
+  ale vrací jen účty **65333343 / FTDFYG50719650896** a
+  **65333277 / FTDFYG50488642119**. Původní followeři **64832671/64832689** chybí
+  v celém adresáři, nikoli jen ve filtru aktivních účtů. Leader **64503883**
+  byl bez pozice/příkazů. Chybějící účet není důkaz flat ani breach.
+- Dotaz uživateli, zda nové účty mají nahradit původní. Žádná automatická výměna,
+  ARM, reconciliation controlleru, broker write, instalace/restart ani push.
+  Provozní brána zůstává zavřená do vyjasnění účtů a kompletního flat/no-orders
+  ověření. Podrobnosti: `docs/reviews/live-changes-20260910/VERIFICATION.md`.
+
+### 2026-09-10 — Kompletní kontrola změn: restart zatím blokován (Codex)
+
+- Report: `docs/reviews/live-changes-20260910/VERIFICATION.md`. Celý běh 332 souborů: 3133/3136 testů prošlo. Backtest timeout prošel izolovaně 30/30 se stejným limitem. Dvě opakovatelné chyby `storageBacktestPersistence` jsou `rpc(...).abortSignal is not a function` — zastaralý async mock, zatímco reálný PostgREST builder tuto metodu má. Mock ani aplikační kód se při tomto ověřování neměnily.
+- TypeScript, web/PWA build a lint errors všech změněných TS/TSX prošly; diff whitespace čistý. Browser kontrola není potvrzená: schvalovací timeout a jediné povolené opakování skončilo timeoutem kernelu. Žádné obcházení přes jiný browser/API povrch.
+- Předinstalační read-only kontrola v 16:08–16:09 CEST: worker DISARMED, connected, vyžaduje reconciliation, `groupFlat=false`. Broker potvrdil leadera 64503883 flat/no-active; followery 64832671 a 64832689 nevrátila žádná z dostupných OAuth capabilities čtení. Jejich stav nelze považovat za flat ani dovozovat breach. **Instalace/restart zastaveny** do ověření všech účtů. Bez ARM, controller reconciliation, cancel/flatten, broker writes, deploye či změny konfigurace.
+
+### 2026-09-10 — Nový vstup nesmí použít starou leader expozici (Codex, lokální oprava)
+
+- Ranní log dokládá zapnutí 09:32, dispatch obou followerů 09:33 a opakované `nevysvětlená divergence … před OSO leader exitem MNQU6` od 09:44. Přesný historický pre-net se neukládal; mechanismus je ale reprodukovaný integračně: stará blocked epocha ±15 + autoritativně flat účty → opačný nový vstup byl vyhodnocen jako exit a DISARMoval skupinu.
+- Controller rozlišuje známou nulu od neznámého symbolu (včetně prázdného úplného position snapshotu). Pro nové/změněné příkazy respektuje pořadí fill-ledger vs Position: novější fill nesmí přebít stará nula a novější nulu nesmí přebít ještě neuzavřený lot. Pre-fill klasifikace skutečných exitů zachovává kauzální ledger a remaining quantity pro partial/reversal.
+- Po čisté, generation-valid reconciliaci se staré flat epochy přestanou používat jako fallback expozice i pro vstupní fill bez order eventu. Ownership, audit, unresolved markery ani broker data se nemažou; baseline se po restartu obnovuje povinnou reconciliací, není persistovaným tvrzením o aktuální bezpečnosti. Reconnect ruší úplnost snapshotu, změna leadera a hranice denní session resetují odpovídající volatilní důkazy.
+- Nový `copierStaleExposure.test.ts`: 14 scénářů — standard/OSO/on-fill bez orderu, BUY/SELL, explicitní nula/prázdný snapshot, dva followeři, zachování ARM a historie, žádný auto-close; navíc oba směry pořadí fill/Position během pauzy. Před opravou regrese padaly stejným divergence důvodem. Finální sada kopírky: **65 souborů / 955 testů prošlo**. Celoprojektový typecheck i následný cílený typecheck finálních změn a jejich závislostí prošly (dočasný cílený config musí zahrnout `vite-env.d.ts`). Scoped lint: 0 errors, 3 existující warningy; finální worker sestaven pouze do `/private/tmp` a syntax zkontrolována. `git diff --check` čistý.
+- Bez commitu, push/deploye, instalace/restartu workeru, ARM, reconciliace skutečných účtů nebo broker writes. Běžící worker opravu zatím nemá. `workingOrderAccounts` jako poslední výsledek kontroly není touto změnou převeden na realtime inventář; neslibovat aktuální no-working stav z tohoto pole. Souběžné změny UI zůstatků zachovány.
+
+### 2026-09-10 — Zůstatek zůstává viditelný při zastarání cash snapshotu (Codex)
+
+- Pouze UI: `liveBalanceDisplay`/`liveCapitalDisplay` zobrazují poslední známé cash hodnoty s platným potvrzovacím timestampem i po 45 s nebo po failed read, který datová vrstva již mergeuje s předchozí hodnotou. Poznámka „čeká na ověření“ + tooltip s časem. Nová hodnota nahrazuje starou bez lokální odvozené cache.
+- Desktop účet, součet kapitálu i kompaktní kapitál používají stejné pravidlo. Chybějící/denied/neplatný údaj zůstává pomlčkou; skupina nesčítá neúplné členy jako nuly. Skutečná nula i legacy shadow snapshot kompatibilní. `isLiveAccountReadVerified`, DLL, pozice a runtime risk beze změn.
+- 31 cílených testů prošlo ve 4 souborech; dva import-timeouty při zátěži vyřešeny opakováním s 15s timeoutem. Browser potvrdil `last-known` částku a čas posledního potvrzení bez error boundary. Při editaci vznikla opravená chybějící závorka UI komponenty, poté obnoven pouze frontend. Typecheck při zápisu ještě běžel. Bez worker restartu, ARM/broker operací či deploye. Cizí změny runtime zachovány.
+
+### 2026-09-10 — Risk ukazuje aktuální blokace, ne historický lastError (Codex)
+
+- LiveRiskTab už nevykresluje samotný `lastError` jako „Chyba workeru“. Technický detail zůstává v Událostech. Aktuální banner je odvozen pouze z dostupného runtime: kill switch, stopped, broker disconnected, reconciliation, divergence, stuck outbox a neověřené vlastnictví kopií. Při nedostupném runtime zobrazuje neověřený stav místo starých příznaků.
+- Browser ověřil Risk s textem „Kopírování blokováno — Worker vyžaduje kontrolu stavu účtů“, bez starého WebSocket erroru. 60 testů ve 3 souborech + typecheck prošly; diff whitespace čistý. Jen prezentace, beze změn konfigurace, ARM, kontroly pozic, workeru nebo produkce.
+
+### 2026-09-10 — Odstranění dočasné ukázky cooldownu (Codex)
+
+- Na žádost uživatele odstraněno tlačítko, demo dialog, samostatná preview stránka i její DEV/loopback helper a specifický test. Skutečný panel v LIVE, odpočet, čas konce pauzy, animace a bezpečnostní UI blokace zůstávají. Regrese desktop/mobile kontroluje nepřítomnost tlačítka ukázky. Pouze lokální změna, bez push/deploye a restartu workeru.
+
+### 2026-09-10 — Viditelný čas konce cooldownu (Codex)
+
+- Pod odpočtem je nově přímo „Konec pauzy v HH:mm“ v místním čase zařízení, podle pozdějšího konce obou pauz. Není nutné otevírat Podrobnosti. Neověřený stav dál neukazuje slíbený čas odemčení; konec času nezapíná kopírku ani neruší ostatní blokace. Lokální UI změna a render regrese, bez push/deploye či restartu.
+
+### 2026-09-10 — Další příčiny opakovaného banneru deníku (Codex)
+
+- Browser log doložil `dashboard-read-invalidated` na background paginaci bez abort signálu a několik `dashboard-refresh-timeout`; poslední timeout následoval těsně po dokončení základních stránek před hydratací poznámek.
+- `authStateVersion` se dosud zvyšoval při každém Supabase auth eventu. Stejno-uživatelské SIGNED_IN/TOKEN_REFRESHED/INITIAL_SESSION už nezneplatňují rozpracované čtení; změna uživatele, odhlášení, USER_UPDATED a bezpečnostní události dál ano. Regrese ověřují i logout/login stejného uživatele.
+- Background recovery má 60s celkový limit pro vícestupňové načtení místo 20s; jednotlivé paginované/notes requesty max 20s. Abort signál se propisuje do obou hydrátorů soukromých poznámek a pozdní výsledky se odmítnou. Chyba fallback requestu obsahuje tabulku a DB code; success log je nově až po dokončení poznámek/cache, nikoli po samotných základních stránkách.
+- 68 testů v 7 souborech prošlo; po doplnění abort regresí samostatně 23 notes testů prošlo. Typecheck při zápisu stále běží. Finální browser ověření obnovy není potvrzené: po reloadu CDP operation exceeded deadline. Netvrdit, že banner už zmizel nebo je produkce opravená. Bez DB/RLS změn, deploye či broker akcí.
+
+### 2026-09-10 — Kompaktní cooldown a izolovaná lokální ukázka (Codex)
+
+- Pouze localhost: `CopierCooldownPanel` ve skupině na desktopu i mobilu ukazuje maximum z `entryCooldownUntil` a `pause.until`. Dvě samostatné položky vysvětlují situaci, kdy 15min cooldown skončil, ale 20min pauza pravidel ještě běží. UI blokace zapnutí nyní zahrnuje i tuto pauzu, včetně menu; vypnutí zůstává dostupné. Runtime ani broker logika se nemění.
+- Konec odpočtu má jemnou animaci a desetisekundové potvrzení pouze uplynutí času, nikdy automatický ARM ani tvrzení o flat účtech. Neověřený worker zobrazuje pomlčku; kill switch, denní zámek, spojení a reconciliation/outbox problémy nedostávají úspěšnou dokončovací animaci. Časování je uvnitř panelu, ne celé tabulky; respektuje reduced motion a po dokončení se uklidí.
+- DEV + loopback-only tlačítko `Ukázka cooldownu` otevírá samostatný dialog se simulovanými daty. Alternativa `/cooldown-preview.html`. Tlačítka 10 s / 20 s / 02:48, scénáře vypnutá kopírka / neověřený worker / denní zámek. Demo nemá execution adaptéry, neukládá falešný stav do runtime či localStorage a není součástí produkčního bundlu (ověřeno hledáním demo textů v dist).
+- Browser ověřil otevření dialogu přímo v LIVE, vizuální odpočet, přechod na 00:00 s textem „Kopírka zůstává vypnutá. Sama se nezapne.“ a neověřený stav bez falešného odpočtu. Typecheck, scoped lint a build prošly (jen běžné upozornění na velké chunky). Regrese pokrývají 15/20min mezeru, desktop/mobil, blokaci ARM a dostupnost DISARM. Bez push/deploye, restartu workeru a obchodních příkazů; souběžné změny druhého agenta zachovány.
+
+### 2026-09-10 — Expirace historického DISARM upozornění (Codex)
+
+- Na výslovný požadavek uživatele se oznámení posledního vypnutí zobrazuje pouze 15 minut od události; poté zůstává incident jen v Událostech. Společné časové pravidlo pro detail skupiny, horní notice i popisek vypnuté kopírky, s timerem pro expiraci bez dalšího pollingu.
+- Jde pouze o životnost UI oznámení, ne potvrzení výsledku: lastDisarm/history, unknown outcome, ARM gate, reconciliation a kill switch beze změny. Žádné broker akce ani deploy.
+- 14 cílených testů prošlo (časová hranice, 12h starý incident, zachování historie a bezpečnostních stavů). Browser potvrdil načtený LIVE Dashboard/skupiny bez starého oznámení.
+
+### 2026-09-10 — Historický DISARM bez duplicitního banneru (Codex)
+
+- LIVE Dashboard potlačuje horní DISARM notice při dostupném detailu skupiny; během loadingu/chyby a na ostatních záložkách zůstává zachován. Obnova TradingView se tím neschovává.
+- Obě podoby nyní uvádějí poslední zaznamenané vypnutí s datem, nikoli jen čas. Detail rozlišuje výsledek při incidentu od aktuálního stavu pozic. Unknown ani nechráněné kopie se nemažou, nepřeklasifikují na flat a bezpečnostní stav runtime se nemění.
+- Browser potvrdil jediný panel u skupiny s datem 9. 9. 2026 16:15:18. 12 cílených testů prošlo; bez broker akcí, restartu workeru a deploye. Souběžné změny cooldown UI zachovány.
+
+### 2026-09-10 — Localhost LIVE API a role při obnově deníku (Codex)
+
+- Plain Vite na portu 3000 vracel pro LIVE API HTML. Přepnuto na existující `npm run dev:live -- --host 127.0.0.1 --port 3000 --strictPort` s read-only Tradovate proxy; neautentizovaný status nyní správně vrací JSON 401.
+- Opravena vlastní regrese v paginovaném dashboard fallbacku: projekce `profiles` vynechávala `role`, takže mapper vracel `friend` a uzamkl LIVE skutečnému ownerovi. Nyní se přenáší databázová role; přidány regresní případy owner/friend/user bez změn oprávnění nebo RLS.
+- Ověřeno v přihlášeném browseru: LIVE zobrazuje skupinu, leadera a dva followery, kapitál a P&L, bez chyby neplatného API. Existující fail-closed varování zůstává viditelné, kopírka OFF. 29 cílených testů + typecheck prošly. Zůstávají nesouvisející Recharts layout warnings.
+- Bez ARM/Flatten, restartu workeru, produkčních změn, commitu nebo deploye.
+
+### 2026-09-10 (Codex, lokální obnova cloudových dat dashboardu)
+
+Diagnostika localhostu potvrdila `get_dashboard_data` chybu `57014 canceling
+statement due to statement timeout`; dřívější souběžné `Failed to fetch` /
+Realtime chyby samy neurčovaly příčinu. Globální banner navíc přetrvával po
+návratu sítě: online handler pouze nastavil networkOnline.
+
+Lokálně doplněn `dashboardRecovery`: jeden request současně, 20s deadline,
+abort při cleanupu, backoff 5–60s, obnova při online/focus/visibility a ruční
+opakování. Úspěch musí být úplný, cache ani dílčí pull-refresh banner nesmažou.
+Recovery načítá potvrzené owner-scoped tabulky po 100 řádcích přes
+`dashboardFallback`, nikoli opakovaně pomalou agregaci. Původní RPC při 57014
+také přechází na tuto cestu. Projekce trade polí zachovává stávající mapper;
+private notes hydratace zůstává. Žádné neúplné tabulky se neaplikují.
+Banner říká, že se týká deníku, na LIVE výslovně nehodnotí broker/worker.
+
+Ověření: 26 cílených testů (recovery, paginace a izolace session), typecheck,
+produkční build a lint nových modulů prošly. Nový banner a probíhající
+obnova byly viditelné na localhostu. Finální úspěch paginované obnovy proti
+cloudu NEPOTVRZEN: browser kontrola skončila CDP timeoutem; neoznačovat
+serverový výkon za opravený. Změny necommitnuté, bez push/deploy, bez změny
+DB, workeru či broker příkazů. Zbývá živé ověření a případně samostatné
+DB performance šetření se zálohou před jakoukoli vzdálenou změnou.
 
 ### 2026-09-08 (Claude, Live Activity: cooldown svítí i po ručním DISARM)
 
@@ -5645,3 +5921,7 @@ Keychain, device pairing, Supabase command relay. p95 162–269 ms.
 - Přenos z izolovaného snapshotu s porovnáním původních bajtů; rozpracované změny copieru zachovány. Žádný push, deploy, DB migrace ani broker akce.
 - Ověření: kompletní 221 souborů / 1 834 testů passed; finální cílené 26 souborů / 330 testů passed; typecheck 4 GB a standardní produkční build passed; browser market/partial/final/pending-limit, denní krok+výpadek/retry, reopen bez duplicit. Podrobnosti: docs/reviews/backtest-20260905/FIXES.md.
 - Po přenosu do hlavního adresáře: 330/330 cílených testů passed, typecheck exit 0, diff --check exit 0, localhost:3001 spuštěn a Dashboard načten.
+
+
+### 2026-09-11 (Codex, localhost: potvrzení Tradovate účtů)
+Pouze TradovateAccountProfileSetup: kompaktní rozbalovací účty, hromadná identita jen pro vybrané řádky, původ hodnot, chybějící risk z dostupného broker snapshotu, zachování uložených hodnot a viditelné rozdíly. Katalog doplňuje pouze prázdná pole a při shodné fázi Evaluation; velikost z názvu vyžaduje potvrzení. Browser ověřil 7 účtů, Lucid risk 1200/2000/EOD, změnu jediného označeného účtu a discard. Testy katalogu 7/7, lint a diff check passed; celoprojektový typecheck po více než 5 minutách bez výsledku zastaven. Žádné profily neuloženy, žádný deploy ani broker/worker změna. Localhost dev:live stále používá read-only proxy; uložení profilů nebylo ověřeno.

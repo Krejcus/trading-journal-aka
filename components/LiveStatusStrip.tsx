@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useCopierDisarmNotice } from '../hooks/useCopierDisarmNotice';
 import { AlertTriangle } from 'lucide-react';
 import type { CopierControllerStatus } from '../services/copierRuntimeController';
 import type { CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
@@ -24,7 +25,7 @@ const TEXT: Record<LiveStatusTone, string> = {
  * zdravý stav je tichý, jediné tlačítko je bezpečná obnova TradingView, když
  * vypadlo CDP. Vše ostatní (lastError, historie odzbrojení, časy) je v Událostech.
  */
-export default function LiveStatusStrip({ status, available, pending, transport, snapshotHealth, onRepairSnapshots, accountLabel, quiet = false }: {
+export default function LiveStatusStrip({ status, available, pending, transport, snapshotHealth, onRepairSnapshots, accountLabel, quiet = false, hideDisarmNotice = false }: {
   status: CopierControllerStatus | null;
   available: boolean;
   pending: boolean;
@@ -38,12 +39,16 @@ export default function LiveStatusStrip({ status, available, pending, transport,
    * vypnutí; plná lišta patří do Událostí.
    */
   quiet?: boolean;
+  /** Only suppress the duplicate when another visible panel carries the incident. */
+  hideDisarmNotice?: boolean;
 }) {
   const model = buildLiveStatusStrip({ status, available, pending, transport, snapshotHealth });
+  const recentDisarm = useCopierDisarmNotice(status?.lastDisarm?.at);
+  const notice = hideDisarmNotice || !recentDisarm ? null : model.notice;
   const [repairBusy, setRepairBusy] = useState(false);
   const [repairError, setRepairError] = useState<string | null>(null);
   const repair = model.repairSnapshots && onRepairSnapshots;
-  if (quiet && !repair && !model.notice) return null;
+  if (quiet && !repair && !notice) return null;
   const chips = quiet ? model.chips.filter(chip => chip.id === 'snapshots' && model.repairSnapshots) : model.chips;
   return (
     <section aria-label="Aktuální stav kopírky" data-live-status-strip={quiet ? 'quiet' : 'true'} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-2.5">
@@ -72,10 +77,10 @@ export default function LiveStatusStrip({ status, available, pending, transport,
           </button>
         ) : null}
       </div>
-      {model.notice ? (
+      {notice ? (
         <p role="status" className="mt-1.5 flex items-start gap-1.5 text-[11px] font-semibold text-rose-600">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
-          <span>{model.notice}</span>
+          <span>{notice}</span>
         </p>
       ) : null}
       {repairError ? <p className="mt-1.5 text-[11px] font-bold text-rose-600">{repairError}</p> : null}
