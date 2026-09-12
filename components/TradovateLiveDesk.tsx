@@ -1,3 +1,5 @@
+import { readTradovateDisplaySession, writeTradovateDisplaySession } from '../lib/tradovateDisplaySessionCache';
+import { liveBalanceDisplay, liveDailyPnlDisplay } from '../lib/liveBalanceDisplay';
 import { useTradovateDisplayFallback } from './useTradovateDisplayFallback';
 import { mergeTradovateAccountDisplay, type AccountDisplayCache } from '../lib/tradovateAccountDisplayMerge';
 import type { TradovateAccountDisplayFeedState } from '../lib/tradovateAccountDisplayTypes';
@@ -187,6 +189,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [copyGroups, setCopyGroups] = useState<CopyGroupConfig[]>([]);
   const [displayFeedReceipt, setDisplayFeedReceipt] = useState<{ userId: string; receivedAt: number; feeds: TradovateAccountDisplayFeedState[] } | null>(null);
+  const restoredDisplay = useMemo(() => readTradovateDisplaySession(userId), [userId]);
   const [displayCache, setDisplayCache] = useState<{ userId: string; values: AccountDisplayCache }>({ userId, values: {} });
   const [agentStatus, setAgentStatus] = useState<LocalCopierAgentStatus | null>(null);
   const [agentStatusObservedAt, setAgentStatusObservedAt] = useState<number | null>(null);
@@ -317,10 +320,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   })), [live.connectionData, live.status?.connections]);
   useEffect(() => {
     setDisplayCache(previous => ({ userId, values: mergeTradovateAccountDisplay(
-      previous.userId === userId ? previous.values : {},
+      { ...restoredDisplay, ...(previous.userId === userId ? previous.values : {}) },
       displayFeedReceipt?.userId === userId ? displayFeedReceipt.feeds : [], displayMembership,
     ) }));
-  }, [userId, displayFeedReceipt, displayMembership]);
+  }, [userId, displayFeedReceipt, displayMembership, restoredDisplay]);
   const displayInterrupted = useTradovateDisplayFallback({ userId, membership: displayMembership, worker: displayFeedReceipt,
     publish: (owner, feeds) => setDisplayCache(previous => ({ userId: owner, values: mergeTradovateAccountDisplay(
       previous.userId === owner ? previous.values : {}, feeds, displayMembership,
@@ -332,10 +335,35 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       const owners = [...displayMembership].filter(([, connection]) => connection.accountIds.has(account.id));
       const owner = owners.length === 1 ? owners[0] : null;
       const values = owner && displayCache.userId === userId
-        ? displayCache.values[`${owner[1].environment}:${owner[0]}:${account.id}`] : undefined;
-      return values ? { ...account, displayValues: values } : account;
+        ? displayCache.values[`${owner[1].environment}:${owner[0]}:${account.id}`]
+          ?? restoredDisplay[`${owner[1].environment}:${owner[0]}:${account.id}`] : undefined;
+      return { ...account, ...(values ? { displayValues: values } : {}), riskDisplayStorageScope: owner ? `${userId}:${owner[1].environment}:${owner[0]}` : undefined, riskDisplayConfigKey: `${owner ? owner[1].environment + ':' + owner[0] : 'unavailable'}:${account.riskDisplayConfigKey}` };
     }) };
-  }, [copyTradeSnapshot, displayMembership, displayCache, userId]);
+  }, [copyTradeSnapshot, displayMembership, displayCache, userId, restoredDisplay]);
+  useEffect(() => {
+    // Wait for every connected account list before replacing the persisted view.
+    // A partial bootstrap must not erase amounts for connections still loading.
+    if (!displaySnapshot || !connectedConnectionIds.every(id => displayMembership.has(id))) return;
+    const values: AccountDisplayCache = {};
+    for (const account of displaySnapshot.accounts) {
+      const owners = [...displayMembership].filter(([, connection]) => connection.accountIds.has(account.id));
+      if (owners.length !== 1) continue;
+      const [connectionId, connection] = owners[0];
+      const balance = liveBalanceDisplay(account);
+      const daily = liveDailyPnlDisplay(account, Date.now(), live.dataEnrichmentPending);
+      const entry: AccountDisplayCache[string] = {};
+      if (balance.value != null && balance.confirmedAt) entry.totalCashValue = {
+        value: balance.value, requestedAt: account.displayValues?.totalCashValue?.confirmedAt === balance.confirmedAt
+          ? account.displayValues.totalCashValue.requestedAt : balance.confirmedAt, confirmedAt: balance.confirmedAt,
+      };
+      if (daily.value != null && daily.confirmedAt) entry.dailyRealizedPnL = {
+        value: daily.value, requestedAt: account.displayValues?.dailyRealizedPnL?.confirmedAt === daily.confirmedAt
+          ? account.displayValues.dailyRealizedPnL.requestedAt : daily.confirmedAt, confirmedAt: daily.confirmedAt,
+      };
+      if (Object.keys(entry).length) values[`${connection.environment}:${connectionId}:${account.id}`] = entry;
+    }
+    writeTradovateDisplaySession(userId, values);
+  }, [userId, displaySnapshot, displayMembership, connectedConnectionIds, live.dataEnrichmentPending]);
   const brokerDailyPnlByAccount = useMemo<Readonly<Record<string, number | null>>>(() => {
     if (!live.data) return {};
     return tradovateBrokerDailyPnlByAccount(live.data);

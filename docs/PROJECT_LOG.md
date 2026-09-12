@@ -208,6 +208,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-12 — LIVE display reload persistence
+
+- Balance and daily P&L restore from user-scoped session display cache; DLL/DD retain their last known values across partial refresh and reload, with original timestamps and value-based colors. Cache is scoped to user, broker connection, account, explicit risk profile and trading session.
+- Presentation cache never feeds execution or risk eligibility. Local read proxy additionally allows authenticated GET copier-relay only.
+- Release validation: 35 focused tests passed, typecheck and production build passed. Isolated from unrelated account profile UI work.
+
 ### 2026-09-11 — Schválené nasazení oprav této session (Codex)
 
 - Uživatel schválil nasazení všech oprav session. Izolovaný balíček zahrnuje

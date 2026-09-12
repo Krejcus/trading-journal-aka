@@ -1,3 +1,5 @@
+import { LiveRiskValue } from './LiveRiskValue';
+import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
 import { liveBalanceDisplay, liveCapitalDisplay, liveDailyPnlDisplay, liveGroupDailyPnlDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
 import { useCopierDisarmNotice } from '../hooks/useCopierDisarmNotice';
@@ -91,7 +93,6 @@ const DEFAULT_REDACTION: RedactionSettings = { visibleStart: 4, visibleEnd: 4 };
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
 const moneyWhole = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
-const plain = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 
 /** Režim replikace follower účtu — hodnoty přebírají chování Tradecopie. */
 export type ReplicationMode = CopyReplicationMode;
@@ -1220,7 +1221,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   });
 
   return (
-    <div className="space-y-5" style={{ fontSize: `${density}%` }}>
+    <div key={userId} className="space-y-5" style={{ fontSize: `${density}%` }}>
       {stuckOperations.length > 0 && commandAdapter ? (
         <StuckOperationsPanel
           operations={stuckOperations}
@@ -2845,7 +2846,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
           <tbody>
             {rows.map((row, i) => (
               <AccountRow
-                key={`${row.name}-${i}`} row={row} live={isLive(row.account)} onAccount={onAccount} columns={columns}
+                key={row.accountId ?? `unavailable-${i}`} row={row} live={isLive(row.account)} onAccount={onAccount} columns={columns}
                 dailyPnlPending={dailyPnlPending}
                 orders={groupOrders}
                 eligibility={row.accountId != null ? eligibilityByAccount.get(row.accountId) : undefined}
@@ -2920,7 +2921,11 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
   const rowRejection = visibleRejectedExecution(accountId, eligibility, rowFlat, dismissedRejections);
   const cushion = a?.cushion ?? null;
   const cashKnown = !!a && isLiveAccountReadVerified(a, 'cash');
-  const dllRemaining = a && cashKnown && a.unrealizedPnlSource !== 'stale' ? copyTradeDailyLossRemaining(a) : null;
+  const rawDaily = liveDailyPnlDisplay(a ? { ...a, displayValues: undefined } : undefined, Date.now(), dailyPnlPending);
+  const dllRemaining = a && rawDaily.value != null ? copyTradeDailyLossRemaining(a) : null;
+  const riskKey = `${accountId}:${a?.riskDisplayConfigKey ?? "legacy"}:${tradovateDisplayTradeDate()}`;
+  const dllAt = [a?.cashUpdatedAt, rawDaily.confirmedAt, a?.unrealizedPnlUpdatedAt].filter((at): at is string => !!at);
+  const dllConfirmedAt = dllAt.length === 3 ? dllAt.sort((x,y)=>Date.parse(x)-Date.parse(y))[0] : null;
 
   const cell = (key: AccountColumnKey): React.ReactNode => {
     switch (key) {
@@ -2976,18 +2981,12 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
           : <span className="text-xs tabular-nums text-[var(--text-secondary)]">—</span>;
       case 'daily':
         return <span className={`text-xs tabular-nums ${a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? pnlClass(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : 'text-[var(--text-secondary)]'}`}>{a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? money.format(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : '—'}</span>;
-      case 'dllRemaining': {
-        if (!a || dailyPnlPending || dllRemaining == null) {
-          return <span className="text-xs tabular-nums text-[var(--text-secondary)]">—</span>;
-        }
-        const currentDailyPnl = a.realizedPnl + a.unrealizedPnl;
-        return <span
-          className={`text-xs tabular-nums font-bold ${dllRemainingClass(dllRemaining, a.dailyLossLimit)}`}
-          title={`DLL ${money.format(a.dailyLossLimit as number)} · dnešní realizovaný + otevřený P&L ${money.format(currentDailyPnl)}`}
-        >
-          {plain.format(Math.max(0, dllRemaining))}
-        </span>;
-      }
+      case 'dllRemaining':
+        return <LiveRiskValue identity={`${riskKey}:dll`} label="DLL zbývá" storageScope={a?.riskDisplayStorageScope} legacy={!!a && a.cashAvailability == null}
+          enabled={!!a && a.cashAvailability !== 'denied' && (a.dailyLossLimit == null || a.dailyLossLimit > 0)}
+          value={dailyPnlPending || a?.riskDisplayPending || dllRemaining == null ? null : Math.max(0,dllRemaining)} confirmedAt={dllConfirmedAt}
+          verified={cashKnown && !dailyPnlPending && a?.unrealizedPnlSource !== 'stale'}
+          color={value=>dllRemainingClass(value,a?.dailyLossLimit)} />;
       case 'unreal':
         return a ? <span
           className={`inline-flex items-center justify-end gap-1.5 text-xs tabular-nums ${pnlClass(a.unrealizedPnl)}`}
@@ -2999,7 +2998,10 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
           {a.unrealizedPnlSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
         </span> : <span className="text-xs text-[var(--text-secondary)]">—</span>;
       case 'distDd':
-        return <span className={`text-xs tabular-nums font-bold ${cushionClass(cushion)}`}>{cushion != null ? plain.format(cushion) : '—'}</span>;
+        return <LiveRiskValue identity={`${riskKey}:dd`} label="Rezerva DD" storageScope={a?.riskDisplayStorageScope} legacy={!!a && a.cashAvailability == null}
+          enabled={!!a && a.cashAvailability !== 'denied' && !a.riskDisplayDrawdownDisabled}
+          value={dailyPnlPending || a?.riskDisplayPending ? null : cushion} confirmedAt={a?.cashUpdatedAt ?? null}
+          verified={cashKnown && a?.unrealizedPnlSource !== 'stale'} color={cushionClass} />;
       case 'execLimit':
         return <span className="text-[11px] tabular-nums text-[var(--text-secondary)]">—</span>;
       case 'qtyMult':

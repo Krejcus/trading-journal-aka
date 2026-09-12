@@ -4,6 +4,7 @@ const productionOrigin = 'https://alphatrade-mentor-15.vercel.app';
 
 const allowedRequests = new Set([
   'GET /api/tradovate/oauth/status',
+  'GET /api/tradovate/oauth/copier-relay',
   'POST /api/tradovate/oauth/preflight',
   'POST /api/tradovate/oauth/live-pnl',
   'POST /api/tradovate/oauth/history',

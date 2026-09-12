@@ -59,6 +59,11 @@ export function tradovateCopyTradeSnapshot(
       }));
     return {
       id: account.id,
+      riskDisplayConfigKey: JSON.stringify([profile?.accountSize, profile?.accountType,
+        profile?.drawdownType, profile?.maxLoss, profile?.dailyLossLimit]),
+      riskDisplayDrawdownDisabled: profile?.drawdownType === 'none',
+      riskDisplayPending: [account.risk.limitsCoverage, account.risk.statusCoverage]
+        .some(coverage => coverage != null && !hasCompleteTradovateRead(coverage)),
       entityId: null,
       name: profile?.displayName?.trim() || account.name,
       firm: profileFirm(profile),

@@ -34,6 +34,18 @@ const profiles = [{
 }] as TradovateAccountProfile[];
 
 describe('Tradovate copy-trade bridge', () => {
+  it('keeps display identity across partial broker risk and renaming, but invalidates changed profile rules', () => {
+    const before=tradovateCopyTradeSnapshot(data,profiles).accounts[0];
+    const partial=structuredClone(data);
+    partial.accounts[0].risk.dailyLossAutoLiq=null;
+    partial.accounts[0].risk.maxNetLiq=55_000;
+    partial.accounts[0].risk.limitsCoverage={availability:'unavailable',count:0,httpStatus:503};
+    const after=tradovateCopyTradeSnapshot(partial,[{...profiles[0],displayName:'Renamed'}]).accounts[0];
+    expect(after.riskDisplayConfigKey).toBe(before.riskDisplayConfigKey);
+    expect(after.riskDisplayPending).toBe(true);
+    expect(tradovateCopyTradeSnapshot(data,[{...profiles[0],maxLoss:3_000}]).accounts[0].riskDisplayConfigKey).not.toBe(before.riskDisplayConfigKey);
+    expect(tradovateCopyTradeSnapshot(data,[{...profiles[0],drawdownType:'none'}]).accounts[0].riskDisplayDrawdownDisabled).toBe(true);
+  });
   it('feeds the TradeCopia-style UI exclusively from the OAuth account snapshot', () => {
     const snapshot = tradovateCopyTradeSnapshot(data, profiles);
     expect(snapshot.accounts[0]).toMatchObject({ name: 'Leader 50K', firm: 'Tradeify', dailyLossLimit: 1_200, balance: 49_000, equity: 48_900, realizedPnl: 120, unrealizedPnl: -100, cushion: 900 });

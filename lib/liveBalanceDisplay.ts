@@ -54,7 +54,7 @@ export function liveDailyPnlDisplay(account: LiveAccount | null | undefined, now
   if (account.dailyPnlTradeDate && account.dailyPnlTradeDate !== tradovateDisplayTradeDate(now)) return missing;
   const at = Date.parse(account.dailyPnlUpdatedAt ?? account.cashUpdatedAt ?? '');
   if (!Number.isFinite(at) || at > now + 1_000 || !sameTradovateSession(at, now)) return missing;
-  return { value: account.realizedPnl, stale: !isLiveAccountReadVerified(account, 'cash', now), confirmedAt: account.cashUpdatedAt! };
+  return { value: account.realizedPnl, stale: !isLiveAccountReadVerified(account, 'cash', now), confirmedAt: account.dailyPnlUpdatedAt ?? account.cashUpdatedAt! };
 }
 
 export function liveGroupDailyPnlDisplay(accounts: Array<LiveAccount | null | undefined>, now = Date.now(), pending = false): number | null {
