@@ -91,6 +91,7 @@ export async function authorizeTradovateCopierDevice(options: {
   db: SupabaseClient;
   authorization: string | undefined;
   now?: number;
+  touchLastUsed?: boolean;
 }): Promise<AuthorizedTradovateCopierDevice> {
   const match = /^Device ([0-9a-f-]{36})\.([A-Za-z0-9_-]{43,128})$/i.exec(options.authorization ?? '');
   if (!match || !UUID.test(match[1])) throw new Error('invalid-copier-device-auth');
@@ -107,12 +108,14 @@ export async function authorizeTradovateCopierDevice(options: {
   if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
     throw new Error('invalid-copier-device-auth');
   }
-  const { error: touchError } = await options.db
-    .from('tradovate_copier_devices')
-    .update({ last_used_at: new Date(options.now ?? Date.now()).toISOString() })
-    .eq('id', deviceId)
-    .is('revoked_at', null);
-  if (touchError) throw new Error(`copier-device-touch-failed: ${touchError.message}`);
+  if (options.touchLastUsed !== false) {
+    const { error: touchError } = await options.db
+      .from('tradovate_copier_devices')
+      .update({ last_used_at: new Date(options.now ?? Date.now()).toISOString() })
+      .eq('id', deviceId)
+      .is('revoked_at', null);
+    if (touchError) throw new Error(`copier-device-touch-failed: ${touchError.message}`);
+  }
   return {
     id: data.id,
     userId: data.user_id,

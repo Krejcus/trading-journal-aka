@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { authorizeTradovateCopierDevice } from '../../../server/tradovateCopierDevice.js';
 import {
+  claimTradovateCopierCommandV2, completeTradovateCopierCommandV2,
   claimTradovateCopierCommand, completeTradovateCopierCommand, enqueueTradovateCopierCommand,
   copierRelayValidationErrorStatus,
   heartbeatTradovateCopierDevice, readTradovateCopierCommand, readTradovateCopierDeviceRuntime,
@@ -40,8 +41,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const isDevice = req.headers.authorization?.startsWith('Device ');
     if (isDevice) {
       if (req.method !== 'POST') return res.status(405).json({ error: 'method-not-allowed' });
-      const device = await authorizeTradovateCopierDevice({ db, authorization: req.headers.authorization });
       const action = String(req.body?.action ?? '');
+      const device = await authorizeTradovateCopierDevice({ db, authorization: req.headers.authorization,
+        ...(['poll-v2', 'complete-v2'].includes(action) ? { touchLastUsed: false } : {}),
+      });
+      if (action === 'poll-v2') {
+        const deliveryId = String(req.body?.deliveryId ?? '');
+        if (!SNAPSHOT_TEST_REQUEST_ID.test(deliveryId)) return res.status(400).json({ error: 'invalid-delivery-id' });
+        const command = await claimTradovateCopierCommandV2({ db, deviceId: device.id, deliveryId });
+        return res.status(200).json({ protocol: 2, command, realtime: {
+          url: config.supabaseUrl, anonKey: config.supabaseAnonKey, topic: `copier-kick-${device.id}`,
+        } });
+      }
+      if (action === 'complete-v2' || action === 'heartbeat-v2' || action === 'background-v2') {
+        if (!Number.isSafeInteger(req.body?.revision) || req.body.revision <= 0
+          || !req.body?.status || !Number.isFinite(Date.parse(req.body.status.startedAt))) {
+          return res.status(400).json({ error: 'invalid-relay-heartbeat' });
+        }
+      }
+      if (action === 'heartbeat-v2') {
+        await heartbeatTradovateCopierDevice({ db, deviceId: device.id, userId: device.userId,
+          connectionId: device.connectionId, status: req.body.status, revision: req.body.revision, runtimeOnly: true });
+        return res.status(200).json({ protocol: 2, accepted: true });
+      }
+      if (action === 'complete-v2') {
+        const deliveryId = String(req.body?.deliveryId ?? '');
+        const commandId = String(req.body?.commandId ?? '');
+        if (!SNAPSHOT_TEST_REQUEST_ID.test(deliveryId) || !SNAPSHOT_TEST_REQUEST_ID.test(commandId)) {
+          return res.status(400).json({ error: 'invalid-delivery-id' });
+        }
+        const accepted = await completeTradovateCopierCommandV2({ db, deviceId: device.id, deliveryId, commandId,
+          result: req.body?.result, error: typeof req.body?.error === 'string' ? req.body.error : undefined,
+          status: req.body.status, revision: req.body.revision });
+        return res.status(accepted ? 200 : 409).json({ protocol: 2, accepted });
+      }
       if (action === 'snapshot-test') {
         const requestId = typeof req.body?.requestId === 'string' ? req.body.requestId.trim() : '';
         if (!SNAPSHOT_TEST_REQUEST_ID.test(requestId)) {
@@ -135,12 +168,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return res.status(202).json({ accepted: false });
         }
       }
-      if (action === 'poll') {
-        if (req.body?.status) await heartbeatTradovateCopierDevice({ db, deviceId: device.id, userId: device.userId, connectionId: device.connectionId, status: req.body.status });
+      if (action === 'poll' || action === 'background-v2') {
+        if (req.body?.status) await heartbeatTradovateCopierDevice({ db, deviceId: device.id, userId: device.userId, connectionId: device.connectionId, status: req.body.status,
+          ...(action === 'background-v2' ? { revision: req.body.revision } : {}) });
         // A queued control command takes priority over APNs and screenshots.
         // The heartbeat above durably retains events; when a command is ready,
         // the existing watchdog delivers them using the same dedup marker.
-        const command = await claimTradovateCopierCommand({ db, deviceId: device.id });
+        const command = action === 'background-v2' ? null : await claimTradovateCopierCommand({ db, deviceId: device.id });
+        if (action === 'background-v2' && Array.isArray(req.body?.completedCommandIds)) {
+          const ids = req.body.completedCommandIds.filter((id: unknown) => typeof id === 'string' && SNAPSHOT_TEST_REQUEST_ID.test(id)).slice(0, 20);
+          if (ids.length) {
+            // Notification work is deliberately on the background lane; ACK and
+            // subsequent controls do not wait for APNs or snapshot enrichment.
+            const { data: completed, error: lookupError } = await db.from('tradovate_copier_commands')
+              .select('id,command_type').eq('device_id', device.id).eq('status', 'succeeded')
+              .in('id', ids).in('command_type', ['arm-live', 'disarm'])
+              .gte('completed_at', new Date(Date.now() - 60_000).toISOString()).order('completed_at', { ascending: false }).limit(1);
+            if (lookupError) throw new Error('copier-relay-notification-lookup-failed');
+            for (const row of completed ?? []) {
+              if ((row.command_type === 'arm-live') !== req.body.status?.controller?.armed) continue;
+              await sendImmediateCopierArmPush({ db, userId: device.userId, deviceId: device.id,
+                transition: row.command_type === 'arm-live' ? 'arm-started' : 'arm-ended',
+                snapshotHealth: req.body.status?.snapshotHealth });
+            }
+          }
+        }
         // Worker hlásí nové trade eventy -> okamžitý push místo čekání na
         // minutový cron (sdílený marker, cron je jen záloha).
         if (!command && req.body?.copyEvents === true && req.body?.status) {
@@ -180,6 +232,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           }
         }
         return res.status(200).json({
+          ...(action === 'background-v2' ? { protocol: 2 } : {}),
           command,
           snapshotRequests,
           // Realtime „kick": worker se přihlásí k broadcast kanálu a příkaz

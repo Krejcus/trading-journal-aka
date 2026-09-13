@@ -472,3 +472,33 @@ describe('okamžité trade eventy', () => {
     await relay.close();
   });
 });
+
+describe('recoverable relay lane isolation', () => {
+  it('executes and publishes fresh status while background enrichment is hung', async () => {
+    const { randomUUID } = await import('node:crypto');
+    let saved: import('../server/copierRelayDeliveryStore').RelayDelivery | null = null;
+    let delivered = false;
+    const commandId = randomUUID();
+    const agent = { status, execute: vi.fn(async () => ({ ok: true })) } as unknown as LocalCopierExecutionAgent;
+    const actions: string[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)); actions.push(body.action);
+      if (body.action === 'background-v2') return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+      });
+      if (body.action === 'poll-v2') {
+        const command = delivered ? null : { id: commandId, command: { type: 'disarm' }, status: 'claimed',
+          createdAt: new Date(Date.now() + 1).toISOString(), expiresAt: new Date(Date.now() + 30_000).toISOString() };
+        delivered = true; return Response.json({ protocol: 2, command });
+      }
+      return Response.json({ protocol: 2, accepted: true });
+    });
+    const relay = startMacCopierCommandRelay({ apiOrigin: 'https://offline.invalid', agent, authorizationHeader: async () => 'offline',
+      deliveryStore: { read: async () => saved, write: async row => { saved = row; } }, fetchImpl: fetchImpl as typeof fetch });
+    try {
+      await vi.waitFor(() => expect(actions).toContain('complete-v2'));
+      expect(actions).toContain('heartbeat-v2'); expect(agent.execute).toHaveBeenCalledOnce();
+      expect(actions).not.toContain('poll');
+    } finally { await relay.close(); }
+  });
+});

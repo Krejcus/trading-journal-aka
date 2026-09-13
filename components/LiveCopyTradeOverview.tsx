@@ -327,6 +327,7 @@ interface PendingAction {
   successText?: string;
   /** Informační fail-closed dialog; potvrzení pouze zavře dialog. */
   blocked?: boolean;
+  outcomeUnknown?: boolean;
   /** UI-only kontext; audit ani runtime error se nepřepisuje. */
   accountIds?: number[];
 }
@@ -812,11 +813,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       const affectedGroup = groups.find(group => group.id === groupId)
         ?? (runtimeGroup?.id === groupId ? runtimeGroup : null);
       setPendingAction({
-        title: connecting ? 'Copier se nepodařilo zapnout' : 'Copier se nepodařilo vypnout',
+        title: connecting ? 'Zapnutí kopírky není potvrzené' : 'Vypnutí kopírky není potvrzené',
         detail: `${detail} AlphaTrade nebude pokračovat bez autoritativního potvrzení runtime. Zkontroluj aktuální stav skupiny a akci zopakuj až po ověření.`,
         confirmLabel: 'Rozumím',
         danger: true,
         blocked: true,
+        outcomeUnknown: true,
         accountIds: affectedGroup
           ? [affectedGroup.leaderAccountId, ...affectedGroup.followers.map(follower => follower.accountId)]
             .filter((accountId): accountId is number => accountId != null)
@@ -3739,7 +3741,9 @@ const ConfirmActionDialog = ({ action, busy, apiReady, onClose, onConfirm }: { a
       <h3 className="text-lg font-black text-[var(--text-primary)] mt-4">{action.title}</h3><p className="text-sm text-[var(--text-secondary)] mt-1.5 leading-relaxed">{action.detail}</p>
       {action.blocked ? (
         <div className="mt-4 rounded-xl border border-rose-500/25 bg-rose-500/[0.07] px-3 py-2.5 text-[11px] font-bold text-rose-600">
-          Žádný brokerový příkaz ani změna runtime nebyly odeslány.
+          {action.outcomeUnknown
+            ? 'Výsledek akce není ověřený. Příkaz se automaticky neopakuje; zkontroluj aktuální stav kopírky.'
+            : 'Žádný brokerový příkaz ani změna runtime nebyly odeslány.'}
         </div>
       ) : !action.run ? (
         <div className={`rounded-xl border px-3 py-2.5 text-[11px] font-bold mt-4 ${apiReady ? 'border-emerald-500/15 bg-emerald-500/[0.055] text-emerald-600' : 'border-blue-500/15 bg-blue-500/[0.055] text-blue-500'}`}>

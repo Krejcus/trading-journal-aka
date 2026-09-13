@@ -435,6 +435,30 @@ export async function claimTradovateCopierCommand(options: { db: SupabaseClient;
   return row ? { id: row.id, command: rowCommand(row), expiresAt: row.expires_at } : null;
 }
 
+export async function claimTradovateCopierCommandV2(options: { db: SupabaseClient; deviceId: string; deliveryId: string }) {
+  const { data, error } = await options.db.rpc('claim_tradovate_copier_command_v2', {
+    target_device_id: options.deviceId, target_delivery_id: options.deliveryId,
+  });
+  if (error) throw new Error(`copier-relay-claim-failed: ${error.message}`);
+  if (!Array.isArray(data) || data.length > 1) throw new Error('copier-relay-claim-invalid-response');
+  const row = data[0] as (CommandRow & { created_at: string }) | undefined;
+  return row ? { id: row.id, command: row.status === 'claimed' ? rowCommand(row) : null,
+    createdAt: row.created_at, expiresAt: row.expires_at, status: row.status } : null;
+}
+
+export async function completeTradovateCopierCommandV2(options: {
+  db: SupabaseClient; deviceId: string; deliveryId: string; commandId: string;
+  result?: unknown; error?: string; status: LocalCopierAgentStatus; revision: number;
+}): Promise<boolean> {
+  const { data, error } = await options.db.rpc('complete_tradovate_copier_command_v2', {
+    target_device_id: options.deviceId, target_delivery_id: options.deliveryId, target_command_id: options.commandId,
+    command_result: options.result ?? null, command_error: options.error?.slice(0, 500) || null,
+    snapshot: { ...options.status, nonce: '' }, revision: options.revision,
+  });
+  if (error) throw new Error(`copier-relay-complete-failed: ${error.message}`);
+  return data === true;
+}
+
 export async function completeTradovateCopierCommand(options: {
   db: SupabaseClient; deviceId: string; commandId: string; result?: unknown; error?: string;
 }): Promise<boolean> {
@@ -449,14 +473,17 @@ export async function completeTradovateCopierCommand(options: {
 }
 
 export async function heartbeatTradovateCopierDevice(options: {
-  db: SupabaseClient; deviceId: string; userId: string; connectionId: string; status: LocalCopierAgentStatus;
+  db: SupabaseClient; deviceId: string; userId: string; connectionId: string; status: LocalCopierAgentStatus; revision?: number; runtimeOnly?: boolean;
 }): Promise<void> {
   const safeStatus = { ...options.status, nonce: '' };
-  const { error } = await options.db.from('tradovate_copier_device_runtime').upsert({
+  const { error } = options.revision !== undefined
+    ? await options.db.rpc('heartbeat_tradovate_copier_v2', { target_device_id: options.deviceId, snapshot: safeStatus, revision: options.revision })
+    : await options.db.from('tradovate_copier_device_runtime').upsert({
     device_id: options.deviceId, user_id: options.userId, connection_id: options.connectionId,
     status: safeStatus, last_seen_at: new Date().toISOString(), started_at: options.status.startedAt,
   }, { onConflict: 'device_id' });
   if (error) throw new Error(`copier-relay-heartbeat-failed: ${error.message}`);
+  if (options.runtimeOnly) return;
   const trades = closedTradesFromStatus(options.status);
   if (trades.length > 0) {
     const { error: tradeError } = await options.db.from('tradovate_copier_trades').upsert(

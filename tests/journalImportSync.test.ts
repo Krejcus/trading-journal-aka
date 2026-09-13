@@ -102,3 +102,31 @@ describe('new journal synchronization and cutover', () => {
     expect(mergeImportedJournalTrades([manual, newlyInserted], [manual], [])).toEqual([manual, newlyInserted]);
   });
 });
+
+describe('unchanged journal load suppression', () => {
+  it('still loads on first visit, then skips only an already read unchanged receipt', async () => {
+    const f = fixture(); const verifiedReads = new Map<string, string>();
+    f.options.importConnection.mockResolvedValue({ ...accepted, unchanged: true });
+    expect(parseJournalImportResult({ ...accepted, unchanged: true }).unchanged).toBe(true);
+    await syncJournalConnections({ ...f.options, verifiedReads });
+    for (let i = 0; i < 20; i++) expect((await syncJournalConnections({ ...f.options, verifiedReads })).trades).toBeNull();
+    expect(f.options.loadTrades).toHaveBeenCalledTimes(1);
+    f.options.accounts[0].oauth!.externalAccountId = '999';
+    await syncJournalConnections({ ...f.options, verifiedReads }); expect(f.options.loadTrades).toHaveBeenCalledTimes(2);
+  });
+  it('retries a failed changed read even if the next unchanged receipt has the same revision', async () => {
+    const f = fixture(); const verifiedReads = new Map<string, string>();
+    await syncJournalConnections({ ...f.options, verifiedReads });
+    f.options.loadTrades.mockRejectedValueOnce(new Error('network'));
+    await expect(syncJournalConnections({ ...f.options, verifiedReads })).rejects.toThrow('network');
+    f.options.importConnection.mockResolvedValue({ ...accepted, unchanged: true });
+    await syncJournalConnections({ ...f.options, verifiedReads }); expect(f.options.loadTrades).toHaveBeenCalledTimes(3);
+  });
+  it('an invalidated or new session receipt cannot suppress a read', async () => {
+    const f = fixture(); const verifiedReads = new Map<string, string>();
+    f.options.importConnection.mockResolvedValue({ ...accepted, unchanged: true });
+    await syncJournalConnections({ ...f.options, verifiedReads });
+    await syncJournalConnections({ ...f.options, verifiedReads: new Map() });
+    expect(f.options.loadTrades).toHaveBeenCalledTimes(2);
+  });
+});

@@ -26,8 +26,10 @@ export function parseJournalImportResult(value: unknown): JournalImportResult {
     || (row.accepted === true && (row.stale === true || row.processing === true))
     || (processing && (row.stale === true || row.unchanged === true || !count(row.targetThrough)
       || row.targetThrough! < row.through || row.confirmed + row.pending + row.unassigned !== 0))
+    || (row.unchanged !== undefined && typeof row.unchanged !== 'boolean')
+    || (row.unchanged === true && row.accepted !== true)
     || (row.through === 0 && row.confirmed + row.pending + row.unassigned > 0)) throw new Error('journal-import-invalid-response');
-  return { accepted: row.accepted, stale: row.stale === true, through: row.through,
+  return { accepted: row.accepted, ...(row.unchanged === true ? { unchanged: true } : {}), stale: row.stale === true, through: row.through,
     ...(processing ? { processing: true, targetThrough: row.targetThrough } : {}),
     confirmed: row.confirmed, pending: row.pending, unassigned: row.unassigned };
 }
@@ -36,6 +38,8 @@ export function parseJournalImportResult(value: unknown): JournalImportResult {
  * All financial values are calculated server-side from immutable evidence. */
 export async function syncJournalConnections(options: {
   accounts: readonly Account[];
+  /** Session-scoped receipts whose complete trade read succeeded. */
+  verifiedReads?: Map<string, string>;
   isCurrent: () => boolean;
   signal: AbortSignal;
   loadStatus: () => Promise<TradovateOAuthStatus>;
@@ -60,6 +64,9 @@ export async function syncJournalConnections(options: {
   if (scopes.size > 250) throw new Error('journal-import-partition-required');
   const connections: JournalConnectionSync[] = [];
   let accepted = false;
+  const readReceipts = new Map<string, string>();
+  const accountScope = JSON.stringify(options.accounts.filter(account => account.oauth?.provider === 'tradovate')
+    .map(account => ({ id: account.id, oauth: account.oauth })).sort((a, b) => a.id.localeCompare(b.id)));
   for (const [connectionId, environment] of scopes) {
     active();
     if (environment !== 'demo') {
@@ -67,7 +74,17 @@ export async function syncJournalConnections(options: {
     }
     try {
       const result = parseJournalImportResult(await options.importConnection(connectionId, options.signal)); active();
-      accepted ||= result.accepted;
+      if (result.accepted) {
+        const receipt = JSON.stringify([accountScope, result.through, result.confirmed, result.pending, result.unassigned]);
+        readReceipts.set(connectionId, receipt);
+        // First visit and changed projection always require a complete read.
+        // Clear an old receipt before loading: if that read fails, the next
+        // unchanged response must not accidentally suppress the retry.
+        if (!result.unchanged || options.verifiedReads?.get(connectionId) !== receipt) {
+          accepted = true;
+          options.verifiedReads?.delete(connectionId);
+        }
+      }
       connections.push({ connectionId, through: result.through, pending: result.pending, unassigned: result.unassigned,
         ...(result.processing ? { targetThrough: result.targetThrough } : {}),
         state: result.processing ? 'processing' : !result.accepted ? 'stale' : result.through === 0 ? 'empty' : result.pending || result.unassigned ? 'pending' : 'ready' });
@@ -83,6 +100,7 @@ export async function syncJournalConnections(options: {
   // Even a zero-result import can invalidate a former trade. A complete read
   // must remove it from financial arrays, instead of retaining a stale P&L.
   const trades = accepted ? await options.loadTrades() : null; active();
+  if (trades) for (const [id, receipt] of readReceipts) options.verifiedReads?.set(id, receipt);
   return { report: { connections, completedAt: Date.now() }, trades };
 }
 

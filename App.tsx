@@ -1,3 +1,4 @@
+import { coalescedJournalRead } from './services/coalescedJournalRead';
 import { filterHistoryTrades } from './lib/historyTradeFilter';
 import { journalSourceConnections } from './services/journalSourceStatus';
 import { aggregateHistoryTrades, tradeDetailMembers } from './lib/tradeHistoryPresentation';
@@ -602,6 +603,7 @@ const App: React.FC = () => {
         setCopierImportRunning(false);
         copierImportAbortRef.current?.abort();
         copierJournalLastSyncRef.current = 0;
+        journalVerifiedReadsRef.current = new Map();
         copierJournalSyncBusyRef.current = false;
         setOfflineSnapshotAt(null);
         setSyncError(null);
@@ -719,6 +721,7 @@ const App: React.FC = () => {
   const [isUserFromDb, setIsUserFromDb] = useState(false);
   const copierJournalSyncBusyRef = useRef(false);
   const copierJournalLastSyncRef = useRef(0);
+  const journalVerifiedReadsRef = useRef(new Map<string, string>());
 
   const runCopierJournalSync = useCallback(async (force = false) => {
     const userId = session?.user?.id;
@@ -732,7 +735,7 @@ const App: React.FC = () => {
     setCopierImportRunning(true);
     const before = copierRowsRef.current;
     try {
-      const result = await syncJournalConnections({ accounts, signal: abort.signal,
+      const result = await syncJournalConnections({ accounts, signal: abort.signal, verifiedReads: journalVerifiedReadsRef.current,
         isCurrent: isCurrentSession, loadStatus: loadTradovateOAuthStatus,
         importConnection: importTradovateJournalConnection, loadTrades: () => storageService.getTrades(),
       });
@@ -756,6 +759,7 @@ const App: React.FC = () => {
   useEffect(() => {
     copierJournalSyncBusyRef.current = false;
     copierJournalLastSyncRef.current = 0;
+    journalVerifiedReadsRef.current = new Map();
     setCopierImportReport(null); setCopierImportError(false); setCopierImportRunning(false);
     return () => { copierImportAbortRef.current?.abort(); };
   }, [session?.user?.id]);
@@ -2168,23 +2172,21 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!session || !isInitialLoadDone) return;
     const isCurrentSession = captureSessionRequest(session.user.id);
-    let journalReadTimer: ReturnType<typeof setTimeout> | null = null;
-    let journalReadVersion = 0;
+    const journalReader = coalescedJournalRead({ read: async isLatest => {
+      if (!isCurrentSession()) return;
+      const before = copierRowsRef.current;
+      try {
+        const incoming = await storageService.getTrades();
+        if (!isCurrentSession() || !isLatest()) return;
+        setTrades(current => isCurrentSession() && isLatest()
+          ? mergeImportedJournalTrades(current, before, incoming) : current);
+      } catch {
+        if (isCurrentSession() && isLatest()) setCopierImportError(true);
+      }
+    } });
     const scheduleJournalRead = () => {
-      const version = ++journalReadVersion;
-      if (journalReadTimer) clearTimeout(journalReadTimer);
-      journalReadTimer = setTimeout(async () => {
-        if (!isCurrentSession()) return;
-        const before = copierRowsRef.current;
-        try {
-          const incoming = await storageService.getTrades();
-          if (!isCurrentSession() || version !== journalReadVersion) return;
-          setTrades(current => isCurrentSession() && version === journalReadVersion
-            ? mergeImportedJournalTrades(current, before, incoming) : current);
-        } catch {
-          if (isCurrentSession() && version === journalReadVersion) setCopierImportError(true);
-        }
-      }, 350);
+      journalVerifiedReadsRef.current = new Map();
+      journalReader.request();
     };
 
     // Delay Realtime subscription to avoid WebSocket connection attempts blocking initial REST calls
@@ -2294,8 +2296,7 @@ const App: React.FC = () => {
 
     return () => {
       clearTimeout(realtimeTimer);
-      journalReadVersion++;
-      if (journalReadTimer) clearTimeout(journalReadTimer);
+      journalReader.dispose();
       if (realtimeChannelRef.current) {
         supabase.removeChannel(realtimeChannelRef.current);
         realtimeChannelRef.current = null;

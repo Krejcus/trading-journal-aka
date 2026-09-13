@@ -1,3 +1,5 @@
+import { recoverableCopierDelivery } from './recoverableCopierDelivery.js';
+import type { RelayDeliveryStore } from './copierRelayDeliveryStore.js';
 import type { LocalCopierExecutionAgent } from './localCopierExecutionAgent.js';
 import {
   localCopierAgentErrorDetails,
@@ -41,6 +43,8 @@ export function startMacCopierCommandRelay(options: {
   agent: LocalCopierExecutionAgent;
   fetchImpl?: typeof fetch;
   pollMs?: number;
+  /** Opt in only with the durable device checkpoint; never fall back to v1. */
+  deliveryStore?: RelayDeliveryStore;
   /**
    * Volitelný realtime „kick": server po zařazení příkazu pošle broadcast a
    * relay poll proběhne okamžitě místo čekání na interval. Konfigurace
@@ -159,62 +163,126 @@ export function startMacCopierCommandRelay(options: {
     }, 10_000, loopAbort.signal);
   };
 
+  let statusRevision = 0;
+  const completedNotifications = new Set<string>();
+  const handoffSnapshots = (response: Record<string, unknown>) => {
+    if (!Array.isArray(response.snapshotRequests) || !options.onSnapshotRequests) return;
+    const requests = response.snapshotRequests.flatMap(value => {
+      const row = value as Record<string, unknown> | null;
+      if (!row || typeof row.id !== 'string' || typeof row.symbol !== 'string') return [];
+      return [{ id: row.id, symbol: row.symbol, timeframe: typeof row.timeframe === 'string' ? row.timeframe : null }];
+    });
+    if (requests.length) options.onSnapshotRequests(requests);
+  };
+  let background: Promise<void> | null = null;
+  let backgroundTimer: ReturnType<typeof setTimeout> | null = null;
+  const publishBackground = () => {
+    if (stopped || background || !options.deliveryStore) return;
+    if (backgroundTimer) clearTimeout(backgroundTimer);
+    const sentRevision = copyEventsRevision;
+    const ids = [...completedNotifications].slice(0, 20);
+    background = (async () => {
+      try {
+        const response = await request({ action: 'background-v2', status: options.agent.status(), revision: ++statusRevision,
+          ...(sentRevision !== acknowledgedCopyEventsRevision ? { copyEvents: true } : {}), completedCommandIds: ids,
+        }, 10_000, loopAbort.signal);
+        if (response.protocol !== 2) throw new Error('relay-delivery-protocol-unavailable');
+        acknowledgedCopyEventsRevision = sentRevision;
+        for (const id of ids) completedNotifications.delete(id);
+        if (!stopped) handoffSnapshots(response);
+      } catch (error) {
+        if (!stopped) console.warn(`COPIER RELAY background: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        background = null;
+        if (!stopped) backgroundTimer = setTimeout(publishBackground, 1_000);
+      }
+    })();
+  };
+  let statusHeartbeat: Promise<void> | null = null;
+  let statusTimer: ReturnType<typeof setTimeout> | null = null;
+  const publishStatus = () => {
+    if (stopped || statusHeartbeat || !options.deliveryStore) return;
+    statusHeartbeat = (async () => {
+      try {
+        const response = await request({ action: 'heartbeat-v2', status: options.agent.status(), revision: ++statusRevision }, 3_000, loopAbort.signal);
+        if (response.protocol !== 2 || response.accepted !== true) throw new Error('relay-heartbeat-not-confirmed');
+      } catch (error) {
+        if (!stopped) console.warn(`COPIER RELAY status: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        statusHeartbeat = null;
+        if (!stopped) statusTimer = setTimeout(publishStatus, 2_000);
+      }
+    })();
+  };
+  const delivery = options.deliveryStore ? recoverableCopierDelivery({
+    store: options.deliveryStore, agent: options.agent,
+    request: body => request(body, 3_000, loopAbort.signal),
+    nextRevision: () => ++statusRevision,
+    isActive: () => !stopped,
+    onComplete: id => { completedNotifications.add(id); publishBackground(); },
+  }) : null;
   const loop = async () => {
     let failures = 0;
     while (!stopped) {
       try {
-        const sentCopyEventsRevision = copyEventsRevision;
-        const notifyCopyEvents = sentCopyEventsRevision !== acknowledgedCopyEventsRevision;
-        const response = await request({
-          action: 'poll',
-          status: options.agent.status(),
-          ...(notifyCopyEvents ? { copyEvents: true } : {}),
-        }, 10_000, loopAbort.signal);
-        failures = 0;
-        // ACK covers only the heartbeat just sent. A newer event may have
-        // arrived while its HTTP response was pending and needs another poll.
-        acknowledgedCopyEventsRevision = sentCopyEventsRevision;
-        await maybeSubscribeKick(response.realtime);
-        if (Array.isArray(response.snapshotRequests) && options.onSnapshotRequests) {
-          const requests = response.snapshotRequests.flatMap(value => {
-            if (!value || typeof value !== 'object') return [];
-            const row = value as Record<string, unknown>;
-            if (typeof row.id !== 'string' || typeof row.symbol !== 'string') return [];
-            return [{
-              id: row.id,
-              symbol: row.symbol,
-              timeframe: typeof row.timeframe === 'string' ? row.timeframe : null,
-            }];
-          });
-          if (requests.length > 0) options.onSnapshotRequests(requests);
-        }
-        const remote = response.command as { id?: string; command?: LocalCopierAgentCommand; expiresAt?: string } | null;
-        if (remote?.id && remote.command) {
-          // Telemetrie: enqueue čas = expiresAt - 30 s (server TTL). Čekání
-          // ve frontě přímo ukazuje, jestli realtime kick funguje (<300 ms).
-          const expiresAt = typeof remote.expiresAt === 'string' ? Date.parse(remote.expiresAt) : NaN;
-          if (Number.isFinite(expiresAt)) {
-            const queuedAt = expiresAt - 30_000;
-            if (Number.isFinite(queuedAt)) {
-              console.log(`${new Date().toISOString()} RELAY CMD ${remote.command.type} čekal ve frontě ${Math.max(0, Date.now() - queuedAt)} ms`);
-            }
+        if (delivery) {
+          const response = await delivery();
+          await maybeSubscribeKick(response.realtime);
+          failures = 0;
+        } else {
+          const sentCopyEventsRevision = copyEventsRevision;
+          const notifyCopyEvents = sentCopyEventsRevision !== acknowledgedCopyEventsRevision;
+          const response = await request({
+            action: 'poll',
+            status: options.agent.status(),
+            ...(notifyCopyEvents ? { copyEvents: true } : {}),
+          }, 10_000, loopAbort.signal);
+          failures = 0;
+          // ACK covers only the heartbeat just sent. A newer event may have
+          // arrived while its HTTP response was pending and needs another poll.
+          acknowledgedCopyEventsRevision = sentCopyEventsRevision;
+          await maybeSubscribeKick(response.realtime);
+          if (Array.isArray(response.snapshotRequests) && options.onSnapshotRequests) {
+            const requests = response.snapshotRequests.flatMap(value => {
+              if (!value || typeof value !== 'object') return [];
+              const row = value as Record<string, unknown>;
+              if (typeof row.id !== 'string' || typeof row.symbol !== 'string') return [];
+              return [{
+                id: row.id,
+                symbol: row.symbol,
+                timeframe: typeof row.timeframe === 'string' ? row.timeframe : null,
+              }];
+            });
+            if (requests.length > 0) options.onSnapshotRequests(requests);
           }
-          if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-            await complete(remote.id, undefined, 'command-expired-before-execution');
-          } else {
-            let result: unknown;
-            let executionError: string | undefined;
-            try {
-              result = await options.agent.execute(remote.command);
-            } catch (error) {
-              executionError = error instanceof Error ? error.message : String(error);
-              const errorDetails = localCopierAgentErrorDetails(error);
-              if (errorDetails) result = { errorDetails };
+          const remote = response.command as { id?: string; command?: LocalCopierAgentCommand; expiresAt?: string } | null;
+          if (remote?.id && remote.command) {
+            // Telemetrie: enqueue čas = expiresAt - 30 s (server TTL). Čekání
+            // ve frontě přímo ukazuje, jestli realtime kick funguje (<300 ms).
+            const expiresAt = typeof remote.expiresAt === 'string' ? Date.parse(remote.expiresAt) : NaN;
+            if (Number.isFinite(expiresAt)) {
+              const queuedAt = expiresAt - 30_000;
+              if (Number.isFinite(queuedAt)) {
+                console.log(`${new Date().toISOString()} RELAY CMD ${remote.command.type} čekal ve frontě ${Math.max(0, Date.now() - queuedAt)} ms`);
+              }
             }
-            // ACK transport failure must never be rewritten as execution
-            // failure: the broker outcome may already be authoritative and
-            // must not be retried or falsely reported as unexecuted.
-            await complete(remote.id, result, executionError);
+            if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+              await complete(remote.id, undefined, 'command-expired-before-execution');
+            } else {
+              let result: unknown;
+              let executionError: string | undefined;
+              try {
+                result = await options.agent.execute(remote.command);
+              } catch (error) {
+                executionError = error instanceof Error ? error.message : String(error);
+                const errorDetails = localCopierAgentErrorDetails(error);
+                if (errorDetails) result = { errorDetails };
+              }
+              // ACK transport failure must never be rewritten as execution
+              // failure: the broker outcome may already be authoritative and
+              // must not be retried or falsely reported as unexecuted.
+              await complete(remote.id, result, executionError);
+            }
           }
         }
       } catch (error) {
@@ -229,9 +297,12 @@ export function startMacCopierCommandRelay(options: {
     }
   };
   running = loop();
+  publishBackground();
+  publishStatus();
   return {
     nudgeCopyEvents() {
       copyEventsRevision += 1;
+      publishBackground();
       kickPending = true;
       wake?.();
     },
@@ -280,7 +351,9 @@ export function startMacCopierCommandRelay(options: {
       stopped = true;
       loopAbort.abort(new Error('copier-relay-close'));
       wake?.();
-      await running;
+      if (backgroundTimer) clearTimeout(backgroundTimer);
+      if (statusTimer) clearTimeout(statusTimer);
+      await Promise.all([running, background, statusHeartbeat]);
       await clearKickSubscription();
     },
   };

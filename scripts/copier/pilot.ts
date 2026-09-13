@@ -1,3 +1,4 @@
+import { fileRelayDeliveryStore } from '../../server/copierRelayDeliveryStore.js';
 import { copierJournalLinks } from '../../services/copierJournalLinks';
 import { startLocalCopierJournal } from '../../server/localCopierJournal';
 import { createTradovateAccountDisplayFeed } from '../../server/tradovateAccountDisplayFeed';
@@ -916,6 +917,7 @@ async function runLocalAgent(
       relay = startMacCopierCommandRelay({
         ...context.relay,
         agent,
+        deliveryStore: fileRelayDeliveryStore(resolve(root, `${key}.relay-delivery.json`)),
         // Realtime budíček: příkaz z UI dorazí za ~100–300 ms místo čekání
         // na poll interval. Kanál nese jen „kick", data jdou dál přes
         // autentizovaný REST relay; poll zůstává jako záloha.

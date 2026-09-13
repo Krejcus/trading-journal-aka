@@ -208,6 +208,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-13 — Codex: lokální oprava latence a obnovy copier relay
+
+Po měření ztraceného `claimed` příkazu připravena izolovaná oprava z `5b2265f2`: oddělené řízení / rychlý heartbeat / pozadí, durable delivery checkpoint, idempotentní claim a completion, ochrana proti opakování execution a starému ARM po restartu. Přídavná migrace zůstává lokální; v1 kompatibilita pro postupné nasazení zachována. Opožděné snapshoty nesmějí přepsat novější stav. Historie zachovává `unchanged`, první čtení a invalidace; realtime čtení je single-flight. Neověřený ON/OFF dialog už netvrdí, že nic nebylo odesláno.
+
+Ověření: celá sada 3541 testů (46 vyžadovalo povolení lokálního testovacího portu a následně prošlo), navíc 2 nové ochrany v cílené sadě 82/82; TypeScript, web build, worker bundle a 20 izolovaných SQL kontrol. Offline výpadek claim/ACK se zotavil za cca 3,7 s s jediným provedením; není to produkční rychlost. Žádný deploy, remote migrace, reinstall ani živé přepínání. Detaily, omezení a pořadí aktivace: `docs/COPIER_RELAY_RECOVERY_20260913.md`.
+
 ### 2026-09-13 — Retire obsolete Tradecopia import and notifications
 
 - Removed legacy notification settings, auto-import queue, Tradovate/Tradesyncer CSV dialogs and account/history upload entry points. Preserved current journal import, account source status, historical records and current copier alerts.

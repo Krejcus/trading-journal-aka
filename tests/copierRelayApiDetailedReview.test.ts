@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  authorize: vi.fn(), heartbeat: vi.fn(), claim: vi.fn(), push: vi.fn(),
+  claimV2: vi.fn(), completeV2: vi.fn(), authorize: vi.fn(), heartbeat: vi.fn(), claim: vi.fn(), push: vi.fn(),
   requireUser: vi.fn(), enqueue: vi.fn(), read: vi.fn(), snapshots: vi.fn(), tick: vi.fn(),
 }));
 vi.mock('../server/tradovateOAuthStore', () => ({
@@ -11,6 +11,7 @@ vi.mock('../server/tradovateOAuthStore', () => ({
 }));
 vi.mock('../server/tradovateCopierDevice', () => ({ authorizeTradovateCopierDevice: mocks.authorize }));
 vi.mock('../server/tradovateCopierCommandRelay', () => ({
+  claimTradovateCopierCommandV2: mocks.claimV2, completeTradovateCopierCommandV2: mocks.completeV2,
   heartbeatTradovateCopierDevice: mocks.heartbeat, claimTradovateCopierCommand: mocks.claim,
   enqueueTradovateCopierCommand: mocks.enqueue, readTradovateCopierCommand: mocks.read,
   copierRelayValidationErrorStatus: () => null,
@@ -101,5 +102,47 @@ describe('copier relay API fault review', () => {
       expect(res.status).toHaveBeenCalledWith(202);
       expect(res.json).toHaveBeenCalledWith(queued);
     } finally { vi.useRealTimers(); vi.unstubAllGlobals(); }
+  });
+});
+
+
+describe('v2 control lane', () => {
+  const deliveryId = '11111111-1111-4111-8111-111111111111';
+  const invoke = async (body: Record<string, unknown>) => {
+    const res = response();
+    await handler({ method: 'POST', headers: { authorization: 'Device mock' }, body } as VercelRequest, res as unknown as VercelResponse);
+    return res;
+  };
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.authorize.mockResolvedValue({ id: 'device', userId: 'user', connectionId: 'connection' });
+    mocks.claimV2.mockResolvedValue(null); mocks.completeV2.mockResolvedValue(true);
+  });
+  it('authenticates freshly but skips the device touch and all background work on poll', async () => {
+    const res = await invoke({ action: 'poll-v2', deliveryId });
+    expect(mocks.authorize).toHaveBeenCalledWith(expect.objectContaining({ touchLastUsed: false }));
+    expect(mocks.claimV2).toHaveBeenCalledWith(expect.objectContaining({ deliveryId, deviceId: 'device' }));
+    expect(mocks.heartbeat).not.toHaveBeenCalled(); expect(mocks.push).not.toHaveBeenCalled();
+    expect(mocks.tick).not.toHaveBeenCalled(); expect(mocks.snapshots).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ protocol: 2, command: null }));
+  });
+  it('ACKs through the atomic RPC without waiting for notifications or a second heartbeat', async () => {
+    const res = await invoke({ action: 'complete-v2', deliveryId, commandId: deliveryId,
+      status: { startedAt: '2026-09-13T10:00:00Z' }, revision: 2, result: { ok: true } });
+    expect(mocks.completeV2).toHaveBeenCalledOnce(); expect(mocks.heartbeat).not.toHaveBeenCalled();
+    expect(mocks.push).not.toHaveBeenCalled(); expect(res.json).toHaveBeenCalledWith({ protocol: 2, accepted: true });
+  });
+  it('keeps the fast heartbeat free of history and notifications', async () => {
+    const res = await invoke({ action: 'heartbeat-v2', status: { startedAt: '2026-09-13T10:00:00Z' }, revision: 3 });
+    expect(mocks.heartbeat).toHaveBeenCalledWith(expect.objectContaining({ runtimeOnly: true, revision: 3 }));
+    expect(mocks.claimV2).not.toHaveBeenCalled(); expect(mocks.push).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+  it('rejects bad identifiers, missing revisions and revoked devices before claim/complete', async () => {
+    expect((await invoke({ action: 'poll-v2', deliveryId: 'bad' })).status).toHaveBeenCalledWith(400);
+    expect((await invoke({ action: 'complete-v2', deliveryId, commandId: deliveryId, status: {} })).status).toHaveBeenCalledWith(400);
+    mocks.authorize.mockRejectedValueOnce(new Error('invalid-copier-device-auth'));
+    expect((await invoke({ action: 'poll-v2', deliveryId })).status).toHaveBeenCalledWith(401);
+    expect(mocks.claimV2).not.toHaveBeenCalled(); expect(mocks.completeV2).not.toHaveBeenCalled();
   });
 });
