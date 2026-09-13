@@ -1,3 +1,5 @@
+import { copierJournalLinks } from '../../services/copierJournalLinks';
+import { startLocalCopierJournal } from '../../server/localCopierJournal';
 import { access, appendFile, chmod, copyFile, mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -218,11 +220,12 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
       connectionLabel: connectionLabel(context.connectionId),
       onReconnectDiagnostic: logReconnectDiagnostic,
     });
-    await runLocalAgent([context], leaderId, followerId, accounts, broker);
+    await runLocalAgent([context], leaderId, followerId, accounts, broker, [{ broker, label: connectionLabel(context.connectionId), connectionId: context.connectionId }]);
     return;
   }
 
   assertFlatAndNoWorking(selectedAccounts);
+  if (selected !== 'live' && selected !== 'shadow') throw new Error('Unsupported runtime command');
   await runRuntime(selected, context, leaderId, followerId, accountSpecsByAccountId);
 }
 
@@ -285,7 +288,7 @@ async function runMultiConnectionAgent(): Promise<void> {
   }
   await runLocalAgent(
     loaded.map(item => item.context), leaderId, followerId, accounts, broker,
-    loaded.map(item => ({ broker: item.broker, label: `conn:${item.context.connectionId.slice(0, 8)}` })),
+    loaded.map(item => ({ broker: item.broker, label: `conn:${item.context.connectionId.slice(0, 8)}`, connectionId: item.context.connectionId })),
     async request => {
       const refreshed = await refreshDynamicBrokerRoutes(routingConnections, broker, request);
       for (const accountId of refreshed.missingOptional) {
@@ -304,7 +307,7 @@ async function runLocalAgent(
   followerId: number,
   accounts: ExecutionAccount[],
   baseBroker: BrokerPort,
-  renewableBrokers: ReadonlyArray<{ broker: TradovateBrokerPort; label: string }> = [],
+  renewableBrokers: ReadonlyArray<{ broker: TradovateBrokerPort; label: string; connectionId: string }> = [],
   prepareGroupAccounts?: (request: PrepareGroupAccountsRequest) => Promise<PrepareGroupAccountsResult>,
 ): Promise<void> {
   const context = contexts[0];
@@ -397,6 +400,8 @@ async function runLocalAgent(
     );
   }
   const releaseLock = await acquireProcessLock(resolve(root, `${key}.lock`));
+  const journals: Array<Awaited<ReturnType<typeof startLocalCopierJournal>>> = [];
+  const recordedJournalLinks = new Set<string>();
   let auditTail = Promise.resolve();
   let controller: CopierRuntimeController | null = null;
   let agent: Awaited<ReturnType<typeof startLocalCopierExecutionAgent>> | null = null;
@@ -559,6 +564,7 @@ async function runLocalAgent(
       await attempt(() => auditTail);
       await attempt(() => agent?.close());
       await attempt(() => controller?.stop());
+      for (const journal of journals) await attempt(() => journal.close());
       await attempt(releaseLock);
       cancelShutdownWatchdog();
       if (firstFailure) throw firstFailure;
@@ -628,9 +634,52 @@ async function runLocalAgent(
     check();
   };
   try {
+    for (const connection of renewableBrokers) {
+      const owner = contexts.find(candidate => candidate.connectionId === connection.connectionId);
+      if (!owner) continue;
+      try {
+        journals.push(await startLocalCopierJournal({
+          path: resolve(root, `${key}.${connection.connectionId}.journal.jsonl`),
+          connectionId: connection.connectionId, environment: owner.environment,
+          broker: connection.broker,
+          relay: owner.relay,
+        }));
+      } catch (error) {
+        console.warn(`[JOURNAL] recording unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     controller = await bootstrapCopierRuntime({
       broker,
-      store: runtimeStore,
+      store: {
+        load: () => runtimeStore.load(),
+        async commit(snapshot, expectedRevision) {
+          const committed = await runtimeStore.commit(snapshot, expectedRevision);
+          // Durable execution commit completes first. Recording cannot change its result.
+          try {
+            const resolveLeader = (orderId: string) => {
+              const owners = journals.flatMap(journal => {
+                const accountId = journal.accountForOrder(orderId);
+                return accountId == null ? [] : [{ connectionId: journal.connectionId, accountId }];
+              });
+              return owners.length === 1 ? owners[0] : null;
+            };
+              for (const event of copierJournalLinks(committed, resolveLeader, Date.now())) {
+                const owners = journals.filter(journal => journal.accountForOrder(String(event.entity.orderId)) === event.entity.accountId);
+                if (owners.length !== 1) continue;
+                const eventKey = `${owners[0].connectionId}:${event.entity.id}`;
+                if (!recordedJournalLinks.has(eventKey)) {
+                  // Recording is asynchronous: disk latency must never delay execution.
+                  void owners[0].record(event).then(persisted => {
+                    if (persisted) recordedJournalLinks.add(eventKey);
+                  });
+                }
+              }
+          } catch (error) {
+            console.warn(`[JOURNAL] order-link capture failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          return committed;
+        },
+      },
       group,
       metrics: createCopierMetrics(),
       // Všichni followeři musí odejít v JEDEN okamžik. Sériový dispatch
@@ -657,6 +706,7 @@ async function runLocalAgent(
         // Jen vstup a výstup (rozhodnutí uživatele 2026-08-22): posun SL je
         // vlastní akce — notifikace stačí textová a snímek by byl jen šum.
         if (event.kind !== 'entry' && event.kind !== 'exit') return;
+        const snapshotKind = event.kind;
         const snapshotRelay = relay;
         const notifyDeadlineAt = event.at + COPY_EVENT_IMAGE_PUSH_DEADLINE_MS;
         // Po grace worker vyvolá druhý průchod. Pokud obrázek uspěl, serverový
@@ -691,7 +741,7 @@ async function runLocalAgent(
           try {
             await snapshotRelay.uploadSnapshot({
               episodeId: event.episodeId!,
-              kind: event.kind,
+              kind: snapshotKind,
               at: event.at,
               symbol: event.symbol,
               png: png.toString('base64'),

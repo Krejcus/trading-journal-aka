@@ -1,3 +1,7 @@
+import { readSharedTradePage, readSharedTradeHistory, sharedTradeDisplayModel } from './sharedTradeRead';
+import { sharedResultStats } from '../lib/sharedTradeStats';
+import { groupNetworkTrades } from '../lib/networkTradeGroups';
+import { completeNetworkTradeGroups } from './networkTradeGroupRead';
 import { hydrateLegacyTradeNotes, stripLegacyTradeNotes, tradeNotesStorageReady, privateNotesFromSavedRow, readConnectionTradeNoteConsent, confirmConnectionTradeNotes } from './tradeLegacyNotes';
 import { loadLabExperiments, persistLabExperiment, removeLabExperiment } from './labExperimentPersistence';
 
@@ -10,10 +14,21 @@ import { resizeImageDataUrl, dataUrlSizeKB } from './imageResize';
 import { stripAndUploadBase64Images, hasBase64Images } from './stripBase64';
 import { clearAppStorage } from '../utils/appStorage';
 import { parseOptionalTradeValidity } from './tradeValidity';
-import { containsTradeNoteHistory, hydrateOwnedTradeNoteHistories, publicTradeNotes, stripTradeNoteHistory } from './tradeNotePrivacy';
+import { containsTradeNoteHistory, hydrateOwnedTradeNoteHistories, publicTradeNotes, stripTradeNoteHistory as stripNoteHistory } from './tradeNotePrivacy';
 import { backtestReviewDataFromRow, backtestReviewPatch, requestBacktestReviewPatch, type BacktestReviewSnapshot } from './backtestReviewPersistence';
+import { hydrateOwnedJournalTrades, stripPrivateJournalHistory, journalProjectionFingerprint } from './journalTradeHydration';
+import { readOwnedJournalDetails } from './journalTradeDetail';
+import { readTradeListPages } from './tradeListPages';
+import { isEvidenceJournalTrade, isRetiredJournalTrade } from '../lib/journalTradeFacts';
+import { journalReviewPatch } from '../lib/journalReviewPatch';
+import { readJournalInbox, readJournalRetainedReview, type JournalInboxKind } from './journalReviewInbox';
+import { readJournalSourceStatus } from './journalSourceStatus';
+import { loadTradovateJournalSourceStatus } from './tradovateOAuthConnection';
 
 const embedTrade = (trade: Trade) => void import('./embeddingService').then(module => module.embedTrade(trade));
+// All ordinary trade saves remove both private ledgers. Each has a dedicated
+// owner-only persistence path and is rehydrated only for authorized reads.
+const stripTradeNoteHistory = <T,>(value: T): T => stripPrivateJournalHistory(stripNoteHistory(value));
 const embedPrep = (prep: DailyPrep) => void import('./embeddingService').then(module => module.embedPrep(prep));
 const embedReview = (review: DailyReview) => void import('./embeddingService').then(module => module.embedReview(review));
 
@@ -64,6 +79,13 @@ const hydratePrivateTradeNotes = async <T extends Pick<Trade, 'id'>>(trades: T[]
   const stillCurrent = async () => !signal?.aborted && version === authStateVersion && await getUserId() === owner;
   const legacy = owner ? await hydrateLegacyTradeNotes(supabase, trades, owner === targetOwnerId ? 'owner' : 'connection', stillCurrent, signal) : trades.map(stripLegacyTradeNotes);
   return hydrateOwnedTradeNoteHistories(supabase, legacy, owner, targetOwnerId, stillCurrent, signal);
+};
+
+const hydratePrivateJournalFacts = async (trades: Trade[], targetOwnerId: string | null, signal?: AbortSignal, detail = false): Promise<Trade[]> => {
+  const version = authStateVersion;
+  const owner = await getUserId();
+  return hydrateOwnedJournalTrades(supabase, trades, owner, targetOwnerId,
+    async () => version === authStateVersion && await getUserId() === owner, { signal, detail });
 };
 
 // Safe LocalStorage helper to prevent QuotaExceededError from crashing the app
@@ -188,6 +210,7 @@ export const storageService = {
         needsReview: d.needsReview === true,
         exitReason: d.exitReason || undefined,
         copierTradeId: d.copierTradeId || undefined,
+        journalSupersededBy: d.journalSupersededBy || undefined,
         copierEpisodeId: d.copierEpisodeId || undefined,
         copierSnapshots: Array.isArray(d.copierSnapshots) ? d.copierSnapshots : undefined,
         pnlEstimated: d.pnlEstimated === true,
@@ -271,6 +294,7 @@ export const storageService = {
     // full dashboard refreshes. Cache failures must never turn a successful
     // server response into an application error.
     const userId = raw.user?.id;
+    trades = await hydratePrivateJournalFacts(trades, userId ?? null, signal);
     trades = await hydratePrivateTradeNotes(trades, userId ?? null, signal);
     if (signal?.aborted) throw new Error('dashboard-read-invalidated');
     if (userId && user) {
@@ -337,7 +361,7 @@ export const storageService = {
       const preferences = prefsRaw ? JSON.parse(prefsRaw) : (validSnapshot?.preferences || null);
       const timestampRaw = localStorage.getItem(`alphatrade_cache_timestamp_${userId}`);
       const timestamp = timestampRaw ? Number(timestampRaw) : NaN;
-      const cachedTrades = (trades || validSnapshot?.trades || []) as Trade[];
+      const cachedTrades = ((trades || validSnapshot?.trades || []) as Trade[]).filter(trade => !isRetiredJournalTrade(trade));
       const activeOwner = await getUserId();
       return {
         trades: activeOwner === userId ? cachedTrades : cachedTrades.map(t => stripLegacyTradeNotes(stripTradeNoteHistory(t))),
@@ -428,6 +452,23 @@ export const storageService = {
   },
 
   // Trades
+  async getJournalReviewInbox(kind: JournalInboxKind, options: { after?: string | null; accountIds?: string[]; signal?: AbortSignal } = {}) {
+    const version = authStateVersion;
+    const owner = await getUserId();
+    if (!owner) throw new Error('journal-inbox-session-changed');
+    return readJournalInbox(supabase, owner, kind,
+      async () => version === authStateVersion && await getUserId() === owner, options);
+  },
+
+  async getJournalRetainedReview(tradeId: string, signal?: AbortSignal) {
+    const version = authStateVersion;
+    const owner = await getUserId();
+    if (!owner) throw new Error('journal-inbox-session-changed');
+    return readJournalRetainedReview(supabase, owner, tradeId,
+      async () => version === authStateVersion && await getUserId() === owner,
+      trades => hydratePrivateTradeNotes(trades, owner, signal), signal);
+  },
+
   // Synchronous method for initial load, returns empty array as IndexedDB is async.
   getCachedTrades(): Trade[] {
     return [];
@@ -440,24 +481,27 @@ export const storageService = {
 
     const localKey = `alphatrade_trades_${userId}`;
     const cached = await get(localKey);
-    return cached || [];
+    return (cached || []).filter((trade: Trade) => !isRetiredJournalTrade(trade));
   },
 
   async getTrades(targetUserId?: string): Promise<Trade[]> {
-    const userId = targetUserId || await getUserId();
+    const requestVersion=authStateVersion;
+    const ownerId=await getUserId();
+    const userId = targetUserId || ownerId;
+    const stillCurrent=async()=>requestVersion===authStateVersion && await getUserId()===ownerId && requestVersion===authStateVersion;
 
     // Fast IndexedDB fallback
     const localKey = userId ? `alphatrade_trades_${userId}` : 'alphatrade_trades';
-    let localTrades: Trade[] = await get(localKey) || [];
+    let localTrades: Trade[] = ((await get(localKey)) || []).filter((trade: Trade) => !isRetiredJournalTrade(trade));
     if (!userId || userId !== await getUserId()) localTrades = localTrades.map(t => stripLegacyTradeNotes(stripTradeNoteHistory(t)));
 
     if (!userId) return localTrades;
 
     // Optimized select to avoid fetching heavy 'screenshot'/'screenshots' from 'data' JSON blob
     // We explicitly select the fields we need.
-    const { data: rawData, error } = await supabase
-      .from('trades')
-      .select(`
+    if (!await stillCurrent()) throw new Error('trade-list-session-changed');
+    const generation=ownerId===userId ? await journalProjectionFingerprint(supabase,userId) : null;
+    const fields=`
         id,
         user_id,
         account_id,
@@ -500,6 +544,7 @@ export const storageService = {
         needsReview:data->>needsReview,
         exitReason:data->>exitReason,
         copierTradeId:data->>copierTradeId,
+        journalSupersededBy:data->>journalSupersededBy,
         copierEpisodeId:data->>copierEpisodeId,
         copierSnapshots:data->copierSnapshots,
         pnlEstimated:data->>pnlEstimated,
@@ -546,18 +591,16 @@ export const storageService = {
         excursion:data->excursion,
         entryMap:data->entryMap,
         entryContext:data->entryContext
-      `)
-      .eq('user_id', userId)
-      .order('timestamp', { ascending: false })
-      // Supabase/PostgREST má default "Max rows" = 1000. Bez explicitního rozsahu
-      // by se u traderů s >1000 obchody tiše uřízly NEJSTARŠÍ řádky (DESC řazení)
-      // → zmizí z dashboardu/statistik. Explicitní vysoký strop to obchází.
-      .range(0, 99999);
-
-    if (error) {
-      console.error("Supabase getTrades error:", error);
-      return userId === await getUserId() ? localTrades : localTrades.map(t => stripLegacyTradeNotes(stripTradeNoteHistory(t))); // Owner may change during the request
-    }
+      `;
+    const rawData=await readTradeListPages<any>(userId,async(after,limit)=>{
+      let query=supabase.from('trades').select(fields).eq('user_id',userId).order('id',{ ascending:true }).limit(limit)
+        .abortSignal(AbortSignal.timeout(20_000));
+      if (after!==null) query=query.gt('id',after);
+      const { data,error }=await query;
+      if (error) throw new Error('trade-list-unavailable');
+      return data as any[];
+    },stillCurrent);
+    rawData.sort((a,b)=>Number(b.timestamp)-Number(a.timestamp));
 
     let trades = rawData.map((t: any) => ({
       id: t.id,
@@ -606,6 +649,7 @@ export const storageService = {
       needsReview: t.needsReview === 'true' || t.needsReview === true,
       exitReason: t.exitReason || undefined,
       copierTradeId: t.copierTradeId || undefined,
+      journalSupersededBy: t.journalSupersededBy || undefined,
       copierEpisodeId: t.copierEpisodeId || undefined,
       copierSnapshots: Array.isArray(t.copierSnapshots) ? t.copierSnapshots : undefined,
       pnlEstimated: t.pnlEstimated === 'true' || t.pnlEstimated === true,
@@ -662,7 +706,11 @@ export const storageService = {
       data: {}
     })) as Trade[];
 
+    trades = await hydratePrivateJournalFacts(trades, userId);
     trades = await hydratePrivateTradeNotes(trades, userId);
+    if (!await stillCurrent()) throw new Error('trade-list-session-changed');
+    if (generation!==null && generation!==await journalProjectionFingerprint(supabase,userId)) throw new Error('journal-facts-changed-during-read');
+    if (!await stillCurrent()) throw new Error('trade-list-session-changed');
     // Cache to IndexedDB (fire-and-forget, don't block return)
     set(localKey, trades);
     return trades;
@@ -773,8 +821,11 @@ export const storageService = {
       throw new Error(`Nepodařilo se načíst obchod před uložením: ${msg}`);
     }
 
-    // All backtest edit/recalculation callers use the atomic path. Live/copier
-    // edits retain their existing contract until a separately scoped migration.
+    // Use persisted identity; callers cannot remove provenance to bypass review-only edits.
+    updates = journalReviewPatch(current.data ?? {}, updates);
+    if (!Object.keys(updates).length) return;
+    if (reviewAuthVersion !== authStateVersion || await getUserId() !== userId) throw new Error('Účet se během ukládání změnil.');
+    // All backtest edit/recalculation callers use the atomic path.
     if (current.backtest_run_id || current.data?.backtestRunId) {
       const needsPrivateSnapshot = ['notes', 'sessionPreNotes', 'sessionPostNotes', 'noteHistory'].some(key => Object.hasOwn(updates, key));
       const snapshot = needsPrivateSnapshot ? await this.prepareBacktestTradeReview(tradeId, updates)
@@ -784,10 +835,10 @@ export const storageService = {
     }
 
     if (Object.hasOwn(updates, 'noteHistory')) throw new Error('Historii poznámek lze uložit pouze privátní cestou backtest review.');
-    const updatedData = stripTradeNoteHistory({
+    const updatedData = stripPrivateJournalHistory(stripTradeNoteHistory({
       ...current.data,
       ...updates
-    });
+    }));
 
     // Only sync specific known root columns — spreading arbitrary fields causes Supabase 400 errors
     const ROOT_COLUMN_MAP: Record<string, string> = {
@@ -829,6 +880,7 @@ export const storageService = {
   async saveTrades(trades: Trade[], options?: { insertOnly?: boolean }): Promise<Trade[]> {
     const userId = await getUserId();
     if (!userId || trades.length === 0) return [];
+    if (trades.some(isEvidenceJournalTrade)) throw new Error('Obchody z Tradovate upravujte přes hodnocení obchodu.');
 
     // NOTE: Cache is written AFTER successful DB upsert (not before) to prevent phantom data.
     // If DB fails, cache stays consistent with what's actually persisted.
@@ -899,6 +951,7 @@ export const storageService = {
       if (!realAccId) return null;
 
       const existingData = existingDataMap.get(String(t.id));
+      if (isEvidenceJournalTrade(existingData ?? {})) throw new Error('Obchody z Tradovate upravujte přes hodnocení obchodu.');
       // Replay outbox retries create missing rows only. Never overwrite a
       // confirmed trade's subsequent review, even when another tab saved it.
       if (options?.insertOnly && existingDataMap.has(String(t.id))) return null;
@@ -1057,6 +1110,22 @@ export const storageService = {
     if (error || !data) throw new Error('Nastavení veřejného sdílení nebylo uloženo. Zkuste to znovu.');
   },
 
+  async getJournalSourceStatus(ids: readonly string[], signal?: AbortSignal) {
+    const version = authStateVersion;
+    const owner = await getUserId();
+    const stillOwner = async () => version === authStateVersion && await getUserId() === owner && version === authStateVersion;
+    if (!owner || !await stillOwner()) throw new Error('journal-source-session-changed');
+    return readJournalSourceStatus(loadTradovateJournalSourceStatus, owner, ids, stillOwner, signal);
+  },
+
+  async getJournalTradeDetails(ids: readonly string[], signal?: AbortSignal): Promise<Trade[]> {
+    const version = authStateVersion;
+    const owner = await getUserId();
+    const stillOwner = async () => version === authStateVersion && await getUserId() === owner && version === authStateVersion;
+    if (!owner || !await stillOwner()) throw new Error('journal-session-changed');
+    return readOwnedJournalDetails(supabase, ids, owner, stillOwner, rows => hydratePrivateTradeNotes(rows, owner, signal), signal);
+  },
+
   async getTradeById(id: string): Promise<Trade | null> {
     const userId = await getUserId();
     if (!userId) return null;
@@ -1080,9 +1149,10 @@ export const storageService = {
       isPublic: data.is_public,
       createdAt: data.created_at
     };
-    const [hydrated] = await hydratePrivateTradeNotes([trade], userId);
+    const verified = await hydratePrivateJournalFacts([trade], userId, undefined, true);
+    const [hydrated] = await hydratePrivateTradeNotes(verified, userId);
     if (detailAuthVersion !== authStateVersion || await getUserId() !== userId) return null;
-    return hydrated;
+    return hydrated ?? null;
   },
 
   /**
@@ -1700,7 +1770,8 @@ export const storageService = {
       screenshot: r.screenshot_url || (r.data || {}).screenshot,
       screenshots: r.screenshots_urls || (r.data || {}).screenshots,
     }));
-    const hydrated = await hydratePrivateTradeNotes(trades, userId);
+    const verified = await hydratePrivateJournalFacts(trades, userId, options?.signal, true);
+    const hydrated = await hydratePrivateTradeNotes(verified, userId, options?.signal);
     // Hydration may involve more network pages; a late auth change or cancellation
     // must not return the previous owner's fully hydrated private records.
     await assertCurrent();
@@ -2577,7 +2648,7 @@ export const storageService = {
       .eq('status', 'accepted');
 
     if (connErr) {
-      console.error('[Feed] Connection query failed:', connErr.message);
+      throw new Error('network-permissions-unavailable');
     }
 
     // Build permission map: permissions set by the receiver (data owner) control what we see
@@ -2594,13 +2665,18 @@ export const storageService = {
     const profileMap: Record<string, { full_name: string; avatar_url: string | null; ironRules?: any[] }> = {};
     (profilesData || []).forEach(p => { profileMap[p.id] = { full_name: p.full_name || 'Neznámý', avatar_url: p.avatar_url, ironRules: (p.preferences as any)?.ironRules }; });
 
-    // Fetch recent trades
-    let { data: trades } = await supabase
-      .from('trades')
-      .select('*')
-      .in('user_id', followingIds)
-      .order('date', { ascending: false })
-      .limit(20);
+    // The RPC applies sharing permissions before any trade facts reach the client.
+    const stillFeedOwner = async () => feedAuthVersion === authStateVersion && await getUserId() === currentUserId;
+    let { data: trades } = await readSharedTradePage(supabase, { ownerIds: followingIds, recent: true, limit: 20 }, stillFeedOwner);
+    const canReadTrade = (row: { user_id: string; account_id: string }) => {
+      if (row.user_id === currentUserId) return true;
+      const permission = permissionMap[row.user_id];
+      if (!permission) return false;
+      const allowed = permission.allowedAccountIds;
+      return !Array.isArray(allowed) || allowed.length === 0 || allowed.includes(row.account_id);
+    };
+    trades = await completeNetworkTradeGroups((trades || []).filter(canReadTrade), (owner, groupId) =>
+      readSharedTradePage(supabase, { ownerIds: [owner], groupId, limit: 1000 }, stillFeedOwner), stillFeedOwner);
 
     // Fetch recent reviews
     const { data: reviews } = await supabase
@@ -2621,15 +2697,7 @@ export const storageService = {
     trades = await hydrateLegacyTradeNotes(supabase, trades ?? [], 'connection',
       async () => feedAuthVersion === authStateVersion && await getUserId() === currentUserId);
     const activity = [
-      ...(trades || []).filter(t => {
-        // Filter by allowed accounts
-        const rawPerms = String(t.user_id) === String(currentUserId) ? null : (permissionMap[t.user_id] as any);
-        const allowed = rawPerms?.allowedAccountIds;
-        if (allowed && allowed.length > 0 && t.account_id) {
-          return allowed.includes(t.account_id);
-        }
-        return true;
-      }).map(t => {
+      ...(trades || []).filter(canReadTrade).map(t => {
         const isSelf = String(t.user_id) === String(currentUserId);
         const rawPerms = isSelf ? null : (permissionMap[t.user_id] as any);
         const perms = isSelf ? {
@@ -2643,16 +2711,8 @@ export const storageService = {
         };
 
         const jsonb = (typeof t.data === 'object' && t.data !== null) ? t.data : {};
-        const rawPnl = t.pnl ?? jsonb.pnl ?? 0;
-        const rawRisk = jsonb.riskAmount ?? t.riskAmount ?? 0;
-
-        let displayPnl = 0;
-        if (perms.pnlFormat === 'usd') {
-          displayPnl = rawPnl;
-        } else if (perms.pnlFormat === 'rr') {
-          const rr = rawRisk > 0 ? rawPnl / rawRisk : 0;
-          displayPnl = parseFloat(rr.toFixed(2));
-        }
+        // Money/R is already projected by the database; do not convert it twice.
+        const result = { pnl: t.pnl, riskAmount: typeof jsonb.riskAmount === 'number' ? jsonb.riskAmount : undefined };
 
         return {
           type: 'trade',
@@ -2662,16 +2722,19 @@ export const storageService = {
           data: {
             ...publicTradeNotes(jsonb, perms.canSeeReviewNotes),
             ...publicTradeNotes(t, perms.canSeeReviewNotes),
-            pnl: perms.pnlFormat !== 'hidden' ? displayPnl : 0,
-            riskAmount: perms.pnlFormat === 'rr' ? 1 : rawRisk,
-            entryPrice: jsonb.entryPrice ?? t.entryPrice,
-            exitPrice: jsonb.exitPrice ?? t.exitPrice,
-            notes: perms.canSeeReviewNotes ? (jsonb.notes ?? t.notes) : null,
-            screenshot: perms.canSeeScreenshots ? (jsonb.screenshot ?? t.screenshot) : null,
-            screenshots: perms.canSeeScreenshots ? (jsonb.screenshots ?? t.screenshots) : []
+            id: t.id,
+            accountId: t.account_id,
+            accountName: t.account_name,
+            pnl: result.pnl,
+            riskAmount: result.riskAmount,
+            entryPrice: jsonb.entryPrice,
+            exitPrice: jsonb.exitPrice,
+            notes: perms.canSeeReviewNotes && typeof t.notes === 'string' ? t.notes : null,
+            screenshot: perms.canSeeScreenshots ? jsonb.screenshot : null,
+            screenshots: perms.canSeeScreenshots ? jsonb.screenshots ?? [] : []
           },
           meta: {
-            pnlFormat: perms.pnlFormat
+            pnlFormat: t.pnl_format
           }
         };
       }),
@@ -2748,92 +2811,59 @@ export const storageService = {
       })
     ];
 
-    // Deduplicate copy trades (same user, instrument, direction, date = likely copy across accounts)
-    const dedupMap = new Map<string, any>();
-    const nonTrades: any[] = [];
-    for (const item of activity) {
-      if (item.type !== 'trade') {
-        nonTrades.push(item);
-        continue;
-      }
-      const key = `${item.data.user_id}_${item.data.instrument}_${item.data.direction}_${item.date}`;
-      if (dedupMap.has(key)) {
-        const existing = dedupMap.get(key);
-        (existing.meta as any).accountCount = ((existing.meta as any).accountCount || 1) + 1;
-      } else {
-        (item.meta as any).accountCount = 1;
-        dedupMap.set(key, item);
-      }
-    }
-    const deduped = [...dedupMap.values(), ...nonTrades];
-
-    return deduped.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const { data: latestConnections, error: permissionError } = await supabase.from('connections')
+      .select('sender_id, receiver_id, permissions').eq('sender_id', currentUserId).eq('status', 'accepted');
+    const permissionsKey = (rows: typeof connections) => JSON.stringify((rows || [])
+      .map(row => [row.receiver_id, row.permissions]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+    if (permissionError || permissionsKey(latestConnections) !== permissionsKey(connections)) throw new Error('network-permissions-changed');
+    if (!await stillFeedOwner()) throw new Error('network-session-changed');
+    const grouped = groupNetworkTrades(activity);
+    return grouped.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   },
 
   async getLeaderboardStats(userIds: string[]): Promise<any[]> {
     if (userIds.length === 0) return [];
 
-    // Posledních 100 obchodů PER USER (paralelně). Dřív byl globální .limit(500) přes
-    // všechny usery najednou → aktivní uživatel s ~480 obchody vyžral skoro celý limit
-    // a ostatním zbylo pár řádků → nesmyslný win rate. Per-user limit to napravuje.
-    const perUserTrades = await Promise.all(
-      userIds.map(async (uid) => {
-        const { data } = await supabase
-          .from('trades')
-          .select('user_id, pnl')
-          .eq('user_id', uid)
-          .order('date', { ascending: false })
-          .limit(100);
-        return data || [];
-      })
-    );
-    const trades = perUserTrades.flat();
-
-    // Fetch last 20 reviews for Discipline
-    const { data: reviews } = await supabase
-      .from('daily_reviews')
-      .select('user_id, data')
-      .in('user_id', userIds)
-      .order('date', { ascending: false })
-      .limit(200);
-
-    const statsMap: Record<string, { wins: number, losses: number, totalTrades: number, totalRating: number, reviewCount: number }> = {};
-
-    userIds.forEach(id => { statsMap[id] = { wins: 0, losses: 0, totalTrades: 0, totalRating: 0, reviewCount: 0 }; });
-
-    trades?.forEach(t => {
-      const s = statsMap[t.user_id];
-      if (!s) return;
-      s.totalTrades++;
-      // Win rate jen z rozhodnutých obchodů — break-even (pnl ~ 0) se nepočítá jako prohra.
-      if (t.pnl > 0.01) s.wins++;
-      else if (t.pnl < -0.01) s.losses++;
+    const viewer = await getUserId();
+    if (!viewer) return [];
+    const version = authStateVersion;
+    const current = async () => version === authStateVersion && await getUserId() === viewer;
+    const { data: connections, error } = await supabase.from('connections').select('receiver_id,permissions')
+      .eq('sender_id', viewer).eq('status', 'accepted');
+    if (error) throw new Error('network-permissions-unavailable');
+    const permissions = new Map((connections || []).map(row => [row.receiver_id, row.permissions]));
+    const permitted = [...new Set(userIds)].filter(id => id === viewer || permissions.has(id));
+    if (!permitted.length) return [];
+    const samples = new Map<string, ReturnType<typeof sharedResultStats>>();
+    for (let offset = 0; offset < permitted.length; offset += 4) {
+      const ids = permitted.slice(offset, offset + 4);
+      const pages = await Promise.all(ids.map(id => readSharedTradePage(supabase, { ownerIds: [id], recent: true, limit: 100 }, current)));
+      ids.forEach((id, index) => {
+        const page = pages[index];
+        if (page.data.length !== Math.min(page.count, 100) || new Set(page.data.map(row => row.pnl_format)).size > 1) throw new Error('shared-trades-incomplete');
+        samples.set(id, sharedResultStats(page.data.map(sharedTradeDisplayModel)));
+      });
+    }
+    const ratingIds = permitted.filter(id => id === viewer || (permissions.get(id) as any)?.canSeeReviewStats === true);
+    const reviews = ratingIds.length ? await supabase.from('daily_reviews').select('user_id,rating:data->rating')
+      .in('user_id', ratingIds).order('date', { ascending: false }).limit(200) : { data: [], error: null };
+    if (reviews.error) throw new Error('network-review-stats-unavailable');
+    const ratings = new Map<string, number[]>();
+    for (const row of reviews.data || []) {
+      if (typeof row.rating === 'number' && Number.isFinite(row.rating) && row.rating > 0) ratings.set(row.user_id, [...ratings.get(row.user_id) || [], row.rating]);
+    }
+    const { data: profiles, error: profileError } = await supabase.from('profiles').select('id,full_name,avatar_url').in('id', permitted);
+    if (profileError) throw new Error('network-profiles-unavailable');
+    const latest = await supabase.from('connections').select('receiver_id,permissions').eq('sender_id', viewer).eq('status', 'accepted');
+    const key = (rows: typeof connections) => JSON.stringify((rows || []).map(row => [row.receiver_id, row.permissions]).sort((a,b) => String(a[0]).localeCompare(String(b[0]))));
+    if (latest.error || key(latest.data) !== key(connections) || !await current()) throw new Error('network-permissions-changed');
+    return (profiles || []).map(profile => {
+      const stats = samples.get(profile.id)!;
+      const values = ratings.get(profile.id) || [];
+      return { id: profile.id, name: profile.full_name, avatar: profile.avatar_url,
+        winRate: stats.winRate, discipline: values.length ? values.reduce((sum,value) => sum + value, 0) / values.length : null,
+        tradeCount: stats.count, sampleLimit: 100 };
     });
-
-    reviews?.forEach(r => {
-      if (statsMap[r.user_id]) {
-        const rating = (r.data as any).rating || 0;
-        if (rating > 0) {
-          statsMap[r.user_id].totalRating += rating;
-          statsMap[r.user_id].reviewCount++;
-        }
-      }
-    });
-
-    // Get profiles to return enriched data
-    const { data: profiles } = await supabase.from('profiles').select('id, full_name, avatar_url').in('id', userIds);
-
-    return profiles?.map(p => {
-      const s = statsMap[p.id];
-      return {
-        id: p.id,
-        name: p.full_name,
-        avatar: p.avatar_url,
-        winRate: (s.wins + s.losses) > 0 ? (s.wins / (s.wins + s.losses)) * 100 : 0,
-        discipline: s.reviewCount > 0 ? (s.totalRating / s.reviewCount) : 0,
-        tradeCount: s.totalTrades
-      };
-    }) || [];
   },
 
   async getSpectatorData(targetUserId: string): Promise<{
@@ -2849,6 +2879,8 @@ export const storageService = {
     const currentUserId = await getUserId();
     if (!currentUserId || !targetUserId) return null;
 
+    const spectatorAuthVersion = authStateVersion;
+    const stillSpectator = async () => spectatorAuthVersion === authStateVersion && await getUserId() === currentUserId;
     const isSelf = currentUserId === targetUserId;
 
     // 1. Check permissions FIRST - before fetching any data
@@ -2888,63 +2920,20 @@ export const storageService = {
       allowedAccountIds: isSelf ? [] : (rawPerms?.allowedAccountIds || []) as string[]
     };
 
-    // 3. Fetch only data that permissions allow (minimize network transfer)
-    const fetchPromises: [Promise<Trade[]>, Promise<Account[]>, Promise<DailyPrep[]>, Promise<DailyReview[]>, Promise<UserPreferences | null>] = [
-      this.getTrades(targetUserId),
-      this.getAccounts(targetUserId),
+    const [rows, accounts, preps, reviews, prefs] = await Promise.all([
+      readSharedTradeHistory(supabase, targetUserId, stillSpectator), this.getAccounts(targetUserId),
       perms.canSeePrep ? this.getDailyPreps(targetUserId) : Promise.resolve([]),
       (perms.canSeeReviewStats || perms.canSeeReviewNotes) ? this.getDailyReviews(targetUserId) : Promise.resolve([]),
       this.getPreferences(targetUserId)
-    ];
-
-    const [trades, accounts, preps, reviews, prefs] = await Promise.all(fetchPromises);
-
-    // 3b. Fetch screenshots separately if permitted (getTrades() omits them for performance)
-    if (perms.canSeeScreenshots && trades.length > 0) {
-      const tradeIds = trades.map((t: Trade) => t.id);
-      const { data: screenshotData } = await supabase
-        .from('trades')
-        .select('id, screenshot:data->>screenshot, screenshots:data->screenshots')
-        .in('id', tradeIds);
-
-      if (screenshotData) {
-        const ssMap = new Map(screenshotData.map((s: any) => [s.id, s]));
-        trades.forEach((t: any) => {
-          const ss = ssMap.get(t.id);
-          if (ss) {
-            t.screenshot = ss.screenshot || undefined;
-            t.screenshots = ss.screenshots || [];
-          }
-        });
-      }
-    }
-
-    // 4. Filter by allowed accounts, then sanitize TRADES
-    const filteredTrades = perms.allowedAccountIds.length > 0
-      ? trades.filter((t: Trade) => perms.allowedAccountIds.includes(t.accountId))
-      : trades;
-    const sanitizedTrades = filteredTrades.map((t: Trade) => {
-      let displayPnl = 0;
-
-      if (perms.pnlFormat === 'usd') {
-        displayPnl = t.pnl;
-      } else if (perms.pnlFormat === 'rr') {
-        const risk = t.riskAmount || 0;
-        const rr = risk > 0 ? t.pnl / risk : 0;
-        displayPnl = parseFloat(rr.toFixed(2));
-      }
-
-      return {
-        ...publicTradeNotes(t, perms.canSeeReviewNotes),
-        pnl: displayPnl,
-        riskAmount: perms.pnlFormat === 'rr' ? 1 : t.riskAmount,
-        notes: perms.canSeeReviewNotes ? t.notes : null,
-        screenshot: perms.canSeeScreenshots ? t.screenshot : null,
-        screenshots: perms.canSeeScreenshots ? t.screenshots : [],
-        entryPrice: perms.pnlFormat !== 'hidden' ? t.entryPrice : null,
-        exitPrice: perms.pnlFormat !== 'hidden' ? t.exitPrice : null,
-      };
-    });
+    ]);
+    const sourceUnit = rows[0]?.pnl_format ?? (['usd','rr','hidden'].includes(perms.pnlFormat) ? perms.pnlFormat : 'hidden');
+    const withNotes = await hydrateLegacyTradeNotes(supabase, rows, isSelf ? 'owner' : 'connection', stillSpectator);
+    const sanitizedTrades = withNotes.map(sharedTradeDisplayModel).map(trade => ({
+      ...publicTradeNotes(trade, perms.canSeeReviewNotes),
+      notes: perms.canSeeReviewNotes ? trade.notes : undefined,
+      screenshot: perms.canSeeScreenshots ? trade.screenshot : undefined,
+      screenshots: perms.canSeeScreenshots ? trade.screenshots : [],
+    }));
 
     // 5. Sanitize REVIEWS
     const sanitizedReviews = reviews.map((r: DailyReview) => ({
@@ -2977,10 +2966,17 @@ export const storageService = {
       : accounts;
     const sanitizedAccounts = filteredAccounts.map((a: Account) => ({
       ...a,
-      initialBalance: perms.pnlFormat === 'usd' ? a.initialBalance : 0,
-      totalWithdrawals: perms.pnlFormat === 'usd' ? a.totalWithdrawals : 0
+      initialBalance: sourceUnit === 'usd' ? a.initialBalance : Number.NaN,
+      totalWithdrawals: sourceUnit === 'usd' ? a.totalWithdrawals : Number.NaN,
+      totalGrossWithdrawals: sourceUnit === 'usd' ? a.totalGrossWithdrawals : Number.NaN
     }));
 
+    if (!isSelf) {
+      const latest = await supabase.from('connections').select('permissions').eq('sender_id', currentUserId)
+        .eq('receiver_id', targetUserId).eq('status', 'accepted').maybeSingle();
+      if (latest.error || !latest.data || JSON.stringify(latest.data.permissions) !== JSON.stringify(rawPerms)) throw new Error('network-permissions-changed');
+    }
+    if (!await stillSpectator()) throw new Error('network-session-changed');
     return {
       trades: sanitizedTrades,
       accounts: sanitizedAccounts,
@@ -2988,7 +2984,7 @@ export const storageService = {
       reviews: sanitizedReviews,
       preferences: prefs,
       meta: {
-        pnlFormat: perms.pnlFormat as 'usd' | 'rr' | 'hidden'
+        pnlFormat: sourceUnit as 'usd' | 'rr' | 'hidden'
       }
     };
   },
@@ -3275,7 +3271,7 @@ export const storageService = {
 
     // Fetch full content for all three sources.
     const [tradesRes, prepsRes, reviewsRes] = await Promise.all([
-      supabase.from('trades').select('id, date, data, account_id, instrument, signal, pnl, direction, timestamp').eq('user_id', userId),
+      supabase.from('confirmed_journal_trades').select('id, date, data, account_id, instrument, signal, pnl, direction, timestamp').eq('user_id', userId),
       supabase.from('daily_preps').select('id, date, data').eq('user_id', userId),
       supabase.from('daily_reviews').select('id, date, data').eq('user_id', userId),
     ]);

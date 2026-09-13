@@ -26,12 +26,14 @@ interface StoredMarketResponse {
 const DAY_BUCKET_VERSION = 'databento-glbx-day-v1';
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Margin od „teď": den se cachuje, až když je bezpečně uzavřený u poskytovatele. */
-const DAY_COMPLETE_MARGIN_MS = 60 * 60 * 1000;
+const HISTORICAL_DELAY_MS = 24 * 60 * 60 * 1000;
+const DAY_COMPLETE_MARGIN_MS = HISTORICAL_DELAY_MS + 60 * 60 * 1000;
 /** Limity Databento oken na jeden request: ~16 dní pro 1m, ~370 dní pro 1h. */
 const FETCH_CHUNK_DAYS: Record<MarketDataSchema, number> = { 'ohlcv-1m': 14, 'ohlcv-1h': 300 };
 
 interface StoredDayBucket {
   expiresAt: number;
+  coveredThroughMs?: number;
   /** Prázdné pole je platný obsah — soboty a svátky se jinak stahovaly pořád dokola. */
   candles: MarketCandle[];
 }
@@ -114,19 +116,20 @@ const fetchCandleRange = async (
   schema: MarketDataSchema,
   startMs: number,
   endMs: number,
-): Promise<{ candles: MarketCandle[]; estimatedCostUsd: number; sourceSymbol?: string }> => {
+): Promise<{ candles: MarketCandle[]; estimatedCostUsd: number; sourceSymbol?: string; coveredThroughMs: number }> => {
   const { data, error } = await supabase.functions.invoke('market-candles', {
     body: { symbol, start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString(), schema },
   });
   if (error) throw await parseFunctionError(error);
   if (data?.error) {
-    if (String(data.error) === 'no-data') return { candles: [], estimatedCostUsd: 0 };
+    if (String(data.error) === 'no-data') return { candles: [], estimatedCostUsd: 0, coveredThroughMs: Math.min(endMs, Date.now() - HISTORICAL_DELAY_MS) };
     throw new MarketDataError(String(data.message || data.error), String(data.error));
   }
   const candles = parseCandleRows(data?.candles);
   candles.sort((a, b) => a.time - b.time);
   return {
     candles,
+    coveredThroughMs: Math.min(endMs, typeof data?.end === 'string' && Number.isFinite(Date.parse(data.end)) ? Date.parse(data.end) : Date.now() - HISTORICAL_DELAY_MS),
     estimatedCostUsd: finiteNumber(data?.estimatedCostUsd) ?? 0,
     sourceSymbol: typeof data?.sourceSymbol === 'string' ? data.sourceSymbol : undefined,
   };
@@ -149,7 +152,7 @@ const storeDayBuckets = async (
     const endSec = (day + DAY_MS) / 1000;
     entries.push([
       dayBucketKey(schema, symbol, day),
-      { expiresAt: now + MARKET_CACHE_TTL_MS, candles: candles.filter(c => c.time >= startSec && c.time < endSec) },
+      { expiresAt: now + MARKET_CACHE_TTL_MS, coveredThroughMs: coveredEndMs, candles: candles.filter(c => c.time >= startSec && c.time < endSec) },
     ]);
   }
   if (!entries.length) return;
@@ -181,7 +184,8 @@ export async function loadMarketCandles(params: {
     // i požadavkům s jinými hranicemi.
     try {
       const legacy = await idbGet<StoredMarketResponse>(`${MARKET_CACHE_VERSION}|${cacheKey}`);
-      if (legacy?.expiresAt > Date.now() && Array.isArray(legacy.value?.candles) && legacy.value.candles.length > 0) {
+      if (legacy?.expiresAt > Date.now() && legacy.expiresAt - MARKET_CACHE_TTL_MS >= endMs + DAY_COMPLETE_MARGIN_MS
+        && Array.isArray(legacy.value?.candles) && legacy.value.candles.length > 0) {
         void storeDayBuckets(schema, params.symbol, legacy.value.candles, startMs, endMs);
         return legacy.value;
       }
@@ -194,7 +198,8 @@ export async function loadMarketCandles(params: {
     try {
       const stored = await idbGetMany<StoredDayBucket>(days.map(day => dayBucketKey(schema, params.symbol, day)));
       stored.forEach((bucket, index) => {
-        if (bucket && bucket.expiresAt > Date.now() && Array.isArray(bucket.candles)) {
+        const coveredThrough = bucket?.coveredThroughMs ?? (bucket?.expiresAt - MARKET_CACHE_TTL_MS - DAY_COMPLETE_MARGIN_MS);
+        if (bucket && bucket.expiresAt > Date.now() && coveredThrough >= days[index] + DAY_MS && Array.isArray(bucket.candles)) {
           buckets.set(days[index], bucket.candles);
         }
       });
@@ -203,6 +208,7 @@ export async function loadMarketCandles(params: {
     }
 
     let estimatedCostUsd = 0;
+    let coveredThroughMs = endMs;
     let sourceSymbol: string | undefined;
     const missing = days.filter(day => !buckets.has(day));
     if (missing.length) {
@@ -216,15 +222,16 @@ export async function loadMarketCandles(params: {
         estimatedCostUsd += result.estimatedCostUsd;
         sourceSymbol ??= result.sourceSymbol;
         const chunk = chunks[index];
+        if (result.coveredThroughMs < chunk.endMs) coveredThroughMs = Math.min(coveredThroughMs, result.coveredThroughMs);
         for (let day = chunk.startMs; day < chunk.endMs; day += DAY_MS) {
           const startSec = day / 1000;
           const endSec = (day + DAY_MS) / 1000;
           const dayCandles = result.candles.filter(c => c.time >= startSec && c.time < endSec);
           buckets.set(day, dayCandles);
-          if (day + DAY_MS <= now - DAY_COMPLETE_MARGIN_MS) {
+          if (day + DAY_MS <= now - DAY_COMPLETE_MARGIN_MS && day + DAY_MS <= result.coveredThroughMs) {
             toStore.push([
               dayBucketKey(schema, params.symbol, day),
-              { expiresAt: now + MARKET_CACHE_TTL_MS, candles: dayCandles },
+              { expiresAt: now + MARKET_CACHE_TTL_MS, coveredThroughMs: result.coveredThroughMs, candles: dayCandles },
             ]);
           }
         }
@@ -250,7 +257,7 @@ export async function loadMarketCandles(params: {
       symbol: params.symbol,
       sourceSymbol,
       start: startIso,
-      end: endIso,
+      end: new Date(coveredThroughMs).toISOString(),
       estimatedCostUsd: estimatedCostUsd > 0 ? estimatedCostUsd : undefined,
       candles,
     };
@@ -258,7 +265,11 @@ export async function loadMarketCandles(params: {
 
   requestCache.set(cacheKey, request);
   try {
-    return await request;
+    const response = await request;
+    // A window near the publication boundary can become fuller on retry.
+    if ((endMs > Date.now() - DAY_COMPLETE_MARGIN_MS || Date.parse(response.end) < endMs)
+      && requestCache.get(cacheKey) === request) requestCache.delete(cacheKey);
+    return response;
   } catch (error) {
     requestCache.delete(cacheKey);
     throw error;

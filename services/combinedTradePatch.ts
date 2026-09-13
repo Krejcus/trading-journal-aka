@@ -1,5 +1,6 @@
 import type { Trade } from '../types';
 import { changedTradeFields } from './tradePatch';
+import { journalReviewOnly } from '../lib/journalReviewPatch';
 
 export interface CombinedTradeChange { id: string; before: Trade; patch: Partial<Trade> }
 /** Each member keeps its own economics and optimistic rollback baseline. */
@@ -13,6 +14,10 @@ export const combinedTradeChanges = (members: readonly Trade[], proposed: Partia
   const round2 = (value: number) => Math.round(value * 100) / 100;
   return members.flatMap(member => {
     if (typeof member.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(member.id)) return [];
+    if (journalReviewOnly(member)) {
+      const patch = changedTradeFields(member, safe);
+      return Object.keys(patch).length ? [{ id: member.id, before: member, patch }] : [];
+    }
     const factor = master ? ratio(member.pnl, master.pnl) ?? ratio(member.riskAmount, master.riskAmount) ?? ratio(member.positionSize, master.positionSize) ?? 1 : 1;
     const payload: Partial<Trade> = { ...safe };
     if (pnl != null) payload.pnl = round2(pnl * factor);

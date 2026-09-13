@@ -1,7 +1,9 @@
+import { createJournalChartPrimitive } from '../services/journalChartPrimitive';
+import { createJournalPositionPrimitive } from '../services/journalPositionDrawing';
 import { retainEqualNumbers, uniqueStructureEvents } from '../services/chartReplayPaint';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { Drawing } from '@getcandlekit/charts';
+import { DEFAULT_STYLE, type Drawing } from '@getcandlekit/charts';
 import {
   ChartView,
   IndicatorController,
@@ -3257,7 +3259,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const entryTime = nearestCandleTime(visibleCandles, asUnix(trade.entryTime || trade.entryDate, entryMs));
     const exitTime = nearestCandleTime(visibleCandles, asUnix(trade.timestamp || trade.exitDate, exitMs));
     const isLong = String(trade.direction).toLowerCase() === 'long';
-    createSeriesMarkers(series, replayActive ? [] : [
+    createSeriesMarkers(series, replayActive || trade.executionHistory ? [] : [
       {
         time: entryTime,
         position: isLong ? 'belowBar' as const : 'aboveBar' as const,
@@ -3423,7 +3425,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         Number(exitTime),
         Number(entryTime) + Math.max(10, MARKET_TIMEFRAME_MINUTES[timeframe]) * 60,
       ));
-      if (!replayActive && Number.isFinite(entry) && entry > 0 && Number.isFinite(stop) && stop > 0) {
+      if (!replayActive && !trade.executionHistory && Number.isFinite(entry) && entry > 0 && Number.isFinite(stop) && stop > 0) {
         commitOnce({
           id: `auto-risk-${trade.id}`,
           tool: 'Rectangle',
@@ -3820,6 +3822,22 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   }, [chartSettings.trading.tradeLines, replayActive, replayCursorTime, showManagedPositionBoxes, visibleCandles]);
 
   useLayoutEffect(() => {
+    const api = apiRef.current;
+    if (!api || replayActive || !trade.executionHistory) return;
+    const series = api.controller.getSeries() as ISeriesApi<'Candlestick'>;
+    // Journal history is loaded as 1m bars; higher timeframes aggregate those
+    // same bars and must not hide an absent minute inside an otherwise present bar.
+    const coverage = { candles: rawCandles, intervalSeconds: 60 };
+    const primitive = createJournalChartPrimitive(trade.executionHistory, visibleCandles,
+      MARKET_TIMEFRAME_MINUTES[timeframe] * 60, api.controller.getChart(), series, coverage);
+    const position = showManagedPositionBoxes ? createJournalPositionPrimitive(trade, api.drawing?.engine.getDefaultStyle() ?? DEFAULT_STYLE,
+      visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60, chartSettings.trading.orderPriceLabels, coverage) : null;
+    if (position) series.attachPrimitive(position);
+    series.attachPrimitive(primitive);
+    return () => { try { series.detachPrimitive(primitive); if (position) series.detachPrimitive(position); } catch { /* Chart already disposed. */ } };
+  }, [chartApiEpoch, replayActive, trade, timeframe, visibleCandles, rawCandles, showManagedPositionBoxes, chartSettings.trading.orderPriceLabels]);
+
+  useLayoutEffect(() => {
     const engine = apiRef.current?.drawing?.engine;
     if (!engine) return;
     const prefix = 'auto-managed-position-';
@@ -3866,7 +3884,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const selectedId = engine.getSelectedId();
     if (selectedId && selectedId.startsWith(prefix)) engine.select(null);
     positionProgressPrimitiveRequestUpdateRef.current?.();
-  }, [chartApiEpoch, chartSettings.trading.orderPriceLabels, managedPositionBoxes, replayActive, replayCursorTime, timeframe, visibleCandles]);
+  }, [chartApiEpoch, chartSettings.trading.orderPriceLabels, managedPositionBoxes, replayActive, replayCursorTime, timeframe, trade, visibleCandles]);
 
   useEffect(() => {
     if (!replayActive) return;

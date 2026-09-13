@@ -76,7 +76,7 @@ Deno.serve(async (req) => {
   const eightWeeksAgo = new Date(now.getTime() - 56 * 86400000).toISOString();
 
   // Uživatelé s obchody za poslední týden
-  const { data: recentRows, error: uErr } = await db.from('trades').select('user_id').gte('date', weekAgo).limit(2000);
+  const { data: recentRows, error: uErr } = await db.from('confirmed_journal_trades').select('user_id').gte('date', weekAgo).limit(2000);
   if (uErr) return new Response(JSON.stringify({ error: uErr.message }), { status: 500 });
   const userIds = [...new Set((recentRows || []).map((r: any) => r.user_id))];
 
@@ -87,7 +87,7 @@ Deno.serve(async (req) => {
       const { data: existing } = await db.from('weekly_reports').select('id').eq('user_id', userId).eq('week_start', weekStartIso).maybeSingle();
       if (existing) { results.push({ userId, skipped: 'exists' }); continue; }
 
-      const { data: rows } = await db.from('trades')
+      const { data: rows } = await db.from('confirmed_journal_trades')
         .select('id, user_id, instrument, direction, pnl, date, data')
         .eq('user_id', userId).gte('date', eightWeeksAgo).limit(1500);
       const all = (rows || []).map((r: any) => ({ ...(r.data || {}), id: r.id, instrument: r.instrument, direction: r.direction, pnl: r.pnl, date: r.date }));

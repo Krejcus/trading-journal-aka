@@ -1,3 +1,4 @@
+import TradeExecutionTimeline from './TradeExecutionTimeline';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -31,7 +32,7 @@ import {
   findEntryStructureEvent,
   findFairValueGaps,
   loadMarketCandles,
-  marketDataWindowForEntry,
+  marketDataWindowForTrade,
   MARKET_TIMEFRAME_MINUTES,
   MarketDataError,
   resolveMarketSymbol,
@@ -172,13 +173,15 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark }) =>
     setError(null);
     setRawCandles([]);
     setEstimatedCostUsd(null);
-    if (entryMs > Date.now() - 24 * 60 * 60 * 1000) {
+    if (Math.max(entryMs, exitMs) > Date.now() - 24 * 60 * 60 * 1000) {
       setError({ code: 'data-not-yet-historical', message: 'Databento historical feed zpřístupní tento obchod přibližně 24 hodin po trhu.' });
       setLoading(false);
       return () => { cancelled = true; };
     }
-    const { start, end } = marketDataWindowForEntry(entryMs);
-    loadMarketCandles({ symbol: marketSymbol, start, end }).then(response => {
+    Promise.resolve().then(() => {
+      const { start, end } = marketDataWindowForTrade(entryMs, exitMs);
+      return loadMarketCandles({ symbol: marketSymbol, start, end });
+    }).then(response => {
       if (cancelled) return;
       setRawCandles(response.candles);
       setProviderSymbol(response.sourceSymbol || response.symbol);
@@ -670,7 +673,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark }) =>
             </div>
           </div>
         )}
-        {!loading && !error && !trade.stopLoss && (
+        {!loading && !error && !trade.executionHistory && !trade.stopLoss && (
           <div className="absolute left-3 bottom-8 z-20 px-2 py-1 rounded-lg bg-amber-500/90 text-black text-[9px] font-black shadow-lg">
             Risk box chybí: původní SL není uložený
           </div>
@@ -679,6 +682,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark }) =>
       <div className={`h-7 shrink-0 px-3 flex items-center gap-4 border-t text-[8px] font-bold uppercase tracking-wider ${isDark ? 'border-white/5 text-slate-600' : 'border-slate-200 text-slate-400'}`}>
         <span className="text-amber-500">VWAP ±1σ</span><span className="text-blue-400">PDH / PDL</span><span className="text-violet-400">PWH / PWL</span><span>Časy Praha</span><span className="ml-auto">Databento · GLBX.MDP3{estimatedCostUsd !== null ? ` · request ≤ $${estimatedCostUsd.toFixed(4)}` : ''}</span>
       </div>
+      <TradeExecutionTimeline history={trade.executionHistory} isDark={isDark} candleCoverage={!loading && !error ? { candles: rawCandles, intervalSeconds: 60 } : undefined} />
     </div>
   );
 

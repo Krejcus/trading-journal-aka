@@ -19,6 +19,7 @@ export interface CopierLedgerRow {
   exit_price: number | null;
   episode_id?: string | null;
   connection_id?: string | null;
+  updated_at?: string;
 }
 
 export interface CopierSnapshotRow {
@@ -85,10 +86,10 @@ const browserStore: KeyValueStore = {
 const defaultLoadRows = async (userId: string, after: string): Promise<CopierLedgerRow[]> => {
   const { data, error } = await supabase
     .from('tradovate_copier_trades')
-    .select('trade_id,symbol,side,quantity,realized_pnl_usd,opened_at,closed_at,exit_reason,entry_price,exit_price,episode_id,connection_id')
+    .select('trade_id,symbol,side,quantity,realized_pnl_usd,opened_at,closed_at,exit_reason,entry_price,exit_price,episode_id,connection_id,updated_at')
     .eq('user_id', userId)
-    .gt('closed_at', after)
-    .order('closed_at', { ascending: true });
+    .gt('updated_at', after)
+    .order('updated_at', { ascending: true });
   if (error) throw new Error(`copier-journal-ledger-read-failed: ${error.message}`);
   return (data ?? []) as CopierLedgerRow[];
 };
@@ -131,9 +132,6 @@ const validRow = (row: CopierLedgerRow): boolean =>
 
 const copierLogicalId = (tradeId: string): string => `copier-${tradeId.trim()}`;
 const copierGroupId = (tradeId: string): string => `copier-group-${tradeId.trim()}`;
-const followerLogicalId = (tradeId: string, followerAccountId: number): string =>
-  `copier-${tradeId.trim()}-${followerAccountId}`;
-
 const candidateFromRow = (row: CopierLedgerRow, accountId: string, snapshots: CopierSnapshotRow[]): Trade => {
   const closedAt = Date.parse(row.closed_at);
   const openedAt = row.opened_at ? Date.parse(row.opened_at) : Number.NaN;
@@ -189,43 +187,6 @@ const rawTradeIdFromMaster = (trade: Trade): string | null => {
     : null;
 };
 
-const followerCopyFromMaster = (
-  master: Trade,
-  rawTradeId: string,
-  accountId: string,
-  follower: CopierJournalFollower,
-): Trade => {
-  const multiplier = follower.multiplier;
-  const logicalId = followerLogicalId(rawTradeId, follower.accountId);
-  const scaledQuantity = Math.round((master.positionSize ?? 0) * multiplier);
-  return {
-    id: logicalId,
-    copierTradeId: logicalId,
-    accountId,
-    source: 'copier',
-    signal: 'Copier',
-    instrument: master.instrument,
-    direction: master.direction,
-    pnl: master.pnl * multiplier,
-    pnlEstimated: true,
-    positionSize: multiplier > 0 ? Math.max(1, scaledQuantity) : scaledQuantity,
-    date: master.date,
-    timestamp: master.timestamp,
-    entryTime: master.entryTime,
-    entryDate: master.entryDate,
-    exitDate: master.exitDate,
-    entryPrice: master.entryPrice,
-    exitPrice: master.exitPrice,
-    exitReason: master.exitReason,
-    groupId: copierGroupId(rawTradeId),
-    masterTradeId: master.id,
-    runUp: 0,
-    drawdown: 0,
-    durationMinutes: master.durationMinutes,
-    duration: master.duration,
-  };
-};
-
 export async function syncCopierJournal(options: CopierJournalSyncOptions): Promise<CopierJournalSyncResult> {
   const { userId, leaderAccountId, accounts, followers } = options;
   if (!userId || leaderAccountId == null || !Number.isSafeInteger(leaderAccountId)) {
@@ -272,30 +233,13 @@ export async function syncCopierJournal(options: CopierJournalSyncOptions): Prom
   const updated: Trade[] = [];
   let skippedFollowers = 0;
 
-  const buildMissingCopies = (master: Trade, rawTradeId: string): Trade[] => {
-    const copies: Trade[] = [];
-    const seenFollowers = new Set<number>();
-    for (const follower of followers) {
-      if (seenFollowers.has(follower.accountId)) continue;
-      seenFollowers.add(follower.accountId);
-      const logicalId = followerLogicalId(rawTradeId, follower.accountId);
-      if (existingIds.has(logicalId)) continue;
-      const journalAccount = accounts.find(candidate =>
-        candidate.oauth?.externalAccountId === String(follower.accountId));
-      if (!journalAccount) {
-        skippedFollowers += 1;
-        continue;
-      }
-      copies.push(followerCopyFromMaster(master, rawTradeId, journalAccount.id, follower));
-      existingIds.add(logicalId);
-    }
-    return copies;
-  };
+  // Configuration describes intended routing, not historical executions.
+  // Actual follower fills will be imported through the verified journal read model.
+  skippedFollowers = new Set(followers.map(follower => follower.accountId)).size;
 
   // Starší copier mastery za posledních 30 dní pouze doplníme o seskupení.
   // Reflexe ani jiná uživatelská pole se touto aktualizací nikdy nepřepisují.
   const rowByRawTradeId = new Map(rowsForSnapshots.map(candidate => [candidate.trade_id.trim(), candidate]));
-  const healingCopies: Trade[] = [];
   for (const master of healingMasters) {
     const rawTradeId = rawTradeIdFromMaster(master)!;
     const healingUpdate: Partial<Trade> = {};
@@ -317,9 +261,7 @@ export async function syncCopierJournal(options: CopierJournalSyncOptions): Prom
       await deps.updateTrade(master.id, healingUpdate);
       updated.push(healedMaster);
     }
-    healingCopies.push(...buildMissingCopies(healedMaster, rawTradeId));
   }
-  if (healingCopies.length > 0) created.push(...await deps.saveTrades(healingCopies));
 
   const accountKey = `${ACCOUNT_PREFIX}${userId}-${leaderAccountId}`;
   if (options.accountIdOverride && accounts.some(account => account.id === options.accountIdOverride)) {
@@ -349,6 +291,7 @@ export async function syncCopierJournal(options: CopierJournalSyncOptions): Prom
   }
 
   const masterCandidates = rows
+    .filter(row => Number.isFinite(row.realized_pnl_usd))
     .map(row => candidateFromRow(row, account.id,
       row.episode_id ? (snapshotsByEpisode.get(row.episode_id) ?? []) : []))
     .filter(trade => !existingIds.has(String(trade.id)) && !existingIds.has(String(trade.copierTradeId)));
@@ -358,16 +301,13 @@ export async function syncCopierJournal(options: CopierJournalSyncOptions): Prom
     if (master.copierTradeId) existingIds.add(master.copierTradeId);
   }
 
-  const rowByLogicalId = new Map(rows.map(row => [copierLogicalId(row.trade_id), row]));
-  const newCopies = savedMasters.flatMap(master => {
-    const row = master.copierTradeId ? rowByLogicalId.get(master.copierTradeId) : undefined;
-    return row ? buildMissingCopies(master, row.trade_id.trim()) : [];
-  });
-  if (newCopies.length > 0) created.push(...await deps.saveTrades(newCopies));
-
   // Kurzor se posune až po úspěšném zápisu (nebo při čistě idempotentním průchodu).
   // Při chybě saveTrades výjimka probublá a stejná data se bezpečně načtou znovu.
-  const newest = rows.reduce((latest, row) => Date.parse(row.closed_at) > Date.parse(latest) ? row.closed_at : latest, after);
+  const newest = rows.reduce((latest, row) => Date.parse(row.updated_at ?? row.closed_at) > Date.parse(latest) ? row.updated_at ?? row.closed_at : latest, after);
   deps.cursorStore.setItem(cursorKey, newest);
-  return { created, updated, pending: [], scanned: rows.length, skippedFollowers };
+  const unresolved = rows.filter(row => !Number.isFinite(row.realized_pnl_usd)).map(row => ({
+    id: copierLogicalId(row.trade_id), tradeId: row.trade_id.trim(), symbol: copierSymbolRoot(row.symbol),
+    closedAt: row.closed_at, pnl: null, leaderAccountId, connectionId: row.connection_id ?? null, followers: [],
+  }));
+  return { created, updated, pending: unresolved, scanned: rows.length, skippedFollowers };
 }

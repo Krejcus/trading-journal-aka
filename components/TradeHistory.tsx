@@ -1,7 +1,8 @@
+import { buildTradeGroupIndex, explicitTradeMaster, journalDisplayBalance, isCombinedTrade, tradeAccountLabel, tradeGroupMembers, tradeEstimateNotice } from '../lib/tradeHistoryPresentation';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Trade, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
-import { formatPnL } from '../utils/formatPnL';
+import { formatTradePnL } from '../utils/formatPnL';
 import { ExchangeRates } from '../services/currencyService';
 import { storageService } from '../services/storageService';
 import { thumbMedium, thumbLarge, fullSize } from '../services/imageUrlService';
@@ -17,7 +18,6 @@ import {
   MoreHorizontal, CheckSquare, Inbox
 } from 'lucide-react';
 import { tradeNeedsEnrichment } from '../services/tradovateImport';
-import type { PendingCopierJournalTrade } from '../services/copierJournalSync';
 
 import TradeDetailModal from './TradeDetailModal';
 import ImageZoomModal from './ImageZoomModal';
@@ -114,26 +114,25 @@ interface TradeHistoryProps {
   enrichSignal?: number;
   /** Uživatelské kategorie chyb (Settings → Strategie → Katalog Chyb) — pro bulk-tag importovaných obchodů. */
   userMistakes?: string[];
-  pendingCopierTrades?: PendingCopierJournalTrade[];
-  onResolvePendingCopier?: (accountId: string) => void;
 }
 
 const TradeHistory: React.FC<TradeHistoryProps> = ({
   trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade,
   pnlDisplayMode = 'usd', initialBalance, user, exchangeRates, allTrades = [],
   viewMode, setViewMode, onImportTradovate, onImportTradesyncer, enrichSignal, userMistakes = [],
-  pendingCopierTrades = [], onResolvePendingCopier,
 }) => {
   const isDark = theme !== 'light';
   const targetCurrency = user.currency || 'USD';
 
-  const formatValue = (val: number, mode: PnLDisplayMode = pnlDisplayMode, bal?: number, rr?: number, sign: boolean = true) => {
-    return formatPnL(val, mode, bal, rr, sign, targetCurrency, exchangeRates);
+  const formatValue = (trade: Trade, mode: PnLDisplayMode = pnlDisplayMode, bal?: number, rr?: number, sign: boolean = true) => {
+    const balance = mode === 'percent' && trade.copierTradeId?.startsWith('journal:') ? journalDisplayBalance(trade, accounts, isCombinedTrade(trade) ? tradeGroupMembers(trade, groupMap) : [trade]) : bal;
+    return formatTradePnL(trade, mode, balance, rr, sign, targetCurrency, exchangeRates);
   };
 
   // Price-based RR helper (jako TradingView) — preferuje entry/exit/stopLoss diff
   // před pnl/riskAmount poměrem (který zahrnuje fees).
   const priceBasedRR = (t: Trade): number | undefined => {
+    if (t.copierTradeId?.startsWith('journal:')) return undefined;
     if (t.entryPrice && t.exitPrice && t.stopLoss) {
       const profitMove = Math.abs(t.entryPrice - t.exitPrice);
       const riskMove = Math.abs(t.entryPrice - t.stopLoss);
@@ -160,7 +159,6 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   // --- ENRICHMENT (doplnění importovaných obchodů) ---
   const [enrichFilter, setEnrichFilter] = useState(false); // filtr „K doplnění"
   const [copierReviewFilter, setCopierReviewFilter] = useState(false);
-  const [pendingAccountId, setPendingAccountId] = useState('');
   const [wizardMode, setWizardMode] = useState(false);      // průvodce: po zavření detailu otevři další
 
   // --- MULTI-SELECT STATE ---
@@ -273,13 +271,14 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   };
 
   // Sync selectedTrade when trades change.
-  // DŮLEŽITÉ: hledáme v `allTrades` (kompletní list), ne ve `trades` (po filtru).
+  // Kombinované objekty žijí jen ve filtrovaném seznamu; jednotlivé záznamy
+  // mohou po editaci vypadnout z filtru, proto zůstává fallback na allTrades.
   // Jinak po editaci na Invalid/Missed by trade vypadl z filtru "Valid only" a selectedTrade
   // by se neaktualizoval — modal by zůstal viset na staré verzi.
   useEffect(() => {
     if (selectedTrade) {
-      const source = allTrades.length > 0 ? allTrades : trades;
-      const updated = source.find(t => t.id === selectedTrade.id);
+      const updated = trades.find(t => t.id === selectedTrade.id)
+        ?? allTrades.find(t => t.id === selectedTrade.id);
       // Levný podpis místo JSON.stringify celého tradu — ten dřív serializoval i inline base64
       // screenshot (stovky KB) synchronně při KAŽDÉ změně trades/allTrades → zásek UI.
       if (updated && updated !== selectedTrade && tradeSig(updated) !== tradeSig(selectedTrade)) {
@@ -377,33 +376,14 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   // Plné karty renderují jen NEneplatné obchody (paginováno přes visibleTrades).
   const validTrades = useMemo(() => visibleTrades.filter(t => !isInvalidTrade(t)), [visibleTrades, isInvalidTrade]);
 
-  // Předpočítané indexy pro detekci skupinových/copy obchodů. Dřív se pro KAŽDOU
-  // vykreslenou kartu 2× lineárně skenoval celý allTrades (O(karty × N)) přímo v render
-  // mapě → záseky při scrollu/načtení screenshotu. Teď O(1) lookup v Map.
-  const { groupMap, fuzzyMap } = useMemo(() => {
-    const src = allTrades.length > 0 ? allTrades : trades;
-    const g = new Map<string, Trade[]>();
-    const f = new Map<string, Trade[]>();
-    for (const t of src) {
-      if (t.groupId) {
-        const arr = g.get(t.groupId);
-        if (arr) arr.push(t); else g.set(t.groupId, [t]);
-      }
-      const fk = `${t.instrument}|${t.timestamp}|${t.direction}`;
-      const fa = f.get(fk);
-      if (fa) fa.push(t); else f.set(fk, [t]);
-    }
-    return { groupMap: g, fuzzyMap: f };
-  }, [allTrades, trades]);
-  const getGroupTrades = useCallback((trade: Trade): Trade[] => {
-    let group: Trade[] = trade.groupId ? (groupMap.get(trade.groupId) || []) : [];
-    if (group.length <= 1) {
-      const fuzzy = fuzzyMap.get(`${trade.instrument}|${trade.timestamp}|${trade.direction}`) || [];
-      if (fuzzy.length > 1) group = fuzzy;
-    }
-    return group;
-  }, [groupMap, fuzzyMap]);
-
+  const groupMap = useMemo(
+    () => buildTradeGroupIndex(allTrades.length > 0 ? allTrades : trades),
+    [allTrades, trades],
+  );
+  const getGroupTrades = useCallback(
+    (trade: Trade): Trade[] => tradeGroupMembers(trade, groupMap),
+    [groupMap],
+  );
 
   // --- MULTI-SELECT HANDLERS ---
   const toggleTradeSelection = (tradeId: string | number) => {
@@ -731,27 +711,6 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
         theme={theme}
       />
 
-      {pendingCopierTrades.length > 0 && (
-        <div className={`mb-4 flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center ${theme === 'light' ? 'border-amber-200 bg-amber-50' : 'border-amber-500/25 bg-amber-500/[0.07]'}`}>
-          <AlertTriangle size={18} className="shrink-0 text-amber-500" />
-          <div className="min-w-0 flex-1">
-            <div className={`text-sm font-black ${theme === 'light' ? 'text-slate-800' : 'text-slate-100'}`}>
-              {pendingCopierTrades.length} {pendingCopierTrades.length === 1 ? 'obchod čeká' : 'obchodů čeká'} na přiřazení účtu
-            </div>
-            <div className="text-[11px] text-slate-500">Leader {pendingCopierTrades[0].leaderAccountId} nemá journal mapping. Vyber účet; nic se nepřiřadí potichu.</div>
-          </div>
-          <select value={pendingAccountId} onChange={event => setPendingAccountId(event.target.value)} className="h-9 min-w-[190px] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 text-xs font-bold text-[var(--text-primary)]">
-            <option value="">Vyber journal účet…</option>
-            {accounts.filter(account => account.status === 'Active' && account.type !== 'Backtest').map(account => (
-              <option key={account.id} value={account.id}>{account.name}</option>
-            ))}
-          </select>
-          <button type="button" disabled={!pendingAccountId || !onResolvePendingCopier} onClick={() => onResolvePendingCopier?.(pendingAccountId)} className="h-9 rounded-md bg-indigo-600 px-4 text-xs font-black text-white disabled:opacity-40">
-            Přiřadit a vytvořit drafty
-          </button>
-        </div>
-      )}
-
       {/* Multi-Select Toolbar */}
       <div className="flex items-center gap-3 mb-4 px-2">
         {!isMultiSelectMode && enrichCount > 0 && (
@@ -1023,14 +982,13 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
             const needsEnrich = enrichIds.has(String(trade.id));
 
             const tradeAccount = accounts.find(a => a.id === trade.accountId);
-            // Find group trades using same logic as TradeDetailModal (groupId + fuzzy) — O(1) přes index
+            // Explicitní skupina; kombinovaná karta zachovává členství po filtrech.
             const groupTrades = getGroupTrades(trade);
             const isGroupTrade = groupTrades.length > 1;
             const isCombinedCard = String(trade.id).startsWith('combined_');
-            const masterTrade = groupTrades.find(t => t.isMaster) || groupTrades[0];
+            const masterTrade = explicitTradeMaster(groupTrades);
             const masterAcc = isGroupTrade ? accounts.find(a => a.id === masterTrade?.accountId) : null;
-            const copyCount = isGroupTrade ? groupTrades.length - 1 : 0;
-            const isCopyCard = isGroupTrade && !isCombinedCard && trade.id !== masterTrade?.id;
+            const isCopyCard = isGroupTrade && !isCombinedCard && trade.masterTradeId != null;
             const isMasterCard = isGroupTrade && !isCombinedCard && trade.id === masterTrade?.id;
 
             return (
@@ -1094,6 +1052,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         );
                       })()}
                       {trade.source === 'copier' && trade.needsReview === true && <CopierReviewBadge variant="card" />}
+                      {trade.pnlEstimated && <span className="px-2 py-0.5 rounded-md border border-amber-500/20 bg-amber-500/10 text-amber-500 text-[8px] font-black uppercase" title={tradeEstimateNotice(trade) || undefined}>Odhad</span>}
                       {/* Execution Status badge — always show */}
                       {(() => {
                         const status = trade.executionStatus || (trade.isValid === false ? 'Invalid' : 'Valid');
@@ -1136,14 +1095,14 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         isGroupTrade ? 'bg-blue-500' :
                         'bg-emerald-500'
                       }`} />
-                      {isCombinedCard && masterAcc ? (
+                      {isCombinedCard ? (
                         <>
                           <span className={`text-[8px] font-black uppercase tracking-tighter truncate max-w-[120px] ${theme !== 'light' ? 'text-slate-300' : 'text-slate-600'}`}>
-                            {masterAcc.name}
+                            {masterAcc?.name || 'Skupina obchodu'}
                           </span>
                           <ArrowRight size={8} className="text-blue-400/60" />
                           <span className="text-[7px] font-black text-blue-400 uppercase tracking-widest">
-                            {copyCount} {copyCount === 1 ? 'copy' : 'copies'}
+                            {tradeAccountLabel(groupTrades)}
                           </span>
                         </>
                       ) : (
@@ -1176,7 +1135,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                   <div className="flex items-end mt-6 md:mt-0">
                     <span className={`text-3xl md:text-4xl font-black tracking-tighter leading-none font-mono ${pnlColor}`}>
                       {formatValue(
-                        trade.pnl,
+                        trade,
                         pnlDisplayMode,
                         accounts.find(a => a.id === trade.accountId)?.initialBalance || 0,
                         priceBasedRR(trade)
@@ -1284,10 +1243,9 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                   const tblGroup = getGroupTrades(trade);
                   const tblIsGroup = tblGroup.length > 1;
                   const tblIsCombined = String(trade.id).startsWith('combined_');
-                  const tblMaster = tblGroup.find(t => t.isMaster) || tblGroup[0];
+                  const tblMaster = explicitTradeMaster(tblGroup);
                   const tblMasterAcc = tblIsGroup ? accounts.find(a => a.id === tblMaster?.accountId) : null;
-                  const tblCopyCount = tblIsGroup ? tblGroup.length - 1 : 0;
-                  const tblIsCopy = tblIsGroup && !tblIsCombined && trade.id !== tblMaster?.id;
+                  const tblIsCopy = tblIsGroup && !tblIsCombined && trade.masterTradeId != null;
                   const tblIsMaster = tblIsGroup && !tblIsCombined && trade.id === tblMaster?.id;
 
                   return (
@@ -1348,6 +1306,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                             {enrichIds.has(String(trade.id)) && <EnrichBadge variant="inline" />}
                             {(trade as any).excursionComplete === false && <PendingBadge variant="inline" />}
                             {trade.source === 'copier' && trade.needsReview === true && <CopierReviewBadge variant="inline" />}
+                            {trade.pnlEstimated && <span className="text-[8px] font-black text-amber-500" title={tradeEstimateNotice(trade) || undefined}>ODHAD</span>}
                           </span>
                           <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{getTradePhase(trade) || 'Standard'}</span>
                         </div>
@@ -1371,12 +1330,12 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       <td className="px-6 py-3">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <Terminal size={10} className={tblIsGroup ? 'text-blue-400' : 'text-slate-600'} />
-                          {tblIsCombined && tblMasterAcc ? (
+                          {tblIsCombined ? (
                             <>
-                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest max-w-[100px] truncate">{tblMasterAcc.name}</span>
+                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest max-w-[100px] truncate">{tblMasterAcc?.name || 'Skupina obchodu'}</span>
                               <ArrowRight size={8} className="text-blue-400/60" />
                               <span className="text-[8px] font-bold text-blue-400 uppercase tracking-wider">
-                                {tblCopyCount} {tblCopyCount === 1 ? 'copy' : 'copies'}
+                                {tradeAccountLabel(tblGroup)}
                               </span>
                             </>
                           ) : (
@@ -1395,7 +1354,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       <td className="px-6 py-3 text-right">
                         <span className={`text-sm font-mono font-black ${pnlColor}`}>
                           {formatValue(
-                            trade.pnl,
+                            trade,
                             pnlDisplayMode,
                             accounts.find(a => a.id === trade.accountId)?.initialBalance || 0,
                             priceBasedRR(trade)

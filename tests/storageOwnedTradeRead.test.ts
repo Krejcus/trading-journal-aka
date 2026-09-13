@@ -13,6 +13,7 @@ function fixture(count = 1) {
   const state = { owner: 'owner' as string | null, items: rows(count), cap: 1000, failAt: -1, nullAt: -1, repeat: false, sessionRead: undefined as undefined | (() => Promise<string | null>), onRead: undefined as undefined | (() => void) };
   const calls: Array<{ table: string; filters: Array<[string, unknown]>; order?: [string, unknown]; range?: [number, number]; signal?: AbortSignal }> = [];
   const hydrate = vi.fn(async (trades: any[], _owner: string) => trades.map(t => ({ ...t, notes: 'private owner note', noteHistory: { version: 1, revision: 0, revisions: [] } })));
+  const hydrateJournal = vi.fn(async (trades: any[]) => trades);
   const db = { from(table: string) {
     const call: typeof calls[number] = { table, filters: [] }; calls.push(call);
     return {
@@ -29,12 +30,19 @@ function fixture(count = 1) {
       },
     };
   } };
-  const runtime = new Function('supabase', 'getUserId', 'stripTradeNoteHistory', 'hydratePrivateTradeNotes', `${js}; return { read: service.getTradesWithDataByAccounts, bump: () => { authStateVersion += 1; } };`)(db, () => state.sessionRead ? state.sessionRead() : Promise.resolve(state.owner), stripTradeNoteHistory, hydrate);
-  return { ...runtime, state, calls, hydrate };
+  const runtime = new Function('supabase', 'getUserId', 'stripTradeNoteHistory', 'hydratePrivateTradeNotes', 'hydratePrivateJournalFacts', `${js}; return { read: service.getTradesWithDataByAccounts, bump: () => { authStateVersion += 1; } };`)(db, () => state.sessionRead ? state.sessionRead() : Promise.resolve(state.owner), stripTradeNoteHistory, hydrate, hydrateJournal);
+  return { ...runtime, state, calls, hydrate, hydrateJournal };
 }
 const strict = { strict: true as const, expectedOwnerId: 'owner' };
 
 describe('complete owner trade read', () => {
+  it('exports verified broker facts and propagates unavailable evidence instead of old PnL', async () => {
+    const f = fixture(); f.hydrateJournal.mockImplementation(async trades => trades.map(t => ({ ...t, pnl: 42 })));
+    expect((await f.read(['account'], 'owner', strict))[0].pnl).toBe(42);
+    expect(f.hydrateJournal).toHaveBeenCalledWith(expect.any(Array), 'owner', undefined, true);
+    f.hydrateJournal.mockRejectedValue(new Error('journal-facts-unavailable'));
+    await expect(f.read(['account'], 'owner', strict)).rejects.toThrow('journal-facts-unavailable');
+  });
   it('reads beyond server caps through the final empty page and keeps rich fields + private hydration', async () => {
     const f = fixture(1205); f.state.cap = 500; const progress = vi.fn();
     Object.assign(f.state.items[1204], { drawings: [{ id: 'chart-mark' }], backtest_run_id: 'run-id', signal: 'root-signal', share_notes: false });

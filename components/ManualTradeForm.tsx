@@ -1,3 +1,5 @@
+import { changedTradeFields } from '../services/tradePatch';
+import { journalReviewOnly, journalReviewPatch } from '../lib/journalReviewPatch';
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { storageService } from '../services/storageService';
@@ -52,6 +54,8 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
   // Edit mode: pokud je editTrade nastaveno, nezobrazujeme multi-account, draft,
   // a Save volá onUpdate s diff místo onAdd s novými trades.
   const isEditMode = !!editTrade;
+  const reviewOnly = !!editTrade && journalReviewOnly(editTrade);
+  const [saving, setSaving] = useState(false);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
   const [isInstrumentOpen, setIsInstrumentOpen] = useState(false);
   const [expandedSection, setExpandedSection] = useState<'emotions' | 'htf' | 'ltf' | 'mistakes' | null>('emotions');
@@ -120,6 +124,15 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
       planAdherence: 'Yes' as 'Yes' | 'No' | 'Partial',
       executionStatus: 'Valid' as 'Valid' | 'Invalid' | 'Missed'
     };
+  });
+
+  const initialReview = useRef<Partial<Trade>>({
+    copierTradeId: editTrade?.copierTradeId,
+    notes: formData.notes, htfConfluence: formData.htfConfluence, ltfConfluence: formData.ltfConfluence,
+    mistakes: formData.mistakes, emotions: formData.emotions,
+    planAdherence: formData.executionStatus === 'Valid' ? 'Yes' : 'No',
+    isValid: formData.executionStatus === 'Valid', executionStatus: formData.executionStatus,
+    screenshots: formData.screenshots, screenshot: formData.screenshots[0] ?? '',
   });
 
   const [uploadingScreenshot, setUploadingScreenshot] = useState(false);
@@ -252,6 +265,22 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (saving) return;
+    if (reviewOnly && editTrade && onUpdate) {
+      const updates = changedTradeFields(initialReview.current, journalReviewPatch(editTrade, {
+        notes: formData.notes, htfConfluence: formData.htfConfluence, ltfConfluence: formData.ltfConfluence,
+        mistakes: formData.mistakes, emotions: formData.emotions,
+        planAdherence: formData.executionStatus === 'Valid' ? 'Yes' : 'No',
+        isValid: formData.executionStatus === 'Valid', executionStatus: formData.executionStatus,
+        screenshots: formData.screenshots, screenshot: formData.screenshots[0] ?? '',
+      }));
+      setSaving(true); setValidationError(null);
+      Promise.resolve().then(() => onUpdate(updates)).then(onClose).catch(() => {
+        setValidationError('Hodnocení se nepodařilo uložit. Rozpracované změny zůstaly ve formuláři.');
+      }).finally(() => setSaving(false));
+      return;
+    }
 
     // Weekend validation
     const isWeekend = (dateStr: string) => {
@@ -437,6 +466,10 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
   const inputClass = `w-full px-3 py-2 bg-transparent text-sm font-black tabular-nums outline-none text-[var(--text-primary)] placeholder-[var(--text-secondary)]`;
   const pilarHeaderClass = "text-[10px] font-black uppercase tracking-[0.2em] text-blue-500 mb-4 flex items-center gap-2";
 
+  const displayedPnl = reviewOnly ? editTrade!.pnl : calculations.pnl;
+  const displayedFees = reviewOnly ? (String(editTrade!.id).startsWith('combined_') ? null : editTrade!.executionHistory?.fees ?? null) : calculations.totalFees;
+  const displayedDirection = reviewOnly ? editTrade!.direction : calculations.direction;
+  const displayedRR = reviewOnly ? '—' : calculations.rr;
   const currentInst = INSTRUMENTS.find(i => i.id === formData.instrument);
   const activeAccounts = useMemo(() => accounts.filter(a => a.status === 'Active'), [accounts]);
 
@@ -451,7 +484,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
             <div className="flex items-center gap-3 md:gap-4">
               <div className={`p-2.5 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-500/20`}><Plus size={18} className="text-white" /></div>
               <div>
-                <h2 className={`text-sm md:text-lg font-black tracking-tighter uppercase text-[var(--text-primary)]`}>{isEditMode ? 'UPRAVIT OBCHOD' : 'NOVÝ OBCHOD'}</h2>
+                <h2 className={`text-sm md:text-lg font-black tracking-tighter uppercase text-[var(--text-primary)]`}>{reviewOnly ? 'HODNOCENÍ OBCHODU' : isEditMode ? 'UPRAVIT OBCHOD' : 'NOVÝ OBCHOD'}</h2>
               </div>
               {!isEditMode && localStorage.getItem('alphatrade_trade_draft') && (
                 <button
@@ -469,16 +502,16 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
           <div className="flex-1 overflow-y-auto custom-scrollbar p-5 md:p-8 lg:p-10 bg-gradient-to-b from-transparent to-[var(--bg-page)]/40">
             <div className={`flex flex-col lg:flex-row gap-6 mb-8 justify-between items-start lg:items-center p-4 rounded-3xl border ${theme !== 'light' ? 'bg-[var(--bg-page)]/60 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'}`}>
               <div className="flex flex-wrap gap-4 md:gap-6 w-full relative">
-                <div className="flex flex-col"><span className="text-[8px] font-black text-slate-500 uppercase">{formData.executionStatus === 'Missed' ? 'Ušlý zisk' : 'Výsledek (Net)'}</span><span className={`text-xl font-mono font-black ${calculations.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'} ${formData.executionStatus === 'Missed' ? 'opacity-50' : ''}`}>${calculations.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div>
+                <div className="flex flex-col"><span className="text-[8px] font-black text-slate-500 uppercase">{formData.executionStatus === 'Missed' ? 'Ušlý zisk' : 'Výsledek (Net)'}</span><span className={`text-xl font-mono font-black ${displayedPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'} ${formData.executionStatus === 'Missed' ? 'opacity-50' : ''}`}>${displayedPnl.toLocaleString(undefined, { minimumFractionDigits: reviewOnly ? 2 : 0, maximumFractionDigits: 2 })}</span></div>
                 <div className="hidden md:block w-px h-8 bg-white/5"></div>
-                <div className="flex flex-col"><span className="text-[8px] font-black text-slate-500 uppercase">Fees</span><span className="text-sm font-mono font-black text-rose-400">-${calculations.totalFees.toFixed(2)}</span></div>
+                <div className="flex flex-col"><span className="text-[8px] font-black text-slate-500 uppercase">Fees</span><span className="text-sm font-mono font-black text-rose-400">{displayedFees == null ? '—' : `-$${displayedFees.toFixed(2)}`}</span></div>
                 <div className="hidden md:block w-px h-8 bg-white/5"></div>
-                <div className="flex flex-col"><span className="text-[8px] font-black text-slate-500 uppercase">R:R Ratio</span><span className="text-sm font-mono font-black text-blue-400">{calculations.rr} R</span></div>
+                <div className="flex flex-col"><span className="text-[8px] font-black text-slate-500 uppercase">R:R Ratio</span><span className="text-sm font-mono font-black text-blue-400">{displayedRR} R</span></div>
                 <div className="hidden md:block w-px h-8 bg-white/5"></div>
-                <div className="flex flex-col"><span className="text-[8px] font-black text-slate-500 uppercase">Seance</span><span className={`text-[10px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{calculations.session}</span></div>
+                <div className="flex flex-col"><span className="text-[8px] font-black text-slate-500 uppercase">Seance</span><span className={`text-[10px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{reviewOnly ? editTrade!.session || '—' : calculations.session}</span></div>
                 <div className="ml-auto flex items-center">
-                  <div className={`px-2 py-1 rounded text-[9px] font-black uppercase flex items-center gap-1 ${calculations.direction === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-orange-500/10 text-orange-500'}`}>
-                    {calculations.direction === 'Long' ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />} {calculations.direction}
+                  <div className={`px-2 py-1 rounded text-[9px] font-black uppercase flex items-center gap-1 ${displayedDirection === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-orange-500/10 text-orange-500'}`}>
+                    {displayedDirection === 'Long' ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />} {displayedDirection}
                   </div>
                 </div>
 
@@ -492,8 +525,10 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
             </div>
 
             {/* Zbytek formuláře zůstává stejný */}
+            {reviewOnly && <p className="mb-5 text-xs text-[var(--text-muted)]">Ceny, časy, objem a P&amp;L přebíráme z Tradovate. Zde upravujete hodnocení a vlastní obrázky.</p>}
             <form onSubmit={handleSubmit} className="space-y-8">
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 md:gap-8 items-start">
+              <div className={`grid grid-cols-1 md:grid-cols-2 ${reviewOnly ? '' : 'xl:grid-cols-4'} gap-6 md:gap-8 items-start`}>
+                {!reviewOnly && <>
                 <div className="space-y-4">
                   <h3 className={pilarHeaderClass}><Zap size={12} /> 01 Genesis</h3>
                   <div className="relative group">
@@ -614,8 +649,18 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                   </div>
                 </div>
 
+                </>}
                 <div className="space-y-4">
-                  <h3 className={pilarHeaderClass}><Brain size={12} /> 03 Tactical Engine</h3>
+                  {reviewOnly && <div className="space-y-2">
+                    <p className={pilarHeaderClass}>Dodržení plánu</p>
+                    <div className="flex gap-2">
+                      {(['Valid', 'Invalid'] as const).map(status => <button key={status} type="button" onClick={() => setFormData(previous => ({ ...previous, executionStatus: status }))}
+                        className={`flex-1 py-2 rounded-xl text-xs font-bold border ${formData.executionStatus === status ? (status === 'Valid' ? 'bg-emerald-600 text-white border-emerald-500' : 'bg-rose-600 text-white border-rose-500') : 'border-[var(--border-subtle)] text-[var(--text-muted)]'}`}>
+                        {status === 'Valid' ? 'Podle plánu' : 'Mimo plán'}
+                      </button>)}
+                    </div>
+                  </div>}
+                  <h3 className={pilarHeaderClass}><Brain size={12} /> {reviewOnly ? 'Kontext obchodu' : '03 Tactical Engine'}</h3>
                   <div className="space-y-2">
                     <div className={`rounded-2xl border overflow-hidden ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
                       <button type="button" onClick={() => setExpandedSection(expandedSection === 'emotions' ? null : 'emotions')} className={`w-full px-4 py-3 flex items-center justify-between text-[10px] font-black uppercase tracking-widest ${isDark ? 'bg-white/5' : 'bg-slate-100/50'}`}><span className="flex items-center gap-2"><Brain size={12} className="text-purple-500" /> Emoce</span>{expandedSection === 'emotions' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
@@ -637,7 +682,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                 </div>
 
                 <div className="space-y-4">
-                  <h3 className={pilarHeaderClass}><ImageIcon size={12} /> 04 Evidence</h3>
+                  <h3 className={pilarHeaderClass}><ImageIcon size={12} /> {reviewOnly ? 'Obrázky a poznámky' : '04 Evidence'}</h3>
                   {uploadingScreenshot && (
                     <div className="flex items-center gap-2 text-[10px] font-black text-blue-400 uppercase tracking-widest mb-2">
                       <div className="w-3 h-3 rounded-full border border-blue-400 border-t-transparent animate-spin" />
@@ -665,7 +710,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
 
           <div className={`p-5 md:p-8 shrink-0 border-t flex flex-col sm:flex-row gap-3 md:gap-6 bg-[var(--bg-page)]/50 border-[var(--border-subtle)] backdrop-blur-xl`}>
             <button type="button" onClick={onClose} className="w-full sm:w-[180px] h-[52px] bg-white/5 text-slate-500 rounded-2xl font-black text-xs uppercase tracking-widest border border-white/5 hover:bg-white/10 transition-all">Zrušit</button>
-            <button onClick={handleSubmit} type="button" className={`flex-1 h-[52px] rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl transition-all flex items-center justify-center gap-3 ${formData.executionStatus === 'Valid' ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20' : formData.executionStatus === 'Invalid' ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/20' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'}`}><Save size={18} /> {isEditMode ? 'ULOŽIT ZMĚNY' : 'ULOŽIT OBCHOD'}</button>
+            <button onClick={handleSubmit} disabled={saving || uploadingScreenshot} type="button" className={`flex-1 h-[52px] rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl transition-all flex items-center justify-center gap-3 ${formData.executionStatus === 'Valid' ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20' : formData.executionStatus === 'Invalid' ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/20' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'}`}><Save size={18} /> {saving ? 'UKLÁDÁM…' : reviewOnly ? 'ULOŽIT HODNOCENÍ' : isEditMode ? 'ULOŽIT ZMĚNY' : 'ULOŽIT OBCHOD'}</button>
           </div>
         </div >
       </div >

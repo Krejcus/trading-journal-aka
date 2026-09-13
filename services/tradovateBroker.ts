@@ -1,3 +1,8 @@
+import { createJournalBackfillPlan, validateJournalBackfillScope } from '../lib/journalBackfillPlan';
+import { positionSnapshotObservations } from '../lib/journalPositionSnapshot';
+import { createJournalAccountingBackfill, JOURNAL_ACCOUNTING_MAX_BYTES, readJournalResponseText, waitJournalReceipt } from '../lib/journalAccountingBackfill';
+import { visitJournalSocketEvidence, JOURNAL_SOCKET_ENTITY_TYPES } from '../lib/journalSocketEvidence';
+import { journalObservation, type JournalObservation } from '../lib/tradovateJournalEvidence';
 import type {
   BrokerEnvironment,
   BrokerEvent,
@@ -225,6 +230,9 @@ export interface TradovateBrokerPort extends BrokerPort {
    * spustit (socket není v plném provozu nebo už běží).
    */
   renewSocket(): boolean;
+  /** Passive observer; does not start/retain execution. Optional false/async false
+   * reports failed persistence; accounting backfill awaits async receipts. */
+  subscribeEvidence(listener: (event: JournalObservation) => unknown): () => void;
 }
 
 export interface TradovateVisibleAccount extends BrokerAccountCapability {
@@ -241,6 +249,31 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const timeouts = config.setTimeoutImpl ?? setTimeout;
   const clearTimeouts = config.clearTimeoutImpl ?? clearTimeout;
   const listeners = new Set<(event: BrokerEvent) => void>();
+  const evidenceListeners = new Set<(event: JournalObservation) => unknown>();
+  const journalAccounting = createJournalAccountingBackfill();
+  const journalBackfillPlan = createJournalBackfillPlan();
+  let journalRoster: number[] = [];
+  const observe = (type: string, entity: unknown, source: JournalObservation['source'], eventType = 'Observed', receivedAt = clock()) => {
+    if (evidenceListeners.size === 0) return Promise.resolve(false);
+    const evidence = journalObservation(type, entity, source, eventType, receivedAt);
+    if (!evidence) return Promise.resolve(false);
+    journalAccounting.remember(evidence);
+    Object.freeze(evidence.entity);
+    Object.freeze(evidence);
+    const receipts: Promise<boolean>[] = [];
+    for (const listener of evidenceListeners) {
+      // Analytics errors never enter the controller's fail-closed event queue.
+      try { receipts.push(Promise.resolve(listener(evidence)).then(value => value !== false, () => false)); }
+      catch { receipts.push(Promise.resolve(false)); }
+    }
+    // Delivery stays synchronous for stream events. Only background backfill
+    // awaits durable recorder receipts; execution never waits on disk writes.
+    return Promise.all(receipts).then(results => {
+      const accepted = results.every(Boolean);
+      if (!accepted) journalAccounting.reset();
+      return accepted;
+    });
+  };
   const accountSpecsByAccountId = new Map<number, string>(
     Object.entries(config.accountSpecsByAccountId ?? {}).flatMap(([rawId, rawName]) => {
       const accountId = Number(rawId);
@@ -351,9 +384,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   };
   const commandCorrelationTag = (command: TradovateCommandEntity): string | undefined =>
     command.clOrdId?.trim() || command.customTag50?.trim() || undefined;
+  let journalSnapshotBusy = false;
+  let journalSnapshotAbort: AbortController | null = null;
+  let journalSnapshotTimer: ReturnType<typeof setInterval> | null = null;
   const syncRequestBody = {
     splitResponses: true,
-    entityTypes: ['contract', 'order', 'fill', 'position', 'command', 'executionReport', 'commandReport'],
+    entityTypes: [...JOURNAL_SOCKET_ENTITY_TYPES],
   };
 
   const emit = (event: BrokerEvent) => {
@@ -380,10 +416,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     return value.trim();
   };
 
-  const requestRaw = async <T>(path: string, init: RequestInit = {}, allowNotFound = false): Promise<T | null> => {
+  const requestRaw = async <T>(path: string, init: RequestInit = {}, allowNotFound = false, maxResponseBytes?: number): Promise<T | null> => {
     if (!fetchImpl) throw new TradovateTransportError('fetch is unavailable');
     assertNotRateLimited();
     const accessToken = await token();
+    init.signal?.throwIfAborted();
     const response = await fetchImpl(`${hosts.rest}${path}`, {
       ...init,
       headers: {
@@ -394,19 +431,20 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       },
     });
     if (allowNotFound && response.status === 404) return null;
-    const text = await response.text();
+    if (response.status === 423 || response.status === 429) {
+      const error = new TradovateRateLimitError(
+        `Tradovate ${path} rate limited (${response.status})`,
+        response.status === 429 ? 60 * 60 * 1_000 : null,
+        response.status === 429,
+        undefined,
+        response.status,
+      );
+      armRateLimitBreaker(error);
+      void response.body?.cancel().catch(() => {});
+      throw error;
+    }
+    const text = maxResponseBytes == null ? await response.text() : await readJournalResponseText(response, maxResponseBytes);
     if (!response.ok) {
-      if (response.status === 423 || response.status === 429) {
-        const error = new TradovateRateLimitError(
-          `Tradovate ${path} rate limited (${response.status})`,
-          response.status === 429 ? 60 * 60 * 1_000 : null,
-          response.status === 429,
-          undefined,
-          response.status,
-        );
-        armRateLimitBreaker(error);
-        throw error;
-      }
       throw new TradovateTransportError(
         `Tradovate ${path} failed (${response.status}): ${text.slice(0, 500)}`,
         response.status,
@@ -439,7 +477,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
 
   const request = async <T>(path: string, init: RequestInit = {}, allowNotFound = false): Promise<T | null> => {
     try {
-      return await requestRaw<T>(path, init, allowNotFound);
+      const result = await requestRaw<T>(path, init, allowNotFound);
+      if (!init.method || init.method === 'GET') {
+        const type = path.split('/')[1];
+        for (const row of Array.isArray(result) ? result : result ? [result] : []) observe(type, row, 'snapshot');
+      }
+      return result;
     } catch (reason) {
       throw contextualError(reason, 'rest');
     }
@@ -630,6 +673,84 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     return loadOrderGraphUncached(selectedOrderId);
   };
 
+  const captureJournalPositions = async () => {
+    const candidate = socket;
+    if (journalSnapshotBusy || !candidate || !syncReady || socketState !== 'connected' || !evidenceListeners.size) return;
+    journalSnapshotBusy = true;
+    const startedAt = clock();
+    const snapshotId = crypto.randomUUID();
+    const abort = new AbortController();
+    journalSnapshotAbort = abort;
+    const timeout = timeouts(() => abort.abort(), 20_000);
+    const current = () => socket === candidate && socketState === 'connected' && syncReady && evidenceListeners.size > 0 && !abort.signal.aborted;
+    try {
+      try {
+        // Dedicated fresh GETs: joining an older in-flight request would invalidate
+        // this witness's startedAt. Analytics never updates execution caches.
+        const roster = await requestRaw<unknown>('/account/list', { signal: abort.signal });
+        if (!current()) return;
+        if (Array.isArray(roster) && roster.length <= 10000 && roster.every(row => row && Number.isSafeInteger(row.id) && row.id > 0)) journalRoster = [...new Set(roster.map(row => row.id))];
+        const positions = await requestRaw<unknown>('/position/list', { signal: abort.signal });
+        if (!current()) return;
+        const completedAt = clock();
+        for (const event of positionSnapshotObservations(snapshotId, roster, positions, startedAt, completedAt)) {
+          observe(event.entityType, event.entity, event.source, event.eventType, completedAt);
+        }
+      } catch (error) {
+        if (socket === candidate && evidenceListeners.size) observe('positionsnapshot', {
+          id: `${snapshotId}:failed`, snapshotId, kind: 'failed', startedAt, completedAt: clock(), reason: 'snapshot-unavailable',
+        }, 'snapshot');
+        if (error instanceof TradovateRateLimitError) return;
+      }
+      // One bounded pass across available source lists, then exact known-parent
+      // batches for oversized sources. No per-account socket or execution cache.
+      for (const type of journalBackfillPlan.cycle()) {
+        if (!current()) return;
+        const read = journalBackfillPlan.next(type, parent => parent === 'account'
+          ? [...journalRoster, ...journalAccounting.references(parent)] : journalAccounting.references(parent));
+        const readStartedAt = clock();
+        const revision = journalAccounting.begin();
+        try {
+          if (!read.path) throw new Error('journal-backfill-no-known-parents');
+          const rows = await requestRaw<unknown>(read.path, { signal: abort.signal }, false, JOURNAL_ACCOUNTING_MAX_BYTES);
+          if (!current()) return;
+          validateJournalBackfillScope(read, rows);
+          const result = journalAccounting.select(read.type, rows, revision, clock());
+          let recorded = 0; let contended = result.contended;
+          for (const event of result.observations) {
+            if (!current()) return;
+            // The stream can also change while earlier rows wait for disk.
+            const fresh = journalAccounting.select(read.type, [event.entity], revision, event.receivedAt);
+            contended += fresh.contended;
+            if (!fresh.observations.length) continue;
+            const accepted = await waitJournalReceipt(observe(event.entityType, event.entity, event.source, event.eventType, event.receivedAt), abort.signal);
+            if (!accepted) throw new Error('journal-backfill-recorder-unavailable');
+            recorded++;
+          }
+          if (!current()) return;
+          observe('journalbackfill', { id: `${snapshotId}:${read.type}`, entityType: read.type, kind: 'observed',
+            startedAt: readStartedAt, completedAt: clock(), scope: read.scope, requested: read.ids?.length ?? null, remaining: read.remaining ?? null, scanned: result.scanned,
+            recorded, contended }, 'snapshot');
+        } catch (error) {
+          if (error instanceof Error && error.message === 'journal-backfill-response-too-large') journalBackfillPlan.useScoped(read.type);
+          // A timed-out receipt is not a durable ACK. Retry its facts next pass.
+          if (abort.signal.aborted) journalAccounting.reset();
+          if (socket !== candidate || socketState !== 'connected' || !evidenceListeners.size) return;
+          observe('journalbackfill', { id: `${snapshotId}:${read.type}`, entityType: read.type, kind: 'unavailable',
+            startedAt: readStartedAt, completedAt: clock(), scope: read.scope, requested: read.ids?.length ?? null, remaining: read.remaining ?? null, reason: abort.signal.aborted ? 'history-read-timeout'
+              : error instanceof Error && ['journal-backfill-invalid-list', 'journal-backfill-response-too-large', 'journal-backfill-recorder-unavailable', 'journal-backfill-no-known-parents'].includes(error.message)
+                ? error.message : 'history-read-unavailable' }, 'snapshot');
+          if (abort.signal.aborted || error instanceof TradovateRateLimitError) break;
+        }
+      }
+    } finally {
+      clearTimeouts(timeout);
+      journalSnapshotBusy = false;
+      if (journalSnapshotAbort === abort) journalSnapshotAbort = null;
+      if (socket !== candidate && syncReady && evidenceListeners.size) void captureJournalPositions();
+    }
+  };
+
   const loadOrderGraphUncached = async (selectedOrderId?: number) => {
     const suffix = selectedOrderId == null ? '/list' : `/deps?masterid=${selectedOrderId}`;
     const [rawResult, versionResult, commandResult, fillResult] = await Promise.all([
@@ -693,7 +814,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     const items = Array.isArray(payload) ? payload : [payload];
     for (const raw of items) {
       if (!raw || typeof raw !== 'object') continue;
-      const item = raw as { entityType?: string; entity?: unknown };
+      const item = raw as { entityType?: string; entity?: unknown; eventType?: string };
       const entityType = item.entityType?.toLowerCase();
       if (!item.entity || typeof item.entity !== 'object') continue;
       if (entityType === 'contract') {
@@ -733,14 +854,20 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         await hydrateOrderVersion(report.orderId);
         const order = await composeOrder(report.orderId);
         if (order) emit({ type: 'order', order });
-      } else if (entityType === 'orderversion') {
-        const version = item.entity as TradovateOrderVersionEntity;
-        rememberVersion(version);
-        const order = await composeOrder(version.orderId);
-        if (order) emit({ type: 'order', order });
-        await flushPendingFills(version.orderId);
       } else if (entityType === 'order') {
         const orderEntity = item.entity as TradovateRawOrderEntity;
+        // A new Order and its initial shape can arrive together before REST knows
+        // the order. Preserve that correlation without letting standalone requested
+        // versions replace an already populated execution order. Journal protection
+        // confirmation remains separate and requires its own execution evidence.
+        if (!rawOrders.has(orderEntity.id) && !orderVersions.has(orderEntity.id)) {
+          for (const candidate of items) {
+            if (!candidate || typeof candidate !== 'object') continue;
+            const sibling = candidate as { entityType?: string; entity?: TradovateOrderVersionEntity };
+            if (sibling.entityType?.toLowerCase() === 'orderversion'
+              && sibling.entity?.orderId === orderEntity.id) rememberVersion(sibling.entity);
+          }
+        }
         rawOrders.set(orderEntity.id, orderEntity);
         await hydrateOrderVersion(orderEntity.id);
         const order = await composeOrder(orderEntity.id);
@@ -764,7 +891,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     }
   };
 
-  const handleMessageObject = async (message: unknown) => {
+  const handleMessageObject = async (message: unknown, isCurrent: () => boolean) => {
+    if (!isCurrent()) return;
     if (!message || typeof message !== 'object') return;
     const value = message as { e?: string; d?: unknown; i?: number; s?: number };
     if (value.s === 423 || value.s === 429) {
@@ -834,16 +962,19 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       if (Array.isArray(value.d)) await handleProps(value.d);
       if (!syncReady) {
         const baseline = await loadOrderGraph();
+        if (!isCurrent()) return;
         for (const raw of baseline) {
           const order = await composeOrder(raw.id);
           if (order) emit({ type: 'order', order });
         }
+        if (!isCurrent()) return;
         if (syncTimeout) clearTimeouts(syncTimeout);
         syncTimeout = null;
         if (syncRetry) clearTimeouts(syncRetry);
         syncRetry = null;
         syncReady = true;
         socketState = 'connected';
+        observe('connection', { state: 'synced' }, 'transport');
         reconnectFailures = 0;
         stopDisconnectedLog();
         // Dokončená plánovaná obměna: controller výpadek nikdy neviděl,
@@ -851,21 +982,24 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         const wasRenewal = renewalInProgress;
         if (renewalInProgress) finishRenewal();
         emit({ type: 'connection', connected: true, at: clock(), ...(wasRenewal ? { resynced: true } : {}) });
+        void captureJournalPositions();
       }
       return;
     }
     if (Array.isArray(value.d)) {
-      for (const item of value.d) await handleMessageObject(item);
+      for (const item of value.d) await handleMessageObject(item, isCurrent);
     }
   };
 
-  const handleSocketData = async (raw: unknown) => {
+  const handleSocketData = async (raw: unknown, messages: readonly unknown[], isCurrent: () => boolean) => {
+    if (!isCurrent()) return;
     if (typeof raw !== 'string' || raw.length === 0) return;
     lastSocketMessageAt = clock();
     emit({ type: 'heartbeat', at: lastSocketMessageAt });
     if (raw === 'o') {
       socketState = 'authorizing';
-      socket?.send(`authorize\n0\n\n${await token()}`);
+      const accessToken = await token();
+      if (isCurrent()) socket?.send(`authorize\n0\n\n${accessToken}`);
       return;
     }
     if (raw[0] === 'h') {
@@ -873,8 +1007,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       return;
     }
     if (raw[0] !== 'a') return;
-    const messages = JSON.parse(raw.slice(1)) as unknown[];
-    for (const message of messages) await handleMessageObject(message);
+    for (const message of messages) await handleMessageObject(message, isCurrent);
   };
 
   const clearSocketTimers = () => {
@@ -961,6 +1094,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
 
   const releaseSocket = (candidate: WebSocketLike) => {
     if (socket !== candidate) return false;
+    journalSnapshotAbort?.abort();
+    journalAccounting.reset();
+    journalBackfillPlan.reset(); journalRoster = [];
     candidate.onopen = null;
     candidate.onmessage = null;
     candidate.onerror = null;
@@ -974,7 +1110,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
 
   const closeSocket = (candidate: WebSocketLike, reason: string, minimumDelayMs = 0) => {
     if (socket !== candidate) return;
+    observe('connection', { state: 'disconnected', reason }, 'transport');
     socketState = 'closing';
+    journalSnapshotAbort?.abort();
+    journalAccounting.reset();
+    journalBackfillPlan.reset(); journalRoster = [];
     // A dead transport may never deliver onclose (e.g. after Mac sleep).
     // Invalidate the router's connection state now so a later successful
     // sync is not suppressed as a duplicate connected=true notification.
@@ -1003,6 +1143,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       closeDeadlineAt = 0;
       if (socket !== candidate) return;
       diagnostic(`WS CLOSE WATCHDOG state=${socketState} reason=${reason}`);
+      observe('connection', { state: 'disconnected', reason: 'socket-close' }, 'transport');
       releaseSocket(candidate);
       scheduleReconnect(`${reason}:close-watchdog`, minimumDelayMs);
     }, closeTimeoutMs);
@@ -1056,9 +1197,29 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       }, config.syncTimeoutMs ?? 5_000);
     };
     candidate.onmessage = event => {
-      if (socket !== candidate) return;
+      if (socket !== candidate || socketState === 'closing') return;
+      const receivedAt = clock();
+      let messages: unknown[] = [];
+      let parseError: unknown;
+      try {
+        if (typeof event.data === 'string' && event.data[0] === 'a') {
+          const parsed: unknown = JSON.parse(event.data.slice(1));
+          if (!Array.isArray(parsed)) throw new TradovateTransportError('Invalid WebSocket frame');
+          messages = parsed;
+          // Capture before metadata/REST awaits. Analytics-only orderVersion events
+          // must never update execution caches or emit a requested price as confirmed.
+          if (evidenceListeners.size) {
+            for (const message of messages) visitJournalSocketEvidence(message,
+              (type, entity, source, eventType) => observe(type, entity, source, eventType, receivedAt));
+          }
+        }
+      } catch (reason) { parseError = reason; }
       socketMessageTail = socketMessageTail
-        .then(() => handleSocketData(event.data))
+        .then(() => {
+          if (socket !== candidate) return;
+          if (parseError) throw parseError;
+          return handleSocketData(event.data, messages, () => socket === candidate && socketState !== 'closing');
+        })
         .catch(reason => {
           if (socket !== candidate) return;
           const error = contextualError(reason, 'websocket');
@@ -1088,6 +1249,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       if (!renewalInProgress && socketState !== 'closing') {
         emit({ type: 'connection', connected: false, at: clock() });
       }
+      observe('connection', { state: 'disconnected', reason: 'socket-close' }, 'transport');
       releaseSocket(candidate);
       scheduleReconnect(renewalInProgress ? 'planned-renewal' : 'socket-close');
     };
@@ -1374,6 +1536,21 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       }, config.renewalDeadlineMs ?? 15_000);
       closeSocket(socket, 'planned-renewal');
       return true;
+    },
+    subscribeEvidence(listener) {
+      evidenceListeners.add(listener);
+      observe('connection', { state: syncReady ? 'synced' : 'starting' }, 'transport');
+      if (!journalSnapshotTimer) journalSnapshotTimer = intervals(() => { void captureJournalPositions(); }, 300_000);
+      void captureJournalPositions();
+      return () => {
+        evidenceListeners.delete(listener);
+        if (!evidenceListeners.size) {
+          journalSnapshotAbort?.abort();
+          journalAccounting.reset();
+          journalBackfillPlan.reset(); journalRoster = [];
+          if (journalSnapshotTimer) { clearIntervals(journalSnapshotTimer); journalSnapshotTimer = null; }
+        }
+      };
     },
     subscribe(listener) {
       listeners.add(listener);

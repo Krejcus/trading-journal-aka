@@ -365,6 +365,17 @@ export function marketDataWindowForEntry(entryMs: number): MarketDataWindow {
   };
 }
 
+/** Keep the existing shared daily context, including the actual exit day when
+ * an execution crosses midnight. Subminute execution times remain unchanged. */
+export function marketDataWindowForTrade(entryMs: number, exitMs: number): MarketDataWindow {
+  if (![entryMs, exitMs].every(value => Number.isFinite(value) && Number.isFinite(new Date(value).getTime())) || exitMs < entryMs) {
+    throw new Error('Obchod nemá platné pořadí času vstupu a výstupu.');
+  }
+  const entryWindow = marketDataWindowForEntry(entryMs);
+  const exitWindow = marketDataWindowForEntry(exitMs);
+  return { start: entryWindow.start, end: exitWindow.end };
+}
+
 export function resolveMarketSymbol(root: 'MNQ' | 'NQ', tradeSymbol?: string): string {
   const normalized = String(tradeSymbol || '').trim().toUpperCase();
   const contract = normalized.match(/^(MNQ|NQ)([HMUZ]\d{1,2})$/);

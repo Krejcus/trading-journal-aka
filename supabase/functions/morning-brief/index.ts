@@ -100,7 +100,7 @@ Deno.serve(async (req: Request) => {
   const [tradesRes, reviewsRes, memoryRes, accountsRes] = await Promise.all([
     // limit 500 řádků: fan-out = 1 obchod ~10 zápisů; dřívější limit 20 chytil jen
     // kopie posledních ~2 obchodů (a jen ztráty, protože řadí od nejnovějších).
-    supabase.from('trades').select('id, date, instrument, direction, pnl, data, account_id')
+    supabase.from('confirmed_journal_trades').select('id, date, instrument, direction, pnl, data, account_id')
       .eq('user_id', userId).gte('date', day7).order('date', { ascending: false }).limit(500),
     supabase.from('daily_reviews').select('date, data').eq('user_id', userId).order('date', { ascending: false }).limit(3),
     supabase.from('ai_coach_memory').select('type, content, memory_date, importance, metadata')

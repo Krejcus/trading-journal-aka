@@ -1,4 +1,5 @@
 import type { Trade } from '../types';
+import { journalReviewPatch } from '../lib/journalReviewPatch';
 
 export const tradeValuesEqual = (a: unknown, b: unknown): boolean => {
   if (Object.is(a, b)) return true;
@@ -14,7 +15,7 @@ export const tradeValuesEqual = (a: unknown, b: unknown): boolean => {
 const identity = new Set(['id', 'accountId', 'backtestRunId', 'recordedAt', 'createdAt']);
 /** A full editor snapshot is not a patch: never resend unrelated unchanged fields. */
 export const changedTradeFields = (before: Partial<Trade>, proposed: Partial<Trade>): Partial<Trade> => Object.fromEntries(
-  Object.entries(proposed).filter(([key, value]) => !identity.has(key) && value !== undefined
+  Object.entries(journalReviewPatch(before, proposed)).filter(([key, value]) => !identity.has(key) && value !== undefined
     && !tradeValuesEqual((before as Record<string, unknown>)[key], value)),
 );
 

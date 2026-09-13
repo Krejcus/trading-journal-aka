@@ -1,3 +1,4 @@
+import { calculateTotalRR } from '../utils/tradeRisk';
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Activity, Sparkles } from 'lucide-react';
@@ -129,7 +130,7 @@ const MonteCarloLab: React.FC<Props> = ({ theme, trades, initialBalance, onClose
     if (denom < 5) return null;
     const avgWin = wins.reduce((s, t) => s + (t.pnl || 0), 0) / (wins.length || 1);
     const avgLoss = Math.abs(losses.reduce((s, t) => s + (t.pnl || 0), 0)) / (losses.length || 1);
-    const rTrades = valid.filter(t => t.riskAmount && (t.riskAmount as number) > 0);
+    const rTrades = calculateTotalRR(valid) === null ? [] : valid;
     const avgRisk = rTrades.length ? rTrades.reduce((s, t) => s + (t.riskAmount as number), 0) / rTrades.length : 0;
     return {
       wr: (wins.length / denom) * 100,

@@ -47,6 +47,50 @@ beforeEach(() => {
 });
 
 describe('denní kbelíky svíček', () => {
+  it('doplní tentýž částečně zveřejněný den i při stejném okně požadavku', async () => {
+    const day = MONDAY + DAY_MS;
+    vi.setSystemTime(new Date(day + DAY_MS + DAY_MS / 2));
+    invoke.mockImplementation(async (_name, options) => {
+      const end = new Date(Math.min(Date.parse(options.body.end), Date.now() - DAY_MS)).toISOString();
+      const response = serveCandles({ ...options.body, end });
+      return { ...response, data: { ...response.data, end } };
+    });
+    const request = { symbol: 'MNQU6', start: new Date(day), end: new Date(day + DAY_MS) };
+    const first = await loadMarketCandles(request);
+    expect(first.candles).toHaveLength(720);
+    expect(first.end).toBe(new Date(day + DAY_MS / 2).toISOString());
+    vi.setSystemTime(new Date(day + DAY_MS + DAY_MS / 2 + 3600_000));
+    const second = await loadMarketCandles(request);
+    expect(second.candles).toHaveLength(780);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('nepřevezme starý denní cache záznam vytvořený před dokončením publikace', async () => {
+    const day = MONDAY + DAY_MS;
+    const createdAt = day + DAY_MS + DAY_MS / 2;
+    idbStore.set(`databento-glbx-day-v1|ohlcv-1m|NQU6|${new Date(day).toISOString().slice(0, 10)}`, {
+      expiresAt: createdAt + 30 * DAY_MS,
+      candles: [{ time: day / 1000, open: 1, high: 1, low: 1, close: 1, volume: 1 }],
+    });
+    vi.setSystemTime(new Date(day + 4 * DAY_MS));
+    const response = await loadMarketCandles({ symbol: 'NQU6', start: new Date(day), end: new Date(day + DAY_MS) });
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(response.candles).toHaveLength(1440);
+  });
+
+  it('nepovažuje providerem zkrácený starý den za dokončený ani v paměti', async () => {
+    const day = MONDAY;
+    const end = new Date(day + DAY_MS / 2).toISOString();
+    invoke.mockImplementation(async (_name, options) => {
+      const response = serveCandles({ ...options.body, end });
+      return { ...response, data: { ...response.data, end } };
+    });
+    const request = { symbol: 'MNQH6', start: new Date(day), end: new Date(day + DAY_MS) };
+    await loadMarketCandles(request);
+    await loadMarketCandles(request);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
   it('jiné hranice okna nad stejnými dny už nestahují ze sítě', async () => {
     const first = await loadMarketCandles({
       symbol: 'MNQ.v.0',

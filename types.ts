@@ -247,6 +247,8 @@ export interface Trade {
   screenshots?: string[];
   /** Privátní auto-snapshoty copier epizody; `path` není veřejná URL. */
   copierSnapshots?: Array<{ kind: string; at: number; path: string }>;
+  /** Transient owner read status; never a financial fact or review field. */
+  copierSnapshotLoadError?: boolean;
   notes?: string;
   /** Private owner-only history, hydrated separately; never store in public Trade JSON. */
   noteHistory?: import('./services/tradeNoteHistory').TradeNoteHistory;
@@ -268,10 +270,14 @@ export interface Trade {
   exitReason?: 'sl' | 'tp' | 'manual';
   /** Stabilní logické ID copier close události; DB `trades.id` zůstává UUID. */
   copierTradeId?: string;
+  /** Preserved older review, excluded from confirmed results after exact migration. */
+  journalSupersededBy?: string;
   /** Stabilní vazba na ENTRY/EXIT obrázky, které mohou dorazit až po založení obchodu. */
   copierEpisodeId?: string;
   /** Odhad P&L kopie podle leadera a multiplieru; přesnou hodnotu doplní budoucí reconciliace z broker historie. */
   pnlEstimated?: boolean;
+  /** Broker evidence for this account only; combined cards select an individual source. */
+  executionHistory?: import('./lib/tradeExecutionHistory').TradeExecutionHistory;
   /** Ruční význam setupu. Automatický přepočet jej nesmí měnit. */
   setupType?: 'reaction' | 'break' | 'unclear';
   tags?: string[];
@@ -281,6 +287,8 @@ export interface Trade {
   /** Exact generated capsules still owned by replay; unknown/legacy tags stay manual. */
   autoConfluence?: { htf: string[]; ltf: string[] };
   groupId?: string;
+  /** View-only membership of a combined card after filters; never an account execution. */
+  combinedTradeIds?: Array<string | number>;
   isMaster?: boolean; // If this is the source trade for a copy group
   masterTradeId?: string | number; // ID of the master trade if this is a copy
   phase?: 'Challenge' | 'Funded';

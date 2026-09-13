@@ -95,6 +95,7 @@ import {
 } from '../services/liveCopyTrading';
 
 interface TradovateLiveDeskProps {
+  journalHistory?: React.ReactNode;
   userId: string;
   theme: 'dark' | 'light' | 'oled';
   live: TradovateLiveData;
@@ -167,6 +168,7 @@ const LiveDashboardSkeleton = () => (
 );
 
 const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
+  journalHistory,
   userId,
   live,
   onCopierJournalRefresh,
@@ -809,6 +811,7 @@ setAgentStatus((await executeAgent({
         <>
           {tab === 'overview' && copyTradeSnapshot ? (
             <LiveCopyTradeOverview
+              journalHistory={journalHistory}
               userId={userId}
               snapshot={copyTradeSnapshot}
               accountProfiles={live.profiles}

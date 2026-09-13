@@ -1,3 +1,6 @@
+import { mergeJournalDetailSelection } from '../services/journalTradeDetail';
+import { journalReviewOnly } from '../lib/journalReviewPatch';
+import { explicitTradeMaster, isCombinedTrade, journalDisplayBalance, tradeAccountLabel, tradeDetailMembers, tradeDetailSource, tradeEstimateNotice } from '../lib/tradeHistoryPresentation';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { pointValueFor } from '../services/tradovateImport';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -8,7 +11,7 @@ import {
     ShieldCheck, Layers, Wallet, Save, CornerDownLeft, AlertOctagon
 } from 'lucide-react';
 import { Trade, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
-import { formatPnL } from '../utils/formatPnL';
+import { formatTradePnL } from '../utils/formatPnL';
 import { ExchangeRates } from '../services/currencyService';
 import { storageService } from '../services/storageService';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -16,8 +19,11 @@ import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
 import TradeExecutionIntel from './TradeExecutionIntel';
 import TradeConfluence from './TradeConfluence';
+const EMPTY_TRADES: Trade[] = [];
+const defaultLoadJournalDetails = (ids: readonly string[], signal?: AbortSignal) => storageService.getJournalTradeDetails(ids, signal);
+const defaultLoadTradeDetail = (id: string) => storageService.getTradeById(id);
 const ManualTradeForm = React.lazy(() => import('./ManualTradeForm'));
-const TradeMarketChart = React.lazy(() => import('./TradeMarketChart'));
+const AccountExecutionChart = React.lazy(() => import('./AccountExecutionChart'));
 import TradeShareModal from './TradeShareModal';
 
 interface PropertyProps {
@@ -55,7 +61,8 @@ const EditableNumberProperty: React.FC<{
   icon: any;
   isDark: boolean;
   onSave: (value: number | undefined) => void;
-}> = ({ label, value, placeholder, color, icon: Icon, isDark, onSave }) => {
+  readOnly?: boolean;
+}> = ({ label, value, placeholder, color, icon: Icon, isDark, onSave, readOnly = false }) => {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(value !== undefined ? String(value) : '');
 
@@ -72,6 +79,7 @@ const EditableNumberProperty: React.FC<{
     setEditing(false);
   };
 
+  if (readOnly) return <Property label={label} value={value ?? '—'} color={color} icon={Icon} isDark={isDark} />;
   return (
     <div className={`flex items-baseline justify-between gap-2 py-1 group/prop border-b [&:nth-last-child(-n+2)]:border-0 ${isDark ? 'border-white/[0.03]' : 'border-slate-100'}`}>
       <span className="flex items-center gap-1 shrink-0">
@@ -126,7 +134,10 @@ interface TradeDetailModalProps {
     onNext?: () => void;
     hasPrev?: boolean;
     hasNext?: boolean;
-    onUpdateTrade?: (updates: Partial<Trade>) => void;
+    loadJournalDetails?: (ids: readonly string[], signal?: AbortSignal) => Promise<Trade[]>;
+    loadTradeDetail?: (id: string) => Promise<Trade | null>;
+    signCopierSnapshots?: typeof storageService.createCopierSnapshotSignedUrls;
+    onUpdateTrade?: (updates: Partial<Trade>) => void | boolean | Promise<void | boolean>;
     pnlDisplayMode?: PnLDisplayMode;
     accounts?: Account[];
     initialBalance?: number;
@@ -142,7 +153,7 @@ interface TradeDetailModalProps {
 const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     trade, accountName, theme, onClose, onDelete, emotions, onPrev, onNext, hasPrev, hasNext,
     onUpdateTrade, pnlDisplayMode = 'usd', accounts = [], initialBalance, user, exchangeRates,
-    allTrades = [], startInEditMode = false, onSaved
+    allTrades = EMPTY_TRADES, startInEditMode = false, onSaved, loadJournalDetails = defaultLoadJournalDetails, loadTradeDetail = defaultLoadTradeDetail, signCopierSnapshots = storageService.createCopierSnapshotSignedUrls
 }) => {
     const isDark = theme !== 'light';
     const targetCurrency = user?.currency || 'USD';
@@ -152,15 +163,23 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
         return isNaN(parsed) ? 0 : parsed;
     };
 
-    const formatValue = (val: number, mode: PnLDisplayMode = pnlDisplayMode, bal?: number, rr?: number, sign: boolean = true) => {
-        // Ensure inputs to formatPnL are numbers
-        const cleanVal = isNaN(val) ? 0 : val;
-        const cleanRR = (rr !== undefined && isFinite(rr)) ? rr : undefined;
-        return formatPnL(cleanVal, mode, bal, cleanRR, sign, targetCurrency, exchangeRates);
+    const formatValue = (sourceTrade: Trade, mode: PnLDisplayMode = pnlDisplayMode, bal?: number, rr?: number, sign: boolean = true) => {
+        const balance = mode === 'percent' && journalReviewOnly(sourceTrade) ? journalDisplayBalance(sourceTrade, accounts, isCombinedTrade(sourceTrade) ? groupTrades : [sourceTrade]) : bal;
+        return formatTradePnL(sourceTrade, mode, balance, rr, sign, targetCurrency, exchangeRates);
     };
 
+    const detailLookupId = useMemo(
+        () => tradeDetailSource(trade, allTrades)?.id,
+        [trade, allTrades],
+    );
+    const selectedMembers = useMemo(() => tradeDetailMembers(trade, allTrades), [trade, allTrades]);
+    const [journalResult, setJournalResult] = useState<{ input: Trade; selection: Trade[]; rows: Trade[] | null } | null>(null);
+    const currentJournal = journalResult?.input === trade && journalResult.selection === selectedMembers ? journalResult : null;
+    const journalPending = journalReviewOnly(trade) && !currentJournal?.rows;
     const [fullTrade, setFullTrade] = useState<Trade>(trade);
     const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+    const [detailsLoadError, setDetailsLoadError] = useState(false);
+    const [detailsRetry, setDetailsRetry] = useState(0);
     // Id obchodu, pro který už doběhl lazy-load detailu (screenshoty z DB).
     const [detailsLoadedTradeId, setDetailsLoadedTradeId] = useState<string | null>(null);
 
@@ -183,8 +202,28 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
     useEffect(() => {
         setFullTrade(trade);
+        setDetailsLoadError(false);
+        if (journalReviewOnly(trade)) {
+            const controller = new AbortController();
+            setIsLoadingDetails(true);
+            setJournalResult(null);
+            setDetailsLoadedTradeId(previous => previous === String(trade.id) ? previous : null);
+            void loadJournalDetails(isCombinedTrade(trade) ? trade.combinedTradeIds?.map(String) ?? [] : [String(trade.id)], controller.signal)
+                .then(rows => {
+                    if (controller.signal.aborted) return;
+                    const merged = mergeJournalDetailSelection(trade, selectedMembers, rows);
+                    setFullTrade(merged.trade);
+                    setJournalResult({ input: trade, selection: selectedMembers, rows: merged.members });
+                    setDetailsLoadedTradeId(String(trade.id));
+                }).catch(() => {
+                    if (controller.signal.aborted) return;
+                    setDetailsLoadError(true);
+                    setJournalResult({ input: trade, selection: selectedMembers, rows: null });
+                }).finally(() => { if (!controller.signal.aborted) setIsLoadingDetails(false); });
+            return () => controller.abort();
+        }
         // If parent trade already has screenshot data, use it directly (no extra DB call)
-        if (trade.screenshot || (trade.screenshots && trade.screenshots.length > 0)) {
+        if (!journalReviewOnly(trade) && (trade.screenshot || (trade.screenshots && trade.screenshots.length > 0))) {
             // Předchozí (zrušený) lazy-load mohl nechat spinner zapnutý — vypni ho,
             // jinak by screenshot z props zůstal schovaný za spinnerem.
             setIsLoadingDetails(false);
@@ -192,22 +231,29 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
             return;
         }
         let cancelled = false;
+        // Keep an already opened editor mounted while its optimistic review refreshes.
+        setDetailsLoadedTradeId(previous => previous === String(trade.id) ? previous : null);
         const loadFull = async () => {
             // Bez guardu na isLoadingDetails: hodnota v closure je stále z prvního renderu
             // a při rychlém přepínání obchodů by načtení detailu úplně přeskočila.
             setIsLoadingDetails(true);
+            let succeeded = false;
             try {
-                if (trade.id) {
-                    const detailed = await storageService.getTradeById(String(trade.id));
+                if (detailLookupId != null) {
+                    const detailed = await loadTradeDetail(String(detailLookupId));
                     // Merge only screenshot/screenshots from DB — keep parent prop's
                     // up-to-date fields (executionStatus, isValid, notes, etc.) so we
                     // don't overwrite an optimistic update with stale DB data.
+                    if (journalReviewOnly(trade) && (!detailed || String(detailed.id) !== String(detailLookupId))) throw new Error("journal-review-details-unavailable");
                     if (detailed && !cancelled) {
+                        succeeded = true;
                         setFullTrade(prev => ({
                             ...prev,
                             screenshot: detailed.screenshot ?? prev.screenshot,
                             screenshots: detailed.screenshots ?? prev.screenshots,
-                            copierSnapshots: detailed.copierSnapshots ?? prev.copierSnapshots,
+                            copierSnapshots: journalReviewOnly(trade) ? detailed.copierSnapshots ?? [] : detailed.copierSnapshots ?? prev.copierSnapshots,
+                            copierEpisodeId: journalReviewOnly(trade) ? detailed.copierEpisodeId : detailed.copierEpisodeId ?? prev.copierEpisodeId,
+                            copierSnapshotLoadError: detailed.copierSnapshotLoadError ?? false,
                             drawings: detailed.drawings ?? prev.drawings,
                             aiSuggestions: (detailed as any).aiSuggestions ?? (prev as any).aiSuggestions,
                             visionAnalysis: (detailed as any).visionAnalysis ?? (prev as any).visionAnalysis,
@@ -216,75 +262,45 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                 }
             } catch (e) {
                 console.error("Failed to load full trade details", e);
+                if (!cancelled) setDetailsLoadError(true);
             } finally {
                 if (!cancelled) {
                     setIsLoadingDetails(false);
-                    setDetailsLoadedTradeId(String(trade.id));
+                    if (succeeded || !journalReviewOnly(trade)) setDetailsLoadedTradeId(String(trade.id));
                 }
             }
         };
         loadFull();
         return () => { cancelled = true; };
     // Sync na CELÝ trade objekt — když edit upraví jakékoliv pole, sync fullTrade.
-    }, [trade]);
+    }, [trade, detailLookupId, detailsRetry, loadTradeDetail, loadJournalDetails, selectedMembers]);
 
-    const groupTrades = useMemo(() => {
-        if (!allTrades.length) return [activeTrade];
-
-        // 1. Try grouping by groupId (preferred for new trades)
-        if (activeTrade.groupId) {
-            const trades = allTrades.filter(t => t.groupId === activeTrade.groupId);
-            const seen = new Set();
-            return trades.filter(t => {
-                const duplicate = seen.has(t.accountId);
-                seen.add(t.accountId);
-                return !duplicate;
-            });
-        }
-
-        // 2. Fallback: Smart Grouping for old trades (same instrument + same timestamp + same direction)
-        const fuzzyMatches = allTrades.filter(t =>
-            t.instrument === activeTrade.instrument &&
-            t.timestamp === activeTrade.timestamp &&
-            t.direction === activeTrade.direction
-        );
-
-        if (fuzzyMatches.length > 1) {
-            const seen = new Set();
-            return fuzzyMatches.filter(t => {
-                const duplicate = seen.has(t.accountId);
-                seen.add(t.accountId);
-                return !duplicate;
-            });
-        }
-
-        return [activeTrade];
-    }, [activeTrade, allTrades]);
-
-    // Smarter MASTER identification
-    const masterTradeIdInGroup = useMemo(() => {
-        if (groupTrades.length <= 1) return null;
-
-        // 1. Explicit master flag
-        const explicitMaster = groupTrades.find(t => t.isMaster);
-        if (explicitMaster) return explicitMaster.id;
-
-        // 2. Look for "HLAVNÍ" (Main) in account name
-        const masterByName = groupTrades.find(t => {
-            const acc = accounts.find(a => a.id === t.accountId);
-            const name = acc?.name || (t.accountId === activeTrade.accountId ? accountName : '');
-            return name?.toLowerCase().includes('hlavní');
-        });
-        if (masterByName) return masterByName.id;
-
-        // 3. Fallback to first one
-        return groupTrades[0]?.id;
-    }, [groupTrades, accounts, activeTrade.accountId, accountName]);
+    const groupTrades = useMemo(
+        () => journalReviewOnly(trade) ? currentJournal?.rows ?? [] : tradeDetailMembers(activeTrade, allTrades),
+        [trade, currentJournal, activeTrade, allTrades],
+    );
+    const masterTradeIdInGroup = useMemo(
+        () => explicitTradeMaster(groupTrades)?.id ?? null,
+        [groupTrades],
+    );
+    const estimateNotice = tradeEstimateNotice(activeTrade);
+    const isCombined = isCombinedTrade(activeTrade);
+    const [chartAccountId, setChartAccountId] = useState<string | null>(null);
+    const [chartRealizationId, setChartRealizationId] = useState<string | null>(null);
+    const accountChartTrades = isCombined
+        ? groupTrades.filter(member => member.accountId === (chartAccountId ?? activeTrade.accountId))
+        : [activeTrade];
+    const chartTrade = isCombined
+        ? accountChartTrades.find(member => String(member.id) === chartRealizationId) ?? accountChartTrades[0]
+          ?? groupTrades.find(member => member.accountId === activeTrade.accountId) ?? groupTrades[0]
+        : activeTrade;
 
     const [isZoomed, setIsZoomed] = useState(false);
     const [accountsExpanded, setAccountsExpanded] = useState(false);
     const [activeImageIndex, setActiveImageIndex] = useState(0);
     const [visualMode, setVisualMode] = useState<'chart' | 'screenshots'>('screenshots');
+    const [isSigningSnapshots, setIsSigningSnapshots] = useState(false);
+    const [snapshotSignError, setSnapshotSignError] = useState(false);
     const [signedCopierSnapshots, setSignedCopierSnapshots] = useState<Array<{
         kind: string; at: number; path: string; url: string;
     }>>([]);
@@ -350,25 +366,38 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
         ? signedCopierSnapshots[activeImageIndex - manualImages.length]
         : undefined;
 
+    const requiresJournalMedia = journalReviewOnly(activeTrade);
     // Modal je hranice lazy-loadu: privátní cesty se podepíší až po otevření
     // detailu a ruční screenshoty zůstávají nedotčené.
     useEffect(() => {
         let cancelled = false;
         setSignedCopierSnapshots([]);
+        setSnapshotSignError(false);
+        setIsSigningSnapshots(false);
+        // Journal media must come from the freshly read owner detail.
+        if (requiresJournalMedia && (isLoadingDetails || detailsLoadedTradeId !== String(trade.id))) return () => { cancelled = true; };
         const snapshots = activeTrade.copierSnapshots ?? [];
         if (snapshots.length === 0) return () => { cancelled = true; };
-        void storageService.createCopierSnapshotSignedUrls(snapshots)
-            .then(items => { if (!cancelled) setSignedCopierSnapshots(items); })
-            .catch(error => console.warn('[SNAPSHOT] gallery load failed', error));
+        setIsSigningSnapshots(true);
+        void signCopierSnapshots(snapshots)
+            .then(items => {
+                if (!cancelled) {
+                    setSignedCopierSnapshots(items);
+                    setSnapshotSignError(items.length !== snapshots.length);
+                }
+            })
+            .catch(() => { if (!cancelled) setSnapshotSignError(true); })
+            .finally(() => { if (!cancelled) setIsSigningSnapshots(false); });
         return () => { cancelled = true; };
-    }, [activeTrade.id, activeTrade.copierSnapshots]);
+    }, [activeTrade.id, requiresJournalMedia, activeTrade.copierSnapshots, trade.id, isLoadingDetails, detailsLoadedTradeId, signCopierSnapshots]);
 
     useEffect(() => {
         if (activeImageIndex >= images.length) setActiveImageIndex(0);
     }, [activeImageIndex, images.length]);
 
-    const entryPrice = safeValue(activeTrade.entryPrice);
-    const exitPrice = safeValue(activeTrade.exitPrice);
+    const executionTrade = journalReviewOnly(activeTrade) && isCombined && visualMode === 'chart' ? chartTrade ?? activeTrade : activeTrade;
+    const entryPrice = safeValue(executionTrade.entryPrice);
+    const exitPrice = safeValue(executionTrade.exitPrice);
     const stopLoss = safeValue(activeTrade.stopLoss);
     const takeProfit = safeValue(activeTrade.takeProfit);
     const riskAmount = safeValue(activeTrade.riskAmount);
@@ -389,12 +418,12 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
       }
       return null;
     })();
-    const realRRR = priceBasedRR !== null
+    const realRRR = journalReviewOnly(activeTrade) ? null : priceBasedRR !== null
       ? priceBasedRR
       : (riskAmount > 0 ? pnl / riskAmount : 0);
 
-    const exitTime = activeTrade.timestamp || new Date(activeTrade.date).getTime();
-    const tradeEntryTime = activeTrade.entryTime || activeTrade.entryDate || (exitTime - (safeValue(activeTrade.durationMinutes) * 60 * 1000));
+    const exitTime = executionTrade.timestamp || new Date(executionTrade.date).getTime();
+    const tradeEntryTime = executionTrade.entryTime || executionTrade.entryDate || (exitTime - (safeValue(executionTrade.durationMinutes) * 60 * 1000));
 
     // Format the time range string
     const formatTime = (time: any) => {
@@ -403,7 +432,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     };
 
     const timeRange = `${formatTime(tradeEntryTime)} - ${formatTime(exitTime)}`;
-    const holdTime = activeTrade.duration || (Math.round(safeValue(activeTrade.durationMinutes ?? (activeTrade as any).duration_minutes)) + 'm');
+    const holdTime = executionTrade.duration || (Math.round(safeValue(executionTrade.durationMinutes ?? (executionTrade as any).duration_minutes)) + 'm');
     // Status MUSÍ číst z nejnovějšího trade propu (ne z fullTrade, který může být přepsán stale DB fetchem)
     const status = trade.executionStatus || activeTrade.executionStatus || ((trade.isValid === false || activeTrade.isValid === false) ? 'Invalid' : 'Valid');
     const isMissed = status === 'Missed';
@@ -422,16 +451,11 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     useEffect(() => { setImageLoadError(false); }, [activeImageIndex]);
     // Reset error state when trade changes
     useEffect(() => { setImageLoadError(false); }, [activeTrade.id]);
+    const snapshotError = Boolean(activeTrade.copierSnapshotLoadError || snapshotSignError || detailsLoadError || imageLoadError);
+    const loadingImages = isLoadingDetails || (isSigningSnapshots && images.length === 0);
     // Screenshot obchodu je výchozí pohled; graf je druhá záložka.
     useEffect(() => { setVisualMode('screenshots'); }, [activeTrade.id]);
-    // Obchod bez jediného screenshotu (ani copier snapshotu): po dohrání detailu
-    // přepni na graf, ať se místo prázdné plochy „BEZ SCREENSHOTU" hned ukáže něco užitečného.
-    const copierSnapshotCount = activeTrade.copierSnapshots?.length ?? 0;
-    useEffect(() => {
-        if (detailsLoadedTradeId !== String(activeTrade.id)) return;
-        if (images.length > 0 || copierSnapshotCount > 0) return;
-        setVisualMode('chart');
-    }, [detailsLoadedTradeId, activeTrade.id, images.length, copierSnapshotCount]);
+
 
 
     const handleShare = async () => {
@@ -458,10 +482,17 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     };
 
     // Preferuj price-based RR (jako TradingView) pro PnL display v R mode
-    const formattedPnL = formatValue(pnl, pnlDisplayMode, initialBalance || accounts.find(a => a.id === activeTrade.accountId)?.initialBalance, priceBasedRR !== null ? priceBasedRR : ((riskAmount > 0) ? pnl / riskAmount : undefined));
+    const formattedPnL = formatValue(activeTrade, pnlDisplayMode, initialBalance || accounts.find(a => a.id === activeTrade.accountId)?.initialBalance, priceBasedRR !== null ? priceBasedRR : ((riskAmount > 0) ? pnl / riskAmount : undefined));
 
     return (
         <ErrorBoundary name="TradeDetailModal">
+            {journalPending && <div className="fixed inset-0 z-[300] flex items-center justify-center bg-theme-page-95 backdrop-blur-2xl p-6">
+                <div role={currentJournal ? 'alert' : 'status'} className="max-w-md rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-6 text-center text-sm text-[var(--text-primary)]">
+                    <p>{currentJournal ? 'Údaje vybraných účtů se nepodařilo ověřit. Obnovte detail, případně výběr v historii.' : 'Načítám společný přehled vybraných účtů…'}</p>
+                    <div className="mt-4 flex justify-center gap-4">{currentJournal && <button className="font-bold text-blue-500" onClick={() => setDetailsRetry(value => value + 1)}>Zkusit znovu</button>}<button onClick={onClose}>Zavřít</button></div>
+                </div>
+            </div>}
+            <div style={{ display: 'contents', visibility: journalPending ? 'hidden' : undefined }}>
             <div className="native-modal-safe-area fixed inset-0 z-[110] flex items-center justify-center p-0 md:p-6 lg:p-12 overflow-hidden">
                 <motion.div
                     initial={{ opacity: 0 }}
@@ -479,12 +510,12 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                 >
                     {/* Header */}
                     <div className={`h-14 lg:h-20 shrink-0 border-b flex items-center justify-between px-4 md:px-10 z-20 ${isDark ? 'border-white/5 bg-theme-card-50' : 'bg-white/50 border-slate-100'} backdrop-blur-md`}>
-                        <div className="flex items-center gap-3 lg:gap-8 min-w-0">
+                        <div className="flex items-center gap-3 lg:gap-4 min-w-0">
                             <div className="flex items-center gap-2 lg:gap-4 min-w-0">
-                                <h2 className={`text-lg lg:text-2xl font-black tracking-tighter uppercase truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>{trade.instrument}</h2>
+                                <h2 className={`text-lg lg:text-2xl font-black tracking-tighter uppercase shrink-0 ${isDark ? 'text-white' : 'text-slate-900'}`}>{activeTrade.instrument}</h2>
                                 <div className={`px-2 lg:px-3 py-1 rounded-full border flex items-center gap-1.5 shrink-0 ${directionColor}`}>
-                                    {isMissed ? <Clock size={11} /> : (trade.direction === 'Long' ? <ArrowUpRight size={12} strokeWidth={3} /> : <ArrowDownRight size={12} strokeWidth={3} />)}
-                                    <span className="text-[9px] lg:text-[10px] font-black uppercase tracking-widest">{isMissed ? 'MISSED' : trade.direction}</span>
+                                    {isMissed ? <Clock size={11} /> : (activeTrade.direction === 'Long' ? <ArrowUpRight size={12} strokeWidth={3} /> : <ArrowDownRight size={12} strokeWidth={3} />)}
+                                    <span className="text-[9px] lg:text-[10px] font-black uppercase tracking-widest">{isMissed ? 'MISSED' : activeTrade.direction}</span>
                                 </div>
                                 {!isMissed && (
                                     <div className={`px-2 lg:px-3 py-1 rounded-full border flex items-center gap-1.5 shrink-0 ${status === 'Invalid' ? 'text-rose-500 bg-rose-500/10 border-rose-500/20' : 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20'}`}>
@@ -497,7 +528,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             <div className="hidden lg:flex flex-col">
                                 <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Transaction Date</p>
                                 <p className={`text-[11px] font-bold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                                    {trade.date ? new Date(trade.date).toLocaleDateString('cs-CZ', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'}
+                                    {activeTrade.date ? new Date(activeTrade.date).toLocaleDateString('cs-CZ', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'}
                                 </p>
                             </div>
                             <div className={`hidden lg:flex p-1 rounded-xl border shrink-0 ${isDark ? 'bg-black/30 border-white/10' : 'bg-white/80 border-slate-200 shadow-sm'}`}>
@@ -514,7 +545,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             </div>
                             <button onClick={() => setIsShareCardOpen(true)} title="Sdílet jako kartu" className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white' : 'bg-white text-slate-400 hover:text-slate-700 hover:bg-slate-50 border border-slate-200'}`}><Share2 size={16} /></button>
                             {onUpdateTrade && (
-                                <button onClick={(e) => { e.stopPropagation(); setIsFullEditOpen(true); }} className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${isDark ? 'bg-blue-500/10 text-blue-500 hover:bg-blue-500 hover:text-white' : 'bg-white text-blue-400 hover:bg-blue-500 hover:text-white border border-blue-200'}`} title={String(activeTrade.id).startsWith('combined_') ? 'Upravit obchod (změny se propíší na všechny účty; PnL/risk se edituje individuálně)' : 'Upravit obchod'}><Edit3 size={16} /></button>
+                                <button onClick={(e) => { e.stopPropagation(); setIsFullEditOpen(true); }} className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${isDark ? 'bg-blue-500/10 text-blue-500 hover:bg-blue-500 hover:text-white' : 'bg-white text-blue-400 hover:bg-blue-500 hover:text-white border border-blue-200'}`} title={journalReviewOnly(activeTrade) ? 'Upravit hodnocení obchodu' : String(activeTrade.id).startsWith('combined_') ? 'Upravit obchod (změny se propíší na účty v aktuálním výběru)' : 'Upravit obchod'}><Edit3 size={16} /></button>
                             )}
                             <button onClick={(e) => { e.stopPropagation(); setIsDeleteModalOpen(true); }} className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${isDark ? 'bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white' : 'bg-white text-rose-400 hover:bg-rose-500 hover:text-white border border-rose-200'}`}><Trash2 size={16} /></button>
                             <button onClick={onClose} className={`p-2 lg:p-3 rounded-full transition-all ${isDark ? 'hover:bg-white/10 text-slate-400' : 'bg-white hover:bg-slate-50 text-slate-400 border border-slate-200'}`}><X size={20} /></button>
@@ -527,16 +558,19 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                         <div className={`order-2 lg:order-1 w-full lg:w-[320px] flex-1 lg:flex-none shrink-0 border-t lg:border-t-0 lg:border-r flex flex-col z-10 ${isDark ? 'border-white/5 bg-theme-card-40' : 'border-slate-100 bg-slate-50/40'} backdrop-blur-xl overflow-y-auto no-scrollbar`}>
                             {/* PnL hero card */}
                             <div className={`p-5 border-b relative ${isDark ? 'border-white/5' : 'border-slate-100'} ${isMissed ? 'bg-blue-500/[0.04]' : isBEOverride ? 'bg-amber-500/[0.04]' : isWin ? 'bg-emerald-500/[0.04]' : 'bg-rose-500/[0.04]'}`}>
-                                <p className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] mb-2">Profit / Loss</p>
+                                <p className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] mb-2">{isCombined ? 'Profit / Loss · vybrané účty' : 'Profit / Loss · tento účet'}</p>
                                 <div className="flex items-baseline justify-between gap-4 flex-wrap">
                                     <h3 className={`text-4xl lg:text-4xl font-black font-mono tracking-tighter leading-none ${pnlColor}`} style={{ color: isMissed ? '#60a5fa' : isBEOverride ? '#f59e0b' : isWin ? '#10b981' : '#f43f5e' }}>
                                         {formattedPnL || '—'}
                                     </h3>
                                     <div className="flex flex-col items-end">
-                                        <span className={`text-base font-black font-mono ${realRRR >= 1 ? 'text-emerald-500' : 'text-slate-500'}`}>{isFinite(realRRR) ? realRRR.toFixed(2) : '0.00'} R</span>
-                                        <span className="text-[8px] font-bold text-slate-600 uppercase tracking-widest leading-none mt-1">Reward/Risk</span>
+                                        <span className={`text-base font-black font-mono ${(realRRR ?? -Infinity) >= 1 ? 'text-emerald-500' : 'text-slate-500'}`}>{realRRR == null ? '—' : `${isFinite(realRRR) ? realRRR.toFixed(2) : '0.00'} R`}</span>
+                                        <span className="text-[8px] font-bold text-slate-600 uppercase tracking-widest leading-none mt-1" title={journalReviewOnly(activeTrade) ? 'Výchozí peněžní riziko není doložené. Pozdější SL ani původní odhad nejsou podkladem pro R/R.' : undefined}>{journalReviewOnly(activeTrade) ? 'R/R · chybí riziko' : 'Reward/Risk'}</span>
                                     </div>
                                 </div>
+                                {estimateNotice && (
+                                    <p className="mt-3 text-[10px] leading-relaxed text-amber-500" role="note">{estimateNotice}</p>
+                                )}
                                 {/* BE override — když trade byl fakticky BE ale fees/slippage daly +/- pár dolarů */}
                                 {!isMissed && onUpdateTrade && (
                                   <button
@@ -554,12 +588,14 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             </div>
                             {/* Metrics — 3-col na mobile (kompaktnější), 2-col na desktop */}
                             <div className="p-3 lg:p-5">
+                                {journalReviewOnly(activeTrade) && isCombined && <p className="mb-2 text-[8px] font-bold uppercase tracking-wider text-slate-500">Plnění · {accounts.find(account => account.id === executionTrade.accountId)?.name ?? accountName}</p>}
                                 <div className="grid grid-cols-2 gap-x-4 lg:gap-x-6">
                                     <Property label="ENTRY" value={entryPrice || '—'} icon={Target} isDark={isDark} />
                                     <Property label="EXIT" value={exitPrice || '—'} color={isWin ? 'text-emerald-400' : 'text-rose-400'} icon={ArrowRight} isDark={isDark} />
                                     <EditableNumberProperty
+                                      readOnly={journalReviewOnly(activeTrade)}
                                       label="STOP"
-                                      value={activeTrade.stopLoss}
+                                      value={executionTrade.stopLoss}
                                       placeholder="—"
                                       color="text-rose-500/80"
                                       icon={ShieldCheck}
@@ -579,8 +615,9 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                       }}
                                     />
                                     <EditableNumberProperty
+                                      readOnly={journalReviewOnly(activeTrade)}
                                       label="TARGET"
-                                      value={activeTrade.takeProfit}
+                                      value={executionTrade.takeProfit}
                                       placeholder="—"
                                       color="text-emerald-500/80"
                                       icon={Zap}
@@ -598,20 +635,16 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                         onUpdateTrade(updates);
                                       }}
                                     />
-                                    <Property label="POSITION" value={activeTrade.positionSize || 1} icon={Layers} isDark={isDark} />
+                                    <Property label="POSITION" value={executionTrade.positionSize || 1} icon={Layers} isDark={isDark} />
                                     <Property label="HOLD" value={holdTime} subValue={timeRange.includes('01:00 - 01:00') ? undefined : timeRange} icon={Timer} isDark={isDark} />
                                 </div>
                                 {(() => {
                                     // Účty: master vždy nahoře, kopie schované za rozbalovací lištu.
                                     // Souhrn (počet + Σ P/L) je hned v hlavičce, takže i sbalené vidíš celek.
-                                    const visibleAccountTrades = groupTrades.filter(gt =>
-                                        accounts.find(a => a.id === gt.accountId) || gt.accountId === activeTrade.accountId
-                                    );
+                                    const visibleAccountTrades = groupTrades;
                                     if (visibleAccountTrades.length === 0) return null;
 
-                                    const isMasterTrade = (gt: Trade) => masterTradeIdInGroup
-                                        ? gt.id === masterTradeIdInGroup
-                                        : (gt.isMaster || (!gt.masterTradeId && groupTrades.length > 1 && gt.id === groupTrades[0]?.id));
+                                    const isMasterTrade = (gt: Trade) => masterTradeIdInGroup != null && gt.id === masterTradeIdInGroup;
 
                                     // Master první, zbytek ponech v původním pořadí.
                                     const masterTrade = visibleAccountTrades.find(isMasterTrade) || visibleAccountTrades[0];
@@ -627,11 +660,11 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                             <div className={`px-3 py-2 flex items-center justify-between transition-all ${isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-slate-50'}`}>
                                                 <div className="flex items-center gap-2.5 min-w-0">
                                                     <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${acc?.type === 'Funded' ? 'bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)]' : 'bg-blue-500'}`} />
-                                                    <span className="text-[11px] font-black uppercase tracking-tight truncate max-w-[120px]">{acc?.name || accountName}</span>
+                                                    <span className="text-[11px] font-black uppercase tracking-tight truncate max-w-[120px]">{acc?.name || (gt.accountId === activeTrade.accountId ? accountName : gt.accountId)}</span>
                                                     {master && groupTrades.length > 1 && <span className="text-[7px] font-black text-blue-500 uppercase tracking-widest shrink-0">MASTER</span>}
-                                                    {!master && groupTrades.length > 1 && <span className="text-[7px] font-black text-purple-500 uppercase tracking-widest shrink-0">COPY</span>}
+                                                    {!master && gt.masterTradeId != null && groupTrades.length > 1 && <span className="text-[7px] font-black text-purple-500 uppercase tracking-widest shrink-0">COPY</span>}
                                                 </div>
-                                                <span className={`text-[11px] font-black font-mono shrink-0 ${pnlVal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatValue(pnlVal)}</span>
+                                                <span className={`text-[11px] font-black font-mono shrink-0 ${pnlVal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{gt.pnlEstimated ? '≈ ' : ''}{formatValue(gt)}</span>
                                             </div>
                                         );
                                     };
@@ -646,7 +679,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                                 <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] flex items-center gap-2"><Wallet size={12} /> Účty</p>
                                                 {hasCopies && (
                                                     <span className="text-[10px] font-black tracking-tight text-slate-500">
-                                                        {visibleAccountTrades.length} účtů · <span className={`font-mono ${totalPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatValue(totalPnl)}</span>
+                                                        {tradeAccountLabel(visibleAccountTrades)} · <span className={`font-mono ${totalPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{visibleAccountTrades.some(member => member.pnlEstimated) ? '≈ ' : ''}{formatValue({ ...activeTrade, pnl: totalPnl })}</span>
                                                     </span>
                                                 )}
                                             </div>
@@ -660,9 +693,9 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                                     className={`w-full px-3 py-2 flex items-center gap-2.5 text-left transition-all ${hasCopies ? (isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-slate-50') : 'cursor-default'}`}
                                                 >
                                                     <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${masterAcc?.type === 'Funded' ? 'bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)]' : 'bg-blue-500'}`} />
-                                                    <span className="text-[11px] font-black uppercase tracking-tight truncate">{masterAcc?.name || accountName}</span>
-                                                    {groupTrades.length > 1 && <span className="text-[7px] font-black text-blue-500 uppercase tracking-widest shrink-0">MASTER</span>}
-                                                    <span className={`ml-auto text-[11px] font-black font-mono shrink-0 ${masterPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatValue(masterPnl)}</span>
+                                                    <span className="text-[11px] font-black uppercase tracking-tight truncate">{masterAcc?.name || (masterTrade.accountId === activeTrade.accountId ? accountName : masterTrade.accountId)}</span>
+                                                    {isMasterTrade(masterTrade) && <span className="text-[7px] font-black text-blue-500 uppercase tracking-widest shrink-0">MASTER</span>}
+                                                    <span className={`ml-auto text-[11px] font-black font-mono shrink-0 ${masterPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{masterTrade.pnlEstimated ? '≈ ' : ''}{formatValue(masterTrade)}</span>
                                                     {hasCopies && (
                                                         <span className={`flex items-center gap-1 pl-2.5 ml-0.5 border-l text-[10px] font-black shrink-0 ${divider} ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                                                             +{copyTrades.length}
@@ -726,17 +759,33 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
                                 {visualMode === 'chart' ? (
                                     <React.Suspense fallback={<div className="absolute inset-0 flex items-center justify-center"><div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-emerald-500 animate-spin" /></div>}>
-                                        <TradeMarketChart trade={activeTrade} isDark={isDark} />
+                                        {chartTrade ? <>
+                                            {isCombined && <div className="absolute top-0 left-0 right-0 z-30 h-10 flex items-center gap-2 px-3 text-[10px] font-bold text-slate-500 bg-theme-card">
+                                                <label htmlFor="trade-chart-account">Účet v grafu</label>
+                                                <select id="trade-chart-account" value={chartTrade.accountId} onChange={event => setChartAccountId(event.target.value)} className="min-w-0 max-w-[55%] rounded-lg border border-slate-500/20 bg-theme-card px-2 py-1 text-theme-primary">
+                                                    {[...new Set(groupTrades.map(member => member.accountId))].map(id => <option key={id} value={id}>{accounts.find(account => account.id === id)?.name || id}</option>)}
+                                                </select>
+                                                {accountChartTrades.length > 1 && <select aria-label="Realizace vybraného účtu" value={String(chartTrade.id)} onChange={event => setChartRealizationId(event.target.value)} className="min-w-0 rounded-lg border border-slate-500/20 bg-theme-card px-2 py-1 text-theme-primary">
+                                                    {accountChartTrades.map((member, index) => <option key={member.id} value={String(member.id)}>Realizace {index + 1} · {new Date(member.timestamp).toLocaleTimeString('cs-CZ')}</option>)}
+                                                </select>}
+                                                {chartTrade.pnlEstimated && <span className="text-amber-500">Odhad podle leadera</span>}
+                                            </div>}
+                                            <div className={isCombined ? 'absolute inset-0 top-10' : 'absolute inset-0'}><AccountExecutionChart trade={chartTrade} isDark={isDark} verifiedDetail={currentJournal?.rows?.includes(chartTrade) ? chartTrade : undefined} /></div>
+                                        </> : <p className="p-6 text-xs text-slate-500">Podklady vybraných účtů nejsou načtené.</p>}
                                     </React.Suspense>
                                 ) : (
                                     <>
-                                        {isLoadingDetails && (
+                                        {loadingImages && (
                                             <div className="absolute inset-0 flex items-center justify-center z-10">
                                                 <div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-emerald-500 animate-spin" />
                                             </div>
                                         )}
+                                        {snapshotError && !isLoadingDetails && <div role="status" className="absolute bottom-16 left-4 right-4 z-30 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-3 text-xs text-[var(--text-primary)]">
+                                            Snímky se nepodařilo úplně načíst.
+                                            <button type="button" className="ml-2 font-bold text-blue-500" onClick={() => { setImageLoadError(false); setDetailsRetry(value => value + 1); }}>Zkusit znovu</button>
+                                        </div>}
                                         <AnimatePresence mode="wait">
-                                            {!isLoadingDetails && (images.length > 0 && !imageLoadError) ? (
+                                            {!loadingImages && (images.length > 0 && !imageLoadError) ? (
                                                 <motion.div key={images[activeImageIndex]} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0">
                                                     <img src={images[activeImageIndex]} className="absolute inset-0 w-full h-full object-contain cursor-zoom-in" onClick={() => setIsZoomed(true)} onError={() => setImageLoadError(true)} />
                                                     {activeCopierSnapshot && (
@@ -749,10 +798,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                                         <div className="p-5 bg-black/40 backdrop-blur-md rounded-full text-white border border-white/20 shadow-2xl pointer-events-auto cursor-pointer" onClick={() => setIsZoomed(true)}><Maximize2 size={28} /></div>
                                                     </div>
                                                 </motion.div>
-                                            ) : !isLoadingDetails ? (
+                                            ) : !loadingImages ? (
                                                 <div className="absolute inset-0 flex flex-col items-center justify-center opacity-30 text-slate-500 p-8 text-center">
                                                     <div className="p-8 rounded-[36px] border-2 border-dashed border-slate-500"><ImageIcon size={52} strokeWidth={1} /></div>
-                                                    <p className="text-sm font-black uppercase tracking-[0.3em] mt-7">{imageLoadError ? 'CHYBA NAČÍTÁNÍ' : 'BEZ SCREENSHOTU'}</p>
+                                                    <p className="text-sm font-black uppercase tracking-[0.3em] mt-7">{snapshotError ? 'CHYBA NAČÍTÁNÍ' : 'BEZ SCREENSHOTU'}</p>
                                                 </div>
                                             ) : null}
                                         </AnimatePresence>
@@ -798,10 +847,15 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                 <ImageZoomModal images={images} initialIndex={activeImageIndex} onClose={() => setIsZoomed(false)} />
             )}
 
+            {isFullEditOpen && journalReviewOnly(activeTrade) && detailsLoadedTradeId !== String(trade.id) && (
+                <div className="absolute inset-x-4 bottom-4 z-[130] rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 text-xs text-[var(--text-primary)]" role="status">
+                    {detailsLoadError ? <>Hodnocení nelze otevřít bez načtených poznámek a obrázků. <button className="ml-2 font-bold text-blue-500" onClick={() => setDetailsRetry(value => value + 1)}>Načíst znovu</button></> : 'Načítám podklady pro hodnocení…'}
+                </div>
+            )}
             {/* FULL EDIT MODE — ManualTradeForm overlay. Lazy chunk MUSÍ mít lokální
                 Suspense — App.tsx:4117 renderuje modal mimo jakoukoli boundary a bez
                 fallbacku by suspend při otevření editace shodil celou appku. */}
-            {isFullEditOpen && onUpdateTrade && (
+            {isFullEditOpen && onUpdateTrade && (!journalReviewOnly(activeTrade) || detailsLoadedTradeId === String(trade.id)) && (
                 <React.Suspense fallback={null}>
                 <ManualTradeForm
                     key={String(activeTrade.id)}
@@ -809,7 +863,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                     onUpdate={(updates) => {
                         // Označ „uloženo" až PO úspěšném dořešení (ManualTradeForm volá onClose
                         // teprve po resolve této promise) — jinak by průvodce postoupil i po selhání.
-                        return Promise.resolve(onUpdateTrade(updates)).then(res => { wizardSavedRef.current = true; return res; });
+                        return Promise.resolve(onUpdateTrade(updates)).then(res => { if (res === false) throw new Error('review-save-unconfirmed'); wizardSavedRef.current = true; });
                     }}
                     onClose={() => {
                         if (startInEditMode) {
@@ -845,6 +899,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                     onClose={() => setIsShareCardOpen(false)}
                 />
             )}
+            </div>
         </ErrorBoundary>
     );
 };

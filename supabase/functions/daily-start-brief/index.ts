@@ -73,7 +73,7 @@ Deno.serve(async (req: Request) => {
 
   const [tradesRes, reviewsRes, memoryRes, accountsRes] = await Promise.all([
     // limit 500: fan-out = 1 obchod ~10 řádků, dřívější limit 60 pokryl jen ~6 obchodů.
-    supabase.from('trades').select('date, pnl, data, account_id').eq('user_id', userId).gte('date', day14).order('date', { ascending: false }).limit(500),
+    supabase.from('confirmed_journal_trades').select('date, pnl, data, account_id').eq('user_id', userId).gte('date', day14).order('date', { ascending: false }).limit(500),
     supabase.from('daily_reviews').select('date, data').eq('user_id', userId).order('date', { ascending: false }).limit(3),
     supabase.from('ai_coach_memory').select('type, content, importance, memory_date').eq('user_id', userId).order('importance', { ascending: false }).limit(6),
     supabase.from('accounts').select('id, name, status, type, meta').eq('user_id', userId),

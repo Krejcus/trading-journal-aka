@@ -91,6 +91,26 @@ const authorization = async (): Promise<string> => {
   return `Bearer ${data.session.access_token}`;
 };
 
+/** Owner-authenticated read of the existing evidence endpoint. */
+export const loadTradovateJournalEvidencePage = (connectionId: string, after: number, through?: number): Promise<unknown> => {
+  const params = new URLSearchParams({ connectionId, after: String(after) });
+  if (through != null) params.set('through', String(through));
+  return authenticatedRequest(`/api/tradovate/oauth/copier-journal?${params}`);
+};
+
+/** Stored source availability through the authenticated server; no broker read. */
+export const loadTradovateJournalSourceStatus = (connectionIds: readonly string[], signal: AbortSignal): Promise<unknown> =>
+  authenticatedRequest('/api/tradovate/oauth/journal-sources', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ connectionIds }), signal,
+  });
+
+/** Idempotent journal persistence only; this endpoint never submits broker orders. */
+export const importTradovateJournalConnection = (connectionId: string, signal?: AbortSignal): Promise<unknown> =>
+  authenticatedRequest('/api/tradovate/oauth/journal-import', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ connectionId }),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000),
+  });
+
 export class TradovateRequestError extends Error {
   constructor(
     message: string,

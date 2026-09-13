@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   legacyNotesReady: false, legacyNotes: new Map<string, any>(), privateHistories: new Map<string, any>(), rows: new Map<string, any>(), cache: new Map<string, any>(),
   insertRace: null as any, selected: [] as string[], writes: [] as any[],
   querySignals: new Map<string, AbortSignal>(), beforeQuery: null as null | ((resource: string) => void),
+  journalHeads:[] as any[], tradePageCap:Infinity,
   tradeReadError: false, switchOwnerOnRead: false, updateError: null as any, skipUpdate: false, galleryError: null as any, rpcMissing: false, rpcCalls: 0, auth: null as null | ((event: string, session: any) => void),
 }));
 vi.mock('idb-keyval', () => ({ get: async (key: string) => h.cache.get(key), set: async (key: string, value: any) => { h.cache.set(key, value); } }));
@@ -51,13 +52,17 @@ vi.mock('../services/supabase', () => {
   from: (table: string) => {
     const q = {
       op: 'select', payload: [] as any[], opts: undefined as any, projection: '', filters: [] as Array<[string, any]>, bounds: null as [number, number] | null,
+      afterId:null as string|null,orderKey:null as string|null,ascending:true,
       select(projection = '*') { this.projection = projection; h.selected.push(projection); return this; },
       eq(key: string, value: any) { this.filters.push([key, value]); return this; },
       in(key: string, values: any[]) { this.filters.push([key, values]); return this; },
-      order() { return this; }, limit() { return this; }, range(lo: number, hi: number) { this.bounds = [lo, hi]; return this; },
+      order(key:string,options?:{ ascending?:boolean }) { this.orderKey=key; this.ascending=options?.ascending!==false; return this; },
+      gt(key:string,value:string) { if (key!=='id') throw new Error('unsupported test cursor'); this.afterId=value; return this; },
+      limit(count:number) { this.bounds=[0,count-1]; return this; }, range(lo: number, hi: number) { this.bounds = [lo, hi]; return this; },
       upsert(payload: any[], opts: any) { this.op = 'upsert'; this.payload = payload; this.opts = opts; return this; },
       update(payload: any) { this.op = 'update'; this.payload = payload; return this; },
       execute(single = false) {
+        if (table==='tradovate_journal_projection_heads') return { data:structuredClone(h.journalHeads),error:null };
         if (this.projection.includes('screenshot:data->>screenshot') && h.galleryError) return { data: null, error: h.galleryError };
         if (table === 'backtest_trade_note_histories') return { data: [...h.privateHistories.entries()].map(([trade_id, history]) => ({ trade_id, history, user_id: h.userId })).filter(row => this.filters.every(([key, value]) => Array.isArray(value) ? value.includes(row[key]) : row[key] === value)), error: null };
         if (table === 'accounts') return { data: [{ id: h.accountId, name: 'Backtest' }], error: null };
@@ -81,6 +86,8 @@ vi.mock('../services/supabase', () => {
           return { data, error: null };
         }
         let data = [...h.rows.values()].filter(row => this.filters.every(([key, value]) => Array.isArray(value) ? value.includes(row[key]) : row[key] === value));
+        if (this.afterId!==null) data=data.filter(row=>row.id>this.afterId!);
+        if (this.orderKey) data.sort((a,b)=>(a[this.orderKey!]<b[this.orderKey!] ? -1 : a[this.orderKey!]>b[this.orderKey!] ? 1 : 0)*(this.ascending ? 1 : -1));
         if (this.op === 'update') {
           if (h.updateError) return { data: null, error: h.updateError };
           if (h.skipUpdate) return { data: null, error: null };
@@ -88,6 +95,7 @@ vi.mock('../services/supabase', () => {
           data.forEach(row => h.rows.set(row.id, row));
         }
         if (this.bounds) data = data.slice(this.bounds[0], this.bounds[1] + 1);
+        if (table==='trades' && this.op==='select' && !single) data=data.slice(0,h.tradePageCap);
         // PostgREST ->> projection puts JSON values into selected root aliases.
         if (this.projection.includes('excursionAmbiguous:data->>excursionAmbiguous')) data = data.map(row => ({ ...row, ...row.data }));
         return { data: single ? data[0] ?? null : data, error: null };
@@ -105,11 +113,30 @@ beforeEach(() => {
   h.legacyNotesReady = false; h.legacyNotes.clear(); h.tradeReadError = false; h.switchOwnerOnRead = false; h.privateHistories.clear(); h.rows.clear(); h.cache.clear(); h.insertRace = null; h.selected = []; h.writes = [];
   h.galleryError = null; h.updateError = null; h.skipUpdate = false; h.rpcMissing = false; h.rpcCalls = 0;
   h.querySignals.clear(); h.beforeQuery = null;
+  h.journalHeads=[]; h.tradePageCap=Infinity;
   h.auth?.('SIGNED_IN', { user: { id: h.userId } });
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
 });
 
 describe('backtest insert-only journal persistence', () => {
+  it('reads the complete actual list beyond 1000 rows and a lower server page cap',async()=>{
+    h.tradePageCap=73;
+    for(let i=0;i<2400;i++) {
+      const item={ ...trade(),id:`aaaaaaaa-aaaa-4aaa-8aaa-${String(i).padStart(12,'0')}`,timestamp:i };
+      h.rows.set(String(item.id),row(item));
+    }
+    const loaded=await storageService.getTrades();
+    expect(loaded).toHaveLength(2400);
+    expect(loaded[0].timestamp).toBe(2399); expect(loaded.at(-1)?.timestamp).toBe(0);
+    expect(h.cache.get(`alphatrade_trades_${h.userId}`)).toHaveLength(2400);
+  });
+  it('rejects publication changing during root pagination before updating cache',async()=>{
+    h.journalHeads=[{ connection_id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',revision:1,completed_revision:1,generation:1 }];
+    const item=trade(); h.rows.set(String(item.id),row(item));
+    h.beforeQuery=resource=>{ if(resource==='trades') h.journalHeads[0].generation++; };
+    await expect(storageService.getTrades()).rejects.toThrow('journal-facts-changed-during-read');
+    expect(h.cache.has(`alphatrade_trades_${h.userId}`)).toBe(false);
+  });
   it('does not overwrite a previously reviewed row', async () => {
     const item = trade(); h.rows.set(String(item.id), row({ ...item, notes: 'user review', screenshots: ['https://example.test/review.png'] }));
     expect(await storageService.saveTrades([item], { insertOnly: true })).toEqual([]);
@@ -298,7 +325,7 @@ describe('private history ordinary write guard', () => {
     expect((await storageService.getCachedDashboardData(h.userId))?.trades[0]).not.toHaveProperty('noteHistory');
     h.auth?.('SIGNED_IN', { user: { id: h.userId } });
     h.tradeReadError = true; h.switchOwnerOnRead = true;
-    expect((await storageService.getTrades())[0]).not.toHaveProperty('noteHistory');
+    await expect(storageService.getTrades()).rejects.toThrow('trade-list-unavailable');
   });
   it('bulk saves keep confirmed private history out of the public blob and return the private value', async () => {
     const item = trade(); const history = ledger();

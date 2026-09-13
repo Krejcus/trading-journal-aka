@@ -54,7 +54,7 @@ Deno.serve(async (req: Request) => {
 
   const [reviewsRes, tradesRes, memoryRes, profileRes] = await Promise.all([
     supabase.from('daily_reviews').select('date, data').eq('user_id', userId).order('date', { ascending: false }).limit(5),
-    supabase.from('trades').select('date, pnl, data').eq('user_id', userId).gte('date', day7).order('date', { ascending: false }).limit(40),
+    supabase.from('confirmed_journal_trades').select('date, pnl, data').eq('user_id', userId).gte('date', day7).order('date', { ascending: false }).limit(40),
     supabase.from('ai_coach_memory').select('type, content, importance').eq('user_id', userId).order('importance', { ascending: false }).limit(6),
     supabase.from('ai_coach_profile').select('facts, preferences').eq('user_id', userId).maybeSingle(),
   ]);

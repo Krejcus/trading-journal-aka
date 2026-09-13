@@ -4,7 +4,7 @@ export const dashboardTradeFields = [
   'backtestRunId', 'confidence', 'rr', 'duration', 'durationMinutes', 'isValid', 'groupId',
   'phase', 'htfConfluence', 'ltfConfluence', 'autoConfluence', 'mistakes', 'emotions',
   'planAdherence', 'executionStatus', 'needsReview', 'exitReason', 'copierTradeId',
-  'copierEpisodeId', 'copierSnapshots', 'pnlEstimated', 'setupType', 'miniViewRange',
+  'copierEpisodeId', 'copierSnapshots', 'journalSupersededBy', 'pnlEstimated', 'setupType', 'miniViewRange',
   'miniViewLayout', 'miniViewSecondaryRange', 'miniViewSecondaryTimeframe', 'aiSuggestions',
   'visionAnalysis', 'positionSize', 'isMaster', 'masterTradeId', 'entryTime', 'entryDate',
   'source', 'tsOrderIds', 'isBE', 'exitDate', 'mfeR', 'maeR', 'mfePoints', 'maePoints',

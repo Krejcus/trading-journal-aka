@@ -266,6 +266,7 @@ function loadViewSettings(): { density: number; redaction: RedactionSettings; co
 }
 
 interface Props {
+  journalHistory?: React.ReactNode;
   userId?: string;
   snapshot: LiveSnapshot;
   accountProfiles?: TradovateAccountProfile[];
@@ -449,6 +450,7 @@ export const liveOrderIsOpenForSafety = (order: Pick<LiveOrder, 'status'>): bool
   !TERMINAL_LIVE_ORDER_STATUSES.has(order.status.trim().toLowerCase());
 
 export const LiveCopyTradeOverview: React.FC<Props> = ({
+  journalHistory,
   userId = '',
   snapshot,
   accountProfiles = [],
@@ -1531,6 +1533,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           compact
         />
       )}
+      {journalHistory}
       {!compact ? (
         <LivePnlPanel
           open={apiPanelOpen}

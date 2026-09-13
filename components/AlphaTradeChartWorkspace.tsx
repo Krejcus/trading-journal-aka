@@ -1,4 +1,5 @@
 import { sharedRevealedCandles } from '../services/chartReplayPaint';
+import TradeExecutionTimeline from './TradeExecutionTimeline';
 import { ChartWorkspaceLibraryDialog, WorkspaceImportPreview } from './ChartWorkspaceLibraryDialog';
 import { saveWorkspaceTemplate } from '../services/chartWorkspaceLibrary';
 import type { BacktestTagSuggestions } from '../services/backtestTagCatalog';
@@ -2082,6 +2083,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           />}
         </div>
       </WorkspaceDataContext.Provider>
+      {!backtestSession && replay.phase === 'off' && trade.executionHistory
+        && <TradeExecutionTimeline history={trade.executionHistory} isDark={isDark} />}
     </div>
     </React.Profiler>
   );

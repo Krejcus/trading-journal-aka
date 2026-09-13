@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="cs" class="overflow-x-hidden">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#000000">
+  <title>AlphaTrade · fiktivní historie účtů</title>
+
+  <!-- PWA Meta Tags -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Alpha Trade">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="description" content="Professional Trading Journal & Performance Analytics">
+
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="/manifest.json">
+
+  <!-- Premium Favicon & Mobile Icons -->
+  <link rel="icon" type="image/png" href="/logos/at_logo_light_clean.png">
+  <link rel="apple-touch-icon" href="/logos/at_logo_light_clean.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/logos/at_logo_light_clean.png">
+  <link rel="apple-touch-icon" sizes="152x152" href="/logos/at_logo_light_clean.png">
+  <link rel="apple-touch-icon" sizes="167x167" href="/logos/at_logo_light_clean.png">
+  <script>
+    (function () {
+      try {
+        const storedTheme = localStorage.getItem('alphatrade_theme');
+        const prefsJson = localStorage.getItem('alphatrade_preferences');
+        let theme = storedTheme;
+
+        if (!theme && prefsJson) {
+          const prefs = JSON.parse(prefsJson);
+          theme = prefs.theme;
+        }
+
+        if (theme === 'light') {
+          document.documentElement.classList.add('light-theme');
+          document.documentElement.classList.remove('oled-theme');
+        } else if (theme === 'oled') {
+          document.documentElement.classList.add('oled-theme');
+          document.documentElement.classList.remove('light-theme');
+        } else {
+          document.documentElement.classList.remove('light-theme', 'oled-theme');
+        }
+      } catch (e) { }
+    })();
+  </script>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700;900&family=JetBrains+Mono:wght@400;700&display=swap"
+    rel="stylesheet">
+  <style>
+    html,
+    body {
+      overflow-x: hidden;
+      width: 100%;
+      position: relative;
+      touch-action: pan-y;
+      font-family: 'Inter', sans-serif;
+    }
+
+    body {
+      background-color: var(--bg-page);
+      transition: background-color 0.3s ease;
+    }
+
+    /* Pulsating Neon Glows */
+    @keyframes pulse-green {
+      0%, 100% { box-shadow: -4px 0 12px -4px rgba(16, 185, 129, 0.15), 0 0 8px rgba(16, 185, 129, 0.03); }
+      50% { box-shadow: -4px 0 18px -2px rgba(16, 185, 129, 0.35), 0 0 20px rgba(16, 185, 129, 0.08); }
+    }
+    @keyframes pulse-red {
+      0%, 100% { box-shadow: -4px 0 12px -4px rgba(244, 63, 94, 0.15), 0 0 8px rgba(244, 63, 94, 0.03); }
+      50% { box-shadow: -4px 0 18px -2px rgba(244, 63, 94, 0.35), 0 0 20px rgba(244, 63, 94, 0.08); }
+    }
+    @keyframes pulse-blue {
+      0%, 100% { box-shadow: -4px 0 12px -4px rgba(59, 130, 246, 0.15), 0 0 8px rgba(59, 130, 246, 0.03); }
+      50% { box-shadow: -4px 0 18px -2px rgba(59, 130, 246, 0.35), 0 0 20px rgba(59, 130, 246, 0.08); }
+    }
+    @keyframes pulse-amber {
+      0%, 100% { box-shadow: -4px 0 12px -4px rgba(245, 158, 11, 0.15), 0 0 8px rgba(245, 158, 11, 0.03); }
+      50% { box-shadow: -4px 0 18px -2px rgba(245, 158, 11, 0.35), 0 0 20px rgba(245, 158, 11, 0.08); }
+    }
+
+    .neon-border-green {
+      border-left: 3px solid #10b981;
+      animation: pulse-green 3s ease-in-out infinite;
+    }
+
+    .neon-border-red {
+      border-left: 3px solid #f43f5e;
+      animation: pulse-red 3s ease-in-out infinite;
+    }
+
+    .neon-border-blue {
+      border-left: 3px solid #3b82f6;
+      animation: pulse-blue 3s ease-in-out infinite;
+    }
+
+    .neon-border-amber {
+      border-left: 3px solid #f59e0b;
+      animation: pulse-amber 3s ease-in-out infinite;
+    }
+
+    .neon-glow-green:hover {
+      animation: none;
+      box-shadow: -4px 0 24px -2px rgba(16, 185, 129, 0.4), 0 0 30px rgba(16, 185, 129, 0.12);
+    }
+
+    .neon-glow-red:hover {
+      animation: none;
+      box-shadow: -4px 0 24px -2px rgba(244, 63, 94, 0.4), 0 0 30px rgba(244, 63, 94, 0.12);
+    }
+
+    .neon-glow-blue:hover {
+      animation: none;
+      box-shadow: -4px 0 24px -2px rgba(59, 130, 246, 0.4), 0 0 30px rgba(59, 130, 246, 0.12);
+    }
+
+    .neon-glow-amber:hover {
+      animation: none;
+      box-shadow: -4px 0 24px -2px rgba(245, 158, 11, 0.4), 0 0 30px rgba(245, 158, 11, 0.12);
+    }
+
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #1e293b;
+      border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #334155;
+    }
+
+    .glass-panel {
+      background: rgba(10, 15, 29, 0.7);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+  </style>
+  <link rel="stylesheet" href="/index.css">
+</head>
+<body><div id="root"></div><script type="module" src="/mockups/journal-preview/main.tsx"></script></body></html>

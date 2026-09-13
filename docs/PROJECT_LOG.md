@@ -208,6 +208,127 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-13 — Codex: historie, fáze 29 — kapacita a dávkový staging (lokálně)
+
+- Na 12 fiktivních účtech ověřeno až 24 000 obchodů/120 013 raw řádků se správnými vlastními součty. Výpočet 2,236 s, projekce 34,4 MB; není to síťový ani vzdálený výkonový důkaz.
+- Staging nově nejvýše 8 bloků na požadavek, s kontrolou 5s rozpočtu mezi RPC. Processing pokračuje ze serverem potvrzených bloků, viditelná generace se změní až po úplném publikování. Limity zůstávají explicitní, bez tichého zkrácení.
+- 3 466 testů/376 souborů, SQL harness (2 400 epizod/12 účtů včetně zachování head během processing), TypeScript, lint bez chyb/varování a build prošly. Podrobnosti `docs/reviews/trade-history-20260912/PHASE-29-CAPACITY-AND-STAGING.md`.
+- Read-only fetch potvrdil novější main 110aa0db; další krok je izolovaná integrace jeho oprav před aktivačním review. Žádné vzdálené zápisy, deploy, worker ani broker akce.
+
+
+### 2026-09-13 — Codex: historie, fáze 28 — spectator a žebříček (lokálně)
+
+- Dokončené přepojení spectator historie/žebříčku na omezené RPC z fáze 27; bez raw fallbacku. Historie po 250 až do úplného konce, kontroly počtu/jednotky/session/oprávnění; žebříček explicitně posledních 100 povolených řádků na tradera.
+- Neznámé výsledky zachované bez falešné nuly, ranku či úspěšnosti. NaN je pouze přechodný kompatibilní model; UI kontroluje konečnost, hidden kalendář ani v prázdných týdnech neukazuje dolary. Křivka bez úplných výsledků uvádí nedostupnost.
+- Celá regrese 376 souborů/3 462 testů; po posledním okrajovém případu 37 cílených testů včetně nového. TypeScript/build/diff-check prošly, lint 0 chyb/59 varování. Browser na skutečném NetworkHub s fiktivními 12 účty: účet 1 −4,52 → účet 11 +5,48 USD, skryté výsledky, chyba/retry. Fiktivní testovací server zastaven.
+- Podrobný rozsah a limity: `docs/reviews/trade-history-20260912/PHASE-28-SPECTATOR-LEADERBOARD.md`. Bez vzdálených změn/broker akcí. Celkový cíl nadále čeká na kontrolu velké projekce, přihlášený tok/conformance a schválenou aktivaci.
+
+
+### 2026-09-13 — Codex: historie, fáze 27 — serverové omezení sdílených obchodů (lokálně)
+
+Read-only produkční katalog potvrdil široké Trades visibility (včetně is_public a opačné connection strany), ale funkční guard souhlasu příjemce. Osmá lokální migrace přidává restrictive journal SELECT a úzké RPC s auth.uid()/směrem/account filtrem/unit/media projekcí; privilegovaná část je v journal_private, veřejný wrapper invoker, anon nemá EXECUTE. Feed nyní používá RPC bez raw fallbacku a bez dvojího převodu R. Skutečné SQL + klientský adaptér, 3 449 testů, TS, lint bez chyb a build prošly. Spectator/žebříček ještě potřebují přepojení před společnou aktivací; starší raw ruční obchody/preps/reviews nejsou globálně auditované touto změnou. Bez vzdálené migrace/deploye/workeru/brokeru. Podrobnosti: `docs/reviews/trade-history-20260912/PHASE-27-SHARED-READ-BOUNDARY.md`.
+
+### 2026-09-12 — Codex: historie, fáze 26 — přesné skupiny ve sdíleném feedu (lokálně)
+
+Odstraněno heuristické slučování dle dne/instrumentu/směru. Explicitní skupiny se doplní z celé odpovědi s exact count; limit/chyba/změna oprávnění nepředstírá menší počet účtů. Karta zobrazuje součet povolených členů, rozkliknutí vlastní účet s jeho cenami/P&L/časy na ms přes kompaktní selector. Klient zahazuje odpovědi po změně rozsahu a ukazuje chybu s opakováním. 3 445 testů, TS, lint bez chyb, build a browser 12 účtů → účet 11 +5,48 USD při součtu +11,76 USD prošly; neúplná skupina součet nezobrazí. Serverová oprávnění/spectator a živé ověření ještě zbývají; bez produkce/workeru/brokeru. Podrobnosti: `docs/reviews/trade-history-20260912/PHASE-26-EXPLICIT-FEED-GROUPS.md`.
+
+### 2026-09-12 — Codex: historie, fáze 25 — aktuální sdílená fakta (lokálně)
+
+Sedmá lokální migrace aktualizuje finanční root fakta/stav atomicky se soukromou projekcí, bez zpřístupnění privátní evidence. Opravy poplatků zachovají review; pending/invalidace/delete odstraní řádek z potvrzeného pohledu. Klient nemůže podvrhnout stav. Feed/detail zachovává mínus/centy a neznámé R; opraveny dva nečitelné světlé popisky. 3 433 testů, TS, lint bez chyb, build, skutečné SQL s follower RLS a 2 400 epizodami/12 účty, browser s fiktivními daty prošly. Jemná serverová oprávnění, spectator a heuristické seskupování feedu stále nedokončeny; bez produkce/workeru/brokeru. Podrobnosti: `docs/reviews/trade-history-20260912/PHASE-25-CURRENT-SHARED-FACTS.md`.
+
+### 2026-09-12 — Codex: historie, fáze 24 — kalendář otevírá společný detail (lokálně)
+
+Denní i týdenní seznam vlastního Dashboardu předává přesné ID do stávajícího TradeDetailModal a zavírá původní přehled. Řádky rozlišují účty názvem, používají skutečná tlačítka a týdenní P&L zachovává centy/neznámé R. Cizí sdílený kalendář nezískává owner čtení ani editaci. 42 testů, TS, lint bez chyb, Vite/PWA build a browser den→účet 2 / týden→účet 11 prošly; Screenshoty zůstávají první. Fiktivní UI není produkční E2E. Bez produkce/workeru/brokeru. Podrobnosti: `docs/reviews/trade-history-20260912/PHASE-24-CALENDAR-DETAIL.md`.
+
+
+### 2026-09-12 — Codex: historie, fáze 23 — časové okno a plné regrese (lokálně)
+
+Graf zahrnuje skutečný den výstupu; cache nezamyká neúplná historická data a respektuje publikovaný konec. Opravena jednotka již převedeného R-only DTO v NetworkHubu (upřesnění fáze 22). Plná sada odhalila neplatné nativní ESM importy a tři regrese po odstranění OrderVersion větve ve fázi 8: doplněny přípony a úzká počáteční korelace nového Order s verzí ze stejné dávky, bez přepsání známé ceny samostatným požadavkem. 370 souborů / 3 429 testů, TS, lint bez chyb, Vite/PWA build a načtení fiktivního náhledu prošly. Broker conformance a přihlášený tok nejsou tímto prokázané. Bez produkce/workeru/brokeru. Podrobnosti a zbývající práce: `docs/reviews/trade-history-20260912/PHASE-23-COMPATIBILITY.md`.
+
+
+### 2026-09-12 — Codex: historie, fáze 22 — skutečné R ve statistikách (lokálně)
+
+Souhrny už neberou chybějící risk jako 0R ani náhradní 1 USD. Doložená R se počítají po jednotlivých obchodech, ne jako dolarová metrika dělená průměrným riskem. Kalendář i rozkliknuté R používají neutrální neznámý stav; souběžné účty mají jeden časový krok R drawdownu. Opraveny zavádějící R popisky dolarových hodnot NetworkHubu a neúplný risk prefill Monte Carlo. 38 testů včetně skutečného SSR kalendáře, TS, lint bez chyb, build a browser fiktivního náhledu pro 12 účtů i účet 2 prošly. Hlavní tab 3000 byl spadlý; produkční UI ani raw-to-UI tok tím nejsou ověřené. Bez deploye/migrace/workeru/brokeru. Podrobnosti a zbývající práce: `docs/reviews/trade-history-20260912/PHASE-22-R-STATISTICS.md`.
+
+
+
+### 2026-09-12 — Codex: historie, fáze 21 — přesné promítání grafu (lokálně)
+
+V izolované pracovní kopii sjednoceno promítání journal position boxu, SL/TP a plnění na zlomky svíček. Dostupné úseky se zachovávají, chybějící svíčky ani výpadky evidence se nespojují; chybějící 1m zůstává mezerou i uvnitř agregované 5m. Box používá stávající CandleKit renderer s přesnými anchors, nikoliv extrapolaci obecného kreslicího engine. Staré přichycené ENTRY/EXIT značky nahrazují přesná vlastní plnění. Reference prvních doložených SL/TP je vysvětlená v legendě, neplatné bracket ceny se nedopočítávají. 31 testů včetně skutečného rendereru/backtest regrese, typecheck/lint bez chyb, build a browser s různými účty/časovými mezerami prošly. Změny jsou lokální, bez brokeru/deploye/workeru. Podrobnosti: `docs/reviews/trade-history-20260912/PHASE-21-CHART-GEOMETRY.md`.
+
+
+### 2026-09-12 — Codex: historie, fáze 20 — dostupnost zdrojů (lokálně)
+
+V izolovaném `/private/tmp/alphatrade-history-20260912` přibyl sbalený owner přehled podkladů v Historii i LIVE, jeden na připojení i pro 12+ účtů. Rozlišuje poslední seznam/dávku/chybu/chybějící metadata bez tvrzení úplné historie. Ověřený serverový endpoint a service-only read RPC zachovávají zákaz browser přístupu k OAuth registru. Starší úspěch nahraný později nepřepíše novější chybu; scope i auth generation se validují a neúplná odpověď se odmítne. Finanční projekce a ovládání brokeru se nemění. 44 testů, skutečná lokální SQL migrace se dvěma vlastníky a kontrolou oprávnění, TypeScript, lint bez chyb, Vite/PWA a browser prošly. Bez deploye/vzdálené migrace/restartu workeru. Podrobnosti a zbývající práce: `docs/reviews/trade-history-20260912/PHASE-20-SOURCE-AVAILABILITY.md`.
+
+### 2026-09-12 — Codex: lokální historie SL/TP a vlastních účtů (rozpracováno)
+
+- Fáze 19: pasivní historický sběr rozšířen o orders/fills/verze/commands/reporty, přesné contract a account podklady. Velké odpovědi přecházejí na doložené dávky známých rodičů; pořadí zdrojů po timeoutu pokračuje, scope metadata neoznačují úplnou historickou retenci. 96 testů, scoped TS/lint/build prošly; bez execution akcí. Podrobnosti a limity: `docs/reviews/trade-history-20260912/PHASE-19-HISTORY-BACKFILL.md`. UI dostupnosti zdrojů stále zbývá, nic nenasazeno.
+
+- Fáze 18: společný owner detail přesných filtrovaných ID obnovuje všechna P&L, ceny a historii ve stejné generaci; graf v modalu používá stejný ověřený objekt. Chyba jednoho člena nedovolí částečný součet. Údaje o plnění sledují účet vybraný v grafu. 79 testů, SQL průchod 12/2 400 epizod, scoped TS/lint/build a browser s opravou součtu i třemi SL změnami v minutě prošly. Skutečné svíčky v preview nejsou dostupné. Podrobnosti: `docs/reviews/trade-history-20260912/PHASE-18-CONSISTENT-DETAIL.md`. Lokální draft, nic nenasazeno.
+
+- Fáze 17: historie a detail zobrazují vlastní čisté P&L na centy; procentní součet používá kapitál unikátních vybraných účtů, ne leadera. Nedoložené výchozí riziko znamená neznámé R/R, původní odhady rizika se při hydrataci/importu odstraní. 45 testů, scoped TS/lint/build a skutečný modal pro leadera, followera i 12 účtů prošly. Podrobnosti a hranice: `docs/reviews/trade-history-20260912/PHASE-17-RESULT-PRECISION.md`. Jen lokální draft, cíl dále rozpracovaný.
+
+- Fáze 16: automatické screenshoty nového journalu se čtou přes přesný finální fill → owner/connection ledger → episode, bez současné konfigurace či kopírování obrázků followerům. Pozdní upload nevyžaduje finanční reimport; chyby metadat/odkazů mají vlastní stav a retry. Privátní security_invoker view, 79 testů, skutečný SQL/owner hydration průchod (včetně 2 400 epizod), TS/lint/build a skutečný modal ve fiktivním preview prošly. Capture/CDP a přihlášený Storage tok zatím neověřeny. Detaily a hranice: `docs/reviews/trade-history-20260912/PHASE-16-SNAPSHOT-LINKAGE.md`. Nic nenasazeno; další konkrétní UI položka je přesnost P&L/RR.
+
+- Fáze 15: nový raw vstup se zpracovává trvale po 250 událostech s pevným cílem, atomickým potvrzením a kontrolou generace. Pozdní vložení přehrává jen historii dotčené entity; časové kotvy/plnění/mezery se neslučují. Aplikace rozlišuje processing a automaticky pokračuje další dávkou. 88 testů, skutečný SQL/server import 2 400 epizod na 12 účtech, input rollback/CAS/role, jednořádková fee korekce a cílený replay prošly; TS/lint/build a actual-component preview také. Finanční výpočet stále prochází celý omezený kompaktní vstup. Podrobnosti a zbývající práce: `docs/reviews/trade-history-20260912/PHASE-15-INCREMENTAL-INPUT.md`. Lokální draft, nic nenasazeno.
+
+- Fáze 14: velká hotová projekce se přenáší skrytými dávkami s obsahovou identitou, pokračováním po přerušení a jednou atomickou finální transakcí. Skutečné `getTrades` navíc opravuje velký rozsah jednoho dotazu na úplné UUID stránkování, s kontrolou generace před root čtením i po hydraci. 90 testů, SQL/server/paged-owner-read pro 2 400 epizod na 12 účtech, pozdní korekce a rollback posledního člena prošly; TypeScript/ESLint/build také. Výpočet raw historie stále není inkrementální a produkční timeouty nejsou ověřené. Přesné hranice: `docs/reviews/trade-history-20260912/PHASE-14-STAGED-HISTORY.md`. Pouze lokální draft.
+
+- Fáze 13: atomický import receipt ověřuje dokončenou revizi, verzi projekce a přesné vazby účtů. Nezměněný import už nečte raw historii, nepřepočítává pozice ani nezvyšuje generaci; nová evidence či přiřazení znovu spustí import. 36 testů, izolovaný SQL/server harness pro 12 účtů, scoped TypeScript a ESLint prošly. Skutečné dělení dlouhé historie zatím není implementované. Detaily: `docs/reviews/trade-history-20260912/PHASE-13-IMPORT-CHECKPOINT.md`. Pouze lokální draft, produkce/worker beze změny.
+
+- Fáze 12: journal review-only allowlist před optimistickým stavem, bez škálování P&L kopií, kontrola podle uložené identity ve storage a ochrana root/JSON faktů ve stávajícím lokálním draft triggeru. Formulář Hodnocení obchodu zobrazuje brokerové P&L, ukládá jen skutečně měněné review, čeká na potvrzení a zachová text při chybě. Preview používá i skutečný TradeDetailModal; browser odhalil a opravil nechtěný automatický přechod z prázdných Screenshotů na Graf. 26 testů, SQL/server/owner-read harness, TS/ESLint/build prošly. Detaily a omezení: `docs/reviews/trade-history-20260912/PHASE-12-REVIEW-ONLY.md`. Produkce/worker beze změny.
+
+- Fáze 11: doplnění fillFee/fillPair ze dvou connection-wide GETů, bez násobení požadavků účty. Omezená odpověď/cache, potlačení duplicit, revize proti přepsání stream oprav, asynchronní potvrzení diskového zápisu mimo execution frontu, explicitní nedostupnost a retry po timeoutu. Deleted fee už neponechává starou částku. Testováno 12 vlastních P&L, souběh stream/REST/disk, 403/429, abort/timeout a regrese. Detaily/hranice: `docs/reviews/trade-history-20260912/PHASE-11-ACCOUNTING-BACKFILL.md`. Obecný backfill, dlouhá historie a ostatní otevřené body pokračují; produkce/worker beze změny.
+
+- Fáze 10: doplněn úplný počáteční account/position snapshot, jeden čerstvý pár GETů pro 12+ účtů. Doložené řádky/completion a časové okno umožňují stanovit budoucí flat stav i pro nový instrument; chybějící data, výpadek nebo souběžné/pozdní plnění důkaz odmítnou. 60 testů / 10 souborů, durable/API hash průchod a izolovaný SQL import pro 12 účtů s novým snapshotem prošly, stejně jako TS/ESLint/build. Backfill, dlouhá historie a další úkoly stále zbývají. Detaily: `docs/reviews/trade-history-20260912/PHASE-10-POSITION-SNAPSHOT.md`. Produkce/worker beze změny.
+
+- Fáze 9: skutečná LIVE karta historie napojena na App/shared detail. Při integraci nalezen a odstraněn zbývající starý pre-filter aggregate v App — jinak správný nový helper dostával už sloučená data. Sdílený filtr teď pracuje s vlastními řádky a exact výběrem účtů. Journal chart vyžaduje současný owner detail a má explicitní chybu/timeout/retry, bere čerstvé ceny i historii společně. 37 testů / 6 souborů, scoped TS/ESLint a Vite/PWA build 3 481 modulů / 89 precache prošly. Fiktivní UI ověřeno, přihlášený tok stále ne. Úplnost sběru a další otevřené body v `docs/reviews/trade-history-20260912/PHASE-9-LIVE-AND-FILTERS.md`; produkce beze změny.
+
+- Fáze 8: doplněn explicitní odběr analytických entit, okamžitá pasivní capture před metadata frontou a normalizace úvodního snapshot objektu. Samostatné požadované orderVersion nesmějí změnit execution cache. Staré async dokončení po zavření socketu nesmí potvrdit synchronizaci. 42 testů / 9 souborů, scoped TypeScript/ESLint a Vite/PWA build prošly. Doklad úplného počátečního flat stavu, backfill i další úkoly fáze 7 stále zbývají; žádný produkční zásah. Detaily: `docs/reviews/trade-history-20260912/PHASE-8-CAPTURE.md`.
+
+- Fáze 7: App lokálně nahradil starý import podle aktuálního leadera serverovým importem po historických připojeních (jeden požadavek pro 12 účtů). Přidány statusy, konkrétní pending důvody, zachování lokálních review při aktualizaci a slučování Realtime událostí do ověřené čtečky. Nepřevzatý legacy leader je stejně jako starý follower mimo potvrzené statistiky, protože jeho původní účet nebyl historicky doložený; review zůstává v archivu. 58 testů / 8 souborů, izolovaný SQL průchod, scoped TypeScript a Vite/PWA build (3 476 modulů, 87 precache) prošly. Úplný sběr, LIVE obchodní karta, dlouhá historie a E2E stále zbývají. `docs/reviews/trade-history-20260912/PHASE-7-APP-SYNC.md` uvádí konkrétní další kroky. Produkce beze změny.
+
+- Fáze 6: přesný legacy převod podle spojení a finálního fill ID zachovává UUID/review, opravuje účet a ponechává duplicitní poznámky jako navázané původní záznamy. SQL ověření včetně followera, konfliktů a starého INSERT prošlo. Přidán sbalený owner archiv pending/invalidated a původních odhadů, dostupný i bez potvrzených obchodů, s vlastním filtrem účtu a lazy poznámkami/screenshoty. Zobrazení ověřeno na 12 fiktivních účtech ve světlém/tmavém náhledu. Poslední cílený běh: 28 testů / 4 soubory; TypeScript a Vite/PWA build (3 475 modulů, 86 precache) prošly. Import stále čeká na výměnu starého App syncu, LIVE a úplný sběr. Detaily a omezení: `docs/reviews/trade-history-20260912/PHASE-6-LEGACY-REVIEWS.md`.
+
+- Nově je soukromá finanční projekce zapojená do dashboardu, seznamu, detailu a úplného exportu. Kontrola generace brání smíchání dvou verzí mezi dávkami. Read-only SQL view vylučuje neplatné výsledky ze serverových přehledů; veřejný RPC zachovává `is_public`/`share_notes` a soukromý ledger nesdílí. Izolovaný SQL průchod včetně 12 vlastních detailů a anonymního sdílení prošel; 62 cílených testů čteček/exportů/soukromí prošlo. UI neúplných pozic, automatický start importu, legacy dedupe, plný sběr a dlouhá historie stále zbývají. Podrobnosti: `docs/reviews/trade-history-20260912/PHASE-5-READERS.md`.
+- Závěrečné společné ověření čteček: 167 testů / 23 souborů, scoped TypeScript, ESLint bez chyb a Vite/PWA build (3 473 modulů, 85 precache) prošly. Žádná produkční migrace ani deploy. Pro další dedupe je doložené, že legacy `trade_id` pochází z finálního broker `fill.id`; propojení vyžaduje také přesné spojení a jednoznačný původní záznam, nikoli aktuálního leadera.
+
+- Doplněn lokální serverový import raw evidence → pozice → atomická SQL transakce pro všechny účty spojení. Rezervované UUID brání duplicitám, pending poplatky nevyrábí P&L 0, opravy nepoškozují review a smazané obchody se znovu nevytváří. 80 testů / 14 souborů a izolovaný průchod tří migrací s 12 fiktivními účty prošly. Soukromá fakta/stavy ještě nejsou zapojené do všech čteček a statistik; bez toho se import nesmí aktivovat. Dlouhá historie zatím má explicitní mez místo částečných zápisů. Podrobnosti a zbývající práce: `docs/reviews/trade-history-20260912/PHASE-4-PERSISTENCE.md`. Produkce beze změny.
+
+- Další pokrok: připraven owner-scoped GET evidence, serializovaný append RPC, transakční IndexedDB cache s pevnou hranicí snímku a read model pro všechny účty jednoho spojení. Přesná OAuth identita bez fallbacku na první účet; otevřené/neúplné pozice a chybějící poplatky zůstávají pending. 73 testů / 12 souborů, scoped TypeScript/ESLint a izolované SQL/RLS + IndexedDB transakční ověření prošly. Uložení `Trade` a napojení obou karet ještě chybí. Podrobnosti: `docs/reviews/trade-history-20260912/PHASE-3-READ-MODEL.md`. Produkce a worker zůstaly beze změny.
+
+- Navazující výslovné „souhlasím“ schválilo přenos vyjmenované obchodní evidence přes `alphatrade-mentor-15.vercel.app` do vlastníkova Supabase. Dřívější zamítnutí uploaderu je vyřešené. Lokální kód nyní uploader zapojuje, vynucuje přesný origin, úplné ACK a integritu obsahu, zachovává ID při opakování a nečeká na síť v exekuční cestě. Nejde o souhlas s deployem, migrací nebo restartem workeru.
+- Doplněna oddělená projekce celých pozic (počáteční doložený flat, scale-in, partial close, reversal, poměrné poplatky), segmenty SL/TP přes rozpory a výpadky a seznam událostí ve fullscreen. 62 cílených testů / 10 souborů prošlo. UI/import nové projekce, úplný analytický sběr a skutečné DB ověření stále zbývají; stav je podrobně v PHASE-2-LOCAL.md.
+- Aktuální závěrečná kontrola po tomto doplnění: opakovaných 9 testů epizod, scoped TypeScript a ESLint bez chyb, úspěšný Vite/PWA build (3471 modulů) a DOM individuálního účtu 11 s přesnými posuny a odmítnutím. Nedošlo k produkčnímu nasazení.
+
+- Izolovaný worktree `/private/tmp/alphatrade-history-20260912` z e61ab59a; cizí necommitnutá práce v Documents zůstala nedotčená.
+- Fiktivní ukázka na portu 4189 používá skutečný CandleKit graf a styly appky: 12 účtů, vlastní ceny/časy/poplatky/P&L, tři změny SL uvnitř minuty, odmítnutí a mezera záznamu. Screenshoty jsou první. Opraven převod zlomkového času přes celočíselné souřadnice LWC 5.2.
+- Připraven pasivní observer, lokální JSONL evidence, projekce SL/TP a FillPair realizací, výběr účtu/realizace a lazy-load detailu. Copier sync už nevyrábí nové follower obchody z aktuálního nastavení. Staré odhady zůstávají označené.
+- Celá funkce NENÍ dokončená: zbývá úplný ověřený sběr, cloudový přenos/read model/import, celé epizody pozic, oprava starých odhadů a LIVE karta. Legacy ledger bez historického accountId neprokazuje přiřazení po změně leadera.
+- Původní stav před navazujícím souhlasem: automatická kontrola zamítla uploader a vznikl jen lokální recorder. SQL/API jsou nadále místní soubory. Žádné broker akce, ARM, restart/reinstalace workeru, push, deploy ani změna DB.
+- Ověřeno 48 cílených testů / 9 souborů, scoped ESLint bez chyb, scoped TypeScript klienta/pilotu/API, produkční Vite/PWA build a přepínání fiktivních účtů v browseru. Podrobný stav a zbývající ověření: `docs/reviews/trade-history-20260912/PHASE-2-LOCAL.md`.
+
+
+### 2026-09-12 — Historie podle účtu, první izolovaná část (Codex)
+
+- Po schválení návrhu zahájena postupná implementace v odděleném worktree
+  `/private/tmp/alphatrade-history-20260912` z `e61ab59a`; kanonický checkout
+  obsahuje jinou rozpracovanou úpravu LIVE.
+- Individuální detail pracuje s vybraným záznamem účtu. Kombinovaná karta nese
+  přesné členství po filtrech, odhadované PnL se propaguje do součtu a označuje.
+  Seskupení podle shodného času/instrumentu odstraněno; počty jsou unikátní účty
+  deníku, nikoli tvrzení o skutečně provedených kopiích.
+- Screenshoty zůstávají první; kombinovaný detail načítá screenshot i graf přes
+  skutečný zahrnutý účet. Nový position box a historie SL/TP zatím nejsou zapojeny.
+- Vlastní přesná plnění followerů, poplatky, sběr SL/TP událostí a oprava starých
+  duplicit následují samostatně. Dnešní syntetické kopie nelze změnou UI ověřit.
+- Ověření: 13 regresí, scoped ESLint bez chyb, typová kontrola dotčené
+  aplikační závislostní větve a finální Vite/PWA build prošly. Celý extension/server
+  scope nebyl ověřen; build má existující upozornění na velikost chunků.
+- Rozsah a návaznosti: `docs/reviews/trade-history-20260912/PHASE-1.md`.
+  Bez nasazení, změny databáze, instalace workeru a broker akcí.
+
 ### 2026-09-11 — Schválené nasazení oprav této session (Codex)
 
 - Uživatel schválil nasazení všech oprav session. Izolovaný balíček zahrnuje

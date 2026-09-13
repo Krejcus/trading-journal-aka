@@ -1,3 +1,6 @@
+import { filterHistoryTrades } from './lib/historyTradeFilter';
+import { journalSourceConnections } from './services/journalSourceStatus';
+import { aggregateHistoryTrades, tradeDetailMembers } from './lib/tradeHistoryPresentation';
 import { combinedTradeChanges } from './services/combinedTradePatch';
 import { enqueueBacktestAnalytics, flushBacktestAnalytics } from './services/backtestAnalyticsOutbox';
 import type { BacktestAnalyticsRefreshCandidate } from './services/backtestAnalyticsRefresh';
@@ -31,13 +34,17 @@ import { adjustmentTotal, getFinancialAdjustments } from './services/tradingInci
 import { calculateAccountDrawdown, portfolioFloorForDate } from './services/propDrawdown';
 import { useTradovateLiveData } from './components/useTradovateLiveData';
 import { buildOAuthAccountLiveStates } from './lib/oauthAccountLiveState';
-import { syncCopierJournal, type PendingCopierJournalTrade } from './services/copierJournalSync';
-import { sanitizeCopyGroups, type CopyGroupConfig } from './services/liveCopyTrading';
-import { loadTradovateAccountProfiles, saveTradovateAccountProfiles } from './services/tradovateOAuthConnection';
+import { syncJournalConnections, mergeImportedJournalTrades, type JournalSyncReport } from './services/journalImportSync';
+import { isEvidenceJournalTrade, isRetiredJournalTrade } from './lib/journalTradeFacts';
+import { loadTradovateOAuthStatus, importTradovateJournalConnection } from './services/tradovateOAuthConnection';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'));
 const TradeHistory = React.lazy(() => import('./components/TradeHistory'));
+const JournalReviewInbox = React.lazy(() => import('./components/JournalReviewInbox'));
+const LiveJournalHistory = React.lazy(() => import('./components/LiveJournalHistory'));
+const JournalImportStatus = React.lazy(() => import('./components/JournalImportStatus'));
+const JournalSourceStatus = React.lazy(() => import('./components/JournalSourceStatus'));
 const Settings = React.lazy(() => import('./components/Settings'));
 const AccountsManager = React.lazy(() => import('./components/AccountsManager'));
 const Graveyard = React.lazy(() => import('./components/Graveyard'));
@@ -398,53 +405,6 @@ const stripWidgetAndCompact = (layouts: DashboardLayouts, id: string): Dashboard
   return out;
 };
 
-const aggregateTrades = (trades: Trade[], accounts: Account[]): Trade[] => {
-  const groups = new Map<string, Trade[]>();
-  const independent: Trade[] = [];
-
-  trades.forEach(t => {
-    if (t.groupId) {
-      if (!groups.has(t.groupId)) groups.set(t.groupId, []);
-      groups.get(t.groupId)!.push(t);
-    } else {
-      independent.push(t);
-    }
-  });
-
-  const aggregated: Trade[] = [...independent];
-
-  groups.forEach((groupTrades, groupId) => {
-    // Smarter master identification:
-    // 1. Explicit isMaster flag
-    // 2. Account name contains 'hlavní'
-    // 3. Fallback to first one
-    let master = groupTrades.find(t => t.isMaster);
-
-    if (!master && accounts.length > 0) {
-      master = groupTrades.find(t => {
-        const acc = accounts.find(a => a.id === t.accountId);
-        return acc?.name?.toLowerCase().includes('hlavní');
-      });
-    }
-
-    if (!master) master = groupTrades[0];
-
-    // Create combined trade Object
-    const combined: Trade = {
-      ...master,
-      id: `combined_${groupId}`,
-      pnl: groupTrades.reduce((sum, t) => sum + t.pnl, 0),
-      riskAmount: groupTrades.reduce((sum, t) => sum + (t.riskAmount || 0), 0),
-      notes: `${master.notes || ''} (Kombinováno z ${groupTrades.length} účtů)`.trim(),
-      // Ensure we mark it so UI can potentially handle it
-      tags: [...(master.tags || []), 'aggregated']
-    };
-    aggregated.push(combined);
-  });
-
-  return aggregated.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-};
-
 // Elegant Loading Fallback for Suspense
 const LoadingFallback = () => (
   <div className="flex-1 flex flex-col items-center justify-center min-h-[60vh] animate-in fade-in duration-500">
@@ -636,7 +596,11 @@ const App: React.FC = () => {
         setLabExperiments([]);
         setIsLabExpLoaded(false);
         setTradeToast(null);
-        setPendingCopierTrades([]);
+        setAiChatTrade(null);
+        setCopierImportReport(null);
+        setCopierImportError(false);
+        setCopierImportRunning(false);
+        copierImportAbortRef.current?.abort();
         copierJournalLastSyncRef.current = 0;
         copierJournalSyncBusyRef.current = false;
         setOfflineSnapshotAt(null);
@@ -741,7 +705,12 @@ const App: React.FC = () => {
   const [tradovateImportAccount, setTradovateImportAccount] = useState<string | undefined>(undefined);
   // Průvodce doplněním importovaných obchodů — inkrement spustí wizard v TradeHistory.
   const [enrichSignal, setEnrichSignal] = useState(0);
-  const [pendingCopierTrades, setPendingCopierTrades] = useState<PendingCopierJournalTrade[]>([]);
+  const [copierImportReport, setCopierImportReport] = useState<JournalSyncReport | null>(null);
+  const [copierImportError, setCopierImportError] = useState(false);
+  const [copierImportRunning, setCopierImportRunning] = useState(false);
+  const copierImportAbortRef = useRef<AbortController | null>(null);
+  const copierRowsRef = useRef(trades);
+  copierRowsRef.current = trades;
   const [currentUser, setCurrentUser] = useState<User>(DEFAULT_USER);
   // Locked feature modal pro non-owner roli (kamarád apod.)
   const [lockedFeatureModal, setLockedFeatureModal] = useState<string | null>(null);
@@ -751,75 +720,50 @@ const App: React.FC = () => {
   const copierJournalSyncBusyRef = useRef(false);
   const copierJournalLastSyncRef = useRef(0);
 
-  const runCopierJournalSync = useCallback(async (
-    group: CopyGroupConfig | null,
-    options?: { force?: boolean; accountIdOverride?: string },
-  ) => {
+  const runCopierJournalSync = useCallback(async (force = false) => {
     const userId = session?.user?.id;
-    const leaderAccountId = group?.leaderAccountId ?? null;
-    if (!userId || leaderAccountId == null || copierJournalSyncBusyRef.current) return;
+    if (!userId || copierJournalSyncBusyRef.current) return;
     const isCurrentSession = captureSessionRequest(userId);
     if (!isCurrentSession()) return;
-    const now = Date.now();
-    if (!options?.force && now - copierJournalLastSyncRef.current < 60_000) return;
+    if (!force && Date.now() - copierJournalLastSyncRef.current < 60_000) return;
     copierJournalSyncBusyRef.current = true;
+    const abort = new AbortController();
+    copierImportAbortRef.current = abort;
+    setCopierImportRunning(true);
+    const before = copierRowsRef.current;
     try {
-      const result = await syncCopierJournal({
-        userId,
-        leaderAccountId,
-        accounts,
-        followers: (group?.followers ?? [])
-          .filter(follower => follower.mode !== 'off')
-          .map(follower => ({ accountId: follower.accountId, multiplier: follower.multiplier })),
-        accountIdOverride: options?.accountIdOverride,
+      const result = await syncJournalConnections({ accounts, signal: abort.signal,
+        isCurrent: isCurrentSession, loadStatus: loadTradovateOAuthStatus,
+        importConnection: importTradovateJournalConnection, loadTrades: () => storageService.getTrades(),
       });
-      if (!isCurrentSession()) return;
-      setPendingCopierTrades(result.pending);
-      if (result.created.length > 0 || result.updated.length > 0) {
-        setTrades(current => {
-          if (!isCurrentSession()) return current;
-          const byId = new Map(current.map(trade => [String(trade.id), trade]));
-          const copierIds = new Set(current.map(trade => trade.copierTradeId).filter(Boolean));
-          for (const trade of result.updated) byId.set(String(trade.id), trade);
-          for (const trade of result.created) {
-            if (!byId.has(String(trade.id)) && !copierIds.has(trade.copierTradeId)) byId.set(String(trade.id), trade);
-          }
-          return [...byId.values()].sort((a, b) => b.timestamp - a.timestamp);
-        });
-      }
-    } catch (reason) {
-      console.warn('[Copier journal] Sync selhal:', reason);
+      if (!isCurrentSession() || abort.signal.aborted) return;
+      setCopierImportReport(result.report);
+      setCopierImportError(false);
+      if (result.trades) setTrades(current => isCurrentSession()
+        ? mergeImportedJournalTrades(current, before, result.trades!) : current);
+    } catch {
+      if (isCurrentSession() && !abort.signal.aborted) setCopierImportError(true);
     } finally {
-      // Throttle se musí posunout i po chybě. Dřív seděl uvnitř `try` za
-      // awaitem, takže neúspěšný sync ho nechal na staré hodnotě a
-      // dvousekundový poll pak spouštěl tentýž plný fetch pořád dokola.
-      if (isCurrentSession()) {
-        copierJournalLastSyncRef.current = now;
+      if (isCurrentSession() && copierImportAbortRef.current === abort) {
+        copierJournalLastSyncRef.current = Date.now();
         copierJournalSyncBusyRef.current = false;
+        setCopierImportRunning(false);
+        copierImportAbortRef.current = null;
       }
     }
   }, [accounts, session?.user?.id, captureSessionRequest]);
 
-  // Start po přihlášení: použij poslední webovou konfiguraci skupiny. LIVE
-  // stránka níže dodá autoritativní runtime group při každém svém refreshi.
   useEffect(() => {
-    if (!isInitialLoadDone || !session?.user?.id || accounts.length === 0) return;
-    try {
-      const parsed = JSON.parse(localStorage.getItem('alphatrade_live_copytrade_draft_groups') ?? '[]');
-      const groups = sanitizeCopyGroups(parsed) ?? [];
-      const active = groups.find(group => group.enabled && group.leaderAccountId != null)
-        ?? groups.find(group => group.leaderAccountId != null)
-        ?? null;
-      void runCopierJournalSync(active);
-    } catch {
-      // Poškozený lokální draft nesmí blokovat start aplikace; LIVE refresh
-      // později dodá validovaný runtime stav.
-    }
-  }, [accounts.length, isInitialLoadDone, runCopierJournalSync, session?.user?.id]);
+    copierJournalSyncBusyRef.current = false;
+    copierJournalLastSyncRef.current = 0;
+    setCopierImportReport(null); setCopierImportError(false); setCopierImportRunning(false);
+    return () => { copierImportAbortRef.current?.abort(); };
+  }, [session?.user?.id]);
 
-  const handleCopierJournalRefresh = useCallback((group: CopyGroupConfig | null) => {
-    void runCopierJournalSync(group);
-  }, [runCopierJournalSync]);
+
+  // LIVE refresh is only a scheduling hint. Current group configuration is not
+  // evidence of historical membership and is deliberately not consumed.
+  const handleCopierJournalRefresh = useCallback(() => { void runCopierJournalSync(); }, [runCopierJournalSync]);
 
   // Safety timeout: pokud DB user load selže nebo trvá moc dlouho (>5s),
   // uvolnit loader s JWT user data. Lepší fallback než nekonečný spinner.
@@ -1208,6 +1152,36 @@ const App: React.FC = () => {
     },
     tradovateLiveEnabled,
   );
+  const hasJournalConnection = accounts.some(account => account.oauth?.provider === 'tradovate') || Boolean(tradovateLive.status?.connections.length);
+  useEffect(() => {
+    if (!isInitialLoadDone || !session?.user?.id || !hasJournalConnection) return;
+    const refresh = () => { if (document.visibilityState === 'visible') void runCopierJournalSync(); };
+    refresh();
+    const timer = window.setInterval(refresh, 60_000);
+    window.addEventListener('online', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener('online', refresh); document.removeEventListener('visibilitychange', refresh); };
+  }, [hasJournalConnection, isInitialLoadDone, runCopierJournalSync, session?.user?.id]);
+  // Continue durable input preparation without waiting for the periodic refresh.
+  // A failed request stops this chain; reconnect/visibility or manual retry can resume it.
+  useEffect(() => {
+    if (!isInitialLoadDone || !session?.user?.id || copierImportRunning || copierImportError
+      || !copierImportReport?.connections.some(row => row.state === 'processing')) return;
+    let timer: number | undefined;
+    const schedule = () => {
+      window.clearTimeout(timer);
+      if (document.visibilityState !== 'visible' || !navigator.onLine) return;
+      timer = window.setTimeout(() => { void runCopierJournalSync(true); }, 2000);
+    };
+    schedule();
+    window.addEventListener('online', schedule);
+    document.addEventListener('visibilitychange', schedule);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('online', schedule);
+      document.removeEventListener('visibilitychange', schedule);
+    };
+  }, [isInitialLoadDone, session?.user?.id, copierImportRunning, copierImportError, copierImportReport, runCopierJournalSync]);
   const [liveIntentPending, setLiveIntentPending] = useState(false);
   const prefetchLiveData = tradovateLive.prefetch;
   const prepareLiveNavigation = useCallback(() => {
@@ -1229,40 +1203,6 @@ const App: React.FC = () => {
     connectionData: tradovateLive.connectionData,
     profiles: tradovateLive.profiles,
   }), [accounts, tradovateLive.connectionData, tradovateLive.profiles, tradovateLive.status]);
-
-  const resolvePendingCopierAccount = useCallback(async (accountId: string) => {
-    const pending = pendingCopierTrades[0];
-    if (!pending || !accounts.some(account => account.id === accountId)) return;
-    try {
-      const stored = await loadTradovateAccountProfiles();
-      const profile = stored.profiles.find(item => item.externalAccountId === String(pending.leaderAccountId));
-      if (profile && pending.connectionId) {
-        const linkedAccounts = accounts.map(account => account.id === accountId ? {
-          ...account,
-          oauth: {
-            provider: 'tradovate' as const,
-            environment: stored.environment,
-            externalAccountId: String(pending.leaderAccountId),
-            connectionId: pending.connectionId!,
-            firm: profile.propFirm,
-          },
-        } : account);
-        const savedAccounts = await storageService.saveAccounts(linkedAccounts);
-        setAccounts(savedAccounts);
-        await saveTradovateAccountProfiles(stored.profiles.map(item => item.id === profile.id
-          ? { ...item, mappedAccountId: accountId }
-          : item));
-      }
-      await runCopierJournalSync({
-        id: 'copier-journal-pending', name: 'Copier journal', enabled: true,
-        leaderAccountId: pending.leaderAccountId,
-        followers: pending.followers.map(follower => ({ ...follower, mode: 'on-fill' })),
-      }, { force: true, accountIdOverride: accountId });
-    } catch (reason) {
-      console.error('[Copier journal] Přiřazení účtu selhalo:', reason);
-      setSyncError('Nepodařilo se přiřadit čekající copier obchody k účtu.');
-    }
-  }, [accounts, pendingCopierTrades, runCopierJournalSync]);
 
   /**
    * Wrapper kolem setActivePage — když je AI Coach v aktivním streamu a user
@@ -2228,6 +2168,24 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!session || !isInitialLoadDone) return;
     const isCurrentSession = captureSessionRequest(session.user.id);
+    let journalReadTimer: ReturnType<typeof setTimeout> | null = null;
+    let journalReadVersion = 0;
+    const scheduleJournalRead = () => {
+      const version = ++journalReadVersion;
+      if (journalReadTimer) clearTimeout(journalReadTimer);
+      journalReadTimer = setTimeout(async () => {
+        if (!isCurrentSession()) return;
+        const before = copierRowsRef.current;
+        try {
+          const incoming = await storageService.getTrades();
+          if (!isCurrentSession() || version !== journalReadVersion) return;
+          setTrades(current => isCurrentSession() && version === journalReadVersion
+            ? mergeImportedJournalTrades(current, before, incoming) : current);
+        } catch {
+          if (isCurrentSession() && version === journalReadVersion) setCopierImportError(true);
+        }
+      }, 350);
+    };
 
     // Delay Realtime subscription to avoid WebSocket connection attempts blocking initial REST calls
     const realtimeTimer = setTimeout(() => {
@@ -2245,6 +2203,17 @@ const App: React.FC = () => {
           },
           async (payload) => {
             if (!isCurrentSession()) return;
+            const rawJournal = payload.eventType === 'DELETE' ? payload.old : payload.new;
+            const currentJournal = copierRowsRef.current.find(trade => String(trade.id) === String(rawJournal?.id));
+            const journalData = rawJournal && 'data' in rawJournal ? rawJournal.data as Partial<Trade> : undefined;
+            if (journalData?.source === 'copier' || (journalData && (isEvidenceJournalTrade(journalData as Trade) || isRetiredJournalTrade(journalData as Trade)))
+              || currentJournal?.source === 'copier' || (currentJournal && isEvidenceJournalTrade(currentJournal))) {
+              // Raw realtime rows do not contain the private current facts.
+              // Coalesce a whole import into one verified owner read; never
+              // flash an old P&L or legacy estimate through the generic parser.
+              scheduleJournalRead();
+              return;
+            }
 
             // Helper: parse raw DB row into Trade (same mapping as getTradeById)
             const parseRealtimeTrade = (raw: any): Trade => ({
@@ -2325,6 +2294,8 @@ const App: React.FC = () => {
 
     return () => {
       clearTimeout(realtimeTimer);
+      journalReadVersion++;
+      if (journalReadTimer) clearTimeout(journalReadTimer);
       if (realtimeChannelRef.current) {
         supabase.removeChannel(realtimeChannelRef.current);
         realtimeChannelRef.current = null;
@@ -2446,7 +2417,7 @@ const App: React.FC = () => {
     // History/Deník/AI také potřebují, aby se v UI místo "Neznámý účet" objevil
     // název archivovaného (spáleného) účtu pro jeho staré obchody.
     // Combined ("Vše") na dashboardu chce zahrnout i archivované obchody → musíme načíst.
-    const needsArchived = (dashboardMode === 'archive' || dashboardMode === 'combined' || activePage === 'accounts' || activePage === 'history' || activePage === 'journal' || activePage === 'ai' || activePage === 'lab' || activePage === 'business');
+    const needsArchived = (dashboardMode === 'archive' || dashboardMode === 'combined' || activePage === 'accounts' || activePage === 'history' || activePage === 'live' || activePage === 'journal' || activePage === 'ai' || activePage === 'lab' || activePage === 'business');
     if (needsArchived && session && !isArchivedLoaded) {
       const isCurrentSession = captureSessionRequest(session.user.id);
       if (!isCurrentSession()) return;
@@ -3164,61 +3135,6 @@ const App: React.FC = () => {
     return () => window.removeEventListener('alphatrade:open-native-system', openNativeSystem);
   }, [inNativeShell]);
 
-  const displayTrades = useMemo(() => {
-    if (viewMode === 'individual') {
-      // Indiv. mód = každý obchod zvlášť (žádné agregování přes master/groupId).
-      // Account scoping NEDĚLÁME tady — to řídí čistě dropdown přes filters.accounts
-      // v baseFilteredTrades. Bez tohoto byl Indiv. zaseklý na "active account family"
-      // a klikání na ostatní účty v dropdownu nic neudělalo.
-      return trades;
-    }
-
-    const grouped = new Map<string, Trade[]>();
-    const independent: Trade[] = [];
-
-    // Fáze účtu pro grupování — funded a challenge kopie téhož fan-outu NESMÍ splynout do
-    // jedné karty, jinak by combined karta (klíčovaná masterem) ve funded/challenge filtru
-    // míchala cizí peníze. Klíč proto zahrnuje "phase bucket".
-    const aggLookup = [...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))];
-    const phaseBucketOf = (accId?: string): string => {
-      const acc = aggLookup.find(a => a.id === accId);
-      if (!acc) return 'other';
-      if (acc.type === 'Funded' && acc.phase === 'Challenge') return 'challenge';
-      if (acc.type === 'Live' || (acc.type === 'Funded' && acc.phase === 'Funded')) return 'funded';
-      if (acc.type === 'Backtest') return 'backtest';
-      return 'other';
-    };
-
-    trades.forEach(t => {
-      // Logic: If it's a copy, group by masterTradeId. If it's a master, group by its own ID.
-      const baseKey = t.masterTradeId || (t.isMaster ? t.id : t.groupId);
-      if (baseKey) {
-        const key = `${baseKey}__${phaseBucketOf(t.accountId)}`;
-        if (!grouped.has(key)) grouped.set(key, []);
-        grouped.get(key)!.push(t);
-      } else {
-        independent.push(t);
-      }
-    });
-
-    const aggregated: Trade[] = Array.from(grouped.values()).map(group => {
-      const master = group.find(t => t.isMaster) || group[0];
-      return {
-        ...master,
-        pnl: group.reduce((sum, t) => sum + t.pnl, 0),
-        riskAmount: group.reduce((sum, t) => sum + (t.riskAmount || 0), 0),
-        targetAmount: group.reduce((sum, t) => sum + (t.targetAmount || 0), 0),
-        // Keep other metadata from master
-      };
-    });
-
-    return [...independent, ...aggregated].sort((a, b) => b.timestamp - a.timestamp);
-  }, [trades, viewMode, accounts, archivedAccounts]);
-
-  // (Pozn.: dřív tu byl `const stats = useMemo(calculateStats(displayTrades…))`, který se ale
-  // nikde nepoužíval — Dashboard bere `filteredStats`. Odstraněno: byl to plný průchod všemi
-  // obchody (equity křivka, kalendář, hodinové/denní mapy) na každou změnu trades zbytečně.)
-
   // Global refresh handler for Pull-to-Refresh
   const handleRefreshData = useCallback(async () => {
     if (!session) return;
@@ -3287,128 +3203,14 @@ const App: React.FC = () => {
     return () => window.removeEventListener('alphatrade:native-refresh', refreshFromNativeShell);
   }, [handleRefreshData, inNativeShell]);
 
-  const baseFilteredTrades = useMemo(() => {
-    const now = new Date();
-    // KRITICKÉ: account lookup musí brát i archivované účty, jinak obchody z archivovaných
-    // (např. spálené Tradeify 50k) zmizí z Deníku/Dashboardu, i když jsou v Historii vidět.
-    // Bug: AlphaBridge trade na archived účtu → acc undefined → phase check fail → hidden.
-    const accountsLookup = [...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))];
-    // TVRDÁ BRÁNA pro funded/challenge/backtesting: obchod musí patřit AKTIVNÍMU účtu.
-    // Spálené/deaktivované účty (status Inactive / isArchived) sem NIKDY nepatří — jejich
-    // obchody žijí jen ve "Vše" (záměr, viz contextAccounts) a v Archivu. Bez téhle brány
-    // prosakovaly dvěma skulinami: (1) phase check níže bere fázi z accountsLookup VČETNĚ
-    // archivovaných (spálený Funded účet projde jako 'funded'), (2) combined view pouští
-    // obchod spálené KOPIE, když její parentAccountId míří na aktivní master (ř. matchAcc).
-    // Projevovalo se to lednovými obchody v Hodinovém/Denním výkonu na 2 týdny starém účtu.
-    const strictActiveMode = dashboardMode === 'funded' || dashboardMode === 'challenge' || dashboardMode === 'backtesting';
-    const activeAccountIds = strictActiveMode ? new Set(accounts.filter(a => a.status === 'Active').map(a => String(a.id))) : null;
-    return displayTrades.filter(t => {
-      if (activeAccountIds && !activeAccountIds.has(String(t.accountId))) return false;
-      // DEBUG: Log Alpha Bridge trades to see why they're filtered
-      const isAlphaBridge = t.signal === 'Alpha Bridge v2';
-
-      // TVRDÁ PŘEPÁŽKA: Backtest obchody patří jen do backtest světa.
-      // Mimo 'backtesting' je NIKDY nezobrazuj (Deník/Dashboard/History), i v "Vše".
-      {
-        const acc = accountsLookup.find(a => a.id === t.accountId);
-        const isBacktestTrade = isBacktestAccount(acc);
-        if (dashboardMode === 'backtesting') {
-          if (!isBacktestTrade) return false;
-        } else if (isBacktestTrade) {
-          return false;
-        }
-      }
-
-      // Filter by phase based on dashboardMode
-      // ALWAYS use account phase as source of truth, not trade phase
-      if (dashboardMode === 'challenge') {
-        const acc = accountsLookup.find(a => a.id === t.accountId);
-        const isChallenge = acc?.type === 'Funded' && acc?.phase === 'Challenge';
-        if (!isChallenge) {
-          return false;
-        }
-      } else if (dashboardMode === 'funded') {
-        const acc = accountsLookup.find(a => a.id === t.accountId);
-        const isFunded = acc?.type === 'Live' || (acc?.type === 'Funded' && acc?.phase === 'Funded');
-        if (!isFunded) {
-          return false;
-        }
-      }
-
-      const d = new Date(t.date);
-      const h = new Date(t.timestamp).getHours();
-      const dayName = ['Ne', 'Po', 'Út', 'St', 'Čt', 'Pá', 'So'][d.getDay()];
-      const status = t.executionStatus || 'Valid';
-
-      const matchDay = filters.days.includes(dayName);
-      const matchHour = filters.hours.includes(h);
-
-      let matchAcc = false;
-      // Prázdný account-filtr: "ukaž vše" platí JEN v módu 'combined' (Vše).
-      // U konkrétního módu (funded/challenge/backtesting) prázdný filtr znamená,
-      // že v něm není žádný aktivní účet → nic nezobrazuj (obchody se ale nemažou).
-      const emptyMeansAll = dashboardMode === 'combined';
-      if (viewMode === 'combined') {
-        // In combined mode, if filtering by accounts, include trades from both master and its children
-        if (filters.accounts.length === 0) {
-          matchAcc = emptyMeansAll;
-        } else {
-          matchAcc = filters.accounts.some(filterId => {
-            const isTarget = t.accountId === filterId;
-            const isChildOfTarget = t.masterTradeId && t.accountId !== filterId; // Simplified check
-            // More robust: does this trade's account have a parent that is in filters?
-            const acc = accountsLookup.find(a => a.id === t.accountId);
-            return isTarget || (acc?.parentAccountId && filters.accounts.includes(acc.parentAccountId));
-          });
-        }
-      } else {
-        // In normal mode, empty filter means "show all accounts" (jen v combined módu)
-        if (filters.accounts.length === 0) {
-          matchAcc = emptyMeansAll;
-        } else {
-          matchAcc = filters.accounts.includes(t.accountId);
-        }
-      }
-
-      // Case-insensitive direction matching (SHORT/Short, LONG/Long)
-      const matchDir = filters.directions.some(dir =>
-        dir.toLowerCase() === t.direction?.toLowerCase()
-      );
-      const matchStatus = filters.executionStatuses.includes(status);
-
-      let matchRes = false;
-      if (t.pnl > 0 && filters.outcomes.includes('Win')) matchRes = true;
-      else if (t.pnl < 0 && filters.outcomes.includes('Loss')) matchRes = true;
-      else if (t.pnl === 0 && filters.outcomes.includes('BE')) matchRes = true;
-
-      let matchHtf = filters.htfConfluences.length === 0 ||
-        (t.htfConfluence?.some(c => filters.htfConfluences.includes(c)) || false);
-
-      let matchLtf = filters.ltfConfluences.length === 0 ||
-        (t.ltfConfluence?.some(c => filters.ltfConfluences.includes(c)) || false);
-
-      let matchMistake = filters.mistakes.length === 0 ||
-        (t.mistakes?.some(m => filters.mistakes.includes(m)) || false);
-
-      let matchPeriod = true;
-      if (dashboardMode !== 'backtesting' && filters.period !== 'all') {
-        const diffDays = (now.getTime() - d.getTime()) / (1000 * 3600 * 24);
-        if (filters.period === 'week' && diffDays > 7) matchPeriod = false;
-        if (filters.period === 'month' && diffDays > 30) matchPeriod = false;
-        if (filters.period === 'quarter' && diffDays > 90) matchPeriod = false;
-        if (filters.period === 'year' && diffDays > 365) matchPeriod = false;
-      }
-
-      const passes = matchDay && matchHour && matchAcc && matchDir && matchRes && matchPeriod &&
-        matchStatus && matchHtf && matchLtf && matchMistake;
-
-      return passes;
-    });
-  }, [displayTrades, filters, viewMode, accounts, archivedAccounts, dashboardMode]);
-
-  const filteredDisplayTrades = useMemo(() => {
-    return viewMode === 'combined' ? aggregateTrades(baseFilteredTrades, accounts) : baseFilteredTrades;
-  }, [baseFilteredTrades, viewMode, accounts]);
+  const baseFilteredTrades = useMemo(() => filterHistoryTrades(
+    trades, accounts, archivedAccounts, filters, dashboardMode,
+  ), [trades, accounts, archivedAccounts, filters, dashboardMode]);
+  const filteredDisplayTrades = useMemo(() => viewMode === 'combined'
+    ? aggregateHistoryTrades(baseFilteredTrades) : baseFilteredTrades, [baseFilteredTrades, viewMode]);
+  const resolvedReviewTrade = aiChatTrade && isEvidenceJournalTrade(aiChatTrade)
+    ? (String(aiChatTrade.id).startsWith('combined_') ? filteredDisplayTrades : trades).find(row => row.id === aiChatTrade.id) ?? null
+    : aiChatTrade;
 
   // Vrací datované položky (ne jen součet) — equity křivka je potřebuje zasadit
   // na správný den, jinak by končila jinde než Net P&L.
@@ -3758,46 +3560,48 @@ const App: React.FC = () => {
     }));
   }, [trades]);
 
-  const handleUpdateTrade = useCallback((tradeId: string | number, updates: Partial<Trade>) => {
+  const handleUpdateTrade = useCallback(async (tradeId: string | number, updates: Partial<Trade>) => {
     const reviewedUpdates: Partial<Trade> = { ...updates, needsReview: false };
-    // ── COMBINED (agregovaný) obchod: id je syntetické `combined_<groupId>`, v DB neexistuje.
-    // Editaci propíšeme na VŠECHNY reálné kopie skupiny (fan-out sdílí entry/SL/TP/setup).
-    // Ekonomická pole (pnl/risk/target/objem) NEJDOU 1:1 — kopie mají různé multipliery
-    // (2× vs 1× risk). Full edit je ale posílá přepočítané pro MASTERŮV objem (combined
-    // karta zobrazuje masterova pole), takže je per kopii ŠKÁLUJEME jejím podílem na
-    // masterovi. Dřív se stripovaly úplně → změna objemu se propsala, pnl zůstalo staré.
+    // Shared review affects only visible group members. Broker facts stay account-specific.
     if (typeof tradeId === 'string' && tradeId.startsWith('combined_')) {
-      const groupId = tradeId.slice('combined_'.length);
-      const changes = combinedTradeChanges(trades.filter(trade => trade.groupId === groupId), reviewedUpdates);
-      if (!changes.length) return;
+      const combinedView = filteredDisplayTrades.find(trade => trade.id === tradeId);
+      if (!combinedView) {
+        setSyncError('Skupina již není v aktuálním výběru. Otevři ji znovu z historie.');
+        return false;
+      }
+      const changes = combinedTradeChanges(tradeDetailMembers(combinedView, trades), reviewedUpdates);
+      if (!changes.length) return true;
       const patches = new Map(changes.map(change => [change.id, change.patch]));
       setTrades(current => current.map(trade => patches.has(String(trade.id))
         ? { ...trade, ...patches.get(String(trade.id)) } : trade));
-      void Promise.all(changes.map(async ({ id, before, patch }) => {
-        try { await storageService.updateTrade(id, patch, before); }
+      const results = await Promise.all(changes.map(async ({ id, before, patch }) => {
+        try { await storageService.updateTrade(id, patch, before); return true; }
         catch (error) {
           console.error('Failed to persist combined trade update:', error);
           setSyncError(error instanceof Error ? error.message : 'Nepodařilo se uložit změnu kopie obchodu.');
           setTrades(current => current.map(trade => String(trade.id) === id
             ? rollbackTradePatch(trade, before, patch) : trade));
+          return false;
         }
       }));
-      return;
+      return results.every(Boolean);
     }
 
     const snapshot = trades.find(trade => trade.id === tradeId);
-    if (!snapshot) return;
+    if (!snapshot) return false;
     const patch = changedTradeFields(snapshot, reviewedUpdates);
-    if (!Object.keys(patch).length) return;
+    if (!Object.keys(patch).length) return true;
     setTrades(current => current.map(trade => trade.id === tradeId ? { ...trade, ...patch } : trade));
     if (typeof tradeId === 'string' && tradeId.includes('-')) {
-      void storageService.updateTrade(tradeId, patch, snapshot).catch(error => {
+      try { await storageService.updateTrade(tradeId, patch, snapshot); } catch (error) {
         console.error('Failed to persist trade update:', error);
         setSyncError(error instanceof Error ? error.message : 'Nepodařilo se uložit změny obchodu.');
         setTrades(current => current.map(trade => trade.id === tradeId ? rollbackTradePatch(trade, snapshot, patch) : trade));
-      });
+        return false;
+      }
     }
-  }, [trades]);
+    return true;
+  }, [trades, filteredDisplayTrades]);
 
   const handleBacktestTradeReviewSave = useCallback(async (
     tradeId: string,
@@ -3874,8 +3678,12 @@ const App: React.FC = () => {
     const idsToDelete: (string | number)[] = [];
 
     if (typeof id === 'string' && id.startsWith('combined_')) {
-      const groupId = id.replace('combined_', '');
-      const groupTrades = trades.filter(t => t.groupId === groupId);
+      const combinedView = filteredDisplayTrades.find(trade => trade.id === id);
+      if (!combinedView) {
+        setSyncError('Skupina již není v aktuálním výběru. Otevři ji znovu z historie.');
+        return;
+      }
+      const groupTrades = tradeDetailMembers(combinedView, trades);
       idsToDelete.push(...groupTrades.map(t => t.id));
     } else {
       const tradeToDelete = trades.find(t => t.id === id);
@@ -4446,7 +4254,7 @@ const App: React.FC = () => {
             {/* Filtr + přepínač režimu — vlastní skupina blízko u sebe */}
             <div className="flex items-center gap-1.5">
             {/* Item 2: Filter Dropdown */}
-            {activePage !== 'live' && <FilterDropdown
+            {<FilterDropdown
               filters={filters}
               setFilters={setFilters}
               accounts={contextAccounts}
@@ -4724,8 +4532,19 @@ const App: React.FC = () => {
                     />
                   )}
 
+                  {(activePage === 'history' || activePage === 'live') && dashboardMode !== 'backtesting' && (
+                    <>
+                    <JournalImportStatus report={copierImportReport} running={copierImportRunning} error={copierImportError}
+                      onRetry={() => void runCopierJournalSync(true)} onAccounts={() => setActivePage('accounts')} />
+                    <JournalSourceStatus key={currentUser.id} connections={journalSourceConnections([...accounts, ...archivedAccounts], copierImportReport?.connections.map(row => row.connectionId))} />
+                    </>
+                  )}
+
                   {activePage === 'history' && (
-                    trades.length === 0 && pendingCopierTrades.length === 0 ? (
+                    <>
+                    {dashboardMode !== 'backtesting' && <JournalReviewInbox key={currentUser.id} refreshVersion={copierImportReport?.completedAt} accounts={[...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))]} />}
+                    {
+                    trades.length === 0 ? (
                       <div className="flex flex-col items-center justify-center h-[60vh] space-y-6">
                         <div className="w-full max-w-md h-64">
                           <FileUpload onDataLoaded={handleFileUpload} />
@@ -4757,15 +4576,14 @@ const App: React.FC = () => {
                         setViewMode={setHistoryLayoutMode}
                         enrichSignal={enrichSignal}
                         userMistakes={userMistakes}
-                        pendingCopierTrades={dashboardMode === 'backtesting' ? [] : pendingCopierTrades}
-                        onResolvePendingCopier={dashboardMode === 'backtesting' ? undefined : accountId => void resolvePendingCopierAccount(accountId)}
                         onImportTradovate={() => {
                           setTradovateImportAccount(viewMode === 'individual' ? activeAccountId : undefined);
                           setTradovateImportOpen(true);
                         }}
                         onImportTradesyncer={() => setTradesyncerImportOpen(true)}
                       />
-                    )
+                    )}
+                    </>
                   )}
 
                   {activePage === 'insights' && (
@@ -4965,6 +4783,8 @@ const App: React.FC = () => {
                       theme={theme}
                       live={tradovateLive}
                       onCopierJournalRefresh={handleCopierJournalRefresh}
+                      journalHistory={<LiveJournalHistory trades={baseFilteredTrades} accounts={allAccountsWithArchived}
+                        mode={viewMode} onMode={setViewMode} onSelect={setAiChatTrade} onHistory={() => setActivePage('history')} />}
                       requestedTab={requestedLiveTab}
                       onRequestedTabHandled={handleRequestedLiveTabHandled}
                       macCompanionPairingIntent={macCompanionPairingIntent}
@@ -5276,17 +5096,17 @@ const App: React.FC = () => {
       />
 
       {/* Trade detail otevřený z AI Chatu */}
-      {aiChatTrade && (
+      {session && loadedUserId === session.user.id && resolvedReviewTrade && (
         <TradeDetailModal
-          trade={aiChatTrade}
-          accountName={accounts.find(a => String(a.id) === String(aiChatTrade.accountId))?.name ?? accounts[0]?.name ?? ''}
+          trade={resolvedReviewTrade}
+          accountName={allAccountsWithArchived.find(a => a.id === resolvedReviewTrade.accountId)?.name ?? resolvedReviewTrade.accountId}
           theme={theme as 'dark' | 'light' | 'oled'}
           onClose={() => setAiChatTrade(null)}
-          onDelete={() => { handleDeleteTrade(aiChatTrade.id); setAiChatTrade(null); }}
+          onDelete={() => { handleDeleteTrade(resolvedReviewTrade.id); setAiChatTrade(null); }}
           emotions={userEmotions}
-          onUpdateTrade={(updates) => handleUpdateTrade(aiChatTrade.id, updates)}
+          onUpdateTrade={(updates) => handleUpdateTrade(resolvedReviewTrade.id, updates)}
           pnlDisplayMode={pnlDisplayMode}
-          accounts={accounts}
+          accounts={allAccountsWithArchived}
           initialBalance={displayBalance}
           user={currentUser ?? undefined}
           exchangeRates={exchangeRates}

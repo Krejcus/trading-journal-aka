@@ -20,7 +20,7 @@ export const containsTradeNoteHistory = (value: unknown): boolean => {
 export const publicTradeNotes = <T>(value: T, canSeeNotes: boolean): T => {
   if (Array.isArray(value)) return value.map(item => publicTradeNotes(item, canSeeNotes)) as T;
   if (!value || typeof value !== 'object') return value;
-  const privateKeys = new Set(canSeeNotes ? ['noteHistory'] : ['noteHistory', 'notes', 'sessionPreNotes', 'sessionPostNotes']);
+  const privateKeys = new Set(canSeeNotes ? ['noteHistory', 'executionHistory', 'copierSnapshotLoadError'] : ['noteHistory', 'executionHistory', 'copierSnapshotLoadError', 'notes', 'sessionPreNotes', 'sessionPostNotes']);
   return Object.fromEntries(Object.entries(value).filter(([key]) => !privateKeys.has(key))
     .map(([key, item]) => [key, publicTradeNotes(item, canSeeNotes)])) as T;
 };

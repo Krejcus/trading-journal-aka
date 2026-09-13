@@ -53,8 +53,8 @@ Deno.serve(async (req: Request) => {
   const day30 = isoTZ(subDays(new Date(), 30));
 
   const [todayTradesRes, recent30Res, memoryRes, profileRes, prefsRes] = await Promise.all([
-    supabase.from('trades').select('id, date, instrument, direction, pnl, timestamp, data').eq('user_id', userId).gte('date', targetDate).lte('date', targetDate + 'T23:59:59'),
-    supabase.from('trades').select('date, pnl, data').eq('user_id', userId).gte('date', day30).order('date', { ascending: false }).limit(150),
+    supabase.from('confirmed_journal_trades').select('id, date, instrument, direction, pnl, timestamp, data').eq('user_id', userId).gte('date', targetDate).lte('date', targetDate + 'T23:59:59'),
+    supabase.from('confirmed_journal_trades').select('date, pnl, data').eq('user_id', userId).gte('date', day30).order('date', { ascending: false }).limit(150),
     supabase.from('ai_coach_memory').select('type, content, importance, memory_date').eq('user_id', userId).order('importance', { ascending: false }).limit(8),
     supabase.from('ai_coach_profile').select('facts, preferences').eq('user_id', userId).maybeSingle(),
     supabase.from('preferences').select('ironRules').eq('user_id', userId).maybeSingle(),

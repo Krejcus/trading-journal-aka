@@ -407,7 +407,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                             // se každý obchod ohlásí právě jednou. Dřív byl klíč jen
                             // user_id a 5min lookback ho poslal 5× po sobě.
                             watchedUserIds.some(uid => netNotifs[uid]?.newTrade)
-                                ? supabase.from('trades').select('id, user_id, instrument, direction').in('user_id', watchedUserIds.filter(uid => netNotifs[uid]?.newTrade)).gte('created_at', fiveMinAgo).limit(10)
+                                ? supabase.from('confirmed_journal_trades').select('id, user_id, instrument, direction').in('user_id', watchedUserIds.filter(uid => netNotifs[uid]?.newTrade)).gte('created_at', fiveMinAgo).limit(10)
                                 : Promise.resolve({ data: [] }),
                             watchedUserIds.some(uid => netNotifs[uid]?.newPrep)
                                 ? supabase.from('daily_preps').select('id, user_id').in('user_id', watchedUserIds.filter(uid => netNotifs[uid]?.newPrep)).gte('created_at', fiveMinAgo).limit(10)

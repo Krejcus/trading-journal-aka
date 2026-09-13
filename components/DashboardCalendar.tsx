@@ -1,7 +1,8 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Trade, DailyPrep, DailyReview, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
-import { formatPnL, calculateTotalRR, formatRMultiple } from '../utils/formatPnL';
+import { formatPnL, formatTradePnL, calculateTotalRR, formatRMultiple } from '../utils/formatPnL';
+import { tradeRMultiple } from '../utils/tradeRisk';
 import { ExchangeRates } from '../services/currencyService';
 import ImageZoomModal from './ImageZoomModal';
 import {
@@ -59,6 +60,14 @@ import {
    BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, Cell, PieChart, Pie, AreaChart, Area, CartesianGrid
 } from 'recharts';
 
+const resultTextColor = (pnl: number, mode: PnLDisplayMode, trades: Trade[]) => {
+   const metric = mode === 'rr' ? calculateTotalRR(trades) : pnl;
+   return metric === null || !Number.isFinite(metric) ? 'text-slate-400' : metric >= 0 ? 'text-emerald-500' : 'text-rose-500';
+};
+
+const calendarAccountName = (trade: Trade, accounts: Account[]) => String(trade.id).startsWith('combined_')
+   ? 'Kombinovaný obchod' : accounts.find(account => account.id === trade.accountId)?.name || trade.accountId;
+
 interface DashboardCalendarProps {
    trades: Trade[];
    preps: DailyPrep[];
@@ -68,7 +77,11 @@ interface DashboardCalendarProps {
    initialBalance: number;
    emotions: CustomEmotion[];
    onDayClick?: (dateStr: string) => void;
+   /** Owner dashboard routes to its shared, freshly hydrated trade detail. */
+   onOpenTrade?: (trade: Trade) => void;
    pnlFormat?: PnLDisplayMode;
+   /** Shared history may hide results even for empty calendar periods. */
+   resultsHidden?: boolean;
    user: User;
    exchangeRates: ExchangeRates | null;
    onAnalyzeWithAI?: (prompt: string) => void;
@@ -139,7 +152,9 @@ const DashboardCalendar: React.FC<DashboardCalendarProps> = ({
    initialBalance,
    emotions,
    onDayClick,
+   onOpenTrade,
    pnlFormat,
+   resultsHidden = false,
    user,
    exchangeRates,
    onAnalyzeWithAI,
@@ -147,12 +162,17 @@ const DashboardCalendar: React.FC<DashboardCalendarProps> = ({
    const isDark = theme !== 'light';
    const targetCurrency = user.currency || 'USD';
 
-   const formatValue = (val: number, mode: PnLDisplayMode = (pnlFormat || 'usd'), bal?: number, rr?: number, sign: boolean = true) => {
+   const formatValue = (val: number, mode: PnLDisplayMode = (pnlFormat || 'usd'), bal?: number, rr?: number | null, sign: boolean = true) => {
       return formatPnL(val, mode, bal, rr, sign, targetCurrency, exchangeRates);
    };
    const [currentMonthIndex, setCurrentMonthIndex] = useState(0);
    const [selectedDay, setSelectedDay] = useState<DayData | null>(null);
    const [selectedWeek, setSelectedWeek] = useState<WeekData | null>(null);
+   const openTrade = onOpenTrade ? (trade: Trade) => {
+      setSelectedDay(null);
+      setSelectedWeek(null);
+      onOpenTrade(trade);
+   } : undefined;
 
    const monthsData = useMemo(() => {
       const allDates = new Set([
@@ -214,6 +234,7 @@ const DashboardCalendar: React.FC<DashboardCalendarProps> = ({
                month={currentData.month}
                trades={currentData.trades}
                allTrades={trades}
+               resultsHidden={resultsHidden}
                preps={preps}
                reviews={reviews}
                theme={theme}
@@ -234,19 +255,19 @@ const DashboardCalendar: React.FC<DashboardCalendarProps> = ({
             />
          </div>
          {selectedDay && createPortal(
-            <DayDeepDiveModal day={selectedDay} theme={theme} onClose={() => setSelectedDay(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat as PnLDisplayMode} initialBalance={initialBalance} currency={targetCurrency} rates={exchangeRates} onAnalyzeWithAI={onAnalyzeWithAI} />,
+            <DayDeepDiveModal day={selectedDay} theme={theme} onClose={() => setSelectedDay(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat as PnLDisplayMode} initialBalance={initialBalance} currency={targetCurrency} rates={exchangeRates} onAnalyzeWithAI={onAnalyzeWithAI} onOpenTrade={openTrade} />,
             document.body
          )}
          {selectedWeek && createPortal(
-            <WeekDetailModal week={selectedWeek} monthName={new Date(currentData.year, currentData.month - 1, 1).toLocaleString('cs-CZ', { month: 'long' })} theme={theme} onClose={() => setSelectedWeek(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat as PnLDisplayMode} initialBalance={initialBalance} currency={targetCurrency} rates={exchangeRates} onAnalyzeWithAI={onAnalyzeWithAI} />,
+            <WeekDetailModal week={selectedWeek} monthName={new Date(currentData.year, currentData.month - 1, 1).toLocaleString('cs-CZ', { month: 'long' })} theme={theme} onClose={() => setSelectedWeek(null)} accounts={accounts} emotions={emotions} pnlFormat={pnlFormat as PnLDisplayMode} initialBalance={initialBalance} currency={targetCurrency} rates={exchangeRates} onAnalyzeWithAI={onAnalyzeWithAI} onOpenTrade={openTrade} />,
             document.body
          )}
       </div>
    );
 };
 
-const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: any }> = ({ year, month, trades, allTrades, preps, reviews, theme, onPrev, onNext, canPrev, canNext, onDayClick, onWeekClick, pnlFormat = 'usd', accounts, initialBalance, currency, rates }) => {
-   const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number, sign: boolean = true) => {
+const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: any }> = ({ year, month, trades, allTrades, preps, reviews, theme, onPrev, onNext, canPrev, canNext, onDayClick, onWeekClick, pnlFormat = 'usd', accounts, initialBalance, currency, rates, resultsHidden = false }) => {
+   const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number | null, sign: boolean = true) => {
       return formatPnL(val, mode, bal, rr, sign, currency, rates);
    };
    const gridRows = useMemo(() => {
@@ -263,7 +284,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
          const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
          const dayTrades = source.filter(t => t.date.startsWith(dateStr));
          const realTrades = dayTrades.filter(t => t.executionStatus !== 'Missed');
-         const pnl = realTrades.reduce((acc, t) => acc + t.pnl, 0);
+         const pnl = resultsHidden ? Number.NaN : realTrades.reduce((acc, t) => acc + t.pnl, 0);
          const prep = preps.find(p => p.date === dateStr);
          const review = reviews.find(r => r.date === dateStr);
          const emotions = realTrades.flatMap(t => t.emotions || []);
@@ -328,24 +349,24 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
          }
       }
       return rows;
-   }, [year, month, trades, allTrades, preps, reviews]);
+   }, [year, month, trades, allTrades, preps, reviews, resultsHidden]);
 
    const monthName = new Date(year, month - 1, 1).toLocaleString('cs-CZ', { month: 'long', year: 'numeric' });
 
    // Overall month PNL should also exclude missed
    const totalMonthPnl = useMemo(() => {
-      return trades.filter(t => t.executionStatus !== 'Missed').reduce((acc, t) => acc + t.pnl, 0);
-   }, [trades]);
+      return resultsHidden ? Number.NaN : trades.filter(t => t.executionStatus !== 'Missed').reduce((acc, t) => acc + t.pnl, 0);
+   }, [trades, resultsHidden]);
 
    // Metrika pro výběr barvy měsíčního souhrnu — v RR módu RR, jinak USD
    const totalMonthColorMetric = useMemo(() => {
       if (pnlFormat === 'rr') return calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed'));
       return totalMonthPnl;
    }, [trades, pnlFormat, totalMonthPnl]);
-   const monthIsPositive = totalMonthColorMetric >= 0;
+   const monthIsPositive = totalMonthColorMetric !== null && totalMonthColorMetric >= 0;
 
    const maxDayPnL = useMemo(() => {
-      const absolutePnLs = gridRows.flatMap(row => row.map(cell => cell.type === 'day' ? Math.abs(cell.data!.pnl) : 0));
+      const absolutePnLs = gridRows.flatMap(row => row.map(cell => cell.type === 'day' ? Math.abs(cell.data!.pnl) : 0)).filter(Number.isFinite);
       return Math.max(...absolutePnLs, 1);
    }, [gridRows]);
 
@@ -366,7 +387,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
                </div>
                <div className="flex flex-col items-end">
                   <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Měsíční PnL</span>
-                  <span className={`text-lg font-mono font-bold tracking-tight leading-tight ${monthIsPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  <span className={`text-lg font-mono font-bold tracking-tight leading-tight ${totalMonthColorMetric === null || !Number.isFinite(totalMonthColorMetric) ? 'text-slate-400' : monthIsPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
                      {formatVal(totalMonthPnl, pnlFormat as PnLDisplayMode, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed')) : undefined)}
                   </span>
                </div>
@@ -388,7 +409,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
             </div>
             <div className={`flex flex-col items-end gap-1 px-5 py-3 rounded-lg border ${theme === 'oled' ? 'bg-black border-white/10' : theme === 'dark' ? 'bg-slate-900/50 border-white/5' : 'bg-white border-slate-200'}`}>
                <span className="text-[8px] font-black uppercase tracking-[0.2em] text-slate-500">Měsíční PnL</span>
-               <span className={`text-2xl font-mono font-bold tracking-tight ${monthIsPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
+               <span className={`text-2xl font-mono font-bold tracking-tight ${totalMonthColorMetric === null || !Number.isFinite(totalMonthColorMetric) ? 'text-slate-400' : monthIsPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
                   {formatVal(totalMonthPnl, pnlFormat as PnLDisplayMode, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed')) : undefined)}
                </span>
             </div>
@@ -422,9 +443,11 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
 
 const formatPnLCompact = (val: number, mode: PnLDisplayMode, trades?: Trade[], initialBalance?: number): string => {
    if (mode === 'rr') {
-      const rr = trades ? calculateTotalRR(trades) : 0;
+      const rr = trades ? calculateTotalRR(trades) : null;
+      if (rr === null) return '—';
       return `${rr >= 0 ? '+' : ''}${formatRMultiple(rr, 1)}R`;
    }
+   if (!Number.isFinite(val)) return '—';
    if (mode === 'percent') {
       const pct = initialBalance && initialBalance > 0 ? (val / initialBalance) * 100 : 0;
       return `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
@@ -437,7 +460,7 @@ const formatPnLCompact = (val: number, mode: PnLDisplayMode, trades?: Trade[], i
 };
 
 const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled'; maxPnL: number; onDayClick: (day: DayData) => void; onWeekClick: (week: WeekData) => void; pnlFormat?: PnLDisplayMode; accounts: Account[]; initialBalance: number; currency: any, rates: any }> = ({ cell, theme, maxPnL, onDayClick, onWeekClick, pnlFormat = 'usd', accounts, initialBalance, currency, rates }) => {
-   const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number, sign: boolean = true) => {
+   const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number | null, sign: boolean = true) => {
       return formatPnL(val, mode, bal, rr, sign, currency, rates);
    };
    if (cell.type === 'empty') return <div className="opacity-0"></div>;
@@ -447,8 +470,8 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
       // V RR módu rozhoduj barvu podle RR (ne USD) — RR a USD se mohou rozcházet znaménkem
       const weekTrades = week.days.flatMap(d => d.trades);
       const colorMetric = pnlFormat === 'rr' ? calculateTotalRR(weekTrades) : pnl;
-      const isPositive = colorMetric > 0;
-      const isNegative = colorMetric < 0;
+      const isPositive = colorMetric !== null && colorMetric > 0;
+      const isNegative = colorMetric !== null && colorMetric < 0;
       const summaryTone = isPositive
          ? 'border-emerald-500/25 bg-emerald-500/[0.045] hover:bg-emerald-500/[0.08]'
          : isNegative
@@ -473,7 +496,7 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
    if (cell.type === 'ghost') {
       const gday = cell.data!;
       const gColorMetric = pnlFormat === 'rr' ? calculateTotalRR(gday.trades.filter(t => t.executionStatus !== 'Missed')) : gday.pnl;
-      const gIsPositive = gColorMetric >= 0;
+      const gIsPositive = gColorMetric !== null && gColorMetric >= 0;
       const gPnlCompact = gday.hasTrades ? formatPnLCompact(gday.pnl, pnlFormat, gday.trades, initialBalance) : null;
       return (
          <div
@@ -486,7 +509,7 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
             </div>
             <div className="flex-1 flex items-center justify-center py-0.5">
                {gPnlCompact && (
-                  <span className={`font-semibold text-[10px] md:text-[13px] tracking-tight leading-none text-center ${gIsPositive ? 'text-emerald-500/50' : 'text-rose-500/50'}`}>
+                  <span className={`font-semibold text-[10px] md:text-[13px] tracking-tight leading-none text-center ${gColorMetric === null || !Number.isFinite(gColorMetric) ? 'text-slate-400' : gIsPositive ? 'text-emerald-500/50' : 'text-rose-500/50'}`}>
                      {gPnlCompact}
                   </span>
                )}
@@ -497,17 +520,17 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
    const day = cell.data!;
    // V RR módu rozhoduj barvu podle součtu RR (ne USD) — mohou se rozcházet znaménkem
    const dayColorMetric = pnlFormat === 'rr' ? calculateTotalRR(day.trades.filter(t => t.executionStatus !== 'Missed')) : day.pnl;
-   const dayIsPositive = dayColorMetric >= 0;
-   const intensity = day.hasTrades ? Math.max(0.15, Math.min(1, Math.abs(day.pnl) / maxPnL)) : 0;
+   const dayIsPositive = dayColorMetric !== null && dayColorMetric >= 0;
+   const intensity = day.hasTrades && dayColorMetric !== null && Number.isFinite(dayColorMetric) && Number.isFinite(day.pnl) ? Math.max(0.15, Math.min(1, Math.abs(day.pnl) / maxPnL)) : 0;
    let bgStyle = {};
    let borderClass = theme !== 'light' ? 'border-white/5' : 'border-slate-100';
-   if (day.hasTrades) {
+   if (day.hasTrades && dayColorMetric !== null && Number.isFinite(dayColorMetric) && Number.isFinite(day.pnl)) {
       const color = dayIsPositive ? '16, 185, 129' : '244, 63, 94';
       bgStyle = { backgroundColor: `rgba(${color}, ${intensity})` };
       borderClass = dayIsPositive ? 'border-emerald-500/30' : 'border-rose-500/30';
    }
    const pnlCompact = day.hasTrades ? formatPnLCompact(day.pnl, pnlFormat, day.trades, initialBalance) : null;
-   const textColor = intensity > 0.6 ? 'text-white' : (dayIsPositive ? 'text-emerald-400' : 'text-rose-400');
+   const textColor = dayColorMetric === null || !Number.isFinite(dayColorMetric) ? 'text-slate-400' : intensity > 0.6 ? 'text-white' : (dayIsPositive ? 'text-emerald-400' : 'text-rose-400');
    return (
       <div onClick={() => onDayClick(day)} className={`rounded-lg p-1 md:p-3 flex flex-col cursor-pointer border relative overflow-hidden transition-all active:scale-95 md:hover:ring-2 md:hover:ring-slate-500/30 ${borderClass} ${theme === 'oled' ? 'bg-black shadow-none' : theme === 'dark' ? 'bg-white/5' : 'bg-white shadow-sm'}`} style={bgStyle}>
          {/* Day number */}
@@ -534,8 +557,8 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
    );
 };
 
-const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: PnLDisplayMode; initialBalance: number; currency: any, rates: any, onAnalyzeWithAI?: (prompt: string) => void }> = ({ week, monthName, theme, onClose, accounts, emotions, pnlFormat = 'usd', initialBalance, currency, rates, onAnalyzeWithAI }) => {
-   const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number, sign: boolean = true) => {
+const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: PnLDisplayMode; initialBalance: number; currency: any, rates: any, onAnalyzeWithAI?: (prompt: string) => void; onOpenTrade?: (trade: Trade) => void }> = ({ week, monthName, theme, onClose, accounts, emotions, pnlFormat = 'usd', initialBalance, currency, rates, onAnalyzeWithAI, onOpenTrade }) => {
+   const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number | null, sign: boolean = true) => {
       return formatPnL(val, mode, bal, rr, sign, currency, rates);
    };
    const isDark = theme !== 'light';
@@ -550,18 +573,20 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
    // --- STATISTICAL INTELLIGENCE ---
    // Statistics should exclude missed
    const realWeekTrades = useMemo(() => allWeekTrades.filter(t => t.executionStatus !== 'Missed'), [allWeekTrades]);
+   const resultsKnown = realWeekTrades.length > 0 && realWeekTrades.every(t => Number.isFinite(t.pnl));
    const wins = realWeekTrades.filter(t => t.pnl > 0).length;
    const losses = realWeekTrades.filter(t => t.pnl < 0).length;
    const validTrades = realWeekTrades.filter(t => t.executionStatus === 'Valid').length;
    const invalidTrades = realWeekTrades.filter(t => t.executionStatus === 'Invalid').length;
 
    // Extremes
-   const sortedByPnL = [...realWeekTrades].sort((a, b) => b.pnl - a.pnl);
+   const sortedByPnL = (!resultsKnown || pnlFormat === 'rr' && calculateTotalRR(realWeekTrades) === null ? [] : [...realWeekTrades])
+      .sort((a, b) => pnlFormat === 'rr' ? tradeRMultiple(b)! - tradeRMultiple(a)! : b.pnl - a.pnl);
    const maxWin = sortedByPnL[0]?.pnl > 0 ? sortedByPnL[0] : null;
    const maxLoss = sortedByPnL[sortedByPnL.length - 1]?.pnl < 0 ? sortedByPnL[sortedByPnL.length - 1] : null;
 
    // Best/Worst Day (already excludes missed in hasTrades)
-   const daysWithTrades = week.days.filter(d => d.hasTrades).sort((a, b) => b.pnl - a.pnl);
+   const daysWithTrades = (resultsKnown ? week.days : []).filter(d => d.hasTrades).sort((a, b) => b.pnl - a.pnl);
    const bestDay = daysWithTrades[0];
    const worstDay = daysWithTrades[daysWithTrades.length - 1];
 
@@ -628,7 +653,7 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                      )}
                      <div className="text-right">
                         <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Net Result</p>
-                        <p className={`text-3xl font-black font-mono leading-none ${week.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                        <p className={`text-3xl font-black font-mono leading-none ${resultTextColor(week.pnl, pnlFormat, allWeekTrades)}`}>
                            {formatPnL(
                               week.pnl,
                               pnlFormat,
@@ -664,10 +689,10 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                               </div>
                            </div>
                         </div>
-                        <StatCard icon={<TrendingUp size={16} />} label="Wins" value={wins} color="text-emerald-500" subValue={`${week.tradeCount > 0 ? ((wins / week.tradeCount) * 100).toFixed(0) : 0}% Rate`} subColor="text-emerald-500/60" />
-                        <StatCard icon={<TrendingDown size={16} />} label="Losses" value={losses} color="text-rose-500" subValue={`${week.tradeCount > 0 ? ((losses / week.tradeCount) * 100).toFixed(0) : 0}% Rate`} subColor="text-rose-500/60" />
-                        <StatCard icon={<Trophy size={16} />} label="Max Win" value={maxWin ? formatPnL(maxWin.pnl, pnlFormat, accounts.length > 0 ? accounts.find(a => a.id === maxWin.accountId)?.initialBalance : 0, maxWin.riskAmount ? maxWin.pnl / maxWin.riskAmount : undefined) : '-'} color="text-emerald-400" subValue={maxWin?.instrument} />
-                        <StatCard icon={<Trophy size={16} />} label="Max Loss" value={maxLoss ? formatPnL(maxLoss.pnl, pnlFormat, accounts.length > 0 ? accounts.find(a => a.id === maxLoss.accountId)?.initialBalance : 0, maxLoss.riskAmount ? maxLoss.pnl / maxLoss.riskAmount : undefined) : '-'} color="text-rose-400" subValue={maxLoss?.instrument} />
+                        <StatCard icon={<TrendingUp size={16} />} label="Wins" value={resultsKnown ? wins : '—'} color="text-emerald-500" subValue={resultsKnown ? `${((wins / week.tradeCount) * 100).toFixed(0)}% Rate` : '—'} subColor="text-emerald-500/60" />
+                        <StatCard icon={<TrendingDown size={16} />} label="Losses" value={resultsKnown ? losses : '—'} color="text-rose-500" subValue={resultsKnown ? `${((losses / week.tradeCount) * 100).toFixed(0)}% Rate` : '—'} subColor="text-rose-500/60" />
+                        <StatCard icon={<Trophy size={16} />} label="Max Win" value={maxWin ? formatTradePnL(maxWin, pnlFormat, accounts.find(a => a.id === maxWin.accountId)?.initialBalance, tradeRMultiple(maxWin), true, currency, rates) : '-'} color="text-emerald-400" subValue={maxWin?.instrument} />
+                        <StatCard icon={<Trophy size={16} />} label="Max Loss" value={maxLoss ? formatTradePnL(maxLoss, pnlFormat, accounts.find(a => a.id === maxLoss.accountId)?.initialBalance, tradeRMultiple(maxLoss), true, currency, rates) : '-'} color="text-rose-400" subValue={maxLoss?.instrument} />
                      </div>
                   </div>
 
@@ -682,7 +707,7 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                               {week.days.map((day) => (
                                  <div key={day.dateStr} className={`p-4 rounded-2xl border flex items-center justify-between transition-all hover:scale-[1.01] ${isDark ? 'bg-theme-card border-white/5' : 'bg-white border-slate-200 shadow-sm'}`}>
                                     <div className="flex items-center gap-4">
-                                       <div className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center border font-black ${day.hasTrades ? (day.pnl >= 0 ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-rose-500/10 border-rose-500/20 text-rose-500') : (isDark ? 'bg-slate-800 border-slate-700 text-slate-500' : 'bg-slate-100 border-slate-200 text-slate-400')}`}>
+                                       <div className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center border font-black ${day.hasTrades && Number.isFinite(day.pnl) && (pnlFormat !== 'rr' || calculateTotalRR(day.trades) !== null) ? ((pnlFormat === 'rr' ? calculateTotalRR(day.trades)! : day.pnl) >= 0 ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-rose-500/10 border-rose-500/20 text-rose-500') : (isDark ? 'bg-slate-800 border-slate-700 text-slate-500' : 'bg-slate-100 border-slate-200 text-slate-400')}`}>
                                           <span className="text-[10px] uppercase leading-none">{day.dateObj.toLocaleString('cs-CZ', { weekday: 'short' })}</span>
                                           <span className="text-xs leading-none mt-0.5">{day.dayNum}</span>
                                        </div>
@@ -691,7 +716,7 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                                           <p className="text-[10px] text-slate-500 truncate max-w-[200px] italic">{day.review?.mainTakeaway || (day.prep?.goals[0] ? `Goal: ${day.prep.goals[0]}` : "No notes")}</p>
                                        </div>
                                     </div>
-                                    <div className="text-right"><span className={`text-lg font-black font-mono ${day.hasTrades ? (day.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500') : 'text-slate-500'}`}>
+                                    <div className="text-right"><span className={`text-lg font-black font-mono ${day.hasTrades ? resultTextColor(day.pnl, pnlFormat, day.trades) : 'text-slate-500'}`}>
                                        {day.hasTrades ? formatPnL(day.pnl, pnlFormat, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(day.trades) : undefined) : ''}
                                     </span></div>
                                  </div>
@@ -700,18 +725,18 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                         ) : (
                            <div className="space-y-2">
                               {allWeekTrades.length > 0 ? allWeekTrades.map((trade) => (
-                                 <div key={trade.id} onClick={() => setSelectedTrade(trade)} className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all hover:scale-[1.01] hover:border-blue-500/30 ${isDark ? 'bg-theme-card border-white/5' : 'bg-white border-slate-200'} ${trade.executionStatus === 'Missed' ? 'opacity-60' : ''}`}>
+                                 <button type="button" aria-label={`Otevřít obchod ${calendarAccountName(trade, accounts)} · ${trade.instrument}`} key={trade.id} onClick={() => onOpenTrade ? onOpenTrade(trade) : setSelectedTrade(trade)} className={`w-full text-left p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all hover:scale-[1.01] hover:border-blue-500/30 ${isDark ? 'bg-theme-card border-white/5' : 'bg-white border-slate-200'} ${trade.executionStatus === 'Missed' ? 'opacity-60' : ''}`}>
                                     <div className="flex items-center gap-3">
                                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center border ${trade.executionStatus === 'Missed' ? 'bg-blue-500/10 border-blue-500/20 text-blue-400' : (trade.pnl >= 0 ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-rose-500/10 border-rose-500/20 text-rose-500')}`}>{trade.executionStatus === 'Missed' ? <Clock size={16} /> : (trade.direction === 'Long' ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />)}</div>
                                        <div>
-                                          <div className="flex items-center gap-2"><span className="text-xs font-black uppercase">{trade.instrument}</span><span className="text-[9px] font-mono text-slate-500">{new Date(trade.timestamp).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })}</span></div>
+                                          <div className="flex items-center gap-2"><span className="text-xs font-black uppercase">{trade.instrument}</span><span className="text-[9px] font-mono text-slate-500">{new Date(trade.timestamp).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })}</span></div><p className="text-[9px] text-slate-500">{calendarAccountName(trade, accounts)}</p>
                                           <div className="flex gap-1 mt-0.5">{trade.executionStatus === 'Missed' && <span className="text-[8px] bg-blue-500/20 text-blue-400 px-1.5 rounded uppercase font-bold">Missed</span>}{trade.mistakes && trade.mistakes.length > 0 && <span className="text-[8px] bg-rose-500/20 text-rose-500 px-1.5 rounded uppercase font-bold">Mistake</span>}</div>
                                        </div>
                                     </div>
-                                    <div className="text-right"><span className={`text-sm font-black font-mono ${trade.executionStatus === 'Missed' ? 'text-blue-400' : (trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500')}`}>
-                                       {trade.executionStatus === 'Missed' ? '±' : formatPnL(trade.pnl, pnlFormat, accounts.length > 0 ? accounts.find(a => a.id === trade.accountId)?.initialBalance : 0, trade.riskAmount ? trade.pnl / trade.riskAmount : undefined)}
+                                    <div className="text-right"><span className={`text-sm font-black font-mono ${trade.executionStatus === 'Missed' ? 'text-blue-400' : resultTextColor(trade.pnl, pnlFormat, [trade])}`}>
+                                       {trade.executionStatus === 'Missed' ? '±' : formatTradePnL(trade, pnlFormat, accounts.find(a => a.id === trade.accountId)?.initialBalance, tradeRMultiple(trade), true, currency, rates)}
                                     </span></div>
-                                 </div>
+                                 </button>
                               )) : <div className="text-center py-10 opacity-30"><p className="text-[10px] font-black uppercase">No trades this week</p></div>}
                            </div>
                         )}
@@ -725,8 +750,8 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
    );
 };
 
-const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: PnLDisplayMode; initialBalance: number; currency: any, rates: any, onAnalyzeWithAI?: (prompt: string) => void }> = ({ day, theme, onClose, accounts, emotions, pnlFormat = 'usd', initialBalance, currency, rates, onAnalyzeWithAI }) => {
-   const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number, sign: boolean = true) => {
+const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled'; onClose: () => void; accounts: Account[]; emotions: CustomEmotion[]; pnlFormat?: PnLDisplayMode; initialBalance: number; currency: any, rates: any, onAnalyzeWithAI?: (prompt: string) => void; onOpenTrade?: (trade: Trade) => void }> = ({ day, theme, onClose, accounts, emotions, pnlFormat = 'usd', initialBalance, currency, rates, onAnalyzeWithAI, onOpenTrade }) => {
+   const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number | null, sign: boolean = true) => {
       return formatPnL(val, mode, bal, rr, sign, currency, rates);
    };
    const { dateObj, pnl, trades, prep, review, dominantEmotion, hasTrades } = day;
@@ -752,7 +777,7 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
             <div className={`w-full max-w-7xl h-[85vh] rounded-[32px] overflow-hidden shadow-2xl flex flex-col border ${isDark ? 'bg-theme-card border-white/10' : 'bg-white border-slate-200'}`}>
                <div className={`h-20 shrink-0 border-b flex items-center justify-between px-8 ${isDark ? 'border-white/5 bg-theme-card' : 'bg-white border-slate-100'}`}>
                   <div className="flex items-center gap-4">
-                     <div className={`p-2.5 rounded-xl text-white shadow-lg ${hasTrades ? (pnl >= 0 ? 'bg-emerald-500 shadow-emerald-500/20' : 'bg-rose-500 shadow-rose-500/20') : 'bg-slate-700'}`}>
+                     <div className={`p-2.5 rounded-xl text-white shadow-lg ${hasTrades && Number.isFinite(pnl) && (pnlFormat !== 'rr' || calculateTotalRR(trades) !== null) ? ((pnlFormat === 'rr' ? calculateTotalRR(trades)! : pnl) >= 0 ? 'bg-emerald-500 shadow-emerald-500/20' : 'bg-rose-500 shadow-rose-500/20') : 'bg-slate-700'}`}>
                         <Activity size={20} />
                      </div>
                      <div>
@@ -777,7 +802,7 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                      )}
                      <div className="text-right">
                         <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Daily PnL</p>
-                        <p className={`text-3xl font-black font-mono leading-none ${hasTrades ? (pnl >= 0 ? 'text-emerald-500' : 'text-rose-500') : 'text-slate-500'}`}>
+                        <p className={`text-3xl font-black font-mono leading-none ${hasTrades ? resultTextColor(pnl, pnlFormat, trades) : 'text-slate-500'}`}>
                            {hasTrades ? formatVal(day.pnl, pnlFormat, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(day.trades) : undefined) : ''}
                         </p>
                      </div>
@@ -789,7 +814,7 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                   <div className={`w-full lg:w-[35%] flex flex-col border-r ${isDark ? 'bg-[#0F172A]/50 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
                      <div className={`grid grid-cols-2 border-b ${isDark ? 'border-white/5' : 'border-slate-200'}`}>
                         <div className={`p-4 border-r text-center ${isDark ? 'border-white/5' : 'border-slate-200'}`}><p className="text-[9px] font-black uppercase text-slate-500 mb-1">Trades</p><p className="text-xl font-black">{realDayTrades.length}</p></div>
-                        <div className="p-4 text-center"><p className="text-[9px] font-black uppercase text-slate-500 mb-1">Win Rate</p><p className="text-xl font-black text-blue-500">{realDayTrades.length > 0 ? ((realDayTrades.filter(t => t.pnl > 0).length / realDayTrades.length) * 100).toFixed(0) : 0}%</p></div>
+                        <div className="p-4 text-center"><p className="text-[9px] font-black uppercase text-slate-500 mb-1">Win Rate</p><p className="text-xl font-black text-blue-500">{realDayTrades.length > 0 && realDayTrades.every(t => Number.isFinite(t.pnl)) ? `${((realDayTrades.filter(t => t.pnl > 0).length / realDayTrades.length) * 100).toFixed(0)}%` : '—'}</p></div>
                      </div>
                      <div className={`flex p-1 border-b ${isDark ? 'border-white/5 bg-slate-900/50' : 'border-slate-200 bg-slate-100'}`}>
                         <button onClick={() => setActiveTab('narrative')} className={`flex-1 py-2 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all ${activeTab === 'narrative' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Context Feed</button>
@@ -850,14 +875,14 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                            })()}{!prep && !review && <div className="text-center opacity-30 mt-10"><FileText size={32} className="mx-auto mb-2" /><p className="text-[10px] uppercase font-black">No Data</p></div>}</>
                         ) : (
                            <div className="space-y-2">
-                              {trades.map((t, i) => (
-                                 <div key={i} onClick={() => setSelectedTrade(t)} className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all hover:scale-[1.02] ${isDark ? 'bg-white/5 border-white/5 hover:bg-white/10' : 'bg-white border-slate-100 hover:shadow-md'} ${t.executionStatus === 'Missed' ? 'opacity-60' : ''}`}>
+                              {trades.map((t) => (
+                                 <button type="button" aria-label={`Otevřít obchod ${calendarAccountName(t, accounts)} · ${t.instrument}`} key={t.id} onClick={() => onOpenTrade ? onOpenTrade(t) : setSelectedTrade(t)} className={`w-full text-left p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all hover:scale-[1.02] ${isDark ? 'bg-white/5 border-white/5 hover:bg-white/10' : 'bg-white border-slate-100 hover:shadow-md'} ${t.executionStatus === 'Missed' ? 'opacity-60' : ''}`}>
                                     <div className="flex items-center gap-3">
                                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${t.executionStatus === 'Missed' ? 'bg-blue-500/20 text-blue-400' : (t.direction === 'Long' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-rose-500/20 text-rose-500')}`}>{t.executionStatus === 'Missed' ? 'MISSED' : t.direction}</span>
-                                       <div><p className="text-[10px] font-black uppercase">{t.instrument}</p><p className="text-[9px] text-slate-500 font-mono">{t.duration}</p></div>
+                                       <div><p className="text-[10px] font-black uppercase">{t.instrument}</p><p className="text-[9px] text-slate-500">{calendarAccountName(t, accounts)}</p><p className="text-[9px] text-slate-500 font-mono">{t.duration}</p></div>
                                     </div>
-                                    <div className="flex items-center gap-3"><span className={`text-sm font-black font-mono ${t.executionStatus === 'Missed' ? 'text-blue-400' : (t.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500')}`}>{t.executionStatus === 'Missed' ? '±' : formatVal(t.pnl, pnlFormat, accounts.length > 0 ? accounts.find(a => a.id === t.accountId)?.initialBalance : 0, t.riskAmount ? t.pnl / t.riskAmount : undefined)}</span><ArrowRight size={12} className="text-slate-600" /></div>
-                                 </div>
+                                    <div className="flex items-center gap-3"><span className={`text-sm font-black font-mono ${t.executionStatus === 'Missed' ? 'text-blue-400' : resultTextColor(t.pnl, pnlFormat, [t])}`}>{t.executionStatus === 'Missed' ? '±' : formatTradePnL(t, pnlFormat, accounts.find(a => a.id === t.accountId)?.initialBalance, tradeRMultiple(t), true, currency, rates)}</span><ArrowRight size={12} className="text-slate-600" /></div>
+                                 </button>
                               ))}
                            </div>
                         )}
@@ -877,7 +902,7 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
 };
 
 const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'oled', onClose: () => void, accounts: Account[], emotions: CustomEmotion[], pnlFormat: PnLDisplayMode, currency: any, rates: any }> = ({ trade, theme, onClose, accounts, emotions, pnlFormat, currency, rates }) => {
-   const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number, sign: boolean = true) => {
+   const formatVal = (val: number, mode: PnLDisplayMode = pnlFormat, bal?: number, rr?: number | null, sign: boolean = true) => {
       return formatPnL(val, mode, bal, rr, sign, currency, rates);
    };
    const isDark = theme !== 'light';
@@ -893,12 +918,12 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
    const stopLoss = parseFloat(String(trade.stopLoss || 0));
    const takeProfit = parseFloat(String(trade.takeProfit || 0));
    const riskAmount = parseFloat(String(trade.riskAmount || 0));
-   const realRRR = (riskAmount !== 0 && riskAmount !== undefined) ? (Math.abs(trade.pnl) / riskAmount).toFixed(2) : 'N/A';
+   const riskMultiple = tradeRMultiple(trade);
+   const realRRR = riskMultiple === null ? '—' : formatRMultiple(riskMultiple);
    const holdTime = trade.duration || (Math.round(trade.durationMinutes || 0) + 'm');
-   const isWin = trade.pnl >= 0;
 
    const isMissed = trade.executionStatus === 'Missed';
-   const pnlColor = isMissed ? 'text-blue-400' : (isWin ? 'text-emerald-500' : 'text-rose-500');
+   const pnlColor = isMissed ? 'text-blue-400' : resultTextColor(trade.pnl, pnlFormat, [trade]);
    const directionColor = isMissed ? 'text-blue-400 bg-blue-500/10 border-blue-500/20' : (trade.direction === 'Long' ? 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20' : 'text-orange-500 bg-orange-500/10 border-orange-500/20');
 
    const MetricCell = ({ label, value, color = 'text-white' }: { label: string, value: string | number, color?: string }) => (
@@ -922,7 +947,7 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
                      <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{new Date(trade.date).toLocaleString('cs-CZ')}</p>
                   </div>
                </div>
-               <div className={`text-3xl font-black font-mono tracking-tighter ${pnlColor}`}>{isMissed ? '±' : formatVal(trade.pnl, pnlFormat, accounts.length > 0 ? accounts.find(a => a.id === trade.accountId)?.initialBalance : 0, trade.riskAmount ? trade.pnl / trade.riskAmount : undefined)}</div>
+               <div className={`text-3xl font-black font-mono tracking-tighter ${pnlColor}`}>{isMissed ? '±' : formatTradePnL(trade, pnlFormat, accounts.find(a => a.id === trade.accountId)?.initialBalance, tradeRMultiple(trade), true, currency, rates)}</div>
                <button onClick={onClose} className="p-2.5 hover:bg-white/10 rounded-full transition-all text-slate-500 hover:text-white"><X size={20} /></button>
             </div>
 
@@ -935,8 +960,8 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
                      <MetricCell label="Take Profit" value={takeProfit || '-'} color="text-emerald-500" />
                      <MetricCell label="Size" value={trade.positionSize || 1} />
                      <MetricCell label="Duration" value={holdTime} color="text-blue-400" />
-                     <MetricCell label="Risk" value={formatVal(riskAmount, 'usd')} color="text-slate-400" />
-                     <MetricCell label="Realized RR" value={`${realRRR}R`} color={parseFloat(realRRR) > 1 ? 'text-emerald-500' : 'text-slate-400'} />
+                     <MetricCell label="Risk" value={riskMultiple === null ? '—' : formatVal(riskAmount, 'usd')} color="text-slate-400" />
+                     <MetricCell label="Realized RR" value={riskMultiple === null ? '—' : `${realRRR}R`} color={parseFloat(realRRR) > 1 ? 'text-emerald-500' : 'text-slate-400'} />
                   </div>
                   <div className="p-6 space-y-6">
                      <div className="space-y-3">
@@ -988,6 +1013,6 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
    );
 };
 
-interface SingleMonthViewProps { year: number; month: number; trades: Trade[]; allTrades: Trade[]; preps: DailyPrep[]; reviews: DailyReview[]; theme: 'dark' | 'light' | 'oled'; onPrev: () => void; onNext: () => void; canPrev: boolean; canNext: boolean; onDayClick: (day: DayData) => void; onWeekClick: (week: WeekData) => void; pnlFormat?: PnLDisplayMode; accounts: Account[]; initialBalance: number; }
+interface SingleMonthViewProps { resultsHidden?: boolean; year: number; month: number; trades: Trade[]; allTrades: Trade[]; preps: DailyPrep[]; reviews: DailyReview[]; theme: 'dark' | 'light' | 'oled'; onPrev: () => void; onNext: () => void; canPrev: boolean; canNext: boolean; onDayClick: (day: DayData) => void; onWeekClick: (week: WeekData) => void; pnlFormat?: PnLDisplayMode; accounts: Account[]; initialBalance: number; }
 
 export default DashboardCalendar;

@@ -22,7 +22,7 @@ const memoryStore = () => {
 };
 
 describe('copier journal sync', () => {
-  it('založí master a kopie podle závazné konvence včetně multiplier matematiky', async () => {
+  it('založí jen doložený master a nevytvoří obchody podle konfigurace followerů', async () => {
     const stored: Trade[] = [];
     const saveTrades = vi.fn(async (trades: Trade[]) => {
       const saved = trades.map((trade, index) => ({
@@ -48,8 +48,9 @@ describe('copier journal sync', () => {
       deps,
     });
 
-    expect(first.created).toHaveLength(3);
-    expect(saveTrades).toHaveBeenCalledTimes(2);
+    expect(first.created).toHaveLength(1);
+    expect(first.skippedFollowers).toBe(2);
+    expect(saveTrades).toHaveBeenCalledTimes(1);
     expect(saveTrades.mock.calls[0][0][0]).toMatchObject({
       id: 'copier-fill-42', copierTradeId: 'copier-fill-42', accountId: account().id,
       instrument: 'MNQ', direction: 'Long', pnl: 125, positionSize: 2,
@@ -57,23 +58,7 @@ describe('copier journal sync', () => {
       source: 'copier', signal: 'Copier', groupId: 'copier-group-fill-42', isMaster: true,
     });
     expect(saveTrades.mock.calls[0][0][0]).not.toHaveProperty('masterTradeId');
-    expect(saveTrades.mock.calls[1][0]).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: 'copier-fill-42-200', copierTradeId: 'copier-fill-42-200',
-        accountId: accounts[1].id, groupId: 'copier-group-fill-42',
-        masterTradeId: '22222222-2222-4222-8222-222222222222',
-        positionSize: 3, pnl: 200, pnlEstimated: true,
-        entryPrice: 21_000, exitPrice: 21_062.5, exitReason: 'tp',
-        source: 'copier', signal: 'Copier',
-      }),
-      expect.objectContaining({
-        id: 'copier-fill-42-300', positionSize: 1, pnl: 25, pnlEstimated: true,
-      }),
-    ]));
-    for (const copy of saveTrades.mock.calls[1][0]) {
-      expect(copy).not.toHaveProperty('isMaster');
-      expect(copy).not.toHaveProperty('needsReview');
-    }
+    expect(first.created.every(trade => trade.pnlEstimated !== true)).toBe(true);
   });
 
   it('přilepí snapshoty stejné episode pouze k novému masteru', async () => {
@@ -104,7 +89,7 @@ describe('copier journal sync', () => {
       kind: 'entry', at: Date.parse('2026-08-22T10:00:00.000Z'),
       path: `u1/${episodeRow.episode_id}/entry-1.png`,
     }]);
-    expect(saveTrades.mock.calls[1][0][0].copierSnapshots).toBeUndefined();
+    expect(saveTrades).toHaveBeenCalledTimes(1);
   });
 
   it('doplní pozdě nahraný snapshot k existujícímu masteru bez duplikace obchodu', async () => {
@@ -179,7 +164,7 @@ describe('copier journal sync', () => {
     await syncCopierJournal(options);
     const second = await syncCopierJournal(options);
 
-    expect(saveTrades).toHaveBeenCalledTimes(2);
+    expect(saveTrades).toHaveBeenCalledTimes(1);
     expect(second.created).toEqual([]);
   });
 
@@ -209,7 +194,7 @@ describe('copier journal sync', () => {
     expect(saveTrades).toHaveBeenCalledTimes(1);
   });
 
-  it('healing doplní pouze groupId/isMaster a chybějící kopii, reflexi nechá beze změny', async () => {
+  it('healing doplní pouze metadata mastera a zachová reflexi; žádnou kopii nevymýšlí', async () => {
     const legacy: Trade = {
       id: '22222222-2222-4222-8222-222222222222', copierTradeId: 'copier-fill-42',
       accountId: account().id, source: 'copier', signal: 'Copier', instrument: 'MNQ',
@@ -241,10 +226,8 @@ describe('copier journal sync', () => {
     });
     expect(stored[0]).toMatchObject({ notes: 'Moje reflexe', emotions: ['Klid'], runUp: 42, drawdown: 7, needsReview: false });
     expect(result.updated[0]).toMatchObject({ groupId: 'copier-group-fill-42', isMaster: true, notes: 'Moje reflexe' });
-    expect(saveTrades).toHaveBeenCalledWith([expect.objectContaining({
-      id: 'copier-fill-42-200', masterTradeId: legacy.id, groupId: 'copier-group-fill-42',
-      positionSize: 4, pnl: 250, pnlEstimated: true,
-    })]);
+    expect(saveTrades).not.toHaveBeenCalled();
+    expect(result.created).toEqual([]);
   });
 
   it('po explicitním výběru použije zvolený účet a volbu si zapamatuje', async () => {

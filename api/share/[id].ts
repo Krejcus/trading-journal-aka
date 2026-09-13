@@ -64,13 +64,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let image = `${origin}/logos/at_logo_light_clean.png`;
 
     try {
-        // Fetch trade — RLS dovolí jen `is_public = true` pro anon role
-        const { data: trade, error } = await supabase
-            .from('trades')
-            .select('id, instrument, direction, pnl, data, date, is_public')
-            .eq('id', id)
-            .eq('is_public', true)
-            .maybeSingle();
+        // The public RPC checks is_public, current financial evidence and the
+        // explicit note-sharing choice. Anonymous clients cannot read evidence.
+        const { data: trade, error } = await supabase.rpc('get_public_trade', { p_id: id });
 
         if (!error && trade) {
             const pnl = Number(trade.pnl || 0);
