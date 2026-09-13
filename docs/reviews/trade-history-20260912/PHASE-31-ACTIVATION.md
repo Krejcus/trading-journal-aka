@@ -32,3 +32,7 @@ Uživatel výslovně schválil aktivační plán v `ACTIVATION-REVIEW.md`. Samos
 - LIVE dále ukazuje dřívější CDP nedostupnost snímků a 4 účty bez dokončeného plánu. Tyto konfigurace se neměnily.
 - Weekly reporty existují: 9 řádků, poslední 6. 9. 2026 17:01 UTC. Stávající kód je ukládá do weekly_reports a AI paměti; služba coachTools je čte pro Coach. Automatické e-mailové/push doručení nebylo nalezeno ani přidáno.
 
+
+## Sjednocení main
+
+Po dalším konkrétním schválení uživatele byl 26efeada pushnut na main; vzdálený ref ověřen přes ls-remote. Git integrace spustila dpl_FkFpAuHvKusKcpCums1fCNfpspa1 se stejným aplikačním commitem. Navazující verze potvrzena READY, hlavní alias i git-main alias patří tomuto deploymentu.
