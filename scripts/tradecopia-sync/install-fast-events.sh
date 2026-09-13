@@ -1,4 +1,6 @@
 #!/bin/bash
+echo 'Tradecopia integration retired; installer disabled.' >&2
+exit 1
 # Installs the low-latency TradeCopia event collector as a persistent launchd job.
 
 set -euo pipefail

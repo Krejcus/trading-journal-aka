@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+throw new Error('Tradecopia integration retired; use AlphaTrade Tradovate connection.');
 // Tradecopia → AlphaTrade sync agent.
 //
 // Čte read-only lokální SQLite Tradecopia desktopu (report_performance_history =

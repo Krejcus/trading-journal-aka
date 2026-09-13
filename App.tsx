@@ -10,7 +10,7 @@ import { collectBacktestTagSuggestions } from './services/backtestTagCatalog';
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { normalizeTrades, calculateStats } from './services/analysis';
+import { calculateStats } from './services/analysis';
 import { buildLabDataset, detectLeaks, prepBiasFromPreps, prepDaysFromPreps, type LeakFinding } from './services/labAnalytics';
 import { tradeNeedsEnrichment } from './services/tradovateImport';
 import { storageService, getUserId } from './services/storageService';
@@ -60,12 +60,12 @@ const NetworkHub = React.lazy(() => import('./components/NetworkHub'));
 const loadLiveDesk = () => import('./components/TradovateLiveDesk');
 const LiveDesk = React.lazy(loadLiveDesk);
 const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
-const FileUpload = React.lazy(() => import('./components/FileUpload'));
+
 const AICoachPage = React.lazy(() => import('./components/AICoachPage'));
 const InsightsPanel = React.lazy(() => import('./components/InsightsPanel'));
 const LabPage = React.lazy(() => import('./components/LabPage'));
-const TradovateImportModal = React.lazy(() => import('./components/TradovateImportModal'));
-const TradesyncerImportModal = React.lazy(() => import('./components/TradesyncerImportModal'));
+
+
 
 
 import Sidebar from './components/Sidebar';
@@ -693,8 +693,8 @@ const App: React.FC = () => {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [activeAccountId, setActiveAccountId] = useState<string>('');
   // Tradovate import modal
-  const [tradovateImportOpen, setTradovateImportOpen] = useState(false);
-  const [tradesyncerImportOpen, setTradesyncerImportOpen] = useState(false);
+
+
   // Toast „nový obchod přidán" — spustí se z Realtime INSERTu (obchod z AlphaBridge dorazil do appky).
   const [tradeToast, setTradeToast] = useState<{ id: number; instrument: string; pnl: number; accountId: string } | null>(null);
   useEffect(() => {
@@ -702,7 +702,7 @@ const App: React.FC = () => {
     const t = setTimeout(() => setTradeToast(cur => (cur && cur.id === tradeToast.id ? null : cur)), 4500);
     return () => clearTimeout(t);
   }, [tradeToast]);
-  const [tradovateImportAccount, setTradovateImportAccount] = useState<string | undefined>(undefined);
+
   // Průvodce doplněním importovaných obchodů — inkrement spustí wizard v TradeHistory.
   const [enrichSignal, setEnrichSignal] = useState(0);
   const [copierImportReport, setCopierImportReport] = useState<JournalSyncReport | null>(null);
@@ -1744,7 +1744,7 @@ const App: React.FC = () => {
     const isCurrentSession = captureSessionRequest(sessionRef.current?.user.id ?? '');
     if (!isCurrentSession()) return;
     isApplyingPrefsRef.current = true;
-    
+
     // DIAGNOSTIC: track what fields are present in incoming prefs
     console.log('[applyPreferences] called with dirty=', isPreferencesDirty.current, 'fields:', {
       sessions: prefs.sessions?.length,
@@ -1848,7 +1848,7 @@ const App: React.FC = () => {
     // Mark prefs as applied — autosave se teď může spustit, nehrozí přepsání DB
     // defaulty z useState (HTF/LTF, sessions, emotions, …).
     prefsAppliedRef.current = true;
-    
+
     // Zámek uvolníme až po dokončení re-renderů a inicializace v Reactu (zabraňuje samovolnému znečištění refs)
     setTimeout(() => {
       if (isCurrentSession()) isApplyingPrefsRef.current = false;
@@ -2979,10 +2979,10 @@ const App: React.FC = () => {
 
       } else if (dashboardMode === 'challenge') {
         // IMPORTANT: Show all Prop accounts (Funded type), even if they are now in 'Funded' phase,
-        // because we want to see the whole journey? 
+        // because we want to see the whole journey?
         // OR filtering by 'Challenge' phase only?
         // User request: "kdyz zaskrtnu ze chci pouze funded" -> He implies "Funded ONLY".
-        // "Challenge" usually implies active challenges. 
+        // "Challenge" usually implies active challenges.
         // Let's stick to phase 'Challenge'.
         const challengeIds = accounts
           .filter(a => a.status === 'Active' && a.type === 'Funded' && a.phase === 'Challenge')
@@ -3349,129 +3349,6 @@ const App: React.FC = () => {
       console.error("Failed to save profile", err);
       setSyncError("Nepodařilo se uložit profil.");
     }
-  };
-
-  const handleFileUpload = (data: any[]) => {
-    const activeAccount = accounts.find(a => a.id === activeAccountId);
-    const normalized = normalizeTrades(data, activeAccountId).map(t => ({
-      ...t,
-      phase: activeAccount?.phase || 'Challenge'
-    }));
-    // Jen skutečně NOVÉ obchody (dedup proti tomu, co už máme v paměti).
-    const newTrades = normalized.filter(nt =>
-      !trades.some(t => t.id === nt.id && t.accountId === activeAccountId)
-    );
-    if (newTrades.length === 0) return;
-
-    // Optimistic UI — přidej nové k existujícím.
-    setTrades(prev => [...prev, ...newTrades]);
-
-    // CRITICAL: ulož JEN nové obchody, ne celé pole. Dřív se posílal [...trades, ...new] →
-    // saveTrades re-fetchnul a re-upsertnul VŠECHNY existující řádky (write amplification).
-    // saveTrades existující v DB nechá být; tady jen zreconcilujeme optimistické nové
-    // (temp ID) za uložené verze (reálná UUID z DB), zbytek stavu se nedotkneme.
-    const optimisticIds = new Set(newTrades.map(t => t.id));
-    storageService.saveTrades(newTrades).then(saved => {
-      if (saved && saved.length > 0) {
-        setTrades(prev => [...prev.filter(t => !optimisticIds.has(t.id)), ...saved]);
-      }
-    }).catch(err => {
-      console.error("[FileUpload] Failed to save imported trades:", err);
-      setSyncError("Nepodařilo se uložit importované obchody do cloudu.");
-    });
-  };
-
-  // Tradovate import: modal už spáruje fills→obchody a vyřeší dedup,
-  // takže sem chodí jen NOVÉ obchody (s accountId zapečeným) k uložení.
-  // Tradesyncer import: nejdřív vytvoř nové účty (temp id → real DB id), pak ulož obchody.
-  const handleTradesyncerImport = async (newTrades: Trade[], newAccounts: Account[]) => {
-    if (!newTrades || newTrades.length === 0) return;
-    let tradesToSave = newTrades;
-
-    // 1) Vytvoř nové účty a získej mapování temp id → real id (matchuje se přes jméno).
-    if (newAccounts.length > 0) {
-      try {
-        const saved = await storageService.saveAccounts(newAccounts);
-        const nameToReal = new Map(saved.map(a => [a.name, a.id]));
-        const tempToReal = new Map<string, string>();
-        for (const na of newAccounts) {
-          const real = nameToReal.get(na.name);
-          if (real) tempToReal.set(na.id, real);
-        }
-        // Přidej nové účty do stavu (s reálnými id) — ať jsou hned vidět.
-        setAccounts(prev => {
-          const have = new Set(prev.map(a => a.id));
-          return [...prev, ...saved.filter(a => !have.has(a.id))];
-        });
-        // Přemapuj accountId na obchodech z temp na real.
-        tradesToSave = newTrades.map(t =>
-          tempToReal.has(String(t.accountId)) ? { ...t, accountId: tempToReal.get(String(t.accountId))! } : t
-        );
-        // Zapamatuj i nově vytvořené účty (accountName je zapečené v temp id) pro příští importy.
-        try {
-          const PREFIX = 'tradesyncer-new-';
-          const saved = JSON.parse(localStorage.getItem('tradesyncer-account-map') || '{}') || {};
-          for (const [temp, real] of tempToReal) {
-            if (temp.startsWith(PREFIX)) saved[temp.slice(PREFIX.length)] = real;
-          }
-          localStorage.setItem('tradesyncer-account-map', JSON.stringify(saved));
-        } catch { /* localStorage nedostupné */ }
-      } catch (err) {
-        console.error('[TradesyncerImport] Vytvoření účtů selhalo:', err);
-        setSyncError('Nepodařilo se vytvořit nové účty pro import.');
-        return;
-      }
-    }
-
-    // 2) Ulož obchody (stejný flow jako Tradovate import).
-    const importedIds = new Set(tradesToSave.map(t => String(t.id)));
-    setTrades(prev => [...prev, ...tradesToSave]);
-    const rollback = () => setTrades(prev => prev.filter(t => !importedIds.has(String(t.id))));
-    try {
-      const savedTrades = await storageService.saveTrades(tradesToSave);
-      if (savedTrades && savedTrades.length > 0) {
-        setTrades(prev => {
-          const savedIds = new Set(savedTrades.map(s => String(s.id)));
-          const withoutImported = prev.filter(t => !importedIds.has(String(t.id)) && !savedIds.has(String(t.id)));
-          return [...withoutImported, ...savedTrades];
-        });
-      } else {
-        rollback();
-        setSyncError('Nepodařilo se uložit importované obchody do cloudu.');
-      }
-    } catch (err) {
-      console.error('[TradesyncerImport] Uložení obchodů selhalo:', err);
-      rollback();
-      setSyncError('Nepodařilo se uložit importované obchody do cloudu.');
-    }
-  };
-
-  const handleTradovateImport = (newTrades: Trade[]) => {
-    if (!newTrades || newTrades.length === 0) return;
-    const importedIds = new Set(newTrades.map(t => String(t.id)));
-    // Optimisticky přidej, ať uživatel hned vidí výsledek.
-    setTrades(prev => [...prev, ...newTrades]);
-    // Vrátí optimistické přidání zpět (aby v UI nezůstaly obchody s dočasnými id, které v DB nejsou).
-    const rollback = () => setTrades(prev => prev.filter(t => !importedIds.has(String(t.id))));
-    storageService.saveTrades(newTrades).then(saved => {
-      if (saved && saved.length > 0) {
-        // Nahraď optimistické verze uloženými (s reálnými DB id).
-        setTrades(prev => {
-          const savedIds = new Set(saved.map(s => String(s.id)));
-          const withoutImported = prev.filter(t => !importedIds.has(String(t.id)) && !savedIds.has(String(t.id)));
-          return [...withoutImported, ...saved];
-        });
-      } else {
-        // Uložení neproběhlo (prázdná odpověď bez výjimky) → ber jako selhání, ne tiše nechat orphany.
-        console.error('[TradovateImport] saveTrades vrátilo prázdný výsledek — rollback optimistického přidání.');
-        rollback();
-        setSyncError('Nepodařilo se uložit importované obchody do cloudu.');
-      }
-    }).catch(err => {
-      console.error('[TradovateImport] Failed to save imported trades:', err);
-      rollback();
-      setSyncError('Nepodařilo se uložit importované obchody do cloudu.');
-    });
   };
 
   // Počet importovaných obchodů bez doplněného screenshotu/konfluence.
@@ -4547,7 +4424,7 @@ const App: React.FC = () => {
                     trades.length === 0 ? (
                       <div className="flex flex-col items-center justify-center h-[60vh] space-y-6">
                         <div className="w-full max-w-md h-64">
-                          <FileUpload onDataLoaded={handleFileUpload} />
+                          <div className="flex h-full items-center justify-center text-center text-sm text-[var(--text-secondary)]">Zatím tu nejsou žádné obchody. Obchody z připojeného Tradovate se doplní automaticky.</div>
                         </div>
                         <div className="flex items-center gap-4 w-full max-w-md">
                           <div className="h-px bg-slate-800 flex-1"></div>
@@ -4576,11 +4453,8 @@ const App: React.FC = () => {
                         setViewMode={setHistoryLayoutMode}
                         enrichSignal={enrichSignal}
                         userMistakes={userMistakes}
-                        onImportTradovate={() => {
-                          setTradovateImportAccount(viewMode === 'individual' ? activeAccountId : undefined);
-                          setTradovateImportOpen(true);
-                        }}
-                        onImportTradesyncer={() => setTradesyncerImportOpen(true)}
+
+
                       />
                     )}
                     </>
@@ -4737,10 +4611,7 @@ const App: React.FC = () => {
                           markPreferencesDirty();
                           setActivePage('dashboard');
                         }}
-                        onImportTradovate={(id) => {
-                          setTradovateImportAccount(id);
-                          setTradovateImportOpen(true);
-                        }}
+
                       />
                       {/* Hřbitov spálených účtů — všechny Failed účty z aktivního i archivovaného pole. */}
                       {(() => {
@@ -4821,7 +4692,7 @@ const App: React.FC = () => {
                       accentColor={accentColor}
                       onAccentColorChange={handleAccentColorChange}
                       onCreateAccount={(account) => setAccounts(prev => [...prev, account])}
-                      onImportIncidentSaved={handleSaveReview}
+
                       onOpenTradeDraft={(draft) => {
                         setNativeTradeDraft(draft);
                         setIsManualEntryOpen(true);
@@ -4926,34 +4797,6 @@ const App: React.FC = () => {
         )
       }
 
-
-      {tradovateImportOpen && (
-        <React.Suspense fallback={null}>
-          <TradovateImportModal
-            isOpen={tradovateImportOpen}
-            onClose={() => setTradovateImportOpen(false)}
-            accounts={accounts.filter(a => a.status === 'Active')}
-            defaultAccountId={tradovateImportAccount || activeAccountId}
-            existingTrades={trades}
-            isDark={theme !== 'light'}
-            onConfirm={handleTradovateImport}
-            onStartEnrich={startEnrichWizard}
-          />
-        </React.Suspense>
-      )}
-
-      {tradesyncerImportOpen && (
-        <React.Suspense fallback={null}>
-          <TradesyncerImportModal
-            isOpen={tradesyncerImportOpen}
-            onClose={() => setTradesyncerImportOpen(false)}
-            accounts={accounts}
-            existingTrades={trades}
-            isDark={theme !== 'light'}
-            onConfirm={handleTradesyncerImport}
-          />
-        </React.Suspense>
-      )}
 
       {/* Warning modal — pokud user odchází z AI stránky během streamu. */}
       <ConfirmationModal

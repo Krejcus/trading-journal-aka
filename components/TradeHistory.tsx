@@ -109,8 +109,6 @@ interface TradeHistoryProps {
   initialBalance?: number;
   user: User;
   exchangeRates: ExchangeRates;
-  onImportTradovate?: () => void;
-  onImportTradesyncer?: () => void;
   /** Inkrementuje se zvenčí (floating tlačítko / „Doplnit teď") pro spuštění průvodce doplněním. */
   enrichSignal?: number;
   /** Uživatelské kategorie chyb (Settings → Strategie → Katalog Chyb) — pro bulk-tag importovaných obchodů. */
@@ -120,7 +118,7 @@ interface TradeHistoryProps {
 const TradeHistory: React.FC<TradeHistoryProps> = ({
   trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade,
   pnlDisplayMode = 'usd', initialBalance, user, exchangeRates, allTrades = [],
-  viewMode, setViewMode, onImportTradovate, onImportTradesyncer, enrichSignal, userMistakes = [],
+  viewMode, setViewMode, enrichSignal, userMistakes = [],
 }) => {
   const isDark = theme !== 'light';
   const targetCurrency = user.currency || 'USD';
@@ -815,26 +813,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                   >
                     <CheckSquare size={16} className="opacity-70" /> Vybrat více
                   </button>
-                  {onImportTradovate && (
-                    <button
-                      onClick={() => { setKebabOpen(false); onImportTradovate(); }}
-                      className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm font-semibold text-left transition-colors ${
-                        theme === 'light' ? 'hover:bg-slate-100 text-slate-700' : 'hover:bg-slate-700/60 text-slate-200'
-                      }`}
-                    >
-                      <UploadCloud size={16} className="opacity-70" /> Import Tradovate
-                    </button>
-                  )}
-                  {onImportTradesyncer && (
-                    <button
-                      onClick={() => { setKebabOpen(false); onImportTradesyncer(); }}
-                      className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm font-semibold text-left transition-colors ${
-                        theme === 'light' ? 'hover:bg-slate-100 text-slate-700' : 'hover:bg-slate-700/60 text-slate-200'
-                      }`}
-                    >
-                      <UploadCloud size={16} className="opacity-70" /> Import Tradesyncer
-                    </button>
-                  )}
+
+
                 </motion.div>
               )}
             </AnimatePresence>

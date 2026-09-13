@@ -1,4 +1,6 @@
 #!/bin/bash
+echo 'Tradecopia integration retired; installer disabled.' >&2
+exit 1
 # Installs the isolated Tradecopia shadow collector as a persistent launchd job.
 # Requires the existing ~/.alphatrade/tradecopia-sync.json configuration.
 

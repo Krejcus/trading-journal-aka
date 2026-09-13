@@ -208,6 +208,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-13 — Retire obsolete Tradecopia import and notifications
+
+- Removed legacy notification settings, auto-import queue, Tradovate/Tradesyncer CSV dialogs and account/history upload entry points. Preserved current journal import, account source status, historical records and current copier alerts.
+- Legacy notification API and Edge ingestion functions return 410. Edge functions deployed as import-trades v10 and tradecopia-shadow-ingest v7 with previous JWT settings retained; original source backed up before replacement. Old Mac collectors unloaded and source installers disabled. No data deletion or current worker changes.
+- Rebased removal onto production d7a5aebf to preserve newer journal work. Typecheck, production build and targeted regression tests passed.
+
 ### 2026-09-13 — návrat původních obchodů po aktivaci nové historie
 
 Oprava migrační regrese: vlastník znovu vidí explicitní starší hlavní záznamy kopírky (isMaster, bez masterTradeId, bez pnlEstimated), označené jako „Starší záznam“. Chybějící nová fill evidence nesmí odstranit existující historii. Odhadované followery, nahrazené řádky a nepotvrzené nové journal pozice se nevracejí do součtů. Duplicitní původní import stejného owner/account/copier ID má jediný stabilní řádek; uložená data a hodnocení zůstávají zachovaná v archivu. Stejné pravidlo platí pro cache, historii a LIVE; detail vysvětluje původ cen/P&L a nedostupnost starých posunů SL/TP. Databázové confirmed/shared projekce, oprávnění, Edge Functions a worker se touto opravou nemění. Uživatel výslovně požádal „nasad opravu“.

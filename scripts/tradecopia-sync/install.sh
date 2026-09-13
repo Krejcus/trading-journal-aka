@@ -1,4 +1,6 @@
 #!/bin/bash
+echo 'Tradecopia integration retired; installer disabled.' >&2
+exit 1
 # Instalace Tradecopia sync agenta na další Mac.
 #
 # Použití:

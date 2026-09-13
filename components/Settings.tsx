@@ -20,20 +20,14 @@ import {
   Smartphone, Share2, CalendarPlus
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
-import ImportSettings from './ImportSettings';
-import ImportQueue from './ImportQueue';
+
+
 import { CustomEmotion, SessionConfig, IronRule, WeeklyFocus, SystemSettings, Account, DailyReview } from '../types';
 import { getPushDiagnostics } from '../utils/notificationHelper';
 import { enablePush, disablePush, listPushDevices, sendTestPush, type PushDevice } from '../services/pushSubscriptionService';
 import { initializeNativeRemoteNotifications, sendNativeRemoteTestPush, sendNativeSnapshotTestPush } from '../services/nativePushNotifications';
-import {
-  mergeTradecopiaNotificationPreferences,
-  type TradecopiaNotificationPreferences,
-} from '../services/tradecopiaNotificationPreferences';
-import {
-  formatTradecopiaNotification,
-  type TradecopiaFastEvent,
-} from '../services/tradecopiaNotificationFormatter';
+
+
 import { isNativeBuild } from '../utils/runtimeConfig';
 import {
   getNativeNotificationPermission,
@@ -49,7 +43,7 @@ import {
   type NativePendingNotification,
   type NativeDeliveredNotification,
 } from '../services/nativeNotifications';
-import { createTradeNotificationAttachment } from '../services/nativeNotificationCard';
+
 import type { PermissionState } from '@capacitor/core';
 import {
   buildNativeSessionReminderPlan,
@@ -144,71 +138,6 @@ const getWeekISOString = (date: Date) => {
 
 const COMMON_EMOJIS = ['🎯', '🔥', '💎', '🚀', '📈', '🧘', '🧠', '⚡', '🏆', '💰', '📉', '🛡️', '✅', '❌', '⏰', '📅', '📊', '💪', '🦁', '🦅'];
 
-const LOCAL_ALERT_SAMPLES: Array<{ label: string; event: TradecopiaFastEvent }> = [
-  {
-    label: 'Objednávka zadána',
-    event: {
-      key: 'local-order-submitted', type: 'order_submitted', severity: 'info', occurredAt: '2026-08-10T09:30:00Z',
-      symbol: 'MNQ', side: 'LONG', quantity: 1, orderType: 'Market', copiedAccountCount: 13, expectedAccountCount: 13,
-      leaderName: 'Alpha Leader', accountNames: ['Alpha 50K', 'Alpha 100K', 'Lucid 50K', 'Tradeify 50K'],
-    },
-  },
-  {
-    label: 'Obchod otevřen',
-    event: {
-      key: 'local-trade-opened', type: 'trade_opened', severity: 'info', occurredAt: '2026-08-10T09:30:01Z',
-      symbol: 'MNQ', side: 'LONG', quantity: 1, price: 21842.25, copiedAccountCount: 13, expectedAccountCount: 13,
-      leaderName: 'Alpha Leader', accountNames: ['Alpha 50K', 'Alpha 100K', 'Lucid 50K', 'Tradeify 50K'],
-    },
-  },
-  {
-    label: 'Obchod uzavřen',
-    event: {
-      key: 'local-trade-closed', type: 'trade_closed', severity: 'info', occurredAt: '2026-08-10T09:42:00Z',
-      symbol: 'MNQ', side: 'LONG', quantity: 1, price: 21858.75, pnl: 428.5, copiedAccountCount: 13, expectedAccountCount: 13,
-      accountNames: ['Alpha 50K', 'Alpha 100K', 'Lucid 50K', 'Tradeify 50K'],
-    },
-  },
-  {
-    label: 'Neúplné kopírování',
-    event: {
-      key: 'local-copy-partial', type: 'copy_partial', severity: 'warning', occurredAt: '2026-08-10T09:30:02Z',
-      symbol: 'MNQ', side: 'LONG', quantity: 1, copiedAccountCount: 11, expectedAccountCount: 13, failedAccountCount: 2,
-      accountNames: ['Alpha 50K', 'Alpha 100K', 'Lucid 50K'],
-    },
-  },
-  {
-    label: 'Objednávka zamítnuta',
-    event: {
-      key: 'local-order-rejected', type: 'order_rejected', severity: 'critical', occurredAt: '2026-08-10T09:30:02Z',
-      symbol: 'MNQ', side: 'SHORT', quantity: 1, copiedAccountCount: 11, expectedAccountCount: 13, failedAccountCount: 2,
-      reasons: ['Účet překročil maximální velikost pozice', 'Spojení s brokerem vypršelo'],
-    },
-  },
-  {
-    label: 'Prop účet odpojen',
-    event: {
-      key: 'local-connection-changed', type: 'connection_changed', severity: 'critical', occurredAt: '2026-08-10T09:35:00Z',
-      firm: 'Tradeify', connected: false, copiedAccountCount: 0, expectedAccountCount: 13, reason: 'Přihlášení vypršelo',
-    },
-  },
-  {
-    label: 'Nesoulad pozic',
-    event: {
-      key: 'local-position-mismatch', type: 'position_mismatch', severity: 'critical', occurredAt: '2026-08-10T09:36:00Z',
-      symbol: 'MNQ', groupName: 'MNQ skupina', copiedAccountCount: 11, expectedAccountCount: 13, failedAccountCount: 2,
-      accountNames: ['Alpha 50K', 'Alpha 100K'],
-    },
-  },
-  {
-    label: 'Drawdown upozornění',
-    event: {
-      key: 'local-risk-alert', type: 'risk_alert', severity: 'critical', occurredAt: '2026-08-10T09:40:00Z',
-      cushion: 342, drawdownFloor: 50000, balance: 50342, accountNames: ['Alpha 50K'],
-    },
-  },
-];
-
 type NativeCopierAlertSample = {
   label: string;
   title: string;
@@ -233,7 +162,7 @@ const NATIVE_COPIER_ALERT_SAMPLES: NativeCopierAlertSample[] = [
   { label: 'Auto-flatten selhal', title: 'Copier: AUTO-FLATTEN SELHAL', body: 'Účty nejsou potvrzené flat. Okamžitě zkontroluj Tradovate!', kind: 'risk' },
 ];
 
-const NATIVE_ALERT_GALLERY_COUNT = LOCAL_ALERT_SAMPLES.length + NATIVE_COPIER_ALERT_SAMPLES.length;
+const NATIVE_ALERT_GALLERY_COUNT = NATIVE_COPIER_ALERT_SAMPLES.length;
 const NATIVE_ALERT_GALLERY_FIRST_DELAY_MS = 4_000;
 const NATIVE_ALERT_GALLERY_INTERVAL_MS = 5_000;
 
@@ -390,7 +319,6 @@ const Settings: React.FC<SettingsProps> = ({
   const [itemToDelete, setItemToDelete] = useState<{ id: string | number, type: 'rule' | 'emotion' | 'mistake' | 'session' | 'goal' } | null>(null);
   const [toast, setToast] = useState<{ message: string, id: number } | null>(null);
   const [nativeRemoteRegistered, setNativeRemoteRegistered] = useState(false);
-  const [localAlertBusyKey, setLocalAlertBusyKey] = useState<string | null>(null);
   const alertTestInFlightRef = useRef(false);
 
   // Screenshot migration state
@@ -648,7 +576,7 @@ const Settings: React.FC<SettingsProps> = ({
   };
 
   const handleNativeAlertGallery = async () => {
-    if (pushBusy || localAlertBusyKey !== null || alertTestInFlightRef.current) return;
+    if (pushBusy || alertTestInFlightRef.current) return;
     alertTestInFlightRef.current = true;
     setPushBusy(true);
     try {
@@ -658,27 +586,6 @@ const Settings: React.FC<SettingsProps> = ({
         return;
       }
 
-      for (const [index, sample] of LOCAL_ALERT_SAMPLES.entries()) {
-        const event = { ...sample.event, occurredAt: new Date().toISOString() };
-        const formatted = formatTradecopiaNotification(event, tradecopiaNotifications);
-        const isTradeEvent = event.type === 'trade_opened' || event.type === 'trade_closed';
-        const attachmentUrl = isTradeEvent
-          ? await createTradeNotificationAttachment(event)
-          : undefined;
-        await scheduleNativeNotification({
-          source: 'test',
-          title: formatted.title,
-          body: formatted.body,
-          route: event.type === 'trade_closed' ? 'journal' : 'live',
-          threadIdentifier: `alphatrade-${event.type}`,
-          attachmentUrl,
-          actionType: event.severity === 'critical' ? 'risk' : (isTradeEvent ? 'trade' : 'general'),
-          interruptionLevel: event.severity === 'critical' ? 'timeSensitive' : 'active',
-          delayMs: NATIVE_ALERT_GALLERY_FIRST_DELAY_MS + index * NATIVE_ALERT_GALLERY_INTERVAL_MS,
-        });
-      }
-      const copierStartDelay = NATIVE_ALERT_GALLERY_FIRST_DELAY_MS
-        + LOCAL_ALERT_SAMPLES.length * NATIVE_ALERT_GALLERY_INTERVAL_MS;
       for (const [index, sample] of NATIVE_COPIER_ALERT_SAMPLES.entries()) {
         await scheduleNativeNotification({
           source: 'test',
@@ -688,7 +595,7 @@ const Settings: React.FC<SettingsProps> = ({
           threadIdentifier: sample.kind === 'trade' ? 'alphatrade-copier-trades' : 'alphatrade-copier-risk',
           actionType: sample.kind,
           interruptionLevel: sample.kind === 'risk' ? 'timeSensitive' : 'active',
-          delayMs: copierStartDelay + index * NATIVE_ALERT_GALLERY_INTERVAL_MS,
+          delayMs: NATIVE_ALERT_GALLERY_FIRST_DELAY_MS + index * NATIVE_ALERT_GALLERY_INTERVAL_MS,
         });
       }
       await refreshPushState();
@@ -980,92 +887,11 @@ const Settings: React.FC<SettingsProps> = ({
     showToast('Nastavení aktualizováno');
   };
 
-  const tradecopiaNotifications = useMemo(
-    () => mergeTradecopiaNotificationPreferences(systemSettings.tradecopiaNotifications),
-    [systemSettings.tradecopiaNotifications],
-  );
-
-  const isLocalAlertLab = isNativeBuild || (import.meta.env.DEV
-    && typeof window !== 'undefined'
-    && ['localhost', '127.0.0.1'].includes(window.location.hostname));
-
-  const localAlertSamples = useMemo(
-    () => LOCAL_ALERT_SAMPLES.map(sample => ({
-      ...sample,
-      formatted: formatTradecopiaNotification(sample.event, tradecopiaNotifications),
-    })),
-    [tradecopiaNotifications],
-  );
-
-  const handleLocalAlertTest = async (event: TradecopiaFastEvent) => {
-    if (pushBusy || localAlertBusyKey !== null || alertTestInFlightRef.current) return;
-    alertTestInFlightRef.current = true;
-    setLocalAlertBusyKey(event.key);
-    try {
-      if (isNativeBuild) {
-        const formatted = formatTradecopiaNotification(event, tradecopiaNotifications);
-        const isTradeEvent = event.type === 'trade_opened' || event.type === 'trade_closed';
-        const attachmentUrl = isTradeEvent
-          ? await createTradeNotificationAttachment(event)
-          : undefined;
-        await scheduleNativeNotification({
-          source: 'test',
-          title: formatted.title,
-          body: formatted.body,
-          route: event.type === 'trade_closed' ? 'journal' : 'live',
-          threadIdentifier: 'alphatrade-tradecopia',
-          attachmentUrl,
-          actionType: event.severity === 'critical' ? 'risk' : (isTradeEvent ? 'trade' : 'general'),
-          interruptionLevel: event.severity === 'critical' ? 'timeSensitive' : 'active',
-        });
-        showToast(`${attachmentUrl ? 'Rich' : 'Nativní'} alert naplánován — zavři appku a počkej 2 sekundy`);
-        return;
-      }
-      const response = await fetch('/__dev/tradecopia-alert-lab', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          event: {
-            ...event,
-            key: `${event.key}:${Date.now()}:${crypto.randomUUID()}`,
-            occurredAt: new Date().toISOString(),
-          },
-        }),
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok || !result.ok) {
-        showToast(result.error ? `Push selhal: ${result.error}` : `Push selhal: HTTP ${response.status}`);
-      } else if (Number(result.sent || 0) > 0) {
-        showToast(`Skutečný push odeslán na ${result.sent} z ${result.devices} zařízení`);
-      } else if (Number(result.skipped || 0) > 0) {
-        showToast('Tento typ alertu je vypnutý nebo právě běží tichý režim');
-      } else {
-        showToast('Žádné aktivní zařízení push nepřijalo');
-      }
-    } catch (error) {
-      showToast(`Push selhal: ${error instanceof Error ? error.message : 'neznámá chyba'}`);
-    } finally {
-      alertTestInFlightRef.current = false;
-      setLocalAlertBusyKey(null);
-    }
-  };
-
-  const updateTradecopiaNotification = <K extends keyof TradecopiaNotificationPreferences>(
-    key: K,
-    value: TradecopiaNotificationPreferences[K],
-  ) => {
-    setSystemSettings({
-      ...systemSettings,
-      tradecopiaNotifications: { ...tradecopiaNotifications, [key]: value },
-    });
-    showToast('Nastavení notifikací aktualizováno');
-  };
-
   const tabs = [
     { id: 'psychology', label: 'Psychologie', icon: Brain, desc: 'Pravidla, Cíle & Focus' },
     { id: 'strategy', label: 'Strategie', icon: Target, desc: 'Confluence, Chyby & Emoce' },
     { id: 'market', label: 'Trh', icon: Clock, desc: 'Seance & Čas' },
-    { id: 'notifications', label: 'Notifikace', icon: Bell, desc: 'TradeCopia & Push' },
+    { id: 'notifications', label: 'Notifikace', icon: Bell, desc: 'Copier & Push' },
     { id: 'system', label: 'Systém', icon: Shield, desc: 'Alpha Guardian' },
   ] as const;
 
@@ -1445,61 +1271,7 @@ const Settings: React.FC<SettingsProps> = ({
             <div className="space-y-6">
               <TradingViewAlertSettings isDark={isDark} onToast={showToast} />
 
-              <Card isDark={isDark}>
-                <SectionHeader icon={Bell} title="TradeCopia notifikace" subtitle="Jeden obchod · všechny kopírované účty" color="bg-gradient-to-br from-emerald-600 to-cyan-600" isDark={isDark} />
-
-                <div className={`mb-5 p-4 rounded-xl border ${isDark ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-emerald-50 border-emerald-200'}`}>
-                  <p className="text-[9px] font-black uppercase tracking-[0.18em] text-emerald-500 mb-2">Ukázka výsledné zprávy</p>
-                  <p className="text-sm font-black text-[var(--text-primary)]">💰 LONG MNQ uzavřen na 13 účtech</p>
-                  <p className="mt-1 text-[11px] font-bold text-[var(--text-muted)]">Výsledek skupiny: +$428.50 · ✅ 13/13 účtů uzavřeno</p>
-                  <p className="mt-1 text-[10px] font-bold text-[var(--text-muted)]">Alpha 50K, Alpha 100K, Lucid 50K +10</p>
-                </div>
-
-                <div className="space-y-2">
-                  <Toggle
-                    active={tradecopiaNotifications.enabled}
-                    onClick={() => updateTradecopiaNotification('enabled', !tradecopiaNotifications.enabled)}
-                    label="TradeCopia notifikace"
-                    desc="Hlavní vypínač pro rychlé události z copieru."
-                    isDark={isDark}
-                  />
-                  <div className={`grid grid-cols-1 md:grid-cols-2 gap-2 ${tradecopiaNotifications.enabled ? '' : 'opacity-40 pointer-events-none'}`}>
-                    <Toggle active={tradecopiaNotifications.orderSubmitted} onClick={() => updateTradecopiaNotification('orderSubmitted', !tradecopiaNotifications.orderSubmitted)} label="📤 Objednávka zadána" desc="Kolik z očekávaných účtů ji přijalo." isDark={isDark} />
-                    <Toggle active={tradecopiaNotifications.tradeOpened} onClick={() => updateTradecopiaNotification('tradeOpened', !tradecopiaNotifications.tradeOpened)} label="🟢 Obchod otevřen" desc="Jedna souhrnná zpráva místo X zpráv." isDark={isDark} />
-                    <Toggle active={tradecopiaNotifications.tradeClosed} onClick={() => updateTradecopiaNotification('tradeClosed', !tradecopiaNotifications.tradeClosed)} label="💰 Obchod uzavřen" desc="Souhrn účtů a dostupné P&L skupiny." isDark={isDark} />
-                    <Toggle active={tradecopiaNotifications.copyPartial} onClick={() => updateTradecopiaNotification('copyPartial', !tradecopiaNotifications.copyPartial)} label="⚠️ Neúplné kopírování" desc="Například 11 z 13 účtů." isDark={isDark} />
-                    <Toggle active={tradecopiaNotifications.orderRejected} onClick={() => updateTradecopiaNotification('orderRejected', !tradecopiaNotifications.orderRejected)} label="🚫 Zamítnutá objednávka" desc="Chyba účtu nebo prop firmy." isDark={isDark} />
-                    <Toggle active={tradecopiaNotifications.connectionChanged} onClick={() => updateTradecopiaNotification('connectionChanged', !tradecopiaNotifications.connectionChanged)} label="🔌 Připojení prop firmy" desc="Odpojení i opětovné připojení." isDark={isDark} />
-                    <Toggle active={tradecopiaNotifications.positionMismatch} onClick={() => updateTradecopiaNotification('positionMismatch', !tradecopiaNotifications.positionMismatch)} label="🚨 Nesoulad pozic" desc="Follower nemá očekávanou pozici leaderu." isDark={isDark} />
-                    <Toggle active={tradecopiaNotifications.riskAlerts} onClick={() => updateTradecopiaNotification('riskAlerts', !tradecopiaNotifications.riskAlerts)} label="🛑 Drawdown a risk" desc="Blížící se nebo dosažený limit." isDark={isDark} />
-                  </div>
-                </div>
-
-                <div className="mt-6 pt-5 border-t border-[var(--border-subtle)] space-y-2">
-                  <p className="text-[9px] font-black uppercase tracking-[0.2em] text-[var(--text-muted)] mb-3">Obsah zprávy</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    <Toggle active={tradecopiaNotifications.includeAccountNames} onClick={() => updateTradecopiaNotification('includeAccountNames', !tradecopiaNotifications.includeAccountNames)} label="Názvy účtů" desc="Ukáže první tři a počet dalších." isDark={isDark} />
-                    <Toggle active={tradecopiaNotifications.includePnl} onClick={() => updateTradecopiaNotification('includePnl', !tradecopiaNotifications.includePnl)} label="P&L ve zprávě" desc="Jen když je v okamžiku události dostupné." isDark={isDark} />
-                  </div>
-                </div>
-
-                <div className="mt-6 pt-5 border-t border-[var(--border-subtle)] space-y-3">
-                  <Toggle active={tradecopiaNotifications.quietHoursEnabled} onClick={() => updateTradecopiaNotification('quietHoursEnabled', !tradecopiaNotifications.quietHoursEnabled)} label="Tichý režim" desc="Běžné zprávy v tomto čase nechodí." isDark={isDark} />
-                  {tradecopiaNotifications.quietHoursEnabled && (
-                    <div className="grid grid-cols-2 gap-3 px-4">
-                      <label className="text-[9px] font-black uppercase tracking-widest text-[var(--text-muted)]">Od
-                        <input type="time" value={tradecopiaNotifications.quietHoursStart} onChange={event => updateTradecopiaNotification('quietHoursStart', event.target.value)} className="mt-1.5 w-full px-3 py-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-input)] text-xs text-[var(--text-primary)]" />
-                      </label>
-                      <label className="text-[9px] font-black uppercase tracking-widest text-[var(--text-muted)]">Do
-                        <input type="time" value={tradecopiaNotifications.quietHoursEnd} onChange={event => updateTradecopiaNotification('quietHoursEnd', event.target.value)} className="mt-1.5 w-full px-3 py-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-input)] text-xs text-[var(--text-primary)]" />
-                      </label>
-                    </div>
-                  )}
-                  <Toggle active={tradecopiaNotifications.criticalBypassQuietHours} onClick={() => updateTradecopiaNotification('criticalBypassQuietHours', !tradecopiaNotifications.criticalBypassQuietHours)} label="Kritické zprávy vždy" desc="Zamítnutí, odpojení, nesoulad a drawdown obejdou tichý režim." isDark={isDark} />
-                </div>
-              </Card>
-
-              {isLocalAlertLab && (
+              {isNativeBuild && (
                 <Card isDark={isDark} className="!rounded-lg !p-0 overflow-hidden border-violet-500/30">
                   <div className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-5 py-4 border-b ${isDark ? 'bg-violet-500/5 border-white/10' : 'bg-violet-50 border-violet-100'}`}>
                     <div>
@@ -1515,81 +1287,13 @@ const Settings: React.FC<SettingsProps> = ({
                     </div>
                   </div>
 
-                  <div className="grid min-w-0 gap-3 p-4 sm:hidden" aria-label="Jednotlivé testy notifikací">
-                    {localAlertSamples.map(({ label, event, formatted }) => (
-                      <article key={event.key} className="min-w-0 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-page)] p-4">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <h4 className="text-sm font-black text-[var(--text-primary)]">{label}</h4>
-                          <span className={`rounded-md px-2 py-1 text-[9px] font-black uppercase ${event.severity === 'critical' ? 'bg-rose-500/10 text-rose-500' : event.severity === 'warning' ? 'bg-amber-500/10 text-amber-500' : 'bg-blue-500/10 text-blue-500'}`}>{event.severity}</span>
-                        </div>
-                        <p className="mt-3 break-words text-xs font-black text-[var(--text-primary)]">{formatted.title}</p>
-                        <p className="mt-1 whitespace-pre-line break-words text-xs leading-relaxed text-[var(--text-muted)]">{formatted.body}</p>
-                        <button
-                          type="button"
-                          aria-label={`Otestovat: ${label}`}
-                          disabled={pushBusy || localAlertBusyKey !== null}
-                          onClick={() => void handleLocalAlertTest(event)}
-                          className="mt-4 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-xs font-black text-white active:scale-[0.98] disabled:opacity-40"
-                        >
-                          <Bell size={16} /> {localAlertBusyKey === event.key ? 'Plánuji…' : (isNativeBuild ? 'Test na iPhone' : 'Odeslat push')}
-                        </button>
-                      </article>
-                    ))}
-                  </div>
-
-                  <div className="hidden overflow-x-auto sm:block">
-                    <table className="w-full min-w-[760px] text-left">
-                      <thead>
-                        <tr className="border-b border-[var(--border-subtle)] text-[8px] font-black uppercase tracking-[0.18em] text-[var(--text-muted)]">
-                          <th className="px-5 py-3 w-[175px]">Typ alertu</th>
-                          <th className="px-4 py-3">Přesný náhled zprávy</th>
-                          <th className="px-4 py-3 w-[100px]">Priorita</th>
-                          <th className="px-5 py-3 w-[125px] text-right">Test</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {localAlertSamples.map(({ label, event, formatted }) => {
-                          const severityStyle = event.severity === 'critical'
-                            ? 'bg-rose-500/10 text-rose-500 border-rose-500/20'
-                            : event.severity === 'warning'
-                              ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
-                              : 'bg-blue-500/10 text-blue-500 border-blue-500/20';
-                          return (
-                            <tr key={event.key} className="border-b last:border-b-0 border-[var(--border-subtle)] hover:bg-[var(--bg-page)]/60 transition-colors">
-                              <td className="px-5 py-4 align-top">
-                                <p className="text-[11px] font-black text-[var(--text-primary)]">{label}</p>
-                                <p className="mt-1 text-[8px] font-bold uppercase tracking-wider text-[var(--text-muted)]">{event.type.replaceAll('_', ' ')}</p>
-                              </td>
-                              <td className="px-4 py-4 align-top">
-                                <p className="text-[11px] font-black text-[var(--text-primary)]">{formatted.title}</p>
-                                <p className="mt-1 whitespace-pre-line text-[10px] font-semibold leading-relaxed text-[var(--text-muted)]">{formatted.body}</p>
-                              </td>
-                              <td className="px-4 py-4 align-top">
-                                <span className={`inline-flex px-2 py-1 rounded-md border text-[8px] font-black uppercase tracking-wider ${severityStyle}`}>{event.severity}</span>
-                              </td>
-                              <td className="px-5 py-4 align-top text-right">
-                                <button
-                                  type="button"
-                                  disabled={pushBusy || localAlertBusyKey !== null}
-                                  onClick={() => void handleLocalAlertTest(event)}
-                                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-violet-600 hover:bg-violet-500 text-white text-[9px] font-black uppercase tracking-wider transition-colors active:scale-95 disabled:opacity-50 disabled:cursor-wait"
-                                >
-                                  <Bell size={12} /> {localAlertBusyKey === event.key ? 'Plánuji…' : (isNativeBuild ? 'Test na iPhone' : 'Odeslat push')}
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
                   {isNativeBuild && (
                     <details className="border-t border-[var(--border-subtle)] px-5 py-4">
                       <summary className="cursor-pointer text-xs font-bold text-[var(--text-muted)]">Hromadný test · {NATIVE_ALERT_GALLERY_COUNT} scénářů</summary>
                       <p className="mt-3 text-xs leading-relaxed text-[var(--text-muted)]">Tato volba naplánuje všechny ukázky během dvou minut. Pro jeden alert použij tlačítko u konkrétní ukázky výše.</p>
                       <button
                         type="button"
-                        disabled={pushBusy || localAlertBusyKey !== null}
+                        disabled={pushBusy}
                         onClick={() => void handleNativeAlertGallery()}
                         className="mt-3 min-h-11 rounded-xl border border-[var(--border-subtle)] px-4 py-3 text-xs font-bold text-[var(--text-primary)] disabled:opacity-40"
                       >
@@ -1602,7 +1306,7 @@ const Settings: React.FC<SettingsProps> = ({
                       <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        disabled={pushBusy || localAlertBusyKey !== null || !nativePendingNotifications.some(notification => notification.source === 'test')}
+                        disabled={pushBusy || !nativePendingNotifications.some(notification => notification.source === 'test')}
                         onClick={() => void handleCancelNativeAlerts()}
                         className="px-4 py-3 rounded-xl border border-[var(--border-subtle)] text-[9px] font-black uppercase tracking-widest text-[var(--text-primary)] disabled:opacity-40"
                       >
@@ -1922,21 +1626,6 @@ const Settings: React.FC<SettingsProps> = ({
                     </button>
                   ))}
                 </div>
-              </Card>
-
-              {/* Tradecopia auto-import — párování účtů */}
-              <Card isDark={isDark}>
-                <SectionHeader icon={Activity} title="Auto-import obchodů" subtitle="Tradecopia → AlphaTrade" color="bg-gradient-to-br from-blue-600 to-cyan-600" isDark={isDark} />
-                <p className={`text-xs mb-4 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  Sync agent čte lokální data Tradecopie a posílá obchody ze všech prop účtů. Tady je přiřadíš k účtům v appce — nové účty (koupené challenge) se detekují automaticky.
-                </p>
-                <ImportSettings isDark={isDark} onToast={showToast} onCreateAccount={onCreateAccount} />
-              </Card>
-
-              {/* Fronta importu — párování exekucí na deník */}
-              <Card isDark={isDark}>
-                <SectionHeader icon={Link2} title="Fronta importu" subtitle="Párování exekucí na deník" color="bg-gradient-to-br from-emerald-600 to-teal-600" isDark={isDark} />
-                <ImportQueue isDark={isDark} onToast={showToast} onIncidentSaved={onImportIncidentSaved} />
               </Card>
 
               <div className="grid grid-cols-1 gap-6">

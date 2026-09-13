@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+throw new Error('Tradecopia integration retired; use AlphaTrade Tradovate connection.');
 // Low-latency TradeCopia event collector. It reads only an explicit safe
 // projection from the local SQLite database and sends semantic, deduplicable
 // events to AlphaTrade. It never sends OAuth tokens or personal profile data.

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+throw new Error('Tradecopia integration retired; use AlphaTrade Tradovate connection.');
 // Isolated Tradecopia raw/live shadow collector.
 // Reads selected non-secret SQLite tables read-only and sends only changed rows
 // plus the complete set of present keys to the dedicated shadow Edge Function.

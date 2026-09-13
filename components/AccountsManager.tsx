@@ -54,7 +54,6 @@ interface AccountsManagerProps {
   onUpdateTrades: (trades: Trade[]) => void;
   onAddExpense?: (expense: any) => void;
   onOpenInDashboard?: (id: string) => void;
-  onImportTradovate?: (id: string) => void;
   onUpdatePayouts: (payouts: BusinessPayout[]) => boolean | void | Promise<boolean | void>;
   payouts: BusinessPayout[];
   reviews: DailyReview[];
@@ -216,7 +215,6 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
   user,
   onAddExpense,
   onOpenInDashboard,
-  onImportTradovate,
   oauthLiveStates = {},
   tradovateProfiles = [],
   tradovateConnectionData = {},
@@ -671,7 +669,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         {!model.breached && model.risk === 'ok' && <span className="rounded border border-emerald-500/25 px-2 py-1 text-[10px] font-bold text-emerald-500">V bezpečí</span>}
         <div className="ml-auto flex items-center gap-2">
           {phaseFunded && <button type="button" onClick={event => { event.stopPropagation(); setPayoutTargetAccountId(acc.id); }} className="flex h-11 w-11 items-center justify-center rounded-lg text-emerald-500 hover:bg-emerald-500/10" aria-label="Výplata"><HandCoins size={14} /></button>}
-          {onImportTradovate && <button type="button" onClick={event => { event.stopPropagation(); onImportTradovate(acc.id); }} className="flex h-11 w-11 items-center justify-center rounded-lg text-indigo-500 hover:bg-indigo-500/10" aria-label="Importovat"><UploadCloud size={14} /></button>}
+
           <button type="button" onClick={event => toggleAccountStatus(event, acc.id)} className="text-[9px] font-black uppercase text-slate-500 hover:text-amber-500">Archivovat</button>
         </div>
       </div>
@@ -706,7 +704,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         className={`group relative ${cardPadding} ${cardHeight} rounded-[24px] border transition-all duration-500 cursor-pointer overflow-hidden backdrop-blur-sm flex flex-col justify-between
           ${activeAccountId === acc.id
             ? 'border-blue-500/50 bg-blue-500/10 shadow-[0_0_30px_rgba(59,130,246,0.15)] ring-1 ring-blue-500/20'
-            : (theme !== 'light' ? 'bg-slate-900/40 border-white/5 hover:border-white/10 hover:bg-slate-900/60' : 'bg-white border-slate-200 hover:border-blue-300')} 
+            : (theme !== 'light' ? 'bg-slate-900/40 border-white/5 hover:border-white/10 hover:bg-slate-900/60' : 'bg-white border-slate-200 hover:border-blue-300')}
           ${acc.status === 'Inactive' ? 'opacity-60 grayscale-[0.8]' : ''}`}
       >
         <div className="relative z-20 flex-1 flex flex-col">
@@ -862,11 +860,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                 <LayoutDashboard size={10} /> Dashboard
               </button>
             )}
-            {acc.status === 'Active' && onImportTradovate && (
-              <button onClick={(e) => { e.stopPropagation(); onImportTradovate(acc.id); }} className="text-[8px] font-black uppercase tracking-wider flex items-center gap-1 text-blue-500 hover:text-blue-400 transition-all" title="Importovat obchody z Tradovate">
-                <UploadCloud size={10} /> Import
-              </button>
-            )}
+
           </div>
           <button onClick={(e) => { e.stopPropagation(); setAccountToDelete(acc); }} className="text-[8px] font-black uppercase text-slate-600 hover:text-rose-500 transition-all flex items-center gap-1">
             {acc.oauth ? <><Archive size={10} /> Archivovat</> : <><Trash2 size={10} /> Smazat</>}
@@ -915,7 +909,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       {isAdding && (
         <div className={`p-8 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200 shadow-xl'}`}>
           <div className="flex items-center gap-3 mb-6"><div className="p-2 bg-blue-600/10 text-blue-500 rounded-xl"><Activity size={20} /></div><h3 className="text-lg font-black italic uppercase">Nový obchodní účet</h3></div>
-          
+
           {/* Account type selector */}
           <div className="flex gap-3 mb-6">
             <button
