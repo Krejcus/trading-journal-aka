@@ -80,6 +80,7 @@ export interface ApnsLiveActivityStart {
   attributes: {
     sessionID: string;
     symbol: string;
+    registrationToken?: string;
   };
   state: ApnsLiveActivityContentState;
   alert: {
@@ -196,6 +197,7 @@ export function buildApnsLiveActivityStartPayload(start: ApnsLiveActivityStart):
       attributes: {
         sessionID: start.attributes.sessionID,
         symbol: start.attributes.symbol,
+        ...(start.attributes.registrationToken ? { registrationToken: start.attributes.registrationToken } : {}),
       },
       alert: {
         title: start.alert.title,

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApnsDevice, ApnsLiveActivityUpdate, ApnsResult } from '../server/apns';
 import type { NativeLiveActivityBrokerSnapshot } from '../server/nativeLiveActivityBrokerSnapshot';
 import {
@@ -177,6 +177,8 @@ describe('Live Activity tik z relay pollu', () => {
 });
 
 describe('Live Activity tik: push-to-start bez běžící aktivity', () => {
+  beforeEach(() => vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-registration-key-at-least-32-characters'));
+  afterEach(() => vi.unstubAllEnvs());
   it('bez odběru aktualizací zavolá starter (dedup podle session triggeru) a vrátí started', async () => {
     const updates: Array<{ table: string; id: string; payload: Record<string, unknown> }> = [];
     const startRow = {

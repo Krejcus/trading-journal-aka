@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { createNativeLiveActivityGrant } from './nativeLiveActivityGrant.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
@@ -90,6 +91,7 @@ export async function startNativeLiveActivities(options: {
   runtimes: readonly NativeLiveActivityRuntimeRow[];
   brokerSnapshot: NativeBrokerSnapshotLoader;
   now?: number;
+  registrationSecret?: string;
   send?: (device: ApnsDevice, start: ApnsLiveActivityStart) => Promise<ApnsResult>;
 }): Promise<{ registered: number; sent: number; skipped: number; failed: number; expired: number }> {
   const now = options.now ?? Date.now();
@@ -134,6 +136,10 @@ export async function startNativeLiveActivities(options: {
       continue;
     }
     const live = planNativeLiveActivityUpdate({ runtime, broker, now });
+    const sessionID = `remote-${randomUUID()}`;
+    const registrationToken = createNativeLiveActivityGrant({
+      userId: subscription.user_id, subscriptionId: subscription.id, sessionId: sessionID,
+    }, options.registrationSecret ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? '', now);
     const result = await send({
       id: subscription.installation_id,
       deviceToken: subscription.push_token,
@@ -141,7 +147,8 @@ export async function startNativeLiveActivities(options: {
       bundleId: subscription.bundle_id,
     }, {
       attributes: {
-        sessionID: `remote-${subscription.id.slice(0, 8)}-${Math.floor(now / 1_000)}`,
+        sessionID,
+        registrationToken,
         symbol: live.symbol,
       },
       state: live.update.state,

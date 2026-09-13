@@ -1,6 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 
+import { verifyNativeLiveActivityGrant } from '../server/nativeLiveActivityGrant.js';
+
 import { handleNativeCors } from '../server/nativeCors.js';
 import { normalizeNativeLiveActivityRegistration } from '../server/nativeLiveActivityRegistration.js';
 
@@ -17,24 +19,53 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: 'server-not-configured' });
   }
   const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'missing-token' });
-
-  const authClient = createClient(supabaseUrl, anonKey, {
-    global: { headers: { Authorization: authHeader } },
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-  const { data: userData, error: userError } = await authClient.auth.getUser();
-  if (userError || !userData.user) return res.status(401).json({ error: 'invalid-token' });
   const registration = normalizeNativeLiveActivityRegistration(req.body);
   if (!registration) return res.status(400).json({ error: 'invalid-registration' });
-
   const db = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+  let userId: string;
+  const nativeManaged = authHeader?.startsWith('LiveActivity ') === true;
+  if (nativeManaged) {
+    const grant = verifyNativeLiveActivityGrant(authHeader!.slice(13), serviceRoleKey, Date.now());
+    if (!grant || grant.sessionId !== registration.activityId) {
+      return res.status(401).json({ error: 'invalid-activity-grant' });
+    }
+    // A revoked installation must not be revived by a delayed background request.
+    const { data: owner, error } = await db.from('native_live_activity_start_subscriptions')
+      .select('id,environment,bundle_id')
+      .eq('id', grant.subscriptionId).eq('user_id', grant.userId).is('expires_at', null).maybeSingle();
+    if (error) return res.status(503).json({ error: 'registration-owner-unavailable' });
+    if (!owner || owner.environment !== registration.environment || owner.bundle_id !== registration.bundleId) {
+      return res.status(401).json({ error: 'revoked-activity-grant' });
+    }
+    userId = grant.userId;
+  } else {
+    if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'missing-token' });
+    const authClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: userData, error: userError } = await authClient.auth.getUser();
+    if (userError || !userData.user) return res.status(401).json({ error: 'invalid-token' });
+    userId = userData.user.id;
+  }
+  if (req.method === 'DELETE' && nativeManaged) {
+    // Retain a tombstone even if DELETE reaches the server before a timed-out
+    // POST. Native POSTs omit expires_at and cannot resurrect this session.
+    const now = new Date().toISOString();
+    const { error } = await db.from('native_live_activity_subscriptions').upsert({
+      user_id: userId, activity_id: registration.activityId,
+      push_token: registration.pushToken, environment: registration.environment,
+      bundle_id: registration.bundleId, expires_at: now, updated_at: now,
+    }, { onConflict: 'user_id,activity_id' });
+    if (error) return res.status(500).json({ error: 'delete-failed' });
+    return res.status(200).json({ ok: true });
+  }
   if (req.method === 'DELETE') {
     const { error } = await db.from('native_live_activity_subscriptions')
       .delete()
-      .eq('user_id', userData.user.id)
+      .eq('user_id', userId)
       .eq('activity_id', registration.activityId);
     if (error) return res.status(500).json({ error: 'delete-failed' });
     return res.status(200).json({ ok: true });
@@ -42,12 +73,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const now = new Date().toISOString();
   const { error } = await db.from('native_live_activity_subscriptions').upsert({
-    user_id: userData.user.id,
+    user_id: userId,
     activity_id: registration.activityId,
     push_token: registration.pushToken,
     environment: registration.environment,
     bundle_id: registration.bundleId,
-    expires_at: null,
+    ...(nativeManaged ? {} : { expires_at: null }),
     last_error: null,
     updated_at: now,
   }, { onConflict: 'user_id,activity_id' });

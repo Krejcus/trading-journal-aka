@@ -192,6 +192,7 @@ describe('remote native Live Activity', () => {
       db: db as never,
       runtimes: [runtime({ armed: true, armedAt: now - 20_000, connected: true })],
       brokerSnapshot: async () => broker,
+      registrationSecret: "test-registration-key-32-characters-long",
       now,
       send,
     });
@@ -239,6 +240,7 @@ describe('remote native Live Activity', () => {
       db: db as never,
       runtimes: [runtime({ armed: true, armedAt: now - 20_000, connected: true })],
       brokerSnapshot: async () => broker,
+      registrationSecret: "test-registration-key-32-characters-long",
       now,
       send,
     });
