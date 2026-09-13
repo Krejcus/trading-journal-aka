@@ -47,8 +47,27 @@ export interface StoredJournalTradeFacts {
   history?: JournalPositionEpisode['history'];
 }
 export const isEvidenceJournalTrade = (trade: Trade) => trade.copierTradeId?.startsWith('journal:') === true;
+/** The old ledger's explicit leader remains a historical record. This does
+ * not certify broker fills or the generated follower estimates. */
+export const isLegacyJournalTrade = (trade: Trade) => trade.source === 'copier'
+  && !trade.journalSupersededBy && trade.isMaster === true && !trade.masterTradeId
+  && trade.pnlEstimated !== true && trade.copierTradeId?.startsWith('copier-') === true;
 export const isRetiredJournalTrade = (trade: Trade) => Boolean(trade.journalSupersededBy)
-  || (!isEvidenceJournalTrade(trade) && trade.source === 'copier');
+  || (!isEvidenceJournalTrade(trade) && trade.source === 'copier' && !isLegacyJournalTrade(trade));
+
+/** Old imports could save the same ledger identity more than once. Keep one
+ * stable row per owner/account/ledger ID; all original reviews stay in storage. */
+export function visibleJournalTrades(trades: readonly Trade[]): Trade[] {
+  const selected = new Map<string, Trade>();
+  for (const trade of trades) {
+    if (!isLegacyJournalTrade(trade)) continue;
+    const key = JSON.stringify([(trade as Trade & { userId?: string }).userId ?? '', trade.accountId, trade.copierTradeId]);
+    const previous = selected.get(key);
+    if (!previous || String(trade.id).localeCompare(String(previous.id)) < 0) selected.set(key, trade);
+  }
+  return trades.filter(trade => !isRetiredJournalTrade(trade) && (!isLegacyJournalTrade(trade)
+    || selected.get(JSON.stringify([(trade as Trade & { userId?: string }).userId ?? '', trade.accountId, trade.copierTradeId])) === trade));
+}
 
 function confirmedFacts(facts: JournalTradeFacts): boolean {
   return typeof facts.instrument === 'string' && facts.instrument.length > 0
@@ -63,7 +82,7 @@ function confirmedFacts(facts: JournalTradeFacts): boolean {
  * The underlying review row is retained and becomes visible again once confirmed. */
 export function mergeJournalTradeFacts(trades: readonly Trade[], records: readonly StoredJournalTradeFacts[]): Trade[] {
   const byId = new Map(records.map(row => [row.trade_id, row]));
-  return trades.flatMap(trade => {
+  return visibleJournalTrades(trades).flatMap(trade => {
     if (isRetiredJournalTrade(trade)) return [];
     if (!isEvidenceJournalTrade(trade)) return [trade];
     const record = byId.get(String(trade.id));

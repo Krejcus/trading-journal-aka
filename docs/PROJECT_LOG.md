@@ -208,6 +208,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-13 — návrat původních obchodů po aktivaci nové historie
+
+Oprava migrační regrese: vlastník znovu vidí explicitní starší hlavní záznamy kopírky (isMaster, bez masterTradeId, bez pnlEstimated), označené jako „Starší záznam“. Chybějící nová fill evidence nesmí odstranit existující historii. Odhadované followery, nahrazené řádky a nepotvrzené nové journal pozice se nevracejí do součtů. Duplicitní původní import stejného owner/account/copier ID má jediný stabilní řádek; uložená data a hodnocení zůstávají zachovaná v archivu. Stejné pravidlo platí pro cache, historii a LIVE; detail vysvětluje původ cen/P&L a nedostupnost starých posunů SL/TP. Databázové confirmed/shared projekce, oprávnění, Edge Functions a worker se touto opravou nemění. Uživatel výslovně požádal „nasad opravu“.
+
 ### 2026-09-13 — Historie fáze 31: schválená aktivace (Codex)
 
 Po explicitním schválení samostatná soukromá DB/Edge/worker záloha, osm migrací,

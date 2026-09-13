@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Trade } from '../types';
 import { hydrateJournalSnapshots } from './journalSnapshotHydration';
-import { isEvidenceJournalTrade, isRetiredJournalTrade, mergeJournalTradeFacts, type StoredJournalTradeFacts } from '../lib/journalTradeFacts';
+import { isEvidenceJournalTrade, visibleJournalTrades, mergeJournalTradeFacts, type StoredJournalTradeFacts } from '../lib/journalTradeFacts';
 
 /** Broker execution history belongs to the owner-only evidence tables. Review
  * sharing and ordinary trade saves must not copy it into a public JSON blob. */
@@ -40,7 +40,7 @@ export async function hydrateOwnedJournalTrades(
   client: SupabaseClient, trades: readonly Trade[], ownerId: string | null, targetOwnerId: string | null,
   stillOwner: () => boolean | Promise<boolean>, options: { signal?: AbortSignal; detail?: boolean } = {},
 ): Promise<Trade[]> {
-  const clean = trades.map(stripPrivateJournalHistory).filter(trade => !isRetiredJournalTrade(trade));
+  const clean = visibleJournalTrades(trades.map(stripPrivateJournalHistory));
   const journal = clean.filter(isEvidenceJournalTrade);
   if (!journal.length) return clean;
   // Social/public reads must use a separately verified public financial

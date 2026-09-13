@@ -1,4 +1,5 @@
 import type { Account, Trade } from '../types.js';
+import { isLegacyJournalTrade } from './journalTradeFacts.js';
 
 export const isCombinedTrade = (trade: Trade): boolean => String(trade.id).startsWith('combined_');
 
@@ -76,6 +77,7 @@ export const aggregateHistoryTrades = (trades: readonly Trade[]): Trade[] => {
 };
 
 export const tradeEstimateNotice = (trade: Trade): string | null => {
+  if (isLegacyJournalTrade(trade)) return 'Původní záznam kopírky: zobrazené ceny a P&L pocházejí ze staršího záznamu hlavního účtu. Nejsou nově ověřené z jednotlivých plnění. Historie posunů SL/TP není dostupná; odhadované kopie nejsou započítané.';
   if (!trade.pnlEstimated) return null;
   return isCombinedTrade(trade)
     ? 'Součet obsahuje odhadované PnL. Vlastní plnění některých účtů zatím nejsou doložena.'

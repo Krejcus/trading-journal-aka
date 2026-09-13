@@ -1,3 +1,4 @@
+import { isLegacyJournalTrade } from '../lib/journalTradeFacts';
 import { buildTradeGroupIndex, explicitTradeMaster, journalDisplayBalance, isCombinedTrade, tradeAccountLabel, tradeGroupMembers, tradeEstimateNotice } from '../lib/tradeHistoryPresentation';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -1052,6 +1053,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         );
                       })()}
                       {trade.source === 'copier' && trade.needsReview === true && <CopierReviewBadge variant="card" />}
+                      {isLegacyJournalTrade(trade) && <span className="px-2 py-0.5 rounded-md border border-amber-500/20 bg-amber-500/10 text-amber-500 text-[8px] font-black uppercase" title={tradeEstimateNotice(trade) || undefined}>Starší záznam</span>}
                       {trade.pnlEstimated && <span className="px-2 py-0.5 rounded-md border border-amber-500/20 bg-amber-500/10 text-amber-500 text-[8px] font-black uppercase" title={tradeEstimateNotice(trade) || undefined}>Odhad</span>}
                       {/* Execution Status badge — always show */}
                       {(() => {
@@ -1306,6 +1308,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                             {enrichIds.has(String(trade.id)) && <EnrichBadge variant="inline" />}
                             {(trade as any).excursionComplete === false && <PendingBadge variant="inline" />}
                             {trade.source === 'copier' && trade.needsReview === true && <CopierReviewBadge variant="inline" />}
+                            {isLegacyJournalTrade(trade) && <span className="text-[8px] font-black text-amber-500" title={tradeEstimateNotice(trade) || undefined}>STARŠÍ ZÁZNAM</span>}
                             {trade.pnlEstimated && <span className="text-[8px] font-black text-amber-500" title={tradeEstimateNotice(trade) || undefined}>ODHAD</span>}
                           </span>
                           <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{getTradePhase(trade) || 'Standard'}</span>

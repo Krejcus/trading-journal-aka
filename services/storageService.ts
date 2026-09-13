@@ -19,7 +19,7 @@ import { backtestReviewDataFromRow, backtestReviewPatch, requestBacktestReviewPa
 import { hydrateOwnedJournalTrades, stripPrivateJournalHistory, journalProjectionFingerprint } from './journalTradeHydration';
 import { readOwnedJournalDetails } from './journalTradeDetail';
 import { readTradeListPages } from './tradeListPages';
-import { isEvidenceJournalTrade, isRetiredJournalTrade } from '../lib/journalTradeFacts';
+import { isEvidenceJournalTrade, visibleJournalTrades } from '../lib/journalTradeFacts';
 import { journalReviewPatch } from '../lib/journalReviewPatch';
 import { readJournalInbox, readJournalRetainedReview, type JournalInboxKind } from './journalReviewInbox';
 import { readJournalSourceStatus } from './journalSourceStatus';
@@ -361,7 +361,7 @@ export const storageService = {
       const preferences = prefsRaw ? JSON.parse(prefsRaw) : (validSnapshot?.preferences || null);
       const timestampRaw = localStorage.getItem(`alphatrade_cache_timestamp_${userId}`);
       const timestamp = timestampRaw ? Number(timestampRaw) : NaN;
-      const cachedTrades = ((trades || validSnapshot?.trades || []) as Trade[]).filter(trade => !isRetiredJournalTrade(trade));
+      const cachedTrades = visibleJournalTrades((trades || validSnapshot?.trades || []) as Trade[]);
       const activeOwner = await getUserId();
       return {
         trades: activeOwner === userId ? cachedTrades : cachedTrades.map(t => stripLegacyTradeNotes(stripTradeNoteHistory(t))),
@@ -481,7 +481,7 @@ export const storageService = {
 
     const localKey = `alphatrade_trades_${userId}`;
     const cached = await get(localKey);
-    return (cached || []).filter((trade: Trade) => !isRetiredJournalTrade(trade));
+    return visibleJournalTrades(cached || []);
   },
 
   async getTrades(targetUserId?: string): Promise<Trade[]> {
@@ -492,7 +492,7 @@ export const storageService = {
 
     // Fast IndexedDB fallback
     const localKey = userId ? `alphatrade_trades_${userId}` : 'alphatrade_trades';
-    let localTrades: Trade[] = ((await get(localKey)) || []).filter((trade: Trade) => !isRetiredJournalTrade(trade));
+    let localTrades: Trade[] = visibleJournalTrades((await get(localKey)) || []);
     if (!userId || userId !== await getUserId()) localTrades = localTrades.map(t => stripLegacyTradeNotes(stripTradeNoteHistory(t)));
 
     if (!userId) return localTrades;

@@ -1,5 +1,5 @@
 import type { Account, DashboardMode, Trade, TradeFilters } from '../types.js';
-import { isRetiredJournalTrade } from './journalTradeFacts.js';
+import { visibleJournalTrades } from './journalTradeFacts.js';
 
 /** Filter individual records before aggregation. An account's current parent or
  * copier role never expands an explicit selection of historical accounts. */
@@ -10,8 +10,7 @@ export function filterHistoryTrades(trades: readonly Trade[], accounts: readonly
   const strictActive = mode === 'funded' || mode === 'challenge' || mode === 'backtesting';
   const active = new Set(accounts.filter(account => account.status === 'Active').map(account => account.id));
   const maxDays = { all: undefined, week: 7, month: 30, quarter: 90, year: 365 }[filters.period];
-  return trades.filter(trade => {
-    if (isRetiredJournalTrade(trade)) return false;
+  return visibleJournalTrades(trades).filter(trade => {
     const account = byId.get(trade.accountId);
     if (strictActive && !active.has(trade.accountId)) return false;
     if ((account?.type === 'Backtest') !== (mode === 'backtesting')) return false;
