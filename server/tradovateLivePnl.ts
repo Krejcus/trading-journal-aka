@@ -24,6 +24,8 @@ interface SnapshotEntity {
   openPnL?: number;
   netLiq?: number;
   totalCashValue?: number;
+  realizedPnL?: number;
+  totalCashValueSOD?: number;
 }
 
 export async function loadTradovateLivePnlAnchor(options: {
@@ -62,6 +64,8 @@ export async function loadTradovateLivePnlAnchor(options: {
       openPnl,
       netLiq: finite(snapshot.netLiq),
       totalCashValue: finite(snapshot.totalCashValue),
+      ...(finite(snapshot.realizedPnL) != null ? { realizedPnL: finite(snapshot.realizedPnL) } : {}),
+      ...(finite(snapshot.totalCashValueSOD) != null ? { totalCashValueSOD: finite(snapshot.totalCashValueSOD) } : {}),
     },
   };
 }
@@ -254,6 +258,8 @@ export async function loadTradovateLivePnlTick(options: {
           openPnl,
           netLiq: finite(snapshot.netLiq),
           totalCashValue: finite(snapshot.totalCashValue),
+      ...(finite(snapshot.realizedPnL) != null ? { realizedPnL: finite(snapshot.realizedPnL) } : {}),
+      ...(finite(snapshot.totalCashValueSOD) != null ? { totalCashValueSOD: finite(snapshot.totalCashValueSOD) } : {}),
         };
       } else {
         anchorError = 'cash-snapshot-unavailable';

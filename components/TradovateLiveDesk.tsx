@@ -1,3 +1,8 @@
+import { readTradovateDisplaySession, writeTradovateDisplaySession } from '../lib/tradovateDisplaySessionCache';
+import { liveBalanceDisplay, liveDailyPnlDisplay } from '../lib/liveBalanceDisplay';
+import { useTradovateDisplayFallback } from './useTradovateDisplayFallback';
+import { mergeTradovateAccountDisplay, type AccountDisplayCache } from '../lib/tradovateAccountDisplayMerge';
+import type { TradovateAccountDisplayFeedState } from '../lib/tradovateAccountDisplayTypes';
 import { tradovateAccountReadState, hasCompleteTradovateRead } from '../lib/tradovateLiveReadState';
 import { LIVE_READ_MAX_AGE_MS } from '../lib/liveReadFreshness';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -185,6 +190,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [copyGroups, setCopyGroups] = useState<CopyGroupConfig[]>([]);
+  const [displayFeedReceipt, setDisplayFeedReceipt] = useState<{ userId: string; receivedAt: number; feeds: TradovateAccountDisplayFeedState[] } | null>(null);
+  const restoredDisplay = useMemo(() => readTradovateDisplaySession(userId), [userId]);
+  const [displayCache, setDisplayCache] = useState<{ userId: string; values: AccountDisplayCache }>({ userId, values: {} });
   const [agentStatus, setAgentStatus] = useState<LocalCopierAgentStatus | null>(null);
   const [agentStatusObservedAt, setAgentStatusObservedAt] = useState<number | null>(null);
   // Než doběhne první dotaz, `agentStatus` je null a armovaný copier by se
@@ -307,6 +315,57 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     () => live.data ? tradovateCopyTradeSnapshot(live.data, live.profiles) : null,
     [live.data, live.profiles],
   );
+  const displayMembership = useMemo(() => new Map(Object.entries(live.connectionData).flatMap(([id, data]) => {
+    const connection = live.status?.connections.find(item => item.id === id && item.connected);
+    return connection && connection.environment === data.environment
+      ? [[id, { environment: data.environment, accountIds: new Set(data.accounts.map(account => account.id)) }] as const] : [];
+  })), [live.connectionData, live.status?.connections]);
+  useEffect(() => {
+    setDisplayCache(previous => ({ userId, values: mergeTradovateAccountDisplay(
+      { ...restoredDisplay, ...(previous.userId === userId ? previous.values : {}) },
+      displayFeedReceipt?.userId === userId ? displayFeedReceipt.feeds : [], displayMembership,
+    ) }));
+  }, [userId, displayFeedReceipt, displayMembership, restoredDisplay]);
+  const displayInterrupted = useTradovateDisplayFallback({ userId, membership: displayMembership, worker: displayFeedReceipt,
+    publish: (owner, feeds) => setDisplayCache(previous => ({ userId: owner, values: mergeTradovateAccountDisplay(
+      previous.userId === owner ? previous.values : {}, feeds, displayMembership,
+    ) })),
+  });
+  const displaySnapshot = useMemo(() => {
+    if (!copyTradeSnapshot) return null;
+    return { ...copyTradeSnapshot, accounts: copyTradeSnapshot.accounts.map(account => {
+      const owners = [...displayMembership].filter(([, connection]) => connection.accountIds.has(account.id));
+      const owner = owners.length === 1 ? owners[0] : null;
+      const values = owner && displayCache.userId === userId
+        ? displayCache.values[`${owner[1].environment}:${owner[0]}:${account.id}`]
+          ?? restoredDisplay[`${owner[1].environment}:${owner[0]}:${account.id}`] : undefined;
+      return { ...account, ...(values ? { displayValues: values } : {}), riskDisplayStorageScope: owner ? `${userId}:${owner[1].environment}:${owner[0]}` : undefined, riskDisplayConfigKey: `${owner ? owner[1].environment + ':' + owner[0] : 'unavailable'}:${account.riskDisplayConfigKey}` };
+    }) };
+  }, [copyTradeSnapshot, displayMembership, displayCache, userId, restoredDisplay]);
+  useEffect(() => {
+    // Wait for every connected account list before replacing the persisted view.
+    // A partial bootstrap must not erase amounts for connections still loading.
+    if (!displaySnapshot || !connectedConnectionIds.every(id => displayMembership.has(id))) return;
+    const values: AccountDisplayCache = {};
+    for (const account of displaySnapshot.accounts) {
+      const owners = [...displayMembership].filter(([, connection]) => connection.accountIds.has(account.id));
+      if (owners.length !== 1) continue;
+      const [connectionId, connection] = owners[0];
+      const balance = liveBalanceDisplay(account);
+      const daily = liveDailyPnlDisplay(account, Date.now(), live.dataEnrichmentPending);
+      const entry: AccountDisplayCache[string] = {};
+      if (balance.value != null && balance.confirmedAt) entry.totalCashValue = {
+        value: balance.value, requestedAt: account.displayValues?.totalCashValue?.confirmedAt === balance.confirmedAt
+          ? account.displayValues.totalCashValue.requestedAt : balance.confirmedAt, confirmedAt: balance.confirmedAt,
+      };
+      if (daily.value != null && daily.confirmedAt) entry.dailyRealizedPnL = {
+        value: daily.value, requestedAt: account.displayValues?.dailyRealizedPnL?.confirmedAt === daily.confirmedAt
+          ? account.displayValues.dailyRealizedPnL.requestedAt : daily.confirmedAt, confirmedAt: daily.confirmedAt,
+      };
+      if (Object.keys(entry).length) values[`${connection.environment}:${connectionId}:${account.id}`] = entry;
+    }
+    writeTradovateDisplaySession(userId, values);
+  }, [userId, displaySnapshot, displayMembership, connectedConnectionIds, live.dataEnrichmentPending]);
   const brokerDailyPnlByAccount = useMemo<Readonly<Record<string, number | null>>>(() => {
     if (!live.data) return {};
     return tradovateBrokerDailyPnlByAccount(live.data);
@@ -549,6 +608,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
             directAgentProbe.current = 'available';
             setAgentStatus(next);
             setAgentStatusObservedAt(Date.now());
+            setDisplayFeedReceipt({ userId, receivedAt: Date.now(), feeds: next.accountDisplay ?? [] });
             setAgentStatusResolved(true);
             setAgentTransport('local');
             setRelayConnectionId(next.device?.connectionId ?? next.devices?.[0]?.connectionId ?? null);
@@ -574,6 +634,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         const active = candidates.find(candidate => candidate.remote?.connected) ?? null;
         if (!stopped && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
           setAgentStatus(active?.remote?.status ?? null);
+          setDisplayFeedReceipt({ userId, receivedAt: Date.now(), feeds: candidates.flatMap(candidate => candidate.remote?.connected ? candidate.remote.status?.accountDisplay ?? [] : []) });
           setAgentStatusObservedAt(active ? Date.parse(active.remote!.lastSeenAt) : null);
           setAgentTransport(active ? 'relay' : null);
           setRelayConnectionId(active?.connectionId ?? null);
@@ -599,7 +660,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       stopped = true;
       if (timer != null) window.clearTimeout(timer);
     };
-  }, [agentClient, connectedConnectionIds]);
+  }, [agentClient, connectedConnectionIds, userId]);
 
   useEffect(() => {
     const prefix = '#copier-pair=';
@@ -809,11 +870,12 @@ setAgentStatus((await executeAgent({
         <LiveDashboardSkeleton />
       ) : (
         <>
+          {displayInterrupted && <div role="status" className="text-xs text-[var(--text-secondary)]">Obnovuji spojení pro aktualizaci zůstatků. Zobrazené hodnoty jsou poslední potvrzené.</div>}
           {tab === 'overview' && copyTradeSnapshot ? (
             <LiveCopyTradeOverview
               journalHistory={journalHistory}
               userId={userId}
-              snapshot={copyTradeSnapshot}
+              snapshot={displaySnapshot ?? copyTradeSnapshot}
               accountProfiles={live.profiles}
               orders={copyTradeOrders}
               onRefreshOrders={async () => { await live.refreshData(); }}
@@ -876,7 +938,7 @@ setAgentStatus((await executeAgent({
             <LiveRiskTab
               runtimeAvailable={runtimeAvailable}
               riskConfigSupported={supportsCopierRiskConfig(agentStatus)}
-              snapshot={copyTradeSnapshot}
+              snapshot={displaySnapshot ?? copyTradeSnapshot}
               accountProfiles={live.profiles}
               group={agentStatus?.group ?? null}
               status={agentStatus?.controller ?? null}

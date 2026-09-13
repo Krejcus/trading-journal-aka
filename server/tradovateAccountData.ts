@@ -714,6 +714,7 @@ export async function loadTradovateAccountData(options: {
         positionsAsOf: positionsProbe.ok ? requestedAt : null,
         ordersAsOf: ordersProbe.ok ? requestedAt : null,
         cashAsOf: snapshot ? cashAsOf : null,
+        dailyAsOf: !bootstrap && (cashBalancesProbe.ok || historyProbe.ok) ? requestedAt : null,
         requestedAt,
       },
       balance: {

@@ -208,6 +208,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-13 — Codex: historie, fáze 30 — izolovaná integrace main
+
+- Lokální práce uložena jako 0163c891 do větve `codex/history-evidence-20260913`, následně sloučen main 110aa0db. Zachovaný display feed i journal sběr přes jeden socket; oba dostávají resync. Canonical necommitnuté pracovní soubory beze změny.
+- Sloučený kód: 3 515 testů/386 souborů, TypeScript, scoped lint, Vite/PWA build a oddělený esbuild worker bundle + node syntax check prošly. Worker nebyl spuštěn nebo instalován. Browser ověřil hlavní fiktivní graf se třemi SL změnami v jedné minutě.
+- Dvě upstream testovací očekávání opravena podle aktuálního Currency/LiveRiskValue kontraktu, číselné/risk aserce zachované. Podrobnosti `PHASE-30-INTEGRATION.md` v review složce.
+- Připravené `ACTIVATION-REVIEW.md` a `ACTIVATION-FILES.txt`: požadavky → důkazy, 190 cest, 8 migrací, záloha, souběžné nasazení RPC/klienta a bezpečný restart workeru. Žádný push, vzdálená migrace ani broker akce. Další krok vyžaduje výslovné schválení aktivačního plánu.
+
+
 ### 2026-09-13 — Codex: historie, fáze 29 — kapacita a dávkový staging (lokálně)
 
 - Na 12 fiktivních účtech ověřeno až 24 000 obchodů/120 013 raw řádků se správnými vlastními součty. Výpočet 2,236 s, projekce 34,4 MB; není to síťový ani vzdálený výkonový důkaz.
@@ -328,6 +336,11 @@ V izolovaném `/private/tmp/alphatrade-history-20260912` přibyl sbalený owner 
   scope nebyl ověřen; build má existující upozornění na velikost chunků.
 - Rozsah a návaznosti: `docs/reviews/trade-history-20260912/PHASE-1.md`.
   Bez nasazení, změny databáze, instalace workeru a broker akcí.
+### 2026-09-12 — LIVE display reload persistence
+
+- Balance and daily P&L restore from user-scoped session display cache; DLL/DD retain their last known values across partial refresh and reload, with original timestamps and value-based colors. Cache is scoped to user, broker connection, account, explicit risk profile and trading session.
+- Presentation cache never feeds execution or risk eligibility. Local read proxy additionally allows authenticated GET copier-relay only.
+- Release validation: 35 focused tests passed, typecheck and production build passed. Isolated from unrelated account profile UI work.
 
 ### 2026-09-11 — Schválené nasazení oprav této session (Codex)
 

@@ -1,3 +1,4 @@
+import type { TradovateAccountDisplaySnapshot } from '../lib/tradovateAccountDisplayTypes';
 import { supabase } from './supabase';
 import { apiUrl } from '../utils/runtimeConfig';
 import type {
@@ -211,11 +212,13 @@ export function disconnectTradovateOAuth(connectionId: string): Promise<{ connec
 export function runTradovateReadOnlyPreflight(
   connectionId: string,
   mode: 'bootstrap' | 'full' = 'full',
+  signal?: AbortSignal,
 ): Promise<TradovatePreflightResult> {
   return authenticatedRequest('/api/tradovate/oauth/preflight', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ connectionId, mode }),
+    ...(signal ? { signal } : {}),
   });
 }
 
@@ -373,4 +376,15 @@ export function saveTradovateAccountProfiles(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ profiles }),
   });
+}
+
+
+/** Old servers return a normal tick for unknown modes; never treat it as cash. */
+export async function runTradovateAccountDisplayRead(connectionId: string, accountId: number): Promise<TradovateAccountDisplaySnapshot | null> {
+  const result = await authenticatedRequest<{kind?: string; snapshot?: TradovateAccountDisplaySnapshot}>('/api/tradovate/oauth/live-pnl', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({connectionId, accountId, mode: 'cash'}),
+    signal: AbortSignal.timeout(20_000),
+  });
+  return result.kind === 'account-display-v1' && result.snapshot ? result.snapshot : null;
 }

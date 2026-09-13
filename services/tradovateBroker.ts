@@ -127,7 +127,16 @@ export interface WebSocketLike {
   close(): void;
 }
 
+export interface TradovateAccountDataChange {
+  accountId: number | null;
+  reason: 'cash' | 'position' | 'fill' | 'resync';
+  receivedAt: number;
+}
+
 export interface TradovateBrokerConfig {
+  onAccountDataConnectionChange?: (connected: boolean) => void | Promise<void>;
+  /** Display-only invalidation. Never awaited; failures cannot enter execution. */
+  onAccountDataChange?: (change: TradovateAccountDataChange) => void | Promise<void>;
   environment: BrokerEnvironment;
   accessToken?: string;
   getAccessToken?: () => Promise<string>;
@@ -389,10 +398,25 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   let journalSnapshotTimer: ReturnType<typeof setInterval> | null = null;
   const syncRequestBody = {
     splitResponses: true,
-    entityTypes: [...JOURNAL_SOCKET_ENTITY_TYPES],
+    entityTypes: [...JOURNAL_SOCKET_ENTITY_TYPES, ...(config.onAccountDataChange ? ['cashBalance'] : [])],
+  };
+
+  const notifyAccountDataChange = (accountId: unknown, reason: TradovateAccountDataChange['reason']) => {
+    if (!config.onAccountDataChange) return;
+    if (reason !== 'resync' && (typeof accountId !== 'number' || !Number.isSafeInteger(accountId) || accountId <= 0)) return;
+    try {
+      void Promise.resolve(config.onAccountDataChange({
+        accountId: reason === 'resync' ? null : accountId as number,
+        reason, receivedAt: clock(),
+      })).catch(() => { /* Display observer failures never affect execution. */ });
+    } catch { /* Same boundary for synchronous observers. */ }
   };
 
   const emit = (event: BrokerEvent) => {
+    if (event.type === 'connection' && config.onAccountDataConnectionChange) {
+      try { void Promise.resolve(config.onAccountDataConnectionChange(event.connected)).catch(() => {}); }
+      catch { /* Presentation observer cannot affect execution. */ }
+    }
     for (const listener of listeners) listener(event);
   };
 
@@ -817,7 +841,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       const item = raw as { entityType?: string; entity?: unknown; eventType?: string };
       const entityType = item.entityType?.toLowerCase();
       if (!item.entity || typeof item.entity !== 'object') continue;
-      if (entityType === 'contract') {
+      if (entityType === 'cashbalance') {
+        notifyAccountDataChange((item.entity as { accountId?: number }).accountId, 'cash');
+      } else if (entityType === 'contract') {
         const contract = item.entity as TradovateContractEntity;
         if (contract.id != null && contract.name) contracts.set(contract.id, contract.name);
       } else if (entityType === 'command') {
@@ -874,6 +900,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (order) emit({ type: 'order', order });
         await flushPendingFills(orderEntity.id);
       } else if (entityType === 'position') {
+        notifyAccountDataChange((item.entity as { accountId?: number }).accountId, 'position');
         const position = item.entity as TradovatePositionEntity;
         await hydrateContracts([position.contractId]);
         emit({ type: 'position', position: {
@@ -884,6 +911,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       } else if (entityType === 'fill') {
         const fill = item.entity as TradovateFillEntity;
         if (!rememberFill(fill)) continue;
+        const changedAccount = (item.entity as { accountId?: number }).accountId ?? rawOrders.get(fill.orderId)?.accountId;
+        if (changedAccount != null) notifyAccountDataChange(changedAccount, 'fill');
+        else notifyAccountDataChange(null, 'resync');
         await emitMappedFill(fill);
         const updated = await composeOrder(fill.orderId);
         if (updated) emit({ type: 'order', order: updated });
@@ -975,6 +1005,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         syncReady = true;
         socketState = 'connected';
         observe('connection', { state: 'synced' }, 'transport');
+        notifyAccountDataChange(null, 'resync');
         reconnectFailures = 0;
         stopDisconnectedLog();
         // Dokončená plánovaná obměna: controller výpadek nikdy neviděl,

@@ -337,3 +337,19 @@ describe('Tradovate follower live P&L estimation', () => {
     expect(tradovateValuePerPoint('ESZ6')).toBeNull();
   });
 });
+
+
+describe('confirmed cash fields in rapid ticks', () => {
+  it('updates realized P&L only for the exact broker account, including zero', () => {
+    const data = { ...dataset, accounts: dataset.accounts.map(a => ({ ...a, balance: { ...a.balance, realizedPnL: 99 } })) };
+    const tick = {
+      connectionId: 'c', environment: 'demo' as const, capturedAt: '2026-08-27T20:00:01.000Z',
+      anchor: { accountId: 10, contractId: 7, openPnl: 20, netLiq: 50_020, totalCashValue: 50_000, realizedPnL: 0, totalCashValueSOD: 49_900 },
+    };
+    const result = applyTradovateLivePnlAnchorTick(data, tick);
+    expect(result.data.accounts.map(a => a.balance.realizedPnL)).toEqual([0, 99, 99]);
+    expect(result.data.accounts.map(a => a.balance.totalCashValueSOD)).toEqual([49_900, 50_000, 50_000]);
+    const missing = applyTradovateLivePnlAnchorTick(data, { ...tick, anchor: { ...tick.anchor, realizedPnL: null } });
+    expect(missing.data.accounts[0].balance.realizedPnL).toBe(99);
+  });
+});

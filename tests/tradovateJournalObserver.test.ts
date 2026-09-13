@@ -87,6 +87,28 @@ describe('passive journal observer', () => {
     stop(); good();
   });
 
+  it('shares one sync request with the account display observer without losing journal events', async () => {
+    const display = vi.fn();
+    const { broker, socket } = setup(undefined, { onAccountDataChange: display });
+    const events: JournalObservation[] = [];
+    const evidence = broker.subscribeEvidence(event => events.push(event));
+    const stop = broker.subscribe(() => {});
+    socket.readyState = 1;
+    socket.onmessage?.({data:'a[{"i":0,"s":200,"d":{}}]'});
+    await vi.waitFor(() => expect(socket.send).toHaveBeenCalledTimes(1));
+    const request = JSON.parse(socket.send.mock.calls[0][0].split('\n')[3]);
+    expect(request.entityTypes).toEqual(expect.arrayContaining(['cashBalance','orderVersion','fillFee','fillPair','cashBalanceLog']));
+    expect(new Set(request.entityTypes).size).toBe(request.entityTypes.length);
+    socket.onmessage?.({data:'a[{"i":1,"s":200,"d":[]}]'});
+    await vi.waitFor(() => expect(display).toHaveBeenCalledWith(expect.objectContaining({reason:'resync'})));
+    expect(events.some(event=>event.entityType==='connection' && event.entity.state==='synced')).toBe(true);
+    socket.onmessage?.({data:'a[{"e":"props","d":[{"entityType":"cashBalance","entity":{"id":1,"accountId":1}},{"entityType":"orderVersion","entity":{"id":77,"orderId":20,"stopPrice":99}}]}]'});
+    await vi.waitFor(() => expect(display).toHaveBeenCalledWith(expect.objectContaining({reason:'cash',accountId:1})));
+    expect(events.some(event=>event.entityType==='orderversion' && event.entity.id===77)).toBe(true);
+    expect(socket.send).toHaveBeenCalledTimes(1);
+    stop(); evidence();
+  });
+
   it('keeps a requested new stop out of an already populated execution order', async () => {
     const { broker, socket } = setup(async input => {
       const path = new URL(String(input)).pathname;

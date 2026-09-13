@@ -1,10 +1,12 @@
 import { copierJournalLinks } from '../../services/copierJournalLinks';
 import { startLocalCopierJournal } from '../../server/localCopierJournal';
+import { createTradovateAccountDisplayFeed } from '../../server/tradovateAccountDisplayFeed';
+import { readTradovateAccountDisplay } from '../../server/tradovateAccountDisplayRead';
 import { access, appendFile, chmod, copyFile, mkdir, open, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { createClient as createSupabaseClient, type SupabaseClient } from '@supabase/supabase-js';
+import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { tradovateApiBaseUrl } from '../../server/tradovateOAuth';
 import { loadTradovateAccountData } from '../../server/tradovateAccountData';
 import {
@@ -100,6 +102,7 @@ interface ConnectionRow {
 }
 
 interface PilotContext {
+  displayFeed?: ReturnType<typeof createTradovateAccountDisplayFeed>;
   environment: 'demo';
   connectionId: string;
   accountSpec?: string;
@@ -212,6 +215,7 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
   }
 
   if (selected === 'agent') {
+    context.displayFeed = makeDisplayFeed(context, Object.keys(accountSpecsByAccountId).map(Number));
     const broker = createTradovateBroker({
       environment: 'demo',
       accountSpec: context.accountSpec,
@@ -219,6 +223,8 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
       getAccessToken: context.getAccessToken,
       connectionLabel: connectionLabel(context.connectionId),
       onReconnectDiagnostic: logReconnectDiagnostic,
+      onAccountDataChange: change => context.displayFeed?.invalidate(change.accountId),
+      onAccountDataConnectionChange: connected => context.displayFeed?.setStreamConnected(connected),
     });
     await runLocalAgent([context], leaderId, followerId, accounts, broker, [{ broker, label: connectionLabel(context.connectionId), connectionId: context.connectionId }]);
     return;
@@ -246,6 +252,7 @@ async function runMultiConnectionAgent(): Promise<void> {
       accessToken: await context.getAccessToken(),
     });
     const accountSpecsByAccountId = Object.fromEntries(data.accounts.map(account => [account.id, account.name]));
+    context.displayFeed = makeDisplayFeed(context, data.accounts.map(account => account.id));
     const broker = createTradovateBroker({
       environment: 'demo',
       accountSpec: context.accountSpec,
@@ -255,6 +262,8 @@ async function runMultiConnectionAgent(): Promise<void> {
       // spojení (propfirma) vypadlo.
       connectionLabel: connectionLabel(entry.connectionId),
       onReconnectDiagnostic: logReconnectDiagnostic,
+      onAccountDataChange: change => context.displayFeed?.invalidate(change.accountId),
+      onAccountDataConnectionChange: connected => context.displayFeed?.setStreamConnected(connected),
     });
     return { context, accounts: data.accounts, broker };
   }));
@@ -299,6 +308,15 @@ async function runMultiConnectionAgent(): Promise<void> {
       return { missingOptional: refreshed.missingOptional };
     },
   );
+}
+
+function makeDisplayFeed(context: PilotContext, accountIds: number[]) {
+  return createTradovateAccountDisplayFeed({
+    connectionId: context.connectionId, environment: context.environment, accountIds: () => accountIds,
+    read: async (accountId, signal) => readTradovateAccountDisplay({
+      baseUrl: tradovateApiBaseUrl(context.environment), accessToken: await context.getAccessToken(), accountId, signal,
+    }),
+  });
 }
 
 async function runLocalAgent(
@@ -536,6 +554,7 @@ async function runLocalAgent(
     if (pairingRestartTimer) clearTimeout(pairingRestartTimer);
     if (snapshotHealthTimer) clearInterval(snapshotHealthTimer);
     marketPriceFeed?.stop();
+    contexts.forEach(item => item.displayFeed?.close());
     const cancelShutdownWatchdog = startAgentShutdownWatchdog({
       timeoutMs: 20_000,
       onTimeout: () => {
@@ -773,6 +792,7 @@ async function runLocalAgent(
       devices: contexts.flatMap(candidate => candidate.device ? [candidate.device] : []),
       snapshotHealth: () => snapshotHealth,
       marketPrices: () => marketPriceFeed?.current() ?? [],
+      accountDisplay: () => contexts.flatMap(item => item.displayFeed ? [item.displayFeed.state()] : []),
       onSnapshotTest: (requestId, options) => {
         if (!snapshotsEnabled) throw new Error('snapshot-test-unavailable');
         if (snapshotTestInFlight) throw new Error('snapshot-test-already-running');
@@ -1416,15 +1436,15 @@ async function acquireProcessLock(path: string): Promise<() => Promise<void>> {
     await handle.close();
   } catch (error) {
     if (!isCode(error, 'EEXIST')) throw error;
-    let pid = 0;
+    let pid: number;
     try {
       const raw = JSON.parse(await readFile(path, 'utf8')) as { pid?: unknown };
       pid = Number(raw.pid);
-    } catch {
-      throw new Error(`Pilot lock existuje a nejde ověřit: ${path}`);
+    } catch (cause) {
+      throw new Error(`Pilot lock existuje a nejde ověřit: ${path}`, { cause });
     }
     if (Number.isSafeInteger(pid) && pid > 0 && processExists(pid)) {
-      throw new Error(`Jiný pilot runtime už běží (pid ${pid})`);
+      throw new Error(`Jiný pilot runtime už běží (pid ${pid})`, { cause: error });
     }
     await unlink(path);
     return acquireProcessLock(path);

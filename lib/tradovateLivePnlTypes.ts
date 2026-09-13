@@ -13,6 +13,9 @@ export interface TradovateLivePnlAnchor {
   openPnl: number;
   netLiq: number | null;
   totalCashValue: number | null;
+  /** Confirmed account cash fields; never estimated from another account. */
+  realizedPnL?: number | null;
+  totalCashValueSOD?: number | null;
 }
 
 /**

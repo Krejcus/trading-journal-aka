@@ -1,3 +1,9 @@
+import { createTradovateAccountDisplayFeed } from '../server/tradovateAccountDisplayFeed';
+import { readTradovateAccountDisplay } from '../server/tradovateAccountDisplayRead';
+import { mergeTradovateAccountDisplay } from '../lib/tradovateAccountDisplayMerge';
+import { liveBalanceDisplay, liveDailyPnlDisplay } from '../lib/liveBalanceDisplay';
+import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
+import type { LiveAccount } from '../services/tradecopiaLiveService';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrokerEvent } from '../services/brokerPort';
 import { createBrokerRouter } from '../services/brokerRouter';
@@ -56,6 +62,7 @@ const createHarness = (options: {
   socketFactory?: () => FakeSocket;
   getAccessToken?: () => Promise<string>;
   reconnectMaxDelayMs?: number;
+  onAccountDataChange?: Parameters<typeof createTradovateBroker>[0]['onAccountDataChange'];
 } = {}) => {
   const sockets: FakeSocket[] = [];
   const diagnostics: string[] = [];
@@ -63,6 +70,7 @@ const createHarness = (options: {
   const factory = options.socketFactory ?? (() => new FakeSocket(true));
   const broker = createTradovateBroker({
     environment: 'demo',
+    onAccountDataChange: options.onAccountDataChange,
     accountSpec: 'DEMO123',
     accessToken: options.getAccessToken ? undefined : 'token',
     getAccessToken: options.getAccessToken,
@@ -93,6 +101,44 @@ describe('Tradovate WebSocket konečný reconnect automat', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('delivers a broker cash event through the read queue and serialized status into display without refreshing risk', async () => {
+    let balance=51000; let daily=125;
+    const fetcher=vi.fn(async (url: string | URL | Request) => Response.json(String(url).includes('/currency/') ? [{id:2,name:'USD',symbol:'$'}]
+      : String(url).includes('/deps?') ? [{accountId:10,currencyId:2,tradeDate:{year:2026,month:9,day:3},timestamp:'2026-09-03T05:00:00Z',realizedPnL:daily}]
+      : {totalCashValue:balance,netLiq:balance,realizedPnL:99999,openPnL:0}));
+    const feed=createTradovateAccountDisplayFeed({connectionId:'c',environment:'demo',accountIds:()=>[10],read:(accountId,signal)=>readTradovateAccountDisplay({baseUrl:'https://demo.tradovateapi.com/v1',accessToken:'test',accountId,signal,fetchImpl:fetcher})});
+    const harness=createHarness({onAccountDataChange:change=>feed.invalidate(change.accountId)});
+    await flush();await completeHandshake(harness.sockets[0]);await vi.advanceTimersByTimeAsync(250);
+    const membership=new Map([['c',{environment:'demo' as const,accountIds:new Set([10])}]]);
+    let cache=mergeTradovateAccountDisplay({},JSON.parse(JSON.stringify([feed.state()])),membership);
+    expect(cache['demo:c:10'].dailyRealizedPnL?.value).toBe(125);
+    balance=51200;daily=325;
+    harness.sockets[0].deliver('a[{"e":"props","d":{"entityType":"cashBalance","entity":{"accountId":10,"amount":51200}}}]');
+    await flush();await vi.advanceTimersByTimeAsync(1000);
+    cache=mergeTradovateAccountDisplay(cache,JSON.parse(JSON.stringify([feed.state()])),membership);
+    const account={id:10,balance:51000,realizedPnl:125,cashAvailability:'available',cashUpdatedAt:'2026-09-03T04:00:00Z',displayValues:cache['demo:c:10']} as LiveAccount;
+    expect(liveBalanceDisplay(account).value).toBe(51200);
+    expect(liveDailyPnlDisplay(account).value).toBe(325);
+    expect(account.balance).toBe(51000);expect(account.realizedPnl).toBe(125);
+    expect(isLiveAccountReadVerified(account,'cash')).toBe(false);
+    harness.unsubscribe();feed.close();
+  });
+
+  it('isolates cash invalidations from execution and tolerates display observer failure', async () => {
+    const observer = vi.fn(() => { throw new Error('display-only failure'); });
+    const harness = createHarness({ onAccountDataChange: observer });
+    await flush();
+    await completeHandshake(harness.sockets[0]);
+    expect(observer).toHaveBeenCalledWith(expect.objectContaining({ reason: 'resync', accountId: null }));
+    harness.events.length = 0;
+    harness.sockets[0].deliver('a[{"e":"props","d":{"entityType":"cashBalance","entity":{"accountId":10,"amount":51000}}}]');
+    await flush();
+    expect(observer).toHaveBeenCalledWith(expect.objectContaining({ reason: 'cash', accountId: 10 }));
+    expect(harness.events.filter(event => event.type !== 'heartbeat')).toEqual([]);
+    expect(harness.sockets[0].sent.some(message => message.includes('cashBalance'))).toBe(true);
+    harness.unsubscribe();
   });
 
   it('po heartbeat timeoutu bez onclose obnoví agregovaný stav obou OAuth spojení', async () => {

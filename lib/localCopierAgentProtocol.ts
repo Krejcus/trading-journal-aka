@@ -1,3 +1,4 @@
+import type { TradovateAccountDisplayFeedState } from './tradovateAccountDisplayTypes.js';
 import type {
   CopyGroupConfig,
   LiveCopyTradingCommand,
@@ -65,6 +66,8 @@ export interface LocalCopierAgentStatus {
    * rozhodování copieru; chybí, když TradingView neběží.
    */
   marketPrices?: CopierMarketPrice[];
+  /** Read-only display snapshots; never authorize broker actions. */
+  accountDisplay?: TradovateAccountDisplayFeedState[];
 }
 
 export interface CopierMarketPrice {

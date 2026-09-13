@@ -1,3 +1,4 @@
+import { readTradovateAccountDisplay } from '../../../server/tradovateAccountDisplayRead.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import {
   createTradovateAdminClient,
@@ -31,6 +32,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       userId,
       connectionId,
     });
+    if (req.body?.mode === 'cash') {
+      const accountId = Number(req.body?.accountId);
+      if (!Number.isSafeInteger(accountId) || accountId <= 0) return res.status(400).json({ error: 'invalid-account-id' });
+      const requestedAt = new Date().toISOString();
+      const fields = await readTradovateAccountDisplay({
+        baseUrl: tradovateApiBaseUrl(config.environment), accessToken, accountId, signal: AbortSignal.timeout(8_000),
+      });
+      return res.status(200).json({ kind: 'account-display-v1', snapshot: {
+        connectionId, environment: config.environment, accountId, requestedAt, confirmedAt: new Date().toISOString(), fields,
+      } });
+    }
     if (req.body?.mode === 'anchor') {
       const accountId = Number(req.body?.accountId);
       const contractId = Number(req.body?.contractId);
@@ -60,6 +72,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json(tick);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (req.body?.mode === 'cash' && error && typeof error === 'object' && 'status' in error && error.status === 429) {
+      const retryAfterMs = 'retryAfterMs' in error && typeof error.retryAfterMs === 'number' && Number.isFinite(error.retryAfterMs)
+        ? Math.max(1_000, error.retryAfterMs) : 60_000;
+      return res.status(429).json({ error: 'tradovate-rate-limited', retryAfterMs });
+    }
+
     if (message === 'missing-auth-token' || message === 'invalid-auth-token') {
       return res.status(401).json({ error: message });
     }
