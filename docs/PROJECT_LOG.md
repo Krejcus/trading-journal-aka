@@ -208,6 +208,25 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-13 — Historie fáze 31: schválená aktivace (Codex)
+
+Po explicitním schválení samostatná soukromá DB/Edge/worker záloha, osm migrací,
+šest Edge Functions a Vercel 26efeada (dpl_4DwVJPEjSheiE7wjiGeFCbtFFbWW READY).
+DEMO worker aktualizován až po autoritativní flat/DISARMED kontrole; po restartu
+zůstává DISARMED, connected a bez pracovních příkazů. 138 skutečných událostí
+ze dvou připojení má shodné event-ID hashe na disku a v DB; upload ACK a import
+200, dokončené projekční cursory. Nedělní broker seznamy neobsahují fill/order
+historii: nový obchod a opakované posuny SL/TP nejsou tímto ověřeny. Zůstává
+uživatelský DEMO scénář a produkční UI ověření odebrání sdílecího souhlasu.
+Původní syntetické copier výsledky jsou oddělené od potvrzených statistik.
+Podrobnosti, záloha, advisories a hranice důkazů:
+`docs/reviews/trade-history-20260912/PHASE-31-ACTIVATION.md`.
+Weekly-report v6 nasazen po doplňujícím souhlasu s existujícím přenosem do
+Anthropic. V DB již bylo 9 reportů; kód je používá v Coach, neposílá automaticky
+email/push. Hromadné kopírování Storage objektů zamítnuto kontrolou, provedena
+pouze schválená kontrola metadat/HEAD; DB záloha neobsahuje obrázkové objekty.
+
+
 ### 2026-09-13 — Codex: historie, fáze 30 — izolovaná integrace main
 
 - Lokální práce uložena jako 0163c891 do větve `codex/history-evidence-20260913`, následně sloučen main 110aa0db. Zachovaný display feed i journal sběr přes jeden socket; oba dostávají resync. Canonical necommitnuté pracovní soubory beze změny.
