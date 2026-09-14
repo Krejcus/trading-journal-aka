@@ -1,4 +1,4 @@
-import { latestJournalEvidence, projectJournalEvidence, type JournalEvidence, type JournalFill, type JournalProtectionEvent } from './tradovateJournalEvidence.js';
+import { journalCurrencyCode, latestJournalEvidence, projectJournalEvidence, type JournalEvidence, type JournalFill, type JournalProtectionEvent } from './tradovateJournalEvidence.js';
 import { pointValueUsd } from '../services/futuresContractSpecs.js';
 
 export interface TradeExecutionHistory {
@@ -96,13 +96,13 @@ export function buildJournalAccountTrades(evidence: readonly JournalEvidence[]):
     const buyPrice = number(pair.entity.buyPrice) ?? buy.price;
     const sellPrice = number(pair.entity.sellPrice) ?? sell.price;
     const ledger = (ledgerByPair.get(pair.entity.id) ?? []).filter(event => event.entity.accountId === entry.accountId
-      && event.entity.cashChangeType === 'TradePaired' && event.entity.currencyId === 840);
+      && event.entity.cashChangeType === 'TradePaired' && journalCurrencyCode(latest, event.entity.currencyId) === 'USD');
     const grossPnl = ledger.length && ledger.every(event => number(event.entity.delta) != null)
       ? ledger.reduce((sum, event) => sum + Number(event.entity.delta), 0)
       : pv == null ? null : (sellPrice - buyPrice) * quantity * pv;
     // A fill can close several pairs or reverse. Allocate its fee by quantity;
     // charging the entire fill fee to each pair would multiply commissions.
-    const fees = [buy, sell].every(fill => fill.fees != null && fill.feeCurrencyId === 840)
+    const fees = [buy, sell].every(fill => fill.fees != null && journalCurrencyCode(latest, fill.feeCurrencyId) === 'USD')
       ? buy.fees! * quantity / buy.quantity + sell.fees! * quantity / sell.quantity : null;
     const childOrders = new Set(childrenByParent.get(`${entry.accountId}:${entry.orderId}`) ?? []);
     const links = (linksByOrder.get(`${entry.accountId}:${entry.orderId}`) ?? []).filter(event => event.entity.role === 'entry');

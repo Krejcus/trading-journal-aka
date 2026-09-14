@@ -13,6 +13,7 @@ export function journalAccountsFixture(connectionId = '33333333-3333-4333-8333-3
       sequence, id: sequence.toString(16).padStart(64, '0'), sessionId: '55555555-5555-4555-8555-555555555555' });
   };
   add('contract', { id: 1, name: 'MNQU6' }, 0);
+  add('currency', { id: 1, name: 'USD', symbol: '$' }, 0);
   if (initialSnapshot) {
     for (const row of positionSnapshotObservations('initial', Array.from({ length: count }, (_, index) => ({ id: index + 1 })), [], 0, 100)) {
       add(row.entityType, row.entity, row.receivedAt, 'snapshot');
@@ -24,7 +25,7 @@ export function journalAccountsFixture(connectionId = '33333333-3333-4333-8333-3
     if (!initialSnapshot) add('position', { id, accountId: id, contractId: 1, netPos: 0 }, 0);
     for (const [fillId, action, price, at] of [[id * 10, 'Buy', 20_000 + id, 1000 + id], [id * 10 + 1, 'Sell', 20_010 + id, 2000 + id]] as const) {
       add('fill', { id: fillId, orderId: fillId, accountId: id, contractId: 1, action, price, qty: id, timestamp: new Date(at).toISOString() }, at);
-      add('fillfee', { id: fillId, commission: id * 0.5, commissionCurrencyId: 840 }, at);
+      add('fillfee', { id: fillId, commission: id * 0.5, commissionCurrencyId: 1 }, at);
     }
     add('fillpair', { id, buyFillId: id * 10, sellFillId: id * 10 + 1, qty: id, active: true }, 3000);
   }

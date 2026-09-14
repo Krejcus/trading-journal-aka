@@ -3,7 +3,7 @@ import { JOURNAL_BACKFILL_TYPES } from '../lib/journalBackfillPlan';
 import type { JournalBackfillType } from '../lib/journalAccountingBackfill';
 
 export interface JournalSourceStatus {
-  type: JournalBackfillType;
+  type: Exclude<JournalBackfillType, 'currency'>;
   recordedAt: number | null;
   metadata: null | {
     kind: 'observed' | 'unavailable'; startedAt: number; completedAt: number;
@@ -50,7 +50,7 @@ export function decodeJournalSourceStatus(value: unknown, expected: readonly str
     seen.add(row.connectionId);
     const types = new Set<string>();
     const sources = row.sources.map(value => {
-      const source = object(value); const type = source.type as JournalBackfillType;
+      const source = object(value); const type = source.type as Exclude<JournalBackfillType, 'currency'>;
       if (!JOURNAL_BACKFILL_TYPES.includes(type) || types.has(type)) return fail();
       types.add(type);
       if (source.metadata === null && source.recordedAt === null) return { type, metadata: null, recordedAt: null };

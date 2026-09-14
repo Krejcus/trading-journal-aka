@@ -21,12 +21,13 @@ const evidence = (count = 1) => {
     rows.push({ ...journalObservation(type, data, 'stream', 'Created', time)!, connectionId, environment: 'demo',
       id: sequence.toString(16).padStart(64, '0'), sequence, sessionId: 'session' });
   };
+  add('currency', { id: 1, name: 'USD', symbol: '$' }, 0);
   add('contract', { id: 1, name: 'MNQU6' }, 0);
   for (let id = 1; id <= count; id++) {
     add('position', { id, accountId: id, contractId: 1, netPos: 0 }, 0);
     for (const [fillId, side, price, time] of [[id * 10, 'Buy', 20_000 + id, 1000 + id], [id * 10 + 1, 'Sell', 20_010 + id, 2000 + id]] as const) {
       add('fill', { id: fillId, orderId: fillId, accountId: id, contractId: 1, action: side, price, qty: id, timestamp: new Date(time).toISOString() }, time);
-      add('fillfee', { id: fillId, commission: id * 0.5, commissionCurrencyId: 840 }, time);
+      add('fillfee', { id: fillId, commission: id * 0.5, commissionCurrencyId: 1 }, time);
     }
     add('fillpair', { id, buyFillId: id * 10, sellFillId: id * 10 + 1, qty: id, active: true }, 3000);
   }

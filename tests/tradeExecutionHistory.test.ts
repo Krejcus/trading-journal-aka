@@ -9,6 +9,7 @@ const observation = (type: JournalEntityType, entity: Record<string, string | nu
   id: String(sequence), connectionId: 'conn', environment: 'demo', sessionId: 'session', sequence,
 });
 const rows = () => [
+  observation('currency', { id: 1, name: 'USD', symbol: '$' }),
   observation('contract', { id: 1, name: 'MNQU6' }),
   observation('order', { id: 10, accountId: 101, action: 'Buy' }),
   observation('order', { id: 11, accountId: 101, action: 'Sell' }),
@@ -16,9 +17,9 @@ const rows = () => [
   observation('fill', { id: 100, orderId: 10, contractId: 1, qty: 3, price: 20_000, timestamp: '2026-09-01T12:00:00.123Z', action: 'Buy' }),
   observation('fill', { id: 101, orderId: 11, contractId: 1, qty: 1, price: 20_005, timestamp: '2026-09-01T12:01:00.456Z', action: 'Sell' }),
   observation('fill', { id: 102, orderId: 12, contractId: 1, qty: 2, price: 20_010, timestamp: '2026-09-01T12:02:00.789Z', action: 'Sell' }),
-  observation('fillfee', { id: 100, commission: 3, commissionCurrencyId: 840 }),
-  observation('fillfee', { id: 101, commission: 1, commissionCurrencyId: 840 }),
-  observation('fillfee', { id: 102, commission: 2, commissionCurrencyId: 840 }),
+  observation('fillfee', { id: 100, commission: 3, commissionCurrencyId: 1 }),
+  observation('fillfee', { id: 101, commission: 1, commissionCurrencyId: 1 }),
+  observation('fillfee', { id: 102, commission: 2, commissionCurrencyId: 1 }),
   observation('fillpair', { id: 500, buyFillId: 100, sellFillId: 101, qty: 1, active: true }),
   observation('fillpair', { id: 501, buyFillId: 100, sellFillId: 102, qty: 2, active: true }),
 ];

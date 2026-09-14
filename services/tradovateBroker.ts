@@ -728,7 +728,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       }
       // One bounded pass across available source lists, then exact known-parent
       // batches for oversized sources. No per-account socket or execution cache.
-      for (const type of journalBackfillPlan.cycle()) {
+      // Reference data is captured through the same bounded, durable read path.
+      // It is not a historical-coverage source; keep the existing source-status
+      // contract unchanged. Its arrival advances the journal cursor, so pending
+      // trades are reprojected from their original fills without duplicate IDs.
+      // Read reference data last so a slow dictionary cannot starve fills/fees.
+      for (const type of [...journalBackfillPlan.cycle(), 'currency' as const]) {
         if (!current()) return;
         const read = journalBackfillPlan.next(type, parent => parent === 'account'
           ? [...journalRoster, ...journalAccounting.references(parent)] : journalAccounting.references(parent));

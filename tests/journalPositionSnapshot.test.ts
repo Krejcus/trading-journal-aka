@@ -40,11 +40,12 @@ describe('complete position snapshot evidence', () => {
   it('builds a new full trade from empty initial positions and never backdates that proof', () => {
     const base = positionSnapshotObservations('snapshot', [{ id: 1 }], [], from, to);
     const add = (type: string, entity: Record<string, string | number>, at = to + 10) => base.push(journalObservation(type, entity, 'stream', 'Created', at)!);
+    add('currency', { id: 1, name: 'USD', symbol: '$' });
     add('contract', { id: 10, name: 'MNQU6' });
     for (const [id, side, price, at] of [[1, 'Buy', 20000, to + 1000], [2, 'Sell', 20005, to + 2000]] as const) {
       add('order', { id, accountId: 1, contractId: 10, action: side }, at);
       add('fill', { id, orderId: id, accountId: 1, contractId: 10, action: side, qty: 1, price, timestamp: new Date(at).toISOString() }, at);
-      add('fillfee', { id, commission: 1, commissionCurrencyId: 840 }, at);
+      add('fillfee', { id, commission: 1, commissionCurrencyId: 1 }, at);
     }
     add('fillpair', { id: 1, buyFillId: 1, sellFillId: 2, qty: 1 }, to + 2000);
     const { episodes, unassignedFillIds } = buildJournalPositionEpisodes(evidence(base));

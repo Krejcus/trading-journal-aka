@@ -10,13 +10,14 @@ const fixture = () => {
     evidence.push({ ...journalObservation(type, entity, source, 'Updated', origin + at)!, id: String(++sequence),
       connectionId: 'conn', environment: 'demo', sessionId: 'one', sequence });
   };
+  add('currency', { id: 1, name: 'USD', symbol: '$' }, 0);
   add('contract', { id: 1, name: 'MNQU6' }, 0);
   const flat = (account = 1, at = 0, source: 'stream' | 'snapshot' = 'stream') =>
     add('position', { id: account, accountId: account, contractId: 1, netPos: 0, timestamp: new Date(origin + at).toISOString() }, at, source);
   const fill = (id: number, side: 'Buy' | 'Sell', quantity: number, price: number, at: number, account = 1) => {
     add('order', { id, accountId: account, contractId: 1, action: side }, at);
     add('fill', { id, orderId: id, accountId: account, contractId: 1, action: side, qty: quantity, price, timestamp: new Date(origin + at).toISOString() }, at);
-    add('fillfee', { id, commission: quantity, commissionCurrencyId: 840 }, at);
+    add('fillfee', { id, commission: quantity, commissionCurrencyId: 1 }, at);
   };
   const pair = (id: number, buyFillId: number, sellFillId: number, qty: number, at = 3000) =>
     add('fillpair', { id, buyFillId, sellFillId, qty, active: true }, at);

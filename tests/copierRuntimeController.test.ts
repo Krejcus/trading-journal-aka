@@ -3717,7 +3717,9 @@ describe('autoritativní follower magnitude guard', () => {
         phase: 'open',
         followers: [expect.objectContaining({
           accountId: 200,
-          eligibleAtOpen: false,
+          // The complete empty snapshot proves this is a new opening;
+          // eligibility is known, but matching positions still prove no copy lineage.
+          eligibleAtOpen: true,
           copyLineage: 'unproven',
         })],
       }),

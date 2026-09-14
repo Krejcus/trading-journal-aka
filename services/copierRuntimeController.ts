@@ -6383,7 +6383,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         }
       }
       if (event.position.accountId === group.leaderAccountId) {
-        const previousKnown = leaderPositions.has(event.position.symbol);
+        // A successful account-wide snapshot proves flat even when Tradovate
+        // omits the symbol. Without it, the first partial fill used to skip the
+        // opening transition and reuse a terminal epoch from the previous trade.
+        // Disconnect/reconfiguration invalidate this witness; a lone stream row
+        // must never establish a zero baseline for other symbols.
+        const previousKnown = leaderPositions.has(event.position.symbol) || leaderPositionSnapshotComplete;
         const previousNet = leaderPositions.get(event.position.symbol) ?? 0;
         await handleLeaderPositionTransition(
           event.position.symbol,

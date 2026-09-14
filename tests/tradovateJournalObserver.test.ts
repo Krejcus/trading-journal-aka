@@ -220,7 +220,8 @@ describe('passive journal observer', () => {
     const fetchImpl = vi.fn(async input => {
       const path = new URL(String(input)).pathname;
       if (path === '/v1/account/list') return Response.json(Array.from({ length: 12 }, (_, i) => ({ id: i + 1 })));
-      if (path === '/v1/fillFee/list') return Response.json([{ id: 1, commission, commissionCurrencyId: 840 }]);
+      if (path === '/v1/currency/list') return Response.json([{ id: 1, name: 'USD', symbol: '$' }]);
+      if (path === '/v1/fillFee/list') return Response.json([{ id: 1, commission, commissionCurrencyId: 1 }]);
       if (path === '/v1/fillPair/list') return Response.json([{ id: 1, buyFillId: 1, sellFillId: 2, active: true, qty: 1 }]);
       return Response.json([]);
     });
@@ -231,12 +232,13 @@ describe('passive journal observer', () => {
     const events: JournalObservation[] = []; const execution = vi.fn();
     const good = broker.subscribeEvidence(event => events.push(event)); const stop = broker.subscribe(execution);
     socket.readyState = 1; socket.onmessage?.({ data: 'a[{"i":1,"s":200,"d":[]}]' });
-    await vi.waitFor(() => expect(events.filter(row => row.entityType === 'journalbackfill')).toHaveLength(10));
+    await vi.waitFor(() => expect(events.filter(row => row.entityType === 'journalbackfill')).toHaveLength(11));
     expect(fetchImpl.mock.calls.filter(([input]) => String(input).includes('/fillFee/list'))).toHaveLength(1);
     expect(fetchImpl.mock.calls.filter(([input]) => String(input).includes('/fillPair/list'))).toHaveLength(1);
     periodic(); periodic();
-    await vi.waitFor(() => expect(events.filter(row => row.entityType === 'journalbackfill')).toHaveLength(20));
+    await vi.waitFor(() => expect(events.filter(row => row.entityType === 'journalbackfill')).toHaveLength(22));
     expect(events.filter(row => row.entityType === 'fillfee')).toHaveLength(1);
+    expect(events.filter(row => row.entityType === 'currency').map(row => row.entity)).toEqual([{ id: 1, name: 'USD', symbol: '$' }]);
     commission = 2; periodic();
     await vi.waitFor(() => expect(events.filter(row => row.entityType === 'fillfee')).toHaveLength(2));
     expect(events.filter(row => row.entityType === 'fillfee').at(-1)?.entity.commission).toBe(2);
@@ -290,7 +292,7 @@ describe('passive journal observer', () => {
     stop(); expect(signal!.aborted).toBe(true);
     release(Response.json([{ id: 1, commission: 1 }]));
     for (let i = 0; i < 30; i++) await Promise.resolve();
-    expect(events.some(row => row.entityType === 'fillfee' || row.entityType === 'journalbackfill')).toBe(false);
+    expect(events.some(row => row.entityType === 'fillfee' || (row.entityType === 'journalbackfill' && row.entity.entityType === 'fillfee'))).toBe(false);
     good();
   });
 
@@ -333,10 +335,10 @@ describe('passive journal observer', () => {
     });
     const stop = broker.subscribe(() => {});
     socket.readyState = 1; socket.onmessage?.({ data: 'a[{"i":1,"s":200,"d":[]}]' });
-    await vi.waitFor(() => expect(events.filter(row => row.entityType === 'journalbackfill')).toHaveLength(10));
+    await vi.waitFor(() => expect(events.filter(row => row.entityType === 'journalbackfill')).toHaveLength(11));
     expect(events.some(row => row.entityType === 'journalbackfill' && row.entity.entityType === 'fillfee' && row.entity.kind === 'unavailable')).toBe(true);
     available = true; periodic();
-    await vi.waitFor(() => expect(events.filter(row => row.entityType === 'journalbackfill')).toHaveLength(20));
+    await vi.waitFor(() => expect(events.filter(row => row.entityType === 'journalbackfill')).toHaveLength(22));
     expect(events.filter(row => row.entityType === 'fillfee')).toHaveLength(2);
     expect(events.some(row => row.entityType === 'journalbackfill' && row.entity.entityType === 'fillfee' && row.entity.recorded === 1)).toBe(true);
     stop(); good();
@@ -400,7 +402,7 @@ describe('passive journal observer', () => {
     const {broker,socket}=setup(fetchImpl); const events:JournalObservation[]=[]; const execution=vi.fn();
     const good=broker.subscribeEvidence(event=>events.push(event)); const stop=broker.subscribe(execution);
     socket.readyState=1; socket.onmessage?.({data:'a[{"i":1,"s":200,"d":[]}]'});
-    await vi.waitFor(()=>expect(events.filter(event=>event.entityType==='journalbackfill')).toHaveLength(10));
+    await vi.waitFor(()=>expect(events.filter(event=>event.entityType==='journalbackfill')).toHaveLength(11));
     for(const type of ['order','fill','orderversion','command','executionreport','contract','cashbalancelog']) expect(events.some(event=>event.entityType===type && event.eventType==='Backfill'), type).toBe(true);
     expect(fetchImpl.mock.calls.map(([url])=>new URL(String(url)).search).filter(Boolean)).toEqual(['?ids=50','?masterids=1,2']);
     expect(execution.mock.calls.some(([event])=>['order','fill','position'].includes(event.type))).toBe(false);
@@ -421,9 +423,9 @@ describe('passive journal observer', () => {
     const {broker,socket}=setup(fetchImpl,{setIntervalImpl:((callback:()=>void,ms:number)=>{if(ms===300000)periodic=callback;return setInterval(callback,ms);}) as typeof setInterval});
     const events:JournalObservation[]=[];const good=broker.subscribeEvidence(event=>events.push(event));const stop=broker.subscribe(()=>{});
     socket.readyState=1;socket.onmessage?.({data:'a[{"i":1,"s":200,"d":[]}]'});
-    await vi.waitFor(()=>expect(events.filter(event=>event.entityType==='journalbackfill')).toHaveLength(10));
+    await vi.waitFor(()=>expect(events.filter(event=>event.entityType==='journalbackfill')).toHaveLength(11));
     expect(events.some(event=>event.entityType==='fillfee')).toBe(false);
-    periodic();await vi.waitFor(()=>expect(events.filter(event=>event.entityType==='journalbackfill')).toHaveLength(20));
+    periodic();await vi.waitFor(()=>expect(events.filter(event=>event.entityType==='journalbackfill')).toHaveLength(22));
     expect(fetchImpl.mock.calls.filter(([url])=>String(url).includes('/fillFee/list'))).toHaveLength(1);
     expect(fetchImpl.mock.calls.some(([url])=>String(url).endsWith('/fillFee/ldeps?masterids=10,20'))).toBe(true);
     expect(events.filter(event=>event.entityType==='fillfee').map(event=>event.entity.commission)).toEqual([1,2]);

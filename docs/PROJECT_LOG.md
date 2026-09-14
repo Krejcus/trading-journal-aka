@@ -208,6 +208,16 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-14 — Codex: oprava prvního vstupu a měny poplatků (lokálně)
+
+- Uživatel schválil pouze ranní chybu a historii; obnova správy otevřeného obchodu zůstává odložená. Izolovaný worktree `/private/tmp/alphatrade-entry-history-fix-20260914`, základ produkční `f4f04147`; cizí rozpracované změny v hlavní složce zachované.
+- Leader Position transition nyní používá již existující důkaz úplného prázdného snapshotu. Nový vstup 1+4+1 založí vlastní epochu od prvního fillu místo opětovného použití terminální epochy minulého obchodu. Unknown/reconnect ani shoda follower množství nevytváří neprokázané ownership.
+- Poplatky a TradePaired ledger rozpoznávají měnu z pasivně uložené Currency entity stejného broker připojení, nikoliv konstantou 840. GET `/currency/list` je na konci omezeného journal cyklu; nezasahuje do execution cache. Nová evidence posune cursor a běžný import dokončí stejné epizody. Bez změny DB schématu a bez ručního přepisování P&L.
+- Finální kompletní regrese **393 souborů / 3571 testů passed**. Typecheck passed, lokální produkční build passed, cílený lint 0 errors (3 starší warnings v controlleru), diff check passed. Mac bundle sestaven a syntakticky ověřen bez spuštění. Devět původních offline scénářů po opravě bez DISARM a broker zápisů; šest kopií ve dvou pořadích Fill/Position provedlo všechny čtyři SL změny.
+- Soukromé replay podklady zůstávají mimo git v `/private/tmp/alphatrade-incident-20260914`. Offline účetní replay s testovacím USD číselníkem vrátil všech sedm očekávaných výsledků; produkční číselník/import tím není ověřen.
+- **Bez push/deploy, bez aktualizace nebo restartu běžícího workeru, bez broker příkazů.** Nasazení vyžaduje web/server i worker a následnou kontrolu skutečného Currency capture a sedmi dokončených epizod. Detail: `docs/reviews/copier-entry-history-20260914/FIXES.md`.
+
+
 ### 2026-09-13 — Codex: lokální oprava latence a obnovy copier relay
 
 Po měření ztraceného `claimed` příkazu připravena izolovaná oprava z `5b2265f2`: oddělené řízení / rychlý heartbeat / pozadí, durable delivery checkpoint, idempotentní claim a completion, ochrana proti opakování execution a starému ARM po restartu. Přídavná migrace zůstává lokální; v1 kompatibilita pro postupné nasazení zachována. Opožděné snapshoty nesmějí přepsat novější stav. Historie zachovává `unchanged`, první čtení a invalidace; realtime čtení je single-flight. Neověřený ON/OFF dialog už netvrdí, že nic nebylo odesláno.

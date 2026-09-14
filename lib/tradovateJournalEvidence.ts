@@ -1,5 +1,6 @@
 /** Broker observations are evidence, never execution instructions. Times are milliseconds. */
 export const JOURNAL_ENTITY_FIELDS = {
+  currency: ['id', 'name', 'symbol'],
   contract: ['id', 'name', 'contractMaturityId'],
   order: ['id', 'accountId', 'contractId', 'action', 'ordStatus', 'parentId', 'linkedId', 'ocoId', 'timestamp'],
   orderversion: ['id', 'orderId', 'orderQty', 'orderType', 'price', 'stopPrice', 'pegDifference', 'timeInForce'],
@@ -94,6 +95,17 @@ const eventTime = (event: JournalEvidence) => {
   return Number.isFinite(parsed) ? { at: parsed, timeSource: 'broker' as const }
     : { at: event.receivedAt, timeSource: 'received' as const };
 };
+
+/** Tradovate IDs are broker entity keys, not ISO numeric currency codes.
+ * Resolve only the same connection's captured dictionary; unknown IDs remain
+ * unknown (including 840). Never infer USD from a dollar symbol. */
+export function journalCurrencyCode(latest: ReadonlyMap<string, JournalEvidence>, id: unknown): string | null {
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) return null;
+  const row = latest.get(`currency:${id}`);
+  if (!row || row.eventType.toLowerCase() === 'deleted') return null;
+  const name = row.entity.name;
+  return typeof name === 'string' && /^[A-Z]{3}$/.test(name) ? name : null;
+}
 
 export function orderedJournalEvidence(events: readonly JournalEvidence[]): JournalEvidence[] {
   return [...new Map(events.map(event => [event.id, event])).values()]

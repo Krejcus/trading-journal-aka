@@ -1,6 +1,6 @@
 import { journalSnapshotAnchors } from './journalPositionSnapshot.js';
 import { buildJournalAccountTrades, type JournalAccountTrade, type TradeExecutionHistory } from './tradeExecutionHistory.js';
-import { latestJournalEvidence, orderedJournalEvidence, projectJournalEvidence, type JournalEvidence, type JournalFill } from './tradovateJournalEvidence.js';
+import { journalCurrencyCode, latestJournalEvidence, orderedJournalEvidence, projectJournalEvidence, type JournalEvidence, type JournalFill } from './tradovateJournalEvidence.js';
 
 export interface JournalPositionEpisode {
   id: string;
@@ -201,7 +201,7 @@ export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[
     const ownIssues = [...new Set([...episode.issues, ...realizations.flatMap(pair => pair.history.issues)
       .filter(issue => issue !== 'protection-history-unavailable'), ...projection.issues,
       ...(!matches ? ['fill-pair-reconciliation-pending'] : []), ...(!protection.length ? ['protection-history-unavailable'] : [])])];
-    const fees = episode.fills.every(fill => fill.fees != null && fill.feeCurrencyId === 840)
+    const fees = episode.fills.every(fill => fill.fees != null && journalCurrencyCode(latest, fill.feeCurrencyId) === 'USD')
       ? episode.fills.reduce((sum, fill) => sum + fill.fees! * fill.allocatedQuantity / fill.quantity, 0) : null;
     const gross = episode.status === 'closed' && matches && realizations.every(pair => pair.history.grossPnl != null)
       ? realizations.reduce((sum, pair) => sum + pair.history.grossPnl!, 0) : null;

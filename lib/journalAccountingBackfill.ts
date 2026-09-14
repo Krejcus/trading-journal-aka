@@ -14,8 +14,8 @@ export const JOURNAL_HISTORY_READS = [
   { type: 'commandreport', path: '/commandReport/list' },
   { type: 'executionreport', path: '/executionReport/list' },
 ] as const;
-export type JournalBackfillType = typeof JOURNAL_HISTORY_READS[number]['type'] | 'contract' | 'cashbalancelog';
-const knownTypes = new Set<string>([...JOURNAL_HISTORY_READS.map(read => read.type), 'contract', 'cashbalancelog', 'position']);
+export type JournalBackfillType = typeof JOURNAL_HISTORY_READS[number]['type'] | 'contract' | 'cashbalancelog' | 'currency';
+const knownTypes = new Set<string>([...JOURNAL_HISTORY_READS.map(read => read.type), 'contract', 'cashbalancelog', 'position', 'currency']);
 const MAX_ROWS = 10_000;
 export const JOURNAL_ACCOUNTING_MAX_BYTES = 4 * 1024 * 1024;
 
@@ -97,11 +97,18 @@ export function createJournalAccountingBackfill(maxEntries = 100_000) {
     });
     return { observations: selected, scanned: rows.length, contended };
   };
-  const references = (type: 'order' | 'fill' | 'command' | 'position' | 'contract' | 'account') => {
+  const references = (type: 'order' | 'fill' | 'command' | 'position' | 'contract' | 'account' | 'currency') => {
     const ids = new Set<number>();
     for (const [key, value] of known) {
       if (value.deleted) continue;
       const row = value.entity;
+      if (type === 'currency') {
+        for (const [field, id] of Object.entries(row)) {
+          if (/CurrencyId$/.test(field) || field === 'currencyId') {
+            if (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) ids.add(id);
+          }
+        }
+      }
       const id = key.startsWith(`${type}:`) ? row.id : row[`${type}Id`];
       if (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) ids.add(id);
     }
