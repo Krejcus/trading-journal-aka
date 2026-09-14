@@ -29,6 +29,7 @@ interface EntryCandidate {
 }
 
 interface LegCandidate {
+  event: LeaderEvent;
   orderId: string;
   entryOrderId: string;
   accountId: number;
@@ -108,6 +109,7 @@ export class CopierBracketCorrelator {
 
     const legs = this.legsByEntry.get(entry.orderId) ?? new Map<string, LegCandidate>();
     legs.set(event.orderId, {
+      event,
       orderId: event.orderId,
       entryOrderId: entry.orderId,
       accountId: event.accountId,
@@ -170,6 +172,7 @@ export class CopierBracketCorrelator {
       }
       legs.set(event.orderId, {
         ...leg,
+        event: { ...leg.event, orderType: event.orderType, stopPrice: event.stopPrice, limitPrice: event.limitPrice },
         type,
         price,
         // Korelační stáří zůstává od prvního submitted legu. Opakovaný
@@ -194,6 +197,15 @@ export class CopierBracketCorrelator {
     return this.awaitingPair.has(entryOrderId);
   }
 
+  /** A manually added lone SL after a fill is valid without a TP. Explicit
+   * native-parent legs and ambiguous/multiple legs retain the strict pair gate. */
+  standaloneStop(entryOrderId: string): LeaderEvent | null {
+    if (!this.awaitingPair.has(entryOrderId)) return null;
+    const legs = [...(this.legsByEntry.get(entryOrderId)?.values() ?? [])];
+    return legs.length === 1 && legs[0].type === 'stop' && !legs[0].exactParent
+      ? { ...legs[0].event } : null;
+  }
+
   /** Controller volá po vypršení fail-closed timeru; čekající pár už poté
    * nesmí zůstat v paměti až do restartu workeru. */
   abandonPendingPair(entryOrderId: string): void {
@@ -209,6 +221,9 @@ export class CopierBracketCorrelator {
   private prune(now: number): void {
     for (const [orderId, entry] of this.entries) {
       if (now - entry.filledAt > this.inferenceWindowMs) {
+        // Keep an admitted pending leg until its timer makes the explicit
+        // pair/standalone decision. Unrelated events must not erase that proof.
+        if (this.awaitingPair.has(orderId)) continue;
         this.entries.delete(orderId);
         if (!this.emittedEntries.has(orderId)) this.legsByEntry.delete(orderId);
       }

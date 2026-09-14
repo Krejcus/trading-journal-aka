@@ -4174,10 +4174,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ? entry.status
         : brokerOrder?.status;
       if (!status || status === 'canceled' || status === 'rejected') continue;
+      // A copied standalone SL/TP is still a resting conditional order when
+      // only the leader's leg has filled. It must not suppress orphan recovery.
+      // Unknown/sending writes and actual market exits remain in-flight.
+      const standingProtection = !guardLiquidation && brokerOrder
+        && brokerOrder.orderType !== 'Market'
+        && (status === 'working' || status === 'pending');
       evidence.push({
         accountId,
         symbol: epoch.symbol,
-        role: guardLiquidation ? 'guard-liquidation' : 'copied-exit',
+        role: guardLiquidation ? 'guard-liquidation' : standingProtection ? 'protective' : 'copied-exit',
         status,
         ...(guardLiquidation ? { epochId: epoch.id } : {}),
         ...(copiedExit ? { leaderOrderId: entry.leaderOrderId } : {}),
@@ -4251,7 +4257,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // nesmí přepsat novější obchod ani autorizovat jeho zavření.
     for (const row of rows) {
       if (!row.ok) continue;
-      const map = positionsByAccount.get(row.accountId) ?? new Map<string, number>();
+      // listPositions is a complete account snapshot; an omitted flat symbol
+      // must remove the previous exposure from the local display/safety cache.
+      const map = new Map<string, number>();
       for (const position of row.positions) map.set(position.symbol, position.netQuantity);
       positionsByAccount.set(row.accountId, map);
       if (row.accountId === epoch.leaderAccountId) {
@@ -5065,6 +5073,45 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     pendingOsoResolvers.get(entryOrderId)?.();
     pendingOsoResolvers.delete(entryOrderId);
     pendingOsoFlushes.delete(entryOrderId);
+  };
+
+  const flushStandaloneBracketStop = async (entryOrderId: string, admissionGeneration: number) => {
+    const pending = bracketCorrelator.standaloneStop(entryOrderId);
+    const epoch = pending ? leaderExposureEpoch(pending.symbol) : null;
+    if (!pending || !epoch || epoch.phase !== 'open' || !epoch.leaderEntryOrderIds.includes(entryOrderId)) return false;
+    if (stopped || !gate.armed || !gate.connected || gate.killSwitch || safetyGeneration !== admissionGeneration) return true;
+    const [lookup, positions] = await Promise.all([
+      broker.findOrderById(pending.accountId, pending.orderId),
+      broker.listPositions(pending.accountId),
+    ]);
+    if (stopped || !gate.armed || !gate.connected || gate.killSwitch || safetyGeneration !== admissionGeneration) return true;
+    const currentEpoch = leaderExposureEpoch(pending.symbol);
+    if (currentEpoch?.id !== epoch.id || currentEpoch.phase !== 'open') return true;
+    if (lookup.completeness !== 'authoritative') throw new Error('Samostatný SL nemá autoritativní potvrzení');
+    const order = lookup.order;
+    if (!order || !isOpenOrderStatus(order.status)) return true;
+    const net = positions.filter(position => position.symbol === pending.symbol).reduce((sum, position) => sum + position.netQuantity, 0);
+    if (net === 0) return true;
+    if (order.accountId !== pending.accountId || order.symbol !== pending.symbol || order.side !== pending.side
+      || !['Stop', 'StopLimit'].includes(order.orderType)
+      || reducingQuantityAgainst(net, order.side, order.quantity) !== order.quantity) {
+      throw new Error('Samostatný SL neodpovídá potvrzené otevřené pozici');
+    }
+    const event = { ...pending, orderType: order.orderType, quantity: order.quantity,
+      stopPrice: order.stopPrice, limitPrice: order.limitPrice };
+    const adjusted = cutAwareDispatchFor(event, false);
+    if (adjusted.unsafeDivergenceAccounts.length > 0) throw new Error('Samostatný SL: neověřená follower expozice');
+    const result = await processor.process({ event, group: adjusted.dispatchGroup,
+      context: { ...gate, now: clock(), sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
+        stuckOutbox: gate.stuckOutbox || hasStuckOutbox(), ineligibleAccounts: adjusted.ineligibleAccounts },
+      broker: dispatchBroker(admissionGeneration, event), clock, store: options.store, metrics,
+      maxConcurrentDispatches: options.maxConcurrentDispatches, deferredReplay: true });
+    runtime = result.runtime;
+    rememberCurrentRuntimePendingExposure(result.plan, result.audit);
+    rememberExitOnlyReservations(adjusted.exitOnlyAccounts, result.plan, result.audit);
+    if (result.audit.length > 0) options.onAudit?.(result.audit);
+    failClosedOnCriticalAudit(result.audit);
+    return true;
   };
 
   const flushStandaloneOsoEntry = async (entryOrderId: string) => {
@@ -6603,15 +6650,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (!pendingBracketTimers.has(bracketEntryOrderId)) {
           const timer = setTimeout(() => {
             pendingBracketTimers.delete(bracketEntryOrderId);
-            if (!bracketCorrelator.hasPendingPair(bracketEntryOrderId)) return;
-            bracketCorrelator.abandonPendingPair(bracketEntryOrderId);
-            options.onAudit?.([{
-              at: clock(), leaderEventId: leaderEvent.id, kind: 'blocked',
-              reason: 'incomplete-bracket-pair',
-            }]);
-            if (gate.armed) {
-              failClosed(new Error(`Bracket ${bracketEntryOrderId} nemá bezpečně spárovaný SL i TP`));
-            } else invalidateReconciliation();
+            eventTail = eventTail.then(async () => {
+              if (!bracketCorrelator.hasPendingPair(bracketEntryOrderId)) return;
+              try {
+                if (await flushStandaloneBracketStop(bracketEntryOrderId, admissionGeneration)) return;
+                options.onAudit?.([{
+                  at: clock(), leaderEventId: leaderEvent.id, kind: 'blocked', reason: 'incomplete-bracket-pair',
+                }]);
+                if (gate.armed) failClosed(new Error(`Bracket ${bracketEntryOrderId} nemá bezpečně spárovaný SL i TP`));
+                else invalidateReconciliation();
+              } finally { bracketCorrelator.abandonPendingPair(bracketEntryOrderId); }
+            }).catch(reason => failClosed(reason));
           }, bracketCorrelator.pendingTimeoutMs() + 250);
           pendingBracketTimers.set(bracketEntryOrderId, timer);
         }
@@ -6673,7 +6722,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       await flushStandaloneOsoEntry(leaderEvent.orderId);
     }
 
-    const osoObservation = osoCorrelator.observe(leaderEvent);
+    // OSO waits for children of a NEW pending entry. A standalone stop/target
+    // reducing an already open position has no entry children to discover.
+    // Bracket/parent correlation was handled above; keep it intact.
+    const standaloneReduction = leaderEvent.kind === 'submitted'
+      && !eventIncreasesExposure && !leaderEvent.parentOrderId;
+    const osoObservation = standaloneReduction
+      ? { kind: 'unrelated' as const }
+      : osoCorrelator.observe(leaderEvent);
     if (osoObservation.kind === 'ambiguous') {
       options.onAudit?.([{
         at: now, leaderEventId: leaderEvent.id, kind: 'blocked', reason: osoObservation.reason,

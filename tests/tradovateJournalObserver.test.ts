@@ -113,7 +113,7 @@ describe('passive journal observer', () => {
     const { broker, socket } = setup(async input => {
       const path = new URL(String(input)).pathname;
       if (path === '/v1/order/list') return Response.json([{ id: 20, accountId: 1, contractId: 10, action: 'Sell', ordStatus: 'Working' }]);
-      if (path === '/v1/orderVersion/list') return Response.json([{ id: 1, orderId: 20, orderQty: 1, orderType: 'Stop', stopPrice: 100 }]);
+      if (path === '/v1/orderVersion/list') return Response.json([{ id: 20, orderId: 20, orderQty: 1, orderType: 'Stop', stopPrice: 100 }]);
       if (path === '/v1/contract/items') return Response.json([{ id: 10, name: 'MNQ' }]);
       return Response.json([]);
     });
@@ -124,14 +124,14 @@ describe('passive journal observer', () => {
     socket.onmessage?.({ data: 'a[{"i":1,"s":200,"d":[]}]' });
     await vi.waitFor(() => expect(execution.mock.calls.some(([event]) => event.type === 'order' && event.order.stopPrice === 100)).toBe(true));
     execution.mockClear();
-    socket.onmessage?.({ data: 'a[{"e":"props","d":{"entityType":"orderVersion","entity":{"id":2,"orderId":20,"orderQty":1,"orderType":"Stop","stopPrice":999}}}]' });
+    socket.onmessage?.({ data: 'a[{"e":"props","d":{"entityType":"orderVersion","entity":{"id":21,"orderId":20,"orderQty":1,"orderType":"Stop","stopPrice":999}}}]' });
     for (let i = 0; i < 30; i++) await Promise.resolve();
     expect(events.some(event => event.entityType === 'orderversion' && event.entity.stopPrice === 999)).toBe(true);
     expect(execution.mock.calls.some(([event]) => event.type === 'order')).toBe(false);
     // An unrelated Order notification must not later pick up the requested
     // price, including when the same requested version is replayed beside it.
     socket.onmessage?.({ data: `a${JSON.stringify([{ e: 'props', d: [
-      { entityType: 'orderVersion', entity: { id: 2, orderId: 20, orderQty: 1, orderType: 'Stop', stopPrice: 999 } },
+      { entityType: 'orderVersion', entity: { id: 21, orderId: 20, orderQty: 1, orderType: 'Stop', stopPrice: 999 } },
       { entityType: 'order', entity: { id: 20, accountId: 1, contractId: 10, action: 'Sell', ordStatus: 'Working' } },
     ] }])}` });
     await vi.waitFor(() => expect(execution.mock.calls.some(([event]) => event.type === 'order')).toBe(true));

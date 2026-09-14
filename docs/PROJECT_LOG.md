@@ -208,6 +208,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-14 — Codex: oprava druhého incidentu a rozšířené execution regrese (lokálně)
+- Opraven přenos přesně potvrzeného OrderVersion přes ExecutionReport New/Replaced, včetně obráceného pořadí, pozdních verzí, REST obnovy, odmítnutých požadavků a zachování parent/OCO vazeb. Modify/Cancel reject již neshazuje platný pracovní order; HTTP ACK ani stejná stará cena nejsou potvrzení modify.
+- Standalone follower SL/TP již není nekonečný in-flight exit pro leader-flat guard. Unknown/sending/Market ochrana, vlastnictví epochy, nativní account/symbol likvidace, následné flat potvrzení a DISARM zůstávají přísné. Kompletní prázdný position snapshot odstraní starou lokální expozici.
+- Redukující SL/TP po otevření nečeká na nové OSO. Samotný ručně přidaný SL bez TP těsně po fillu po korelačním okně projde samostatně jen s novým potvrzením order/pozice/epochy; cancel, DISARM a změna generace ruší odložené odeslání. Neúplné nativní pending OSO se tím nepovoluje.
+- Nový HTTP/WebSocket test harness používá skutečný Tradovate adaptér + controller: fan-out 1/6/12, posuny SL, orphan exit, 12 on-fill účtů s partial 1+4+1, duplicate fills, partial/final exit, standalone SL, cancel/DISARM a přesný command ACK/reject. Celá sada 397 souborů / 3603 testů passed; typecheck/build passed, lint 0 errors (3 stávající warnings), worker bundle + syntax check passed.
+- Zdroj zůstává v izolovaném worktree navazujícím na 33ea4271 a lokální screenshot opravu 86d72d2e. Žádný push, deploy, restart workeru, ARM ani broker příkaz. Podrobnosti a hranice důkazů: `docs/reviews/copier-entry-history-20260914/COPIER_RELIABILITY.md`.
+
+### 2026-09-14 — Codex: druhý incident 12:52–12:53, pouze analýza
+
+- Všech 7 účtů mělo potvrzený vstup. Leader posunul samostatný SL 28941,25 → 28930,50; broker potvrdil Replaced, ale 6 followerů zůstalo na původní ceně. Adaptér při ExecutionReport použije starou OrderVersion kvůli cache early-return. Pasivní zachytávání nové verze se do execution nepromítne ani po potvrzení. Reprodukováno offline na skutečném adaptéru. Větev byla změněna v journal commitu 0163c891.
+- Po leader exit ochrana chybně označí stále čekající ochranný Stop za probíhající copied-exit. Guard čeká bez omezení, opakovaně hlásí fail-closed. Reálná epocha v čisté offline funkci vrací wait-inflight pro 6 účtů po 2,5 i 60 sekundách. Followery uzavřel až samostatný uživatelský flatten-group, potvrzený cca 17–18 sekund po leaderovi.
+- Poslední úplné broker snapshoty potvrdily všech 7 účtů flat. Worker zůstává vypnutý, reconciliationRequired/divergence zůstaly jako stav incidentu. Oba snímky tohoto druhého obchodu byly úspěšně nahrané.
+- Zdroj, produkce a worker beze změn. Žádný ARM, DISARM, Flatten ani reconcile touto analýzou. Schválení screenshot release 86d72d2e je stále nevyřízené; nebyl nasazen. Soukromé důkazy a reprodukce: `/private/tmp/alphatrade-exit-incident-20260914/ANALYSIS.md`.
+
 ### 2026-09-14 — Codex: oprava pořizování screenshotů a uchování obrázků (lokálně)
 
 - Zachycení už nemá starý 2,5s limit sdílený s doručením; dostává maximálně 8 s v 15s okně původní události. Souběžné capture běží postupně, při novém vstupu/výstupu se neaktuální obrázek nepřiřadí ke staré události. Chyby obsahují fázi, bezpečný kód a dobu trvání; čekání na překreslení je omezené.

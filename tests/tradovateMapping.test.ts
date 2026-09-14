@@ -305,7 +305,7 @@ describe('createTradovateBroker REST', () => {
         id: 42, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Working',
       }]);
       if (url.includes('/orderVersion/list')) return jsonResponse([{
-        id: 101, orderId: 42, orderType: 'Limit', orderQty: 2,
+        id: 102, orderId: 42, orderType: 'Limit', orderQty: 2,
       }]);
       if (url.includes('/command/list')) return jsonResponse([{
         id: 102, orderId: 42, commandType: 'New', clOrdId: 'cpabc123',
@@ -385,7 +385,7 @@ describe('createTradovateBroker WebSocket', () => {
         id: 42, accountId: 100, contractId: 7, action: 'Buy', ordStatus: 'Working',
       }]);
       if (url.includes('/orderVersion/list')) return jsonResponse([{
-        id: 11, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_500,
+        id: 42, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_500,
       }]);
       if (url.includes('/command/list')) return jsonResponse([]);
       if (url.includes('/fill/list')) return jsonResponse([]);
@@ -455,7 +455,7 @@ describe('createTradovateBroker WebSocket', () => {
     const unsubscribe = broker.subscribe(event => events.push(event));
     const props = [
       { entityType: 'Command', entity: { id: 10, orderId: 42, commandType: 'New', clOrdId: 'cpabc123' } },
-      { entityType: 'OrderVersion', entity: { id: 11, orderId: 42, orderQty: 3, orderType: 'Limit', price: 29500 } },
+      { entityType: 'OrderVersion', entity: { id: 42, orderId: 42, orderQty: 3, orderType: 'Limit', price: 29500 } },
       { entityType: 'Order', entity: { id: 42, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Working' } },
       { entityType: 'Fill', entity: { id: 12, orderId: 42, accountId: 200, contractId: 7, action: 'Buy', qty: 1, price: 29500 } },
       { entityType: 'Fill', entity: { id: 12, orderId: 42, accountId: 200, contractId: 7, action: 'Buy', qty: 1, price: 29500 } },
@@ -478,7 +478,7 @@ describe('createTradovateBroker WebSocket', () => {
     const fetchImpl: typeof fetch = async input => {
       const url = String(input);
       if (url.includes('/orderVersion/deps')) return jsonResponse([{
-        id: 11, orderId: 42, orderQty: 1, orderType: 'Market',
+        id: 42, orderId: 42, orderQty: 1, orderType: 'Market',
       }]);
       if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
       throw new Error(`unexpected url ${url}`);
@@ -511,7 +511,7 @@ describe('createTradovateBroker WebSocket', () => {
     const fetchImpl: typeof fetch = async input => {
       const url = String(input);
       if (url.includes('/orderVersion/deps')) return jsonResponse([{
-        id: 11, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_500,
+        id: 42, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_500,
       }]);
       if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
       throw new Error(`unexpected url ${url}`);
@@ -555,7 +555,7 @@ describe('createTradovateBroker WebSocket', () => {
     const fetchImpl: typeof fetch = async input => {
       const url = String(input);
       if (url.includes('/orderVersion/deps')) return jsonResponse([{
-        id: 11, orderId: 42, orderQty: 1, orderType: 'Market',
+        id: 42, orderId: 42, orderQty: 1, orderType: 'Market',
       }]);
       if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
       throw new Error(`unexpected url ${url}`);
@@ -731,7 +731,7 @@ describe('createTradovateBroker WebSocket', () => {
       if (url.includes('/order/list') || url.includes('/orderVersion/list') || url.includes('/command/list') || url.includes('/fill/list')) return jsonResponse([]);
       if (url.includes('/fill/deps')) return jsonResponse([]);
       if (url.includes('/orderVersion/deps')) return jsonResponse([{
-        id: 11, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_500,
+        id: 42, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_500,
       }]);
       if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
       throw new Error(`unexpected url ${url}`);
@@ -769,7 +769,7 @@ describe('createTradovateBroker WebSocket', () => {
     const fetchImpl: typeof fetch = async input => {
       const url = String(input);
       if (url.endsWith('/order/modifyorder')) {
-        return jsonResponse({ commandId: 17, failureReason: 'Success' });
+        return jsonResponse({ commandId: 43, failureReason: 'Success' });
       }
       if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
       if (
@@ -802,7 +802,11 @@ describe('createTradovateBroker WebSocket', () => {
     await Promise.resolve();
     socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [
       { entityType: 'OrderVersion', entity: {
-        id: 18, orderId: 42, orderQty: 6, orderType: 'Stop', stopPrice: 29_391,
+        id: 43, orderId: 42, orderQty: 6, orderType: 'Stop', stopPrice: 29_391,
+      } },
+      { entityType: 'executionReport', entity: {
+        id: 44, commandId: 43, orderId: 42, accountId: 200, contractId: 7,
+        action: 'Sell', ordStatus: 'Suspended', execType: 'Replaced',
       } },
       { entityType: 'Order', entity: {
         id: 42, accountId: 200, contractId: 7, action: 'Sell', ordStatus: 'Suspended',
@@ -825,9 +829,13 @@ describe('createTradovateBroker WebSocket', () => {
         id: 42, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Working',
       });
       if (url.includes('/orderVersion/deps')) return jsonResponse([{
-        id: 12, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_501,
+        id: 43, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_501,
       }]);
       if (url.includes('/command/list') || url.includes('/fill/deps')) return jsonResponse([]);
+      if (url.includes('/executionReport/list')) return jsonResponse([{
+        id: 44, commandId: 43, orderId: 42, accountId: 200, contractId: 7,
+        action: 'Buy', ordStatus: 'Working', execType: 'Replaced',
+      }]);
       if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
       throw new Error(`unexpected url ${url}`);
     };
@@ -844,7 +852,7 @@ describe('createTradovateBroker WebSocket', () => {
     });
     socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [
       { entityType: 'OrderVersion', entity: {
-        id: 11, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_500,
+        id: 42, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_500,
       } },
       { entityType: 'Order', entity: {
         id: 42, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Working',
