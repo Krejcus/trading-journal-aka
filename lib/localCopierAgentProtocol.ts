@@ -43,6 +43,9 @@ export interface CopierSnapshotHealth {
   lastCheckedAt: number | null;
   lastAttemptAt: number | null;
   lastSuccessAt: number | null;
+  /** A health probe must not acknowledge a missing historical image. */
+  lastFailure?: { id: string; at: number; phase: 'capture' | 'upload' | 'storage'; code: string } | null;
+  pendingUploads?: number;
 }
 
 export interface LocalCopierAgentStatus {

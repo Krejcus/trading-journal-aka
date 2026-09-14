@@ -31,6 +31,13 @@ export interface TradingViewCopierSnapshotOptions extends CopierChartSnapshotOpt
   dedicated?: TradingViewDedicatedChartRef | null;
   onDedicatedResolved?: (value: TradingViewDedicatedChartRef) => Promise<void> | void;
   sleepImpl?: (ms: number) => Promise<void>;
+  onFailure?: (failure: SnapshotCaptureFailure) => void;
+}
+
+export interface SnapshotCaptureFailure {
+  phase: 'target' | 'normalize' | 'capture';
+  code: string;
+  elapsedMs: number;
 }
 
 const chartBoundsExpression = `(() => {
@@ -223,8 +230,10 @@ function renderReadyExpression(budgetMs: number): string {
     };
     while (Date.now() < deadline) {
       if (painted()) {
-        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-        return true;
+        return await new Promise(resolve => {
+          const timer = setTimeout(() => resolve(false), Math.max(1, deadline - Date.now()));
+          requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(timer); resolve(true); }));
+        });
       }
       await new Promise(r => setTimeout(r, 80));
     }
@@ -262,7 +271,11 @@ function evaluateExpression(symbol?: string, timeframe?: string): string {
     // Dva framy zůstanou uvnitř stejného CDP evaluate: žádný síťový round-trip,
     // ale spacing a pravý offset se počítají už z finálního jednoho panelu.
     if (layoutChanged) {
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const layoutPainted = await new Promise(resolve => {
+        const timer = setTimeout(() => resolve(false), 1500);
+        requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(timer); resolve(true); }));
+      });
+      if (!layoutPainted) return false;
       try { singlePanelReady = api.layout() === 's'; } catch (layoutError) {}
     }
     if (!singlePanelReady) return false;
@@ -345,9 +358,9 @@ function normalizedChartBoundsExpression(): string {
   return `(async () => {
     if (await ${evaluateExpression()} !== true) return null;
     // Stabilní jednopanelový graf projde hned a čeká jen dva paint framy.
-    // Po právě provedeném layout reflow dáme canvasu nejvýše 300 ms; raději
+    // Po právě provedeném layout reflow dáme canvasu nejvýše 1500 ms; raději
     // textová notifikace než částečně bílý obrázek z ještě staré bitmapy.
-    if (await ${renderReadyExpression(300)} !== true) return null;
+    if (await ${renderReadyExpression(1500)} !== true) return null;
     return ${chartBoundsExpression};
   })()`;
 }
@@ -360,6 +373,7 @@ async function cdpRequest(options: {
   onCommandResult?: (id: number, result: Record<string, unknown>) => Promise<void> | void;
   /** Chyby těchto příkazů se tolerují (best-effort warm-up na starších Electronech). */
   optionalCommandIds?: readonly number[];
+  onCommandSent?: (id: number) => void;
 }): Promise<Map<number, Record<string, unknown>>> {
   if (!options.target.webSocketDebuggerUrl) throw new Error('snapshot-cdp-missing-websocket');
   const socket = options.webSocketFactory(options.target.webSocketDebuggerUrl);
@@ -381,7 +395,10 @@ async function cdpRequest(options: {
       cleanup();
       callback(value);
     };
-    const send = (command: { id: number; method: string; params?: Record<string, unknown> }) => socket.send(JSON.stringify(command));
+    const send = (command: { id: number; method: string; params?: Record<string, unknown> }) => {
+      options.onCommandSent?.(command.id);
+      socket.send(JSON.stringify(command));
+    };
     const onOpen = () => {
       try { send(options.commands[0]); } catch (error) { finish(reject, error); }
     };
@@ -495,8 +512,9 @@ export async function captureTradingViewCopierSnapshot(
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const webSocketFactory = options.webSocketFactory
     ?? ((url: string) => new WebSocket(url) as unknown as WebSocketLike);
-  const totalMs = Math.min(3_000, Math.max(1, options.timeoutMs ?? 1_500));
+  const totalMs = Math.min(10_000, Math.max(1, options.timeoutMs ?? 8_000));
   const started = Date.now();
+  let phase: SnapshotCaptureFailure['phase'] = 'target';
   const remaining = () => Math.max(1, totalMs - (Date.now() - started));
   const cdpOrigin = options.cdpOrigin ?? DEFAULT_CDP_ORIGIN;
   try {
@@ -516,6 +534,7 @@ export async function captureTradingViewCopierSnapshot(
       timeoutMs: remaining(),
       webSocketFactory,
       optionalCommandIds: [10, 11, 12],
+      onCommandSent: id => { phase = id === 3 ? 'capture' : 'normalize'; },
       commands: [
         { id: 10, method: 'Emulation.setFocusEmulationEnabled', params: { enabled: true } },
         { id: 11, method: 'Page.enable' },
@@ -550,8 +569,15 @@ export async function captureTradingViewCopierSnapshot(
     const encoded = results.get(3)?.data;
     if (typeof encoded !== 'string') throw new Error('snapshot-cdp-invalid-response');
     const png = Buffer.from(encoded, 'base64');
-    return png.length > 0 ? png : null;
-  } catch {
+    if (!png.length) throw new Error('snapshot-cdp-empty-image');
+    return png;
+  } catch (error) {
+    // Report only known codes, never arbitrary CDP text or URLs/tokens.
+    const message = error instanceof Error ? error.message : '';
+    const code = /^snapshot-[a-z-]+$/.test(message) ? message
+      : error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name)
+        ? 'snapshot-cdp-timeout' : 'snapshot-cdp-error';
+    try { options.onFailure?.({ phase, code, elapsedMs: Date.now() - started }); } catch { /* observability only */ }
     return null;
   }
 }

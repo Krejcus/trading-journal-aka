@@ -36,6 +36,13 @@ export interface LiveStatusStripInput {
 /** Jedna věta ke stavu snímků; sdílí ji lišta (tooltip) i záložka Události. */
 export const snapshotHealthMessage = (health: CopierSnapshotHealth): string => {
   if (!health.enabled || health.state === 'disabled') return 'Automatické snímky jsou vypnuté.';
+  if (health.lastFailure) {
+    const when = new Date(health.lastFailure.at).toLocaleString('cs-CZ');
+    if (health.lastFailure.phase === 'capture') return `Snímek z ${when} se nepodařilo pořídit. Dostupnost TradingView nepotvrzuje uložený obrázek.`;
+    if (health.lastFailure.phase === 'storage') return `Snímek se nepodařilo bezpečně uložit na Macu (${when}).`;
+    return `Snímek z ${when} čeká na nahrání. Uložený obrázek se odešle znovu po obnovení spojení.`;
+  }
+  if ((health.pendingUploads ?? 0) > 0) return `Na Macu čeká na nahrání ${health.pendingUploads} snímků.`;
   if (health.state === 'checking') return 'Kontroluji TradingView a vyhrazený layout…';
   if (health.state === 'cdp-offline') return 'TradingView není připojené přes CDP. Obchod proběhne, ale graf se neuloží.';
   if (health.state === 'layout-missing') {
@@ -110,7 +117,12 @@ export function buildLiveStatusStrip(input: LiveStatusStripInput): LiveStatusStr
   let repairSnapshots = false;
   if (health && health.enabled && health.state !== 'disabled') {
     const title = snapshotHealthMessage(health);
-    switch (health.state) {
+    if (health.lastFailure || (health.pendingUploads ?? 0) > 0) {
+      chips.push({ id: 'snapshots', label: 'Snímky',
+        value: health.lastFailure?.phase === 'capture' ? 'Chybí snímek'
+          : health.lastFailure?.phase === 'storage' ? 'Chyba uložení' : 'Čeká na nahrání',
+        tone: 'warn', title });
+    } else switch (health.state) {
       case 'ready':
         chips.push({ id: 'snapshots', label: 'Snímky', value: 'Připravené', tone: 'muted', title });
         break;

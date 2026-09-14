@@ -36,6 +36,52 @@ const targetResponse = () => new Response(JSON.stringify([{
 }]), { status: 200 });
 
 describe('copier TradingView CDP snapshot', () => {
+  it('allows slow rendering beyond the old 2.5/3s cap without capturing another tab', async () => {
+    const socket = new FakeSocket();
+    const failures = vi.fn();
+    const send = socket.send.bind(socket);
+    socket.send = text => {
+      send(text);
+      const command = JSON.parse(text);
+      const result = command.id === 2 ? { result: { value: { x: 0, y: 0, width: 800, height: 600 } } }
+        : command.id === 3 ? { data: Buffer.from('slow-png').toString('base64') } : {};
+      setTimeout(() => socket.emit('message', { data: JSON.stringify({ id: command.id, result }) }), command.id === 2 ? 3200 : 0);
+    };
+    const capture = captureTradingViewCopierSnapshot({
+      dedicated: { chartId: 'abc' }, fetchImpl: async () => targetResponse(),
+      webSocketFactory: () => socket, timeoutMs: 6000, onFailure: failures,
+    });
+    await vi.waitUntil(() => socket.listeners.has('open'));
+    socket.emit('open');
+    expect(await capture).toEqual(Buffer.from('slow-png'));
+    expect(failures).not.toHaveBeenCalled();
+    expect(socket.sent.filter(value => JSON.parse(value).method === 'Page.captureScreenshot')).toHaveLength(1);
+  });
+
+  it('reports the exact failed capture phase and strips arbitrary remote error content', async () => {
+    const socket = new FakeSocket(); const failures = vi.fn();
+    socket.send = text => {
+      const command = JSON.parse(text);
+      queueMicrotask(() => socket.emit('message', { data: JSON.stringify(command.id === 2
+        ? { id: 2, error: { message: 'secret https://private.example/token' } }
+        : { id: command.id, result: {} }) }));
+    };
+    const capture = captureTradingViewCopierSnapshot({ dedicated: { chartId: 'abc' },
+      fetchImpl: async () => targetResponse(), webSocketFactory: () => socket, onFailure: failures });
+    await vi.waitUntil(() => socket.listeners.has('open')); socket.emit('open');
+    expect(await capture).toBeNull();
+    expect(failures).toHaveBeenCalledWith({ phase: 'normalize', code: 'snapshot-cdp-error', elapsedMs: expect.any(Number) });
+  });
+
+  it('records a target timeout instead of silently losing the cause', async () => {
+    const failures = vi.fn();
+    await captureTradingViewCopierSnapshot({ dedicated: { chartId: 'abc' }, timeoutMs: 20, onFailure: failures,
+      fetchImpl: (_url, init) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('timed out', 'TimeoutError')));
+      }) });
+    expect(failures).toHaveBeenCalledWith({ phase: 'target', code: 'snapshot-cdp-timeout', elapsedMs: expect.any(Number) });
+  });
+
   it('pošle pouze pasivní Page.captureScreenshot s fromSurface false', async () => {
     const socket = new FakeSocket();
     // This case verifies the passive command, not scheduler timing. Observe
@@ -166,7 +212,7 @@ describe('copier dedicated snapshot layout', () => {
     }
     const bounds = JSON.parse(socket.sent[3]);
     expect(bounds).toMatchObject({ id: 2, method: 'Runtime.evaluate', params: { awaitPromise: true } });
-    expect(bounds.params.expression).toContain('requestAnimationFrame(() => requestAnimationFrame(resolve))');
+    expect(bounds.params.expression).toContain('requestAnimationFrame(() => requestAnimationFrame(() =>');
     expect(bounds.params.expression).toContain("executeActionById('chartReset')");
     expect(bounds.params.expression).toContain('setBarSpacing(barSpacing)');
     expect(bounds.params.expression).toContain('setRightOffset(rightOffset)');
@@ -178,7 +224,7 @@ describe('copier dedicated snapshot layout', () => {
     const chartIndex = bounds.params.expression.indexOf("const chart = typeof api.chart");
     const resetIndex = bounds.params.expression.indexOf("executeActionById('chartReset')");
     const spacingIndex = bounds.params.expression.indexOf('setBarSpacing(barSpacing)');
-    const finalPaintIndex = bounds.params.expression.lastIndexOf('await new Promise(r => requestAnimationFrame');
+    const finalPaintIndex = bounds.params.expression.lastIndexOf('return await new Promise(resolve =>');
     const boundsIndex = bounds.params.expression.lastIndexOf("document.querySelector('.chart-container.active')");
     expect(layoutIndex).toBeLessThan(layoutPaintIndex);
     expect(layoutPaintIndex).toBeLessThan(chartIndex);

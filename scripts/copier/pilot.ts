@@ -1,4 +1,6 @@
 import { fileRelayDeliveryStore } from '../../server/copierRelayDeliveryStore.js';
+import { createCopierSnapshotDelivery, snapshotDeliveryId } from '../../server/copierSnapshotDelivery';
+import { captureTimelyCopierSnapshot } from '../../services/copierSnapshotCapture';
 import { copierJournalLinks } from '../../services/copierJournalLinks';
 import { startLocalCopierJournal } from '../../server/localCopierJournal';
 import { createTradovateAccountDisplayFeed } from '../../server/tradovateAccountDisplayFeed';
@@ -479,6 +481,8 @@ async function runLocalAgent(
   };
   let snapshotPreparation: Promise<boolean> | null = null;
   let snapshotCapturesInFlight = 0;
+  let snapshotCameraTail: Promise<unknown> = Promise.resolve();
+  const latestSnapshotEvent = new Map<string, string>();
   let snapshotMaintenanceInFlight = false;
   const prepareSnapshotCamera = (): Promise<boolean> => {
     if (snapshotPreparation) return snapshotPreparation;
@@ -498,8 +502,12 @@ async function runLocalAgent(
     // refresh tak nemůže otevřít druhý CDP reset uprostřed ostrého capture.
     snapshotCapturesInFlight += 1;
     try {
-      await snapshotPreparation;
-      return await capture();
+      const task = snapshotCameraTail.then(async () => {
+        await snapshotPreparation;
+        return capture();
+      });
+      snapshotCameraTail = task.catch(() => {});
+      return await task;
     } finally {
       snapshotCapturesInFlight -= 1;
     }
@@ -532,6 +540,40 @@ async function runLocalAgent(
     ? setInterval(() => { void refreshSnapshotHealth(); }, 30_000)
     : null;
   snapshotHealthTimer?.unref();
+  let snapshotDelivery: Awaited<ReturnType<typeof createCopierSnapshotDelivery>> | null = null;
+  const snapshotFailure = async (
+    id: string, at: number, phase: 'capture' | 'upload' | 'storage', code: string,
+  ) => {
+    const failure = { id, at, phase, code };
+    snapshotHealth = { ...snapshotHealth, lastFailure: failure,
+      state: phase === 'capture' ? 'capture-failed' : 'upload-failed' };
+    console.warn(`${new Date().toISOString()} SNAPSHOT failed id=${id} phase=${phase} code=${code}`);
+    try { await snapshotDelivery?.fail(failure); }
+    catch { console.warn(`${new Date().toISOString()} SNAPSHOT diagnostic-persist-failed`); }
+  };
+  if (snapshotsEnabled) {
+    try {
+      snapshotDelivery = await createCopierSnapshotDelivery({
+        path: resolve(root, `${key}.snapshot-delivery.json`),
+        upload: async job => {
+          if (!relay) throw new Error('snapshot-relay-unavailable');
+          // APNs keeps its original deadline. Journal storage has independent retries.
+          await relay.uploadSnapshot(job);
+          console.log(`${new Date().toISOString()} SNAPSHOT uploaded id=${snapshotDeliveryId(job)} delayMs=${Date.now() - job.at}`);
+        },
+        onState: state => { snapshotHealth = { ...snapshotHealth, ...state }; },
+        onFailure: failure => console.warn(`${new Date().toISOString()} SNAPSHOT pending id=${failure.id} phase=${failure.phase} code=${failure.code}`),
+      });
+    } catch {
+      await snapshotFailure('spool', Date.now(), 'storage', 'snapshot-spool-unavailable');
+    }
+  }
+  const flushSnapshots = () => {
+    if (!relay || !snapshotDelivery) return;
+    void snapshotDelivery.flush().catch(() => snapshotFailure('spool', Date.now(), 'storage', 'snapshot-spool-write-failed'));
+  };
+  const snapshotDeliveryTimer = snapshotsEnabled ? setInterval(flushSnapshots, 30_000) : null;
+  snapshotDeliveryTimer?.unref();
   const tvSnapshotHandledUntil = new Map<string, number>();
   let snapshotTestInFlight = false;
   let stopPromise: Promise<void> | null = null;
@@ -554,6 +596,9 @@ async function runLocalAgent(
     if (pairingProbeTimer) clearInterval(pairingProbeTimer);
     if (pairingRestartTimer) clearTimeout(pairingRestartTimer);
     if (snapshotHealthTimer) clearInterval(snapshotHealthTimer);
+    if (snapshotDeliveryTimer) clearInterval(snapshotDeliveryTimer);
+    // Do not delay broker shutdown for an image request; the disk spool survives restart.
+    void snapshotDelivery?.close().catch(() => {});
     marketPriceFeed?.stop();
     contexts.forEach(item => item.displayFeed?.close());
     const cancelShutdownWatchdog = startAgentShutdownWatchdog({
@@ -722,61 +767,57 @@ async function runLocalAgent(
       // Trade event -> okamžitý poll s příznakem -> server pushne hned.
       onCopyEvent: event => {
         relay?.nudgeCopyEvents();
-        if (!snapshotsEnabled || !relay || !event.episodeId) return;
+        if (!snapshotsEnabled) return;
         // Jen vstup a výstup (rozhodnutí uživatele 2026-08-22): posun SL je
         // vlastní akce — notifikace stačí textová a snímek by byl jen šum.
         if (event.kind !== 'entry' && event.kind !== 'exit') return;
+        if (!event.episodeId) {
+          void snapshotFailure(event.id, event.at, 'capture', 'snapshot-episode-missing');
+          return;
+        }
         const snapshotKind = event.kind;
         const snapshotRelay = relay;
         const notifyDeadlineAt = event.at + COPY_EVENT_IMAGE_PUSH_DEADLINE_MS;
         // Po grace worker vyvolá druhý průchod. Pokud obrázek uspěl, serverový
         // marker z něj udělá no-op; jinak tentýž event odejde jako text.
         const fallbackTimer = setTimeout(
-          () => snapshotRelay.nudgeCopyEvents(),
+          () => snapshotRelay?.nudgeCopyEvents(),
           Math.max(0, event.at + COPY_EVENT_IMAGE_GRACE_MS + 25 - Date.now()),
         );
         fallbackTimer.unref();
-        // Záměrně bez await: CDP ani síť nesmí vstoupit do dispatch/eventTail.
+        // No capture/upload/disk await enters the broker event callback.
+        const id = snapshotDeliveryId({ episodeId: event.episodeId, kind: snapshotKind, at: event.at });
+        latestSnapshotEvent.set(event.symbol, id);
+        let captureError = 'snapshot-capture-empty';
+        let failurePhase: 'capture' | 'storage' = 'capture';
         snapshotHealth = { ...snapshotHealth, lastAttemptAt: Date.now() };
-        void withSnapshotCamera(async () => {
-          const remaining = notifyDeadlineAt - Date.now();
-          if (remaining <= 0) return null;
-          // Capture má vlastní strop; zbytek deadline patří uploadu s retry.
-          return captureTradingViewCopierSnapshot({
+        void withSnapshotCamera(() => captureTimelyCopierSnapshot({
+          eventAt: event.at,
+          isCurrent: () => latestSnapshotEvent.get(event.symbol) === id,
+          onSkip: code => { captureError = code; },
+          capture: timeoutMs => captureTradingViewCopierSnapshot({
             dedicated: dedicatedChartRef,
-            timeoutMs: Math.min(2_500, remaining),
+            timeoutMs,
             onDedicatedResolved: persistResolvedChart,
-          });
-        }).then(async png => {
-          if (!png) {
-            await refreshSnapshotHealth();
-            if (snapshotHealth.state === 'ready') snapshotHealth = { ...snapshotHealth, state: 'capture-failed' };
-            return;
-          }
+            onFailure: failure => {
+              captureError = failure.code;
+              console.warn(`${new Date().toISOString()} SNAPSHOT capture id=${id} phase=${failure.phase} code=${failure.code} elapsedMs=${failure.elapsedMs}`);
+            },
+          }),
+        })).then(async png => {
+          if (!png) { await snapshotFailure(id, event.at, 'capture', captureError); return; }
           if (png.byteLength > 2 * 1024 * 1024) {
-            snapshotHealth = { ...snapshotHealth, state: 'capture-failed' };
-            console.warn(`${new Date().toISOString()} SNAPSHOT PNG je větší než 2 MB; zahazuji ${event.symbol} ${event.kind}`);
-            return;
+            await snapshotFailure(id, event.at, 'capture', 'snapshot-image-too-large'); return;
           }
-          try {
-            await snapshotRelay.uploadSnapshot({
-              episodeId: event.episodeId!,
-              kind: snapshotKind,
-              at: event.at,
-              symbol: event.symbol,
-              png: png.toString('base64'),
-              notifyDeadlineAt,
-            }, { deadlineAt: notifyDeadlineAt });
-            snapshotHealth = { ...snapshotHealth, state: 'ready', lastSuccessAt: Date.now() };
-            console.log(`${new Date().toISOString()} SNAPSHOT uploaded ${event.symbol} ${event.kind} (${Math.round(png.byteLength / 1024)} kB, +${Date.now() - event.at} ms)`);
-          } catch (error) {
-            snapshotHealth = { ...snapshotHealth, state: 'upload-failed' };
-            throw error;
-          }
-        }).catch(error => {
-          if (snapshotHealth.state !== 'upload-failed') snapshotHealth = { ...snapshotHealth, state: 'capture-failed' };
-          console.warn(`${new Date().toISOString()} SNAPSHOT ${error instanceof Error ? error.message : String(error)}`);
-        });
+          failurePhase = 'storage';
+          if (!snapshotDelivery) throw new Error('snapshot-spool-unavailable');
+          await snapshotDelivery.enqueue({
+            episodeId: event.episodeId!, kind: snapshotKind, at: event.at,
+            symbol: event.symbol, png: png.toString('base64'), notifyDeadlineAt,
+          });
+          flushSnapshots();
+        }).catch(() => snapshotFailure(id, event.at, failurePhase,
+          failurePhase === 'storage' ? 'snapshot-spool-write-failed' : captureError));
       },
     });
     if (await abortLateStartupIfStopping()) return;

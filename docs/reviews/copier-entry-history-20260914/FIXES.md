@@ -66,7 +66,7 @@ přepočteno offline s explicitním testovacím číselníkem USD; výsledky odp
 částkám z incidentního auditu. To není ověření číselníku nebo importu v produkci.
 Soukromá broker data a logy zůstávají mimo git v adresáři incidentu.
 
-## Navazující nasazení — zatím neprovedeno
+## Plán navazujícího nasazení (následně dokončen níže)
 
 1. Vyžádat schválení konkrétního push na main a aktualizace Mac workeru.
 2. Pro worker ověřit aktuální stav; za otevřených pozic nebo pracovních příkazů
@@ -78,3 +78,25 @@ Soukromá broker data a logy zůstávají mimo git v adresáři incidentu.
    všech sedmi epizod v obou připojeních, se zachovanými ID a bez duplicit.
 5. Ověřit připojení, flat/no-working, reconciliation a ponechat kopírku vypnutou.
    Živý obchod ani automatické obnovení ARM nejsou součástí této opravy.
+
+## Produkční aktivace 2026-09-14 — dokončeno
+
+Uživatel schválil konkrétní push a aktualizaci workeru, případně jeho vypnutí.
+Commit `33ea4271a066de00a41e34d8ff893cb5357f1d20` je na main a produkčním
+Vercel deploymentu `dpl_4ZYCZr7i9qdmTLzea6mMfVyYSUpp` (READY).
+Po soukromé záloze a reconciliation byl aktualizován již vypnutý flat worker.
+Instalovaný SHA-256 `0f947457c2e65aea4968434811d7cd3c74c6e78907ba22c4c5dd1e1921763065`
+odpovídá sestavení z tohoto commitu. Následná reconciliation a stavová kontrola
+potvrdily připojení, DISARMED, flat, žádné pracovní příkazy, divergence,
+stuck outbox ani lastError. Kopírka zůstala vypnutá.
+
+Skutečná Currency evidence z obou broker připojení dorazila do DB a normální
+import dokončil všech sedm dnešních epizod pod původními position_id/trade_id,
+bez duplicit nebo ručního přepisování P&L. Čistý součet je 1156,20 USD.
+Produkční LIVE UI ověřeno v kombinovaném i individuálním zobrazení; hlavní
+Historie dnešní kartu rovněž zobrazuje. FUNDED filtr omezuje zobrazení na tři
+účty / 400,20 USD, režim VŠE obsahuje všech sedm.
+
+Nasazení a obnovený import jsou nyní produkčně ověřené. Nový skutečný obchod
+po opravě nebyl zadán; ověření vstupů a SL změn zůstává regresní/mock.
+Tento následný dokumentační zápis není součástí nasazeného commitu.

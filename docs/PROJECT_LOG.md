@@ -208,6 +208,23 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-14 — Codex: oprava pořizování screenshotů a uchování obrázků (lokálně)
+
+- Zachycení už nemá starý 2,5s limit sdílený s doručením; dostává maximálně 8 s v 15s okně původní události. Souběžné capture běží postupně, při novém vstupu/výstupu se neaktuální obrázek nepřiřadí ke staré události. Chyby obsahují fázi, bezpečný kód a dobu trvání; čekání na překreslení je omezené.
+- ENTRY/EXIT PNG se nejdřív uloží do soukromé atomické diskové fronty. Retry po výpadku/restartu používá totožné bytes a ID, žádné opožděné focení. Původní deadline notifikace se nemění a neomezuje samotné uložení historie. Fronta je omezená, poškození/plný disk nevede k tichému smazání.
+- Trvalá chyba chybějícího snímku přežije restart i další ready probe. Zobrazení v existujícím LIVE chipu se nevrátí na „Připravené“ pouhým nalezením TradingView. Obchodní controller, limity, ARM a broker příkazy beze změn.
+- Ověření: kompletní 394 souborů / 3580 testů; po posledních doplněních cíleně 4 soubory / 34 testů. Typecheck, produkční web build, cílený lint a esbuild worker bundle. Podrobná evidence/hranice v `docs/reviews/copier-entry-history-20260914/SCREENSHOTS.md`.
+- **Tato oprava zatím nebyla nasazena ani instalována do workeru.** Původní ranní obrázky neexistují a nebyly vymyšleny. Následuje schválení konkrétního release a oddělené produkční ověření focení. Předchozí oprava vstupu/historie 33ea4271 zůstává nasazená.
+
+### 2026-09-14 — Codex: schválené nasazení ranní opravy a obnovená historie
+
+- Po výslovném souhlasu push přesného `33ea4271a066de00a41e34d8ff893cb5357f1d20` na main. Vercel `dpl_4ZYCZr7i9qdmTLzea6mMfVyYSUpp` READY, produkční alias odpovídá tomuto commitu; nepřihlášený POST pilot-lease vrací 401.
+- Před i po aktualizaci Mac workeru proběhla reconciliation. Kopírka byla již vypnutá a flat, bez pracovních příkazů; nebylo třeba odeslat DISARM. Záloha původního workeru/state/config je v soukromém `Documents/AlphaTrade-backups/2026-09-14-entry-history`. Instalace zachovala durable skupinu a párování.
+- Instalovaný bundle SHA-256 `0f947457c2e65aea4968434811d7cd3c74c6e78907ba22c4c5dd1e1921763065` odpovídá ověřenému sestavení. Worker start `2026-09-14T10:15:31.415Z`; kontrola 10:24:07 UTC: connected, DISARMED, groupFlat, bez reconciliationRequired, orders, divergence, stuck outbox a lastError.
+- Obě skutečná připojení zachytila Currency USD, evidence dorazila do DB a běžný import potvrdil všech sedm dnešních epizod. Původní position_id/trade_id zachované, pending_reason null; čisté P&L celkem 1156,20 USD. Bez ručního přepisování obchodů nebo DB migrace.
+- Produkční UI ověřeno: LIVE kombinovaně 7 účtů / 1156,20 USD při VŠE; individuálně všech 7 s vlastními časy a P&L. Režim FUNDED ukazuje 3 účty / 400,20 USD; dnešní karta ověřena také v hlavní Historii. Po ověření vrácen FUNDED / kombinované zobrazení.
+- Žádný nový obchod, ARM ani Flatten. Reálný nový vstup po opravě nebyl prováděn; automatizované regresní výsledky jsou v předchozím zápisu. Soukromé důkazy aktivace: `/private/tmp/alphatrade-activation-20260914`. Tento následný dokumentační zápis není součástí nasazeného commitu.
+
 ### 2026-09-14 — Codex: oprava prvního vstupu a měny poplatků (lokálně)
 
 - Uživatel schválil pouze ranní chybu a historii; obnova správy otevřeného obchodu zůstává odložená. Izolovaný worktree `/private/tmp/alphatrade-entry-history-fix-20260914`, základ produkční `f4f04147`; cizí rozpracované změny v hlavní složce zachované.
