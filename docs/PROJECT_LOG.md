@@ -208,6 +208,25 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-14 — Codex: opravené propojení screenshotů přes více OAuth připojení
+
+- Produkční `journal_trade_snapshots` již nepovažuje `tradovate_copier_trades.connection_id` za připojení zdrojového obchodu: tento sloupec označuje relay zařízení, které zde přenáší Lucid leadera přes Tradeify. Vztah určuje unikátní potvrzené závěrečné broker fill ID, přesný čas uzavření, známý čas otevření, instrument, směr a ověřený účet z dokončené journal projekce. Duplicitní/konfliktní fill nebo episode vazby se nepřipojí. RLS security_invoker zachován.
+- Použita jen verzovaná migrace pohledu; žádné přepisování obchodů, ledgeru, obrázků nebo broker stavu. Původní produkční definice/granty, dry-run a návratový SQL jsou privátně v `/private/tmp/alphatrade-snapshot-link-fix-20260914`. CLI vytvořil migraci; název souboru byl následně sladěn s verzí přidělenou produkční migration history `20260914125323`.
+- Ověřeno 25 PostgreSQL/PGlite regresních testů a 24 testů frontendového načítání. SQL test obsahuje reprodukci původního selhání, Lucid/Tradeify, 12 followerů, partial exit, late upload, duplicitní relay, kolize ID, špatné účty/časy/instrumenty, neúplnou projekci a autentizované RLS. Samostatné spuštění: `PGLITE_MODULE=/path/to/pglite/dist/index.js node --test tests/sql/journalSnapshotLinks.pg.mjs`.
+- Produkční dry-run a následná kontrola: 0 -> 2 vazby u dnešního obchodu 12:52, žádná původní vazba odebrána. V prohlížeči potvrzeno Screenshoty (2), vykreslené AUTO ENTRY 12:52:03 i AUTO EXIT 12:53:10. Security/performance advisory žádný nový nález proti baseline.
+- Oprava funguje pro existující i budoucí jednoznačně spárované obchody. Ranní obrázky, které vůbec nevznikly, se neregenerují. Worker ani Vercel bundle se kvůli této čistě databázové opravě neměnily; žádný ARM, DISARM, restart, Flatten ani brokerový test.
+
+
+### 2026-09-14 — Codex: schválené nasazení opravy kopírky a screenshot capture
+
+- Po výslovném souhlasu uživatele nasazen přesný commit `d039aa32452445faacad40778cdd1230a06949ad` včetně `86d72d2e`; origin/main ověřen. Vercel `dpl_2k1TgBDn1HPPzMqNQR37QEYjBKqb` je READY a produkční alias ukazuje na tuto verzi. Žádné změny DB schématu ani produkční konfigurace.
+- Před reinstalací vznikla privátní záloha bundle, manifestu, launchd a durable state v `/private/tmp/alphatrade-release-d039aa32-20260914/before`. Read-only reconciliation před i po restartu potvrzuje všech 7 účtů flat, bez working orders/divergence/stuck outbox; connected=true, armed=false, reconciliationRequired=false, lastError=null. Nastavení skupiny zachováno přes adopt-durable-group.
+- Nainstalovaný Mac bundle SHA-256 `22d09bf751a8ac2243e532a3fabc58cf6c1847d39d6372e75353c7f8ffd9217d` odpovídá předem otestovanému buildu. Worker spuštěn 11:56:01.188Z, launchd running, persistent lifetime; cloud heartbeat ověřen s věkem 1.6 s. Nové worker logy neobsahují execution chybu. Produkční HTTP 200, unauthenticated POST pilot-lease 401, žádné 5xx nového deploymentu; jeden existující Node url.parse deprecation warning v úspěšném cronu.
+- Před vydáním prošlo 397 test files / 3603 tests, typecheck a build. Produkční LIVE ověřen vizuálně: 6/6 followers, vypnutá kopírka, historie zpracovaná. Graf detailu zobrazuje existující čekání na historická data Databento (přibližně 24 hodin po trhu), nikoli syntetické svíčky.
+- OTEVŘENÉ: detail dnešního obchodu 12:52 ukazuje BEZ SCREENSHOTU, přestože metadata ENTRY/EXIT i oba objekty v copier-snapshots existují. Propojení obrázků do historie vyžaduje navazující opravu; toto nasazení řeší capture/durable upload, nikoli ověřené zobrazení tohoto historického případu. Neslibovat zpětnou rekonstrukci chybějících ranních snímků.
+- Žádný ARM, broker order, Flatten ani broker-write test. Zelené testy, deploy a flat reconciliation nedokazují nový reálný copy lifecycle. Tento záznam je lokální evidence po deploymentu a nebyl součástí dalšího push.
+
+
 ### 2026-09-14 — Codex: oprava druhého incidentu a rozšířené execution regrese (lokálně)
 - Opraven přenos přesně potvrzeného OrderVersion přes ExecutionReport New/Replaced, včetně obráceného pořadí, pozdních verzí, REST obnovy, odmítnutých požadavků a zachování parent/OCO vazeb. Modify/Cancel reject již neshazuje platný pracovní order; HTTP ACK ani stejná stará cena nejsou potvrzení modify.
 - Standalone follower SL/TP již není nekonečný in-flight exit pro leader-flat guard. Unknown/sending/Market ochrana, vlastnictví epochy, nativní account/symbol likvidace, následné flat potvrzení a DISARM zůstávají přísné. Kompletní prázdný position snapshot odstraní starou lokální expozici.
