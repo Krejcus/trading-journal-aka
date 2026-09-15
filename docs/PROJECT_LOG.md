@@ -208,6 +208,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-15 — připravená oprava ARM při přepnutí skupiny
+
+- Potvrzen konflikt Hlavní cooldown 1 min versus nová FN skupina 0 min.
+  ARM nyní připravuje konfiguraci se zachováním přísnějších potvrzených pravidel
+  session i cílové skupiny. Neslučitelné okno či follower limity se nevymýšlejí;
+  zůstávají blokované. Autoritativní relay/worker kontroly se nemění.
+- Přidána kontrola, zda má OAuth připojení účtu spárovanou routu v běžícím
+  workeru. Lokální worker dosud obsahuje jen Lucid/Tradeify; FN potřebuje
+  samostatné schválené spárování a bezpečné načtení konfigurace.
+- Známé odmítnutí se zobrazuje jako zablokované zapnutí, timeout zůstává neznámý.
+  129 cílených testů, typecheck a lint prošly; dialog ověřen ve světlém/tmavém
+  režimu na skutečné komponentě s mock callbackem. Žádný skutečný ARM ani broker
+  příkaz. Podrobnosti: `docs/reviews/copier-group-arm-20260915.md`.
+
 ### 2026-09-15 (Codex, rozlišení Tradovate Reconnect)
 Lokálně opraveno maskování odmítnutého OAuth refresh jako obecné 502 a zelené Connected. Per-connection read evidence ukazuje Obnov přihlášení + Reconnect a banner napříč LIVE; timeout/429/app-session chyby nezaměňuje za broker reautorizaci. Tradeify profily a skupina zůstávají uložené. Přesná příčina Invalid token není z existujících logů prokazatelná; riziko souběžné rotace a chybějící evidence refresh expiry popsány v docs/reviews/tradovate-reconnect-20260915.md. Přidána bezpečná diagnostika bez tokenů. Žádný deploy, DB změna, broker akce ani změna workeru.
 

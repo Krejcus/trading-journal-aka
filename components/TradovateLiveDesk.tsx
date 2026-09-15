@@ -89,6 +89,7 @@ import {
 } from '../lib/tradovateLiveTab';
 import { supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
 import { CopierStatusPollFence } from '../lib/copierStatusPollFence';
+import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup } from '../lib/copierArmPreparation';
 import {
   resolveLocalExecutionGroup,
   type LocalCopierAgentStatus,
@@ -201,6 +202,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // v přepínači ukázal jako OFF. Do té doby se stav zobrazuje jako neznámý.
   const [agentStatusResolved, setAgentStatusResolved] = useState(false);
   const [agentStatusFresh, setAgentStatusFresh] = useState(false);
+  const armStatusRef = useRef({ status: agentStatus, fresh: agentStatusFresh });
+  armStatusRef.current = { status: agentStatus, fresh: agentStatusFresh };
+  const [armRulesNotice, setArmRulesNotice] = useState<string | null>(null);
   useEffect(() => {
     setAgentStatusFresh(agentStatus != null);
     if (!agentStatus) return;
@@ -494,6 +498,18 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     return false;
   }, [agentClient, agentTransport, relayConnectionId]);
   const armLiveGroup = useCallback(async (targetGroup: CopyGroupConfig) => {
+    setArmRulesNotice(null);
+    const prepare = () => {
+      const current = armStatusRef.current;
+      if (!current.status || !current.fresh) {
+        throw new CopierArmBlockedError('Čekám na čerstvý stav kopírky. Po obnovení stavu můžeš zapnutí zopakovat.');
+      }
+      assertCopierArmConnections(targetGroup, current.status, live.connectionData,
+        accountEligibilityExclusions.map(entry => entry.accountId));
+      return prepareCopierArmGroup(targetGroup, current.status);
+    };
+    // Do not offer a camera restart for a group whose execution route is missing.
+    prepare();
     if (!targetGroup.enabled) {
       targetGroup = { ...targetGroup, enabled: true, localOnly: true };
     }
@@ -543,14 +559,20 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       }
     }
     await runConfigMutation(async () => {
+      // Re-read after any camera dialog/repair; the worker still rejects any
+      // concurrent tightening that happened after this UI snapshot.
+      const prepared = prepare();
       const result = await executeAgent({
         type: 'arm-live',
-        group: targetGroup,
+        group: prepared.group,
         accountEligibilityExclusions: exclusions,
       });
       acceptConfigAck(result.status);
+      if (prepared.preservedRules.length) {
+        setArmRulesNotice(`Při zapnutí zůstala zachována dnešní potvrzená pravidla: ${prepared.preservedRules.join(', ')}. Aktuální hodnoty najdeš v Risk.`);
+      }
     });
-  }, [acceptConfigAck, accountEligibilityExclusions, agentStatus?.snapshotHealth, confirmAction, effectiveAccountEligibility, executeAgent, runConfigMutation, waitForSnapshotReady]);
+  }, [acceptConfigAck, accountEligibilityExclusions, agentStatus?.snapshotHealth, confirmAction, effectiveAccountEligibility, executeAgent, live.connectionData, runConfigMutation, waitForSnapshotReady]);
   const commandAdapter = useMemo<LiveCopyTradingAdapter | undefined>(() => {
     if (!executionGroup) return undefined;
     return {
@@ -795,6 +817,12 @@ setAgentStatus((await executeAgent({
       {pairingNotice && (
         <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs font-bold text-emerald-600">
           {pairingNotice}
+        </div>
+      )}
+
+      {armRulesNotice && (
+        <div role="status" className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs font-semibold text-amber-700 dark:text-amber-400">
+          {armRulesNotice}
         </div>
       )}
 

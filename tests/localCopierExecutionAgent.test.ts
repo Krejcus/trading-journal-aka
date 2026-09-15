@@ -9,6 +9,8 @@ import type { CopyGroupConfig } from '../services/liveCopyTrading';
 import { createMockBroker } from '../services/mockBroker';
 import { createMemoryCopierStore } from '../services/copierStore';
 import { bootstrapCopierRuntime } from '../services/copierRuntimeController';
+import { prepareCopierArmGroup } from '../lib/copierArmPreparation';
+import { DEFAULT_COPY_GROUP_SAFETY } from '../services/liveCopyTrading';
 
 const origin = 'https://alphatrade-mentor-15.vercel.app';
 const group = (): CopyGroupConfig => ({
@@ -999,6 +1001,40 @@ describe('local copier execution agent', () => {
 });
 
 describe('atomický arm-live s konfigurací', () => {
+  it('prepared cross-group ARM retains the cooldown and still runs worker preflight and reconciliation', async () => {
+    const current = { ...group(), safety: { ...structuredClone(DEFAULT_COPY_GROUP_SAFETY), entryCooldownMinutes: 1 } };
+    const runtime = controller({ sessionArmedAt: 1 });
+    const prepareAccounts = vi.fn(async () => ({ missingOptional: [] }));
+    const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: current, port: 0, prepareGroupAccounts: prepareAccounts });
+    try {
+      const requested = { ...group(), id: 'fn', leaderAccountId: 33, followers: [{ accountId: 44, multiplier: 1, mode: 'on-submit' as const }] };
+      const prepared = prepareCopierArmGroup(requested, agent.status());
+      await agent.execute({ type: 'arm-live', group: prepared.group });
+      expect(agent.status().group.safety!.entryCooldownMinutes).toBe(1);
+      expect(prepareAccounts).toHaveBeenCalled();
+      expect(runtime.reconcile).toHaveBeenCalledOnce();
+      expect(runtime.arm).toHaveBeenCalledOnce();
+      expect(runtime.flattenGroup).not.toHaveBeenCalled();
+      expect(runtime.flattenAccount).not.toHaveBeenCalled();
+    } finally {
+      await agent.close();
+    }
+  });
+
+  it('worker still rejects a stale prepared ARM after another client tightens the cooldown', async () => {
+    const oldGroup = { ...group(), safety: { ...structuredClone(DEFAULT_COPY_GROUP_SAFETY), entryCooldownMinutes: 1 } };
+    const runtime = controller({ sessionArmedAt: 1 });
+    const prepared = prepareCopierArmGroup({ ...group(), id: 'fn' }, { group: oldGroup, controller: runtime.status() });
+    const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: { ...oldGroup, safety: { ...oldGroup.safety, entryCooldownMinutes: 2 } }, port: 0 });
+    try {
+      await expect(agent.execute({ type: 'arm-live', group: prepared.group })).rejects.toThrow('entryCooldownMinutes');
+      expect(runtime.arm).not.toHaveBeenCalled();
+      expect(agent.status().group.safety!.entryCooldownMinutes).toBe(2);
+    } finally {
+      await agent.close();
+    }
+  });
+
   it('arm-live před prvním session ARM přijme i mírnější group, pak reconcile a ARM', async () => {
     const runtime = controller();
     const saved: CopyGroupConfig[] = [];

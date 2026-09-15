@@ -1,4 +1,5 @@
 import { LiveRiskValue } from './LiveRiskValue';
+import { copierArmRejection } from '../lib/copierArmPreparation';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
 import { liveBalanceDisplay, liveCapitalDisplay, liveDailyPnlDisplay, liveGroupDailyPnlDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
@@ -328,6 +329,7 @@ interface PendingAction {
   /** Informační fail-closed dialog; potvrzení pouze zavře dialog. */
   blocked?: boolean;
   outcomeUnknown?: boolean;
+  outcomeRejected?: boolean;
   /** UI-only kontext; audit ani runtime error se nepřepisuje. */
   accountIds?: number[];
 }
@@ -807,18 +809,20 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         ? { tone: 'success', text: 'Copier je připojený — příkazy leadera se kopírují naostro.' }
         : { tone: 'info', text: 'Copier je bezpečně odpojený.' });
     } catch (reason) {
+      const rejected = connecting ? copierArmRejection(reason) : null;
       const detail = reason instanceof Error
         ? reason.message
         : connecting ? 'Copier se nepodařilo připojit.' : 'Copier se nepodařilo odpojit.';
       const affectedGroup = groups.find(group => group.id === groupId)
         ?? (runtimeGroup?.id === groupId ? runtimeGroup : null);
       setPendingAction({
-        title: connecting ? 'Zapnutí kopírky není potvrzené' : 'Vypnutí kopírky není potvrzené',
-        detail: `${detail} AlphaTrade nebude pokračovat bez autoritativního potvrzení runtime. Zkontroluj aktuální stav skupiny a akci zopakuj až po ověření.`,
+        title: rejected ? 'Zapnutí kopírky je zablokované' : connecting ? 'Zapnutí kopírky není potvrzené' : 'Vypnutí kopírky není potvrzené',
+        detail: rejected ?? `${detail} AlphaTrade nebude pokračovat bez autoritativního potvrzení runtime. Zkontroluj aktuální stav skupiny a akci zopakuj až po ověření.`,
         confirmLabel: 'Rozumím',
         danger: true,
         blocked: true,
-        outcomeUnknown: true,
+        outcomeUnknown: !rejected,
+        outcomeRejected: !!rejected,
         accountIds: affectedGroup
           ? [affectedGroup.leaderAccountId, ...affectedGroup.followers.map(follower => follower.accountId)]
             .filter((accountId): accountId is number => accountId != null)
@@ -3741,7 +3745,9 @@ const ConfirmActionDialog = ({ action, busy, apiReady, onClose, onConfirm }: { a
       <h3 className="text-lg font-black text-[var(--text-primary)] mt-4">{action.title}</h3><p className="text-sm text-[var(--text-secondary)] mt-1.5 leading-relaxed">{action.detail}</p>
       {action.blocked ? (
         <div className="mt-4 rounded-xl border border-rose-500/25 bg-rose-500/[0.07] px-3 py-2.5 text-[11px] font-bold text-rose-600">
-          {action.outcomeUnknown
+          {action.outcomeRejected
+            ? 'Tímto požadavkem se kopírka nezapnula. Požadavek se automaticky neopakuje.'
+            : action.outcomeUnknown
             ? 'Výsledek akce není ověřený. Příkaz se automaticky neopakuje; zkontroluj aktuální stav kopírky.'
             : 'Žádný brokerový příkaz ani změna runtime nebyly odeslány.'}
         </div>
