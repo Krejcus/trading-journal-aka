@@ -6,6 +6,7 @@ import {
   writeTradovateConnectionShell,
 } from '../lib/tradovateLiveConnectionCache';
 import type { TradovateOAuthStatus, TradovatePreflightResult } from '../services/tradovateOAuthConnection';
+import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
 
 const status: TradovateOAuthStatus = {
   connected: true,
@@ -60,6 +61,36 @@ describe('Tradovate LIVE connection shell cache', () => {
     expect(buildTradovateConnectionSummaries(status, { 'connection-1': dataset }, [], {
       'connection-1': { accountCount: 5, organizationName: 'Tradeify' },
     })['connection-1'].accountCount).toBe(2);
+  });
+
+  it('renders all connections when a newly added prop account has no firm yet', () => {
+    const connections = ['tradeify', 'lucid', 'new-prop'].map(id => ({ ...status.connections[0], id }));
+    const data = Object.fromEntries(connections.map((connection, index) => [connection.id, {
+      connectionId: connection.id, accounts: [{ id: index + 1 }],
+    } as TradovatePreflightResult]));
+    const profiles = ['Tradeify', 'Lucid', null].map((propFirm, index) => ({
+      externalAccountId: String(index + 1), propFirm,
+    } as TradovateAccountProfile));
+
+    expect(buildTradovateConnectionSummaries({ ...status, connections }, data, profiles)).toEqual({
+      tradeify: { accountCount: 1, organizationName: 'Tradeify' },
+      lucid: { accountCount: 1, organizationName: 'Lucid' },
+      'new-prop': { accountCount: 1, organizationName: null },
+    });
+  });
+
+  it('ignores unset or blank firms and keeps the existing organization fallback', () => {
+    const dataset = { accounts: [{ id: 1 }, { id: 2 }] } as TradovatePreflightResult;
+    const profiles = [null, '   '].map((propFirm, index) => ({
+      externalAccountId: String(index + 1), propFirm,
+    } as TradovateAccountProfile));
+    expect(buildTradovateConnectionSummaries(status, { 'connection-1': dataset }, profiles, {
+      'connection-1': { accountCount: 2, organizationName: 'Known organization' },
+    })['connection-1']).toEqual({ accountCount: 2, organizationName: 'Known organization' });
+
+    profiles[1].propFirm = ' Lucid ';
+    expect(buildTradovateConnectionSummaries(status, { 'connection-1': dataset }, profiles)['connection-1'])
+      .toEqual({ accountCount: 2, organizationName: 'Lucid' });
   });
 
   it('keeps unrelated broker connections during a partial post-close refresh', () => {

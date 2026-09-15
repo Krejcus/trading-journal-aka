@@ -89,7 +89,7 @@ export const buildTradovateConnectionSummaries = (
   const propFirms = Array.from(new Set(
     profiles
       .filter(profile => accountIds.has(profile.externalAccountId))
-      .map(profile => profile.propFirm.trim())
+      .map(profile => profile.propFirm?.trim())
       .filter(Boolean),
   ));
   return [connection.id, {

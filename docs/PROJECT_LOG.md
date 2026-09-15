@@ -208,6 +208,15 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-15 — Codex: oprava pádu LIVE po přidání prop připojení
+
+- Nahlášený Safari stack `null is not an object (evaluating u.propFirm.trim)` přesně reprodukován v `buildTradovateConnectionSummaries`. Nový onboarding profil dovoluje `propFirm=null`; nechráněný `.trim()` zrušil render celé LIVE stránky.
+- Souhrn připojení nyní toleruje nevyplněnou prop firmu a zachovává dosavadní fallback názvu organizace. Žádná změna account mappingu, dat profilu, broker příkazů ani workeru.
+- Dva nové regresní testy nejprve selhaly se stejnou TypeError; po opravě prošlo 20 testů cache/onboardingu/bridge, TypeScript a produkční build. Test zahrnuje tři připojení Tradeify + Lucid + nový účet s null firmou a prázdné názvy/fallback.
+- Localhost 4190 s read-only proxy vizuálně ověřen: LIVE se načetl se třemi připojeními a stávající skupinou; null prop firma již render neshodí.
+- Připraveno lokálně v izolovaném worktree; produkční main před opravou `d039aa32`. Novější Vercel `f9b27f69` je pouze dependabot preview, nikoli produkční alias. Nasazení této opravy zatím neprovedeno.
+
+
 ### 2026-09-14 — Codex: opravené propojení screenshotů přes více OAuth připojení
 
 - Produkční `journal_trade_snapshots` již nepovažuje `tradovate_copier_trades.connection_id` za připojení zdrojového obchodu: tento sloupec označuje relay zařízení, které zde přenáší Lucid leadera přes Tradeify. Vztah určuje unikátní potvrzené závěrečné broker fill ID, přesný čas uzavření, známý čas otevření, instrument, směr a ověřený účet z dokončené journal projekce. Duplicitní/konfliktní fill nebo episode vazby se nepřipojí. RLS security_invoker zachován.
