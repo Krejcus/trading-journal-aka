@@ -23,6 +23,13 @@ describe('authenticated cash display mode',()=>{
   await handler(request({connectionId:'other',mode:'cash',accountId:10}),res as unknown as VercelResponse);
   expect(res.status).toHaveBeenCalledWith(409);expect(mocks.read).not.toHaveBeenCalled();
  });
+ it('preserves the broker reconnect code for the web instead of returning a generic gateway error',async()=>{
+  const res=response();mocks.token.mockRejectedValue(new Error('tradovate-reauthorization-required'));
+  await handler(request({connectionId:'c',mode:'cash',accountId:10}),res as unknown as VercelResponse);
+  expect(res.status).toHaveBeenCalledWith(409);
+  expect(res.json).toHaveBeenCalledWith({error:'tradovate-reauthorization-required'});
+  expect(mocks.read).not.toHaveBeenCalled();
+ });
  it('rejects invalid account IDs and propagates broker backoff',async()=>{
   const res=response();await handler(request({connectionId:'c',mode:'cash',accountId:-1}),res as unknown as VercelResponse);
   expect(res.status).toHaveBeenCalledWith(400);expect(mocks.read).not.toHaveBeenCalled();

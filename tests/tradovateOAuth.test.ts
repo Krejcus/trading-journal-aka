@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildTradovateAuthorizationUrl,
   buildTradovateStateCookie,
@@ -128,4 +128,10 @@ describe('Tradovate OAuth primitives', () => {
     expect(new URLSearchParams(String(requests[1].init.body)).get('grant_type')).toBe('refresh_token');
     expect(new URLSearchParams(String(requests[1].init.body)).get('refresh_token')).toBe('refresh-old');
   });
+  it('preserves the optional broker refresh lifetime without guessing one', async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ access_token: 'test', refresh_token: 'test-refresh', expires_in: 4800, refresh_token_expires_in: 1209600 })) as unknown as typeof fetch;
+    const result = await refreshTradovateAccessToken({ refreshToken: 'test-old', clientId: 'test', clientSecret: 'test', environment: 'demo', fetchImpl });
+    expect(result.refreshExpiresIn).toBe(1209600);
+  });
+
 });

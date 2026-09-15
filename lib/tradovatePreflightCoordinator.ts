@@ -32,10 +32,12 @@ export const consumeTradovatePreflights = (
   start: StartPreflight,
   onDataset: (dataset: TradovatePreflightResult) => void,
   prestarted?: PrestartedTradovatePreflights,
+  onSettled?: (connectionId: string, result: SettledTradovatePreflight) => void,
 ): Promise<SettledTradovatePreflight[]> => Promise.all(connectionIds.map(connectionId => {
   const result = prestarted?.get(connectionId) ?? startSettledPreflight(connectionId, start);
   return result.then(settled => {
     if (settled.status === 'fulfilled') onDataset(settled.value);
+    onSettled?.(connectionId, settled);
     return settled;
   });
 }));

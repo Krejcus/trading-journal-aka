@@ -1,3 +1,4 @@
+import { tradovateConnectionPresentation, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
 import { readTradovateDisplaySession, writeTradovateDisplaySession } from '../lib/tradovateDisplaySessionCache';
 import { liveBalanceDisplay, liveDailyPnlDisplay } from '../lib/liveBalanceDisplay';
 import { useTradovateDisplayFallback } from './useTradovateDisplayFallback';
@@ -778,6 +779,12 @@ setAgentStatus((await executeAgent({
         quiet
       />
 
+      {(live.status?.connections ?? []).filter(connection => live.connectionHealth[connection.id]?.state === 'reconnect-required').map(connection => (
+        <TradovateReconnectNotice key={connection.id}
+          organization={live.connectionSummaries[connection.id]?.organizationName || connection.organizationName || 'Tradovate'}
+          disabled={live.busy != null} onReconnect={() => void live.connect(connection.id)} />
+      ))}
+
       {renderedLiveError && (
         <div className="flex items-center gap-3 rounded-md border border-rose-500/30 bg-rose-500/10 p-4 text-rose-500">
           <AlertTriangle size={18} className="shrink-0" /><span className="flex-1 text-sm font-semibold">{renderedLiveError}</span>
@@ -819,6 +826,7 @@ setAgentStatus((await executeAgent({
             status={live.status}
             connectionData={live.connectionData}
             connectionSummaries={live.connectionSummaries}
+            connectionHealth={live.connectionHealth}
             profiles={live.profiles}
             busy={live.busy}
             onAdd={() => setAddConnectionOpen(true)}
@@ -1009,10 +1017,11 @@ setAgentStatus((await executeAgent({
   );
 };
 
-const Connections = ({ status, connectionData, connectionSummaries, profiles, busy, onAdd, onRefreshStatus, onProfiles, onDisconnect, onReconnect, onPilotLease, pilotDevices }: {
+export const Connections = ({ status, connectionData, connectionSummaries, connectionHealth = {}, profiles, busy, onAdd, onRefreshStatus, onProfiles, onDisconnect, onReconnect, onPilotLease, pilotDevices }: {
   status: TradovateOAuthStatus | null;
   connectionData: Record<string, TradovatePreflightResult>;
   connectionSummaries: Record<string, TradovateConnectionSummary>;
+  connectionHealth?: TradovateConnectionHealthMap;
   profiles: TradovateAccountProfile[];
   busy: 'status' | 'connect' | 'data' | 'disconnect' | null;
   onAdd: () => void;
@@ -1026,7 +1035,7 @@ const Connections = ({ status, connectionData, connectionSummaries, profiles, bu
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const profilesById = profileMap(profiles);
   const connections = status?.connections ?? [];
-  const activeConnections = connections.filter(connection => connection.connected).length;
+  const activeConnections = connections.filter(connection => tradovateConnectionPresentation(connection.connected, connectionHealth[connection.id]).healthy).length;
   const totalAccounts = connections.reduce((sum, connection) => (
     sum + (connectionData[connection.id]?.accounts.length ?? connectionSummaries[connection.id]?.accountCount ?? 0)
   ), 0);
@@ -1041,6 +1050,7 @@ const Connections = ({ status, connectionData, connectionSummaries, profiles, bu
         <div className="hidden grid-cols-[48px_90px_90px_1.15fr_1fr_130px_180px] gap-3 bg-[var(--bg-page)] px-4 py-2.5 text-[9px] font-black uppercase tracking-[0.13em] text-[var(--text-secondary)] lg:grid"><span /><span>Broker</span><span>Type</span><span>Connection</span><span>Organization</span><span>Status</span><span /></div>
         {connections.length === 0 && busy !== 'status' ? <EmptyConnection onAdd={onAdd} /> : connections.length > 0 ? (
           connections.map(connection => {
+            const presentation = tradovateConnectionPresentation(connection.connected, connectionHealth[connection.id]);
             const pilotDevice = pilotDevices.find(device => device.connectionId === connection.id);
             const dataset = connectionData[connection.id];
             const summary = connectionSummaries[connection.id];
@@ -1061,10 +1071,10 @@ const Connections = ({ status, connectionData, connectionSummaries, profiles, bu
                   className="grid w-full items-center gap-3 px-4 py-2 text-left outline-none transition-colors focus-visible:bg-indigo-500/[0.06] disabled:cursor-default lg:grid-cols-[48px_90px_90px_1.15fr_1fr_130px]"
                 >
                   <span className="flex items-center gap-2 text-[var(--text-secondary)]"><ChevronRight size={15} className={`transition-transform duration-300 ease-out ${isExpanded ? 'rotate-90' : ''} ${connection.connected && dataset ? '' : 'opacity-30'}`} /><span className="text-xs font-bold">{accountCount}</span></span>
-                  <MobileMetric label="Broker"><TradovateCircleLogo /></MobileMetric><MobileMetric label="Type"><b className="text-[var(--text-secondary)]">{connection.environment.toUpperCase()}</b></MobileMetric><MobileMetric label="Connection"><span className="truncate font-mono font-bold">{connectionName}</span></MobileMetric><MobileMetric label="Organization"><OrganizationBrand name={organization} /></MobileMetric><MobileMetric label="Status"><span className={`inline-flex items-center gap-2 font-bold ${connection.connected ? 'text-emerald-500' : 'text-amber-500'}`}><span className={`h-2 w-2 rounded-full ${connection.connected ? 'bg-emerald-500' : 'bg-amber-500'}`} />{connection.connected ? 'Connected' : 'Disconnected'}</span></MobileMetric>
+                  <MobileMetric label="Broker"><TradovateCircleLogo /></MobileMetric><MobileMetric label="Type"><b className="text-[var(--text-secondary)]">{connection.environment.toUpperCase()}</b></MobileMetric><MobileMetric label="Connection"><span className="truncate font-mono font-bold">{connectionName}</span></MobileMetric><MobileMetric label="Organization"><OrganizationBrand name={organization} /></MobileMetric><MobileMetric label="Status"><span className={`inline-flex items-center gap-2 font-bold ${presentation.healthy ? 'text-emerald-500' : 'text-amber-500'}`}><span className={`h-2 w-2 rounded-full ${presentation.healthy ? 'bg-emerald-500' : 'bg-amber-500'}`} />{presentation.label}</span></MobileMetric>
                 </button>
               <div className="flex flex-nowrap items-center justify-end gap-1 px-4 py-2 lg:px-0 lg:pr-4">
-                {connection.connected ? <>
+                {connection.connected && !presentation.reconnect ? <>
                   <button type="button" onClick={() => onDisconnect(connection.id)} disabled={busy != null} className="h-7 shrink-0 whitespace-nowrap rounded-md border border-[var(--border-subtle)] px-2 text-[10px] font-bold leading-none text-[var(--text-primary)] disabled:opacity-50">Disconnect</button>
                   <button type="button" disabled title="Uzavření pozic je dostupné u skupiny na Live Dashboardu." className="h-7 shrink-0 cursor-not-allowed whitespace-nowrap rounded-md bg-rose-500 px-2 text-[10px] font-black leading-none text-white opacity-45">Flatten All</button>
                   <IconButton
@@ -1257,3 +1267,16 @@ const IconButton = ({ label, onClick, disabled, small = false, children }: { lab
 const Empty = ({ text }: { text: string }) => <div className="col-span-full py-8 text-center text-sm text-[var(--text-secondary)]">{text}</div>;
 
 export default TradovateLiveDesk;
+
+export const TradovateReconnectNotice = ({ organization, disabled, onReconnect }: {
+  organization: string; disabled: boolean; onReconnect: () => void;
+}) => (
+        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-amber-700 dark:text-amber-400">
+          <KeyRound size={18} className="shrink-0" />
+          <div className="min-w-0 flex-1 text-sm">
+            <b>{organization}: je potřeba znovu připojit</b>
+            <p className="mt-1 text-xs">Tradovate odmítlo obnovu přihlášení. Aktuální stav účtů nelze ověřit. Účty ze skupiny neodstraňuj; obnov přihlášení přes Reconnect.</p>
+          </div>
+          <button type="button" onClick={onReconnect} disabled={disabled} className="flex h-9 items-center gap-2 rounded-md bg-indigo-600 px-4 text-xs font-black text-white disabled:opacity-50"><RotateCcw size={14} /> Reconnect</button>
+        </div>
+);

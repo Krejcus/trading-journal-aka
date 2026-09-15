@@ -38,6 +38,8 @@ export interface TradovateTokenResponse {
   accessToken: string;
   refreshToken: string | null;
   expiresIn: number;
+  /** Broker-provided lifetime; optional, never inferred from access-token expiry. */
+  refreshExpiresIn?: number;
   tokenType: string;
   scope: string | null;
 }
@@ -251,6 +253,8 @@ function normalizeTokenResponse(value: unknown): TradovateTokenResponse {
       ? body.refresh_token.trim()
       : null,
     expiresIn: Math.floor(expiresIn),
+    ...(Number.isFinite(Number(body.refresh_token_expires_in)) && Number(body.refresh_token_expires_in) > 0
+      ? { refreshExpiresIn: Math.floor(Number(body.refresh_token_expires_in)) } : {}),
     tokenType: typeof body.token_type === 'string' && body.token_type.trim() ? body.token_type.trim() : 'Bearer',
     scope: typeof body.scope === 'string' && body.scope.trim() ? body.scope.trim() : null,
   };

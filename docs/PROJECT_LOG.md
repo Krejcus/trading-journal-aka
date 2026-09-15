@@ -208,6 +208,9 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-15 (Codex, rozlišení Tradovate Reconnect)
+Lokálně opraveno maskování odmítnutého OAuth refresh jako obecné 502 a zelené Connected. Per-connection read evidence ukazuje Obnov přihlášení + Reconnect a banner napříč LIVE; timeout/429/app-session chyby nezaměňuje za broker reautorizaci. Tradeify profily a skupina zůstávají uložené. Přesná příčina Invalid token není z existujících logů prokazatelná; riziko souběžné rotace a chybějící evidence refresh expiry popsány v docs/reviews/tradovate-reconnect-20260915.md. Přidána bezpečná diagnostika bez tokenů. Žádný deploy, DB změna, broker akce ani změna workeru.
+
 ### 2026-09-15 — Codex: FundedNext Futures v LIVE a katalogu plánů
 
 - Prefix FNFT nyní rozpozná FundedNext i u existujících null profilů. Znovu použité logo z `public/firms/fundednext.svg` a současné komponenty; název viditelný v Připojení, účtech i kopírovací skupině. Ruční firma má přednost; rozpoznání nezapisuje profil ani nehádá plán/fázi/velikost.

@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   decryptTradovateSecret,
   encryptTradovateSecret,
   refreshTradovateAccessToken,
+  TradovateOAuthError,
   type TradovateEnvironment,
   type TradovateTokenResponse,
 } from './tradovateOAuth.js';
@@ -264,6 +266,9 @@ export async function getValidTradovateAccessToken(options: {
   if (!row.encrypted_refresh_token) throw new Error('tradovate-reauthorization-required');
 
   const refreshToken = decryptTradovateSecret(row.encrypted_refresh_token, options.config.tokenEncryptionKey);
+  const refreshAttemptId = randomUUID();
+  const refreshContext = { connectionId: row.id, environment: row.environment, attemptId: refreshAttemptId, credentialRevision: row.updated_at };
+  console.info('[tradovate-refresh]', { ...refreshContext, phase: 'started', expiresAt: row.access_token_expires_at });
   let refreshed: TradovateTokenResponse;
   try {
     refreshed = await refreshTradovateAccessToken({
@@ -274,6 +279,7 @@ export async function getValidTradovateAccessToken(options: {
       fetchImpl: options.fetchImpl,
     });
   } catch (error) {
+    console.warn('[tradovate-refresh]', { ...refreshContext, phase: 'exchange-failed', code: error instanceof TradovateOAuthError ? error.code : 'transport-error' });
     // A concurrent invocation may have rotated the refresh token first. If so,
     // consume the newer row rather than turning a harmless race into logout.
     const latest = await connectionRow(options.db, options.userId, row.id);
@@ -283,6 +289,17 @@ export async function getValidTradovateAccessToken(options: {
         accessToken: decryptTradovateSecret(latest.encrypted_access_token, options.config.tokenEncryptionKey),
         expiresAt: latest.access_token_expires_at,
       };
+    }
+    // Classify only definitive refresh rejection, after checking for a newer
+    // credential saved by another request. Network/DB failures stay retryable.
+    if (error instanceof TradovateOAuthError
+      && /^(?:Tradovate OAuth rejected the request|Tradovate token exchange failed): (?:Invalid token|invalid_grant|invalid_token)$/i.test(error.message)) {
+      console.warn('[tradovate-refresh] Reauthorization required', {
+        ...refreshContext,
+        refreshedAt: row.refreshed_at, expiresAt: row.access_token_expires_at,
+        phase: 'refresh-rejected', newerCredentialAvailable: false,
+      });
+      throw new Error('tradovate-reauthorization-required', { cause: error });
     }
     throw error;
   }
@@ -299,8 +316,12 @@ export async function getValidTradovateAccessToken(options: {
     refreshed_at: timestamp,
     updated_at: timestamp,
   }).eq('id', row.id).eq('user_id', options.userId).eq('connection_status', 'connected').eq('updated_at', row.updated_at).select('user_id').maybeSingle<{ user_id: string }>();
-  if (error) throw new Error(`Tradovate token refresh save failed: ${error.message}`);
+  if (error) {
+    console.error('[tradovate-refresh]', { ...refreshContext, phase: 'save-failed' });
+    throw new Error(`Tradovate token refresh save failed: ${error.message}`);
+  }
   if (!updated) {
+    console.warn('[tradovate-refresh]', { ...refreshContext, phase: 'save-conflict' });
     const latest = await connectionRow(options.db, options.userId, row.id);
     const latestExpiry = Date.parse(latest?.access_token_expires_at ?? '');
     if (latest?.connection_status !== 'connected' || !latest.encrypted_access_token || !latest.access_token_expires_at || latestExpiry - now <= minimumValidityMs) {
@@ -312,6 +333,8 @@ export async function getValidTradovateAccessToken(options: {
     };
   }
 
+  console.info('[tradovate-refresh]', { ...refreshContext, phase: 'saved', expiresAt: nextExpiresAt,
+    refreshExpiresAt: refreshed.refreshExpiresIn ? new Date(now + refreshed.refreshExpiresIn * 1000).toISOString() : null });
   return { accessToken: refreshed.accessToken, expiresAt: nextExpiresAt };
 }
 

@@ -1,3 +1,4 @@
+import { applyTradovateConnectionHealth, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
 import { createTradovateIntentPrefetch } from '../lib/tradovateIntentPrefetch';
 import { consumeTradovateReads } from '../lib/tradovateReadCoordinator';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -54,6 +55,7 @@ import {
 type BusyState = 'status' | 'connect' | 'data' | 'disconnect' | null;
 
 interface TradovateLiveCacheEntry {
+  connectionHealth: TradovateConnectionHealthMap;
   status: TradovateOAuthStatus | null;
   connectionData: Record<string, TradovatePreflightResult>;
   profiles: TradovateAccountProfile[];
@@ -64,6 +66,7 @@ interface TradovateLiveCacheEntry {
 // memory, keyed by AlphaTrade user, so remounting never flashes a false
 // disconnected state. Nothing sensitive (OAuth tokens) is stored here.
 const tradovateLiveCache = new Map<string, TradovateLiveCacheEntry>();
+const EMPTY_CONNECTION_HEALTH: TradovateConnectionHealthMap = {};
 const EMPTY_CONNECTION_DATA: Record<string, TradovatePreflightResult> = {};
 const EMPTY_PROFILES: TradovateAccountProfile[] = [];
 const EMPTY_HISTORY_SNAPSHOTS: Record<string, TradovateHistorySnapshot> = {};
@@ -129,6 +132,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   );
   const cached = userId ? tradovateLiveCache.get(userId) : undefined;
   const [stateUserId, setStateUserId] = useState(userId);
+  const [storedConnectionHealth, setConnectionHealth] = useState<TradovateConnectionHealthMap>(() => cached?.connectionHealth ?? {});
   const [storedStatus, setStatus] = useState<TradovateOAuthStatus | null>(() => cached?.status ?? persisted?.status ?? null);
   const [storedConnectionData, setConnectionData] = useState<Record<string, TradovatePreflightResult>>(() => cached?.connectionData ?? {});
   const [storedProfiles, setProfiles] = useState<TradovateAccountProfile[]>(() => cached?.profiles ?? []);
@@ -136,6 +140,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   // Identity changes must be safe during render, before reset effects run.
   // Otherwise both children and the new user's cache can receive old data.
   const identityReady = stateUserId === userId;
+  const connectionHealth = identityReady ? storedConnectionHealth : cached?.connectionHealth ?? EMPTY_CONNECTION_HEALTH;
   const status = identityReady ? storedStatus : cached?.status ?? persisted?.status ?? null;
   const connectionData = identityReady ? storedConnectionData : cached?.connectionData ?? EMPTY_CONNECTION_DATA;
   const profiles = identityReady ? storedProfiles : cached?.profiles ?? EMPTY_PROFILES;
@@ -205,6 +210,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     if (previousUserIdRef.current === userId) return;
     previousUserIdRef.current = userId;
     setStateUserId(userId);
+    setConnectionHealth(cached?.connectionHealth ?? {});
     journalLinkAttemptsRef.current.clear();
     livePnlCursorsRef.current = {};
     livePnlAnchorCursorsRef.current = {};
@@ -229,8 +235,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
 
   useEffect(() => {
     if (!userId) return;
-    tradovateLiveCache.set(userId, { status, connectionData, profiles, historySnapshots });
-  }, [connectionData, historySnapshots, profiles, status, userId]);
+    tradovateLiveCache.set(userId, { status, connectionData, profiles, historySnapshots, connectionHealth });
+  }, [connectionData, historySnapshots, profiles, status, userId, connectionHealth]);
 
   const data = useMemo(() => {
     const merged = mergePreflights(Object.values(connectionData));
@@ -339,6 +345,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     prestarted?: PrestartedTradovatePreflights,
     prestartedProfiles?: Promise<TradovateAccountProfilesResult | null>,
   ) => {
+    const healthRequestedAt = Date.now();
     const requestedUserId = activeUserIdRef.current;
     const requestedEpoch = identityEpochRef.current.epoch;
     const requestedConnectionEpoch = connectionEpochRef.current;
@@ -392,11 +399,17 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
           setConnectionData(next);
         },
         prestarted,
+        (connectionId, result) => {
+          if (!isCurrent()) return;
+          setConnectionHealth(current => applyTradovateConnectionHealth(
+            current, connectionId, healthRequestedAt, result.status === 'rejected' ? result.reason : undefined,
+          ));
+        },
       );
       if (!isCurrent()) return false;
-      for (const result of preflights) {
+      preflights.forEach(result => {
         if (result.status === 'rejected') recordRateLimit(result.reason);
-      }
+      });
       const datasets = preflights.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
       if (datasets.length === 0 && connectionIds.length > 0) {
         const failed = preflights.find((result): result is PromiseRejectedResult => result.status === 'rejected');
@@ -624,11 +637,24 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         const runFullTick = !hasOpenPosition
           || Date.now() - livePnlLastFullTickAtRef.current >= ACTIVE_PNL_INTERVAL_MS;
         let rateLimitResults: PromiseSettledResult<unknown>[];
+        const readWithHealth = async <T,>(connectionId: string, read: () => Promise<T>): Promise<T> => {
+          const requestedAt = Date.now();
+          try {
+            const result = await read();
+            if (!cancelled && activeUserIdRef.current === pollUserId) setConnectionHealth(current =>
+              applyTradovateConnectionHealth(current, connectionId, requestedAt));
+            return result;
+          } catch (error) {
+            if (!cancelled && activeUserIdRef.current === pollUserId) setConnectionHealth(current =>
+              applyTradovateConnectionHealth(current, connectionId, requestedAt, error));
+            throw error;
+          }
+        };
         if (runFullTick) {
           const becameFlat: string[] = [];
           rateLimitResults = await consumeTradovateReads(
             available,
-            connectionId => runTradovateLivePnlTick(connectionId, livePnlCursorsRef.current[connectionId] ?? 0),
+            connectionId => readWithHealth(connectionId, () => runTradovateLivePnlTick(connectionId, livePnlCursorsRef.current[connectionId] ?? 0)),
             (connectionId, tick) => {
               if (cancelled || activeUserIdRef.current !== pollUserId) return;
               // Partial success must still honor the broker's rate-limit signal.
@@ -662,7 +688,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
             [...candidatesByConnection.keys()],
             connectionId => {
               const { candidate } = candidatesByConnection.get(connectionId)!;
-              return runTradovateLivePnlAnchor(connectionId, candidate.accountId, candidate.contractId);
+              return readWithHealth(connectionId, () => runTradovateLivePnlAnchor(connectionId, candidate.accountId, candidate.contractId));
             },
             (connectionId, tick) => {
               if (cancelled || activeUserIdRef.current !== pollUserId) return;
@@ -727,6 +753,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     data,
     connectionData,
     connectionSummaries,
+    connectionHealth,
     profiles,
     historySnapshots,
     historyError,

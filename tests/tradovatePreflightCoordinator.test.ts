@@ -57,4 +57,19 @@ describe('Tradovate preflight coordinator', () => {
 
     expect(received).toEqual(['confirmed']);
   });
+  it('publishes a failed login without waiting for another slow connection', async () => {
+    let resolveSlow!: (value: TradovatePreflightResult) => void;
+    const slow = new Promise<TradovatePreflightResult>(resolve => { resolveSlow = resolve; });
+    const rejected = new Error('tradovate-reauthorization-required');
+    const seen: string[] = [];
+    const completed = consumeTradovatePreflights(['bad', 'slow'],
+      id => id === 'bad' ? Promise.reject(rejected) : slow,
+      () => {}, undefined, (id, result) => seen.push(`${id}:${result.status}`));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(seen).toEqual(['bad:rejected']);
+    resolveSlow(dataset('slow'));
+    await completed;
+    expect(seen).toEqual(['bad:rejected', 'slow:fulfilled']);
+  });
+
 });

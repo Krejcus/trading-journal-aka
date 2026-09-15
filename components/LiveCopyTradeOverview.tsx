@@ -2959,7 +2959,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
               </span>
             ) : !a && accountId != null ? (
               <span className="block pl-3.5 text-[10px] font-bold leading-tight text-slate-500">
-                Účet není v aktuálním OAuth snapshotu. Oprav skupinu přes Edit group.
+                Aktuální data účtu nejsou dostupná. Ověř připojení firmy v záložce Připojení.
               </span>
             ) : null}
           </span>
