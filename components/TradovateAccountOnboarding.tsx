@@ -11,6 +11,7 @@ import {
   type TradovateAccountOnboardingDraft,
 } from '../lib/tradovateAccountOnboarding';
 import { TRADOVATE_PROP_PLAN_PRESETS } from '../lib/tradovatePropPlanCatalog';
+import { FIRM_LOGOS } from '../utils/accountFirm';
 import { saveTradovateAccountProfiles } from '../services/tradovateOAuthConnection';
 import { saveFirmPayoutRules } from '../services/firmPayoutRules';
 
@@ -38,29 +39,33 @@ const drawdownLabel = {
   none: 'Bez drawdownu',
 } as const;
 
-const PlanDetails = ({ presetKey }: { presetKey: string | null }) => {
-  const preset = findTradovateOnboardingPlanPreset(presetKey);
+const PlanDetails = ({ presetKey, accountType }: { presetKey: string | null; accountType: TradovateProfileAccountType }) => {
+  const preset = findTradovateOnboardingPlanPreset(presetKey, accountType);
   if (!preset) return null;
   return <p className="mt-1 text-[9px] font-semibold leading-4 text-[var(--text-secondary)]">
-    {usd.format(preset.accountSize)} · max loss {usd.format(preset.maxLoss)} · {drawdownLabel[preset.drawdownType]}
+    {usd.format(preset.accountSize)} · max loss {usd.format(preset.maxLoss)} · {drawdownLabel[preset.drawdownType]} · {preset.maxMini} mini / {preset.maxMicro} micro
   </p>;
 };
 
 const PlanSelect = ({
   value,
   onChange,
+  firm,
+  accountType,
 }: {
   value: string | null;
   onChange: (value: string | null) => void;
+  firm: string;
+  accountType: TradovateProfileAccountType;
 }) => <div>
-  <select className={inputClass} value={value ?? ''} onChange={event => onChange(event.target.value || null)}>
+  <select aria-label="Plán účtu" className={inputClass} value={value ?? ''} onChange={event => onChange(event.target.value || null)}>
     <option value="">Bez plánu</option>
-    {TRADOVATE_PROP_PLAN_PRESETS.map(preset => {
+    {TRADOVATE_PROP_PLAN_PRESETS.filter(preset => !firm.trim() || preset.propFirm.toLowerCase() === firm.trim().toLowerCase()).map(preset => {
       const key = tradovateOnboardingPlanPresetKey(preset);
-      return <option key={key} value={key}>{preset.propFirm} · {preset.planName}</option>;
+      return <option key={key} value={key} disabled={preset.propFirm === 'FundedNext' && accountType === 'live'}>{preset.planName}{preset.discontinued ? ' · starší účty' : ''}</option>;
     })}
   </select>
-  <PlanDetails presetKey={value} />
+  <PlanDetails presetKey={value} accountType={accountType} />
 </div>;
 
 const FirmField = ({
@@ -73,11 +78,15 @@ const FirmField = ({
   onChange: (value: string) => void;
 }) => {
   const selected = firmValue(value, firms);
+  const logo = FIRM_LOGOS[value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '')];
   return <div className="space-y-1">
-    <select className={inputClass} value={selected} onChange={event => onChange(event.target.value === '__new__' ? '' : event.target.value)}>
+    <div className="relative">
+    {logo ? <img src={logo} alt="" className="pointer-events-none absolute left-2 top-1/2 h-5 w-5 -translate-y-1/2 rounded-full object-cover" /> : null}
+    <select aria-label="Prop firma" className={`${inputClass} ${logo ? 'pl-9' : ''}`} value={selected} onChange={event => onChange(event.target.value === '__new__' ? '' : event.target.value)}>
       {firms.map(firm => <option key={firm} value={firm}>{firm}</option>)}
       <option value="__new__">Nová…</option>
     </select>
+    </div>
     {selected === '__new__' && <input className={inputClass} value={value} placeholder="Název nové firmy" onChange={event => onChange(event.target.value)} />}
   </div>;
 };
@@ -139,7 +148,7 @@ export default function TradovateAccountOnboarding({
     const preset = findTradovateOnboardingPlanPreset(planPresetKey);
     if (preset) {
       setBulkFirm(preset.propFirm);
-      setBulkType(preset.accountType);
+      if (preset.propFirm !== 'FundedNext') setBulkType(preset.accountType);
     }
   };
 
@@ -147,7 +156,7 @@ export default function TradovateAccountOnboarding({
     const preset = findTradovateOnboardingPlanPreset(planPresetKey);
     patchDraft(profileId, {
       planPresetKey,
-      ...(preset ? { propFirm: preset.propFirm, accountType: preset.accountType } : {}),
+      ...(preset ? { propFirm: preset.propFirm, ...(preset.propFirm !== 'FundedNext' ? { accountType: preset.accountType } : {}) } : {}),
     });
   };
 
@@ -199,7 +208,7 @@ export default function TradovateAccountOnboarding({
         <select className={inputClass} value={bulkType} onChange={event => setBulkType(event.target.value as TradovateProfileAccountType)}>
           {Object.entries(accountTypeLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
-        <PlanSelect value={bulkPlanPresetKey} onChange={changeBulkPlan} />
+        <PlanSelect value={bulkPlanPresetKey} firm={bulkFirm} accountType={bulkType} onChange={changeBulkPlan} />
         <button type="button" disabled={selectedIds.size === 0 || !bulkFirm.trim()} onClick={applyBulk} className="h-9 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-4 text-[10px] font-black uppercase text-indigo-500 disabled:opacity-50">Použít pro vybrané</button>
       </div>
     </div>
@@ -217,7 +226,7 @@ export default function TradovateAccountOnboarding({
             <td className="px-2 py-3"><input className={inputClass} value={draft.displayName} onChange={event => patchDraft(draft.profileId, { displayName: event.target.value })} /><p className="mt-1 truncate font-mono text-[9px] text-[var(--text-secondary)]">{profile?.accountName}</p></td>
             <td className="px-2 py-3"><FirmField value={draft.propFirm} firms={firms} onChange={propFirm => patchDraft(draft.profileId, { propFirm, planPresetKey: null })} /></td>
             <td className="px-2 py-3"><select className={inputClass} value={draft.accountType} onChange={event => patchDraft(draft.profileId, { accountType: event.target.value as TradovateProfileAccountType })}>{Object.entries(accountTypeLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></td>
-            <td className="px-2 py-3"><PlanSelect value={draft.planPresetKey} onChange={planPresetKey => changeDraftPlan(draft.profileId, planPresetKey)} /></td>
+            <td className="px-2 py-3"><PlanSelect value={draft.planPresetKey} firm={draft.propFirm} accountType={draft.accountType} onChange={planPresetKey => changeDraftPlan(draft.profileId, planPresetKey)} /></td>
           </tr>;
         })}</tbody>
       </table>

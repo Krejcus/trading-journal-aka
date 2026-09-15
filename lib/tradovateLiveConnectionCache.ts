@@ -1,3 +1,4 @@
+import { tradovateAccountFirm } from './tradovatePropPlanCatalog';
 import { isOlderTradovateRead, mergeTradovateAccountRead } from './tradovateLiveReadState';
 import type { TradovateAccountProfile } from './tradovateAccountProfileTypes';
 import type {
@@ -85,11 +86,10 @@ export const buildTradovateConnectionSummaries = (
   previous: Record<string, TradovateConnectionSummary> = {},
 ): Record<string, TradovateConnectionSummary> => Object.fromEntries((status?.connections ?? []).map(connection => {
   const dataset = connectionData[connection.id];
-  const accountIds = new Set(dataset?.accounts.map(account => String(account.id)) ?? []);
+  const profilesById = new Map(profiles.map(profile => [profile.externalAccountId, profile]));
   const propFirms = Array.from(new Set(
-    profiles
-      .filter(profile => accountIds.has(profile.externalAccountId))
-      .map(profile => profile.propFirm?.trim())
+    (dataset?.accounts ?? [])
+      .map(account => tradovateAccountFirm(profilesById.get(String(account.id)), account.name))
       .filter(Boolean),
   ));
   return [connection.id, {

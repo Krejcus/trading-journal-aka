@@ -12,6 +12,7 @@ import {
   findTradovatePropPlanPreset,
   inferTradovatePropIdentity,
   TRADOVATE_PROP_PLAN_PRESETS,
+  tradovatePlanForAccountType,
   type TradovatePropPlanPreset,
 } from './tradovatePropPlanCatalog';
 
@@ -40,11 +41,13 @@ export const tradovateOnboardingPlanPresetKey = (
 
 export const findTradovateOnboardingPlanPreset = (
   presetKey: string | null,
+  accountType?: TradovateProfileAccountType | null,
 ): TradovatePropPlanPreset | null => {
   if (!presetKey) return null;
-  return TRADOVATE_PROP_PLAN_PRESETS.find(
+  const preset = TRADOVATE_PROP_PLAN_PRESETS.find(
     preset => tradovateOnboardingPlanPresetKey(preset) === presetKey,
   ) ?? null;
+  return preset ? tradovatePlanForAccountType(preset, accountType) : null;
 };
 
 /** Jakmile jediný profil nemá klíč onboardedAt, server ještě čte staré schéma. */
@@ -107,7 +110,7 @@ export function createTradovateAccountOnboardingDraft(
   const inferred = inferTradovatePropIdentity(profile.accountName);
   const propFirm = profile.propFirm?.trim() || inferred?.propFirm || '';
   const planName = profile.planName ?? inferred?.planName ?? null;
-  const preset = findTradovatePropPlanPreset(propFirm, planName);
+  const preset = findTradovatePropPlanPreset(propFirm, planName, profile.accountType);
   return {
     profileId: profile.id,
     displayName: profile.displayName?.trim() || profile.accountName,
@@ -174,7 +177,7 @@ export function planTradovateAccountOnboardingSave({
     const displayName = draft.displayName.trim();
     if (!displayName) throw new Error('Každý vybraný účet musí mít jméno.');
     const preset = draft.planPresetKey
-      ? findTradovateOnboardingPlanPreset(draft.planPresetKey)
+      ? findTradovateOnboardingPlanPreset(draft.planPresetKey, draft.accountType)
       : null;
     if (draft.planPresetKey && !preset) throw new Error('Vybraný plán už není v katalogu dostupný.');
     const propFirm = preset?.propFirm ?? draft.propFirm.trim();

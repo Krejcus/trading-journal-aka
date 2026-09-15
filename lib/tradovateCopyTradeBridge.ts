@@ -9,8 +9,7 @@ import {
   profileMap,
 } from './tradovateLiveView';
 import type { LiveAccount, LiveOrder, LiveSnapshot } from '../services/tradecopiaLiveService';
-
-const profileFirm = (profile: TradovateAccountProfile | undefined) => profile?.propFirm?.trim() || 'Tradovate';
+import { tradovateAccountFirm } from './tradovatePropPlanCatalog';
 
 const dailyRealizedPnl = (
   account: TradovateAccountDataResult['accounts'][number],
@@ -66,7 +65,7 @@ export function tradovateCopyTradeSnapshot(
         .some(coverage => coverage != null && !hasCompleteTradovateRead(coverage)),
       entityId: null,
       name: profile?.displayName?.trim() || account.name,
-      firm: profileFirm(profile),
+      firm: tradovateAccountFirm(profile, account.name) || 'Tradovate',
       phase: profile?.accountType ?? null,
       accountSize: profile?.accountSize ?? null,
       dailyLossLimit: profile?.dailyLossLimit ?? account.risk.dailyLossAutoLiq,

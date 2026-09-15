@@ -3,9 +3,10 @@ import type {
   TradovateProfileAccountType,
   TradovateProfileDrawdownType,
 } from './tradovateAccountProfileTypes';
+import { FUNDEDNEXT_PROP_PLAN_PRESETS } from './fundedNextPropPlans';
 
 export interface TradovatePropPlanPreset {
-  propFirm: 'Tradeify' | 'Lucid';
+  propFirm: 'Tradeify' | 'Lucid' | 'FundedNext';
   planName: string;
   accountType: TradovateProfileAccountType;
   accountSize: number;
@@ -18,6 +19,9 @@ export interface TradovatePropPlanPreset {
   maxMicro: number;
   sourceUrl: string;
   verifiedAt: string;
+  fundedRules?: Pick<TradovatePropPlanPreset, 'profitTarget' | 'consistencyPct' | 'maxMini' | 'maxMicro'>;
+  trailingLockOffset?: number;
+  discontinued?: boolean;
 }
 
 const TRADEIFY_GROWTH_SOURCE = 'https://help.tradeify.co/en/articles/10495915-growth-evaluation-accounts';
@@ -146,7 +150,20 @@ export const TRADOVATE_PROP_PLAN_PRESETS: TradovatePropPlanPreset[] = [
   tradeifySelect(100_000, 3_000, 6_000, 8),
   tradeifySelect(150_000, 4_500, 9_000, 12),
   ...lucidPresets,
+  ...FUNDEDNEXT_PROP_PLAN_PRESETS,
 ];
+
+export function tradovatePlanForAccountType(
+  preset: TradovatePropPlanPreset,
+  accountType?: TradovateProfileAccountType | null,
+): TradovatePropPlanPreset | null {
+  if (preset.propFirm !== 'FundedNext') return preset;
+  // Real-money live allocation has different rules; never inherit simulated limits.
+  if (accountType === 'live') return null;
+  return accountType === 'funded'
+    ? { ...preset, ...preset.fundedRules, accountType: 'funded' }
+    : preset;
+}
 
 const normalize = (value: string | null | undefined) => (value ?? '')
   .trim()
@@ -157,11 +174,19 @@ const normalize = (value: string | null | undefined) => (value ?? '')
 export function findTradovatePropPlanPreset(
   propFirm: string | null | undefined,
   planName: string | null | undefined,
+  accountType?: TradovateProfileAccountType | null,
 ): TradovatePropPlanPreset | null {
   const firm = normalize(propFirm);
   const plan = normalize(planName);
   const sizeMatch = plan.match(/(?:^|\s)(25|50|100|150)\s*k?(?:\s|$)/);
   if (!sizeMatch) return null;
+
+  if (firm.replace(/[^a-z]/g, '') === 'fundednext' || firm.replace(/[^a-z]/g, '') === 'fundednextfutures') {
+    // Exact family and explicit Pro DLL choice avoid mixing similarly named products.
+    const canonical = plan.replace(/^funded\s*next(?: futures)?\s+/, '').replace(/\bevaluation\s*/g, '');
+    const preset = FUNDEDNEXT_PROP_PLAN_PRESETS.find(candidate => normalize(candidate.planName) === canonical);
+    return preset ? tradovatePlanForAccountType(preset, accountType) : null;
+  }
 
   if (firm.includes('tradeify')) {
     const family = plan.includes('growth') ? 'growth' : plan.includes('select') ? 'select' : null;
@@ -197,9 +222,9 @@ export function findTradovatePropPlanPreset(
 }
 
 /**
- * Known Tradeify/Lucid simulated-funded plans stop trailing at $100 above the
- * nominal starting balance. The broker-provided trailingMaxDrawdownLimit still
- * has priority; this is only the catalog fallback when Tradovate omits it.
+ * Tradeify/Lucid use a +$100 stop; FundedNext uses its family-specific offset.
+ * The broker-provided trailingMaxDrawdownLimit still has priority; this is only
+ * the catalog fallback when Tradovate omits it.
  */
 export function fundedTradovateTrailingDrawdownLimit(
   profile: Pick<TradovateAccountProfile,
@@ -219,13 +244,22 @@ export function fundedTradovateTrailingDrawdownLimit(
     || preset.accountSize !== profile.accountSize
   ) return null;
 
-  return profile.accountSize + 100;
+  return profile.accountSize + (preset.trailingLockOffset ?? 100);
 }
 
-export function inferTradovatePropIdentity(accountName: string): Pick<TradovatePropPlanPreset, 'propFirm'> & { planName: string | null } | null {
-  const normalized = accountName.trim().toUpperCase();
+export function inferTradovatePropIdentity(accountName: string | null | undefined): Pick<TradovatePropPlanPreset, 'propFirm'> & { planName: string | null } | null {
+  const normalized = (accountName ?? '').trim().toUpperCase();
+  if (/^FNFT/.test(normalized)) return { propFirm: 'FundedNext', planName: null };
   if (/^(?:FTDFY|TDFY)/.test(normalized)) return { propFirm: 'Tradeify', planName: null };
   if (/^LFE/.test(normalized)) return { propFirm: 'Lucid', planName: 'LucidFlex' };
   if (/^(?:LFF|LTT)/.test(normalized) || normalized.includes('LUCID')) return { propFirm: 'Lucid', planName: null };
   return null;
+}
+
+/** Display-only fallback. It never persists a plan, phase, size or risk setting. */
+export function tradovateAccountFirm(
+  profile: Pick<TradovateAccountProfile, 'propFirm'> | undefined,
+  accountName: string | null | undefined,
+): string | null {
+  return profile?.propFirm?.trim() || inferTradovatePropIdentity(accountName)?.propFirm || null;
 }

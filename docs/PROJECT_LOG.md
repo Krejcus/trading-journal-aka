@@ -208,13 +208,22 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-15 — Codex: FundedNext Futures v LIVE a katalogu plánů
+
+- Prefix FNFT nyní rozpozná FundedNext i u existujících null profilů. Znovu použité logo z `public/firms/fundednext.svg` a současné komponenty; název viditelný v Připojení, účtech i kopírovací skupině. Ruční firma má přednost; rozpoznání nezapisuje profil ani nehádá plán/fázi/velikost.
+- Katalog obsahuje 19 futures variant: Rapid Pro DLL ON/OFF, Rapid Daily, Legacy, Flex a označené starší Rapid/Bolt. Oficiální zdroje, omezení a datum ověření jsou v `docs/fundednext-futures-plans.md`. Evaluace/funded rozlišují consistency, profit target a kontrakty; drawdown lock je pro Legacy/Rapid na počátečním zůstatku a pro Flex/Pro/Daily/Bolt +100 USD. Bez automatického převzetí pravidel pro real-money live nebo CFD/Labs produkty.
+- Tlačítko Nastavit účty u připojení nyní omezuje hromadný formulář na jeho účty, banner na účty s chybějícím plánem. FundedNext volba plánu/fáze doplní odpovídající pravidla, změna na plán bez DLL/consistency odstraní staré hodnoty i při použití na více účtů. Žádná automatická firm-wide payout šablona pro různorodé FundedNext plány.
+- Lokálně prošlo 66 testů v 9 souborech, typecheck, scoped ESLint a build. Browser ověřil skutečné 3. připojení s logem, rozsah 5 účtů a neuložené hromadné změny Legacy evaluation/funded → Pro DLL ON → Flex. Formulář uzavřen bez uložení. Uživatelův konkrétní plán zatím nepotvrzen; žádný broker příkaz, zápis profilu, restart workeru ani produkční deploy. Změna připravena v izolovaném worktree `/private/tmp/alphatrade-entry-history-fix-20260914`.
+
 ### 2026-09-15 — Codex: oprava pádu LIVE po přidání prop připojení
 
 - Nahlášený Safari stack `null is not an object (evaluating u.propFirm.trim)` přesně reprodukován v `buildTradovateConnectionSummaries`. Nový onboarding profil dovoluje `propFirm=null`; nechráněný `.trim()` zrušil render celé LIVE stránky.
 - Souhrn připojení nyní toleruje nevyplněnou prop firmu a zachovává dosavadní fallback názvu organizace. Žádná změna account mappingu, dat profilu, broker příkazů ani workeru.
 - Dva nové regresní testy nejprve selhaly se stejnou TypeError; po opravě prošlo 20 testů cache/onboardingu/bridge, TypeScript a produkční build. Test zahrnuje tři připojení Tradeify + Lucid + nový účet s null firmou a prázdné názvy/fallback.
 - Localhost 4190 s read-only proxy vizuálně ověřen: LIVE se načetl se třemi připojeními a stávající skupinou; null prop firma již render neshodí.
-- Připraveno lokálně v izolovaném worktree; produkční main před opravou `d039aa32`. Novější Vercel `f9b27f69` je pouze dependabot preview, nikoli produkční alias. Nasazení této opravy zatím neprovedeno.
+- Po výslovném souhlasu uživatele nasazen commit `2e053e1c8c7780843d7f4036a30b250aaa5eaf2f`; shoda s origin/main ověřena. Vercel `dpl_2pZAPjaDeURfwUHofw6MTfyAnAKp` je READY a produkční alias vrací HTTP 200. Novější `f9b27f69` z dřívější kontroly byl pouze dependabot preview.
+- Produkční browser načetl nový bundle `index-Db0tilh7.js`; LIVE i Připojení se vykreslily bez pádu, seznam ukázal 3 aktivní připojení / 12 účtů včetně nové prop firmy bez názvu. První načtení provázely samostatné chyby fetch/synchronizace a dashboard RPC timeout; nejsou důkazem selhání opraveného null trim a nejsou tímto patchem opravené. Žádné 5xx v dostupných logách nového deploymentu při kontrole. Worker ani DB se při tomto webovém nasazení neměnily; SQL migrace v parent commitu je záznam již aplikované opravy. Tento odstavec je lokální záznam po deploymentu.
+- Po obnovení produkční stránky chyba synchronizace účtů zmizela; LIVE načetlo 3 připojení a stávající skupinu. Obnova historie ještě běžela, takže tento krok neověřuje dokončení journal synchronizace ani obchodní exekuci.
 
 
 ### 2026-09-14 — Codex: opravené propojení screenshotů přes více OAuth připojení
