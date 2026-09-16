@@ -208,6 +208,42 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-16 — obnova cloudové knihovny v otevřeném editoru skupiny
+
+Při výpadku během vyplňování editor nyní přímo ukazuje příčinu a nabízí
+„Znovu načíst a uložit“. Název, leader, followeři a pravidla zůstávají
+v otevřeném formuláři; reload stránky ani trvalé uložení rozpracovaného
+formuláře se neslibuje. Čtení má 15s timeout včetně čekání na auth, abort
+a ochranu před opožděným zápisem do cache. Výslovná obnova drží write fence,
+takže ji focus/online ani staré odpovědi nepřepíšou. Pokud byl konfigurační
+požadavek potvrzen a selhal až cloud, nezměněný draft opakuje jen cloudový
+upsert. Import starých skupin zůstává výslovný. Žádné automatické ARM ani
+změny brokerových kontrol. UI s fiktivními daty ověřeno při 390×844: výpadek
+čtení neposlal zápis, chyba zápisu zachovala draft, po obnově uložen stejný
+název/leader/follower a formulář zavřen, bez console errors. Fyzický Safari
+na iPhonu zatím neověřen. Dočasný náhled a server odstraněny. Existující
+render test stale followera aktualizován na text již přítomný v HEAD 9e34d309.
+Ověření: 102 cílených testů (po opravě starého textového očekávání), typecheck,
+scoped ESLint a produkční build prošly. Nasazení této opravy zatím neprovedeno.
+
+### 2026-09-15 — ARM oprava nasazena, FundedNext worker připojen
+
+Po výslovném souhlasu push `9e34d309` na main; produkční Vercel
+`dpl_Hw5Dac8pGvicTnwnpSmWPqjMWNte` READY se správným SHA a aliasem.
+Záloha manifestu, bundle, LaunchAgentu a durable stavu je lokálně v
+`/private/tmp/alphatrade-fn-backup-20260915-204443` (bez exportu Keychain).
+FN dostalo vlastní odvolatelné spárování přes autentizovaný web; manifest
+rozšířen pouze o FN, existující dvě routy i primární připojení zachovány.
+Před restartem byl worker odpojený od Tradeify WS a jeho reconcile vypršel.
+Uživatel výslovně schválil výjimku: restart i při tomto odpojení po novém
+nezávislém GET ověření všech 12 účtů jako flat/no-working a runtime DISARMED.
+Tato kontrola prošla; restart stejného bundle obnovil spojení. Následný
+reconcile autoritativně čistý, všech pět FN účtů ověřeno přímo přes worker.
+Skupina/risk i bundle nezměněny, 3 paired zařízení, cloud heartbeat čerstvý,
+connected=true, armed=false, žádná divergence, stuck operace ani lastError.
+Žádný ARM/Flatten/order/cancel; reálné kopírování tímto během netestováno.
+Výpadek WS byl restartem odstraněn, jeho kořenová příčina není prokázaná.
+
 ### 2026-09-15 — připravená oprava ARM při přepnutí skupiny
 
 - Potvrzen konflikt Hlavní cooldown 1 min versus nová FN skupina 0 min.

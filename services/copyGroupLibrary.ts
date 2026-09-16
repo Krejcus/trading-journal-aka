@@ -7,6 +7,18 @@ import { supabase } from './supabase';
 
 export const LEGACY_COPY_GROUPS_STORAGE_KEY = 'alphatrade_live_copytrade_draft_groups';
 const COPY_GROUPS_CACHE_PREFIX = 'alphatrade:copy-groups:v1:';
+export const COPY_GROUP_LIBRARY_READ_TIMEOUT_MS = 15_000;
+
+export const copyGroupLibraryErrorMessage = (reason: unknown): string => {
+  const message = reason instanceof Error ? reason.message : '';
+  if (/failed to fetch|load failed|networkerror|network request failed/i.test(message)) {
+    return 'Spojení s cloudovou knihovnou selhalo. Zkontroluj internet a zkus načtení znovu.';
+  }
+  if (/jwt expired|invalid jwt|refresh token|not authenticated/i.test(message)) {
+    return 'Přihlášení vypršelo. Pro uložení skupiny se znovu přihlas.';
+  }
+  return message || 'Cloudovou knihovnu skupin se nepodařilo načíst.';
+};
 
 interface StorageLike {
   getItem(key: string): string | null;
@@ -114,11 +126,22 @@ export async function loadCopyGroupLibrary(
 ): Promise<CopyGroupLibrarySnapshot> {
   if (!userId) return { groups: fallback.map(copyGroupForStorage), needsLegacyImport: false, source: 'empty' };
   const cached = readCopyGroupCache(userId, fallback);
-  const { data, error } = await supabase
-    .from('copy_groups')
-    .select('group_id,config,updated_at')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: true });
+  const abort = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  // The explicit race also bounds time spent waiting for an auth refresh before
+  // fetch starts. A late response never reaches cache/application updates below.
+  const request = supabase.from('copy_groups')
+    .select('group_id,config,updated_at').eq('user_id', userId)
+    .order('created_at', { ascending: true }).abortSignal(abort.signal);
+  const { data, error } = await Promise.race([
+    request,
+    new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => {
+        reject(new Error('Načítání cloudové knihovny trvá příliš dlouho. Zkus načtení znovu.'));
+        abort.abort();
+      }, COPY_GROUP_LIBRARY_READ_TIMEOUT_MS);
+    }),
+  ]).finally(() => clearTimeout(timeout));
   if (error) throw new Error(`Copy groups se nepodařilo načíst: ${error.message}`);
   const groups = groupsFromRows((data ?? []) as CopyGroupRow[]);
   if (groups.length > 0) {

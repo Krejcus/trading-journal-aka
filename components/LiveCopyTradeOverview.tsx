@@ -63,6 +63,8 @@ import {
   type LiveCopyTradingCommand,
 } from '../services/liveCopyTrading';
 import {
+  copyGroupLibraryErrorMessage,
+  copyGroupForStorage,
   deleteCopyGroup,
   importCopyGroups,
   loadCopyGroupLibrary,
@@ -533,6 +535,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [groupLibraryState, setGroupLibraryState] = useState<'loading' | 'ready' | 'needs-import' | 'error'>(userId ? 'loading' : 'ready');
   const [groupLibraryError, setGroupLibraryError] = useState<string | null>(null);
   const [groupLibraryBusy, setGroupLibraryBusy] = useState(false);
+  const [groupSaveBusy, setGroupSaveBusy] = useState(false);
+  const groupSaveInFlight = useRef(false);
+  const pendingCloudGroupSaves = useRef(new Map<string, { owner: string; group: CopyGroupConfig }>());
   const [editorGroup, setEditorGroup] = useState<CopyGroupConfig | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [pendingUnavailableFollowerRemoval, setPendingUnavailableFollowerRemoval] = useState<PendingUnavailableFollowerRemoval | null>(null);
@@ -578,7 +583,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     } catch (reason) {
       if (!groupLibraryFence.canAcceptRead(token)) return;
       setGroupLibraryState('error');
-      setGroupLibraryError(reason instanceof Error ? reason.message : 'Cloudovou knihovnu skupin se nepodařilo načíst.');
+      setGroupLibraryError(copyGroupLibraryErrorMessage(reason));
     }
   }, [groupLibraryFence, userId]);
 
@@ -603,10 +608,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       if (document.visibilityState === 'visible') void refreshGroupLibrary();
     };
     window.addEventListener('focus', refreshWhenVisible);
+    window.addEventListener('online', refreshWhenVisible);
     document.addEventListener('visibilitychange', refreshWhenVisible);
     return () => {
       groupLibraryFence.invalidate();
       window.removeEventListener('focus', refreshWhenVisible);
+      window.removeEventListener('online', refreshWhenVisible);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
   }, [groupLibraryFence, refreshGroupLibrary]);
@@ -1013,7 +1020,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     onError?: (message: string) => void,
     waiveUnverifiableFollowerOwnership = false,
   ): Promise<boolean> => {
-    const exists = groups.some(candidate => candidate.id === group.id);
+    if (groupSaveInFlight.current) return false;
+    const pending = pendingCloudGroupSaves.current.get(group.id);
+    const confirmedGroup = pending?.owner === userId ? pending.group : null;
+    let exists = groups.some(candidate => candidate.id === group.id);
     const normalizedGroup = group.id === executionGroupId
       ? group
       : { ...group, enabled: false };
@@ -1030,51 +1040,108 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       }
       return false;
     }
-    const command: LiveCopyTradingCommand = exists
-      ? {
-        type: 'update-group',
-        group: normalizedGroup,
-        ...(waiveUnverifiableFollowerOwnership
-          ? { waiveUnverifiableFollowerOwnership: true }
-          : {}),
-      }
-      : { type: 'create-group', group: normalizedGroup };
     // Editor se smí přepnout na nový leader až po potvrzení execution
     // runtime. Když broker preflight změnu odmítne, runCommand callback
     // nespustí a UI tak nikdy nelže o jiné topologii než drží worker.
-    if (groupLibraryState !== 'ready') {
-      const message = groupLibraryState === 'needs-import'
-        ? 'Nejdřív potvrď jednorázový import lokálních skupin do cloudu.'
-        : 'Cloudová knihovna skupin zatím není připravená.';
+    if (groupLibraryState === 'needs-import' && !confirmedGroup) {
+      const message = 'Nejdřív potvrď jednorázový import lokálních skupin do cloudu.';
       if (onError) onError(message); else setToast({ tone: 'error', text: message });
       return false;
     }
+    groupSaveInFlight.current = true;
+    setGroupSaveBusy(true);
     const write = groupLibraryFence.beginWrite();
     try {
-      const saved = await runCommand(command, async () => {
+      if (groupLibraryState !== 'ready') {
+        // An explicit save/retry owns this refresh. Focus/online events and old
+        // reads cannot supersede it or write stale cache while the draft saves.
+        try {
+          const loaded = await loadCopyGroupLibrary(userId, [], () => groupLibraryFence.canAcceptWrite(write));
+          if (!groupLibraryFence.canAcceptWrite(write)) return false;
+          const currentRuntime = runtimeGroupRef.current;
+          let refreshed = currentRuntime
+            ? adoptRuntimeCopyGroup(loaded.groups, availableAccountIdsRef.current, currentRuntime)
+            : loaded.groups;
+          // Runtime/local command already succeeded; a failed cloud save must
+          // not turn a retry into a second create or make its draft disappear.
+          if (confirmedGroup && !refreshed.some(candidate => candidate.id === group.id)) {
+            refreshed = [...refreshed, confirmedGroup];
+          }
+          setGroups(refreshed);
+          const needsImport = loaded.needsLegacyImport && !confirmedGroup;
+          setGroupLibraryState(needsImport ? 'needs-import' : 'ready');
+          setGroupLibraryError(null);
+          if (needsImport) {
+            const message = 'Nejdřív potvrď jednorázový import lokálních skupin do cloudu.';
+            if (onError) onError(message); else setToast({ tone: 'error', text: message });
+            return false;
+          }
+          if (exists && !refreshed.some(candidate => candidate.id === group.id)) {
+            const message = 'Tato skupina už v knihovně není. Rozepsané údaje zůstaly ve formuláři; ověř změny na ostatních zařízeních.';
+            if (onError) onError(message); else setToast({ tone: 'error', text: message });
+            return false;
+          }
+          exists = refreshed.some(candidate => candidate.id === group.id);
+        } catch (reason) {
+          if (!groupLibraryFence.canAcceptWrite(write)) return false;
+          const message = copyGroupLibraryErrorMessage(reason);
+          setGroupLibraryState('error');
+          setGroupLibraryError(message);
+          if (onError) onError(message); else setToast({ tone: 'error', text: message });
+          return false;
+        }
+      }
+      const command: LiveCopyTradingCommand = exists
+        ? {
+          type: 'update-group', group: normalizedGroup,
+          ...(waiveUnverifiableFollowerOwnership ? { waiveUnverifiableFollowerOwnership: true } : {}),
+        }
+        : { type: 'create-group', group: normalizedGroup };
+      const persistConfirmedGroup = async () => {
         if (!groupLibraryFence.canAcceptWrite(write)) return;
+        pendingCloudGroupSaves.current.set(group.id, { owner: userId, group: normalizedGroup });
         setGroups(current => exists
           ? current.map(candidate => candidate.id === normalizedGroup.id ? normalizedGroup : candidate)
           : [...current, normalizedGroup]);
         setExpanded(current => new Set(current).add(normalizedGroup.id));
         try {
           await saveCopyGroup(userId, normalizedGroup);
-          if (groupLibraryFence.canAcceptWrite(write)) setEditorGroup(null);
+          if (groupLibraryFence.canAcceptWrite(write)) {
+            pendingCloudGroupSaves.current.delete(group.id);
+            setGroupLibraryState('ready');
+            setGroupLibraryError(null);
+            setEditorGroup(null);
+          }
         } catch (reason) {
           if (groupLibraryFence.canAcceptWrite(write)) {
-            const message = reason instanceof Error ? reason.message : 'Copy group se nepodařilo synchronizovat.';
+            const message = copyGroupLibraryErrorMessage(reason);
             setGroupLibraryState('error');
             setGroupLibraryError(message);
           }
           throw reason;
         }
-      }, message => {
+      };
+      if (confirmedGroup && JSON.stringify(copyGroupForStorage(confirmedGroup)) === JSON.stringify(copyGroupForStorage(normalizedGroup))) {
+        try {
+          await persistConfirmedGroup();
+          return groupLibraryFence.canAcceptWrite(write);
+        } catch (reason) {
+          if (groupLibraryFence.canAcceptWrite(write)) {
+            const message = copyGroupLibraryErrorMessage(reason);
+            if (onError) onError(message); else setToast({ tone: 'error', text: message });
+          }
+          return false;
+        }
+      }
+      const saved = await runCommand(command, persistConfirmedGroup, message => {
         if (!groupLibraryFence.canAcceptWrite(write)) return;
         if (onError) onError(message); else setToast({ tone: 'error', text: message });
       });
       return saved && groupLibraryFence.canAcceptWrite(write);
     } finally {
       groupLibraryFence.endWrite(write);
+      groupSaveInFlight.current = false;
+      setGroupSaveBusy(false);
     }
   };
 
@@ -1560,7 +1627,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           accounts={snapshot.accounts}
           accountLabel={(accountId, role) => accountLabel(accountId, editorGroup.id, role)}
           onClose={() => setEditorGroup(null)}
-          onSave={group => void saveGroup(group)}
+          onSave={(group, onError) => saveGroup(group, message => onError(copyGroupLibraryErrorMessage(new Error(message))))}
+          libraryState={groupLibraryState === 'needs-import' && pendingCloudGroupSaves.current.get(editorGroup.id)?.owner === userId ? 'error' : groupLibraryState}
+          libraryError={groupLibraryError}
           onRemoveUnavailableFollowers={(draft, accountIds) => requestUnavailableFollowerRemoval(
             editorGroup,
             draft,
@@ -1575,7 +1644,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
               confirmLabel: 'Smazat', danger: true, command: { type: 'delete-group', groupId: editorGroup.id },
             });
           } : undefined}
-          saving={busyCommand != null}
+          saving={busyCommand != null || groupSaveBusy}
         />
       )}
       {pendingUnavailableFollowerRemoval && (
@@ -3223,15 +3292,17 @@ export const CopyGroupChangePreview = ({ saved, draft, accountLabel }: {
   );
 };
 
-const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, accountLabel, saving, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
+const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, accountLabel, saving, libraryState, libraryError, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
   group: CopyGroupConfig;
   isNew: boolean;
   tightenOnly: boolean;
   accounts: LiveAccount[];
   accountLabel: (accountId: number, role?: CopyTradeAccountRole) => string;
   saving: boolean;
+  libraryState: 'loading' | 'ready' | 'needs-import' | 'error';
+  libraryError: string | null;
   onClose: () => void;
-  onSave: (group: CopyGroupConfig) => void;
+  onSave: (group: CopyGroupConfig, onError: (message: string) => void) => Promise<boolean>;
   onRemoveUnavailableFollowers: (group: CopyGroupConfig, accountIds: number[]) => void;
   onDelete?: () => void;
 }) => {
@@ -3298,12 +3369,15 @@ const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, accountLabel, 
   };
 
   const submit = () => {
+    if (saving) return;
     const validation = validateCopyGroup(draft, accounts.map(account => account.id));
     if (!validation.valid) {
       setErrors(copyGroupValidationMessages(validation, accountId => accountLabel(accountId)));
       return;
     }
-    onSave({ ...draft, name: draft.name.trim() });
+    setErrors([]);
+    void onSave({ ...draft, name: draft.name.trim() }, message => setErrors([message]))
+      .catch(reason => setErrors([copyGroupLibraryErrorMessage(reason)]));
   };
 
   const next = () => {
@@ -3452,9 +3526,17 @@ const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, accountLabel, 
           {errors.length > 0 && <div className="rounded-md border border-rose-500/25 bg-rose-500/8 p-3.5 flex gap-2.5"><AlertTriangle size={17} className="text-rose-500 shrink-0 mt-0.5" /><div className="space-y-1">{errors.map(error => <div key={error} className="text-xs font-bold text-rose-500">{error}</div>)}</div></div>}
         </div>
 
-        <footer className="px-5 py-4 border-t border-[var(--border-subtle)] flex items-center justify-between gap-3">
+        {libraryState !== 'ready' ? (
+          <div role="status" className="mx-5 mb-3 rounded-md border border-amber-500/30 bg-amber-500/[0.08] p-3 text-xs leading-relaxed text-[var(--text-primary)]">
+            <p className="font-bold">{libraryState === 'needs-import'
+              ? 'Nejdřív potvrď import lokálních skupin do cloudu.'
+              : libraryError ?? 'Cloudová knihovna se ještě načítá.'}</p>
+            <p className="mt-1 text-[var(--text-secondary)]">Rozepsané údaje zůstávají v tomto formuláři. Stránku nemusíš obnovovat.</p>
+          </div>
+        ) : null}
+        <footer className="px-5 py-4 border-t border-[var(--border-subtle)] flex flex-wrap items-center justify-between gap-3">
           <div>{onDelete ? <button onClick={onDelete} disabled={saving} className="flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-rose-500 hover:bg-rose-500/10"><Trash2 size={14} /> Smazat</button> : <button onClick={onClose} disabled={saving} className="h-9 rounded-lg border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Zrušit</button>}</div>
-          <div className="flex gap-2">{step > 0 ? <button onClick={() => { setErrors([]); setStep(current => current - 1); }} disabled={saving} className="h-9 rounded-lg border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Zpět</button> : null}{step < 3 ? <button onClick={next} disabled={saving} className="h-9 rounded-lg bg-indigo-600 px-5 text-xs font-bold text-white hover:bg-indigo-500">Další</button> : <button onClick={submit} disabled={saving} className="flex h-9 items-center gap-1.5 rounded-lg bg-indigo-600 px-5 text-xs font-bold text-white hover:bg-indigo-500 disabled:opacity-50"><Save size={14} /> {saving ? 'Ukládám…' : isNew ? 'Vytvořit skupinu' : 'Uložit změny'}</button>}</div>
+          <div className="flex gap-2">{step > 0 ? <button onClick={() => { setErrors([]); setStep(current => current - 1); }} disabled={saving} className="h-9 rounded-lg border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]">Zpět</button> : null}{step < 3 ? <button onClick={next} disabled={saving} className="h-9 rounded-lg bg-indigo-600 px-5 text-xs font-bold text-white hover:bg-indigo-500">Další</button> : <button onClick={submit} disabled={saving || libraryState === 'needs-import'} className="flex min-h-9 max-w-48 py-2 items-center gap-1.5 rounded-lg bg-indigo-600 px-5 text-xs font-bold text-white hover:bg-indigo-500 disabled:opacity-50"><Save size={14} /> {saving ? (libraryState === 'ready' ? 'Ukládám…' : 'Obnovuji a ukládám…') : libraryState === 'error' || libraryState === 'loading' ? 'Znovu načíst a uložit' : isNew ? 'Vytvořit skupinu' : 'Uložit změny'}</button>}</div>
         </footer>
       </section>
     </div>,

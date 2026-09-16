@@ -283,7 +283,8 @@ describe('GroupDetail Positions integrace', () => {
     expect(markup).toContain('0/1 zařazených');
     expect(markup).toContain('1× nedostupný');
     expect(markup).toContain('Nedostupný účet');
-    expect(markup).toContain('Účet není v aktuálním OAuth snapshotu. Oprav skupinu přes Edit group.');
+    expect(markup).toContain('Aktuální data účtu nejsou dostupná. Ověř připojení firmy v záložce Připojení.');
+    expect(markup).not.toContain('Oprav skupinu přes Edit group.');
     expect(markup).toContain('Odebrat ze skupiny');
   });
 

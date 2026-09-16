@@ -3,9 +3,9 @@ import { CopyGroupLibraryRequestFence } from '../lib/copyGroupLibraryRequestFenc
 
 const remote = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock('../services/supabase', () => ({ supabase: {
-  from: () => ({ select: () => ({ eq: () => ({ order: remote.read }) }) }),
+  from: () => ({ select: () => ({ eq: () => ({ order: () => ({ abortSignal: remote.read }) }) }) }),
 } }));
-import { loadCopyGroupLibrary, readCopyGroupCache, writeCopyGroupCache } from '../services/copyGroupLibrary';
+import { COPY_GROUP_LIBRARY_READ_TIMEOUT_MS, copyGroupLibraryErrorMessage, loadCopyGroupLibrary, readCopyGroupCache, writeCopyGroupCache } from '../services/copyGroupLibrary';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
 
 const profile = (multiplier: number): CopyGroupConfig => ({
@@ -29,7 +29,7 @@ const pendingRead = () => {
   });
 };
 
-afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 describe('copy group refresh cache ordering', () => {
   it.each(['save', 'import', 'delete', 'follower-update'] as const)(
@@ -86,5 +86,55 @@ describe('copy group refresh cache ordering', () => {
     finishRead([profile(5)]);
     expect((await loading).groups[0].followers[0].multiplier).toBe(5);
     expect(readCopyGroupCache('owner', [])[0].followers[0].multiplier).toBe(5);
+  });
+
+  it('times out a suspended read and ignores its late cache update after a successful retry', async () => {
+    vi.useFakeTimers();
+    setup();
+    writeCopyGroupCache('owner', [profile(1)]);
+    const finishOldRead = pendingRead();
+    const first = loadCopyGroupLibrary('owner', []).catch(error => error);
+    const signal = remote.read.mock.calls.at(-1)?.[0] as AbortSignal;
+    await vi.advanceTimersByTimeAsync(COPY_GROUP_LIBRARY_READ_TIMEOUT_MS);
+    expect((await first).message).toContain('trvá příliš dlouho');
+    expect(signal.aborted).toBe(true);
+    expect(readCopyGroupCache('owner', [])[0].followers[0].multiplier).toBe(1);
+
+    const finishRetry = pendingRead();
+    const retry = loadCopyGroupLibrary('owner', []);
+    finishRetry([profile(2)]);
+    await retry;
+    finishOldRead([]);
+    await Promise.resolve();
+    expect(readCopyGroupCache('owner', [])[0].followers[0].multiplier).toBe(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('an explicit recovery read is fenced against focus events and pre-retry responses', async () => {
+    const fence = setup();
+    const finishBackground = pendingRead();
+    const old = fence.beginRead()!;
+    const background = loadCopyGroupLibrary('owner', [], () => fence.canAcceptRead(old));
+    const write = fence.beginWrite();
+    const finishRetry = pendingRead();
+    const retry = loadCopyGroupLibrary('owner', [], () => fence.canAcceptWrite(write));
+    expect(fence.beginRead()).toBeNull();
+    finishRetry([profile(2)]);
+    expect((await retry).groups[0].followers[0].multiplier).toBe(2);
+    finishBackground([profile(1)]);
+    await background;
+    expect(readCopyGroupCache('owner', [])[0].followers[0].multiplier).toBe(2);
+    fence.endWrite(write);
+  });
+
+  it('keeps cache on a Safari network error and exposes an actionable reason', async () => {
+    setup();
+    writeCopyGroupCache('owner', [profile(3)]);
+    remote.read.mockResolvedValueOnce({ data: null, error: { message: 'TypeError: Load failed' } });
+    const error = await loadCopyGroupLibrary('owner', []).catch(reason => reason);
+    expect(copyGroupLibraryErrorMessage(error)).toContain('Zkontroluj internet');
+    expect(readCopyGroupCache('owner', [])[0].followers[0].multiplier).toBe(3);
+    expect(copyGroupLibraryErrorMessage(new Error('JWT expired'))).toContain('znovu přihlas');
+    expect(copyGroupLibraryErrorMessage(new Error('permission denied for table copy_groups'))).toContain('permission denied');
   });
 });
