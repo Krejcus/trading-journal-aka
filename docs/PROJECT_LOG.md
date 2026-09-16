@@ -208,6 +208,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-16 — DD rezerva ve sloupci DLL u plánů bez denního limitu
+
+Na žádost uživatele sloupec DLL u potvrzeného plánu bez DLL ukazuje stejnou
+rezervu jako Rezerva DD, s označením „· DD“ a vysvětlením. Sdílí výpočet,
+cache identitu, stáří a dostupnost původní DD buňky; částka není pevně 1500.
+Klasifikace vychází z explicitní nuly profilu nebo známého katalogového plánu,
+nikoliv z chybějícího broker limitu. Kladný efektivní DLL má stále přednost.
+Není změněn risk gate, runtime ani broker konfigurace. Ověření: 33 cílených
+testů včetně nulové/záporné rezervy, chybějících/denied/pending dat a priority
+DLL; typecheck, scoped lint a produkční build prošly. Izolovaný statický
+náhled skutečné komponenty s fiktivními účty ověřen v prohlížeči. Zatím lokální,
+nasazení spolu s předchozí opravou cloudové knihovny čeká na souhlas s pushem.
+
 ### 2026-09-16 — obnova cloudové knihovny v otevřeném editoru skupiny
 
 Při výpadku během vyplňování editor nyní přímo ukazuje příčinu a nabízí

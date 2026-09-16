@@ -9,7 +9,7 @@ import {
   profileMap,
 } from './tradovateLiveView';
 import type { LiveAccount, LiveOrder, LiveSnapshot } from '../services/tradecopiaLiveService';
-import { tradovateAccountFirm } from './tradovatePropPlanCatalog';
+import { findTradovatePropPlanPreset, tradovateAccountFirm } from './tradovatePropPlanCatalog';
 
 const dailyRealizedPnl = (
   account: TradovateAccountDataResult['accounts'][number],
@@ -44,6 +44,9 @@ export function tradovateCopyTradeSnapshot(
   const profilesById = profileMap(profiles);
   const accounts: LiveAccount[] = data.accounts.map(account => {
     const profile = profilesById.get(String(account.id));
+    const plan = findTradovatePropPlanPreset(profile?.propFirm, profile?.planName, profile?.accountType);
+    const dailyLossDisabled = profile?.dailyLossLimit === 0
+      || (profile?.dailyLossLimit == null && plan != null && plan.dailyLossLimit == null);
     const readState = tradovateAccountReadState(account, data);
     const positions = account.positions
       .filter(position => position.netPosition !== 0)
@@ -59,8 +62,9 @@ export function tradovateCopyTradeSnapshot(
     return {
       id: account.id,
       riskDisplayConfigKey: JSON.stringify([profile?.accountSize, profile?.accountType,
-        profile?.drawdownType, profile?.maxLoss, profile?.dailyLossLimit]),
+        profile?.drawdownType, profile?.maxLoss, profile?.dailyLossLimit, dailyLossDisabled]),
       riskDisplayDrawdownDisabled: profile?.drawdownType === 'none',
+      riskDisplayDailyLossDisabled: dailyLossDisabled,
       riskDisplayPending: [account.risk.limitsCoverage, account.risk.statusCoverage]
         .some(coverage => coverage != null && !hasCompleteTradovateRead(coverage)),
       entityId: null,

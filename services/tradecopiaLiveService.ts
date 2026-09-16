@@ -49,6 +49,8 @@ export interface LiveAccount {
   riskDisplayConfigKey?: string;
   riskDisplayStorageScope?: string;
   riskDisplayDrawdownDisabled?: boolean;
+  /** Confirmed profile/plan without DLL; missing broker data alone is not proof. Display only. */
+  riskDisplayDailyLossDisabled?: boolean;
   riskDisplayPending?: boolean;
   id: number;
   entityId: string | null;

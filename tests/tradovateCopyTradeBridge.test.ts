@@ -34,6 +34,20 @@ const profiles = [{
 }] as TradovateAccountProfile[];
 
 describe('Tradovate copy-trade bridge', () => {
+  it('distinguishes a known plan without DLL from a missing limit or an unsupported live plan', () => {
+    const withoutDll = structuredClone(data);
+    withoutDll.accounts[0].risk.dailyLossAutoLiq = null;
+    const profile = { ...profiles[0], propFirm: 'FundedNext', planName: 'Flex 50K', dailyLossLimit: null, accountType: 'evaluation' as const };
+    const read = (p: TradovateAccountProfile) => tradovateCopyTradeSnapshot(withoutDll, [p]).accounts[0];
+    expect(read(profile)).toMatchObject({ dailyLossLimit: null, riskDisplayDailyLossDisabled: true });
+    expect(read({ ...profile, planName: null }).riskDisplayDailyLossDisabled).toBe(false);
+    expect(read({ ...profile, accountType: 'live' }).riskDisplayDailyLossDisabled).toBe(false);
+    expect(read({ ...profile, dailyLossLimit: 750 })).toMatchObject({ dailyLossLimit: 750, riskDisplayDailyLossDisabled: false });
+    expect(read({ ...profile, planName: null, dailyLossLimit: 0 }).riskDisplayDailyLossDisabled).toBe(true);
+    expect(read({ ...profile, planName: null }).riskDisplayConfigKey).not.toBe(read(profile).riskDisplayConfigKey);
+    // A real broker DLL still takes priority in the UI, even for a no-DLL preset.
+    expect(tradovateCopyTradeSnapshot(data, [profile]).accounts[0].dailyLossLimit).toBe(1_200);
+  });
   it('keeps display identity across partial broker risk and renaming, but invalidates changed profile rules', () => {
     const before=tradovateCopyTradeSnapshot(data,profiles).accounts[0];
     const partial=structuredClone(data);

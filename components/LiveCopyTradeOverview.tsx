@@ -3004,6 +3004,14 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
   const riskKey = `${accountId}:${a?.riskDisplayConfigKey ?? "legacy"}:${tradovateDisplayTradeDate()}`;
   const dllAt = [a?.cashUpdatedAt, rawDaily.confirmedAt, a?.unrealizedPnlUpdatedAt].filter((at): at is string => !!at);
   const dllConfirmedAt = dllAt.length === 3 ? dllAt.sort((x,y)=>Date.parse(x)-Date.parse(y))[0] : null;
+  // Both columns share the same value, freshness and cache identity. A missing
+  // broker DLL alone must never be interpreted as a plan without a daily limit.
+  const showDrawdownInDll = !!a?.riskDisplayDailyLossDisabled
+    && (a.dailyLossLimit == null || a.dailyLossLimit === 0);
+  const drawdownValue = () => <LiveRiskValue identity={`${riskKey}:dd`} label="Rezerva DD" storageScope={a?.riskDisplayStorageScope} legacy={!!a && a.cashAvailability == null}
+    enabled={!!a && a.cashAvailability !== 'denied' && !a.riskDisplayDrawdownDisabled}
+    value={dailyPnlPending || a?.riskDisplayPending ? null : cushion} confirmedAt={a?.cashUpdatedAt ?? null}
+    verified={cashKnown && a?.unrealizedPnlSource !== 'stale'} color={cushionClass} />;
 
   const cell = (key: AccountColumnKey): React.ReactNode => {
     switch (key) {
@@ -3060,6 +3068,10 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
       case 'daily':
         return <span className={`text-xs tabular-nums ${a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? pnlClass(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : 'text-[var(--text-secondary)]'}`}>{a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? money.format(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : '—'}</span>;
       case 'dllRemaining':
+        if (showDrawdownInDll) return <span className="inline-flex items-center justify-end gap-1 whitespace-nowrap"
+          title="Účet nemá denní limit ztráty. Zobrazuje se zbývající rezerva drawdownu (DD).">
+          {drawdownValue()}<span className="text-[10px] font-medium text-[var(--text-secondary)]">· DD</span>
+        </span>;
         return <LiveRiskValue identity={`${riskKey}:dll`} label="DLL zbývá" storageScope={a?.riskDisplayStorageScope} legacy={!!a && a.cashAvailability == null}
           enabled={!!a && a.cashAvailability !== 'denied' && (a.dailyLossLimit == null || a.dailyLossLimit > 0)}
           value={dailyPnlPending || a?.riskDisplayPending || dllRemaining == null ? null : Math.max(0,dllRemaining)} confirmedAt={dllConfirmedAt}
@@ -3076,10 +3088,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
           {a.unrealizedPnlSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
         </span> : <span className="text-xs text-[var(--text-secondary)]">—</span>;
       case 'distDd':
-        return <LiveRiskValue identity={`${riskKey}:dd`} label="Rezerva DD" storageScope={a?.riskDisplayStorageScope} legacy={!!a && a.cashAvailability == null}
-          enabled={!!a && a.cashAvailability !== 'denied' && !a.riskDisplayDrawdownDisabled}
-          value={dailyPnlPending || a?.riskDisplayPending ? null : cushion} confirmedAt={a?.cashUpdatedAt ?? null}
-          verified={cashKnown && a?.unrealizedPnlSource !== 'stale'} color={cushionClass} />;
+        return drawdownValue();
       case 'execLimit':
         return <span className="text-[11px] tabular-nums text-[var(--text-secondary)]">—</span>;
       case 'qtyMult':

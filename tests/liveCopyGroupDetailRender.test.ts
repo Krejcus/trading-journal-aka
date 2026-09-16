@@ -124,6 +124,52 @@ describe('GroupDetail Positions integrace', () => {
     expect(markup).toContain('>1,000<');
   });
 
+  it.each([1_500, 850, 0, -25])('uses the same actual DD reserve in both columns without DLL (%s)', cushion => {
+    const account = {
+      ...snapshot.accounts[0], dailyLossLimit: null, riskDisplayDailyLossDisabled: true,
+      cashAvailability: 'available' as const, cashUpdatedAt: new Date().toISOString(),
+      unrealizedPnlSource: 'broker' as const, cushion,
+    };
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot: { ...snapshot, accounts: [account] },
+    }));
+    const cells = tableCells(tableRows(markup).find(row => row.includes('title="Leader účet"'))!);
+    const ddCells = cells.filter(cell => cell.includes('data-risk-display="verified"'));
+    expect(ddCells).toHaveLength(2);
+    for (const cell of ddCells) expect(cell).toContain(`>${new Intl.NumberFormat('en-US').format(cushion)}<`);
+    expect(ddCells[0]).toContain('· DD');
+    expect(ddCells[1]).not.toContain('· DD');
+    expect(ddCells[0]).not.toContain('role="status"');
+  });
+
+  it('keeps real DLL and unknown limits distinct from a confirmed no-DLL plan', () => {
+    for (const account of [
+      { ...snapshot.accounts[0], dailyLossLimit: 1_250, riskDisplayDailyLossDisabled: true, cushion: 1_500 },
+      { ...snapshot.accounts[0], dailyLossLimit: null, riskDisplayDailyLossDisabled: false, cushion: 1_500 },
+    ]) {
+      const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+        snapshot: { ...snapshot, accounts: [account] },
+      }));
+      expect(markup).not.toContain('· DD');
+      if (account.dailyLossLimit) expect(markup).toContain('>1,250<');
+    }
+  });
+
+  it.each(['missing', 'pending', 'denied', 'disabled'])('never invents a DD reserve when %s', state => {
+    const account = {
+      ...snapshot.accounts[0], dailyLossLimit: null, riskDisplayDailyLossDisabled: true,
+      cashAvailability: state === 'denied' ? 'denied' as const : 'available' as const,
+      cashUpdatedAt: new Date().toISOString(), unrealizedPnlSource: 'broker' as const,
+      cushion: state === 'missing' ? null : 1_500,
+      riskDisplayPending: state === 'pending', riskDisplayDrawdownDisabled: state === 'disabled',
+    };
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot: { ...snapshot, accounts: [account] },
+    }));
+    expect(markup).toContain('· DD');
+    expect(markup).not.toContain('>1,500<');
+  });
+
   it('během fresh bootstrapu nevydává chybějící denní ledger za nulu', () => {
     const bootstrapSnapshot = {
       ...snapshot,
