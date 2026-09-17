@@ -208,6 +208,39 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-17 18:10 — Claude: výpadek Tradovate uprostřed obchodu, Flatten All 5/12 (jen analýza, bez změny kódu)
+
+- 15:37Z leader short 7 MNQZ6, 11 followerů s native OSO brackety, ARM od
+  15:29Z. 15:43:43Z Tradovate zavřel WS všech tří loginů naráz; každý
+  reconnect prošel authorize i syncrequest (stav `syncing`) a pak server
+  15 s mlčel (`heartbeat-timeout`); REST téže doby: `stale-snapshot`,
+  `fetch failed`. Status Tradovate hlásil vše UP; síť Macu i procesu v
+  pořádku (test stejnou node binárkou: REST 0,35 s, WS „o“ ihned).
+  Stejný vzor jako dnešní 05:35Z, 08:52Z (jen Lucid), 13:40Z a 14:03Z
+  (`sync-timeout` před zvýšením limitu na 20 s). Streamy se samy vrátily
+  15:54:45Z (11 min); FundedNext 7cce8c5b padá znovu od 16:03Z.
+- Copier při ztrátě transportu správně DISARM (`transport-lost`, 15:43:50Z);
+  po návratu zůstal DISARMED s `reconciliationRequired` (fail-closed, žádný
+  auto re-ARM). Leader zavřel ručně ~15:57Z (−7 USD).
+- **Flatten All 15:57:13Z**: zavřeno 5/12 (Lucid leader + 4 followeři,
+  15:57:20Z). Tradeify 2 + FundedNext 5 selhaly: `Flatten broker request
+  timeout (positions <acct>, 5000 ms)` — nouzový flatten čte pozice přes
+  REST s 5 s deadline (`withEmergencyDeadline`, copierRuntimeController
+  ~3316) a Tradovate REST těch loginů odpovídal pomaleji. Příkaz běžel 265 s,
+  druhý Flatten (15:58Z) vypršel ve frontě (`command-expired`). Followeři
+  uzavřeni ručně v Tradovate účet po účtu: Tradeify 15:58:51Z, FundedNext
+  16:01:00Z, 16:03:15Z, 16:04:01Z, 16:04:12Z, 16:04:18Z (ověřeno journal
+  evidencí: netPos 0 + fill 7 ks). Mezi zrušením bracketů (16:02:40–48Z) a
+  uzavřením byly tři účty ~1,5 min bez SL — ruční postup, ne copier.
+- Vercel `live-pnl` vrací 502 (`tradovate-live-pnl-failed`) 167× za
+  20 min — serverové REST k Tradovate selhává stejně; `copier_account_snapshots`
+  FundedNext zamrzly 15:55:19Z.
+- **Návrh (čeká na rozhodnutí uživatele)**: nouzový flatten nesmí vzdát po
+  jednom 5s REST timeoutu — prodloužit deadline (20–30 s) a opakovat čtení
+  pozic/liquidateposition po dobu života příkazu; relay TTL Flattenu (30 s)
+  prodloužit, aby druhý pokus nevypršel ve frontě. Bezpečnostní kód → jen
+  po výslovném „udělej“.
+
 ### 2026-09-17 17:45 — Claude: pomalé API po nasazení = retry bouře importu journalu (6a5379a + 3ecebdc, nasazeno)
 
 Po 7ffaaf2 se copier stále nedal zapnout („leader nedostupný", „Neověřeno",
