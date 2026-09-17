@@ -208,6 +208,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-17 17:00 — Claude: worker přežije pomalý Tradovate při startu (7ffaaf2, nasazeno)
+
+Po Codexově `9e3d09c` (lease timeout 10→60 s, worker zastaven) uživatel
+předal dokončení mně. Kořen dnešních pádů: Tradovate potřeboval 17–61 s na
+obnovu tokenu a >5 s na WS sync; pevné limity workeru z toho dělaly tvrdé
+chyby při startu (proces skončil, launchd ho 40× restartoval).
+- `server/retryTransient.ts`: ohraničený retry jen pro přechodné chyby
+  (timeout, síť, 408/425/429/5xx, `tradovate-pilot-lease-failed`); auth,
+  identita, dešifrování, `expired` jsou finální. Rostoucí prodleva 5→60 s,
+  deadline 10 min, pak chyba probublá jako dřív (stále fail-closed).
+- `createMacCopierDeviceTokenProvider`: 120 s na požadavek, retry jen když
+  není použitelný token (start); s platným tokenem jediný pokus a fallback
+  jako dřív (ověřeno stávajícím testem). Nespárované zařízení retry nemá.
+- Pilot: `loadTradovateAccountData` při startu se stejným retry a logem
+  `STARTUP …`; `syncTimeoutMs` 5 → 20 s pro agent brokery (reconnect backoff
+  zůstává). Nové testy `tests/retryTransient.test.ts` + 2 v
+  `tests/macCopierDevice.test.ts`.
+- Ověření: 3686/3686, tsc čistý mimo `extension/`, web build, esbuild bundle.
+  Push 7ffaaf2 na main (Vercel auto-deploy), reinstall workeru z téhož
+  stromu s `--adopt-durable-group` (záloha
+  `/private/tmp/alphatrade-release-7ffaaf2-20260917/before`), start
+  DISARMED. Codexův 120s návrh nebyl nikde uložený, nahrazuje ho tato změna.
+
 ### 2026-09-17 odpoledne — Claude: výpadky Tradovate, restart workeru a předání Codexovi
 
 - 15:35 ARM prošel (0,8 s). 15:40:23 padly WebSockety všech tří loginů ve
