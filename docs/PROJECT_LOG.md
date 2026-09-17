@@ -208,6 +208,58 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-17 19:15 — Claude: „dnešek byl extrém" — oprava celého řetězce (2db341c, web nasazen, worker čeká na reinstall)
+
+Uživatel: kompletní research a oprava všech dnešních bodů. Řetězec a opravy:
+- **REST brokeru bez deadline** (kořen zamrzlých risk snímků `stale-snapshot`
+  20+ min po návratu streamu i pomalé recovery): hung fetch držel eventTail
+  až 5 min (undici default). `restRequestTimeoutMs` 15 s na celé volání
+  včetně těla (`tradovateBroker.requestRaw`). Test
+  `tradovateBrokerRestTimeout.test.ts`.
+- **Nouzový Flatten** (5/12): čtení (positions/orders/lookup) se po
+  timeoutu/síti/5xx/429 opakují s prodlevou 1→5 s v rozpočtu 60 s; účty
+  s přechodnou chybou projdou znovu se stejným operationId (durable outbox
+  brání druhému odeslání) až do celkového deadline 180 s; nativní liquidate
+  po `indeterminate` se pošle znovu jen stavově: čerstvé čtení pozici stále
+  ukazuje, na symbolu neběží žádný Market close, nejvýše 2 pokusy
+  (`flattenLiquidateAttempts`). Zápisy se nikdy neopakují slepě; po `submitted`
+  ani `rejected` se neposílá nic. Per-call deadline 5 → 20 s.
+  `copierManualActions.ts`, `copierRuntimeController.ts`; 7 nových testů +
+  2 v controlleru.
+- **Relay**: druhý Flatten vypršel ve frontě za 265s prvním. `flatten-group`/
+  `flatten-account` se na serveru přichytí k čekajícímu/běžícímu Flattenu
+  stejného cíle (`findInFlightFlatten`, okno 5 min) — UI dostane výsledek
+  toho běžícího, nikdy druhou likvidaci po změně stavu. Web na risk-redukční
+  příkaz čeká 240 s místo 35 s.
+- **Import journalu**: souběžné importy (web, iPhone, localhost) si posouvaly
+  generaci → `journal-input-changed` → restart. Lease 120 s na (user,
+  connection): migrace `20260917190000_journal_import_lease.sql`
+  (APLIKOVÁNA `db query -f` + `migration repair`), ostatní importéři
+  dostanou `processing`. Testy vitest + `tests/sql/journalImportLease.pg.mjs`.
+- **Recorder**: upload timeout 10 → 30 s; úspěšný upload vrací stav
+  `recording` (dřív zůstal `degraded` navždy po jediném timeoutu).
+- **Plánovaná 50min obměna WS**: onclose hlásí důvod `planned-renewal`;
+  projekce mezeru zahodí, když nový socket resyncne do 60 s (sync nese
+  kompletní stav, nic nechybí). Skutečné výpadky zůstávají mezerou.
+- **Diagnostika**: WS authorize/sync selhání nese `s=` a text odpovědi;
+  `live-pnl` mapuje timeout brokeru na 504 `tradovate-timeout`.
+- `retryTransient` přesunut do `lib/` (sdílený s jádrem copieru).
+- Ověření: cílené 343 + celá sada 3706/3707 (jediný pád = kolize testu
+  observeru s `ms === 20_000`, REST default proto 15 s; po opravě zelený),
+  tsc čistý mimo `extension/`, eslint 0, `vite build` OK, PGlite SQL 4/4.
+- **Mezitím (16:05–16:32Z)**: uživatel znovu ARMoval, 16:11:32Z leader long
+  25 MNQ; 4 Lucid followeři odmítnuti prop limitem („Fungible Exposed 2",
+  Rule #3968) → `follower-position-mismatch` fail-closed 16:11:34Z (správně).
+  Tradeify/FundedNext kopie dostaly brackety; leader vystoupil 16:31:06Z,
+  všech 12 účtů flat do 16:31:53Z (journal evidence). Worker teď:
+  DISARMED, divergentní Lucid followeři, stuck outbox (4× rejected) —
+  reinstall workera (bundle s těmito opravami) vyžaduje nejdřív v LIVE
+  označit stuck operace za vyřešené + Kontrola pozic, pak
+  `scripts/copier/mac-reinstall-safe.sh`.
+- **Nezměněno záměrně**: DISARM při ztrátě transportu (fail-closed design);
+  následné leader exity při DISARMED se nekopírují — brackety followerů u
+  brokera jsou jediná ochrana; auto re-ARM bez důkazu nezavádíme.
+
 ### 2026-09-17 18:10 — Claude: výpadek Tradovate uprostřed obchodu, Flatten All 5/12 (jen analýza, bez změny kódu)
 
 - 15:37Z leader short 7 MNQZ6, 11 followerů s native OSO brackety, ARM od
