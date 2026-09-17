@@ -208,6 +208,47 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-17 17:45 — Claude: pomalé API po nasazení = retry bouře importu journalu (6a5379a + 3ecebdc, nasazeno)
+
+Po 7ffaaf2 se copier stále nedal zapnout („leader nedostupný", „Neověřeno",
+`command-expired`): relay (3 s) a lease (10 s) vypršely, protože KAŽDÁ trasa
+Vercel API čekala desítky sekund na PostgREST pool („Timed out acquiring
+connection from connection pool"). DB přitom byla téměř nečinná.
+- **Příčina 1 (6a5379a)**: `read_journal_input_snapshot` sestavil, seřadil
+  a zahodil celou množinu entit+retained (44 000 řádků na připojení) na
+  KAŽDÉ stránce; jeden import = ~180 stránek po 1,2 s, tři připojení a více
+  klientů naráz vyčerpaly pool. Migrace `20260917153000`: výrazové indexy
+  na `('e:'||entity_key) collate "C"` / `('r:'||event_id) collate "C"`,
+  funkce čte dvě ohraničené stránky a slije je — stejný obsah i pořadí
+  (ověřeno v PGlite porovnáním všech stránek), 1,2 s → ~0,2–0,4 s.
+  Relay timeouty 3/10 s → 20/30 s. ARM prošel 15:29Z.
+- **Příčina 2 (3ecebdc)**: i po indexech ~1 100–1 600 rollbacků/s a 6–8
+  PostgREST sessions `idle in transaction (aborted)` na téže funkci.
+  Diagnostická varianta (15 s, zápis volajících do dočasné tabulky místo
+  výjimky) ukázala: `service_role`, user-agent `node`, AWS IP = Vercel
+  `journal-import`, `p_generation` o 6–20 za hlavou. `journal-input-changed`
+  se vyhazovalo s SQLSTATE **40001** (serialization_failure) a HTTP vrstva
+  40001 automaticky opakuje — se stejnou zastaralou generací, tedy donekonečna
+  po dobu života invokace. Smyčky se zastavily v okamžiku, kdy funkce
+  přestala 40001 vyhazovat. Migrace `20260917154500`: stejná funkce, errcode
+  **55000**; zpráva i mapování v `journalIncrementalInput.ts` beze změny;
+  dočasná `journal_input_diag` smazána. Po nasazení 15:41Z: rollbacky
+  11 048 987 → +1 za 35 s, 0 busy PostgREST sessions, heartbeat 0,3 s,
+  API ~70 ms. Obě migrace aplikovány `db query -f` + `migration repair`
+  (`db push` zůstává zakázán).
+- **Ponaučení**: 40001 patří jen skutečným serializačním konfliktům, kde
+  opakování stejného požadavku může uspět. Stále 40001 používají
+  `backtest_review_atomic_patch`, `tag_library_atomic_commit`,
+  `private_trade_note_history`, `legacy_notes_privacy` (CAS z prohlížeče,
+  jednorázová volání — pár zbytečných pokusů, ne smyčka; neměněno).
+- **Otevřené**: souběžné importy jednoho připojení si navzájem posouvají
+  generaci (časté `journal-input-changed` → celý import od začátku) —
+  serializovat import per připojení; 10 s timeout uploadu journalu dělá
+  z recorderů `degraded` (šum, zápis probíhá); plánované 50min WS obnovy
+  tvoří 2s mezery, které označí otevřené epizody jako neúplné.
+- Worker: bundle 7028a177 (7ffaaf2), connected, reconciled, ARM od 15:29Z
+  (expirace 19:00 Chicago). Bez reinstalu.
+
 ### 2026-09-17 17:00 — Claude: worker přežije pomalý Tradovate při startu (7ffaaf2, nasazeno)
 
 Po Codexově `9e3d09c` (lease timeout 10→60 s, worker zastaven) uživatel
