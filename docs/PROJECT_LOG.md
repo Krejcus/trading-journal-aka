@@ -208,6 +208,65 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-17 — Claude: zapisovač evidence bez přetečení + screenshoty followerů přes copylink
+
+Navazuje na ranní analýzu (chybějící snímky u obchodů z 16. 9.) a review od
+Codexe (dvě chyby, ne jedna). Větev `claude/journal-snapshots-copylink-20260917`
+(worktree `/private/tmp/alphatrade-journal-snapshots-20260917`, základ `7f2a39e`).
+
+- **Příčina mezer v historii**: `server/fileJournalEvidenceStore.ts` psal každou
+  observaci zvlášť s `datasync`; fronta 10 000 přetekla vždy po reconnectu
+  (heartbeat timeout → REST resync všech entit, 90 % byly `command` snapshoty
+  z velké části totožné s předchozím stavem). Přetečení se logovalo na každý
+  zahozený řádek bez časového razítka (1,3 mil. řádků `[JOURNAL] …queue-full…`
+  za 15.–17. 9.), proto ho grep podle data minul. Každá ztráta = `recording-gap`
+  → `connection-gap` → pozice `incomplete` → účty Lucid připojení bez obchodů
+  i snímků. Poprvé 15. 9. 12:18 hned po WS heartbeat timeoutu.
+- **Zapisovač**: dávkový append + jeden `datasync` na dávku (max 2 000 řádků /
+  4 MB); totožná REST snapshot re-observace (stejný `entityType:id`, stejná
+  entita) se neukládá (vrací `true`, aby broker accounting neresetoval);
+  `positionsnapshot`/`journalbackfill`/`connection` a stream události se nikdy
+  nededuplikují. Priorita: `command`/`commandreport` se zahazují už na měkkém
+  limitu bez gap markeru (ztráta historie příkazů, ne pozic), pozice-kritické
+  typy až na 4× limitu s `recording-gap reason=queue-full`. Ztráta se hlásí
+  jednou za epizodu, s časem. Zdraví (`queued`, `dropped`,
+  `droppedLowPriority`, `deduplicated`, `lastGapAt/Reason`, `lastWriteMs`) jde
+  do `LocalCopierAgentStatus.journalHealth` a LIVE lišta má chip „Historie“
+  jen při ztrátě (ztráta pozic = danger, projde i tichým dashboardem).
+- **Vazba snímků**: worker nyní posílá u uzavřeného obchodu
+  `leaderEntryOrderIds` (lot si pamatuje entry ordery), server je ukládá do
+  nového sloupce `tradovate_copier_trades.leader_entry_order_ids`. Pohled
+  `journal_trade_snapshots` (migrace `20260917071500`) k původní fill-identitě
+  leadera přidává follower cestu: `facts.groupId`
+  (`execution:demo:<leaderConn>:<leaderOrderId>`, materializovaný z copylink
+  evidence follower připojení) = `any(leader_entry_order_ids)` + instrument +
+  směr + vstup v okně epizody s tolerancí 2 s (Tradovate razítkuje kopie někdy
+  o 1 ms dřív než leaderův fill; 13:30 a 16:12 by jinak vypadly). Order
+  nárokovaný dvěma epizodami → nic. Copylink role `exit` neexistuje (jen
+  entry/stop/target), řetězec přes exit fill tedy nebyl možný.
+- **Backfill** (jednorázově v migraci, tři zdroje, jen NULL řádky, jen
+  jednoznačný výsledek): potvrzená pozice leadera podle fill-identity →
+  fill v evidenci s přesným razítkem + copylink self-link leadera → jediný
+  leader order z potvrzených follower pozic v okně epizody. Na produkci
+  doplněno 20/21 epizod od 12. 9.; bez klíče zůstala jen 09:28→10:04 (žádný
+  follower, pozice Lucid pending). Pohled váže 42/43 obchodů z 16. 9.
+- **Ověření**: SQL PGlite 47/47 (`PGLITE_MODULE=<scratch>/node_modules/@electric-sql/pglite/dist/index.js node --test tests/sql/journalSnapshotLinks.pg.mjs`),
+  Vitest celá sada 3667/3668 (1 timeout `liveCopyCompactRender` pod zátěží,
+  samostatně prošel), tsc čistý mimo `extension/`, `vite build` OK, esbuild
+  bundle workeru OK. Migrace aplikována přes `npx supabase db query --linked -f`
+  z Documents (CLI je linknuté; `db push` NEPOUŽÍVAT, lokální/vzdálená historie
+  se rozcházejí) a zapsána do `supabase_migrations.schema_migrations`; rollback
+  v `/private/tmp/claude-501/…/scratchpad/rollback-20260917071500.sql`.
+- **Nasazení**: DB část je živá (produkční historie ukazuje snímky followerů
+  hned). Web/server (ledger sloupec, LIVE chip) a worker (zapisovač, entry
+  ordery) čekají na „nasaď“ — obchodní den, worker reinstall jen z čistého
+  reconciled stavu. Do reinstallu vznikají nové ledger řádky bez klíče;
+  doplní se stejným backfillem (migrace je opakovatelná).
+- Otevřené: každý plánovaný WS renewal (50 min) otevírá 2s gap, který
+  přeruší otevřenou pozici (`interrupt('connection-gap')` bez ohledu na délku);
+  09:28 epizoda skončila `conflicting-position-anchors`. Netýká se snímků,
+  ale historie pozic delších než 50 min.
+
 ### 2026-09-17 — Codex: prioritní nouzový Flatten All (lokálně)
 Incident z 16. 9. prokázal, že ruční Flatten čekal ve stejné serializované
 frontě jako leader lifecycle/SL modify; jeden visící broker call tak zdržel
