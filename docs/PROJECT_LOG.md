@@ -208,6 +208,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-17 — Codex: prioritní nouzový Flatten All (lokálně)
+Incident z 16. 9. prokázal, že ruční Flatten čekal ve stejné serializované
+frontě jako leader lifecycle/SL modify; jeden visící broker call tak zdržel
+nouzové zavření o několik minut. Ruční Flatten účtu i celé skupiny proto na
+Tradovate nově používá samostatnou prioritní lane mimo leader processor,
+reconciliation i journal. Lane vyžaduje broker-native stavové
+`liquidatePosition`, zpracovává účty paralelně, potvrzuje position → orders →
+position stav a každý broker call omezuje na 5 s. Timeout se nepovažuje za
+úspěch ani se slepě neopakuje; účet musí být následně autoritativně flat.
+Stejné operationId v jednom procesu sdílí tentýž promise. Hlavní runtime po
+zásahu zůstává DISARMED a vyžaduje novou reconciliation. Adaptéry bez nativní
+likvidace zachovávají původní durable serializovanou cestu.
+
+Regrese simuluje visící follower write: běžný processor zůstane blokovaný,
+ale Flatten All zavře leadera i followera a ověří oba flat. Druhá regrese
+simuluje nikdy nekončící native liquidate a potvrzuje řízený timeout místo
+nekonečného „Připravuji“. Ověření: 105/105 cílených testů, kompletní sada
+3662/3662, TypeScript, lint změněných souborů bez chyb, `git diff --check` a
+produkční build. Nebyl odeslán brokerovský příkaz, worker nebyl restartován a
+změna zatím nebyla nasazena.
+
 ### 2026-09-16 — DD rezerva ve sloupci DLL u plánů bez denního limitu
 
 Na žádost uživatele sloupec DLL u potvrzeného plánu bez DLL ukazuje stejnou

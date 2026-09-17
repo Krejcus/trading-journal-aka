@@ -1769,6 +1769,112 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
+  it('ruční Flatten All obejde zaseknutý leader-event processor a potvrdí všechny účty flat', async () => {
+    const broker = createMockBroker({
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'working' }),
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      flattenConfirmationAttempts: 2,
+      flattenConfirmationPollMs: 0,
+      wait: async () => undefined,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    broker.setPosition(100, 'MNQU6', 1);
+    broker.setPosition(200, 'MNQU6', 1);
+
+    const originalPlace = broker.placeOrder.bind(broker);
+    let releaseCopy!: () => void;
+    let markCopyStarted!: () => void;
+    const copyStarted = new Promise<void>(resolve => { markCopyStarted = resolve; });
+    const copyMayFinish = new Promise<void>(resolve => { releaseCopy = resolve; });
+    broker.placeOrder = async request => {
+      if (request.accountId === 200) {
+        markCopyStarted();
+        await copyMayFinish;
+        throw new Error('simulovaný visící follower write');
+      }
+      return originalPlace(request);
+    };
+    broker.emitEvent({
+      type: 'order',
+      order: leaderOrder({
+        brokerOrderId: 'leader-blocking-order',
+        tag: 'leader-blocking-order',
+        orderType: 'Limit',
+        limitPrice: 29_900,
+        status: 'working',
+      }),
+    });
+    await copyStarted;
+
+    const result = await Promise.race([
+      controller.flattenGroup('manual-priority-flat-all-001'),
+      new Promise<never>((_resolve, reject) => setTimeout(
+        () => reject(new Error('Flatten čekal za běžnou processor frontou')),
+        250,
+      )),
+    ]);
+
+    expect(result).toMatchObject({
+      accountIds: [100, 200],
+      submittedClosures: 2,
+      flat: true,
+      failedAccounts: [],
+    });
+    expect(await broker.listPositions(100)).toEqual([
+      expect.objectContaining({ netQuantity: 0 }),
+    ]);
+    expect(await broker.listPositions(200)).toEqual([
+      expect.objectContaining({ netQuantity: 0 }),
+    ]);
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: true,
+    });
+
+    releaseCopy();
+    await controller.waitForIdle();
+    controller.stop();
+  });
+
+  it('prioritní Flatten ukončí visící broker call deadlinem místo nekonečného Připravuji', async () => {
+    const broker = createMockBroker({ nativeLiquidate: true });
+    broker.setPosition(200, 'MNQU6', 1);
+    broker.liquidatePosition = vi.fn(() => new Promise<never>(() => undefined));
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      flattenConfirmationAttempts: 1,
+      flattenConfirmationPollMs: 0,
+      flattenBrokerRequestTimeoutMs: 10,
+      wait: async () => undefined,
+    });
+
+    await expect(Promise.race([
+      controller.flattenAccount(200, 'manual-priority-timeout-001'),
+      new Promise<never>((_resolve, reject) => setTimeout(
+        () => reject(new Error('Flatten nevrátil řízený výsledek')),
+        1_000,
+      )),
+    ])).rejects.toThrow('Flatten selhal: zavřeno 0/1 účtů; selhaly 200');
+    expect(broker.liquidatePosition).toHaveBeenCalledTimes(1);
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: true,
+    });
+    controller.stop();
+  });
+
   it('Flatten čeká na opožděnou autoritativní Position projekci místo falešného ne-flat výsledku', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 30_000 }) });
     await broker.placeOrder({

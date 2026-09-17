@@ -62,7 +62,11 @@ import {
   assertedFollowerQuantity,
 } from './copierRunner';
 import type { CopierStore } from './copierStore';
-import { COPIER_SEEN_TERMINAL_REJECT_LIMIT, toSnapshot } from './copierStore';
+import {
+  COPIER_SEEN_TERMINAL_REJECT_LIMIT,
+  createMemoryCopierStore,
+  toSnapshot,
+} from './copierStore';
 import {
   DEFAULT_COPY_GROUP_SAFETY,
   sanitizeCopyGroupSafety,
@@ -514,6 +518,8 @@ export interface BootstrapCopierOptions {
   flattenConfirmationAttempts?: number;
   flattenConfirmationPollMs?: number;
   flattenAccountConcurrency?: number;
+  /** Deadline jednoho broker callu v prioritní ruční Flatten lane. */
+  flattenBrokerRequestTimeoutMs?: number;
   wait?: (ms: number) => Promise<void>;
   /**
    * Read-only zdroj „followeři právě neviditelní v žádném připojeném OAuth
@@ -3248,6 +3254,122 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       for (const accountId of accountIds) positionsByAccount.set(accountId, new Map());
     }
     return result;
+  };
+
+  /**
+   * Ruční Flatten/Flatten All nesmí čekat za běžnou serializovanou frontou.
+   * Běží nad odděleným in-memory outboxem a používá výhradně broker-native
+   * stavové liquidatePosition. Hlavní durable runtime záměrně nemění: po
+   * nouzovém zásahu zůstává skupina DISARMED a vyžaduje novou reconciliation.
+   * Cloud command je durable operation envelope; opakování stejného ID v
+   * tomto procesu vrací stejný promise a nikdy nevyšle druhou likvidaci.
+   */
+  const emergencyFlattenOperations = new Map<string, Promise<ManualFlattenResult>>();
+  let emergencyFlattenTail: Promise<void> = Promise.resolve();
+  const emergencyFlatten = (
+    accountIds: readonly number[],
+    operationId: string,
+  ): Promise<ManualFlattenResult> => {
+    // Ne-Tradovate adaptéry bez stavového endpointu zachovají původní
+    // durable cancel -> přesný Market close cestu. Produkční Tradovate
+    // router liquidatePosition vždy poskytuje a používá prioritní lane níže.
+    if (!broker.liquidatePosition) return flatten(accountIds, operationId);
+    const key = operationId.trim();
+    const existing = emergencyFlattenOperations.get(key);
+    if (existing) return existing;
+
+    gate = { ...gate, armed: false };
+    invalidateReconciliation();
+    const run = emergencyFlattenTail.then(async () => {
+      const live = currentRuntime();
+      const isolatedStore = createMemoryCopierStore(toSnapshot(
+        live.state,
+        live.outbox.values(),
+        live.cancelOutbox.values(),
+        live.revision,
+        live.bracketOutbox.values(),
+        live.osoOutbox.values(),
+      ));
+      const isolatedRuntime = runtimeFromSnapshot(await isolatedStore.load());
+      const requestTimeoutMs = Math.max(250, options.flattenBrokerRequestTimeoutMs ?? 5_000);
+      const withEmergencyDeadline = <T>(label: string, operation: () => Promise<T>): Promise<T> => {
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error(
+            `Flatten broker request timeout (${label}, ${requestTimeoutMs} ms)`,
+          )), requestTimeoutMs);
+        });
+        return Promise.race([operation(), deadline]).finally(() => {
+          if (timeout) clearTimeout(timeout);
+        });
+      };
+      // Deadline je schválně pouze na nouzové lane. Nezastavuje ani
+      // nepřepisuje běžné broker operace; u stavového liquidate znamená
+      // timeout „indeterminate“ a následuje pouze autoritativní read.
+      const emergencyBroker: BrokerPort = {
+        ...broker,
+        liquidatePosition: request => withEmergencyDeadline(
+          `liquidate ${request.accountId}/${request.symbol}`,
+          () => broker.liquidatePosition!(request),
+        ),
+        cancelOrder: (accountId, brokerOrderId) => withEmergencyDeadline(
+          `cancel ${accountId}/${brokerOrderId}`,
+          () => broker.cancelOrder(accountId, brokerOrderId),
+        ),
+        listPositions: accountId => withEmergencyDeadline(
+          `positions ${accountId}`,
+          () => broker.listPositions(accountId),
+        ),
+        listOrders: accountId => withEmergencyDeadline(
+          `orders ${accountId}`,
+          () => broker.listOrders(accountId),
+        ),
+        findOrderById: (accountId, brokerOrderId) => withEmergencyDeadline(
+          `order ${accountId}/${brokerOrderId}`,
+          () => broker.findOrderById(accountId, brokerOrderId),
+        ),
+      };
+      const processed = await processManualFlatten({
+        runtime: isolatedRuntime,
+        broker: emergencyBroker,
+        store: isolatedStore,
+        groupId: group.id,
+        accountIds,
+        nativeOnly: true,
+        operationId: key,
+        clock,
+        confirmationAttempts: options.flattenConfirmationAttempts,
+        confirmationPollMs: options.flattenConfirmationPollMs,
+        accountConcurrency: options.flattenAccountConcurrency,
+        wait: options.wait,
+      });
+      const result = processed.result;
+      workingOrderAccounts = new Set(result.workingOrderAccounts);
+      if (!result.flat) {
+        const failed = result.accounts.filter(account => !account.ok);
+        const detail = failed
+          .map(account => `${account.accountId} (${account.error ?? 'účet není autoritativně flat'})`)
+          .join(', ');
+        throw new Error(
+          `Flatten selhal: zavřeno ${result.accounts.length - failed.length}/${result.accounts.length} účtů; selhaly ${detail || 'neznámé účty'}`,
+        );
+      }
+      for (const accountId of accountIds) positionsByAccount.set(accountId, new Map());
+      return result;
+    });
+    const guarded = run.catch(error => {
+      failClosed(error, { autoClose: false });
+      throw error;
+    });
+    emergencyFlattenOperations.set(key, guarded);
+    // Další odlišná nouzová operace může čekat pouze za jiným Flattenem,
+    // nikdy za leader eventem, journalem ani reconciliation frontou.
+    emergencyFlattenTail = guarded.then(() => undefined, () => undefined);
+    if (emergencyFlattenOperations.size > 64) {
+      const oldest = emergencyFlattenOperations.keys().next().value as string | undefined;
+      if (oldest && oldest !== key) emergencyFlattenOperations.delete(oldest);
+    }
+    return guarded;
   };
 
   const finiteOrNull = (value: number | null): number | null => (
@@ -8200,11 +8322,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ...group.followers.map(follower => follower.accountId),
       ]);
       if (!allowed.has(accountId)) throw new Error('Účet není součástí této copy group');
-      return flatten([accountId], operationId);
+      return emergencyFlatten([accountId], operationId);
     },
     async flattenGroup(operationId) {
       if (group.leaderAccountId == null) throw new Error('Copy group nemá leader účet');
-      return flatten(
+      return emergencyFlatten(
         [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)],
         operationId,
       );

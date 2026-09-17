@@ -143,7 +143,7 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
     }
   }
   if (options.nativeOnly && !options.broker.liquidatePosition) {
-    throw new Error('Symbolově cílený auto-close vyžaduje broker-native liquidatePosition');
+    throw new Error('Nouzové zploštění vyžaduje broker-native liquidatePosition');
   }
   const symbolInScope = (accountId: number, symbol: string) => cleanupScope === 'account'
     || targetSymbolsByAccount.get(accountId)?.has(symbol) === true;
