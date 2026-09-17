@@ -235,7 +235,10 @@ brackety). Fail-closed byl tu špatná odpověď: reject vstupu není nejistota.
   jiného zůstává fail-closed) byla zablokována bezpečnostním klasifikátorem
   jako oslabení fail-closed cesty; uživatel rozhodne.
 - Ověření: 177 testů dotčených souborů, tsc čistý mimo `extension/`, eslint 0.
-  Worker stále na starém bundlu; reinstall viz předchozí zápis.
+- **Worker reinstalován uživatelem 19:12Z** přes `mac-reinstall-safe.sh` z
+  aa0c83f (bundle 3ae56cef…): brána prošla (stuck operace vyřešeny v LIVE),
+  po startu connection-recovery sama potvrdila flat/no-active, streamy všech
+  tří loginů připojené, journal `recording`, DISARMED, bez chyby.
 
 ### 2026-09-17 19:15 — Claude: „dnešek byl extrém" — oprava celého řetězce (2db341c, web nasazen, worker čeká na reinstall)
 
