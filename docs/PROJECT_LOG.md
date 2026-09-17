@@ -208,6 +208,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-17 21:00 — Claude: odmítnutý follower už nevypne skupinu (nasazeno na main)
+
+Uživatel: „Lucidy se neotevřely kvůli max 20 MNQ, ostatní ano, kopírka se
+vypla a obchod jsem nemohl managovat." Nález: 16:11:33Z Tradovate odmítl
+vstupy čtyř Lucid followerů (`Your maximum position limit has been met …
+Rule #3968`), brackety odmítl také (žádné osiřelé nohy). Za 1 s
+`verifyFollowerMagnitude` viděl follower net 0 vs. očekáváno 25 →
+`failClosed` bez auto-close: skupina DISARMED, sedm otevřených kopií bez
+řízení exitů (leader vystoupil 16:31Z, followery zavíraly jen jejich
+brackety). Fail-closed byl tu špatná odpověď: reject vstupu není nejistota.
+- **Oprava (asynchronní cesta = dnešní případ)**: flat follower, jehož jediný
+  outbox záznam pro symbol je definitivně odmítnutý vstup ve směru leadera
+  (nic pending/acknowledged/unknown, reject ≤ 15 min), se vyřadí z epizody
+  stejně jako propkou zlikvidovaný účet: záměrné potlačení vstupu
+  s povolenou pozicí 0 (exity se přeskočí, další epizoda ho zase zapojí),
+  odmítnuté položky se označí za vysvětlené (ne stuck), ochranné nohy se
+  uklidí, audit `skipped`, skupina zůstává ARMED. Test: „asynchronně
+  odmítnutý vstup followera (dnešní Lucid případ)" — follower 300 dostane
+  exit, 200 nic, `armed: true`, `stuckOutbox: false`.
+- **Neopraveno (čeká na rozhodnutí)**: synchronní varianta — broker odmítne
+  vstup už v dispatch dávce → `failClosedOnCriticalAudit` dnes vypne skupinu
+  a auto-close zavře všechny kopie (followeři nezůstanou bez dozoru, ale
+  kopírka je pryč a leader obchoduje sám). Připravená změna (jen definitivní
+  rejecty flat followerů se známým snapshotem pozic se vyřadí, cokoli
+  jiného zůstává fail-closed) byla zablokována bezpečnostním klasifikátorem
+  jako oslabení fail-closed cesty; uživatel rozhodne.
+- Ověření: 177 testů dotčených souborů, tsc čistý mimo `extension/`, eslint 0.
+  Worker stále na starém bundlu; reinstall viz předchozí zápis.
+
 ### 2026-09-17 19:15 — Claude: „dnešek byl extrém" — oprava celého řetězce (2db341c, web nasazen, worker čeká na reinstall)
 
 Uživatel: kompletní research a oprava všech dnešních bodů. Řetězec a opravy:
