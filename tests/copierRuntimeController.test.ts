@@ -3140,6 +3140,79 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     controller.stop();
   });
 
+  it('asynchronně odmítnutý vstup followera (dnešní Lucid případ) vyřadí jen jeho a exity ostatních dál kopíruje', async () => {
+    // Vstup followera 200 broker nejdřív přijme (working) a o chvíli později
+    // odmítne limitem pozice; follower 300 je vyplněn. Skupina má zůstat ARMED.
+    const audit = vi.fn();
+    const rejectReason = 'Your maximum position limit has been met. Contact your prop firm provider. Rule #3968';
+    const broker = createMockBroker({
+      behavior: request => request.accountId === 200 && request.side === 'Buy'
+        ? { kind: 'working' }
+        : { kind: 'fill', price: 29_500 },
+      nativeLiquidate: true,
+    });
+    const twoFollowers: CopyGroupConfig = {
+      ...group,
+      followers: [
+        { accountId: 200, mode: 'on-submit', multiplier: 1 },
+        { accountId: 300, mode: 'on-submit', multiplier: 1 },
+      ],
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: twoFollowers,
+      clock: stepClock(),
+      onAudit: audit,
+      followerTransitionCorrelationWindowMs: 20,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-entry-async-reject', quantity: 1, orderType: 'Market', limitPrice: undefined,
+    }) });
+    await controller.waitForIdle();
+    const followerEntry = (await broker.listOrders(200)).find(order => order.side === 'Buy');
+    expect(followerEntry).toBeDefined();
+    broker.emitEvent({ type: 'order', order: { ...followerEntry!, status: 'rejected', rejectReason, updatedAt: 5_000 } });
+    broker.setPosition(100, 'MNQU6', 1);
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
+    await controller.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 60));
+    await controller.waitForIdle();
+
+    expect((await broker.listPositions(300))[0]?.netQuantity).toBe(1);
+    expect(controller.status()).toMatchObject({
+      armed: true,
+      divergentAccounts: [],
+      stuckOutbox: false,
+      lastError: null,
+    });
+    expect(audit.mock.calls.flat(2)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'skipped', accountId: 200, reason: expect.stringContaining('broker odmítl vstup') }),
+    ]));
+
+    const sellsBefore = broker.placedRequests().length;
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-exit-async-reject', side: 'Sell', quantity: 1, orderType: 'Market', limitPrice: undefined,
+    }) });
+    broker.setPosition(100, 'MNQU6', 0);
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 } });
+    await controller.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 60));
+    await controller.waitForIdle();
+
+    const sells = broker.placedRequests().slice(sellsBefore).filter(request => request.side === 'Sell');
+    expect(sells.some(request => request.accountId === 300)).toBe(true);
+    expect(sells.some(request => request.accountId === 200)).toBe(false);
+    expect((await broker.listPositions(300))[0]?.netQuantity).toBe(0);
+    expect(controller.status()).toMatchObject({ armed: true, divergentAccounts: [], lastError: null });
+    controller.stop();
+  });
+
   it('modify→filled s autoritativní divergencí zůstane fail-closed a stuck', async () => {
     const broker = createMockBroker({
       behavior: request => request.tag === 'external-exposure'

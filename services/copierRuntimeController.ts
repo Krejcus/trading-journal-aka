@@ -1224,6 +1224,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   let brokerObservationVersion = 0;
   let accountRiskPollTail: Promise<void> = Promise.resolve();
   const accountRiskLastRequestedAt = new Map<number, number>();
+  /** Jak starý smí být terminální reject vstupu, aby vysvětlil flat followera při otevřeném leaderu. */
+  const REJECTED_ENTRY_ISOLATION_WINDOW_MS = 15 * 60_000;
   const ACCOUNT_RISK_POLL_MS = 30_000;
   /** VYPNUTO/shadow: limity propek a PnL účtů chceme vidět vždy, jen pomaleji. */
   const ACCOUNT_RISK_IDLE_POLL_MS = 60_000;
@@ -3034,6 +3036,93 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return true;
   };
 
+  /**
+   * Terminální odmítnutí vstupu followera pro tento symbol (limit pozice
+   * propky, risk pravidlo brokera). Důkaz musí být úplný: pro účet a symbol
+   * nesmí v outboxu viset nic nevyřízeného a odmítnutý příkaz je vstup ve
+   * směru leadera z posledních minut. Bez toho zůstává cesta fail-closed.
+   */
+  const terminalEntryRejection = (accountId: number, symbol: string, leaderNet: number): OutboxEntry | null => {
+    const entrySide = leaderNet > 0 ? 'Buy' : 'Sell';
+    const now = clock();
+    let latest: OutboxEntry | null = null;
+    for (const entry of currentRuntime().outbox.values()) {
+      if (entry.request.accountId !== accountId || entry.request.symbol !== symbol) continue;
+      if (
+        entry.status === 'planned'
+        || entry.status === 'sending'
+        || entry.status === 'unknown'
+        || entry.status === 'acknowledged'
+      ) return null;
+      if (entry.status !== 'rejected' || entry.request.side !== entrySide) continue;
+      if (now - entry.updatedAt > REJECTED_ENTRY_ISOLATION_WINDOW_MS) continue;
+      if (!latest || entry.updatedAt > latest.updatedAt) latest = entry;
+    }
+    return latest;
+  };
+
+  /**
+   * 17. 9. 2026: broker odmítl vstup čtyř Lucid followerů (limit pozice
+   * propky), sedm ostatních v obchodě bylo a fail-closed celé skupiny jim
+   * sebral řízení exitů. Follower s odmítnutým vstupem do této epizody
+   * nepatří: dostane záměrné potlačení s povolenou pozicí 0 (jeho exity se
+   * přeskočí, do další epizody vstoupí znovu), odmítnuté položky jsou
+   * vysvětlené a nezůstávají stuck, případné ochranné nohy se uklidí.
+   * Skupina zůstává ARMED pro followery, kteří v obchodě jsou.
+   */
+  const sidelineRejectedFollower = async (accountId: number, symbol: string, rejection: OutboxEntry): Promise<void> => {
+    const now = clock();
+    const reason = rejection.reason?.trim() || 'broker odmítl vstup';
+    intentionalEntrySuppressions.set(intentionalSuppressionKey(accountId, symbol), {
+      allowedNet: 0,
+      createdAt: now,
+      leaderOrderId: rejection.leaderOrderId,
+    });
+    for (const [key, timer] of pendingFollowerMagnitudeChecks) {
+      if (!key.startsWith(`${accountId}:`)) continue;
+      clearTimeout(timer);
+      pendingFollowerMagnitudeChecks.delete(key);
+    }
+    for (const [key, pending] of pendingFollowerTransitions) {
+      if (pending.accountId !== accountId) continue;
+      clearPendingFollowerTransition(key);
+    }
+    await processor.mutate(async current => {
+      const outbox = new Map(current.outbox);
+      let changed = false;
+      for (const [key, entry] of outbox) {
+        if (entry.status !== 'rejected' || entry.request.accountId !== accountId || entry.request.symbol !== symbol) continue;
+        outbox.set(key, waiveOutboxEntry(
+          entry,
+          `${entry.reason?.trim() || reason} — follower vyřazen z této epizody, kopírka pokračuje pro ostatní`,
+          now,
+        ));
+        changed = true;
+      }
+      if (!changed) return current;
+      const committed = await options.store.commit(
+        toSnapshot(
+          current.state,
+          outbox.values(),
+          current.cancelOutbox.values(),
+          current.revision,
+          current.bracketOutbox.values(),
+          current.osoOutbox.values(),
+        ),
+        current.revision,
+      );
+      return { ...current, outbox, revision: committed.revision };
+    });
+    options.onAudit?.([{
+      at: now,
+      leaderEventId: `follower-entry-rejected-isolated:${accountId}:${now}`,
+      kind: 'skipped',
+      accountId,
+      reason: `follower ${accountId} vyřazen z této epizody — broker odmítl vstup (${reason}); kopírka pokračuje pro ostatní followery`,
+    }]);
+    await sweepFollowerProtectiveLegs(accountId, symbol, now);
+  };
+
   const verifyFollowerMagnitude = async (accountId: number, symbol: string) => {
     const key = followerTransitionKey(accountId, symbol);
     if (!pendingFollowerMagnitudeChecks.has(key) || stopped) return;
@@ -3070,6 +3159,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const breach = await classifyFollowerBrokerBreach(accountId);
         if (breach) {
           await isolateBreachedFollower(accountId, symbol, breach);
+          return;
+        }
+        const rejection = terminalEntryRejection(accountId, symbol, leaderNet);
+        if (rejection) {
+          await sidelineRejectedFollower(accountId, symbol, rejection);
           return;
         }
       }
