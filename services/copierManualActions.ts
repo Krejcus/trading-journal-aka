@@ -26,6 +26,7 @@ import {
   resolveLookup,
 } from './copierOutbox';
 import { netQuantityForSymbol } from './copierLiquidationRecovery';
+import { isTransientRemoteError } from '../lib/retryTransient';
 import type { CopierRuntime } from './copierRunner';
 import { toSnapshot, type CopierStore } from './copierStore';
 
@@ -74,6 +75,29 @@ export interface ManualFlattenOptions {
   confirmationPollMs?: number;
   accountConcurrency?: number;
   wait?: (ms: number) => Promise<void>;
+  /**
+   * Absolutní čas (`clock`), po kterém se už nečeká na potvrzení a nic se
+   * neopakuje; výsledek pak poctivě hlásí, co zůstalo neuzavřené.
+   */
+  deadlineAt?: number;
+  /** Prodleva mezi dalšími průchody účtů, které selhaly na přechodnou chybu brokera. */
+  retryPollMs?: number;
+  /**
+   * Nejvyšší počet stavově ověřených nativních liquidate pokusů na pozici
+   * (1 = žádné opakování). Opakuje se jen po `indeterminate` odpovědi, když
+   * čerstvé autoritativní čtení pozici stále ukazuje a žádný Market close
+   * na symbolu neběží; fallback Market cesta se neopakuje nikdy.
+   */
+  liquidateAttempts?: number;
+  /** Klasifikace přechodné chyby účtu (default: timeout, síť, 5xx, 429). */
+  isTransientError?: (message: string) => boolean;
+}
+
+interface AccountPipelineResult {
+  accountId: number;
+  canceledOrders: number;
+  submittedClosures: number;
+  error?: string;
 }
 
 const operationToken = (value: string) => {
@@ -158,6 +182,12 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
     ? Math.max(1, requestedConcurrency)
     : 5;
   const wait = options.wait ?? sleep;
+  const deadlineAt = options.deadlineAt ?? Number.POSITIVE_INFINITY;
+  const pastDeadline = () => options.clock() >= deadlineAt;
+  const retryPollMs = Math.max(0, Math.trunc(options.retryPollMs ?? 2_000));
+  const liquidateAttempts = Math.max(1, Math.trunc(options.liquidateAttempts ?? 2));
+  const isTransientError = options.isTransientError
+    ?? ((message: string) => isTransientRemoteError(new Error(message)));
   let commitTail: Promise<void> = Promise.resolve();
   let commitFailed = false;
   let commitFailure: unknown;
@@ -203,7 +233,10 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
   ) => {
     let entry = current;
     for (let attempt = 0; attempt < confirmationAttempts; attempt += 1) {
-      if (attempt > 0) await wait(confirmationPollMs);
+      if (attempt > 0) {
+        if (pastDeadline()) break;
+        await wait(confirmationPollMs);
+      }
       const lookup = await options.broker.findOrderById(accountId, brokerOrderId);
       entry = resolveCancelLookup(entry, lookup.order, lookup.completeness, options.clock());
       runtime.current.cancelOutbox.set(entry.key, entry);
@@ -215,26 +248,81 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
 
   const confirmPositionFlat = async (accountId: number, symbol: string) => {
     let netQuantity: number | null = null;
+    let openOrders: BrokerOrder[] = [];
     for (let attempt = 0; attempt < confirmationAttempts; attempt += 1) {
-      if (attempt > 0) await wait(confirmationPollMs);
+      if (attempt > 0) {
+        if (pastDeadline()) break;
+        await wait(confirmationPollMs);
+      }
       const positionsBefore = await options.broker.listPositions(accountId);
       const orders = await options.broker.listOrders(accountId);
       const positionsAfter = await options.broker.listPositions(accountId);
       const beforeNet = netQuantityForSymbol(positionsBefore, accountId, symbol);
       netQuantity = netQuantityForSymbol(positionsAfter, accountId, symbol);
+      openOrders = orders.filter(order => (
+        order.accountId === accountId
+        && order.symbol === symbol
+        && isOpenOrderStatus(order.status)
+      ));
       if (beforeNet === 0 && netQuantity === 0) {
-        return {
-          flat: true as const,
-          netQuantity,
-          workingOrders: orders.filter(order => (
-            order.accountId === accountId
-            && order.symbol === symbol
-            && isOpenOrderStatus(order.status)
-          )),
-        };
+        return { flat: true as const, netQuantity, workingOrders: openOrders };
       }
     }
-    return { flat: false as const, netQuantity, workingOrders: [] as BrokerOrder[] };
+    // Ne-flat výsledek nese poslední autoritativní čtení: net množství a
+    // aktivní příkazy symbolu, podle nichž se rozhoduje stavové opakování.
+    return { flat: false as const, netQuantity, workingOrders: [] as BrokerOrder[], openOrders };
+  };
+
+  /**
+   * Stavově ověřené opakování nativního liquidate. Nikdy slepě: pouze po
+   * `indeterminate` odpovědi (broker nic nepotvrdil), když čerstvé čtení
+   * pozici stále ukazuje a na symbolu neběží žádný Market close, který by
+   * mohl být tím prvním pokusem. Tradovate liquidateposition zavírá právě
+   * aktuální net pozici, takže opakování nemůže otevřít opačnou pozici.
+   */
+  const mayResendLiquidation = (
+    entry: ReturnType<typeof markLiquidationResult>,
+    confirmed: { netQuantity: number | null; openOrders?: BrokerOrder[] },
+  ) => (
+    isLiquidationOutboxEntry(entry)
+    && entry.status === 'unknown'
+    && entry.liquidationPhase === 'awaiting-state'
+    && entry.liquidationAttempt?.status === 'indeterminate'
+    && entry.attempts < liquidateAttempts
+    && confirmed.netQuantity != null
+    && confirmed.netQuantity !== 0
+    && !(confirmed.openOrders ?? []).some(order => order.orderType === 'Market')
+  );
+
+  // Účty, které selhaly jen na přechodnou chybu brokera (timeout, síť, 5xx),
+  // projdou do deadline znovu se stejným operationId. Durable položky
+  // outboxu zaručí, že se nic neodešle podruhé: další průchod jen dočte a
+  // dopotvrdí. Počty se sčítají, chyba se přepíše poslední známou.
+  const retryTransientAccountFailures = async (results: AccountPipelineResult[]) => {
+    for (;;) {
+      throwIfCommitFailed();
+      const retryIndexes = results.flatMap((item, index) => (
+        item.error !== undefined && isTransientError(item.error) ? [index] : []
+      ));
+      if (retryIndexes.length === 0 || pastDeadline()) return;
+      await wait(retryPollMs);
+      if (pastDeadline()) return;
+      const retried = await mapWithConcurrency(
+        retryIndexes.map(index => accountIds[index]),
+        accountConcurrency,
+        processAccount,
+      );
+      retryIndexes.forEach((index, position) => {
+        const previous = results[index];
+        const next = retried[position];
+        results[index] = {
+          accountId: previous.accountId,
+          canceledOrders: previous.canceledOrders + next.canceledOrders,
+          submittedClosures: previous.submittedClosures + next.submittedClosures,
+          ...(next.error !== undefined ? { error: next.error } : {}),
+        };
+      });
+    }
   };
 
   // Každý worker zpracuje účet samostatně. Když broker umí stavové nativní
@@ -242,7 +330,7 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
   // dočišťujeme případné orphan working orders. Starý unknown cancel/modify
   // tak nikdy nestojí před risk-redukčním close. Fallback bez nativního
   // liquidate zachovává bezpečné pořadí cancel → přesný Market close.
-  const pipelineResults = await mapWithConcurrency(accountIds, accountConcurrency, async accountId => {
+  const processAccount = async (accountId: number): Promise<AccountPipelineResult> => {
     let canceledOrders = 0;
     let submittedClosures = 0;
     try {
@@ -295,7 +383,27 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
               if (result.status === 'submitted') submittedClosures += 1;
             }
 
-            const confirmed = await confirmPositionFlat(accountId, position.symbol);
+            let confirmed = await confirmPositionFlat(accountId, position.symbol);
+            while (!confirmed.flat && !pastDeadline() && mayResendLiquidation(entry, confirmed)) {
+              entry = markLiquidationSending(entry, options.clock());
+              runtime.current.outbox.set(plan.key, entry);
+              await commitSerialized();
+              let retried: BrokerLiquidateResult;
+              try {
+                retried = await options.broker.liquidatePosition({
+                  tag: entry.tag,
+                  accountId,
+                  symbol: position.symbol,
+                });
+              } catch (reason) {
+                retried = { status: 'indeterminate', reason: errorMessage(reason) };
+              }
+              entry = markLiquidationResult(entry, retried, options.clock());
+              runtime.current.outbox.set(plan.key, entry);
+              await commitSerialized();
+              if (retried.status === 'submitted') submittedClosures += 1;
+              confirmed = await confirmPositionFlat(accountId, position.symbol);
+            }
             if (!confirmed.flat) {
               throw new Error(
                 `Flatten close ${position.symbol} není potvrzen stavem (net=${confirmed.netQuantity ?? 'neznámé'}); blind retry stejného operationId je zakázaný`,
@@ -434,7 +542,10 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
     } catch (reason) {
       return { accountId, canceledOrders, submittedClosures, error: errorMessage(reason) };
     }
-  });
+  };
+
+  const pipelineResults = await mapWithConcurrency(accountIds, accountConcurrency, processAccount);
+  await retryTransientAccountFailures(pipelineResults);
 
   throwIfCommitFailed();
 
@@ -446,7 +557,10 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
     error?: string;
   }> = [];
   for (let attempt = 0; attempt < confirmationAttempts; attempt += 1) {
-    if (attempt > 0) await wait(confirmationPollMs);
+    if (attempt > 0) {
+      if (pastDeadline()) break;
+      await wait(confirmationPollMs);
+    }
     finalState = await Promise.all(accountIds.map(async accountId => {
       try {
         const positionsBefore = await options.broker.listPositions(accountId);

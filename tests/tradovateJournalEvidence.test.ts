@@ -53,6 +53,22 @@ describe('journal broker evidence', () => {
     expect(projectJournalEvidence([order, fill, fee]).fills[0].fees).toBeNull();
     expect(projectJournalEvidence([order, fill, event('fill', { ...fill.entity, active: false } as Record<string, string | number | boolean>, 2_000)]).fills).toEqual([]);
   });
+  it('drops a short planned socket renewal once the new socket has re-synced the complete state', () => {
+    const rows = [event('connection', { state: 'synced' }, 100),
+      event('connection', { state: 'disconnected', reason: 'planned-renewal' }, 300),
+      event('connection', { state: 'disconnected', reason: 'planned-renewal' }, 301),
+      event('connection', { state: 'synced' }, 2_300)];
+    expect(projectJournalEvidence(rows).gaps).toEqual([]);
+  });
+  it('keeps a planned renewal that did not re-sync within a minute, and every unplanned disconnect', () => {
+    expect(projectJournalEvidence([event('connection', { state: 'disconnected', reason: 'planned-renewal' }, 300),
+      event('connection', { state: 'synced' }, 61_301)]).gaps).toEqual([{ from: 300, to: 61_301 }]);
+    expect(projectJournalEvidence([event('connection', { state: 'disconnected', reason: 'socket-close' }, 300),
+      event('connection', { state: 'synced' }, 500)]).gaps).toEqual([{ from: 300, to: 500 }]);
+    expect(projectJournalEvidence([event('connection', { state: 'disconnected', reason: 'planned-renewal' }, 300),
+      event('connection', { state: 'disconnected', reason: 'heartbeat-timeout' }, 400),
+      event('connection', { state: 'synced' }, 500)]).gaps).toEqual([]);
+  });
   it('marks gaps independently of successful snapshots and uses received-time labels for unknown times', () => {
     const rows = [event('connection', { state: 'starting' }, 100), event('connection', { state: 'synced' }, 200),
       event('connection', { state: 'disconnected' }, 300), event('connection', { state: 'disconnected' }, 400)];

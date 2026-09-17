@@ -402,6 +402,16 @@ export async function enqueueTradovateCopierCommand(options: {
     });
   }
 
+  // 17. 9. 2026: druhý Flatten All (15:58Z) vypršel ve frontě, protože worker
+  // 265 s vykonával ten první a příkazy zpracovává sériově. Risk-redukční
+  // Flatten se proto přichytí k už běžícímu/čekajícímu Flattenu stejného
+  // cíle místo nového záznamu: UI čeká na jeho výsledek a nikdy nevznikne
+  // druhá likvidace „na slepo" po tom, co se stav mezitím změnil.
+  const inFlight = await findInFlightFlatten({
+    db: options.db, userId: options.userId, deviceId: device.id, command: options.command, now,
+  });
+  if (inFlight) return { ...inFlight, deviceId: device.id };
+
   const expiresAt = new Date(now + 30_000).toISOString();
   const { data, error } = await options.db.from('tradovate_copier_commands').upsert({
     user_id: options.userId,
@@ -427,6 +437,34 @@ export async function enqueueTradovateCopierCommand(options: {
     .single<{ id: string; status: string; expires_at: string }>();
   if (existingError || !existing) throw new Error(`copier-relay-idempotency-lookup-failed: ${existingError?.message ?? 'missing'}`);
   return { id: existing.id, status: existing.status, expiresAt: existing.expires_at, deviceId: device.id };
+}
+
+const IN_FLIGHT_FLATTEN_WINDOW_MS = 5 * 60_000;
+
+/** Čekající (neexpirovaný) nebo právě vykonávaný Flatten stejného cíle, k němuž se nový požadavek přichytí. */
+async function findInFlightFlatten(options: {
+  db: SupabaseClient; userId: string; deviceId: string; command: LocalCopierAgentCommand; now: number;
+}): Promise<{ id: string; status: string; expiresAt: string } | null> {
+  if (options.command.type !== 'copy-command') return null;
+  const inner = (options.command as { command?: { type?: unknown; accountId?: unknown } }).command;
+  if (!inner || (inner.type !== 'flatten-group' && inner.type !== 'flatten-account')) return null;
+  const target = inner.type === 'flatten-account'
+    ? { type: inner.type, accountId: inner.accountId }
+    : { type: inner.type };
+  const nowIso = new Date(options.now).toISOString();
+  const { data, error } = await options.db.from('tradovate_copier_commands')
+    .select('id,status,expires_at')
+    .eq('user_id', options.userId)
+    .eq('device_id', options.deviceId)
+    .eq('command_type', 'copy-command')
+    .contains('payload', { command: target })
+    .gte('created_at', new Date(options.now - IN_FLIGHT_FLATTEN_WINDOW_MS).toISOString())
+    .or(`status.eq.claimed,and(status.eq.pending,expires_at.gt.${nowIso})`)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle<{ id: string; status: string; expires_at: string }>();
+  if (error) throw new Error(`copier-relay-inflight-lookup-failed: ${error.message}`);
+  return data ? { id: data.id, status: data.status, expiresAt: data.expires_at } : null;
 }
 
 export async function readTradovateCopierCommand(options: { db: SupabaseClient; userId: string; commandId: string }) {

@@ -17,6 +17,8 @@ type CopyCommand = Extract<LocalCopierAgentCommand, { type: 'copy-command' }>;
 function enqueueDb(
   upsert: (row: unknown, options: unknown) => void,
   runtimeStatus: LocalCopierAgentStatus | null = null,
+  inFlight: { id: string; status: string; expires_at: string } | null = null,
+  onInFlightLookup?: (calls: Array<[string, unknown[]]>) => void,
 ): SupabaseClient {
   const deviceQuery = {
     eq: () => deviceQuery,
@@ -46,10 +48,19 @@ function enqueueDb(
         return { select: () => deviceQuery };
       }
       if (table === 'tradovate_copier_commands') {
-        return { upsert: (row: unknown, options: unknown) => {
-          upsert(row, options);
-          return upsertQuery;
-        } };
+        const calls: Array<[string, unknown[]]> = [];
+        const inFlightQuery: Record<string, unknown> = {};
+        for (const method of ['eq', 'contains', 'gte', 'or', 'order', 'limit']) {
+          inFlightQuery[method] = (...args: unknown[]) => { calls.push([method, args]); return inFlightQuery; };
+        }
+        inFlightQuery.maybeSingle = async () => { onInFlightLookup?.(calls); return { data: inFlight, error: null }; };
+        return {
+          select: () => inFlightQuery,
+          upsert: (row: unknown, options: unknown) => {
+            upsert(row, options);
+            return upsertQuery;
+          },
+        };
       }
       if (table === 'tradovate_copier_device_runtime') {
         return { select: () => runtimeQuery };
@@ -231,6 +242,42 @@ describe('Tradovate copier command relay', () => {
       command: { type: 'device-paired', deviceId },
     })).rejects.toThrow('unsupported-relay-command');
     expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it.each<CopyCommand>([
+    { type: 'copy-command', command: { type: 'flatten-group', groupId: 'group-1', operationId: 'flatten-all-2' } },
+    { type: 'copy-command', command: { type: 'flatten-account', groupId: 'group-1', accountId: 42, operationId: 'flatten-one-2' } },
+  ])('$command.type se přichytí k už běžícímu Flattenu stejného cíle místo druhé likvidace', async command => {
+    // 17. 9. 2026: druhý Flatten All vypršel ve frontě, protože worker 265 s
+    // vykonával první; UI má čekat na výsledek toho běžícího.
+    const upsert = vi.fn();
+    let lookup: Array<[string, unknown[]]> = [];
+    const queued = await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert, null, { id: 'running-flatten', status: 'claimed', expires_at: '2026-08-21T12:00:30.000Z' }, calls => { lookup = calls; }),
+      userId, connectionId, command, now: Date.parse('2026-08-21T12:03:00.000Z'),
+    });
+    expect(queued).toEqual({ id: 'running-flatten', status: 'claimed', expiresAt: '2026-08-21T12:00:30.000Z', deviceId });
+    expect(upsert).not.toHaveBeenCalled();
+    expect(lookup).toContainEqual(['contains', ['payload', { command: command.command.type === 'flatten-account'
+      ? { type: 'flatten-account', accountId: 42 } : { type: 'flatten-group' } }]]);
+    expect(lookup).toContainEqual(['or', ['status.eq.claimed,and(status.eq.pending,expires_at.gt.2026-08-21T12:03:00.000Z)']]);
+  });
+
+  it('bez běžícího Flattenu vznikne nový příkaz a ARM se k Flattenu nikdy nepřichytí', async () => {
+    const upsert = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert, null, null), userId, connectionId,
+      command: { type: 'copy-command', command: { type: 'flatten-group', groupId: 'group-1', operationId: 'flatten-all-3' } },
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    expect(upsert).toHaveBeenCalledTimes(1);
+    const lookups = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert, null, { id: 'running-flatten', status: 'claimed', expires_at: '2026-08-21T12:00:30.000Z' }, lookups),
+      userId, connectionId, command: { type: 'disarm' }, now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    expect(upsert).toHaveBeenCalledTimes(2);
+    expect(lookups).not.toHaveBeenCalled();
   });
 
   it('claim vrátí flatten command beze změny', async () => {

@@ -82,6 +82,8 @@ export interface JournalFill {
   fees: number | null;
   feeCurrencyId: number | null;
 }
+/** Longest planned renewal that still counts as a seamless resync, not an outage. */
+export const PLANNED_RENEWAL_GAP_MS = 60_000;
 export interface JournalProjection {
   fills: JournalFill[];
   protection: JournalProtectionEvent[];
@@ -136,12 +138,20 @@ export function projectJournalEvidence(events: readonly JournalEvidence[]): Jour
   }
   const ordered = orderedJournalEvidence(events);
   const tables = new Map<JournalEntityType, Map<string, JournalEvidence>>();
+  let openGapReason: unknown = null;
   for (const event of ordered) {
     if (event.entityType === 'connection') {
       const last = result.gaps.at(-1);
       if (event.entity.state !== 'synced') {
-        if (!last || last.to != null) result.gaps.push({ from: event.receivedAt, to: null });
-      } else if (last && last.to == null) last.to = event.receivedAt;
+        if (!last || last.to != null) { result.gaps.push({ from: event.receivedAt, to: null }); openGapReason = event.entity.reason; }
+      } else if (last && last.to == null) {
+        last.to = event.receivedAt;
+        // A planned socket renewal closes the stream on purpose and the new
+        // socket re-syncs the complete broker state within seconds, so no
+        // fill can be missing. Only a renewal that failed (long outage) stays a gap.
+        if (openGapReason === 'planned-renewal' && last.to - last.from <= PLANNED_RENEWAL_GAP_MS) result.gaps.pop();
+        openGapReason = null;
+      }
       continue;
     }
     if (event.entity.id == null) result.issues.push(`missing-id:${event.id}`);

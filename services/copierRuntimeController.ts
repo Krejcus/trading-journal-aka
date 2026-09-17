@@ -68,6 +68,7 @@ import {
   createMemoryCopierStore,
   toSnapshot,
 } from './copierStore';
+import { retryTransient } from '../lib/retryTransient';
 import {
   DEFAULT_COPY_GROUP_SAFETY,
   sanitizeCopyGroupSafety,
@@ -526,8 +527,19 @@ export interface BootstrapCopierOptions {
   flattenConfirmationAttempts?: number;
   flattenConfirmationPollMs?: number;
   flattenAccountConcurrency?: number;
-  /** Deadline jednoho broker callu v prioritní ruční Flatten lane. */
+  /** Deadline jednoho broker callu v prioritní ruční Flatten lane (default 20 s, nad 15s REST timeoutem brokeru). */
   flattenBrokerRequestTimeoutMs?: number;
+  /**
+   * Kolik času smí prioritní Flatten věnovat opakování čtení (positions,
+   * orders, lookup) po timeoutu/5xx brokera. Zápisy se neopakují.
+   */
+  flattenRetryBudgetMs?: number;
+  /** Celkový deadline jednoho Flatten příkazu; po něm se vrátí poctivý částečný výsledek. */
+  flattenDeadlineMs?: number;
+  /** Nejvyšší počet stavově ověřených nativních liquidate pokusů na pozici. */
+  flattenLiquidateAttempts?: number;
+  /** Prodleva mezi dalšími průchody účtů, které selhaly na přechodnou chybu. */
+  flattenRetryPollMs?: number;
   wait?: (ms: number) => Promise<void>;
   /**
    * Read-only zdroj „followeři právě neviditelní v žádném připojeném OAuth
@@ -3308,7 +3320,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         live.osoOutbox.values(),
       ));
       const isolatedRuntime = runtimeFromSnapshot(await isolatedStore.load());
-      const requestTimeoutMs = Math.max(250, options.flattenBrokerRequestTimeoutMs ?? 5_000);
+      const requestTimeoutMs = Math.max(250, options.flattenBrokerRequestTimeoutMs ?? 20_000);
       const withEmergencyDeadline = <T>(label: string, operation: () => Promise<T>): Promise<T> => {
         let timeout: ReturnType<typeof setTimeout> | undefined;
         const deadline = new Promise<never>((_resolve, reject) => {
@@ -3320,6 +3332,25 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           if (timeout) clearTimeout(timeout);
         });
       };
+      // 17. 9. 2026: Flatten All zavřel 5/12 účtů, protože jediný 5s timeout
+      // čtení pozic byl konečný. Čtení jsou idempotentní, takže se po
+      // timeoutu/síťové chybě/5xx opakují s rostoucí prodlevou uvnitř
+      // rozpočtu a nikdy za celkový deadline. Zápisy (liquidate, cancel)
+      // zůstávají u jediného odeslání; jejich výsledek dokazuje jen
+      // autoritativní čtení (u nativního liquidate stavově ověřený resend).
+      const flattenDeadlineAt = clock() + Math.max(1_000, options.flattenDeadlineMs ?? 180_000);
+      const retryBudgetMs = Math.max(0, options.flattenRetryBudgetMs ?? 60_000);
+      const emergencyWait = options.wait ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
+      const readWithRetry = <T>(label: string, operation: () => Promise<T>): Promise<T> => retryTransient(
+        () => withEmergencyDeadline(label, operation),
+        {
+          deadlineMs: Math.min(retryBudgetMs, Math.max(0, flattenDeadlineAt - clock())),
+          initialDelayMs: 1_000,
+          maxDelayMs: 5_000,
+          sleep: emergencyWait,
+          clock,
+        },
+      );
       // Deadline je schválně pouze na nouzové lane. Nezastavuje ani
       // nepřepisuje běžné broker operace; u stavového liquidate znamená
       // timeout „indeterminate“ a následuje pouze autoritativní read.
@@ -3333,17 +3364,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           `cancel ${accountId}/${brokerOrderId}`,
           () => broker.cancelOrder(accountId, brokerOrderId),
         ),
-        listPositions: accountId => withEmergencyDeadline(
+        listPositions: accountId => readWithRetry(
           `positions ${accountId}`,
           () => broker.listPositions(accountId),
         ),
-        listOrders: accountId => withEmergencyDeadline(
+        listOrders: accountId => readWithRetry(
           `orders ${accountId}`,
           () => broker.listOrders(accountId),
         ),
-        findOrderById: (accountId, brokerOrderId) => withEmergencyDeadline(
+        findOrderById: (accountId, brokerOrderId) => readWithRetry(
           `order ${accountId}/${brokerOrderId}`,
           () => broker.findOrderById(accountId, brokerOrderId),
+        ),
+        findOrdersByTag: (accountId, tag) => readWithRetry(
+          `orders-by-tag ${accountId}/${tag}`,
+          () => broker.findOrdersByTag(accountId, tag),
         ),
       };
       const processed = await processManualFlatten({
@@ -3359,6 +3394,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         confirmationPollMs: options.flattenConfirmationPollMs,
         accountConcurrency: options.flattenAccountConcurrency,
         wait: options.wait,
+        deadlineAt: flattenDeadlineAt,
+        retryPollMs: options.flattenRetryPollMs,
+        liquidateAttempts: options.flattenLiquidateAttempts,
       });
       const result = processed.result;
       workingOrderAccounts = new Set(result.workingOrderAccounts);

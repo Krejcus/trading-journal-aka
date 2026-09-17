@@ -1857,6 +1857,8 @@ describe('bootstrapCopierRuntime', () => {
       flattenConfirmationAttempts: 1,
       flattenConfirmationPollMs: 0,
       flattenBrokerRequestTimeoutMs: 10,
+      // Test hlídá deadline, ne stavově ověřený resend (ten má vlastní testy).
+      flattenLiquidateAttempts: 1,
       wait: async () => undefined,
     });
 
@@ -1872,6 +1874,48 @@ describe('bootstrapCopierRuntime', () => {
       armed: false,
       reconciliationRequired: true,
     });
+    controller.stop();
+  });
+
+  it('prioritní Flatten opakuje čtení pozic po timeoutu brokera místo vzdání účtu', async () => {
+    // 17. 9. 2026: sedm followerů selhalo na jediný 5s timeout `positions`.
+    const broker = createMockBroker({ nativeLiquidate: true });
+    broker.setPosition(200, 'MNQU6', 1);
+    const originalListPositions = broker.listPositions.bind(broker);
+    let reads = 0;
+    broker.listPositions = async accountId => {
+      reads += 1;
+      if (reads === 1) return new Promise<never>(() => undefined);
+      return originalListPositions(accountId);
+    };
+    const native = broker.liquidatePosition!.bind(broker);
+    const liquidate = vi.fn(async (request: Parameters<typeof native>[0]) => native(request));
+    broker.liquidatePosition = liquidate;
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      flattenConfirmationAttempts: 2,
+      flattenConfirmationPollMs: 0,
+      flattenBrokerRequestTimeoutMs: 10,
+      flattenRetryBudgetMs: 5_000,
+      flattenRetryPollMs: 0,
+      wait: async () => undefined,
+    });
+
+    const result = await Promise.race([
+      controller.flattenAccount(200, 'manual-priority-read-retry-001'),
+      new Promise<never>((_resolve, reject) => setTimeout(
+        () => reject(new Error('Flatten nevrátil řízený výsledek')),
+        2_000,
+      )),
+    ]);
+
+    expect(result).toMatchObject({ accountIds: [200], flat: true, failedAccounts: [], submittedClosures: 1 });
+    expect(liquidate).toHaveBeenCalledTimes(1);
+    expect(reads).toBeGreaterThan(1);
+    expect(await broker.listPositions(200)).toEqual([expect.objectContaining({ netQuantity: 0 })]);
     controller.stop();
   });
 

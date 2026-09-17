@@ -171,6 +171,12 @@ export interface TradovateBrokerConfig {
   syncTimeoutMs?: number;
   socketIdleTimeoutMs?: number;
   /**
+   * Deadline jednoho REST volání včetně čtení těla. Bez něj visel hung
+   * fetch až 5 minut (undici default) a blokoval eventTail: risk poll,
+   * post-reconnect recovery i nouzový Flatten čekaly za ním (17. 9. 2026).
+   */
+  restRequestTimeoutMs?: number;
+  /**
    * Lidský štítek OAuth spojení do chybových hlášek. U multi-connection
    * runtime bez něj nejde z logu poznat, KTERÉ spojení vypadlo (živý případ:
    * „odpojil se Lucid?" nešlo z `transport error` vůbec vyčíst).
@@ -180,6 +186,14 @@ export interface TradovateBrokerConfig {
   renewalDeadlineMs?: number;
   /** Jak dlouho po command ACK čekat na autoritativní Order update ze sync streamu. */
   commandConfirmationTimeoutMs?: number;
+}
+
+/** Stav + text odpovědi Tradovate do chybové hlášky (do logu; bez tokenů). */
+function socketFailureDetail(value: { s?: unknown; d?: unknown }): string {
+  const status = typeof value.s === 'number' ? ` s=${value.s}` : '';
+  const body = typeof value.d === 'string' ? value.d : value.d == null ? '' : JSON.stringify(value.d);
+  const detail = body ? ` ${body.slice(0, 200)}` : '';
+  return status || detail ? ` (${(status + detail).trim()})` : '';
 }
 
 export class TradovateTransportError extends Error {
@@ -457,62 +471,87 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     return value.trim();
   };
 
+  const restRequestTimeoutMs = Math.max(1, config.restRequestTimeoutMs ?? 15_000);
   const requestRaw = async <T>(path: string, init: RequestInit = {}, allowNotFound = false, maxResponseBytes?: number): Promise<T | null> => {
     if (!fetchImpl) throw new TradovateTransportError('fetch is unavailable');
     assertNotRateLimited();
     const accessToken = await token();
     init.signal?.throwIfAborted();
-    const response = await fetchImpl(`${hosts.rest}${path}`, {
-      ...init,
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-        ...(init.body != null ? { 'Content-Type': 'application/json' } : {}),
-        ...init.headers,
-      },
-    });
-    if (allowNotFound && response.status === 404) return null;
-    if (response.status === 423 || response.status === 429) {
-      const error = new TradovateRateLimitError(
-        `Tradovate ${path} rate limited (${response.status})`,
-        response.status === 429 ? 60 * 60 * 1_000 : null,
-        response.status === 429,
-        undefined,
-        response.status,
-      );
-      armRateLimitBreaker(error);
-      void response.body?.cancel().catch(() => {});
-      throw error;
-    }
-    const text = maxResponseBytes == null ? await response.text() : await readJournalResponseText(response, maxResponseBytes);
-    if (!response.ok) {
-      throw new TradovateTransportError(
-        `Tradovate ${path} failed (${response.status}): ${text.slice(0, 500)}`,
-        response.status,
-      );
-    }
-    if (!text) return null;
+    // Jeden deadline na celé volání včetně čtení těla. Hung REST nikdy nesmí
+    // držet eventTail (risk poll, recovery, Flatten) déle než tento limit.
+    const abort = new AbortController();
+    const timeoutError = new TradovateTransportError(`Tradovate ${path} request timeout (${restRequestTimeoutMs} ms)`);
+    const timer = timeouts(() => abort.abort(timeoutError), restRequestTimeoutMs);
+    const forwardAbort = () => abort.abort(init.signal?.reason);
+    init.signal?.addEventListener('abort', forwardAbort, { once: true });
+    const timedOut = (reason: unknown) => (abort.signal.aborted && abort.signal.reason === timeoutError ? timeoutError : reason);
     try {
-      const parsed = JSON.parse(text) as T & {
-        'p-ticket'?: string;
-        'p-time'?: number;
-        'p-captcha'?: boolean;
-        'p-message'?: string;
-      };
-      if (parsed && typeof parsed === 'object' && parsed['p-ticket']) {
+      let response: Response;
+      try {
+        response = await fetchImpl(`${hosts.rest}${path}`, {
+          ...init,
+          signal: abort.signal,
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+            ...(init.body != null ? { 'Content-Type': 'application/json' } : {}),
+            ...init.headers,
+          },
+        });
+      } catch (reason) {
+        throw timedOut(reason);
+      }
+      if (allowNotFound && response.status === 404) return null;
+      if (response.status === 423 || response.status === 429) {
         const error = new TradovateRateLimitError(
-          parsed['p-message'] ?? `Tradovate ${path} returned a penalty ticket`,
-          Number.isFinite(parsed['p-time']) ? (parsed['p-time'] as number) * 1_000 : null,
-          parsed['p-captcha'] === true,
-          parsed['p-ticket'],
+          `Tradovate ${path} rate limited (${response.status})`,
+          response.status === 429 ? 60 * 60 * 1_000 : null,
+          response.status === 429,
+          undefined,
+          response.status,
         );
         armRateLimitBreaker(error);
+        void response.body?.cancel().catch(() => {});
         throw error;
       }
-      return parsed;
-    } catch (error) {
-      if (error instanceof TradovateRateLimitError) throw error;
-      throw new TradovateTransportError(`Tradovate ${path} returned malformed JSON`);
+      let text: string;
+      try {
+        text = maxResponseBytes == null ? await response.text() : await readJournalResponseText(response, maxResponseBytes);
+      } catch (reason) {
+        throw timedOut(reason);
+      }
+      if (!response.ok) {
+        throw new TradovateTransportError(
+          `Tradovate ${path} failed (${response.status}): ${text.slice(0, 500)}`,
+          response.status,
+        );
+      }
+      if (!text) return null;
+      try {
+        const parsed = JSON.parse(text) as T & {
+          'p-ticket'?: string;
+          'p-time'?: number;
+          'p-captcha'?: boolean;
+          'p-message'?: string;
+        };
+        if (parsed && typeof parsed === 'object' && parsed['p-ticket']) {
+          const error = new TradovateRateLimitError(
+            parsed['p-message'] ?? `Tradovate ${path} returned a penalty ticket`,
+            Number.isFinite(parsed['p-time']) ? (parsed['p-time'] as number) * 1_000 : null,
+            parsed['p-captcha'] === true,
+            parsed['p-ticket'],
+          );
+          armRateLimitBreaker(error);
+          throw error;
+        }
+        return parsed;
+      } catch (error) {
+        if (error instanceof TradovateRateLimitError) throw error;
+        throw new TradovateTransportError(`Tradovate ${path} returned malformed JSON`);
+      }
+    } finally {
+      clearTimeouts(timer);
+      init.signal?.removeEventListener('abort', forwardAbort);
     }
   };
 
@@ -1081,13 +1120,13 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       return;
     }
     if (value.i === 0) {
-      if (value.s !== 200) throw new TradovateTransportError('WebSocket authorization failed');
+      if (value.s !== 200) throw new TradovateTransportError(`WebSocket authorization failed${socketFailureDetail(value)}`);
       socketState = 'syncing';
       sendSocketRequest('user/syncrequest', syncRequestBody, 1);
       return;
     }
     if (value.i === 1) {
-      if (value.s !== 200) throw new TradovateTransportError('WebSocket synchronization failed');
+      if (value.s !== 200) throw new TradovateTransportError(`WebSocket synchronization failed${socketFailureDetail(value)}`);
       if (Array.isArray(value.d)) await handleProps(value.d);
       if (!syncReady) {
         const baseline = await loadOrderGraph();
@@ -1379,7 +1418,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       if (!renewalInProgress && socketState !== 'closing') {
         emit({ type: 'connection', connected: false, at: clock() });
       }
-      observe('connection', { state: 'disconnected', reason: 'socket-close' }, 'transport');
+      // Plánovaná obměna socketu není výpadek: projekce journalu ji podle
+      // důvodu odliší od skutečné ztráty streamu (viz projectJournalEvidence).
+      observe('connection', { state: 'disconnected', reason: renewalInProgress ? 'planned-renewal' : 'socket-close' }, 'transport');
       releaseSocket(candidate);
       scheduleReconnect(renewalInProgress ? 'planned-renewal' : 'socket-close');
     };

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Account } from '../types.js';
 import { projectJournalAccounts } from '../lib/journalAccountProjection.js';
@@ -41,6 +42,28 @@ export async function importJournalPositions(db: SupabaseClient, scope: JournalF
       confirmed: checkpoint.confirmed, pending: checkpoint.pending, unassigned: checkpoint.unassigned };
   }
 
+  // 17. 9. 2026: web, iPhone a localhost importovaly totéž připojení naráz;
+  // každý commit posunul generaci ostatním a jejich snapshot čtení padalo na
+  // `journal-input-changed`. Jeden importér na připojení; ostatní dostanou
+  // `processing` a přijdou s dalším cyklem.
+  const holder = randomUUID();
+  const { data: acquired, error: leaseError } = await db.rpc('claim_journal_import_lease', {
+    p_user_id: scope.ownerId, p_connection_id: scope.connectionId, p_holder: holder, p_ttl_ms: JOURNAL_IMPORT_LEASE_MS,
+  });
+  if (leaseError) throw new Error('journal-lease-unavailable');
+  if (acquired !== true) return { accepted: false, processing: true, through: 0, targetThrough: 0, confirmed: 0, pending: 0, unassigned: 0 };
+  try {
+    return await importWithLease(db, scope);
+  } finally {
+    await db.rpc('release_journal_import_lease', { p_user_id: scope.ownerId, p_connection_id: scope.connectionId, p_holder: holder })
+      .then(() => undefined, () => undefined);
+  }
+}
+
+/** Longest single import a holder may run before another importer may take over. */
+export const JOURNAL_IMPORT_LEASE_MS = 120_000;
+
+async function importWithLease(db: SupabaseClient, scope: JournalFeedScope): Promise<JournalImportResult> {
   const input=await prepareJournalInput(db,scope);
   const through=input.through;
   if (!input.ready) return { accepted:false,processing:true,through,targetThrough:input.targetThrough,confirmed:0,pending:0,unassigned:0 };

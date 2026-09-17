@@ -87,6 +87,20 @@ const harness = () => {
 };
 
 describe('plynulá obměna socketu', () => {
+  it('journal evidence označí plánovanou obměnu důvodem planned-renewal, ne jako ztrátu streamu', async () => {
+    const { broker, sockets, unsubscribe } = harness();
+    const observed: string[] = [];
+    const stopEvidence = broker.subscribeEvidence(observation => {
+      if (observation.entityType === 'connection') observed.push(`${observation.entity.state}:${observation.entity.reason ?? ''}`);
+    });
+    await completeHandshake(sockets[0]);
+    expect(broker.renewSocket()).toBe(true);
+    await flush();
+    expect(observed.filter(row => row.startsWith('disconnected'))).toEqual(['disconnected:planned-renewal', 'disconnected:planned-renewal']);
+    stopEvidence();
+    unsubscribe();
+  });
+
   it('úspěšný swap nikdy neukáže disconnect a starý socket zavře', async () => {
     const { broker, sockets, connections, errors, events, unsubscribe } = harness();
     await completeHandshake(sockets[0]);

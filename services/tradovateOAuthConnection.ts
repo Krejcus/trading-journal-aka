@@ -289,7 +289,14 @@ export async function executeTradovateCopierRelayCommand(
       details,
     );
   }
-  const deadline = Math.min(Date.parse(queued.expiresAt) + 5_000, Date.now() + 35_000);
+  // Nouzový Flatten smí u pomalého brokera běžet i minuty (retry čtení,
+  // stavové potvrzení); server ho navíc přichytí k už běžícímu Flattenu,
+  // takže jeho expirace před claimem tady není směrodatná.
+  const riskReducing = command.type === 'copy-command'
+    && (command.command.type === 'flatten-group' || command.command.type === 'flatten-account');
+  const deadline = riskReducing
+    ? Date.now() + 240_000
+    : Math.min(Date.parse(queued.expiresAt) + 5_000, Date.now() + 35_000);
   while (Date.now() < deadline) {
     const result = await authenticatedRequest<{ status: string; result?: unknown; error?: string }>(
       `/api/tradovate/oauth/copier-relay?connectionId=${encodeURIComponent(connectionId)}&commandId=${encodeURIComponent(queued.id)}`,

@@ -31,6 +31,16 @@ describe('durable journal evidence', () => {
     await third.close();
     expect((await readFile(options.path, 'utf8')).trim().split('\n')).toHaveLength(1);
   });
+  it('returns to recording once a later upload is acknowledged', async () => {
+    const options = await setup();
+    const store = await createFileJournalEvidenceStore(options);
+    store.record(observation);
+    await expect(store.flush(async () => { throw new Error('The operation was aborted due to timeout'); })).rejects.toThrow('timeout');
+    expect(store.health()).toMatchObject({ state: 'degraded', error: 'The operation was aborted due to timeout' });
+    await store.flush(async () => undefined);
+    expect(store.health()).toMatchObject({ state: 'recording', error: null });
+    await store.close();
+  });
   it('uses bounded batches and keeps events appended during an upload', async () => {
     const options = await setup();
     const store = await createFileJournalEvidenceStore(options);

@@ -87,6 +87,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (error instanceof TradovateLivePnlError && error.status === 429) {
       return res.status(429).json({ error: 'tradovate-rate-limited', retryAfterMs: 3_600_000 });
     }
+    // A slow broker is not a broken route: report it as a timeout so logs
+    // and clients can tell Tradovate latency from a real failure.
+    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+      console.warn('[tradovate-live-pnl] Tradovate read timed out');
+      return res.status(504).json({ error: 'tradovate-timeout', retryAfterMs: 15_000 });
+    }
     console.error('[tradovate-live-pnl] Read-only tick failed:', message);
     return res.status(502).json({ error: 'tradovate-live-pnl-failed' });
   }

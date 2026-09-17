@@ -10,6 +10,8 @@ const receipt = { accepted: true, unchanged: true, through: 73, confirmed: 12, p
 const rpc = vi.fn();
 const from = vi.fn(() => { throw new Error('unexpected-table-read'); });
 const db = { rpc, from } as unknown as SupabaseClient;
+const byName = (answers: Record<string, unknown>) => rpc.mockImplementation(async (name: string) => (
+  { data: name in answers ? answers[name] : name === 'claim_journal_import_lease' ? true : null, error: null }));
 beforeEach(() => { vi.clearAllMocks(); rpc.mockResolvedValue({ data: receipt, error: null });
   mocks.read.mockRejectedValue(new Error('full-import-required')); });
 
@@ -22,9 +24,31 @@ describe('server import checkpoint trust boundary', () => {
     expect(mocks.read).not.toHaveBeenCalled(); expect(from).not.toHaveBeenCalled();
   });
   it('continues the full import when the database has no matching checkpoint', async () => {
-    rpc.mockResolvedValue({ data: null, error: null });
+    byName({ read_journal_import_checkpoint: null });
     await expect(importJournalPositions(db, scope)).rejects.toThrow('full-import-required');
     expect(mocks.read).toHaveBeenCalledExactlyOnceWith(db, scope);
+  });
+  it('claims one import lease per connection and releases it even after a failed import', async () => {
+    byName({ read_journal_import_checkpoint: null });
+    await expect(importJournalPositions(db, scope)).rejects.toThrow('full-import-required');
+    const claim = rpc.mock.calls.find(([name]) => name === 'claim_journal_import_lease');
+    const release = rpc.mock.calls.find(([name]) => name === 'release_journal_import_lease');
+    expect(claim?.[1]).toMatchObject({ p_user_id: scope.ownerId, p_connection_id: scope.connectionId, p_ttl_ms: 120_000 });
+    expect(release?.[1]).toEqual({ p_user_id: scope.ownerId, p_connection_id: scope.connectionId, p_holder: (claim?.[1] as { p_holder: string }).p_holder });
+    expect(rpc.mock.calls.map(([name]) => name).indexOf('release_journal_import_lease'))
+      .toBeGreaterThan(rpc.mock.calls.map(([name]) => name).indexOf('claim_journal_import_lease'));
+  });
+  it('answers processing without reading evidence while another importer holds the lease', async () => {
+    byName({ read_journal_import_checkpoint: null, claim_journal_import_lease: false });
+    expect(await importJournalPositions(db, scope)).toEqual({ accepted: false, processing: true, through: 0, targetThrough: 0, confirmed: 0, pending: 0, unassigned: 0 });
+    expect(mocks.read).not.toHaveBeenCalled();
+    expect(rpc.mock.calls.map(([name]) => name)).not.toContain('release_journal_import_lease');
+  });
+  it('fails closed when the lease cannot be claimed at all', async () => {
+    rpc.mockImplementation(async (name: string) => name === 'claim_journal_import_lease'
+      ? { data: null, error: { message: 'connection pool exhausted' } } : { data: null, error: null });
+    await expect(importJournalPositions(db, scope)).rejects.toThrow('journal-lease-unavailable');
+    expect(mocks.read).not.toHaveBeenCalled();
   });
   it('accepts a stored empty snapshot and pending counts without fabricating confirmed trades', async () => {
     for (const next of [{ ...receipt, through: 0, confirmed: 0 }, { ...receipt, confirmed: 0, pending: 12, unassigned: 1 }]) {

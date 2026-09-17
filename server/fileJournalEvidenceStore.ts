@@ -217,6 +217,9 @@ export async function createFileJournalEvidenceStore(options: {
       await rename(tmp, cursorPath);
       cursor = next;
       health.lastUploadedAt = Date.now();
+      // A durable remote ACK proves the pipeline works again; a stale upload
+      // error must not keep the recorder reported as degraded.
+      if (!writeFailed && lostFrom == null) { health.state = 'recording'; health.error = null; }
       if (health.pending != null) health.pending = Math.max(queue.length, health.pending - events.length);
     })().catch(error => { fail(error); throw error; }).finally(() => { uploading = null; });
     return uploading;

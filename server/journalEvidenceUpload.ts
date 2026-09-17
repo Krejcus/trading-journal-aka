@@ -28,7 +28,9 @@ export function createJournalBatchUploader(options: {
   const endpoint = journalUploadUrl(options.apiOrigin);
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   return async (events: readonly JournalEvidence[], shutdownSignal?: AbortSignal) => {
-    const timeout = AbortSignal.timeout(options.timeoutMs ?? 10_000);
+    // 10 s nestačilo, když API čekalo na PostgREST pool: každý timeout
+    // přepnul zapisovač do `degraded`, ačkoli další pokus prošel.
+    const timeout = AbortSignal.timeout(options.timeoutMs ?? 30_000);
     const signal = shutdownSignal ? AbortSignal.any([timeout, shutdownSignal]) : timeout;
     const authorization = await abortable(options.authorizationHeader(), signal);
     const response = await abortable(fetchImpl(endpoint, {

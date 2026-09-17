@@ -259,3 +259,135 @@ describe('manual Flatten native state confirmation', () => {
     expect(broker.placedRequests()).toHaveLength(0);
   });
 });
+
+/**
+ * 17. 9. 2026: sedm followerů selhalo na jediný REST timeout a Flatten je
+ * vzdal. Přechodné chyby se do deadline opakují; nativní liquidate se po
+ * `indeterminate` odpovědi pošle znovu jen se stavovým důkazem.
+ */
+describe('manual Flatten transient failures and state-verified resend', () => {
+  const marketOrder = (status: 'working' | 'filled' = 'working') => ({
+    tag: 'close-in-flight', brokerOrderId: 'market-1', accountId, symbol, side: 'Sell' as const,
+    orderType: 'Market' as const, quantity: 1, filledQuantity: 0, status, updatedAt: 1,
+  });
+  const run = async (broker: ReturnType<typeof createMockBroker>, operationId: string, extra: {
+    confirmationAttempts?: number; deadlineAt?: number; liquidateAttempts?: number; clock?: () => number;
+  } = {}) => {
+    const store = createMemoryCopierStore();
+    const processed = await processManualFlatten({
+      runtime: runtimeFromSnapshot(await store.load()),
+      broker, store, groupId, accountIds: [accountId], operationId,
+      clock: extra.clock ?? stepClock(),
+      confirmationAttempts: extra.confirmationAttempts ?? 2,
+      confirmationPollMs: 0, retryPollMs: 0, wait: async () => undefined,
+      ...(extra.deadlineAt !== undefined ? { deadlineAt: extra.deadlineAt } : {}),
+      ...(extra.liquidateAttempts !== undefined ? { liquidateAttempts: extra.liquidateAttempts } : {}),
+    });
+    return { ...processed, store };
+  };
+
+  it('resends native liquidate once after an indeterminate reply when the position is still open and no Market close is in flight', async () => {
+    const broker = createMockBroker({ nativeLiquidate: true });
+    broker.setPosition(accountId, symbol, 1);
+    const native = broker.liquidatePosition!.bind(broker);
+    const liquidate = vi.fn(async (request: Parameters<typeof native>[0]): Promise<BrokerLiquidateResult> => (
+      liquidate.mock.calls.length === 1 ? { status: 'indeterminate', reason: 'Flatten broker request timeout (liquidate, 20000 ms)' } : native(request)
+    ));
+    broker.liquidatePosition = liquidate;
+
+    const { result, store } = await run(broker, 'resend-after-indeterminate-001');
+
+    expect(liquidate).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ flat: true, submittedClosures: 1, failedAccounts: [] });
+    expect((await store.load()).outbox[0]).toMatchObject({ attempts: 2, status: 'confirmed-by-state' });
+  });
+
+  it('never resends while an open Market order on the symbol may be the first close', async () => {
+    const broker = createMockBroker({ nativeLiquidate: true });
+    broker.setPosition(accountId, symbol, 1);
+    const liquidate = vi.fn(async (): Promise<BrokerLiquidateResult> => ({ status: 'indeterminate', reason: 'socket hang up' }));
+    broker.liquidatePosition = liquidate;
+    broker.listOrders = async () => [marketOrder()];
+
+    const { result } = await run(broker, 'no-resend-market-in-flight-001');
+
+    expect(liquidate).toHaveBeenCalledTimes(1);
+    expect(result.flat).toBe(false);
+    expect(result.accounts[0].error).toContain('není potvrzen stavem');
+  });
+
+  it('never resends after the broker acknowledged the liquidate, even when the position lingers', async () => {
+    const broker = createMockBroker({ nativeLiquidate: true });
+    broker.setPosition(accountId, symbol, 1);
+    const liquidate = vi.fn(async (): Promise<BrokerLiquidateResult> => ({ status: 'submitted', brokerOrderId: 'ack-1' }));
+    broker.liquidatePosition = liquidate;
+
+    const { result } = await run(broker, 'no-resend-after-ack-001');
+
+    expect(liquidate).toHaveBeenCalledTimes(1);
+    expect(result.flat).toBe(false);
+  });
+
+  it('honours liquidateAttempts=1 as the historical single-send policy', async () => {
+    const broker = createMockBroker({ nativeLiquidate: true });
+    broker.setPosition(accountId, symbol, 1);
+    const liquidate = vi.fn(async (): Promise<BrokerLiquidateResult> => ({ status: 'indeterminate', reason: 'timeout' }));
+    broker.liquidatePosition = liquidate;
+
+    const { result } = await run(broker, 'single-send-policy-001', { liquidateAttempts: 1 });
+
+    expect(liquidate).toHaveBeenCalledTimes(1);
+    expect(result.flat).toBe(false);
+  });
+
+  it('retries an account whose first position read timed out and still closes it', async () => {
+    const broker = createMockBroker({ nativeLiquidate: true });
+    broker.setPosition(accountId, symbol, 1);
+    const originalList = broker.listPositions.bind(broker);
+    let reads = 0;
+    broker.listPositions = async id => {
+      reads += 1;
+      if (reads === 1) throw new Error('Flatten broker request timeout (positions 200, 20000 ms)');
+      return originalList(id);
+    };
+    const native = broker.liquidatePosition!.bind(broker);
+    const liquidate = vi.fn(async (request: Parameters<typeof native>[0]) => native(request));
+    broker.liquidatePosition = liquidate;
+
+    const { result } = await run(broker, 'retry-transient-read-001');
+
+    expect(liquidate).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ flat: true, failedAccounts: [], submittedClosures: 1 });
+    expect(result.accounts[0].error).toBeUndefined();
+  });
+
+  it('does not retry a final rejection', async () => {
+    const broker = createMockBroker({ nativeLiquidate: true });
+    broker.setPosition(accountId, symbol, 1);
+    const liquidate = vi.fn(async (): Promise<BrokerLiquidateResult> => ({ status: 'rejected', reason: 'Account is locked' }));
+    broker.liquidatePosition = liquidate;
+
+    const { result, store } = await run(broker, 'no-retry-final-001');
+
+    expect(liquidate).toHaveBeenCalledTimes(1);
+    expect(result.flat).toBe(false);
+    expect(result.accounts[0].error).toContain('není potvrzen stavem');
+    expect((await store.load()).outbox[0]).toMatchObject({ status: 'rejected', attempts: 1 });
+  });
+
+  it('stops retrying and confirming at the deadline and reports the honest partial state', async () => {
+    const broker = createMockBroker({ nativeLiquidate: true });
+    broker.setPosition(accountId, symbol, 1);
+    let reads = 0;
+    broker.listPositions = async () => { reads += 1; throw new Error('Flatten broker request timeout (positions 200, 20000 ms)'); };
+    let now = 100;
+    const clock = () => ++now;
+
+    const { result } = await run(broker, 'deadline-stops-retry-001', { clock, deadlineAt: 130, confirmationAttempts: 50 });
+
+    expect(result.flat).toBe(false);
+    expect(result.failedAccounts).toEqual([accountId]);
+    expect(result.accounts[0].error).toContain('timeout');
+    expect(reads).toBeLessThan(20);
+  });
+});
