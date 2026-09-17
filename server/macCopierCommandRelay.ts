@@ -6,6 +6,16 @@ import {
   type LocalCopierAgentCommand,
 } from '../lib/localCopierAgentProtocol.js';
 
+/**
+ * 17. 9. 2026: produkční API odpovídalo 12–20 s (vyčerpaný pool DB spojení),
+ * heartbeat s 3s a převzetí příkazu s 10s limitem padaly pořád dokola —
+ * cloud viděl worker jako nedostupný a ARM končil `command-expired`.
+ * Smyčky jsou sekvenční (další požadavek až po dokončení), delší limit tedy
+ * nezvyšuje souběh; jen nechá pomalou, ale platnou odpověď dorazit.
+ */
+const RELAY_STATUS_TIMEOUT_MS = 20_000;
+const RELAY_COMMAND_TIMEOUT_MS = 30_000;
+
 export interface MacCopierCommandRelay {
   /** Okamžitě probudí poll s příznakem nových trade eventů — server pošle
    *  push hned místo čekání na minutový cron. */
@@ -160,7 +170,7 @@ export function startMacCopierCommandRelay(options: {
     await request({
       action: 'complete', commandId, status: options.agent.status(),
       ...(error ? { error, ...(result == null ? {} : { result }) } : { result }),
-    }, 10_000, loopAbort.signal);
+    }, RELAY_COMMAND_TIMEOUT_MS, loopAbort.signal);
   };
 
   let statusRevision = 0;
@@ -185,7 +195,7 @@ export function startMacCopierCommandRelay(options: {
       try {
         const response = await request({ action: 'background-v2', status: options.agent.status(), revision: ++statusRevision,
           ...(sentRevision !== acknowledgedCopyEventsRevision ? { copyEvents: true } : {}), completedCommandIds: ids,
-        }, 10_000, loopAbort.signal);
+        }, RELAY_COMMAND_TIMEOUT_MS, loopAbort.signal);
         if (response.protocol !== 2) throw new Error('relay-delivery-protocol-unavailable');
         acknowledgedCopyEventsRevision = sentRevision;
         for (const id of ids) completedNotifications.delete(id);
@@ -204,7 +214,7 @@ export function startMacCopierCommandRelay(options: {
     if (stopped || statusHeartbeat || !options.deliveryStore) return;
     statusHeartbeat = (async () => {
       try {
-        const response = await request({ action: 'heartbeat-v2', status: options.agent.status(), revision: ++statusRevision }, 3_000, loopAbort.signal);
+        const response = await request({ action: 'heartbeat-v2', status: options.agent.status(), revision: ++statusRevision }, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal);
         if (response.protocol !== 2 || response.accepted !== true) throw new Error('relay-heartbeat-not-confirmed');
       } catch (error) {
         if (!stopped) console.warn(`COPIER RELAY status: ${error instanceof Error ? error.message : String(error)}`);
@@ -216,7 +226,7 @@ export function startMacCopierCommandRelay(options: {
   };
   const delivery = options.deliveryStore ? recoverableCopierDelivery({
     store: options.deliveryStore, agent: options.agent,
-    request: body => request(body, 3_000, loopAbort.signal),
+    request: body => request(body, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal),
     nextRevision: () => ++statusRevision,
     isActive: () => !stopped,
     onComplete: id => { completedNotifications.add(id); publishBackground(); },
@@ -236,7 +246,7 @@ export function startMacCopierCommandRelay(options: {
             action: 'poll',
             status: options.agent.status(),
             ...(notifyCopyEvents ? { copyEvents: true } : {}),
-          }, 10_000, loopAbort.signal);
+          }, RELAY_COMMAND_TIMEOUT_MS, loopAbort.signal);
           failures = 0;
           // ACK covers only the heartbeat just sent. A newer event may have
           // arrived while its HTTP response was pending and needs another poll.
