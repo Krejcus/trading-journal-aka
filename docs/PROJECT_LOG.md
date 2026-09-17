@@ -208,6 +208,48 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-17 — Claude: falešný BREACHED čtyř nových Lucid funded účtů (chybné čtení Tradovate risk statusu)
+
+Uživatel: LFF…0008–0011 (nové Lucid funded účty, založené 06:45Z) se v LIVE
+ukázaly jako BREACHED „net liq 50000.00 USD dosáhla drawdown flooru 50000.00“.
+Lucid dashboard: 50 000 / floor 48 000, aktivní. Příčina v
+`services/tradovateBroker.ts` `listAccountRiskSnapshots`: `accountRiskStatus`
+`maxNetLiq`/`minNetLiq` jsou zaznamenané extrémy net liq (high-/low-watermark),
+ne prahy. Kód vydával `maxNetLiq` jako net liq a `minNetLiq` jako floor →
+nikdy neobchodovaný účet (obě = 50 000) splnil `netLiq <= minNetLiq` a
+`classifyFollowerBrokerBreach` ho durable vyřadil (10:39Z, všechny čtyři),
+což v 10:40Z ještě přispělo k fail-closed „nevysvětlená divergence“.
+Důkaz: leader 0007 má maxNetLiq 52 718,5 / minNetLiq 49 300, ale Lucid floor
+50 100 = `trailingMaxDrawdownLimit`; čerstvé účty 50 000 / 50 000, floor 48 000
+= 50 000 − `trailingMaxDrawdown` 2 000.
+
+- **Oprava** (`services/brokerPort.ts` `propDrawdownFloor`, `brokerRiskEquity`):
+  floor = `min(highWater − trailingMaxDrawdown, trailingMaxDrawdownLimit)`,
+  bez kladného trailingu nebo bez watermarku null (nikdy se nehádá ze
+  startovního zůstatku). `netLiq` jen když ho transport opravdu vydal;
+  `/cashBalance/deps` nese `amount` → nové `cashBalanceUsd` (u flat účtu =
+  net liq). Snapshot nese i `highWaterNetLiq`, `trailingMaxDrawdownLimit`.
+  Controller: breach jen když `equity (netLiq ?? cash) <= floor`;
+  `propLimitUsd = dailyLossAutoLiq ?? equity − floor` (tím se opravil i limit
+  „Max ztráta ≤ 95 % limitu propky“ v Risk tabu). Frontend `accountRiskFloor`
+  v `lib/tradovateLiveView.ts` počítal správně už dřív; worker teď používá
+  stejnou logiku.
+- **Zrušení falešného BREACHED**: stav je trvalý a reconciliace ho nemění.
+  `verifyAccountEligibility` (ruční „Ověřit“, nově dostupné i u BREACHED)
+  ho zruší jedině s úplným broker důkazem: `classifyFollowerBrokerBreach`
+  nic nehlásí, floor i equity známé, equity > floor, účet active/canTrade,
+  pozice/příkazy čitelné. Jinak vyhodí konkrétní důvod. Skutečná likvidace
+  (cash na flooru, canTrade=false) zůstává vyřazená — testy
+  `tests/copierAccountEligibility.test.ts`, `tests/propDrawdownFloor.test.ts`,
+  `tests/tradovateBrokerAccountRisk.test.ts`.
+- **Postup pro uživatele po nasazení workeru**: v LIVE u každého ze čtyř
+  účtů kliknout „Ověřit“; worker udělá read-only kontrolu a vrátí je mezi
+  způsobilé (audit `eligibility-verify-<id>` „BREACHED zrušen operátorem“).
+  Bez reinstalu workeru by ověření dopadlo stejně jako dnes.
+- Ověření: cílené sady 290/290, tsc čistý mimo `extension/`, `vite build`
+  a esbuild bundle OK; celá sada viz commit. Žádný ARM, broker příkaz ani
+  změna skupiny. Větev `claude/journal-snapshots-copylink-20260917`.
+
 ### 2026-09-17 — Claude: zapisovač evidence bez přetečení + screenshoty followerů přes copylink
 
 Navazuje na ranní analýzu (chybějící snímky u obchodů z 16. 9.) a review od

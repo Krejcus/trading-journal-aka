@@ -2225,7 +2225,7 @@ const CompactAccountRow = ({ row, live, eligibility, orders, dailyPnlPending, bu
           live={live}
           unavailable={!a && accountId != null}
           verifying={verifying}
-          onVerify={eligibility?.state === 'unverifiable' && accountId != null && onVerifyEligibility
+          onVerify={(eligibility?.state === 'unverifiable' || eligibility?.state === 'breached') && accountId != null && onVerifyEligibility
             ? () => onVerifyEligibility(accountId)
             : undefined}
         />
@@ -2801,8 +2801,23 @@ export const AccountEligibilityPill = ({ eligibility, live, unavailable = false,
       <Lock aria-hidden="true" size={10} strokeWidth={2.7} className="shrink-0" />DLL · do konce session</span>;
   }
   if (state === 'breached') {
-    return <span title={eligibility?.reason} className="inline-flex items-center gap-1 rounded-md border border-rose-500/40 bg-rose-500/15 px-2 py-1 text-[10px] font-black leading-none text-rose-600">
-      <Ban aria-hidden="true" size={10} strokeWidth={2.7} className="shrink-0" />BREACHED</span>;
+    // BREACHED je trvalý; tlačítko spouští jen read-only broker důkaz (účet
+    // aktivní, equity nad floorem propky). Bez důkazu worker vyřazení nezruší.
+    return <span className="inline-flex items-center gap-1.5">
+      <span title={eligibility?.reason} className="inline-flex items-center gap-1 rounded-md border border-rose-500/40 bg-rose-500/15 px-2 py-1 text-[10px] font-black leading-none text-rose-600">
+        <Ban aria-hidden="true" size={10} strokeWidth={2.7} className="shrink-0" />BREACHED</span>
+      {onVerify ? <button
+        type="button"
+        disabled={verifying}
+        title="Read-only kontrola u brokera: vyřazení se zruší jen když je účet aktivní a equity nad floorem propky"
+        aria-label="Znovu ověřit BREACHED účet u brokera"
+        onClick={event => { event.stopPropagation(); onVerify(); }}
+        className="inline-flex h-6 items-center gap-1 rounded-md border border-indigo-500/25 bg-indigo-500/[0.06] px-2 text-[10px] font-black text-indigo-600 transition-colors hover:bg-indigo-500/12 disabled:cursor-wait disabled:opacity-55"
+      >
+        <RefreshCw aria-hidden="true" size={10} strokeWidth={2.6} className={verifying ? 'animate-spin' : ''} />
+        {verifying ? 'Ověřuji…' : 'Ověřit'}
+      </button> : null}
+    </span>;
   }
   if (state === 'unverifiable') {
     return <span className="inline-flex items-center gap-1.5">
@@ -3051,7 +3066,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
           live={live}
           unavailable={!a && accountId != null}
           verifying={verifying}
-          onVerify={eligibility?.state === 'unverifiable' && accountId != null && onVerifyEligibility
+          onVerify={(eligibility?.state === 'unverifiable' || eligibility?.state === 'breached') && accountId != null && onVerifyEligibility
             ? () => onVerifyEligibility(accountId)
             : undefined}
         />;

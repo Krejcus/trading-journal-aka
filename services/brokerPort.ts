@@ -109,10 +109,50 @@ export interface BrokerAccountRiskSnapshot {
   at: number;
   /** Brokerem vykázané dnešní realized P&L včetně poplatků. */
   realizedPnlUsd: number | null;
+  /** Net liquidation value, jen pokud ji transport skutečně vydal; jinak null. */
   netLiq: number | null;
+  /**
+   * Aktuální floor propky (equity, pod kterou propka účet zlikviduje):
+   * `min(highWater − trailingMaxDrawdown, trailingMaxDrawdownLimit)`.
+   * Tradovate `accountRiskStatus.minNetLiq` floor NENÍ — je to nejnižší
+   * zaznamenané net liq (u čerstvého účtu rovné startovnímu zůstatku).
+   */
   minNetLiq: number | null;
   dailyLossAutoLiq: number | null;
   trailingMaxDrawdown: number | null;
+  /** Realizovaný cash zůstatek (`cashBalance.amount`); u flat účtu rovný net liq. */
+  cashBalanceUsd?: number | null;
+  /** Brokerem vedený high-watermark (`accountRiskStatus.maxNetLiq`). */
+  highWaterNetLiq?: number | null;
+  /** Equity, na které se trailing floor zastaví (`userAccountAutoLiq.trailingMaxDrawdownLimit`). */
+  trailingMaxDrawdownLimit?: number | null;
+}
+
+/**
+ * Floor propky z brokerem vedeného high-watermarku a nastavení trailing
+ * drawdownu. Bez kladného trailing limitu nebo bez watermarku je floor
+ * neznámý (null) — nikdy se nehádá ze startovního zůstatku.
+ */
+export function propDrawdownFloor(input: {
+  highWaterNetLiq: number | null;
+  trailingMaxDrawdown: number | null;
+  trailingMaxDrawdownLimit: number | null;
+}): number | null {
+  const { highWaterNetLiq, trailingMaxDrawdown, trailingMaxDrawdownLimit } = input;
+  if (highWaterNetLiq == null || !Number.isFinite(highWaterNetLiq)) return null;
+  if (trailingMaxDrawdown == null || !Number.isFinite(trailingMaxDrawdown) || trailingMaxDrawdown <= 0) return null;
+  const trailingFloor = highWaterNetLiq - trailingMaxDrawdown;
+  return trailingMaxDrawdownLimit != null && Number.isFinite(trailingMaxDrawdownLimit) && trailingMaxDrawdownLimit > 0
+    ? Math.min(trailingFloor, trailingMaxDrawdownLimit)
+    : trailingFloor;
+}
+
+/** Equity pro porovnání s floorem: skutečné net liq, jinak realizovaný cash (flat účet). */
+export function brokerRiskEquity(snapshot: Pick<BrokerAccountRiskSnapshot, 'netLiq' | 'cashBalanceUsd'>): number | null {
+  const netLiq = snapshot.netLiq;
+  if (netLiq != null && Number.isFinite(netLiq)) return netLiq;
+  const cash = snapshot.cashBalanceUsd;
+  return cash != null && Number.isFinite(cash) ? cash : null;
 }
 
 export type BrokerEvent =

@@ -419,6 +419,83 @@ describe('account eligibility — DLL incident', () => {
     controller.stop();
   });
 
+  describe('ruční zrušení BREACHED s broker důkazem (falešná likvidace 17. 9. 2026)', () => {
+    const breachedInitial = () => {
+      const initial = emptySnapshot();
+      initial.safety = {
+        entryCooldownUntil: 0,
+        dayLockUntil: 0,
+        accountEligibility: [{
+          accountId: 205,
+          state: 'breached',
+          reason: 'propka zlikvidovala účet: net liq 50000.00 USD dosáhla drawdown flooru 50000.00 USD',
+          at: 900,
+        }],
+      };
+      return initial;
+    };
+    const boot = async (risk: Partial<import('../services/brokerPort').BrokerAccountRiskSnapshot>) => {
+      let now = 1_000;
+      const clock = () => ++now;
+      const broker = createMockBroker({
+        clock,
+        behavior: () => ({ kind: 'working' }),
+        accountCapabilities: [{ accountId: 205, active: true, canTrade: true }],
+        accountRiskSnapshots: [{
+          accountId: 205, at: 950, realizedPnlUsd: 0, netLiq: null, cashBalanceUsd: 50_000,
+          highWaterNetLiq: 50_000, minNetLiq: 48_000, dailyLossAutoLiq: 1_200,
+          trailingMaxDrawdown: 2_000, trailingMaxDrawdownLimit: 50_100, ...risk,
+        }],
+      });
+      const store = createMemoryCopierStore(breachedInitial());
+      const controller = await bootstrapCopierRuntime({ broker, store, group, clock, wait: async () => undefined });
+      broker.setConnected(true);
+      await controller.waitForIdle();
+      return { controller, store };
+    };
+
+    it('čerstvý funded účet (cash nad floorem, broker aktivní) se vrátí mezi způsobilé', async () => {
+      const { controller, store } = await boot({});
+      await expect(controller.verifyAccountEligibility(205)).resolves.toMatchObject({
+        accountId: 205, state: 'active', reason: expect.stringContaining('BREACHED zrušen ručním ověřením'),
+      });
+      expect((await store.load()).safety?.accountEligibility)
+        .toEqual(expect.arrayContaining([expect.objectContaining({ accountId: 205, state: 'active' })]));
+      controller.stop();
+    });
+
+    it('skutečně zlikvidovaný účet (cash na flooru) zůstane BREACHED', async () => {
+      const { controller, store } = await boot({ cashBalanceUsd: 47_990 });
+      await expect(controller.verifyAccountEligibility(205)).rejects.toThrow(/dosáhla drawdown flooru/);
+      expect((await store.load()).safety?.accountEligibility)
+        .toEqual(expect.arrayContaining([expect.objectContaining({ accountId: 205, state: 'breached' })]));
+      controller.stop();
+    });
+
+    it('bez známého flooru propky nebo equity se vyřazení nezruší', async () => {
+      const { controller } = await boot({ minNetLiq: null, trailingMaxDrawdown: null });
+      await expect(controller.verifyAccountEligibility(205)).rejects.toThrow(/nevydal floor propky/);
+      const unknownEquity = await boot({ cashBalanceUsd: null, netLiq: null });
+      await expect(unknownEquity.controller.verifyAccountEligibility(205)).rejects.toThrow(/nevydal floor propky/);
+      controller.stop(); unknownEquity.controller.stop();
+    });
+
+    it('účet, který broker už nepovoluje, zůstane BREACHED i s dobrým floorem', async () => {
+      let now = 1_000;
+      const clock = () => ++now;
+      const broker = createMockBroker({
+        clock, behavior: () => ({ kind: 'working' }),
+        accountCapabilities: [{ accountId: 205, active: true, canTrade: false }],
+        accountRiskSnapshots: [{ accountId: 205, at: 950, realizedPnlUsd: 0, netLiq: null, cashBalanceUsd: 50_000, minNetLiq: 48_000, dailyLossAutoLiq: 1_200, trailingMaxDrawdown: 2_000 }],
+      });
+      const controller = await bootstrapCopierRuntime({ broker, store: createMemoryCopierStore(breachedInitial()), group, clock, wait: async () => undefined });
+      broker.setConnected(true);
+      await controller.waitForIdle();
+      await expect(controller.verifyAccountEligibility(205)).rejects.toThrow(/nepovoluje obchodování/);
+      controller.stop();
+    });
+  });
+
   it('bezpečně odebere BREACHED follower, který už není v broker account/list', async () => {
     const initial = emptySnapshot();
     initial.safety = {

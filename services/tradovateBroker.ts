@@ -19,7 +19,7 @@ import type {
   OrderSide,
   OrderType,
 } from './brokerPort';
-import { isOpenOrderStatus } from './brokerPort';
+import { isOpenOrderStatus, propDrawdownFloor } from './brokerPort';
 import {
   TRADOVATE_HEARTBEAT_MS,
   TRADOVATE_HOSTS,
@@ -43,8 +43,15 @@ interface TradovateCashBalanceEntity {
   accountId?: number;
   /** Některé transportní vrstvy mohou propustit bohatší cash snapshot. */
   netLiq?: number;
+  /** Realizovaný cash zůstatek; běžná `/deps` entita nic víc nenese. */
+  amount?: number;
   realizedPnL?: number;
 }
+/**
+ * `maxNetLiq`/`minNetLiq` jsou brokerem zaznamenané extrémy net liq účtu
+ * (high-/low-watermark), ne prahy. Čerstvý účet má obě rovné startovnímu
+ * zůstatku; floor propky se z nich musí teprve odvodit (viz propDrawdownFloor).
+ */
 interface TradovateAccountRiskStatusEntity {
   accountId?: number;
   maxNetLiq?: number;
@@ -54,6 +61,7 @@ interface TradovateUserAccountAutoLiqEntity {
   accountId?: number;
   dailyLossAutoLiq?: number;
   trailingMaxDrawdown?: number;
+  trailingMaxDrawdownLimit?: number;
 }
 interface TradovatePositionEntity { accountId: number; contractId: number; netPos: number }
 interface TradovateRawOrderEntity {
@@ -1570,20 +1578,28 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         const cashBalance = firstAccountDependent(cashBalances, accountId);
         const riskStatus = firstAccountDependent(riskStatuses, accountId);
         const autoLiq = firstAccountDependent(autoLiqSettings, accountId);
+        // 17. 9. 2026: čtyři čerstvé funded účty Lucid měly maxNetLiq =
+        // minNetLiq = 50 000 (nikdy neobchodované), a protože se dřív
+        // maxNetLiq vydával jako net liq a minNetLiq jako floor, worker je
+        // durable vyřadil jako BREACHED. Oba údaje jsou jen zaznamenané
+        // extrémy net liq; floor propky je high-watermark mínus trailing
+        // drawdown, nejvýš trailingMaxDrawdownLimit (u Lucid 48 000 / 50 100).
+        const highWaterNetLiq = activeRiskThreshold(riskStatus?.maxNetLiq);
+        const trailingMaxDrawdown = activeRiskThreshold(autoLiq?.trailingMaxDrawdown);
+        const trailingMaxDrawdownLimit = activeRiskThreshold(autoLiq?.trailingMaxDrawdownLimit);
         return {
           accountId,
           at: clock(),
           realizedPnlUsd: finiteNumber(cashBalance?.realizedPnL),
-          // Prop risk status vrací dvojici maxNetLiq/minNetLiq; jejich rozdíl
-          // je nakonfigurovaný trailing limit. Ve sdíleném broker portu se
-          // horní hodnota normalizuje jako `netLiq` podle Risk spec. Bohatší
-          // cash snapshot je jen kompatibilní fallback — běžné GET /deps
-          // entity obsahují `amount`, které za net liquidation nevydáváme.
-          netLiq: activeRiskThreshold(riskStatus?.maxNetLiq)
-            ?? finiteNumber(cashBalance?.netLiq),
-          minNetLiq: activeRiskThreshold(riskStatus?.minNetLiq),
+          // Běžná GET /deps entita nese jen `amount` (realizovaný cash), ne net
+          // liquidation; net liq se vydává jen tam, kde ho transport opravdu poslal.
+          netLiq: finiteNumber(cashBalance?.netLiq),
+          cashBalanceUsd: finiteNumber(cashBalance?.amount),
+          highWaterNetLiq,
+          minNetLiq: propDrawdownFloor({ highWaterNetLiq, trailingMaxDrawdown, trailingMaxDrawdownLimit }),
           dailyLossAutoLiq: activeRiskThreshold(autoLiq?.dailyLossAutoLiq),
-          trailingMaxDrawdown: activeRiskThreshold(autoLiq?.trailingMaxDrawdown),
+          trailingMaxDrawdown,
+          trailingMaxDrawdownLimit,
         };
       }));
     },

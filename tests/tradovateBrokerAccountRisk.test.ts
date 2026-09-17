@@ -27,7 +27,7 @@ describe('Tradovate broker account risk snapshots', () => {
       if (url.pathname.endsWith('/userAccountAutoLiq/deps')) {
         return json(accountId === 101
           ? [{ dailyLossAutoLiq: 1_250, trailingMaxDrawdown: 2_000 }]
-          : [{ dailyLossAutoLiq: 1_200, trailingMaxDrawdown: 1_800 }]);
+          : [{ dailyLossAutoLiq: 1_200, trailingMaxDrawdown: 1_800, trailingMaxDrawdownLimit: 50_100 }]);
       }
       throw new Error(`unexpected request ${url.pathname}`);
     });
@@ -44,19 +44,27 @@ describe('Tradovate broker account risk snapshots', () => {
         accountId: 101,
         at: 1_789_000_000_000,
         realizedPnlUsd: -324.75,
-        netLiq: 50_250,
-        minNetLiq: 48_750,
+        // `/deps` cash entity nese jen realizovaný cash, ne net liq.
+        netLiq: null,
+        cashBalanceUsd: 49_675.25,
+        highWaterNetLiq: 50_250,
+        // floor = high-water − trailing; broker `minNetLiq` (48 750) je jen low-watermark
+        minNetLiq: 48_250,
         dailyLossAutoLiq: 1_250,
         trailingMaxDrawdown: 2_000,
+        trailingMaxDrawdownLimit: null,
       },
       {
         accountId: 202,
         at: 1_789_000_000_000,
         realizedPnlUsd: 125,
-        netLiq: 50_500,
-        minNetLiq: 50_000,
+        netLiq: null,
+        cashBalanceUsd: 50_125,
+        highWaterNetLiq: 50_500,
+        minNetLiq: 48_700,
         dailyLossAutoLiq: 1_200,
         trailingMaxDrawdown: 1_800,
+        trailingMaxDrawdownLimit: 50_100,
       },
     ]);
 
@@ -100,10 +108,31 @@ describe('Tradovate broker account risk snapshots', () => {
       at: 321,
       realizedPnlUsd: null,
       netLiq: null,
+      cashBalanceUsd: 49_900,
+      highWaterNetLiq: null,
       minNetLiq: null,
       dailyLossAutoLiq: null,
       trailingMaxDrawdown: null,
+      trailingMaxDrawdownLimit: null,
     }]);
+  });
+
+  it('a never-traded funded account (max = min = start balance) keeps a real floor below its cash', async () => {
+    // Lucid LFF…0008–0011, 17. 9. 2026: falešně BREACHED, protože se maxNetLiq bral jako net liq a minNetLiq jako floor.
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith('/cashBalance/deps')) return json([{ accountId: 66142381, amount: 50_000, realizedPnL: 0 }]);
+      if (path.endsWith('/accountRiskStatus/deps')) return json([{ accountId: 66142381, maxNetLiq: 50_000, minNetLiq: 50_000 }]);
+      if (path.endsWith('/userAccountAutoLiq/deps')) return json([{ accountId: 66142381, dailyLossAutoLiq: 1_200, trailingMaxDrawdown: 2_000, trailingMaxDrawdownLimit: 50_100 }]);
+      throw new Error(`unexpected request ${path}`);
+    });
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'token', clock: () => 1,
+      fetchImpl: fetchImpl as typeof fetch, webSocketFactory: () => { throw new Error('WebSocket is not used'); },
+    });
+    const [snapshot] = await broker.listAccountRiskSnapshots([66142381]);
+    expect(snapshot).toMatchObject({ netLiq: null, cashBalanceUsd: 50_000, highWaterNetLiq: 50_000, minNetLiq: 48_000, trailingMaxDrawdownLimit: 50_100 });
+    expect(snapshot.cashBalanceUsd! > snapshot.minNetLiq!).toBe(true);
   });
 });
 

@@ -1,4 +1,5 @@
 import {
+  brokerRiskEquity,
   isOpenOrderStatus,
   type BrokerEvent,
   type BrokerFill,
@@ -333,11 +334,18 @@ export interface CopierAccountRiskSnapshot {
   /** Čas broker dotazu; snapshot starší než 90 s je „neověřeno". */
   verifiedAt: number;
   realizedPnlUsd: number | null;
+  /** Net liq jen když ho broker transport vydal; jinak null. */
   netLiq: number | null;
+  /** Realizovaný cash zůstatek; u flat účtu rovný net liq. Starší snapshoty ho nemají. */
+  cashBalanceUsd?: number | null;
+  /** Brokerem vedený high-watermark net liq. */
+  highWaterNetLiq?: number | null;
+  /** Odvozený floor propky (high-watermark − trailing, nejvýš trailing limit). */
   minNetLiq: number | null;
   dailyLossAutoLiq: number | null;
   trailingMaxDrawdown: number | null;
-  /** dailyLossAutoLiq ?? (netLiq - minNetLiq); null = neznámý. */
+  trailingMaxDrawdownLimit?: number | null;
+  /** dailyLossAutoLiq ?? ((netLiq ?? cashBalanceUsd) − minNetLiq); null = neznámý. */
   propLimitUsd: number | null;
   error?: string | null;
 }
@@ -2951,8 +2959,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ) {
         return `realizovaná ztráta ${risk.realizedPnlUsd.toFixed(2)} USD dosáhla daily loss auto-liq ${risk.dailyLossAutoLiq} USD`;
       }
-      if (risk.netLiq != null && risk.minNetLiq != null && risk.netLiq <= risk.minNetLiq) {
-        return `net liq ${risk.netLiq.toFixed(2)} USD dosáhla drawdown flooru ${risk.minNetLiq.toFixed(2)} USD`;
+      // `minNetLiq` je odvozený floor propky (high-watermark − trailing, nejvýš
+      // trailing limit), equity je skutečné net liq nebo realizovaný cash.
+      // Čerstvý účet (cash = high-watermark = start) tak floor nikdy „nedosáhne“.
+      const equity = brokerRiskEquity(risk);
+      if (equity != null && risk.minNetLiq != null && equity <= risk.minNetLiq) {
+        return `equity ${equity.toFixed(2)} USD dosáhla drawdown flooru ${risk.minNetLiq.toFixed(2)} USD`;
       }
       return null;
     } catch {
@@ -3384,8 +3396,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     snapshot: BrokerAccountRiskSnapshot,
   ): CopierAccountRiskSnapshot => {
     const netLiq = finiteOrNull(snapshot.netLiq);
+    const cashBalanceUsd = finiteOrNull(snapshot.cashBalanceUsd ?? null);
     const minNetLiq = finiteOrNull(snapshot.minNetLiq);
     const dailyLossAutoLiq = finiteOrNull(snapshot.dailyLossAutoLiq);
+    const equity = brokerRiskEquity({ netLiq, cashBalanceUsd });
     const validTimestamp = Number.isFinite(snapshot.at) && snapshot.at > 0;
     return {
       accountId: snapshot.accountId,
@@ -3394,11 +3408,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       verifiedAt: validTimestamp ? snapshot.at : 0,
       realizedPnlUsd: finiteOrNull(snapshot.realizedPnlUsd),
       netLiq,
+      cashBalanceUsd,
+      highWaterNetLiq: finiteOrNull(snapshot.highWaterNetLiq ?? null),
       minNetLiq,
       dailyLossAutoLiq,
       trailingMaxDrawdown: finiteOrNull(snapshot.trailingMaxDrawdown),
+      trailingMaxDrawdownLimit: finiteOrNull(snapshot.trailingMaxDrawdownLimit ?? null),
       propLimitUsd: dailyLossAutoLiq ?? (
-        netLiq != null && minNetLiq != null ? netLiq - minNetLiq : null
+        equity != null && minNetLiq != null ? equity - minNetLiq : null
       ),
       error: validTimestamp ? null : 'broker risk snapshot má neplatný čas',
     };
@@ -4104,9 +4121,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           verifiedAt: previous?.verifiedAt ?? 0,
           realizedPnlUsd: previous?.realizedPnlUsd ?? null,
           netLiq: previous?.netLiq ?? null,
+          cashBalanceUsd: previous?.cashBalanceUsd ?? null,
+          highWaterNetLiq: previous?.highWaterNetLiq ?? null,
           minNetLiq: previous?.minNetLiq ?? null,
           dailyLossAutoLiq: previous?.dailyLossAutoLiq ?? null,
           trailingMaxDrawdown: previous?.trailingMaxDrawdown ?? null,
+          trailingMaxDrawdownLimit: previous?.trailingMaxDrawdownLimit ?? null,
           propLimitUsd: previous?.propLimitUsd ?? null,
           error: accountError?.message ?? 'broker risk snapshot chybí',
         });
@@ -8238,8 +8258,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const now = clock();
       const current = accountEligibility.get(accountId);
       const effective = current ? eligibilityAt(current, now) : undefined;
+      // BREACHED je trvalý a nikdy se neruší časem ani reconciliací. Jediná
+      // cesta zpět je tato ruční operátorská kontrola s úplným broker důkazem:
+      // žádná známka likvidace, známý floor propky a equity nad ním. (17. 9.
+      // 2026: čtyři čerstvé funded účty byly vyřazeny kvůli špatnému čtení
+      // maxNetLiq/minNetLiq; bez této cesty by zůstaly vyřazené navždy.)
+      let breachedProof: string | null = null;
       if (effective?.state === 'breached') {
-        throw new Error(`Účet je BREACHED a nelze ho automaticky reaktivovat: ${effective.reason ?? 'bez důvodu'}`);
+        const breach = await classifyFollowerBrokerBreach(accountId);
+        if (breach) throw new Error(`Účet je BREACHED a broker to potvrzuje: ${breach}`);
+        const [risk] = await broker.listAccountRiskSnapshots([accountId]);
+        const equity = risk ? brokerRiskEquity(risk) : null;
+        if (!risk || equity == null || risk.minNetLiq == null) {
+          throw new Error('Účet je BREACHED a broker nevydal floor propky ani equity, kterými by šlo vyřazení zrušit');
+        }
+        if (equity <= risk.minNetLiq) {
+          throw new Error(`Účet je BREACHED: equity ${equity.toFixed(2)} USD není nad floorem propky ${risk.minNetLiq.toFixed(2)} USD`);
+        }
+        breachedProof = `equity ${equity.toFixed(2)} USD nad floorem propky ${risk.minNetLiq.toFixed(2)} USD`;
       }
       if (effective?.state === 'dll-locked') {
         throw new Error(`DLL stále platí do konce broker session: ${effective.reason ?? 'bez důvodu'}`);
@@ -8262,7 +8298,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ...(current ?? {}),
         accountId,
         state: 'active',
-        reason: 'autoritativně ověřeno u brokera po nové session',
+        reason: breachedProof
+          ? `BREACHED zrušen ručním ověřením u brokera: účet aktivní, ${breachedProof}`
+          : 'autoritativně ověřeno u brokera po nové session',
         at: now,
         lockSessionEndAt: undefined,
       };
@@ -8273,7 +8311,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         leaderEventId: `eligibility-verify-${accountId}`,
         kind: 'recovered',
         accountId,
-        reason: 'účet znovu způsobilý — cílené read-only ověření u brokera',
+        reason: breachedProof
+          ? `BREACHED zrušen operátorem — broker účet aktivní, ${breachedProof}`
+          : 'účet znovu způsobilý — cílené read-only ověření u brokera',
       }]);
       return verified;
     },
