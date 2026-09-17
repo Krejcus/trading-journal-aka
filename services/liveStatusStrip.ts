@@ -1,11 +1,11 @@
 import type { CopierControllerStatus } from './copierRuntimeController';
 import { isRecentCopierDisarm } from '../lib/copierDisarmNotice';
-import type { CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
+import type { CopierJournalRecorderStatus, CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
 
 export type LiveStatusTone = 'muted' | 'ok' | 'warn' | 'danger';
 
 export interface LiveStatusChip {
-  id: 'worker' | 'broker' | 'copier' | 'snapshots';
+  id: 'worker' | 'broker' | 'copier' | 'snapshots' | 'journal';
   label: string;
   value: string;
   tone: LiveStatusTone;
@@ -30,8 +30,25 @@ export interface LiveStatusStripInput {
   pending: boolean;
   transport: 'local' | 'relay' | null;
   snapshotHealth?: CopierSnapshotHealth | null;
+  journalHealth?: CopierJournalRecorderStatus[] | null;
   now?: number;
 }
+
+/** Jedna věta ke stavu záznamu historie; lišta ji ukazuje jen při problému. */
+export const journalHealthMessage = (recorders: readonly CopierJournalRecorderStatus[]): string => {
+  const parts = recorders.map(recorder => {
+    const id = recorder.connectionId.slice(0, 8);
+    const load = `fronta ${recorder.queued}/${recorder.maxQueued}, zápis ${recorder.lastWriteMs ?? '–'} ms, vynecháno ${recorder.deduplicated} totožných snapshotů`;
+    if (recorder.dropped > 0) {
+      const when = recorder.lastGapAt ? new Date(recorder.lastGapAt).toLocaleString('cs-CZ') : 'neznámo kdy';
+      return `${id}: ztraceno ${recorder.dropped} záznamů o pozicích (mezera ${when}, ${recorder.lastGapReason ?? 'důvod neznámý'}); ${load}.`;
+    }
+    if (recorder.droppedLowPriority > 0) return `${id}: ztraceno ${recorder.droppedLowPriority} záznamů historie příkazů, pozice zůstávají prokazatelné; ${load}.`;
+    if (recorder.state === 'degraded') return `${id}: ${recorder.error ?? 'zapisovač hlásí chybu'}; ${load}.`;
+    return `${id}: v pořádku; ${load}.`;
+  });
+  return `Záznam historie obchodů na Macu. ${parts.join(' ')}`;
+};
 
 /** Jedna věta ke stavu snímků; sdílí ji lišta (tooltip) i záložka Události. */
 export const snapshotHealthMessage = (health: CopierSnapshotHealth): string => {
@@ -139,6 +156,16 @@ export function buildLiveStatusStrip(input: LiveStatusStripInput): LiveStatusStr
       default:
         chips.push({ id: 'snapshots', label: 'Snímky', value: 'Poslední snímek selhal', tone: 'warn', title });
     }
+  }
+
+  // Chip jen při ztrátě: tichý zapisovač nemá v liště co říkat. Ztráta záznamů
+  // o pozicích znamená obchody bez potvrzené historie (a bez snímků).
+  const recorders = input.journalHealth ?? [];
+  if (recorders.some(recorder => recorder.dropped > 0 || recorder.droppedLowPriority > 0 || recorder.state === 'degraded')) {
+    const positionLoss = recorders.some(recorder => recorder.dropped > 0);
+    chips.push({ id: 'journal', label: 'Historie',
+      value: positionLoss ? 'Mezera v záznamu' : recorders.some(recorder => recorder.droppedLowPriority > 0) ? 'Ztráta historie příkazů' : 'Zapisovač hlásí chybu',
+      tone: positionLoss ? 'danger' : 'warn', title: journalHealthMessage(recorders) });
   }
 
   const last = current?.lastDisarm;

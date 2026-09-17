@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useCopierDisarmNotice } from '../hooks/useCopierDisarmNotice';
 import { AlertTriangle } from 'lucide-react';
 import type { CopierControllerStatus } from '../services/copierRuntimeController';
-import type { CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
+import type { CopierJournalRecorderStatus, CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
 import { buildLiveStatusStrip, type LiveStatusTone } from '../services/liveStatusStrip';
 import { formatSnapshotRepairError } from '../lib/copierBlockerMessages';
 
@@ -25,12 +25,14 @@ const TEXT: Record<LiveStatusTone, string> = {
  * zdravý stav je tichý, jediné tlačítko je bezpečná obnova TradingView, když
  * vypadlo CDP. Vše ostatní (lastError, historie odzbrojení, časy) je v Událostech.
  */
-export default function LiveStatusStrip({ status, available, pending, transport, snapshotHealth, onRepairSnapshots, accountLabel, quiet = false, hideDisarmNotice = false }: {
+export default function LiveStatusStrip({ status, available, pending, transport, snapshotHealth, journalHealth, onRepairSnapshots, accountLabel, quiet = false, hideDisarmNotice = false }: {
   status: CopierControllerStatus | null;
   available: boolean;
   pending: boolean;
   transport: 'local' | 'relay' | null;
   snapshotHealth?: CopierSnapshotHealth | null;
+  /** Zdraví zapisovačů historie z workeru; chip jen při ztrátě záznamů. */
+  journalHealth?: CopierJournalRecorderStatus[] | null;
   onRepairSnapshots?: () => Promise<void> | void;
   accountLabel?: (accountId: number) => string;
   /**
@@ -42,14 +44,19 @@ export default function LiveStatusStrip({ status, available, pending, transport,
   /** Only suppress the duplicate when another visible panel carries the incident. */
   hideDisarmNotice?: boolean;
 }) {
-  const model = buildLiveStatusStrip({ status, available, pending, transport, snapshotHealth });
+  const model = buildLiveStatusStrip({ status, available, pending, transport, snapshotHealth, journalHealth });
   const recentDisarm = useCopierDisarmNotice(status?.lastDisarm?.at);
   const notice = hideDisarmNotice || !recentDisarm ? null : model.notice;
   const [repairBusy, setRepairBusy] = useState(false);
   const [repairError, setRepairError] = useState<string | null>(null);
   const repair = model.repairSnapshots && onRepairSnapshots;
-  if (quiet && !repair && !notice) return null;
-  const chips = quiet ? model.chips.filter(chip => chip.id === 'snapshots' && model.repairSnapshots) : model.chips;
+  // Ztráta záznamů o pozicích se ukáže i na dashboardu: obchody bez historie
+  // a snímků nesmí čekat, až někdo otevře Události.
+  const journalLoss = model.chips.some(chip => chip.id === 'journal' && chip.tone === 'danger');
+  if (quiet && !repair && !notice && !journalLoss) return null;
+  const chips = quiet
+    ? model.chips.filter(chip => (chip.id === 'snapshots' && model.repairSnapshots) || (chip.id === 'journal' && chip.tone === 'danger'))
+    : model.chips;
   return (
     <section aria-label="Aktuální stav kopírky" data-live-status-strip={quiet ? 'quiet' : 'true'} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-2.5">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs">

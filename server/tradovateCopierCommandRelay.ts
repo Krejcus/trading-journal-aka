@@ -34,10 +34,19 @@ export interface PersistedCopierTradeInput {
   exitReason: 'sl' | 'tp' | 'manual' | null;
   entryPrice: number | null;
   exitPrice: number | null;
+  /** Leader entry broker order IDs; null from workers older than the copylink screenshot link. */
+  leaderEntryOrderIds: string[] | null;
 }
 
 const finite = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+/** Broker order IDs are numeric strings; anything else is not a usable link key. */
+const leaderEntryOrderIds = (value: unknown): string[] | null => {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 32) return null;
+  if (!value.every((id): id is string => typeof id === 'string' && /^[0-9]{1,32}$/.test(id))) return null;
+  return [...new Set(value)];
+};
 
 /** Redukuje heartbeat na malý, validovaný a idempotentní ledger close událostí. */
 export function closedTradesFromStatus(status: LocalCopierAgentStatus): PersistedCopierTradeInput[] {
@@ -71,6 +80,7 @@ export function closedTradesFromStatus(status: LocalCopierAgentStatus): Persiste
       exitReason,
       entryPrice: finite(candidate.avgEntryPrice),
       exitPrice: finite(candidate.avgExitPrice),
+      leaderEntryOrderIds: leaderEntryOrderIds(candidate.leaderEntryOrderIds),
     });
   }
   return [...unique.values()];
@@ -503,6 +513,8 @@ export async function heartbeatTradovateCopierDevice(options: {
         exit_reason: trade.exitReason,
         entry_price: trade.entryPrice,
         exit_price: trade.exitPrice,
+        // Older workers omit the link key; never erase one already backfilled from evidence.
+        ...(trade.leaderEntryOrderIds ? { leader_entry_order_ids: trade.leaderEntryOrderIds } : {}),
         updated_at: new Date().toISOString(),
       })),
       { onConflict: 'device_id,trade_id' },

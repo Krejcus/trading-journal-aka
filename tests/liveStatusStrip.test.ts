@@ -7,7 +7,7 @@ import LiveStatusStrip from '../components/LiveStatusStrip';
 import CopierEventsPanel from '../components/CopierEventsPanel';
 import { createCopierDisarmRecord } from '../lib/copierDisarmReason';
 import type { CopierControllerStatus } from '../services/copierRuntimeController';
-import type { CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
+import type { CopierJournalRecorderStatus, CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
 
 const now = Date.UTC(2026, 8, 8, 12, 0, 0);
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(now); });
@@ -51,6 +51,29 @@ describe('buildLiveStatusStrip', () => {
     ]);
     expect(model.repairSnapshots).toBe(false);
     expect(model.notice).toBeNull();
+  });
+
+  it('zapisovač historie má chip jen při ztrátě; ztráta pozic je nebezpečná a projde i tichým dashboardem', () => {
+    const recorder = (patch: Partial<CopierJournalRecorderStatus> = {}): CopierJournalRecorderStatus => ({
+      connectionId: '754e4b5b-9b68-4ee8-b400-365863cec131', state: 'recording', queued: 12, maxQueued: 10_000,
+      dropped: 0, droppedLowPriority: 0, deduplicated: 4_200, lastGapAt: null, lastGapReason: null,
+      lastWriteMs: 3, lastPersistedAt: now, lastUploadedAt: now, error: null, ...patch,
+    });
+    const base = { status: status(), available: true, pending: false, transport: 'local' as const };
+    expect(buildLiveStatusStrip({ ...base, journalHealth: [recorder()] }).chips.some(chip => chip.id === 'journal')).toBe(false);
+    const commands = buildLiveStatusStrip({ ...base, journalHealth: [recorder({ state: 'degraded', droppedLowPriority: 31 })] });
+    expect(commands.chips.find(chip => chip.id === 'journal')).toMatchObject({ value: 'Ztráta historie příkazů', tone: 'warn' });
+    const positions = buildLiveStatusStrip({ ...base, journalHealth: [recorder({ state: 'degraded', dropped: 1_309_483, lastGapAt: now - 3_600_000, lastGapReason: 'queue-full' })] });
+    const chip = positions.chips.find(chip => chip.id === 'journal');
+    expect(chip).toMatchObject({ value: 'Mezera v záznamu', tone: 'danger' });
+    expect(chip?.title).toContain('ztraceno 1309483 záznamů o pozicích');
+    expect(chip?.title).toContain('queue-full');
+    expect(chip?.title).toContain('fronta 12/10000');
+    const quiet = renderToStaticMarkup(React.createElement(LiveStatusStrip, { ...base, quiet: true, journalHealth: [recorder({ state: 'degraded', dropped: 5, lastGapAt: now, lastGapReason: 'queue-full' })] }));
+    expect(quiet).toContain('data-chip="journal"');
+    expect(quiet).not.toContain('data-chip="snapshots"');
+    const quietCommandsOnly = renderToStaticMarkup(React.createElement(LiveStatusStrip, { ...base, quiet: true, journalHealth: [recorder({ state: 'degraded', droppedLowPriority: 5 })] }));
+    expect(quietCommandsOnly).toBe('');
   });
 
   it('zastaralý lastError se v liště neukazuje, když je stream připojený', () => {

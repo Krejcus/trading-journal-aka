@@ -48,6 +48,25 @@ export interface CopierSnapshotHealth {
   pendingUploads?: number;
 }
 
+/** Read-only health of one connection's local evidence recorder (journal history). */
+export interface CopierJournalRecorderStatus {
+  connectionId: string;
+  state: 'recording' | 'degraded';
+  queued: number;
+  maxQueued: number;
+  /** Position-relevant observations lost since worker start; each loss left a recording gap. */
+  dropped: number;
+  /** Command-history observations lost since worker start; positions stay provable. */
+  droppedLowPriority: number;
+  deduplicated: number;
+  lastGapAt: number | null;
+  lastGapReason: string | null;
+  lastWriteMs: number | null;
+  lastPersistedAt: number | null;
+  lastUploadedAt: number | null;
+  error: string | null;
+}
+
 export interface LocalCopierAgentStatus {
   version: 1;
   /** Additive feature negotiation. Older version-1 workers omit this field. */
@@ -63,6 +82,8 @@ export interface LocalCopierAgentStatus {
   devices?: LocalCopierAgentDevice[];
   /** Diagnostika obrázků je read-only a nikdy neblokuje broker execution. */
   snapshotHealth?: CopierSnapshotHealth;
+  /** Diagnostika záznamu historie (evidence); jen zobrazení, nikdy neautorizuje broker akce. */
+  journalHealth?: CopierJournalRecorderStatus[];
   /**
    * Aktuální ceny z otevřených grafů TradingView (lokální CDP), jen pro
    * zobrazení (Live Activity čekajícího limitu). Nikdy nevstupují do

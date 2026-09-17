@@ -833,6 +833,15 @@ async function runLocalAgent(
       port: Number(portValue),
       devices: contexts.flatMap(candidate => candidate.device ? [candidate.device] : []),
       snapshotHealth: () => snapshotHealth,
+      journalHealth: () => journals.map(journal => {
+        const health = journal.health();
+        return {
+          connectionId: journal.connectionId, state: health.state, queued: health.queued, maxQueued: health.maxQueued,
+          dropped: health.dropped, droppedLowPriority: health.droppedLowPriority, deduplicated: health.deduplicated,
+          lastGapAt: health.lastGapAt, lastGapReason: health.lastGapReason, lastWriteMs: health.lastWriteMs,
+          lastPersistedAt: health.lastPersistedAt, lastUploadedAt: health.lastUploadedAt, error: health.error,
+        };
+      }),
       marketPrices: () => marketPriceFeed?.current() ?? [],
       accountDisplay: () => contexts.flatMap(item => item.displayFeed ? [item.displayFeed.state()] : []),
       onSnapshotTest: (requestId, options) => {

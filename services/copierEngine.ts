@@ -252,6 +252,8 @@ export interface CopierDailyLot {
   openedAt?: number;
   side?: 'Long' | 'Short';
   maxQuantity?: number;
+  /** Broker order IDs of the leader entry fills; the journal links follower copies to them. */
+  entryOrderIds?: string[];
 }
 
 export interface CopierClosedTrade {
@@ -271,6 +273,11 @@ export interface CopierClosedTrade {
   exitReason?: 'sl' | 'tp' | 'manual';
   avgEntryPrice?: number;
   avgExitPrice?: number;
+  /**
+   * Leader entry order IDs of the closed episode. Follower journal trades carry
+   * the copied leader order in their group; screenshots link through it.
+   */
+  leaderEntryOrderIds?: string[];
 }
 
 export interface CopierDailyStats {

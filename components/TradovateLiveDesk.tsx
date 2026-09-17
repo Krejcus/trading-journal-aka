@@ -795,6 +795,7 @@ setAgentStatus((await executeAgent({
         pending={!agentStatusResolved}
         transport={agentTransport}
         snapshotHealth={agentStatus?.snapshotHealth}
+        journalHealth={agentStatus?.journalHealth}
         onRepairSnapshots={repairSnapshots}
         hideDisarmNotice={tab === 'overview' && !checkingConnection && !requiresConnection
           && !!live.data && !!copyTradeSnapshot && !!executionGroup?.id && !copierUiDemo}
@@ -999,6 +1000,7 @@ setAgentStatus((await executeAgent({
                 pending={!agentStatusResolved}
                 transport={agentTransport}
                 snapshotHealth={agentStatus?.snapshotHealth}
+                journalHealth={agentStatus?.journalHealth}
                 onRepairSnapshots={repairSnapshots}
               />
               <CopierEventsPanel

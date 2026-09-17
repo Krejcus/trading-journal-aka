@@ -2624,6 +2624,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             : leaderTargetOrderIds.has(fill.brokerOrderId) ? 'tp' : 'manual',
           avgEntryPrice: lot.avgPrice,
           avgExitPrice: fill.price,
+          ...(lot.entryOrderIds?.length ? { leaderEntryOrderIds: [...lot.entryOrderIds] } : {}),
         };
         stats.recentClosedTrades = [
           closedTrade,
@@ -2652,12 +2653,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           openedAt: at,
           side: remaining > 0 ? 'Long' : 'Short',
           maxQuantity: Math.abs(remaining),
+          ...(fill.brokerOrderId ? { entryOrderIds: [fill.brokerOrderId] } : {}),
         });
       } else {
         const total = Math.abs(lot.netQuantity) + Math.abs(remaining);
         lot.avgPrice = (Math.abs(lot.netQuantity) * lot.avgPrice + Math.abs(remaining) * fill.price) / total;
         lot.netQuantity += remaining;
         lot.maxQuantity = Math.max(lot.maxQuantity ?? 0, Math.abs(lot.netQuantity));
+        if (fill.brokerOrderId && !(lot.entryOrderIds ?? []).includes(fill.brokerOrderId)) {
+          lot.entryOrderIds = [...(lot.entryOrderIds ?? []), fill.brokerOrderId];
+        }
       }
     }
 

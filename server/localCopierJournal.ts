@@ -7,8 +7,10 @@ export async function startLocalCopierJournal(options: {
   path: string; connectionId: string; environment: 'demo' | 'live'; broker: TradovateBrokerPort;
   relay?: { apiOrigin: string; authorizationHeader: () => Promise<string> };
 }) {
+  // The recorder reports each loss episode once; a per-row warning flooded the
+  // worker log with more than a million identical lines in a single day.
   const store = await createFileJournalEvidenceStore({ ...options,
-    onError: error => console.warn(`[JOURNAL] ${options.connectionId.slice(0, 8)} ${error.message}`),
+    onError: error => console.warn(`${new Date().toISOString()} JOURNAL connection=conn:${options.connectionId.slice(0, 8)} ${error.message}`),
   });
   const accounts = new Set<number>();
   let uploader: ReturnType<typeof startJournalEvidenceUpload> | null = null;

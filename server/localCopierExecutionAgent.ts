@@ -50,6 +50,8 @@ interface LocalCopierExecutionAgentOptions {
   device?: NonNullable<LocalCopierAgentStatus['device']>;
   devices?: NonNullable<LocalCopierAgentStatus['devices']>;
   snapshotHealth?: () => NonNullable<LocalCopierAgentStatus['snapshotHealth']>;
+  /** Zdraví lokálních zapisovačů evidence; read-only, prázdné pole = žádný zapisovač. */
+  journalHealth?: () => NonNullable<LocalCopierAgentStatus['journalHealth']>;
   /** Ceny z TradingView jen pro zobrazení; prázdné pole = žádná čerstvá cena. */
   marketPrices?: () => NonNullable<LocalCopierAgentStatus['marketPrices']>;
   accountDisplay?: () => NonNullable<LocalCopierAgentStatus['accountDisplay']>;
@@ -222,6 +224,10 @@ export async function startLocalCopierExecutionAgent(
     ...(devices.length > 0 ? { devices: structuredClone(devices) } : {}),
     ...(options.accountDisplay ? { accountDisplay: structuredClone(options.accountDisplay()) } : {}),
     ...(options.snapshotHealth ? { snapshotHealth: structuredClone(options.snapshotHealth()) } : {}),
+    ...(() => {
+      const journalHealth = options.journalHealth?.() ?? [];
+      return journalHealth.length > 0 ? { journalHealth: structuredClone(journalHealth) } : {};
+    })(),
     ...(() => {
       const marketPrices = options.marketPrices?.() ?? [];
       return marketPrices.length > 0 ? { marketPrices: structuredClone(marketPrices) } : {};

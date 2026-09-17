@@ -37,6 +37,7 @@ describe('copier closed trade heartbeat ledger', () => {
       openedAt: new Date(1_777_777_000_000).toISOString(),
       closedAt: new Date(1_777_777_060_000).toISOString(),
       exitReason: 'tp', entryPrice: 21_000.25, exitPrice: 21_040.5,
+      leaderEntryOrderIds: null,
     }]);
     expect(closedTradesFromStatus(status([{
       id: 'fill-unpriced', symbol: 'UNKNOWN', side: 'Short', quantity: 1,
@@ -47,6 +48,16 @@ describe('copier closed trade heartbeat ledger', () => {
       realizedPnlUsd: 1, followerCount: 1, closedAt: 1_777_777_060_000,
       exitReason: 'unknown', avgEntryPrice: Number.NaN, avgExitPrice: Number.POSITIVE_INFINITY,
     }]))[0]).toMatchObject({ exitReason: null, entryPrice: null, exitPrice: null });
+  });
+
+  it('carries leader entry order ids only when the worker sent a usable list', () => {
+    const base = { id: 'fill-1', symbol: 'MNQZ6', side: 'Long', quantity: 1, realizedPnlUsd: 5, followerCount: 2, closedAt: 1_777_777_060_000 };
+    expect(closedTradesFromStatus(status([{ ...base, leaderEntryOrderIds: ['647188292538', '647188292538', '647188292540'] }]))[0].leaderEntryOrderIds)
+      .toEqual(['647188292538', '647188292540']);
+    expect(closedTradesFromStatus(status([base]))[0].leaderEntryOrderIds).toBeNull();
+    expect(closedTradesFromStatus(status([{ ...base, leaderEntryOrderIds: [] }]))[0].leaderEntryOrderIds).toBeNull();
+    expect(closedTradesFromStatus(status([{ ...base, leaderEntryOrderIds: ['abc', '1'] }]))[0].leaderEntryOrderIds).toBeNull();
+    expect(closedTradesFromStatus(status([{ ...base, leaderEntryOrderIds: 'not-a-list' }]))[0].leaderEntryOrderIds).toBeNull();
   });
 
   it('deduplicates by stable fill id and rejects malformed rows', () => {
