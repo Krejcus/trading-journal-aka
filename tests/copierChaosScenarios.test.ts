@@ -235,8 +235,11 @@ describe('fail-closed za živého ARM: auto-zavření kopií', () => {
   });
 
   it('fail-closed bez otevřené pozice nic neposílá', async () => {
+    // Nejistý výsledek (požadavek k brokerovi nedorazil) je kritický. Konečný
+    // reject vstupu od brokera od 17. 9. 2026 followera jen vyřadí a skupinu
+    // nevypíná, proto tu není spouštěčem.
     const broker = createMockBroker({
-      behavior: () => ({ kind: 'reject', reason: 'Simulovaný broker reject' }),
+      behavior: () => ({ kind: 'timeout-before-accept' }),
     });
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group: followersGroup,
