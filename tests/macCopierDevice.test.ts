@@ -103,6 +103,7 @@ describe('mac copier device', () => {
       secretStore: { read: async () => 'secret', write: async () => undefined },
       fetchImpl: fetchImpl as typeof fetch,
       requestTimeoutMs: 10,
+      retry: { deadlineMs: 0 },
     });
 
     await expect(provider.getAccessToken()).rejects.toThrow('mac-copier-lease-timeout');
@@ -137,9 +138,53 @@ describe('mac copier device', () => {
       secretStore: { read: async () => 'secret', write: async () => undefined },
       fetchImpl: fetchImpl as typeof fetch,
       requestTimeoutMs: 10,
+      retry: { deadlineMs: 0 },
     });
 
     await expect(provider.getAccessToken()).rejects.toThrow('mac-copier-lease-timeout');
+  });
+
+  it('retries a stalled or 5xx lease request in-process instead of failing the worker start (17. 9. 2026 crash loop)', async () => {
+    let calls = 0;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      calls += 1;
+      if (calls === 1) return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal as AbortSignal;
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+      if (calls === 2) return { ok: false, status: 502, json: async () => ({ error: 'tradovate-pilot-lease-failed' }) } as Response;
+      throw new Error('lease-fetch-should-have-been-retried-only-twice');
+    });
+    const delays: number[] = [];
+    const provider = createMacCopierDeviceTokenProvider({
+      config: {
+        version: 1, deviceId: crypto.randomUUID(), connectionId: crypto.randomUUID(), deviceName: 'Retry test',
+        apiOrigin: 'https://alpha.example', publicKeyPath: '/n', privateKeyPath: '/n', paired: true, createdAt: new Date().toISOString(),
+      },
+      secretStore: { read: async () => 'secret', write: async () => undefined },
+      fetchImpl: fetchImpl as typeof fetch,
+      requestTimeoutMs: 10,
+      retry: { deadlineMs: 5_000, initialDelayMs: 1, maxDelayMs: 2, sleep: async ms => { delays.push(ms); }, onRetry: () => undefined },
+    });
+    // The third attempt throws a non-transient error, so the provider gives up there — proving two retries happened.
+    await expect(provider.getAccessToken()).rejects.toThrow('lease-fetch-should-have-been-retried-only-twice');
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(delays).toEqual([1, 2]);
+  });
+
+  it('never retries an unauthorized or unpaired device lease', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({ error: 'tradovate-device-unauthorized' }) } as Response));
+    const provider = createMacCopierDeviceTokenProvider({
+      config: {
+        version: 1, deviceId: crypto.randomUUID(), connectionId: crypto.randomUUID(), deviceName: 'Auth test',
+        apiOrigin: 'https://alpha.example', publicKeyPath: '/n', privateKeyPath: '/n', paired: true, createdAt: new Date().toISOString(),
+      },
+      secretStore: { read: async () => 'secret', write: async () => undefined },
+      fetchImpl: fetchImpl as typeof fetch,
+      retry: { deadlineMs: 5_000, initialDelayMs: 1, sleep: async () => undefined },
+    });
+    await expect(provider.getAccessToken()).rejects.toThrow('tradovate-device-unauthorized');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('renews near expiry once for concurrent callers during a persistent run', async () => {

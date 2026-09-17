@@ -71,6 +71,20 @@ import {
   macCopierDevicePairing,
   markMacCopierDevicePaired,
 } from '../../server/macCopierDevice';
+import { retryTransient, type RetryTransientOptions } from '../../server/retryTransient';
+
+/**
+ * Tradovate WebSocket `user/syncrequest` under load (17. 9. 2026) needed more
+ * than the 5 s default; a too-tight budget turned slow syncs into a
+ * reconnect loop that kept the copier DISARMED for 16 minutes.
+ */
+const WS_SYNC_TIMEOUT_MS = 20_000;
+/** Startup reads retry in-process for up to 10 minutes instead of exiting into a launchd crash loop. */
+const STARTUP_RETRY: RetryTransientOptions = { deadlineMs: 10 * 60_000, initialDelayMs: 5_000, maxDelayMs: 60_000 };
+const leaseRetry = (connectionId: string): RetryTransientOptions => ({
+  ...STARTUP_RETRY,
+  onRetry: (error, attempt, delayMs) => console.warn(`${new Date().toISOString()} LEASE ${connectionLabel(connectionId)} obnova lease selhala (pokus ${attempt}): ${error.message}; další pokus za ${Math.round(delayMs / 1_000)} s`),
+});
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
 import { startTradingViewMarketPriceFeed, type TradingViewMarketPriceFeed } from '../../services/tradingViewMarketPrice';
 import { ensureTradingViewCdp, restartTradingViewWithCdp } from '../../server/tradingViewCdpLifecycle';
@@ -221,6 +235,7 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
     context.displayFeed = makeDisplayFeed(context, Object.keys(accountSpecsByAccountId).map(Number));
     const broker = createTradovateBroker({
       environment: 'demo',
+      syncTimeoutMs: WS_SYNC_TIMEOUT_MS,
       accountSpec: context.accountSpec,
       accountSpecsByAccountId,
       getAccessToken: context.getAccessToken,
@@ -250,14 +265,20 @@ async function runMultiConnectionAgent(): Promise<void> {
     if (context.connectionId !== entry.connectionId) {
       throw new Error(`Manifest connection ${entry.connectionId} neodpovídá device/lease ${context.connectionId}`);
     }
-    const data = await loadTradovateAccountData({
+    // Startup reads are retried in-process: a slow or briefly failing
+    // Tradovate/cloud read must not exit the worker and start a launchd loop.
+    const data = await retryTransient(() => (async () => loadTradovateAccountData({
       baseUrl: tradovateApiBaseUrl(context.environment),
       accessToken: await context.getAccessToken(),
+    }))(), {
+      ...STARTUP_RETRY,
+      onRetry: (error, attempt, delayMs) => console.warn(`${new Date().toISOString()} STARTUP ${connectionLabel(entry.connectionId)} načtení účtů selhalo (pokus ${attempt}): ${error.message}; další pokus za ${Math.round(delayMs / 1_000)} s`),
     });
     const accountSpecsByAccountId = Object.fromEntries(data.accounts.map(account => [account.id, account.name]));
     context.displayFeed = makeDisplayFeed(context, data.accounts.map(account => account.id));
     const broker = createTradovateBroker({
       environment: 'demo',
+      syncTimeoutMs: WS_SYNC_TIMEOUT_MS,
       accountSpec: context.accountSpec,
       accountSpecsByAccountId,
       getAccessToken: context.getAccessToken,
@@ -1114,7 +1135,8 @@ async function pilotContext(options: PilotContextOptions = {}): Promise<PilotCon
   const deviceConfigPath = options.deviceConfigPath ?? stringFlag('device-config', false);
   let deviceConfig = deviceConfigPath ? await loadMacCopierDevice(deviceConfigPath) : null;
   if (deviceConfig && !deviceConfig.paired && deviceConfigPath) {
-    const pendingProvider = createMacCopierDeviceTokenProvider({ config: deviceConfig });
+    // Unpaired device: a quick probe only; the bootstrap lease follows.
+    const pendingProvider = createMacCopierDeviceTokenProvider({ config: deviceConfig, retry: { deadlineMs: 0 } });
     try {
       await pendingProvider.refresh();
       deviceConfig = await markMacCopierDevicePaired(deviceConfigPath);
@@ -1124,7 +1146,7 @@ async function pilotContext(options: PilotContextOptions = {}): Promise<PilotCon
     }
   }
   if (deviceConfig?.paired) {
-    const provider = createMacCopierDeviceTokenProvider({ config: deviceConfig });
+    const provider = createMacCopierDeviceTokenProvider({ config: deviceConfig, retry: leaseRetry(deviceConfig.connectionId) });
     const payload = await provider.refresh();
     return {
       environment: 'demo',
@@ -1150,7 +1172,7 @@ async function pilotContext(options: PilotContextOptions = {}): Promise<PilotCon
     const privateKey = await readFile(resolve(privateKeyPath), 'utf8');
     const payload = openTradovatePilotLease(envelope, privateKey);
     let paired = false;
-    const provider = deviceConfig ? createMacCopierDeviceTokenProvider({ config: deviceConfig }) : null;
+    const provider = deviceConfig ? createMacCopierDeviceTokenProvider({ config: deviceConfig, retry: leaseRetry(deviceConfig.connectionId) }) : null;
     if (deviceConfig && payload.connectionId !== deviceConfig.connectionId) {
       throw new Error('Mac device a pilot lease míří na rozdílné Tradovate připojení');
     }

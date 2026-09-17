@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { isTransientRemoteError, retryTransient, type RetryTransientOptions } from './retryTransient.js';
 import {
   createTradovatePilotKeyPair,
   openTradovatePilotLease,
@@ -147,6 +148,8 @@ export function createMacCopierDeviceTokenProvider(options: {
   minimumValidityMs?: number;
   fallbackMinimumValidityMs?: number;
   requestTimeoutMs?: number;
+  /** In-process retry for transient lease failures (timeouts, 5xx); `deadlineMs: 0` disables it. */
+  retry?: RetryTransientOptions;
 }) {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const clock = options.clock ?? Date.now;
@@ -155,14 +158,16 @@ export function createMacCopierDeviceTokenProvider(options: {
     fallbackMinimumValidityMs,
     options.minimumValidityMs ?? 10 * 60_000,
   );
-  // A valid device lease performs authenticated device lookup/touch and then
-  // reads the OAuth connection. Under transient Supabase latency the endpoint
-  // can still complete successfully after the old 10 s deadline. Keep the
-  // request bounded, but allow enough time for that safe read path so launchd
-  // does not turn a slow cloud response into a crash loop.
-  const requestTimeoutMs = Math.max(1_000, options.requestTimeoutMs ?? 60_000);
+  // A valid device lease performs authenticated device lookup/touch, reads the
+  // OAuth connection and may renew the Tradovate token; 17. 9. 2026 a valid
+  // renewal took 61,4 s. Keep the request bounded, but never let a slow cloud
+  // response become a crash loop: one request may take up to 120 s and the
+  // provider retries transient failures in-process (see `retry`).
+  const requestTimeoutMs = Math.max(1_000, options.requestTimeoutMs ?? 120_000);
+  const retryOptions: RetryTransientOptions = { deadlineMs: 10 * 60_000, initialDelayMs: 5_000, maxDelayMs: 60_000, ...options.retry };
   let payload: TradovatePilotLeasePayload | null = null;
   let renewal: Promise<TradovatePilotLeasePayload> | null = null;
+  const hasUsableToken = () => payload != null && Date.parse(payload.expiresAt) - clock() > fallbackMinimumValidityMs;
   const providerError = (phase: string, reason: unknown): Error => {
     const error = reason instanceof Error ? reason : new Error(String(reason));
     const label = options.config.connectionId.slice(0, 8);
@@ -180,6 +185,7 @@ export function createMacCopierDeviceTokenProvider(options: {
       } catch (reason) {
         throw providerError('keychain', reason);
       }
+      return retryTransient(async () => {
       const requestAbort = new AbortController();
       const timeout = setTimeout(
         () => requestAbort.abort(new Error('mac-copier-lease-timeout')),
@@ -230,6 +236,15 @@ export function createMacCopierDeviceTokenProvider(options: {
       } finally {
         clearTimeout(timeout);
       }
+      }, {
+        ...retryOptions,
+        // With a still-valid token the caller must not wait on retries: one
+        // attempt, then the fallback below. Retries exist for the start-up
+        // case, where a failed first lease would otherwise exit the worker.
+        deadlineMs: hasUsableToken() ? 0 : retryOptions.deadlineMs,
+        // Auth/identity/decrypt failures are final; only the transport is retried.
+        isTransient: retryOptions.isTransient ?? (error => /phase=(lease-fetch|lease-body)/.test(error instanceof Error ? error.message : '') && isTransientRemoteError(error)),
+      });
     })().catch(reason => {
       if (payload && Date.parse(payload.expiresAt) - clock() > fallbackMinimumValidityMs) return payload;
       throw reason;
