@@ -13,8 +13,13 @@ const pilotLease = vi.hoisted(() => ({
   sealTradovatePilotLease: vi.fn(),
 }));
 
+const copierDevice = vi.hoisted(() => ({
+  authorizeTradovateCopierDevice: vi.fn(),
+}));
+
 vi.mock('../server/tradovateOAuthStore', () => oauthStore);
 vi.mock('../server/tradovatePilotLease', () => pilotLease);
+vi.mock('../server/tradovateCopierDevice', () => copierDevice);
 
 import handler from '../api/tradovate/oauth/pilot-lease';
 
@@ -63,6 +68,7 @@ describe('Tradovate pilot lease API', () => {
       accessToken: 'short-lived-broker-token',
       expiresAt: '2026-08-17T08:00:00.000Z',
     });
+    copierDevice.authorizeTradovateCopierDevice.mockResolvedValue(null);
     pilotLease.sealTradovatePilotLease.mockReturnValue({
       version: 1,
       algorithm: 'RSA-OAEP-256+A256GCM',
@@ -136,6 +142,33 @@ describe('Tradovate pilot lease API', () => {
     expect(pilotLease.sealTradovatePilotLease).toHaveBeenCalledWith(
       expect.not.objectContaining({ accountSpec: expect.anything() }),
       'PUBLIC KEY',
+    );
+  });
+
+  it('uses the device-bound connection without loading the full connection list', async () => {
+    copierDevice.authorizeTradovateCopierDevice.mockResolvedValue({
+      id: 'device-1',
+      userId: 'user-1',
+      connectionId: 'connection-owned',
+      publicKey: 'DEVICE PUBLIC KEY',
+      deviceName: 'MacBook Air',
+    });
+    const harness = responseHarness();
+    await handler(request({
+      headers: { authorization: 'Device device.secret' },
+      body: {},
+    }), harness.res);
+
+    expect(harness.status()).toBe(200);
+    expect(oauthStore.listTradovateConnectionStatuses).not.toHaveBeenCalled();
+    expect(oauthStore.requireSupabaseUserId).not.toHaveBeenCalled();
+    expect(oauthStore.getValidTradovateAccessToken).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'user-1',
+      connectionId: 'connection-owned',
+    }));
+    expect(pilotLease.sealTradovatePilotLease).toHaveBeenCalledWith(
+      expect.not.objectContaining({ accountSpec: expect.anything() }),
+      'DEVICE PUBLIC KEY',
     );
   });
 

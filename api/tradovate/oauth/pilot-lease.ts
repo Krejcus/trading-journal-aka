@@ -30,9 +30,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const publicKey = device?.publicKey
       ?? (typeof req.body?.publicKey === 'string' ? req.body.publicKey.trim() : '');
     if (!connectionId || !publicKey) return res.status(400).json({ error: 'missing-pilot-lease-input' });
-    const connection = (await listTradovateConnectionStatuses(db, userId, 'demo'))
-      .find(item => item.id === connectionId && item.connected);
-    if (!connection) return res.status(404).json({ error: 'tradovate-connection-not-found' });
+    // Device auth already binds this request to one owned connection. Avoid an
+    // additional full connection-list round trip on every worker renewal; the
+    // targeted token lookup below still rejects missing/disconnected rows.
+    const connection = device
+      ? null
+      : (await listTradovateConnectionStatuses(db, userId, 'demo'))
+        .find(item => item.id === connectionId && item.connected);
+    if (!device && !connection) return res.status(404).json({ error: 'tradovate-connection-not-found' });
     const token = await getValidTradovateAccessToken({
       db,
       config,
@@ -45,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       version: 1,
       environment: 'demo',
       connectionId,
-      ...(connection.tradovateEmail?.trim() ? { accountSpec: connection.tradovateEmail.trim() } : {}),
+      ...(connection?.tradovateEmail?.trim() ? { accountSpec: connection.tradovateEmail.trim() } : {}),
       accessToken: token.accessToken,
       expiresAt: token.expiresAt,
       issuedAt,

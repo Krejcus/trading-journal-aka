@@ -155,7 +155,12 @@ export function createMacCopierDeviceTokenProvider(options: {
     fallbackMinimumValidityMs,
     options.minimumValidityMs ?? 10 * 60_000,
   );
-  const requestTimeoutMs = Math.max(1_000, options.requestTimeoutMs ?? 10_000);
+  // A valid device lease performs authenticated device lookup/touch and then
+  // reads the OAuth connection. Under transient Supabase latency the endpoint
+  // can still complete successfully after the old 10 s deadline. Keep the
+  // request bounded, but allow enough time for that safe read path so launchd
+  // does not turn a slow cloud response into a crash loop.
+  const requestTimeoutMs = Math.max(1_000, options.requestTimeoutMs ?? 60_000);
   let payload: TradovatePilotLeasePayload | null = null;
   let renewal: Promise<TradovatePilotLeasePayload> | null = null;
   const providerError = (phase: string, reason: unknown): Error => {
