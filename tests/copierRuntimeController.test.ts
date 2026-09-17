@@ -258,11 +258,12 @@ describe('bootstrapCopierRuntime', () => {
   });
 
   it('fail-closed vyplní strukturované odzbrojení a ARM ho nemaže', async () => {
-    const broker = createMockBroker({
-      behavior: () => ({ kind: 'reject', reason: 'healthy follower order rejected by broker' }),
-    });
+    // Spouštěč: interní policy blok (maxContracts). Konečný reject vstupu od
+    // brokera už od 17. 9. 2026 followera jen vyřadí a skupinu nevypíná.
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const controller = await bootstrapCopierRuntime({
-      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+      broker, store: createMemoryCopierStore(), clock: stepClock(),
+      group: { ...group, followers: [{ accountId: 200, mode: 'on-submit', multiplier: 1, maxContracts: 1 }] },
     });
     broker.setConnected(true);
     await controller.waitForIdle();
@@ -277,8 +278,7 @@ describe('bootstrapCopierRuntime', () => {
       armed: false,
       lastDisarm: {
         trigger: 'fail-closed',
-        code: 'order-rejected',
-        detail: expect.stringContaining('healthy follower order rejected'),
+        detail: expect.stringContaining('maxContracts blokoval'),
         copiesOutcome: 'flat',
       },
     });
@@ -288,7 +288,7 @@ describe('bootstrapCopierRuntime', () => {
     controller.arm();
     expect(controller.status()).toMatchObject({
       armed: true,
-      lastDisarm: { code: 'order-rejected' },
+      lastDisarm: { code: 'order-blocked' },
     });
     expect(controller.status().disarmHistory).toHaveLength(1);
     controller.stop();
@@ -3140,6 +3140,77 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     controller.stop();
   });
 
+  it('synchronně odmítnutý vstup followera (reject přímo v dávce) vyřadí jen jeho a skupinu nechá ARMED pro ostatní', async () => {
+    // Sjednoceno se stream variantou (uživatel 17. 9. 2026): reject vstupu
+    // není nejistota, ostatní followeři v obchodě potřebují řízení exitů.
+    const audit = vi.fn();
+    const rejectReason = 'Your maximum position limit has been met. Limit: Fungible Exposed 2. Rule #3968';
+    const broker = createMockBroker({
+      behavior: request => request.accountId === 200 && request.side === 'Buy'
+        ? { kind: 'reject', reason: rejectReason }
+        : { kind: 'fill', price: 29_500 },
+      nativeLiquidate: true,
+    });
+    const twoFollowers: CopyGroupConfig = {
+      ...group,
+      followers: [
+        { accountId: 200, mode: 'on-submit', multiplier: 1 },
+        { accountId: 300, mode: 'on-submit', multiplier: 1 },
+      ],
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: twoFollowers,
+      clock: stepClock(),
+      onAudit: audit,
+      followerTransitionCorrelationWindowMs: 20,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-entry-rejected-follower', quantity: 1, orderType: 'Market', limitPrice: undefined,
+    }) });
+    broker.setPosition(100, 'MNQU6', 1);
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
+    await controller.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 60));
+    await controller.waitForIdle();
+
+    expect((await broker.listPositions(300))[0]?.netQuantity).toBe(1);
+    expect((await broker.listPositions(200))[0]?.netQuantity ?? 0).toBe(0);
+    expect(controller.status()).toMatchObject({
+      armed: true,
+      divergentAccounts: [],
+      stuckOutbox: false,
+      lastError: null,
+      autoClose: null,
+    });
+    expect(audit.mock.calls.flat(2)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'skipped', accountId: 200, reason: expect.stringContaining('broker odmítl vstup') }),
+    ]));
+
+    const placedBefore = broker.placedRequests().length;
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-exit-after-rejected-follower', side: 'Sell', quantity: 1, orderType: 'Market', limitPrice: undefined,
+    }) });
+    broker.setPosition(100, 'MNQU6', 0);
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 0 } });
+    await controller.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 60));
+    await controller.waitForIdle();
+
+    const sells = broker.placedRequests().slice(placedBefore).filter(request => request.side === 'Sell');
+    expect(sells.some(request => request.accountId === 300)).toBe(true);
+    expect(sells.some(request => request.accountId === 200)).toBe(false);
+    expect((await broker.listPositions(300))[0]?.netQuantity).toBe(0);
+    expect(controller.status()).toMatchObject({ armed: true, divergentAccounts: [], lastError: null });
+    controller.stop();
+  });
+
   it('asynchronně odmítnutý vstup followera (dnešní Lucid případ) vyřadí jen jeho a exity ostatních dál kopíruje', async () => {
     // Vstup followera 200 broker nejdřív přijme (working) a o chvíli později
     // odmítne limitem pozice; follower 300 je vyplněn. Skupina má zůstat ARMED.
@@ -3178,6 +3249,10 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     const followerEntry = (await broker.listOrders(200)).find(order => order.side === 'Buy');
     expect(followerEntry).toBeDefined();
     broker.emitEvent({ type: 'order', order: { ...followerEntry!, status: 'rejected', rejectReason, updatedAt: 5_000 } });
+    broker.emitEvent({ type: 'fill', fill: {
+      fillId: 'leader-fill-async-reject', tag: 'leader-entry-async-reject', brokerOrderId: 'leader-entry-async-reject',
+      accountId: 100, symbol: 'MNQU6', side: 'Buy', quantity: 1, price: 29_500, filledAt: 101,
+    } });
     broker.setPosition(100, 'MNQU6', 1);
     broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
     await controller.waitForIdle();

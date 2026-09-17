@@ -78,7 +78,9 @@ import { retryTransient, type RetryTransientOptions } from '../../server/retryTr
  * than the 5 s default; a too-tight budget turned slow syncs into a
  * reconnect loop that kept the copier DISARMED for 16 minutes.
  */
-const WS_SYNC_TIMEOUT_MS = 20_000;
+// Tradovate dnes (17. 9. 2026) potřeboval na syncrequest i /order/list přes
+// 15 s z obou sítí; kratší limit reconnect jen roztočil.
+const WS_SYNC_TIMEOUT_MS = 45_000;
 /** Startup reads retry in-process for up to 10 minutes instead of exiting into a launchd crash loop. */
 const STARTUP_RETRY: RetryTransientOptions = { deadlineMs: 10 * 60_000, initialDelayMs: 5_000, maxDelayMs: 60_000 };
 const leaseRetry = (connectionId: string): RetryTransientOptions => ({

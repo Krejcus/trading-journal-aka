@@ -471,7 +471,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     return value.trim();
   };
 
-  const restRequestTimeoutMs = Math.max(1, config.restRequestTimeoutMs ?? 15_000);
+  // 17. 9. 2026 večer: Tradovate odpovídal na /order/list a /account/list
+  // déle než 15 s z Macu i z AWS. Kratší limit z „pomalého" dělá „mrtvého"
+  // a reconnect se točí; 45 s stále brání pětiminutovému visení.
+  const restRequestTimeoutMs = Math.max(1, config.restRequestTimeoutMs ?? 45_000);
   const requestRaw = async <T>(path: string, init: RequestInit = {}, allowNotFound = false, maxResponseBytes?: number): Promise<T | null> => {
     if (!fetchImpl) throw new TradovateTransportError('fetch is unavailable');
     assertNotRateLimited();
@@ -1449,7 +1452,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       notOpenSince = 0;
       if (candidate.readyState !== 1) return;
       const now = clock();
-      if (now - lastSocketMessageAt >= (config.socketIdleTimeoutMs ?? 15_000)) {
+      // Před dokončeným syncem rozhoduje sync deadline: pomalý server, který
+      // připravuje syncrequest, nesmí spadnout na kratší heartbeat guard.
+      const idleLimitMs = socketState === 'connected'
+        ? (config.socketIdleTimeoutMs ?? 15_000)
+        : Math.max(config.socketIdleTimeoutMs ?? 15_000, config.syncTimeoutMs ?? 5_000);
+      if (now - lastSocketMessageAt >= idleLimitMs) {
         emit({
           type: 'error',
           error: contextualError(

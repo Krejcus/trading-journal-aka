@@ -68,6 +68,7 @@ export function createExposureCappedBroker(
           brokerOrderId: '',
           accepted: false,
           definitive: true,
+          policy: true,
           rejectReason: error instanceof Error ? error.message : String(error),
         };
       }
@@ -90,6 +91,7 @@ export function createExposureCappedBroker(
           secondBrokerOrderId: '',
           accepted: false,
           definitive: true,
+          policy: true,
           rejectReason: error instanceof Error ? error.message : String(error),
         };
       }
@@ -109,6 +111,7 @@ export function createExposureCappedBroker(
           secondBrokerOrderId: '',
           accepted: false,
           definitive: true,
+          policy: true,
           rejectReason: error instanceof Error ? error.message : String(error),
         };
       }

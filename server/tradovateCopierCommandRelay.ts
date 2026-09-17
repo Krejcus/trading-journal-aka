@@ -446,11 +446,14 @@ async function findInFlightFlatten(options: {
   db: SupabaseClient; userId: string; deviceId: string; command: LocalCopierAgentCommand; now: number;
 }): Promise<{ id: string; status: string; expiresAt: string } | null> {
   if (options.command.type !== 'copy-command') return null;
-  const inner = (options.command as { command?: { type?: unknown; accountId?: unknown } }).command;
+  const inner = (options.command as { command?: { type?: unknown; groupId?: unknown; accountId?: unknown } }).command;
   if (!inner || (inner.type !== 'flatten-group' && inner.type !== 'flatten-account')) return null;
+  if (typeof inner.groupId !== 'string' || !inner.groupId) return null;
+  // Přichytit se smí jen ke stejnému cíli: stejná skupina a u účtového
+  // Flattenu i stejný účet. Flatten skupiny B nikdy nečeká na skupinu A.
   const target = inner.type === 'flatten-account'
-    ? { type: inner.type, accountId: inner.accountId }
-    : { type: inner.type };
+    ? { type: inner.type, groupId: inner.groupId, accountId: inner.accountId }
+    : { type: inner.type, groupId: inner.groupId };
   const nowIso = new Date(options.now).toISOString();
   const { data, error } = await options.db.from('tradovate_copier_commands')
     .select('id,status,expires_at')

@@ -857,11 +857,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (entry?.status === 'acknowledged') {
           outbox.set(entry.key, explained
             ? waiveOutboxEntry(
-                markOutboxRejected(entry, auditReason, receivedAt),
+                markOutboxRejected(entry, auditReason, receivedAt, 'broker'),
                 `${auditReason} — účet vyřazen z nových vstupů (${classified})`,
                 receivedAt,
               )
-            : markOutboxRejected(entry, auditReason, receivedAt));
+            : markOutboxRejected(entry, auditReason, receivedAt, 'broker'));
         }
       }
 
@@ -3042,10 +3042,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * nesmí v outboxu viset nic nevyřízeného a odmítnutý příkaz je vstup ve
    * směru leadera z posledních minut. Bez toho zůstává cesta fail-closed.
    */
-  const terminalEntryRejection = (accountId: number, symbol: string, leaderNet: number): OutboxEntry | null => {
+  const terminalEntryRejection = (accountId: number, symbol: string, leaderNet: number): OutboxEntry[] | null => {
     const entrySide = leaderNet > 0 ? 'Buy' : 'Sell';
+    // Vazba na konkrétní epizodu: jen otevřená epocha leadera a jen vstupní
+    // příkazy, které ji otevřely. Starší reject stejného směru nic nevysvětluje.
+    const epoch = leaderExposureEpoch(symbol);
+    if (!epoch || epoch.phase !== 'open' || epoch.leaderEntryOrderIds.length === 0) return null;
     const now = clock();
-    let latest: OutboxEntry | null = null;
+    const rejected: OutboxEntry[] = [];
     for (const entry of currentRuntime().outbox.values()) {
       if (entry.request.accountId !== accountId || entry.request.symbol !== symbol) continue;
       if (
@@ -3054,11 +3058,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         || entry.status === 'unknown'
         || entry.status === 'acknowledged'
       ) return null;
-      if (entry.status !== 'rejected' || entry.request.side !== entrySide) continue;
-      if (now - entry.updatedAt > REJECTED_ENTRY_ISOLATION_WINDOW_MS) continue;
-      if (!latest || entry.updatedAt > latest.updatedAt) latest = entry;
+      if (entry.status !== 'rejected' || !epoch.leaderEntryOrderIds.includes(entry.leaderOrderId)) continue;
+      if (entry.rejectedBy !== 'broker' || entry.request.side !== entrySide || !entry.reason?.trim()) return null;
+      if (now - entry.updatedAt > REJECTED_ENTRY_ISOLATION_WINDOW_MS) return null;
+      rejected.push(entry);
     }
-    return latest;
+    return rejected.length > 0 ? rejected : null;
   };
 
   /**
@@ -3070,13 +3075,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * vysvětlené a nezůstávají stuck, případné ochranné nohy se uklidí.
    * Skupina zůstává ARMED pro followery, kteří v obchodě jsou.
    */
-  const sidelineRejectedFollower = async (accountId: number, symbol: string, rejection: OutboxEntry): Promise<void> => {
+  const sidelineRejectedFollower = async (accountId: number, symbol: string, rejections: readonly OutboxEntry[]): Promise<void> => {
     const now = clock();
-    const reason = rejection.reason?.trim() || 'broker odmítl vstup';
+    const reason = rejections[0]?.reason?.trim() || 'broker odmítl vstup';
+    const rejectedKeys = new Set(rejections.map(entry => entry.key));
     intentionalEntrySuppressions.set(intentionalSuppressionKey(accountId, symbol), {
       allowedNet: 0,
       createdAt: now,
-      leaderOrderId: rejection.leaderOrderId,
+      leaderOrderId: rejections[0]?.leaderOrderId ?? '',
     });
     for (const [key, timer] of pendingFollowerMagnitudeChecks) {
       if (!key.startsWith(`${accountId}:`)) continue;
@@ -3091,7 +3097,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const outbox = new Map(current.outbox);
       let changed = false;
       for (const [key, entry] of outbox) {
-        if (entry.status !== 'rejected' || entry.request.accountId !== accountId || entry.request.symbol !== symbol) continue;
+        // Jen konkrétní odmítnuté vstupy této epizody, nic jiného téhož účtu.
+        if (!rejectedKeys.has(key) || entry.status !== 'rejected') continue;
         outbox.set(key, waiveOutboxEntry(
           entry,
           `${entry.reason?.trim() || reason} — follower vyřazen z této epizody, kopírka pokračuje pro ostatní`,
@@ -3161,9 +3168,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           await isolateBreachedFollower(accountId, symbol, breach);
           return;
         }
-        const rejection = terminalEntryRejection(accountId, symbol, leaderNet);
-        if (rejection) {
-          await sidelineRejectedFollower(accountId, symbol, rejection);
+        const rejections = terminalEntryRejection(accountId, symbol, leaderNet);
+        if (rejections) {
+          await sidelineRejectedFollower(accountId, symbol, rejections);
           return;
         }
       }
@@ -3215,11 +3222,61 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
   };
 
+  /**
+   * Definitivní reject VSTUPU followera (limit pozice propky, risk pravidlo
+   * brokera) není nejistota: broker příkaz nevytvořil a follower je
+   * autoritativně flat, do této epizody nepatří. Vrací outbox položku jen
+   * s úplným důkazem (známý snapshot pozic, follower na symbolu flat,
+   * důvod od brokera); jinak null a dávka zůstává fail-closed.
+   */
+  const sidelinableEntryRejection = (item: CopierAuditEntry): OutboxEntry | null => {
+    if (item.kind !== 'rejected' || !item.key || item.accountId == null) return null;
+    if (!group.followers.some(follower => follower.accountId === item.accountId)) return null;
+    const runtime = currentRuntime();
+    const entry = runtime.outbox.get(item.key);
+    if (
+      !entry
+      || entry.status !== 'rejected'
+      // Jen verdikt brokera z TÉTO dávky; interní policy blok (maxContracts)
+      // zůstává kritický jako dřív.
+      || entry.rejectedBy !== 'broker'
+      || entry.leaderEventId !== item.leaderEventId
+      || entry.request.accountId !== item.accountId
+      || entry.operationKind === 'liquidate-position'
+      || !entry.reason?.trim()
+    ) return null;
+    // Nic dalšího pro účet a symbol nesmí být rozpracované (částečné plnění,
+    // nejasný nebo přijatý vstup) — jinak flat není důkaz, že nikdy nevstoupil.
+    for (const other of runtime.outbox.values()) {
+      if (other.key === entry.key || other.request.accountId !== item.accountId
+        || other.request.symbol !== entry.request.symbol) continue;
+      if (other.status === 'planned' || other.status === 'sending' || other.status === 'unknown'
+        || other.status === 'acknowledged') return null;
+    }
+    const positions = positionsByAccount.get(item.accountId);
+    if (!positions || (positions.get(entry.request.symbol) ?? 0) !== 0) return null;
+    return entry;
+  };
+
   const failClosedOnCriticalAudit = (entries: readonly CopierAuditEntry[]) => {
     const critical = entries.filter(isCriticalAuditEntry);
     if (critical.length === 0) return;
     if (!gate.armed) {
       invalidateReconciliation();
+      return;
+    }
+    // 17. 9. 2026 (uživatel potvrdil sjednocení se stream variantou): když
+    // jsou VŠECHNY kritické položky definitivně odmítnuté vstupy flat
+    // followerů, skupina se nevypíná — ostatní followeři v obchodě jsou a
+    // potřebují řízení exitů. Odmítnutí followeři se vyřadí z epizody.
+    // Jakákoli jiná nejistota (unknown, abandoned, cancel-failed, blocked)
+    // zůstává fail-closed s auto-close.
+    const rejectedEntries = critical.map(sidelinableEntryRejection);
+    if (rejectedEntries.every((entry): entry is OutboxEntry => entry != null)) {
+      for (const entry of rejectedEntries) {
+        void sidelineRejectedFollower(entry.request.accountId, entry.request.symbol, [entry])
+          .catch(reason => failClosed(reason, { autoClose: false }));
+      }
       return;
     }
     const reconcileAfterTerminalFill = criticalAuditAllowsTerminalFillRecovery(

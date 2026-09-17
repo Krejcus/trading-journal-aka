@@ -1746,7 +1746,7 @@ export async function processLeaderEvent(
             };
           }
           metrics.rejected += 1;
-          entry = markRejected(entry, ack.rejectReason ?? 'rejected', ackAt);
+          entry = markRejected(entry, ack.rejectReason ?? 'rejected', ackAt, ack.policy ? 'policy' : 'broker');
           return {
             entry,
             resolvedKey: entry.key,

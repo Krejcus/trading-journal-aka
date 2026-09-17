@@ -208,6 +208,40 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-17 21:45 — Claude: sjednocení synchronní varianty, vazba na epizodu, groupId ve Flattenu, limity 45 s (čeká na reinstall)
+
+Uživatel potvrdil sjednocení; druhý Claude (review) našel dvě mezery, obě
+opraveny:
+- **Původ rejectu**: `BrokerOrderAck.policy` značí interní blok
+  (`exposureCappedBroker` / maxContracts), outbox položka nese
+  `rejectedBy: 'broker' | 'policy'` (runner i async `recordAccountRejection`).
+  Vyřadit followera smí jen verdikt brokera; policy blok zůstává kritický
+  (`order-blocked`, fail-closed) — stávající maxContracts testy beze změny.
+- **Synchronní cesta** (`failClosedOnCriticalAudit`): skupina se nevypne jen
+  když VŠECHNY kritické položky dávky jsou brokerem odmítnuté vstupy
+  followerů, kteří jsou podle známého snapshotu flat, položka patří k této
+  dávce (`leaderEventId`) a pro účet+symbol nic neběží (žádné
+  planned/sending/unknown/acknowledged). Jinak fail-closed + auto-close
+  jako od 20. 8.
+- **Asynchronní cesta** svázána s epizodou: jen otevřená
+  `leaderExposureEpoch` a jen její `leaderEntryOrderIds`; vysvětlí se
+  pouze konkrétní odmítnuté položky (ne vše téhož účtu); reject starší
+  15 min nebo mimo epochu = fail-closed.
+- **Relay**: `findInFlightFlatten` vyžaduje shodu `groupId` (a u
+  flatten-account i účtu). Flatten skupiny B se nikdy nepřichytí ke skupině A.
+- **Limity**: 19:30Z Tradovate REST (`/account/list`, `/order/list`)
+  odpovídal >15 s — z Macu i z AWS (Vercel `live-pnl`: 1 timeout z 5 000
+  volání 19:12–19:29Z, poté 40 za 9 min). Worker s 15s REST a 20s sync
+  limitem točil reconnect (`socket-message-error`), ARM nešel. REST default
+  a `WS_SYNC_TIMEOUT_MS` → 45 s; heartbeat guard během handshaku nesmí
+  předběhnout sync limit. Pomalý ≠ mrtvý; 45 s stále brání pětiminutovému
+  visení eventTailu.
+- Korekce dřívějších zápisů: „Tradovate zavřel WS" bylo z workeru odvozeno,
+  ne ověřeno; večerní zpomalení 19:30Z je první případ potvrzený i z AWS.
+- Ověření: testy brokeru/controlleru/relay zelené, tsc/eslint čisté (celá
+  sada viz commit). Worker běží na aa0c83f → po zotavení Tradovate a čistém
+  stavu znovu `scripts/copier/mac-reinstall-safe.sh`.
+
 ### 2026-09-17 21:00 — Claude: odmítnutý follower už nevypne skupinu (nasazeno na main)
 
 Uživatel: „Lucidy se neotevřely kvůli max 20 MNQ, ostatní ano, kopírka se
@@ -295,7 +329,8 @@ Uživatel: kompletní research a oprava všech dnešních bodů. Řetězec a opr
 ### 2026-09-17 18:10 — Claude: výpadek Tradovate uprostřed obchodu, Flatten All 5/12 (jen analýza, bez změny kódu)
 
 - 15:37Z leader short 7 MNQZ6, 11 followerů s native OSO brackety, ARM od
-  15:29Z. 15:43:43Z Tradovate zavřel WS všech tří loginů naráz; každý
+  15:29Z. 15:43:43Z padly WS všech tří loginů naráz (příčina na straně
+  Tradovate/trasy neověřena; z AWS REST v tu dobu fungoval); každý
   reconnect prošel authorize i syncrequest (stav `syncing`) a pak server
   15 s mlčel (`heartbeat-timeout`); REST téže doby: `stale-snapshot`,
   `fetch failed`. Status Tradovate hlásil vše UP; síť Macu i procesu v

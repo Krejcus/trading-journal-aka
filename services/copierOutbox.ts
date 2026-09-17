@@ -80,6 +80,8 @@ export interface OutboxEntry {
   attempts: number;
   brokerOrderId?: string;
   reason?: string;
+  /** Kdo příkaz odmítl: broker (konečný verdikt venue), nebo interní policy obal. */
+  rejectedBy?: 'broker' | 'policy';
   /** Obyčejné placeOrder položky pole nemají; legacy snapshoty zůstávají platné. */
   operationKind?: 'place-order' | 'liquidate-position';
   liquidationPhase?: LiquidationPhase;
@@ -250,8 +252,13 @@ export function markAcknowledged(entry: OutboxEntry, brokerOrderId: string, now:
   return { ...entry, status: 'acknowledged', brokerOrderId, updatedAt: now };
 }
 
-export function markRejected(entry: OutboxEntry, reason: string, now: number): OutboxEntry {
-  return { ...entry, status: 'rejected', reason, updatedAt: now };
+export function markRejected(
+  entry: OutboxEntry,
+  reason: string,
+  now: number,
+  rejectedBy?: 'broker' | 'policy',
+): OutboxEntry {
+  return { ...entry, status: 'rejected', reason, updatedAt: now, ...(rejectedBy ? { rejectedBy } : {}) };
 }
 
 /** Timeout nebo síťová chyba — osud objednávky neznáme. */

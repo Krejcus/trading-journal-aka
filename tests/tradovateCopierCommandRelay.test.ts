@@ -259,7 +259,7 @@ describe('Tradovate copier command relay', () => {
     expect(queued).toEqual({ id: 'running-flatten', status: 'claimed', expiresAt: '2026-08-21T12:00:30.000Z', deviceId });
     expect(upsert).not.toHaveBeenCalled();
     expect(lookup).toContainEqual(['contains', ['payload', { command: command.command.type === 'flatten-account'
-      ? { type: 'flatten-account', accountId: 42 } : { type: 'flatten-group' } }]]);
+      ? { type: 'flatten-account', groupId: 'group-1', accountId: 42 } : { type: 'flatten-group', groupId: 'group-1' } }]]);
     expect(lookup).toContainEqual(['or', ['status.eq.claimed,and(status.eq.pending,expires_at.gt.2026-08-21T12:03:00.000Z)']]);
   });
 

@@ -182,6 +182,11 @@ export interface BrokerOrderAck {
   /** Explicitní business výsledek. false znamená nejednoznačnou odpověď. */
   definitive: boolean;
   rejectReason?: string;
+  /**
+   * Odmítnutí vzniklo v interním obalu (maxContracts, policy), ne u brokera.
+   * Takový reject nikdy nevysvětluje flat followera jako „broker ho nepustil".
+   */
+  policy?: true;
 }
 
 /**
