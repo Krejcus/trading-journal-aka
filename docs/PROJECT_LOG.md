@@ -208,6 +208,38 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-17 odpoledne — Claude: výpadky Tradovate, restart workeru a předání Codexovi
+
+- 15:35 ARM prošel (0,8 s). 15:40:23 padly WebSockety všech tří loginů ve
+  stejnou sekundu; každý další pokus prošel TCP/TLS, ale `user/syncrequest`
+  nedoběhl do 5 s (`syncTimeoutMs` default) → smyčka reconnect/sync-timeout,
+  kopírka fail-closed DISARMED. Produkční preflight Lucid loginu 502 po 10–13 s,
+  Tradeify/FundedNext REST v pořádku. Dva ARM pokusy (15:41, 15:47) vypršely po
+  5 min bez potvrzení workeru („Mac worker příkaz včas nepotvrdil“).
+- 15:53 jsem na žádost uživatele provedl `launchctl kickstart -k` (runtime
+  DISARMED, všech 12 účtů nezávisle ověřeno flat/no-working). Start v 15:56:32
+  se připojil, reconciliace prošla, ARM 15:57:41 OK. 15:58:36 vstup short 3
+  MNQZ6 na 11 followerů s nativním OSO (SL 29 682,25 / TP 29 555), posuny SL
+  16:01 a 16:03 OK. 16:03:46 opět pád Lucid WS → DISARM „unknown“; SL u brokera
+  se vyplnil sám na všech účtech (~−230/−238 USD/účet), flat sweep pak jen
+  nestihl potvrdit zrušení už neexistujících noh (deadline 1 500 ms). V 16:07
+  vše flat bez working orders.
+- **Vedlejší účinek restartu (zjistil Codex):** worker se po mém kickstartu
+  dostal do havarijní smyčky (40+ startů): lease požadavek na produkční API
+  trval 17–61 s (obnova Tradovate tokenu 61,4 s), worker měl limit 10 s a
+  timeout shodil celý proces, launchd ho znovu startoval. Codex smyčku zastavil,
+  worker je vypnutý, DISARMED, a nasadil `9e3d09c` (lease timeout 60 s);
+  navrhuje 120 s + reinstall. Od této chvíle worker vlastní Codex.
+- Společný kořen všech dnešních odpoledních potíží je extrémně pomalý
+  Tradovate (auth/renew 61 s, sync nedoběhne do 5 s, REST 502): 5s sync
+  timeout a 10s lease timeout jsou pod tímto zatížením příliš přísné a mění
+  pomalost v tvrdé výpadky. Doporučení pro navazující práci: (1) timeout lease
+  nikdy neshazovat proces, dokud platí stávající lease — retry s backoffem;
+  (2) `syncTimeoutMs` zvýšit/adaptivně (15–20 s) a při opakovaném timeoutu
+  prodlužovat backoff místo smyčky každých 5 s; (3) relay timeouty
+  (`copier-relay-request-timeout`) mají stejný původ. Dnes s kopírkou dál
+  neobchodovat, dokud Tradovate neodpovídá stabilně.
+
 ### 2026-09-17 — Claude: falešný BREACHED čtyř nových Lucid funded účtů (chybné čtení Tradovate risk statusu)
 
 Uživatel: LFF…0008–0011 (nové Lucid funded účty, založené 06:45Z) se v LIVE
