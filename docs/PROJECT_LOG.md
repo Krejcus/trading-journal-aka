@@ -229,8 +229,10 @@ per-follower potvrzení. Na žádost doplněno:
   změny. Reducer: ověřeně flat DISARMED → `disarmed` místo `unknown`.
 - Testy: 3 nové v `macCompanionStatus.test.ts` (naplněná expozice, ověřeně
   flat, 6 malformed variant), 1 v controlleru (null → po reconcile → po
-  vstupu → null při odpojení). Web se nasadí pushem; worker potřebuje
-  reinstall (`mac-reinstall-safe.sh`).
+  vstupu → null při odpojení). Web nasazen pushem (2461613).
+- **05:58Z worker reinstalován** (Claude na žádost uživatele, který není u
+  PC; první pokus brána zastavila kvůli živému ARM 05:52Z, po DISARM prošel):
+  bundle 00787140… z 2461613, po startu reconcile čistý, DISARMED, flat.
 
 ### 2026-09-17 21:45 — Claude: sjednocení synchronní varianty, vazba na epizodu, groupId ve Flattenu, limity 45 s (čeká na reinstall)
 
