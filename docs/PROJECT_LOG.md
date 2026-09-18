@@ -234,6 +234,9 @@ při zatížení, hlavní zdroj API spotřeby).
 - Testy: `tradovateWorkerExposureOverlay.test.ts` (10), rozšířený test
   expozice v controlleru (order → heartbeat → cancel). Pozor při hromadném
   přejmenování `live.data`: v desku existuje i `live.dataEnrichmentPending`.
+- **10:55Z worker reinstalován** (Claude, brána prošla: DISARMED, flat,
+  čistý), bundle 731d3419… z acd6741; po startu reconcile čistý, heartbeat
+  nese `exposure.orders`. Celá sada 3740/3740, build OK.
 
 ### 2026-09-18 08:30 — Claude: LIVE ukazuje poslední známé pozice místo „Pozice neověřena"
 
