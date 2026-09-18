@@ -208,6 +208,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-18 21:50 — Claude: worker reinstalován z 0df6c6b (na „nasaď worker")
+
+Brána prošla (DISARMED, připojený, reconciled, flat, bez chyby). Bundle
+sha256 d393c9a2e29b4867…; nese diagnostiku penalizace (WS PENALTY + lastError),
+`connectionUsage` ve statusu (REST/WS volání, fáze, close kód, penaltyUntil)
+pro panel v LIVE, plus všechny dřívější dnešní fixy. Manifest jen Tradeify +
+Lucid. Po startu read-only reconcile. Runtime DISARMED.
+
 ### 2026-09-18 21:45 — Claude: LIVE Diagnostika ukazuje čerpání limitu Tradovate na login a stav session workeru
 
 Uživatel: dosavadní panel „jen počet požadavků prohlížeče" byl k ničemu —
