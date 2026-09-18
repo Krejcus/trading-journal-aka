@@ -190,6 +190,23 @@ export interface CopierControllerStatus {
     verifiedAt: number;
     positions: Array<{ accountId: number; symbol: string; netQuantity: number }>;
     followers: Array<{ accountId: number; ok: boolean; detail: string | null }>;
+    /**
+     * Aktivní příkazy účtů skupiny z brokerového streamu a poslední úplné
+     * kontroly; web z nich kreslí ochranu (SL/TP) bez vlastního REST pollingu.
+     */
+    orders?: Array<{
+      accountId: number;
+      brokerOrderId: string;
+      symbol: string;
+      side: 'Buy' | 'Sell';
+      orderType: string;
+      quantity: number;
+      filledQuantity: number;
+      limitPrice: number | null;
+      stopPrice: number | null;
+      status: string;
+      updatedAt: number;
+    }>;
   } | null;
   lastError: string | null;
   /** Poslední odzbrojení v tomto běhu; additivní kvůli starším klientům. */
@@ -1319,6 +1336,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     leaderFillAheadOfPosition.delete(symbol);
   };
   const positionsByAccount = new Map<number, Map<string, number>>();
+  /**
+   * Aktivní příkazy účtů skupiny z `order` událostí streamu a z úplných
+   * broker čtení při reconciliation. Jen pro read-only status (heartbeat →
+   * web/companion); execution rozhodnutí z této cache nikdy nevycházejí.
+   */
+  const liveOrdersByAccount = new Map<number, Map<string, BrokerOrder>>();
+  const rememberLiveOrder = (order: BrokerOrder) => {
+    const orders = liveOrdersByAccount.get(order.accountId) ?? new Map<string, BrokerOrder>();
+    if (isOpenOrderStatus(order.status)) orders.set(order.brokerOrderId, order);
+    else orders.delete(order.brokerOrderId);
+    liveOrdersByAccount.set(order.accountId, orders);
+  };
+  const rememberLiveOrderSnapshot = (accountId: number, orders: readonly BrokerOrder[]) => {
+    liveOrdersByAccount.set(accountId, new Map(
+      orders.filter(order => isOpenOrderStatus(order.status)).map(order => [order.brokerOrderId, order]),
+    ));
+  };
   let cooldownPending = false;
   /** Čekající auto day-lock; zamyká se výhradně existující cestou po flat. */
   let dayLockPending: { trigger: DayLockTrigger; reason: string; until?: number } | null = null;
@@ -5273,6 +5307,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
     positionsByAccount.clear();
     for (const [accountId, positions] of nextPositions) positionsByAccount.set(accountId, positions);
+    for (const snapshot of snapshots) rememberLiveOrderSnapshot(snapshot.accountId, snapshot.orders);
     lastAuthoritativeReadAt = clock();
     lastBrokerPositionAt = lastAuthoritativeReadAt;
     leaderPositions.clear();
@@ -6307,6 +6342,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const handleBrokerEvent = async (event: BrokerEvent, admissionGeneration: number) => {
     if (stopped) return;
     const now = clock();
+    if (event.type === 'order') rememberLiveOrder(event.order);
     if (event.type === 'heartbeat') {
       gate = { ...gate, lastHeartbeatAt: event.at };
       await maybeHandleArmExpiry(now);
@@ -7646,6 +7682,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           snapshot.positions.map(item => [item.symbol, item.netQuantity]),
         ));
       }
+      for (const snapshot of snapshots) rememberLiveOrderSnapshot(snapshot.accountId, snapshot.orders);
       lastAuthoritativeReadAt = clock();
       lastBrokerPositionAt = lastAuthoritativeReadAt;
       leaderPositions.clear();
@@ -8128,6 +8165,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           snapshot.positions.map(position => [position.symbol, position.netQuantity]),
         ));
       }
+      for (const snapshot of snapshots) rememberLiveOrderSnapshot(snapshot.accountId, snapshot.orders);
       lastAuthoritativeReadAt = clock();
       lastBrokerPositionAt = lastAuthoritativeReadAt;
       untrackedTradeSymbols.clear();
@@ -8725,10 +8763,27 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             }
             return { accountId: id, ok: true, detail: null };
           });
+          const members = new Set([group.leaderAccountId as number, ...group.followers.map(follower => follower.accountId)]);
+          const orders = [...liveOrdersByAccount].flatMap(([accountId, byId]) => (members.has(accountId)
+            ? [...byId.values()].map(order => ({
+              accountId,
+              brokerOrderId: order.brokerOrderId,
+              symbol: order.symbol,
+              side: order.side,
+              orderType: order.orderType,
+              quantity: order.quantity,
+              filledQuantity: order.filledQuantity,
+              limitPrice: order.limitPrice ?? null,
+              stopPrice: order.stopPrice ?? null,
+              status: order.status,
+              updatedAt: order.updatedAt,
+            }))
+            : []));
           return {
             verifiedAt: Math.max(lastAuthoritativeReadAt, lastBrokerPositionAt ?? 0),
             positions,
             followers,
+            orders,
           };
         })(),
         lastError: lastError?.message ?? null,

@@ -286,6 +286,15 @@ describe('bootstrapCopierRuntime', () => {
     expect(open!.followers).toEqual([{ accountId: 200, ok: true, detail: null }]);
     expect(open!.verifiedAt).toBeGreaterThan(flat!.verifiedAt);
 
+    // Aktivní příkazy followera ze streamu jdou do heartbeatu; terminální stav je odebere.
+    const stopOrder = leaderOrder({ brokerOrderId: 'follower-stop-1', tag: 'follower-stop-1', accountId: 200, side: 'Sell', orderType: 'Stop', stopPrice: 29_400, limitPrice: undefined, quantity: 1, status: 'working' });
+    broker.emitEvent({ type: 'order', order: stopOrder });
+    await controller.waitForIdle();
+    expect(controller.status().exposure!.orders).toContainEqual(expect.objectContaining({ accountId: 200, brokerOrderId: 'follower-stop-1', side: 'Sell', orderType: 'Stop', stopPrice: 29_400, status: 'working' }));
+    broker.emitEvent({ type: 'order', order: { ...stopOrder, status: 'canceled', sourceVersion: '2:Canceled' } });
+    await controller.waitForIdle();
+    expect(controller.status().exposure!.orders!.some(order => order.brokerOrderId === 'follower-stop-1')).toBe(false);
+
     broker.setConnected(false);
     await controller.waitForIdle();
     expect(controller.status().exposure).toBeNull();

@@ -60,6 +60,7 @@ import {
   tradovateCopyTradeOrders,
   tradovateCopyTradeSnapshot,
 } from '../lib/tradovateCopyTradeBridge';
+import { overlayWorkerExposure } from '../lib/tradovateWorkerExposureOverlay';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import {
   createCopyTradeAccountLabelResolver,
@@ -309,18 +310,24 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     () => agentStatus?.devices ?? (agentStatus?.device ? [agentStatus.device] : []),
     [agentStatus],
   );
-  const selectedAccount = live.data?.accounts.find(account => account.id === selectedAccountId) ?? null;
+  // Pozice a aktivní příkazy účtů kopírky přednostně z heartbeatu workeru
+  // (stream Tradovate, každou sekundu); REST přes Vercel zůstává zálohou.
+  const liveData = useMemo(
+    () => overlayWorkerExposure(live.data, agentStatus, agentStatusObservedAt),
+    [live.data, agentStatus, agentStatusObservedAt],
+  );
+  const selectedAccount = liveData?.accounts.find(account => account.id === selectedAccountId) ?? null;
   const [profileSetupAccountIds, setProfileSetupAccountIds] = useState<Set<string> | null>(null);
   const accountsWithoutPlan = useMemo(() => {
-    if (!live.data) return [];
+    if (!liveData) return [];
     const profilesById = profileMap(live.profiles);
-    return live.data.accounts.filter(account => (
+    return liveData.accounts.filter(account => (
       tradovateAccountProfileNeedsPlan(profilesById.get(String(account.id)), account.name)
     ));
-  }, [live.data, live.profiles]);
+  }, [liveData, live.profiles]);
   const copyTradeSnapshot = useMemo(
-    () => live.data ? tradovateCopyTradeSnapshot(live.data, live.profiles) : null,
-    [live.data, live.profiles],
+    () => liveData ? tradovateCopyTradeSnapshot(liveData, live.profiles) : null,
+    [liveData, live.profiles],
   );
   const displayMembership = useMemo(() => new Map(Object.entries(live.connectionData).flatMap(([id, data]) => {
     const connection = live.status?.connections.find(item => item.id === id && item.connected);
@@ -374,9 +381,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     writeTradovateDisplaySession(userId, values);
   }, [userId, displaySnapshot, displayMembership, connectedConnectionIds, live.dataEnrichmentPending]);
   const brokerDailyPnlByAccount = useMemo<Readonly<Record<string, number | null>>>(() => {
-    if (!live.data) return {};
-    return tradovateBrokerDailyPnlByAccount(live.data);
-  }, [live.data]);
+    if (!liveData) return {};
+    return tradovateBrokerDailyPnlByAccount(liveData);
+  }, [liveData]);
   const accountLabel = useMemo(() => createCopyTradeAccountLabelResolver({
     accountsById: new Map(copyTradeSnapshot?.accounts.map(account => [account.id, account]) ?? []),
     profilesById: new Map(live.profiles.flatMap(profile => {
@@ -394,8 +401,8 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     ? formatKnownCopyTradeAccountIds(live.error, knownCopierAccountIds, accountLabel)
     : null;
   const copyTradeOrders = useMemo(
-    () => live.data ? tradovateCopyTradeOrders(live.data) : [],
-    [live.data],
+    () => liveData ? tradovateCopyTradeOrders(liveData) : [],
+    [liveData],
   );
   const effectiveAccountEligibility = useMemo(
     () => copyTradeSnapshot && !live.dataEnrichmentPending
@@ -422,26 +429,26 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // Jeden autoritativní read-only snapshot pro Home/Lock Screen widgety a
   // Live Activity. Neobsahuje OAuth token ani žádnou broker akci.
   useEffect(() => {
-    if (!live.data) return;
+    if (!liveData) return;
     const state = buildNativeLiveWidgetState({
-      accounts: live.data.accounts,
+      accounts: liveData.accounts,
       profiles: live.profiles,
       controller: agentStatus?.controller ?? null,
       followerCount: agentStatus?.group.followers.length ?? 0,
       workerObservedAtMs: agentStatusObservedAt,
-      brokerCapturedAtMs: Date.parse(live.data.capturedAt),
-      positionsAvailable: ['available', 'empty'].includes(live.data.coverage.positions.availability),
-      ordersAvailable: ['available', 'empty'].includes(live.data.coverage.orders.availability),
+      brokerCapturedAtMs: Date.parse(liveData.capturedAt),
+      positionsAvailable: ['available', 'empty'].includes(liveData.coverage.positions.availability),
+      ordersAvailable: ['available', 'empty'].includes(liveData.coverage.orders.availability),
     });
     void syncNativeLiveWidgetSnapshot(state);
-  }, [agentStatus, agentStatusObservedAt, live.data, live.profiles]);
+  }, [agentStatus, agentStatusObservedAt, liveData, live.profiles]);
   const executionGroup = useMemo(() => {
     if (!agentStatus) return null;
     return resolveLocalExecutionGroup(copyGroups, agentStatus.group);
   }, [agentStatus, copyGroups]);
   useEffect(() => {
     onCopierJournalRefresh?.(agentStatus?.group ?? executionGroup ?? null);
-  }, [agentStatus?.group, executionGroup, live.data?.capturedAt, onCopierJournalRefresh]);
+  }, [agentStatus?.group, executionGroup, liveData?.capturedAt, onCopierJournalRefresh]);
   const executeAgent = useCallback(async (command: Parameters<typeof agentClient.execute>[0]) => {
     if (agentTransport === 'local') return agentClient.execute(command);
     if (!relayConnectionId) throw new Error('Chybí aktivní Tradovate připojení pro Mac worker relay.');
@@ -798,7 +805,7 @@ setAgentStatus((await executeAgent({
         journalHealth={agentStatus?.journalHealth}
         onRepairSnapshots={repairSnapshots}
         hideDisarmNotice={tab === 'overview' && !checkingConnection && !requiresConnection
-          && !!live.data && !!copyTradeSnapshot && !!executionGroup?.id && !copierUiDemo}
+          && !!liveData && !!copyTradeSnapshot && !!executionGroup?.id && !copierUiDemo}
         quiet
       />
 
@@ -908,7 +915,7 @@ setAgentStatus((await executeAgent({
         <LiveDashboardSkeleton />
       ) : requiresConnection ? (
         <ConnectionRequired onConnect={() => setAddConnectionOpen(true)} />
-      ) : !live.data ? (
+      ) : !liveData ? (
         <LiveDashboardSkeleton />
       ) : (
         <>
@@ -990,8 +997,8 @@ setAgentStatus((await executeAgent({
               onSaveGroup={agentStatus ? saveRiskGroup : undefined}
             />
           ) : null}
-          {tab === 'accounts' ? <Accounts data={live.data} profiles={live.profiles} onAccount={setSelectedAccountId} /> : null}
-          {tab === 'orders' ? <PositionsAndOrders data={live.data} profiles={live.profiles} /> : null}
+          {tab === 'accounts' ? <Accounts data={liveData} profiles={live.profiles} onAccount={setSelectedAccountId} /> : null}
+          {tab === 'orders' ? <PositionsAndOrders data={liveData} profiles={live.profiles} /> : null}
           {tab === 'events' ? (
             <>
               <LiveStatusStrip
@@ -1009,7 +1016,7 @@ setAgentStatus((await executeAgent({
                 snapshotHealth={agentStatus?.snapshotHealth}
                 disarmHistory={agentStatus?.controller.disarmHistory ?? []}
               />
-              <ActivityView data={live.data} profiles={live.profiles} />
+              <ActivityView data={liveData} profiles={live.profiles} />
             </>
           ) : null}
         </>
@@ -1029,9 +1036,9 @@ setAgentStatus((await executeAgent({
         />
       ) : null}
       {addConnectionOpen ? <TradovateAddConnectionModal environment={live.status?.environment ?? 'demo'} connecting={live.busy === 'connect'} onClose={() => setAddConnectionOpen(false)} onConnect={() => void live.connect()} /> : null}
-      {live.profileSetupOpen && live.data ? (
+      {live.profileSetupOpen && liveData ? (
         <TradovateAccountProfileSetup
-          accounts={live.data.accounts.filter(account => !profileSetupAccountIds || profileSetupAccountIds.has(String(account.id)))}
+          accounts={liveData.accounts.filter(account => !profileSetupAccountIds || profileSetupAccountIds.has(String(account.id)))}
           profiles={live.profiles}
           onClose={() => { live.setProfileSetupOpen(false); setProfileSetupAccountIds(null); }}
           onSaved={profiles => {

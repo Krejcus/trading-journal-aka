@@ -208,6 +208,33 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-18 10:15 — Claude: LIVE bere pozice a příkazy z heartbeatu workeru (čeká na reinstall workera)
+
+Uživatel: „udělej i ty pozice z heartbeatu workeru". Dosud web/telefon četl
+pozice a příkazy jen přes Vercel `live-pnl` z Tradovate REST (pomalé, 502/504
+při zatížení, hlavní zdroj API spotřeby).
+- **Worker**: `controller.exposure.orders` — aktivní příkazy účtů skupiny
+  z cache `liveOrdersByAccount`, plněné z `order` událostí streamu
+  (`rememberLiveOrder`, terminální stav položku odebere) a z úplných broker
+  čtení při reconciliation/recovery (`rememberLiveOrderSnapshot`). Jen pro
+  read-only status; execution z ní nevychází. `listOrders` brokeru je REST,
+  proto se neptá přímo.
+- **Web** (`lib/tradovateWorkerExposureOverlay.ts`): v LIVE desku se nad
+  `live.data` položí `overlayWorkerExposure(data, agentStatus,
+  agentStatusObservedAt)`: účtům skupiny nahradí pozice a příkazy z
+  heartbeatu, `readState.positionsAsOf/ordersAsOf` = čas heartbeatu,
+  coverage available/empty. Podmínky: heartbeat ≤ 8 s, `connected`, blok
+  `exposure` existuje; jinak se vrátí původní REST data beze změny (starší
+  worker bez `orders` nechá REST příkazy). Zůstatky a P&L se nemění; účty
+  mimo skupinu nedotčeny. Průměrná cena pozice se převezme z REST, worker ji
+  nezná.
+- Efekt: pozice v LIVE jsou čerstvé, dokud worker žije (heartbeat každou
+  sekundu), nezávisle na Tradovate REST latenci; „Neověřeno" jen při
+  odpojeném streamu. Redukce `live-pnl` pollingu (P&L) zatím ne.
+- Testy: `tradovateWorkerExposureOverlay.test.ts` (10), rozšířený test
+  expozice v controlleru (order → heartbeat → cancel). Pozor při hromadném
+  přejmenování `live.data`: v desku existuje i `live.dataEnrichmentPending`.
+
 ### 2026-09-18 08:30 — Claude: LIVE ukazuje poslední známé pozice místo „Pozice neověřena"
 
 Uživatel: po delší době v pozadí (telefon/web) všude „Pozice neověřena". Příčina:
