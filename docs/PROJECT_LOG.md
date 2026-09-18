@@ -239,8 +239,12 @@ opraveny:
 - Korekce dřívějších zápisů: „Tradovate zavřel WS" bylo z workeru odvozeno,
   ne ověřeno; večerní zpomalení 19:30Z je první případ potvrzený i z AWS.
 - Ověření: testy brokeru/controlleru/relay zelené, tsc/eslint čisté (celá
-  sada viz commit). Worker běží na aa0c83f → po zotavení Tradovate a čistém
-  stavu znovu `scripts/copier/mac-reinstall-safe.sh`.
+  sada viz commit).
+- **18. 9. 04:04Z**: Tradovate od půlnoci v pořádku; read-only reconcile
+  uzavřel nedokončenou epochu leadera (automatická kontrola ji přeskakovala),
+  uživatel reinstaloval worker z 40737f8 (bundle 2fb31a43…, obsahuje
+  sjednocení, vazbu na epizodu i 45s limity), po startu reconcile čistý,
+  DISARMED, flat, streamy i journal v pořádku.
 
 ### 2026-09-17 21:00 — Claude: odmítnutý follower už nevypne skupinu (nasazeno na main)
 
