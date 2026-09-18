@@ -172,6 +172,43 @@ describe('Tradovate pilot lease API', () => {
     );
   });
 
+  describe('vynucená obnova tokenu (mrtvá Tradovate session)', () => {
+    const deviceAuth = () => copierDevice.authorizeTradovateCopierDevice.mockResolvedValue({
+      id: 'device-1', userId: 'user-1', connectionId: 'connection-owned', publicKey: 'DEVICE PUBLIC KEY', deviceName: 'MacBook Air',
+    });
+    const tokenExpiringIn = (ms: number) => ({ accessToken: 'tok', expiresAt: new Date(Date.now() + ms).toISOString() });
+
+    it('obnoví token podruhé s validitou delší než životnost, když worker pošle forceRenewal a token není čerstvý', async () => {
+      deviceAuth();
+      oauthStore.getValidTradovateAccessToken
+        .mockResolvedValueOnce(tokenExpiringIn(70 * 60_000)) // vydán před 10 min
+        .mockResolvedValueOnce({ accessToken: 'fresh', expiresAt: new Date(Date.now() + 80 * 60_000).toISOString() });
+      const harness = responseHarness();
+      await handler(request({ headers: { authorization: 'Device device.secret' }, body: { forceRenewal: true } }), harness.res);
+      expect(harness.status()).toBe(200);
+      expect(oauthStore.getValidTradovateAccessToken).toHaveBeenCalledTimes(2);
+      expect(oauthStore.getValidTradovateAccessToken).toHaveBeenLastCalledWith(expect.objectContaining({ minimumValidityMs: 81 * 60_000 }));
+      expect(pilotLease.sealTradovatePilotLease).toHaveBeenCalledWith(expect.objectContaining({ accessToken: 'fresh' }), 'DEVICE PUBLIC KEY');
+    });
+
+    it('token mladší než 3 minuty znovu neobnoví (brzda proti smyčce)', async () => {
+      deviceAuth();
+      oauthStore.getValidTradovateAccessToken.mockResolvedValueOnce(tokenExpiringIn(79 * 60_000)); // vydán před 1 min
+      const harness = responseHarness();
+      await handler(request({ headers: { authorization: 'Device device.secret' }, body: { forceRenewal: true } }), harness.res);
+      expect(harness.status()).toBe(200);
+      expect(oauthStore.getValidTradovateAccessToken).toHaveBeenCalledTimes(1);
+    });
+
+    it('bez device auth forceRenewal ignoruje', async () => {
+      oauthStore.getValidTradovateAccessToken.mockResolvedValueOnce(tokenExpiringIn(70 * 60_000));
+      const harness = responseHarness();
+      await handler(request({ body: { connectionId: 'connection-owned', publicKey: 'PUBLIC KEY', forceRenewal: true } }), harness.res);
+      expect(harness.status()).toBe(200);
+      expect(oauthStore.getValidTradovateAccessToken).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('maps invalid public keys to a non-sensitive client error', async () => {
     pilotLease.sealTradovatePilotLease.mockImplementation(() => {
       throw new Error('pilot-public-key-must-be-rsa-3072');

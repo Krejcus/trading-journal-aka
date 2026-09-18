@@ -175,8 +175,18 @@ export function createMacCopierDeviceTokenProvider(options: {
     return error;
   };
 
-  const refresh = async (): Promise<TradovatePilotLeasePayload> => {
-    if (renewal) return renewal;
+  /**
+   * `forceRenewal`: worker hlásí mrtvou broker session (opakovaný sync
+   * timeout) a chce od serveru nový access token, tedy novou Tradovate
+   * session; server si drží vlastní brzdu proti smyčce. Běžící obyčejná
+   * obnova se nejdřív nechá doběhnout, aby se nekřížily dva lease požadavky.
+   */
+  const refresh = async (refreshOptions: { forceRenewal?: boolean } = {}): Promise<TradovatePilotLeasePayload> => {
+    if (renewal) {
+      if (!refreshOptions.forceRenewal) return renewal;
+      await renewal.catch(() => undefined);
+    }
+    const forceRenewal = refreshOptions.forceRenewal === true;
     renewal = (async () => {
       if (!fetchImpl) throw providerError('lease-fetch', new Error('mac-copier-fetch-unavailable'));
       let secret: string;
@@ -202,7 +212,7 @@ export function createMacCopierDeviceTokenProvider(options: {
               Authorization: `Device ${options.config.deviceId}.${secret}`,
               'Content-Type': 'application/json',
             },
-            body: '{}',
+            body: JSON.stringify(forceRenewal ? { forceRenewal: true } : {}),
             signal: requestAbort.signal,
           });
         } catch (reason) {

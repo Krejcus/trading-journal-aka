@@ -70,6 +70,38 @@ describe('mac copier device', () => {
     expect((await loadMacCopierDevice(configPath)).paired).toBe(true);
   });
 
+  it('vynucená obnova pošle forceRenewal a nahradí token i při jinak platném leasu (mrtvá session 18. 9. 2026)', async () => {
+    root = await mkdtemp(resolve(tmpdir(), 'alphatrade-mac-device-'));
+    const secrets = new Map<string, string>();
+    const secretStore: MacCopierSecretStore = {
+      read: async id => secrets.get(id) ?? Promise.reject(new Error('missing')),
+      write: async (id, value) => { secrets.set(id, value); },
+    };
+    const connectionId = crypto.randomUUID();
+    const now = Date.parse('2026-09-18T15:45:00.000Z');
+    const config = await createMacCopierDevice({
+      configPath: resolve(root, 'device.json'), connectionId, apiOrigin: 'https://alpha.example', deviceName: 'Test Mac', secretStore, now,
+    });
+    const publicKey = await readFile(config.publicKeyPath, 'utf8');
+    const bodies: string[] = [];
+    let issued = 0;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      bodies.push(String(init?.body));
+      issued += 1;
+      const envelope = sealTradovatePilotLease({
+        version: 1, environment: 'demo', connectionId, accessToken: `token-${issued}`,
+        issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 60 * 60_000).toISOString(),
+      }, publicKey, now);
+      return new Response(JSON.stringify({ envelope }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    const provider = createMacCopierDeviceTokenProvider({ config, secretStore, fetchImpl: fetchImpl as typeof fetch, clock: () => now });
+    expect(await provider.getAccessToken()).toBe('token-1');
+    expect(await provider.getAccessToken()).toBe('token-1');
+    await provider.refresh({ forceRenewal: true });
+    expect(await provider.getAccessToken()).toBe('token-2');
+    expect(bodies).toEqual(['{}', '{"forceRenewal":true}']);
+  });
+
   it('rejects a non-TLS remote API origin', async () => {
     root = await mkdtemp(resolve(tmpdir(), 'alphatrade-mac-device-'));
     const secretStore: MacCopierSecretStore = { read: async () => '', write: async () => undefined };

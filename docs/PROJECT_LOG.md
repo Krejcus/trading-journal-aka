@@ -208,6 +208,38 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-18 17:50 — Claude: mrtvá Tradovate session ožívá až s novým tokenem → worker si obnovu vynutí (čeká na reinstall)
+
+**Nález (uživatel odmítl „je to Tradovate" bez důkazu, právem):** Vercel log
+`pilot-lease` ukazuje, že server obnovil access tokeny Tradeify a FundedNext
+v 15:31:20–21Z (worker si vyžádal lease, token měl < 35 min). Staré tokeny
+vypršely 15:41:2xZ a přesně tehdy Tradovate zavřel oba sockety. Reconnect s
+novými tokeny 39× skončil sync timeoutem, REST s týmiž tokeny vracel z Vercelu
+408. V 16:41:28/39Z si worker vyžádal lease znovu (token < 10 min), server
+vydal třetí token a reconnect v 16:42:15Z prošel napoprvé. Lucid s tokenem z
+15:16Z běžel celou dobu. Závěr: session svázaná s tokenem z 15:31 byla na
+straně Tradovate mrtvá; nová session (nový token) ji nahradila. Bez zásahu to
+trvá do přirozeného okna obnovy, tedy až hodinu. Breach FundedNext s tím
+nesouvisí (Tradeify breach nebyl, umřel stejně).
+
+**Oprava (commit v tomto zápisu, worker + server):**
+- `services/tradovateBroker.ts`: `onSessionSuspect({ reason:'sync-timeout',
+  consecutive, at })` — počítá sync timeouty v řadě, nuluje po dokončeném syncu.
+- `services/copierSessionRenewalPolicy.ts`: práh 2 timeouty v řadě, cooldown
+  5 min na spojení. Test.
+- `scripts/copier/pilot.ts`: `sessionSuspectHandler` → `context.forceTokenRenewal()`
+  (jen párované zařízení), log `SESSION RENEWAL conn:x …`. Broker sám nic
+  neposílá; příští reconnect vezme nový token z provideru.
+- `server/macCopierDevice.ts`: `refresh({ forceRenewal: true })` → tělo
+  `{"forceRenewal":true}`; běžící obyčejná obnova se nejdřív nechá doběhnout.
+- `api/tradovate/oauth/pilot-lease.ts`: `forceRenewal` jen s device auth;
+  token mladší než 3 min se znovu neobnovuje (brzda proti smyčce); obnova přes
+  `getValidTradovateAccessToken` s validitou 81 min (> životnost 80 min), takže
+  nový token dostane i Vercel (live-pnl). Testy API, provideru i brokeru.
+
+Očekávaný efekt: dnešní 61min výpadek by trval ~2–3 min (dva sync timeouty
+po 45 s + obnova). Server část je v produkci po pushi; worker po reinstallu.
+
 ### 2026-09-18 16:50 — Claude: mrtvé OAuth spojení bez účtů nesmí držet kopírku v „nepřipojeno" (čeká na reinstall workera)
 
 **Co se stalo:** od 15:41Z Tradovate neobsluhuje sessions Tradeify (53157614)

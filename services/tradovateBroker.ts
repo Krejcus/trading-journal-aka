@@ -142,6 +142,14 @@ export interface TradovateAccountDataChange {
   receivedAt: number;
 }
 
+/** Opakovaný sync timeout jedné broker session (viz TradovateBrokerConfig.onSessionSuspect). */
+export interface TradovateSessionSuspect {
+  reason: 'sync-timeout';
+  /** Kolikátý sync timeout v řadě od posledního dokončeného syncu. */
+  consecutive: number;
+  at: number;
+}
+
 export interface TradovateBrokerConfig {
   onAccountDataConnectionChange?: (connected: boolean) => void | Promise<void>;
   /** Display-only invalidation. Never awaited; failures cannot enter execution. */
@@ -168,6 +176,13 @@ export interface TradovateBrokerConfig {
   closeTimeoutMs?: number;
   disconnectedLogIntervalMs?: number;
   onReconnectDiagnostic?: (message: string) => void;
+  /**
+   * Podezření na mrtvou broker session: socket se otevře, ale `user/syncrequest`
+   * opakovaně nedoběhne. 18. 9. 2026 to na Tradeify a FundedNext trvalo 61 min
+   * a skončilo přesně ve chvíli, kdy server vydal nový access token. Volající
+   * (pilot) na to smí vynutit obnovu tokenu; broker sám nic neobnovuje.
+   */
+  onSessionSuspect?: (info: TradovateSessionSuspect) => void;
   syncTimeoutMs?: number;
   socketIdleTimeoutMs?: number;
   /**
@@ -397,6 +412,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const diagnostic = (message: string) => config.onReconnectDiagnostic?.(
     `connection=${diagnosticLabel} ${message}`,
   );
+  /** Sync timeouty v řadě od posledního dokončeného syncu (viz onSessionSuspect). */
+  let consecutiveSyncTimeouts = 0;
   const contextualError = (
     reason: unknown,
     phase: 'token-lease' | 'rest' | 'websocket' | 'reconciliation',
@@ -1148,6 +1165,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         observe('connection', { state: 'synced' }, 'transport');
         notifyAccountDataChange(null, 'resync');
         reconnectFailures = 0;
+        consecutiveSyncTimeouts = 0;
         stopDisconnectedLog();
         // Dokončená plánovaná obměna: controller výpadek nikdy neviděl,
         // redundantní `connected: true` je neškodné a srovná heartbeat.
@@ -1365,6 +1383,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           new TradovateTransportError('Tradovate WebSocket sync timeout'),
           'websocket',
         ));
+        consecutiveSyncTimeouts += 1;
+        config.onSessionSuspect?.({ reason: 'sync-timeout', consecutive: consecutiveSyncTimeouts, at: clock() });
         closeSocket(candidate, 'sync-timeout');
       }, config.syncTimeoutMs ?? 5_000);
     };

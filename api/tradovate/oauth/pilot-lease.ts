@@ -10,6 +10,14 @@ import { sealTradovatePilotLease } from '../../../server/tradovatePilotLease.js'
 import { authorizeTradovateCopierDevice } from '../../../server/tradovateCopierDevice.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
 
+/** Tradovate access token žije 80 min; stáří odvozujeme z expiry, řádek se nečte znovu. */
+const TRADOVATE_ACCESS_TOKEN_LIFETIME_MS = 80 * 60_000;
+/** Delší než životnost tokenu → getValidTradovateAccessToken vždy obnoví. */
+const FORCED_RENEWAL_VALIDITY_MS = TRADOVATE_ACCESS_TOKEN_LIFETIME_MS + 60_000;
+const FORCED_RENEWAL_MIN_TOKEN_AGE_MS = 3 * 60_000;
+const tokenAgeMs = (expiresAt: string, now = Date.now()) =>
+  now - (Date.parse(expiresAt) - TRADOVATE_ACCESS_TOKEN_LIFETIME_MS);
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
   // preflight odpovedi selze fetch jako 'Load failed'. Web je same-origin.
@@ -38,13 +46,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       : (await listTradovateConnectionStatuses(db, userId, 'demo'))
         .find(item => item.id === connectionId && item.connected);
     if (!device && !connection) return res.status(404).json({ error: 'tradovate-connection-not-found' });
-    const token = await getValidTradovateAccessToken({
+    let token = await getValidTradovateAccessToken({
       db,
       config,
       userId,
       connectionId,
       minimumValidityMs: 35 * 60_000,
     });
+    // Worker hlásí mrtvou session (opakovaný sync timeout) a chce nový token,
+    // tedy novou Tradovate session. Jen s device auth, a token mladší než
+    // FORCED_RENEWAL_MIN_TOKEN_AGE_MS se znovu neobnovuje — brzda proti smyčce
+    // worker ↔ Tradovate, kdyby ani nový token nepomohl.
+    const forceRenewal = device != null && req.body?.forceRenewal === true;
+    if (forceRenewal && tokenAgeMs(token.expiresAt) >= FORCED_RENEWAL_MIN_TOKEN_AGE_MS) {
+      console.warn('[tradovate-pilot-lease] forced renewal requested by worker', { connectionId });
+      token = await getValidTradovateAccessToken({
+        db,
+        config,
+        userId,
+        connectionId,
+        minimumValidityMs: FORCED_RENEWAL_VALIDITY_MS,
+      });
+    }
     const issuedAt = new Date().toISOString();
     const envelope = sealTradovatePilotLease({
       version: 1,

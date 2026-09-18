@@ -24,7 +24,8 @@ import {
   copierPilotStateKey,
   parseCopierFollowersFlag,
 } from '../../services/copierPilotGroup';
-import { createTradovateBroker, type TradovateBrokerPort } from '../../services/tradovateBroker';
+import { createTradovateBroker, type TradovateBrokerPort, type TradovateSessionSuspect } from '../../services/tradovateBroker';
+import { createSessionRenewalPolicy, type SessionRenewalPolicy } from '../../services/copierSessionRenewalPolicy';
 import { createBrokerRouter } from '../../services/brokerRouter';
 import { isOpenOrderStatus, type BrokerPort } from '../../services/brokerPort';
 import {
@@ -128,6 +129,8 @@ interface PilotContext {
   expiresAt: string | null;
   renewable: boolean;
   getAccessToken: () => Promise<string>;
+  /** Vynutí nový access token (novou Tradovate session) přes pilot-lease; jen párované zařízení. */
+  forceTokenRenewal?: () => Promise<void>;
   device?: NonNullable<Parameters<typeof startLocalCopierExecutionAgent>[0]['device']>;
   onDevicePaired?: (deviceId: string) => Promise<void>;
   /** Read-only probe used when pairing was approved in the cloud/QR flow. */
@@ -149,6 +152,25 @@ const dedicatedChartConfigPath = resolve(homedir(), 'Library/Application Support
 const connectionLabel = (connectionId: string) => `conn:${connectionId.slice(0, 8)}`;
 const logReconnectDiagnostic = (message: string) => {
   console.error(`${new Date().toISOString()} ${message}`);
+};
+/**
+ * Mrtvá broker session (18. 9. 2026): socket se otevře, sync nikdy nedoběhne,
+ * REST vrací 408, a to s platným tokenem. Ožilo to až s dalším access
+ * tokenem. Po opakovaném sync timeoutu proto worker vynutí obnovu tokenu
+ * (nová Tradovate session); broker sám nic neposílá, jen příští reconnect
+ * použije nový token. Politika drží práh a cooldown na jedno spojení.
+ */
+const sessionRenewalPolicies = new Map<string, SessionRenewalPolicy>();
+const sessionSuspectHandler = (context: PilotContext, label: string) => (info: TradovateSessionSuspect) => {
+  if (!context.forceTokenRenewal) return;
+  const policy = sessionRenewalPolicies.get(context.connectionId) ?? createSessionRenewalPolicy();
+  sessionRenewalPolicies.set(context.connectionId, policy);
+  if (!policy.shouldForceRenewal(info.consecutive, info.at)) return;
+  console.warn(`${new Date().toISOString()} SESSION RENEWAL ${label} ${info.consecutive}× sync timeout v řadě → vynucená obnova access tokenu (nová Tradovate session)`);
+  context.forceTokenRenewal().then(
+    () => console.warn(`${new Date().toISOString()} SESSION RENEWAL ${label} token obnoven; příští reconnect použije novou session`),
+    (error: unknown) => console.error(`${new Date().toISOString()} SESSION RENEWAL ${label} obnova tokenu selhala: ${error instanceof Error ? error.message : String(error)}`),
+  );
 };
 const logControllerError = (error: Error) => {
   const connection = error.message.includes('connection=') ? '' : 'connection=aggregate ';
@@ -243,6 +265,7 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
       getAccessToken: context.getAccessToken,
       connectionLabel: connectionLabel(context.connectionId),
       onReconnectDiagnostic: logReconnectDiagnostic,
+      onSessionSuspect: sessionSuspectHandler(context, connectionLabel(context.connectionId)),
       onAccountDataChange: change => context.displayFeed?.invalidate(change.accountId),
       onAccountDataConnectionChange: connected => context.displayFeed?.setStreamConnected(connected),
     });
@@ -298,6 +321,7 @@ async function runMultiConnectionAgent(): Promise<void> {
       // spojení (propfirma) vypadlo.
       connectionLabel: connectionLabel(entry.connectionId),
       onReconnectDiagnostic: logReconnectDiagnostic,
+      onSessionSuspect: sessionSuspectHandler(context, connectionLabel(entry.connectionId)),
       onAccountDataChange: change => context.displayFeed?.invalidate(change.accountId),
       onAccountDataConnectionChange: connected => context.displayFeed?.setStreamConnected(connected),
     });
@@ -1167,6 +1191,7 @@ async function pilotContext(options: PilotContextOptions = {}): Promise<PilotCon
       expiresAt: payload.expiresAt,
       renewable: true,
       getAccessToken: provider.getAccessToken,
+      forceTokenRenewal: async () => { await provider.refresh({ forceRenewal: true }); },
       relay: { apiOrigin: deviceConfig.apiOrigin, authorizationHeader: provider.authorizationHeader },
       device: {
         state: 'paired',
