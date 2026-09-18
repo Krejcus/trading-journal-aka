@@ -179,6 +179,18 @@ export interface CopierControllerStatus {
     accountId: number;
     epochIds: string[];
   }>;
+  /**
+   * Autoritativní expozice pro read-only klienty (Mac companion): čas
+   * poslední broker informace o pozicích (úplné čtení při reconciliation
+   * nebo Position entita ze streamu), aktuální nenulové pozice všech účtů
+   * a per-follower shoda s očekávanou expozicí. null = v tomto běhu ještě
+   * neproběhla úplná kontrola, nebo stream není připojený.
+   */
+  exposure?: {
+    verifiedAt: number;
+    positions: Array<{ accountId: number; symbol: string; netQuantity: number }>;
+    followers: Array<{ accountId: number; ok: boolean; detail: string | null }>;
+  } | null;
   lastError: string | null;
   /** Poslední odzbrojení v tomto běhu; additivní kvůli starším klientům. */
   lastDisarm?: CopierDisarmRecord;
@@ -1181,6 +1193,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   let shutdownRequested = false;
   let shutdownPromise: Promise<void> | null = null;
   let positionCheckComplete = false;
+  /** Čas poslední úplné broker kontroly pozic (reconciliation / recovery) v tomto běhu. */
+  let lastAuthoritativeReadAt: number | null = null;
+  /** Čas poslední broker Position entity ze streamu nebo čtení. */
+  let lastBrokerPositionAt: number | null = null;
   // A complete position/list also proves zero for symbols omitted by the broker.
   // A per-symbol stream event alone does not establish that account-wide fact.
   let leaderPositionSnapshotComplete = false;
@@ -5257,6 +5273,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
     positionsByAccount.clear();
     for (const [accountId, positions] of nextPositions) positionsByAccount.set(accountId, positions);
+    lastAuthoritativeReadAt = clock();
+    lastBrokerPositionAt = lastAuthoritativeReadAt;
     leaderPositions.clear();
     leaderFillAheadOfPosition.clear();
     for (const [symbol, quantity] of nextLeaderPositions) leaderPositions.set(symbol, quantity);
@@ -6669,6 +6687,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const exitOnlyFillReachedFlat = exitOnlyFlatFillAwaitingPosition.delete(transitionKey);
       accountPositions.set(event.position.symbol, event.position.netQuantity);
       positionsByAccount.set(event.position.accountId, accountPositions);
+      lastBrokerPositionAt = clock();
       // Incident 24. 8.: follower byl flat v 19.198, ale jeho stop u brokera
       // dál pracoval (venue ho přeasertoval na vyšší total) a o 980 ms
       // později ho otočil do protipozice. Jakmile follower dosáhne flat,
@@ -7627,6 +7646,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           snapshot.positions.map(item => [item.symbol, item.netQuantity]),
         ));
       }
+      lastAuthoritativeReadAt = clock();
+      lastBrokerPositionAt = lastAuthoritativeReadAt;
       leaderPositions.clear();
       leaderFillAheadOfPosition.clear();
       // Atribuce SL/TP exitů přežije restart: ochranné nohy leadera se
@@ -8107,6 +8128,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           snapshot.positions.map(position => [position.symbol, position.netQuantity]),
         ));
       }
+      lastAuthoritativeReadAt = clock();
+      lastBrokerPositionAt = lastAuthoritativeReadAt;
       untrackedTradeSymbols.clear();
       recentFollowerFillCauses.clear();
       for (const timer of pendingFollowerMagnitudeChecks.values()) clearTimeout(timer);
@@ -8671,6 +8694,42 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             byAccount.set(item.accountId, [...(byAccount.get(item.accountId) ?? []), item.epochId]);
           }
           return [...byAccount].map(([accountId, epochIds]) => ({ accountId, epochIds }));
+        })(),
+        exposure: (() => {
+          if (lastAuthoritativeReadAt == null || !gate.connected) return null;
+          const positions = [...positionsByAccount].flatMap(([accountId, bySymbol]) => [...bySymbol]
+            .filter(([, netQuantity]) => netQuantity !== 0)
+            .map(([symbol, netQuantity]) => ({ accountId, symbol, netQuantity })));
+          const leaderHeld = positionsByAccount.get(group.leaderAccountId as number);
+          const symbols = new Set(positions.map(position => position.symbol));
+          const followers = group.followers.map(follower => {
+            const id = follower.accountId;
+            if (follower.mode === 'off') return { accountId: id, ok: true, detail: 'vypnutý follower' };
+            if (gate.divergentAccounts.has(id)) return { accountId: id, ok: false, detail: 'pozice se liší od leadera' };
+            if (workingOrderAccounts.has(id)) return { accountId: id, ok: false, detail: 'aktivní příkazy mimo kopii' };
+            const eligibility = accountEligibility.get(id)?.state;
+            if (eligibility === 'breached') return { accountId: id, ok: false, detail: 'účet zlikvidován propkou' };
+            if (eligibility === 'dll-locked') return { accountId: id, ok: false, detail: 'denní limit účtu' };
+            const held = positionsByAccount.get(id);
+            if (!held) return { accountId: id, ok: false, detail: 'pozice neověřena' };
+            if (activeFollowerCut(id)) return { accountId: id, ok: true, detail: 'vyřazen limitem do konce session' };
+            for (const symbol of symbols) {
+              const expected = Math.trunc((leaderHeld?.get(symbol) ?? 0) * follower.multiplier);
+              const actual = held.get(symbol) ?? 0;
+              if (actual === expected) continue;
+              const suppression = intentionalEntrySuppressions.get(intentionalSuppressionKey(id, symbol));
+              if (suppression && actual === suppression.allowedNet) {
+                return { accountId: id, ok: true, detail: 'vyřazen z této epizody' };
+              }
+              return { accountId: id, ok: false, detail: `${symbol}: drží ${actual}, očekáváno ${expected}` };
+            }
+            return { accountId: id, ok: true, detail: null };
+          });
+          return {
+            verifiedAt: Math.max(lastAuthoritativeReadAt, lastBrokerPositionAt ?? 0),
+            positions,
+            followers,
+          };
         })(),
         lastError: lastError?.message ?? null,
         ...(lastDisarm ? { lastDisarm: { ...lastDisarm } } : {}),

@@ -9,6 +9,8 @@ import {
   type MacCompanionDayLockTrigger,
   type MacCompanionProblemKind,
   type MacCompanionStatusDTO,
+  type MacCompanionPositionDTO,
+  type MacCompanionFollowerAckDTO,
 } from '../lib/macCompanionContract.js';
 import { COPIER_LEADER_DAILY_STATS_LABEL } from '../lib/copierDailyStatsLabels.js';
 
@@ -209,6 +211,47 @@ export function buildMacCompanionStatus(options: {
     : null;
   const armExpiresAt = finite(controller.armExpiresAt);
   const state = copierState(controller);
+  const exposure = ((): MacCompanionStatusDTO['exposure'] | null => {
+    const raw = object(controller.exposure);
+    const verifiedAt = finite(raw.verifiedAt);
+    if (verifiedAt == null || verifiedAt <= 0 || verifiedAt > now + 60_000) return null;
+    if (!Array.isArray(raw.positions) || !Array.isArray(raw.followers)) return null;
+    const leaderId = finite(group.leaderAccountId);
+    const at = new Date(verifiedAt).toISOString();
+    const positions: MacCompanionPositionDTO[] = [];
+    for (const candidate of raw.positions.slice(0, 200)) {
+      const row = object(candidate);
+      const accountId = finite(row.accountId);
+      const net = finite(row.netQuantity);
+      const symbol = typeof row.symbol === 'string' ? row.symbol.trim() : '';
+      if (accountId == null || net == null || !symbol) return null;
+      // The companion shows the leader's exposure; follower deviations are
+      // reported through the per-follower acknowledgement below.
+      if (accountId !== leaderId || net === 0) continue;
+      positions.push({ symbol: symbol.slice(0, 32), side: net > 0 ? 'long' : 'short', qty: Math.abs(Math.trunc(net)), at });
+    }
+    const failing: MacCompanionFollowerAckDTO['failing'] = [];
+    let total = 0;
+    for (const candidate of raw.followers.slice(0, 200)) {
+      const row = object(candidate);
+      const accountId = finite(row.accountId);
+      if (accountId == null || typeof row.ok !== 'boolean') return null;
+      total += 1;
+      if (row.ok) continue;
+      failing.push({
+        account: redactedAccountLabel(accountId, group),
+        detail: typeof row.detail === 'string' && row.detail.trim() ? row.detail.trim().slice(0, 200) : 'Follower nepotvrdil expozici.',
+        sinceMinutes: Math.max(0, Math.floor((now - verifiedAt) / 60_000)),
+      });
+    }
+    return {
+      verifiedAt: at,
+      positions,
+      followerAck: { confirmed: total - failing.length, total, failing },
+      accountsWithWorkingOrders: workingOrderEvidence.known ? workingOrderAccounts.length : null,
+    };
+  })();
+
   const divergences = divergentAccounts.map(accountId => ({
     symbol: null,
     account: redactedAccountLabel(accountId, group),
@@ -382,10 +425,11 @@ export function buildMacCompanionStatus(options: {
       dayLockActive: dayLockUntil != null && dayLockUntil > now,
       killSwitchTripped,
     },
-    // The heartbeat contains no authoritative position snapshot or
-    // per-follower acknowledgement. Empty positions plus verifiedAt:null means
-    // "unverified", never "flat".
-    exposure: {
+    // 18. 9. 2026: the worker heartbeat now carries `controller.exposure`
+    // (broker position time, non-zero positions, per-follower agreement).
+    // Anything malformed or missing stays null: empty positions plus
+    // verifiedAt:null means "unverified", never "flat".
+    exposure: exposure ?? {
       verifiedAt: null,
       positions: [],
       followerAck: null,

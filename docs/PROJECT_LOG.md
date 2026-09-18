@@ -208,6 +208,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-18 06:40 — Claude: Mac companion dostává skutečnou expozici (čeká na reinstall workera)
+
+Uživatel: „proč mi Mac panel píše Expozice neověřena / Potvrzení followerů
+nedostupné?" Od 2. 9. (4b821bc) plnil `/api/mac-companion/status` blok
+`exposure` natvrdo `null`, protože heartbeat workera nenesl pozice ani
+per-follower potvrzení. Na žádost doplněno:
+- **Worker** (`CopierControllerStatus.exposure`): `verifiedAt` = max(čas
+  poslední úplné broker kontroly při reconciliation/recovery, poslední
+  Position entita ze streamu), `positions` = nenulové pozice všech účtů z
+  `positionsByAccount`, `followers` = per follower shoda s očekávanou
+  expozicí (divergence, working orders, breached/DLL, neověřená pozice,
+  cut a záměrné potlačení jako `ok` s vysvětlením). `null` bez úplné
+  kontroly v tomto běhu nebo při odpojeném streamu.
+- **Server** (`macCompanionStatus.ts`): striktní parse; pozice do DTO jen
+  leaderovy (panel nemá pole účtu, followeři jdou přes `followerAck` s
+  redigovaným „Follower N"), `accountsWithWorkingOrders` z known evidence,
+  cokoli vadného → původní `null` (nikdy „flat" bez důkazu). Mac aplikace
+  DTO už dekóduje (`ExposureDTO`, `FollowerAcknowledgementDTO`), Swift beze
+  změny. Reducer: ověřeně flat DISARMED → `disarmed` místo `unknown`.
+- Testy: 3 nové v `macCompanionStatus.test.ts` (naplněná expozice, ověřeně
+  flat, 6 malformed variant), 1 v controlleru (null → po reconcile → po
+  vstupu → null při odpojení). Web se nasadí pushem; worker potřebuje
+  reinstall (`mac-reinstall-safe.sh`).
+
 ### 2026-09-17 21:45 — Claude: sjednocení synchronní varianty, vazba na epizodu, groupId ve Flattenu, limity 45 s (čeká na reinstall)
 
 Uživatel potvrdil sjednocení; druhý Claude (review) našel dvě mezery, obě

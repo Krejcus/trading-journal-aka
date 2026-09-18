@@ -257,6 +257,41 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
+  it('status po autoritativní reconciliation vydává expozici pro read-only klienty', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 29_500 }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    expect(controller.status().exposure).toBeNull();
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    const flat = controller.status().exposure;
+    expect(flat).toMatchObject({ positions: [], followers: [{ accountId: 200, ok: true, detail: null }] });
+    expect(flat!.verifiedAt).toBeGreaterThan(0);
+
+    controller.arm();
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-entry-exposure', quantity: 1, orderType: 'Market', limitPrice: undefined,
+    }) });
+    broker.setPosition(100, 'MNQU6', 1);
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 1 } });
+    await controller.waitForIdle();
+    const open = controller.status().exposure;
+    expect(open!.positions).toEqual(expect.arrayContaining([
+      { accountId: 100, symbol: 'MNQU6', netQuantity: 1 },
+      { accountId: 200, symbol: 'MNQU6', netQuantity: 1 },
+    ]));
+    expect(open!.followers).toEqual([{ accountId: 200, ok: true, detail: null }]);
+    expect(open!.verifiedAt).toBeGreaterThan(flat!.verifiedAt);
+
+    broker.setConnected(false);
+    await controller.waitForIdle();
+    expect(controller.status().exposure).toBeNull();
+    controller.stop();
+  });
+
   it('fail-closed vyplní strukturované odzbrojení a ARM ho nemaže', async () => {
     // Spouštěč: interní policy blok (maxContracts). Konečný reject vstupu od
     // brokera už od 17. 9. 2026 followera jen vyřadí a skupinu nevypíná.

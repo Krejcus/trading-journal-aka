@@ -39,6 +39,62 @@ const healthyController = (extras: Record<string, unknown> = {}) => ({
   ...extras,
 });
 
+describe('mac companion exposure from the worker heartbeat', () => {
+  const exposure = (extras: Record<string, unknown> = {}) => ({
+    verifiedAt: NOW - 2_000,
+    positions: [
+      { accountId: 123456, symbol: 'MNQZ6', netQuantity: -7 },
+      { accountId: 222222, symbol: 'MNQZ6', netQuantity: -7 },
+    ],
+    followers: [
+      { accountId: 222222, ok: true, detail: null },
+      { accountId: 333333, ok: false, detail: 'pozice se liší od leadera' },
+    ],
+    ...extras,
+  });
+
+  it('publishes the leader position, a redacted follower acknowledgement and the working-order count', () => {
+    const dto = buildMacCompanionStatus({
+      runtime: runtime(healthyController({ armed: true, exposure: exposure() })),
+      now: NOW,
+    });
+    expect(dto.exposure).toEqual({
+      verifiedAt: new Date(NOW - 2_000).toISOString(),
+      positions: [{ symbol: 'MNQZ6', side: 'short', qty: 7, at: new Date(NOW - 2_000).toISOString() }],
+      followerAck: {
+        confirmed: 1,
+        total: 2,
+        failing: [{ account: 'Follower 2', detail: 'pozice se liší od leadera', sinceMinutes: 0 }],
+      },
+      accountsWithWorkingOrders: 0,
+    });
+    expect(JSON.stringify(dto)).not.toContain('333333');
+  });
+
+  it('lets a verified flat DISARMED worker reduce to disarmed instead of unknown', () => {
+    const dto = buildMacCompanionStatus({
+      runtime: runtime(healthyController({ exposure: exposure({ positions: [], followers: [{ accountId: 222222, ok: true, detail: null }] }) })),
+      now: NOW,
+    });
+    expect(dto.exposure.positions).toEqual([]);
+    expect(dto.exposure.followerAck).toEqual({ confirmed: 1, total: 1, failing: [] });
+    expect(reduceMacCompanionPresentation(dto, NOW)).toBe('disarmed');
+  });
+
+  it.each([
+    { exposure: null },
+    { exposure: { verifiedAt: 0, positions: [], followers: [] } },
+    { exposure: { verifiedAt: NOW, positions: 'flat', followers: [] } },
+    { exposure: { verifiedAt: NOW, positions: [{ accountId: 123456, symbol: 'MNQZ6' }], followers: [] } },
+    { exposure: { verifiedAt: NOW, positions: [], followers: [{ accountId: 222222 }] } },
+    { exposure: { verifiedAt: NOW + 120_000, positions: [], followers: [] } },
+  ])('keeps exposure unverified for a malformed heartbeat %j', extras => {
+    const dto = buildMacCompanionStatus({ runtime: runtime(healthyController(extras)), now: NOW });
+    expect(dto.exposure).toEqual({ verifiedAt: null, positions: [], followerAck: null, accountsWithWorkingOrders: null });
+    expect(reduceMacCompanionPresentation(dto, NOW)).toBe('unknown');
+  });
+});
+
 describe('mac companion cloud status reducer', () => {
   it('builds a strict allowlist DTO without inventing exposure or follower acknowledgements', () => {
     const dto = buildMacCompanionStatus({
