@@ -414,16 +414,18 @@ export function copyGroupPowerBlocker({
 /**
  * Připraví pouze explicitní odebrání followerů, kteří opravdu chybí v
  * aktuálním OAuth snapshotu. Leader se touto cestou nikdy nemění ani nemaže.
+ * Odebírají se vždy všichni nedostupní followeři: skupina, ve které by
+ * jediný nedostupný účet zůstal, neprojde validací a uložení by selhalo
+ * (18. 9. 2026 — odebrání jednoho FundedNext účtu z řádku, zatímco další
+ * čtyři byly také nedostupné).
  */
 export function unavailableFollowerRemovalPlan(
   group: CopyGroupConfig,
   availableAccountIds: Iterable<number>,
-  requestedAccountIds?: Iterable<number>,
   ownership: readonly { accountId: number; epochIds: readonly string[] }[] = [],
 ): UnavailableFollowerRemovalPlan | null {
   const unavailable = unavailableCopyGroupAccounts(group, availableAccountIds);
-  const requested = requestedAccountIds == null ? null : new Set(requestedAccountIds);
-  const removedIds = unavailable.followerAccountIds.filter(accountId => requested == null || requested.has(accountId));
+  const removedIds = unavailable.followerAccountIds;
   if (removedIds.length === 0) return null;
   const removed = new Set(removedIds);
   return {
@@ -776,7 +778,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const requestUnavailableFollowerRemoval = (
     saved: CopyGroupConfig,
     draft: CopyGroupConfig,
-    requestedAccountIds?: Iterable<number>,
     leaderUnavailableAccountId: number | null = null,
     source: PendingUnavailableFollowerRemoval['source'] = 'arm',
   ) => {
@@ -788,7 +789,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         ? unavailableFollowerRemovalPlan(
           draft,
           snapshot.accounts.map(account => account.id),
-          requestedAccountIds,
           unverifiableFollowerOwnership,
         )
         : null,
@@ -876,7 +876,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       requestUnavailableFollowerRemoval(
         candidate,
         candidate,
-        unavailable.followerAccountIds,
         unavailable.leaderAccountId,
       );
       return;
@@ -1292,7 +1291,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       title: 'Zrušit příkaz?', detail: 'Připraví zrušení tohoto pracovního příkazu.',
       confirmLabel: 'Zrušit příkaz', danger: true, command: { type: 'cancel-order', groupId: group.id, orderId },
     }),
-    onRemoveUnavailableFollower: (accountId: number) => requestUnavailableFollowerRemoval(group, group, [accountId], null, 'row'),
+    onRemoveUnavailableFollower: () => requestUnavailableFollowerRemoval(group, group, null, 'row'),
   });
 
   return (
@@ -1554,10 +1553,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                                   type: 'flatten-account', groupId: group.id, accountId, operationId: manualOperationId(),
                                 },
                               })}
-                              onRemoveUnavailableFollower={accountId => requestUnavailableFollowerRemoval(
+                              onRemoveUnavailableFollower={() => requestUnavailableFollowerRemoval(
                                 group,
                                 group,
-                                [accountId],
                                 null,
                                 'row',
                               )}
@@ -1630,10 +1628,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           onSave={(group, onError) => saveGroup(group, message => onError(copyGroupLibraryErrorMessage(new Error(message))))}
           libraryState={groupLibraryState === 'needs-import' && pendingCloudGroupSaves.current.get(editorGroup.id)?.owner === userId ? 'error' : groupLibraryState}
           libraryError={groupLibraryError}
-          onRemoveUnavailableFollowers={(draft, accountIds) => requestUnavailableFollowerRemoval(
+          onRemoveUnavailableFollowers={draft => requestUnavailableFollowerRemoval(
             editorGroup,
             draft,
-            accountIds,
             null,
             'editor',
           )}

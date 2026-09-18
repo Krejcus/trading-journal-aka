@@ -71,6 +71,23 @@ const elementText = (node: ReactNode): string => {
   return React.Children.toArray((node.props as { children?: ReactNode }).children).map(elementText).join('');
 };
 
+describe('plán odebrání nedostupných followerů', () => {
+  it('odebere všechny nedostupné followery najednou, aby uložená skupina prošla validací', () => {
+    const secondUnavailable = 65839444;
+    const group: CopyGroupConfig = {
+      ...saved,
+      followers: [...saved.followers, { accountId: secondUnavailable, mode: 'on-submit', multiplier: 1 }],
+    };
+    const value = unavailableFollowerRemovalPlan(group, [leaderId, healthyFollowerId], [
+      { accountId: secondUnavailable, epochIds: ['epoch-1'] },
+    ]);
+    expect(value?.missingOptionalAccountIds).toEqual([unavailableFollowerId, secondUnavailable]);
+    expect(value?.group.followers.map(follower => follower.accountId)).toEqual([healthyFollowerId]);
+    expect(value?.ownershipWarnings).toEqual([{ accountId: secondUnavailable, epochIds: ['epoch-1'] }]);
+    expect(unavailableFollowerRemovalPlan(saved, [leaderId, healthyFollowerId, unavailableFollowerId])).toBeNull();
+  });
+});
+
 describe('nedostupný follower — potvrzení přímo z blokujícího místa', () => {
   it('renderuje pro followera primární akci a stejný diff s ODEBRÁN', () => {
     const markup = renderToStaticMarkup(dialog(state()));
@@ -151,7 +168,6 @@ describe('nedostupný follower — potvrzení přímo z blokujícího místa', (
     const riskyPlan = unavailableFollowerRemovalPlan(
       saved,
       [leaderId, healthyFollowerId],
-      undefined,
       [{ accountId: unavailableFollowerId, epochIds: ['epoch-risk-1'] }],
     );
     if (!riskyPlan) throw new Error('Test musí vytvořit risky removal plan');

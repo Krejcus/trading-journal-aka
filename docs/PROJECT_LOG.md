@@ -208,6 +208,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-18 15:40 — Claude: odebrání nedostupného followera z řádku nikdy neprošlo validací
+
+**Symptom:** po breachi FundedNext účtů (14:17Z „liquidation only due to low net
+liquidating value") byly všechny FNFTCH účty v LIVE „Nedostupný účet". Klik na
+odebrání jednoho z nich otevřel dialog (převzetí odpovědnosti za neověřenou
+kopii z epochy 5deacf15), ale uložení selhalo: plán odebíral jen požadovaný
+účet, ve skupině zůstali další nedostupní followeři a `validateCopyGroup`
+vrátil „Follower účet … není dostupný" → „Změna nebyla uložena". Relay ani
+worker žádný příkaz nedostaly (ověřeno v `tradovate_copier_commands` a logu
+workera), takže selhání bylo čistě klientské.
+
+**Oprava:** `unavailableFollowerRemovalPlan` odebírá vždy všechny nedostupné
+followery (řádek, editor i zapnutí se chovají stejně; diff v dialogu je
+vypisuje všechny). Parametr `requestedAccountIds` zrušen. Test v
+`tests/liveCopyUnavailableFollowerRemoval.test.ts`.
+
+**Stav workera v tu dobu (nezměněno, k rozhodnutí operátora):** DISARMED,
+connected, `reconciliationRequired=true`, lastError 14:16:44Z „follower
+65839434 má autoritativně pozici -25 na MNQZ6, leader 0"; exposure po
+14:17:08Z bez pozic. Worker odmítá `update-group`, dokud běží
+recovery/reconciliation → po nasazení je nutné nejdřív spustit Kontrolu pozic.
+Všech 11 followerů nese durable ownership marker epochy 5deacf15.
+
 ### 2026-09-18 12:40 — Claude: lehké načtení deníku (banner „Data deníku čekají na obnovení")
 
 **Symptom:** po delším pozadí na telefonu/webu zůstal viset banner „Data deníku
