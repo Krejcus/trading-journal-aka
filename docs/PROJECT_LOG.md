@@ -208,6 +208,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-18 19:52 — Claude: worker reinstalován z 3408088 (na „nasaď"), FundedNext odebráno z manifestu
+
+Brána bezpečného skriptu prošla (DISARMED, připojený, po Kontrole pozic, flat,
+bez chyby; uživatel dnes neobchoduje). Před reinstallem záloha manifestu
+`connections.json.bak-20260918T175002Z` a odebrání připojení 7cce8c5b
+(FundedNext, po breachi bez účtů). Worker startoval 17:50:15Z jen se dvěma
+připojeními (Tradeify 65333343/65333277, Lucid leader + 4 followeři), oba
+sockety `WS AUTHORIZED afterMs≈140`, automatická kontrola po startu potvrdila
+flat, read-only reconcile `authoritativelyClean: true`, bez divergence.
+Bundle sha256 ddc925e6f18819b0…, obsahuje: router ignorující spojení bez účtů,
+tolerantní start bez čitelného adresáře, vynucenou obnovu tokenu po 2 sync
+timeoutech a diagnostiku close kódů. Runtime DISARMED; zapnutí je na uživateli.
+Plist stále nese starý `--followers` seznam (jen fallback, durable skupina má 6).
+
 ### 2026-09-18 17:50 — Claude: mrtvá Tradovate session ožívá až s novým tokenem → worker si obnovu vynutí (čeká na reinstall)
 
 **Nález (uživatel odmítl „je to Tradovate" bez důkazu, právem):** Vercel log
