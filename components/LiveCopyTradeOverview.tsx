@@ -16,6 +16,7 @@ import {
 import type { LiveAccount, LiveGroup, LiveOrder, LivePosition, LiveSnapshot } from '../services/tradecopiaLiveService';
 import { futuresSymbolRoot } from '../services/futuresContractSpecs';
 import type { TradovateApiTelemetrySnapshot } from '../lib/tradovateApiTelemetry';
+import type { TradovateConnectionUsageRow } from '../lib/tradovateConnectionUsageRows';
 import type { CopierAccountEligibility, CopierControllerStatus, CopierStuckOperation } from '../services/copierRuntimeController';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
 import {
@@ -294,6 +295,8 @@ interface Props {
   runtimeAvailable?: boolean;
   riskConfigSupported?: boolean;
   apiTelemetry?: TradovateApiTelemetrySnapshot;
+  /** Čerpání limitu Tradovate a stav session workeru po připojení; jen zobrazení. */
+  connectionUsage?: TradovateConnectionUsageRow[];
   /** Atomicky vybere čistou skupinu, provede reconciliation a ARM LIVE. */
   onSwitchAndArm?: (group: CopyGroupConfig) => Promise<void> | void;
   onArmLive?: () => Promise<void> | void;
@@ -477,6 +480,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   runtimeAvailable = false,
   riskConfigSupported = false,
   apiTelemetry,
+  connectionUsage = [],
   onSwitchAndArm,
   onArmLive,
   onDisarm,
@@ -1614,6 +1618,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           apiReady={!!commandAdapter}
           onHelp={() => setHelpOpen(true)}
           telemetry={apiTelemetry}
+          connectionUsage={connectionUsage}
         />
       ) : null}
 
@@ -1782,9 +1787,30 @@ const EMPTY_API_TELEMETRY: TradovateApiTelemetrySnapshot = {
   lastStatus: null,
   lastUpdatedAt: null,
   rateLimitedUntil: null,
+  brokerCalls: {},
 };
 
-const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry = EMPTY_API_TELEMETRY }: { open: boolean; onToggle: () => void; dataActive: boolean; apiReady: boolean; onHelp: () => void; telemetry?: TradovateApiTelemetrySnapshot }) => {
+const usageTone = (level: TradovateConnectionUsageRow['level']) => level === 'over' ? 'text-rose-500' : level === 'warn' ? 'text-amber-500' : 'text-emerald-500';
+const formatRemaining = (ms: number) => ms >= 60_000 ? `${Math.ceil(ms / 60_000)} min` : `${Math.ceil(ms / 1_000)} s`;
+const formatClockTime = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+/** Věta o stavu session workeru na jednom loginu; penalizace a close kód jsou to, co dnes rozhodovalo. */
+export const describeConnectionSession = (row: TradovateConnectionUsageRow): { text: string; tone: string } => {
+  const { session } = row;
+  if (!session.known) return { text: 'worker nehlásí', tone: 'text-[var(--text-muted)]' };
+  if (session.penaltyRemainingMs != null) {
+    return { text: `penalizace Tradovate, sync za ${formatRemaining(session.penaltyRemainingMs)}`, tone: 'text-rose-500' };
+  }
+  const close = session.lastClose;
+  const closeText = close
+    ? ` · poslední zavření ${formatClockTime(close.at)} (${close.initiatedBy === 'remote' ? 'Tradovate' : 'worker'}${close.code != null ? `, kód ${close.code}` : ''})`
+    : '';
+  if (session.streamConnected) return { text: `session připojená${closeText}`, tone: 'text-emerald-500' };
+  const timeouts = session.consecutiveSyncTimeouts > 0 ? `, ${session.consecutiveSyncTimeouts}× sync timeout` : '';
+  return { text: `bez streamu (${session.phase}${timeouts})${closeText}`, tone: 'text-amber-500' };
+};
+
+const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry = EMPTY_API_TELEMETRY, connectionUsage = [] }: { open: boolean; onToggle: () => void; dataActive: boolean; apiReady: boolean; onHelp: () => void; telemetry?: TradovateApiTelemetrySnapshot; connectionUsage?: TradovateConnectionUsageRow[] }) => {
   const rows = [
     { label: 'Za minutu', usage: telemetry.minute },
     { label: 'Za hodinu', usage: telemetry.hour },
@@ -1839,6 +1865,30 @@ const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry 
               </div>
             ))}
           </div>
+          {connectionUsage.length > 0 ? (
+            <div className="mt-4">
+              <p className="text-[11px] font-bold text-[var(--text-secondary)] mb-2">Limit Tradovate na login (80/min, 5 000/h)</p>
+              <div className="space-y-2">
+                {connectionUsage.map(row => {
+                  const session = describeConnectionSession(row);
+                  return (
+                    <div key={row.connectionId} className="rounded-md border border-[var(--border-subtle)] px-3 py-2" data-testid={`tradovate-usage-${row.connectionId}`}>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="text-xs font-black text-[var(--text-primary)]">{row.label}</span>
+                        <span className={`text-xs font-bold tabular-nums ${usageTone(row.level)}`}>
+                          {row.total.minute}/{row.minuteLimit} za minutu · {row.total.hour}/{row.hourLimit} za hodinu
+                        </span>
+                      </div>
+                      <div className="mt-1 text-[10px] tabular-nums text-[var(--text-muted)]">
+                        web (tato aplikace) {row.web.minute}/min · worker {row.worker ? `${row.worker.rest.minute}/min REST + ${row.worker.ws.minute}/min WS` : 'nehlásí'}
+                      </div>
+                      <div className={`mt-0.5 text-[10px] ${session.tone}`}>{session.text}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
           <p className="mt-3 text-[10px] leading-relaxed text-[var(--text-muted)]">
             Jde o přesný počet požadavků z této otevřené aplikace na AlphaTrade Tradovate proxy. Tradovate neposkytuje autoritativní procento vyčerpaného limitu; odpovědi 429 evidujeme zvlášť.
             {telemetry.inFlight > 0 ? ` Právě probíhá: ${telemetry.inFlight}.` : ''}

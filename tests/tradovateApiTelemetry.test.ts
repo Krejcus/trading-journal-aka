@@ -5,6 +5,7 @@ import {
   getTradovateApiTelemetrySnapshot,
   refreshTradovateApiTelemetry,
   resetTradovateApiTelemetryForTests,
+  recordTradovateBrokerCalls,
 } from '../lib/tradovateApiTelemetry';
 
 describe('Tradovate API telemetry', () => {
@@ -47,5 +48,23 @@ describe('Tradovate API telemetry', () => {
     const request = beginTradovateApiRequest(start);
     finishTradovateApiRequest(request, 0, null, start + 50);
     expect(getTradovateApiTelemetrySnapshot().minute).toMatchObject({ requests: 1, failures: 1 });
+  });
+});
+
+describe('Tradovate volání serveru po připojení', () => {
+  it('zapíše jen kladné počty a drží je po připojení v minutovém a hodinovém okně', () => {
+    resetTradovateApiTelemetryForTests();
+    const now = Date.parse('2026-09-18T18:50:00.000Z');
+    recordTradovateBrokerCalls('conn-a', 4, now);
+    recordTradovateBrokerCalls('conn-a', 0, now);
+    recordTradovateBrokerCalls('conn-a', undefined, now);
+    recordTradovateBrokerCalls('conn-b', 3, now + 1_000);
+    recordTradovateBrokerCalls('', 9, now);
+    const snapshot = getTradovateApiTelemetrySnapshot();
+    expect(snapshot.brokerCalls['conn-a']).toEqual({ minute: 4, hour: 4 });
+    expect(snapshot.brokerCalls['conn-b']).toEqual({ minute: 3, hour: 3 });
+    expect(Object.keys(snapshot.brokerCalls)).toEqual(['conn-a', 'conn-b']);
+    refreshTradovateApiTelemetry(now + 2 * 60_000);
+    expect(getTradovateApiTelemetrySnapshot().brokerCalls['conn-a']).toEqual({ minute: 0, hour: 4 });
   });
 });

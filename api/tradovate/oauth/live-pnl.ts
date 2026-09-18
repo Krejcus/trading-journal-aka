@@ -26,9 +26,9 @@ const TICK_COALESCE_MS = 2_500;
 const CASH_COALESCE_MS = 5_000;
 const recentTicks = new Map<string, { at: number; result: Promise<unknown> }>();
 
-function coalesce<T>(key: string, ttlMs: number, now: number, read: () => Promise<T>): Promise<T> {
+function coalesce<T>(key: string, ttlMs: number, now: number, read: () => Promise<T>): Promise<T> & { shared?: boolean } {
   const cached = recentTicks.get(key);
-  if (cached && now - cached.at < ttlMs) return cached.result as Promise<T>;
+  if (cached && now - cached.at < ttlMs) return Object.assign(cached.result.then(value => value) as Promise<T>, { shared: true });
   const result = read();
   recentTicks.set(key, { at: now, result });
   // Selhání se nesdílí: další požadavek zkusí broker znovu.
@@ -66,10 +66,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const accountId = Number(req.body?.accountId);
       if (!Number.isSafeInteger(accountId) || accountId <= 0) return res.status(400).json({ error: 'invalid-account-id' });
       const requestedAt = new Date().toISOString();
-      const fields = await coalesce(`cash:${userId}:${connectionId}:${accountId}`, CASH_COALESCE_MS, Date.now(), () => readTradovateAccountDisplay({
+      const pending = coalesce(`cash:${userId}:${connectionId}:${accountId}`, CASH_COALESCE_MS, Date.now(), () => readTradovateAccountDisplay({
         baseUrl: tradovateApiBaseUrl(config.environment), accessToken, accountId, signal: AbortSignal.timeout(8_000),
       }));
-      return res.status(200).json({ kind: 'account-display-v1', snapshot: {
+      const fields = await pending;
+      // readTradovateAccountDisplay = 3 Tradovate volání (snapshot, deps, currency/list).
+      return res.status(200).json({ kind: 'account-display-v1', brokerCalls: pending.shared ? 0 : 3, snapshot: {
         connectionId, environment: config.environment, accountId, requestedAt, confirmedAt: new Date().toISOString(), fields,
       } });
     }
@@ -92,14 +94,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
       return res.status(200).json(anchor);
     }
-    const tick = await coalesce(`tick:${userId}:${connectionId}:${contractCursor}`, TICK_COALESCE_MS, Date.now(), () => loadTradovateLivePnlTick({
+    const pendingTick = coalesce(`tick:${userId}:${connectionId}:${contractCursor}`, TICK_COALESCE_MS, Date.now(), () => loadTradovateLivePnlTick({
       baseUrl: tradovateApiBaseUrl(config.environment),
       accessToken,
       connectionId,
       environment: config.environment,
       contractCursor,
     }));
-    return res.status(200).json(tick);
+    const tick = await pendingTick;
+    return res.status(200).json(pendingTick.shared ? { ...tick, brokerCalls: 0 } : tick);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (req.body?.mode === 'cash' && error && typeof error === 'object' && 'status' in error && error.status === 429) {

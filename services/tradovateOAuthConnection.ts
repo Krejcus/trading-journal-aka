@@ -1,4 +1,5 @@
 import type { TradovateAccountDisplaySnapshot } from '../lib/tradovateAccountDisplayTypes';
+import { recordTradovateBrokerCalls } from '../lib/tradovateApiTelemetry';
 import { supabase } from './supabase';
 import { apiUrl } from '../utils/runtimeConfig';
 import type {
@@ -388,10 +389,11 @@ export function saveTradovateAccountProfiles(
 
 /** Old servers return a normal tick for unknown modes; never treat it as cash. */
 export async function runTradovateAccountDisplayRead(connectionId: string, accountId: number): Promise<TradovateAccountDisplaySnapshot | null> {
-  const result = await authenticatedRequest<{kind?: string; snapshot?: TradovateAccountDisplaySnapshot}>('/api/tradovate/oauth/live-pnl', {
+  const result = await authenticatedRequest<{kind?: string; brokerCalls?: number; snapshot?: TradovateAccountDisplaySnapshot}>('/api/tradovate/oauth/live-pnl', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({connectionId, accountId, mode: 'cash'}),
     signal: AbortSignal.timeout(20_000),
   });
+  recordTradovateBrokerCalls(connectionId, result.brokerCalls);
   return result.kind === 'account-display-v1' && result.snapshot ? result.snapshot : null;
 }

@@ -901,6 +901,7 @@ async function runLocalAgent(
       }),
       marketPrices: () => marketPriceFeed?.current() ?? [],
       accountDisplay: () => contexts.flatMap(item => item.displayFeed ? [item.displayFeed.state()] : []),
+      connectionUsage: () => renewableBrokers.map(item => ({ connectionId: item.connectionId, ...item.broker.usage() })),
       onSnapshotTest: (requestId, options) => {
         if (!snapshotsEnabled) throw new Error('snapshot-test-unavailable');
         if (snapshotTestInFlight) throw new Error('snapshot-test-already-running');

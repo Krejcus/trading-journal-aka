@@ -1,3 +1,5 @@
+import { createTradovateUsageMeter, type TradovateUsageMeter, type TradovateUsageWindow } from './tradovateUsageMeter';
+
 export type TradovateApiFailureCause = 'network' | 'auth' | 'http4xx' | 'http5xx';
 
 export interface TradovateApiUsageWindow {
@@ -16,6 +18,11 @@ export interface TradovateApiTelemetrySnapshot {
   lastStatus: number | null;
   lastUpdatedAt: number | null;
   rateLimitedUntil: number | null;
+  /**
+   * Skutečná Tradovate volání, která server udělal pro tuto aplikaci, po
+   * OAuth spojení (token). Sdílené výsledky z cache serveru se nepočítají.
+   */
+  brokerCalls: Record<string, TradovateUsageWindow>;
 }
 
 interface UsageBucket extends TradovateApiUsageWindow {
@@ -29,6 +36,7 @@ export interface TradovateApiRequestToken {
 
 const MINUTE_MS = 60_000;
 const buckets = new Map<number, UsageBucket>();
+const brokerMeters = new Map<string, TradovateUsageMeter>();
 const listeners = new Set<() => void>();
 let inFlight = 0;
 let lastStatus: number | null = null;
@@ -67,6 +75,7 @@ let snapshot: TradovateApiTelemetrySnapshot = {
   lastStatus: null,
   lastUpdatedAt: null,
   rateLimitedUntil: null,
+  brokerCalls: {},
 };
 
 const publish = (now: number) => {
@@ -78,6 +87,7 @@ const publish = (now: number) => {
     inFlight,
     lastStatus,
     lastUpdatedAt,
+    brokerCalls: Object.fromEntries([...brokerMeters].map(([connectionId, meter]) => [connectionId, meter.snapshot(now)])),
     rateLimitedUntil: rateLimitedUntil != null && rateLimitedUntil > now ? rateLimitedUntil : null,
   };
   for (const listener of listeners) listener();
@@ -119,6 +129,15 @@ export const finishTradovateApiRequest = (
   publish(now);
 };
 
+/** Server v odpovědi říká, kolik Tradovate volání pro nás udělal; 0 nebo undefined nic nezapíše. */
+export const recordTradovateBrokerCalls = (connectionId: string, calls: number | null | undefined, now = Date.now()) => {
+  if (!connectionId || !Number.isFinite(calls) || (calls as number) <= 0) return;
+  const meter = brokerMeters.get(connectionId) ?? createTradovateUsageMeter();
+  brokerMeters.set(connectionId, meter);
+  meter.record(calls as number, now);
+  publish(now);
+};
+
 export const getTradovateApiTelemetrySnapshot = () => snapshot;
 
 /** Posune rolling okna i v době, kdy právě nepřichází nový požadavek. */
@@ -132,6 +151,7 @@ export const subscribeTradovateApiTelemetry = (listener: () => void) => {
 /** Pouze pro izolované testy. Produkční UI historii telemetrie nikdy nemaže. */
 export const resetTradovateApiTelemetryForTests = () => {
   buckets.clear();
+  brokerMeters.clear();
   inFlight = 0;
   lastStatus = null;
   lastUpdatedAt = null;

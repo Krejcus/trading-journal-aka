@@ -92,6 +92,25 @@ export interface LocalCopierAgentStatus {
   marketPrices?: CopierMarketPrice[];
   /** Read-only display snapshots; never authorize broker actions. */
   accountDisplay?: TradovateAccountDisplayFeedState[];
+  /** Využití Tradovate API a stav session každého OAuth spojení workeru; jen zobrazení. */
+  connectionUsage?: CopierConnectionUsage[];
+}
+
+/** Co worker dělá s jedním Tradovate loginem: kolik volá a jak na tom je jeho session (18. 9. 2026). */
+export interface CopierConnectionUsage {
+  connectionId: string;
+  /** REST volání workeru na tento token. */
+  rest: { minute: number; hour: number };
+  /** WebSocket požadavky (authorize, syncrequest, …). */
+  ws: { minute: number; hour: number };
+  streamConnected: boolean;
+  /** Fáze socketu: idle | connecting | authorizing | syncing | connected | closing | waiting. */
+  phase: string;
+  /** Poslední zavření socketu od Tradovate nebo od nás. */
+  lastClose: { at: number; code: number | null; reason: string; clean: boolean | null; initiatedBy: 'remote' | 'local' } | null;
+  /** Tradovate penalizace (p-ticket) syncu: do kdy broker čeká; null bez penalizace. */
+  penaltyUntil: number | null;
+  consecutiveSyncTimeouts: number;
 }
 
 export interface CopierMarketPrice {

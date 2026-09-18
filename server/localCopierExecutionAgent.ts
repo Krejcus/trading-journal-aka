@@ -55,6 +55,8 @@ interface LocalCopierExecutionAgentOptions {
   /** Ceny z TradingView jen pro zobrazení; prázdné pole = žádná čerstvá cena. */
   marketPrices?: () => NonNullable<LocalCopierAgentStatus['marketPrices']>;
   accountDisplay?: () => NonNullable<LocalCopierAgentStatus['accountDisplay']>;
+  /** Využití Tradovate API a stav session po spojení; jen zobrazení. */
+  connectionUsage?: () => NonNullable<LocalCopierAgentStatus['connectionUsage']>;
   /** Naplánuje observability test mimo broker dispatch a okamžitě se vrátí. */
   onSnapshotTest?: (requestId: string, options: { repairCamera: boolean }) => void;
   onDevicePaired?: (deviceId: string) => Promise<void>;
@@ -223,6 +225,7 @@ export async function startLocalCopierExecutionAgent(
     ...(devices[0] ? { device: structuredClone(devices[0]) } : {}),
     ...(devices.length > 0 ? { devices: structuredClone(devices) } : {}),
     ...(options.accountDisplay ? { accountDisplay: structuredClone(options.accountDisplay()) } : {}),
+    ...(options.connectionUsage ? { connectionUsage: structuredClone(options.connectionUsage()) } : {}),
     ...(options.snapshotHealth ? { snapshotHealth: structuredClone(options.snapshotHealth()) } : {}),
     ...(() => {
       const journalHealth = options.journalHealth?.() ?? [];

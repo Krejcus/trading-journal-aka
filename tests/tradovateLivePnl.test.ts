@@ -72,6 +72,7 @@ describe('Tradovate lightweight live P&L reader', () => {
     });
 
     expect(tick).toEqual({
+      brokerCalls: 1,
       connectionId: 'connection',
       environment: 'demo',
       capturedAt: '2026-08-27T20:00:00.000Z',

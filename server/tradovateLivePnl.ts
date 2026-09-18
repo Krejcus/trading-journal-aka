@@ -45,15 +45,19 @@ export async function loadTradovateLivePnlAnchor(options: {
     throw new TradovateLivePnlError('Tradovate live P&L anchor has invalid contractId');
   }
   const requestedAt = new Date(options.now ?? Date.now()).toISOString();
+  let brokerCalls = 0;
+  const upstreamAnchorFetch = options.fetchImpl ?? fetch;
+  const countingFetch: typeof fetch = (input, init) => { brokerCalls += 1; return upstreamAnchorFetch(input, init); };
   const snapshot = await tradovateRequest<SnapshotEntity>({
     ...options,
     path: '/cashBalance/getcashbalancesnapshot',
     method: 'POST',
     body: { accountId: options.accountId },
-    fetchImpl: options.fetchImpl ?? fetch,
+    fetchImpl: countingFetch,
   });
   const openPnl = finite(snapshot.openPnL);
   return {
+    brokerCalls,
     connectionId: options.connectionId,
     environment: options.environment,
     requestedAt,
@@ -210,7 +214,10 @@ export async function loadTradovateLivePnlTick(options: {
   fetchImpl?: typeof fetch;
   now?: number;
 }): Promise<TradovateLivePnlTick> {
-  const fetchImpl = options.fetchImpl ?? fetch;
+  // Počet Tradovate volání jde do odpovědi: UI ukazuje skutečné čerpání limitu.
+  let brokerCalls = 0;
+  const upstream = options.fetchImpl ?? fetch;
+  const fetchImpl: typeof fetch = (input, init) => { brokerCalls += 1; return upstream(input, init); };
   const requestedAt = new Date(options.now ?? Date.now()).toISOString();
   const [positions, rawOrders] = await Promise.all([
     tradovateRequest<PositionEntity[]>({
@@ -301,5 +308,6 @@ export async function loadTradovateLivePnlTick(options: {
     anchor,
     activeContractCount: contractIds.length,
     nextContractCursor: contractIds.length > 0 ? (cursor + 1) % contractIds.length : 0,
+    brokerCalls,
   };
 }

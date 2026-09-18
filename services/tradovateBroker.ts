@@ -1,4 +1,5 @@
 import { createJournalBackfillPlan, validateJournalBackfillScope } from '../lib/journalBackfillPlan';
+import { createTradovateUsageMeter, type TradovateUsageWindow } from '../lib/tradovateUsageMeter';
 import { positionSnapshotObservations } from '../lib/journalPositionSnapshot';
 import { createJournalAccountingBackfill, JOURNAL_ACCOUNTING_MAX_BYTES, readJournalResponseText, waitJournalReceipt } from '../lib/journalAccountingBackfill';
 import { visitJournalSocketEvidence, JOURNAL_SOCKET_ENTITY_TYPES } from '../lib/journalSocketEvidence';
@@ -262,7 +263,20 @@ const firstAccountDependent = <T extends { accountId?: number }>(
   return exact ?? value.find(item => item != null && item.accountId == null) ?? null;
 };
 
+/** Využití Tradovate API a stav session jednoho OAuth spojení; jen pro zobrazení. */
+export interface TradovateBrokerUsage {
+  rest: TradovateUsageWindow;
+  ws: TradovateUsageWindow;
+  streamConnected: boolean;
+  phase: string;
+  lastClose: { at: number; code: number | null; reason: string; clean: boolean | null; initiatedBy: 'remote' | 'local' } | null;
+  penaltyUntil: number | null;
+  consecutiveSyncTimeouts: number;
+}
+
 export interface TradovateBrokerPort extends BrokerPort {
+  /** Read-only využití API a stav session (LIVE Diagnostika); nikdy nerozhoduje o obchodu. */
+  usage(): TradovateBrokerUsage;
   /**
    * Obnoví autoritativní adresář účtů viditelných tímto OAuth spojením.
    * Kromě oprávnění aktualizuje i Account.name používané při order side
@@ -417,6 +431,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   );
   /** Sync timeouty v řadě od posledního dokončeného syncu (viz onSessionSuspect). */
   let consecutiveSyncTimeouts = 0;
+  // Využití Tradovate API tímto spojením a stav session — jen pro zobrazení
+  // v LIVE (Diagnostika), nikdy nevstupuje do rozhodování o obchodech.
+  const restUsage = createTradovateUsageMeter(clock);
+  const wsUsage = createTradovateUsageMeter(clock);
+  let lastClose: TradovateBrokerUsage['lastClose'] = null;
+  let penaltyUntil: number | null = null;
   const contextualError = (
     reason: unknown,
     phase: 'token-lease' | 'rest' | 'websocket' | 'reconciliation',
@@ -579,6 +599,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   };
 
   const request = async <T>(path: string, init: RequestInit = {}, allowNotFound = false): Promise<T | null> => {
+    restUsage.record();
     try {
       const result = await requestRaw<T>(path, init, allowNotFound);
       if (!init.method || init.method === 'GET') {
@@ -961,6 +982,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
 
   const sendSocketRequest = (endpoint: string, body: unknown, id = requestId++) => {
     if (!socket || socket.readyState !== 1) throw new TradovateTransportError('WebSocket is not open');
+    wsUsage.record();
     socket.send(`${endpoint}\n${id}\n\n${JSON.stringify(body)}`);
   };
 
@@ -1111,6 +1133,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (value.i === 1 && penalty['p-captcha'] !== true) {
           if (syncTimeout) clearTimeouts(syncTimeout);
           syncTimeout = null;
+          penaltyUntil = clock() + (Number.isFinite(penalty['p-time']) ? Math.max(0, penalty['p-time'] as number) * 1_000 : 1_000);
           emitOrHoldError(contextualError(
             new TradovateTransportError(
               `Tradovate WebSocket sync penalized (p-time ${Number.isFinite(penalty['p-time']) ? `${penalty['p-time']} s` : 'neznámý'}): rate limit, sync se zopakuje po uplynutí penalizace`,
@@ -1182,6 +1205,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         notifyAccountDataChange(null, 'resync');
         reconnectFailures = 0;
         consecutiveSyncTimeouts = 0;
+        penaltyUntil = null;
         stopDisconnectedLog();
         // Dokončená plánovaná obměna: controller výpadek nikdy neviděl,
         // redundantní `connected: true` je neškodné a srovná heartbeat.
@@ -1456,6 +1480,13 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     };
     candidate.onclose = event => {
       if (socket !== candidate) return;
+      lastClose = {
+        at: clock(),
+        code: typeof event?.code === 'number' ? event.code : null,
+        reason: typeof event?.reason === 'string' ? event.reason : '',
+        clean: typeof event?.wasClean === 'boolean' ? event.wasClean : null,
+        initiatedBy: socketState === 'closing' || renewalInProgress ? 'local' : 'remote',
+      };
       diagnostic(
         `WS CLOSE state=${socketState} code=${event?.code ?? '-'} reason=${JSON.stringify(event?.reason ?? '')} clean=${event?.wasClean ?? '-'} socketAgeS=${Math.round((clock() - socketOpenedAt) / 1_000)}`,
       );
@@ -1743,6 +1774,18 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       const order = await composeOrder(orderId);
       if (!order) throw new TradovateTransportError(`Missing OrderVersion for order ${orderId}`);
       return { order, completeness: 'authoritative', observedAt: clock() };
+    },
+    usage(): TradovateBrokerUsage {
+      const now = clock();
+      return {
+        rest: restUsage.snapshot(now),
+        ws: wsUsage.snapshot(now),
+        streamConnected: syncReady && socketState === 'connected',
+        phase: socketState,
+        lastClose,
+        penaltyUntil: penaltyUntil != null && penaltyUntil > now ? penaltyUntil : null,
+        consecutiveSyncTimeouts,
+      };
     },
     renewSocket() {
       if (!socket || !syncReady || renewalInProgress || listeners.size === 0) return false;

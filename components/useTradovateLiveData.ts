@@ -39,6 +39,7 @@ import {
   getTradovateApiTelemetrySnapshot,
   refreshTradovateApiTelemetry,
   subscribeTradovateApiTelemetry,
+  recordTradovateBrokerCalls,
 } from '../lib/tradovateApiTelemetry';
 import { planTradovateJournalAccountLinks } from '../lib/tradovateJournalAccountRegistry';
 import {
@@ -666,6 +667,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
             connectionId => readWithHealth(connectionId, () => runTradovateLivePnlTick(connectionId, livePnlCursorsRef.current[connectionId] ?? 0)),
             (connectionId, tick) => {
               if (cancelled || activeUserIdRef.current !== pollUserId) return;
+              recordTradovateBrokerCalls(connectionId, tick.brokerCalls);
               // Partial success must still honor the broker's rate-limit signal.
               if (tick.anchorErrorStatus === 429) rateLimitUntilRef.current = Date.now() + RATE_LIMIT_FALLBACK_MS;
               const current = connectionDataRef.current;
@@ -701,6 +703,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
             },
             (connectionId, tick) => {
               if (cancelled || activeUserIdRef.current !== pollUserId) return;
+              recordTradovateBrokerCalls(connectionId, tick.brokerCalls);
               const current = connectionDataRef.current;
               const dataset = current[connectionId];
               if (!dataset) return;

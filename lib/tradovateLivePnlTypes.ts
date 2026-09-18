@@ -24,6 +24,8 @@ export interface TradovateLivePnlAnchor {
  * jen tehdy, když stále vidí právě jednu odpovídající otevřenou pozici.
  */
 export interface TradovateLivePnlAnchorTick {
+  /** Tradovate REST volání serveru pro tento anchor (0 = sdílený výsledek). */
+  brokerCalls?: number;
   connectionId: string;
   environment: 'demo' | 'live';
   capturedAt: string;
@@ -63,4 +65,6 @@ export interface TradovateLivePnlTick {
   anchor: TradovateLivePnlAnchor | null;
   activeContractCount: number;
   nextContractCursor: number;
+  /** Kolik Tradovate REST volání server pro tento tick udělal (0 = sdílený výsledek z cache). */
+  brokerCalls?: number;
 }
