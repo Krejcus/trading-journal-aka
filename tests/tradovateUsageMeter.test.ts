@@ -15,10 +15,12 @@ describe('Tradovate usage meter', () => {
     meter.record(0); meter.record(-4); meter.record(Number.NaN);
     expect(meter.snapshot()).toEqual({ minute: 0, hour: 0 });
   });
-  it('vrací semafor podle limitů 80/min a 5000/h', () => {
+  it('vrací semafor podle oficiálních limitů: 5000/h na uživatele, 300 syncrequest/h na IP, tempo 84/min', () => {
     expect(tradovateUsageLevel({ minute: 10, hour: 100 })).toBe('ok');
-    expect(tradovateUsageLevel({ minute: 49, hour: 100 })).toBe('warn');
-    expect(tradovateUsageLevel({ minute: 81, hour: 100 })).toBe('over');
+    expect(tradovateUsageLevel({ minute: 85, hour: 100 })).toBe('warn');
+    expect(tradovateUsageLevel({ minute: 10, hour: 3_001 })).toBe('warn');
     expect(tradovateUsageLevel({ minute: 1, hour: 5_001 })).toBe('over');
+    expect(tradovateUsageLevel({ minute: 1, hour: 10 }, 181)).toBe('warn');
+    expect(tradovateUsageLevel({ minute: 1, hour: 10 }, 301)).toBe('over');
   });
 });

@@ -1,5 +1,5 @@
 import type { CopierConnectionUsage } from './localCopierAgentProtocol';
-import { TRADOVATE_HOUR_LIMIT, TRADOVATE_MINUTE_LIMIT, tradovateUsageLevel, type TradovateUsageWindow } from './tradovateUsageMeter';
+import { TRADOVATE_HOUR_LIMIT, TRADOVATE_MINUTE_PACE, TRADOVATE_SYNCREQUEST_HOUR_LIMIT, tradovateUsageLevel, type TradovateUsageWindow } from './tradovateUsageMeter';
 
 /**
  * Řádek panelu „Diagnostika dat a API“: kolik Tradovate volání na jeden
@@ -12,11 +12,15 @@ export interface TradovateConnectionUsageRow {
   /** Volání serveru pro tuto otevřenou aplikaci (sdílené výsledky se nepočítají). */
   web: TradovateUsageWindow;
   /** Volání workeru na Macu (REST + WebSocket požadavky); null = worker nehlásí. */
-  worker: { rest: TradovateUsageWindow; ws: TradovateUsageWindow } | null;
+  worker: { rest: TradovateUsageWindow; ws: TradovateUsageWindow; syncRequests: TradovateUsageWindow | null } | null;
   total: TradovateUsageWindow;
   level: 'ok' | 'warn' | 'over';
-  minuteLimit: number;
+  /** Tempo, které by za hodinu vyčerpalo limit uživatele (5000/60); není to limit. */
+  minutePace: number;
+  /** Oficiální limit uživatele přes všechny endpointy (429). */
   hourLimit: number;
+  /** Oficiální limit user/syncrequest za hodinu na IP /24 (p-ticket). */
+  syncRequestHourLimit: number;
   session: {
     known: boolean;
     streamConnected: boolean;
@@ -55,11 +59,12 @@ export function buildTradovateConnectionUsageRows(input: TradovateConnectionUsag
       connectionId,
       label: connection?.organizationName?.trim() || connection?.tradovateEmail?.trim() || `conn:${connectionId.slice(0, 8)}`,
       web,
-      worker: worker ? { rest: worker.rest, ws: worker.ws } : null,
+      worker: worker ? { rest: worker.rest, ws: worker.ws, syncRequests: worker.syncRequests ?? null } : null,
       total,
-      level: tradovateUsageLevel(total),
-      minuteLimit: TRADOVATE_MINUTE_LIMIT,
+      level: tradovateUsageLevel(total, worker?.syncRequests?.hour ?? 0),
+      minutePace: TRADOVATE_MINUTE_PACE,
       hourLimit: TRADOVATE_HOUR_LIMIT,
+      syncRequestHourLimit: TRADOVATE_SYNCREQUEST_HOUR_LIMIT,
       session: {
         known: worker != null,
         streamConnected: worker?.streamConnected === true,

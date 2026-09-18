@@ -103,6 +103,8 @@ export interface CopierConnectionUsage {
   rest: { minute: number; hour: number };
   /** WebSocket požadavky (authorize, syncrequest, …). */
   ws: { minute: number; hour: number };
+  /** Jen `user/syncrequest`: Tradovate limit 300/h na IP rozsah /24, sdílený se vším na téže síti. Starší worker pole nemá. */
+  syncRequests?: { minute: number; hour: number };
   streamConnected: boolean;
   /** Fáze socketu: idle | connecting | authorizing | syncing | connected | closing | waiting. */
   phase: string;

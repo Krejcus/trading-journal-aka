@@ -1867,7 +1867,7 @@ const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry 
           </div>
           {connectionUsage.length > 0 ? (
             <div className="mt-4">
-              <p className="text-[11px] font-bold text-[var(--text-secondary)] mb-2">Limit Tradovate na login (80/min, 5 000/h)</p>
+              <p className="text-[11px] font-bold text-[var(--text-secondary)] mb-2">Tradovate na login: 5 000 volání/h na uživatele, syncrequest 300/h na IP</p>
               <div className="space-y-2">
                 {connectionUsage.map(row => {
                   const session = describeConnectionSession(row);
@@ -1876,11 +1876,12 @@ const LivePnlPanel = ({ open, onToggle, dataActive, apiReady, onHelp, telemetry 
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                         <span className="text-xs font-black text-[var(--text-primary)]">{row.label}</span>
                         <span className={`text-xs font-bold tabular-nums ${usageTone(row.level)}`}>
-                          {row.total.minute}/{row.minuteLimit} za minutu · {row.total.hour}/{row.hourLimit} za hodinu
+                          {row.total.hour}/{row.hourLimit} za hodinu · {row.total.minute}/min (tempo limitu {row.minutePace}/min)
                         </span>
                       </div>
                       <div className="mt-1 text-[10px] tabular-nums text-[var(--text-muted)]">
                         web (tato aplikace) {row.web.minute}/min · worker {row.worker ? `${row.worker.rest.minute}/min REST + ${row.worker.ws.minute}/min WS` : 'nehlásí'}
+                        {row.worker?.syncRequests ? ` · syncrequest ${row.worker.syncRequests.hour}/${row.syncRequestHourLimit} za hodinu (limit na IP, sdílený s celou sítí)` : ''}
                       </div>
                       <div className={`mt-0.5 text-[10px] ${session.tone}`}>{session.text}</div>
                     </div>

@@ -208,6 +208,51 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-18 22:15 — Claude: oprava podle review Codexu — oficiální limity Tradovate, p-ticket je na IP, ne na token
+
+Codex správně opravil moje závěry, ověřeno v oficiální dokumentaci
+(partner.tradovate.com/overview/core-concepts/rate-limits a /penalty-tickets):
+- **Limity uživatele:** 5 000 požadavků/h přes všechny endpointy (překročení =
+  429, na WS `[{"s":429}]`). Žádný pevný limit 80/min neexistuje — ten byl z
+  třetích stran (Tradesyncer). Dnešní ~90 volání/min z webu by hodinový limit
+  překročilo jen při trvalém běhu; 429 jsme za celý den neviděli, takže
+  uživatelský limit prokazatelně překročen NEBYL.
+- **Endpointové limity jsou na IP rozsah /24, ne na token/uživatele:**
+  `syncrequest` 300/h (počítá každé volání), `accesstokenrequest` 5/h.
+  Překročení = `p-ticket`/`p-time` v jinak úspěšné odpovědi; předčasné
+  opakování `p-time` sčítá. → p-ticket workeru na Macu nemohl způsobit Vercel
+  (jiné IP). Na téže domácí síti ale běží i platforma Tradovate uživatele
+  („nic tam nejde") a iPhone — jejich syncrequesty a přihlášení se počítají
+  do stejného IP budgetu jako worker.
+- **Nový token nevytváří nový rate-limit prostor.** Že obnova tokenu dvakrát
+  „pomohla", je časová shoda s novým socketem/syncrequestem, ne důkaz.
+  Vlastní token workeru má smysl jen pro oddělení execution session, ne jako
+  lék na limity.
+- **Close kódy:** 1005 = bez status kódu, 1006 = abnormální ukončení (server,
+  síť, proxy i lokální transport). Lucid 18:08 (čistý 1005 ze stavu connected)
+  je silně podezřelý na vzdálené zavření; Tradeify 1006 po socket-error
+  jednoznačný není.
+- Dva různé jevy: (a) tiché stally (syncrequest bez odpovědi, REST 45 s
+  timeout) 15:41–16:42, 18:08 Lucid, 18:50 Tradeify — příčina neprokázaná;
+  (b) p-ticket na syncrequest 18:52 po sérii reconnectů — prokázaný
+  endpointový limit na IP.
+
+**Změny (web + worker, commit tohoto zápisu):** počítadlo a panel používají
+oficiální hodnoty (5 000/h uživatel, tempo 83/min jen orientačně, syncrequest
+300/h na IP); broker počítá `user/syncrequest` zvlášť (`syncRequests` ve
+`connectionUsage`), panel ho ukazuje s poznámkou „limit na IP, sdílený s
+celou sítí". Worker část po dalším reinstallu.
+
+**Doporučení Codexu, se kterými souhlasím:** support nejdřív Tradovate Partner
+Support (p-ticket není vázaný na propku) s UTC časy, endpointem, close kódy a
+poli tiketu; izolace mrtvého spojení podle fáze obchodu (flat účty vyřadit
+z nových vstupů, při otevřeném obchodu zdravým dál kopírovat exity/SL/TP,
+odpojené držet jako UNKNOWN/DEGRADED); FundedNext: spojení zachovat, živé
+brokerové čtení pozastavit; jeden řízený datový tok na login s rozpočtem
+požadavků, web čte z uloženého streamu/cache. **Neuzavřené riziko:** účet
+65839434 (-25 MNQ při flat leaderu ve 14:16Z) ověřit ve FundedNext/Tradovate
+historii — odebrání z manifestu nic nepotvrzuje.
+
 ### 2026-09-18 21:50 — Claude: worker reinstalován z 0df6c6b (na „nasaď worker")
 
 Brána prošla (DISARMED, připojený, reconciled, flat, bez chyby). Bundle

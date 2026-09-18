@@ -12,19 +12,22 @@ describe('řádky využití Tradovate API po připojení', () => {
       ],
       brokerCalls: { 'tradeify-1': { minute: 60, hour: 900 }, 'lucid-1': { minute: 20, hour: 300 } },
       workerUsage: [{
-        connectionId: 'tradeify-1', rest: { minute: 25, hour: 200 }, ws: { minute: 2, hour: 10 },
+        connectionId: 'tradeify-1', rest: { minute: 25, hour: 200 }, ws: { minute: 2, hour: 10 }, syncRequests: { minute: 1, hour: 310 },
         streamConnected: false, phase: 'syncing', lastClose: { at: now - 60_000, code: 1006, reason: '', clean: false, initiatedBy: 'remote' },
         penaltyUntil: now + 90_000, consecutiveSyncTimeouts: 2,
       }],
     });
     expect(rows.map(row => row.label)).toEqual(['Tradeify', 'lucid@example.com']);
     expect(rows[0].total).toEqual({ minute: 87, hour: 1110 });
-    expect(rows[0].level).toBe('over');
+    expect(rows[0].level).toBe('over'); // syncrequest 310/h nad limitem 300 na IP
+    expect(rows[0].worker?.syncRequests).toEqual({ minute: 1, hour: 310 });
+    expect(rows[0]).toMatchObject({ minutePace: 83, hourLimit: 5_000, syncRequestHourLimit: 300 });
     expect(rows[0].session).toMatchObject({ known: true, streamConnected: false, phase: 'syncing', penaltyRemainingMs: 90_000, consecutiveSyncTimeouts: 2 });
     expect(rows[0].session.lastClose?.code).toBe(1006);
     expect(rows[1].worker).toBeNull();
     expect(rows[1].session).toMatchObject({ known: false, phase: 'unknown', penaltyRemainingMs: null });
     expect(rows[1].level).toBe('ok');
+    expect(rows[1].worker).toBeNull();
   });
   it('ukáže i připojení, o kterém ví jen worker, a vypršelou penalizaci nehlásí', () => {
     const rows = buildTradovateConnectionUsageRows({
@@ -35,5 +38,6 @@ describe('řádky využití Tradovate API po připojení', () => {
     expect(rows[0].label).toBe('conn:abcdef12');
     expect(rows[0].session.penaltyRemainingMs).toBeNull();
     expect(rows[0].total).toEqual({ minute: 1, hour: 6 });
+    expect(rows[0].worker?.syncRequests).toBeNull();
   });
 });

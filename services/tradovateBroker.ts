@@ -267,6 +267,7 @@ const firstAccountDependent = <T extends { accountId?: number }>(
 export interface TradovateBrokerUsage {
   rest: TradovateUsageWindow;
   ws: TradovateUsageWindow;
+  syncRequests: TradovateUsageWindow;
   streamConnected: boolean;
   phase: string;
   lastClose: { at: number; code: number | null; reason: string; clean: boolean | null; initiatedBy: 'remote' | 'local' } | null;
@@ -435,6 +436,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   // v LIVE (Diagnostika), nikdy nevstupuje do rozhodování o obchodech.
   const restUsage = createTradovateUsageMeter(clock);
   const wsUsage = createTradovateUsageMeter(clock);
+  /** Jen user/syncrequest: oficiálně 300/h na IP rozsah /24 (p-ticket), sdílené s platformou Tradovate na téže síti. */
+  const syncRequestUsage = createTradovateUsageMeter(clock);
   let lastClose: TradovateBrokerUsage['lastClose'] = null;
   let penaltyUntil: number | null = null;
   const contextualError = (
@@ -983,6 +986,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const sendSocketRequest = (endpoint: string, body: unknown, id = requestId++) => {
     if (!socket || socket.readyState !== 1) throw new TradovateTransportError('WebSocket is not open');
     wsUsage.record();
+    if (endpoint === 'user/syncrequest') syncRequestUsage.record();
     socket.send(`${endpoint}\n${id}\n\n${JSON.stringify(body)}`);
   };
 
@@ -1780,6 +1784,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       return {
         rest: restUsage.snapshot(now),
         ws: wsUsage.snapshot(now),
+        syncRequests: syncRequestUsage.snapshot(now),
         streamConnected: syncReady && socketState === 'connected',
         phase: socketState,
         lastClose,
