@@ -14,6 +14,36 @@ import {
 } from '../../../server/tradovateLivePnl.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
 
+/**
+ * Krátká paměť ticků na připojení. Web, iPhone a companion pollují nezávisle
+ * a každý tick stojí 3–4 Tradovate REST volání se stejným tokenem, který drží
+ * i copier worker; Tradovate při překročení limitu zavírá jeho socket a
+ * penalizuje sync (18. 9. 2026). Souběžné i těsně následující požadavky na
+ * stejné připojení dostanou jeden sdílený výsledek; cache žije jen ve warm
+ * instanci a nikdy nevrací starší data než TICK_COALESCE_MS.
+ */
+const TICK_COALESCE_MS = 2_500;
+const CASH_COALESCE_MS = 5_000;
+const recentTicks = new Map<string, { at: number; result: Promise<unknown> }>();
+
+function coalesce<T>(key: string, ttlMs: number, now: number, read: () => Promise<T>): Promise<T> {
+  const cached = recentTicks.get(key);
+  if (cached && now - cached.at < ttlMs) return cached.result as Promise<T>;
+  const result = read();
+  recentTicks.set(key, { at: now, result });
+  // Selhání se nesdílí: další požadavek zkusí broker znovu.
+  result.catch(() => { if (recentTicks.get(key)?.result === result) recentTicks.delete(key); });
+  if (recentTicks.size > 500) {
+    for (const [candidate, entry] of recentTicks) if (now - entry.at >= Math.max(ttlMs, CASH_COALESCE_MS)) recentTicks.delete(candidate);
+  }
+  return result;
+}
+
+/** Jen pro testy: zapomene sdílené ticky. */
+export function resetTradovateLivePnlCoalescingForTests(): void {
+  recentTicks.clear();
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
   // preflight odpovedi selze fetch jako 'Load failed'. Web je same-origin.
@@ -36,9 +66,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const accountId = Number(req.body?.accountId);
       if (!Number.isSafeInteger(accountId) || accountId <= 0) return res.status(400).json({ error: 'invalid-account-id' });
       const requestedAt = new Date().toISOString();
-      const fields = await readTradovateAccountDisplay({
+      const fields = await coalesce(`cash:${userId}:${connectionId}:${accountId}`, CASH_COALESCE_MS, Date.now(), () => readTradovateAccountDisplay({
         baseUrl: tradovateApiBaseUrl(config.environment), accessToken, accountId, signal: AbortSignal.timeout(8_000),
-      });
+      }));
       return res.status(200).json({ kind: 'account-display-v1', snapshot: {
         connectionId, environment: config.environment, accountId, requestedAt, confirmedAt: new Date().toISOString(), fields,
       } });
@@ -62,13 +92,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
       return res.status(200).json(anchor);
     }
-    const tick = await loadTradovateLivePnlTick({
+    const tick = await coalesce(`tick:${userId}:${connectionId}:${contractCursor}`, TICK_COALESCE_MS, Date.now(), () => loadTradovateLivePnlTick({
       baseUrl: tradovateApiBaseUrl(config.environment),
       accessToken,
       connectionId,
       environment: config.environment,
       contractCursor,
-    });
+    }));
     return res.status(200).json(tick);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

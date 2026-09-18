@@ -1102,9 +1102,21 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         'p-ticket'?: string; 'p-time'?: number; 'p-captcha'?: boolean; 'p-message'?: string;
       };
       if (penalty['p-ticket']) {
+        // 18. 9. 2026: penalizovaný syncrequest čekal p-time potichu — v logu
+        // jen „WS AUTHORIZED" a pak 18 minut nic, status hlásil „nepřipojeno"
+        // bez důvodu. Penalizace je důkaz rate limitu, musí být vidět.
+        diagnostic(
+          `WS PENALTY request=${value.i ?? '-'} p-time=${Number.isFinite(penalty['p-time']) ? `${penalty['p-time']}s` : '-'} p-captcha=${penalty['p-captcha'] === true} p-message=${JSON.stringify(penalty['p-message'] ?? '')}`,
+        );
         if (value.i === 1 && penalty['p-captcha'] !== true) {
           if (syncTimeout) clearTimeouts(syncTimeout);
           syncTimeout = null;
+          emitOrHoldError(contextualError(
+            new TradovateTransportError(
+              `Tradovate WebSocket sync penalized (p-time ${Number.isFinite(penalty['p-time']) ? `${penalty['p-time']} s` : 'neznámý'}): rate limit, sync se zopakuje po uplynutí penalizace`,
+            ),
+            'websocket',
+          ));
           if (!syncRetry) {
             const delay = Number.isFinite(penalty['p-time'])
               ? Math.max(0, penalty['p-time'] as number) * 1_000

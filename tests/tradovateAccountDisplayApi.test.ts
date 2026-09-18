@@ -4,11 +4,11 @@ const mocks=vi.hoisted(()=>({auth:vi.fn(),token:vi.fn(),read:vi.fn()}));
 vi.mock('../server/tradovateOAuthStore.js',()=>({createTradovateAdminClient:()=>({}),getValidTradovateAccessToken:mocks.token,readTradovateServerConfig:()=>({environment:'demo'}),requireSupabaseUserId:mocks.auth}));
 vi.mock('../server/nativeCors.js',()=>({handleNativeCors:()=>false}));
 vi.mock('../server/tradovateAccountDisplayRead.js',()=>({readTradovateAccountDisplay:mocks.read}));
-import handler from '../api/tradovate/oauth/live-pnl';
+import handler, { resetTradovateLivePnlCoalescingForTests } from '../api/tradovate/oauth/live-pnl';
 const request=(body:Record<string,unknown>)=>({method:'POST',headers:{authorization:'Bearer app-session'},body}) as VercelRequest;
 const response=()=>{const res={setHeader:vi.fn(),status:vi.fn(),json:vi.fn()};res.status.mockReturnValue(res);return res;};
 describe('authenticated cash display mode',()=>{
- beforeEach(()=>{vi.clearAllMocks();mocks.auth.mockResolvedValue('owner');mocks.token.mockResolvedValue({accessToken:'broker-test'});mocks.read.mockResolvedValue({totalCashValue:0,dailyRealizedPnL:0});});
+ beforeEach(()=>{vi.clearAllMocks();resetTradovateLivePnlCoalescingForTests();mocks.auth.mockResolvedValue('owner');mocks.token.mockResolvedValue({accessToken:'broker-test'});mocks.read.mockResolvedValue({totalCashValue:0,dailyRealizedPnL:0});});
  it('binds the read to the authenticated owner and returns the explicit versioned envelope',async()=>{
   const res=response();await handler(request({connectionId:'c',mode:'cash',accountId:10}),res as unknown as VercelResponse);
   expect(mocks.token).toHaveBeenCalledWith(expect.objectContaining({userId:'owner',connectionId:'c'}));
@@ -29,6 +29,19 @@ describe('authenticated cash display mode',()=>{
   expect(res.status).toHaveBeenCalledWith(409);
   expect(res.json).toHaveBeenCalledWith({error:'tradovate-reauthorization-required'});
   expect(mocks.read).not.toHaveBeenCalled();
+ });
+ it('sdílí čerstvé čtení stejného účtu mezi klienty a selhání nesdílí (limit Tradovate 18. 9. 2026)',async()=>{
+  const res=response();
+  await handler(request({connectionId:'c',mode:'cash',accountId:10}),res as unknown as VercelResponse);
+  await handler(request({connectionId:'c',mode:'cash',accountId:10}),res as unknown as VercelResponse);
+  await handler(request({connectionId:'c',mode:'cash',accountId:11}),res as unknown as VercelResponse);
+  expect(mocks.read).toHaveBeenCalledTimes(2);
+  resetTradovateLivePnlCoalescingForTests();
+  mocks.read.mockRejectedValueOnce(new Error('boom'));
+  await handler(request({connectionId:'c',mode:'cash',accountId:10}),res as unknown as VercelResponse);
+  await handler(request({connectionId:'c',mode:'cash',accountId:10}),res as unknown as VercelResponse);
+  expect(mocks.read).toHaveBeenCalledTimes(4);
+  expect(res.status).toHaveBeenLastCalledWith(200);
  });
  it('rejects invalid account IDs and propagates broker backoff',async()=>{
   const res=response();await handler(request({connectionId:'c',mode:'cash',accountId:-1}),res as unknown as VercelResponse);

@@ -103,9 +103,15 @@ const mergePreflights = (datasets: TradovatePreflightResult[]): TradovatePreflig
   };
 };
 
-const FAST_PNL_INTERVAL_MS = 1_000;
-const ACTIVE_PNL_INTERVAL_MS = 2_000;
-const IDLE_POSITION_INTERVAL_MS = 5_000;
+// 18. 9. 2026: každý tick = 3–4 Tradovate REST volání na připojení; při 1–2 s
+// to bylo ~90 volání/min na token, tedy nad limitem Tradovate (~80/min,
+// 5000/h). Tradovate pak místo 429 zavíral WebSocket workeru (1005/1006) a
+// penalizoval syncrequest (p-ticket) — kopírka nešla zapnout. Pozice a
+// příkazy má LIVE z heartbeatu workera každou sekundu; REST je jen záloha
+// a zdroj zůstatků, na které stačí sekundy.
+const FAST_PNL_INTERVAL_MS = 3_000;
+const ACTIVE_PNL_INTERVAL_MS = 6_000;
+const IDLE_POSITION_INTERVAL_MS = 15_000;
 // At 20 accounts the full preflight is expensive (risk, history, fees, etc.).
 // Ten minutes keeps it useful for reconciliation without consuming the budget
 // reserved for the 2-second position/P&L read model.

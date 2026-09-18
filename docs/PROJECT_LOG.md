@@ -208,6 +208,36 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-18 21:20 — Claude: penalizace Tradovate potvrzena chováním (p-ticket na syncrequest), snížený objem REST z webu
+
+**Nový důkaz:** Tradeify session umřela potřetí (18:50:56Z, close 1006 po 474 s
+na tokenu z 18:42Z). Po vynucené obnově (18:52:30Z) se socket autorizoval za
+143 ms a pak 18 minut nic: to je větev `p-ticket` v `handleMessageObject` —
+Tradovate odpověděl na `user/syncrequest` penalizačním tiketem a broker potichu
+čeká `p-time`. Současně REST čtení zůstatků na stejném tokenu z Macu fungovala
+(accountDisplay confirmedAt 19:10:15Z). Tradovate dokumentace: „when you
+trigger the rate limit or flood the API with too many reconnections, Tradovate
+may assign a p-ticket“; partner docs: „Only one syncrequest is sent per socket
+lifecycle“. Zdroje: github.com/tradovate/example-api-faq
+HowToHandleRequestLimits.md, partner.tradovate.com Stage 2 WebSocket
+Management, help.tradesyncer.com (80/min, 5000/h).
+
+**Změny (commit v tomto zápisu):**
+- `services/tradovateBroker.ts`: penalizace už není tichá — `WS PENALTY
+  request p-time p-captcha p-message` v diagnostice a chybová událost
+  „Tradovate WebSocket sync penalized (p-time X s)“ do controlleru (lastError).
+  Worker to dostane příštím reinstallem.
+- `components/useTradovateLiveData.ts`: intervaly 1/2/5 s → 3/6/15 s (pozice a
+  příkazy má LIVE z heartbeatu workera každou sekundu, REST je záloha a
+  zůstatky).
+- `api/tradovate/oauth/live-pnl.ts`: sdílení ticků na (uživatel, připojení,
+  cursor) 2,5 s a zůstatků na účet 5 s ve warm instanci — web, iPhone a
+  companion už netáhnou každý zvlášť. Selhání se nesdílí. Test.
+
+Odhad: z ~90 Tradovate volání/min na token na ~20–30. Zbývá: vlastní token
+pro worker (oddělená session), odpojení FundedNext v aplikaci (web ho stále
+polluje), volitelně delší backoff reconnectů po sync timeoutu.
+
 ### 2026-09-18 20:50 — Claude: vzorec „mrtvá session" se opakoval 2× i po reinstallu; nová diagnostika ukazuje close kódy 1005/1006 a hlavní podezřelý je objem REST z webu
 
 **Pozorování (worker 3408088, nová diagnostika):**
