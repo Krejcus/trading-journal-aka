@@ -208,6 +208,46 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-18 16:50 — Claude: mrtvé OAuth spojení bez účtů nesmí držet kopírku v „nepřipojeno" (čeká na reinstall workera)
+
+**Co se stalo:** od 15:41Z Tradovate neobsluhuje sessions Tradeify (53157614)
+a FundedNext (7cce8c5b): socket se otevře, `user/syncrequest` nikdy nedoběhne
+(45 s), REST `/account/list` a `/order/list` vyprší po 45 s, Vercel dostává na
+stejných tokenech HTTP 408. Lucid (leader + 4 followeři) běží celou dobu.
+Tokeny jsou platné (obnova 15:31Z), worker nepadá (běží od 10:51Z), lease ani
+relay dnes nevypršely — chyby `mac-copier-lease-timeout` ve stderr jsou ze
+včerejší crash smyčky. Status page Tradovate hlásí vše OK. Čtyři pokusy o
+zapnutí (15:57–16:00Z) worker odmítl po 45 s čekání na sync; relay TTL 30 s →
+UI „worker příkaz včas nepotvrdil". Nic se nezapnulo.
+
+**Chyba k opravě (uživatel: „tu chybu musíme opravit"):** FundedNext spojení
+už nemá žádné účty (propka je po breachi odebrala, skupina je 15:33Z přestala
+obsahovat), přesto ho `createBrokerRouter` počítal do agregátu `connected`
+(každé spojení muselo být připojené) a jeho transport chyby šly do controlleru.
+Takové spojení by kopírku blokovalo i po návratu Tradeify a Lucidu.
+
+**Oprava (worker, čeká na „nasaď"):**
+- `services/brokerRouter.ts`: agregát `connected` počítá jen spojení, která
+  nesou aspoň jeden účet skupiny; spojení bez účtů si jen pamatuje stav
+  socketu, chyby ani entity nepropouští; `replaceRoutes` agregát přepočítá
+  (vyprázdněná mrtvá routa ho uvolní, znovu osazená ho hned zase drží; zadržené
+  chyby z reconnect lhůty se zahodí). Testy v `tests/brokerRouter.test.ts`.
+- `scripts/copier/pilot.ts`: start workera přežije spojení, jehož adresář
+  účtů zůstane nečitelný po celém 10min retry budgetu — startuje bez účtů
+  (nic se na něj nesměruje); účet skupiny, který tam bydlel, nahlásí
+  routing/preflight jako chybějící a ARM zůstane blokovaný. Bez toho by
+  reinstall při mlčícím FundedNext skončil v launchd crash smyčce.
+
+**Co to neřeší (rozhodnutí pro uživatele):** výpadek follower-only spojení,
+které účty skupiny NESE (dnes Tradeify), pořád po 10 s lhůtě shodí ARM celé
+skupiny (`transport-lost`). Alternativa = izolovat jen followery na mrtvém
+spojení (jako breach/reject) a nechat skupinu ARMED pro ostatní; je to změna
+bezpečnostní sémantiky, neudělal jsem ji bez potvrzení.
+
+**Reinstall:** brána bezpečného skriptu vyžaduje `connected` → možné až po
+návratu Tradeify. Doporučení: před reinstallem odebrat FundedNext z
+`connections.json` (manifest) — spojení bez účtů je v workeru zbytečné.
+
 ### 2026-09-18 15:40 — Claude: odebrání nedostupného followera z řádku nikdy neprošlo validací
 
 **Symptom:** po breachi FundedNext účtů (14:17Z „liquidation only due to low net

@@ -269,12 +269,22 @@ async function runMultiConnectionAgent(): Promise<void> {
     }
     // Startup reads are retried in-process: a slow or briefly failing
     // Tradovate/cloud read must not exit the worker and start a launchd loop.
+    // A connection whose directory stays unreadable after the whole retry
+    // budget (18. 9. 2026: FundedNext session silent for hours after the prop
+    // firm removed its accounts) starts without accounts instead of taking
+    // the worker down with it. Nothing is routed to it, so no order can reach
+    // it; a group account that lived there is reported missing by the
+    // routing/preflight and ARM stays blocked until it is visible again.
     const data = await retryTransient(() => (async () => loadTradovateAccountData({
       baseUrl: tradovateApiBaseUrl(context.environment),
       accessToken: await context.getAccessToken(),
     }))(), {
       ...STARTUP_RETRY,
       onRetry: (error, attempt, delayMs) => console.warn(`${new Date().toISOString()} STARTUP ${connectionLabel(entry.connectionId)} načtení účtů selhalo (pokus ${attempt}): ${error.message}; další pokus za ${Math.round(delayMs / 1_000)} s`),
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`${new Date().toISOString()} STARTUP ${connectionLabel(entry.connectionId)} adresář účtů nedostupný, spojení startuje bez účtů (žádný účet se na něj nesměruje): ${message}`);
+      return { accounts: [] as Awaited<ReturnType<typeof loadTradovateAccountData>>['accounts'] };
     });
     const accountSpecsByAccountId = Object.fromEntries(data.accounts.map(account => [account.id, account.name]));
     context.displayFeed = makeDisplayFeed(context, data.accounts.map(account => account.id));

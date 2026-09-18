@@ -95,6 +95,15 @@ export function createBrokerRouter(
     if (!broker) throw new Error(`Pro účet ${accountId} není nakonfigurované OAuth spojení`);
     return broker;
   };
+  /**
+   * Spojení bez jediného přiřazeného účtu (propfirma po breachi odebrala
+   * účty, skupina je už neobsahuje) nenese žádný leader ani follower stream.
+   * Jeho výpadek proto nesmí držet agregát v „nepřipojeno" ani hlásit chyby:
+   * 18. 9. 2026 takové FundedNext spojení blokovalo zapnutí celé kopírky.
+   */
+  const carriesAccounts = (broker: BrokerPort) => (accountIdsByBroker.get(broker)?.size ?? 0) > 0;
+  /** Aktivní subscribe smyčky; po výměně rout se agregát přepočítá. */
+  const reevaluators = new Set<(at: number) => void>();
 
   return {
     environment,
@@ -104,6 +113,8 @@ export function createBrokerRouter(
       // původní mapa i event filtr beze změny.
       byAccount = validated.nextByAccount;
       accountIdsByBroker = validated.nextAccountIdsByBroker;
+      const at = Date.now();
+      for (const reevaluate of reevaluators) reevaluate(at);
     },
     setCriticalAccounts(accountIds) {
       const next = new Set<BrokerPort>();
@@ -165,13 +176,22 @@ export function createBrokerRouter(
         held: BrokerEvent[];
       }>();
 
-      const applyConnection = (broker: BrokerPort, event: Extract<BrokerEvent, { type: 'connection' }>) => {
-        connected.set(broker, event.connected);
-        const next = [...connected.values()].every(Boolean);
+      // Agregát počítá jen spojení, která nesou aspoň jeden účet skupiny;
+      // bez takového spojení (prázdná topologie) platí původní „všechna".
+      const computeAggregate = () => {
+        const relevant = fixedBrokers.filter(carriesAccounts);
+        return (relevant.length > 0 ? relevant : fixedBrokers).every(broker => connected.get(broker) === true);
+      };
+      const publishAggregate = (at: number) => {
+        const next = computeAggregate();
         if (next !== aggregateConnected) {
           aggregateConnected = next;
-          listener({ type: 'connection', connected: next, at: event.at });
+          listener({ type: 'connection', connected: next, at });
         }
+      };
+      const applyConnection = (broker: BrokerPort, event: Extract<BrokerEvent, { type: 'connection' }>) => {
+        connected.set(broker, event.connected);
+        publishAggregate(event.at);
       };
 
       const flushOutage = (broker: BrokerPort) => {
@@ -184,7 +204,29 @@ export function createBrokerRouter(
         }
       };
 
+      // Výměna rout: spojení, které právě přišlo o všechny účty, opustí
+      // reconnect lhůtu potichu (zadržené chyby jsou šum, stav socketu se
+      // zapamatuje) a agregát se přepočítá nad novou topologií.
+      const reevaluate = (at: number) => {
+        for (const [broker, outage] of [...pendingOutage]) {
+          if (carriesAccounts(broker)) continue;
+          clearTimeoutImpl(outage.timer);
+          pendingOutage.delete(broker);
+          for (const held of outage.held) {
+            if (held.type === 'connection') connected.set(broker, held.connected);
+          }
+        }
+        publishAggregate(at);
+      };
+      reevaluators.add(reevaluate);
+
       const unsubs = fixedBrokers.map(routeBroker => routeBroker.subscribe((event: BrokerEvent) => {
+        if (!carriesAccounts(routeBroker)) {
+          // Spojení bez účtů: jen si pamatujeme stav socketu pro případ,
+          // že mu routing účty zase přidělí; chyby ani entity nepropouštíme.
+          if (event.type === 'connection') applyConnection(routeBroker, event);
+          return;
+        }
         if (event.type === 'order' || event.type === 'fill' || event.type === 'position') {
           const accountId = event.type === 'order'
             ? event.order.accountId
@@ -249,6 +291,7 @@ export function createBrokerRouter(
         applyConnection(routeBroker, event);
       }));
       return () => {
+        reevaluators.delete(reevaluate);
         for (const outage of pendingOutage.values()) clearTimeoutImpl(outage.timer);
         pendingOutage.clear();
         unsubs.forEach(unsubscribe => unsubscribe());

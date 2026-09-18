@@ -241,3 +241,95 @@ describe('reconnect grace nekritických spojení', () => {
     unsubscribe();
   });
 });
+
+describe('spojení bez přiřazených účtů', () => {
+  const connections = (events: BrokerEvent[]) => events
+    .filter(event => event.type === 'connection')
+    .map(event => (event as Extract<BrokerEvent, { type: 'connection' }>).connected);
+
+  it('nedrží agregát v nepřipojeno a jeho chyby nepropouští', () => {
+    const lucid = createMockBroker();
+    const orphaned = createMockBroker();
+    const router = createBrokerRouter([
+      { broker: lucid, accountIds: [11], critical: true },
+      { broker: orphaned, accountIds: [], critical: false },
+    ]);
+    const events: BrokerEvent[] = [];
+    const unsubscribe = router.subscribe(event => events.push(event));
+
+    lucid.setConnected(true);
+    expect(connections(events)).toEqual([true]);
+
+    orphaned.emitEvent({ type: 'error', error: new Error('Tradovate WebSocket sync timeout'), at: 5 });
+    orphaned.setConnected(false);
+    orphaned.setConnected(true);
+    orphaned.setConnected(false);
+    expect(events.some(event => event.type === 'error')).toBe(false);
+    expect(connections(events)).toEqual([true]);
+
+    lucid.setConnected(false);
+    expect(connections(events)).toEqual([true, false]);
+    unsubscribe();
+  });
+
+  it('po výměně rout přepočítá agregát: vyprázdněná mrtvá routa ho uvolní, znovu osazená ho zase drží', () => {
+    const lucid = createMockBroker();
+    const tradeify = createMockBroker();
+    const router = createBrokerRouter([
+      { broker: lucid, accountIds: [11], critical: true },
+      { broker: tradeify, accountIds: [22], critical: false },
+    ], { reconnectGraceMs: 0 });
+    const events: BrokerEvent[] = [];
+    const unsubscribe = router.subscribe(event => events.push(event));
+    lucid.setConnected(true);
+    tradeify.setConnected(true);
+    tradeify.setConnected(false);
+    expect(connections(events)).toEqual([true, false]);
+
+    router.replaceRoutes([
+      { broker: lucid, accountIds: [11] },
+      { broker: tradeify, accountIds: [] },
+    ]);
+    expect(connections(events)).toEqual([true, false, true]);
+
+    router.replaceRoutes([
+      { broker: lucid, accountIds: [11] },
+      { broker: tradeify, accountIds: [22] },
+    ]);
+    expect(connections(events)).toEqual([true, false, true, false]);
+    tradeify.setConnected(true);
+    expect(connections(events)).toEqual([true, false, true, false, true]);
+    unsubscribe();
+  });
+
+  it('vyprázdnění routy během reconnect lhůty zahodí zadržené chyby a zapamatuje si stav socketu', async () => {
+    const lucid = createMockBroker();
+    const follower = createMockBroker();
+    const router = createBrokerRouter([
+      { broker: lucid, accountIds: [11], critical: true },
+      { broker: follower, accountIds: [22], critical: false },
+    ], { reconnectGraceMs: 20 });
+    const events: BrokerEvent[] = [];
+    const unsubscribe = router.subscribe(event => events.push(event));
+    lucid.setConnected(true);
+    follower.setConnected(true);
+    follower.emitEvent({ type: 'error', error: new Error('Tradovate WebSocket transport error'), at: 5 });
+    follower.setConnected(false);
+
+    router.replaceRoutes([
+      { broker: lucid, accountIds: [11] },
+      { broker: follower, accountIds: [] },
+    ]);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(events.some(event => event.type === 'error')).toBe(false);
+    expect(connections(events)).toEqual([true]);
+
+    // Účet se vrátí, socket je pořád dole → agregát spadne hned.
+    router.replaceRoutes([
+      { broker: lucid, accountIds: [11] },
+      { broker: follower, accountIds: [22] },
+    ]);
+    expect(connections(events)).toEqual([true, false]);
+    unsubscribe();
+  });
+});
