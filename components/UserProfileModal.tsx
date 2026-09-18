@@ -14,7 +14,7 @@ interface UserProfileModalProps {
    user: User;
    isOpen: boolean;
    onClose: () => void;
-   onUpdate: (updatedUser: User) => void;
+   onUpdate: (updatedUser: User) => void | Promise<void>;
    theme: 'dark' | 'light' | 'oled';
 }
 
@@ -108,8 +108,8 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
             }
          }
 
-         // Profile update logic
-         onUpdate({ ...user, ...formData });
+         // Profile update logic — počkat na zápis do DB; modal dřív hlásil úspěch i při selhání.
+         await onUpdate({ ...user, ...formData });
 
          if (passwords.newPassword) {
             setMsg({ text: 'Heslo a profil byly úspěšně změněny', type: 'success' });
@@ -123,7 +123,8 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
             setMsg(null);
          }, 1500);
       } catch (err: any) {
-         setMsg({ text: 'Došlo k neočekávané chybě při ukládání', type: 'error' });
+         const detail = err instanceof Error && err.message ? `: ${err.message.slice(0, 120)}` : '';
+         setMsg({ text: `Profil se nepodařilo uložit${detail}`, type: 'error' });
       } finally {
          setIsSaving(false);
       }
@@ -134,8 +135,12 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
       if (file) {
          // Zmenšit na 256 px: avatar cestuje s každým načtením deníku.
          downscaleAvatar(file).then(avatar => {
+            console.info('[Profile] avatar ready', { originalBytes: file.size, dataUrlChars: avatar.length });
             setFormData(prev => ({ ...prev, avatar }));
-         }).catch(err => console.error('[Profile] avatar read failed', err));
+         }).catch(err => {
+            console.error('[Profile] avatar read failed', err);
+            setMsg({ text: 'Obrázek se nepodařilo načíst', type: 'error' });
+         });
       }
    };
 

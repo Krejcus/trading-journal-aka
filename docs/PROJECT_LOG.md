@@ -244,6 +244,13 @@ stačí ho jednou znovu nahrát v profilu (nový upload se zmenší), nebo ho
 nechat zmenšit z DB (je to změna uživatelských dat, neudělal jsem to sám).
 Worker se neměnil (jen web + SQL). Testy 3 747/3 747, tsc, build OK.
 
+**Dodatek 12:45:** uživatel nahrál nový avatar, ale v DB zůstal starý — API logy
+Supabase (edge_logs) neukazují žádný POST na `profiles` (jen GET), takže zápis
+z klienta vůbec neodešel. Modal profilu přitom hlásil „Profil byl úspěšně
+aktualizován" bez ohledu na výsledek (`onUpdate` se nečekal). Opraveno: modal
+čeká na zápis a ukazuje důvod selhání, `saveUser` bez session vyhazuje chybu
+místo tichého návratu, po zmenšení avataru se loguje velikost.
+
 ### 2026-09-18 10:15 — Claude: LIVE bere pozice a příkazy z heartbeatu workeru (čeká na reinstall workera)
 
 Uživatel: „udělej i ty pozice z heartbeatu workeru". Dosud web/telefon četl

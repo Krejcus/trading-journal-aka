@@ -3387,6 +3387,7 @@ const App: React.FC = () => {
     } catch (err) {
       console.error("Failed to save profile", err);
       setSyncError("Nepodařilo se uložit profil.");
+      throw err; // modal profilu ukáže důvod místo falešného „uloženo"
     }
   };
 

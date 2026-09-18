@@ -447,7 +447,7 @@ export const storageService = {
 
   async saveUser(user: User): Promise<void> {
     const userId = await getUserId();
-    if (!userId) return;
+    if (!userId) throw new Error('profile-save-no-session');
 
     if (user.avatarDeferred && user.avatar == null) {
       throw new Error('avatar-not-loaded'); // never overwrite a stored avatar with the placeholder of a deferred one
