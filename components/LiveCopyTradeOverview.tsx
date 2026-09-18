@@ -1,7 +1,7 @@
 import { LiveRiskValue } from './LiveRiskValue';
 import { copierArmRejection } from '../lib/copierArmPreparation';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
-import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
+import { isLiveAccountReadVerified, liveReadStaleLabel } from '../lib/liveReadFreshness';
 import { liveBalanceDisplay, liveCapitalDisplay, liveDailyPnlDisplay, liveGroupDailyPnlDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
 import { useCopierDisarmNotice } from '../hooks/useCopierDisarmNotice';
 import { CopyGroupLibraryRequestFence } from '../lib/copyGroupLibraryRequestFence';
@@ -2580,14 +2580,26 @@ const hasProtectiveAction = (order: LiveOrder, netPosition: number) => {
  * conservative: only a working opposite-side order on the exact contract can
  * protect a position. The shortened futures root is display-only.
  */
-export const CopyTradePositionsCell = ({ accountId, positions, orders, positionsVerified = true, ordersVerified = true }: {
+export const CopyTradePositionsCell = ({ accountId, positions, orders, positionsVerified = true, ordersVerified = true, staleLabel = null }: {
   accountId: number | null;
   positions: LivePosition[];
   orders: LiveOrder[];
   positionsVerified?: boolean;
   ordersVerified?: boolean;
+  /**
+   * Poslední známý stav zůstává vidět; štítek se objeví jen u čtení staršího
+   * než LIVE_READ_STALE_MS nebo nedostupného (např. „před 3 min").
+   */
+  staleLabel?: string | null;
 }) => {
-  if (!positionsVerified || !ordersVerified) return <span className="text-[11px] font-semibold text-amber-600">{!positionsVerified ? 'Pozice neověřené' : 'Příkazy neověřené'}</span>;
+  const stale = (!positionsVerified || !ordersVerified) && staleLabel
+    ? <span className="ml-1 text-[10px] font-semibold text-amber-600" title="Poslední známý stav; broker čtení není čerstvé">{staleLabel}</span>
+    : null;
+  // Neověřené čtení nikdy netvrdí „flat" ani nehodnotí ochranu: prázdná
+  // buňka dostane tichý otazník a pilulka místo štítu/varování neutrální „?".
+  const unverifiedMark = !positionsVerified || !ordersVerified
+    ? <span className="ml-0.5 text-[10px] font-semibold text-[var(--text-secondary)]" title="Poslední známý stav, čtení u brokera není čerstvě ověřené">?</span>
+    : null;
   const openPositions = positions.filter(position => position.netPosition !== 0);
   const workingOrders = accountId == null
     ? []
@@ -2597,10 +2609,10 @@ export const CopyTradePositionsCell = ({ accountId, positions, orders, positions
     isPendingEntryOrder(order) && !openSymbols.has(fullSymbolKey(order.symbol)));
 
   if (openPositions.length === 0 && entryOrders.length === 0) {
-    return <span className="text-xs tabular-nums text-[var(--text-secondary)]">—</span>;
+    return <span className="text-xs tabular-nums text-[var(--text-secondary)]">—{unverifiedMark}{stale}</span>;
   }
 
-  return <span className="inline-flex items-center justify-end gap-1.5 whitespace-nowrap">
+  return <span className="inline-flex items-center justify-end gap-1.5 whitespace-nowrap">{stale}
     {openPositions.map((position, index) => {
       const symbol = displaySymbol(position.symbol);
       const protectiveOrders = workingOrders.filter(order =>
@@ -2619,7 +2631,9 @@ export const CopyTradePositionsCell = ({ accountId, positions, orders, positions
       const protectionComplete = stopCoverageExact && targetCoverageExact;
       const signedQuantity = `${position.netPosition > 0 ? '+' : '−'}${contractQuantity(position.netPosition)}`;
       const positionLabel = `${symbol} ${position.netPosition > 0 ? 'long' : 'short'} ${contractQuantity(position.netPosition)}`;
-      const protectionLabel = protectionComplete
+      const protectionLabel = !ordersVerified
+        ? 'ochrana neověřena'
+        : protectionComplete
         ? 'working SL a target'
         : !hasStop
           ? 'bez working SL'
@@ -2637,14 +2651,15 @@ export const CopyTradePositionsCell = ({ accountId, positions, orders, positions
             : 'border-rose-500/25 bg-rose-500/10 text-rose-600'}`}
         >
           <span>{symbol}</span><span>{signedQuantity}</span>
-          {protectionComplete ? <ShieldCheck aria-hidden="true" size={10} strokeWidth={2.7} className="shrink-0" /> : null}
+          {ordersVerified && protectionComplete ? <ShieldCheck aria-hidden="true" size={10} strokeWidth={2.7} className="shrink-0" /> : null}
+          {!ordersVerified ? <span aria-hidden="true">?</span> : null}
         </span>
-        {!hasStop ? <span
+        {ordersVerified && !hasStop ? <span
           aria-label={`${symbol} bez working stop lossu`}
           title={`${symbol}: pozice nemá working stop loss`}
           className="inline-flex items-center gap-0.5 rounded-md border border-amber-500/40 bg-amber-500/15 px-1.5 py-1 text-[9px] font-black leading-none text-amber-600"
         ><AlertTriangle aria-hidden="true" size={9} strokeWidth={2.8} className="shrink-0" />bez SL</span> : null}
-        {hasStop && !stopCoverageExact ? <span
+        {ordersVerified && hasStop && !stopCoverageExact ? <span
           aria-label={`${symbol} nebezpečné krytí stop lossem ${contractQuantity(stopCoverage)} z ${contractQuantity(positionQuantity)}`}
           title={`${symbol}: working SL ${stopCoverage < positionQuantity ? 'nepokrývá celou pozici' : 'překrývá pozici a může ji otočit'}`}
           className="inline-flex items-center gap-0.5 rounded-md border border-rose-500/45 bg-rose-500/15 px-1.5 py-1 text-[9px] font-black leading-none text-rose-600"
@@ -3078,7 +3093,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
         return <BalanceValue display={liveBalanceDisplay(a)} />;
       case 'positions':
         return a
-          ? <CopyTradePositionsCell accountId={accountId} positions={a.positions} orders={orders} positionsVerified={isLiveAccountReadVerified(a, 'positions')} ordersVerified={isLiveAccountReadVerified(a, 'orders')} />
+          ? <CopyTradePositionsCell accountId={accountId} positions={a.positions} orders={orders} positionsVerified={isLiveAccountReadVerified(a, 'positions')} ordersVerified={isLiveAccountReadVerified(a, 'orders')} staleLabel={liveReadStaleLabel(a, 'positions') ?? liveReadStaleLabel(a, 'orders')} />
           : <span className="text-xs tabular-nums text-[var(--text-secondary)]">—</span>;
       case 'daily':
         return <span className={`text-xs tabular-nums ${a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? pnlClass(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : 'text-[var(--text-secondary)]'}`}>{a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? money.format(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : '—'}</span>;

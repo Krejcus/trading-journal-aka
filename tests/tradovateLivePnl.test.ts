@@ -10,7 +10,7 @@ import {
   tradovateValuePerPoint,
 } from '../lib/tradovateLivePnl';
 import type { TradovateLivePnlTick } from '../lib/tradovateLivePnlTypes';
-import { loadTradovateLivePnlAnchor, loadTradovateLivePnlTick } from '../server/tradovateLivePnl';
+import { loadTradovateLivePnlAnchor, loadTradovateLivePnlTick, TradovateLivePnlError } from '../server/tradovateLivePnl';
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
   status,
@@ -351,5 +351,24 @@ describe('confirmed cash fields in rapid ticks', () => {
     expect(result.data.accounts.map(a => a.balance.totalCashValueSOD)).toEqual([49_900, 50_000, 50_000]);
     const missing = applyTradovateLivePnlAnchorTick(data, { ...tick, anchor: { ...tick.anchor, realizedPnL: null } });
     expect(missing.data.accounts[0].balance.realizedPnL).toBe(99);
+  });
+});
+
+describe('broker rate limit carries the wait the broker asked for', () => {
+  const tick = (positionList: () => Response) => loadTradovateLivePnlTick({
+    baseUrl: 'https://mock.invalid/v1', accessToken: 'mock', connectionId: 'c', environment: 'demo',
+    fetchImpl: (async (url: string | URL | Request) => (new URL(String(url)).pathname.endsWith('/position/list') ? positionList() : json([]))) as typeof fetch,
+  });
+  it('passes p-time from a 429 body as retryAfterMs instead of a fixed hour', async () => {
+    const rejected = tick(() => json({ 'p-ticket': 'abc', 'p-time': 30 }, 429));
+    await expect(rejected).rejects.toBeInstanceOf(TradovateLivePnlError);
+    await expect(rejected).rejects.toMatchObject({ status: 429, retryAfterMs: 30_000 });
+  });
+  it('reads a Retry-After header in seconds', async () => {
+    await expect(tick(() => new Response('{}', { status: 429, headers: { 'retry-after': '12' } })))
+      .rejects.toMatchObject({ status: 429, retryAfterMs: 12_000 });
+  });
+  it('leaves retryAfterMs null when the broker gives no hint', async () => {
+    await expect(tick(() => json({ error: 'slow down' }, 429))).rejects.toMatchObject({ status: 429, retryAfterMs: null });
   });
 });

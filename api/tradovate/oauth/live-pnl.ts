@@ -85,7 +85,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(409).json({ error: message });
     }
     if (error instanceof TradovateLivePnlError && error.status === 429) {
-      return res.status(429).json({ error: 'tradovate-rate-limited', retryAfterMs: 3_600_000 });
+      // Tradovate říká přes p-time nebo Retry-After, jak dlouho čekat; bez toho
+      // 5 minut. Paušální hodina dřív zamrazila LIVE po jediném 429.
+      return res.status(429).json({ error: 'tradovate-rate-limited', retryAfterMs: Math.max(1_000, error.retryAfterMs ?? 300_000) });
     }
     // A slow broker is not a broken route: report it as a timeout so logs
     // and clients can tell Tradovate latency from a real failure.

@@ -88,11 +88,25 @@ interface OrderEntity {
 }
 
 export class TradovateLivePnlError extends Error {
-  constructor(message: string, public readonly status: number | null = null) {
+  constructor(
+    message: string,
+    public readonly status: number | null = null,
+    /** Broker-provided wait (Retry-After header or p-time), when known. */
+    public readonly retryAfterMs: number | null = null,
+  ) {
     super(message);
     this.name = 'TradovateLivePnlError';
   }
 }
+
+const retryAfterFromResponse = (response: Response, payload: unknown): number | null => {
+  const header = response.headers?.get?.('retry-after');
+  const seconds = header == null ? NaN : Number(header);
+  if (Number.isFinite(seconds) && seconds > 0) return seconds * 1_000;
+  if (header) { const at = Date.parse(header); if (Number.isFinite(at) && at > Date.now()) return at - Date.now(); }
+  const pTime = payload && typeof payload === 'object' ? (payload as { 'p-time'?: unknown })['p-time'] : undefined;
+  return typeof pTime === 'number' && Number.isFinite(pTime) && pTime > 0 ? pTime * 1_000 : null;
+};
 
 const finite = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -120,7 +134,11 @@ async function tradovateRequest<T>(options: {
   });
   const payload = await response.json().catch(() => null) as T | null;
   if (!response.ok || payload == null) {
-    throw new TradovateLivePnlError(`Tradovate request failed (${response.status})`, response.status);
+    throw new TradovateLivePnlError(
+      `Tradovate request failed (${response.status})`,
+      response.status,
+      response.status === 429 ? retryAfterFromResponse(response, payload) : null,
+    );
   }
   return payload;
 }

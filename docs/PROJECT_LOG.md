@@ -208,6 +208,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-18 08:30 — Claude: LIVE ukazuje poslední známé pozice místo „Pozice neověřena"
+
+Uživatel: po delší době v pozadí (telefon/web) všude „Pozice neověřena". Příčina:
+`liveReadFreshness` považuje čtení za ověřené jen do 45 s a buňka pozic
+místo dat vykreslila varování; pozice čte web přes Vercel `live-pnl` z
+Tradovate REST (ne z workeru), live hook nereagoval na návrat do popředí a po
+jediném `429` čekal paušálně hodinu (server i klient). Změny (jen web/server,
+worker beze změny):
+- Buňka pozic a metriky LIVE desku vždy ukážou poslední známý stav; štítek
+  „před 3 min" / „nedostupné" jen u čtení staršího než 2 min nebo
+  nedostupného (`LIVE_READ_STALE_MS`, `liveReadStaleLabel`). Ověření do 45 s
+  zůstává vnitřně beze změny (risk logika se neopírá o zobrazení). Neověřené
+  čtení nikdy netvrdí flat ani nehodnotí ochranu: prázdná buňka nese tichý
+  „?", pilulka místo štítu/„bez SL" neutrální „?" (test
+  `liveCopyPositionsRender` z 9/2026 upraven na nové chování).
+- Live hook čte hned při `visibilitychange` (návrat z pozadí), s guardem pro
+  testovací `document` bez event API.
+- `429`: server posílá `retryAfterMs` z `p-time`/`Retry-After`, bez hintu 5 min
+  místo hodiny; klientský fallback také 5 min.
+- Testy: `liveReadFreshness.test.ts`, `copyTradePositionsCellRender.test.ts`,
+  3× 429 v `tradovateLivePnl.test.ts`.
+- Nezměněno (další krok, až bude čas): brát pozice primárně z heartbeatu
+  workeru (`controller.exposure`, každou sekundu) a Tradovate REST přes
+  Vercel nechat jen jako zálohu — sníží API zátěž i závislost na REST latenci.
+
 ### 2026-09-18 06:40 — Claude: Mac companion dostává skutečnou expozici (čeká na reinstall workera)
 
 Uživatel: „proč mi Mac panel píše Expozice neověřena / Potvrzení followerů

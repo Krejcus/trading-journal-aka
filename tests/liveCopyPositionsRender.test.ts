@@ -51,13 +51,18 @@ describe('Positions sloupec copy tradingu', () => {
     const unknownPositions = renderToStaticMarkup(React.createElement(CopyTradePositionsCell, {
       accountId: 7, positions: [], orders: [], positionsVerified: false,
     }));
-    expect(unknownPositions).toContain('Pozice neověřené');
+    // Poslední známý stav zůstává na obrazovce; prázdná buňka nese tichý
+    // otazník, aby nevypadala jako ověřený flat.
+    expect(unknownPositions).toContain('?');
+    expect(unknownPositions).toContain('není čerstvě ověřené');
     expect(unknownPositions).not.toContain('flat');
     const unknownOrders = renderToStaticMarkup(React.createElement(CopyTradePositionsCell, {
       accountId: 7, positions: [livePosition()], orders: [], ordersVerified: false,
     }));
-    expect(unknownOrders).toContain('Příkazy neověřené');
+    expect(unknownOrders).toContain('MNQ');
+    expect(unknownOrders).toContain('ochrana neověřena');
     expect(unknownOrders).not.toContain('bez working stop lossu');
+    expect(unknownOrders).not.toContain('lucide-shield-check');
   });
   it('vykreslí long pill se zkráceným symbolem a štítem jen při working SL i targetu', () => {
     const markup = renderCell({

@@ -110,6 +110,9 @@ const IDLE_POSITION_INTERVAL_MS = 5_000;
 // Ten minutes keeps it useful for reconciliation without consuming the budget
 // reserved for the 2-second position/P&L read model.
 const FULL_REFRESH_INTERVAL_MS = 10 * 60_000;
+// Bez p-time od Tradovate se čeká 5 minut, ne hodinu: hodinový backoff nechal
+// LIVE po jediném 429 celé odpoledne na „neověřeno".
+const RATE_LIMIT_FALLBACK_MS = 5 * 60_000;
 
 export function useTradovateLiveData(userId: string, journalOptions?: {
   accounts: readonly Account[] | null;
@@ -177,7 +180,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       blocked: () => Date.now() < Math.max(rateLimitUntilRef.current, getTradovateApiTelemetrySnapshot().rateLimitedUntil ?? 0),
       onError: reason => {
         if (reason instanceof TradovateRequestError && reason.status === 429) {
-          rateLimitUntilRef.current = Date.now() + (reason.retryAfterMs ?? 3_600_000);
+          rateLimitUntilRef.current = Date.now() + (reason.retryAfterMs ?? RATE_LIMIT_FALLBACK_MS);
         }
       },
     });
@@ -354,7 +357,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     connectionIds = connectionIds.filter(id => statusRef.current?.connections.some(connection => connection.id === id && connection.connected));
     const recordRateLimit = (reason: unknown) => {
       if (isCurrent() && reason instanceof TradovateRequestError && reason.status === 429) {
-        rateLimitUntilRef.current = Math.max(rateLimitUntilRef.current, Date.now() + Math.max(1_000, reason.retryAfterMs ?? 3_600_000));
+        rateLimitUntilRef.current = Math.max(rateLimitUntilRef.current, Date.now() + Math.max(1_000, reason.retryAfterMs ?? RATE_LIMIT_FALLBACK_MS));
       }
     };
     if (!quiet) setBusy('data');
@@ -390,7 +393,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
           const limitedSources = coverage.filter(source => source?.httpStatus === 429);
           if (limitedSources.length > 0) recordRateLimit(new TradovateRequestError(
             'Tradovate rate limited a partial read.', 429,
-            Math.max(...limitedSources.map(source => source.retryAfterMs ?? 3_600_000)),
+            Math.max(...limitedSources.map(source => source.retryAfterMs ?? RATE_LIMIT_FALLBACK_MS)),
           ));
           // Update the shared read model synchronously before publishing to
           // React; a tick resolving in the same batch must see this refresh.
@@ -658,7 +661,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
             (connectionId, tick) => {
               if (cancelled || activeUserIdRef.current !== pollUserId) return;
               // Partial success must still honor the broker's rate-limit signal.
-              if (tick.anchorErrorStatus === 429) rateLimitUntilRef.current = Date.now() + 3_600_000;
+              if (tick.anchorErrorStatus === 429) rateLimitUntilRef.current = Date.now() + RATE_LIMIT_FALLBACK_MS;
               const current = connectionDataRef.current;
               const dataset = current[connectionId];
               if (!dataset) return;
@@ -712,7 +715,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
           && result.reason instanceof TradovateRequestError
           && result.reason.status === 429);
         if (rateLimited?.status === 'rejected' && rateLimited.reason instanceof TradovateRequestError) {
-          rateLimitUntilRef.current = Date.now() + (rateLimited.reason.retryAfterMs ?? 3_600_000);
+          rateLimitUntilRef.current = Date.now() + (rateLimited.reason.retryAfterMs ?? RATE_LIMIT_FALLBACK_MS);
         }
       } finally {
         livePnlBusyRef.current = false;
@@ -722,9 +725,21 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       schedule(hasOpenPosition ? FAST_PNL_INTERVAL_MS : IDLE_POSITION_INTERVAL_MS);
     };
 
+    // Návrat do popředí (telefon po spánku, přepnutí záložky) čte hned,
+    // ne až za další interval; poslední známé hodnoty tak nahradí do sekundy.
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || cancelled) return;
+      if (timer != null) window.clearTimeout(timer);
+      timer = null;
+      void poll();
+    };
+    // Testovací prostředí stubuje `document` bez event API.
+    const listens = typeof document.addEventListener === 'function';
+    if (listens) document.addEventListener('visibilitychange', onVisible);
     schedule(1_000);
     return () => {
       cancelled = true;
+      if (listens) document.removeEventListener('visibilitychange', onVisible);
       if (timer != null) window.clearTimeout(timer);
     };
   }, [enabled, refreshData, status?.connections]);
