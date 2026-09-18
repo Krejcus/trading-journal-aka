@@ -1,5 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
+import { downscaleAvatar } from '../lib/avatarImage';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
    X, User as UserIcon, Camera, Mail, Hash,
@@ -131,11 +132,10 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
    const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) {
-         const reader = new FileReader();
-         reader.onloadend = () => {
-            setFormData(prev => ({ ...prev, avatar: reader.result as string }));
-         };
-         reader.readAsDataURL(file);
+         // Zmenšit na 256 px: avatar cestuje s každým načtením deníku.
+         downscaleAvatar(file).then(avatar => {
+            setFormData(prev => ({ ...prev, avatar }));
+         }).catch(err => console.error('[Profile] avatar read failed', err));
       }
    };
 

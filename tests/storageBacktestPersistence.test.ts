@@ -174,15 +174,15 @@ describe('backtest excursion ambiguity read parity', () => {
 describe('dashboard request cancellation', () => {
   it('attaches a deadline when the caller supplies no signal', async () => {
     await storageService.getDashboardData();
-    expect(h.querySignals.get('get_dashboard_data')).toBeInstanceOf(AbortSignal);
-    expect(h.querySignals.get('get_dashboard_data')?.aborted).toBe(false);
+    expect(h.querySignals.get('get_dashboard_data_light_v1')).toBeInstanceOf(AbortSignal);
+    expect(h.querySignals.get('get_dashboard_data_light_v1')?.aborted).toBe(false);
   });
 
   it('forwards the caller signal through dashboard and private-note reads', async () => {
     const item = trade(); h.rows.set(String(item.id), row(item));
     const controller = new AbortController();
     expect((await storageService.getDashboardData(controller.signal)).trades[0].id).toBe(item.id);
-    const signals = ['get_dashboard_data', 'get_trade_note_projection_v1', 'backtest_trade_note_histories']
+    const signals = ['get_dashboard_data_light_v1', 'get_trade_note_projection_v1', 'backtest_trade_note_histories']
       .map(resource => h.querySignals.get(resource));
     for (const signal of signals) expect(signal?.aborted).toBe(false);
     // Private reads combine caller cancellation with their own deadline.
@@ -190,7 +190,7 @@ describe('dashboard request cancellation', () => {
     for (const signal of signals) expect(signal?.aborted).toBe(true);
   });
 
-  it.each(['get_dashboard_data', 'get_trade_note_projection_v1', 'backtest_trade_note_histories'])(
+  it.each(['get_dashboard_data_light_v1', 'get_trade_note_projection_v1', 'backtest_trade_note_histories'])(
     'preserves the previous cache when aborted during %s', async resource => {
       const item = trade(); h.rows.set(String(item.id), row(item));
       const cached = [{ ...item, notes: 'last confirmed value' }];

@@ -36,6 +36,8 @@ import { calculateAccountDrawdown, portfolioFloorForDate } from './services/prop
 import { useTradovateLiveData } from './components/useTradovateLiveData';
 import { buildOAuthAccountLiveStates } from './lib/oauthAccountLiveState';
 import { syncJournalConnections, mergeImportedJournalTrades, type JournalSyncReport } from './services/journalImportSync';
+import { mergeTradeAnalytics, type TradeAnalytics } from './lib/tradeAnalyticsMerge';
+import { mergeDeferredAvatar } from './lib/avatarImage';
 import { isEvidenceJournalTrade, isRetiredJournalTrade } from './lib/journalTradeFacts';
 import { loadTradovateOAuthStatus, importTradovateJournalConnection } from './services/tradovateOAuthConnection';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
@@ -481,6 +483,7 @@ const App: React.FC = () => {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [offlineSnapshotAt, setOfflineSnapshotAt] = useState<number | null>(null);
   const [cloudRefreshing, setCloudRefreshing] = useState(false);
+  const [cloudRefreshError, setCloudRefreshError] = useState<string | null>(null);
   const retryCloudRef = useRef<() => void>(() => {});
   const [networkOnline, setNetworkOnline] = useState(() => navigator.onLine !== false);
   const [initStatus, setInitStatus] = useState<string>("Inicializace...");
@@ -788,6 +791,17 @@ const App: React.FC = () => {
     const state = buildNativeJournalWidgetState({ trades, accounts });
     void syncNativeJournalWidgetSnapshot(state);
   }, [accounts, currentUser.id, isUserFromDb, trades]);
+
+  // Avatar nad 256 kB nechává lehké načtení deníku stranou; dotáhnout ho po prvním vykreslení.
+  useEffect(() => {
+    if (!currentUser.avatarDeferred || currentUser.avatar || currentUser.id === 'default_user') return;
+    const userId = currentUser.id;
+    const isCurrentSession = captureSessionRequest(userId);
+    storageService.getDeferredAvatar(userId).then(avatar => {
+      if (!isCurrentSession()) return;
+      setCurrentUser(prev => prev.id === userId ? { ...prev, avatar: avatar ?? undefined, avatarDeferred: false } : prev);
+    }).catch(err => console.warn('[Profile] deferred avatar load failed:', err instanceof Error ? err.message : err));
+  }, [currentUser.avatarDeferred, currentUser.avatar, currentUser.id, captureSessionRequest]);
 
   // Persist celý user objekt do localStorage při každé změně z DB — další reload pak má
   // instant rendering (žádný flash avatara/jména/role). Cache klíč per-user.
@@ -1885,7 +1899,7 @@ const App: React.FC = () => {
     const isCurrentSession = captureSessionRequest(session.user.id);
     const recovery = createDashboardRecovery({
       // Complete paginated history plus private notes spans multiple requests.
-      timeoutMs: 60_000,
+      timeoutMs: 90_000,
       available: () => isCurrentSession() && navigator.onLine !== false && document.visibilityState === 'visible',
       load: signal => storageService.getDashboardData(signal, true),
       apply: fresh => {
@@ -1893,7 +1907,7 @@ const App: React.FC = () => {
         setTrades(previous => reconcileDashboardRows(previous, fresh.trades));
         setAccounts(previous => reconcileDashboardRows(previous, fresh.accounts));
         if (fresh.user?.id === session.user.id) {
-          setCurrentUser(fresh.user);
+          setCurrentUser(prev => mergeDeferredAvatar(prev, fresh.user));
           setIsUserFromDb(true);
         }
         if (!isPreferencesDirty.current) applyPreferences(fresh.preferences || {});
@@ -1902,11 +1916,14 @@ const App: React.FC = () => {
         setWeeklyFocusList(previous => reconcileDashboardRows(previous, fresh.weeklyFocus, isWeeklyFocusDirty.current));
         isSyncedWithDbRef.current = true;
         setCloudRefreshing(false);
+        setCloudRefreshError(null);
         setOfflineSnapshotAt(null);
       },
       onBusy: busy => { if (isCurrentSession()) setCloudRefreshing(busy); },
       onError: error => {
-        console.warn('[Dashboard recovery] Refresh failed; retry scheduled:', error instanceof Error ? error.message : 'cloud-read-failed');
+        const message = error instanceof Error ? error.message : 'cloud-read-failed';
+        console.warn('[Dashboard recovery] Refresh failed; retry scheduled:', message);
+        if (isCurrentSession()) setCloudRefreshError(message);
       },
     });
     const retry = () => { void recovery.retry(); };
@@ -2017,7 +2034,7 @@ const App: React.FC = () => {
           if (!isCurrentSession()) return;
           setTrades(prev => reconcileDashboardRows(prev, fresh.trades));
           setAccounts(prev => reconcileDashboardRows(prev, fresh.accounts));
-          if (fresh.user?.id === session.user.id) { setCurrentUser(fresh.user); setIsUserFromDb(true); }
+          if (fresh.user?.id === session.user.id) { setCurrentUser(prev => mergeDeferredAvatar(prev, fresh.user)); setIsUserFromDb(true); }
           if (fresh.preferences) {
             console.log('[BG-Refresh] received fresh prefs, dirty=', isPreferencesDirty.current, 'fields:', {
               sessions: fresh.preferences.sessions?.length,
@@ -2107,7 +2124,7 @@ const App: React.FC = () => {
           setActiveAccountId(DEFAULT_ACCOUNT.id);
         }
 
-        if (dbUser?.id === session.user.id) { setCurrentUser(dbUser); setIsUserFromDb(true); }
+        if (dbUser?.id === session.user.id) { setCurrentUser(prev => mergeDeferredAvatar(prev, dbUser)); setIsUserFromDb(true); }
         if (dbPrefs) {
           applyPreferences(dbPrefs);
         } else {
@@ -2459,6 +2476,27 @@ const App: React.FC = () => {
       setIsLabExpLoaded(false); // retry při příštím otevření
     });
   }, [activePage, session, isLabExpLoaded, captureSessionRequest]);
+
+  // --- LAZY LOADING: analytická pole obchodů (counterfactual, excursion, …) ---
+  // Lehké načtení deníku je vynechává; Lab a AI kouč si je dotáhnou jednou
+  // za session a dostanou obchody sloučené na čtení (hlavní stav se nemění).
+  const [tradeAnalytics, setTradeAnalytics] = useState<ReadonlyMap<string, TradeAnalytics>>(() => new Map());
+  const [isTradeAnalyticsLoaded, setIsTradeAnalyticsLoaded] = useState(false);
+  useEffect(() => {
+    if ((activePage !== 'lab' && activePage !== 'ai') || !session || isTradeAnalyticsLoaded) return;
+    const isCurrentSession = captureSessionRequest(session.user.id);
+    if (!isCurrentSession()) return;
+    setIsTradeAnalyticsLoaded(true);
+    storageService.getTradeAnalytics().then(rows => {
+      if (isCurrentSession()) setTradeAnalytics(rows);
+    }).catch(err => {
+      if (!isCurrentSession()) return;
+      console.error('[Lab] load trade analytics failed:', err);
+      setIsTradeAnalyticsLoaded(false); // retry při příštím otevření
+    });
+  }, [activePage, session, isTradeAnalyticsLoaded, captureSessionRequest]);
+  useEffect(() => { setTradeAnalytics(new Map()); setIsTradeAnalyticsLoaded(false); }, [session?.user?.id]);
+  const analyticsTrades = useMemo(() => mergeTradeAnalytics(trades, tradeAnalytics), [trades, tradeAnalytics]);
 
   // Metadata affects account balances, so cached payouts stay immediately
   // available. Only their background refresh on Dashboard may be deferred.
@@ -3159,7 +3197,7 @@ const App: React.FC = () => {
       ]);
 
       if (!isCurrentSession()) return;
-      if (dbUser?.id === session.user.id) { setCurrentUser(dbUser); setIsUserFromDb(true); }
+      if (dbUser?.id === session.user.id) { setCurrentUser(prev => mergeDeferredAvatar(prev, dbUser)); setIsUserFromDb(true); }
 
       // OCHRANA: nepřepisuj trades prázdným polem pokud DB call selhal/timeoutoval.
       // Bez tohoto bliká dashboard na 0pnl/0RR při dočasné chybě sítě nebo Supabase glitch.
@@ -4178,7 +4216,7 @@ const App: React.FC = () => {
           <div className="flex-1 overflow-hidden h-full pt-[80px] lg:pt-[96px]">
             <React.Suspense fallback={<div className="flex-1" />}>
               <AICoachPage
-                trades={trades}
+                trades={analyticsTrades}
                 accounts={allAccountsWithArchived}
                 ironRules={ironRules}
                 standardGoals={standardGoals}
@@ -4322,6 +4360,7 @@ const App: React.FC = () => {
                     {networkOnline ? 'Data deníku čekají na obnovení' : 'Offline režim deníku'} — zobrazuji poslední známá data{offlineSnapshotAt && offlineSnapshotAt > 0 ? ` z ${new Date(offlineSnapshotAt).toLocaleString('cs-CZ')}` : ' z lokální cache'}.
                     {' '}{activePage === 'live' ? 'Toto není ukazatel spojení brokeru ani workeru. ' : ''}
                     {cloudRefreshing ? 'Ověřuji čerstvá data…' : 'Po obnovení spojení se načtení automaticky zopakuje.'}
+                    {cloudRefreshError ? ` Poslední pokus selhal: ${cloudRefreshError.replace(/^dashboard-/, '').slice(0, 120)}.` : ''}
                   </span>
                   <button type="button" disabled={!networkOnline || cloudRefreshing} onClick={() => retryCloudRef.current()} className="shrink-0 rounded-lg border border-amber-500/30 px-3 py-2 disabled:opacity-50">
                     {cloudRefreshing ? 'Obnovuji…' : 'Zkusit znovu'}
@@ -4504,7 +4543,7 @@ const App: React.FC = () => {
                         </p>
                       </div>
                       <LabPage
-                        trades={trades}
+                        trades={analyticsTrades}
                         accounts={allAccountsWithArchived}
                         theme={theme}
                         dashboardMode={dashboardMode}

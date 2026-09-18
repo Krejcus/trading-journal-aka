@@ -65,6 +65,8 @@ export interface User {
   email: string;
   name: string;
   avatar?: string;
+  /** Light dashboard read left the avatar out (oversized); App fetches it after the first paint. */
+  avatarDeferred?: boolean;
   language?: 'cs' | 'en';
   currency?: 'USD' | 'CZK' | 'EUR';
   timezone?: string;

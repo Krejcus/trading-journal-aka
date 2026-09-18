@@ -5,14 +5,22 @@ export const dashboardTradeFields = [
   'phase', 'htfConfluence', 'ltfConfluence', 'autoConfluence', 'mistakes', 'emotions',
   'planAdherence', 'executionStatus', 'needsReview', 'exitReason', 'copierTradeId',
   'copierEpisodeId', 'copierSnapshots', 'journalSupersededBy', 'pnlEstimated', 'setupType', 'miniViewRange',
-  'miniViewLayout', 'miniViewSecondaryRange', 'miniViewSecondaryTimeframe', 'aiSuggestions',
-  'visionAnalysis', 'positionSize', 'isMaster', 'masterTradeId', 'entryTime', 'entryDate',
+  'miniViewLayout', 'miniViewSecondaryRange', 'miniViewSecondaryTimeframe',
+  'positionSize', 'isMaster', 'masterTradeId', 'entryTime', 'entryDate',
   'source', 'tsOrderIds', 'isBE', 'exitDate', 'mfeR', 'maeR', 'mfePoints', 'maePoints',
-  'excursionAvailable', 'excursionComplete', 'executionPath', 'executionPathComplete',
+  'excursionAvailable', 'excursionComplete', 'executionPathComplete',
   'outcomeAmbiguous', 'excursionAmbiguous', 'slPlacement', 'targetType', 'targetLevel',
   'management', 'sessionBias', 'sessionPreNotes', 'sessionPostNotes', 'biasAligned',
-  'schemaVersion', 'counterfactual', 'excursion', 'entryMap', 'entryContext',
+  'schemaVersion',
 ];
+
+/** Fields the light dashboard read defers (see lib/tradeAnalyticsMerge). */
+export const deferredDashboardTradeFields = [
+  'counterfactual', 'excursion', 'entryMap', 'entryContext', 'aiSuggestions', 'executionPath', 'visionAnalysis',
+] as const;
+
+/** PostgREST caps a page at 1 000 rows; 500 keeps a page under a few hundred kB and halves the round trips of 100. */
+export const DASHBOARD_PAGE_SIZE = 500;
 
 export const dashboardTables = {
   profiles: 'id,email,full_name,avatar_url,role,preferences',
@@ -33,10 +41,10 @@ export async function loadDashboardFallback(
 ) {
   const readAll = async (table: DashboardTable) => {
     const rows: DashboardRawRow[] = [];
-    for (let offset = 0; ; offset += 100) {
-      const page = await readPage(table, offset, 100);
+    for (let offset = 0; ; offset += DASHBOARD_PAGE_SIZE) {
+      const page = await readPage(table, offset, DASHBOARD_PAGE_SIZE);
       rows.push(...page);
-      if (page.length < 100) return rows;
+      if (page.length < DASHBOARD_PAGE_SIZE) return rows;
     }
   };
   const [profiles, accounts, trades, preps, reviews, weeklyFocus] = await Promise.all(

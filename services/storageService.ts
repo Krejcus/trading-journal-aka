@@ -8,6 +8,7 @@ import { loadLabExperiments, persistLabExperiment, removeLabExperiment } from '.
 import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, WeeklyFocus, DrawingTemplate, AIConversation, LabExperiment } from '../types';
 import { supabase } from './supabase';
 import { dashboardTables, loadDashboardFallback, type DashboardRawRow } from './dashboardFallback';
+import { tradeAnalyticsById, type TradeAnalytics } from '../lib/tradeAnalyticsMerge';
 import { get, set } from 'idb-keyval';
 import { maybeDetectEpisodes } from './coachMemoryService';
 import { resizeImageDataUrl, dataUrlSizeKB } from './imageResize';
@@ -147,6 +148,9 @@ type DashboardSnapshot = {
   weeklyFocus: WeeklyFocus[];
 };
 
+/** Full-history reads span a slow mobile link; 20 s used to cut the refresh short. */
+const DASHBOARD_RPC_TIMEOUT_MS = 45_000;
+
 export const storageService = {
 
   // Single RPC call to load all dashboard data at once (replaces 7 parallel HTTP requests)
@@ -155,11 +159,13 @@ export const storageService = {
     reviews: DailyReview[]; preferences: UserPreferences | null;
     user: User | null; weeklyFocus: WeeklyFocus[];
   }> {
-    const result = preferPaged ? null : await supabase.rpc('get_dashboard_data')
-      .abortSignal(signal ?? AbortSignal.timeout(20_000));
+    // Light read: per-trade analytics blobs are deferred (getTradeAnalytics);
+    // the full call took 6 s / 12.7 MB and a phone could not finish it.
+    const result = preferPaged ? null : await supabase.rpc('get_dashboard_data_light_v1')
+      .abortSignal(signal ?? AbortSignal.timeout(DASHBOARD_RPC_TIMEOUT_MS));
     const data = result?.data;
     const error = result?.error;
-    if (error) console.error('[RPC] get_dashboard_data error:', error.code, error.message);
+    if (error) console.error('[RPC] get_dashboard_data_light_v1 error:', error.code, error.message);
     if (error && error.code !== '57014') throw error;
     let raw = data as any;
     if (preferPaged || error) {
@@ -171,7 +177,7 @@ export const storageService = {
         const result = await supabase.from(table).select(dashboardTables[table])
           .eq(table === 'profiles' ? 'id' : 'user_id', ownerId)
           .order('id').range(offset, offset + limit - 1)
-          .abortSignal(signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000));
+          .abortSignal(signal ? AbortSignal.any([signal, AbortSignal.timeout(DASHBOARD_RPC_TIMEOUT_MS)]) : AbortSignal.timeout(DASHBOARD_RPC_TIMEOUT_MS));
         if (result.error) throw new Error(`dashboard-read-failed:${table}:${result.error.code || 'request-error'}:${result.error.message}`);
         if (ownerVersion !== authStateVersion || signal?.aborted || result.data === null) throw new Error('dashboard-read-invalidated');
         return result.data as unknown as DashboardRawRow[];
@@ -278,6 +284,7 @@ export const storageService = {
       id: raw.user.id, email: raw.user.email || '',
       name: raw.user.full_name || '', avatar: raw.user.avatar_url,
       role: (raw.user.role as any) || 'friend',
+      ...(raw.user.avatar_deferred ? { avatarDeferred: true } : {}),
     } as User : null;
 
     const preferences = raw.preferences || null;
@@ -417,6 +424,14 @@ export const storageService = {
     return user;
   },
 
+  /** Avatar left out of the light dashboard read because it is oversized; fetched after the first paint. */
+  async getDeferredAvatar(userId: string): Promise<string | null> {
+    if (!userId || !isUUID(userId)) return null;
+    const { data, error } = await supabase.from('profiles').select('avatar_url').eq('id', userId).maybeSingle();
+    if (error) throw new Error(`avatar-read-failed:${error.code || 'request-error'}:${error.message}`);
+    return data?.avatar_url ?? null;
+  },
+
   async getProfile(userId: string): Promise<User | null> {
     if (!userId || !isUUID(userId)) return null;
     const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
@@ -434,6 +449,9 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return;
 
+    if (user.avatarDeferred && user.avatar == null) {
+      throw new Error('avatar-not-loaded'); // never overwrite a stored avatar with the placeholder of a deferred one
+    }
     const profileData = {
       id: userId,
       full_name: user.name,
@@ -2057,6 +2075,19 @@ export const storageService = {
   // ── Lab experimenty — vlastní tabulka (zdroj pravdy) ─────────────────────
   // Dřív žily v preferences blobu → last-write-wins z druhého zařízení je umělo
   // tiše smazat i s baseline startTs. Celý experiment se ukládá jako jsonb `data`.
+  /**
+   * Deferred per-trade analytics (counterfactual, excursion, entry map/context,
+   * execution path, AI suggestions, vision) for the caller's trades. Lab and
+   * the AI coach merge them with mergeTradeAnalytics; the light dashboard read
+   * leaves them out on purpose.
+   */
+  async getTradeAnalytics(tradeIds?: readonly string[], signal?: AbortSignal): Promise<Map<string, TradeAnalytics>> {
+    const { data, error } = await supabase.rpc('get_trade_analytics_v1', tradeIds ? { p_trade_ids: [...tradeIds] } : {})
+      .abortSignal(signal ?? AbortSignal.timeout(DASHBOARD_RPC_TIMEOUT_MS));
+    if (error) throw new Error(`trade-analytics-read-failed:${error.code || 'request-error'}:${error.message}`);
+    return tradeAnalyticsById(data);
+  },
+
   async getLabExperiments(): Promise<LabExperiment[]> {
     const ownerId = await getUserId(); const version = authStateVersion;
     if (!ownerId) return [];
