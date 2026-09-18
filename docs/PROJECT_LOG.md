@@ -208,6 +208,33 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-18 20:50 — Claude: vzorec „mrtvá session" se opakoval 2× i po reinstallu; nová diagnostika ukazuje close kódy 1005/1006 a hlavní podezřelý je objem REST z webu
+
+**Pozorování (worker 3408088, nová diagnostika):**
+- 18:08:10Z Tradovate zavřel socket Lucid (`code=1005 clean=true socketAgeS=1075`, stav connected, kopírka ARMED od 18:01:44Z → transport-lost DISARM, flat). Reconnect: `WS AUTHORIZED afterMs≈145`, pak `WS SYNC TIMEOUT phase=syncing` 45 s, znovu totéž → 18:09:44Z `SESSION RENEWAL 2× sync timeout → vynucená obnova tokenu`, 18:09:45Z token obnoven, 18:09:49Z autorizace a session funguje. Výpadek 1,5 min místo hodiny.
+- Tradeify: socket zůstal otevřený (věk 3002 s), ale REST `/account/list` a `/order/list` visely 45 s už v 18:12:52Z; plánovaná obměna socketu 18:40:17Z (`code=1006`), reconnect autorizován, sync 2× timeout → 18:42:46Z vynucená obnova → 18:43:02Z autorizace, 18:43:04Z read-only kontrola potvrdila flat. Zapnutí kopírky mezitím 4× odmítnuto po 45 s (UI „worker příkaz včas nepotvrdil").
+- Vercel live-pnl se stejnými tokeny po celou dobu 200 (žádné 408, žádné 429 za 3 h).
+
+**Hypotéza (zatím nejlepší, nepotvrzená):** Tradovate limituje REST ~80/min a 5000/h
+na uživatele/session; při překročení podle komunitních vláken nezřídka nevrací
+429, ale zavírá sockety s 1005/1006 a stalluje session (p-time typicky 3600 s
+— dnešní první výpadek trval přesně 61 min). Web při otevřeném LIVE volá
+`live-pnl` ~67×/min (3 připojení, 1–2 s interval), každé volání = position/list
++ order/list + orderVersion/list + rotující cashBalance snapshot ≈ 4 Tradovate
+volání → ~90/min na token, plus worker (risk poll 30 s × účet), cron snapshoty,
+status/preflight. Sessions umíraly vždy při otevřeném LIVE (15:41Z, 18:08Z,
+≤18:12Z); v noci a bez LIVE běží worker hodiny. Nový token = nová session =
+nový budget, proto vynucená obnova pomáhá.
+
+**Návrh (rozhodnutí uživatele):** 1) web při čerstvém heartbeatu workera
+nepolluje pozice/příkazy přes REST (má je z heartbeatu), cash snapshot jen
+každých 10–30 s, na pozadí nic; 2) worker dostane vlastní Tradovate token
+(vlastní session) oddělený od tokenu pro webové čtení, aby ho web nemohl
+penalizovat; 3) FundedNext připojení odpojit i v aplikaci (live-pnl ho stále
+polluje bez účtů). Zdroje limitů: Tradesyncer „REST 5000 requests/hour or 80
+requests/minute", Tradovate fórum „API and Websocket limitation" (1005/1006 bez
+vysvětlení).
+
 ### 2026-09-18 19:52 — Claude: worker reinstalován z 3408088 (na „nasaď"), FundedNext odebráno z manifestu
 
 Brána bezpečného skriptu prošla (DISARMED, připojený, po Kontrole pozic, flat,
