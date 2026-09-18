@@ -208,6 +208,38 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-18 22:20 — Claude: čtvrtý pád session Tradeify (20:07Z) a korelace s dávkami čtení z webu
+
+**Pád 20:07:17Z:** socket-error → close 1006 (socket starý 1504 s), reconnect
+autorizace 158 ms, sync 2× timeout (fáze syncing), 20:08:52Z vynucená obnova
+tokenu, 20:08:55Z autorizace, 20:12:12Z read-only kontrola potvrdila flat →
+připojeno. Kopírka byla ARMED → transport-lost DISARM (flat). Výpadek 5 min.
+
+**Korelace (Vercel, 5 min před každým pádem, group by requestPath):**
+| okno | preflight | history-sync | live-pnl | výsledek |
+|---|---|---|---|---|
+| 12:33–12:38 (Tradeify socket-error 12:38) | 0 | 0 | 0 (LIVE zavřené) | reconnect + sync OK hned |
+| 15:36–15:41 (Tradeify+FundedNext) | 12 | 14 | 420 | hodinu mrtvé |
+| 18:03–18:08 (Lucid) | 6 | 7 | 429 | mrtvé do obnovy tokenu |
+| 18:46–18:51 (Tradeify) | 3 | 0 | 307 | mrtvé, pak p-ticket |
+| 20:04–20:07 (Tradeify) | 15 (3 dávky po 6 během 2 s = načtení stránky) | 14 | 168 | mrtvé 5 min |
+| kontrola 19:45–19:50 (klid) | 0 | 0 | 54 | žádný pád |
+Jeden „full" preflight = account/list + 4 volání na účet + 7 listů + probe ≈
+17 (Tradeify) až 30 (Lucid) Tradovate volání během sekundy; načtení LIVE =
+bootstrap + full na každé připojení (i FundedNext bez účtů). Samotný socket-error
+není patologie (12:38 se zotavil okamžitě); patologie je „sync po reconnectu
+neodpoví, když token právě dostává dávky REST". Zůstává korelace, ne důkaz.
+Worker sám: Tradeify ~275–300 REST/h, Lucid ~600 REST/h (risk poll 60 s ×
+účet v DISARMED, čtení zůstatků při stream událostech, reconcile).
+
+**Změna (commit tohoto zápisu):** `api/tradovate/oauth/preflight.ts` sdílí
+výsledek na (uživatel, připojení, režim) 20 s — opakované načtení stránky,
+iPhone a companion už dávku neopakují. Web live.
+
+**Doporučení pro zítřek:** LIVE otevřít jednou a nechat (bez reloadů), sledovat
+panel; zvážit: live čtení jen pro připojení s účty (FundedNext vynechat),
+history-sync na vyžádání, worker risk poll v DISARMED 60 s → 120 s.
+
 ### 2026-09-18 22:15 — Claude: oprava podle review Codexu — oficiální limity Tradovate, p-ticket je na IP, ne na token
 
 Codex správně opravil moje závěry, ověřeno v oficiální dokumentaci
