@@ -208,6 +208,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-18 21:45 — Claude: LIVE Diagnostika ukazuje čerpání limitu Tradovate na login a stav session workeru
+
+Uživatel: dosavadní panel „jen počet požadavků prohlížeče" byl k ničemu —
+token na ~90 Tradovate volání/min vypadal v klidu. Nově (commit e3281ab):
+- `lib/tradovateUsageMeter.ts` — klouzavé minutové/hodinové počítadlo, limity
+  80/min a 5000/h, semafor (60 % = oranžová, nad limit = červená).
+- Server: `live-pnl` vrací `brokerCalls` (tick = počet Tradovate volání, cash
+  = 3, sdílený výsledek z cache = 0); klientská telemetrie je sčítá po
+  připojení (`brokerCalls` ve snapshotu).
+- Worker: broker počítá REST (`request`) i WS požadavky (`sendSocketRequest`),
+  drží `lastClose` (kód, důvod, clean, kdo zavřel), `penaltyUntil` (p-time)
+  a `consecutiveSyncTimeouts`; `usage()` na `TradovateBrokerPort`; pilot
+  posílá `connectionUsage[]` ve statusu (protokol `CopierConnectionUsage`).
+- UI: `buildTradovateConnectionUsageRows` (label z organizationName /
+  tradovateEmail / conn:xxxx) → v „Diagnostika dat a API" na login: web +
+  worker vs. limit, věta o session („penalizace Tradovate, sync za 12 min",
+  „bez streamu (syncing, 2× sync timeout) · poslední zavření 20:50:56
+  (Tradovate, kód 1006)", „session připojená").
+Web část je live; worker část čeká na reinstall (kopírka je teď ARMED, uživatel
+zapíná/vypíná, penalizace Tradeify vypršela ~19:25Z po ~32 min).
+
 ### 2026-09-18 21:20 — Claude: penalizace Tradovate potvrzena chováním (p-ticket na syncrequest), snížený objem REST z webu
 
 **Nový důkaz:** Tradeify session umřela potřetí (18:50:56Z, close 1006 po 474 s
