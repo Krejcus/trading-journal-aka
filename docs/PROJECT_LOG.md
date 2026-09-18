@@ -208,6 +208,42 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-18 12:40 — Claude: lehké načtení deníku (banner „Data deníku čekají na obnovení")
+
+**Symptom:** po delším pozadí na telefonu/webu zůstal viset banner „Data deníku
+čekají na obnovení — zobrazuji poslední známá data … Obnovuji…". Příčina změřená
+na produkci: `get_dashboard_data` vracel **12,7 MB za 7,8 s** (3 720 obchodů);
+klientský limit 20 s na pomalé mobilní lince nestačil a recovery smyčka to
+opakovala pořád dokola. Rozklad velikosti: analytická pole obchodů
+(counterfactual, entryContext, excursion, aiSuggestions, executionPath,
+entryMap, visionAnalysis) 3,9 MB, **avatar profilu 3,7 MB** (base64 JPEG
+z telefonu uložený v `profiles.avatar_url`, cestoval s každým načtením).
+
+**Řešení (commit cbbdc17, migrace `20260918120000_dashboard_light_and_trade_analytics.sql`
+nasazená přes `db query -f` + `migration repair`):**
+- `get_dashboard_data_light_v1` — stejná data bez sedmi analytických polí a
+  s avatarem odloženým, když má přes 256 kB (`avatar_deferred: true`).
+  Změřeno jako přihlášený uživatel: **5,1 MB / 1,7 s**. Starý
+  `get_dashboard_data` zůstává (nikdo ho už z webu nevolá).
+- `get_trade_analytics_v1(p_trade_ids uuid[] default null)` — odložená pole,
+  RLS invoker. Lab a AI kouč si je dotáhnou jednou za session
+  (`storageService.getTradeAnalytics`) a dostávají obchody sloučené na čtení
+  (`lib/tradeAnalyticsMerge`); hlavní stav `trades` se nemění, detail obchodu
+  čte celý řádek jako dřív. TradeHistory potřebuje jen `excursionComplete`,
+  které zůstává.
+- Stránkovaný fallback: 500 řádků na stránku (dřív 100) bez analytických polí;
+  limity požadavků 20 s → 45 s, deadline obnovy na pozadí 60 s → 90 s.
+- Banner nově ukazuje důvod posledního selhání (`cloudRefreshError`).
+- Avatar: nahrání v profilu zmenší obrázek na 256 px JPEG
+  (`lib/avatarImage.downscaleAvatar`); odložený avatar drží poslední známý
+  (`mergeDeferredAvatar`, cache v localStorage) a dotáhne se po prvním
+  vykreslení; `saveUser` odmítne přepsat uložený avatar placeholderem.
+
+**Co zbývá / rozhodnutí pro uživatele:** stávající avatar v DB má pořád 3,7 MB —
+stačí ho jednou znovu nahrát v profilu (nový upload se zmenší), nebo ho
+nechat zmenšit z DB (je to změna uživatelských dat, neudělal jsem to sám).
+Worker se neměnil (jen web + SQL). Testy 3 747/3 747, tsc, build OK.
+
 ### 2026-09-18 10:15 — Claude: LIVE bere pozice a příkazy z heartbeatu workeru (čeká na reinstall workera)
 
 Uživatel: „udělej i ty pozice z heartbeatu workeru". Dosud web/telefon četl
