@@ -131,7 +131,8 @@ export interface WebSocketLike {
   onopen: (() => void) | null;
   onmessage: ((event: { data: unknown }) => void) | null;
   onerror: (() => void) | null;
-  onclose: (() => void) | null;
+  /** Close kód a důvod od Tradovate jdou do diagnostiky (18. 9. 2026: bez nich nešlo poznat, proč server zavřel tři sockety naráz). */
+  onclose: ((event?: { code?: number; reason?: string; wasClean?: boolean }) => void) | null;
   send(data: string): void;
   close(): void;
 }
@@ -363,6 +364,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   let syncRetry: ReturnType<typeof setTimeout> | null = null;
   let socketMessageTail: Promise<void> = Promise.resolve();
   let lastSocketMessageAt = 0;
+  /** Kdy se aktuální socket otevřel (diagnostika WS CLOSE). */
+  let socketOpenedAt = 0;
   let lastHeartbeatSentAt = 0;
   /**
    * Circuit breaker rate limitu. Po HTTP 429 Tradovate počítá hodinové okno
@@ -1141,6 +1144,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     }
     if (value.i === 0) {
       if (value.s !== 200) throw new TradovateTransportError(`WebSocket authorization failed${socketFailureDetail(value)}`);
+      diagnostic(`WS AUTHORIZED afterMs=${Math.max(0, clock() - socketOpenedAt)}`);
       socketState = 'syncing';
       sendSocketRequest('user/syncrequest', syncRequestBody, 1);
       return;
@@ -1376,9 +1380,13 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       connectWatchdog = null;
       socketState = 'authorizing';
       lastSocketMessageAt = clock();
+      socketOpenedAt = clock();
       lastHeartbeatSentAt = 0;
       syncTimeout = timeouts(() => {
         if (socket !== candidate) return;
+        // Fáze rozhoduje o diagnóze: „authorizing" = Tradovate neodpověděl ani
+        // na authorize (session/token), „syncing" = authorize prošel a mlčí sync.
+        diagnostic(`WS SYNC TIMEOUT phase=${socketState} afterMs=${Math.max(0, clock() - socketOpenedAt)}`);
         emitOrHoldError(contextualError(
           new TradovateTransportError('Tradovate WebSocket sync timeout'),
           'websocket',
@@ -1434,8 +1442,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       if (!renewalInProgress) emit({ type: 'connection', connected: false, at: clock() });
       closeSocket(candidate, 'socket-error');
     };
-    candidate.onclose = () => {
+    candidate.onclose = event => {
       if (socket !== candidate) return;
+      diagnostic(
+        `WS CLOSE state=${socketState} code=${event?.code ?? '-'} reason=${JSON.stringify(event?.reason ?? '')} clean=${event?.wasClean ?? '-'} socketAgeS=${Math.round((clock() - socketOpenedAt) / 1_000)}`,
+      );
       // closeSocket already reports an intentional close immediately;
       // unsolicited remote closes still need their own disconnect event.
       if (!renewalInProgress && socketState !== 'closing') {

@@ -240,6 +240,18 @@ nesouvisí (Tradeify breach nebyl, umřel stejně).
 Očekávaný efekt: dnešní 61min výpadek by trval ~2–3 min (dva sync timeouty
 po 45 s + obnova). Server část je v produkci po pushi; worker po reinstallu.
 
+**Dodatek 18:20 — co příčinu NEvysvětluje a co se má sledovat:** Lucid token
+byl obnoven stejnou cestou v 15:16Z (starý vypršel 15:26Z) a jeho socket se v
+15:26 nezavřel; zavřel se až v 15:41:04Z spolu s ostatními (Tradeify 15:40:58Z
+socket-error, FundedNext 15:41:04Z socket-error, Lucid socket-close). Zavření
+tří socketů v jedné minutě tedy nebylo vypršením tokenů, ale událostí na
+straně Tradovate; po ní byly sessions tokenů vydaných 15:31Z mrtvé (authorize
+nebo sync neodpověděl, REST 408) a session tokenu z 15:16Z v pořádku. Broker
+dosud nelogoval close kód ani fázi handshaku → doplněno: `WS CLOSE state code
+reason clean socketAgeS`, `WS AUTHORIZED afterMs`, `WS SYNC TIMEOUT
+phase=authorizing|syncing`. Příště z toho půjde poznat, zda Tradovate zavírá s
+kódem (1008 policy / 4xxx) a zda mlčí už authorize (token/session) nebo až sync.
+
 ### 2026-09-18 16:50 — Claude: mrtvé OAuth spojení bez účtů nesmí držet kopírku v „nepřipojeno" (čeká na reinstall workera)
 
 **Co se stalo:** od 15:41Z Tradovate neobsluhuje sessions Tradeify (53157614)
