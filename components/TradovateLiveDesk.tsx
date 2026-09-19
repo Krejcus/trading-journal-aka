@@ -891,6 +891,7 @@ setAgentStatus((await executeAgent({
               }
             })()}
             onReconnect={connectionId => void live.connect(connectionId)}
+            onArchive={(connectionId, archived) => void live.setArchived(connectionId, archived)}
             pilotDevices={pilotDevices}
             onPilotLease={connectionId => void (async () => {
               const device = pilotDevices.find(item => item.connectionId === connectionId);
@@ -1064,7 +1065,7 @@ setAgentStatus((await executeAgent({
   );
 };
 
-export const Connections = ({ status, connectionData, connectionSummaries, connectionHealth = {}, profiles, busy, onAdd, onRefreshStatus, onProfiles, onDisconnect, onReconnect, onPilotLease, pilotDevices }: {
+export const Connections = ({ status, connectionData, connectionSummaries, connectionHealth = {}, profiles, busy, onAdd, onRefreshStatus, onProfiles, onDisconnect, onReconnect, onArchive, onPilotLease, pilotDevices }: {
   status: TradovateOAuthStatus | null;
   connectionData: Record<string, TradovatePreflightResult>;
   connectionSummaries: Record<string, TradovateConnectionSummary>;
@@ -1076,12 +1077,17 @@ export const Connections = ({ status, connectionData, connectionSummaries, conne
   onProfiles: (connectionId: string) => void;
   onDisconnect: (connectionId: string) => void;
   onReconnect: (connectionId: string) => void;
+  /** Skrýt odpojené připojení z přehledu nebo ho zase ukázat; nic se nemaže. */
+  onArchive?: (connectionId: string, archived: boolean) => void;
   onPilotLease: (connectionId: string) => void;
   pilotDevices: NonNullable<LocalCopierAgentStatus['devices']>;
 }) => {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [showArchived, setShowArchived] = useState(false);
   const profilesById = profileMap(profiles);
-  const connections = status?.connections ?? [];
+  const allConnections = status?.connections ?? [];
+  const archivedCount = allConnections.filter(connection => connection.archivedAt && !connection.connected).length;
+  const connections = allConnections.filter(connection => showArchived || connection.connected || !connection.archivedAt);
   const activeConnections = connections.filter(connection => tradovateConnectionPresentation(connection.connected, connectionHealth[connection.id]).healthy).length;
   const totalAccounts = connections.reduce((sum, connection) => (
     sum + (connectionData[connection.id]?.accounts.length ?? connectionSummaries[connection.id]?.accountCount ?? 0)
@@ -1092,7 +1098,7 @@ export const Connections = ({ status, connectionData, connectionSummaries, conne
       <section className="overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)]">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-4 py-3">
           <div><h2 className="text-base font-black text-[var(--text-primary)]">Connections</h2><div className="mt-1 flex items-center gap-2 text-[10px] text-[var(--text-secondary)]"><span className={`h-1.5 w-1.5 rounded-full ${activeConnections > 0 ? 'bg-emerald-500' : busy === 'status' ? 'bg-amber-500' : 'bg-[var(--text-secondary)]'}`} /><span className={activeConnections > 0 ? 'font-bold text-emerald-500' : ''}>{activeConnections > 0 ? `${activeConnections} aktivní · ${connections.length} uložených${busy === 'status' ? ' · obnovuji' : ''}` : busy === 'status' ? 'Ověřuji stav…' : connections.length > 0 ? `${activeConnections} aktivní · ${connections.length} uložených` : 'Žádné připojení'}</span></div></div>
-          <div className="flex items-center gap-2"><button type="button" onClick={onAdd} disabled={busy != null} className="flex h-9 items-center gap-2 rounded-md bg-indigo-600 px-4 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-45"><Plus size={15} /> Add connection</button><IconButton label="Obnovit stav" onClick={onRefreshStatus} disabled={busy != null}><RefreshCw size={15} className={busy === 'status' || busy === 'data' ? 'animate-spin' : ''} /></IconButton></div>
+          <div className="flex items-center gap-2">{archivedCount > 0 ? <button type="button" onClick={() => setShowArchived(value => !value)} className="h-9 rounded-md border border-[var(--border-subtle)] px-3 text-[11px] font-bold text-[var(--text-secondary)] hover:text-[var(--text-primary)]">{showArchived ? 'Skrýt archivovaná' : `Archivovaná (${archivedCount})`}</button> : null}<button type="button" onClick={onAdd} disabled={busy != null} className="flex h-9 items-center gap-2 rounded-md bg-indigo-600 px-4 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-45"><Plus size={15} /> Add connection</button><IconButton label="Obnovit stav" onClick={onRefreshStatus} disabled={busy != null}><RefreshCw size={15} className={busy === 'status' || busy === 'data' ? 'animate-spin' : ''} /></IconButton></div>
         </div>
         <div className="hidden grid-cols-[48px_90px_90px_1.15fr_1fr_130px_180px] gap-3 bg-[var(--bg-page)] px-4 py-2.5 text-[9px] font-black uppercase tracking-[0.13em] text-[var(--text-secondary)] lg:grid"><span /><span>Broker</span><span>Type</span><span>Connection</span><span>Organization</span><span>Status</span><span /></div>
         {connections.length === 0 && busy !== 'status' ? <EmptyConnection onAdd={onAdd} /> : connections.length > 0 ? (
@@ -1131,7 +1137,7 @@ export const Connections = ({ status, connectionData, connectionSummaries, conne
                     small
                   ><KeyRound size={13} /></IconButton>
                   <IconButton label="Nastavit účty" onClick={() => onProfiles(connection.id)} disabled={!dataset?.accounts.length} small><Settings2 size={13} /></IconButton>
-                </> : <button type="button" onClick={() => onReconnect(connection.id)} disabled={busy != null} className="flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md bg-indigo-600 px-3 text-[10px] font-black leading-none text-white disabled:opacity-50"><RotateCcw size={12} /> Reconnect</button>}
+                </> : <>{onArchive && !connection.connected ? <button type="button" onClick={() => onArchive(connection.id, !connection.archivedAt)} disabled={busy != null} title={connection.archivedAt ? 'Zase ukázat v přehledu' : 'Skrýt z přehledu; historie a deník zůstanou'} className="h-7 shrink-0 whitespace-nowrap rounded-md border border-[var(--border-subtle)] px-3 text-[10px] font-black text-[var(--text-secondary)] disabled:opacity-50">{connection.archivedAt ? 'Obnovit' : 'Skrýt'}</button> : null}<button type="button" onClick={() => onReconnect(connection.id)} disabled={busy != null} className="flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md bg-indigo-600 px-3 text-[10px] font-black leading-none text-white disabled:opacity-50"><RotateCcw size={12} /> Reconnect</button></>}
                 </div>
               </div>
               {dataset ? (

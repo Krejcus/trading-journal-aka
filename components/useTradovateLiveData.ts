@@ -17,6 +17,7 @@ import {
 import {
   beginTradovateOAuth,
   disconnectTradovateOAuth,
+  setTradovateOAuthConnectionArchived,
   loadTradovateAccountProfiles,
   loadTradovateOAuthStatus,
   runTradovateReadOnlyPreflight,
@@ -587,6 +588,19 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     }
   }, [refreshStatus]);
 
+  /** Skrýt odpojené připojení z přehledu (nebo ukázat); server nic nemaže. */
+  const setArchived = useCallback(async (connectionId: string, archived: boolean) => {
+    setBusy('disconnect');
+    setError(null);
+    try {
+      await setTradovateOAuthConnectionArchived(connectionId, archived);
+      await refreshStatus();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Připojení se nepodařilo skrýt.');
+      setBusy(null);
+    }
+  }, [refreshStatus]);
+
   useEffect(() => {
     if (!userId || !enabled) return;
     void refreshStatus();
@@ -793,6 +807,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     refreshData: (quiet = false) => refreshData(status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [], quiet),
     connect,
     disconnect,
+    setArchived,
   };
 }
 

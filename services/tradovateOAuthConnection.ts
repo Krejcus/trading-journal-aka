@@ -45,6 +45,8 @@ export interface TradovateOAuthConnectionStatus {
   organizationName: string | null;
   disconnectedAt: string | null;
   disconnectReason: string | null;
+  /** Skryté (archivované) odpojené připojení; starší server pole nevrací. */
+  archivedAt?: string | null;
 }
 
 export interface TradovateOAuthStatus {
@@ -204,6 +206,15 @@ export async function beginTradovateOAuth(connectionId?: string): Promise<void> 
 
 export async function loadTradovateOAuthStatus(): Promise<TradovateOAuthStatus> {
   return parseTradovateOAuthStatus(await authenticatedRequest<unknown>('/api/tradovate/oauth/status'));
+}
+
+/** Skryje odpojené připojení z přehledu nebo ho zase ukáže; nic nemaže. */
+export function setTradovateOAuthConnectionArchived(connectionId: string, archived: boolean): Promise<{ archivedAt: string | null }> {
+  return authenticatedRequest('/api/tradovate/oauth/status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ connectionId, archived }),
+  });
 }
 
 export function disconnectTradovateOAuth(connectionId: string): Promise<{ connected: false }> {

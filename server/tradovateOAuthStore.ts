@@ -34,6 +34,8 @@ export interface TradovateConnectionStatus {
   organizationName: string | null;
   disconnectedAt: string | null;
   disconnectReason: string | null;
+  /** Uživatel odpojené připojení skryl z přehledu; řádek zůstává kvůli historii. */
+  archivedAt: string | null;
 }
 
 interface ConnectionRow {
@@ -54,6 +56,7 @@ interface ConnectionRow {
   connection_status: 'connected' | 'disconnected';
   disconnected_at: string | null;
   disconnect_reason: string | null;
+  archived_at?: string | null;
 }
 
 const required = (name: string): string => {
@@ -210,6 +213,7 @@ const sanitizedStatus = (
     organizationName: activeRow?.organization_name ?? null,
     disconnectedAt: activeRow?.disconnected_at ?? null,
     disconnectReason: activeRow?.disconnect_reason ?? null,
+    archivedAt: activeRow?.archived_at ?? null,
   };
 };
 
@@ -356,6 +360,33 @@ export async function disconnectTradovateConnection(
   }).eq('user_id', userId).eq('id', connectionId).select('id').maybeSingle<{ id: string }>();
   if (error) throw new Error(`Tradovate disconnect failed: ${error.message}`);
   if (!data) throw new Error('tradovate-connection-not-found');
+}
+
+/**
+ * Skryje odpojené připojení z přehledu (nebo ho zase ukáže). Nikdy nemaže:
+ * obchody, journal evidence a spárovaná zařízení nesou jeho ID. Připojené
+ * připojení se archivovat nesmí — nejdřív odpojit.
+ */
+export async function setTradovateConnectionArchived(
+  db: SupabaseClient,
+  userId: string,
+  connectionId: string,
+  archived: boolean,
+  now = Date.now(),
+): Promise<{ archivedAt: string | null }> {
+  const timestamp = new Date(now).toISOString();
+  const { data: row, error: readError } = await db.from('tradovate_oauth_connections')
+    .select('id, connection_status').eq('user_id', userId).eq('id', connectionId)
+    .maybeSingle<{ id: string; connection_status: 'connected' | 'disconnected' }>();
+  if (readError) throw new Error(`Tradovate connection read failed: ${readError.message}`);
+  if (!row) throw new Error('tradovate-connection-not-found');
+  if (archived && row.connection_status === 'connected') throw new Error('tradovate-connection-still-connected');
+  const archivedAt = archived ? timestamp : null;
+  const { error } = await db.from('tradovate_oauth_connections')
+    .update({ archived_at: archivedAt, updated_at: timestamp })
+    .eq('user_id', userId).eq('id', connectionId);
+  if (error) throw new Error(`Tradovate connection archive failed: ${error.message}`);
+  return { archivedAt };
 }
 
 export async function requireReconnectableTradovateConnection(options: {

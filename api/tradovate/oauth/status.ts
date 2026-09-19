@@ -3,6 +3,7 @@ import {
   createTradovateAdminClient,
   disconnectTradovateConnection,
   listTradovateConnectionStatuses,
+  setTradovateConnectionArchived,
   readTradovateServerConfig,
   requireSupabaseUserId,
 } from '../../../server/tradovateOAuthStore.js';
@@ -13,11 +14,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // preflight odpovedi selze fetch jako 'Load failed'. Web je same-origin.
   if (handleNativeCors(req, res, ['GET', 'POST', 'DELETE'])) return;
   res.setHeader('Cache-Control', 'no-store');
-  if (req.method !== 'GET' && req.method !== 'DELETE') return res.status(405).json({ error: 'method-not-allowed' });
+  if (req.method !== 'GET' && req.method !== 'DELETE' && req.method !== 'POST') return res.status(405).json({ error: 'method-not-allowed' });
   try {
     const config = readTradovateServerConfig();
     const userId = await requireSupabaseUserId(req.headers.authorization, config);
     const db = createTradovateAdminClient(config);
+    if (req.method === 'POST') {
+      // Skrýt / zase ukázat odpojené připojení v přehledu; nic se nemaže.
+      const connectionId = typeof req.body?.connectionId === 'string' ? req.body.connectionId : '';
+      if (!connectionId) return res.status(400).json({ error: 'missing-connection-id' });
+      if (typeof req.body?.archived !== 'boolean') return res.status(400).json({ error: 'missing-archived-flag' });
+      try {
+        const result = await setTradovateConnectionArchived(db, userId, connectionId, req.body.archived);
+        return res.status(200).json(result);
+      } catch (reason) {
+        const detail = reason instanceof Error ? reason.message : String(reason);
+        if (detail === 'tradovate-connection-not-found') return res.status(404).json({ error: detail });
+        if (detail === 'tradovate-connection-still-connected') return res.status(409).json({ error: detail });
+        throw reason;
+      }
+    }
     if (req.method === 'DELETE') {
       const connectionId = typeof req.query.connectionId === 'string' ? req.query.connectionId : '';
       if (!connectionId) return res.status(400).json({ error: 'missing-connection-id' });

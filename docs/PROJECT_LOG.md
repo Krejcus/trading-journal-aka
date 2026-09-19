@@ -208,6 +208,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-19 08:40 — Claude: odpojené Tradovate připojení jde skrýt z přehledu (archivace), nemaže se
+
+Uživatel v 08:17 odpojil FundedNext (tokeny smazány, `connection_status =
+disconnected`) a ptal se, proč řádek zůstává. Zůstává záměrně (deník, journal
+evidence a spárovaná zařízení nesou ID připojení, Reconnect bez nového
+párování). Nově: migrace `20260919063000_oauth_connection_archive.sql`
+(sloupec `archived_at`, nasazena `db query -f` + repair, zkopírována do
+Documents), `setTradovateConnectionArchived` (jen odpojené; připojené → 409),
+`POST /api/tradovate/oauth/status { connectionId, archived }`, klient
+`setTradovateOAuthConnectionArchived`, hook `setArchived`, v Connections
+tlačítko „Skrýt" u odpojeného řádku, přepínač „Archivovaná (n)" a „Obnovit".
+Živá čtení archivovaná připojení už nedělají (jsou odpojená). Nic se nemaže.
+
+**Ráno 05:01:48Z (07:01 místního):** oba sockety (Tradeify 1006, Lucid čistý
+1005 ze stavu connected) zavřeny během 10 ms, sync na obou 2× timeout, 05:03:23Z
+vynucená obnova tokenů, 05:03:27Z obě sessions synchronizované. Mac bez
+síťové události, relay bez výpadku. Zátěž z webu v 04:43–04:49 (socket-error
+04:48 se zotavil hned) byla stejná jako v 04:56–05:02 → korelace se zátěží
+slábne; nejlepší čtení: událost na straně Tradovate (status page: probíhající
+víkendová údržba, je sobota, burza zavřená).
+
 ### 2026-09-18 22:20 — Claude: čtvrtý pád session Tradeify (20:07Z) a korelace s dávkami čtení z webu
 
 **Pád 20:07:17Z:** socket-error → close 1006 (socket starý 1504 s), reconnect
