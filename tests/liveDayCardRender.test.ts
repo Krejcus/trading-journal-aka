@@ -52,7 +52,7 @@ describe('karta dne', () => {
       account({ id: 3, name: 'C', cashAvailability: 'denied' }),
     ], now);
     const markup = card(summary);
-    expect(markup).toContain('Sečteno z 1 z 3 účtů');
+    expect(markup).toContain('Sečteno bez 2 účtů');
     // Nepotvrzený účet má pomlčku, ne nulu.
     expect(markup.match(/live-day-val live-day-flat">—/g)).toHaveLength(2);
   });
@@ -77,8 +77,26 @@ describe('karta dne', () => {
     expect(card(summary, { onClose: () => {} })).toContain('live-day-close');
   });
 
+  it('klidný den není výpadek dat a karta ho tak nepopisuje', () => {
+    const markup = card(buildLiveDaySummary([account({ dailyPnlAvailable: false })], now));
+    expect(markup).toContain('Broker dnes u žádného účtu nehlásí uzavřený obchod.');
+    expect(markup).not.toContain('nepotvrdil');
+  });
+
+  it('účet bez obchodu vedle potvrzeného nevyvolá varování o dílčím součtu', () => {
+    const markup = card(buildLiveDaySummary([
+      account({ id: 1, name: 'A', realizedPnl: 240 }),
+      account({ id: 2, name: 'B', dailyPnlAvailable: false }),
+    ], now));
+    expect(markup).not.toContain('Sečteno bez');
+  });
+
   it('prázdné portfolio nevypadá jako rozbitá karta', () => {
-    expect(card(buildLiveDaySummary([], now))).toContain('Žádný připojený účet.');
+    const markup = card(buildLiveDaySummary([], now));
+    expect(markup).toContain('Žádný připojený účet.');
+    // Bez účtu není co potvrzovat — hlásit „broker nepotvrdil“ by bylo lživé.
+    expect(markup).not.toContain('nepotvrdil');
+    expect(markup).not.toContain('nehlásí');
   });
 });
 
@@ -104,7 +122,11 @@ describe('spouštěč karty dne', () => {
       account({ id: 2, cashAvailability: 'denied' }),
     ], now));
     expect(markup).toContain('live-day-partial-dot');
-    expect(markup).toContain('Sečteno z 1 z 2 účtů');
+    expect(markup).toContain('Sečteno bez 1 účtu');
+  });
+
+  it('bez jediného připojeného účtu se spouštěč vůbec nevykreslí', () => {
+    expect(trigger(buildLiveDaySummary([], now))).toBe('');
   });
 
   it('bez potvrzené hodnoty ukáže pomlčku, ne nulu', () => {

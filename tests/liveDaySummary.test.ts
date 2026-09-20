@@ -91,6 +91,46 @@ describe('buildLiveDaySummary', () => {
     ).confirmed).toBe(120);
   });
 
+  it('účet bez obchodu se odliší od účtu, který se nepodařilo přečíst', () => {
+    const summary = buildLiveDaySummary([
+      // Čtení prošlo, broker jen nemá denní záznam → klid, ne výpadek.
+      account({ id: 1, name: 'klid', dailyPnlAvailable: false }),
+      // Čtení neprošlo → o tomhle účtu nevíme nic.
+      account({ id: 2, name: 'necteno', cashAvailability: 'denied' }),
+    ], now);
+    expect(summary.rows.map(row => [row.name, row.state])).toEqual(
+      expect.arrayContaining([['klid', 'no-trades'], ['necteno', 'unconfirmed']]),
+    );
+    expect(summary.noTradeCount).toBe(1);
+    expect(summary.unconfirmedCount).toBe(1);
+  });
+
+  it('klidný účet vedle potvrzeného nedělá ze součtu dílčí součet', () => {
+    const summary = buildLiveDaySummary([
+      account({ id: 1, name: 'obchodoval', realizedPnl: 240 }),
+      account({ id: 2, name: 'klid', dailyPnlAvailable: false }),
+    ], now);
+    expect(summary.confirmed).toBe(240);
+    // Účet bez obchodu do součtu nic nepřidá, takže není o čem varovat.
+    expect(summary.partial).toBe(false);
+    expect(summary.unconfirmedCount).toBe(0);
+  });
+
+  it('nepřečtený účet vedle potvrzeného ze součtu dílčí součet udělá', () => {
+    const summary = buildLiveDaySummary([
+      account({ id: 1, name: 'obchodoval', realizedPnl: 240 }),
+      account({ id: 2, name: 'necteno', cashAvailability: 'denied' }),
+    ], now);
+    expect(summary.partial).toBe(true);
+    expect(summary.unconfirmedCount).toBe(1);
+  });
+
+  it('během doplňování ledgeru se klid nevydává za ověřený klid', () => {
+    const summary = buildLiveDaySummary([account({ dailyPnlAvailable: false })], now, true);
+    expect(summary.rows[0].state).toBe('unconfirmed');
+    expect(summary.noTradeCount).toBe(0);
+  });
+
   it('prázdná firma se nese jako null, ne jako prázdný řetězec', () => {
     const summary = buildLiveDaySummary([account({ firm: '  ' })], now);
     expect(summary.rows[0].firm).toBeNull();

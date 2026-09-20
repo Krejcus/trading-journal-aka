@@ -23,11 +23,26 @@ const initials = (name: string): string => {
   return name.trim().slice(0, 2).toUpperCase() || '?';
 };
 
-const partialNote = (summary: LiveDaySummary): string | null => summary.partial
-  ? `Sečteno z ${summary.confirmedCount} z ${summary.accountCount} účtů — u zbytku broker dnešní P&L nepotvrdil.`
-  : summary.confirmed == null
-    ? 'Broker dnes nepotvrdil denní P&L ani u jednoho účtu.'
-    : null;
+const plural = (count: number, one: string, few: string, many: string): string =>
+  count === 1 ? one : count < 5 ? few : many;
+
+/**
+ * Co kartě chybí, řečeno přesně. Klidné ráno bez obchodu není výpadek dat a
+ * nesmí se tak tvářit — rozlišuje se podle toho, jestli čtení brokera prošlo.
+ */
+const partialNote = (summary: LiveDaySummary): string | null => {
+  // Bez připojeného účtu není co hlásit; soupis vedle to říká sám.
+  if (summary.accountCount === 0) return null;
+  const missing = summary.unconfirmedCount;
+  if (summary.confirmed != null) {
+    return missing > 0
+      ? `Sečteno bez ${missing} ${plural(missing, 'účtu', 'účtů', 'účtů')} — u ${plural(missing, 'něj', 'nich', 'nich')} se dnešní P&L nepodařilo ověřit.`
+      : null;
+  }
+  return missing === 0
+    ? 'Broker dnes u žádného účtu nehlásí uzavřený obchod.'
+    : 'Broker dnes nepotvrdil denní P&L ani u jednoho účtu.';
+};
 
 // ── spouštěč v hlavičce LIVE ────────────────────────────────────────────────
 /**
@@ -37,6 +52,9 @@ const partialNote = (summary: LiveDaySummary): string | null => summary.partial
  */
 export const LiveDayTrigger = ({ summary, onOpen }: { summary: LiveDaySummary; onOpen: () => void }) => {
   const note = partialNote(summary);
+  // Bez jediného připojeného účtu není co shrnovat a pomlčka v hlavičce by
+  // vypadala jako porucha.
+  if (summary.accountCount === 0) return null;
   return (
     <button
       type="button"

@@ -1,5 +1,14 @@
 import { liveDailyPnlDisplay } from './liveBalanceDisplay';
+import { isLiveAccountReadVerified } from './liveReadFreshness';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
+
+/**
+ * Proč u účtu chybí číslo. Rozlišit to jde jen podle toho, jestli čtení
+ * brokera prošlo: když prošlo a denní záznam přesto není, broker prostě
+ * dnes žádný uzavřený obchod nehlásí — to není výpadek a nesmí se tak
+ * tvářit. Když čtení neprošlo, nevíme nic.
+ */
+export type LiveDayRowState = 'confirmed' | 'no-trades' | 'unconfirmed';
 
 export interface LiveDayRow {
   accountId: number;
@@ -7,6 +16,7 @@ export interface LiveDayRow {
   firm: string | null;
   /** null = broker dnešní realizované P&L pro tento účet nepotvrdil. */
   value: number | null;
+  state: LiveDayRowState;
   /** Potvrzená hodnota, ale starší než poslední ověřené čtení. */
   stale: boolean;
 }
@@ -21,12 +31,17 @@ export interface LiveDaySummary {
   confirmedCount: number;
   accountCount: number;
   /**
-   * Aspoň jeden účet chybí, takže `confirmed` je dílčí součet, ne celý den.
-   * UI to musí říct nahlas; jinak by se dílčí číslo vydávalo za celek.
+   * Chybí data, takže `confirmed` je dílčí součet. Účty bez obchodu se sem
+   * NEpočítají — ty do součtu nic nepřidají, takže varovat u nich znamená
+   * strašit v klidný den. Varuje se jen na účty, o kterých nevíme nic.
    */
   partial: boolean;
   /** Aspoň jedna potvrzená hodnota je zastaralá. */
   stale: boolean;
+  /** Účty, kde čtení prošlo, ale broker dnes nehlásí uzavřený obchod. */
+  noTradeCount: number;
+  /** Účty, u kterých čtení neprošlo — o těch nevíme nic. */
+  unconfirmedCount: number;
 }
 
 /**
@@ -44,11 +59,18 @@ export function buildLiveDaySummary(
 ): LiveDaySummary {
   const rows: LiveDayRow[] = accounts.map(account => {
     const display = liveDailyPnlDisplay(account, now, pending);
+    // `dailyPnlAvailable === false` znamená, že broker na dotaz odpověděl a
+    // denní záznam pro dnešek prostě nemá. Spolu s ověřeným čtením zůstatku
+    // je to důkaz „nic uzavřeného“, ne chybějící data.
+    const answered = account.dailyPnlAvailable === false
+      && !pending
+      && isLiveAccountReadVerified(account, 'cash', now);
     return {
       accountId: account.id,
       name: account.name,
       firm: account.firm?.trim() || null,
       value: display.value,
+      state: display.value != null ? 'confirmed' : answered ? 'no-trades' : 'unconfirmed',
       stale: display.value != null && display.stale,
     };
   });
@@ -62,12 +84,15 @@ export function buildLiveDaySummary(
   });
 
   const confirmedRows = rows.filter(row => row.value != null);
+  const noTradeCount = rows.filter(row => row.state === 'no-trades').length;
   return {
     rows,
     confirmed: confirmedRows.length ? confirmedRows.reduce((sum, row) => sum + row.value!, 0) : null,
     confirmedCount: confirmedRows.length,
     accountCount: rows.length,
-    partial: confirmedRows.length > 0 && confirmedRows.length < rows.length,
+    partial: confirmedRows.length > 0 && rows.length - confirmedRows.length - noTradeCount > 0,
     stale: confirmedRows.some(row => row.stale),
+    noTradeCount,
+    unconfirmedCount: rows.length - confirmedRows.length - noTradeCount,
   };
 }
