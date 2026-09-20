@@ -105,7 +105,10 @@ describe('LIVE kompaktní karty (telefon)', () => {
 
     // Hlavička skupiny + přepínač copieru.
     expect(markup).toContain('Hlavni');
-    expect(markup).toContain('1/1 aktivních');
+    // Plný počet způsobilých je ticho; chip se ukáže až při výpadku (19. 9.).
+    expect(markup).not.toContain('aktivních');
+    // Firma skupiny, ne jen leaderova.
+    expect(markup).toContain('Tradeify');
     expect(markup).toContain('role="switch"');
 
     // Souhrn skupiny.

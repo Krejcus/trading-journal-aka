@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Čekající vstup — jak ukázat směr</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-page:#f1f5f9; --bg-card:#ffffff; --bg-sunken:#f8fafc;
+  --text-primary:#0f172a; --text-secondary:#475569; --text-muted:#94a3b8;
+  --border-subtle:#e2e8f0; --accent:#4f46e5;
+  --emerald:#059669; --rose:#e11d48; --amber:#b45309;
+}
+.dark {
+  --bg-page:#020617; --bg-card:#0a0f1d; --bg-sunken:#0f172a;
+  --text-primary:#f8fafc; --text-secondary:#94a3b8; --text-muted:#475569;
+  --border-subtle:rgba(255,255,255,.08); --accent:#6366f1;
+  --emerald:#10b981; --rose:#f43f5e; --amber:#d97706;
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:26px 16px 90px; font-family:Inter,system-ui,sans-serif;
+  background:var(--bg-page); color:var(--text-primary); transition:background .25s,color .25s; }
+.wrap { max-width:1020px; margin:0 auto; }
+h1 { font-size:21px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.65; color:var(--text-secondary); max-width:82ch; margin:0 0 18px; }
+.lede b { color:var(--text-primary); }
+.bar { display:flex; gap:8px; align-items:center; padding:9px 12px; margin-bottom:24px;
+  border:1px solid var(--border-subtle); border-radius:12px; background:var(--bg-card); }
+.bar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+.bar button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.bar button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+
+h2 { font-size:13px; font-weight:900; margin:26px 0 8px; }
+h2 em { font-style:normal; color:var(--text-muted); font-weight:800; font-size:10px;
+  letter-spacing:.09em; text-transform:uppercase; margin-right:8px; }
+.note { font-size:12.5px; line-height:1.6; color:var(--text-secondary); margin:0 0 10px; max-width:84ch; }
+.note b { color:var(--text-primary); }
+
+table { width:100%; border-collapse:separate; border-spacing:0; border:1px solid var(--border-subtle);
+  border-radius:12px; overflow:hidden; background:var(--bg-card); }
+th { font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted);
+  text-align:left; padding:8px 12px; border-bottom:1px solid var(--border-subtle); }
+td { padding:10px 12px; border-bottom:1px solid var(--border-subtle); font-size:11.5px; vertical-align:middle; }
+tr:last-child td { border-bottom:0; }
+td.kdy { color:var(--text-secondary); line-height:1.55; }
+td.kdy .t { color:var(--text-primary); font-weight:800; display:block; margin-bottom:2px; }
+td.kdy b { color:var(--text-primary); font-weight:800; }
+.mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; color:var(--text-muted); }
+
+/* ── skutečná pozice (referenční, z appky) ───────────────────── */
+.pos { display:inline-flex; align-items:center; gap:4px; border-radius:6px; border:1px solid;
+  padding:4px 8px; font-size:10px; font-weight:900; line-height:1; font-variant-numeric:tabular-nums; }
+.pos.long { border-color:color-mix(in srgb,var(--emerald) 25%,transparent);
+  background:color-mix(in srgb,var(--emerald) 10%,transparent); color:var(--emerald); }
+.pos.short { border-color:color-mix(in srgb,var(--rose) 25%,transparent);
+  background:color-mix(in srgb,var(--rose) 10%,transparent); color:var(--rose); }
+
+/* ── čekající vstup: základ ──────────────────────────────────── */
+.p { display:inline-flex; align-items:center; gap:4px; border-radius:6px; padding:4px 8px;
+  font-size:10px; font-weight:700; line-height:1; font-variant-numeric:tabular-nums;
+  border:1px solid var(--border-subtle); background:var(--bg-card); color:var(--text-secondary); }
+svg { flex:none; }
+
+/* A — dnešek */
+/* B — znaménko a barva textu */
+.p.b-buy  { color:var(--emerald); }
+.p.b-sell { color:var(--rose); }
+
+/* C — čárkovaný rámeček v barvě směru */
+.p.c { border-style:dashed; font-weight:800; }
+.p.c-buy  { border-color:color-mix(in srgb,var(--emerald) 55%,transparent); color:var(--emerald); }
+.p.c-sell { border-color:color-mix(in srgb,var(--rose) 55%,transparent); color:var(--rose); }
+
+/* D — barevný pruh na náběžné hraně */
+.p.d { position:relative; padding-left:12px; overflow:hidden; font-weight:800; }
+.p.d::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; }
+.p.d-buy::before  { background:var(--emerald); }
+.p.d-sell::before { background:var(--rose); }
+.p.d-buy  { color:var(--emerald); }
+.p.d-sell { color:var(--rose); }
+
+/* E — slovo BUY/SELL */
+.p.e { font-weight:800; }
+.p.e .w { font-size:8.5px; font-weight:900; letter-spacing:.06em; padding:1px 3px; border-radius:3px; }
+.p.e-buy .w  { background:color-mix(in srgb,var(--emerald) 18%,transparent); color:var(--emerald); }
+.p.e-sell .w { background:color-mix(in srgb,var(--rose) 18%,transparent); color:var(--rose); }
+
+/* F — čárkovaná výplň i rámeček */
+.p.f { border-style:dashed; font-weight:900; }
+.p.f-buy  { border-color:color-mix(in srgb,var(--emerald) 50%,transparent);
+  background:color-mix(in srgb,var(--emerald) 8%,transparent); color:var(--emerald); }
+.p.f-sell { border-color:color-mix(in srgb,var(--rose) 50%,transparent);
+  background:color-mix(in srgb,var(--rose) 8%,transparent); color:var(--rose); }
+
+.pairs { display:flex; align-items:center; gap:10px; }
+.vs { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+.vs .lab { font-size:9px; font-weight:900; letter-spacing:.07em; text-transform:uppercase;
+  color:var(--text-muted); }
+
+/* ── tooltip ─────────────────────────────────────────────────── */
+.demo { display:flex; align-items:center; gap:26px; flex-wrap:wrap; padding:16px;
+  border:1px solid var(--border-subtle); border-radius:12px; background:var(--bg-card); }
+.demo > div { display:flex; flex-direction:column; gap:7px; align-items:flex-start; }
+.demo .cap { font-size:10px; font-weight:800; color:var(--text-muted); }
+.tip { position:relative; }
+.tip .bubble { position:absolute; bottom:calc(100% + 7px); left:0; white-space:nowrap;
+  padding:5px 9px; border-radius:7px; font-size:10.5px; font-weight:700; line-height:1.3;
+  background:var(--text-primary); color:var(--bg-card);
+  opacity:0; transform:translateY(3px); pointer-events:none; transition:opacity .12s, transform .12s; }
+.tip:hover .bubble { opacity:1; transform:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Čekající vstup — jak z chipu poznat long/short</h1>
+  <p class="lede">Znaménko samo je málo, souhlasím. Šest provedení níž, u každého hned vedle
+    <b>skutečná otevřená pozice</b>, ať je vidět to podstatné: čekající vstup musí být na první
+    pohled odlišitelný od pozice, kterou už v trhu máš. Kdyby vypadaly stejně, mohl bys číst
+    „jsem v trhu“, když tam nejsi.</p>
+
+  <div class="bar">
+    <b>Téma</b>
+    <button id="bl" aria-pressed="false" onclick="theme(false)">Světlé</button>
+    <button id="bd" aria-pressed="true" onclick="theme(true)">Tmavé</button>
+  </div>
+
+  <h2><em>Tooltip</em>Ano, ukáže se po najetí — ale je tu háček</h2>
+  <p class="note">Dnešní tooltip je nativní <span class="mono">title</span> prohlížeče: objeví se
+    <b>až po zhruba sekundě</b> držení myši, vykreslí ho operační systém a na dotyku nefunguje
+    vůbec. Vpravo je vlastní bublina, která naskočí okamžitě a vypadá jako zbytek appky.
+    <b>Najeď myší na oba</b> a porovnej.</p>
+  <div class="demo">
+    <div>
+      <span class="cap">Dnes — nativní <span class="mono">title</span></span>
+      <span class="p" title="Limit entry čeká na fill">${}</span>
+    </div>
+    <div>
+      <span class="cap">Návrh — vlastní bublina</span>
+      <span class="tip"><span class="p c c-buy">${}</span>
+        <span class="bubble">Buy Limit · čeká na fill · 3 kontrakty</span></span>
+    </div>
+  </div>
+
+  <h2><em>Provedení</em>Šest způsobů, jak nést směr</h2>
+  <table>
+    <thead><tr>
+      <th style="width:120px">Buy</th><th style="width:120px">Sell</th>
+      <th style="width:120px">Vedle pozice</th><th>Co na tom</th>
+    </tr></thead>
+    <tbody id="t"></tbody>
+  </table>
+</div>
+
+<script>
+const CLOCK = `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor"
+  stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4"/><circle cx="12" cy="12" r="10"/></svg>`;
+const UP = `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor"
+  stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>`;
+const DOWN = `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor"
+  stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>`;
+
+const posChip = (qty) => `<span class="pos ${qty > 0 ? 'long' : 'short'}">
+  <span>MNQ</span><span>${qty > 0 ? '+' : '−'}${Math.abs(qty)}</span></span>`;
+
+const OPTIONS = [
+  ['A — dnes',
+   `<span class="p">${CLOCK}<span>MNQ</span><span>3</span></span>`,
+   `<span class="p">${CLOCK}<span>MNQ</span><span>3</span></span>`,
+   '<span class="t">Beze změny</span>Buy i Sell vypadají stejně. Od pozice se liší dobře, ale směr v tom není.'],
+
+  ['B — znaménko a barva textu',
+   `<span class="p b-buy">${CLOCK}<span>MNQ</span><span>+3</span></span>`,
+   `<span class="p b-sell">${CLOCK}<span>MNQ</span><span>−3</span></span>`,
+   '<span class="t">Můj původní návrh</span>Barva je jen v písmu, rámeček zůstává šedý. Na malém textu je to <b>slabé</b> — přesně jak říkáš.'],
+
+  ['C — čárkovaný rámeček v barvě',
+   `<span class="p c c-buy">${CLOCK}<span>MNQ</span><span>+3</span></span>`,
+   `<span class="p c c-sell">${CLOCK}<span>MNQ</span><span>−3</span></span>`,
+   '<span class="t">Čárkovaně = ještě není</span>Barva nese směr, <b>čárkovaný rámeček nese „zatím nevyplněno“</b>. Od plné pozice se liší okamžitě a přitom je směr jasný.'],
+
+  ['D — barevný pruh na hraně',
+   `<span class="p d d-buy">${CLOCK}<span>MNQ</span><span>+3</span></span>`,
+   `<span class="p d d-sell">${CLOCK}<span>MNQ</span><span>−3</span></span>`,
+   '<span class="t">Náběžná hrana</span>Tenký barevný proužek vlevo. Čitelné i koutkem oka, ale v řadě chipů vedle sebe se pruhy slévají.'],
+
+  ['E — slovo BUY/SELL',
+   `<span class="p e e-buy">${CLOCK}<span>MNQ</span><span class="w">BUY</span><span>3</span></span>`,
+   `<span class="p e e-sell">${CLOCK}<span>MNQ</span><span class="w">SELL</span><span>3</span></span>`,
+   '<span class="t">Bez interpretace</span>Nejjednoznačnější ze všech, nejde to přečíst špatně. Ale chip je o třetinu širší a sloupec je úzký.'],
+
+  ['F — čárkovaný rámeček i výplň',
+   `<span class="p f f-buy">${UP}<span>MNQ</span><span>+3</span></span>`,
+   `<span class="p f f-sell">${DOWN}<span>MNQ</span><span>−3</span></span>`,
+   '<span class="t">Nejsilnější</span>Šipka místo hodin, barevná výplň i čárkovaný rámeček. Směr je nepřehlédnutelný — ale <b>ztrácí se hodinová ikona</b>, tedy signál „čeká se“, a plná výplň se začíná podobat pozici.'],
+];
+
+document.getElementById('t').innerHTML = OPTIONS.map(([name, buy, sell, why]) => `<tr>
+  <td>${buy}</td><td>${sell}</td>
+  <td><span class="pairs">${posChip(3)}${buy}</span></td>
+  <td class="kdy">${why.replace('<span class="t">', `<span class="t">${name} — `)}</td>
+</tr>`).join('');
+
+/* ukázka tooltipů nahoře */
+document.querySelectorAll('.demo .p').forEach((el, index) => {
+  el.innerHTML = `${CLOCK}<span>MNQ</span><span>${index === 0 ? '3' : '+3'}</span>`;
+});
+
+function theme(dark) {
+  document.documentElement.classList.toggle('dark', dark);
+  document.getElementById('bd').setAttribute('aria-pressed', String(dark));
+  document.getElementById('bl').setAttribute('aria-pressed', String(!dark));
+}
+theme(true);
+</script>
+</body>
+</html>

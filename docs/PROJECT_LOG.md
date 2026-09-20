@@ -208,6 +208,228 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-20 — Claude: čekající vstup nese směr, varování a vlastní bublinu
+
+Uživatel se zeptal, jestli chip čekajícího vstupu rozlišuje Buy/Sell. Nerozlišoval:
+vykresloval jen hodiny, symbol a počet, typ příkazu byl pouze v nativním
+`title` a směr nikde — přestože u otevřené pozice sloupec směr ukazuje
+znaménkem i barvou. Z porovnaných provedení
+(`mockups/pending-entry.html`, `mockups/pending-warning.html`) vybráno:
+
+- **Směr slovem** — barevný odznak BUY/SELL v chipu. Znaménko a barva písma
+  byly na 10px textu nečitelné, plná barevná výplň se zase pletla s otevřenou
+  pozicí (v trhu ještě nejsi).
+- **Varování uvnitř chipu**, ne jako samostatný štítek. Naměřeno: štítek
+  „bez SL“ jako u pozice roztáhne nejhorší případ (pozice + vstup) na 224 px,
+  sloupec má 200. Trojúhelník uvnitř dá 177 px. Oranžový = bez stop lossu,
+  červený s „2/3“ = kryje jen část.
+- **Vlastní bublina místo `title`.** Nativní tooltip naskočí až po sekundě,
+  kreslí ho OS a na dotyku nefunguje. `HoverCard` jde portálem s
+  `position: fixed`, protože tabulka účtů má vlastní posuvník, který by
+  absolutně umístěnou bublinu ořízla; u horního okraje se překlápí pod kotvu
+  a zavírá se při scrollu. Nese cenu vstupu, SL, target a stáří příkazu; totéž
+  dostala i otevřená pozice, kde dosud po najetí nebylo nic.
+
+`pendingEntryProtection` (7 testů) odvozuje ochranu stejným pravidlem jako
+u pozic — working příkaz na opačnou stranu a přesně stejný kontrakt, sám vstup
+se nepočítá. Omezení: broker vazbu mezi příkazy (bracket, OCO) neposílá, takže
+dvě protilehlé čekající objednávky na jednom kontraktu by se navzájem
+označily za ochranu. Řádek, který to přiznával v bublině, uživatel nechal
+smazat jako otravný — chybějící SL hlásí štítek.
+
+`contractsLabel` (2 testy) opravuje skloňování: dosud „2 kontraktů“.
+
+Zrušen úzký režim tabulky účtů. Pod 1100 px tabulka zahazovala uživatelův výběr
+sloupců a nechala sedm „základních“, k tomu se objevilo tlačítko „Všechny
+sloupce“ na přepnutí zpět. Nastavení sloupců se dělá právě proto, aby platilo
+pořád — širší tabulka se teď vodorovně odscrolluje v `.live-accounts-scroll`.
+Ověřeno při šířce okna 1096 px: tlačítko je pryč a vykreslí se všech
+12 sloupců.
+
+### 2026-09-19 — Claude: přepínač Účty/Příkazy z hlavičky detailu dolů
+
+Uživatel ukázal na kolizi: záložka „Účty“ stála přímo nad sloupcem „ÚČET“ —
+totéž slovo dvakrát pod sebou. Měření odhalilo víc: pruh se záložkami měří
+988 × 36,5 px a na záložce Účty v něm byla jen dvě tlačítka (~870 px prázdna),
+protože pravá půlka (chip zařazených followerů, počet working, obnovit) se
+ukazovala **jen** na Příkazech. Kolik příkazů skupina má se tedy nedalo zjistit
+bez kliknutí.
+
+Nová podoba: pruh nahoře zrušen, po řádku skupiny jde rovnou tabulka.
+Přepínač je vlevo **pod obsahem**, podtržený jako dřív, ale menší (10 px proti
+11, řádek 26 proti 30,5) a bez barvy akcentu — funkce se používá zřídka, tak
+nemá tahat oči. Nese počty („Účty 6“, „Příkazy 3“); počet working a obnovit
+zůstaly vpravo na záložce příkazů.
+
+Chip „Followeři X/Y zařazení“ zrušen bez náhrady. Je to stav skupiny a vidíme
+ho tam, kde na něj je vidět bez rozbalování: oranžový chip v řádku skupiny se
+objeví právě při odchylce (stejné pravidlo jako u ostatních chipů — plný počet
+nic neříká) a stavová tečka u konkrétního účtu.
+
+Překlopení animuje: obsah se přelije do strany podle směru
+(`live-detail-pane` / `-back`) a karta přejede na novou výšku, aby přepínač
+neuskočil zpod kurzoru. `min-height: 180px` drží kartu pohromadě — bez ní by
+přechod z dvaceti účtů (strop 60vh ≈ 502 px) na tři příkazy složil téměř
+400 px naráz. Respektuje `prefers-reduced-motion`.
+
+Tabulka příkazů ztenčena z 53 na 37 px na řádek. Výšku nedržel text, ale
+tlačítko Cancel (30 px) v řádku o jediné řádce; zmenšeno na 24 px, k tomu
+svislé odsazení buněk 10 → 6 px, logo brokera 20 → 16 px a hlavička 47 → 28 px.
+Spodní hranice se tím zvýraznila (u tří příkazů zbývalo 114 px prázdna), proto
+snížena z 260 na 180 px — prázdna zbyde 34 px.
+
+Zamítnuto při návrhu: varianta „příkazy jako sekce pod účty bez záložek“.
+Uživatelova námitka byla správná a moje protiargumentace špatná — tabulka účtů
+má strop `min(60vh, 620px)` s vlastním posuvníkem, takže ani při dvaceti účtech
+by se sekce neztratila. Nakonec přesto vyhrál přepínač, protože je úspornější.
+
+Ověřeno v prohlížeči na skutečné komponentě (`mockups/live-groups-live.html`,
+mountuje `LiveCopyTradeOverview` s daty z render testů): výška jede
+313 → 274 → 260 px v deseti mezikrocích, oba směry animace sedí, spodní hranice
+drží. 3722 testů, typecheck i lint čisté.
+
+### 2026-09-19 — Claude: editor skupiny přestavěn (průvodce → jedna obrazovka)
+
+Založení i úprava skupiny jely stejným čtyřkrokovým průvodcem. Naměřeno na
+dnešní verzi: úprava existující skupiny startovala na obrazovce „Pojmenuj
+skupinu“ a záložky kroků šly jen zpátky (`index <= step`), takže změna jednoho
+násobku stála 3× „Další“; dialog měnil výšku mezi kroky o 370 px (400 → 545 →
+612 → 770); poslední krok přetékal o 301 px a přehled změn před uložením byl
+celý pod okrajem; kroky „Leader“ a „Followeři“ nabízely tentýž seznam účtů
+dvakrát; při otevření svítilo 15 zašedlých ovládacích prvků.
+
+Nová podoba (varianta F z `mockups/group-editor-leader.html`): **leader vlevo
+ve vlastním sloupci, followeři vpravo**, žádné kroky. Leader je jedna volba, tak
+má vlastní místo a zlatou korunku — ne šestý sloupec v řádku. Účet zvolený jako
+leader z tabulky followerů zmizí, takže nemůže kopírovat sám sebe. Přibylo
+„Označit vše / Odebrat vše“ (nepřepisuje už nastavené followery a leadera se
+nedotkne) a průběžná **souhrnná expozice** v hlavičce
+(`copyGroupExposureMultiple`, 4 testy — follower s replikací „Vypnuto“ se
+nepočítá). Ochrany a přehled změn jsou rozbalovací, přehled otevřený.
+
+Hlavička: titulek okna („Vytvořit skupinu“ / „Upravit skupinu“), popisek
+„Název skupiny“ a **barva jako destička uvnitř pole** s paletou v popoveru —
+osm volných koleček bylo devět prvků za jednu volbu a zabíralo 389 px proti
+dnešním 264. Barva patří k názvu, protože v tabulce LIVE je to jeho tečka.
+
+Ovládání v řádku followera už není nativní: `<select>` má `appearance:none`
+a vlastní chevron, číselníky nahradil krokovač `− hodnota +`. U Max limitu je
+„bez limitu“ plnohodnotný stav (∞) a krok dolů z jedničky se do něj vrací, takže
+se limit ruší stejným ovládáním, jakým se nastavuje. Psát hodnotu jde pořád.
+
+Opraveno při přejímce: `changeCopyGroupLeader` přidával předchozího leadera
+mezi followery **vždy**, takže proklikání seznamu leaderů postupně označilo
+všechny účty jako followery. Prohazování rolí bylo na přání zrušeno úplně —
+přidat obchodující účet do skupiny musí být vědomé rozhodnutí. Funkce je teď
+hloupá: nastaví leadera a odebere ho z followerů, nic nedoplňuje.
+
+Samotné zrušení ale otevřelo opačnou past: povýšený follower z tabulky vypadl
+a nic ho nevracelo, takže projetí seznamu skupinu naopak **vyprázdnilo** i se
+zadanými násobky. Editor si proto drží `displacedFollowers` — koho vytlačilo
+povýšení, ten se při změně leadera vrátí přesně s původním nastavením.
+Výsledek ověřen v prohlížeči: projití všech šesti účtů jako leaderů nechá
+followery i násobek 2× beze změny a návrat k původnímu leaderovi obnoví
+výchozí stav.
+
+V řádku leadera je logo propfirmy s korunkou jako odznakem v rohu (korunka je
+role, ne ikona účtu) a pod názvem zůstatek v USD. Krokovače Násobku a Maxu
+zúženy z 92 na 74 px.
+
+Zachováno beze změny: režim „dnes jen zpřísnit“ (nelze přidat followera, zvýšit
+násobek ani uvolnit Max nad uloženou hodnotu, ani přepnout leadera), náhrada
+nedostupných účtů z uložené skupiny, hlášení stavu cloudové knihovny, validace
+přes `validateCopyGroup` a Escape pro zavření (nejdřív zavře paletu).
+Layout se pod `md` skládá pod sebe a tabulka followerů dostala vodorovný scroll
+— původní jednosloupcový editor na úzké obrazovce fungoval a nesmělo to být
+horší. Ověřeno v prohlížeči na skutečné komponentě
+(`mockups/group-editor-live.html`): krokovače, hromadný výběr i přepnutí leadera
+se správně promítají do přehledu změn. 3718 testů, typecheck čistý.
+
+### 2026-09-19 — Claude: mazání skupiny přímo z menu řádku
+
+Smazat skupinu šlo dosud jen přes „Upravit skupinu“ → tlačítko v patičce
+editoru. Přidáno do menu ⋮ u řádku skupiny i u kompaktní karty, pod čáru a
+úplně dolů, aby se na něj nedalo trefit cestou k něčemu jinému. Používá
+beze změny existující cestu `pendingAction` → `command: delete-group`, takže
+potvrzovací dialog, cloudová fence i chování při chybě zůstávají stejné.
+
+Bezpečnost: `runCommand` volá runtime adaptér dřív, než sáhne na lokální
+stav, a runtime smazání běžící skupiny odmítne („Skupinu nejdřív DISARM“) —
+konfigurace tedy nemůže zmizet pod běžícím agentem. UI na to navíc
+upozorní dopředu vlastním dialogem, ať uživatel nenaráží do chyby.
+
+Menu dopřeloženo do češtiny („Upravit skupinu“, „Použít šablonu“, titulek
+„Další akce“) — zbývala v něm angličtina vedle českých položek.
+`mockups/group-menu-live.html` mountuje skutečné `GroupActionMenu` s mock
+akcemi (proto je exportované).
+
+### 2026-09-19 — Claude: Nastavení tabulky přestavěno na boční lištu + pořadí sloupců
+
+Dialog „Nastavení tabulky“ na LIVE byl jedna 1069px dlouhá roura s 32
+zaškrtávátky (452 px se muselo scrollovat), 23 anglickými popisky proti 12
+českým a třemi seznamy sloupců ve dvou různých provedeních. Přestavěn na
+boční lištu (macOS styl): sekce Účty / Skupiny / Příkazy s počtem zapnutých
+sloupců, plus Soukromí a Bezpečnost. Vše česky, pevná výška 352 px, aby
+přepnutí sekce nehýbalo dialogem pod kurzorem.
+
+**Pořadí sloupců** je nové a jde napříč všemi třemi tabulkami. Tabulka účtů
+už byla datová (`columns.map`), tabulka skupin a příkazů měly sloupce natvrdo
+v JSX — převedeny na mapu buněk podle klíče, která se skládá v uživatelově
+pořadí. Logika je v `lib/tableColumnOrder.ts` (12 testů): neznámý klíč se
+zahodí, nově přidaný sloupec se vrátí na své výchozí místo (ne na konec, kde
+by ho nikdo nehledal), a `account`/`actions` drží krajní pozice bez ohledu na
+uložené pořadí. Ukládá se do `alphatrade_live_copytrade_column_order`.
+
+Přetahování (`components/ColumnOrderList.tsx`) jede na pointer events, ne na
+HTML5 drag — tažený řádek se drží pod prstem přes `transform` a ostatní se
+překládají FLIP animací, takže to vypadá jako prohazování, ne jako skok.
+První verze se sekala: každý přesun o řádek zapsal do stavu
+`LiveCopyTradeOverview`, což překreslilo celou stránku LIVE a zapsalo do
+localStorage — desetkrát za jeden tah. Přeskládání proto běží lokálně
+(`localOrder`), posun pod prstem se píše rovnou do DOM bez `setState` a
+pointermove se slučuje po snímcích; nadřazený stav dostane jediný výsledný
+přesun až při puštění. Naměřeno 59 fps při tahu přes devět řádků.
+Pointermove se poslouchá na `window`, ne na úchytu: samotné `setPointerCapture`
+nestačilo a tah se zastavil, jakmile ruka vyjela do strany mimo ikonu.
+Rychlý tah pak odhalil tři další chyby: (1) FLIP měřil `getBoundingClientRect`
+na prvku, po kterém zrovna běžela animace, takže si uložil místo, kde je prvek
+zrovna vidět, ne kam patří — běžící animace se teď ruší PŘED měřením;
+(2) posun taženého řádku se zapisoval do DOM hned při přepočtu, tedy o snímek
+dřív, než se seznam přeskládal, takže řádek na snímek visel mezi místy — píše
+se až v layout efektu po překreslení; (3) při švihnutí a okamžitém puštění se
+naplánovaný snímek vůbec nestihl a přesun se zahodil — cílová pozice se proto
+dopočítá znovu ze souřadnice `pointerup`. Ověřeno: 40 pohybů se změnami směru
+v pěti snímcích, řádky sedí přesně na mřížce po 28 px a tažený řádek drží prst
+s nulovou odchylkou. `pointercancel` pořadí nemění.
+`useFlipReorder` dostal `skipId` (tažený řádek se neanimuje proti ruce) a ruší
+předchozí animaci na témže prvku, aby se při rychlém tahu nesčítaly. Pořadí
+jde měnit i klávesnicí (šipky na úchytu). Ověřeno v prohlížeči: řádky mají
+28 px a rozteč taky 28 px, takže řádek pod prstem nedriftuje.
+
+**Zrušena hustota tabulky.** Nastavovala `fontSize: N%` na obalu, jenže
+Tailwind sází v `rem` (root-relative), takže to na `text-xs` nemělo žádný
+vliv — volba nikdy nic nedělala. Odstraněn i stav a zápis do
+`VIEW_SETTINGS_STORAGE_KEY`; starší uložená hodnota se ignoruje.
+
+Viditelnost sloupce se přepíná zaškrtávátkem, ne kolébkovým přepínačem:
+přepínač v této appce znamená zapnutou kopírku a nesmí vypadat stejně jako
+volba sloupce.
+
+Smazána dočasná ukázka stavů ostrova (`islandDemo` + panel dole vlevo), která
+podstrkovala ostrovu falešné vstupy kvůli návrhu.
+
+Volba „Po Flatten All nabídnout zapnutí a pokračovat“ je chování copieru, ne
+nastavení tabulky — přesunuta do sekce Bezpečnost téhož dialogu (zatím ne
+jinam, aby se nerozbíjelo, kde ji uživatel hledá).
+
+`mockups/table-settings.html` jsou čtyři porovnané návrhy (vybrána varianta B).
+`mockups/table-settings-live.html` mountuje **skutečnou** komponentu dialogu
+s mock stavem — náhled designu bez přihlášení; proto je `TableSettingsDialog`
+exportovaný.
+
+Ověřeno: 3714 testů, typecheck bez chyb (mimo předchozí `extension/` chyby
+kvůli chybějícím `@types/chrome`).
+
 ### 2026-09-19 08:40 — Claude: odpojené Tradovate připojení jde skrýt z přehledu (archivace), nemaže se
 
 Uživatel v 08:17 odpojil FundedNext (tokeny smazány, `connection_status =

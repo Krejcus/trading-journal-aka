@@ -29,21 +29,29 @@ describe('Connect/Disconnect přepínač copieru', () => {
     expect(markup).toContain('role="switch"');
     expect(markup).toContain('aria-checked="true"');
     expect(markup).toContain('aria-label="Vypnout kopírovací skupinu"');
-    expect(markup).toContain('ZAPNUTÁ');
-    expect(markup).toContain('h-11 w-[108px]');
-    expect(markup).toContain('h-7 w-full');
+    // Od 19. 9. je to přepínač: stav nese `aria-checked` a popisky v koleji,
+    // ne text „ZAPNUTÁ" schovaný za hoverem.
+    expect(markup).toContain('copier-switch');
+    expect(markup).toContain('>ON<');
+    expect(markup).toContain('>OFF<');
   });
 
   it('odpojený runtime nabízí připojení a hlásí ostrý provoz', () => {
     const markup = render();
     expect(markup).toContain('aria-checked="false"');
     expect(markup).toContain('aria-label="Zapnout kopírovací skupinu"');
-    expect(markup).toContain('VYPNUTÁ');
     expect(markup).toContain('naostro');
   });
 
   it('kill switch, denní zámek ani cooldown nepustí připojení', () => {
     const markup = render({ connectBlocked: true });
+    expect(markup).toContain('disabled=""');
+  });
+
+  it('během přechodu točí spinner v knoflíku a nepustí další kliknutí', () => {
+    const markup = render({ transition: 'connecting' });
+    expect(markup).toContain('copier-switch-busy');
+    expect(markup).toContain('animate-spin');
     expect(markup).toContain('disabled=""');
   });
 });

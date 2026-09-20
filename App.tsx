@@ -4450,7 +4450,7 @@ const App: React.FC = () => {
                     />
                   )}
 
-                  {(activePage === 'history' || activePage === 'live') && dashboardMode !== 'backtesting' && (
+                  {activePage === 'history' && dashboardMode !== 'backtesting' && (
                     <>
                     <JournalImportStatus report={copierImportReport} running={copierImportRunning} error={copierImportError}
                       onRetry={() => void runCopierJournalSync(true)} onAccounts={() => setActivePage('accounts')} />
@@ -4702,6 +4702,17 @@ const App: React.FC = () => {
                       macCompanionPairingIntent={macCompanionPairingIntent}
                       onMacCompanionPairingIntentHandled={handleMacCompanionPairingIntentHandled}
                     />
+                  )}
+
+                  {/* Stav podkladů historie je na LIVE doplňková informace, ne to
+                      první, co chceš vidět — proto až za skupinami. Na Historii
+                      zůstává nahoře, tam se váže přímo k obsahu stránky. */}
+                  {activePage === 'live' && dashboardMode !== 'backtesting' && (
+                    <div className="mx-auto mt-4 max-w-[1500px]">
+                      <JournalImportStatus report={copierImportReport} running={copierImportRunning} error={copierImportError}
+                        onRetry={() => void runCopierJournalSync(true)} onAccounts={() => setActivePage('accounts')} />
+                      <JournalSourceStatus key={currentUser.id} connections={journalSourceConnections([...accounts, ...archivedAccounts], copierImportReport?.connections.map(row => row.connectionId))} />
+                    </div>
                   )}
 
                   {activePage === 'settings' && (

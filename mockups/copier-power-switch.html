@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Přepínač kopírování — varianty</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-page:#f8fafc; --bg-card:#ffffff; --text-primary:#0f172a; --text-secondary:#475569;
+  --text-muted:#94a3b8; --border-subtle:#e2e8f0; --track:#e2e8f0;
+  --emerald:#10b981; --emerald-dark:#059669; --rose:#f43f5e; --indigo:#6366f1;
+}
+.dark {
+  --bg-page:#020617; --bg-card:#0a0f1d; --text-primary:#f8fafc; --text-secondary:#94a3b8;
+  --text-muted:#475569; --border-subtle:rgba(255,255,255,.08); --track:#1e293b;
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:28px 16px 72px; font-family:Inter,system-ui,sans-serif;
+  background:var(--bg-page); color:var(--text-primary); transition:background .25s,color .25s; }
+.wrap { max-width:1020px; margin:0 auto; }
+h1 { font-size:21px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.6; color:var(--text-secondary); max-width:76ch; margin:0 0 22px; }
+.bar { position:sticky; top:10px; z-index:20; display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+  padding:9px 12px; margin-bottom:26px; border:1px solid var(--border-subtle); border-radius:12px;
+  background:var(--bg-card); box-shadow:0 4px 16px -8px rgba(0,0,0,.3); }
+.bar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+.bar button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.bar button[aria-pressed="true"] { background:var(--indigo); border-color:var(--indigo); color:#fff; }
+
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(310px,1fr)); gap:16px; }
+.card { border:1px solid var(--border-subtle); border-radius:14px; overflow:hidden; background:var(--bg-card); }
+.head { padding:12px 16px 10px; }
+.head h2 { margin:0 0 3px; font-size:13px; font-weight:900; }
+.head p { margin:0; font-size:11px; line-height:1.55; color:var(--text-secondary); }
+.stage { display:flex; align-items:center; justify-content:center; gap:14px; padding:26px 16px;
+  background:var(--bg-page); border-block:1px solid var(--border-subtle); min-height:96px; }
+.note { padding:10px 16px; font-size:10.5px; line-height:1.5; color:var(--text-muted); }
+.pill { display:inline-block; font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase;
+  padding:2px 6px; border-radius:5px; margin-left:6px; vertical-align:1px;
+  background:color-mix(in srgb, var(--emerald) 16%, transparent); color:var(--emerald); }
+
+/* ═══ společné ═══ */
+.sw { position:relative; cursor:pointer; flex:none; border:none; padding:0; font:inherit; }
+.lbl { font-size:10px; font-weight:900; letter-spacing:.07em; text-transform:uppercase; color:var(--text-muted);
+  transition:color .3s; min-width:62px; }
+.on .lbl { color:var(--emerald); }
+
+/* ─── 1. Hladký ─── */
+.s1 { width:48px; height:27px; border-radius:99px; background:var(--track);
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.18); transition:background .3s cubic-bezier(.34,1.3,.5,1); }
+.on .s1 { background:linear-gradient(180deg, var(--emerald), var(--emerald-dark)); }
+.s1 i { position:absolute; top:3px; left:3px; width:21px; height:21px; border-radius:99px; background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.28); transition:transform .32s cubic-bezier(.34,1.5,.45,1); }
+.on .s1 i { transform:translateX(21px); }
+
+/* ─── 2. S popisky uvnitř ─── */
+.s2 { width:74px; height:28px; border-radius:99px; background:var(--track); overflow:hidden;
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.16); transition:background .3s; }
+.on .s2 { background:linear-gradient(180deg, var(--emerald), var(--emerald-dark)); }
+.s2 .txt { position:absolute; inset:0; display:flex; align-items:center; font-size:9px; font-weight:900;
+  letter-spacing:.09em; }
+.s2 .txt b { position:absolute; transition:opacity .25s, transform .3s cubic-bezier(.34,1.3,.5,1); }
+.s2 .txt .t-on { left:11px; color:#fff; opacity:0; transform:translateX(-6px); }
+.s2 .txt .t-off { right:11px; color:var(--text-muted); opacity:1; }
+.on .s2 .txt .t-on { opacity:1; transform:none; }
+.on .s2 .txt .t-off { opacity:0; transform:translateX(6px); }
+.s2 i { position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:99px; background:#fff;
+  box-shadow:0 1px 4px rgba(0,0,0,.3); transition:transform .34s cubic-bezier(.34,1.5,.45,1); }
+.on .s2 i { transform:translateX(46px); }
+
+/* ─── 3. S ikonou v knoflíku ─── */
+.s3 { width:52px; height:29px; border-radius:99px; background:var(--track);
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.18); transition:background .3s; }
+.on .s3 { background:linear-gradient(180deg, var(--emerald), var(--emerald-dark)); }
+.s3 i { position:absolute; top:3px; left:3px; width:23px; height:23px; border-radius:99px; background:#fff;
+  display:flex; align-items:center; justify-content:center; box-shadow:0 1px 4px rgba(0,0,0,.3);
+  transition:transform .34s cubic-bezier(.34,1.5,.45,1); }
+.on .s3 i { transform:translateX(23px); }
+.s3 svg { width:12px; height:12px; stroke:var(--text-muted); stroke-width:2.6; fill:none;
+  stroke-linecap:round; transition:stroke .3s, transform .4s cubic-bezier(.34,1.4,.5,1); }
+.on .s3 svg { stroke:var(--emerald-dark); transform:rotate(180deg); }
+
+/* ─── 4. Se světelnou stopou ─── */
+.s4 { width:50px; height:28px; border-radius:99px; background:var(--track);
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.2); transition:background .3s, box-shadow .4s; }
+.on .s4 { background:linear-gradient(180deg, var(--emerald), var(--emerald-dark));
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.1), 0 0 0 3px color-mix(in srgb, var(--emerald) 22%, transparent),
+             0 0 18px -2px color-mix(in srgb, var(--emerald) 60%, transparent); }
+.s4 i { position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:99px; background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.3); transition:transform .34s cubic-bezier(.34,1.5,.45,1); }
+.on .s4 i { transform:translateX(22px); }
+.on .s4::after { content:''; position:absolute; top:50%; right:9px; width:6px; height:6px; margin-top:-3px;
+  border-radius:99px; background:rgba(255,255,255,.95); animation:blink 1.9s ease-in-out infinite; }
+@keyframes blink { 0%,100%{opacity:.25} 50%{opacity:1} }
+
+/* ─── 5. Přetáhnout pro zapnutí ─── */
+.s5 { width:96px; height:30px; border-radius:99px; background:var(--track); overflow:hidden;
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.16); transition:background .35s; touch-action:none; }
+.on .s5 { background:linear-gradient(180deg, var(--emerald), var(--emerald-dark)); }
+.s5 .hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  padding-left:14px; font-size:8.5px; font-weight:900; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--text-muted); transition:opacity .25s; }
+.on .s5 .hint { opacity:0; }
+.s5 .doneTxt { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  font-size:8.5px; font-weight:900; letter-spacing:.1em; text-transform:uppercase; color:#fff; opacity:0;
+  transition:opacity .3s; }
+.on .s5 .doneTxt { opacity:1; }
+.s5 i { position:absolute; top:3px; left:3px; width:24px; height:24px; border-radius:99px; background:#fff;
+  box-shadow:0 2px 6px rgba(0,0,0,.3); }
+.s5.snap i { transition:transform .32s cubic-bezier(.34,1.5,.45,1); }
+.on .s5 i { transform:translateX(66px); }
+
+/* ─── 6. Podržet: knoflík se plní ─── */
+.s6 { width:50px; height:28px; border-radius:99px; background:var(--track);
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.2); transition:background .3s; }
+.on .s6 { background:linear-gradient(180deg, var(--emerald), var(--emerald-dark)); }
+.s6 i { position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:99px; background:#fff;
+  overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.3);
+  transition:transform .34s cubic-bezier(.34,1.5,.45,1); }
+.on .s6 i { transform:translateX(22px); }
+.s6 i b { position:absolute; inset:0; background:var(--emerald); transform:scaleY(0); transform-origin:bottom; }
+.s6.charging i b { transform:scaleY(1); transition:transform .85s linear; }
+.s6 .ring { position:absolute; inset:-4px; border-radius:99px; border:2px solid transparent; }
+.s6.charging .ring { border-color:color-mix(in srgb, var(--emerald) 45%, transparent); animation:pulse .85s ease-out; }
+@keyframes pulse { from { transform:scale(.94); opacity:0 } to { transform:scale(1); opacity:1 } }
+
+/* ─── 7. Kombinace 2 + 4: popisky uvnitř + světelná stopa ─── */
+.s7 { width:76px; height:28px; border-radius:99px; background:var(--track); overflow:visible;
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.16); transition:background .3s, box-shadow .4s; }
+.on .s7 { background:linear-gradient(180deg, var(--emerald), var(--emerald-dark));
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.1), 0 0 0 3px color-mix(in srgb, var(--emerald) 22%, transparent),
+             0 0 20px -2px color-mix(in srgb, var(--emerald) 65%, transparent); }
+.s7 .clip { position:absolute; inset:0; border-radius:99px; overflow:hidden; }
+.s7 .txt { position:absolute; inset:0; font-size:9px; font-weight:900; letter-spacing:.09em; }
+.s7 .txt b { position:absolute; top:50%; transform:translateY(-50%);
+  transition:opacity .25s, transform .3s cubic-bezier(.34,1.3,.5,1); }
+.s7 .t-on  { left:11px; color:#fff; opacity:0; transform:translate(-6px,-50%); }
+.s7 .t-off { right:11px; color:var(--text-muted); opacity:1; }
+.on .s7 .t-on  { opacity:1; transform:translateY(-50%); }
+.on .s7 .t-off { opacity:0; transform:translate(6px,-50%); }
+.s7 i { position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:99px; background:#fff;
+  box-shadow:0 1px 4px rgba(0,0,0,.3); transition:transform .34s cubic-bezier(.34,1.5,.45,1); z-index:2; }
+.on .s7 i { transform:translateX(48px); }
+/* Tepe vedle popisku, ne pod knoflíkem. */
+.s7 .beat { position:absolute; top:50%; left:34px; width:6px; height:6px; margin-top:-3px; border-radius:99px;
+  background:rgba(255,255,255,.95); opacity:0; transition:opacity .3s; }
+.on .s7 .beat { opacity:1; animation:blink 1.9s ease-in-out infinite; }
+
+/* ─── 8. Totéž bez tepání ─── */
+.s8 { width:76px; height:28px; border-radius:99px; background:var(--track);
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.16); transition:background .3s, box-shadow .4s; }
+.on .s8 { background:linear-gradient(180deg, var(--emerald), var(--emerald-dark));
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.1), 0 0 0 2px color-mix(in srgb, var(--emerald) 18%, transparent),
+             0 0 14px -4px color-mix(in srgb, var(--emerald) 55%, transparent); }
+.s8 .txt { position:absolute; inset:0; font-size:9px; font-weight:900; letter-spacing:.09em; }
+.s8 .txt b { position:absolute; top:50%; transform:translateY(-50%);
+  transition:opacity .25s, transform .3s cubic-bezier(.34,1.3,.5,1); }
+.s8 .t-on  { left:12px; color:#fff; opacity:0; transform:translate(-6px,-50%); }
+.s8 .t-off { right:12px; color:var(--text-muted); opacity:1; }
+.on .s8 .t-on  { opacity:1; transform:translateY(-50%); }
+.on .s8 .t-off { opacity:0; transform:translate(6px,-50%); }
+.s8 i { position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:99px; background:#fff;
+  box-shadow:0 1px 4px rgba(0,0,0,.3); transition:transform .34s cubic-bezier(.34,1.5,.45,1); }
+.on .s8 i { transform:translateX(48px); }
+
+/* ─── 9-11: zmenšené a ztlumené varianty ─── */
+.sz { border-radius:99px; background:color-mix(in srgb, var(--text-muted) 26%, transparent);
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.14); transition:background .3s ease, box-shadow .35s ease; }
+.sz .lb { position:absolute; top:50%; font-weight:900; letter-spacing:.08em; transform:translateY(-50%);
+  transition:opacity .22s ease, transform .28s cubic-bezier(.34,1.3,.5,1); }
+.sz .l-on { color:#fff; opacity:0; }
+.sz .l-off { color:var(--text-secondary); opacity:1; }
+.on .sz .l-on { opacity:1; }
+.on .sz .l-off { opacity:0; }
+.sz i { position:absolute; border-radius:99px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.26);
+  transition:transform .3s cubic-bezier(.34,1.5,.45,1); }
+
+/* 9 — S: 56 × 22 */
+.s9 { width:56px; height:22px; }
+.s9 .lb { font-size:7.5px; }
+.s9 .l-on { left:8px; } .s9 .l-off { right:8px; }
+.s9 i { top:2px; left:2px; width:18px; height:18px; }
+.on .s9 i { transform:translateX(34px); }
+.on .s9 { background:#10b981; box-shadow:inset 0 1px 2px rgba(0,0,0,.1),
+  0 0 0 2px color-mix(in srgb, #10b981 16%, transparent); }
+
+/* 10 — M: 62 × 24, jemná záře */
+.s10 { width:62px; height:24px; }
+.s10 .lb { font-size:8px; }
+.s10 .l-on { left:9px; } .s10 .l-off { right:9px; }
+.s10 i { top:2.5px; left:2.5px; width:19px; height:19px; }
+.on .s10 i { transform:translateX(38px); }
+.on .s10 { background:linear-gradient(180deg,#10b981,#059669);
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.1), 0 0 0 2px color-mix(in srgb,#10b981 18%,transparent),
+             0 0 12px -4px color-mix(in srgb,#10b981 55%,transparent); }
+
+/* 11 — bez popisků, jen tečka uvnitř */
+.s11 { width:44px; height:22px; }
+.s11 i { top:2px; left:2px; width:18px; height:18px; }
+.on .s11 i { transform:translateX(22px); }
+.on .s11 { background:#10b981; box-shadow:inset 0 1px 2px rgba(0,0,0,.1),
+  0 0 0 2px color-mix(in srgb,#10b981 16%,transparent); }
+
+.sizerow { display:flex; align-items:center; gap:22px; flex-wrap:wrap; justify-content:center; }
+.sizerow .tag2 { font-size:9px; font-weight:900; letter-spacing:.07em; text-transform:uppercase;
+  color:var(--text-muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Přepínač kopírování — designové varianty</h1>
+  <p class="lede">Šest provedení téhož přepínače. Všechny jsou funkční, tak je zkoušej — u pátého se knoflík
+    táhne myší, u šestého se drží. Všechny se vejdou do sloupce Stav (132 px) a do výšky řádku (51 px).</p>
+
+  <div class="bar">
+    <b>Téma</b>
+    <button id="bl" aria-pressed="true" onclick="theme(false)">Světlé</button>
+    <button id="bd" aria-pressed="false" onclick="theme(true)">Tmavé</button>
+    <span style="width:10px"></span>
+    <b>Vše</b>
+    <button onclick="all(false)">Vypnout</button>
+    <button onclick="all(true)">Zapnout</button>
+  </div>
+
+  <div class="grid">
+    <section class="card" data-v="1">
+      <div class="head"><h2>1 — Hladký<span class="pill">nejčistší</span></h2>
+        <p>Gradient v koleji, vsazený stín, knoflík s pružinou. Nic navíc.</p></div>
+      <div class="stage">
+        <button class="sw s1" role="switch" aria-checked="false"><i></i></button>
+        <span class="lbl"></span>
+      </div>
+      <p class="note">Nejmenší z variant, 48 × 27 px. Stav čteš z barvy a polohy.</p>
+    </section>
+
+    <section class="card" data-v="2">
+      <div class="head"><h2>2 — S popisky uvnitř</h2>
+        <p>ON a OFF se prolínají uvnitř koleje, takže stav je i přečtený, nejen barevný.</p></div>
+      <div class="stage">
+        <button class="sw s2" role="switch" aria-checked="false">
+          <span class="txt"><b class="t-on">ON</b><b class="t-off">OFF</b></span><i></i>
+        </button>
+      </div>
+      <p class="note">Nepotřebuje popisek vedle sebe, takže ušetří místo jinde. Široký 74 px.</p>
+    </section>
+
+    <section class="card" data-v="3">
+      <div class="head"><h2>3 — S ikonou v knoflíku</h2>
+        <p>Knoflík nese symbol zapnutí a při přepnutí se otočí. Odkazuje na dnešní Power ikonu.</p></div>
+      <div class="stage">
+        <button class="sw s3" role="switch" aria-checked="false">
+          <i><svg viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></svg></i>
+        </button>
+        <span class="lbl"></span>
+      </div>
+      <p class="note">Ikona drží spojitost s dnešním tlačítkem, takže změna nepůsobí jako cizí prvek.</p>
+    </section>
+
+    <section class="card" data-v="4">
+      <div class="head"><h2>4 — Se světelnou stopou<span class="pill">nejvýraznější</span></h2>
+        <p>Zapnutý stav svítí prstencem a tepe tečkou — kopírka dává o sobě vědět i periferním viděním.</p></div>
+      <div class="stage">
+        <button class="sw s4" role="switch" aria-checked="false"><i></i></button>
+        <span class="lbl"></span>
+      </div>
+      <p class="note">Sedí k ostrovu, který používá stejnou zelenou a stejné tepání.</p>
+    </section>
+
+    <section class="card" data-v="5">
+      <div class="head"><h2>5 — Přetáhnout pro zapnutí</h2>
+        <p>Knoflík se táhne doprava jako zámek na telefonu. Vypnutí je jedno kliknutí.</p></div>
+      <div class="stage">
+        <button class="sw s5 snap" role="switch" aria-checked="false">
+          <span class="hint">Táhni →</span><span class="doneTxt">Kopíruje</span><i></i>
+        </button>
+      </div>
+      <p class="note">Omylem se zapnout nedá a návod je přímo v koleji. Nejširší, 96 px.</p>
+    </section>
+
+    <section class="card" data-v="6">
+      <div class="head"><h2>6 — Podržet, knoflík se plní</h2>
+        <p>Drž a knoflík se zaplní zelenou; po dokončení přejede. Vypnutí zase jedním kliknutím.</p></div>
+      <div class="stage">
+        <button class="sw s6" role="switch" aria-checked="false">
+          <span class="ring"></span><i><b></b></i>
+        </button>
+        <span class="lbl"></span>
+      </div>
+      <p class="note">Kompromis mezi přepínačem a pojistkou: vypadá jako switch, chová se opatrně.</p>
+    </section>
+
+    <section class="card" data-v="7">
+      <div class="head"><h2>7 — Popisky + světelná stopa<span class="pill">kombinace 2 a 4</span></h2>
+        <p>Kolej nese ON/OFF, zapnutý stav k tomu svítí prstencem a tepe tečkou vedle popisku.</p></div>
+      <div class="stage">
+        <button class="sw s7" role="switch" aria-checked="false">
+          <span class="txt"><b class="t-on">ON</b><b class="t-off">OFF</b></span>
+          <span class="beat"></span><i></i>
+        </button>
+      </div>
+      <p class="note">Stav je čitelný slovem, barvou i pohybem naráz. Tepání sedí k ostrovu. Široký 76 px.</p>
+    </section>
+
+    <section class="card" data-v="8">
+      <div class="head"><h2>8 — Totéž, jen klidnější</h2>
+        <p>Stejná kombinace bez tepající tečky a s jemnějším prstencem — pro případ, že by pohyb rušil.</p></div>
+      <div class="stage">
+        <button class="sw s8" role="switch" aria-checked="false">
+          <span class="txt"><b class="t-on">ON</b><b class="t-off">OFF</b></span><i></i>
+        </button>
+      </div>
+      <p class="note">Když je skupin víc a všechny běží, sedm tepajících teček najednou už je hlučné.</p>
+    </section>
+
+    <section class="card" data-v="9" style="grid-column:1/-1">
+      <div class="head"><h2>9 — Zmenšené a ztlumené<span class="pill">na výběr</span></h2>
+        <p>Sedmička byla 76 × 28 px se silnou září. Tady jsou tři tišší velikosti vedle sebe —
+          přepni je a řekni číslo. Vlevo je pro srovnání dnešní velká.</p></div>
+      <div class="stage sizerow">
+        <span style="display:flex;flex-direction:column;align-items:center;gap:7px">
+          <button class="sw s7" role="switch" aria-checked="false">
+            <span class="txt"><b class="t-on">ON</b><b class="t-off">OFF</b></span><i></i>
+          </button>
+          <span class="tag2">dnes · 76×28</span>
+        </span>
+        <span style="display:flex;flex-direction:column;align-items:center;gap:7px">
+          <button class="sw sz s10" role="switch" aria-checked="false">
+            <span class="lb l-on">ON</span><span class="lb l-off">OFF</span><i></i>
+          </button>
+          <span class="tag2">A · 62×24</span>
+        </span>
+        <span style="display:flex;flex-direction:column;align-items:center;gap:7px">
+          <button class="sw sz s9" role="switch" aria-checked="false">
+            <span class="lb l-on">ON</span><span class="lb l-off">OFF</span><i></i>
+          </button>
+          <span class="tag2">B · 56×22</span>
+        </span>
+        <span style="display:flex;flex-direction:column;align-items:center;gap:7px">
+          <button class="sw sz s11" role="switch" aria-checked="false"><i></i></button>
+          <span class="tag2">C · 44×22 bez popisků</span>
+        </span>
+      </div>
+      <p class="note">Všechny čtyři se přepínají zároveň, ať je rozdíl vidět v obou stavech.
+        Záře je u A jemná, u B a C jen tenký prstenec.</p>
+    </section>
+  </div>
+</div>
+
+<script>
+function theme(dark) {
+  document.documentElement.classList.toggle('dark', dark);
+  document.getElementById('bd').setAttribute('aria-pressed', String(dark));
+  document.getElementById('bl').setAttribute('aria-pressed', String(!dark));
+}
+function paint(card) {
+  const on = card.classList.contains('on');
+  const lbl = card.querySelector('.lbl');
+  if (lbl) lbl.textContent = on ? 'Kopíruje' : 'Vypnuto';
+  for (const one of card.querySelectorAll('.sw')) one.setAttribute('aria-checked', String(on));
+}
+function set(card, on) { card.classList.toggle('on', on); paint(card); }
+function toggle(card) { set(card, !card.classList.contains('on')); }
+function all(on) { for (const c of document.querySelectorAll('.card')) set(c, on); }
+
+for (const card of document.querySelectorAll('.card')) {
+  paint(card);
+  const sw = card.querySelector('.sw');
+  const variant = card.dataset.v;
+
+  if (variant === '5') {                     // přetažení
+    const knob = sw.querySelector('i');
+    const travel = 66;
+    let dragging = false, startX = 0;
+    sw.addEventListener('pointerdown', e => {
+      if (card.classList.contains('on')) { set(card, false); return; }
+      dragging = true; startX = e.clientX; sw.classList.remove('snap');
+      sw.setPointerCapture(e.pointerId);
+    });
+    sw.addEventListener('pointermove', e => {
+      if (!dragging) return;
+      const x = Math.max(0, Math.min(travel, e.clientX - startX));
+      knob.style.transform = `translateX(${x}px)`;
+    });
+    const end = e => {
+      if (!dragging) return;
+      dragging = false; sw.classList.add('snap');
+      const x = Math.max(0, Math.min(travel, e.clientX - startX));
+      knob.style.transform = '';
+      set(card, x > travel * 0.6);
+    };
+    sw.addEventListener('pointerup', end);
+    sw.addEventListener('pointercancel', end);
+
+  } else if (variant === '6') {              // podržení
+    let timer = null;
+    const start = () => {
+      if (card.classList.contains('on')) { set(card, false); return; }
+      sw.classList.add('charging');
+      timer = setTimeout(() => { sw.classList.remove('charging'); set(card, true); }, 850);
+    };
+    const cancel = () => { clearTimeout(timer); sw.classList.remove('charging'); };
+    sw.addEventListener('pointerdown', start);
+    sw.addEventListener('pointerup', cancel);
+    sw.addEventListener('pointerleave', cancel);
+
+  } else {
+    for (const one of card.querySelectorAll('.sw')) one.addEventListener('click', () => toggle(card));
+  }
+}
+</script>
+</body>
+</html>

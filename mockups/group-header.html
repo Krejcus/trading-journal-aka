@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hlavička skupiny — varianty</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-page:#f1f5f9; --bg-card:#ffffff; --bg-sunken:#f8fafc;
+  --text-primary:#0f172a; --text-secondary:#475569; --text-muted:#94a3b8;
+  --border-subtle:#e2e8f0; --accent:#4f46e5; --lead:#d97706;
+  --shadow:0 18px 44px -20px rgba(15,23,42,.4);
+}
+.dark {
+  --bg-page:#020617; --bg-card:#0a0f1d; --bg-sunken:#0f172a;
+  --text-primary:#f8fafc; --text-secondary:#94a3b8; --text-muted:#475569;
+  --border-subtle:rgba(255,255,255,.08); --accent:#6366f1; --lead:#f59e0b;
+  --shadow:0 18px 44px -20px rgba(0,0,0,.85);
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:26px 16px 90px; font-family:Inter,system-ui,sans-serif;
+  background:var(--bg-page); color:var(--text-primary); transition:background .25s,color .25s; }
+.wrap { max-width:900px; margin:0 auto; }
+h1 { font-size:21px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.65; color:var(--text-secondary); max-width:78ch; margin:0 0 18px; }
+.bar { display:flex; gap:8px; align-items:center; padding:9px 12px; margin-bottom:26px;
+  border:1px solid var(--border-subtle); border-radius:12px; background:var(--bg-card); }
+.bar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+.bar button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.bar button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+
+.case { margin-bottom:30px; }
+.case h2 { font-size:14px; font-weight:900; margin:0 0 3px; }
+.case h2 em { font-style:normal; color:var(--text-muted); font-weight:800; font-size:10.5px;
+  letter-spacing:.08em; text-transform:uppercase; margin-right:8px; }
+.case p { font-size:12.5px; line-height:1.6; color:var(--text-secondary); margin:0 0 10px; max-width:76ch; }
+.frame { border:1px solid var(--border-subtle); border-radius:13px; background:var(--bg-card);
+  box-shadow:var(--shadow); overflow:visible; }
+.frame > .head { display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:11px 14px; border-bottom:1px solid var(--border-subtle); }
+.frame > .body { padding:11px 14px; font-size:11px; color:var(--text-muted); font-weight:600; }
+.xbtn { width:28px; height:28px; border:0; border-radius:8px; background:transparent; cursor:pointer;
+  color:var(--text-secondary); font-size:15px; line-height:1; flex:none; }
+.meas { font-size:10.5px; color:var(--text-muted); font-weight:700; margin-top:7px; }
+
+/* ── společné prvky ─────────────────────────────────────────── */
+.name-input { font:inherit; font-size:13px; font-weight:800; height:34px; padding:0 11px;
+  border-radius:9px; border:1px solid var(--border-subtle); background:var(--bg-sunken);
+  color:var(--text-primary); outline:none; width:100%; }
+.name-input:focus { border-color:var(--accent); }
+.pop { position:absolute; z-index:30; top:calc(100% + 6px); left:0; display:grid; gap:6px;
+  grid-template-columns:repeat(4,26px); padding:8px; border-radius:11px;
+  border:1px solid var(--border-subtle); background:var(--bg-card); box-shadow:var(--shadow); }
+.pop button { width:26px; height:26px; border-radius:999px; border:2px solid transparent; cursor:pointer; padding:0; }
+.pop button[aria-pressed="true"] { border-color:var(--text-primary); }
+.rel { position:relative; }
+
+/* 1 — barva uvnitř pole */
+.field-dot { position:relative; display:flex; align-items:center; width:264px; }
+.field-dot .name-input { padding-left:38px; }
+.field-dot .chip { position:absolute; left:6px; width:24px; height:24px; border-radius:7px; border:0;
+  cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center; }
+.field-dot .chip::after { content:''; width:12px; height:12px; border-radius:999px;
+  background:rgba(255,255,255,.55); display:none; }
+
+/* 2 — barva jako tlačítko vedle */
+.field-btn { display:flex; align-items:center; gap:8px; }
+.field-btn .name-input { width:210px; }
+.colorbtn { display:flex; align-items:center; gap:6px; height:34px; padding:0 9px; border-radius:9px;
+  border:1px solid var(--border-subtle); background:var(--bg-sunken); cursor:pointer; color:var(--text-secondary);
+  font:inherit; font-size:11px; font-weight:800; }
+.colorbtn i { width:14px; height:14px; border-radius:999px; display:block; }
+.colorbtn svg { width:11px; height:11px; }
+
+/* 3 — tečky jako jeden celek */
+.field-seg { display:flex; align-items:center; gap:9px; }
+.field-seg .name-input { width:200px; }
+.segdots { display:flex; gap:3px; padding:4px; border-radius:9px; background:var(--bg-sunken);
+  border:1px solid var(--border-subtle); }
+.segdots button { width:17px; height:17px; border-radius:999px; border:2px solid transparent; cursor:pointer; padding:0; }
+.segdots button[aria-pressed="true"] { border-color:var(--text-primary); }
+
+/* 4 — náhled řádku */
+.field-prev { display:flex; align-items:center; gap:10px; }
+.preview-row { display:flex; align-items:center; gap:7px; height:34px; padding:0 11px 0 9px;
+  border-radius:9px; border:1px dashed var(--border-subtle); background:var(--bg-sunken); }
+.preview-row .dot { width:9px; height:9px; border-radius:999px; flex:none; }
+.preview-row b { font-size:12px; font-weight:800; }
+.preview-row span { font-size:10px; color:var(--text-muted); font-weight:700; }
+
+.lbl { font-size:9.5px; font-weight:900; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); }
+.dlgtitle { font-size:13.5px; font-weight:900; letter-spacing:-.01em; margin-bottom:5px; }
+
+/* korunka */
+.crown { width:32px; height:32px; flex:none; border-radius:999px; display:flex; align-items:center;
+  justify-content:center; background:var(--lead); color:#3b2600; }
+.crown svg { width:56%; height:56%; }
+.crowns { display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+.crowns figure { margin:0; text-align:center; }
+.crowns figcaption { font-size:10px; color:var(--text-secondary); font-weight:700; margin-top:6px; }
+.c-old { background:var(--lead); color:#3b2600; font-size:15px; }
+.c-ghost { background:color-mix(in srgb,var(--lead) 16%,transparent); color:var(--lead);
+  border:1px solid color-mix(in srgb,var(--lead) 40%,transparent); }
+.c-plain { background:transparent; color:var(--lead); }
+.c-badge { position:relative; background:var(--bg-sunken); color:var(--text-secondary);
+  border:1px solid var(--border-subtle); }
+.c-badge i { position:absolute; right:-3px; bottom:-3px; width:16px; height:16px; border-radius:999px;
+  background:var(--lead); color:#3b2600; display:flex; align-items:center; justify-content:center;
+  border:2px solid var(--bg-card); }
+.c-badge i svg { width:9px; height:9px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Hlavička skupiny a korunka leadera</h1>
+  <p class="lede">Dnešní hlavička je textové pole a osm volných koleček — devět prvků vedle sebe za
+    jednu jedinou volbu, a vybraná barva se pozná jen tenkým prstýnkem. Čtyři varianty níž; klikat
+    jde všechno. Dole korunka: ta dosavadní byla <b>šachová dáma ♛</b>, ne koruna.</p>
+
+  <div class="bar">
+    <b>Téma</b>
+    <button id="bl" aria-pressed="false" onclick="theme(false)">Světlé</button>
+    <button id="bd" aria-pressed="true" onclick="theme(true)">Tmavé</button>
+  </div>
+
+  <div class="case">
+    <h2><em>Dnes</em>Pole a osm koleček</h2>
+    <p>Devět prvků za jednu volbu a nikde nestojí, že je to název skupiny.</p>
+    <div class="frame"><div class="head" id="H0"></div><div class="body">obsah dialogu…</div></div>
+    <div class="meas" id="M0"></div>
+  </div>
+
+  <div class="case">
+    <h2><em>1a</em>Popisek nad polem</h2>
+    <p>Malý popisek „Název skupiny“ nad polem — stejný tvar, jaký mají ostatní popisky v appce
+      (<i>NÁZEV SKUPINY</i>, <i>BARVA</i>). Hlavička povyroste o 15 px.</p>
+    <div class="frame"><div class="head" id="H1"></div><div class="body">obsah dialogu…</div></div>
+    <div class="meas" id="M1"></div>
+  </div>
+
+  <div class="case">
+    <h2><em>1b</em>Nadpis dialogu nad polem</h2>
+    <p>Místo popisku vlastní nadpis okna — „Upravit skupinu“, a pod ním pole. Z nadpisu je jasné,
+      co se upravuje, a zároveň dialog konečně má titulek (dnes ho v návrzích E/F/G nemá vůbec).</p>
+    <div class="frame"><div class="head" id="H2"></div><div class="body">obsah dialogu…</div></div>
+    <div class="meas" id="M2"></div>
+  </div>
+
+  <div class="case">
+    <h2><em>1c</em>Popisek vlevo od pole</h2>
+    <p>Hlavička zůstane na jednom řádku a nízká; popisek stojí před polem. Zabere ale vodorovné
+      místo, kterého je v hlavičce míň než svislého.</p>
+    <div class="frame"><div class="head" id="H3"></div><div class="body">obsah dialogu…</div></div>
+    <div class="meas" id="M3"></div>
+  </div>
+
+  <div class="case">
+    <h2><em>Korunka</em>Čtyři provedení</h2>
+    <p>Vlevo dnešní stav, pak tři návrhy se skutečnou ikonou koruny z knihovny, kterou appka používá.</p>
+    <div class="frame"><div class="head" style="justify-content:flex-start">
+      <div class="crowns" id="CR"></div>
+    </div></div>
+  </div>
+</div>
+
+<script>
+const COLORS = ['#6366f1','#f97316','#d946ef','#84cc16','#06b6d4','#ec4899','#8b5cf6','#94a3b8'];
+const CROWN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"
+  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z"/>
+  <path d="M5 21h14"/></svg>`;
+const CHEV = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+  stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`;
+
+const S = [0,1,2,3].map(() => ({ name:'Hlavní', color:COLORS[0], open:false }));
+
+const palette = i => S[i].open ? `<div class="pop">${COLORS.map(c =>
+  `<button style="background:${c}" aria-pressed="${S[i].color===c}" aria-label="Barva ${c}"
+    onclick="pick(${i},'${c}')"></button>`).join('')}</div>` : '';
+
+const nameInput = i => `<input class="name-input" type="text" value="${S[i].name}"
+  placeholder="např. Tradeify 50K" aria-label="Název skupiny" oninput="setName(${i}, this.value)">`;
+
+const chipField = i => `<div class="rel"><div class="field-dot">
+    <button class="chip" style="background:${S[i].color}" aria-label="Barva skupiny"
+      aria-expanded="${S[i].open}" onclick="toggle(${i})"></button>
+    ${nameInput(i)}</div>${palette(i)}</div>`;
+
+const HEADS = {
+  0: i => `<div style="display:flex;align-items:center;gap:10px">
+      <div style="width:200px">${nameInput(i)}</div>
+      <div style="display:flex;gap:5px">${COLORS.map(c =>
+        `<button style="width:18px;height:18px;border-radius:999px;padding:0;cursor:pointer;background:${c};
+          border:2px solid ${S[i].color===c ? 'var(--text-primary)' : 'transparent'}"
+          aria-pressed="${S[i].color===c}" aria-label="Barva ${c}" onclick="pick(${i},'${c}')"></button>`).join('')}
+      </div></div><button class="xbtn">✕</button>`,
+
+  1: i => `<div><div class="lbl" style="margin-bottom:4px">Název skupiny</div>${chipField(i)}</div>
+    <button class="xbtn">✕</button>`,
+
+  2: i => `<div><div class="dlgtitle">Upravit skupinu</div>${chipField(i)}</div>
+    <button class="xbtn">✕</button>`,
+
+  3: i => `<div style="display:flex;align-items:center;gap:9px">
+      <span class="lbl" style="white-space:nowrap">Název skupiny</span>${chipField(i)}</div>
+    <button class="xbtn">✕</button>`,
+};
+
+function render(i, keepFocus) {
+  document.getElementById('H' + i).innerHTML = HEADS[i](i);
+  const head = document.getElementById('H' + i);
+  const first = head.firstElementChild;
+  document.getElementById('M' + i).textContent =
+    `šířka ${Math.round(first.getBoundingClientRect().width)} px · výška hlavičky ${Math.round(head.getBoundingClientRect().height)} px`;
+  if (keepFocus) {
+    const input = head.querySelector('.name-input');
+    input.focus(); input.setSelectionRange(input.value.length, input.value.length);
+  }
+}
+function pick(i, color) { S[i].color = color; S[i].open = false; render(i); }
+function toggle(i) { S[i].open = !S[i].open; render(i); }
+function setName(i, value) { S[i].name = value; render(i, true); }
+
+document.getElementById('CR').innerHTML = [
+  ['c-old', '♛', 'Dnes — šachová dáma'],
+  ['', CROWN, 'Plná — nejvýraznější'],
+  ['c-ghost', CROWN, 'Ztlumená — klidnější'],
+  ['c-plain', CROWN, 'Bez kolečka — nejlehčí'],
+].map(([cls, glyph, caption]) => `<figure>
+    <div style="display:flex;align-items:flex-end;gap:10px;justify-content:center">
+      <span class="crown ${cls}" style="width:46px;height:46px">${glyph}</span>
+      <span class="crown ${cls}" style="width:26px;height:26px" title="skutečná velikost">${glyph}</span>
+    </div>
+    <figcaption>${caption}</figcaption></figure>`).join('');
+/* šachová dáma je znak, ne ikona — velikost se u ní řídí písmem */
+document.querySelectorAll('#CR .c-old').forEach(el => {
+  el.style.fontSize = Math.round(parseInt(el.style.width) * 0.5) + 'px';
+});
+
+function theme(dark) {
+  document.documentElement.classList.toggle('dark', dark);
+  document.getElementById('bd').setAttribute('aria-pressed', String(dark));
+  document.getElementById('bl').setAttribute('aria-pressed', String(!dark));
+}
+theme(true);
+[0,1,2,3].forEach(i => render(i));
+</script>
+</body>
+</html>

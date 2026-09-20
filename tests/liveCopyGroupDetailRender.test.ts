@@ -137,8 +137,9 @@ describe('GroupDetail Positions integrace', () => {
     const ddCells = cells.filter(cell => cell.includes('data-risk-display="verified"'));
     expect(ddCells).toHaveLength(2);
     for (const cell of ddCells) expect(cell).toContain(`>${new Intl.NumberFormat('en-US').format(cushion)}<`);
-    expect(ddCells[0]).toContain('· DD');
-    expect(ddCells[1]).not.toContain('· DD');
+    // Popisek „· DD“ u hodnoty byl odstraněn; rozdíl nese jen tooltip buňky.
+    expect(ddCells[0]).toContain('title="Účet nemá denní limit ztráty');
+    expect(ddCells[1]).not.toContain('title="Účet nemá denní limit ztráty');
     expect(ddCells[0]).not.toContain('role="status"');
   });
 
@@ -150,7 +151,7 @@ describe('GroupDetail Positions integrace', () => {
       const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
         snapshot: { ...snapshot, accounts: [account] },
       }));
-      expect(markup).not.toContain('· DD');
+      expect(markup).not.toContain('title="Účet nemá denní limit ztráty');
       if (account.dailyLossLimit) expect(markup).toContain('>1,250<');
     }
   });
@@ -166,7 +167,7 @@ describe('GroupDetail Positions integrace', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
       snapshot: { ...snapshot, accounts: [account] },
     }));
-    expect(markup).toContain('· DD');
+    expect(markup).toContain('title="Účet nemá denní limit ztráty');
     expect(markup).not.toContain('>1,500<');
   });
 
@@ -196,14 +197,16 @@ describe('GroupDetail Positions integrace', () => {
 
     const leaderRow = tableRows(markup).find(row => row.includes('title="Leader účet"'));
     const positionsCell = leaderRow && tableCells(leaderRow)
-      .find(cell => cell.includes('aria-label="Čekající vstup'));
+      .find(cell => cell.includes('aria-label="Čekající BUY'));
 
     expect(leaderRow, 'leader account row se musí vykreslit').toBeDefined();
     expect(leaderRow).toContain('Leader DEMO');
     expect(positionsCell, 'pending pill musí být přímo v Positions buňce leadera').toBeDefined();
-    expect(positionsCell).toContain('aria-label="Čekající vstup MNQ, 3 kontraktů"');
+    // Popisek nese směr, typ i stav ochrany — chip sám ukáže směr a trojúhelník.
+    expect(positionsCell).toContain('aria-label="Čekající BUY Limit MNQ, 3 kontrakty, bez stop lossu"');
     expect(positionsCell).toContain('lucide-clock-3');
-    expect(positionsCell).not.toContain('Čekající vstup NQ,');
+    expect(positionsCell).toContain('>BUY<');
+    expect(positionsCell).not.toContain('Čekající BUY Limit NQ,');
   });
 
   it('překrývající profily vykreslí jako vypnuté, dokud runtime není ARMED', () => {
@@ -228,8 +231,8 @@ describe('GroupDetail Positions integrace', () => {
 
     expect(markup).toContain('Hlavni');
     expect(markup).toContain('Druhy profil');
-    expect(markup.match(/VYPNUTÁ/g)).toHaveLength(2);
-    expect(markup).not.toContain('ZAPNUTÁ');
+    expect(markup.match(/aria-checked="false"/g)).toHaveLength(2);
+    expect(markup).not.toContain('aria-checked="true"');
   });
 
   it('vybraný, ale vypnutý execution profil nezobrazuje jako aktivní', () => {
@@ -252,7 +255,7 @@ describe('GroupDetail Positions integrace', () => {
       runtimeGroup,
     }));
 
-    expect(markup.match(/VYPNUTÁ/g)).toHaveLength(2);
+    expect(markup.match(/aria-checked="false"/g)).toHaveLength(2);
     expect(markup).not.toContain('Execution aktivní');
   });
 
@@ -307,8 +310,8 @@ describe('GroupDetail Positions integrace', () => {
       copierArmed: true,
     }));
 
-    expect(markup.match(/ZAPNUTÁ/g)).toHaveLength(1);
-    expect(markup.match(/VYPNUTÁ/g)).toHaveLength(1);
+    expect(markup.match(/aria-checked="true"/g)).toHaveLength(1);
+    expect(markup.match(/aria-checked="false"/g)).toHaveLength(1);
     expect(markup.indexOf('Druhy profil')).toBeLessThan(markup.indexOf('Hlavni'));
   });
 
@@ -396,5 +399,32 @@ describe('GroupDetail Positions integrace', () => {
     expect(markup).toContain('LIVE denní P&amp;L -1206.50 USD');
     expect(markup).toContain('BREACHED');
     expect(markup).toContain('LIVE equity dosáhla drawdown flooru');
+  });
+  it('hlavička i buňky skupiny jdou ve stejném pořadí a nic z nich nechybí', () => {
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, { snapshot }));
+    const headers = ['Skupina', 'Stav', 'Leader', 'Firma', 'Followeři', 'Kapitál', 'Denní P&amp;L', 'Otevřený P&amp;L'];
+    const positions = headers.map(label => markup.indexOf(`>${label}</th>`));
+    expect(positions.every(index => index > 0)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+
+    // Řádek skupiny: šipka + název + 7 volitelných sloupců + akce.
+    const groupRow = tableRows(markup).find(row => row.includes('Hlavni'));
+    expect(groupRow).toBeDefined();
+    expect(tableCells(groupRow!)).toHaveLength(10);
+  });
+  it('přepínač Účty/Příkazy stojí pod obsahem, ne nad hlavičkou tabulky', () => {
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, { snapshot }));
+    const morph = markup.indexOf('live-detail-morph');
+    const tab = markup.indexOf('live-detail-tab');
+    expect(morph).toBeGreaterThan(-1);
+    // Dřív „Účty" stály hned nad sloupcem „ÚČET"; teď jsou až za obsahem.
+    expect(tab).toBeGreaterThan(morph);
+    expect(markup.indexOf('>Účet</th>')).toBeLessThan(tab);
+  });
+
+  it('přepínač nese počty a chip se zařazenými followery už nezdvojuje řádek skupiny', () => {
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, { snapshot }));
+    expect(markup).toContain('live-detail-tab');
+    expect(markup).not.toContain('zařazení');
   });
 });

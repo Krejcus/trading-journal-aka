@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Čekající vstup — varování bez SL</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-page:#f1f5f9; --bg-card:#ffffff; --bg-sunken:#f8fafc;
+  --text-primary:#0f172a; --text-secondary:#475569; --text-muted:#94a3b8;
+  --border-subtle:#e2e8f0; --accent:#4f46e5;
+  --emerald:#059669; --rose:#e11d48; --amber:#b45309;
+}
+.dark {
+  --bg-page:#020617; --bg-card:#0a0f1d; --bg-sunken:#0f172a;
+  --text-primary:#f8fafc; --text-secondary:#94a3b8; --text-muted:#475569;
+  --border-subtle:rgba(255,255,255,.08); --accent:#6366f1;
+  --emerald:#10b981; --rose:#f43f5e; --amber:#d97706;
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:26px 16px 80px; font-family:Inter,system-ui,sans-serif;
+  background:var(--bg-page); color:var(--text-primary); transition:background .25s,color .25s; }
+.wrap { max-width:1060px; margin:0 auto; }
+h1 { font-size:21px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.65; color:var(--text-secondary); max-width:84ch; margin:0 0 16px; }
+.lede b { color:var(--text-primary); }
+.bar { display:flex; gap:8px; align-items:center; padding:9px 12px; margin-bottom:22px;
+  border:1px solid var(--border-subtle); border-radius:12px; background:var(--bg-card); }
+.bar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+.bar button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.bar button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+
+table { width:100%; border-collapse:separate; border-spacing:0; border:1px solid var(--border-subtle);
+  border-radius:12px; background:var(--bg-card); }
+th { font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted);
+  text-align:left; padding:8px 12px; border-bottom:1px solid var(--border-subtle); }
+td { padding:11px 12px; border-bottom:1px solid var(--border-subtle); font-size:11.5px; vertical-align:middle; }
+tr:last-child td { border-bottom:0; }
+td.kdy { color:var(--text-secondary); line-height:1.55; }
+td.kdy .t { color:var(--text-primary); font-weight:800; display:block; margin-bottom:2px; }
+td.kdy b { color:var(--text-primary); font-weight:800; }
+.w { font-family:'JetBrains Mono',monospace; font-size:10.5px; font-weight:700; white-space:nowrap; }
+.w em { font-style:normal; color:var(--text-muted); }
+.w.over { color:var(--rose); }
+.w.fine { color:var(--emerald); }
+
+/* ── chipy ───────────────────────────────────────────────────── */
+.p { display:inline-flex; align-items:center; gap:4px; border-radius:6px; padding:4px 8px;
+  font-size:10px; font-weight:800; line-height:1; font-variant-numeric:tabular-nums;
+  border:1px solid var(--border-subtle); background:var(--bg-card); color:var(--text-secondary); }
+.p .side { font-size:8.5px; font-weight:900; letter-spacing:.06em; padding:1px 3px; border-radius:3px; }
+.p.buy .side  { background:color-mix(in srgb,var(--emerald) 18%,transparent); color:var(--emerald); }
+.p.sell .side { background:color-mix(in srgb,var(--rose) 18%,transparent); color:var(--rose); }
+.p.amberline { border-color:color-mix(in srgb,var(--amber) 55%,transparent); }
+.p.amberfill { border-color:color-mix(in srgb,var(--amber) 50%,transparent);
+  background:color-mix(in srgb,var(--amber) 9%,transparent); }
+.p .alert { color:var(--amber); }
+.p .dot { width:5px; height:5px; border-radius:999px; background:var(--amber); }
+
+.badge { display:inline-flex; align-items:center; gap:2px; border-radius:6px; border:1px solid;
+  padding:4px 6px; font-size:9px; font-weight:900; line-height:1; }
+.badge.amber { border-color:color-mix(in srgb,var(--amber) 40%,transparent);
+  background:color-mix(in srgb,var(--amber) 15%,transparent); color:var(--amber); }
+.badge.rose { border-color:color-mix(in srgb,var(--rose) 45%,transparent);
+  background:color-mix(in srgb,var(--rose) 15%,transparent); color:var(--rose); }
+
+.pos { display:inline-flex; align-items:center; gap:4px; border-radius:6px; border:1px solid;
+  padding:4px 8px; font-size:10px; font-weight:900; line-height:1; font-variant-numeric:tabular-nums;
+  border-color:color-mix(in srgb,var(--emerald) 25%,transparent);
+  background:color-mix(in srgb,var(--emerald) 10%,transparent); color:var(--emerald); }
+.pair { display:inline-flex; align-items:center; gap:4px; }
+.stack { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+svg { flex:none; }
+.limit { position:relative; }
+.limit::after { content:''; position:absolute; top:-6px; bottom:-6px; left:200px; width:1px;
+  background:color-mix(in srgb,var(--rose) 55%,transparent); }
+.limitnote { font-size:9.5px; font-weight:800; color:var(--rose); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Varování „bez SL“ u čekajícího vstupu</h1>
+  <p class="lede">Šest způsobů, od nejupovídanějšího po nejtišší. Ve sloupci <b>Šířka</b> je skutečná
+    naměřená šířka buňky ve chvíli, kdy vedle čekajícího vstupu stojí ještě otevřená pozice — to je
+    nejhorší případ. <b>Sloupec Pozice má dnes 200 px</b>; co přeteče, je červeně a svislá čára
+    ukazuje, kde je hranice.</p>
+
+  <div class="bar">
+    <b>Téma</b>
+    <button id="bl" aria-pressed="false" onclick="theme(false)">Světlé</button>
+    <button id="bd" aria-pressed="true" onclick="theme(true)">Tmavé</button>
+  </div>
+
+  <table>
+    <thead><tr>
+      <th style="width:150px">Bez SL</th>
+      <th style="width:160px">SL jen na část</th>
+      <th style="width:230px">Nejhorší případ: pozice + vstup</th>
+      <th style="width:70px">Šířka</th>
+      <th>Co na tom</th>
+    </tr></thead>
+    <tbody id="t"></tbody>
+  </table>
+</div>
+
+<script>
+const CLOCK = `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor"
+  stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4"/><circle cx="12" cy="12" r="10"/></svg>`;
+const ALERT = (size = 9) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor"
+  stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`;
+
+const chip = (extra = '', cls = '') =>
+  `<span class="p buy ${cls}">${CLOCK}<span>MNQ</span><span class="side">BUY</span><span>3</span>${extra}</span>`;
+const posChip = `<span class="pos"><span>MNQ</span><span>+3</span></span>`;
+
+const VARIANTS = [
+  ['A — plný štítek jako u pozice',
+   `<span class="stack">${chip()}<span class="badge amber">${ALERT()}bez SL</span></span>`,
+   `<span class="stack">${chip()}<span class="badge rose">${ALERT()}SL 2/3</span></span>`,
+   '<span class="t">Nejdelší, ale konzistentní</span>Přesně stejný štítek, jaký znáš od pozic — nic nového se neučíš. Jenže u vstupu se přidává k chipu, který už má slovo BUY, takže buňka pěkně naroste.'],
+
+  ['B — jen trojúhelník ve štítku',
+   `<span class="stack">${chip()}<span class="badge amber">${ALERT()}</span></span>`,
+   `<span class="stack">${chip()}<span class="badge rose">${ALERT()}2/3</span></span>`,
+   '<span class="t">Zkratka</span>Samotná ikona bez slova. U „bez SL“ to stačí, u dílčího krytí se nechá číslo. Ušetří asi 30 px proti áčku.'],
+
+  ['C — trojúhelník uvnitř chipu',
+   chip(`<span class="alert">${ALERT(10)}</span>`),
+   chip(`<span class="alert">${ALERT(10)}</span><span class="alert">2/3</span>`),
+   '<span class="t">Bez druhého rámečku</span>Varování se vejde dovnitř chipu. Nejúspornější varianta, která pořád nese ikonu — ale ztrácí tu „nálepkovost“, která u pozic upoutá.'],
+
+  ['D — oranžový rámeček chipu',
+   chip('', 'amberline'),
+   chip(`<span class="alert">2/3</span>`, 'amberline'),
+   '<span class="t">Nulová šířka navíc</span>Chip jen zorná ve výstražné barvě. Nic se nepřidává, ale je to tiché — a oranžový rámeček může splynout s ostatními barvami v řádku.'],
+
+  ['E — oranžový rámeček i výplň',
+   chip('', 'amberfill'),
+   chip(`<span class="alert">2/3</span>`, 'amberfill'),
+   '<span class="t">Nulová šířka, hlasitější</span>Totéž co D, jen s podbarvením. Vidíš to i koutkem oka, ale chip tím přestane vypadat „neutrálně čekající“ a začne se prát o pozornost s pozicemi.'],
+
+  ['F — oranžová tečka na konci',
+   chip(`<span class="dot"></span>`),
+   chip(`<span class="alert">2/3</span>`),
+   '<span class="t">Nejtišší</span>Pět pixelů navíc. Funguje jako připomínka pro toho, kdo ví, co tečka znamená — pro ostatní je to neviditelné.'],
+];
+
+document.getElementById('t').innerHTML = VARIANTS.map(([name, noSl, partial, why]) => `<tr>
+  <td>${noSl}</td>
+  <td>${partial}</td>
+  <td class="limit"><span class="stack worst">${posChip}${noSl.replace('<span class="stack">', '').replace(/<\/span>$/, '')}</span></td>
+  <td class="w"></td>
+  <td class="kdy">${why.replace('<span class="t">', `<span class="t">${name.split(' — ')[1]} — `)}</td>
+</tr>`).join('');
+
+/* skutečné šířky se změří až po vykreslení */
+requestAnimationFrame(() => {
+  document.querySelectorAll('#t tr').forEach(row => {
+    const worst = row.querySelector('.worst');
+    const cell = row.querySelector('.w');
+    const width = Math.round(worst.getBoundingClientRect().width);
+    cell.className = `w ${width > 200 ? 'over' : 'fine'}`;
+    cell.innerHTML = `${width} px<br><em>${width > 200 ? `+${width - 200} přes` : `${200 - width} volných`}</em>`;
+  });
+});
+
+function theme(dark) {
+  document.documentElement.classList.toggle('dark', dark);
+  document.getElementById('bd').setAttribute('aria-pressed', String(dark));
+  document.getElementById('bl').setAttribute('aria-pressed', String(!dark));
+}
+theme(true);
+</script>
+</body>
+</html>

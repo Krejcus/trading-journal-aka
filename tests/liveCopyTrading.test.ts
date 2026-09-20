@@ -198,14 +198,14 @@ describe('liveCopyTrading', () => {
     ]);
   });
 
-  it('při volbě nového leadera nepřenese nedostupného starého leadera mezi followery', async () => {
+  it('při volbě nového leadera nepřenese starého leadera mezi followery', async () => {
     const { changeCopyGroupLeader } = await import('../components/LiveCopyTradeOverview');
     const group: CopyGroupConfig = {
       id: 'g', name: 'Test', enabled: false, leaderAccountId: 63338592,
       followers: [{ accountId: 2, mode: 'on-submit', multiplier: 1 }],
     };
 
-    expect(changeCopyGroupLeader(group, 1, [1, 2]).followers.map(item => item.accountId)).toEqual([2]);
+    expect(changeCopyGroupLeader(group, 1).followers.map(item => item.accountId)).toEqual([2]);
   });
 
   it('dovolí uložit stejný účet ve více neaktivních profilech', () => {

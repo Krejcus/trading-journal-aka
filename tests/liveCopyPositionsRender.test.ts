@@ -188,7 +188,7 @@ describe('Positions sloupec copy tradingu', () => {
       ],
     });
 
-    expect(markup).toContain('aria-label="Čekající vstup NQ, 2 kontraktů"');
+    expect(markup).toContain('aria-label="Čekající BUY Limit NQ, 2 kontrakty, bez stop lossu"');
     expect(markup.match(/lucide-clock-3/g)).toHaveLength(1);
   });
 });

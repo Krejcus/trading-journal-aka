@@ -950,6 +950,7 @@ setAgentStatus((await executeAgent({
               dailyPnlPending={live.dataEnrichmentPending}
               brokerDailyPnlByAccount={brokerDailyPnlByAccount}
               dailyStats={agentStatus?.controller.dailyStats ?? null}
+              marketPrices={agentStatus?.marketPrices ?? []}
               copierObservingOnly={!copierUiDemo && agentStatus?.controller.armed === true && agentStatus.controller.shadowMode === true}
               copierKillSwitch={agentStatus?.controller.killSwitch === true}
               dayLockUntil={agentStatus?.controller.dayLockUntil ?? 0}

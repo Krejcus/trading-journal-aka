@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sloupec Pozice — všechny stavy</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-page:#f1f5f9; --bg-card:#ffffff; --bg-sunken:#f8fafc;
+  --text-primary:#0f172a; --text-secondary:#475569; --text-muted:#94a3b8;
+  --border-subtle:#e2e8f0; --accent:#4f46e5;
+  --emerald:#059669; --rose:#e11d48; --amber:#b45309;
+}
+.dark {
+  --bg-page:#020617; --bg-card:#0a0f1d; --bg-sunken:#0f172a;
+  --text-primary:#f8fafc; --text-secondary:#94a3b8; --text-muted:#475569;
+  --border-subtle:rgba(255,255,255,.08); --accent:#6366f1;
+  --emerald:#10b981; --rose:#f43f5e; --amber:#d97706;
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:26px 16px 90px; font-family:Inter,system-ui,sans-serif;
+  background:var(--bg-page); color:var(--text-primary); transition:background .25s,color .25s; }
+.wrap { max-width:1000px; margin:0 auto; }
+h1 { font-size:21px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.65; color:var(--text-secondary); max-width:80ch; margin:0 0 18px; }
+.bar { display:flex; gap:8px; align-items:center; padding:9px 12px; margin-bottom:24px;
+  border:1px solid var(--border-subtle); border-radius:12px; background:var(--bg-card); }
+.bar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+.bar button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.bar button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+
+h2 { font-size:13px; font-weight:900; margin:26px 0 8px; letter-spacing:-.01em; }
+h2 em { font-style:normal; color:var(--text-muted); font-weight:800; font-size:10px;
+  letter-spacing:.09em; text-transform:uppercase; margin-right:8px; }
+.note { font-size:12.5px; line-height:1.6; color:var(--text-secondary); margin:0 0 10px; max-width:82ch; }
+.note b { color:var(--text-primary); }
+
+table { width:100%; border-collapse:separate; border-spacing:0; border:1px solid var(--border-subtle);
+  border-radius:12px; overflow:hidden; background:var(--bg-card); }
+th { font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted);
+  text-align:left; padding:8px 12px; border-bottom:1px solid var(--border-subtle); }
+td { padding:9px 12px; border-bottom:1px solid var(--border-subtle); font-size:11.5px; vertical-align:middle; }
+tr:last-child td { border-bottom:0; }
+td.cell { width:210px; }
+td.kdy { color:var(--text-secondary); }
+td.kdy .t { color:var(--text-primary); font-weight:800; display:block; margin-bottom:2px; }
+td.kdy b { color:var(--text-primary); font-weight:800; }
+.mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; color:var(--text-muted); }
+
+/* ── přesně jako v appce ─────────────────────────────────────── */
+.stack { display:inline-flex; align-items:center; justify-content:flex-start; gap:6px; white-space:nowrap; }
+.pair { display:inline-flex; align-items:center; gap:4px; }
+.pos { display:inline-flex; align-items:center; gap:4px; border-radius:6px; border:1px solid;
+  padding:4px 8px; font-size:10px; font-weight:900; line-height:1; font-variant-numeric:tabular-nums; }
+.pos.long { border-color:color-mix(in srgb,var(--emerald) 25%,transparent);
+  background:color-mix(in srgb,var(--emerald) 10%,transparent); color:var(--emerald); }
+.pos.short { border-color:color-mix(in srgb,var(--rose) 25%,transparent);
+  background:color-mix(in srgb,var(--rose) 10%,transparent); color:var(--rose); }
+.warnchip { display:inline-flex; align-items:center; gap:2px; border-radius:6px; border:1px solid;
+  padding:4px 6px; font-size:9px; font-weight:900; line-height:1; }
+.warnchip.amber { border-color:color-mix(in srgb,var(--amber) 40%,transparent);
+  background:color-mix(in srgb,var(--amber) 15%,transparent); color:var(--amber); }
+.warnchip.rose { border-color:color-mix(in srgb,var(--rose) 45%,transparent);
+  background:color-mix(in srgb,var(--rose) 15%,transparent); color:var(--rose); }
+.pending { display:inline-flex; align-items:center; gap:4px; border-radius:6px;
+  border:1px solid var(--border-subtle); background:var(--bg-card); padding:4px 8px;
+  font-size:10px; font-weight:700; line-height:1; color:var(--text-secondary);
+  font-variant-numeric:tabular-nums; }
+.dash { font-size:12px; color:var(--text-secondary); font-variant-numeric:tabular-nums; }
+.unverified { font-size:11px; font-weight:600; color:var(--amber); }
+svg { flex:none; }
+
+/* návrh */
+.new { border-color:color-mix(in srgb,var(--accent) 45%,transparent) !important;
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 10%,transparent); }
+.pending.buy { color:var(--emerald); }
+.pending.sell { color:var(--rose); }
+.tagnew { font-size:8.5px; font-weight:900; letter-spacing:.05em; text-transform:uppercase;
+  color:var(--accent); margin-left:8px; }
+.arrow { font-size:11px; color:var(--text-muted); margin:0 8px; }
+.row2 { display:flex; align-items:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Sloupec „Pozice“ — všechny stavy, které umí</h1>
+  <p class="lede">Vyčteno přímo z <span class="mono">CopyTradePositionsCell</span>, ne z hlavy.
+    Nahoře co appka umí dnes, dole co bych přidal. Sloupec záměrně považuje za ochranu
+    <b>jen working příkaz na opačnou stranu a na přesně stejný kontrakt</b>.</p>
+
+  <div class="bar">
+    <b>Téma</b>
+    <button id="bl" aria-pressed="false" onclick="theme(false)">Světlé</button>
+    <button id="bd" aria-pressed="true" onclick="theme(true)">Tmavé</button>
+  </div>
+
+  <h2><em>1</em>Nic a neověřeno</h2>
+  <table><thead><tr><th style="width:210px">Buňka</th><th>Kdy nastane</th></tr></thead>
+  <tbody id="t1"></tbody></table>
+
+  <h2><em>2</em>Otevřená pozice</h2>
+  <p class="note">Barva chipu nese směr: zelená long, červená short. Znaménko u počtu říká totéž
+    podruhé. Štítek se štítem znamená <b>kompletní ochranu</b> — working SL i target, oba přesně
+    na velikost pozice.</p>
+  <table><thead><tr><th style="width:210px">Buňka</th><th>Kdy nastane</th></tr></thead>
+  <tbody id="t2"></tbody></table>
+
+  <h2><em>3</em>Čekající vstup</h2>
+  <p class="note">Ukáže se, jen když na tom kontraktu <b>ještě žádná pozice není</b>. Jakmile se
+    limitka vyplní, chip zmizí a nahradí ho pozice.</p>
+  <table><thead><tr><th style="width:210px">Buňka</th><th>Kdy nastane</th></tr></thead>
+  <tbody id="t3"></tbody></table>
+
+  <h2><em>4</em>Kombinace</h2>
+  <table><thead><tr><th style="width:210px">Buňka</th><th>Kdy nastane</th></tr></thead>
+  <tbody id="t4"></tbody></table>
+
+  <h2><em>Návrh</em>Co bych přidal</h2>
+  <p class="note">Tři věci. Všechny řeší jedno: <b>u čekajícího vstupu dnes nevíš, na kterou stranu
+    tě to postaví</b>, přestože u otevřené pozice to sloupec ukazuje. Nové prvky jsou orámované
+    fialově.</p>
+  <table><thead><tr><th style="width:120px">Dnes</th><th style="width:150px">Návrh</th><th>Proč</th></tr></thead>
+  <tbody id="t5"></tbody></table>
+</div>
+
+<script>
+const CLOCK = `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor"
+  stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4"/><circle cx="12" cy="12" r="10"/></svg>`;
+const SHIELD = `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor"
+  stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>`;
+const ALERT = `<svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor"
+  stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`;
+
+const pos = (symbol, qty, opts = {}) => `<span class="pos ${qty > 0 ? 'long' : 'short'}">
+  <span>${symbol}</span><span>${qty > 0 ? '+' : '−'}${Math.abs(qty)}</span>
+  ${opts.shield ? SHIELD : ''}</span>`;
+const noSl = () => `<span class="warnchip amber">${ALERT}bez SL</span>`;
+const badSl = (cov, qty) => `<span class="warnchip rose">${ALERT}SL ${cov}/${qty}</span>`;
+const pending = (symbol, qty, cls = '', sign = '') =>
+  `<span class="pending ${cls}">${CLOCK}<span>${symbol}</span><span>${sign}${qty}</span></span>`;
+const stack = (...parts) => `<span class="stack">${parts.join('')}</span>`;
+const pair = (...parts) => `<span class="pair">${parts.join('')}</span>`;
+
+const rows = (id, data) => {
+  document.getElementById(id).innerHTML = data.map(([cell, title, detail]) =>
+    `<tr><td class="cell">${cell}</td><td class="kdy"><span class="t">${title}</span>${detail}</td></tr>`).join('');
+};
+
+rows('t1', [
+  ['<span class="dash">—</span>', 'Klid',
+   'Žádná otevřená pozice a žádný čekající limit ani stop na tomto účtu.'],
+  ['<span class="unverified">Pozice neověřené</span>', 'Snapshot pozic není potvrzený',
+   'Sloupec radši nic netvrdí, než aby ukázal prázdno, které by se dalo číst jako „jsem flat“.'],
+  ['<span class="unverified">Příkazy neověřené</span>', 'Pozice potvrzené, příkazy ne',
+   'Bez potvrzených příkazů nejde říct, jestli je pozice krytá — tak se netvrdí ani to.'],
+]);
+
+rows('t2', [
+  [stack(pair(pos('MNQ', 3, { shield:true }))), 'Long s kompletní ochranou',
+   'Working SL i target, oba přesně na 3 kontrakty. Štít svítí jen v tomhle jediném případě.'],
+  [stack(pair(pos('MNQ', -2, { shield:true }))), 'Short s kompletní ochranou',
+   'Totéž na druhou stranu; barva a znaménko nesou směr.'],
+  [stack(pair(pos('MNQ', 3))), 'SL sedí, target chybí',
+   'Nejtišší stav: chip bez štítu a bez varování. Pozice má přesný SL, ale žádný cíl.'],
+  [stack(pair(pos('MNQ', 3), noSl())), 'Bez working stop lossu',
+   'Žádný working příkaz na opačnou stranu. Oranžová, protože riziko je otevřené.'],
+  [stack(pair(pos('MNQ', 3), badSl(2, 3))), 'SL nekryje celou pozici',
+   'Working SL na 2 z 3 kontraktů — po zásahu zbyde nekrytý zbytek.'],
+  [stack(pair(pos('MNQ', 3), badSl(5, 3))), 'SL je větší než pozice',
+   'Červená i tady: po fillu by přebytek účet otočil do protipozice. Víc není lepší.'],
+  [stack(pair(pos('MNQ', 3, { shield:true })), pair(pos('MES', -1), noSl())),
+   'Dvě pozice naráz', 'Každý kontrakt má vlastní chip i vlastní posouzení ochrany.'],
+]);
+
+rows('t3', [
+  [stack(pending('MNQ', 3)), 'Čekající limitka',
+   'Buy Limit i Sell Limit vypadají <b>úplně stejně</b>. Typ je jen v tooltipu („Limit entry čeká na fill“).'],
+  [stack(pending('MNQ', 3)), 'Čekající stopka',
+   'Stop entry dostane tentýž šedý chip. Od limitky ho nerozeznáš jinak než najetím myší.'],
+]);
+
+rows('t4', [
+  [stack(pair(pos('MNQ', 3, { shield:true })), pending('MES', 2)),
+   'Pozice na jednom kontraktu, čekající vstup na druhém',
+   'Čekající vstup na MNQ by se skryl — na tom kontraktu už pozice je.'],
+  [stack(pair(pos('MNQ', 3), noSl()), pending('MES', 2)),
+   'Nekrytá pozice a k tomu další vstup na cestě',
+   'Stav, kdy se expozice chystá narůst dřív, než je ta stávající zajištěná.'],
+]);
+
+document.getElementById('t5').innerHTML = [
+  [stack(pending('MNQ', 3)),
+   stack(`<span class="pending buy new">${CLOCK}<span>MNQ</span><span>+3</span></span>`),
+   '<b>Znaménko a barva i u čekajícího vstupu.</b> Buy zeleně s <span class="mono">+</span>, Sell červeně s <span class="mono">−</span> — stejný jazyk, jaký už sloupec používá u otevřených pozic. Dnes „MNQ 3“ neříká, na kterou stranu tě to postaví.'],
+  [stack(pending('MNQ', 3)),
+   stack(`<span class="pending sell new">${CLOCK}<span>MNQ</span><span>−3</span></span>`),
+   'Sell Limit. Odstín je tlumenější než u otevřené pozice, protože v trhu ještě nejsi — plná barva patří jen skutečné expozici.'],
+  [stack(pending('MNQ', 3)),
+   stack(`<span class="pending buy new">${CLOCK}<span>MNQ</span><span>+3</span></span>`),
+   '<b>Popisek pro čtečku a tooltip.</b> Dnes „Čekající vstup MNQ, 3 kontraktů“ — navrhuju „Čekající <b>Buy Limit</b> MNQ, 3 kontrakty“, tedy i směr i typ.'],
+].map(([a, b, why]) =>
+  `<tr><td>${a}</td><td>${b}<span class="tagnew">nové</span></td><td class="kdy">${why}</td></tr>`).join('');
+
+function theme(dark) {
+  document.documentElement.classList.toggle('dark', dark);
+  document.getElementById('bd').setAttribute('aria-pressed', String(dark));
+  document.getElementById('bl').setAttribute('aria-pressed', String(!dark));
+}
+theme(true);
+</script>
+</body>
+</html>

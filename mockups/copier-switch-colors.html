@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zelená přepínače — vzorník</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-page:#f8fafc; --bg-card:#ffffff; --text-primary:#0f172a; --text-secondary:#475569;
+  --text-muted:#94a3b8; --border-subtle:#e2e8f0; --track:#e2e8f0;
+}
+.dark {
+  --bg-page:#020617; --bg-card:#0a0f1d; --text-primary:#f8fafc; --text-secondary:#94a3b8;
+  --text-muted:#475569; --border-subtle:rgba(255,255,255,.08); --track:#1e293b;
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:28px 16px 64px; font-family:Inter,system-ui,sans-serif;
+  background:var(--bg-page); color:var(--text-primary); transition:background .25s,color .25s; }
+.wrap { max-width:940px; margin:0 auto; }
+h1 { font-size:21px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.6; color:var(--text-secondary); max-width:74ch; margin:0 0 20px; }
+.bar { position:sticky; top:10px; z-index:20; display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+  padding:9px 12px; margin-bottom:22px; border:1px solid var(--border-subtle); border-radius:12px;
+  background:var(--bg-card); box-shadow:0 4px 16px -8px rgba(0,0,0,.3); }
+.bar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+.bar button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.bar button[aria-pressed="true"] { background:#6366f1; border-color:#6366f1; color:#fff; }
+
+table { width:100%; border-collapse:separate; border-spacing:0; border:1px solid var(--border-subtle);
+  border-radius:12px; overflow:hidden; background:var(--bg-card); }
+th { font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted);
+  text-align:left; padding:10px 14px; border-bottom:1px solid var(--border-subtle); }
+td { padding:11px 14px; border-bottom:1px solid var(--border-subtle); font-size:12px; vertical-align:middle; }
+tr:last-child td { border-bottom:0; }
+tr.sel td { background:color-mix(in srgb, var(--c) 8%, transparent); }
+.name { font-weight:800; }
+.hex { font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--text-secondary); }
+.desc { font-size:11px; color:var(--text-secondary); }
+
+/* přepínač — přesně velikost B z appky: 56 × 22 */
+.sw { position:relative; width:56px; height:22px; flex:none; border:0; padding:0; border-radius:999px;
+  cursor:pointer; background:color-mix(in srgb, var(--text-muted) 26%, transparent);
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.14); transition:background .3s, box-shadow .35s; }
+.sw[aria-checked="true"] { background:var(--c);
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.1), 0 0 0 2px color-mix(in srgb, var(--c) 16%, transparent); }
+.sw .lb { position:absolute; top:50%; font-size:7.5px; font-weight:900; letter-spacing:.08em;
+  transform:translateY(-50%); transition:opacity .22s, transform .28s cubic-bezier(.34,1.3,.5,1); }
+.sw .on  { left:8px; color:#fff; opacity:0; transform:translate(-5px,-50%); }
+.sw .off { right:8px; color:var(--text-secondary); opacity:1; }
+.sw[aria-checked="true"] .on  { opacity:1; transform:translateY(-50%); }
+.sw[aria-checked="true"] .off { opacity:0; transform:translate(5px,-50%); }
+.sw i { position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:999px; background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.26); transition:transform .3s cubic-bezier(.34,1.5,.45,1); }
+.sw[aria-checked="true"] i { transform:translateX(34px); }
+
+/* jak odstín působí na ostatních místech, kde appka zelenou používá */
+.ctx { display:flex; align-items:center; gap:10px; }
+.ctx .pill { display:inline-flex; align-items:center; gap:5px; padding:3px 8px; border-radius:999px;
+  font-size:9px; font-weight:900; letter-spacing:.07em; text-transform:uppercase;
+  border:1px solid color-mix(in srgb, var(--c) 40%, transparent);
+  background:color-mix(in srgb, var(--c) 12%, transparent); color:var(--c); }
+.ctx .pill em { width:5px; height:5px; border-radius:999px; background:var(--c); font-style:normal; }
+.ctx .num { font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:700; color:var(--c); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Zelená přepínače</h1>
+  <p class="lede">Šest odstínů na přepínači ve skutečné velikosti (56 × 22 px). Vpravo je vidět, jak by
+    tentýž odstín vypadal na štítku stavu a na kladném P&amp;L — appka totiž zelenou používá i tam,
+    takže výběr se týká i ostrova a rámu skupiny. Klikni na řádek a přepínač se přepne.</p>
+
+  <div class="bar">
+    <b>Téma</b>
+    <button id="bl" aria-pressed="true" onclick="theme(false)">Světlé</button>
+    <button id="bd" aria-pressed="false" onclick="theme(true)">Tmavé</button>
+    <span style="width:10px"></span>
+    <b>Vše</b>
+    <button onclick="all(false)">Vypnout</button>
+    <button onclick="all(true)">Zapnout</button>
+  </div>
+
+  <table>
+    <thead><tr><th style="width:90px">Přepínač</th><th style="width:150px">Odstín</th><th style="width:200px">V kontextu</th><th>Charakter</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+
+<script>
+const SHADES = [
+  { hex:'#10b981', name:'Emerald 500', note:'Dnešní. Systémová zelená appky — do modra, chladná.' },
+  { hex:'#22c55e', name:'Green 500', note:'Klasická listová zelená, teplejší a přívětivější než dnešní.' },
+  { hex:'#16a34a', name:'Green 600', note:'Tmavší a klidnější. Na světlém pozadí drží, na tmavém zašedne.' },
+  { hex:'#00c853', name:'Signal 500', note:'Živá „obchodní“ zelená, jakou mají terminály. Nejvíc svítí.' },
+  { hex:'#34d399', name:'Emerald 400', note:'Světlejší a měkčí varianta dnešní. Na tmavém pozadí čitelnější.' },
+  { hex:'#059669', name:'Emerald 600', note:'Ztlumená, skoro lahvová. Nejméně křičí, hodí se k ostrovu.' },
+];
+
+const rows = document.getElementById('rows');
+rows.innerHTML = SHADES.map((s, i) => `
+  <tr style="--c:${s.hex}" data-i="${i}">
+    <td>
+      <button class="sw" role="switch" aria-checked="false">
+        <span class="lb on">ON</span><span class="lb off">OFF</span><i></i>
+      </button>
+    </td>
+    <td><div class="name">${s.name}</div><div class="hex">${s.hex}</div></td>
+    <td><div class="ctx"><span class="pill"><em></em>Zapnutá</span><span class="num">+$124</span></div></td>
+    <td class="desc">${s.note}</td>
+  </tr>`).join('');
+
+function theme(dark) {
+  document.documentElement.classList.toggle('dark', dark);
+  document.getElementById('bd').setAttribute('aria-pressed', String(dark));
+  document.getElementById('bl').setAttribute('aria-pressed', String(!dark));
+}
+function set(tr, on) {
+  tr.classList.toggle('sel', on);
+  tr.querySelector('.sw').setAttribute('aria-checked', String(on));
+}
+function all(on) { for (const tr of rows.children) set(tr, on); }
+for (const tr of rows.children) {
+  tr.addEventListener('click', () => set(tr, tr.querySelector('.sw').getAttribute('aria-checked') !== 'true'));
+}
+all(true);
+</script>
+</body>
+</html>

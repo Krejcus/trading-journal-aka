@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor skupiny — návrhy</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-page:#f1f5f9; --bg-card:#ffffff; --bg-sunken:#f8fafc;
+  --text-primary:#0f172a; --text-secondary:#475569; --text-muted:#94a3b8;
+  --border-subtle:#e2e8f0; --accent:#4f46e5; --accent-soft:rgba(79,70,229,.1);
+  --ok:#059669; --warn:#b45309; --danger:#e11d48; --shadow:0 24px 60px -24px rgba(15,23,42,.35);
+}
+.dark {
+  --bg-page:#020617; --bg-card:#0a0f1d; --bg-sunken:#0f172a;
+  --text-primary:#f8fafc; --text-secondary:#94a3b8; --text-muted:#475569;
+  --border-subtle:rgba(255,255,255,.08); --accent:#6366f1; --accent-soft:rgba(99,102,241,.16);
+  --ok:#34d399; --warn:#fbbf24; --danger:#fb7185; --shadow:0 24px 60px -24px rgba(0,0,0,.8);
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:26px 16px 80px; font-family:Inter,system-ui,sans-serif;
+  background:var(--bg-page); color:var(--text-primary); transition:background .25s,color .25s; }
+.wrap { max-width:1180px; margin:0 auto; }
+h1 { font-size:22px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.65; color:var(--text-secondary); max-width:82ch; margin:0 0 18px; }
+.bar { position:sticky; top:10px; z-index:40; display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+  padding:9px 12px; margin-bottom:24px; border:1px solid var(--border-subtle); border-radius:12px;
+  background:var(--bg-card); box-shadow:0 4px 16px -8px rgba(0,0,0,.35); }
+.bar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+.bar button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.bar button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+
+.findings { display:grid; gap:8px; margin-bottom:34px; }
+.finding { display:grid; grid-template-columns:52px 1fr; gap:12px; align-items:baseline;
+  padding:10px 12px; border:1px solid var(--border-subtle); border-radius:10px; background:var(--bg-card); }
+.finding .n { font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:700; color:var(--danger); }
+.finding .t { font-size:12.5px; line-height:1.55; color:var(--text-secondary); }
+.finding .t b { color:var(--text-primary); }
+
+.spec { margin-bottom:46px; }
+.spec > header { margin-bottom:12px; }
+.spec h2 { font-size:15px; font-weight:900; margin:0 0 4px; letter-spacing:-.01em; }
+.spec h2 em { font-style:normal; color:var(--text-muted); font-weight:800; font-size:11px;
+  letter-spacing:.08em; text-transform:uppercase; margin-right:8px; }
+.spec p { font-size:12.5px; line-height:1.6; color:var(--text-secondary); margin:0; max-width:80ch; }
+.tags { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+.tag { font-size:9.5px; font-weight:800; letter-spacing:.05em; text-transform:uppercase;
+  padding:3px 7px; border-radius:6px; background:var(--bg-sunken); border:1px solid var(--border-subtle);
+  color:var(--text-secondary); }
+.tag.good { color:var(--ok); border-color:color-mix(in srgb,var(--ok) 35%,transparent); background:color-mix(in srgb,var(--ok) 10%,transparent); }
+.tag.warn { color:var(--warn); border-color:color-mix(in srgb,var(--warn) 32%,transparent); background:color-mix(in srgb,var(--warn) 10%,transparent); }
+
+/* ─── skořápka dialogu ─────────────────────────────────────────── */
+.dlg { display:flex; flex-direction:column; border:1px solid var(--border-subtle); border-radius:14px;
+  background:var(--bg-card); box-shadow:var(--shadow); overflow:hidden; }
+.dlg-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
+  padding:13px 18px; border-bottom:1px solid var(--border-subtle); }
+.dlg-head h3 { margin:0; font-size:15px; font-weight:900; letter-spacing:-.01em; }
+.dlg-head .sub { font-size:11px; color:var(--text-secondary); margin-top:2px; }
+.xbtn { width:28px; height:28px; border:0; border-radius:8px; background:transparent; cursor:pointer;
+  color:var(--text-secondary); font-size:15px; line-height:1; }
+.dlg-foot { display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:11px 18px; border-top:1px solid var(--border-subtle); }
+.btn-ghost { font:inherit; font-size:11.5px; font-weight:800; padding:8px 11px; border:0; border-radius:9px;
+  background:transparent; color:var(--text-secondary); cursor:pointer; }
+.btn-line { font:inherit; font-size:11.5px; font-weight:800; padding:8px 14px; border-radius:9px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.btn-primary { font:inherit; font-size:11.5px; font-weight:800; padding:8px 18px; border:0; border-radius:9px;
+  background:var(--accent); color:#fff; cursor:pointer; }
+.btn-danger { font:inherit; font-size:11.5px; font-weight:800; padding:8px 11px; border:0; border-radius:9px;
+  background:transparent; color:var(--danger); cursor:pointer; }
+
+/* ─── hlavička identity ────────────────────────────────────────── */
+.ident { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.ident input[type=text] { font:inherit; font-size:13px; font-weight:800; height:34px; padding:0 11px;
+  border-radius:9px; border:1px solid var(--border-subtle); background:var(--bg-sunken);
+  color:var(--text-primary); width:220px; outline:none; }
+.ident input[type=text]:focus { border-color:var(--accent); }
+.swatches { display:flex; gap:5px; }
+.sw { width:20px; height:20px; border-radius:999px; border:2px solid transparent; cursor:pointer; padding:0; }
+.sw[aria-pressed="true"] { border-color:var(--text-primary); transform:scale(1.12); }
+
+/* ─── tabulka rolí ─────────────────────────────────────────────── */
+.roles { width:100%; border-collapse:separate; border-spacing:0; }
+.roles th { font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted);
+  text-align:left; padding:7px 10px; border-bottom:1px solid var(--border-subtle); white-space:nowrap; }
+.roles th.r, .roles td.r { text-align:right; }
+.roles td { padding:6px 10px; border-bottom:1px solid var(--border-subtle); font-size:12px; vertical-align:middle; }
+.roles tr:last-child td { border-bottom:0; }
+.roles tr.is-leader td { background:color-mix(in srgb, #f59e0b 9%, transparent); }
+.roles tr.is-follower td { background:color-mix(in srgb, var(--accent) 5%, transparent); }
+.acct b { display:block; font-size:12px; font-weight:800; }
+.acct span { display:block; font-size:10px; color:var(--text-secondary); margin-top:1px; }
+.roleseg { display:inline-flex; padding:2px; gap:2px; border-radius:8px; background:var(--bg-sunken);
+  border:1px solid var(--border-subtle); }
+.roleseg button { font:inherit; font-size:10px; font-weight:800; padding:4px 9px; border:0; border-radius:6px;
+  background:transparent; color:var(--text-muted); cursor:pointer; }
+.roleseg button[aria-pressed="true"] { background:var(--bg-card); color:var(--text-primary);
+  box-shadow:0 1px 2px rgba(0,0,0,.18); }
+.roleseg button.lead[aria-pressed="true"] { background:#f59e0b; color:#3b2600; }
+.roleseg button.foll[aria-pressed="true"] { background:var(--accent); color:#fff; }
+.roles select, .roles input[type=number] { font:inherit; font-size:11px; font-weight:700; height:28px;
+  border-radius:7px; border:1px solid var(--border-subtle); background:var(--bg-card); color:var(--text-primary);
+  padding:0 6px; }
+.roles input[type=number] { width:62px; text-align:right; }
+.roles [disabled] { opacity:.28; }
+.dash { color:var(--text-muted); font-size:11px; }
+
+/* ─── ochrany ──────────────────────────────────────────────────── */
+.guards { display:grid; gap:1px; background:var(--border-subtle); border:1px solid var(--border-subtle);
+  border-radius:10px; overflow:hidden; }
+.guard { display:flex; gap:10px; align-items:flex-start; padding:9px 12px; background:var(--bg-card); }
+.guard input { margin-top:2px; accent-color:var(--accent); }
+.guard b { font-size:11.5px; font-weight:800; display:block; }
+.guard span { font-size:10.5px; line-height:1.5; color:var(--text-secondary); display:block; margin-top:1px; }
+.guard b { white-space:nowrap; }
+.pill-req { font-size:8.5px; font-weight:900; letter-spacing:.06em; text-transform:uppercase; color:var(--ok);
+  margin-left:6px; }
+
+/* ─── přehled změn ─────────────────────────────────────────────── */
+.diff { border:1px solid var(--border-subtle); border-radius:10px; overflow:hidden; }
+.diff-row { display:flex; align-items:center; gap:8px; padding:7px 11px; font-size:11.5px;
+  border-bottom:1px solid var(--border-subtle); }
+.diff-row:last-child { border-bottom:0; }
+.diff-row b { font-weight:800; }
+.badge { font-size:8.5px; font-weight:900; letter-spacing:.05em; text-transform:uppercase; padding:2px 6px;
+  border-radius:5px; }
+.badge.add { color:var(--ok); background:color-mix(in srgb,var(--ok) 13%,transparent); }
+.badge.del { color:var(--danger); background:color-mix(in srgb,var(--danger) 13%,transparent); }
+.badge.chg { color:var(--warn); background:color-mix(in srgb,var(--warn) 15%,transparent); }
+.diff-empty { padding:16px; text-align:center; font-size:11px; color:var(--text-muted); font-weight:600; }
+
+.sect { padding:0 0 14px; }
+.sect > h4 { margin:0 0 7px; font-size:9.5px; font-weight:900; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--text-muted); }
+.hint { font-size:10.5px; color:var(--text-muted); font-weight:600; }
+
+/* ─── A: boční lišta ───────────────────────────────────────────── */
+.split { display:grid; grid-template-columns:172px 1fr; }
+.rail { border-right:1px solid var(--border-subtle); background:var(--bg-sunken); padding:9px 8px; }
+.rail button { display:flex; width:100%; align-items:center; justify-content:space-between; gap:8px;
+  font:inherit; font-size:12px; font-weight:700; padding:7px 10px; border:0; border-radius:8px;
+  background:transparent; color:var(--text-secondary); cursor:pointer; text-align:left; }
+.rail button[aria-current="true"] { background:var(--accent-soft); color:var(--accent); font-weight:800; }
+.dark .rail button[aria-current="true"] { color:#a5b4fc; }
+.rail .cnt { font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:700; opacity:.75; }
+.rail .warn { color:var(--warn); font-size:11px; }
+.pane { padding:13px 14px; min-height:0; }
+.scroll { max-height:330px; overflow-y:auto; }
+
+/* ─── C: dva sloupce ───────────────────────────────────────────── */
+.twocol { display:grid; grid-template-columns:1fr 268px; }
+.twocol > .side { border-left:1px solid var(--border-subtle); background:var(--bg-sunken); padding:13px; }
+.side h4 { margin:0 0 3px; font-size:9.5px; font-weight:900; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--text-muted); }
+.side .note { font-size:10.5px; color:var(--text-secondary); line-height:1.5; margin:0 0 10px; }
+.summary { font-size:11.5px; }
+.summary div { display:flex; justify-content:space-between; gap:10px; padding:5px 0;
+  border-bottom:1px dashed var(--border-subtle); }
+.summary div:last-child { border-bottom:0; }
+.summary span:last-child { font-weight:800; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Založení a úprava skupiny — návrhy</h1>
+  <p class="lede">Nejdřív co jsem naměřil na dnešním dialogu, pak tři návrhy. Všechny pracují se
+    skutečnými účty, skutečnými ochranami a skutečnými volbami replikace. Klikat jde všechno —
+    role, násobky i ochrany; přehled změn se přepočítává živě.</p>
+
+  <div class="bar">
+    <b>Téma</b>
+    <button id="bl" aria-pressed="false" onclick="theme(false)">Světlé</button>
+    <button id="bd" aria-pressed="true" onclick="theme(true)">Tmavé</button>
+  </div>
+
+  <h2 style="font-size:14px;font-weight:900;margin:0 0 10px">Co je na dnešním dialogu špatně</h2>
+  <div class="findings">
+    <div class="finding"><span class="n">3×</span><span class="t"><b>Úprava jede stejným průvodcem jako založení.</b>
+      Otevřeš existující skupinu „Hlavní“ se třemi followery a začínáš na obrazovce „Pojmenuj skupinu“.
+      Záložky kroků jdou jen zpátky, ne dopředu — než změníš jeden násobek, klikneš 3× na „Další“.</span></div>
+    <div class="finding"><span class="n">370</span><span class="t"><b>Dialog mění výšku mezi kroky o 370 px.</b>
+      400 → 545 → 612 → 770 px. Tlačítka „Další“ a „Zpět“ ti pokaždé utečou zpod kurzoru.</span></div>
+    <div class="finding"><span class="n">301</span><span class="t"><b>Poslední krok přetéká o 301 px.</b>
+      Obsah měří 886 px do okna vysokého 585 px — a <b>přehled změn před uložením</b>, tedy to nejdůležitější,
+      je celý pod okrajem.</span></div>
+    <div class="finding"><span class="n">2×</span><span class="t"><b>Účty se vybírají dvakrát ze stejného seznamu.</b>
+      Krok „Leader“ ukáže všech šest účtů, krok „Followeři“ těch samých pět zbylých. Je to jedna otázka
+      rozdělená na dvě obrazovky.</span></div>
+    <div class="finding"><span class="n">15</span><span class="t"><b>Patnáct mrtvých ovládacích prvků při otevření.</b>
+      V tabulce followerů má každý řádek Replikaci, Násobek a Max — všechny zašedlé, dokud nezaškrtneš účet.</span></div>
+    <div class="finding"><span class="n">1</span><span class="t"><b>Celá obrazovka za jedno textové pole.</b>
+      Krok „Identita“ je 768 × 400 px za název a osm koleček barvy.</span></div>
+  </div>
+
+  <!-- ══ A ══════════════════════════════════════════════════════ -->
+  <section class="spec">
+    <header>
+      <h2><em>Návrh A</em>Boční lišta — stejný tvar jako Nastavení tabulky</h2>
+      <p>Žádné kroky. Vlevo čtyři oblasti, každá na jedno kliknutí, u každé rovnou stav
+        („Leader vybrán“, „3 followeři“). Průvodce zmizí i pro novou skupinu — místo nucené cesty
+        lišta ukazuje, co ještě chybí, žlutým vykřičníkem. Ladí s dialogem nastavení tabulky,
+        který jsme právě udělali.</p>
+      <div class="tags"><span class="tag good">úprava na jedno kliknutí</span><span class="tag good">známý tvar</span>
+        <span class="tag warn">u nové skupiny neurčuje pořadí</span></div>
+    </header>
+    <div class="dlg" style="max-width:830px" id="A"></div>
+  </section>
+
+  <!-- ══ B ══════════════════════════════════════════════════════ -->
+  <section class="spec">
+    <header>
+      <h2><em>Návrh B</em>Jedna tabulka rolí — všechno na jedné obrazovce</h2>
+      <p>Nejradikálnější zjednodušení: dva kroky výběru účtů splynou do jedné tabulky, kde každý
+        řádek má přepínač role <b>Leader / Follower / —</b>. Násobek a Max se zpřístupní teprve tomu,
+        kdo je follower, takže nesvítí mrtvé ovládání. Název s barvou je proužek v hlavičce,
+        ochrany a přehled změn jsou rozbalovací pod tabulkou. Celý editor je jedna obrazovka.</p>
+      <div class="tags"><span class="tag good">nejméně kliknutí</span><span class="tag good">role vidíš naráz</span>
+        <span class="tag warn">při 20 účtech dlouhá tabulka</span></div>
+    </header>
+    <div class="dlg" style="max-width:820px" id="B"></div>
+  </section>
+
+  <!-- ══ C ══════════════════════════════════════════════════════ -->
+  <section class="spec">
+    <header>
+      <h2><em>Návrh C</em>Formulář vlevo, co se uloží vpravo</h2>
+      <p>Tabulka rolí jako v B, ale vpravo trvale visí panel <b>„Co se uloží“</b> — leader, počet
+        followerů, celková expozice a seznam změn proti uložené skupině. Přehled změn dnes leží
+        schovaný pod okrajem posledního kroku; tady ho máš pořád na očích, takže před uložením
+        nemusíš nikam scrollovat.</p>
+      <div class="tags"><span class="tag good">kontrola před uložením</span><span class="tag good">expozice naráz</span>
+        <span class="tag warn">nejširší okno (1000 px)</span></div>
+    </header>
+    <div class="dlg" style="max-width:1000px" id="C"></div>
+  </section>
+
+  <div class="finding" style="max-width:1000px;border-color:color-mix(in srgb,var(--warn) 30%,transparent)">
+    <span class="n" style="color:var(--warn)">D</span>
+    <span class="t"><b>Nejlevnější varianta, kdyby se ti nic z toho nelíbilo:</b> nechat dnešního
+      průvodce pro <i>novou</i> skupinu a při <i>úpravě</i> jen odemknout všechny čtyři záložky
+      a sjednotit výšku dialogu. Je to změna dvou podmínek v kódu a odstraní to nejhorší bolest
+      (3× „Další“ kvůli jednomu násobku), ale zbytek problémů zůstane.</span>
+  </div>
+</div>
+
+<script>
+/* ── skutečná data ────────────────────────────────────────────── */
+const ACCOUNTS = [
+  { id:1, name:'LFF05066846490007', firm:'Lucid',    balance:51525 },
+  { id:2, name:'TDF-50K-118204',    firm:'Tradeify', balance:50310 },
+  { id:3, name:'TDF-50K-118205',    firm:'Tradeify', balance:49880 },
+  { id:4, name:'TDF-100K-90412',    firm:'Tradeify', balance:101240 },
+  { id:5, name:'APEX-184920',       firm:'Apex',     balance:49500 },
+  { id:6, name:'LFF05066846490011', firm:'Lucid',    balance:50000 },
+];
+const MODES = [['off','Vypnuto'], ['on-submit','Při zadání'], ['on-fill','Při vyplnění']];
+const GUARDS = [
+  ['positionReconciler', 'Kontrola shody pozic',
+   'Po každém vyplnění followera ověří, že nová pozice odpovídá směru a symbolu leadera.'],
+  ['disableReplicationOnBreach', 'Zastavit skupinu při nesouladu',
+   'Povinná fail-closed ochrana: rozdíl na jediném followerovi okamžitě zastaví replikaci celé skupiny.'],
+  ['autoCloseFollowerPositions', 'Automaticky zavřít pozice followerů',
+   'Jakmile se zavře pozice leadera, automaticky zavře odpovídající pozice followerů.'],
+  ['preventHedging', 'Zabránit opačné pozici',
+   'Nedovolí opačnému příkazu překlopit follower účet do obráceného směru.'],
+];
+const COLORS = ['#6366f1','#f97316','#d946ef','#84cc16','#06b6d4','#ec4899','#8b5cf6','#94a3b8'];
+
+/** Uložená skupina, proti které se počítá přehled změn. */
+const SAVED = {
+  name:'Hlavní', color:'#6366f1', leader:1,
+  followers:{ 2:{mode:'on-submit',mult:1,max:null}, 3:{mode:'on-submit',mult:2,max:null},
+              4:{mode:'on-fill',mult:1,max:5} },
+};
+const fresh = () => ({
+  name:SAVED.name, color:SAVED.color, leader:SAVED.leader,
+  followers:JSON.parse(JSON.stringify(SAVED.followers)),
+  guards:{ positionReconciler:true, disableReplicationOnBreach:true,
+           autoCloseFollowerPositions:true, preventHedging:true },
+  section:'accounts', open:{ guards:false, diff:true },
+});
+const S = { A:fresh(), B:fresh(), C:fresh() };
+
+const usd = new Intl.NumberFormat('cs-CZ',{style:'currency',currency:'USD',maximumFractionDigits:0});
+const modeLabel = m => (MODES.find(x=>x[0]===m)||[])[1] ?? m;
+const roleOf = (s,id) => s.leader===id ? 'leader' : s.followers[id] ? 'follower' : 'none';
+
+/* ── přehled změn ─────────────────────────────────────────────── */
+function diffRows(s) {
+  const out = [];
+  if (s.name !== SAVED.name) out.push(['chg','Název', `${SAVED.name} → ${s.name || '—'}`]);
+  if (s.leader !== SAVED.leader) {
+    const from = ACCOUNTS.find(a=>a.id===SAVED.leader)?.name ?? 'nevybrán';
+    const to = ACCOUNTS.find(a=>a.id===s.leader)?.name ?? 'nevybrán';
+    out.push(['chg','Leader', `${from} → ${to}`]);
+  }
+  for (const a of ACCOUNTS) {
+    const was = SAVED.followers[a.id], now = s.followers[a.id];
+    if (!was && now) out.push(['add', a.name, `${modeLabel(now.mode)} · ${now.mult}× · max ${now.max ?? '∞'}`]);
+    else if (was && !now) out.push(['del', a.name, 'odebrán ze skupiny']);
+    else if (was && now && (was.mode!==now.mode || was.mult!==now.mult || (was.max??null)!==(now.max??null))) {
+      const bits = [];
+      if (was.mode!==now.mode) bits.push(`${modeLabel(was.mode)} → ${modeLabel(now.mode)}`);
+      if (was.mult!==now.mult) bits.push(`${was.mult}× → ${now.mult}×`);
+      if ((was.max??null)!==(now.max??null)) bits.push(`max ${was.max ?? '∞'} → ${now.max ?? '∞'}`);
+      out.push(['chg', a.name, bits.join(' · ')]);
+    }
+  }
+  return out;
+}
+const diffHtml = s => {
+  const rows = diffRows(s);
+  if (!rows.length) return '<div class="diff"><div class="diff-empty">Zatím žádná změna proti uložené skupině</div></div>';
+  return '<div class="diff">' + rows.map(([kind,label,text]) =>
+    `<div class="diff-row"><span class="badge ${kind}">${kind==='add'?'přidán':kind==='del'?'odebrán':'změna'}</span>
+      <b>${label}</b><span style="color:var(--text-secondary)">${text}</span></div>`).join('') + '</div>';
+};
+
+/* ── tabulka rolí ─────────────────────────────────────────────── */
+function rolesHtml(v) {
+  const s = S[v];
+  return `<table class="roles">
+    <thead><tr>
+      <th style="width:44%">Účet</th><th style="width:150px">Role</th>
+      <th>Replikace</th><th class="r">Násobek</th>
+      <th class="r" title="Tvrdý strop expozice; překročení odmítne celý příkaz a odzbrojí copier">Max</th>
+    </tr></thead><tbody>
+    ${ACCOUNTS.map(a => {
+      const role = roleOf(s,a.id), f = s.followers[a.id];
+      return `<tr class="${role==='leader'?'is-leader':role==='follower'?'is-follower':''}">
+        <td class="acct"><b>${a.name}</b><span>${a.firm} · ${usd.format(a.balance)}</span></td>
+        <td><div class="roleseg">
+          <button class="lead" aria-pressed="${role==='leader'}" onclick="setRole('${v}',${a.id},'leader')">Leader</button>
+          <button class="foll" aria-pressed="${role==='follower'}" onclick="setRole('${v}',${a.id},'follower')">Follower</button>
+          <button aria-pressed="${role==='none'}" onclick="setRole('${v}',${a.id},'none')">—</button>
+        </div></td>
+        ${role==='follower' ? `
+          <td><select onchange="setField('${v}',${a.id},'mode',this.value)">
+            ${MODES.map(([k,l])=>`<option value="${k}" ${f.mode===k?'selected':''}>${l}</option>`).join('')}
+          </select></td>
+          <td class="r"><input type="number" min="0.01" step="0.25" value="${f.mult}"
+              aria-label="Násobek ${a.name}" onchange="setField('${v}',${a.id},'mult',Number(this.value))"></td>
+          <td class="r"><input type="number" min="1" step="1" placeholder="∞" value="${f.max ?? ''}"
+              aria-label="Max kontrakty ${a.name}" onchange="setField('${v}',${a.id},'max',this.value?Number(this.value):null)"></td>
+        ` : `<td colspan="3" class="dash">${role==='leader' ? 'Leader se nekopíruje sám na sebe' : 'mimo skupinu'}</td>`}
+      </tr>`;
+    }).join('')}
+    </tbody></table>`;
+}
+function setRole(v, id, role) {
+  const s = S[v];
+  if (role === 'leader') { if (s.leader === id) return; delete s.followers[id]; s.leader = id; }
+  else if (role === 'follower') { if (s.leader === id) s.leader = null; s.followers[id] ??= { mode:'on-submit', mult:1, max:null }; }
+  else { if (s.leader === id) s.leader = null; delete s.followers[id]; }
+  render(v);
+}
+function setField(v, id, key, value) { S[v].followers[id][key] = value; render(v); }
+function setGuard(v, key, on) { S[v].guards[key] = on; render(v); }
+function setName(v, value) { S[v].name = value; render(v, true); }
+function setColor(v, color) { S[v].color = color; render(v); }
+
+const identHtml = v => {
+  const s = S[v];
+  return `<div class="ident">
+    <input type="text" value="${s.name}" placeholder="např. Tradeify 50K" aria-label="Název skupiny"
+      oninput="setName('${v}', this.value)">
+    <div class="swatches">${COLORS.map(c =>
+      `<button class="sw" style="background:${c}" aria-pressed="${s.color===c}" aria-label="Barva ${c}"
+        onclick="setColor('${v}','${c}')"></button>`).join('')}</div>
+  </div>`;
+};
+const guardsHtml = v => {
+  const s = S[v];
+  return `<div class="guards">${GUARDS.map(([key,title,detail]) => {
+    const req = key === 'disableReplicationOnBreach';
+    return `<label class="guard">
+      <input type="checkbox" ${s.guards[key]||req?'checked':''} ${req?'disabled':''}
+        onchange="setGuard('${v}','${key}',this.checked)">
+      <span><b>${title}${req?'<span class="pill-req">povinné</span>':''}</b><span>${detail}</span></span>
+    </label>`; }).join('')}</div>`;
+};
+const exposure = s => Object.entries(s.followers)
+  .reduce((sum,[,f]) => sum + (f.mode==='off' ? 0 : f.mult), 0);
+
+/* ── A: boční lišta ───────────────────────────────────────────── */
+const A_SECTIONS = [
+  ['identity', 'Skupina'], ['accounts', 'Účty'], ['guards', 'Ochrany'], ['review', 'Přehled'],
+];
+function renderA(keepFocus) {
+  const s = S.A, n = Object.keys(s.followers).length;
+  const status = {
+    identity: s.name.trim() ? '✓' : '<span class="warn">!</span>',
+    accounts: (s.leader != null && n > 0) ? `1 + ${n}` : '<span class="warn">!</span>',
+    guards: `${Object.values(s.guards).filter(Boolean).length}/4`,
+    review: String(diffRows(s).length),
+  };
+  const pane = {
+    identity: `<div class="sect"><h4>Název a barva</h4>${identHtml('A')}
+      <p class="hint" style="margin:9px 0 0">Barva se objeví jako tečka u názvu skupiny v tabulce LIVE.</p></div>`,
+    accounts: `<div class="sect"><h4>Role účtů</h4><div class="scroll">${rolesHtml('A')}</div></div>`,
+    guards: `<div class="sect"><h4>Ochrany kopírování</h4>${guardsHtml('A')}
+      <p class="hint" style="margin:9px 0 0">Denní limity, obchodní okno a cooldown najdeš v záložce Risk.</p></div>`,
+    review: `<div class="sect"><h4>Změny proti uložené skupině</h4>${diffHtml(s)}</div>`,
+  }[s.section];
+
+  document.getElementById('A').innerHTML = `
+    <div class="dlg-head">
+      <div><h3>Upravit skupinu</h3><div class="sub">Uloží se bez zapnutí kopírky.</div></div>
+      <button class="xbtn">✕</button>
+    </div>
+    <div class="split">
+      <nav class="rail">${A_SECTIONS.map(([key,label]) =>
+        `<button aria-current="${s.section===key}" onclick="S.A.section='${key}';renderA()">
+          <span>${label}</span><span class="cnt">${status[key]}</span></button>`).join('')}</nav>
+      <div class="pane" style="min-height:376px">${pane}</div>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn-danger">Smazat skupinu</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn-line">Zrušit</button>
+        <button class="btn-primary">Uložit změny</button>
+      </div>
+    </div>`;
+  if (keepFocus) focusName('A');
+}
+
+/* ── B: jedna obrazovka ───────────────────────────────────────── */
+function renderB(keepFocus) {
+  const s = S.B, n = Object.keys(s.followers).length;
+  document.getElementById('B').innerHTML = `
+    <div class="dlg-head">
+      <div style="flex:1">
+        ${identHtml('B')}
+        <div class="sub" style="margin-top:6px">${s.leader ? '1 leader' : '<span style="color:var(--warn)">leader nevybrán</span>'}
+          · ${n} ${n===1?'follower':'followerů'} · souhrnná expozice ${exposure(s)}× leadera</div>
+      </div>
+      <button class="xbtn">✕</button>
+    </div>
+    <div style="padding:10px 14px 0">${rolesHtml('B')}</div>
+    <div style="padding:12px 14px 4px">
+      <details ${s.open.guards?'open':''} ontoggle="S.B.open.guards=this.open">
+        <summary style="cursor:pointer;font-size:10px;font-weight:900;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted)">
+          Ochrany kopírování — ${Object.values(s.guards).filter(Boolean).length}/4 zapnuto</summary>
+        <div style="padding-top:9px">${guardsHtml('B')}</div>
+      </details>
+      <details ${s.open.diff?'open':''} ontoggle="S.B.open.diff=this.open" style="margin-top:10px">
+        <summary style="cursor:pointer;font-size:10px;font-weight:900;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted)">
+          Změny proti uložené skupině — ${diffRows(s).length}</summary>
+        <div style="padding-top:9px">${diffHtml(s)}</div>
+      </details>
+    </div>
+    <div class="dlg-foot" style="margin-top:8px">
+      <button class="btn-danger">Smazat skupinu</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn-line">Zrušit</button>
+        <button class="btn-primary">Uložit změny</button>
+      </div>
+    </div>`;
+  if (keepFocus) focusName('B');
+}
+
+/* ── C: formulář + panel ──────────────────────────────────────── */
+function renderC(keepFocus) {
+  const s = S.C, n = Object.keys(s.followers).length;
+  const leader = ACCOUNTS.find(a=>a.id===s.leader);
+  document.getElementById('C').innerHTML = `
+    <div class="dlg-head">
+      <div style="flex:1">${identHtml('C')}</div>
+      <button class="xbtn">✕</button>
+    </div>
+    <div class="twocol">
+      <div style="padding:11px 14px 14px">
+        <div class="sect"><h4>Role účtů</h4>${rolesHtml('C')}</div>
+        <div class="sect" style="padding-bottom:0"><h4>Ochrany kopírování</h4>${guardsHtml('C')}</div>
+      </div>
+      <div class="side">
+        <h4>Co se uloží</h4>
+        <p class="note">Žádné zapnutí kopírky. Skupina se jen uloží do knihovny.</p>
+        <div class="summary">
+          <div><span>Leader</span><span style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${leader ? leader.name : '—'}</span></div>
+          <div><span>Followeři</span><span>${n}</span></div>
+          <div><span>Expozice</span><span>${exposure(s)}× leadera</span></div>
+          <div><span>Ochrany</span><span>${Object.values(s.guards).filter(Boolean).length}/4</span></div>
+        </div>
+        <h4 style="margin-top:14px">Změny</h4>
+        ${diffHtml(s)}
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn-danger">Smazat skupinu</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn-line">Zrušit</button>
+        <button class="btn-primary">Uložit změny</button>
+      </div>
+    </div>`;
+  if (keepFocus) focusName('C');
+}
+
+function focusName(v) {
+  const input = document.querySelector(`#${v} input[type=text]`);
+  if (!input) return;
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+}
+function render(v, keepFocus) { ({ A:renderA, B:renderB, C:renderC })[v](keepFocus); }
+function theme(dark) {
+  document.documentElement.classList.toggle('dark', dark);
+  document.getElementById('bd').setAttribute('aria-pressed', String(dark));
+  document.getElementById('bl').setAttribute('aria-pressed', String(!dark));
+}
+theme(true);
+renderA(); renderB(); renderC();
+</script>
+</body>
+</html>

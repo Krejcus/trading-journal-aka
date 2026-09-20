@@ -14,6 +14,7 @@ import {
 import { tradovateApiBaseUrl } from './tradovateOAuth.js';
 import { marketSymbolRoot } from '../services/futuresContractSpecs.js';
 import { tradovateValuePerPoint } from '../lib/tradovateLivePnl.js';
+import { COPIER_MARKET_PRICE_MAX_AGE_MS, pickCopierMarketPrice } from '../lib/copierMarketPrice.js';
 import {
   BROKER_ACCOUNTS_DAILY_PNL_LABEL,
   COPIER_LEADER_DAILY_STATS_LABEL,
@@ -74,35 +75,14 @@ export interface NativeLiveActivityMarketPrice {
 }
 
 /** Nejvyšší přijatelné stáří ceny z workeru (hodiny Macu vs. serveru, poll ≤ 1 s). */
-export const LIVE_ACTIVITY_MARKET_PRICE_MAX_AGE_MS = 10_000;
+export const LIVE_ACTIVITY_MARKET_PRICE_MAX_AGE_MS = COPIER_MARKET_PRICE_MAX_AGE_MS;
 
 /**
- * Cena z grafů TradingView pro čekající limit: stejný kořen kontraktu jako
- * vstup leadera, čerstvá; přesný kontrakt (`MNQU6`) má přednost před
- * kontinuálním `MNQ1!`, který se v rollover týdnu může lišit o spread.
+ * Výběr ceny žije v `lib/copierMarketPrice.ts`, aby server i UI (stavový
+ * ostrov v LIVE) používaly stejné pravidlo čerstvosti i stejný výběr
+ * kontraktu. Reexport drží zpětnou kompatibilitu volání i testů.
  */
-export function pickNativeLiveActivityMarketPrice(
-  candidates: readonly unknown[],
-  symbol: string,
-  now: number,
-): number | null {
-  const root = marketSymbolRoot(symbol);
-  const exact = symbol.trim().toUpperCase();
-  const fresh = candidates.flatMap(candidate => {
-    const row = object(candidate);
-    const price = optionalFinite(row.price);
-    const at = optionalFinite(row.at);
-    if (typeof row.symbol !== 'string' || price == null || price <= 0 || at == null) return [];
-    if (Math.abs(now - at) > LIVE_ACTIVITY_MARKET_PRICE_MAX_AGE_MS) return [];
-    const candidateSymbol = row.symbol.trim().toUpperCase();
-    if (marketSymbolRoot(candidateSymbol) !== root) return [];
-    return [{ symbol: candidateSymbol, price, continuous: row.continuous === true || /\d!$/.test(candidateSymbol) }];
-  });
-  if (fresh.length === 0) return null;
-  return (fresh.find(entry => entry.symbol === exact)
-    ?? fresh.find(entry => !entry.continuous)
-    ?? fresh[0]).price;
-}
+export const pickNativeLiveActivityMarketPrice = pickCopierMarketPrice;
 
 const controllerOf = (runtime: NativeLiveActivityRuntimeRow): Record<string, unknown> => {
   const root = object(runtime.status);

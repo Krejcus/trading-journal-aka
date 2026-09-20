@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nastavení tabulky — návrhy</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-page:#f1f5f9; --bg-card:#ffffff; --bg-sunken:#f8fafc;
+  --text-primary:#0f172a; --text-secondary:#475569; --text-muted:#94a3b8;
+  --border-subtle:#e2e8f0; --accent:#4f46e5; --accent-soft:rgba(79,70,229,.1);
+  --on:#34d399; --shadow:0 24px 60px -24px rgba(15,23,42,.35);
+}
+.dark {
+  --bg-page:#020617; --bg-card:#0a0f1d; --bg-sunken:#0f172a;
+  --text-primary:#f8fafc; --text-secondary:#94a3b8; --text-muted:#475569;
+  --border-subtle:rgba(255,255,255,.08); --accent:#6366f1; --accent-soft:rgba(99,102,241,.16);
+  --on:#34d399; --shadow:0 24px 60px -24px rgba(0,0,0,.8);
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:26px 16px 80px; font-family:Inter,system-ui,sans-serif;
+  background:var(--bg-page); color:var(--text-primary); transition:background .25s,color .25s; }
+.wrap { max-width:1180px; margin:0 auto; }
+h1 { font-size:22px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.65; color:var(--text-secondary); max-width:80ch; margin:0 0 18px; }
+.bar { position:sticky; top:10px; z-index:40; display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+  padding:9px 12px; margin-bottom:26px; border:1px solid var(--border-subtle); border-radius:12px;
+  background:var(--bg-card); box-shadow:0 4px 16px -8px rgba(0,0,0,.35); }
+.bar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+.bar button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.bar button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+
+.spec { margin-bottom:44px; }
+.spec > header { margin-bottom:12px; }
+.spec h2 { font-size:15px; font-weight:900; margin:0 0 4px; letter-spacing:-.01em; }
+.spec h2 em { font-style:normal; color:var(--text-muted); font-weight:800; font-size:11px;
+  letter-spacing:.08em; text-transform:uppercase; margin-right:8px; }
+.spec p { font-size:12.5px; line-height:1.6; color:var(--text-secondary); margin:0; max-width:78ch; }
+.tags { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+.tag { font-size:9.5px; font-weight:800; letter-spacing:.05em; text-transform:uppercase;
+  padding:3px 7px; border-radius:6px; background:var(--bg-sunken); border:1px solid var(--border-subtle);
+  color:var(--text-secondary); }
+.tag.good { color:#059669; border-color:rgba(5,150,105,.35); background:rgba(16,185,129,.1); }
+.dark .tag.good { color:#34d399; }
+.tag.warn { color:#b45309; border-color:rgba(180,83,9,.32); background:rgba(245,158,11,.1); }
+.dark .tag.warn { color:#fbbf24; }
+
+/* ─── skořápka dialogu ─────────────────────────────────────────── */
+.dlg { display:flex; flex-direction:column; border:1px solid var(--border-subtle); border-radius:14px;
+  background:var(--bg-card); box-shadow:var(--shadow); overflow:hidden; }
+.dlg-head { display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:14px 18px; border-bottom:1px solid var(--border-subtle); }
+.dlg-head h3 { margin:0; font-size:15px; font-weight:900; letter-spacing:-.01em; }
+.dlg-head .sub { font-size:11px; color:var(--text-secondary); margin-top:2px; }
+.xbtn { width:28px; height:28px; border:0; border-radius:8px; background:transparent; cursor:pointer;
+  color:var(--text-secondary); font-size:15px; line-height:1; }
+.xbtn:hover { background:var(--bg-sunken); }
+.dlg-foot { display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:12px 18px; border-top:1px solid var(--border-subtle); background:var(--bg-card); }
+.btn-ghost { font:inherit; font-size:11.5px; font-weight:800; padding:8px 11px; border:0; border-radius:9px;
+  background:transparent; color:var(--text-secondary); cursor:pointer; }
+.btn-ghost:hover { background:var(--bg-sunken); color:var(--text-primary); }
+.btn-primary { font:inherit; font-size:11.5px; font-weight:800; padding:8px 20px; border:0; border-radius:9px;
+  background:var(--accent); color:#fff; cursor:pointer; }
+
+/* ─── řádek sloupce (společný pro všechny varianty) ─────────────── */
+.rows { list-style:none; margin:0; padding:0; }
+.row { display:flex; align-items:center; gap:10px; padding:7px 10px 7px 6px; border-radius:9px;
+  font-size:12px; font-weight:700; color:var(--text-primary); user-select:none; }
+.row + .row { margin-top:1px; }
+.row:hover { background:var(--bg-sunken); }
+.row.drag { opacity:.35; }
+.row.over { box-shadow:inset 0 2px 0 var(--accent); }
+.row.pinned { color:var(--text-muted); }
+.grip { width:16px; flex:none; text-align:center; cursor:grab; color:var(--text-muted);
+  font-size:13px; line-height:1; letter-spacing:-1px; }
+.grip:active { cursor:grabbing; }
+.row.pinned .grip { cursor:default; opacity:.35; }
+.row .name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.lock { font-size:9px; font-weight:800; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--text-muted); display:inline-flex; align-items:center; gap:3px; }
+
+/* přepínač v řádku — 38 × 20 */
+.sw { position:relative; width:38px; height:20px; flex:none; border:0; padding:0; border-radius:999px;
+  cursor:pointer; background:color-mix(in srgb, var(--text-muted) 34%, transparent);
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.16); transition:background .25s; }
+.sw[aria-checked="true"] { background:var(--on); }
+.sw i { position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:999px; background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.3); transition:transform .28s cubic-bezier(.34,1.5,.45,1); }
+.sw[aria-checked="true"] i { transform:translateX(18px); }
+.sw:disabled { opacity:.4; cursor:default; }
+
+/* zaškrtávátko, kde je přepínač zbytečně těžký */
+.cb { width:15px; height:15px; flex:none; accent-color:var(--accent); cursor:pointer; margin:0; }
+
+/* ─── A: záložky ───────────────────────────────────────────────── */
+.tabs { display:flex; gap:2px; padding:0 18px; border-bottom:1px solid var(--border-subtle); }
+.tabs button { position:relative; font:inherit; font-size:12px; font-weight:800; padding:10px 12px 11px;
+  border:0; background:transparent; color:var(--text-secondary); cursor:pointer; }
+.tabs button[aria-selected="true"] { color:var(--text-primary); }
+.tabs button[aria-selected="true"]::after { content:''; position:absolute; left:8px; right:8px; bottom:-1px;
+  height:2px; border-radius:2px; background:var(--accent); }
+.seg { display:inline-flex; padding:3px; gap:2px; border-radius:10px; background:var(--bg-sunken);
+  border:1px solid var(--border-subtle); }
+.seg button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border:0; border-radius:7px;
+  background:transparent; color:var(--text-secondary); cursor:pointer; display:flex; align-items:center; gap:6px; }
+.seg button[aria-pressed="true"] { background:var(--bg-card); color:var(--text-primary);
+  box-shadow:0 1px 3px rgba(0,0,0,.14); }
+.seg .cnt { font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:700; color:var(--text-muted); }
+.pane { padding:14px 12px 14px; }
+.pane-head { display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:0 6px 10px; }
+.hint { font-size:10.5px; color:var(--text-muted); font-weight:600; }
+.scroll { max-height:288px; overflow-y:auto; padding:0 6px; }
+
+/* ─── B: boční lišta ───────────────────────────────────────────── */
+.split { display:grid; grid-template-columns:172px 1fr; min-height:352px; }
+.rail { border-right:1px solid var(--border-subtle); background:var(--bg-sunken); padding:10px 8px; }
+.rail-group { font-size:9px; font-weight:900; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--text-muted); padding:8px 10px 5px; }
+.rail button { display:flex; width:100%; align-items:center; justify-content:space-between; gap:8px;
+  font:inherit; font-size:12px; font-weight:700; padding:7px 10px; border:0; border-radius:8px;
+  background:transparent; color:var(--text-secondary); cursor:pointer; text-align:left; }
+.rail button[aria-current="true"] { background:var(--accent-soft); color:var(--accent); font-weight:800; }
+.dark .rail button[aria-current="true"] { color:#a5b4fc; }
+.rail .cnt { font-family:'JetBrains Mono',monospace; font-size:9.5px; font-weight:700; opacity:.75; }
+
+/* ─── C: převodní seznam ───────────────────────────────────────── */
+.transfer { display:grid; grid-template-columns:1fr 1fr; gap:0; }
+.tcol { padding:12px; display:flex; flex-direction:column; max-height:340px; }
+.tcol .scrollbox { overflow-y:auto; flex:1; min-height:0; }
+.tcol + .tcol { border-left:1px solid var(--border-subtle); }
+.tcol > h4 { margin:0 0 3px; font-size:10px; font-weight:900; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--text-secondary); padding:0 6px; }
+.tcol > .sub { font-size:10.5px; color:var(--text-muted); padding:0 6px 10px; font-weight:600; }
+.tcol.off { background:var(--bg-sunken); }
+.trow { display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:9px; font-size:12px;
+  font-weight:700; cursor:pointer; }
+.trow:hover { background:color-mix(in srgb, var(--accent) 9%, transparent); }
+.trow .arrow { margin-left:auto; color:var(--text-muted); font-size:13px; }
+.tcol.off .trow { color:var(--text-secondary); }
+.empty { font-size:11px; color:var(--text-muted); text-align:center; padding:28px 10px; font-weight:600;
+  border:1px dashed var(--border-subtle); border-radius:10px; margin:6px; }
+
+/* ─── D: jeden seznam se sekcemi ───────────────────────────────── */
+.sect-head { display:flex; align-items:center; gap:8px; padding:12px 8px 6px; position:sticky; top:0;
+  background:var(--bg-card); z-index:2; }
+.sect-head span { font-size:9.5px; font-weight:900; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--text-muted); }
+.sect-head hr { flex:1; border:0; border-top:1px solid var(--border-subtle); margin:0; }
+.search { display:flex; align-items:center; gap:8px; margin:0 6px 4px; padding:8px 11px; border-radius:10px;
+  border:1px solid var(--border-subtle); background:var(--bg-sunken); }
+.search input { flex:1; border:0; background:transparent; font:inherit; font-size:12px; font-weight:600;
+  color:var(--text-primary); outline:none; }
+.search input::placeholder { color:var(--text-muted); font-weight:600; }
+
+/* ostatní panely */
+.field { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:10px 12px;
+  border:1px solid var(--border-subtle); border-radius:10px; }
+.field + .field { margin-top:8px; }
+.field .lbl { font-size:12px; font-weight:800; }
+.field .dsc { font-size:10.5px; color:var(--text-secondary); font-weight:600; margin-top:2px; max-width:42ch; }
+select, input[type=number] { font:inherit; font-size:11.5px; font-weight:800; height:30px; padding:0 8px;
+  border-radius:8px; border:1px solid var(--border-subtle); background:var(--bg-sunken); color:var(--text-primary); }
+input[type=number] { width:64px; text-align:right; }
+.preview { font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--text-secondary);
+  background:var(--bg-sunken); border:1px solid var(--border-subtle); border-radius:8px; padding:6px 9px;
+  margin-top:8px; }
+.note { display:flex; gap:9px; align-items:flex-start; padding:10px 12px; border-radius:10px; font-size:11px;
+  line-height:1.55; font-weight:600; color:var(--text-secondary);
+  background:rgba(245,158,11,.09); border:1px solid rgba(245,158,11,.28); }
+.note b { color:var(--text-primary); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Nastavení tabulky — čtyři návrhy</h1>
+  <p class="lede">Všechny varianty mají skutečné sloupce z appky: <b>7</b> u skupin, <b>11</b> u příkazů,
+    <b>12</b> u účtů (z toho 2 připnuté). Přepínače i přetahování fungují — chytni řádek za úchyt vlevo
+    a přesuň ho. Dnešní dialog má 32 zaškrtávátek v jedné rouře a 452 px se musí proscrollovat.</p>
+
+  <div class="bar">
+    <b>Téma</b>
+    <button id="bl" aria-pressed="false" onclick="theme(false)">Světlé</button>
+    <button id="bd" aria-pressed="true" onclick="theme(true)">Tmavé</button>
+  </div>
+
+  <!-- ══ A ══════════════════════════════════════════════════════ -->
+  <section class="spec">
+    <header>
+      <h2><em>Návrh A</em>Záložky + přepínač tabulky</h2>
+      <p>Nejmenší zásah do dnešního tvaru. Tři záložky nahoře rozdělí, co spolu nesouvisí; uvnitř
+        Sloupců přepínáš mezi třemi tabulkami segmentovým přepínačem, který rovnou ukazuje kolik
+        z kolika je vidět. Vždy vidíš jeden seznam — místo tří pod sebou.</p>
+      <div class="tags"><span class="tag good">bez scrollu</span><span class="tag good">malá změna kódu</span>
+        <span class="tag warn">dva kroky k cíli</span></div>
+    </header>
+    <div class="dlg" style="max-width:560px">
+      <div class="dlg-head">
+        <div><h3>Nastavení tabulky</h3></div>
+        <button class="xbtn">✕</button>
+      </div>
+      <div class="tabs" id="a-tabs">
+        <button aria-selected="true" onclick="aTab(this,'cols')">Sloupce</button>
+        <button aria-selected="false" onclick="aTab(this,'look')">Vzhled</button>
+        <button aria-selected="false" onclick="aTab(this,'priv')">Soukromí</button>
+      </div>
+      <div class="pane" id="a-cols">
+        <div class="pane-head">
+          <div class="seg" id="a-seg"></div>
+        </div>
+        <div class="pane-head" style="padding-top:0">
+          <span class="hint">Pořadí změníš přetažením za ⠿</span>
+          <button class="btn-ghost" style="padding:4px 8px" onclick="allOn('a')">Zobrazit vše</button>
+        </div>
+        <div class="scroll"><ul class="rows" id="a-list"></ul></div>
+      </div>
+      <div class="pane" id="a-look" hidden>
+        <div class="field">
+          <div><div class="lbl">Hustota tabulky</div><div class="dsc">Zmenší řádky, aby se jich vešlo víc.</div></div>
+          <select><option>80 %</option><option>90 %</option><option selected>100 %</option><option>110 %</option></select>
+        </div>
+      </div>
+      <div class="pane" id="a-priv" hidden>
+        <div class="field">
+          <div><div class="lbl">Skrývání názvů účtů</div>
+            <div class="dsc">Kolik znaků zůstane vidět na začátku a na konci. Zbytek se nahradí tečkami.</div></div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="number" value="3" min="0" max="12" oninput="redact()">
+            <span style="color:var(--text-muted);font-size:11px;font-weight:800">…</span>
+            <input type="number" value="4" min="0" max="12" oninput="redact()">
+          </div>
+        </div>
+        <div class="preview" id="a-prev">APEX-184920 → APE•••4920</div>
+      </div>
+      <div class="dlg-foot">
+        <button class="btn-ghost">↺ Obnovit výchozí</button>
+        <button class="btn-primary">Hotovo</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ B ══════════════════════════════════════════════════════ -->
+  <section class="spec">
+    <header>
+      <h2><em>Návrh B</em>Boční lišta jako v systémovém nastavení</h2>
+      <p>Všech pět oblastí je vidět naráz vlevo, obsah vpravo. U každé tabulky rovnou svítí počet
+        zapnutých sloupců, takže na první pohled vidíš, kde jsi něco schoval. Tvar, který lidi znají
+        z nastavení macOS i Chromu — a unese i to, když sekcí přibude.</p>
+      <div class="tags"><span class="tag good">vše na jedno kliknutí</span><span class="tag good">roste dobře</span>
+        <span class="tag warn">širší okno (700 px)</span></div>
+    </header>
+    <div class="dlg" style="max-width:700px">
+      <div class="dlg-head">
+        <div><h3>Nastavení tabulky</h3>
+          <div class="sub">Co vidíš na záložce LIVE a v jakém pořadí.</div></div>
+        <button class="xbtn">✕</button>
+      </div>
+      <div class="split">
+        <nav class="rail" id="b-rail"></nav>
+        <div style="padding:12px 10px">
+          <div class="pane-head">
+            <span class="hint" id="b-hint">Pořadí změníš přetažením za ⠿</span>
+            <button class="btn-ghost" style="padding:4px 8px" onclick="allOn('b')">Zobrazit vše</button>
+          </div>
+          <div class="scroll" style="max-height:290px"><ul class="rows" id="b-list"></ul></div>
+          <div id="b-other" hidden></div>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <button class="btn-ghost">↺ Obnovit výchozí</button>
+        <button class="btn-primary">Hotovo</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ C ══════════════════════════════════════════════════════ -->
+  <section class="spec">
+    <header>
+      <h2><em>Návrh C</em>Skryté vs. zobrazené</h2>
+      <p>Nejsilnější pro pořadí: vpravo je přesně to, co uvidíš v tabulce, shora dolů ve stejném pořadí
+        jako zleva doprava. Vlevo odložené sloupce. Klikneš na řádek a přeskočí na druhou stranu.
+        Nejde přehlédnout, co je pryč — a nejde omylem zapnout sloupec bez toho, abys viděl, kam se zařadí.</p>
+      <div class="tags"><span class="tag good">pořadí = hlavní věc</span><span class="tag good">nulová nejednoznačnost</span>
+        <span class="tag warn">nejvíc nové logiky</span></div>
+    </header>
+    <div class="dlg" style="max-width:640px">
+      <div class="dlg-head">
+        <div><h3>Sloupce tabulky účtů</h3>
+          <div class="sub">Pravý sloupec je pořadí v tabulce. Přetáhni nebo klikni.</div></div>
+        <button class="xbtn">✕</button>
+      </div>
+      <div style="padding:10px 12px 0"><div class="seg" id="c-seg"></div></div>
+      <div class="transfer">
+        <div class="tcol off">
+          <h4>Skryté</h4><div class="sub" id="c-off-n">—</div>
+          <div class="scrollbox" id="c-off"></div>
+        </div>
+        <div class="tcol">
+          <h4>Zobrazené — v pořadí</h4><div class="sub" id="c-on-n">—</div>
+          <ul class="rows scrollbox" id="c-on"></ul>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <button class="btn-ghost">↺ Obnovit výchozí</button>
+        <button class="btn-primary">Hotovo</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ D ══════════════════════════════════════════════════════ -->
+  <section class="spec">
+    <header>
+      <h2><em>Návrh D</em>Jeden seznam s hledáním</h2>
+      <p>Žádné záložky ani lišta — jeden seznam, ale srovnaný: sekce jsou oddělené lepivými nadpisy
+        a nahoře je hledání. Napíšeš „dll“ a máš ten sloupec, aniž bys věděl, ve které tabulce je.
+        Nejrychlejší, když víš co hledáš; nejhorší, když jen prohlížíš.</p>
+      <div class="tags"><span class="tag good">nejrychlejší cesta</span><span class="tag good">úzké okno stačí</span>
+        <span class="tag warn">scroll zůstává</span></div>
+    </header>
+    <div class="dlg" style="max-width:480px">
+      <div class="dlg-head">
+        <div><h3>Nastavení tabulky</h3></div>
+        <button class="xbtn">✕</button>
+      </div>
+      <div style="padding:12px 6px 6px">
+        <div class="search">
+          <span style="color:var(--text-muted);font-size:12px">⌕</span>
+          <input id="d-q" placeholder="Najdi sloupec…" oninput="renderD()">
+          <button class="btn-ghost" style="padding:3px 7px;font-size:10.5px" onclick="allOn('d')">Vše</button>
+        </div>
+        <div class="scroll" style="max-height:330px;padding:0 6px" id="d-list"></div>
+      </div>
+      <div class="dlg-foot">
+        <button class="btn-ghost">↺ Obnovit výchozí</button>
+        <button class="btn-primary">Hotovo</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="note" style="max-width:700px">
+    <span style="font-size:14px">⚠</span>
+    <div>Ve všech čtyřech návrzích chybí dnešní zaškrtávátko <b>„Po Flatten All nabídnout zapnutí a pokračovat“</b>.
+      Je to chování copieru, ne nastavení tabulky — patří k bezpečnostním volbám skupiny, ne sem.
+      Kdybys ho chtěl nechat, přidám do návrhu A a B čtvrtou sekci <b>Bezpečnost</b>.</div>
+  </div>
+</div>
+
+<script>
+/* ── data: skutečné sloupce z LiveCopyTradeOverview.tsx ───────── */
+const TABLES = {
+  accounts: { label:'Účty', cols:[
+    { key:'account', label:'Účet', pinned:true },
+    { key:'broker', label:'Broker' }, { key:'firm', label:'Firma' },
+    { key:'balance', label:'Zůstatek' }, { key:'positions', label:'Pozice' },
+    { key:'daily', label:'Denní P&L' }, { key:'dllRemaining', label:'DLL zbývá' },
+    { key:'unreal', label:'Otevřený P&L' }, { key:'distDd', label:'Rezerva DD' },
+    { key:'execLimit', label:'Exec/Limit' }, { key:'qtyMult', label:'Násobek' },
+    { key:'actions', label:'Akce', pinned:true },
+  ]},
+  groups: { label:'Skupiny', cols:[
+    { key:'name', label:'Skupina', pinned:true },
+    { key:'status', label:'Stav' }, { key:'leader', label:'Leader' }, { key:'firm', label:'Firma' },
+    { key:'followers', label:'Followeři' }, { key:'capital', label:'Kapitál' },
+    { key:'daily', label:'Denní P&L' }, { key:'unreal', label:'Otevřený P&L' },
+  ]},
+  orders: { label:'Příkazy', cols:[
+    { key:'account', label:'Účet' }, { key:'broker', label:'Broker' }, { key:'symbol', label:'Symbol' },
+    { key:'action', label:'Směr' }, { key:'type', label:'Typ' }, { key:'qty', label:'Počet' },
+    { key:'limit', label:'Limitní cena' }, { key:'stop', label:'Stop cena' }, { key:'status', label:'Stav' },
+    { key:'timestamp', label:'Čas' }, { key:'orderId', label:'ID příkazu' },
+  ]},
+};
+const ORDER_KEYS = ['accounts','groups','orders'];
+
+/* stav — každá varianta má vlastní kopii, ať se navzájem nepřepisují */
+const mk = () => {
+  const s = {};
+  for (const t of ORDER_KEYS) s[t] = TABLES[t].cols.map(c => ({ ...c, on:true }));
+  return s;
+};
+const S = { a:mk(), b:mk(), c:mk(), d:mk() };
+const sel = { a:'accounts', b:'accounts', c:'accounts' };
+/* pár sloupců předem vypnutých, ať je vidět rozdíl */
+for (const v of ['a','b','c','d']) {
+  S[v].accounts.find(c => c.key==='execLimit').on = false;
+  S[v].orders.find(c => c.key==='orderId').on = false;
+  S[v].orders.find(c => c.key==='broker').on = false;
+}
+
+const count = (v,t) => { const l = S[v][t]; return l.filter(c => c.on).length + '/' + l.length; };
+
+/* ── přetahování ──────────────────────────────────────────────── */
+let dragging = null;
+function dnd(li, list, redraw) {
+  li.draggable = true;
+  li.addEventListener('dragstart', e => { dragging = li; li.classList.add('drag');
+    e.dataTransfer.effectAllowed = 'move'; });
+  li.addEventListener('dragend', () => { li.classList.remove('drag');
+    for (const n of list.children) n.classList.remove('over'); dragging = null; });
+  li.addEventListener('dragover', e => {
+    if (!dragging || dragging === li || dragging.parentElement !== list) return;
+    e.preventDefault(); li.classList.add('over');
+  });
+  li.addEventListener('dragleave', () => li.classList.remove('over'));
+  li.addEventListener('drop', e => {
+    e.preventDefault(); li.classList.remove('over');
+    if (!dragging || dragging === li) return;
+    const arr = li.__arr, from = Number(dragging.dataset.i), to = Number(li.dataset.i);
+    arr.splice(to, 0, arr.splice(from, 1)[0]);
+    redraw();
+  });
+}
+
+/* ── řádek ────────────────────────────────────────────────────── */
+function rowEl(col, arr, i, list, redraw, kind = 'switch') {
+  const li = document.createElement('li');
+  li.className = 'row' + (col.pinned ? ' pinned' : '');
+  li.dataset.i = i; li.__arr = arr;
+  li.innerHTML = `<span class="grip">⠿</span><span class="name">${col.label}</span>`;
+  if (col.pinned) {
+    li.insertAdjacentHTML('beforeend', '<span class="lock">🔒 vždy</span>');
+  } else if (kind === 'switch') {
+    const b = document.createElement('button');
+    b.className = 'sw'; b.setAttribute('role','switch'); b.setAttribute('aria-checked', String(col.on));
+    b.innerHTML = '<i></i>';
+    b.onclick = () => { col.on = !col.on; redraw(); };
+    li.appendChild(b);
+  } else {
+    const c = document.createElement('input');
+    c.type = 'checkbox'; c.className = 'cb'; c.checked = col.on;
+    c.onchange = () => { col.on = !col.on; redraw(); };
+    li.appendChild(c);
+  }
+  if (!col.pinned) dnd(li, list, redraw);
+  return li;
+}
+
+/* ── A: záložky ───────────────────────────────────────────────── */
+function renderA() {
+  const seg = document.getElementById('a-seg');
+  seg.innerHTML = ORDER_KEYS.map(t =>
+    `<button aria-pressed="${sel.a===t}" onclick="sel.a='${t}';renderA()">${TABLES[t].label}
+      <span class="cnt">${count('a',t)}</span></button>`).join('');
+  const list = document.getElementById('a-list');
+  list.innerHTML = '';
+  const arr = S.a[sel.a];
+  arr.forEach((c,i) => list.appendChild(rowEl(c, arr, i, list, renderA)));
+}
+function aTab(btn, id) {
+  for (const b of document.getElementById('a-tabs').children) b.setAttribute('aria-selected','false');
+  btn.setAttribute('aria-selected','true');
+  for (const p of ['cols','look','priv']) document.getElementById('a-'+p).hidden = (p !== id);
+}
+function redact() {
+  const [s,e] = [...document.querySelectorAll('#a-priv input[type=number]')].map(i => Number(i.value)||0);
+  const n = 'APEX-184920';
+  const mid = Math.max(0, n.length - s - e);
+  document.getElementById('a-prev').textContent =
+    `${n} → ${n.slice(0,s)}${'•'.repeat(mid)}${e ? n.slice(n.length-e) : ''}`;
+}
+
+/* ── B: boční lišta ───────────────────────────────────────────── */
+const B_OTHER = {
+  look: `<div class="field"><div><div class="lbl">Hustota tabulky</div>
+      <div class="dsc">Zmenší řádky, aby se jich vešlo víc.</div></div>
+      <select><option>80 %</option><option>90 %</option><option selected>100 %</option><option>110 %</option></select></div>`,
+  priv: `<div class="field"><div><div class="lbl">Skrývání názvů účtů</div>
+      <div class="dsc">Kolik znaků zůstane vidět na začátku a na konci.</div></div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="number" value="3" min="0" max="12"><span style="color:var(--text-muted)">…</span>
+        <input type="number" value="4" min="0" max="12"></div></div>
+      <div class="preview">APEX-184920 → APE••••4920</div>`,
+};
+function renderB() {
+  const rail = document.getElementById('b-rail');
+  rail.innerHTML = '<div class="rail-group">Sloupce</div>'
+    + ORDER_KEYS.map(t => `<button aria-current="${sel.b===t}" onclick="sel.b='${t}';renderB()">
+        <span>${TABLES[t].label}</span><span class="cnt">${count('b',t)}</span></button>`).join('')
+    + '<div class="rail-group">Ostatní</div>'
+    + `<button aria-current="${sel.b==='look'}" onclick="sel.b='look';renderB()"><span>Vzhled</span></button>`
+    + `<button aria-current="${sel.b==='priv'}" onclick="sel.b='priv';renderB()"><span>Soukromí</span></button>`;
+
+  const isCols = ORDER_KEYS.includes(sel.b);
+  const list = document.getElementById('b-list');
+  const other = document.getElementById('b-other');
+  list.parentElement.hidden = !isCols;
+  document.getElementById('b-hint').parentElement.hidden = !isCols;
+  other.hidden = isCols;
+  if (isCols) {
+    list.innerHTML = '';
+    const arr = S.b[sel.b];
+    arr.forEach((c,i) => list.appendChild(rowEl(c, arr, i, list, renderB)));
+  } else {
+    other.innerHTML = B_OTHER[sel.b];
+  }
+}
+
+/* ── C: převodní seznam ───────────────────────────────────────── */
+function renderC() {
+  document.getElementById('c-seg').innerHTML = ORDER_KEYS.map(t =>
+    `<button aria-pressed="${sel.c===t}" onclick="sel.c='${t}';renderC()">${TABLES[t].label}
+      <span class="cnt">${count('c',t)}</span></button>`).join('');
+  const arr = S.c[sel.c];
+  const off = arr.filter(c => !c.on), on = arr.filter(c => c.on);
+  const offBox = document.getElementById('c-off');
+  offBox.innerHTML = off.length ? '' : '<div class="empty">Nic není skryté</div>';
+  for (const c of off) {
+    const d = document.createElement('div');
+    d.className = 'trow';
+    d.innerHTML = `<span class="name">${c.label}</span><span class="arrow">→</span>`;
+    d.onclick = () => { c.on = true; renderC(); };
+    offBox.appendChild(d);
+  }
+  document.getElementById('c-off-n').textContent = off.length + ' sloupců';
+  document.getElementById('c-on-n').textContent = on.length + ' sloupců · shora = zleva';
+  const onBox = document.getElementById('c-on');
+  onBox.innerHTML = '';
+  on.forEach((c,i) => {
+    const li = rowEl(c, on, i, onBox, () => {
+      /* pořadí se skládá zpět do hlavního pole, aby skryté zůstaly na místě */
+      const rest = arr.filter(x => !x.on);
+      S.c[sel.c] = [...on, ...rest];
+      renderC();
+    }, 'none');
+    li.querySelector('.cb')?.remove();
+    if (!c.pinned) {
+      const b = document.createElement('button');
+      b.className = 'btn-ghost'; b.style.cssText = 'padding:2px 6px;font-size:11px';
+      b.textContent = '←'; b.title = 'Skrýt';
+      b.onclick = () => { c.on = false; renderC(); };
+      li.appendChild(b);
+    }
+    onBox.appendChild(li);
+  });
+}
+
+/* ── D: jeden seznam ──────────────────────────────────────────── */
+function renderD() {
+  const q = document.getElementById('d-q').value.trim().toLowerCase();
+  const box = document.getElementById('d-list');
+  box.innerHTML = '';
+  for (const t of ORDER_KEYS) {
+    const arr = S.d[t];
+    const hits = arr.filter(c => c.label.toLowerCase().includes(q));
+    if (!hits.length) continue;
+    box.insertAdjacentHTML('beforeend',
+      `<div class="sect-head"><span>${TABLES[t].label}</span><hr><span>${count('d',t)}</span></div>`);
+    const ul = document.createElement('ul');
+    ul.className = 'rows';
+    hits.forEach(c => ul.appendChild(rowEl(c, arr, arr.indexOf(c), ul, renderD, 'checkbox')));
+    box.appendChild(ul);
+  }
+  if (!box.children.length) box.innerHTML = '<div class="empty">Nic takového tu není</div>';
+}
+
+/* ── společné ─────────────────────────────────────────────────── */
+function allOn(v) {
+  const t = v === 'd' ? null : sel[v];
+  for (const k of (t ? [t] : ORDER_KEYS)) for (const c of S[v][k]) c.on = true;
+  ({ a:renderA, b:renderB, c:renderC, d:renderD })[v]();
+}
+function theme(dark) {
+  document.documentElement.classList.toggle('dark', dark);
+  document.getElementById('bd').setAttribute('aria-pressed', String(dark));
+  document.getElementById('bl').setAttribute('aria-pressed', String(!dark));
+}
+theme(true);
+renderA(); renderB(); renderC(); renderD();
+</script>
+</body>
+</html>

@@ -1331,18 +1331,20 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
   display: none !important;
 }
 /* Lupa JEN na Chromiu (.backdrop-svg-ok přidá JS v index.tsx — viz WebKit bug #245510).
-   Nespolehlivý @supports tu nepoužíváme: Safari ho přes -webkit- projde, ale nevykreslí. */
+   Nespolehlivý @supports tu nepoužíváme: Safari ho přes -webkit- projde, ale nevykreslí.
+   Displacement sám text jen zkřiví, nerozostří — 10px řádky tabulky pod headerem
+   pak zůstaly čitelné a mísily se s jeho obsahem. Proto k lupě ještě lehký blur. */
 .backdrop-svg-ok .floating-glass-header.header-clear {
-  backdrop-filter: url(#liquid-glass) saturate(130%) !important;
-  -webkit-backdrop-filter: url(#liquid-glass) saturate(130%) !important;
+  backdrop-filter: url(#liquid-glass) blur(4px) saturate(130%) !important;
+  -webkit-backdrop-filter: url(#liquid-glass) blur(4px) saturate(130%) !important;
 }
 .backdrop-svg-ok.light-theme .floating-glass-header.header-clear {
-  backdrop-filter: url(#liquid-glass) saturate(120%) !important;
-  -webkit-backdrop-filter: url(#liquid-glass) saturate(120%) !important;
+  backdrop-filter: url(#liquid-glass) blur(4px) saturate(120%) !important;
+  -webkit-backdrop-filter: url(#liquid-glass) blur(4px) saturate(120%) !important;
 }
 .backdrop-svg-ok.oled-theme .floating-glass-header.header-clear {
-  backdrop-filter: url(#liquid-glass) saturate(140%) !important;
-  -webkit-backdrop-filter: url(#liquid-glass) saturate(140%) !important;
+  backdrop-filter: url(#liquid-glass) blur(4px) saturate(140%) !important;
+  -webkit-backdrop-filter: url(#liquid-glass) blur(4px) saturate(140%) !important;
 }
 
 /* Varianta pro NÍZKÉ lišty (mobilní bottom nav): plný 42px sheen nahoře+dole
@@ -2074,3 +2076,398 @@ html.light-theme[data-accent="cyan"] .border-slate-100 {
 /* Ověřeno na zařízení: iOS PWA (standalone WKWebView) backdrop blur NEZVLÁDNE —
    dělá matný flek. Proto zde záměrně ZŮSTÁVÁ plné poloprůhledné pozadí (definováno výš),
    žádný blur ani lupa. Nepřidávat sem backdrop-filter. */
+
+/* LIVE → Kopírovací skupiny → tabulka účtů.
+   Vlastní svislý posuvník existuje kvůli sticky hlavičce: nejbližší
+   scrollovatelný předek (animační obal rozbalení) svisle nescrolluje, takže
+   `sticky top-0` na <th> by se bez tohoto kontejneru nikdy nepohnul.
+   Výška je volena tak, aby při běžném počtu účtů posuvník vůbec nevznikl. */
+/* Bublina po najetí — vlastní náhrada nativního `title`, který naskočí až po
+   sekundě a kreslí ho operační systém. Portál s `position: fixed`, protože
+   tabulka účtů má vlastní posuvník, který by ji ořízl. */
+.live-hovercard {
+  z-index: 160;
+  border: 1px solid var(--border-subtle);
+  border-radius: 11px;
+  background: var(--bg-card);
+  box-shadow: 0 18px 40px -14px rgba(0, 0, 0, 0.55);
+  padding: 9px 11px;
+  text-align: left;
+  pointer-events: none;
+  animation: live-hovercard-in 0.13s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+@keyframes live-hovercard-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-hovercard { animation: none; }
+}
+
+/* Detail skupiny: obsah se při překlopení Účty/Příkazy přelije do strany a
+   karta plynule přejede na novou výšku, aby přepínač pod ní neuskočil zpod
+   kurzoru. Spodní hranice drží kartu pohromadě — jinak by přechod z dvaceti
+   účtů na tři příkazy složil skoro 400 px najednou. 180 px je kompromis:
+   při pár příkazech zbyde jen pár desítek pixelů prázdna. */
+.live-detail-morph {
+  overflow: hidden;
+  min-height: 180px;
+  transition: height 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.live-detail-pane {
+  animation: live-detail-pane-in 0.26s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.live-detail-pane-back {
+  animation-name: live-detail-pane-in-back;
+}
+
+@keyframes live-detail-pane-in {
+  from { opacity: 0; transform: translateX(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes live-detail-pane-in-back {
+  from { opacity: 0; transform: translateX(-14px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Přepínač pod obsahem je doplněk, ne nadpis: menší než záložky nahoře a bez
+   barvy akcentu, protože se používá zřídka. */
+.live-detail-tab {
+  border-bottom: 1.5px solid transparent;
+}
+
+.live-detail-tab[aria-pressed='true'] {
+  border-bottom-color: color-mix(in srgb, var(--text-primary) 55%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-detail-morph { transition: none; }
+  .live-detail-pane { animation: none; }
+}
+
+.live-accounts-scroll {
+  max-height: min(60vh, 620px);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+/* Globální scrollbar je 6px a v klidu splývá. Tady je posuvník jediný signál,
+   že seznam pokračuje, takže je v klidu vidět a po najetí zesílí. */
+.live-accounts-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.live-accounts-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-secondary) 45%, transparent);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+  transition: background-color 0.2s ease;
+}
+
+.live-accounts-scroll:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-secondary) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.live-accounts-scroll::-webkit-scrollbar-thumb:active {
+  background: var(--color-trade-accent);
+  background-clip: padding-box;
+}
+
+/* V OLED má hlavička i řádky čistě černé pozadí, takže sticky hlavička nemá
+   proti odjíždějícím řádkům žádnou hranu. Linka je tam jediný dělič. */
+.oled-theme .live-accounts-scroll thead th {
+  border-bottom-color: rgba(255, 255, 255, 0.18);
+}
+
+/* Rozbalený stav: uživatel chce vidět všechny účty najednou, takže strop padá
+   a posuvník zmizí. Sticky hlavička tím přestane mít ke komu přilnout — to je
+   vědomá výměna, kterou si uživatel vybral kliknutím. */
+.live-accounts-scroll-expanded {
+  max-height: none;
+  overflow-y: visible;
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   LIVE — plovoucí stav kopírky („ostrov“).
+   Drží se okna, ne obsahu, takže stav i akce jsou vidět i po odscrollování.
+   Rám kolem výřezu nese fázi barvou; 1px stačí, protože signál dělá stálost,
+   ne tloušťka. Vypnutý stav rám nekreslí vůbec — klid nemá co hlásit.
+   ─────────────────────────────────────────────────────────────────────────── */
+.live-island {
+  --island: var(--text-muted);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: stretch;
+  max-width: min(96vw, 760px);
+  padding: 5px 7px 5px 12px;
+  /* Konstantní rádius, žádná animace tvaru. Při současné změně výšky Chrome
+     interpolovaný border-radius / clip-path na některých snímcích vyhodnotil
+     jako nulový a rohy problikly hranatě. 18 px dělá rozdíl sám: na 38px
+     compactu je to prakticky pilulka, na rozbaleném ~97px mírně zaoblený
+     obdélník — tedy přesně ten rozdíl, o který šlo. */
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--island) 45%, transparent);
+  /* Blur je zpátky: problikávání rohů způsoboval animovaný tvar, ne samotný
+     backdrop-filter. Teď je rádius i clip-path konstantní, takže se vrstva
+     nemá s čím rozejít — a ostrov drží stejný sklovitý jazyk jako hlavička. */
+  /* 92 %: blur je pořád vidět na okrajích, ale text na pilulce zůstává
+     čitelný i nad hustou tabulkou. Na 82 % už se pod ním prokreslovaly
+     řádky a hodnoty se ztrácely. */
+  background: color-mix(in srgb, var(--bg-card) 92%, transparent);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  cursor: default;
+  /* `overflow: hidden` tady nestačilo: rozbalovaný grid si vytváří vlastní
+     vrstvu a ta se skládá až NAD rodičovský ořez — během roztahování proto
+     měl ostrov ostrý spodek a zaoblil se, až když přechod doběhl.
+     `clip-path` ořezává i kompozitní potomky, takže tvar sedí v každém snímku.
+     Stín musí ven na `.live-island-dock`, protože clip-path by ho uřízl. */
+  overflow: hidden;
+  /* clip-path ořezává i kompozitní vrstvu rozbalovaného gridu, kterou samotný
+     `overflow` nechytí. Je statický, takže se nemá co rozjet s výškou. */
+  clip-path: inset(0 round 18px);
+  transition: border-color .3s ease, padding .3s ease;
+}
+
+.live-island-dock { filter: drop-shadow(0 8px 14px rgba(0, 0, 0, 0.42)); }
+
+.live-island-ok      { --island: #10b981; }
+.live-island-active  { --island: #8b5cf6; }
+.live-island-danger  { --island: #f43f5e; }
+
+/* Rozbalený ostrov přechází z pilulky na zaoblený obdélník: pilulkový rádius
+   ukrajoval krajní hodnoty druhého řádku. */
+.live-island.is-open { padding: 7px 9px 8px 13px; }
+
+.live-island-row { display: flex; align-items: center; gap: 9px; white-space: nowrap; }
+
+.live-island-dot {
+  width: 6px; height: 6px; border-radius: 999px; flex: none;
+  background: var(--island);
+}
+
+.live-island-title {
+  font-size: 9px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--island);
+}
+.live-island-muted .live-island-title { color: var(--text-secondary); }
+
+.live-island-sep { width: 1px; height: 11px; background: var(--border-subtle); flex: none; }
+.live-island-value { font-family: var(--font-mono); font-size: 10px; font-weight: 700; }
+.live-island-chev { opacity: .45; transition: transform .3s ease; flex: none; }
+.live-island-chev.is-open { transform: rotate(180deg); }
+
+.live-island-action {
+  font-size: 9px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase;
+  padding: 5px 11px; border-radius: 999px; flex: none;
+  border: 1px solid var(--border-subtle); background: transparent; color: var(--text-secondary);
+  transition: all .2s ease;
+}
+.live-island-action.is-danger {
+  border-color: color-mix(in srgb, #f43f5e 50%, transparent);
+  background: color-mix(in srgb, #f43f5e 14%, transparent);
+  color: #f43f5e;
+}
+.live-island-action.is-danger:hover { background: #f43f5e; color: #fff; }
+.live-island-action:not(.is-danger):hover { border-color: var(--text-muted); color: var(--text-primary); }
+
+/* Rozbalení: grid 0fr→1fr animuje výšku bez měření v JS. Obsah zůstává
+   v DOM, jen se sroluje do nulové stopy — proto ten vnitřní overflow. */
+.live-island-expand {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows .34s cubic-bezier(.34, 1.3, .5, 1);
+}
+.live-island.is-open .live-island-expand { grid-template-rows: 1fr; }
+.live-island-expand > div { overflow: hidden; min-height: 0; }
+
+.live-island-fields {
+  display: flex; flex-wrap: wrap; gap: 6px 14px;
+  padding: 7px 4px 3px; margin-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity .2s ease .06s, transform .28s cubic-bezier(.34, 1.3, .5, 1) .06s;
+}
+.live-island.is-open .live-island-fields { opacity: 1; transform: none; }
+.live-island-fields span {
+  display: block; font-size: 8px; font-weight: 900; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--text-muted); margin-bottom: 1px;
+}
+.live-island-fields b { font-family: var(--font-mono); font-size: 10.5px; font-weight: 700; }
+
+/* Běžná změna fáze se „nadechne“, porucha škubne — poplach se nemá vplouvat
+   elegantně, jinak si na něj oko zvykne. */
+.live-island.is-soft { animation: live-island-breathe .42s cubic-bezier(.34, 1.4, .5, 1); }
+.live-island.is-hard { animation: live-island-jolt .3s cubic-bezier(.3, 0, .2, 1); }
+
+@keyframes live-island-breathe {
+  0%   { transform: scale(1); }
+  45%  { transform: scale(1.04); }
+  100% { transform: scale(1); }
+}
+@keyframes live-island-jolt {
+  0%   { transform: translateX(0) scale(1); }
+  30%  { transform: translateX(-3px) scale(1.02); }
+  60%  { transform: translateX(3px) scale(1.02); }
+  100% { transform: translateX(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-island, .live-island-fields, .live-island-chev, .live-island-expand { animation: none !important; transition: none !important; }
+  .live-island-fields { opacity: 1; transform: none; }
+}
+
+/* Fázi nese ŘÁDEK konkrétní skupiny — ne karta a už vůbec ne okno. S víc než
+   jednou skupinou rám kolem karty tvrdil, že se stav týká i těch ostatních.
+
+   Rám kolem CELÉ skupiny (řádek + rozbalený detail účtů) tu nejde: jsou to dva
+   sourozenecké řádky a v této tabulce mají různou šířku — hlavní řádek je flex
+   (~1019 px), detail je table-cell přes celou šířku tabulky (~2003 px, s
+   vodorovným přetečením). Rám složený z půlek proto nikdy nenavázal. Šlo by to
+   až po vytažení skupiny z tabulky do vlastního kontejneru.
+
+   `outline` nerozhodí rozměry řádku, respektuje zaoblení a drží i na ohnutém
+   `<tr>`. Záporný offset ho vtáhne dovnitř, ať nepřekrývá sousední řádky. */
+/* POZOR na název: `.live-island-row` je vnitřní řádek ostrova a nastavuje
+   `display: flex`. Zvýraznění skupiny proto musí mít vlastní jméno — když se
+   ty dvě třídy potkaly na `<tr>`, udělaly z něj flex a rozhodily zarovnání.
+
+   Rám sedí na `<tbody>`: každá skupina má svoje vlastní. Skládání rámu po
+   jednotlivých řádcích se trhalo na 1px oddělovači mezi skupinou a detailem
+   a spodní hranu překrývalo pozadí detailu. Na `<tbody>` je rám jeden kus. */
+.live-island-group {
+  outline: 1px solid var(--island-edge);
+  outline-offset: -1px;
+  border-radius: 8px;
+  transition: outline-color .3s ease;
+}
+
+/* `outline` se kreslí POD potomky, takže cokoli s vlastním pozadím, co sahá
+   až na hranu, ho přerušilo: sticky hlavička tabulky účtů (`bg-…-card`,
+   `z-20`) a podbarvení řádku při najetí myší. `box-shadow` ani `::after` to
+   nezachrání — Chrome je na `table-row-group` nevykresluje vůbec.
+   Řešení je obsah o pixel a půl odsadit, aby rám měl kudy projít. */
+.live-island-group .live-accounts-scroll { margin: 0 1.5px 1.5px; }
+.live-island-group > tr > td { background-clip: padding-box; }
+.live-island-group > tr:first-child > td:first-child { padding-left: 13px; }
+.live-island-group-ok     { --island-edge: #10b981; }
+.live-island-group-active { --island-edge: #8b5cf6; }
+.live-island-group-danger { --island-edge: #f43f5e; }
+
+/* V nativní appce leží pod hlavičkou i status bar — ostrov musí níž. */
+html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px); }
+
+/* Mobilní rozložení vykresluje skupinu jako jeden `<article>`, takže tady rám
+   obepne celou skupinu i s účty — přesně to, co v tabulce na desktopu nejde. */
+.live-island-card { border-color: var(--island-edge) !important; }
+.live-island-card-ok     { --island-edge: color-mix(in srgb, #10b981 70%, transparent); }
+.live-island-card-active { --island-edge: color-mix(in srgb, #8b5cf6 75%, transparent); }
+.live-island-card-danger { --island-edge: color-mix(in srgb, #f43f5e 75%, transparent); }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Přepínač kopírovací skupiny.
+   Nahradil chip, který pojmenovával STAV („VYPNUTÁ") a akci prozradil až
+   hoverem — vypadal jako štítek, ne jako ovládání, a na dotyku se akce
+   nedozvěděl nikdo. Přepínač pozná každý a popisky v koleji drží stav
+   čitelný i beze slov vedle.
+   ─────────────────────────────────────────────────────────────────────────── */
+.copier-switch {
+  position: relative;
+  width: 56px;
+  height: 22px;
+  flex: none;
+  border: 0;
+  padding: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--text-muted) 26%, transparent);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.14);
+  transition: background .3s ease, box-shadow .4s ease;
+}
+
+.copier-switch:disabled { cursor: not-allowed; opacity: .45; }
+
+/* Zapnuto: sytá kolej a světelná stopa, aby běžící kopírka byla vidět
+   periferně — stejná zelená jako stavový ostrov. */
+/* Emerald 400. Světlejší kolej znamená, že bílé „ON" by na ní mělo kontrast
+   1,9 : 1 — popisek proto ztmavl na emerald 900 (5,2 : 1). */
+.copier-switch[aria-checked="true"] {
+  background: #34d399;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1),
+              0 0 0 2px color-mix(in srgb, #34d399 18%, transparent);
+}
+
+.copier-switch-label {
+  position: absolute;
+  top: 50%;
+  font-size: 7.5px;
+  font-weight: 900;
+  letter-spacing: .08em;
+  transform: translateY(-50%);
+  transition: opacity .25s ease, transform .3s cubic-bezier(.34, 1.3, .5, 1);
+}
+.copier-switch-on  { left: 8px; color: #064e3b; opacity: 0; transform: translate(-5px, -50%); }
+.copier-switch-off { right: 8px; color: var(--text-secondary); opacity: 1; }
+.copier-switch[aria-checked="true"] .copier-switch-on  { opacity: 1; transform: translateY(-50%); }
+.copier-switch[aria-checked="true"] .copier-switch-off { opacity: 0; transform: translate(5px, -50%); }
+
+.copier-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #fff;
+  color: #059669;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.26);
+  transition: transform .34s cubic-bezier(.34, 1.5, .45, 1);
+}
+.copier-switch[aria-checked="true"] .copier-switch-knob { transform: translateX(34px); }
+
+/* Přechod ARM/DISARM: knoflík zůstane, kde je, a točí se v něm spinner. */
+.copier-switch-busy .copier-switch-knob { color: var(--text-secondary); }
+
+@media (prefers-reduced-motion: reduce) {
+  .copier-switch, .copier-switch-knob, .copier-switch-label { transition: none !important; }
+}
+
+/* Rozbalení skupiny: 0fr → 1fr animuje výšku bez měření v JS. Dosud tu žádný
+   přechod nebyl, takže detail naskakoval skokem. Obsah se přidává s malým
+   zpožděním, ať se nejdřív otevře místo a teprve pak se objeví. */
+.live-group-expand {
+  transition: grid-template-rows .36s cubic-bezier(.34, 1.3, .5, 1), opacity .24s ease;
+}
+.live-group-expand.grid-rows-\[1fr\] { transition-delay: 0s, .06s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .live-group-expand { transition: none !important; }
+}
+
+/* Ostrov se schová, dokud je řádek skupiny na obrazovce: tam stav čteš přímo
+   a plovoucí pilulka by jen překrývala taby a hlášení pod hlavičkou.
+   Porucha se hlásí vždy — ta na scroll čekat nemůže. */
+.live-island-dock {
+  transition: opacity .28s ease, transform .32s cubic-bezier(.34, 1.3, .5, 1);
+}
+.live-island-dock.is-hidden {
+  opacity: 0;
+  transform: translateY(-10px) scale(.96);
+  pointer-events: none;
+}
+.live-island-dock.is-hidden .live-island { pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .live-island-dock { transition: none !important; }
+}

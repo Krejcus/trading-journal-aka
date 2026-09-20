@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Čekající vstup — chip E a tooltip</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-page:#f1f5f9; --bg-card:#ffffff; --bg-sunken:#f8fafc;
+  --text-primary:#0f172a; --text-secondary:#475569; --text-muted:#94a3b8;
+  --border-subtle:#e2e8f0; --accent:#4f46e5;
+  --emerald:#059669; --rose:#e11d48; --amber:#b45309;
+  --tip-bg:#ffffff; --tip-shadow:0 18px 40px -16px rgba(15,23,42,.45);
+}
+.dark {
+  --bg-page:#020617; --bg-card:#0a0f1d; --bg-sunken:#0f172a;
+  --text-primary:#f8fafc; --text-secondary:#94a3b8; --text-muted:#475569;
+  --border-subtle:rgba(255,255,255,.08); --accent:#6366f1;
+  --emerald:#10b981; --rose:#f43f5e; --amber:#d97706;
+  --tip-bg:#111a2e; --tip-shadow:0 18px 40px -14px rgba(0,0,0,.9);
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:26px 16px 200px; font-family:Inter,system-ui,sans-serif;
+  background:var(--bg-page); color:var(--text-primary); transition:background .25s,color .25s; }
+.wrap { max-width:1000px; margin:0 auto; }
+h1 { font-size:21px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.65; color:var(--text-secondary); max-width:82ch; margin:0 0 18px; }
+.lede b { color:var(--text-primary); }
+.bar { display:flex; gap:8px; align-items:center; padding:9px 12px; margin-bottom:24px;
+  border:1px solid var(--border-subtle); border-radius:12px; background:var(--bg-card); }
+.bar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+.bar button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.bar button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+h2 { font-size:13px; font-weight:900; margin:26px 0 8px; }
+h2 em { font-style:normal; color:var(--text-muted); font-weight:800; font-size:10px;
+  letter-spacing:.09em; text-transform:uppercase; margin-right:8px; }
+.note { font-size:12.5px; line-height:1.6; color:var(--text-secondary); margin:0 0 12px; max-width:84ch; }
+.note b { color:var(--text-primary); }
+.mono { font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--text-muted); }
+
+table { width:100%; border-collapse:separate; border-spacing:0; border:1px solid var(--border-subtle);
+  border-radius:12px; background:var(--bg-card); }
+th { font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted);
+  text-align:left; padding:8px 12px; border-bottom:1px solid var(--border-subtle); }
+td { padding:14px 12px; border-bottom:1px solid var(--border-subtle); font-size:11.5px; vertical-align:middle; }
+tr:last-child td { border-bottom:0; }
+td.kdy { color:var(--text-secondary); line-height:1.55; }
+td.kdy .t { color:var(--text-primary); font-weight:800; display:block; margin-bottom:2px; }
+td.kdy b { color:var(--text-primary); font-weight:800; }
+
+/* ── chip E ──────────────────────────────────────────────────── */
+.p { display:inline-flex; align-items:center; gap:4px; border-radius:6px; padding:4px 8px;
+  font-size:10px; font-weight:800; line-height:1; font-variant-numeric:tabular-nums;
+  border:1px solid var(--border-subtle); background:var(--bg-card); color:var(--text-secondary); }
+.p .w { font-size:8.5px; font-weight:900; letter-spacing:.06em; padding:1px 3px; border-radius:3px; }
+.p.buy .w  { background:color-mix(in srgb,var(--emerald) 18%,transparent); color:var(--emerald); }
+.p.sell .w { background:color-mix(in srgb,var(--rose) 18%,transparent); color:var(--rose); }
+.pos { display:inline-flex; align-items:center; gap:4px; border-radius:6px; border:1px solid;
+  padding:4px 8px; font-size:10px; font-weight:900; line-height:1; font-variant-numeric:tabular-nums; }
+.pos.long { border-color:color-mix(in srgb,var(--emerald) 25%,transparent);
+  background:color-mix(in srgb,var(--emerald) 10%,transparent); color:var(--emerald); }
+.pos.short { border-color:color-mix(in srgb,var(--rose) 25%,transparent);
+  background:color-mix(in srgb,var(--rose) 10%,transparent); color:var(--rose); }
+svg { flex:none; }
+
+/* ── tooltip ve stylu appky ──────────────────────────────────── */
+.tip { position:relative; display:inline-flex; }
+.tip .bubble { position:absolute; z-index:40; bottom:calc(100% + 8px); left:0; width:252px;
+  border:1px solid var(--border-subtle); border-radius:11px; background:var(--tip-bg);
+  box-shadow:var(--tip-shadow); padding:9px 11px; text-align:left;
+  opacity:0; transform:translateY(4px); pointer-events:none;
+  transition:opacity .13s ease, transform .13s cubic-bezier(.32,.72,0,1); }
+.tip:hover .bubble, .tip:focus-within .bubble { opacity:1; transform:none; }
+.bubble .head { display:flex; align-items:center; gap:6px; font-size:11px; font-weight:900;
+  color:var(--text-primary); }
+.bubble .head .dir { font-size:8.5px; font-weight:900; letter-spacing:.06em; padding:1px 4px; border-radius:4px; }
+.bubble .head .dir.buy  { background:color-mix(in srgb,var(--emerald) 18%,transparent); color:var(--emerald); }
+.bubble .head .dir.sell { background:color-mix(in srgb,var(--rose) 18%,transparent); color:var(--rose); }
+.bubble .sub { font-size:10px; color:var(--text-muted); font-weight:600; margin-top:2px; }
+.bubble hr { border:0; border-top:1px solid var(--border-subtle); margin:8px -11px; }
+.bubble .row { display:flex; align-items:baseline; justify-content:space-between; gap:10px;
+  font-size:10.5px; padding:2px 0; }
+.bubble .row span:first-child { color:var(--text-secondary); font-weight:600; }
+.bubble .row span:last-child { font-weight:800; font-variant-numeric:tabular-nums; }
+.bubble .row .ok { color:var(--emerald); }
+.bubble .row .miss { color:var(--amber); }
+.bubble .row .bad { color:var(--rose); }
+.bubble .foot { display:flex; gap:6px; margin-top:8px; padding-top:7px;
+  border-top:1px solid var(--border-subtle); font-size:9.5px; line-height:1.45;
+  color:var(--text-muted); font-weight:600; }
+.bubble .foot svg { margin-top:1px; }
+
+.demorow { display:flex; align-items:center; gap:34px; flex-wrap:wrap; }
+.hint { font-size:10.5px; color:var(--text-muted); font-weight:700; }
+.spacer { height:130px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Chip E s tooltipem ve stylu appky</h1>
+  <p class="lede"><b>Najeď myší na kterýkoli chip.</b> Bublina naskočí okamžitě, kreslí ji appka
+    (ne operační systém) a nese to, co se do chipu nevejde: cenu vstupu, ochranu a stáří příkazu.
+    Scrolluj — ukázky jsou i pro otevřenou pozici.</p>
+
+  <div class="bar">
+    <b>Téma</b>
+    <button id="bl" aria-pressed="false" onclick="theme(false)">Světlé</button>
+    <button id="bd" aria-pressed="true" onclick="theme(true)">Tmavé</button>
+  </div>
+
+
+  <div class="spacer"></div>
+
+  <h2><em>Čekající vstup</em>Tři situace</h2>
+  <table><thead><tr><th style="width:230px">Chip</th><th>Co v bublině je a proč</th></tr></thead>
+  <tbody id="t1"></tbody></table>
+
+  <div class="spacer"></div>
+
+  <h2><em>Otevřená pozice</em>Stejná bublina, jiný obsah</h2>
+  <table><thead><tr><th style="width:230px">Chip</th><th>Co v bublině je a proč</th></tr></thead>
+  <tbody id="t2"></tbody></table>
+</div>
+
+<script>
+const CLOCK = `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor"
+  stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4"/><circle cx="12" cy="12" r="10"/></svg>`;
+const SHIELD = `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor"
+  stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>`;
+const INFO = `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor"
+  stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`;
+
+const chipE = (side, qty) => `<span class="p ${side === 'Buy' ? 'buy' : 'sell'}">${CLOCK}
+  <span>MNQ</span><span class="w">${side === 'Buy' ? 'BUY' : 'SELL'}</span><span>${qty}</span></span>`;
+const chipPos = (qty, shield) => `<span class="pos ${qty > 0 ? 'long' : 'short'}">
+  <span>MNQ</span><span>${qty > 0 ? '+' : '−'}${Math.abs(qty)}</span>${shield ? SHIELD : ''}</span>`;
+
+const bubble = ({ dir, title, sub, rows }) => `<span class="bubble">
+  <span class="head">${dir ? `<span class="dir ${dir.toLowerCase()}">${dir.toUpperCase()}</span>` : ''}${title}</span>
+  <span class="sub">${sub}</span>
+  <hr>
+  ${rows.map(([k, v, tone]) => `<span class="row"><span>${k}</span><span class="${tone ?? ''}">${v}</span></span>`).join('')}
+</span>`;
+
+const tip = (chip, data) => `<span class="tip" tabindex="0">${chip}${bubble(data)}</span>`;
+
+const PENDING = [
+  [tip(chipE('Buy', 3), {
+    dir: 'Buy', title: 'Limit · čeká na fill', sub: 'MNQZ6 · 3 kontrakty',
+    rows: [['Vstupní cena', '29 487,75'], ['Stop loss', '29 462,00 · 3', 'ok'],
+           ['Target', '29 560,00 · 3', 'ok'], ['Zadáno', 'v 10:04 · před 6 min']],
+  }), '<span class="t">Vstup s kompletním bracketem</span>Cena vstupu i obě ochranné nohy sedí na počet. To se do chipu nikdy nevejde, a přitom je to přesně to, co chceš vědět, než se limitka vyplní.'],
+
+  [tip(chipE('Sell', 2), {
+    dir: 'Sell', title: 'Limit · čeká na fill', sub: 'MNQZ6 · 2 kontrakty',
+    rows: [['Vstupní cena', '29 610,00'], ['Stop loss', 'žádný', 'miss'],
+           ['Target', 'žádný', 'miss'], ['Zadáno', 'v 09:58 · před 12 min']],
+  }), '<span class="t">Nahá limitka</span>Po vyplnění vznikne nekrytá pozice. Dnes se to dozvíš až ve chvíli, kdy je pozice otevřená a objeví se oranžové „bez SL“ — tady o tom víš předem.'],
+
+  [tip(chipE('Buy', 3), {
+    dir: 'Buy', title: 'Stop · čeká na spuštění', sub: 'MNQZ6 · 3 kontrakty',
+    rows: [['Spouštěcí cena', '29 540,00'], ['Stop loss', '29 500,00 · 2', 'bad'],
+           ['Target', 'žádný', 'miss'], ['Zadáno', 'v 10:07 · před 3 min']],
+  }), '<span class="t">Stop entry s děravým SL</span>Bublina rozliší <b>Limit od Stopu</b> — v chipu jsou oba stejné. A ukáže, že SL kryje jen 2 ze 3 kontraktů, což je díra, kterou sloupec u pozice hlásí červeně až potom.'],
+];
+
+const OPEN = [
+  [tip(chipPos(3, true), {
+    dir: null, title: 'Long 3 kontrakty', sub: 'MNQZ6 · průměrná cena 29 501,25',
+    rows: [['Stop loss', '29 462,00 · 3', 'ok'], ['Target', '29 560,00 · 3', 'ok'],
+           ['Otevřený P&L', '+38,50 USD', 'ok'], ['Otevřeno', 'v 10:05 · před 5 min']],
+  }), '<span class="t">Kompletní ochrana</span>Dnes to sdělí jediná ikona štítu. Bublina řekne, na jakých cenách ochrana stojí — to je rozdíl mezi „SL existuje“ a „SL je tam, kde ho chci“.'],
+
+  [tip(chipPos(-2, false), {
+    dir: null, title: 'Short 2 kontrakty', sub: 'MNQZ6 · průměrná cena 29 588,00',
+    rows: [['Stop loss', 'žádný', 'miss'], ['Target', '29 540,00 · 2', 'ok'],
+           ['Otevřený P&L', '−19,00 USD', 'bad'], ['Otevřeno', 'v 10:01 · před 9 min']],
+  }), '<span class="t">Bez stop lossu</span>Chip nese oranžové „bez SL“, bublina doplní, že target naopak visí — takže víš, že to není zapomenutý bracket, ale půlka.'],
+];
+
+const render = (id, data) => {
+  document.getElementById(id).innerHTML = data.map(([chip, why]) =>
+    `<tr><td>${chip}</td><td class="kdy">${why}</td></tr>`).join('');
+};
+render('t1', PENDING);
+render('t2', OPEN);
+
+function theme(dark) {
+  document.documentElement.classList.toggle('dark', dark);
+  document.getElementById('bd').setAttribute('aria-pressed', String(dark));
+  document.getElementById('bl').setAttribute('aria-pressed', String(!dark));
+}
+theme(true);
+</script>
+</body>
+</html>

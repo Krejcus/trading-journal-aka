@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zapínání skupiny — návrhy</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-page:#f8fafc; --bg-card:#ffffff; --text-primary:#0f172a; --text-secondary:#475569;
+  --text-muted:#94a3b8; --border-subtle:#e2e8f0;
+  --emerald:#10b981; --rose:#f43f5e; --amber:#f59e0b; --indigo:#6366f1;
+}
+.dark {
+  --bg-page:#020617; --bg-card:#0a0f1d; --text-primary:#f8fafc; --text-secondary:#94a3b8;
+  --text-muted:#475569; --border-subtle:rgba(255,255,255,.08);
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:28px 16px 64px; font-family:Inter,system-ui,sans-serif;
+  background:var(--bg-page); color:var(--text-primary); transition:background .25s,color .25s; }
+.wrap { max-width:1000px; margin:0 auto; }
+h1 { font-size:21px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.6; color:var(--text-secondary); max-width:76ch; margin:0 0 22px; }
+.bar { position:sticky; top:10px; z-index:20; display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+  padding:9px 12px; margin-bottom:26px; border:1px solid var(--border-subtle); border-radius:12px;
+  background:var(--bg-card); box-shadow:0 4px 16px -8px rgba(0,0,0,.3); }
+.bar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+.bar button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.bar button[aria-pressed="true"] { background:var(--indigo); border-color:var(--indigo); color:#fff; }
+
+.card { margin-bottom:26px; border:1px solid var(--border-subtle); border-radius:14px; overflow:hidden;
+  background:var(--bg-card); }
+.head { padding:13px 18px; border-bottom:1px solid var(--border-subtle); }
+.head h2 { margin:0 0 3px; font-size:14px; font-weight:900; }
+.head p { margin:0; font-size:11.5px; line-height:1.6; color:var(--text-secondary); max-width:78ch; }
+.tag { display:inline-block; font-size:9px; font-weight:900; letter-spacing:.09em; text-transform:uppercase;
+  padding:2px 7px; border-radius:5px; margin-left:8px; vertical-align:2px;
+  background:color-mix(in srgb, var(--emerald) 16%, transparent); color:var(--emerald); }
+/* Skutečný kontext: řádek skupiny je vysoký 51 px a sloupec Stav měří 132 px. */
+.stage { display:flex; align-items:center; gap:18px; padding:14px 18px; background:var(--bg-page); }
+.rowsim { display:flex; align-items:center; gap:10px; height:51px; padding:0 12px; flex:1;
+  border:1px solid var(--border-subtle); border-radius:8px; background:var(--bg-card); font-size:12px; font-weight:700; }
+.rowsim .dot { width:8px; height:8px; border-radius:99px; background:#d946ef; flex:none; }
+.rowsim .slot { width:132px; display:flex; justify-content:flex-start; }
+.rowsim .rest { margin-left:auto; display:flex; gap:14px; font-family:'JetBrains Mono',monospace;
+  font-size:11px; font-weight:500; color:var(--text-secondary); }
+.notes { display:grid; grid-template-columns:1fr 1fr; gap:8px 20px; padding:12px 18px;
+  border-top:1px solid var(--border-subtle); font-size:11px; line-height:1.55; }
+.notes b { display:block; font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; margin-bottom:2px; }
+.notes .pro b { color:var(--emerald); } .notes .con b { color:var(--rose); }
+.notes p { margin:0; color:var(--text-secondary); }
+@media (max-width:720px){ .notes{grid-template-columns:1fr;} .rowsim .rest{display:none;} }
+
+/* ───── A: toggle switch ───── */
+.sw { position:relative; width:46px; height:26px; border-radius:99px; cursor:pointer; flex:none;
+  border:1px solid var(--border-subtle); background:color-mix(in srgb, var(--text-muted) 22%, transparent);
+  transition:background .28s cubic-bezier(.34,1.3,.5,1), border-color .28s; }
+.on .sw { background:var(--emerald); border-color:var(--emerald); }
+.sw i { position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:99px; background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.3); transition:transform .28s cubic-bezier(.34,1.5,.5,1); }
+.on .sw i { transform:translateX(20px); }
+.swlbl { font-size:10px; font-weight:900; letter-spacing:.07em; text-transform:uppercase; color:var(--text-muted); }
+.on .swlbl { color:var(--emerald); }
+
+/* ───── B: tlačítko s akcí (ne stavem) ───── */
+.act { font:inherit; font-size:10px; font-weight:900; letter-spacing:.07em; text-transform:uppercase;
+  display:inline-flex; align-items:center; gap:6px; height:30px; padding:0 13px; border-radius:8px; cursor:pointer;
+  border:1px solid color-mix(in srgb, var(--emerald) 45%, transparent);
+  background:color-mix(in srgb, var(--emerald) 10%, transparent); color:var(--emerald);
+  transition:all .22s ease; }
+.act:hover { background:color-mix(in srgb, var(--emerald) 20%, transparent); transform:translateY(-1px); }
+.on .act { border-color:color-mix(in srgb, var(--rose) 45%, transparent);
+  background:color-mix(in srgb, var(--rose) 10%, transparent); color:var(--rose); }
+.on .act:hover { background:color-mix(in srgb, var(--rose) 20%, transparent); }
+.actstate { display:inline-flex; align-items:center; gap:5px; font-size:10px; font-weight:900;
+  letter-spacing:.07em; text-transform:uppercase; color:var(--text-muted); }
+.on .actstate { color:var(--emerald); }
+.pip { width:7px; height:7px; border-radius:99px; background:currentColor; position:relative; }
+.on .pip::after { content:''; position:absolute; inset:0; border-radius:99px; background:currentColor;
+  animation:ping 1.8s cubic-bezier(0,0,.2,1) infinite; }
+@keyframes ping { 75%,100% { transform:scale(2.6); opacity:0; } }
+
+/* ───── C: segmentovaný přepínač ───── */
+.seg { position:relative; display:inline-flex; padding:2px; border-radius:9px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:color-mix(in srgb, var(--text-muted) 10%, transparent); }
+.seg span { position:relative; z-index:1; padding:5px 11px; font-size:9.5px; font-weight:900;
+  letter-spacing:.07em; text-transform:uppercase; color:var(--text-muted); transition:color .25s; }
+.seg .knob { position:absolute; top:2px; bottom:2px; left:2px; width:calc(50% - 2px); border-radius:7px;
+  background:var(--bg-card); box-shadow:0 1px 4px rgba(0,0,0,.18);
+  transition:transform .3s cubic-bezier(.34,1.4,.5,1), background .25s; }
+.seg span:first-of-type { color:var(--rose); }
+.on .seg .knob { transform:translateX(100%); background:color-mix(in srgb, var(--emerald) 18%, transparent); }
+.on .seg span:first-of-type { color:var(--text-muted); }
+.on .seg span:last-of-type { color:var(--emerald); }
+
+/* ───── D: podržet pro zapnutí ───── */
+.hold { position:relative; display:inline-flex; align-items:center; gap:7px; height:30px; padding:0 13px;
+  border-radius:8px; cursor:pointer; overflow:hidden; font:inherit; font-size:10px; font-weight:900;
+  letter-spacing:.07em; text-transform:uppercase; border:1px solid var(--border-subtle);
+  background:transparent; color:var(--text-secondary); }
+.hold .fill { position:absolute; inset:0; width:0; background:color-mix(in srgb, var(--emerald) 26%, transparent); }
+.hold.filling .fill { width:100%; transition:width .9s linear; }
+.hold span { position:relative; z-index:1; }
+.on .hold { border-color:color-mix(in srgb, var(--rose) 45%, transparent);
+  background:color-mix(in srgb, var(--rose) 10%, transparent); color:var(--rose); }
+
+/* ───── E: dnešní stav ───── */
+.today { position:relative; display:flex; height:28px; width:108px; align-items:center; justify-content:center;
+  overflow:hidden; border-radius:6px; cursor:pointer; font-size:9px; font-weight:900; letter-spacing:.08em;
+  text-transform:uppercase; border:1px solid color-mix(in srgb, var(--rose) 40%, transparent);
+  background:color-mix(in srgb, var(--rose) 10%, transparent); color:var(--rose); transition:all .3s; }
+.on .today { border-color:color-mix(in srgb, var(--emerald) 40%, transparent);
+  background:color-mix(in srgb, var(--emerald) 10%, transparent); color:var(--emerald); }
+.today .swap1, .today .swap2 { position:absolute; transition:transform .3s, opacity .3s; }
+.today .swap2 { transform:translateY(100%); opacity:0; }
+.today:hover .swap1 { transform:translateY(-100%); opacity:0; }
+.today:hover .swap2 { transform:translateY(0); opacity:1; }
+.today:hover { border-color:color-mix(in srgb, var(--emerald) 40%, transparent); color:var(--emerald); }
+.on .today:hover { border-color:color-mix(in srgb, var(--rose) 40%, transparent); color:var(--rose); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Zapínání kopírovací skupiny</h1>
+  <p class="lede">Pět variant ve skutečném kontextu: řádek je vysoký 51 px a sloupec Stav měří 132 px, jak je změřeno v appce.
+    Všechny jsou klikací — zkoušej je. Otázka zní: <b>pozná někdo, kdo appku nezná, že se tím zapíná kopírování?</b></p>
+
+  <div class="bar">
+    <b>Téma</b>
+    <button id="bl" aria-pressed="true" onclick="theme(false)">Světlé</button>
+    <button id="bd" aria-pressed="false" onclick="theme(true)">Tmavé</button>
+    <span style="width:10px"></span>
+    <b>Vše</b>
+    <button onclick="all(false)">Vypnout</button>
+    <button onclick="all(true)">Zapnout</button>
+  </div>
+
+  <section class="card" id="cA">
+    <div class="head">
+      <h2>A — Klasický přepínač<span class="tag">nejznámější vzor</span></h2>
+      <p>Posuvník, jaký zná každý z nastavení telefonu. Vedle něj slovní stav, ať je jasné, co je zapnuté.</p>
+    </div>
+    <div class="stage"><div class="rowsim">
+      <span class="dot"></span>asdlkjasd
+      <span class="slot">
+        <span style="display:flex;align-items:center;gap:8px">
+          <span class="sw" role="switch" tabindex="0"><i></i></span>
+          <span class="swlbl">Vypnuto</span>
+        </span>
+      </span>
+      <span class="rest"><span>6 účtů</span><span>$349,261</span></span>
+    </div></div>
+    <div class="notes">
+      <div class="pro"><b>Pro</b><p>Nikdo se neptá, jak to ovládat. Funguje stejně myší i prstem a stav je čitelný bez najíždění.</p></div>
+      <div class="con"><b>Proti</b><p>Přepínač svádí k rychlému cvaknutí — u věci, která pouští příkazy na broker, může být až moc lehký.</p></div>
+    </div>
+  </section>
+
+  <section class="card" id="cB">
+    <div class="head">
+      <h2>B — Tlačítko říká akci, ne stav<span class="tag">nejjasnější</span></h2>
+      <p>Na tlačítku je vždy to, co se stane po kliknutí. Stav je vedle jako tichý štítek s tečkou.</p>
+    </div>
+    <div class="stage"><div class="rowsim">
+      <span class="dot"></span>asdlkjasd
+      <span class="slot">
+        <span style="display:flex;align-items:center;gap:9px">
+          <span class="actstate"><span class="pip"></span><span data-on="Běží" data-off="Stojí"></span></span>
+          <button class="act"><span data-on="Vypnout" data-off="Zapnout"></span></button>
+        </span>
+      </span>
+      <span class="rest"><span>6 účtů</span><span>$349,261</span></span>
+    </div></div>
+    <div class="notes">
+      <div class="pro"><b>Pro</b><p>Nováček nemusí nic tušit — na tlačítku čte „Zapnout“. Stav a akce jsou oddělené, takže se nedají splést.</p></div>
+      <div class="con"><b>Proti</b><p>Zabere nejvíc šířky ze všech variant, protože nese dva prvky vedle sebe.</p></div>
+    </div>
+  </section>
+
+  <section class="card" id="cC">
+    <div class="head">
+      <h2>C — Segmentovaný přepínač</h2>
+      <p>Dvě polohy vedle sebe, aktivní podložená. Vidíš obě možnosti naráz, takže je zřejmé, že jde přepnout.</p>
+    </div>
+    <div class="stage"><div class="rowsim">
+      <span class="dot"></span>asdlkjasd
+      <span class="slot">
+        <span class="seg" role="switch" tabindex="0"><span class="knob"></span><span>Stop</span><span>Kopíruj</span></span>
+      </span>
+      <span class="rest"><span>6 účtů</span><span>$349,261</span></span>
+    </div></div>
+    <div class="notes">
+      <div class="pro"><b>Pro</b><p>Obě polohy jsou pojmenované, takže je jasné, co se stane. Kompaktnější než varianta B.</p></div>
+      <div class="con"><b>Proti</b><p>Vypnutá poloha je pořád vidět jako „tlačítko“, což může působit, že je pořád něco aktivní.</p></div>
+    </div>
+  </section>
+
+  <section class="card" id="cD">
+    <div class="head">
+      <h2>D — Podržet pro zapnutí<span class="tag">nejbezpečnější</span></h2>
+      <p>Zapnutí vyžaduje podržení, které se vizuálně plní. Vypnutí zůstává na jedno kliknutí — bezpečný směr nemá co zdržovat.</p>
+    </div>
+    <div class="stage"><div class="rowsim">
+      <span class="dot"></span>asdlkjasd
+      <span class="slot">
+        <button class="hold"><span class="fill"></span><span data-on="Vypnout" data-off="Podrž pro zapnutí"></span></button>
+      </span>
+      <span class="rest"><span>6 účtů</span><span>$349,261</span></span>
+    </div></div>
+    <div class="notes">
+      <div class="pro"><b>Pro</b><p>Omylem se zapnout nedá a návod je přímo na tlačítku. Plnění dává zpětnou vazbu i na dotyku.</p></div>
+      <div class="con"><b>Proti</b><p>Nezvyklé — část lidí zkusí kliknout a nic se nestane. Musí být krátké, jinak otravuje.</p></div>
+    </div>
+  </section>
+
+  <section class="card" id="cE">
+    <div class="head">
+      <h2>E — Dnešní stav<span class="tag" style="background:color-mix(in srgb,#f59e0b 16%,transparent);color:#f59e0b">pro srovnání</span></h2>
+      <p>Chip se stavem, který se po najetí myší přepne na akci. Na dotyku se ta akce nikdy neukáže.</p>
+    </div>
+    <div class="stage"><div class="rowsim">
+      <span class="dot"></span>asdlkjasd
+      <span class="slot">
+        <span class="today"><span class="swap1" data-on="Zapnutá" data-off="Vypnutá"></span><span class="swap2" data-on="Vypnout" data-off="Zapnout"></span></span>
+      </span>
+      <span class="rest"><span>6 účtů</span><span>$349,261</span></span>
+    </div></div>
+    <div class="notes">
+      <div class="con"><b>Proti</b><p>Vypadá jako štítek stavu, ne jako ovládání — přesně to, na cos narazil. Akci prozradí až hover, který na telefonu není.</p></div>
+      <div class="pro"><b>Pro</b><p>Hover morph je zároveň pojistka: než klikneš, přečteš si, co se stane.</p></div>
+    </div>
+  </section>
+</div>
+
+<script>
+function theme(dark) {
+  document.documentElement.classList.toggle('dark', dark);
+  document.getElementById('bd').setAttribute('aria-pressed', String(dark));
+  document.getElementById('bl').setAttribute('aria-pressed', String(!dark));
+}
+function paint(card) {
+  const on = card.classList.contains('on');
+  for (const el of card.querySelectorAll('[data-on]')) el.textContent = on ? el.dataset.on : el.dataset.off;
+  const lbl = card.querySelector('.swlbl');
+  if (lbl) lbl.textContent = on ? 'Zapnuto' : 'Vypnuto';
+}
+function toggle(card) { card.classList.toggle('on'); paint(card); }
+function all(on) { for (const c of document.querySelectorAll('.card')) { c.classList.toggle('on', on); paint(c); } }
+
+for (const card of document.querySelectorAll('.card')) {
+  paint(card);
+  const hold = card.querySelector('.hold');
+  for (const el of card.querySelectorAll('.sw, .act, .seg, .today')) {
+    el.addEventListener('click', () => toggle(card));
+    el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(card); } });
+  }
+  if (hold) {
+    let timer = null;
+    const start = () => {
+      if (card.classList.contains('on')) { toggle(card); return; }   // vypnutí hned
+      hold.classList.add('filling');
+      timer = setTimeout(() => { hold.classList.remove('filling'); toggle(card); }, 900);
+    };
+    const cancel = () => { clearTimeout(timer); hold.classList.remove('filling'); };
+    hold.addEventListener('pointerdown', start);
+    hold.addEventListener('pointerup', cancel);
+    hold.addEventListener('pointerleave', cancel);
+  }
+}
+</script>
+</body>
+</html>

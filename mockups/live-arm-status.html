@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LIVE — stav kopírky, návrhy</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-page:#020617; --bg-card:#0a0f1d; --text-primary:#f8fafc; --text-secondary:#94a3b8;
+  --text-muted:#475569; --border-subtle:rgba(255,255,255,.07); --shadow-card:0 10px 30px -10px rgba(0,0,0,.5);
+  --emerald:#10b981; --rose:#f43f5e; --amber:#f59e0b; --indigo:#6366f1;
+}
+.light {
+  --bg-page:#f8fafc; --bg-card:#ffffff; --text-primary:#0f172a; --text-secondary:#475569;
+  --text-muted:#94a3b8; --border-subtle:#e2e8f0; --shadow-card:0 4px 20px -5px rgba(0,0,0,.06);
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:32px 16px 72px; font-family:Inter,system-ui,sans-serif;
+  background:var(--bg-page); color:var(--text-primary); transition:background .25s,color .25s; }
+.wrap { max-width:1180px; margin:0 auto; }
+h1 { font-size:22px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.6; color:var(--text-secondary); max-width:78ch; margin:0 0 24px; }
+.toolbar { position:sticky; top:12px; z-index:20; display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+  padding:10px 12px; margin-bottom:28px; border:1px solid var(--border-subtle); border-radius:12px;
+  background:var(--bg-card); box-shadow:var(--shadow-card); }
+.toolbar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); margin-right:2px; }
+button.t { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); transition:all .18s; }
+button.t:hover { color:var(--text-primary); border-color:var(--text-muted); }
+button.t[aria-pressed="true"] { background:var(--indigo); border-color:var(--indigo); color:#fff; }
+
+.variant { margin-bottom:34px; border:1px solid var(--border-subtle); border-radius:14px; overflow:hidden; background:var(--bg-card); box-shadow:var(--shadow-card); }
+.vhead { padding:14px 18px; border-bottom:1px solid var(--border-subtle); }
+.vhead h2 { margin:0 0 4px; font-size:14px; font-weight:900; letter-spacing:-.01em; }
+.vhead p { margin:0; font-size:11.5px; line-height:1.6; color:var(--text-secondary); max-width:80ch; }
+.tag { display:inline-block; font-size:9px; font-weight:900; letter-spacing:.09em; text-transform:uppercase;
+  padding:2px 7px; border-radius:5px; margin-left:8px; vertical-align:2px; }
+.tag.best { background:color-mix(in srgb, var(--emerald) 16%, transparent); color:var(--emerald); }
+.tag.risk { background:color-mix(in srgb, var(--amber) 16%, transparent); color:var(--amber); }
+.stage { padding:20px 18px; background:var(--bg-page); }
+
+/* ---- sdílené kousky UI z appky ---- */
+.tabs { display:flex; gap:2px; border-bottom:1px solid var(--border-subtle); margin-bottom:12px; }
+.tab { font-size:10.5px; font-weight:700; padding:8px 12px; color:var(--text-secondary); border-bottom:2px solid transparent; }
+.tab.on { color:var(--indigo); border-bottom-color:var(--indigo); }
+.fauxtable { border:1px solid var(--border-subtle); border-radius:8px; overflow:hidden; }
+.fauxrow { display:flex; align-items:center; gap:10px; padding:9px 12px; font-size:10.5px; border-top:1px solid var(--border-subtle); }
+.fauxrow:first-child { border-top:0; font-size:9px; font-weight:900; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); }
+.fauxrow .grow { flex:1; }
+.mono { font-family:'JetBrains Mono',monospace; }
+.dot { width:6px; height:6px; border-radius:99px; flex:none; }
+
+/* ---- A: rozšířený LiveStatusStrip ---- */
+.stripA { display:flex; align-items:center; gap:10px; padding:9px 14px; border-radius:10px; margin-bottom:12px;
+  font-size:11.5px; border:1px solid var(--border-subtle); background:transparent; transition:all .3s; }
+.armed .stripA { border-color:color-mix(in srgb, var(--emerald) 45%, transparent);
+  background:color-mix(in srgb, var(--emerald) 10%, transparent); }
+.stripA .lbl { font-weight:900; letter-spacing:.06em; text-transform:uppercase; font-size:10px; }
+.armed .stripA .lbl { color:var(--emerald); }
+.stripA .lbl { color:var(--text-muted); }
+
+/* ---- B: celoširoký pás ---- */
+.barB { border-radius:12px; margin-bottom:12px; padding:12px 16px; display:flex; align-items:center; gap:14px;
+  border:1px solid var(--border-subtle); background:transparent; transition:all .3s; }
+.armed .barB { padding:16px; border-color:color-mix(in srgb, var(--emerald) 50%, transparent);
+  background:linear-gradient(90deg, color-mix(in srgb, var(--emerald) 14%, transparent), transparent 65%);
+  box-shadow:inset 3px 0 0 var(--emerald); }
+.barB .big { font-size:18px; font-weight:900; letter-spacing:-.02em; line-height:1; }
+.armed .barB .big { color:var(--emerald); }
+.barB .big { color:var(--text-secondary); }
+.barB .sub { font-size:10.5px; color:var(--text-secondary); margin-top:4px; }
+.meta { display:flex; gap:18px; margin-left:auto; text-align:right; }
+.meta div span { display:block; font-size:8.5px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+.meta div b { font-size:12px; font-weight:800; }
+/* Vypnout je nebezpečná akce jen když kopírka běží; jinak drží klidný tón. */
+.btn-off { font:inherit; font-size:10px; font-weight:900; letter-spacing:.07em; text-transform:uppercase; cursor:pointer;
+  padding:9px 16px; border-radius:8px; border:1px solid var(--border-subtle);
+  background:transparent; color:var(--text-secondary); transition:all .25s; }
+.armed .btn-off { border-color:color-mix(in srgb, var(--rose) 45%, transparent);
+  background:color-mix(in srgb, var(--rose) 12%, transparent); color:var(--rose); }
+.btn-on { font:inherit; font-size:10px; font-weight:900; letter-spacing:.07em; text-transform:uppercase; cursor:pointer;
+  padding:8px 14px; border-radius:8px; border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+
+/* ---- C: rám stránky ---- */
+.frameC { position:relative; border-radius:12px; padding:14px; transition:box-shadow .3s; }
+.armed .frameC { box-shadow:0 0 0 2px var(--emerald), 0 0 26px -6px color-mix(in srgb, var(--emerald) 55%, transparent); }
+.badgeC { position:absolute; top:-9px; left:16px; display:none; align-items:center; gap:6px; padding:3px 10px;
+  border-radius:99px; background:var(--emerald); color:#04140e; font-size:9px; font-weight:900; letter-spacing:.09em; text-transform:uppercase; }
+.armed .badgeC { display:inline-flex; }
+
+/* ---- D: v plovoucí hlavičce ---- */
+.hdrD { display:flex; align-items:center; gap:12px; padding:12px 16px; border-radius:10px; margin-bottom:12px;
+  border:1px solid var(--border-subtle); background:color-mix(in srgb, var(--bg-card) 70%, transparent);
+  backdrop-filter:blur(8px); transition:all .3s; }
+.hdrD .brand { font-size:15px; font-weight:900; letter-spacing:.06em; }
+.pillD { display:inline-flex; align-items:center; gap:7px; padding:5px 11px; border-radius:99px; font-size:10px;
+  font-weight:900; letter-spacing:.07em; text-transform:uppercase;
+  border:1px solid var(--border-subtle); color:var(--text-muted); transition:all .3s; }
+.armed .pillD { border-color:color-mix(in srgb, var(--emerald) 50%, transparent);
+  background:color-mix(in srgb, var(--emerald) 12%, transparent); color:var(--emerald); }
+.armed .hdrD { box-shadow:inset 0 -2px 0 var(--emerald); }
+
+.pulse { position:relative; }
+.armed .pulse::after { content:''; position:absolute; inset:0; border-radius:99px;
+  background:var(--emerald); animation:ping 1.8s cubic-bezier(0,0,.2,1) infinite; }
+@keyframes ping { 75%,100% { transform:scale(2.4); opacity:0; } }
+
+/* ---- C: varianty umístění tlačítka ---- */
+.cvar { position:relative; border-radius:12px; padding:14px; margin-top:6px; transition:box-shadow .3s; }
+.armed .cvar { box-shadow:0 0 0 2px var(--emerald), 0 0 26px -6px color-mix(in srgb, var(--emerald) 55%, transparent); }
+.cbadge { position:absolute; top:-10px; left:16px; display:none; align-items:center; gap:7px; padding:4px 11px;
+  border-radius:99px; background:var(--emerald); color:#04140e; font:inherit; font-size:9px; font-weight:900;
+  letter-spacing:.09em; text-transform:uppercase; border:0; }
+.armed .cbadge { display:inline-flex; }
+
+/* C1 — jmenovka je sama tlačítkem (morph jako dnešní chip) */
+button.cbadge { cursor:pointer; overflow:hidden; }
+button.cbadge .swapA, button.cbadge .swapB { transition:opacity .2s, transform .2s; }
+button.cbadge .swapB { display:none; }
+button.cbadge:hover .swapA { display:none; }
+button.cbadge:hover .swapB { display:inline; }
+button.cbadge:hover { background:var(--rose); color:#fff; }
+
+/* C2 — jmenovka vlevo, tlačítko na protější straně hrany */
+.cbtn-edge { position:absolute; top:-13px; right:16px; display:none; align-items:center; gap:6px; cursor:pointer;
+  font:inherit; font-size:9px; font-weight:900; letter-spacing:.09em; text-transform:uppercase; padding:5px 13px;
+  border-radius:99px; border:1px solid color-mix(in srgb, var(--rose) 55%, transparent);
+  background:var(--bg-page); color:var(--rose); }
+.armed .cbtn-edge { display:inline-flex; }
+.cbtn-edge:hover { background:var(--rose); color:#fff; }
+
+/* C3 — rám i ovládání drží u okna, ne u obsahu */
+.viewport { position:relative; height:250px; overflow-y:auto; border-radius:10px; border:1px dashed var(--border-subtle); }
+.viewport .inner { padding:14px; }
+.vframe { position:sticky; top:0; height:0; z-index:5; pointer-events:none; }
+.vframe i { display:none; position:absolute; top:0; left:0; right:0; height:250px; border-radius:10px; }
+.armed .vframe i { display:block; box-shadow:inset 0 0 0 2px var(--emerald), inset 0 0 26px -10px var(--emerald); }
+.vdock { display:none; position:absolute; top:8px; left:50%; transform:translateX(-50%); align-items:center; gap:9px;
+  padding:5px 7px 5px 13px; border-radius:99px; pointer-events:auto;
+  background:color-mix(in srgb, var(--bg-card) 92%, transparent); backdrop-filter:blur(10px);
+  border:1px solid color-mix(in srgb, var(--emerald) 45%, transparent); box-shadow:0 8px 22px -8px rgba(0,0,0,.5); }
+.armed .vdock { display:inline-flex; }
+.vdock .lbl2 { font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--emerald); }
+.vdock button { font:inherit; font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; cursor:pointer;
+  padding:5px 11px; border-radius:99px; border:1px solid color-mix(in srgb, var(--rose) 50%, transparent);
+  background:color-mix(in srgb, var(--rose) 14%, transparent); color:var(--rose); }
+.vdock button:hover { background:var(--rose); color:#fff; }
+.hint { font-size:10px; color:var(--text-muted); margin:8px 0 0; }
+
+/* ---- C3 doladěná: tenčí rám + obsah podle situace (Dynamic Island) ---- */
+.vp2 { position:relative; height:190px; overflow-y:auto; border-radius:10px; border:1px dashed var(--border-subtle); margin-bottom:8px; }
+.vp2 .inner { padding:14px; }
+.vf2 { position:sticky; top:0; height:0; z-index:5; pointer-events:none; }
+.vf2 i { position:absolute; top:0; left:0; right:0; height:190px; border-radius:10px; }
+/* 1px místo 2px: signál nese barva a stálost, ne tloušťka. */
+.vf2.ok i    { box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--emerald) 85%, transparent), inset 0 0 22px -12px var(--emerald); }
+.vf2.live i  { box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--indigo) 90%, transparent), inset 0 0 22px -12px var(--indigo); }
+.vf2.bad i   { box-shadow:inset 0 0 0 1px var(--rose), inset 0 0 26px -10px var(--rose); }
+.island { position:absolute; top:8px; left:50%; transform:translateX(-50%); display:inline-flex; align-items:center;
+  gap:9px; padding:5px 7px 5px 12px; border-radius:99px; pointer-events:auto; white-space:nowrap;
+  background:color-mix(in srgb, var(--bg-card) 94%, transparent); backdrop-filter:blur(10px);
+  box-shadow:0 8px 22px -8px rgba(0,0,0,.55); transition:all .35s cubic-bezier(.2,.8,.2,1); }
+.vf2.ok .island   { border:1px solid color-mix(in srgb, var(--emerald) 40%, transparent); }
+.vf2.live .island { border:1px solid color-mix(in srgb, var(--indigo) 45%, transparent); }
+.vf2.bad .island  { border:1px solid color-mix(in srgb, var(--rose) 55%, transparent); }
+.island .ttl { font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; }
+.vf2.ok .island .ttl { color:var(--emerald); }
+.vf2.live .island .ttl { color:var(--indigo); }
+.vf2.bad .island .ttl { color:var(--rose); }
+.island .sep { width:1px; height:11px; background:var(--border-subtle); }
+.island .num { font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:700; }
+.island button { font:inherit; font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; cursor:pointer;
+  padding:5px 11px; border-radius:99px; border:1px solid color-mix(in srgb, var(--rose) 50%, transparent);
+  background:color-mix(in srgb, var(--rose) 14%, transparent); color:var(--rose); }
+.island button:hover { background:var(--rose); color:#fff; }
+.caselbl { font-size:10.5px; font-weight:800; margin:16px 0 4px; }
+.caselbl span { font-weight:500; color:var(--text-secondary); }
+
+/* ---- Cyklus stavů: jeden ostrov, pět situací ---- */
+.cycle { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px; }
+.cycle button { font:inherit; font-size:10px; font-weight:800; padding:6px 12px; border-radius:99px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); transition:all .18s; }
+.cycle button[aria-pressed="true"] { border-color:currentColor; }
+.cycle button[data-s="off"][aria-pressed="true"]   { color:var(--text-primary); background:color-mix(in srgb, var(--text-muted) 18%, transparent); }
+.cycle button[data-s="armed"][aria-pressed="true"] { color:var(--emerald); background:color-mix(in srgb, var(--emerald) 14%, transparent); }
+.cycle button[data-s="limit"][aria-pressed="true"] { color:var(--indigo); background:color-mix(in srgb, var(--indigo) 12%, transparent); }
+.cycle button[data-s="pos"][aria-pressed="true"],
+.cycle button[data-s="posL"][aria-pressed="true"] { color:var(--indigo); background:color-mix(in srgb, var(--indigo) 22%, transparent); }
+.cycle button[data-s="div"][aria-pressed="true"]   { color:var(--rose); background:color-mix(in srgb, var(--rose) 16%, transparent); }
+
+.vp3 { position:relative; height:250px; overflow-y:auto; border-radius:10px; border:1px dashed var(--border-subtle); }
+.vp3 .inner { padding:14px; }
+.vf3 { position:sticky; top:0; height:0; z-index:5; pointer-events:none; }
+.vf3 i { position:absolute; top:0; left:0; right:0; height:250px; border-radius:10px; transition:box-shadow .4s; }
+.vf3[data-s="off"] i    { box-shadow:none; }
+.vf3[data-s="armed"] i  { box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--emerald) 85%, transparent), inset 0 0 22px -12px var(--emerald); }
+/* Limit = obchod se teprve chystá → stejná rodina jako pozice, nižší intenzita.
+   Amber se schválně nepoužívá: v appce už znamená varování (DLL zámek). */
+.vf3[data-s="limit"] i  { box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--indigo) 55%, transparent); }
+/* Barva stavu „pozice běží“ je volitelná — viz přepínač v mockupu. */
+:root, .light { --pos:#8b5cf6; }
+body[data-pos="cyan"]   { --pos:#06b6d4; }
+body[data-pos="violet"] { --pos:#8b5cf6; }
+body[data-pos="white"]  { --pos:var(--text-primary); }
+body[data-pos="indigo"] { --pos:var(--indigo); }
+.vf3[data-s="pos"] i,
+.vf3[data-s="posL"] i   { box-shadow:inset 0 0 0 1px var(--pos), inset 0 0 24px -11px var(--pos); }
+.vf3[data-s="div"] i    { box-shadow:inset 0 0 0 1px var(--rose), inset 0 0 26px -10px var(--rose); }
+
+.isl { position:absolute; top:8px; left:50%; transform:translateX(-50%); display:inline-flex; align-items:center;
+  gap:9px; padding:5px 7px 5px 12px; border-radius:99px; pointer-events:auto; white-space:nowrap;
+  background:color-mix(in srgb, var(--bg-card) 94%, transparent); backdrop-filter:blur(10px);
+  border:1px solid var(--border-subtle); box-shadow:0 8px 22px -8px rgba(0,0,0,.55);
+  transition:border-color .35s, box-shadow .35s; }
+.isl .t { font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; }
+.isl .m { font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:700; color:var(--text-secondary); }
+.isl .sep { width:1px; height:11px; background:var(--border-subtle); }
+.isl .act { font:inherit; font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; cursor:pointer;
+  padding:5px 11px; border-radius:99px; border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.isl .act.danger { border-color:color-mix(in srgb, var(--rose) 50%, transparent);
+  background:color-mix(in srgb, var(--rose) 14%, transparent); color:var(--rose); }
+.isl .act.danger:hover { background:var(--rose); color:#fff; }
+.dotc { width:6px; height:6px; border-radius:99px; flex:none; }
+
+/* Rozbalený ostrov — compact nese fázi, tohle nese čísla skupiny.
+   Na desktopu hover, na dotyku klepnutí (v mockupu obojí). */
+.isl { flex-direction:column; align-items:stretch; padding:5px 7px 5px 12px; }
+.isl .row2 { display:none; gap:14px; padding:7px 4px 3px; margin-top:6px;
+  border-top:1px solid var(--border-subtle); }
+.isl.open .row2 { display:flex; animation:swapIn .28s cubic-bezier(.34,1.3,.5,1); }
+/* Pilulkový radius ukrajuje krajní hodnoty druhého řádku — rozbalený ostrov
+   proto přechází na zaoblený obdélník, stejně jako to dělá Dynamic Island. */
+.isl.open { padding:7px 9px 8px 13px; border-radius:16px; }
+.isl { transition:border-radius .32s cubic-bezier(.34,1.3,.5,1); }
+.isl .row2 div span { display:block; font-size:8px; font-weight:900; letter-spacing:.07em;
+  text-transform:uppercase; color:var(--text-muted); margin-bottom:1px; }
+.isl .row2 div b { font-family:'JetBrains Mono',monospace; font-size:10.5px; font-weight:700; }
+.isl .chev { margin-left:2px; opacity:.5; font-size:8px; transition:transform .3s; }
+.isl.open .chev { transform:rotate(180deg); }
+
+/* ---- Morph ostrova: iOS pružina, u poruchy schválně jinak ---- */
+.isl { will-change:width, transform; }
+.isl.morph { transition:width .42s cubic-bezier(.34,1.3,.5,1), height .38s cubic-bezier(.34,1.3,.5,1),
+  border-radius .32s cubic-bezier(.34,1.3,.5,1), border-color .35s, box-shadow .35s; }
+.isl.morph.urgent { transition-duration:.18s; transition-timing-function:cubic-bezier(.3,0,.2,1); }
+.isl { overflow:hidden; }
+.isl .swap { display:inline-flex; align-items:center; gap:9px; transition:opacity .16s ease, transform .22s cubic-bezier(.34,1.3,.5,1);
+  /* Vstup jako keyframes: nový obsah = nový element = animace se přehraje sama.
+     Kdyby se přepínala třída, zamrzlý rAF (zakrytá záložka) by ji nechal viset
+     na opacity 0 a ostrov by po návratu byl prázdný. */
+  animation:swapIn .26s cubic-bezier(.34,1.3,.5,1); }
+.isl.out .swap { opacity:0; transform:translateY(-5px) scale(.97); animation:none; }
+@keyframes swapIn { from { opacity:0; transform:translateY(6px) scale(.97); } to { opacity:1; transform:none; } }
+.isl.breathe { animation:breathe .45s cubic-bezier(.34,1.4,.5,1); }
+@keyframes breathe { 0%{transform:translateX(-50%) scale(1)} 42%{transform:translateX(-50%) scale(1.045)} 100%{transform:translateX(-50%) scale(1)} }
+.isl.jolt { animation:jolt .32s cubic-bezier(.3,0,.2,1); }
+@keyframes jolt { 0%{transform:translateX(-50%) scale(1)} 30%{transform:translateX(-52%) scale(1.02)} 60%{transform:translateX(-48%) scale(1.02)} 100%{transform:translateX(-50%) scale(1)} }
+/* Kdo si vypnul pohyb v systému, dostane prostý střih. */
+@media (prefers-reduced-motion:reduce) {
+  .isl, .isl.morph, .isl .swap { transition:none !important; animation:none !important; opacity:1 !important; transform:none !important; }
+}
+
+.notes { display:grid; grid-template-columns:1fr 1fr; gap:10px 22px; padding:14px 18px; border-top:1px solid var(--border-subtle); font-size:11px; line-height:1.55; }
+.notes div b { display:block; font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; margin-bottom:3px; }
+.notes .pro b { color:var(--emerald); } .notes .con b { color:var(--rose); }
+.notes p { margin:0; color:var(--text-secondary); }
+@media (max-width:760px){ .notes{grid-template-columns:1fr;} .meta{display:none;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>LIVE — stav kopírky</h1>
+  <p class="lede">Čtyři návrhy, jak dát ARMED/DISARMED váhu, kterou dnes nemá. Dnešní chip měří 108 × 44 px,
+    tedy prakticky stejnou plochu jako tlačítko „Přidat skupinu“ (139 × 34 px). Přepínej stav i téma
+    a sleduj, jestli rozdíl poznáš periferním viděním — to je jediné kritérium, které tady rozhoduje.</p>
+
+  <div class="toolbar">
+    <b>Stav</b>
+    <button class="t" id="bDis" aria-pressed="true" onclick="setArmed(false)">Vypnutá</button>
+    <button class="t" id="bArm" aria-pressed="false" onclick="setArmed(true)">Zapnutá</button>
+    <span style="width:14px"></span>
+    <b>Téma</b>
+    <button class="t" id="bDark" aria-pressed="true" onclick="setTheme(false)">Tmavé</button>
+    <button class="t" id="bLight" aria-pressed="false" onclick="setTheme(true)">Světlé</button>
+  </div>
+
+  <!-- A -->
+  <section class="variant">
+    <div class="vhead">
+      <h2>A — Rozšířený LiveStatusStrip<span class="tag best">nejmenší zásah</span></h2>
+      <p>Pruh už v LIVE existuje a drží princip „zdravý stav je tichý“ — proto ho dnes nevidíš.
+        Tahle varianta do něj přidá ARM jako jediný stav, který tichý nezůstane.</p>
+    </div>
+    <div class="stage">
+      <div class="tabs"><span class="tab">Připojení</span><span class="tab on">Live Dashboard</span><span class="tab">Risk</span><span class="tab">Účty</span></div>
+      <div class="stripA">
+        <span class="dot pulse" style="background:currentColor" id="dotA"></span>
+        <span class="lbl" data-armed="Kopírka zapnutá" data-disarmed="Kopírka vypnutá"></span>
+        <span style="color:var(--text-secondary)" data-armed="Hlavní · 11 účtů · ARM do 17:00 CT" data-disarmed="Sama se nezapne"></span>
+        <span class="grow" style="flex:1"></span>
+        <button class="btn-off" data-armed="Vypnout" data-disarmed="Zapnout"></button>
+      </div>
+      <div class="fauxtable">
+        <div class="fauxrow"><span class="grow">Účet</span><span>Zůstatek</span></div>
+        <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">LFF05066846490007</span><span class="mono">$52,696.00</span></div>
+        <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FTDFYG50719650896</span><span class="mono">$52,873.46</span></div>
+      </div>
+    </div>
+    <div class="notes">
+      <div class="pro"><b>Pro</b><p>Nezavádí nový prvek — rozšiřuje ten, který v LIVE existuje a má své místo v layoutu. Nejlevnější na implementaci i na výšku stránky.</p></div>
+      <div class="con"><b>Proti</b><p>Pořád je to jen řádek. Při scrollu dolů zmizí a nevíš, jestli kopírka běží.</p></div>
+    </div>
+  </section>
+
+  <!-- B -->
+  <section class="variant">
+    <div class="vhead">
+      <h2>B — Celoširoký pás nad obsahem</h2>
+      <p>Samostatný blok jako první prvek stránky. Ve vypnutém stavu nízký a neutrální,
+        v zapnutém vyšší, barevný a nese to, co v ARM potřebuješ bez klikání.</p>
+    </div>
+    <div class="stage">
+      <div class="tabs"><span class="tab">Připojení</span><span class="tab on">Live Dashboard</span><span class="tab">Risk</span><span class="tab">Účty</span></div>
+      <div class="barB">
+        <span class="dot pulse" style="background:currentColor;width:9px;height:9px;color:var(--emerald)"></span>
+        <div>
+          <div class="big" data-armed="KOPÍRKA ZAPNUTÁ" data-disarmed="Kopírka vypnutá"></div>
+          <div class="sub" data-armed="Hlavní · leader LFF05066846490007 · 11 followerů" data-disarmed="Sama se nezapne. Zapnutí je vždy ruční."></div>
+        </div>
+        <div class="meta">
+          <div><span>ARM do</span><b class="mono">17:00 CT</b></div>
+          <div><span>Kapitál</span><b class="mono">$616 457</b></div>
+          <div><span>Denní P&amp;L</span><b class="mono" style="color:var(--rose)">−$16.20</b></div>
+        </div>
+        <button class="btn-off" data-armed="Vypnout" data-disarmed="Zapnout"></button>
+      </div>
+      <div class="fauxtable">
+        <div class="fauxrow"><span class="grow">Účet</span><span>Zůstatek</span></div>
+        <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">LFF05066846490007</span><span class="mono">$52,696.00</span></div>
+      </div>
+    </div>
+    <div class="notes">
+      <div class="pro"><b>Pro</b><p>Nejvíc místa pro kontext: expirace ARM, kapitál pod kopírkou, denní P&amp;L skupiny. Vypnutý stav zabere málo, zapnutý si řekne o pozornost.</p></div>
+      <div class="con"><b>Proti</b><p>Ukousne ~40–64 px z první obrazovky, která je už dnes přeplněná. Při scrollu taky zmizí.</p></div>
+    </div>
+  </section>
+
+  <!-- C -->
+  <section class="variant">
+    <div class="vhead">
+      <h2>C — Rám celé stránky<span class="tag risk">nejsilnější signál</span></h2>
+      <p>Žádný nový blok. V ARM dostane obsah LIVE tenký svítící rám a jmenovku na hraně.
+        Stav není prvek na stránce — stav <em>je</em> stránka.</p>
+    </div>
+    <div class="stage">
+      <div class="frameC">
+        <span class="badgeC"><span class="dot" style="background:#04140e"></span>Kopírka zapnutá · 11 účtů · ARM do 17:00 CT</span>
+        <div class="tabs"><span class="tab">Připojení</span><span class="tab on">Live Dashboard</span><span class="tab">Risk</span><span class="tab">Účty</span></div>
+        <div class="fauxtable">
+          <div class="fauxrow"><span class="grow">Účet</span><span>Zůstatek</span></div>
+          <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">LFF05066846490007</span><span class="mono">$52,696.00</span></div>
+          <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FTDFYG50719650896</span><span class="mono">$52,873.46</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="notes">
+      <div class="pro"><b>Pro</b><p>Nula ukradené výšky a nejsilnější periferní signál ze všech variant — rám vidíš, i když čteš čísla uprostřed.</p></div>
+      <div class="con"><b>Proti</b><p>Nemá kam dát detaily ani tlačítko Vypnout. Při dlouhém sezení v ARM může začít unavovat. Chce klidnější odstín než plnou zelenou.</p></div>
+    </div>
+  </section>
+
+  <!-- D -->
+  <section class="variant">
+    <div class="vhead">
+      <h2>D — Stav v plovoucí hlavičce<span class="tag best">vidět i po scrollu</span></h2>
+      <p>Hlavička s nápisem LIVE je jediný prvek, který je na obrazovce pořád. Stav kopírky patří přesně tam.</p>
+    </div>
+    <div class="stage">
+      <div class="hdrD">
+        <span class="brand">LIVE</span>
+        <span class="pillD"><span class="dot pulse" style="background:currentColor"></span><span data-armed="Zapnutá · 11 účtů" data-disarmed="Vypnutá"></span></span>
+        <span class="grow" style="flex:1"></span>
+        <span style="font-size:10px;color:var(--text-muted)" data-armed="ARM do 17:00 CT" data-disarmed=""></span>
+        <button class="btn-on" data-armed="Vypnout" data-disarmed="Zapnout"></button>
+      </div>
+      <div class="fauxtable">
+        <div class="fauxrow"><span class="grow">Účet</span><span>Zůstatek</span></div>
+        <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">LFF05066846490007</span><span class="mono">$52,696.00</span></div>
+        <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FTDFYG50719650896</span><span class="mono">$52,873.46</span></div>
+      </div>
+    </div>
+    <div class="notes">
+      <div class="pro"><b>Pro</b><p>Jediná varianta, kterou vidíš i po odscrollování dolů — a v nativní appce na telefonu taky. Nula ukradené výšky.</p></div>
+      <div class="con"><b>Proti</b><p>Hlavička je sdílená všemi stránkami, takže zásah přesahuje LIVE. Místa na detaily je tam málo.</p></div>
+    </div>
+  </section>
+
+  <!-- C: kam s tlačítkem -->
+  <section class="variant" id="tlacitko">
+    <div class="vhead">
+      <h2>C — kam s tlačítkem Vypnout<span class="tag best">tři řešení</span></h2>
+      <p>Rám sám tlačítko unese jen tehdy, když je vypnutí dosažitelné okamžitě a bez hledání.
+        Tři možnosti od nejlevnější po nejbezpečnější.</p>
+    </div>
+
+    <div class="stage">
+      <h3 style="margin:0 0 2px;font-size:11.5px;font-weight:900">C1 — jmenovka je zároveň tlačítko</h3>
+      <p class="hint">Najetím se přepne na „Vypnout“ — stejná mechanika, jakou má dnešní chip v řádku skupiny.</p>
+      <div class="cvar">
+        <button class="cbadge">
+          <span class="dot" style="background:#04140e"></span>
+          <span class="swapA">Kopírka zapnutá · 11 účtů · ARM do 17:00 CT</span>
+          <span class="swapB">Vypnout kopírku</span>
+        </button>
+        <div class="tabs" style="margin-top:4px"><span class="tab">Připojení</span><span class="tab on">Live Dashboard</span><span class="tab">Risk</span></div>
+        <div class="fauxtable">
+          <div class="fauxrow"><span class="grow">Účet</span><span>Zůstatek</span></div>
+          <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">LFF05066846490007</span><span class="mono">$52,696.00</span></div>
+        </div>
+      </div>
+
+      <h3 style="margin:26px 0 2px;font-size:11.5px;font-weight:900">C2 — jmenovka vlevo, tlačítko na protější straně</h3>
+      <p class="hint">Stav a akce oddělené, takže se Vypnout nedá kliknout omylem při čtení stavu.</p>
+      <div class="cvar">
+        <span class="cbadge" style="pointer-events:none"><span class="dot" style="background:#04140e"></span>Kopírka zapnutá · 11 účtů · ARM do 17:00 CT</span>
+        <button class="cbtn-edge">Vypnout</button>
+        <div class="tabs" style="margin-top:4px"><span class="tab">Připojení</span><span class="tab on">Live Dashboard</span><span class="tab">Risk</span></div>
+        <div class="fauxtable">
+          <div class="fauxrow"><span class="grow">Účet</span><span>Zůstatek</span></div>
+          <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">LFF05066846490007</span><span class="mono">$52,696.00</span></div>
+        </div>
+      </div>
+
+      <h3 style="margin:26px 0 2px;font-size:11.5px;font-weight:900">C3 — rám i ovládání drží u okna</h3>
+      <p class="hint">Rám nelemuje obsah, ale výřez obrazovky. Scrolluj uvnitř rámečku níže — stav i tlačítko zůstanou na místě.</p>
+      <div class="viewport">
+        <div class="vframe"><i></i>
+          <span class="vdock"><span class="lbl2">● Kopírka zapnutá · 11 účtů · ARM do 17:00 CT</span><button>Vypnout</button></span>
+        </div>
+        <div class="inner">
+          <div class="tabs" style="margin-top:26px"><span class="tab">Připojení</span><span class="tab on">Live Dashboard</span><span class="tab">Risk</span></div>
+          <div class="fauxtable">
+            <div class="fauxrow"><span class="grow">Účet</span><span>Zůstatek</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">LFF05066846490007</span><span class="mono">$52,696.00</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FTDFYG50719650896</span><span class="mono">$52,873.46</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FTDFYG50488642119</span><span class="mono">$52,875.96</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FNFTCHFILIPKREJCA36331</span><span class="mono">$51,604.86</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FNFTCHFILIPKREJCA5114</span><span class="mono">$51,607.86</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FNFTCHFILIPKREJCA20811</span><span class="mono">$51,600.86</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">LFF05066846490010</span><span class="mono">$50,000.00</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">LFF05066846490009</span><span class="mono">$50,000.00</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="pro"><b>C1 — pro / proti</b><p>Nula nových prvků, vzor už v appce je. Ale na dotyku hover neexistuje, takže na telefonu by se muselo klepnout naslepo — a jediný klik na jmenovku by kopírku vypnul.</p></div>
+      <div class="con"><b>C2 — pro / proti</b><p>Stav a akce oddělené, bezpečné proti omylu. Pořád ale platí, že po odscrollování je tlačítko mimo obraz.</p></div>
+      <div class="pro"><b>C3 — pro</b><p>Jediné řešení, kde je Vypnout dosažitelné vždy, bez scrollování. Rám navíc drží u okraje okna, takže signál nezmizí ani dole na stránce.</p></div>
+      <div class="con"><b>C3 — proti</b><p>Fixed vrstva přes celé okno se musí ohlídat vůči modalům a na telefonu ukousne kus výšky. Nejvíc práce ze tří.</p></div>
+    </div>
+  </section>
+
+  <!-- C3 doladěná -->
+  <section class="variant" id="island">
+    <div class="vhead">
+      <h2>C3 doladěná — ostrov pro skupinu<span class="tag best">tenčí rám · obsah podle situace</span></h2>
+      <p>Rám ztenčen na 1 px — signál nese barva a to, že je tam pořád, ne tloušťka. Text mluví o skupině, ne o „kopírce“.
+        A hlavně: ostrov nedrží jednu větu, ale mění obsah podle toho, co se právě děje. Scrolluj uvnitř každého výřezu.</p>
+    </div>
+
+    <div class="stage">
+      <p class="caselbl">1 · Zapnutá, nikdo neobchoduje <span>— klidný stav, jen fakt a expirace</span></p>
+      <div class="vp2">
+        <div class="vf2 ok"><i></i>
+          <span class="island">
+            <span class="dot" style="background:var(--emerald)"></span>
+            <span class="ttl">Hlavní zapnutá</span><span class="sep"></span>
+            <span class="num" style="color:var(--text-secondary)">11 účtů · do 17:00 CT</span>
+            <button>Vypnout</button>
+          </span>
+        </div>
+        <div class="inner"><div class="fauxtable" style="margin-top:26px">
+            <div class="fauxrow"><span class="grow">Účet</span><span>Zůstatek</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">LFF05066846490007</span><span class="mono">$52,696.00</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FTDFYG50719650896</span><span class="mono">$52,873.46</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FTDFYG50488642119</span><span class="mono">$52,875.96</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FNFTCHFILIPKREJCA36331</span><span class="mono">$51,604.86</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FNFTCHFILIPKREJCA5114</span><span class="mono">$51,607.86</span></div>
+        </div></div>
+      </div>
+
+      <p class="caselbl">2 · Běží pozice <span>— ostrov se přepne na to, co je teď důležitější</span></p>
+      <div class="vp2">
+        <div class="vf2 live"><i></i>
+          <span class="island">
+            <span class="dot" style="background:var(--indigo)"></span>
+            <span class="ttl">3 pozice · MNQ</span><span class="sep"></span>
+            <span class="num" style="color:var(--emerald)">+$124.50</span><span class="sep"></span>
+            <span class="num" style="color:var(--text-secondary)">11/11 sedí</span>
+            <button>Flatten</button>
+          </span>
+        </div>
+        <div class="inner"><div class="fauxtable" style="margin-top:26px">
+            <div class="fauxrow"><span class="grow">Účet</span><span>Zůstatek</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">LFF05066846490007</span><span class="mono">$52,696.00</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FTDFYG50719650896</span><span class="mono">$52,873.46</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FTDFYG50488642119</span><span class="mono">$52,875.96</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FNFTCHFILIPKREJCA36331</span><span class="mono">$51,604.86</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FNFTCHFILIPKREJCA5114</span><span class="mono">$51,607.86</span></div>
+        </div></div>
+      </div>
+
+      <p class="caselbl">3 · Něco nesedí <span>— nejvyšší priorita přebije vše ostatní</span></p>
+      <div class="vp2">
+        <div class="vf2 bad"><i></i>
+          <span class="island">
+            <span class="dot" style="background:var(--rose)"></span>
+            <span class="ttl">Divergence · skupina zastavena</span><span class="sep"></span>
+            <span class="num" style="color:var(--rose)">2 účty mimo</span>
+            <button>Zobrazit</button>
+          </span>
+        </div>
+        <div class="inner"><div class="fauxtable" style="margin-top:26px">
+            <div class="fauxrow"><span class="grow">Účet</span><span>Zůstatek</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">LFF05066846490007</span><span class="mono">$52,696.00</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FTDFYG50719650896</span><span class="mono">$52,873.46</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FTDFYG50488642119</span><span class="mono">$52,875.96</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FNFTCHFILIPKREJCA36331</span><span class="mono">$51,604.86</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FNFTCHFILIPKREJCA5114</span><span class="mono">$51,607.86</span></div>
+        </div></div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="pro"><b>Proč obsah podle situace</b><p>Zapnutá kopírka bez pozice a zapnutá kopírka se třemi otevřenými kontrakty jsou dvě různé situace. Jedna věta pro obě znamená, že v té důležitější ti ostrov nic neřekne.</p></div>
+      <div class="con"><b>Co to musí uhlídat</b><p>Ostrov je nejnápadnější místo v UI, takže tam nesmí být nepotvrzené číslo. Když je P&amp;L stale nebo čeká na broker snapshot, musí ostrov říct „čekám na potvrzení“, ne ukázat starou hodnotu.</p></div>
+      <div class="pro"><b>Vypnout vs. Flatten</b><p>Akce se mění se stavem: bez pozice je nejnutnější Vypnout, s otevřenou pozicí Flatten. Ostrov tak vždy nabízí ten krok, který v dané chvíli řeší problém.</p></div>
+      <div class="con"><b>Hranice</b><p>Tři stavy jsou strop. Čtvrtý a pátý by z ostrova udělaly další dashboard — a tím by přestal fungovat jako jeden pohled.</p></div>
+    </div>
+  </section>
+
+  <section class="variant" id="cyklus">
+    <div class="vhead">
+      <h2>Cyklus — pět situací, jeden ostrov<span class="tag best">finální návrh</span></h2>
+      <p>Přepínej stavy a sleduj, jak se mění text, akce i barva rámu. Pořadí kopíruje skutečný průběh obchodu:
+        vypnuto → zapnuto → limit čeká → pozice běží. Divergence může přijít kdykoli a přebije vše.</p>
+    </div>
+    <div class="stage">
+      <div class="cycle">
+        <button data-s="off" aria-pressed="false" onclick="setState('off')">Vypnutá</button>
+        <button data-s="armed" aria-pressed="true" onclick="setState('armed')">Zapnutá</button>
+        <button data-s="limit" aria-pressed="false" onclick="setState('limit')">Limit čeká</button>
+        <button data-s="pos" aria-pressed="false" onclick="setState('pos')">Pozice · zisk</button>
+        <button data-s="posL" aria-pressed="false" onclick="setState('posL')">Pozice · ztráta</button>
+        <button data-s="div" aria-pressed="false" onclick="setState('div')">Divergence</button>
+      </div>
+      <div class="cycle" style="margin-top:-6px">
+        <b style="font-size:9px;font-weight:900;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted);align-self:center;margin-right:2px">Barva pozice</b>
+        <button data-c="violet" aria-pressed="true" onclick="setPos('violet')">Violet</button>
+        <button data-c="cyan" aria-pressed="false" onclick="setPos('cyan')">Cyan</button>
+        <button data-c="white" aria-pressed="false" onclick="setPos('white')">Neutrální</button>
+        <button data-c="indigo" aria-pressed="false" onclick="setPos('indigo')">Indigo (dosud)</button>
+        <span style="width:12px"></span>
+        <b style="font-size:9px;font-weight:900;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted);align-self:center;margin-right:2px">Rozbalení</b>
+        <button data-g="fazova" aria-pressed="true" onclick="setGroup('fazova')">Podle fáze</button>
+        <button data-g="stejna" aria-pressed="false" onclick="setGroup('stejna')">Pořád stejná</button>
+      </div>
+      <div class="vp3">
+        <div class="vf3" id="vf3" data-s="armed"><i></i>
+          <span class="isl" id="isl"><span class="swap"><span class="dotc" style="background:var(--emerald)"></span><span class="t" style="color:var(--emerald)">Hlavní zapnutá</span><span class="sep"></span><span class="m">11 účtů · do 17:00 CT</span><span class="chev">▾</span><button class="act danger">Vypnout</button></span></span>
+        </div>
+        <div class="inner"><div class="fauxtable" style="margin-top:26px">
+            <div class="fauxrow"><span class="grow">Účet</span><span>Zůstatek</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">LFF05066846490007</span><span class="mono">$52,696.00</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FTDFYG50719650896</span><span class="mono">$52,873.46</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FTDFYG50488642119</span><span class="mono">$52,875.96</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FNFTCHFILIPKREJCA36331</span><span class="mono">$51,604.86</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FNFTCHFILIPKREJCA5114</span><span class="mono">$51,607.86</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">FNFTCHFILIPKREJCA20811</span><span class="mono">$51,600.86</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">LFF05066846490010</span><span class="mono">$50,000.00</span></div>
+            <div class="fauxrow"><span class="dot" style="background:var(--emerald)"></span><span class="grow mono">LFF05066846490009</span><span class="mono">$50,000.00</span></div>
+        </div></div>
+      </div>
+    </div>
+    <div class="notes">
+      <div class="pro"><b>Proč limit patří dovnitř</b><p>Je to vlastní fáze mezi klidem a pozicí — příkaz visí v trhu, ale nic se ještě nestalo. A je to jediný stav, kde má smysl ukazovat vzdálenost ceny k limitu; appka pro to už bere kotaci z TradingView.</p></div>
+      <div class="con"><b>Proč limit není oranžový</b><p>Amber v appce znamená varování (DLL zámek, čekání na ověření). Limit není problém, jen dřívější fáze téhož obchodu — proto stejná modrá jako pozice, jen slabší.</p></div>
+      <div class="pro"><b>Akce se mění s fází</b><p>Vypnout → Zrušit limit → Flatten → Zobrazit. Ostrov nabízí krok, který je v dané chvíli nejnaléhavější, ne pořád ten samý.</p></div>
+      <div class="con"><b>Co zůstává hlídat</b><p>Cena i P&amp;L v ostrově musí být potvrzené. Když čekají na broker snapshot, patří tam „čekám na potvrzení“, ne poslední známá hodnota.</p></div>
+    </div>
+  </section>
+</div>
+
+<script>
+function setArmed(on) {
+  document.body.classList.toggle('armed', on);
+  document.getElementById('bArm').setAttribute('aria-pressed', String(on));
+  document.getElementById('bDis').setAttribute('aria-pressed', String(!on));
+  for (const el of document.querySelectorAll('[data-armed]')) {
+    el.textContent = on ? el.dataset.armed : el.dataset.disarmed;
+  }
+  document.getElementById('dotA').style.color = on ? 'var(--emerald)' : 'var(--text-muted)';
+}
+function setTheme(light) {
+  document.documentElement.classList.toggle('light', light);
+  document.getElementById('bLight').setAttribute('aria-pressed', String(light));
+  document.getElementById('bDark').setAttribute('aria-pressed', String(!light));
+}
+setArmed(false);
+
+const STATES = {
+  off:   { dot:'var(--text-muted)', t:'Hlavní vypnutá', tc:'var(--text-secondary)', m:'Sama se nezapne', mc:'var(--text-secondary)', act:'Zapnout', danger:false },
+  armed: { dot:'var(--emerald)', t:'Hlavní zapnutá', tc:'var(--emerald)', m:'11 účtů · do 17:00 CT', mc:'var(--text-secondary)', act:'Vypnout', danger:true },
+  limit: { dot:'var(--indigo)', t:'Limit čeká · MNQ Long', tc:'var(--indigo)', m:'@ 29 487,75 · 12,5 b do vstupu', mc:'var(--text-secondary)', act:'Zrušit', danger:true },
+  pos:   { dot:'var(--pos)', t:'3× MNQ Long', tc:'var(--pos)', m:'+$124,50', mc:'var(--emerald)', m2:'11/11 sedí', act:'Flatten', danger:true },
+  posL:  { dot:'var(--pos)', t:'3× MNQ Long', tc:'var(--pos)', m:'−$86,40', mc:'var(--rose)', m2:'11/11 sedí', act:'Flatten', danger:true },
+  div:   { dot:'var(--rose)', t:'Divergence · skupina zastavena', tc:'var(--rose)', m:'2 účty mimo', mc:'var(--rose)', act:'Zobrazit', danger:false },
+};
+// Druhý řádek je pro každou fázi stejný: čísla skupiny, která z compact vypadla.
+// Rozbalení má dvě části: STÁLÉ jádro (vlevo, stejné ve všech fázích, aby
+// se oko mělo čeho chytit) a FÁZOVÁ pole (vpravo, jen to, co v dané chvíli
+// existuje). Prázdné pole se nevykreslí — u vypnuté skupiny žádný SL není.
+const CORE = [
+  ['Účty', '11 / 11', null],
+  ['Denní P&L', '−$16,20', 'var(--rose)'],
+];
+const PHASE = {
+  off:   [['Obchodů dnes', '3 / 5', null], ['Naposled vypnuto', '14:32', null]],
+  armed: [['Nejblíž limitu', 'FTD…896 · 1 178', 'var(--amber)'], ['Obchodů dnes', '3 / 5', null], ['ARM do', '17:00 CT', null]],
+  limit: [['Do fillu', '12,5 b', 'var(--pos)'], ['SL', '29 462,00 · −25,8 b', 'var(--rose)'], ['TP', '29 538,50 · +50,8 b', 'var(--emerald)']],
+  pos:   [['SL', '−$340 · 12,5 b', 'var(--rose)'], ['TP', '+$680 · 25,0 b', 'var(--emerald)'], ['Nejblíž limitu', 'FTD…896 · 1 178', 'var(--amber)']],
+  posL:  [['SL', '−$254 · 9,4 b', 'var(--rose)'], ['TP', '+$766 · 28,1 b', 'var(--emerald)'], ['Nejblíž limitu', 'FTD…896 · 1 178', 'var(--amber)']],
+  div:   [['Mimo synchron', 'FTD…896 · LFF…010', 'var(--rose)'], ['Od', '14:07:22', null], ['Poslední shoda', '13:58:04', null]],
+};
+let groupSet = 'fazova';
+const html = s => `<span class="swap">` +
+  `<span class="dotc" style="background:${s.dot}"></span>` +
+  `<span class="t" style="color:${s.tc}">${s.t}</span><span class="sep"></span>` +
+  `<span class="m" style="color:${s.mc}">${s.m}</span>` +
+  (s.m2 ? `<span class="sep"></span><span class="m">${s.m2}</span>` : '') +
+  `<span class="chev">▾</span>` +
+  `<button class="act${s.danger ? ' danger' : ''}">${s.act}</button></span>` +
+  `<span class="row2">` +
+  (groupSet === 'fazova' ? CORE.concat(PHASE[current] ?? []) : CORE.concat(PHASE.armed))
+    .map(([k, v, c]) => `<div><span>${k}</span><b${c ? ` style="color:${c}"` : ''}>${v}</b></div>`).join('') +
+  `</span>`;
+
+let timers = [];
+let current = null;
+
+/* Stav se aplikuje OKAMŽITĚ a synchronně; animace je jen dekorace navrch.
+   Dřív se obsah měnil až v setTimeout a ostrov mezitím držel .out (opacity 0).
+   Když se záložka uspí, timery se uškrtí — a ostrov uvízl jako prázdná
+   pilulka, se kterou nešlo nic dělat. Pravdivý stav nikdy nesmí viset na
+   doběhnutí časovače. */
+function render(k) {
+  const s = STATES[k], isl = document.getElementById('isl'), frame = document.getElementById('vf3');
+  if (!s) return;
+  const wasOpen = isl.classList.contains('open');
+  isl.innerHTML = html(s);
+  frame.dataset.s = k;
+  isl.classList.toggle('open', wasOpen);
+  isl.classList.remove('out', 'morph', 'urgent', 'breathe', 'jolt');
+  isl.style.width = '';
+  isl.style.height = '';
+}
+
+function setState(k) {
+  const isl = document.getElementById('isl');
+  if (!STATES[k] || k === current) return;
+  const urgent = k === 'div';
+  current = k;
+  for (const b of document.querySelectorAll('.cycle button[data-s]')) {
+    b.setAttribute('aria-pressed', String(b.dataset.s === k));
+  }
+  for (const t of timers) clearTimeout(t);
+  timers = [];
+  const fromW = isl.offsetWidth, fromH = isl.offsetHeight;
+  const first = !isl.dataset.ready;
+
+  render(k);                       // ← pravda je na obrazovce hned
+  isl.dataset.ready = '1';
+
+  if (first || document.hidden) return;   // na pozadí se neanimuje, jen překreslí
+  isl.classList.add('morph'); isl.classList.toggle('urgent', urgent);
+  isl.style.width = 'auto'; isl.style.height = 'auto';
+  const toW = isl.offsetWidth, toH = isl.offsetHeight;
+  isl.style.width = fromW + 'px'; isl.style.height = fromH + 'px';
+  void isl.offsetWidth;
+  isl.style.width = toW + 'px'; isl.style.height = toH + 'px';
+  isl.classList.add(urgent ? 'jolt' : 'breathe');
+  timers.push(setTimeout(() => {
+    isl.style.width = ''; isl.style.height = '';
+    isl.classList.remove('breathe', 'jolt', 'morph', 'urgent');
+  }, urgent ? 330 : 470));
+}
+
+/* Pojistka: po návratu na kartu ostrov vždy přerenderovat do čistého stavu,
+   ať se uspané timery nemají jak projevit. */
+document.addEventListener('visibilitychange', () => { if (!document.hidden && current) render(current); });
+window.addEventListener('pageshow', () => { if (current) render(current); });
+
+// Rozbalení: hover na desktopu, klepnutí na dotyku. Výška se animuje stejně jako šířka.
+function toggleOpen(force) {
+  const isl = document.getElementById('isl');
+  const open = force === undefined ? !isl.classList.contains('open') : force;
+  if (open === isl.classList.contains('open')) return;
+  const fromH = isl.offsetHeight, fromW = isl.offsetWidth;
+  isl.classList.toggle('open', open);
+  if (document.hidden) { isl.style.width = ''; isl.style.height = ''; return; }
+  isl.classList.add('morph');
+  isl.style.height = 'auto'; isl.style.width = 'auto';
+  const toH = isl.offsetHeight, toW = isl.offsetWidth;
+  isl.style.height = fromH + 'px'; isl.style.width = fromW + 'px';
+  void isl.offsetWidth;
+  isl.style.height = toH + 'px'; isl.style.width = toW + 'px';
+  setTimeout(() => { isl.style.height = ''; isl.style.width = ''; isl.classList.remove('morph'); }, 430);
+}
+const islEl = document.getElementById('isl');
+islEl.addEventListener('mouseenter', () => toggleOpen(true));
+islEl.addEventListener('mouseleave', () => toggleOpen(false));
+islEl.addEventListener('click', e => { if (!e.target.closest('.act')) toggleOpen(); });
+
+function setGroup(g) {
+  groupSet = g;
+  render(current);
+  for (const b of document.querySelectorAll('.cycle button[data-g]')) {
+    b.setAttribute('aria-pressed', String(b.dataset.g === g));
+  }
+}
+function setPos(c) {
+  document.body.dataset.pos = c;
+  for (const b of document.querySelectorAll('.cycle button[data-c]')) {
+    b.setAttribute('aria-pressed', String(b.dataset.c === c));
+  }
+}
+setPos('violet');
+setState('armed');
+</script>
+</body>
+</html>

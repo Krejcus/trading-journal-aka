@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor skupiny — oddělený leader</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-page:#f1f5f9; --bg-card:#ffffff; --bg-sunken:#f8fafc;
+  --text-primary:#0f172a; --text-secondary:#475569; --text-muted:#94a3b8;
+  --border-subtle:#e2e8f0; --accent:#4f46e5; --accent-soft:rgba(79,70,229,.1);
+  --lead:#d97706; --ok:#059669; --warn:#b45309; --danger:#e11d48;
+  --shadow:0 24px 60px -24px rgba(15,23,42,.35);
+}
+.dark {
+  --bg-page:#020617; --bg-card:#0a0f1d; --bg-sunken:#0f172a;
+  --text-primary:#f8fafc; --text-secondary:#94a3b8; --text-muted:#475569;
+  --border-subtle:rgba(255,255,255,.08); --accent:#6366f1; --accent-soft:rgba(99,102,241,.16);
+  --lead:#f59e0b; --ok:#34d399; --warn:#fbbf24; --danger:#fb7185;
+  --shadow:0 24px 60px -24px rgba(0,0,0,.8);
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:26px 16px 80px; font-family:Inter,system-ui,sans-serif;
+  background:var(--bg-page); color:var(--text-primary); transition:background .25s,color .25s; }
+.wrap { max-width:1180px; margin:0 auto; }
+h1 { font-size:22px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.65; color:var(--text-secondary); max-width:82ch; margin:0 0 18px; }
+.bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+  padding:9px 12px; margin-bottom:24px; border:1px solid var(--border-subtle); border-radius:12px;
+  background:var(--bg-card); }
+.bar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+.bar button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.bar button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+
+.spec { margin-bottom:46px; }
+.spec > header { margin-bottom:12px; }
+.spec h2 { font-size:15px; font-weight:900; margin:0 0 4px; letter-spacing:-.01em; }
+.spec h2 em { font-style:normal; color:var(--text-muted); font-weight:800; font-size:11px;
+  letter-spacing:.08em; text-transform:uppercase; margin-right:8px; }
+.spec p { font-size:12.5px; line-height:1.6; color:var(--text-secondary); margin:0; max-width:80ch; }
+.tags { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+.tag { font-size:9.5px; font-weight:800; letter-spacing:.05em; text-transform:uppercase;
+  padding:3px 7px; border-radius:6px; background:var(--bg-sunken); border:1px solid var(--border-subtle);
+  color:var(--text-secondary); }
+.tag.good { color:var(--ok); border-color:color-mix(in srgb,var(--ok) 35%,transparent); background:color-mix(in srgb,var(--ok) 10%,transparent); }
+.tag.warn { color:var(--warn); border-color:color-mix(in srgb,var(--warn) 32%,transparent); background:color-mix(in srgb,var(--warn) 10%,transparent); }
+
+/* ─── skořápka ─────────────────────────────────────────────────── */
+.dlg { display:flex; flex-direction:column; border:1px solid var(--border-subtle); border-radius:14px;
+  background:var(--bg-card); box-shadow:var(--shadow); overflow:hidden; }
+.dlg-head { display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:12px 16px; border-bottom:1px solid var(--border-subtle); }
+.xbtn { width:28px; height:28px; border:0; border-radius:8px; background:transparent; cursor:pointer;
+  color:var(--text-secondary); font-size:15px; line-height:1; }
+.dlg-foot { display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:11px 16px; border-top:1px solid var(--border-subtle); }
+.btn-line { font:inherit; font-size:11.5px; font-weight:800; padding:8px 14px; border-radius:9px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.btn-primary { font:inherit; font-size:11.5px; font-weight:800; padding:8px 18px; border:0; border-radius:9px;
+  background:var(--accent); color:#fff; cursor:pointer; }
+.btn-danger { font:inherit; font-size:11.5px; font-weight:800; padding:8px 11px; border:0; border-radius:9px;
+  background:transparent; color:var(--danger); cursor:pointer; }
+.btn-mini { font:inherit; font-size:10.5px; font-weight:800; padding:5px 10px; border-radius:7px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:var(--bg-card); color:var(--text-secondary); }
+
+.ident { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.ident input[type=text] { font:inherit; font-size:13px; font-weight:800; height:34px; padding:0 11px;
+  border-radius:9px; border:1px solid var(--border-subtle); background:var(--bg-sunken);
+  color:var(--text-primary); outline:none; }
+.ident input[type=text]:focus { border-color:var(--accent); }
+.rel { position:relative; }
+.field-dot { position:relative; display:flex; align-items:center; width:264px; }
+.field-dot input[type=text] { width:100%; padding-left:38px; }
+.field-dot .chip { position:absolute; left:6px; width:24px; height:24px; border-radius:7px; border:0;
+  cursor:pointer; padding:0; }
+.pop { position:absolute; z-index:30; top:calc(100% + 6px); left:0; display:grid; gap:6px;
+  grid-template-columns:repeat(4,26px); padding:8px; border-radius:11px;
+  border:1px solid var(--border-subtle); background:var(--bg-card); box-shadow:var(--shadow); }
+.pop button { width:26px; height:26px; border-radius:999px; border:2px solid transparent; cursor:pointer; padding:0; }
+.pop button[aria-pressed="true"] { border-color:var(--text-primary); }
+
+.lbl { font-size:9.5px; font-weight:900; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); }
+.hint { font-size:10.5px; color:var(--text-muted); font-weight:600; line-height:1.5; }
+
+/* ─── leader ───────────────────────────────────────────────────── */
+.leadband { border:1px solid color-mix(in srgb,var(--lead) 40%,transparent); border-radius:11px;
+  background:color-mix(in srgb,var(--lead) 8%,transparent); padding:10px 12px;
+  display:flex; align-items:center; gap:11px; }
+.crown { width:32px; height:32px; flex:none; border-radius:999px; display:flex; align-items:center;
+  justify-content:center; background:var(--lead); color:#3b2600; font-size:15px; }
+.leadband .who b { display:block; font-size:12.5px; font-weight:800; }
+.leadband .who span { display:block; font-size:10.5px; color:var(--text-secondary); margin-top:1px; }
+.leadband .empty { font-size:12px; font-weight:800; color:var(--warn); }
+
+.pick { display:grid; gap:6px; grid-template-columns:1fr 1fr; margin-top:9px; }
+.pick button { display:flex; align-items:center; gap:9px; text-align:left; font:inherit; cursor:pointer;
+  padding:7px 10px; border-radius:9px; border:1px solid var(--border-subtle); background:var(--bg-card);
+  color:var(--text-primary); }
+.pick button[aria-pressed="true"] { border-color:var(--lead); background:color-mix(in srgb,var(--lead) 10%,transparent); }
+.pick b { display:block; font-size:11.5px; font-weight:800; }
+.pick span { display:block; font-size:10px; color:var(--text-secondary); }
+
+/* ─── tabulka followerů ────────────────────────────────────────── */
+.fol { width:100%; border-collapse:separate; border-spacing:0; }
+.fol th { font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted);
+  text-align:left; padding:6px 10px; border-bottom:1px solid var(--border-subtle); white-space:nowrap; }
+.fol th.r, .fol td.r { text-align:right; }
+.fol td { padding:5px 10px; border-bottom:1px solid var(--border-subtle); font-size:12px; vertical-align:middle; }
+.fol tr:last-child td { border-bottom:0; }
+.fol tr.on td { background:color-mix(in srgb, var(--accent) 5%, transparent); }
+.fol .acct b { display:block; font-size:11.5px; font-weight:800; }
+.fol .acct span { display:block; font-size:10px; color:var(--text-secondary); margin-top:1px; }
+.fol label { display:flex; align-items:center; gap:9px; cursor:pointer; }
+.fol input[type=checkbox] { width:14px; height:14px; accent-color:var(--accent); cursor:pointer; flex:none; }
+.fol .off { opacity:.3; }
+
+/* výběr replikace — nativní šipka prohlížeče pryč, zbytek je náš */
+.sel { position:relative; display:inline-flex; align-items:center; }
+.sel select { font:inherit; font-size:11px; font-weight:800; height:28px; width:126px;
+  padding:0 26px 0 9px; border-radius:8px; border:1px solid var(--border-subtle);
+  background:var(--bg-sunken); color:var(--text-primary); cursor:pointer;
+  -webkit-appearance:none; -moz-appearance:none; appearance:none; }
+.sel select:focus { outline:none; border-color:var(--accent); }
+.sel select:disabled { cursor:default; }
+.sel .chev { position:absolute; right:8px; width:11px; height:11px; pointer-events:none;
+  color:var(--text-muted); }
+.sel.mode-off select { color:var(--text-muted); }
+
+/* krokovač — číselník se šipkami prohlížeče je v tabulce cizí těleso */
+.step { display:inline-flex; align-items:center; height:28px; border-radius:8px;
+  border:1px solid var(--border-subtle); background:var(--bg-sunken); overflow:hidden; }
+.step button { font:inherit; font-size:13px; font-weight:800; line-height:1; width:22px; height:100%;
+  border:0; background:transparent; color:var(--text-muted); cursor:pointer; }
+.step button:hover:not(:disabled) { background:var(--bg-card); color:var(--text-primary); }
+.step button:disabled { opacity:.3; cursor:default; }
+.step .val { min-width:40px; text-align:center; font-size:11.5px; font-weight:800;
+  font-variant-numeric:tabular-nums; }
+.step .val.inf { color:var(--text-muted); }
+.step.dim { opacity:.32; }
+
+.selall { display:flex; gap:4px; }
+.selall button { font:inherit; font-size:10.5px; font-weight:800; padding:4px 9px; border-radius:7px;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); cursor:pointer; }
+.selall button:hover:not(:disabled) { background:var(--bg-sunken); color:var(--text-primary); }
+.selall button:disabled { opacity:.35; cursor:default; }
+
+/* ─── sloupce ──────────────────────────────────────────────────── */
+.cols2 { display:grid; grid-template-columns:250px 1fr; }
+.cols2 > .left { border-right:1px solid var(--border-subtle); background:var(--bg-sunken); padding:12px; }
+.cols2 > .right { padding:12px; }
+.leadlist { display:grid; gap:5px; margin-top:8px; }
+.leadlist button { display:flex; align-items:center; gap:8px; text-align:left; font:inherit; cursor:pointer;
+  padding:7px 9px; border-radius:9px; border:1px solid transparent; background:transparent; color:var(--text-primary); }
+.leadlist button:hover { background:var(--bg-card); }
+.leadlist button[aria-pressed="true"] { border-color:var(--lead);
+  background:color-mix(in srgb,var(--lead) 12%,transparent); }
+.leadlist .dot { width:22px; height:22px; flex:none; border-radius:999px; display:flex; align-items:center;
+  justify-content:center; font-size:11px; background:var(--bg-card); color:var(--text-muted); }
+.leadlist button[aria-pressed="true"] .dot { background:var(--lead); color:#3b2600; }
+.leadlist b { display:block; font-size:11px; font-weight:800; }
+.leadlist span { display:block; font-size:9.5px; color:var(--text-secondary); }
+
+/* ─── tři sloupce ──────────────────────────────────────────────── */
+.cols3 { display:grid; grid-template-columns:1fr 1fr; }
+.bay { padding:12px; min-height:300px; }
+.bay + .bay { border-left:1px solid var(--border-subtle); }
+.bay.pool { background:var(--bg-sunken); }
+.bay > header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:9px; }
+.card { display:flex; align-items:center; gap:9px; padding:7px 9px; border-radius:10px;
+  border:1px solid var(--border-subtle); background:var(--bg-card); margin-bottom:6px; }
+.card.lead { border-color:color-mix(in srgb,var(--lead) 45%,transparent);
+  background:color-mix(in srgb,var(--lead) 9%,transparent); }
+.card .who { flex:1; min-width:0; }
+.card .who b { display:block; font-size:11.5px; font-weight:800; }
+.card .who span { display:block; font-size:10px; color:var(--text-secondary); }
+.card .move { font:inherit; font-size:13px; font-weight:800; border:0; background:transparent; cursor:pointer;
+  color:var(--text-muted); padding:2px 6px; border-radius:6px; }
+.card .move:hover { background:var(--bg-sunken); color:var(--text-primary); }
+.fields { display:flex; gap:5px; align-items:center; }
+.fields .sel select { width:108px; height:26px; font-size:10.5px; }
+.fields .step { height:26px; }
+.fields .step .val { min-width:32px; font-size:10.5px; }
+.fields .step button { width:19px; }
+.slot { border:1px dashed color-mix(in srgb,var(--lead) 45%,transparent); border-radius:10px; padding:14px;
+  text-align:center; font-size:11px; font-weight:700; color:var(--warn); }
+.empty { border:1px dashed var(--border-subtle); border-radius:10px; padding:14px; text-align:center;
+  font-size:11px; font-weight:600; color:var(--text-muted); }
+
+/* ─── ochrany + změny ──────────────────────────────────────────── */
+.guards { display:grid; gap:1px; background:var(--border-subtle); border:1px solid var(--border-subtle);
+  border-radius:10px; overflow:hidden; }
+.guard { display:flex; gap:9px; align-items:flex-start; padding:8px 11px; background:var(--bg-card); }
+.guard input { margin-top:2px; accent-color:var(--accent); }
+.guard b { font-size:11px; font-weight:800; display:block; white-space:nowrap; }
+.guard span { font-size:10px; line-height:1.45; color:var(--text-secondary); display:block; margin-top:1px; }
+.pill-req { font-size:8.5px; font-weight:900; letter-spacing:.06em; text-transform:uppercase; color:var(--ok); margin-left:6px; }
+.diff { border:1px solid var(--border-subtle); border-radius:10px; overflow:hidden; }
+.diff-row { display:flex; align-items:center; gap:8px; padding:6px 10px; font-size:11px;
+  border-bottom:1px solid var(--border-subtle); }
+.diff-row:last-child { border-bottom:0; }
+.badge { font-size:8.5px; font-weight:900; letter-spacing:.05em; text-transform:uppercase; padding:2px 6px; border-radius:5px; }
+.badge.add { color:var(--ok); background:color-mix(in srgb,var(--ok) 13%,transparent); }
+.badge.del { color:var(--danger); background:color-mix(in srgb,var(--danger) 13%,transparent); }
+.badge.chg { color:var(--warn); background:color-mix(in srgb,var(--warn) 15%,transparent); }
+.diff-empty { padding:13px; text-align:center; font-size:10.5px; color:var(--text-muted); font-weight:600; }
+summary { cursor:pointer; font-size:9.5px; font-weight:900; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--text-muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Oddělený leader — tři další návrhy</h1>
+  <p class="lede">Leader je jeden a jediný účet, takže nemá soutěžit s pěti followery o stejné místo v řádku.
+    Ve všech třech je vytažený jinam: nad tabulku, na druhou stranu, nebo do vlastní přihrádky.
+    Klikat jde všechno — leadera přepni a uvidíš, jak se seznam followerů sám přizpůsobí.</p>
+
+  <div class="bar">
+    <b>Téma</b>
+    <button id="bl" aria-pressed="false" onclick="theme(false)">Světlé</button>
+    <button id="bd" aria-pressed="true" onclick="theme(true)">Tmavé</button>
+  </div>
+
+  <section class="spec">
+    <header>
+      <h2><em>Návrh E</em>Leader jako pruh nad followery</h2>
+      <p>Leader má vlastní zlatý pruh nad tabulkou — vždycky vidíš, kdo se kopíruje, aniž bys ho
+        musel hledat v seznamu. Tabulka pod ním je čistě o followerech: zaškrtávátko, replikace,
+        násobek, max. Žádný sloupec s rolí. „Změnit“ rozbalí výběr přímo v pruhu, takže se nikam
+        neproklikáváš.</p>
+      <div class="tags"><span class="tag good">nejmenší okno</span><span class="tag good">leader nepřehlédnutelný</span>
+        <span class="tag warn">výběr leadera je o kliknutí navíc</span></div>
+    </header>
+    <div class="dlg" style="max-width:720px" id="E"></div>
+  </section>
+
+  <section class="spec">
+    <header>
+      <h2><em>Návrh F</em>Leader vlevo, followeři vpravo</h2>
+      <p>Doslova na druhé straně. Vlevo úzký sloupec, kde se leader vybírá jedním kliknutím ze
+        seznamu — je to jedna volba, tak vypadá jako jedna volba. Vpravo followeři s nastavením.
+        Účet zvolený jako leader ze seznamu followerů sám zmizí, takže se nemůže stát, že by
+        kopíroval sám sebe.</p>
+      <div class="tags"><span class="tag good">obě volby naráz</span><span class="tag good">leader na jedno kliknutí</span>
+        <span class="tag warn">levý sloupec ukrojí 250 px</span></div>
+    </header>
+    <div class="dlg" style="max-width:940px" id="F"></div>
+  </section>
+
+  <section class="spec">
+    <header>
+      <h2><em>Návrh G</em>Přihrádky — leader, followeři, nezařazené</h2>
+      <p>Skupina jako tři přihrádky. Vlevo nahoře jediný slot pro leadera, pod ním followeři
+        s nastavením přímo na kartě, vpravo zbylé účty. Šipkami se účty přesouvají mezi stranami.
+        Nejnázornější, když skupinu skládáš poprvé: vidíš, co je uvnitř a co venku.</p>
+      <div class="tags"><span class="tag good">nejnázornější stavba</span><span class="tag good">vidíš i nezařazené</span>
+        <span class="tag warn">nastavení na kartě je stísněné</span></div>
+    </header>
+    <div class="dlg" style="max-width:940px" id="G"></div>
+  </section>
+</div>
+
+<script>
+const ACCOUNTS = [
+  { id:1, name:'LFF05066846490007', firm:'Lucid',    balance:51525 },
+  { id:2, name:'TDF-50K-118204',    firm:'Tradeify', balance:50310 },
+  { id:3, name:'TDF-50K-118205',    firm:'Tradeify', balance:49880 },
+  { id:4, name:'TDF-100K-90412',    firm:'Tradeify', balance:101240 },
+  { id:5, name:'APEX-184920',       firm:'Apex',     balance:49500 },
+  { id:6, name:'LFF05066846490011', firm:'Lucid',    balance:50000 },
+];
+const MODES = [['off','Vypnuto'], ['on-submit','Při zadání'], ['on-fill','Při vyplnění']];
+const GUARDS = [
+  ['positionReconciler','Kontrola shody pozic','Po každém vyplnění followera ověří, že nová pozice odpovídá směru a symbolu leadera.'],
+  ['disableReplicationOnBreach','Zastavit skupinu při nesouladu','Povinná fail-closed ochrana: rozdíl na jediném followerovi okamžitě zastaví replikaci celé skupiny.'],
+  ['autoCloseFollowerPositions','Automaticky zavřít pozice followerů','Jakmile se zavře pozice leadera, automaticky zavře odpovídající pozice followerů.'],
+  ['preventHedging','Zabránit opačné pozici','Nedovolí opačnému příkazu překlopit follower účet do obráceného směru.'],
+];
+const COLORS = ['#6366f1','#f97316','#d946ef','#84cc16','#06b6d4','#ec4899','#8b5cf6','#94a3b8'];
+const SAVED = { name:'Hlavní', color:'#6366f1', leader:1,
+  followers:{ 2:{mode:'on-submit',mult:1,max:null}, 3:{mode:'on-submit',mult:2,max:null}, 4:{mode:'on-fill',mult:1,max:5} } };
+const fresh = () => ({ name:SAVED.name, color:SAVED.color, leader:SAVED.leader,
+  followers:JSON.parse(JSON.stringify(SAVED.followers)),
+  guards:{ positionReconciler:true, disableReplicationOnBreach:true, autoCloseFollowerPositions:true, preventHedging:true },
+  picking:false, paletteOpen:false });
+const S = { E:fresh(), F:fresh(), G:fresh() };
+
+const usd = new Intl.NumberFormat('cs-CZ',{style:'currency',currency:'USD',maximumFractionDigits:0});
+const modeLabel = m => (MODES.find(x=>x[0]===m)||[])[1] ?? m;
+const acct = id => ACCOUNTS.find(a=>a.id===id);
+const exposure = s => Object.values(s.followers).reduce((sum,f)=>sum+(f.mode==='off'?0:f.mult),0);
+
+function diffRows(s) {
+  const out = [];
+  if (s.name !== SAVED.name) out.push(['chg','Název',`${SAVED.name} → ${s.name||'—'}`]);
+  if (s.leader !== SAVED.leader) out.push(['chg','Leader',
+    `${acct(SAVED.leader)?.name ?? 'nevybrán'} → ${acct(s.leader)?.name ?? 'nevybrán'}`]);
+  for (const a of ACCOUNTS) {
+    const was = SAVED.followers[a.id], now = s.followers[a.id];
+    if (!was && now) out.push(['add', a.name, `${modeLabel(now.mode)} · ${now.mult}× · max ${now.max ?? '∞'}`]);
+    else if (was && !now) out.push(['del', a.name, 'odebrán ze skupiny']);
+    else if (was && now && (was.mode!==now.mode || was.mult!==now.mult || (was.max??null)!==(now.max??null))) {
+      const bits = [];
+      if (was.mode!==now.mode) bits.push(`${modeLabel(was.mode)} → ${modeLabel(now.mode)}`);
+      if (was.mult!==now.mult) bits.push(`${was.mult}× → ${now.mult}×`);
+      if ((was.max??null)!==(now.max??null)) bits.push(`max ${was.max ?? '∞'} → ${now.max ?? '∞'}`);
+      out.push(['chg', a.name, bits.join(' · ')]);
+    }
+  }
+  return out;
+}
+const diffHtml = s => {
+  const rows = diffRows(s);
+  if (!rows.length) return '<div class="diff"><div class="diff-empty">Zatím žádná změna proti uložené skupině</div></div>';
+  return '<div class="diff">' + rows.map(([k,l,t]) =>
+    `<div class="diff-row"><span class="badge ${k}">${k==='add'?'přidán':k==='del'?'odebrán':'změna'}</span><b>${l}</b>
+      <span style="color:var(--text-secondary)">${t}</span></div>`).join('') + '</div>';
+};
+const identHtml = v => {
+  const s = S[v];
+  return `<div>
+    <div class="lbl" style="margin-bottom:4px">Název skupiny</div>
+    <div class="rel"><div class="ident field-dot">
+      <button class="chip" style="background:${s.color}" aria-label="Barva skupiny"
+        aria-expanded="${s.paletteOpen === true}" onclick="togglePalette('${v}')"></button>
+      <input type="text" value="${s.name}" placeholder="např. Tradeify 50K" aria-label="Název skupiny"
+        oninput="setName('${v}',this.value)">
+    </div>${s.paletteOpen ? `<div class="pop">${COLORS.map(c =>
+      `<button style="background:${c}" aria-pressed="${s.color===c}" aria-label="Barva ${c}"
+        onclick="setColor('${v}','${c}')"></button>`).join('')}</div>` : ''}</div>
+  </div>`;
+};
+const guardsHtml = v => {
+  const s = S[v];
+  return `<div class="guards">${GUARDS.map(([key,title,detail])=>{
+    const req = key==='disableReplicationOnBreach';
+    return `<label class="guard"><input type="checkbox" ${s.guards[key]||req?'checked':''} ${req?'disabled':''}
+      onchange="setGuard('${v}','${key}',this.checked)">
+      <span><b>${title}${req?'<span class="pill-req">povinné</span>':''}</b><span>${detail}</span></span></label>`;
+  }).join('')}</div>`;
+};
+const footHtml = () => `<div class="dlg-foot"><button class="btn-danger">Smazat skupinu</button>
+  <div style="display:flex;gap:8px"><button class="btn-line">Zrušit</button>
+  <button class="btn-primary">Uložit změny</button></div></div>`;
+
+/* ── akce ─────────────────────────────────────────────────────── */
+function setLeader(v, id) {
+  const s = S[v];
+  delete s.followers[id];
+  s.leader = id;
+  s.picking = false;
+  render(v);
+}
+function toggleFollower(v, id) {
+  const s = S[v];
+  if (s.leader === id) return;
+  if (s.followers[id]) delete s.followers[id];
+  else s.followers[id] = { mode:'on-submit', mult:1, max:null };
+  render(v);
+}
+function setField(v,id,key,value){ S[v].followers[id][key]=value; render(v); }
+function setGuard(v,key,on){ S[v].guards[key]=on; render(v); }
+function setName(v,value){ S[v].name=value; render(v,true); }
+function setColor(v,color){ S[v].color=color; S[v].paletteOpen=false; render(v); }
+function togglePalette(v){ S[v].paletteOpen = !S[v].paletteOpen; render(v); }
+function togglePick(v){ S[v].picking = !S[v].picking; render(v); }
+
+/* ── followerská tabulka (E, F) ───────────────────────────────── */
+const CHEV = `<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+  stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`;
+
+/** Násobek i Max se krokují tlačítky — číselník prohlížeče sem nepatří. */
+function stepper(v, id, kind, value, on) {
+  const infinite = kind === 'max' && value == null;
+  const label = kind === 'max' ? (infinite ? '∞' : String(value)) : `${value}×`;
+  const minus = kind === 'max' ? (infinite ? '' : `bump('${v}',${id},'max',-1)`)
+    : (value > 0.25 ? `bump('${v}',${id},'mult',-0.25)` : '');
+  const plus = kind === 'max' ? `bump('${v}',${id},'max',1)` : `bump('${v}',${id},'mult',0.25)`;
+  return `<span class="step ${on?'':'dim'}">
+    <button ${on && minus ? `onclick="${minus}"` : 'disabled'} aria-label="Snížit">−</button>
+    <span class="val ${infinite?'inf':''}" title="${kind==='max' && infinite ? 'Bez limitu' : ''}">${label}</span>
+    <button ${on ? `onclick="${plus}"` : 'disabled'} aria-label="Zvýšit">+</button>
+  </span>`;
+}
+
+function bump(v, id, key, delta) {
+  const f = S[v].followers[id];
+  if (!f) return;
+  if (key === 'mult') f.mult = Math.round(Math.max(0.25, f.mult + delta) * 100) / 100;
+  else {
+    const next = (f.max ?? 0) + delta;
+    f.max = next < 1 ? null : next;   // pod jedničku se vrací „bez limitu“
+  }
+  render(v);
+}
+
+function folTable(v) {
+  const s = S[v];
+  const rows = ACCOUNTS.filter(a => a.id !== s.leader);
+  return `<table class="fol"><thead><tr>
+      <th style="width:42%">Účet</th><th>Replikace</th><th class="r">Násobek</th>
+      <th class="r" title="Tvrdý strop expozice; překročení odmítne celý příkaz a odzbrojí copier">Max</th>
+    </tr></thead><tbody>
+    ${rows.map(a => { const f = s.followers[a.id]; return `<tr class="${f?'on':''}">
+      <td class="acct"><label><input type="checkbox" ${f?'checked':''} onchange="toggleFollower('${v}',${a.id})">
+        <span><b>${a.name}</b><span>${a.firm} · ${usd.format(a.balance)}</span></span></label></td>
+      <td><span class="sel ${f && f.mode==='off' ? 'mode-off' : ''} ${f?'':'off'}">
+        <select ${f?'':'disabled'} aria-label="Replikace ${a.name}" onchange="setField('${v}',${a.id},'mode',this.value)">
+          ${MODES.map(([k,l])=>`<option value="${k}" ${(f?f.mode:'on-submit')===k?'selected':''}>${l}</option>`).join('')}
+        </select>${CHEV}</span></td>
+      <td class="r">${stepper(v, a.id, 'mult', f ? f.mult : 1, !!f)}</td>
+      <td class="r">${stepper(v, a.id, 'max', f ? f.max : null, !!f)}</td>
+    </tr>`; }).join('')}
+    </tbody></table>`;
+}
+
+/** Hromadný výběr followerů. Leader se nikdy nepřidá — nekopíruje sám sebe. */
+function selectAll(v, on) {
+  const s = S[v];
+  for (const a of ACCOUNTS) {
+    if (a.id === s.leader) continue;
+    if (on) s.followers[a.id] ??= { mode:'on-submit', mult:1, max:null };
+    else delete s.followers[a.id];
+  }
+  render(v);
+}
+const selAllHtml = v => {
+  const s = S[v];
+  const candidates = ACCOUNTS.filter(a => a.id !== s.leader).length;
+  const chosen = Object.keys(s.followers).length;
+  return `<span class="selall">
+    <button ${chosen===candidates?'disabled':''} onclick="selectAll('${v}',true)">Označit vše</button>
+    <button ${chosen===0?'disabled':''} onclick="selectAll('${v}',false)">Odebrat vše</button>
+  </span>`;
+};
+
+/* ── E: pruh nad tabulkou ─────────────────────────────────────── */
+function renderE(keepFocus) {
+  const s = S.E, lead = acct(s.leader), n = Object.keys(s.followers).length;
+  document.getElementById('E').innerHTML = `
+    <div class="dlg-head">${identHtml('E')}<button class="xbtn">✕</button></div>
+    <div style="padding:12px 14px 0">
+      <div class="lbl" style="margin-bottom:6px">Leader</div>
+      <div class="leadband">
+        <span class="crown"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="width:58%;height:58%" aria-hidden="true"><path d="M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z"/><path d="M5 21h14"/></svg></span>
+        <span class="who" style="flex:1">${lead
+          ? `<b>${lead.name}</b><span>${lead.firm} · ${usd.format(lead.balance)}</span>`
+          : '<span class="empty">Leader zatím nevybrán</span>'}</span>
+        <button class="btn-mini" onclick="togglePick('E')">${s.picking?'Hotovo':'Změnit'}</button>
+      </div>
+      ${s.picking ? `<div class="pick">${ACCOUNTS.map(a=>`
+        <button aria-pressed="${s.leader===a.id}" onclick="setLeader('E',${a.id})">
+          <span class="crown" style="width:24px;height:24px;${s.leader===a.id?'':'background:var(--bg-sunken);color:var(--text-muted)'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="width:58%;height:58%" aria-hidden="true"><path d="M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z"/><path d="M5 21h14"/></svg></span>
+          <span><b>${a.name}</b><span>${a.firm} · ${usd.format(a.balance)}</span></span></button>`).join('')}</div>`
+        : `<p class="hint" style="margin:6px 0 0">Obchody tohoto účtu se kopírují na followery níž. Leader sám sebe nekopíruje.</p>`}
+    </div>
+    <div style="padding:14px 14px 0">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px">
+        <span class="lbl">Followeři — ${n} z ${ACCOUNTS.length-1} · expozice ${exposure(s)}× leadera</span>
+        ${selAllHtml('E')}
+      </div>
+      ${folTable('E')}
+    </div>
+    <div style="padding:12px 14px 4px">
+      <details><summary>Ochrany kopírování — ${Object.values(s.guards).filter(Boolean).length}/4 zapnuto</summary>
+        <div style="padding-top:8px">${guardsHtml('E')}</div></details>
+      <details open style="margin-top:9px"><summary>Změny proti uložené skupině — ${diffRows(s).length}</summary>
+        <div style="padding-top:8px">${diffHtml(s)}</div></details>
+    </div>
+    ${footHtml()}`;
+  if (keepFocus) focusName('E');
+}
+
+/* ── F: leader vlevo ──────────────────────────────────────────── */
+function renderF(keepFocus) {
+  const s = S.F, n = Object.keys(s.followers).length;
+  document.getElementById('F').innerHTML = `
+    <div class="dlg-head">${identHtml('F')}<button class="xbtn">✕</button></div>
+    <div class="cols2">
+      <div class="left">
+        <div class="lbl">Leader</div>
+        <p class="hint" style="margin:4px 0 0">Jeden účet, jehož obchody se kopírují.</p>
+        <div class="leadlist">${ACCOUNTS.map(a=>`
+          <button aria-pressed="${s.leader===a.id}" onclick="setLeader('F',${a.id})">
+            <span class="dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="width:58%;height:58%" aria-hidden="true"><path d="M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z"/><path d="M5 21h14"/></svg></span><span style="min-width:0"><b>${a.name}</b><span>${a.firm}</span></span>
+          </button>`).join('')}</div>
+      </div>
+      <div class="right">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px">
+          <span class="lbl">Followeři — ${n} vybráno · expozice ${exposure(s)}× leadera</span>
+          ${selAllHtml('F')}
+        </div>
+        ${folTable('F')}
+        <div style="margin-top:12px">
+          <details><summary>Ochrany kopírování — ${Object.values(s.guards).filter(Boolean).length}/4 zapnuto</summary>
+            <div style="padding-top:8px">${guardsHtml('F')}</div></details>
+          <details open style="margin-top:9px"><summary>Změny — ${diffRows(s).length}</summary>
+            <div style="padding-top:8px">${diffHtml(s)}</div></details>
+        </div>
+      </div>
+    </div>
+    ${footHtml()}`;
+  if (keepFocus) focusName('F');
+}
+
+/* ── G: přihrádky ─────────────────────────────────────────────── */
+function renderG(keepFocus) {
+  const s = S.G, lead = acct(s.leader);
+  const followers = ACCOUNTS.filter(a => s.followers[a.id] && a.id !== s.leader);
+  const pool = ACCOUNTS.filter(a => a.id !== s.leader && !s.followers[a.id]);
+  const card = (a, kind) => {
+    const f = s.followers[a.id];
+    return `<div class="card ${kind==='lead'?'lead':''}">
+      ${kind==='lead' ? '<span class="crown" style="width:26px;height:26px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="width:58%;height:58%" aria-hidden="true"><path d="M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z"/><path d="M5 21h14"/></svg></span>' : ''}
+      <span class="who"><b>${a.name}</b><span>${a.firm} · ${usd.format(a.balance)}</span></span>
+      ${kind==='follower' ? `<span class="fields">
+        <span class="sel ${f.mode==='off'?'mode-off':''}">
+          <select aria-label="Replikace ${a.name}" onchange="setField('G',${a.id},'mode',this.value)">
+            ${MODES.map(([k,l])=>`<option value="${k}" ${f.mode===k?'selected':''}>${l}</option>`).join('')}
+          </select>${CHEV}</span>
+        ${stepper('G', a.id, 'mult', f.mult, true)}
+        ${stepper('G', a.id, 'max', f.max, true)}</span>` : ''}
+      ${kind==='pool'
+        ? `<button class="move" title="Přidat jako followera" onclick="toggleFollower('G',${a.id})">←</button>`
+        : kind==='follower'
+          ? `<button class="move" title="Odebrat ze skupiny" onclick="toggleFollower('G',${a.id})">→</button>`
+          : `<button class="move" title="Uvolnit slot leadera" onclick="S.G.leader=null;render('G')">→</button>`}
+    </div>`;
+  };
+  document.getElementById('G').innerHTML = `
+    <div class="dlg-head">${identHtml('G')}<button class="xbtn">✕</button></div>
+    <div class="cols3">
+      <div class="bay">
+        <header><span class="lbl">Leader</span></header>
+        ${lead ? card(lead,'lead') : '<div class="slot">Přetáhni sem účet nebo klikni na ← vpravo</div>'}
+        <header style="margin-top:14px"><span class="lbl">Followeři — ${followers.length}</span>
+          <span class="hint">expozice ${exposure(s)}× leadera</span></header>
+        <div style="margin-bottom:7px">${selAllHtml('G')}</div>
+        ${followers.length ? followers.map(a=>card(a,'follower')).join('') : '<div class="empty">Zatím žádný follower</div>'}
+      </div>
+      <div class="bay pool">
+        <header><span class="lbl">Nezařazené účty — ${pool.length}</span></header>
+        ${pool.length ? pool.map(a=>card(a,'pool')).join('') : '<div class="empty">Všechny účty jsou ve skupině</div>'}
+        <div style="margin-top:14px">
+          <details><summary>Ochrany — ${Object.values(s.guards).filter(Boolean).length}/4</summary>
+            <div style="padding-top:8px">${guardsHtml('G')}</div></details>
+          <details open style="margin-top:9px"><summary>Změny — ${diffRows(s).length}</summary>
+            <div style="padding-top:8px">${diffHtml(s)}</div></details>
+        </div>
+      </div>
+    </div>
+    ${footHtml()}`;
+  if (keepFocus) focusName('G');
+}
+
+function focusName(v) {
+  const input = document.querySelector(`#${v} input[type=text]`);
+  if (!input) return;
+  input.focus(); input.setSelectionRange(input.value.length, input.value.length);
+}
+function render(v, keepFocus) { ({ E:renderE, F:renderF, G:renderG })[v](keepFocus); }
+function theme(dark) {
+  document.documentElement.classList.toggle('dark', dark);
+  document.getElementById('bd').setAttribute('aria-pressed', String(dark));
+  document.getElementById('bl').setAttribute('aria-pressed', String(!dark));
+}
+theme(true);
+renderE(); renderF(); renderG();
+</script>
+</body>
+</html>
