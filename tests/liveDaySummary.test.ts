@@ -91,10 +91,15 @@ describe('buildLiveDaySummary', () => {
     ).confirmed).toBe(120);
   });
 
+  // Klid se smí tvrdit jen s důkazem, že se DENNÍ report opravdu četl.
+  const quiet = (patch: Partial<LiveAccount> = {}) => account({
+    dailyPnlAvailable: false, dailyPnlUpdatedAt: new Date(now - 2_000).toISOString(), ...patch,
+  });
+
   it('účet bez obchodu se odliší od účtu, který se nepodařilo přečíst', () => {
     const summary = buildLiveDaySummary([
-      // Čtení prošlo, broker jen nemá denní záznam → klid, ne výpadek.
-      account({ id: 1, name: 'klid', dailyPnlAvailable: false }),
+      // Denní report přečten, záznam pro dnešek žádný → klid, ne výpadek.
+      quiet({ id: 1, name: 'klid' }),
       // Čtení neprošlo → o tomhle účtu nevíme nic.
       account({ id: 2, name: 'necteno', cashAvailability: 'denied' }),
     ], now);
@@ -108,7 +113,7 @@ describe('buildLiveDaySummary', () => {
   it('klidný účet vedle potvrzeného nedělá ze součtu dílčí součet', () => {
     const summary = buildLiveDaySummary([
       account({ id: 1, name: 'obchodoval', realizedPnl: 240 }),
-      account({ id: 2, name: 'klid', dailyPnlAvailable: false }),
+      quiet({ id: 2, name: 'klid' }),
     ], now);
     expect(summary.confirmed).toBe(240);
     // Účet bez obchodu do součtu nic nepřidá, takže není o čem varovat.
@@ -126,9 +131,22 @@ describe('buildLiveDaySummary', () => {
   });
 
   it('během doplňování ledgeru se klid nevydává za ověřený klid', () => {
-    const summary = buildLiveDaySummary([account({ dailyPnlAvailable: false })], now, true);
+    const summary = buildLiveDaySummary([quiet()], now, true);
     expect(summary.rows[0].state).toBe('unconfirmed');
     expect(summary.noTradeCount).toBe(0);
+  });
+
+  it.each([
+    { label: 'denní report se ještě nenačetl', patch: { dailyPnlUpdatedAt: null } },
+    { label: 'čas čtení je nesmysl', patch: { dailyPnlUpdatedAt: 'invalid' } },
+    { label: 'čtení je z minulé broker session', patch: { dailyPnlUpdatedAt: new Date(Date.UTC(2026, 8, 9, 8)).toISOString() } },
+  ])('bez důkazu o přečtení denního reportu se klid netvrdí: $label', ({ patch }) => {
+    // Čerstvý zůstatek nestačí: cash a denní report chodí z jiných endpointů,
+    // takže z čerstvého cash neplyne, že se denní report vůbec načetl.
+    const summary = buildLiveDaySummary([quiet(patch as Partial<LiveAccount>)], now);
+    expect(summary.rows[0].state).toBe('unconfirmed');
+    expect(summary.noTradeCount).toBe(0);
+    expect(summary.confirmed).toBeNull();
   });
 
   it('prázdná firma se nese jako null, ne jako prázdný řetězec', () => {

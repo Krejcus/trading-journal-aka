@@ -77,16 +77,31 @@ describe('karta dne', () => {
     expect(card(summary, { onClose: () => {} })).toContain('live-day-close');
   });
 
+  // Klid se smí tvrdit jen s důkazem, že se DENNÍ report opravdu četl.
+  const quiet = (patch: Partial<LiveAccount> = {}) => account({
+    dailyPnlAvailable: false, dailyPnlUpdatedAt: new Date(now - 2_000).toISOString(), ...patch,
+  });
+
   it('klidný den není výpadek dat a karta ho tak nepopisuje', () => {
-    const markup = card(buildLiveDaySummary([account({ dailyPnlAvailable: false })], now));
+    const markup = card(buildLiveDaySummary([quiet()], now));
     expect(markup).toContain('Broker dnes u žádného účtu nehlásí uzavřený obchod.');
     expect(markup).not.toContain('nepotvrdil');
+  });
+
+  it('řádek s prokázaným klidem ukáže nulu, nepotvrzený pomlčku', () => {
+    const markup = card(buildLiveDaySummary([
+      quiet({ id: 1, name: 'klid' }),
+      account({ id: 2, name: 'necteno', cashAvailability: 'denied' }),
+    ], now));
+    // Do součtu nahoře se klid počítá jako nula, tak to musí říkat i řádek.
+    expect(markup).toContain('>$0</span>');
+    expect(markup).toContain('live-day-val live-day-flat">—');
   });
 
   it('účet bez obchodu vedle potvrzeného nevyvolá varování o dílčím součtu', () => {
     const markup = card(buildLiveDaySummary([
       account({ id: 1, name: 'A', realizedPnl: 240 }),
-      account({ id: 2, name: 'B', dailyPnlAvailable: false }),
+      quiet({ id: 2, name: 'B' }),
     ], now));
     expect(markup).not.toContain('Sečteno bez');
   });

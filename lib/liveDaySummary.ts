@@ -1,5 +1,5 @@
 import { liveDailyPnlDisplay } from './liveBalanceDisplay';
-import { isLiveAccountReadVerified } from './liveReadFreshness';
+import { sameTradovateSession } from '../services/copierArmSession';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
 
 /**
@@ -45,6 +45,20 @@ export interface LiveDaySummary {
 }
 
 /**
+ * Prokazatelně přečtený denní report BEZ záznamu pro dnešek = žádný uzavřený
+ * obchod. Důkazem musí být čas čtení DENNÍHO reportu (`dailyPnlUpdatedAt`,
+ * tedy `readState.dailyAsOf`) v aktuální broker session — ne čerstvost čtení
+ * zůstatku. Zůstatek a denní report chodí z jiných endpointů: cash může být
+ * čerstvý, zatímco denní se ještě nenačetl, a z toho by „nic se neobchodovalo“
+ * byla domněnka vydávaná za fakt.
+ */
+export function liveDayReadAnswered(account: LiveAccount, now = Date.now(), pending = false): boolean {
+  if (pending || account.dailyPnlAvailable !== false) return false;
+  const readAt = Date.parse(account.dailyPnlUpdatedAt ?? '');
+  return Number.isFinite(readAt) && readAt <= now + 1_000 && sameTradovateSession(readAt, now);
+}
+
+/**
  * Denní přehled napříč účty pro kartu dne a spouštěč v hlavičce LIVE.
  *
  * Záměrně NEpoužívá `liveGroupDailyPnlDisplay`: ten vrací null, jakmile chybí
@@ -59,12 +73,7 @@ export function buildLiveDaySummary(
 ): LiveDaySummary {
   const rows: LiveDayRow[] = accounts.map(account => {
     const display = liveDailyPnlDisplay(account, now, pending);
-    // `dailyPnlAvailable === false` znamená, že broker na dotaz odpověděl a
-    // denní záznam pro dnešek prostě nemá. Spolu s ověřeným čtením zůstatku
-    // je to důkaz „nic uzavřeného“, ne chybějící data.
-    const answered = account.dailyPnlAvailable === false
-      && !pending
-      && isLiveAccountReadVerified(account, 'cash', now);
+    const answered = liveDayReadAnswered(account, now, pending);
     return {
       accountId: account.id,
       name: account.name,

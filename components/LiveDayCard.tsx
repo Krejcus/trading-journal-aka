@@ -247,8 +247,13 @@ export const LiveDayCard: React.FC<LiveDayCardProps> = ({ summary, owner, tradeD
                         <span className="live-day-nm">{formatName(row.name)}</span>
                         {row.firm ? <span className="live-day-fm">{row.firm}</span> : null}
                       </span>
-                      <span className={`live-day-val ${tone(row.value)}`}>
-                        {row.value == null ? '—' : dayMoney(row.value)}
+                      {/* Prokázaný klid je nula, ne neznámo — do součtu nahoře
+                          se tak počítá, tak to musí říkat i řádek. */}
+                      <span
+                        className={`live-day-val ${tone(row.value)}`}
+                        title={row.state === 'no-trades' ? 'Broker dnes u tohoto účtu nehlásí uzavřený obchod' : undefined}
+                      >
+                        {row.value != null ? dayMoney(row.value) : row.state === 'no-trades' ? dayMoney(0) : '—'}
                       </span>
                     </div>
                   ))}

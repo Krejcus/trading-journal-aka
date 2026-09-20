@@ -3,7 +3,7 @@ import { ColumnOrderList, type ColumnOrderItem } from './ColumnOrderList';
 import { applyColumnOrder, moveColumn, pinColumnEdges } from '../lib/tableColumnOrder';
 import LiveCopierIsland from './LiveCopierIsland';
 import { LiveDayTrigger, LiveDayCardDialog } from './LiveDayCard';
-import { buildLiveDaySummary } from '../lib/liveDaySummary';
+import { buildLiveDaySummary, liveDayReadAnswered } from '../lib/liveDaySummary';
 import { buildLiveCopierIsland } from '../lib/liveCopierIsland';
 import { copierArmRejection } from '../lib/copierArmPreparation';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
@@ -2501,6 +2501,10 @@ const CompactAccountRow = ({ row, variant, live, eligibility, orders, dailyPnlPe
   const hasOpenPositions = a?.positions.some(position => position.netPosition !== 0) ?? false;
   const unavailableFollower = !a && accountId != null && !row.isLeader;
   const daily = a ? liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value : null;
+  // Prokázaný klid je nula, ne neznámo. Pomlčka by tvrdila „nevím“ u účtu,
+  // který se do celkového součtu nahoře započítává jako nula — a součet
+  // s pomlčkami pod sebou vypadá jako rozbitá data.
+  const quiet = daily == null && a != null && liveDayReadAnswered(a, Date.now(), dailyPnlPending);
   const attention = eligibilityNeedsAttention(eligibility, live, !a && accountId != null);
   const note = compactRejection
     ? <RejectedExecutionStatus
@@ -2540,7 +2544,9 @@ const CompactAccountRow = ({ row, variant, live, eligibility, orders, dailyPnlPe
           : (daily != null ? pnlClass(daily) : 'text-[var(--text-secondary)]')}`}>
           {variant === 'market'
             ? (a ? money.format(a.unrealizedPnl) : '—')
-            : (daily != null ? money.format(daily) : '—')}
+            : daily != null ? money.format(daily)
+              : quiet ? <span title="Broker dnes u tohoto účtu nehlásí uzavřený obchod">{money.format(0)}</span>
+                : '—'}
         </span>
       </div>
       {/* Druhý řádek existuje jen tam, kde je co říct. Pilulky pozice na něm
