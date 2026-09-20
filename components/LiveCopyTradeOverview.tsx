@@ -190,13 +190,13 @@ const TradovateMark = ({ size = 'h-6 w-6' }: { size?: string }) => (
   </span>
 );
 
-const FirmMark = ({ firm, withLabel = false }: { firm: string; withLabel?: boolean }) => {
+const FirmMark = ({ firm, withLabel = false, size = 'h-6 w-6' }: { firm: string; withLabel?: boolean; size?: string }) => {
   const key = firm.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   const logo = FIRM_LOGOS[key];
   return <span className="inline-flex min-w-0 items-center gap-1.5">
     {logo
-      ? <img src={logo} alt="" className="h-6 w-6 shrink-0 rounded-full border border-black/10 bg-white object-cover" />
-      : <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[8px] font-black text-white" style={{ background: firmColor(key || firm).bg }}>{firmInitials(firm)}</span>}
+      ? <img src={logo} alt="" className={`${size} shrink-0 rounded-full border border-black/10 bg-white object-cover`} />
+      : <span className={`flex ${size} shrink-0 items-center justify-center rounded-full text-[8px] font-black text-white`} style={{ background: firmColor(key || firm).bg }}>{firmInitials(firm)}</span>}
     {withLabel ? <span className="truncate text-xs leading-none">{firm}</span> : null}
   </span>;
 };
@@ -220,9 +220,19 @@ const firmCountLabel = (count: number): string =>
   count < 5 ? `${count} firmy` : `${count} firem`;
 
 /** Jedna firma = logo s názvem, víc firem = překryv log a počet. */
-const FirmStack = ({ firms }: { firms: string[] }) => {
+/**
+ * `marksOnly` je pro úzkou buňku souhrnu na telefonu: text „3 firmy“ by se
+ * tam nevešel a přetekl by do sousedního čísla. Názvy zůstanou v `title`.
+ */
+const FirmStack = ({ firms, marksOnly = false }: { firms: string[]; marksOnly?: boolean }) => {
   if (firms.length === 0) return <span className="text-[11px] text-[var(--text-secondary)]">—</span>;
-  if (firms.length === 1) return <FirmMark firm={firms[0]} withLabel />;
+  // Bez popisku musí název nést aspoň `title`, jinak by u neznámé firmy
+  // (monogram místo loga) nešlo zjistit, o koho jde.
+  if (firms.length === 1) {
+    return marksOnly
+      ? <span title={firms[0]} className="inline-flex"><FirmMark firm={firms[0]} size="h-5 w-5" /></span>
+      : <FirmMark firm={firms[0]} withLabel />;
+  }
   const shown = firms.slice(0, 3);
   return (
     <span className="inline-flex min-w-0 items-center gap-1.5" title={firms.join(' · ')}>
@@ -230,14 +240,14 @@ const FirmStack = ({ firms }: { firms: string[] }) => {
         {shown.map((firm, index) => (
           <span
             key={firm}
-            className={index === 0 ? 'flex' : '-ml-2.5 flex rounded-full ring-2 ring-[var(--bg-card)]'}
+            className={index === 0 ? 'flex' : `${marksOnly ? '-ml-2' : '-ml-2.5'} flex rounded-full ring-2 ring-[var(--bg-card)]`}
             style={{ zIndex: shown.length - index }}
           >
-            <FirmMark firm={firm} />
+            <FirmMark firm={firm} size={marksOnly ? 'h-5 w-5' : 'h-6 w-6'} />
           </span>
         ))}
       </span>
-      <span className="truncate text-xs leading-none">{firmCountLabel(firms.length)}</span>
+      {marksOnly ? null : <span className="truncate text-xs leading-none">{firmCountLabel(firms.length)}</span>}
     </span>
   );
 };
@@ -2439,14 +2449,37 @@ export const BalanceValue = ({ display, compact = false }: { display: LiveBalanc
 const CompactStat = ({ label, value, className = 'text-[var(--text-primary)]' }: {
   label: string; value: React.ReactNode; className?: string;
 }) => (
-  <div className="min-w-0 px-3 py-2.5">
+  <div className="min-w-0 px-2 py-2.5">
     <div className="text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">{label}</div>
     <div className={`mt-0.5 truncate text-[13px] font-black tabular-nums ${className}`}>{value}</div>
   </div>
 );
 
-const CompactAccountRow = ({ row, live, eligibility, orders, dailyPnlPending, busyCommand, verifying, onVerifyEligibility, onAccount, onFlatten, onRemoveUnavailableFollower, redactNames, redaction }: {
+/**
+ * Účet je „v trhu“, když drží otevřenou pozici nebo má čekající vstupní
+ * příkaz. Obojí patří do stejné sekce, protože obojí kreslí sloupec Pozice —
+ * stejně jako na počítači.
+ */
+const accountInMarket = (row: Row, orders: LiveOrder[]): boolean => {
+  if (row.account?.positions.some(position => position.netPosition !== 0)) return true;
+  if (row.accountId == null) return false;
+  return orders.some(order => order.accountId === row.accountId && order.working && isPendingEntryOrder(order));
+};
+
+/**
+ * Pilulka způsobilosti se na telefonu ukazuje jen tehdy, když něco není
+ * v pořádku. Zelené „Aktivní“ u každého účtu jen ujídalo šířku jménu, a to
+ * je u propek, kde se účty liší až posledními číslicemi, to podstatné.
+ */
+const eligibilityNeedsAttention = (eligibility: CopierAccountEligibility | undefined, live: boolean, unavailable: boolean): boolean =>
+  unavailable || !live || (eligibility?.state != null && eligibility.state !== 'active');
+
+const CompactAccountRow = ({ row, variant, live, eligibility, orders, dailyPnlPending, busyCommand, verifying, onVerifyEligibility, onAccount, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, style }: {
   row: Row;
+  /** Jen zpoždění náběhu při rozbalení seznamu. */
+  style?: React.CSSProperties;
+  /** `market` = sloupce Pozice a Otevřený, `flat` = jen Dnes. */
+  variant: 'market' | 'flat';
   live: boolean;
   eligibility?: CopierAccountEligibility;
   orders: LiveOrder[];
@@ -2467,80 +2500,75 @@ const CompactAccountRow = ({ row, live, eligibility, orders, dailyPnlPending, bu
   const compactRejection = visibleRejectedExecution(accountId, eligibility, compactFlat, dismissedRejections);
   const hasOpenPositions = a?.positions.some(position => position.netPosition !== 0) ?? false;
   const unavailableFollower = !a && accountId != null && !row.isLeader;
+  const daily = a ? liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value : null;
+  const attention = eligibilityNeedsAttention(eligibility, live, !a && accountId != null);
+  const note = compactRejection
+    ? <RejectedExecutionStatus
+        execution={compactRejection}
+        accountAuthoritativelyFlat={compactFlat}
+        onDismiss={accountId != null ? () => dismissRejection(rejectedExecutionDismissKey(accountId, compactRejection)) : undefined}
+      />
+    : eligibility && eligibility.state !== 'active' && eligibility.reason
+      ? <p className="text-[10px] leading-tight text-[var(--text-muted)]">
+          {eligibility.reason}{!a ? ' · účet není v aktuálním OAuth snapshotu' : ''}
+        </p>
+      : unavailableFollower
+        ? <p className="text-[10px] font-bold leading-tight text-slate-500">Účet není v aktuálním OAuth snapshotu.</p>
+        : null;
+
   return (
-    <li className="px-4 py-3">
+    <li className="px-3" style={style}>
       <div
         role={a ? 'button' : undefined}
         onClick={() => a && onAccount?.(a)}
-        className="flex items-center justify-between gap-3"
+        className="grid min-h-9 grid-cols-[minmax(0,1fr)_84px] items-center gap-2"
       >
         <span className="flex min-w-0 items-center gap-2">
-          <span className={`h-2 w-2 shrink-0 rounded-full ${live ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-          <span className={`min-w-0 break-all text-[13px] font-bold leading-tight tracking-tight ${live ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${live ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+          <span className={`truncate text-[12px] font-semibold leading-tight tracking-tight ${live ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
             {redactAccountName(row.name, redactNames, redaction)}
           </span>
-          {row.isLeader ? (
-            <span title="Leader účet" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-amber-400/35 bg-amber-400/12 text-amber-500">
-              <Crown size={13} strokeWidth={2.4} />
-            </span>
-          ) : (
-            <span title="Násobek množství" className="shrink-0 rounded-md bg-[var(--bg-page)] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[var(--text-secondary)]">×{row.scale}</span>
-          )}
-          {!row.synced && <span title="Nesedí s leaderem" className="text-amber-500">⚠</span>}
+          {row.isLeader
+            ? <span title="Leader účet" className="flex shrink-0 text-amber-500"><Crown aria-label="Leader účet" size={12} strokeWidth={2.6} /></span>
+            /* Násobek je risk parametr, ne dekorace — zůstává i u ×1, aby
+               se jeho nepřítomnost nedala splést s „nevím“. */
+            : <span title="Násobek množství" className="shrink-0 rounded bg-[var(--bg-page)] px-1 text-[9.5px] font-bold tabular-nums text-[var(--text-secondary)]">×{row.scale}</span>}
+          {!row.synced && <span title="Nesedí s leaderem" className="shrink-0 text-amber-500">⚠</span>}
         </span>
-        <AccountEligibilityPill
-          eligibility={eligibility}
-          live={live}
-          unavailable={!a && accountId != null}
-          verifying={verifying}
-          onVerify={(eligibility?.state === 'unverifiable' || eligibility?.state === 'breached') && accountId != null && onVerifyEligibility
-            ? () => onVerifyEligibility(accountId)
-            : undefined}
-        />
+        <span className={`truncate text-right text-[12px] font-bold tabular-nums ${variant === 'market'
+          ? (a ? pnlClass(a.unrealizedPnl) : 'text-[var(--text-secondary)]')
+          : (daily != null ? pnlClass(daily) : 'text-[var(--text-secondary)]')}`}>
+          {variant === 'market'
+            ? (a ? money.format(a.unrealizedPnl) : '—')
+            : (daily != null ? money.format(daily) : '—')}
+        </span>
       </div>
-      <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] tabular-nums">
-        <div className="min-w-0">
-          <span className="block text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Denní</span>
-          <span className={`font-bold ${a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? pnlClass(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : 'text-[var(--text-secondary)]'}`}>
-            {a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? money.format(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : '—'}
-          </span>
-        </div>
-        <div className="min-w-0">
-          <span className="block text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Otevřený</span>
-          <span className={`inline-flex items-center gap-1 font-bold ${a ? pnlClass(a.unrealizedPnl) : 'text-[var(--text-secondary)]'}`}>
-            {a ? money.format(a.unrealizedPnl) : '—'}
-            {a?.unrealizedPnlSource === 'stale' ? <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
-          </span>
-        </div>
-        <div className="min-w-0 overflow-hidden">
-          <span className="block text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Pozice</span>
-          {a
-            ? <CopyTradePositionsCell accountId={accountId} positions={a.positions} orders={orders} />
-            : <span className="text-[var(--text-secondary)]">—</span>}
-        </div>
-      </div>
-      {compactRejection ? (
-        <RejectedExecutionStatus
-          execution={compactRejection}
-          accountAuthoritativelyFlat={compactFlat}
-          onDismiss={accountId != null ? () => dismissRejection(rejectedExecutionDismissKey(accountId, compactRejection)) : undefined}
-          className="mt-1.5"
-        />
-      ) : eligibility && eligibility.state !== 'active' && eligibility.reason ? (
-        <p className="mt-1.5 text-[10px] leading-tight text-[var(--text-muted)]">
-          {eligibility.reason}{!a ? ' · účet není v aktuálním OAuth snapshotu' : ''}
-        </p>
-      ) : unavailableFollower ? (
-        <p className="mt-1.5 text-[10px] font-bold leading-tight text-slate-500">Účet není v aktuálním OAuth snapshotu.</p>
-      ) : null}
-      {(hasOpenPositions && a) || unavailableFollower ? (
-        <div className="mt-2 flex items-center gap-2">
+      {/* Druhý řádek existuje jen tam, kde je co říct. Pilulky pozice na něm
+          jedou s tlačítkem Flatten účet, takže účet v trhu nestojí ani
+          o pixel víc — a jméno má na prvním řádku plnou šířku. Ve sloupci
+          o 86 px mu zbývalo 70 px a zkracovalo se na „TDF0000…“. */}
+      {variant === 'market' || attention || note || unavailableFollower ? (
+        <div className="flex flex-wrap items-center gap-2 pb-2">
+          {variant === 'market' && a ? (
+            <CopyTradePositionsCell accountId={accountId} positions={a.positions} orders={orders} />
+          ) : null}
+          {attention ? (
+            <AccountEligibilityPill
+              eligibility={eligibility}
+              live={live}
+              unavailable={!a && accountId != null}
+              verifying={verifying}
+              onVerify={(eligibility?.state === 'unverifiable' || eligibility?.state === 'breached') && accountId != null && onVerifyEligibility
+                ? () => onVerifyEligibility(accountId)
+                : undefined}
+            />
+          ) : null}
           {hasOpenPositions && a ? (
             <button
               type="button"
               disabled={busyCommand != null}
               onClick={() => onFlatten(a.id)}
-              className="h-9 rounded-lg border border-rose-500/25 bg-rose-500/[0.04] px-3 text-[11px] font-bold text-rose-500 disabled:opacity-40"
+              className="h-8 rounded-lg border border-rose-500/25 bg-rose-500/[0.04] px-3 text-[11px] font-bold text-rose-500 disabled:opacity-40"
             >
               Flatten účet
             </button>
@@ -2550,16 +2578,37 @@ const CompactAccountRow = ({ row, live, eligibility, orders, dailyPnlPending, bu
               type="button"
               disabled={busyCommand != null}
               onClick={() => onRemoveUnavailableFollower(accountId)}
-              className="h-9 rounded-lg border border-[var(--border-subtle)] px-3 text-[11px] font-bold text-[var(--text-secondary)] disabled:opacity-40"
+              className="h-8 rounded-lg border border-[var(--border-subtle)] px-3 text-[11px] font-bold text-[var(--text-secondary)] disabled:opacity-40"
             >
               Odebrat ze skupiny
             </button>
           ) : null}
+          {note ? <div className="w-full">{note}</div> : null}
         </div>
       ) : null}
     </li>
   );
 };
+
+/**
+ * Hlavička sekce účtů. Nese jen popisky sloupců — ty samy o sobě říkají,
+ * čím se sekce liší (`Otevřený` u účtů v trhu, `Dnes` u ostatních), takže
+ * pruh s názvem sekce nad nimi byl druhý řádek chrome, který nic nepřidal.
+ */
+/**
+ * Kolik účtů bez pozice se ukáže před rozbalením. Účty v trhu se nesbalují
+ * nikdy — kvůli nim se na telefon člověk dívá. Nic naléhavého se sbalením
+ * neztratí: neaktivní účty hlásí štítky v hlavičce skupiny (`N/M aktivních`,
+ * DLL, BREACHED) bez ohledu na to, jestli je jejich řádek vidět.
+ */
+const COMPACT_FLAT_PREVIEW = 6;
+
+const CompactAccountSectionHead = ({ columns }: { columns: 'market' | 'flat' }) => (
+  <div className="grid grid-cols-[minmax(0,1fr)_84px] gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-page)]/60 px-3 py-1 text-[9px] font-black uppercase tracking-[0.1em] text-[var(--text-secondary)]">
+    <span>Účet</span>
+    <span className="text-right">{columns === 'market' ? 'Otevřený' : 'Dnes'}</span>
+  </div>
+);
 
 const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, dailyPnlPending, eligibility, eligibilityByAccount, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onDelete, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel, islandTone = null }: {
   group: CopyGroupConfig;
@@ -2599,6 +2648,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   disarmPanel?: React.ReactNode;
   cooldownPanel?: React.ReactNode;
 }) => {
+  const [showAllFlat, setShowAllFlat] = useState(false);
   const capital = liveCapitalDisplay(rows.map(row => row.account));
   const daily = liveGroupDailyPnlDisplay(rows.map(row => row.account), Date.now(), dailyPnlPending);
   const unreal = rows.reduce((sum, row) => sum + (row.account?.unrealizedPnl || 0), 0);
@@ -2613,6 +2663,18 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   const groupOrders = orders.filter(order => order.accountId != null && accountIds.has(order.accountId));
   const workingCount = groupOrders.filter(order => order.working).length;
   const color = group.color ?? GROUP_COLORS[0];
+  // V obchodu se hýbe otevřený P&L, kapitál stojí — a na 375 px si o čtvrtou
+  // buňku konkurují. Čekající vstup se nepočítá: dokud není fill, není co
+  // sledovat a kapitál je pořád ta užitečnější informace.
+  const hasOpenExposure = rows.some(row => row.account?.positions.some(position => position.netPosition !== 0));
+  // Pořadí uvnitř sekcí zůstává původní (leader první), jen se rozdělí.
+  const accountRows = rows.reduce<{ market: Array<{ row: Row; index: number }>; flat: Array<{ row: Row; index: number }> }>(
+    (split, row, index) => {
+      split[accountInMarket(row, groupOrders) ? 'market' : 'flat'].push({ row, index });
+      return split;
+    },
+    { market: [], flat: [] },
+  );
 
   return (
     <article
@@ -2622,32 +2684,21 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
         ? `live-island-card live-island-card-${islandTone}`
         : armed ? 'border-emerald-500/40' : 'border-[var(--border-subtle)]'}`}
     >
-      <header className="flex items-start justify-between gap-3 px-4 pb-3 pt-4">
-        <div className="min-w-0 flex-1">
-          <h4 className="flex items-center gap-2 text-base font-black" style={{ color }}>
-            <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
-            <span className="truncate">{group.name}</span>
-          </h4>
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            {activeFollowerCount < enabledFollowerRows.length ? (
-              <span
-                title="Způsobilých followerů z těch, co mají kopírování zapnuté"
-                className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[10px] font-black text-amber-600"
-              >
-                {activeFollowerCount}/{enabledFollowerRows.length} aktivních
-              </span>
-            ) : null}
-            <FirmStack firms={groupFirmList(rows)} />
-            {dllCount > 0 ? <span className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[10px] font-black text-amber-600">{dllCount}× DLL</span> : null}
-            {breachedCount > 0 ? <span className="rounded-full bg-rose-500/12 px-2 py-0.5 text-[10px] font-black text-rose-600">{breachedCount}× BREACHED</span> : null}
-            {unavailableLeader ? <span className="rounded-full bg-rose-500/12 px-2 py-0.5 text-[10px] font-black text-rose-600">leader nedostupný</span> : null}
-            {observingOnly ? (
-              <span title="Shadow režim pouze sleduje a nic neodesílá." className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-black uppercase text-amber-600">
-                <ShieldAlert size={10} /> Shadow
-              </span>
-            ) : null}
-          </div>
-        </div>
+      {/* Název, Flatten a vypínač na jednom řádku. Název je jediný pružný
+          prvek, takže se zkrátí on a nikdy nevytlačí ovládání ze řádku.
+          Kolečka firem se přesunula do pruhu s čísly — čtou se při zakládání
+          skupiny, ne každou minutu, a tady by ujídala šířku názvu. */}
+      <header className="flex items-center gap-2 px-3 py-2.5">
+        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+        <h4 className="min-w-0 flex-1 truncate text-[15px] font-black" style={{ color }}>{group.name}</h4>
+        <button
+          type="button"
+          onClick={onFlatten}
+          title="Uzavřít všechny pozice ve skupině"
+          className="h-8 shrink-0 rounded-lg border border-rose-500/30 bg-rose-500/[0.06] px-3 text-[11px] font-black text-rose-500"
+        >
+          Flatten All
+        </button>
         <CopierConnectionSwitch
           connected={armed}
           statusPending={statusPending}
@@ -2658,39 +2709,126 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
         />
       </header>
 
-      <div className="grid grid-cols-3 divide-x divide-[var(--border-subtle)] border-y border-[var(--border-subtle)] bg-[var(--bg-page)]/60">
-        <CompactStat label="Kapitál" value={<BalanceValue display={capital} compact />} />
+      {/* Varovné štítky mají vlastní řádek, ale jen když nějaké jsou; v klidu
+          zůstane hlavička jednořádková. */}
+      {activeFollowerCount < enabledFollowerRows.length || dllCount > 0 || breachedCount > 0 || unavailableLeader || observingOnly ? (
+        <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2.5">
+          {activeFollowerCount < enabledFollowerRows.length ? (
+            <span
+              title="Způsobilých followerů z těch, co mají kopírování zapnuté"
+              className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[10px] font-black text-amber-600"
+            >
+              {activeFollowerCount}/{enabledFollowerRows.length} aktivních
+            </span>
+          ) : null}
+          {dllCount > 0 ? <span className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[10px] font-black text-amber-600">{dllCount}× DLL</span> : null}
+          {breachedCount > 0 ? <span className="rounded-full bg-rose-500/12 px-2 py-0.5 text-[10px] font-black text-rose-600">{breachedCount}× BREACHED</span> : null}
+          {unavailableLeader ? <span className="rounded-full bg-rose-500/12 px-2 py-0.5 text-[10px] font-black text-rose-600">leader nedostupný</span> : null}
+          {observingOnly ? (
+            <span title="Shadow režim pouze sleduje a nic neodesílá." className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-black uppercase text-amber-600">
+              <ShieldAlert size={10} /> Shadow
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className={`grid divide-x divide-[var(--border-subtle)] border-y border-[var(--border-subtle)] bg-[var(--bg-page)]/60 ${hasOpenExposure
+        ? 'grid-cols-[62px_repeat(2,minmax(0,1fr))]'
+        : 'grid-cols-[62px_repeat(3,minmax(0,1fr))]'}`}
+      >
+        <div className="min-w-0 overflow-hidden px-2 py-2.5">
+          <div className="text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Firmy</div>
+          <div className="mt-1 flex"><FirmStack firms={groupFirmList(rows)} marksOnly /></div>
+        </div>
+        {hasOpenExposure ? null : <CompactStat label="Kapitál" value={<BalanceValue display={capital} compact />} />}
+        {/* Bez haléřů: „$2,906.00“ se do buňky na 375 px nevejde a ořízlo se
+            na „$2,90…“, což je horší než zaokrouhlení. */}
         <CompactStat
           label="Denní P&L"
-          value={daily == null ? '—' : money.format(daily)}
+          value={daily == null ? '—' : moneyWhole.format(daily)}
           className={daily == null ? 'text-[var(--text-secondary)]' : pnlClass(daily)}
         />
-        <CompactStat label="Otevřený P&L" value={money.format(unreal)} className={pnlClass(unreal)} />
+        <CompactStat label="Otevřený" value={moneyWhole.format(unreal)} className={pnlClass(unreal)} />
       </div>
 
       {disarmPanel}
       {cooldownPanel}
 
-      <ul className="divide-y divide-[var(--border-subtle)]">
-        {rows.map((row, index) => (
-          <CompactAccountRow
-            key={`${row.name}-${index}`}
-            row={row}
-            live={isLive(row.account)}
-            eligibility={row.accountId != null ? eligibilityByAccount.get(row.accountId) : undefined}
-            orders={groupOrders}
-            dailyPnlPending={dailyPnlPending}
-            busyCommand={busyCommand}
-            verifying={row.accountId != null && verifyingAccountId === row.accountId}
-            onVerifyEligibility={onVerifyEligibility}
-            onAccount={onAccount}
-            onFlatten={onFlattenAccount}
-            onRemoveUnavailableFollower={onRemoveUnavailableFollower}
-            redactNames={redactNames}
-            redaction={redaction}
-          />
-        ))}
-      </ul>
+      {/* Dvě sekce místo jedné tabulky se čtyřmi sloupci: popisek nad každou
+          platí pro všechny řádky pod sebou, takže žádný sloupec nemá dva
+          významy. Účty bez pozice — většina dne — mají jen dva sloupce, a
+          jméno účtu se tak vejde celé. */}
+      {([['market', accountRows.market], ['flat', accountRows.flat]] as const).map(([variant, sectionRows]) => (
+        sectionRows.length === 0 ? null : (
+          <section key={variant}>
+            <CompactAccountSectionHead columns={variant} />
+            <ul className="divide-y divide-[var(--border-subtle)]">
+              {(variant === 'flat' ? sectionRows.slice(0, COMPACT_FLAT_PREVIEW) : sectionRows).map(({ row, index }) => (
+                <CompactAccountRow
+                  key={`${row.name}-${index}`}
+                  row={row}
+                  variant={variant}
+                  live={isLive(row.account)}
+                  eligibility={row.accountId != null ? eligibilityByAccount.get(row.accountId) : undefined}
+                  orders={groupOrders}
+                  dailyPnlPending={dailyPnlPending}
+                  busyCommand={busyCommand}
+                  verifying={row.accountId != null && verifyingAccountId === row.accountId}
+                  onVerifyEligibility={onVerifyEligibility}
+                  onAccount={onAccount}
+                  onFlatten={onFlattenAccount}
+                  onRemoveUnavailableFollower={onRemoveUnavailableFollower}
+                  redactNames={redactNames}
+                  redaction={redaction}
+                />
+              ))}
+            </ul>
+            {variant === 'flat' && sectionRows.length > COMPACT_FLAT_PREVIEW ? (<>
+              {/* Skryté řádky zůstávají v DOMu a jen se sroluje výška obalu
+                  (mřížka 0fr → 1fr), takže se výška nemusí měřit v JS.
+                  Řádky pak naskakují postupně, ať rozbalení není skok. */}
+              <div className="live-accounts-more" data-open={showAllFlat}>
+                {/* `inert` vyřadí sbalené řádky z tab pořadí i ze čtečky —
+                    samotná nulová výška je jen schová očima a tlačítka
+                    „Flatten účet“ uvnitř by zůstala dosažitelná tabem. */}
+                <div inert={!showAllFlat}>
+                  <ul className="divide-y divide-[var(--border-subtle)] border-t border-[var(--border-subtle)]">
+                    {sectionRows.slice(COMPACT_FLAT_PREVIEW).map(({ row, index }, position) => (
+                      <CompactAccountRow
+                        key={`${row.name}-${index}`}
+                        style={{ animationDelay: `${Math.min(position, 8) * 28}ms` }}
+                        row={row}
+                        variant={variant}
+                        live={isLive(row.account)}
+                        eligibility={row.accountId != null ? eligibilityByAccount.get(row.accountId) : undefined}
+                        orders={groupOrders}
+                        dailyPnlPending={dailyPnlPending}
+                        busyCommand={busyCommand}
+                        verifying={row.accountId != null && verifyingAccountId === row.accountId}
+                        onVerifyEligibility={onVerifyEligibility}
+                        onAccount={onAccount}
+                        onFlatten={onFlattenAccount}
+                        onRemoveUnavailableFollower={onRemoveUnavailableFollower}
+                        redactNames={redactNames}
+                        redaction={redaction}
+                      />
+                    ))}
+                  </ul>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAllFlat(value => !value)}
+                aria-expanded={showAllFlat}
+                className="flex h-9 w-full items-center justify-center gap-1.5 border-t border-[var(--border-subtle)] text-[11px] font-bold text-[var(--text-secondary)]"
+              >
+                {showAllFlat ? 'Sbalit' : `Zobrazit dalších ${sectionRows.length - COMPACT_FLAT_PREVIEW}`}
+                <ChevronDown size={13} className={`transition-transform duration-300 ${showAllFlat ? 'rotate-180' : ''}`} />
+              </button>
+            </>) : null}
+          </section>
+        )
+      ))}
 
       {groupOrders.length > 0 ? (
         <section className="border-t border-[var(--border-subtle)]">
@@ -2735,19 +2873,13 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
         </section>
       ) : null}
 
-      <footer className="flex items-center gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
-        <button
-          type="button"
-          onClick={onFlatten}
-          title="Uzavřít všechny pozice ve skupině"
-          className="flex h-11 flex-1 items-center justify-center rounded-lg border border-rose-500/30 bg-rose-500/[0.06] text-xs font-black text-rose-500"
-        >
-          Flatten All
-        </button>
+      {/* Flatten se přestěhoval nahoru k vypínači, aby byl vidět i při dvaceti
+          účtech bez scrollování; dole zbyla jen správa skupiny. */}
+      <footer className="flex items-center gap-2 border-t border-[var(--border-subtle)] px-3 py-2.5">
         <button
           type="button"
           onClick={onEdit}
-          className="flex h-11 items-center justify-center rounded-lg border border-[var(--border-subtle)] px-4 text-xs font-bold text-[var(--text-secondary)]"
+          className="flex h-10 flex-1 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-xs font-bold text-[var(--text-secondary)]"
         >
           Upravit
         </button>

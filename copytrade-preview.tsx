@@ -20,10 +20,21 @@ const DAY_PNL = [412, -64, 388, 91, -145, 507, 33, -22, 264, 118, -97, 441, 76, 
 const accounts = [
   { ...account(101, 'FTDFYG50511354175', 'Tradeify', 48_046.18), realizedPnl: 610 },
   { ...account(102, 'LFF05066846490007', 'Lucid', 49_300), realizedPnl: -95 },
-  ...DAY_PNL.map((pnl, index) => ({
-    ...account(200 + index, `TDF${String(8_206 + index).padStart(8, '0')}`, index % 3 === 0 ? 'Apex' : 'Tradeify', 50_000 + pnl),
-    realizedPnl: pnl,
-  })),
+  ...DAY_PNL.map((pnl, index) => {
+    const base = account(200 + index, `TDF${String(8_206 + index).padStart(8, '0')}`, index % 3 === 0 ? 'Apex' : 'Tradeify', 50_000 + pnl);
+    // Dva účty drží pozici, ať má sekce „V trhu" co ukázat.
+    const inMarket = index === 1 || index === 4;
+    return {
+      ...base,
+      realizedPnl: pnl,
+      unrealizedPnl: inMarket ? (index === 1 ? 38 : -24) : 0,
+      positions: inMarket
+        ? [{ accountId: 200 + index, symbol: 'MNQZ6', netPosition: index === 1 ? 2 : -1,
+            netPrice: 23_412.25, realizedPnl: 0, unrealizedPnl: index === 1 ? 38 : -24,
+            updatedAt: new Date().toISOString() }]
+        : [],
+    };
+  }),
 ];
 const snapshot: LiveSnapshot = {
   run: null, accounts, appAccounts: [], alerts: [],
@@ -33,7 +44,11 @@ const snapshot: LiveSnapshot = {
 };
 const initialGroup: CopyGroupConfig = {
   id: 'local-preview', name: 'Hlavní', enabled: true, leaderAccountId: 101,
-  followers: [{ accountId: 102, mode: 'on-submit', multiplier: 1 }], color: '#84cc16', localOnly: true,
+  followers: [
+    { accountId: 102, mode: 'on-submit' as const, multiplier: 1 },
+    // Zbytek portfolia jako followeři, ať jde hustota seznamu ladit v zátěži.
+    ...DAY_PNL.map((_, index) => ({ accountId: 200 + index, mode: 'on-submit' as const, multiplier: index % 5 === 0 ? 2 : 1 })),
+  ], color: '#84cc16', localOnly: true,
   safety: { ...DEFAULT_COPY_GROUP_SAFETY, dailyMaxLosingTrades: 2, entryCooldownMinutes: 15, dailyLossLimitUsd: 0, dailyMaxTrades: 0, armExpiryFlatten: 'off' },
 };
 function Preview() {

@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LIVE na telefonu — hustota řádků</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-page:#f1f5f9; --bg-card:#ffffff; --text-primary:#0f172a; --text-secondary:#475569;
+  --text-muted:#94a3b8; --border-subtle:#e2e8f0; --accent:#4f46e5; --win:#059669; --loss:#e11d48;
+}
+.dark {
+  --bg-page:#020617; --bg-card:#0a0f1d; --text-primary:#f8fafc; --text-secondary:#94a3b8;
+  --text-muted:#475569; --border-subtle:rgba(255,255,255,.08); --accent:#6366f1;
+  --win:#10b981; --loss:#f43f5e;
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:24px 16px 80px; font-family:Inter,-apple-system,system-ui,sans-serif;
+  background:var(--bg-page); color:var(--text-primary); }
+h1 { font-size:21px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.65; color:var(--text-secondary); max-width:92ch; margin:0 0 16px; }
+.lede b { color:var(--text-primary); }
+.bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:9px 12px; margin-bottom:22px;
+  border:1px solid var(--border-subtle); border-radius:12px; background:var(--bg-card); }
+.bar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+.bar button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.bar button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+
+.decks { display:flex; gap:18px; align-items:flex-start; overflow-x:auto; padding-bottom:16px; }
+.deck { flex:none; width:375px; }
+.deck > h2 { font-size:13px; font-weight:900; margin:0 0 2px; }
+.deck > h2 em { font-style:normal; color:var(--text-muted); font-weight:800; font-size:10px;
+  letter-spacing:.09em; text-transform:uppercase; margin-right:7px; }
+.deck > p { font-size:11.5px; line-height:1.5; color:var(--text-secondary); margin:0 0 8px; min-height:52px; }
+.deck > p b { color:var(--text-primary); }
+.metric { display:inline-flex; align-items:baseline; gap:6px; margin-bottom:8px; padding:4px 10px;
+  border-radius:999px; background:var(--bg-card); border:1px solid var(--border-subtle);
+  font-size:10.5px; font-weight:700; color:var(--text-secondary); }
+.metric s { text-decoration:none; font-variant-numeric:tabular-nums; color:var(--text-primary); font-weight:800; }
+.metric i { font-style:normal; color:var(--win); font-weight:800; }
+
+/* ── telefon ─────────────────────────────────────────────────────────── */
+.phone { width:375px; height:700px; overflow-y:auto; border-radius:26px; padding:12px;
+  border:1px solid var(--border-subtle); background:var(--bg-page);
+  box-shadow:0 18px 40px -26px rgba(15,23,42,.5); }
+.phone::-webkit-scrollbar { width:6px; }
+.phone::-webkit-scrollbar-thumb { background:rgba(100,116,139,.35); border-radius:999px; }
+
+.sect { border:1px solid var(--border-subtle); border-radius:14px; background:var(--bg-card); overflow:hidden; }
+.shead { display:flex; align-items:center; gap:10px; padding:12px 14px; flex-wrap:wrap; }
+.stitle { font-size:16px; font-weight:900; }
+.daybtn { display:inline-flex; align-items:center; gap:8px; padding:5px 9px 5px 11px; border-radius:9px;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-primary); font:inherit; }
+.daybtn .k { font-size:8.5px; font-weight:900; letter-spacing:.12em; text-transform:uppercase; color:var(--text-secondary); white-space:nowrap; }
+.daybtn .v { font-size:13px; font-weight:800; color:var(--win); font-variant-numeric:tabular-nums; }
+.daybtn .go { color:var(--text-muted); font-size:12px; }
+.iconbtn { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px;
+  border-radius:8px; border:1px solid var(--border-subtle); color:var(--text-secondary); font-size:14px; }
+.addbtn { display:inline-flex; align-items:center; gap:6px; padding:7px 12px; border-radius:8px;
+  border:1px solid var(--border-subtle); font-size:11.5px; font-weight:700; color:var(--text-secondary); }
+
+.gcard { margin:0 10px 10px; border:1px solid var(--border-subtle); border-radius:12px; overflow:hidden; }
+.ghead { display:flex; align-items:center; gap:8px; padding:10px 12px; }
+.gname { font-size:14px; font-weight:900; color:#65a30d; }
+.gdot { width:7px; height:7px; border-radius:999px; background:#84cc16; flex:none; }
+.firms { display:flex; margin-left:2px; }
+.firms span { width:20px; height:20px; border-radius:999px; border:1.5px solid var(--bg-card);
+  margin-left:-6px; display:flex; align-items:center; justify-content:center; font-size:7px;
+  font-weight:900; color:#fff; }
+.firms span:first-child { margin-left:0; }
+.sw { margin-left:auto; display:inline-flex; align-items:center; gap:6px; }
+.sw b { font-size:9px; font-weight:900; letter-spacing:.1em; color:var(--text-muted); }
+.sw i { width:36px; height:20px; border-radius:999px; background:var(--border-subtle); position:relative; }
+.sw i::after { content:''; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:999px;
+  background:var(--bg-card); box-shadow:0 1px 3px rgba(0,0,0,.25); }
+
+.gsum { display:grid; grid-template-columns:repeat(3,1fr); border-top:1px solid var(--border-subtle);
+  border-bottom:1px solid var(--border-subtle); background:color-mix(in srgb, var(--bg-page) 55%, transparent); }
+.gsum > div { padding:8px 12px; border-right:1px solid var(--border-subtle); }
+.gsum > div:last-child { border-right:0; }
+.gsum .k { font-size:8.5px; font-weight:900; letter-spacing:.1em; text-transform:uppercase; color:var(--text-secondary); }
+.gsum .v { margin-top:1px; font-size:13px; font-weight:800; font-variant-numeric:tabular-nums; }
+
+.acts { display:flex; gap:8px; padding:10px 12px; }
+.acts .danger { flex:1; height:36px; display:flex; align-items:center; justify-content:center;
+  border-radius:9px; border:1px solid rgba(225,29,72,.3); color:var(--loss); font-size:12px; font-weight:800; }
+.acts .plain { height:36px; padding:0 14px; display:flex; align-items:center; border-radius:9px;
+  border:1px solid var(--border-subtle); font-size:12px; font-weight:700; color:var(--text-secondary); }
+
+.win { color:var(--win); } .loss { color:var(--loss); } .flat { color:var(--text-secondary); }
+.num { font-variant-numeric:tabular-nums; }
+.dot { width:7px; height:7px; border-radius:999px; flex:none; background:#10b981; }
+.crown { color:#f59e0b; font-size:11px; }
+.mult { font-size:9.5px; font-weight:800; color:var(--text-secondary); background:var(--bg-page);
+  border-radius:5px; padding:1px 4px; font-variant-numeric:tabular-nums; }
+
+/* ── DNES: dva bloky, opakované popisky ─────────────────────────────── */
+.v0 .row { padding:12px 14px; border-bottom:1px solid var(--border-subtle); }
+.v0 .row:last-child { border-bottom:0; }
+.v0 .line1 { display:flex; align-items:center; gap:8px; }
+.v0 .nm { font-size:13px; font-weight:700; letter-spacing:-.01em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.v0 .pill { margin-left:auto; flex:none; font-size:10px; font-weight:700; padding:3px 8px; border-radius:999px;
+  border:1px solid rgba(16,185,129,.3); color:var(--win); }
+.v0 .grid { margin-top:8px; display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.v0 .grid .k { display:block; font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-secondary); }
+.v0 .grid .v { font-size:11px; font-weight:700; }
+
+/* ── A: tabulka s jednou hlavičkou ──────────────────────────────────── */
+.va .thead { display:grid; grid-template-columns:1fr 74px 62px 40px; gap:6px; padding:6px 12px;
+  border-bottom:1px solid var(--border-subtle); font-size:8.5px; font-weight:900;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); }
+.va .thead span:not(:first-child) { text-align:right; }
+.va .row { display:grid; grid-template-columns:1fr 74px 62px 40px; gap:6px; align-items:center;
+  padding:0 12px; height:38px; border-bottom:1px solid var(--border-subtle); }
+.va .row:last-child { border-bottom:0; }
+.va .who { display:flex; align-items:center; gap:7px; min-width:0; }
+.va .nm { font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.va .row > span:not(.who) { text-align:right; font-size:12px; font-weight:700; }
+
+/* ── B: jeden řádek, druhý jen když je co říct ──────────────────────── */
+.vb .row { padding:9px 12px; border-bottom:1px solid var(--border-subtle); }
+.vb .row:last-child { border-bottom:0; }
+.vb .line1 { display:flex; align-items:center; gap:8px; }
+.vb .nm { font-size:12.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.vb .day { margin-left:auto; flex:none; font-size:13px; font-weight:700; }
+.vb .line2 { margin-top:5px; display:flex; gap:7px; flex-wrap:wrap; }
+.vb .chip { font-size:10px; font-weight:700; padding:2px 7px; border-radius:6px;
+  border:1px solid var(--border-subtle); color:var(--text-secondary); }
+.vb .chip.open { border-color:rgba(16,185,129,.3); color:var(--win); }
+.vb .chip.pos { border-color:rgba(99,102,241,.35); color:var(--accent); }
+
+/* ── C: dvě čísla pod sebou vpravo, žádné popisky ───────────────────── */
+.vc .row { display:flex; align-items:center; gap:10px; padding:7px 12px; height:44px;
+  border-bottom:1px solid var(--border-subtle); }
+.vc .row:last-child { border-bottom:0; }
+.vc .who { display:flex; align-items:center; gap:7px; min-width:0; flex:1; }
+.vc .nm { font-size:12.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.vc .sub { display:block; font-size:9.5px; color:var(--text-muted); margin-top:1px; }
+.vc .right { text-align:right; flex:none; }
+.vc .day { display:block; font-size:13px; font-weight:700; }
+.vc .open { display:block; font-size:9.5px; color:var(--text-muted); margin-top:1px; }
+</style>
+</head>
+<body>
+<h1>LIVE na telefonu — hustota řádků</h1>
+<p class="lede">Dneska zabere jeden účet <b>83 px</b>: dva bloky pod sebou a u každého účtu znovu popisky
+  <b>DENNÍ / OTEVŘENÝ / POZICE</b>, které už stejně stojí v souhrnu skupiny nad tím. Tři varianty, jak to
+  stáhnout. <b>Přepni na dvacet účtů</b> — tam se rozdíl pozná nejvíc. Telefony jsou scrollovatelné.</p>
+
+<div class="bar">
+  <b>Téma</b>
+  <button id="bl" aria-pressed="false" onclick="theme(false)">Světlé</button>
+  <button id="bd" aria-pressed="true" onclick="theme(true)">Tmavé</button>
+  <span style="width:12px"></span>
+  <b>Účtů ve skupině</b>
+  <button id="c3" aria-pressed="true" onclick="setCount(3)">Tři</button>
+  <button id="c20" aria-pressed="false" onclick="setCount(20)">Dvacet</button>
+</div>
+
+<div class="decks" id="decks"></div>
+
+<script>
+const BASE = [
+  ['FTDFYG50511354175', 'Tradeify', '#22c55e', 610, 0, 0, true],
+  ['LFF05066846490007', 'Lucid', '#94a3b8', -95, 0, 0, false],
+  ['APX118862004412', 'Apex', '#818cf8', 412, 38, 2, false],
+];
+const EXTRA = Array.from({ length: 17 }, (_, i) => [
+  `TDF0000${8206 + i}`, i % 4 === 0 ? 'Apex' : 'Tradeify', i % 4 === 0 ? '#818cf8' : '#22c55e',
+  [507, -64, 388, 91, -145, 264, 33, -22, 118, -97, 441, 76, 159, -210, 88, 305, 47][i],
+  i % 6 === 2 ? 24 : 0, i % 6 === 2 ? 1 : 0, false,
+]);
+const state = { count: 3 };
+const accounts = () => state.count === 3 ? BASE : [...BASE, ...EXTRA];
+
+const nf = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const usd = v => `${v < 0 ? '-' : ''}$${nf.format(Math.abs(v))}`;
+const short = v => `${v < 0 ? '−' : v > 0 ? '+' : ''}$${Math.abs(Math.round(v))}`;
+const tone = v => v > 0 ? 'win' : v < 0 ? 'loss' : 'flat';
+const init = firm => firm.slice(0, 2).toUpperCase();
+
+// Hlavička je ve všech variantách stejná (mění se jen řádky účtů), ale musí
+// sedět s tím, co appka na 375 px opravdu dělá: tři řádky nad obsahem.
+const head = () => `<div class="shead" style="padding-bottom:0">
+    <span class="stitle">Kopírovací skupiny</span></div>
+  <div class="shead" style="padding-top:8px;padding-bottom:8px">
+    <button class="daybtn"><span class="k">Dnešní P&L</span><span class="v num">+$2 906</span><span class="go">›</span></button>
+  </div>
+  <div class="shead" style="padding-top:0">
+    <span class="addbtn">+ Přidat skupinu</span><span class="iconbtn">⋮</span></div>`;
+
+const ghead = () => `<div class="ghead">
+  <span class="gdot"></span><span class="gname">Hlavní</span>
+  <span class="firms"><span style="background:#22c55e">TR</span><span style="background:#94a3b8">LU</span></span>
+  <span class="sw"><i></i><b>OFF</b></span></div>
+<div class="gsum">
+  <div><div class="k">Kapitál</div><div class="v">$97,346</div></div>
+  <div><div class="k">Denní P&L</div><div class="v win">$515.00</div></div>
+  <div><div class="k">Otevřený</div><div class="v">$0.00</div></div>
+</div>`;
+
+const acts = () => `<div class="acts"><span class="danger">Flatten All</span>
+  <span class="plain">Upravit</span><span class="plain">⋮</span></div>`;
+
+const shell = (variant, body) => `<div class="sect">${head()}
+  <div class="gcard ${variant}">${ghead()}${body}${acts()}</div>
+  <div style="padding:10px 14px;font-size:11.5px;color:var(--text-secondary)">Celkem skupin: <b>1</b></div>
+</div>`;
+
+/** Dnešní stav: dva bloky, popisky u každého účtu znovu. */
+const v0 = () => shell('v0', accounts().map(([nm, firm, color, day, open, pos, leader]) => `
+  <div class="row" data-row>
+    <div class="line1"><span class="dot"></span><span class="nm">${nm}</span>
+      ${leader ? '<span class="crown">♛</span>' : `<span class="mult">×1</span>`}
+      <span class="pill">✓ Aktivní</span></div>
+    <div class="grid">
+      <div><span class="k">Denní</span><span class="v ${tone(day)}">${usd(day)}</span></div>
+      <div><span class="k">Otevřený</span><span class="v ${tone(open)}">${usd(open)}</span></div>
+      <div><span class="k">Pozice</span><span class="v flat">${pos ? `${pos}× MNQ` : '—'}</span></div>
+    </div>
+  </div>`).join(''));
+
+/** A: jedna hlavička na skupinu, každý účet jeden 38px řádek. */
+const va = () => shell('va', `<div class="thead"><span>Účet</span><span>Denní</span><span>Otevř.</span><span>Poz.</span></div>`
+  + accounts().map(([nm, firm, color, day, open, pos, leader]) => `
+  <div class="row" data-row>
+    <span class="who"><span class="dot"></span><span class="nm">${nm}</span>${leader ? '<span class="crown">♛</span>' : ''}</span>
+    <span class="num ${tone(day)}">${short(day)}</span>
+    <span class="num ${open ? tone(open) : 'flat'}">${open ? short(open) : '—'}</span>
+    <span class="num flat">${pos || '—'}</span>
+  </div>`).join(''));
+
+/** B: jeden řádek; druhý jen když je otevřená pozice nebo varování. */
+const vb = () => shell('vb', accounts().map(([nm, firm, color, day, open, pos, leader]) => `
+  <div class="row" data-row>
+    <div class="line1"><span class="dot"></span><span class="nm">${nm}</span>
+      ${leader ? '<span class="crown">♛</span>' : ''}
+      <span class="day num ${tone(day)}">${short(day)}</span></div>
+    ${open || pos ? `<div class="line2">
+      ${pos ? `<span class="chip pos">${pos}× MNQ</span>` : ''}
+      ${open ? `<span class="chip open">otevř. ${short(open)}</span>` : ''}</div>` : ''}
+  </div>`).join(''));
+
+/** C: pevných 44px, druhé číslo jako podtitul vpravo. */
+const vc = () => shell('vc', accounts().map(([nm, firm, color, day, open, pos, leader]) => `
+  <div class="row" data-row>
+    <span class="who"><span class="dot"></span>
+      <span style="min-width:0"><span class="nm">${nm}</span>
+        <span class="sub">${firm}${leader ? ' · leader' : ''}${pos ? ` · ${pos}× MNQ` : ''}</span></span></span>
+    <span class="right"><span class="day num ${tone(day)}">${short(day)}</span>
+      ${open ? `<span class="open num">otevř. ${short(open)}</span>` : ''}</span>
+  </div>`).join(''));
+
+const DECKS = [
+  ['Dnes', 'Dnešní stav', 'Dva bloky na účet a popisky <b>DENNÍ / OTEVŘENÝ / POZICE</b> u každého znovu.', v0],
+  ['A', 'Tabulka', 'Popisky jednou v hlavičce skupiny, účet je <b>jeden řádek</b>. Nejhustší — ale čtyři sloupce na 375 px zkrátí jméno účtu.', va],
+  ['B', 'Řádek + chip jen když je co', 'Klidný účet = jeden řádek se jménem a denním P&L. <b>Druhý řádek naskočí jen u otevřené pozice.</b> Jméno má plnou šířku.', vb],
+  ['C', 'Pevná výška, číslo vpravo', 'Vždy 44 px: jméno s podtitulem (firma, pozice) vlevo, denní P&L vpravo. <b>Nejklidnější rytmus</b>, stálá výška.', vc],
+];
+
+function render() {
+  document.getElementById('decks').innerHTML = DECKS.map(([key, name, note, build]) => `
+    <div class="deck">
+      <h2><em>${key}</em>${name}</h2>
+      <p>${note}</p>
+      <div class="metric" data-metric="${key}">řádek <s>?</s> · účty celkem <s class="tot">?</s></div>
+      <div class="phone">${build()}</div>
+    </div>`).join('');
+  measure();
+}
+
+/** Skutečná výška řádku a celého soupisu — ať se varianty neporovnávají od oka. */
+function measure() {
+  for (const deck of document.querySelectorAll('.deck')) {
+    const rows = deck.querySelectorAll('[data-row]');
+    if (!rows.length) continue;
+    const one = Math.round(rows[0].getBoundingClientRect().height);
+    const all = Math.round([...rows].reduce((sum, row) => sum + row.getBoundingClientRect().height, 0));
+    const metric = deck.querySelector('.metric');
+    metric.querySelector('s').textContent = `${one} px`;
+    metric.querySelector('.tot').textContent = `${all} px`;
+  }
+}
+
+function setCount(n) {
+  state.count = n;
+  document.getElementById('c3').setAttribute('aria-pressed', String(n === 3));
+  document.getElementById('c20').setAttribute('aria-pressed', String(n === 20));
+  render();
+}
+function theme(dark) {
+  document.documentElement.classList.toggle('dark', dark);
+  document.getElementById('bd').setAttribute('aria-pressed', String(dark));
+  document.getElementById('bl').setAttribute('aria-pressed', String(!dark));
+}
+theme(true);
+render();
+</script>
+</body>
+</html>

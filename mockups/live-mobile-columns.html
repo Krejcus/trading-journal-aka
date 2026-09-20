@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LIVE na telefonu — sloupce tabulky</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-page:#f1f5f9; --bg-card:#ffffff; --text-primary:#0f172a; --text-secondary:#475569;
+  --text-muted:#94a3b8; --border-subtle:#e2e8f0; --accent:#4f46e5; --win:#059669; --loss:#e11d48;
+}
+.dark {
+  --bg-page:#020617; --bg-card:#0a0f1d; --text-primary:#f8fafc; --text-secondary:#94a3b8;
+  --text-muted:#475569; --border-subtle:rgba(255,255,255,.08); --accent:#6366f1;
+  --win:#10b981; --loss:#f43f5e;
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:24px 16px 80px; font-family:Inter,-apple-system,system-ui,sans-serif;
+  background:var(--bg-page); color:var(--text-primary); }
+h1 { font-size:21px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.65; color:var(--text-secondary); max-width:94ch; margin:0 0 16px; }
+.lede b { color:var(--text-primary); }
+.bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:9px 12px; margin-bottom:22px;
+  border:1px solid var(--border-subtle); border-radius:12px; background:var(--bg-card); }
+.bar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+.bar button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.bar button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+
+.decks { display:flex; gap:18px; align-items:flex-start; overflow-x:auto; padding-bottom:16px; }
+.deck { flex:none; width:375px; }
+.deck > h2 { font-size:13px; font-weight:900; margin:0 0 2px; }
+.deck > h2 em { font-style:normal; color:var(--text-muted); font-weight:800; font-size:10px;
+  letter-spacing:.09em; text-transform:uppercase; margin-right:7px; }
+.deck > p { font-size:11.5px; line-height:1.5; color:var(--text-secondary); margin:0 0 8px; min-height:86px; }
+.deck > p b { color:var(--text-primary); }
+.metric { display:inline-flex; gap:8px; margin-bottom:8px; padding:4px 10px; border-radius:999px;
+  background:var(--bg-card); border:1px solid var(--border-subtle);
+  font-size:10.5px; font-weight:700; color:var(--text-secondary); }
+.metric s { text-decoration:none; color:var(--text-primary); font-weight:800; font-variant-numeric:tabular-nums; }
+
+.phone { width:375px; height:660px; overflow-y:auto; border-radius:26px; padding:12px;
+  border:1px solid var(--border-subtle); background:var(--bg-page);
+  box-shadow:0 18px 40px -26px rgba(15,23,42,.5); }
+.phone::-webkit-scrollbar { width:6px; }
+.phone::-webkit-scrollbar-thumb { background:rgba(100,116,139,.35); border-radius:999px; }
+
+.sect { border:1px solid var(--border-subtle); border-radius:14px; background:var(--bg-card); overflow:hidden; }
+.shead { display:flex; align-items:center; gap:10px; padding:12px 14px; flex-wrap:wrap; }
+.stitle { font-size:16px; font-weight:900; }
+.daybtn { display:inline-flex; align-items:center; gap:8px; padding:5px 9px 5px 11px; border-radius:9px;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-primary); font:inherit; }
+.daybtn .k { font-size:8.5px; font-weight:900; letter-spacing:.12em; text-transform:uppercase;
+  color:var(--text-secondary); white-space:nowrap; }
+.daybtn .v { font-size:13px; font-weight:800; color:var(--win); font-variant-numeric:tabular-nums; }
+.daybtn .go { color:var(--text-muted); font-size:12px; }
+.iconbtn { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px;
+  border-radius:8px; border:1px solid var(--border-subtle); color:var(--text-secondary); font-size:14px; }
+.addbtn { display:inline-flex; align-items:center; gap:6px; padding:7px 12px; border-radius:8px;
+  border:1px solid var(--border-subtle); font-size:11.5px; font-weight:700; color:var(--text-secondary); }
+
+.gcard { margin:0 10px 10px; border:1px solid var(--border-subtle); border-radius:12px; overflow:hidden; }
+/* Hlavička skupiny je teď dvouřádková: název + firmy, pod tím Flatten a vypínač.
+   Nápis „Flatten All“ se vedle vypínače na 375 px na jeden řádek nevejde. */
+.ghead { display:flex; align-items:center; gap:8px; padding:10px 12px 8px; }
+.gname { font-size:14px; font-weight:900; color:#65a30d; }
+.gdot { width:7px; height:7px; border-radius:999px; background:#84cc16; flex:none; }
+.firms { display:flex; margin-left:2px; }
+.firms span { width:20px; height:20px; border-radius:999px; border:1.5px solid var(--bg-card);
+  margin-left:-6px; display:flex; align-items:center; justify-content:center; font-size:7px;
+  font-weight:900; color:#fff; }
+.firms span:first-child { margin-left:0; }
+.gctl { display:flex; align-items:center; gap:8px; padding:0 12px 10px; }
+.flatbtn { height:32px; padding:0 14px; display:inline-flex; align-items:center; border-radius:9px;
+  border:1px solid rgba(225,29,72,.35); background:rgba(225,29,72,.07); color:var(--loss);
+  font-size:11.5px; font-weight:800; }
+.sw { margin-left:auto; display:inline-flex; align-items:center; gap:6px; }
+.sw b { font-size:9px; font-weight:900; letter-spacing:.1em; color:var(--text-muted); }
+.sw i { width:36px; height:20px; border-radius:999px; background:var(--border-subtle); position:relative; }
+.sw i::after { content:''; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:999px;
+  background:var(--bg-card); box-shadow:0 1px 3px rgba(0,0,0,.25); }
+
+.gsum { display:grid; grid-template-columns:repeat(3,1fr); border-top:1px solid var(--border-subtle);
+  border-bottom:1px solid var(--border-subtle); background:color-mix(in srgb, var(--bg-page) 55%, transparent); }
+.gsum > div { padding:8px 12px; border-right:1px solid var(--border-subtle); }
+.gsum > div:last-child { border-right:0; }
+.gsum .k { font-size:8.5px; font-weight:900; letter-spacing:.1em; text-transform:uppercase; color:var(--text-secondary); }
+.gsum .v { margin-top:1px; font-size:13px; font-weight:800; font-variant-numeric:tabular-nums; }
+
+.tail { display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--border-subtle); }
+.tail span { height:34px; padding:0 14px; display:inline-flex; align-items:center; border-radius:9px;
+  border:1px solid var(--border-subtle); font-size:12px; font-weight:700; color:var(--text-secondary); }
+.tail .icon { width:34px; padding:0; justify-content:center; }
+
+.win { color:var(--win); } .loss { color:var(--loss); } .flat { color:var(--text-secondary); }
+.num { font-variant-numeric:tabular-nums; }
+.dot { width:7px; height:7px; border-radius:999px; flex:none; background:#10b981; }
+.crown { color:#f59e0b; font-size:11px; }
+
+/* pozice — stejné pilulky jako na počítači */
+.pos { display:inline-flex; align-items:center; gap:3px; border-radius:6px; padding:2px 5px;
+  font-size:9.5px; font-weight:900; line-height:1; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.pos.long { border:1px solid rgba(16,185,129,.28); background:rgba(16,185,129,.12); color:var(--win); }
+.pos.short { border:1px solid rgba(225,29,72,.28); background:rgba(225,29,72,.12); color:var(--loss); }
+.warn { display:inline-flex; align-items:center; gap:2px; border-radius:6px; padding:2px 4px;
+  font-size:8.5px; font-weight:900; line-height:1; white-space:nowrap;
+  border:1px solid rgba(245,158,11,.45); background:rgba(245,158,11,.15); color:#d97706; }
+
+/* ── společná mřížka řádků ───────────────────────────────────────────── */
+.tbl .thead { display:grid; gap:6px; padding:6px 12px; border-bottom:1px solid var(--border-subtle);
+  font-size:8.5px; font-weight:900; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); }
+.tbl .row { display:grid; gap:6px; align-items:center; padding:0 12px; min-height:38px;
+  border-bottom:1px solid var(--border-subtle); }
+.tbl .row:last-child { border-bottom:0; }
+.tbl .who { display:flex; align-items:center; gap:7px; min-width:0; }
+.tbl .nm { font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tbl .r { text-align:right; font-size:12px; font-weight:700; }
+.tbl .c { display:flex; justify-content:flex-end; gap:4px; flex-wrap:wrap; }
+.tag { font-size:8px; font-weight:900; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--text-muted); margin-right:3px; }
+
+/* dnešek: čtyři sloupce */
+.n0 .thead, .n0 .row { grid-template-columns:1fr 74px 62px 40px; }
+.n0 .thead span:not(:first-child) { text-align:right; }
+/* N1 / N4: tři sloupce, poslední adaptivní */
+.n1 .thead, .n1 .row, .n4 .thead, .n4 .row { grid-template-columns:1fr 92px 72px; }
+.n1 .thead span:not(:first-child), .n4 .thead span:not(:first-child) { text-align:right; }
+/* N2: dva sloupce */
+.n2 .thead, .n2 .row { grid-template-columns:1fr 150px; }
+.n2 .thead span:not(:first-child) { text-align:right; }
+/* N3: dvě sekce, každá vlastní hlavičku */
+.n3 .grp { padding:5px 12px; background:color-mix(in srgb, var(--bg-page) 60%, transparent);
+  border-bottom:1px solid var(--border-subtle); font-size:8.5px; font-weight:900;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--text-secondary); }
+.n3 .open .thead, .n3 .open .row { grid-template-columns:1fr 92px 72px; }
+.n3 .flatsec .thead, .n3 .flatsec .row { grid-template-columns:1fr 80px; }
+.n3 .thead span:not(:first-child) { text-align:right; }
+
+/* N4: řádek v pozici je podbarvený, aby bylo poznat, že sloupec znamená něco jiného */
+.n4 .row.inpos { background:rgba(99,102,241,.07); }
+</style>
+</head>
+<body>
+<h1>Sloupce tabulky na telefonu</h1>
+<p class="lede">Tvůj nápad: nechat <b>Pozici</b> a <b>Otevřený P&L</b> (pozice stejné jako na počítači) a u účtu
+  bez pozice ukázat místo nich <b>Denní</b>. Čtyři způsoby, jak to udělat, plus dnešní čtyřsloupcová
+  tabulka pro srovnání. Flatten All je všude <b>nápisem vedle vypínače</b>, jak jsi chtěl.
+  Měřím <b>šířku sloupce se jménem</b> — o to celé jde.</p>
+
+<div class="bar">
+  <b>Téma</b>
+  <button id="bl" aria-pressed="false" onclick="theme(false)">Světlé</button>
+  <button id="bd" aria-pressed="true" onclick="theme(true)">Tmavé</button>
+  <span style="width:12px"></span>
+  <b>Kolik účtů v pozici</b>
+  <button id="p2" aria-pressed="true" onclick="setOpen(2)">Dva</button>
+  <button id="p0" aria-pressed="false" onclick="setOpen(0)">Žádný</button>
+</div>
+
+<div class="decks" id="decks"></div>
+
+<script>
+/** [jméno, firma, denní, otevřený, pozice {sym, qty, sl}] */
+const ACC = [
+  ['FTDFYG50511354175', 'Tradeify', 610, 0, null, true],
+  ['LFF05066846490007', 'Lucid', -95, 0, null, false],
+  ['APX118862004412', 'Apex', 412, 38, { sym: 'MNQ', qty: 2, sl: true }, false],
+  ['TDF00008206', 'Tradeify', 507, 0, null, false],
+  ['TDF00008207', 'Tradeify', -64, 0, null, false],
+  ['TDF00008208', 'Tradeify', 388, -24, { sym: 'MNQ', qty: -1, sl: false }, false],
+  ['TDF00008209', 'Tradeify', 91, 0, null, false],
+  ['TDF00008210', 'Tradeify', -145, 0, null, false],
+];
+const state = { open: 2 };
+const accounts = () => state.open === 2 ? ACC : ACC.map(a => [a[0], a[1], a[2], 0, null, a[5]]);
+
+const short = v => `${v < 0 ? '−' : v > 0 ? '+' : ''}$${Math.abs(Math.round(v))}`;
+const tone = v => v > 0 ? 'win' : v < 0 ? 'loss' : 'flat';
+const posChip = p => !p ? '' :
+  `<span class="pos ${p.qty > 0 ? 'long' : 'short'}">${p.sym} ${p.qty > 0 ? '+' : '−'}${Math.abs(p.qty)}${p.sl ? ' ⛊' : ''}</span>`
+  + (p.sl ? '' : `<span class="warn">⚠ bez SL</span>`);
+
+const head = () => `<div class="shead" style="padding-bottom:0"><span class="stitle">Kopírovací skupiny</span></div>
+  <div class="shead" style="padding-top:8px;padding-bottom:8px">
+    <button class="daybtn"><span class="k">Dnešní P&L</span><span class="v num">+$2 906</span><span class="go">›</span></button></div>
+  <div class="shead" style="padding-top:0"><span class="addbtn">+ Přidat skupinu</span><span class="iconbtn">⋮</span></div>`;
+
+const ghead = () => `<div class="ghead">
+    <span class="gdot"></span><span class="gname">Hlavní</span>
+    <span class="firms"><span style="background:#22c55e">TR</span><span style="background:#94a3b8">LU</span></span></div>
+  <div class="gctl"><span class="flatbtn">Flatten All</span>
+    <span class="sw"><i></i><b>OFF</b></span></div>
+  <div class="gsum">
+    <div><div class="k">Kapitál</div><div class="v">$97,346</div></div>
+    <div><div class="k">Denní P&L</div><div class="v win">$515.00</div></div>
+    <div><div class="k">Otevřený</div><div class="v">${state.open ? '$14.00' : '$0.00'}</div></div>
+  </div>`;
+
+const tail = () => `<div class="tail"><span>Upravit</span><span class="icon">⋮</span></div>`;
+const shell = (cls, body) => `<div class="sect">${head()}
+  <div class="gcard tbl ${cls}">${ghead()}${body}${tail()}</div>
+  <div style="padding:10px 14px;font-size:11.5px;color:var(--text-secondary)">Celkem skupin: <b>1</b></div></div>`;
+const who = (nm, leader) => `<span class="who" data-name><span class="dot"></span>
+  <span class="nm">${nm}</span>${leader ? '<span class="crown">♛</span>' : ''}</span>`;
+
+/** Dnešek: čtyři sloupce, dva z nich bývají prázdné. */
+const n0 = () => shell('n0', `<div class="thead"><span>Účet</span><span>Denní</span><span>Otevř.</span><span>Poz.</span></div>`
+  + accounts().map(([nm, f, day, open, pos, leader]) => `<div class="row">${who(nm, leader)}
+      <span class="r num ${tone(day)}">${short(day)}</span>
+      <span class="r num ${open ? tone(open) : 'flat'}">${open ? short(open) : '—'}</span>
+      <span class="r num flat">${pos ? Math.abs(pos.qty) : '—'}</span></div>`).join(''));
+
+/** N1: poslední sloupec je buď otevřený P&L, nebo denní — s mikropopiskem. */
+const n1 = () => shell('n1', `<div class="thead"><span>Účet</span><span>Pozice</span><span>P&L</span></div>`
+  + accounts().map(([nm, f, day, open, pos, leader]) => `<div class="row">${who(nm, leader)}
+      <span class="c">${pos ? posChip(pos) : '<span class="flat">—</span>'}</span>
+      <span class="r num ${pos ? tone(open) : tone(day)}">${pos ? '' : '<span class="tag">dnes</span>'}${short(pos ? open : day)}</span></div>`).join(''));
+
+/** N2: pozice i číslo v jedné pravé buňce. */
+const n2 = () => shell('n2', `<div class="thead"><span>Účet</span><span>Pozice a P&L</span></div>`
+  + accounts().map(([nm, f, day, open, pos, leader]) => `<div class="row">${who(nm, leader)}
+      <span class="c">${pos ? posChip(pos) : ''}
+        <span class="r num ${pos ? tone(open) : tone(day)}">${pos ? '' : '<span class="tag">dnes</span>'}${short(pos ? open : day)}</span></span></div>`).join(''));
+
+/** N3: dvě sekce, každá s pravdivou hlavičkou. */
+const n3 = () => {
+  const inPos = accounts().filter(a => a[4]);
+  const flatAcc = accounts().filter(a => !a[4]);
+  return shell('n3', (inPos.length ? `<div class="open">
+      <div class="grp">V pozici · ${inPos.length}</div>
+      <div class="thead"><span>Účet</span><span>Pozice</span><span>Otevřený</span></div>
+      ${inPos.map(([nm, f, day, open, pos, leader]) => `<div class="row">${who(nm, leader)}
+        <span class="c">${posChip(pos)}</span>
+        <span class="r num ${tone(open)}">${short(open)}</span></div>`).join('')}</div>` : '')
+    + `<div class="flatsec">
+      <div class="grp">Bez pozice · ${flatAcc.length}</div>
+      <div class="thead"><span>Účet</span><span>Dnes</span></div>
+      ${flatAcc.map(([nm, f, day, open, pos, leader]) => `<div class="row">${who(nm, leader)}
+        <span class="r num ${tone(day)}">${short(day)}</span></div>`).join('')}</div>`);
+};
+
+/** N4: jako N1, ale řádek v pozici je podbarvený. */
+const n4 = () => shell('n4', `<div class="thead"><span>Účet</span><span>Pozice</span><span>Otevř. / dnes</span></div>`
+  + accounts().map(([nm, f, day, open, pos, leader]) => `<div class="row ${pos ? 'inpos' : ''}">${who(nm, leader)}
+      <span class="c">${pos ? posChip(pos) : '<span class="flat">—</span>'}</span>
+      <span class="r num ${pos ? tone(open) : tone(day)}">${short(pos ? open : day)}</span></div>`).join(''));
+
+const DECKS = [
+  ['Dnes', 'Čtyři sloupce', 'Denní, Otevřený i Pozice pořád. <b>Bez otevřené pozice jsou dva sloupce plné pomlček</b> a jméno se stejně zkrátí. Pro srovnání.', n0],
+  ['N1', 'Adaptivní poslední sloupec', 'Účet v pozici ukáže <b>otevřený</b> P&L, ostatní <b>denní</b> s popiskem „dnes“. Jméno dostane nejvíc místa. Riziko: jeden sloupec má dva významy, popisek to musí unést.', n1],
+  ['N2', 'Pozice a číslo v jedné buňce', 'Jen dva sloupce. <b>Jméno má nejvíc ze všech.</b> Zato pravá buňka mění šířku podle toho, jestli tam pilulka je — čísla se nesrovnají pod sebe.', n2],
+  ['N3', 'Dvě sekce podle stavu', 'Účty v pozici nahoře se sloupci Pozice a Otevřený, zbytek pod tím jen s Dnes. <b>Každá hlavička platí pro všechny řádky pod sebou</b> — žádný sloupec nemá dva významy. Co tě zajímá, je navrchu.', n3],
+  ['N4', 'Adaptivní + podbarvený řádek', 'Jako N1, ale řádek v pozici je podbarvený, takže <b>jinak čtený sloupec je vidět periferně</b> a nemusí se popisovat slovem.', n4],
+];
+
+function render() {
+  document.getElementById('decks').innerHTML = DECKS.map(([key, name, note, build]) => `
+    <div class="deck"><h2><em>${key}</em>${name}</h2><p>${note}</p>
+      <div class="metric">jméno účtu <s>?</s></div>
+      <div class="phone">${build()}</div></div>`).join('');
+  measure();
+}
+
+/** Šířka sloupce se jménem — kvůli tomu se sloupce škrtají. */
+function measure() {
+  for (const deck of document.querySelectorAll('.deck')) {
+    const name = deck.querySelector('[data-name]');
+    if (!name) continue;
+    deck.querySelector('.metric s').textContent = `${Math.round(name.getBoundingClientRect().width)} px`;
+  }
+}
+
+function setOpen(n) {
+  state.open = n;
+  document.getElementById('p2').setAttribute('aria-pressed', String(n === 2));
+  document.getElementById('p0').setAttribute('aria-pressed', String(n === 0));
+  render();
+}
+function theme(dark) {
+  document.documentElement.classList.toggle('dark', dark);
+  document.getElementById('bd').setAttribute('aria-pressed', String(dark));
+  document.getElementById('bl').setAttribute('aria-pressed', String(!dark));
+}
+theme(true);
+render();
+</script>
+</body>
+</html>

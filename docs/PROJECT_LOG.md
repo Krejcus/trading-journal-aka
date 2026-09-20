@@ -208,6 +208,76 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-20 — LIVE na telefonu: hustší řádky, dvě sekce, Flatten nahoru (Claude)
+
+Uživatel: „přijde mi, že jsou ty řádky zbytečně velké.“ Změřeno: jeden účet
+zabíral **82 px** (dva bloky pod sebou a u každého účtu znovu popisky
+DENNÍ / OTEVŘENÝ / POZICE, které stojí i v souhrnu skupiny nad tím). Při
+dvaceti účtech 1 660 px jen na seznam. Vybráno z mockupů
+`live-mobile-rows`, `-flatten`, `-columns`, `-header`.
+
+- **Účty ve dvou sekcích** místo jedné tabulky se čtyřmi sloupci. Sekce
+  rozlišuje jen popisek pravého sloupce (`Otevřený` u účtů v trhu, `Dnes`
+  u ostatních); pruh s názvem sekce nad nimi byl druhý řádek chrome, který
+  nic nepřidal, a šel pryč. Důvod: uživatel chtěl adaptivní poslední
+  sloupec (otevřený P&L u účtu v pozici, jinak denní). Jedna tabulka by
+  pak měla sloupec se dvěma významy a lživou hlavičkou. Dvě sekce to
+  obejdou — popisek platí pro všechny řádky pod sebou. Bonus: většinu dne
+  v pozici nejsi, takže běžný stav je dvousloupcová tabulka, kde se
+  **jméno účtu vejde celé** (122 px místo 101 px; bez otevřených pozic až
+  209 px v mockupu). U propek, kde se účty liší až posledními číslicemi,
+  je to to hlavní.
+- „V trhu“ = otevřená pozice **nebo** čekající vstupní příkaz, protože obojí
+  kreslí sloupec Pozice stejně jako na počítači.
+- **Pilulky pozice jsou na druhém řádku**, ne ve sloupci. Ve sloupci o 86 px
+  zbylo na jméno 70 px a zkracovalo se na „TDF0000…“. Druhý řádek ty účty
+  stejně mají kvůli tlačítku Flatten účet, takže to nestojí ani pixel.
+- **Flatten All nahoru** vedle vypínače, nápisem (ne ikonou). Je vidět bez
+  scrollování i při dvaceti účtech; dole zbyla jen správa skupiny.
+- **Hlavička skupiny na jeden řádek**: název · Flatten All · vypínač. Název
+  je jediný pružný prvek, takže se zkrátí on a nikdy nevytlačí ovládání.
+  Kolečka firem se přesunula do souhrnu jako úzká čtvrtá buňka (Kapitál se
+  přitom nesmí ztratit) a v ní jsou bez textu — název nese `title`.
+- Varovné štítky (`N/M aktivních`, DLL, BREACHED, leader nedostupný, Shadow)
+  mají vlastní řádek, ale jen když nějaké jsou.
+- **Zelené „Aktivní“ u každého účtu je pryč** — pilulka způsobilosti se
+  ukáže jen tehdy, když něco není v pořádku. `×N` naopak zůstává i u ×1:
+  násobek je risk parametr a jeho nepřítomnost by šla splést s „nevím“.
+- Souhrn skupiny je na telefonu bez haléřů: „-$225.00“ se do buňky nevešlo
+  a ořízlo se na „-$225.0…“, což je horší než zaokrouhlení. U jednotlivých
+  účtů haléře zůstávají.
+- **Souhrn skupiny je adaptivní**: v obchodu ustoupí Kapitál a zbydou Firmy,
+  Denní a Otevřený (127 px na číslo místo 86). Kapitál se v obchodu nehýbe,
+  zatímco otevřený P&L ano. Čekající vstup se za obchod nepočítá — dokud
+  není fill, není co sledovat a kapitál je užitečnější.
+- **Seznam účtů bez pozice se sbalí na prvních 6** s přepínačem „Zobrazit
+  dalších N“. Účty v trhu se nesbalují nikdy — kvůli nim se na telefon
+  člověk dívá. Sbalením se nic naléhavého neztratí: neaktivní účty hlásí
+  štítky v hlavičce skupiny (`N/M aktivních`, DLL, BREACHED) bez ohledu na
+  to, jestli je jejich řádek vidět. Pořadí zůstává přirozené (leader první),
+  ne podle velikosti čísla — jinak by řádky při každé aktualizaci skákaly.
+  Rozbalení animuje výšku mřížkou `0fr → 1fr` (`.live-accounts-more`), ne
+  `max-height`: nemusí se hádat horní mez ani měřit v JS, takže se chová
+  stejně při šesti i padesáti skrytých účtech. Řádky uvnitř naskakují
+  postupně; samotná animace výšky vypadá jako skok. Skryté řádky zůstávají
+  v DOMu a sbalený obal má `inert` — nulová výška je schová jen očima
+  a tlačítka „Flatten účet“ uvnitř by zůstala dosažitelná tabem.
+- Řádek je 36 px, ne méně: pod tím už je z něj špatný dotykový cíl a přitom
+  otevírá detail účtu.
+- Výsledek: řádek **36 px** místo 82; karta s 20 účty **630 px** sbalená
+  (vejde se celá na obrazovku telefonu) a 1 074 px rozbalená. Ověřeno
+  v prohlížeči na 375 px ve světlém i tmavém režimu, nula přetečení a žádný
+  vodorovný posuv. `copytrade-preview.tsx` rozšířen na 20 účtů ve skupině
+  (dva v pozici), aby šlo ladit v zátěži.
+- Desktopová tabulka se nemění: `CompactStat` a `marksOnly` jsou jen pro
+  kompaktní kartu, `FirmMark` má nový `size` s původní výchozí hodnotou.
+- 424 souborů / 3878 testů, typecheck i lint čisté.
+
+**Past, do které jsem spadl:** ověřovací příkaz `npx vitest run 2>&1 | grep …
+&& npx eslint` mi ohlásil úspěch i s padlým testem — roura váže silněji než
+`&&`, takže exit kód byl z `grep`. Je to přesně to, na co upozorňuje zápis
+ze 4. 9. Brána musí jít do souboru (`> log 2>&1 && …`), ne přes rouru.
+
 ### 2026-09-20 — Karta dne v LIVE + spouštěč v hlavičce (Claude)
 
 Chyběl denní souhrn napříč účty, který konkurence má. Průzkum: Tradesyncer

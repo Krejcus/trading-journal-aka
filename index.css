@@ -3189,3 +3189,49 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
   border-color: rgba(15, 23, 42, 0.22);
   background: rgba(15, 23, 42, 0.07);
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   LIVE → kompaktní karta skupiny → rozbalení zbytku účtů
+
+   Výška se animuje mřížkou `0fr → 1fr`, ne `max-height`: nemusí se hádat
+   horní mez ani měřit v JS, takže se sbalení chová stejně při šesti i při
+   padesáti skrytých účtech. Řádky uvnitř naskakují postupně — bez toho
+   vypadá rozbalení jako skok, i když se výška animuje.
+   ───────────────────────────────────────────────────────────────────────── */
+.live-accounts-more {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.live-accounts-more > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.live-accounts-more[data-open='true'] {
+  grid-template-rows: 1fr;
+}
+
+.live-accounts-more[data-open='true'] li {
+  animation: live-account-reveal 0.34s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+@keyframes live-account-reveal {
+  from { opacity: 0; transform: translateY(-7px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Při sbalování se neanimuje nic uvnitř — řádky jen zmizí s výškou, jinak
+   by se prolínaly přes obsah, který se nad ně sune. */
+.live-accounts-more[data-open='false'] li {
+  animation: none;
+  opacity: 0;
+  transition: opacity 0.14s linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-accounts-more { transition: none; }
+  .live-accounts-more li { animation: none; transition: none; }
+  .live-accounts-more[data-open='false'] li { opacity: 1; }
+}
