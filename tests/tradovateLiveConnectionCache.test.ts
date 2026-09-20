@@ -28,6 +28,33 @@ const status: TradovateOAuthStatus = {
 };
 
 describe('Tradovate LIVE connection shell cache', () => {
+  it.each([null, undefined, '', '   '])('handles a missing prop firm (%s) without crashing LIVE', propFirm => {
+    const dataset = { accounts: [{ id: 1 }, { id: 2 }, { id: 3 }] } as unknown as TradovatePreflightResult;
+    const profiles = [
+      { externalAccountId: '1', propFirm },
+      { externalAccountId: '2', propFirm: ' Tradeify ' },
+      { externalAccountId: '3', propFirm: 'Tradeify' },
+      { externalAccountId: '99', propFirm: 'Lucid' },
+    ] as TradovateAccountProfile[];
+    expect(buildTradovateConnectionSummaries(status, { 'connection-1': dataset }, profiles)).toEqual({
+      'connection-1': { accountCount: 3, organizationName: 'Tradeify' },
+    });
+  });
+
+  it('preserves organization fallbacks when no account has a prop firm', () => {
+    const dataset = { accounts: [{ id: 1 }] } as unknown as TradovatePreflightResult;
+    const profiles = [{ externalAccountId: '1', propFirm: null }] as TradovateAccountProfile[];
+    const data = { 'connection-1': dataset };
+    const previous = { 'connection-1': { accountCount: 9, organizationName: 'Cached firm' } };
+    const brokerStatus = { ...status, connections: [{ ...status.connections[0], organizationName: 'Broker organization' }] };
+    expect(buildTradovateConnectionSummaries(brokerStatus, data, profiles, previous)['connection-1'])
+      .toEqual({ accountCount: 1, organizationName: 'Broker organization' });
+    expect(buildTradovateConnectionSummaries(status, data, profiles, previous)['connection-1'])
+      .toEqual({ accountCount: 1, organizationName: 'Cached firm' });
+    expect(buildTradovateConnectionSummaries(status, data, profiles)['connection-1'])
+      .toEqual({ accountCount: 1, organizationName: null });
+  });
+
   it('restores the connected shell without persisting identity or token metadata', () => {
     const values = new Map<string, string>();
     const storage = {

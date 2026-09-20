@@ -27,6 +27,7 @@
 		B10000000000000000000003 /* AlphaTradeWidgets.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* AlphaTradeWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		C10000000000000000000001 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000002 /* NotificationService.swift */; };
 		C10000000000000000000003 /* AlphaTradeNotifications.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = C10000000000000000000004 /* AlphaTradeNotifications.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		D71300000000000000000001 /* AlphaTradeLiveActivityRegistration.swift in Sources */ = {isa = PBXBuildFile; fileRef = D71300000000000000000002 /* AlphaTradeLiveActivityRegistration.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -86,6 +87,7 @@
 		C10000000000000000000002 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		C10000000000000000000004 /* AlphaTradeNotifications.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AlphaTradeNotifications.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C10000000000000000000007 /* Notification Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Info.plist; sourceTree = "<group>"; };
+		D71300000000000000000002 /* AlphaTradeLiveActivityRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlphaTradeLiveActivityRegistration.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -142,6 +144,7 @@
 				A71FAB092FEA000100000009 /* AlphaTradeControlIntents.swift */,
 				A71FAB062FEA000100000006 /* AlphaTradeLiveActivityAttributes.swift */,
 				A71FAB042FEA000100000004 /* AlphaTradeSystemActions.swift */,
+				D71300000000000000000002 /* AlphaTradeLiveActivityRegistration.swift */,
 				A71FAB022FEA000100000002 /* AlphaTradeNativePlugin.swift */,
 				A71FAB002FEA000100000001 /* AlphaTradeShellViewController.swift */,
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
@@ -338,6 +341,7 @@
 				A71FAB0A2FEA00010000000A /* AlphaTradeControlIntents.swift in Sources */,
 				A71FAB072FEA000100000007 /* AlphaTradeLiveActivityAttributes.swift in Sources */,
 				A71FAB052FEA000100000005 /* AlphaTradeSystemActions.swift in Sources */,
+				D71300000000000000000001 /* AlphaTradeLiveActivityRegistration.swift in Sources */,
 				A71FAB032FEA000100000003 /* AlphaTradeNativePlugin.swift in Sources */,
 				A71FAB012FEA000100000001 /* AlphaTradeShellViewController.swift in Sources */,
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,

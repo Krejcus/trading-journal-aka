@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
     clearWidgetAccessToken: vi.fn(async () => undefined),
     updateWidgetSnapshot: vi.fn(async () => undefined),
     getPushEnvironment: vi.fn(async () => ({ environment: 'development' })),
-    getLiveActivityState: vi.fn(async () => ({ supported: true, enabled: true, activeCount: 1 })),
+    getLiveActivityState: vi.fn<() => Promise<{ supported: boolean; enabled: boolean; activeCount: number; activeActivityIds?: string[]; nativeManagedActivityIds?: string[] }>>(),
     endLiveActivity: vi.fn(async () => undefined),
     addListener: vi.fn(),
   },
@@ -21,6 +21,7 @@ beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   mocks.callbacks.clear();
+  mocks.plugin.getLiveActivityState.mockResolvedValue({ supported: true, enabled: true, activeCount: 1, activeActivityIds: ['activity-a'] });
   mocks.session = { user: { id: 'user-a' }, access_token: 'mock-auth' };
   mocks.plugin.addListener.mockImplementation(async (name: string, callback: (value: any) => void) => {
     mocks.callbacks.set(name, callback);
@@ -120,5 +121,81 @@ describe('Live Activity content ownership', () => {
     expect(await deactivating).toEqual({ revoked: true });
     expect(vi.mocked(fetch).mock.calls.map(call => call[1]?.method)).toEqual(['POST', 'DELETE']);
     expect(push.isNativeLiveActivityRemoteManaged()).toBe(false);
+  });
+});
+
+
+describe('Live Activity registration reconciliation', () => {
+  const storageKey = 'alphatrade-live-activity-registrations-v1';
+  const registration = { activityId: 'activity-a', pushToken: 'a'.repeat(64) };
+
+  it('removes a cached activity that no longer exists on the phone without re-registering it', async () => {
+    localStorage.setItem(storageKey, JSON.stringify([registration]));
+    mocks.plugin.getLiveActivityState.mockResolvedValue({ supported: true, enabled: true, activeCount: 0, activeActivityIds: [] });
+    const push = await import('../services/nativeLiveActivityPush');
+    await push.initializeNativeLiveActivityPush('user-a');
+    expect(vi.mocked(fetch).mock.calls.map(call => call[1]?.method)).toEqual(['DELETE']);
+    expect(localStorage.getItem(storageKey)).toBeNull();
+  });
+
+  it('leaves new sessions to the native owner instead of registering a second server row', async () => {
+    localStorage.setItem(storageKey, JSON.stringify([registration]));
+    mocks.plugin.getLiveActivityState.mockResolvedValue({ supported: true, enabled: true, activeCount: 1,
+      activeActivityIds: [registration.activityId], nativeManagedActivityIds: [registration.activityId] });
+    const push = await import('../services/nativeLiveActivityPush');
+    await push.initializeNativeLiveActivityPush('user-a');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(localStorage.getItem(storageKey)).toBeNull();
+  });
+
+  it('retries the token of a confirmed active activity', async () => {
+    localStorage.setItem(storageKey, JSON.stringify([registration]));
+    const push = await import('../services/nativeLiveActivityPush');
+    await push.initializeNativeLiveActivityPush('user-a');
+    expect(vi.mocked(fetch).mock.calls.map(call => call[1]?.method)).toEqual(['POST']);
+  });
+
+  it('does not treat an unavailable native inventory as an empty inventory', async () => {
+    localStorage.setItem(storageKey, JSON.stringify([registration]));
+    mocks.plugin.getLiveActivityState.mockRejectedValue(new Error('bridge unavailable'));
+    const push = await import('../services/nativeLiveActivityPush');
+    await push.initializeNativeLiveActivityPush('user-a');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(storageKey)!)).toEqual([registration]);
+  });
+
+  it('does not re-register legacy cached tokens without an authoritative inventory', async () => {
+    localStorage.setItem(storageKey, JSON.stringify([registration]));
+    mocks.plugin.getLiveActivityState.mockResolvedValue({ supported: true, enabled: true, activeCount: 1 });
+    const push = await import('../services/nativeLiveActivityPush');
+    await push.initializeNativeLiveActivityPush('user-a');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('orders end after a pending POST and ignores a late token emission', async () => {
+    const push = await import('../services/nativeLiveActivityPush');
+    await push.initializeNativeLiveActivityPush('user-a');
+    let finish!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    mocks.callbacks.get('liveActivityPushToken')!(registration);
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    mocks.callbacks.get('liveActivityEnded')!({ activityId: registration.activityId });
+    mocks.callbacks.get('liveActivityPushToken')!(registration);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    finish(new Response('{}', { status: 200 }));
+    await vi.waitFor(() => expect(localStorage.getItem(storageKey)).toBeNull());
+    expect(vi.mocked(fetch).mock.calls.map(call => call[1]?.method)).toEqual(['POST', 'DELETE']);
+  });
+
+  it('persists a failed end across restart and retries DELETE instead of POST', async () => {
+    localStorage.setItem(storageKey, JSON.stringify([{ ...registration, ended: true }]));
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('{}', { status: 503 }));
+    const push = await import('../services/nativeLiveActivityPush');
+    await push.initializeNativeLiveActivityPush('user-a');
+    expect(JSON.parse(localStorage.getItem(storageKey)!)[0].ended).toBe(true);
+    await push.resetNativeLiveActivityPushListener();
+    await push.initializeNativeLiveActivityPush('user-a');
+    expect(vi.mocked(fetch).mock.calls.map(call => call[1]?.method)).toEqual(['DELETE', 'DELETE']);
+    expect(localStorage.getItem(storageKey)).toBeNull();
   });
 });

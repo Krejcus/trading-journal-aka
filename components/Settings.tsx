@@ -1279,7 +1279,7 @@ const Settings: React.FC<SettingsProps> = ({
                         <span className="px-2 py-1 rounded-md bg-violet-600 text-white text-[8px] font-black uppercase tracking-[0.18em]">{isNativeBuild ? 'iOS Lab' : 'Pouze localhost'}</span>
                         <h3 className="text-sm font-black uppercase tracking-tight text-[var(--text-primary)]">Alert test lab</h3>
                       </div>
-                      <p className="mt-1.5 text-[10px] font-bold text-[var(--text-muted)]">{isNativeBuild ? 'Vyber jednu ukázku. Každý test naplánuje jeden alert pouze na tomto iPhonu.' : 'Vyber jednu ukázku pro odeslání na registrovaná zařízení.'}</p>
+                      <p className="mt-1.5 text-[10px] font-bold text-[var(--text-muted)]">{isNativeBuild ? 'Diagnostika a testy současného copieru na tomto iPhonu.' : 'Vyber jednu ukázku pro odeslání na registrovaná zařízení.'}</p>
                     </div>
                     <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-[var(--text-muted)]">
                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
@@ -1290,7 +1290,7 @@ const Settings: React.FC<SettingsProps> = ({
                   {isNativeBuild && (
                     <details className="border-t border-[var(--border-subtle)] px-5 py-4">
                       <summary className="cursor-pointer text-xs font-bold text-[var(--text-muted)]">Hromadný test · {NATIVE_ALERT_GALLERY_COUNT} scénářů</summary>
-                      <p className="mt-3 text-xs leading-relaxed text-[var(--text-muted)]">Tato volba naplánuje všechny ukázky během dvou minut. Pro jeden alert použij tlačítko u konkrétní ukázky výše.</p>
+                      <p className="mt-3 text-xs leading-relaxed text-[var(--text-muted)]">Tato volba naplánuje všechny ukázky během dvou minut. Testy patří současnému copieru.</p>
                       <button
                         type="button"
                         disabled={pushBusy}
@@ -1417,7 +1417,7 @@ const Settings: React.FC<SettingsProps> = ({
             <div className="space-y-6">
               {isNativeBuild && (
                 <Card isDark={isDark} className="border-blue-500/25">
-                  <SectionHeader icon={Smartphone} title="Nativní iOS funkce" subtitle="Face ID · Live Activity · Kalendář · Diktování · Haptika · Sdílení" color="bg-gradient-to-br from-blue-600 to-cyan-600" isDark={isDark} />
+                  <SectionHeader icon={Smartphone} title="Tento iPhone" subtitle="Ovládání · Soukromí · Oprávnění" color="bg-gradient-to-br from-blue-600 to-cyan-600" isDark={isDark} />
                   <div className="space-y-5">
                     <NativeShellTabsSettings />
                     <div className="rounded-2xl border border-[var(--border-subtle)] p-4">

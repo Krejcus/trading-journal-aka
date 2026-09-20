@@ -208,6 +208,417 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-17 — Proč včerejší obchody nemají screenshoty (Claude, jen analýza)
+
+Uživatel: část obchodů z 16. 9. je v historii bez screenshotu. Nález (bez
+změny kódu, DB, workeru ani brokera):
+- Snímky VZNIKLY: worker nahrál entry+exit ke všem 15 epizodám (SNAPSHOT
+  uploaded, `copier_trade_snapshots` 30 řádků, `snapshotHealth` ready).
+- Od 14. 9. nevznikají journal obchody klientským `syncCopierJournal`
+  (`copier-…`, snímky v `data.copierSnapshots`), ale serverovou projekcí
+  evidence (`journal:<id>`, skupina `execution:demo:…`). Snímky k nim
+  přiřazuje jen DB pohled `journal_trade_snapshots` (migrace 20260914125323):
+  vyžaduje potvrzenou uzavřenou journal pozici, jejíž závěrečný fill ID ==
+  `tradovate_copier_trades.trade_id` leadera. Včera propojeny 3/15 (09:19,
+  13:30, 15:14:16) — přesně ty, kde existuje potvrzená pozice účtu leadera.
+- Kořen: připojení leadera `754e4b5b` (Lucid 64503883 + 4 followeři) má 24
+  pozic `pending/incomplete` (19× issue `connection-gap`, 5× `conflicting-
+  position-anchors`), další epizody bez pozice vůbec. Mezery pocházejí z
+  evidence `connection {state: recording-gap, reason: local-write-failed}`
+  — v `server/fileJournalEvidenceStore.ts` je to přetečení fronty zapisovače
+  (`maxQueued` 10 000 → `journal-queue-full-history-incomplete`), ne chyba
+  disku (33 GB volných). Objem evidence tohoto připojení: až 125 tis. řádků
+  za hodinu při otevřené pozici (760 tis. za den, journal.jsonl 515 MB),
+  převážně `command`/`commandReport`; append+datasync na každou událost
+  nestíhá. Okna mezer 13:39–13:46, 14:09–14:17, 15:14–15:27, 16:13–16:49,
+  18:41–18:51, 19:02 přesně odpovídají obchodům bez snímku. Poprvé 15. 9.
+  (69 událostí), 14. 9. žádné. FTD připojení `53157614` (2 účty) mezery
+  nemá, proto má všech 14 obchodů potvrzených — ale bez snímků, protože
+  jeho fill ID není leaderovo.
+- Vedlejší nálezy: worker log neobsahuje žádný řádek o přetečení fronty
+  (`onError` se do logu nedostane); hlava projekce třetího připojení
+  `7cce8c5b` visí 4 484 událostí za evidencí; lokální Documents checkout
+  je 22 commitů za origin/main a localhost:3000 tím pádem journal snímky
+  neumí zobrazit vůbec (nemá `journalSnapshotHydration`).
+- Návrh (nerealizováno, čeká na rozhodnutí): (1) zapisovač evidence —
+  dávkový append + jeden datasync na dávku a/nebo filtrovat `command`/
+  `commandReport` z lokálního záznamu, (2) logovat přetečení fronty a
+  ukazovat `JournalRecorderHealth` v LIVE, (3) pohled snímků: fallback
+  přiřazení přes episode + účet leadera i bez potvrzené pozice je
+  bezpečnostně sporné — raději opravit zdroj.
+- Korekce po Codex review (8:52): jsou to DVĚ chyby. Prázdné karty FTD
+  followerů způsobuje výhradně pravidlo pohledu (follower má vlastní fill
+  ID); přesná vazba existuje přes `copylink` evidenci: leader fill → leader
+  order → copylink → follower order → follower fill, u 10 z 12 epizod
+  dohledatelná → zpětné doplnění je bezpečné bez ručního párování.
+  Přetečení zapisovače vysvětluje jen to, proč chybí obchody pěti účtů
+  Lucid připojení (leader + 4 followeři) v historii vůbec. Otevřená výhrada:
+  followeři často vystupují vlastní ochrannou nohou (leader 15:23:57 vs
+  followeři 15:27:32), copylink k exitu pak nemusí existovat → řetězit
+  raději přes vstupní order. Hlava třetího připojení mezitím dohnala
+  evidenci. Hlášení `journal-queue-full-history-incomplete` jde jen do
+  `console.warn` přes `logControllerError`; v logu workeru 15.–17. 9. se
+  nevyskytuje ani jednou.
+- **Oprava hotová 2026-09-17 dopoledne** (větev
+  `claude/journal-snapshots-copylink-20260917`, pushnutá na origin): dávkový
+  zapisovač evidence s dedupe totožných snapshotů a prioritou, zdraví
+  zapisovače ve statusu + LIVE chip, ledger sloupec `leader_entry_order_ids`,
+  pohled `journal_trade_snapshots` s follower cestou přes copylink/`groupId`
+  (tolerance 2 s na 1ms skew Tradovate razítek), backfill 20/21 epizod.
+  Migrace `20260917071500` JE aplikovaná na produkci (historie ukazuje snímky
+  u 42/43 obchodů z 16. 9.). Web/server + worker čekají na „nasaď“. Korekce
+  ranního nálezu: přetečení SE logovalo (1,3 mil. řádků bez časového razítka),
+  spouštěčem je REST resync po WS heartbeat timeoutu. Plný zápis je v
+  PROJECT_LOG na té větvi.
+- **Druhá oprava na stejné větvi (11:10)**: falešný BREACHED čtyř nových
+  Lucid funded účtů LFF…0008–0011. Worker četl `accountRiskStatus.maxNetLiq`
+  jako net liq a `minNetLiq` jako floor; jsou to zaznamenané extrémy net
+  liq, u neobchodovaného účtu obě = 50 000. Floor je nově
+  `min(highWater − trailingMaxDrawdown, trailingMaxDrawdownLimit)`, equity
+  = net liq nebo realizovaný cash. BREACHED zruší jen ruční „Ověřit“
+  s broker důkazem. Po reinstalu workeru kliknout Ověřit u všech čtyř účtů.
+- **Nasazeno (11:15, po „nasaď“)**: fast-forward push 89e880a na main,
+  Vercel `dpl_FTYSSodnhxTsE3UuBiUhX26b5UGR` READY s produkčním aliasem.
+  Worker NEreinstalován: hlásil connected=false, reconciliationRequired,
+  lastError z výpadku 7cce8c5b (10:40Z). Nezávislá GET kontrola 09:15Z:
+  všech 12 účtů flat/no-working, DISARMED. Příkaz reinstalu z worktree
+  `/private/tmp/alphatrade-journal-snapshots-20260917` (přesný 89e880a)
+  předán uživateli (`--connections-manifest` + `--adopt-durable-group`).
+- **Odpoledne (Claude, plné zápisy v PROJECT_LOG na větvi
+  `claude/journal-snapshots-copylink-20260917`, vše na main)**: Tradovate
+  výpadky a `kickstart -k` → 40× crash loop workeru při startu (lease 10 s vs
+  17–61 s obnova tokenu) → 7ffaaf2 ohraničený retry přechodných chyb
+  (`server/retryTransient.ts`, 120 s/lease, WS sync 20 s), reinstal workeru.
+  Copier stále „leader nedostupný“/`command-expired`: PostgREST pool
+  vyčerpaný. 6a5379a = indexované stránkování `read_journal_input_snapshot`
+  (migrace `20260917153000`) + relay timeouty 20/30 s. 3ecebdc = odstranění
+  retry bouře: `journal-input-changed` bylo SQLSTATE 40001, které HTTP
+  vrstva opakuje donekonečna se zastaralou generací (~1 400 volání/s);
+  migrace `20260917154500` → errcode 55000. Rollbacky ~1 100/s → 0, API
+  ~70 ms, heartbeat 0,3 s, ARM od 15:29Z drží. Migrace aplikovány
+  `db query -f` + `migration repair`, soubory zkopírovány sem.
+- **18:10 (Claude, analýza)**: 15:43:43Z Tradovate zavřel WS všech tří
+  loginů uprostřed obchodu (short 7 MNQ, 11 followerů); reconnecty prošly
+  authorize+sync a server mlčel (stejný vzor 05:35Z, 08:52Z, 13:40Z,
+  14:03Z), samo se vrátilo za 11 min. Copier správně DISARM. Flatten All
+  15:57Z zavřel 5/12 — Tradeify/FundedNext selhaly na 5s REST timeout čtení
+  pozic; followeři uzavřeni ručně v Tradovate do 16:04:18Z (ověřeno journal
+  evidencí, všech 12 flat). Návrh: delší deadline + opakování nouzového
+  flattenu (čeká na rozhodnutí). Plný zápis na větvi.
+- **19:15 (Claude, 2db341c na main, web nasazen)**: oprava celého řetězce —
+  REST brokeru 15s deadline (kořen zamrzlých risk snímků a pomalé recovery),
+  nouzový Flatten s opakováním čtení, opakovanými průchody a stavově
+  ověřeným resendem liquidate (deadline 180 s), relay přichytí druhý
+  Flatten k běžícímu, lease importu journalu (migrace `20260917190000`
+  aplikována, soubor zkopírován sem), recorder se vrací do `recording`,
+  plánovaná WS obměna už netvoří mezeru, WS/live-pnl diagnostika.
+  Testy 3706/3707 → zelené, tsc/eslint/build čisté. Worker čeká na
+  reinstall: nejdřív v LIVE vyřešit stuck operace (4× rejected Lucid, prop
+  limit 25 MNQ) + Kontrola pozic, pak `scripts/copier/mac-reinstall-safe.sh`.
+- **21:00 (Claude, na main)**: brokerem odmítnutý vstup followera (limit
+  pozice) už nevypne skupinu — follower se vyřadí z epizody (potlačení
+  vstupu 0, exity se přeskočí, položky vysvětlené), ostatní followeři se
+  řídí dál. Synchronní varianta (reject přímo v dávce → fail-closed +
+  auto-close) záměrně beze změny, čeká na rozhodnutí. Plný zápis na větvi.
+  **Worker reinstalován 19:12Z** (aa0c83f, bundle 3ae56cef…), po startu
+  sám potvrdil flat, DISARMED, streamy i journal v pořádku.
+- **21:45 (Claude, na main)**: synchronní varianta sjednocena (jen verdikt
+  brokera; interní maxContracts blok dál kritický), izolace svázaná
+  s epochou leadera a konkrétními položkami, relay Flatten rozlišuje
+  `groupId`, REST/sync limity 45 s (19:30Z Tradovate >15 s z Macu i AWS).
+  **18. 9. 04:04Z**: worker reinstalován z 40737f8 (bundle 2fb31a43…),
+  reconcile čistý, DISARMED, flat, vše připojeno.
+- **18. 9. 06:40 (Claude)**: Mac companion panel dostává skutečnou expozici:
+  worker posílá v heartbeatu `controller.exposure` (čas broker kontroly,
+  pozice, per-follower shoda), server ho překládá do stávajícího DTO
+  (`verifiedAt`, `positions` leadera, `followerAck`, working orders).
+  Swift beze změny. Worker reinstalován 05:58Z (2461613, po DISARM
+  uživatele; brána předtím správně zastavila živý ARM). Plný zápis na větvi.
+- **18. 9. 08:30 (Claude)**: LIVE po návratu z pozadí ukazuje poslední známé
+  pozice se stářím místo „Pozice neověřena" (štítek jen nad 2 min nebo při
+  nedostupném čtení), live hook čte hned při návratu do popředí, backoff po
+  `429` podle `p-time`/`Retry-After` (fallback 5 min místo hodiny). Jen
+  web/server, worker beze změny.
+- **18. 9. 10:15 (Claude)**: LIVE bere pozice a aktivní příkazy účtů kopírky
+  přednostně z heartbeatu workeru (`controller.exposure` + nové `orders`
+  z cache stream událostí), REST přes Vercel jen jako záloha při heartbeatu
+  starším 8 s nebo odpojeném streamu. Worker reinstalován 10:55Z (acd6741).
+- **18. 9. 12:40 (Claude)**: banner „Data deníku čekají na obnovení" — RPC
+  `get_dashboard_data` 12,7 MB / 7,8 s (3 720 obchodů; 3,9 MB analytická pole
+  obchodů + 3,7 MB avatar profilu jako base64). Nové `get_dashboard_data_light_v1`
+  (5,1 MB / 1,7 s; bez analytických polí, avatar nad 256 kB odložený) a
+  `get_trade_analytics_v1` pro Lab/AI kouče (dotažení jednou za session,
+  sloučení na čtení); fallback 500 řádků/stránka, limity 45 s / 90 s, banner
+  ukazuje důvod selhání; nahrání avataru zmenšuje na 256 px. Migrace
+  `20260918120000` nasazena `db query -f` + repair. Commit cbbdc17, detail
+  ve worktree logu. Stávající avatar v DB zůstal 3,7 MB — stačí ho znovu
+  nahrát v profilu.
+- **18. 9. 15:40 (Claude)**: odebrání nedostupného followera z řádku LIVE
+  nikdy neprošlo — plán odebíral jen kliknutý účet, další nedostupné FNFTCH
+  účty (breach 14:17Z) ve skupině zůstaly a validace uložení selhala; worker
+  žádný příkaz nedostal. Plán teď odebírá všechny nedostupné followery. Worker
+  drží `reconciliationRequired` (65839434: -25 MNQ vs leader 0 ve 14:16Z) →
+  před změnou skupiny je nutná Kontrola pozic. Detail ve worktree logu.
+- **18. 9. 16:50 (Claude)**: od 15:41Z Tradovate neobsluhuje sessions Tradeify a
+  FundedNext (sync timeout, REST 45 s, na Vercelu 408), Lucid běží; zapnutí
+  proto worker odmítá. Opraveno (čeká na reinstall): broker router nepočítá
+  spojení bez účtů skupiny do `connected` (FundedNext bez účtů by blokovalo
+  kopírku i po návratu ostatních) a start workera přežije spojení s nečitelným
+  adresářem účtů (startuje bez účtů, nic se na něj nesměruje). Otevřené
+  rozhodnutí: izolace followerů na mrtvém follower-only spojení místo
+  odzbrojení skupiny. Detail ve worktree logu.
+- **18. 9. 17:50 (Claude)**: příčina dnešního výpadku dohledána z Vercel logu
+  `pilot-lease`: tokeny Tradeify/FundedNext obnovené 15:31Z dostaly na straně
+  Tradovate mrtvou session (sync timeout, REST 408) od vypršení starých tokenů
+  15:41Z až do další obnovy 16:41Z; ožilo hned s třetím tokenem. Oprava: broker
+  hlásí sync timeouty v řadě, worker po dvou vynutí obnovu tokenu přes
+  pilot-lease (cooldown 5 min, server neobnoví token mladší 3 min). Server část
+  nasazena, worker čeká na reinstall. Detail ve worktree logu.
+- **18. 9. 19:52 (Claude)**: worker reinstalován z 3408088 na „nasaď" (všechny
+  tři dnešní fixy + diagnostika close kódů), FundedNext 7cce8c5b odebráno z
+  manifestu (záloha `.bak-20260918T175002Z`). Start 17:50:15Z se dvěma
+  připojeními, autorizace ~140 ms, reconcile čistý, DISARMED.
+- **18. 9. 20:50 (Claude)**: mrtvé sessions se opakovaly i po reinstallu (Lucid
+  18:08Z close 1005, Tradeify REST visí od ≤18:12Z, close 1006 při obměně
+  18:40Z); vynucená obnova tokenu je vyřešila za 1,5 min. Nejlepší hypotéza:
+  překročení REST limitu Tradovate (~80/min, 5000/h) hlavně kvůli live-pnl
+  pollování z webu (~90 volání/min na token při otevřeném LIVE) + journal
+  import + cron; Tradovate místo 429 zavírá sockety a stalluje session (p-time
+  ~1 h). Návrh: web bez REST pollování pozic při čerstvém heartbeatu, vlastní
+  token pro worker, odpojit FundedNext v aplikaci. Detail ve worktree logu.
+- **18. 9. 21:20 (Claude)**: penalizace potvrzena chováním — po obnově tokenu
+  18:52Z Tradovate odpověděl na syncrequest p-ticketem a broker potichu čekal
+  p-time (REST zůstatků přitom fungoval). Nasazeno na web: intervaly live-pnl
+  3/6/15 s, sdílení ticků na serveru 2,5 s / zůstatků 5 s; broker loguje WS
+  PENALTY a hlásí ji jako chybu (čeká na reinstall). Detail ve worktree logu.
+- **18. 9. 21:45 (Claude)**: LIVE „Diagnostika dat a API" nově ukazuje na každý
+  Tradovate login skutečná volání (web přes server + worker REST/WS) proti
+  limitu 80/min a 5 000/h se semaforem a stav session workeru (penalizace s
+  odpočtem, poslední close kód a kdo zavřel, fáze, sync timeouty). Web live,
+  worker část po reinstallu. Penalizace Tradeify trvala ~32 min (18:52–19:25Z).
+- **18. 9. 21:50 (Claude)**: worker reinstalován z 0df6c6b (bundle d393c9a2…) —
+  diagnostika penalizace a `connectionUsage` pro panel v LIVE. DISARMED,
+  reconcile po startu.
+- **18. 9. 22:15 (Claude, po review Codexu)**: oficiální limity Tradovate:
+  5 000/h na uživatele (429; dnes nikdy nepřišlo → nepřekročeno), endpointové
+  limity na IP /24 (syncrequest 300/h, accesstokenrequest 5/h → p-ticket);
+  žádný limit 80/min. p-ticket workeru tedy nemohl způsobit Vercel; do IP
+  budgetu se počítá i platforma Tradovate a iPhone na téže síti. Nový token
+  rate-limit prostor nevytváří. Panel a počítadlo opraveny, broker počítá
+  syncrequest zvlášť (po reinstallu). Otevřené: ověřit účet 65839434 v historii
+  FundedNext. Detail ve worktree logu.
+- **18. 9. 22:30 (Claude)**: kompletní předání session pro Codex v
+  `docs/HANDOVER_2026-09-18_claude.md` (incidenty, commity, chybné závěry,
+  otevřené body).
+- **18. 9. 22:20 (Claude)**: čtvrtý pád Tradeify session 20:07Z (5 min, obnova
+  tokenu pomohla). Korelace z Vercel logů: každý pád přišel 0–5 min po dávce
+  full preflightů (načtení LIVE = 17–30 Tradovate volání na login během
+  sekundy × 3 připojení), zatímco socket-error ve 12:38Z bez LIVE se zotavil
+  hned. Server teď sdílí preflight na (uživatel, připojení, režim) 20 s.
+  Zítra: LIVE otevřít jednou bez reloadů a sledovat panel. Detail ve worktree.
+- **19. 9. 08:40 (Claude)**: ráno 05:01:48Z oba sockety zavřeny naráz (Tradovate
+  strana, víkendová údržba), worker se obnovil sám za 1,5 min. Odpojené
+  připojení jde nově skrýt z přehledu (migrace `20260919063000`, sloupec
+  `archived_at`, POST status s `archived`); nic se nemaže, FundedNext odpojen
+  uživatelem 08:17. Detail ve worktree logu.
+
+### 2026-09-16 — AlphaTrade 1.0 (10) nainstalována do iPhonu (Codex)
+
+- Po uživatelově opětovném připojení kabelu dokončena dříve schválená instalace již sestaveného a ověřeného App.app; bez dalšího buildu. devicectl potvrdil instalaci app.alphatrade.native a následné spuštění. Samostatné info apps na fyzickém zařízení potvrdilo verzi 1.0, Bundle Version 10.
+- Verze obsahuje opravu pádu LIVE na nullable propFirm i schválené zachování posledního ON/OFF stavu. Instalace a start jsou ověřeny; konkrétní otevření LIVE dashboardu na fyzické obrazovce zatím neověřeno. Žádný ARM, broker příkaz, worker restart ani web deploy.
+- Doklady: /tmp/alphatrade-ios-build10-install-retry.json, /tmp/alphatrade-ios-build10-launch.json, /tmp/alphatrade-ios-build10-installed-app.json. Předchozí blokace odemčením je vyřešena.
+
+### 2026-09-16 — iOS 1.0 (10) podepsáno, instalace čeká na odemčení (Codex)
+
+- Uživatel potvrdil licenci a výslovně autorizoval instalaci. Xcode 27 funguje; CLI doplnilo nové systémové součásti CoreDevice. Sestavení App Debug generic iOS s CURRENT_PROJECT_VERSION=10, jobs=2, stávající DerivedData skončilo BUILD SUCCEEDED. Xcode GUI ani simulátor nebyly otevřeny.
+- Podepsaný App.app v /Users/filipkrejca/Library/Developer/Xcode/DerivedData/App-ausqwvwdwpzpyvbauwjqdeunkitb/Build/Products/Debug-iphoneos/ prošel codesign --verify --deep --strict mimo sandbox. Všech 112 webových souborů odpovídá ověřenému dist-native. Obsahuje opravu propFirm a již schválené uchování přepínače.
+- První instalace na iPhone UDID 00008110-0002098A1EDB801E (CoreDevice DB4D6D2E-5D1E-5A78-9028-2D2EA3738811) selhala při montování DDI: device locked (10003 / -402652958). Uživateli odeslána žádost odemknout a ponechat telefon odemčený; zatím bez odpovědi. Read-only lockState následně vrátil Could not allocate a resource. Nová verze zatím NENÍ potvrzeně nainstalována. Navázat instalací a launch, ne dalším buildem.
+- Log sestavení /tmp/alphatrade-ios-build10.log, první neúspěšná instalace /tmp/alphatrade-ios-build10-install.json. Žádný broker příkaz nebo web deploy.
+
+### 2026-09-16 — Oprava pádu mobilního LIVE při chybějící prop firmě (Codex)
+
+- Stack trace uživatele odpovídá funkci Cw v dodaném native assetu index-Ddc5sLJI.js: buildTradovateConnectionSummaries volal profile.propFirm.trim(), přestože propFirm smí být null. Chyba přesně reprodukována regresním testem před opravou.
+- Jednořádková oprava v lib/tradovateLiveConnectionCache.ts používá propFirm?.trim() || ''. Zachovány existující fallbacky organizace, filtrování účtů i počty. Doplněny testy null, undefined, prázdných hodnot, deduplikace a fallbacků.
+- Prošlo 23 cílených testů, typecheck, eslint, ios:doctor, build:native a ověření native bundlu. cap copy ios dokončeno; asset index-BDVbd4VH.js je shodný v dist-native a iOS projektu. Žádný broker příkaz ani web deploy.
+- Podepsané iOS sestavení/instalace zatím neprovedeny: po aktualizaci na Xcode 27.0 (27A266a) git a devicectl odmítají spuštění kvůli nepotvrzené licenci. Vyžaduje ruční kontrolu a přijetí uživatelem přes sudo xcodebuild -license; asistent licenci nepřijímal.
+
+### 2026-09-15 — Zachování posledního stavu přepínače kopírky (Codex, lokálně)
+
+- Schváleno uživatelem: po běžném návratu ponechat poslední potvrzené Zapnuto/Vypnuto, průběžně obnovovat na pozadí a neproblikávat „Neověřeno“. Společný `CopierConnectionSwitch` platí pro plné i kompaktní zobrazení.
+- Oddělená cache uchovává pouze prezentační boolean + čas, podle uživatele a skupiny (24 h; mazání při odhlášení přes existující `alphatrade_` prefix). Cache se nikdy nevrací do execution/runtime stavu. Přepínač zůstává do čerstvého potvrzení neaktivní, po 8 s bez ověření ve viditelné aplikaci ukáže „Stav není aktuální“. Bez předchozího potvrzení se OFF nevymýšlí.
+- Read-only status poll se spouští ihned po návratu/focus/online, běží sekvenčně a nečte v pozadí. Odpovědi zahájené před uspáním/návratem/unmountem se nepřijímají; stávající mutation fence zůstává zachovaná. Pozice, freshness/risk limity a broker příkazy se touto úpravou nemění.
+- Ověření: 35 cílených testů prošlo, typecheck a eslint změněných souborů bez chyb, standardní `npm run build` prošel. V lokálním náhledu skutečné komponenty ověřeny ON/OFF během obnovy, aktualizace oběma směry, remount a upozornění po výpadku i jeho odstranění po zotavení. Nebyl proveden broker příkaz, push/deploy ani instalace do telefonu. Záloha výchozích dvou upravených komponent: `/tmp/alphatrade-power-retention/before/`.
+
+### 2026-09-13 — Schválené nasazení registrace Live Activity a iPhone 1.0 (9) (Codex)
+
+- Uživatel schválil nasazení. Schválených osm serverových/testovacích souborů odděleno v `/private/tmp/at-live-activity-release-20260913` nad aktuálním origin/main `4ac346ac`; kanonický pracovní strom zůstal zachován, bez zahrnutí ostatních změn. Izolovaný release prošel 56 testy / 6 souborů, TypeScriptem a produkčním buildem.
+- Commit `f4f04147427b186075186b95819ce035635bcbc8` pushed na main. Vercel `dpl_HY18M6NztftMKSBF6XRyyfiXFBoW` READY pro přesný commit, alias `alphatrade-mentor-15.vercel.app` HTTP 200, nový registrační guard s neplatným grantem vrací očekávaný 401. V logách jen Node url.parse deprecation warning u relay HTTP 200; žádný zjištěný fatální import/runtime problém.
+- Podepsaný build 1.0 (9) nainstalován (první pokus přerušení CoreDevice, druhý úspěšný), aplikace spuštěna. QuickTime zatím hlásí přerušený náhled. Fyzický důkaz nové registrace při zamčeném telefonu stále čeká na uživatelovo další zapnutí.
+- Worker pouze přečten: connected=true, armed=false, reconciliationRequired=false, lastError=null, groupFlat=true. Bez ARM, broker příkazů, restartu workeru, migrací a změn konfigurace.
+
+### 2026-09-13 — Nativní registrace Live Activity na pozadí, připraven build 9 (Codex)
+
+- Uživatel odmítl nové vizuály a požádal pokračovat pouze v opravě. Vzhled zůstává beze změn.
+- Fyzicky a serverově potvrzeno: start karty proběhl, ale její odběr aktualizací vznikl až po otevření appky v 16:20:06 UTC. Oprava přesouvá registraci z uspávaného JavaScriptu do vlastníka spouštěného AppDelegatem. Server předává do startu podepsané devítihodinové oprávnění omezené na registraci dané session; žádné rozšíření přihlášení nebo broker oprávnění.
+- Native registry serializuje POST/DELETE, uchová nedoručené záznamy v odděleném Keychain, při probuzení je zopakuje a po expiraci uklidí. Server ponechává end marker proti opožděnému POST. Starší aktivity a klienti zůstávají kompatibilní.
+- Prošlo 65 testů / 8 souborů, TypeScript, ESLint, native bundle, iOS build a podpis. Připraven build 1.0 (9), 112 webových souborů hashově shodných. Zatím nenainstalován, server nepushed/nedeployed, žádný broker zásah ani restart workeru. E2E na zamčeném telefonu vyžaduje serverové nasazení a novou aktivitu s novými atributy.
+- Rozsah release a omezení: `docs/reviews/live-activity-background-20260913/README.md`. Dřívější audit OFF/ON souhrnů a frekvence aktualizací není touto samostatnou opravou dokončen.
+
+### 2026-09-13 — Oprava starých registrací Live Activity, iPhone 1.0 (8) (Codex)
+
+- Při uživatelem hlášeném chybějícím startu byl aktuální ARM trigger na serveru označen za pokrytý starší aktivitou (poslední skutečný push-to-start 13:06 UTC, nové ARM 15:37 UTC). QuickTime ukázal ARM notifikaci bez velké Live Activity; později uživatel ručně vypnul kopírku. Žádné ARM/obchody/restart workeru nebyly provedeny asistentem.
+- Nalezená cesta ke vzniku falešně aktivních záznamů: retry uložených tokenů bez kontroly ActivityKit znovu aktivoval serverový řádek; neúspěšný DELETE se při příštím startu měnil na POST. Nový nativní bridge vrací ID pouze active/stale aktivit. Klient před POST ověřuje skutečnou existenci, chybějící registrace odstraňuje, neověřitelný stav ponechá k retry.
+- Ukončení se trvale označí před síťovým požadavkem a požadavky stejné aktivity se řadí, takže opožděný POST nemůže předběhnout finální DELETE. Ručně zavřená aktivita se tím automaticky znovu nespouští; start trigger ani serverová pravidla nebyla měněna.
+- Ověření: 56 testů / 6 souborů, TypeScript, cílený ESLint, native bundle a podepsaný iOS build prošly. Build 1.0 (8), všech 112 webových souborů hashově shodných, nainstalován a spuštěn na fyzickém iPhonu; otevření aplikace viděno v QuickTime. Bez Xcode GUI/simulátoru, bez push/deploy.
+- Nový skutečný push-to-start při dalším uživatelově zapnutí ještě není ověřen. Auditované serverové změny frekvence, OFF/ON životního cyklu a neověřených dat zůstávají samostatnou rozpracovanou položkou.
+
+### 2026-09-13 — Audit Live Activity: latence, OFF/ON duplicita a čerstvost (Codex)
+
+- Uživatel chce posoudit vzhled/výkon a hlásí zpoždění limitů, další kartu
+  po OFF/ON a nejasné stavy vypnuto/neověřeno. Audit bez úprav aplikace/deploy.
+- Kód a pure-function reprodukce: OFF+flat ukončí aktivitu se shrnutím na
+  dalších 900 s; nové ARM má nový start trigger, takže staré shrnutí a nová
+  karta mohou zůstat vedle sebe. Tick běží jen armed=true, i s otevřenou
+  pozicí po DISARM spadne na cron. Čerstvost tick 30 s vs cron 180 s.
+- Při chybějícím open P&L může mode=position použít realized P&L (repro +$250).
+  Broker=null může zachovat ARM LIVE a čerstvé updatedAt; reconciliationRequired
+  chybí ve statusText. Nutné oddělit data freshness od transport heartbeat.
+- Výkon: šest broker seznamů/OAuth připojení každých cca 5 s, další dotazy
+  při pozici; vše ActivityKit priority 10; relay await až 2,5 s a Promise.race
+  nezruší dotazy. Doporučeno oddělení od relay, stream se skutečnou čerstvostí,
+  stavové změny prioritně, jediný životní cyklus karty napříč krátkým OFF/ON.
+- 42 existujících testů/4 soubory prošly. Baterie, CPU ani produkční APNs
+  neměřeny; QuickTime hlásí odpojený iPhone, aktuální render neověřen.
+  Podrobnosti: /private/tmp/alphatrade-live-activity-review-20260913.md.
+
+### 2026-09-13 — Ruční read-only reconciliation po hlášce na PC i iPhonu (Codex)
+
+- Uživatel požádal opravit „reconciliation je nutná“. Před kontrolou worker
+  připojený, DISARMED, bez divergence/working orders/stuck outbox/lastError,
+  ale reconciliationRequired=true. Proveden pouze lokální příkaz reconcile.
+- Broker kontrola vrátila authoritativelyClean=true, missingAccounts=[],
+  divergentAccounts=[] a workingOrderAccounts=[]. Následný stav potvrdil
+  reconciliationRequired=false, groupFlat=true, connected=true, armed=false,
+  stuckOutbox=false a lastError=null. Bez ARM, broker write nebo restartu.
+- Samostatný stav snímků je stále cdp-offline; obnova TradingView v tomto
+  kroku nebyla provedena. Nejde o chybu mobilního zobrazení.
+
+### 2026-09-13 — Detail mobilního účtu nad menu, otevírání shora, iPhone 1.0 (7) (Codex)
+
+- Podle screenshotu uživatele detail překrývala nativní spodní lišta. Detail
+  nyní odečítá její výšku + 8 px z dostupné výšky a respektuje horní safe area.
+  Na následné upřesnění je zarovnaný nahoře pod stavovou lištou, delší obsah
+  se posouvá uvnitř. Zachované komponenty, barvy, data i obchodní handlery.
+- Otevření: jemný posun shora + fade 240 ms; zavření opačně 180 ms, včetně
+  backdropu. Křížek, spodní tlačítko, backdrop i Escape sdílejí zavírání;
+  dialog/focus trap zůstává do konce animace, s timeout pojistkou a cleanupem.
+  Respektuje prefers-reduced-motion, opakované zavření je blokované.
+- Ověřen browserový odstup 8 px od modelované nativní lišty, horní zarovnání,
+  dokončení obou animací a zavření včetně Escape/obnovy body overflow.
+  18 souvisejících testů, TypeScript, cílený lint a native build prošly.
+  Podpis a shoda všech 112 webových souborů v App.app ověřeny; finální 1.0 (7)
+  nainstalována do stejného iPhonu. Skutečný nový render na telefonu zatím
+  vizuálně nepotvrzen; Xcode GUI ani simulátor nebyly spuštěny.
+- Dočasný náhled a vstupy odstraněny. Bez push/deploy, worker restartu nebo
+  broker akce. Dříve doložené dvě chyby celkové sady zůstávají mimo tento rozsah.
+
+### 2026-09-13 — Ztenčení řádků a Flatten All v hlavičce, iPhone 1.0 (6) (Codex)
+
+- Uživatel na telefonu potvrdil vzhled buildu 5 a požádal o dostupnější Flatten
+  All při mnoha účtech. V mobilní hlavičce je nyní přímo vedle ZAPNUTÁ/VYPNUTÁ;
+  spodní duplicita odstraněna. Handler i potvrzení původní, nově blokuje double
+  click během probíhajícího UI příkazu. Žádný Flatten nebyl proveden.
+- Stav účtu (Aktivní i všechny blokace) je vedle násobku a badge pozice. Řádky
+  běžných účtů mají asi 60 px; původní Flatten účtu/odebrání neověřitelného
+  followera a read-only ověření jsou v kontextovém menu ⋮. Chyby a důvody
+  blokací zůstávají viditelné. Leader má pouze korunku na logu.
+- Browser ověřil pořadí ovládání nad seznamem, společný status řádek,
+  kontextové akce a detail; 18 souvisejících testů, TypeScript a cílený lint
+  prošly. Znovu sestaven aktuální native web, ověřena shoda všech souborů
+  v podepsaném App.app, nainstalována 1.0 (6) do stejného iPhonu.
+- Dočasný izolovaný localhost náhled a jeho dva vstupní soubory odstraněny.
+  Bez push/deploy či změn workeru a broker akcí. Dvě dříve doložené chyby
+  celkové sady nejsou součástí těchto úprav.
+
+### 2026-09-13 — Mobilní LIVE, volba zobrazení a iPhone 1.0 (5) (Codex)
+
+- Schválený kompaktní LIVE je výchozí pod 1024 px. Nabídka ⋮ → Zobrazení
+  přepíná Mobilní / Plné a pamatuje volbu jen v localStorage tohoto zařízení;
+  široký desktop nadále používá původní tabulky a stejné execution handlery.
+- Mobilní přehled: součet dnešního a otevřeného P&L, loga firem, leader pouze
+  korunkou na logu, jednotné řádky s P&L, původní badge pozic/SL a čekajících
+  BUY/SELL STOP/LIMIT příkazů. Rozbalovací příkazy a akce zachovány, Flatten All
+  dál používá původní skupinový příkaz a potvrzení. Detail účtu má Přehled,
+  Příkazy a Historii, limity a SL/TP; neověřené pozice/příkazy nejsou vydávány
+  za flat nebo chráněné. Stav snímků odkazuje na existující Události.
+- SL/TP: vzdálenost od přibližné ceny odvozené z čerstvého account P&L pouze
+  při jediné pozici; výsledek od vstupu před poplatky. Skupina sčítá skutečné
+  množství včetně leadera. Jiný kontrakt/strana, split úrovně, částečné či
+  nadměrné krytí a chybějící data se neslévají do falešného společného výsledku.
+  Výpočty jsou výhradně prezentační, nejdou do risk/execution.
+- Jediná položka Nastavení v nativním menu; duplicitní iOS funkce odstraněny.
+  iPhone otevírá Nastavení na Systém / Tento iPhone; staré deep linky zachovány.
+  Nabídka obnovy TradingView při ARM již existovala společně pro local i relay;
+  přenesena do čerstvého telefonního balíčku, bez provedení ARM nebo restartu TV.
+- Oprava dřívější instalace v této session: starý uložený web bundle ze září 5
+  nebyl novější verzí telefonu. Tentokrát build:native z aktuálního canonical
+  checkoutu, cap copy ios, build jedním jobem/Swift -j1 bez Xcode GUI a simulátoru.
+  Nainstalována 1.0 (5) na iPhone 13 Pro Max. SHA-256 všech 112 webových souborů
+  v podepsané App.app souhlasí s dist-native; systémový codesign verify prošel.
+- Ověření: 42 cílených testů, TypeScript, cílený lint bez chyb, web/native build
+  a ios:doctor prošly. Browser: mobilní karty, detail a jeho záložky, přepnutí
+  na Plné a zachování po reloadu, automatická tabulka při širokém viewportu.
+  Celá sada: 3207/3209; dvě chyby (liveCopyGroupDetailRender DLL tooltip a
+  tradovateBrokerReconnect daily cash value) reprodukovány i v izolované kopii
+  stavu před těmito úpravami. Nejsou opraveny v rámci UI práce.
+- Fyzické spuštění po instalaci odmítl iPhone jako Locked; čeká na odemknutí
+  uživatelem. Instalace je potvrzená, fyzický finální průchod zatím ne.
+  Evidence a návratové kopie jen změněných souborů: /private/tmp/at-mobile-ui/.
+  Bez push/deploy, broker akcí nebo změny/restartu copier workeru.
+
+### 2026-09-13 — Dočasný náhled iPhonu přes QuickTime (Codex)
+
+- Na výslovnou žádost uživatele přidáno do nativního capture shieldu tlačítko
+  „Povolit náhled na 15 minut“, pouze pod `#if DEBUG`. Souhlas je pouze v paměti,
+  expiruje po 15 minutách, odpojením capture nebo restartem appky; nezruší
+  samostatný privacy/Face ID lock. Release nadále capture vždy zakrývá.
+- Přímý QuickTime náhled přes USB funguje bez Xcode GUI a simulátoru. Uživatel
+  prochází skutečný telefon, Codex čte snímky QuickTime. Po instalaci vizuálně
+  ověřeno nové tlačítko a opravený kontrast vysvětlujícího textu na iPhonu 13 Pro Max.
+- Nainstalováno AlphaTrade 1.0 (4), debug build přes `nice -n 15`, `-jobs 1`
+  a Swift `-j1`. Použita existující DerivedData cache; všech 120 webových souborů
+  přesně shodných s předchozím uloženým device buildem. Žádný web rebuild,
+  odinstalace, push, deploy ani zásah do copier workeru či broker příkazů.
+- Ověřeno: nativní build, systémový codesign verify, ios doctor, diff whitespace,
+  10 Swift lifecycle assertions (`node scripts/ios/test-capture-preview.mjs`).
+  Fyzické klepnutí na nové tlačítko a uplynutí celých 15 minut zatím nejsou
+  ověřené; uživatel musí náhled povolit na telefonu. Testy pokrývají hranici
+  expirace, reconnect, nový proces a návrat po expiraci bez simulátoru.
+- Záloha původního nativního souboru a App.app 1.0 (1), test/build evidence:
+  `/private/tmp/alphatrade-mirroring-20260913`. Ostatní rozpracované změny zachovány.
+
+### 2026-09-13 — Retire obsolete Tradecopia and CSV import UI (local)
+
+- Removed Tradecopia notification settings/samples, old auto-import and pairing queue, Tradovate/Tradesyncer CSV dialogs and account/history entry points including empty-history upload. Current copier journal sync, pending account assignment, screenshot linking and native copier alerts retained.
+- Legacy notification API and two Tradecopia Edge ingestion sources now return 410; not deployed. Historical database records and Coach incident reads retained; shared instrument/pairing/live types remain.
+- Unloaded com.alphatrade.tradecopia-fast-events and com.alphatrade.tradecopia-sync; verified both absent from launchd. Plists backed up in Library/Application Support/AlphaTrade/retired-tradecopia-20260913. Old source installers/collectors fail immediately to prevent reactivation. Current copier worker untouched.
+- Validation: 58 focused tests passed (journal sync, snapshot storage, historical pairing, instrument helpers, retired API). Typecheck and production build passed. Targeted lint: 0 errors (74 warnings). No production push, Edge deploy, database mutation or broker action.
+
+### 2026-09-11 — Lokální průběžná data LIVE (ověřeno lokálně, Codex)
+Potvrzené zůstatky a denní P&L jsou oddělené od 45s risk brány; původní execution pole se nepřepisují. Worker změny cash/position/fill invalidují omezenou frontu snapshotů, stav se přenáší přídavným accountDisplay DTO. Dashboard má per-user/per-connection/per-environment cache a záložní cílené čtení; pro staré API dočasně jeden společný preflight/minutu. Stav streamu je oddělený od stáří částky. Vše pouze lokálně, instalovaný worker a produkce beze změny. Přesný stav, ověření a zbývající kroky v docs/reviews/live-cash-stream-20260911/PROGRESS.md; lokální audit je dokončen v souboru VERIFICATION.md ve stejné složce (3185 testů prošlo). Aktivace API a instalovaného workeru vyžaduje souhlas nad rámec localhostu.
+
+### 2026-09-12 (Codex, pouze localhost: hodnoty LIVE po reloadu)
+Doplněna session cache pouze potvrzeného zůstatku a denního P&L pro konkrétního uživatele/připojení/prostředí/účet. Po načtení aktuálního seznamu účtů se zobrazí uložené částky během obnovování; nepersistuje se risk ani execution stav. Zachované původní časy, expirace 24 h, denní P&L pouze ve stejném obchodním dni, denied účty bez hodnot. Kontrola reloadu zobrazila všech 7 zůstatků při prvním zachyceném vykreslení tabulky. Typecheck, lint a build prošly; cílené testy ověřují obnovu, identitu, den a zachování risk gate. Bez push/deploy či změny workeru.
+
+### 2026-09-12 (Codex, localhost: DLL/DD bez prázdných mezistavů)
+AccountRow zobrazuje poslední známou částku DLL a rezervy DD při expirovaném nebo neúplném čtení neutrálně s původním časem v tooltipu. Krátkodobá paměť hodnot je pouze v UI, oddělená podle uživatele, účtu, pravidla a obchodního dne; není vstupem do risk/execution. Přísná 45s kontrola zachována, změna potvrzené částky se promítá hned. Browser potvrdil 14 částek (DLL/DD u 7 účtů) se stavem last-known a původními časy. Bez nasazení či změny workeru.
+
+### 2026-09-12 (Codex, localhost: úplný průběh DLL/DD obnovování)
+Opraveny další mezistavy: stabilní React klíč podle accountId namísto názvu/pořadí; identita uchování podle uživatele, OAuth připojení/prostředí, explicitního profilu a obchodního dne, nikoli dopočítaného DD flooru. Neznámý limit při dílčí odpovědi již neznamená vypnutý limit. Před dokončením bootstrapu/čtení risk podkladů se nezobrazí předběžný DD z profilu; první načtení ukazuje statický placeholder, obnovení ponechá poslední známé číslo. Pro localhost přidán pouze GET copier-relay; POST/DELETE zůstávají blokované. Browser zachytil nejdřív 14 placeholderů, následně všech 14 správných částek u 7 účtů a čerstvý OFF stav workeru. 28 cílených testů passed. Bez push/deploy či restartu workeru.
+
+### 2026-09-12 (Codex, localhost: zelené DLL/DD a paměť po reloadu)
+Na žádost uživatele stáří hodnot nemění barvu částek; tooltip a data-risk-display stále rozlišují last-known. Přidána sessionStorage cache výhradně pro zobrazení DLL/DD, oddělená uživatelem, připojením, prostředím, účtem, explicitním profilem a obchodním dnem. Obnova zachová původní čas a nikdy neoznačuje cache za nové ověření. Na změně pravidel nebo dni se nepoužije; při vypnutí se odstraní. Risk/execution se z cache nepočítá. Bez push/deploy či změny workeru.
+
 ### 2026-09-20 — Claude: čekající vstup nese směr, varování a vlastní bublinu
 
 Uživatel se zeptal, jestli chip čekajícího vstupu rozlišuje Buy/Sell. Nerozlišoval:

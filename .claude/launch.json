@@ -12,6 +12,23 @@
       "autoPort": true
     },
     {
+      "name": "alphatrade-design",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "--prefix",
+        "/private/tmp/alphatrade-main-preview",
+        "dev:live",
+        "--",
+        "--port",
+        "5273",
+        "--strictPort"
+      ],
+      "port": 5273,
+      "autoPort": false,
+      "url": "http://localhost:5273"
+    },
+    {
       "name": "alphatrade-live",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
@@ -19,6 +36,7 @@
         "dev:live"
       ],
       "port": 3000,
+      "autoPort": false,
       "url": "http://localhost:3000"
     },
     {

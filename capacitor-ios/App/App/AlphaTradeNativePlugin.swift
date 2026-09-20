@@ -262,10 +262,15 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
             call.resolve(["supported": false, "enabled": false, "activeCount": 0])
             return
         }
+        let active = Activity<AlphaTradeLiveActivityAttributes>.activities.filter {
+            $0.activityState == .active || $0.activityState == .stale
+        }
         call.resolve([
             "supported": true,
             "enabled": ActivityAuthorizationInfo().areActivitiesEnabled,
-            "activeCount": Activity<AlphaTradeLiveActivityAttributes>.activities.count,
+            "activeCount": active.count,
+            "activeActivityIds": active.map { $0.id },
+            "nativeManagedActivityIds": active.filter { $0.attributes.registrationToken != nil }.map { $0.id },
         ])
     }
 
@@ -349,6 +354,7 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
             for activity in activities {
                 if call.getBool("automatic") == true && self.isRemoteLiveActivity(activity) { continue }
                 await activity.end(nil, dismissalPolicy: .immediate)
+                await AlphaTradeLiveActivityRegistration.shared.unregister(activity)
                 self.notifyListeners(
                     "liveActivityEnded",
                     data: ["activityId": activity.id],
@@ -398,6 +404,8 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
     @available(iOS 16.2, *)
     @MainActor
     private func observeLiveActivityPushToken(_ activity: Activity<AlphaTradeLiveActivityAttributes>) {
+        // New sessions are registered before WebKit starts by the native owner.
+        guard activity.attributes.registrationToken == nil else { return }
         if liveActivityTokenTasks[activity.id] == nil {
             if let tokenData = activity.pushToken {
                 notifyListeners("liveActivityPushToken", data: [
@@ -961,6 +969,30 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
     }
 }
 
+#if DEBUG
+// Memory-only consent: never survives relaunch or a disconnected capture session.
+struct AlphaTradeCapturePreviewSession {
+    static let duration: TimeInterval = 15 * 60
+    private(set) var expiresAt: TimeInterval?
+
+    mutating func allow(now: TimeInterval) {
+        expiresAt = now + Self.duration
+    }
+
+    mutating func shouldObscure(isCaptured: Bool, now: TimeInterval) -> Bool {
+        guard isCaptured else {
+            expiresAt = nil
+            return false
+        }
+        guard let expiresAt, now < expiresAt else {
+            self.expiresAt = nil
+            return true
+        }
+        return false
+    }
+}
+#endif
+
 final class AlphaTradePrivacyShield: NSObject {
     static let shared = AlphaTradePrivacyShield()
     private let defaultsKey = "AlphaTradePrivacyModeEnabled"
@@ -969,6 +1001,11 @@ final class AlphaTradePrivacyShield: NSObject {
     private var detailLabel: UILabel?
     private var reasons = Set<ShieldReason>()
     private var captureObserver: NSObjectProtocol?
+#if DEBUG
+    private var capturePreview = AlphaTradeCapturePreviewSession()
+    private var capturePreviewTimer: Timer?
+    private var capturePreviewButton: UIButton?
+#endif
     private(set) var lockGeneration = 0
     var isAuthenticating = false
 
@@ -1021,11 +1058,43 @@ final class AlphaTradePrivacyShield: NSObject {
             let isCaptured = UIApplication.shared.connectedScenes
                 .compactMap { $0 as? UIWindowScene }
                 .contains { $0.screen.isCaptured }
-            if isCaptured { self.reasons.insert(.screenCapture) }
+#if DEBUG
+            let shouldObscure = self.capturePreview.shouldObscure(
+                isCaptured: isCaptured, now: Date.timeIntervalSinceReferenceDate
+            )
+            if self.capturePreview.expiresAt == nil {
+                self.capturePreviewTimer?.invalidate()
+                self.capturePreviewTimer = nil
+            }
+#else
+            let shouldObscure = isCaptured
+#endif
+            if shouldObscure { self.reasons.insert(.screenCapture) }
             else { self.reasons.remove(.screenCapture) }
             self.reconcileShield()
         }
     }
+
+#if DEBUG
+    @objc private func allowCapturePreview() {
+        guard UIApplication.shared.applicationState == .active,
+              UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .contains(where: { $0.screen.isCaptured }) else { return }
+        capturePreview.allow(now: Date.timeIntervalSinceReferenceDate)
+        capturePreviewTimer?.invalidate()
+        let timer = Timer(timeInterval: AlphaTradeCapturePreviewSession.duration,
+                          repeats: false) { [weak self] _ in
+            // The timer also revokes directly if the wall clock moved backwards.
+            self?.capturePreview = AlphaTradeCapturePreviewSession()
+            self?.refreshScreenCaptureState()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        capturePreviewTimer = timer
+        // Reconcile only capture consent; an independent privacy lock stays locked.
+        refreshScreenCaptureState()
+    }
+#endif
 
     private func reconcileShield() {
         guard !reasons.isEmpty else {
@@ -1033,6 +1102,9 @@ final class AlphaTradePrivacyShield: NSObject {
             shield = nil
             titleLabel = nil
             detailLabel = nil
+#if DEBUG
+            capturePreviewButton = nil
+#endif
             return
         }
 
@@ -1042,6 +1114,12 @@ final class AlphaTradePrivacyShield: NSObject {
         detailLabel?.text = recording
             ? "Nahrávání nebo zrcadlení obrazovky právě probíhá."
             : "Otevři aplikaci a ověř vlastníka zařízení."
+#if DEBUG
+        capturePreviewButton?.isHidden = !recording
+        if recording {
+            detailLabel?.text = "Pro kontrolu vzhledu můžeš dočasně sdílet obsah.\nPovolení skončí za 15 minut nebo odpojením zrcadlení."
+        }
+#endif
     }
 
     private func createShield() {
@@ -1063,11 +1141,29 @@ final class AlphaTradePrivacyShield: NSObject {
         title.font = .systemFont(ofSize: 20, weight: .bold)
         let detail = UILabel()
         detail.text = "Otevři aplikaci a ověř vlastníka zařízení."
-        detail.textColor = .secondaryLabel
+        detail.textColor = UIColor.white.withAlphaComponent(0.72)
         detail.font = .systemFont(ofSize: 13, weight: .semibold)
         detail.textAlignment = .center
+        detail.numberOfLines = 0
 
         let stack = UIStackView(arrangedSubviews: [icon, title, detail])
+#if DEBUG
+        let previewButton = UIButton(type: .system)
+        var previewConfiguration = UIButton.Configuration.filled()
+        previewConfiguration.title = "Povolit náhled na 15 minut"
+        previewConfiguration.baseBackgroundColor = .systemBlue
+        previewConfiguration.baseForegroundColor = .white
+        previewConfiguration.cornerStyle = .medium
+        previewConfiguration.contentInsets = NSDirectionalEdgeInsets(
+            top: 12, leading: 18, bottom: 12, trailing: 18
+        )
+        previewButton.configuration = previewConfiguration
+        previewButton.accessibilityIdentifier = "allowCapturePreview"
+        previewButton.addTarget(self, action: #selector(allowCapturePreview), for: .touchUpInside)
+        previewButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        stack.addArrangedSubview(previewButton)
+        capturePreviewButton = previewButton
+#endif
         stack.axis = .vertical
         stack.alignment = .center
         stack.spacing = 14

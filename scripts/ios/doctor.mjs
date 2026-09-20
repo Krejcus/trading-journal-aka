@@ -81,7 +81,8 @@ requireMatch(privacyGate, /appStateChange/, 'Privacy gate musí zkontrolovat nov
 requireMatch(scene, /sceneDidEnterBackground[\s\S]*showIfEnabled\(force: true\)/, 'Skutečný odchod do pozadí musí zamknout i během Face ID');
 requireMatch(plugin, /applyWorldFromWeb\(world\)/, 'Swift plugin nepředává LIVE/BACKTEST svět shellu');
 requireMatch(shell, /__alphaTradeNative\?\.toggleWorld\(\)/, 'Nativní menu neumí přepnout LIVE/BACKTEST svět');
-requireMatch(shell, /id: "native-system", title: "iOS funkce"/, 'Nativní menu nemá přímou cestu k iOS funkcím');
+requireMatch(shell, /id: "settings", title: "Nastavení"/, 'Nativní menu nemá společné Nastavení');
+if (/id: "native-system", title: "iOS funkce"/.test(shell)) errors.push('iOS funkce mají být ve společném Nastavení, ne ve druhé položce menu');
 requireMatch(appSource, /alphatrade:open-native-system/, 'Webový most neumí otevřít testovací sekci iOS funkcí');
 requireMatch(shell, /AlphaTradeKeepAwake\.shared\.setWorld\(world\)/, 'Nativní shell nepředává LIVE/BACKTEST stav keep-awake vrstvě');
 requireMatch(scene, /isEnabled && isApplicationActive && activeWorld == "live"/, 'Keep-awake musí být účinný pouze v aktivním LIVE světě');

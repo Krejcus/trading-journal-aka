@@ -122,6 +122,67 @@ html.native-shell .native-bottom-sheet {
   bottom: var(--native-shell-tab-bar-height);
 }
 
+/* Account details are native dialogs in the web top layer, but the UIKit
+   tab bar still sits above the WKWebView. Reserve its space in both bounds. */
+.live-mobile-account-sheet {
+  --live-account-sheet-top: calc(env(safe-area-inset-top, 0px) + 0.75rem);
+  --live-account-sheet-bottom: 0px;
+  top: var(--live-account-sheet-top);
+  bottom: auto;
+  max-height: calc(100dvh - var(--live-account-sheet-top) - var(--live-account-sheet-bottom));
+}
+
+html.native-shell .live-mobile-account-sheet {
+  --live-account-sheet-bottom: calc(var(--native-shell-tab-bar-height) + 0.5rem);
+}
+
+html.native-shell .live-mobile-account-sheet-content {
+  padding-bottom: 1rem;
+}
+
+.live-mobile-account-sheet[open] {
+  animation: live-account-sheet-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.live-mobile-account-sheet[open]::backdrop {
+  animation: live-account-backdrop-in 240ms ease-out both;
+}
+
+.live-mobile-account-sheet[data-closing="true"] {
+  animation: live-account-sheet-out 180ms ease-in both;
+}
+
+.live-mobile-account-sheet[data-closing="true"]::backdrop {
+  animation: live-account-backdrop-out 180ms ease-in both;
+}
+
+@keyframes live-account-sheet-in {
+  from { transform: translateY(-12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes live-account-sheet-out {
+  from { transform: translateY(0); opacity: 1; }
+  to { transform: translateY(-12px); opacity: 0; }
+}
+
+@keyframes live-account-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes live-account-backdrop-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-mobile-account-sheet[open],
+  .live-mobile-account-sheet[open]::backdrop {
+    animation: none;
+  }
+}
+
 /* Fixed status messages are portaled outside page/modal safe-area wrappers. */
 html.native-shell .native-fixed-above-tab-bar {
   bottom: calc(var(--native-shell-tab-bar-height) + 1rem);

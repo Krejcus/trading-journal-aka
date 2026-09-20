@@ -91,4 +91,5 @@ struct AlphaTradeLiveActivityAttributes: ActivityAttributes {
 
     let sessionID: String
     let symbol: String
+    var registrationToken: String? = nil
 }

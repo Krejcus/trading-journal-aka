@@ -128,7 +128,7 @@ describe('LIVE kompaktní karty (telefon)', () => {
     expect(markup).toContain('MNQU6');
     expect(markup).toContain('Zrušit');
     expect(markup).toContain('Flatten All');
-    expect(markup).toContain('Upravit');
+    expect(markup).toContain('More actions');
   });
 
   it('desktop bez úzkého viewportu dál vykresluje tabulku', async () => {

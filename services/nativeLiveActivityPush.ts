@@ -11,6 +11,7 @@ const INSTALLATION_KEY = 'alphatrade-native-installation-id-v1';
 interface ActivityRegistration {
   activityId: string;
   pushToken: string;
+  ended?: boolean;
 }
 
 interface StartRegistration {
@@ -22,6 +23,7 @@ let listeners: PluginListenerHandle[] = [];
 let listeningUserId: string | null = null;
 let listenerGeneration = 0;
 const acceptedActivities = new Set<string>();
+const activityRequests = new Map<string, Promise<boolean>>();
 let acceptedStart = false;
 const pendingPosts = new Set<Promise<Response>>();
 const uncertainPosts = new Set<string>();
@@ -122,12 +124,49 @@ function saveStartRegistration(pushToken: string): StartRegistration {
   return registration;
 }
 
-async function sendRegistration(
+function sendRegistration(
   registration: ActivityRegistration,
   method: 'POST' | 'DELETE',
   expectedUserId: string,
 ): Promise<boolean> {
   const epoch = listenerGeneration;
+  // An end must follow a pending POST, never race it and resurrect its row.
+  const key = `${expectedUserId}:${registration.activityId}`;
+  const previous = activityRequests.get(key) ?? Promise.resolve(false);
+  const next = previous.catch(() => false).then(() =>
+    performRegistration(registration, method, expectedUserId, epoch));
+  activityRequests.set(key, next);
+  void next.finally(() => {
+    if (activityRequests.get(key) === next) activityRequests.delete(key);
+  }).catch(() => undefined);
+  return next;
+}
+
+async function performRegistration(
+  registration: ActivityRegistration,
+  method: 'POST' | 'DELETE',
+  expectedUserId: string,
+  epoch: number,
+): Promise<boolean> {
+  if (method === 'POST') {
+    if (epoch !== listenerGeneration) return false;
+    const stored = registrationFor(registration.activityId);
+    if (stored?.ended || registration.ended) method = 'DELETE';
+    else {
+      // A cached push token is not proof the activity still exists on iOS.
+      // On old bridges or a failed inventory read, leave it for a later retry.
+      const state = await alphaTradeNativePlugin.getLiveActivityState();
+      if (Array.isArray(state.nativeManagedActivityIds) && state.nativeManagedActivityIds.includes(registration.activityId)) {
+        // The native owner registers this session while WebKit is suspended.
+        if (epoch === listenerGeneration) removeRegistration(registration.activityId);
+        return true;
+      }
+      if (!Array.isArray(state.activeActivityIds)) return false;
+      if (!state.activeActivityIds.includes(registration.activityId)) method = 'DELETE';
+    }
+    if (epoch !== listenerGeneration) return false;
+    if (method === 'DELETE') saveRegistration({ ...registration, ended: true });
+  }
   const { data: { session } } = await supabase.auth.getSession();
   if (!session || session.user.id !== expectedUserId) return false;
   const environment = await alphaTradeNativePlugin.getPushEnvironment() as {
@@ -149,7 +188,10 @@ async function sendRegistration(
   }, registration.pushToken);
   if (response.ok && epoch === listenerGeneration && listeningUserId === expectedUserId) {
     if (method === 'POST') { acceptedActivities.add(registration.activityId); writeRemoteManagedFlag(true); }
-    else acceptedActivities.delete(registration.activityId);
+    else {
+      acceptedActivities.delete(registration.activityId);
+      removeRegistration(registration.activityId);
+    }
   }
   return response.ok;
 }
@@ -209,6 +251,7 @@ export async function initializeNativeLiveActivityPush(userId: string): Promise<
         if (epoch !== listenerGeneration || listeningUserId !== userId) return;
         // Persist first, then sync. A temporary endpoint/network failure must
         // not lose the only token emission for the lifetime of an activity.
+        if (registrationFor(registration.activityId)?.ended) return;
         saveRegistration(registration);
         void sendRegistration(registration, 'POST', userId).then(ok => {
           if (!ok) console.warn('[Native Live Activity] Token registration was not accepted; it will retry.');
@@ -224,6 +267,7 @@ export async function initializeNativeLiveActivityPush(userId: string): Promise<
         acceptedActivities.delete(activityId);
         const registration = registrationFor(activityId);
         if (!registration) return;
+        saveRegistration({ ...registration, ended: true });
         void sendRegistration(registration, 'DELETE', userId)
           .then(ok => { if (ok) removeRegistration(activityId); })
           .catch(error => {

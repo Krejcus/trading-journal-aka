@@ -686,11 +686,9 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
         // Everything the bar does not show. Backtest hides LIVE-only surfaces
         // and, like the web sidebar, presents Účty as the backtest Session.
         let inBar = Set(tabSlots)
-        var items: [AlphaTradeMoreMenuItem] = AlphaTradeTabCatalog.destinations
+        let items: [AlphaTradeMoreMenuItem] = AlphaTradeTabCatalog.destinations
             .filter { !inBar.contains($0.id) && (!isBacktest || !$0.liveOnly) }
             .map { AlphaTradeMoreMenuItem(id: $0.id, title: $0.id == "accounts" && isBacktest ? "Session" : $0.title, symbol: $0.symbol) }
-        let settingsIndex = items.firstIndex { $0.id == "settings" } ?? items.endIndex
-        items.insert(AlphaTradeMoreMenuItem(id: "native-system", title: "iOS funkce", symbol: "iphone.gen3"), at: settingsIndex)
 
         let menu = AlphaTradeMoreMenuView(theme: activeTheme, isBacktest: isBacktest, items: items) { [weak self] action in
             guard let self else { return }

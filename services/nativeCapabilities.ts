@@ -32,6 +32,8 @@ export interface NativeLiveActivityState {
   supported: boolean;
   enabled: boolean;
   activeCount: number;
+  activeActivityIds?: string[];
+  nativeManagedActivityIds?: string[];
   activityID?: string;
 }
 

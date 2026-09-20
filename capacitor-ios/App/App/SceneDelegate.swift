@@ -57,6 +57,9 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
+        if #available(iOS 16.2, *) {
+            AlphaTradeLiveActivityRegistration.shared.resume()
+        }
         AlphaTradeKeepAwake.shared.applicationDidBecomeActive()
         AlphaTradePrivacyShield.shared.refreshScreenCaptureState()
     }

@@ -1,4 +1,7 @@
 import { tradovateConnectionPresentation, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
+import { createCopierForegroundPoller } from '../lib/copierForegroundPoller';
+import LiveMobileAccountDetail from './LiveMobileAccountDetail';
+import { useLiveLayout } from '../hooks/useLiveLayout';
 import { readTradovateDisplaySession, writeTradovateDisplaySession } from '../lib/tradovateDisplaySessionCache';
 import { liveBalanceDisplay, liveDailyPnlDisplay } from '../lib/liveBalanceDisplay';
 import { useTradovateDisplayFallback } from './useTradovateDisplayFallback';
@@ -17,6 +20,7 @@ import {
   Activity,
   AlertTriangle,
   ChevronRight,
+  Camera,
   Clock3,
   Database,
   Gauge,
@@ -192,6 +196,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       typeof window === 'undefined' ? '' : window.location.search,
     )
   ));
+  const { compact: mobileLayout } = useLiveLayout();
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [copyGroups, setCopyGroups] = useState<CopyGroupConfig[]>([]);
@@ -639,13 +644,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const directAgentProbe = useRef<'unknown' | 'available' | 'unavailable'>('unknown');
   useEffect(() => {
     let stopped = false;
-    let timer: number | undefined;
-    const poll = async () => {
+    const poll = async (isCurrent: () => boolean) => {
       const pollGeneration = copyGroupStatusPollFence.beginPoll();
       if (canUseDirectLocalCopierAgent(window.location) || directAgentProbe.current !== 'unavailable') {
         try {
           const next = await agentClient.status();
-          if (!stopped && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
+          if (!stopped && isCurrent() && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
             directAgentProbe.current = 'available';
             setAgentStatus(next);
             setAgentStatusObservedAt(Date.now());
@@ -653,10 +657,6 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
             setAgentStatusResolved(true);
             setAgentTransport('local');
             setRelayConnectionId(next.device?.connectionId ?? next.devices?.[0]?.connectionId ?? null);
-            timer = window.setTimeout(poll, 2_000);
-          }
-          if (!stopped && !copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
-            timer = window.setTimeout(poll, 2_000);
           }
           return;
         } catch {
@@ -673,7 +673,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
           remote: await loadTradovateCopierRelayStatus(connectionId).catch(() => null),
         })));
         const active = candidates.find(candidate => candidate.remote?.connected) ?? null;
-        if (!stopped && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
+        if (!stopped && isCurrent() && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
           setAgentStatus(active?.remote?.status ?? null);
           setDisplayFeedReceipt({ userId, receivedAt: Date.now(), feeds: candidates.flatMap(candidate => candidate.remote?.connected ? candidate.remote.status?.accountDisplay ?? [] : []) });
           setAgentStatusObservedAt(active ? Date.parse(active.remote!.lastSeenAt) : null);
@@ -681,25 +681,34 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
           setRelayConnectionId(active?.connectionId ?? null);
         }
       } catch {
-        if (!stopped && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
+        if (!stopped && isCurrent() && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
           setAgentStatus(null);
           setAgentStatusObservedAt(null);
           setAgentTransport(null);
           setRelayConnectionId(null);
         }
       } finally {
-        if (!stopped) {
+        if (!stopped && isCurrent()) {
           if (copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
             setAgentStatusResolved(true);
           }
-          timer = window.setTimeout(poll, 2_000);
         }
       }
     };
-    void poll();
+    const poller = createCopierForegroundPoller({
+      visible: () => document.visibilityState !== 'hidden',
+      read: poll,
+      invalidate: () => setAgentStatusFresh(false),
+    });
+    document.addEventListener('visibilitychange', poller.resume);
+    window.addEventListener('online', poller.resume);
+    window.addEventListener('focus', poller.resume);
     return () => {
       stopped = true;
-      if (timer != null) window.clearTimeout(timer);
+      poller.stop();
+      document.removeEventListener('visibilitychange', poller.resume);
+      window.removeEventListener('online', poller.resume);
+      window.removeEventListener('focus', poller.resume);
     };
   }, [agentClient, connectedConnectionIds, userId]);
 
@@ -791,6 +800,8 @@ setAgentStatus((await executeAgent({
       </div>
     );
   }
+  const selectedLiveAccount = (displaySnapshot ?? copyTradeSnapshot)?.accounts.find(a => a.id === selectedAccountId);
+  const selectedMembership = copyGroups.find(g => g.leaderAccountId === selectedAccountId || g.followers.some(f => f.accountId === selectedAccountId));
   const requiresConnection = tab !== 'connections' && live.status != null && !live.status.connected;
 
   return (
@@ -995,6 +1006,9 @@ setAgentStatus((await executeAgent({
               }}
             />
           ) : null}
+          {mobileLayout && tab === 'overview' && copyTradeSnapshot ? <button type="button" onClick={() => navigateToTab('events')} className="flex min-h-14 w-full items-center gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 text-left text-xs font-bold text-[var(--text-secondary)]">
+            <Camera size={21} className="shrink-0" /><span className="flex-1">{!agentStatusFresh || !agentStatus?.snapshotHealth ? 'Stav snímků neověřen' : !agentStatus.snapshotHealth.enabled ? 'Snímky vypnuté' : agentStatus.snapshotHealth.state === 'ready' ? 'Snímky připravené' : agentStatus.snapshotHealth.state === 'checking' ? 'Kontroluji snímky' : 'Snímky nejsou připravené'}</span><span className="text-[10px]">Detail</span><ChevronRight size={14} />
+          </button> : null}
           {tab === 'risk' && copyTradeSnapshot ? (
             <LiveRiskTab
               runtimeAvailable={runtimeAvailable}
@@ -1061,7 +1075,10 @@ setAgentStatus((await executeAgent({
           }}
         />
       ) : null}
-      {selectedAccount ? <AccountDetail account={selectedAccount} profile={profileMap(live.profiles).get(String(selectedAccount.id))} onClose={() => setSelectedAccountId(null)} /> : null}
+      {mobileLayout && selectedLiveAccount ? <LiveMobileAccountDetail key={selectedLiveAccount.id} account={selectedLiveAccount} history={selectedAccount ?? undefined} orders={copyTradeOrders}
+        dailyPnlPending={live.dataEnrichmentPending} leader={selectedMembership?.leaderAccountId === selectedAccountId}
+        multiplier={selectedMembership?.followers.find(f => f.accountId === selectedAccountId)?.multiplier ?? 1}
+        onClose={() => setSelectedAccountId(null)} /> : selectedAccount ? <AccountDetail account={selectedAccount} profile={profileMap(live.profiles).get(String(selectedAccount.id))} onClose={() => setSelectedAccountId(null)} /> : null}
     </div>
   );
 };
