@@ -2,6 +2,8 @@ import { LiveRiskValue } from './LiveRiskValue';
 import { ColumnOrderList, type ColumnOrderItem } from './ColumnOrderList';
 import { applyColumnOrder, moveColumn, pinColumnEdges } from '../lib/tableColumnOrder';
 import LiveCopierIsland from './LiveCopierIsland';
+import { LiveDayTrigger, LiveDayCardDialog } from './LiveDayCard';
+import { buildLiveDaySummary } from '../lib/liveDaySummary';
 import { buildLiveCopierIsland } from '../lib/liveCopierIsland';
 import { copierArmRejection } from '../lib/copierArmPreparation';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
@@ -358,6 +360,8 @@ function loadViewSettings(): { redaction: RedactionSettings; confirmRearmAfterFl
 interface Props {
   journalHistory?: React.ReactNode;
   userId?: string;
+  /** Komu den patří — karta dne se posílá dál, bez jména je anonymní. */
+  owner?: { name: string; avatar?: string | null };
   snapshot: LiveSnapshot;
   accountProfiles?: TradovateAccountProfile[];
   orders?: LiveOrder[];
@@ -550,6 +554,7 @@ export const liveOrderIsOpenForSafety = (order: Pick<LiveOrder, 'status'>): bool
 export const LiveCopyTradeOverview: React.FC<Props> = ({
   journalHistory,
   userId = '',
+  owner,
   snapshot,
   accountProfiles = [],
   orders = [],
@@ -639,6 +644,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [helpOpen, setHelpOpen] = useState(false);
   const [tableSettingsOpen, setTableSettingsOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [dayCardOpen, setDayCardOpen] = useState(false);
   const [redactNames, setRedactNames] = useState(false);
   const [redaction, setRedaction] = useState<RedactionSettings>(initialViewSettings.redaction);
   const [confirmRearmAfterFlatten, setConfirmRearmAfterFlatten] = useState(initialViewSettings.confirmRearmAfterFlatten);
@@ -808,6 +814,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     () => new Map(snapshot.accounts.map(a => [a.id, a])),
     [snapshot.accounts],
   );
+  // Den se počítá při každém renderu jako u řádků skupin: `Date.now()` v memo
+  // by zamrzlo a potvrzená hodnota by nikdy nezestárla.
+  const daySummary = buildLiveDaySummary(snapshot.accounts, Date.now(), dailyPnlPending);
   const profilesById = useMemo(() => {
     const next = new Map<number, TradovateAccountProfile>();
     for (const profile of accountProfiles) {
@@ -1508,7 +1517,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
       <section id="live-copy-groups" className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden">
         <header className="flex items-center justify-between gap-3 px-5 lg:px-6 py-4 flex-wrap">
-          <h3 className="text-lg font-black text-[var(--text-primary)]">Kopírovací skupiny</h3>
+          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
+            <h3 className="text-lg font-black text-[var(--text-primary)]">Kopírovací skupiny</h3>
+            <LiveDayTrigger summary={daySummary} onOpen={() => setDayCardOpen(true)} />
+          </div>
           <div className="flex items-center gap-2">
             <button
               disabled={groupLibraryState !== 'ready'}
@@ -1962,6 +1974,15 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         />
       )}
       {templatesOpen && <GroupTemplatesDialog templates={templates} accounts={snapshot.accounts} onChange={setTemplates} onClose={() => setTemplatesOpen(false)} />}
+      {dayCardOpen && <LiveDayCardDialog
+        summary={daySummary}
+        owner={owner ?? { name: 'Trader' }}
+        tradeDate={tradovateDisplayTradeDate()}
+        trades={dailyStats?.tradesToday ?? null}
+        losingTrades={dailyStats?.losingTrades ?? null}
+        formatName={name => redactAccountName(name, redactNames, redaction)}
+        onClose={() => setDayCardOpen(false)}
+      />}
       {toast && <StatusToast tone={toast.tone} text={renderAccountMessage(toast.text, toast.accountIds ?? knownAccountIds)} />}
     </div>
   );

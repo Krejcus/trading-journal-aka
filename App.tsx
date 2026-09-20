@@ -4692,6 +4692,7 @@ const App: React.FC = () => {
                     <LiveDesk
                       key={currentUser.id}
                       userId={currentUser.id}
+                      cardOwner={{ name: currentUser.name, avatar: currentUser.avatar }}
                       theme={theme}
                       live={tradovateLive}
                       onCopierJournalRefresh={handleCopierJournalRefresh}

@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karta dne — logo ve světlém režimu</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root { --page:#e8edf3; --panel:#fff; --ink:#0f172a; --ink2:#475569; --ink3:#94a3b8; --line:#e2e8f0; }
+* { box-sizing:border-box; }
+body { margin:0; padding:26px 16px 120px; font-family:Inter,-apple-system,system-ui,sans-serif;
+  background:var(--page); color:var(--ink); }
+.wrap { max-width:1000px; margin:0 auto; }
+h1 { font-size:21px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.65; color:var(--ink2); max-width:86ch; margin:0 0 22px; }
+.lede b { color:var(--ink); }
+.case { margin-bottom:22px; }
+.case > p { font-size:12px; line-height:1.6; color:var(--ink2); margin:0 0 9px; max-width:88ch; }
+.case > p b { color:var(--ink); }
+.case > p em { font-style:normal; color:var(--ink3); font-weight:800; font-size:10px;
+  letter-spacing:.09em; text-transform:uppercase; margin-right:7px; }
+
+/* ══ karta — zvolená kombinace: pozadí C (vinětace), okraje 2 (tyrkysové) ══ */
+.tilt { perspective:1500px; max-width:940px; }
+.card { position:relative; overflow:hidden; border-radius:16px; padding:1px;
+  background:linear-gradient(140deg, rgba(8,145,178,.5), rgba(15,23,42,.1) 38%, rgba(16,185,129,.38));
+  box-shadow:0 26px 56px -32px rgba(15,23,42,.5);
+  transform-style:preserve-3d; transition:transform .35s cubic-bezier(.22,.61,.36,1); }
+.inner { position:relative; overflow:hidden; border-radius:15px; padding:22px 24px; color:var(--ink);
+  background:
+    radial-gradient(ellipse 100% 100% at 50% 45%, transparent 40%, rgba(15,23,42,.07) 100%),
+    radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34,211,238,.2) 0%, transparent 62%),
+    radial-gradient(ellipse 60% 60% at 100% 100%, rgba(16,185,129,.16) 0%, transparent 62%),
+    #fbfdff; }
+.inner > *:not(.aurora):not(.edge) { position:relative; z-index:3; }
+.aurora { position:absolute; top:-150px; left:50%; width:820px; height:320px; z-index:1; pointer-events:none;
+  transform:translateX(-50%); filter:blur(46px); opacity:.7;
+  background:radial-gradient(ellipse, rgba(34,211,238,.3) 0%, transparent 70%);
+  animation:drift 14s ease-in-out infinite alternate; }
+@keyframes drift { from { transform:translateX(-58%) scale(1); } to { transform:translateX(-42%) scale(1.12); } }
+.sheen { position:absolute; inset:0; z-index:2; pointer-events:none; opacity:0; transition:opacity .3s;
+  background:radial-gradient(420px circle at var(--mx,50%) var(--my,0%), rgba(255,255,255,.9), transparent 62%); }
+.tilt:hover .sheen { opacity:1; }
+.edge { position:absolute; z-index:2; pointer-events:none; }
+.ed-t { top:0; left:0; height:2px; width:55%; animation:runX 3.4s linear infinite;
+  background:linear-gradient(90deg, transparent, rgba(6,182,212,.95), transparent); }
+.ed-b { bottom:0; right:0; height:2px; width:55%; animation:runXr 3.4s linear infinite; animation-delay:.6s;
+  background:linear-gradient(90deg, transparent, rgba(6,182,212,.95), transparent); }
+.ed-r { top:0; right:0; width:2px; height:55%; animation:runY 3.4s linear infinite; animation-delay:1.7s;
+  background:linear-gradient(180deg, transparent, rgba(6,182,212,.95), transparent); }
+.ed-l { bottom:0; left:0; width:2px; height:55%; animation:runYr 3.4s linear infinite; animation-delay:2.3s;
+  background:linear-gradient(180deg, transparent, rgba(6,182,212,.95), transparent); }
+@keyframes runX  { from { left:-55%; } to { left:100%; } }
+@keyframes runXr { from { right:-55%; } to { right:100%; } }
+@keyframes runY  { from { top:-55%; } to { top:100%; } }
+@keyframes runYr { from { bottom:-55%; } to { bottom:100%; } }
+
+/* ══ hlavička ══ */
+.head { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:18px; }
+.brand { display:flex; align-items:center; gap:13px; }
+.mark { position:relative; width:42px; height:42px; flex:none; display:flex; align-items:center; justify-content:center; }
+.mark img { width:42px; height:42px; object-fit:contain; position:relative; z-index:2; }
+.wordmark { font-size:12.5px; font-weight:200; letter-spacing:.44em; text-transform:uppercase;
+  background-image:linear-gradient(180deg, #0f172a, rgba(15,23,42,.6));
+  -webkit-background-clip:text; background-clip:text; color:transparent; }
+.wordmark i { font-style:normal; font-weight:500; color:#0891b2; -webkit-text-fill-color:#0891b2; }
+
+/* ── A: tyrkysový kruh (rodina avataru vpravo) ─────────────────────────── */
+.lg-a .mark::before { content:''; position:absolute; inset:0; border-radius:999px;
+  background:linear-gradient(145deg,#67e8f9,#10b981); box-shadow:0 4px 14px -6px rgba(13,148,136,.75); }
+.lg-a .mark img { width:30px; height:30px; }
+
+/* ── B: mléčný kruh s tyrkysovým prstencem ─────────────────────────────── */
+.lg-b .mark::before { content:''; position:absolute; inset:0; border-radius:999px;
+  background:rgba(255,255,255,.9); border:1.5px solid rgba(8,145,178,.5);
+  box-shadow:0 0 0 4px rgba(34,211,238,.1), 0 4px 12px -6px rgba(15,23,42,.35); }
+.lg-b .mark img { width:29px; height:29px; filter:saturate(2.2) brightness(.86); }
+
+/* ── C: jen záře, žádný podklad ────────────────────────────────────────── */
+.lg-c .mark::before { content:''; position:absolute; inset:-6px; border-radius:999px;
+  background:radial-gradient(circle, rgba(34,211,238,.55) 0%, rgba(34,211,238,0) 70%); }
+.lg-c .mark img { filter:saturate(2.4) brightness(.82) drop-shadow(0 2px 5px rgba(8,145,178,.45)); }
+
+/* ── D: tyrkysové sklo bez podkladu ────────────────────────────────────── */
+.lg-d .mark img { filter:saturate(3.2) brightness(.72) contrast(1.15) drop-shadow(0 3px 7px rgba(15,23,42,.28)); }
+
+/* ── E: bez značky, jen nápis ──────────────────────────────────────────── */
+.lg-e .mark { display:none; }
+.lg-e .wordmark { font-size:17px; font-weight:300; letter-spacing:.3em; }
+
+/* ── F: tmavý čtverec (dnešní stav pro srovnání) ───────────────────────── */
+.lg-f .mark img { padding:5px; border-radius:12px; background:linear-gradient(150deg,#0b1526,#052029);
+  box-shadow:0 8px 18px -10px rgba(15,23,42,.65); filter:drop-shadow(0 0 9px rgba(45,212,191,.5)); }
+
+.stamp { display:flex; align-items:center; gap:12px; }
+.owner { display:flex; align-items:center; gap:10px; }
+.avatar { width:34px; height:34px; border-radius:11px; flex:none; display:flex; align-items:center;
+  justify-content:center; font-size:11.5px; font-weight:800; color:#04121a;
+  background:linear-gradient(145deg,#67e8f9,#10b981); box-shadow:0 2px 12px rgba(13,148,136,.3); }
+.who { display:block; font-size:12.5px; font-weight:600; text-align:right; }
+.date { display:block; margin-top:2px; font-size:11.5px; font-weight:500; letter-spacing:.05em;
+  font-variant-numeric:tabular-nums; color:rgba(15,23,42,.52); text-align:right; }
+
+.body { display:grid; grid-template-columns:minmax(272px,336px) 1fr; gap:18px; }
+.glass { border-radius:19px; border:1px solid rgba(15,23,42,.09);
+  background:rgba(255,255,255,.66); backdrop-filter:blur(28px); }
+.total { padding:20px 22px; display:flex; flex-direction:column; justify-content:space-between; gap:18px; }
+.k { font-size:10px; font-weight:700; letter-spacing:.22em; text-transform:uppercase; color:rgba(15,23,42,.55); }
+.big { margin-top:12px; font-size:48px; font-weight:300; line-height:1; letter-spacing:-.035em;
+  font-variant-numeric:tabular-nums; }
+.split { display:flex; gap:18px; padding-top:13px; border-top:1px solid rgba(15,23,42,.09); }
+.split div { flex:1; }
+.kk { font-size:9px; font-weight:800; letter-spacing:.15em; text-transform:uppercase; color:rgba(15,23,42,.45); }
+.vv { margin-top:4px; font-size:16px; font-weight:500; font-variant-numeric:tabular-nums; }
+.list { overflow:hidden; display:flex; flex-direction:column; }
+.lhead { display:grid; grid-template-columns:minmax(0,1fr) auto; padding:9px 18px; font-size:9px;
+  font-weight:800; letter-spacing:.16em; text-transform:uppercase; color:rgba(15,23,42,.45);
+  border-bottom:1px solid rgba(15,23,42,.08); }
+.lhead span:last-child { text-align:right; }
+.arow { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px;
+  padding:5px 16px; border-bottom:1px solid rgba(15,23,42,.06); }
+.arow:last-child { border-bottom:0; }
+.who-cell { display:flex; align-items:center; gap:10px; min-width:0; }
+.dotlogo { width:18px; height:18px; border-radius:999px; flex:none; display:flex; align-items:center;
+  justify-content:center; font-size:7px; font-weight:900; color:#fff; }
+.nm { flex:0 1 auto; min-width:2.5em; font-size:12px; font-weight:500; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; }
+.fm { font-size:10px; color:rgba(15,23,42,.45); white-space:nowrap; }
+.val { flex:none; font-size:12.5px; font-weight:500; font-variant-numeric:tabular-nums; }
+.more { display:flex; align-items:center; justify-content:center; min-height:26px; padding:6px;
+  font-size:10px; font-weight:700; color:rgba(15,23,42,.45); border-top:1px solid rgba(15,23,42,.07); }
+.win { color:#15803d; } .loss { color:#be123c; } .slash { color:rgba(15,23,42,.32); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Logo ve světlém režimu — šest způsobů</h1>
+  <p class="lede">Značka zůstává <b>pořád stejná a světlá</b> (stejný soubor jako v tmavém režimu) —
+    mění se jen to, na čem sedí. Problém je fyzikální: světlé sklo na skoro bílé nemá kontrast,
+    protože i vnitřek loga je světlý. Seznam účtů je tu zkrácený, ať jde porovnávat bez scrollování.</p>
+  <div id="list"></div>
+</div>
+
+<script>
+const ACC = [
+  ['FTDFYG50511354175','Tradeify','#22c55e',610], ['TDF00008211','Tradeify','#22c55e',507],
+  ['TDF00008206','Apex','#818cf8',412], ['LFF05066846490007','Lucid','#94a3b8',-95],
+];
+const nf = new Intl.NumberFormat('cs-CZ', { maximumFractionDigits:0 });
+const money = v => `${v > 0 ? '+' : v < 0 ? '−' : ''}$${nf.format(Math.abs(Math.round(v)))}`;
+const tone = v => v > 0 ? 'win' : v < 0 ? 'loss' : '';
+
+const card = lg => `<div class="tilt lg-${lg}"><div class="card"><div class="inner">
+  <div class="aurora"></div><div class="sheen"></div>
+  <span class="edge ed-t"></span><span class="edge ed-b"></span>
+  <span class="edge ed-r"></span><span class="edge ed-l"></span>
+  <div class="head">
+    <div class="brand">
+      <span class="mark"><img src="/logos/at_logo_light_clean.png" alt=""></span>
+      <span class="wordmark">Alpha <i>Trade</i></span>
+    </div>
+    <div class="stamp"><div class="owner"><span class="avatar">FK</span>
+      <span><span class="who">Filip Krejča</span><span class="date">20. 09. 2026</span></span></div></div>
+  </div>
+  <div class="body">
+    <div class="glass total">
+      <div><div class="k">Dnešní P&L</div><div class="big win">+$2 906</div></div>
+      <div class="split">
+        <div><div class="kk">Obchodů</div><div class="vv">7</div></div>
+        <div><div class="kk">Win / Loss</div><div class="vv"><span class="win">5</span><span class="slash">/</span><span class="loss">2</span></div></div>
+      </div>
+    </div>
+    <div class="glass list">
+      <div class="lhead"><span>Účet · 20</span><span>Dnes</span></div>
+      ${ACC.map(([n,f,c,v]) => `<div class="arow"><span class="who-cell">
+        <span class="dotlogo" style="background:${c}">${f.slice(0,2).toUpperCase()}</span>
+        <span class="nm">${n}</span><span class="fm">${f}</span></span>
+        <span class="val ${tone(v)}">${money(v)}</span></div>`).join('')}
+      <div class="more">+ 16 účtů</div>
+    </div>
+  </div>
+</div></div></div>`;
+
+const OPTIONS = [
+  ['a', 'Tyrkysový kruh', 'Značka sedí na barevném kruhu ze <b>stejné rodiny jako avatar vpravo</b> — hlavička má pak dvě souměrné dlaždice. Nic tmavého.'],
+  ['b', 'Mléčný kruh s prstencem', 'Bílý kotouč, tyrkysový prstenec a měkký halo. <b>Nejsvětlejší varianta</b> — nic na kartě neztmavne.'],
+  ['c', 'Jen záře, bez podkladu', 'Žádná dlaždice, jen tyrkysové světlo za logem. <b>Nejvolnější</b>, zato nejméně ostré.'],
+  ['d', 'Tyrkysové sklo, nic pod tím', 'Sklo se jen víc dosytí a ztmaví. <b>Nejmenší zásah</b>, ale kontrast je pořád nejnižší ze všech.'],
+  ['e', 'Bez značky, jen nápis', 'Logo úplně vypadne a zůstane větší <b>ALPHA TRADE</b>. Nejčistší — ale karta přijde o znak, podle kterého ji poznáš z dálky.'],
+  ['f', 'Tmavý čtverec (dnešní stav)', 'Pro srovnání. <b>Tohle se ti nelíbí.</b>'],
+];
+
+document.getElementById('list').innerHTML = OPTIONS.map(([key, name, note]) => `
+  <div class="case"><p><em>${key.toUpperCase()}</em><b>${name}.</b> ${note}</p>${card(key)}</div>`).join('');
+
+/** Náklon a odlesk podle kurzoru — ±6°, stejně jako v appce. */
+for (const wrap of document.querySelectorAll('.tilt')) {
+  const cardEl = wrap.querySelector('.card');
+  wrap.addEventListener('pointermove', event => {
+    const box = wrap.getBoundingClientRect();
+    const px = (event.clientX - box.left) / box.width;
+    const py = (event.clientY - box.top) / box.height;
+    cardEl.style.transition = 'transform .12s linear';
+    cardEl.style.transform = `rotateX(${(0.5 - py) * 6}deg) rotateY(${(px - 0.5) * 6}deg)`;
+    wrap.style.setProperty('--mx', `${px * 100}%`);
+    wrap.style.setProperty('--my', `${py * 100}%`);
+  });
+  wrap.addEventListener('pointerleave', () => {
+    cardEl.style.transition = 'transform .45s cubic-bezier(.22,.61,.36,1)';
+    cardEl.style.transform = '';
+  });
+}
+</script>
+</body>
+</html>

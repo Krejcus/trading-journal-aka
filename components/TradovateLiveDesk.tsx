@@ -111,6 +111,8 @@ import {
 interface TradovateLiveDeskProps {
   journalHistory?: React.ReactNode;
   userId: string;
+  /** Jméno a avatar pro kartu dne; ta se posílá dál, takže nesmí být anonymní. */
+  cardOwner?: { name: string; avatar?: string | null };
   theme: 'dark' | 'light' | 'oled';
   live: TradovateLiveData;
   onCopierJournalRefresh?: (group: CopyGroupConfig | null) => void;
@@ -184,6 +186,7 @@ const LiveDashboardSkeleton = () => (
 const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   journalHistory,
   userId,
+  cardOwner,
   live,
   onCopierJournalRefresh,
   requestedTab = null,
@@ -945,6 +948,7 @@ setAgentStatus((await executeAgent({
             <LiveCopyTradeOverview
               journalHistory={journalHistory}
               userId={userId}
+              owner={cardOwner}
               snapshot={displaySnapshot ?? copyTradeSnapshot}
               accountProfiles={live.profiles}
               orders={copyTradeOrders}

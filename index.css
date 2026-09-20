@@ -2532,3 +2532,660 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
 @media (prefers-reduced-motion: reduce) {
   .live-island-dock { transition: none !important; }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   LIVE → karta dne
+
+   Jazyk přihlašovací stránky: vždy černá (i ve světlém motivu — karta se
+   posílá dál a musí vypadat stejně u každého), běžící světla po obvodu,
+   ultra-průhledné sklo, logo s tyrkysovou září a plovoucí aurora.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Spouštěč v hlavičce. Tichý, dokud na něj nenajedeš — vedle nadpisu sekce
+   nesmí přebíjet „Přidat skupinu“. */
+.live-day-trigger {
+  background: transparent;
+  transition: border-color 0.18s, background 0.18s;
+}
+
+.live-day-trigger:hover {
+  border-color: rgba(34, 211, 238, 0.5);
+  background: rgba(34, 211, 238, 0.06);
+}
+
+/* Jantarová tečka = číslo je dílčí součet. Bez ní by se součet části účtů
+   vydával za celý den. */
+.live-day-partial-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: #f59e0b;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.8);
+}
+
+.live-day-overlay {
+  background: rgba(2, 6, 23, 0.72);
+  backdrop-filter: blur(6px);
+  animation: live-day-fade 0.18s ease both;
+}
+
+@keyframes live-day-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.live-day-tilt { perspective: 1500px; }
+
+.live-day-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+  padding: 1px;
+  background: linear-gradient(140deg, rgba(34, 211, 238, 0.3), rgba(255, 255, 255, 0.05) 38%, rgba(16, 185, 129, 0.22));
+  box-shadow: 0 34px 70px -34px rgba(0, 0, 0, 1);
+  transform-style: preserve-3d;
+  transition: transform 0.35s cubic-bezier(0.22, 0.61, 0.36, 1);
+  will-change: transform;
+}
+
+.live-day-inner {
+  position: relative;
+  overflow: hidden;
+  border-radius: 15px;
+  padding: 24px 26px;
+  color: #fff;
+  background:
+    radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34, 211, 238, 0.13) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 60% at 100% 100%, rgba(16, 185, 129, 0.1) 0%, transparent 60%),
+    #000;
+}
+
+/* Jemná mřížka. Bez ní je černá plocha mrtvá. */
+.live-day-inner::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.016) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.016) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 80% 80% at 50% 0%, #000 40%, transparent 100%);
+}
+
+.live-day-inner > *:not(.live-day-aurora):not(.live-day-edge) {
+  position: relative;
+  z-index: 2;
+}
+
+/* Odlesk sledující kurzor — bez něj působí náklon jako plochý papír. */
+.live-day-sheen {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s;
+  background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 255, 255, 0.06), transparent 60%);
+}
+
+.live-day-tilt:hover .live-day-sheen { opacity: 1; }
+
+.live-day-aurora {
+  position: absolute;
+  top: -150px;
+  left: 50%;
+  width: 820px;
+  height: 320px;
+  pointer-events: none;
+  transform: translateX(-50%);
+  filter: blur(46px);
+  opacity: 0.85;
+  background: radial-gradient(ellipse, rgba(34, 211, 238, 0.16) 0%, transparent 70%);
+  animation: live-day-drift 14s ease-in-out infinite alternate;
+}
+
+@keyframes live-day-drift {
+  from { transform: translateX(-58%) scale(1); }
+  to { transform: translateX(-42%) scale(1.12); }
+}
+
+.live-day-edge { position: absolute; pointer-events: none; }
+
+.live-day-edge-t {
+  top: 0; left: 0; height: 2px; width: 55%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.85), transparent);
+  animation: live-day-run-x 3.4s linear infinite;
+}
+
+.live-day-edge-b {
+  bottom: 0; right: 0; height: 2px; width: 55%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.85), transparent);
+  animation: live-day-run-xr 3.4s linear infinite;
+  animation-delay: 0.6s;
+}
+
+.live-day-edge-r {
+  top: 0; right: 0; width: 2px; height: 55%;
+  background: linear-gradient(180deg, transparent, rgba(34, 211, 238, 0.9), transparent);
+  animation: live-day-run-y 3.4s linear infinite;
+  animation-delay: 1.7s;
+}
+
+.live-day-edge-l {
+  bottom: 0; left: 0; width: 2px; height: 55%;
+  background: linear-gradient(180deg, transparent, rgba(34, 211, 238, 0.9), transparent);
+  animation: live-day-run-yr 3.4s linear infinite;
+  animation-delay: 2.3s;
+}
+
+@keyframes live-day-run-x { from { left: -55%; } to { left: 100%; } }
+@keyframes live-day-run-xr { from { right: -55%; } to { right: 100%; } }
+@keyframes live-day-run-y { from { top: -55%; } to { top: 100%; } }
+@keyframes live-day-run-yr { from { bottom: -55%; } to { bottom: 100%; } }
+
+/* hlavička karty */
+.live-day-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.live-day-brand { display: flex; align-items: center; gap: 13px; }
+
+.live-day-brand img {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 22px rgba(45, 212, 191, 0.65));
+}
+
+.live-day-wordmark {
+  font-size: 12.5px;
+  font-weight: 200;
+  letter-spacing: 0.44em;
+  text-transform: uppercase;
+  background: linear-gradient(180deg, #fff, rgba(255, 255, 255, 0.62));
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}
+
+.live-day-wordmark i {
+  font-style: normal;
+  font-weight: 500;
+  color: #22d3ee;
+  -webkit-text-fill-color: #22d3ee;
+}
+
+/* Bez avataru a jména se z karty nepozná, komu den patří — a posílá se dál. */
+.live-day-stamp { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.live-day-owner { display: flex; align-items: center; gap: 10px; min-width: 0; }
+
+.live-day-avatar,
+.live-day-avatar-img {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  flex: none;
+  object-fit: cover;
+}
+
+.live-day-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11.5px;
+  font-weight: 800;
+  color: #04121a;
+  background: linear-gradient(145deg, #67e8f9, #10b981);
+  box-shadow: 0 0 18px rgba(34, 211, 238, 0.28);
+}
+
+.live-day-who {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+/* Inter s tabular-nums: monospace kreslí přeškrtnutou nulu, která v datu ruší. */
+.live-day-date {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* tělo */
+.live-day-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+
+@media (min-width: 720px) {
+  .live-day-body { grid-template-columns: minmax(272px, 336px) 1fr; }
+}
+
+.live-day-glass {
+  border-radius: 19px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.028);
+  backdrop-filter: blur(28px);
+}
+
+.live-day-total {
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.live-day-k {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Inter s tabular-nums, ne monospace: SF Mono kreslí přeškrtnutou nulu, která
+   ve velkém čísle ruší nejvíc. `tabular-nums` drží číslice stejně široké,
+   takže se dopočítávaná částka při animaci neroztřese. */
+.live-day-big {
+  margin-top: 12px;
+  font-size: 48px;
+  /* Inter je načtený jen v 300/400/500/700/900 — cokoli nad 500 spadne na 700
+     a při 48 px je z toho kvádr. 300 je nejlehčí dostupný řez a v tomhle
+     stupni pořád čitelný. */
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+}
+
+.live-day-note {
+  margin: 10px 0 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: rgba(251, 191, 36, 0.85);
+}
+
+.live-day-split {
+  display: flex;
+  gap: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.live-day-split > div { flex: 1; }
+
+.live-day-kk {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.38);
+}
+
+.live-day-vv {
+  margin-top: 4px;
+  font-size: 16px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.live-day-slash { color: rgba(255, 255, 255, 0.3); }
+
+/* Soupis se nerozpadá do sloupců, jen scrolluje — stejně jako tabulka účtů
+   na LIVE. Karta má pak stejnou výšku, ať máš šest účtů nebo dvacet. */
+.live-day-list { overflow: hidden; display: flex; flex-direction: column; }
+
+.live-day-rows {
+  display: block;
+  max-height: 232px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.live-day-rows::-webkit-scrollbar { width: 9px; }
+
+.live-day-rows::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+
+.live-day-rows:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  background-clip: padding-box;
+}
+
+.live-day-lhead {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 10px 18px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.36);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.live-day-lhead span:last-child { text-align: right; }
+
+.live-day-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  transition: background 0.18s;
+  opacity: 0;
+  animation: live-day-rowin 0.42s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+
+.live-day-row:last-child { border-bottom: 0; }
+.live-day-row:hover { background: rgba(255, 255, 255, 0.035); }
+
+@keyframes live-day-rowin {
+  from { opacity: 0; transform: translateX(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+.live-day-who-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+
+.live-day-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex: none;
+}
+
+.live-day-logo {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  flex: none;
+  object-fit: cover;
+  background: #fff;
+}
+
+.live-day-mono {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 7px;
+  font-weight: 900;
+  color: #fff;
+}
+
+/* Zkracovat se má název účtu, ne se ztratit: bez `flex: 0 1 auto` a `min-width`
+   si nezlomitelný název firmy vzal celou šířku a ze jména zbylo jedno písmeno. */
+.live-day-nm {
+  flex: 0 1 auto;
+  min-width: 2.5em;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.live-day-fm {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgba(255, 255, 255, 0.34);
+}
+
+.live-day-val {
+  flex: none;
+  font-size: 12.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.live-day-empty {
+  margin: 0;
+  padding: 26px 18px;
+  text-align: center;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.42);
+}
+
+/* Kolik účtů zbývá pod okrajem. Mizí, jakmile doscrolluješ na konec. */
+.live-day-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 27px;
+  padding: 7px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.4);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  transition: opacity 0.2s;
+}
+
+.live-day-more-hidden { opacity: 0; }
+
+.live-day-win { color: #22c55e; }
+.live-day-loss { color: #f87171; }
+.live-day-flat { color: rgba(255, 255, 255, 0.42); }
+
+@media (prefers-reduced-motion: reduce) {
+  .live-day-aurora,
+  .live-day-edge,
+  .live-day-overlay { animation: none; }
+  .live-day-row { animation: none; opacity: 1; }
+  .live-day-card { transition: none; }
+}
+
+/* Na telefonu se hlavička karty nesmí lámat na tři řádky: prostrkání
+   loga i jméno se zkrátí, karta zůstane jedna kompozice. */
+@media (max-width: 480px) {
+  .live-day-inner { padding: 18px 16px; }
+  .live-day-head { gap: 10px; margin-bottom: 16px; }
+  .live-day-brand { gap: 9px; }
+  .live-day-brand img { width: 34px; height: 34px; }
+  .live-day-wordmark { font-size: 10px; letter-spacing: 0.18em; }
+  .live-day-who,
+  .live-day-date { white-space: nowrap; }
+  .live-day-date { font-size: 10.5px; }
+  .live-day-big { font-size: 40px; }
+  .live-day-total { padding: 18px 18px; gap: 16px; }
+  .live-day-stamp { gap: 8px; }
+  .live-day-close { width: 26px; height: 26px; border-radius: 8px; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Karta dne — světlý režim
+
+   Karta není jen „černá naruby“: na bílé nefunguje nic, co svítí. Běžící
+   světla po obvodu musí ztmavnout (bílá na bílé není vidět), odlesk se obrací
+   na bílý horký bod nad tónovaným podkladem a logo je skleněné a světlé, takže
+   se musí ztmavit filtrem. Zbytek (náklon, dopočítávání čísla, počítadlo
+   skrytých účtů) je na barvách nezávislý a platí pro oba režimy.
+   `.oled-theme` je tmavé téma, takže spadá pod výchozí styl.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.light-theme .live-day-overlay {
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.light-theme .live-day-card {
+  background: linear-gradient(140deg, rgba(8, 145, 178, 0.5), rgba(15, 23, 42, 0.1) 38%, rgba(16, 185, 129, 0.38));
+  box-shadow: 0 34px 70px -34px rgba(15, 23, 42, 0.45);
+}
+
+/* Vinětace místo mřížky: na bílé byla čtverečkovaná textura vidět a rušila.
+   Ztmavené okraje drží pohled ve středu a zároveň dají odlesku co rozsvěcet —
+   nad čistě bílou plochou by nebyl vidět vůbec. První vrstva = nejvýš. */
+.light-theme .live-day-inner {
+  color: #0f172a;
+  background:
+    radial-gradient(ellipse 100% 100% at 50% 45%, transparent 40%, rgba(15, 23, 42, 0.07) 100%),
+    radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34, 211, 238, 0.2) 0%, transparent 62%),
+    radial-gradient(ellipse 60% 60% at 100% 100%, rgba(16, 185, 129, 0.16) 0%, transparent 62%),
+    #fbfdff;
+}
+
+.light-theme .live-day-inner::before { background-image: none; }
+
+.light-theme .live-day-sheen {
+  background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 255, 255, 0.9), transparent 62%);
+}
+
+.light-theme .live-day-aurora {
+  opacity: 0.7;
+  background: radial-gradient(ellipse, rgba(34, 211, 238, 0.3) 0%, transparent 70%);
+}
+
+/* Jedna barva po všech čtyřech stranách. Tmavá vodorovná stopa vypadala na
+   bílé jako dvě různé animace; tyrkysová se neztratí a nekřičí. */
+.light-theme .live-day-edge-t,
+.light-theme .live-day-edge-b {
+  background: linear-gradient(90deg, transparent, rgba(6, 182, 212, 0.95), transparent);
+}
+
+.light-theme .live-day-edge-r,
+.light-theme .live-day-edge-l {
+  background: linear-gradient(180deg, transparent, rgba(6, 182, 212, 0.95), transparent);
+}
+
+/* Logo zůstává stejný soubor jako v tmavém režimu, jen se dosytí a ztmaví —
+   žádná dlaždice pod tím. Sklo si tak udrží plastičnost a hlavička zůstane
+   vzdušná; je to z porovnávaných variant nejmenší zásah do značky.
+   `contrast` je tam kvůli vnitřku loga: ten je taky světlý, takže bez něj
+   splyne se svým vlastním obrysem. */
+.light-theme .live-day-brand img {
+  filter: saturate(3.2) brightness(0.72) contrast(1.15) drop-shadow(0 3px 7px rgba(15, 23, 42, 0.28));
+}
+
+/* `background-image`, ne zkratka `background` — ta by shodila `background-clip:
+   text` z výchozího pravidla a z nápisu by byl plný obdélník. */
+.light-theme .live-day-wordmark {
+  background-image: linear-gradient(180deg, #0f172a, rgba(15, 23, 42, 0.6));
+}
+
+.light-theme .live-day-wordmark i {
+  color: #0891b2;
+  -webkit-text-fill-color: #0891b2;
+}
+
+.light-theme .live-day-avatar {
+  color: #04121a;
+  box-shadow: 0 2px 12px rgba(13, 148, 136, 0.3);
+}
+
+.light-theme .live-day-who { color: #0f172a; }
+.light-theme .live-day-date { color: rgba(15, 23, 42, 0.52); }
+
+.light-theme .live-day-glass {
+  border-color: rgba(15, 23, 42, 0.09);
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.light-theme .live-day-k { color: rgba(15, 23, 42, 0.55); }
+.light-theme .live-day-kk { color: rgba(15, 23, 42, 0.45); }
+.light-theme .live-day-note { color: #b45309; }
+.light-theme .live-day-split { border-top-color: rgba(15, 23, 42, 0.09); }
+.light-theme .live-day-slash { color: rgba(15, 23, 42, 0.32); }
+
+.light-theme .live-day-lhead {
+  color: rgba(15, 23, 42, 0.45);
+  border-bottom-color: rgba(15, 23, 42, 0.08);
+}
+
+.light-theme .live-day-row { border-bottom-color: rgba(15, 23, 42, 0.06); }
+.light-theme .live-day-row:hover { background: rgba(15, 23, 42, 0.035); }
+.light-theme .live-day-fm { color: rgba(15, 23, 42, 0.45); }
+.light-theme .live-day-empty { color: rgba(15, 23, 42, 0.45); }
+
+.light-theme .live-day-logo { background: #fff; border: 1px solid rgba(15, 23, 42, 0.08); }
+
+.light-theme .live-day-more {
+  color: rgba(15, 23, 42, 0.45);
+  border-top-color: rgba(15, 23, 42, 0.07);
+}
+
+.light-theme .live-day-rows::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.18);
+  background-clip: padding-box;
+}
+
+.light-theme .live-day-rows:hover::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.3);
+  background-clip: padding-box;
+}
+
+/* Emerald 500 / rose 400 jsou na bílé nedočtitelné — o dva stupně tmavší. */
+.light-theme .live-day-win { color: #15803d; }
+.light-theme .live-day-loss { color: #be123c; }
+.light-theme .live-day-flat { color: rgba(15, 23, 42, 0.45); }
+
+/* Zavírací tlačítko je uvnitř karty, ne přilepené na roh: na scrimu působilo
+   jako cizí prvek. Místo v hlavičce si drží pořád (`opacity`, ne `display`),
+   takže se při najetí nic neposune. Bez hoveru — dotykové zařízení — svítí
+   trvale, jinak by se karta nedala zavřít jinak než klepnutím vedle. */
+.live-day-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  opacity: 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.55);
+  transition: opacity 0.2s, color 0.16s, border-color 0.16s, background 0.16s;
+}
+
+.live-day-tilt:hover .live-day-close,
+.live-day-close:focus-visible {
+  opacity: 1;
+}
+
+.live-day-close:hover {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+@media (hover: none) {
+  .live-day-close { opacity: 1; }
+}
+
+.light-theme .live-day-close {
+  border-color: rgba(15, 23, 42, 0.1);
+  background: rgba(15, 23, 42, 0.03);
+  color: rgba(15, 23, 42, 0.5);
+}
+
+.light-theme .live-day-close:hover {
+  color: #0f172a;
+  border-color: rgba(15, 23, 42, 0.22);
+  background: rgba(15, 23, 42, 0.07);
+}

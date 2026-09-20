@@ -208,6 +208,68 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-20 — Karta dne v LIVE + spouštěč v hlavičce (Claude)
+
+Chyběl denní souhrn napříč účty, který konkurence má. Průzkum: Tradesyncer
+má v „Cockpitu“ jen tenký textový proužek pod lištou akcí (`Total Day PnL |
+Total Open PnL | Total Balance`, vpravo `Open Positions`) — vždy vidět,
+nekliknutelný; hezkou kartu mají až v Journalu (kalendář, denní sloupcový
+graf) a v Prop Firm Trackeru. My to spojili: **hodnota je vidět pořád a
+zároveň je to vstup do karty**.
+
+- `lib/liveDaySummary.ts` (+10 testů): sečte `liveDailyPnlDisplay` přes
+  `snapshot.accounts`, seřadí od nejlepšího, nepotvrzené účty dá nakonec.
+- Rozhodnutí: NEpoužívá `liveGroupDailyPnlDisplay`, který vrací null, jakmile
+  chybí jediný účet. U dvaceti účtů by karta nikdy nic neukázala. Místo toho
+  `confirmed` = součet potvrzených + `partial`/`confirmedCount`, a UI to
+  **řekne nahlas** (jantarová tečka u spouštěče, věta „Sečteno z N z M účtů“
+  na kartě). Dílčí součet s uvedeným jmenovatelem není odhad. Žádný
+  potvrzený účet → `null` a pomlčka, nikdy nula.
+- `components/LiveDayCard.tsx` (+11 render testů): karta v jazyce
+  přihlašovací stránky (vždy černá, běžící světla po obvodu, sklo blur 28px,
+  aurora, náklon ±6° a odlesk podle kurzoru, dopočítávané číslo). Vlevo
+  dlaždice s dnešním P&L + Obchodů/Win-Loss, vpravo scrollující soupis účtů
+  s počítadlem „+ N účtů“. Obchodů/Win-Loss jde z leader-only
+  `dailyStats`; bez běžícího runtime pomlčka, nedopočítává se z účtů.
+- Spouštěč = varianta 2 z návrhů (popisek + číslo + šipka) vedle nadpisu
+  „Kopírovací skupiny“. Win/Loss z něj vypadl — poměr je hned v kartě.
+- Jméno a avatar na kartu tečou z `App.tsx` přes `cardOwner`; karta se posílá
+  dál, anonymní být nesmí.
+- Sdílení karty jako obrázek zatím ZÁMĚRNĚ není (uživatel odložil). Tlačítko
+  raději chybí, než aby nedělalo nic.
+- Světlý režim karty (`.light-theme .live-day-*`): není to černá naruby. Na
+  bílé nefunguje nic, co svítí. Vybráno z `mockups/day-card-light.html`
+  (4 pozadí × 5 variant okrajů × 3 loga):
+  - **pozadí = vinětace** místo mřížky. Čtverečkovaná textura byla na bílé
+    vidět a rušila; ztmavené okraje navíc dají odlesku co rozsvěcet, nad
+    čistě bílou plochou by nebyl vidět vůbec.
+  - **okraje = tyrkysová po všech čtyřech.** Tmavá vodorovná stopa vypadala
+    na bílé jako dvě různé animace.
+  - **logo = stejný soubor, jen dosycený a ztmavený** filtrem
+    `saturate(3.2) brightness(.72) contrast(1.15)`, bez jakékoli dlaždice pod
+    sebou (varianta D z `mockups/day-card-light-logo.html`). `contrast` tam
+    musí být: vnitřek loga je taky světlý a bez něj splyne s vlastním obrysem.
+    Cesta sem vedla přes dva zamítnuté pokusy — plná černá (uživatel chce
+    logo světlé) a tmavý čip pod logem (vypadal jako záplata).
+  `.oled-theme` je tmavé téma, spadá pod výchozí styl. Past, která tam byla:
+  zkratka `background` v override shodila `background-clip: text` a z nápisu
+  „ALPHA“ byl plný obdélník — nutné `background-image`.
+- Čísla na kartě nejsou monospace, ale Inter s `tabular-nums`: SF Mono kreslí
+  přeškrtnutou nulu. Tím zároveň padl hack `word-spacing: -0.34em`, kterým se
+  stahoval oddělovač tisíců — v monospace zabíral celé pole, v Interu je
+  správně široký sám o sobě. POZOR na řezy: `index.html` načítá Inter jen
+  v 300/400/500/700/900, takže napsat 600 znamená vykreslit 700. Velké číslo
+  je proto 300 (nejlehčí dostupný), zbytek 500.
+- Zavírací křížek je uvnitř karty vedle jména, ne přilepený na rohu scrimu;
+  naběhne až při najetí na kartu (`opacity`, ne `display`, aby se nic
+  neposunulo) a na dotykovém zařízení (`@media (hover: none)`) svítí trvale.
+- Ověřeno v `copytrade-preview.html` (rozšířen na 20 účtů) v prohlížeči:
+  desktop i 375px, světlé i tmavé téma, Escape zavírá, počítadlo mizí na
+  konci seznamu. Dvě chyby nalezené a opravené až tam: oddělovač tisíců
+  v monospace zabíral celé pole (`+$2  906`) a název účtu se v úzkém sloupci
+  ořízl na jedno písmeno.
+- 424 souborů / 3870 testů, typecheck i lint čisté.
+
 ### 2026-09-17 — Proč včerejší obchody nemají screenshoty (Claude, jen analýza)
 
 Uživatel: část obchodů z 16. 9. je v historii bez screenshotu. Nález (bez

@@ -14,7 +14,17 @@ const account = (id: number, name: string, firm: string, balance: number): LiveA
   cushion: balance - 48_000, positions: [], updatedAt: new Date().toISOString(),
   mapRowId: null, mappedAccountId: null, mappedAccountName: null, mappingStatus: null,
 });
-const accounts = [account(101, 'Tradeify · leader', 'Tradeify', 48_046.18), account(102, 'Lucid · follower', 'Lucid', 49_300)];
+// Ukázkové portfolio: dvě účty ve skupině + zbytek jen pro denní přehled,
+// ať je na kartě dne vidět i posuvník a počítadlo skrytých účtů.
+const DAY_PNL = [412, -64, 388, 91, -145, 507, 33, -22, 264, 118, -97, 441, 76, 159, -210, 88, 305, 47];
+const accounts = [
+  { ...account(101, 'FTDFYG50511354175', 'Tradeify', 48_046.18), realizedPnl: 610 },
+  { ...account(102, 'LFF05066846490007', 'Lucid', 49_300), realizedPnl: -95 },
+  ...DAY_PNL.map((pnl, index) => ({
+    ...account(200 + index, `TDF${String(8_206 + index).padStart(8, '0')}`, index % 3 === 0 ? 'Apex' : 'Tradeify', 50_000 + pnl),
+    realizedPnl: pnl,
+  })),
+];
 const snapshot: LiveSnapshot = {
   run: null, accounts, appAccounts: [], alerts: [],
   connections: accounts.map(a => ({ id: a.firm, firm: a.firm, connected: true, status: 'Connected', accountCount: 1, disconnectedAt: null, disconnectReason: null, updatedAt: new Date().toISOString() })),
@@ -38,7 +48,7 @@ function Preview() {
     divergentAccounts: [], workingOrderAccounts: [], stuckOutbox: false, stuckOperations: [], lastError: scenario === 'offline' ? 'Tradovate WebSocket transport error' : null,
     revision: 1, lastSequence: 0, groupFlat: true, dayLockUntil: 0, sessionArmedAt: 0,
     pause: scenario === 'paused' ? { until: now + 20 * 60_000, rule: 'daily-loss', at: now } : null,
-    dailyStats: { label: 'Leader · jen obchody přes kopírku · bez poplatků', sessionEndAt: now + 3_600_000, realizedPnlUsd: 0, losingTrades: 0, tradesToday: 0, windowState: 'off', warnedRules: [], recentClosedTrades: [], unpricedSymbols: [] },
+    dailyStats: { label: 'Leader · jen obchody přes kopírku · bez poplatků', sessionEndAt: now + 3_600_000, realizedPnlUsd: 0, losingTrades: 2, tradesToday: 7, windowState: 'off', warnedRules: [], recentClosedTrades: [], unpricedSymbols: [] },
   };
   const available = scenario !== 'unknown';
   const supported = scenario !== 'legacy';
@@ -53,6 +63,7 @@ function Preview() {
     <LiveStatusStrip status={status} available={available} pending={false} transport="local" />
     {notice && <p className="text-xs text-indigo-500">{notice}</p>}
     {tab === 'overview' ? <LiveCopyTradeOverview key={scenario} snapshot={snapshot} runtimeGroup={group} executionGroupId={group.id}
+      owner={{ name: 'Filip Krejča' }}
       runtimeStatus={status} runtimeAvailable={available} riskConfigSupported={supported} copierArmed={status.armed}
       copierStatusPending={!available} dailyStats={status.dailyStats} pause={status.pause} onOpenRisk={() => setTab('risk')} />
       : <LiveRiskTab snapshot={snapshot} group={group} status={status} runtimeAvailable={available} riskConfigSupported={supported}
