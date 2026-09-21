@@ -20,17 +20,53 @@ const tokenFromRequest = (req: VercelRequest): string => {
   return String(Array.isArray(raw) ? raw[0] ?? '' : raw ?? '').trim();
 };
 
+/**
+ * Odkaz otevírá člověk, ne stroj: holý `{"error":...}` je pro příjemce
+ * nečitelný. Stroji (og crawler, appka s `?format=json`) zůstává JSON.
+ */
+const wantsJson = (req: VercelRequest): boolean =>
+  req.query?.format === 'json' || String(req.headers.accept ?? '').includes('application/json');
+
+const problemPage = (res: VercelResponse, status: number, heading: string, detail: string) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  return res.status(status).send(`<!doctype html>
+<html lang="cs"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="robots" content="noindex,nofollow" />
+<title>${escapeHtml(heading)} | AlphaTrade</title>
+<style>body{margin:0;background:#020617;color:#fff;font-family:Inter,-apple-system,sans-serif;
+display:grid;min-height:100vh;place-items:center;text-align:center;padding:24px}
+h1{font-size:20px;font-weight:900;margin:18px 0 8px}p{margin:0;font-size:13px;color:#94a3b8;max-width:38ch;line-height:1.6}
+img{width:64px;height:64px;object-fit:contain}</style></head>
+<body><div><img src="/logos/at_logo_light_clean.png" alt="AlphaTrade" />
+<h1>${escapeHtml(heading)}</h1><p>${escapeHtml(detail)}</p></div></body></html>`);
+};
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'method-not-allowed' });
   const token = tokenFromRequest(req);
-  if (!LIVE_DAY_SHARE_TOKEN_PATTERN.test(token)) return res.status(400).json({ error: 'invalid-share-token' });
+  if (!LIVE_DAY_SHARE_TOKEN_PATTERN.test(token)) {
+    return wantsJson(req)
+      ? res.status(400).json({ error: 'invalid-share-token' })
+      // Nejčastější příčina: k odkazu se při vložení do zprávy přilepila
+      // tečka nebo závorka, takže token v adrese už není platné UUID.
+      : problemPage(res, 400, 'Odkaz je poškozený',
+          'Adresa nevypadá jako platný odkaz na kartu dne. Nejspíš se k ní na konci přilepil znak navíc — zkus ji zkopírovat znovu, celou a bez interpunkce.');
+  }
 
   try {
     const row = await readPublicLiveDayShareRow(createLiveDayShareAdminClient(), token);
     const snapshot = row ? publicLiveDayShareFromRow(row) : null;
-    if (!row || !snapshot) return res.status(404).json({ error: 'share-not-found' });
+    if (!row || !snapshot) {
+      return wantsJson(req)
+        ? res.status(404).json({ error: 'share-not-found' })
+        : problemPage(res, 404, 'Tato karta už není dostupná',
+            'Odkaz je neplatný nebo jej autor zneplatnil.');
+    }
 
-    if (req.query?.format === 'json' || String(req.headers.accept ?? '').includes('application/json')) {
+    if (wantsJson(req)) {
       res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=60');
       return res.status(200).json(snapshot);
     }

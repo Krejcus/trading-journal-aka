@@ -208,6 +208,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-21 — „invalid share token“ u sdílené karty (Claude)
+
+Uživatel hlásil, že po otevření odkazu dostane `invalid share token`, a ptal
+se, jestli se mu odkazy nemíchají. Nemíchají — každý nese vlastní snapshot.
+Ověřeno na produkci: všech pět dnešních odkazů má platný token a vrací 200
+na HTML, JSON i náhledový obrázek; v úložišti nejsou žádné osiřelé náhledy,
+takže žádné vytvoření neselhalo v půlce.
+
+Příčinu našlo až zkoušení tvarů adresy:
+
+    /day/<token>    → 200
+    /day/<token>.   → 400 {"error":"invalid-share-token"}
+    /day/<token>/   → 404 (obecná stránka Vercelu)
+
+Ke zkopírovanému odkazu se ve zprávě přilepí tečka nebo závorka a token
+přestane být platné UUID. To samo o sobě je správné chování; špatné bylo, co
+u toho appka ukázala — **holý JSON, který vidí i příjemce odkazu**.
+
+Endpoint teď rozlišuje, kdo se ptá: stroj (og crawler, appka přes `?format=json`
+nebo `Accept: application/json`) dostane dál JSON, člověk čitelnou stránku
+„Odkaz je poškozený“ s radou zkopírovat adresu znovu. Totéž pro neexistující
+nebo zneplatněný odkaz místo `{"error":"share-not-found"}`. Přibyl rewrite pro
+`/day/:token/`, aby koncové lomítko nekončilo na obecné 404 Vercelu.
+
 ### 2026-09-21 — Na kartě dne svítil cizí demo účet (Claude)
 
 Uživatel na sdílené kartě našel účet `PTLOP1748077962`, který nezná. Dohledáno

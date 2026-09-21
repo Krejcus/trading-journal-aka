@@ -70,6 +70,33 @@ describe('LIVE day share endpoint', () => {
     expect(html).toContain('630');
   });
 
+  it('člověku ukáže čitelnou stránku místo holého JSONu', async () => {
+    // Nejčastější příčina: k odkazu se ve zprávě přilepila tečka, takže token
+    // v adrese přestal být platné UUID. Příjemce nesmí skončit na {"error":…}.
+    const damaged = responseHarness();
+    await handler(request({ token: `${token}.` }), damaged.res);
+    expect(damaged.status()).toBe(400);
+    const page = String(damaged.body());
+    expect(page).toContain('Odkaz je poškozený');
+    expect(page).not.toContain('invalid-share-token');
+    expect(damaged.headers.get('Content-Type')).toContain('text/html');
+    expect(store.readPublicLiveDayShareRow).not.toHaveBeenCalled();
+
+    store.readPublicLiveDayShareRow.mockResolvedValueOnce(null);
+    store.publicLiveDayShareFromRow.mockReturnValueOnce(null);
+    const gone = responseHarness();
+    await handler(request({ token }), gone.res);
+    expect(gone.status()).toBe(404);
+    expect(String(gone.body())).toContain('Tato karta už není dostupná');
+  });
+
+  it('stroji zůstává JSON — crawler i appka se ptají přes Accept/format', async () => {
+    const harness = responseHarness();
+    await handler(request({ token: `${token}.` }, 'application/json'), harness.res);
+    expect(harness.status()).toBe(400);
+    expect(harness.body()).toEqual({ error: 'invalid-share-token' });
+  });
+
   it('rejects guessed paths and missing shares without querying private data', async () => {
     const invalid = responseHarness();
     await handler(request({ token: '../private' }, 'application/json'), invalid.res);

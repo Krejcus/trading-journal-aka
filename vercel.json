@@ -30,6 +30,10 @@
         {
             "source": "/day/:token",
             "destination": "/api/live-day-share/:token"
+        },
+        {
+            "source": "/day/:token/",
+            "destination": "/api/live-day-share/:token"
         }
     ]
 }
