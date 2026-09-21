@@ -207,6 +207,20 @@ describe('LIVE kompaktní karty (telefon)', () => {
     expect(markup).toContain('Leader DEMO');
   });
 
+  it('karta dne počítá jen účty ze skupin, ne demo účty z OAuth snapshotu', async () => {
+    const { LiveCopyTradeOverview } = await import('../components/LiveCopyTradeOverview');
+    // Demo účet, který chodí s Tradovate přihlášením a v žádné skupině není.
+    const withDemo: LiveSnapshot = {
+      ...snapshot,
+      accounts: [...snapshot.accounts, { ...liveAccount(66_424_940, 'PTLOP1748077962'), realizedPnl: 900 }],
+    };
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, { snapshot: withDemo, orders: [] }));
+    // Skupina má dva účty; demo do součtu ani do soupisu nepatří.
+    expect(markup).not.toContain('PTLOP1748077962');
+    expect(markup).toContain('−$225');
+    expect(markup).not.toContain('+$675');
+  });
+
   it('desktop bez úzkého viewportu dál vykresluje tabulku', async () => {
     vi.doMock('../utils/useCompactViewport', () => ({ useCompactViewport: () => false }));
     vi.resetModules();

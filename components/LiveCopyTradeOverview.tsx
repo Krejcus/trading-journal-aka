@@ -824,9 +824,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     () => new Map(snapshot.accounts.map(a => [a.id, a])),
     [snapshot.accounts],
   );
-  // Den se počítá při každém renderu jako u řádků skupin: `Date.now()` v memo
-  // by zamrzlo a potvrzená hodnota by nikdy nezestárla.
-  const daySummary = buildLiveDaySummary(snapshot.accounts, Date.now(), dailyPnlPending);
   const profilesById = useMemo(() => {
     const next = new Map<number, TradovateAccountProfile>();
     for (const profile of accountProfiles) {
@@ -846,6 +843,20 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     runtimeGroup?.leaderAccountId,
     ...(runtimeGroup?.followers.map(follower => follower.accountId) ?? []),
   ].filter((accountId): accountId is number => accountId != null))], [groups, runtimeGroup]);
+  // Karta dne počítá JEN účty z kopírovacích skupin, ne celý OAuth snapshot.
+  // Ten totiž nese i demo účty, které chodí s Tradovate přihlášením — na kartě
+  // se pak objevil účet, o kterém uživatel ani nevěděl, a šel ven i ve
+  // veřejném odkazu. `LiveAccount` si prostředí nenese, takže se demo nedá
+  // odfiltrovat přímo; členství ve skupině je zároveň přesnější odpověď na
+  // otázku „které účty vlastně provozuju“.
+  const dayAccounts = useMemo(() => {
+    const wanted = new Set(knownAccountIds);
+    return snapshot.accounts.filter(account => wanted.has(account.id));
+  }, [knownAccountIds, snapshot.accounts]);
+  // Den se počítá při každém renderu jako u řádků skupin: `Date.now()` v memo
+  // by zamrzlo a potvrzená hodnota by nikdy nezestárla.
+  const daySummary = buildLiveDaySummary(dayAccounts, Date.now(), dailyPnlPending);
+
   const rulesGroup = runtimeGroup
     ?? groups.find(group => group.id === executionGroupId)
     ?? groups[0]

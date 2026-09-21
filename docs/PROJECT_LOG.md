@@ -208,6 +208,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-21 — Na kartě dne svítil cizí demo účet (Claude)
+
+Uživatel na sdílené kartě našel účet `PTLOP1748077962`, který nezná. Dohledáno
+v produkční DB: `environment = demo`, profil bez propky, typu i plánu — je to
+demo účet, který chodí s Tradovate přihlášením. „Tradovate“ u něj nebyl název
+firmy, ale náhrada, když se žádná neodvodí.
+
+Příčina byla v mém původním rozhodnutí: `buildLiveDaySummary` sčítal
+`snapshot.accounts`, tedy VŠECHNO, co OAuth připojení vidí. Zdůvodnil jsem to
+tehdy „úplným obrazem dne“, jenže snapshot nese i demo účty — a ty pak šly ven
+i ve veřejném odkazu.
+
+Karta teď počítá jen účty z kopírovacích skupin (`knownAccountIds`: leadeři
+i followeři napříč všemi skupinami včetně těch s `mode: off`, plus runtime
+skupina). Demo se tím odfiltruje samo. Přímo podle prostředí to nejde —
+`LiveAccount` si `environment` nenese — a členství ve skupině je stejně
+přesnější odpověď na otázku, které účty uživatel provozuje.
+
+Důsledek, který nejde vzít zpět: **odkazy vytvořené dřív ten demo účet
+obsahují**, protože snapshot je neměnný. Zneplatnit odkaz zatím z appky nejde
+(schéma i endpoint `revoked_at` mají, UI ne) — tohle je konkrétní důvod to
+dodělat.
+
 ### 2026-09-21 — Vizuální doladění karty dne a sdílení (Claude)
 
 Codex postavil sdílení karty dne (veřejný odkaz `/day/<token>`, redigovaný
