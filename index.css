@@ -2869,6 +2869,20 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
   background-clip: padding-box;
 }
 
+/* Export do PNG kreslí i posuvník — v tmavém motivu se do obrázku zapekl bílý
+   pruh přes celou výšku seznamu. Ořez už hlásí patička „+ N účtů“, takže
+   posuvník ve snímku nic nenese. */
+.live-day-capture .live-day-rows {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.live-day-capture .live-day-rows::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
 .live-day-lhead {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3234,4 +3248,161 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
   .live-accounts-more { transition: none; }
   .live-accounts-more li { animation: none; transition: none; }
   .live-accounts-more[data-open='false'] li { opacity: 1; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Karta dne → sdílení
+
+   Ikona je stejně tichá jako zavírací křížek vedle ní: karta má i po
+   odeslání držet kompozici, kterou posíláš dál, takže ovládání nesmí být
+   samostatná lišta pod ní. Bublina se stavy je `absolute`, aby se karta
+   při jejím otevření nikam neposunula.
+   ───────────────────────────────────────────────────────────────────────── */
+.live-day-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.55);
+  transition: opacity 0.2s, color 0.16s, border-color 0.16s, background 0.16s;
+}
+
+.live-day-ghost:hover:not(:disabled) {
+  color: #22d3ee;
+  border-color: rgba(34, 211, 238, 0.45);
+  background: rgba(34, 211, 238, 0.1);
+}
+
+.live-day-ghost:disabled { cursor: progress; }
+
+.light-theme .live-day-ghost {
+  border-color: rgba(15, 23, 42, 0.1);
+  background: rgba(15, 23, 42, 0.03);
+  color: rgba(15, 23, 42, 0.5);
+}
+
+.light-theme .live-day-ghost:hover:not(:disabled) {
+  color: #0891b2;
+  border-color: rgba(8, 145, 178, 0.45);
+  background: rgba(8, 145, 178, 0.09);
+}
+
+.live-day-sharepop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 5;
+  width: max-content;
+  max-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(8, 12, 22, 0.96);
+  box-shadow: 0 20px 44px -18px rgba(0, 0, 0, 0.9);
+  animation: live-day-sharepop-in 0.14s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+@keyframes live-day-sharepop-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.light-theme .live-day-sharepop {
+  border-color: rgba(15, 23, 42, 0.1);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 20px 44px -18px rgba(15, 23, 42, 0.45);
+}
+
+.live-day-sharepop-main,
+.live-day-sharepop-alt {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 800;
+  white-space: nowrap;
+  transition: background 0.16s, color 0.16s;
+}
+
+.live-day-sharepop-main {
+  color: #04121a;
+  background: linear-gradient(140deg, #22d3ee, #10b981);
+}
+
+.live-day-sharepop-main:hover { filter: brightness(1.07); }
+
+.live-day-sharepop-alt {
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.live-day-sharepop-alt:hover { color: #fff; background: rgba(255, 255, 255, 0.11); }
+
+.light-theme .live-day-sharepop-alt {
+  color: rgba(15, 23, 42, 0.65);
+  background: rgba(15, 23, 42, 0.05);
+}
+
+.light-theme .live-day-sharepop-alt:hover { color: #0f172a; background: rgba(15, 23, 42, 0.1); }
+
+.live-day-sharepop-note {
+  margin: 0;
+  padding: 0 4px 2px;
+  font-size: 10px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.light-theme .live-day-sharepop-note { color: rgba(15, 23, 42, 0.55); }
+
+@media (prefers-reduced-motion: reduce) {
+  .live-day-sharepop { animation: none; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Karta dne → prosvítající deska (jen veřejná sdílená stránka)
+
+   Za kartou tam běží graf svíček, který byl dosud úplně zakrytý. Deska se
+   proto zprůhlední a rozostří pozadí — svíčky pod ní zůstanou jen jako
+   stíny, stejně jako sklo na přihlašovací stránce, o něco čitelněji.
+   V appce se to NEpoužívá: tam je pod dialogem tabulka účtů, ne graf.
+   ───────────────────────────────────────────────────────────────────────── */
+.live-day-seethrough .live-day-inner {
+  background:
+    radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34, 211, 238, 0.14) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 60% at 100% 100%, rgba(16, 185, 129, 0.11) 0%, transparent 60%),
+    rgba(0, 0, 0, 0.26);
+  backdrop-filter: blur(11px) saturate(125%);
+}
+
+.light-theme .live-day-seethrough .live-day-inner {
+  background:
+    radial-gradient(ellipse 100% 100% at 50% 45%, transparent 40%, rgba(15, 23, 42, 0.07) 100%),
+    radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34, 211, 238, 0.18) 0%, transparent 62%),
+    radial-gradient(ellipse 60% 60% at 100% 100%, rgba(16, 185, 129, 0.14) 0%, transparent 62%),
+    rgba(251, 253, 255, 0.22);
+  backdrop-filter: blur(11px) saturate(125%);
+}
+
+/* Vnitřní dlaždice drží čísla, takže zůstávají krytější než deska kolem —
+   svíčky se ukážou hlavně v horním pruhu a v mezerách mezi dlaždicemi. */
+.live-day-seethrough .live-day-glass {
+  background: rgba(10, 14, 22, 0.3);
+  backdrop-filter: blur(22px) saturate(115%);
+}
+
+.light-theme .live-day-seethrough .live-day-glass {
+  background: rgba(255, 255, 255, 0.52);
+  backdrop-filter: blur(22px) saturate(115%);
 }

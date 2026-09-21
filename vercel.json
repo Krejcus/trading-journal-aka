@@ -26,6 +26,10 @@
         {
             "source": "/share/:id",
             "destination": "/api/share/:id"
+        },
+        {
+            "source": "/day/:token",
+            "destination": "/api/live-day-share/:token"
         }
     ]
 }

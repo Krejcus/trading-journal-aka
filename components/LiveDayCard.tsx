@@ -1,7 +1,12 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronRight, X } from 'lucide-react';
+import { Check, ChevronRight, Copy, Loader2, Share2, X } from 'lucide-react';
+import { toPng } from 'html-to-image';
 import type { LiveDaySummary } from '../lib/liveDaySummary';
+import { currentLiveDayShareTheme, publicLiveDaySummary } from '../lib/liveDayShare';
+import { createLiveDayShare } from '../services/liveDayShareService';
+import { shareTextNative } from '../services/nativeShare';
+import { isNativeBuild } from '../utils/runtimeConfig';
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 
 const AT_LOGO = '/logos/at_logo_light_clean.png';
@@ -89,6 +94,15 @@ export interface LiveDayCardProps {
   formatName: (name: string) => string;
   /** Když kartu drží dialog, přidá se do hlavičky tiché zavírací tlačítko. */
   onClose?: () => void;
+  /** Stabilní export bez dopočítávání částky a vstupních animací řádků. */
+  captureMode?: boolean;
+  /** Ovládání sdílení v hlavičce karty. Do exportu se nepředává. */
+  shareSlot?: React.ReactNode;
+  /**
+   * Prosvítající deska pro veřejnou stránku, kde za kartou běží graf svíček.
+   * V appce ne: tam by skrz kartu prosvítala tabulka účtů pod dialogem.
+   */
+  translucent?: boolean;
 }
 
 const FirmDot = ({ firm }: { firm: string | null }) => {
@@ -100,7 +114,7 @@ const FirmDot = ({ firm }: { firm: string | null }) => {
     : <span className="live-day-mono" style={{ background: firmColor(key || firm).bg }}>{firmInitials(firm)}</span>;
 };
 
-export const LiveDayCard: React.FC<LiveDayCardProps> = ({ summary, owner, tradeDate, trades, losingTrades, formatName, onClose }) => {
+export const LiveDayCard: React.FC<LiveDayCardProps> = ({ summary, owner, tradeDate, trades, losingTrades, formatName, onClose, captureMode = false, shareSlot, translucent = false }) => {
   const wrapRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -113,7 +127,7 @@ export const LiveDayCard: React.FC<LiveDayCardProps> = ({ summary, owner, tradeD
   useEffect(() => {
     const wrap = wrapRef.current;
     const card = cardRef.current;
-    if (!wrap || !card || reducedMotion()) return;
+    if (!wrap || !card || reducedMotion() || captureMode) return;
     const move = (event: PointerEvent) => {
       const box = wrap.getBoundingClientRect();
       const px = (event.clientX - box.left) / box.width;
@@ -130,7 +144,7 @@ export const LiveDayCard: React.FC<LiveDayCardProps> = ({ summary, owner, tradeD
     wrap.addEventListener('pointermove', move);
     wrap.addEventListener('pointerleave', leave);
     return () => { wrap.removeEventListener('pointermove', move); wrap.removeEventListener('pointerleave', leave); };
-  }, []);
+  }, [captureMode]);
 
   // Kolik účtů zůstalo pod okrajem posuvníku. `offsetTop` se měří od nejbližšího
   // pozicovaného předka, ne od posuvníku — proto skutečné souřadnice.
@@ -144,9 +158,9 @@ export const LiveDayCard: React.FC<LiveDayCardProps> = ({ summary, owner, tradeD
   useLayoutEffect(syncHidden, [syncHidden, summary.rows]);
 
   // Číslo se dopočítá, stejně jako se na přihlašovací stránce dokreslují svíčky.
-  const [shown, setShown] = useState(() => (total == null || reducedMotion() ? total : 0));
+  const [shown, setShown] = useState(() => (total == null || reducedMotion() || captureMode ? total : 0));
   useEffect(() => {
-    if (total == null || reducedMotion()) { setShown(total); return; }
+    if (total == null || reducedMotion() || captureMode) { setShown(total); return; }
     const start = performance.now();
     let frame = 0;
     const tick = (nowMs: number) => {
@@ -156,7 +170,7 @@ export const LiveDayCard: React.FC<LiveDayCardProps> = ({ summary, owner, tradeD
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [total]);
+  }, [captureMode, total]);
 
   const note = partialNote(summary);
   const dateLabel = (() => {
@@ -167,7 +181,11 @@ export const LiveDayCard: React.FC<LiveDayCardProps> = ({ summary, owner, tradeD
   })();
 
   return (
-    <div className="live-day-tilt" ref={wrapRef} data-testid="live-day-card">
+    <div
+      className={`live-day-tilt${captureMode ? ' live-day-capture' : ''}${translucent ? ' live-day-seethrough' : ''}`}
+      ref={wrapRef}
+      data-testid="live-day-card"
+    >
       <div className="live-day-card" ref={cardRef}>
         <div className="live-day-inner">
           <span className="live-day-aurora" aria-hidden />
@@ -192,6 +210,7 @@ export const LiveDayCard: React.FC<LiveDayCardProps> = ({ summary, owner, tradeD
                   <span className="live-day-date">{dateLabel}</span>
                 </span>
               </div>
+              {shareSlot}
               {onClose ? (
                 <button type="button" onClick={onClose} className="live-day-close" aria-label="Zavřít kartu dne">
                   <X size={14} />
@@ -240,7 +259,9 @@ export const LiveDayCard: React.FC<LiveDayCardProps> = ({ summary, owner, tradeD
                       key={row.accountId}
                       data-day-row
                       className="live-day-row"
-                      style={{ animationDelay: `${70 + index * (summary.rows.length > 8 ? 26 : 55)}ms` }}
+                      style={captureMode
+                        ? { animation: 'none', opacity: 1 }
+                        : { animationDelay: `${70 + index * (summary.rows.length > 8 ? 26 : 55)}ms` }}
                     >
                       <span className="live-day-who-cell">
                         <FirmDot firm={row.firm} />
@@ -269,6 +290,158 @@ export const LiveDayCard: React.FC<LiveDayCardProps> = ({ summary, owner, tradeD
   );
 };
 
+const waitForPreviewAssets = async (root: HTMLElement): Promise<void> => {
+  await document.fonts?.ready;
+  await Promise.all([...root.querySelectorAll('img')].map(async image => {
+    if (!image.complete) await new Promise<void>(resolve => {
+      image.addEventListener('load', () => resolve(), { once: true });
+      image.addEventListener('error', () => resolve(), { once: true });
+    });
+    await image.decode?.().catch(() => undefined);
+  }));
+  await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+};
+
+const LiveDayShareControls = (card: Omit<LiveDayCardProps, 'onClose' | 'captureMode' | 'shareSlot'>) => {
+  const previewRef = useRef<HTMLDivElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [theme] = useState(currentLiveDayShareTheme);
+  const publicSummary = useMemo(() => publicLiveDaySummary(card.summary), [card.summary]);
+
+  const prepare = useCallback(async () => {
+    if (!previewRef.current || busy) return;
+    setBusy(true);
+    setFeedback(null);
+    try {
+      await waitForPreviewAssets(previewRef.current);
+      const dataUrl = await toPng(previewRef.current, {
+        width: 1200,
+        height: 630,
+        pixelRatio: 1,
+        cacheBust: true,
+        skipFonts: true,
+        backgroundColor: theme === 'light' ? '#e2e8f0' : '#020617',
+      });
+      const preview = await fetch(dataUrl).then(response => response.blob());
+      const created = await createLiveDayShare({
+        summary: publicSummary,
+        owner: card.owner,
+        tradeDate: card.tradeDate,
+        trades: card.trades,
+        losingTrades: card.losingTrades,
+        theme,
+        preview,
+      });
+      setShareUrl(created.url);
+      setOpen(true);
+      setFeedback(null);
+    } catch (error) {
+      setOpen(true);
+      setFeedback(error instanceof Error ? error.message : 'Odkaz se nepodařilo vytvořit.');
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, card.losingTrades, card.owner, card.tradeDate, card.trades, publicSummary, theme]);
+
+  const share = useCallback(async () => {
+    if (!shareUrl) return;
+    const text = `Karta dne ${card.tradeDate} · AlphaTrade`;
+    try {
+      if (isNativeBuild) {
+        const result = await shareTextNative({ text, url: shareUrl });
+        if (result.completed) setFeedback('Odkaz sdílen');
+      } else if (navigator.share) {
+        await navigator.share({ title: 'Karta dne | AlphaTrade', text, url: shareUrl });
+        setFeedback('Odkaz sdílen');
+      } else {
+        await navigator.clipboard.writeText(shareUrl);
+        setFeedback('Odkaz zkopírován');
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      setFeedback('Sdílení se nepodařilo — použij Kopírovat.');
+    }
+  }, [card.tradeDate, shareUrl]);
+
+  const copy = useCallback(async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setFeedback('Odkaz zkopírován');
+    } catch {
+      setFeedback(shareUrl);
+    }
+  }, [shareUrl]);
+
+  return <>
+    {/* Sdílení je v hlavičce karty jako tichá ikona — samostatná lišta pod
+        kartou rozbíjela kompozici, kterou má karta držet i po odeslání.
+        Stavy se dějí v bublině, takže se karta nikam neposouvá. */}
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => (shareUrl ? setOpen(value => !value) : void prepare())}
+        disabled={busy}
+        aria-label={shareUrl ? 'Možnosti sdílení' : 'Připravit odkaz ke sdílení'}
+        aria-expanded={open}
+        title={shareUrl ? 'Možnosti sdílení' : 'Připravit odkaz ke sdílení'}
+        className="live-day-ghost"
+      >
+        {busy ? <Loader2 size={13} className="animate-spin" /> : shareUrl ? <Check size={13} /> : <Share2 size={13} />}
+      </button>
+
+      {open && !busy ? (
+        <div className="live-day-sharepop" role="dialog" aria-label="Sdílení karty dne">
+          {shareUrl ? <>
+            <button type="button" onClick={() => void share()} className="live-day-sharepop-main">
+              <Share2 size={13} /> Sdílet odkaz
+            </button>
+            <button type="button" onClick={() => void copy()} className="live-day-sharepop-alt">
+              <Copy size={13} /> Kopírovat
+            </button>
+          </> : null}
+          <p aria-live="polite" className="live-day-sharepop-note">
+            {feedback ?? 'Jména účtů jsou v odkazu redigovaná.'}
+          </p>
+        </div>
+      ) : null}
+    </div>
+
+    <div
+      aria-hidden="true"
+      className={theme === 'light' ? 'light-theme' : theme === 'oled' ? 'oled-theme' : undefined}
+      style={{ position: 'fixed', left: -20_000, top: 0, width: 1200, height: 630, pointerEvents: 'none' }}
+    >
+      <div
+        ref={previewRef}
+        style={{
+          width: 1200,
+          height: 630,
+          padding: '54px 60px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: theme === 'light'
+            ? 'radial-gradient(circle at 20% 5%, #cffafe 0, transparent 38%), radial-gradient(circle at 90% 90%, #d1fae5 0, transparent 36%), #e2e8f0'
+            : 'radial-gradient(circle at 20% 5%, #083344 0, transparent 38%), radial-gradient(circle at 90% 90%, #052e2b 0, transparent 36%), #020617',
+        }}
+      >
+        <div style={{ width: 1080 }}>
+          <LiveDayCard
+            {...card}
+            summary={publicSummary}
+            formatName={name => name}
+            captureMode
+          />
+        </div>
+      </div>
+    </div>
+  </>;
+};
+
 // ── overlay ─────────────────────────────────────────────────────────────────
 export const LiveDayCardDialog = ({ onClose, ...card }: LiveDayCardProps & { onClose: () => void }) => {
   useEffect(() => {
@@ -282,11 +455,13 @@ export const LiveDayCardDialog = ({ onClose, ...card }: LiveDayCardProps & { onC
       role="dialog"
       aria-modal="true"
       aria-label="Karta dne"
-      className="live-day-overlay fixed inset-0 z-[155] flex items-center justify-center p-4 sm:p-7"
+      className="live-day-overlay fixed inset-0 z-[155] overflow-y-auto p-4 sm:p-7"
       onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}
     >
-      <div className="w-full max-w-[940px]">
-        <LiveDayCard {...card} onClose={onClose} />
+      <div className="mx-auto flex min-h-full w-full max-w-[940px] items-center justify-center">
+        <div className="w-full">
+          <LiveDayCard {...card} onClose={onClose} shareSlot={<LiveDayShareControls {...card} />} />
+        </div>
       </div>
     </div>,
     document.body,

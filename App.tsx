@@ -91,6 +91,7 @@ import { PullToRefresh } from './components/PullToRefresh';
 import ConfirmationModal from './components/ConfirmationModal';
 import TradeDetailModal from './components/TradeDetailModal';
 import SharedTradeView from './components/SharedTradeView';
+import SharedLiveDayView from './components/SharedLiveDayView';
 import { currencyService, ExchangeRates } from './services/currencyService';
 import { t } from './services/translations';
 import { GuardianIntervention, GuardianOverlay, DebtCollector } from './components/GuardianSystem';
@@ -3863,6 +3864,8 @@ const App: React.FC = () => {
     }
   }, [session?.user.id, captureSessionRequest]);
 
+  const dayShareToken = new URLSearchParams(window.location.search).get('dayShare');
+
   // GATE pro shared trade — pokud je v URL ?shareId nebo ?share, NEZOBRAZUJEME
   // ani login ani app UI dokud se shared trade nenačte. Předchází to flashe
   // tvého účtu / login screenu před shared view (race condition).
@@ -3873,6 +3876,10 @@ const App: React.FC = () => {
 
   if (logoutBusy) {
     return <div role="status" aria-live="polite" className="min-h-screen flex items-center justify-center bg-[var(--bg-page)] text-[var(--text-primary)]">Odhlašuji…</div>;
+  }
+
+  if (dayShareToken) {
+    return <SharedLiveDayView token={dayShareToken} />;
   }
 
   if (hasShareInUrl && !sharedTrade) {

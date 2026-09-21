@@ -10,6 +10,7 @@ import {
   NATIVE_OAUTH_RESULT_EVENT,
   type NativeOAuthResultDetail,
 } from '../services/nativeOAuth';
+import AnimatedTradingBackground from './AnimatedTradingBackground';
 
 interface AuthProps {
   onLogin: (user: any) => void;
@@ -43,7 +44,6 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [showCheckEmail, setShowCheckEmail] = useState(false);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const oauthPendingRef = useRef(false);
 
   useEffect(() => {
@@ -93,139 +93,6 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
     mouseX.set(0);
     mouseY.set(0);
   };
-
-  // Canvas chart animation
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth * window.devicePixelRatio;
-      canvas.height = window.innerHeight * window.devicePixelRatio;
-      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-    };
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-
-    // Generate candles (Version C pattern)
-    const numCandles = 70;
-    const candles: any[] = [];
-    let lastClose = 100;
-    let trend = 0;
-
-    for (let i = 0; i < numCandles; i++) {
-      if (i < 20) {
-        trend = (Math.random() - 0.5) * 4;
-      } else if (i < 45) {
-        if (i === 22) trend = 1.5;
-        if (i === 28) trend = -1.8;
-        if (i === 34) trend = 1.2;
-        if (i === 40) trend = -1.1;
-      } else {
-        if (i === 46) trend = -2.0;
-        if (i === 52) trend = 2.5;
-      }
-
-      const volatility = i < 20 ? 1.5 + Math.random() * 2.5 : 0.8 + Math.random() * 1.5;
-      const noise = (Math.random() - 0.5) * (i < 20 ? 2 : 1.2);
-
-      const open = lastClose;
-      const close = open + trend + noise;
-      const high = Math.max(open, close) + Math.random() * volatility;
-      const low = Math.min(open, close) - Math.random() * volatility;
-
-      candles.push({
-        open, high, low, close,
-        color: close >= open ? '#10b981' : '#ef4444'
-      });
-
-      lastClose = close;
-    }
-
-    let currentIndex = 0;
-    let animationInterval: NodeJS.Timeout;
-
-    const drawCandle = (index: number) => {
-      const candle = candles[index];
-      const width = window.innerWidth;
-      const height = window.innerHeight;
-
-      const candleWidth = Math.max(2, (width - 40) / candles.length);
-      const x = 20 + index * candleWidth;
-
-      const allPrices = candles.flatMap(c => [c.high, c.low]);
-      const minPrice = Math.min(...allPrices);
-      const maxPrice = Math.max(...allPrices);
-      const priceRange = maxPrice - minPrice;
-
-      const scaleY = (price: number) => {
-        const padding = height * 0.1;
-        return height - padding - ((price - minPrice) / priceRange) * (height - padding * 2);
-      };
-
-      const openY = scaleY(candle.open);
-      const closeY = scaleY(candle.close);
-      const highY = scaleY(candle.high);
-      const lowY = scaleY(candle.low);
-
-      const bodyTop = Math.min(openY, closeY);
-      const bodyBottom = Math.max(openY, closeY);
-      const bodyHeight = Math.max(bodyBottom - bodyTop, 1);
-
-      ctx.strokeStyle = candle.color;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x + candleWidth / 2, highY);
-      ctx.lineTo(x + candleWidth / 2, lowY);
-      ctx.stroke();
-
-      ctx.fillStyle = candle.color;
-      const bodyWidth = Math.max(candleWidth * 0.7, 2);
-      ctx.fillRect(
-        x + (candleWidth - bodyWidth) / 2,
-        bodyTop,
-        bodyWidth,
-        bodyHeight || 1
-      );
-    };
-
-    const render = () => {
-      const width = window.innerWidth;
-      const height = window.innerHeight;
-
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(0, 0, width, height);
-
-      for (let i = 0; i < currentIndex; i++) {
-        drawCandle(i);
-      }
-    };
-
-    const animate = () => {
-      animationInterval = setInterval(() => {
-        if (currentIndex < candles.length) {
-          currentIndex++;
-          render();
-        } else {
-          setTimeout(() => {
-            currentIndex = 0;
-            render();
-          }, 800);
-        }
-      }, 80); // Slower animation for login
-    };
-
-    animate();
-
-    return () => {
-      clearInterval(animationInterval);
-      window.removeEventListener('resize', resizeCanvas);
-    };
-  }, []);
-
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -333,23 +200,7 @@ const Auth: React.FC<AuthProps> = ({ onLogin, theme }) => {
 
   return (
     <div className="min-h-screen w-screen bg-black relative overflow-hidden flex items-center justify-center font-sans select-none">
-      {/* Canvas chart animation */}
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 w-full h-full"
-        style={{ opacity: 1.0, zIndex: 1 }}
-      />
-
-      {/* Background gradient effect */}
-      <div className="absolute inset-0 bg-gradient-to-b from-blue-900/20 via-slate-950/40 to-black pointer-events-none" />
-
-      {/* Noise texture overlay */}
-      <div className="absolute inset-0 opacity-[0.03] mix-blend-soft-light pointer-events-none"
-        style={{
-          backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")`,
-          backgroundSize: '200px 200px'
-        }}
-      />
+      <AnimatedTradingBackground />
 
       <motion.div
         initial={{ opacity: 0, y: 20 }}

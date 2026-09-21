@@ -208,6 +208,47 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-21 — Vizuální doladění karty dne a sdílení (Claude)
+
+Codex postavil sdílení karty dne (veřejný odkaz `/day/<token>`, redigovaný
+snapshot, privátní bucket s náhledem, RLS jen na vlastníka). Prošel jsem
+bezpečnostní část a sedí: jména účtů se redigují na klientu PŘED odesláním,
+takže server neredigovanou verzi nikdy nevidí; cesta k náhledu je vynucená
+databázovým CHECK na `owner_id/token.png`; veřejný endpoint jede přes
+service_role, ale vrací jen normalizovanou projekci a respektuje `revoked_at`.
+Tenhle commit veze POUZE kartu dne a sdílení — zbytek Codexovy rozpracované
+práce (copier runtime, Historie, TradeDetail) zůstává necommitnutý v pracovním
+stromu Documents.
+
+Vizuální změny:
+- **Lišta sdílení zmizela zpod karty.** Byla to samostatná plovoucí lišta, která
+  rozbíjela kompozici, kterou má karta držet i ve chvíli, kdy ji posíláš dál.
+  Sdílení je teď tichá ikona v hlavičce karty vedle data (tam, kde ho měl
+  původní mockup) a stavy se dějí v bublině pod ní, takže se karta neposouvá.
+- **Karta na veřejné stránce byla úzká z jiného důvodu, než to vypadalo.** Nešlo
+  o `max-width`: `LiveDayCard` je flex položka bez vlastní šířky, takže se
+  smrskla na obsah (~490 px). V dialogu ji roztahoval obal `w-full`, na veřejné
+  stránce chyběl. Strop je 1060 px.
+- **Graf svíček jede i ve světlém režimu.** Měl natvrdo černou výplň, proto byl
+  ve světlém vypnutý. `AnimatedTradingBackground` má teď `variant`: světlá deska
+  a tmavší svíčky. Překryvná vrstva nad plátnem dělá v tmavém vinětaci, ale ve
+  světlém dusila svíčky do mlhy, takže tam jen naznačí rohy.
+- **Karta na veřejné stránce je sklo** (`translucent`), aby svíčky prosvítaly:
+  deska 26 % (tmavá) / 22 % (světlá), dlaždice s čísly krytější, ať zůstanou
+  čitelné. V appce se to NEpoužívá — pod dialogem je tabulka účtů, ne graf.
+  Na export do PNG to nemá vliv, ten se renderuje nad statickým přechodem.
+- **Oprava v exportu:** `html-to-image` kreslí i posuvník a do tmavého snímku se
+  zapékal bílý pruh přes celou výšku seznamu. V exportním režimu je posuvník
+  schovaný; ořez hlásí patička „+ N účtů“.
+
+Codexův test hlídal, že graf jede jen v tmavém — to byl právě požadavek ke
+změně, takže test popisuje nový záměr a přibyl druhý na chybějící `w-full`.
+
+Náhledy bez Supabase: `mockups/shared-day-live.html` (veřejná stránka) a
+`mockups/shared-day-glass.html` (čtyři míry průhlednosti nad běžícím grafem).
+
+Ověřeno: typecheck, lint a 3912 testů čisté.
+
 ### 2026-09-20 — LIVE na telefonu: hustší řádky, dvě sekce, Flatten nahoru (Claude)
 
 Uživatel: „přijde mi, že jsou ty řádky zbytečně velké.“ Změřeno: jeden účet
