@@ -824,6 +824,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     () => new Map(snapshot.accounts.map(a => [a.id, a])),
     [snapshot.accounts],
   );
+
   const profilesById = useMemo(() => {
     const next = new Map<number, TradovateAccountProfile>();
     for (const profile of accountProfiles) {
@@ -934,7 +935,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     action: () => Promise<void> | void,
   ) => {
     if (copierTransition) return;
-    const startedAt = Date.now();
     setTransitionGroupId(groupId);
     setCopierTransition(connecting ? 'connecting' : 'disconnecting');
     try {
@@ -965,8 +965,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           : undefined,
       });
     } finally {
-      const remainingAnimation = Math.max(0, 650 - (Date.now() - startedAt));
-      if (remainingAnimation > 0) await new Promise(resolve => window.setTimeout(resolve, remainingAnimation));
       setCopierTransition(null);
       setTransitionGroupId(null);
     }
@@ -2307,6 +2305,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
       type="button"
       role="switch"
       aria-checked={connected}
+      aria-busy={busy || undefined}
       aria-label={connected ? 'Vypnout kopírovací skupinu' : 'Zapnout kopírovací skupinu'}
       title={title}
       disabled={disabled}
@@ -2319,7 +2318,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
       <span className="copier-switch-label copier-switch-on" aria-hidden="true">ON</span>
       <span className="copier-switch-label copier-switch-off" aria-hidden="true">OFF</span>
       <span className="copier-switch-knob">
-        {busy ? <RefreshCw size={10} strokeWidth={2.8} className="animate-spin" /> : null}
+        {busy ? <span className="copier-switch-spinner" aria-hidden="true"><RefreshCw size={10} strokeWidth={2.8} className="animate-spin" /></span> : null}
       </span>
     </button>
   );

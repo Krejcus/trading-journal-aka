@@ -51,7 +51,9 @@ describe('Connect/Disconnect přepínač copieru', () => {
   it('během přechodu točí spinner v knoflíku a nepustí další kliknutí', () => {
     const markup = render({ transition: 'connecting' });
     expect(markup).toContain('copier-switch-busy');
+    expect(markup).toContain('copier-switch-spinner');
     expect(markup).toContain('animate-spin');
+    expect(markup).toContain('aria-busy="true"');
     expect(markup).toContain('disabled=""');
   });
 });

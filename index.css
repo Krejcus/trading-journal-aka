@@ -2451,7 +2451,7 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
   cursor: pointer;
   background: color-mix(in srgb, var(--text-muted) 26%, transparent);
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.14);
-  transition: background .3s ease, box-shadow .4s ease;
+  transition: background .2s ease, box-shadow .2s ease;
 }
 
 .copier-switch:disabled { cursor: not-allowed; opacity: .45; }
@@ -2473,7 +2473,7 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
   font-weight: 900;
   letter-spacing: .08em;
   transform: translateY(-50%);
-  transition: opacity .25s ease, transform .3s cubic-bezier(.34, 1.3, .5, 1);
+  transition: opacity .16s ease, transform .2s cubic-bezier(.34, 1.3, .5, 1);
 }
 .copier-switch-on  { left: 8px; color: #064e3b; opacity: 0; transform: translate(-5px, -50%); }
 .copier-switch-off { right: 8px; color: var(--text-secondary); opacity: 1; }
@@ -2493,15 +2493,26 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
   background: #fff;
   color: #059669;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.26);
-  transition: transform .34s cubic-bezier(.34, 1.5, .45, 1);
+  transition: transform .22s cubic-bezier(.34, 1.5, .45, 1);
 }
 .copier-switch[aria-checked="true"] .copier-switch-knob { transform: translateX(34px); }
 
-/* Přechod ARM/DISARM: knoflík zůstane, kde je, a točí se v něm spinner. */
+/* Přechod ARM/DISARM: knoflík zůstane na posledním potvrzeném stavu. Spinner
+   se ukáže až po 140 ms, takže rychlý ACK neproblikne zbytečným kolečkem. */
 .copier-switch-busy .copier-switch-knob { color: var(--text-secondary); }
+.copier-switch-spinner {
+  display: inline-flex;
+  animation: copier-switch-spinner-reveal .08s ease-out .14s both;
+}
+@keyframes copier-switch-spinner-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .copier-switch, .copier-switch-knob, .copier-switch-label { transition: none !important; }
+  .copier-switch-spinner { animation: none !important; opacity: 1; }
+  .copier-switch-spinner > svg { animation: none !important; }
 }
 
 /* Rozbalení skupiny: 0fr → 1fr animuje výšku bez měření v JS. Dosud tu žádný
