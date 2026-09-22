@@ -6,8 +6,11 @@ import { Trade, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
 import { formatTradePnL } from '../utils/formatPnL';
 import { ExchangeRates } from '../services/currencyService';
 import { storageService } from '../services/storageService';
+import { journalReviewOnly } from '../lib/journalReviewPatch';
+import { preloadDecodedImage } from '../services/imageDecodeCache';
+import { advanceTradeHistoryIndex, navigationWarmOffsets, warmJournalTradeDetail, type PreparedJournalTradeDetail } from '../services/tradeHistoryWarmup';
 import { thumbMedium, thumbLarge, fullSize } from '../services/imageUrlService';
-import { getCopierThumbUrl, getCachedCopierThumbs, invalidateCopierThumb } from '../services/copierSnapshotThumbs';
+import { getCachedCopierThumbs, hasCurrentCopierThumb, invalidateCopierThumb, prefetchCopierThumbUrls } from '../services/copierSnapshotThumbs';
 import {
   Trash2, TrendingUp, TrendingDown, X, Edit3, Calendar,
   Tag, DollarSign, FileText, Image as ImageIcon,
@@ -23,6 +26,12 @@ import { tradeNeedsEnrichment } from '../services/tradovateImport';
 import TradeDetailModal from './TradeDetailModal';
 import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
+
+const DETAIL_FRESH_MS = 25_000;
+// Closed, owner-verified details may be reused briefly inside one History
+// session while a fresh verification runs in the background. This cache is
+// memory-only and is cleared on an owner change.
+const DETAIL_NAVIGATION_REUSE_MS = 10 * 60_000;
 
 // Levný podpis tradu pro detekci změny — vynechá base64 screenshoty (ty by JSON.stringify
 // nafoukl na stovky KB). Screenshoty porovnáme zvlášť přes délku + KONEC URL.
@@ -210,8 +219,25 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   const [errorImages, setErrorImages] = useState<Set<string>>(new Set());
   // Náhledy z copier snapshotů (podepsané URL) pro obchody bez ručního screenshotu.
   // Init z module-level cache, ať se při návratu na záložku nepodepisuje znovu.
-  const [copierThumbs, setCopierThumbs] = useState<Map<string, string>>(() => getCachedCopierThumbs());
+  const [copierThumbs, setCopierThumbs] = useState<Map<string, string>>(() => getCachedCopierThumbs(user.id));
   const copierThumbRetriedRef = useRef<Set<string>>(new Set());
+  const detailPrefetchRef = useRef<Map<string, Promise<PreparedJournalTradeDetail | null>>>(new Map());
+  const preparedJournalDetailRef = useRef<Map<string, PreparedJournalTradeDetail>>(new Map());
+  const detailWarmUntilRef = useRef<Map<string, number>>(new Map());
+  const detailReuseUntilRef = useRef<Map<string, number>>(new Map());
+  const navigationCursorRef = useRef(-1);
+  const navigationDirectionRef = useRef<-1 | 1 | null>(null);
+
+  useEffect(() => {
+    setCopierThumbs(getCachedCopierThumbs(user.id));
+    copierThumbRetriedRef.current.clear();
+    detailPrefetchRef.current.clear();
+    preparedJournalDetailRef.current.clear();
+    detailWarmUntilRef.current.clear();
+    detailReuseUntilRef.current.clear();
+    navigationCursorRef.current = -1;
+    navigationDirectionRef.current = null;
+  }, [user.id]);
 
   // Keep ref in sync with state (synchronously inside setState so ref is always current)
   const updateScreenshotCache = useCallback((updater: (prev: Map<string, { screenshot?: string; screenshots?: string[] }>) => Map<string, { screenshot?: string; screenshots?: string[] }>) => {
@@ -239,7 +265,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     });
     // Copier náhled: podepsaná URL mohla vypršet — jednou ji zahodíme a podepíšeme znovu.
     if (copierThumbs.has(id)) {
-      invalidateCopierThumb(id);
+      invalidateCopierThumb(user.id, id);
       setCopierThumbs(prev => { const next = new Map(prev); next.delete(id); return next; });
       if (copierThumbRetriedRef.current.has(id)) return;
       copierThumbRetriedRef.current.add(id);
@@ -268,6 +294,89 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
       loadingScreenshotsRef.current.delete(id);
     });
   };
+
+  const prefetchJournalDetail = useCallback((trade: Trade): Promise<PreparedJournalTradeDetail | null> => {
+    if (!journalReviewOnly(trade)) return Promise.resolve(null);
+    const ids = isCombinedTrade(trade) ? trade.combinedTradeIds?.map(String) ?? [] : [String(trade.id)];
+    if (ids.length === 0) return Promise.resolve(null);
+    const key = JSON.stringify(ids);
+    const now = Date.now();
+    const prepared = preparedJournalDetailRef.current.get(key) ?? null;
+    if ((detailWarmUntilRef.current.get(key) ?? 0) > now && prepared) return Promise.resolve(prepared);
+    const existing = detailPrefetchRef.current.get(key);
+    if (existing) {
+      return prepared && (detailReuseUntilRef.current.get(key) ?? 0) > now
+        ? Promise.resolve(prepared)
+        : existing;
+    }
+    const request = warmJournalTradeDetail(trade, {
+      loadJournalDetails: (selection, signal) => storageService.getJournalTradeDetails(selection, signal),
+      signSnapshots: snapshots => storageService.createCopierSnapshotSignedUrls(snapshots),
+      decodeImage: preloadDecodedImage,
+    }).then(prepared => {
+      // Detail cache žije 30 s; malá rezerva zajistí, že modal ještě dostane hit.
+      if (prepared) {
+        preparedJournalDetailRef.current.set(key, prepared);
+        detailWarmUntilRef.current.set(key, Date.now() + DETAIL_FRESH_MS);
+        detailReuseUntilRef.current.set(key, Date.now() + DETAIL_NAVIGATION_REUSE_MS);
+      }
+      return prepared;
+    }).finally(() => {
+      if (detailPrefetchRef.current.get(key) === request) detailPrefetchRef.current.delete(key);
+    });
+    detailPrefetchRef.current.set(key, request);
+    if (prepared && (detailReuseUntilRef.current.get(key) ?? 0) > now) {
+      // The click stays instant; a newer owner-verified snapshot replaces this
+      // entry for the next visit without blanking the currently visible modal.
+      void request.catch(() => undefined);
+      return Promise.resolve(prepared);
+    }
+    return request;
+  }, []);
+
+  const prefetchJournalDetailSelections = useCallback((tradesToPrefetch: readonly Trade[]): Promise<void> => {
+    const now = Date.now();
+    const waits: Array<Promise<PreparedJournalTradeDetail | null>> = [];
+    const missing: Array<{ trade: Trade; ids: string[]; key: string }> = [];
+    const seen = new Set<string>();
+    for (const trade of tradesToPrefetch) {
+      if (!journalReviewOnly(trade)) continue;
+      const ids = isCombinedTrade(trade) ? trade.combinedTradeIds?.map(String) ?? [] : [String(trade.id)];
+      if (ids.length === 0) continue;
+      const key = JSON.stringify(ids);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const prepared = preparedJournalDetailRef.current.get(key);
+      if (prepared && (detailReuseUntilRef.current.get(key) ?? 0) > now) continue;
+      const existing = detailPrefetchRef.current.get(key);
+      if (existing) waits.push(existing);
+      else missing.push({ trade, ids, key });
+    }
+    if (missing.length === 0) return Promise.allSettled(waits).then(() => undefined);
+
+    // One consistent owner read for the whole moving window. Previously every
+    // trade repeated the full projection fingerprint/facts/snapshot chain.
+    const shared = storageService.getJournalTradeDetailSelections(missing.map(item => item.ids));
+    for (const item of missing) {
+      const request = shared.then(rowsBySelection => warmJournalTradeDetail(item.trade, {
+        loadJournalDetails: async ids => rowsBySelection.get(JSON.stringify(ids.map(String))) ?? [],
+        signSnapshots: snapshots => storageService.createCopierSnapshotSignedUrls(snapshots),
+        decodeImage: preloadDecodedImage,
+      })).then(prepared => {
+        if (prepared) {
+          preparedJournalDetailRef.current.set(item.key, prepared);
+          detailWarmUntilRef.current.set(item.key, Date.now() + DETAIL_FRESH_MS);
+          detailReuseUntilRef.current.set(item.key, Date.now() + DETAIL_NAVIGATION_REUSE_MS);
+        }
+        return prepared;
+      }).finally(() => {
+        if (detailPrefetchRef.current.get(item.key) === request) detailPrefetchRef.current.delete(item.key);
+      });
+      detailPrefetchRef.current.set(item.key, request);
+      waits.push(request);
+    }
+    return Promise.allSettled(waits).then(() => undefined);
+  }, []);
 
   // Sync selectedTrade when trades change.
   // Kombinované objekty žijí jen ve filtrovaném seznamu; jednotlivé záznamy
@@ -315,6 +424,81 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
       : enrichFilter ? trades.filter(tradeNeedsEnrichment) : trades;
     return [...base].sort((a, b) => entryMs(b) - entryMs(a));
   }, [trades, enrichFilter, copierReviewFilter]);
+
+  const initialDetailWarmTrades = useMemo(() => {
+    const selected: Trade[] = [];
+    let rowCount = 0;
+    for (const trade of sortedTrades) {
+      if (!journalReviewOnly(trade) || selected.length >= 3) continue;
+      const rows = isCombinedTrade(trade) ? trade.combinedTradeIds?.length ?? 0 : 1;
+      if (rows === 0 || rowCount + rows > 24) continue;
+      selected.push(trade);
+      rowCount += rows;
+    }
+    return selected;
+  }, [sortedTrades]);
+  const initialDetailWarmKey = initialDetailWarmTrades.map(trade => String(trade.id)).join('|');
+  const initialDetailWarmTradesRef = useRef(initialDetailWarmTrades);
+  initialDetailWarmTradesRef.current = initialDetailWarmTrades;
+
+  // Populate this mounted History instance's own navigation cache. The global
+  // app warmup primes network/image caches, but only this local result can be
+  // handed synchronously to the modal on an arrow click.
+  useEffect(() => {
+    void prefetchJournalDetailSelections(initialDetailWarmTradesRef.current);
+  }, [initialDetailWarmKey, prefetchJournalDetailSelections]);
+
+  const selectedTradeIndex = selectedTrade
+    ? sortedTrades.findIndex(trade => String(trade.id) === String(selectedTrade.id))
+    : -1;
+  useEffect(() => {
+    navigationCursorRef.current = selectedTradeIndex;
+  }, [selectedTradeIndex, selectedTrade?.id]);
+  const selectedTradeWarmKey = selectedTrade
+    ? JSON.stringify(isCombinedTrade(selectedTrade) ? selectedTrade.combinedTradeIds?.map(String) ?? [] : [String(selectedTrade.id)])
+    : null;
+  const preparedSelectedDetail = selectedTradeWarmKey
+    && (detailReuseUntilRef.current.get(selectedTradeWarmKey) ?? 0) > Date.now()
+    ? preparedJournalDetailRef.current.get(selectedTradeWarmKey)
+    : undefined;
+
+  const prefetchNavigationWindow = useCallback((originIndex: number, direction: -1 | 1 | null) => {
+    const targets = navigationWarmOffsets(direction)
+      .map(offset => sortedTrades[originIndex + offset])
+      .filter((trade): trade is Trade => Boolean(trade));
+    if (targets.length === 0) return;
+
+    void prefetchJournalDetailSelections(targets);
+  }, [prefetchJournalDetailSelections, sortedTrades]);
+
+  const prefetchTradeAtOffset = useCallback((offset: -1 | 1) => {
+    const target = sortedTrades[selectedTradeIndex + offset];
+    return target ? prefetchJournalDetail(target) : Promise.resolve(null);
+  }, [prefetchJournalDetail, selectedTradeIndex, sortedTrades]);
+
+  // Before the first click prepare four steps in both directions. After the
+  // user chooses a direction, move an eight-trade runway with the selection.
+  // This stays bounded and never downloads the entire journal.
+  useEffect(() => {
+    if (selectedTradeIndex < 0) return;
+    prefetchNavigationWindow(selectedTradeIndex, navigationDirectionRef.current);
+  }, [prefetchNavigationWindow, selectedTradeIndex]);
+
+  const navigateSelectedTrade = useCallback((offset: -1 | 1) => {
+    if (!selectedTrade || selectedTradeIndex < 0) return;
+    const originIndex = navigationCursorRef.current >= 0
+      ? navigationCursorRef.current
+      : selectedTradeIndex;
+    const targetIndex = advanceTradeHistoryIndex(originIndex, offset, sortedTrades.length);
+    if (targetIndex == null) return;
+    const target = sortedTrades[targetIndex];
+    navigationCursorRef.current = targetIndex;
+    navigationDirectionRef.current = offset;
+    // Selection must follow the input immediately. A prepared neighbor is
+    // rendered synchronously; a cold neighbor verifies itself in the modal
+    // while the moving warm window is refreshed after this render.
+    setSelectedTrade(target);
+  }, [selectedTrade, selectedTradeIndex, sortedTrades]);
 
   // Pokud filtr „K doplnění" vyprázdní seznam (vše doplněno), vypni ho.
   useEffect(() => {
@@ -566,41 +750,45 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
     return () => clearTimeout(retryTimer);
   }, [visibleTrades, loadScreenshots]);
 
-  // Copier snapshoty jsou v privátním bucketu — podepisujeme jen pro právě vykreslené
-  // karty bez ručního screenshotu (po 5, ať to při načtení seznamu nespustí desítky
-  // požadavků naráz). Ruční screenshot má vždy přednost, viz getScreenshot.
+  // Copier snapshoty jsou v privátním bucketu — pro právě vykreslenou dávku je
+  // podepíšeme jedním požadavkem; každý kus se pak zobrazí vlastním onLoad.
   useEffect(() => {
     const candidates = visibleTrades.filter(t =>
       (t.copierSnapshots?.length ?? 0) > 0 &&
       !t.screenshot &&
       !screenshotCache.get(String(t.id))?.screenshot &&
-      !copierThumbs.has(String(t.id))
+      !hasCurrentCopierThumb(user.id, String(t.id), t.copierSnapshots)
     );
     if (candidates.length === 0) return;
     let cancelled = false;
     const run = async () => {
       for (let i = 0; i < candidates.length; i += SCREENSHOT_BATCH) {
         const batch = candidates.slice(i, i + SCREENSHOT_BATCH);
-        const signed = await Promise.all(batch.map(async t => {
-          const url = await getCopierThumbUrl(String(t.id), t.copierSnapshots, snaps => storageService.createCopierSnapshotSignedUrls(snaps));
-          return [String(t.id), url] as const;
-        }));
+        const signed = await prefetchCopierThumbUrls(user.id, batch.map(t => ({
+          tradeId: String(t.id), snapshots: t.copierSnapshots,
+        })), snaps => storageService.createCopierSnapshotSignedUrls(snaps));
         if (cancelled) return;
-        const found = signed.filter((item): item is readonly [string, string] => typeof item[1] === 'string');
+        const found = [...signed];
         if (found.length === 0) continue;
+        // Připoj URL hned: každý <img> pak zmizí ze skeletonu vlastním onLoad,
+        // místo aby celá pětice čekala na nejpomalejší dekódování.
         setCopierThumbs(prev => {
           const next = new Map(prev);
           found.forEach(([id, url]) => next.set(id, url));
           return next;
         });
+        const decoded = await Promise.all(found.map(async ([id, url]) => {
+          try { await preloadDecodedImage(url); return id; } catch { return null; }
+        }));
+        if (cancelled) return;
+        const readyIds = decoded.filter((id): id is string => id !== null);
+        readyIds.forEach(id => storageService.markImageLoaded(id));
+        if (readyIds.length > 0) setLoadedImages(previous => new Set([...previous, ...readyIds]));
       }
     };
     void run();
     return () => { cancelled = true; };
-    // copierThumbs záměrně mimo deps: efekt spouští změna viditelných karet nebo ručních
-    // screenshotů, ne vlastní zápis; cache ve službě dedupuje případné opakované podpisy.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleTrades, screenshotCache]);
+  }, [visibleTrades, screenshotCache, copierThumbs, user.id]);
 
   // PREFETCH ALL screenshoty jedním query při mountu — eliminate flash při scroll/lazy load.
   // Po dokončení má každý visible trade screenshot okamžitě z cache, žádný per-batch query.
@@ -976,6 +1164,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
               <div
                 key={trade.id}
                 onClick={() => !isMultiSelectMode && setSelectedTrade(trade)}
+                onPointerEnter={() => { void prefetchJournalDetail(trade).catch(() => undefined); }}
+                onFocus={() => { void prefetchJournalDetail(trade).catch(() => undefined); }}
                 className={`group relative flex flex-col md:flex-row h-auto md:h-56 rounded-lg border overflow-hidden transition-[border-color,box-shadow,background-color] duration-200 cursor-pointer ${glowClass} glass-panel ${
                   selectedTradeIds.has(trade.id) ? 'ring-2 ring-cyan-400' : ''
                 }`}
@@ -1161,7 +1351,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         onLoad={() => handleImageLoad(String(trade.id))}
                         onError={() => handleImageError(String(trade.id))}
                         loading="lazy"
-                        className={`w-full h-full object-cover ${isCopierThumb(trade) ? 'object-[80%_50%]' : ''} transition-opacity duration-300 group-hover/img:scale-105 ${isImageLoaded ? 'opacity-100' : 'opacity-0'}`}
+                        className={`w-full h-full object-cover ${isCopierThumb(trade) ? 'object-[80%_50%] opacity-100' : isImageLoaded ? 'opacity-100' : 'opacity-0'} transition-transform duration-300 group-hover/img:scale-105`}
                       />
 
                       <div className={`absolute inset-0 bg-gradient-to-r ${theme !== 'light' ? 'from-[var(--bg-card)] via-transparent' : 'from-white via-transparent'} to-transparent md:block hidden z-20`}></div>
@@ -1234,6 +1424,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                     <tr
                       key={trade.id}
                       onClick={() => !isMultiSelectMode && setSelectedTrade(trade)}
+                      onPointerEnter={() => { void prefetchJournalDetail(trade).catch(() => undefined); }}
+                      onFocus={() => { void prefetchJournalDetail(trade).catch(() => undefined); }}
                       className={`group hover:bg-white/[0.03] transition-colors cursor-pointer border-b ${theme !== 'light' ? 'border-white/5' : 'border-slate-100'} ${
                         selectedTradeIds.has(trade.id) ? 'bg-cyan-500/10 ring-1 ring-cyan-400' : ''
                       }`}
@@ -1272,7 +1464,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                                   onLoad={() => handleImageLoad(String(trade.id))}
                                   onError={() => handleImageError(String(trade.id))}
                                   loading="lazy"
-                                  className={`w-full h-full object-cover ${isCopierThumb(trade) ? 'object-[80%_50%]' : ''} group-hover:opacity-100 transition-all duration-700 animate-in fade-in ${loadedImages.has(String(trade.id)) ? 'opacity-60 scale-100' : 'opacity-0 scale-90'}`}
+                                  className={`w-full h-full object-cover ${isCopierThumb(trade) ? 'object-[80%_50%] opacity-60 scale-100' : loadedImages.has(String(trade.id)) ? 'opacity-60 scale-100' : 'opacity-0 scale-90'} group-hover:opacity-100 transition-transform duration-300`}
                                 />
                               )}
                             </>
@@ -1537,16 +1729,13 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           initialBalance={initialBalance}
           user={user}
           exchangeRates={exchangeRates}
-          onPrev={() => {
-            const idx = sortedTrades.findIndex(t => t.id === selectedTrade.id);
-            if (idx > 0) setSelectedTrade(sortedTrades[idx - 1]);
-          }}
-          onNext={() => {
-            const idx = sortedTrades.findIndex(t => t.id === selectedTrade.id);
-            if (idx < sortedTrades.length - 1) setSelectedTrade(sortedTrades[idx + 1]);
-          }}
-          hasPrev={sortedTrades.findIndex(t => t.id === selectedTrade.id) > 0}
-          hasNext={sortedTrades.findIndex(t => t.id === selectedTrade.id) < sortedTrades.length - 1}
+          onPrev={() => { void navigateSelectedTrade(-1); }}
+          onNext={() => { void navigateSelectedTrade(1); }}
+          onPrefetchPrev={() => { void prefetchTradeAtOffset(-1).catch(() => undefined); }}
+          onPrefetchNext={() => { void prefetchTradeAtOffset(1).catch(() => undefined); }}
+          preparedJournalDetail={preparedSelectedDetail}
+          hasPrev={selectedTradeIndex > 0}
+          hasNext={selectedTradeIndex >= 0 && selectedTradeIndex < sortedTrades.length - 1}
           allTrades={allTrades.length > 0 ? allTrades : trades}
         />
       )}

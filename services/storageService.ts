@@ -18,7 +18,8 @@ import { parseOptionalTradeValidity } from './tradeValidity';
 import { containsTradeNoteHistory, hydrateOwnedTradeNoteHistories, publicTradeNotes, stripTradeNoteHistory as stripNoteHistory } from './tradeNotePrivacy';
 import { backtestReviewDataFromRow, backtestReviewPatch, requestBacktestReviewPatch, type BacktestReviewSnapshot } from './backtestReviewPersistence';
 import { hydrateOwnedJournalTrades, stripPrivateJournalHistory, journalProjectionFingerprint } from './journalTradeHydration';
-import { readOwnedJournalDetails } from './journalTradeDetail';
+import { cacheVerifiedJournalDetail, getCachedJournalDetail, readOwnedJournalDetails } from './journalTradeDetail';
+import { getCachedCopierSnapshotSignedUrls } from './copierSnapshotSignedUrlCache';
 import { readTradeListPages } from './tradeListPages';
 import { isEvidenceJournalTrade, visibleJournalTrades } from '../lib/journalTradeFacts';
 import { journalReviewPatch } from '../lib/journalReviewPatch';
@@ -87,6 +88,81 @@ const hydratePrivateJournalFacts = async (trades: Trade[], targetOwnerId: string
   const owner = await getUserId();
   return hydrateOwnedJournalTrades(supabase, trades, owner, targetOwnerId,
     async () => version === authStateVersion && await getUserId() === owner, { signal, detail });
+};
+
+const journalDetailSelectionInFlight = new Map<string, Promise<Trade[]>>();
+
+const loadJournalTradeDetailSelections = async (
+  selections: readonly (readonly string[])[],
+  signal?: AbortSignal,
+): Promise<Map<string, Trade[]>> => {
+  const normalized = selections.map(selection => selection.map(String));
+  if (normalized.length === 0 || normalized.some(selection => selection.length === 0
+    || new Set(selection).size !== selection.length || selection.some(id => !isUUID(id)))) {
+    throw new Error('journal-detail-selection-invalid');
+  }
+  const version = authStateVersion;
+  const owner = await getUserId();
+  const stillOwner = async () => version === authStateVersion && await getUserId() === owner && version === authStateVersion;
+  if (!owner || !await stillOwner()) throw new Error('journal-session-changed');
+  const cacheScope = `${version}:${owner}`;
+  const result = new Map<string, Trade[]>();
+  const waiting = new Map<string, Promise<Trade[]>>();
+  const missing: string[][] = [];
+  for (const selection of normalized) {
+    const key = JSON.stringify(selection);
+    if (result.has(key) || waiting.has(key)) continue;
+    const cached = getCachedJournalDetail(cacheScope, selection);
+    if (cached) result.set(key, cached);
+    else {
+      const pending = journalDetailSelectionInFlight.get(JSON.stringify([cacheScope, selection]));
+      if (pending) waiting.set(key, pending);
+      else missing.push(selection);
+    }
+  }
+
+  if (missing.length > 0) {
+    const union = [...new Set(missing.flat())];
+    if (union.length > 1000) throw new Error('journal-detail-selection-invalid');
+    // The shared request is owner-fenced but not tied to one component's abort
+    // signal; a StrictMode remount must not cancel the same work for its twin.
+    const shared = readOwnedJournalDetails(
+      supabase,
+      union,
+      owner,
+      stillOwner,
+      selected => hydratePrivateTradeNotes(selected, owner),
+    ).then(rows => {
+      const byId = new Map(rows.map(row => [String(row.id), row]));
+      const selectedRows = new Map<string, Trade[]>();
+      for (const selection of missing) {
+        const selected = selection.map(id => byId.get(id)).filter((row): row is Trade => Boolean(row));
+        if (selected.length !== selection.length) throw new Error('journal-detail-incomplete');
+        cacheVerifiedJournalDetail(cacheScope, selection, selected);
+        selectedRows.set(JSON.stringify(selection), selected);
+      }
+      return selectedRows;
+    });
+    for (const selection of missing) {
+      const key = JSON.stringify(selection);
+      const flightKey = JSON.stringify([cacheScope, selection]);
+      const request = shared.then(rowsBySelection => {
+        const selected = rowsBySelection.get(key);
+        if (!selected) throw new Error('journal-detail-incomplete');
+        return selected;
+      }).finally(() => {
+        if (journalDetailSelectionInFlight.get(flightKey) === request) journalDetailSelectionInFlight.delete(flightKey);
+      });
+      journalDetailSelectionInFlight.set(flightKey, request);
+      waiting.set(key, request);
+    }
+  }
+
+  for (const [key, request] of waiting) {
+    result.set(key, await request);
+  }
+  if (signal?.aborted || !await stillOwner()) throw new Error('journal-session-changed');
+  return result;
 };
 
 // Safe LocalStorage helper to prevent QuotaExceededError from crashing the app
@@ -1137,11 +1213,17 @@ export const storageService = {
   },
 
   async getJournalTradeDetails(ids: readonly string[], signal?: AbortSignal): Promise<Trade[]> {
-    const version = authStateVersion;
-    const owner = await getUserId();
-    const stillOwner = async () => version === authStateVersion && await getUserId() === owner && version === authStateVersion;
-    if (!owner || !await stillOwner()) throw new Error('journal-session-changed');
-    return readOwnedJournalDetails(supabase, ids, owner, stillOwner, rows => hydratePrivateTradeNotes(rows, owner, signal), signal);
+    const selection = ids.map(String);
+    const loaded = await loadJournalTradeDetailSelections([selection], signal);
+    return loaded.get(JSON.stringify(selection)) ?? [];
+  },
+
+  /** One owner-consistent verification for several adjacent modal selections. */
+  async getJournalTradeDetailSelections(
+    selections: readonly (readonly string[])[],
+    signal?: AbortSignal,
+  ): Promise<Map<string, Trade[]>> {
+    return loadJournalTradeDetailSelections(selections, signal);
   },
 
   async getTradeById(id: string): Promise<Trade | null> {
@@ -1267,17 +1349,21 @@ export const storageService = {
   async createCopierSnapshotSignedUrls(
     snapshots: NonNullable<Trade['copierSnapshots']>,
   ): Promise<Array<{ kind: string; at: number; path: string; url: string }>> {
-    const signed = await Promise.all(snapshots.map(async snapshot => {
+    const version = authStateVersion;
+    const owner = await getUserId();
+    if (!owner || version !== authStateVersion) throw new Error('snapshot-session-changed');
+    const cacheScope = `${version}:${owner}`;
+    return getCachedCopierSnapshotSignedUrls(cacheScope, snapshots, async paths => {
       const { data, error } = await supabase.storage
         .from('copier-snapshots')
-        .createSignedUrl(snapshot.path, 3_600);
-      if (error || !data?.signedUrl) {
-        console.warn('[SNAPSHOT] signed URL failed', error?.message ?? snapshot.path);
-        return null;
+        .createSignedUrls(paths, 3_600);
+      if (error || !data) throw new Error(error?.message || 'snapshot-signing-failed');
+      if (version !== authStateVersion || await getUserId() !== owner) throw new Error('snapshot-session-changed');
+      for (const item of data) {
+        if (item.error || !item.signedUrl) console.warn('[SNAPSHOT] signed URL failed', item.error ?? item.path);
       }
-      return { ...snapshot, url: data.signedUrl };
-    }));
-    return signed.filter((item): item is { kind: string; at: number; path: string; url: string } => item != null);
+      return data;
+    });
   },
 
   // Globální in-memory cache screenshotů — sdílená napříč komponentami.

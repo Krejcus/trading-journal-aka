@@ -6,6 +6,47 @@ import { isEvidenceJournalTrade, isRetiredJournalTrade } from '../lib/journalTra
 import { JOURNAL_REVIEW_FIELDS } from '../lib/journalReviewPatch';
 import { aggregateHistoryTrades, isCombinedTrade } from '../lib/tradeHistoryPresentation';
 
+const JOURNAL_DETAIL_CACHE_TTL_MS = 30_000;
+const JOURNAL_DETAIL_CACHE_MAX_ENTRIES = 32;
+const journalDetailCache = new Map<string, { expiresAt: number; rows: Trade[] }>();
+
+const journalDetailCacheKey = (scope: string, ids: readonly string[]) => JSON.stringify([scope, ids.map(String)]);
+
+/** A short, owner-scoped memory cache for an already verified detail snapshot.
+ * It deliberately never persists to disk and authStateVersion is part of scope. */
+export function getCachedJournalDetail(scope: string, ids: readonly string[], now = Date.now()): Trade[] | null {
+  const key = journalDetailCacheKey(scope, ids);
+  const cached = journalDetailCache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= now) {
+    journalDetailCache.delete(key);
+    return null;
+  }
+  return cached.rows;
+}
+
+export function cacheVerifiedJournalDetail(scope: string, ids: readonly string[], rows: Trade[], now = Date.now()): void {
+  for (const [key, cached] of journalDetailCache) {
+    if (cached.expiresAt <= now) journalDetailCache.delete(key);
+  }
+  if (journalDetailCache.size >= JOURNAL_DETAIL_CACHE_MAX_ENTRIES) {
+    const oldest = journalDetailCache.keys().next().value;
+    if (oldest) journalDetailCache.delete(oldest);
+  }
+  journalDetailCache.set(journalDetailCacheKey(scope, ids), { expiresAt: now + JOURNAL_DETAIL_CACHE_TTL_MS, rows });
+}
+
+export function journalDetailSelectionKey(selected: Trade, members: readonly Trade[]): string {
+  const ids = isCombinedTrade(selected)
+    ? selected.combinedTradeIds?.map(String) ?? []
+    : members.map(member => String(member.id));
+  return JSON.stringify([String(selected.id), ids]);
+}
+
+export function __resetJournalDetailCacheForTests(): void {
+  journalDetailCache.clear();
+}
+
 /** One complete owner snapshot for the exact selected realizations. A separately
  * read member may be individually valid but cannot establish a consistent sum. */
 export async function readOwnedJournalDetails(client: SupabaseClient, ids: readonly string[], ownerId: string,

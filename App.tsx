@@ -15,6 +15,8 @@ import { calculateStats } from './services/analysis';
 import { buildLabDataset, detectLeaks, prepBiasFromPreps, prepDaysFromPreps, type LeakFinding } from './services/labAnalytics';
 import { tradeNeedsEnrichment } from './services/tradovateImport';
 import { storageService, getUserId } from './services/storageService';
+import { preloadDecodedImage } from './services/imageDecodeCache';
+import { warmTradeHistory } from './services/tradeHistoryWarmup';
 import { persistBacktestTradeReview } from './services/backtestTradeReview';
 import {
   BacktestTradeOutboxError, enqueueBacktestTrade, flushBacktestTradeOutbox, getPendingBacktestTrades,
@@ -3248,6 +3250,35 @@ const App: React.FC = () => {
   ), [trades, accounts, archivedAccounts, filters, dashboardMode]);
   const filteredDisplayTrades = useMemo(() => viewMode === 'combined'
     ? aggregateHistoryTrades(baseFilteredTrades) : baseFilteredTrades, [baseFilteredTrades, viewMode]);
+  const historyWarmupTrades = useMemo(() => filteredDisplayTrades.slice(0, 20), [filteredDisplayTrades]);
+  const historyWarmupKey = useMemo(() => historyWarmupTrades.map(trade => [
+    String(trade.id),
+    trade.combinedTradeIds?.map(String).join(',') ?? '',
+    trade.copierSnapshots?.map(snapshot => snapshot.path).join(',') ?? '',
+  ].join(':')).join('|'), [historyWarmupTrades]);
+  const historyWarmupTradesRef = useRef(historyWarmupTrades);
+  historyWarmupTradesRef.current = historyWarmupTrades;
+
+  // Připraví jen první obrazovku Historie na pozadí. Limit ve warmupu chrání start
+  // aplikace před dřívějším problémem, kdy se stahovaly screenshoty celé historie.
+  // Stabilní klíč zabrání rušení rozběhnutého warmupu při běžném refreshi stejných dat.
+  useEffect(() => {
+    const ownerId = session?.user?.id;
+    if (!ownerId || dashboardMode === 'backtesting' || !historyWarmupKey) return;
+    const controller = new AbortController();
+    const recentTrades = historyWarmupTradesRef.current;
+    void warmTradeHistory(recentTrades, ownerId, {
+      signSnapshots: snapshots => storageService.createCopierSnapshotSignedUrls(snapshots),
+      decodeImage: preloadDecodedImage,
+      markImageLoaded: id => storageService.markImageLoaded(id),
+      loadJournalDetails: (ids, signal) => storageService.getJournalTradeDetails(ids, signal),
+      loadJournalDetailSelections: (selections, signal) => storageService.getJournalTradeDetailSelections(selections, signal),
+      signal: controller.signal,
+      isCurrent: () => sessionRef.current?.user.id === ownerId && !logoutInProgressRef.current,
+    });
+    return () => controller.abort();
+  }, [dashboardMode, historyWarmupKey, session?.user?.id]);
+
   const resolvedReviewTrade = aiChatTrade && isEvidenceJournalTrade(aiChatTrade)
     ? (String(aiChatTrade.id).startsWith('combined_') ? filteredDisplayTrades : trades).find(row => row.id === aiChatTrade.id) ?? null
     : aiChatTrade;

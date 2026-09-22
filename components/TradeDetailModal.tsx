@@ -1,9 +1,11 @@
-import { mergeJournalDetailSelection } from '../services/journalTradeDetail';
-import { journalReviewOnly } from '../lib/journalReviewPatch';
+import { journalDetailSelectionKey, mergeJournalDetailSelection } from '../services/journalTradeDetail';
+import { JOURNAL_REVIEW_FIELDS, journalReviewOnly } from '../lib/journalReviewPatch';
+import { isImageDecoded, preloadDecodedImage } from '../services/imageDecodeCache';
+import type { PreparedJournalTradeDetail } from '../services/tradeHistoryWarmup';
 import { explicitTradeMaster, isCombinedTrade, journalDisplayBalance, tradeAccountLabel, tradeDetailMembers, tradeDetailSource, tradeEstimateNotice } from '../lib/tradeHistoryPresentation';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { pointValueFor } from '../services/tradovateImport';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
     Play, X, Edit3, Trash2, Clock, Image as ImageIcon,
     Maximize2, ArrowRight, Timer, Terminal, ArrowUpRight, ArrowDownRight,
@@ -132,6 +134,9 @@ interface TradeDetailModalProps {
     emotions: CustomEmotion[];
     onPrev?: () => void;
     onNext?: () => void;
+    onPrefetchPrev?: () => void;
+    onPrefetchNext?: () => void;
+    preparedJournalDetail?: PreparedJournalTradeDetail;
     hasPrev?: boolean;
     hasNext?: boolean;
     loadJournalDetails?: (ids: readonly string[], signal?: AbortSignal) => Promise<Trade[]>;
@@ -151,7 +156,7 @@ interface TradeDetailModalProps {
 }
 
 const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
-    trade, accountName, theme, onClose, onDelete, emotions, onPrev, onNext, hasPrev, hasNext,
+    trade, accountName, theme, onClose, onDelete, emotions, onPrev, onNext, onPrefetchPrev, onPrefetchNext, preparedJournalDetail, hasPrev, hasNext,
     onUpdateTrade, pnlDisplayMode = 'usd', accounts = [], initialBalance, user, exchangeRates,
     allTrades = EMPTY_TRADES, startInEditMode = false, onSaved, loadJournalDetails = defaultLoadJournalDetails, loadTradeDetail = defaultLoadTradeDetail, signCopierSnapshots = storageService.createCopierSnapshotSignedUrls
 }) => {
@@ -172,16 +177,46 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
         () => tradeDetailSource(trade, allTrades)?.id,
         [trade, allTrades],
     );
+    const detailLoadLookupId = journalReviewOnly(trade) ? null : detailLookupId;
     const selectedMembers = useMemo(() => tradeDetailMembers(trade, allTrades), [trade, allTrades]);
-    const [journalResult, setJournalResult] = useState<{ input: Trade; selection: Trade[]; rows: Trade[] | null } | null>(null);
-    const currentJournal = journalResult?.input === trade && journalResult.selection === selectedMembers ? journalResult : null;
+    const selectionKey = journalDetailSelectionKey(trade, selectedMembers);
+    const detailLoadTrigger = journalReviewOnly(trade) ? selectionKey : trade;
+    const tradeRef = useRef(trade);
+    const selectedMembersRef = useRef(selectedMembers);
+    tradeRef.current = trade;
+    selectedMembersRef.current = selectedMembers;
+    const [journalResult, setJournalResult] = useState<{ selectionKey: string; rows: Trade[] | null } | null>(null);
+    const preparedJournal = useMemo(() => {
+        if (!journalReviewOnly(trade) || preparedJournalDetail?.tradeId !== String(trade.id)) return null;
+        try {
+            return mergeJournalDetailSelection(trade, selectedMembers, preparedJournalDetail.rows);
+        } catch {
+            return null;
+        }
+    }, [preparedJournalDetail, selectedMembers, trade]);
+    const currentJournal = useMemo(() => journalResult?.selectionKey === selectionKey
+        ? journalResult
+        : preparedJournal ? { selectionKey, rows: preparedJournal.members } : null,
+    [journalResult, preparedJournal, selectionKey]);
     const journalPending = journalReviewOnly(trade) && !currentJournal?.rows;
+    const [showJournalPending, setShowJournalPending] = useState(false);
     const [fullTrade, setFullTrade] = useState<Trade>(trade);
     const [isLoadingDetails, setIsLoadingDetails] = useState(false);
     const [detailsLoadError, setDetailsLoadError] = useState(false);
     const [detailsRetry, setDetailsRetry] = useState(0);
     // Id obchodu, pro který už doběhl lazy-load detailu (screenshoty z DB).
     const [detailsLoadedTradeId, setDetailsLoadedTradeId] = useState<string | null>(null);
+
+    // Rychlý zásah cache se vejde před první zprávu. Při skutečně studeném
+    // načtení zůstává ověřovací stav pravdivě skrytý a stav ukážeme až po 180 ms.
+    useEffect(() => {
+        if (!journalPending) {
+            setShowJournalPending(false);
+            return;
+        }
+        const timer = window.setTimeout(() => setShowJournalPending(true), 180);
+        return () => window.clearTimeout(timer);
+    }, [journalPending, selectionKey]);
 
     // Scroll Lock
     useEffect(() => {
@@ -198,61 +233,72 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     }, []);
 
 
-    const activeTrade = fullTrade || trade;
+    // Při změně propu nesmí starý fullTrade ani na jediný render vystupovat
+    // jako nový obchod. Ověřený detail se připojí až se shodným id.
+    const activeTrade = preparedJournal?.trade
+        ?? (String(fullTrade.id) === String(trade.id) ? fullTrade : trade);
 
     useEffect(() => {
-        setFullTrade(trade);
+        const detailTrade = tradeRef.current;
+        const detailMembers = selectedMembersRef.current;
+        setFullTrade(detailTrade);
         setDetailsLoadError(false);
-        if (journalReviewOnly(trade)) {
+        if (journalReviewOnly(detailTrade)) {
+            if (preparedJournal) {
+                setFullTrade(preparedJournal.trade);
+                setJournalResult({ selectionKey, rows: preparedJournal.members });
+                setDetailsLoadedTradeId(String(detailTrade.id));
+                setIsLoadingDetails(false);
+                return;
+            }
             const controller = new AbortController();
             setIsLoadingDetails(true);
-            setJournalResult(null);
-            setDetailsLoadedTradeId(previous => previous === String(trade.id) ? previous : null);
-            void loadJournalDetails(isCombinedTrade(trade) ? trade.combinedTradeIds?.map(String) ?? [] : [String(trade.id)], controller.signal)
+            setDetailsLoadedTradeId(previous => previous === String(detailTrade.id) ? previous : null);
+            void loadJournalDetails(isCombinedTrade(detailTrade) ? detailTrade.combinedTradeIds?.map(String) ?? [] : [String(detailTrade.id)], controller.signal)
                 .then(rows => {
                     if (controller.signal.aborted) return;
-                    const merged = mergeJournalDetailSelection(trade, selectedMembers, rows);
+                    const merged = mergeJournalDetailSelection(detailTrade, detailMembers, rows);
                     setFullTrade(merged.trade);
-                    setJournalResult({ input: trade, selection: selectedMembers, rows: merged.members });
-                    setDetailsLoadedTradeId(String(trade.id));
+                    setJournalResult({ selectionKey, rows: merged.members });
+                    setDetailsLoadedTradeId(String(detailTrade.id));
                 }).catch(() => {
                     if (controller.signal.aborted) return;
                     setDetailsLoadError(true);
-                    setJournalResult({ input: trade, selection: selectedMembers, rows: null });
+                    setJournalResult({ selectionKey, rows: null });
                 }).finally(() => { if (!controller.signal.aborted) setIsLoadingDetails(false); });
             return () => controller.abort();
         }
         // If parent trade already has screenshot data, use it directly (no extra DB call)
-        if (!journalReviewOnly(trade) && (trade.screenshot || (trade.screenshots && trade.screenshots.length > 0))) {
+        if (!journalReviewOnly(detailTrade) && (detailTrade.screenshot || (detailTrade.screenshots && detailTrade.screenshots.length > 0))) {
             // Předchozí (zrušený) lazy-load mohl nechat spinner zapnutý — vypni ho,
             // jinak by screenshot z props zůstal schovaný za spinnerem.
             setIsLoadingDetails(false);
-            setDetailsLoadedTradeId(String(trade.id));
+            setDetailsLoadedTradeId(String(detailTrade.id));
             return;
         }
         let cancelled = false;
         // Keep an already opened editor mounted while its optimistic review refreshes.
-        setDetailsLoadedTradeId(previous => previous === String(trade.id) ? previous : null);
+        setDetailsLoadedTradeId(previous => previous === String(detailTrade.id) ? previous : null);
         const loadFull = async () => {
             // Bez guardu na isLoadingDetails: hodnota v closure je stále z prvního renderu
             // a při rychlém přepínání obchodů by načtení detailu úplně přeskočila.
             setIsLoadingDetails(true);
             let succeeded = false;
             try {
-                if (detailLookupId != null) {
-                    const detailed = await loadTradeDetail(String(detailLookupId));
+                if (detailLoadLookupId != null) {
+                    const detailed = await loadTradeDetail(String(detailLoadLookupId));
                     // Merge only screenshot/screenshots from DB — keep parent prop's
                     // up-to-date fields (executionStatus, isValid, notes, etc.) so we
                     // don't overwrite an optimistic update with stale DB data.
-                    if (journalReviewOnly(trade) && (!detailed || String(detailed.id) !== String(detailLookupId))) throw new Error("journal-review-details-unavailable");
+                    if (journalReviewOnly(detailTrade) && (!detailed || String(detailed.id) !== String(detailLoadLookupId))) throw new Error("journal-review-details-unavailable");
                     if (detailed && !cancelled) {
                         succeeded = true;
                         setFullTrade(prev => ({
                             ...prev,
                             screenshot: detailed.screenshot ?? prev.screenshot,
                             screenshots: detailed.screenshots ?? prev.screenshots,
-                            copierSnapshots: journalReviewOnly(trade) ? detailed.copierSnapshots ?? [] : detailed.copierSnapshots ?? prev.copierSnapshots,
-                            copierEpisodeId: journalReviewOnly(trade) ? detailed.copierEpisodeId : detailed.copierEpisodeId ?? prev.copierEpisodeId,
+                            copierSnapshots: journalReviewOnly(detailTrade) ? detailed.copierSnapshots ?? [] : detailed.copierSnapshots ?? prev.copierSnapshots,
+                            copierEpisodeId: journalReviewOnly(detailTrade) ? detailed.copierEpisodeId : detailed.copierEpisodeId ?? prev.copierEpisodeId,
                             copierSnapshotLoadError: detailed.copierSnapshotLoadError ?? false,
                             drawings: detailed.drawings ?? prev.drawings,
                             aiSuggestions: (detailed as any).aiSuggestions ?? (prev as any).aiSuggestions,
@@ -266,14 +312,23 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
             } finally {
                 if (!cancelled) {
                     setIsLoadingDetails(false);
-                    if (succeeded || !journalReviewOnly(trade)) setDetailsLoadedTradeId(String(trade.id));
+                    if (succeeded || !journalReviewOnly(detailTrade)) setDetailsLoadedTradeId(String(detailTrade.id));
                 }
             }
         };
         loadFull();
         return () => { cancelled = true; };
-    // Sync na CELÝ trade objekt — když edit upraví jakékoliv pole, sync fullTrade.
-    }, [trade, detailLookupId, detailsRetry, loadTradeDetail, loadJournalDetails, selectedMembers]);
+    // Journal detail tracks stable selected IDs; ordinary trades still track the full object.
+    }, [detailLoadTrigger, detailLoadLookupId, detailsRetry, loadTradeDetail, loadJournalDetails, preparedJournal, selectionKey]);
+
+    // Background list refreshes may carry newer review labels, but they must not
+    // invalidate or overwrite the already verified financial/media snapshot.
+    useEffect(() => {
+        if (!journalReviewOnly(trade) || !currentJournal?.rows) return;
+        const review = Object.fromEntries(Object.entries(trade).filter(([key, value]) => JOURNAL_REVIEW_FIELDS.has(key)
+            && !['screenshot', 'screenshots', 'drawings'].includes(key) && value !== undefined));
+        setFullTrade(previous => String(previous.id) === String(trade.id) ? { ...previous, ...review } : previous);
+    }, [trade, currentJournal?.rows]);
 
     const groupTrades = useMemo(
         () => journalReviewOnly(trade) ? currentJournal?.rows ?? [] : tradeDetailMembers(activeTrade, allTrades),
@@ -298,12 +353,15 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     const [isZoomed, setIsZoomed] = useState(false);
     const [accountsExpanded, setAccountsExpanded] = useState(false);
     const [activeImageIndex, setActiveImageIndex] = useState(0);
+    const [displayedImage, setDisplayedImage] = useState<{ tradeId: string; url: string } | null>(null);
+    const [imageLoadError, setImageLoadError] = useState(false);
     const [visualMode, setVisualMode] = useState<'chart' | 'screenshots'>('screenshots');
     const [isSigningSnapshots, setIsSigningSnapshots] = useState(false);
     const [snapshotSignError, setSnapshotSignError] = useState(false);
     const [signedCopierSnapshots, setSignedCopierSnapshots] = useState<Array<{
         kind: string; at: number; path: string; url: string;
     }>>([]);
+    const [signedSnapshotTradeId, setSignedSnapshotTradeId] = useState<string | null>(null);
     const [shareCopied, setShareCopied] = useState(false);
     const [isShareCardOpen, setIsShareCardOpen] = useState(false);
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -358,12 +416,26 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
         setIsEditingNotes(false);
     };
 
-    const manualImages = activeTrade.screenshots && activeTrade.screenshots.length > 0
+    const manualImages = useMemo(() => activeTrade.screenshots && activeTrade.screenshots.length > 0
         ? activeTrade.screenshots
-        : (activeTrade.screenshot ? [activeTrade.screenshot] : []);
-    const images = [...manualImages, ...signedCopierSnapshots.map(snapshot => snapshot.url)];
-    const activeCopierSnapshot = activeImageIndex >= manualImages.length
-        ? signedCopierSnapshots[activeImageIndex - manualImages.length]
+        : (activeTrade.screenshot ? [activeTrade.screenshot] : []), [activeTrade.screenshot, activeTrade.screenshots]);
+    const currentSignedCopierSnapshots = useMemo(
+        () => signedSnapshotTradeId === String(activeTrade.id)
+            ? signedCopierSnapshots
+            : preparedJournalDetail?.tradeId === String(activeTrade.id)
+                ? preparedJournalDetail.signedCopierSnapshots
+                : [],
+        [activeTrade.id, preparedJournalDetail, signedCopierSnapshots, signedSnapshotTradeId],
+    );
+    const images = useMemo(() => [...manualImages, ...currentSignedCopierSnapshots.map(snapshot => snapshot.url)], [manualImages, currentSignedCopierSnapshots]);
+    const requestedImageIndex = images.length > 0 ? Math.min(activeImageIndex, images.length - 1) : -1;
+    const requestedImageUrl = requestedImageIndex >= 0 ? images[requestedImageIndex] : null;
+    const displayedImageUrl = displayedImage?.tradeId === String(activeTrade.id) && images.includes(displayedImage.url)
+        ? displayedImage.url
+        : requestedImageUrl && isImageDecoded(requestedImageUrl) ? requestedImageUrl : null;
+    const displayedImageIndex = displayedImageUrl ? images.indexOf(displayedImageUrl) : -1;
+    const activeCopierSnapshot = displayedImageIndex >= manualImages.length
+        ? currentSignedCopierSnapshots[displayedImageIndex - manualImages.length]
         : undefined;
 
     const requiresJournalMedia = journalReviewOnly(activeTrade);
@@ -372,28 +444,59 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     useEffect(() => {
         let cancelled = false;
         setSignedCopierSnapshots([]);
+        setSignedSnapshotTradeId(null);
         setSnapshotSignError(false);
         setIsSigningSnapshots(false);
         // Journal media must come from the freshly read owner detail.
         if (requiresJournalMedia && (isLoadingDetails || detailsLoadedTradeId !== String(trade.id))) return () => { cancelled = true; };
         const snapshots = activeTrade.copierSnapshots ?? [];
         if (snapshots.length === 0) return () => { cancelled = true; };
+        const preparedSnapshots = preparedJournalDetail?.tradeId === String(activeTrade.id)
+            ? preparedJournalDetail.signedCopierSnapshots
+            : null;
+        const preparedPaths = new Set(preparedSnapshots?.map(snapshot => snapshot.path));
+        if (preparedSnapshots && snapshots.every(snapshot => preparedPaths.has(snapshot.path))) {
+            setSignedCopierSnapshots(preparedSnapshots);
+            setSignedSnapshotTradeId(String(activeTrade.id));
+            setSnapshotSignError(preparedSnapshots.length !== snapshots.length);
+            return () => { cancelled = true; };
+        }
         setIsSigningSnapshots(true);
         void signCopierSnapshots(snapshots)
             .then(items => {
                 if (!cancelled) {
                     setSignedCopierSnapshots(items);
+                    setSignedSnapshotTradeId(String(activeTrade.id));
                     setSnapshotSignError(items.length !== snapshots.length);
                 }
             })
             .catch(() => { if (!cancelled) setSnapshotSignError(true); })
             .finally(() => { if (!cancelled) setIsSigningSnapshots(false); });
         return () => { cancelled = true; };
-    }, [activeTrade.id, requiresJournalMedia, activeTrade.copierSnapshots, trade.id, isLoadingDetails, detailsLoadedTradeId, signCopierSnapshots]);
+    }, [activeTrade.id, requiresJournalMedia, activeTrade.copierSnapshots, trade.id, isLoadingDetails, detailsLoadedTradeId, preparedJournalDetail, signCopierSnapshots]);
 
     useEffect(() => {
         if (activeImageIndex >= images.length) setActiveImageIndex(0);
     }, [activeImageIndex, images.length]);
+
+    useEffect(() => {
+        const requested = requestedImageUrl;
+        if (!requested) {
+            if (images.length === 0) setDisplayedImage(null);
+            return;
+        }
+        let cancelled = false;
+        setImageLoadError(false);
+        void preloadDecodedImage(requested)
+            .then(() => { if (!cancelled) setDisplayedImage({ tradeId: String(activeTrade.id), url: requested }); })
+            .catch(() => { if (!cancelled) setImageLoadError(true); });
+        // The active image has priority, while the rest of the small carousel is
+        // decoded in advance so arrow clicks can cross-fade without a blank frame.
+        for (const url of images) {
+            if (url !== requested) void preloadDecodedImage(url).catch(() => undefined);
+        }
+        return () => { cancelled = true; };
+    }, [activeTrade.id, images, requestedImageUrl]);
 
     const executionTrade = journalReviewOnly(activeTrade) && isCombined && visualMode === 'chart' ? chartTrade ?? activeTrade : activeTrade;
     const entryPrice = safeValue(executionTrade.entryPrice);
@@ -445,14 +548,11 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
     const getEmotionDetails = (emoId: string) => emotions.find(e => e.id === emoId) || { label: emoId, icon: '' };
 
-    const [imageLoadError, setImageLoadError] = useState(false);
-
-    // Reset error state when switching images
-    useEffect(() => { setImageLoadError(false); }, [activeImageIndex]);
     // Reset error state when trade changes
     useEffect(() => { setImageLoadError(false); }, [activeTrade.id]);
     const snapshotError = Boolean(activeTrade.copierSnapshotLoadError || snapshotSignError || detailsLoadError || imageLoadError);
-    const loadingImages = isLoadingDetails || (isSigningSnapshots && images.length === 0);
+    const loadingImages = (isLoadingDetails && !displayedImageUrl) || (isSigningSnapshots && images.length === 0)
+        || (images.length > 0 && !displayedImageUrl && !imageLoadError);
     // Screenshot obchodu je výchozí pohled; graf je druhá záložka.
     useEffect(() => { setVisualMode('screenshots'); }, [activeTrade.id]);
 
@@ -486,7 +586,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
     return (
         <ErrorBoundary name="TradeDetailModal">
-            {journalPending && <div className="fixed inset-0 z-[300] flex items-center justify-center bg-theme-page-95 backdrop-blur-2xl p-6">
+            {journalPending && showJournalPending && <div className="fixed inset-0 z-[300] flex items-center justify-center bg-theme-page-95 backdrop-blur-2xl p-6">
                 <div role={currentJournal ? 'alert' : 'status'} className="max-w-md rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-6 text-center text-sm text-[var(--text-primary)]">
                     <p>{currentJournal ? 'Údaje vybraných účtů se nepodařilo ověřit. Obnovte detail, případně výběr v historii.' : 'Načítám společný přehled vybraných účtů…'}</p>
                     <div className="mt-4 flex justify-center gap-4">{currentJournal && <button className="font-bold text-blue-500" onClick={() => setDetailsRetry(value => value + 1)}>Zkusit znovu</button>}<button onClick={onClose}>Zavřít</button></div>
@@ -540,8 +640,8 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                         <div className="flex items-center gap-1.5 lg:gap-3">
                             {/* Prev/Next */}
                             <div className={`flex items-center gap-0.5 p-0.5 rounded-xl border ${isDark ? 'bg-white/5 border-white/5' : 'bg-white border-slate-200'}`}>
-                                <button onClick={onPrev} disabled={!hasPrev} className={`p-1.5 lg:p-2 rounded-lg transition-all ${!hasPrev ? 'opacity-20 cursor-not-allowed' : isDark ? 'hover:bg-white/10 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-slate-700'}`}><ChevronLeft size={16} /></button>
-                                <button onClick={onNext} disabled={!hasNext} className={`p-1.5 lg:p-2 rounded-lg transition-all ${!hasNext ? 'opacity-20 cursor-not-allowed' : isDark ? 'hover:bg-white/10 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-slate-700'}`}><ChevronRight size={16} /></button>
+                                <button onPointerEnter={onPrefetchPrev} onPointerDown={onPrefetchPrev} onFocus={onPrefetchPrev} onClick={onPrev} disabled={!hasPrev} className={`p-1.5 lg:p-2 rounded-lg transition-all ${!hasPrev ? 'opacity-20 cursor-not-allowed' : isDark ? 'hover:bg-white/10 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-slate-700'}`}><ChevronLeft size={16} /></button>
+                                <button onPointerEnter={onPrefetchNext} onPointerDown={onPrefetchNext} onFocus={onPrefetchNext} onClick={onNext} disabled={!hasNext} className={`p-1.5 lg:p-2 rounded-lg transition-all ${!hasNext ? 'opacity-20 cursor-not-allowed' : isDark ? 'hover:bg-white/10 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-slate-700'}`}><ChevronRight size={16} /></button>
                             </div>
                             <button onClick={() => setIsShareCardOpen(true)} title="Sdílet jako kartu" className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white' : 'bg-white text-slate-400 hover:text-slate-700 hover:bg-slate-50 border border-slate-200'}`}><Share2 size={16} /></button>
                             {onUpdateTrade && (
@@ -784,10 +884,9 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                             Snímky se nepodařilo úplně načíst.
                                             <button type="button" className="ml-2 font-bold text-blue-500" onClick={() => { setImageLoadError(false); setDetailsRetry(value => value + 1); }}>Zkusit znovu</button>
                                         </div>}
-                                        <AnimatePresence mode="wait">
-                                            {!loadingImages && (images.length > 0 && !imageLoadError) ? (
-                                                <motion.div key={images[activeImageIndex]} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0">
-                                                    <img src={images[activeImageIndex]} className="absolute inset-0 w-full h-full object-contain cursor-zoom-in" onClick={() => setIsZoomed(true)} onError={() => setImageLoadError(true)} />
+                                        {displayedImageUrl ? (
+                                                <div className="absolute inset-0">
+                                                    <img src={displayedImageUrl} className="absolute inset-0 w-full h-full object-contain cursor-zoom-in" onClick={() => setIsZoomed(true)} onError={() => { setImageLoadError(true); setDisplayedImage(null); }} />
                                                     {activeCopierSnapshot && (
                                                         <div className="absolute top-16 left-4 z-20 rounded-lg border border-white/10 bg-black/65 px-3 py-2 text-white backdrop-blur-md">
                                                             <p className="text-[9px] font-black uppercase tracking-widest">Auto · {activeCopierSnapshot.kind}</p>
@@ -797,18 +896,17 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                                     <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                                                         <div className="p-5 bg-black/40 backdrop-blur-md rounded-full text-white border border-white/20 shadow-2xl pointer-events-auto cursor-pointer" onClick={() => setIsZoomed(true)}><Maximize2 size={28} /></div>
                                                     </div>
-                                                </motion.div>
+                                                </div>
                                             ) : !loadingImages ? (
                                                 <div className="absolute inset-0 flex flex-col items-center justify-center opacity-30 text-slate-500 p-8 text-center">
                                                     <div className="p-8 rounded-[36px] border-2 border-dashed border-slate-500"><ImageIcon size={52} strokeWidth={1} /></div>
                                                     <p className="text-sm font-black uppercase tracking-[0.3em] mt-7">{snapshotError ? 'CHYBA NAČÍTÁNÍ' : 'BEZ SCREENSHOTU'}</p>
                                                 </div>
                                             ) : null}
-                                        </AnimatePresence>
                                         {images.length > 1 && (
                                             <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-4 py-2 bg-black/60 backdrop-blur-xl rounded-full border border-white/10">
                                                 <button onClick={() => setActiveImageIndex((activeImageIndex - 1 + images.length) % images.length)} className="p-1 text-white/50 hover:text-white"><ChevronLeft size={18} /></button>
-                                                <span className="text-[10px] font-mono text-white/70">{activeImageIndex + 1} / {images.length}</span>
+                                                <span className="text-[10px] font-mono text-white/70">{(displayedImageIndex >= 0 ? displayedImageIndex : activeImageIndex) + 1} / {images.length}</span>
                                                 <button onClick={() => setActiveImageIndex((activeImageIndex + 1) % images.length)} className="p-1 text-white/50 hover:text-white"><ChevronRight size={18} /></button>
                                             </div>
                                         )}
@@ -844,7 +942,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
             </div>
 
             {isZoomed && images.length > 0 && (
-                <ImageZoomModal images={images} initialIndex={activeImageIndex} onClose={() => setIsZoomed(false)} />
+                <ImageZoomModal images={images} initialIndex={displayedImageIndex >= 0 ? displayedImageIndex : activeImageIndex} onClose={() => setIsZoomed(false)} />
             )}
 
             {isFullEditOpen && journalReviewOnly(activeTrade) && detailsLoadedTradeId !== String(trade.id) && (
