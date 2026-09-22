@@ -2618,6 +2618,13 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
   z-index: 2;
 }
 
+/* Hlavička musí být nad tělem. Obojí mělo `z-index: 2`, takže si hlavička
+   udělala vlastní kontext stohování a bublina sdílení se z něj nedostala —
+   tělo karty ji jako pozdější sourozenec překreslilo a uživatel ji neviděl.
+   Selektor musí být takhle dlouhý: pravidlo nad ním má kvůli dvěma `:not()`
+   specificitu (0,3,0) a kratší zápis by prohrál. */
+.live-day-card .live-day-inner > .live-day-head { z-index: 4; }
+
 /* Odlesk sledující kurzor — bez něj působí náklon jako plochý papír. */
 .live-day-sheen {
   position: absolute;
@@ -3029,139 +3036,47 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
   .live-day-big { font-size: 40px; }
   .live-day-total { padding: 18px 18px; gap: 16px; }
   .live-day-stamp { gap: 8px; }
-  .live-day-close { width: 26px; height: 26px; border-radius: 8px; }
+  /* Ovládání si své místo teprve rozevře (mřížka 0fr → 1fr), takže se jméno
+   plynule odsune doleva a v klidu stojí úplně vpravo. Šířka se nikde nepíše
+   natvrdo — přibude-li třetí ikona, animace to unese beze změny. */
+.live-day-tools {
+  display: grid;
+  grid-template-columns: 0fr;
+  overflow: hidden;
+  opacity: 0;
+  transition: grid-template-columns 0.28s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.2s;
 }
 
-/* ─────────────────────────────────────────────────────────────────────────
-   Karta dne — světlý režim
-
-   Karta není jen „černá naruby“: na bílé nefunguje nic, co svítí. Běžící
-   světla po obvodu musí ztmavnout (bílá na bílé není vidět), odlesk se obrací
-   na bílý horký bod nad tónovaným podkladem a logo je skleněné a světlé, takže
-   se musí ztmavit filtrem. Zbytek (náklon, dopočítávání čísla, počítadlo
-   skrytých účtů) je na barvách nezávislý a platí pro oba režimy.
-   `.oled-theme` je tmavé téma, takže spadá pod výchozí styl.
-   ───────────────────────────────────────────────────────────────────────── */
-
-.light-theme .live-day-overlay {
-  background: rgba(15, 23, 42, 0.42);
+.live-day-tools > span {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  padding-left: 0;
+  overflow: hidden;
+  transition: padding-left 0.28s cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-.light-theme .live-day-card {
-  background: linear-gradient(140deg, rgba(8, 145, 178, 0.5), rgba(15, 23, 42, 0.1) 38%, rgba(16, 185, 129, 0.38));
-  box-shadow: 0 34px 70px -34px rgba(15, 23, 42, 0.45);
+.live-day-tilt:hover .live-day-tools,
+.live-day-tools:focus-within {
+  grid-template-columns: 1fr;
+  opacity: 1;
 }
 
-/* Vinětace místo mřížky: na bílé byla čtverečkovaná textura vidět a rušila.
-   Ztmavené okraje drží pohled ve středu a zároveň dají odlesku co rozsvěcet —
-   nad čistě bílou plochou by nebyl vidět vůbec. První vrstva = nejvýš. */
-.light-theme .live-day-inner {
-  color: #0f172a;
-  background:
-    radial-gradient(ellipse 100% 100% at 50% 45%, transparent 40%, rgba(15, 23, 42, 0.07) 100%),
-    radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34, 211, 238, 0.2) 0%, transparent 62%),
-    radial-gradient(ellipse 60% 60% at 100% 100%, rgba(16, 185, 129, 0.16) 0%, transparent 62%),
-    #fbfdff;
+.live-day-tilt:hover .live-day-tools > span,
+.live-day-tools:focus-within > span {
+  padding-left: 12px;
 }
 
-.light-theme .live-day-inner::before { background-image: none; }
-
-.light-theme .live-day-sheen {
-  background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 255, 255, 0.9), transparent 62%);
+/* Dotykové zařízení hover nemá — tam je ovládání vidět rovnou. */
+@media (hover: none) {
+  .live-day-tools { grid-template-columns: 1fr; opacity: 1; }
+  .live-day-tools > span { padding-left: 12px; }
 }
 
-.light-theme .live-day-aurora {
-  opacity: 0.7;
-  background: radial-gradient(ellipse, rgba(34, 211, 238, 0.3) 0%, transparent 70%);
+@media (prefers-reduced-motion: reduce) {
+  .live-day-tools, .live-day-tools > span { transition: none; }
 }
 
-/* Jedna barva po všech čtyřech stranách. Tmavá vodorovná stopa vypadala na
-   bílé jako dvě různé animace; tyrkysová se neztratí a nekřičí. */
-.light-theme .live-day-edge-t,
-.light-theme .live-day-edge-b {
-  background: linear-gradient(90deg, transparent, rgba(6, 182, 212, 0.95), transparent);
-}
-
-.light-theme .live-day-edge-r,
-.light-theme .live-day-edge-l {
-  background: linear-gradient(180deg, transparent, rgba(6, 182, 212, 0.95), transparent);
-}
-
-/* Logo zůstává stejný soubor jako v tmavém režimu, jen se dosytí a ztmaví —
-   žádná dlaždice pod tím. Sklo si tak udrží plastičnost a hlavička zůstane
-   vzdušná; je to z porovnávaných variant nejmenší zásah do značky.
-   `contrast` je tam kvůli vnitřku loga: ten je taky světlý, takže bez něj
-   splyne se svým vlastním obrysem. */
-.light-theme .live-day-brand img {
-  filter: saturate(3.2) brightness(0.72) contrast(1.15) drop-shadow(0 3px 7px rgba(15, 23, 42, 0.28));
-}
-
-/* `background-image`, ne zkratka `background` — ta by shodila `background-clip:
-   text` z výchozího pravidla a z nápisu by byl plný obdélník. */
-.light-theme .live-day-wordmark {
-  background-image: linear-gradient(180deg, #0f172a, rgba(15, 23, 42, 0.6));
-}
-
-.light-theme .live-day-wordmark i {
-  color: #0891b2;
-  -webkit-text-fill-color: #0891b2;
-}
-
-.light-theme .live-day-avatar {
-  color: #04121a;
-  box-shadow: 0 2px 12px rgba(13, 148, 136, 0.3);
-}
-
-.light-theme .live-day-who { color: #0f172a; }
-.light-theme .live-day-date { color: rgba(15, 23, 42, 0.52); }
-
-.light-theme .live-day-glass {
-  border-color: rgba(15, 23, 42, 0.09);
-  background: rgba(255, 255, 255, 0.66);
-}
-
-.light-theme .live-day-k { color: rgba(15, 23, 42, 0.55); }
-.light-theme .live-day-kk { color: rgba(15, 23, 42, 0.45); }
-.light-theme .live-day-note { color: #b45309; }
-.light-theme .live-day-split { border-top-color: rgba(15, 23, 42, 0.09); }
-.light-theme .live-day-slash { color: rgba(15, 23, 42, 0.32); }
-
-.light-theme .live-day-lhead {
-  color: rgba(15, 23, 42, 0.45);
-  border-bottom-color: rgba(15, 23, 42, 0.08);
-}
-
-.light-theme .live-day-row { border-bottom-color: rgba(15, 23, 42, 0.06); }
-.light-theme .live-day-row:hover { background: rgba(15, 23, 42, 0.035); }
-.light-theme .live-day-fm { color: rgba(15, 23, 42, 0.45); }
-.light-theme .live-day-empty { color: rgba(15, 23, 42, 0.45); }
-
-.light-theme .live-day-logo { background: #fff; border: 1px solid rgba(15, 23, 42, 0.08); }
-
-.light-theme .live-day-more {
-  color: rgba(15, 23, 42, 0.45);
-  border-top-color: rgba(15, 23, 42, 0.07);
-}
-
-.light-theme .live-day-rows::-webkit-scrollbar-thumb {
-  background: rgba(15, 23, 42, 0.18);
-  background-clip: padding-box;
-}
-
-.light-theme .live-day-rows:hover::-webkit-scrollbar-thumb {
-  background: rgba(15, 23, 42, 0.3);
-  background-clip: padding-box;
-}
-
-/* Emerald 500 / rose 400 jsou na bílé nedočtitelné — o dva stupně tmavší. */
-.light-theme .live-day-win { color: #15803d; }
-.light-theme .live-day-loss { color: #be123c; }
-.light-theme .live-day-flat { color: rgba(15, 23, 42, 0.45); }
-
-/* Zavírací tlačítko je uvnitř karty, ne přilepené na roh: na scrimu působilo
-   jako cizí prvek. Místo v hlavičce si drží pořád (`opacity`, ne `display`),
-   takže se při najetí nic neposune. Bez hoveru — dotykové zařízení — svítí
-   trvale, jinak by se karta nedala zavřít jinak než klepnutím vedle. */
 .live-day-close {
   display: inline-flex;
   align-items: center;
@@ -3170,26 +3085,16 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
   width: 30px;
   height: 30px;
   border-radius: 9px;
-  opacity: 0;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.03);
   color: rgba(255, 255, 255, 0.55);
-  transition: opacity 0.2s, color 0.16s, border-color 0.16s, background 0.16s;
-}
-
-.live-day-tilt:hover .live-day-close,
-.live-day-close:focus-visible {
-  opacity: 1;
+  transition: color 0.16s, border-color 0.16s, background 0.16s;
 }
 
 .live-day-close:hover {
   color: #fff;
   border-color: rgba(255, 255, 255, 0.28);
   background: rgba(255, 255, 255, 0.09);
-}
-
-@media (hover: none) {
-  .live-day-close { opacity: 1; }
 }
 
 .light-theme .live-day-close {
@@ -3269,7 +3174,7 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.03);
   color: rgba(255, 255, 255, 0.55);
-  transition: opacity 0.2s, color 0.16s, border-color 0.16s, background 0.16s;
+  transition: color 0.16s, border-color 0.16s, background 0.16s;
 }
 
 .live-day-ghost:hover:not(:disabled) {

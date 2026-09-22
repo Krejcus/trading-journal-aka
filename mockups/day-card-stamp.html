@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karta dne — jméno vpravo a odhalení ovládání</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root { --page:#e8edf3; --panel:#fff; --ink:#0f172a; --ink2:#475569; --ink3:#94a3b8; --line:#e2e8f0; --accent:#4f46e5; }
+.dark { --page:#020617; --panel:#0a0f1d; --ink:#f8fafc; --ink2:#94a3b8; --ink3:#475569;
+  --line:rgba(255,255,255,.08); --accent:#6366f1; }
+* { box-sizing:border-box; }
+body { margin:0; padding:26px 16px 90px; font-family:Inter,-apple-system,system-ui,sans-serif;
+  background:var(--page); color:var(--ink); }
+.wrap { max-width:1000px; margin:0 auto; }
+h1 { font-size:21px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.65; color:var(--ink2); max-width:88ch; margin:0 0 16px; }
+.lede b { color:var(--ink); }
+.bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:9px 12px; margin-bottom:22px;
+  border:1px solid var(--line); border-radius:12px; background:var(--panel); }
+.bar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--ink3); }
+.bar button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--line); background:transparent; color:var(--ink2); }
+.bar button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+.case { margin-bottom:24px; }
+.case > h2 { font-size:13px; font-weight:900; margin:0 0 3px; display:flex; align-items:baseline; gap:9px; }
+.case > h2 em { font-style:normal; color:var(--ink3); font-weight:800; font-size:10px;
+  letter-spacing:.09em; text-transform:uppercase; }
+.case > p { font-size:12px; line-height:1.55; color:var(--ink2); margin:0 0 10px; max-width:88ch; }
+.case > p b { color:var(--ink); }
+
+/* ── karta (zkrácená, jde jen o hlavičku) ───────────────────────────── */
+.card { position:relative; overflow:hidden; border-radius:16px; padding:1px; max-width:760px;
+  background:linear-gradient(140deg, rgba(34,211,238,.3), rgba(255,255,255,.05) 38%, rgba(16,185,129,.22));
+  box-shadow:0 22px 48px -30px rgba(0,0,0,.9); }
+.dark .card { background:linear-gradient(140deg, rgba(34,211,238,.3), rgba(255,255,255,.05) 38%, rgba(16,185,129,.22)); }
+.inner { position:relative; border-radius:15px; padding:22px 24px; color:#fff;
+  background:radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34,211,238,.13) 0%, transparent 60%), #000; }
+body:not(.dark) .inner { color:#0f172a;
+  background:radial-gradient(ellipse 100% 100% at 50% 45%, transparent 40%, rgba(15,23,42,.07) 100%),
+             radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34,211,238,.2) 0%, transparent 62%), #fbfdff; }
+
+.head { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:18px; }
+.brand { display:flex; align-items:center; gap:12px; }
+.brand .mark { width:38px; height:38px; border-radius:10px; display:flex; align-items:center; justify-content:center;
+  font-size:13px; font-weight:900; letter-spacing:-.02em;
+  background:linear-gradient(145deg,#67e8f9,#10b981); color:#04121a; }
+.wordmark { font-size:11.5px; font-weight:200; letter-spacing:.42em; text-transform:uppercase; opacity:.85; }
+.wordmark i { font-style:normal; font-weight:600; color:#22d3ee; }
+body:not(.dark) .wordmark i { color:#0891b2; }
+
+/* razítko: jméno + ovládání */
+.stamp { display:flex; align-items:center; }
+.owner { display:flex; align-items:center; gap:10px; }
+.avatar { width:32px; height:32px; border-radius:10px; flex:none; display:flex; align-items:center;
+  justify-content:center; font-size:11px; font-weight:800; color:#04121a;
+  background:linear-gradient(145deg,#67e8f9,#10b981); }
+.who { display:block; font-size:12.5px; font-weight:600; text-align:right; white-space:nowrap; }
+.date { display:block; margin-top:2px; font-size:11px; font-weight:500; letter-spacing:.05em;
+  opacity:.5; text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.tools { display:flex; align-items:center; gap:8px; }
+.tool { width:30px; height:30px; flex:none; border-radius:9px; display:inline-flex; align-items:center;
+  justify-content:center; cursor:pointer; border:1px solid rgba(255,255,255,.1);
+  background:rgba(255,255,255,.03); color:rgba(255,255,255,.55); transition:color .16s,border-color .16s,background .16s; }
+.tool:hover { color:#22d3ee; border-color:rgba(34,211,238,.45); background:rgba(34,211,238,.1); }
+body:not(.dark) .tool { border-color:rgba(15,23,42,.1); background:rgba(15,23,42,.03); color:rgba(15,23,42,.5); }
+body:not(.dark) .tool:hover { color:#0891b2; border-color:rgba(8,145,178,.45); background:rgba(8,145,178,.09); }
+.tool svg { width:14px; height:14px; }
+
+/* ── A: nástroje rozevřou šířku, jméno se odsune ────────────────────── */
+.va .tools { display:grid; grid-template-columns:0fr; overflow:hidden;
+  transition:grid-template-columns .28s cubic-bezier(.32,.72,0,1), opacity .2s; opacity:0; }
+.va .tools > span { display:flex; gap:8px; min-width:0; overflow:hidden; padding-left:0; }
+.va:hover .tools { grid-template-columns:1fr; opacity:1; }
+.va:hover .tools > span { padding-left:12px; }
+
+/* ── B: celé razítko popojede doleva, nástroje se prolnou ───────────── */
+.vb .stamp { position:relative; }
+.vb .owner { transition:transform .28s cubic-bezier(.32,.72,0,1); }
+.vb:hover .owner { transform:translateX(-80px); }
+.vb .tools { position:absolute; right:0; opacity:0; transform:translateX(8px);
+  transition:opacity .22s ease .06s, transform .28s cubic-bezier(.32,.72,0,1) .06s; }
+.vb:hover .tools { opacity:1; transform:none; }
+
+/* ── C: nástroje vyjedou zprava zpod jména ──────────────────────────── */
+.vc .tools { width:0; overflow:hidden; opacity:0;
+  transition:width .26s cubic-bezier(.32,.72,0,1), opacity .18s, margin-left .26s cubic-bezier(.32,.72,0,1); margin-left:0; }
+.vc .tools > span { display:flex; gap:8px; }
+.vc:hover .tools { width:68px; opacity:1; margin-left:12px; }
+.vc .tool { transform:translateX(10px); transition:transform .28s cubic-bezier(.32,.72,0,1); }
+.vc:hover .tool { transform:none; }
+.vc:hover .tool:last-child { transition-delay:.04s; }
+
+/* ── D: bez pohybu, jen prolnutí (místo je rezervované) ─────────────── */
+.vd .tools { opacity:0; margin-left:12px; transition:opacity .2s; }
+.vd:hover .tools { opacity:1; }
+
+/* tělo jen naznačené */
+.body { display:grid; grid-template-columns:minmax(0,260px) 1fr; gap:16px; }
+.glass { border-radius:16px; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.028); padding:16px 18px; }
+body:not(.dark) .glass { border-color:rgba(15,23,42,.09); background:rgba(255,255,255,.66); }
+.k { font-size:9.5px; font-weight:700; letter-spacing:.2em; text-transform:uppercase; opacity:.55; }
+.big { margin-top:8px; font-size:38px; font-weight:300; letter-spacing:-.035em; color:#22c55e;
+  font-variant-numeric:tabular-nums; }
+body:not(.dark) .big { color:#15803d; }
+.rows { display:flex; flex-direction:column; gap:7px; }
+.row { display:flex; justify-content:space-between; font-size:11.5px; }
+.row span:last-child { color:#22c55e; font-weight:700; font-variant-numeric:tabular-nums; }
+body:not(.dark) .row span:last-child { color:#15803d; }
+</style>
+</head>
+<body class="dark">
+<div class="wrap">
+  <h1>Jméno vpravo, ovládání až po najetí</h1>
+  <p class="lede">V klidu je vpravo jen <b>jméno a datum</b> — karta je čistá kompozice, kterou posíláš dál.
+    Po najetí na kartu se odhalí <b>sdílení i křížek</b>, stejně jako se dnes chová jen křížek.
+    <b>Najeď myší na kartu</b>, ne jen na roh. Liší se tím, jak se to místo udělá.</p>
+
+  <div class="bar">
+    <b>Téma</b>
+    <button id="bd" aria-pressed="true" onclick="theme(true)">Tmavé</button>
+    <button id="bl" aria-pressed="false" onclick="theme(false)">Světlé</button>
+  </div>
+
+  <div id="list"></div>
+</div>
+
+<script>
+const I = {
+  share:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg>`,
+  x:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>`,
+};
+
+const card = (cls) => `<div class="card ${cls}"><div class="inner">
+  <div class="head">
+    <div class="brand"><span class="mark">AT</span><span class="wordmark">Alpha <i>Trade</i></span></div>
+    <div class="stamp">
+      <div class="owner"><span class="avatar">FK</span>
+        <span><span class="who">Filip Krejča</span><span class="date">22. 09. 2026</span></span></div>
+      <div class="tools"><span><button class="tool" title="Sdílet">${I.share}</button><button class="tool" title="Zavřít">${I.x}</button></span></div>
+    </div>
+  </div>
+  <div class="body">
+    <div class="glass"><div class="k">Dnešní P&L</div><div class="big">+$2 906</div></div>
+    <div class="glass"><div class="rows">
+      <div class="row"><span>FTDF••••4175</span><span>+$610</span></div>
+      <div class="row"><span>TDF0••••8211</span><span>+$507</span></div>
+      <div class="row"><span>TDF0••••8217</span><span>+$441</span></div>
+    </div></div>
+  </div>
+</div></div>`;
+
+const CASES = [
+  ['A', 'Rozevření šířky', 'Nástroje rozevřou svoje místo z nuly (mřížka <code>0fr → 1fr</code>) a jméno se tím <b>plynule odsune doleva</b>. Nic se nepřekrývá a šířka se nemusí hádat dopředu.', 'va'],
+  ['B', 'Razítko popojede', 'Jméno se posune doleva o pevných 80 px a nástroje se do uvolněného místa <b>prolnou</b>. Pohyb je nejvýraznější, ale posun je natvrdo.', 'vb'],
+  ['C', 'Vyjedou zprava', 'Místo se otevře animací šířky a ikony navíc <b>dojedou zprava</b>, každá s malým zpožděním. Nejživější.', 'vc'],
+  ['D', 'Jen prolnutí', 'Místo je rezervované pořád, mění se jen krytí. <b>Nic neposkakuje</b> — ale jméno není v klidu úplně vpravo.', 'vd'],
+];
+
+function render() {
+  document.getElementById('list').innerHTML = CASES.map(([key, name, note, cls]) => `
+    <div class="case"><h2><em>Varianta ${key}</em>${name}</h2><p>${note}</p>${card(cls)}</div>`).join('');
+}
+function theme(dark) {
+  document.body.classList.toggle('dark', dark);
+  document.getElementById('bd').setAttribute('aria-pressed', String(dark));
+  document.getElementById('bl').setAttribute('aria-pressed', String(!dark));
+}
+render();
+</script>
+</body>
+</html>

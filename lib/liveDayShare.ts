@@ -40,10 +40,38 @@ export function publicLiveDaySummary(summary: LiveDaySummary): LiveDaySummary {
   };
 }
 
-/** Public JSON accepts only compact HTTPS avatars; inline data images stay in the private app. */
+/** Nad tímhle se avatar do sdílení nepustí a zůstanou iniciály. */
+export const LIVE_DAY_SHARE_AVATAR_MAX = 64_000;
+
+/**
+ * Appka ukládá avatar jako vložený `data:` obrázek, ne jako odkaz. Dokud se
+ * sem nepouštěl, měla sdílená stránka vždycky jen iniciály, i když fotka
+ * v profilu byla — a v obrázkovém náhledu se přitom vykreslila.
+ *
+ * `<img src="data:image/…">` nic nespouští, ale typ i abeceda base64 se
+ * kontrolují, aby tudy nešlo protlačit jiný obsah. Velký avatar (syrová
+ * fotka z telefonu jsou megabajty) se raději zahodí, než aby zdražil každou
+ * veřejnou odpověď.
+ */
+const INLINE_AVATAR_PREFIX = /^data:image\/(?:png|jpe?g|webp);base64,/;
+
+/**
+ * Tělo se kontroluje po částech, ne jedním velkým výrazem: na dvaceti
+ * kilobajtech by se hvězdička s alternativou mohla zvrhnout v backtracking.
+ */
+const inlineAvatar = (clean: string): string | null => {
+  const prefix = INLINE_AVATAR_PREFIX.exec(clean);
+  if (!prefix) return null;
+  const body = clean.slice(prefix[0].length);
+  if (body.length < 4 || body.length % 4 !== 0) return null;
+  const core = body.replace(/={1,2}$/, '');
+  return core.length > 0 && /^[A-Za-z0-9+/]+$/.test(core) ? clean : null;
+};
+
 export function publicLiveDayAvatar(value: string | null | undefined): string | null {
   const clean = value?.trim();
-  if (!clean || clean.length > 2_000) return null;
+  if (!clean || clean.length > LIVE_DAY_SHARE_AVATAR_MAX) return null;
+  if (clean.startsWith('data:')) return inlineAvatar(clean);
   try {
     const url = new URL(clean);
     return url.protocol === 'https:' && !url.username && !url.password ? url.toString() : null;

@@ -208,6 +208,38 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-22 — Karta dne: ovládání až po najetí a fotka ve sdílení (Claude)
+
+**Jméno vpravo, ovládání po najetí.** V klidu je v hlavičce karty jen jméno
+a datum; sdílení i křížek se odhalí až po najetí na kartu. Vybráno z
+`mockups/day-card-stamp.html` (varianta A): nástroje si rozevřou místo mřížkou
+`0fr → 1fr`, takže se jméno plynule odsune a šířka se nikde nepíše natvrdo —
+přibude-li třetí ikona, animace to unese. Na dotykovém zařízení (`hover: none`)
+je ovládání vidět rovnou.
+
+**Bublina sdílení byla schovaná za tělem karty.** Hlavička i tělo měly stejné
+`z-index: 2`; hlavička si tím udělá vlastní kontext stohování, bublina z něj
+neuteče a tělo ji jako pozdější sourozenec překreslí. Napoprvé jsem to opravil
+špatně — pravidlo se neuplatnilo, protože obecný selektor nad ním má kvůli
+dvěma `:not()` specificitu (0,3,0). Přibyl test na přesné znění selektoru.
+
+**Fotka na sdílené stránce.** Avatar je v profilu uložený jako vložený `data:`
+obrázek, ale `publicLiveDayAvatar` pouštěl dál jen HTTPS odkazy, takže na
+veřejné stránce zůstaly vždycky iniciály — přestože v appce i v obrázkovém
+náhledu se fotka vykreslila. Vložený obrázek teď projde, ale jen
+`image/png|jpeg|webp` s platnou base64 (délka na násobek čtyř, kontrolovaná
+abeceda) a do 64 000 znaků; syrová fotka z telefonu má megabajty a zdražila by
+každou veřejnou odpověď, takže se zahodí a zůstanou iniciály. Tělo se
+kontroluje po částech, ne jedním velkým regexem — na dvaceti kilobajtech by se
+hvězdička s alternativou mohla zvrhnout v backtracking.
+
+Migrace `20260922090000_live_day_share_inline_avatar.sql` zvedá strop sloupce
+z 2 000 na 64 000 znaků. **Na produkci je už nasazená** (přes `db query
+--linked`, ověřeno čtením `pg_get_constraintdef`).
+
+Datum v textu sdílení je česky (`21. 09. 2026`) místo ISO — sjednoceno s tím,
+co stojí na kartě, přes `liveDayDateLabel`.
+
 ### 2026-09-21 — „invalid share token“ u sdílené karty (Claude)
 
 Uživatel hlásil, že po otevření odkazu dostane `invalid share token`, a ptal

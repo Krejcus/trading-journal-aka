@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   normalizePublicLiveDayShare,
+  LIVE_DAY_SHARE_AVATAR_MAX,
   publicLiveDayAvatar,
   publicLiveDaySummary,
   redactLiveDayAccountName,
@@ -24,9 +25,11 @@ const summary: LiveDaySummary = {
 };
 
 describe('LIVE day public snapshot', () => {
-  it('keeps compact HTTPS avatars and drops inline data images', () => {
+  it('pustí HTTPS odkaz i vložený obrázek, protože appka ukládá avatar jako data: URL', () => {
     expect(publicLiveDayAvatar('https://cdn.example.com/avatar.jpg')).toBe('https://cdn.example.com/avatar.jpg');
+    // „abc“ není platná base64 délka; obsah se kontroluje, ne jen prefix.
     expect(publicLiveDayAvatar('data:image/jpeg;base64,abc')).toBeNull();
+    expect(publicLiveDayAvatar('data:image/jpeg;base64,abcd')).toBe('data:image/jpeg;base64,abcd');
   });
 
   it('redacts every broker account identifier and replaces short names completely', () => {
@@ -83,6 +86,37 @@ describe('LIVE day share background', () => {
     expect(sharedView).toContain("<AnimatedTradingBackground variant={light ? 'light' : 'dark'} />");
     expect(sharedView).not.toContain('{!light ? <AnimatedTradingBackground');
     expect(sharedView).toContain("light ? 'bg-slate-200' : 'bg-black'");
+  });
+
+  it('vložený avatar z profilu projde, aby na sdílené stránce nebyly jen iniciály', () => {
+    const png = `data:image/png;base64,${'A'.repeat(4000)}`;
+    expect(publicLiveDayAvatar(png)).toBe(png);
+    expect(publicLiveDayAvatar(`data:image/webp;base64,${'B'.repeat(102)}==`)).not.toBeNull();
+    // Délka base64 musí sedět na násobek čtyř, jinak to není obrázek.
+    expect(publicLiveDayAvatar(`data:image/webp;base64,${'B'.repeat(100)}==`)).toBeNull();
+  });
+
+  it.each([
+    ['skript místo obrázku', 'data:text/html;base64,PHNjcmlwdD4='],
+    ['svg, které umí spustit kód', 'data:image/svg+xml;base64,PHN2Zz4='],
+    ['nesmysl v base64', 'data:image/png;base64,<script>'],
+    ['http místo https', 'http://example.com/a.png'],
+    ['odkaz s heslem', 'https://user:pass@example.com/a.png'],
+  ])('avatar se zahodí: %s', (_label, value) => {
+    expect(publicLiveDayAvatar(value)).toBeNull();
+  });
+
+  it('přerostlý avatar se zahodí, ať nezdraží každou veřejnou odpověď', () => {
+    expect(publicLiveDayAvatar(`data:image/png;base64,${'A'.repeat(LIVE_DAY_SHARE_AVATAR_MAX)}`)).toBeNull();
+  });
+
+  it('hlavička karty stojí nad tělem, jinak bublinu sdílení nikdo neuvidí', () => {
+    const css = readFileSync(new URL('../index.css', import.meta.url), 'utf8');
+    // Obecné pravidlo dává hlavičce i tělu `z-index: 2`; hlavička si tím udělá
+    // vlastní kontext stohování a bublina z něj neuteče, takže ji tělo jako
+    // pozdější sourozenec překreslí. Selektor musí přebít specificitu (0,3,0)
+    // toho obecného pravidla se dvěma `:not()`.
+    expect(css).toContain('.live-day-card .live-day-inner > .live-day-head { z-index: 4; }');
   });
 
   it('karta na veřejné stránce vyplní šířku, nesmrskne se na obsah', () => {

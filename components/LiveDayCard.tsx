@@ -22,6 +22,14 @@ const tone = (value: number | null): string =>
 const reducedMotion = (): boolean =>
   typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
 
+/** Obchodní den česky. Sdílený text i karta musí psát datum stejně. */
+export const liveDayDateLabel = (tradeDate: string): string => {
+  const parsed = new Date(`${tradeDate}T12:00:00Z`);
+  return Number.isNaN(parsed.getTime())
+    ? tradeDate
+    : new Intl.DateTimeFormat('cs-CZ', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(parsed);
+};
+
 const initials = (name: string): string => {
   const words = name.trim().split(/\s+/).filter(Boolean);
   if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
@@ -173,12 +181,7 @@ export const LiveDayCard: React.FC<LiveDayCardProps> = ({ summary, owner, tradeD
   }, [captureMode, total]);
 
   const note = partialNote(summary);
-  const dateLabel = (() => {
-    const parsed = new Date(`${tradeDate}T12:00:00Z`);
-    return Number.isNaN(parsed.getTime())
-      ? tradeDate
-      : new Intl.DateTimeFormat('cs-CZ', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(parsed);
-  })();
+  const dateLabel = liveDayDateLabel(tradeDate);
 
   return (
     <div
@@ -210,11 +213,20 @@ export const LiveDayCard: React.FC<LiveDayCardProps> = ({ summary, owner, tradeD
                   <span className="live-day-date">{dateLabel}</span>
                 </span>
               </div>
-              {shareSlot}
-              {onClose ? (
-                <button type="button" onClick={onClose} className="live-day-close" aria-label="Zavřít kartu dne">
-                  <X size={14} />
-                </button>
+              {/* V klidu je vpravo jen jméno a datum — karta je kompozice, kterou
+                  posíláš dál. Ovládání se odhalí až po najetí na kartu a jméno
+                  se mu plynule uhne. */}
+              {shareSlot || onClose ? (
+                <div className="live-day-tools">
+                  <span>
+                    {shareSlot}
+                    {onClose ? (
+                      <button type="button" onClick={onClose} className="live-day-close" aria-label="Zavřít kartu dne">
+                        <X size={14} />
+                      </button>
+                    ) : null}
+                  </span>
+                </div>
               ) : null}
             </div>
           </div>
@@ -348,7 +360,9 @@ const LiveDayShareControls = (card: Omit<LiveDayCardProps, 'onClose' | 'captureM
 
   const share = useCallback(async () => {
     if (!shareUrl) return;
-    const text = `Karta dne ${card.tradeDate} · AlphaTrade`;
+    // Datum česky, ne ISO: tenhle text čte příjemce ve zprávě vedle odkazu
+    // a na kartě samotné stojí „21. 09. 2026“.
+    const text = `Karta dne ${liveDayDateLabel(card.tradeDate)} · AlphaTrade`;
     try {
       if (isNativeBuild) {
         const result = await shareTextNative({ text, url: shareUrl });

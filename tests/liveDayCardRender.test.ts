@@ -1,7 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { LiveDayCard, LiveDayTrigger, dayMoney } from '../components/LiveDayCard';
+import { LiveDayCard, LiveDayTrigger, dayMoney, liveDayDateLabel } from '../components/LiveDayCard';
 import { buildLiveDaySummary, type LiveDaySummary } from '../lib/liveDaySummary';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
 
@@ -112,6 +112,17 @@ describe('karta dne', () => {
     // Bez účtu není co potvrzovat — hlásit „broker nepotvrdil“ by bylo lživé.
     expect(markup).not.toContain('nepotvrdil');
     expect(markup).not.toContain('nehlásí');
+  });
+});
+
+describe('datum obchodního dne', () => {
+  it('píše se česky — stejně na kartě i v textu sdílení vedle odkazu', () => {
+    expect(liveDayDateLabel('2026-09-21')).toBe('21. 09. 2026');
+    expect(card(buildLiveDaySummary([account({ realizedPnl: 1 })], now))).toContain('10. 09. 2026');
+  });
+
+  it('nesmyslné datum se nevymýšlí, projde beze změny', () => {
+    expect(liveDayDateLabel('nesmysl')).toBe('nesmysl');
   });
 });
 
