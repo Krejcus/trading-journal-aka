@@ -3036,7 +3036,10 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
   .live-day-big { font-size: 40px; }
   .live-day-total { padding: 18px 18px; gap: 16px; }
   .live-day-stamp { gap: 8px; }
-  /* Ovládání si své místo teprve rozevře (mřížka 0fr → 1fr), takže se jméno
+  .live-day-close { width: 26px; height: 26px; border-radius: 8px; }
+}
+
+/* Ovládání si své místo teprve rozevře (mřížka 0fr → 1fr), takže se jméno
    plynule odsune doleva a v klidu stojí úplně vpravo. Šířka se nikde nepíše
    natvrdo — přibude-li třetí ikona, animace to unese beze změny. */
 .live-day-tools {
