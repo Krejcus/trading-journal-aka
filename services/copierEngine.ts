@@ -176,6 +176,18 @@ export interface CopierState {
   safety: {
     entryCooldownUntil: number;
     dayLockUntil: number;
+    /**
+     * Degraded live mode: no new exposure may be copied, but lifecycle and
+     * risk-reducing management of already owned copies must keep running.
+     * It is entered only after authoritative proof that every affected open
+     * copy still has full working stop coverage.
+     */
+    managementOnly?: {
+      at: number;
+      reason: string;
+      source: 'protected-target-modify';
+      accountIds: number[];
+    };
     dayLockReason?: string;
     /** Optional in the persisted type for legacy snapshots; new workers persist all four. */
     dayLockTrigger?: DayLockTrigger | null;

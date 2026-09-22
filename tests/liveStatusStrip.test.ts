@@ -82,6 +82,35 @@ describe('buildLiveStatusStrip', () => {
     expect(model.notice).toBeNull();
   });
 
+  it('management-only je viditelný a poctivě říká, že nové vstupy stojí', () => {
+    const managementOnly = {
+      at: now,
+      reason: 'Target modify nebyl potvrzen; nové vstupy jsou pozastavené.',
+      source: 'protected-target-modify' as const,
+      accountIds: [200, 201],
+    };
+    const model = buildLiveStatusStrip({
+      status: status({ armed: true, managementOnly }),
+      available: true,
+      pending: false,
+      transport: 'local',
+      now,
+    });
+    expect(model.chips.find(chip => chip.id === 'copier')).toMatchObject({
+      value: 'Jen správa pozic', tone: 'warn', title: managementOnly.reason,
+    });
+    const quiet = renderToStaticMarkup(React.createElement(LiveStatusStrip, {
+      status: status({ armed: true, managementOnly }),
+      available: true,
+      pending: false,
+      transport: 'local',
+      quiet: true,
+    }));
+    expect(quiet).toContain('data-chip="copier"');
+    expect(quiet).toContain('Jen správa pozic');
+    expect(quiet).not.toContain('data-chip="worker"');
+  });
+
   it('CDP offline zbarví jen chip snímků a nabídne obnovu u workeru, který ji umí', () => {
     const offline = buildLiveStatusStrip({ status: status(), available: true, pending: false, transport: 'local', snapshotHealth: health({ state: 'cdp-offline' }), now });
     expect(offline.chips.find(chip => chip.id === 'snapshots')).toMatchObject({ value: 'TradingView bez CDP', tone: 'warn' });

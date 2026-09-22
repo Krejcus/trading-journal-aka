@@ -47,7 +47,7 @@ import {
   type OutboxEntry,
 } from './copierOutbox';
 import { stuckBracketEntries, waiveBracketOutboxEntry } from './copierBracketOutbox';
-import { stuckOsoEntries, waiveOsoOutboxEntry } from './copierOsoOutbox';
+import { stuckOsoEntries, waiveOsoOutboxEntry, type OsoOutboxEntry } from './copierOsoOutbox';
 import { applyResolved, type LeaderEvent } from './copierEngine';
 import { COPIER_LEADER_DAILY_STATS_LABEL } from '../lib/copierDailyStatsLabels';
 import { cancelLifecycleHaltReason, createRiskGateContext, haltReason, type RiskGateContext } from './copierRiskGate';
@@ -226,6 +226,13 @@ export interface CopierControllerStatus {
   dayUnlock?: { at: number; reason: string } | null;
   /** Běžící pauza pravidla dne (blokuje jen vstupy leadera); null/undefined = žádná. */
   pause?: { until: number; rule: CopierDailyRule; at: number } | null;
+  /** Nové vstupy jsou blokované, existující kopie se dál risk-redukčně řídí. */
+  managementOnly?: {
+    at: number;
+    reason: string;
+    source: 'protected-target-modify';
+    accountIds: number[];
+  } | null;
   /** První ostrý ARM v aktuální session; > 0 = pravidla i limity jdou jen zpřísnit. */
   sessionArmedAt?: number;
   /** Followeři vyřazení z kopírování do konce session (limit účtu). */
@@ -2155,6 +2162,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     .every(accountId => [...(positionsByAccount.get(accountId)?.values() ?? [])]
       .every(quantity => quantity === 0));
 
+  const managementOnlyGroupPositionsAreKnownFlat = () => (
+    [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]
+      .filter((accountId): accountId is number => accountId != null)
+      .every(accountId => {
+        const positions = positionsByAccount.get(accountId);
+        return positions != null && [...positions.values()].every(quantity => quantity === 0);
+      })
+  );
+
   const hasFollowerExposure = () => group.followers.some(follower =>
     [...(positionsByAccount.get(follower.accountId)?.values() ?? [])].some(quantity => quantity !== 0));
 
@@ -3308,7 +3324,217 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return entry;
   };
 
-  const failClosedOnCriticalAudit = (entries: readonly CopierAuditEntry[]) => {
+  type ProtectedTargetModifyProof = {
+    item: CopierAuditEntry;
+    lifecycle: CancelOutboxEntry;
+    leaderTargetOrderId: string;
+    target: BrokerOrder;
+    stop: BrokerOrder;
+  };
+
+  type ProtectedTargetModifyRecovery = {
+    failures: ProtectedTargetModifyProof[];
+    protectedAccountIds: number[];
+  };
+
+  /**
+   * A target-only modify race is not grounds to market-close every follower
+   * when the broker still authoritatively shows the original target AND a
+   * full-size working stop for the exact durable OSO lineage. The proof is
+   * deliberately strict: one unknown/rejected/missing stop falls back to the
+   * ordinary fail-closed + auto-close path.
+   */
+  const proveProtectedTargetModifyFailures = async (
+    critical: readonly CopierAuditEntry[],
+  ): Promise<ProtectedTargetModifyRecovery | null> => {
+    if (critical.length === 0 || !critical.every(item => item.kind === 'cancel-failed')) return null;
+    const current = currentRuntime();
+    const proofs: ProtectedTargetModifyProof[] = [];
+    const readWorkingProtection = async (
+      accountId: number,
+      oso: OsoOutboxEntry,
+    ): Promise<{ target: BrokerOrder; stop: BrokerOrder } | null> => {
+      if (!oso.firstBrokerOrderId || !oso.secondBrokerOrderId) return null;
+      const [positions, targetLookup, stopLookup] = await Promise.all([
+        broker.listPositions(accountId),
+        broker.findOrderById(accountId, oso.secondBrokerOrderId),
+        broker.findOrderById(accountId, oso.firstBrokerOrderId),
+      ]);
+      if (targetLookup.completeness !== 'authoritative' || stopLookup.completeness !== 'authoritative') return null;
+      const target = targetLookup.order;
+      const stop = stopLookup.order;
+      if (!target || !stop || target.accountId !== accountId || stop.accountId !== accountId) return null;
+      if (target.symbol !== oso.request.symbol || stop.symbol !== oso.request.symbol) return null;
+      const net = positions
+        .filter(position => position.symbol === oso.request.symbol)
+        .reduce((sum, position) => sum + position.netQuantity, 0);
+      const protectiveSide = net > 0 ? 'Sell' : 'Buy';
+      const requiredQuantity = Math.abs(net);
+      if (
+        net === 0
+        || target.status !== 'working'
+        || stop.status !== 'working'
+        || target.side !== protectiveSide
+        || stop.side !== protectiveSide
+        || target.orderType !== 'Limit'
+        || (stop.orderType !== 'Stop' && stop.orderType !== 'StopLimit')
+        || target.filledQuantity !== 0
+        || stop.filledQuantity !== 0
+        || target.quantity !== requiredQuantity
+        || stop.quantity !== requiredQuantity
+        || target.limitPrice == null
+        || stop.stopPrice == null
+      ) return null;
+      return { target, stop };
+    };
+    for (const item of critical) {
+      if (!item.key || item.accountId == null || !item.brokerOrderId) return null;
+      const lifecycle = current.cancelOutbox.get(item.key);
+      if (
+        !lifecycle
+        || lifecycle.operation !== 'modify'
+        || lifecycle.accountId !== item.accountId
+        || lifecycle.brokerOrderId !== item.brokerOrderId
+        || (lifecycle.status !== 'unknown' && lifecycle.status !== 'abandoned')
+      ) return null;
+      const targetContexts = [...current.state.links.entries()].flatMap(([leaderTargetOrderId, links]) => (
+        links
+          .filter(link => (
+            link.accountId === item.accountId
+            && link.brokerOrderId === item.brokerOrderId
+            && link.nativeOsoRole === 'target'
+          ))
+          .map(() => leaderTargetOrderId)
+      ));
+      if (targetContexts.length !== 1) return null;
+      const leaderTargetOrderId = targetContexts[0];
+      const oso = [...current.osoOutbox.values()].find(entry => (
+        entry.request.accountId === item.accountId
+        && entry.leaderTargetOrderId === leaderTargetOrderId
+        && entry.secondBrokerOrderId === item.brokerOrderId
+        && entry.firstBrokerOrderId != null
+        && entry.status === 'acknowledged'
+      ));
+      if (!oso) return null;
+      const protection = await readWorkingProtection(item.accountId, oso);
+      if (!protection || protection.target.brokerOrderId !== item.brokerOrderId) return null;
+      proofs.push({ item, lifecycle, leaderTargetOrderId, ...protection });
+    }
+    const targetOrderIds = new Set(proofs.map(proof => proof.leaderTargetOrderId));
+    const symbols = new Set(proofs.map(proof => proof.target.symbol));
+    if (targetOrderIds.size !== 1 || symbols.size !== 1) return null;
+    const leaderTargetOrderId = proofs[0].leaderTargetOrderId;
+    const symbol = proofs[0].target.symbol;
+    const protectedAccountIds: number[] = [];
+    for (const follower of group.followers) {
+      const positions = await broker.listPositions(follower.accountId);
+      const net = positions
+        .filter(position => position.symbol === symbol)
+        .reduce((sum, position) => sum + position.netQuantity, 0);
+      if (net === 0) continue;
+      const oso = [...current.osoOutbox.values()].find(entry => (
+        entry.request.accountId === follower.accountId
+        && entry.leaderTargetOrderId === leaderTargetOrderId
+        && entry.request.symbol === symbol
+        && entry.status === 'acknowledged'
+      ));
+      if (!oso || await readWorkingProtection(follower.accountId, oso) == null) return null;
+      protectedAccountIds.push(follower.accountId);
+    }
+    if (!proofs.every(proof => protectedAccountIds.includes(proof.lifecycle.accountId))) return null;
+    return { failures: proofs, protectedAccountIds };
+  };
+
+  const enterManagementOnlyAfterProtectedTargetFailure = async (
+    critical: readonly CopierAuditEntry[],
+  ): Promise<boolean> => {
+    const recovery = await proveProtectedTargetModifyFailures(critical);
+    if (!recovery) return false;
+    const proofs = recovery.failures;
+    const at = clock();
+    const accountIds = [...recovery.protectedAccountIds].sort((a, b) => a - b);
+    const reason = 'Target modify nebyl potvrzen; broker potvrdil původní target a plné working SL. Nové vstupy jsou pozastavené, otevřené kopie se dál řídí.';
+    runtime = await processor.mutate(async current => {
+      const cancelOutbox = new Map(current.cancelOutbox);
+      let state = current.state;
+      const touchedEvents = new Set<string>();
+      for (const proof of proofs) {
+        const live = cancelOutbox.get(proof.lifecycle.key);
+        if (
+          !live
+          || live.operation !== 'modify'
+          || live.brokerOrderId !== proof.lifecycle.brokerOrderId
+          || (live.status !== 'unknown' && live.status !== 'abandoned')
+        ) throw new Error('Management-only důkaz zestárl před durable commitem');
+        cancelOutbox.set(live.key, waiveCancelEntry(
+          live,
+          `management-only: target zůstal working a SL kryje ${proof.stop.quantity}`,
+          at,
+        ));
+        touchedEvents.add(live.leaderEventId);
+        state = updateFollowerLinkQuantity(state, proof.target.brokerOrderId, proof.target.quantity);
+        state = updateFollowerLinkQuantity(state, proof.stop.brokerOrderId, proof.stop.quantity);
+      }
+      for (const leaderEventId of touchedEvents) {
+        const lifecycle = [...cancelOutbox.values()].filter(entry => entry.leaderEventId === leaderEventId);
+        if (lifecycle.length > 0 && lifecycle.every(entry => (
+          entry.status === 'confirmed' || entry.status === 'waived'
+        ))) {
+          state = applyResolved(
+            state,
+            [],
+            Math.max(...lifecycle.map(entry => entry.leaderSequence)),
+          );
+        }
+      }
+      state = {
+        ...state,
+        safety: {
+          ...state.safety,
+          managementOnly: {
+            at,
+            reason,
+            source: 'protected-target-modify',
+            accountIds,
+          },
+        },
+      };
+      const committed = await options.store.commit(
+        toSnapshot(
+          state,
+          current.outbox.values(),
+          cancelOutbox.values(),
+          current.revision,
+          current.bracketOutbox.values(),
+          current.osoOutbox.values(),
+        ),
+        current.revision,
+      );
+      return { ...current, state, cancelOutbox, revision: committed.revision };
+    });
+    lastError = new Error(reason);
+    options.onError?.(lastError);
+    options.onAudit?.([
+      ...proofs.map(proof => ({
+        at,
+        leaderEventId: proof.item.leaderEventId,
+        kind: 'recovered' as const,
+        accountId: proof.lifecycle.accountId,
+        key: proof.lifecycle.key,
+        brokerOrderId: proof.lifecycle.brokerOrderId,
+        reason: `management-only: target working, stop working qty=${proof.stop.quantity}`,
+      })),
+      {
+        at,
+        leaderEventId: `management-only-${at}`,
+        kind: 'blocked' as const,
+        reason,
+      },
+    ]);
+    return true;
+  };
+
+  const failClosedOnCriticalAudit = async (entries: readonly CopierAuditEntry[]) => {
     const critical = entries.filter(isCriticalAuditEntry);
     if (critical.length === 0) return;
     if (!gate.armed) {
@@ -3324,11 +3550,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const rejectedEntries = critical.map(sidelinableEntryRejection);
     if (rejectedEntries.every((entry): entry is OutboxEntry => entry != null)) {
       for (const entry of rejectedEntries) {
-        void sidelineRejectedFollower(entry.request.accountId, entry.request.symbol, [entry])
-          .catch(reason => failClosed(reason, { autoClose: false }));
+        try {
+          await sidelineRejectedFollower(entry.request.accountId, entry.request.symbol, [entry]);
+        } catch (reason) {
+          failClosed(reason, { autoClose: false });
+        }
       }
       return;
     }
+    if (await enterManagementOnlyAfterProtectedTargetFailure(critical)) return;
     const reconcileAfterTerminalFill = criticalAuditAllowsTerminalFillRecovery(
       entries,
       currentRuntime().cancelOutbox,
@@ -5499,7 +5729,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     rememberCurrentRuntimePendingExposure(result.plan, result.audit);
     rememberExitOnlyReservations(adjusted.exitOnlyAccounts, result.plan, result.audit);
     if (result.audit.length > 0) options.onAudit?.(result.audit);
-    failClosedOnCriticalAudit(result.audit);
+    await failClosedOnCriticalAudit(result.audit);
     return true;
   };
 
@@ -5596,7 +5826,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         result.plan,
         result.audit,
       );
-      failClosedOnCriticalAudit(result.audit);
+      await failClosedOnCriticalAudit(result.audit);
       if (pending.kind === 'submitted'
         && (pending.orderType === 'Limit' || pending.orderType === 'Stop' || pending.orderType === 'StopLimit')
         && auditCleanDispatch(result.audit, 'dispatched')) {
@@ -5829,6 +6059,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const safety = currentRuntime().state.safety;
     const now = event.receivedAt;
     if (gate.shadowMode || safety.dayLockUntil > now || !leaderEventIncreasesExposure(event)) return false;
+    if (safety.managementOnly) {
+      const splitExit = allowReducingSlice && leaderReducingQuantityFor(event) > 0;
+      rememberIntentionalEntrySuppression(event);
+      if (record && !splitExit) {
+        const recorded = await processor.record({ event: eventToRecord, group, clock, store: options.store });
+        runtime = recorded.runtime;
+        if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
+      }
+      options.onAudit?.([{
+        at: event.receivedAt,
+        leaderEventId: event.id,
+        kind: 'blocked',
+        reason: `management-only:${safety.managementOnly.source}`,
+      }]);
+      if (event.kind === 'submitted') rememberBlockedLeaderEntryOrder(event.orderId);
+      return !splitExit;
+    }
     if (dayLockPending) {
       const splitExit = allowReducingSlice && leaderReducingQuantityFor(event) > 0;
       rememberIntentionalEntrySuppression(event);
@@ -6090,7 +6337,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const safety = currentRuntime().state.safety;
     const tradingWindow = group.safety?.tradingWindow ?? DEFAULT_COPY_GROUP_SAFETY.tradingWindow;
     const entryRestrictionActive = increasesExposure && !gate.shadowMode && (
-      dayLockPending != null
+      safety.managementOnly != null
+      || dayLockPending != null
       || ((safety.pauseUntil ?? 0) > at && safety.pauseRule != null)
       || (tradingWindow.enabled
         && tradingWindowStateAt(tradingWindow, event.receivedAt) !== 'inside')
@@ -7081,7 +7329,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       });
       runtime = result.runtime;
       if (result.audit.length > 0) options.onAudit?.(result.audit);
-      failClosedOnCriticalAudit(result.audit);
+      await failClosedOnCriticalAudit(result.audit);
       // Reporting attribution depends only on deterministic recognition of
       // the leader's protective pair, never on follower dispatch success.
       await rememberProtectiveLeg(bracketPair.stopOrderId, bracketPair.targetOrderId, now);
@@ -7245,7 +7493,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           exitResult.plan,
           exitResult.audit,
         );
-        failClosedOnCriticalAudit(exitResult.audit);
+        await failClosedOnCriticalAudit(exitResult.audit);
       } else {
         const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
         runtime = recorded.runtime;
@@ -7343,7 +7591,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           exitResult.plan,
           exitResult.audit,
         );
-        failClosedOnCriticalAudit(exitResult.audit);
+        await failClosedOnCriticalAudit(exitResult.audit);
         if (!gate.armed) return;
       }
       const openingExcluded = new Set([...previouslyExcluded, ...exitOnlyAccounts]);
@@ -7380,7 +7628,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       runtime = result.runtime;
       rememberCurrentRuntimePendingOsoExposure(result.audit);
       if (result.audit.length > 0) options.onAudit?.(result.audit);
-      failClosedOnCriticalAudit(result.audit);
+      await failClosedOnCriticalAudit(result.audit);
       await rememberProtectiveLeg(pair.stopOrderId, pair.targetOrderId, now);
       if (!result.audit.some(isCriticalAuditEntry)) {
         if (auditCleanDispatch(result.audit, 'dispatched')) {
@@ -7500,7 +7748,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       result.plan,
       result.audit,
     );
-    failClosedOnCriticalAudit(result.audit);
+    await failClosedOnCriticalAudit(result.audit);
 
     // Order lifecycle notifikace (po potvrzeném mirroru na followerech).
     const eventSide: 'Long' | 'Short' = leaderEvent.side === 'Sell' ? 'Short' : 'Long';
@@ -8241,6 +8489,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         throw new Error('Po reconnectu je nutná kontrola pozic; před ARM proveď kontrolu pozic');
       }
       const safety = currentRuntime().state.safety;
+      if (!shadowMode && safety.managementOnly) {
+        throw new Error('ARM blokován: kopírka je v režimu správy otevřených kopií; po flat proveď Kontrolu pozic');
+      }
       if (!shadowMode && currentDailyStats(now).unconfirmedFlatLots?.length) {
         throw new Error('ARM blokován: nepotvrzený výsledek uzavření leadera v této session; ověř close fills a denní risk');
       }
@@ -8466,12 +8717,34 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (changed) await persistEligibility();
     },
     async reconcile(reconciliationOptions = {}) {
+      const managementOnly = currentRuntime().state.safety.managementOnly;
+      if (
+        gate.armed
+        && managementOnly
+        && !managementOnlyGroupPositionsAreKnownFlat()
+      ) {
+        throw new Error(
+          'Kontrola pozic je během správy otevřených kopií blokovaná, aby nevypnula jejich řízení. '
+          + 'Počkej na flat nebo použij Flatten.',
+        );
+      }
       // Veřejná Kontrola pozic je explicitní uživatelská recovery akce.
       // Pouze její čistý výsledek smí odstranit starou chybu; automatické
       // reconnect/terminal-fill kontroly incident uživateli neschovávají.
       const result = await performReconciliation({ ...reconciliationOptions, clearLastError: true });
       if (result.authoritativelyClean && groupIsFlat()) {
         pendingReadOnlyConnectionRecovery = false;
+        const safety = currentRuntime().state.safety;
+        if (safety.managementOnly) {
+          const { managementOnly: _finished, ...rest } = safety;
+          await persistSafety(rest);
+          options.onAudit?.([{
+            at: clock(),
+            leaderEventId: 'management-only-cleared',
+            kind: 'recovered',
+            reason: 'management-only ukončen po autoritativně potvrzeném flat/no-active stavu',
+          }]);
+        }
       }
       if (
         result.authoritativelyClean
@@ -8805,6 +9078,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             until: current.state.safety.pauseUntil ?? 0,
             rule: current.state.safety.pauseRule,
             at: current.state.safety.pauseAt ?? 0,
+          }
+          : null,
+        managementOnly: current.state.safety.managementOnly
+          ? {
+            ...current.state.safety.managementOnly,
+            accountIds: [...current.state.safety.managementOnly.accountIds],
           }
           : null,
         sessionArmedAt: effectiveSessionArmedAt,

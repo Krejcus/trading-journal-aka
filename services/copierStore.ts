@@ -144,13 +144,16 @@ function cloneSnapshot(snapshot: CopierSnapshot): CopierSnapshot {
 
 function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapshot['safety']> {
   const base = safety ?? { entryCooldownUntil: 0, dayLockUntil: 0 };
-  const { leaderExposureEpochs, followerCuts, accountRisk, ...rest } = base;
+  const { leaderExposureEpochs, followerCuts, accountRisk, managementOnly, ...rest } = base;
   return {
     ...rest,
     // Volitelná pole se klonují, ale nevyrábějí: prázdný snapshot zůstává
     // prázdný (stejně jako `leaderExposureEpochs`), runtime doplní defaulty.
     ...(base.dayLockSnoozedRules ? { dayLockSnoozedRules: [...base.dayLockSnoozedRules] } : {}),
     ...(base.dayUnlock !== undefined ? { dayUnlock: base.dayUnlock ? { ...base.dayUnlock } : null } : {}),
+    ...(managementOnly
+      ? { managementOnly: { ...managementOnly, accountIds: [...managementOnly.accountIds] } }
+      : {}),
     ...(leaderExposureEpochs
       ? {
         leaderExposureEpochs: leaderExposureEpochs.map(epoch => ({

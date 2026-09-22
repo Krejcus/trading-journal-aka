@@ -75,6 +75,13 @@ export const snapshotHealthMessage = (health: CopierSnapshotHealth): string => {
 const copierValue = (current: CopierControllerStatus, now: number): { value: string; tone: LiveStatusTone; title?: string } => {
   if (current.killSwitch) return { value: 'Nouzově zastavená', tone: 'danger' };
   if ((current.dayLockUntil ?? 0) > now) return { value: 'Zámek dne', tone: 'warn' };
+  if (current.managementOnly) {
+    return {
+      value: 'Jen správa pozic',
+      tone: 'warn',
+      title: current.managementOnly.reason,
+    };
+  }
   if (!current.armed) {
     const last = current.lastDisarm;
     if (last && last.trigger !== 'manual' && isRecentCopierDisarm(last.at, now)) {

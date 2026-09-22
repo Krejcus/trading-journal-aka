@@ -53,9 +53,14 @@ export default function LiveStatusStrip({ status, available, pending, transport,
   // Ztráta záznamů o pozicích se ukáže i na dashboardu: obchody bez historie
   // a snímků nesmí čekat, až někdo otevře Události.
   const journalLoss = model.chips.some(chip => chip.id === 'journal' && chip.tone === 'danger');
-  if (quiet && !repair && !notice && !journalLoss) return null;
+  const managementOnly = status?.managementOnly != null;
+  if (quiet && !repair && !notice && !journalLoss && !managementOnly) return null;
   const chips = quiet
-    ? model.chips.filter(chip => (chip.id === 'snapshots' && model.repairSnapshots) || (chip.id === 'journal' && chip.tone === 'danger'))
+    ? model.chips.filter(chip => (
+      (chip.id === 'snapshots' && model.repairSnapshots)
+      || (chip.id === 'journal' && chip.tone === 'danger')
+      || (chip.id === 'copier' && managementOnly)
+    ))
     : model.chips;
   return (
     <section aria-label="Aktuální stav kopírky" data-live-status-strip={quiet ? 'quiet' : 'true'} className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-2.5">

@@ -232,9 +232,22 @@ function validSafety(value: unknown): boolean {
       return `${receipt.accountId}:${receipt.brokerOrderId}`;
     }))
   );
+  const validManagementOnly = value.managementOnly == null || (
+    isRecord(value.managementOnly)
+    && finite(value.managementOnly.at)
+    && value.managementOnly.at >= 0
+    && string(value.managementOnly.reason)
+    && value.managementOnly.reason.length > 0
+    && value.managementOnly.source === 'protected-target-modify'
+    && Array.isArray(value.managementOnly.accountIds)
+    && value.managementOnly.accountIds.length > 0
+    && value.managementOnly.accountIds.every(accountId => integer(accountId) && accountId > 0)
+    && unique(value.managementOnly.accountIds.map(String))
+  );
   return finite(value.entryCooldownUntil) && Number(value.entryCooldownUntil) >= 0
     && finite(value.dayLockUntil) && Number(value.dayLockUntil) >= 0
     && optionalString(value.dayLockReason)
+    && validManagementOnly
     && validDayRuleState(value)
     && (value.leaderExposureEpochs == null || (Array.isArray(value.leaderExposureEpochs)
       && value.leaderExposureEpochs.every(validLeaderExposureEpoch)))
