@@ -208,6 +208,32 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-22 — Sdílí se jen odkaz + rozbitý build z dělení po hunkách (Claude)
+
+**Odkaz se lepil s průvodním textem.** Uživateli vyšlo
+`…/day/<token>%20Karta%20dne%202026-09-21%20·%20AlphaTrade` — cíl sdílení
+slepil `url` a `text` do jednoho řetězce, chat to zlinkoval celé a token
+přestal být platné UUID. Stránka „Odkaz je poškozený“ tedy hlásila pravdu;
+chyba byla o krok dřív. `navigator.share` i nativní plugin teď dostávají
+POUZE odkaz. Datum a částku nese stránka sama v og: metadatech, takže náhled
+ve zprávě o nic nepřijde. Přibyl test na znění volání.
+
+**Fotka ve sdílení funguje.** Ověřeno na produkci: odkaz z 22. 9. nese
+`owner_avatar_url` (22 875 znaků) a veřejný endpoint ho vrací. Starší odkazy
+ji mít nebudou — snapshot je neměnný.
+
+**Rozbil jsem produkční build.** Commit `f2edd15` dělil `index.css` po hunkách
+a řez začal u `.live-day-close` uvnitř mobilní `@media (max-width: 480px)`.
+Spolkl její uzavírací závorku, blok ovládání skončil uvnitř media query a
+soubor přestal být platné CSS — Vercel padl na „Missing closing }“.
+
+**Poučení pro dělení commitů:** typecheck ani testy CSS neparsují a
+`npm run build` jsem pouštěl nad pracovním stromem, kde je soubor celý, ne nad
+tím, co šlo do commitu. Kontrola podmnožiny v izolovaném worktree musí
+zahrnovat i `npm run build`, jinak se dá poslat soubor, který nikdy nikdo
+nesestavil. Produkce mezitím běžela na předchozím dobrém nasazení, takže
+uživateli appka nespadla.
+
 ### 2026-09-22 — Karta dne: ovládání až po najetí a fotka ve sdílení (Claude)
 
 **Jméno vpravo, ovládání po najetí.** V klidu je v hlavičce karty jen jméno

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -112,6 +113,17 @@ describe('karta dne', () => {
     // Bez účtu není co potvrzovat — hlásit „broker nepotvrdil“ by bylo lživé.
     expect(markup).not.toContain('nepotvrdil');
     expect(markup).not.toContain('nehlásí');
+  });
+});
+
+describe('sdílení', () => {
+  it('posílá se jen odkaz, text vedle něj se v cíli slepí do jednoho řetězce', () => {
+    const source = readFileSync(new URL('../components/LiveDayCard.tsx', import.meta.url), 'utf8');
+    // „…/day/<token> Karta dne 2026-09-21 · AlphaTrade“ chat zlinkuje celé,
+    // token přestane být platné UUID a příjemce dostane „Odkaz je poškozený“.
+    expect(source).toContain('navigator.share({ title, url: shareUrl })');
+    expect(source).toContain('shareTextNative({ text: shareUrl })');
+    expect(source).not.toContain('title: \'Karta dne | AlphaTrade\', text');
   });
 });
 

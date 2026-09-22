@@ -360,15 +360,18 @@ const LiveDayShareControls = (card: Omit<LiveDayCardProps, 'onClose' | 'captureM
 
   const share = useCallback(async () => {
     if (!shareUrl) return;
-    // Datum česky, ne ISO: tenhle text čte příjemce ve zprávě vedle odkazu
-    // a na kartě samotné stojí „21. 09. 2026“.
-    const text = `Karta dne ${liveDayDateLabel(card.tradeDate)} · AlphaTrade`;
+    // Sdílí se JEN odkaz. Průvodní text vedle něj cíl slepí do jednoho řetězce
+    // („…/day/<token> Karta dne 2026-09-21 · AlphaTrade“), chat to zlinkuje
+    // celé a token přestane být platné UUID — příjemce pak dostane
+    // „Odkaz je poškozený“. Datum i částku nese stránka sama v og: metadatech,
+    // takže náhled ve zprávě o nic nepřijde.
+    const title = `Karta dne ${liveDayDateLabel(card.tradeDate)} · AlphaTrade`;
     try {
       if (isNativeBuild) {
-        const result = await shareTextNative({ text, url: shareUrl });
+        const result = await shareTextNative({ text: shareUrl });
         if (result.completed) setFeedback('Odkaz sdílen');
       } else if (navigator.share) {
-        await navigator.share({ title: 'Karta dne | AlphaTrade', text, url: shareUrl });
+        await navigator.share({ title, url: shareUrl });
         setFeedback('Odkaz sdílen');
       } else {
         await navigator.clipboard.writeText(shareUrl);
