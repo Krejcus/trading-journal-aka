@@ -322,6 +322,68 @@ describe('createTradovateBroker REST', () => {
     expect(lookup.orders[0]).toMatchObject({ brokerOrderId: '42', symbol: 'MNQU6' });
   });
 
+  it('cancel-only lookup čte přesný Order status bez OrderVersion, Command a Fill deps', async () => {
+    const calls: string[] = [];
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123',
+      fetchImpl: async input => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes('/order/item?id=42')) return jsonResponse({
+          id: 42, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Canceled',
+        });
+        if (url.includes('/fill/deps')) throw new Error('/fill/deps request timeout');
+        throw new Error(`unexpected url ${url}`);
+      },
+    });
+
+    await expect(broker.findOrderStatusById!(200, '42')).resolves.toMatchObject({
+      status: 'canceled', completeness: 'authoritative',
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('/order/item?id=42');
+  });
+
+  it('modify-only lookup potvrzuje přesný Replaced report bez globálního Command a Fill listu', async () => {
+    const calls: string[] = [];
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123',
+      fetchImpl: async input => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes('/order/item?id=42')) return jsonResponse({
+          id: 42, accountId: 200, contractId: 7, action: 'Sell', ordStatus: 'Working',
+        });
+        if (url.includes('/orderVersion/deps?masterid=42')) return jsonResponse([{
+          id: 43, orderId: 42, orderQty: 4, orderType: 'Stop', stopPrice: 30_712.5,
+        }]);
+        if (url.includes('/command/deps?masterid=42')) return jsonResponse([{
+          id: 43, orderId: 42, commandType: 'Modify', commandStatus: 'AtExecution',
+        }]);
+        if (url.includes('/executionReport/deps?masterid=43')) return jsonResponse([{
+          id: 44, commandId: 43, orderId: 42, accountId: 200, contractId: 7,
+          action: 'Sell', ordStatus: 'Working', execType: 'Replaced',
+        }]);
+        if (url.includes('/contract/items?ids=7')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
+        if (url.includes('/command/list') || url.includes('/fill/deps')) {
+          throw new Error('globální lookup se pro potvrzení modify nesmí volat');
+        }
+        throw new Error(`unexpected url ${url}`);
+      },
+    });
+
+    await expect(broker.findModifiedOrderById!(200, '42', {
+      quantity: 4, orderType: 'Stop', stopPrice: 30_712.5,
+    })).resolves.toMatchObject({
+      order: {
+        brokerOrderId: '42', accountId: 200, symbol: 'MNQU6', quantity: 4,
+        orderType: 'Stop', stopPrice: 30_712.5, status: 'working',
+      },
+      completeness: 'authoritative',
+    });
+    expect(calls.some(url => url.includes('/command/list') || url.includes('/fill/deps'))).toBe(false);
+  });
+
   it('hydratuje více kontraktů jedním comma-separated ids parametrem', async () => {
     let contractItemsUrl = '';
     const fetchImpl: typeof fetch = async input => {

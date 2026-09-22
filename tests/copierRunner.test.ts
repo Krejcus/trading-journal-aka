@@ -207,6 +207,67 @@ describe('ostrý režim', () => {
     expect(result.metrics.dispatched).toBe(15);
   });
 
+  it('zruší šest follower OSO bez plného fill grafu a bez stuck outboxu', async () => {
+    const broker = createMockBroker();
+    const clock = stepClock();
+    const followers = [200, 300, 400, 500, 600, 700].map(accountId => ({
+      accountId, mode: 'on-submit' as const, multiplier: 1,
+    }));
+    const opened = await processOsoPair({
+      pair: {
+        entryOrderId: 'entry-oso-six', stopOrderId: 'stop-oso-six', targetOrderId: 'target-oso-six',
+        accountId: 100, symbol: 'MNQU6', entrySide: 'Buy', quantity: 1,
+        entryOrderType: 'Limit', entryLimitPrice: 30_000,
+        stopPrice: 29_950, targetPrice: 30_100, detectedAt: 10,
+        correlation: 'inferred-window',
+      },
+      event: event({ id: 'oso-six', orderId: 'stop-oso-six', sequence: 3 }),
+      group: { ...group, followers },
+      runtime: createRuntime(createCopierState([], 2)),
+      context: liveGate(), broker, clock, store: createMemoryCopierStore(),
+    });
+
+    let fullLookupCalls = 0;
+    const statusLookupIds: string[] = [];
+    const cancelFastBroker = {
+      ...broker,
+      async findOrderById() {
+        fullLookupCalls += 1;
+        throw new Error('/fill/deps timeout — plný lookup se pro cancel nesmí volat');
+      },
+      async findOrderStatusById(accountId: number, brokerOrderId: string) {
+        statusLookupIds.push(brokerOrderId);
+        const order = broker.orders().find(item => (
+          item.accountId === accountId && item.brokerOrderId === brokerOrderId
+        ));
+        return {
+          status: order?.status ?? null,
+          completeness: 'authoritative' as const,
+          observedAt: clock(),
+        };
+      },
+    };
+
+    let runtime = opened.runtime;
+    for (const [index, orderId] of ['entry-oso-six', 'stop-oso-six', 'target-oso-six'].entries()) {
+      const result = await processLeaderEvent({
+        event: event({
+          id: `cancel-oso-six-${index}`, orderId, kind: 'canceled', sequence: 4 + index,
+          orderType: index === 1 ? 'Stop' : 'Limit',
+        }),
+        group: { ...group, followers }, runtime,
+        context: liveGate(), broker: cancelFastBroker, clock,
+      });
+      runtime = result.runtime;
+    }
+
+    expect(fullLookupCalls).toBe(0);
+    expect(statusLookupIds).toHaveLength(18);
+    expect([...runtime.cancelOutbox.values()]).toHaveLength(18);
+    expect([...runtime.cancelOutbox.values()].every(entry => entry.status === 'confirmed')).toBe(true);
+    expect(runtime.state.lastSequence).toBe(6);
+  });
+
   it('desetinný násobek neposílá OSO s nulovým množstvím', async () => {
     const broker = createMockBroker();
     const result = await processOsoPair({
@@ -2124,6 +2185,48 @@ describe('změna pracovní objednávky', () => {
     });
     expect(modified.audit.some(item => item.kind === 'modified')).toBe(true);
     expect(broker.orders()[0]).toMatchObject({ quantity: 3, limitPrice: 29_600 });
+  });
+
+  it('po modify používá specializované potvrzení místo druhého plného order grafu', async () => {
+    const inner = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    let fullLookupCalls = 0;
+    let modifyLookupCalls = 0;
+    const broker = {
+      ...inner,
+      async findOrderById(accountId: number, brokerOrderId: string) {
+        fullLookupCalls += 1;
+        return inner.findOrderById(accountId, brokerOrderId);
+      },
+      async findModifiedOrderById(
+        accountId: number,
+        brokerOrderId: string,
+        changes: Parameters<typeof inner.modifyOrder>[2],
+      ) {
+        modifyLookupCalls += 1;
+        const lookup = await inner.findOrderById(accountId, brokerOrderId);
+        expect(lookup.order).toMatchObject(changes);
+        return lookup;
+      },
+    };
+    const clock = stepClock();
+    const opened = await processLeaderEvent({
+      event: event({ orderType: 'Limit', limitPrice: 29_500 }), group: soloGroup,
+      runtime: createRuntime(createCopierState()), context: liveGate(), broker, clock,
+    });
+    const modified = await processLeaderEvent({
+      event: event({
+        id: 'e2', kind: 'replaced', quantity: 3, limitPrice: 29_600,
+        orderType: 'Limit', sequence: 2,
+      }),
+      group: soloGroup, runtime: opened.runtime, context: liveGate(), broker, clock,
+    });
+
+    expect(fullLookupCalls).toBe(1);
+    expect(modifyLookupCalls).toBe(1);
+    expect(modified.audit).toContainEqual(expect.objectContaining({ kind: 'modified' }));
+    expect([...modified.runtime.cancelOutbox.values()]).toEqual([
+      expect.objectContaining({ status: 'confirmed', outcome: 'working' }),
+    ]);
   });
 
   it('autoritativně potvrzený pending modify aktualizuje durable follower link', async () => {

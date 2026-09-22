@@ -330,15 +330,22 @@ export async function startLocalCopierExecutionAgent(
       }
       case 'set-multiplier': {
         assertMember(group, command.accountId);
-        if (!group.followers.some(follower => follower.accountId === command.accountId)) {
+        const follower = group.followers.find(item => item.accountId === command.accountId);
+        if (!follower) {
           throw new Error('Násobek lze změnit pouze follower účtu');
         }
-        return applyGroup({
+        const nextMultiplier = normalizeMultiplier(command.multiplier);
+        const result = await applyGroup({
           ...group,
-          followers: group.followers.map(follower => follower.accountId === command.accountId
-            ? { ...follower, multiplier: normalizeMultiplier(command.multiplier) }
-            : follower),
+          followers: group.followers.map(item => item.accountId === command.accountId
+            ? { ...item, multiplier: nextMultiplier }
+            : item),
         });
+        // Příští incident musí být dohledatelný bez odhadování z výsledné
+        // konfigurace: account i hodnota před/po jsou zapsané až po durable
+        // úspěchu applyGroup.
+        console.log(`${new Date().toISOString()} CONFIG SET-MULTIPLIER groupId=${group.id} accountId=${command.accountId} before=${follower.multiplier} after=${nextMultiplier}`);
+        return result;
       }
       case 'flatten-account':
         // Autoritativní cíl: groupId z příkazu musí sedět na runtime skupinu.

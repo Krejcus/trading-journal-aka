@@ -5,6 +5,7 @@ import {
   createModifyEntry,
   markCancelSending,
   resolveCancelLookup,
+  resolveCancelStatusLookup,
   stuckCancelEntries,
 } from '../services/copierCancelOutbox';
 
@@ -41,6 +42,22 @@ describe('cancel resolution', () => {
 
   it('pending stále není potvrzený cancel ani terminální stav', () => {
     expect(resolveCancelLookup(cancelEntry(), order('pending'), 'authoritative', 9))
+      .toMatchObject({ status: 'unknown' });
+  });
+
+  it('status-only cesta potvrzuje jen autoritativní terminální cancel a Filled dál blokuje', () => {
+    expect(resolveCancelStatusLookup(cancelEntry(), 'canceled', 'authoritative', 9))
+      .toMatchObject({ status: 'confirmed', outcome: 'canceled' });
+    expect(resolveCancelStatusLookup(cancelEntry(), 'filled', 'authoritative', 9))
+      .toMatchObject({ status: 'abandoned', outcome: 'filled' });
+    expect(resolveCancelStatusLookup(cancelEntry(), 'canceled', 'eventual', 9))
+      .toMatchObject({ status: 'unknown' });
+    expect(resolveCancelStatusLookup(cancelEntry(), 'working', 'authoritative', 9))
+      .toMatchObject({ status: 'unknown' });
+  });
+
+  it('status-only cesta nikdy nepotvrdí modify', () => {
+    expect(resolveCancelStatusLookup(modifyEntry(), 'canceled', 'authoritative', 9))
       .toMatchObject({ status: 'unknown' });
   });
 });

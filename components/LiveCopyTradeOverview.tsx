@@ -1753,7 +1753,16 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               busyCommand={busyCommand}
                               onRefreshOrders={onRefreshOrders}
                               onMultiplier={(accountId, multiplier) => {
-                                void runCommand({ type: 'set-multiplier', groupId: group.id, accountId, multiplier }, () => updateFollower(group.id, accountId, { multiplier }));
+                                const follower = group.followers.find(item => item.accountId === accountId);
+                                const next = normalizeMultiplier(multiplier);
+                                if (!follower || follower.multiplier === next) return;
+                                setPendingAction({
+                                  title: 'Změnit násobek účtu?',
+                                  detail: `Účet ${accountId}: ${follower.multiplier}× → ${next}×. Změna platí pouze pro tento účet; ostatní followeři zůstanou beze změny.`,
+                                  confirmLabel: 'Potvrdit násobek',
+                                  accountIds: [accountId],
+                                  command: { type: 'set-multiplier', groupId: group.id, accountId, multiplier: next },
+                                });
                               }}
                               onFlattenAccount={accountId => setPendingAction({
                                 title: 'Flatten účet?', detail: 'Připraví uzavření všech otevřených pozic pouze na tomto účtu.',
@@ -1929,6 +1938,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
               if (command.type === 'set-group-enabled') {
                 const { groupId, enabled } = command;
                 setGroups(current => current.map(group => group.id === groupId ? { ...group, enabled } : group));
+              } else if (command.type === 'set-multiplier') {
+                await updateFollower(command.groupId, command.accountId, { multiplier: command.multiplier });
               } else if (command.type === 'delete-group') {
                 const { groupId } = command;
                 setGroups(current => current.filter(group => group.id !== groupId));
@@ -3777,6 +3788,65 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
   );
 };
 
+const MultiplierEditor = ({ accountId, accountName, value, tightenOnly, disabled, onCommit }: {
+  accountId: number;
+  accountName: string;
+  value: number;
+  tightenOnly: boolean;
+  disabled: boolean;
+  onCommit: (accountId: number, multiplier: number) => void;
+}) => {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [accountId, value]);
+  const parsed = Number(draft);
+  const valid = Number.isFinite(parsed)
+    && parsed >= 0.01
+    && parsed <= 100
+    && (!tightenOnly || parsed <= value);
+  const next = valid ? normalizeMultiplier(parsed) : null;
+  const changed = next != null && next !== value;
+  const commit = () => {
+    if (!changed || next == null || disabled) return;
+    onCommit(accountId, next);
+    // Hodnota se v řádku změní až po explicitním potvrzení dialogu. Tady
+    // draft vrátíme na poslední potvrzený stav, aby zrušený dialog nikdy
+    // nevypadal jako uložená změna.
+    setDraft(String(value));
+  };
+
+  return (
+    <div onClick={event => event.stopPropagation()} className="inline-flex items-center justify-end gap-1">
+      <input
+        aria-label={`Násobek ${accountName}`}
+        type="number"
+        min="0.01"
+        max={tightenOnly ? value : 100}
+        step="0.25"
+        value={draft}
+        disabled={disabled}
+        title={tightenOnly ? 'dnes jen zpřísnit' : 'Změnu potvrď tlačítkem Uložit'}
+        onFocus={event => event.currentTarget.select()}
+        onChange={event => setDraft(event.target.value)}
+        onKeyDown={event => {
+          if (event.key === 'Enter') commit();
+          if (event.key === 'Escape') setDraft(String(value));
+        }}
+        className={`w-14 rounded-md border bg-[var(--bg-card)] px-1.5 py-1 text-center tabular-nums outline-none focus:border-indigo-500 ${valid ? 'border-[var(--border-subtle)]' : 'border-rose-500'}`}
+      />
+      <button
+        type="button"
+        aria-label={`Uložit násobek ${accountName}`}
+        title={changed ? `Potvrdit změnu ${value}× → ${next}×` : 'Nejdřív změň násobek'}
+        disabled={disabled || !changed}
+        onClick={commit}
+        className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border-subtle)] text-indigo-500 hover:border-indigo-500/40 hover:bg-indigo-500/10 disabled:cursor-default disabled:opacity-25"
+      >
+        <Save size={11} />
+      </button>
+    </div>
+  );
+};
+
 const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCommand, onVerifyEligibility, verifying, dailyPnlPending, onMultiplier, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, tightenOnly }: {
   row: Row; live: boolean; onAccount?: (a: LiveAccount) => void; columns: ColumnDef[];
   orders: LiveOrder[];
@@ -3928,25 +3998,14 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
       case 'qtyMult':
         return row.isLeader || accountId == null
           ? <span className="mx-auto flex w-full items-center justify-center text-center text-[11px] text-[var(--text-secondary)]">—</span>
-          : <label onClick={event => event.stopPropagation()} className="inline-flex items-center justify-end gap-1 text-[11px] text-[var(--text-secondary)]">
-              <input
-                aria-label={`Násobek ${row.name}`}
-                key={`${accountId}-${row.scale}`}
-                type="number" min="0.01" max={tightenOnly ? row.scale : 100} step="0.25" defaultValue={row.scale}
-                disabled={busyCommand != null}
-                title={tightenOnly ? 'dnes jen zpřísnit' : undefined}
-                onBlur={event => {
-                  const next = Number(event.target.value);
-                  if (!Number.isFinite(next) || (tightenOnly && next > row.scale)) {
-                    event.currentTarget.value = String(row.scale);
-                    return;
-                  }
-                  onMultiplier(accountId, next);
-                }}
-                onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-                className="w-14 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-1.5 py-1 text-center tabular-nums outline-none focus:border-indigo-500"
-              />
-            </label>;
+          : <MultiplierEditor
+              accountId={accountId}
+              accountName={row.name}
+              value={row.scale}
+              tightenOnly={tightenOnly}
+              disabled={busyCommand != null}
+              onCommit={onMultiplier}
+            />;
       case 'actions':
         return null;
     }

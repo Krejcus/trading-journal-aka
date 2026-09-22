@@ -268,6 +268,17 @@ export interface BrokerOrderStateLookup {
   observedAt: number;
 }
 
+/**
+ * Lehký přesný lookup pouze pro potvrzení cancelu. Na rozdíl od
+ * `findOrderById` nepotřebuje rekonstruovat OrderVersion ani filly: pro
+ * bezpečný výsledek cancelu stačí autoritativní terminální stav Order entity.
+ */
+export interface BrokerOrderStatusLookup {
+  status: OrderStatus | null;
+  completeness: 'authoritative' | 'eventual';
+  observedAt: number;
+}
+
 export interface BrokerPort {
   /** Optional local admission assertion; throws only before a copier write is attempted. */
   assertDispatchAllowed?: (operation: 'place' | 'oco' | 'oso' | 'modify' | 'cancel') => void;
@@ -306,6 +317,20 @@ export interface BrokerPort {
    */
   findOrdersByTag(accountId: number, tag: string): Promise<BrokerOrderLookup>;
   findOrderById(accountId: number, brokerOrderId: string): Promise<BrokerOrderStateLookup>;
+  /**
+   * Volitelná oddělená cesta pro cancel-only potvrzení. Implementace nesmí
+   * odvozovat Filled/Cancelled z chybějících fillů; vrací přímo stav Order.
+   */
+  findOrderStatusById?(accountId: number, brokerOrderId: string): Promise<BrokerOrderStatusLookup>;
+  /**
+   * Přesné potvrzení právě odeslaného modify bez globálního order grafu.
+   * Musí doložit nejen shape, ale i broker execution potvrzení jeho verze.
+   */
+  findModifiedOrderById?(
+    accountId: number,
+    brokerOrderId: string,
+    changes: { quantity: number; orderType: OrderType; limitPrice?: number; stopPrice?: number },
+  ): Promise<BrokerOrderStateLookup>;
   /** Vrací odhlašovací funkci. */
   subscribe(listener: (event: BrokerEvent) => void): () => void;
 }

@@ -32,6 +32,7 @@ import {
   toPlaceOcoPayload,
   toPlaceOsoPayload,
   toPlaceOrderPayload,
+  toOrderStatus,
   type TradovateOrderEntity,
   type TradovatePlaceOrderResult,
   type TradovatePlaceOcoResult,
@@ -88,6 +89,7 @@ interface TradovateCommandEntity {
   id: number;
   orderId?: number;
   commandType?: 'New' | 'Cancel' | 'Modify';
+  commandStatus?: string;
   clOrdId?: string;
   customTag50?: string;
 }
@@ -1778,6 +1780,119 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       const order = await composeOrder(orderId);
       if (!order) throw new TradovateTransportError(`Missing OrderVersion for order ${orderId}`);
       return { order, completeness: 'authoritative', observedAt: clock() };
+    },
+    async findOrderStatusById(accountId, brokerOrderId) {
+      const orderId = numberId(brokerOrderId);
+      // `cancelOrder` už čeká na přesnou terminální Order událost. Pokud ji
+      // autoritativní sync stream doručil, nepálíme po ní další REST burst.
+      const streamed = orders.get(String(orderId));
+      if (
+        syncReady
+        && streamed?.accountId === accountId
+        && ['canceled', 'filled', 'rejected'].includes(streamed.status)
+      ) {
+        return { status: streamed.status, completeness: 'authoritative', observedAt: clock() };
+      }
+
+      // Po reconnectu/restartu stačí pro osud cancelu přesná Order entita.
+      // Záměrně zde nejsou OrderVersion, globální Command list ani Fill deps:
+      // ty jsou nutné pro modify/shape/fill reconciliation, ne pro důkaz, že
+      // konkrétní order už není Working.
+      const raw = await request<TradovateRawOrderEntity | null>(
+        `/order/item?id=${orderId}`,
+        {},
+        true,
+      );
+      if (!raw || raw.accountId !== accountId) {
+        return { status: null, completeness: 'authoritative', observedAt: clock() };
+      }
+      return {
+        status: toOrderStatus(raw.ordStatus),
+        completeness: 'authoritative',
+        observedAt: clock(),
+      };
+    },
+    async findModifiedOrderById(accountId, brokerOrderId, changes) {
+      const orderId = numberId(brokerOrderId);
+      const shapeMatches = (order: BrokerOrder) => (
+        order.quantity === changes.quantity
+        && order.orderType === changes.orderType
+        && order.limitPrice === changes.limitPrice
+        && order.stopPrice === changes.stopPrice
+      );
+
+      // `modifyOrder` se vrací až po Replaced execution reportu. Jeho
+      // složený stream order je proto přesnější a levnější důkaz než okamžitě
+      // znovu stahovat globální Command/Fill seznamy.
+      const streamed = orders.get(String(orderId));
+      if (
+        syncReady
+        && streamed?.accountId === accountId
+        && (shapeMatches(streamed) || !isOpenOrderStatus(streamed.status))
+      ) {
+        return { order: streamed, completeness: 'authoritative', observedAt: clock() };
+      }
+
+      // Recovery po restartu používá jen entity závislé na konkrétním orderu
+      // a konkrétním modify commandu. OrderVersion sama je jen požadavek;
+      // za potvrzenou ji povýší až přesný ExecutionReport `Replaced`.
+      const [raw, versions, dependentCommands] = await Promise.all([
+        request<TradovateRawOrderEntity | null>(`/order/item?id=${orderId}`, {}, true),
+        request<TradovateOrderVersionEntity[]>(`/orderVersion/deps?masterid=${orderId}`),
+        request<TradovateCommandEntity[]>(`/command/deps?masterid=${orderId}`),
+      ]);
+      if (!raw || raw.accountId !== accountId) {
+        return { order: null, completeness: 'authoritative', observedAt: clock() };
+      }
+      rememberRawOrder(raw);
+      for (const command of dependentCommands ?? []) commands.set(command.id, command);
+      for (const version of versions ?? []) rememberVersion(version);
+
+      const matchingVersions = (versions ?? []).filter(version => (
+        version.orderId === orderId
+        && version.orderQty === changes.quantity
+        && supportedOrderType(version.orderType) === changes.orderType
+        && version.price === changes.limitPrice
+        && version.stopPrice === changes.stopPrice
+      ));
+      const candidate = matchingVersions.sort((a, b) => b.id - a.id)[0];
+      const command = candidate == null
+        ? undefined
+        : (dependentCommands ?? []).find(item => (
+            item.id === candidate.id && item.orderId === orderId && item.commandType === 'Modify'
+          ));
+
+      if (candidate && command) {
+        const reports = await request<TradovateExecutionReportEntity[]>(
+          `/executionReport/deps?masterid=${command.id}`,
+        );
+        for (const report of reports ?? []) rememberExecutionReport(report);
+        const confirmed = (reports ?? []).some(report => (
+          report.commandId === command.id
+          && report.orderId === orderId
+          && report.execType === 'Replaced'
+          && !rejectedCommands.has(command.id)
+        ));
+        if (confirmed) {
+          const order = await composeOrder(orderId);
+          if (order && (shapeMatches(order) || !isOpenOrderStatus(order.status))) {
+            return { order, completeness: 'authoritative', observedAt: clock() };
+          }
+        }
+      }
+
+      // U terminálního orderu shape modify už nerozhoduje: Filled/Rejected
+      // musí zůstat blokující a Canceled je bezpečný no-op. Poslední známá
+      // verze slouží jen k sestavení BrokerOrder; status pochází přímo z Order.
+      if (terminalOrderStatus(raw.ordStatus)) {
+        const latest = [...(versions ?? [])].sort((a, b) => b.id - a.id)[0];
+        if (latest) {
+          orderVersions.set(orderId, latest);
+          const order = await composeOrder(orderId);
+          if (order) return { order, completeness: 'authoritative', observedAt: clock() };
+        }
+      }
+      throw new TradovateTransportError(`Missing confirmed modify execution for order ${orderId}`);
     },
     usage(): TradovateBrokerUsage {
       const now = clock();

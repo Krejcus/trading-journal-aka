@@ -146,6 +146,12 @@ export function createExposureCappedBroker(
     listOrders: accountId => broker.listOrders(accountId),
     findOrdersByTag: (accountId, tag) => broker.findOrdersByTag(accountId, tag),
     findOrderById: (accountId, brokerOrderId) => broker.findOrderById(accountId, brokerOrderId),
+    findOrderStatusById: broker.findOrderStatusById
+      ? (accountId, brokerOrderId) => broker.findOrderStatusById!(accountId, brokerOrderId)
+      : undefined,
+    findModifiedOrderById: broker.findModifiedOrderById
+      ? (accountId, brokerOrderId, changes) => broker.findModifiedOrderById!(accountId, brokerOrderId, changes)
+      : undefined,
     subscribe: listener => broker.subscribe(listener),
   };
 }

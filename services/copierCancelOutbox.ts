@@ -1,4 +1,4 @@
-import { isOpenOrderStatus, type BrokerOrder, type OrderType } from './brokerPort';
+import { isOpenOrderStatus, type BrokerOrder, type OrderStatus, type OrderType } from './brokerPort';
 
 export type CancelStatus = 'planned' | 'sending' | 'unknown' | 'confirmed' | 'abandoned' | 'waived';
 
@@ -136,6 +136,46 @@ export function resolveCancelLookup(
       outcome: order.status,
       reason: `cancel nebyl potvrzen; objednávka skončila jako ${order.status}`,
       updatedAt: now,
+    };
+  }
+  return markCancelUnknown(entry, entry.reason ?? 'cancel zatím není potvrzen order streamem', now);
+}
+
+/**
+ * Cancel nepotřebuje celý execution graf. Přímý stav Order entity je
+ * dostatečný jen pro cancel; modify dál musí projít plným lookupem shape a
+ * fillů. Tím timeout pomocného `/fill/deps` nezmění potvrzený cancel na
+ * falešný stuck outbox, ale Filled a každý neterminální stav zůstává
+ * fail-closed.
+ */
+export function resolveCancelStatusLookup(
+  entry: CancelOutboxEntry,
+  status: OrderStatus | null,
+  completeness: 'authoritative' | 'eventual',
+  now: number,
+): CancelOutboxEntry {
+  if (entry.operation !== 'cancel') {
+    return markCancelUnknown(entry, 'status-only lookup nesmí potvrdit modify', now);
+  }
+  if (completeness !== 'authoritative') {
+    return markCancelUnknown(entry, 'potvrzení není autoritativní', now);
+  }
+  if (status == null) {
+    return { ...entry, status: 'abandoned', reason: 'objednávka podle brokerOrderId neexistuje', updatedAt: now };
+  }
+  if (status === 'canceled') {
+    return { ...entry, status: 'confirmed', outcome: 'canceled', reason: undefined, updatedAt: now };
+  }
+  if (status === 'rejected') {
+    return {
+      ...entry, status: 'confirmed', outcome: 'rejected',
+      reason: 'cancel bezpředmětný — objednávka skončila jako rejected', updatedAt: now,
+    };
+  }
+  if (status === 'filled') {
+    return {
+      ...entry, status: 'abandoned', outcome: 'filled',
+      reason: 'cancel nebyl potvrzen; objednávka skončila jako filled', updatedAt: now,
     };
   }
   return markCancelUnknown(entry, entry.reason ?? 'cancel zatím není potvrzen order streamem', now);

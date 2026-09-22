@@ -164,6 +164,22 @@ export function createBrokerRouter(
     findOrdersByTag: (accountId, tag) => brokerFor(accountId).findOrdersByTag(accountId, tag),
     findOrderById: (accountId, brokerOrderId) =>
       brokerFor(accountId).findOrderById(accountId, brokerOrderId),
+    findOrderStatusById: async (accountId, brokerOrderId) => {
+      const broker = brokerFor(accountId);
+      return broker.findOrderStatusById
+        ? broker.findOrderStatusById(accountId, brokerOrderId)
+        : broker.findOrderById(accountId, brokerOrderId).then(lookup => ({
+            status: lookup.order?.status ?? null,
+            completeness: lookup.completeness,
+            observedAt: lookup.observedAt,
+          }));
+    },
+    findModifiedOrderById: (accountId, brokerOrderId, changes) => {
+      const broker = brokerFor(accountId);
+      return broker.findModifiedOrderById
+        ? broker.findModifiedOrderById(accountId, brokerOrderId, changes)
+        : broker.findOrderById(accountId, brokerOrderId);
+    },
     subscribe(listener) {
       const setTimeoutImpl = options.setTimeoutImpl ?? setTimeout;
       const clearTimeoutImpl = options.clearTimeoutImpl ?? clearTimeout;

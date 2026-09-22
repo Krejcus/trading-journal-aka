@@ -45,6 +45,7 @@ import {
   markCancelSending,
   markCancelUnknown,
   resolveCancelLookup,
+  resolveCancelStatusLookup,
   stuckCancelEntries,
   waiveCancelEntry,
   type CancelOutboxEntry,
@@ -86,6 +87,24 @@ import {
 } from './copierRiskGate';
 import { snapshotToState, toSnapshot, type CopierSnapshot, type CopierStore } from './copierStore';
 import type { CopyGroupConfig } from './liveCopyTrading';
+
+async function resolveBrokerLifecycleEntry(
+  broker: BrokerPort,
+  entry: CancelOutboxEntry,
+  now: number,
+): Promise<CancelOutboxEntry> {
+  if (entry.operation === 'cancel' && broker.findOrderStatusById) {
+    const lookup = await broker.findOrderStatusById(entry.accountId, entry.brokerOrderId);
+    return resolveCancelStatusLookup(entry, lookup.status, lookup.completeness, now);
+  }
+  const lookup = entry.operation === 'modify' && entry.changes && broker.findModifiedOrderById
+    ? await broker.findModifiedOrderById(entry.accountId, entry.brokerOrderId, entry.changes)
+    : await broker.findOrderById(entry.accountId, entry.brokerOrderId);
+  if (lookup.completeness !== 'authoritative') {
+    return markCancelUnknown(entry, 'potvrzení není autoritativní', now);
+  }
+  return resolveCancelLookup(entry, lookup.order, lookup.completeness, now);
+}
 
 /**
  * Spojuje jádro copieru, outbox, risk gate a brokera do jedné cesty.
@@ -603,10 +622,7 @@ async function processStagedLifecycleCommands(options: {
       let resolved = entry;
       if (entry.status !== 'confirmed') {
         try {
-          const lookup = await broker.findOrderById(entry.accountId, entry.brokerOrderId);
-          resolved = lookup.completeness === 'authoritative'
-            ? resolveCancelLookup(entry, lookup.order, lookup.completeness, clock())
-            : markCancelUnknown(entry, 'potvrzení není autoritativní', clock());
+          resolved = await resolveBrokerLifecycleEntry(broker, entry, clock());
         } catch (error) {
           resolved = markCancelUnknown(
             entry,
@@ -1540,8 +1556,7 @@ export async function processLeaderEvent(
       // vede na fail-closed, jen bez trvalé rozsynchronizace.
       let resolved: CancelOutboxEntry;
       try {
-        const lookup = await broker.findOrderById(entry.accountId, entry.brokerOrderId);
-        resolved = resolveCancelLookup(entry, lookup.order, lookup.completeness, clock());
+        resolved = await resolveBrokerLifecycleEntry(broker, entry, clock());
       } catch (error) {
         resolved = markCancelUnknown(
           entry,
@@ -2153,9 +2168,8 @@ export async function recoverOutbox(options: RecoverOutboxOptions): Promise<Copi
   for (const entry of [...cancelOutbox.values()]) {
     if (entry.status !== 'sending' && entry.status !== 'unknown') continue;
     recoveredLifecycleEvents.set(entry.leaderEventId, entry.leaderSequence);
-    const lookup = await broker.findOrderById(entry.accountId, entry.brokerOrderId);
     const at = clock();
-    const resolved = resolveCancelLookup(entry, lookup.order, lookup.completeness, at);
+    const resolved = await resolveBrokerLifecycleEntry(broker, entry, at);
     cancelOutbox.set(entry.key, resolved);
     if (resolved.status === 'confirmed') {
       waiveSupersededModifications(cancelOutbox, resolved, clock);
