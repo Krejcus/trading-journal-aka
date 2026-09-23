@@ -91,9 +91,11 @@ const followerCutCount = (value: unknown, now: number): number => {
       || positiveEpoch(closed) != null;
     // Vadný záznam se přeskočí, ale platné cuts se počítají dál — schovat
     // skutečně vyřazený účet za jednu poškozenou položku by bylo fail-open.
+    const manualTradeCut = cut.source === 'manual' && cut.scope === 'trade' && cutUsd === 0;
     if (accountId == null || accountId <= 0 || at == null || until == null
-      || at > until || until <= now || realizedPnlUsd == null || cutUsd == null || cutUsd <= 0
-      || (cut.source !== 'broker' && cut.source !== 'ledger') || !closedValid
+      || at > until || until <= now || realizedPnlUsd == null || cutUsd == null
+      || (!manualTradeCut && cutUsd <= 0)
+      || (cut.source !== 'broker' && cut.source !== 'ledger' && cut.source !== 'manual') || !closedValid
       || accountIds.has(accountId)) continue;
     accountIds.add(accountId);
   }

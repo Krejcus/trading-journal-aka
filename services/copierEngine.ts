@@ -200,14 +200,18 @@ export interface CopierState {
     pauseAt?: number;
     /** První úspěšný ostrý ARM aktuální broker session (tighten-only epoch). */
     sessionArmedAt?: number;
-    /** Vyřazení jednotlivých followerů do konce broker session. */
+    /** Vyřazení jednotlivých followerů do konce broker session nebo aktuální trade epizody. */
     followerCuts?: Record<string, {
       accountId: number;
       at: number;
       until: number;
       realizedPnlUsd: number;
       cutUsd: number;
-      source: 'broker' | 'ledger';
+      source: 'broker' | 'ledger' | 'manual';
+      /** Legacy záznam bez scope je session cut. */
+      scope?: 'session' | 'trade';
+      /** Idempotency klíč ručního Flatten followera. */
+      operationId?: string;
       closed: number | null | false;
     }>;
     /** Poslední read-only broker risk snapshot per účet. */

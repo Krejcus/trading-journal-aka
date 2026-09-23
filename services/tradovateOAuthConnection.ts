@@ -305,7 +305,9 @@ export async function executeTradovateCopierRelayCommand(
   // stavové potvrzení); server ho navíc přichytí k už běžícímu Flattenu,
   // takže jeho expirace před claimem tady není směrodatná.
   const riskReducing = command.type === 'copy-command'
-    && (command.command.type === 'flatten-group' || command.command.type === 'flatten-account');
+    && (command.command.type === 'flatten-group'
+      || command.command.type === 'flatten-account'
+      || command.command.type === 'flatten-follower-trade');
   const deadline = riskReducing
     ? Date.now() + 240_000
     : Math.min(Date.parse(queued.expiresAt) + 5_000, Date.now() + 35_000);

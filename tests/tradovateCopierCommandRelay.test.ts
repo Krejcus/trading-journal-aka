@@ -198,6 +198,12 @@ describe('Tradovate copier command relay', () => {
         type: 'flatten-account', groupId: 'group-1', accountId: 42, operationId: 'flatten-one-1',
       },
     },
+    {
+      type: 'copy-command',
+      command: {
+        type: 'flatten-follower-trade', groupId: 'group-1', accountId: 42, operationId: 'flatten-trade-1',
+      },
+    },
   ])('enqueue přijme $command.type a uloží celý command do payloadu', async command => {
     const upsert = vi.fn();
 
@@ -247,6 +253,7 @@ describe('Tradovate copier command relay', () => {
   it.each<CopyCommand>([
     { type: 'copy-command', command: { type: 'flatten-group', groupId: 'group-1', operationId: 'flatten-all-2' } },
     { type: 'copy-command', command: { type: 'flatten-account', groupId: 'group-1', accountId: 42, operationId: 'flatten-one-2' } },
+    { type: 'copy-command', command: { type: 'flatten-follower-trade', groupId: 'group-1', accountId: 42, operationId: 'flatten-trade-2' } },
   ])('$command.type se přichytí k už běžícímu Flattenu stejného cíle místo druhé likvidace', async command => {
     // 17. 9. 2026: druhý Flatten All vypršel ve frontě, protože worker 265 s
     // vykonával první; UI má čekat na výsledek toho běžícího.
@@ -258,8 +265,9 @@ describe('Tradovate copier command relay', () => {
     });
     expect(queued).toEqual({ id: 'running-flatten', status: 'claimed', expiresAt: '2026-08-21T12:00:30.000Z', deviceId });
     expect(upsert).not.toHaveBeenCalled();
-    expect(lookup).toContainEqual(['contains', ['payload', { command: command.command.type === 'flatten-account'
-      ? { type: 'flatten-account', groupId: 'group-1', accountId: 42 } : { type: 'flatten-group', groupId: 'group-1' } }]]);
+    expect(lookup).toContainEqual(['contains', ['payload', { command: command.command.type === 'flatten-group'
+      ? { type: 'flatten-group', groupId: 'group-1' }
+      : { type: command.command.type, groupId: 'group-1', accountId: 42 } }]]);
     expect(lookup).toContainEqual(['or', ['status.eq.claimed,and(status.eq.pending,expires_at.gt.2026-08-21T12:03:00.000Z)']]);
   });
 

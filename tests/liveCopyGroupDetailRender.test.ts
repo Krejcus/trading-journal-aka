@@ -337,6 +337,29 @@ describe('GroupDetail Positions integrace', () => {
     expect(markup).toContain('Odebrat ze skupiny');
   });
 
+  it('ručně zavřeného followera označí jako čekajícího a odečte ho z aktivních', () => {
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot,
+      executionGroupId: 'group-main',
+      copierArmed: true,
+      followerCuts: [{
+        accountId: followerId,
+        at: Date.now() - 1_000,
+        until: Date.now() + 60_000,
+        realizedPnlUsd: 0,
+        cutUsd: 0,
+        source: 'manual',
+        scope: 'trade',
+        operationId: 'render-trade-cut-001',
+        closed: Date.now() - 500,
+      }],
+    }));
+
+    expect(markup).toContain('0/1 zařazených');
+    expect(markup).toContain('ČEKÁ NA DALŠÍ OBCHOD');
+    expect(markup).toContain('Ručně zavřeno · znovu se připojí po flat skupiny');
+  });
+
   it('u chybějícího OAuth účtu zachová autoritativní BREACHED místo obecného nedostupný', () => {
     const staleFollowerId = 63_338_592;
     const staleGroup = {

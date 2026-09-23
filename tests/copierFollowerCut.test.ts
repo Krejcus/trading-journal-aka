@@ -253,6 +253,119 @@ const accountRisk = (controller: CopierRuntimeController, accountId: number) => 
 );
 
 describe('CopierRuntimeController — follower account cuts', () => {
+  it('ruční Flatten followera nechá skupinu ARM a vrátí účet až po čistém konci obchodu', async () => {
+    const time = manualClock();
+    const broker = createMockBroker({
+      clock: time.clock,
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'fill', price: 20_000 }),
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId, at: time.now(), realizedPnlUsd: 0,
+    }));
+    // Ruční Flatten je vždy close-copy, i když automatický denní cut má
+    // pro tento účet nastavené let-run.
+    const runtime = await bootRuntime({ broker, group: riskGroup({ onCut: 'let-run' }), time });
+    try {
+      broker.setPosition(100, 'MNQU6', 1);
+      await emitLeaderFill({
+        ...runtime, time, side: 'Buy', price: 20_000, netQuantity: 1,
+      });
+      expect(broker.placedRequests().map(request => request.accountId).sort()).toEqual([200, 201]);
+
+      const result = await runtime.controller.flattenFollowerTrade(200, 'manual-trade-cut-001');
+      await runtime.controller.waitForIdle();
+      expect(result).toMatchObject({ flat: true, accountIds: [200] });
+      expect(followerCut(runtime.controller)).toMatchObject({
+        source: 'manual', scope: 'trade', operationId: 'manual-trade-cut-001', closed: expect.any(Number),
+      });
+      expect(runtime.controller.status()).toMatchObject({ armed: true, lastError: null });
+      expect(await broker.listPositions(200)).toEqual([
+        expect.objectContaining({ symbol: 'MNQU6', netQuantity: 0 }),
+      ]);
+      expect(await broker.listPositions(201)).toEqual([
+        expect.objectContaining({ symbol: 'MNQU6', netQuantity: 1 }),
+      ]);
+
+      // Scale-in stejného obchodu pokračuje jen na zbývajícím followerovi.
+      const placedBeforeScale = broker.placedRequests().length;
+      broker.setPosition(100, 'MNQU6', 2);
+      await emitLeaderFill({
+        ...runtime, time, side: 'Buy', price: 20_010, netQuantity: 2,
+      });
+      expect(broker.placedRequests().slice(placedBeforeScale)).toEqual([
+        expect.objectContaining({ accountId: 201, side: 'Buy', quantity: 1 }),
+      ]);
+
+      // Konec obchodu: vyřazený účet nesmí dostat leader exit a otevřít reverse.
+      const placedBeforeExit = broker.placedRequests().length;
+      broker.setPosition(100, 'MNQU6', 0);
+      await emitLeaderFill({
+        ...runtime, time, side: 'Sell', quantity: 2, price: 20_020, netQuantity: 0,
+      });
+      expect(broker.placedRequests().slice(placedBeforeExit)).toEqual([
+        expect.objectContaining({ accountId: 201, side: 'Sell', quantity: 2 }),
+      ]);
+      expect(followerCut(runtime.controller)).toBeUndefined();
+      expect(runtime.controller.status()).toMatchObject({ armed: true, groupFlat: true, lastError: null });
+
+      // Další obchod už znovu dostanou oba followeři.
+      const placedBeforeNextTrade = broker.placedRequests().length;
+      broker.setPosition(100, 'MNQU6', 1);
+      await emitLeaderFill({
+        ...runtime, time, side: 'Buy', price: 20_030, netQuantity: 1,
+      });
+      expect(broker.placedRequests().slice(placedBeforeNextTrade).map(request => request.accountId).sort())
+        .toEqual([200, 201]);
+    } finally {
+      runtime.controller.stop();
+    }
+  });
+
+  it('okamžitý reverz bez potvrzeného clean boundary ponechá ručně zavřený účet vyřazený', async () => {
+    const time = manualClock();
+    const broker = createMockBroker({
+      clock: time.clock,
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'fill', price: 20_000 }),
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId, at: time.now(), realizedPnlUsd: 0,
+    }));
+    const runtime = await bootRuntime({ broker, group: riskGroup(), time });
+    try {
+      broker.setPosition(100, 'MNQU6', 1);
+      await emitLeaderFill({
+        ...runtime, time, side: 'Buy', price: 20_000, netQuantity: 1,
+      });
+      await runtime.controller.flattenFollowerTrade(200, 'manual-trade-cut-002');
+      await runtime.controller.waitForIdle();
+
+      const beforeReverse = broker.placedRequests().length;
+      // Broker už drží reverzní leader pozici a stream doručí flat + nový
+      // short v jedné frontě. Mezilehlá Position=0 není clean boundary.
+      broker.setPosition(100, 'MNQU6', -1);
+      broker.emitEvent({
+        type: 'fill',
+        fill: brokerFill({ accountId: 100, side: 'Sell', quantity: 1, price: 19_990, at: time.now() }),
+      });
+      broker.emitEvent(leaderPosition(0));
+      broker.emitEvent({
+        type: 'fill',
+        fill: brokerFill({ accountId: 100, side: 'Sell', quantity: 1, price: 19_985, at: time.now() }),
+      });
+      broker.emitEvent(leaderPosition(-1));
+      await runtime.controller.waitForIdle();
+
+      expect(followerCut(runtime.controller)).toMatchObject({
+        source: 'manual', scope: 'trade', operationId: 'manual-trade-cut-002',
+      });
+      expect(broker.placedRequests().slice(beforeReverse).some(request => request.accountId === 200)).toBe(false);
+    } finally {
+      runtime.controller.stop();
+    }
+  });
+
   it('broker cut zavře jen zasaženou kopii a ostatní follower dál přijímá nové vstupy', async () => {
     const time = manualClock();
     let breached = false;
@@ -467,6 +580,45 @@ describe('CopierRuntimeController — follower account cuts', () => {
       expect(broker.liquidateRequests().filter(request => request.accountId === 200)).toHaveLength(0);
       expect(await broker.listPositions(200)).toEqual([
         expect.objectContaining({ netQuantity: 1 }),
+      ]);
+    } finally {
+      runtime.controller.stop();
+    }
+  });
+
+  it('ruční Flatten nelikviduje cizí pozici a nelže o flat výsledku', async () => {
+    const time = manualClock();
+    const broker = createMockBroker({
+      clock: time.clock,
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'fill', price: 20_000 }),
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId, at: time.now(), realizedPnlUsd: 0,
+    }));
+    const runtime = await bootRuntime({ broker, group: riskGroup(), time });
+    try {
+      await broker.placeOrder({
+        tag: 'manual-external-order',
+        accountId: 200,
+        symbol: 'MNQU6',
+        side: 'Buy',
+        quantity: 1,
+        orderType: 'Market',
+      });
+      await runtime.controller.waitForIdle();
+
+      await expect(runtime.controller.flattenFollowerTrade(200, 'manual-trade-cut-external'))
+        .rejects.toThrow('nepodařilo potvrzeně zavřít');
+      await runtime.controller.waitForIdle();
+
+      expect(followerCut(runtime.controller)).toMatchObject({
+        source: 'manual', scope: 'trade', closed: false,
+      });
+      expect(runtime.controller.status()).toMatchObject({ armed: true, lastError: null });
+      expect(broker.liquidateRequests().filter(request => request.accountId === 200)).toHaveLength(0);
+      expect(await broker.listPositions(200)).toEqual([
+        expect.objectContaining({ symbol: 'MNQU6', netQuantity: 1 }),
       ]);
     } finally {
       runtime.controller.stop();

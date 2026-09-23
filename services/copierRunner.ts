@@ -152,7 +152,7 @@ export interface CopierAuditEntry {
   limit?: number;
   /** Konec pauzy/cutu; additivní metadata pro nové auditní druhy. */
   until?: number;
-  source?: 'broker' | 'ledger';
+  source?: 'broker' | 'ledger' | 'manual';
   cutUsd?: number;
 }
 

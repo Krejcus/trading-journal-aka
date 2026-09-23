@@ -339,6 +339,8 @@ export const LiveAccountRiskTable = ({
   const riskById = useMemo(() => new Map(accountRisk.map(snapshot => [snapshot.accountId, snapshot])), [accountRisk]);
   const followerIds = useMemo(() => new Set(group?.followers.map(follower => follower.accountId) ?? []), [group]);
   const cutsById = useMemo(() => activeCutMap(runtimeAvailable ? followerCuts : [], followerIds, now), [followerCuts, followerIds, now, runtimeAvailable]);
+  const manualTradeCuts = [...cutsById.values()].filter(cut => cut.source === 'manual' && cut.scope === 'trade');
+  const sessionCuts = [...cutsById.values()].filter(cut => cut.source !== 'manual' || cut.scope !== 'trade');
   const tightenOnly = sessionArmedAt > 0;
   const runtime = copierRuntimePresentation(controllerStatus, runtimeAvailable, now);
   const writesDisabled = disabled || !riskConfigSupported || !runtimeAvailable || saving || !onSave;
@@ -414,10 +416,17 @@ export const LiveAccountRiskTable = ({
           : 'Aktuální stav workeru není dostupný. Podporu Risk limitů nelze ověřit.'}</p>
       ) : null}
 
-      {cutsById.size > 0 ? (
+      {manualTradeCuts.length > 0 ? (
+        <div data-follower-trade-cut-banner="true" className="flex items-start gap-2 border-b border-amber-500/25 bg-amber-500/[0.07] px-3 py-2 text-[11px] font-bold text-amber-600">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          <span>{manualTradeCuts.length === 1 ? '1 účet čeká na další obchod' : `${manualTradeCuts.length} účty čekají na další obchod`}: {manualTradeCuts.map(cut => accountIdentity(cut.accountId, accountsById, profilesById).name).join(', ')}</span>
+        </div>
+      ) : null}
+
+      {sessionCuts.length > 0 ? (
         <div data-follower-cut-banner="true" className="flex items-start gap-2 border-b border-rose-500/25 bg-rose-500/[0.07] px-3 py-2 text-[11px] font-bold text-rose-500">
           <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-          <span>{cutsById.size === 1 ? '1 účet je vyřazen do konce session' : `${cutsById.size} účty jsou vyřazené do konce session`}: {[...cutsById.keys()].map(accountId => accountIdentity(accountId, accountsById, profilesById).name).join(', ')}</span>
+          <span>{sessionCuts.length === 1 ? '1 účet je vyřazen do konce session' : `${sessionCuts.length} účty jsou vyřazené do konce session`}: {sessionCuts.map(cut => accountIdentity(cut.accountId, accountsById, profilesById).name).join(', ')}</span>
         </div>
       ) : null}
 

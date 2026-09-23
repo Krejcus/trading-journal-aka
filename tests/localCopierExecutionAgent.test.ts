@@ -63,6 +63,7 @@ const controller = (overrides: Partial<CopierControllerStatus> = {}) => {
     reconfigureGroup: vi.fn(async () => undefined),
     updateGroup: vi.fn(),
     flattenAccount: vi.fn(async () => ({ flat: true })),
+    flattenFollowerTrade: vi.fn(async () => ({ flat: true })),
     flattenGroup: vi.fn(async () => ({ flat: true })),
     waiveStuckOperation: vi.fn(),
     status: vi.fn(() => status),
@@ -241,7 +242,7 @@ describe('local copier execution agent', () => {
     await expect(running.close()).resolves.toBeUndefined();
   });
 
-  it('forwards only explicit Flatten and Flatten All commands with their stable operation id', async () => {
+  it('forwards explicit account, current-trade follower and group Flatten commands with their stable operation id', async () => {
     const runtime = controller();
     running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
     const nonce = running.status().nonce;
@@ -251,6 +252,12 @@ describe('local copier execution agent', () => {
       command: { type: 'flatten-account', groupId: 'runtime-test', accountId: 22, operationId: 'flatten-one-123' },
     })).status).toBe(200);
     expect(runtime.flattenAccount).toHaveBeenCalledWith(22, 'flatten-one-123');
+
+    expect((await post(running, nonce, {
+      type: 'copy-command',
+      command: { type: 'flatten-follower-trade', groupId: 'runtime-test', accountId: 22, operationId: 'flatten-trade-123' },
+    })).status).toBe(200);
+    expect(runtime.flattenFollowerTrade).toHaveBeenCalledWith(22, 'flatten-trade-123');
 
     expect((await post(running, nonce, {
       type: 'copy-command',

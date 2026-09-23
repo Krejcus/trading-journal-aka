@@ -354,6 +354,13 @@ export async function startLocalCopierExecutionAgent(
         assertGroupTarget(group, command.groupId);
         assertMember(group, command.accountId);
         return { type: 'flatten', ...await options.controller.flattenAccount(command.accountId, command.operationId) };
+      case 'flatten-follower-trade':
+        assertGroupTarget(group, command.groupId);
+        assertMember(group, command.accountId);
+        if (!group.followers.some(follower => follower.accountId === command.accountId)) {
+          throw new Error('Do konce obchodu lze vyřadit pouze follower účet');
+        }
+        return { type: 'flatten', ...await options.controller.flattenFollowerTrade(command.accountId, command.operationId) };
       case 'flatten-group':
         assertGroupTarget(group, command.groupId);
         return { type: 'flatten', ...await options.controller.flattenGroup(command.operationId) };

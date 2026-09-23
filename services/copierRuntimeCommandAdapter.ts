@@ -86,6 +86,8 @@ export function createCopierRuntimeCommandAdapter(
           return { type: 'configuration', group: options.getGroup() };
         case 'flatten-account':
           return { type: 'flatten', ...await options.controller.flattenAccount(command.accountId, command.operationId) };
+        case 'flatten-follower-trade':
+          return { type: 'flatten', ...await options.controller.flattenFollowerTrade(command.accountId, command.operationId) };
         case 'flatten-group':
           return { type: 'flatten', ...await options.controller.flattenGroup(command.operationId) };
         case 'create-group':

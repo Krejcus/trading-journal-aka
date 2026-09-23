@@ -126,7 +126,7 @@ export interface CopierCopyEventRow {
   accountId?: number;
   cutUsd?: number;
   realizedPnlUsd?: number;
-  source?: 'broker' | 'ledger';
+  source?: 'broker' | 'ledger' | 'manual';
   closed?: number | null | false;
 }
 
@@ -159,6 +159,14 @@ const formatPotential = (value: number | undefined): string => {
 export function copyEventNotification(event: CopierCopyEventRow): { title: string; body: string } {
   if (event.kind === 'follower-cut') {
     const account = event.accountId != null ? ` ${event.accountId}` : '';
+    if (event.source === 'manual') {
+      return {
+        title: `Copier: účet${account} ručně zavřen`,
+        body: event.closed === false
+          ? 'Účet zůstává mimo aktuální obchod; jeho kopii se nepodařilo potvrzeně zavřít.'
+          : 'Účet čeká na další obchod; ostatní účty pokračují.',
+      };
+    }
     const loss = event.realizedPnlUsd != null ? formatUsd(event.realizedPnlUsd) : 'neověřeno';
     const limit = event.cutUsd != null ? `${event.cutUsd} USD` : 'neověřen';
     return {

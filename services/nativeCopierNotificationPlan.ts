@@ -318,8 +318,12 @@ export function planCopierNotifications(options: {
       const account = followerAccountLabel(cut.accountId);
       if (!previousCut) {
         fireNow.push({
-          title: `Copier: ${account} vyřazen`,
-          body: `Ztráta −${usdMagnitude.format(Math.abs(cut.realizedPnlUsd))} USD, limit ${usdMagnitude.format(Math.abs(cut.cutUsd))} USD.`,
+          title: cut.source === 'manual'
+            ? `Copier: ${account} ručně zavřen`
+            : `Copier: ${account} vyřazen`,
+          body: cut.source === 'manual'
+            ? 'Účet čeká na další obchod; ostatní účty pokračují.'
+            : `Ztráta −${usdMagnitude.format(Math.abs(cut.realizedPnlUsd))} USD, limit ${usdMagnitude.format(Math.abs(cut.cutUsd))} USD.`,
           kind: 'follower-cut',
         });
       }

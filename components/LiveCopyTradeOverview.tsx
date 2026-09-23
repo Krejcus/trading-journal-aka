@@ -440,6 +440,8 @@ interface PendingAction {
   accountIds?: number[];
 }
 
+type ActiveFollowerCut = NonNullable<CopierControllerStatus['followerCuts']>[number];
+
 export interface UnavailableFollowerRemovalPlan {
   group: CopyGroupConfig;
   /**
@@ -824,6 +826,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     () => new Map(snapshot.accounts.map(a => [a.id, a])),
     [snapshot.accounts],
   );
+  const tradeCutsByAccount = useMemo(() => new Map(
+    (followerCuts ?? [])
+      .filter(cut => cut.source === 'manual' && cut.scope === 'trade' && cut.until > Date.now())
+      .map(cut => [cut.accountId, cut]),
+  ), [followerCuts]);
 
   const profilesById = useMemo(() => {
     const next = new Map<number, TradovateAccountProfile>();
@@ -1105,11 +1112,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     update?: () => void | Promise<void>,
     onError?: (message: string) => void,
   ): Promise<boolean> => {
-    const key = command.type === 'flatten-account' || command.type === 'set-replication' || command.type === 'set-multiplier'
+    const key = command.type === 'flatten-account' || command.type === 'flatten-follower-trade' || command.type === 'set-replication' || command.type === 'set-multiplier'
       ? `${command.type}-${command.accountId}`
       : 'groupId' in command ? `${command.type}-${command.groupId}` : command.type;
-    const brokerWrite = command.type === 'flatten-account' || command.type === 'flatten-group' || command.type === 'cancel-order';
-    const requiresArmed = command.type === 'cancel-order';
+    const brokerWrite = command.type === 'flatten-account' || command.type === 'flatten-follower-trade' || command.type === 'flatten-group' || command.type === 'cancel-order';
+    const requiresArmed = command.type === 'cancel-order' || command.type === 'flatten-follower-trade';
     const commandGroupId = command.type === 'create-group' || command.type === 'update-group'
       ? command.group.id
       : 'groupId' in command ? command.groupId : null;
@@ -1136,7 +1143,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       }
       await update?.();
       const successText = result && result.type === 'flatten'
-        ? `Flatten potvrzen: ${result.accountIds.length} účtů je flat, zrušeno ${result.canceledOrders} příkazů, odesláno ${result.submittedClosures} close příkazů.`
+        ? command.type === 'flatten-follower-trade'
+          ? 'Účet je potvrzeně flat a čeká na další obchod. Ostatní účty i kopírka pokračují.'
+          : `Flatten potvrzen: ${result.accountIds.length} účtů je flat, zrušeno ${result.canceledOrders} příkazů, odesláno ${result.submittedClosures} close příkazů.`
         : command.type === 'resolve-stuck-operation'
           ? 'Operace označena za vyřešenou. Runtime je VYPNUTO; před zapnutím proběhne nová kontrola pozic.'
           : command.type === 'set-multiplier'
@@ -1395,6 +1404,24 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   // a nebylo by poznat, co se kam posunulo.
   useFlipReorder(orderedGroups.map(group => group.id).join('|'));
 
+  const requestAccountFlatten = (group: CopyGroupConfig, accountId: number) => {
+    const followerInRunningTrade = copierArmed
+      && group.id === executionGroupId
+      && group.followers.some(follower => follower.accountId === accountId);
+    setPendingAction({
+      title: followerInRunningTrade ? 'Zavřít účet jen pro tento obchod?' : 'Flatten účet?',
+      detail: followerInRunningTrade
+        ? 'Zavře pouze potvrzenou kopii a její čekající příkazy na tomto followerovi. Ostatní účty pokračují; účet se automaticky vrátí až po flat celé skupiny bez aktivních příkazů.'
+        : 'Připraví uzavření všech otevřených pozic pouze na tomto účtu a kopírku z bezpečnostních důvodů vypne.',
+      accountIds: [accountId],
+      confirmLabel: followerInRunningTrade ? 'Zavřít jen tento účet' : 'Flatten',
+      danger: true,
+      command: followerInRunningTrade
+        ? { type: 'flatten-follower-trade', groupId: group.id, accountId, operationId: manualOperationId() }
+        : { type: 'flatten-account', groupId: group.id, accountId, operationId: manualOperationId() },
+    });
+  };
+
   // Stejné akce jako v desktopové tabulce, jen bez vazby na buňky <td>.
   const compactGroupActions = (group: CopyGroupConfig) => ({
     onFlatten: () => setPendingAction({
@@ -1436,13 +1463,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       };
       void saveGroup(updated);
     },
-    onFlattenAccount: (accountId: number) => setPendingAction({
-      title: 'Flatten účet?', detail: 'Připraví uzavření všech otevřených pozic pouze na tomto účtu.',
-      accountIds: [accountId],
-      confirmLabel: 'Flatten', danger: true, command: {
-        type: 'flatten-account', groupId: group.id, accountId, operationId: manualOperationId(),
-      },
-    }),
+    onFlattenAccount: (accountId: number) => requestAccountFlatten(group, accountId),
     onCancelOrder: (orderId: number) => setPendingAction({
       title: 'Zrušit příkaz?', detail: 'Připraví zrušení tohoto pracovního příkazu.',
       confirmLabel: 'Zrušit příkaz', danger: true, command: { type: 'cancel-order', groupId: group.id, orderId },
@@ -1602,6 +1623,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                     .filter(follower => follower.mode !== 'off')
                     .map(follower => eligibilityByAccount.get(follower.accountId))}
                   eligibilityByAccount={eligibilityByAccount}
+                  tradeCutsByAccount={tradeCutsByAccount}
                   orders={orders}
                   isLive={isLive}
                   onAccount={onAccount}
@@ -1671,6 +1693,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         eligibility={group.followers
                           .filter(follower => follower.mode !== 'off')
                           .map(follower => eligibilityByAccount.get(follower.accountId))}
+                        tradeCutsByAccount={tradeCutsByAccount}
                         observingOnly={selected && copierObservingOnly}
                         // Dokud stav neznáme, neznáme ani execution skupinu —
                         // neznámý stav proto platí pro všechny řádky.
@@ -1748,6 +1771,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               columns={visibleColumns}
                               orders={orders}
                               eligibilityByAccount={eligibilityByAccount}
+                              tradeCutsByAccount={tradeCutsByAccount}
                               onVerifyEligibility={verifyAccountEligibility}
                               verifyingAccountId={verifyingAccountId}
                               busyCommand={busyCommand}
@@ -1764,13 +1788,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                                   command: { type: 'set-multiplier', groupId: group.id, accountId, multiplier: next },
                                 });
                               }}
-                              onFlattenAccount={accountId => setPendingAction({
-                                title: 'Flatten účet?', detail: 'Připraví uzavření všech otevřených pozic pouze na tomto účtu.',
-                                accountIds: [accountId],
-                                confirmLabel: 'Flatten', danger: true, command: {
-                                  type: 'flatten-account', groupId: group.id, accountId, operationId: manualOperationId(),
-                                },
-                              })}
+                              onFlattenAccount={accountId => requestAccountFlatten(group, accountId)}
                               onRemoveUnavailableFollower={() => requestUnavailableFollowerRemoval(
                                 group,
                                 group,
@@ -2335,10 +2353,11 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
   );
 };
 
-const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, tightenOnly, onApplyTemplate, onDelete, groupColumns }: {
+const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsByAccount, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, tightenOnly, onApplyTemplate, onDelete, groupColumns }: {
   group: CopyGroupConfig; rows: Row[]; armed: boolean; open: boolean; onToggle: () => void;
   dailyPnlPending: boolean;
   eligibility: (CopierAccountEligibility | undefined)[];
+  tradeCutsByAccount: ReadonlyMap<number, ActiveFollowerCut>;
   observingOnly: boolean;
   statusPending: boolean;
   runtimeReady: boolean;
@@ -2369,7 +2388,9 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, observingO
   const unavailableFollowerCount = enabledFollowerRows.filter((row, index) =>
     !row.account && (eligibility[index]?.state ?? 'active') === 'active').length;
   const inactiveFollowerCount = enabledFollowerRows.filter((row, index) =>
-    !row.account || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')).length;
+    !row.account
+    || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
+    || (row.accountId != null && tradeCutsByAccount.has(row.accountId))).length;
   const activeFollowerCount = Math.max(0, enabledFollowerCount - inactiveFollowerCount);
   const dllCount = eligibility.filter(entry => entry?.state === 'dll-locked').length;
   const breachedCount = eligibility.filter(entry => entry?.state === 'breached').length;
@@ -2495,7 +2516,13 @@ const accountInMarket = (row: Row, orders: LiveOrder[]): boolean => {
 const eligibilityNeedsAttention = (eligibility: CopierAccountEligibility | undefined, live: boolean, unavailable: boolean): boolean =>
   unavailable || !live || (eligibility?.state != null && eligibility.state !== 'active');
 
-const CompactAccountRow = ({ row, variant, live, eligibility, orders, dailyPnlPending, busyCommand, verifying, onVerifyEligibility, onAccount, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, style }: {
+const TradeCutPill = () => (
+  <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/[0.08] px-2 py-1 text-[10px] font-black leading-none text-amber-600">
+    <Clock3 aria-hidden="true" size={10} strokeWidth={2.5} /> ČEKÁ NA DALŠÍ OBCHOD
+  </span>
+);
+
+const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, orders, dailyPnlPending, busyCommand, verifying, onVerifyEligibility, onAccount, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, style }: {
   row: Row;
   /** Jen zpoždění náběhu při rozbalení seznamu. */
   style?: React.CSSProperties;
@@ -2503,6 +2530,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, orders, dailyPnlPe
   variant: 'market' | 'flat';
   live: boolean;
   eligibility?: CopierAccountEligibility;
+  tradeCut?: ActiveFollowerCut;
   orders: LiveOrder[];
   dailyPnlPending: boolean;
   busyCommand: string | null;
@@ -2526,8 +2554,10 @@ const CompactAccountRow = ({ row, variant, live, eligibility, orders, dailyPnlPe
   // který se do celkového součtu nahoře započítává jako nula — a součet
   // s pomlčkami pod sebou vypadá jako rozbitá data.
   const quiet = daily == null && a != null && liveDayReadAnswered(a, Date.now(), dailyPnlPending);
-  const attention = eligibilityNeedsAttention(eligibility, live, !a && accountId != null);
-  const note = compactRejection
+  const attention = eligibilityNeedsAttention(eligibility, live, !a && accountId != null) || tradeCut != null;
+  const note = tradeCut
+    ? <p className="text-[10px] font-semibold leading-tight text-amber-600">Ručně zavřeno · znovu se připojí po flat skupiny</p>
+    : compactRejection
     ? <RejectedExecutionStatus
         execution={compactRejection}
         accountAuthoritativelyFlat={compactFlat}
@@ -2542,7 +2572,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, orders, dailyPnlPe
         : null;
 
   return (
-    <li className="px-3" style={style}>
+    <li className={`px-3 ${tradeCut ? 'bg-amber-500/[0.035] opacity-80' : ''}`} style={style}>
       <div
         role={a ? 'button' : undefined}
         onClick={() => a && onAccount?.(a)}
@@ -2580,7 +2610,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, orders, dailyPnlPe
             <CopyTradePositionsCell accountId={accountId} positions={a.positions} orders={orders} />
           ) : null}
           {attention ? (
-            <AccountEligibilityPill
+            tradeCut ? <TradeCutPill /> : <AccountEligibilityPill
               eligibility={eligibility}
               live={live}
               unavailable={!a && accountId != null}
@@ -2637,7 +2667,7 @@ const CompactAccountSectionHead = ({ columns }: { columns: 'market' | 'flat' }) 
   </div>
 );
 
-const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, dailyPnlPending, eligibility, eligibilityByAccount, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onDelete, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel, islandTone = null }: {
+const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, dailyPnlPending, eligibility, eligibilityByAccount, tradeCutsByAccount, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onDelete, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel, islandTone = null }: {
   group: CopyGroupConfig;
   /** Fáze ze stavového ostrova. Karta je jeden box, takže tu rám obepne
    *  celou skupinu včetně účtů — na rozdíl od tabulkového rozložení. */
@@ -2652,6 +2682,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   dailyPnlPending: boolean;
   eligibility: (CopierAccountEligibility | undefined)[];
   eligibilityByAccount: Map<number, CopierAccountEligibility>;
+  tradeCutsByAccount: ReadonlyMap<number, ActiveFollowerCut>;
   orders: LiveOrder[];
   isLive: (a?: LiveAccount) => boolean;
   onAccount?: (a: LiveAccount) => void;
@@ -2681,7 +2712,9 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   const unreal = rows.reduce((sum, row) => sum + (row.account?.unrealizedPnl || 0), 0);
   const enabledFollowerRows = rows.filter(row => !row.isLeader && row.mode !== 'off');
   const inactiveFollowerCount = enabledFollowerRows.filter((row, index) =>
-    !row.account || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')).length;
+    !row.account
+    || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
+    || (row.accountId != null && tradeCutsByAccount.has(row.accountId))).length;
   const activeFollowerCount = Math.max(0, enabledFollowerRows.length - inactiveFollowerCount);
   const dllCount = eligibility.filter(entry => entry?.state === 'dll-locked').length;
   const breachedCount = eligibility.filter(entry => entry?.state === 'breached').length;
@@ -2797,6 +2830,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
                   variant={variant}
                   live={isLive(row.account)}
                   eligibility={row.accountId != null ? eligibilityByAccount.get(row.accountId) : undefined}
+                  tradeCut={row.accountId != null ? tradeCutsByAccount.get(row.accountId) : undefined}
                   orders={groupOrders}
                   dailyPnlPending={dailyPnlPending}
                   busyCommand={busyCommand}
@@ -3574,7 +3608,7 @@ export const AccountEligibilityPill = ({ eligibility, live, unavailable = false,
     <CheckCircle2 aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Aktivní</span>;
 };
 
-const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eligibilityByAccount, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, dailyPnlPending, onMultiplier, onFlattenAccount, onRemoveUnavailableFollower, onCancelOrder, redactNames, redaction, orderColumns, tightenOnly }: {
+const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eligibilityByAccount, tradeCutsByAccount, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, dailyPnlPending, onMultiplier, onFlattenAccount, onRemoveUnavailableFollower, onCancelOrder, redactNames, redaction, orderColumns, tightenOnly }: {
   rows: Row[];
   tab: 'accounts' | 'orders';
   isLive: (a?: LiveAccount) => boolean;
@@ -3583,6 +3617,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
   columns: ColumnDef[];
   orders: LiveOrder[];
   eligibilityByAccount: Map<number, CopierAccountEligibility>;
+  tradeCutsByAccount: ReadonlyMap<number, ActiveFollowerCut>;
   busyCommand: string | null;
   onRefreshOrders?: () => Promise<void> | void;
   onVerifyEligibility?: (accountId: number) => void;
@@ -3687,6 +3722,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
                 dailyPnlPending={dailyPnlPending}
                 orders={groupOrders}
                 eligibility={row.accountId != null ? eligibilityByAccount.get(row.accountId) : undefined}
+                tradeCut={row.accountId != null ? tradeCutsByAccount.get(row.accountId) : undefined}
                 busyCommand={busyCommand}
                 onVerifyEligibility={onVerifyEligibility}
                 verifying={row.accountId != null && verifyingAccountId === row.accountId}
@@ -3847,10 +3883,11 @@ const MultiplierEditor = ({ accountId, accountName, value, tightenOnly, disabled
   );
 };
 
-const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCommand, onVerifyEligibility, verifying, dailyPnlPending, onMultiplier, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, tightenOnly }: {
+const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeCut, busyCommand, onVerifyEligibility, verifying, dailyPnlPending, onMultiplier, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, tightenOnly }: {
   row: Row; live: boolean; onAccount?: (a: LiveAccount) => void; columns: ColumnDef[];
   orders: LiveOrder[];
   eligibility?: CopierAccountEligibility;
+  tradeCut?: ActiveFollowerCut;
   busyCommand: string | null;
   onVerifyEligibility?: (accountId: number) => void;
   verifying: boolean;
@@ -3879,7 +3916,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
   const eligibilityState = eligibility?.state ?? 'active';
   const accountUnavailable = !a && accountId != null;
   // Odchylka = cokoli, co není „živý a způsobilý účet“. Jen ta se vykreslí.
-  const stateIsDeviation = eligibilityState !== 'active' || accountUnavailable || !live;
+  const stateIsDeviation = tradeCut != null || eligibilityState !== 'active' || accountUnavailable || !live;
   const stateTone: AccountStateTone = eligibilityState === 'breached'
     ? { dotClass: 'bg-rose-500', accentClass: 'text-rose-500', label: 'Breached',
         detail: 'Účet je trvale vyřazen z kopírování. Zrušit to může jen read-only důkaz od brokera — že je účet aktivní a equity nad floorem propky.' }
@@ -3921,7 +3958,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
             </span>
             {stateIsDeviation ? (
               <span className="mt-1 flex flex-wrap items-center gap-1.5 pl-3.5">
-                <AccountEligibilityPill
+                {tradeCut ? <TradeCutPill /> : <AccountEligibilityPill
                   eligibility={eligibility}
                   live={live}
                   unavailable={accountUnavailable}
@@ -3929,10 +3966,14 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
                   onVerify={(eligibilityState === 'unverifiable' || eligibilityState === 'breached') && accountId != null && onVerifyEligibility
                     ? () => onVerifyEligibility(accountId)
                     : undefined}
-                />
+                />}
               </span>
             ) : null}
-            {rowRejection ? (
+            {tradeCut ? (
+              <span className="block pl-3.5 text-[10px] font-semibold leading-tight text-amber-600">
+                Ručně zavřeno · znovu se připojí po flat skupiny
+              </span>
+            ) : rowRejection ? (
               <RejectedExecutionStatus
                 execution={rowRejection}
                 accountAuthoritativelyFlat={rowFlat}
@@ -3950,7 +3991,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
           </span>
         );
       case 'status':
-        return <AccountEligibilityPill
+        return tradeCut ? <TradeCutPill /> : <AccountEligibilityPill
           eligibility={eligibility}
           live={live}
           unavailable={!a && accountId != null}
@@ -4014,7 +4055,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, busyCo
   return (
     <tr
       onClick={() => a && onAccount?.(a)}
-      className={`border-b border-[var(--border-subtle)] last:border-0 transition-colors ${a ? 'cursor-pointer hover:bg-[var(--bg-card)]' : ''}`}
+      className={`border-b border-[var(--border-subtle)] last:border-0 transition-colors ${tradeCut ? 'bg-amber-500/[0.035] opacity-80' : ''} ${a ? 'cursor-pointer hover:bg-[var(--bg-card)]' : ''}`}
     >
       {columns.map(col => (
         <td key={col.key} className={`px-3 ${col.key === 'actions' ? 'py-0' : 'py-1.5'} ${col.key === 'qtyMult' ? 'text-center' : col.align === 'right' ? 'text-right' : ''}`}>

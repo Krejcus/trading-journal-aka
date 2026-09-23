@@ -128,7 +128,7 @@ const validatedDayLockReason = (value: unknown): string => {
 // stays deliberately rejected on this remote path.
 const remoteCopyCommands = new Set([
   'update-group', 'set-group-enabled', 'set-replication', 'set-multiplier',
-  'flatten-account', 'flatten-group',
+  'flatten-account', 'flatten-follower-trade', 'flatten-group',
 ]);
 
 // Stejný formát vynucuje controller (operationToken); validace už na ingressu
@@ -154,14 +154,14 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
   if (typeof command.type !== 'string' || !remoteCopyCommands.has(command.type)) {
     throw new Error('unsupported-remote-copy-command');
   }
-  if (command.type === 'flatten-account' || command.type === 'flatten-group') {
+  if (command.type === 'flatten-account' || command.type === 'flatten-follower-trade' || command.type === 'flatten-group') {
     if (typeof command.groupId !== 'string' || command.groupId.trim() === '') {
       throw new Error('invalid-relay-command-payload');
     }
     if (typeof command.operationId !== 'string' || !OPERATION_ID_PATTERN.test(command.operationId.trim())) {
       throw new Error('invalid-relay-command-payload');
     }
-    if (command.type === 'flatten-account'
+    if ((command.type === 'flatten-account' || command.type === 'flatten-follower-trade')
       && (typeof command.accountId !== 'number' || !Number.isSafeInteger(command.accountId) || command.accountId <= 0)) {
       throw new Error('invalid-relay-command-payload');
     }
@@ -447,11 +447,13 @@ async function findInFlightFlatten(options: {
 }): Promise<{ id: string; status: string; expiresAt: string } | null> {
   if (options.command.type !== 'copy-command') return null;
   const inner = (options.command as { command?: { type?: unknown; groupId?: unknown; accountId?: unknown } }).command;
-  if (!inner || (inner.type !== 'flatten-group' && inner.type !== 'flatten-account')) return null;
+  if (!inner || (inner.type !== 'flatten-group'
+    && inner.type !== 'flatten-account'
+    && inner.type !== 'flatten-follower-trade')) return null;
   if (typeof inner.groupId !== 'string' || !inner.groupId) return null;
   // Přichytit se smí jen ke stejnému cíli: stejná skupina a u účtového
   // Flattenu i stejný účet. Flatten skupiny B nikdy nečeká na skupinu A.
-  const target = inner.type === 'flatten-account'
+  const target = inner.type === 'flatten-account' || inner.type === 'flatten-follower-trade'
     ? { type: inner.type, groupId: inner.groupId, accountId: inner.accountId }
     : { type: inner.type, groupId: inner.groupId };
   const nowIso = new Date(options.now).toISOString();
