@@ -25,6 +25,45 @@ const fixture = () => {
 };
 
 describe('position episodes from observed account exposure', () => {
+  // 23. 9. 2026: SL výstup 13 lotů se rozpadl na 1 + 1 + 11, poslední dva fills
+  // ve stejné milisekundě. Broker ke každému poslal stav pozice (−11 a 0) se
+  // stejným časem a zavřený obchod skončil jako „incomplete“ mimo Historii.
+  const position = (f: ReturnType<typeof fixture>, netPos: number, at: number) =>
+    f.add('position', { id: 1, accountId: 1, contractId: 1, netPos, timestamp: new Date(origin + at).toISOString() }, at);
+
+  it('stavy pozice se stejným časem, které jsou cestou fills, obchod nezruší', () => {
+    const f = fixture(); f.flat();
+    f.fill(10, 'Sell', 13, 20000, 1000); position(f, -13, 1000);
+    f.fill(11, 'Buy', 1, 19990, 2000); position(f, -12, 2000);
+    f.fill(12, 'Buy', 1, 19990, 3000); f.fill(13, 'Buy', 11, 19991, 3000);
+    position(f, -11, 3000); position(f, 0, 3000);
+    const { episodes } = buildJournalPositionEpisodes(f.evidence);
+    expect(episodes).toHaveLength(1);
+    expect(episodes[0]).toMatchObject({ enteredQuantity: 13, exitedQuantity: 13, exitAt: origin + 3000,
+      history: { position: { status: 'closed', openQuantity: 0 } } });
+    expect(episodes[0].history.issues ?? []).not.toContain('conflicting-position-anchors');
+  });
+
+  it('stav mimo cestu fills ve stejné milisekundě dál přeruší pozici', () => {
+    const f = fixture(); f.flat();
+    f.fill(10, 'Sell', 13, 20000, 1000); position(f, -13, 1000);
+    f.fill(11, 'Buy', 13, 19990, 3000);
+    // −5 není stav, kterým by pozice prošla — rozpor, nevíme, co platí.
+    position(f, -5, 3000); position(f, 0, 3000);
+    const { episodes } = buildJournalPositionEpisodes(f.evidence);
+    expect(episodes[0].history.position).toMatchObject({ status: 'incomplete' });
+  });
+
+  it('když konečný stav mezi stavy chybí, pozice se neuzavře', () => {
+    const f = fixture(); f.flat();
+    f.fill(10, 'Sell', 13, 20000, 1000); position(f, -13, 1000);
+    f.fill(11, 'Buy', 1, 19990, 3000); f.fill(12, 'Buy', 12, 19991, 3000);
+    // Jen mezistavy −13 a −12; stav po posledním fillu (0) broker nepotvrdil.
+    position(f, -13, 3000); position(f, -12, 3000);
+    const { episodes } = buildJournalPositionEpisodes(f.evidence);
+    expect(episodes[0].history.position).toMatchObject({ status: 'incomplete' });
+  });
+
   it('keeps scale-in and partial exits in one position with own weighted prices and fees', () => {
     const f = fixture(); f.flat();
     f.fill(10, 'Buy', 2, 20000, 1000); f.fill(11, 'Buy', 1, 20003, 1500);

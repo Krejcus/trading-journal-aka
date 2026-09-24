@@ -113,6 +113,9 @@ export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[
       while (index < current.items.length && current.items[index].at === at) bucket.push(current.items[index++]);
       if (bucket.some(item => item.type === 'gap')) interrupt('connection-gap', at);
       const fills = bucket.flatMap(item => item.type === 'fill' ? [item.fill] : []);
+      // Stavy, kterými pozice v téhle milisekundě prošla (před, mezi a po
+      // fillech). Broker ke každému fillu pošle vlastní stav se stejným časem.
+      const reached = new Set<number>(net == null ? [] : [net]);
       const inGap = projection.gaps.some(gap => gap.from <= at && (gap.to ?? Infinity) > at);
       const crossesWithinTie = fills.length > 1 && net != null && net !== 0
         && Math.sign(net) !== (fills[0].side === 'Buy' ? 1 : -1)
@@ -140,11 +143,18 @@ export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[
           if (remainder > 0) { start(fill); allocate(fill, 'entry', remainder); net = sign * remainder; }
         }
         if (active) { active.openQuantity = Math.abs(net); active.peakQuantity = Math.max(active.peakQuantity, Math.abs(net)); }
+        if (net != null) reached.add(net);
       }
-      const anchors = bucket.flatMap(item => item.type === 'anchor' ? [item.net] : []);
-      if (new Set(anchors).size > 1) { interrupt('conflicting-position-anchors', at); continue; }
+      const anchors = [...new Set(bucket.flatMap(item => item.type === 'anchor' ? [item.net] : []))];
+      // Víc různých stavů ve stejné milisekundě není rozpor, když je to přesně
+      // cesta, kterou fills prošly (např. −12 → −11 → 0 u výstupu rozděleného
+      // na 1 + 11 kontraktů), a konečný stav mezi nimi je. Cokoli jiného —
+      // stav mimo tu cestu, nebo chybějící konečný stav — dál přeruší pozici.
+      const pathConsistent = anchors.length > 1 && net != null
+        && anchors.every(value => reached.has(value)) && anchors.includes(net);
+      if (anchors.length > 1 && !pathConsistent) { interrupt('conflicting-position-anchors', at); continue; }
       if (anchors.length) {
-        const anchor = anchors[0];
+        const anchor = pathConsistent ? net! : anchors[0];
         if (net != null && net !== anchor) interrupt('position-reconciliation-mismatch', at);
         if (net == null && anchor === 0) { net = 0; baselineAt = at; }
       }
