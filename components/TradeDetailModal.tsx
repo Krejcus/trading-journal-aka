@@ -27,6 +27,7 @@ const defaultLoadTradeDetail = (id: string) => storageService.getTradeById(id);
 const ManualTradeForm = React.lazy(() => import('./ManualTradeForm'));
 const AccountExecutionChart = React.lazy(() => import('./AccountExecutionChart'));
 import TradeShareModal from './TradeShareModal';
+import { HistoryScreenshotSlot, clipboardImage, pasteTargetsEditable, type ScreenshotAttachStatus } from './HistoryScreenshotSlot';
 
 interface PropertyProps {
     label: string;
@@ -153,12 +154,14 @@ interface TradeDetailModalProps {
     startInEditMode?: boolean;
     /** Zavolá se po ULOŽENÍ v režimu průvodce — přejdi na další obchod. */
     onSaved?: () => void;
+    /** Nahraje a uloží snímek vložený přímo v detailu; vrací jeho URL, nebo null. */
+    onAttachScreenshotFile?: (file: Blob) => Promise<string | null>;
 }
 
 const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     trade, accountName, theme, onClose, onDelete, emotions, onPrev, onNext, onPrefetchPrev, onPrefetchNext, preparedJournalDetail, hasPrev, hasNext,
     onUpdateTrade, pnlDisplayMode = 'usd', accounts = [], initialBalance, user, exchangeRates,
-    allTrades = EMPTY_TRADES, startInEditMode = false, onSaved, loadJournalDetails = defaultLoadJournalDetails, loadTradeDetail = defaultLoadTradeDetail, signCopierSnapshots = storageService.createCopierSnapshotSignedUrls
+    allTrades = EMPTY_TRADES, startInEditMode = false, onSaved, onAttachScreenshotFile, loadJournalDetails = defaultLoadJournalDetails, loadTradeDetail = defaultLoadTradeDetail, signCopierSnapshots = storageService.createCopierSnapshotSignedUrls
 }) => {
     const isDark = theme !== 'light';
     const targetCurrency = user?.currency || 'USD';
@@ -416,9 +419,49 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
         setIsEditingNotes(false);
     };
 
-    const manualImages = useMemo(() => activeTrade.screenshots && activeTrade.screenshots.length > 0
-        ? activeTrade.screenshots
-        : (activeTrade.screenshot ? [activeTrade.screenshot] : []), [activeTrade.screenshot, activeTrade.screenshots]);
+    // Snímek vložený právě v tomhle detailu. Ověřený řádek z mezipaměti ho ještě
+    // nemá, takže se ukáže hned odsud — nečeká na další načtení z databáze.
+    const [attachedShots, setAttachedShots] = useState<{ tradeId: string; urls: string[] }>({ tradeId: '', urls: [] });
+    const [shotAttach, setShotAttach] = useState<ScreenshotAttachStatus | null>(null);
+    const manualImages = useMemo(() => {
+        const base = activeTrade.screenshots && activeTrade.screenshots.length > 0
+            ? activeTrade.screenshots
+            : (activeTrade.screenshot ? [activeTrade.screenshot] : []);
+        const local = attachedShots.tradeId === String(activeTrade.id) ? attachedShots.urls.filter(url => !base.includes(url)) : [];
+        return local.length ? [...local, ...base] : base;
+    }, [activeTrade.id, activeTrade.screenshot, activeTrade.screenshots, attachedShots]);
+
+    const attachShot = async (file: Blob) => {
+        if (!onAttachScreenshotFile || shotAttach?.status === 'uploading') return;
+        const tradeId = String(activeTrade.id);
+        setShotAttach({ status: 'uploading' });
+        const url = await onAttachScreenshotFile(file);
+        if (!url) { setShotAttach({ status: 'error', message: 'Snímek se nepodařilo uložit.' }); return; }
+        setAttachedShots(previous => ({ tradeId, urls: [url, ...(previous.tradeId === tradeId ? previous.urls : [])] }));
+        setVisualMode('screenshots');
+        setActiveImageIndex(0);
+        setShotAttach({ status: 'saved' });
+        window.setTimeout(() => setShotAttach(current => current?.status === 'saved' ? null : current), 1800);
+    };
+    const attachShotRef = useRef(attachShot);
+    attachShotRef.current = attachShot;
+
+    useEffect(() => { setShotAttach(null); }, [activeTrade.id]);
+
+    // ⌘V v detailu přidá snímek k obchodu. Editační formulář má vlastní
+    // vkládání a pole s textem patří textu — tam se nepřebíjí.
+    useEffect(() => {
+        if (!onAttachScreenshotFile || isFullEditOpen) return;
+        const onPaste = (event: ClipboardEvent) => {
+            if (event.defaultPrevented || pasteTargetsEditable(event.target)) return;
+            const image = clipboardImage(event.clipboardData);
+            if (!image) return;
+            event.preventDefault();
+            void attachShotRef.current(image);
+        };
+        window.addEventListener('paste', onPaste);
+        return () => window.removeEventListener('paste', onPaste);
+    }, [onAttachScreenshotFile, isFullEditOpen]);
     const currentSignedCopierSnapshots = useMemo(
         () => signedSnapshotTradeId === String(activeTrade.id)
             ? signedCopierSnapshots
@@ -898,11 +941,27 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                                     </div>
                                                 </div>
                                             ) : !loadingImages ? (
-                                                <div className="absolute inset-0 flex flex-col items-center justify-center opacity-30 text-slate-500 p-8 text-center">
-                                                    <div className="p-8 rounded-[36px] border-2 border-dashed border-slate-500"><ImageIcon size={52} strokeWidth={1} /></div>
-                                                    <p className="text-sm font-black uppercase tracking-[0.3em] mt-7">{snapshotError ? 'CHYBA NAČÍTÁNÍ' : 'BEZ SCREENSHOTU'}</p>
-                                                </div>
+                                                onAttachScreenshotFile && !snapshotError ? (
+                                                    // Stejná plocha jako prázdná miniatura v Historii — jen větší.
+                                                    <div className="absolute inset-0">
+                                                        <HistoryScreenshotSlot variant="detail" light={!isDark} canAttach state={shotAttach}
+                                                            onPickFile={file => { void attachShot(file); }} />
+                                                    </div>
+                                                ) : (
+                                                    <div className="absolute inset-0 flex flex-col items-center justify-center opacity-30 text-slate-500 p-8 text-center">
+                                                        <div className="p-8 rounded-[36px] border-2 border-dashed border-slate-500"><ImageIcon size={52} strokeWidth={1} /></div>
+                                                        <p className="text-sm font-black uppercase tracking-[0.3em] mt-7">{snapshotError ? 'CHYBA NAČÍTÁNÍ' : 'BEZ SCREENSHOTU'}</p>
+                                                    </div>
+                                                )
                                             ) : null}
+                                        {shotAttach && images.length > 0 && (
+                                            <div role="status" className={`absolute top-16 right-4 z-30 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-extrabold backdrop-blur-md ${
+                                                shotAttach.status === 'error' ? 'border-rose-500/30 bg-rose-500/15 text-rose-500'
+                                                    : shotAttach.status === 'saved' ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-500'
+                                                        : 'border-indigo-500/30 bg-indigo-500/15 text-indigo-500'}`}>
+                                                {shotAttach.status === 'uploading' ? 'Ukládám snímek…' : shotAttach.status === 'saved' ? 'Snímek uložen' : shotAttach.message}
+                                            </div>
+                                        )}
                                         {images.length > 1 && (
                                             <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-4 py-2 bg-black/60 backdrop-blur-xl rounded-full border border-white/10">
                                                 <button onClick={() => setActiveImageIndex((activeImageIndex - 1 + images.length) % images.length)} className="p-1 text-white/50 hover:text-white"><ChevronLeft size={18} /></button>

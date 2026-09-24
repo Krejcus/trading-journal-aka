@@ -24,6 +24,7 @@ import {
 import { tradeNeedsEnrichment } from '../services/tradovateImport';
 
 import TradeDetailModal from './TradeDetailModal';
+import { HistoryScreenshotSlot, clipboardImage, pasteTargetsEditable, shotTargetIds, type ScreenshotAttachStatus } from './HistoryScreenshotSlot';
 import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
 
@@ -111,6 +112,9 @@ interface TradeHistoryProps {
   theme: 'dark' | 'light' | 'oled';
   emotions: CustomEmotion[];
   onUpdateTrade?: (tradeId: string | number, updates: Partial<Trade>) => void;
+  /** Uloží snímek vložený z Historie ke všem uvedeným obchodům, bez označení
+   *  obchodu jako zkontrolovaného. Vrací, jestli se uložení povedlo. */
+  onAttachScreenshot?: (tradeIds: readonly string[], url: string) => Promise<boolean>;
   allTrades?: Trade[];
   viewMode: 'grid' | 'table';
   setViewMode?: (mode: 'grid' | 'table') => void;
@@ -125,7 +129,7 @@ interface TradeHistoryProps {
 }
 
 const TradeHistory: React.FC<TradeHistoryProps> = ({
-  trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade,
+  trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade, onAttachScreenshot,
   pnlDisplayMode = 'usd', initialBalance, user, exchangeRates, allTrades = [],
   viewMode, setViewMode, enrichSignal, userMistakes = [],
 }) => {
@@ -172,6 +176,58 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   // --- MULTI-SELECT STATE ---
   const [selectedTradeIds, setSelectedTradeIds] = useState<Set<string | number>>(new Set());
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+
+  // --- SNÍMEK VLOŽENÝ PŘÍMO NA KARTU ---
+  // Karta bez snímku pod myší. ⌘V se použije jen pro ni — nikdy „někam“ do stránky.
+  const pasteTargetRef = useRef<Trade | null>(null);
+  const [attachState, setAttachState] = useState<{ id: string; state: ScreenshotAttachStatus } | null>(null);
+  const attachScreenshot = useCallback(async (trade: Trade, file: Blob): Promise<string | null> => {
+    const ids = shotTargetIds(trade);
+    if (!onAttachScreenshot || ids.length === 0) return null;
+    const id = String(trade.id);
+    setAttachState({ id, state: { status: 'uploading' } });
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error ?? new Error('Obrázek se nepodařilo načíst.'));
+        reader.readAsDataURL(file);
+      });
+      const url = await storageService.uploadScreenshot(dataUrl, ids[0]);
+      if (!await onAttachScreenshot(ids, url)) throw new Error('Snímek se nepodařilo uložit k obchodu.');
+      // Detail obchodu si při najetí na kartu předem načetl řádek BEZ snímku.
+      // Uložení už doběhlo, takže další otevření musí číst z databáze znovu.
+      for (const key of [...preparedJournalDetailRef.current.keys(), ...detailPrefetchRef.current.keys()]) {
+        const keyIds = JSON.parse(key) as string[];
+        if (!keyIds.some(keyId => ids.includes(keyId))) continue;
+        preparedJournalDetailRef.current.delete(key);
+        detailPrefetchRef.current.delete(key);
+        detailWarmUntilRef.current.delete(key);
+        detailReuseUntilRef.current.delete(key);
+      }
+      setAttachState({ id, state: { status: 'saved' } });
+      window.setTimeout(() => setAttachState(current => current?.id === id && current.state.status === 'saved' ? null : current), 1800);
+      return url;
+    } catch (error) {
+      setAttachState({ id, state: { status: 'error', message: error instanceof Error ? error.message : 'Snímek se nepodařilo uložit.' } });
+      return null;
+    }
+  }, [onAttachScreenshot]);
+
+  useEffect(() => {
+    if (!onAttachScreenshot) return;
+    const onPaste = (event: ClipboardEvent) => {
+      const trade = pasteTargetRef.current;
+      // Otevřený detail má vlastní vkládání do formuláře; pole s textem patří textu.
+      if (!trade || selectedTrade || isMultiSelectMode || event.defaultPrevented || pasteTargetsEditable(event.target)) return;
+      const image = clipboardImage(event.clipboardData);
+      if (!image) return;
+      event.preventDefault();
+      void attachScreenshot(trade, image);
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [attachScreenshot, isMultiSelectMode, onAttachScreenshot, selectedTrade]);
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
 
   // --- BULK TAG MODAL (pro hromadné tagování importovaných obchodů) ---
@@ -1158,13 +1214,19 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
             const masterTrade = explicitTradeMaster(groupTrades);
             const masterAcc = isGroupTrade ? accounts.find(a => a.id === masterTrade?.accountId) : null;
             const isCopyCard = isGroupTrade && !isCombinedCard && trade.masterTradeId != null;
+            // Sloučená karta je jeden obchod na víc účtech — snímek se uloží ke všem.
+            const canAttachShot = !tradeScreenshot && onAttachScreenshot != null && shotTargetIds(trade).length > 0;
             const isMasterCard = isGroupTrade && !isCombinedCard && trade.id === masterTrade?.id;
 
             return (
               <div
                 key={trade.id}
                 onClick={() => !isMultiSelectMode && setSelectedTrade(trade)}
-                onPointerEnter={() => { void prefetchJournalDetail(trade).catch(() => undefined); }}
+                onPointerEnter={() => {
+                  if (canAttachShot) pasteTargetRef.current = trade;
+                  void prefetchJournalDetail(trade).catch(() => undefined);
+                }}
+                onPointerLeave={() => { if (pasteTargetRef.current?.id === trade.id) pasteTargetRef.current = null; }}
                 onFocus={() => { void prefetchJournalDetail(trade).catch(() => undefined); }}
                 className={`group relative flex flex-col md:flex-row h-auto md:h-56 rounded-lg border overflow-hidden transition-[border-color,box-shadow,background-color] duration-200 cursor-pointer ${glowClass} glass-panel ${
                   selectedTradeIds.has(trade.id) ? 'ring-2 ring-cyan-400' : ''
@@ -1365,9 +1427,12 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       )}
                     </div>
                   ) : (
-                    <div className={`w-full h-full flex items-center justify-center border-l bg-[var(--bg-page)]/10 group-hover:bg-blue-500/5 transition-colors duration-500 ${theme === 'light' ? 'border-slate-100' : 'border-[var(--border-subtle)]'}`}>
-                      <Cpu size={24} className="text-slate-800/40 group-hover:text-blue-500 transition-colors" />
-                    </div>
+                    <HistoryScreenshotSlot
+                      light={theme === 'light'}
+                      canAttach={canAttachShot}
+                      state={attachState?.id === String(trade.id) ? attachState.state : null}
+                      onPickFile={file => { void attachScreenshot(trade, file); }}
+                    />
                   )}
                 </div>
 
@@ -1724,6 +1789,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           onDelete={() => { onDelete(selectedTrade.id); setSelectedTrade(null); }}
           emotions={emotions}
           onUpdateTrade={(updates) => onUpdateTrade?.(selectedTrade.id, updates)}
+          onAttachScreenshotFile={onAttachScreenshot ? file => attachScreenshot(selectedTrade, file) : undefined}
           pnlDisplayMode={pnlDisplayMode}
           accounts={accounts}
           initialBalance={initialBalance}

@@ -7,6 +7,7 @@ import { enqueueBacktestAnalytics, flushBacktestAnalytics } from './services/bac
 import type { BacktestAnalyticsRefreshCandidate } from './services/backtestAnalyticsRefresh';
 import { buildBacktestTradeRecalculationUpdates } from './services/backtestTradeRecalculation';
 import { changedTradeFields, rollbackTradePatch } from './services/tradePatch';
+import { withAttachedScreenshot } from './components/HistoryScreenshotSlot';
 import { collectBacktestTagSuggestions } from './services/backtestTagCatalog';
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
@@ -3488,7 +3489,9 @@ const App: React.FC = () => {
     setNativeTradeDraft(null);
   };
 
-  const handleUpdateTrades = useCallback((updatedTrades: Trade[]) => {
+  // Vrací, jestli se všechno uložilo — vložený snímek na to čeká, než pustí
+  // detail obchodu číst z databáze.
+  const handleUpdateTrades = useCallback(async (updatedTrades: Trade[]): Promise<boolean> => {
     const previous = new Map(trades.map(trade => [String(trade.id), trade]));
     const changes = updatedTrades.flatMap(trade => {
       const before = previous.get(String(trade.id));
@@ -3496,18 +3499,30 @@ const App: React.FC = () => {
       const patch = changedTradeFields(before, trade);
       return Object.keys(patch).length ? [{ id: String(trade.id), before, patch }] : [];
     });
-    if (!changes.length) return;
+    if (!changes.length) return true;
     const patches = new Map(changes.map(change => [change.id, change.patch]));
     setTrades(current => current.map(trade => patches.has(String(trade.id)) ? { ...trade, ...patches.get(String(trade.id)) } : trade));
-    void Promise.all(changes.map(async ({ id, before, patch }) => {
-      try { await storageService.updateTrade(id, patch, before); }
+    const results = await Promise.all(changes.map(async ({ id, before, patch }) => {
+      try { await storageService.updateTrade(id, patch, before); return true; }
       catch (error) {
         console.error('Failed to save trade changes', error);
         setTrades(current => current.map(trade => String(trade.id) === id ? rollbackTradePatch(trade, before, patch) : trade));
         setSyncError(error instanceof Error ? error.message : 'Nepodařilo se uložit změny obchodu.');
+        return false;
       }
     }));
+    return results.every(Boolean);
   }, [trades]);
+
+  // Snímek vložený z Historie jde přes obecnou úpravu obchodů, ne přes
+  // handleUpdateTrade — ten by obchod zároveň označil jako zkontrolovaný.
+  // Sloučená karta předá všechny účty: je to jeden obchod, jeden graf.
+  const handleAttachTradeScreenshot = useCallback((tradeIds: readonly string[], url: string): Promise<boolean> => {
+    const ids = new Set(tradeIds);
+    const targets = trades.filter(row => ids.has(String(row.id)));
+    if (targets.length !== ids.size) return Promise.resolve(false);
+    return handleUpdateTrades(targets.map(trade => withAttachedScreenshot(trade, url)));
+  }, [trades, handleUpdateTrades]);
 
   const handleUpdateTrade = useCallback(async (tradeId: string | number, updates: Partial<Trade>) => {
     const reviewedUpdates: Partial<Trade> = { ...updates, needsReview: false };
@@ -4520,6 +4535,7 @@ const App: React.FC = () => {
                         accounts={[...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))]}
                         onDelete={handleDeleteTrade}
                         onUpdateTrade={handleUpdateTrade}
+                        onAttachScreenshot={handleAttachTradeScreenshot}
                         onClear={handleClearTrades}
                         theme={theme}
                         emotions={userEmotions}

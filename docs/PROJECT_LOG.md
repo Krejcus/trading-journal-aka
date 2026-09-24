@@ -208,6 +208,28 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-24 — Historie: snímek vložený ⌘V z karty i detailu (Claude)
+
+Obchod mimo kopírku (ruční, jen na jednom účtu) nemá snímek — kopírka ho
+pořizuje jen pro obchody leadera — a karta v Historii byla prázdná bez
+vysvětlení. Nově `components/HistoryScreenshotSlot.tsx`: šrafa + pilulka
+„Bez screenshotu“ + „Vložit ⌘V · nahrát“; stejná plocha (větší) v detailu.
+
+- ⌘V na kartě jen pro kartu pod myší; ne při otevřeném detailu, v editoru,
+  v poli s textem ani v hromadném výběru. Detail má vlastní ⌘V, vypnuté při
+  otevřeném editačním formuláři (ten má svoje).
+- Sloučená karta uloží snímek ke všem účtům (`shotTargetIds`); chybí-li
+  některý řádek, neuloží se nic.
+- Uložení jde přes `handleUpdateTrades` (teď vrací `Promise<boolean>`), NE
+  přes `handleUpdateTrade`, který nastaví `needsReview: false` — vložený
+  obrázek není reflexe.
+- Po uložení se zahodí předem načtený detail (`preparedJournalDetailRef` a
+  spol.) — najetí na kartu ho načetlo ještě bez snímku a detail pak snímek
+  ukázal až po expiraci cache. Detail navíc drží právě vložený snímek lokálně.
+- Otevřené: ranní obchod 23. 9. (6 účtů) má snímky kopírky jen u 5 účtů;
+  u hlavního `journal_trade_snapshots` řádek chybí a sloučená karta bere
+  média z hlavního. Proč kopírka odkaz nezapsala, nezjištěno.
+
 ### 2026-09-23 — Sdílení karty dne: neviditelná bublina a odkaz na localhost (Claude)
 
 **Po kliknutí byla vidět jen fajfka.** Odkaz vznikl, ale bublina „Sdílet /
