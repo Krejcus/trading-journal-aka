@@ -2,13 +2,14 @@ import type { LiveDaySummary } from '../lib/liveDaySummary';
 import {
   LIVE_DAY_SHARE_PREVIEW_BUCKET,
   LIVE_DAY_SHARE_TOKEN_PATTERN,
+  liveDayShareOrigin,
   normalizePublicLiveDayShare,
   publicLiveDayAvatar,
   publicLiveDaySummary,
   type LiveDayShareTheme,
   type PublicLiveDayShare,
 } from '../lib/liveDayShare';
-import { apiUrl, isNativeBuild } from '../utils/runtimeConfig';
+import { apiUrl, isNativeBuild, publicAppOrigin } from '../utils/runtimeConfig';
 import { supabase } from './supabase';
 
 export interface CreateLiveDayShareInput {
@@ -27,8 +28,8 @@ export interface CreatedLiveDayShare {
 }
 
 export function liveDayShareUrl(token: string): string {
-  const path = `/day/${encodeURIComponent(token)}`;
-  return isNativeBuild ? apiUrl(path) : new URL(path, window.location.origin).toString();
+  const origin = liveDayShareOrigin(isNativeBuild ? null : window.location.origin, publicAppOrigin());
+  return new URL(`/day/${encodeURIComponent(token)}`, origin).toString();
 }
 
 export async function createLiveDayShare(input: CreateLiveDayShareInput): Promise<CreatedLiveDayShare> {

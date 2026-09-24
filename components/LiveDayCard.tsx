@@ -329,6 +329,9 @@ const LiveDayShareControls = (card: Omit<LiveDayCardProps, 'onClose' | 'captureM
     setFeedback(null);
     try {
       await waitForPreviewAssets(previewRef.current);
+      // html-to-image při nenačteném obrázku (loga firem, avatar) nehází
+      // Error, ale holý Event — bez obalu by uživatel viděl jen obecné
+      // „nepodařilo se“ a nepoznal, že selhal náhled, ne uložení.
       const dataUrl = await toPng(previewRef.current, {
         width: 1200,
         height: 630,
@@ -336,6 +339,9 @@ const LiveDayShareControls = (card: Omit<LiveDayCardProps, 'onClose' | 'captureM
         cacheBust: true,
         skipFonts: true,
         backgroundColor: theme === 'light' ? '#e2e8f0' : '#020617',
+      }).catch((error: unknown) => {
+        if (error instanceof Error) throw error;
+        throw new Error('Náhled karty se nepodařilo vykreslit — obnov stránku a zkus to znovu.');
       });
       const preview = await fetch(dataUrl).then(response => response.blob());
       const created = await createLiveDayShare({

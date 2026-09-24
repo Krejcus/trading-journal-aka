@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   normalizePublicLiveDayShare,
   LIVE_DAY_SHARE_AVATAR_MAX,
+  liveDayShareOrigin,
   publicLiveDayAvatar,
   publicLiveDaySummary,
   redactLiveDayAccountName,
@@ -119,9 +120,39 @@ describe('LIVE day share background', () => {
     expect(css).toContain('.live-day-card .live-day-inner > .live-day-head { z-index: 4; }');
   });
 
+  it('otevřenou bublinu sdílení neořízne obal vysouvacích ikon', () => {
+    const css = readFileSync(new URL('../index.css', import.meta.url), 'utf8');
+    // Obal ikon má kvůli animaci `overflow: hidden`; bez výjimky pro otevřenou
+    // bublinu uživatel po kliknutí vidí jen fajfku a žádný odkaz.
+    expect(css).toMatch(/\.live-day-tools:has\(\.live-day-sharepop\) > span \{[^}]*overflow: visible;/);
+  });
+
   it('karta na veřejné stránce vyplní šířku, nesmrskne se na obsah', () => {
     // `LiveDayCard` je flex položka bez vlastní šířky — bez obalu `w-full`
     // by se stránka tvářila úzce bez ohledu na `max-w`.
     expect(sharedView).toContain('<div className="w-full"><LiveDayCard');
+  });
+});
+
+describe('adresa sdíleného odkazu', () => {
+  const publicOrigin = 'https://alphatrade-mentor-15.vercel.app';
+
+  it.each([
+    'http://localhost:3000',
+    'http://127.0.0.1:5273',
+    'http://192.168.1.20:3000',
+    'http://10.0.0.5:3000',
+    'http://filip-mac.local:3000',
+  ])('z neveřejné adresy %s míří odkaz na veřejnou appku', origin => {
+    expect(liveDayShareOrigin(origin, publicOrigin)).toBe(publicOrigin);
+  });
+
+  it('na veřejné adrese (i náhledovém deployi) zůstává, kde uživatel je', () => {
+    expect(liveDayShareOrigin(publicOrigin, publicOrigin)).toBe(publicOrigin);
+    expect(liveDayShareOrigin('https://alphatrade-git-x.vercel.app', publicOrigin)).toBe('https://alphatrade-git-x.vercel.app');
+  });
+
+  it('nativní appka nemá vlastní webovou adresu — bere veřejnou', () => {
+    expect(liveDayShareOrigin(null, publicOrigin)).toBe(publicOrigin);
   });
 });

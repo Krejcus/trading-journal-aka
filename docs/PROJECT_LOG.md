@@ -208,6 +208,85 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-23 — Sdílení karty dne: neviditelná bublina a odkaz na localhost (Claude)
+
+**Po kliknutí byla vidět jen fajfka.** Odkaz vznikl, ale bublina „Sdílet /
+Kopírovat“ sedí uvnitř `.live-day-tools`, který má kvůli animaci vysunutí
+`overflow: hidden` — ořízl ji celou. `.live-day-tools:has(.live-day-sharepop)`
+teď obal drží rozevřený a ořez pouští. Test hlídá pravidlo v CSS.
+
+**Obecné „Odkaz se nepodařilo vytvořit“.** Dev server na :3000 mezitím
+spadl, a `html-to-image` při nenačteném obrázku hází holý `Event`, ne
+`Error`. Selhání náhledu má teď vlastní hlášku.
+
+**Odkaz z dev serveru mířil na `http://localhost:3000/day/…`.** Snapshot
+přitom leží v produkční DB. `liveDayShareOrigin` z neveřejné adresy
+(localhost, LAN, `.local`) skládá odkaz na `publicAppOrigin()`; veřejná
+adresa i preview deploy zůstávají, kde uživatel je.
+
+**Ranní obchod chyběl v Historii.** Short MNQ 09:35–10:07 (23. 9.) zůstal
+v `tradovate_journal_positions` jako `pending/incomplete` s issue
+`conflicting-position-anchors`. SL výstup se rozpadl na 1 + 1 + 11 lotů,
+poslední dva fills ve stejné milisekundě, a broker k nim poslal stavy −11 a
+0 se stejným `timestamp`. `buildJournalPositionEpisodes` bral jakékoli dva
+různé stavy v jedné ms jako rozpor a shodil už uzavřenou pozici. Nově je to
+v pořádku jen tehdy, když všechny stavy leží na cestě fills (před/mezi/po)
+a konečný stav mezi nimi je; cokoli jiného dál přeruší (fail-closed, dva
+testy na to). Replay produkční evidence 06:30–08:45: starý kód 5×
+`incomplete`, nový 5× `closed` +170 net (183 hrubě − 13 poplatky), druhý
+obchod beze změny. Běží ve Vercel `api/tradovate/oauth/journal-import.ts`,
+nasazení = push; jestli se stará pending pozice po deployi sama přepočítá,
+je třeba ověřit.
+
+**Deník:** Codexova kopie tohoto souboru (necommitnutá, 23. 9.) vznikla nad
+starší verzí a vypustila pět záznamů Claude z 21.–22. 9. Vrátil jsem je
+zpátky; diff souboru proti HEAD je teď čistě přírůstkový. Nic z toho zatím
+není pushnuté — uživatel chce pokračovat v úpravách.
+
+### 2026-09-23 — Ruční Flatten followera pouze pro aktuální obchod (Codex)
+
+- Přidán samostatný command `flatten-follower-trade`: za zapnutého LIVE
+  copieru smí zavřít pouze followera s autoritativně potvrzenou copier
+  lineage, zruší jeho copier-owned čekající entry/SL/TP a používá existující
+  durable cancel/liquidation cestu. Ostatní účty i ARM pokračují; běžný
+  nouzový `flatten-account` zůstává oddělený a dál DISARMuje.
+- Účet dostane durable `manual/trade` exclusion ještě před broker side
+  effectem. Po úspěšném flat nedostává další scale-in, protection ani leader
+  exit, takže nemůže reverse-open. Ruční close je vždy `close-copy` bez ohledu
+  na nastavení automatického denního cutu; neověřená cizí pozice/order se
+  nikdy account-wide nezavírá naslepo.
+- Automatický návrat je možný až po dvojím úplném read-only snapshotu všech
+  účtů: všechny pozice flat, žádný aktivní order, žádný stuck/unknown outbox,
+  stejné safety generation a žádná čekající position/order/fill událost.
+  Mezilehlý flat při okamžitém reverzu proto účet neuvolní; nejpozději jej
+  uvolní další heartbeat po skutečně čisté hranici. Session risk cuty se tím
+  nemění.
+- UI followera tlumeně označí oranžovým `ČEKÁ NA DALŠÍ OBCHOD`, vysvětlí
+  automatický návrat a odečte jej z `N/M zařazených`. Risk panel rozlišuje
+  ruční trade cut (oranžový) od denního session cutu (červený); notifikace už
+  u ručního zavření nevymýšlejí ztrátový limit. Relay, lokální agent i dlouhý
+  risk-reducing timeout znají nový command a jeho stabilní operation ID.
+- Ověření: typecheck čistý; 429 souborů / 3939 testů prošlo; produkční build
+  prošel; scoped ESLint změněných souborů 0 chyb (3 starší warningy v
+  `copierRuntimeController.ts`). Globální lint dál selhává na 62 starších
+  chybách v archivních `docs/reviews/*/evidence` souborech mimo změnu.
+  Kanonický localhost běží na `127.0.0.1:3001`; bez přihlášení šla vizuálně
+  ověřit pouze login obrazovka bez error overlay; konzole na loginu hlásí
+  starší neblokující selhání načtení kurzů měn. Konkrétní LIVE řádky kryjí
+  render regrese.
+  Release commit `7382d2e` byl pushnut na `origin/main`; produkční Vercel
+  deployment `dpl_CoHYCnb6YDcGbUCeVCSUZkDoNvQ3` je READY a veřejný alias
+  obsahuje nový command i stavový label. Nepřihlášený pilot-lease POST vrací
+  401. Worker byl po čistém preflightu reinstalovaný ze stejného stromu;
+  čerstvý i instalovaný bundle mají SHA-256
+  `96233fabe166a779336560699dd0521d818765c1a13bbe67cfdaa84108f874da`.
+  První pokus s novým storage klíčem načetl fallback group ID, což odhalila
+  okamžitá post-install kontrola; worker byl hned vrácen na původní durable
+  klíč přes `--adopt-durable-group`. Finální stav znovu potvrzuje skupinu
+  `Hlavní` (`local-1789500528863`), DISARMED/shadow, connected, flat,
+  no-active, bez divergence/stuck outbox a `lastError=null`. Žádný ARM,
+  Flatten ani broker write nebyl proveden.
+
 ### 2026-09-22 — Sdílí se jen odkaz + rozbitý build z dělení po hunkách (Claude)
 
 **Odkaz se lepil s průvodním textem.** Uživateli vyšlo
@@ -353,6 +432,198 @@ Náhledy bez Supabase: `mockups/shared-day-live.html` (veřejná stránka) a
 `mockups/shared-day-glass.html` (čtyři míry průhlednosti nad běžícím grafem).
 
 Ověřeno: typecheck, lint a 3912 testů čisté.
+
+### 2026-09-21 — Protected-target race už neukončuje zdravé otevřené kopie (Codex)
+
+- Incident 13→14→15→18 kontraktů na šesti followerech ukázal, že starší
+  globální fail-closed větev nerozlišovala selhání samotného TP modify od
+  ztráty ochrany: při potvrzeném pracovním SL i TP poslala followerům market
+  close. Přidán durable režim `safety.managementOnly` („Jen správa pozic“),
+  který v této úzce prokázané situaci zablokuje nové vstupy, ale ponechá
+  aktivní správu existujících kopií, exity, SL/TP a ruční Flatten.
+- Přechod je dovolen jen po autoritativním důkazu pro každou zasaženou větev
+  a současně pro každého dalšího followera s otevřenou kopií ve skupině:
+  přesný neúspěšný target modify v outboxu, přesná durable OSO role/lineage,
+  pracovní target i stop na brokerovi, stejný účet/symbol/protisměr, nulové
+  filled množství a množství obou ochran přesně rovné skutečné otevřené pozici.
+  Jakákoli neúplnost nebo nepracující stop zachová původní tvrdý fail-closed a
+  native auto-liquidate; nejde o obecné změkčení bezpečnostní politiky.
+- Běžná „Kontrola pozic“ nesmí management-only shodit, dokud nejsou pozice
+  leadera a všech followerů celé skupiny lokálně známé jako flat. Durable blok se
+  smaže až po autoritativně čisté flat/no-active reconciliation; nový ARM je do
+  té doby odmítnut. Stav je viditelný oranžovým chipem i v jinak tichém LIVE
+  dashboardu.
+- Regrese přesně simuluje šest followerů a pořadí 13→14→15→18, ověřuje žádný
+  market liquidate, blokování nového entry, pokračující kopii plného exitu,
+  blokovanou předčasnou reconciliation, tvrdý fallback při chybějícím SL na
+  zasaženém i jiném otevřeném followerovi a odemčení teprve po autoritativním
+  flat stavu. Ověření: kompletní sada 3911/3911 testů v 429 souborech,
+  TypeScript čistý, scoped ESLint 0 chyb (3 starší warningy), produkční build
+  čistý a `git diff --check` čistý. Globální ESLint baseline nyní selhává na 62
+  starších chybách v archivních `docs/reviews/*/evidence` skriptech mimo tuto
+  změnu. Localhost LIVE se po reloadu vykreslil bez
+  pádu; zůstávají dřívější nesouvisející warningy Recharts a chyba načtení FX.
+  Bez deploye, reinstalace workeru, ARM/Flatten nebo jiného broker write.
+- Read-only předinstalační kontrola běžícího Mac workeru potvrdila DEMO,
+  `armed=false`, `shadowMode=true`, připojený stream, čerstvou autoritativně
+  čistou reconciliation, flat všech účtů, žádné working orders/divergence ani
+  stuck outbox a `lastError=null`. Instalační preflight navíc potvrdil přesnou
+  shodu CLI leadera a všech šesti followerů s durable skupinou
+  (`compareDurableGroupWithCli.matches=true`), takže nebyly potřeba žádné
+  `--adopt-durable-group` ani `--replace-durable-group` zásahy. Po výslovném
+  souhlasu uživatele byl Mac worker reinstalován; SHA-256 čerstvého kandidáta i
+  nainstalovaného bundle je shodně
+  `df0c278c312e1569bcdc53eeb4aef5d908cde9a699ca3950767a49489f101ff4`.
+  LaunchAgent po restartu běží jako persistentní služba (PID 89312) a status už
+  obsahuje nové pole `managementOnly: null`. Následná read-only reconciliation
+  znovu autoritativně potvrdila flat stav, žádné working orders, divergence,
+  missing accounts ani stuck outbox a `lastError=null`; worker zůstal
+  `armed=false`, `shadowMode=true` a připojený. Reinstalace ani ověření
+  neposlaly ARM, Flatten, objednávku ani jiný broker write.
+
+### 2026-09-21 — Veřejný odkaz na kartu dne z LIVE (Codex)
+
+Karta dne má pod původním vizuálem samostatnou akci `Připravit odkaz`. Vytvoří
+neměnný snapshot s automaticky redigovanými názvy a ID účtů, privátní PNG náhled
+1200 × 630 pro sociální sítě a veřejnou adresu `/day/:token`. Po otevření odkazu
+se zobrazí stejná interaktivní karta; crawler dostane OG/Twitter metadata a
+náhledový obrázek bez zpřístupnění Storage bucketu.
+
+- Snapshoty jsou owner-scoped přes RLS. Veřejné čtení probíhá serverem pouze
+  podle náhodného UUID tokenu; klient ani anonymní role nemají přímý přístup k
+  tabulce nebo bucketu.
+- Vizuál karty zůstal beze změny. Sdílecí ovládání je mimo kartu a export používá
+  stabilní režim bez číselné a řádkové animace.
+- Lokální ověření: 4 cílené soubory / 27 testů, TypeScript, scoped ESLint bez
+  chyb, produkční build a vizuální kontrola v LIVE dashboardu. Viditelná zůstala
+  pouze známá localhost chyba načítání měnových kurzů.
+- Migrace `20260921101224_live_day_shares.sql` byla aplikovaná pouze do propojeného
+  projektu `kopinlpdvjfgmvxydohk`: RLS zapnuté, anon bez SELECT, čtyři owner
+  politiky, dvě Storage politiky a privátní bucket. Kvůli starému rozdílu historie
+  se nepoužil hromadný `db push`.
+- Izolovaný produkční deploy `dpl_6vZkXpq4urNT39NGW9EYBr3RVX98` je READY na
+  `alphatrade-mentor-15.vercel.app`. Dnešní veřejný snapshot má token
+  `ef8b82a8-1d57-43f3-9f65-9ad2754914e2`; HTML, redigovaný JSON i PNG vracejí
+  200 a rozkliknutá karta byla vizuálně ověřená. Bez broker zásahu.
+- Následná úprava pozadí vytáhla přihlašovací canvas se svíčkami do společné
+  komponenty: tmavý i OLED veřejný odkaz používají přesně stejnou animaci jako
+  login, světlý odkaz zůstává na čistém `slate-200` bez canvasu. Obě větve byly
+  vizuálně ověřené; login se nezměnil. Cílených 8 testů, TypeScript a produkční
+  build prošly. Izolovaný produkční deploy `dpl_Djv2M82iqCteZNm2c4BEYRUPe1Ju`
+  je READY na stejné doméně a původní veřejný odkaz, JSON i PNG znovu vracejí
+  200. Error log obsahuje jen existující Node `url.parse()` deprecation warning.
+
+### 2026-09-20 — Historie: šipky mezi obchody bez loadingu screenshotu (Codex)
+
+Navigace v otevřeném detailu připravuje journal obchody jako jeden celek:
+owner-ověřené řádky, privátní podepsané snapshot URL i dekódované pixely. Klik
+na šipku nechá současný kompletní obchod na obrazovce, dokud není cíl připravený,
+a potom atomicky přepne P&L, fakta i screenshot. Starý `fullTrade` zároveň nesmí
+ani na jeden render vystupovat pod identitou nového obchodu.
+
+- Odhalená runtime příčina zbylého spinneru byla nenápadná: přímé
+  `array.map(preloadDecodedImage)` předávalo kromě URL také index jako volitelný
+  loader. Dekódování sousedů proto selhalo hláškou `load is not a function`,
+  zatímco `Promise.allSettled` chybu záměrně nepropustil do UI. Callback nyní
+  posílá přesně jediný argument a regresní test tuto aritu hlídá.
+- Připravené podepsané snapshoty se předávají z Historie přímo do modalu;
+  modal z nich synchronně složí i owner-ověřený obchod a členy účtů. Už první
+  render cíle je kompletní a nikdy znovu nespustí `visibility:hidden`. Navigaci
+  blokuje jen první skutečně zobrazený obrázek; další ENTRY/EXIT se dekódují na
+  pozadí.
+- Měření studeného nového obchodu se 7 účty našlo hlavní brzdu v owner ověření:
+  5,7–6,3 s; podpis URL a dekódování byly v tomto běhu pod 1 ms z cache. Každý
+  soused předtím opakoval celý fingerprint/facts/snapshot řetězec. Nyní se až
+  12 prvních výběrů a posuvné navigační okno ověří jedním konzistentním batch
+  readem, rozdělí se do owner-scoped cache a souběžní žadatelé sdílejí stejný
+  in-flight požadavek. Finanční kontrola se nevynechává.
+- První modal připraví čtyři kroky na obě strany; po pohybu se s výběrem posouvá
+  runway osmi obchodů ve směru a dvou zpět. Opakovaná návštěva může 10 minut
+  použít již ověřený detail, zatímco kontrola po 25 s běží na pozadí. Cache je
+  pouze v paměti a při změně vlastníka se zahodí.
+- Rozdíl u 11. 9. je datový: karty jsou `Starší záznam`, mají 1 účet a nepoužívají
+  novou přísnou `journal:` rehydrataci; proto jsou instantní z načteného seznamu.
+  Novější 14.–18. 9. mají 2–7 owner-ověřovaných účtů a úplnou historii plnění.
+- Localhost: frame měření běžného přechodu 115 ms, návrat po více než 25 s 87 ms
+  a vzdálený krok 116 ms. Sekvence 15 rychlých kroků zachovala přesné pořadí,
+  modal byl vždy viditelný a spinner se neobjevil. Bez nové konzolové chyby.
+- Ověření: 426 souborů / 3 898 testů, TypeScript, scoped ESLint 0 chyb a
+  produkční Vite/PWA build. Zůstávají jen starší lint warningy, známý localhost
+  výpadek kurzů a existující upozornění na velikost chunků. Bez deploye, pushnutí
+  nebo broker zásahu.
+
+### 2026-09-20 — Historie: odstraněný dvojitý záblesk a rychlejší první náhled (Codex)
+
+Následná reálná zpětná vazba ukázala, že 160ms crossfade dvou ostrých grafů
+působí jako `entry → exit → entry → exit`. Crossfade je proto zrušený: cílový
+snímek se nejdřív stáhne/dekóduje a potom proběhne jediný atomický swap. V DOM
+je při přepnutí vždy právě jeden aktivní screenshot; žádný návrat na starý.
+
+- App na pozadí připraví jen první čtyři copier miniatury a nejvýše čtyři
+  ověřené journal detaily z první obrazovky. Limity záměrně brání návratu
+  starého problému „stáhni celou historii“; ruční screenshoty se tímto warmupem
+  nestahují.
+- Miniatury používají owner-scoped memory cache a chybějící cesty podepíšou
+  jedním Storage batch požadavkem. Seznam připojí každou URL hned a každý obrázek
+  se od skeletonu odemkne vlastním `onLoad`, takže nečeká na nejpomalejší kus
+  pětice. Úvodní 300ms opacity animace copier náhledu byla odstraněna.
+- Journal detail se dál nezobrazí bez owner-ověřené konzistentní sady. Text
+  „Načítám společný přehled…“ se ale ukáže až po 180 ms, takže cache hit ani
+  rychlý prefetch neblikne; při skutečně pomalé síti zůstává stav pravdivý.
+- Localhost: po studeném otevření Historie byly podepsané 2730px miniatury při
+  dalším 300ms vzorku už připojené, první desítka byla kompletně vykreslená a
+  opacity byla 1. Otevření detailu neukázalo načítací text. Entry → Exit i
+  Exit → Entry měly okamžitě i po 30 ms přesně jeden kompletní aktivní obrázek.
+- Ověření: 426 souborů / 3 893 testů, TypeScript, scoped ESLint 0 chyb,
+  `git diff --check` a produkční Vite/PWA build. Zůstávají jen starší lint
+  warningy, známý výpadek kurzů na localhostu a existující upozornění na velikost
+  chunků. Žádný deploy, push, broker zásah ani změna finančních výpočtů.
+
+### 2026-09-20 — Historie: stabilní detail a plynulé screenshoty (Codex)
+
+První dvě fáze zrychlení historie jsou hotové bez změny grafu, brokeru nebo
+finančních výpočtů. Příčina opakovaného „Načítám společný přehled…“ byla
+referenční identita `trade`/pole účtů: běžný background refresh vytvořil nové
+objekty a otevřený detail považoval stejné ID za jiný výběr.
+
+- Otevřený journal detail je nově svázaný se stabilním klíčem vybraných ID.
+  Refresh seznamu se stejným výběrem zachová ověřený detail; aktuální review
+  pole se dál propíšou, ale nepřepíšou ověřené exekuce ani média.
+- Kompletní owner-ověřený detail má krátkou 30s memory-only cache, oddělenou
+  `authStateVersion + userId`, maximálně 32 položek. Změna účtu/session stará
+  data nikdy nepoužije; cache se neukládá na disk.
+- Privátní screenshoty se místo N samostatných Storage požadavků podepisují
+  jedním `createSignedUrls` batch voláním. Úspěšné URL mají 50min memory-only,
+  auth-scoped cache; částečné selhání nezahodí ostatní snímky.
+- Galerie nejprve stáhne a dekóduje aktivní i sousední snímky. Při šipce starý
+  snímek zůstane vidět a s novým se 160 ms překrývá; žádný spinner ani prázdný
+  mezisnímek. Staré URL se při přechodu na jiný obchod nesmí zobrazit.
+- Browser na localhostu ověřil dva skutečné 2730px auto-screenshoty: během
+  přepnutí byly oba `complete` a překryté (opacity 0.988/0.012), po přechodu
+  zůstal nový. Nové konzolové chyby nevznikly; zůstává známý nesouvisející
+  výpadek kurzů a Recharts varování z dashboardu.
+- Ověření: 425 souborů / 3 889 testů, TypeScript, scoped ESLint bez nových chyb,
+  `git diff --check` a produkční Vite/PWA build. Žádný deploy, push, migrace,
+  ARM/DISARM ani broker akce neproběhly.
+
+### 2026-09-20 — Plynulejší LIVE ON/OFF bez umělého čekání (Codex)
+
+Uživatel upozornil, že přepínač kopírovací skupiny nejdřív zbytečně dlouho
+točí spinner a teprve potom přesune kolečko. Příčina byla prezentační: po
+autoritativním ARM/DISARM potvrzení UI vždy dorovnávalo animaci nejméně na
+650 ms a následný posun trval dalších 340 ms.
+
+- Pevné čekání 650 ms je odstraněné; bezpečnostní preflight, runtime ACK a
+  fail-closed chování zůstávají beze změny. ON/OFF se stále nesmí změnit před
+  potvrzením workeru.
+- Spinner se odhalí až po 140 ms. Rychlý ACK tedy kolečkem neproblikne, pomalý
+  broker/relay zůstává pravdivě viditelný jako čekající.
+- Posun knoflíku trvá 220 ms, barva koleje 200 ms a popisky 160–200 ms.
+  `prefers-reduced-motion` dál vypíná pohyb a nově i rotaci spinneru.
+- Ověřeno 12 cílenými testy, TypeScriptem, scoped ESLintem, `git diff --check`,
+  produkčním buildem a v prohlížeči na skutečném LIVE přehledu bez error
+  overlaye. Ostrý přepínač se při ověření neklikl; žádný ARM/DISARM, broker
+  příkaz, push ani deploy neproběhl.
 
 ### 2026-09-20 — LIVE na telefonu: hustší řádky, dvě sekce, Flatten nahoru (Claude)
 

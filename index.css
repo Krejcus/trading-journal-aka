@@ -3211,6 +3211,21 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
   padding-left: 12px;
 }
 
+/* Otevřená bublina sdílení je uvnitř tohohle obalu. Ořez `overflow: hidden`
+   potřebuje jen animace vysunutí — s otevřenou bublinou by ji ořízl celou
+   a zbyla by jen fajfka bez odkazu. Obal se proto drží rozevřený a ořez
+   pouští, dokud bublina žije, i když myš z karty mezitím odjede. */
+.live-day-tools:has(.live-day-sharepop) {
+  grid-template-columns: 1fr;
+  opacity: 1;
+  overflow: visible;
+}
+
+.live-day-tools:has(.live-day-sharepop) > span {
+  overflow: visible;
+  padding-left: 12px;
+}
+
 /* Dotykové zařízení hover nemá — tam je ovládání vidět rovnou. */
 @media (hover: none) {
   .live-day-tools { grid-template-columns: 1fr; opacity: 1; }
@@ -3327,7 +3342,9 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
   background: rgba(34, 211, 238, 0.1);
 }
 
-.live-day-ghost:disabled { cursor: progress; }
+/* Průběh ukazuje točící se ikona. Systémový kurzor „progress“ vypadal, jako
+   by se zasekl počítač, ne appka. */
+.live-day-ghost:disabled { cursor: default; }
 
 .light-theme .live-day-ghost {
   border-color: rgba(15, 23, 42, 0.1);

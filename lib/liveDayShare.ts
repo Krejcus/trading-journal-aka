@@ -41,6 +41,23 @@ export function publicLiveDaySummary(summary: LiveDaySummary): LiveDaySummary {
 }
 
 /** Nad tímhle se avatar do sdílení nepustí a zůstanou iniciály. */
+/**
+ * Odkaz se skládá z adresy stránky, na které uživatel zrovna je. Z lokálního
+ * dev serveru by tak vznikl `http://localhost:3000/day/…`, který nikdo jiný
+ * neotevře — snapshot přitom leží v produkční databázi. Z neveřejné adresy
+ * (localhost, adresa v domácí síti, `.local`) proto odkaz míří na veřejnou.
+ */
+const PRIVATE_HOST = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|.+\.local)$/i;
+
+export function liveDayShareOrigin(pageOrigin: string | null, publicOrigin: string): string {
+  if (!pageOrigin) return publicOrigin;
+  try {
+    return PRIVATE_HOST.test(new URL(pageOrigin).hostname) ? publicOrigin : pageOrigin;
+  } catch {
+    return publicOrigin;
+  }
+}
+
 export const LIVE_DAY_SHARE_AVATAR_MAX = 64_000;
 
 /**

@@ -8,8 +8,12 @@ export function apiUrl(path: string): string {
   if (!path.startsWith('/')) return path;
   if (!isNativeBuild) return path;
 
-  const origin = (import.meta.env.VITE_API_ORIGIN || DEFAULT_NATIVE_API_ORIGIN).replace(/\/$/, '');
-  return `${origin}${path}`;
+  return `${publicAppOrigin()}${path}`;
+}
+
+/** Veřejná adresa appky — tam, kam míří odkazy určené jiným lidem. */
+export function publicAppOrigin(): string {
+  return (import.meta.env.VITE_API_ORIGIN || DEFAULT_NATIVE_API_ORIGIN).replace(/\/$/, '');
 }
 
 /** Supabase allow-list must contain this exact callback for native OAuth. */
