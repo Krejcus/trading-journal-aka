@@ -370,6 +370,236 @@ describe('ostrý režim', () => {
     expect(modified.runtime.state.lastSequence).toBe(4);
   });
 
+  it('pending OSO SL/TP při posunu entry projdou jen při autoritativně nulovém leader fillu', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const clock = stepClock();
+    const store = createMemoryCopierStore();
+    const opened = await processOsoPair({
+      pair: {
+        entryOrderId: 'entry-pending-reprice', stopOrderId: 'stop-pending-reprice',
+        targetOrderId: 'target-pending-reprice', accountId: 100, symbol: 'MNQU6',
+        entrySide: 'Buy', quantity: 1, entryOrderType: 'Limit', entryLimitPrice: 30_000,
+        stopPrice: 29_950, targetPrice: 30_100, detectedAt: 10,
+        correlation: 'inferred-window',
+      },
+      event: event({ id: 'oso-pending-reprice', orderId: 'stop-pending-reprice', sequence: 3 }),
+      group: soloGroup, runtime: createRuntime(createCopierState([], 2)),
+      context: liveGate(), broker, clock, store,
+    });
+    const mapping = opened.runtime.osoOutbox.get('oso:g1:entry-pending-reprice:200')!;
+    for (const order of broker.orders()) {
+      if (order.brokerOrderId === mapping.firstBrokerOrderId
+        || order.brokerOrderId === mapping.secondBrokerOrderId) order.status = 'pending';
+    }
+    const parent = {
+      tag: '', brokerOrderId: 'entry-pending-reprice', accountId: 100,
+      symbol: 'MNQU6', side: 'Buy' as const, orderType: 'Limit' as const,
+      quantity: 1, filledQuantity: 0, limitPrice: 30_002,
+      status: 'working' as const, updatedAt: clock(),
+    };
+    const stop = {
+      tag: '', brokerOrderId: 'stop-pending-reprice', accountId: 100,
+      symbol: 'MNQU6', side: 'Sell' as const, orderType: 'Stop' as const,
+      quantity: 1, filledQuantity: 0, stopPrice: 29_952,
+      status: 'pending' as const, updatedAt: clock(),
+    };
+    const target = {
+      tag: '', brokerOrderId: 'target-pending-reprice', accountId: 100,
+      symbol: 'MNQU6', side: 'Sell' as const, orderType: 'Limit' as const,
+      quantity: 1, filledQuantity: 0, limitPrice: 30_102,
+      status: 'pending' as const, updatedAt: clock(),
+    };
+    const leaderBroker = {
+      ...broker,
+      async findOrderById(accountId: number, brokerOrderId: string) {
+        if (accountId === 100) {
+          const order = [parent, stop, target].find(item => item.brokerOrderId === brokerOrderId) ?? null;
+          return { order, completeness: 'authoritative' as const, observedAt: clock() };
+        }
+        return broker.findOrderById(accountId, brokerOrderId);
+      },
+    };
+    const repriced = await processLeaderEvent({
+      event: event({ id: 'pending-reprice', orderId: parent.brokerOrderId,
+        kind: 'replaced', sequence: 4, orderType: 'Limit', limitPrice: 30_001 }),
+      group: soloGroup, runtime: opened.runtime, context: liveGate(),
+      broker: leaderBroker, clock, store,
+    });
+    expect(broker.modifyRequests().map(item => item.brokerOrderId)).toEqual([
+      mapping.entryBrokerOrderId, mapping.firstBrokerOrderId, mapping.secondBrokerOrderId,
+    ]);
+    expect(broker.modifyRequests().map(item => item.changes)).toMatchObject([
+      { limitPrice: 30_002 }, { stopPrice: 29_952 }, { limitPrice: 30_102 },
+    ]);
+    expect([...repriced.runtime.cancelOutbox.values()].filter(item => item.leaderEventId === 'pending-reprice')
+      .map(item => item.outcome)).toEqual(['working', 'pending', 'pending']);
+    expect(repriced.runtime.state.lastSequence).toBe(4);
+
+    parent.filledQuantity = 1;
+    parent.limitPrice = 30_002;
+    const afterFill = await processLeaderEvent({
+      event: event({ id: 'pending-reprice-after-fill', orderId: parent.brokerOrderId,
+        kind: 'replaced', sequence: 5, orderType: 'Limit', limitPrice: 30_002 }),
+      group: soloGroup, runtime: repriced.runtime, context: liveGate(),
+      broker: leaderBroker, clock, store,
+    });
+    expect(afterFill.audit).toContainEqual(expect.objectContaining({
+      kind: 'blocked', reason: expect.stringContaining('pending child bez autoritativně nevyplněného leader entry'),
+    }));
+    expect(broker.modifyRequests()).toHaveLength(3);
+    expect(afterFill.runtime.state.lastSequence).toBe(4);
+
+    // Fill arriving between the initial parent proof and stage-1 confirmation
+    // must not reclassify a pending stop as protection of the new position.
+    parent.filledQuantity = 0;
+    parent.limitPrice = 30_003;
+    let parentReads = 0;
+    const racingBroker = {
+      ...leaderBroker,
+      async findOrderById(accountId: number, brokerOrderId: string) {
+        if (accountId === 100 && brokerOrderId === parent.brokerOrderId && ++parentReads === 2) {
+          parent.filledQuantity = 1;
+        }
+        return leaderBroker.findOrderById(accountId, brokerOrderId);
+      },
+    };
+    const raced = await processLeaderEvent({
+      event: event({ id: 'pending-reprice-raced-fill', orderId: parent.brokerOrderId,
+        kind: 'replaced', sequence: 5, orderType: 'Limit', limitPrice: 30_003 }),
+      group: soloGroup, runtime: repriced.runtime, context: liveGate(),
+      broker: racingBroker, clock, store,
+    });
+    expect(broker.modifyRequests().map(item => item.brokerOrderId).slice(3)).toEqual([
+      mapping.entryBrokerOrderId, mapping.firstBrokerOrderId,
+    ]);
+    expect(raced.audit).toContainEqual(expect.objectContaining({
+      kind: 'cancel-failed', reason: expect.stringContaining('pending child bez autoritativně nevyplněných leader/follower entry'),
+    }));
+    expect(raced.runtime.state.lastSequence).toBe(4);
+
+    // The follower can fill first even while the leader remains unfilled.
+    // Its Suspended child is then not acceptable position protection either.
+    parent.filledQuantity = 0;
+    parent.limitPrice = 30_004;
+    const followerParent = broker.orders().find(order => order.brokerOrderId === mapping.entryBrokerOrderId)!;
+    followerParent.filledQuantity = 0;
+    let followerRaceReads = 0;
+    const followerRacingBroker = {
+      ...leaderBroker,
+      async findOrderById(accountId: number, brokerOrderId: string) {
+        if (accountId === 100 && brokerOrderId === parent.brokerOrderId && ++followerRaceReads === 2) {
+          followerParent.filledQuantity = 1;
+        }
+        return leaderBroker.findOrderById(accountId, brokerOrderId);
+      },
+    };
+    const followerRaced = await processLeaderEvent({
+      event: event({ id: 'pending-reprice-follower-fill', orderId: parent.brokerOrderId,
+        kind: 'replaced', sequence: 5, orderType: 'Limit', limitPrice: 30_004 }),
+      group: soloGroup, runtime: repriced.runtime, context: liveGate(),
+      broker: followerRacingBroker, clock,
+    });
+    expect(followerRaced.audit).toContainEqual(expect.objectContaining({
+      kind: 'cancel-failed', reason: expect.stringContaining('pending child bez autoritativně nevyplněných leader/follower entry'),
+    }));
+    expect(followerRaced.runtime.state.lastSequence).toBe(4);
+  });
+
+  it('rychlé B→C přebere brokerový tvar včetně quantity a C po restartu projde všemi vrstvami', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const clock = stepClock();
+    const store = createMemoryCopierStore();
+    const opened = await processOsoPair({
+      pair: {
+        entryOrderId: 'entry-fast-reprice', stopOrderId: 'stop-fast-reprice',
+        targetOrderId: 'target-fast-reprice', accountId: 100, symbol: 'MNQU6',
+        entrySide: 'Buy', quantity: 1, entryOrderType: 'Limit', entryLimitPrice: 30_000,
+        stopPrice: 29_950, targetPrice: 30_100, detectedAt: 10,
+        correlation: 'inferred-window',
+      },
+      event: event({ id: 'oso-fast-reprice', orderId: 'stop-fast-reprice', sequence: 3 }),
+      group: soloGroup, runtime: createRuntime(createCopierState([], 2)),
+      context: liveGate(), broker, clock, store,
+    });
+    const mapping = opened.runtime.osoOutbox.get('oso:g1:entry-fast-reprice:200')!;
+    for (const order of broker.orders()) {
+      if (order.brokerOrderId === mapping.firstBrokerOrderId
+        || order.brokerOrderId === mapping.secondBrokerOrderId) order.status = 'pending';
+    }
+    const parent = {
+      tag: '', brokerOrderId: 'entry-fast-reprice', accountId: 100,
+      symbol: 'MNQU6', side: 'Buy' as const, orderType: 'Limit' as const,
+      quantity: 2, filledQuantity: 0, limitPrice: 30_002,
+      status: 'working' as const, updatedAt: clock(),
+    };
+    const stop = {
+      tag: '', brokerOrderId: 'stop-fast-reprice', accountId: 100,
+      symbol: 'MNQU6', side: 'Sell' as const, orderType: 'Stop' as const,
+      quantity: 2, filledQuantity: 0, stopPrice: 29_952,
+      status: 'pending' as const, updatedAt: clock(),
+    };
+    const target = {
+      tag: '', brokerOrderId: 'target-fast-reprice', accountId: 100,
+      symbol: 'MNQU6', side: 'Sell' as const, orderType: 'Limit' as const,
+      quantity: 2, filledQuantity: 0, limitPrice: 30_102,
+      status: 'pending' as const, updatedAt: clock(),
+    };
+    const leaderBroker = {
+      ...broker,
+      async findOrderById(accountId: number, brokerOrderId: string) {
+        if (accountId === 100) {
+          const order = [parent, stop, target].find(item => item.brokerOrderId === brokerOrderId) ?? null;
+          return { order, completeness: 'authoritative' as const, observedAt: clock() };
+        }
+        return broker.findOrderById(accountId, brokerOrderId);
+      },
+    };
+    const b = await processLeaderEvent({
+      event: event({ id: 'fast-B', orderId: parent.brokerOrderId,
+        kind: 'replaced', sequence: 4, orderType: 'Limit', quantity: 1, limitPrice: 30_001 }),
+      group: soloGroup, runtime: opened.runtime, context: liveGate(),
+      broker: leaderBroker, clock, store,
+    });
+    expect(b.audit.some(item => item.kind === 'blocked' || item.kind === 'cancel-failed')).toBe(false);
+    expect(b.runtime.state.lastSequence).toBe(4);
+    expect(broker.modifyRequests().map(item => item.changes)).toMatchObject([
+      { quantity: 2, limitPrice: 30_002 },
+      { quantity: 2, stopPrice: 29_952 },
+      { quantity: 2, limitPrice: 30_102 },
+    ]);
+
+    const restarted = runtimeFromSnapshot((await store.load())!);
+    const c = await processLeaderEvent({
+      event: event({ id: 'fast-C', orderId: parent.brokerOrderId,
+        kind: 'replaced', sequence: 5, orderType: 'Limit', quantity: 2, limitPrice: 30_002 }),
+      group: soloGroup, runtime: restarted, context: liveGate(),
+      broker: leaderBroker, clock, store,
+    });
+    expect(c.audit.some(item => item.kind === 'blocked' || item.kind === 'cancel-failed')).toBe(false);
+    expect(c.runtime.state.lastSequence).toBe(5);
+    expect(broker.modifyRequests().map(item => item.brokerOrderId).slice(3)).toEqual([
+      mapping.entryBrokerOrderId, mapping.firstBrokerOrderId, mapping.secondBrokerOrderId,
+    ]);
+    expect(broker.orders().filter(order => order.accountId === 200)
+      .map(order => [order.quantity, order.limitPrice, order.stopPrice])).toEqual([
+      [2, 30_002, undefined], [2, undefined, 29_952], [2, 30_102, undefined],
+    ]);
+
+    parent.filledQuantity = 1;
+    parent.limitPrice = 30_003;
+    const afterPartialFill = await processLeaderEvent({
+      event: event({ id: 'fast-D-after-partial-fill', orderId: parent.brokerOrderId,
+        kind: 'replaced', sequence: 6, orderType: 'Limit', quantity: 2, limitPrice: 30_003 }),
+      group: soloGroup, runtime: c.runtime, context: liveGate(),
+      broker: leaderBroker, clock, store,
+    });
+    expect(afterPartialFill.audit).toContainEqual(expect.objectContaining({
+      kind: 'blocked', reason: expect.stringContaining('pending child bez autoritativně nevyplněného leader entry'),
+    }));
+    expect(afterPartialFill.runtime.state.lastSequence).toBe(5);
+    expect(broker.modifyRequests()).toHaveLength(6);
+  });
+
   it('explicitně cizí parentId leader ochrany zablokuje OSO parent modify před brokerem', async () => {
     const broker = createMockBroker({
       behavior: () => ({ kind: 'working' }),
@@ -665,6 +895,21 @@ describe('ostrý režim', () => {
     expect(eventEntries.find(entry => entry.brokerOrderId === mapped?.firstBrokerOrderId)?.status).toBe('unknown');
     expect(eventEntries.find(entry => entry.brokerOrderId === mapped?.secondBrokerOrderId)?.status).toBe('planned');
     expect(modified.runtime.state.lastSequence).toBe(3);
+
+    // A crash here cannot silently treat the newer replace as completed.
+    // Recovery keeps the uncertain stop and never sends C's entry/target
+    // while the old three-stage operation remains unresolved.
+    const restarted = runtimeFromSnapshot((await store.load())!);
+    const recovered = await recoverOutbox({ runtime: restarted, broker: leaderBroker, clock, store });
+    const next = await processLeaderEvent({
+      event: event({ id: 'entry-stop-fail-next', orderId: 'entry-stop-fail',
+        kind: 'replaced', sequence: 5, orderType: 'Limit', limitPrice: 30_002 }),
+      group: soloGroup, runtime: recovered.runtime, context: liveGate(),
+      broker: leaderBroker, clock, store,
+    });
+    expect(next.audit).toContainEqual(expect.objectContaining({ kind: 'blocked' }));
+    expect(next.runtime.state.lastSequence).toBe(3);
+    expect(broker.modifyRequests()).toHaveLength(1);
   });
 
   it('chyba stop korekce jednoho followera nezastaví bezpečné dokončení druhého', async () => {
@@ -2024,6 +2269,65 @@ describe('zrušení objednávky u leadera', () => {
     });
     expect(canceled.audit.some(item => item.kind === 'canceled')).toBe(true);
     expect(canceled.runtime.cancelOutbox.values().next().value?.status).toBe('confirmed');
+  });
+
+  it('cancel již odmítnutého follower příkazu potvrdí jako neškodný no-op, ne nový reject', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    broker.findOrderStatusById = async () => ({
+      status: 'rejected', completeness: 'authoritative', observedAt: 9,
+    });
+    const clock = stepClock();
+    const opened = await processLeaderEvent({
+      event: event({ orderType: 'Limit', limitPrice: 29_500 }), group: soloGroup,
+      runtime: createRuntime(createCopierState()), context: liveGate(), broker, clock,
+    });
+    broker.orders()[0].status = 'rejected';
+    const canceled = await processLeaderEvent({
+      event: event({ id: 'leader-rejected-cancel', kind: 'rejected', sequence: 2,
+        orderType: 'Limit', limitPrice: 29_500 }),
+      group: soloGroup, runtime: opened.runtime, context: liveGate(), broker, clock,
+    });
+    expect(canceled.audit).toContainEqual(expect.objectContaining({
+      kind: 'cancel-noop-rejected', accountId: 200,
+    }));
+    expect(canceled.audit.some(item => item.kind === 'rejected' || item.kind === 'cancel-failed')).toBe(false);
+    expect([...canceled.runtime.cancelOutbox.values()]).toEqual([
+      expect.objectContaining({ status: 'confirmed', outcome: 'rejected' }),
+    ]);
+    expect(canceled.runtime.state.lastSequence).toBe(2);
+  });
+
+  it('status-only Rejected vyžádá fill graf a partial fill ponechá jako kritickou divergenci', async () => {
+    const inner = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    let fullLookups = 0;
+    const broker = {
+      ...inner,
+      async findOrderStatusById() {
+        return { status: 'rejected' as const, completeness: 'authoritative' as const, observedAt: 9 };
+      },
+      async findOrderById(accountId: number, brokerOrderId: string) {
+        fullLookups += 1;
+        return inner.findOrderById(accountId, brokerOrderId);
+      },
+    };
+    const clock = stepClock();
+    const opened = await processLeaderEvent({
+      event: event({ orderType: 'Limit', limitPrice: 29_500 }), group: soloGroup,
+      runtime: createRuntime(createCopierState()), context: liveGate(), broker, clock,
+    });
+    inner.orders()[0].status = 'rejected';
+    inner.orders()[0].filledQuantity = 1;
+    const canceled = await processLeaderEvent({
+      event: event({ id: 'partial-rejected-cancel', kind: 'rejected', sequence: 2,
+        orderType: 'Limit', limitPrice: 29_500 }),
+      group: soloGroup, runtime: opened.runtime, context: liveGate(), broker, clock,
+    });
+    expect(fullLookups).toBe(1);
+    expect(canceled.audit).toContainEqual(expect.objectContaining({ kind: 'cancel-failed' }));
+    expect(canceled.runtime.cancelOutbox.values().next().value).toMatchObject({
+      status: 'abandoned', outcome: 'rejected',
+    });
+    expect(canceled.runtime.state.lastSequence).toBe(1);
   });
 
   it('timeout před cancellem zůstane unknown a neposune sekvenci', async () => {

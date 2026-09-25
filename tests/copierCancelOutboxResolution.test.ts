@@ -35,6 +35,11 @@ describe('cancel resolution', () => {
       .toMatchObject({ status: 'confirmed', outcome: 'rejected' });
   });
 
+  it('rejected po částečném fillu není neškodný cancel no-op', () => {
+    expect(resolveCancelLookup(cancelEntry(), order('rejected', { filledQuantity: 1 }), 'authoritative', 9))
+      .toMatchObject({ status: 'abandoned', outcome: 'rejected' });
+  });
+
   it('filled = leader zrušil, follower vyplnil — divergence, fail-closed', () => {
     expect(resolveCancelLookup(cancelEntry(), order('filled'), 'authoritative', 9))
       .toMatchObject({ status: 'abandoned', outcome: 'filled' });
@@ -50,6 +55,8 @@ describe('cancel resolution', () => {
       .toMatchObject({ status: 'confirmed', outcome: 'canceled' });
     expect(resolveCancelStatusLookup(cancelEntry(), 'filled', 'authoritative', 9))
       .toMatchObject({ status: 'abandoned', outcome: 'filled' });
+    expect(resolveCancelStatusLookup(cancelEntry(), 'rejected', 'authoritative', 9))
+      .toMatchObject({ status: 'unknown' });
     expect(resolveCancelStatusLookup(cancelEntry(), 'canceled', 'eventual', 9))
       .toMatchObject({ status: 'unknown' });
     expect(resolveCancelStatusLookup(cancelEntry(), 'working', 'authoritative', 9))

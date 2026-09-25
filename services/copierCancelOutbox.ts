@@ -121,9 +121,14 @@ export function resolveCancelLookup(
     return { ...entry, status: 'confirmed', outcome: 'canceled', reason: undefined, updatedAt: now };
   }
   if (order.status === 'rejected') {
+    if (order.filledQuantity !== 0) {
+      return {
+        ...entry, status: 'abandoned', outcome: 'rejected',
+        reason: `cancel nad rejected objednávkou s vyplněným množstvím ${order.filledQuantity}; pozice vyžaduje kontrolu`, updatedAt: now,
+      };
+    }
     // Objednávka u brokera zemřela rejectem — cíl cancelu („nesmí být
-    // working") je splněn. Trestat tohle fail-closedem vyrábělo falešné
-    // vypnutí uprostřed obchodu (živý incident 2026-08-20).
+    // working") je splněn jen při autoritativně nulovém fillu.
     return {
       ...entry, status: 'confirmed', outcome: 'rejected',
       reason: 'cancel bezpředmětný — objednávka skončila jako rejected', updatedAt: now,
@@ -167,10 +172,9 @@ export function resolveCancelStatusLookup(
     return { ...entry, status: 'confirmed', outcome: 'canceled', reason: undefined, updatedAt: now };
   }
   if (status === 'rejected') {
-    return {
-      ...entry, status: 'confirmed', outcome: 'rejected',
-      reason: 'cancel bezpředmětný — objednávka skončila jako rejected', updatedAt: now,
-    };
+    // Samotný stav Order neříká, jestli před rejectem nepřišel partial fill.
+    // Runner musí v tomto jediném případě načíst i fresh Fill dependencies.
+    return markCancelUnknown(entry, 'rejected cancel vyžaduje autoritativní kontrolu fillů', now);
   }
   if (status === 'filled') {
     return {

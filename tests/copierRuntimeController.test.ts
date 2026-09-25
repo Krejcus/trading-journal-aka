@@ -128,6 +128,158 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
+  it('reject leadera přijatý během follower preflightu zablokuje raw place před zpracováním fronty', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const audit: CopierAuditEntry[] = [];
+    const cappedGroup = { ...group, followers: [{ ...group.followers[0], maxContracts: 10 }] };
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: cappedGroup,
+      clock: stepClock(), onAudit: entries => audit.push(...entries),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    const originalListOrders = broker.listOrders.bind(broker);
+    let injectReject = true;
+    broker.listOrders = async accountId => {
+      if (accountId === 200 && injectReject) {
+        injectReject = false;
+        broker.emitEvent({ type: 'order', order: leaderOrder({
+          brokerOrderId: 'leader-risk-rejected', status: 'rejected',
+          sourceVersion: '2:Rejected', rejectReason: 'Fungible Exposed 2',
+        }) });
+      }
+      return originalListOrders(accountId);
+    };
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-risk-rejected', sourceVersion: '1:Working',
+    }) });
+    await controller.waitForIdle();
+
+    expect(broker.placedRequests()).toHaveLength(0);
+    expect(audit).toContainEqual(expect.objectContaining({
+      kind: 'skipped', accountId: 200,
+      reason: expect.stringContaining('leader-rejected-before-dispatch'),
+    }));
+    expect(controller.status()).toMatchObject({ armed: true, autoClose: null });
+    controller.stop();
+  });
+
+  it('reject leader OSO entry v preflightu zablokuje i atomický follower bracket', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const cappedGroup = { ...group, followers: [{ ...group.followers[0], maxContracts: 10 }] };
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: cappedGroup,
+      clock: stepClock(), osoCorrelationWindowMs: 5,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    const originalListOrders = broker.listOrders.bind(broker);
+    let injectReject = true;
+    broker.listOrders = async accountId => {
+      if (accountId === 200 && injectReject) {
+        injectReject = false;
+        broker.emitEvent({ type: 'order', order: leaderOrder({
+          brokerOrderId: 'leader-oso-rejected', status: 'rejected',
+          sourceVersion: '2:Rejected', rejectReason: 'Fungible Exposed 2',
+        }) });
+      }
+      return originalListOrders(accountId);
+    };
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-oso-rejected', quantity: 1, limitPrice: 30_000,
+      sourceVersion: '1:Working',
+    }) });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-oso-stop', parentOrderId: 'leader-oso-rejected',
+      side: 'Sell', quantity: 1, orderType: 'Stop', limitPrice: undefined,
+      stopPrice: 29_950,
+    }) });
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-oso-target', parentOrderId: 'leader-oso-rejected',
+      side: 'Sell', quantity: 1, orderType: 'Limit', limitPrice: 30_100,
+    }) });
+    await controller.waitForIdle();
+
+    expect(broker.placedOsoRequests()).toHaveLength(0);
+    expect(controller.status().autoClose).toBeNull();
+    controller.stop();
+  });
+
+  it('reject během částečného fan-outu zůstane fail-closed, protože první kopie už mohla vzniknout', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const twoFollowers = { ...group, followers: [
+      { accountId: 200, mode: 'on-submit' as const, multiplier: 1 },
+      { accountId: 300, mode: 'on-submit' as const, multiplier: 1 },
+    ] };
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: twoFollowers, clock: stepClock(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    const originalPlaceOrder = broker.placeOrder.bind(broker);
+    broker.placeOrder = request => {
+      const result = originalPlaceOrder(request);
+      if (request.accountId === 200) {
+        broker.emitEvent({ type: 'order', order: leaderOrder({
+          brokerOrderId: 'leader-partial-reject', status: 'rejected',
+          sourceVersion: '2:Rejected', rejectReason: 'Fungible Exposed 2',
+        }) });
+      }
+      return result;
+    };
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-partial-reject', sourceVersion: '1:Working',
+    }) });
+    await controller.waitForIdle();
+
+    expect(broker.placedRequests().map(request => request.accountId)).toEqual([200]);
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      lastError: expect.stringContaining('částečného follower dispatchu'),
+    });
+    controller.stop();
+  });
+
+  it('potvrzený cancel-noop nad již odmítnutým follower příkazem sám kopírku nevypne', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const audit: CopierAuditEntry[] = [];
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group, clock: stepClock(),
+      onAudit: entries => audit.push(...entries),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-cancel-noop', sourceVersion: '1:Working',
+    }) });
+    await controller.waitForIdle();
+    expect(broker.placedRequests()).toHaveLength(1);
+    broker.orders()[0].status = 'rejected';
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-cancel-noop', status: 'rejected',
+      sourceVersion: '2:Rejected', rejectReason: 'Fungible Exposed 2',
+    }) });
+    await controller.waitForIdle();
+
+    expect(audit).toContainEqual(expect.objectContaining({
+      kind: 'cancel-noop-rejected', accountId: 200,
+    }));
+    expect(controller.status()).toMatchObject({ armed: true, autoClose: null });
+    controller.stop();
+  });
+
   it('ostrý ARM nikdy nepřežije restart runtime ani se neobnoví z durable snapshotu', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const store = createMemoryCopierStore();

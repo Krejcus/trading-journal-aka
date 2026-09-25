@@ -9,6 +9,10 @@ export interface StagedOsoModifyCommand extends ModifyCommand {
 
 export interface OsoModifyCascadePlan {
   commands: StagedOsoModifyCommand[];
+  /** Pending children are valid only while this exact leader entry is still unfilled. */
+  pendingLeaderEntryOrderId?: string;
+  /** Current broker shape supersedes an older queued replace event. */
+  pendingLeaderEntry?: BrokerOrder;
   error?: string;
 }
 
@@ -22,6 +26,7 @@ function validateLeaderChild(
     symbol: string;
     side: LeaderEvent['side'];
     quantity: number;
+    allowPending: boolean;
   },
 ): string | null {
   if (!order) return `${options.role} ${options.expectedOrderId} nebyl nalezen`;
@@ -35,7 +40,9 @@ function validateLeaderChild(
   }
   if (order.symbol !== options.symbol) return `${options.role} má jiný kontrakt`;
   if (order.side !== oppositeSide(options.side)) return `${options.role} má nesprávnou stranu`;
-  if (order.status !== 'working') return `${options.role} není working (${order.status})`;
+  if (order.status !== 'working' && !(options.allowPending && order.status === 'pending')) {
+    return `${options.role} není working (${order.status})`;
+  }
   if (order.quantity !== options.quantity || order.filledQuantity !== 0) {
     return `${options.role} množství/fill nesouhlasí (${order.filledQuantity}/${order.quantity} vs ${options.quantity})`;
   }
@@ -180,18 +187,46 @@ export async function planOsoModifyCascade(options: {
     return { commands: [], error: 'oso-leader-protection-unverified: leader child lookup není autoritativní' };
   }
 
+  // Suspended SL/TP are normal for an unfilled native OSO entry, but they
+  // cannot protect a position. Prove the exact parent has zero fills before
+  // accepting either pending child. A missing/stale/terminal parent fails shut.
+  const hasPendingChild = stopLookup.order?.status === 'pending' || targetLookup.order?.status === 'pending';
+  let pendingLeaderEntryOrderId: string | undefined;
+  let pendingLeaderEntry: BrokerOrder | undefined;
+  if (hasPendingChild) {
+    try {
+      const parent = await broker.findOrderById(group.leaderAccountId, event.orderId);
+      const order = parent.order;
+      if (parent.completeness !== 'authoritative' || !order
+        || order.brokerOrderId !== event.orderId
+        || order.accountId !== group.leaderAccountId
+        || order.symbol !== event.symbol
+        || order.side !== event.side
+        || order.filledQuantity !== 0
+        || (order.status !== 'working' && order.status !== 'pending')) {
+        return { commands: [], error: 'oso-leader-protection-unverified: pending child bez autoritativně nevyplněného leader entry' };
+      }
+      pendingLeaderEntryOrderId = event.orderId;
+      pendingLeaderEntry = { ...order };
+    } catch (error) {
+      return { commands: [], error: `oso-leader-protection-unverified: leader entry lookup selhal (${error instanceof Error ? error.message : String(error)})` };
+    }
+  }
+
   const common = {
     leaderAccountId: group.leaderAccountId,
     leaderEntryOrderId: event.orderId,
     symbol: event.symbol,
     side: event.side,
-    quantity: event.quantity,
+    quantity: pendingLeaderEntry?.quantity ?? event.quantity,
   };
   const stopProblem = validateLeaderChild(stopLookup.order, {
     ...common, role: 'stop', expectedOrderId: mapping.leaderStopOrderId,
+    allowPending: pendingLeaderEntryOrderId != null,
   });
   const targetProblem = validateLeaderChild(targetLookup.order, {
     ...common, role: 'target', expectedOrderId: mapping.leaderTargetOrderId,
+    allowPending: pendingLeaderEntryOrderId != null,
   });
   if (stopProblem || targetProblem || !stopLookup.order || !targetLookup.order) {
     return {
@@ -203,6 +238,8 @@ export async function planOsoModifyCascade(options: {
   const leaderStop = stopLookup.order;
   const leaderTarget = targetLookup.order;
   return {
+    ...(pendingLeaderEntryOrderId ? { pendingLeaderEntryOrderId } : {}),
+    ...(pendingLeaderEntry ? { pendingLeaderEntry } : {}),
     commands: relevant.flatMap(({ modification, mapping: followerMapping }) => ([
       {
         key: `mx:${followerMapping.key}:stop-reassert:${event.id}`,

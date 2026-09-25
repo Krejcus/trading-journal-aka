@@ -95,7 +95,19 @@ async function resolveBrokerLifecycleEntry(
 ): Promise<CancelOutboxEntry> {
   if (entry.operation === 'cancel' && broker.findOrderStatusById) {
     const lookup = await broker.findOrderStatusById(entry.accountId, entry.brokerOrderId);
-    return resolveCancelStatusLookup(entry, lookup.status, lookup.completeness, now);
+    if (lookup.status !== 'rejected' || lookup.completeness !== 'authoritative') {
+      return resolveCancelStatusLookup(entry, lookup.status, lookup.completeness, now);
+    }
+    // Rejected is terminal, but status-only cannot prove zero partial fills.
+    // Pay for the full Order+Fill graph only on this uncommon path.
+    const full = await broker.findOrderById(entry.accountId, entry.brokerOrderId);
+    if (full.completeness !== 'authoritative'
+      || !full.order
+      || full.order.brokerOrderId !== entry.brokerOrderId
+      || full.order.accountId !== entry.accountId) {
+      return markCancelUnknown(entry, 'rejected cancel nemá autoritativní Order+Fill důkaz', now);
+    }
+    return resolveCancelLookup(entry, full.order, full.completeness, now);
   }
   const lookup = entry.operation === 'modify' && entry.changes && broker.findModifiedOrderById
     ? await broker.findModifiedOrderById(entry.accountId, entry.brokerOrderId, entry.changes)
@@ -127,6 +139,8 @@ export type CopierAuditKind =
   | 'recovered'
   | 'abandoned'
   | 'canceled'
+  /** Cancel target was already broker-rejected; no order remains to cancel. */
+  | 'cancel-noop-rejected'
   | 'modified'
   /** Noha skončila vyplněná, ne zrušená — audit to nesmí zaměňovat. */
   | 'filled'
@@ -449,6 +463,7 @@ async function processStagedLifecycleCommands(options: {
   store?: CopierStore;
   revision: number;
   maxConcurrentDispatches?: number;
+  pendingLeaderEntryOrderId?: string;
 }): Promise<{
   state: CopierState;
   revision: number;
@@ -563,6 +578,12 @@ async function processStagedLifecycleCommands(options: {
 
   let allConfirmed = true;
   const stageSuccess = new Map<string, boolean>();
+  const followerParentByAccount = new Map<number, Extract<StagedLifecycleCommand, { operation: 'modify' }>>();
+  for (const command of commands) {
+    if (command.stage === 0 && command.operation === 'modify') {
+      followerParentByAccount.set(command.accountId, command);
+    }
+  }
   const stages = [...new Set(commands.map(command => command.stage))].sort((a, b) => a - b);
   for (const stage of stages) {
     const stageItems = commands
@@ -633,14 +654,60 @@ async function processStagedLifecycleCommands(options: {
       }
       // Obecná lifecycle cesta smí považovat modify nad mezitím zrušenou
       // objednávkou za potvrzený no-op: následný leader cancel ji dočistí.
-      // Ve vícefázové OSO opravě je ale `working` skutečný precondition
-      // další vrstvy. Zrušený parent nesmí pustit reassert SL a zrušený SL
-      // nesmí pustit target. Převod na durable `abandoned` drží runtime
-      // fail-closed i po restartu, dokud stav nevyřeší reconciliation.
+      // Suspended child modify proves the future price, not protection of an
+      // open position. Both exact parent entries must still have zero fills:
+      // a follower may fill before the leader. Parent stage 0 must remain
+      // Working; canceled/filled/rejected stages never advance.
+      if (
+        resolved.status === 'confirmed'
+        && resolved.operation === 'modify'
+        && resolved.outcome === 'pending'
+        && command.stage > 0
+        && options.pendingLeaderEntryOrderId === event.orderId
+      ) {
+        try {
+          const followerParentCommand = followerParentByAccount.get(command.accountId);
+          const [leaderParent, followerParent] = await Promise.all([
+            broker.findOrderById(event.accountId, event.orderId),
+            followerParentCommand
+              ? broker.findOrderById(command.accountId, followerParentCommand.brokerOrderId)
+              : Promise.resolve(null),
+          ]);
+          const leader = leaderParent.order;
+          const follower = followerParent?.order;
+          if (leaderParent.completeness !== 'authoritative' || !leader
+            || leader.brokerOrderId !== event.orderId
+            || leader.accountId !== event.accountId
+            || leader.symbol !== event.symbol
+            || leader.side !== event.side
+            || leader.filledQuantity !== 0
+            || (leader.status !== 'working' && leader.status !== 'pending')
+            || !followerParentCommand || followerParent?.completeness !== 'authoritative' || !follower
+            || follower.brokerOrderId !== followerParentCommand.brokerOrderId
+            || follower.accountId !== command.accountId
+            || follower.symbol !== event.symbol
+            || follower.orderType !== followerParentCommand.orderType
+            || follower.quantity !== followerParentCommand.quantity
+            || follower.limitPrice !== followerParentCommand.limitPrice
+            || follower.stopPrice !== followerParentCommand.stopPrice
+            || follower.filledQuantity !== 0
+            || follower.status !== 'working') {
+            resolved = { ...resolved, status: 'abandoned',
+              reason: 'staged pending child bez autoritativně nevyplněných leader/follower entry', updatedAt: clock() };
+          }
+        } catch (error) {
+          resolved = { ...resolved, status: 'abandoned',
+            reason: `staged pending leader lookup selhal (${error instanceof Error ? error.message : String(error)})`, updatedAt: clock() };
+        }
+      }
+      // Ve vícefázové OSO opravě musí být každá další vrstva potvrzena.
+      // Pending je dovoleno jen u child nohy při nulovém leader fillu.
       if (
         resolved.status === 'confirmed'
         && resolved.operation === 'modify'
         && resolved.outcome !== 'working'
+        && !(resolved.outcome === 'pending' && command.stage > 0
+          && options.pendingLeaderEntryOrderId === event.orderId)
       ) {
         resolved = {
           ...resolved,
@@ -657,13 +724,15 @@ async function processStagedLifecycleCommands(options: {
       );
       if (confirmed) {
         waiveSupersededModifications(cancelOutbox, resolved, clock);
-        if (entry.operation === 'modify' && resolved.outcome === 'working' && entry.changes) {
+        if (entry.operation === 'modify'
+          && (resolved.outcome === 'working' || resolved.outcome === 'pending')
+          && entry.changes) {
           state = updateFollowerLink(state, entry.brokerOrderId, entry.changes);
         }
         audit.push({
           at: clock(), leaderEventId: event.id,
           kind: entry.operation === 'cancel'
-            ? (resolved.outcome === 'rejected' ? 'rejected' : 'canceled')
+            ? (resolved.outcome === 'rejected' ? 'cancel-noop-rejected' : 'canceled')
             : 'modified',
           accountId: entry.accountId,
           key: entry.key, brokerOrderId: entry.brokerOrderId,
@@ -1392,14 +1461,44 @@ export async function processLeaderEvent(
       };
     }
     if (cascade.commands.length > 0) {
+      // An older queued replace may be processed after the broker already
+      // accepted a newer price/quantity. Apply the latest authoritative
+      // parent shape now, rather than depending on a future stream event
+      // surviving a worker restart. All three follower stages use it.
+      const currentParent = cascade.pendingLeaderEntry;
+      const effectiveEvent = currentParent ? {
+        ...event,
+        orderType: currentParent.orderType,
+        quantity: currentParent.quantity,
+        limitPrice: currentParent.limitPrice,
+        stopPrice: currentParent.stopPrice,
+      } : event;
+      const effectiveModifications = currentParent
+        ? planModify(effectiveEvent, planningState, group)
+        : modifications;
+      const effectiveByAccount = new Map(effectiveModifications.map(command => [command.accountId, command]));
+      if (effectiveModifications.length !== modifications.length
+        || modifications.some(command => !effectiveByAccount.has(command.accountId))) {
+        for (const command of modifications) {
+          audit.push({ at: clock(), leaderEventId: event.id, kind: 'blocked',
+            accountId: command.accountId, key: command.key, brokerOrderId: command.brokerOrderId,
+            reason: 'oso-leader-protection-unverified: aktuální leader tvar nelze bezpečně zkopírovat všem followerům' });
+        }
+        return {
+          runtime: { state, outbox, bracketOutbox, osoOutbox, cancelOutbox, shadowLinks, revision },
+          plan: { leaderEventId: event.id, orders: [], skipped: [] }, audit, metrics,
+        };
+      }
       const stagedCommands: StagedLifecycleCommand[] = [
         ...cancels.map(command => ({ ...command, operation: 'cancel' as const, stage: 0 })),
-        ...modifications.map(command => ({ ...command, operation: 'modify' as const, stage: 0 })),
-        ...cascade.commands.map(command => ({ ...command, operation: 'modify' as const })),
+        ...effectiveModifications.map(command => ({ ...command, operation: 'modify' as const, stage: 0 })),
+        ...cascade.commands.map(command => ({ ...command,
+          quantity: effectiveByAccount.get(command.accountId)!.quantity,
+          operation: 'modify' as const })),
       ];
       const lifecycle = await processStagedLifecycleCommands({
         commands: stagedCommands,
-        event,
+        event: effectiveEvent,
         state,
         outbox,
         cancelOutbox,
@@ -1410,6 +1509,7 @@ export async function processLeaderEvent(
         store,
         revision,
         maxConcurrentDispatches: options.maxConcurrentDispatches,
+        pendingLeaderEntryOrderId: cascade.pendingLeaderEntryOrderId,
       });
       state = lifecycle.state;
       revision = lifecycle.revision;
@@ -1579,11 +1679,10 @@ export async function processLeaderEvent(
         }
         audit.push({
           at: clock(), leaderEventId: event.id,
-          // Kind podle skutečného výsledku, ne podle operace: cancel nad
-          // objednávkou, která zemřela rejectem (DLL apod.), NENÍ zrušení —
-          // incident TDFYG: rejected příkaz se vykázal jako canceled.
+          // Reject cíle je potvrzený no-op cancelu, nikoli další kritické
+          // odmítnutí follower vstupu ani tvrzení, že broker objednávku zrušil.
           kind: entry.operation === 'cancel'
-            ? (resolved.outcome === 'rejected' ? 'rejected' : 'canceled')
+            ? (resolved.outcome === 'rejected' ? 'cancel-noop-rejected' : 'canceled')
             : 'modified',
           accountId: entry.accountId,
           key: entry.key, brokerOrderId: entry.brokerOrderId,

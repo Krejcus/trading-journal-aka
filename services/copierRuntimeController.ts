@@ -1253,12 +1253,31 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    */
   let safetyGeneration = 0;
 
+  // Ingress runs synchronously, while handleBrokerEvent is serialized behind
+  // potentially slow OSO correlation/store writes. A terminal leader event
+  // must fence an older submitted event before its follower broker write,
+  // even when that terminal event has not reached the event processor yet.
+  const terminalLeaderOrdersOnIngress = new Map<string, 'rejected' | 'canceled'>();
+
   // Capture admission once, but read live safety again after every async preflight,
   // immediately before the raw broker write. Re-ARM cannot revive an older job.
-  const dispatchBroker = (generation: number, event?: LeaderEvent): BrokerPort => createExposureCappedBroker(
+  const dispatchBroker = (
+    generation: number,
+    event?: LeaderEvent,
+    leaderOrderIds: readonly string[] = event ? [event.orderId] : [],
+  ): BrokerPort => createExposureCappedBroker(
     options.broker,
     accountId => group.followers.find(follower => follower.accountId === accountId)?.maxContracts,
     operation => {
+      if (event && (event.kind === 'submitted' || leaderOrderIds.length > 1)
+        && (operation === 'place' || operation === 'oso')) {
+        const terminal = leaderOrderIds.find(orderId =>
+          terminalLeaderOrdersOnIngress.has(`${event.accountId}:${orderId}`));
+        if (terminal) {
+          const status = terminalLeaderOrdersOnIngress.get(`${event.accountId}:${terminal}`);
+          throw new CopierDispatchRevokedError(`leader-${status}-before-dispatch:${terminal}`);
+        }
+      }
       const terminalCancel = operation === 'cancel'
         && (event?.kind === 'canceled' || event?.kind === 'rejected')
         && ![...runtime.bracketOutbox.values(), ...runtime.osoOutbox.values()]
@@ -3552,6 +3571,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
 
   const failClosedOnCriticalAudit = async (entries: readonly CopierAuditEntry[]) => {
+    // A terminal leader event can arrive during concurrent fan-out: one
+    // follower write may have passed the fence while another is revoked.
+    // That mixed batch is real possible exposure, not an ordinary skip.
+    if (entries.some(item => item.kind === 'dispatched')
+      && entries.some(item => item.kind === 'skipped'
+        && item.reason?.startsWith('dispatch-revoked:leader-')
+        && item.reason.includes('-before-dispatch:'))) {
+      failClosed(new Error('Copier fail-closed: leader skončil během částečného follower dispatchu'));
+      return;
+    }
     const critical = entries.filter(isCriticalAuditEntry);
     if (critical.length === 0) return;
     if (!gate.armed) {
@@ -7886,7 +7915,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
           ineligibleAccounts: currentEntryIneligibleAccounts(),
         },
-        broker: dispatchBroker(entryAdmissionGeneration, leaderEvent),
+        broker: dispatchBroker(entryAdmissionGeneration, leaderEvent,
+          [pair.entryOrderId, pair.stopOrderId, pair.targetOrderId]),
         clock,
         store: options.store,
         metrics,
@@ -8731,6 +8761,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   assertCutsWithinKnownPropLimits(group);
 
   const unsubscribe = broker.subscribe(event => {
+    if (event.type === 'order'
+      && event.order.accountId === group.leaderAccountId
+      && (event.order.status === 'rejected' || event.order.status === 'canceled')) {
+      terminalLeaderOrdersOnIngress.set(
+        `${event.order.accountId}:${event.order.brokerOrderId}`,
+        event.order.status,
+      );
+    }
     brokerObservationVersion += 1;
     if (event.type === 'position' || event.type === 'order' || event.type === 'fill') {
       tradeBoundaryObservationVersion += 1;
