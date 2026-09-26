@@ -16,6 +16,7 @@ import { Trade, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
 import { formatTradePnL } from '../utils/formatPnL';
 import { ExchangeRates } from '../services/currencyService';
 import { storageService } from '../services/storageService';
+import { prefetchTradeChart } from '../services/tradeChartData';
 import { ErrorBoundary } from './ErrorBoundary';
 import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
@@ -366,6 +367,16 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     // Každý návrat na graf = nové „postavení“ svíček.
     const [chartRevealKey, setChartRevealKey] = useState(0);
     useEffect(() => { if (visualMode === 'chart') { setChartMounted(true); setChartRevealKey(value => value + 1); } }, [visualMode]);
+    // Podklady grafu se stahují na pozadí, zatímco uživatel kouká na snímek.
+    // Až po 1 s v detailu: rychlé listování obchody nestahuje (a nevyčerpá
+    // limit 12 dotazů/min na tržní data) nic, co by se neotevřelo.
+    const chartPrefetchVerified = chartTrade && currentJournal?.rows?.includes(chartTrade) ? chartTrade : undefined;
+    useEffect(() => {
+        if (!chartTrade) return;
+        const timer = window.setTimeout(() => prefetchTradeChart(chartTrade, chartPrefetchVerified), 1_000);
+        return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- jednou pro vybraný obchod
+    }, [chartTrade?.id, chartTrade?.accountId]);
     const shotInputRef = useRef<HTMLInputElement>(null);
     const [isSigningSnapshots, setIsSigningSnapshots] = useState(false);
     const [snapshotSignError, setSnapshotSignError] = useState(false);

@@ -376,6 +376,19 @@ export function marketDataWindowForTrade(entryMs: number, exitMs: number): Marke
   return { start: entryWindow.start, end: exitWindow.end };
 }
 
+/**
+ * Jen seance obchodu — pro rychlé první načtení detailu (1 dotaz místo 16 dní).
+ * Začíná půlnocí (Praha) dne, ve kterém leží vstup minus rezerva: aspoň 2 h,
+ * u delšího obchodu jeho délka (ať je vycentrovaný obchod celý v datech).
+ * Konec je stejný jako u plného okna.
+ */
+export function marketDataSessionWindowForTrade(entryMs: number, exitMs: number): MarketDataWindow {
+  const full = marketDataWindowForTrade(entryMs, exitMs);
+  const lead = Math.max(2 * 60 * 60 * 1000, exitMs - entryMs);
+  const parts = Object.fromEntries(pragueDateParts.formatToParts(new Date(entryMs - lead)).map(part => [part.type, part.value]));
+  return { start: pragueMidnightUtc(Number(parts.year), Number(parts.month), Number(parts.day)), end: full.end };
+}
+
 export function resolveMarketSymbol(root: 'MNQ' | 'NQ', tradeSymbol?: string): string {
   const normalized = String(tradeSymbol || '').trim().toUpperCase();
   const contract = normalized.match(/^(MNQ|NQ)([HMUZ]\d{1,2})$/);

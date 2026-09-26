@@ -39,14 +39,13 @@ import {
   findEntryFairValueGap,
   findEntryStructureEvent,
   findFairValueGaps,
-  loadTradeMarketCandles,
-  marketDataWindowForTrade,
   MARKET_TIMEFRAME_MINUTES,
   MarketDataError,
   resolveMarketSymbol,
   type MarketCandle,
   type MarketTimeframe,
 } from '../services/marketData';
+import { loadTradeChartCandles, loadTradeChartHistory, tradeChartDataAvailable, tradeChartTiming } from '../services/tradeChartData';
 import { ALPHATRADE_CHART_STYLE as chartStyle } from '../services/chartVisualStyle';
 import { formatNqMnqTickPrice } from '../services/chartPriceTick';
 import { chartAxisTickLabel, chartCrosshairTimeLabel } from '../services/chartTimeAxisFormat';
@@ -156,22 +155,16 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   const [chartEngine, setChartEngine] = useState<'candlekit' | 'classic'>('candlekit');
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const entryMs = useMemo(() => {
-    if (typeof trade.entryTime === 'number' && trade.entryTime > 0) return trade.entryTime;
-    if (trade.entryDate) {
-      const parsed = Date.parse(trade.entryDate);
-      if (Number.isFinite(parsed)) return parsed;
-    }
-    const exit = trade.timestamp || Date.parse(trade.date) || Date.now();
-    return exit - Math.max(0, Number(trade.durationMinutes) || 0) * 60_000;
-  }, [trade]);
-  const exitMs = useMemo(() => trade.timestamp || Date.parse(trade.exitDate || trade.date) || entryMs, [trade, entryMs]);
+  // Časy i okno počítá stejně jako předstažení v detailu (services/tradeChartData).
+  const timing = useMemo(() => tradeChartTiming(trade), [trade]);
+  const { entryMs, exitMs } = timing;
   const marketSymbol = useMemo(() => resolveMarketSymbol(root, trade.symbol || trade.instrument), [root, trade.symbol, trade.instrument]);
-  // Cena prvního plnění ověří, že svíčky patří kontraktu obchodu (rollover).
-  const firstEntryPrice = useMemo(() => {
-    const fill = trade.executionHistory?.fills.filter(item => item.role === 'entry').sort((a, b) => a.at - b.at)[0];
-    return fill ? { at: fill.at, price: fill.price } : { at: entryMs, price: Number(trade.entryPrice) };
-  }, [trade.executionHistory, trade.entryPrice, entryMs]);
+  // Detail načte nejdřív jen seanci obchodu (1 dotaz); plná historie (16 dní)
+  // se dotáhne až po posunu grafu doleva nebo ve fullscreenu — vždy až po
+  // dokončeném prvním načtení a ke stejnému kontraktu.
+  const [fullHistory, setFullHistory] = useState(!detail);
+  const [loadedSymbol, setLoadedSymbol] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   // ── Přehrávání obchodu (jen v detailu) ─────────────────────────────────
   // Kurzor = čas otevření poslední odkryté 1m svíčky; null = celý obchod.
@@ -287,18 +280,17 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
     setError(null);
     setRawCandles([]);
     setEstimatedCostUsd(null);
-    if (Math.max(entryMs, exitMs) > Date.now() - 24 * 60 * 60 * 1000) {
+    setLoadedSymbol(null);
+    if (detail) setFullHistory(false);
+    if (!tradeChartDataAvailable(timing)) {
       setError({ code: 'data-not-yet-historical', message: 'Databento historical feed zpřístupní tento obchod přibližně 24 hodin po trhu.' });
       setLoading(false);
       return () => { cancelled = true; };
     }
-    Promise.resolve().then(() => {
-      const { start, end } = marketDataWindowForTrade(entryMs, exitMs);
-      return loadTradeMarketCandles({ root, tradeSymbol: trade.symbol || trade.instrument, start, end,
-        entryMs: firstEntryPrice.at, entryPrice: firstEntryPrice.price });
-    }).then(response => {
+    Promise.resolve().then(() => loadTradeChartCandles(trade, root, detail ? 'session' : 'full', timing)).then(response => {
       if (cancelled) return;
       setRawCandles(response.candles);
+      setLoadedSymbol(response.symbol);
       setProviderSymbol(response.sourceSymbol || response.symbol);
       setEstimatedCostUsd(typeof response.estimatedCostUsd === 'number' ? response.estimatedCostUsd : null);
     }).catch((reason: unknown) => {
@@ -309,8 +301,24 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [entryMs, exitMs, marketSymbol, retry, firstEntryPrice.at, firstEntryPrice.price]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- okno určují časy a kontrakt, ne identita obchodu
+  }, [entryMs, exitMs, marketSymbol, retry, timing.firstEntry.at, timing.firstEntry.price]);
 
+  // Dotažení plné historie ke kontraktu, který vybralo první načtení.
+  useEffect(() => {
+    if (!fullHistory || !loadedSymbol || loading) return;
+    let cancelled = false;
+    setHistoryLoading(true);
+    loadTradeChartHistory(loadedSymbol, timing).then(response => {
+      if (!cancelled && response.candles.length >= rawCandlesRef.current.length) setRawCandles(response.candles);
+    }).catch(() => { /* graf zůstane se seancí */ }).finally(() => { if (!cancelled) setHistoryLoading(false); });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- jednou po přepnutí na plnou historii
+  }, [fullHistory, loadedSymbol, loading]);
+  useEffect(() => { if (isFullscreen) setFullHistory(true); }, [isFullscreen]);
+
+  const rawCandlesRef = useRef(rawCandles);
+  rawCandlesRef.current = rawCandles;
   const candles = useMemo(() => aggregateCandles(rawCandles, timeframe), [rawCandles, timeframe]);
   const replayRawCandles = useMemo(
     () => cursor == null ? rawCandles : rawCandles.filter(candle => candle.time <= cursor),
@@ -787,6 +795,8 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
             replayCursorTime={cursor}
             journalHistoryInReplay
             centeredTradeView
+            onNeedOlderHistory={!fullHistory ? () => setFullHistory(true) : undefined}
+            olderHistoryLoading={historyLoading}
             onChartApiReady={setChartApi}
           />
         )}

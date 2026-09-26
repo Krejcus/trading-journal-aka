@@ -208,6 +208,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-26 — Rychlost grafu v detailu: měření, seance napřed, předstažení (Claude)
+
+- Měřeno na :3000 (dev). Obchod v cache prohlížeče: 1,1 s od kliknutí na
+  graf, z toho 0,7 s = 7 Supabase dotazů za sebou (detail obchodu), 54 ms
+  svíčky z IndexedDB, ~0,3 s vykreslení 15k svíček. Nový obchod: navíc
+  4–6 s (jednou výkyv 34 s) — pevná režie edge funkce `market-candles`
+  (metadata.get_cost + timeseries.get_range za sebou), skoro nezávislá na
+  velikosti okna; 16 dní 0,06 $, jedna seance ~0,005–0,015 $.
+- Detail načte nejdřív jen seanci (`marketDataSessionWindowForTrade`:
+  od půlnoci Praha dne vstupu − max(2 h, délka obchodu), konec jako plné
+  okno). Plných 16 dní až po posunu doleva (`onNeedOlderHistory`) nebo ve
+  fullscreenu, vždy až po dokončeném prvním načtení a ke stejnému kontraktu
+  (`loadTradeChartHistory(loadedSymbol)`) — podmínky od Codexe.
+- Předstažení: detail po 1 s (ne při rychlém listování — limit 12 dotazů/min
+  na tržní data) stáhne na pozadí detail obchodu i svíčky seance
+  (`services/tradeChartData.ts`, sdílený výpočet časů/okna s grafem).
+  Detail si graf vyzvedne jednou (lhůta 3 s kvůli dvojímu efektu
+  StrictMode, nevyzvednutý zastará za 60 s).
+- Výsledek: obchod v cache 0,08 s od kliknutí (první graf po načtení
+  stránky ~0,7 s kvůli inicializaci modulů); nový obchod po předstažení
+  0,3 s, bez čekání dál 4–6 s (jen 1 dotaz místo 2).
+- Další fáze (ne teď): neveřejný serverový sklad svíček —
+  `docs/CANDLE_STORE_PLAN.md`; stavět až po změření částí a ověření licence.
+
 ### 2026-09-26 — Ruční vypnutí followera ve skupině + animace přepínačů (Claude UI, Codex jádro)
 
 - Nové pole `enabled` ve `CopyFollowerConfig` + příkaz `set-follower-enabled`

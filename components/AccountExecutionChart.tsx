@@ -4,6 +4,7 @@ import type { Trade } from '../types';
 import { isEvidenceJournalTrade } from '../lib/journalTradeFacts';
 import { storageService } from '../services/storageService';
 import { loadJournalChartDetail } from '../services/journalChartDetail';
+import { takePrefetchedJournalDetail } from '../services/tradeChartData';
 
 const TradeMarketChart = React.lazy(() => import('./TradeMarketChart'));
 const loadOwnerTrade = (id: string) => storageService.getTradeById(id);
@@ -28,7 +29,9 @@ export default function AccountExecutionChart({ trade, isDark, verifiedDetail, l
       setResult({ input: trade, retry, detail });
     };
     const timeout = setTimeout(() => finish(null), 20_000);
-    void loadJournalChartDetail(trade, loadTrade).then(detail => finish(detail), () => finish(null));
+    // Detail obchodu mohl stáhnout už otevřený detail (předstažení) — jen poprvé.
+    const prefetched = retry === 0 && loadTrade === loadOwnerTrade ? takePrefetchedJournalDetail(trade) : null;
+    void (prefetched ?? loadJournalChartDetail(trade, loadTrade)).then(detail => finish(detail), () => finish(null));
     return () => { cancelled = true; clearTimeout(timeout); };
   }, [journal, verified, loadTrade, retry, trade]);
   // Obnovení stejného obchodu na pozadí nesmí graf odpojit — jinak by se
