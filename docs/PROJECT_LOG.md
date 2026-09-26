@@ -220,6 +220,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   náhodných děravých osách). Pomáhá i backtestu. Po opravě se všemi
   čtyřmi: 246 ms blokování za 6 s, levely 24× ~19 ms (škrcené 4×/s),
   ostatní výpočty pod 10 ms.
+- Limit struktury: nové nastavení „Max počet posledních BOS/CHoCH“
+  (`structure.maxCount`, výchozí 10, 1–50) jako u FVG; kreslí se jen
+  posledních N (+ struktura vstupu). V detailu mimo přehrávání „posledních“
+  k výstupu obchodu + 30 min, v přehrávání do kurzoru.
+- Plynulost levelů (Codexův krok „c“, bez změny výsledku): `weekKey` jen při
+  změně obchodního dne (dřív Date + ISO text pro každou z 12k svíček),
+  `afterIb` jen od RTH openu, ATR svíček průběžně bez pomocného pole (stejné
+  pořadí operací). 12k svíček: medián 10,5 → 2,3 ms, p95 13,2 → 6,1 ms.
+  Shoda hlídaná testem proti zamrzlé referenci
+  (`tests/fixtures/liquidityLevelsReference.ts`): DST jaro/podzim, týden,
+  chybějící svíčky, posuvné 12k okno, kroky přehrávání, <14 svíček, 3 sady
+  nastavení. Krok přehrávání v detailu teď stojí s indikátory i bez nich
+  ~20 ms (dev) — akumulátor ani worker zatím nejsou potřeba.
 - Struktura kouká do budoucnosti? Výpočet je kauzální (swing potvrzený
   následující svíčkou, zlom na zavření svíčky), v přehrávání se událost
   objeví až po zlomu. Popisek leží v půlce mezi swingem a zlomem, takže ve

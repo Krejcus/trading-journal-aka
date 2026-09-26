@@ -41,6 +41,8 @@ export interface StructureIndicatorSettings {
   textSize: 'tiny' | 'small' | 'medium' | 'large';
   textBackground: boolean;
   textBackgroundColor: string;
+  /** Kolik posledních BOS/CHoCH kreslit (jako „Max počet aktivních FVG“). */
+  maxCount: number;
   paneLabels: boolean;
   statusInputs: boolean;
   visibility: IndicatorVisibilitySettings;
@@ -157,6 +159,7 @@ export const DEFAULT_INDICATOR_SETTINGS: AlphaTradeIndicatorSettings = {
     textSize: 'medium',
     textBackground: false,
     textBackgroundColor: '#ffffff',
+    maxCount: 10,
     paneLabels: true,
     statusInputs: true,
     visibility: visibilityDefaults(),

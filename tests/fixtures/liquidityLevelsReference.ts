@@ -1,5 +1,6 @@
-import type { LevelsIndicatorSettings } from './chartIndicatorSettings';
-import type { IndicatorPoint, MarketCandle } from './marketData';
+/** Zamrzlá kopie výpočtu levelů před optimalizací (2026-09-26) — reference pro test shody. Neupravovat. */
+import type { LevelsIndicatorSettings } from '../../services/chartIndicatorSettings';
+import type { IndicatorPoint, MarketCandle } from '../../services/marketData';
 
 export type LiquidityLineStyle = 'solid' | 'dashed' | 'dotted';
 
@@ -184,25 +185,9 @@ export const wilderAverageTrueRange = (
   return wilderAverage(ranges, length);
 };
 
-/**
- * ATR(14) přímo na svíčkách grafu — protějšek `atrVal` z Pine indikátoru.
- * Průběžně bez pomocného pole 12k rozsahů; pořadí operací je stejné jako
- * ve `wilderAverageTrueRange`, takže i výsledek je bit po bitu stejný.
- */
+/** ATR(14) přímo na svíčkách grafu — protějšek `atrVal` z Pine indikátoru. */
 const candleAverageTrueRange = (candles: MarketCandle[], length = 14) => {
-  if (!candles.length || candles.length < length) return candles.length ? wilderAverageTrueRange(candles, length) : null;
-  const range = (index: number) => {
-    const candle = candles[index];
-    const previousClose = candles[index - 1]?.close;
-    return previousClose === undefined
-      ? candle.high - candle.low
-      : Math.max(candle.high - candle.low, Math.abs(candle.high - previousClose), Math.abs(candle.low - previousClose));
-  };
-  let sum = 0;
-  for (let index = 0; index < length; index += 1) sum += range(index);
-  let value = sum / length;
-  for (let index = length; index < candles.length; index += 1) value = (value * (length - 1) + range(index)) / length;
-  return value;
+  return wilderAverageTrueRange(candles, length);
 };
 
 export const EMPTY_LIQUIDITY_DAY_CONTEXT: LiquidityDayContext = {
@@ -234,11 +219,9 @@ export function calculateLiquidityLevels(candles: MarketCandle[], settings: Leve
   const lower2: IndicatorPoint[] = [];
   const dayStartIndices: number[] = [];
 
-  // weekKey (Date + ISO text) jen při změně obchodního dne, ne pro každou svíčku.
-  let nextWeek = '';
   candles.forEach((candle, index) => {
     const nextDay = tradingDayKey(candle.time);
-    if (nextDay !== dayKey) nextWeek = weekKey(nextDay);
+    const nextWeek = weekKey(nextDay);
     if (nextDay !== dayKey) {
       if (day) days.push(day);
       dayKey = nextDay;
@@ -382,12 +365,9 @@ export function calculateLiquidityLevels(candles: MarketCandle[], settings: Leve
   const pdClose = previousDay?.close;
   const rthOpen = rthIndex >= 0 ? candles[rthIndex].open : latest.close;
   const gap = pdClose !== undefined && dailyAtr !== null && dailyAtr > 0 ? (rthOpen - pdClose) / dailyAtr : undefined;
-  // Svíčky jsou seřazené — po konci IB leží jen za RTH openem.
-  const afterIb: MarketCandle[] = [];
-  if (ibHigh !== undefined && ibLow !== undefined && rthIndex >= 0) {
-    const ibEnd = candles[rthIndex].time + 3600;
-    for (let index = rthIndex; index < candles.length; index += 1) if (candles[index].time >= ibEnd) afterIb.push(candles[index]);
-  }
+  const afterIb = ibHigh !== undefined && ibLow !== undefined && rthIndex >= 0
+    ? candles.filter(candle => candle.time >= candles[rthIndex].time + 3600)
+    : [];
   const brokeUp = ibHigh !== undefined && afterIb.some(candle => candle.high > Number(ibHigh));
   const brokeDown = ibLow !== undefined && afterIb.some(candle => candle.low < Number(ibLow));
   const dayContext: LiquidityDayContext = {

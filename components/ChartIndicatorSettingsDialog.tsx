@@ -185,6 +185,7 @@ export const ChartIndicatorSettingsDialog: React.FC<{
             <Check checked={value.enabled} onChange={enabled => update('structure', { enabled })} label="Zobrazit BoS/ChoCh" />
             <Check checked={value.showBos} onChange={showBos => update('structure', { showBos })} label="Zobrazit BOS" />
             <Check checked={value.showChoch} onChange={showChoch => update('structure', { showChoch })} label="Zobrazit CHoCH" />
+            <Field label="Max počet posledních BOS/CHoCH"><NumberInput value={value.maxCount} min={1} max={50} onChange={maxCount => update('structure', { maxCount })} /></Field>
             <Field label="Bullish / Bearish"><ColorInput label="Bullish struktura" value={value.bullishColor} onChange={bullishColor => update('structure', { bullishColor })} /><ColorInput label="Bearish struktura" value={value.bearishColor} onChange={bearishColor => update('structure', { bearishColor })} /></Field>
             <Field label="Šířka čáry"><NumberInput value={value.lineWidth} min={1} max={4} onChange={lineWidth => update('structure', { lineWidth: lineWidth as StructureIndicatorSettings['lineWidth'] })} /></Field>
             <Field label="Velikost textu"><select value={value.textSize} onChange={event => update('structure', { textSize: event.target.value as StructureIndicatorSettings['textSize'] })} className="h-9 w-full rounded-md border border-slate-300 px-2"><option value="tiny">Mikro</option><option value="small">Malé</option><option value="medium">Střední</option><option value="large">Velké</option></select></Field>

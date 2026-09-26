@@ -71,6 +71,7 @@ import {
   updateMarketStructureAccumulator,
   type FairValueGapAccumulator,
   type MarketCandle,
+  type MarketStructureEvent,
   type MarketStructureAccumulator,
   type MarketTimeframe,
 } from '../services/marketData';
@@ -2642,13 +2643,19 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   renderedFvgsRef.current = renderedFvgs;
   const structureOverlayEvents = useMemo(() => {
     const style = indicatorSettings.structure;
+    const shown = (event: MarketStructureEvent) => (event.type === 'BOS' && style.showBos) || (event.type === 'CHoCH' && style.showChoch);
+    // Jen posledních N (jako FVG). V detailu mimo přehrávání „posledních“
+    // k výstupu obchodu — jinak by u obchodu, po kterém trh ještě dlouho
+    // běžel, vypadly právě události kolem obchodu. V přehrávání do kurzoru.
+    const limit = Math.max(1, Math.min(50, Number(style.maxCount) || 10));
+    const anchorTime = centeredTradeView && !replayActive ? Math.floor(exitMs / 1000) + 30 * 60 : Number.POSITIVE_INFINITY;
+    const regular = visibleStructure
+      ? structureEvents.filter(event => shown(event) && event.breakTime <= anchorTime).slice(-limit)
+      : [];
     const events = uniqueStructureEvents([
-      ...(visibleStructure ? structureEvents : []),
+      ...regular,
       ...(showEntryStructure && entryStructure ? [entryStructure] : []),
-    ]).filter(event => (
-      (event.type === 'BOS' && style.showBos)
-      || (event.type === 'CHoCH' && style.showChoch)
-    ));
+    ]).filter(shown);
     return events.map(event => ({
       event,
       midpoint: nearestCandleTime(
@@ -2656,7 +2663,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         Math.floor((event.pivotTime + event.breakTime) / 2),
       ),
     }));
-  }, [entryStructure, indicatorSettings.structure, showEntryStructure, structureEvents, visibleCandles, visibleStructure]);
+  }, [centeredTradeView, entryStructure, exitMs, indicatorSettings.structure, replayActive, showEntryStructure, structureEvents, visibleCandles, visibleStructure]);
   const structureOverlayEventsRef = useRef(structureOverlayEvents);
   structureOverlayEventsRef.current = structureOverlayEvents;
   const drawingMagnetSourcesRef = useRef<DrawingMagnetSources>({ candles: [] });
