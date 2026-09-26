@@ -16,6 +16,9 @@ const LEADER_ID = 62_364_058;
 const FOLLOWER_A = 62_364_057;
 const FOLLOWER_B = 62_364_060;
 const FOLLOWER_C = 62_364_061;
+const FOLLOWER_D = 62_364_062;
+/** Čtení pozic/příkazů starší než limit čerstvosti — ukáže „?“ a „před 4 min“. */
+const STALE_READ_AT = new Date(Date.now() - 4 * 60_000).toISOString();
 const UPDATED_AT = '2026-09-05T13:42:10.000Z';
 
 const account = (id: number, name: string, firm: string, patch: Partial<LiveAccount> = {}): LiveAccount => ({
@@ -50,11 +53,15 @@ export const devLiveCopyFixtureSnapshot: LiveSnapshot = {
       positions: [{ accountId: LEADER_ID, symbol: 'MNQZ6', netPosition: 2, netPrice: 23_412.25, realizedPnl: 0, unrealizedPnl: 70, updatedAt: UPDATED_AT }],
     }),
     account(FOLLOWER_A, 'LFF05066846490007', 'Lucid', {
-      balance: 49_880, equity: 49_950, realizedPnl: -120, unrealizedPnl: 70, cushion: 1_120,
+      balance: 49_880, equity: 49_950, realizedPnl: -120, unrealizedPnl: 70, cushion: 1_120, dailyLossLimit: 1_200,
+      positionsAvailability: 'available', positionsUpdatedAt: STALE_READ_AT,
+      ordersAvailability: 'available', ordersUpdatedAt: STALE_READ_AT,
+      unrealizedPnlSource: 'stale', unrealizedPnlUpdatedAt: STALE_READ_AT,
       positions: [{ accountId: FOLLOWER_A, symbol: 'MNQZ6', netPosition: 2, netPrice: 23_412.5, realizedPnl: 0, unrealizedPnl: 70, updatedAt: UPDATED_AT }],
     }),
-    account(FOLLOWER_B, 'TRD-2200418', 'Tradeify', { balance: 50_000, equity: 50_000, realizedPnl: 0, unrealizedPnl: 0, cushion: 410 }),
+    account(FOLLOWER_B, 'TRD-2200418', 'Tradeify', { balance: 50_000, equity: 50_000, realizedPnl: 0, unrealizedPnl: 0, cushion: 410, dailyLossLimit: 1_000 }),
     account(FOLLOWER_C, 'APX-118862', 'Apex', { balance: 48_300, equity: 48_300, realizedPnl: -640, unrealizedPnl: 0, cushion: 0 }),
+    account(FOLLOWER_D, 'TDY-3310552', 'Tradeify', { balance: 50_085, equity: 50_085, realizedPnl: 85, unrealizedPnl: 0, cushion: 1_935, dailyLossLimit: 1_000 }),
   ],
   appAccounts: [],
   connections: [{
@@ -62,7 +69,7 @@ export const devLiveCopyFixtureSnapshot: LiveSnapshot = {
     firm: 'Tradeify',
     connected: true,
     status: 'Connected',
-    accountCount: 4,
+    accountCount: 5,
     disconnectedAt: null,
     disconnectReason: null,
     updatedAt: UPDATED_AT,
@@ -76,6 +83,7 @@ export const devLiveCopyFixtureSnapshot: LiveSnapshot = {
       { accountId: FOLLOWER_A, accountName: 'LFF05066846490007', scale: 1, replicate: true, synced: true, mismatches: [] },
       { accountId: FOLLOWER_B, accountName: 'TRD-2200418', scale: 2, replicate: true, synced: true, mismatches: [] },
       { accountId: FOLLOWER_C, accountName: 'APX-118862', scale: 1, replicate: true, synced: false, mismatches: [] },
+      { accountId: FOLLOWER_D, accountName: 'TDY-3310552', scale: 1, replicate: true, synced: true, mismatches: [] },
     ],
     syncedCount: 2,
     warningCount: 1,
@@ -122,8 +130,9 @@ export const devLiveCopyFixtureOrders: LiveOrder[] = [
   },
 ];
 
-/** Ruční přepínač followerů: A přepnout jde, B a C blokuje automatické vyřazení. */
+/** Ruční přepínač followerů: A a D přepnout jde, B a C blokuje automatické vyřazení. */
 export const devLiveCopyFixtureParticipation = [
+  { accountId: FOLLOWER_D, configuredEnabled: true, effectiveEnabled: true, canToggle: true, blockers: [] as string[] },
   { accountId: FOLLOWER_A, configuredEnabled: true, effectiveEnabled: true, canToggle: true, blockers: [] as string[] },
   {
     accountId: FOLLOWER_B, configuredEnabled: true, effectiveEnabled: false, canToggle: false,
@@ -143,6 +152,7 @@ export const devLiveCopyFixtureEligibility: CopierAccountEligibility[] = [
   },
   { accountId: FOLLOWER_B, state: 'dll-locked', reason: 'Denní ztrátový limit propfirmy dosažen', at: Date.now() - 30 * 60_000 },
   { accountId: FOLLOWER_C, state: 'breached', reason: 'Účet porušil drawdown', at: Date.now() - 2 * 60 * 60_000 },
+  { accountId: FOLLOWER_D, state: 'active', at: Date.now() - 60_000 },
 ];
 
 export const devLiveCopyFixtureDailyStats = {

@@ -2587,10 +2587,34 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
    zůstávají čitelné, aby šel účet znovu zapnout. */
 td.follower-row-off { opacity: .42; }
 td.follower-cell { transition: opacity .35s ease; }
+/* Telefon: stejný přepínač, ale 44px dotyková plocha přes neviditelný okraj. */
+.follower-switch-touch::before { content: ''; position: absolute; inset: -13px -7px; }
+/* Mobilní řádek ručně vypnutého followera. */
+.compact-row-dim { transition: opacity .35s ease; }
+.compact-row-off .compact-row-dim { opacity: .42; }
+/* Důvod zámku / odmítnutí pod řádkem účtu: 0fr → 1fr jako u rozbalení skupiny. */
+.compact-switch-note { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .25s ease; }
+.compact-switch-note[data-open="true"] { grid-template-rows: 1fr; }
+.compact-switch-note > div { overflow: hidden; min-height: 0; }
+/* Spodní list na telefonu (Flatten All, násobek, úprava skupiny). */
+.compact-sheet-scrim { animation: compact-sheet-fade .18s ease-out; }
+.compact-sheet { animation: compact-sheet-rise .26s cubic-bezier(.2, .9, .3, 1); padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+html.native-shell .compact-sheet {
+  max-height: calc(100% - env(safe-area-inset-top, 0px) - 16px);
+  padding-bottom: calc(var(--native-shell-tab-bar-height) + 12px);
+}
+@keyframes compact-sheet-fade { from { opacity: 0; } }
+@keyframes compact-sheet-rise { from { transform: translateY(100%); } }
+.compact-editor-view { animation: compact-editor-in .22s ease-out; }
+.compact-editor-view[data-dir="back"] { animation-name: compact-editor-back; }
+@keyframes compact-editor-in { from { opacity: 0; transform: translateX(18px); } }
+@keyframes compact-editor-back { from { opacity: 0; transform: translateX(-18px); } }
 @media (prefers-reduced-motion: reduce) {
   .follower-switch, .follower-switch-knob { transition: none !important; }
   .follower-switch-confirmed, .follower-switch-rejected { animation: none !important; }
   .follower-switch-spinner { animation: none !important; }
+  .compact-row-dim, .compact-switch-note { transition: none !important; }
+  .compact-sheet, .compact-sheet-scrim, .compact-editor-view { animation: none !important; }
 }
 
 /* Rozbalení skupiny: 0fr → 1fr animuje výšku bez měření v JS. Dosud tu žádný
@@ -2724,7 +2748,13 @@ td.follower-cell { transition: opacity .35s ease; }
   background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 255, 255, 0.06), transparent 60%);
 }
 
-.live-day-tilt:hover .live-day-sheen { opacity: 1; }
+.live-day-tilt:hover .live-day-sheen,
+.live-day-tilt.live-day-gyro .live-day-sheen { opacity: 1; }
+.live-day-tilt.live-day-pressed .live-day-sheen { opacity: 1; }
+/* Svislý posun stránky prstem zůstává; vodorovný tah naklání kartu. Během
+   stisku se nesmí začít označovat text (na iOS by vyskočila lupa). */
+.live-day-tilt { touch-action: pan-y; }
+.live-day-tilt.live-day-pressed { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 
 .live-day-aurora {
   position: absolute;

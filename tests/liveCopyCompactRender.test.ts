@@ -1,6 +1,6 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LiveAccount, LiveOrder, LiveSnapshot } from '../services/tradecopiaLiveService';
 import { DEFAULT_COPY_GROUP_SAFETY } from '../services/liveCopyTrading';
 
@@ -229,6 +229,125 @@ describe('LIVE kompaktní karty (telefon)', () => {
     expect(markup).toContain('<table');
     expect(markup).not.toContain('data-testid="compact-group-list"');
     expect(markup).toContain('Diagnostika dat a API');
+  });
+});
+
+describe('LIVE mobilní ovládání skupiny', () => {
+  // Předchozí blok přepíná mock na desktop; tady je vždy telefon.
+  beforeEach(() => {
+    vi.doMock('../utils/useCompactViewport', () => ({ useCompactViewport: () => true }));
+    vi.resetModules();
+  });
+  const participation = (accountId: number, patch: Record<string, unknown> = {}) => ({
+    accountId, configuredEnabled: true, effectiveEnabled: true, canToggle: true, blockers: [] as string[], ...patch,
+  });
+  const adapter = { execute: async () => undefined };
+
+  it('follower má přepínač, leader korunku na jeho místě a ručně vypnutý účet je šedý „kopíruje“', async () => {
+    const { LiveCopyTradeOverview } = await import('../components/LiveCopyTradeOverview');
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot,
+      orders: [],
+      executionGroupId: 'group-main',
+      commandAdapter: adapter,
+      followerParticipation: [participation(followerId, { configuredEnabled: false, effectiveEnabled: false })],
+    }));
+    expect(markup).toContain('aria-label="Zapnout kopírování na účet Follower DEMO"');
+    expect(markup).toContain('follower-switch-touch');
+    expect(markup).toContain('data-copy-off="true"');
+    // Ručně vypnutý follower je volba, ne výpadek: šedý štítek, ne jantarový.
+    expect(markup).toContain('kopíruje 0/1');
+    expect(markup).not.toContain('zařazených');
+  });
+
+  it('zamčený přepínač zůstane klepnutelný, aby na telefonu šlo ukázat důvod', async () => {
+    const { LiveCopyTradeOverview } = await import('../components/LiveCopyTradeOverview');
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot,
+      orders: [],
+      executionGroupId: 'group-main',
+      commandAdapter: adapter,
+      followerParticipation: [participation(followerId, { canToggle: false, blockers: ['Leader má otevřenou pozici'] })],
+    }));
+    const switchTag = markup.match(/<button[^>]*role="switch"[^>]*Follower DEMO[^>]*>/)?.[0] ?? '';
+    expect(switchTag).not.toContain('aria-disabled');
+    expect(switchTag).toContain('data-locked="true"');
+    expect(switchTag).not.toMatch(/\sdisabled=""/);
+  });
+
+  it('pod jménem je DLL a DD, starý snapshot pozic se netváří jako ověřený', async () => {
+    const { LiveCopyTradeOverview } = await import('../components/LiveCopyTradeOverview');
+    const staleAt = new Date(Date.now() - 4 * 60_000).toISOString();
+    const withRisk: LiveSnapshot = {
+      ...snapshot,
+      accounts: snapshot.accounts.map((account, index) => index === 1 ? {
+        ...account, dailyLossLimit: 1_000, cushion: 1_500,
+        positionsAvailability: 'available', positionsUpdatedAt: staleAt,
+        ordersAvailability: 'available', ordersUpdatedAt: staleAt,
+      } : account),
+    };
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, { snapshot: withRisk, orders: [] }));
+    expect(markup).toContain('DLL ');
+    expect(markup).toContain('DD ');
+    expect(markup).toContain('925');
+    expect(markup).toContain('1,500');
+    expect(markup).toContain('Pozice neověřeny · před 4 min');
+  });
+
+  it('účet zavřený jen pro tento obchod nese štítek i za sedmým řádkem', async () => {
+    const { LiveCopyTradeOverview } = await import('../components/LiveCopyTradeOverview');
+    const extra = Array.from({ length: 8 }, (_, index) => liveAccount(80_000 + index, `Extra ${index}`));
+    const group = {
+      ...snapshot.groups[0],
+      followers: [
+        ...snapshot.groups[0].followers,
+        ...extra.map(account => ({ accountId: account.id, accountName: account.name, scale: 1, replicate: true, synced: true, mismatches: [] })),
+      ],
+    };
+    const lastId = extra[extra.length - 1].id;
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot: { ...snapshot, accounts: [...snapshot.accounts, ...extra], groups: [group] },
+      orders: [],
+      followerCuts: [{
+        accountId: lastId, at: Date.now(), until: Date.now() + 60_000, realizedPnlUsd: 0, cutUsd: 0,
+        source: 'manual', scope: 'trade', closed: null,
+      }],
+    }));
+    const more = markup.slice(markup.indexOf('class="live-accounts-more"'));
+    expect(more).toContain('Extra 7');
+    expect(more).toContain('ČEKÁ NA DALŠÍ OBCHOD');
+  });
+});
+
+describe('Pomocníci mobilní karty', () => {
+  it('kódy automatického vyřazení překládá do vět a radí, co s tím', async () => {
+    const { participationBlockerLabel, participationBlockerHint } = await import('../components/LiveCopyTradeOverview');
+    expect(participationBlockerLabel('Automatické vyřazení: dll-locked')).toBe('Automaticky vyřazen: denní limit ztráty (DLL), uvolní se další obchodní den');
+    expect(participationBlockerLabel('Automatické vyřazení: follower-cut:manual')).toBe('Automaticky vyřazen do dalšího obchodu');
+    expect(participationBlockerLabel('Leader má otevřenou pozici')).toBe('Leader má otevřenou pozici');
+    expect(participationBlockerHint(['Automatické vyřazení: breached'])).toContain('nezruší');
+    expect(participationBlockerHint(['Follower má čekající příkaz'])).toContain('flat');
+    expect(participationBlockerHint(['Worker není připojený'])).toBeNull();
+  });
+
+  it('výčet Flatten All bere jen pozice a working příkazy členů skupiny', async () => {
+    const { buildFlattenGroupPreview } = await import('../components/LiveCopyTradeOverview');
+    const accounts = new Map<number, LiveAccount>([
+      [leaderId, { ...liveAccount(leaderId, 'Leader DEMO'), positions: [{ accountId: leaderId, symbol: 'MNQZ6', netPosition: 2, netPrice: 1, realizedPnl: 0, unrealizedPnl: 0, updatedAt: '' }] }],
+      [followerId, { ...liveAccount(followerId, 'Follower DEMO'), positions: [{ accountId: followerId, symbol: 'MNQZ6', netPosition: -3, netPrice: 1, realizedPnl: 0, unrealizedPnl: 0, updatedAt: '' }] }],
+    ]);
+    const stop: LiveOrder = { ...workingLeaderLimit, id: 1, orderType: 'Stop', action: 'Sell', price: null, stopPrice: 23_380 };
+    const suspended: LiveOrder = { ...workingLeaderLimit, id: 2, working: false, status: 'Suspended' };
+    const foreign: LiveOrder = { ...workingLeaderLimit, id: 3, accountId: 99 };
+    const preview = buildFlattenGroupPreview(
+      { name: 'Hlavni', leaderAccountId: leaderId, followers: [{ accountId: followerId, mode: 'on-submit', multiplier: 1.5 }] },
+      accounts,
+      [stop, suspended, foreign],
+      accountId => accounts.get(accountId)?.name ?? String(accountId),
+    );
+    expect(preview.positions.map(position => [position.name, position.role, position.symbol, position.netPosition]))
+      .toEqual([['Leader DEMO', 'leader', 'MNQ', 2], ['Follower DEMO', '×1.5', 'MNQ', -3]]);
+    expect(preview.orders).toEqual([{ accountId: leaderId, name: 'Leader DEMO', label: 'Sell Stop 23\u00a0380' }]);
   });
 });
 

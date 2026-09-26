@@ -208,6 +208,44 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-26 — LIVE na telefonu: přepínač followera, Flatten All, úprava skupiny (Claude, jen UI)
+
+- Rozhodnutí uživatele z mockupů `mockups/live-mobile-controls.html` a
+  `mockups/live-mobile-decisions.html`: přepínač vlevo jako na desktopu (A),
+  Flatten All potvrzovaný spodním listem s výčtem (A), úprava skupiny jako
+  seznam se souhrnem → detail followera (B), DLL/DD vždy jako tichý řádek pod
+  jménem. Režim replikace se v mobilním editoru vůbec nenabízí (uživatel ho
+  nemění); uložená hodnota zůstává a jiná než „Při zadání“ je vidět v souhrnu.
+- Telefon nemá hover: zamčený `FollowerCopySwitch` s `onBlockedTap` zůstane
+  klepnutelný a důvod (`participationBlockerLabel` překládá kódy automatického
+  vyřazení) ukáže pod řádkem; odmítnutí workerem tamtéž místo toastu.
+- Opraveno na mobilu: pozice ze starého čtení se tvářily ověřené (chyběly
+  `positionsVerified/ordersVerified/staleLabel`), otevřený P&L bez tečky
+  „stale“, rozbalené řádky za šestým bez `tradeCut`, ručně vypnutý follower
+  v jantarovém „N/M aktivních“. Přidáno: „N× nedostupný“, skrytí jmen v ⋮,
+  rychlý násobek (klepnutí na ×N → stejný `set-multiplier`; list výslovně
+  říká, že worker při změně konfigurace kopírku odzbrojí), detail pozice na
+  klepnutí (HoverCard přepíná dotykem).
+- Rychlé přepínání více followerů po sobě selhávalo: runCommand kontroloval
+  `busyCommand` ze zastaralého uzávěru (druhé klepnutí během čekání prvního
+  nikdy nedošlo k workeru) a přes relay (~3 s) nestačila okna opakování na
+  přechodné „Stav se během ověření změnil“. Nově `busyCommandRef`, fronta
+  přepnutí a 4 pokusy s pauzou 0,7/1,4/2,1 s. Worker log 26. 9. 16:57Z
+  potvrdil přechodná odmítnutí; jádro beze změny.
+- Karta dne (LiveDayCard) jako u Spotify: najetí myší ±15° (dřív ±3°),
+  dotyk/stisk zhoupne kartu k prstu a pruží zpět, na telefonu gyroskop ±10°
+  s pomalu se přizpůsobující klidovou polohou. Gyroskop bez nativní změny:
+  Capacitor `WebViewDelegationHandler` schvaluje DeviceOrientation `.grant`;
+  `requestPermission()` se volá synchronně z klepnutí na „Dnešní P&L“.
+- Připomínka před zapnutím kopírky, když je některý follower ručně vypnutý —
+  platí i pro desktop (stejný `requestGroupPower`), jen UI krok `proceed`.
+- DLL/DD výpočet vytažen do `accountRiskValues`, sdílí ho desktop i mobil.
+  Jádro kopírky beze změny. Ověřeno: 438 souborů / 4 054 testů, typecheck,
+  cílený ESLint, produkční build a proklikání v dočasném náhledu na 375 px.
+  Pushnuto na main po „nasaď“. iOS build z worktree `claude/live-mobile-controls-20260926`
+  nainstalován čistě (uninstall + install); první build byl bez `.env.local`
+  (worktree ho nemá) a visel na splashi — opraveno symlinkem, viz paměť iOS.
+
 ### 2026-09-26 — Animace svíček v přehrávání detailu (Claude)
 
 - Varianta C z `mockups/replay-candle-animation.html`: nová svíčka během

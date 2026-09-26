@@ -18,7 +18,7 @@ import {
   ChevronDown, ChevronRight, Crown, Plus, HelpCircle, Settings2, Eye, MoreVertical,
   RefreshCw, Inbox, RotateCcw, X, Save, Trash2, Power,
   EyeOff, AlertTriangle, CheckCircle2, SlidersHorizontal, ShieldAlert, ShieldCheck, Clock3,
-  Lock, Ban, Unplug,
+  Lock, Ban, Unplug, ChevronLeft, Check,
 } from 'lucide-react';
 import type { LiveAccount, LiveGroup, LiveOrder, LivePosition, LiveSnapshot } from '../services/tradecopiaLiveService';
 import { futuresSymbolRoot } from '../services/futuresContractSpecs';
@@ -440,6 +440,10 @@ interface PendingAction {
   outcomeRejected?: boolean;
   /** UI-only kontext; audit ani runtime error se nepřepisuje. */
   accountIds?: number[];
+  /** Potvrzení jen pustí další krok v UI (např. zapnutí po připomínce). */
+  proceed?: () => void;
+  /** Flatten All skupiny — na telefonu se potvrzuje listem s výčtem. */
+  flattenGroupId?: string;
 }
 
 type ActiveFollowerCut = NonNullable<CopierControllerStatus['followerCuts']>[number];
@@ -452,10 +456,18 @@ const EMPTY_PARTICIPATION: ReadonlyMap<number, FollowerParticipation> = new Map(
  * pulz, odmítnutí = návrat a zatřesení (důvod ukáže toast). Rozhoduje vždy
  * worker — `canToggle` jen zamyká přepínač a vysvětluje proč.
  */
-const FollowerCopySwitch = ({ accountName, participation, onToggle }: {
+const FollowerCopySwitch = ({ accountName, participation, onToggle, onBlockedTap, touch = false }: {
   accountName: string;
   participation: FollowerParticipation;
   onToggle: (enabled: boolean) => Promise<boolean>;
+  /**
+   * Telefon nemá hover, takže tooltip s důvodem zámku nikdo neuvidí. Když je
+   * callback zadaný, zamčený přepínač zůstane klepnutelný a místo přepnutí
+   * nahlásí důvody; worker se nevolá.
+   */
+  onBlockedTap?: (blockers: string[]) => void;
+  /** Rozšíří dotykovou plochu na 44 px bez změny vzhledu. */
+  touch?: boolean;
 }) => {
   const confirmed = participation.configuredEnabled;
   const [intent, setIntent] = useState<boolean | null>(null);
@@ -494,10 +506,18 @@ const FollowerCopySwitch = ({ accountName, participation, onToggle }: {
       aria-busy={pending || undefined}
       aria-label={`${shown ? 'Vypnout' : 'Zapnout'} kopírování na účet ${accountName}`}
       title={title}
-      disabled={locked || pending}
+      disabled={pending || (locked && !onBlockedTap)}
+      // Na telefonu zamčený přepínač po klepnutí vysvětlí důvod, takže pro
+      // čtečku není „nedostupný“ — důvod nese title.
+      aria-disabled={(locked && !onBlockedTap) || undefined}
       data-locked={locked || undefined}
       onClick={async event => {
         event.stopPropagation();
+        if (locked) {
+          setSettle('rejected');
+          onBlockedTap?.(participation.blockers);
+          return;
+        }
         const next = !shown;
         setIntent(next);
         setPending(true);
@@ -506,7 +526,7 @@ const FollowerCopySwitch = ({ accountName, participation, onToggle }: {
         if (ok) setSettle('confirmed');
         else { setIntent(null); setSettle('rejected'); }
       }}
-      className={`follower-switch${pending ? ' follower-switch-pending' : ''}${settle ? ` follower-switch-${settle}` : ''}`}
+      className={`follower-switch${touch ? ' follower-switch-touch' : ''}${pending ? ' follower-switch-pending' : ''}${settle ? ` follower-switch-${settle}` : ''}`}
     >
       <span className="follower-switch-knob" aria-hidden="true">
         {pending ? <span className="follower-switch-spinner" /> : locked ? <Lock size={9} strokeWidth={3} /> : null}
@@ -735,7 +755,14 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const [redaction, setRedaction] = useState<RedactionSettings>(initialViewSettings.redaction);
   const [confirmRearmAfterFlatten, setConfirmRearmAfterFlatten] = useState(initialViewSettings.confirmRearmAfterFlatten);
   const [templates, setTemplates] = useState<CopyGroupTemplate[]>(loadTemplates);
-  const [busyCommand, setBusyCommand] = useState<string | null>(null);
+  const [busyCommand, setBusyCommandState] = useState<string | null>(null);
+  // Živá hodnota pro async smyčky (opakování přepnutí followera): stav
+  // `busyCommand` se v jejich uzávěru zastará a blokoval by navždy.
+  const busyCommandRef = useRef<string | null>(null);
+  const setBusyCommand = useCallback((key: string | null) => {
+    busyCommandRef.current = key;
+    setBusyCommandState(key);
+  }, []);
   const [verifyingAccountId, setVerifyingAccountId] = useState<number | null>(null);
   const [copierTransition, setCopierTransition] = useState<'connecting' | 'disconnecting' | null>(null);
   const [transitionGroupId, setTransitionGroupId] = useState<string | null>(null);
@@ -1174,19 +1201,68 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       });
       return;
     }
+    // Ručně vypnutý follower platí do ručního zapnutí, i přes noc. Před
+    // zapnutím to připomeneme, jinak se ráno snadno přehlédne, že účet nekopíruje.
+    const manuallyOff = candidate.followers.filter(follower => follower.enabled === false
+      || (candidate.id === executionGroupId && participationByAccount.get(follower.accountId)?.configuredEnabled === false));
+    if (manuallyOff.length > 0) {
+      const names = manuallyOff.map(follower => accountLabel(follower.accountId, candidate.id));
+      setPendingAction({
+        title: 'Zapnout kopírování?',
+        detail: manuallyOff.length === 1
+          ? `${names[0]} je ručně vypnutý a kopírovat se na něj nebude. Zapneš ho přepínačem v řádku účtu, až bude skupina flat.`
+          : `${manuallyOff.length} followeři jsou ručně vypnutí a kopírovat se na ně nebude: ${names.join(', ')}. Zapneš je přepínačem v řádku účtu, až bude skupina flat.`,
+        confirmLabel: 'Zapnout',
+        accountIds: manuallyOff.map(follower => follower.accountId),
+        proceed: () => { void runCopierTransition(candidate.id, true, () => armAction(candidate)); },
+      });
+      return;
+    }
     void runCopierTransition(candidate.id, true, () => armAction(candidate));
   };
 
   /**
    * Přepnutí followera. Worker bezpečně odmítne, když se během jeho dvojího
-   * čtení změnil stav brokera (typicky při rychlém přepínání více účtů po
-   * sobě) nebo když ještě běží jiný příkaz. Obojí je přechodné: worker při
-   * každém pokusu vše ověří znovu, takže opakování je bezpečné. Hlášku
+   * čtení změnil stav brokera — typicky při rychlém přepínání více účtů po
+   * sobě, kdy předchozí přepnutí právě zapisuje. Je to přechodné: worker při
+   * každém pokusu vše ověří znovu, takže opakování je bezpečné. Přes relay
+   * (telefon) trvá odpověď i několik sekund, proto se přepnutí řadí do fronty
+   * (další účet počká na doběhnutí předchozího, místo aby narazil na „probíhá
+   * jiný příkaz“) a přechodné odmítnutí se opakuje s delší pauzou. Hlášku
    * ukážeme jen při skutečném odmítnutí nebo po posledním pokusu.
    */
-  const toggleFollower = async (groupId: string, accountId: number, enabled: boolean): Promise<boolean> => {
-    const attempts = 3;
+  const followerToggleQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const toggleFollower = (
+    groupId: string,
+    accountId: number,
+    enabled: boolean,
+    /** Telefon ukazuje důvod přímo pod řádkem účtu, ne v toastu. */
+    onRejected?: (message: string) => void,
+  ): Promise<boolean> => {
+    const run = followerToggleQueue.current.then(() => toggleFollowerNow(groupId, accountId, enabled, onRejected));
+    followerToggleQueue.current = run.catch(() => undefined);
+    return run;
+  };
+  const toggleFollowerNow = async (
+    groupId: string,
+    accountId: number,
+    enabled: boolean,
+    onRejected?: (message: string) => void,
+  ): Promise<boolean> => {
+    const report = (text: string) => {
+      if (onRejected) onRejected(text);
+      else setToast({ tone: 'error', text, accountIds: [accountId] });
+    };
+    const sleep = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms));
+    const attempts = 4;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      // Jiný příkaz kopírky (Flatten, násobek…) má přednost; počkáme na něj.
+      const idleBy = Date.now() + 20_000;
+      while (busyCommandRef.current && Date.now() < idleBy) await sleep(150);
+      if (busyCommandRef.current) {
+        report('Kopírka ještě zpracovává jiný příkaz — přepnutí se neodeslalo. Zkus to za chvíli znovu.');
+        return false;
+      }
       let message: string | null = null;
       const ok = await runCommand(
         { type: 'set-follower-enabled', groupId, accountId, enabled },
@@ -1196,14 +1272,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       if (ok) return true;
       const transient = message == null || /během ověření změnil|Probíhá broker událost/.test(message);
       if (!transient || attempt === attempts) {
-        setToast({
-          tone: 'error',
-          text: message ?? 'Přepnutí se nepodařilo — zkus to prosím znovu.',
-          accountIds: [accountId],
-        });
+        report(message ?? 'Přepnutí se nepodařilo — zkus to prosím znovu.');
         return false;
       }
-      await new Promise(resolve => window.setTimeout(resolve, 400 * attempt));
+      await sleep(700 * attempt);
     }
     return false;
   };
@@ -1240,7 +1312,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       ? command.group.id
       : 'groupId' in command ? command.groupId : null;
     const targetsExecutionRuntime = commandGroupId != null && commandGroupId === executionGroupId;
-    if (busyCommand) return false;
+    if (busyCommandRef.current) return false;
     setBusyCommand(key);
     try {
       if (brokerWrite && copierKillSwitch && commandBlockedByCopierKillSwitch(command)) {
@@ -1543,14 +1615,33 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     });
   };
 
+  // Výčet pro potvrzení Flatten All na telefonu se počítá z živých dat při
+  // každém renderu, takže se list sám aktualizuje, když se mezitím něco zavře.
+  const flattenPreviewFor = (groupId: string): FlattenGroupPreview | null => {
+    const group = groups.find(candidate => candidate.id === groupId);
+    if (!group) return null;
+    return buildFlattenGroupPreview(group, accountsById, orders, accountId => redactAccountName(
+      accountsById.get(accountId)?.name ?? accountLabel(accountId, groupId), redactNames, redaction,
+    ));
+  };
+
   // Stejné akce jako v desktopové tabulce, jen bez vazby na buňky <td>.
   const compactGroupActions = (group: CopyGroupConfig) => ({
     onFlatten: () => setPendingAction({
       title: 'Flatten All?', detail: `Připraví uzavření všech otevřených pozic ve skupině ${group.name}.`,
-      confirmLabel: 'Flatten All', danger: true, command: {
+      confirmLabel: 'Flatten All', danger: true, flattenGroupId: group.id, command: {
         type: 'flatten-group', groupId: group.id, operationId: manualOperationId(),
       },
     }),
+    onMultiplier: async (accountId: number, multiplier: number): Promise<boolean> => {
+      const follower = group.followers.find(item => item.accountId === accountId);
+      const next = normalizeMultiplier(multiplier);
+      if (!follower || follower.multiplier === next) return false;
+      return runCommand(
+        { type: 'set-multiplier', groupId: group.id, accountId, multiplier: next },
+        () => updateFollower(group.id, accountId, { multiplier: next }),
+      );
+    },
     onApplyTemplate: (template: CopyGroupTemplate) => {
       const currentSafety = group.safety ?? DEFAULT_COPY_GROUP_SAFETY;
       const currentFollowers = new Map(group.followers.map(follower => [follower.accountId, follower]));
@@ -1700,6 +1791,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             </>) : null}
             <TopActionsMenu
               onTemplates={() => setTemplatesOpen(true)}
+              redactNames={compact ? redactNames : undefined}
+              onToggleRedact={compact ? () => setRedactNames(value => !value) : undefined}
               onKillSwitch={triggerKillSwitch}
               onDayLock={triggerDayLock}
               killSwitchActive={copierKillSwitch}
@@ -1745,6 +1838,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                     .map(follower => eligibilityByAccount.get(follower.accountId))}
                   eligibilityByAccount={eligibilityByAccount}
                   tradeCutsByAccount={tradeCutsByAccount}
+                  participationByAccount={selected ? participationByAccount : EMPTY_PARTICIPATION}
+                  onFollowerEnabled={selected && commandAdapter
+                    ? (accountId, enabled, onRejected) => toggleFollower(group.id, accountId, enabled, onRejected)
+                    : undefined}
                   orders={orders}
                   isLive={isLive}
                   onAccount={onAccount}
@@ -2041,6 +2138,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           }}
           busy={busyCommand != null}
           apiReady={!!commandAdapter}
+          flattenPreview={compact && pendingAction.flattenGroupId ? flattenPreviewFor(pendingAction.flattenGroupId) : null}
           onClose={() => setPendingAction(null)}
           onConfirm={() => {
             const action = pendingAction;
@@ -2048,8 +2146,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
               setPendingAction(null);
               return;
             }
+            if (action.proceed) {
+              setPendingAction(null);
+              action.proceed();
+              return;
+            }
             if (action.run) {
-              if (busyCommand) return;
+              if (busyCommandRef.current) return;
               setBusyCommand('confirmed-runtime-action');
               void action.run()
                 .then(() => {
@@ -2675,13 +2778,72 @@ const accountInMarket = (row: Row, orders: LiveOrder[]): boolean => {
 const eligibilityNeedsAttention = (eligibility: CopierAccountEligibility | undefined, live: boolean, unavailable: boolean): boolean =>
   unavailable || !live || (eligibility?.state != null && eligibility.state !== 'active');
 
+/**
+ * DLL zbývá a Rezerva DD jednoho účtu. Sdílí je desktopová tabulka i mobilní
+ * karta, aby obě měly stejnou hodnotu, čerstvost i cache identitu. Chybějící
+ * brokerové DLL samo o sobě nikdy neznamená plán bez denního limitu.
+ */
+const accountRiskValues = (a: LiveAccount | undefined, accountId: number | null, dailyPnlPending: boolean, sizeClass?: string) => {
+  const cushion = a?.cushion ?? null;
+  const cashKnown = !!a && isLiveAccountReadVerified(a, 'cash');
+  const rawDaily = liveDailyPnlDisplay(a ? { ...a, displayValues: undefined } : undefined, Date.now(), dailyPnlPending);
+  const dllRemaining = a && rawDaily.value != null ? copyTradeDailyLossRemaining(a) : null;
+  const riskKey = `${accountId}:${a?.riskDisplayConfigKey ?? "legacy"}:${tradovateDisplayTradeDate()}`;
+  const dllAt = [a?.cashUpdatedAt, rawDaily.confirmedAt, a?.unrealizedPnlUpdatedAt].filter((at): at is string => !!at);
+  const dllConfirmedAt = dllAt.length === 3 ? dllAt.sort((x,y)=>Date.parse(x)-Date.parse(y))[0] : null;
+  const dllShowsDrawdown = !!a?.riskDisplayDailyLossDisabled
+    && (a.dailyLossLimit == null || a.dailyLossLimit === 0);
+  const drawdown = <LiveRiskValue identity={`${riskKey}:dd`} label="Rezerva DD" storageScope={a?.riskDisplayStorageScope} legacy={!!a && a.cashAvailability == null}
+    enabled={!!a && a.cashAvailability !== 'denied' && !a.riskDisplayDrawdownDisabled}
+    value={dailyPnlPending || a?.riskDisplayPending ? null : cushion} confirmedAt={a?.cashUpdatedAt ?? null}
+    verified={cashKnown && a?.unrealizedPnlSource !== 'stale'} color={cushionClass} sizeClass={sizeClass} />;
+  const dll = <LiveRiskValue identity={`${riskKey}:dll`} label="DLL zbývá" storageScope={a?.riskDisplayStorageScope} legacy={!!a && a.cashAvailability == null}
+    enabled={!!a && a.cashAvailability !== 'denied' && (a.dailyLossLimit == null || a.dailyLossLimit > 0)}
+    value={dailyPnlPending || a?.riskDisplayPending || dllRemaining == null ? null : Math.max(0,dllRemaining)} confirmedAt={dllConfirmedAt}
+    verified={cashKnown && !dailyPnlPending && a?.unrealizedPnlSource !== 'stale'}
+    color={value=>dllRemainingClass(value,a?.dailyLossLimit)} sizeClass={sizeClass} />;
+  return { dll, drawdown, dllShowsDrawdown };
+};
+
 const TradeCutPill = () => (
   <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/[0.08] px-2 py-1 text-[10px] font-black leading-none text-amber-600">
     <Clock3 aria-hidden="true" size={10} strokeWidth={2.5} /> ČEKÁ NA DALŠÍ OBCHOD
   </span>
 );
 
-const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, orders, dailyPnlPending, busyCommand, verifying, onVerifyEligibility, onAccount, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, style }: {
+/** Kódy automatického vyřazení z workeru → věta pro člověka. */
+const AUTOMATIC_EXCLUSION_LABEL: Record<string, string> = {
+  'dll-locked': 'denní limit ztráty (DLL), uvolní se další obchodní den',
+  breached: 'účet porušil drawdown',
+  unverifiable: 'stav účtu nejde ověřit',
+};
+
+/**
+ * Worker vrací blocker jako „Automatické vyřazení: dll-locked“. Kód je pro
+ * log, ne pro telefon; ostatní blockery už jsou české věty a zůstávají.
+ */
+export const participationBlockerLabel = (blocker: string): string => {
+  const match = /^Automatické vyřazení: (.+)$/.exec(blocker);
+  if (!match) return blocker;
+  const code = match[1].trim();
+  if (code.startsWith('follower-cut:')) return 'Automaticky vyřazen do dalšího obchodu';
+  return `Automaticky vyřazen: ${AUTOMATIC_EXCLUSION_LABEL[code] ?? code}`;
+};
+
+/** Co s tím: u vyřazení nic nepomůže ruka, u obchodu stačí počkat na flat. */
+export const participationBlockerHint = (blockers: string[]): string | null => {
+  if (blockers.some(blocker => blocker.startsWith('Automatické vyřazení'))) {
+    return 'Ruční přepínač automatické vyřazení nezruší.';
+  }
+  if (blockers.some(blocker => /pozici|příkaz|lifecycle/.test(blocker))) {
+    return 'Přepnout půjde, až bude leader i účet flat bez čekajících příkazů.';
+  }
+  return null;
+};
+
+type CompactSwitchNote = { tone: 'lock' | 'reject'; lines: string[]; hint: string | null };
+
+const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, participation, showSwitchSlot = false, onFollowerEnabled, onMultiplierTap, orders, dailyPnlPending, busyCommand, verifying, onVerifyEligibility, onAccount, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, style }: {
   row: Row;
   /** Jen zpoždění náběhu při rozbalení seznamu. */
   style?: React.CSSProperties;
@@ -2690,6 +2852,11 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, orders, 
   live: boolean;
   eligibility?: CopierAccountEligibility;
   tradeCut?: ActiveFollowerCut;
+  participation?: FollowerParticipation;
+  /** Rezervuje místo přepínače i u leadera (tam sedí korunka), aby jména lícovala. */
+  showSwitchSlot?: boolean;
+  onFollowerEnabled?: (accountId: number, enabled: boolean, onRejected: (message: string) => void) => Promise<boolean>;
+  onMultiplierTap?: (row: Row) => void;
   orders: LiveOrder[];
   dailyPnlPending: boolean;
   busyCommand: string | null;
@@ -2714,6 +2881,28 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, orders, 
   // s pomlčkami pod sebou vypadá jako rozbitá data.
   const quiet = daily == null && a != null && liveDayReadAnswered(a, Date.now(), dailyPnlPending);
   const attention = eligibilityNeedsAttention(eligibility, live, !a && accountId != null) || tradeCut != null;
+  // Stejná pravidla čerstvosti jako desktop: staré čtení nesmí nést zelený
+  // štít ani tvářit se jako „flat“.
+  const positionsVerified = a ? isLiveAccountReadVerified(a, 'positions') : true;
+  const ordersVerified = a ? isLiveAccountReadVerified(a, 'orders') : true;
+  const readStaleLabel = a ? liveReadStaleLabel(a, 'positions') ?? liveReadStaleLabel(a, 'orders') : null;
+  const readUnverified = !positionsVerified || !ordersVerified;
+  const unrealStale = a?.unrealizedPnlSource === 'stale';
+  const risk = a ? accountRiskValues(a, accountId, dailyPnlPending, 'text-[10px]') : null;
+  // Ručně vypnutý follower: čísla zešednou, jméno a přepínač zůstanou čitelné.
+  const copyOff = participation != null && !participation.configuredEnabled;
+  const switchInSlot = participation != null && accountId != null && onFollowerEnabled != null && !row.isLeader;
+  const crownInSlot = row.isLeader && showSwitchSlot;
+
+  const [switchNote, setSwitchNote] = useState<CompactSwitchNote | null>(null);
+  const [switchNoteOpen, setSwitchNoteOpen] = useState(false);
+  useEffect(() => {
+    if (!switchNoteOpen) return;
+    const timer = window.setTimeout(() => setSwitchNoteOpen(false), 6_000);
+    return () => window.clearTimeout(timer);
+  }, [switchNoteOpen, switchNote]);
+  const showSwitchNote = (next: CompactSwitchNote) => { setSwitchNote(next); setSwitchNoteOpen(true); };
+
   const note = tradeCut
     ? <p className="text-[10px] font-semibold leading-tight text-amber-600">Ručně zavřeno · znovu se připojí po flat skupiny</p>
     : compactRejection
@@ -2729,45 +2918,136 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, orders, 
       : unavailableFollower
         ? <p className="text-[10px] font-bold leading-tight text-slate-500">Účet není v aktuálním OAuth snapshotu.</p>
         : null;
+  const flatReadWarning = variant === 'flat' && a && readUnverified
+    ? <span title="Poslední známý stav; čtení pozic nebo příkazů u brokera není čerstvě ověřené" className="text-[10px] font-semibold text-amber-600">
+        Pozice neověřeny{readStaleLabel ? ` · ${readStaleLabel}` : ''}
+      </span>
+    : null;
+
+  const multiplierBadge = onMultiplierTap && a && !row.isLeader && accountId != null
+    ? (
+      <button
+        type="button"
+        title="Změnit násobek"
+        aria-label={`Násobek ${row.scale}×, změnit`}
+        onClick={event => { event.stopPropagation(); onMultiplierTap(row); }}
+        className="compact-row-dim -my-0.5 shrink-0 rounded border border-[var(--border-subtle)] px-1 py-px text-[9.5px] font-bold tabular-nums text-[var(--text-secondary)]"
+      >×{row.scale}</button>
+    )
+    : <span title="Násobek množství" className="compact-row-dim shrink-0 rounded bg-[var(--bg-page)] px-1 text-[9.5px] font-bold tabular-nums text-[var(--text-secondary)]">×{row.scale}</span>;
 
   return (
-    <li className={`px-3 ${tradeCut ? 'bg-amber-500/[0.035] opacity-80' : ''}`} style={style}>
+    <li className={`px-3 ${tradeCut ? 'bg-amber-500/[0.035] opacity-80' : ''} ${copyOff ? 'compact-row-off' : ''}`} style={style} data-copy-off={copyOff || undefined}>
       <div
         role={a ? 'button' : undefined}
         onClick={() => a && onAccount?.(a)}
-        className="grid min-h-9 grid-cols-[minmax(0,1fr)_84px] items-center gap-2"
+        className="grid min-h-11 grid-cols-[minmax(0,1fr)_84px] items-center gap-2 py-1"
       >
-        <span className="flex min-w-0 items-center gap-2">
-          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${live ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-          <span className={`truncate text-[12px] font-semibold leading-tight tracking-tight ${live ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
-            {redactAccountName(row.name, redactNames, redaction)}
+        <span className="flex min-w-0 items-center gap-2.5">
+          {switchInSlot ? (
+            <FollowerCopySwitch
+              touch
+              accountName={redactAccountName(row.name, redactNames, redaction)}
+              participation={participation!}
+              onToggle={async enabled => {
+                const ok = await onFollowerEnabled!(accountId!, enabled, message => showSwitchNote({
+                  tone: 'reject', lines: [message], hint: null,
+                }));
+                // Starší hláška o odmítnutí po úspěchu neplatí.
+                if (ok) setSwitchNoteOpen(false);
+                return ok;
+              }}
+              onBlockedTap={blockers => showSwitchNote({
+                tone: 'lock',
+                lines: blockers.length > 0 ? blockers.map(participationBlockerLabel) : ['Stav účtu nejde ověřit'],
+                hint: participationBlockerHint(blockers),
+              })}
+            />
+          ) : crownInSlot ? (
+            <span title="Leader účet" className="flex w-8 shrink-0 justify-center text-amber-500"><Crown aria-label="Leader účet" size={13} strokeWidth={2.6} /></span>
+          ) : showSwitchSlot ? <span aria-hidden="true" className="w-8 shrink-0" /> : null}
+          <span className="min-w-0 flex-1">
+            <span className="flex min-w-0 items-center gap-2">
+              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${live ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+              <span className={`truncate text-[12px] font-semibold leading-tight tracking-tight transition-colors ${live && !copyOff ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
+                {redactAccountName(row.name, redactNames, redaction)}
+              </span>
+              {row.isLeader
+                ? crownInSlot ? null : <span title="Leader účet" className="flex shrink-0 text-amber-500"><Crown aria-label="Leader účet" size={12} strokeWidth={2.6} /></span>
+                /* Bez řádku rizika (účet mimo snapshot) zůstává násobek tady. */
+                : risk ? null : multiplierBadge}
+              {!row.synced && <span title="Nesedí s leaderem" className="shrink-0 text-amber-500">⚠</span>}
+            </span>
+            {/* DLL a DD jsou jediné údaje o vzdálenosti od limitů propky —
+                na telefonu tichý řádek pod jménem, barvy jako na desktopu.
+                Násobek jede s nimi: je to risk parametr (zůstává i u ×1, aby
+                se jeho nepřítomnost nedala splést s „nevím“) a jméno účtu
+                tak má celý první řádek. */}
+            {risk ? (
+              <span className="mt-0.5 flex items-center gap-1 whitespace-nowrap pl-3.5 text-[10px] font-semibold leading-tight text-[var(--text-muted)]">
+                {row.isLeader ? null : <>{multiplierBadge}<span className="compact-row-dim" aria-hidden="true">·</span></>}
+                <span className="compact-row-dim flex items-baseline gap-1">
+                  {risk.dllShowsDrawdown ? null : <>DLL {risk.dll}<span aria-hidden="true">·</span></>}
+                  DD {risk.drawdown}
+                </span>
+              </span>
+            ) : null}
           </span>
-          {row.isLeader
-            ? <span title="Leader účet" className="flex shrink-0 text-amber-500"><Crown aria-label="Leader účet" size={12} strokeWidth={2.6} /></span>
-            /* Násobek je risk parametr, ne dekorace — zůstává i u ×1, aby
-               se jeho nepřítomnost nedala splést s „nevím“. */
-            : <span title="Násobek množství" className="shrink-0 rounded bg-[var(--bg-page)] px-1 text-[9.5px] font-bold tabular-nums text-[var(--text-secondary)]">×{row.scale}</span>}
-          {!row.synced && <span title="Nesedí s leaderem" className="shrink-0 text-amber-500">⚠</span>}
         </span>
-        <span className={`truncate text-right text-[12px] font-bold tabular-nums ${variant === 'market'
+        <span className={`compact-row-dim truncate text-right text-[12px] font-bold tabular-nums ${variant === 'market'
           ? (a ? pnlClass(a.unrealizedPnl) : 'text-[var(--text-secondary)]')
           : (daily != null ? pnlClass(daily) : 'text-[var(--text-secondary)]')}`}>
           {variant === 'market'
-            ? (a ? money.format(a.unrealizedPnl) : '—')
+            ? (a ? (
+              <span
+                className="inline-flex items-center justify-end gap-1"
+                title={unrealStale ? `Poslední známý údaj${a.unrealizedPnlUpdatedAt ? ' · ' + new Date(a.unrealizedPnlUpdatedAt).toLocaleTimeString('cs-CZ') : ''}. Čeká na ověření.` : undefined}
+              >
+                {money.format(a.unrealizedPnl)}
+                {unrealStale ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
+              </span>
+            ) : '—')
             : daily != null ? money.format(daily)
               : quiet ? <span title="Broker dnes u tohoto účtu nehlásí uzavřený obchod">{money.format(0)}</span>
                 : '—'}
         </span>
       </div>
+      {switchInSlot ? (
+        <div className="compact-switch-note" data-open={switchNoteOpen} aria-live="polite">
+          <div>
+            {switchNote ? (
+              <p className={`mb-2 ml-[42px] flex items-start gap-1.5 text-[10.5px] font-bold leading-snug ${switchNote.tone === 'reject' ? 'text-rose-500' : 'text-amber-600'}`}>
+                {switchNote.tone === 'reject'
+                  ? <X aria-hidden="true" size={12} strokeWidth={3} className="mt-px shrink-0" />
+                  : <Lock aria-hidden="true" size={11} strokeWidth={2.8} className="mt-px shrink-0" />}
+                <span>
+                  {switchNote.tone === 'reject' ? 'Přepnutí se nepovedlo' : 'Teď nejde přepnout'}
+                  <span className="block font-semibold text-[var(--text-secondary)]">
+                    {switchNote.lines.join(' · ')}{switchNote.hint ? `. ${switchNote.hint}` : ''}
+                  </span>
+                </span>
+              </p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       {/* Druhý řádek existuje jen tam, kde je co říct. Pilulky pozice na něm
           jedou s tlačítkem Flatten účet, takže účet v trhu nestojí ani
           o pixel víc — a jméno má na prvním řádku plnou šířku. Ve sloupci
           o 86 px mu zbývalo 70 px a zkracovalo se na „TDF0000…“. */}
-      {variant === 'market' || attention || note || unavailableFollower ? (
-        <div className="flex flex-wrap items-center gap-2 pb-2">
+      {variant === 'market' || attention || note || unavailableFollower || flatReadWarning ? (
+        <div className={`compact-row-dim flex flex-wrap items-center gap-2 pb-2 ${showSwitchSlot ? 'pl-[42px]' : ''}`}>
           {variant === 'market' && a ? (
-            <CopyTradePositionsCell accountId={accountId} positions={a.positions} orders={orders} />
+            <CopyTradePositionsCell
+              accountId={accountId}
+              positions={a.positions}
+              orders={orders}
+              positionsVerified={positionsVerified}
+              ordersVerified={ordersVerified}
+              staleLabel={readStaleLabel}
+            />
           ) : null}
+          {flatReadWarning}
           {attention ? (
             tradeCut ? <TradeCutPill /> : <AccountEligibilityPill
               eligibility={eligibility}
@@ -2819,14 +3099,15 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, orders, 
  */
 const COMPACT_FLAT_PREVIEW = 6;
 
-const CompactAccountSectionHead = ({ columns }: { columns: 'market' | 'flat' }) => (
+const CompactAccountSectionHead = ({ columns, indent = false }: { columns: 'market' | 'flat'; indent?: boolean }) => (
   <div className="grid grid-cols-[minmax(0,1fr)_84px] gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-page)]/60 px-3 py-1 text-[9px] font-black uppercase tracking-[0.1em] text-[var(--text-secondary)]">
-    <span>Účet</span>
+    {/* S přepínači lícuje popisek se jménem, ne s přepínačem. */}
+    <span className={indent ? 'pl-[42px]' : undefined}>Účet</span>
     <span className="text-right">{columns === 'market' ? 'Otevřený' : 'Dnes'}</span>
   </div>
 );
 
-const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, dailyPnlPending, eligibility, eligibilityByAccount, tradeCutsByAccount, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onDelete, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel, islandTone = null }: {
+const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, dailyPnlPending, eligibility, eligibilityByAccount, tradeCutsByAccount, participationByAccount = EMPTY_PARTICIPATION, onFollowerEnabled, onMultiplier, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onDelete, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel, islandTone = null }: {
   group: CopyGroupConfig;
   /** Fáze ze stavového ostrova. Karta je jeden box, takže tu rám obepne
    *  celou skupinu včetně účtů — na rozdíl od tabulkového rozložení. */
@@ -2842,6 +3123,11 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   eligibility: (CopierAccountEligibility | undefined)[];
   eligibilityByAccount: Map<number, CopierAccountEligibility>;
   tradeCutsByAccount: ReadonlyMap<number, ActiveFollowerCut>;
+  /** Ruční účast followerů; jen u execution skupiny, jinak prázdná. */
+  participationByAccount?: ReadonlyMap<number, FollowerParticipation>;
+  onFollowerEnabled?: (accountId: number, enabled: boolean, onRejected: (message: string) => void) => Promise<boolean>;
+  /** Přímá změna násobku přes worker; vrací, zda ji runtime potvrdil. */
+  onMultiplier?: (accountId: number, multiplier: number) => Promise<boolean>;
   orders: LiveOrder[];
   isLive: (a?: LiveAccount) => boolean;
   onAccount?: (a: LiveAccount) => void;
@@ -2876,16 +3162,24 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
     || (row.accountId != null && tradeCutsByAccount.has(row.accountId))).length;
   // Ručně vypnutí followeři (přepínač v řádku) nejsou problém, jen volba —
   // počítají se zvlášť a ukazují neutrálně, ne jantarově.
-  const manuallyOffIds = new Set(group.followers.filter(follower => follower.enabled === false).map(follower => follower.accountId));
+  // Worker hlásí ruční účast dřív, než se změna propíše do uložené skupiny.
+  const manuallyOffIds = new Set(group.followers
+    .filter(follower => follower.enabled === false || participationByAccount.get(follower.accountId)?.configuredEnabled === false)
+    .map(follower => follower.accountId));
   const manuallyOffCount = enabledFollowerRows.filter((row, index) =>
     row.accountId != null && manuallyOffIds.has(row.accountId)
     && !(!row.account
       || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
       || tradeCutsByAccount.has(row.accountId))).length;
   const activeFollowerCount = Math.max(0, enabledFollowerRows.length - inactiveFollowerCount - manuallyOffCount);
+  const unavailableFollowerCount = enabledFollowerRows.filter((row, index) =>
+    !row.account && (eligibility[index]?.state ?? 'active') === 'active').length;
   const dllCount = eligibility.filter(entry => entry?.state === 'dll-locked').length;
   const breachedCount = eligibility.filter(entry => entry?.state === 'breached').length;
   const unavailableLeader = rows.some(row => row.isLeader && row.accountId != null && !row.account);
+  const [multiplierRow, setMultiplierRow] = useState<Row | null>(null);
+  const showSwitchSlot = participationByAccount.size > 0;
+  const unrealStale = rows.some(row => row.account?.unrealizedPnlSource === 'stale');
   const accountIds = new Set(rows.flatMap(row => row.accountId != null ? [row.accountId] : []));
   const groupOrders = orders.filter(order => order.accountId != null && accountIds.has(order.accountId));
   const workingCount = groupOrders.filter(order => order.working).length;
@@ -2902,6 +3196,12 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
     },
     { market: [], flat: [] },
   );
+  const rowParticipation = (row: Row) => ({
+    participation: row.accountId != null && !row.isLeader ? participationByAccount.get(row.accountId) : undefined,
+    showSwitchSlot,
+    onFollowerEnabled,
+    onMultiplierTap: onMultiplier ? setMultiplierRow : undefined,
+  });
 
   return (
     <article
@@ -2938,18 +3238,34 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
 
       {/* Varovné štítky mají vlastní řádek, ale jen když nějaké jsou; v klidu
           zůstane hlavička jednořádková. */}
-      {activeFollowerCount < enabledFollowerRows.length || dllCount > 0 || breachedCount > 0 || unavailableLeader || observingOnly ? (
+      {inactiveFollowerCount > 0 || manuallyOffCount > 0 || dllCount > 0 || breachedCount > 0 || unavailableFollowerCount > 0 || unavailableLeader || observingOnly ? (
         <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2.5">
-          {activeFollowerCount < enabledFollowerRows.length ? (
+          {/* Stejné štítky jako desktop: jantarově jen automatické vyřazení,
+              ručně vypnutý follower je volba, ne problém — ten je šedý. */}
+          {inactiveFollowerCount > 0 ? (
             <span
               title="Způsobilých followerů z těch, co mají kopírování zapnuté"
               className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[10px] font-black text-amber-600"
             >
-              {activeFollowerCount}/{enabledFollowerRows.length} aktivních
+              {activeFollowerCount}/{enabledFollowerRows.length} zařazených
+            </span>
+          ) : manuallyOffCount > 0 ? (
+            <span
+              title={`${manuallyOffCount === 1 ? '1 follower je' : `${manuallyOffCount} followeři jsou`} ručně vypnutí přepínačem v řádku účtu`}
+              className="rounded-full bg-slate-500/15 px-2 py-0.5 text-[10px] font-black text-[var(--text-secondary)]"
+            >
+              kopíruje {activeFollowerCount}/{enabledFollowerRows.length}
+            </span>
+          ) : null}
+          {/* Při souběhu obou druhů vyřazení zůstane vidět, kolik je ručních. */}
+          {inactiveFollowerCount > 0 && manuallyOffCount > 0 ? (
+            <span title="Ručně vypnuté přepínačem v řádku účtu" className="rounded-full bg-slate-500/15 px-2 py-0.5 text-[10px] font-black text-[var(--text-secondary)]">
+              {manuallyOffCount}× vypnutý
             </span>
           ) : null}
           {dllCount > 0 ? <span className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[10px] font-black text-amber-600">{dllCount}× DLL</span> : null}
           {breachedCount > 0 ? <span className="rounded-full bg-rose-500/12 px-2 py-0.5 text-[10px] font-black text-rose-600">{breachedCount}× BREACHED</span> : null}
+          {unavailableFollowerCount > 0 ? <span className="rounded-full bg-slate-500/15 px-2 py-0.5 text-[10px] font-black text-slate-500">{unavailableFollowerCount}× nedostupný</span> : null}
           {unavailableLeader ? <span className="rounded-full bg-rose-500/12 px-2 py-0.5 text-[10px] font-black text-rose-600">leader nedostupný</span> : null}
           {observingOnly ? (
             <span title="Shadow režim pouze sleduje a nic neodesílá." className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-black uppercase text-amber-600">
@@ -2975,7 +3291,15 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
           value={daily == null ? '—' : moneyWhole.format(daily)}
           className={daily == null ? 'text-[var(--text-secondary)]' : pnlClass(daily)}
         />
-        <CompactStat label="Otevřený" value={moneyWhole.format(unreal)} className={pnlClass(unreal)} />
+        <CompactStat
+          label="Otevřený"
+          value={unrealStale
+            ? <span className="inline-flex items-center gap-1" title="Některý účet čeká na nový snapshot; součet obsahuje poslední známé údaje.">
+                {moneyWhole.format(unreal)}<span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Čeká na snapshot" />
+              </span>
+            : moneyWhole.format(unreal)}
+          className={pnlClass(unreal)}
+        />
       </div>
 
       {disarmPanel}
@@ -2988,7 +3312,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
       {([['market', accountRows.market], ['flat', accountRows.flat]] as const).map(([variant, sectionRows]) => (
         sectionRows.length === 0 ? null : (
           <section key={variant}>
-            <CompactAccountSectionHead columns={variant} />
+            <CompactAccountSectionHead columns={variant} indent={showSwitchSlot} />
             <ul className="divide-y divide-[var(--border-subtle)]">
               {(variant === 'flat' ? sectionRows.slice(0, COMPACT_FLAT_PREVIEW) : sectionRows).map(({ row, index }) => (
                 <CompactAccountRow
@@ -2998,6 +3322,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
                   live={isLive(row.account)}
                   eligibility={row.accountId != null ? eligibilityByAccount.get(row.accountId) : undefined}
                   tradeCut={row.accountId != null ? tradeCutsByAccount.get(row.accountId) : undefined}
+                  {...rowParticipation(row)}
                   orders={groupOrders}
                   dailyPnlPending={dailyPnlPending}
                   busyCommand={busyCommand}
@@ -3029,6 +3354,10 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
                         variant={variant}
                         live={isLive(row.account)}
                         eligibility={row.accountId != null ? eligibilityByAccount.get(row.accountId) : undefined}
+                        // Bez tohohle by účet zavřený jen pro tento obchod za
+                        // šestým řádkem ztratil štítek „čeká na další obchod“.
+                        tradeCut={row.accountId != null ? tradeCutsByAccount.get(row.accountId) : undefined}
+                        {...rowParticipation(row)}
                         orders={groupOrders}
                         dailyPnlPending={dailyPnlPending}
                         busyCommand={busyCommand}
@@ -3113,7 +3442,105 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
         </button>
         <GroupActionMenu active={armed} onToggleEnabled={onToggleEnabled} onEdit={onEdit} onDelete={onDelete} templates={templates} tightenOnly={tightenOnly} onApplyTemplate={onApplyTemplate} />
       </footer>
+      {multiplierRow && onMultiplier && multiplierRow.accountId != null ? (
+        <CompactMultiplierSheet
+          accountId={multiplierRow.accountId}
+          accountName={redactAccountName(multiplierRow.name, redactNames, redaction)}
+          value={multiplierRow.scale}
+          tightenOnly={tightenOnly}
+          armed={armed}
+          busy={busyCommand != null}
+          onClose={() => setMultiplierRow(null)}
+          onCommit={onMultiplier}
+        />
+      ) : null}
     </article>
+  );
+};
+
+/**
+ * Spodní list pro telefon. Portál mimo kartu, aby ho neořízl `overflow-hidden`
+ * karty; v iOS appce si dole nechá místo pod nativní lištou (viz index.css).
+ */
+const CompactSheet = ({ label, busy = false, onClose, children }: {
+  label: string;
+  busy?: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+}) => {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [busy, onClose]);
+  return createPortal(
+    <div className="fixed inset-0 z-[160]" role="dialog" aria-modal="true" aria-label={label}>
+      <button type="button" aria-label="Zavřít" className="compact-sheet-scrim absolute inset-0 cursor-default bg-slate-950/50" onClick={() => { if (!busy) onClose(); }} />
+      <section className="compact-sheet absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-2xl border-t border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 pt-2 shadow-2xl">
+        <div aria-hidden="true" className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-[var(--border-subtle)]" />
+        {children}
+      </section>
+    </div>,
+    document.body,
+  );
+};
+
+/**
+ * Rychlá změna násobku z telefonu — stejný příkaz `set-multiplier` jako
+ * políčko v desktopové tabulce. Tlačítko s „2× → 1.5×“ je samo potvrzením.
+ */
+const CompactMultiplierSheet = ({ accountId, accountName, value, tightenOnly, armed, busy, onClose, onCommit }: {
+  accountId: number;
+  accountName: string;
+  value: number;
+  tightenOnly: boolean;
+  armed: boolean;
+  busy: boolean;
+  onClose: () => void;
+  onCommit: (accountId: number, multiplier: number) => Promise<boolean>;
+}) => {
+  const [draft, setDraft] = useState(value);
+  const [submitting, setSubmitting] = useState(false);
+  const next = normalizeMultiplier(draft);
+  const changed = next !== value;
+  return (
+    <CompactSheet label={`Násobek účtu ${accountName}`} busy={submitting} onClose={onClose}>
+      <h4 className="text-[15px] font-black text-[var(--text-primary)]">Násobek</h4>
+      <p className="mt-0.5 truncate text-[11px] text-[var(--text-secondary)]">{accountName}</p>
+      <p className="mt-3 text-[11.5px] leading-relaxed text-[var(--text-secondary)]">
+        Kolik kontraktů dostane tento účet na jeden kontrakt leadera.{tightenOnly ? ' Dnes jde násobek jen snížit.' : ''}
+      </p>
+      <div className="mt-3">
+        <NumberStepper
+          size="lg" ariaLabel={`Násobek ${accountName}`}
+          value={draft} step={0.25} min={0.25} max={tightenOnly ? value : 100}
+          onChange={nextValue => setDraft(nextValue ?? 0.25)}
+        />
+      </div>
+      {/* Worker každou změnu konfigurace provádí až po odzbrojení — i tuhle. */}
+      {armed ? (
+        <p className="mt-3 flex gap-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2.5 text-[11px] font-bold leading-relaxed text-amber-600">
+          <AlertTriangle aria-hidden="true" size={14} className="mt-px shrink-0" />
+          Změna násobku kopírku vypne. Znovu ji zapneš přepínačem skupiny.
+        </p>
+      ) : null}
+      <button
+        type="button"
+        disabled={!changed || busy || submitting}
+        onClick={async () => {
+          setSubmitting(true);
+          const ok = await onCommit(accountId, next);
+          setSubmitting(false);
+          if (ok) onClose();
+        }}
+        className="mt-4 h-12 w-full rounded-xl bg-indigo-600 text-sm font-black text-white disabled:opacity-40"
+      >
+        {submitting ? 'Čekám na potvrzení…' : changed ? `Změnit ${value}× → ${next}×` : 'Nejdřív změň násobek'}
+      </button>
+      <button type="button" disabled={submitting} onClick={onClose} className="mt-2 h-11 w-full rounded-xl border border-[var(--border-subtle)] text-[13px] font-bold text-[var(--text-secondary)]">
+        Zrušit
+      </button>
+    </CompactSheet>
   );
 };
 
@@ -3158,8 +3585,11 @@ export const GroupActionMenu = ({ active, onToggleEnabled, onEdit, onDelete, tem
   </div>;
 };
 
-const TopActionsMenu = ({ onTemplates, onKillSwitch, onDayLock, killSwitchActive, dayLockActive, runtimeReady }: {
+const TopActionsMenu = ({ onTemplates, onKillSwitch, onDayLock, killSwitchActive, dayLockActive, runtimeReady, redactNames, onToggleRedact }: {
   onTemplates: () => void;
+  /** Telefon: skrytí jmen účtů (na desktopu je to ikona oka v hlavičce). */
+  redactNames?: boolean;
+  onToggleRedact?: () => void;
   onKillSwitch?: () => Promise<void> | void;
   onDayLock?: () => Promise<void> | void;
   killSwitchActive: boolean;
@@ -3182,6 +3612,15 @@ const TopActionsMenu = ({ onTemplates, onKillSwitch, onDayLock, killSwitchActive
       <button aria-label="Close more actions" className="fixed inset-0 z-[139] cursor-default" onClick={() => setOpen(false)} />
       <div className="fixed z-[140] w-48 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] py-1 shadow-xl" style={position}>
         <button onClick={() => { setOpen(false); onTemplates(); }} className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-xs font-bold text-[var(--text-primary)] hover:bg-[var(--bg-page)]"><Save size={13} />Group Templates</button>
+        {onToggleRedact ? (
+          <button
+            aria-pressed={!!redactNames}
+            onClick={() => { setOpen(false); onToggleRedact(); }}
+            className={`flex w-full items-center gap-2 px-3 py-2.5 text-left text-xs font-bold hover:bg-[var(--bg-page)] ${redactNames ? 'text-indigo-500' : 'text-[var(--text-primary)]'}`}
+          >
+            {redactNames ? <Eye size={13} /> : <EyeOff size={13} />}{redactNames ? 'Zobrazit jména účtů' : 'Skrýt jména účtů'}
+          </button>
+        ) : null}
         <div className="my-1 border-t border-[var(--border-subtle)]" />
         <button
           disabled={!runtimeReady || !onDayLock || killSwitchActive || dayLockActive}
@@ -3260,18 +3699,39 @@ const HoverCard = ({ label, children, card }: {
     });
   };
   const close = () => setPlacement(null);
+  // Na dotyku iOS při jednom klepnutí pošle „najetí“ i hned „odjetí“, takže by
+  // se bublina otevřela a vzápětí zavřela. Dotyk proto přepíná klepnutím.
+  const touchRef = useRef(false);
 
   useEffect(() => {
     if (!placement) return;
     // Po odscrollování by bublina zůstala viset u prázdného místa.
     window.addEventListener('scroll', close, true);
-    return () => window.removeEventListener('scroll', close, true);
+    // Klepnutí jinam bublinu zavře (dotyk nemá „odjetí“ myši).
+    const onOutside = (event: PointerEvent) => {
+      if (!anchorRef.current?.contains(event.target as Node)) close();
+    };
+    document.addEventListener('pointerdown', onOutside, true);
+    return () => {
+      window.removeEventListener('scroll', close, true);
+      document.removeEventListener('pointerdown', onOutside, true);
+    };
   }, [placement]);
 
   return (
     <span
-      ref={anchorRef} tabIndex={0} aria-label={label}
-      onPointerEnter={open} onPointerLeave={close} onFocus={open} onBlur={close}
+      ref={anchorRef} tabIndex={0} aria-label={label} aria-expanded={placement != null}
+      onPointerDown={event => { touchRef.current = event.pointerType !== 'mouse'; }}
+      onPointerEnter={event => { if (event.pointerType === 'mouse') open(); }}
+      onPointerLeave={event => { if (event.pointerType === 'mouse') close(); }}
+      onFocus={() => { if (!touchRef.current) open(); }}
+      onBlur={close}
+      onClick={event => {
+        if (!touchRef.current) return;
+        // Řádek účtu po klepnutí otevírá detail účtu; tady jde jen o bublinu.
+        event.stopPropagation();
+        if (placement) close(); else open();
+      }}
       className="inline-flex rounded-md outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
     >
       {children}
@@ -4097,15 +4557,6 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
   const copyOff = participation != null && !participation.configuredEnabled;
   const rowFlat = live && a != null && a.positions.every(position => position.netPosition === 0);
   const rowRejection = visibleRejectedExecution(accountId, eligibility, rowFlat, dismissedRejections);
-  const cushion = a?.cushion ?? null;
-  const cashKnown = !!a && isLiveAccountReadVerified(a, 'cash');
-  const rawDaily = liveDailyPnlDisplay(a ? { ...a, displayValues: undefined } : undefined, Date.now(), dailyPnlPending);
-  const dllRemaining = a && rawDaily.value != null ? copyTradeDailyLossRemaining(a) : null;
-  const riskKey = `${accountId}:${a?.riskDisplayConfigKey ?? "legacy"}:${tradovateDisplayTradeDate()}`;
-  const dllAt = [a?.cashUpdatedAt, rawDaily.confirmedAt, a?.unrealizedPnlUpdatedAt].filter((at): at is string => !!at);
-  const dllConfirmedAt = dllAt.length === 3 ? dllAt.sort((x,y)=>Date.parse(x)-Date.parse(y))[0] : null;
-  // Both columns share the same value, freshness and cache identity. A missing
-  // broker DLL alone must never be interpreted as a plan without a daily limit.
   const eligibilityState = eligibility?.state ?? 'active';
   const accountUnavailable = !a && accountId != null;
   // Odchylka = cokoli, co není „živý a způsobilý účet“. Jen ta se vykreslí.
@@ -4127,12 +4578,9 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
         detail: 'Účet je v aktuálním OAuth snapshotu a je způsobilý ke kopírování. Hodnoty v řádku pocházejí z potvrzeného broker snapshotu.' }
     : { dotClass: 'bg-rose-500', accentClass: 'text-rose-500', label: 'Odpojeno',
         detail: 'Z účtu nepřicházejí živá data. Zobrazené hodnoty jsou poslední známé, ne aktuální.' };
-  const showDrawdownInDll = !!a?.riskDisplayDailyLossDisabled
-    && (a.dailyLossLimit == null || a.dailyLossLimit === 0);
-  const drawdownValue = () => <LiveRiskValue identity={`${riskKey}:dd`} label="Rezerva DD" storageScope={a?.riskDisplayStorageScope} legacy={!!a && a.cashAvailability == null}
-    enabled={!!a && a.cashAvailability !== 'denied' && !a.riskDisplayDrawdownDisabled}
-    value={dailyPnlPending || a?.riskDisplayPending ? null : cushion} confirmedAt={a?.cashUpdatedAt ?? null}
-    verified={cashKnown && a?.unrealizedPnlSource !== 'stale'} color={cushionClass} />;
+  const risk = accountRiskValues(a, accountId, dailyPnlPending);
+  const showDrawdownInDll = risk.dllShowsDrawdown;
+  const drawdownValue = () => risk.drawdown;
 
   const cell = (key: AccountColumnKey): React.ReactNode => {
     switch (key) {
@@ -4217,11 +4665,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
           title="Účet nemá denní limit ztráty. Zobrazuje se zbývající rezerva drawdownu (DD).">
           {drawdownValue()}
         </span>;
-        return <LiveRiskValue identity={`${riskKey}:dll`} label="DLL zbývá" storageScope={a?.riskDisplayStorageScope} legacy={!!a && a.cashAvailability == null}
-          enabled={!!a && a.cashAvailability !== 'denied' && (a.dailyLossLimit == null || a.dailyLossLimit > 0)}
-          value={dailyPnlPending || a?.riskDisplayPending || dllRemaining == null ? null : Math.max(0,dllRemaining)} confirmedAt={dllConfirmedAt}
-          verified={cashKnown && !dailyPnlPending && a?.unrealizedPnlSource !== 'stale'}
-          color={value=>dllRemainingClass(value,a?.dailyLossLimit)} />;
+        return risk.dll;
       case 'unreal':
         return a ? <span
           className={`inline-flex items-center justify-end gap-1.5 text-xs tabular-nums ${pnlClass(a.unrealizedPnl)}`}
@@ -4450,7 +4894,9 @@ const REPLICATION_MODES: Array<{ value: ReplicationMode; label: string }> = [
  * `nullable` znamená „bez limitu“: krok pod minimum se vrátí na prázdno (∞),
  * takže se limit ruší stejným ovládáním, jakým se nastavuje.
  */
-const NumberStepper = ({ value, onChange, step, min, max, nullable = false, disabled = false, ariaLabel, title, suffix }: {
+const NumberStepper = ({ value, onChange, step, min, max, nullable = false, disabled = false, ariaLabel, title, suffix, size = 'sm' }: {
+  /** `lg` = dotyková velikost pro telefon (44 px, přes celou šířku). */
+  size?: 'sm' | 'lg';
   value: number | null;
   onChange: (next: number | null) => void;
   step: number;
@@ -4475,12 +4921,12 @@ const NumberStepper = ({ value, onChange, step, min, max, nullable = false, disa
   return (
     <span
       title={title}
-      className={`inline-flex h-7 w-[74px] items-center overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-page)] ${disabled ? 'opacity-35' : ''}`}
+      className={`inline-flex items-center overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-page)] ${size === 'lg' ? 'h-11 w-full rounded-xl' : 'h-7 w-[74px] rounded-lg'} ${disabled ? 'opacity-35' : ''}`}
     >
       <button
         type="button" disabled={disabled || (value == null && nullable)} onClick={() => bump(-step)}
         aria-label={`Snížit ${ariaLabel}`}
-        className="h-full w-[19px] shrink-0 text-xs font-black leading-none text-[var(--text-muted)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] disabled:pointer-events-none disabled:opacity-40"
+        className={`h-full shrink-0 font-black leading-none text-[var(--text-muted)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] disabled:pointer-events-none disabled:opacity-40 ${size === 'lg' ? 'w-12 text-lg' : 'w-[19px] text-xs'}`}
       >−</button>
       <span className="flex min-w-0 flex-1 items-center justify-center">
         <input
@@ -4488,18 +4934,24 @@ const NumberStepper = ({ value, onChange, step, min, max, nullable = false, disa
           min={min} max={max} step={step} placeholder={nullable ? '∞' : undefined}
           value={value ?? ''}
           onChange={event => commit(event.target.value === '' ? null : Number(event.target.value))}
-          className="w-full min-w-0 bg-transparent text-center text-[11px] font-bold tabular-nums text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          className={`w-full min-w-0 bg-transparent text-center font-bold tabular-nums ${size === 'lg' ? 'text-[15px]' : 'text-[11px]'} text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
         />
-        {suffix && value != null ? <span className="pr-0.5 text-[10px] font-bold text-[var(--text-muted)]">{suffix}</span> : null}
+        {suffix && value != null ? <span className={`pr-0.5 font-bold text-[var(--text-muted)] ${size === 'lg' ? 'text-[13px]' : 'text-[10px]'}`}>{suffix}</span> : null}
       </span>
       <button
         type="button" disabled={disabled || atCeiling} onClick={() => bump(step)}
         aria-label={`Zvýšit ${ariaLabel}`}
-        className="h-full w-[19px] shrink-0 text-xs font-black leading-none text-[var(--text-muted)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] disabled:pointer-events-none disabled:opacity-40"
+        className={`h-full shrink-0 font-black leading-none text-[var(--text-muted)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] disabled:pointer-events-none disabled:opacity-40 ${size === 'lg' ? 'w-12 text-lg' : 'w-[19px] text-xs'}`}
       >+</button>
     </span>
   );
 };
+
+type CompactEditorView =
+  | { kind: 'main' }
+  | { kind: 'leader' }
+  | { kind: 'add' }
+  | { kind: 'follower'; accountId: number };
 
 export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, accountLabel, saving, libraryState, libraryError, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
   group: CopyGroupConfig;
@@ -4523,6 +4975,9 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
   const [errors, setErrors] = useState<string[]>([]);
   const [replacementNotice, setReplacementNotice] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const compact = useCompactViewport();
+  const [mobileView, setMobileView] = useState<CompactEditorView>({ kind: 'main' });
+  const [mobileViewDir, setMobileViewDir] = useState<'forward' | 'back'>('forward');
   const baselineFollowers = useMemo(
     () => new Map(group.followers.map(follower => [follower.accountId, follower])),
     [group.followers],
@@ -4536,11 +4991,15 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || saving) return;
       if (paletteOpen) return setPaletteOpen(false);
+      if (mobileView.kind !== 'main') {
+        setMobileViewDir('back');
+        return setMobileView({ kind: 'main' });
+      }
       onClose();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose, paletteOpen, saving]);
+  }, [onClose, paletteOpen, saving, mobileView.kind]);
 
   /**
    * Followeři, které z tabulky vytlačilo povýšení na leadera. Prohazování rolí
@@ -4625,6 +5084,375 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
   }));
   const enabledSafetyCount = SAFETY_OPTIONS.filter(([key]) => key === 'disableReplicationOnBreach' || safety[key]).length;
   const sectionLabel = 'text-[9.5px] font-black uppercase tracking-[.1em] text-[var(--text-muted)]';
+
+  // Bloky sdílené desktopovým dialogem i mobilním listem — stejná logika,
+  // jen jiné rozložení kolem.
+  const unavailableFollowersBlock = (
+    <>
+      {unavailableFollowers.length > 0 ? (
+        <div className="mb-2.5 rounded-lg border border-amber-500/35 bg-amber-500/[0.07] p-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex gap-2.5">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" />
+              <div>
+                <b className="block text-xs text-amber-700">Nedostupné účty v uložené skupině</b>
+                <span className="mt-0.5 block text-[11px] text-amber-700/80">Vyber přesnou náhradu z OAuth snapshotu, nebo starý účet odeber. Nic se nepáruje automaticky.</span>
+              </div>
+            </div>
+            <button type="button" disabled={saving} onClick={() => onRemoveUnavailableFollowers(draft, unavailableFollowers.map(follower => follower.accountId))} className="h-9 rounded-md bg-amber-600 px-3 text-xs font-black text-white hover:bg-amber-500 disabled:opacity-50">Odebrat všechny nedostupné</button>
+          </div>
+          <div className="mt-3 space-y-2">
+            {unavailableFollowers.map(follower => {
+              const replacementCandidates = accounts.filter(account => account.id !== draft.leaderAccountId && !draft.followers.some(item => item.accountId === account.id));
+              return (
+                <div key={follower.accountId} className="grid gap-2 rounded-md border border-amber-500/20 bg-[var(--bg-card)] p-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(190px,1fr)_auto] sm:items-center">
+                  <span>
+                    <b className="block text-xs text-[var(--text-primary)]">{accountLabel(follower.accountId, 'follower')}</b>
+                    <span className="block text-[10px] text-[var(--text-secondary)]">{REPLICATION_MODES.find(mode => mode.value === follower.mode)?.label ?? follower.mode} · násobek {follower.multiplier}</span>
+                  </span>
+                  <select
+                    aria-label={`Nahradit nedostupný účet ${follower.accountId}`} defaultValue=""
+                    disabled={tightenOnly && baselineHasFollowerCut}
+                    title={tightenOnly && baselineHasFollowerCut ? 'dnes jen zpřísnit' : undefined}
+                    onChange={event => {
+                      const replacementId = Number(event.target.value);
+                      if (!Number.isSafeInteger(replacementId)) return;
+                      setDraft(current => replaceCopyGroupFollowerAccount(current, follower.accountId, replacementId));
+                      if (follower.multiplier !== 1 || follower.maxContracts != null) setReplacementNotice(`Náhradní účet ${accountLabel(replacementId, 'follower')} dostal bezpečný násobek 1× bez Max limitu. Původní nastavení účtu ${accountLabel(follower.accountId, 'follower')} se záměrně nepřeneslo; případnou změnu nastav ručně a zkontroluj v přehledu před uložením.`);
+                    }}
+                    className="h-9 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <option value="">Vyber náhradu…</option>
+                    {replacementCandidates.map(account => <option key={account.id} value={account.id}>{account.name} · {account.firm}</option>)}
+                  </select>
+                  <button type="button" onClick={() => setDraft(current => ({ ...current, followers: current.followers.filter(item => item.accountId !== follower.accountId) }))} className="h-9 rounded-md border border-rose-500/25 px-3 text-xs font-bold text-rose-500 hover:bg-rose-500/10">Odebrat</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+  const editorTailBlock = (
+    <>
+      <details className="mt-3">
+        <summary className={`${sectionLabel} cursor-pointer`}>Ochrany kopírování — {enabledSafetyCount}/{SAFETY_OPTIONS.length} zapnuto</summary>
+        <div className="mt-2 divide-y divide-[var(--border-subtle)] overflow-hidden rounded-lg border border-[var(--border-subtle)]">
+          {SAFETY_OPTIONS.map(([key, title, detail]) => {
+            const mandatory = key === 'disableReplicationOnBreach';
+            return (
+              <label key={key} className={`flex items-start gap-3 px-3.5 py-2.5 ${mandatory ? 'cursor-not-allowed bg-emerald-500/[0.025]' : 'cursor-pointer'}`}>
+                <input type="checkbox" checked={mandatory ? true : safety[key]} disabled={mandatory} onChange={event => updateSafety(key, event.target.checked)} className="mt-0.5 accent-indigo-600" />
+                <span>
+                  <b className="block text-[11.5px] text-[var(--text-primary)]">{title}{mandatory ? <span className="ml-2 text-[9px] uppercase text-emerald-600">Povinné</span> : null}</b>
+                  <span className="mt-0.5 block text-[10.5px] leading-relaxed text-[var(--text-secondary)]">{detail}</span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+        <div className="mt-2 flex items-start gap-2.5 rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045] px-3.5 py-2.5">
+          <Clock3 size={14} className="mt-0.5 shrink-0 text-indigo-500" />
+          <span>
+            <b className="block text-[11.5px] text-[var(--text-primary)]">Pravidla dne jsou v záložce Risk</b>
+            <span className="mt-0.5 block text-[10.5px] leading-relaxed text-[var(--text-secondary)]">Denní limity, akce pravidel, obchodní okno, cooldown a expiraci LIVE session nastavíš na jedné kartě. Po prvním ARM v session jdou pravidla už jen zpřísnit.</span>
+          </span>
+        </div>
+      </details>
+
+      <details open className="mt-2.5">
+        <summary className={`${sectionLabel} cursor-pointer`}>Změny proti uložené skupině</summary>
+        <div className="mt-2"><CopyGroupChangePreview saved={group} draft={draft} accountLabel={accountLabel} /></div>
+        <div className="mt-2 flex items-start gap-2.5 rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045] px-3.5 py-2.5">
+          <ShieldCheck size={14} className="mt-0.5 shrink-0 text-indigo-500" />
+          <span className="text-[10.5px] leading-relaxed text-[var(--text-secondary)]">Uložením se kopírka nezapíná. Skupinu můžeš z jejího menu zvolit jako jedinou execution skupinu; runtime po přepnutí zůstane VYPNUTO až do samostatného zapnutí.</span>
+        </div>
+      </details>
+
+      {replacementNotice ? <div role="status" className="mt-2.5 rounded-md border border-amber-500/30 bg-amber-500/[0.08] p-3 text-[11px] font-bold leading-relaxed text-amber-700"><AlertTriangle size={14} className="mr-2 inline-block align-text-bottom" />{replacementNotice}</div> : null}
+      {errors.length > 0 ? (
+        <div className="mt-2.5 flex gap-2.5 rounded-md border border-rose-500/25 bg-rose-500/8 p-3">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-rose-500" />
+          <div className="space-y-1">{errors.map(error => <div key={error} className="text-[11px] font-bold text-rose-500">{error}</div>)}</div>
+        </div>
+      ) : null}
+    </>
+  );
+  const libraryNotice = (
+    <>
+    {libraryState !== 'ready' ? (
+      <div role="status" className="mx-5 mb-3 rounded-md border border-amber-500/30 bg-amber-500/[0.08] p-3 text-xs leading-relaxed text-[var(--text-primary)]">
+        <p className="font-bold">{libraryState === 'needs-import'
+          ? 'Nejdřív potvrď import lokálních skupin do cloudu.'
+          : libraryError ?? 'Cloudová knihovna se ještě načítá.'}</p>
+        <p className="mt-1 text-[var(--text-secondary)]">Rozepsané údaje zůstávají v tomto formuláři. Stránku nemusíš obnovovat.</p>
+      </div>
+    ) : null}
+    </>
+  );
+
+  const saveLabel = saving
+    ? (libraryState === 'ready' ? 'Ukládám…' : 'Obnovuji a ukládám…')
+    : libraryState === 'error' || libraryState === 'loading' ? 'Znovu načíst a uložit' : isNew ? 'Vytvořit skupinu' : 'Uložit změny';
+
+  /*
+   * Telefon: celoobrazovkový list místo 900px dialogu. Leader je jeden řádek,
+   * každý follower řádek se souhrnem („2× · max 4“) a teprve klepnutím se
+   * otevře jeho nastavení s velkými krokovači. Režim replikace se tu
+   * záměrně nenabízí (uživatel ho nemění); uložená hodnota zůstává a jiná
+   * než výchozí se ukáže v souhrnu, aby nebyla skrytá.
+   */
+  if (compact) {
+    const goto = (view: CompactEditorView) => {
+      setMobileViewDir(view.kind === 'main' ? 'back' : 'forward');
+      setMobileView(view);
+    };
+    const leaderAccount = accounts.find(account => account.id === draft.leaderAccountId);
+    const listedFollowers = draft.followers.filter(follower => !unavailable.followerAccountIds.includes(follower.accountId));
+    const freeCandidates = followerCandidates.filter(account => !followerById.has(account.id) && !followerAdditionBlocked(account.id));
+    const accountById = new Map(accounts.map(account => [account.id, account]));
+    const followerSummary = (follower: CopyFollowerConfig) => [
+      `${follower.multiplier}×`,
+      `max ${follower.maxContracts ?? '∞'}`,
+      follower.mode !== 'on-submit' ? REPLICATION_MODES.find(mode => mode.value === follower.mode)?.label ?? follower.mode : null,
+    ].filter(Boolean).join(' · ');
+    const detailFollower = mobileView.kind === 'follower' ? followerById.get(mobileView.accountId) : undefined;
+    const detailAccount = detailFollower ? accountById.get(detailFollower.accountId) : undefined;
+    const detailBaseline = detailFollower ? baselineFollowers.get(detailFollower.accountId) : undefined;
+    const rowButton = 'flex w-full items-center gap-3 px-3 py-3 text-left';
+    const view = mobileView.kind === 'follower' && !detailFollower ? { kind: 'main' as const } : mobileView;
+    const headerTitle = view.kind === 'leader' ? 'Leader'
+      : view.kind === 'add' ? 'Přidat followery'
+      : view.kind === 'follower' ? (detailAccount?.name ?? accountLabel(view.accountId, 'follower'))
+      : isNew ? 'Vytvořit skupinu' : 'Upravit skupinu';
+
+    return createPortal(
+      <div className="fixed inset-0 z-[150] flex bg-[var(--bg-card)]">
+        <section role="dialog" aria-modal="true" aria-label="Nastavení kopírovací skupiny" className="flex min-h-0 w-full flex-col">
+          <header className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2.5">
+            {view.kind === 'main' ? (
+              <span className="flex min-w-0 flex-1 items-center gap-2 pl-1">
+                <h3 className="truncate text-[15px] font-black text-[var(--text-primary)]">{headerTitle}</h3>
+                {tightenOnly ? <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/[0.07] px-2 py-0.5 text-[9px] font-bold text-amber-600"><Lock size={9} /> jen zpřísnit</span> : null}
+              </span>
+            ) : (
+              <>
+                <button type="button" onClick={() => goto({ kind: 'main' })} className="flex h-9 shrink-0 items-center gap-0.5 rounded-lg pr-2 text-[13px] font-bold text-indigo-500">
+                  <ChevronLeft size={18} /> {view.kind === 'add' ? 'Hotovo' : 'Skupina'}
+                </button>
+                <h3 className="min-w-0 flex-1 truncate text-center text-[14px] font-black text-[var(--text-primary)]">{headerTitle}</h3>
+                <span aria-hidden="true" className="w-[72px] shrink-0" />
+              </>
+            )}
+            {view.kind === 'main' ? (
+              <button onClick={onClose} disabled={saving} aria-label="Zavřít" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--border-subtle)] text-[var(--text-secondary)] disabled:opacity-40"><X size={17} /></button>
+            ) : null}
+          </header>
+
+          <div key={view.kind === 'follower' ? `follower-${view.accountId}` : view.kind} data-dir={mobileViewDir} className="compact-editor-view min-h-0 flex-1 overflow-y-auto px-4 py-3">
+            {view.kind === 'main' ? (<>
+              <div className={sectionLabel}>Název a barva</div>
+              <div className="relative mt-1.5 flex items-center">
+                <button
+                  type="button" aria-label="Barva skupiny" aria-expanded={paletteOpen}
+                  onClick={() => setPaletteOpen(open => !open)}
+                  style={{ backgroundColor: draft.color ?? GROUP_COLORS[0] }}
+                  className="absolute left-2 h-7 w-7 rounded-lg"
+                />
+                <input
+                  autoFocus={isNew} value={draft.name} aria-label="Název skupiny"
+                  onChange={event => setDraft(current => ({ ...current, name: event.target.value }))}
+                  placeholder="např. Tradeify 50K"
+                  className="h-11 w-full rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-page)] pl-11 pr-3 text-[15px] font-bold text-[var(--text-primary)] outline-none focus:border-indigo-500"
+                />
+              </div>
+              {paletteOpen ? (
+                <div className="mt-2 flex flex-wrap gap-2.5 rounded-xl border border-[var(--border-subtle)] p-2.5">
+                  {GROUP_COLORS.map(color => (
+                    <button
+                      key={color} type="button" aria-label={`Barva ${color}`} aria-pressed={draft.color === color}
+                      onClick={() => { setDraft(current => ({ ...current, color })); setPaletteOpen(false); }}
+                      style={{ backgroundColor: color }}
+                      className={`h-8 w-8 rounded-full border-2 ${draft.color === color ? 'border-[var(--text-primary)]' : 'border-transparent'}`}
+                    />
+                  ))}
+                </div>
+              ) : null}
+
+              <div className={`${sectionLabel} mt-5`}>Leader</div>
+              {unavailable.leaderAccountId != null ? (
+                <div className="mt-1.5 flex gap-2 rounded-xl border border-amber-500/35 bg-amber-500/[0.08] p-2.5 text-amber-700">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                  <span className="text-[11px] font-bold leading-relaxed">Uložený leader {accountLabel(unavailable.leaderAccountId, 'leader')} není dostupný. Vyber aktuální účet — AlphaTrade náhradu nikdy nehádá.</span>
+                </div>
+              ) : null}
+              <button
+                type="button" onClick={() => goto({ kind: 'leader' })}
+                className={`mt-1.5 flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left ${leaderAccount ? 'border-amber-500/45 bg-amber-500/[0.08]' : 'border-dashed border-[var(--border-subtle)]'}`}
+              >
+                {leaderAccount ? (<>
+                  <span className="relative shrink-0">
+                    <FirmMark firm={leaderAccount.firm} size="h-8 w-8" />
+                    <span className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-amber-950 ring-2 ring-[var(--bg-card)]"><Crown size={9} /></span>
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <b className="block truncate text-[13px] text-[var(--text-primary)]">{leaderAccount.name}</b>
+                    <span className="block truncate text-[11px] text-[var(--text-secondary)]">{leaderAccount.firm} · {money.format(leaderAccount.balance)}</span>
+                  </span>
+                  <span className="shrink-0 text-[12px] font-bold text-indigo-500">Změnit</span>
+                </>) : (
+                  <span className="flex-1 text-[13px] font-bold text-[var(--text-secondary)]">Vyber leadera</span>
+                )}
+                <ChevronRight size={16} className="shrink-0 text-[var(--text-muted)]" />
+              </button>
+
+              <div className={`${sectionLabel} mt-5 flex items-baseline justify-between gap-2`}>
+                <span>Followeři · {selectedCount}</span>
+                {draft.leaderAccountId != null ? <span className="normal-case tracking-normal text-[var(--text-secondary)]">expozice {copyGroupExposureMultiple(draft)}× leadera</span> : null}
+              </div>
+              <div className="mt-1.5">{unavailableFollowersBlock}</div>
+              {listedFollowers.length > 0 ? (
+                <ul className="divide-y divide-[var(--border-subtle)] overflow-hidden rounded-xl border border-[var(--border-subtle)]">
+                  {listedFollowers.map(follower => {
+                    const account = accountById.get(follower.accountId);
+                    return (
+                      <li key={follower.accountId}>
+                        <button type="button" onClick={() => goto({ kind: 'follower', accountId: follower.accountId })} className={rowButton}>
+                          {account ? <FirmMark firm={account.firm} size="h-8 w-8" /> : <span className="h-8 w-8 shrink-0 rounded-full bg-[var(--bg-page)]" />}
+                          <span className="min-w-0 flex-1">
+                            <b className="block truncate text-[13px] text-[var(--text-primary)]">{account?.name ?? accountLabel(follower.accountId, 'follower')}</b>
+                            <span className="block truncate text-[11px] font-semibold tabular-nums text-[var(--text-secondary)]">{followerSummary(follower)}</span>
+                          </span>
+                          <ChevronRight size={16} className="shrink-0 text-[var(--text-muted)]" />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="rounded-xl border border-dashed border-[var(--border-subtle)] px-3 py-3 text-[12px] text-[var(--text-secondary)]">Zatím žádný follower.</p>
+              )}
+              <button
+                type="button" disabled={followerCandidates.length === 0} onClick={() => goto({ kind: 'add' })}
+                className="mt-2 flex h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-[var(--border-subtle)] text-[12.5px] font-bold text-[var(--text-secondary)] disabled:opacity-40"
+              >
+                <Plus size={15} /> Přidat followera{freeCandidates.length > 0 ? ` (${freeCandidates.length} ${freeCandidates.length === 1 ? 'volný' : freeCandidates.length <= 4 ? 'volné' : 'volných'})` : ''}
+              </button>
+
+              <div className="mt-5">{editorTailBlock}</div>
+              {onDelete ? (
+                <button onClick={onDelete} disabled={saving} className="mt-4 flex h-11 w-full items-center justify-center gap-1.5 rounded-xl text-[12.5px] font-bold text-rose-500 disabled:opacity-40">
+                  <Trash2 size={14} /> Smazat skupinu
+                </button>
+              ) : null}
+            </>) : view.kind === 'leader' ? (<>
+              <p className="mb-3 text-[11.5px] leading-relaxed text-[var(--text-secondary)]">Jeden účet, jehož obchody se kopírují. Sám sebe nekopíruje; follower povýšený na leadera se vrátí, když ho zase vystřídáš.</p>
+              <ul className="divide-y divide-[var(--border-subtle)] overflow-hidden rounded-xl border border-[var(--border-subtle)]">
+                {accounts.map(account => {
+                  const active = draft.leaderAccountId === account.id;
+                  const blocked = tightenOnly && baselineHasFollowerCut && !active;
+                  return (
+                    <li key={account.id}>
+                      <button
+                        type="button" disabled={blocked} aria-pressed={active}
+                        onClick={() => { chooseLeader(account.id); goto({ kind: 'main' }); }}
+                        className={`${rowButton} disabled:opacity-45 ${active ? 'bg-amber-500/[0.1]' : ''}`}
+                      >
+                        <span className="relative shrink-0">
+                          <FirmMark firm={account.firm} size="h-8 w-8" />
+                          {active ? <span className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-amber-950 ring-2 ring-[var(--bg-card)]"><Crown size={9} /></span> : null}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <b className="block truncate text-[13px] text-[var(--text-primary)]">{account.name}</b>
+                          <span className="block truncate text-[11px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}{blocked ? ' · dnes jen zpřísnit' : ''}</span>
+                        </span>
+                        {active ? <Check size={16} className="shrink-0 text-amber-500" /> : null}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>) : view.kind === 'add' ? (<>
+              <p className="mb-3 text-[11.5px] leading-relaxed text-[var(--text-secondary)]">Nový follower začne s násobkem 1× a bez Max limitu; nastavíš je po klepnutí na jeho řádek.</p>
+              <ul className="divide-y divide-[var(--border-subtle)] overflow-hidden rounded-xl border border-[var(--border-subtle)]">
+                {followerCandidates.map(account => {
+                  const selected = followerById.has(account.id);
+                  const blocked = !selected && followerAdditionBlocked(account.id);
+                  return (
+                    <li key={account.id}>
+                      <button type="button" disabled={blocked} aria-pressed={selected} onClick={() => toggleFollower(account.id)} className={`${rowButton} disabled:opacity-45`}>
+                        <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border-2 ${selected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-[var(--border-subtle)]'}`}>
+                          {selected ? <Check size={14} strokeWidth={3} /> : null}
+                        </span>
+                        <FirmMark firm={account.firm} size="h-8 w-8" />
+                        <span className="min-w-0 flex-1">
+                          <b className="block truncate text-[13px] text-[var(--text-primary)]">{account.name}</b>
+                          <span className="block truncate text-[11px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}{blocked ? ' · dnes jen zpřísnit' : ''}</span>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>) : detailFollower ? (<>
+              <div className="flex items-center gap-3">
+                {detailAccount ? <FirmMark firm={detailAccount.firm} size="h-10 w-10" /> : null}
+                <span className="min-w-0">
+                  <b className="block truncate text-[15px] text-[var(--text-primary)]">{detailAccount?.name ?? accountLabel(detailFollower.accountId, 'follower')}</b>
+                  {detailAccount ? <span className="block text-[11.5px] text-[var(--text-secondary)]">{detailAccount.firm} · {money.format(detailAccount.balance)}</span> : null}
+                </span>
+              </div>
+
+              <div className={`${sectionLabel} mt-6`}>Násobek</div>
+              <div className="mt-1.5">
+                <NumberStepper
+                  size="lg" ariaLabel={`Násobek ${detailAccount?.name ?? detailFollower.accountId}`}
+                  title={tightenOnly && detailBaseline ? 'dnes jen zpřísnit' : undefined}
+                  value={detailFollower.multiplier} step={0.25} min={0.25}
+                  max={tightenOnly && detailBaseline ? detailBaseline.multiplier : undefined}
+                  onChange={next => patchFollower(detailFollower.accountId, { multiplier: next ?? 0.25 })}
+                />
+              </div>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-secondary)]">Kolik kontraktů dostane účet na jeden kontrakt leadera.</p>
+
+              <div className={`${sectionLabel} mt-5`}>Max kontraktů na symbol</div>
+              <div className="mt-1.5">
+                <NumberStepper
+                  size="lg" nullable ariaLabel={`Max kontrakty ${detailAccount?.name ?? detailFollower.accountId}`}
+                  title={tightenOnly && detailBaseline?.maxContracts != null ? 'dnes jen zpřísnit' : undefined}
+                  value={detailFollower.maxContracts ?? null} step={1} min={1}
+                  max={tightenOnly ? detailBaseline?.maxContracts : undefined}
+                  onChange={next => patchFollower(detailFollower.accountId, { maxContracts: next ?? undefined })}
+                />
+              </div>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-secondary)]">Tvrdý strop expozice. Překročení odmítne celý příkaz a vypne kopírku. Prázdné (∞) = bez limitu.</p>
+
+              {detailFollower.mode !== 'on-submit' ? (
+                <p className="mt-5 rounded-xl border border-[var(--border-subtle)] px-3 py-2.5 text-[11px] leading-relaxed text-[var(--text-secondary)]">
+                  Režim replikace: <b className="text-[var(--text-primary)]">{REPLICATION_MODES.find(mode => mode.value === detailFollower.mode)?.label ?? detailFollower.mode}</b>. Mění se na počítači.
+                </p>
+              ) : null}
+
+              <button
+                type="button" onClick={() => { toggleFollower(detailFollower.accountId); goto({ kind: 'main' }); }}
+                className="mt-6 h-11 w-full rounded-xl border border-rose-500/30 bg-rose-500/[0.06] text-[13px] font-bold text-rose-500"
+              >
+                Odebrat ze skupiny
+              </button>
+            </>) : null}
+          </div>
+
+          {libraryNotice}
+          <footer className="flex gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
+            <button onClick={onClose} disabled={saving} className="h-11 w-24 shrink-0 rounded-xl border border-[var(--border-subtle)] text-[13px] font-bold text-[var(--text-secondary)]">Zrušit</button>
+            <button onClick={submit} disabled={saving || libraryState === 'needs-import'} className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl bg-indigo-600 text-[13px] font-black text-white disabled:opacity-50"><Save size={15} /> {saveLabel}</button>
+          </footer>
+        </section>
+      </div>,
+      document.body,
+    );
+  }
 
   return createPortal(
     <div className="fixed inset-0 z-[150] flex items-center justify-center bg-slate-950/35 p-4" onMouseDown={event => { if (event.target === event.currentTarget && !saving) onClose(); }}>
@@ -4740,49 +5568,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
               </span>
             </div>
 
-            {unavailableFollowers.length > 0 ? (
-              <div className="mb-2.5 rounded-lg border border-amber-500/35 bg-amber-500/[0.07] p-3">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="flex gap-2.5">
-                    <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" />
-                    <div>
-                      <b className="block text-xs text-amber-700">Nedostupné účty v uložené skupině</b>
-                      <span className="mt-0.5 block text-[11px] text-amber-700/80">Vyber přesnou náhradu z OAuth snapshotu, nebo starý účet odeber. Nic se nepáruje automaticky.</span>
-                    </div>
-                  </div>
-                  <button type="button" disabled={saving} onClick={() => onRemoveUnavailableFollowers(draft, unavailableFollowers.map(follower => follower.accountId))} className="h-9 rounded-md bg-amber-600 px-3 text-xs font-black text-white hover:bg-amber-500 disabled:opacity-50">Odebrat všechny nedostupné</button>
-                </div>
-                <div className="mt-3 space-y-2">
-                  {unavailableFollowers.map(follower => {
-                    const replacementCandidates = accounts.filter(account => account.id !== draft.leaderAccountId && !draft.followers.some(item => item.accountId === account.id));
-                    return (
-                      <div key={follower.accountId} className="grid gap-2 rounded-md border border-amber-500/20 bg-[var(--bg-card)] p-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(190px,1fr)_auto] sm:items-center">
-                        <span>
-                          <b className="block text-xs text-[var(--text-primary)]">{accountLabel(follower.accountId, 'follower')}</b>
-                          <span className="block text-[10px] text-[var(--text-secondary)]">{REPLICATION_MODES.find(mode => mode.value === follower.mode)?.label ?? follower.mode} · násobek {follower.multiplier}</span>
-                        </span>
-                        <select
-                          aria-label={`Nahradit nedostupný účet ${follower.accountId}`} defaultValue=""
-                          disabled={tightenOnly && baselineHasFollowerCut}
-                          title={tightenOnly && baselineHasFollowerCut ? 'dnes jen zpřísnit' : undefined}
-                          onChange={event => {
-                            const replacementId = Number(event.target.value);
-                            if (!Number.isSafeInteger(replacementId)) return;
-                            setDraft(current => replaceCopyGroupFollowerAccount(current, follower.accountId, replacementId));
-                            if (follower.multiplier !== 1 || follower.maxContracts != null) setReplacementNotice(`Náhradní účet ${accountLabel(replacementId, 'follower')} dostal bezpečný násobek 1× bez Max limitu. Původní nastavení účtu ${accountLabel(follower.accountId, 'follower')} se záměrně nepřeneslo; případnou změnu nastav ručně a zkontroluj v přehledu před uložením.`);
-                          }}
-                          className="h-9 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-45"
-                        >
-                          <option value="">Vyber náhradu…</option>
-                          {replacementCandidates.map(account => <option key={account.id} value={account.id}>{account.name} · {account.firm}</option>)}
-                        </select>
-                        <button type="button" onClick={() => setDraft(current => ({ ...current, followers: current.followers.filter(item => item.accountId !== follower.accountId) }))} className="h-9 rounded-md border border-rose-500/25 px-3 text-xs font-bold text-rose-500 hover:bg-rose-500/10">Odebrat</button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : null}
+            {unavailableFollowersBlock}
 
             <div className="overflow-x-auto rounded-lg border border-[var(--border-subtle)]">
               <div className="grid min-w-[416px] grid-cols-[minmax(0,1fr)_132px_74px_74px] gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 py-2 text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">
@@ -4839,58 +5625,11 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
               })}
             </div>
 
-            <details className="mt-3">
-              <summary className={`${sectionLabel} cursor-pointer`}>Ochrany kopírování — {enabledSafetyCount}/{SAFETY_OPTIONS.length} zapnuto</summary>
-              <div className="mt-2 divide-y divide-[var(--border-subtle)] overflow-hidden rounded-lg border border-[var(--border-subtle)]">
-                {SAFETY_OPTIONS.map(([key, title, detail]) => {
-                  const mandatory = key === 'disableReplicationOnBreach';
-                  return (
-                    <label key={key} className={`flex items-start gap-3 px-3.5 py-2.5 ${mandatory ? 'cursor-not-allowed bg-emerald-500/[0.025]' : 'cursor-pointer'}`}>
-                      <input type="checkbox" checked={mandatory ? true : safety[key]} disabled={mandatory} onChange={event => updateSafety(key, event.target.checked)} className="mt-0.5 accent-indigo-600" />
-                      <span>
-                        <b className="block text-[11.5px] text-[var(--text-primary)]">{title}{mandatory ? <span className="ml-2 text-[9px] uppercase text-emerald-600">Povinné</span> : null}</b>
-                        <span className="mt-0.5 block text-[10.5px] leading-relaxed text-[var(--text-secondary)]">{detail}</span>
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-              <div className="mt-2 flex items-start gap-2.5 rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045] px-3.5 py-2.5">
-                <Clock3 size={14} className="mt-0.5 shrink-0 text-indigo-500" />
-                <span>
-                  <b className="block text-[11.5px] text-[var(--text-primary)]">Pravidla dne jsou v záložce Risk</b>
-                  <span className="mt-0.5 block text-[10.5px] leading-relaxed text-[var(--text-secondary)]">Denní limity, akce pravidel, obchodní okno, cooldown a expiraci LIVE session nastavíš na jedné kartě. Po prvním ARM v session jdou pravidla už jen zpřísnit.</span>
-                </span>
-              </div>
-            </details>
-
-            <details open className="mt-2.5">
-              <summary className={`${sectionLabel} cursor-pointer`}>Změny proti uložené skupině</summary>
-              <div className="mt-2"><CopyGroupChangePreview saved={group} draft={draft} accountLabel={accountLabel} /></div>
-              <div className="mt-2 flex items-start gap-2.5 rounded-lg border border-indigo-500/20 bg-indigo-500/[0.045] px-3.5 py-2.5">
-                <ShieldCheck size={14} className="mt-0.5 shrink-0 text-indigo-500" />
-                <span className="text-[10.5px] leading-relaxed text-[var(--text-secondary)]">Uložením se kopírka nezapíná. Skupinu můžeš z jejího menu zvolit jako jedinou execution skupinu; runtime po přepnutí zůstane VYPNUTO až do samostatného zapnutí.</span>
-              </div>
-            </details>
-
-            {replacementNotice ? <div role="status" className="mt-2.5 rounded-md border border-amber-500/30 bg-amber-500/[0.08] p-3 text-[11px] font-bold leading-relaxed text-amber-700"><AlertTriangle size={14} className="mr-2 inline-block align-text-bottom" />{replacementNotice}</div> : null}
-            {errors.length > 0 ? (
-              <div className="mt-2.5 flex gap-2.5 rounded-md border border-rose-500/25 bg-rose-500/8 p-3">
-                <AlertTriangle size={16} className="mt-0.5 shrink-0 text-rose-500" />
-                <div className="space-y-1">{errors.map(error => <div key={error} className="text-[11px] font-bold text-rose-500">{error}</div>)}</div>
-              </div>
-            ) : null}
+            {editorTailBlock}
           </div>
         </div>
 
-        {libraryState !== 'ready' ? (
-          <div role="status" className="mx-5 mb-3 rounded-md border border-amber-500/30 bg-amber-500/[0.08] p-3 text-xs leading-relaxed text-[var(--text-primary)]">
-            <p className="font-bold">{libraryState === 'needs-import'
-              ? 'Nejdřív potvrď import lokálních skupin do cloudu.'
-              : libraryError ?? 'Cloudová knihovna se ještě načítá.'}</p>
-            <p className="mt-1 text-[var(--text-secondary)]">Rozepsané údaje zůstávají v tomto formuláři. Stránku nemusíš obnovovat.</p>
-          </div>
-        ) : null}
+        {libraryNotice}
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)] px-5 py-3.5">
           <div>{onDelete ? <button onClick={onDelete} disabled={saving} className="flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-rose-500 hover:bg-rose-500/10"><Trash2 size={14} /> Smazat skupinu</button> : null}</div>
           <div className="flex gap-2">
@@ -5295,7 +6034,130 @@ const UnavailableFollowerRemovalDialogPortal = (props: React.ComponentProps<type
   document.body,
 );
 
-const ConfirmActionDialog = ({ action, busy, apiReady, onClose, onConfirm }: { action: PendingAction; busy: boolean; apiReady: boolean; onClose: () => void; onConfirm: () => void }) => createPortal(
+export interface FlattenGroupPreview {
+  groupName: string;
+  positions: Array<{ accountId: number; name: string; role: string; symbol: string; netPosition: number }>;
+  orders: Array<{ accountId: number; name: string; label: string }>;
+}
+
+/** „Sell Stop 23 380“, u Stop Limit obě ceny. */
+const orderPriceText = (order: LiveOrder): string => {
+  const stop = isStopOrder(order);
+  const prices = stop && order.price != null && order.stopPrice != null
+    ? `${priceLabel(order.stopPrice)} / ${priceLabel(order.price)}`
+    : priceLabel(stop ? order.stopPrice ?? order.price : order.price ?? order.stopPrice);
+  return `${order.action} ${order.orderType} ${prices}`;
+};
+
+/**
+ * Co Flatten All skupiny zavře a zruší — pro potvrzení na telefonu. Jen
+ * náhled z posledního snapshotu; autoritativně rozhoduje worker.
+ */
+export const buildFlattenGroupPreview = (
+  group: Pick<CopyGroupConfig, 'name' | 'leaderAccountId' | 'followers'>,
+  accountsById: ReadonlyMap<number, LiveAccount>,
+  orders: LiveOrder[],
+  accountName: (accountId: number) => string,
+): FlattenGroupPreview => {
+  const members = [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]
+    .filter((accountId): accountId is number => accountId != null);
+  const memberSet = new Set(members);
+  const role = (accountId: number) => accountId === group.leaderAccountId
+    ? 'leader'
+    : `×${group.followers.find(follower => follower.accountId === accountId)?.multiplier ?? 1}`;
+  return {
+    groupName: group.name,
+    positions: members.flatMap(accountId => (accountsById.get(accountId)?.positions ?? [])
+      .filter(position => position.netPosition !== 0)
+      .map(position => ({
+        accountId, name: accountName(accountId), role: role(accountId),
+        symbol: displaySymbol(position.symbol), netPosition: position.netPosition,
+      }))),
+    orders: orders
+      .filter(order => order.working && order.accountId != null && memberSet.has(order.accountId))
+      .map(order => ({ accountId: order.accountId!, name: accountName(order.accountId!), label: orderPriceText(order) })),
+  };
+};
+
+const czechCount = (count: number, one: string, few: string, many: string) =>
+  `${count} ${count === 1 ? one : count >= 2 && count <= 4 ? few : many}`;
+
+/**
+ * Potvrzení Flatten All na telefonu: spodní list s výčtem, co se zavře a co
+ * se zruší, a velké tlačítko v dosahu palce. Jedno klepnutí — v nouzi se
+ * nečeká. Příkaz i následné „Pokračovat v kopírování?“ jsou stejné jako
+ * v dialogu na desktopu.
+ */
+const CompactFlattenSheet = ({ preview, busy, apiReady, onClose, onConfirm }: {
+  preview: FlattenGroupPreview;
+  busy: boolean;
+  apiReady: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) => {
+  const positions = preview.positions.length;
+  const orders = preview.orders.length;
+  const confirmLabel = positions > 0
+    ? `Flatten All · ${czechCount(positions, 'pozice', 'pozice', 'pozic')}`
+    : orders > 0 ? `Flatten All · zrušit ${czechCount(orders, 'příkaz', 'příkazy', 'příkazů')}` : 'Flatten All';
+  const listClass = 'mb-3 divide-y divide-[var(--border-subtle)] overflow-hidden rounded-xl border border-[var(--border-subtle)]';
+  const headClass = 'mb-1.5 text-[9.5px] font-black uppercase tracking-[0.1em] text-[var(--text-secondary)]';
+  return (
+    <CompactSheet label={`Flatten All · ${preview.groupName}`} busy={busy} onClose={onClose}>
+      <h4 className="text-[15px] font-black text-[var(--text-primary)]">Flatten All · {preview.groupName}</h4>
+      <p className="mb-3 mt-1 text-[11.5px] leading-relaxed text-[var(--text-secondary)]">
+        Zavře všechny pozice ve skupině a zruší čekající příkazy. Ostatní skupiny se nemění.
+      </p>
+      {positions > 0 ? (<>
+        <div className={headClass}>Zavřou se pozice · {positions}</div>
+        <ul className={listClass}>
+          {preview.positions.map((position, index) => (
+            <li key={`${position.accountId}-${position.symbol}-${index}`} className="flex items-center gap-2 px-3 py-2.5 text-[12px]">
+              <span className="min-w-0 flex-1 truncate font-semibold text-[var(--text-primary)]">{position.name}</span>
+              <span className="shrink-0 rounded bg-[var(--bg-page)] px-1 text-[9.5px] font-bold text-[var(--text-secondary)]">{position.role}</span>
+              <span className={`shrink-0 rounded-md border px-2 py-1 text-[10px] font-black leading-none tabular-nums ${position.netPosition > 0
+                ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600'
+                : 'border-rose-500/25 bg-rose-500/10 text-rose-600'}`}>
+                {position.symbol} {position.netPosition > 0 ? '+' : '−'}{contractQuantity(position.netPosition)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </>) : null}
+      {orders > 0 ? (<>
+        <div className={headClass}>Zruší se příkazy · {orders}</div>
+        <ul className={listClass}>
+          {preview.orders.map((order, index) => (
+            <li key={`${order.accountId}-${index}`} className="flex items-center gap-2 px-3 py-2.5 text-[12px]">
+              <span className="min-w-0 flex-1 truncate font-semibold text-[var(--text-primary)]">{order.name}</span>
+              <span className="shrink-0 font-bold tabular-nums text-[var(--text-secondary)]">{order.label}</span>
+            </li>
+          ))}
+        </ul>
+      </>) : null}
+      {positions === 0 && orders === 0 ? (
+        <p className="mb-3 rounded-xl border border-[var(--border-subtle)] px-3 py-2.5 text-[11.5px] leading-relaxed text-[var(--text-secondary)]">
+          Podle posledních dat skupina nemá otevřenou pozici ani čekající příkaz. Flatten to u brokera ověří.
+        </p>
+      ) : null}
+      {!apiReady ? (
+        <p className="mb-3 rounded-xl border border-blue-500/15 bg-blue-500/[0.055] px-3 py-2.5 text-[11px] font-bold text-blue-500">
+          Bez připojeného execution adaptéru se akce pouze uloží lokálně a žádný brokerový příkaz se neodešle.
+        </p>
+      ) : null}
+      <button type="button" disabled={busy} onClick={onConfirm} className="h-12 w-full rounded-xl bg-rose-600 text-sm font-black text-white disabled:opacity-50">
+        {busy ? 'Připravuji…' : confirmLabel}
+      </button>
+      <button type="button" disabled={busy} onClick={onClose} className="mt-2 h-11 w-full rounded-xl border border-[var(--border-subtle)] text-[13px] font-bold text-[var(--text-secondary)]">
+        Zrušit
+      </button>
+    </CompactSheet>
+  );
+};
+
+const ConfirmActionDialog = ({ action, busy, apiReady, flattenPreview = null, onClose, onConfirm }: { action: PendingAction; busy: boolean; apiReady: boolean; flattenPreview?: FlattenGroupPreview | null; onClose: () => void; onConfirm: () => void }) => flattenPreview
+  ? <CompactFlattenSheet preview={flattenPreview} busy={busy} apiReady={apiReady} onClose={onClose} onConfirm={onConfirm} />
+  : createPortal(
   <div className="fixed inset-0 z-[160] bg-slate-950/35 flex items-center justify-center p-4" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <section role="alertdialog" aria-modal="true" className="w-full max-w-md rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl p-5">
       <div className={`w-11 h-11 rounded-2xl flex items-center justify-center ${action.danger ? 'bg-rose-500/10 text-rose-500' : 'bg-indigo-500/10 text-indigo-500'}`}>{action.danger ? <AlertTriangle size={21} /> : <Power size={21} />}</div>
@@ -5308,7 +6170,7 @@ const ConfirmActionDialog = ({ action, busy, apiReady, onClose, onConfirm }: { a
             ? 'Výsledek akce není ověřený. Příkaz se automaticky neopakuje; zkontroluj aktuální stav kopírky.'
             : 'Žádný brokerový příkaz ani změna runtime nebyly odeslány.'}
         </div>
-      ) : !action.run ? (
+      ) : !action.run && !action.proceed ? (
         <div className={`rounded-xl border px-3 py-2.5 text-[11px] font-bold mt-4 ${apiReady ? 'border-emerald-500/15 bg-emerald-500/[0.055] text-emerald-600' : 'border-blue-500/15 bg-blue-500/[0.055] text-blue-500'}`}>
           {apiReady
             ? 'Execution adaptér je připojen. Potvrzená akce bude předána lokálnímu DEMO runtime.'
