@@ -97,6 +97,38 @@ export function findEntryFairValueGap(
   return candidates[0]?.gap ?? null;
 }
 
+/**
+ * FVG, na jehož hraně obchod vstoupil — automaticky, bez ručního tagu.
+ * Bere jen FVG vzniklé před vstupem (nejvýš `lookbackSeconds` zpět), které
+ * do vstupu nebyly vyplněné. Hrana = aktuální zbývající hrana (po částečném
+ * vyplnění), vstup musí ležet do `tolerance` od ní. Víc kandidátů → nejbližší,
+ * při shodě novější.
+ */
+export function findEntryEdgeFairValueGap(
+  candles: MarketCandle[],
+  entryTime: number,
+  entryPrice: number,
+  direction: 'long' | 'short',
+  options: { lookbackSeconds?: number; tolerance?: number } = {},
+): FairValueGap | null {
+  if (!Number.isFinite(entryTime) || !Number.isFinite(entryPrice)) return null;
+  const lookback = options.lookbackSeconds ?? 26 * 3600;
+  const tolerance = options.tolerance ?? 0.25;
+  const entryMinute = Math.floor(entryTime / 60) * 60;
+  const before = candles.filter(candle => candle.time >= entryTime - lookback && candle.time < entryMinute);
+  const expected = direction === 'long' ? 'bullish' : 'bearish';
+  const candidates = findFairValueGaps(before)
+    .filter(gap => gap.direction === expected && !gap.mitigated)
+    .map(gap => {
+      const last = gap.mitigationSteps.at(-1);
+      const edges = [last?.remainingTop ?? gap.top, last?.remainingBottom ?? gap.bottom];
+      return { gap, distance: Math.min(...edges.map(edge => Math.abs(entryPrice - edge))) };
+    })
+    .filter(candidate => candidate.distance <= tolerance + 1e-9)
+    .sort((a, b) => a.distance - b.distance || b.gap.startTime - a.gap.startTime);
+  return candidates[0]?.gap ?? null;
+}
+
 export function findEntryStructureEvent(
   events: MarketStructureEvent[],
   entryTime: number,

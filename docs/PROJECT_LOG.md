@@ -208,6 +208,40 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-26 — Animace svíček v přehrávání detailu (Claude)
+
+- Varianta C z `mockups/replay-candle-animation.html`: nová svíčka během
+  kroku „žije“ (open → extrémy → close). Pořadí high/low v 1m datech neznáme,
+  proto `lib/candleReplayPath.ts` cestu **ukotví na plnění obchodu** v té
+  minutě (přesný čas i cena) — SL/TP/vstup ve stejné svíčce se tak nikdy
+  neukáže v opačném pořadí. Zbylé extrémy: býčí low→high, medvědí high→low,
+  do nejdelší volné mezery. Konec kroku = vždy skutečná svíčka. Bez dalších
+  dat (sekundová data odmítnuta jako zbytečná).
+- `TradeMarketChart`: `setInterval` nahrazen rAF smyčkou; rozpracovaná
+  svíčka jde přímo do `controller.updateBar` mimo React (záběr se při
+  přidání baru vrací na původní logický rozsah), kurzor + indikátory až po
+  dokončení kroku. Pauza svíčku dokončí, krok/Go To animaci zruší, změna
+  rychlosti pokračuje z rozehraného místa. Jen timeframe 1m; s
+  `prefers-reduced-motion` svíčka naskočí celá jako dřív.
+- Testy `tests/candleReplayPath.test.ts` (5). Ověřeno živě v detailu
+  (0,5×: poslední cena se v kroku mění, záběr stojí, pauza nechá celou svíčku).
+
+### 2026-09-26 — FVG vstupu automaticky (Claude)
+
+- Filip vstupuje na hraně FVG, někdy na starším nevyplněném mimo limit
+  posledních N. `findEntryEdgeFairValueGap` (marketDataCalculations): FVG
+  vzniklé nejvýš 26 h před vstupem, nevyplněné do vstupu (svíčka vstupu se
+  nezapočítá), hrana = aktuální zbývající hrana po částečném vyplnění,
+  první plnění do ±1 tick (0,25) od ní; víc kandidátů → nejbližší, pak
+  novější. Bez tagu, jen se zapnutým FVG; ruční tag dál přes
+  `findEntryFairValueGap`.
+- Graf: ukáže se i mimo limit posledních N, vypadá jako ostatní FVG (bez
+  obrysu a štítku — Filipovo přání). V přehrávání v detailu až od vstupu
+  (nic neprozradí dopředu).
+- Na 40 posledních obchodech (7.–24. 9.) našel FVG vstupu u 15, i 6 h starý
+  (24. 9. 15:47 short). Některé nálezy jsou drobné půlbodové FVG vzniklé
+  minutu před vstupem — může jít o náhodu; zatím bez filtru velikosti.
+
 ### 2026-09-26 — Sekání grafu s indikátory: lineární hledání svíčky (Claude)
 
 - Změřeno v detailu (16 dní historie, přehrávání): struktura 7 fps

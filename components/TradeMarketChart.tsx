@@ -24,6 +24,7 @@ import { Activity, AlertTriangle, BarChart3, LocateFixed, Loader2, Maximize2, Mi
 import TradeProgress from './TradeProgress';
 import TradeReplayBar, { type TradeReplayGoTo, type TradeReplaySpeed } from './TradeReplayBar';
 import { historyAt, protectionLevelsAt, tradeTimelineEvents } from '../lib/tradeReplay';
+import { candleReplayPath, partialReplayCandle, type PathPoint } from '../lib/candleReplayPath';
 import { JOURNAL_SL_COLOR, JOURNAL_TP_COLOR } from '../services/journalChartPrimitive';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import { DEFAULT_STYLE } from '@getcandlekit/charts';
@@ -199,14 +200,66 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   const replayEnd = floorMinute(Math.floor(exitMs / 1000)) + 5 * 60;
   // Události v právě odkryté svíčce už proběhly — svíčka pokrývá celou minutu.
   const cutoffMs = cursor == null ? null : (cursor + REPLAY_STEP_S) * 1000 - 1;
-  useEffect(() => { setCursor(null); setPlaying(false); }, [trade.id]);
+  const replayAnimationRef = useRef<{ time: number; progress: number } | null>(null);
+  useEffect(() => { setCursor(null); setPlaying(false); replayAnimationRef.current = null; }, [trade.id]);
+  // Rozpracovaná svíčka přehrávání: během kroku „žije“ přímo v grafu (mimo
+  // React) po cestě z candleReplayPath — plnění obchodu v ní padnou přesně
+  // na svůj čas a cenu. Po dokončení kroku ji převezme kurzor (a indikátory).
+  const replayLoopRef = useRef({ cursor, rawCandles: [] as MarketCandle[], chartApi: null as ChartViewApi | null, timeframe: '1m' as MarketTimeframe });
   useEffect(() => {
     if (!playing) return;
-    const timer = window.setInterval(() => {
-      setCursor(current => Math.min(replayEnd, (current ?? replayStart) + REPLAY_STEP_S));
-    }, REPLAY_TICK_MS / speed);
-    return () => window.clearInterval(timer);
-  }, [playing, speed, replayStart, replayEnd]);
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const stepMs = REPLAY_TICK_MS / speed;
+    let frame = 0;
+    let stepStart = performance.now() - (replayAnimationRef.current?.progress ?? 0) * stepMs;
+    let path: { time: number; points: PathPoint[]; candle: MarketCandle | null } | null = null;
+    // Během přehrávání kurzor mění jen tahle smyčka — drží si ho sama, ať
+    // nečeká na překreslení Reactu (jinak by svíčku rozehrála znovu).
+    let current = replayLoopRef.current.cursor;
+    const tick = (now: number) => {
+      const { rawCandles: candlesNow, chartApi: api, timeframe: frameTf } = replayLoopRef.current;
+      const next = Math.min(replayEnd, (current ?? replayStart) + REPLAY_STEP_S);
+      const progress = (now - stepStart) / stepMs;
+      if (progress >= 1 || next <= (current ?? replayStart)) {
+        replayAnimationRef.current = null;
+        path = null;
+        stepStart = now;
+        current = next;
+        setCursor(next);
+        if (next >= replayEnd) return;
+        frame = window.requestAnimationFrame(tick);
+        return;
+      }
+      // Animuje se jen 1m graf; na vyšším timeframu (a s omezeným pohybem)
+      // svíčka naskočí celá jako dřív.
+      if (!reducedMotion && frameTf === '1m' && api) {
+        if (!path || path.time !== next) {
+          const candle = candlesNow.find(item => item.time === next) ?? null;
+          const fills = candle && history ? history.fills.filter(fill => fill.at >= next * 1000 && fill.at < next * 1000 + 60_000) : [];
+          path = { time: next, candle, points: candle ? candleReplayPath(candle, fills) : [] };
+        }
+        if (path.candle) {
+          try {
+            const partial = partialReplayCandle(path.candle, path.points, progress);
+            const controller = api.controller;
+            const timeScale = controller.getChart().timeScale();
+            const lastTs = controller.getBars().at(-1)?.ts;
+            const appending = lastTs !== undefined && lastTs < next * 1000;
+            const range = appending ? timeScale.getVisibleLogicalRange() : null;
+            if (lastTs === undefined || lastTs <= next * 1000) {
+              controller.updateBar({ ts: next * 1000, open: partial.open, high: partial.high, low: partial.low, close: partial.close, volume: partial.volume });
+              // Přidaný bar nesmí posunout záběr — posun řeší replay efekt grafu.
+              if (range) timeScale.setVisibleLogicalRange(range);
+              replayAnimationRef.current = { time: next, progress };
+            }
+          } catch { /* graf se právě vyměnil */ }
+        }
+      }
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [playing, speed, replayStart, replayEnd, history]);
   useEffect(() => { if (playing && cursor != null && cursor >= replayEnd) setPlaying(false); }, [cursor, playing, replayEnd]);
   const replayAtEnd = cursor != null && cursor >= replayEnd;
 
@@ -240,7 +293,14 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   const startFromBeginning = () => { setRewind(null); setCursor(replayStart); setPlaying(true); };
   const playPause = () => {
     if (rewind) return;
-    if (playing) { setPlaying(false); return; }
+    if (playing) {
+      setPlaying(false);
+      // Rozpracovanou svíčku při pauze dokončíme — v grafu nesmí zůstat půlka.
+      const animating = replayAnimationRef.current;
+      replayAnimationRef.current = null;
+      if (animating) setCursor(animating.time);
+      return;
+    }
     if (cursor == null || replayAtEnd) {
       const area = rewindArea();
       if (area) { setRewind(area); return; }
@@ -250,6 +310,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   };
   const stepReplay = () => {
     setPlaying(false);
+    replayAnimationRef.current = null;
     setCursor(current => current == null || current >= replayEnd ? replayStart : Math.min(replayEnd, current + REPLAY_STEP_S));
   };
   const firstSeries = events.find(event => event.seriesKey);
@@ -263,6 +324,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   ];
   const goTo = (id: string) => {
     setPlaying(false);
+    replayAnimationRef.current = null;
     if (id === 'all') { setCursor(null); setFocusRequest(value => value + 1); return; }
     const at = (ms: number) => floorMinute(Math.floor(ms / 1000));
     if (id === 'next') {
@@ -359,6 +421,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   // Úrovně na cenové ose: vstup, SL a TP platné v okamžiku přehrávání
   // (bez přehrávání poslední před výstupem). Samotné čáry kreslí historie.
   const [chartApi, setChartApi] = useState<ChartViewApi | null>(null);
+  replayLoopRef.current = { cursor, rawCandles, chartApi, timeframe };
   const entryFill = useMemo(() => history?.fills.filter(fill => fill.role === 'entry').sort((a, b) => a.at - b.at)[0], [history]);
   const levelAt = Math.min(cutoffMs ?? Infinity, exitMs);
   const levels = protectionLevelsAt(history, levelAt);

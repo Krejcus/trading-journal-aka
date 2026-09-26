@@ -63,6 +63,7 @@ import {
 } from '../services/chartInstrumentLegend';
 import {
   calculateMarketStructure,
+  findEntryEdgeFairValueGap,
   findEntryFairValueGap,
   findEntryStructureEvent,
   findFairValueGaps,
@@ -2293,7 +2294,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     && !hiddenCustomIndicators.has('structure')
     && indicatorSettings.structure.enabled
     && indicatorVisibleOnTimeframe(timeframe, indicatorSettings.structure.visibility);
-  const showEntryFvg = !replayActive && !hiddenCustomIndicators.has('fvg');
+  // Detail: FVG vstupu i v přehrávání — až od vstupu, ať nic neprozradí dopředu.
+  const entryMinuteUnix = Math.floor(entryMs / 60_000) * 60;
+  const showEntryFvg = (!replayActive || (centeredTradeView && replayCursorTime != null && replayCursorTime >= entryMinuteUnix))
+    && !hiddenCustomIndicators.has('fvg');
   const showEntryStructure = !replayActive && !hiddenCustomIndicators.has('structure');
   const overlayRebuildSignature = JSON.stringify({
     visibleFvg,
@@ -2580,18 +2584,28 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     if (!showEntryFvg) return null;
     const entryMappedToFvg = trade.entryMap?.entryFvg === true
       || trade.ltfConfluence?.some(tag => /entry.*fvg/i.test(tag));
-    if (!entryMappedToFvg) return null;
     const entryUnix = Math.floor(entryMs / 1000);
-    return findEntryFairValueGap(
-      findFairValueGaps(rawCandles.filter(candle => candle.time >= entryUnix - 8 * 3600 && candle.time <= entryUnix)),
-      entryUnix,
-      Number(trade.entryPrice),
-      String(trade.direction).toLowerCase() === 'long' ? 'long' : 'short',
-    );
-  }, [rawCandles, entryMs, showEntryFvg, trade]);
+    const direction = String(trade.direction).toLowerCase() === 'long' ? 'long' : 'short';
+    if (entryMappedToFvg) {
+      return findEntryFairValueGap(
+        findFairValueGaps(rawCandles.filter(candle => candle.time >= entryUnix - 8 * 3600 && candle.time <= entryUnix)),
+        entryUnix,
+        Number(trade.entryPrice),
+        direction,
+      );
+    }
+    // Bez tagu automaticky: nevyplněný FVG z posledního dne, na jehož hraně
+    // (±1 tick) leží první plnění. Jen se zapnutým FVG — jinak by se zóna
+    // objevovala i tomu, kdo FVG nechce.
+    if (!visibleFvg) return null;
+    const firstEntry = trade.executionHistory?.fills.filter(fill => fill.role === 'entry').sort((a, b) => a.at - b.at)[0];
+    return findEntryEdgeFairValueGap(rawCandles, firstEntry ? Math.floor(firstEntry.at / 1000) : entryUnix,
+      firstEntry?.price ?? Number(trade.entryPrice), direction);
+  }, [rawCandles, entryMs, showEntryFvg, trade, visibleFvg]);
   const displayedEntryFvg = useMemo(() => {
     if (!entryFvg) return null;
-    const from = Math.floor(entryMs / 1000) - 8 * 3600;
+    // Od vzniku FVG (i den starého) — vyplnění po vstupu se tak kreslí správně.
+    const from = Math.min(Math.floor(entryMs / 1000) - 8 * 3600, entryFvg.startTime - 5 * 60);
     return findFairValueGaps(rawCandles.filter(candle => candle.time >= from))
       .find(gap => gap.startTime === entryFvg.startTime) ?? entryFvg;
   }, [entryFvg, entryMs, rawCandles]);
