@@ -59,7 +59,15 @@ export function createCopierRuntimeCommandAdapter(
       }
       switch (command.type) {
         case 'update-group':
-          await applyGroup(command.group, {
+          await applyGroup({
+            ...command.group,
+            followers: command.group.followers.map(follower => ({
+              ...follower,
+              ...(current.followers.find(item => item.accountId === follower.accountId)?.enabled === false
+                ? { enabled: false }
+                : { enabled: true }),
+            })),
+          }, {
             ...(command.waiveUnverifiableFollowerOwnership === true
               ? { waiveUnverifiableFollowerOwnership: true }
               : {}),
@@ -76,6 +84,14 @@ export function createCopierRuntimeCommandAdapter(
               : follower),
           }));
           return { type: 'configuration', group: options.getGroup() };
+        case 'set-follower-enabled': {
+          const next = await options.controller.setFollowerEnabled(
+            command.accountId,
+            command.enabled,
+            async updated => { options.setGroup(updated); },
+          );
+          return { type: 'configuration', group: next };
+        }
         case 'set-multiplier':
           await update(group => ({
             ...group,

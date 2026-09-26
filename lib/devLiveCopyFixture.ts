@@ -104,6 +104,35 @@ export const devLiveCopyFixtureOrders: LiveOrder[] = [
     quantity: 2, price: 23_470, stopPrice: null, status: 'Working', symbol: 'MNQZ6',
     placedAt: UPDATED_AT, updatedAt: UPDATED_AT, working: true,
   },
+  // Čekající bracket na flat followerovi: SL/TP drží Tradovate Suspended do fillu vstupu.
+  {
+    id: 9004, accountId: FOLLOWER_B, accountName: 'TRD-2200418', action: 'Buy', orderType: 'Limit',
+    quantity: 2, price: 23_390, stopPrice: null, status: 'Working', symbol: 'MNQZ6',
+    placedAt: UPDATED_AT, updatedAt: UPDATED_AT, working: true,
+  },
+  {
+    id: 9005, accountId: FOLLOWER_B, accountName: 'TRD-2200418', action: 'Sell', orderType: 'Stop',
+    quantity: 2, price: null, stopPrice: 23_370, status: 'Suspended', symbol: 'MNQZ6',
+    placedAt: UPDATED_AT, updatedAt: UPDATED_AT, working: false,
+  },
+  {
+    id: 9006, accountId: FOLLOWER_B, accountName: 'TRD-2200418', action: 'Sell', orderType: 'Limit',
+    quantity: 2, price: 23_450, stopPrice: null, status: 'Suspended', symbol: 'MNQZ6',
+    placedAt: UPDATED_AT, updatedAt: UPDATED_AT, working: false,
+  },
+];
+
+/** Ruční přepínač followerů: A přepnout jde, B a C blokuje automatické vyřazení. */
+export const devLiveCopyFixtureParticipation = [
+  { accountId: FOLLOWER_A, configuredEnabled: true, effectiveEnabled: true, canToggle: true, blockers: [] as string[] },
+  {
+    accountId: FOLLOWER_B, configuredEnabled: true, effectiveEnabled: false, canToggle: false,
+    blockers: ['Automatické vyřazení: dll-locked'], automaticExclusion: 'dll-locked',
+  },
+  {
+    accountId: FOLLOWER_C, configuredEnabled: false, effectiveEnabled: false, canToggle: false,
+    blockers: ['Automatické vyřazení: breached'], automaticExclusion: 'breached',
+  },
 ];
 
 export const devLiveCopyFixtureEligibility: CopierAccountEligibility[] = [

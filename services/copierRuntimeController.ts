@@ -237,6 +237,15 @@ export interface CopierControllerStatus {
   sessionArmedAt?: number;
   /** Followeři vyřazení do konce session nebo do clean boundary aktuálního obchodu. */
   followerCuts?: CopierFollowerCut[];
+  /** Ruční participation je oddělená od automatické eligibility a cutů. */
+  followerParticipation?: Array<{
+    accountId: number;
+    configuredEnabled: boolean;
+    effectiveEnabled: boolean;
+    canToggle: boolean;
+    blockers: string[];
+    automaticExclusion?: string;
+  }>;
   /** Poslední broker risk snapshot per účet (vč. limitu propky). */
   accountRisk?: CopierAccountRiskSnapshot[];
   /**
@@ -516,6 +525,12 @@ export interface CopierRuntimeController {
   activateGroup(group: CopyGroupConfig, options?: CopierGroupReconfigurationOptions): Promise<void>;
   /** Synchronní změna follower/risk konfigurace při nezměněném leaderovi. */
   updateGroup(group: CopyGroupConfig): void;
+  /** Bez DISARM, serializovaně s broker eventy a s durable zápisem před změnou účasti. */
+  setFollowerEnabled(
+    accountId: number,
+    enabled: boolean,
+    persistGroup: (group: CopyGroupConfig) => Promise<void>,
+  ): Promise<CopyGroupConfig>;
   /** Explicitní ruční Flatten jednoho účtu. Nikdy se nespouští automaticky. */
   flattenAccount(accountId: number, operationId: string): Promise<ManualFlattenResult>;
   /** Zavře potvrzenou kopii followera a vyřadí jej jen do čistého konce obchodu. */
@@ -627,6 +642,9 @@ function assertRuntimeGroup(group: CopyGroupConfig): void {
     seen.add(follower.accountId);
     if (follower.mode !== 'off' && follower.mode !== 'on-submit' && follower.mode !== 'on-fill') {
       throw new Error('Follower má neplatný replication mode');
+    }
+    if (follower.enabled != null && typeof follower.enabled !== 'boolean') {
+      throw new Error('Follower má neplatný ruční participation stav');
     }
     if (!Number.isFinite(follower.multiplier) || follower.multiplier <= 0 || follower.multiplier > 100) {
       throw new Error('Follower multiplier musí být větší než 0 a nejvýše 100');
@@ -1005,6 +1023,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const currentEntryIneligibleAccounts = (now = clock()): ReadonlyMap<number, string> => {
     const ineligible = new Map(currentIneligibleAccounts(now));
     for (const follower of group.followers) {
+      if (follower.enabled === false) ineligible.set(follower.accountId, 'manual-participation-disabled');
       const cut = activeFollowerCut(follower.accountId, now);
       if (cut) ineligible.set(follower.accountId, `follower-cut:${cut.source}:${cut.until}`);
     }
@@ -1013,6 +1032,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const currentExitIneligibleAccounts = (now = clock()): ReadonlyMap<number, string> => {
     const ineligible = new Map(currentIneligibleAccounts(now));
     for (const follower of group.followers) {
+      if (follower.enabled === false) ineligible.set(follower.accountId, 'manual-participation-disabled');
       const cut = activeFollowerCut(follower.accountId, now);
       const closesCopy = cut?.source === 'manual' || (follower.onCut ?? 'close-copy') === 'close-copy';
       if (cut && closesCopy && (cut.source === 'manual' || cut.closed !== false)) {
@@ -1182,7 +1202,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const copyEvent: CopierCopyEvent = {
       id: `${at}-${copyEventCounter}`,
       at, kind, symbol, side, quantity,
-      followers: group.followers.filter(follower => follower.mode !== 'off').length,
+      followers: group.followers.filter(follower => follower.enabled !== false && follower.mode !== 'off').length,
       ...(episodeId ? { episodeId } : {}),
       ...extra,
     };
@@ -1252,6 +1272,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * čtení nevznikl novější incident, reconnect ani jiná invalidace.
    */
   let safetyGeneration = 0;
+  let participationGeneration = 0;
 
   // Ingress runs synchronously, while handleBrokerEvent is serialized behind
   // potentially slow OSO correlation/store writes. A terminal leader event
@@ -2126,7 +2147,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
   const leaderFlatFollowersAt = (symbol: string, leaderNet: number): LeaderFlatFollowerOwnership[] =>
     group.followers.map(follower => {
-      const eligibleAtOpen = follower.mode !== 'off'
+      const eligibleAtOpen = follower.enabled !== false && follower.mode !== 'off'
         && !currentIneligibleAccounts().has(follower.accountId)
         && !activeFollowerCut(follower.accountId);
       const followerNet = positionsByAccount.get(follower.accountId)?.get(symbol);
@@ -2152,7 +2173,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const epoch = leaderExposureEpoch(symbol);
     if (!epoch || epoch.phase !== 'open' || netQuantity === 0) return;
     const follower = group.followers.find(item => item.accountId === accountId);
-    if (!follower || follower.mode === 'off') return;
+    if (!follower || follower.enabled === false || follower.mode === 'off') return;
     const leaderNet = leaderPositions.get(symbol);
     if (leaderNet == null || leaderNet === 0) return;
     const expectedNet = Math.trunc(leaderNet * follower.multiplier);
@@ -2740,7 +2761,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           side: closingSide,
           quantity: closingQuantity,
           realizedPnlUsd: pv == null ? null : lot.tradePnlUsd,
-          followerCount: group.followers.filter(follower => follower.mode !== 'off').length,
+          followerCount: group.followers.filter(follower => follower.enabled !== false && follower.mode !== 'off').length,
           openedAt: lot.openedAt ?? null,
           closedAt: at,
           exitReason: leaderStopOrderIds.has(fill.brokerOrderId)
@@ -3238,6 +3259,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     pendingFollowerMagnitudeChecks.delete(key);
     const follower = group.followers.find(item => item.accountId === accountId);
     if (!follower
+      || follower.enabled === false
       || follower.mode === 'off'
       || currentIneligibleAccounts().has(accountId)
       || activeFollowerCut(accountId)) return;
@@ -3945,7 +3967,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       symbol: '',
       side: 'Long',
       quantity: 0,
-      followers: group.followers.filter(follower => follower.mode !== 'off').length,
+      followers: group.followers.filter(follower => follower.enabled !== false && follower.mode !== 'off').length,
       accountId: cut.accountId,
       cutUsd: cut.cutUsd,
       realizedPnlUsd: cut.realizedPnlUsd,
@@ -5728,6 +5750,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return null;
   };
 
+  // Unlike connection recovery, a participation toggle does not require
+  // every OTHER follower's previously opened copy to have finished. The
+  // leader and the selected follower must be flat; unfinished operations
+  // anywhere still fence a configuration change.
+  const participationLifecyclePending = (): boolean => (
+    pendingBracketTimers.size > 0
+    || pendingOsoTimers.size > 0
+    || pendingOsoEvents.size > 0
+    || pendingOsoFlushes.size > 0
+    || pendingFollowerTransitions.size > 0
+    || pendingFollowerMagnitudeChecks.size > 0
+    || sweepingProtectiveLegs.size > 0
+    || autoCloseInFlight
+    || [...followerCuts.values()].some(cut => cut.closed === null)
+  );
+
   /**
    * Po obyčejném reconnectu DISARMED runtime obnoví pre-ARM snapshot bez
    * obchodní akce. Nestačí jen shoda pozic: všechny zapojené účty musí být
@@ -5818,7 +5856,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const followerPositions = nextPositions.get(follower.accountId) ?? new Map<string, number>();
       const symbols = new Set([...nextLeaderPositions.keys(), ...followerPositions.keys()]);
       for (const symbol of symbols) {
-        const expected = Math.trunc((nextLeaderPositions.get(symbol) ?? 0) * follower.multiplier);
+        const expected = follower.enabled === false
+          ? 0 : Math.trunc((nextLeaderPositions.get(symbol) ?? 0) * follower.multiplier);
         if ((followerPositions.get(symbol) ?? 0) !== expected) {
           nextDivergentAccounts.add(follower.accountId);
           break;
@@ -6318,7 +6357,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     for (const follower of group.followers) {
       const acceptsEvent = (event.kind === 'submitted' && follower.mode === 'on-submit')
         || (event.kind === 'filled' && follower.mode === 'on-fill');
-      if (!acceptsEvent || currentIneligibleAccounts().has(follower.accountId)) continue;
+      if (!acceptsEvent || follower.enabled === false || currentIneligibleAccounts().has(follower.accountId)) continue;
       const key = intentionalSuppressionKey(follower.accountId, event.symbol);
       if (intentionalEntrySuppressions.has(key)) continue;
       const authoritativePositions = positionsByAccount.get(follower.accountId);
@@ -6646,7 +6685,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const letRunCut = cut != null && (follower.onCut ?? 'close-copy') === 'let-run';
       const modeAcceptsEvent = (event.kind === 'filled' && follower.mode === 'on-fill')
         || (event.kind === 'submitted' && follower.mode === 'on-submit');
-      if (!modeAcceptsEvent || (cut && !letRunCut)) {
+      if (!modeAcceptsEvent || follower.enabled === false || (cut && !letRunCut)) {
         return follower;
       }
       const positionSnapshot = positionsByAccount.get(follower.accountId);
@@ -7349,6 +7388,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (event.position.accountId !== group.leaderAccountId) {
         const follower = group.followers.find(item => item.accountId === event.position.accountId);
         if (follower
+          && follower.enabled !== false
           && follower.mode !== 'off'
           && !currentIneligibleAccounts().has(follower.accountId)
           && !activeFollowerCut(follower.accountId)) {
@@ -7384,7 +7424,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           const suppression = intentionalEntrySuppressions.get(
             intentionalSuppressionKey(follower.accountId, event.position.symbol),
           );
-          if (follower.mode === 'off'
+          if (follower.enabled === false
+            || follower.mode === 'off'
             || currentIneligibleAccounts().has(follower.accountId)
             || activeFollowerCut(follower.accountId)
             || (suppression != null && followerNet === suppression.allowedNet)) continue;
@@ -7500,7 +7541,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           (currentRuntime().state.links.get(leaderEvent.orderId) ?? []).map(link => link.accountId),
         );
         const hasExistingOnSubmitCopy = group.followers.some(follower => (
-          follower.mode === 'on-submit' && linkedAccounts.has(follower.accountId)
+          follower.enabled !== false
+          && follower.mode === 'on-submit' && linkedAccounts.has(follower.accountId)
         ));
         // Bracket korelátor smí fill podržet jen tehdy, když alespoň
         // jeden on-submit follower prokazatelně dostal jeho entry. Jinak je
@@ -7959,7 +8001,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (leaderEvent.kind === 'replaced' && leaderEvent.executionShapeChanged === true) {
       const hasFollowerLink = (currentRuntime().state.links.get(leaderEvent.orderId)?.length ?? 0) > 0;
       const needsSubmitLifecycle = group.followers.some(follower => (
-        follower.mode === 'on-submit' && !currentIneligibleAccounts().has(follower.accountId)
+        follower.enabled !== false
+        && follower.mode === 'on-submit' && !currentIneligibleAccounts().has(follower.accountId)
       ));
       if (!hasFollowerLink && needsSubmitLifecycle) {
         const error = new Error(
@@ -8364,7 +8407,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           && accountEligibility.get(follower.accountId)?.state === 'breached';
         for (const symbol of symbols) {
           const leaderNet = reconciledLeaderPositions.get(symbol) ?? 0;
-          const expected = expectsFlatAfterCut || isolatedBreach
+          const expected = follower.enabled === false || expectsFlatAfterCut || isolatedBreach
             ? 0
             : Math.trunc(leaderNet * follower.multiplier);
           const actual = followerPositions.get(symbol) ?? 0;
@@ -8844,7 +8887,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (leaderReason) throw new Error(`Leader účet není způsobilý pro nové vstupy: ${leaderReason}`);
       if (!shadowMode) {
         const participatingFollowers = group.followers.filter(follower =>
-          follower.mode !== 'off'
+          follower.enabled !== false && follower.mode !== 'off'
           && !ineligible.has(follower.accountId)
           && !activeFollowerCut(follower.accountId, now));
         if (participatingFollowers.length === 0) {
@@ -9169,6 +9212,128 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         forceEpoch: true,
       });
     },
+    async setFollowerEnabled(accountId, enabled, persistGroup) {
+      const run = eventTail.then(async () => {
+        const follower = group.followers.find(item => item.accountId === accountId);
+        const before = follower?.enabled !== false;
+        const audit = (outcome: 'changed' | 'blocked', reason: string, after = before) => {
+          const at = clock();
+          options.onAudit?.([{
+            at, leaderEventId: `follower-participation:${group.id}:${accountId}:${participationGeneration}:${at}`,
+            kind: 'follower-participation', accountId, reason, participationOutcome: outcome,
+            configuredEnabledBefore: before, configuredEnabledAfter: after,
+          }]);
+        };
+        try {
+          if (!Number.isSafeInteger(accountId) || !follower) throw new Error('Účet není follower této skupiny');
+          if (typeof enabled !== 'boolean') throw new Error('Neplatný stav přepínače followera');
+          const eligibility = currentIneligibleAccounts().get(accountId);
+          const cut = activeFollowerCut(accountId);
+          if (eligibility || cut || follower.mode === 'off') {
+            throw new Error(`Follower je automaticky nebo režimem vyřazen: ${eligibility ?? (cut ? `follower-cut:${cut.source}` : 'mode-off')}`);
+          }
+          if (enabled === before) return group;
+          if (stopped || shutdownRequested || !gate.connected || gate.killSwitch) {
+            throw new Error('Worker není připravený nebo připojený');
+          }
+          if (source.needsReconciliation() || !positionCheckComplete
+            || reconciliationRequestsPending > 0 || recoveryInFlight
+            || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery) {
+            throw new Error('Čeká kontrola pozic nebo obnova spojení');
+          }
+          if (pendingBrokerEvents > 0 || participationLifecyclePending()
+            || currentStuckOperations().length > 0 || hasBrokerUncertainOutbox()) {
+            throw new Error('Probíhá broker událost, obchodní lifecycle nebo nejasný outbox');
+          }
+          const generation = safetyGeneration;
+          const observation = brokerObservationVersion;
+          const participation = participationGeneration;
+          const leaderAccountId = group.leaderAccountId!;
+          const accountIds = [leaderAccountId, accountId];
+          for (const id of accountIds) {
+            if ([...(positionsByAccount.get(id)?.values() ?? [])].some(quantity => quantity !== 0)) {
+              throw new Error(`Účet ${id} má podle živého streamu otevřenou pozici`);
+            }
+            if ((liveOrdersByAccount.get(id)?.size ?? 0) > 0) {
+              throw new Error(`Účet ${id} má podle živého streamu čekající příkaz`);
+            }
+          }
+          const readRound = async () => withLeaderEpochDeadline('Přepnutí followera', Promise.all(
+            accountIds.map(async id => {
+              const [positions, orders] = await Promise.all([
+                broker.listPositions(id), broker.listOrders(id),
+              ]);
+              return { accountId: id, positions, orders };
+            }),
+          ));
+          const assertUnchanged = () => {
+            if (stopped || shutdownRequested || !gate.connected || gate.killSwitch
+              || safetyGeneration !== generation || brokerObservationVersion !== observation
+              || participationGeneration !== participation || pendingBrokerEvents > 0
+              || source.needsReconciliation() || recoveryInFlight
+              || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery
+              || reconciliationRequestsPending > 0 || participationLifecyclePending()
+              || currentStuckOperations().length > 0
+              || hasBrokerUncertainOutbox()) {
+              throw new Error('Stav se během ověření změnil; přepnutí followera opakuj');
+            }
+          };
+          let confirmedSnapshots: Awaited<ReturnType<typeof readRound>> = [];
+          for (let round = 0; round < 2; round += 1) {
+            const snapshots = await readRound();
+            assertUnchanged();
+            for (const snapshot of snapshots) {
+              if (snapshot.positions.some(position => position.netQuantity !== 0)) {
+                throw new Error(`Účet ${snapshot.accountId} má otevřenou pozici`);
+              }
+              if (snapshot.orders.some(order => isOpenOrderStatus(order.status))) {
+                throw new Error(`Účet ${snapshot.accountId} má čekající nebo pracovní příkaz`);
+              }
+            }
+            confirmedSnapshots = snapshots;
+          }
+          assertUnchanged();
+          const previous = group;
+          const next = normalizedRuntimeGroup({
+            ...previous,
+            followers: previous.followers.map(item => item.accountId === accountId
+              ? { ...item, enabled }
+              : item),
+          });
+          try {
+            await persistGroup(next);
+            // Ingress is synchronous while the store fsyncs. Its event stays
+            // behind this eventTail item; roll back before it may dispatch.
+            assertUnchanged();
+          } catch (reason) {
+            try {
+              await persistGroup(previous);
+            } catch (rollbackError) {
+              failClosed(new Error(`Participation persistence/rollback uncertain: ${String(rollbackError)}`));
+            }
+            throw reason;
+          }
+          group = next;
+          participationGeneration += 1;
+          // The two fresh rounds are now the authoritative flat baseline.
+          for (const snapshot of confirmedSnapshots) {
+            positionsByAccount.set(snapshot.accountId, new Map(
+              snapshot.positions.map(position => [position.symbol, position.netQuantity]),
+            ));
+            rememberLiveOrderSnapshot(snapshot.accountId, snapshot.orders);
+          }
+          lastAuthoritativeReadAt = clock();
+          lastBrokerPositionAt = lastAuthoritativeReadAt;
+          audit('changed', `ruční účast změněna ${before} → ${enabled}`, enabled);
+          return group;
+        } catch (reason) {
+          audit('blocked', errorOf(reason).message);
+          throw reason;
+        }
+      });
+      eventTail = run.then(() => undefined, () => undefined);
+      return run;
+    },
     updateGroup(nextGroup) {
       // Jakýkoli pokus o změnu konfigurace nejdřív zavře live dispatch.
       gate = { ...gate, armed: false };
@@ -9330,6 +9495,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           const symbols = new Set(positions.map(position => position.symbol));
           const followers = group.followers.map(follower => {
             const id = follower.accountId;
+            if (follower.enabled === false) {
+              const held = positionsByAccount.get(id);
+              const nonFlat = held == null || [...held.values()].some(quantity => quantity !== 0);
+              const working = (liveOrdersByAccount.get(id)?.size ?? 0) > 0;
+              return nonFlat || working || gate.divergentAccounts.has(id)
+                ? { accountId: id, ok: false, detail: working
+                  ? 'vypnutý follower má aktivní příkaz'
+                  : 'vypnutý follower není flat' }
+                : { accountId: id, ok: true, detail: 'ručně vypnutý follower' };
+            }
             if (follower.mode === 'off') return { accountId: id, ok: true, detail: 'vypnutý follower' };
             if (gate.divergentAccounts.has(id)) return { accountId: id, ok: false, detail: 'pozice se liší od leadera' };
             if (workingOrderAccounts.has(id)) return { accountId: id, ok: false, detail: 'aktivní příkazy mimo kopii' };
@@ -9413,6 +9588,42 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           .filter(cut => cut.until > statusNow
             && group.followers.some(follower => follower.accountId === cut.accountId))
           .map(cut => ({ ...cut })),
+        followerParticipation: group.followers.map(follower => {
+          const configuredEnabled = follower.enabled !== false;
+          const eligibility = currentIneligibleAccounts(statusNow).get(follower.accountId);
+          const cut = activeFollowerCut(follower.accountId, statusNow);
+          const automaticExclusion = eligibility ?? (cut ? `follower-cut:${cut.source}` : undefined);
+          const blockers: string[] = [];
+          if (!gate.connected || stopped || shutdownRequested) blockers.push('Worker není připojený');
+          if (lastAuthoritativeReadAt == null || statusNow - lastAuthoritativeReadAt > 5 * 60_000
+            || !positionsByAccount.has(group.leaderAccountId!)
+            || !positionsByAccount.has(follower.accountId)) blockers.push('Snapshot pozic není čerstvý');
+          if (source.needsReconciliation() || !positionCheckComplete) blockers.push('Čeká kontrola pozic');
+          if (automaticExclusion) blockers.push(`Automatické vyřazení: ${automaticExclusion}`);
+          if (follower.mode === 'off') blockers.push('Režim replikace je vypnutý');
+          if ([...(positionsByAccount.get(group.leaderAccountId!)?.values() ?? [])].some(quantity => quantity !== 0)) {
+            blockers.push('Leader má otevřenou pozici');
+          }
+          if ([...(positionsByAccount.get(follower.accountId)?.values() ?? [])].some(quantity => quantity !== 0)) {
+            blockers.push('Follower má otevřenou pozici');
+          }
+          if ((liveOrdersByAccount.get(group.leaderAccountId!)?.size ?? 0) > 0) blockers.push('Leader má čekající příkaz');
+          if ((liveOrdersByAccount.get(follower.accountId)?.size ?? 0) > 0) blockers.push('Follower má čekající příkaz');
+          if (pendingBrokerEvents > 0 || participationLifecyclePending()) blockers.push('Probíhá obchodní lifecycle');
+          if (hasBrokerUncertainOutbox() || reconciliationRequestsPending > 0
+            || recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery) {
+            blockers.push('Nejasný outbox nebo obnova spojení');
+          }
+          if (gate.killSwitch) blockers.push('Kill switch je aktivní');
+          return {
+            accountId: follower.accountId,
+            configuredEnabled,
+            effectiveEnabled: configuredEnabled && follower.mode !== 'off' && !automaticExclusion,
+            canToggle: blockers.length === 0,
+            blockers,
+            ...(automaticExclusion ? { automaticExclusion } : {}),
+          };
+        }),
         accountRisk: [...accountRisk.values()]
           .filter(snapshot => snapshot.accountId === group.leaderAccountId
             || group.followers.some(follower => follower.accountId === snapshot.accountId))

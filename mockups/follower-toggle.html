@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zapnutí / vypnutí účtu ve skupině — varianty</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-page:#020617; --bg-card:#0a0f1d; --bg-row:#0c1222; --text-primary:#f8fafc; --text-secondary:#94a3b8;
+  --text-muted:#475569; --border-subtle:rgba(255,255,255,.07); --track:#1e293b;
+  --emerald:#10b981; --emerald-dark:#059669; --rose:#f43f5e; --amber:#f59e0b; --indigo:#6366f1;
+}
+.light {
+  --bg-page:#f8fafc; --bg-card:#ffffff; --bg-row:#ffffff; --text-primary:#0f172a; --text-secondary:#475569;
+  --text-muted:#94a3b8; --border-subtle:#e2e8f0; --track:#e2e8f0;
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:28px 16px 80px; font-family:Inter,system-ui,sans-serif;
+  background:var(--bg-page); color:var(--text-primary); }
+.wrap { max-width:1180px; margin:0 auto; }
+h1 { font-size:21px; font-weight:900; letter-spacing:-.02em; margin:0 0 6px; }
+.lede { font-size:13px; line-height:1.6; color:var(--text-secondary); max-width:90ch; margin:0 0 18px; }
+.lede b { color:var(--text-primary); }
+.bar { position:sticky; top:10px; z-index:30; display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+  padding:9px 12px; margin-bottom:26px; border:1px solid var(--border-subtle); border-radius:12px;
+  background:var(--bg-card); box-shadow:0 4px 16px -8px rgba(0,0,0,.4); }
+.bar b { font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); }
+.bar button { font:inherit; font-size:11px; font-weight:800; padding:6px 12px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--border-subtle); background:transparent; color:var(--text-secondary); }
+.bar button[aria-pressed="true"] { background:var(--indigo); border-color:var(--indigo); color:#fff; }
+
+section { margin-bottom:34px; }
+.vhead { display:flex; align-items:baseline; gap:10px; margin:0 0 4px; }
+.vhead h2 { margin:0; font-size:15px; font-weight:900; }
+.tag { font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; padding:2px 7px; border-radius:5px;
+  background:color-mix(in srgb, var(--indigo) 18%, transparent); color:#a5b4fc; }
+.light .tag { color:var(--indigo); }
+.tag.rec { background:color-mix(in srgb, var(--emerald) 16%, transparent); color:var(--emerald); }
+.vdesc { font-size:12px; line-height:1.55; color:var(--text-secondary); margin:0 0 10px; max-width:95ch; }
+.pros { display:flex; gap:18px; flex-wrap:wrap; font-size:11px; color:var(--text-secondary); margin:10px 2px 0; }
+.pros span::before { content:"+ "; color:var(--emerald); font-weight:900; }
+.pros span.con::before { content:"− "; color:var(--rose); }
+
+/* ── panel skupiny ── */
+.panel { border:1px solid var(--border-subtle); border-radius:14px; background:var(--bg-card); overflow:hidden; }
+.ghead { display:flex; align-items:center; gap:14px; padding:12px 16px; border-bottom:1px solid var(--border-subtle); font-size:12px; }
+.ghead .name { font-weight:800; display:flex; align-items:center; gap:6px; }
+.ghead .name::before { content:""; width:6px; height:6px; border-radius:9px; background:var(--emerald); }
+.gstat { display:inline-flex; align-items:center; gap:6px; font-size:10px; font-weight:900; letter-spacing:.06em; text-transform:uppercase;
+  padding:3px 8px; border-radius:6px; border:1px solid var(--border-subtle); color:var(--text-secondary); }
+.gstat .dots { display:inline-flex; gap:2px; }
+.gstat .dots i { width:5px; height:5px; border-radius:9px; background:var(--emerald); }
+.gstat .dots i.off { background:var(--text-muted); opacity:.6; }
+.ghead .spacer { flex:1; }
+.ghead .muted { color:var(--text-muted); font-size:11px; }
+
+table { width:100%; border-collapse:collapse; font-size:12.5px; }
+th { text-align:left; font-size:9.5px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted);
+  padding:8px 12px; border-bottom:1px solid var(--border-subtle); white-space:nowrap; }
+td { padding:9px 12px; border-bottom:1px solid var(--border-subtle); white-space:nowrap; tabular-nums:1; font-variant-numeric:tabular-nums; }
+tr:last-child td { border-bottom:none; }
+.r { text-align:right; } .c { text-align:center; }
+.acct { display:flex; align-items:center; gap:8px; font-weight:600; }
+.dot { width:6px; height:6px; border-radius:9px; background:var(--emerald); flex:none; }
+.crown { font-size:11px; padding:1px 4px; border-radius:4px; background:rgba(245,158,11,.14); color:var(--amber); }
+.firm { display:inline-flex; align-items:center; gap:6px; color:var(--text-secondary); }
+.firm i { width:16px; height:16px; border-radius:9px; border:1.5px solid var(--text-secondary); display:inline-block; }
+.firm i.tdf { border-color:var(--emerald); background:color-mix(in srgb,var(--emerald) 25%,transparent); }
+.pos { color:var(--text-secondary); }
+.chip { display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:900; padding:4px 7px; border-radius:6px;
+  border:1px solid rgba(16,185,129,.25); background:rgba(16,185,129,.1); color:var(--emerald); }
+.pnl-pos { color:var(--emerald); } .pnl-zero { color:var(--text-secondary); }
+.mult { display:inline-flex; width:30px; height:26px; align-items:center; justify-content:center; border-radius:7px;
+  border:1px solid var(--border-subtle); background:var(--bg-page); font-weight:800; }
+.kebab { color:var(--text-muted); font-weight:900; letter-spacing:1px; cursor:pointer; }
+
+/* stavy řádku */
+td { transition:opacity .35s ease; }
+tr.is-off td:not(.keep) { opacity:.42; }
+/* Čeká na potvrzení workerem: jezdec už je v nové poloze, točí se v něm kolečko. */
+.sw.pending { cursor:default; }
+.sw.pending i::after { content:""; position:absolute; inset:3px; border-radius:99px;
+  border:1.6px solid rgba(15,23,42,.18); border-top-color:#0f172a; animation:spin .7s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+/* Potvrzeno: krátký „pulz“ kolem přepínače. */
+.sw.confirmed { animation:pulse .6s ease-out; }
+@keyframes pulse { 0% { box-shadow:0 0 0 0 rgba(16,185,129,.55); } 100% { box-shadow:0 0 0 8px rgba(16,185,129,0); } }
+.sw.confirmed-off { animation:pulseoff .6s ease-out; }
+@keyframes pulseoff { 0% { box-shadow:0 0 0 0 rgba(148,163,184,.5); } 100% { box-shadow:0 0 0 8px rgba(148,163,184,0); } }
+/* Odmítnuto: vrátí se zpět a zatřese. */
+.sw.shake { animation:shake .42s cubic-bezier(.36,.07,.19,.97); }
+@keyframes shake { 20%,60% { transform:translateX(-3px); } 40%,80% { transform:translateX(3px); } }
+.flash { position:fixed; left:50%; bottom:22px; transform:translate(-50%,20px); opacity:0; z-index:50; max-width:440px;
+  transition:opacity .2s, transform .25s cubic-bezier(.34,1.4,.5,1); pointer-events:none; }
+.flash.show { opacity:1; transform:translate(-50%,0); }
+tr.is-off .dot { background:var(--text-muted); }
+.badge { display:inline-flex; align-items:center; gap:4px; font-size:9px; font-weight:900; letter-spacing:.06em; text-transform:uppercase;
+  padding:2px 6px; border-radius:5px; white-space:nowrap; }
+.badge.off { background:rgba(148,163,184,.14); color:var(--text-secondary); }
+.badge.cut { background:rgba(245,158,11,.14); color:var(--amber); }
+.badge.lock { background:rgba(99,102,241,.14); color:#a5b4fc; }
+.light .badge.lock { color:var(--indigo); }
+
+/* ── přepínač ── */
+.sw { position:relative; width:32px; height:18px; border-radius:99px; background:var(--track); border:none; padding:0; cursor:pointer;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.3); transition:background .25s; flex:none; vertical-align:middle; }
+.sw i { position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:99px; background:#fff;
+  box-shadow:0 1px 2px rgba(0,0,0,.35); transition:transform .28s cubic-bezier(.34,1.5,.45,1); }
+.sw.on { background:linear-gradient(180deg,var(--emerald),var(--emerald-dark)); }
+.sw.on i { transform:translateX(14px); }
+.sw[disabled] { cursor:not-allowed; }
+/* Zamčeno během obchodu: stav zůstává čitelný (poloha + barva), zámek sedí přímo v jezdci. */
+.sw.locked { filter:saturate(.7); opacity:.9; }
+.sw.locked i { background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23334155' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='5' y='11' width='14' height='10' rx='2'/%3E%3Cpath d='M8 11V7a4 4 0 0 1 8 0v4'/%3E%3C/svg%3E") center / 11px 11px no-repeat; }
+.sw.locked:not(.on) i { background-color:#e2e8f0; }
+.swlbl { font-size:10px; font-weight:800; color:var(--text-muted); margin-left:6px; vertical-align:middle; }
+.sw.on + .swlbl { color:var(--emerald); }
+
+/* tooltip */
+.tip { position:relative; display:inline-flex; align-items:center; }
+.tip:hover .bubble { opacity:1; transform:translate(-50%,0); pointer-events:auto; }
+.bubble { position:absolute; bottom:calc(100% + 8px); left:50%; transform:translate(-50%,4px); opacity:0; pointer-events:none;
+  width:230px; white-space:normal; z-index:20; padding:9px 11px; border-radius:10px; font-size:11px; line-height:1.45;
+  background:#111827; color:#e2e8f0; border:1px solid rgba(255,255,255,.08); box-shadow:0 10px 30px -10px rgba(0,0,0,.6);
+  transition:opacity .15s, transform .15s; }
+.bubble b { color:#fff; }
+
+/* varianta C: segment */
+.seg { display:inline-flex; border:1px solid var(--border-subtle); border-radius:8px; overflow:hidden; background:var(--bg-page); }
+.seg button { font:inherit; font-size:10px; font-weight:800; padding:4px 9px; border:none; background:transparent; color:var(--text-muted); cursor:pointer; }
+.seg button.sel.on { background:rgba(16,185,129,.16); color:var(--emerald); }
+.seg button.sel.off { background:rgba(148,163,184,.16); color:var(--text-primary); }
+.seg.dis { opacity:.45; pointer-events:none; }
+
+/* varianta D: menu */
+.menu { position:absolute; right:10px; top:26px; width:230px; z-index:15; border-radius:12px; padding:6px;
+  background:var(--bg-card); border:1px solid var(--border-subtle); box-shadow:0 18px 40px -12px rgba(0,0,0,.7); }
+.menu div { display:flex; align-items:center; gap:9px; padding:8px 9px; border-radius:8px; font-size:12px; color:var(--text-secondary); }
+.menu div.hl { background:rgba(255,255,255,.05); color:var(--text-primary); }
+.menu div.dim { opacity:.45; }
+.menu hr { border:none; border-top:1px solid var(--border-subtle); margin:4px 0; }
+.menu small { display:block; font-size:10px; color:var(--text-muted); margin-top:1px; }
+
+/* doplňky */
+.extras { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:16px; }
+.card { border:1px solid var(--border-subtle); border-radius:14px; background:var(--bg-card); padding:16px; }
+.card h3 { margin:0 0 4px; font-size:13px; font-weight:900; }
+.card p { margin:0 0 12px; font-size:11.5px; line-height:1.55; color:var(--text-secondary); }
+.dialog { border:1px solid var(--border-subtle); border-radius:12px; padding:16px; background:var(--bg-page); }
+.dialog h4 { margin:0 0 6px; font-size:14px; font-weight:900; }
+.dialog .warn { display:flex; gap:9px; padding:9px 11px; border-radius:9px; margin:10px 0 12px; font-size:11.5px; line-height:1.45;
+  background:rgba(148,163,184,.1); color:var(--text-secondary); }
+.dialog .warn b { color:var(--text-primary); }
+.btns { display:flex; gap:8px; justify-content:flex-end; }
+.btn { font:inherit; font-size:11.5px; font-weight:800; padding:7px 13px; border-radius:8px; border:1px solid var(--border-subtle);
+  background:transparent; color:var(--text-secondary); cursor:pointer; }
+.btn.primary { background:var(--emerald); border-color:var(--emerald); color:#022c22; }
+.toast { display:flex; align-items:center; gap:10px; padding:11px 13px; border-radius:11px; font-size:12px;
+  background:var(--bg-page); border:1px solid var(--border-subtle); }
+.toast .ic { width:24px; height:24px; border-radius:7px; display:grid; place-items:center; background:rgba(99,102,241,.16); color:#a5b4fc; font-size:12px; }
+.rel { position:relative; }
+.states td:first-child { color:var(--text-secondary); font-size:11.5px; white-space:normal; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Zapnutí / vypnutí účtu ve skupině</h1>
+  <p class="lede">Follower jde dočasně vyřadit z kopírování bez mazání ze skupiny — násobek, strop i limity zůstanou.
+  Pravidla: <b>přepnout jde jen když leader i ten účet nemají pozici ani čekající příkaz</b> (zapnutý účet tak vždy naskočí až od dalšího obchodu),
+  vypnutí platí <b>do ručního zapnutí</b>, vypnutý účet se dál sleduje a Flatten na něm funguje.
+  Přepínače jsou v mockupu klikací; řádek s 🔒 ukazuje stav „během obchodu“.</p>
+
+  <div class="bar">
+    <b>Motiv</b>
+    <button data-theme="dark" aria-pressed="true">Tmavý</button>
+    <button data-theme="light" aria-pressed="false">Světlý</button>
+    <span style="flex:1"></span>
+    <b>Skupina</b>
+    <button data-trade="flat" aria-pressed="true">Bez obchodu</button>
+    <button data-trade="open" aria-pressed="false">Leader v obchodě</button>
+    <span style="width:10px"></span>
+    <b>Worker</b>
+    <button data-worker="ok" aria-pressed="true">Potvrdí</button>
+    <button data-worker="reject" aria-pressed="false">Odmítne</button>
+  </div>
+
+  <!-- ═════════ A ═════════ -->
+  <section>
+    <div class="vhead"><h2>A · Přepínač na začátku řádku</h2><span class="tag rec">doporučuju</span></div>
+    <p class="vdesc">Jako u TradeSynceru: malý přepínač hned před jménem účtu. Stav je vidět při prvním pohledu na řádek,
+    vypnutý řádek zešedne — štítek není potřeba, stav říká přepínač. Během obchodu je v jezdci zámek. Leader přepínač nemá (korunka).</p>
+    <div class="panel" data-variant="A"></div>
+    <div class="pros"><span>stav účtu je první, co vidíš</span><span>jedno kliknutí</span><span>nejbližší TradeSynceru</span><span class="con">o 44 px širší první sloupec</span></div>
+  </section>
+
+  <!-- ═════════ B ═════════ -->
+  <section>
+    <div class="vhead"><h2>B · Sloupec „Kopírovat“ vedle násobku</h2><span class="tag">nastavení u sebe</span></div>
+    <p class="vdesc">Přepínač v samostatném sloupci vpravo, u násobku — všechna „nastavení účtu“ na jednom místě, levá část
+    řádku zůstane čistá pro čísla.</p>
+    <div class="panel" data-variant="B"></div>
+    <div class="pros"><span>logicky u násobku</span><span>nemění levý okraj tabulky</span><span class="con">na úzké obrazovce se odsune za scroll</span></div>
+  </section>
+
+  <!-- ═════════ C ═════════ -->
+  <section>
+    <div class="vhead"><h2>C · Segment Kopíruje / Vypnuto</h2><span class="tag">nejčitelnější</span></div>
+    <p class="vdesc">Místo přepínače dvoupolohový segment se slovy. Nenechá žádnou pochybnost, co je zapnuté —
+    za cenu víc místa.</p>
+    <div class="panel" data-variant="C"></div>
+    <div class="pros"><span>stav slovy, ne barvou</span><span>těžko se splete</span><span class="con">nejvíc místa (≈ 130 px)</span><span class="con">vizuálně „těžší“ tabulka</span></div>
+  </section>
+
+  <!-- ═════════ D ═════════ -->
+  <section>
+    <div class="vhead"><h2>D · V menu ⋮ účtu</h2><span class="tag">minimalistická</span></div>
+    <p class="vdesc">Žádný nový prvek v řádku; „Pozastavit kopírování“ je položka v menu účtu. V řádku se objeví jen štítek, když je účet vypnutý.
+    Bezpečné proti náhodnému kliknutí, ale pomalejší.</p>
+    <div class="panel rel" data-variant="D"></div>
+    <div class="pros"><span>čistá tabulka</span><span>náhodné vypnutí skoro nemožné</span><span class="con">dvě kliknutí</span><span class="con">stav zapnuto není vidět (jen vypnuto)</span></div>
+  </section>
+
+  <!-- ═════════ doplňky ═════════ -->
+  <section>
+    <div class="vhead"><h2>Společné doplňky</h2><span class="tag">pro všechny varianty</span></div>
+    <p class="vdesc">Vypnutí platí do ručního zapnutí, takže je důležité, aby se na vypnutý účet nezapomnělo.</p>
+    <div class="extras">
+      <div class="card">
+        <h3>1 · Hlavička skupiny: „Kopíruje 3/4“</h3>
+        <p>Počet kopírujících followerů přímo v řádku skupiny, s tečkami. Když jsou zapnutí všichni, jen „4 followeři“ jako dnes.</p>
+        <div class="toast" style="justify-content:space-between">
+          <span style="display:flex;gap:10px;align-items:center;font-weight:800">Hlavní
+            <span class="gstat"><span class="dots"><i></i><i></i><i class="off"></i><i></i></span>Kopíruje 3/4</span></span>
+          <span class="muted" style="font-size:11px;color:var(--text-muted)">$258,553.50</span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>2 · Připomínka při zapnutí kopírky (ARM)</h3>
+        <p>Když zapínáš kopírku a některý účet je vypnutý, řekne to jedna věta v potvrzení. Nic neblokuje.</p>
+        <div class="dialog">
+          <h4>Zapnout kopírku?</h4>
+          <div style="font-size:11.5px;color:var(--text-secondary)">Skupina Hlavní · leader LFF…0008</div>
+          <div class="warn"><span>⏸</span><span><b>LFF…0010 je vypnutý</b> a kopírovat nebude. Zapnout ho můžeš v řádku účtu.</span></div>
+          <div class="btns"><button class="btn">Zrušit</button><button class="btn primary">Zapnout kopírku</button></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>3 · Pokus o přepnutí během obchodu</h3>
+        <p>Přepínač je zašedlý se zámkem; po najetí vysvětlí proč. Kdyby se obchod otevřel přesně ve chvíli kliknutí, worker přepnutí odmítne a appka to řekne:</p>
+        <div class="toast"><span class="ic">🔒</span><span><b>Nepřepnuto.</b> Leader právě otevřel obchod — účet můžeš přepnout, až bude skupina bez pozic a příkazů.</span></div>
+      </div>
+      <div class="card">
+        <h3>4 · Stavy řádku (vše varianty)</h3>
+        <p>Automatická vyřazení (limit ztráty, breach) mají vlastní štítek a ručním přepínačem se obejít nedají.</p>
+        <table class="states">
+          <tr><td>Kopíruje</td><td><button class="sw on" aria-label="kopíruje"><i></i></button></td></tr>
+          <tr><td>Vypnuto ručně</td><td><button class="sw" aria-label="vypnuto"><i></i></button> <span class="swlbl" style="margin-left:4px">řádek zešedne, bez štítku</span></td></tr>
+          <tr><td>Během obchodu (zapnutý)</td><td><button class="sw on locked" disabled><i></i></button></td></tr>
+          <tr><td>Během obchodu (vypnutý)</td><td><button class="sw locked" disabled><i></i></button></td></tr>
+          <tr><td>Vyřazen limitem ztráty</td><td><span class="badge cut">⚠ Limit ztráty · do zítřka</span></td></tr>
+        </table>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+const accounts = [
+  { id:'LFF05066846490008', firm:'Lucid', bal:'$51,352.00', leader:true },
+  { id:'LFF05066846490011', firm:'Lucid', bal:'$51,416.00', on:true },
+  { id:'FTDFYG50488642119', firm:'Tradeify', bal:'$53,029.00', on:true, tdf:true },
+  { id:'LFF05066846490010', firm:'Lucid', bal:'$51,431.00', on:false },
+  { id:'LFF05066846490009', firm:'Lucid', bal:'$51,325.50', on:true, cut:true },
+];
+let tradeOpen = false;
+let workerRejects = false;
+const busy = new Set();
+let menuOpenFor = 'LFF05066846490010';
+
+const lockTip = '<div class="bubble"><b>Nelze přepnout během obchodu.</b> Leader má otevřenou pozici nebo čekající příkaz. Přepnout půjde, až bude skupina bez pozic a příkazů — zapnutý účet pak naskočí od dalšího obchodu.</div>';
+const offTip = '<div class="bubble"><b>Kopírování vypnuto</b> — na účet se nic nekopíruje, dál ho sledujeme a Flatten funguje. Platí do ručního zapnutí.</div>';
+const cutTip = '<div class="bubble"><b>Vyřazen automaticky</b> — účet dosáhl denního limitu ztráty. Kopírovat začne zase zítra; ručně to obejít nejde.</div>';
+
+function sw(a, label) {
+  if (a.cut) return `<span class="tip"><span class="badge cut">⚠ Limit</span>${cutTip}</span>`;
+  const locked = tradeOpen;
+  return `<span class="tip"><button class="sw ${a.on?'on':''} ${locked?'locked':''}" ${locked?'disabled':''} data-acc="${a.id}" aria-label="${a.on?'Kopíruje':'Vypnuto'}"><i></i></button>${label?`<span class="swlbl">${a.on?'Kopíruje':'Vypnuto'}</span>`:''}${locked?lockTip:''}</span>`;
+}
+function seg(a) {
+  if (a.cut) return `<span class="tip"><span class="badge cut">⚠ Limit ztráty</span>${cutTip}</span>`;
+  return `<span class="tip"><span class="seg ${tradeOpen?'dis':''}"><button class="${a.on?'sel on':''}" data-acc="${a.id}" data-set="1">Kopíruje</button><button class="${!a.on?'sel off':''}" data-acc="${a.id}" data-set="0">Vypnuto</button></span>${tradeOpen?lockTip:''}</span>`;
+}
+function statusBadge(a) {
+  if (a.leader) return '';
+  if (a.cut) return ` <span class="tip"><span class="badge cut">⚠ Limit ztráty</span>${cutTip}</span>`;
+  if (!a.on) return ` <span class="tip"><span class="badge off">⏸ Vypnuto</span>${offTip}</span>`;
+  return '';
+}
+function posCell(a) {
+  if (!tradeOpen) return '<span class="pos">—</span>';
+  if (a.leader || (a.on && !a.cut)) return '<span class="chip">MNQ +2 🛡</span>';
+  return '<span class="pos">—</span>';
+}
+function groupHead() {
+  const f = accounts.filter(a => !a.leader);
+  const active = f.filter(a => a.on && !a.cut).length;
+  const dots = f.map(a => `<i class="${a.on && !a.cut ? '' : 'off'}"></i>`).join('');
+  const label = active === f.length ? `${f.length} followeři` : `Kopíruje ${active}/${f.length}`;
+  return `<div class="ghead"><span class="name">Hlavní</span><span class="gstat"><span class="dots">${dots}</span>${label}</span>
+    <span class="muted">leader LFF…0008</span><span class="spacer"></span><span class="muted">${tradeOpen?'Leader v obchodě · přepínání zamčeno':'Bez obchodu · přepínat lze'}</span></div>`;
+}
+function rowClass(a) { return (!a.leader && (!a.on || a.cut)) ? 'is-off' : ''; }
+function acctCell(a, withSwitch) {
+  const lead = a.leader ? ' <span class="crown">♛</span>' : '';
+  const s = withSwitch ? (a.leader ? '<span style="display:inline-block;width:32px"></span>' : sw(a)) : '';
+  return `<td class="keep"><span class="acct">${s}<span class="dot"></span><span style="${!a.leader && (!a.on||a.cut)?'opacity:.5':''}">${a.id}</span>${lead}${withSwitch?'':statusBadge(a)}</span></td>`;
+}
+const cells = a => `
+  <td><span class="firm"><i class="${a.tdf?'tdf':''}"></i>${a.firm}</span></td>
+  <td class="r">${a.bal}</td>
+  <td class="r">${posCell(a)}</td>
+  <td class="r pnl-zero">$0.00</td>
+  <td class="r pnl-pos">${a.tdf?'1,250':'1,200'}</td>`;
+
+function render() {
+  document.querySelectorAll('.panel').forEach(p => {
+    const v = p.dataset.variant;
+    let head = '<th>Účet</th><th>Firma</th><th class="r">Zůstatek</th><th class="r">Pozice</th><th class="r">Denní P&L</th><th class="r">DLL zbývá</th>';
+    let rows = '';
+    if (v === 'A') {
+      head += '<th class="c">Násobek</th><th></th>';
+      rows = accounts.map(a => `<tr class="${rowClass(a)}">${acctCell(a,true)}${cells(a)}<td class="c">${a.leader?'—':'<span class="mult">1</span>'}</td><td class="r kebab keep">⋮</td></tr>`).join('');
+    } else if (v === 'B') {
+      head += '<th class="c">Násobek</th><th class="c">Kopírovat</th><th></th>';
+      rows = accounts.map(a => `<tr class="${rowClass(a)}">${acctCell(a,false)}${cells(a)}<td class="c">${a.leader?'—':'<span class="mult">1</span>'}</td><td class="c keep">${a.leader?'<span class="pos">leader</span>':sw(a,true)}</td><td class="r kebab keep">⋮</td></tr>`).join('');
+    } else if (v === 'C') {
+      head += '<th class="c">Násobek</th><th class="c">Kopírování</th>';
+      rows = accounts.map(a => `<tr class="${rowClass(a)}">${acctCell(a,false).replace(statusBadge(a),'')}${cells(a)}<td class="c">${a.leader?'—':'<span class="mult">1</span>'}</td><td class="c keep">${a.leader?'<span class="pos">leader</span>':seg(a)}</td></tr>`).join('');
+    } else {
+      head += '<th class="c">Násobek</th><th></th>';
+      rows = accounts.map(a => {
+        const menu = (a.id === menuOpenFor) ? `<div class="menu">
+            <div class="${tradeOpen?'dim':'hl'}" data-acc="${a.id}" data-toggle="1">${a.on?'⏸':'▶'} <span>${a.on?'Pozastavit kopírování':'Obnovit kopírování'}<small>${tradeOpen?'🔒 až po obchodu':(a.on?'nové obchody se na účet nekopírují':'naskočí od dalšího obchodu')}</small></span></div>
+            <div>✎ <span>Upravit násobek</span></div><div>⛨ <span>Limity účtu</span></div><hr><div style="color:var(--rose)">⨯ <span>Flatten účtu</span></div></div>` : '';
+        return `<tr class="${rowClass(a)}">${acctCell(a,false)}${cells(a)}<td class="c">${a.leader?'—':'<span class="mult">1</span>'}</td><td class="r kebab keep" style="position:relative" data-menu="${a.leader?'':a.id}">⋮${menu}</td></tr>`;
+      }).join('');
+    }
+    p.innerHTML = groupHead() + `<table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>` + (v==='D'?'<div style="height:175px"></div>':'');
+  });
+}
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-acc],[data-menu],[data-theme],[data-trade],[data-worker]');
+  if (!t) return;
+  if (t.dataset.theme) {
+    document.documentElement.classList.toggle('light', t.dataset.theme === 'light');
+    document.querySelectorAll('[data-theme]').forEach(b => b.setAttribute('aria-pressed', b === t));
+    return;
+  }
+  if (t.dataset.trade) {
+    tradeOpen = t.dataset.trade === 'open';
+    document.querySelectorAll('[data-trade]').forEach(b => b.setAttribute('aria-pressed', b === t));
+    return render();
+  }
+  if (t.dataset.worker) {
+    workerRejects = t.dataset.worker === 'reject';
+    document.querySelectorAll('[data-worker]').forEach(b => b.setAttribute('aria-pressed', b === t));
+    return;
+  }
+  if (t.dataset.menu !== undefined && !t.dataset.acc) {
+    menuOpenFor = t.dataset.menu && menuOpenFor !== t.dataset.menu ? t.dataset.menu : null;
+    return render();
+  }
+  if (tradeOpen) return;
+  const a = accounts.find(x => x.id === t.dataset.acc);
+  if (!a || a.cut) return;
+  const next = t.dataset.set !== undefined ? t.dataset.set === '1' : !a.on;
+  if (next === a.on || busy.has(a.id)) return;
+  animateToggle(a, next);
+});
+
+function flash(html) {
+  let el = document.querySelector('.flash');
+  if (!el) { el = document.createElement('div'); el.className = 'flash toast'; document.body.appendChild(el); }
+  el.innerHTML = html; el.classList.add('show');
+  clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('show'), 3200);
+}
+function paint(a, on, cls) {
+  document.querySelectorAll(`.sw[data-acc="${a.id}"]`).forEach(b => {
+    b.classList.toggle('on', on);
+    b.classList.remove('pending','confirmed','confirmed-off','shake');
+    if (cls) { void b.offsetWidth; b.classList.add(cls); }
+    const l = b.nextElementSibling; if (l && l.classList.contains('swlbl')) l.textContent = on ? 'Kopíruje' : 'Vypnuto';
+    const tr = b.closest('tr'); if (tr && cls !== 'pending') tr.classList.toggle('is-off', !on);
+  });
+}
+function animateToggle(a, next) {
+  // 1) okamžitě: jezdec se posune (optimisticky), v jezdci kolečko = čeká na worker
+  busy.add(a.id);
+  paint(a, next, 'pending');
+  // 2) za ~1,2 s odpověď workeru
+  setTimeout(() => {
+    busy.delete(a.id);
+    if (workerRejects) {
+      paint(a, a.on, 'shake');
+      flash('<span class="ic">🔒</span><span><b>Nepřepnuto.</b> Leader právě otevřel obchod — účet můžeš přepnout, až bude skupina bez pozic a příkazů.</span>');
+      return;
+    }
+    a.on = next;
+    paint(a, next, next ? 'confirmed' : 'confirmed-off');   // řádek plynule zešedne / rozsvítí se
+    setTimeout(render, 650);                                 // hlavička „Kopíruje x/4“ se přepočítá
+  }, 1200);
+}
+render();
+</script>
+</body>
+</html>

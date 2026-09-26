@@ -406,6 +406,8 @@ interface Props {
   pause?: CopierControllerStatus['pause'];
   sessionArmedAt?: number;
   followerCuts?: CopierControllerStatus['followerCuts'];
+  /** Ruční per-follower přepínač kopírování: stav a zda jde teď přepnout. */
+  followerParticipation?: CopierControllerStatus['followerParticipation'];
   accountRisk?: CopierControllerStatus['accountRisk'];
   onOpenRisk?: () => void;
   /** Konec anti-revenge cooldownu (epoch ms); 0 = neběží. */
@@ -441,6 +443,77 @@ interface PendingAction {
 }
 
 type ActiveFollowerCut = NonNullable<CopierControllerStatus['followerCuts']>[number];
+type FollowerParticipation = NonNullable<CopierControllerStatus['followerParticipation']>[number];
+const EMPTY_PARTICIPATION: ReadonlyMap<number, FollowerParticipation> = new Map();
+
+/**
+ * Ruční zapnutí/vypnutí kopírování jednoho followera. Knoflík hned sjede na
+ * stranu záměru a točí se v něm kolečko, dokud worker nepotvrdí; potvrzení =
+ * pulz, odmítnutí = návrat a zatřesení (důvod ukáže toast). Rozhoduje vždy
+ * worker — `canToggle` jen zamyká přepínač a vysvětluje proč.
+ */
+const FollowerCopySwitch = ({ accountName, participation, onToggle }: {
+  accountName: string;
+  participation: FollowerParticipation;
+  onToggle: (enabled: boolean) => Promise<boolean>;
+}) => {
+  const confirmed = participation.configuredEnabled;
+  const [intent, setIntent] = useState<boolean | null>(null);
+  const [pending, setPending] = useState(false);
+  const [settle, setSettle] = useState<'confirmed' | 'rejected' | null>(null);
+  // Po úspěchu držíme záměr, dokud ho nepotvrdí i status poll — jinak by
+  // knoflík na chvíli skočil zpět na starou hodnotu.
+  useEffect(() => {
+    if (intent == null || pending) return;
+    if (confirmed === intent) { setIntent(null); return; }
+    const timer = window.setTimeout(() => setIntent(null), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [intent, pending, confirmed]);
+  useEffect(() => {
+    if (!settle) return;
+    const timer = window.setTimeout(() => setSettle(null), 650);
+    return () => window.clearTimeout(timer);
+  }, [settle]);
+
+  const shown = intent ?? confirmed;
+  const locked = !participation.canToggle && !pending;
+  const reasons = participation.blockers.length > 0 ? participation.blockers.join(' · ') : null;
+  const title = pending
+    ? 'Čeká na potvrzení workerem…'
+    : locked
+      ? `Nelze přepnout: ${reasons ?? 'stav nejde ověřit'}`
+      : shown
+        ? 'Kopíruje. Kliknutím vypneš kopírování na tento účet (platí do ručního zapnutí).'
+        : 'Vypnuto. Kliknutím zapneš — účet naskočí od dalšího obchodu.';
+
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={shown}
+      aria-busy={pending || undefined}
+      aria-label={`${shown ? 'Vypnout' : 'Zapnout'} kopírování na účet ${accountName}`}
+      title={title}
+      disabled={locked || pending}
+      data-locked={locked || undefined}
+      onClick={async event => {
+        event.stopPropagation();
+        const next = !shown;
+        setIntent(next);
+        setPending(true);
+        const ok = await onToggle(next);
+        setPending(false);
+        if (ok) setSettle('confirmed');
+        else { setIntent(null); setSettle('rejected'); }
+      }}
+      className={`follower-switch${pending ? ' follower-switch-pending' : ''}${settle ? ` follower-switch-${settle}` : ''}`}
+    >
+      <span className="follower-switch-knob" aria-hidden="true">
+        {pending ? <span className="follower-switch-spinner" /> : locked ? <Lock size={9} strokeWidth={3} /> : null}
+      </span>
+    </button>
+  );
+};
 
 export interface UnavailableFollowerRemovalPlan {
   group: CopyGroupConfig;
@@ -594,6 +667,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   pause = null,
   sessionArmedAt = 0,
   followerCuts = [],
+  followerParticipation = [],
   accountRisk = [],
   onOpenRisk,
   cooldownUntil = 0,
@@ -831,6 +905,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       .filter(cut => cut.source === 'manual' && cut.scope === 'trade' && cut.until > Date.now())
       .map(cut => [cut.accountId, cut]),
   ), [followerCuts]);
+  const participationByAccount = useMemo(() => new Map(
+    (followerParticipation ?? []).map(item => [item.accountId, item]),
+  ), [followerParticipation]);
 
   const profilesById = useMemo(() => {
     const next = new Map<number, TradovateAccountProfile>();
@@ -946,10 +1023,21 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     setCopierTransition(connecting ? 'connecting' : 'disconnecting');
     try {
       await action();
+      // Ručně vypnutý follower se snadno zapomene — při zapnutí to řekneme.
+      const armedGroup = groups.find(group => group.id === groupId)
+        ?? (runtimeGroup?.id === groupId ? runtimeGroup : null);
+      const offFollowers = connecting
+        ? (armedGroup?.followers ?? []).filter(follower => follower.enabled === false)
+        : [];
+      const offNote = offFollowers.length === 0
+        ? ''
+        : offFollowers.length === 1
+          ? ` ${accountLabel(offFollowers[0].accountId, groupId)} je vypnutý a kopírovat nebude.`
+          : ` ${offFollowers.length} followeři jsou vypnutí a kopírovat nebudou.`;
       setToast(connecting
         // Připojení znamená ostré odesílání příkazů brokerovi, proto po
         // úspěšném preflightu zůstává výsledek viditelný v jednoznačném toastu.
-        ? { tone: 'success', text: 'Copier je připojený — příkazy leadera se kopírují naostro.' }
+        ? { tone: 'success', text: `Copier je připojený — příkazy leadera se kopírují naostro.${offNote}` }
         : { tone: 'info', text: 'Copier je bezpečně odpojený.' });
     } catch (reason) {
       const rejected = connecting ? copierArmRejection(reason) : null;
@@ -1112,7 +1200,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     update?: () => void | Promise<void>,
     onError?: (message: string) => void,
   ): Promise<boolean> => {
-    const key = command.type === 'flatten-account' || command.type === 'flatten-follower-trade' || command.type === 'set-replication' || command.type === 'set-multiplier'
+    const key = command.type === 'flatten-account' || command.type === 'flatten-follower-trade' || command.type === 'set-replication' || command.type === 'set-multiplier' || command.type === 'set-follower-enabled'
       ? `${command.type}-${command.accountId}`
       : 'groupId' in command ? `${command.type}-${command.groupId}` : command.type;
     const brokerWrite = command.type === 'flatten-account' || command.type === 'flatten-follower-trade' || command.type === 'flatten-group' || command.type === 'cancel-order';
@@ -1142,6 +1230,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         );
       }
       await update?.();
+      // Přepínač followera potvrzuje sám animací v řádku; toast by jen rušil.
+      if (command.type === 'set-follower-enabled' && commandAdapter && targetsExecutionRuntime) return true;
       const successText = result && result.type === 'flatten'
         ? command.type === 'flatten-follower-trade'
           ? 'Účet je potvrzeně flat a čeká na další obchod. Ostatní účty i kopírka pokračují.'
@@ -1772,6 +1862,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               orders={orders}
                               eligibilityByAccount={eligibilityByAccount}
                               tradeCutsByAccount={tradeCutsByAccount}
+                              participationByAccount={group.id === executionGroupId ? participationByAccount : EMPTY_PARTICIPATION}
+                              onFollowerEnabled={group.id === executionGroupId && commandAdapter
+                                ? (accountId, enabled) => runCommand({ type: 'set-follower-enabled', groupId: group.id, accountId, enabled })
+                                : undefined}
                               onVerifyEligibility={verifyAccountEligibility}
                               verifyingAccountId={verifyingAccountId}
                               busyCommand={busyCommand}
@@ -2304,6 +2398,24 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
 }) => {
   const busy = transition != null;
   const disabled = statusPending || !runtimeReady || busy || (!connected && connectBlocked);
+  // Knoflík ukazuje ZÁMĚR (hned po kliknutí sjede na novou stranu), kolej a
+  // popisky ON/OFF dál jen potvrzený stav. Dokud worker ARM/DISARM nepotvrdí,
+  // kolej tedy nezezelená a v knoflíku se točí kolečko.
+  const intent = transition === 'connecting' ? true : transition === 'disconnecting' ? false : connected;
+  const [settle, setSettle] = useState<'confirmed' | 'rejected' | null>(null);
+  const pendingIntent = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (transition != null) {
+      pendingIntent.current = transition === 'connecting';
+      return;
+    }
+    const wanted = pendingIntent.current;
+    if (wanted == null) return;
+    pendingIntent.current = null;
+    setSettle(wanted === connected ? 'confirmed' : 'rejected');
+    const timer = window.setTimeout(() => setSettle(null), 650);
+    return () => window.clearTimeout(timer);
+  }, [transition, connected]);
   const title = statusPending
     ? 'Zjišťuji stav copieru…'
     : !runtimeReady
@@ -2342,7 +2454,8 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
         event.stopPropagation();
         onToggle();
       }}
-      className={`copier-switch${busy ? ' copier-switch-busy' : ''}`}
+      data-intent={intent}
+      className={`copier-switch${busy ? ' copier-switch-busy' : ''}${settle ? ` copier-switch-${settle}` : ''}`}
     >
       <span className="copier-switch-label copier-switch-on" aria-hidden="true">ON</span>
       <span className="copier-switch-label copier-switch-off" aria-hidden="true">OFF</span>
@@ -2391,7 +2504,15 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
     !row.account
     || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
     || (row.accountId != null && tradeCutsByAccount.has(row.accountId))).length;
-  const activeFollowerCount = Math.max(0, enabledFollowerCount - inactiveFollowerCount);
+  // Ručně vypnutí followeři (přepínač v řádku) nejsou problém, jen volba —
+  // počítají se zvlášť a ukazují neutrálně, ne jantarově.
+  const manuallyOffIds = new Set(group.followers.filter(follower => follower.enabled === false).map(follower => follower.accountId));
+  const manuallyOffCount = enabledFollowerRows.filter((row, index) =>
+    row.accountId != null && manuallyOffIds.has(row.accountId)
+    && !(!row.account
+      || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
+      || tradeCutsByAccount.has(row.accountId))).length;
+  const activeFollowerCount = Math.max(0, enabledFollowerCount - inactiveFollowerCount - manuallyOffCount);
   const dllCount = eligibility.filter(entry => entry?.state === 'dll-locked').length;
   const breachedCount = eligibility.filter(entry => entry?.state === 'breached').length;
 
@@ -2445,12 +2566,19 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
           <span className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs font-bold text-[var(--text-primary)]">
           {group.name}
           {/* Plný počet nic neříká; chip se ukáže, teprve když někdo vypadne. */}
-          {activeFollowerCount < enabledFollowerCount ? (
+          {inactiveFollowerCount > 0 ? (
             <span
               title="Způsobilých followerů z těch, co mají kopírování zapnuté"
               className="whitespace-nowrap rounded-full bg-amber-500/12 px-1.5 py-0.5 text-[9px] font-black text-amber-600"
             >
               {activeFollowerCount}/{enabledFollowerCount} zařazených
+            </span>
+          ) : manuallyOffCount > 0 ? (
+            <span
+              title={`${manuallyOffCount === 1 ? '1 follower je' : `${manuallyOffCount} followeři jsou`} ručně vypnutí přepínačem v řádku účtu`}
+              className="whitespace-nowrap rounded-full bg-slate-500/15 px-1.5 py-0.5 text-[9px] font-black text-[var(--text-secondary)]"
+            >
+              kopíruje {activeFollowerCount}/{enabledFollowerCount}
             </span>
           ) : null}
           {dllCount > 0 ? <span className="rounded-full bg-amber-500/12 px-1.5 py-0.5 text-[9px] font-black text-amber-600">{dllCount}× DLL</span> : null}
@@ -2715,7 +2843,15 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
     !row.account
     || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
     || (row.accountId != null && tradeCutsByAccount.has(row.accountId))).length;
-  const activeFollowerCount = Math.max(0, enabledFollowerRows.length - inactiveFollowerCount);
+  // Ručně vypnutí followeři (přepínač v řádku) nejsou problém, jen volba —
+  // počítají se zvlášť a ukazují neutrálně, ne jantarově.
+  const manuallyOffIds = new Set(group.followers.filter(follower => follower.enabled === false).map(follower => follower.accountId));
+  const manuallyOffCount = enabledFollowerRows.filter((row, index) =>
+    row.accountId != null && manuallyOffIds.has(row.accountId)
+    && !(!row.account
+      || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
+      || tradeCutsByAccount.has(row.accountId))).length;
+  const activeFollowerCount = Math.max(0, enabledFollowerRows.length - inactiveFollowerCount - manuallyOffCount);
   const dllCount = eligibility.filter(entry => entry?.state === 'dll-locked').length;
   const breachedCount = eligibility.filter(entry => entry?.state === 'breached').length;
   const unavailableLeader = rows.some(row => row.isLeader && row.accountId != null && !row.account);
@@ -3151,18 +3287,27 @@ export interface PendingEntryProtection {
   quantity: number;
   stopCoverage: number;
   targetCoverage: number;
+  /** Aspoň jedna noha je SL/TP bracketu, který Tradovate drží Suspended do fillu vstupu. */
+  awaitingEntry: boolean;
 }
+
+/** Tradovate drží SL/TP nativního bracketu jako `Suspended`, dokud se vstup nevyplní. */
+const isSuspendedBracketLeg = (order: LiveOrder) => order.status.trim().toLowerCase() === 'suspended';
 
 /**
  * Ochrana čekajícího vstupu: co by pozici zajistilo, kdyby se příkaz vyplnil.
  *
- * Stejné pravidlo jako u otevřené pozice — jen working příkaz na opačnou
- * stranu a na přesně stejný kontrakt. Broker nám vazbu mezi příkazy (bracket,
- * OCO) neposílá, takže se odvozuje; sám vstup se do ochrany nikdy nepočítá.
+ * Příkaz na opačnou stranu a na přesně stejný kontrakt, working nebo
+ * Suspended — Suspended SL/TP je noha bracketu, kterou broker aktivuje až
+ * fillem vstupu, takže u čekajícího vstupu je to správný stav, ne díra.
+ * Otevřená pozice dál uznává jen working ochranu. Broker nám vazbu mezi
+ * příkazy (bracket, OCO) neposílá, takže se odvozuje; sám vstup se do
+ * ochrany nikdy nepočítá.
  */
-export const pendingEntryProtection = (entry: LiveOrder, workingOrders: LiveOrder[]): PendingEntryProtection => {
+export const pendingEntryProtection = (entry: LiveOrder, accountOrders: LiveOrder[]): PendingEntryProtection => {
   const direction = entry.action.trim().toLowerCase().includes('buy') ? 1 : -1;
-  const guards = workingOrders.filter(order => order.id !== entry.id
+  const guards = accountOrders.filter(order => order.id !== entry.id
+    && (order.working || isSuspendedBracketLeg(order))
     && fullSymbolKey(order.symbol) === fullSymbolKey(entry.symbol)
     && hasProtectiveAction(order, direction));
   const coverage = (matches: (order: LiveOrder) => boolean) =>
@@ -3171,6 +3316,7 @@ export const pendingEntryProtection = (entry: LiveOrder, workingOrders: LiveOrde
     quantity: workingQuantity(entry),
     stopCoverage: coverage(isStopOrder),
     targetCoverage: coverage(isLimitOrder),
+    awaitingEntry: guards.some(isSuspendedBracketLeg),
   };
 };
 
@@ -3200,9 +3346,10 @@ export const CopyTradePositionsCell = ({ accountId, positions, orders, positions
     ? <span className="ml-0.5 text-[10px] font-semibold text-[var(--text-secondary)]" title="Poslední známý stav, čtení u brokera není čerstvě ověřené">?</span>
     : null;
   const openPositions = positions.filter(position => position.netPosition !== 0);
-  const workingOrders = accountId == null
+  const accountOrders = accountId == null
     ? []
-    : orders.filter(order => order.accountId === accountId && order.working);
+    : orders.filter(order => order.accountId === accountId);
+  const workingOrders = accountOrders.filter(order => order.working);
   const openSymbols = new Set(openPositions.map(position => fullSymbolKey(position.symbol)));
   const entryOrders = workingOrders.filter(order =>
     isPendingEntryOrder(order) && !openSymbols.has(fullSymbolKey(order.symbol)));
@@ -3295,7 +3442,7 @@ export const CopyTradePositionsCell = ({ accountId, positions, orders, positions
       const symbol = displaySymbol(order.symbol);
       const buy = order.action.trim().toLowerCase().includes('buy');
       const triggered = isStopOrder(order);
-      const protection = pendingEntryProtection(order, workingOrders);
+      const protection = pendingEntryProtection(order, accountOrders);
       const hasStop = protection.stopCoverage > 0;
       const stopExact = protection.stopCoverage === protection.quantity;
       const sideLabel = buy ? 'BUY' : 'SELL';
@@ -3310,7 +3457,8 @@ export const CopyTradePositionsCell = ({ accountId, positions, orders, positions
         ? 'ochrana neověřena'
         : !hasStop
           ? 'bez stop lossu'
-          : !stopExact ? `stop loss kryje jen ${coverageText}` : 'stop loss kryje celý vstup';
+          : !stopExact ? `stop loss kryje jen ${coverageText}`
+            : protection.awaitingEntry ? 'stop loss kryje celý vstup, aktivuje se fillem' : 'stop loss kryje celý vstup';
 
       return (
         <HoverCard
@@ -3326,6 +3474,9 @@ export const CopyTradePositionsCell = ({ accountId, positions, orders, positions
             <HoverRow label={triggered ? 'Spouštěcí cena' : 'Vstupní cena'} value={priceLabel(order.stopPrice ?? order.price)} />
             <HoverRow label="Stop loss" value={ordersVerified ? stopValue : 'neověřeno'} tone={!ordersVerified ? undefined : !hasStop ? 'miss' : stopExact ? 'ok' : 'bad'} />
             <HoverRow label="Target" value={ordersVerified ? targetValue : 'neověřeno'} tone={!ordersVerified ? undefined : protection.targetCoverage > 0 ? 'ok' : 'miss'} />
+            {ordersVerified && protection.awaitingEntry
+              ? <div className="pt-0.5 text-[10px] font-semibold text-[var(--text-muted)]">Bracket: SL/TP čekají u brokera a aktivují se fillem vstupu.</div>
+              : null}
             <HoverRow label="Zadáno" value={placedLabel(order.placedAt, Date.now())} />
           </>}
         >
@@ -3608,7 +3759,7 @@ export const AccountEligibilityPill = ({ eligibility, live, unavailable = false,
     <CheckCircle2 aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Aktivní</span>;
 };
 
-const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eligibilityByAccount, tradeCutsByAccount, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, dailyPnlPending, onMultiplier, onFlattenAccount, onRemoveUnavailableFollower, onCancelOrder, redactNames, redaction, orderColumns, tightenOnly }: {
+const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eligibilityByAccount, tradeCutsByAccount, participationByAccount, onFollowerEnabled, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, dailyPnlPending, onMultiplier, onFlattenAccount, onRemoveUnavailableFollower, onCancelOrder, redactNames, redaction, orderColumns, tightenOnly }: {
   rows: Row[];
   tab: 'accounts' | 'orders';
   isLive: (a?: LiveAccount) => boolean;
@@ -3618,6 +3769,8 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
   orders: LiveOrder[];
   eligibilityByAccount: Map<number, CopierAccountEligibility>;
   tradeCutsByAccount: ReadonlyMap<number, ActiveFollowerCut>;
+  participationByAccount: ReadonlyMap<number, FollowerParticipation>;
+  onFollowerEnabled?: (accountId: number, enabled: boolean) => Promise<boolean>;
   busyCommand: string | null;
   onRefreshOrders?: () => Promise<void> | void;
   onVerifyEligibility?: (accountId: number) => void;
@@ -3723,6 +3876,9 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
                 orders={groupOrders}
                 eligibility={row.accountId != null ? eligibilityByAccount.get(row.accountId) : undefined}
                 tradeCut={row.accountId != null ? tradeCutsByAccount.get(row.accountId) : undefined}
+                participation={row.accountId != null && !row.isLeader ? participationByAccount.get(row.accountId) : undefined}
+                showSwitchSlot={participationByAccount.size > 0}
+                onFollowerEnabled={onFollowerEnabled}
                 busyCommand={busyCommand}
                 onVerifyEligibility={onVerifyEligibility}
                 verifying={row.accountId != null && verifyingAccountId === row.accountId}
@@ -3883,11 +4039,15 @@ const MultiplierEditor = ({ accountId, accountName, value, tightenOnly, disabled
   );
 };
 
-const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeCut, busyCommand, onVerifyEligibility, verifying, dailyPnlPending, onMultiplier, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, tightenOnly }: {
+const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeCut, participation, showSwitchSlot = false, onFollowerEnabled, busyCommand, onVerifyEligibility, verifying, dailyPnlPending, onMultiplier, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, tightenOnly }: {
   row: Row; live: boolean; onAccount?: (a: LiveAccount) => void; columns: ColumnDef[];
   orders: LiveOrder[];
   eligibility?: CopierAccountEligibility;
   tradeCut?: ActiveFollowerCut;
+  participation?: FollowerParticipation;
+  /** Rezervuje místo přepínače i u leadera, aby jména účtů lícovala. */
+  showSwitchSlot?: boolean;
+  onFollowerEnabled?: (accountId: number, enabled: boolean) => Promise<boolean>;
   busyCommand: string | null;
   onVerifyEligibility?: (accountId: number) => void;
   verifying: boolean;
@@ -3902,6 +4062,8 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
   const a = row.account;
   const accountId = row.accountId;
   const dismissedRejections = useDismissedRejections();
+  // Ručně vypnutý follower: řádek zešedne (bez štítku — stav říká přepínač).
+  const copyOff = participation != null && !participation.configuredEnabled;
   const rowFlat = live && a != null && a.positions.every(position => position.netPosition === 0);
   const rowRejection = visibleRejectedExecution(accountId, eligibility, rowFlat, dismissedRejections);
   const cushion = a?.cushion ?? null;
@@ -3947,8 +4109,15 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
         return (
           <span className="block">
             <span className="flex items-center gap-2 text-xs">
+            {participation && accountId != null && onFollowerEnabled ? (
+              <FollowerCopySwitch
+                accountName={redactAccountName(row.name, redactNames, redaction)}
+                participation={participation}
+                onToggle={enabled => onFollowerEnabled(accountId, enabled)}
+              />
+            ) : showSwitchSlot ? <span aria-hidden="true" className="w-8 shrink-0" /> : null}
             <AccountStateDot tone={stateTone} reason={eligibility?.reason} confirmedAt={a?.cashUpdatedAt ?? null} />
-            <span className={`truncate max-w-[190px] ${live ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>{redactAccountName(row.name, redactNames, redaction)}</span>
+            <span className={`truncate max-w-[190px] transition-colors ${live && !copyOff ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>{redactAccountName(row.name, redactNames, redaction)}</span>
             {row.isLeader && (
               <span title="Leader účet" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-amber-400/35 bg-amber-400/12 text-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.12)]">
                 <Crown size={14} strokeWidth={2.4} />
@@ -4056,9 +4225,10 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
     <tr
       onClick={() => a && onAccount?.(a)}
       className={`border-b border-[var(--border-subtle)] last:border-0 transition-colors ${tradeCut ? 'bg-amber-500/[0.035] opacity-80' : ''} ${a ? 'cursor-pointer hover:bg-[var(--bg-card)]' : ''}`}
+      data-copy-off={copyOff || undefined}
     >
       {columns.map(col => (
-        <td key={col.key} className={`px-3 ${col.key === 'actions' ? 'py-0' : 'py-1.5'} ${col.key === 'qtyMult' ? 'text-center' : col.align === 'right' ? 'text-right' : ''}`}>
+        <td key={col.key} className={`px-3 ${col.key === 'actions' ? 'py-0' : 'py-1.5'} ${col.key === 'qtyMult' ? 'text-center' : col.align === 'right' ? 'text-right' : ''} follower-cell ${copyOff && col.key !== 'account' && col.key !== 'actions' ? 'follower-row-off' : ''}`}>
           {col.key === 'actions' && a ? (
             <button
               disabled={busyCommand != null}

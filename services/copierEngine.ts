@@ -485,7 +485,7 @@ export function planModify(
   const links = state.links.get(event.orderId) ?? [];
   return links.flatMap(link => {
     const follower = group.followers.find(item => item.accountId === link.accountId);
-    if (!follower || follower.mode !== 'on-submit') return [];
+    if (!follower || follower.enabled === false || follower.mode !== 'on-submit') return [];
     const nativeProtective = link.nativeOsoRole === 'stop' || link.nativeOsoRole === 'target';
     // Tradovate nativní OSO engine mění child qty při partial fillech sám na
     // každém účtu. Leaderových přechodných 6→11 proto nikdy nesmí přepsat
@@ -615,7 +615,7 @@ export function planReplication(
       skip('follower-is-leader');
       continue;
     }
-    if (follower.mode === 'off') {
+    if (follower.enabled === false || follower.mode === 'off') {
       skip('follower-off');
       continue;
     }

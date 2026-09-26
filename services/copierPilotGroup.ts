@@ -128,6 +128,7 @@ const replacementGroup = (durableGroup: CopyGroupConfig, cliGroup: CopierCliGrou
   followers: cliGroup.followers.map(cliFollower => ({
     ...cliFollower,
     mode: durableGroup.followers.find(item => item.accountId === cliFollower.accountId)?.mode ?? cliFollower.mode,
+    enabled: durableGroup.followers.find(item => item.accountId === cliFollower.accountId)?.enabled !== false,
   })),
 });
 

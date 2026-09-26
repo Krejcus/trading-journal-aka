@@ -150,7 +150,8 @@ export type CopierAuditKind =
   | 'day-unlock'
   | 'rule-pause'
   | 'rule-pause-end'
-  | 'follower-cut';
+  | 'follower-cut'
+  | 'follower-participation';
 
 export interface CopierAuditEntry {
   at: number;
@@ -160,6 +161,10 @@ export interface CopierAuditEntry {
   key?: string;
   brokerOrderId?: string;
   reason?: string;
+  /** Ruční změna participation; u odmítnutí zůstává after shodné s before. */
+  configuredEnabledBefore?: boolean;
+  configuredEnabledAfter?: boolean;
+  participationOutcome?: 'changed' | 'blocked';
   /** Strukturovaný payload pro `rule-warning`; legacy konzumenti jej ignorují. */
   rule?: 'daily-loss' | 'losing-trades' | 'max-trades' | 'window-end';
   current?: number;
@@ -855,7 +860,7 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
     };
   }
   const jobs = group.followers.flatMap(follower => {
-    if (follower.mode === 'off') {
+    if (follower.enabled === false || follower.mode === 'off') {
       audit.push({
         at: clock(), leaderEventId: event.id, kind: 'skipped', accountId: follower.accountId,
         reason: 'follower-disabled',
@@ -1134,7 +1139,7 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
     || stuckOsoEntries(osoOutbox.values()).length > 0
     || stuckCancelEntries(cancelOutbox.values()).length > 0;
   for (const follower of group.followers) {
-    if (follower.mode === 'off') continue;
+    if (follower.enabled === false || follower.mode === 'off') continue;
     if (follower.mode !== 'on-submit') {
       audit.push({
         at: clock(), leaderEventId: event.id, kind: 'blocked', accountId: follower.accountId,

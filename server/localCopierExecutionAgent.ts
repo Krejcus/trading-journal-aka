@@ -119,6 +119,12 @@ const mappedGroup = (runtimeGroup: CopyGroupConfig, incoming: CopyGroupConfig): 
     ...incoming,
     id: runtimeGroup.id,
     localOnly: true,
+    // Full UI updates may be based on a status preceding a manual toggle.
+    // Participation belongs to the worker's durable group, not that snapshot.
+    followers: incoming.followers.map(follower => ({
+      ...follower,
+      enabled: runtimeGroup.followers.find(item => item.accountId === follower.accountId)?.enabled !== false,
+    })),
   };
 };
 
@@ -328,6 +334,19 @@ export async function startLocalCopierExecutionAgent(
             : follower),
         });
       }
+      case 'set-follower-enabled': {
+        assertGroupTarget(group, command.groupId);
+        if (!options.onGroupChanged) throw new Error('Trvalé uložení skupiny není dostupné');
+        const next = await options.controller.setFollowerEnabled(
+          command.accountId,
+          command.enabled,
+          async updated => {
+            await options.onGroupChanged!(structuredClone(updated));
+          },
+        );
+        group = next;
+        return configurationResult();
+      }
       case 'set-multiplier': {
         assertMember(group, command.accountId);
         const follower = group.followers.find(item => item.accountId === command.accountId);
@@ -388,7 +407,9 @@ export async function startLocalCopierExecutionAgent(
         return executeCopyCommand(command.command);
       case 'activate-group': {
         const next: CopyGroupConfig = {
-          ...structuredClone(command.group),
+          ...(command.group.id === group.id
+            ? mappedGroup(group, command.group)
+            : structuredClone(command.group)),
           enabled: true,
           localOnly: true,
         };

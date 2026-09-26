@@ -12,7 +12,7 @@ const buyEntry = order({ id: 1, action: 'Buy', orderType: 'Limit', quantity: 3 }
 describe('pendingEntryProtection', () => {
   it('bez dalších příkazů nemá vstup žádnou ochranu', () => {
     expect(pendingEntryProtection(buyEntry, [buyEntry]))
-      .toEqual({ quantity: 3, stopCoverage: 0, targetCoverage: 0 });
+      .toEqual({ quantity: 3, stopCoverage: 0, targetCoverage: 0, awaitingEntry: false });
   });
 
   it('opačný stop na stejném kontraktu je stop loss, opačná limitka target', () => {
@@ -22,7 +22,7 @@ describe('pendingEntryProtection', () => {
       order({ id: 3, action: 'Sell', orderType: 'Limit', quantity: 3 }),
     ];
     expect(pendingEntryProtection(buyEntry, guards))
-      .toEqual({ quantity: 3, stopCoverage: 3, targetCoverage: 3 });
+      .toEqual({ quantity: 3, stopCoverage: 3, targetCoverage: 3, awaitingEntry: false });
   });
 
   it('sám sebe za ochranu nepovažuje', () => {
@@ -68,5 +68,26 @@ describe('contractsLabel', () => {
   it('neceločíselný i nesmyslný počet skloní bezpečně', () => {
     expect(contractsLabel(1.5)).toBe('1.5 kontraktů');
     expect(contractsLabel(Number.NaN)).toBe('— kontraktů');
+  });
+
+  it('Suspended SL/TP bracketu čekajícího vstupu kryjí vstup a aktivují se fillem', () => {
+    const guards = [
+      buyEntry,
+      order({ id: 2, action: 'Sell', orderType: 'Stop', quantity: 3, status: 'Suspended', working: false }),
+      order({ id: 3, action: 'Sell', orderType: 'Limit', quantity: 3, status: 'Suspended', working: false }),
+    ];
+    expect(pendingEntryProtection(buyEntry, guards))
+      .toEqual({ quantity: 3, stopCoverage: 3, targetCoverage: 3, awaitingEntry: true });
+  });
+
+  it('jiné neaktivní stavy (PendingNew, Unknown, zrušené) ochranu nedělají', () => {
+    const guards = [
+      buyEntry,
+      order({ id: 2, action: 'Sell', orderType: 'Stop', quantity: 3, status: 'PendingNew', working: false }),
+      order({ id: 3, action: 'Sell', orderType: 'Stop', quantity: 3, status: 'Unknown', working: false }),
+      order({ id: 4, action: 'Sell', orderType: 'Stop', quantity: 3, status: 'Canceled', working: false }),
+    ];
+    expect(pendingEntryProtection(buyEntry, guards))
+      .toEqual({ quantity: 3, stopCoverage: 0, targetCoverage: 0, awaitingEntry: false });
   });
 });

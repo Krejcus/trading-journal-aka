@@ -90,6 +90,40 @@ describe('local copier execution agent', () => {
     running = null;
   });
 
+  it('přepne followera trvale bez DISARM a stale update-group jeho účast nepřepíše', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const runtime = await bootstrapCopierRuntime({ broker, store: createMemoryCopierStore(), group: group() });
+    broker.setConnected(true);
+    await runtime.waitForIdle();
+    await runtime.reconcile();
+    runtime.arm();
+    let persisted = group();
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0,
+      onGroupChanged: async next => { persisted = structuredClone(next); },
+    });
+    const nonce = running.status().nonce;
+    const toggle = await post(running, nonce, {
+      type: 'copy-command',
+      command: { type: 'set-follower-enabled', groupId: 'runtime-test', accountId: 22, enabled: false },
+    });
+    expect(toggle.status).toBe(200);
+    expect(persisted.followers[0]).toMatchObject({ mode: 'on-submit', enabled: false });
+    expect(running.status()).toMatchObject({
+      group: { followers: [expect.objectContaining({ enabled: false })] },
+      controller: { armed: true, followerParticipation: [expect.objectContaining({
+        accountId: 22, configuredEnabled: false, effectiveEnabled: false,
+      })] },
+    });
+    const stale = await post(running, nonce, {
+      type: 'copy-command', command: { type: 'update-group', group: group() },
+    });
+    expect(stale.status).toBe(200);
+    expect(persisted.followers[0].enabled).toBe(false);
+    expect(running.status().group.followers[0].enabled).toBe(false);
+    runtime.stop();
+  });
+
   it('is loopback-only, exposes status to the approved origin and updates the follower multiplier', async () => {
     const runtime = controller();
     running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });

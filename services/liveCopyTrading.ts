@@ -4,6 +4,8 @@ export type CopyReplicationMode = 'off' | 'on-submit' | 'on-fill';
 
 export interface CopyFollowerConfig {
   accountId: number;
+  /** Ruční účast v kopírování; chybějící hodnota znamená zapnuto. */
+  enabled?: boolean;
   mode: CopyReplicationMode;
   multiplier: number;
   /**
@@ -232,6 +234,7 @@ export type LiveCopyTradingCommand =
   | { type: 'delete-group'; groupId: string }
   | { type: 'set-group-enabled'; groupId: string; enabled: boolean }
   | { type: 'set-replication'; groupId: string; accountId: number; mode: CopyReplicationMode }
+  | { type: 'set-follower-enabled'; groupId: string; accountId: number; enabled: boolean }
   | { type: 'set-multiplier'; groupId: string; accountId: number; multiplier: number }
   | { type: 'flatten-account'; groupId: string; accountId: number; operationId: string }
   /** Zavře potvrzenou kopii followera a vyřadí jej jen do čistého konce aktuálního obchodu. */
@@ -277,6 +280,7 @@ export type CopyGroupValidationIssueCode =
   | 'invalid-max-contracts'
   | 'invalid-daily-loss-cut'
   | 'invalid-cut-action'
+  | 'invalid-follower-enabled'
   | 'invalid-safety';
 
 export interface CopyGroupValidationIssue {
@@ -465,6 +469,9 @@ export function validateCopyGroup(
     if (follower.onCut != null && !validFollowerCutAction(follower.onCut)) {
       add({ code: 'invalid-cut-action', accountId: follower.accountId, message: 'Akce při vyřazení musí být „zavřít kopii" nebo „nechat dojet".' });
     }
+    if (follower.enabled != null && typeof follower.enabled !== 'boolean') {
+      add({ code: 'invalid-follower-enabled', accountId: follower.accountId, message: 'Ruční zapnutí followera musí být ano/ne.' });
+    }
   }
   if (sanitizeSafety(group.safety) == null) {
     add({ code: 'invalid-safety', message: 'Pravidla dne obsahují neplatnou hodnotu.' });
@@ -573,8 +580,10 @@ export function sanitizeCopyGroups(value: unknown): CopyGroupConfig[] | null {
       if (dailyLossCutUsd != null && dailyLossCutUsd !== 0 && !validDailyLossCut(dailyLossCutUsd)) return null;
       const onCut = follower.onCut;
       if (onCut != null && !validFollowerCutAction(onCut)) return null;
+      if (follower.enabled != null && typeof follower.enabled !== 'boolean') return null;
       followers.push({
         accountId: follower.accountId,
+        ...(follower.enabled === false ? { enabled: false } : {}),
         mode: follower.mode,
         multiplier: normalizeMultiplier(follower.multiplier),
         ...(maxContracts != null ? { maxContracts } : {}),

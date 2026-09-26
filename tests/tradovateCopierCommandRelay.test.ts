@@ -190,6 +190,10 @@ describe('Tradovate copier command relay', () => {
   it.each<CopyCommand>([
     {
       type: 'copy-command',
+      command: { type: 'set-follower-enabled', groupId: 'group-1', accountId: 42, enabled: false },
+    },
+    {
+      type: 'copy-command',
       command: { type: 'flatten-group', groupId: 'group-1', operationId: 'flatten-all-1' },
     },
     {
@@ -221,6 +225,33 @@ describe('Tradovate copier command relay', () => {
       command_type: 'copy-command',
       payload: { command: command.command },
     });
+  });
+
+  it('relay odmítne neplatný follower toggle ještě před enqueue', async () => {
+    const upsert = vi.fn();
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert), userId, connectionId,
+      command: { type: 'copy-command', command: {
+        type: 'set-follower-enabled', groupId: 'group-1', accountId: 42, enabled: 'false',
+      } } as unknown as LocalCopierAgentCommand,
+    })).rejects.toThrow('invalid-relay-command-payload');
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('claim validuje a předá follower toggle workeru', async () => {
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'toggle-command-id', command_type: 'copy-command',
+        payload: { command: {
+          type: 'set-follower-enabled', groupId: 'group-1', accountId: 42, enabled: false,
+        } },
+        expires_at: '2026-08-21T12:00:30.000Z', status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toEqual({ type: 'copy-command', command: {
+      type: 'set-follower-enabled', groupId: 'group-1', accountId: 42, enabled: false,
+    } });
   });
 
   it('enqueue odmítne vzdálený cancel-order', async () => {

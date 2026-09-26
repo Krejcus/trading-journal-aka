@@ -77,6 +77,7 @@ import {
   devLiveCopyFixtureEligibility,
   devLiveCopyFixtureEnabled,
   devLiveCopyFixtureOrders,
+  devLiveCopyFixtureParticipation,
   devLiveCopyFixtureSnapshot,
 } from '../lib/devLiveCopyFixture';
 import LiveRiskTab from './LiveRiskTab';
@@ -140,6 +141,44 @@ const COPY_GROUP_CONFIG_COMMANDS = new Set<LiveCopyTradingCommand['type']>([
   'set-replication',
   'set-multiplier',
 ]);
+
+/**
+ * Dev fixture LIVE přehledu s falešným execution adaptérem: přepínač followera
+ * po ~1,2 s „potvrdí" (nebo odmítne, když `canToggle` je false), aby šla
+ * ladit animace bez workeru. Nic se neodesílá.
+ */
+const DevLiveCopyFixtureOverview = () => {
+  const [participation, setParticipation] = useState(devLiveCopyFixtureParticipation);
+  const participationRef = useRef(participation);
+  participationRef.current = participation;
+  const commandAdapter = useMemo(() => ({
+    async execute(command: LiveCopyTradingCommand) {
+      if (command.type !== 'set-follower-enabled') return undefined;
+      await new Promise(resolve => window.setTimeout(resolve, 1200));
+      const current = participationRef.current.find(item => item.accountId === command.accountId);
+      if (!current?.canToggle) throw new Error(`Nepřepnuto: ${current?.blockers.join(' · ') || 'účet nejde přepnout'}`);
+      setParticipation(prev => prev.map(item => item.accountId === command.accountId
+        ? { ...item, configuredEnabled: command.enabled, effectiveEnabled: command.enabled }
+        : item));
+      return undefined;
+    },
+  }), []);
+  return (
+    <LiveCopyTradeOverview
+      snapshot={devLiveCopyFixtureSnapshot}
+      orders={devLiveCopyFixtureOrders}
+      accountEligibility={devLiveCopyFixtureEligibility}
+      dailyStats={devLiveCopyFixtureDailyStats}
+      copierArmed={false}
+      copierStatusPending={false}
+      executionGroupId="group-main"
+      cooldownUntil={Date.now() + 6 * 60_000}
+      sessionArmedAt={0}
+      followerParticipation={participation}
+      commandAdapter={commandAdapter}
+    />
+  );
+};
 
 const TradovateCircleLogo = () => (
   <span className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white shadow-sm" title="Tradovate">
@@ -789,17 +828,7 @@ setAgentStatus((await executeAgent({
         <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] font-bold text-amber-600">
           DEV fixture LIVE přehledu — ukázková data, nic se neodesílá.
         </div>
-        <LiveCopyTradeOverview
-          snapshot={devLiveCopyFixtureSnapshot}
-          orders={devLiveCopyFixtureOrders}
-          accountEligibility={devLiveCopyFixtureEligibility}
-          dailyStats={devLiveCopyFixtureDailyStats}
-          copierArmed={false}
-          copierStatusPending={false}
-          executionGroupId="group-main"
-          cooldownUntil={Date.now() + 6 * 60_000}
-          sessionArmedAt={0}
-        />
+<DevLiveCopyFixtureOverview />
       </div>
     );
   }
@@ -972,6 +1001,7 @@ setAgentStatus((await executeAgent({
               pause={agentStatus?.controller.pause ?? null}
               sessionArmedAt={agentStatus?.controller.sessionArmedAt ?? 0}
               followerCuts={agentStatus?.controller.followerCuts ?? []}
+              followerParticipation={agentStatus?.controller.followerParticipation ?? []}
               accountRisk={agentStatus?.controller.accountRisk ?? []}
               onOpenRisk={() => navigateToTab('risk')}
               cooldownUntil={copierUiDemo ? copierUiDemo.cooldownUntil : agentStatus?.controller.entryCooldownUntil ?? 0}

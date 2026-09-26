@@ -11,6 +11,25 @@ const initialGroup: CopyGroupConfig = {
 };
 
 describe('createCopierRuntimeCommandAdapter', () => {
+  it('přepne followera přímo bez změny mode a bez odzbrojení', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: initialGroup,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    let current = initialGroup;
+    const adapter = createCopierRuntimeCommandAdapter({
+      controller, getGroup: () => current, setGroup: next => { current = next; },
+    });
+    await adapter.execute({ type: 'set-follower-enabled', groupId: 'g1', accountId: 200, enabled: false });
+    expect(current.followers[0]).toMatchObject({ enabled: false, mode: 'on-submit' });
+    expect(controller.status().armed).toBe(true);
+    controller.stop();
+  });
+
   it('propíše násobek do živého runtime a explicitní Flatten předá s operationId', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 30_000 }) });
     await broker.placeOrder({

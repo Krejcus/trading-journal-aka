@@ -208,6 +208,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-26 — Ruční vypnutí followera ve skupině + animace přepínačů (Claude UI, Codex jádro)
+
+- Nové pole `enabled` ve `CopyFollowerConfig` + příkaz `set-follower-enabled`
+  (Codex). Nezávislé na `mode`: `mode: 'off'` nastavuje i runtime při
+  automatických vyřazeních a zapnutí musí vrátit `on-submit`/`on-fill`.
+  Přepnout jde jen když leader i follower nemají pozici ani příkaz — worker
+  to ověřuje na `eventTail`, UI jen zamyká podle
+  `controller.followerParticipation`. Reconciliation u vypnutého followera
+  očekává 0. Zadání a diskuse: `docs/reviews/follower-toggle.md`.
+- Proč ne obecný `update-group`: dnes nejdřív DISARMuje. Výjimka z pravidla
+  „přepnutí nikdy nevypne kopírku": selže-li zápis group.json i rollback,
+  runtime fail-closed odzbrojí (Codex, souhlas Claude).
+- UI: přepínač na začátku řádku followera (knoflík hned na stranu záměru +
+  kolečko do potvrzení workerem, pulz / zatřesení při odmítnutí, zámek
+  v knoflíku když nejde přepnout), vypnutý řádek zešedne bez štítku,
+  hlavička „kopíruje 3/4", připomínka v toastu při ARM. Stejná animace
+  u přepínače skupiny (kolej/ON zezelená až po potvrzení).
+- Čekající limit s bracketem už nehlásí „bez SL": Suspended SL/TP se
+  u čekajícího vstupu počítají (otevřená pozice dál jen Working).
+- Mobilní karty přepínač zatím nemají — samostatná session.
+
 ### 2026-09-24 — Historie: snímek vložený ⌘V z karty i detailu (Claude)
 
 Obchod mimo kopírku (ruční, jen na jednom účtu) nemá snímek — kopírka ho

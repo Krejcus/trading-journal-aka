@@ -2495,10 +2495,11 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.26);
   transition: transform .22s cubic-bezier(.34, 1.5, .45, 1);
 }
-.copier-switch[aria-checked="true"] .copier-switch-knob { transform: translateX(34px); }
+.copier-switch[data-intent="true"] .copier-switch-knob { transform: translateX(34px); }
 
-/* Přechod ARM/DISARM: knoflík zůstane na posledním potvrzeném stavu. Spinner
-   se ukáže až po 140 ms, takže rychlý ACK neproblikne zbytečným kolečkem. */
+/* Přechod ARM/DISARM: knoflík hned sjede na stranu záměru, ale kolej a popisek
+   ON/OFF drží poslední POTVRZENÝ stav (aria-checked), dokud worker neodpoví.
+   Spinner se ukáže až po 140 ms, takže rychlý ACK neproblikne kolečkem. */
 .copier-switch-busy .copier-switch-knob { color: var(--text-secondary); }
 .copier-switch-spinner {
   display: inline-flex;
@@ -2509,10 +2510,87 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
   to { opacity: 1; }
 }
 
+/* Odpověď workeru: potvrzení = krátký pulz kolem koleje, odmítnutí = knoflík
+   se vrátí a přepínač se zatřese. */
+.copier-switch-confirmed { animation: copier-switch-pulse .6s ease-out; }
+.copier-switch-confirmed[aria-checked="false"] { animation-name: copier-switch-pulse-off; }
+.copier-switch-rejected { animation: copier-switch-shake .42s cubic-bezier(.36, .07, .19, .97); }
+@keyframes copier-switch-pulse {
+  from { box-shadow: 0 0 0 0 color-mix(in srgb, #34d399 60%, transparent); }
+  to { box-shadow: 0 0 0 8px color-mix(in srgb, #34d399 0%, transparent); }
+}
+@keyframes copier-switch-pulse-off {
+  from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--text-secondary) 50%, transparent); }
+  to { box-shadow: 0 0 0 8px color-mix(in srgb, var(--text-secondary) 0%, transparent); }
+}
+@keyframes copier-switch-shake {
+  20%, 60% { transform: translateX(-3px); }
+  40%, 80% { transform: translateX(3px); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .copier-switch, .copier-switch-knob, .copier-switch-label { transition: none !important; }
+  .copier-switch-confirmed, .copier-switch-rejected { animation: none !important; }
   .copier-switch-spinner { animation: none !important; opacity: 1; }
   .copier-switch-spinner > svg { animation: none !important; }
+}
+
+/* ── Přepínač kopírování jednoho followera (řádek účtu) ──────────────────────
+   Menší bratr přepínače skupiny: knoflík hned sjede na stranu záměru, točí se
+   v něm kolečko, dokud worker nepotvrdí. Zamčeno (leader/účet v obchodě) =
+   zámek přímo v knoflíku, barva a poloha stavu zůstávají čitelné. */
+.follower-switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  flex: none;
+  border: 0;
+  padding: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--text-muted) 30%, transparent);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
+  transition: background .25s ease, filter .2s ease, opacity .2s ease;
+}
+.follower-switch[aria-checked="true"] { background: #34d399; }
+.follower-switch[data-locked] { cursor: not-allowed; filter: saturate(.7); opacity: .85; }
+.follower-switch-pending { cursor: progress; }
+.follower-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: #fff;
+  color: #334155;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform .28s cubic-bezier(.34, 1.5, .45, 1);
+}
+.follower-switch[aria-checked="true"] .follower-switch-knob { transform: translateX(14px); }
+.follower-switch-spinner {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1.6px solid rgba(15, 23, 42, .18);
+  border-top-color: #0f172a;
+  animation: follower-switch-spin .7s linear infinite, copier-switch-spinner-reveal .08s ease-out .14s both;
+}
+@keyframes follower-switch-spin { to { transform: rotate(360deg); } }
+.follower-switch-confirmed { animation: copier-switch-pulse .6s ease-out; }
+.follower-switch-confirmed[aria-checked="false"] { animation-name: copier-switch-pulse-off; }
+.follower-switch-rejected { animation: copier-switch-shake .42s cubic-bezier(.36, .07, .19, .97); }
+/* Ručně vypnutý follower: čísla v řádku plynule zešednou; jméno a přepínač
+   zůstávají čitelné, aby šel účet znovu zapnout. */
+td.follower-row-off { opacity: .42; }
+td.follower-cell { transition: opacity .35s ease; }
+@media (prefers-reduced-motion: reduce) {
+  .follower-switch, .follower-switch-knob { transition: none !important; }
+  .follower-switch-confirmed, .follower-switch-rejected { animation: none !important; }
+  .follower-switch-spinner { animation: none !important; }
 }
 
 /* Rozbalení skupiny: 0fr → 1fr animuje výšku bez měření v JS. Dosud tu žádný

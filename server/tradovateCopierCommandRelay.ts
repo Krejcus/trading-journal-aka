@@ -127,7 +127,7 @@ const validatedDayLockReason = (value: unknown): string => {
 // broker-write command (cancel-order, replication changes mid-flight, …)
 // stays deliberately rejected on this remote path.
 const remoteCopyCommands = new Set([
-  'update-group', 'set-group-enabled', 'set-replication', 'set-multiplier',
+  'update-group', 'set-group-enabled', 'set-replication', 'set-follower-enabled', 'set-multiplier',
   'flatten-account', 'flatten-follower-trade', 'flatten-group',
 ]);
 
@@ -149,6 +149,7 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
     groupId?: unknown;
     accountId?: unknown;
     operationId?: unknown;
+    enabled?: unknown;
     waiveUnverifiableFollowerOwnership?: unknown;
   };
   if (typeof command.type !== 'string' || !remoteCopyCommands.has(command.type)) {
@@ -166,6 +167,11 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
       throw new Error('invalid-relay-command-payload');
     }
   }
+  if (command.type === 'set-follower-enabled' && (
+    typeof command.groupId !== 'string' || command.groupId.trim() === ''
+    || typeof command.accountId !== 'number' || !Number.isSafeInteger(command.accountId) || command.accountId <= 0
+    || typeof command.enabled !== 'boolean'
+  )) throw new Error('invalid-relay-command-payload');
   if (
     command.type === 'update-group'
     && command.waiveUnverifiableFollowerOwnership !== undefined
