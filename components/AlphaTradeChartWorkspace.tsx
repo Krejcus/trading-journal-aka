@@ -3,6 +3,7 @@ import TradeExecutionTimeline from './TradeExecutionTimeline';
 import { ChartWorkspaceLibraryDialog, WorkspaceImportPreview } from './ChartWorkspaceLibraryDialog';
 import { saveWorkspaceTemplate } from '../services/chartWorkspaceLibrary';
 import type { BacktestTagSuggestions } from '../services/backtestTagCatalog';
+import type { TradeChartIndicators } from '../services/detailIndicators';
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createBacktestWorkspaceCheckpoint, mergeWorkspacePanelSnapshots, workspaceLayoutPanelIds, workspacePanelsReady } from '../services/backtestWorkspaceCheckpoint';
 import { storeWorkspaceRecovery, chartWorkspaceDocumentStorageKey, createChartWorkspaceDocument, parseChartWorkspaceDocument, type CompleteChartWorkspaceState } from '../services/chartWorkspaceDocument';
@@ -246,6 +247,12 @@ interface AlphaTradeChartWorkspaceProps {
   isDark: boolean;
   onClose: () => void;
   backtestSession?: BacktestChartSessionBridge;
+  /**
+   * Fullscreen obchodu (mimo backtest): indikátory sdílené s detailem —
+   * panely s nimi startují a každé zapnutí/vypnutí se propíše zpět.
+   */
+  tradeIndicators?: TradeChartIndicators;
+  onTradeIndicatorsChange?: (next: TradeChartIndicators) => void;
 }
 
 interface WorkspacePanelConfig extends Record<string, unknown> {
@@ -278,6 +285,7 @@ interface WorkspaceDataContextValue {
   onPositionQuickOrder?: () => void;
   tradingSettings: ChartTradingSettings;
   openBacktestTradeReview: (tradeId: string) => void;
+  onTradeIndicatorsChange?: (next: TradeChartIndicators) => void;
 }
 
 interface WorkspacePanelControl {
@@ -321,25 +329,27 @@ const WORKSPACE_GLOBAL = {
 const panelConfig = (
   root: MarketRoot = 'MNQ',
   timeframe: MarketTimeframe = '1m',
+  indicators?: TradeChartIndicators,
 ): WorkspacePanelConfig => ({
   root,
   timeframe,
-  showFvg: false,
-  showLevels: false,
-  showStructure: false,
+  showFvg: indicators?.fvg ?? false,
+  showLevels: indicators?.levels ?? false,
+  showStructure: indicators?.structure ?? false,
 });
 
 const buildWorkspaceLayout = (
   root: MarketRoot,
   id: ChartWorkspaceLayoutId = '2h',
   suppliedConfigs?: WorkspacePanelConfig[],
+  indicators?: TradeChartIndicators,
 ) => {
   const count = getChartWorkspaceLayout(id).panelCount;
   const defaultTimeframes: MarketTimeframe[] = ['1m', '5m', '15m', '1d'];
   const configs = Array.from({ length: count }, (_, index) => (
     suppliedConfigs?.[index]
       ? { ...suppliedConfigs[index] }
-      : panelConfig(root, defaultTimeframes[index] ?? '1m')
+      : panelConfig(root, defaultTimeframes[index] ?? '1m', indicators)
   ));
   return buildChartWorkspaceLayout({
     id,
@@ -499,7 +509,14 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   const updatePanelConfig = useCallback((next: Partial<WorkspacePanelConfig>) => {
     if (next.root !== undefined || next.timeframe !== undefined) setChartApi(null);
     updateConfig(next);
-  }, [updateConfig]);
+    if (context.onTradeIndicatorsChange && (next.showFvg !== undefined || next.showLevels !== undefined || next.showStructure !== undefined)) {
+      context.onTradeIndicatorsChange({
+        fvg: next.showFvg ?? config.showFvg,
+        levels: next.showLevels ?? config.showLevels,
+        structure: next.showStructure ?? config.showStructure,
+      });
+    }
+  }, [config.showFvg, config.showLevels, config.showStructure, context.onTradeIndicatorsChange, updateConfig]);
   const getIndicatorState = useCallback((): WorkspaceIndicatorState => ({
     custom: {
       fvg: config.showFvg,
@@ -745,11 +762,15 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   isDark,
   onClose,
   backtestSession,
+  tradeIndicators,
+  onTradeIndicatorsChange,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workspaceShellRef = useRef<HTMLDivElement>(null);
   const workspaceViewportRef = useRef<HTMLDivElement>(null);
   const replayToolbarRef = useRef<HTMLDivElement>(null);
+  // Jen fullscreen obchodu; backtest má vlastní uložený stav panelů.
+  const indicatorDefaults = backtestSession ? undefined : tradeIndicators;
   const savedLayoutId = backtestSession?.workspaceState?.layoutId as ChartWorkspaceLayoutId | undefined;
   const initialLayoutIdRef = useRef<ChartWorkspaceLayoutId>(
     savedLayoutId && getChartWorkspaceLayout(savedLayoutId).id === savedLayoutId ? savedLayoutId : loadLayoutId(),
@@ -1091,7 +1112,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     setActivePanelId(id);
   }, [activePanelId]);
   const initialLayout = useMemo(
-    () => buildWorkspaceLayout(initialRoot, initialLayoutIdRef.current),
+    () => buildWorkspaceLayout(initialRoot, initialLayoutIdRef.current, undefined, indicatorDefaults),
+    // Indikátory jen při otevření — další přepnutí mění panely, ne rozložení.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [initialRoot],
   );
   const workspace = useMemo<WorkspaceManager>(() => {
@@ -1104,7 +1127,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       kind: WORKSPACE_KIND,
       component: ResilientWorkspacePanel,
       displayName: 'MNQ / NQ graf',
-      defaultConfig: () => panelConfig(initialRoot, '1m'),
+      defaultConfig: () => panelConfig(initialRoot, '1m', indicatorDefaults),
     });
     return manager;
   }, [backtestSession?.id, initialLayout, initialRoot]);
@@ -1150,7 +1173,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       : undefined,
     tradingSettings: chartTradingSettings,
     openBacktestTradeReview,
-  }), [activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
+    onTradeIndicatorsChange: backtestSession ? undefined : onTradeIndicatorsChange,
+  }), [onTradeIndicatorsChange, activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
   const activeControl = panelControls.get(activePanelId) ?? null;
   const reviewTrade = reviewTradeId
     ? backtestSession?.journalTrades?.find(candidate => String(candidate.id) === reviewTradeId)
@@ -1440,7 +1464,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     const existing = [...panelControlsRef.current.entries()]
       .sort(([left], [right]) => panelOrder(left) - panelOrder(right))
       .map(([, control]) => ({ ...control.config }));
-    const fallback = activeControl?.config ?? panelConfig(initialRoot, '1m');
+    const fallback = activeControl?.config ?? panelConfig(initialRoot, '1m', indicatorDefaults);
     const defaultTimeframes: MarketTimeframe[] = ['1m', '5m', '15m', '1d'];
     const configs = Array.from({ length: template.panelCount }, (_, index) => (
       existing[index]
@@ -1463,7 +1487,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     setLayoutPickerOpen(false);
     try { window.localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, nextLayoutId); } catch { /* private storage */ }
     setStatus(`Layout ${nextLayoutId} · ${template.panelCount} graf${template.panelCount === 1 ? '' : 'y'}`);
-  }, [activeControl?.config, initialRoot, workspace]);
+  }, [activeControl?.config, indicatorDefaults, initialRoot, workspace]);
 
   useEffect(() => installChartWorkspaceSync(panelControls, syncSettings), [
     panelControls,
@@ -1488,7 +1512,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       name: 'default',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      tree: buildWorkspaceLayout(initialRoot, '2h'),
+      tree: buildWorkspaceLayout(initialRoot, '2h', undefined, indicatorDefaults),
       panels: {},
     });
     setLayoutId('2h');
@@ -1496,7 +1520,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     try { window.localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, '2h'); } catch { /* private storage */ }
     setActivePanelId('alphatrade-chart-1');
     setStatus('Výchozí rozložení obnoveno');
-  }, [initialRoot, workspace]);
+  }, [indicatorDefaults, initialRoot, workspace]);
 
   const persistWorkspaceStatus = useCallback(async (message: string) => {
     const result = await backtestSessionRef.current?.onSaveWorkspace?.();
@@ -1870,7 +1894,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         <button type="button" className={topButton} onClick={() => {
           const panelNumber = nextPanelNumberRef.current;
           nextPanelNumberRef.current += 1;
-          workspace.addPanel(WORKSPACE_KIND, panelConfig(initialRoot, '1m'), `Graf ${panelNumber}`);
+          workspace.addPanel(WORKSPACE_KIND, panelConfig(initialRoot, '1m', indicatorDefaults), `Graf ${panelNumber}`);
           setStatus('Nový panel přidán');
         }} title="Přidat nový graf"><Plus size={15} /> <span className="hidden md:inline">Graf</span></button>
         <span className={topDivider} />

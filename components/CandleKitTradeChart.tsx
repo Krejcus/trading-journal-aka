@@ -241,10 +241,15 @@ interface CandleKitTradeChartProps {
    */
   centeredTradeView?: boolean;
   /**
-   * Detail obchodu: hotové nastavení indikátorů jen pro čtení — nic se
-   * neuloží, dialog nastavení se neotevře, změny z jiných grafů se ignorují.
+   * Detail obchodu: hotové nastavení indikátorů zvenku — změny z jiných
+   * grafů se ignorují. Bez `onIndicatorSettingsSaved` jen pro čtení.
    */
   indicatorSettingsOverride?: AlphaTradeIndicatorSettings;
+  /**
+   * S `indicatorSettingsOverride`: styl jde upravit v legendě. Uloží se jen
+   * globálně (jako fullscreen obchodu), nikdy do otevřené backtest session.
+   */
+  onIndicatorSettingsSaved?: () => void;
   replaySelecting?: boolean;
   replaySelectionCandles?: MarketCandle[];
   replaySelectionTime?: number | null;
@@ -1651,6 +1656,19 @@ const persistPanelIndicatorSettings = (
   writeGlobalChartAppearance('indicatorSettings', envelope);
 };
 
+/**
+ * Úprava z detailu obchodu: stejný zdroj jako fullscreen obchodu (globální
+ * nastavení, jeho první 1m panel) a „naposledy použitý“ styl, ze kterého
+ * detail čte. Otevřenou backtest session nikdy nepřepíše.
+ */
+const TRADE_FULLSCREEN_PANEL_ID = 'alphatrade-chart-1';
+const persistTradeChartIndicatorSettings = (settings: AlphaTradeIndicatorSettings) => {
+  const envelope = writePanelSettings(inheritGlobalAppearance('indicatorSettings'), TRADE_FULLSCREEN_PANEL_ID, settings);
+  sharedIndicatorSettingsCache.delete(TRADE_FULLSCREEN_PANEL_ID);
+  rememberLatestIndicatorSettings(settings);
+  writeGlobalChartAppearance('indicatorSettings', envelope);
+};
+
 // Otevření i zavření session mění platný zdroj nastavení. Cache musí padnout a
 // namontované grafy se to dozvědí stejnou cestou jako při běžné úpravě.
 onChartAppearanceScopeReset(() => {
@@ -1701,6 +1719,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   journalHistoryInReplay = false,
   centeredTradeView = false,
   indicatorSettingsOverride,
+  onIndicatorSettingsSaved,
   replaySelecting = false,
   replaySelectionMinimumTime = null,
   replaySelectionCandles = [],
@@ -4875,7 +4894,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           setSettingsDialogIndicator(id);
         }}
         offsetForToolbar={!hideDrawingToolbar}
-        readOnly={indicatorSettingsOverride != null}
+        readOnly={indicatorSettingsOverride != null && !onIndicatorSettingsSaved}
       />
       {!hideFocusButton && chartSettings.canvas.navigationButtons !== 'never' && <button
         type="button"
@@ -4903,10 +4922,11 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         />,
         document.body,
       )}
-      {settingsDialogIndicator && (
+      {settingsDialogIndicator && createPortal(
         <ChartIndicatorSettingsDialog
           indicator={settingsDialogIndicator}
           settings={indicatorSettings}
+          singleChart={indicatorSettingsOverride != null}
           onPreview={next => updateIndicatorSettings(next)}
           onCancel={() => {
             if (settingsBackupRef.current) updateIndicatorSettings(settingsBackupRef.current);
@@ -4915,15 +4935,22 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
           }}
           onApply={(next, allPanels) => {
             updateIndicatorSettings(next, allPanels);
-            persistPanelIndicatorSettings(
-              next,
-              { panelId: settingsPanelId, allPanels },
-              legacySettingsStorageKey,
-            );
+            if (indicatorSettingsOverride) {
+              persistTradeChartIndicatorSettings(next);
+              onIndicatorSettingsSaved?.();
+            } else {
+              persistPanelIndicatorSettings(
+                next,
+                { panelId: settingsPanelId, allPanels },
+                legacySettingsStorageKey,
+              );
+            }
             settingsBackupRef.current = null;
             setSettingsDialogIndicator(null);
           }}
-        />
+        />,
+        // Mimo graf: v detailu obchodu by ho modal (transform + overflow) ořízl.
+        document.body,
       )}
       {!hideDrawingToolbar && selectedFib && fibSettingsOpen && <FibDrawingSettingsDialog
         engine={selectedFib.engine}

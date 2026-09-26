@@ -1,5 +1,5 @@
 import TradeExecutionTimeline from './TradeExecutionTimeline';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   CandlestickSeries,
@@ -46,10 +46,8 @@ import {
   type MarketCandle,
   type MarketTimeframe,
 } from '../services/marketData';
-import DetailIndicatorMenu from './DetailIndicatorMenu';
 import { onChartAppearanceScopeBroadcast } from '../services/chartAppearanceScope';
-import { detailIndicatorSettings, type DetailIndicatorToggles } from '../services/chartIndicatorSettings';
-import { detailIndicatorStyleSnapshot, readDetailIndicatorToggles, writeDetailIndicatorToggles } from '../services/detailIndicators';
+import { detailIndicatorStyleSnapshot, onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators, type TradeChartIndicators } from '../services/detailIndicators';
 import { loadTradeChartCandles, loadTradeChartHistory, tradeChartDataAvailable, tradeChartTiming } from '../services/tradeChartData';
 import { ALPHATRADE_CHART_STYLE as chartStyle } from '../services/chartVisualStyle';
 import { formatNqMnqTickPrice } from '../services/chartPriceTick';
@@ -173,10 +171,13 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   // Plná historie je v grafu (levely PDH/PDL/PWH a VWAP z ní počítají).
   const [historyReady, setHistoryReady] = useState(!detail);
 
-  // Indikátory v detailu: jedno menu, platí pro všechny obchody. Styly jen
-  // čte (snapshot z backtestu), nikdy nesahá na otevřenou backtest session.
-  const [detailIndicators, setDetailIndicators] = useState<DetailIndicatorToggles>(readDetailIndicatorToggles);
-  const changeDetailIndicators = (next: DetailIndicatorToggles) => { setDetailIndicators(next); writeDetailIndicatorToggles(next); };
+  // Indikátory detailu = indikátory fullscreenu obchodu (platí pro všechny
+  // obchody). Přidávají se ve fullscreenu; v detailu je legenda upraví nebo
+  // odebere. Styl se čte ze snapshotu, nikdy z otevřené backtest session.
+  const [tradeIndicators, setTradeIndicators] = useState<TradeChartIndicators>(readTradeChartIndicators);
+  useEffect(() => onTradeChartIndicatorsChange(setTradeIndicators), []);
+  const changeTradeIndicators = useCallback((next: TradeChartIndicators) => writeTradeChartIndicators(next), []);
+  const toggleTradeIndicator = (id: keyof TradeChartIndicators) => changeTradeIndicators({ ...tradeIndicators, [id]: !tradeIndicators[id] });
   // Styl je po uživatelích a přihlášení se při načtení stránky teprve ověřuje —
   // po jeho vyřešení (a po změně session) se snapshot přečte znovu.
   const [indicatorStyleVersion, setIndicatorStyleVersion] = useState(0);
@@ -184,8 +185,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   // Znovu i při každém návratu na graf (styl mohl být mezitím uložen v backtestu).
   // eslint-disable-next-line react-hooks/exhaustive-deps -- verze = pokyn přečíst znovu
   const indicatorStyle = useMemo(() => detailIndicatorStyleSnapshot(), [indicatorStyleVersion, revealKey]);
-  const indicatorOverride = useMemo(() => detailIndicatorSettings(indicatorStyle, detailIndicators), [indicatorStyle, detailIndicators]);
-  const levelsWanted = detailIndicators.levels || detailIndicators.vwap;
+  const levelsWanted = tradeIndicators.levels;
   useEffect(() => { if (detail && levelsWanted) setFullHistory(true); }, [detail, levelsWanted, trade.id]);
 
   // ── Přehrávání obchodu (jen v detailu) ─────────────────────────────────
@@ -851,8 +851,6 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
         <span className={`text-[12px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{root}</span>
         <span className="ml-1.5 whitespace-nowrap text-[11px] font-semibold text-slate-500">1m · CME</span>
         <span className="flex-1" />
-        <DetailIndicatorMenu isDark={isDark} value={detailIndicators} onChange={changeDetailIndicators}
-          historyLoading={levelsWanted && !historyReady} className={detailButton} />
         <button type="button" className={detailButton} onClick={() => setFocusRequest(value => value + 1)} title="Vycentrovat graf na obchod" aria-label="Vycentrovat na obchod">
           <LocateFixed size={13} /> <span className="hidden sm:inline">Obchod</span>
         </button>
@@ -870,11 +868,15 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
             timeframe={timeframe}
             entryMs={entryMs}
             exitMs={exitMs}
-            showFvg={detailIndicators.fvg}
+            showFvg={tradeIndicators.fvg}
             // Levely a VWAP až s plnou historií — z neúplné by PDH/PDL lhaly.
             showLevels={levelsWanted && historyReady}
-            showStructure={detailIndicators.structure}
-            indicatorSettingsOverride={indicatorOverride}
+            showStructure={tradeIndicators.structure}
+            onToggleFvg={() => toggleTradeIndicator('fvg')}
+            onToggleLevels={() => toggleTradeIndicator('levels')}
+            onToggleStructure={() => toggleTradeIndicator('structure')}
+            indicatorSettingsOverride={indicatorStyle}
+            onIndicatorSettingsSaved={() => setIndicatorStyleVersion(value => value + 1)}
             isDark={isDark}
             compactMode
             hideDrawingToolbar
@@ -1039,6 +1041,8 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
         initialRoot={root}
         initialCandles={rawCandles}
         isDark={isDark}
+        tradeIndicators={tradeIndicators}
+        onTradeIndicatorsChange={changeTradeIndicators}
         onClose={() => setIsFullscreen(false)}
       />,
       document.body,

@@ -1,31 +1,42 @@
-import { describe, expect, it } from 'vitest';
-import { DEFAULT_DETAIL_INDICATORS, DEFAULT_INDICATOR_SETTINGS, detailIndicatorSettings, mergeIndicatorSettings } from '../services/chartIndicatorSettings';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_INDICATOR_SETTINGS, mergeIndicatorSettings } from '../services/chartIndicatorSettings';
+import { onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators } from '../services/detailIndicators';
 
-const base = () => {
-  const settings = structuredClone(DEFAULT_INDICATOR_SETTINGS);
-  Object.assign(settings.levels, { priorDay: true, priorWeek: true, showVwap: true, showPrevVwap: true, showDeviations: true, vwapColor: '#123456' });
-  return settings;
-};
+const store = new Map<string, string>();
+beforeEach(() => {
+  store.clear();
+  const target = new EventTarget();
+  vi.stubGlobal('window', {
+    localStorage: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+    },
+    addEventListener: target.addEventListener.bind(target),
+    removeEventListener: target.removeEventListener.bind(target),
+    dispatchEvent: target.dispatchEvent.bind(target),
+  });
+});
+afterEach(() => { vi.unstubAllGlobals(); });
 
-describe('indikátory v detailu obchodu', () => {
-  it('výchozí stav: všechno vypnuté', () => {
-    expect(DEFAULT_DETAIL_INDICATORS).toEqual({ levels: false, vwap: false, fvg: false, structure: false });
+describe('indikátory grafu obchodu (detail = fullscreen)', () => {
+  it('bez uložení: nic zapnuté', () => {
+    expect(readTradeChartIndicators()).toEqual({ fvg: false, levels: false, structure: false });
   });
-  it('jen VWAP: levely bez čar PDH/PWH a seancí, VWAP podle stylu z backtestu', () => {
-    const levels = detailIndicatorSettings(base(), { ...DEFAULT_DETAIL_INDICATORS, vwap: true }).levels;
-    expect(levels).toMatchObject({ priorDay: false, priorWeek: false, currentDay: false, showSessionBoxes: false,
-      showVwap: true, showPrevVwap: true, showDeviations: true, vwapColor: '#123456' });
+  it('starší zápis se samostatným VWAP: VWAP patří k levelům', () => {
+    store.set('alphatrade:detail-indicators', JSON.stringify({ levels: false, vwap: true, fvg: true, structure: false }));
+    expect(readTradeChartIndicators()).toEqual({ fvg: true, levels: true, structure: false });
   });
-  it('levely bez VWAP: čáry zůstanou, VWAP s pásmy zmizí', () => {
-    const levels = detailIndicatorSettings(base(), { ...DEFAULT_DETAIL_INDICATORS, levels: true }).levels;
-    expect(levels).toMatchObject({ priorDay: true, priorWeek: true, showVwap: false, showPrevVwap: false, showDeviations: false });
+  it('zápis se přečte zpět a dá vědět otevřeným grafům', () => {
+    const seen = vi.fn();
+    const stop = onTradeChartIndicatorsChange(seen);
+    writeTradeChartIndicators({ fvg: true, levels: false, structure: true });
+    expect(readTradeChartIndicators()).toEqual({ fvg: true, levels: false, structure: true });
+    expect(seen).toHaveBeenCalledWith({ fvg: true, levels: false, structure: true });
+    stop();
   });
-  it('styl z backtestu se jinak nemění (FVG, struktura)', () => {
-    const source = base();
-    const result = detailIndicatorSettings(source, { levels: true, vwap: true, fvg: true, structure: true });
-    expect(result.fvg).toEqual(source.fvg);
-    expect(result.structure).toEqual(source.structure);
-    expect(source.levels.priorDay).toBe(true);
+  it('poškozený zápis: nic zapnuté', () => {
+    store.set('alphatrade:detail-indicators', '{nope');
+    expect(readTradeChartIndicators()).toEqual({ fvg: false, levels: false, structure: false });
   });
   it('neúplné uložené nastavení se doplní výchozími hodnotami', () => {
     const merged = mergeIndicatorSettings(JSON.stringify({ levels: { vwapColor: '#abcdef' } }));

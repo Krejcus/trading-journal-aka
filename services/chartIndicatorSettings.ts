@@ -283,29 +283,3 @@ export const mergeIndicatorSettings = (saved: string | null): AlphaTradeIndicato
   }
 };
 
-/** Co je v detailu obchodu zapnuté (jedno menu „Indikátory“). */
-export interface DetailIndicatorToggles {
-  levels: boolean;
-  vwap: boolean;
-  fvg: boolean;
-  structure: boolean;
-}
-export const DEFAULT_DETAIL_INDICATORS: DetailIndicatorToggles = { levels: false, vwap: false, fvg: false, structure: false };
-
-/**
- * Nastavení pro detail: styly z backtestu, ale levely a VWAP (oba patří do
- * indikátoru levelů) jdou zapnout zvlášť. Samotný VWAP = levely se vším
- * ostatním vypnutým.
- */
-export function detailIndicatorSettings(base: AlphaTradeIndicatorSettings, toggles: DetailIndicatorToggles): AlphaTradeIndicatorSettings {
-  const levels = { ...base.levels };
-  if (!toggles.levels) Object.assign(levels, {
-    showAsia: false, showAsiaLines: false, showLondon: false, showLondonLines: false, showNewYork: false, showNewYorkLines: false,
-    showSessionBoxes: false, currentDay: false, priorDay: false, priorWeek: false, dayOpen: false, weekOpen: false,
-    sessionHighLow: false, showOpen: false, showZones: false, showOvernight: false, showCompass: false,
-    showInitialBalance: false, showBiasTable: false,
-  } satisfies Partial<LevelsIndicatorSettings>);
-  levels.showVwap = toggles.vwap;
-  if (!toggles.vwap) Object.assign(levels, { showPrevVwap: false, showDeviations: false } satisfies Partial<LevelsIndicatorSettings>);
-  return { ...base, levels };
-}

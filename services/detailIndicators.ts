@@ -1,16 +1,11 @@
 import { chartAppearanceUserId, inheritGlobalAppearance } from './chartAppearanceScope';
-import {
-  DEFAULT_DETAIL_INDICATORS,
-  mergeIndicatorSettings,
-  type AlphaTradeIndicatorSettings,
-  type DetailIndicatorToggles,
-} from './chartIndicatorSettings';
+import { mergeIndicatorSettings, type AlphaTradeIndicatorSettings } from './chartIndicatorSettings';
 import { panelSettingsEnvelope } from './chartPanelSettings';
 
 /**
- * Indikátory v detailu obchodu. Styly se jen čtou — edituje se v backtestu
- * nebo ve fullscreenu. Detail si nikdy nesahá na nastavení otevřené backtest
- * session (mohl by ho přepsat), bere snapshot „naposledy použitého“ stylu.
+ * Indikátory v detailu obchodu. Detail si nikdy nesahá na nastavení otevřené
+ * backtest session (mohl by ho přepsat): čte snapshot „naposledy použitého“
+ * stylu a úpravy z detailu zapisuje jen do globálního nastavení.
  */
 
 const scopedKey = (base: string) => {
@@ -45,18 +40,37 @@ export function detailIndicatorStyleSnapshot(): AlphaTradeIndicatorSettings {
   return mergeIndicatorSettings(shared ? JSON.stringify(shared) : null);
 }
 
-// Přepínače jsou volba zobrazení v tomhle prohlížeči — záměrně bez ID
-// uživatele: to se při načtení stránky teprve ověřuje a detail by při prvním
-// vykreslení četl jiný klíč, než pod který se zapisovalo.
-export function readDetailIndicatorToggles(): DetailIndicatorToggles {
+/**
+ * Které indikátory má graf obchodu — detail i fullscreen obchodu ukazují
+ * totéž. Přidávají se ve fullscreenu, v detailu jdou upravit nebo odebrat.
+ * VWAP je součást levelů (jako ve fullscreenu), zapíná se v jejich nastavení.
+ */
+export interface TradeChartIndicators { fvg: boolean; levels: boolean; structure: boolean }
+export const NO_TRADE_CHART_INDICATORS: TradeChartIndicators = { fvg: false, levels: false, structure: false };
+const TRADE_CHART_INDICATORS_EVENT = 'alphatrade:trade-chart-indicators';
+
+// Volba zobrazení v tomhle prohlížeči — záměrně bez ID uživatele: to se při
+// načtení stránky teprve ověřuje a detail by při prvním vykreslení četl jiný
+// klíč, než pod který se zapisovalo.
+export function readTradeChartIndicators(): TradeChartIndicators {
   try {
-    const saved = JSON.parse(window.localStorage.getItem(DETAIL_TOGGLES_KEY) ?? 'null') as Partial<DetailIndicatorToggles> | null;
-    return { ...DEFAULT_DETAIL_INDICATORS, ...(saved ?? {}) };
+    const saved = JSON.parse(window.localStorage.getItem(DETAIL_TOGGLES_KEY) ?? 'null') as Record<string, unknown> | null;
+    if (!saved || typeof saved !== 'object') return { ...NO_TRADE_CHART_INDICATORS };
+    // Starší zápis měl VWAP zvlášť; teď patří k levelům.
+    return { fvg: saved.fvg === true, levels: saved.levels === true || saved.vwap === true, structure: saved.structure === true };
   } catch {
-    return { ...DEFAULT_DETAIL_INDICATORS };
+    return { ...NO_TRADE_CHART_INDICATORS };
   }
 }
 
-export function writeDetailIndicatorToggles(toggles: DetailIndicatorToggles): void {
-  try { window.localStorage.setItem(DETAIL_TOGGLES_KEY, JSON.stringify(toggles)); } catch { /* jen pro tuto relaci */ }
+export function writeTradeChartIndicators(next: TradeChartIndicators): void {
+  const value = { fvg: next.fvg, levels: next.levels, structure: next.structure };
+  try { window.localStorage.setItem(DETAIL_TOGGLES_KEY, JSON.stringify(value)); } catch { /* jen pro tuto relaci */ }
+  window.dispatchEvent(new CustomEvent(TRADE_CHART_INDICATORS_EVENT, { detail: value }));
+}
+
+export function onTradeChartIndicatorsChange(handler: (next: TradeChartIndicators) => void): () => void {
+  const listener = (event: Event) => handler((event as CustomEvent<TradeChartIndicators>).detail);
+  window.addEventListener(TRADE_CHART_INDICATORS_EVENT, listener);
+  return () => window.removeEventListener(TRADE_CHART_INDICATORS_EVENT, listener);
 }

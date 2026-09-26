@@ -208,6 +208,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-26 — Indikátory detailu = fullscreen obchodu, úpravy v legendě (Claude)
+
+- Filipovo zadání: v detailu je to, co ve fullscreenu; v detailu jde
+  upravit/skrýt/odebrat, přidává se ve fullscreenu. Tlačítko „Indikátory“
+  v liště detailu (`DetailIndicatorMenu`) zrušeno.
+- Sdílený stav `{fvg, levels, structure}` v `services/detailIndicators.ts`
+  (klíč `alphatrade:detail-indicators`, událost pro otevřené grafy). Starší
+  zápis se samostatným VWAP se čte jako levely — VWAP je teď jako ve
+  fullscreenu součást stylu levelů (maskování `detailIndicatorSettings`
+  zrušeno, detail ukazuje levely přesně podle stylu).
+- Fullscreen obchodu (`AlphaTradeChartWorkspace` bez backtest session) si
+  dřív zapnuté indikátory nepamatoval vůbec; teď panely startují ze
+  sdíleného stavu a každé zapnutí/odebrání se propíše zpět. Backtest beze
+  změny (má vlastní stav panelů).
+- Legenda v detailu: Skrýt (dočasně) / Nastavit / Odebrat (= vypnout i ve
+  fullscreenu). Nastavení se uloží jen globálně — panel `alphatrade-chart-1`
+  globální obálky + „naposledy použitý“ styl — nikdy do otevřené backtest
+  session. Dialog nastavení je v portálu (modal detailu ho ořezával) a v
+  detailu nemá „Na všechny grafy“.
+- Ověřeno živě: legenda má 3× Skrýt/Nastavit/Odebrat, uložení FVG max 5 se
+  propsalo do obou úložišť, fullscreen startuje se stejnými 3 indikátory,
+  odebrání struktury ve fullscreenu → detail ukáže 2. Filipovo nastavení
+  po testu vráceno.
+
 ### 2026-09-26 — LIVE na telefonu: přepínač followera, Flatten All, úprava skupiny (Claude, jen UI)
 
 - Rozhodnutí uživatele z mockupů `mockups/live-mobile-controls.html` a
