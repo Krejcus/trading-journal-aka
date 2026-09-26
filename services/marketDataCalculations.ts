@@ -383,6 +383,44 @@ export function resolveMarketSymbol(root: 'MNQ' | 'NQ', tradeSymbol?: string): s
   return `${root}.v.0`;
 }
 
+const QUARTER_CODES: Record<number, string> = { 3: 'H', 6: 'M', 9: 'U', 12: 'Z' };
+
+/** Expirace čtvrtletního kontraktu: třetí pátek měsíce (konec dne UTC). */
+function quarterlyExpiryMs(year: number, month: number): number {
+  const firstDay = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+  const firstFriday = 1 + ((5 - firstDay + 7) % 7);
+  return Date.UTC(year, month - 1, firstFriday + 14, 23, 59, 59);
+}
+
+/**
+ * Aktuální a příští čtvrtletní kontrakt k okamžiku `atMs` (např. MNQU6, MNQZ6).
+ * V týdnech rolloveru obchoduje trh oba a kontinuální `.v.0` může ukazovat
+ * jiný, než na kterém obchod proběhl.
+ */
+export function quarterlyContractsAround(root: 'MNQ' | 'NQ', atMs: number): string[] {
+  const at = new Date(atMs);
+  const contracts: string[] = [];
+  let year = at.getUTCFullYear();
+  let month = Math.ceil((at.getUTCMonth() + 1) / 3) * 3;
+  if (quarterlyExpiryMs(year, month) < atMs) { month += 3; if (month > 12) { month = 3; year += 1; } }
+  for (let index = 0; index < 2; index++) {
+    contracts.push(`${root}${QUARTER_CODES[month]}${year % 10}`);
+    month += 3; if (month > 12) { month = 3; year += 1; }
+  }
+  return contracts;
+}
+
+/**
+ * Jak daleko (v bodech) je cena plnění od rozpětí svíčky, ve které proběhlo.
+ * 0 = cena leží ve svíčce; null = svíčka pro ten okamžik chybí.
+ */
+export function priceDistanceFromCandle(candles: readonly MarketCandle[], atMs: number, price: number): number | null {
+  const minute = Math.floor(atMs / 60_000) * 60;
+  const candle = candles.find(item => item.time === minute);
+  if (!candle || !Number.isFinite(price)) return null;
+  return price < candle.low ? candle.low - price : price > candle.high ? price - candle.high : 0;
+}
+
 export function aggregateCandles(candles: MarketCandle[], timeframe: MarketTimeframe): MarketCandle[] {
   const minutes = MARKET_TIMEFRAME_MINUTES[timeframe];
   if (minutes === 1) return candles.slice();

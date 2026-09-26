@@ -165,6 +165,10 @@ export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[
   for (const pair of pairs) {
     const rows = pairsByAccount.get(pair.accountId) ?? []; rows.push(pair); pairsByAccount.set(pair.accountId, rows);
   }
+  const protectionByOrder = new Map<string, typeof projection.protection>();
+  for (const event of projection.protection) {
+    const rows = protectionByOrder.get(event.orderId) ?? []; rows.push(event); protectionByOrder.set(event.orderId, rows);
+  }
   const linksByAccount = new Map<number, JournalEvidence[]>();
   const childrenByParent = new Map<string, string[]>();
   for (const event of latest.values()) {
@@ -205,8 +209,30 @@ export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[
     for (const event of linkRows) if (['stop', 'target'].includes(String(event.entity.role))
       && leaderOrders.has(`${event.entity.leaderConnectionId}:${event.entity.leaderOrderId}`)) protectiveOrders.add(String(event.entity.orderId));
     const through = episode.exitAt ?? episode.observedThrough;
-    const protection = projection.protection.filter(event => event.accountId === episode.accountId && protectiveOrders.has(event.orderId)
-      && event.at >= episode.baselineAt && event.at <= through);
+    // SL/TP přidané až během obchodu samostatnou objednávkou: stop (SL) nebo
+    // limit (TP) na opačné straně, stejný účet i kontrakt, vzniklý při otevřené
+    // pozici a nejvýš na její tehdejší velikost. Větší objednávka by byla
+    // stop-and-reverse — nový vstup, ne ochrana. Starší objednávky z doby před
+    // vstupem se nepřiřazují, jejich účel nelze doložit.
+    const exitSide = episode.direction === 'Long' ? 'Sell' : 'Buy';
+    const openQuantityAt = (at: number) => episode.fills.filter(fill => fill.at <= at)
+      .reduce((sum, fill) => sum + (fill.role === 'entry' ? fill.allocatedQuantity : -fill.allocatedQuantity), 0);
+    const standaloneOrders = new Set<string>();
+    for (const [orderId, events] of protectionByOrder) {
+      if (protectiveOrders.has(orderId) || entryOrderIds.has(orderId)) continue;
+      const order = latest.get(`order:${orderId}`)?.entity;
+      if (!order || order.accountId !== episode.accountId || order.contractId !== episode.contractId
+        || order.action !== exitSide || order.parentId != null) continue;
+      const created = events[0];
+      if (created.accountId !== episode.accountId || created.at < episode.entryAt || created.at > through) continue;
+      const open = openQuantityAt(created.at);
+      if (created.quantity == null || open <= 0 || created.quantity > open) continue;
+      standaloneOrders.add(orderId);
+    }
+    const protection = projection.protection.filter(event => event.accountId === episode.accountId
+      && (protectiveOrders.has(event.orderId) || standaloneOrders.has(event.orderId))
+      && event.at >= episode.baselineAt && event.at <= through)
+      .map(event => standaloneOrders.has(event.orderId) ? { ...event, source: 'standalone' as const } : event);
     const gaps = projection.gaps.filter(gap => gap.from >= episode.entryAt && gap.from <= through);
     const ownIssues = [...new Set([...episode.issues, ...realizations.flatMap(pair => pair.history.issues)
       .filter(issue => issue !== 'protection-history-unavailable'), ...projection.issues,

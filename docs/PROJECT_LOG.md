@@ -228,6 +228,121 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Čekající limit s bracketem už nehlásí „bez SL": Suspended SL/TP se
   u čekajícího vstupu počítají (otevřená pozice dál jen Working).
 - Mobilní karty přepínač zatím nemají — samostatná session.
+### 2026-09-24 — Nový detail obchodu: A2, galerie, graf jako fullscreen, průběh a přehrávání (Claude)
+
+Podle odsouhlaseného náhledu `mockups/trade-detail-final.html`. Nic se
+nenasazovalo, stav je v pracovní složce.
+
+- `TradeDetailModal`: hranaté okno (8 px), hlavička (symbol, směr, validita,
+  datum · čas, Nezkontrolováno + Zkontrolovat/Upravit, ‹ ›, sdílet, ⋯ s
+  Upravit / BE / Smazat, zavřít). Levý sloupec: čistý výsledek + hrubě a
+  poplatky z `executionHistory`, tenké dlaždice (vstup/výstup s časem, pohyb
+  v bodech, velikost, držení, R), účty, hodnocení, konfluence, intel,
+  galerie snímků + řádek „Interaktivní graf“ (zelený obrys). Snímek ↔ graf
+  se prolnou (`.trade-stage-layer`), graf se připojí až při prvním otevření.
+  Poznámka pod plochou jde upravit na místě. „Označit jako BE“ je v ⋯.
+- R u deníku = čistý P&L / (vzdálenost vstupu od SL platného při vstupu ×
+  kontrakty × point value) za JEDEN účet — u sloučené karty hlavní účet
+  (v grafu vybraný); součet účtů proti riziku jednoho by R zkreslil.
+- `TradeMarketChart variant="detail"`: jen trh · 1m · CME, Obchod, Průběh,
+  Fullscreen; bez timeframů, indikátorů a kreslení (vše ve fullscreenu).
+  Přehrávání: kurzor po 1m svíčkách, `CandleKitTradeChart` dostane odkryté
+  svíčky + `replayActive` a historii oříznutou `historyAt()` — nový prop
+  `journalHistoryInReplay` nechá SL/TP čáry kreslit i v replayi (backtest
+  ho nepoužívá, beze změny). `TradeReplayBar` = vzhled Bar Replay z
+  workspace; Go To skáče na události.
+- `lib/tradeReplay.ts` (+ testy na skutečném shortu 23. 9.): události z
+  historie (sloučená dílčí plnění, důvod výstupu stop/cíl/ručně, posuny
+  SL/TP jen při změně ceny, ≥ 3 posuny SL za sebou = série), `historyAt`,
+  `initialRiskPoints`. `TradeProgress`: bubliny z tlačítka Průběh se
+  skládají pod sebe (každá 2,2 s, max 6), klik = celý seznam.
+- `AccountExecutionChart` při obnovení stejného obchodu na pozadí už graf
+  neodpojí (jinak se vynulovalo rozběhnuté přehrávání).
+- Box pozice (`journalPositionDrawing`) se u obchodů kopírky nikdy
+  nevykreslil: čekal na SL/TP `confirmed` + `operation: 'new'`, ale Tradovate
+  posílá `new` jako pending a potvrzení jako `modify` pár ms po plnění. Nově
+  platí úroveň potvrzená do 2 s po vstupu (fallback: původní pravidlo);
+  zábrany (strana, souběžné rozporné ceny, výpadek) zůstávají. Otevřená
+  pozice (přehrávání) má box do `observedThrough`, neúplná žádný. Testy.
+- Čáry SL/TP v `journalChartPrimitive`: SL červeně, TP zeleně (dřív oranžová
+  a modrá = barvy výstupu a vstupu). Platí i ve fullscreenu.
+- Detail: štítky na cenové ose (`createPriceLine`) jen pro to, co box
+  neukazuje — aktuální SL/TP, když se liší od původního, nebo vše bez boxu.
+  Při prvním zobrazení se svíčky odkryjí zleva doprava (`.trade-chart-reveal`).
+- Plnění v grafu jako šipky (TradingView): nákup modře zespodu, prodej
+  červeně shora, hrot na ceně; dílčí plnění příkazu = jedna šipka
+  (`tradeFillGroups`). Šipky jsou tenké (čára + otevřený hrot); po najetí
+  myší (`subscribeCrosshairMove`, hit-test v primitivu) se animovaně zvětší
+  a ukážou štítek „Vstup / Přikoupeno / Částečný výstup / Výstup · Buy 6 ·
+  cena · čas“. Trvalé popisky ani tlačítko Popisky nejsou — uživatel nechce
+  další ikony. Odkrývání svíček se spustí při každém návratu na graf
+  (`revealKey`).
+- Čáry SL/TP jsou tenké (1 px); po najetí (±10 px, přes konce úseku 4 px)
+  se celá linie daného druhu zesílí a u kurzoru ukáže štítek „SL cena ·
+  ±body · ±USD · N MNQ“ — `protectionValueAt` v `lib/tradeReplay.ts`
+  počítá pro pozici otevřenou v okamžiku pod kurzorem (průměrná cena,
+  přikoupení mění průměr, částečný výstup zmenšuje velikost; před vstupem
+  „plán“ podle prvního příkazu, po uzavření nic). Hodnota bodu podle
+  kontraktu obchodu (MNQ 2, NQ 20 $), ne podle zobrazeného grafu.
+  Svislý úsek (okamžik posunu) má vlastní zásah a štítek „SL a → b ·
+  ±body · ±USD · čas“ = o kolik posun pomohl/přitížil pro tehdejší velikost;
+  když je kurzor v jeho výšce do 6 px, vyhrává nad vodorovnými čarami.
+- SL/TP přidané až během obchodu samostatnou objednávkou (ne bracket ani
+  kopírka) se přiřadí k pozici (`lib/journalPositionEpisodes.ts`): stop (SL)
+  nebo limit (TP) na opačné straně, stejný účet a kontrakt, vzniklý při
+  otevřené pozici a nejvýš na její tehdejší velikost (větší = stop-and-reverse,
+  nepřiřadí se; objednávky z doby před vstupem taky ne). Události nesou
+  `source: 'standalone'`; do faktů `stopLoss/takeProfit` (riziko, R) se
+  počítají jen, když vznikly do 2 s od vstupu. Import běží jako Vercel API
+  (`api/tradovate/oauth/journal-import.ts`) → projeví se po nasazení.
+- Obchod bez SL/TP dostane v grafu výsledkový box (varianta B z
+  `mockups/trade-no-sltp.html`): od vstupu po výstup × průměrný vstup →
+  průměrný výstup, zeleně/červeně, tečkovaně vstup, štítek „±body · ±USD“
+  (uzavřený = hrubý výsledek brokera). V přehrávání končí na poslední
+  odkryté svíčce. Zahrnut v autoscale detailu.
+- Barvy boxu pozice jsou sdílené: styl nástroje Long/ShortPosition se
+  vždy zapisuje i do globálních výchozích stylů (`SHARED_TOOLS`
+  v `chartDrawingStyleDefaults.ts`) a globální hodnota má přednost i uvnitř
+  backtest session. Box obchodu v detailu i fullscreenu ho čte přes
+  `getDrawingStyleDefault`. Styl uložený dřív jen v session se povýší při
+  jejím otevření. Globální = localStorage daného prohlížeče (per origin),
+  ne cloud. V detailu žádné nastavení barev — edituje se jen v backtestu
+  nebo ve fullscreenu. Long a Short sdílí jeden vzhled (úprava jednoho se
+  zapíše do obou; dřív uložený jen jeden převezme i druhý).
+- Detail (`centeredTradeView` v CandleKitTradeChart): každý návrat na graf
+  (`revealKey` → `focusRequest`) dá obchod doprostřed s okraji podle délky
+  obchodu; cenová osa zahrne SL/TP a plnění v záběru (`autoscaleLevels` →
+  `autoscaleInfo` journal primitivu); okraj = max(15 barů, ½ délky obchodu).
+  Přehrávání v detailu neskáče doprava jako backtest: graf stojí, budoucí
+  svíčky zakryje clona zprava doleva (`.trade-chart-rewind`, 0,5 s), pak se
+  přehrávají na místě. Cenová osa se na startu zamkne na rozsah celého
+  obchodu; pohled se posune (animace 260 ms) jen když kurzor dojede
+  k pravému okraji. „Celý obchod“ v Go To vrátí autoscale přes focus.
+- Odskok grafu v detailu (otevření, „Celý obchod“, start přehrávání) měl tři
+  příčiny, změřené po snímcích: (1) nový ChartView ukázal výchozí záběr
+  u konce dat a ten spustil rozšíření okna → druhé vytvoření grafu;
+  (2) efekt nastavení znovu aplikoval `rightOffset` na nový graf a odhodil
+  vycentrovaný záběr na konec; (3) výměna dat při startu přehrávání drží
+  odsazení od posledního baru. Opravy: detail dostává celou sérii a jeden
+  stálý klíč ChartView (bez nového grafu při přehrávání), ChartView během
+  přehrávání drží poslední plná data, `rightOffset` se znovu nenastavuje,
+  když ho graf už má, nový graf je skrytý do usazení záběru (prolnutí
+  140 ms) a záběr po výměně dat se drží přes `scrollToPosition`.
+- Rollover: kopírkou zapsané obchody nemají `symbol` → graf bral `MNQ.v.0`,
+  což u mikra 15. 9. byl ještě U6 (~29 060), ale obchod byl na Z6 (~29 360);
+  box, šipky i čáry ležely ~300 b. nad grafem („nevidím obchody“).
+  `loadTradeMarketCandles` (detail i fullscreen) ověří cenu prvního plnění
+  proti svíčce; když je dál než 10 b., zkusí aktuální a příští čtvrtletní
+  kontrakt (`quarterlyContractsAround`) a vezme ten, kde cena sedí.
+- Pozor: plná sada testů pod zátěží (load 15–20) trvala 18 min a 8 souborů
+  nedoběhlo na timeoutu workeru; v obchodní době ji nespouštět vedle copier
+  agenta, stačí cílené soubory.
+- Známé: graf v tmavém motivu zůstane bílý, pokud se poprvé otevřel ve
+  světlém a motiv se přepnul bez reloadu — `loadChartSettings` cachuje
+  nastavení per panel bez ohledu na `isDark` (starší chování, i fullscreen).
+- Testy: celá sada zelená v izolaci; pod zátěží (dev server + prohlížeč)
+  občas timeout v `liveCopyCompactRender`, `chartReplayPaint`,
+  `tradovateBrokerSessionSuspect`, `tradovateBrokerRenewal` — samostatně projdou.
 
 ### 2026-09-24 — Historie: snímek vložený ⌘V z karty i detailu (Claude)
 

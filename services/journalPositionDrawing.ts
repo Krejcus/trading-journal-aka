@@ -13,29 +13,44 @@ export function journalPositionDrawing(trade: Trade, currentStyle: PositionDrawi
   if (instrument !== 'MNQ' && instrument !== 'NQ') return null;
   const history = trade.executionHistory;
   if (!history || !history.fills.length) return null;
-  if (history.position && history.position.status !== 'closed') return null;
-  const original = history.protection.filter(event => event.accountId === history.accountId && event.status === 'confirmed' && event.operation === 'new').sort((a, b) => a.at - b.at);
+  // Otevřená pozice = přehrávání v detailu (historie oříznutá k okamžiku
+  // kurzoru), případně skutečně otevřený obchod. Box pak končí v posledním
+  // pozorovaném okamžiku. Neúplná pozice box nedostane.
+  const status = history.position?.status;
+  if (status && status !== 'closed' && status !== 'open') return null;
+  const open = status === 'open';
   const entries = history.fills.filter(fill => fill.role === 'entry').sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
   const exits = history.fills.filter(fill => fill.role === 'exit');
-  if (!entries.length || !exits.length || !Number.isFinite(intervalSeconds) || intervalSeconds <= 0
+  if (!entries.length || (!open && !exits.length) || !Number.isFinite(intervalSeconds) || intervalSeconds <= 0
     || history.fills.some(fill => fill.accountId !== history.accountId || !Number.isFinite(fill.at) || !Number.isFinite(fill.price))) return null;
   const start = Math.min(...entries.map(fill => fill.at));
-  const end = Math.max(...exits.map(fill => fill.at));
+  const end = open ? history.position?.observedThrough ?? NaN : Math.max(...exits.map(fill => fill.at));
+  if (!Number.isFinite(end)) return null;
   if (entries.some(fill => fill.at === start && fill.price !== entries[0].price)) return null;
-  const stopEvent = original.find(event => event.kind === 'sl' && event.at <= end);
-  const targetEvent = original.find(event => event.kind === 'tp' && event.at <= end);
+  const own = history.protection.filter(event => event.accountId === history.accountId);
+  const original = own.filter(event => event.status === 'confirmed' && event.operation === 'new').sort((a, b) => a.at - b.at);
+  // Úroveň doložená při vstupu: poslední potvrzená do chvíle vstupu (+ doba,
+  // za kterou broker potvrzení k vyplněnému příkazu posílá). Kopírka posílá
+  // SL/TP jako „odesláno“ a potvrzení chodí jako úprava — ne jako nový příkaz.
+  const ENTRY_CONFIRM_MS = 2_000;
+  const documented = (kind: 'sl' | 'tp') => own
+    .filter(event => event.kind === kind && event.status === 'confirmed' && event.price != null && event.at <= start + ENTRY_CONFIRM_MS)
+    .sort((a, b) => a.at - b.at).at(-1)
+    ?? original.find(event => event.kind === kind && event.at <= end);
+  const stopEvent = documented('sl');
+  const targetEvent = documented('tp');
   const stop = stopEvent?.price, target = targetEvent?.price;
   if (stop == null || target == null || !Number.isFinite(stop) || !Number.isFinite(target) || end <= start
     || !['Long', 'Short'].includes(trade.direction)
     || (trade.direction === 'Long' ? stop >= entries[0].price || target <= entries[0].price : stop <= entries[0].price || target >= entries[0].price)) return null;
   // A single reference box cannot represent incompatible simultaneous brackets.
-  if (original.some(event => ((event.kind === 'sl' && event.at === stopEvent!.at && event.price !== stop)
+  if (own.some(event => event.status === 'confirmed' && ((event.kind === 'sl' && event.at === stopEvent!.at && event.price !== stop)
     || (event.kind === 'tp' && event.at === targetEvent!.at && event.price !== target)))) return null;
   if (history.gaps.some(gap => gap.from <= start && (gap.to ?? Infinity) >= start)) return null;
   return managedPositionDrawing({
     id: `managed-position-journal-${trade.id}`, orderId: entries[0].orderId, instrument,
     tool: trade.direction === 'Long' ? 'LongPosition' : 'ShortPosition',
-    startTime: start / 1_000, initialEndTime: end / 1_000, terminalTime: end / 1_000, state: 'closed',
+    startTime: start / 1_000, initialEndTime: end / 1_000, terminalTime: end / 1_000, state: open ? 'active' : 'closed',
     // Original risk box belongs to the first fill, not a later scale-in average.
     entryPrice: entries[0].price, stopPrice: stop, targetPrice: target,
     style: { ...currentStyle, position: { ...normalizePositionSettings(currentStyle.position, trade.instrument),

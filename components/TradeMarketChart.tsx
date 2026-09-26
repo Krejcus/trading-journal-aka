@@ -10,6 +10,7 @@ import {
   LineStyle,
   type IChartApi,
   type ISeriesApi,
+  type Logical,
   type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
@@ -20,6 +21,13 @@ import {
   type Drawing,
 } from 'lightweight-charts-drawing';
 import { Activity, AlertTriangle, BarChart3, LocateFixed, Loader2, Maximize2, Minimize2, RefreshCw } from 'lucide-react';
+import TradeProgress from './TradeProgress';
+import TradeReplayBar, { type TradeReplayGoTo, type TradeReplaySpeed } from './TradeReplayBar';
+import { historyAt, protectionLevelsAt, tradeTimelineEvents } from '../lib/tradeReplay';
+import { JOURNAL_SL_COLOR, JOURNAL_TP_COLOR } from '../services/journalChartPrimitive';
+import type { ChartViewApi } from '@getcandlekit/charts/react';
+import { DEFAULT_STYLE } from '@getcandlekit/charts';
+import { journalPositionDrawing } from '../services/journalPositionDrawing';
 import { Trade } from '../types';
 import CandleKitTradeChart from './CandleKitTradeChart';
 import AlphaTradeChartWorkspace from './AlphaTradeChartWorkspace';
@@ -31,7 +39,7 @@ import {
   findEntryFairValueGap,
   findEntryStructureEvent,
   findFairValueGaps,
-  loadMarketCandles,
+  loadTradeMarketCandles,
   marketDataWindowForTrade,
   MARKET_TIMEFRAME_MINUTES,
   MarketDataError,
@@ -46,7 +54,21 @@ import { chartAxisTickLabel, chartCrosshairTimeLabel } from '../services/chartTi
 interface TradeMarketChartProps {
   trade: Trade;
   isDark: boolean;
+  /**
+   * `detail` = zjednodušený graf v detailu obchodu: jeden timeframe (1m), bez
+   * indikátorů a kreslení, s průběhem obchodu a přehráváním. Všechno ostatní
+   * je ve fullscreenu. Výchozí `full` zůstává pro ostatní místa.
+   */
+  variant?: 'full' | 'detail';
+  /** Změna čísla = graf se znovu ukázal (návrat ze snímku) → znovu animace svíček. */
+  revealKey?: number;
 }
+
+/** Krok přehrávání = jedna 1m svíčka; při 1x trvá půl vteřiny. */
+const REPLAY_STEP_S = 60;
+const REPLAY_TICK_MS = 500;
+const floorMinute = (unix: number) => Math.floor(unix / 60) * 60;
+const clockAt = (unix: number) => new Intl.DateTimeFormat('cs-CZ', { timeZone: 'Europe/Prague', hour: 'numeric', minute: '2-digit' }).format(unix * 1000);
 
 const TRADE_CONTEXT_BARS: Record<MarketTimeframe, { before: number; after: number }> = {
   '1m': { before: 45, after: 45 },
@@ -115,7 +137,8 @@ const focusChartOnTrade = (
   });
 };
 
-const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark }) => {
+const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, variant = 'full', revealKey = 0 }) => {
+  const detail = variant === 'detail';
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -144,6 +167,97 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark }) =>
   }, [trade]);
   const exitMs = useMemo(() => trade.timestamp || Date.parse(trade.exitDate || trade.date) || entryMs, [trade, entryMs]);
   const marketSymbol = useMemo(() => resolveMarketSymbol(root, trade.symbol || trade.instrument), [root, trade.symbol, trade.instrument]);
+  // Cena prvního plnění ověří, že svíčky patří kontraktu obchodu (rollover).
+  const firstEntryPrice = useMemo(() => {
+    const fill = trade.executionHistory?.fills.filter(item => item.role === 'entry').sort((a, b) => a.at - b.at)[0];
+    return fill ? { at: fill.at, price: fill.price } : { at: entryMs, price: Number(trade.entryPrice) };
+  }, [trade.executionHistory, trade.entryPrice, entryMs]);
+
+  // ── Přehrávání obchodu (jen v detailu) ─────────────────────────────────
+  // Kurzor = čas otevření poslední odkryté 1m svíčky; null = celý obchod.
+  const history = trade.executionHistory;
+  const events = useMemo(() => tradeTimelineEvents(history), [history]);
+  const [cursor, setCursor] = useState<number | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState<TradeReplaySpeed>(1);
+  const [focusRequest, setFocusRequest] = useState(0);
+  const replayStart = floorMinute(Math.floor(entryMs / 1000)) - 10 * 60;
+  const replayEnd = floorMinute(Math.floor(exitMs / 1000)) + 5 * 60;
+  // Události v právě odkryté svíčce už proběhly — svíčka pokrývá celou minutu.
+  const cutoffMs = cursor == null ? null : (cursor + REPLAY_STEP_S) * 1000 - 1;
+  useEffect(() => { setCursor(null); setPlaying(false); }, [trade.id]);
+  useEffect(() => {
+    if (!playing) return;
+    const timer = window.setInterval(() => {
+      setCursor(current => Math.min(replayEnd, (current ?? replayStart) + REPLAY_STEP_S));
+    }, REPLAY_TICK_MS / speed);
+    return () => window.clearInterval(timer);
+  }, [playing, speed, replayStart, replayEnd]);
+  useEffect(() => { if (playing && cursor != null && cursor >= replayEnd) setPlaying(false); }, [cursor, playing, replayEnd]);
+  const replayAtEnd = cursor != null && cursor >= replayEnd;
+
+  // Při prvním zobrazení se svíčky „postaví“ zleva doprava: clona v barvě
+  // pozadí přes plochu svíček se stáhne doprava, osy zůstávají stát.
+  const [introDone, setIntroDone] = useState(false);
+  useEffect(() => { setIntroDone(false); }, [trade.id, revealKey]);
+  // Každý návrat na graf vycentruje obchod (nebo rozběhnuté přehrávání).
+  const lastRevealRef = useRef(revealKey);
+  useEffect(() => {
+    if (lastRevealRef.current === revealKey) return;
+    lastRevealRef.current = revealKey;
+    setFocusRequest(value => value + 1);
+  }, [revealKey]);
+  // Přehrání od začátku: graf stojí, budoucí svíčky se „přetočí“ zprava
+  // doleva (clona v barvě pozadí) a teprve pak se začne přehrávat.
+  const [rewind, setRewind] = useState<{ left: number; width: number } | null>(null);
+  const rewindArea = () => {
+    if (!chartApi || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return null;
+    try {
+      const timeScale = chartApi.controller.getChart().timeScale();
+      const index = candles.findIndex(candle => candle.time >= replayStart);
+      if (index < 0) return null;
+      const x = timeScale.logicalToCoordinate(index as Logical);
+      const width = timeScale.width();
+      if (x == null) return null;
+      const left = Math.max(0, x + timeScale.options().barSpacing / 2);
+      return left < width - 4 ? { left, width: width - left } : null;
+    } catch { return null; }
+  };
+  const startFromBeginning = () => { setRewind(null); setCursor(replayStart); setPlaying(true); };
+  const playPause = () => {
+    if (rewind) return;
+    if (playing) { setPlaying(false); return; }
+    if (cursor == null || replayAtEnd) {
+      const area = rewindArea();
+      if (area) { setRewind(area); return; }
+      setCursor(replayStart);
+    }
+    setPlaying(true);
+  };
+  const stepReplay = () => {
+    setPlaying(false);
+    setCursor(current => current == null || current >= replayEnd ? replayStart : Math.min(replayEnd, current + REPLAY_STEP_S));
+  };
+  const firstSeries = events.find(event => event.seriesKey);
+  const goToTargets: TradeReplayGoTo[] = [
+    { id: 'next', label: 'Další událost', hint: '→' },
+    { id: 'start', label: 'Začátek', hint: clockAt(replayStart) },
+    { id: 'entry', label: 'Vstup', hint: clockAt(Math.floor(entryMs / 1000)) },
+    ...(firstSeries ? [{ id: 'series', label: 'Posuny SL', hint: clockAt(Math.floor(firstSeries.at / 1000)) }] : []),
+    { id: 'exit', label: 'Výstup', hint: clockAt(Math.floor(exitMs / 1000)) },
+    { id: 'all', label: 'Celý obchod', hint: 'konec' },
+  ];
+  const goTo = (id: string) => {
+    setPlaying(false);
+    if (id === 'all') { setCursor(null); setFocusRequest(value => value + 1); return; }
+    const at = (ms: number) => floorMinute(Math.floor(ms / 1000));
+    if (id === 'next') {
+      const next = events.find(event => cutoffMs == null || event.at > cutoffMs);
+      setCursor(next ? at(next.at) : null);
+      return;
+    }
+    setCursor(id === 'start' ? replayStart : id === 'entry' ? at(entryMs) : id === 'series' && firstSeries ? at(firstSeries.at) : at(exitMs));
+  };
 
   useEffect(() => {
     if (!isFullscreen) return;
@@ -180,7 +294,8 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark }) =>
     }
     Promise.resolve().then(() => {
       const { start, end } = marketDataWindowForTrade(entryMs, exitMs);
-      return loadMarketCandles({ symbol: marketSymbol, start, end });
+      return loadTradeMarketCandles({ root, tradeSymbol: trade.symbol || trade.instrument, start, end,
+        entryMs: firstEntryPrice.at, entryPrice: firstEntryPrice.price });
     }).then(response => {
       if (cancelled) return;
       setRawCandles(response.candles);
@@ -194,9 +309,47 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark }) =>
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [entryMs, exitMs, marketSymbol, retry]);
+  }, [entryMs, exitMs, marketSymbol, retry, firstEntryPrice.at, firstEntryPrice.price]);
 
   const candles = useMemo(() => aggregateCandles(rawCandles, timeframe), [rawCandles, timeframe]);
+  const replayRawCandles = useMemo(
+    () => cursor == null ? rawCandles : rawCandles.filter(candle => candle.time <= cursor),
+    [cursor, rawCandles],
+  );
+  const replayCandles = useMemo(
+    () => cursor == null ? candles : aggregateCandles(replayRawCandles, timeframe),
+    [candles, cursor, replayRawCandles, timeframe],
+  );
+  const replayTrade = useMemo(
+    () => cutoffMs != null && history ? { ...trade, executionHistory: historyAt(history, cutoffMs) } : trade,
+    [cutoffMs, history, trade],
+  );
+
+  // Úrovně na cenové ose: vstup, SL a TP platné v okamžiku přehrávání
+  // (bez přehrávání poslední před výstupem). Samotné čáry kreslí historie.
+  const [chartApi, setChartApi] = useState<ChartViewApi | null>(null);
+  const entryFill = useMemo(() => history?.fills.filter(fill => fill.role === 'entry').sort((a, b) => a.at - b.at)[0], [history]);
+  const levelAt = Math.min(cutoffMs ?? Infinity, exitMs);
+  const levels = protectionLevelsAt(history, levelAt);
+  const showEntryLevel = entryFill != null && entryFill.at <= (cutoffMs ?? Infinity);
+  // Box pozice má vlastní štítky vstupu a původního SL/TP — tady doplníme
+  // jen to, co box neukazuje: aktuální (posunuté) úrovně, případně všechno,
+  // když box chybí (třeba obchod bez TP).
+  const box = useMemo(() => journalPositionDrawing(replayTrade, DEFAULT_STYLE, 60), [replayTrade]);
+  const boxEntry = box?.points[0]?.price, boxTarget = box?.points[1]?.price, boxStop = box?.points[2]?.price;
+  useEffect(() => {
+    if (!detail || !chartApi || !history) return;
+    const series = chartApi.controller.getSeries() as ISeriesApi<'Candlestick'> | null;
+    if (!series) return;
+    const lines = [
+      showEntryLevel && entryFill && boxEntry == null ? { price: entryFill.price, color: chartStyle.entry } : null,
+      showEntryLevel && levels.sl != null && levels.sl !== boxStop ? { price: levels.sl, color: JOURNAL_SL_COLOR } : null,
+      showEntryLevel && levels.tp != null && levels.tp !== boxTarget ? { price: levels.tp, color: JOURNAL_TP_COLOR } : null,
+    ].filter((line): line is { price: number; color: string } => line != null)
+      .map(line => series.createPriceLine({ ...line, lineWidth: 1, lineStyle: LineStyle.Dotted, lineVisible: false, axisLabelVisible: true, title: '' }));
+    return () => { lines.forEach(line => { try { series.removePriceLine(line); } catch { /* graf už je pryč */ } }); };
+  }, [detail, chartApi, history, showEntryLevel, entryFill?.price, levels.sl, levels.tp, boxEntry, boxStop, boxTarget]);
+
   const indicators = useMemo(() => calculateIndicators(candles), [candles]);
   const fvgs = useMemo(() => {
     const from = Math.floor(entryMs / 1000) - 8 * 3600;
@@ -572,6 +725,97 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark }) =>
     ? 'Graf je připravený. Pro reálné CME svíčky zbývá nastavit DATABENTO_API_KEY v Supabase Edge Function secrets.'
     : error?.message;
 
+  const detailButton = `h-7 inline-flex items-center gap-1.5 px-2 rounded-md text-[11px] font-bold transition-colors ${isDark ? 'text-slate-300 hover:bg-white/5 hover:text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'}`;
+  const statusOverlays = (
+    <>
+      {loading && (
+        <div className={`absolute inset-0 z-20 flex flex-col items-center justify-center ${isDark ? 'bg-[#090d12]' : 'bg-white'}`}>
+          <Loader2 size={28} className="animate-spin text-emerald-500" />
+          <p className="mt-3 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Načítám reálné MNQ svíčky</p>
+        </div>
+      )}
+      {!loading && error && (
+        <div className={`absolute inset-0 z-20 flex items-center justify-center p-8 ${isDark ? 'bg-[#090d12]' : 'bg-white'}`}>
+          <div className="max-w-md text-center">
+            {error.code === 'data-not-yet-historical' ? <Activity size={34} className="mx-auto text-blue-400" /> : <AlertTriangle size={34} className="mx-auto text-amber-400" />}
+            <p className={`mt-4 text-sm font-black ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{setupMessage}</p>
+            <p className="mt-2 text-[10px] leading-relaxed text-slate-500">Žádná náhradní ani syntetická data se nezobrazují, aby analýza nebyla zavádějící.</p>
+            <button onClick={() => setRetry(value => value + 1)} className="mt-4 inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-500/10 text-blue-400 text-[10px] font-black uppercase tracking-wider hover:bg-blue-500/20">
+              <RefreshCw size={12} /> Zkusit znovu
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+  // Detail obchodu: jen trh, Obchod, Průběh a Fullscreen. Timeframy,
+  // indikátory i kreslení jsou ve fullscreenu (stejný workspace jako backtest).
+  const detailContent = (
+    <div data-trade-chart className={`h-full min-h-[360px] flex flex-col ${isDark ? 'bg-[#090d12]' : 'bg-white'}`}>
+      <div className={`h-10 shrink-0 flex items-center gap-1 px-3 border-b ${isDark ? 'border-white/5' : 'border-slate-200'}`}>
+        <span className={`text-[12px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{root}</span>
+        <span className="ml-1.5 whitespace-nowrap text-[11px] font-semibold text-slate-500">1m · CME</span>
+        <span className="flex-1" />
+        <button type="button" className={detailButton} onClick={() => setFocusRequest(value => value + 1)} title="Vycentrovat graf na obchod" aria-label="Vycentrovat na obchod">
+          <LocateFixed size={13} /> <span className="hidden sm:inline">Obchod</span>
+        </button>
+        <TradeProgress events={events} cursorMs={cutoffMs} isDark={isDark} />
+        <button type="button" className={detailButton} onClick={() => setIsFullscreen(true)} title="Otevřít ve fullscreenu — timeframy, indikátory, kreslení" aria-label="Otevřít fullscreen graf">
+          <Maximize2 size={13} /> <span className="hidden sm:inline">Fullscreen</span>
+        </button>
+      </div>
+      <div className="relative flex-1 min-h-0">
+        {candles.length > 0 && (
+          <CandleKitTradeChart
+            trade={replayTrade}
+            candles={replayCandles}
+            rawCandles={replayRawCandles}
+            timeframe={timeframe}
+            entryMs={entryMs}
+            exitMs={exitMs}
+            showFvg={false}
+            showLevels={false}
+            showStructure={false}
+            isDark={isDark}
+            compactMode
+            hideDrawingToolbar
+            hideFocusButton
+            keyboardShortcutsActive={false}
+            focusRequest={focusRequest}
+            replayActive={cursor != null}
+            replayCursorTime={cursor}
+            journalHistoryInReplay
+            centeredTradeView
+            onChartApiReady={setChartApi}
+          />
+        )}
+        {rewind && (
+          <div aria-hidden="true" onAnimationEnd={startFromBeginning} style={{ left: rewind.left, width: rewind.width }}
+            className={`trade-chart-rewind pointer-events-none absolute top-0 bottom-[28px] z-10 ${isDark ? 'bg-[#090d12]' : 'bg-white'}`} />
+        )}
+        {!loading && !error && candles.length > 0 && !introDone && (
+          <div aria-hidden="true" onAnimationEnd={() => setIntroDone(true)}
+            className={`trade-chart-reveal pointer-events-none absolute left-0 top-0 right-[84px] bottom-[28px] z-10 ${isDark ? 'bg-[#090d12]' : 'bg-white'}`} />
+        )}
+        {statusOverlays}
+        {!loading && !error && candles.length > 0 && history && (
+          <TradeReplayBar
+            isDark={isDark}
+            playing={playing}
+            atEnd={replayAtEnd}
+            speed={speed}
+            goTo={goToTargets}
+            onPlayPause={playPause}
+            onStep={stepReplay}
+            onSpeed={setSpeed}
+            onGoTo={goTo}
+          />
+        )}
+      </div>
+    </div>
+  );
+
   const chartContent = (
     <div className={`${isFullscreen ? 'fixed inset-0 z-[300] min-h-0' : 'h-full min-h-[360px]'} flex flex-col ${isDark ? 'bg-[#090d12]' : 'bg-white'}`}>
       <div className={`h-11 shrink-0 flex items-center justify-between gap-3 px-3 border-b ${isDark ? 'border-white/5 bg-black/20' : 'border-slate-200 bg-slate-50'}`}>
@@ -699,7 +943,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark }) =>
       />,
       document.body,
     )
-    : chartContent;
+    : detail ? detailContent : chartContent;
 };
 
 export default TradeMarketChart;

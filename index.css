@@ -3550,3 +3550,38 @@ td.follower-cell { transition: opacity .35s ease; }
   background: rgba(255, 255, 255, 0.52);
   backdrop-filter: blur(22px) saturate(115%);
 }
+
+/* ── Průběh obchodu: bubliny vynořené z tlačítka ─────────────────────────
+   Vyjedou z tlačítka (zmenšené, posunuté nahoru) a stejnou cestou zajedou
+   zpátky; výška se přitom stáhne, takže se zbytek řady plynule posune. */
+@keyframes trade-progress-pop-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.6); max-height: 0; }
+  to { opacity: 1; transform: none; max-height: 64px; }
+}
+@keyframes trade-progress-pop-out {
+  from { opacity: 1; transform: none; max-height: 64px; }
+  to { opacity: 0; transform: translateX(10px); max-height: 0; padding-top: 0; padding-bottom: 0; margin-top: -4px; }
+}
+.trade-progress-pop-in { transform-origin: 12% 0; animation: trade-progress-pop-in 0.3s cubic-bezier(0.22, 0.61, 0.36, 1) both; }
+.trade-progress-pop-out { animation: trade-progress-pop-out 0.32s ease-in both; }
+@keyframes trade-progress-ping { from { transform: scale(1.35); } to { transform: scale(1); } }
+.trade-progress-ping { display: inline-block; animation: trade-progress-ping 0.5s ease-out; }
+@keyframes trade-progress-list-in { from { opacity: 0; transform: translateY(-6px) scale(0.97); } to { opacity: 1; transform: none; } }
+.trade-progress-list { transform-origin: 30% 0; animation: trade-progress-list-in 0.22s cubic-bezier(0.22, 0.61, 0.36, 1) both; }
+
+/* Detail obchodu: snímek ↔ graf se prolnou. */
+.trade-stage-layer { transition: opacity 0.38s ease, transform 0.5s cubic-bezier(0.22, 0.61, 0.36, 1), filter 0.38s ease; }
+.trade-stage-layer.is-off { opacity: 0; transform: scale(0.985); filter: blur(8px); pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .trade-progress-pop-in, .trade-progress-pop-out, .trade-progress-ping, .trade-progress-list { animation: none; }
+  .trade-stage-layer { transition: none; }
+}
+
+/* Detail obchodu: svíčky se při prvním zobrazení postaví zleva doprava. */
+@keyframes trade-chart-reveal { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.trade-chart-reveal { transform-origin: right center; animation: trade-chart-reveal 0.9s cubic-bezier(0.22, 0.61, 0.36, 1) 0.12s both; }
+@media (prefers-reduced-motion: reduce) { .trade-chart-reveal { display: none; } }
+/* Přetočení na začátek přehrávání: clona se natáhne zprava doleva přes budoucí svíčky. */
+@keyframes trade-chart-rewind { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.trade-chart-rewind { transform-origin: right center; animation: trade-chart-rewind 0.5s cubic-bezier(0.65, 0, 0.35, 1) both; }

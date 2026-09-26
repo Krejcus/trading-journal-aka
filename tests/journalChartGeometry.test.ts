@@ -66,19 +66,114 @@ describe('journal candle geometry', () => {
     value.executionHistory!.fills.push({ ...value.executionHistory!.fills[1], id: 'partial', at: 240_123 });
     const chart = { timeScale: () => ({ logicalToCoordinate: x }) } as unknown as IChartApi;
     const series = { priceToCoordinate: (price: number) => 200 - price } as unknown as ISeriesApi<'Candlestick'>;
-    const primitive = createJournalChartPrimitive(value.executionHistory!, candles, 60, chart, series);
-    const paths: number[][][] = [], marks: number[][] = [], labels: Array<[string, number]> = [];
+    const primitive = createJournalChartPrimitive(value.executionHistory!, candles, 60, chart, series, undefined, { direction: 'Long' });
+    const paths: number[][][] = [], labels: string[] = [];
     let path: number[][] = [];
     const context = new Proxy({ beginPath: () => { path = []; }, moveTo: (a: number, b: number) => path.push([a, b]),
-      lineTo: (a: number, b: number) => path.push([a, b]), stroke: () => paths.push(path),
-      arc: (...args: number[]) => marks.push(args), fillText: (label: string, xx: number) => labels.push([label, xx]) },
+      lineTo: (a: number, b: number) => path.push([a, b]), stroke: () => paths.push(path), fillText: (label: string) => labels.push(label) },
     { get: (target, key) => key in target ? target[key as keyof typeof target] : () => {} });
     const renderer = primitive.paneViews!()[0].renderer()!;
     renderer.draw({ useMediaCoordinateSpace: (callback: (scope: unknown) => void) => callback({ context }) } as Parameters<typeof renderer.draw>[0]);
-    expect(paths).toHaveLength(4);
-    expect(paths.every(points => !(points[0][0] < 140 && points[1][0] > 140))).toBe(true);
-    expect(marks).toHaveLength(2);
-    expect(labels).toEqual([['ENTRY', 120.041], ['EXIT', 160.263]]);
+    // Čtyři úseky SL/TP + dvě tenké šipky (hrot, stonek).
+    const levels = paths.filter(points => points.length === 2);
+    const arrows = paths.filter(points => points.length === 5);
+    expect(levels).toHaveLength(4);
+    expect(levels.every(points => !(points[0][0] < 140 && points[1][0] > 140))).toBe(true);
+    // Šipky jen u plnění, která mají načtenou svíčku; hrot na x plnění.
+    expect(arrows.map(points => points[1][0])).toEqual([120.041, 160.263]);
+    // Bez najetí myší žádný štítek.
+    expect(labels).toEqual([]);
+  });
+  it('po najetí na šipku ukáže, co je zač', () => {
+    let onMove: ((param: { point?: { x: number; y: number } }) => void) | null = null;
+    const chart = { timeScale: () => ({ logicalToCoordinate: x }), subscribeCrosshairMove: (handler: typeof onMove) => { onMove = handler; },
+      unsubscribeCrosshairMove: () => { onMove = null; } } as unknown as IChartApi;
+    const series = { priceToCoordinate: (price: number) => 200 - price } as unknown as ISeriesApi<'Candlestick'>;
+    const primitive = createJournalChartPrimitive(trade().executionHistory!, candles, 60, chart, series, undefined, { direction: 'Long' });
+    let updates = 0;
+    primitive.attached!({ requestUpdate: () => { updates++; } } as unknown as Parameters<NonNullable<typeof primitive.attached>>[0]);
+    const labels: string[] = [];
+    const context = new Proxy({ fillText: (label: string) => labels.push(label) },
+      { get: (target, key) => key in target ? target[key as keyof typeof target] : () => {} });
+    const renderer = primitive.paneViews!()[0].renderer()!;
+    const draw = () => renderer.draw({ useMediaCoordinateSpace: (callback: (scope: unknown) => void) => callback({ context }) } as Parameters<typeof renderer.draw>[0]);
+    draw();
+    const entryY = 200 - trade().executionHistory!.fills[0].price;
+    onMove!({ point: { x: 121, y: entryY + 10 } });
+    draw();
+    expect(updates).toBeGreaterThan(1);
+    expect(labels).toHaveLength(1);
+    expect(labels[0]).toMatch(/^Vstup · Buy 1 · /);
+    labels.length = 0;
+    onMove!({ point: undefined });
+    draw();
+    expect(labels).toEqual([]);
+    primitive.detached!();
+    expect(onMove).toBeNull();
+  });
+});
+
+describe('najetí na čáry SL/TP', () => {
+  const setup = () => {
+    const value = trade();
+    value.executionHistory!.protection.push({ id: 'sl-move', orderId: 'sl', accountId: 1, at: 390_000, price: 95, status: 'confirmed',
+      operation: 'modify', kind: 'sl', timeSource: 'broker', quantity: 1 } as never);
+    let onMove: ((param: { point?: { x: number; y: number } }) => void) | null = null;
+    const linear = (index: number) => 100 + index * 20;
+    const chart = { timeScale: () => ({ logicalToCoordinate: linear, coordinateToLogical: (px: number) => (px - 100) / 20 }),
+      subscribeCrosshairMove: (handler: typeof onMove) => { onMove = handler; }, unsubscribeCrosshairMove: () => {} } as unknown as IChartApi;
+    const series = { priceToCoordinate: (price: number) => 200 - price } as unknown as ISeriesApi<'Candlestick'>;
+    const primitive = createJournalChartPrimitive(value.executionHistory!, candles, 60, chart, series, undefined, { direction: 'Long', pointValue: 2, instrument: 'MNQ' });
+    primitive.attached!({ requestUpdate: () => {} } as unknown as Parameters<NonNullable<typeof primitive.attached>>[0]);
+    const labels: string[] = [];
+    const context = new Proxy({ fillText: (label: string) => labels.push(label) },
+      { get: (target, key) => key in target ? target[key as keyof typeof target] : () => {} });
+    const renderer = primitive.paneViews!()[0].renderer()!;
+    const draw = () => { labels.length = 0; renderer.draw({ useMediaCoordinateSpace: (callback: (scope: unknown) => void) => callback({ context }) } as Parameters<typeof renderer.draw>[0]); };
+    return { draw, labels, move: (px: number, py: number) => onMove!({ point: { x: px, y: py } }) };
+  };
+  const plain = (text: string) => text.replace(/[\u00a0\u202f]/g, ' ');
+  it('vodorovná úroveň ukáže hodnotu pro otevřenou pozici, i kousek vedle čáry', () => {
+    const { draw, labels, move } = setup();
+    draw();
+    move(145, 110 + 8);
+    draw();
+    expect(labels.map(plain)).toEqual(['SL 90,00 · −10,00 b. · −20,00 $ · 1 MNQ']);
+  });
+  it('svislý úsek ukáže samotný posun', () => {
+    const { draw, labels, move } = setup();
+    draw();
+    move(150 + 4, 107.5);
+    draw();
+    expect(plain(labels[0])).toMatch(/^SL 90,00 → 95,00 · \+5,00 b\. · \+10,00 \$ · /);
+  });
+});
+
+describe('obchod bez SL/TP', () => {
+  const paint = (value: Trade) => {
+    const chart = { timeScale: () => ({ logicalToCoordinate: (index: number) => 100 + index * 20 }) } as unknown as IChartApi;
+    const series = { priceToCoordinate: (price: number) => 200 - price } as unknown as ISeriesApi<'Candlestick'>;
+    const primitive = createJournalChartPrimitive(value.executionHistory!, candles, 60, chart, series, undefined, { direction: 'Long', pointValue: 2 });
+    const labels: string[] = []; const rects: number[][] = [];
+    const context = new Proxy({ fillText: (label: string) => labels.push(label.replace(/[\u00a0\u202f]/g, ' ')),
+      fillRect: (...args: number[]) => rects.push(args) }, { get: (target, key) => key in target ? target[key as keyof typeof target] : () => {} });
+    const renderer = primitive.paneViews!()[0].renderer()!;
+    renderer.draw({ useMediaCoordinateSpace: (callback: (scope: unknown) => void) => callback({ context }) } as Parameters<typeof renderer.draw>[0]);
+    return { labels, rects };
+  };
+  it('dostane výsledkový box od vstupu po výstup se štítkem výsledku', () => {
+    const value = trade();
+    value.executionHistory!.protection = [];
+    const { labels, rects } = paint(value);
+    expect(labels).toEqual(['+5,00 b. · +10,00 $']);
+    // Box mezi vstupní (100) a výstupní (105) cenou, rozdělený chybějícími svíčkami.
+    expect(rects.length).toBeGreaterThan(0);
+    expect(rects.every(([, top, , height]) => top === 95 && height === 5)).toBe(true);
+  });
+  it('obchod se SL/TP box nedostane (má box pozice a čáry)', () => {
+    const { labels, rects } = paint(trade());
+    expect(labels).toEqual([]);
+    expect(rects).toEqual([]);
   });
 });
 
@@ -119,6 +214,32 @@ describe('journal position reference uses the actual CandleKit renderer', () => 
       expect(journalPositionDrawing(value, DEFAULT_STYLE, 60)).toBeNull();
     }
     const value = trade(); value.executionHistory!.protection[0].accountId = 2;
+    expect(journalPositionDrawing(value, DEFAULT_STYLE, 60)).toBeNull();
+  });
+  it('kopírka: SL/TP odeslané s příkazem a potvrzené úpravou při vstupu dají box', () => {
+    // Skutečný tvar z Tradovate: „new“ jde jako pending před vstupem, potvrzení
+    // přijde jako „modify“ pár ms po plnění. Bez toho box nikdy nevznikl.
+    const value = trade();
+    const [sl, tp] = value.executionHistory!.protection;
+    value.executionHistory!.protection = [
+      { ...sl, id: 'sl-new', at: 110_000, status: 'pending', operation: 'new' },
+      { ...tp, id: 'tp-new', at: 110_000, status: 'pending', operation: 'new' },
+      { ...sl, id: 'sl-ok', at: 120_140, status: 'confirmed', operation: 'modify' },
+      { ...tp, id: 'tp-ok', at: 120_140, status: 'confirmed', operation: 'modify' },
+      // Pozdější posun SL box nemění — box nese původní riziko.
+      { ...sl, id: 'sl-trail', at: 300_000, price: 95, status: 'confirmed', operation: 'modify' },
+    ];
+    const box = journalPositionDrawing(value, DEFAULT_STYLE, 60)!;
+    expect(box).toMatchObject({ tool: 'LongPosition' });
+    expect(box.points.map(point => point.price)).toEqual([100, 110, 90]);
+  });
+  it('otevřená pozice (přehrávání) má box do posledního pozorovaného okamžiku, neúplná žádný', () => {
+    const value = trade();
+    value.executionHistory!.fills = value.executionHistory!.fills.filter(fill => fill.role === 'entry');
+    value.executionHistory!.position = { id: 'p', status: 'open', openedAt: 120_123, closedAt: null, openQuantity: null, peakQuantity: 1, observedThrough: 360_000 };
+    const box = journalPositionDrawing(value, DEFAULT_STYLE, 60)!;
+    expect(box.points[1].time).toBe(360);
+    value.executionHistory!.position = { ...value.executionHistory!.position, status: 'incomplete' };
     expect(journalPositionDrawing(value, DEFAULT_STYLE, 60)).toBeNull();
   });
   it('handles short references and refuses ambiguous simultaneous first-fill prices', () => {

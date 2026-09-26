@@ -20,7 +20,6 @@ type DrawingStyleDefaults = Record<string, DrawingStyle>;
 let memoryDefaults: DrawingStyleDefaults = {};
 const patchedEngines = new WeakSet<DrawingEngine>();
 
-onChartAppearanceScopeReset(() => { memoryDefaults = {}; });
 
 const finiteWidth = (value: unknown, fallback = 2): number => {
   const width = Number(value);
@@ -103,12 +102,50 @@ const writeDefaults = (defaults: DrawingStyleDefaults, storage?: StorageLike | n
   try { resolveStorage(storage)?.setItem(STORAGE_KEY, JSON.stringify(defaults)); } catch { /* private storage */ }
 };
 
+/**
+ * Barvy boxu pozice jsou jedny pro celou appku: co si nastavíš v backtestu,
+ * platí v každé session, ve fullscreenu i v detailu obchodu. Ostatní nástroje
+ * zůstávají vázané na session.
+ */
+const SHARED_TOOLS = new Set<string>(['LongPosition', 'ShortPosition']);
+const readShared = (tool: DrawingToolId): DrawingStyle | undefined => {
+  const global = inheritGlobalAppearance('drawingStyleDefaults');
+  if (!isRecord(global)) return undefined;
+  // Dřív se ukládal jen upravený z dvojice — druhý převezme jeho vzhled.
+  return global[tool] ?? [...SHARED_TOOLS].map(other => global[other]).find(isRecord);
+};
+// Long a Short mají jeden vzhled — barvy zisku a ztráty znamenají u obou totéž,
+// takže úprava jednoho boxu platí pro oba.
+const writeShared = (_tool: DrawingToolId, style: DrawingStyle) => {
+  const global = inheritGlobalAppearance('drawingStyleDefaults');
+  const shared = Object.fromEntries([...SHARED_TOOLS].map(tool => [tool, style]));
+  writeGlobalChartAppearance('drawingStyleDefaults', { ...(isRecord(global) ? global : {}), ...shared });
+};
+
+// Otevření backtest session: barvy boxu uložené dřív jen v ní se povýší na
+// sdílené hned, ne až při prvním výběru nástroje.
+onChartAppearanceScopeReset(() => {
+  memoryDefaults = {};
+  const scoped = readChartAppearance('drawingStyleDefaults');
+  if (!isRecord(scoped)) return;
+  for (const tool of SHARED_TOOLS) {
+    if (isRecord(scoped[tool]) && !readShared(tool as DrawingToolId)) writeShared(tool as DrawingToolId, scoped[tool]);
+  }
+});
+
 export const getDrawingStyleDefault = (
   tool: DrawingToolId,
   fallback: DrawingStyle,
   storage?: StorageLike | null,
 ): DrawingStyle => {
-  const style = normalizeDrawingStyle(readDefaults(storage)[tool], fallback);
+  const scoped = readDefaults(storage)[tool];
+  let saved: unknown = scoped;
+  if (storage === undefined && SHARED_TOOLS.has(tool)) {
+    saved = readShared(tool) ?? scoped;
+    // Styl nastavený dřív jen uvnitř session se jednou povýší na sdílený.
+    if (saved === scoped && isRecord(scoped)) writeShared(tool, scoped as DrawingStyle);
+  }
+  const style = normalizeDrawingStyle(saved, fallback);
   return tool === 'Text' ? { ...style, text: '' } : style;
 };
 
@@ -120,6 +157,7 @@ export const rememberDrawingStyleDefault = (
   const defaults = readDefaults(storage);
   const normalized = normalizeDrawingStyle(style, style);
   writeDefaults({ ...defaults, [tool]: tool === 'Text' ? { ...normalized, text: '' } : normalized }, storage);
+  if (storage === undefined && SHARED_TOOLS.has(tool)) writeShared(tool, normalized);
 };
 
 export const updateDrawingStyleAndDefault = (

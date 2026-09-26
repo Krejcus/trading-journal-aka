@@ -10,7 +10,7 @@ import {
     Play, X, Edit3, Trash2, Clock, Image as ImageIcon,
     Maximize2, ArrowRight, Timer, Terminal, ArrowUpRight, ArrowDownRight,
     Share2, Check, ChevronLeft, ChevronRight, ChevronDown, Zap, Brain, FileText, Target,
-    ShieldCheck, Layers, Wallet, Save, CornerDownLeft, AlertOctagon
+    ShieldCheck, Layers, Wallet, Save, CornerDownLeft, AlertOctagon, MoreHorizontal, BarChart3
 } from 'lucide-react';
 import { Trade, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
 import { formatTradePnL } from '../utils/formatPnL';
@@ -27,6 +27,7 @@ const defaultLoadTradeDetail = (id: string) => storageService.getTradeById(id);
 const ManualTradeForm = React.lazy(() => import('./ManualTradeForm'));
 const AccountExecutionChart = React.lazy(() => import('./AccountExecutionChart'));
 import TradeShareModal from './TradeShareModal';
+import { initialRiskPoints } from '../lib/tradeReplay';
 import { HistoryScreenshotSlot, clipboardImage, pasteTargetsEditable, type ScreenshotAttachStatus } from './HistoryScreenshotSlot';
 
 interface PropertyProps {
@@ -359,6 +360,13 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     const [displayedImage, setDisplayedImage] = useState<{ tradeId: string; url: string } | null>(null);
     const [imageLoadError, setImageLoadError] = useState(false);
     const [visualMode, setVisualMode] = useState<'chart' | 'screenshots'>('screenshots');
+    const [moreOpen, setMoreOpen] = useState(false);
+    // Graf se připojí až při prvním otevření a pak zůstane — přepnutí zpět je okamžité.
+    const [chartMounted, setChartMounted] = useState(false);
+    // Každý návrat na graf = nové „postavení“ svíček.
+    const [chartRevealKey, setChartRevealKey] = useState(0);
+    useEffect(() => { if (visualMode === 'chart') { setChartMounted(true); setChartRevealKey(value => value + 1); } }, [visualMode]);
+    const shotInputRef = useRef<HTMLInputElement>(null);
     const [isSigningSnapshots, setIsSigningSnapshots] = useState(false);
     const [snapshotSignError, setSnapshotSignError] = useState(false);
     const [signedCopierSnapshots, setSignedCopierSnapshots] = useState<Array<{
@@ -627,6 +635,44 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     // Preferuj price-based RR (jako TradingView) pro PnL display v R mode
     const formattedPnL = formatValue(activeTrade, pnlDisplayMode, initialBalance || accounts.find(a => a.id === activeTrade.accountId)?.initialBalance, priceBasedRR !== null ? priceBasedRR : ((riskAmount > 0) ? pnl / riskAmount : undefined));
 
+    // ── Odvozené hodnoty nového detailu ────────────────────────────────────
+    const history = executionTrade.executionHistory;
+    // R je vždy za jeden účet: u sloučené karty hlavní účet (v grafu vybraný).
+    // Součet P&L všech účtů proti riziku jednoho by R zkreslil.
+    const rTrade = isCombined
+        ? (visualMode === 'chart' ? chartTrade : groupTrades.find(member => member.id === masterTradeIdInGroup) ?? groupTrades[0]) ?? executionTrade
+        : executionTrade;
+    const riskPts = initialRiskPoints(rTrade.executionHistory);
+    const tradeQty = safeValue(rTrade.positionSize) || 1;
+    const journalRiskUsd = riskPts != null ? riskPts * tradeQty * pointValueFor(rTrade.instrument) : null;
+    // R: u deníku z SL platného při vstupu (doložené brokerem), jinak původní výpočet.
+    const tileR = journalReviewOnly(activeTrade)
+        ? (journalRiskUsd ? safeValue(rTrade.pnl) / journalRiskUsd : null)
+        : (realRRR ?? null);
+    const tileRiskUsd = journalReviewOnly(activeTrade) ? journalRiskUsd : (riskAmount > 0 ? riskAmount : null);
+    const movePts = entryPrice > 0 && exitPrice > 0 ? (exitPrice - entryPrice) * (executionTrade.direction === 'Long' ? 1 : -1) : null;
+    const grossFees = !isCombined && history && history.grossPnl != null ? { gross: history.grossPnl, fees: history.fees } : null;
+    const fmtPrice = (value: number) => value.toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmtUsd = (value: number, signed = true) => `${signed ? (value < 0 ? '−' : value > 0 ? '+' : '') : ''}$${Math.abs(value).toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const dateLabel = activeTrade.date ? new Date(activeTrade.date).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric', year: 'numeric' }) : '—';
+    const pnlHex = isMissed ? '#60a5fa' : isBEOverride ? '#f59e0b' : isWin ? (isDark ? '#34d399' : '#059669') : '#f43f5e';
+    const needsReview = trade.needsReview === true || activeTrade.needsReview === true;
+    const reviewChips = [
+        ...(activeTrade.emotions ?? []).map(id => ({ key: `e:${id}`, label: getEmotionDetails(id).label, tone: 'purple' as const })),
+        ...(activeTrade.mistakes ?? []).map(mistake => ({ key: `m:${mistake}`, label: mistake, tone: 'rose' as const })),
+    ];
+    const shotLabel = (index: number) => {
+        if (index < manualImages.length) return `Snímek ${index + 1}`;
+        const kind = currentSignedCopierSnapshots[index - manualImages.length]?.kind;
+        return kind === 'entry' ? 'Vstup' : kind === 'exit' ? 'Výstup' : 'Auto';
+    };
+    const selectedShot = visualMode === 'screenshots' ? (displayedImageIndex >= 0 ? displayedImageIndex : activeImageIndex) : -1;
+    const panel = isDark ? 'bg-theme-card border-white/10' : 'bg-white border-slate-200';
+    const hairline = isDark ? 'border-white/[0.06]' : 'border-slate-200/80';
+    const labelCls = 'text-[9.5px] font-black uppercase tracking-[0.12em] text-slate-500';
+    const ghostBase = `h-8 w-8 items-center justify-center rounded-md transition-colors ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-900'}`;
+    const ghostBtn = `inline-flex ${ghostBase}`;
+
     return (
         <ErrorBoundary name="TradeDetailModal">
             {journalPending && showJournalPending && <div className="fixed inset-0 z-[300] flex items-center justify-center bg-theme-page-95 backdrop-blur-2xl p-6">
@@ -646,347 +692,314 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                 />
 
                 <motion.div
-                    initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                    initial={{ opacity: 0, scale: 0.97, y: 16 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                    className={`relative w-full max-w-[1600px] h-full lg:h-[85vh] rounded-none md:rounded-[40px] overflow-hidden shadow-[0_0_100px_rgba(0,0,0,0.8)] flex flex-col border ${isDark ? 'bg-theme-card-80 border-white/10' : 'bg-white/90 border-slate-200'}`}
+                    exit={{ opacity: 0, scale: 0.97, y: 16 }}
+                    className={`relative w-full max-w-[1600px] h-full lg:h-[85vh] rounded-none md:rounded-lg overflow-hidden shadow-[0_40px_80px_-40px_rgba(15,23,42,0.55)] flex flex-col border ${panel}`}
                 >
-                    {/* Header */}
-                    <div className={`h-14 lg:h-20 shrink-0 border-b flex items-center justify-between px-4 md:px-10 z-20 ${isDark ? 'border-white/5 bg-theme-card-50' : 'bg-white/50 border-slate-100'} backdrop-blur-md`}>
-                        <div className="flex items-center gap-3 lg:gap-4 min-w-0">
-                            <div className="flex items-center gap-2 lg:gap-4 min-w-0">
-                                <h2 className={`text-lg lg:text-2xl font-black tracking-tighter uppercase shrink-0 ${isDark ? 'text-white' : 'text-slate-900'}`}>{activeTrade.instrument}</h2>
-                                <div className={`px-2 lg:px-3 py-1 rounded-full border flex items-center gap-1.5 shrink-0 ${directionColor}`}>
-                                    {isMissed ? <Clock size={11} /> : (activeTrade.direction === 'Long' ? <ArrowUpRight size={12} strokeWidth={3} /> : <ArrowDownRight size={12} strokeWidth={3} />)}
-                                    <span className="text-[9px] lg:text-[10px] font-black uppercase tracking-widest">{isMissed ? 'MISSED' : activeTrade.direction}</span>
+                    {/* ── Hlavička ───────────────────────────────────────────── */}
+                    <div className={`h-14 shrink-0 border-b flex items-center gap-2.5 px-3 md:px-5 z-20 ${hairline}`}>
+                        <h2 className={`text-[19px] font-black tracking-tight shrink-0 ${isDark ? 'text-white' : 'text-slate-900'}`}>{activeTrade.instrument}</h2>
+                        <span className={`h-[22px] px-2 rounded border inline-flex items-center gap-1 shrink-0 text-[9.5px] font-black uppercase tracking-[0.07em] ${directionColor}`}>
+                            {isMissed ? <Clock size={10} /> : (activeTrade.direction === 'Long' ? <ArrowUpRight size={11} strokeWidth={3} /> : <ArrowDownRight size={11} strokeWidth={3} />)}
+                            {isMissed ? 'Missed' : activeTrade.direction}
+                        </span>
+                        {!isMissed && (
+                            <span className={`hidden sm:inline-flex h-[22px] px-2 rounded border items-center gap-1 shrink-0 text-[9.5px] font-black uppercase tracking-[0.07em] ${status === 'Invalid' ? 'text-rose-500 bg-rose-500/10 border-rose-500/20' : isDark ? 'text-slate-300 bg-white/5 border-white/10' : 'text-slate-600 bg-slate-100 border-slate-200'}`}>
+                                {status === 'Invalid' ? <AlertOctagon size={10} strokeWidth={3} /> : <Check size={10} strokeWidth={3} />}
+                                {status === 'Invalid' ? 'Nevalidní' : 'Validní'}
+                            </span>
+                        )}
+                        <span className={`hidden md:inline text-[12.5px] whitespace-nowrap ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                            <b className={`font-semibold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{dateLabel}</b> · {formatTime(tradeEntryTime)} → {formatTime(exitTime)}
+                        </span>
+                        <span className="flex-1" />
+                        {needsReview && (
+                            <span className="hidden lg:inline-flex h-[22px] px-2 rounded border items-center gap-1.5 text-[9.5px] font-black uppercase tracking-[0.07em] text-amber-600 bg-amber-500/10 border-amber-500/30">
+                                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />Nezkontrolováno
+                            </span>
+                        )}
+                        {onUpdateTrade && (
+                            <button type="button" onClick={(e) => { e.stopPropagation(); setIsFullEditOpen(true); }}
+                                className={`h-8 px-2.5 sm:px-3 rounded-md text-[12px] font-bold whitespace-nowrap transition-colors ${needsReview ? 'bg-indigo-600 text-white hover:bg-indigo-500' : isDark ? 'border border-white/10 text-slate-300 hover:bg-white/5' : 'border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                                title={journalReviewOnly(activeTrade) ? 'Upravit hodnocení obchodu' : String(activeTrade.id).startsWith('combined_') ? 'Upravit obchod (změny se propíší na účty v aktuálním výběru)' : 'Upravit obchod'}>
+                                {needsReview ? 'Zkontrolovat' : 'Upravit'}
+                            </button>
+                        )}
+                        <span className={`hidden sm:block h-5 w-px ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
+                        <span className={`flex rounded-md border overflow-hidden ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
+                            <button onPointerEnter={onPrefetchPrev} onPointerDown={onPrefetchPrev} onFocus={onPrefetchPrev} onClick={onPrev} disabled={!hasPrev} title="Předchozí obchod (←)"
+                                className={`h-8 w-8 inline-flex items-center justify-center disabled:opacity-25 ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-900'}`}><ChevronLeft size={15} /></button>
+                            <button onPointerEnter={onPrefetchNext} onPointerDown={onPrefetchNext} onFocus={onPrefetchNext} onClick={onNext} disabled={!hasNext} title="Další obchod (→)"
+                                className={`h-8 w-8 inline-flex items-center justify-center border-l disabled:opacity-25 ${isDark ? 'border-white/10 text-slate-400 hover:bg-white/5 hover:text-white' : 'border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-900'}`}><ChevronRight size={15} /></button>
+                        </span>
+                        <button onClick={() => setIsShareCardOpen(true)} title="Sdílet jako kartu" className={`hidden sm:inline-flex ${ghostBase}`}><Share2 size={15} /></button>
+                        <span className="relative">
+                            <button type="button" onClick={() => setMoreOpen(value => !value)} title="Další akce" aria-expanded={moreOpen} className={ghostBtn}><MoreHorizontal size={16} /></button>
+                            {moreOpen && (
+                                <div className={`absolute right-0 top-10 z-50 w-52 rounded-lg border py-1 shadow-2xl ${panel}`} onMouseLeave={() => setMoreOpen(false)}>
+                                    <button type="button" onClick={() => { setMoreOpen(false); setIsShareCardOpen(true); }} className={`sm:hidden w-full h-9 px-3 flex items-center gap-2 text-left text-[12px] font-semibold ${isDark ? 'text-slate-200 hover:bg-white/5' : 'text-slate-700 hover:bg-slate-50'}`}><Share2 size={13} /> Sdílet jako kartu</button>
+                                    {onUpdateTrade && <button type="button" onClick={() => { setMoreOpen(false); setIsFullEditOpen(true); }} className={`w-full h-9 px-3 flex items-center gap-2 text-left text-[12px] font-semibold ${isDark ? 'text-slate-200 hover:bg-white/5' : 'text-slate-700 hover:bg-slate-50'}`}><Edit3 size={13} /> Upravit obchod</button>}
+                                    {onUpdateTrade && !isMissed && <button type="button" onClick={() => { setMoreOpen(false); onUpdateTrade({ isBE: !isBEOverride } as any); }} className={`w-full h-9 px-3 flex items-center gap-2 text-left text-[12px] font-semibold ${isDark ? 'text-slate-200 hover:bg-white/5' : 'text-slate-700 hover:bg-slate-50'}`}
+                                        title="Break-even ve statistikách bez ohledu na P&L"><span className="w-[13px] text-center">⚖</span> {isBEOverride ? 'Zrušit označení BE' : 'Označit jako BE'}</button>}
+                                    <button type="button" onClick={(e) => { e.stopPropagation(); setMoreOpen(false); setIsDeleteModalOpen(true); }} className="w-full h-9 px-3 flex items-center gap-2 text-left text-[12px] font-semibold text-rose-500 hover:bg-rose-500/10"><Trash2 size={13} /> Smazat obchod</button>
                                 </div>
-                                {!isMissed && (
-                                    <div className={`px-2 lg:px-3 py-1 rounded-full border flex items-center gap-1.5 shrink-0 ${status === 'Invalid' ? 'text-rose-500 bg-rose-500/10 border-rose-500/20' : 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20'}`}>
-                                        {status === 'Invalid' ? <AlertOctagon size={11} strokeWidth={3} /> : <Check size={11} strokeWidth={3} />}
-                                        <span className="text-[9px] lg:text-[10px] font-black uppercase tracking-widest">{status === 'Invalid' ? 'NEVALIDNÍ' : 'VALIDNÍ'}</span>
-                                    </div>
-                                )}
-                            </div>
-                            <div className="h-6 w-px bg-white/10 hidden lg:block" />
-                            <div className="hidden lg:flex flex-col">
-                                <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Transaction Date</p>
-                                <p className={`text-[11px] font-bold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                                    {activeTrade.date ? new Date(activeTrade.date).toLocaleDateString('cs-CZ', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'}
-                                </p>
-                            </div>
-                            <div className={`hidden lg:flex p-1 rounded-xl border shrink-0 ${isDark ? 'bg-black/30 border-white/10' : 'bg-white/80 border-slate-200 shadow-sm'}`}>
-                                <button onClick={() => setVisualMode('screenshots')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all ${visualMode === 'screenshots' ? 'bg-blue-500 text-white' : 'text-slate-500'}`}>Screenshoty {images.length ? `(${images.length})` : ''}</button>
-                                <button onClick={() => setVisualMode('chart')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all ${visualMode === 'chart' ? 'bg-emerald-500 text-white' : 'text-slate-500'}`}>Graf</button>
-                            </div>
-                        </div>
-
-                        <div className="flex items-center gap-1.5 lg:gap-3">
-                            {/* Prev/Next */}
-                            <div className={`flex items-center gap-0.5 p-0.5 rounded-xl border ${isDark ? 'bg-white/5 border-white/5' : 'bg-white border-slate-200'}`}>
-                                <button onPointerEnter={onPrefetchPrev} onPointerDown={onPrefetchPrev} onFocus={onPrefetchPrev} onClick={onPrev} disabled={!hasPrev} className={`p-1.5 lg:p-2 rounded-lg transition-all ${!hasPrev ? 'opacity-20 cursor-not-allowed' : isDark ? 'hover:bg-white/10 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-slate-700'}`}><ChevronLeft size={16} /></button>
-                                <button onPointerEnter={onPrefetchNext} onPointerDown={onPrefetchNext} onFocus={onPrefetchNext} onClick={onNext} disabled={!hasNext} className={`p-1.5 lg:p-2 rounded-lg transition-all ${!hasNext ? 'opacity-20 cursor-not-allowed' : isDark ? 'hover:bg-white/10 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-slate-700'}`}><ChevronRight size={16} /></button>
-                            </div>
-                            <button onClick={() => setIsShareCardOpen(true)} title="Sdílet jako kartu" className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white' : 'bg-white text-slate-400 hover:text-slate-700 hover:bg-slate-50 border border-slate-200'}`}><Share2 size={16} /></button>
-                            {onUpdateTrade && (
-                                <button onClick={(e) => { e.stopPropagation(); setIsFullEditOpen(true); }} className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${isDark ? 'bg-blue-500/10 text-blue-500 hover:bg-blue-500 hover:text-white' : 'bg-white text-blue-400 hover:bg-blue-500 hover:text-white border border-blue-200'}`} title={journalReviewOnly(activeTrade) ? 'Upravit hodnocení obchodu' : String(activeTrade.id).startsWith('combined_') ? 'Upravit obchod (změny se propíší na účty v aktuálním výběru)' : 'Upravit obchod'}><Edit3 size={16} /></button>
                             )}
-                            <button onClick={(e) => { e.stopPropagation(); setIsDeleteModalOpen(true); }} className={`p-2 lg:p-3 rounded-xl lg:rounded-2xl transition-all ${isDark ? 'bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white' : 'bg-white text-rose-400 hover:bg-rose-500 hover:text-white border border-rose-200'}`}><Trash2 size={16} /></button>
-                            <button onClick={onClose} className={`p-2 lg:p-3 rounded-full transition-all ${isDark ? 'hover:bg-white/10 text-slate-400' : 'bg-white hover:bg-slate-50 text-slate-400 border border-slate-200'}`}><X size={20} /></button>
-                        </div>
+                        </span>
+                        <span className={`hidden sm:block h-5 w-px ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
+                        <button onClick={onClose} title="Zavřít (Esc)" className={ghostBtn}><X size={17} /></button>
                     </div>
 
                     <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
 
-                        {/* LEFT: Pure trade data only */}
-                        <div className={`order-2 lg:order-1 w-full lg:w-[320px] flex-1 lg:flex-none shrink-0 border-t lg:border-t-0 lg:border-r flex flex-col z-10 ${isDark ? 'border-white/5 bg-theme-card-40' : 'border-slate-100 bg-slate-50/40'} backdrop-blur-xl overflow-y-auto no-scrollbar`}>
-                            {/* PnL hero card */}
-                            <div className={`p-5 border-b relative ${isDark ? 'border-white/5' : 'border-slate-100'} ${isMissed ? 'bg-blue-500/[0.04]' : isBEOverride ? 'bg-amber-500/[0.04]' : isWin ? 'bg-emerald-500/[0.04]' : 'bg-rose-500/[0.04]'}`}>
-                                <p className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em] mb-2">{isCombined ? 'Profit / Loss · vybrané účty' : 'Profit / Loss · tento účet'}</p>
-                                <div className="flex items-baseline justify-between gap-4 flex-wrap">
-                                    <h3 className={`text-4xl lg:text-4xl font-black font-mono tracking-tighter leading-none ${pnlColor}`} style={{ color: isMissed ? '#60a5fa' : isBEOverride ? '#f59e0b' : isWin ? '#10b981' : '#f43f5e' }}>
-                                        {formattedPnL || '—'}
-                                    </h3>
-                                    <div className="flex flex-col items-end">
-                                        <span className={`text-base font-black font-mono ${(realRRR ?? -Infinity) >= 1 ? 'text-emerald-500' : 'text-slate-500'}`}>{realRRR == null ? '—' : `${isFinite(realRRR) ? realRRR.toFixed(2) : '0.00'} R`}</span>
-                                        <span className="text-[8px] font-bold text-slate-600 uppercase tracking-widest leading-none mt-1" title={journalReviewOnly(activeTrade) ? 'Výchozí peněžní riziko není doložené. Pozdější SL ani původní odhad nejsou podkladem pro R/R.' : undefined}>{journalReviewOnly(activeTrade) ? 'R/R · chybí riziko' : 'Reward/Risk'}</span>
-                                    </div>
-                                </div>
-                                {estimateNotice && (
-                                    <p className="mt-3 text-[10px] leading-relaxed text-amber-500" role="note">{estimateNotice}</p>
+                        {/* ── Levý sloupec: výsledek, fakta, účty, hodnocení, snímky ── */}
+                        <div className={`order-2 lg:order-1 w-full lg:w-[330px] flex-1 lg:flex-none shrink-0 border-t lg:border-t-0 lg:border-r flex flex-col z-10 overflow-y-auto no-scrollbar ${hairline} ${isDark ? 'bg-white/[0.015]' : 'bg-slate-50/70'}`}>
+                            <div className={`px-5 pt-5 pb-4 border-b ${hairline}`} style={{ background: `linear-gradient(180deg, ${pnlHex}14, transparent)` }}>
+                                <p className={labelCls}>{isCombined ? 'Čistý výsledek · vybrané účty' : 'Čistý výsledek · tento účet'}</p>
+                                <h3 className="mt-2 text-[40px] font-light tracking-[-0.04em] leading-none tabular-nums whitespace-nowrap" style={{ color: pnlHex }}>{formattedPnL || '—'}</h3>
+                                {grossFees && (
+                                    <p className={`mt-2.5 text-[12px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                                        Hrubě <b className={`font-medium tabular-nums ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{fmtUsd(grossFees.gross)}</b>
+                                        {grossFees.fees != null && <> · poplatky <b className={`font-medium tabular-nums ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{fmtUsd(grossFees.fees, false)}</b></>}
+                                    </p>
                                 )}
-                                {/* BE override — když trade byl fakticky BE ale fees/slippage daly +/- pár dolarů */}
-                                {!isMissed && onUpdateTrade && (
-                                  <button
-                                    onClick={() => onUpdateTrade({ isBE: !isBEOverride } as any)}
-                                    className={`mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all active:scale-95 ${
-                                      isBEOverride
-                                        ? 'bg-amber-500 text-white shadow-sm'
-                                        : isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10 border border-white/10' : 'bg-white text-slate-500 hover:bg-amber-50 hover:text-amber-600 border border-slate-200'
-                                    }`}
-                                    title={isBEOverride ? 'Odznačit jako BE (vrátit auto detekci podle pnl)' : 'Označit jako BE (počítá se jako break-even ve statistikách bez ohledu na pnl)'}
-                                  >
-                                    {isBEOverride ? '✓ Označeno jako BE' : '⚖ Označit jako BE'}
-                                  </button>
-                                )}
+                                {isBEOverride && <p className="mt-2 text-[11px] font-semibold text-amber-500">Označeno jako break-even</p>}
+                                {estimateNotice && <p className="mt-2 text-[10.5px] leading-relaxed text-amber-500" role="note">{estimateNotice}</p>}
                             </div>
-                            {/* Metrics — 3-col na mobile (kompaktnější), 2-col na desktop */}
-                            <div className="p-3 lg:p-5">
-                                {journalReviewOnly(activeTrade) && isCombined && <p className="mb-2 text-[8px] font-bold uppercase tracking-wider text-slate-500">Plnění · {accounts.find(account => account.id === executionTrade.accountId)?.name ?? accountName}</p>}
-                                <div className="grid grid-cols-2 gap-x-4 lg:gap-x-6">
-                                    <Property label="ENTRY" value={entryPrice || '—'} icon={Target} isDark={isDark} />
-                                    <Property label="EXIT" value={exitPrice || '—'} color={isWin ? 'text-emerald-400' : 'text-rose-400'} icon={ArrowRight} isDark={isDark} />
-                                    <EditableNumberProperty
-                                      readOnly={journalReviewOnly(activeTrade)}
-                                      label="STOP"
-                                      value={executionTrade.stopLoss}
-                                      placeholder="—"
-                                      color="text-rose-500/80"
-                                      icon={ShieldCheck}
-                                      isDark={isDark}
-                                      onSave={(val) => {
-                                        if (!onUpdateTrade) return;
-                                        // Při změně SL spočítej i riskAmount (pro RR display)
-                                        const updates: Partial<Trade> = { stopLoss: val };
-                                        if (val !== undefined && activeTrade.entryPrice && activeTrade.positionSize) {
-                                          const pv = pointValueFor(activeTrade.instrument);
-                                          const risk = Math.abs(activeTrade.entryPrice - val) * activeTrade.positionSize * pv;
-                                          updates.riskAmount = risk > 0 ? risk : undefined;
-                                        } else {
-                                          updates.riskAmount = undefined;
-                                        }
-                                        onUpdateTrade(updates);
-                                      }}
-                                    />
-                                    <EditableNumberProperty
-                                      readOnly={journalReviewOnly(activeTrade)}
-                                      label="TARGET"
-                                      value={executionTrade.takeProfit}
-                                      placeholder="—"
-                                      color="text-emerald-500/80"
-                                      icon={Zap}
-                                      isDark={isDark}
-                                      onSave={(val) => {
-                                        if (!onUpdateTrade) return;
-                                        const updates: Partial<Trade> = { takeProfit: val };
-                                        if (val !== undefined && activeTrade.entryPrice && activeTrade.positionSize) {
-                                          const pv = pointValueFor(activeTrade.instrument);
-                                          const target = Math.abs(val - activeTrade.entryPrice) * activeTrade.positionSize * pv;
-                                          updates.targetAmount = target > 0 ? target : undefined;
-                                        } else {
-                                          updates.targetAmount = undefined;
-                                        }
-                                        onUpdateTrade(updates);
-                                      }}
-                                    />
-                                    <Property label="POSITION" value={executionTrade.positionSize || 1} icon={Layers} isDark={isDark} />
-                                    <Property label="HOLD" value={holdTime} subValue={timeRange.includes('01:00 - 01:00') ? undefined : timeRange} icon={Timer} isDark={isDark} />
+
+                            {journalReviewOnly(activeTrade) && isCombined && visualMode === 'chart' && (
+                                <p className="px-5 pt-3 text-[9px] font-bold uppercase tracking-wider text-slate-500">Plnění · {accounts.find(account => account.id === executionTrade.accountId)?.name ?? accountName}</p>
+                            )}
+                            <div className={`grid grid-cols-2 border-b ${hairline} ${isDark ? 'bg-white/[0.02]' : 'bg-white'}`}>
+                                {([
+                                    ['Vstup', entryPrice > 0 ? fmtPrice(entryPrice) : '—', formatTime(tradeEntryTime), undefined],
+                                    ['Výstup', exitPrice > 0 ? fmtPrice(exitPrice) : '—', formatTime(exitTime), undefined],
+                                    ['Pohyb', movePts == null ? '—' : `${movePts >= 0 ? '+' : '−'}${fmtPrice(Math.abs(movePts))} b.`, undefined, movePts == null ? undefined : movePts >= 0 ? pnlHex : '#f43f5e'],
+                                    ['Velikost', `${executionTrade.positionSize || 1} ${executionTrade.instrument || ''}`.trim(), undefined, undefined],
+                                    ['Držení', String(holdTime).replace(/m$/, ' min'), undefined, undefined],
+                                    ['R', tileR == null || !Number.isFinite(tileR) ? '—' : `${tileR.toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} R`,
+                                        tileRiskUsd != null ? `riziko ${fmtUsd(tileRiskUsd, false)}` : 'bez stopu', undefined],
+                                ] as Array<[string, string, string | undefined, string | undefined]>).map(([label, value, sub, color], index) => (
+                                    <div key={label} className={`px-4 py-2 ${index % 2 === 0 ? `border-r ${hairline}` : ''} ${index > 1 ? `border-t ${hairline}` : ''}`}>
+                                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">{label}</p>
+                                        <p className={`mt-0.5 text-[13.5px] font-medium tabular-nums whitespace-nowrap ${value === '—' ? 'text-slate-500' : isDark ? 'text-slate-100' : 'text-slate-900'}`} style={color ? { color } : undefined}>
+                                            {value}{sub && <span className="ml-1.5 text-[10.5px] font-normal text-slate-500">{sub}</span>}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                            {!journalReviewOnly(activeTrade) && onUpdateTrade && (
+                                <div className={`px-5 py-2 border-b grid grid-cols-2 gap-x-5 ${hairline}`}>
+                                    <EditableNumberProperty label="STOP" value={executionTrade.stopLoss} placeholder="—" color="text-rose-500/80" icon={ShieldCheck} isDark={isDark}
+                                        onSave={(val) => {
+                                            const updates: Partial<Trade> = { stopLoss: val };
+                                            if (val !== undefined && activeTrade.entryPrice && activeTrade.positionSize) {
+                                                const risk = Math.abs(activeTrade.entryPrice - val) * activeTrade.positionSize * pointValueFor(activeTrade.instrument);
+                                                updates.riskAmount = risk > 0 ? risk : undefined;
+                                            } else updates.riskAmount = undefined;
+                                            onUpdateTrade(updates);
+                                        }} />
+                                    <EditableNumberProperty label="TARGET" value={executionTrade.takeProfit} placeholder="—" color="text-emerald-500/80" icon={Zap} isDark={isDark}
+                                        onSave={(val) => {
+                                            const updates: Partial<Trade> = { takeProfit: val };
+                                            if (val !== undefined && activeTrade.entryPrice && activeTrade.positionSize) {
+                                                const target = Math.abs(val - activeTrade.entryPrice) * activeTrade.positionSize * pointValueFor(activeTrade.instrument);
+                                                updates.targetAmount = target > 0 ? target : undefined;
+                                            } else updates.targetAmount = undefined;
+                                            onUpdateTrade(updates);
+                                        }} />
                                 </div>
+                            )}
+
+                            <div className="px-5 py-4 space-y-4">
                                 {(() => {
                                     // Účty: master vždy nahoře, kopie schované za rozbalovací lištu.
-                                    // Souhrn (počet + Σ P/L) je hned v hlavičce, takže i sbalené vidíš celek.
                                     const visibleAccountTrades = groupTrades;
                                     if (visibleAccountTrades.length === 0) return null;
-
                                     const isMasterTrade = (gt: Trade) => masterTradeIdInGroup != null && gt.id === masterTradeIdInGroup;
-
-                                    // Master první, zbytek ponech v původním pořadí.
                                     const masterTrade = visibleAccountTrades.find(isMasterTrade) || visibleAccountTrades[0];
                                     const copyTrades = visibleAccountTrades.filter(gt => gt.id !== masterTrade.id);
                                     const hasCopies = copyTrades.length > 0;
-                                    const totalPnl = visibleAccountTrades.reduce((s, gt) => s + safeValue(gt.pnl), 0);
-
-                                    // Řádek účtu bez vlastního rámečku — rámeček nese obalová „buňka".
-                                    const AccountRow = ({ gt, master }: { gt: Trade; master: boolean }) => {
+                                    const totalPnl = visibleAccountTrades.reduce((sum, gt) => sum + safeValue(gt.pnl), 0);
+                                    const row = (gt: Trade, master: boolean) => {
                                         const acc = accounts.find(a => a.id === gt.accountId);
                                         const pnlVal = safeValue(gt.pnl);
                                         return (
-                                            <div className={`px-3 py-2 flex items-center justify-between transition-all ${isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-slate-50'}`}>
-                                                <div className="flex items-center gap-2.5 min-w-0">
-                                                    <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${acc?.type === 'Funded' ? 'bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)]' : 'bg-blue-500'}`} />
-                                                    <span className="text-[11px] font-black uppercase tracking-tight truncate max-w-[120px]">{acc?.name || (gt.accountId === activeTrade.accountId ? accountName : gt.accountId)}</span>
-                                                    {master && groupTrades.length > 1 && <span className="text-[7px] font-black text-blue-500 uppercase tracking-widest shrink-0">MASTER</span>}
-                                                    {!master && gt.masterTradeId != null && groupTrades.length > 1 && <span className="text-[7px] font-black text-purple-500 uppercase tracking-widest shrink-0">COPY</span>}
-                                                </div>
-                                                <span className={`text-[11px] font-black font-mono shrink-0 ${pnlVal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{gt.pnlEstimated ? '≈ ' : ''}{formatValue(gt)}</span>
-                                            </div>
+                                            <>
+                                                <span className={`h-[7px] w-[7px] rounded-full shrink-0 ${acc?.type === 'Funded' ? 'bg-purple-500' : 'bg-blue-500'}`} />
+                                                <span className={`text-[12.5px] font-semibold truncate ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{acc?.name || (gt.accountId === activeTrade.accountId ? accountName : gt.accountId)}</span>
+                                                {master && visibleAccountTrades.length > 1 && <span className="text-[8px] font-black uppercase tracking-widest text-blue-500 shrink-0">Master</span>}
+                                                <span className={`ml-auto text-[12.5px] font-semibold tabular-nums shrink-0 ${pnlVal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{gt.pnlEstimated ? '≈ ' : ''}{formatValue(gt)}</span>
+                                            </>
                                         );
                                     };
-
-                                    const divider = isDark ? 'border-white/5' : 'border-slate-200';
-                                    const masterAcc = accounts.find(a => a.id === masterTrade.accountId);
-                                    const masterPnl = safeValue(masterTrade.pnl);
-
                                     return (
-                                        <div className="pt-4">
+                                        <div>
                                             <div className="flex items-center justify-between mb-2">
-                                                <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] flex items-center gap-2"><Wallet size={12} /> Účty</p>
-                                                {hasCopies && (
-                                                    <span className="text-[10px] font-black tracking-tight text-slate-500">
-                                                        {tradeAccountLabel(visibleAccountTrades)} · <span className={`font-mono ${totalPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{visibleAccountTrades.some(member => member.pnlEstimated) ? '≈ ' : ''}{formatValue({ ...activeTrade, pnl: totalPnl })}</span>
-                                                    </span>
-                                                )}
+                                                <p className={labelCls}>{hasCopies ? 'Účty' : 'Účet'}</p>
+                                                {hasCopies && <span className="text-[10.5px] font-semibold text-slate-500">{tradeAccountLabel(visibleAccountTrades)} · <span className={`tabular-nums ${totalPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{visibleAccountTrades.some(member => member.pnlEstimated) ? '≈ ' : ''}{formatValue({ ...activeTrade, pnl: totalPnl })}</span></span>}
                                             </div>
-                                            {/* Master + přepínač kopií = jeden řádek v jedné buňce.
-                                                Po rozbalení se kopie odvinou pod ním uvnitř téhož rámečku. */}
-                                            <div className={`rounded-xl border overflow-hidden ${isDark ? 'bg-white/[0.03] border-white/5' : 'bg-white border-slate-200'}`}>
-                                                <button
-                                                    onClick={hasCopies ? () => setAccountsExpanded(v => !v) : undefined}
-                                                    aria-expanded={hasCopies ? accountsExpanded : undefined}
-                                                    disabled={!hasCopies}
-                                                    className={`w-full px-3 py-2 flex items-center gap-2.5 text-left transition-all ${hasCopies ? (isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-slate-50') : 'cursor-default'}`}
-                                                >
-                                                    <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${masterAcc?.type === 'Funded' ? 'bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)]' : 'bg-blue-500'}`} />
-                                                    <span className="text-[11px] font-black uppercase tracking-tight truncate">{masterAcc?.name || (masterTrade.accountId === activeTrade.accountId ? accountName : masterTrade.accountId)}</span>
-                                                    {isMasterTrade(masterTrade) && <span className="text-[7px] font-black text-blue-500 uppercase tracking-widest shrink-0">MASTER</span>}
-                                                    <span className={`ml-auto text-[11px] font-black font-mono shrink-0 ${masterPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{masterTrade.pnlEstimated ? '≈ ' : ''}{formatValue(masterTrade)}</span>
-                                                    {hasCopies && (
-                                                        <span className={`flex items-center gap-1 pl-2.5 ml-0.5 border-l text-[10px] font-black shrink-0 ${divider} ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                                                            +{copyTrades.length}
-                                                            <ChevronDown size={12} className={`transition-transform ${accountsExpanded ? 'rotate-180' : ''}`} />
-                                                        </span>
-                                                    )}
+                                            <div className={`rounded-md border overflow-hidden ${panel}`}>
+                                                <button type="button" onClick={hasCopies ? () => setAccountsExpanded(v => !v) : undefined} aria-expanded={hasCopies ? accountsExpanded : undefined} disabled={!hasCopies}
+                                                    className={`w-full px-3 py-2 flex items-center gap-2.5 text-left ${hasCopies ? (isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-slate-50') : 'cursor-default'}`}>
+                                                    {row(masterTrade, isMasterTrade(masterTrade))}
+                                                    {hasCopies && <span className={`flex items-center gap-1 pl-2.5 border-l text-[10.5px] font-bold shrink-0 ${hairline} text-slate-500`}>+{copyTrades.length}<ChevronDown size={12} className={`transition-transform ${accountsExpanded ? 'rotate-180' : ''}`} /></span>}
                                                 </button>
                                                 {hasCopies && accountsExpanded && copyTrades.map(gt => (
-                                                    <div key={gt.id} className={`border-t ${divider}`}><AccountRow gt={gt} master={false} /></div>
+                                                    <div key={gt.id} className={`px-3 py-2 flex items-center gap-2.5 border-t ${hairline}`}>{row(gt, false)}</div>
                                                 ))}
                                             </div>
                                         </div>
                                     );
                                 })()}
 
-                                {/* Mindset */}
-                                {!!(activeTrade.emotions?.length || activeTrade.mistakes?.length) && (
-                                    <div className={`pt-4 border-t ${isDark ? 'border-white/[0.03]' : 'border-slate-100'}`}>
-                                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-2.5 flex items-center gap-2"><Brain size={11} /> Mindset</p>
-                                        <div className="flex flex-wrap gap-1.5">
-                                            {activeTrade.emotions?.map(e => <span key={e} className="px-2 py-1 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-400 text-[9px] font-black uppercase tracking-wide">{getEmotionDetails(e).label}</span>)}
-                                            {activeTrade.mistakes?.map(m => <span key={m} className="px-2 py-1 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-500 text-[9px] font-black uppercase tracking-wide">{m}</span>)}
-                                        </div>
+                                <div>
+                                    <p className={`${labelCls} mb-2`}>Hodnocení</p>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {reviewChips.map(chip => (
+                                            <span key={chip.key} className={`h-[26px] px-2 rounded inline-flex items-center text-[11px] font-semibold border ${chip.tone === 'purple' ? 'bg-purple-500/10 border-purple-500/20 text-purple-500' : 'bg-rose-500/10 border-rose-500/20 text-rose-500'}`}>{chip.label}</span>
+                                        ))}
+                                        {onUpdateTrade && (reviewChips.length === 0 ? ['+ Setup', '+ Emoce', '+ Chyby', '+ Tagy'] : ['+ Doplnit']).map(label => (
+                                            <button key={label} type="button" onClick={() => setIsFullEditOpen(true)}
+                                                className={`h-[26px] px-2 rounded border border-dashed text-[11px] transition-colors ${isDark ? 'border-slate-600 text-slate-500 hover:border-slate-400 hover:text-slate-300' : 'border-slate-300 text-slate-400 hover:border-slate-400 hover:text-slate-600'}`}>{label}</button>
+                                        ))}
                                     </div>
-                                )}
+                                </div>
 
-                                {/* Entry Confluence · HTF Confluence · Levely — vždy viditelné.
-                                    Nahradilo dřívější HTF/LTF Confluence: LTF se dublovalo s „Execution"
-                                    a „Entry model" v Intelu, HTF sekce byla ruční a většinou prázdná. */}
                                 <TradeConfluence trade={activeTrade} isDark={isDark} />
-
-                                {/* AlphaBridge Intel — MFE/MAE v R, execution tagy, entry model,
-                                    excursion (co zbylo na stole) a counterfactual. Vykreslí se jen
-                                    když obchod nese data z extension (jinak vrací null). */}
                                 <TradeExecutionIntel trade={activeTrade} isDark={isDark} />
 
-                                {/* Notes + AI (MOBILE ONLY) — na desktop jsou v right pane bottom.
-                                    Pořadí: nejdřív Poznámky (user content), pak AI návrhy. */}
-                                <div className="lg:hidden pt-4 mt-4 border-t border-slate-100 dark:border-white/[0.03] space-y-4">
-                                    <div>
-                                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-3 flex items-center gap-2"><FileText size={12} /> Poznámky</p>
-                                        <div className={`p-4 rounded-2xl border text-xs font-medium leading-[1.8] ${isDark ? 'bg-black/30 border-white/5 text-slate-400' : 'bg-white border-slate-100 text-slate-600'}`}>
-                                            {activeTrade.notes || <span className="italic opacity-40">No log entry.</span>}
-                                        </div>
+                                {/* Snímky a graf: náhledy přepnou plochu na snímek, řádek grafu na graf. */}
+                                <div>
+                                    <p className={`${labelCls} mb-2`}>Snímky</p>
+                                    <div className="grid grid-cols-3 gap-1.5">
+                                        {images.slice(0, 5).map((url, index) => (
+                                            <button key={url} type="button" onClick={() => { setVisualMode('screenshots'); setActiveImageIndex(index); }}
+                                                className={`relative aspect-[16/10] rounded-md overflow-hidden border transition-[box-shadow,border-color,opacity] ${selectedShot === index ? 'border-emerald-500 shadow-[0_0_0_1px_#10b981]' : hairline} ${visualMode === 'chart' ? 'opacity-55' : ''} ${isDark ? 'bg-black/30' : 'bg-slate-100'}`}>
+                                                <img src={url} alt="" className="h-full w-full object-cover object-[30%_50%]" loading="lazy" />
+                                                <span className={`absolute left-1 bottom-1 rounded px-1 text-[8.5px] font-black uppercase tracking-wide ${isDark ? 'bg-black/70 text-slate-200' : 'bg-white/90 text-slate-600'}`}>{shotLabel(index)}</span>
+                                            </button>
+                                        ))}
+                                        {onAttachScreenshotFile && (
+                                            <button type="button" onClick={() => shotInputRef.current?.click()} title="Vložit snímek ze schránky (⌘V) nebo vybrat soubor"
+                                                className={`aspect-[16/10] rounded-md border border-dashed flex flex-col items-center justify-center gap-0.5 text-[10.5px] font-semibold transition-colors ${isDark ? 'border-slate-600 text-slate-500 hover:text-slate-300' : 'border-slate-300 text-slate-400 hover:text-slate-600'}`}>
+                                                <span className="text-[13px] leading-none">＋</span>Vložit
+                                            </button>
+                                        )}
                                     </div>
+                                    <input ref={shotInputRef} type="file" accept="image/*" className="hidden" onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void attachShot(file); }} />
+                                    <button type="button" onClick={() => setVisualMode('chart')}
+                                        className={`mt-2 w-full flex items-center gap-3 px-3 py-2.5 rounded-md border text-left transition-[border-color,box-shadow] ${visualMode === 'chart' ? 'border-emerald-500 shadow-[0_0_0_1px_#10b981]' : hairline} ${isDark ? 'bg-white/[0.02]' : 'bg-white'}`}>
+                                        <span className={`h-[30px] w-[30px] shrink-0 rounded-md grid place-items-center ${visualMode === 'chart' ? 'bg-emerald-500/10 text-emerald-500' : isDark ? 'bg-white/5 text-slate-400' : 'bg-slate-100 text-slate-500'}`}><BarChart3 size={16} /></span>
+                                        <span className="min-w-0">
+                                            <b className={`block text-[12.5px] ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>Interaktivní graf</b>
+                                            <span className="block truncate text-[11px] text-slate-500">{activeTrade.instrument} · 1 min · průběh SL/TP</span>
+                                        </span>
+                                        <span className={`ml-auto shrink-0 text-[10px] font-black uppercase tracking-[0.08em] ${visualMode === 'chart' ? 'text-emerald-500' : 'text-slate-500'}`}>{visualMode === 'chart' ? 'Zobrazeno' : 'Otevřít'}</span>
+                                    </button>
                                 </div>
                             </div>
                         </div>
 
-                        {/* RIGHT: screenshot top + info bottom.
-                            Na mobile: flex-none (natural height image) — pak sidebar dole.
-                            Na desktop: flex-1 (zabere prostor v row layoutu). */}
-                        <div className="order-1 lg:order-2 flex-none lg:flex-1 flex flex-col overflow-hidden">
+                        {/* ── Pravá část: snímek ↔ graf a poznámka ─────────────── */}
+                        <div className="order-1 lg:order-2 flex-none lg:flex-1 flex flex-col overflow-hidden min-w-0">
+                            {/* Mobil: galerie je až pod plochou, přepínač proto stojí nad ní. */}
+                            <div className={`lg:hidden shrink-0 flex justify-center border-b py-2 ${hairline}`}>
+                                <div className={`flex rounded-md border overflow-hidden ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
+                                    <button onClick={() => setVisualMode('screenshots')} className={`px-3 py-1.5 text-[10.5px] font-bold ${visualMode === 'screenshots' ? (isDark ? 'bg-white text-slate-900' : 'bg-slate-900 text-white') : 'text-slate-500'}`}>Snímky {images.length ? `(${images.length})` : ''}</button>
+                                    <button onClick={() => setVisualMode('chart')} className={`px-3 py-1.5 text-[10.5px] font-bold ${visualMode === 'chart' ? (isDark ? 'bg-white text-slate-900' : 'bg-slate-900 text-white') : 'text-slate-500'}`}>Graf</button>
+                                </div>
+                            </div>
+                            <div className={`relative group flex-none h-[420px] lg:flex-1 lg:h-auto lg:min-h-0 overflow-hidden ${isDark ? 'bg-black/20' : 'bg-slate-100/70'}`}>
 
-                            {/* TOP: screenshot obchodu je výchozí; interaktivní CME graf je druhá záložka. */}
-                            <div className="relative group flex-none h-[420px] lg:flex-[3_3_0] lg:h-auto lg:min-h-0 lg:overflow-hidden">
-                                <div className={`absolute top-3 left-1/2 -translate-x-1/2 z-40 flex lg:hidden p-1 rounded-xl border backdrop-blur-xl ${isDark ? 'bg-black/70 border-white/10' : 'bg-white/80 border-slate-200 shadow-sm'}`}>
-                                    <button onClick={() => setVisualMode('screenshots')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all ${visualMode === 'screenshots' ? 'bg-blue-500 text-white' : 'text-slate-500'}`}>Screenshoty {images.length ? `(${images.length})` : ''}</button>
-                                    <button onClick={() => setVisualMode('chart')} className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all ${visualMode === 'chart' ? 'bg-emerald-500 text-white' : 'text-slate-500'}`}>Graf</button>
+
+                                {/* Snímek */}
+                                <div className={`trade-stage-layer absolute inset-0 ${visualMode === 'screenshots' ? '' : 'is-off'}`}>
+                                    {loadingImages && (
+                                        <div className="absolute inset-0 flex items-center justify-center z-10">
+                                            <div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-emerald-500 animate-spin" />
+                                        </div>
+                                    )}
+                                    {snapshotError && !isLoadingDetails && <div role="status" className={`absolute bottom-16 left-4 right-4 z-30 rounded-md border p-3 text-xs ${panel}`}>
+                                        Snímky se nepodařilo úplně načíst.
+                                        <button type="button" className="ml-2 font-bold text-blue-500" onClick={() => { setImageLoadError(false); setDetailsRetry(value => value + 1); }}>Zkusit znovu</button>
+                                    </div>}
+                                    {displayedImageUrl ? (
+                                        <div className="absolute inset-0">
+                                            <img src={displayedImageUrl} className="absolute inset-0 w-full h-full object-contain cursor-zoom-in" onClick={() => setIsZoomed(true)} onError={() => { setImageLoadError(true); setDisplayedImage(null); }} />
+                                            {activeCopierSnapshot && (
+                                                <div className="absolute top-3 left-3 z-20 rounded-md border border-white/10 bg-black/65 px-2.5 py-1.5 text-white backdrop-blur-md">
+                                                    <p className="text-[9px] font-black uppercase tracking-widest">Auto · {activeCopierSnapshot.kind === 'entry' ? 'vstup' : activeCopierSnapshot.kind === 'exit' ? 'výstup' : activeCopierSnapshot.kind}</p>
+                                                    <p className="mt-0.5 text-[9px] font-mono text-white/60">{new Date(activeCopierSnapshot.at).toLocaleTimeString('cs-CZ')}</p>
+                                                </div>
+                                            )}
+                                            <button type="button" onClick={() => setIsZoomed(true)} className={`absolute right-3 bottom-3 z-20 h-8 px-2.5 inline-flex items-center gap-1.5 rounded-md border text-[11px] font-semibold backdrop-blur-md ${isDark ? 'bg-black/60 border-white/10 text-slate-200' : 'bg-white/90 border-slate-200 text-slate-600'}`}><Maximize2 size={12} /> Zvětšit</button>
+                                        </div>
+                                    ) : !loadingImages ? (
+                                        onAttachScreenshotFile && !snapshotError ? (
+                                            <div className="absolute inset-0">
+                                                <HistoryScreenshotSlot variant="detail" light={!isDark} canAttach state={shotAttach} onPickFile={file => { void attachShot(file); }} />
+                                            </div>
+                                        ) : (
+                                            <div className="absolute inset-0 flex flex-col items-center justify-center opacity-40 text-slate-500 p-8 text-center">
+                                                <ImageIcon size={40} strokeWidth={1} />
+                                                <p className="text-[11px] font-black uppercase tracking-[0.25em] mt-4">{snapshotError ? 'Chyba načítání' : 'Bez screenshotu'}</p>
+                                            </div>
+                                        )
+                                    ) : null}
+                                    {shotAttach && images.length > 0 && (
+                                        <div role="status" className={`absolute top-3 right-3 z-30 inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-[11px] font-bold backdrop-blur-md ${shotAttach.status === 'error' ? 'border-rose-500/30 bg-rose-500/15 text-rose-500' : shotAttach.status === 'saved' ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-500' : 'border-indigo-500/30 bg-indigo-500/15 text-indigo-500'}`}>
+                                            {shotAttach.status === 'uploading' ? 'Ukládám snímek…' : shotAttach.status === 'saved' ? 'Snímek uložen' : shotAttach.message}
+                                        </div>
+                                    )}
+                                    {images.length > 1 && (
+                                        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-3 py-1.5 bg-black/60 backdrop-blur-xl rounded-md border border-white/10">
+                                            <button onClick={() => setActiveImageIndex((activeImageIndex - 1 + images.length) % images.length)} className="p-0.5 text-white/60 hover:text-white"><ChevronLeft size={16} /></button>
+                                            <span className="text-[10px] font-mono text-white/70">{(displayedImageIndex >= 0 ? displayedImageIndex : activeImageIndex) + 1} / {images.length}</span>
+                                            <button onClick={() => setActiveImageIndex((activeImageIndex + 1) % images.length)} className="p-0.5 text-white/60 hover:text-white"><ChevronRight size={16} /></button>
+                                        </div>
+                                    )}
                                 </div>
 
-                                {visualMode === 'chart' ? (
-                                    <React.Suspense fallback={<div className="absolute inset-0 flex items-center justify-center"><div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-emerald-500 animate-spin" /></div>}>
-                                        {chartTrade ? <>
-                                            {isCombined && <div className="absolute top-0 left-0 right-0 z-30 h-10 flex items-center gap-2 px-3 text-[10px] font-bold text-slate-500 bg-theme-card">
-                                                <label htmlFor="trade-chart-account">Účet v grafu</label>
-                                                <select id="trade-chart-account" value={chartTrade.accountId} onChange={event => setChartAccountId(event.target.value)} className="min-w-0 max-w-[55%] rounded-lg border border-slate-500/20 bg-theme-card px-2 py-1 text-theme-primary">
-                                                    {[...new Set(groupTrades.map(member => member.accountId))].map(id => <option key={id} value={id}>{accounts.find(account => account.id === id)?.name || id}</option>)}
-                                                </select>
-                                                {accountChartTrades.length > 1 && <select aria-label="Realizace vybraného účtu" value={String(chartTrade.id)} onChange={event => setChartRealizationId(event.target.value)} className="min-w-0 rounded-lg border border-slate-500/20 bg-theme-card px-2 py-1 text-theme-primary">
-                                                    {accountChartTrades.map((member, index) => <option key={member.id} value={String(member.id)}>Realizace {index + 1} · {new Date(member.timestamp).toLocaleTimeString('cs-CZ')}</option>)}
-                                                </select>}
-                                                {chartTrade.pnlEstimated && <span className="text-amber-500">Odhad podle leadera</span>}
-                                            </div>}
-                                            <div className={isCombined ? 'absolute inset-0 top-10' : 'absolute inset-0'}><AccountExecutionChart trade={chartTrade} isDark={isDark} verifiedDetail={currentJournal?.rows?.includes(chartTrade) ? chartTrade : undefined} /></div>
-                                        </> : <p className="p-6 text-xs text-slate-500">Podklady vybraných účtů nejsou načtené.</p>}
-                                    </React.Suspense>
+                                {/* Graf — připojí se při prvním otevření a pak zůstává, aby přepnutí zpět bylo okamžité. */}
+                                <div className={`trade-stage-layer absolute inset-0 flex flex-col ${visualMode === 'chart' ? '' : 'is-off'} ${isDark ? 'bg-[#090d12]' : 'bg-white'}`}>
+                                    {chartMounted && (
+                                        <React.Suspense fallback={<div className="absolute inset-0 flex items-center justify-center"><div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-emerald-500 animate-spin" /></div>}>
+                                            {chartTrade ? <>
+                                                {isCombined && <div className={`shrink-0 h-9 flex items-center gap-2 px-3 border-b text-[10.5px] font-semibold text-slate-500 ${hairline}`}>
+                                                    <label htmlFor="trade-chart-account">Účet v grafu</label>
+                                                    <select id="trade-chart-account" value={chartTrade.accountId} onChange={event => setChartAccountId(event.target.value)} className={`min-w-0 max-w-[55%] rounded-md border px-2 py-0.5 ${panel}`}>
+                                                        {[...new Set(groupTrades.map(member => member.accountId))].map(id => <option key={id} value={id}>{accounts.find(account => account.id === id)?.name || id}</option>)}
+                                                    </select>
+                                                    {accountChartTrades.length > 1 && <select aria-label="Realizace vybraného účtu" value={String(chartTrade.id)} onChange={event => setChartRealizationId(event.target.value)} className={`min-w-0 rounded-md border px-2 py-0.5 ${panel}`}>
+                                                        {accountChartTrades.map((member, index) => <option key={member.id} value={String(member.id)}>Realizace {index + 1} · {new Date(member.timestamp).toLocaleTimeString('cs-CZ')}</option>)}
+                                                    </select>}
+                                                    {chartTrade.pnlEstimated && <span className="text-amber-500">Odhad podle leadera</span>}
+                                                </div>}
+                                                <div className="relative flex-1 min-h-0"><AccountExecutionChart trade={chartTrade} isDark={isDark} variant="detail" revealKey={chartRevealKey} verifiedDetail={currentJournal?.rows?.includes(chartTrade) ? chartTrade : undefined} /></div>
+                                            </> : <p className="p-6 text-xs text-slate-500">Podklady vybraných účtů nejsou načtené.</p>}
+                                        </React.Suspense>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Poznámka */}
+                            <div className={`shrink-0 border-t px-4 py-3 flex items-start gap-3 ${hairline}`}>
+                                <span className={`${labelCls} pt-2.5 shrink-0`}>Poznámka</span>
+                                {isEditingNotes ? (
+                                    <textarea autoFocus value={editedNotes} onChange={event => setEditedNotes(event.target.value)}
+                                        onBlur={handleSaveNotes}
+                                        onKeyDown={event => { if (event.key === 'Escape') { setEditedNotes(activeTrade.notes || ''); setIsEditingNotes(false); } if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) handleSaveNotes(); }}
+                                        rows={3} placeholder="Co se v obchodu stalo?"
+                                        className={`flex-1 min-h-[72px] resize-y rounded-md border px-3 py-2 text-[12.5px] leading-relaxed outline-none ${isDark ? 'bg-black/30 border-white/10 text-slate-200' : 'bg-white border-slate-200 text-slate-700'}`} />
                                 ) : (
-                                    <>
-                                        {loadingImages && (
-                                            <div className="absolute inset-0 flex items-center justify-center z-10">
-                                                <div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-emerald-500 animate-spin" />
-                                            </div>
-                                        )}
-                                        {snapshotError && !isLoadingDetails && <div role="status" className="absolute bottom-16 left-4 right-4 z-30 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-3 text-xs text-[var(--text-primary)]">
-                                            Snímky se nepodařilo úplně načíst.
-                                            <button type="button" className="ml-2 font-bold text-blue-500" onClick={() => { setImageLoadError(false); setDetailsRetry(value => value + 1); }}>Zkusit znovu</button>
-                                        </div>}
-                                        {displayedImageUrl ? (
-                                                <div className="absolute inset-0">
-                                                    <img src={displayedImageUrl} className="absolute inset-0 w-full h-full object-contain cursor-zoom-in" onClick={() => setIsZoomed(true)} onError={() => { setImageLoadError(true); setDisplayedImage(null); }} />
-                                                    {activeCopierSnapshot && (
-                                                        <div className="absolute top-16 left-4 z-20 rounded-lg border border-white/10 bg-black/65 px-3 py-2 text-white backdrop-blur-md">
-                                                            <p className="text-[9px] font-black uppercase tracking-widest">Auto · {activeCopierSnapshot.kind}</p>
-                                                            <p className="mt-0.5 text-[9px] font-mono text-white/60">{new Date(activeCopierSnapshot.at).toLocaleTimeString('cs-CZ')}</p>
-                                                        </div>
-                                                    )}
-                                                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                                                        <div className="p-5 bg-black/40 backdrop-blur-md rounded-full text-white border border-white/20 shadow-2xl pointer-events-auto cursor-pointer" onClick={() => setIsZoomed(true)}><Maximize2 size={28} /></div>
-                                                    </div>
-                                                </div>
-                                            ) : !loadingImages ? (
-                                                onAttachScreenshotFile && !snapshotError ? (
-                                                    // Stejná plocha jako prázdná miniatura v Historii — jen větší.
-                                                    <div className="absolute inset-0">
-                                                        <HistoryScreenshotSlot variant="detail" light={!isDark} canAttach state={shotAttach}
-                                                            onPickFile={file => { void attachShot(file); }} />
-                                                    </div>
-                                                ) : (
-                                                    <div className="absolute inset-0 flex flex-col items-center justify-center opacity-30 text-slate-500 p-8 text-center">
-                                                        <div className="p-8 rounded-[36px] border-2 border-dashed border-slate-500"><ImageIcon size={52} strokeWidth={1} /></div>
-                                                        <p className="text-sm font-black uppercase tracking-[0.3em] mt-7">{snapshotError ? 'CHYBA NAČÍTÁNÍ' : 'BEZ SCREENSHOTU'}</p>
-                                                    </div>
-                                                )
-                                            ) : null}
-                                        {shotAttach && images.length > 0 && (
-                                            <div role="status" className={`absolute top-16 right-4 z-30 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-extrabold backdrop-blur-md ${
-                                                shotAttach.status === 'error' ? 'border-rose-500/30 bg-rose-500/15 text-rose-500'
-                                                    : shotAttach.status === 'saved' ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-500'
-                                                        : 'border-indigo-500/30 bg-indigo-500/15 text-indigo-500'}`}>
-                                                {shotAttach.status === 'uploading' ? 'Ukládám snímek…' : shotAttach.status === 'saved' ? 'Snímek uložen' : shotAttach.message}
-                                            </div>
-                                        )}
-                                        {images.length > 1 && (
-                                            <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-4 py-2 bg-black/60 backdrop-blur-xl rounded-full border border-white/10">
-                                                <button onClick={() => setActiveImageIndex((activeImageIndex - 1 + images.length) % images.length)} className="p-1 text-white/50 hover:text-white"><ChevronLeft size={18} /></button>
-                                                <span className="text-[10px] font-mono text-white/70">{(displayedImageIndex >= 0 ? displayedImageIndex : activeImageIndex) + 1} / {images.length}</span>
-                                                <button onClick={() => setActiveImageIndex((activeImageIndex + 1) % images.length)} className="p-1 text-white/50 hover:text-white"><ChevronRight size={18} /></button>
-                                            </div>
-                                        )}
-                                    </>
+                                    <button type="button" disabled={!onUpdateTrade} onClick={() => setIsEditingNotes(true)}
+                                        className={`flex-1 text-left rounded-md border px-3 py-2 text-[12.5px] leading-relaxed max-h-[120px] overflow-y-auto whitespace-pre-wrap ${isDark ? 'bg-black/20 border-white/10 text-slate-300' : 'bg-white border-slate-200 text-slate-600'} ${onUpdateTrade ? 'cursor-text' : 'cursor-default'}`}>
+                                        {activeTrade.notes || <span className="text-slate-400">Co se v obchodu stalo?</span>}
+                                    </button>
                                 )}
                             </div>
-
-                            {/* BOTTOM: AI + Notes (DESKTOP ONLY) — na mobile přesunuto do sidebar dole */}
-                            <div className={`hidden lg:block flex-[2_2_0] min-h-0 overflow-y-auto no-scrollbar border-t ${isDark ? 'border-white/5 bg-theme-card-40' : 'border-slate-100 bg-slate-50/30'}`}>
-                                <div className="px-5 lg:px-6 pt-3 pb-5 lg:pb-6 space-y-4">
-                                    {/* Notes */}
-                                    <div>
-                                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-3 flex items-center gap-2"><FileText size={12} /> Poznámky</p>
-                                        <div className={`p-5 rounded-2xl border text-xs font-medium leading-[1.8] ${isDark ? 'bg-black/30 border-white/5 text-slate-400' : 'bg-white border-slate-100 text-slate-600'}`}>
-                                            {activeTrade.notes || <span className="italic opacity-40">No log entry.</span>}
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                        </div>{/* /RIGHT */}
+                        </div>
                     </div>
                 </motion.div>
 

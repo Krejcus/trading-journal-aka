@@ -114,7 +114,7 @@ import FibDrawingSettingsDialog, {
 } from './FibDrawingSettingsDialog';
 import GenericDrawingFloatingToolbar from './GenericDrawingFloatingToolbar';
 import GenericDrawingSettingsDialog from './GenericDrawingSettingsDialog';
-import { installDrawingStyleDefaults } from '../services/chartDrawingStyleDefaults';
+import { getDrawingStyleDefault, installDrawingStyleDefaults } from '../services/chartDrawingStyleDefaults';
 import {
   chartAppearanceUserId,
   inheritGlobalAppearance,
@@ -224,6 +224,16 @@ interface CandleKitTradeChartProps {
   instrumentRoot?: NasdaqFuturesRoot;
   replayActive?: boolean;
   replayCursorTime?: number | null;
+  /**
+   * Přehrávání obchodu v detailu: historie SL/TP a plnění se kreslí i během
+   * replaye (rodič ji předá oříznutou k okamžiku kurzoru). Backtest ji nemá.
+   */
+  journalHistoryInReplay?: boolean;
+  /**
+   * Detail obchodu: obchod vždy uprostřed a celý vidět (včetně SL/TP),
+   * přehrávání drží kurzor uprostřed a svíčky plynule odjíždějí doleva.
+   */
+  centeredTradeView?: boolean;
   replaySelecting?: boolean;
   replaySelectionCandles?: MarketCandle[];
   replaySelectionTime?: number | null;
@@ -1707,6 +1717,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   instrumentRoot,
   replayActive = false,
   replayCursorTime = null,
+  journalHistoryInReplay = false,
+  centeredTradeView = false,
   replaySelecting = false,
   replaySelectionMinimumTime = null,
   replaySelectionCandles = [],
@@ -2107,6 +2119,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     chart: IChartApi,
     initialRange: { from: number; to: number } | null,
     targetRange: { from: number; to: number },
+    durationMs = 220,
   ) => {
     if (replayStartAnimationFrameRef.current !== null) {
       window.cancelAnimationFrame(replayStartAnimationFrameRef.current);
@@ -2120,7 +2133,6 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     }
     chart.timeScale().setVisibleLogicalRange(initialRange);
     replayViewportTargetRef.current = targetRange;
-    const durationMs = 220;
     let startedAt: number | null = null;
     chartRootRef.current?.setAttribute('data-replay-start-transition', 'animating');
     const animate = (now: number) => {
@@ -2411,10 +2423,15 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // Replay vykresluje celou odhalenou sérii. Virtualizaci renderu zvládne
   // Lightweight Charts sám; vlastní okno tu jen dublovalo výpočty, které se
   // musely trefit do stejného místa — a když se netrefily, graf odskočil.
+  // Detail (`centeredTradeView`) taky dostane celou sérii: výchozí záběr
+  // nového grafu u pravého okraje jinak spustil rozšíření okna a druhé
+  // vytvoření grafu — obchod pak viditelně odskočil.
   const renderedCandleWindow = useMemo<CandleWindow>(
-    () => replayActive ? { start: 0, end: candles.length } : candleWindow,
-    [candleWindow, candles.length, replayActive],
+    () => replayActive || centeredTradeView ? { start: 0, end: candles.length } : candleWindow,
+    [candleWindow, candles.length, centeredTradeView, replayActive],
   );
+  // Detail: nový graf se ukáže až s vycentrovaným záběrem.
+  const [viewportSettled, setViewportSettled] = useState(!centeredTradeView);
   const candlesRef = useRef(candles);
   candlesRef.current = candles;
   const renderedCandleWindowRef = useRef(renderedCandleWindow);
@@ -2710,7 +2727,15 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       () => visibleCandles.map(candleKitBar),
     );
   }
-  const chartBars = replayActive ? replayDataSeedRef.current?.bars ?? [] : nonReplayBars;
+  // Detail: ChartView si při startu přehrávání nesmí data dosadit znovu sám
+  // (ve vlastním efektu, až po nastavení záběru) — knihovna by při tom držela
+  // pravý okraj a záběr na snímek odskočil. Dostává dál poslední plná data
+  // a zkrácenou sérii grafu předá replay efekt níž, rovnou i se záběrem.
+  const lastFullBarsRef = useRef<{ key: string; bars: CandleKitBar[] } | null>(null);
+  if (!replayActive) lastFullBarsRef.current = { key: replayDataKey, bars: nonReplayBars };
+  const frozenFullBars = centeredTradeView && lastFullBarsRef.current?.key === replayDataKey && lastFullBarsRef.current.bars.length
+    ? lastFullBarsRef.current.bars : null;
+  const chartBars = replayActive ? frozenFullBars ?? replayDataSeedRef.current?.bars ?? [] : nonReplayBars;
 
   useLayoutEffect(() => {
     if (!replayActive || visibleCandles.length === 0) return;
@@ -2721,11 +2746,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     let viewportBeforeUpdate: { from: number; to: number } | null;
     let actualViewportBeforeUpdate: { from: number; to: number } | null;
     let visiblePriceRange: { from: number; to: number } | null;
+    let shownPriceRange: { from: number; to: number } | null = null;
     try {
       chart = controller.getChart();
       const timeScale = chart.timeScale();
       const priceScale = chart.priceScale('right');
       actualViewportBeforeUpdate = timeScale.getVisibleLogicalRange();
+      try { shownPriceRange = priceScale.getVisibleRange(); } catch { shownPriceRange = null; }
       viewportBeforeUpdate = replayViewportTargetRef.current ?? actualViewportBeforeUpdate;
       visiblePriceRange = priceScale.options().autoScale === false
         ? priceScale.getVisibleRange()
@@ -2779,17 +2806,39 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         const transition = replayStartTransitionRef.current;
         replayStartTransitionRef.current = null;
         const replayBars = compactMode ? 90 : 130;
-        const targetRange = transition
-          ? { from: newestLogicalIndex + 6 - transition.logicalSpan, to: newestLogicalIndex + 6 }
-          : { from: Math.max(0, visibleCandles.length - replayBars), to: visibleCandles.length + 6 };
+        const centeredSpan = actualViewportBeforeUpdate ? actualViewportBeforeUpdate.to - actualViewportBeforeUpdate.from : replayBars;
+        const keepView = centeredTradeView && actualViewportBeforeUpdate
+          && newestLogicalIndex >= actualViewportBeforeUpdate.from && newestLogicalIndex <= actualViewportBeforeUpdate.to;
+        const targetRange = centeredTradeView
+          // Detail: graf zůstává stát (obchod uprostřed); kurzor mimo záběr se vycentruje.
+          ? keepView ? actualViewportBeforeUpdate! : { from: newestLogicalIndex - centeredSpan / 2, to: newestLogicalIndex + centeredSpan / 2 }
+          : transition
+            ? { from: newestLogicalIndex + 6 - transition.logicalSpan, to: newestLogicalIndex + 6 }
+            : { from: Math.max(0, visibleCandles.length - replayBars), to: visibleCandles.length + 6 };
         const initialRange = transition
           ? {
             from: newestLogicalIndex - transition.logicalSpan * transition.cutRatio,
             to: newestLogicalIndex + transition.logicalSpan * (1 - transition.cutRatio),
           }
           : actualViewportBeforeUpdate;
-        try { chart.priceScale('right').setAutoScale(true); } catch { /* osa není v grafu */ }
-        animateReplayViewportTo(chart, initialRange, targetRange);
+        try {
+          const priceScale = chart.priceScale('right');
+          if (keepView && shownPriceRange) {
+            // Detail: cenová osa drží rozsah celého obchodu, ať graf při přehrávání stojí.
+            priceScale.setAutoScale(false);
+            priceScale.setVisibleRange(shownPriceRange);
+          } else priceScale.setAutoScale(true);
+        } catch { /* osa není v grafu */ }
+        if (keepView) {
+          // Knihovna po výměně dat drží odsazení od posledního baru, takže by
+          // záběr přeskočil o zkrácený kus. Odsazení nastavené přes
+          // scrollToPosition se použije až při vykreslení — první snímek po
+          // výměně je tak rovnou na dosavadním záběru (ověřeno po snímcích).
+          chart.timeScale().scrollToPosition(targetRange.to - newestLogicalIndex, false);
+          replayViewportTargetRef.current = null;
+        } else {
+          animateReplayViewportTo(chart, centeredTradeView ? actualViewportBeforeUpdate : initialRange, targetRange, centeredTradeView ? 420 : 220);
+        }
         pendingVisibleRangeRef.current = null;
         expandingWindowRef.current = false;
         replayPriceRangeTargetRef.current = null;
@@ -2847,6 +2896,25 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       );
       replayViewportTargetRef.current = nextRange;
       chartRootRef.current?.setAttribute('data-replay-logical-range', `${nextRange.from}:${nextRange.to}`);
+      // Detail: graf stojí a svíčky přibývají na místě. Posune se, až když
+      // kurzor dojede k pravému okraji — plynule, s kurzorem kousek před okrajem.
+      if (centeredTradeView && actualViewportBeforeUpdate) {
+        // Záměr (i cíl rozběhnuté animace), ne posun o nové bary.
+        const base = viewportBeforeUpdate;
+        const newest = visibleCandles.length - 1;
+        const margin = 3;
+        const target = newest > base.to - margin
+          ? { from: base.from + (newest - (base.to - margin)), to: newest + margin }
+          : base;
+        if (target.from !== actualViewportBeforeUpdate.from || target.to !== actualViewportBeforeUpdate.to) {
+          animateReplayViewportTo(chart, actualViewportBeforeUpdate, target, 260);
+        } else {
+          chart.timeScale().setVisibleLogicalRange(target);
+          replayViewportTargetRef.current = null;
+        }
+        chartRootRef.current?.setAttribute('data-replay-update-mode', 'incremental-centered');
+        return;
+      }
     }
 
     const applyLatestReplayView = () => {
@@ -2885,7 +2953,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       chartRootRef.current?.removeAttribute('data-replay-price-range');
     }
     chartRootRef.current?.setAttribute('data-replay-update-mode', 'incremental');
-  }, [animateReplayViewportTo, compactMode, replayActive, replayCursorTime, timeframe, visibleCandles]);
+  }, [animateReplayViewportTo, centeredTradeView, compactMode, replayActive, replayCursorTime, timeframe, visibleCandles]);
   const drawingOptions = useMemo(() => ({
     storageKey: `alphatrade:candlekit:${trade.id}:${drawingScope || timeframe}`,
   }), [drawingScope, trade.id, timeframe]);
@@ -2900,10 +2968,29 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     }
     try {
       const chart = api.controller.getChart();
-      chart.priceScale('right').setAutoScale(true);
+      // Při přehrávání v detailu drží osa rozsah celého obchodu — nepřepočítávat.
+      if (!(centeredTradeView && replayActive)) chart.priceScale('right').setAutoScale(true);
       const context = CONTEXT_BARS[timeframe];
       const entryIndex = nearestCandleIndex(visibleCandles, asUnix(trade.entryTime || trade.entryDate, entryMs));
       const exitIndex = nearestCandleIndex(visibleCandles, asUnix(trade.timestamp || trade.exitDate, exitMs));
+      if (centeredTradeView) {
+        // Obchod uprostřed a celý vidět; okraje rostou s délkou obchodu
+        // (minimum pokryje i 10 min před vstupem, odkud startuje přehrávání).
+        // Během přehrávání už výstup v datech není — vezme se z obchodu.
+        const intervalSeconds = MARKET_TIMEFRAME_MINUTES[timeframe] * 60;
+        const newest = visibleCandles.length - 1;
+        const lastTime = Number(visibleCandles[newest].time);
+        const logicalAt = (unix: number) => unix > lastTime ? newest + (unix - lastTime) / intervalSeconds : nearestCandleIndex(visibleCandles, unix);
+        const entryLogical = logicalAt(asUnix(trade.entryTime || trade.entryDate, entryMs));
+        const exitLogical = logicalAt(asUnix(trade.timestamp || trade.exitDate, exitMs));
+        const from = Math.min(entryLogical, exitLogical);
+        const to = Math.max(entryLogical, exitLogical);
+        const span = to - from;
+        const half = span / 2 + Math.max(15, Math.round(span * 0.5));
+        const mid = (from + to) / 2;
+        chart.timeScale().setVisibleLogicalRange({ from: mid - half, to: mid + half });
+        return;
+      }
       chart.timeScale().setVisibleLogicalRange({
         from: Math.max(0, entryIndex - context.before),
         to: Math.min(visibleCandles.length - 1, Math.max(entryIndex, exitIndex) + context.after),
@@ -2913,7 +3000,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       // one render before the replacement calls onReady. The new chart focuses
       // itself from handleReady, so the stale frame can be ignored safely.
     }
-  }, [visibleCandles, timeframe, trade, entryMs, exitMs]);
+  }, [visibleCandles, timeframe, trade, entryMs, exitMs, centeredTradeView, replayActive]);
 
   // Zaměřit obchod smí jen skutečný požadavek uživatele (čítač se zvýší).
   // `focusTrade` mění identitu s každou změnou svíček, takže efekt se spouštěl
@@ -3705,11 +3792,38 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     chart.timeScale().subscribeVisibleLogicalRangeChange(handleVisibleRangeChange);
     rangeSubscriptionRef.current = { chart, handler: handleVisibleRangeChange };
 
+    // Detail: nový graf (otevření, start/konec přehrávání) vycentrovat ještě
+    // před prvním vykreslením — ChartView dosadí data až po onReady (a tím
+    // nastaví výchozí záběr u konce dat), mikroúloha proběhne po něm, ale před
+    // snímkem. Odložené zaměření níže proběhne stejně.
+    // Šířka grafu se při vytváření ještě pár snímků usazuje a knihovna při
+    // změně velikosti drží pravý okraj — záběr proto krátce po vzniku grafu
+    // obnovujeme při každé změně šířky.
+    // Jen opravdu nový graf — přestavba overlayů volá onReady se stejnou instancí.
+    if (centeredTradeView && chartApiInstanceRef.current !== api) {
+      setViewportSettled(false);
+      const settle = () => { if (apiRef.current === api && !pendingVisibleRangeRef.current) focusTrade(); };
+      queueMicrotask(settle);
+      const timeScale = chart.timeScale();
+      timeScale.subscribeSizeChange(settle);
+      // Dva snímky po odloženém zaměření níže je záběr usazený — graf se ukáže.
+      window.setTimeout(() => window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+        if (apiRef.current === api) setViewportSettled(true);
+      })), 0);
+      window.setTimeout(() => {
+        try { timeScale.unsubscribeSizeChange(settle); } catch { /* graf zanikl */ }
+        setViewportSettled(true);
+      }, 600);
+    }
+
     window.setTimeout(() => {
       const pendingRange = pendingVisibleRangeRef.current;
       if (pendingRange && !replayActive) {
         chart.timeScale().setVisibleRange(pendingRange);
         pendingVisibleRangeRef.current = null;
+      } else if (replayActive && centeredTradeView) {
+        pendingVisibleRangeRef.current = null;
+        focusTrade();
       } else if (replayActive) {
         // A ready callback can run after a replay window replacement. Never
         // let a stale non-replay time range override the logical viewport.
@@ -3767,7 +3881,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       }
       window.setTimeout(() => { expandingWindowRef.current = false; }, 50);
     }, 0);
-  }, [candles, compactMode, displayedEntryFvg, entryFvg, entryMs, entryStructure, exitMs, focusTrade, fvgs, hideDrawingToolbar, olderHistoryLoading, onChartApiReady, onNeedOlderHistory, renderedCandleWindow, replayActive, showEntryFvg, showEntryStructure, structureEvents, timeframe, trade, visibleCandles, visibleFvg, visibleLevels, visibleStructure, isDark]);
+  }, [candles, centeredTradeView, compactMode, displayedEntryFvg, entryFvg, entryMs, entryStructure, exitMs, focusTrade, fvgs, hideDrawingToolbar, olderHistoryLoading, onChartApiReady, onNeedOlderHistory, renderedCandleWindow, replayActive, showEntryFvg, showEntryStructure, structureEvents, timeframe, trade, visibleCandles, visibleFvg, visibleLevels, visibleStructure, isDark]);
 
   // Keep the callback given to the chart stable even though replay inputs
   // change on every candle. The imperative body still sees the newest data via
@@ -3823,19 +3937,25 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 
   useLayoutEffect(() => {
     const api = apiRef.current;
-    if (!api || replayActive || !trade.executionHistory) return;
+    if (!api || (replayActive && !journalHistoryInReplay) || !trade.executionHistory) return;
     const series = api.controller.getSeries() as ISeriesApi<'Candlestick'>;
     // Journal history is loaded as 1m bars; higher timeframes aggregate those
     // same bars and must not hide an absent minute inside an otherwise present bar.
     const coverage = { candles: rawCandles, intervalSeconds: 60 };
+    const tradedRoot = resolveNasdaqFuturesRoot(undefined, trade.symbol || trade.instrument);
     const primitive = createJournalChartPrimitive(trade.executionHistory, visibleCandles,
-      MARKET_TIMEFRAME_MINUTES[timeframe] * 60, api.controller.getChart(), series, coverage);
-    const position = showManagedPositionBoxes ? createJournalPositionPrimitive(trade, api.drawing?.engine.getDefaultStyle() ?? DEFAULT_STYLE,
+      MARKET_TIMEFRAME_MINUTES[timeframe] * 60, api.controller.getChart(), series, coverage,
+      { direction: trade.direction, autoscaleLevels: centeredTradeView,
+        // Hodnota bodu podle kontraktu obchodu, ne podle zobrazeného grafu (MNQ/NQ).
+        pointValue: tradedRoot === 'NQ' ? 20 : 2, instrument: tradedRoot });
+    const position = showManagedPositionBoxes ? createJournalPositionPrimitive(trade,
+      // Barvy boxu jsou sdílené s nástrojem Long/Short Position z backtestu.
+      getDrawingStyleDefault(trade.direction === 'Short' ? 'ShortPosition' : 'LongPosition', DEFAULT_STYLE),
       visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60, chartSettings.trading.orderPriceLabels, coverage) : null;
     if (position) series.attachPrimitive(position);
     series.attachPrimitive(primitive);
     return () => { try { series.detachPrimitive(primitive); if (position) series.detachPrimitive(position); } catch { /* Chart already disposed. */ } };
-  }, [chartApiEpoch, replayActive, trade, timeframe, visibleCandles, rawCandles, showManagedPositionBoxes, chartSettings.trading.orderPriceLabels]);
+  }, [chartApiEpoch, replayActive, journalHistoryInReplay, centeredTradeView, trade, timeframe, visibleCandles, rawCandles, showManagedPositionBoxes, chartSettings.trading.orderPriceLabels]);
 
   useLayoutEffect(() => {
     const engine = apiRef.current?.drawing?.engine;
@@ -3956,6 +4076,11 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       chart.applyOptions({ ...rest, timeScale: timeScaleRest });
       series.applyOptions(chartSeriesOptions(chartSettings));
       // Pravý okraj hýbe výřezem, proto se sahá jen na skutečnou změnu.
+      // Nový graf ho má už z vytvoření — opakované nastavení by záběr
+      // (např. vycentrovaný obchod) odhodilo na konec dat.
+      if (appliedMarginRightRef.current !== rightOffset && chart.timeScale().options().rightOffset === rightOffset) {
+        appliedMarginRightRef.current = rightOffset ?? null;
+      }
       if (appliedMarginRightRef.current !== rightOffset) {
         appliedMarginRightRef.current = rightOffset ?? null;
         chart.timeScale().applyOptions({ rightOffset });
@@ -4395,10 +4520,15 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       }}
     >
       <ChartView
-        key={replayActive
+        key={centeredTradeView
+          // Detail: jeden graf pro zobrazení i přehrávání — bez nového grafu
+          // při startu/konci přehrávání záběr neodskočí.
+          ? `overlay-v2:${trade.id}:${timeframe}:detail`
+          : replayActive
           ? `overlay-v2:${trade.id}:${timeframe}:replay`
           : `overlay-v2:${trade.id}:${timeframe}:${renderedCandleWindow.start}:${renderedCandleWindow.end}`}
         data={chartBars}
+        style={centeredTradeView ? { opacity: viewportSettled ? 1 : 0, transition: viewportSettled ? 'opacity 140ms ease-out' : 'none' } : undefined}
         theme={chartTheme}
         showVolume={false}
         autoFit={false}

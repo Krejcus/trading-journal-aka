@@ -39,10 +39,9 @@ import {
 import { Trade } from '../types';
 import {
   aggregateCandles,
-  loadMarketCandles,
+  loadTradeMarketCandles,
   marketDataSchemaForTimeframe,
   marketDataWindowForEntry,
-  resolveMarketSymbol,
   updateReplayAnalysisAccumulator,
   type MarketCandle,
   type MarketDataSchema,
@@ -541,10 +540,12 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
     }
     let cancelled = false;
     const { start, end } = marketDataWindowForEntry(context.entryMs);
-    const symbol = resolveMarketSymbol(config.root, context.trade.symbol || context.trade.instrument);
+    const entryFill = context.trade.executionHistory?.fills.filter(fill => fill.role === 'entry').sort((a, b) => a.at - b.at)[0];
     setLoading(true);
     setError(null);
-    loadMarketCandles({ symbol, start, end })
+    // Obchod bez uloženého kontraktu ověří cenou vstupu, že svíčky patří jeho kontraktu (rollover).
+    loadTradeMarketCandles({ root: config.root, tradeSymbol: context.trade.symbol || context.trade.instrument, start, end,
+      entryMs: entryFill?.at ?? context.entryMs, entryPrice: entryFill?.price ?? context.trade.entryPrice })
       .then(response => {
         if (!cancelled) setRawCandles(response.candles);
       })
@@ -555,7 +556,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [config.root, context.backtestSession?.id, context.entryMs, context.initialCandles, context.initialRoot, context.trade.instrument, context.trade.symbol, sessionCandles]);
+  }, [config.root, context.backtestSession?.id, context.entryMs, context.initialCandles, context.initialRoot, context.trade.instrument, context.trade.symbol, context.trade.entryPrice, context.trade.executionHistory, sessionCandles]);
 
   // Older session context is intentionally lazy. Eagerly requesting another
   // full minute-data segment for every panel/root doubled the initial MNQ + NQ

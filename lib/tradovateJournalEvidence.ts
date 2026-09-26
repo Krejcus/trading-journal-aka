@@ -68,6 +68,9 @@ export interface JournalProtectionEvent {
   status: 'confirmed' | 'pending' | 'rejected' | 'cancelled' | 'uncertain';
   operation?: 'new' | 'modify' | 'cancel';
   reason?: string;
+  /** SL/TP přidaný během obchodu samostatnou objednávkou (ne bracket ani
+   * kopírka). Ukazuje se v grafu, ale nepočítá se do původního rizika. */
+  source?: 'standalone';
 }
 export interface JournalFill {
   id: string;

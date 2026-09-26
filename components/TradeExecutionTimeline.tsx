@@ -27,7 +27,7 @@ export default function TradeExecutionTimeline({ history, isDark, candleCoverage
     {history.position?.status === 'incomplete' && <p className="mb-2 text-slate-500">Průběh pozice není úplný. Poslední zaznamenaný výstup nepovažujeme za potvrzené uzavření.</p>}
     {history.fees == null && <p className="mb-2 text-slate-500">Poplatky nejsou úplné; čisté P&L proto zatím neuvádíme.</p>}
     {history.gaps.length > 0 && <p className="mb-2 text-slate-500">Část událostí může chybět kvůli výpadku záznamu. Čáry přes výpadek nepokračují.</p>}
-    <p className="mb-2 text-[var(--text-secondary)]">Box: první doložené SL/TP vůči prvnímu vstupu. Čáry: potvrzené změny. Tečky: plnění.</p>
+    <p className="mb-2 text-[var(--text-secondary)]">Box: první doložené SL/TP vůči prvnímu vstupu. Čáry: potvrzené změny. Šipky: plnění (najetím myší detail).</p>
     {outsideCandles > 0 && <p className="mb-2 text-amber-500">Události mimo načtené svíčky: {outsideCandles}. V grafu je neposouváme na jinou svíčku; přesné časy zůstávají níže.</p>}
     <div className="space-y-1">
       {groups.map(group => <details key={`${group.at}:${group.kind}`} className={`rounded-lg border ${border} px-2 py-1`}>

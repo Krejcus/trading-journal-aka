@@ -20,7 +20,10 @@ export function journalPositionWrite(position: JournalAccountPosition | PendingJ
   const journalAccountId = pending && ['invalid-journal-account', 'account-link-conflict', 'account-not-linked'].includes(position.reason)
     ? null : position.journalAccountId ?? null;
   const durationMinutes = row.exitAt == null ? 0 : (row.exitAt - row.entryAt) / 60_000;
-  const original = row.history.protection.filter(event => event.status === 'confirmed' && event.operation === 'new');
+  // Samostatně přidaný SL/TP se za původní počítá jen, když vznikl hned se
+  // vstupem (do 2 s) — jinak by pozdější stop na BE vyrobil nulové riziko a R.
+  const original = row.history.protection.filter(event => event.status === 'confirmed' && event.operation === 'new'
+    && (event.source !== 'standalone' || event.at <= row.entryAt + 2_000));
   return {
     positionId: row.id, externalAccountId: row.accountId, journalAccountId,
     status: pending ? 'pending' : 'confirmed', pendingReason: pending ? position.reason : null, history: row.history,

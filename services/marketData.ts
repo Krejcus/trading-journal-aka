@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 import { get as idbGet, getMany as idbGetMany, setMany as idbSetMany } from 'idb-keyval';
 
 import type { MarketCandle, MarketCandleResponse, MarketDataSchema } from './marketDataCalculations';
+import { priceDistanceFromCandle, quarterlyContractsAround, resolveMarketSymbol } from './marketDataCalculations';
 export * from './marketDataCalculations';
 
 const requestCache = new Map<string, Promise<MarketCandleResponse>>();
@@ -274,4 +275,40 @@ export async function loadMarketCandles(params: {
     requestCache.delete(cacheKey);
     throw error;
   }
+}
+
+/** Cena vstupu, která je od svíčky dál než tohle, patří jinému kontraktu. */
+const CONTRACT_MISMATCH_POINTS = 10;
+
+/**
+ * Svíčky pro graf obchodu. Obchod bez uloženého kontraktu jde na kontinuální
+ * `.v.0` (objemový lídr). V týdnu rolloveru ale obchod mohl proběhnout na
+ * druhém kontraktu — pak by box, šipky i čáry ležely stovky bodů mimo graf.
+ * Když cena vstupu do svíčky nesedí, zkusí se aktuální a příští čtvrtletní
+ * kontrakt a vezme se ten, kterému cena odpovídá.
+ */
+export async function loadTradeMarketCandles(params: {
+  root: 'MNQ' | 'NQ';
+  tradeSymbol?: string;
+  start: Date;
+  end: Date;
+  entryMs: number;
+  entryPrice?: number | null;
+}): Promise<MarketCandleResponse> {
+  const symbol = resolveMarketSymbol(params.root, params.tradeSymbol);
+  const primary = await loadMarketCandles({ symbol, start: params.start, end: params.end });
+  const price = Number(params.entryPrice);
+  if (!symbol.endsWith('.v.0') || !Number.isFinite(price)) return primary;
+  const distance = priceDistanceFromCandle(primary.candles, params.entryMs, price);
+  if (distance == null || distance <= CONTRACT_MISMATCH_POINTS) return primary;
+  let best: { response: MarketCandleResponse; distance: number } = { response: primary, distance };
+  for (const contract of quarterlyContractsAround(params.root, params.entryMs)) {
+    try {
+      const response = await loadMarketCandles({ symbol: contract, start: params.start, end: params.end });
+      const candidate = priceDistanceFromCandle(response.candles, params.entryMs, price);
+      if (candidate != null && candidate < best.distance) best = { response, distance: candidate };
+      if (candidate === 0) break;
+    } catch { /* kontrakt bez dat: zůstane kontinuální řada */ }
+  }
+  return best.response;
 }

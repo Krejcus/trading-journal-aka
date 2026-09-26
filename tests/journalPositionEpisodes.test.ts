@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildJournalPositionEpisodes } from '../lib/journalPositionEpisodes';
+import { journalPositionWrite } from '../lib/journalTradeFacts';
 import { journalObservation, type JournalEntityType, type JournalEvidence } from '../lib/tradovateJournalEvidence';
 
 const origin = Date.parse('2026-09-12T10:00:00Z');
@@ -154,5 +155,64 @@ describe('position episodes from observed account exposure', () => {
     f.pair(1, 10, 11, 1);
     const withoutFees = f.evidence.filter(row => row.entityType !== 'fillfee');
     expect(buildJournalPositionEpisodes(withoutFees).episodes[0].history).toMatchObject({ grossPnl: 20, fees: null, netPnl: null });
+  });
+});
+
+describe('SL/TP přidané během obchodu samostatnou objednávkou', () => {
+  // Objednávka + její verze potvrzená brokerem (New/Modify) v čase `at`.
+  const protective = (f: ReturnType<typeof fixture>, order: number, side: 'Buy' | 'Sell', type: 'Stop' | 'Limit', quantity: number) => {
+    let version = order * 10;
+    f.add('order', { id: order, accountId: 1, contractId: 1, action: side }, 0);
+    return (price: number, at: number, commandType: 'New' | 'Modify' = 'New') => {
+      const id = ++version;
+      f.add('orderversion', { id, orderId: order, orderType: type, orderQty: quantity, ...(type === 'Stop' ? { stopPrice: price } : { price }) }, at);
+      f.add('command', { id, orderId: order, commandType, timestamp: new Date(origin + at).toISOString() }, at);
+      f.add('executionreport', { id: id + 5000, commandId: id, orderId: order, execType: commandType === 'New' ? 'New' : 'Replaced',
+        timestamp: new Date(origin + at).toISOString() }, at);
+    };
+  };
+  const long3 = () => {
+    const f = fixture(); f.flat();
+    f.fill(10, 'Buy', 3, 20000, 1000);
+    return f;
+  };
+
+  it('stop přidaný po vstupu a jeho posuny patří k obchodu', () => {
+    const f = long3();
+    const stop = protective(f, 50, 'Sell', 'Stop', 3);
+    stop(19980, 60_000); stop(19990, 120_000, 'Modify');
+    f.fill(51, 'Sell', 3, 19990, 180_000); f.pair(1, 10, 51, 3, 180_000);
+    const [episode] = buildJournalPositionEpisodes(f.evidence).episodes;
+    const levels = episode.history.protection.filter(event => event.status === 'confirmed').map(event => [event.kind, event.price, event.source]);
+    expect(levels).toEqual([['sl', 19980, 'standalone'], ['sl', 19990, 'standalone']]);
+    expect(episode.history.issues).not.toContain('protection-history-unavailable');
+  });
+
+  it('limit nad longem je TP', () => {
+    const f = long3();
+    protective(f, 60, 'Sell', 'Limit', 3)(20050, 30_000);
+    const [episode] = buildJournalPositionEpisodes(f.evidence).episodes;
+    expect(episode.history.protection.map(event => [event.kind, event.price])).toEqual([['tp', 20050]]);
+  });
+
+  it('do původního SL (riziko, R) se počítá jen stop zadaný hned se vstupem', () => {
+    const late = long3();
+    protective(late, 50, 'Sell', 'Stop', 3)(19990, 60_000);
+    const [lateEpisode] = buildJournalPositionEpisodes(late.evidence).episodes;
+    expect(journalPositionWrite({ ...lateEpisode, journalAccountId: 'j' }).facts.stopLoss).toBeUndefined();
+    const quick = long3();
+    protective(quick, 50, 'Sell', 'Stop', 3)(19980, 1_800);
+    const [quickEpisode] = buildJournalPositionEpisodes(quick.evidence).episodes;
+    expect(journalPositionWrite({ ...quickEpisode, journalAccountId: 'j' }).facts.stopLoss).toBe(19980);
+  });
+
+  it('stop na víc kusů než pozice (stop-and-reverse), na stejné straně nebo z doby před vstupem se nepřiřadí', () => {
+    const f = fixture(); f.flat();
+    protective(f, 70, 'Sell', 'Stop', 3)(19950, 500);
+    f.fill(10, 'Buy', 3, 20000, 1000);
+    protective(f, 71, 'Sell', 'Stop', 5)(19980, 60_000);
+    protective(f, 72, 'Buy', 'Stop', 3)(20020, 60_000);
+    const [episode] = buildJournalPositionEpisodes(f.evidence).episodes;
+    expect(episode.history.protection).toEqual([]);
   });
 });
