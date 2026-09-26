@@ -45,6 +45,10 @@ import {
   type MarketCandle,
   type MarketTimeframe,
 } from '../services/marketData';
+import DetailIndicatorMenu from './DetailIndicatorMenu';
+import { onChartAppearanceScopeBroadcast } from '../services/chartAppearanceScope';
+import { detailIndicatorSettings, type DetailIndicatorToggles } from '../services/chartIndicatorSettings';
+import { detailIndicatorStyleSnapshot, readDetailIndicatorToggles, writeDetailIndicatorToggles } from '../services/detailIndicators';
 import { loadTradeChartCandles, loadTradeChartHistory, tradeChartDataAvailable, tradeChartTiming } from '../services/tradeChartData';
 import { ALPHATRADE_CHART_STYLE as chartStyle } from '../services/chartVisualStyle';
 import { formatNqMnqTickPrice } from '../services/chartPriceTick';
@@ -165,6 +169,23 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   const [fullHistory, setFullHistory] = useState(!detail);
   const [loadedSymbol, setLoadedSymbol] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  // Plná historie je v grafu (levely PDH/PDL/PWH a VWAP z ní počítají).
+  const [historyReady, setHistoryReady] = useState(!detail);
+
+  // Indikátory v detailu: jedno menu, platí pro všechny obchody. Styly jen
+  // čte (snapshot z backtestu), nikdy nesahá na otevřenou backtest session.
+  const [detailIndicators, setDetailIndicators] = useState<DetailIndicatorToggles>(readDetailIndicatorToggles);
+  const changeDetailIndicators = (next: DetailIndicatorToggles) => { setDetailIndicators(next); writeDetailIndicatorToggles(next); };
+  // Styl je po uživatelích a přihlášení se při načtení stránky teprve ověřuje —
+  // po jeho vyřešení (a po změně session) se snapshot přečte znovu.
+  const [indicatorStyleVersion, setIndicatorStyleVersion] = useState(0);
+  useEffect(() => onChartAppearanceScopeBroadcast(() => setIndicatorStyleVersion(value => value + 1)), []);
+  // Znovu i při každém návratu na graf (styl mohl být mezitím uložen v backtestu).
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- verze = pokyn přečíst znovu
+  const indicatorStyle = useMemo(() => detailIndicatorStyleSnapshot(), [indicatorStyleVersion, revealKey]);
+  const indicatorOverride = useMemo(() => detailIndicatorSettings(indicatorStyle, detailIndicators), [indicatorStyle, detailIndicators]);
+  const levelsWanted = detailIndicators.levels || detailIndicators.vwap;
+  useEffect(() => { if (detail && levelsWanted) setFullHistory(true); }, [detail, levelsWanted, trade.id]);
 
   // ── Přehrávání obchodu (jen v detailu) ─────────────────────────────────
   // Kurzor = čas otevření poslední odkryté 1m svíčky; null = celý obchod.
@@ -281,7 +302,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
     setRawCandles([]);
     setEstimatedCostUsd(null);
     setLoadedSymbol(null);
-    if (detail) setFullHistory(false);
+    if (detail) { setFullHistory(levelsWanted); setHistoryReady(false); }
     if (!tradeChartDataAvailable(timing)) {
       setError({ code: 'data-not-yet-historical', message: 'Databento historical feed zpřístupní tento obchod přibližně 24 hodin po trhu.' });
       setLoading(false);
@@ -310,7 +331,9 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
     let cancelled = false;
     setHistoryLoading(true);
     loadTradeChartHistory(loadedSymbol, timing).then(response => {
-      if (!cancelled && response.candles.length >= rawCandlesRef.current.length) setRawCandles(response.candles);
+      if (cancelled) return;
+      if (response.candles.length >= rawCandlesRef.current.length) setRawCandles(response.candles);
+      setHistoryReady(true);
     }).catch(() => { /* graf zůstane se seancí */ }).finally(() => { if (!cancelled) setHistoryLoading(false); });
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- jednou po přepnutí na plnou historii
@@ -765,6 +788,8 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
         <span className={`text-[12px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{root}</span>
         <span className="ml-1.5 whitespace-nowrap text-[11px] font-semibold text-slate-500">1m · CME</span>
         <span className="flex-1" />
+        <DetailIndicatorMenu isDark={isDark} value={detailIndicators} onChange={changeDetailIndicators}
+          historyLoading={levelsWanted && !historyReady} className={detailButton} />
         <button type="button" className={detailButton} onClick={() => setFocusRequest(value => value + 1)} title="Vycentrovat graf na obchod" aria-label="Vycentrovat na obchod">
           <LocateFixed size={13} /> <span className="hidden sm:inline">Obchod</span>
         </button>
@@ -782,9 +807,11 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
             timeframe={timeframe}
             entryMs={entryMs}
             exitMs={exitMs}
-            showFvg={false}
-            showLevels={false}
-            showStructure={false}
+            showFvg={detailIndicators.fvg}
+            // Levely a VWAP až s plnou historií — z neúplné by PDH/PDL lhaly.
+            showLevels={levelsWanted && historyReady}
+            showStructure={detailIndicators.structure}
+            indicatorSettingsOverride={indicatorOverride}
             isDark={isDark}
             compactMode
             hideDrawingToolbar

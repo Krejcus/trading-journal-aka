@@ -3,6 +3,7 @@ import { get as idbGet, getMany as idbGetMany, setMany as idbSetMany } from 'idb
 
 import type { MarketCandle, MarketCandleResponse, MarketDataSchema } from './marketDataCalculations';
 import { priceDistanceFromCandle, quarterlyContractsAround, resolveMarketSymbol } from './marketDataCalculations';
+import { requestCandleStore } from './candleStoreClient';
 export * from './marketDataCalculations';
 
 const requestCache = new Map<string, Promise<MarketCandleResponse>>();
@@ -112,7 +113,7 @@ const parseCandleRows = (rows: unknown): MarketCandle[] => {
 };
 
 /** Jeden síťový request. `no-data` je tady legitimní odpověď (víkend, svátek). */
-const fetchCandleRange = async (
+const fetchLegacyCandleRange = async (
   symbol: string,
   schema: MarketDataSchema,
   startMs: number,
@@ -133,6 +134,45 @@ const fetchCandleRange = async (
     coveredThroughMs: Math.min(endMs, typeof data?.end === 'string' && Number.isFinite(Date.parse(data.end)) ? Date.parse(data.end) : Date.now() - HISTORICAL_DELAY_MS),
     estimatedCostUsd: finiteNumber(data?.estimatedCostUsd) ?? 0,
     sourceSymbol: typeof data?.sourceSymbol === 'string' ? data.sourceSymbol : undefined,
+  };
+};
+
+// Soukromý sklad svíček (docs/CANDLE_STORE_SERVER_HANDOFF.md). Když nepatří
+// tomuto uživateli, do konce relace se už nezkouší; když není dosažitelný
+// (i nenasazená funkce = CORS chyba), pár minut ne.
+let candleStoreDisabledUntil = 0;
+const STORE_RETRY_AFTER_UNREACHABLE_MS = 5 * 60_000;
+const candleStoreBypassed = () => {
+  try { return window.localStorage.getItem('at:dev:candle-store') === 'off'; } catch { return false; }
+};
+
+/** Sklad svíček, při jeho nedostupnosti dosavadní `market-candles`. */
+const fetchCandleRange = async (
+  symbol: string,
+  schema: MarketDataSchema,
+  startMs: number,
+  endMs: number,
+): Promise<{ candles: MarketCandle[]; estimatedCostUsd: number; sourceSymbol?: string; coveredThroughMs: number }> => {
+  if (Date.now() < candleStoreDisabledUntil || candleStoreBypassed()) return fetchLegacyCandleRange(symbol, schema, startMs, endMs);
+  const outcome = await requestCandleStore(
+    body => supabase.functions.invoke('market-candle-store', { body }),
+    { symbol, schema, start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString() },
+  );
+  if (outcome.kind === 'fallback') {
+    if (outcome.disable === 'session') candleStoreDisabledUntil = Infinity;
+    else if (outcome.disable === 'temporary') candleStoreDisabledUntil = Date.now() + STORE_RETRY_AFTER_UNREACHABLE_MS;
+    return fetchLegacyCandleRange(symbol, schema, startMs, endMs);
+  }
+  if (outcome.kind === 'no-data') return { candles: [], estimatedCostUsd: 0, coveredThroughMs: Math.min(endMs, Date.now() - HISTORICAL_DELAY_MS) };
+  if (outcome.kind === 'error') throw new MarketDataError(outcome.message, outcome.code);
+  const data = outcome.data;
+  const candles = parseCandleRows(data.candles);
+  candles.sort((a, b) => a.time - b.time);
+  return {
+    candles,
+    coveredThroughMs: Math.min(endMs, typeof data.end === 'string' && Number.isFinite(Date.parse(data.end)) ? Date.parse(data.end) : Date.now() - HISTORICAL_DELAY_MS),
+    estimatedCostUsd: finiteNumber(data.estimatedCostUsd) ?? 0,
+    sourceSymbol: typeof data.sourceSymbol === 'string' ? data.sourceSymbol : undefined,
   };
 };
 

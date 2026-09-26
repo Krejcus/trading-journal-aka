@@ -273,13 +273,16 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
       if (hoveredLine && lineT > 0) {
         const value = protectionValueAt(history, hoveredLine.price, hoveredLine.at, options.pointValue ?? 2, options.direction);
         const name = hoveredLine.kind === 'sl' ? 'SL' : 'TP';
-        // Posun: o kolik se úroveň pohnula ve směru obchodu (+ = ve prospěch).
+        // Posun: hodnota NOVÉ úrovně pro tehdejší pozici (stejně jako na
+        // vodorovné čáře — jinak „+20 b.“ u SL, který je pořád v mínusu, mate)
+        // a na konci samotný posun ve směru obchodu (+ = ve prospěch).
         const moved = hoveredLine.nextPrice != null
           ? protectionValueAt(history, hoveredLine.nextPrice, hoveredLine.at, options.pointValue ?? 2, options.direction) : null;
         const text = hoveredLine.nextPrice != null ? [
           `${name} ${priceText(hoveredLine.price)} → ${priceText(hoveredLine.nextPrice)}`,
-          value && moved ? `${signed(moved.points - value.points)} b.` : null,
-          value && moved ? `${signed(moved.usd - value.usd)} $` : null,
+          moved ? `${signed(moved.points)} b.` : null,
+          moved ? `${signed(moved.usd)} $` : null,
+          value && moved ? `posun ${signed(moved.points - value.points)} b.` : null,
           timeText(hoveredLine.at),
         ].filter(Boolean).join(' · ') : [
           `${name} ${priceText(hoveredLine.price)}`,

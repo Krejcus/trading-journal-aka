@@ -3585,3 +3585,7 @@ td.follower-cell { transition: opacity .35s ease; }
 /* Přetočení na začátek přehrávání: clona se natáhne zprava doleva přes budoucí svíčky. */
 @keyframes trade-chart-rewind { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 .trade-chart-rewind { transform-origin: right center; animation: trade-chart-rewind 0.5s cubic-bezier(0.65, 0, 0.35, 1) both; }
+/* Menu lišty přehrávání (Go To, rychlost): vyjede nahoru z tlačítka. */
+@keyframes trade-menu-up-in { from { opacity: 0; transform: translateY(6px) scale(0.96); } to { opacity: 1; transform: none; } }
+.trade-menu-up { transform-origin: 50% 100%; animation: trade-menu-up-in 0.18s cubic-bezier(0.22, 0.61, 0.36, 1) both; }
+@media (prefers-reduced-motion: reduce) { .trade-menu-up { animation: none; } }

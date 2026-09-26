@@ -145,7 +145,8 @@ describe('najetí na čáry SL/TP', () => {
     draw();
     move(150 + 4, 107.5);
     draw();
-    expect(plain(labels[0])).toMatch(/^SL 90,00 → 95,00 · \+5,00 b\. · \+10,00 \$ · /);
+    // Nová úroveň 95 u longu ze 100 = pořád −5 b. / −10 $; posun +5 b. až na konci.
+    expect(plain(labels[0])).toMatch(/^SL 90,00 → 95,00 · −5,00 b\. · −10,00 \$ · posun \+5,00 b\. · /);
   });
 });
 

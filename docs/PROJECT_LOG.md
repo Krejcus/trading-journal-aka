@@ -208,6 +208,75 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-26 — Sekání grafu s indikátory: lineární hledání svíčky (Claude)
+
+- Změřeno v detailu (16 dní historie, přehrávání): struktura 7 fps
+  a 3,5 s blokování ze 4 s, se všemi čtyřmi indikátory úplné zamrznutí
+  (snímek 1,2 s). Příčina: `nearestCandleIndex` v CandleKitTradeChart
+  hledal lineárně a `structureOverlayEvents` ho volá pro každou událost
+  struktury (≈1 960 událostí × 15k svíček) v každém kroku.
+- Oprava: binární hledání v `services/candleSearch.ts` (stejný výsledek
+  vč. remízy → dřívější svíčka; test proti staré lineární verzi na 200
+  náhodných děravých osách). Pomáhá i backtestu. Po opravě se všemi
+  čtyřmi: 246 ms blokování za 6 s, levely 24× ~19 ms (škrcené 4×/s),
+  ostatní výpočty pod 10 ms.
+- Struktura kouká do budoucnosti? Výpočet je kauzální (swing potvrzený
+  následující svíčkou, zlom na zavření svíčky), v přehrávání se událost
+  objeví až po zlomu. Popisek leží v půlce mezi swingem a zlomem, takže ve
+  statickém grafu sedí vlevo od zlomu — může tak působit. Čeká se na
+  konkrétní případ od Filipa.
+- BOS/CHoCH „z budoucnosti“ při přehrávání od začátku: mimo přehrávání se
+  struktura kreslí jako generované kresby `auto-structure-*` z celé série;
+  dřív je smazal nový ChartView při startu přehrávání, detail ho ale drží
+  (stabilní klíč). Oprava: v detailu (`centeredTradeView`) se při
+  zapnutí/vypnutí přehrávání přestaví překryvy (`handleReady`), což `auto-`
+  kresby smaže a v přehrávání je nevytvoří. Ověřeno naživo.
+- Přepínače indikátorů v detailu byly po reloadu pryč: čtení běželo dřív,
+  než se ověřilo přihlášení (jiný klíč než zápis). Přepínače teď bez ID
+  uživatele (volba zobrazení v prohlížeči); styl se znovu přečte po
+  `onChartAppearanceScopeBroadcast`.
+
+### 2026-09-26 — Klient soukromého skladu svíček (Claude)
+
+- `loadMarketCandles` → `fetchCandleRange` zkouší nejdřív
+  `market-candle-store` (Codexův server, zatím NEnasazený), při jeho
+  nedostupnosti dosavadní `market-candles`. Rozhodování v
+  `services/candleStoreClient.ts` podle `docs/CANDLE_STORE_SERVER_HANDOFF.md`:
+  202 store-pending = čekat a opakovat (max 60 s), **nikdy** současně placená
+  záloha; 404 no-data = prázdná řada; 409 = stará cesta (ořízne konec);
+  402/429/400 = chyba bez zálohy; 401/403/404 funkce/503 store-not-configured
+  = stará cesta a sklad do konce relace vypnout.
+- Jiný 503 → jedno automatické opakování po 1 s, pak stará cesta (graf se
+  musí dát otevřít i při rozbitém skladu) — Codex schválil s výhradou: zámek
+  chrání jen souběžné běžné požadavky. Selže-li sklad až po stažení
+  z Databenta, nebo síť bez HTTP odpovědi, záloha může zaplatit tatáž data
+  znovu; jediný nákup je zaručený jen přes 202 store-pending.
+- Zjištění: nenasazená funkce v prohlížeči neprojde CORS → supabase-js vrátí
+  `FunctionsFetchError` bez HTTP odpovědi, ne 404 → stará cesta a sklad
+  5 min nezkoušet. Ověřeno naživo: první nový den +37 ms na neúspěšný
+  pokus, další dny sklad přeskočí. Vypínač `at:dev:candle-store=off`.
+- Databento dnes znovu výkyv: 1 seance 16 s (běžně 4–6 s).
+
+### 2026-09-26 — Indikátory v detailu obchodu (Claude)
+
+- Jedno tlačítko „Indikátory“ v liště detailu (`DetailIndicatorMenu`):
+  Levely, VWAP, FVG, Struktura. Volba platí pro všechny obchody
+  (localStorage `alphatrade:detail-indicators`, po uživateli). VWAP je
+  součást indikátoru levelů — „jen VWAP“ = levely se vším ostatním vypnutým
+  (`detailIndicatorSettings` v `services/chartIndicatorSettings.ts`).
+- Styly jen pro čtení (podmínka Codexe): detail nikdy nečte otevřenou
+  backtest session. Backtest/fullscreen při uložení stylu indikátorů zapíše
+  i „naposledy použitý styl“ (`services/detailIndicators.ts`), styl uložený
+  dřív jen v session se povýší při jejím otevření. CandleKit dostane
+  `indicatorSettingsOverride`: nic neuloží, legenda bez nastavení/odebrání,
+  ignoruje změny z jiných grafů.
+- Levely a VWAP až s plnou historií (PDH/PDL/PWH z neúplných dat by lhaly):
+  zapnutí spustí dotažení 16 dní po načtení seance; do té doby jen FVG
+  a struktura, v menu kolečko. V přehrávání se počítá jen z odkrytých
+  svíček (ověřeno naživo — nic dopředu).
+- Databento: appka povoluje jen `ohlcv-1m` a `ohlcv-1h`; Databento má
+  i sekundové a tickové schéma (~60× víc dat) — pro detail zbytečné.
+
 ### 2026-09-26 — Rychlost grafu v detailu: měření, seance napřed, předstažení (Claude)
 
 - Měřeno na :3000 (dev). Obchod v cache prohlížeče: 1,1 s od kliknutí na
@@ -309,7 +378,8 @@ nenasazovalo, stav je v pracovní složce.
   „plán“ podle prvního příkazu, po uzavření nic). Hodnota bodu podle
   kontraktu obchodu (MNQ 2, NQ 20 $), ne podle zobrazeného grafu.
   Svislý úsek (okamžik posunu) má vlastní zásah a štítek „SL a → b ·
-  ±body · ±USD · čas“ = o kolik posun pomohl/přitížil pro tehdejší velikost;
+  ±body · ±USD · posun ±b. · čas“ — body/USD = hodnota NOVÉ úrovně (jako na
+  vodorovné čáře; dřív tu byl jen posun a „+20 b.“ u SL v mínusu mátlo);
   když je kurzor v jeho výšce do 6 px, vyhrává nad vodorovnými čarami.
 - SL/TP přidané až během obchodu samostatnou objednávkou (ne bracket ani
   kopírka) se přiřadí k pozici (`lib/journalPositionEpisodes.ts`): stop (SL)

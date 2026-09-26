@@ -248,3 +248,61 @@ export const indicatorVisibleOnTimeframe = (
   return visibility.days && visibility.dayFrom <= 1 && visibility.dayTo >= 1;
 };
 
+
+/** Uložené (i starší, neúplné) nastavení doplněné o výchozí hodnoty. */
+export const mergeIndicatorSettings = (saved: string | null): AlphaTradeIndicatorSettings => {
+  const defaults = structuredClone(DEFAULT_INDICATOR_SETTINGS);
+  if (!saved) return defaults;
+  try {
+    const parsed = JSON.parse(saved) as Partial<AlphaTradeIndicatorSettings>;
+    const savedFvg = parsed.fvg;
+    return {
+      fvg: {
+        ...defaults.fvg,
+        ...savedFvg,
+        bullOpacity: savedFvg?.bullOpacity ?? savedFvg?.fillOpacity ?? defaults.fvg.bullOpacity,
+        bearOpacity: savedFvg?.bearOpacity ?? savedFvg?.fillOpacity ?? defaults.fvg.bearOpacity,
+        visibility: { ...defaults.fvg.visibility, ...savedFvg?.visibility },
+      },
+      structure: {
+        ...defaults.structure,
+        ...parsed.structure,
+        visibility: { ...defaults.structure.visibility, ...parsed.structure?.visibility },
+      },
+      levels: {
+        ...defaults.levels,
+        ...parsed.levels,
+        visibility: { ...defaults.levels.visibility, ...parsed.levels?.visibility },
+      },
+    };
+  } catch {
+    return defaults;
+  }
+};
+
+/** Co je v detailu obchodu zapnuté (jedno menu „Indikátory“). */
+export interface DetailIndicatorToggles {
+  levels: boolean;
+  vwap: boolean;
+  fvg: boolean;
+  structure: boolean;
+}
+export const DEFAULT_DETAIL_INDICATORS: DetailIndicatorToggles = { levels: false, vwap: false, fvg: false, structure: false };
+
+/**
+ * Nastavení pro detail: styly z backtestu, ale levely a VWAP (oba patří do
+ * indikátoru levelů) jdou zapnout zvlášť. Samotný VWAP = levely se vším
+ * ostatním vypnutým.
+ */
+export function detailIndicatorSettings(base: AlphaTradeIndicatorSettings, toggles: DetailIndicatorToggles): AlphaTradeIndicatorSettings {
+  const levels = { ...base.levels };
+  if (!toggles.levels) Object.assign(levels, {
+    showAsia: false, showAsiaLines: false, showLondon: false, showLondonLines: false, showNewYork: false, showNewYorkLines: false,
+    showSessionBoxes: false, currentDay: false, priorDay: false, priorWeek: false, dayOpen: false, weekOpen: false,
+    sessionHighLow: false, showOpen: false, showZones: false, showOvernight: false, showCompass: false,
+    showInitialBalance: false, showBiasTable: false,
+  } satisfies Partial<LevelsIndicatorSettings>);
+  levels.showVwap = toggles.vwap;
+  if (!toggles.vwap) Object.assign(levels, { showPrevVwap: false, showDeviations: false } satisfies Partial<LevelsIndicatorSettings>);
+  return { ...base, levels };
+}

@@ -1,8 +1,9 @@
 # Serverový sklad svíček — zadání další fáze
 
-Stav: **návrh k posouzení**, nic se nestaví. Připravil Claude 2026-09-26
-po měření rychlosti grafu; připomínky Codexe zapracované. Stavět až po
-bodech „Před stavbou“.
+Stav: **schváleno ke stavbě jen pro Filipa** (soukromě, žádní další
+uživatelé) — Filip 2026-09-26. Připravil Claude po měření rychlosti grafu;
+připomínky Codexe zapracované. Licence pro vlastní použití prověřená
+(„Před stavbou“ bod 2); zbývá bod 1 (měření) a 3 (volba úložiště).
 
 ## Proč
 
@@ -23,9 +24,18 @@ Režie je pevná na dotaz: edge funkce volá `metadata.get_cost` a pak
 
 ## Cíl
 
-Den 1m svíček (MNQ, NQ, případně konkrétní kontrakty v týdnu rolloveru)
-se stáhne z Databenta **jednou** a všechna zařízení ho pak čtou ze
-serveru. Cache v prohlížeči zůstává první vrstvou.
+Den 1m svíček a hodinová řada (MNQ, NQ, případně konkrétní kontrakty
+v týdnu rolloveru) se stáhne z Databenta **jednou** a všechna zařízení ho
+pak čtou ze serveru. Cache v prohlížeči zůstává první vrstvou.
+
+Největší přínos je v **backtestu**, ne v detailu obchodu: používá stejný
+`loadMarketCandles` (`services/backtestCandleStore.ts`) — dopředu 1m po
+třídenních úsecích pro každý nástroj zvlášť, starší historie po kusech,
+vyšší timeframy z `ohlcv-1h` přes stovky dní. Každý nestažený kus je dnes
+dotaz na Databento (4–6 s) a při rychlém přehrávání přes nové dny naráží na
+limit 12 dotazů/min. Dál: týdenní review v jednom grafu, indikátory
+s vícedenní historií (PDH/PDL, týdenní úrovně), Lab (analýzy přes všechny
+obchody), telefon a starší obchody (IndexedDB vyprší po 30 dnech).
 
 Rychlost ze skladu **není slib** (Codex): zbývá načtení detailu obchodu
 (~0,7 s, 7 dotazů za sebou), výpočet indikátorů a vykreslení. Před
@@ -48,7 +58,10 @@ stavbou změřit každou část zvlášť.
    `MNQZ6` apod.). Graf někdy musí opustit kontinuální `MNQ.v.0` (rollover,
    viz `loadTradeMarketCandles` v `services/marketData.ts`) — sklad musí
    umět oba.
-5. **Klient:** `loadMarketCandles` čte nejdřív IndexedDB, pak sklad, až pak
+5. **Oba schémata:** `ohlcv-1m` (denní kbelíky) i `ohlcv-1h` (backtest
+   HTF, stovky dní; skládat hodinovky z minutových by bylo zbytečně těžké).
+   Stejná pravidla: jen kompletní období, skutečný kontrakt, zámek.
+6. **Klient:** `loadMarketCandles` čte nejdřív IndexedDB, pak sklad, až pak
    Databento (přes server, který den doplní do skladu). Denní kbelíky
    zůstávají v UTC dnech jako dnes.
 
@@ -63,9 +76,24 @@ stavbou změřit každou část zvlášť.
 
 1. Změřit zvlášť: načtení detailu obchodu, čtení ze skladu (prototyp jednoho
    dne), výpočet indikátorů, vykreslení.
-2. **Licence:** ukládání dat Databenta na server a jejich poskytování dalším
-   uživatelům (komerční produkt) může být redistribuce — ověřit v licenci
-   konkrétního datasetu (GLBX.MDP3) a smlouvě dřív, než na tom stavíme.
+2. **Licence** — ověřeno z veřejných stránek 2026-09-26 (Claude), ne právní
+   posudek:
+   - Databento: na historická data (T+1, starší než 24 h) licence
+     potřeba není; výjimka je, když data dál distribuuješ. Práva
+     k redistribuci závisí na datasetu a podmínkách vydavatele (CME);
+     externí distribuce je v ceníku funkce vyššího plánu.
+     (databento.com/blog/introduction-market-data-licensing, databento.com/pricing)
+   - CME: „Historical Information“ = data starší 8 h. Distribuce třetím
+     stranám vyžaduje licenci CME pro historickou distribuci; za Subscriber
+     Feed je od 2021 poplatek 30 000 $ ročně za DCM. Poplatky za jiné typy
+     (např. zobrazení grafů uživatelům appky) se z veřejných zdrojů nepodařilo
+     ověřit — PDF CME blokuje automatické stažení.
+   - Závěr: **soukromý sklad jen pro Filipův účet = vlastní použití
+     historických dat → lze stavět.** Komerční appka pro další uživatele je
+     distribuce CME dat **už dnes** (každý uživatel by bral svíčky přes naši
+     edge funkci a Filipův klíč), se skladem i bez něj → před spuštěním
+     pro další uživatele vyřešit s Databento/CME (licence, nebo vlastní
+     datový účet každého uživatele).
 3. Rozhodnout úložiště (Supabase Storage soukromý bucket vs. tabulka) a
    zámek proti souběžnému stažení.
 
