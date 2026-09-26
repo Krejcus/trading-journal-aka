@@ -151,10 +151,17 @@ const DevLiveCopyFixtureOverview = () => {
   const [participation, setParticipation] = useState(devLiveCopyFixtureParticipation);
   const participationRef = useRef(participation);
   participationRef.current = participation;
+  const transientTried = useRef(new Set<number>());
   const commandAdapter = useMemo(() => ({
     async execute(command: LiveCopyTradingCommand) {
       if (command.type !== 'set-follower-enabled') return undefined;
       await new Promise(resolve => window.setTimeout(resolve, 1200));
+      // Jako živý worker při rychlém přepínání: první pokus u účtu odmítne
+      // přechodnou chybou, aby šlo ověřit automatické opakování v UI.
+      if (!transientTried.current.has(command.accountId)) {
+        transientTried.current.add(command.accountId);
+        throw new Error('Stav se během ověření změnil; přepnutí followera opakuj');
+      }
       const current = participationRef.current.find(item => item.accountId === command.accountId);
       if (!current?.canToggle) throw new Error(`Nepřepnuto: ${current?.blockers.join(' · ') || 'účet nejde přepnout'}`);
       setParticipation(prev => prev.map(item => item.accountId === command.accountId

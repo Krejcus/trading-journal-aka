@@ -2554,7 +2554,7 @@ html.native-shell .live-island-dock { padding-top: env(safe-area-inset-top, 0px)
 }
 .follower-switch[aria-checked="true"] { background: #34d399; }
 .follower-switch[data-locked] { cursor: not-allowed; filter: saturate(.7); opacity: .85; }
-.follower-switch-pending { cursor: progress; }
+.follower-switch-pending { cursor: default; }
 .follower-switch-knob {
   position: absolute;
   top: 2px;

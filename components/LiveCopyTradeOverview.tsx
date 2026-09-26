@@ -1177,6 +1177,37 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     void runCopierTransition(candidate.id, true, () => armAction(candidate));
   };
 
+  /**
+   * Přepnutí followera. Worker bezpečně odmítne, když se během jeho dvojího
+   * čtení změnil stav brokera (typicky při rychlém přepínání více účtů po
+   * sobě) nebo když ještě běží jiný příkaz. Obojí je přechodné: worker při
+   * každém pokusu vše ověří znovu, takže opakování je bezpečné. Hlášku
+   * ukážeme jen při skutečném odmítnutí nebo po posledním pokusu.
+   */
+  const toggleFollower = async (groupId: string, accountId: number, enabled: boolean): Promise<boolean> => {
+    const attempts = 3;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      let message: string | null = null;
+      const ok = await runCommand(
+        { type: 'set-follower-enabled', groupId, accountId, enabled },
+        undefined,
+        reason => { message = reason; },
+      );
+      if (ok) return true;
+      const transient = message == null || /během ověření změnil|Probíhá broker událost/.test(message);
+      if (!transient || attempt === attempts) {
+        setToast({
+          tone: 'error',
+          text: message ?? 'Přepnutí se nepodařilo — zkus to prosím znovu.',
+          accountIds: [accountId],
+        });
+        return false;
+      }
+      await new Promise(resolve => window.setTimeout(resolve, 400 * attempt));
+    }
+    return false;
+  };
+
   const triggerKillSwitch = onEmergencyStop ? async () => {
     try {
       await onEmergencyStop();
@@ -1864,7 +1895,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               tradeCutsByAccount={tradeCutsByAccount}
                               participationByAccount={group.id === executionGroupId ? participationByAccount : EMPTY_PARTICIPATION}
                               onFollowerEnabled={group.id === executionGroupId && commandAdapter
-                                ? (accountId, enabled) => runCommand({ type: 'set-follower-enabled', groupId: group.id, accountId, enabled })
+                                ? (accountId, enabled) => toggleFollower(group.id, accountId, enabled)
                                 : undefined}
                               onVerifyEligibility={verifyAccountEligibility}
                               verifyingAccountId={verifyingAccountId}
