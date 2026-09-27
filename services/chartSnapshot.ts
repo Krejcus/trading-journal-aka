@@ -31,6 +31,10 @@ export const CHART_WORKSPACE_SNAPSHOT_TIMEOUT_MS = 30_000;
 export const captureChartWorkspaceSnapshotDataUrl = async (
   workspace: HTMLElement,
   isDark: boolean,
+  options: {
+    /** Bez ovládání označeného `data-snapshot-hide` (lišty, tlačítka) — tlačítko Snímek. */
+    hideControls?: boolean;
+  } = {},
 ): Promise<string> => {
   if (typeof document !== 'undefined') await document.fonts?.ready;
   const { toPng } = await import('html-to-image');
@@ -55,5 +59,11 @@ export const captureChartWorkspaceSnapshotDataUrl = async (
     // jejich znovuvložení čte cross-origin Google CSS a v localhostu zbytečně
     // vyhazuje SecurityError, i když samotný snapshot následně uspěje.
     skipFonts: true,
+    filter: options.hideControls
+      ? (node: HTMLElement) => !(node instanceof HTMLElement && node.dataset?.snapshotHide != null)
+      : undefined,
   }), timeout]).finally(() => { if (deadline !== undefined) clearTimeout(deadline); });
 };
+
+/** Data URL snímku → Blob pro nahrání ke Snímkům obchodu. */
+export const snapshotDataUrlToBlob = async (dataUrl: string): Promise<Blob> => (await fetch(dataUrl)).blob();

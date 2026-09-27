@@ -42,6 +42,7 @@ export default function TradeReplayBar({ isDark, playing, atEnd, speed, goTo, on
 
   return (
     <div ref={barRef}
+      data-snapshot-hide
       className={`absolute bottom-3 left-1/2 z-30 flex h-10 -translate-x-1/2 items-center gap-0.5 rounded-lg border p-1 shadow-xl backdrop-blur-md ${isDark ? 'border-white/10 bg-[#101720]/95 text-slate-300 shadow-black/40' : 'border-slate-200 bg-white/95 text-slate-700 shadow-slate-900/10'}`}
       role="toolbar"
       aria-label="Přehrávání obchodu"

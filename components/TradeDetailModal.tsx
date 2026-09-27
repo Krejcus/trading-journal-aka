@@ -486,6 +486,17 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
         setShotAttach({ status: 'saved' });
         window.setTimeout(() => setShotAttach(current => current?.status === 'saved' ? null : current), 1800);
     };
+    // Snímek z grafu (tlačítko v detailu/fullscreenu): stejné uložení jako
+    // vložený obrázek, ale graf zůstane otevřený — stav ukazuje tlačítko.
+    const saveChartSnapshot = async (image: Blob): Promise<boolean> => {
+        if (!onAttachScreenshotFile) return false;
+        const tradeId = String(activeTrade.id);
+        const url = await onAttachScreenshotFile(image);
+        if (!url) return false;
+        setAttachedShots(previous => ({ tradeId, urls: [url, ...(previous.tradeId === tradeId ? previous.urls : [])] }));
+        setActiveImageIndex(0);
+        return true;
+    };
     const attachShotRef = useRef(attachShot);
     attachShotRef.current = attachShot;
 
@@ -1019,7 +1030,8 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                                     {chartTrade.pnlEstimated && <span className="text-amber-500">Odhad podle leadera</span>}
                                                 </div>}
                                                 <div className="relative flex-1 min-h-0"><AccountExecutionChart trade={chartTrade} isDark={isDark} variant="detail" revealKey={chartRevealKey} verifiedDetail={currentJournal?.rows?.includes(chartTrade) ? chartTrade : undefined}
-                                                    chartNotes={chartNotes} onChartNotesChange={onSaveChartNotes ? next => { void saveChartNotes(next); } : undefined} /></div>
+                                                    chartNotes={chartNotes} onChartNotesChange={onSaveChartNotes ? next => { void saveChartNotes(next); } : undefined}
+                                                    onSaveSnapshot={onAttachScreenshotFile ? saveChartSnapshot : undefined} /></div>
                                             </> : <p className="p-6 text-xs text-slate-500">Podklady vybraných účtů nejsou načtené.</p>}
                                         </React.Suspense>
                                     )}

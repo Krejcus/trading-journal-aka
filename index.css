@@ -3626,3 +3626,14 @@ body.chart-note-dragging * {
   cursor: grabbing !important;
   user-select: none !important;
 }
+
+/* Tlačítko Snímek: krátké bliknutí přes graf po vyfocení. */
+.chart-snapshot-flash {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  background: #ffffff;
+  animation: chart-snapshot-flash 0.45s ease-out forwards;
+}
+@keyframes chart-snapshot-flash { from { opacity: 0.55; } to { opacity: 0; } }

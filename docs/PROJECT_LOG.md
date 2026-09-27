@@ -208,6 +208,22 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-27 — Tlačítko Snímek v grafu obchodu (Claude)
+
+- Detail i fullscreen obchodu mají „Snímek“ (`components/ChartSnapshotButton.tsx`):
+  vyfotí graf, jak je vidět (šipky, SL/TP, indikátory, poznámky; fullscreen
+  celé rozložení grafů), krátce blikne a uloží obrázek ke Snímkům obchodu
+  stejnou cestou jako vložený screenshot (`onAttachScreenshotFile`), graf
+  zůstane otevřený. Stav na tlačítku (Ukládám… / Uloženo / chyba).
+- Focení: `captureChartWorkspaceSnapshotDataUrl(…, { hideControls })` —
+  html-to-image bez prvků `data-snapshot-hide` (přehrávací lišta detailu,
+  legenda indikátorů, Bar Replay lišta fullscreenu). Backtest beze změny.
+- Ověřeno: focení detailu 0,4 s, 1230×1100 px, bez ovládání; tlačítko ve
+  fullscreenu. Nahrání testováno nebylo (uklidit testovací snímek z
+  Tradovate obchodu nejde) — jde přes existující cestu vložení snímku.
+- Pozn.: ruční snímky jdou do bucketu `trade-images` přes getPublicUrl
+  (veřejné URL) — dotaz na Codexe spolu s návrhem auto snímků z našeho grafu.
+
 ### 2026-09-27 — Šipky jako v TradingView, vteřiny a přesné držení (Claude)
 
 - Šipky plnění stojí nad/pod svíčkou (nákup pod low hrotem nahoru, prodej
@@ -219,6 +235,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Detail: Vstup/Výstup na vteřiny, Držení z přesných časů
   (`lib/holdDuration.ts`: „54 s“, „3 min 12 s“, „1 h 05 min“) místo
   zaokrouhlených „0 min“.
+- Cenová osa v detailu: jen vstup a výstup, bez popisků, v barvě šipek
+  (short vstup červeně, výstup modře). SL/TP na ose ne (Filipovo přání) —
+  ani štítky position boxu (`priceLabels` vypnuté v `centeredTradeView`).
+  Dřív tam byl vstup vždy modře a SL bez popisku (30 900 = SL zadaný až
+  během obchodu, proto R „bez stopu“). Po najetí na šipku tenká čára od
+  plnění k ose a štítek ceny na ose (priceAxisViews).
 - Zvětšení krátkých obchodů v grafu zatím ne — se šipkami nad/pod svíčkou
   je vstup i výstup ve stejné minutě vidět; vteřinová data (Databento
   ohlcv-1s) jen případně později přes Codexe.

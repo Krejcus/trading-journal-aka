@@ -23,14 +23,14 @@ import {
 import { Activity, AlertTriangle, BarChart3, LocateFixed, Loader2, Maximize2, Minimize2, RefreshCw } from 'lucide-react';
 import TradeProgress from './TradeProgress';
 import ChartNotesLayer, { type ChartNoteAddRequest } from './ChartNotesLayer';
+import ChartSnapshotButton from './ChartSnapshotButton';
+import { captureChartWorkspaceSnapshotDataUrl } from '../services/chartSnapshot';
 import { chartNotesOf, type ChartNote } from '../lib/chartNotes';
 import TradeReplayBar, { type TradeReplayGoTo, type TradeReplaySpeed } from './TradeReplayBar';
-import { historyAt, protectionLevelsAt, tradeTimelineEvents } from '../lib/tradeReplay';
+import { historyAt, tradeTimelineEvents } from '../lib/tradeReplay';
 import { candleReplayPath, partialReplayCandle, type PathPoint } from '../lib/candleReplayPath';
-import { JOURNAL_SL_COLOR, JOURNAL_TP_COLOR } from '../services/journalChartPrimitive';
+import { JOURNAL_BUY_COLOR, JOURNAL_SELL_COLOR } from '../services/journalChartPrimitive';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
-import { DEFAULT_STYLE } from '@getcandlekit/charts';
-import { journalPositionDrawing } from '../services/journalPositionDrawing';
 import { Trade } from '../types';
 import CandleKitTradeChart from './CandleKitTradeChart';
 import AlphaTradeChartWorkspace from './AlphaTradeChartWorkspace';
@@ -70,6 +70,8 @@ interface TradeMarketChartProps {
   chartNotes?: readonly ChartNote[];
   /** Detail: bez něj jsou poznámky jen ke čtení. */
   onChartNotesChange?: (notes: ChartNote[]) => void;
+  /** Tlačítko Snímek (detail i fullscreen): uloží obrázek ke snímkům obchodu. */
+  onSaveSnapshot?: (image: Blob) => Promise<boolean>;
 }
 
 /** Krok přehrávání = jedna 1m svíčka; při 1x trvá půl vteřiny. */
@@ -145,7 +147,7 @@ const focusChartOnTrade = (
   });
 };
 
-const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, variant = 'full', revealKey = 0, chartNotes, onChartNotesChange }) => {
+const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, variant = 'full', revealKey = 0, chartNotes, onChartNotesChange, onSaveSnapshot }) => {
   const detail = variant === 'detail';
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -434,26 +436,26 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   const noteBarTimes = useMemo(() => replayRawCandles.map(candle => candle.time), [replayRawCandles]);
   replayLoopRef.current = { cursor, rawCandles, chartApi, timeframe };
   const entryFill = useMemo(() => history?.fills.filter(fill => fill.role === 'entry').sort((a, b) => a.at - b.at)[0], [history]);
-  const levelAt = Math.min(cutoffMs ?? Infinity, exitMs);
-  const levels = protectionLevelsAt(history, levelAt);
   const showEntryLevel = entryFill != null && entryFill.at <= (cutoffMs ?? Infinity);
-  // Box pozice má vlastní štítky vstupu a původního SL/TP — tady doplníme
-  // jen to, co box neukazuje: aktuální (posunuté) úrovně, případně všechno,
-  // když box chybí (třeba obchod bez TP).
-  const box = useMemo(() => journalPositionDrawing(replayTrade, DEFAULT_STYLE, 60), [replayTrade]);
-  const boxEntry = box?.points[0]?.price, boxTarget = box?.points[1]?.price, boxStop = box?.points[2]?.price;
+  // Výstup = poslední plnění uzavřeného obchodu (v přehrávání až po něm).
+  const exitFill = useMemo(() => history?.position?.status === 'open' ? undefined
+    : history?.fills.filter(fill => fill.role === 'exit').sort((a, b) => a.at - b.at).at(-1), [history]);
+  const showExitLevel = exitFill != null && exitFill.at <= (cutoffMs ?? Infinity);
+  // Na cenové ose jen vstup a výstup, bez popisků, v barvě šipek (Buy modře,
+  // Sell červeně). SL/TP ukazují čáry v grafu, ne osa.
   useEffect(() => {
     if (!detail || !chartApi || !history) return;
     const series = chartApi.controller.getSeries() as ISeriesApi<'Candlestick'> | null;
     if (!series) return;
+    const sideColor = (side: string | undefined, fallbackBuy: boolean) => (side ? side === 'Buy' : fallbackBuy) ? JOURNAL_BUY_COLOR : JOURNAL_SELL_COLOR;
+    const long = String(trade.direction).toLowerCase() !== 'short';
     const lines = [
-      showEntryLevel && entryFill && boxEntry == null ? { price: entryFill.price, color: chartStyle.entry } : null,
-      showEntryLevel && levels.sl != null && levels.sl !== boxStop ? { price: levels.sl, color: JOURNAL_SL_COLOR } : null,
-      showEntryLevel && levels.tp != null && levels.tp !== boxTarget ? { price: levels.tp, color: JOURNAL_TP_COLOR } : null,
+      showEntryLevel && entryFill ? { price: entryFill.price, color: sideColor(entryFill.side, long) } : null,
+      showExitLevel && exitFill ? { price: exitFill.price, color: sideColor(exitFill.side, !long) } : null,
     ].filter((line): line is { price: number; color: string } => line != null)
       .map(line => series.createPriceLine({ ...line, lineWidth: 1, lineStyle: LineStyle.Dotted, lineVisible: false, axisLabelVisible: true, title: '' }));
     return () => { lines.forEach(line => { try { series.removePriceLine(line); } catch { /* graf už je pryč */ } }); };
-  }, [detail, chartApi, history, showEntryLevel, entryFill?.price, levels.sl, levels.tp, boxEntry, boxStop, boxTarget]);
+  }, [detail, chartApi, history, showEntryLevel, showExitLevel, entryFill?.price, entryFill?.side, exitFill?.price, exitFill?.side, trade.direction]);
 
   const indicators = useMemo(() => calculateIndicators(candles), [candles]);
   const fvgs = useMemo(() => {
@@ -866,6 +868,17 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
           <LocateFixed size={13} /> <span className="hidden sm:inline">Obchod</span>
         </button>
         <TradeProgress events={events} cursorMs={cutoffMs} isDark={isDark} />
+        {onSaveSnapshot && candles.length > 0 && !loading && !error && (
+          <ChartSnapshotButton
+            className={detailButton}
+            capture={async () => {
+              if (!chartAreaRef.current) throw new Error('Graf ještě není připravený.');
+              return captureChartWorkspaceSnapshotDataUrl(chartAreaRef.current, isDark, { hideControls: true });
+            }}
+            onSave={onSaveSnapshot}
+            flashTarget={() => chartAreaRef.current}
+          />
+        )}
         <button type="button" className={detailButton} onClick={() => setIsFullscreen(true)} title="Otevřít ve fullscreenu — timeframy, indikátory, kreslení" aria-label="Otevřít fullscreen graf">
           <Maximize2 size={13} /> <span className="hidden sm:inline">Fullscreen</span>
         </button>
@@ -1070,6 +1083,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
         onTradeIndicatorsChange={changeTradeIndicators}
         chartNotes={notes}
         onChartNotesChange={onChartNotesChange}
+        onSaveSnapshot={onSaveSnapshot}
         onClose={() => setIsFullscreen(false)}
       />,
       document.body,

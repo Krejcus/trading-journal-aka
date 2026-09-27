@@ -6,6 +6,7 @@ import type { BacktestTagSuggestions } from '../services/backtestTagCatalog';
 import type { TradeChartIndicators } from '../services/detailIndicators';
 import type { ChartNote } from '../lib/chartNotes';
 import ChartNotesLayer, { type ChartNoteAddRequest } from './ChartNotesLayer';
+import ChartSnapshotButton from './ChartSnapshotButton';
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createBacktestWorkspaceCheckpoint, mergeWorkspacePanelSnapshots, workspaceLayoutPanelIds, workspacePanelsReady } from '../services/backtestWorkspaceCheckpoint';
 import { storeWorkspaceRecovery, chartWorkspaceDocumentStorageKey, createChartWorkspaceDocument, parseChartWorkspaceDocument, type CompleteChartWorkspaceState } from '../services/chartWorkspaceDocument';
@@ -258,6 +259,8 @@ interface AlphaTradeChartWorkspaceProps {
   /** Fullscreen obchodu: poznámky v grafu (stejné jako v detailu). */
   chartNotes?: readonly ChartNote[];
   onChartNotesChange?: (notes: ChartNote[]) => void;
+  /** Fullscreen obchodu: tlačítko Snímek (celé rozložení grafů). */
+  onSaveSnapshot?: (image: Blob) => Promise<boolean>;
 }
 
 interface WorkspacePanelConfig extends Record<string, unknown> {
@@ -790,6 +793,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   onTradeIndicatorsChange,
   chartNotes,
   onChartNotesChange,
+  onSaveSnapshot,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workspaceShellRef = useRef<HTMLDivElement>(null);
@@ -1926,6 +1930,18 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           setStatus('Nový panel přidán');
         }} title="Přidat nový graf"><Plus size={15} /> <span className="hidden md:inline">Graf</span></button>
         <span className={topDivider} />
+        {onSaveSnapshot && !backtestSession && (
+          <ChartSnapshotButton
+            className={topButton}
+            compactLabel
+            capture={async () => {
+              if (!workspaceShellRef.current || panelControlsRef.current.size === 0) throw new Error('Grafy ještě nejsou připravené.');
+              return captureChartWorkspaceSnapshotDataUrl(workspaceShellRef.current, isDark, { hideControls: true });
+            }}
+            onSave={onSaveSnapshot}
+            flashTarget={() => workspaceShellRef.current}
+          />
+        )}
         <button type="button" className={topButton} onClick={resetWorkspace} title="Obnovit výchozí rozložení"><RotateCcw size={14} /> <span className="hidden lg:inline">Reset</span></button>
         <button type="button" className={topButton} onClick={saveWorkspace} title="Uložit rozložení"><Save size={14} /> <span className="hidden lg:inline">Uložit</span></button>
         <div className="relative">
@@ -2031,6 +2047,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           {replay.phase !== 'off' && (
             <div
               ref={replayToolbarRef}
+              data-snapshot-hide
               className={`absolute z-[650] flex h-10 items-center gap-0.5 rounded-lg border p-1 shadow-xl backdrop-blur-md ${isDark ? 'border-white/10 bg-[#101720]/95 text-slate-300 shadow-black/40' : 'border-slate-200 bg-white/95 text-slate-700 shadow-slate-900/15'}`}
               style={replayToolbarPosition
                 ? { left: replayToolbarPosition.left, top: replayToolbarPosition.top }

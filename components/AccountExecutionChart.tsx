@@ -10,13 +10,14 @@ import { takePrefetchedJournalDetail } from '../services/tradeChartData';
 const TradeMarketChart = React.lazy(() => import('./TradeMarketChart'));
 const loadOwnerTrade = (id: string) => storageService.getTradeById(id);
 
-export default function AccountExecutionChart({ trade, isDark, verifiedDetail, loadTrade = loadOwnerTrade, variant = 'full', revealKey, chartNotes, onChartNotesChange }: {
+export default function AccountExecutionChart({ trade, isDark, verifiedDetail, loadTrade = loadOwnerTrade, variant = 'full', revealKey, chartNotes, onChartNotesChange, onSaveSnapshot }: {
   trade: Trade; isDark: boolean; verifiedDetail?: Trade; loadTrade?: (id: string) => Promise<Trade | null>;
   /** `detail` = zjednodušený graf s průběhem a přehráváním v detailu obchodu. */
   variant?: 'full' | 'detail';
   revealKey?: number;
   chartNotes?: readonly ChartNote[];
   onChartNotesChange?: (notes: ChartNote[]) => void;
+  onSaveSnapshot?: (image: Blob) => Promise<boolean>;
 }) {
   const journal = isEvidenceJournalTrade(trade);
   const verified = verifiedDetail === trade && !!trade.executionHistory;
@@ -48,5 +49,5 @@ export default function AccountExecutionChart({ trade, isDark, verifiedDetail, l
     <p>Ceny a historii SL/TP zobrazíme po úspěšném načtení.</p>
     <button type="button" onClick={() => setRetry(value => value + 1)} className="inline-flex items-center gap-2 rounded-lg border border-slate-500/20 px-3 py-2 font-bold text-theme-primary"><RefreshCw size={13} />Zkusit znovu</button>
   </div>;
-  return <React.Suspense fallback={loading}><TradeMarketChart trade={journal ? current!.detail! : trade} isDark={isDark} variant={variant} revealKey={revealKey} chartNotes={chartNotes} onChartNotesChange={onChartNotesChange} /></React.Suspense>;
+  return <React.Suspense fallback={loading}><TradeMarketChart trade={journal ? current!.detail! : trade} isDark={isDark} variant={variant} revealKey={revealKey} chartNotes={chartNotes} onChartNotesChange={onChartNotesChange} onSaveSnapshot={onSaveSnapshot} /></React.Suspense>;
 }

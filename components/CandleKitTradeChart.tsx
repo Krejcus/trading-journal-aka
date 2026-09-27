@@ -455,7 +455,7 @@ const ChartIndicatorLegend: React.FC<{
   };
 
   return (
-    <div ref={containerRef} className={`absolute top-11 z-30 text-[9px] ${offsetForToolbar ? 'left-14' : 'left-2'}`}>
+    <div ref={containerRef} data-snapshot-hide className={`absolute top-11 z-30 text-[9px] ${offsetForToolbar ? 'left-14' : 'left-2'}`}>
       <button
         type="button"
         onClick={() => { setOpen(value => !value); setSettingsFor(null); }}
@@ -3996,7 +3996,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const position = showManagedPositionBoxes ? createJournalPositionPrimitive(trade,
       // Barvy boxu jsou sdílené s nástrojem Long/Short Position z backtestu.
       getDrawingStyleDefault(trade.direction === 'Short' ? 'ShortPosition' : 'LongPosition', DEFAULT_STYLE),
-      visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60, chartSettings.trading.orderPriceLabels, coverage) : null;
+      // Detail má na ose jen vstup a výstup (TradeMarketChart) — box bez štítků.
+      visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60, chartSettings.trading.orderPriceLabels && !centeredTradeView, coverage) : null;
     if (position) series.attachPrimitive(position);
     series.attachPrimitive(primitive);
     return () => { try { series.detachPrimitive(primitive); if (position) series.detachPrimitive(position); } catch { /* Chart already disposed. */ } };
