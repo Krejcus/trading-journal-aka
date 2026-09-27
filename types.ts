@@ -3,10 +3,13 @@ export type ChartTime = number | string | { year: number; month: number; day: nu
 
 export interface DrawingObject {
   id: string;
-  type: 'line' | 'rect' | 'text' | 'fib' | 'horizontal';
+  /** `note` = poznámka v grafu obchodu (lib/chartNotes.ts). */
+  type: 'line' | 'rect' | 'text' | 'fib' | 'horizontal' | 'note';
   p1: { time: number | ChartTime; price: number };
   p2?: { time: number | ChartTime; price: number };
   text?: string;
+  /** Poznámka: posun bubliny od bodu v pixelech. */
+  offset?: { dx: number; dy: number };
   color?: string;
   lineWidth?: number;
   lineStyle?: 'solid' | 'dashed' | 'dotted';

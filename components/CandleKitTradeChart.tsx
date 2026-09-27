@@ -42,6 +42,7 @@ import {
   RotateCcw,
   Scissors,
   Settings,
+  StickyNote,
   Star,
   Trash2,
   Unlock,
@@ -223,6 +224,8 @@ interface CandleKitTradeChartProps {
   hideDrawingToolbar?: boolean;
   keyboardShortcutsActive?: boolean;
   onChartApiReady?: (api: ChartViewApi | null) => void;
+  /** Detail obchodu: „Přidat poznámku“ v menu grafu (souřadnice pravého kliku). */
+  onAddChartNote?: (clientX: number, clientY: number) => void;
   activeLibraryIndicators?: string[];
   onToggleFvg?: () => void;
   onToggleLevels?: () => void;
@@ -1709,6 +1712,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   hideDrawingToolbar = false,
   keyboardShortcutsActive = true,
   onChartApiReady,
+  onAddChartNote,
   activeLibraryIndicators = [],
   onToggleFvg,
   onToggleLevels,
@@ -1875,6 +1879,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     price: number | null;
     /** Je vybraný position box, ze kterého jde poslat rychlá objednávka? */
     positionSelected: boolean;
+    clientX: number;
+    clientY: number;
   } | null>(null);
   const settingsBackupRef = useRef<AlphaTradeIndicatorSettings | null>(null);
 
@@ -2035,6 +2041,8 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       // úroveň, kterou si vybral.
       price: priceAtClientY(event.clientY),
       positionSelected: isPositionDrawing(selectedPositionDrawing(apiRef.current?.drawing?.engine)),
+      clientX: event.clientX,
+      clientY: event.clientY,
     });
   }, [onChartOrder, priceAtClientY]);
 
@@ -4993,6 +5001,21 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             <kbd className="ml-auto text-[10px] font-normal text-[#787b86]">⌥ R</kbd>
           </button>
           <div className={`mx-2 h-px ${isDark ? 'bg-white/10' : 'bg-[#e0e3eb]'}`} />
+          {onAddChartNote && <>
+            <button
+              type="button"
+              role="menuitem"
+              className={`flex h-9 w-full items-center px-2 text-left outline-none transition-colors ${isDark ? 'hover:bg-[#2a2e39] focus-visible:bg-[#2a2e39]' : 'hover:bg-[#f0f3fa] focus-visible:bg-[#f0f3fa]'}`}
+              onClick={() => { const { clientX, clientY } = contextMenu; setContextMenu(null); onAddChartNote(clientX, clientY); }}
+            >
+              <span className="mr-2 flex h-6 w-6 shrink-0 items-center justify-center" aria-hidden="true">
+                <StickyNote size={15} strokeWidth={1.55} />
+              </span>
+              Přidat poznámku
+              <span className="ml-auto text-[10px] font-normal text-[#787b86]">dvojklik</span>
+            </button>
+            <div className={`mx-2 h-px ${isDark ? 'bg-white/10' : 'bg-[#e0e3eb]'}`} />
+          </>}
           {contextMenu.positionSelected && onPositionQuickOrder && <>
             <button
               type="button"

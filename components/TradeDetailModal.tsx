@@ -3,7 +3,8 @@ import { JOURNAL_REVIEW_FIELDS, journalReviewOnly } from '../lib/journalReviewPa
 import { isImageDecoded, preloadDecodedImage } from '../services/imageDecodeCache';
 import type { PreparedJournalTradeDetail } from '../services/tradeHistoryWarmup';
 import { explicitTradeMaster, isCombinedTrade, journalDisplayBalance, tradeAccountLabel, tradeDetailMembers, tradeDetailSource, tradeEstimateNotice } from '../lib/tradeHistoryPresentation';
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { chartNotesOf, type ChartNote } from '../lib/chartNotes';
+import React, { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { pointValueFor } from '../services/tradovateImport';
 import { motion } from 'framer-motion';
 import {
@@ -158,12 +159,14 @@ interface TradeDetailModalProps {
     onSaved?: () => void;
     /** Nahraje a uloží snímek vložený přímo v detailu; vrací jeho URL, nebo null. */
     onAttachScreenshotFile?: (file: Blob) => Promise<string | null>;
+    /** Uloží poznámky v grafu k obchodu (u sloučené karty ke všem účtům). */
+    onSaveChartNotes?: (notes: ChartNote[]) => Promise<boolean>;
 }
 
 const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     trade, accountName, theme, onClose, onDelete, emotions, onPrev, onNext, onPrefetchPrev, onPrefetchNext, preparedJournalDetail, hasPrev, hasNext,
     onUpdateTrade, pnlDisplayMode = 'usd', accounts = [], initialBalance, user, exchangeRates,
-    allTrades = EMPTY_TRADES, startInEditMode = false, onSaved, onAttachScreenshotFile, loadJournalDetails = defaultLoadJournalDetails, loadTradeDetail = defaultLoadTradeDetail, signCopierSnapshots = storageService.createCopierSnapshotSignedUrls
+    allTrades = EMPTY_TRADES, startInEditMode = false, onSaved, onAttachScreenshotFile, onSaveChartNotes, loadJournalDetails = defaultLoadJournalDetails, loadTradeDetail = defaultLoadTradeDetail, signCopierSnapshots = storageService.createCopierSnapshotSignedUrls
 }) => {
     const isDark = theme !== 'light';
     const targetCurrency = user?.currency || 'USD';
@@ -354,6 +357,26 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
         ? accountChartTrades.find(member => String(member.id) === chartRealizationId) ?? accountChartTrades[0]
           ?? groupTrades.find(member => member.accountId === activeTrade.accountId) ?? groupTrades[0]
         : activeTrade;
+
+    // Poznámky v grafu: uložené u obchodu, po úpravě hned odsud (načtený
+    // detail z databáze je ještě nemá). Nepovedené uložení se vrátí.
+    const [chartNotesOverride, setChartNotesOverride] = useState<{ tradeId: string; notes: ChartNote[] } | null>(null);
+    const savedChartNotes = useMemo(() => {
+        const own = chartNotesOf(chartTrade);
+        return own.length ? own : chartNotesOf(activeTrade);
+    }, [chartTrade, activeTrade]);
+    const chartNotes = chartNotesOverride?.tradeId === String(activeTrade.id) ? chartNotesOverride.notes : savedChartNotes;
+    const chartNotesRef = useRef(chartNotes);
+    chartNotesRef.current = chartNotes;
+    const saveChartNotes = useCallback(async (next: ChartNote[]) => {
+        if (!onSaveChartNotes) return;
+        const tradeId = String(activeTrade.id);
+        const previous = chartNotesRef.current;
+        setChartNotesOverride({ tradeId, notes: next });
+        if (!await onSaveChartNotes(next)) {
+            setChartNotesOverride(current => current?.tradeId === tradeId ? { tradeId, notes: previous } : current);
+        }
+    }, [activeTrade.id, onSaveChartNotes]);
 
     const [isZoomed, setIsZoomed] = useState(false);
     const [accountsExpanded, setAccountsExpanded] = useState(false);
@@ -987,7 +1010,8 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                                     </select>}
                                                     {chartTrade.pnlEstimated && <span className="text-amber-500">Odhad podle leadera</span>}
                                                 </div>}
-                                                <div className="relative flex-1 min-h-0"><AccountExecutionChart trade={chartTrade} isDark={isDark} variant="detail" revealKey={chartRevealKey} verifiedDetail={currentJournal?.rows?.includes(chartTrade) ? chartTrade : undefined} /></div>
+                                                <div className="relative flex-1 min-h-0"><AccountExecutionChart trade={chartTrade} isDark={isDark} variant="detail" revealKey={chartRevealKey} verifiedDetail={currentJournal?.rows?.includes(chartTrade) ? chartTrade : undefined}
+                                                    chartNotes={chartNotes} onChartNotesChange={onSaveChartNotes ? next => { void saveChartNotes(next); } : undefined} /></div>
                                             </> : <p className="p-6 text-xs text-slate-500">Podklady vybraných účtů nejsou načtené.</p>}
                                         </React.Suspense>
                                     )}

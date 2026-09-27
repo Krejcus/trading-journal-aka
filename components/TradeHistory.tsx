@@ -24,6 +24,7 @@ import {
 import { tradeNeedsEnrichment } from '../services/tradovateImport';
 
 import TradeDetailModal from './TradeDetailModal';
+import type { ChartNote } from '../lib/chartNotes';
 import { HistoryScreenshotSlot, clipboardImage, pasteTargetsEditable, shotTargetIds, type ScreenshotAttachStatus } from './HistoryScreenshotSlot';
 import ImageZoomModal from './ImageZoomModal';
 import ConfirmationModal from './ConfirmationModal';
@@ -115,6 +116,8 @@ interface TradeHistoryProps {
   /** Uloží snímek vložený z Historie ke všem uvedeným obchodům, bez označení
    *  obchodu jako zkontrolovaného. Vrací, jestli se uložení povedlo. */
   onAttachScreenshot?: (tradeIds: readonly string[], url: string) => Promise<boolean>;
+  /** Poznámky v grafu — u sloučené karty ke všem účtům (jeden obchod, jeden graf). */
+  onSaveChartNotes?: (tradeIds: readonly string[], notes: ChartNote[]) => Promise<boolean>;
   allTrades?: Trade[];
   viewMode: 'grid' | 'table';
   setViewMode?: (mode: 'grid' | 'table') => void;
@@ -129,7 +132,7 @@ interface TradeHistoryProps {
 }
 
 const TradeHistory: React.FC<TradeHistoryProps> = ({
-  trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade, onAttachScreenshot,
+  trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade, onAttachScreenshot, onSaveChartNotes,
   pnlDisplayMode = 'usd', initialBalance, user, exchangeRates, allTrades = [],
   viewMode, setViewMode, enrichSignal, userMistakes = [],
 }) => {
@@ -213,6 +216,22 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
       return null;
     }
   }, [onAttachScreenshot]);
+
+  const saveChartNotes = useCallback(async (trade: Trade, notes: ChartNote[]): Promise<boolean> => {
+    const ids = shotTargetIds(trade);
+    if (!onSaveChartNotes || ids.length === 0) return false;
+    const ok = await onSaveChartNotes(ids, notes);
+    // Předem načtený detail poznámky ještě nemá — další otevření čte znovu.
+    if (ok) for (const key of [...preparedJournalDetailRef.current.keys(), ...detailPrefetchRef.current.keys()]) {
+      const keyIds = JSON.parse(key) as string[];
+      if (!keyIds.some(keyId => ids.includes(keyId))) continue;
+      preparedJournalDetailRef.current.delete(key);
+      detailPrefetchRef.current.delete(key);
+      detailWarmUntilRef.current.delete(key);
+      detailReuseUntilRef.current.delete(key);
+    }
+    return ok;
+  }, [onSaveChartNotes]);
 
   useEffect(() => {
     if (!onAttachScreenshot) return;
@@ -1790,6 +1809,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           emotions={emotions}
           onUpdateTrade={(updates) => onUpdateTrade?.(selectedTrade.id, updates)}
           onAttachScreenshotFile={onAttachScreenshot ? file => attachScreenshot(selectedTrade, file) : undefined}
+          onSaveChartNotes={onSaveChartNotes ? notes => saveChartNotes(selectedTrade, notes) : undefined}
           pnlDisplayMode={pnlDisplayMode}
           accounts={accounts}
           initialBalance={initialBalance}

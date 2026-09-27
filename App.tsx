@@ -8,6 +8,7 @@ import type { BacktestAnalyticsRefreshCandidate } from './services/backtestAnaly
 import { buildBacktestTradeRecalculationUpdates } from './services/backtestTradeRecalculation';
 import { changedTradeFields, rollbackTradePatch } from './services/tradePatch';
 import { withAttachedScreenshot } from './components/HistoryScreenshotSlot';
+import { withChartNotes, type ChartNote } from './lib/chartNotes';
 import { collectBacktestTagSuggestions } from './services/backtestTagCatalog';
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
@@ -3524,6 +3525,14 @@ const App: React.FC = () => {
     return handleUpdateTrades(targets.map(trade => withAttachedScreenshot(trade, url)));
   }, [trades, handleUpdateTrades]);
 
+  // Poznámky v grafu — stejně jako snímek bez označení „zkontrolováno“.
+  const handleSaveChartNotes = useCallback((tradeIds: readonly string[], notes: ChartNote[]): Promise<boolean> => {
+    const ids = new Set(tradeIds);
+    const targets = trades.filter(row => ids.has(String(row.id)));
+    if (targets.length !== ids.size) return Promise.resolve(false);
+    return handleUpdateTrades(targets.map(trade => withChartNotes(trade, notes)));
+  }, [trades, handleUpdateTrades]);
+
   const handleUpdateTrade = useCallback(async (tradeId: string | number, updates: Partial<Trade>) => {
     const reviewedUpdates: Partial<Trade> = { ...updates, needsReview: false };
     // Shared review affects only visible group members. Broker facts stay account-specific.
@@ -4536,6 +4545,7 @@ const App: React.FC = () => {
                         onDelete={handleDeleteTrade}
                         onUpdateTrade={handleUpdateTrade}
                         onAttachScreenshot={handleAttachTradeScreenshot}
+                        onSaveChartNotes={handleSaveChartNotes}
                         onClear={handleClearTrades}
                         theme={theme}
                         emotions={userEmotions}

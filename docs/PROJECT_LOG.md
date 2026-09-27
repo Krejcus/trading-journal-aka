@@ -208,6 +208,37 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-27 — Poznámky v grafu detailu obchodu (Claude)
+
+- Varianta B z `mockups/chart-notes.html` (Filip vybral): dvojklik nebo menu
+  grafu „Přidat poznámku“ připíchne bod (čas 1m svíčky + cena), bublina jede
+  za myší, klik ji položí a píše se (Enter uloží, Esc zruší). Bublinu jde
+  přetáhnout (odstup v px, při zoomu stejný), bod taky (přichytí se ke
+  svíčce, bublina stojí); klik bez tahu = úprava/smazání. Dlouhý text se
+  sbalí na 4 řádky, po najetí celý. V přehrávání až od svého času.
+- `components/ChartNotesLayer.tsx`: DOM vrstva nad grafem, polohy přímo v
+  DOM z prázdného primitivu série (`updateAllViews` = každé překreslení).
+  Data `lib/chartNotes.ts` (+ testy): položky `type: 'note'` v
+  `trade.drawings` — sloupec, který DB trigger u Tradovate obchodů povoluje,
+  takže bez migrace. 8 obchodů má v `drawings` staré kresby; zůstávají.
+- Ukládání: detail → `TradeHistory.saveChartNotes` → App
+  `handleSaveChartNotes` → `handleUpdateTrades` (jako snímek: sloučená karta
+  do všech účtů, nesmaže „nezkontrolováno“, zruší předstažený detail).
+  Detail drží optimistický stav, nepovedené uložení vrátí.
+- Ověřeno živě na sloučeném obchodu 24. 9. 18:30: přidání, uložení do 4
+  řádků (read-only SQL), přetažení bubliny i bodu, smazání (v DB 0).
+- Fullscreen obchodu: stejné poznámky v každém panelu (i 5m/15m/…: bod leží
+  na svíčce, která jeho čas obsahuje), přidávání/úpravy odtud ukládá detail.
+  Čas pod myší se bere ze série grafu (`dataByIndex`) — fullscreen kreslí jen
+  výřez dat, pozice v poli nesedí. Rozdělanou poznámku má vždy jen jeden
+  panel; pole pro psaní se zaměří až po dokončení kliku (graf si fokus bere
+  zpět), prázdnou bublinu zavře jen klik mimo. Backtest poznámky nemá.
+  Ověřeno: přidáno na 5m, vidět na 1m i v detailu, smazáno.
+- Otevřené: `get_public_trade` vrací `drawings` vždy → poznámky jsou u
+  veřejného obchodu čitelné z API, i když se nikde nezobrazují (sdílená
+  stránka graf nemá). Filip chce přepínač — navrženo: řídí je
+  „Sdílet i poznámku“ (`share_notes`); úprava RPC = Codex.
+
 ### 2026-09-26 — Indikátory detailu = fullscreen obchodu, úpravy v legendě (Claude)
 
 - Filipovo zadání: v detailu je to, co ve fullscreenu; v detailu jde

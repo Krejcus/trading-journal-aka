@@ -22,6 +22,8 @@ import {
 } from 'lightweight-charts-drawing';
 import { Activity, AlertTriangle, BarChart3, LocateFixed, Loader2, Maximize2, Minimize2, RefreshCw } from 'lucide-react';
 import TradeProgress from './TradeProgress';
+import ChartNotesLayer, { type ChartNoteAddRequest } from './ChartNotesLayer';
+import { chartNotesOf, type ChartNote } from '../lib/chartNotes';
 import TradeReplayBar, { type TradeReplayGoTo, type TradeReplaySpeed } from './TradeReplayBar';
 import { historyAt, protectionLevelsAt, tradeTimelineEvents } from '../lib/tradeReplay';
 import { candleReplayPath, partialReplayCandle, type PathPoint } from '../lib/candleReplayPath';
@@ -64,6 +66,10 @@ interface TradeMarketChartProps {
   variant?: 'full' | 'detail';
   /** Změna čísla = graf se znovu ukázal (návrat ze snímku) → znovu animace svíček. */
   revealKey?: number;
+  /** Detail: poznámky v grafu (jinak se čtou z `trade.drawings`). */
+  chartNotes?: readonly ChartNote[];
+  /** Detail: bez něj jsou poznámky jen ke čtení. */
+  onChartNotesChange?: (notes: ChartNote[]) => void;
 }
 
 /** Krok přehrávání = jedna 1m svíčka; při 1x trvá půl vteřiny. */
@@ -139,7 +145,7 @@ const focusChartOnTrade = (
   });
 };
 
-const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, variant = 'full', revealKey = 0 }) => {
+const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, variant = 'full', revealKey = 0, chartNotes, onChartNotesChange }) => {
   const detail = variant === 'detail';
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -421,6 +427,11 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   // Úrovně na cenové ose: vstup, SL a TP platné v okamžiku přehrávání
   // (bez přehrávání poslední před výstupem). Samotné čáry kreslí historie.
   const [chartApi, setChartApi] = useState<ChartViewApi | null>(null);
+  // Poznámky v grafu (jen detail).
+  const chartAreaRef = useRef<HTMLDivElement>(null);
+  const [noteAddRequest, setNoteAddRequest] = useState<ChartNoteAddRequest | null>(null);
+  const notes = useMemo(() => chartNotes ?? chartNotesOf(trade), [chartNotes, trade]);
+  const noteBarTimes = useMemo(() => replayRawCandles.map(candle => candle.time), [replayRawCandles]);
   replayLoopRef.current = { cursor, rawCandles, chartApi, timeframe };
   const entryFill = useMemo(() => history?.fills.filter(fill => fill.role === 'entry').sort((a, b) => a.at - b.at)[0], [history]);
   const levelAt = Math.min(cutoffMs ?? Infinity, exitMs);
@@ -859,7 +870,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
           <Maximize2 size={13} /> <span className="hidden sm:inline">Fullscreen</span>
         </button>
       </div>
-      <div className="relative flex-1 min-h-0">
+      <div ref={chartAreaRef} className="relative flex-1 min-h-0">
         {candles.length > 0 && (
           <CandleKitTradeChart
             trade={replayTrade}
@@ -890,6 +901,20 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
             onNeedOlderHistory={!fullHistory ? () => setFullHistory(true) : undefined}
             olderHistoryLoading={historyLoading}
             onChartApiReady={setChartApi}
+            onAddChartNote={onChartNotesChange ? (clientX, clientY) => setNoteAddRequest({ clientX, clientY, nonce: Date.now() }) : undefined}
+          />
+        )}
+        {candles.length > 0 && !loading && !error && (
+          <ChartNotesLayer
+            chartApi={chartApi}
+            containerRef={chartAreaRef}
+            notes={notes}
+            barTimes={noteBarTimes}
+            replayCursor={cursor}
+            editable={Boolean(onChartNotesChange)}
+            isDark={isDark}
+            addRequest={noteAddRequest}
+            onChange={next => onChartNotesChange?.(next)}
           />
         )}
         {rewind && (
@@ -1043,6 +1068,8 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
         isDark={isDark}
         tradeIndicators={tradeIndicators}
         onTradeIndicatorsChange={changeTradeIndicators}
+        chartNotes={notes}
+        onChartNotesChange={onChartNotesChange}
         onClose={() => setIsFullscreen(false)}
       />,
       document.body,

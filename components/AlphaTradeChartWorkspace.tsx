@@ -4,6 +4,8 @@ import { ChartWorkspaceLibraryDialog, WorkspaceImportPreview } from './ChartWork
 import { saveWorkspaceTemplate } from '../services/chartWorkspaceLibrary';
 import type { BacktestTagSuggestions } from '../services/backtestTagCatalog';
 import type { TradeChartIndicators } from '../services/detailIndicators';
+import type { ChartNote } from '../lib/chartNotes';
+import ChartNotesLayer, { type ChartNoteAddRequest } from './ChartNotesLayer';
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createBacktestWorkspaceCheckpoint, mergeWorkspacePanelSnapshots, workspaceLayoutPanelIds, workspacePanelsReady } from '../services/backtestWorkspaceCheckpoint';
 import { storeWorkspaceRecovery, chartWorkspaceDocumentStorageKey, createChartWorkspaceDocument, parseChartWorkspaceDocument, type CompleteChartWorkspaceState } from '../services/chartWorkspaceDocument';
@@ -253,6 +255,9 @@ interface AlphaTradeChartWorkspaceProps {
    */
   tradeIndicators?: TradeChartIndicators;
   onTradeIndicatorsChange?: (next: TradeChartIndicators) => void;
+  /** Fullscreen obchodu: poznámky v grafu (stejné jako v detailu). */
+  chartNotes?: readonly ChartNote[];
+  onChartNotesChange?: (notes: ChartNote[]) => void;
 }
 
 interface WorkspacePanelConfig extends Record<string, unknown> {
@@ -286,6 +291,8 @@ interface WorkspaceDataContextValue {
   tradingSettings: ChartTradingSettings;
   openBacktestTradeReview: (tradeId: string) => void;
   onTradeIndicatorsChange?: (next: TradeChartIndicators) => void;
+  chartNotes?: readonly ChartNote[];
+  onChartNotesChange?: (notes: ChartNote[]) => void;
 }
 
 interface WorkspacePanelControl {
@@ -639,6 +646,9 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
   }, [activeLibraryIndicators, applyIndicatorState, chartApi, config.root, config.showFvg, config.showLevels, config.showStructure, config.timeframe, context.registerPanel, focusTrade, getCandles, getIndicatorState, indicatorController, instance.id, rawCandles, updatePanelConfig]);
 
   const isActive = context.activePanelId === instance.id;
+  const chartAreaRef = useRef<HTMLDivElement>(null);
+  const [noteAddRequest, setNoteAddRequest] = useState<ChartNoteAddRequest | null>(null);
+  const noteBarTimes = useMemo(() => candles.map(candle => candle.time), [candles]);
 
   return (
     <div
@@ -649,7 +659,7 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
       data-panel-root={config.root}
       data-panel-timeframe={config.timeframe}
     >
-      <div className="relative flex-1 min-h-0">
+      <div ref={chartAreaRef} className="relative flex-1 min-h-0">
         {!loading && !error && candles.length > 0 && (
           <>
           <CandleKitTradeChart
@@ -705,7 +715,21 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             onToggleFvg={() => updatePanelConfig({ showFvg: !config.showFvg })}
             onToggleLevels={() => updatePanelConfig({ showLevels: !config.showLevels })}
             onToggleStructure={() => updatePanelConfig({ showStructure: !config.showStructure })}
+            onAddChartNote={context.onChartNotesChange ? (clientX, clientY) => setNoteAddRequest({ clientX, clientY, nonce: Date.now() }) : undefined}
           />
+          {context.chartNotes && (
+            <ChartNotesLayer
+              chartApi={chartApi}
+              containerRef={chartAreaRef}
+              notes={context.chartNotes}
+              barTimes={noteBarTimes}
+              replayCursor={context.replay.phase === 'active' ? context.replay.cursorTime : null}
+              editable={Boolean(context.onChartNotesChange)}
+              isDark={context.isDark}
+              addRequest={noteAddRequest}
+              onChange={next => context.onChartNotesChange?.(next)}
+            />
+          )}
           {context.tradingSettings.orderLines && chartApi && config.root === context.backtestSession?.executionInstrument && context.backtestSession.orderLines?.length && context.backtestSession.onOrderLineChange && context.backtestSession.onOrderLineCancel ? (
             <BacktestOrderLinesOverlay
               api={chartApi}
@@ -764,6 +788,8 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   backtestSession,
   tradeIndicators,
   onTradeIndicatorsChange,
+  chartNotes,
+  onChartNotesChange,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workspaceShellRef = useRef<HTMLDivElement>(null);
@@ -1174,7 +1200,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     tradingSettings: chartTradingSettings,
     openBacktestTradeReview,
     onTradeIndicatorsChange: backtestSession ? undefined : onTradeIndicatorsChange,
-  }), [onTradeIndicatorsChange, activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
+    chartNotes: backtestSession ? undefined : chartNotes,
+    onChartNotesChange: backtestSession ? undefined : onChartNotesChange,
+  }), [chartNotes, onChartNotesChange, onTradeIndicatorsChange, activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
   const activeControl = panelControls.get(activePanelId) ?? null;
   const reviewTrade = reviewTradeId
     ? backtestSession?.journalTrades?.find(candidate => String(candidate.id) === reviewTradeId)
