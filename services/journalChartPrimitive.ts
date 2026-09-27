@@ -31,7 +31,7 @@ const ARROW = { gap: 3, stem: 13, head: 4, headDepth: 4.5, width: 1.6, hoverScal
 const LEVEL = { width: 1, hoverWidth: 2.2, hitY: 10, hitX: 4 } as const;
 const signed = (value: number, digits = 2) => `${value >= 0 ? '+' : '−'}${Math.abs(value).toLocaleString('cs-CZ', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
 const priceText = (value: number) => value.toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const timeText = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+const timeText = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
 export function createJournalChartPrimitive(history: TradeExecutionHistory, candles: readonly MarketCandle[], intervalSeconds: number,
   chart: IChartApi, series: ISeriesApi<'Candlestick'>, coverage?: JournalCandleCoverage, options: JournalChartOptions = {}): ISeriesPrimitive<Time> {
@@ -74,12 +74,19 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
       : index === lastExit && closed ? 'Výstup' : 'Částečný výstup';
     return { ...group, buy, label: `${role} · ${buy ? 'Buy' : 'Sell'} ${group.quantity} · ${priceText(group.price)} · ${timeText(group.at)}` };
   });
+  // Šipky stojí jako v TradingView nad/pod svíčkou plnění (nákup pod low,
+  // prodej nad high); víc šipek stejné strany v jedné svíčce se vyskládá.
+  const arrowCandle = arrows.map(arrow => { const point = projection.point(arrow.at); return point == null ? null : Math.floor(point); });
+  const arrowStack = arrows.map((arrow, index) => arrows.slice(0, index)
+    .filter((other, otherIndex) => other.buy === arrow.buy && arrowCandle[otherIndex] != null && arrowCandle[otherIndex] === arrowCandle[index]).length);
   // Hover: poslední vykreslená poloha šipek, cílová šipka a průběh animace (0–1).
   const hitBoxes: Array<{ x: number; top: number; bottom: number } | null> = [];
+  // Sloupec svíčky se šipkami: najetím kamkoli do něj se ukáže přesné plnění.
+  const columnBoxes = new Map<number, { left: number; right: number; top: number; bottom: number }>();
   // Průběh animace: šipky podle indexu, čáry podle druhu (`sl`, `tp`).
   const progress = new Map<string, number>();
   const progressOf = (key: string) => progress.get(key) ?? 0;
-  let hovered = -1;
+  let hovered = new Set<number>();
   // Čára pod kurzorem: druh, poloha kurzoru a hodnota v tom okamžiku.
   type LineHit = { kind: 'sl' | 'tp'; left: number; right: number; y: number; from: number; to: number; logicalFrom: number; logicalTo: number; price: number };
   const lineHits: LineHit[] = [];
@@ -97,7 +104,7 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
       const keys = [...arrows.map((_, index) => `a${index}`), 'sl', 'tp'];
       for (const key of keys) {
         const value = progressOf(key);
-        const target = key === `a${hovered}` || key === hoveredLine?.kind ? 1 : 0;
+        const target = (key.startsWith('a') && hovered.has(Number(key.slice(1)))) || key === hoveredLine?.kind ? 1 : 0;
         const next = value + Math.sign(target - value) * Math.min(Math.abs(target - value), dt / ARROW.animMs);
         progress.set(key, next);
         if (next !== target) moving = true;
@@ -116,16 +123,24 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
   };
   const onCrosshair = (param: { point?: { x: number; y: number } }) => {
     const point = param.point;
-    const next = !point ? -1 : hitBoxes.findIndex(box => box != null
+    const arrowHit = !point ? -1 : hitBoxes.findIndex(box => box != null
       && Math.abs(point.x - box.x) <= ARROW.hitX && point.y >= box.top - 4 && point.y <= box.bottom + 4);
-    // Šipka má přednost; jinak nejbližší úsek SL/TP pod kurzorem — vodorovný
+    // Mimo šipku: sloupec svíčky s plněním (od šipek nad ní po šipky pod ní).
+    const column = !point || arrowHit >= 0 ? null
+      : [...columnBoxes.entries()].find(([, box]) => point.x >= box.left && point.x <= box.right && point.y >= box.top && point.y <= box.bottom)?.[0] ?? null;
+    let nextSet = arrowHit >= 0 ? new Set([arrowHit])
+      : column != null ? new Set(arrows.map((_, index) => index).filter(index => arrowCandle[index] === column)) : new Set<number>();
+    // Šipka a svíčka s plněním mají přednost; jinak nejbližší úsek SL/TP — vodorovný
     // (úroveň) nebo svislý (posun), podle toho, ke kterému je kurzor blíž.
-    const hit = !point || next >= 0 ? null : lineHits
+    const lineHit = !point || arrowHit >= 0 ? null : lineHits
       .filter(line => point.x >= line.left - LEVEL.hitX && point.x <= line.right + LEVEL.hitX && Math.abs(point.y - line.y) <= LEVEL.hitY)
       .sort((a, b) => Math.abs(point.y - a.y) - Math.abs(point.y - b.y))[0] ?? null;
-    const move = !point || next >= 0 ? null : moveHits
+    const moveHit = !point || arrowHit >= 0 ? null : moveHits
       .filter(item => Math.abs(point.x - item.x) <= LEVEL.hitY && point.y >= item.top - LEVEL.hitX && point.y <= item.bottom + LEVEL.hitX)
       .sort((a, b) => Math.abs(point.x - a.x) - Math.abs(point.x - b.x))[0] ?? null;
+    // Ve svíčce s plněním vyhraje čára jen tehdy, když je kurzor přímo na ní.
+    const hit = lineHit && (column == null || Math.abs(point!.y - lineHit.y) <= 3) ? lineHit : null;
+    const move = moveHit && (column == null || Math.abs(point!.x - moveHit.x) <= 5) ? moveHit : null;
     const previousKind = hoveredLine?.kind ?? null;
     // Svislý úsek vyhrává, když je kurzor v jeho výšce a těsně u něj — jinak
     // by krátký posun o pár ticků přebily vodorovné čáry kolem něj.
@@ -141,12 +156,14 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
         ? hit.from + (hit.to - hit.from) * Math.min(1, Math.max(0, ((chart.timeScale().coordinateToLogical(point.x) ?? hit.logicalFrom) - hit.logicalFrom) / (hit.logicalTo - hit.logicalFrom)))
         : hit.from,
     } : null;
-    if (next === hovered && (hoveredLine?.kind ?? null) === previousKind) {
+    if (hoveredLine && arrowHit < 0) nextSet = new Set<number>();
+    const sameSet = nextSet.size === hovered.size && [...nextSet].every(index => hovered.has(index));
+    if (sameSet && (hoveredLine?.kind ?? null) === previousKind) {
       // Kurzor se posouvá po téže čáře — štítek jde s ním.
       if (hoveredLine) requestUpdate?.();
       return;
     }
-    hovered = next;
+    hovered = nextSet;
     animate();
   };
 
@@ -223,20 +240,33 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
         }
       }
       context.lineCap = 'round'; context.lineJoin = 'round';
-      // Šipka hrotem na ceně plnění: nákup zespodu nahoru, prodej shora dolů.
-      // Zvětšená (hover) se kreslí až nakonec, aby ji ostatní nepřekryly.
+      // Šipka nad/pod svíčkou plnění: nákup pod low hrotem nahoru, prodej nad
+      // high hrotem dolů. Zvětšená (hover) se kreslí až nakonec.
+      columnBoxes.clear();
       const order = arrows.map((_, index) => index).sort((a, b) => progressOf(`a${a}`) - progressOf(`a${b}`));
       for (const index of order) {
         const arrow = arrows[index];
-        const xx = x(arrow.at); const yy = series.priceToCoordinate(arrow.price);
-        if (xx == null || yy == null) { hitBoxes[index] = null; continue; }
+        const candleIndex = arrowCandle[index];
+        const candle = candleIndex == null ? undefined : candles[candleIndex];
+        const xx = candleIndex == null ? null : coordinate(candleIndex);
+        const yy = series.priceToCoordinate(arrow.price);
+        const edge = candle ? series.priceToCoordinate(arrow.buy ? candle.low : candle.high) : null;
+        if (xx == null || yy == null || edge == null || !candle || candleIndex == null) { hitBoxes[index] = null; continue; }
         const dir = arrow.buy ? 1 : -1;
         const t = progressOf(`a${index}`);
         const ease = 1 - (1 - t) ** 3;
         const scale = 1 + (ARROW.hoverScale - 1) * ease;
-        const tip = yy + dir * ARROW.gap;
+        const tip = edge + dir * (ARROW.gap + arrowStack[index] * (ARROW.stem + ARROW.gap + 2));
         const tail = tip + dir * ARROW.stem * scale;
         hitBoxes[index] = { x: xx, top: Math.min(tip, tail), bottom: Math.max(tip, tail) };
+        const next = coordinate(candleIndex + 1);
+        const half = Math.max(4, next != null ? Math.abs(next - xx) / 2 : 4);
+        const high = series.priceToCoordinate(candle.high); const low = series.priceToCoordinate(candle.low);
+        // Jen šířka těla svíčky — mezera mezi svíčkami patří čarám SL/TP.
+        const body = Math.max(3, half * 0.75);
+        const box = columnBoxes.get(candleIndex) ?? { left: xx - body, right: xx + body, top: Infinity, bottom: -Infinity };
+        box.top = Math.min(box.top, tip, tail, high ?? tip); box.bottom = Math.max(box.bottom, tip, tail, low ?? tail);
+        columnBoxes.set(candleIndex, box);
         const color = arrow.buy ? JOURNAL_BUY_COLOR : JOURNAL_SELL_COLOR;
         context.strokeStyle = color;
         context.lineWidth = ARROW.width + 0.6 * ease;
@@ -250,8 +280,16 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
         context.stroke();
         context.shadowBlur = 0;
         if (t <= 0) continue;
-        // Přesná cena plnění a štítek za koncem šipky.
+        // Přesné plnění uvnitř svíčky: značka na ceně a tečkovaná spojnice
+        // k šipce, štítek s cenou a časem na vteřiny za koncem šipky.
         context.globalAlpha = ease;
+        context.lineWidth = 1;
+        context.setLineDash([2, 2]);
+        context.beginPath(); context.moveTo(xx, yy); context.lineTo(xx, tip); context.stroke();
+        context.setLineDash([]);
+        const tick = Math.min(9, half * 0.9);
+        context.lineWidth = 1.6;
+        context.beginPath(); context.moveTo(xx - tick, yy); context.lineTo(xx + tick, yy); context.stroke();
         context.fillStyle = color;
         context.beginPath(); context.arc(xx, yy, 2.5, 0, Math.PI * 2); context.fill();
         context.font = '600 10.5px Inter, sans-serif';

@@ -4,6 +4,7 @@ import { isImageDecoded, preloadDecodedImage } from '../services/imageDecodeCach
 import type { PreparedJournalTradeDetail } from '../services/tradeHistoryWarmup';
 import { explicitTradeMaster, isCombinedTrade, journalDisplayBalance, tradeAccountLabel, tradeDetailMembers, tradeDetailSource, tradeEstimateNotice } from '../lib/tradeHistoryPresentation';
 import { chartNotesOf, type ChartNote } from '../lib/chartNotes';
+import { formatHoldDuration } from '../lib/holdDuration';
 import React, { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { pointValueFor } from '../services/tradovateImport';
 import { motion } from 'framer-motion';
@@ -619,8 +620,15 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
         return isNaN(d.getTime()) ? '--:--' : d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
     };
 
+    // Vstup a výstup v přehledu na vteřiny (scalpy v jedné minutě).
+    const formatTimeSeconds = (time: any) => {
+        const d = new Date(time);
+        return isNaN(d.getTime()) ? '--:--:--' : d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    };
+
     const timeRange = `${formatTime(tradeEntryTime)} - ${formatTime(exitTime)}`;
-    const holdTime = executionTrade.duration || (Math.round(safeValue(executionTrade.durationMinutes ?? (executionTrade as any).duration_minutes)) + 'm');
+    const holdTime = formatHoldDuration(tradeEntryTime, exitTime)
+        || executionTrade.duration || (Math.round(safeValue(executionTrade.durationMinutes ?? (executionTrade as any).duration_minutes)) + 'm');
     // Status MUSÍ číst z nejnovějšího trade propu (ne z fullTrade, který může být přepsán stale DB fetchem)
     const status = trade.executionStatus || activeTrade.executionStatus || ((trade.isValid === false || activeTrade.isValid === false) ? 'Invalid' : 'Valid');
     const isMissed = status === 'Missed';
@@ -806,8 +814,8 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             )}
                             <div className={`grid grid-cols-2 border-b ${hairline} ${isDark ? 'bg-white/[0.02]' : 'bg-white'}`}>
                                 {([
-                                    ['Vstup', entryPrice > 0 ? fmtPrice(entryPrice) : '—', formatTime(tradeEntryTime), undefined],
-                                    ['Výstup', exitPrice > 0 ? fmtPrice(exitPrice) : '—', formatTime(exitTime), undefined],
+                                    ['Vstup', entryPrice > 0 ? fmtPrice(entryPrice) : '—', formatTimeSeconds(tradeEntryTime), undefined],
+                                    ['Výstup', exitPrice > 0 ? fmtPrice(exitPrice) : '—', formatTimeSeconds(exitTime), undefined],
                                     ['Pohyb', movePts == null ? '—' : `${movePts >= 0 ? '+' : '−'}${fmtPrice(Math.abs(movePts))} b.`, undefined, movePts == null ? undefined : movePts >= 0 ? pnlHex : '#f43f5e'],
                                     ['Velikost', `${executionTrade.positionSize || 1} ${executionTrade.instrument || ''}`.trim(), undefined, undefined],
                                     ['Držení', String(holdTime).replace(/m$/, ' min'), undefined, undefined],

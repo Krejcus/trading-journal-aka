@@ -208,6 +208,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-27 — Šipky jako v TradingView, vteřiny a přesné držení (Claude)
+
+- Šipky plnění stojí nad/pod svíčkou (nákup pod low hrotem nahoru, prodej
+  nad high), uprostřed svíčky; víc šipek stejné strany v jedné svíčce se
+  vyskládá. Najetí kamkoli do těla svíčky s plněním (nebo na šipku) ukáže
+  přesné plnění: značka na ceně uvnitř svíčky, tečkovaná spojnice a štítek
+  s časem na vteřiny. Priorita: šipka > svíčka > čára SL/TP; čára vyhraje
+  i ve svíčce, je-li kurzor přímo na ní (≤ 3 px / svislý posun ≤ 5 px).
+- Detail: Vstup/Výstup na vteřiny, Držení z přesných časů
+  (`lib/holdDuration.ts`: „54 s“, „3 min 12 s“, „1 h 05 min“) místo
+  zaokrouhlených „0 min“.
+- Zvětšení krátkých obchodů v grafu zatím ne — se šipkami nad/pod svíčkou
+  je vstup i výstup ve stejné minutě vidět; vteřinová data (Databento
+  ohlcv-1s) jen případně později přes Codexe.
+
 ### 2026-09-27 — Poznámky v grafu detailu obchodu (Claude)
 
 - Varianta B z `mockups/chart-notes.html` (Filip vybral): dvojklik nebo menu

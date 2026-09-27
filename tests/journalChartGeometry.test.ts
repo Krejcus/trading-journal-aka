@@ -79,8 +79,11 @@ describe('journal candle geometry', () => {
     const arrows = paths.filter(points => points.length === 5);
     expect(levels).toHaveLength(4);
     expect(levels.every(points => !(points[0][0] < 140 && points[1][0] > 140))).toBe(true);
-    // Šipky jen u plnění, která mají načtenou svíčku; hrot na x plnění.
-    expect(arrows.map(points => points[1][0])).toEqual([120.041, 160.263]);
+    // Šipky jen u plnění, která mají načtenou svíčku; jako v TradingView
+    // uprostřed svíčky, nákup pod jejím low (hrot 90 → y 110 + mezera),
+    // prodej nad high (110 → y 90 − mezera).
+    expect(arrows.map(points => points[1][0])).toEqual([120, 160]);
+    expect(arrows.map(points => points[1][1])).toEqual([113, 87]);
     // Bez najetí myší žádný štítek.
     expect(labels).toEqual([]);
   });
@@ -103,13 +106,42 @@ describe('journal candle geometry', () => {
     draw();
     expect(updates).toBeGreaterThan(1);
     expect(labels).toHaveLength(1);
-    expect(labels[0]).toMatch(/^Vstup · Buy 1 · /);
+    expect(labels[0]).toMatch(/^Vstup · Buy 1 · .* · \d{2}:\d{2}:\d{2}$/);
     labels.length = 0;
     onMove!({ point: undefined });
     draw();
     expect(labels).toEqual([]);
     primitive.detached!();
     expect(onMove).toBeNull();
+  });
+  it('najetí kamkoli do sloupce svíčky ukáže všechna její plnění; víc šipek se vyskládá', () => {
+    const value = trade(120_100, 170_000);
+    value.executionHistory!.fills.push({ ...value.executionHistory!.fills[0], id: 'add', orderId: 'add-order', at: 150_000, price: 101 });
+    let onMove: ((param: { point?: { x: number; y: number } }) => void) | null = null;
+    const chart = { timeScale: () => ({ logicalToCoordinate: x }), subscribeCrosshairMove: (handler: typeof onMove) => { onMove = handler; },
+      unsubscribeCrosshairMove: () => {} } as unknown as IChartApi;
+    const series = { priceToCoordinate: (price: number) => 200 - price } as unknown as ISeriesApi<'Candlestick'>;
+    const primitive = createJournalChartPrimitive(value.executionHistory!, candles, 60, chart, series, undefined, { direction: 'Long' });
+    primitive.attached!({ requestUpdate: () => {} } as unknown as Parameters<NonNullable<typeof primitive.attached>>[0]);
+    const paths: number[][][] = [], labels: string[] = [];
+    let path: number[][] = [];
+    const context = new Proxy({ beginPath: () => { path = []; }, moveTo: (a: number, b: number) => path.push([a, b]),
+      lineTo: (a: number, b: number) => path.push([a, b]), stroke: () => paths.push(path), fillText: (label: string) => labels.push(label) },
+    { get: (target, key) => key in target ? target[key as keyof typeof target] : () => {} });
+    const renderer = primitive.paneViews!()[0].renderer()!;
+    const draw = () => { paths.length = 0; labels.length = 0; renderer.draw({ useMediaCoordinateSpace: (callback: (scope: unknown) => void) => callback({ context }) } as Parameters<typeof renderer.draw>[0]); };
+    draw();
+    // Dva nákupy pod svíčkou nad sebou, prodej nad ní — všechny ve sloupci x = 120.
+    const tips = paths.filter(points => points.length === 5).map(points => points[1]);
+    expect(tips.map(point => point[0])).toEqual([120, 120, 120]);
+    expect(tips.map(point => point[1]).sort((a, b) => a - b)).toEqual([87, 113, 131]);
+    // Kurzor v těle svíčky (mezi high a low), mimo šipky.
+    onMove!({ point: { x: 123, y: 100 } });
+    draw();
+    expect(labels).toHaveLength(3);
+    onMove!({ point: { x: 150, y: 100 } });
+    draw();
+    expect(labels).toEqual([]);
   });
 });
 
