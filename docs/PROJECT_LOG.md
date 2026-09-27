@@ -208,6 +208,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-27 — Detail obchodu otevírá rovnou graf (Claude)
+
+- Filip: graf se načítá rychle → výchozí pohled detailu je graf, snímky jsou
+  druhá záložka. Obchody mladší než 24 h (Databento svíčky ještě nemá,
+  `tradeChartDataAvailable`) dál začínají snímkem. `defaultVisualMode` v
+  `TradeDetailModal`, i při přepnutí na další obchod.
+
 ### 2026-09-27 — Tlačítko Snímek v grafu obchodu (Claude)
 
 - Detail i fullscreen obchodu mají „Snímek“ (`components/ChartSnapshotButton.tsx`):
@@ -221,6 +228,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Ověřeno: focení detailu 0,4 s, 1230×1100 px, bez ovládání; tlačítko ve
   fullscreenu. Nahrání testováno nebylo (uklidit testovací snímek z
   Tradovate obchodu nejde) — jde přes existující cestu vložení snímku.
+- Oprava (Filip: snímek z fullscreenu „špatně oříznutý“): kořen workspace
+  je `absolute left-[52px]` a html-to-image si umístění klonu přenese → obraz
+  ujel o 52 px doprava, pravá cenová osa se usekla, vlevo prázdný pruh.
+  Při focení se kořeni nuluje left/top/margin/transform (`style` v toPng);
+  ověřeno: 1982×1054 px, oba grafy celé i s osami. Platí i pro backtest.
 - Pozn.: ruční snímky jdou do bucketu `trade-images` přes getPublicUrl
   (veřejné URL) — dotaz na Codexe spolu s návrhem auto snímků z našeho grafu.
 

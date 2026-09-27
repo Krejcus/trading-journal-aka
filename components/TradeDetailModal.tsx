@@ -5,6 +5,7 @@ import type { PreparedJournalTradeDetail } from '../services/tradeHistoryWarmup'
 import { explicitTradeMaster, isCombinedTrade, journalDisplayBalance, tradeAccountLabel, tradeDetailMembers, tradeDetailSource, tradeEstimateNotice } from '../lib/tradeHistoryPresentation';
 import { chartNotesOf, type ChartNote } from '../lib/chartNotes';
 import { formatHoldDuration } from '../lib/holdDuration';
+import { tradeChartDataAvailable, tradeChartTiming } from '../services/tradeChartData';
 import React, { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { pointValueFor } from '../services/tradovateImport';
 import { motion } from 'framer-motion';
@@ -163,6 +164,10 @@ interface TradeDetailModalProps {
     /** Uloží poznámky v grafu k obchodu (u sloučené karty ke všem účtům). */
     onSaveChartNotes?: (notes: ChartNote[]) => Promise<boolean>;
 }
+
+/** Výchozí pohled detailu: graf, pokud už pro obchod existují svíčky. */
+const defaultVisualMode = (trade: Trade): 'chart' | 'screenshots' =>
+    tradeChartDataAvailable(tradeChartTiming(trade)) ? 'chart' : 'screenshots';
 
 const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     trade, accountName, theme, onClose, onDelete, emotions, onPrev, onNext, onPrefetchPrev, onPrefetchNext, preparedJournalDetail, hasPrev, hasNext,
@@ -384,7 +389,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     const [activeImageIndex, setActiveImageIndex] = useState(0);
     const [displayedImage, setDisplayedImage] = useState<{ tradeId: string; url: string } | null>(null);
     const [imageLoadError, setImageLoadError] = useState(false);
-    const [visualMode, setVisualMode] = useState<'chart' | 'screenshots'>('screenshots');
+    const [visualMode, setVisualMode] = useState<'chart' | 'screenshots'>(() => defaultVisualMode(activeTrade));
     const [moreOpen, setMoreOpen] = useState(false);
     // Graf se připojí až při prvním otevření a pak zůstane — přepnutí zpět je okamžité.
     const [chartMounted, setChartMounted] = useState(false);
@@ -657,8 +662,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     const snapshotError = Boolean(activeTrade.copierSnapshotLoadError || snapshotSignError || detailsLoadError || imageLoadError);
     const loadingImages = (isLoadingDetails && !displayedImageUrl) || (isSigningSnapshots && images.length === 0)
         || (images.length > 0 && !displayedImageUrl && !imageLoadError);
-    // Screenshot obchodu je výchozí pohled; graf je druhá záložka.
-    useEffect(() => { setVisualMode('screenshots'); }, [activeTrade.id]);
+    // Graf je výchozí pohled (načítá se rychle); snímky jsou druhá záložka.
+    // Obchody z posledních 24 h svíčky ještě nemají → tam snímek.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- jen při změně obchodu
+    useEffect(() => { setVisualMode(defaultVisualMode(activeTrade)); }, [activeTrade.id]);
 
 
 

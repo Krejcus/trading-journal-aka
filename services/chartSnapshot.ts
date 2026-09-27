@@ -59,6 +59,10 @@ export const captureChartWorkspaceSnapshotDataUrl = async (
     // jejich znovuvložení čte cross-origin Google CSS a v localhostu zbytečně
     // vyhazuje SecurityError, i když samotný snapshot následně uspěje.
     skipFonts: true,
+    // Kořen se klonuje i se svým umístěním (fullscreen: absolute, left 52 px
+    // kvůli liště nástrojů) — ve snímku by ujel doprava a pravý okraj
+    // i s cenovou osou by se usekl. Ve snímku začíná vždy v rohu.
+    style: { left: '0px', top: '0px', right: 'auto', bottom: 'auto', margin: '0px', transform: 'none' },
     filter: options.hideControls
       ? (node: HTMLElement) => !(node instanceof HTMLElement && node.dataset?.snapshotHide != null)
       : undefined,
