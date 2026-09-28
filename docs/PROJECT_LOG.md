@@ -208,6 +208,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-28 — UI-10b: DLL a denní P&L bez globálního pendingu (Codex)
+
+- Full enrichment se sleduje pro každé OAuth připojení zvlášť. Selhání už
+  neschová DLL a denní P&L ostatních účtů; neúspěšný full refresh má vlastní
+  retry 15/30/60 s až 10 min, respektuje per-connection 429 a při návratu do
+  popředí se obnoví pending nebo nejméně pět minut staré připojení.
+- Server u 429 čte `p-time` z těla a bez `Retry-After` používá 5 minut. Klient
+  backoff omezuje na 10 minut a nepřenáší limit jednoho připojení na ostatní.
+- Daily P&L i `DLL zbývá` používají tentýž validovaný realized vstup: novější
+  worker display feed má přednost před OAuth snapshotem. DLL timestamp skládá
+  jen z realized, unrealized a skutečně použitého limitu; cash timestamp není
+  vstup. Stará čísla jsou šedá a mají stáří v title i v mobilním detailu.
+- Risk hodnota rozlišuje loading, nedostupné, neznámý limit a účet bez DLL.
+  Poslední známá worker risk hodnota v souhrnné kartě po 15 s nezmizí, ale je
+  výslovně šedá a označená stářím; execution/risk brány dál používají jen
+  striktně čerstvá data.
+- Daily záznamy se párují přes Chicago trade date. UI inference DLL locku je
+  povolená jen pro aktuální trade date, dostupné daily P&L a nestale open P&L,
+  takže rollover 17:00–19:00 CT nevyrábí falešný zámek.
+- Ověřeno cíleně: 11 souborů / 135 testů. `npx tsc --noEmit` hlásí jen předem
+  povolené chyby `extension/` (chybějící Chrome typy a `@crxjs/vite-plugin`).
+  Bez npm install/ci, broker/Tradovate volání, commitu, push, deploye či změny
+  produkční konfigurace.
+
 ### 2026-09-28 — UI-10a: stabilní stale stav kopírky a rychlejší relay poll (Codex)
 
 - `TradovateLiveDesk` už při jediném neúspěšném nebo starém relay čtení

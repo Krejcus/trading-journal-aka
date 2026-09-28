@@ -263,7 +263,7 @@ describe('LiveRiskSummaryCard', () => {
     expect(markup).not.toContain('Broker by vyhrál</b>');
   });
 
-  it('stale nebo chybějící worker P&L nepřekryje starší broker hodnotou', () => {
+  it('stale worker P&L ponechá jako šedou poslední známou hodnotu, chybějící nepřekryje brokerem', () => {
     const singleFollowerGroup: CopyGroupConfig = {
       ...group,
       followers: [group.followers[0]],
@@ -283,11 +283,16 @@ describe('LiveRiskSummaryCard', () => {
       now: NOW,
     }));
 
-    for (const markup of [stale, missing]) {
-      const metricTag = markup.match(/<div[^>]*data-risk-summary-metric="Účet nejblíž limitu"[^>]*>/)?.[0] ?? '';
-      expect(metricTag).toContain('data-metric-known="false"');
-      expect(markup).toContain('Denní P&amp;L všech účtů není ověřené');
-      expect(markup).not.toContain('95 % ·');
-    }
+    const staleMetric = stale.match(/<div[^>]*data-risk-summary-metric="Účet nejblíž limitu"[^>]*>/)?.[0] ?? '';
+    expect(staleMetric).toContain('data-metric-known="true"');
+    expect(staleMetric).toContain('data-metric-state="last-known"');
+    expect(stale).toContain('95 % ·');
+    expect(stale).toContain('poslední potvrzení před 1 min');
+    expect(stale).toContain('text-[var(--text-secondary)]');
+
+    const missingMetric = missing.match(/<div[^>]*data-risk-summary-metric="Účet nejblíž limitu"[^>]*>/)?.[0] ?? '';
+    expect(missingMetric).toContain('data-metric-known="false"');
+    expect(missing).toContain('Denní P&amp;L všech účtů není ověřené');
+    expect(missing).not.toContain('95 % ·');
   });
 });

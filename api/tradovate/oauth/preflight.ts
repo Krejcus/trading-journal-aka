@@ -79,7 +79,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   } catch (error) {
     if (error instanceof TradovateAccountDataError && error.status === 429) {
-      const retryAfterMs = Math.max(1_000, error.retryAfterMs ?? 3_600_000);
+      const retryAfterMs = Math.max(1_000, error.retryAfterMs ?? 300_000);
       res.setHeader('Retry-After', String(Math.ceil(retryAfterMs / 1_000)));
       return res.status(429).json({ error: 'tradovate-rate-limited', retryAfterMs });
     }

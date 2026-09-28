@@ -1,6 +1,7 @@
 import type { TradovateAccountProfile } from './tradovateAccountProfileTypes';
 import type { CopierAccountEligibility } from '../services/copierEngine';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
+import { tradovateDisplayTradeDate } from './tradovateDisplayDay';
 
 const eligibilitySeverity: Record<CopierAccountEligibility['state'], number> = {
   active: 0,
@@ -25,6 +26,7 @@ const observedAt = (account: LiveAccount): number => {
 export function inferredCopyTradeAccountEligibility(
   accounts: readonly LiveAccount[],
   profiles: readonly TradovateAccountProfile[],
+  now = Date.now(),
 ): CopierAccountEligibility[] {
   const profilesByAccount = new Map<number, TradovateAccountProfile>();
   for (const profile of profiles) {
@@ -52,6 +54,9 @@ export function inferredCopyTradeAccountEligibility(
       dailyLossLimit != null
       && Number.isFinite(dailyLossLimit)
       && dailyLossLimit > 0
+      && account.dailyPnlAvailable === true
+      && account.dailyPnlTradeDate === tradovateDisplayTradeDate(now)
+      && account.unrealizedPnlSource !== 'stale'
       && Number.isFinite(currentDailyPnl)
       && currentDailyPnl <= -dailyLossLimit
     ) {
@@ -75,12 +80,13 @@ export function effectiveCopyTradeAccountEligibility(
   accounts: readonly LiveAccount[],
   profiles: readonly TradovateAccountProfile[],
   runtimeEligibility: readonly CopierAccountEligibility[],
+  now = Date.now(),
 ): CopierAccountEligibility[] {
   const merged = new Map<number, CopierAccountEligibility>(
     runtimeEligibility.map(entry => [entry.accountId, entry]),
   );
 
-  for (const inferred of inferredCopyTradeAccountEligibility(accounts, profiles)) {
+  for (const inferred of inferredCopyTradeAccountEligibility(accounts, profiles, now)) {
     const runtime = merged.get(inferred.accountId);
     if (!runtime || eligibilitySeverity[inferred.state] > eligibilitySeverity[runtime.state]) {
       merged.set(inferred.accountId, inferred);

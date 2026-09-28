@@ -5,6 +5,7 @@ import {
   copyTradeDailyLossRemaining,
   LiveCopyTradeOverview,
 } from '../components/LiveCopyTradeOverview';
+import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
 import type { LiveAccount, LiveOrder, LiveSnapshot } from '../services/tradecopiaLiveService';
 
 const liveAccount = (id: number, name: string): LiveAccount => ({
@@ -390,11 +391,22 @@ describe('GroupDetail Positions integrace', () => {
   it('u uložené skupiny dopočítá DLL a BREACHED i bez dostupného worker statusu', () => {
     const dllId = 62_364_553;
     const breachedId = 62_364_058;
+    const currentDailyAt = new Date().toISOString();
     const riskSnapshot: LiveSnapshot = {
       ...snapshot,
       accounts: [
         snapshot.accounts[0],
-        { ...liveAccount(dllId, 'Lucid DLL'), firm: 'Lucid', dailyLossLimit: 1_200, realizedPnl: -1_206.5 },
+        {
+          ...liveAccount(dllId, 'Lucid DLL'),
+          firm: 'Lucid',
+          dailyLossLimit: 1_200,
+          realizedPnl: -1_206.5,
+          dailyPnlAvailable: true,
+          dailyPnlTradeDate: tradovateDisplayTradeDate(Date.parse(currentDailyAt)),
+          dailyPnlUpdatedAt: currentDailyAt,
+          unrealizedPnlSource: 'broker',
+          unrealizedPnlUpdatedAt: currentDailyAt,
+        },
         { ...liveAccount(breachedId, 'Tradeify breached'), cushion: -33 },
       ],
       connections: [

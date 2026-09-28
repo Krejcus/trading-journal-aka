@@ -57,7 +57,12 @@ const api = vi.hoisted(() => ({
 vi.mock('react', () => harness.react);
 vi.mock('../services/tradovateOAuthConnection', () => api);
 vi.mock('../services/storageService', () => ({ storageService: { saveAccounts: vi.fn() } }));
-import { useTradovateLiveData } from '../components/useTradovateLiveData';
+import {
+  tradovateClientBackoffMs,
+  tradovateForegroundRefreshIds,
+  tradovateFullRefreshBackoffMs,
+  useTradovateLiveData,
+} from '../components/useTradovateLiveData';
 import { loadTradovateAccountData } from '../server/tradovateAccountData';
 import { tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
@@ -154,8 +159,48 @@ describe('detailed LIVE data reliability regressions', () => {
       return keep;
     });
     await view('review-partial-429').refreshStatus();
+    await settle();
     expect(Object.keys(view('review-partial-429').connectionData)).toEqual(['keep']);
-    expect(api.runTradovateReadOnlyPreflight.mock.calls.every(call => call[1] === 'bootstrap')).toBe(true);
+    expect(api.runTradovateReadOnlyPreflight.mock.calls.filter(call => call[0] === 'gone').map(call => call[1])).toEqual(['bootstrap']);
+    expect(api.runTradovateReadOnlyPreflight.mock.calls.some(call => call[0] === 'keep' && call[1] === 'full')).toBe(true);
+    expect(view('review-partial-429').dataEnrichmentByConnection.keep.pending).toBe(false);
+    expect(view('review-partial-429').dataEnrichmentByConnection.gone.pending).toBe(true);
+    api.runTradovateReadOnlyPreflight.mockClear();
+    await view('review-partial-429').refreshData(true);
+    expect(api.runTradovateReadOnlyPreflight.mock.calls.map(call => call[0])).toEqual(['keep']);
+  });
+
+  it('retries failed full enrichment per connection after 15/30/60 seconds', async () => {
+    api.loadTradovateOAuthStatus.mockResolvedValue(status(['fast', 'slow']));
+    const fast = await dataset('fast');
+    const slow = await dataset('slow');
+    api.runTradovateReadOnlyPreflight.mockImplementation(async (id, detail) => {
+      if (detail === 'bootstrap') return id === 'fast' ? fast : slow;
+      if (id === 'slow') throw new Error('slow full failed');
+      return fast;
+    });
+    await view('review-per-connection-retry').refreshStatus();
+    await settle();
+    const state = view('review-per-connection-retry').dataEnrichmentByConnection;
+    expect(state.fast).toMatchObject({ pending: false, failureCount: 0 });
+    expect(state.slow).toMatchObject({ pending: true, failureCount: 1, retryAt: now + 15_000 });
+    view('review-per-connection-retry', true);
+    expect(vi.mocked(window.setTimeout).mock.calls.some(call => call[1] === 15_000)).toBe(true);
+    expect([1, 2, 3, 8].map(tradovateFullRefreshBackoffMs)).toEqual([15_000, 30_000, 60_000, 600_000]);
+  });
+
+  it('caps client Retry-After and keeps the fallback bounded', () => {
+    expect(tradovateClientBackoffMs(null)).toBe(300_000);
+    expect(tradovateClientBackoffMs(60_000)).toBe(60_000);
+    expect(tradovateClientBackoffMs(3_600_000)).toBe(600_000);
+  });
+
+  it('na návratu do popředí obnoví pending a starší než pět minut, ne čerstvé spojení', () => {
+    expect(tradovateForegroundRefreshIds(['pending', 'stale', 'fresh'], {
+      pending: { pending: true, lastFullSuccessAt: null, retryAt: now + 15_000, failureCount: 1, error: 'failed' },
+      stale: { pending: false, lastFullSuccessAt: now - 5 * 60_000, retryAt: null, failureCount: 0, error: null },
+      fresh: { pending: false, lastFullSuccessAt: now - 60_000, retryAt: null, failureCount: 0, error: null },
+    }, now)).toEqual(['pending', 'stale']);
   });
 
   it('honors a 429 embedded in partial HTTP 200 source coverage', async () => {

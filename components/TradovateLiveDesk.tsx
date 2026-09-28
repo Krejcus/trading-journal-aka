@@ -62,7 +62,6 @@ import {
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import { tradovateAccountFirm } from '../lib/tradovatePropPlanCatalog';
 import {
-  tradovateBrokerDailyPnlByAccount,
   tradovateCopyTradeOrders,
   tradovateCopyTradeSnapshot,
 } from '../lib/tradovateCopyTradeBridge';
@@ -466,9 +465,15 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       const values = owner && displayCache.userId === userId
         ? displayCache.values[`${owner[1].environment}:${owner[0]}:${account.id}`]
           ?? restoredDisplay[`${owner[1].environment}:${owner[0]}:${account.id}`] : undefined;
-      return { ...account, ...(values ? { displayValues: values } : {}), riskDisplayStorageScope: owner ? `${userId}:${owner[1].environment}:${owner[0]}` : undefined, riskDisplayConfigKey: `${owner ? owner[1].environment + ':' + owner[0] : 'unavailable'}:${account.riskDisplayConfigKey}` };
+      return {
+        ...account,
+        ...(values ? { displayValues: values } : {}),
+        dailyPnlPending: owner ? live.dataEnrichmentByConnection[owner[0]]?.pending !== false : true,
+        riskDisplayStorageScope: owner ? `${userId}:${owner[1].environment}:${owner[0]}` : undefined,
+        riskDisplayConfigKey: `${owner ? owner[1].environment + ':' + owner[0] : 'unavailable'}:${account.riskDisplayConfigKey}`,
+      };
     }) };
-  }, [copyTradeSnapshot, displayMembership, displayCache, userId, restoredDisplay]);
+  }, [copyTradeSnapshot, displayMembership, displayCache, live.dataEnrichmentByConnection, userId, restoredDisplay]);
   useEffect(() => {
     // Wait for every connected account list before replacing the persisted view.
     // A partial bootstrap must not erase amounts for connections still loading.
@@ -479,7 +484,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       if (owners.length !== 1) continue;
       const [connectionId, connection] = owners[0];
       const balance = liveBalanceDisplay(account);
-      const daily = liveDailyPnlDisplay(account, Date.now(), live.dataEnrichmentPending);
+      const daily = liveDailyPnlDisplay(account);
       const entry: AccountDisplayCache[string] = {};
       if (balance.value != null && balance.confirmedAt) entry.totalCashValue = {
         value: balance.value, requestedAt: account.displayValues?.totalCashValue?.confirmedAt === balance.confirmedAt
@@ -492,11 +497,14 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       if (Object.keys(entry).length) values[`${connection.environment}:${connectionId}:${account.id}`] = entry;
     }
     writeTradovateDisplaySession(userId, values);
-  }, [userId, displaySnapshot, displayMembership, connectedConnectionIds, live.dataEnrichmentPending]);
+  }, [userId, displaySnapshot, displayMembership, connectedConnectionIds]);
   const brokerDailyPnlByAccount = useMemo<Readonly<Record<string, number | null>>>(() => {
-    if (!liveData) return {};
-    return tradovateBrokerDailyPnlByAccount(liveData);
-  }, [liveData]);
+    if (!displaySnapshot) return {};
+    return Object.fromEntries(displaySnapshot.accounts.map(account => [
+      String(account.id),
+      liveDailyPnlDisplay(account).value,
+    ]));
+  }, [displaySnapshot]);
   const accountLabel = useMemo(() => createCopyTradeAccountLabelResolver({
     accountsById: new Map(copyTradeSnapshot?.accounts.map(account => [account.id, account]) ?? []),
     profilesById: new Map(live.profiles.flatMap(profile => {
@@ -518,14 +526,14 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     [liveData],
   );
   const effectiveAccountEligibility = useMemo(
-    () => copyTradeSnapshot && !live.dataEnrichmentPending
+    () => copyTradeSnapshot
       ? effectiveCopyTradeAccountEligibility(
-          copyTradeSnapshot.accounts,
+          (displaySnapshot ?? copyTradeSnapshot).accounts.filter(account => !account.dailyPnlPending),
           live.profiles,
           agentStatus?.controller.accountEligibility ?? [],
         )
       : (agentStatus?.controller.accountEligibility ?? []),
-    [agentStatus?.controller.accountEligibility, copyTradeSnapshot, live.dataEnrichmentPending, live.profiles],
+    [agentStatus?.controller.accountEligibility, copyTradeSnapshot, displaySnapshot, live.profiles],
   );
   const accountEligibilityExclusions = useMemo(
     () => effectiveAccountEligibility
@@ -1100,7 +1108,7 @@ acceptAgentStatus((await executeAgent({
               riskConfigSupported={supportsCopierRiskConfig(agentStatus)}
               copierArmed={copierUiDemo ? false : agentStatus?.controller.armed === true}
               copierStatusPending={!copierUiDemo && (!agentStatusResolved || !runtimeAvailable)}
-              dailyPnlPending={live.dataEnrichmentPending}
+              dailyPnlPending={false}
               brokerDailyPnlByAccount={brokerDailyPnlByAccount}
               dailyStats={agentStatus?.controller.dailyStats ?? null}
               marketPrices={agentStatus?.marketPrices ?? []}
@@ -1161,7 +1169,7 @@ acceptAgentStatus((await executeAgent({
               group={agentStatus?.group ?? null}
               status={agentStatus?.controller ?? null}
               brokerDailyPnlByAccount={brokerDailyPnlByAccount}
-              brokerDailyPnlPending={live.dataEnrichmentPending}
+              brokerDailyPnlPending={false}
               disabled={configMutationPending || copyGroupStatusPollFence.inFlight || !runtimeAvailable || !supportsCopierRiskConfig(agentStatus)}
               onSaveGroup={agentStatus ? saveRiskGroup : undefined}
             />
@@ -1219,7 +1227,7 @@ acceptAgentStatus((await executeAgent({
         />
       ) : null}
       {mobileLayout && selectedLiveAccount ? <LiveMobileAccountDetail key={selectedLiveAccount.id} account={selectedLiveAccount} history={selectedAccount ?? undefined} orders={copyTradeOrders}
-        dailyPnlPending={live.dataEnrichmentPending} leader={selectedMembership?.leaderAccountId === selectedAccountId}
+        dailyPnlPending={false} leader={selectedMembership?.leaderAccountId === selectedAccountId}
         multiplier={selectedMembership?.followers.find(f => f.accountId === selectedAccountId)?.multiplier ?? 1}
         onClose={() => setSelectedAccountId(null)} /> : selectedAccount ? <AccountDetail account={selectedAccount} profile={profileMap(live.profiles).get(String(selectedAccount.id))} onClose={() => setSelectedAccountId(null)} /> : null}
     </div>

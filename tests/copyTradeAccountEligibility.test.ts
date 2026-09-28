@@ -18,6 +18,9 @@ const account = (overrides: Partial<LiveAccount>): LiveAccount => ({
   realizedPnl: 0,
   weekRealizedPnl: 0,
   unrealizedPnl: 0,
+  unrealizedPnlSource: 'broker',
+  dailyPnlAvailable: true,
+  dailyPnlTradeDate: '2026-08-26',
   peakEquity: 50_000,
   drawdownFloor: 48_000,
   cushion: 2_000,
@@ -67,7 +70,7 @@ describe('copy trade account eligibility read-model', () => {
   it('odvodí DLL z aktuálního realized + unrealized P&L a profilu účtu', () => {
     const result = inferredCopyTradeAccountEligibility([
       account({ id: 16, realizedPnl: -1_206.5 }),
-    ], [profile(16, 1_200)]);
+    ], [profile(16, 1_200)], Date.parse('2026-08-26T12:00:00Z'));
 
     expect(result).toMatchObject([{ accountId: 16, state: 'dll-locked' }]);
     expect(result[0].reason).toContain('DLL 1200.00 USD');
@@ -76,10 +79,27 @@ describe('copy trade account eligibility read-model', () => {
   it('odvodí DLL i přímo z broker limitu, když profil limit neobsahuje', () => {
     const result = inferredCopyTradeAccountEligibility([
       account({ id: 16, dailyLossLimit: 1_200, realizedPnl: -1_206.5 }),
-    ], []);
+    ], [], Date.parse('2026-08-26T12:00:00Z'));
 
     expect(result).toMatchObject([{ accountId: 16, state: 'dll-locked' }]);
     expect(result[0].reason).toContain('DLL 1200.00 USD');
+  });
+
+  it('nevyrábí DLL lock z předchozího trade date ani ze stale otevřeného P&L po 17:00 CT', () => {
+    const now = Date.parse('2026-09-28T23:30:00Z');
+    const previousDay = account({
+      id: 16,
+      realizedPnl: -1_250,
+      dailyPnlTradeDate: '2026-09-28',
+      updatedAt: new Date(now).toISOString(),
+    });
+    const staleOpen = account({
+      ...previousDay,
+      dailyPnlTradeDate: '2026-09-29',
+      unrealizedPnlSource: 'stale',
+    });
+    expect(inferredCopyTradeAccountEligibility([previousDay], [profile(16, 1_200)], now)).toEqual([]);
+    expect(inferredCopyTradeAccountEligibility([staleOpen], [profile(16, 1_200)], now)).toEqual([]);
   });
 
   it('runtime důvod zachová, ale závažnější LIVE breach smí stav zpřísnit', () => {

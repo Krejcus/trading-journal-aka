@@ -15,9 +15,9 @@ const data = {
   coverage: { accounts: coverage, positions: coverage, orders: coverage, fills: coverage, fillPairs: coverage, fillFees: coverage, contracts: coverage },
   accounts: [{
     id: 42, name: 'TDFY42', active: true, canTrade: true, netPositionCount: 1, workingOrderCount: 1,
-    balance: { totalCashValue: 49_000, netLiq: 48_900, realizedPnL: 120, weekRealizedPnL: 220, openPnL: -100 },
+    balance: { coverage, totalCashValue: 49_000, netLiq: 48_900, realizedPnL: 120, weekRealizedPnL: 220, openPnL: -100 },
     activity: { fillCount: 2 },
-    risk: { minNetLiq: null, maxNetLiq: null, dailyLossAutoLiq: 1_200 },
+    risk: { statusCoverage: coverage, limitsCoverage: coverage, minNetLiq: null, maxNetLiq: null, dailyLossAutoLiq: 1_200 },
     positions: [{ id: 1, contractId: 7, symbol: 'MNQZ6', timestamp: null, tradeDate: null, netPosition: 1, bought: 1, boughtValue: null, sold: 0, soldValue: null, previousPosition: 0, averagePrice: 20_000, previousPrice: null }],
     orders: [{ id: 3, contractId: 7, symbol: 'MNQZ6', timestamp: '2026-08-15T08:00:00.000Z', action: 'Buy', orderType: 'Limit', quantity: 1, price: 20_000, stopPrice: null, status: 'Working', admin: false, ocoId: null, parentId: null, linkedId: null }],
     fills: [], fillPairs: [], daily: [{
@@ -84,6 +84,21 @@ describe('Tradovate copy-trade bridge', () => {
     expect(tradovateBrokerDailyPnlByAccount(confirmedZero)).toEqual({ 42: 0 });
     expect(tradovateBrokerDailyPnlByAccount(unavailable)).toEqual({ 42: null });
     expect(tradovateBrokerDailyPnlByAccount(withoutCurrentDay)).toEqual({ 42: null });
+  });
+
+  it('páruje daily podle 17:00 Chicago trade date, ne podle UTC dne', () => {
+    const evening = structuredClone(data);
+    evening.capturedAt = '2026-09-28T23:30:00.000Z'; // 18:30 CT, už trade date 29. 9.
+    evening.accounts[0].daily = [
+      { ...evening.accounts[0].daily[0], tradeDate: '2026-09-28', reportedRealizedPnl: -1_300 },
+      { ...evening.accounts[0].daily[0], tradeDate: '2026-09-29', reportedRealizedPnl: 75 },
+    ];
+    expect(tradovateBrokerDailyPnlByAccount(evening)).toEqual({ 42: 75 });
+    expect(tradovateCopyTradeSnapshot(evening, profiles).accounts[0]).toMatchObject({
+      realizedPnl: 75,
+      dailyPnlTradeDate: '2026-09-29',
+      dailyPnlAvailable: true,
+    });
   });
 
   it('maps broker orders without changing their working state', () => {

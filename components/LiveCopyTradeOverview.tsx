@@ -7,8 +7,8 @@ import { buildLiveDaySummary, liveDayReadAnswered } from '../lib/liveDaySummary'
 import { buildLiveCopierIsland } from '../lib/liveCopierIsland';
 import { copierArmRejection } from '../lib/copierArmPreparation';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
-import { isLiveAccountReadVerified, liveReadStaleLabel } from '../lib/liveReadFreshness';
-import { liveBalanceDisplay, liveCapitalDisplay, liveDailyPnlDisplay, liveGroupDailyPnlDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
+import { formatReadAge, isLiveAccountReadVerified, liveReadStaleLabel } from '../lib/liveReadFreshness';
+import { liveBalanceDisplay, liveCapitalDisplay, liveDailyLossRemainingDisplay, liveDailyPnlDisplay, liveGroupDailyPnlDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
 import { useCopierDisarmNotice } from '../hooks/useCopierDisarmNotice';
 import { useCopierPowerDisplay } from '../hooks/useCopierPowerDisplay';
 import { copierPowerDisplayKey } from '../lib/copierPowerDisplay';
@@ -2842,6 +2842,18 @@ export const BalanceValue = ({ display, compact = false }: { display: LiveBalanc
   </span>;
 };
 
+export const DailyPnlValue = ({ display, compact = false }: { display: LiveBalanceDisplay; compact?: boolean }) => {
+  if (display.value == null) return <span className="text-xs text-[var(--text-secondary)]">—</span>;
+  const age = display.confirmedAt ? Math.max(0, Date.now() - Date.parse(display.confirmedAt)) : 0;
+  return <span
+    data-daily-pnl-state={display.stale ? 'last-known' : 'confirmed'}
+    title={display.stale && display.confirmedAt
+      ? `Poslední potvrzené denní P&L před ${formatReadAge(age)} · ${new Date(display.confirmedAt).toLocaleString('cs-CZ')}`
+      : display.confirmedAt ? `Potvrzené denní P&L · ${new Date(display.confirmedAt).toLocaleString('cs-CZ')}` : undefined}
+    className={`text-xs tabular-nums ${display.stale ? 'text-[var(--text-secondary)]' : pnlClass(display.value)}`}
+  >{(compact ? moneyWhole : money).format(display.value)}</span>;
+};
+
 const CompactStat = ({ label, value, className = 'text-[var(--text-primary)]' }: {
   label: string; value: React.ReactNode; className?: string;
 }) => (
@@ -2878,21 +2890,22 @@ const eligibilityNeedsAttention = (eligibility: CopierAccountEligibility | undef
 const accountRiskValues = (a: LiveAccount | undefined, accountId: number | null, dailyPnlPending: boolean, sizeClass?: string) => {
   const cushion = a?.cushion ?? null;
   const cashKnown = !!a && isLiveAccountReadVerified(a, 'cash');
-  const rawDaily = liveDailyPnlDisplay(a ? { ...a, displayValues: undefined } : undefined, Date.now(), dailyPnlPending);
-  const dllRemaining = a && rawDaily.value != null ? copyTradeDailyLossRemaining(a) : null;
+  const dllDisplay = liveDailyLossRemainingDisplay(a, Date.now(), dailyPnlPending);
+  const dllRemaining = a && a.cashAvailability == null ? copyTradeDailyLossRemaining(a) : dllDisplay.value;
   const riskKey = `${accountId}:${a?.riskDisplayConfigKey ?? "legacy"}:${tradovateDisplayTradeDate()}`;
-  const dllAt = [a?.cashUpdatedAt, rawDaily.confirmedAt, a?.unrealizedPnlUpdatedAt].filter((at): at is string => !!at);
-  const dllConfirmedAt = dllAt.length === 3 ? dllAt.sort((x,y)=>Date.parse(x)-Date.parse(y))[0] : null;
   const dllShowsDrawdown = !!a?.riskDisplayDailyLossDisabled
     && (a.dailyLossLimit == null || a.dailyLossLimit === 0);
   const drawdown = <LiveRiskValue identity={`${riskKey}:dd`} label="Rezerva DD" storageScope={a?.riskDisplayStorageScope} legacy={!!a && a.cashAvailability == null}
     enabled={!!a && a.cashAvailability !== 'denied' && !a.riskDisplayDrawdownDisabled}
     value={dailyPnlPending || a?.riskDisplayPending ? null : cushion} confirmedAt={a?.cashUpdatedAt ?? null}
-    verified={cashKnown && a?.unrealizedPnlSource !== 'stale'} color={cushionClass} sizeClass={sizeClass} />;
+    verified={cashKnown && a?.unrealizedPnlSource !== 'stale'}
+    state={a?.riskDisplayDrawdownDisabled ? 'no-limit' : a?.dailyPnlPending ? 'loading' : a?.riskDisplayPending ? 'unavailable' : 'ready'}
+    reason={a?.riskDisplayUnavailableReason} color={cushionClass} sizeClass={sizeClass} />;
   const dll = <LiveRiskValue identity={`${riskKey}:dll`} label="DLL zbývá" storageScope={a?.riskDisplayStorageScope} legacy={!!a && a.cashAvailability == null}
-    enabled={!!a && a.cashAvailability !== 'denied' && (a.dailyLossLimit == null || a.dailyLossLimit > 0)}
-    value={dailyPnlPending || a?.riskDisplayPending || dllRemaining == null ? null : Math.max(0,dllRemaining)} confirmedAt={dllConfirmedAt}
-    verified={cashKnown && !dailyPnlPending && a?.unrealizedPnlSource !== 'stale'}
+    enabled={dllDisplay.state !== 'no-limit'}
+    value={dllRemaining == null ? null : Math.max(0,dllRemaining)} confirmedAt={dllDisplay.confirmedAt}
+    verified={dllDisplay.state === 'ready' && !dllDisplay.stale}
+    state={dllDisplay.state} reason={dllDisplay.reason}
     color={value=>dllRemainingClass(value,a?.dailyLossLimit)} sizeClass={sizeClass} />;
   return { dll, drawdown, dllShowsDrawdown };
 };
@@ -2967,7 +2980,8 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
   const compactRejection = visibleRejectedExecution(accountId, eligibility, compactFlat, dismissedRejections);
   const hasOpenPositions = a?.positions.some(position => position.netPosition !== 0) ?? false;
   const unavailableFollower = !a && accountId != null && !row.isLeader;
-  const daily = a ? liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value : null;
+  const dailyDisplay = liveDailyPnlDisplay(a, Date.now(), dailyPnlPending);
+  const daily = dailyDisplay.value;
   // Prokázaný klid je nula, ne neznámo. Pomlčka by tvrdila „nevím“ u účtu,
   // který se do celkového součtu nahoře započítává jako nula — a součet
   // s pomlčkami pod sebou vypadá jako rozbitá data.
@@ -3088,7 +3102,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
         </span>
         <span className={`compact-row-dim truncate text-right text-[12px] font-bold tabular-nums ${variant === 'market'
           ? (a ? pnlClass(a.unrealizedPnl) : 'text-[var(--text-secondary)]')
-          : (daily != null ? pnlClass(daily) : 'text-[var(--text-secondary)]')}`}>
+          : (daily != null && !dailyDisplay.stale ? pnlClass(daily) : 'text-[var(--text-secondary)]')}`}>
           {variant === 'market'
             ? (a ? (
               <span
@@ -3099,7 +3113,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
                 {unrealStale ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
               </span>
             ) : '—')
-            : daily != null ? money.format(daily)
+            : daily != null ? <DailyPnlValue display={dailyDisplay} />
               : quiet ? <span title="Broker dnes u tohoto účtu nehlásí uzavřený obchod">{money.format(0)}</span>
                 : '—'}
         </span>
@@ -4754,7 +4768,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
           ? <CopyTradePositionsCell accountId={accountId} positions={a.positions} orders={orders} positionsVerified={isLiveAccountReadVerified(a, 'positions')} ordersVerified={isLiveAccountReadVerified(a, 'orders')} staleLabel={liveReadStaleLabel(a, 'positions') ?? liveReadStaleLabel(a, 'orders')} />
           : <span className="text-xs tabular-nums text-[var(--text-secondary)]">—</span>;
       case 'daily':
-        return <span className={`text-xs tabular-nums ${a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? pnlClass(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : 'text-[var(--text-secondary)]'}`}>{a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? money.format(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : '—'}</span>;
+        return <DailyPnlValue display={liveDailyPnlDisplay(a, Date.now(), dailyPnlPending)} />;
       case 'dllRemaining':
         if (showDrawdownInDll) return <span className="inline-flex items-center justify-end whitespace-nowrap"
           title="Účet nemá denní limit ztráty. Zobrazuje se zbývající rezerva drawdownu (DD).">
@@ -6323,10 +6337,13 @@ export const copyGroupExposureMultiple = (group: Pick<CopyGroupConfig, 'follower
     (sum, follower) => sum + (follower.mode === 'off' ? 0 : follower.multiplier), 0,
   ) * 100) / 100;
 
-export const copyTradeDailyLossRemaining = (account: Pick<LiveAccount, 'dailyLossLimit' | 'realizedPnl' | 'unrealizedPnl'>): number | null => {
+export const copyTradeDailyLossRemaining = (
+  account: Pick<LiveAccount, 'dailyLossLimit' | 'realizedPnl' | 'unrealizedPnl'>,
+  realizedPnl = account.realizedPnl,
+): number | null => {
   const limit = account.dailyLossLimit;
   if (limit == null || !Number.isFinite(limit) || limit <= 0) return null;
-  const currentDailyPnl = account.realizedPnl + account.unrealizedPnl;
+  const currentDailyPnl = realizedPnl + account.unrealizedPnl;
   return Number.isFinite(currentDailyPnl) ? limit + currentDailyPnl : null;
 };
 

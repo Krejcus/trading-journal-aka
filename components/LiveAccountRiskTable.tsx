@@ -97,6 +97,37 @@ export const verifiedAccountDailyPnl = ({
     : null;
 };
 
+/** Display-only retention for the Risk summary. A stale worker value may stay
+ * visible, but verifiedAccountDailyPnl above remains strict for gates/colors. */
+export const displayedAccountDailyPnl = ({
+  workerRisk,
+  workerRiskFeedAvailable,
+  brokerPnl,
+  brokerPending,
+  now,
+}: {
+  workerRisk?: CopierAccountRiskSnapshot;
+  workerRiskFeedAvailable: boolean;
+  brokerPnl?: number | null;
+  brokerPending: boolean;
+  now: number;
+}): { value: number; stale: boolean; confirmedAt: number | null } | null => {
+  if (workerRiskFeedAvailable || workerRisk != null) {
+    return workerRisk
+      && !workerRisk.error
+      && Number.isFinite(workerRisk.verifiedAt)
+      && workerRisk.verifiedAt > 0
+      && workerRisk.verifiedAt <= now
+      && typeof workerRisk.realizedPnlUsd === 'number'
+      && Number.isFinite(workerRisk.realizedPnlUsd)
+      ? { value: workerRisk.realizedPnlUsd, stale: !accountRiskSnapshotIsFresh(workerRisk, now), confirmedAt: workerRisk.verifiedAt }
+      : null;
+  }
+  return !brokerPending && typeof brokerPnl === 'number' && Number.isFinite(brokerPnl)
+    ? { value: brokerPnl, stale: false, confirmedAt: null }
+    : null;
+};
+
 const optionalDailyLossCut = (raw: string): { valid: boolean; value?: number } => {
   const value = raw.trim();
   if (value === '' || value === '0') return { valid: true };

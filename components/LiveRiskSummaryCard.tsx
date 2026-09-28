@@ -10,9 +10,10 @@ import {
   type CopyGroupConfig,
 } from '../services/liveCopyTrading';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
-import { verifiedAccountDailyPnl } from './LiveAccountRiskTable';
+import { displayedAccountDailyPnl } from './LiveAccountRiskTable';
 import { copierRuntimePresentation } from '../lib/copierRuntimePresentation';
 import { copierAccountEligibilityPresentation } from '../lib/copierAccountEligibilityPresentation';
+import { formatReadAge } from '../lib/liveReadFreshness';
 
 export interface LiveRiskSummaryCardProps {
   group: CopyGroupConfig | null;
@@ -60,13 +61,14 @@ const valueColor: Record<MetricTone, string> = {
   indigo: 'text-indigo-500',
 };
 
-const MiniBar = ({ label, value, detail, percent, tone, disabled = false }: {
+const MiniBar = ({ label, value, detail, percent, tone, disabled = false, stale = false }: {
   label: string;
   value: string;
   detail: string;
   percent: number | null;
   tone: MetricTone;
   disabled?: boolean;
+  stale?: boolean;
 }) => {
   const known = percent != null;
   const width = known ? clampPercent(percent) : 0;
@@ -75,12 +77,13 @@ const MiniBar = ({ label, value, detail, percent, tone, disabled = false }: {
     <div
       data-risk-summary-metric={label}
       data-metric-known={known ? 'true' : 'false'}
+      data-metric-state={known ? stale ? 'last-known' : 'confirmed' : 'unavailable'}
       data-rule-disabled={disabled ? 'true' : 'false'}
       className="min-w-0 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-input)] px-2.5 py-2"
     >
       <div className="flex min-w-0 items-baseline justify-between gap-2">
         <span className="truncate text-[9.5px] font-black uppercase tracking-[0.08em] text-[var(--text-muted)]">{label}</span>
-        <b className={`truncate text-right text-[11px] font-black tabular-nums ${known ? valueColor[tone] : 'text-[var(--text-secondary)]'}`}>{value}</b>
+        <b className={`truncate text-right text-[11px] font-black tabular-nums ${known && !stale ? valueColor[tone] : 'text-[var(--text-secondary)]'}`}>{value}</b>
       </div>
       <div
         role="progressbar"
@@ -92,7 +95,7 @@ const MiniBar = ({ label, value, detail, percent, tone, disabled = false }: {
           : { 'aria-valuetext': disabled ? 'vypnuto' : 'neověřeno' })}
         className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--border-subtle)]"
       >
-        <span className={`block h-full rounded-full ${barColor[tone]}`} style={{ width: `${width}%` }} />
+        <span className={`block h-full rounded-full ${stale ? 'bg-[var(--text-muted)]' : barColor[tone]}`} style={{ width: `${width}%` }} />
       </div>
       <p className="mt-1 truncate text-[9.5px] leading-3 text-[var(--text-muted)]" title={detail}>{detail}</p>
     </div>
@@ -177,8 +180,8 @@ export const LiveRiskSummaryCard = ({
   const accountsById = new Map(accounts.map(account => [account.id, account]));
   const accountRiskById = new Map(accountRisk.map(snapshot => [snapshot.accountId, snapshot]));
   const limitedCopyingFollowers = (riskConfigSupported ? copyingFollowers : []).filter(follower => (follower.dailyLossCutUsd ?? 0) > 0);
-  const pnlForAccount = (accountId: number): number | null => {
-    return verifiedAccountDailyPnl({
+  const pnlForAccount = (accountId: number) => {
+    return displayedAccountDailyPnl({
       workerRisk: accountRiskById.get(accountId),
       workerRiskFeedAvailable: accountRisk.length > 0,
       brokerPnl: brokerDailyPnlByAccount[String(accountId)],
@@ -199,14 +202,16 @@ export const LiveRiskSummaryCard = ({
         lossUsd: number;
         limitUsd: number;
         percent: number;
+        stale: boolean;
+        confirmedAt: number | null;
       } | null>((nearest, follower) => {
         const limitUsd = follower.dailyLossCutUsd ?? 0;
         const account = accountsById.get(follower.accountId)!;
         const pnl = pnlForAccount(follower.accountId)!;
-        const lossUsd = Math.max(0, -pnl);
+        const lossUsd = Math.max(0, -pnl.value);
         const percent = (lossUsd / limitUsd) * 100;
         return nearest == null || percent > nearest.percent
-          ? { account, lossUsd, limitUsd, percent }
+          ? { account, lossUsd, limitUsd, percent, stale: pnl.stale, confirmedAt: pnl.confirmedAt }
           : nearest;
       }, null);
 
@@ -313,7 +318,7 @@ export const LiveRiskSummaryCard = ({
           label="Účet nejblíž limitu"
           value={nearestFollower?.account.name ?? '—'}
           detail={nearestFollower
-            ? `${Math.round(nearestFollower.percent)} % · −${number.format(nearestFollower.lossUsd)} / ${number.format(nearestFollower.limitUsd)} USD`
+            ? `${Math.round(nearestFollower.percent)} % · −${number.format(nearestFollower.lossUsd)} / ${number.format(nearestFollower.limitUsd)} USD${nearestFollower.stale && nearestFollower.confirmedAt != null ? ` · poslední potvrzení před ${formatReadAge(now - nearestFollower.confirmedAt)}` : ''}`
             : !riskConfigSupported
               ? runtimeAvailable ? 'Risk vyžaduje aktualizaci workeru' : 'Podpora Risk pravidel není ověřená'
               : brokerDailyPnlPending && accountRisk.length === 0
@@ -323,6 +328,7 @@ export const LiveRiskSummaryCard = ({
                 : 'Denní P&L všech účtů není ověřené'}
           percent={nearestFollower?.percent ?? null}
           tone={metricTone(nearestFollower?.percent ?? null, 'emerald')}
+          stale={nearestFollower?.stale}
         />
       </div>
 

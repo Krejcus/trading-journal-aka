@@ -177,14 +177,18 @@ export class TradovateAccountDataError extends Error {
   }
 }
 
-const retryAfterMs = (header: string | null): number => {
+const retryAfterMs = (header: string | null, payload: unknown): number | null => {
   if (header != null && header.trim() !== '') {
     const seconds = Number(header);
     if (Number.isFinite(seconds) && seconds >= 0) return Math.max(1_000, seconds * 1_000);
     const at = Date.parse(header);
     if (Number.isFinite(at)) return Math.max(1_000, at - Date.now());
   }
-  return 3_600_000;
+  if (payload && typeof payload === 'object') {
+    const seconds = Number((payload as Record<string, unknown>)['p-time']);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.max(1_000, seconds * 1_000);
+  }
+  return null;
 };
 
 const skippedProbe = <T>(): Probe<T> => ({ ok: false, value: null, status: null });
@@ -387,10 +391,13 @@ const request = async <T>(options: {
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
       signal: AbortSignal.timeout(10_000),
     });
+    const parsed = await response.json().then(value => ({ ok: true as const, value }), () => ({ ok: false as const, value: null }));
     if (!response.ok) return { ok: false, value: null, status: response.status,
-      ...(response.status === 429 ? { retryAfterMs: retryAfterMs(response.headers.get('Retry-After')) } : {}),
+      ...(response.status === 429 ? { retryAfterMs: retryAfterMs(response.headers.get('Retry-After'), parsed.value) ?? 300_000 } : {}),
     };
-    return { ok: true, value: await response.json() as T, status: response.status };
+    // Nečitelné tělo úspěšné odpovědi není „prázdný seznam“ — čtení selhalo.
+    if (!parsed.ok) return { ok: false, value: null, status: response.status };
+    return { ok: true, value: parsed.value as T, status: response.status };
   } catch {
     return { ok: false, value: null, status: null };
   }
@@ -431,7 +438,7 @@ const mergeListProbes = <T>(probes: Probe<T[]>[]): Probe<T[]> => {
   if (probes.length === 0) return { ok: true, value: [], status: 200 };
   const successful = probes.filter(probe => probe.ok && Array.isArray(probe.value));
   const limited = probes.filter(probe => probe.status === 429);
-  const retry = limited.length > 0 ? Math.max(...limited.map(probe => probe.retryAfterMs ?? 3_600_000)) : null;
+  const retry = limited.length > 0 ? Math.max(...limited.map(probe => probe.retryAfterMs ?? 300_000)) : null;
   if (successful.length === 0) return limited.length > 0 ? { ...limited[0], retryAfterMs: retry! } : probes[0];
   return {
     ok: true,
@@ -584,7 +591,7 @@ export async function loadTradovateAccountData(options: {
     const probe = await request<T>({ ...options, ...init, path, fetchImpl });
     if (probe.status === 429) {
       stopped = { ok: false, value: null, status: 429,
-        retryAfterMs: Math.max(currentStop()?.retryAfterMs ?? 0, probe.retryAfterMs ?? 3_600_000),
+        retryAfterMs: Math.max(currentStop()?.retryAfterMs ?? 0, probe.retryAfterMs ?? 300_000),
       };
     } else if (probe.status === 401 && !stopped) {
       stopped = { ok: false, value: null, status: probe.status };

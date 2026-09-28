@@ -1,12 +1,19 @@
 import { tradovateDisplayTradeDate } from './tradovateDisplayDay';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
 import { sameTradovateSession } from '../services/copierArmSession';
-import { isLiveAccountReadVerified } from './liveReadFreshness';
+import { isLiveAccountReadVerified, LIVE_READ_MAX_AGE_MS } from './liveReadFreshness';
 
 export interface LiveBalanceDisplay {
   value: number | null;
   stale: boolean;
   confirmedAt: string | null;
+}
+
+export type LiveRiskDisplayState = 'ready' | 'loading' | 'unavailable' | 'unknown-limit' | 'no-limit';
+
+export interface LiveDailyLossDisplay extends LiveBalanceDisplay {
+  state: LiveRiskDisplayState;
+  reason: string | null;
 }
 
 /** Presentation only: retained cash is not fresh risk/execution evidence. */
@@ -41,20 +48,81 @@ function confirmedField(account: LiveAccount, field: 'totalCashValue' | 'dailyRe
   const raw = Date.parse((field === 'dailyRealizedPnL' ? account.dailyPnlUpdatedAt : account.cashUpdatedAt) ?? '');
   if (!Number.isFinite(requested) || !Number.isFinite(confirmed) || confirmed < requested || confirmed > now + 1_000 || (Number.isFinite(raw) && requested <= raw)) return null;
   if (field === 'dailyRealizedPnL' && (!sameTradovateSession(requested, now) || !sameTradovateSession(confirmed, now))) return null;
-  return { value: entry.value, stale: now - confirmed > 45_000, confirmedAt: entry.confirmedAt };
+  return { value: entry.value, stale: now - confirmed > LIVE_READ_MAX_AGE_MS, confirmedAt: entry.confirmedAt };
 }
 
 export function liveDailyPnlDisplay(account: LiveAccount | null | undefined, now = Date.now(), pending = false): LiveBalanceDisplay {
   const missing = { value: null, stale: false, confirmedAt: null };
-  if (!account || account.cashAvailability === 'denied') return missing;
+  if (!account) return missing;
   const confirmed = confirmedField(account, 'dailyRealizedPnL', now);
   if (confirmed) return confirmed;
+  if (account.cashAvailability === 'denied') return missing;
+  pending ||= account.dailyPnlPending === true;
   if (!Number.isFinite(account.realizedPnl) || account.dailyPnlAvailable === false || (pending && account.dailyPnlAvailable !== true)) return missing;
   if (account.cashAvailability == null) return { value: account.realizedPnl, stale: false, confirmedAt: null };
   if (account.dailyPnlTradeDate && account.dailyPnlTradeDate !== tradovateDisplayTradeDate(now)) return missing;
   const at = Date.parse(account.dailyPnlUpdatedAt ?? account.cashUpdatedAt ?? '');
   if (!Number.isFinite(at) || at > now + 1_000 || !sameTradovateSession(at, now)) return missing;
-  return { value: account.realizedPnl, stale: !isLiveAccountReadVerified(account, 'cash', now), confirmedAt: account.dailyPnlUpdatedAt ?? account.cashUpdatedAt! };
+  return { value: account.realizedPnl, stale: now - at > LIVE_READ_MAX_AGE_MS, confirmedAt: account.dailyPnlUpdatedAt ?? account.cashUpdatedAt! };
+}
+
+const oldestConfirmedInput = (values: Array<string | null | undefined>, now: number): string | null => {
+  const parsed = values.map(value => ({ value, at: Date.parse(value ?? '') }));
+  if (parsed.some(item => !item.value || !Number.isFinite(item.at) || item.at > now + 1_000)) return null;
+  return parsed.sort((a, b) => a.at - b.at)[0]?.value ?? null;
+};
+
+/** Presentation-only DLL remaining. Every number and timestamp belongs to an
+ * input actually used by the formula; cash freshness is deliberately absent. */
+export function liveDailyLossRemainingDisplay(
+  account: LiveAccount | null | undefined,
+  now = Date.now(),
+  pending = false,
+): LiveDailyLossDisplay {
+  if (!account) return { value: null, stale: false, confirmedAt: null, state: 'unavailable', reason: 'Účet není v aktuálním OAuth snapshotu.' };
+  pending ||= account.dailyPnlPending === true;
+  const limit = account.dailyLossLimit;
+  if (account.riskDisplayDailyLossDisabled && (limit == null || limit === 0)) {
+    return { value: null, stale: false, confirmedAt: null, state: 'no-limit', reason: 'Potvrzený plán nemá denní limit ztráty.' };
+  }
+  if (limit == null || !Number.isFinite(limit) || limit <= 0) {
+    return {
+      value: null, stale: false, confirmedAt: null,
+      state: pending ? 'loading' : 'unknown-limit',
+      reason: pending ? 'Načítá se risk limit tohoto připojení.' : account.riskDisplayUnavailableReason ?? 'Tradovate ani profil nepotvrdily denní limit ztráty.',
+    };
+  }
+  const realized = liveDailyPnlDisplay(account, now, pending);
+  if (realized.value == null) {
+    return {
+      value: null, stale: false, confirmedAt: null,
+      state: pending ? 'loading' : 'unavailable',
+      reason: pending ? 'Načítá se denní P&L tohoto připojení.' : 'Tradovate nepotvrdil realizované P&L pro aktuální obchodní den.',
+    };
+  }
+  if (!Number.isFinite(account.unrealizedPnl)) {
+    return { value: null, stale: false, confirmedAt: null, state: 'unavailable', reason: 'Otevřený P&L není dostupný.' };
+  }
+  const confirmedAt = oldestConfirmedInput([
+    realized.confirmedAt,
+    account.unrealizedPnlUpdatedAt,
+    account.dailyLossLimitUpdatedAt,
+  ], now);
+  if (!confirmedAt) {
+    return {
+      value: null, stale: false, confirmedAt: null,
+      state: pending ? 'loading' : 'unavailable',
+      reason: pending ? 'Načítají se časy vstupů pro DLL.' : 'Čas realizovaného P&L, otevřeného P&L nebo limitu není potvrzený.',
+    };
+  }
+  const at = Date.parse(confirmedAt);
+  return {
+    value: limit + realized.value + account.unrealizedPnl,
+    stale: realized.stale || account.unrealizedPnlSource === 'stale' || now - at > LIVE_READ_MAX_AGE_MS,
+    confirmedAt,
+    state: 'ready',
+    reason: null,
+  };
 }
 
 export function liveGroupDailyPnlDisplay(accounts: Array<LiveAccount | null | undefined>, now = Date.now(), pending = false): number | null {
