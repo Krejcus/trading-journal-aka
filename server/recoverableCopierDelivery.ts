@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto';
 import type { LocalCopierExecutionAgent } from './localCopierExecutionAgent.js';
 import { localCopierAgentErrorDetails, type LocalCopierAgentCommand } from '../lib/localCopierAgentProtocol.js';
 import type { RelayDelivery, RelayDeliveryStore } from './copierRelayDeliveryStore.js';
+import { tradovateSessionEndAt } from '../services/copierArmSession.js';
 
 type Request = (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
 export const COPIER_COMMAND_ACK_RESERVE_MS = 10_000;
+export const COPIER_RELAY_CLOCK_SKEW_RESERVE_MS = 2_000;
 /** Serial, durable transport recovery. Only HTTP delivery/ACK is retried;
  * once execution starts the command can NEVER be executed by this relay again. */
 export function recoverableCopierDelivery(options: {
@@ -28,7 +30,9 @@ export function recoverableCopierDelivery(options: {
     if (!checkpoint) await persist({ version: 1, session, deliveryId: randomUUID(), phase: 'polling' });
     let current = checkpoint!;
     await options.store.write(current);
+    const pollStartedAt = now();
     const response = await options.request({ action: 'poll-v2', deliveryId: current.deliveryId });
+    const pollReceivedAt = now();
     if (!Object.hasOwn(response, 'command')) throw new Error('relay-delivery-response-invalid');
     if (response.protocol !== 2) throw new Error('relay-delivery-protocol-unavailable');
     const remote = response.command as { id: string; command: LocalCopierAgentCommand; createdAt: string; expiresAt: string; status: string } | null;
@@ -45,9 +49,20 @@ export function recoverableCopierDelivery(options: {
       await persist({ ...current, phase: 'completed', commandId: remote.id, result: null,
         error: 'command-outcome-unknown-worker-session-changed' });
     } else if (current.phase === 'polling') {
-      const created = Date.parse(remote.createdAt);
-      const expires = Date.parse(remote.expiresAt);
-      if (!Number.isFinite(created) || !Number.isFinite(expires) || expires <= now() || created < startedAt) {
+      const serverNow = typeof response.serverNow === 'string' ? Date.parse(response.serverNow) : NaN;
+      const localMidpoint = pollStartedAt + ((pollReceivedAt - pollStartedAt) / 2);
+      const serverClockOffsetMs = Number.isFinite(serverNow) ? serverNow - localMidpoint : 0;
+      const clockSkewReserveMs = Math.max(
+        COPIER_RELAY_CLOCK_SKEW_RESERVE_MS,
+        Math.ceil(Math.max(0, pollReceivedAt - pollStartedAt) / 2),
+      );
+      const created = Date.parse(remote.createdAt) - serverClockOffsetMs;
+      const expires = Date.parse(remote.expiresAt) - serverClockOffsetMs;
+      const validPrestartDayLock = remote.command.type === 'lock-until-session-end'
+        && Number.isFinite(created)
+        && tradovateSessionEndAt(created) > now();
+      if (!Number.isFinite(created) || !Number.isFinite(expires) || expires <= now()
+        || (created < startedAt && !validPrestartDayLock)) {
         await persist({ ...current, phase: 'completed', commandId: remote.id, result: null,
           error: 'command-expired-or-predates-worker-session' });
       } else {
@@ -63,6 +78,7 @@ export function recoverableCopierDelivery(options: {
           try {
             result = await options.agent.execute(remote.command, {
               createdAt: created,
+              clockSkewReserveMs,
               ...(remote.command.type === 'arm-live'
                 ? { deadlineAt: expires - COPIER_COMMAND_ACK_RESERVE_MS }
                 : {}),

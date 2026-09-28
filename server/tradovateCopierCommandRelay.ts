@@ -124,18 +124,29 @@ interface RelayDeviceTarget {
   lastSeenAt?: string;
 }
 
-/** Selects the exact freshest connection runtime row returned by the UI status endpoint. */
+/** Selects the freshest runtime only among non-revoked devices. */
 const selectRelayDeviceTarget = async (options: {
   db: SupabaseClient;
   userId: string;
   connectionId: string;
   deviceId?: string;
 }): Promise<RelayDeviceTarget> => {
-  let runtimeQuery = options.db.from('tradovate_copier_device_runtime')
+  let deviceQuery = options.db.from('tradovate_copier_devices')
+    .select('id')
+    .eq('user_id', options.userId)
+    .eq('connection_id', options.connectionId)
+    .is('revoked_at', null);
+  if (options.deviceId) deviceQuery = deviceQuery.eq('id', options.deviceId);
+  const { data: devices, error: deviceError } = await deviceQuery;
+  if (deviceError) throw new Error(`copier-relay-device-lookup-failed: ${deviceError.message}`);
+  const activeDeviceIds = (devices ?? []).map(device => device.id);
+  if (activeDeviceIds.length === 0) throw new Error('copier-relay-device-not-found');
+
+  const runtimeQuery = options.db.from('tradovate_copier_device_runtime')
     .select('device_id,status,last_seen_at')
     .eq('user_id', options.userId)
-    .eq('connection_id', options.connectionId);
-  if (options.deviceId) runtimeQuery = runtimeQuery.eq('device_id', options.deviceId);
+    .eq('connection_id', options.connectionId)
+    .in('device_id', activeDeviceIds);
   const { data: runtime, error: runtimeError } = await runtimeQuery
     .order('last_seen_at', { ascending: false })
     .limit(1)
@@ -143,16 +154,7 @@ const selectRelayDeviceTarget = async (options: {
   if (runtimeError) throw new Error(`copier-relay-runtime-status-failed: ${runtimeError.message}`);
   if (!runtime) throw new Error('copier-relay-runtime-not-found');
 
-  const { data: device, error: deviceError } = await options.db.from('tradovate_copier_devices')
-    .select('id')
-    .eq('id', runtime.device_id)
-    .eq('user_id', options.userId)
-    .eq('connection_id', options.connectionId)
-    .is('revoked_at', null)
-    .maybeSingle<{ id: string }>();
-  if (deviceError) throw new Error(`copier-relay-device-lookup-failed: ${deviceError.message}`);
-  if (!device) throw new Error('copier-relay-device-not-found');
-  return { id: device.id, status: runtime.status, lastSeenAt: runtime.last_seen_at };
+  return { id: runtime.device_id, status: runtime.status, lastSeenAt: runtime.last_seen_at };
 };
 
 /**
@@ -515,11 +517,18 @@ export async function enqueueTradovateCopierCommand(options: {
       return { ...canonical, deviceId: device.id };
     }
     if (isTradovateCopierBrakeCommand(options.command)) {
-      await expirePendingArmsSupersededByBrake({
-        db: options.db,
-        deviceId: device.id,
-        brakeCreatedAt: createdAt,
-      });
+      try {
+        await expirePendingArmsSupersededByBrake({
+          db: options.db,
+          deviceId: device.id,
+          brakeCreatedAt: createdAt,
+        });
+      } catch (error) {
+        // Brzda už je durable ve FIFO. Vrátit 502 by klientovi tvrdilo opak
+        // a svádělo k dalšímu příkazu; workerový lastBrakeCreatedAt zůstává
+        // druhá pojistka proti staršímu ARMu.
+        console.error(`COPIER RELAY brake supersede failed after enqueue: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     return { id: data.id, status: data.status, expiresAt: data.expires_at, deviceId: device.id };
   }
@@ -566,13 +575,16 @@ async function coalesceInsertedArm(options: {
   now: number;
 }): Promise<{ id: string; status: string; expiresAt: string }> {
   const nowIso = new Date(options.now).toISOString();
-  const { data: canonical, error } = await options.db.from('tradovate_copier_commands')
+  const lastBrakeCreatedAt = await newestBrakeCreatedAt(options.db, options.deviceId);
+  let canonicalQuery = options.db.from('tradovate_copier_commands')
     .select('id,status,expires_at,payload')
     .eq('user_id', options.userId)
     .eq('device_id', options.deviceId)
     .eq('command_type', 'arm-live')
     .or('status.eq.claimed,status.eq.pending')
-    .gt('expires_at', nowIso)
+    .gt('expires_at', nowIso);
+  if (lastBrakeCreatedAt) canonicalQuery = canonicalQuery.gt('created_at', lastBrakeCreatedAt);
+  const { data: canonical, error } = await canonicalQuery
     .order('created_at', { ascending: true })
     .order('id', { ascending: true })
     .limit(1)
@@ -607,13 +619,16 @@ async function findInFlightArm(options: {
 }): Promise<{ id: string; status: string; expiresAt: string } | null> {
   if (options.command.type !== 'arm-live') return null;
   const nowIso = new Date(options.now).toISOString();
-  const { data, error } = await options.db.from('tradovate_copier_commands')
+  const lastBrakeCreatedAt = await newestBrakeCreatedAt(options.db, options.deviceId);
+  let inFlightQuery = options.db.from('tradovate_copier_commands')
     .select('id,status,expires_at,payload')
     .eq('user_id', options.userId)
     .eq('device_id', options.deviceId)
     .eq('command_type', 'arm-live')
     .or('status.eq.claimed,status.eq.pending')
-    .gt('expires_at', nowIso)
+    .gt('expires_at', nowIso);
+  if (lastBrakeCreatedAt) inFlightQuery = inFlightQuery.gt('created_at', lastBrakeCreatedAt);
+  const { data, error } = await inFlightQuery
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle<{ id: string; status: string; expires_at: string; payload: unknown }>();
@@ -624,6 +639,18 @@ async function findInFlightArm(options: {
   }
   return { id: data.id, status: data.status, expiresAt: data.expires_at };
 }
+
+const newestBrakeCreatedAt = async (db: SupabaseClient, deviceId: string): Promise<string | null> => {
+  const { data, error } = await db.from('tradovate_copier_commands')
+    .select('created_at')
+    .eq('device_id', deviceId)
+    .in('command_type', [...BRAKE_COMMAND_TYPES])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle<{ created_at: string }>();
+  if (error) throw new Error(`copier-relay-brake-epoch-lookup-failed: ${error.message}`);
+  return typeof data?.created_at === 'string' ? data.created_at : null;
+};
 
 const IN_FLIGHT_FLATTEN_WINDOW_MS = 5 * 60_000;
 

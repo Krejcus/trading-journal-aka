@@ -16,7 +16,7 @@ import {
 } from '../lib/localCopierAgentProtocol.js';
 import { isWeakerRiskConfig } from '../lib/copierRiskConfig.js';
 import { COPIER_RISK_CONFIG_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
-import { msUntilTradovateSessionEnd } from '../services/copierArmSession.js';
+import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
   normalizeMultiplier,
@@ -482,9 +482,10 @@ export async function startLocalCopierExecutionAgent(
     deadlineAt: number,
     admittedBrakeEpoch: number,
     commandCreatedAt: number,
+    clockSkewReserveMs = 0,
   ): void => {
     if (Date.now() >= deadlineAt) throw armDeadlineError();
-    if (commandCreatedAt <= lastBrakeCreatedAt) {
+    if (commandCreatedAt <= lastBrakeCreatedAt + Math.max(0, clockSkewReserveMs)) {
       throw new Error('ARM odmítnut: příkaz je starší než poslední bezpečnostní brzda (DISARM, kill switch nebo denní lock)');
     }
     if (brakeEpoch !== admittedBrakeEpoch) {
@@ -564,15 +565,17 @@ export async function startLocalCopierExecutionAgent(
       case 'arm-live': {
         const deadlineAt = context.deadlineAt ?? (Date.now() + LOCAL_ARM_DEADLINE_MS);
         const commandCreatedAt = context.createdAt ?? Date.now();
-        assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt);
+        assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
         const current = options.controller.status();
         if (current.armed && !current.shadowMode) {
-          if (!armMatchesCurrentConfiguration(command, current)) {
-            throw new Error('kopírka je zapnutá s jinou konfigurací — nejdřív vypni');
+          if (armMatchesCurrentConfiguration(command, current)) {
+            // Idempotentní potvrzení jen shodné konfigurace. Nevolat
+            // DISARM/reconcile/arm a neprodloužit existující session TTL.
+            return;
           }
-          // Idempotentní potvrzení jen shodné konfigurace. Nevolat
-          // DISARM/reconcile/arm a neprodloužit existující session TTL.
-          return;
+          // Jiná konfigurace pokračuje stejnou atomickou cestou jako base:
+          // DISARM -> activate/preflight -> reconciliation -> ARM. Jakákoli
+          // chyba ji nechá explicitně DISARMED, nikdy jako falešný úspěch.
         }
         // Volitelný atomický sync konfigurace: dřív UI posílalo update-group
         // + arm-live jako dva relay round-tripy (~5 s); teď jde obojí naráz.
@@ -589,29 +592,29 @@ export async function startLocalCopierExecutionAgent(
               localOnly: true,
             };
             await applyGroup(next, 'activate');
-            assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt);
+            assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
             routingPrepared = true;
           } else {
             const next = mappedGroup(group, command.group);
             routingPrepared = !sameAccountTopology(group, next);
             await applyGroup(next);
-            assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt);
+            assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
           }
         }
         options.controller.disarm();
         await options.controller.applyAccountEligibilityExclusions(
           validatedAccountEligibilityExclusions(command.accountEligibilityExclusions),
         );
-        assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt);
+        assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
         if (!routingPrepared) {
           await awaitArmDeadline(
             prepareAccounts(allAccountsRequired(copyGroupAccountIds(group))),
             deadlineAt,
           );
-          assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt);
+          assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
         }
         const reconciliation = await awaitArmDeadline(options.controller.reconcile(), deadlineAt);
-        assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt);
+        assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
         if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
           throw new Error('ARM odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
         }
@@ -621,7 +624,7 @@ export async function startLocalCopierExecutionAgent(
         options.controller.arm({ shadowMode: false, ttlMs: msUntilTradovateSessionEnd(Date.now()) });
         try {
           await awaitArmDeadline(options.controller.waitForIdle(), deadlineAt);
-          assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt);
+          assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
         } catch (error) {
           // `arm()` je synchronní, durable potvrzení nikoli. Po deadline nebo
           // souběžné brzdě jej okamžitě stáhneme; pozdější tail nesmí zapnout.
@@ -715,13 +718,17 @@ export async function startLocalCopierExecutionAgent(
         });
         return;
       case 'lock-until-session-end':
-        brakeEpoch += 1;
-        await options.controller.lockUntil(
-          Date.now() + msUntilTradovateSessionEnd(Date.now()),
-          command.reason,
-        );
-        recordExecutedBrake(context);
-        return;
+        {
+          const commandCreatedAt = Number.isFinite(context.createdAt) ? context.createdAt! : Date.now();
+          const until = tradovateSessionEndAt(commandCreatedAt);
+          if (until <= Date.now()) {
+            throw new Error('Denní lock nebyl proveden: session skončila');
+          }
+          brakeEpoch += 1;
+          await options.controller.lockUntil(until, command.reason);
+          recordExecutedBrake(context);
+          return;
+        }
       case 'unlock-day':
         await options.controller.unlockDay(command.reason);
         return;
@@ -780,7 +787,9 @@ export async function startLocalCopierExecutionAgent(
     }
     if (command.type === 'arm-live') {
       const current = options.controller.status();
-      if (current.armed && !current.shadowMode) return resultPayload(command, executionContext);
+      if (current.armed && !current.shadowMode && armMatchesCurrentConfiguration(command, current)) {
+        return resultPayload(command, executionContext);
+      }
       if (!current.connected) {
         return Promise.reject(new Error('ARM odmítnut: worker není připojen k brokeru'));
       }

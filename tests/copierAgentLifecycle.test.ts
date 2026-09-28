@@ -242,7 +242,11 @@ describe('Mac copier agent lifecycle', () => {
     expect(installer).toContain('<key>KeepAlive</key><true/>');
     expect(installer).toContain('<key>ThrottleInterval</key><integer>10</integer>');
     expect(installer).toContain('<key>ExitTimeOut</key><integer>25</integer>');
+    expect(installer).toContain('--allow-full-dev-origins');
+    expect(installer).toContain('ALPHATRADE_COPIER_ALLOW_FULL_DEV_ORIGINS');
     expect(safeReinstall).toContain('--adopt-durable-group');
+    expect(safeReinstall).toContain('DEV_ORIGIN_ARGS+=(--allow-full-dev-origins)');
+    expect(safeReinstall).toContain('COPIER_ALLOW_FULL_DEV_ORIGINS:-1');
     expect(pilot).toContain('Durable soubor: ${groupPath}');
     expect(pilot).toContain('--replace-durable-group');
   });

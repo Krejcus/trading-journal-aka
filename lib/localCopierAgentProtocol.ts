@@ -181,9 +181,11 @@ export type LocalCopierAgentCommand =
  * odvozuje ze serverového `expiresAt`, přímý loopback z UI timeoutu.
  */
 export interface LocalCopierAgentExecutionContext {
-  /** Serverový created_at, případně synchronní čas lokálního HTTP ingressu. */
+  /** created_at převedený do hodin workeru, případně čas lokálního HTTP ingressu. */
   createdAt?: number;
   deadlineAt?: number;
+  /** Konzervativní rezerva při porovnání relay času s lokálně přijatou brzdou. */
+  clockSkewReserveMs?: number;
 }
 
 export const isLocalCopierEmergencyCommand = (command: LocalCopierAgentCommand): boolean =>

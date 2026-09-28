@@ -28,6 +28,7 @@ function enqueueDb(
     is: () => deviceQuery,
     order: () => deviceQuery,
     limit: () => deviceQuery,
+    then: (resolve: (value: unknown) => void) => resolve({ data: [{ id: deviceId }], error: null }),
     maybeSingle: async () => ({ data: { id: deviceId }, error: null }),
   };
   const upsertQuery = {
@@ -39,6 +40,7 @@ function enqueueDb(
   };
   const runtimeQuery = {
     eq: () => runtimeQuery,
+    in: () => runtimeQuery,
     order: () => runtimeQuery,
     limit: () => runtimeQuery,
     maybeSingle: async () => ({
@@ -66,7 +68,7 @@ function enqueueDb(
       if (table === 'tradovate_copier_commands') {
         const calls: Array<[string, unknown[]]> = [];
         const inFlightQuery: Record<string, unknown> = {};
-        for (const method of ['eq', 'contains', 'gte', 'gt', 'or', 'order', 'limit']) {
+        for (const method of ['eq', 'in', 'contains', 'gte', 'gt', 'or', 'order', 'limit']) {
           inFlightQuery[method] = (...args: unknown[]) => { calls.push([method, args]); return inFlightQuery; };
         }
         inFlightQuery.maybeSingle = async () => {
@@ -129,7 +131,7 @@ describe('Tradovate copier command relay', () => {
     const runtimeDeviceId = '44444444-4444-4444-8444-444444444444';
     const runtimeCalls: Array<[string, unknown[]]> = [];
     const runtimeQuery: Record<string, unknown> = {};
-    for (const method of ['eq', 'order', 'limit']) {
+    for (const method of ['eq', 'in', 'order', 'limit']) {
       runtimeQuery[method] = (...args: unknown[]) => { runtimeCalls.push([method, args]); return runtimeQuery; };
     }
     runtimeQuery.maybeSingle = async () => ({ data: {
@@ -139,6 +141,7 @@ describe('Tradovate copier command relay', () => {
     }, error: null });
     const deviceQuery: Record<string, unknown> = {};
     for (const method of ['eq', 'is']) deviceQuery[method] = () => deviceQuery;
+    deviceQuery.then = (resolve: (value: unknown) => void) => resolve({ data: [{ id: runtimeDeviceId }], error: null });
     deviceQuery.maybeSingle = async () => ({ data: { id: runtimeDeviceId }, error: null });
     const upsert = vi.fn();
     const upsertQuery = { select: () => upsertQuery, maybeSingle: async () => ({ data: {
@@ -264,7 +267,7 @@ describe('Tradovate copier command relay', () => {
 
   it('souběžně vložený druhý ARM expiruje a vrátí ID nejstaršího canonical ARMu', async () => {
     const runtimeQuery: Record<string, unknown> = {};
-    for (const method of ['eq', 'order', 'limit']) runtimeQuery[method] = () => runtimeQuery;
+    for (const method of ['eq', 'in', 'order', 'limit']) runtimeQuery[method] = () => runtimeQuery;
     runtimeQuery.maybeSingle = async () => ({ data: {
       device_id: deviceId,
       status: { group: { id: 'group-1' }, controller: { connected: true } },
@@ -272,12 +275,13 @@ describe('Tradovate copier command relay', () => {
     }, error: null });
     const deviceQuery: Record<string, unknown> = {};
     for (const method of ['eq', 'is']) deviceQuery[method] = () => deviceQuery;
+    deviceQuery.then = (resolve: (value: unknown) => void) => resolve({ data: [{ id: deviceId }], error: null });
     deviceQuery.maybeSingle = async () => ({ data: { id: deviceId }, error: null });
     let commandLookup = 0;
     const selected: Record<string, unknown> = {};
-    for (const method of ['eq', 'gt', 'or', 'order', 'limit']) selected[method] = () => selected;
+    for (const method of ['eq', 'in', 'gt', 'or', 'order', 'limit']) selected[method] = () => selected;
     selected.maybeSingle = async () => ({
-      data: ++commandLookup === 1 ? null : {
+      data: ++commandLookup < 4 ? null : {
         id: 'older-arm', status: 'pending', expires_at: '2026-08-21T12:00:30.000Z',
         payload: relayArmPayload(),
       },

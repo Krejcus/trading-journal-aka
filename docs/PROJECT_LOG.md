@@ -65,6 +65,14 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Otevřené otázky
 
+- [ ] **UI větev po balíčku 7a-3 (F4 + texty ARM odmítnutí)** — brzdy mají
+      desetiminutovou relay TTL, takže UI po 35 s nesmí tvrdit, že se příkaz
+      už automaticky neprovede; má ukázat čekající brzdu/platnost do konkrétního
+      času. `copierArmRejection` má samostatně a jistě klasifikovat „nejdřív
+      vypni“, `copier-relay-arm-config-conflict`,
+      `copier-relay-worker-disconnected`, deadline a
+      `superseded-by-brake`. V balíčku 7a-3 nebyly podle dělby práce změněny
+      žádné `components/*` ani UI služby.
 - [ ] **ST34 bezpečný bootstrap pilot lease bez kruhové závislosti** —
       kontrola z 15ae535 byla v balíčku 7a-2 vrácena, protože nová instalace
       potřebuje lease před vznikem/spárováním device klíče. Cílově vydávat
@@ -221,6 +229,38 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník
+
+### 2026-09-29 — Balíček 7a-3: dokončení relay/ARM brzd a Mac dev originu (Codex)
+
+- K1 obnovuje base chování „Přepnout a zapnout“: pouze shodná ARMED
+  konfigurace je no-op; jiná skupina nebo nová eligibility exclusion projde
+  serializovanou atomickou cestou DISARM → activate/read-only preflight →
+  reconciliation → ARM. Selhání zůstane explicitní a DISARMED.
+- F1 váže pre-insert i post-insert ARM coalescing na nejnovější brzdu téhož
+  zařízení. F2 přidává do `poll-v2` `serverNow`; durable transport převádí
+  `createdAt`/`expiresAt` do hodin workeru a při relay ARM fence používá
+  minimálně 2s rezervu. F5 po durable enqueue brzdy pouze zaloguje selhání
+  best-effort expirace starších ARM a nevrátí falešné 502.
+- F3 počítá day-lock konec z autoritativního `context.createdAt`; pozdní lock
+  po konci své session se neprovede a vrátí „session skončila“. F6 vybírá
+  nejčerstvější runtime až z nerevokovaných zařízení a stále platný day-lock
+  vytvořený před startem workeru smí projít restartovým filtrem.
+- Mac instalátor má explicitní `--allow-full-dev-origins`, který zapisuje
+  `ALPHATRADE_COPIER_ALLOW_FULL_DEV_ORIGINS=1` do launchd plistu. Bezpečný
+  reinstall jej kvůli Filipovu localhost:3000 workflow předává defaultně;
+  `COPIER_ALLOW_FULL_DEV_ORIGINS=0` jej vypne. Postup je v
+  `docs/COPIER_MAC_RUNTIME.md`.
+- Převzaty review regrese `zzAgentBBrzdy`, `zzbKompatMatrix`,
+  `zzbKompatRerun` a `zzbFakeRelayDb` (plus nutný helper `zzAgentBEmu`) a
+  otočeny na očekávané opravené chování. Před opravou padalo 8 relevantních
+  scénářů K1/F1/F2/F3. Finálně prošla povinná copier sada 140 souborů / 1674
+  testů, scoped TypeScript a ESLint bez chyb a produkční Vite/PWA build.
+  Root `tsc --noEmit` dál hlásí pouze známé chybějící extension závislosti
+  (`chrome`, `@crxjs/vite-plugin`).
+- Záměrně nebyly změněny `services/copierRuntimeController.ts`,
+  `brokerRouter.ts`, `tradovateBroker.ts`, `copierRunner.ts` ani `components/*`.
+  Nic nebylo commitnuto, pushnuto, nasazeno, reinstalováno ani posláno
+  brokerovi.
 
 ### 2026-09-29 — Balíček 7a-2: obnovitelné brzdy a přesná ARM idempotence (Codex)
 

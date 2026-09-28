@@ -976,7 +976,7 @@ describe('local copier execution agent', () => {
     expect(runtime.arm).not.toHaveBeenCalled();
   });
 
-  it('ARM(B) na ARMED(A) odmítne místo falešného úspěchu', async () => {
+  it('ARM(B) na ARMED(A) atomicky přepne konfiguraci a znovu ARM', async () => {
     const runtime = controller({ armed: true, shadowMode: false, sessionArmedAt: 1 });
     running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
     const other: CopyGroupConfig = {
@@ -985,13 +985,14 @@ describe('local copier execution agent', () => {
     };
 
     await expect(running.execute({ type: 'arm-live', group: other }))
-      .rejects.toThrow('kopírka je zapnutá s jinou konfigurací — nejdřív vypni');
-    expect(runtime.activateGroup).not.toHaveBeenCalled();
-    expect(runtime.disarm).not.toHaveBeenCalled();
+      .resolves.toMatchObject({ ok: true });
+    expect(runtime.activateGroup).toHaveBeenCalledWith(expect.objectContaining({ id: 'group-b' }), expect.any(Object));
+    expect(runtime.disarm).toHaveBeenCalled();
+    expect(runtime.arm).toHaveBeenCalled();
     expect(runtime.status().armed).toBe(true);
   });
 
-  it('ARM s dosud neaplikovanou exclusion na ARMED kopírce odmítne', async () => {
+  it('ARM s dosud neaplikovanou exclusion na ARMED kopírce provede plný preflight', async () => {
     const runtime = controller({ armed: true, shadowMode: false, sessionArmedAt: 1 });
     running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
 
@@ -999,8 +1000,12 @@ describe('local copier execution agent', () => {
       type: 'arm-live',
       group: group(),
       accountEligibilityExclusions: [{ accountId: 22, state: 'dll-locked', reason: 'DLL hit dnes' }],
-    })).rejects.toThrow('kopírka je zapnutá s jinou konfigurací — nejdřív vypni');
-    expect(runtime.applyAccountEligibilityExclusions).not.toHaveBeenCalled();
+    })).resolves.toMatchObject({ ok: true });
+    expect(runtime.applyAccountEligibilityExclusions).toHaveBeenCalledWith([
+      expect.objectContaining({ accountId: 22, state: 'dll-locked' }),
+    ]);
+    expect(runtime.disarm).toHaveBeenCalled();
+    expect(runtime.arm).toHaveBeenCalled();
     expect(runtime.status().armed).toBe(true);
   });
 
