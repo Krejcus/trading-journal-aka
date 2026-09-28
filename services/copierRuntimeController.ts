@@ -40,11 +40,6 @@ import {
 import { CopierBracketCorrelator, type LeaderBracketPair } from './copierBracketCorrelator';
 import { CopierOsoCorrelator } from './copierOsoCorrelator';
 import {
-  createCancelEntry,
-  markCancelSending,
-  markCancelUnknown,
-  resolveCancelLookup,
-  resolveCancelStatusLookup,
   stuckCancelEntries,
   waiveCancelEntry,
   type CancelOutboxEntry,
@@ -621,7 +616,7 @@ export interface BootstrapCopierOptions {
   flattenLiquidateAttempts?: number;
   /** Prodleva mezi dalšími průchody účtů, které selhaly na přechodnou chybu. */
   flattenRetryPollMs?: number;
-  /** Celkový budget background flat sweepu jednoho account+symbol (produkčně 7 s). */
+  /** Celkový budget serializovaného flat sweepu jednoho account+symbol (produkčně přibližně 5 s). */
   flatSweepBudgetMs?: number;
   wait?: (ms: number) => Promise<void>;
   /**
@@ -1342,10 +1337,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   let connectionSyncGeneration = 0;
   /** Jedna live ARM session = jedna obchodní epocha pro krátkodobou pending lineage. */
   let tradeEpochGeneration = 0;
-  /** Account+symbol, na kterém flat sweep ověřuje staré nohy. */
-  const flatSweepBlockedTargets = new Set<string>();
-  /** Synchronous ingress fence: nový leader entry nesmí závodit se starým sweep write. */
-  const leaderEntryIngressGenerations = new Map<string, number>();
 
   // Ingress runs synchronously, while handleBrokerEvent is serialized behind
   // potentially slow OSO correlation/store writes. A terminal leader event
@@ -1362,14 +1353,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   ): BrokerPort => createExposureCappedBroker(
     options.broker,
     accountId => group.followers.find(follower => follower.accountId === accountId)?.maxContracts,
-    (operation, target) => {
-      const entryWrite = operation === 'oso'
-        || (operation === 'place' && event != null && leaderEventIncreasesExposure(event));
-      if (entryWrite
-        && target?.symbol
-        && flatSweepBlockedTargets.has(`${target.accountId}:${target.symbol}`)) {
-        throw new CopierDispatchRevokedError(`flat-sweep-in-progress:${target.accountId}:${target.symbol}`);
-      }
+    operation => {
       if (event && (event.kind === 'submitted' || leaderOrderIds.length > 1)
         && (operation === 'place' || operation === 'oso')) {
         const terminal = leaderOrderIds.find(orderId =>
@@ -1620,61 +1604,40 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const sweptProtectiveLegs = new Set<string>();
   /** Rušení právě běží; brání smyčce cancel → position event → cancel. */
   const sweepingProtectiveLegs = new Set<string>();
-  const FLAT_SWEEP_TOTAL_BUDGET_MS = options.flatSweepBudgetMs ?? 7_000;
+  const FLAT_SWEEP_TOTAL_BUDGET_MS = options.flatSweepBudgetMs ?? 5_250;
   if (!Number.isFinite(FLAT_SWEEP_TOTAL_BUDGET_MS) || FLAT_SWEEP_TOTAL_BUDGET_MS <= 0) {
     throw new Error('flatSweepBudgetMs musí být kladné číslo');
   }
   /** Horní mez skutečně pracovních noh v jedné okamžité sweep dávce. */
   const SWEEP_MAX_LEGS_PER_CALL = 6;
-  const flatSweepTasks = new Set<Promise<void>>();
-  let flatSweepJobId = 0;
+  /** Cílené order/item čtení držíme záměrně nízko kvůli venue rate limitu. */
+  const SWEEP_READ_CONCURRENCY = 2;
+  const SWEEP_READ_ATTEMPTS = 2;
+  const SWEEP_READ_BACKOFF_MS = 200;
 
-  interface FlatSweepJob {
-    id: number;
-    key: string;
-    accountId: number;
-    symbol: string;
-    at: number;
+  interface FlatSweepBudget {
     startedAt: number;
-    safetyGeneration: number;
-    groupRevision: number;
-    connectionGeneration: number;
-    tradeEpoch: number;
-    entryIngressGeneration: number;
-    groupId: string;
-    leaderAccountId: number | null;
-    exposureEpochId: string | null;
-    exposureEpochGeneration: number | null;
-    protectiveFillBrokerOrderIds: Set<string>;
+    readAttemptsByOrderId: Map<string, number>;
   }
 
-  const flatSweepJobs = new Map<string, FlatSweepJob>();
-
-  class StaleFlatSweepError extends Error {
-    constructor() {
-      super('flat sweep byl zneplatněn novějším stavem');
-      this.name = 'StaleFlatSweepError';
-    }
-  }
-
-  const flatSweepRemainingMs = (job: FlatSweepJob) => (
-    FLAT_SWEEP_TOTAL_BUDGET_MS - (performance.now() - job.startedAt)
+  const flatSweepRemainingMs = (budget: FlatSweepBudget) => (
+    FLAT_SWEEP_TOTAL_BUDGET_MS - (performance.now() - budget.startedAt)
   );
 
   const withFlatSweepBudget = async <T>(
-    job: FlatSweepJob,
+    budget: FlatSweepBudget,
     label: string,
-    work: Promise<T>,
+    work: () => Promise<T>,
   ): Promise<T> => {
-    const remaining = flatSweepRemainingMs(job);
-    if (remaining <= 0) throw new Error(`celkový deadline ${FLAT_SWEEP_TOTAL_BUDGET_MS} ms`);
+    const remaining = flatSweepRemainingMs(budget);
+    if (remaining <= 0) throw new Error('celkový deadline ' + FLAT_SWEEP_TOTAL_BUDGET_MS + ' ms');
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
-        work,
+        work(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
-            () => reject(new Error(`${label}: celkový deadline ${FLAT_SWEEP_TOTAL_BUDGET_MS} ms`)),
+            () => reject(new Error(label + ': celkový deadline ' + FLAT_SWEEP_TOTAL_BUDGET_MS + ' ms')),
             remaining,
           );
         }),
@@ -1684,176 +1647,97 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
   };
 
-  const flatSweepEpochMatches = (job: FlatSweepJob): boolean => {
-    const epoch = leaderExposureEpoch(job.symbol);
-    return job.exposureEpochId == null
-      ? epoch == null
-      : epoch?.id === job.exposureEpochId && epoch.generation === job.exposureEpochGeneration;
-  };
-
-  const flatSweepBarrierCurrent = (job: FlatSweepJob): boolean => (
-    !stopped
-    && !shutdownRequested
-    && flatSweepJobs.get(job.key)?.id === job.id
-    && safetyGeneration === job.safetyGeneration
-    && groupRevision === job.groupRevision
-    && connectionSyncGeneration === job.connectionGeneration
-    && tradeEpochGeneration === job.tradeEpoch
-    && group.id === job.groupId
-    && group.leaderAccountId === job.leaderAccountId
-    && group.followers.some(follower => follower.accountId === job.accountId)
-    && (positionsByAccount.get(job.accountId)?.get(job.symbol) ?? 0) === 0
-    && (leaderEntryIngressGenerations.get(job.symbol) ?? 0) === job.entryIngressGeneration
-    && flatSweepEpochMatches(job)
-  );
-
-  const assertFlatSweepBarrier = (job: FlatSweepJob): void => {
-    if (!flatSweepBarrierCurrent(job)) throw new StaleFlatSweepError();
-  };
-
-  const retryFlatSweepRead = async <T>(
-    job: FlatSweepJob,
-    label: string,
-    read: () => Promise<T>,
-  ): Promise<T> => {
-    let lastError: Error | null = null;
-    while (flatSweepRemainingMs(job) > 0) {
-      assertFlatSweepBarrier(job);
-      try {
-        return await withFlatSweepBudget(job, label, read());
-      } catch (reason) {
-        if (reason instanceof StaleFlatSweepError) throw reason;
-        lastError = errorOf(reason);
-        const remaining = flatSweepRemainingMs(job);
-        if (remaining <= 0) break;
-        await new Promise(resolve => setTimeout(resolve, Math.min(100, remaining)));
-      }
+  const flatSweepBackoff = async (budget: FlatSweepBudget, attempt: number): Promise<void> => {
+    const remaining = flatSweepRemainingMs(budget);
+    if (remaining <= 0) throw new Error('celkový deadline ' + FLAT_SWEEP_TOTAL_BUDGET_MS + ' ms');
+    const delay = Math.min(SWEEP_READ_BACKOFF_MS * (2 ** Math.max(0, attempt - 1)), remaining);
+    if (options.wait) {
+      await options.wait(delay);
+      return;
     }
-    throw new Error(`${label}: ${lastError?.message ?? `celkový deadline ${FLAT_SWEEP_TOTAL_BUDGET_MS} ms`}`);
+    await withFlatSweepBudget(
+      budget,
+      'backoff cíleného čtení',
+      () => new Promise(resolve => setTimeout(resolve, delay)),
+    );
+  };
+
+  const mapWithConcurrency = async <T, R>(
+    items: readonly T[],
+    concurrency: number,
+    work: (item: T) => Promise<R>,
+  ): Promise<R[]> => {
+    const results = new Array<R>(items.length);
+    let cursor = 0;
+    let firstError: unknown;
+    const workers = Array.from(
+      { length: Math.min(concurrency, items.length) },
+      async () => {
+        while (firstError == null) {
+          const index = cursor;
+          cursor += 1;
+          if (index >= items.length) return;
+          try {
+            results[index] = await work(items[index]);
+          } catch (reason) {
+            firstError = reason;
+          }
+        }
+      },
+    );
+    await Promise.all(workers);
+    if (firstError != null) throw firstError;
+    return results;
   };
 
   const targetedOrderStatus = async (
-    job: FlatSweepJob,
+    accountId: number,
     brokerOrderId: string,
-  ): Promise<BrokerOrderStatusLookup> => retryFlatSweepRead(
-    job,
-    `stav order ${brokerOrderId}`,
-    async () => {
-      if (broker.findOrderStatusById) {
-        return broker.findOrderStatusById(job.accountId, brokerOrderId);
+    budget: FlatSweepBudget,
+  ): Promise<BrokerOrderStatusLookup> => {
+    let lastError: Error | null = null;
+    while ((budget.readAttemptsByOrderId.get(brokerOrderId) ?? 0) < SWEEP_READ_ATTEMPTS) {
+      const attempt = (budget.readAttemptsByOrderId.get(brokerOrderId) ?? 0) + 1;
+      budget.readAttemptsByOrderId.set(brokerOrderId, attempt);
+      try {
+        return await withFlatSweepBudget(
+          budget,
+          'stav order ' + brokerOrderId,
+          () => broker.findOrderStatusById
+            ? broker.findOrderStatusById(accountId, brokerOrderId)
+            : broker.findOrderById(accountId, brokerOrderId).then(lookup => ({
+              status: lookup.order?.status ?? null,
+              completeness: lookup.completeness,
+              observedAt: lookup.observedAt,
+            })),
+        );
+      } catch (reason) {
+        lastError = errorOf(reason);
+        if (attempt >= SWEEP_READ_ATTEMPTS || flatSweepRemainingMs(budget) <= 0) break;
+        await flatSweepBackoff(budget, attempt);
       }
-      const lookup = await broker.findOrderById(job.accountId, brokerOrderId);
-      return {
-        status: lookup.order?.status ?? null,
-        completeness: lookup.completeness,
-        observedAt: lookup.observedAt,
-      };
-    },
-  );
+    }
+    throw new Error(
+      'stav order ' + brokerOrderId + ': '
+      + (lastError?.message ?? ('celkový deadline ' + FLAT_SWEEP_TOTAL_BUDGET_MS + ' ms')),
+    );
+  };
 
-  const persistFlatSweepCancelEntry = async (
-    brokerOrderId: string,
-    update: (entry: CancelOutboxEntry | undefined, current: CopierRuntime) => CancelOutboxEntry,
-    sweepGroupId = group.id,
-  ): Promise<CancelOutboxEntry> => {
-    let saved: CancelOutboxEntry | undefined;
-    await processor.mutate(async current => {
-      const cancelOutbox = new Map(current.cancelOutbox);
-      const key = `flat-sweep:${sweepGroupId}:${brokerOrderId}`;
-      saved = update(cancelOutbox.get(key), current);
-      cancelOutbox.set(key, saved);
-      const committed = await options.store.commit(
-        toSnapshot(
-          current.state,
-          current.outbox.values(),
-          cancelOutbox.values(),
-          current.revision,
-          current.bracketOutbox.values(),
-          current.osoOutbox.values(),
-        ),
-        current.revision,
-      );
-      return { ...current, cancelOutbox, revision: committed.revision };
+  const readFlatSweepStatuses = async (
+    accountId: number,
+    brokerOrderIds: readonly string[],
+    budget: FlatSweepBudget,
+    authoritativeStatuses?: ReadonlyMap<string, BrokerOrderStatusLookup>,
+  ): Promise<Map<string, BrokerOrderStatusLookup>> => {
+    const uniqueIds = [...new Set(brokerOrderIds)];
+    const rows = await mapWithConcurrency(uniqueIds, SWEEP_READ_CONCURRENCY, async brokerOrderId => {
+      const known = authoritativeStatuses?.get(brokerOrderId);
+      const lookup = known ?? await targetedOrderStatus(accountId, brokerOrderId, budget);
+      return [brokerOrderId, lookup] as const;
     });
-    if (!saved) throw new Error(`flat sweep cancel ${brokerOrderId} se nepodařilo uložit`);
-    return saved;
+    return new Map(rows);
   };
 
-  const resolveFlatSweepCancel = async (
-    job: FlatSweepJob,
-    brokerOrderId: string,
-    status: BrokerOrderStatusLookup,
-  ): Promise<CancelOutboxEntry | undefined> => {
-    const key = `flat-sweep:${job.groupId}:${brokerOrderId}`;
-    const existing = currentRuntime().cancelOutbox.get(key);
-    if (!existing) return undefined;
-    let resolved = resolveCancelStatusLookup(existing, status.status, status.completeness, clock());
-    if (status.status === 'rejected' && status.completeness === 'authoritative') {
-      const full = await retryFlatSweepRead(job, `reject order ${brokerOrderId}`, () => (
-        broker.findOrderById(job.accountId, brokerOrderId)
-      ));
-      resolved = resolveCancelLookup(existing, full.order, full.completeness, clock());
-    }
-    return persistFlatSweepCancelEntry(brokerOrderId, () => resolved, job.groupId);
-  };
-
-  const sendFlatSweepCancelOnce = async (
-    job: FlatSweepJob,
-    brokerOrderId: string,
-  ): Promise<void> => {
-    const leaderEventId = `flat-sweep-${job.accountId}-${brokerOrderId}`;
-    let shouldSend = false;
-    assertFlatSweepBarrier(job);
-    const prepared = await persistFlatSweepCancelEntry(brokerOrderId, (existing, current) => {
-      if (existing) return existing;
-      shouldSend = true;
-      return markCancelSending(createCancelEntry(
-        `flat-sweep:${job.groupId}:${brokerOrderId}`,
-        leaderEventId,
-        current.state.lastSequence,
-        job.accountId,
-        brokerOrderId,
-        clock(),
-      ), clock());
-    }, job.groupId);
-
-    // sending/unknown z dřívějšího pokusu znamená výhradně lookup. Nikdy
-    // neposíláme druhý cancel, ani když první HTTP odpověď nebyla jasná.
-    if (!shouldSend || prepared.status !== 'sending') return;
-    try {
-      assertFlatSweepBarrier(job);
-      const positions = await retryFlatSweepRead(job, `pre-write pozice ${job.accountId}/${job.symbol}`, () => (
-        broker.listPositions(job.accountId)
-      ));
-      const netQuantity = positions.find(position => position.symbol === job.symbol)?.netQuantity ?? 0;
-      if (netQuantity !== 0) throw new StaleFlatSweepError();
-      assertFlatSweepBarrier(job);
-    } catch (reason) {
-      await persistFlatSweepCancelEntry(brokerOrderId, entry => waiveCancelEntry(
-        { ...(entry ?? prepared), neverSent: true },
-        `flat sweep zneplatněn před broker write: ${errorOf(reason).message}`,
-        clock(),
-      ), job.groupId);
-      throw reason;
-    }
-
-    let reason = 'cancel odeslán; čeká na cílený status lookup';
-    try {
-      assertFlatSweepBarrier(job);
-      await withFlatSweepBudget(
-        job,
-        `cancel ${brokerOrderId}`,
-        broker.cancelOrder(job.accountId, brokerOrderId),
-      );
-    } catch (error) {
-      reason = `nejasný výsledek cancelu: ${errorOf(error).message}`;
-    }
-    await persistFlatSweepCancelEntry(brokerOrderId, entry => markCancelUnknown(
-      entry ?? prepared,
-      reason,
-      clock(),
-    ), job.groupId);
-  };
   /**
    * Kauzalita podle přesného broker orderId. Historické znaménko ochranných
    * nohou nestačí: po restartu v durable outboxu zůstávají staré strategie a
@@ -1881,223 +1765,293 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     return null;
   };
-  const runFlatSweep = async (job: FlatSweepJob): Promise<void> => {
-    const runtimeAtStart = currentRuntime();
-    const protectiveEntries = [
-      ...runtimeAtStart.bracketOutbox.values(),
-      ...runtimeAtStart.osoOutbox.values(),
-    ].filter(entry => (
-      entry.request.accountId === job.accountId && entry.request.symbol === job.symbol
-    ));
-    const allProtectiveLegIds = new Set<string>();
-    for (const entry of protectiveEntries) {
-      for (const brokerOrderId of [entry.firstBrokerOrderId, entry.secondBrokerOrderId]) {
-        if (brokerOrderId) allProtectiveLegIds.add(brokerOrderId);
+  interface FlatSweepHint {
+    /** Přesná ochranná noha, jejíž fill způsobil přechod do flat. */
+    protectiveFillBrokerOrderId?: string;
+    /** Čerstvý autoritativní order snapshot z reconciliation. */
+    authoritativeOrderStatuses?: ReadonlyMap<string, BrokerOrderStatusLookup>;
+  }
+
+  const recordTerminalSweepState = (
+    accountId: number,
+    brokerOrderId: string,
+    status: BrokerOrderStatusLookup['status'],
+  ): void => {
+    if (followerFillRole(accountId, brokerOrderId) === 'protective') {
+      sweptProtectiveLegs.add(brokerOrderId);
+    }
+    const reservation = exitOnlyReservations.get(brokerOrderId);
+    if (!reservation) return;
+    if (status === 'filled') {
+      exitOnlyPositionApplied.add(brokerOrderId);
+      return;
+    }
+    exitOnlyReservations.delete(brokerOrderId);
+    exitOnlyPositionApplied.delete(brokerOrderId);
+  };
+
+  const waiveResolvedSweepLifecycles = async (
+    brokerOrderIds: ReadonlySet<string>,
+  ): Promise<void> => {
+    if (brokerOrderIds.size === 0) return;
+    await processor.mutate(async current => {
+      const cancelOutbox = new Map(current.cancelOutbox);
+      for (const [key, entry] of cancelOutbox) {
+        if (!brokerOrderIds.has(entry.brokerOrderId)
+          || (entry.status !== 'unknown' && entry.status !== 'sending')) continue;
+        cancelOutbox.set(key, waiveCancelEntry(
+          entry,
+          'autoritativně potvrzený flat + žádná pracovní ochranná noha',
+          clock(),
+        ));
       }
-    }
-    const exitOnlyIds = [...exitOnlyReservations]
-      .filter(([, reservation]) => (
-        reservation.accountId === job.accountId && reservation.symbol === job.symbol
-      ))
-      .map(([brokerOrderId]) => brokerOrderId);
+      return { ...current, cancelOutbox };
+    });
+  };
 
-    let episodeLegIds: string[] | null = null;
-    for (const protectiveFillBrokerOrderId of job.protectiveFillBrokerOrderIds) {
-      const exactEntry = protectiveEntries.find(entry => (
-        entry.firstBrokerOrderId === protectiveFillBrokerOrderId
-        || entry.secondBrokerOrderId === protectiveFillBrokerOrderId
-      ));
-      if (!exactEntry) continue;
-      episodeLegIds = [exactEntry.firstBrokerOrderId, exactEntry.secondBrokerOrderId]
-        .filter((brokerOrderId): brokerOrderId is string => Boolean(brokerOrderId));
-      break;
-    }
-
-    const relevantIds = [...new Set([
-      ...(episodeLegIds ?? [...allProtectiveLegIds]),
-      ...exitOnlyIds,
-    ])].filter(brokerOrderId => !sweptProtectiveLegs.has(brokerOrderId));
+  const sweepKnownFollowerOrders = async (
+    accountId: number,
+    symbol: string,
+    at: number,
+    candidateIds: readonly string[],
+    budget: FlatSweepBudget,
+    optionsForSweep: {
+      authoritativeOrderStatuses?: ReadonlyMap<string, BrokerOrderStatusLookup>;
+    },
+  ): Promise<void> => {
+    const relevantIds = [...new Set(candidateIds)].filter(brokerOrderId => (
+      !sweptProtectiveLegs.has(brokerOrderId)
+      && !sweepingProtectiveLegs.has(brokerOrderId)
+    ));
     if (relevantIds.length === 0) return;
 
-    const initialStatuses = new Map<string, BrokerOrderStatusLookup>();
-    await Promise.all(relevantIds.map(async brokerOrderId => {
-      const status = await targetedOrderStatus(job, brokerOrderId);
-      initialStatuses.set(brokerOrderId, status);
-    }));
-    assertFlatSweepBarrier(job);
-
+    const initialStatuses = await readFlatSweepStatuses(
+      accountId,
+      relevantIds,
+      budget,
+      optionsForSweep.authoritativeOrderStatuses,
+    );
     for (const [brokerOrderId, lookup] of initialStatuses) {
       if (lookup.completeness !== 'authoritative') {
-        throw new Error(`stav order ${brokerOrderId} není autoritativní`);
+        throw new Error('stav order ' + brokerOrderId + ' není autoritativní');
+      }
+      if (lookup.status == null || !isOpenOrderStatus(lookup.status)) {
+        recordTerminalSweepState(accountId, brokerOrderId, lookup.status);
       }
     }
+
     const workingIds = relevantIds.filter(brokerOrderId => {
       const status = initialStatuses.get(brokerOrderId)?.status;
       return status != null && isOpenOrderStatus(status);
     });
+    if (workingIds.length === 0) return;
     if (workingIds.length > SWEEP_MAX_LEGS_PER_CALL) {
-      throw new Error(`broker stále hlásí ${workingIds.length} pracovních ochranných noh`);
+      throw new Error('broker stále hlásí ' + workingIds.length + ' pracovních ochranných noh');
+    }
+    // Každé ID potřebuje po zápisu ještě jeden cílený read. Pokud první read
+    // spotřeboval oba povolené pokusy, zůstává stav nejistý a nic neposíláme.
+    for (const brokerOrderId of workingIds) {
+      if ((budget.readAttemptsByOrderId.get(brokerOrderId) ?? 0) >= SWEEP_READ_ATTEMPTS) {
+        throw new Error('stav order ' + brokerOrderId + ' vyčerpal read pokusy před cancelem');
+      }
+    }
+    for (const brokerOrderId of workingIds) {
+      sweepingProtectiveLegs.add(brokerOrderId);
     }
 
-    for (const brokerOrderId of workingIds) sweepingProtectiveLegs.add(brokerOrderId);
+    const cancelErrors = new Map<string, Error>();
     try {
-      await Promise.all(workingIds.map(async brokerOrderId => {
-        await sendFlatSweepCancelOnce(job, brokerOrderId);
-        assertFlatSweepBarrier(job);
-        const status = await targetedOrderStatus(job, brokerOrderId);
-        await resolveFlatSweepCancel(job, brokerOrderId, status);
-      }));
+      await mapWithConcurrency(workingIds, SWEEP_READ_CONCURRENCY, async brokerOrderId => {
+        try {
+          await withFlatSweepBudget(
+            budget,
+            'cancel ' + brokerOrderId,
+            () => broker.cancelOrder(accountId, brokerOrderId),
+          );
+        } catch (reason) {
+          // Timeout nebo transport error není důvod k druhému write. Rozhodne
+          // až jediná cílená postkontrola stejného ID níže.
+          cancelErrors.set(brokerOrderId, errorOf(reason));
+        }
+      });
+
+      const positionsPromise = withFlatSweepBudget(
+        budget,
+        'pozice ' + accountId + '/' + symbol,
+        () => broker.listPositions(accountId),
+      );
+      const postStatusesPromise = readFlatSweepStatuses(accountId, workingIds, budget);
+      const [positions, postStatuses] = await Promise.all([positionsPromise, postStatusesPromise]);
+      const netQuantity = positions.find(position => position.symbol === symbol)?.netQuantity ?? 0;
+      if (netQuantity !== 0) throw new Error('broker stále hlásí pozici ' + netQuantity);
+
+      const failures: string[] = [];
+      for (const brokerOrderId of workingIds) {
+        const lookup = postStatuses.get(brokerOrderId);
+        if (!lookup || lookup.completeness !== 'authoritative' || isOpenOrderStatus(lookup.status)) {
+          const cancelDetail = cancelErrors.get(brokerOrderId)?.message;
+          failures.push(
+            brokerOrderId + ': '
+            + (cancelDetail ? 'nejasný cancel (' + cancelDetail + '), ' : '')
+            + 'postkontrola nepotvrdila terminální stav',
+          );
+          continue;
+        }
+        recordTerminalSweepState(accountId, brokerOrderId, lookup.status);
+        options.onAudit?.([{
+          at,
+          leaderEventId: 'flat-sweep-' + accountId + '-' + brokerOrderId,
+          accountId,
+          brokerOrderId,
+          kind: lookup.status === 'filled' ? 'filled' : lookup.status === 'rejected' ? 'rejected' : 'canceled',
+          reason: lookup.status === 'filled'
+            ? 'follower flat — ochranná noha se mezitím vyplnila'
+            : lookup.status === 'rejected'
+              ? 'follower flat — ochranná noha skončila rejectem'
+              : 'follower flat — ochranná noha autoritativně nepracuje',
+        }]);
+      }
+      if (failures.length > 0) throw new Error(failures.join(', '));
+      await waiveResolvedSweepLifecycles(new Set(workingIds));
     } finally {
       for (const brokerOrderId of workingIds) sweepingProtectiveLegs.delete(brokerOrderId);
     }
-
-    assertFlatSweepBarrier(job);
-    const [positions, postStatuses] = await Promise.all([
-      retryFlatSweepRead(job, `pozice ${job.accountId}/${job.symbol}`, () => (
-        broker.listPositions(job.accountId)
-      )),
-      Promise.all(relevantIds.map(async brokerOrderId => [
-        brokerOrderId,
-        await targetedOrderStatus(job, brokerOrderId),
-      ] as const)),
-    ]);
-    assertFlatSweepBarrier(job);
-    const netQuantity = positions.find(position => position.symbol === job.symbol)?.netQuantity ?? 0;
-    if (netQuantity !== 0) throw new Error(`broker stále hlásí pozici ${netQuantity}`);
-
-    const unresolved = postStatuses.filter(([, lookup]) => (
-      lookup.completeness !== 'authoritative'
-      || isOpenOrderStatus(lookup.status)
-    ));
-    if (unresolved.length > 0) {
-      throw new Error(`broker stále hlásí ${unresolved.length} pracovních nebo nejasných ochranných noh`);
-    }
-
-    const finalStatuses = new Map(postStatuses.map(([brokerOrderId, lookup]) => [brokerOrderId, lookup.status]));
-    await processor.mutate(async current => {
-      const cancelOutbox = new Map(current.cancelOutbox);
-      for (const [key, entry] of cancelOutbox) {
-        if (!relevantIds.includes(entry.brokerOrderId)) continue;
-        const status = finalStatuses.get(entry.brokerOrderId);
-        if (entry.operation === 'modify' && (entry.status === 'unknown' || entry.status === 'sending')) {
-          cancelOutbox.set(key, waiveCancelEntry(
-            entry,
-            'nahrazeno autoritativně dokončeným flat sweepem',
-            clock(),
-          ));
-        } else if (entry.operation === 'cancel' && status === 'filled'
-          && (entry.status === 'unknown' || entry.status === 'abandoned')) {
-          cancelOutbox.set(key, waiveCancelEntry(
-            { ...entry, outcome: 'filled' },
-            'cancel prohrál závod s fillem; broker potvrzuje flat a order je terminální',
-            clock(),
-          ));
-        }
-      }
-      const committed = await options.store.commit(
-        toSnapshot(
-          current.state,
-          current.outbox.values(),
-          cancelOutbox.values(),
-          current.revision,
-          current.bracketOutbox.values(),
-          current.osoOutbox.values(),
-        ),
-        current.revision,
-      );
-      return { ...current, cancelOutbox, revision: committed.revision };
-    });
-
-    for (const [brokerOrderId, lookup] of postStatuses) {
-      sweptProtectiveLegs.add(brokerOrderId);
-      const reservation = exitOnlyReservations.get(brokerOrderId);
-      if (reservation) {
-        if (lookup.status === 'filled') exitOnlyPositionApplied.add(brokerOrderId);
-        else {
-          exitOnlyReservations.delete(brokerOrderId);
-          exitOnlyPositionApplied.delete(brokerOrderId);
-        }
-      }
-      options.onAudit?.([{
-        at: clock(),
-        leaderEventId: `flat-sweep-${job.accountId}-${brokerOrderId}`,
-        accountId: job.accountId,
-        brokerOrderId,
-        kind: lookup.status === 'filled' ? 'filled' : lookup.status === 'rejected' ? 'rejected' : 'canceled',
-        reason: lookup.status === 'filled'
-          ? 'follower flat — ochranná noha je terminální filled a pozice zůstala flat'
-          : lookup.status === 'rejected'
-            ? 'follower flat — ochranná noha skončila rejectem'
-            : 'follower flat — ochranná noha autoritativně nepracuje',
-      }]);
-    }
   };
 
-  const scheduleFlatSweep = (
+  const sweepFollowerProtectiveLegs = async (
     accountId: number,
     symbol: string,
     at: number,
-    hint: {
-      /** Přesná ochranná noha, jejíž fill způsobil přechod do flat. */
-      protectiveFillBrokerOrderId?: string;
-    } = {},
-  ): void => {
-    const key = `${accountId}:${symbol}`;
-    const existing = flatSweepJobs.get(key);
-    if (existing) {
-      if (hint.protectiveFillBrokerOrderId) {
-        existing.protectiveFillBrokerOrderIds.add(hint.protectiveFillBrokerOrderId);
-      }
-      return;
-    }
-    const epoch = leaderExposureEpoch(symbol);
-    const job: FlatSweepJob = {
-      id: ++flatSweepJobId,
-      key,
-      accountId,
-      symbol,
-      at,
+    hint: FlatSweepHint = {},
+  ): Promise<void> => {
+    const budget: FlatSweepBudget = {
       startedAt: performance.now(),
-      safetyGeneration,
-      groupRevision,
-      connectionGeneration: connectionSyncGeneration,
-      tradeEpoch: tradeEpochGeneration,
-      entryIngressGeneration: leaderEntryIngressGenerations.get(symbol) ?? 0,
-      groupId: group.id,
-      leaderAccountId: group.leaderAccountId,
-      exposureEpochId: epoch?.id ?? null,
-      exposureEpochGeneration: epoch?.generation ?? null,
-      protectiveFillBrokerOrderIds: new Set(
-        hint.protectiveFillBrokerOrderId ? [hint.protectiveFillBrokerOrderId] : [],
-      ),
+      readAttemptsByOrderId: new Map(),
     };
-    flatSweepJobs.set(key, job);
-    flatSweepBlockedTargets.add(key);
-    const task = Promise.resolve()
-      .then(() => runFlatSweep(job))
-      .catch(reason => {
-        if (reason instanceof StaleFlatSweepError || !flatSweepBarrierCurrent(job)) return;
-        const detail = errorOf(reason).message;
-        options.onAudit?.([{
-          at: job.at,
-          leaderEventId: `flat-sweep-${accountId}-${symbol}`,
-          accountId,
-          kind: 'cancel-failed',
-          reason: detail,
-        }]);
-        failClosed(new Error(`Flat sweep nedokončen — účet ${accountId} ${symbol}: ${detail}`));
-      })
-      .finally(() => {
-        if (flatSweepJobs.get(key)?.id === job.id) {
-          flatSweepJobs.delete(key);
-          flatSweepBlockedTargets.delete(key);
+    const runtime = currentRuntime();
+    const bracketEntries = [...runtime.bracketOutbox.values()].filter(entry => (
+      entry.request.accountId === accountId && entry.request.symbol === symbol
+    ));
+    const osoEntries = [...runtime.osoOutbox.values()].filter(entry => (
+      entry.request.accountId === accountId && entry.request.symbol === symbol
+    ));
+    const protectiveEntries = [...bracketEntries, ...osoEntries];
+
+    let episodeLegIds: string[] | null = null;
+    if (hint.protectiveFillBrokerOrderId) {
+      const exactEntry = protectiveEntries.find(entry => (
+        entry.firstBrokerOrderId === hint.protectiveFillBrokerOrderId
+        || entry.secondBrokerOrderId === hint.protectiveFillBrokerOrderId
+      ));
+      if (exactEntry) {
+        episodeLegIds = [exactEntry.firstBrokerOrderId, exactEntry.secondBrokerOrderId]
+          .filter((brokerOrderId): brokerOrderId is string => Boolean(brokerOrderId));
+      }
+    }
+
+    const allLegIds = [...new Set(
+      protectiveEntries.flatMap(entry => [entry.firstBrokerOrderId, entry.secondBrokerOrderId])
+        .filter((brokerOrderId): brokerOrderId is string => Boolean(brokerOrderId)),
+    )];
+    const candidateIds = (episodeLegIds ?? allLegIds).filter(brokerOrderId => (
+      !sweptProtectiveLegs.has(brokerOrderId)
+      && !sweepingProtectiveLegs.has(brokerOrderId)
+    ));
+    if (candidateIds.length === 0) return;
+
+    const failSweep = (reason: string, brokerOrderId?: string) => {
+      options.onAudit?.([{
+        at,
+        leaderEventId: 'flat-sweep-' + accountId + '-' + (brokerOrderId ?? symbol),
+        accountId,
+        ...(brokerOrderId ? { brokerOrderId } : {}),
+        kind: 'cancel-failed',
+        reason,
+      }]);
+      failClosed(
+        new Error('Flat sweep nedokončen — účet ' + accountId + ' ' + symbol + ': ' + reason),
+      );
+      scheduleAutoClose('fail-closed');
+    };
+
+    try {
+      // Nejdřív využijeme terminální stav přes findOrderStatusById. Produkční
+      // Tradovate adaptér jej při syncReady vrací ze streamu bez REST.
+      const initialStatuses = await readFlatSweepStatuses(
+        accountId,
+        candidateIds,
+        budget,
+        hint.authoritativeOrderStatuses,
+      );
+      const openIds = candidateIds.filter(brokerOrderId => {
+        const lookup = initialStatuses.get(brokerOrderId);
+        if (!lookup || lookup.completeness !== 'authoritative') {
+          throw new Error('stav order ' + brokerOrderId + ' není autoritativní');
         }
+        if (lookup.status == null || !isOpenOrderStatus(lookup.status)) {
+          recordTerminalSweepState(accountId, brokerOrderId, lookup.status);
+          return false;
+        }
+        return true;
       });
-    flatSweepTasks.add(task);
-    void task.finally(() => flatSweepTasks.delete(task));
+      if (openIds.length === 0) return;
+
+      // Tradovate drží děti čekajícího OSO jako Suspended/pending. Nohy lze
+      // rušit až po autoritativním důkazu, že parent už nemůže později vstup
+      // vyplnit a nechat followera bez SL/TP.
+      const osoParentByLeg = new Map<string, string>();
+      for (const entry of osoEntries) {
+        if (!entry.entryBrokerOrderId) continue;
+        const protectiveFillProvesParentFilled = hint.protectiveFillBrokerOrderId != null
+          && (
+            entry.firstBrokerOrderId === hint.protectiveFillBrokerOrderId
+            || entry.secondBrokerOrderId === hint.protectiveFillBrokerOrderId
+          );
+        if (protectiveFillProvesParentFilled) continue;
+        for (const brokerOrderId of [entry.firstBrokerOrderId, entry.secondBrokerOrderId]) {
+          if (brokerOrderId) osoParentByLeg.set(brokerOrderId, entry.entryBrokerOrderId);
+        }
+      }
+      const parentIds = [...new Set(
+        openIds.map(brokerOrderId => osoParentByLeg.get(brokerOrderId))
+          .filter((brokerOrderId): brokerOrderId is string => Boolean(brokerOrderId)),
+      )];
+      const parentStatuses = await readFlatSweepStatuses(
+        accountId,
+        parentIds,
+        budget,
+        hint.authoritativeOrderStatuses,
+      );
+      const pendingParentIds = new Set<string>();
+      for (const parentId of parentIds) {
+        const lookup = parentStatuses.get(parentId);
+        if (!lookup || lookup.completeness !== 'authoritative' || lookup.status == null) {
+          throw new Error('stav OSO vstupu ' + parentId + ' není autoritativní');
+        }
+        if (isOpenOrderStatus(lookup.status)) pendingParentIds.add(parentId);
+      }
+      const safeOpenIds = openIds.filter(brokerOrderId => {
+        const parentId = osoParentByLeg.get(brokerOrderId);
+        return parentId == null || !pendingParentIds.has(parentId);
+      });
+      if (safeOpenIds.length === 0) return;
+
+      const knownStatuses = new Map(initialStatuses);
+      await sweepKnownFollowerOrders(
+        accountId,
+        symbol,
+        at,
+        safeOpenIds,
+        budget,
+        {
+          authoritativeOrderStatuses: knownStatuses,
+        },
+      );
+    } catch (reason) {
+      failSweep(errorOf(reason).message);
+    }
   };
 
-  const sweepFollowerProtectiveLegs = scheduleFlatSweep;
 
   const currentRuntime = () => processor.currentRuntime();
   const currentStuckOperations = (): CopierStuckOperation[] => {
@@ -6562,46 +6516,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (net === 0 || Math.sign(net) === Math.sign(signedQuantity)) return Math.abs(quantity);
     return Math.max(0, Math.abs(quantity) - Math.abs(net));
   };
-  const signedQuantityIncreasesExposure = (
-    net: number,
-    side: LeaderEvent['side'],
-    quantity: number,
-  ): boolean => exposurePotential(net, side, quantity) > 0;
-  const invalidateFlatSweepsForLeaderEntryIngress = (symbol: string): void => {
-    leaderEntryIngressGenerations.set(symbol, (leaderEntryIngressGenerations.get(symbol) ?? 0) + 1);
-    for (const follower of group.followers) {
-      const key = `${follower.accountId}:${symbol}`;
-      flatSweepJobs.delete(key);
-      flatSweepBlockedTargets.delete(key);
-    }
-  };
-  const leaderEntryAtIngress = (event: BrokerEvent): string | null => {
-    if (group.leaderAccountId == null) return null;
-    if (event.type === 'order'
-      && event.order.accountId === group.leaderAccountId
-      && isOpenOrderStatus(event.order.status)) {
-      const remaining = Math.max(0, event.order.quantity - event.order.filledQuantity);
-      return remaining > 0 && signedQuantityIncreasesExposure(
-        leaderExposureReferenceNet(event.order.symbol),
-        event.order.side,
-        remaining,
-      ) ? event.order.symbol : null;
-    }
-    if (event.type === 'fill' && event.fill.accountId === group.leaderAccountId) {
-      return signedQuantityIncreasesExposure(
-        leaderExposureReferenceNet(event.fill.symbol, true, event.fill.filledAt),
-        event.fill.side,
-        event.fill.quantity,
-      ) ? event.fill.symbol : null;
-    }
-    if (event.type === 'position'
-      && event.position.accountId === group.leaderAccountId
-      && event.position.netQuantity !== 0
-      && (leaderPositions.get(event.position.symbol) ?? 0) === 0) {
-      return event.position.symbol;
-    }
-    return null;
-  };
   const reducingQuantityAgainst = (
     net: number,
     side: LeaderEvent['side'],
@@ -7544,15 +7458,36 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
   };
 
-  const sweepExitOnlyReservationsAtFlat = (
+  const sweepExitOnlyReservationsAtFlat = async (
     accountId: number,
     symbol: string,
     at: number,
-  ): void => {
-    const hasReservation = [...exitOnlyReservations.values()].some(reservation => (
-      reservation.accountId === accountId && reservation.symbol === symbol
-    ));
-    if (hasReservation) scheduleFlatSweep(accountId, symbol, at);
+  ): Promise<void> => {
+    const reservedIds = [...exitOnlyReservations]
+      .filter(([, reservation]) => (
+        reservation.accountId === accountId && reservation.symbol === symbol
+      ))
+      .map(([brokerOrderId]) => brokerOrderId);
+    if (reservedIds.length === 0) return;
+    const budget: FlatSweepBudget = {
+      startedAt: performance.now(),
+      readAttemptsByOrderId: new Map(),
+    };
+    try {
+      await sweepKnownFollowerOrders(
+        accountId,
+        symbol,
+        at,
+        reservedIds,
+        budget,
+        {},
+      );
+    } catch (reason) {
+      failClosed(new Error(
+        'Copier fail-closed: exit-only sweep ' + accountId + '/' + symbol
+        + ' selhal (' + errorOf(reason).message + ')',
+      ), { autoClose: false });
+    }
   };
 
   const handleBrokerEvent = async (event: BrokerEvent, admissionGeneration: number) => {
@@ -9147,6 +9082,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const workingIds = new Set(
           snapshot.orders.filter(order => isOpenOrderStatus(order.status)).map(order => order.brokerOrderId),
         );
+        const authoritativeOrderStatuses = new Map<string, BrokerOrderStatusLookup>(
+          snapshot.orders.map(order => [order.brokerOrderId, {
+            status: order.status,
+            completeness: 'authoritative',
+            observedAt: clock(),
+          }]),
+        );
         if (workingIds.size === 0) continue;
         const flatSymbols = new Set<string>();
         const runtime = currentRuntime();
@@ -9159,7 +9101,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           if (hasWorkingLeg) flatSymbols.add(entry.request.symbol);
         }
         for (const symbol of flatSymbols) {
-          await sweepFollowerProtectiveLegs(follower.accountId, symbol, clock());
+          await sweepFollowerProtectiveLegs(follower.accountId, symbol, clock(), {
+            authoritativeOrderStatuses,
+          });
         }
       }
       gate = { ...gate, divergentAccounts: divergent, sequenceBroken: false, armed: false };
@@ -9548,8 +9492,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   assertCutsWithinKnownPropLimits(group);
 
   const unsubscribe = broker.subscribe(event => {
-    const entrySymbol = leaderEntryAtIngress(event);
-    if (entrySymbol) invalidateFlatSweepsForLeaderEntryIngress(entrySymbol);
     if (event.type === 'order'
       && event.order.accountId === group.leaderAccountId
       && (event.order.status === 'rejected' || event.order.status === 'canceled')) {
@@ -10412,14 +10354,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (observedShutdown) await observedShutdown;
         const pendingFlushes = [...pendingOsoFlushes.values()];
         if (pendingFlushes.length > 0) await Promise.all(pendingFlushes);
-        const pendingSweeps = [...flatSweepTasks];
-        if (pendingSweeps.length > 0) await Promise.all(pendingSweeps);
         if (
           observed === eventTail
           && observedRiskPoll === accountRiskPollTail
           && observedShutdown === shutdownPromise
           && pendingOsoFlushes.size === 0
-          && flatSweepTasks.size === 0
         ) return;
       }
     },
@@ -10427,8 +10366,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (stopped) return;
       stopped = true;
       gate = { ...gate, armed: false, connected: false };
-      flatSweepJobs.clear();
-      flatSweepBlockedTargets.clear();
       for (const timer of pendingBracketTimers.values()) clearTimeout(timer);
       pendingBracketTimers.clear();
       for (const timer of pendingOsoTimers.values()) clearTimeout(timer);

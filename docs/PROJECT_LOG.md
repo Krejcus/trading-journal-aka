@@ -208,6 +208,32 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-28 — Konzervativní V13: serializovaný flat sweep bez background fencing regresí (Codex, balíček 3b-2)
+
+- Commit `1a59237` byl na `HEAD 90cee98` přepracován bez revertu V12
+  follow-upu, commitu, deploye, reinstalu workeru nebo brokerového volání.
+  Flat sweep je znovu součástí `eventTail`: DISARM, běžný přechod leader
+  epochy ani souběžný nový vstup už risk-redukující cancel starých přesných
+  noh tiše nezahodí a dispatch nemá per-account `flat-sweep-in-progress`
+  blokaci.
+- Kandidáti se nejdřív ověřují přes `findOrderStatusById`; terminální stav ze
+  synchronizovaného streamu proto nepotřebuje REST ani cancel. Zbylé ID mají
+  jeden společný budget 5,25 s, souběh nejvýš 2, celkem nejvýš 2 cílená čtení
+  na ID s backoffem. Broker write se neopakuje; po cancelu rozhoduje
+  `listPositions` a stav jen ID, která byla před zápisem pracovní.
+- Odstraněny durable klíče `flat-sweep:*`, background joby a fencing přes
+  `generation`/`safetyGeneration`. Exit-only chyba znovu volá fail-closed s
+  `autoClose:false`. Sweep i reconciliation před cancelem OSO SL/TP ověřují
+  parent a `Suspended`/`pending` nohy nevyplněného vstupu zachovají.
+- Na původním stavu padalo 8/11 nových konzervativních regresí. Po opravě V13
+  13/13 a cílený širší blok 175/175; cílený TypeScript check čistý, ESLint 0
+  chyb (2 starší warningy), root typecheck má jen povolené chybějící Chrome
+  typy/plugin v `extension/`. Celá předepsaná copier sada prošla 136/136
+  souborů a 1608/1608 testů; první sandboxovaný běh měl jen environmentální
+  `listen EPERM 127.0.0.1`, opakování s loopbackem bylo čisté.
+- Zbývá nezávislé review, schválený commit/reinstall a řízený DEMO test; nic
+  z toho v tomto balíčku neproběhlo.
+
 ### 2026-09-28 — V12 follow-up: filled lineage, modify/partial mirror a reconcile fence (Codex, balíček 3a-2)
 
 - Opraveny regrese commitu `cb5cdf6` bez commitu, deploye, reinstalu workeru

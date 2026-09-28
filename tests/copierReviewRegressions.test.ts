@@ -550,6 +550,12 @@ describe('copier regressions po review 25. 8.', () => {
       .filter((id): id is string => Boolean(id));
     expect(mnqLegIds).toHaveLength(2);
     expect(nqLegIds).toHaveLength(2);
+    const mnqFollowerEntry = broker.orders().find(order => (
+      order.brokerOrderId === mnqEntry?.entryBrokerOrderId
+    ));
+    if (!mnqFollowerEntry) throw new Error('Test setup: MNQ follower OSO parent nebyl nalezen');
+    mnqFollowerEntry.status = 'filled';
+    mnqFollowerEntry.filledQuantity = mnqFollowerEntry.quantity;
 
     const controller = await bootstrapCopierRuntime({
       broker,

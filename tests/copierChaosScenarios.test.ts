@@ -737,6 +737,11 @@ describe('flat sweep ochranných nohou (incident 24. 8.)', () => {
     const followerLegs = broker.orders().filter(order => order.accountId === 200 && order.status === 'working');
     expect(followerLegs.length).toBeGreaterThan(0);
     expect([...oso.runtime.osoOutbox.values()][0]?.status).toBe('acknowledged');
+    const openedOso = [...oso.runtime.osoOutbox.values()][0];
+    const followerEntry = broker.orders().find(order => order.brokerOrderId === openedOso?.entryBrokerOrderId);
+    if (!followerEntry) throw new Error('Test setup: follower OSO parent nebyl nalezen');
+    followerEntry.status = 'filled';
+    followerEntry.filledQuantity = followerEntry.quantity;
 
     // Controller startuje nad stejným store (jako po restartu workeru).
     const controller = await bootstrapCopierRuntime({
@@ -936,6 +941,10 @@ describe('flat sweep ochranných nohou (incident 24. 8.)', () => {
       throw new Error('Test setup: ochranné nohy nebyly potvrzeny');
     }
     const orphanOrderId = entry.secondBrokerOrderId;
+    const followerEntry = broker.orders().find(order => order.brokerOrderId === entry.entryBrokerOrderId);
+    if (!followerEntry) throw new Error('Test setup: follower OSO parent nebyl nalezen');
+    followerEntry.status = 'filled';
+    followerEntry.filledQuantity = followerEntry.quantity;
     const realCancelOrder = broker.cancelOrder.bind(broker);
     broker.cancelOrder = async (accountId, brokerOrderId) => {
       if (brokerOrderId === orphanOrderId) return;

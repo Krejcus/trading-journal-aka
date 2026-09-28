@@ -9,7 +9,6 @@ export class CopierDispatchRevokedError extends Error {
 }
 
 type CopierWriteOperation = 'place' | 'oco' | 'oso' | 'modify' | 'cancel';
-type CopierWriteTarget = { accountId: number; symbol?: string };
 
 /**
  * Poslední autoritativní ochrana celkové expozice přímo před side effectem.
@@ -20,7 +19,7 @@ type CopierWriteTarget = { accountId: number; symbol?: string };
 export function createExposureCappedBroker(
   broker: BrokerPort,
   maxContractsFor: (accountId: number) => number | undefined,
-  assertDispatchAllowed?: (operation: CopierWriteOperation, target?: CopierWriteTarget) => void,
+  assertDispatchAllowed?: (operation: CopierWriteOperation) => void,
 ): BrokerPort {
   const assertWithinCap = async (
     request: Pick<BrokerOrderRequest, 'accountId' | 'symbol' | 'side' | 'quantity'>,
@@ -60,11 +59,11 @@ export function createExposureCappedBroker(
     environment: broker.environment,
     assertDispatchAllowed,
     async placeOrder(request) {
-      assertDispatchAllowed?.('place', request);
+      assertDispatchAllowed?.('place');
       try {
         await assertWithinCap(request);
       } catch (error) {
-        assertDispatchAllowed?.('place', request);
+        assertDispatchAllowed?.('place');
         return {
           brokerOrderId: '',
           accepted: false,
@@ -73,7 +72,7 @@ export function createExposureCappedBroker(
           rejectReason: error instanceof Error ? error.message : String(error),
         };
       }
-      assertDispatchAllowed?.('place', request);
+      assertDispatchAllowed?.('place');
       return broker.placeOrder(request);
     },
     liquidatePosition: broker.liquidatePosition
@@ -81,12 +80,12 @@ export function createExposureCappedBroker(
       : undefined,
     async placeOco(request) {
       if (!broker.placeOco) throw new Error('Broker nepodporuje nativní OCO');
-      assertDispatchAllowed?.('oco', request);
+      assertDispatchAllowed?.('oco');
       try {
         await assertWithinCap({ ...request, side: request.first.side });
         await assertWithinCap({ ...request, side: request.second.side });
       } catch (error) {
-        assertDispatchAllowed?.('oco', request);
+        assertDispatchAllowed?.('oco');
         return {
           firstBrokerOrderId: '',
           secondBrokerOrderId: '',
@@ -96,16 +95,16 @@ export function createExposureCappedBroker(
           rejectReason: error instanceof Error ? error.message : String(error),
         };
       }
-      assertDispatchAllowed?.('oco', request);
+      assertDispatchAllowed?.('oco');
       return broker.placeOco(request);
     },
     async placeOso(request) {
       if (!broker.placeOso) throw new Error('Broker nepodporuje nativní OSO');
-      assertDispatchAllowed?.('oso', request);
+      assertDispatchAllowed?.('oso');
       try {
         await assertWithinCap(request);
       } catch (error) {
-        assertDispatchAllowed?.('oso', request);
+        assertDispatchAllowed?.('oso');
         return {
           entryBrokerOrderId: '',
           firstBrokerOrderId: '',
@@ -116,20 +115,18 @@ export function createExposureCappedBroker(
           rejectReason: error instanceof Error ? error.message : String(error),
         };
       }
-      assertDispatchAllowed?.('oso', request);
+      assertDispatchAllowed?.('oso');
       return broker.placeOso(request);
     },
     async cancelOrder(accountId, brokerOrderId) {
-      assertDispatchAllowed?.('cancel', { accountId });
+      assertDispatchAllowed?.('cancel');
       return broker.cancelOrder(accountId, brokerOrderId);
     },
     async modifyOrder(accountId, brokerOrderId, changes) {
-      assertDispatchAllowed?.('modify', { accountId });
-      let symbol: string | undefined;
+      assertDispatchAllowed?.('modify');
       try {
         const lookup = await broker.findOrderById(accountId, brokerOrderId);
         if (!lookup.order) throw new Error(`Nelze ověřit expozici modify orderu ${brokerOrderId}`);
-        symbol = lookup.order.symbol;
         await assertWithinCap({
           accountId,
           symbol: lookup.order.symbol,
@@ -137,13 +134,10 @@ export function createExposureCappedBroker(
           quantity: changes.quantity,
         }, brokerOrderId);
       } catch (error) {
-        assertDispatchAllowed?.('modify', { accountId });
+        assertDispatchAllowed?.('modify');
         throw error;
       }
-      assertDispatchAllowed?.('modify', {
-        accountId,
-        ...(symbol ? { symbol } : {}),
-      });
+      assertDispatchAllowed?.('modify');
       return broker.modifyOrder(accountId, brokerOrderId, changes);
     },
     listAccountCapabilities: accountIds => broker.listAccountCapabilities(accountIds),
