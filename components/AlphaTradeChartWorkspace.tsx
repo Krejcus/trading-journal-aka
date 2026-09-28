@@ -261,7 +261,22 @@ interface AlphaTradeChartWorkspaceProps {
   onChartNotesChange?: (notes: ChartNote[]) => void;
   /** Fullscreen obchodu: tlačítko Snímek (celé rozložení grafů). */
   onSaveSnapshot?: (image: Blob) => Promise<boolean>;
+  /** Review týdne: pruh pod lištou, panel vpravo a pás obchodů dole (místo časové osy plnění). */
+  review?: WorkspaceReviewSlots;
 }
+
+export interface WorkspaceReviewSlots {
+  /**
+   * Místa pro pruh pod lištou, panel vpravo a pás dole. Review do nich kreslí
+   * přes portál — změna výběru tak nepřekresluje workspace ani grafy.
+   */
+  onSlotsReady: (slots: ReviewSlotElements | null) => void;
+  /** Obchody týdne s historií plnění — v grafu vedle vybraného. */
+  trades: readonly Trade[];
+  /** Kresby v review patří týdnu (klíč úložiště). */
+  drawingKey: string;
+}
+export interface ReviewSlotElements { header: HTMLElement; side: HTMLElement; bottom: HTMLElement }
 
 interface WorkspacePanelConfig extends Record<string, unknown> {
   root: MarketRoot;
@@ -296,6 +311,7 @@ interface WorkspaceDataContextValue {
   onTradeIndicatorsChange?: (next: TradeChartIndicators) => void;
   chartNotes?: readonly ChartNote[];
   onChartNotesChange?: (notes: ChartNote[]) => void;
+  review?: { trades: readonly Trade[]; drawingKey: string };
 }
 
 interface WorkspacePanelControl {
@@ -719,6 +735,9 @@ const AlphaTradeWorkspacePanel: React.FC<WorkspacePanelProps> = ({ instance, upd
             onToggleLevels={() => updatePanelConfig({ showLevels: !config.showLevels })}
             onToggleStructure={() => updatePanelConfig({ showStructure: !config.showStructure })}
             onAddChartNote={context.onChartNotesChange ? (clientX, clientY) => setNoteAddRequest({ clientX, clientY, nonce: Date.now() }) : undefined}
+            reviewMode={Boolean(context.review)}
+            contextTrades={context.review?.trades}
+            drawingKeyId={context.review?.drawingKey}
           />
           {context.chartNotes && (
             <ChartNotesLayer
@@ -794,6 +813,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   chartNotes,
   onChartNotesChange,
   onSaveSnapshot,
+  review,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workspaceShellRef = useRef<HTMLDivElement>(null);
@@ -1180,6 +1200,18 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       backtestSession.replayHasExecutionHistory ? replay.cursorTime ?? -Infinity : -Infinity,
     );
   }, [backtestSession, replay.cursorTime]);
+  const reviewTrades = review?.trades;
+  const reviewDrawingKey = review?.drawingKey;
+  const reviewHeaderRef = useRef<HTMLDivElement>(null);
+  const reviewSideRef = useRef<HTMLDivElement>(null);
+  const reviewBottomRef = useRef<HTMLDivElement>(null);
+  const onReviewSlotsReady = review?.onSlotsReady;
+  useLayoutEffect(() => {
+    if (!onReviewSlotsReady) return;
+    const header = reviewHeaderRef.current, side = reviewSideRef.current, bottom = reviewBottomRef.current;
+    if (header && side && bottom) onReviewSlotsReady({ header, side, bottom });
+    return () => onReviewSlotsReady(null);
+  }, [onReviewSlotsReady]);
   const context = useMemo<WorkspaceDataContextValue>(() => ({
     trade,
     entryMs,
@@ -1205,8 +1237,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
     openBacktestTradeReview,
     onTradeIndicatorsChange: backtestSession ? undefined : onTradeIndicatorsChange,
     chartNotes: backtestSession ? undefined : chartNotes,
+    review: reviewTrades && reviewDrawingKey ? { trades: reviewTrades, drawingKey: reviewDrawingKey } : undefined,
     onChartNotesChange: backtestSession ? undefined : onChartNotesChange,
-  }), [chartNotes, onChartNotesChange, onTradeIndicatorsChange, activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
+  }), [reviewTrades, reviewDrawingKey, chartNotes, onChartNotesChange, onTradeIndicatorsChange, activatePanel, activePanelId, backtestSession, chartTradingSettings, entryMs, exitMs, initialCandles, initialRoot, isDark, openBacktestTradeReview, registerPanel, replay, replaySelectionMinimumTime, replaySelectionTime, selectReplayStart, trade, unregisterPanel]);
   const activeControl = panelControls.get(activePanelId) ?? null;
   const reviewTrade = reviewTradeId
     ? backtestSession?.journalTrades?.find(candidate => String(candidate.id) === reviewTradeId)
@@ -1997,8 +2030,10 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
         <button type="button" className={`${topButton} px-2`} onClick={onClose} title="Zavřít fullscreen (Esc)"><Maximize2 size={14} className="rotate-180" /><span className="hidden sm:inline">Zpět</span></button>
         <button type="button" onClick={onClose} className={`w-8 h-8 inline-flex items-center justify-center rounded-md ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-950'}`} aria-label="Zavřít fullscreen workspace"><X size={16} /></button>
       </div>
+      {review && <div ref={reviewHeaderRef} className="shrink-0" />}
+      <div className="flex flex-1 min-h-0">
       <WorkspaceDataContext.Provider value={context}>
-        <div ref={workspaceViewportRef} className={`relative flex-1 min-h-0 ${isDark ? 'bg-[#070a0f]' : 'bg-white'}`}>
+        <div ref={workspaceViewportRef} className={`relative flex-1 min-w-0 min-h-0 ${isDark ? 'bg-[#070a0f]' : 'bg-white'}`}>
           {quickOrderFeedback && <div
             role="status"
             className={`pointer-events-none absolute left-1/2 top-11 z-[700] -translate-x-1/2 rounded-md border px-3 py-2 text-[11px] font-bold shadow-lg ${quickOrderFeedback.ok
@@ -2153,7 +2188,9 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
           />}
         </div>
       </WorkspaceDataContext.Provider>
-      {!backtestSession && replay.phase === 'off' && trade.executionHistory
+      {review && <div ref={reviewSideRef} className="shrink-0 flex min-h-0" />}
+      </div>
+      {review ? <div ref={reviewBottomRef} className="shrink-0" /> : !backtestSession && replay.phase === 'off' && trade.executionHistory
         && <TradeExecutionTimeline history={trade.executionHistory} isDark={isDark} />}
     </div>
     </React.Profiler>

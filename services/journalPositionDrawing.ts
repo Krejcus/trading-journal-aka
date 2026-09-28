@@ -5,7 +5,7 @@ import { normalizePositionSettings, type PositionDrawingStyle } from './chartPos
 import { DrawingEngine, DrawingPrimitive } from '@getcandlekit/charts';
 import type { ISeriesPrimitive, Logical, Time } from 'lightweight-charts';
 import type { MarketCandle } from './marketData';
-import { createJournalTimeProjection, journalSpanCoordinates, type JournalCandleCoverage } from './journalChartTime';
+import { createJournalTimeProjection, journalSpanCoordinates, journalVisibleSpanCoordinates, type JournalCandleCoverage } from './journalChartTime';
 
 /** Same position renderer and style as replay; missing original protection is never estimated. */
 export function journalPositionDrawing(trade: Trade, currentStyle: PositionDrawingStyle, intervalSeconds: number) {
@@ -87,7 +87,7 @@ export function createJournalPositionPrimitive(trade: Trade, currentStyle: Posit
       // `shapes` is CandleKit's public primitive model. Preserve its renderer,
       // replace only screen anchors; no fake times enter the candle series.
       primitive.shapes = primitive.shapes.map((shape, index) => {
-        const bounds = journalSpanCoordinates(spans[index], coordinate);
+        const bounds = journalVisibleSpanCoordinates(spans[index], coordinate);
         return { ...shape, selected: false, hovered: false, draft: false,
           anchors: shape.drawing.points.map((point, i) => ({ x: bounds ? i ? bounds.right : bounds.left : null,
             y: params.series.priceToCoordinate(point.price) })) };

@@ -208,6 +208,110 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-27 — Review týdne (Claude)
+
+- Historie → „Review týdne“ (`components/WeeklyReview.tsx`, návrh
+  `mockups/weekly-review.html`, varianta A): fullscreen workspace obchodu
+  (stejné rozložení s ikonou 1/2/… grafů, indikátory, poznámky, Snímek) s
+  místy pro review — pruh se souhrnem týdne a „Zkontrolováno x/y“, pás
+  obchodů po dnech dole (místo časové osy plnění), hodnocení vpravo.
+  `AlphaTradeChartWorkspace` prop `review` (header/side/bottom),
+  `TradeMarketChart`/`AccountExecutionChart` prop `review` (vždy
+  fullscreen, zavření/Esc = konec review; Esc v poli pro psaní ne).
+- ← → přepínají obchody (mimo pole pro psaní a mimo aktivní Bar Replay),
+  Enter = „Hotovo → další“ nezkontrolovaný. Hodnocení = stejná pole jako
+  formulář Zkontrolovat: Dle plánu (Ano/Částečně/Ne → planAdherence +
+  executionStatus/isValid), HTF/LTF confluence z preferencí, emoce, chyby,
+  poznámka; ukládá `onUpdateTrade` → `needsReview: false`.
+- Detaily Tradovate obchodů celého týdne jedním dotazem
+  (`getJournalTradeDetails`), graf je dostane jako ověřené → přepnutí bez
+  načítání detailu. Týdny/dny/souhrn v `lib/weeklyReview.ts` (+ testy).
+- Ověřeno živě: týden 21.–25. 9. (61 obchodů), přepnutí šipkou vycentruje
+  oba grafy, zavření vrátí Historii. „Hotovo“ na produkčních datech
+  netestováno (mění hodnocení obchodu).
+- Doplněno (Filip: „kousavé“ přepínání): graf v review zůstává stát —
+  stabilní klíč ChartView (`reviewMode`), celá série, svíčky celého týdne
+  jedním oknem (`review.loadTiming` v TradeMarketChart), kresby patří týdnu
+  (`drawingKeyId`). Přepnutí obchodu = plynulý přejezd záběru (560 ms,
+  cena autoscale), přestavba překryvů navázaných na vstup až po animaci.
+  Změřeno: stejné plátno (bez remountu), animace začne za ~140 ms, ~108
+  snímků/s. Ostatní obchody týdne tlumeně (`muted` v journal primitivu:
+  alfa 0,3, bez najetí, bez vlivu na osu). Nahoře „‹ Obchod n / N ›“.
+- Kolo 2 (Filip: pořád trochu sekavé; ostatní obchody normálně, popisek
+  výsledku jen u aktuálního; obchod v jedné minutě není vidět):
+  - Ostatní obchody plně (bez tlumení), bez popisku výsledku a bez najetí;
+    vrstva se vytvoří jednou za týden (dřív při každém přepnutí 60+
+    primitivů), vybraný se v ní jen skryje (`isHidden`).
+  - Žádná přestavba grafu po přepnutí; FVG vstupu / struktura vstupu se v
+    review nekreslí. TradeMarketChart počítá indikátory klasického grafu
+    jen pro klasický engine (dřív struktura přes celý týden při každém
+    přepnutí). Bez kaskády renderů: koncept hodnocení odvozený (ne efekt),
+    úvodní animace a okno svíček v review se nenastavují.
+  - Změřeno (dev): dlouhé úlohy při přepnutí 68 + 98 ms → ~56–60 ms,
+    vykreslení snímku grafu ~7 ms. Produkce bude rychlejší.
+  - `journalVisibleSpanCoordinates`: úsek celý uvnitř jedné svíčky (vstup i
+    výstup v téže minutě) → box/čáry SL/TP přes celou svíčku; úseky ořízlé
+    chybějící svíčkou zůstávají přesné (+ testy).
+- Position boxy i u ostatních obchodů týdne (bez štítků na ose, vytvoří se
+  jednou za týden spolu s šipkami; vybraný kreslí hlavní vrstva). Změřeno
+  (dev): animace ~10 ms/snímek, start přepnutí ~65 + 90–115 ms.
+- Kolo 3 (Filip: blízké obchody se trhají; při velkém oddálení se graf seká):
+  - Přejezd startuje hned při kliknutí událostí `REVIEW_FOCUS_EVENT` přímo v
+    grafu (mimo React). Panel, pás a pruh se kreslí přes portál do míst ve
+    workspace (`onSlotsReady`) a graf je memo prvek → změna výběru graf
+    nepřekresluje; graf převezme nový obchod až po dojetí (540 ms, transition).
+    Karty pásu jsou memo. Změřeno (dev): první snímek přejezdu 180 → ~30 ms,
+    dál 7–9 ms; ~75 ms až po dojetí, kdy graf stojí.
+  - Oddálení: 5 křivek VWAP z Liquidity Levels se kreslilo bod po bodu
+    (~338 000 `lineTo` na snímek). `drawCurve` ředí na ~1 bod/px → ~6 000;
+    snímek při maximálním oddálení ve Filipově okně (2469 px) 80–95 → 7–11 ms.
+    Platí pro všechny grafy s Levely (detail, fullscreen, backtest).
+- Kolo 4: šipky nového obchodu se po dojetí na 1,2 s ukážou jako po najetí
+  myší (zvětšené, záře, popisek) — `highlightMs` v journal primitivu, čas se
+  drží podle obchodu v CandleKitu (vrstva se může přestavět); skutečné
+  najetí myší zvýraznění převezme. (První pokus s „pulzem“ se neprojevil —
+  vrstva se po přepnutí vytvořila dvakrát a pulz zanikl.) Pravý panel kompaktní (252 px, návrh
+  `mockups/review-panel-compact.html`, Filip: „C, ale vybrané jako dlaždice
+  z B“): rozbalovací sekce (`ReviewSection`, výška animovaná 0fr → 1fr,
+  zavřené `inert`), sbalená sekce ukazuje vybrané dlaždice s pružinkou
+  (klik = odebrat) a počet u názvu; stav rozbalení drží i při přepnutí;
+  Hotovo/Přeskočit pevně dole. Oprava: mřížka Vstup/Výstup ve sloupci s
+  posouváním se smrskla na 2 px (overflow-hidden + shrink) — děti `shrink-0`.
+- Kolo 5 (2026-09-28, Filip: týden 14.–18. 9., obchod 12/38 — obchody i
+  boxy ~300 bodů nad svíčkami): review bral svíčky celého týdne podle
+  kontraktu PRVNÍHO obchodu, týden přes rollover (MNQU6 → MNQZ6) pak kreslil
+  prosincové ceny na zářijové svíčky. Teď `loadReviewWeekCandles`
+  (`services/tradeChartData.ts`) → `loadMarketCandlesForEntries` /
+  `resolveContractsForEntries` (`services/marketData.ts`): kontrakt se volí
+  pro každý obchod zvlášť podle vzdálenosti vstupní ceny od svíčky
+  (`priceDistanceFromCandle`, >10 bodů → zkusí čtvrtletní kontrakty kolem
+  data), každý kontrakt se stáhne jednou. `review.data` předává
+  TradeMarketChartu svíčky vybraného obchodu (už si je nenačítá sám),
+  ostatní obchody týdne se kreslí jen ze stejného kontraktu. CandleKit po
+  výměně série v review znovu vycentruje obchod (staré logické indexy by
+  ukazovaly jinam). Obchod mladší než 24 h drží poslední graf + poznámku.
+  Test `tests/reviewContracts.test.ts`. Ověřeno živě: 12/38 (Dec, 29 437)
+  i 1/38 (28 940) sedí, přepínání tam a zpět vycentruje.
+- Kolo 6 (Filip): zvýraznění po přepnutí jen šipky + čáry k cenové ose,
+  bez štítků u šipek (`labelsQuiet` v journal primitivu, platí i během
+  doznění; štítky vrátí až skutečné najetí). Otevírání review: místo hlášek
+  „Načítám obchody týdne…“ / „Načítám graf vybraného účtu…“ točící se logo
+  appky (`QuantumSpinner` z `QuantumLoader.tsx`) — fallback lazy importu,
+  načítání týdne i Suspense grafu; zavřít jde křížkem v rohu. Změřeno:
+  spinner od 83 ms, graf ve 2,3 s, žádný text mezi tím. Doladěno (Filip:
+  větší, „hryzne a jede odznovu“ 2×): 128 px jako úvodní loader; během
+  otevírání se vystřídají 3 instance (70/384/1629 ms) a CSS animace každé
+  startovala znovu (druhá navíc o ~240 ms později než render). Teď Web
+  Animations se `startTime = 0` → fáze z hodin dokumentu; změřeno 0°
+  odchylka přes všechny instance (104 vzorků).
+- Víc obchodů v jedné svíčce (Filip: 22. 9. 10:50 ×2 + 10:51): šipky se
+  skládaly jen v rámci jednoho obchodu, každý obchod týdne je vlastní vrstva
+  → šipky různých obchodů ležely přes sebe. `createJournalArrowStacks`
+  (sdílený registr, option `arrowStacks`) skládá šipky všech obchodů podle
+  času prvního plnění; vybraný obchod (hlavní vrstva) dostane stejné místo
+  jako ve vrstvě ostatních → po přepnutí neposkočí. + test.
+- Zatím ne: hvězdičková známka.
+
 ### 2026-09-27 — Detail obchodu otevírá rovnou graf (Claude)
 
 - Filip: graf se načítá rychle → výchozí pohled detailu je graf, snímky jsou

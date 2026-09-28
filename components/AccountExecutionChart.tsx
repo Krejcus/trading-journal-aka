@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AlertCircle, Loader2, RefreshCw } from 'lucide-react';
+import { QuantumSpinner } from './QuantumLoader';
 import type { Trade } from '../types';
 import type { ChartNote } from '../lib/chartNotes';
 import { isEvidenceJournalTrade } from '../lib/journalTradeFacts';
@@ -10,7 +11,7 @@ import { takePrefetchedJournalDetail } from '../services/tradeChartData';
 const TradeMarketChart = React.lazy(() => import('./TradeMarketChart'));
 const loadOwnerTrade = (id: string) => storageService.getTradeById(id);
 
-export default function AccountExecutionChart({ trade, isDark, verifiedDetail, loadTrade = loadOwnerTrade, variant = 'full', revealKey, chartNotes, onChartNotesChange, onSaveSnapshot }: {
+export default function AccountExecutionChart({ trade, isDark, verifiedDetail, loadTrade = loadOwnerTrade, variant = 'full', revealKey, chartNotes, onChartNotesChange, onSaveSnapshot, review }: {
   trade: Trade; isDark: boolean; verifiedDetail?: Trade; loadTrade?: (id: string) => Promise<Trade | null>;
   /** `detail` = zjednodušený graf s průběhem a přehráváním v detailu obchodu. */
   variant?: 'full' | 'detail';
@@ -18,6 +19,7 @@ export default function AccountExecutionChart({ trade, isDark, verifiedDetail, l
   chartNotes?: readonly ChartNote[];
   onChartNotesChange?: (notes: ChartNote[]) => void;
   onSaveSnapshot?: (image: Blob) => Promise<boolean>;
+  review?: React.ComponentProps<typeof TradeMarketChart>['review'];
 }) {
   const journal = isEvidenceJournalTrade(trade);
   const verified = verifiedDetail === trade && !!trade.executionHistory;
@@ -41,7 +43,9 @@ export default function AccountExecutionChart({ trade, isDark, verifiedDetail, l
   // Obnovení stejného obchodu na pozadí nesmí graf odpojit — jinak by se
   // v detailu vynulovalo rozběhnuté přehrávání. Nová data se dosadí po načtení.
   const current = verified ? { detail: trade } : result && result.retry === retry && String(result.input.id) === String(trade.id) ? result : null;
-  const loading = <div role="status" className="absolute inset-0 flex items-center justify-center gap-2 text-xs text-slate-500"><Loader2 size={18} className="animate-spin" />Načítám graf vybraného účtu…</div>;
+  // Review týdne: stejný spinner jako při jeho otevírání (bez textu), ať se načítání neskládá ze dvou hlášek.
+  const loading = review ? <div className="absolute inset-0 flex items-center justify-center"><QuantumSpinner /></div>
+    : <div role="status" className="absolute inset-0 flex items-center justify-center gap-2 text-xs text-slate-500"><Loader2 size={18} className="animate-spin" />Načítám graf vybraného účtu…</div>;
   if (journal && !current) return loading;
   if (journal && !current?.detail) return <div role="alert" className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center text-xs text-slate-500">
     <AlertCircle size={22} className="text-amber-500" />
@@ -49,5 +53,5 @@ export default function AccountExecutionChart({ trade, isDark, verifiedDetail, l
     <p>Ceny a historii SL/TP zobrazíme po úspěšném načtení.</p>
     <button type="button" onClick={() => setRetry(value => value + 1)} className="inline-flex items-center gap-2 rounded-lg border border-slate-500/20 px-3 py-2 font-bold text-theme-primary"><RefreshCw size={13} />Zkusit znovu</button>
   </div>;
-  return <React.Suspense fallback={loading}><TradeMarketChart trade={journal ? current!.detail! : trade} isDark={isDark} variant={variant} revealKey={revealKey} chartNotes={chartNotes} onChartNotesChange={onChartNotesChange} onSaveSnapshot={onSaveSnapshot} /></React.Suspense>;
+  return <React.Suspense fallback={loading}><TradeMarketChart trade={journal ? current!.detail! : trade} isDark={isDark} variant={variant} revealKey={revealKey} chartNotes={chartNotes} onChartNotesChange={onChartNotesChange} onSaveSnapshot={onSaveSnapshot} review={review} /></React.Suspense>;
 }

@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_STYLE } from '@getcandlekit/charts';
 import type { IChartApi, ISeriesApi } from 'lightweight-charts';
-import { createJournalTimeProjection, journalLogicalCoordinate, journalSpanCoordinates, journalTimeLogical } from '../services/journalChartTime';
+import { createJournalTimeProjection, journalLogicalCoordinate, journalSpanCoordinates, journalTimeLogical, journalVisibleSpanCoordinates } from '../services/journalChartTime';
 import { createJournalPositionPrimitive, journalPositionDrawing } from '../services/journalPositionDrawing';
-import { createJournalChartPrimitive } from '../services/journalChartPrimitive';
+import { createJournalArrowStacks, createJournalChartPrimitive } from '../services/journalChartPrimitive';
 import type { MarketCandle } from '../services/marketData';
 import type { Trade } from '../types';
 
@@ -145,6 +145,62 @@ describe('journal candle geometry', () => {
   });
 });
 
+describe('review: zvýraznění šipek po přepnutí', () => {
+  it('šipky a čáry k ceně se na chvíli zvýrazní bez štítků, pak zhasnou', () => {
+    vi.useFakeTimers();
+    try {
+      const chart = { timeScale: () => ({ logicalToCoordinate: x }), subscribeCrosshairMove: () => {}, unsubscribeCrosshairMove: () => {} } as unknown as IChartApi;
+      const series = { priceToCoordinate: (price: number) => 200 - price } as unknown as ISeriesApi<'Candlestick'>;
+      const primitive = createJournalChartPrimitive(trade().executionHistory!, candles, 60, chart, series, undefined, { direction: 'Long', highlightMs: 1000 });
+      primitive.attached!({ requestUpdate: () => {} } as unknown as Parameters<NonNullable<typeof primitive.attached>>[0]);
+      const labels: string[] = [];
+      const context = new Proxy({ fillText: (label: string) => labels.push(label) }, { get: (target, key) => key in target ? target[key as keyof typeof target] : () => {} });
+      const draw = () => { labels.length = 0; primitive.paneViews!()[0].renderer()!.draw({ useMediaCoordinateSpace: (callback: (scope: unknown) => void) => callback({ context }) } as never); };
+      draw();
+      expect(labels).toEqual([]);
+      expect(primitive.priceAxisViews!().length).toBeGreaterThan(0);
+      vi.advanceTimersByTime(1000);
+      draw();
+      expect(labels).toEqual([]);
+      primitive.detached!();
+    } finally { vi.useRealTimers(); }
+  });
+});
+
+describe('obchod v jedné minutě', () => {
+  const linear = (index: number) => 100 + index * 20;
+  it('úsek užší než svíčka se roztáhne přes celou svíčku', () => {
+    const projection = createJournalTimeProjection(candles, 60);
+    const [span] = projection.spans(120_100, 150_000); // vstup i výstup v minutě 120 s
+    expect(journalSpanCoordinates(span, linear)!.right - journalSpanCoordinates(span, linear)!.left).toBeLessThan(20);
+    expect(journalVisibleSpanCoordinates(span, linear)).toEqual({ left: 110, right: 130 });
+  });
+  it('delší úsek zůstane beze změny', () => {
+    const projection = createJournalTimeProjection(candles, 60);
+    const [span] = projection.spans(360_000, 450_000);
+    expect(journalVisibleSpanCoordinates(span, linear)).toEqual(journalSpanCoordinates(span, linear));
+  });
+});
+
+describe('review týdne: ostatní obchody', () => {
+  it('kreslí se bez najetí myší a bez vlivu na osu', () => {
+    let subscribed = false;
+    const chart = { timeScale: () => ({ logicalToCoordinate: x }), subscribeCrosshairMove: () => { subscribed = true; }, unsubscribeCrosshairMove: () => {} } as unknown as IChartApi;
+    const series = { priceToCoordinate: (price: number) => 200 - price } as unknown as ISeriesApi<'Candlestick'>;
+    const primitive = createJournalChartPrimitive(trade().executionHistory!, candles, 60, chart, series, undefined, { direction: 'Long', muted: true, autoscaleLevels: true });
+    primitive.attached!({ requestUpdate: () => {} } as unknown as Parameters<NonNullable<typeof primitive.attached>>[0]);
+    expect(subscribed).toBe(false);
+    expect(primitive.autoscaleInfo).toBeUndefined();
+    const alphas: number[] = [];
+    const context = new Proxy({} as Record<string, unknown>, {
+      get: (target, key) => key in target ? target[key as string] : () => {},
+      set: (target, key, value) => { if (key === 'globalAlpha') alphas.push(value as number); target[key as string] = value; return true; },
+    });
+    primitive.paneViews!()[0].renderer()!.draw({ useMediaCoordinateSpace: (callback: (scope: unknown) => void) => callback({ context }) } as never);
+    expect(alphas.length).toBeGreaterThan(0);
+  });
+});
+
 describe('najetí na čáry SL/TP', () => {
   const setup = () => {
     const value = trade();
@@ -282,5 +338,21 @@ describe('journal position reference uses the actual CandleKit renderer', () => 
     expect(journalPositionDrawing(value, DEFAULT_STYLE, 60)).toMatchObject({ tool: 'ShortPosition' });
     value.executionHistory!.fills.push({ ...value.executionHistory!.fills[0], id: 'simultaneous', price: 101 });
     expect(journalPositionDrawing(value, DEFAULT_STYLE, 60)).toBeNull();
+  });
+});
+
+describe('review týdne: šipky víc obchodů v jedné svíčce', () => {
+  it('skládají se podle pořadí obchodů, bez ohledu na pořadí registrace', () => {
+    const stacks = createJournalArrowStacks();
+    stacks.register('b', 20, [{ candle: 5, buy: true }, { candle: 5, buy: false }]);
+    stacks.register('a', 10, [{ candle: 5, buy: true }, { candle: 5, buy: true }, { candle: 6, buy: false }]);
+    stacks.register('c', 30, [{ candle: 5, buy: true }]);
+    expect(stacks.before('a', 5, true)).toBe(0);
+    expect(stacks.before('b', 5, true)).toBe(2);
+    expect(stacks.before('b', 5, false)).toBe(0);
+    expect(stacks.before('c', 5, true)).toBe(3);
+    // Znovu vytvořená vrstva téhož obchodu (vybraný) dostane stejné místo.
+    stacks.register('b', 20, [{ candle: 5, buy: true }, { candle: 5, buy: false }]);
+    expect(stacks.before('b', 5, true)).toBe(2);
   });
 });

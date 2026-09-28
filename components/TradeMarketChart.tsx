@@ -33,7 +33,7 @@ import { JOURNAL_BUY_COLOR, JOURNAL_SELL_COLOR } from '../services/journalChartP
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import { Trade } from '../types';
 import CandleKitTradeChart from './CandleKitTradeChart';
-import AlphaTradeChartWorkspace from './AlphaTradeChartWorkspace';
+import AlphaTradeChartWorkspace, { type WorkspaceReviewSlots } from './AlphaTradeChartWorkspace';
 import ChartTimeframePicker from './ChartTimeframePicker';
 import {
   aggregateCandles,
@@ -46,6 +46,7 @@ import {
   MarketDataError,
   resolveMarketSymbol,
   type MarketCandle,
+  type MarketCandleResponse,
   type MarketTimeframe,
 } from '../services/marketData';
 import { onChartAppearanceScopeBroadcast } from '../services/chartAppearanceScope';
@@ -72,6 +73,15 @@ interface TradeMarketChartProps {
   onChartNotesChange?: (notes: ChartNote[]) => void;
   /** Tlačítko Snímek (detail i fullscreen): uloží obrázek ke snímkům obchodu. */
   onSaveSnapshot?: (image: Blob) => Promise<boolean>;
+  /** Review týdne: rovnou fullscreen workspace s místy pro review; zavření = konec review. */
+  review?: WorkspaceReviewSlots & {
+    onClose: () => void;
+    /**
+     * Svíčky celého týdne pro kontrakt vybraného obchodu (review je stáhne
+     * samo, kontrakt ověřený pro každý obchod — rollover). Graf nic nenačítá.
+     */
+    data: MarketCandleResponse;
+  };
 }
 
 /** Krok přehrávání = jedna 1m svíčka; při 1x trvá půl vteřiny. */
@@ -147,7 +157,7 @@ const focusChartOnTrade = (
   });
 };
 
-const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, variant = 'full', revealKey = 0, chartNotes, onChartNotesChange, onSaveSnapshot }) => {
+const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, variant = 'full', revealKey = 0, chartNotes, onChartNotesChange, onSaveSnapshot, review }) => {
   const detail = variant === 'detail';
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -164,7 +174,11 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   const [showLevels, setShowLevels] = useState(false);
   const [showStructure, setShowStructure] = useState(false);
   const [chartEngine, setChartEngine] = useState<'candlekit' | 'classic'>('candlekit');
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isFullscreenState, setIsFullscreen] = useState(false);
+  // Review týdne je vždy ve fullscreenu.
+  const isFullscreen = isFullscreenState || Boolean(review);
+  const reviewCloseRef = useRef(review?.onClose);
+  reviewCloseRef.current = review?.onClose;
 
   // Časy i okno počítá stejně jako předstažení v detailu (services/tradeChartData).
   const timing = useMemo(() => tradeChartTiming(trade), [trade]);
@@ -274,7 +288,8 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   // Při prvním zobrazení se svíčky „postaví“ zleva doprava: clona v barvě
   // pozadí přes plochu svíček se stáhne doprava, osy zůstávají stát.
   const [introDone, setIntroDone] = useState(false);
-  useEffect(() => { setIntroDone(false); }, [trade.id, revealKey]);
+  // Review (vždy fullscreen) úvodní animaci nepotřebuje — ušetří render při přepnutí.
+  useEffect(() => { if (!review) setIntroDone(false); }, [trade.id, revealKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // Každý návrat na graf vycentruje obchod (nebo rozběhnuté přehrávání).
   const lastRevealRef = useRef(revealKey);
   useEffect(() => {
@@ -351,9 +366,12 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if (document.querySelector('[data-chart-overlay-menu]')) return;
+      // Review: Esc v poli pro psaní jen opustí pole, jinak zavře celé review.
+      if (reviewCloseRef.current && (event.target as HTMLElement)?.closest?.('input, textarea, select')) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      setIsFullscreen(false);
+      if (reviewCloseRef.current) reviewCloseRef.current();
+      else setIsFullscreen(false);
     };
     document.body.style.overflow = 'hidden';
     if (appRoot) appRoot.style.visibility = 'hidden';
@@ -365,14 +383,28 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
     };
   }, [isFullscreen]);
 
+  // Review: svíčky přicházejí hotové (týden, správný kontrakt).
+  const reviewData = review?.data;
   useEffect(() => {
+    if (!reviewData) return;
+    setRawCandles(reviewData.candles);
+    setLoadedSymbol(reviewData.symbol);
+    setProviderSymbol(reviewData.sourceSymbol || reviewData.symbol);
+    setEstimatedCostUsd(null);
+    setError(null);
+    setLoading(false);
+    setHistoryReady(true);
+  }, [reviewData]);
+  useEffect(() => {
+    if (reviewData) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
     setRawCandles([]);
     setEstimatedCostUsd(null);
     setLoadedSymbol(null);
-    if (detail) { setFullHistory(levelsWanted); setHistoryReady(false); }
+    // Fullscreen (i review týdne) chce vždy plnou historii.
+    if (detail) { setFullHistory(levelsWanted || isFullscreen); setHistoryReady(false); }
     if (!tradeChartDataAvailable(timing)) {
       setError({ code: 'data-not-yet-historical', message: 'Databento historical feed zpřístupní tento obchod přibližně 24 hodin po trhu.' });
       setLoading(false);
@@ -393,11 +425,11 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
     });
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- okno určují časy a kontrakt, ne identita obchodu
-  }, [entryMs, exitMs, marketSymbol, retry, timing.firstEntry.at, timing.firstEntry.price]);
+  }, [entryMs, exitMs, marketSymbol, retry, timing.firstEntry.at, timing.firstEntry.price, Boolean(reviewData)]);
 
   // Dotažení plné historie ke kontraktu, který vybralo první načtení.
   useEffect(() => {
-    if (!fullHistory || !loadedSymbol || loading) return;
+    if (reviewData || !fullHistory || !loadedSymbol || loading) return;
     let cancelled = false;
     setHistoryLoading(true);
     loadTradeChartHistory(loadedSymbol, timing).then(response => {
@@ -457,18 +489,25 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
     return () => { lines.forEach(line => { try { series.removePriceLine(line); } catch { /* graf už je pryč */ } }); };
   }, [detail, chartApi, history, showEntryLevel, showExitLevel, entryFill?.price, entryFill?.side, exitFill?.price, exitFill?.side, trade.direction]);
 
-  const indicators = useMemo(() => calculateIndicators(candles), [candles]);
+  // Výpočty níže kreslí jen klasický graf (lightweight-charts). Detail,
+  // fullscreen i review používají CandleKit — bez těchto výpočtů přepnutí
+  // obchodu v review nepřepočítává celý týden svíček.
+  const classicChart = chartEngine === 'classic' && !detail;
+  const indicators = useMemo(() => classicChart ? calculateIndicators(candles) : calculateIndicators([]), [candles, classicChart]);
   const fvgs = useMemo(() => {
+    if (!classicChart) return [];
     const from = Math.floor(entryMs / 1000) - 8 * 3600;
     return findFairValueGaps(candles.filter(candle => candle.time >= from));
-  }, [candles, entryMs]);
+  }, [candles, entryMs, classicChart]);
   const structureEvents = useMemo(() => {
+    if (!classicChart) return [];
     const from = Math.floor(entryMs / 1000) - 200 * 60;
     const to = Math.floor(Math.max(entryMs, exitMs) / 1000) + 30 * 60;
     return calculateMarketStructure(rawCandles)
       .filter(event => event.breakTime >= from && event.pivotTime <= to);
-  }, [rawCandles, entryMs, exitMs]);
+  }, [rawCandles, entryMs, exitMs, classicChart]);
   const entryFvg = useMemo(() => {
+    if (!classicChart) return null;
     const entryMappedToFvg = trade.entryMap?.entryFvg === true
       || trade.ltfConfluence?.some(tag => /entry.*fvg/i.test(tag));
     if (!entryMappedToFvg) return null;
@@ -479,7 +518,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
       Number(trade.entryPrice),
       String(trade.direction).toLowerCase() === 'long' ? 'long' : 'short',
     );
-  }, [rawCandles, entryMs, trade]);
+  }, [rawCandles, entryMs, trade, classicChart]);
   const displayedEntryFvg = useMemo(() => {
     if (!entryFvg) return null;
     const from = Math.floor(entryMs / 1000) - 8 * 3600;
@@ -1084,7 +1123,8 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
         chartNotes={notes}
         onChartNotesChange={onChartNotesChange}
         onSaveSnapshot={onSaveSnapshot}
-        onClose={() => setIsFullscreen(false)}
+        review={review}
+        onClose={() => (review ? review.onClose() : setIsFullscreen(false))}
       />,
       document.body,
     )

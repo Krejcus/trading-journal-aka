@@ -75,6 +75,25 @@ export function createJournalTimeProjection(candles: readonly CandleTime[], inte
 
 /** A small visual cut distinguishes disjoint ranges on a compressed trading
  * axis. Exact event markers still use point(), without this presentation cut. */
+/**
+ * Jako journalSpanCoordinates, ale úsek užší než jedna svíčka (vstup i výstup
+ * v téže minutě) se roztáhne přes celé svíčky, do kterých patří — jinak by box
+ * nebo čára SL/TP zmizely uvnitř těla svíčky.
+ */
+export function journalVisibleSpanCoordinates(span: JournalTimeSpan, coordinate: (index: number) => number | null): { left: number; right: number } | null {
+  const bounds = journalSpanCoordinates(span, coordinate);
+  if (!Number.isFinite(span.fromLogical) || !Number.isFinite(span.toLogical)) return bounds;
+  // Jen úsek celý uvnitř jedné svíčky. Úsek končící na hraně svíčky (ořízlý
+  // chybějící svíčkou nebo mezerou v záznamu) zůstává přesný.
+  const index = Math.floor(span.fromLogical);
+  if (Math.floor(span.toLogical) !== index) return bounds;
+  const center = coordinate(index);
+  if (center == null) return bounds;
+  const next = coordinate(index + 1);
+  const slot = next != null && next !== center ? Math.abs(next - center) : 6;
+  return { left: center - slot / 2, right: center + slot / 2 };
+}
+
 export function journalSpanCoordinates(span: JournalTimeSpan, coordinate: (index: number) => number | null): { left: number; right: number } | null {
   const left = journalLogicalCoordinate(span.fromLogical, coordinate), right = journalLogicalCoordinate(span.toLogical, coordinate);
   if (left == null || right == null || right <= left) return null;

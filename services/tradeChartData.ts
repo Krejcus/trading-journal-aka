@@ -3,6 +3,7 @@ import { isEvidenceJournalTrade } from '../lib/journalTradeFacts';
 import { loadJournalChartDetail } from './journalChartDetail';
 import {
   loadMarketCandles,
+  loadMarketCandlesForEntries,
   loadTradeMarketCandles,
   marketDataSessionWindowForTrade,
   marketDataWindowForTrade,
@@ -51,6 +52,25 @@ export function loadTradeChartCandles(trade: Trade, root: 'MNQ' | 'NQ', depth: T
     : marketDataWindowForTrade(timing.entryMs, timing.exitMs);
   return loadTradeMarketCandles({ root, tradeSymbol: trade.symbol || trade.instrument, start, end,
     entryMs: timing.firstEntry.at, entryPrice: timing.firstEntry.price });
+}
+
+/**
+ * Review týdne: svíčky pro všechny obchody týdne jedním oknem (14 dní před
+ * prvním obchodem → den posledního), kontrakt ověřený pro každý obchod zvlášť
+ * (týden přes rollover má obchody na dvou kontraktech). Obchody mladší než
+ * ~24 h Databento ještě nemá — ty se vynechají.
+ */
+export async function loadReviewWeekCandles(trades: readonly Trade[], root: 'MNQ' | 'NQ' = 'MNQ'): Promise<Map<string, MarketCandleResponse>> {
+  const ready = trades.map(trade => ({ trade, timing: tradeChartTiming(trade) })).filter(item => tradeChartDataAvailable(item.timing));
+  if (!ready.length) return new Map();
+  const { start, end } = marketDataWindowForTrade(
+    Math.min(...ready.map(item => item.timing.entryMs)),
+    Math.max(...ready.map(item => Math.max(item.timing.entryMs, item.timing.exitMs))),
+  );
+  return loadMarketCandlesForEntries({
+    root, start, end,
+    entries: ready.map(({ trade, timing }) => ({ key: String(trade.id), at: timing.firstEntry.at, price: timing.firstEntry.price })),
+  });
 }
 
 /**

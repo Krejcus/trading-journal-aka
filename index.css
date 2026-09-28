@@ -3637,3 +3637,20 @@ body.chart-note-dragging * {
   animation: chart-snapshot-flash 0.45s ease-out forwards;
 }
 @keyframes chart-snapshot-flash { from { opacity: 0.55; } to { opacity: 0; } }
+
+/* Review týdne: sekce hodnocení se rozbalují plynule (0fr → 1fr),
+   vybrané dlaždice ve sbalené sekci naskočí s pružinkou. */
+.review-section-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows .24s cubic-bezier(.2, .8, .2, 1), opacity .18s ease;
+}
+.review-section-body[data-open="true"] { grid-template-rows: 1fr; opacity: 1; }
+.review-section-body > div { overflow: hidden; min-height: 0; }
+.review-tile-in { animation: review-tile-in .22s cubic-bezier(.2, .9, .3, 1.25) both; }
+@keyframes review-tile-in { from { opacity: 0; transform: scale(.82); } }
+@media (prefers-reduced-motion: reduce) {
+  .review-section-body { transition: none; }
+  .review-tile-in { animation: none; }
+}

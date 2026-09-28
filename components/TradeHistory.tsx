@@ -1,6 +1,7 @@
 import { isLegacyJournalTrade } from '../lib/journalTradeFacts';
 import { buildTradeGroupIndex, explicitTradeMaster, journalDisplayBalance, isCombinedTrade, tradeAccountLabel, tradeGroupMembers, tradeEstimateNotice } from '../lib/tradeHistoryPresentation';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { QuantumSpinner } from './QuantumLoader';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Trade, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
 import { formatTradePnL } from '../utils/formatPnL';
@@ -19,11 +20,12 @@ import {
   Maximize2, ArrowRight, Gauge, Hash, Ruler, Percent,
   Compass, Hourglass, Cpu, Terminal, Layers, ArrowUpRight, ArrowDownRight,
   Share2, Check, Copy, LayoutGrid, List, AlertOctagon, Clock, Timer, CheckCircle2, UploadCloud, Sparkles,
-  MoreHorizontal, CheckSquare, Inbox
+  MoreHorizontal, CheckSquare, Inbox, CalendarRange
 } from 'lucide-react';
 import { tradeNeedsEnrichment } from '../services/tradovateImport';
 
 import TradeDetailModal from './TradeDetailModal';
+const WeeklyReview = React.lazy(() => import('./WeeklyReview'));
 import type { ChartNote } from '../lib/chartNotes';
 import { HistoryScreenshotSlot, clipboardImage, pasteTargetsEditable, shotTargetIds, type ScreenshotAttachStatus } from './HistoryScreenshotSlot';
 import ImageZoomModal from './ImageZoomModal';
@@ -174,6 +176,8 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
   // --- ENRICHMENT (doplnění importovaných obchodů) ---
   const [enrichFilter, setEnrichFilter] = useState(false); // filtr „K doplnění"
   const [copierReviewFilter, setCopierReviewFilter] = useState(false);
+  // Review týdne: fullscreen graf + pás obchodů týdne a rychlé hodnocení.
+  const [weeklyReviewOpen, setWeeklyReviewOpen] = useState(false);
   const [wizardMode, setWizardMode] = useState(false);      // průvodce: po zavření detailu otevři další
 
   // --- MULTI-SELECT STATE ---
@@ -989,6 +993,16 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           </button>
         )}
 
+        {!isMultiSelectMode && onUpdateTrade && sortedTrades.length > 0 && (
+          <button
+            onClick={() => setWeeklyReviewOpen(true)}
+            className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-bold transition-all active:scale-95 ${isDark ? 'border border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.08]' : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
+            title="Projít obchody týdne v jednom grafu a rychle je ohodnotit"
+          >
+            <CalendarRange size={14} /> Review týdne
+          </button>
+        )}
+
         {!isMultiSelectMode && copierReviewCount > 0 && (
           <button
             onClick={() => { setCopierReviewFilter(value => !value); setEnrichFilter(false); }}
@@ -1797,6 +1811,20 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
         )}
       </AnimatePresence>
 
+      {weeklyReviewOpen && onUpdateTrade && (
+        <React.Suspense fallback={<div className={`fixed inset-0 z-[290] flex items-center justify-center ${isDark ? 'bg-[#070a0f]' : 'bg-[#f4f6f8]'}`}><QuantumSpinner /></div>}>
+          <WeeklyReview
+            trades={sortedTrades}
+            allTrades={allTrades.length ? allTrades : trades}
+            isDark={isDark}
+            emotions={emotions}
+            onUpdateTrade={onUpdateTrade}
+            onSaveChartNotes={onSaveChartNotes ? (trade, notes) => saveChartNotes(trade, notes) : undefined}
+            onAttachScreenshot={onAttachScreenshot ? (trade, image) => attachScreenshot(trade, image) : undefined}
+            onClose={() => setWeeklyReviewOpen(false)}
+          />
+        </React.Suspense>
+      )}
       {selectedTrade && (
         <TradeDetailModal
           trade={selectedTrade}

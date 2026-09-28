@@ -4,7 +4,7 @@ import type { MarketCandle } from './marketData';
 import { ALPHATRADE_CHART_STYLE as style } from './chartVisualStyle';
 import { journalProtectionSegments } from '../lib/journalProtectionSegments';
 import { protectionValueAt, tradeFillGroups } from '../lib/tradeReplay';
-import { createJournalTimeProjection, journalLogicalCoordinate, journalSpanCoordinates, type JournalCandleCoverage } from './journalChartTime';
+import { createJournalTimeProjection, journalLogicalCoordinate, journalVisibleSpanCoordinates, type JournalCandleCoverage } from './journalChartTime';
 export { journalTimeLogical, journalLogicalCoordinate } from './journalChartTime';
 export const JOURNAL_SL_COLOR = '#ef4444';
 export const JOURNAL_TP_COLOR = '#10b981';
@@ -21,6 +21,64 @@ export interface JournalChartOptions {
   pointValue?: number;
   /** Název kontraktu do štítku („9 MNQ“). */
   instrument?: string;
+  /** Review týdne: ostatní obchody — bez najetí, bez popisku výsledku a bez vlivu na osu. */
+  muted?: boolean;
+  /** Průhlednost celé kresby (výchozí 1). */
+  alpha?: number;
+  /** Dočasně nekreslit (review: obchod je právě vybraný a kreslí ho hlavní vrstva). */
+  isHidden?: () => boolean;
+  /**
+   * Review: po připojení se šipky na tolik ms ukážou jako při najetí myší
+   * (zvětšené, rozsvícené, s popiskem) — ať je vidět, který obchod je aktuální.
+   */
+  highlightMs?: number;
+  /**
+   * Review: sdílené skládání šipek všech obchodů na grafu. Každý obchod je
+   * vlastní vrstva — bez toho by šipky dvou obchodů v jedné svíčce ležely přes sebe.
+   */
+  arrowStacks?: { registry: JournalArrowStacks; key: string; order: number };
+}
+
+type StackedArrow = { candle: number | null; buy: boolean };
+export interface JournalArrowStacks {
+  register(key: string, order: number, arrows: readonly StackedArrow[]): void;
+  /** Kolik šipek stejné strany v téže svíčce mají obchody před tímto (podle pořadí). */
+  before(key: string, candle: number, buy: boolean): number;
+}
+
+export function createJournalArrowStacks(): JournalArrowStacks {
+  const entries = new Map<string, { order: number; arrows: readonly StackedArrow[] }>();
+  // Index svíčka+strana → obchody v pořadí; staví se líně po každé registraci.
+  let index: Map<string, Array<{ key: string; order: number; count: number }>> | null = null;
+  const build = () => {
+    const next = new Map<string, Array<{ key: string; order: number; count: number }>>();
+    for (const [key, entry] of entries) {
+      const counts = new Map<string, number>();
+      for (const arrow of entry.arrows) if (arrow.candle != null) {
+        const slot = `${arrow.candle}:${arrow.buy ? 1 : 0}`;
+        counts.set(slot, (counts.get(slot) ?? 0) + 1);
+      }
+      for (const [slot, count] of counts) {
+        const list = next.get(slot) ?? [];
+        list.push({ key, order: entry.order, count });
+        next.set(slot, list);
+      }
+    }
+    for (const list of next.values()) list.sort((a, b) => a.order - b.order || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    return next;
+  };
+  return {
+    register: (key, order, arrows) => { entries.set(key, { order, arrows }); index = null; },
+    before: (key, candle, buy) => {
+      index ??= build();
+      let count = 0;
+      for (const item of index.get(`${candle}:${buy ? 1 : 0}`) ?? []) {
+        if (item.key === key) return count;
+        count += item.count;
+      }
+      return 0;
+    },
+  };
 }
 
 /** Tenká šipka; po najetí myší se plynule zvětší a ukáže, co je zač. */
@@ -36,6 +94,7 @@ const timeText = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hour
 export function createJournalChartPrimitive(history: TradeExecutionHistory, candles: readonly MarketCandle[], intervalSeconds: number,
   chart: IChartApi, series: ISeriesApi<'Candlestick'>, coverage?: JournalCandleCoverage, options: JournalChartOptions = {}): ISeriesPrimitive<Time> {
   const projection = createJournalTimeProjection(candles, intervalSeconds, coverage);
+  const baseAlpha = options.alpha ?? 1;
   const segments = journalProtectionSegments(history).map(segment => ({ ...segment, spans: projection.spans(segment.from, segment.to) }));
   const long = String(options.direction ?? '').toLowerCase() !== 'short';
   // Dílčí plnění jednoho příkazu = jedna šipka (výstup 1 + 1 + 11 → „Buy 13“).
@@ -79,6 +138,11 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
   const arrowCandle = arrows.map(arrow => { const point = projection.point(arrow.at); return point == null ? null : Math.floor(point); });
   const arrowStack = arrows.map((arrow, index) => arrows.slice(0, index)
     .filter((other, otherIndex) => other.buy === arrow.buy && arrowCandle[otherIndex] != null && arrowCandle[otherIndex] === arrowCandle[index]).length);
+  const stacks = options.arrowStacks;
+  stacks?.registry.register(stacks.key, stacks.order, arrows.map((arrow, index) => ({ candle: arrowCandle[index], buy: arrow.buy })));
+  // Pod šipky dřívějších obchodů v téže svíčce (review); počítá se při kreslení,
+  // protože ostatní obchody se registrují až po tomto.
+  const stackOf = (index: number, candle: number) => arrowStack[index] + (stacks ? stacks.registry.before(stacks.key, candle, arrows[index].buy) : 0);
   // Hover: poslední vykreslená poloha šipek, cílová šipka a průběh animace (0–1).
   const hitBoxes: Array<{ x: number; top: number; bottom: number } | null> = [];
   // Sloupec svíčky se šipkami: najetím kamkoli do něj se ukáže přesné plnění.
@@ -95,6 +159,13 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
   const moveHits: MoveHit[] = [];
   let hoveredLine: { kind: 'sl' | 'tp'; x: number; y: number; at: number; price: number; nextPrice?: number } | null = null;
   let requestUpdate: (() => void) | null = null;
+  // Zvýraznění po připojení (review): šipky ve stavu „najeto“, dokud neuplyne
+  // čas nebo nepřevezme skutečné najetí myší.
+  let highlightActive = false;
+  // Během zvýraznění (a jeho doznění) bez štítků u šipek — jen šipky a čáry
+  // k cenové ose. Štítky vrátí až skutečné najetí myší.
+  let labelsQuiet = false;
+  let highlightTimer: ReturnType<typeof setTimeout> | null = null;
   let frame: number | null = null;
   let lastTick = 0;
   const animate = () => {
@@ -123,6 +194,11 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
   };
   const onCrosshair = (param: { point?: { x: number; y: number } }) => {
     const point = param.point;
+    // Zvýraznění po přepnutí drží, dokud myš nad grafem nic nenajede.
+    if (highlightActive) {
+      if (!point) return;
+      highlightActive = false;
+    }
     const arrowHit = !point ? -1 : hitBoxes.findIndex(box => box != null
       && Math.abs(point.x - box.x) <= ARROW.hitX && point.y >= box.top - 4 && point.y <= box.bottom + 4);
     // Mimo šipku: sloupec svíčky s plněním (od šipek nad ní po šipky pod ní).
@@ -164,10 +240,12 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
       return;
     }
     hovered = nextSet;
+    if (nextSet.size) labelsQuiet = false;
     animate();
   };
 
   const renderer: IPrimitivePaneRenderer = { draw: target => {
+    if (options.isHidden?.()) return;
     target.useMediaCoordinateSpace(({ context, mediaSize }) => {
       const coordinate = (index: number) => chart.timeScale().logicalToCoordinate(index as Logical);
       const x = (at: number) => journalLogicalCoordinate(projection.point(at), coordinate);
@@ -180,6 +258,7 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
         return y;
       };
       context.save();
+      context.globalAlpha = baseAlpha;
       lineHits.length = 0;
       moveHits.length = 0;
       for (const segment of segments) {
@@ -187,7 +266,7 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
         const color = segment.kind === 'sl' ? JOURNAL_SL_COLOR : JOURNAL_TP_COLOR;
         const width = levelWidth(segment.kind);
         for (const span of segment.spans) {
-          const bounds = journalSpanCoordinates(span, coordinate);
+          const bounds = journalVisibleSpanCoordinates(span, coordinate);
           if (!bounds) continue;
           const y = line(bounds.left, bounds.right, segment.price, color, width, segment.receivedTime);
           const logicalFrom = projection.point(span.from); const logicalTo = projection.point(span.to);
@@ -212,18 +291,18 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
           const top = Math.min(yEntry, yExit); const height = Math.max(1, Math.abs(yEntry - yExit));
           let labelLeft: number | null = null; let labelRight: number | null = null;
           for (const span of resultBox.spans) {
-            const bounds = journalSpanCoordinates(span, coordinate);
+            const bounds = journalVisibleSpanCoordinates(span, coordinate);
             if (!bounds) continue;
-            context.globalAlpha = 0.16; context.fillStyle = tone; context.fillRect(bounds.left, top, bounds.right - bounds.left, height);
-            context.globalAlpha = 0.55; context.strokeStyle = tone; context.lineWidth = 1;
+            context.globalAlpha = 0.16 * baseAlpha; context.fillStyle = tone; context.fillRect(bounds.left, top, bounds.right - bounds.left, height);
+            context.globalAlpha = 0.55 * baseAlpha; context.strokeStyle = tone; context.lineWidth = 1;
             context.strokeRect(bounds.left + 0.5, top + 0.5, bounds.right - bounds.left - 1, height - 1);
-            context.globalAlpha = 1; context.strokeStyle = '#94a3b8'; context.setLineDash([3, 3]);
+            context.globalAlpha = baseAlpha; context.strokeStyle = '#94a3b8'; context.setLineDash([3, 3]);
             context.beginPath(); context.moveTo(bounds.left, yEntry); context.lineTo(bounds.right, yEntry); context.stroke();
             context.setLineDash([]);
             labelLeft = labelLeft == null ? bounds.left : Math.min(labelLeft, bounds.left);
             labelRight = labelRight == null ? bounds.right : Math.max(labelRight, bounds.right);
           }
-          if (labelLeft != null && labelRight != null) {
+          if (labelLeft != null && labelRight != null && !options.muted) {
             context.font = '600 10.5px Inter, sans-serif';
             const width = context.measureText?.(resultBox.label)?.width ?? resultBox.label.length * 5.5;
             const pillW = width + 14; const pillH = 19;
@@ -256,7 +335,7 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
         const t = progressOf(`a${index}`);
         const ease = 1 - (1 - t) ** 3;
         const scale = 1 + (ARROW.hoverScale - 1) * ease;
-        const tip = edge + dir * (ARROW.gap + arrowStack[index] * (ARROW.stem + ARROW.gap + 2));
+        const tip = edge + dir * (ARROW.gap + stackOf(index, candleIndex) * (ARROW.stem + ARROW.gap + 2));
         const tail = tip + dir * ARROW.stem * scale;
         hitBoxes[index] = { x: xx, top: Math.min(tip, tail), bottom: Math.max(tip, tail) };
         const next = coordinate(candleIndex + 1);
@@ -290,8 +369,16 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
         const tick = Math.min(9, half * 0.9);
         context.lineWidth = 1.6;
         context.beginPath(); context.moveTo(xx - tick, yy); context.lineTo(xx + tick, yy); context.stroke();
+        // Tenká čára od plnění k cenové ose (tam štítek s cenou, priceAxisViews).
+        context.globalAlpha = ease * 0.7;
+        context.lineWidth = 1;
+        context.setLineDash([3, 3]);
+        context.beginPath(); context.moveTo(xx + tick, yy); context.lineTo(mediaSize?.width ?? xx + tick, yy); context.stroke();
+        context.setLineDash([]);
+        context.globalAlpha = ease;
         context.fillStyle = color;
         context.beginPath(); context.arc(xx, yy, 2.5, 0, Math.PI * 2); context.fill();
+        if (labelsQuiet) { context.globalAlpha = 1; continue; }
         context.font = '600 10.5px Inter, sans-serif';
         const width = context.measureText?.(arrow.label)?.width ?? arrow.label.length * 5.5;
         const pillW = width + 14; const pillH = 19;
@@ -353,16 +440,39 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
   return {
     attached: params => {
       requestUpdate = params.requestUpdate;
-      chart.subscribeCrosshairMove?.(onCrosshair);
+      if (options.highlightMs && options.highlightMs > 0 && arrows.length) {
+        highlightActive = true;
+        labelsQuiet = true;
+        hovered = new Set(arrows.map((_, index) => index));
+        animate();
+        highlightTimer = setTimeout(() => {
+          highlightTimer = null;
+          if (!highlightActive) return;
+          highlightActive = false;
+          hovered = new Set();
+          animate();
+        }, options.highlightMs);
+      }
+      if (!options.muted) chart.subscribeCrosshairMove?.(onCrosshair);
       params.requestUpdate();
     },
     detached: () => {
       chart.unsubscribeCrosshairMove?.(onCrosshair);
       if (frame != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+      if (highlightTimer != null) clearTimeout(highlightTimer);
+      highlightTimer = null; highlightActive = false;
       frame = null; requestUpdate = null;
     },
     paneViews: () => views,
-    autoscaleInfo: options.autoscaleLevels ? (start: Logical, end: Logical) => {
+    // Cena plnění pod kurzorem i na cenové ose (barva šipky).
+    priceAxisViews: () => arrows.flatMap((arrow, index) => {
+      if (progressOf(`a${index}`) < 0.5 || hitBoxes[index] == null) return [];
+      const y = series.priceToCoordinate(arrow.price);
+      if (y == null) return [];
+      const color = arrow.buy ? JOURNAL_BUY_COLOR : JOURNAL_SELL_COLOR;
+      return [{ coordinate: () => y, text: () => arrow.price.toFixed(2), textColor: () => '#ffffff', backColor: () => color, visible: () => true, tickVisible: () => true }];
+    }),
+    autoscaleInfo: options.autoscaleLevels && !options.muted ? (start: Logical, end: Logical) => {
       const prices: number[] = [];
       const inView = (at: number) => { const point = projection.point(at); return point != null && point >= start && point <= end; };
       for (const segment of segments) {

@@ -327,6 +327,54 @@ const CONTRACT_MISMATCH_POINTS = 10;
  * Když cena vstupu do svíčky nesedí, zkusí se aktuální a příští čtvrtletní
  * kontrakt a vezme se ten, kterému cena odpovídá.
  */
+/**
+ * Kontrakt pro víc obchodů najednou (review týdne přes rollover): kontinuální
+ * řada platí pro obchody, jejichž vstup sedí na svíčku; ostatní dostanou
+ * nejbližší kvartální kontrakt. Každý kontrakt se stáhne jen jednou.
+ */
+export async function resolveContractsForEntries(params: {
+  entries: ReadonlyArray<{ key: string; at: number; price: number }>;
+  primary: MarketCandleResponse;
+  candidates: (atMs: number) => string[];
+  load: (symbol: string) => Promise<MarketCandleResponse>;
+}): Promise<Map<string, MarketCandleResponse>> {
+  const result = new Map<string, MarketCandleResponse>();
+  const loads = new Map<string, Promise<MarketCandleResponse | null>>();
+  const loadOnce = (symbol: string) => {
+    if (!loads.has(symbol)) loads.set(symbol, params.load(symbol).catch(() => null));
+    return loads.get(symbol)!;
+  };
+  for (const entry of params.entries) {
+    const distance = Number.isFinite(entry.price) ? priceDistanceFromCandle(params.primary.candles, entry.at, entry.price) : null;
+    if (distance == null || distance <= CONTRACT_MISMATCH_POINTS) { result.set(entry.key, params.primary); continue; }
+    let best = { response: params.primary, distance };
+    for (const contract of params.candidates(entry.at)) {
+      const response = await loadOnce(contract);
+      if (!response) continue;
+      const candidate = priceDistanceFromCandle(response.candles, entry.at, entry.price);
+      if (candidate != null && candidate < best.distance) best = { response, distance: candidate };
+      if (candidate === 0) break;
+    }
+    result.set(entry.key, best.response);
+  }
+  return result;
+}
+
+export async function loadMarketCandlesForEntries(params: {
+  root: 'MNQ' | 'NQ';
+  start: Date;
+  end: Date;
+  entries: ReadonlyArray<{ key: string; at: number; price: number }>;
+}): Promise<Map<string, MarketCandleResponse>> {
+  const primary = await loadMarketCandles({ symbol: resolveMarketSymbol(params.root), start: params.start, end: params.end });
+  return resolveContractsForEntries({
+    entries: params.entries,
+    primary,
+    candidates: atMs => quarterlyContractsAround(params.root, atMs),
+    load: symbol => loadMarketCandles({ symbol, start: params.start, end: params.end }),
+  });
+}
+
 export async function loadTradeMarketCandles(params: {
   root: 'MNQ' | 'NQ';
   tradeSymbol?: string;
