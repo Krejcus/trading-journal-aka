@@ -195,7 +195,29 @@ export interface CopierAuditEntry {
   until?: number;
   source?: 'broker' | 'ledger' | 'manual';
   cutUsd?: number;
+  /** Additivni observability; nema zadny vliv na rozhodnuti ani retry. */
+  latency?: {
+    leaderReceivedAt: number;
+    dispatchStartedAt: number;
+    ackAt: number;
+    queueMs: number;
+    brokerMs: number;
+    totalMs: number;
+  };
 }
+
+const auditLatency = (
+  leaderReceivedAt: number,
+  dispatchStartedAt: number,
+  ackAt: number,
+): NonNullable<CopierAuditEntry['latency']> => ({
+  leaderReceivedAt,
+  dispatchStartedAt,
+  ackAt,
+  queueMs: dispatchStartedAt - leaderReceivedAt,
+  brokerMs: ackAt - dispatchStartedAt,
+  totalMs: ackAt - leaderReceivedAt,
+});
 
 /**
  * Jen follower vyřazený už ve vstupním planning snapshotu je očekávaný
@@ -1029,7 +1051,7 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
           entry = ack.definitive
             ? markBracketRejected(entry, ack.rejectReason ?? 'OCO rejected', at)
             : markBracketUnknown(entry, ack.rejectReason ?? 'nejednoznačná OCO odpověď', at);
-          return { entry, at };
+          return { entry, at, startedAt: item.startedAt };
         }
         entry = markBracketAcknowledged(
           entry,
@@ -1037,13 +1059,13 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
           ack.secondBrokerOrderId,
           at,
         );
-        return { entry, at };
+        return { entry, at, startedAt: item.startedAt };
       } catch (error) {
         const at = clock();
         entry = error instanceof CopierDispatchRevokedError
           ? waiveBracketOutboxEntry(entry, error.message, at)
           : markBracketUnknown(entry, error instanceof Error ? error.message : String(error), at);
-        return { entry, at };
+        return { entry, at, startedAt: item.startedAt };
       }
     },
   );
@@ -1072,6 +1094,7 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
         at: result.at, leaderEventId: event.id, kind: 'dispatched', accountId: entry.request.accountId,
         key: entry.key, brokerOrderId: `${entry.firstBrokerOrderId},${entry.secondBrokerOrderId}`,
         reason: 'native-oco',
+        latency: auditLatency(event.receivedAt, result.startedAt, result.at),
       });
     } else if (entry.status === 'waived') {
       resolvedKeys.push(entry.key);
@@ -1151,7 +1174,7 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
     };
   }
 
-  const dispatchable: OsoOutboxEntry[] = [];
+  const dispatchable: Array<{ entry: OsoOutboxEntry; startedAt: number }> = [];
   const resolvedKeys: string[] = [];
   // Stejné pravidlo jako u OCO: sourozenci v jedné atomické dávce se
   // navzájem neblokují, ale starší nevyřešený outbox blokuje všechny.
@@ -1239,16 +1262,17 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
       continue;
     }
     if (action.type === 'lookup') continue;
-    entry = markOsoSending(entry, clock());
+    const startedAt = clock();
+    entry = markOsoSending(entry, startedAt);
     osoOutbox.set(key, entry);
-    dispatchable.push(entry);
+    dispatchable.push({ entry, startedAt });
   }
 
   if (dispatchable.length > 0) {
     revision = await persistRuntime(store, state, outbox, cancelOutbox, bracketOutbox, osoOutbox, revision);
   }
   const results = await mapWithConcurrency(dispatchable, options.maxConcurrentDispatches ?? 4, async initial => {
-    let entry = initial;
+    let entry = initial.entry;
     try {
       const ack = await broker.placeOso!(entry.request);
       const at = clock();
@@ -1257,16 +1281,17 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
         : ack.definitive
           ? markOsoRejected(entry, ack.rejectReason ?? 'OSO rejected', at)
           : markOsoUnknown(entry, ack.rejectReason ?? 'nejednoznačná OSO odpověď', at);
-      return { entry, at };
+      return { entry, at, startedAt: initial.startedAt };
     } catch (error) {
       const at = clock();
       return { entry: error instanceof CopierDispatchRevokedError
         ? waiveOsoOutboxEntry(entry, error.message, at)
-        : markOsoUnknown(entry, error instanceof Error ? error.message : String(error), at), at };
+        : markOsoUnknown(entry, error instanceof Error ? error.message : String(error), at), at,
+        startedAt: initial.startedAt };
     }
   });
 
-  for (const { entry, at } of results) {
+  for (const { entry, at, startedAt } of results) {
     osoOutbox.set(entry.key, entry);
     if (entry.status === 'acknowledged' && entry.entryBrokerOrderId && entry.firstBrokerOrderId && entry.secondBrokerOrderId) {
       metrics.dispatched += 3;
@@ -1285,7 +1310,8 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
         quantity: entry.request.quantity, limitPrice: entry.request.second.limitPrice, nativeOsoRole: 'target',
       });
       audit.push({ at, leaderEventId: event.id, kind: 'dispatched', accountId: entry.request.accountId, key: entry.key,
-        brokerOrderId: `${entry.entryBrokerOrderId},${entry.firstBrokerOrderId},${entry.secondBrokerOrderId}`, reason: 'native-oso' });
+        brokerOrderId: `${entry.entryBrokerOrderId},${entry.firstBrokerOrderId},${entry.secondBrokerOrderId}`, reason: 'native-oso',
+        latency: auditLatency(event.receivedAt, startedAt, at) });
     } else if (entry.status === 'waived') {
       resolvedKeys.push(entry.key);
       audit.push({ at, leaderEventId: event.id, kind: 'skipped',
@@ -1650,8 +1676,10 @@ export async function processLeaderEvent(
       revision = await persistRuntime(store, state, outbox, cancelOutbox, bracketOutbox, osoOutbox, revision);
     }
 
+    const lifecycleLatencies = new Map<string, NonNullable<CopierAuditEntry['latency']>>();
     await Promise.all(sending.map(async entry => {
       if (!sendableKeys.has(entry.key)) return;
+      let modifyAckAt: number | undefined;
       try {
         if (entry.operation === 'cancel') {
           // `dispatchBroker` dává obyčejnému terminal cancelu výjimku z
@@ -1729,8 +1757,17 @@ export async function processLeaderEvent(
           // a odeslání, zachytí stream detekce (qty > asserted) — okno bez
           // CAS na venue API zavřít nejde, jen ho držet v milisekundách.
           await broker.modifyOrder(entry.accountId, entry.brokerOrderId, changes);
+          // Pouzijeme stejny clock tick, ktery uz drive znackoval prechod do
+          // unknown. Observability nesmi pridat dalsi volani injektovanych
+          // hodin a tim menit deterministicke race/fence testy.
+          modifyAckAt = clock();
+          lifecycleLatencies.set(entry.key, auditLatency(event.receivedAt, entry.updatedAt, modifyAckAt));
         }
-        cancelOutbox.set(entry.key, markCancelUnknown(entry, 'čeká na potvrzení order streamem', clock()));
+        cancelOutbox.set(entry.key, markCancelUnknown(
+          entry,
+          'čeká na potvrzení order streamem',
+          modifyAckAt ?? clock(),
+        ));
       } catch (error) {
         cancelOutbox.set(entry.key, error instanceof CopierDispatchRevokedError
           ? waiveCancelEntry({ ...entry, neverSent: true }, error.message, clock())
@@ -1793,6 +1830,9 @@ export async function processLeaderEvent(
           accountId: entry.accountId,
           key: entry.key, brokerOrderId: entry.brokerOrderId,
           ...(resolved.outcome === 'rejected' && resolved.reason ? { reason: resolved.reason } : {}),
+          ...(entry.operation === 'modify' && lifecycleLatencies.has(entry.key)
+            ? { latency: lifecycleLatencies.get(entry.key) }
+            : {}),
         });
       } else {
         allConfirmed = false;
@@ -2008,6 +2048,7 @@ export async function processLeaderEvent(
             accountId: request.accountId,
             key: entry.key,
             brokerOrderId: ack.brokerOrderId,
+            latency: auditLatency(event.receivedAt, startedAt, ackAt),
           },
         };
       } catch (error) {

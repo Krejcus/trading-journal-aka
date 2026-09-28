@@ -737,13 +737,81 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     return true;
   };
 
-  const hydrateOrderVersion = async (orderId: number) => {
+  type OrderVersionFetchResult =
+    | { ok: true; versions: TradovateOrderVersionEntity[] }
+    | { ok: false; error: unknown };
+  type PreparedOrderVersions = Map<number, Promise<OrderVersionFetchResult>>;
+
+  const fetchOrderVersions = (orderId: number): Promise<OrderVersionFetchResult> => (
+    request<TradovateOrderVersionEntity[]>(`/orderVersion/deps?masterid=${orderId}`)
+      .then(versions => ({ ok: true as const, versions: versions ?? [] }))
+      // Prefetch zacina uz pri prijeti ramce a muze cekat za predchozim
+      // semantickym ramcem. Zachycena chyba zabrani unhandled rejection;
+      // v poradi ramcu ji znovu vyhodi az hydrateOrderVersion.
+      .catch(error => ({ ok: false as const, error }))
+  );
+
+  const hydrateOrderVersion = async (
+    orderId: number,
+    prepared?: Promise<OrderVersionFetchResult>,
+  ) => {
     const desired = confirmedVersionIds.get(orderId);
     if (orderVersions.has(orderId) && (desired == null || orderVersions.get(orderId)!.id >= desired)) return;
-    const versions = await request<TradovateOrderVersionEntity[]>(
-      `/orderVersion/deps?masterid=${orderId}`,
-    );
-    for (const version of versions ?? []) rememberVersion(version);
+    const result = await (prepared ?? fetchOrderVersions(orderId));
+    if ('error' in result) throw result.error;
+    // Aplikace do execution cache zustava v socket serial tailu. Prefetch tedy
+    // prekryva pouze REST latenci; budouci frame nesmi zmenit shape drive,
+    // nez controller dostane predchozi order event.
+    for (const version of result.versions) rememberVersion(version);
+  };
+
+  const prepareOrderVersionHydrations = (messages: readonly unknown[]): PreparedOrderVersions => {
+    const prepared: PreparedOrderVersions = new Map();
+    const prepareProps = (payload: unknown) => {
+      const items = Array.isArray(payload) ? payload : [payload];
+      const siblingVersions = new Map<number, TradovateOrderVersionEntity[]>();
+      for (const raw of items) {
+        if (!raw || typeof raw !== 'object') continue;
+        const item = raw as { entityType?: string; entity?: unknown };
+        if (item.entityType?.toLowerCase() !== 'orderversion' || !item.entity || typeof item.entity !== 'object') continue;
+        const version = item.entity as TradovateOrderVersionEntity;
+        siblingVersions.set(version.orderId, [...(siblingVersions.get(version.orderId) ?? []), version]);
+      }
+      for (const raw of items) {
+        if (!raw || typeof raw !== 'object') continue;
+        const item = raw as { entityType?: string; entity?: unknown };
+        if (!item.entity || typeof item.entity !== 'object') continue;
+        const entityType = item.entityType?.toLowerCase();
+        let orderId: number | undefined;
+        let requiredVersionId: number | undefined;
+        if (entityType === 'order') {
+          orderId = (item.entity as TradovateRawOrderEntity).id;
+          if (orderVersions.has(orderId)) continue;
+        } else if (entityType === 'executionreport') {
+          const report = item.entity as TradovateExecutionReportEntity;
+          orderId = report.orderId;
+          requiredVersionId = report.commandId;
+        } else {
+          continue;
+        }
+        if (!Number.isSafeInteger(orderId) || prepared.has(orderId)) continue;
+        const supplied = siblingVersions.get(orderId) ?? [];
+        if (supplied.some(version => requiredVersionId == null || version.id === requiredVersionId)) continue;
+        prepared.set(orderId, fetchOrderVersions(orderId));
+      }
+    };
+    const visit = (message: unknown) => {
+      if (Array.isArray(message)) {
+        for (const item of message) visit(item);
+        return;
+      }
+      if (!message || typeof message !== 'object') return;
+      const value = message as { e?: string; d?: unknown };
+      if (value.e === 'props') prepareProps(value.d);
+      else if (Array.isArray(value.d)) visit(value.d);
+    };
+    visit(messages);
+    return prepared;
   };
 
   const rememberFill = (fill: TradovateFillEntity): boolean => {
@@ -1022,6 +1090,50 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     return rawList;
   };
 
+  /**
+   * Fresh autoritativni shape jednoho orderu bez globalnich seznamu.
+   * Modify preflight potrebuje quantity/fills i potvrzenou OrderVersion, ale
+   * nema duvod stahovat commandy a execution reporty vsech uctu spojeni.
+   */
+  const loadTargetedOrder = async (orderId: number): Promise<TradovateRawOrderEntity | null> => {
+    const [raw, versions, dependentCommands, fills] = await Promise.all([
+      request<TradovateRawOrderEntity | null>(`/order/item?id=${orderId}`, {}, true),
+      request<TradovateOrderVersionEntity[]>(`/orderVersion/deps?masterid=${orderId}`),
+      // Command metadata slouzi pro clOrdId a typ requestu. Samotny shape se
+      // da fail-closed potvrdit z OrderVersion + ExecutionReport i kdyz venue
+      // command deps pro stary order uz nevrati.
+      request<TradovateCommandEntity[]>(`/command/deps?masterid=${orderId}`).catch(() => []),
+      request<TradovateFillEntity[]>(`/fill/deps?masterid=${orderId}`),
+    ]);
+    if (raw) rememberRawOrder(raw);
+    for (const command of dependentCommands ?? []) {
+      commands.set(command.id, command);
+      const correlationTag = commandCorrelationTag(command);
+      if (command.orderId === orderId && command.commandType === 'New' && correlationTag) {
+        orderTags.set(orderId, correlationTag);
+      }
+    }
+    for (const version of versions ?? []) rememberVersion(version);
+    for (const fill of fills ?? []) rememberFill(fill);
+
+    // Requested OrderVersion neni dukaz uspesneho replace. Stahujeme proto
+    // jen reporty Modify commandu zavislych na tomto orderu a az jejich
+    // `Replaced` smi verzi povysit do execution shape.
+    const modifyCommandIds = [...new Set([
+      ...(dependentCommands ?? [])
+        .filter(command => command.orderId === orderId && command.commandType === 'Modify')
+        .map(command => command.id),
+      // OrderVersion.id je commandId. Tohle zachova dukaz i kdyz command deps
+      // chybi; initial verze se stejnym ID jako Order zadny report nepotrebuje.
+      ...(versions ?? []).filter(version => version.id !== orderId).map(version => version.id),
+    ])];
+    const reports = (await Promise.all(modifyCommandIds.map(commandId => (
+      request<TradovateExecutionReportEntity[]>(`/executionReport/deps?masterid=${commandId}`)
+    )))).flat().sort((left, right) => left.id - right.id);
+    for (const report of reports) rememberExecutionReport(report);
+    return raw;
+  };
+
   const sendSocketRequest = (endpoint: string, body: unknown, id = requestId++) => {
     if (!socket || socket.readyState !== 1) throw new TradovateTransportError('WebSocket is not open');
     wsUsage.record();
@@ -1068,7 +1180,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     for (const report of waiting) await applyCommandReport(report, receivedAt);
   };
 
-  const handleProps = async (payload: unknown, receivedAt: number) => {
+  const handleProps = async (
+    payload: unknown,
+    receivedAt: number,
+    preparedOrderVersions?: PreparedOrderVersions,
+  ) => {
     const items = Array.isArray(payload) ? payload : [payload];
     for (const raw of items) {
       if (!raw || typeof raw !== 'object') continue;
@@ -1096,7 +1212,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       } else if (entityType === 'executionreport') {
         const report = item.entity as TradovateExecutionReportEntity;
         if (!rememberExecutionReport(report)) continue;
-        await hydrateOrderVersion(report.orderId);
+        await hydrateOrderVersion(report.orderId, preparedOrderVersions?.get(report.orderId));
         const order = await composeOrder(report.orderId);
         if (order) emit({ type: 'order', order, receivedAt });
         await flushPendingFills(report.orderId);
@@ -1124,7 +1240,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           }
         }
         rememberRawOrder(orderEntity);
-        await hydrateOrderVersion(orderEntity.id);
+        await hydrateOrderVersion(orderEntity.id, preparedOrderVersions?.get(orderEntity.id));
         const order = await composeOrder(orderEntity.id);
         if (order) emit({ type: 'order', order, receivedAt });
         await flushPendingFills(orderEntity.id);
@@ -1165,6 +1281,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     message: unknown,
     isCurrent: () => boolean,
     receivedAt: number,
+    preparedOrderVersions?: PreparedOrderVersions,
   ) => {
     if (!isCurrent()) return;
     if (!message || typeof message !== 'object') return;
@@ -1235,7 +1352,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       }
     }
     if (value.e === 'props') {
-      await handleProps(value.d, receivedAt);
+      await handleProps(value.d, receivedAt, preparedOrderVersions);
       return;
     }
     if (value.i === 0) {
@@ -1247,7 +1364,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     }
     if (value.i === 1) {
       if (value.s !== 200) throw new TradovateTransportError(`WebSocket synchronization failed${socketFailureDetail(value)}`);
-      if (Array.isArray(value.d)) await handleProps(value.d, receivedAt);
+      if (Array.isArray(value.d)) await handleProps(value.d, receivedAt, preparedOrderVersions);
       if (!syncReady) {
         const baseline = await loadOrderGraph(undefined, true);
         if (!isCurrent()) return;
@@ -1278,7 +1395,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       return;
     }
     if (Array.isArray(value.d)) {
-      for (const item of value.d) await handleMessageObject(item, isCurrent, receivedAt);
+      for (const item of value.d) {
+        await handleMessageObject(item, isCurrent, receivedAt, preparedOrderVersions);
+      }
     }
   };
 
@@ -1287,6 +1406,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     messages: readonly unknown[],
     isCurrent: () => boolean,
     receivedAt: number,
+    preparedOrderVersions?: PreparedOrderVersions,
   ) => {
     if (!isCurrent()) return;
     if (typeof raw !== 'string' || raw.length === 0) return;
@@ -1297,7 +1417,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       return;
     }
     if (raw[0] !== 'a') return;
-    for (const message of messages) await handleMessageObject(message, isCurrent, receivedAt);
+    for (const message of messages) {
+      await handleMessageObject(message, isCurrent, receivedAt, preparedOrderVersions);
+    }
   };
 
   const clearSocketTimers = () => {
@@ -1526,11 +1648,16 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
 
       let messages: unknown[] = [];
       let parseError: unknown;
+      let preparedOrderVersions: PreparedOrderVersions | undefined;
       try {
         if (typeof event.data === 'string' && event.data[0] === 'a') {
           const parsed: unknown = JSON.parse(event.data.slice(1));
           if (!Array.isArray(parsed)) throw new TradovateTransportError('Invalid WebSocket frame');
           messages = parsed;
+          // REST requesty zacinaji pri prijeti ramce, ne az kdyz na nej prijde
+          // rada v semantic tailu. Vysledky se ale do cache aplikuji a eventy
+          // emituji porad striktne v poradi ramcu.
+          preparedOrderVersions = prepareOrderVersionHydrations(messages);
           // Capture before metadata/REST awaits. Analytics-only orderVersion events
           // must never update execution caches or emit a requested price as confirmed.
           if (evidenceListeners.size) {
@@ -1573,6 +1700,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
             messages,
             () => socket === candidate && socketState !== 'closing',
             receivedAt,
+            preparedOrderVersions,
           );
         })
         .catch(reason => {
@@ -1903,8 +2031,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       // command ACK. Vždy proto obnovíme Order + nejnovější OrderVersion z
       // REST grafu s přesným execution potvrzením; samotný novější požadavek
       // nestačí. Prázdný nebo neúplný výsledek zůstává fail-closed.
-      const rawList = await loadOrderGraph(orderId);
-      const raw = rawList[0];
+      const raw = await loadTargetedOrder(orderId);
       if (!raw || raw.accountId !== accountId) {
         return { order: null, completeness: 'authoritative', observedAt: clock() };
       }

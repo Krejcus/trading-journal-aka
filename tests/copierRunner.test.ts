@@ -1293,7 +1293,17 @@ describe('ostrý režim', () => {
       clock,
       store,
     });
-    expect(modified.audit).toContainEqual(expect.objectContaining({ kind: 'modified' }));
+    expect(modified.audit).toContainEqual(expect.objectContaining({
+      kind: 'modified',
+      latency: expect.objectContaining({
+        leaderReceivedAt: 0,
+        dispatchStartedAt: expect.any(Number),
+        ackAt: expect.any(Number),
+        queueMs: expect.any(Number),
+        brokerMs: expect.any(Number),
+        totalMs: expect.any(Number),
+      }),
+    }));
     const stopId = modified.runtime.state.links.get('stop-1')?.[0].brokerOrderId;
     expect(broker.orders().find(item => item.brokerOrderId === stopId)?.stopPrice).toBe(30_120);
   });
@@ -2837,6 +2847,14 @@ describe('metriky latence', () => {
     const sample = result.metrics.samples[0];
     expect(sample.queueMs).toBeGreaterThan(0);
     expect(sample.totalMs).toBe(sample.queueMs + sample.brokerMs);
+    expect(result.audit.find(item => item.kind === 'dispatched')?.latency).toEqual({
+      leaderReceivedAt: 0,
+      dispatchStartedAt: sample.eventReceivedAt + sample.queueMs,
+      ackAt: sample.eventReceivedAt + sample.totalMs,
+      queueMs: sample.queueMs,
+      brokerMs: sample.brokerMs,
+      totalMs: sample.totalMs,
+    });
   });
 
   it('odděluje command ack, order acceptance, first fill a terminal event', async () => {

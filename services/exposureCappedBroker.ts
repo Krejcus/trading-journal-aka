@@ -124,6 +124,13 @@ export function createExposureCappedBroker(
     },
     async modifyOrder(accountId, brokerOrderId, changes) {
       assertDispatchAllowed?.('modify');
+      // Bez nakonfigurovaneho stropu nema exposure gate co overovat. Runner
+      // uz pred touto vrstvou dela povinny lookup konkretniho orderu kvuli
+      // fill/quantity race; druhy plny order graf by jen prodlouzil okno mezi
+      // kontrolou a modify side effectem.
+      if (maxContractsFor(accountId) == null) {
+        return broker.modifyOrder(accountId, brokerOrderId, changes);
+      }
       try {
         const lookup = await broker.findOrderById(accountId, brokerOrderId);
         if (!lookup.order) throw new Error(`Nelze ověřit expozici modify orderu ${brokerOrderId}`);

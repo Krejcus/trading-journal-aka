@@ -105,8 +105,13 @@ export const createTradovateWireHarness = (accountIds = [100, 200]) => {
     if (path === '/order/item') return Response.json(orders.get(Number(url.searchParams.get('id'))) ?? null);
     const collection = path.startsWith('/orderVersion/') ? versions : path.startsWith('/executionReport/') ? reports
       : path.startsWith('/command/') ? commands : path.startsWith('/fill/') ? fills : path.startsWith('/order/') ? orders : null;
-    if (collection) return Response.json([...collection.values()].filter(row => !url.searchParams.has('masterid')
-      || row.orderId === Number(url.searchParams.get('masterid'))));
+    if (collection) return Response.json([...collection.values()].filter(row => {
+      if (!url.searchParams.has('masterid')) return true;
+      const masterId = Number(url.searchParams.get('masterid'));
+      return path.startsWith('/executionReport/')
+        ? row.commandId === masterId
+        : row.orderId === masterId;
+    }));
     if (['/cashBalance/deps', '/accountRiskStatus/deps', '/userAccountAutoLiq/deps', '/commandReport/deps'].includes(path)) return Response.json([]);
     throw new Error(`Unexpected offline GET ${path}`);
   };

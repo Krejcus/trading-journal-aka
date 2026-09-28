@@ -21,6 +21,7 @@ import { createFileCopierStore } from '../../services/fileCopierStore';
 import { createFileCopyGroupStore } from '../../services/fileCopyGroupStore';
 import {
   canBootstrapMissingDurableGroupForRetirement,
+  copierDispatchConcurrency,
   copierPilotGroupPath,
   copierPilotStateKey,
   parseCopierFollowersFlag,
@@ -463,6 +464,10 @@ async function runLocalAgent(
   // změně z UI je autoritativní uložená skupina, takže reinstall nepřepíše
   // leadera zpět na původní hodnotu.
   const group = persistedGroup ?? fallbackGroup;
+  // Controller topologii pri editaci nahradi vlastnim snapshotem. Tuto
+  // referenci aktualizuje durable callback agenta, aby getter dispatch limitu
+  // cetl prave aktualni skupinu, ne pocet followeru pri startu procesu.
+  let activeDispatchGroup = group;
   const broker = baseBroker;
   const runtimeStore = createFileCopierStore(resolve(root, `${key}.snapshot.json`));
   const durableSnapshot = await runtimeStore.load();
@@ -822,7 +827,9 @@ async function runLocalAgent(
       // (pilotní `1`) rozprostřel marketové nohy přes stovky ms — každá
       // kopie pak trefila jinou cenu a P&L kopií se rozcházela. Limitů se
       // to netýká (kniha čeká), marketů/flatten/close zásadně.
-      maxConcurrentDispatches: Math.max(4, group.followers.length),
+      get maxConcurrentDispatches() {
+        return copierDispatchConcurrency(activeDispatchGroup);
+      },
       onAudit: entries => {
         auditTail = auditTail.then(() => writeAudit(entries));
       },
@@ -1002,6 +1009,7 @@ async function runLocalAgent(
       onDevicePairingRestart: requestSafePairingRestart,
       onGroupChanged: async changed => {
         await groupStore.save(changed);
+        activeDispatchGroup = changed;
       },
       prepareGroupAccounts,
     });

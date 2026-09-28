@@ -1051,8 +1051,11 @@ describe('createTradovateBroker WebSocket', () => {
       if (url.includes('/orderVersion/deps')) return jsonResponse([{
         id: 43, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_501,
       }]);
+      if (url.includes('/command/deps?masterid=42')) return jsonResponse([{
+        id: 43, orderId: 42, commandType: 'Modify',
+      }]);
       if (url.includes('/command/list') || url.includes('/fill/deps')) return jsonResponse([]);
-      if (url.includes('/executionReport/list')) return jsonResponse([{
+      if (url.includes('/executionReport/deps?masterid=43')) return jsonResponse([{
         id: 44, commandId: 43, orderId: 42, accountId: 200, contractId: 7,
         action: 'Buy', ordStatus: 'Working', execType: 'Replaced',
       }]);

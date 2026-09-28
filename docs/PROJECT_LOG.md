@@ -219,8 +219,58 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       ochranný posun SL nesmí zamítnout jen kvůli stáří a neodeslaný ochranný
       posun se musí po čerstvém lookupu znovu prosadit. Runner 5b-2 tyto body
       záměrně nemění bez controller kontraktu.
+- [ ] **ST6 pending okno musí běžet od přijetí leader eventu** — balíček 11b
+      odstranil serializovanou REST hydrataci před doručením eventu, ale timer
+      v `copierRuntimeController.ts` se stále zakládá až po zpracování eventu
+      na plných `pendingWindowMs() + 50`. Navazující controller změna má počítat
+      jen zbývající rozpočet z `leaderEvent.receivedAt`, včetně testu, kde
+      brokerová hydratace spotřebuje celé okno. Soubor je záměrně beze změny,
+      protože ho v této worktree vlastní paralelní Codex.
 
 ## Deník
+
+### 2026-09-29 — Balíček 11b: rychlost kopírování bez oslabení bezpečnosti (Codex)
+
+- Změny jsou pouze lokální, bez commitu, push/deploye, reinstalu workeru,
+  produkční konfigurace nebo brokerového volání. Paralelně vlastněné
+  `services/copierRuntimeController.ts` a `services/brokerRouter.ts` zůstaly
+  beze změny.
+- V11 byl nejdřív reprodukován řízeným testem se dvěma Order eventy a 60ms
+  REST latencí: druhý `/orderVersion/deps` se před opravou spustil až po prvním
+  a kritická cesta měla 120 ms. Po opravě se read-only hydratace obou frameů
+  překrývá na 60 ms; aplikace výsledků a emise do controlleru zůstávají ve
+  stávajícím serial tailu a v původním pořadí. Bez kompletní OrderVersion se
+  žádný event neemituje. Nečiní se obecný závěr, že každý order získá pevně
+  0,6–2,9 s — test dokazuje jen odstranění konkrétní serializace.
+- P142: `ExposureCappedBroker.modifyOrder` při chybějícím `maxContracts`
+  přestal dělat duplicitní order/position/order-graph čtení; při nastaveném
+  limitu zůstává celý fail-closed exposure výpočet. Povinný pre-write lookup
+  runneru se nemění.
+- P334: Tradovate `findOrderById` už pro pre-modify lookup nestahuje globální
+  `/command/list` ani `/executionReport/list`. Používá přesné order ID,
+  `/orderVersion/deps`, `/command/deps`, `/fill/deps` a execution-report deps
+  jen pro konkrétní modify command/version. Requested modify bez potvrzujícího
+  execution reportu se dál nepovažuje za broker-confirmed; lookup-before-retry
+  zůstává povinný a blind retry nevznikl.
+- P143: limit paralelních dispatchů je getter odvozený z aktuální durable
+  skupiny, ne startup snapshot. Test mění aktivní followery za běhu 2 -> 7 -> 3
+  a ověřuje limity 4 -> 7 -> 4; skupina se do runtime promítne až po úspěšném
+  durable save.
+- P145: úspěšné place, native OCO/OSO a modify audit záznamy nesou
+  `leaderReceivedAt`, `dispatchStartedAt`, `ackAt`, `queueMs`, `brokerMs` a
+  `totalMs`. Hodnoty pouze znovu používají existující časové body; řídicí
+  logika je nečte a nevznikly další clock tick/race změny.
+- Baseline testy před opravou měly očekávané 3 pády (P142 duplicitní lookup,
+  V11 serializace 120 ms, P334 globální seznamy). Po opravě cílené bloky
+  prošly 11/11, 173/173 a execution/cap review 41/41. Celá předepsaná copier
+  sada prošla mimo loopback sandbox 137/137 souborů a 1622/1622 testů;
+  produkční build a `git diff --check` prošly, scoped ESLint má 0 chyb.
+  Root `tsc --noEmit` hlásí pouze předem známé chybějící Chrome typy a
+  `@crxjs/vite-plugin` v `extension/`, nikoli chybu změněných root souborů.
+- ST6 bod 1 zůstává otevřený výše: controller musí timer zkrátit o stáří
+  `leaderEvent.receivedAt`. ST6 bod 2 je pokryt V11. V `brokerRouter.ts` není
+  pro tento balíček potřeba žádná změna, protože cílený lookup zachovává
+  existující broker rozhraní.
 
 ### 2026-09-29 — V5/V8 adversariální follow-up: per-account SL cancel a semantic-lag (Codex, balíček 5b-2)
 

@@ -6,6 +6,7 @@ import { createFileCopyGroupStore } from '../services/fileCopyGroupStore';
 import {
   canBootstrapMissingDurableGroupForRetirement,
   compareDurableGroupWithCli,
+  copierDispatchConcurrency,
   copierPilotGroupPath,
   decideDurableGroupInstall,
   durableGroupReplacementBlockers,
@@ -55,6 +56,28 @@ const safeReplacementStatus = (): DurableGroupReplacementStatus => ({
 });
 
 describe('Mac copier durable group install guard', () => {
+  it('prepocita dispatch concurrency z aktualni skupiny i po pridani followeru', () => {
+    let current = durableGroup();
+    const currentLimit = () => copierDispatchConcurrency(current);
+    expect(currentLimit()).toBe(4);
+
+    current = {
+      ...current,
+      followers: Array.from({ length: 7 }, (_, index) => ({
+        accountId: 100 + index, mode: 'on-submit' as const, multiplier: 1,
+      })),
+    };
+    expect(currentLimit()).toBe(7);
+
+    current = {
+      ...current,
+      followers: current.followers.map((follower, index) => (
+        index < 4 ? { ...follower, enabled: false } : follower
+      )),
+    };
+    expect(currentLimit()).toBe(4);
+  });
+
   it('dovolí jen explicitně pojmenované úplně OAuth-zmizelé skupině naběhnout pro vyřazení', () => {
     const group = durableGroup();
     expect(canBootstrapMissingDurableGroupForRetirement(group, [], group.id)).toBe(true);

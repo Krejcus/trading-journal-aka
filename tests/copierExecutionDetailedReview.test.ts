@@ -235,7 +235,11 @@ describe('execution review: safety changes while durable sending commit is pendi
   });
 
 
-  it.each([0, 1, 2])('modify lookup %s failure after DISARM/re-ARM is terminal no-send, not auto-close', async lookupNumber => {
+  // Bez maxContracts ma modify uz jen jeden povinny pre-write lookup v runneru.
+  // Drive byl lookup 2 duplicitni cap read v exposure wrapperu; balicek 11b
+  // jej zamerne odstranil. Post-write confirmation uz logicky nemuze dokazat
+  // "no-send", proto zde zustavaji jen pre-write failure body 0/1.
+  it.each([0, 1])('modify lookup %s failure after DISARM/re-ARM is terminal no-send, not auto-close', async lookupNumber => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const started = deferred();
     const release = deferred();
