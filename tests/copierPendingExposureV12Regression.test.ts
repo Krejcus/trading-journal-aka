@@ -373,7 +373,7 @@ describe('V12 regression: authoritative zero/partial-fill mirror', () => {
 });
 
 describe('V12 regression: reconciliation observation fence', () => {
-  it('ST4 stale reconciliation snapshot odmítne a nedovolí ARM', async () => {
+  it('ST4 stale reconciliation snapshot zahodí, jednou zopakuje a nezanechá lastError', async () => {
     const { broker, controller } = await setup({
       behavior: request => request.orderType === 'Market'
         ? { kind: 'fill', price: 30_500 }
@@ -398,10 +398,12 @@ describe('V12 regression: reconciliation observation fence', () => {
     }) });
     await controller.waitForIdle();
     release();
-    await expect(reconciliation).rejects.toThrow('zneplatněna novým stream eventem');
-    expect(() => controller.arm()).toThrow('kontrola pozic');
+    const result = await reconciliation;
+    expect(captured).toBe(4);
+    expect(result).toMatchObject({ authoritativelyClean: false, workingOrderAccounts: [200] });
+    expect(() => controller.arm()).toThrow();
 
-    expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
+    expect(controller.status()).toMatchObject({ armed: false, lastError: null });
     controller.stop();
   });
 });

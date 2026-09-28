@@ -220,8 +220,16 @@ export function createBrokerRouter(
         }
       };
       const applyConnection = (broker: BrokerPort, event: Extract<BrokerEvent, { type: 'connection' }>) => {
+        const aggregateBefore = aggregateConnected;
         connected.set(broker, event.connected);
         publishAggregate(event.at);
+        // Plánovaná obnova může bumpnout routeEpoch, aniž změní agregované
+        // connected=true. Controller přesto musí dostat impuls k novému
+        // read-only důkazu pending lineage; běžné redundantní connection
+        // eventy dál nepropouštíme.
+        if (event.resynced && event.connected && aggregateBefore === aggregateConnected) {
+          listener({ type: 'heartbeat', at: event.at });
+        }
       };
 
       const flushOutage = (broker: BrokerPort) => {
@@ -321,6 +329,7 @@ export function createBrokerRouter(
           clearTimeoutImpl(outage.timer);
           pendingOutage.delete(routeBroker);
           connected.set(routeBroker, true);
+          if (event.resynced) listener({ type: 'heartbeat', at: event.at });
           return;
         }
         applyConnection(routeBroker, event);

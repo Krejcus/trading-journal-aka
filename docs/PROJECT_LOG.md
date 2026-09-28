@@ -208,6 +208,42 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — V12 čtvrtá iterace: tvarová lineage, cílené read-y a epoch refresh (Codex, balíček 3a-4)
+
+- Pending záznam nyní uchovává i dříve potvrzené follower tvary
+  `qty/price/orderType`; opožděný event se starším potvrzeným tvarem proto není
+  falešná anomálie. Leader kontrola porovnává jen symbol a stranu. Ingress
+  plot je po objektech (follower účet+symbol, leader pozice a obě pending order
+  ID), ignoruje právě zpracovávaný order event a cizí symboly.
+- Vzácná S1b/opposite-Market větev má jedno omezené cílené read-only ověření
+  konkrétní kopie a follower pozice. Potvrzený fill dovolí exit; working kopie
+  na flat followerovi se jednou risk-snižujícím způsobem zruší a přeskočí se
+  jen tento follower. Nejasný stav, partial nebo `followerNet !== expectedPreNet`
+  dál znamená fail-closed bez obchodního zápisu.
+- Zápisy povolené zero-fill výjimkou jsou svázané s důkazní kopií. Její pozdní
+  fill zruší jednou všechny takto odvozené ordery, zapíše audit a DISARM; write
+  se neopakuje. Copied-exit fill, který při flat leaderovi otevře followera,
+  okamžitě DISARMu je. Pending Market zbytky v aktuální epoše se započítávají
+  do očekávaného netu.
+- Po každém route-epoch bumpu běží mimo event hot-path omezený read-only refresh
+  pozic a přesných orderů; pouze stále sedící lineage se přerazítkuje. Účet bez
+  routy končí řízeně fail-closed. Reconciliation stale snapshot zahodí bez
+  `lastError` a jednou omezeně zopakuje čtení.
+- Převzaté a asertované V12c sondy v nových testech pokrývají MOD, ING/C0-burst,
+  SC, S1b, MULTI, O6, RC, EP a Z1–Z11. Před opravou selhávaly zejména
+  MOD1/2/2h/5, ING1/2/4, C0-burst, S1b-delayed, MULTI-Market, O6/O6b/O6m1,
+  EP1/2, Z5–Z7 a RC1/2; po opravě jsou všechny nové sondy zelené a ING3 zůstává
+  záměrně fail-closed. Přímá Z11b navíc prokázala, že výjimka `routeEpoch`
+  řízeně DISARMu je skupinu bez zápisu. Předepsaná kompletní copier sada prošla
+  mimo sandbox kvůli loopback socketu 144/144 souborů a 1751/1751 testů.
+  Sedm přímo dotčených souborů prošlo samostatně 261/261.
+  Širší root sada prošla 451/451 souborů a 4198/4198 testů v sandboxu;
+  loopback soubor samostatně 53/53. Root typecheck po odfiltrování výslovně
+  povolených `extension/` chyb nemá další chybu; `git diff --check` je čistý.
+- Žádný commit, push, deploy, worker reinstall, ARM/DISARM, broker API ani
+  produkční změna nebyly provedeny. Nezávislé review a řízené DEMO ověření
+  zůstávají před případným nasazením povinné.
+
 ### 2026-09-29 — V16: episode-bound izolace BREACHED/DLL followera (Codex, balíček 4)
 
 - Divergence před leader exitem nebo ochranným příkazem už nebere samotný

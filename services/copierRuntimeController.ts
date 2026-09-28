@@ -1389,6 +1389,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * už v čítači není; V12 streamový důkaz tak vidí pouze backlog za sebou.
    */
   const pendingTradeIngressByAccount = new Map<number, number>();
+  /**
+   * Objektový ingress plot pro V12. Účetní čítač zůstává pro reconciliation,
+   * ale pending mirror smí invalidovat jen event stejného symbolu/orderu.
+   */
+  const pendingTradeIngressByKey = new Map<string, number>();
   /** Account-scoped fence pro reconciliation; ruch jiné OAuth route ho neruší. */
   const tradeObservationVersionByAccount = new Map<number, number>();
   let accountRiskPollTail: Promise<void> = Promise.resolve();
@@ -1448,12 +1453,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     followerFillReportedQuantity: number;
     tradeEpochGeneration: number;
     connectionSyncGeneration: number;
-    leaderRouteEpoch: number;
-    followerRouteEpoch: number;
+    leaderRouteEpoch: number | null;
+    followerRouteEpoch: number | null;
     evidenceInvalid: boolean;
+    /** Tvary, které kopírka sama dříve potvrdila během modify lifecycle. */
+    priorFollowerShapes?: readonly string[];
   }
   const currentRuntimePendingExposure = new Map<string, CurrentRuntimePendingExposure>();
   const seenCurrentRuntimePendingFillIds = new Set<string>();
+  const conditionalMirrorSourcesByLeaderEvent = new Map<string, Map<number, string[]>>();
+  const conditionalMirrorWritesBySourceOrder = new Map<string, {
+    accountId: number;
+    symbol: string;
+    dependentOrderIds: Set<string>;
+  }>();
   /**
    * Lokální lineage záměrně vynechaných vstupů. Umožní pozdějšímu leader
    * exitu pouze zmenšit skutečně drženou follower pozici, nikdy ji otočit.
@@ -1572,7 +1585,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const blockedLeaderEntryOrderIds = new Set<string>();
   const pendingOsoFlushes = new Map<string, Promise<void>>();
   const pendingOsoResolvers = new Map<string, () => void>();
-  type FollowerFillRole = 'copied-entry' | 'protective';
+  type FollowerFillRole = 'copied-entry' | 'copied-exit' | 'protective';
   interface RecentFollowerFillCause {
     role: FollowerFillRole;
     sign: 1 | -1;
@@ -1706,7 +1719,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     for (const entry of runtime.outbox.values()) {
       if (entry.request.accountId === accountId && entry.brokerOrderId === brokerOrderId) {
-        return 'copied-entry';
+        const increasesExposure = entry.leaderEventId == null
+          ? undefined
+          : leaderExposureIncreaseByEventId.get(entry.leaderEventId);
+        return increasesExposure === true
+          ? 'copied-entry'
+          : increasesExposure === false
+            ? 'copied-exit'
+            : null;
       }
     }
     return null;
@@ -6226,6 +6246,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       broker: dispatchBroker(admissionGeneration, event), clock, store: options.store, metrics,
       maxConcurrentDispatches: options.maxConcurrentDispatches, deferredReplay: true });
     runtime = result.runtime;
+    rememberConditionalMirrorWrites(event, result.audit);
     rememberCurrentRuntimePendingExposure(event, result.plan, result.audit);
     rememberExitOnlyReservations(adjusted.exitOnlyAccounts, result.plan, result.audit);
     if (result.audit.length > 0) options.onAudit?.(result.audit);
@@ -6319,6 +6340,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         deferredReplay: true,
       });
       runtime = result.runtime;
+      rememberConditionalMirrorWrites(pending, result.audit);
       rememberCurrentRuntimePendingExposure(pending, result.plan, result.audit);
       if (result.audit.length > 0) options.onAudit?.(result.audit);
       rememberExitOnlyReservations(
@@ -6768,9 +6790,185 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       || left.stopPrice === right.stopPrice)
   );
 
-  const routeEpochFor = (accountId: number) => (
-    broker.routeEpoch?.(accountId) ?? connectionSyncGeneration
-  );
+  const routeEpochFor = (accountId: number): number | null => {
+    try {
+      return broker.routeEpoch?.(accountId) ?? connectionSyncGeneration;
+    } catch (reason) {
+      // Dynamická route může účet odebrat mezi eventy. Je to řízený
+      // fail-closed důkaz (null), nikoli nechycená výjimka z eventTail.
+      if (gate.armed) {
+        failClosed(new Error(
+          `Copier fail-closed: routeEpoch účtu ${accountId} nelze načíst (${errorOf(reason).message})`,
+        ), { autoClose: false });
+      }
+      return null;
+    }
+  };
+
+  let routeEpochRefreshTail: Promise<void> = Promise.resolve();
+  let routeEpochRefreshScheduled = false;
+  const ROUTE_EPOCH_REFRESH_DEADLINE_MS = 2_000;
+
+  const withRouteEpochRefreshDeadline = async <T>(work: () => Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        work(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`route epoch read-only refresh překročil ${ROUTE_EPOCH_REFRESH_DEADLINE_MS} ms`)),
+            ROUTE_EPOCH_REFRESH_DEADLINE_MS,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  /**
+   * Router bumpuje epochu i při plánované obnově, kterou záměrně nepublikuje
+   * jako globální disconnect. Pending lineage je do nového read-only důkazu
+   * neplatná; refresh běží mimo eventTail a nikdy neposílá broker write.
+   */
+  const scheduleRouteEpochRefresh = (): void => {
+    if (routeEpochRefreshScheduled || stopped || currentRuntimePendingExposure.size === 0) return;
+    const stale = [...currentRuntimePendingExposure.values()].filter(pending => {
+      const leaderEpoch = group.leaderAccountId == null ? null : routeEpochFor(group.leaderAccountId);
+      const followerEpoch = routeEpochFor(pending.accountId);
+      return leaderEpoch == null || followerEpoch == null
+        || pending.leaderRouteEpoch !== leaderEpoch
+        || pending.followerRouteEpoch !== followerEpoch;
+    });
+    if (stale.length === 0) return;
+    routeEpochRefreshScheduled = true;
+    routeEpochRefreshTail = routeEpochRefreshTail.then(async () => {
+      const leaderAccountId = group.leaderAccountId;
+      if (leaderAccountId == null) return;
+      const records = [...currentRuntimePendingExposure.values()].filter(pending => (
+        stale.some(item => item.followerBrokerOrderId === pending.followerBrokerOrderId)
+      ));
+      const accountIds = [...new Set(records.flatMap(pending => [leaderAccountId, pending.accountId]))];
+      if (accountIds.some(accountId => routeEpochFor(accountId) == null)) return;
+      const observationAtStart = new Map(accountIds.map(accountId => [
+        accountId,
+        tradeObservationVersionByAccount.get(accountId) ?? 0,
+      ]));
+      const exactOrderKeys = [...new Map(records.flatMap(pending => [
+        [`${leaderAccountId}:${pending.leaderOrderId}`, {
+          accountId: leaderAccountId,
+          brokerOrderId: pending.leaderOrderId,
+        }],
+        [`${pending.accountId}:${pending.followerBrokerOrderId}`, {
+          accountId: pending.accountId,
+          brokerOrderId: pending.followerBrokerOrderId,
+        }],
+      ])).values()];
+      const [snapshots, exactOrders] = await withRouteEpochRefreshDeadline(() => Promise.all([
+        Promise.all(accountIds.map(async accountId => {
+          const [positions, orders] = await Promise.all([
+            broker.listPositions(accountId),
+            broker.listOrders(accountId),
+          ]);
+          return { accountId, positions, orders };
+        })),
+        Promise.all(exactOrderKeys.map(async key => ({
+          ...key,
+          lookup: await broker.findOrderById(key.accountId, key.brokerOrderId),
+        }))),
+      ]));
+      if (accountIds.some(accountId => (
+        (tradeObservationVersionByAccount.get(accountId) ?? 0)
+          !== observationAtStart.get(accountId)
+      ))) return;
+      const byAccount = new Map(snapshots.map(snapshot => [snapshot.accountId, snapshot]));
+      const exactOrderByKey = new Map(exactOrders.map(result => [
+        `${result.accountId}:${result.brokerOrderId}`,
+        result.lookup.completeness === 'authoritative' ? result.lookup.order : undefined,
+      ]));
+      for (const snapshot of snapshots) {
+        positionsByAccount.set(snapshot.accountId, new Map(
+          snapshot.positions.map(position => [position.symbol, position.netQuantity]),
+        ));
+        rememberLiveOrderSnapshot(snapshot.accountId, snapshot.orders);
+      }
+      // Exact authoritative lookups are part of the same fenced snapshot.
+      // Some adapters omit externally-created leader orders from listOrders
+      // while findOrderById can still prove them; keep that proof in the
+      // stream cache used by the pending-lineage validator below.
+      for (const order of exactOrderByKey.values()) {
+        if (order) rememberLiveOrder(order);
+      }
+      for (const pending of records) {
+        const current = currentRuntimePendingExposure.get(pending.followerBrokerOrderId);
+        if (!current || current.evidenceInvalid) continue;
+        const leaderEpoch = routeEpochFor(leaderAccountId);
+        const followerEpoch = routeEpochFor(current.accountId);
+        if (leaderEpoch == null || followerEpoch == null) continue;
+        const leaderOrder = exactOrderByKey.get(`${leaderAccountId}:${current.leaderOrderId}`)
+          ?? byAccount.get(leaderAccountId)?.orders.find(order => (
+            order.brokerOrderId === current.leaderOrderId
+          ));
+        const followerOrder = exactOrderByKey.get(`${current.accountId}:${current.followerBrokerOrderId}`)
+          ?? byAccount.get(current.accountId)?.orders.find(order => (
+            order.brokerOrderId === current.followerBrokerOrderId
+          ));
+        const leaderFilled = pendingLeaderFillQuantity(current);
+        const leaderShapeValid = leaderOrder != null
+          && leaderOrder.accountId === leaderAccountId
+          && leaderOrder.symbol === current.symbol
+          && leaderOrder.side === current.side
+          && Number.isFinite(leaderOrder.filledQuantity)
+          && leaderOrder.filledQuantity >= 0
+          && leaderOrder.filledQuantity <= leaderOrder.quantity
+          && (leaderFilled >= current.leaderQuantity || isOpenOrderStatus(leaderOrder.status));
+        const followerShapeValid = followerOrder != null
+          && followerOrder.accountId === current.accountId
+          && followerOrder.symbol === current.symbol
+          && followerOrder.side === current.side
+          && followerOrder.orderType === current.orderType
+          && followerOrder.quantity === current.followerQuantity
+          && sameOrderPrices(followerOrder, {
+            orderType: current.orderType,
+            limitPrice: current.followerLimitPrice,
+            stopPrice: current.followerStopPrice,
+          })
+          && Number.isFinite(followerOrder.filledQuantity)
+          && followerOrder.filledQuantity >= 0
+          && followerOrder.filledQuantity <= followerOrder.quantity
+          && isOpenOrderStatus(followerOrder.status);
+        if (!leaderShapeValid || !followerShapeValid) {
+          currentRuntimePendingExposure.set(current.followerBrokerOrderId, {
+            ...current,
+            evidenceInvalid: true,
+          });
+          continue;
+        }
+        currentRuntimePendingExposure.set(current.followerBrokerOrderId, {
+          ...current,
+          leaderOrderReportedFilled: Math.max(
+            current.leaderOrderReportedFilled,
+            leaderOrder.filledQuantity,
+          ),
+          followerOrderReportedFilled: Math.max(
+            current.followerOrderReportedFilled,
+            followerOrder.filledQuantity,
+          ),
+          leaderRouteEpoch: leaderEpoch,
+          followerRouteEpoch: followerEpoch,
+        });
+      }
+    }).catch(reason => {
+      options.onAudit?.([{
+        at: clock(),
+        leaderEventId: 'v12-route-epoch-refresh',
+        kind: 'blocked',
+        reason: `read-only refresh selhal: ${errorOf(reason).message}`,
+      }]);
+    }).finally(() => {
+      routeEpochRefreshScheduled = false;
+    });
+  };
 
   const rememberCurrentRuntimePendingExposure = (
     leaderEvent: Pick<
@@ -6928,6 +7126,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const followerFillValid = Number.isFinite(event.order.filledQuantity)
           && event.order.filledQuantity >= 0
           && event.order.filledQuantity <= event.order.quantity;
+        const staleConfirmedShape = !followerCoreShapeValid
+          && isOpenOrderStatus(event.order.status)
+          && event.order.accountId === pending.accountId
+          && event.order.symbol === pending.symbol
+          && event.order.side === pending.side
+          && event.order.orderType === pending.orderType
+          && (pending.priorFollowerShapes ?? []).includes(
+            `${event.order.quantity}|${event.order.limitPrice ?? ''}|${event.order.stopPrice ?? ''}`,
+          );
         const reportedFilled = followerFillValid
           ? Math.max(pending.followerOrderReportedFilled, event.order.filledQuantity)
           : pending.followerOrderReportedFilled;
@@ -6946,7 +7153,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             ...pending,
             followerOrderReportedFilled: reportedFilled,
             evidenceInvalid: pending.evidenceInvalid
-              || !followerCoreShapeValid
+              || (!followerCoreShapeValid && !staleConfirmedShape)
               || !followerFillValid,
           });
         }
@@ -6955,9 +7162,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (event.order.accountId === group.leaderAccountId) {
         for (const [brokerOrderId, candidate] of currentRuntimePendingExposure) {
           if (candidate.leaderOrderId !== event.order.brokerOrderId) continue;
+          // Typ/qty/cena jsou měnitelné potvrzeným replace. Ingress leader
+          // orderu proto hlídá pouze stabilní identitu symbolu a strany;
+          // potvrzený tvar se atomicky uloží níže v updatePending…
           const leaderCoreShapeValid = event.order.symbol === candidate.symbol
-            && event.order.side === candidate.side
-            && event.order.orderType === candidate.orderType;
+            && event.order.side === candidate.side;
           const leaderFillValid = Number.isFinite(event.order.filledQuantity)
             && event.order.filledQuantity >= 0
             && event.order.filledQuantity <= event.order.quantity;
@@ -7042,10 +7251,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ...pending,
         leaderQuantity: event.quantity,
         followerQuantity,
+        orderType: event.orderType,
         leaderLimitPrice: event.limitPrice,
         leaderStopPrice: event.stopPrice,
         followerLimitPrice: event.limitPrice,
         followerStopPrice: event.stopPrice,
+        priorFollowerShapes: [
+          ...(pending.priorFollowerShapes ?? []),
+          `${pending.followerQuantity}|${pending.followerLimitPrice ?? ''}|${pending.followerStopPrice ?? ''}`,
+        ],
       });
     }
   };
@@ -7055,10 +7269,39 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     symbol: string,
     followerNet: number,
     expectedPreNet: number,
-  ): { net: number; invalidEvidence: boolean; filledLeaderWorkingLimit: boolean } => {
+    triggerOrderId: string,
+  ): {
+    net: number;
+    invalidEvidence: boolean;
+    filledLeaderWorkingLimit: boolean;
+    filledLeaderWorkingOrderIds: string[];
+    zeroFillMirrorOrderIds: string[];
+  } => {
     let net = 0;
     let invalidEvidence = false;
     let filledLeaderWorkingLimit = false;
+    const filledLeaderWorkingOrderIds: string[] = [];
+    const zeroFillMirrorOrderIds: string[] = [];
+    const currentEpochMarketPendingNet = [...currentRuntimePendingExposure.values()]
+      .filter(pending => (
+        pending.accountId === accountId
+        && pending.symbol === symbol
+        && pending.orderType === 'Market'
+        && !pending.evidenceInvalid
+        && pending.tradeEpochGeneration === tradeEpochGeneration
+        && pending.connectionSyncGeneration === connectionSyncGeneration
+        && pending.leaderRouteEpoch != null
+        && pending.followerRouteEpoch != null
+        && pending.leaderRouteEpoch === routeEpochFor(group.leaderAccountId as number)
+        && pending.followerRouteEpoch === routeEpochFor(pending.accountId)
+        && pending.followerOrderReportedFilled === 0
+        && pending.followerFillReportedQuantity === 0
+      ))
+      .reduce((sum, pending) => (
+        sum + (pending.side === 'Buy' ? 1 : -1) * pendingExposureRemaining(pending)
+      ), 0);
+    const marketPendingExplainsExpected = currentEpochMarketPendingNet !== 0
+      && followerNet + currentEpochMarketPendingNet === expectedPreNet;
     for (const pending of currentRuntimePendingExposure.values()) {
       if (pending.accountId !== accountId || pending.symbol !== symbol) continue;
       // Sticky evidence invalidation always wins, including after the leader
@@ -7080,9 +7323,25 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const routeFresh = group.leaderAccountId != null
         && pending.leaderRouteEpoch === routeEpochFor(group.leaderAccountId)
         && pending.followerRouteEpoch === routeEpochFor(pending.accountId);
+      const leaderOrderBacklog = group.leaderAccountId == null ? 1
+        : (pendingTradeIngressByKey.get(
+          `${group.leaderAccountId}:order:${pending.leaderOrderId}`,
+        ) ?? 0);
+      const leaderPositionBacklog = group.leaderAccountId == null ? 1
+        : (pendingTradeIngressByKey.get(
+          `${group.leaderAccountId}:position:${symbol}`,
+        ) ?? 0);
+      const triggeringFillBacklog = group.leaderAccountId == null ? 0
+        : (pendingTradeIngressByKey.get(
+          `${group.leaderAccountId}:fill:${triggerOrderId}`,
+        ) ?? 0);
       const ingressClear = group.leaderAccountId != null
-        && (pendingTradeIngressByAccount.get(group.leaderAccountId) ?? 0) === 0
-        && (pendingTradeIngressByAccount.get(pending.accountId) ?? 0) === 0;
+        && leaderOrderBacklog === 0
+        // V broker burstu order -> fill -> position je pozice následkem právě
+        // kontrolovaného redukujícího orderu. Samotný resent pozice (ING3)
+        // tento kauzální důkaz nemá a zůstává fail-closed.
+        && (leaderPositionBacklog === 0 || triggeringFillBacklog > 0)
+        && (pendingTradeIngressByKey.get(`${pending.accountId}:symbol:${symbol}`) ?? 0) === 0;
       const currentEpoch = pending.tradeEpochGeneration === tradeEpochGeneration
         && pending.connectionSyncGeneration === connectionSyncGeneration;
       const streamShapeValid = leaderOrder != null
@@ -7103,10 +7362,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         && Number.isFinite(followerOrder.filledQuantity)
         && followerOrder.filledQuantity >= 0
         && followerOrder.filledQuantity <= followerOrder.quantity;
-      const streamFresh = routeFresh && ingressClear && currentEpoch && streamShapeValid;
+      const streamFresh = routeFresh
+        && (ingressClear || marketPendingExplainsExpected)
+        && currentEpoch
+        && streamShapeValid;
       const streamLeaderFilled = Math.max(leaderFilled, leaderOrder?.filledQuantity ?? 0);
       const streamFollowerFilled = Math.max(followerFilled, followerOrder?.filledQuantity ?? 0);
-      const exactPositionWithoutPending = followerNet === expectedPreNet;
+      const exactPositionWithoutPending = followerNet === expectedPreNet
+        || marketPendingExplainsExpected;
       const zeroFillMirror = streamFresh
         && pending.orderType !== 'Market'
         && isOpenOrderStatus(leaderOrder!.status)
@@ -7126,6 +7389,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         && followerOrder!.quantity - streamFollowerFilled
           === Math.floor((leaderOrder!.quantity - streamLeaderFilled) * pending.multiplier)
         && exactPositionWithoutPending;
+      if (zeroFillMirror) zeroFillMirrorOrderIds.push(pending.followerBrokerOrderId);
       if (zeroFillMirror || matchedPartialMirror) continue;
       const leaderFullyFilled = leaderFilled >= pending.leaderQuantity
         && leaderFilled > 0;
@@ -7141,10 +7405,171 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (leaderFullyFilled && remaining > 0 && pending.orderType !== 'Market'
         && followerOrder != null && isOpenOrderStatus(followerOrder.status)) {
         filledLeaderWorkingLimit = true;
+        filledLeaderWorkingOrderIds.push(pending.followerBrokerOrderId);
       }
       net += (pending.side === 'Buy' ? 1 : -1) * remaining;
     }
-    return { net, invalidEvidence, filledLeaderWorkingLimit };
+    return {
+      net,
+      invalidEvidence,
+      filledLeaderWorkingLimit,
+      filledLeaderWorkingOrderIds,
+      zeroFillMirrorOrderIds,
+    };
+  };
+
+  type TargetedPendingRead = {
+    kind: 'filled-synced' | 'working-flat' | 'working-matched' | 'unsafe' | 'unverified';
+    freshNet?: number;
+    order?: BrokerOrder;
+    reason?: string;
+  };
+
+  const readPendingCopyAndPosition = async (
+    accountId: number,
+    symbol: string,
+    brokerOrderId: string,
+    expectedPreNet: number,
+    deadlineMs: number,
+  ): Promise<TargetedPendingRead> => {
+    const pending = currentRuntimePendingExposure.get(brokerOrderId);
+    if (!pending || pending.accountId !== accountId || pending.symbol !== symbol) {
+      return { kind: 'unverified', reason: 'pending lineage mezitím zmizela' };
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const [lookup, positions] = await Promise.race([
+        Promise.all([
+          broker.findOrderById(accountId, brokerOrderId),
+          broker.listPositions(accountId),
+        ]),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`cílené V12 čtení překročilo ${deadlineMs} ms`)),
+            deadlineMs,
+          );
+        }),
+      ]);
+      if (lookup.completeness !== 'authoritative') {
+        return { kind: 'unverified', reason: 'lookup kopie nebyl autoritativní' };
+      }
+      const freshNet = positions
+        .filter(position => position.symbol === symbol)
+        .reduce((sum, position) => sum + position.netQuantity, 0);
+      positionsByAccount.set(accountId, new Map(
+        positions.map(position => [position.symbol, position.netQuantity]),
+      ));
+      const order = lookup.order;
+      if (!order) return { kind: 'unverified', freshNet, reason: 'kopie u brokera chybí' };
+      rememberLiveOrder(order);
+      const shapeValid = order.accountId === pending.accountId
+        && order.brokerOrderId === pending.followerBrokerOrderId
+        && order.symbol === pending.symbol
+        && order.side === pending.side
+        && order.orderType === pending.orderType
+        && order.quantity === pending.followerQuantity
+        && sameOrderPrices(order, {
+          orderType: pending.orderType,
+          limitPrice: pending.followerLimitPrice,
+          stopPrice: pending.followerStopPrice,
+        })
+        && Number.isFinite(order.filledQuantity)
+        && order.filledQuantity >= 0
+        && order.filledQuantity <= order.quantity;
+      if (!shapeValid) return { kind: 'unsafe', freshNet, order, reason: 'kopie má jiný tvar' };
+      if (!isOpenOrderStatus(order.status)) {
+        currentRuntimePendingExposure.delete(brokerOrderId);
+        return freshNet === expectedPreNet
+          ? { kind: 'filled-synced', freshNet, order }
+          : { kind: 'unsafe', freshNet, order, reason: `terminální kopie a pozice ${freshNet} != ${expectedPreNet}` };
+      }
+      const observedFill = Math.max(
+        order.filledQuantity,
+        pending.followerOrderReportedFilled,
+        pending.followerFillReportedQuantity,
+      );
+      if (observedFill > 0) {
+        return { kind: 'unsafe', freshNet, order, reason: `pracující kopie má fill ${observedFill}` };
+      }
+      if (freshNet === 0) return { kind: 'working-flat', freshNet, order };
+      if (freshNet === expectedPreNet) return { kind: 'working-matched', freshNet, order };
+      return { kind: 'unsafe', freshNet, order, reason: `pozice ${freshNet} != ${expectedPreNet}` };
+    } catch (reason) {
+      return { kind: 'unverified', reason: errorOf(reason).message };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const rememberConditionalMirrorWrites = (
+    event: LeaderEvent,
+    audit: readonly CopierAuditEntry[],
+  ): void => {
+    const byAccount = conditionalMirrorSourcesByLeaderEvent.get(event.id);
+    conditionalMirrorSourcesByLeaderEvent.delete(event.id);
+    if (!byAccount) return;
+    for (const item of audit) {
+      if (item.kind !== 'dispatched' || item.accountId == null || !item.brokerOrderId) continue;
+      const sources = byAccount.get(item.accountId) ?? [];
+      for (const sourceOrderId of sources) {
+        const existing = conditionalMirrorWritesBySourceOrder.get(sourceOrderId);
+        conditionalMirrorWritesBySourceOrder.set(sourceOrderId, {
+          accountId: item.accountId,
+          symbol: event.symbol,
+          dependentOrderIds: new Set([
+            ...(existing?.dependentOrderIds ?? []),
+            item.brokerOrderId,
+          ]),
+        });
+      }
+    }
+  };
+
+  const cancelConditionalMirrorWritesAfterLateFill = async (fill: BrokerFill): Promise<void> => {
+    const conditional = conditionalMirrorWritesBySourceOrder.get(fill.brokerOrderId);
+    if (!conditional || conditional.accountId !== fill.accountId || conditional.symbol !== fill.symbol) return;
+    conditionalMirrorWritesBySourceOrder.delete(fill.brokerOrderId);
+    const canceled: string[] = [];
+    const uncertain: string[] = [];
+    await Promise.all([...conditional.dependentOrderIds].map(async brokerOrderId => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          broker.cancelOrder(fill.accountId, brokerOrderId),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('conditional mirror cancel deadline 1000 ms')),
+              1_000,
+            );
+          }),
+        ]);
+        canceled.push(brokerOrderId);
+        options.onAudit?.([{
+          at: clock(),
+          leaderEventId: `v12-late-fill-${fill.fillId}`,
+          kind: 'canceled',
+          accountId: fill.accountId,
+          brokerOrderId,
+          reason: `pozdní fill ${fill.brokerOrderId} vyvrátil zero-fill důkaz; závislý order zrušen`,
+        }]);
+      } catch (reason) {
+        uncertain.push(`${brokerOrderId}:${errorOf(reason).message}`);
+        options.onAudit?.([{
+          at: clock(),
+          leaderEventId: `v12-late-fill-${fill.fillId}`,
+          kind: 'cancel-failed',
+          accountId: fill.accountId,
+          brokerOrderId,
+          reason: `pozdní fill vyvrátil zero-fill důkaz; cancel má nejasný výsledek: ${errorOf(reason).message}`,
+        }]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }));
+    failClosed(new Error(
+      `Copier fail-closed: pozdní fill ${fill.brokerOrderId} vyvrátil zero-fill mirror; `
+      + `zrušeno=${canceled.join(',') || 'nic'}${uncertain.length > 0 ? `; nejisté=${uncertain.join(',')}` : ''}`,
+    ), { autoClose: false });
   };
 
   const cutAwareDispatchFor = async (
@@ -7207,6 +7632,104 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       );
       if (evidence) episodeIsolationByAccount.set(follower.accountId, evidence);
     }));
+    const pendingReadSkipAccounts = new Set<number>();
+    const pendingReadUnsafeAccounts = new Map<number, string>();
+    const conditionalMirrorCandidates = new Map<number, string[]>();
+    if (event.orderType === 'Market') {
+      await Promise.all(group.followers.map(async follower => {
+        const modeAcceptsEvent = event.kind === 'filled'
+          ? follower.mode === 'on-fill'
+          : follower.mode === 'on-submit';
+        if (!modeAcceptsEvent || follower.enabled === false || follower.mode === 'off') return;
+        const followerNet = positionsByAccount.get(follower.accountId)?.get(event.symbol) ?? 0;
+        const expectedPreNet = Math.trunc(preNet * follower.multiplier);
+        const pendingExposure = currentRuntimePendingNet(
+          follower.accountId,
+          event.symbol,
+          followerNet,
+          expectedPreNet,
+          event.orderId,
+        );
+        const filledLeaderCandidates = followerNet !== expectedPreNet
+          ? pendingExposure.filledLeaderWorkingOrderIds
+          : [];
+        const allOppositePendingCandidates = [...currentRuntimePendingExposure.values()]
+          .filter(pending => (
+            pending.accountId === follower.accountId
+            && pending.symbol === event.symbol
+            && pending.orderType !== 'Market'
+            && !pending.evidenceInvalid
+            && pending.tradeEpochGeneration === tradeEpochGeneration
+            && pending.connectionSyncGeneration === connectionSyncGeneration
+            && expectedPreNet !== 0
+            && (pending.side === 'Buy' ? 1 : -1) !== Math.sign(expectedPreNet)
+          ))
+          .map(pending => pending.followerBrokerOrderId);
+        // Jediný opačný pending (typický TP) se před Market redukcí vždy
+        // ověří, i když WS cache ještě ukazuje očekávanou pozici. Více
+        // současných ochranných limitů při přesné pozici nepoužívá V12
+        // výjimku a zachová původní přímý exit bez REST hot-path čtení.
+        const oppositePendingCandidates = allOppositePendingCandidates.length === 1
+          || followerNet !== expectedPreNet
+          ? allOppositePendingCandidates
+          : [];
+        const candidates = [...new Set([
+          ...filledLeaderCandidates,
+          ...oppositePendingCandidates,
+        ])];
+        if (candidates.length === 0) return;
+        if (candidates.length !== 1) {
+          pendingReadUnsafeAccounts.set(follower.accountId, 'více pending kopií vyžaduje fail-closed');
+          return;
+        }
+        const targeted = await readPendingCopyAndPosition(
+          follower.accountId,
+          event.symbol,
+          candidates[0],
+          expectedPreNet,
+          oppositePendingCandidates.length > 0 ? 1_000 : 1_500,
+        );
+        if (targeted.kind === 'filled-synced' || targeted.kind === 'working-matched') return;
+        const shouldCancelWorking = targeted.order != null
+          && isOpenOrderStatus(targeted.order.status)
+          && (targeted.kind === 'working-flat' || targeted.kind === 'unsafe');
+        if (shouldCancelWorking) {
+          try {
+            // Jediný risk-snižující write. Při nejasném výsledku se nikdy
+            // neopakuje naslepo; účet zůstane v unsafe mapě a skupina haltne.
+            await broker.cancelOrder(follower.accountId, candidates[0]);
+            currentRuntimePendingExposure.delete(candidates[0]);
+            options.onAudit?.([{
+              at: clock(),
+              leaderEventId: event.id,
+              kind: 'canceled',
+              accountId: follower.accountId,
+              brokerOrderId: candidates[0],
+              reason: 'V12: working vstupní kopie zrušena před leader Market exitem',
+            }]);
+          } catch (reason) {
+            pendingReadUnsafeAccounts.set(
+              follower.accountId,
+              `cancel pending kopie měl nejasný výsledek: ${errorOf(reason).message}`,
+            );
+            return;
+          }
+        }
+        if (targeted.kind === 'working-flat') {
+          intentionalEntrySuppressions.set(
+            intentionalSuppressionKey(follower.accountId, event.symbol),
+            { allowedNet: 0, createdAt: clock(), leaderOrderId: event.orderId },
+          );
+          pendingReadSkipAccounts.add(follower.accountId);
+          ineligibleAccounts.set(follower.accountId, 'pending-entry-copy-canceled-before-exit');
+          return;
+        }
+        pendingReadUnsafeAccounts.set(
+          follower.accountId,
+          targeted.reason ?? 'cílené čtení nepotvrdilo bezpečnou follower expozici',
+        );
+      }));
+    }
     const followers = group.followers.map(follower => {
       const cut = activeFollowerCut(follower.accountId, at);
       const letRunCut = cut != null && (follower.onCut ?? 'close-copy') === 'let-run';
@@ -7214,6 +7737,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         || (event.kind === 'submitted' && follower.mode === 'on-submit');
       if (!modeAcceptsEvent || follower.enabled === false || (cut && !letRunCut)) {
         return follower;
+      }
+      if (pendingReadSkipAccounts.has(follower.accountId)) {
+        return { ...follower, mode: 'off' as const };
+      }
+      const pendingReadFailure = pendingReadUnsafeAccounts.get(follower.accountId);
+      if (pendingReadFailure) {
+        unsafeDivergenceAccounts.push(follower.accountId);
+        ineligibleAccounts.set(
+          follower.accountId,
+          `pending-copy-read-failed:${pendingReadFailure}`,
+        );
+        return { ...follower, mode: 'off' as const };
       }
       const positionSnapshot = positionsByAccount.get(follower.accountId);
       // Reconciliation ukládá autoritativní mapu účtu; chybějící symbol v
@@ -7228,8 +7763,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         event.symbol,
         followerNet,
         expectedPreNet,
+        event.orderId,
       );
       const pendingNet = pendingExposure.net;
+      if (pendingExposure.zeroFillMirrorOrderIds.length > 0) {
+        conditionalMirrorCandidates.set(
+          follower.accountId,
+          [...pendingExposure.zeroFillMirrorOrderIds],
+        );
+      }
       const actualPositionHasCurrentLineage = followerNet === 0
         || copiedEntryLineage(follower.accountId, event.symbol, followerNet);
       const exactCurrentPendingExposure = hasPositionSnapshot
@@ -7249,7 +7791,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         pendingExposure.invalidEvidence
           ? true
           : event.orderType === 'Market'
-            && followerNet === 0
+            && followerNet !== expectedPreNet
             && pendingExposure.filledLeaderWorkingLimit
           ? true
           : pendingNet !== 0
@@ -7355,6 +7897,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (!eligibilityIneligible.has(follower.accountId)) ineligibleAccounts.delete(follower.accountId);
       return { ...follower, multiplier: sliceMultiplier };
     });
+    const safeConditionalCandidates = new Map(
+      [...conditionalMirrorCandidates].filter(([accountId]) => (
+        !pendingReadSkipAccounts.has(accountId)
+        && !pendingReadUnsafeAccounts.has(accountId)
+        && !unsafeDivergenceAccounts.includes(accountId)
+      )),
+    );
+    if (safeConditionalCandidates.size > 0) {
+      conditionalMirrorSourcesByLeaderEvent.set(event.id, safeConditionalCandidates);
+    } else {
+      conditionalMirrorSourcesByLeaderEvent.delete(event.id);
+    }
     return {
       dispatchGroup: changed ? { ...group, followers } : group,
       ineligibleAccounts,
@@ -7496,6 +8050,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (stopped) return;
     const now = clock();
     if (event.type === 'order') rememberLiveOrder(event.order);
+    scheduleRouteEpochRefresh();
     if (event.type === 'heartbeat') {
       gate = { ...gate, lastHeartbeatAt: event.at };
       await maybeHandleArmExpiry(now);
@@ -7509,6 +8064,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (event.type === 'error') {
       currentRuntimePendingExposure.clear();
       seenCurrentRuntimePendingFillIds.clear();
+      conditionalMirrorSourcesByLeaderEvent.clear();
+      conditionalMirrorWritesBySourceOrder.clear();
       failClosed(event.error, { transportLost: true });
       return;
     }
@@ -7519,6 +8076,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (!event.connected) {
         currentRuntimePendingExposure.clear();
         seenCurrentRuntimePendingFillIds.clear();
+        conditionalMirrorSourcesByLeaderEvent.clear();
+        conditionalMirrorWritesBySourceOrder.clear();
       }
       // Výpadek za živého ARM s otevřenými kopiemi → po reconnectu se
       // rozhodne „podle stavu" (držet synchronní / zavřít osiřelé).
@@ -7599,6 +8158,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (rollEligibilityToNewSession(now)) await persistEligibility();
     await evaluateDailyRules(now);
     observeCurrentRuntimePendingExposure(event);
+    if (event.type === 'fill' && event.fill.accountId !== group.leaderAccountId) {
+      await cancelConditionalMirrorWritesAfterLateFill(event.fill);
+    }
     if (event.type === 'fill' && event.fill.accountId !== group.leaderAccountId) {
       const reservation = exitOnlyReservations.get(event.fill.brokerOrderId);
       if (reservation) {
@@ -7954,6 +8516,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
               event.position.netQuantity,
               cause.brokerOrderId,
             );
+          } else if (cause.role === 'copied-exit') {
+            recentFollowerFillCauses.delete(transitionKey);
+            failClosed(new Error(
+              `Copier fail-closed: leader je flat a follower ${event.position.accountId} `
+              + `${event.position.symbol}:${event.position.netQuantity} otevřel fill zkopírovaného exitu `
+              + cause.brokerOrderId,
+            ), { autoClose: false });
           }
         } else {
           scheduleFollowerTransitionVerification(
@@ -8664,6 +9233,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       maxConcurrentDispatches: options.maxConcurrentDispatches,
     });
     runtime = result.runtime;
+    rememberConditionalMirrorWrites(leaderEvent, result.audit);
     rememberCurrentRuntimePendingExposure(leaderEvent, result.plan, result.audit);
     if (result.audit.length > 0) options.onAudit?.(result.audit);
     rememberExitOnlyReservations(
@@ -8727,15 +9297,25 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * vždy čte broker až po starším a starý snapshot nemůže doběhnout jako
    * poslední a přepsat novější bezpečnostní stav.
    */
+  class ReconciliationStaleSnapshotError extends Error {}
+
   async function performReconciliation(
     reconciliationOptions: CopierReconciliationOptions & { clearLastError?: boolean } = {},
   ): Promise<ReconciliationResult> {
     const requestedGeneration = safetyGeneration;
     reconciliationRequestsPending += 1;
-    const reconciliation = reconciliationTail.then(() => runReconciliation(
-      reconciliationOptions,
-      requestedGeneration,
-    ));
+    const reconciliation = reconciliationTail.then(async () => {
+      let lastStale: ReconciliationStaleSnapshotError | null = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          return await runReconciliation(reconciliationOptions, requestedGeneration);
+        } catch (reason) {
+          if (!(reason instanceof ReconciliationStaleSnapshotError)) throw reason;
+          lastStale = reason;
+        }
+      }
+      throw lastStale ?? new ReconciliationStaleSnapshotError('Reconciliation snapshot zůstal zastaralý');
+    });
     const run = reconciliation.finally(() => {
       reconciliationRequestsPending -= 1;
     });
@@ -8870,13 +9450,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           !== (accountObservationAtStart.get(accountId) ?? 0)
       ));
       if (changedAccounts.length > 0) {
-        const error = new Error(
+        const error = new ReconciliationStaleSnapshotError(
           `Reconciliation byla zneplatněna novým stream eventem účtů ${changedAccounts.join(',')}`,
         );
-        if (gate.armed) recordDisarm('fail-closed', error.message, 'unknown');
-        gate = { ...gate, armed: false, shadowMode: true };
-        lastError = error;
-        invalidateReconciliation();
         throw error;
       }
       positionsByAccount.clear();
@@ -9486,6 +10062,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       leaderReducingQuantityByEventId.clear();
       currentRuntimePendingExposure.clear();
       seenCurrentRuntimePendingFillIds.clear();
+      conditionalMirrorSourcesByLeaderEvent.clear();
+      conditionalMirrorWritesBySourceOrder.clear();
       tradeEpochGeneration += 1;
       blockedLeaderEntryOrderIds.clear();
       intentionalEntrySuppressions.clear();
@@ -9570,6 +10148,32 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         : event.type === 'position'
           ? event.position.accountId
           : undefined;
+    const ingressSymbol = event.type === 'order'
+      ? event.order.symbol
+      : event.type === 'fill'
+        ? event.fill.symbol
+        : event.type === 'position'
+          ? event.position.symbol
+          : undefined;
+    const ingressOrderId = event.type === 'order'
+      ? event.order.brokerOrderId
+      : event.type === 'fill'
+        ? event.fill.brokerOrderId
+        : undefined;
+    const ingressKeys = ingressAccountId == null || ingressSymbol == null
+      ? []
+      : [
+        `${ingressAccountId}:symbol:${ingressSymbol}`,
+        ...(event.type === 'position'
+          ? [`${ingressAccountId}:position:${ingressSymbol}`]
+          : []),
+        ...(event.type === 'fill'
+          ? [`${ingressAccountId}:fill:${event.fill.brokerOrderId}`]
+          : []),
+        ...(ingressOrderId == null
+          ? []
+          : [`${ingressAccountId}:order:${ingressOrderId}`]),
+      ];
     if (event.type === 'position' || event.type === 'order' || event.type === 'fill') {
       tradeBoundaryObservationVersion += 1;
       tradeObservationVersionByAccount.set(
@@ -9580,6 +10184,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ingressAccountId!,
         (pendingTradeIngressByAccount.get(ingressAccountId!) ?? 0) + 1,
       );
+      for (const key of ingressKeys) {
+        pendingTradeIngressByKey.set(key, (pendingTradeIngressByKey.get(key) ?? 0) + 1);
+      }
     }
     pendingBrokerEvents += 1;
     const admissionGeneration = safetyGeneration;
@@ -9589,6 +10196,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           const remaining = Math.max(0, (pendingTradeIngressByAccount.get(ingressAccountId) ?? 0) - 1);
           if (remaining === 0) pendingTradeIngressByAccount.delete(ingressAccountId);
           else pendingTradeIngressByAccount.set(ingressAccountId, remaining);
+          for (const key of ingressKeys) {
+            const pending = Math.max(0, (pendingTradeIngressByKey.get(key) ?? 0) - 1);
+            if (pending === 0) pendingTradeIngressByKey.delete(key);
+            else pendingTradeIngressByKey.set(key, pending);
+          }
         }
         return handleBrokerEvent(event, admissionGeneration);
       })
@@ -10434,6 +11046,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         await observed;
         const observedRiskPoll = accountRiskPollTail;
         await observedRiskPoll;
+        const observedRouteEpochRefresh = routeEpochRefreshTail;
+        await observedRouteEpochRefresh;
         const observedShutdown = shutdownPromise;
         if (observedShutdown) await observedShutdown;
         const pendingFlushes = [...pendingOsoFlushes.values()];
@@ -10441,6 +11055,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (
           observed === eventTail
           && observedRiskPoll === accountRiskPollTail
+          && observedRouteEpochRefresh === routeEpochRefreshTail
           && observedShutdown === shutdownPromise
           && pendingOsoFlushes.size === 0
         ) return;
@@ -10467,6 +11082,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       leaderReducingQuantityByEventId.clear();
       currentRuntimePendingExposure.clear();
       seenCurrentRuntimePendingFillIds.clear();
+      conditionalMirrorSourcesByLeaderEvent.clear();
+      conditionalMirrorWritesBySourceOrder.clear();
       liveOrderGenerationsByAccount.clear();
       intentionalEntrySuppressions.clear();
       exitOnlyReservations.clear();

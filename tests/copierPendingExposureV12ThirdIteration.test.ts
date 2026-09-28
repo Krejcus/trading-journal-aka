@@ -231,7 +231,9 @@ describe('V12 třetí iterace: pozitivní streamové důkazy', () => {
         expect(followerRequests(broker, 'Stop')).toHaveLength(1);
         expect(controller.status()).toMatchObject({ armed: true, lastError: null });
       } else {
-        expectFailClosedWithoutNewWrite(broker, controller, writesBefore);
+        expect(followerRequests(broker)).toHaveLength(writesBefore + 1);
+        expect(followerRequests(broker, 'Stop')).toHaveLength(1);
+        expect(controller.status()).toMatchObject({ armed: true, lastError: null });
       }
       controller.stop();
     });
@@ -396,7 +398,7 @@ describe('V12 třetí iterace: terminální kopie se retireuje', () => {
 });
 
 describe('V12 třetí iterace: maskování zůstává fail-closed', () => {
-  it('S1b leader Limit filled + working kopie + Market exit na flat followera je blokovaný', async () => {
+  it('S1b working kopii na flat followerovi zruší a Market exit přeskočí jen pro něj', async () => {
     const { broker, controller } = await setup({ behavior: () => ({ kind: 'working' }) });
     const entry = leaderOrder({
       brokerOrderId: 's1b-limit', side: 'Buy', quantity: 8, orderType: 'Limit', limitPrice: 30_400,
@@ -411,7 +413,11 @@ describe('V12 třetí iterace: maskování zůstává fail-closed', () => {
     }) });
     await controller.waitForIdle();
 
-    expectFailClosedWithoutNewWrite(broker, controller, writesBefore);
+    expect(followerRequests(broker)).toHaveLength(writesBefore);
+    expect(broker.orders().filter(order => (
+      order.accountId === 200 && order.status === 'working'
+    ))).toHaveLength(0);
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null });
     controller.stop();
   });
 

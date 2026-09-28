@@ -1705,7 +1705,7 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
-  it('S6 V12 skrytý reconnect follower routy zneplatní stream důkaz bez REST čtení', async () => {
+  it('S6 V12 skrytý reconnect follower routy obnoví důkaz read-only a divergence zůstane fail-closed', async () => {
     const behavior = (request: { orderType: BrokerOrder['orderType'] }) => request.orderType === 'Market'
       ? { kind: 'fill' as const, price: 30_500 }
       : { kind: 'working' as const };
@@ -1753,7 +1753,7 @@ describe('bootstrapCopierRuntime', () => {
     }) });
     await controller.waitForIdle();
 
-    expect(followerPositionRead).not.toHaveBeenCalled();
+    expect(followerPositionRead).toHaveBeenCalledTimes(1);
     expect(followerBroker.placedRequests().filter(request => request.orderType === 'Stop')).toHaveLength(0);
     expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
     expect(controller.status().lastError).toContain('nevysvětlená divergence');
