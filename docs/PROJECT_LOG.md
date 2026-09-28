@@ -65,6 +65,20 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Otevřené otázky
 
+- [ ] **ST34 bezpečný bootstrap pilot lease bez kruhové závislosti** —
+      kontrola z 15ae535 byla v balíčku 7a-2 vrácena, protože nová instalace
+      potřebuje lease před vznikem/spárováním device klíče. Cílově vydávat
+      lease jen přes Device auth po párování; pokud zůstane JWT bootstrap,
+      pouze pro klíč z potvrzeného pairing requestu, s krátkým TTL a bez
+      obnovy. Vyžaduje samostatný instalační/pairing redesign.
+- [ ] **N6 dvě živá copier zařízení na jednom OAuth connection** — ST35
+      správně routuje na nejčerstvější heartbeat, ale není to fencing.
+      Budoucí oprava má odmítnout ARM při více čerstvých workerech a brzdu
+      fan-outovat na všechna nerevokovaná zařízení connection.
+- [ ] **N10 day-lock snapshot race v controlleru** — `maybeEngageDayLock`
+      má ukládat funkčním `persistSafetyUpdate(current => ...)`, aby
+      nepřepsal souběžnou novější safety hodnotu. Balíček 7a-2 soubor
+      `services/copierRuntimeController.ts` podle dělby práce neměnil.
 - [x] **Zápis venue risk limitů / skutečný broker-side day lock** — UZAVŘENO
       3. 9. rozhodnutím uživatele: nepokračovat. Fáze 1 (read-only sonda,
       `docs/TRADOVATE_RISK_LIMITS_CAPABILITY_20260903.md`) prokázala jen read
@@ -207,6 +221,52 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
 
 ## Deník
+
+### 2026-09-29 — Balíček 7a-2: obnovitelné brzdy a přesná ARM idempotence (Codex)
+
+- Tento zápis nahrazuje transportní rozhodnutí z balíčku 7a níže.
+  Samostatná `poll-priority` linka, claim bez `delivery_id`, v1 ACK,
+  `pendingPriorityAck` a druhý 750ms poller byly odstraněny. DISARM, kill
+  switch a ruční day-lock znovu procházejí jedinou obnovitelnou FIFO v2
+  linkou (`delivery_id` + idempotentní `complete-v2`), takže ztracená claim
+  odpověď ani ACK brzdu nepohřbí a nezasekne další polling. Lokální agent
+  je nadále provede okamžitě mimo svůj běžící command tail.
+- Nově vložená brzda service-role updatem ve stejném serverovém requestu
+  expiruje starší `pending` ARM/SHADOW stejného zařízení s
+  `superseded-by-brake`; nová DB migrace nebyla potřeba. Worker dostává
+  serverové `createdAt`, pamatuje poslední provedenou brzdu a odmítne ARM
+  s `createdAt <= lastBrakeCreatedAt`. HTTP ingress zachytí brake epoch ještě
+  synchronně před čtením body.
+- Brzdy mají konečnou desetiminutovou enqueue TTL (nejsou
+  „nevypršitelné“); ARM zůstává 30 s. Worker ukončí ARM nejpozději
+  `expiresAt - 10 s`, aby zbyl rozpočet na durable ACK. Lokální
+  `X-AlphaTrade-Command-Deadline` se omezuje na 30 s od příchodu requestu.
+- Idempotentní ARM je no-op pouze pro tutéž sanitizovanou/mapped konfiguraci
+  a exclusions, které už platí (nebo je nahrazuje přísnější stav).
+  Jiná skupina nebo nová exclusion se odmítne textem, že je nutné kopírku
+  nejdřív vypnout. Relay deduplikuje/coalescuje jen přesně shodný payload;
+  konflikt vrací 409. `pending` i `claimed` kandidáti musejí mít
+  `expires_at > now`, takže legacy osiřelý claimed ARM nový ARM nepohltí.
+- ST34 JWT pilot-lease kontrola spárovaného klíče byla vrácena na stav
+  před 15ae535, protože vytvořila kruhovou závislost instalace/párování.
+  **Otevřený bod:** správné řešení je vydat lease až přes Device auth po
+  párování; případná JWT bootstrap větev smí pečetit jen klíč z
+  potvrzeného pairing requestu, s krátkým TTL a bez obnovy.
+- Zachováno: omezení dev originů s
+  `ALPHATRADE_COPIER_ALLOW_FULL_DEV_ORIGINS` a ST35 routing na zařízení s
+  nejčerstvějším heartbeatem. **Otevřený starší problém N6:** dvě současně
+  živá zařízení jednoho connection nemají fencing; ARM je třeba v takovém
+  stavu odmítnout a brzdy doručit všem nerevokovaným zařízením. **Otevřený
+  bod N10:** `maybeEngageDayLock` v `copierRuntimeController.ts` má ukládat
+  přes `persistSafetyUpdate(current => ...)`, ne zachycený safety snapshot;
+  soubor byl podle dělby práce záměrně nedotčen.
+- Regrese převzaté z adversariálních PoC před opravou selhaly v 9
+  bezpečnostních/kompatibilitních scénářích. Po opravě prošlo 6 cílených
+  souborů / 162 testů a povinná celá copier sada 136 souborů / 1 627 testů.
+  Scoped TypeScript a ESLint jsou čisté, produkční build prošel. Root
+  `tsc --noEmit` hlásí pouze předexistující chybějící extension závislosti
+  (`chrome`, `@crxjs/vite-plugin`). Nic nebylo commitnuto, pushnuto,
+  nasazeno, migrováno, párováno ani posíláno brokerovi.
 
 ### 2026-09-28 — Balíček 7a: přednostní brzdy a bezpečný lokální relay (Codex)
 

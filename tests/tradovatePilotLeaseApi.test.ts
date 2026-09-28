@@ -134,17 +134,19 @@ describe('Tradovate pilot lease API', () => {
     }));
   });
 
-  it('JWT vlastník nedostane token zapečetěný na nespárovaný nebo revokovaný klíč', async () => {
+  it('JWT vlastník může jako před ST34 stáhnout instalační lease pro dosud nespárovaný klíč', async () => {
     const query: Record<string, unknown> = {};
     for (const method of ['eq', 'is', 'limit']) query[method] = () => query;
     query.maybeSingle = async () => ({ data: null, error: null });
     oauthStore.createTradovateAdminClient.mockReturnValue({ from: () => ({ select: () => query }) });
     const harness = responseHarness();
-    await handler(request({ body: { connectionId: 'connection-owned', publicKey: 'ATTACKER KEY' } }), harness.res);
-    expect(harness.status()).toBe(403);
-    expect(harness.body()).toEqual({ error: 'pilot-key-not-paired' });
-    expect(oauthStore.getValidTradovateAccessToken).not.toHaveBeenCalled();
-    expect(pilotLease.sealTradovatePilotLease).not.toHaveBeenCalled();
+    await handler(request({ body: { connectionId: 'connection-owned', publicKey: 'INSTALL PUBLIC KEY' } }), harness.res);
+    expect(harness.status()).toBe(200);
+    expect(oauthStore.getValidTradovateAccessToken).toHaveBeenCalledOnce();
+    expect(pilotLease.sealTradovatePilotLease).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionId: 'connection-owned' }),
+      'INSTALL PUBLIC KEY',
+    );
   });
 
   it('issues a lease for legacy OAuth rows without stored identity metadata', async () => {

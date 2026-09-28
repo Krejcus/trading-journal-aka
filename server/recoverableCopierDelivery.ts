@@ -4,6 +4,7 @@ import { localCopierAgentErrorDetails, type LocalCopierAgentCommand } from '../l
 import type { RelayDelivery, RelayDeliveryStore } from './copierRelayDeliveryStore.js';
 
 type Request = (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
+export const COPIER_COMMAND_ACK_RESERVE_MS = 10_000;
 /** Serial, durable transport recovery. Only HTTP delivery/ACK is retried;
  * once execution starts the command can NEVER be executed by this relay again. */
 export function recoverableCopierDelivery(options: {
@@ -60,9 +61,12 @@ export function recoverableCopierDelivery(options: {
         else if (expires <= now()) executionError = 'command-expired-before-execution';
         else {
           try {
-            result = remote.command.type === 'arm-live'
-              ? await options.agent.execute(remote.command, { deadlineAt: expires })
-              : await options.agent.execute(remote.command);
+            result = await options.agent.execute(remote.command, {
+              createdAt: created,
+              ...(remote.command.type === 'arm-live'
+                ? { deadlineAt: expires - COPIER_COMMAND_ACK_RESERVE_MS }
+                : {}),
+            });
           }
           catch (error) {
             executionError = error instanceof Error ? error.message : String(error);

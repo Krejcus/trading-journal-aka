@@ -181,6 +181,8 @@ export type LocalCopierAgentCommand =
  * odvozuje ze serverového `expiresAt`, přímý loopback z UI timeoutu.
  */
 export interface LocalCopierAgentExecutionContext {
+  /** Serverový created_at, případně synchronní čas lokálního HTTP ingressu. */
+  createdAt?: number;
   deadlineAt?: number;
 }
 

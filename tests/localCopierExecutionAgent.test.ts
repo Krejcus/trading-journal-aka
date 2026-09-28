@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { request as httpRequest } from 'node:http';
 import {
+  boundedLocalArmDeadline,
   startLocalCopierExecutionAgent,
   type LocalCopierExecutionAgent,
   type PrepareGroupAccountsRequest,
@@ -889,6 +891,68 @@ describe('local copier execution agent', () => {
     expect(runtime.arm).not.toHaveBeenCalled();
   });
 
+  it('lokální deadline hlavička nikdy neprodlouží ARM nad 30 sekund od ingressu', () => {
+    expect(boundedLocalArmDeadline(String(1_000_000), 10_000)).toBe(40_000);
+    expect(boundedLocalArmDeadline(String(25_000), 10_000)).toBe(25_000);
+    expect(boundedLocalArmDeadline(undefined, 10_000)).toBe(40_000);
+  });
+
+  it('HTTP ARM si zachytí brake epoch před await body a po později doručeném DISARM zůstane vypnutý', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    const armBody = JSON.stringify({ type: 'arm-live', group: group() });
+    const armResponse = new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const url = new URL('/v1/command', running!.origin);
+      const request = httpRequest({
+        hostname: url.hostname,
+        port: Number(url.port),
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          Origin: origin,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(armBody),
+          'X-AlphaTrade-Agent-Nonce': running!.status().nonce,
+        },
+      }, response => {
+        const chunks: Buffer[] = [];
+        response.on('data', chunk => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => resolve({
+          status: response.statusCode ?? 0,
+          body: Buffer.concat(chunks).toString('utf8'),
+        }));
+      });
+      request.on('error', reject);
+      const splitAt = armBody.indexOf(',') + 1;
+      request.write(armBody.slice(0, splitAt));
+      void (async () => {
+        await new Promise(resolveDelay => setTimeout(resolveDelay, 20));
+        const brake = await post(running!, running!.status().nonce, { type: 'disarm' });
+        expect(brake.status).toBe(200);
+        request.end(armBody.slice(splitAt));
+      })().catch(reject);
+    });
+
+    const response = await armResponse;
+    expect(response.status).toBe(409);
+    expect(JSON.parse(response.body)).toMatchObject({ error: expect.stringContaining('bezpečnostní brzda') });
+    expect(runtime.arm).not.toHaveBeenCalled();
+    expect(runtime.status().armed).toBe(false);
+  });
+
+  it('odmítne serverový ARM vytvořený nejpozději s poslední provedenou brzdou', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+
+    await running.execute({ type: 'disarm' }, { createdAt: 2_000 });
+    await expect(running.execute(
+      { type: 'arm-live', group: group() },
+      { createdAt: 1_000, deadlineAt: Date.now() + 1_000 },
+    )).rejects.toThrow('starší než poslední bezpečnostní brzda');
+    expect(runtime.arm).not.toHaveBeenCalled();
+    expect(runtime.status().armed).toBe(false);
+  });
+
   it('souběžný druhý ARM odmítne a ARM už zapnuté kopírky je no-op bez prodloužení TTL', async () => {
     const runtime = controller();
     let releasePrepare!: () => void;
@@ -907,6 +971,54 @@ describe('local copier execution agent', () => {
       ok: true,
       status: { controller: { armed: true, shadowMode: false } },
     });
+    expect(runtime.disarm).not.toHaveBeenCalled();
+    expect(runtime.reconcile).not.toHaveBeenCalled();
+    expect(runtime.arm).not.toHaveBeenCalled();
+  });
+
+  it('ARM(B) na ARMED(A) odmítne místo falešného úspěchu', async () => {
+    const runtime = controller({ armed: true, shadowMode: false, sessionArmedAt: 1 });
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    const other: CopyGroupConfig = {
+      id: 'group-b', name: 'B', enabled: true, leaderAccountId: 33,
+      followers: [{ accountId: 44, mode: 'on-submit', multiplier: 1 }], localOnly: true,
+    };
+
+    await expect(running.execute({ type: 'arm-live', group: other }))
+      .rejects.toThrow('kopírka je zapnutá s jinou konfigurací — nejdřív vypni');
+    expect(runtime.activateGroup).not.toHaveBeenCalled();
+    expect(runtime.disarm).not.toHaveBeenCalled();
+    expect(runtime.status().armed).toBe(true);
+  });
+
+  it('ARM s dosud neaplikovanou exclusion na ARMED kopírce odmítne', async () => {
+    const runtime = controller({ armed: true, shadowMode: false, sessionArmedAt: 1 });
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+
+    await expect(running.execute({
+      type: 'arm-live',
+      group: group(),
+      accountEligibilityExclusions: [{ accountId: 22, state: 'dll-locked', reason: 'DLL hit dnes' }],
+    })).rejects.toThrow('kopírka je zapnutá s jinou konfigurací — nejdřív vypni');
+    expect(runtime.applyAccountEligibilityExclusions).not.toHaveBeenCalled();
+    expect(runtime.status().armed).toBe(true);
+  });
+
+  it('shodný ARM je no-op, když požadované exclusions už platí nebo jsou přísnější', async () => {
+    const runtime = controller({
+      armed: true,
+      shadowMode: false,
+      sessionArmedAt: 1,
+      accountEligibility: [{ accountId: 22, state: 'breached', reason: 'Trvalý breach', at: 1 }],
+    });
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+
+    await expect(running.execute({
+      type: 'arm-live',
+      group: group(),
+      accountEligibilityExclusions: [{ accountId: 22, state: 'dll-locked', reason: 'DLL hit dnes' }],
+    })).resolves.toMatchObject({ ok: true });
+    expect(runtime.applyAccountEligibilityExclusions).not.toHaveBeenCalled();
     expect(runtime.disarm).not.toHaveBeenCalled();
     expect(runtime.reconcile).not.toHaveBeenCalled();
     expect(runtime.arm).not.toHaveBeenCalled();

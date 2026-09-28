@@ -474,50 +474,14 @@ describe('okamžité trade eventy', () => {
 });
 
 describe('recoverable relay lane isolation', () => {
-  it('vykoná DISARM prioritní linkou, i když běžná linka čeká na dlouhý command', async () => {
-    const { randomUUID } = await import('node:crypto');
+  it('s durable delivery storem nikdy nevolá odstraněný poll-priority transport', async () => {
     let saved: import('../server/copierRelayDeliveryStore').RelayDelivery | null = null;
-    let regularDelivered = false;
-    let priorityDelivered = false;
-    let releaseRegular!: () => void;
-    let markRegularStarted!: () => void;
-    const regularBlocked = new Promise<void>(resolve => { releaseRegular = resolve; });
-    const regularStarted = new Promise<void>(resolve => { markRegularStarted = resolve; });
-    const executed: string[] = [];
-    const agent = {
-      status,
-      execute: vi.fn(async (command: { type: string }) => {
-        executed.push(command.type);
-        if (command.type === 'copy-command') {
-          markRegularStarted();
-          await regularBlocked;
-        }
-        return { ok: true as const, status: status() };
-      }),
-    } as unknown as LocalCopierExecutionAgent;
+    const agent = { status, execute: vi.fn(async () => ({ ok: true })) } as unknown as LocalCopierExecutionAgent;
+    const actions: string[] = [];
     const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body ?? '{}')) as { action?: string };
-      if (request.action === 'poll-v2') {
-        if (regularDelivered) return Response.json({ protocol: 2, command: null });
-        regularDelivered = true;
-        return Response.json({ protocol: 2, command: {
-          id: randomUUID(),
-          command: { type: 'copy-command', command: {
-            type: 'flatten-group', groupId: 'g', operationId: 'priority-long-123',
-          } },
-          status: 'claimed',
-          createdAt: new Date(Date.now() + 1).toISOString(),
-          expiresAt: new Date(Date.now() + 30_000).toISOString(),
-        } });
-      }
-      if (request.action === 'poll-priority') {
-        await regularStarted;
-        if (priorityDelivered) return Response.json({ command: null });
-        priorityDelivered = true;
-        return Response.json({ command: {
-          id: randomUUID(), command: { type: 'disarm' }, expiresAt: new Date(Date.now() + 300_000).toISOString(),
-        } });
-      }
+      actions.push(request.action ?? '');
+      if (request.action === 'poll-v2') return Response.json({ protocol: 2, command: null });
       if (request.action === 'background-v2') return Response.json({ protocol: 2 });
       return Response.json({ protocol: 2, accepted: true });
     });
@@ -527,14 +491,13 @@ describe('recoverable relay lane isolation', () => {
       authorizationHeader: async () => 'offline',
       deliveryStore: { read: async () => saved, write: async row => { saved = row; } },
       fetchImpl: fetchImpl as typeof fetch,
-      pollMs: 60_000,
+      pollMs: 500,
     });
     try {
-      await vi.waitFor(() => expect(executed).toContain('copy-command'));
-      await vi.waitFor(() => expect(executed).toContain('disarm'));
-      expect(executed.indexOf('disarm')).toBeGreaterThan(executed.indexOf('copy-command'));
+      await vi.waitFor(() => expect(actions).toContain('poll-v2'));
+      await new Promise(resolve => setTimeout(resolve, 800));
+      expect(actions).not.toContain('poll-priority');
     } finally {
-      releaseRegular();
       await relay.close();
     }
   });

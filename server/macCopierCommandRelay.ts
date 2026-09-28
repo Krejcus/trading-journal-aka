@@ -1,8 +1,7 @@
-import { recoverableCopierDelivery } from './recoverableCopierDelivery.js';
+import { COPIER_COMMAND_ACK_RESERVE_MS, recoverableCopierDelivery } from './recoverableCopierDelivery.js';
 import type { RelayDeliveryStore } from './copierRelayDeliveryStore.js';
 import type { LocalCopierExecutionAgent } from './localCopierExecutionAgent.js';
 import {
-  isLocalCopierEmergencyCommand,
   localCopierAgentErrorDetails,
   type LocalCopierAgentCommand,
 } from '../lib/localCopierAgentProtocol.js';
@@ -73,9 +72,7 @@ export function startMacCopierCommandRelay(options: {
   const pollMs = Math.max(500, options.pollMs ?? 750);
   let stopped = false;
   let running: Promise<void> | null = null;
-  let priorityRunning: Promise<void> | null = null;
   let wake: (() => void) | null = null;
-  let priorityWake: (() => void) | null = null;
   /** Kick přišel mimo spánek (během poll requestu) — nesmí se ztratit. */
   let kickPending = false;
   /** Nové trade eventy čekají na okamžité odeslání serverem. */
@@ -102,18 +99,6 @@ export function startMacCopierCommandRelay(options: {
       resolve();
     };
   });
-  const prioritySleep = (ms: number) => new Promise<void>(resolve => {
-    const timer = setTimeout(() => {
-      priorityWake = null;
-      resolve();
-    }, ms);
-    priorityWake = () => {
-      clearTimeout(timer);
-      priorityWake = null;
-      resolve();
-    };
-  });
-
   const clearKickSubscription = async () => {
     const unsubscribe = unsubscribeKick;
     unsubscribeKick = null;
@@ -132,7 +117,6 @@ export function startMacCopierCommandRelay(options: {
       () => {
         kickPending = true;
         wake?.();
-        priorityWake?.();
       },
     );
   };
@@ -246,48 +230,6 @@ export function startMacCopierCommandRelay(options: {
     isActive: () => !stopped,
     onComplete: id => { completedNotifications.add(id); publishBackground(); },
   }) : null;
-  let pendingPriorityAck: { id: string; result?: unknown; error?: string } | null = null;
-  const priorityLoop = async () => {
-    let failures = 0;
-    while (!stopped) {
-      try {
-        if (pendingPriorityAck) {
-          await complete(pendingPriorityAck.id, pendingPriorityAck.result, pendingPriorityAck.error);
-          pendingPriorityAck = null;
-        }
-        const response = await request({ action: 'poll-priority' }, RELAY_STATUS_TIMEOUT_MS, loopAbort.signal);
-        const remote = response.command as { id?: string; command?: LocalCopierAgentCommand; expiresAt?: string } | null;
-        if (remote?.id && remote.command) {
-          if (!isLocalCopierEmergencyCommand(remote.command)) {
-            pendingPriorityAck = { id: remote.id, error: 'priority-lane-command-not-emergency' };
-          } else {
-            let result: unknown;
-            let executionError: string | undefined;
-            try {
-              result = await options.agent.execute(remote.command);
-            } catch (error) {
-              executionError = error instanceof Error ? error.message : String(error);
-              const details = localCopierAgentErrorDetails(error);
-              if (details) result = { errorDetails: details };
-            }
-            pendingPriorityAck = { id: remote.id, result, error: executionError };
-          }
-          // ACK se může transportně opakovat, provedení příkazu nikdy.
-          await complete(pendingPriorityAck.id, pendingPriorityAck.result, pendingPriorityAck.error);
-          pendingPriorityAck = null;
-        }
-        failures = 0;
-      } catch (error) {
-        if (stopped && loopAbort.signal.aborted) break;
-        failures += 1;
-        if (failures === 1 || failures % 20 === 0) {
-          console.error(`${new Date().toISOString()} COPIER PRIORITY RELAY (${failures}. selhání v řadě) ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-      if (stopped) break;
-      await prioritySleep(failures ? Math.min(5_000, pollMs * failures) : pollMs);
-    }
-  };
   const loop = async () => {
     let failures = 0;
     while (!stopped) {
@@ -322,16 +264,19 @@ export function startMacCopierCommandRelay(options: {
             });
             if (requests.length > 0) options.onSnapshotRequests(requests);
           }
-          const remote = response.command as { id?: string; command?: LocalCopierAgentCommand; expiresAt?: string } | null;
+          const remote = response.command as {
+            id?: string;
+            command?: LocalCopierAgentCommand;
+            createdAt?: string;
+            expiresAt?: string;
+          } | null;
           if (remote?.id && remote.command) {
-            // Telemetrie: enqueue čas = expiresAt - 30 s (server TTL). Čekání
-            // ve frontě přímo ukazuje, jestli realtime kick funguje (<300 ms).
+            // createdAt je autoritativní pro telemetrii i workerový brake fence;
+            // z expiresAt už enqueue čas odvodit nelze, protože brzdy mají delší TTL.
             const expiresAt = typeof remote.expiresAt === 'string' ? Date.parse(remote.expiresAt) : NaN;
-            if (Number.isFinite(expiresAt)) {
-              const queuedAt = expiresAt - 30_000;
-              if (Number.isFinite(queuedAt)) {
-                console.log(`${new Date().toISOString()} RELAY CMD ${remote.command.type} čekal ve frontě ${Math.max(0, Date.now() - queuedAt)} ms`);
-              }
+            const createdAt = typeof remote.createdAt === 'string' ? Date.parse(remote.createdAt) : NaN;
+            if (Number.isFinite(createdAt)) {
+              console.log(`${new Date().toISOString()} RELAY CMD ${remote.command.type} čekal ve frontě ${Math.max(0, Date.now() - createdAt)} ms`);
             }
             if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
               await complete(remote.id, undefined, 'command-expired-before-execution');
@@ -339,8 +284,14 @@ export function startMacCopierCommandRelay(options: {
               let result: unknown;
               let executionError: string | undefined;
               try {
-                result = remote.command.type === 'arm-live'
-                  ? await options.agent.execute(remote.command, { deadlineAt: expiresAt })
+                const executionContext = {
+                  ...(Number.isFinite(createdAt) ? { createdAt } : {}),
+                  ...(remote.command.type === 'arm-live'
+                    ? { deadlineAt: expiresAt - COPIER_COMMAND_ACK_RESERVE_MS }
+                    : {}),
+                };
+                result = Object.keys(executionContext).length > 0
+                  ? await options.agent.execute(remote.command, executionContext)
                   : await options.agent.execute(remote.command);
               } catch (error) {
                 executionError = error instanceof Error ? error.message : String(error);
@@ -366,10 +317,6 @@ export function startMacCopierCommandRelay(options: {
     }
   };
   running = loop();
-  // Recoverable v2 je současný instalovaný worker transport. Legacy v1
-  // zůstává kompatibilní bez druhého polleru; jeho příkazy stejně procházejí
-  // nezávislým emergency dispatchcem agenta.
-  priorityRunning = options.deliveryStore ? priorityLoop() : null;
   publishBackground();
   publishStatus();
   return {
@@ -378,7 +325,6 @@ export function startMacCopierCommandRelay(options: {
       publishBackground();
       kickPending = true;
       wake?.();
-      priorityWake?.();
     },
     async uploadSnapshot(snapshot, uploadOptions) {
       let lastError: unknown;
@@ -425,10 +371,9 @@ export function startMacCopierCommandRelay(options: {
       stopped = true;
       loopAbort.abort(new Error('copier-relay-close'));
       wake?.();
-      priorityWake?.();
       if (backgroundTimer) clearTimeout(backgroundTimer);
       if (statusTimer) clearTimeout(statusTimer);
-      await Promise.all([running, priorityRunning, background, statusHeartbeat]);
+      await Promise.all([running, background, statusHeartbeat]);
       await clearKickSubscription();
     },
   };

@@ -31,16 +31,19 @@ describe('recoverable copier delivery', () => {
     vi.mocked(f.options.agent.execute).mockImplementation(async () => { expect(f.saved?.phase).toBe('executing'); return { ok: true } as never; });
     await step(); expect(f.options.agent.execute).toHaveBeenCalledTimes(1); expect(f.saved).toBeNull();
   });
-  it('předá ARM serverový expiresAt jako nepřekročitelný execution deadline', async () => {
+  it('předá ARM deadline s desetisekundovou rezervou na durable ACK a serverový createdAt', async () => {
     const f = fixture();
     f.remote.command = { type: 'arm-live' };
     await recoverableCopierDelivery(f.options)();
     expect(f.options.agent.execute).toHaveBeenCalledWith(
       { type: 'arm-live' },
-      { deadlineAt: Date.parse(f.remote.expiresAt) },
+      {
+        createdAt: Date.parse(f.remote.createdAt),
+        deadlineAt: Date.parse(f.remote.expiresAt) - 10_000,
+      },
     );
   });
-  it('recovers the SAME delivery after a claim response is lost', async () => {
+  it('po ztracené odpovědi obnoví stejný DISARM delivery_id a brzdu provede právě jednou', async () => {
     const f = fixture(); const step = recoverableCopierDelivery(f.options);
     f.options.request.mockRejectedValueOnce(new Error('response-lost'));
     await expect(step()).rejects.toThrow('response-lost');
@@ -49,7 +52,7 @@ describe('recoverable copier delivery', () => {
     expect(f.options.request.mock.calls[1][0].deliveryId).toBe(deliveryId);
     expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
   });
-  it('retries only the completion when the ACK did not reach the database', async () => {
+  it('po ztraceném DISARM ACK opakuje jen complete-v2 a relay se nezasekne', async () => {
     const f = fixture(); const step = recoverableCopierDelivery(f.options);
     f.options.request.mockResolvedValueOnce({ protocol: 2, command: f.remote }).mockRejectedValueOnce(new Error('ACK-lost'));
     await expect(step()).rejects.toThrow('ACK-lost');
