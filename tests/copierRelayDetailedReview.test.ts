@@ -13,6 +13,27 @@ const agentWith = (execute = vi.fn()) => ({
 }) as unknown as LocalCopierExecutionAgent;
 
 describe('copier relay boundary review', () => {
+  it('ukončí polling i když abort přijde těsně mezi GET odpovědí a čekáním', async () => {
+    const controller = new AbortController();
+    vi.stubGlobal('window', { setTimeout, clearTimeout });
+    vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return Response.json({ id: 'abort-race', expiresAt: new Date(Date.now() + 5_000).toISOString() });
+      }
+      controller.abort(new Error('test-abort'));
+      return Response.json({ status: 'claimed' });
+    }));
+    try {
+      await expect(executeTradovateCopierRelayCommand(
+        'mock-connection',
+        { type: 'disarm' },
+        { signal: controller.signal },
+      )).rejects.toThrow('test-abort');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('reports an unconfirmed claimed command as unknown, without re-enqueueing it', async () => {
     vi.useFakeTimers();
     const requests: string[] = [];

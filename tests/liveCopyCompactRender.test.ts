@@ -96,6 +96,7 @@ describe('LIVE kompaktní karty (telefon)', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
       snapshot,
       orders: [workingLeaderLimit],
+      runtimeAvailable: true,
     }));
 
     expect(markup).toContain('data-testid="compact-group-list"');
@@ -254,6 +255,7 @@ describe('LIVE mobilní ovládání skupiny', () => {
       orders: [],
       executionGroupId: 'group-main',
       commandAdapter: adapter,
+      runtimeAvailable: true,
       followerParticipation: [participation(followerId, { configuredEnabled: false, effectiveEnabled: false })],
     }));
     expect(markup).toContain('aria-label="Zapnout kopírování na účet Follower DEMO"');
@@ -271,6 +273,7 @@ describe('LIVE mobilní ovládání skupiny', () => {
       orders: [],
       executionGroupId: 'group-main',
       commandAdapter: adapter,
+      runtimeAvailable: true,
       followerParticipation: [participation(followerId, { canToggle: false, blockers: ['Leader má otevřenou pozici'] })],
     }));
     const switchTag = markup.match(/<button[^>]*role="switch"[^>]*Follower DEMO[^>]*>/)?.[0] ?? '';

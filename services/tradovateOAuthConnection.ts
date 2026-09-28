@@ -271,6 +271,7 @@ export function loadTradovateCopierRelayStatus(connectionId: string): Promise<{
   status: LocalCopierAgentStatus;
   lastSeenAt: string;
   connected: boolean;
+  ageMs?: number;
 } | null> {
   return authenticatedRequest(`/api/tradovate/oauth/copier-relay?connectionId=${encodeURIComponent(connectionId)}`);
 }
@@ -278,6 +279,7 @@ export function loadTradovateCopierRelayStatus(connectionId: string): Promise<{
 export async function executeTradovateCopierRelayCommand(
   connectionId: string,
   command: LocalCopierAgentCommand,
+  options: { signal?: AbortSignal } = {},
 ): Promise<LocalCopierAgentCommandResult> {
   const idempotencyKey = crypto.randomUUID();
   const queued = await authenticatedRequest<{
@@ -288,6 +290,7 @@ export async function executeTradovateCopierRelayCommand(
   }>('/api/tradovate/oauth/copier-relay', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ connectionId, command, idempotencyKey }),
+    signal: options.signal,
   });
   if (queued.resolution) {
     if (queued.resolution.status === 'succeeded' && queued.resolution.result) return queued.resolution.result as LocalCopierAgentCommandResult;
@@ -314,6 +317,7 @@ export async function executeTradovateCopierRelayCommand(
   while (Date.now() < deadline) {
     const result = await authenticatedRequest<{ status: string; result?: unknown; error?: string }>(
       `/api/tradovate/oauth/copier-relay?connectionId=${encodeURIComponent(connectionId)}&commandId=${encodeURIComponent(queued.id)}`,
+      { signal: options.signal },
     );
     if (result.status === 'succeeded' && result.result) return result.result as LocalCopierAgentCommandResult;
     if (result.status === 'rejected' || result.status === 'expired') {
@@ -324,7 +328,22 @@ export async function executeTradovateCopierRelayCommand(
       );
       throw new LocalCopierAgentCommandError(result.error || `Copier příkaz skončil stavem ${result.status}`, details);
     }
-    await new Promise(resolve => window.setTimeout(resolve, 400));
+    await new Promise<void>((resolve, reject) => {
+      let timer: number | undefined;
+      const onAbort = () => {
+        if (timer != null) window.clearTimeout(timer);
+        reject(options.signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+      };
+      if (options.signal?.aborted) {
+        onAbort();
+        return;
+      }
+      timer = window.setTimeout(() => {
+        options.signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, 400);
+      options.signal?.addEventListener('abort', onAbort, { once: true });
+    });
   }
   throw new Error('Mac worker příkaz včas nepotvrdil. Výsledek není ověřený; zkontroluj stav kopírky a účtů. Příkaz nebude automaticky opakován.');
 }

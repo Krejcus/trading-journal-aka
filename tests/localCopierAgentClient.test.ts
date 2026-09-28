@@ -29,6 +29,24 @@ describe('local status deadline', () => {
     expect(fetcher.mock.calls[1][1].signal).toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('předá explicitní safety timeout do execution POSTu', async () => {
+    const controller = new AbortController();
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ nonce: 'test-only' })))
+      .mockImplementationOnce((_url, init: RequestInit) => new Promise((_resolve, reject) => {
+        if (init.signal?.aborted) {
+          reject(new Error('write aborted'));
+          return;
+        }
+        init.signal?.addEventListener('abort', () => reject(new Error('write aborted')), { once: true });
+      }));
+    vi.stubGlobal('fetch', fetcher);
+    const result = createLocalCopierAgentClient().execute({ type: 'disarm' }, { signal: controller.signal });
+    controller.abort();
+    await expect(result).rejects.toThrow('write aborted');
+    expect(fetcher.mock.calls[1][1].signal).toBe(controller.signal);
+  });
 });
 
 describe('canUseDirectLocalCopierAgent', () => {

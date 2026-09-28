@@ -395,8 +395,8 @@ interface Props {
   copierStatusPending?: boolean;
   /** Bootstrap má čerstvé pozice a balance, ale denní ledger se ještě doplňuje. */
   dailyPnlPending?: boolean;
-  /** Přesné current-day broker P&L; null znamená, že broker hodnotu nepotvrdil. */
-  brokerDailyPnlByAccount?: Readonly<Record<string, number | null>>;
+  /** Current-day broker P&L včetně čerstvosti a času potvrzení. */
+  brokerDailyPnlByAccount?: Readonly<Record<string, LiveBalanceDisplay>>;
   /** Durable leader-only copier ledger; never an aggregate of account P&L. */
   dailyStats?: CopierControllerStatus['dailyStats'];
   copierKillSwitch?: boolean;
@@ -715,6 +715,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   onGroupsChange,
 }) => {
   const [initialViewSettings] = useState(loadViewSettings);
+  const copierStateVerifying = copierStatusPending || !runtimeAvailable;
   const disarmNotice = useCopierDisarmNotice(lastDisarm, runtimeStatus?.lastError);
   const pauseActive = useCopierPauseActive(copierPauseDeadline(cooldownUntil, pause?.until));
   const cooldownPanel = <CopierCooldownPanel
@@ -1433,6 +1434,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     onError?: (message: string) => void,
     waiveUnverifiableFollowerOwnership = false,
   ): Promise<boolean> => {
+    if (copierStateVerifying) {
+      const message = 'Stav se ověřuje. Uložení skupiny je dostupné až po potvrzení čerstvého stavu workeru.';
+      if (onError) onError(message); else setToast({ tone: 'error', text: message });
+      return false;
+    }
     if (groupSaveInFlight.current) return false;
     const pending = pendingCloudGroupSaves.current.get(group.id);
     const confirmedGroup = pending?.owner === userId ? pending.group : null;
@@ -1692,7 +1698,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         type: 'flatten-group', groupId: group.id, operationId: manualOperationId(),
       },
     }),
-    onMultiplier: async (accountId: number, multiplier: number): Promise<boolean> => {
+    onMultiplier: copierStateVerifying ? undefined : async (accountId: number, multiplier: number): Promise<boolean> => {
       const follower = group.followers.find(item => item.accountId === accountId);
       const next = normalizeMultiplier(multiplier);
       if (!follower || follower.multiplier === next) return false;
@@ -1702,6 +1708,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       );
     },
     onApplyTemplate: (template: CopyGroupTemplate) => {
+      if (copierStateVerifying) {
+        setToast({ tone: 'error', text: 'Stav se ověřuje. Šablonu lze uložit až po potvrzení čerstvého stavu workeru.' });
+        return;
+      }
       const currentSafety = group.safety ?? DEFAULT_COPY_GROUP_SAFETY;
       const currentFollowers = new Map(group.followers.map(follower => [follower.accountId, follower]));
       const updated: CopyGroupConfig = {
@@ -1887,7 +1897,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                     ? islandModel.tone
                     : null}
                   observingOnly={selected && copierObservingOnly}
-                  statusPending={copierStatusPending && (executionGroupId == null || selected)}
+                  statusPending={copierStateVerifying}
                   runtimeReady={!!onSwitchAndArm || (!!commandAdapter && selected)}
                   transition={transitionGroupId === group.id ? copierTransition : null}
                   connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || pauseActive}
@@ -1899,7 +1909,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   eligibilityByAccount={eligibilityByAccount}
                   tradeCutsByAccount={tradeCutsByAccount}
                   participationByAccount={selected ? participationByAccount : EMPTY_PARTICIPATION}
-                  onFollowerEnabled={selected && commandAdapter
+                  onFollowerEnabled={!copierStateVerifying && selected && commandAdapter
                     ? (accountId, enabled, onRejected) => toggleFollower(group.id, accountId, enabled, onRejected)
                     : undefined}
                   orders={orders}
@@ -1975,7 +1985,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         observingOnly={selected && copierObservingOnly}
                         // Dokud stav neznáme, neznáme ani execution skupinu —
                         // neznámý stav proto platí pro všechny řádky.
-                        statusPending={copierStatusPending && (executionGroupId == null || selected)}
+                        statusPending={copierStateVerifying}
                         runtimeReady={!!onSwitchAndArm || (!!commandAdapter && selected)}
                         transition={transitionGroupId === group.id ? copierTransition : null}
                         connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || pauseActive}
@@ -1988,6 +1998,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         templates={templates}
                         tightenOnly={tightenOnly}
                         onApplyTemplate={template => {
+                          if (copierStateVerifying) {
+                            setToast({ tone: 'error', text: 'Stav se ověřuje. Šablonu lze uložit až po potvrzení čerstvého stavu workeru.' });
+                            return;
+                          }
                           const currentSafety = group.safety ?? DEFAULT_COPY_GROUP_SAFETY;
                           const currentFollowers = new Map(group.followers.map(follower => [follower.accountId, follower]));
                           const updated: CopyGroupConfig = {
@@ -2052,14 +2066,14 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               eligibilityByAccount={eligibilityByAccount}
                               tradeCutsByAccount={tradeCutsByAccount}
                               participationByAccount={group.id === executionGroupId ? participationByAccount : EMPTY_PARTICIPATION}
-                              onFollowerEnabled={group.id === executionGroupId && commandAdapter
+                              onFollowerEnabled={!copierStateVerifying && group.id === executionGroupId && commandAdapter
                                 ? (accountId, enabled) => toggleFollower(group.id, accountId, enabled)
                                 : undefined}
                               onVerifyEligibility={verifyAccountEligibility}
                               verifyingAccountId={verifyingAccountId}
                               busyCommand={busyCommand}
                               onRefreshOrders={onRefreshOrders}
-                              onMultiplier={(accountId, multiplier) => {
+                              onMultiplier={copierStateVerifying ? undefined : (accountId, multiplier) => {
                                 const follower = group.followers.find(item => item.accountId === accountId);
                                 const next = normalizeMultiplier(multiplier);
                                 if (!follower || follower.multiplier === next) return;
@@ -2129,7 +2143,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           open={apiPanelOpen}
           onToggle={() => setApiPanelOpen(v => !v)}
           dataActive={anyLive}
-          apiReady={!!commandAdapter}
+          apiReady={runtimeAvailable}
           onHelp={() => setHelpOpen(true)}
           telemetry={apiTelemetry}
           connectionUsage={connectionUsage}
@@ -2200,7 +2214,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             detail: renderAccountMessage(pendingAction.detail, pendingAction.accountIds ?? knownAccountIds),
           }}
           busy={busyCommand != null}
-          apiReady={!!commandAdapter}
+          apiReady={runtimeAvailable}
           flattenPreview={compact && pendingAction.flattenGroupId ? flattenPreviewFor(pendingAction.flattenGroupId) : null}
           onClose={() => setPendingAction(null)}
           onConfirm={() => {
@@ -2281,7 +2295,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           }}
         />
       )}
-      {helpOpen && <CopyTradingHelpDialog onClose={() => setHelpOpen(false)} apiReady={!!commandAdapter} />}
+      {helpOpen && <CopyTradingHelpDialog onClose={() => setHelpOpen(false)} apiReady={runtimeAvailable} />}
       {tableSettingsOpen && (
         <TableSettingsDialog
           hiddenColumns={hiddenColumns}

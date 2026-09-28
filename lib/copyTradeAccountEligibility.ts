@@ -2,6 +2,7 @@ import type { TradovateAccountProfile } from './tradovateAccountProfileTypes';
 import type { CopierAccountEligibility } from '../services/copierEngine';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
 import { tradovateDisplayTradeDate } from './tradovateDisplayDay';
+import { liveDailyPnlDisplay } from './liveBalanceDisplay';
 
 const eligibilitySeverity: Record<CopierAccountEligibility['state'], number> = {
   active: 0,
@@ -49,7 +50,11 @@ export function inferredCopyTradeAccountEligibility(
 
     const dailyLossLimit = profilesByAccount.get(account.id)?.dailyLossLimit
       ?? account.dailyLossLimit;
-    const currentDailyPnl = account.realizedPnl + account.unrealizedPnl;
+    const displayedRealized = liveDailyPnlDisplay(account, now).value;
+    const realizedCandidates = [account.realizedPnl, displayedRealized]
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+    const conservativeRealized = realizedCandidates.length > 0 ? Math.min(...realizedCandidates) : Number.NaN;
+    const currentDailyPnl = conservativeRealized + account.unrealizedPnl;
     if (
       dailyLossLimit != null
       && Number.isFinite(dailyLossLimit)

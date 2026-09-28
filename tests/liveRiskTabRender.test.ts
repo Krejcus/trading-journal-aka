@@ -3,9 +3,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import {
   accountRiskLimitDraftsFromGroup,
+  displayedAccountDailyPnl,
   LiveAccountRiskTable,
   submitAccountRiskLimits,
   validateAccountRiskLimits,
+  verifiedAccountDailyPnl,
 } from '../components/LiveAccountRiskTable';
 import LiveRiskTab from '../components/LiveRiskTab';
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
@@ -18,6 +20,11 @@ import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from '../services/liv
 import type { LiveAccount, LiveSnapshot } from '../services/tradecopiaLiveService';
 
 const NOW = Date.UTC(2026, 8, 5, 14, 0);
+const pnlDisplay = (value: number, stale = false) => ({
+  value,
+  stale,
+  confirmedAt: new Date(NOW - (stale ? 9 * 60_000 : 1_000)).toISOString(),
+});
 
 const account = (id: number, name: string, realizedPnl: number): LiveAccount => ({
   id,
@@ -140,12 +147,33 @@ const render = (patch: Partial<Parameters<typeof LiveAccountRiskTable>[0]> = {})
     accountProfiles: profiles,
     accountRisk,
     followerCuts,
-    brokerDailyPnlByAccount: { 1: -10, 2: -20, 3: -80, 4: -120, 5: 0, 6: 0 },
+    brokerDailyPnlByAccount: {
+      1: pnlDisplay(-10), 2: pnlDisplay(-20), 3: pnlDisplay(-80),
+      4: pnlDisplay(-120), 5: pnlDisplay(0), 6: pnlDisplay(0),
+    },
     now: NOW,
     onSave: () => undefined,
     ...patch,
   }),
 );
+
+describe('Risk broker P&L freshness', () => {
+  it('zachová stale metadata pro display, ale stale hodnotu nepoužije jako ověřenou', () => {
+    const brokerPnl = pnlDisplay(-300, true);
+    expect(displayedAccountDailyPnl({
+      workerRiskFeedAvailable: false,
+      brokerPnl,
+      brokerPending: false,
+      now: NOW,
+    })).toEqual({ value: -300, stale: true, confirmedAt: Date.parse(brokerPnl.confirmedAt) });
+    expect(verifiedAccountDailyPnl({
+      workerRiskFeedAvailable: false,
+      brokerPnl,
+      brokerPending: false,
+      now: NOW,
+    })).toBeNull();
+  });
+});
 
 const snapshot: LiveSnapshot = {
   run: null,
@@ -394,7 +422,7 @@ describe('LIVE Risk — Účty a propky', () => {
     const markup = render({
       accountRisk: [],
       followerCuts: [],
-      brokerDailyPnlByAccount: { 2: -400 },
+      brokerDailyPnlByAccount: { 2: pnlDisplay(-400) },
     });
 
     expect(row(markup, 2)).toContain('data-account-risk-state="near"');
@@ -409,7 +437,7 @@ describe('LIVE Risk — Účty a propky', () => {
       accountRisk: accountRisk.map(snapshot => snapshot.accountId === 2
         ? { ...snapshot, verifiedAt: NOW - 1_000, realizedPnlUsd: -450 }
         : snapshot),
-      brokerDailyPnlByAccount: { 2: -20 },
+      brokerDailyPnlByAccount: { 2: pnlDisplay(-20) },
       followerCuts: [],
     });
 
@@ -423,14 +451,14 @@ describe('LIVE Risk — Účty a propky', () => {
       accountRisk: accountRisk.map(snapshot => snapshot.accountId === 2
         ? { ...snapshot, verifiedAt: NOW - 90_000, realizedPnlUsd: -450 }
         : snapshot),
-      brokerDailyPnlByAccount: { 2: -450 },
+      brokerDailyPnlByAccount: { 2: pnlDisplay(-450) },
       followerCuts: [],
     });
     const missing = render({
       accountRisk: accountRisk.map(snapshot => snapshot.accountId === 2
         ? { ...snapshot, verifiedAt: NOW - 1_000, realizedPnlUsd: null }
         : snapshot),
-      brokerDailyPnlByAccount: { 2: -450 },
+      brokerDailyPnlByAccount: { 2: pnlDisplay(-450) },
       followerCuts: [],
     });
 
@@ -553,7 +581,10 @@ describe('LIVE Risk záložka', () => {
           unpricedSymbols: [],
         },
       }),
-      brokerDailyPnlByAccount: { 1: -10, 2: -20, 3: -80, 4: -120, 5: 0, 6: 0 },
+      brokerDailyPnlByAccount: {
+        1: pnlDisplay(-10), 2: pnlDisplay(-20), 3: pnlDisplay(-80),
+        4: pnlDisplay(-120), 5: pnlDisplay(0), 6: pnlDisplay(0),
+      },
       now: NOW,
       onSaveGroup: () => undefined,
     }));

@@ -66,12 +66,15 @@ export interface LiveAccount {
   dailyLossLimit?: number | null;
   /** Timestamp of the profile or broker limit actually used by the display. */
   dailyLossLimitUpdatedAt?: string | null;
+  /** Profilový čas je čas konfigurace, ne čas posledního broker čtení. */
+  dailyLossLimitSource?: 'profile' | 'broker';
   balance: number;
   equity: number;
   realizedPnl: number;
   dailyPnlAvailable?: boolean;
   dailyPnlTradeDate?: string;
   dailyPnlUpdatedAt?: string | null;
+  dailyPnlUnavailableReason?: string;
   weekRealizedPnl: number;
   unrealizedPnl: number;
   unrealizedPnlSource?: 'broker' | 'estimated' | 'stale';

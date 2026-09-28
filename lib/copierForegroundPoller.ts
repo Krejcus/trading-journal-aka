@@ -1,4 +1,5 @@
 export const COPIER_STATUS_FRESH_MS = 15_000;
+export const COPIER_STATUS_FUTURE_TOLERANCE_MS = 5_000;
 
 export function isCopierStatusFresh(
   observedAt: number | null,
@@ -8,7 +9,7 @@ export function isCopierStatusFresh(
 ): boolean {
   if (!readHealthy || observedAt == null || !Number.isFinite(observedAt)) return false;
   const age = now - observedAt;
-  return age >= 0 && age < maxAgeMs;
+  return age >= -COPIER_STATUS_FUTURE_TOLERANCE_MS && age < maxAgeMs;
 }
 
 /** One read at a time. Returning to LIVE refreshes immediately, without accepting a pre-sleep response. */

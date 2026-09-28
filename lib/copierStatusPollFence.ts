@@ -43,6 +43,32 @@ export class CopierStatusPollFence {
   }
 }
 
+/**
+ * Řadí ACK podle okamžiku, kdy UI příkaz přijalo. Worker zatím nemá vlastní
+ * gateSeq, takže pozdější odpověď staršího ARM nesmí přepsat už přijatý
+ * DISARM/kill ACK. Úplná distribuovaná garance zůstává na worker gateSeq.
+ */
+export class CopierStatusAckFence {
+  private nextSequence = 0;
+  private lastAcceptedSequence = 0;
+
+  beginRequest(): number {
+    this.nextSequence += 1;
+    return this.nextSequence;
+  }
+
+  accept(sequence: number): boolean {
+    if (!Number.isSafeInteger(sequence) || sequence < this.lastAcceptedSequence) return false;
+    this.lastAcceptedSequence = sequence;
+    return true;
+  }
+
+  reset(): void {
+    this.nextSequence = 0;
+    this.lastAcceptedSequence = 0;
+  }
+}
+
 export interface CopierStatusOrder {
   startedAt: string;
   controller: { revision: number };

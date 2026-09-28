@@ -115,6 +115,27 @@ describe('confirmed daily display', () => {
     });
   });
 
+  it('nezapočítá datum uložení profilového limitu do stáří DLL', () => {
+    const a = account({
+      realizedPnl: -1_000,
+      dailyPnlAvailable: true,
+      dailyPnlTradeDate: '2026-09-10',
+      dailyPnlUpdatedAt: new Date(now - 1_000).toISOString(),
+      dailyLossLimit: 1_000,
+      dailyLossLimitUpdatedAt: new Date(now - 10 * 86_400_000).toISOString(),
+      dailyLossLimitSource: 'profile',
+      unrealizedPnl: 0,
+      unrealizedPnlSource: 'broker',
+      unrealizedPnlUpdatedAt: new Date(now - 800).toISOString(),
+    } as Partial<LiveAccount>);
+    expect(liveDailyLossRemainingDisplay(a, now)).toMatchObject({
+      value: 0,
+      state: 'ready',
+      stale: false,
+      confirmedAt: a.dailyPnlUpdatedAt,
+    });
+  });
+
   it('stale denní P&L vykreslí šedě a s věkem místo barevného aktuálního čísla', () => {
     const display = { value: -125, stale: true, confirmedAt: new Date(now - 60_000).toISOString() };
     const clock = vi.spyOn(Date, 'now').mockReturnValue(now);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
+import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 
 describe('CopierStatusPollFence', () => {
   it('odmítne status poll zahájený před nebo během potvrzované konfigurace', () => {
@@ -59,5 +59,15 @@ describe('copier status monotonic ordering', () => {
     fence.endMutation();
     const after = fence.beginPoll();
     expect(fence.canAcceptPoll(after)).toBe(true);
+  });
+});
+
+describe('copier ACK ordering', () => {
+  it('nepřijme pozdě doručený ARM ACK po novějším kill ACK', () => {
+    const fence = new CopierStatusAckFence();
+    const armRequest = fence.beginRequest();
+    const killRequest = fence.beginRequest();
+    expect(fence.accept(killRequest)).toBe(true);
+    expect(fence.accept(armRequest)).toBe(false);
   });
 });

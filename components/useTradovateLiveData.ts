@@ -72,6 +72,7 @@ const EMPTY_CONNECTION_HEALTH: TradovateConnectionHealthMap = {};
 const EMPTY_CONNECTION_DATA: Record<string, TradovatePreflightResult> = {};
 const EMPTY_PROFILES: TradovateAccountProfile[] = [];
 const EMPTY_HISTORY_SNAPSHOTS: Record<string, TradovateHistorySnapshot> = {};
+const EMPTY_IN_FLIGHT_CONNECTIONS: ReadonlySet<string> = new Set();
 
 const mergeCoverage = (values: TradovateSourceCoverage[]): TradovateSourceCoverage => {
   const rank = { unavailable: 0, denied: 1, empty: 2, partial: 3, available: 4 } as const;
@@ -135,7 +136,9 @@ export interface TradovateConnectionEnrichmentState {
 }
 
 export const tradovateClientBackoffMs = (retryAfterMs: number | null | undefined): number =>
-  Math.min(RATE_LIMIT_MAX_MS, Math.max(1_000, retryAfterMs ?? RATE_LIMIT_FALLBACK_MS));
+  retryAfterMs == null
+    ? Math.min(RATE_LIMIT_MAX_MS, Math.max(1_000, RATE_LIMIT_FALLBACK_MS))
+    : Math.max(1_000, retryAfterMs);
 
 export const tradovateFullRefreshBackoffMs = (failureCount: number): number =>
   Math.min(FULL_REFRESH_RETRY_MAX_MS, FULL_REFRESH_RETRY_BASE_MS * 2 ** Math.max(0, failureCount - 1));
@@ -144,9 +147,12 @@ export const tradovateForegroundRefreshIds = (
   connectionIds: readonly string[],
   states: Readonly<Record<string, TradovateConnectionEnrichmentState>>,
   now = Date.now(),
+  inFlight: ReadonlySet<string> = EMPTY_IN_FLIGHT_CONNECTIONS,
 ): string[] => connectionIds.filter(id => {
+  if (inFlight.has(id)) return false;
   const state = states[id];
-  return !state || state.pending || state.lastFullSuccessAt == null
+  if (state?.retryAt != null && now < state.retryAt) return false;
+  return !state || state.pending || state.retryAt != null || state.lastFullSuccessAt == null
     || now - state.lastFullSuccessAt >= FULL_REFRESH_FOREGROUND_MAX_AGE_MS;
 });
 
@@ -214,6 +220,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   const livePnlMarksRef = useRef<Record<string, TradovateContractMarkMap>>({});
   const livePnlLastFullTickAtRef = useRef(0);
   const rateLimitUntilByConnectionRef = useRef<Record<string, number>>({});
+  const fullRefreshInFlightRef = useRef(new Map<string, symbol>());
   const journalLinkAttemptsRef = useRef(new Set<string>());
   const previousUserIdRef = useRef(userId);
   const activeUserIdRef = useRef(userId);
@@ -224,6 +231,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     connectionEpochRef.current += 1;
     statusRef.current = status;
     connectionDataRef.current = connectionData;
+    fullRefreshInFlightRef.current.clear();
   }
   activeUserIdRef.current = userId;
   const intentPrefetchRef = useRef<ReturnType<typeof createTradovateIntentPrefetch> | null>(null);
@@ -232,9 +240,18 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       status: loadTradovateOAuthStatus,
       bootstrap: connectionId => {
         const until = rateLimitUntilByConnectionRef.current[connectionId] ?? 0;
-        return Date.now() < until
-          ? Promise.reject(new TradovateRequestError('Tradovate rate limit stále platí.', 429, until - Date.now()))
-          : runTradovateReadOnlyPreflight(connectionId, 'bootstrap');
+        if (Date.now() < until) {
+          return Promise.reject(new TradovateRequestError('Tradovate rate limit stále platí.', 429, until - Date.now()));
+        }
+        return runTradovateReadOnlyPreflight(connectionId, 'bootstrap').catch(reason => {
+          if (reason instanceof TradovateRequestError && reason.status === 429) {
+            rateLimitUntilByConnectionRef.current[connectionId] = Math.max(
+              rateLimitUntilByConnectionRef.current[connectionId] ?? 0,
+              Date.now() + tradovateClientBackoffMs(reason.retryAfterMs),
+            );
+          }
+          throw reason;
+        });
       },
       profiles: loadTradovateAccountProfiles,
     });
@@ -417,6 +434,16 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     const isCurrent = () => activeUserIdRef.current === requestedUserId && identityEpochRef.current.epoch === requestedEpoch && connectionEpochRef.current === requestedConnectionEpoch;
     if (!requestedUserId) return false;
     connectionIds = connectionIds.filter(id => statusRef.current?.connections.some(connection => connection.id === id && connection.connected));
+    const fullClaims = new Map<string, symbol>();
+    if (detail === 'full') {
+      connectionIds = connectionIds.filter(id => !fullRefreshInFlightRef.current.has(id));
+      for (const id of connectionIds) {
+        const claim = Symbol(id);
+        fullRefreshInFlightRef.current.set(id, claim);
+        fullClaims.set(id, claim);
+      }
+      if (connectionIds.length === 0) return false;
+    }
     const startedAt = Date.now();
     const recordRateLimit = (connectionId: string, reason: unknown) => {
       if (isCurrent() && reason instanceof TradovateRequestError && reason.status === 429) {
@@ -428,7 +455,12 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     };
     const markPending = (ids: readonly string[]) => updateEnrichment(current => {
       const next = { ...current };
-      for (const id of ids) next[id] = { ...(next[id] ?? emptyEnrichment()), pending: true };
+      for (const id of ids) next[id] = {
+        ...(next[id] ?? emptyEnrichment()),
+        pending: true,
+        retryAt: null,
+        error: null,
+      };
       return next;
     });
     const markSuccess = (connectionId: string) => updateEnrichment(current => ({
@@ -444,7 +476,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         ...current,
         [connectionId]: {
           ...previous,
-          pending: true,
+          pending: false,
           retryAt,
           failureCount,
           error: reason instanceof Error ? reason.message : 'Tradovate data se nepodařilo načíst.',
@@ -459,7 +491,12 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         const next = { ...current };
         for (const id of blocked) {
           const previous = next[id] ?? emptyEnrichment();
-          next[id] = { ...previous, pending: true, retryAt: rateLimitUntilByConnectionRef.current[id] ?? previous.retryAt };
+          next[id] = {
+            ...previous,
+            pending: false,
+            retryAt: rateLimitUntilByConnectionRef.current[id] ?? previous.retryAt,
+            error: previous.error ?? 'Tradovate dočasně omezuje načítání dat tohoto připojení.',
+          };
         }
         return next;
       });
@@ -558,12 +595,18 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       }).catch(reason => {
         if (isCurrent()) setError(reason instanceof Error ? reason.message : 'Profily Tradovate účtů se nepodařilo načíst.');
       });
-      const complete = connectionIds.length > 0 && connectionIds.every(id => dataEnrichmentByConnectionRef.current[id]?.pending === false);
+      const complete = connectionIds.length > 0 && connectionIds.every(id => {
+        const state = dataEnrichmentByConnectionRef.current[id];
+        return state?.pending === false && state.error == null && state.lastFullSuccessAt != null;
+      });
       return complete;
     } catch (reason) {
       if (isCurrent()) setError(reason instanceof Error ? reason.message : 'Tradovate data se nepodařilo načíst.');
       return false;
     } finally {
+      for (const [id, claim] of fullClaims) {
+        if (fullRefreshInFlightRef.current.get(id) === claim) fullRefreshInFlightRef.current.delete(id);
+      }
       if (!quiet && isCurrent()) setBusy(null);
     }
   }, [updateEnrichment]);
@@ -596,7 +639,10 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         if (!isCurrent()) return null;
         const activeConnectionIds = nextStatus.connections.filter(connection => connection.connected).map(connection => connection.id);
         const previousIds = (statusRef.current?.connections ?? []).filter(connection => connection.connected).map(connection => connection.id);
-        if (JSON.stringify([...previousIds].sort()) !== JSON.stringify([...activeConnectionIds].sort())) connectionEpochRef.current += 1;
+        if (JSON.stringify([...previousIds].sort()) !== JSON.stringify([...activeConnectionIds].sort())) {
+          connectionEpochRef.current += 1;
+          fullRefreshInFlightRef.current.clear();
+        }
         setStatus(nextStatus);
         statusRef.current = nextStatus;
         // Fresh authorization revokes removed connections even on warm returns
@@ -720,13 +766,17 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     if (!enabled) return;
     const active = new Set(status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? []);
     const due = Object.entries(dataEnrichmentByConnection)
-      .filter(([id, state]) => active.has(id) && state.pending && state.retryAt != null)
+      .filter(([id, state]) => active.has(id)
+        && state.retryAt != null
+        && !fullRefreshInFlightRef.current.has(id))
       .sort((a, b) => a[1].retryAt! - b[1].retryAt!);
     if (due.length === 0) return;
     const delay = Math.max(0, due[0][1].retryAt! - Date.now());
     const timer = window.setTimeout(() => {
       const now = Date.now();
-      const ids = due.filter(([, state]) => state.retryAt! <= now + 50).map(([id]) => id);
+      const ids = due
+        .filter(([id, state]) => state.retryAt! <= now + 50 && !fullRefreshInFlightRef.current.has(id))
+        .map(([id]) => id);
       if (ids.length > 0) void refreshData(ids, true, 'merge', 'full');
     }, delay);
     return () => window.clearTimeout(timer);
@@ -740,7 +790,12 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       const activeIds = statusRef.current?.connections
         .filter(connection => connection.connected)
         .map(connection => connection.id) ?? [];
-      const ids = tradovateForegroundRefreshIds(activeIds, dataEnrichmentByConnectionRef.current, now);
+      const ids = tradovateForegroundRefreshIds(
+        activeIds,
+        dataEnrichmentByConnectionRef.current,
+        now,
+        new Set(fullRefreshInFlightRef.current.keys()),
+      );
       if (ids.length > 0) void refreshData(ids, true, 'merge', 'full');
     };
     const listensDocument = typeof document.addEventListener === 'function';

@@ -97,7 +97,9 @@ export function liveDailyLossRemainingDisplay(
     return {
       value: null, stale: false, confirmedAt: null,
       state: pending ? 'loading' : 'unavailable',
-      reason: pending ? 'Načítá se denní P&L tohoto připojení.' : 'Tradovate nepotvrdil realizované P&L pro aktuální obchodní den.',
+      reason: pending
+        ? 'Načítá se denní P&L tohoto připojení.'
+        : account.dailyPnlUnavailableReason ?? 'Tradovate nepotvrdil realizované P&L pro aktuální obchodní den.',
     };
   }
   if (!Number.isFinite(account.unrealizedPnl)) {
@@ -106,7 +108,7 @@ export function liveDailyLossRemainingDisplay(
   const confirmedAt = oldestConfirmedInput([
     realized.confirmedAt,
     account.unrealizedPnlUpdatedAt,
-    account.dailyLossLimitUpdatedAt,
+    ...(account.dailyLossLimitSource === 'profile' ? [] : [account.dailyLossLimitUpdatedAt]),
   ], now);
   if (!confirmedAt) {
     return {

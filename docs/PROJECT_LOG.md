@@ -208,6 +208,33 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-28 — UI-10d: adversariální hardening ovládání a LIVE dat (Codex)
+
+- Opraveny všechny vysoké a střední nálezy z `docs/reviews/copier-ui-review-20260928.md`
+  a převzaty důkazní scratch scénáře do trvalých testů. Neověřený nebo retained
+  stav už dovolí pouze risk-snižující flatten/DISARM/kill akce; followery,
+  násobky, editor i šablony jsou do ověření blokované a všechny skupiny ukazují
+  `Neověřeno`. Dialogy odvozují API readiness z `runtimeAvailable`.
+- Relay čerstvost používá serverové `ageMs` (včetně tolerance budoucího času),
+  retention se zapisuje jen z přijatého runtime stavu a brzdy volí trasu
+  `poslední ověřená -> aktuální -> local`. Po zhruba 10 s timeoutu UI výslovně
+  hlásí neověřený výsledek. Lokální ACK fence odmítá starší odpověď; úplné
+  distribuované řešení zůstává worker `gateSeq` v balíčku 7.
+- LIVE full refresh je single-flight po connection, pending ruší starý retry,
+  retry timer i sloučený `visibilitychange`/`focus` respektují backoff a běžící
+  request. Explicitní broker `Retry-After` se nezkracuje, prefetch 429 se ukládá
+  a trvalá chyba ukončí loading stav textem chyby.
+- DLL se při full loadingu neztrácí, používá stejný live daily P&L zdroj jako
+  displej a konzervativně horší z dostupných hodnot. `profile.updatedAt` není
+  freshness důkaz limitu; stale P&L se nepovažuje za verified. Neplatný
+  `capturedAt` už neshodí render.
+- Ověření: adversariální/změnový balík 195/195; povinná plná sada
+  `npx vitest run tests/liveCopy tests/copier tests/tradovate tests/live tests/localCopier`
+  1771/1771 (150 souborů). `npx tsc --noEmit` hlásí jen předem povolené chyby
+  v `extension/` (chybějící Chrome typy a `@crxjs/vite-plugin`), žádnou chybu
+  aplikace/testů. `git diff --check` čistý. Bez `npm ci/install`, broker/agent
+  mutací, commitu, push/deploye nebo reinstalace workeru.
+
 ### 2026-09-28 — UI-10c: worker manifest v editoru, lidské blokery a přesný DISARM důvod (Codex)
 
 - Editor skupiny spojuje webový OAuth katalog s čerstvým manifestem z

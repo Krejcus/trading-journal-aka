@@ -2,6 +2,18 @@ export interface CopierRelayStatusEnvelope<T> {
   status: T;
   lastSeenAt: string;
   connected: boolean;
+  /** Stáří spočítané serverem vůči stejným hodinám jako lastSeenAt. */
+  ageMs?: number;
+}
+
+/** Převod serverového stáří na lokální monotónní bod přijetí bez porovnání
+ * hodin klienta a DB. Záporné serverové stáří tolerujeme jako nulu. */
+export function copierRelayObservedAt(
+  remote: Pick<CopierRelayStatusEnvelope<unknown>, 'ageMs' | 'connected'>,
+  receivedAt: number,
+): number {
+  if (Number.isFinite(remote.ageMs)) return receivedAt - Math.max(0, remote.ageMs!);
+  return remote.connected ? receivedAt : Number.NEGATIVE_INFINITY;
 }
 
 export interface CopierRelayStatusCandidate<T> {

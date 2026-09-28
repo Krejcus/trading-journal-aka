@@ -119,6 +119,7 @@ describe('CopierDisarmPanel', () => {
       executionGroupId: runtimeGroup.id,
       lastDisarm: disarm,
       onSwitchAndArm: () => undefined,
+      runtimeAvailable: true,
     };
     const disarmed = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
       ...props,
@@ -149,6 +150,7 @@ describe('CopierDisarmPanel', () => {
       lastDisarm: manual,
       copierArmed: false,
       onSwitchAndArm: () => undefined,
+      runtimeAvailable: true,
     }));
     expect(markup).not.toContain('data-copier-disarm-panel="true"');
     expect(markup).toContain('aria-label="Zapnout kopírovací skupinu"');

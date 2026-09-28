@@ -101,6 +101,18 @@ describe('Tradovate copy-trade bridge', () => {
     });
   });
 
+  it('neshodí LIVE render kvůli neplatnému capturedAt', () => {
+    const invalid = structuredClone(data);
+    invalid.capturedAt = 'not-a-date';
+    expect(() => tradovateBrokerDailyPnlByAccount(invalid)).not.toThrow();
+    expect(() => tradovateCopyTradeSnapshot(invalid, profiles)).not.toThrow();
+    expect(tradovateBrokerDailyPnlByAccount(invalid)).toEqual({ 42: null });
+    expect(tradovateCopyTradeSnapshot(invalid, profiles).accounts[0]).toMatchObject({
+      realizedPnl: 0,
+      dailyPnlAvailable: false,
+    });
+  });
+
   it('maps broker orders without changing their working state', () => {
     expect(tradovateCopyTradeOrders(data)).toEqual([expect.objectContaining({ id: 3, accountId: 42, symbol: 'MNQZ6', working: true, price: 20_000 })]);
   });

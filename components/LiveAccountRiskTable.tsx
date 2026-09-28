@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, Lock, Save, ShieldCheck } from 'lucide-rea
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
 import type { CopierAccountRiskSnapshot, CopierFollowerCut, CopierControllerStatus } from '../services/copierRuntimeController';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
+import type { LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
 import { copierRuntimePresentation } from '../lib/copierRuntimePresentation';
 import { copierAccountEligibilityPresentation } from '../lib/copierAccountEligibilityPresentation';
 import {
@@ -81,7 +82,7 @@ export const verifiedAccountDailyPnl = ({
 }: {
   workerRisk?: CopierAccountRiskSnapshot;
   workerRiskFeedAvailable: boolean;
-  brokerPnl?: number | null;
+  brokerPnl?: LiveBalanceDisplay | null;
   brokerPending: boolean;
   now: number;
 }): number | null => {
@@ -92,8 +93,9 @@ export const verifiedAccountDailyPnl = ({
       ? workerRisk.realizedPnlUsd
       : null;
   }
-  return !brokerPending && typeof brokerPnl === 'number' && Number.isFinite(brokerPnl)
-    ? brokerPnl
+  return !brokerPending && brokerPnl != null && !brokerPnl.stale
+    && typeof brokerPnl.value === 'number' && Number.isFinite(brokerPnl.value)
+    ? brokerPnl.value
     : null;
 };
 
@@ -108,7 +110,7 @@ export const displayedAccountDailyPnl = ({
 }: {
   workerRisk?: CopierAccountRiskSnapshot;
   workerRiskFeedAvailable: boolean;
-  brokerPnl?: number | null;
+  brokerPnl?: LiveBalanceDisplay | null;
   brokerPending: boolean;
   now: number;
 }): { value: number; stale: boolean; confirmedAt: number | null } | null => {
@@ -123,9 +125,13 @@ export const displayedAccountDailyPnl = ({
       ? { value: workerRisk.realizedPnlUsd, stale: !accountRiskSnapshotIsFresh(workerRisk, now), confirmedAt: workerRisk.verifiedAt }
       : null;
   }
-  return !brokerPending && typeof brokerPnl === 'number' && Number.isFinite(brokerPnl)
-    ? { value: brokerPnl, stale: false, confirmedAt: null }
-    : null;
+  if (brokerPending || brokerPnl == null || typeof brokerPnl.value !== 'number' || !Number.isFinite(brokerPnl.value)) return null;
+  const parsedConfirmedAt = Date.parse(brokerPnl.confirmedAt ?? '');
+  return {
+    value: brokerPnl.value,
+    stale: brokerPnl.stale,
+    confirmedAt: Number.isFinite(parsedConfirmedAt) ? parsedConfirmedAt : null,
+  };
 };
 
 const optionalDailyLossCut = (raw: string): { valid: boolean; value?: number } => {
@@ -262,7 +268,7 @@ export interface LiveAccountRiskTableProps {
   accountProfiles?: TradovateAccountProfile[];
   accountRisk?: CopierAccountRiskSnapshot[];
   followerCuts?: CopierFollowerCut[];
-  brokerDailyPnlByAccount?: Readonly<Record<string, number | null>>;
+  brokerDailyPnlByAccount?: Readonly<Record<string, LiveBalanceDisplay>>;
   brokerDailyPnlPending?: boolean;
   sessionArmedAt?: number;
   disabled?: boolean;

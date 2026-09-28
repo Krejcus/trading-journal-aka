@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { newestCopierRelaySnapshot, startCopierRelayStatusPoll } from '../lib/copierRelayStatusPoll';
+import { copierRelayObservedAt, newestCopierRelaySnapshot, startCopierRelayStatusPoll } from '../lib/copierRelayStatusPoll';
 
 const remote = (name: string, connected = true, lastSeenAt = '2026-09-28T18:00:00.000Z') => ({
   status: name,
@@ -8,6 +8,11 @@ const remote = (name: string, connected = true, lastSeenAt = '2026-09-28T18:00:0
 });
 
 describe('copier relay status poll', () => {
+  it('počítá observedAt ze serverového stáří a záporné stáří toleruje jako nulu', () => {
+    expect(copierRelayObservedAt({ connected: true, ageMs: 1_500 }, 10_000)).toBe(8_500);
+    expect(copierRelayObservedAt({ connected: true, ageMs: -200 }, 10_000)).toBe(10_000);
+    expect(copierRelayObservedAt({ connected: true }, 10_000)).toBe(10_000);
+  });
   it('publishes the first connected worker without waiting for the slowest connection', async () => {
     let finishSlow!: (value: ReturnType<typeof remote>) => void;
     const slow = new Promise<ReturnType<typeof remote>>(resolve => { finishSlow = resolve; });

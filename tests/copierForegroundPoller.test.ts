@@ -58,4 +58,7 @@ describe('copier status freshness',()=>{
   expect(isCopierStatusFresh(10_000,11_000,false)).toBe(false);
   expect(isCopierStatusFresh(null,11_000,true)).toBe(false);
  });
+ it('tolerates a small negative age instead of depending on the client wall clock',()=>{
+  expect(isCopierStatusFresh(10_200,10_000,true)).toBe(true);
+ });
 });

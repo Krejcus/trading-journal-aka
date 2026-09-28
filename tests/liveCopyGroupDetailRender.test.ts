@@ -228,6 +228,7 @@ describe('GroupDetail Positions integrace', () => {
       snapshot: { ...snapshot, groups: [snapshot.groups[0], second] },
       executionGroupId: 'group-main',
       runtimeGroup,
+      runtimeAvailable: true,
     }));
 
     expect(markup).toContain('Hlavni');
@@ -254,6 +255,7 @@ describe('GroupDetail Positions integrace', () => {
       snapshot: { ...snapshot, groups: [snapshot.groups[0], second] },
       executionGroupId: 'group-main',
       runtimeGroup,
+      runtimeAvailable: true,
     }));
 
     expect(markup.match(/aria-checked="false"/g)).toHaveLength(2);
@@ -309,6 +311,7 @@ describe('GroupDetail Positions integrace', () => {
       executionGroupId: 'group-second',
       runtimeGroup,
       copierArmed: true,
+      runtimeAvailable: true,
     }));
 
     expect(markup.match(/aria-checked="true"/g)).toHaveLength(1);

@@ -85,6 +85,31 @@ describe('copy trade account eligibility read-model', () => {
     expect(result[0].reason).toContain('DLL 1200.00 USD');
   });
 
+  it('použije stejný worker realized zdroj jako displej a konzervativně horší hodnotu', () => {
+    const now = Date.parse('2026-09-28T15:07:00.000Z');
+    const result = inferredCopyTradeAccountEligibility([
+      account({
+        id: 16,
+        realizedPnl: -200,
+        dailyPnlTradeDate: '2026-09-28',
+        dailyPnlUpdatedAt: new Date(now - 7 * 60_000).toISOString(),
+        dailyLossLimit: 1_200,
+        unrealizedPnl: 0,
+        unrealizedPnlUpdatedAt: new Date(now - 1_000).toISOString(),
+        displayValues: {
+          dailyRealizedPnL: {
+            value: -1_250,
+            requestedAt: new Date(now - 2_000).toISOString(),
+            confirmedAt: new Date(now - 1_500).toISOString(),
+          },
+        },
+      }),
+    ], [], now);
+
+    expect(result).toMatchObject([{ accountId: 16, state: 'dll-locked' }]);
+    expect(result[0].reason).toContain('-1250.00 USD');
+  });
+
   it('nevyrábí DLL lock z předchozího trade date ani ze stale otevřeného P&L po 17:00 CT', () => {
     const now = Date.parse('2026-09-28T23:30:00Z');
     const previousDay = account({

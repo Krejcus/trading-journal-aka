@@ -14,6 +14,7 @@ import { displayedAccountDailyPnl } from './LiveAccountRiskTable';
 import { copierRuntimePresentation } from '../lib/copierRuntimePresentation';
 import { copierAccountEligibilityPresentation } from '../lib/copierAccountEligibilityPresentation';
 import { formatReadAge } from '../lib/liveReadFreshness';
+import type { LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
 
 export interface LiveRiskSummaryCardProps {
   group: CopyGroupConfig | null;
@@ -26,7 +27,7 @@ export interface LiveRiskSummaryCardProps {
   followerCuts?: CopierFollowerCut[];
   accountRisk?: CopierAccountRiskSnapshot[];
   accounts?: LiveAccount[];
-  brokerDailyPnlByAccount?: Readonly<Record<string, number | null>>;
+  brokerDailyPnlByAccount?: Readonly<Record<string, LiveBalanceDisplay>>;
   brokerDailyPnlPending?: boolean;
   now?: number;
   onOpenRisk?: () => void;
