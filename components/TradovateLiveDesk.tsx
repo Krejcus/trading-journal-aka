@@ -102,6 +102,7 @@ import {
   resolveLocalExecutionGroup,
   type LocalCopierAgentStatus,
 } from '../lib/localCopierAgentProtocol';
+import { buildCopierWorkerAccountRoutes } from '../lib/copierWorkerAccountRoutes';
 import { canUseDirectLocalCopierAgent, createLocalCopierAgentClient } from '../services/localCopierAgentClient';
 import { isNativeBuild } from '../utils/runtimeConfig';
 import { snapshotArmOffer } from '../services/copierSnapshotArmOffer';
@@ -414,6 +415,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     () => agentStatus?.devices ?? (agentStatus?.device ? [agentStatus.device] : []),
     [agentStatus],
   );
+  const workerAccountRoutes = useMemo(() => buildCopierWorkerAccountRoutes(
+    agentStatus,
+    runtimeAvailable,
+    live.connectionData,
+  ), [agentStatus, live.connectionData, runtimeAvailable]);
   // Pozice a aktivní příkazy účtů kopírky přednostně z heartbeatu workeru
   // (stream Tradovate, každou sekundu); REST přes Vercel zůstává zálohou.
   // Skutečné čerpání limitu Tradovate na login: server (tato aplikace) +
@@ -1138,6 +1144,7 @@ acceptAgentStatus((await executeAgent({
               }}
               executionGroupId={executionGroup?.id ?? null}
               runtimeGroup={agentStatus?.group ?? null}
+              workerAccountRoutes={workerAccountRoutes}
               onGroupsChange={setCopyGroups}
               onSwitchAndArm={armLiveGroup}
               onArmLive={executionGroup ? async () => armLiveGroup(executionGroup) : undefined}

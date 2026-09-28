@@ -45,7 +45,7 @@ export default function LiveStatusStrip({ status, available, pending, transport,
   hideDisarmNotice?: boolean;
 }) {
   const model = buildLiveStatusStrip({ status, available, pending, transport, snapshotHealth, journalHealth });
-  const recentDisarm = useCopierDisarmNotice(status?.lastDisarm?.at);
+  const recentDisarm = useCopierDisarmNotice(status?.lastDisarm, status?.lastError);
   const notice = hideDisarmNotice || !recentDisarm ? null : model.notice;
   const [repairBusy, setRepairBusy] = useState(false);
   const [repairError, setRepairError] = useState<string | null>(null);

@@ -3,6 +3,7 @@ import {
   classifyCopierDisarmReason,
   copierCopiesOutcomeText,
   createCopierDisarmRecord,
+  resolveCopierDisarmRecord,
   type CopierDisarmCode,
   type CopierDisarmTrigger,
 } from '../lib/copierDisarmReason';
@@ -14,6 +15,9 @@ describe('classifyCopierDisarmReason', () => {
     trigger?: CopierDisarmTrigger;
   }> = [
     { detail: 'Copier fail-closed: follower 62364059 má autoritativně pozici -2 na MNQU6, očekáváno -3 podle leadera -3 × 1', code: 'follower-position-mismatch' },
+    { detail: 'Copier fail-closed: unexplained-position-divergence účty 67409592,67409600', code: 'unexplained-position-divergence' },
+    { detail: 'Follower dosáhl 95 % prop limitu', code: 'prop-limit' },
+    { detail: 'config-change', code: 'config-change' },
     { detail: 'Copier fail-closed: follower 200 má autoritativně pozici 1 na MNQU6, leader 0; příčinu nelze bezpečně přiřadit ke konkrétnímu fillu', code: 'follower-transition-unverified' },
     { detail: 'Copier fail-closed: autoritativní kontrola expozice followera 200 na MNQU6 selhala: timeout', code: 'follower-position-check-failed' },
     { detail: 'Copier fail-closed: leader je autoritativně flat, follower stav se neshoduje (200 open)', code: 'leader-flat-follower-open' },
@@ -61,5 +65,40 @@ describe('classifyCopierDisarmReason', () => {
     expect(copierCopiesOutcomeText('left-open-unprotected')).toContain('bez potvrzené ochrany');
     expect(copierCopiesOutcomeText('flat')).toContain('flat');
     expect(copierCopiesOutcomeText('unknown')).toContain('nepodařilo potvrdit');
+  });
+
+  it('zpřesní starý unknown z detailu nebo lastError, ale nevymyslí výsledek kopií', () => {
+    const unknown = createCopierDisarmRecord({
+      at: 123,
+      trigger: 'fail-closed',
+      detail: 'legacy-unknown',
+      copiesOutcome: 'unknown',
+    });
+    const resolved = resolveCopierDisarmRecord(
+      unknown,
+      'Copier fail-closed: nevysvětlená divergence follower účtů',
+    );
+    expect(resolved).toMatchObject({
+      code: 'unexplained-position-divergence',
+      title: 'Pozice followerů se odchýlily od očekávané kopie.',
+      copiesOutcome: 'unknown',
+    });
+    expect(resolved?.detail).toContain('nevysvětlená divergence');
+  });
+
+  it('připraví lidský text budoucího config-change kódu', () => {
+    const record = createCopierDisarmRecord({
+      at: 456,
+      trigger: 'fail-closed',
+      detail: 'config-change',
+      copiesOutcome: 'flat',
+      code: 'config-change',
+    });
+    expect(record.title).toBe('Kopírka se vypnula kvůli uložení změny skupiny.');
+    expect(resolveCopierDisarmRecord({
+      ...record,
+      title: 'technical placeholder',
+      nextStep: 'technical placeholder',
+    })?.title).toBe('Kopírka se vypnula kvůli uložení změny skupiny.');
   });
 });

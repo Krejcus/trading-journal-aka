@@ -61,3 +61,47 @@ export function formatSnapshotRepairError(
   }
   return reason instanceof Error ? reason.message : String(reason);
 }
+
+const rawMessage = (reason: unknown): string => (
+  reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : ''
+).replace(/\s+/g, ' ').trim();
+
+const accountNamesFromMessage = (
+  message: string,
+  accountName: (accountId: number) => string | null,
+): string[] => [...new Set(
+  (message.match(/\b\d{4,}\b/g) ?? [])
+    .map(value => accountName(Number(value)))
+    .filter((value): value is string => Boolean(value)),
+)];
+
+/**
+ * UI-only překlad známých odmítnutí execution workeru. Audit a původní Error
+ * se nemění; uživatel dostane konkrétní další krok místo interního kódu.
+ */
+export function formatCopierCommandError(
+  reason: unknown,
+  accountName: (accountId: number) => string | null = () => null,
+): string {
+  const message = rawMessage(reason);
+  const names = accountNamesFromMessage(message, accountName);
+  const namedAccounts = names.length > 0 ? names.join(', ') : 'Vybraný účet';
+
+  if (/stav se (?:během .* )?změnil|stav se změnil během (?:kontroly|read-only preflightu)/i.test(message)) {
+    return 'Stav se změnil během kontroly. Počkej pár sekund a změnu zopakuj.';
+  }
+  if (/nevyřešený durable outbox|stuck[- ]outbox/i.test(message)) {
+    return 'Změnu blokuje nevyřešená operace. Otevři Události, ověř její výsledek a vyřeš ji; potom změnu ulož znovu.';
+  }
+  if (/group-config-armed|copier-armed|kopírk\w* (?:je )?(?:zapnut|armed)|\barmed\b.*(?:group|config|změn)/i.test(message)) {
+    return 'Kopírka je zapnutá. Nejdřív ji bezpečně vypni, potom změnu skupiny ulož znovu.';
+  }
+  if (/ne(?:ní|jsou) viditeln(?:ý|é) v žádném připojeném OAuth|není zapojené do běžící kopírky|neaktivní\/read-only účty/i.test(message)) {
+    const multiple = names.length > 1;
+    return `${namedAccounts} ${multiple ? 'nejsou' : 'není'} ve Mac workeru. Přidej ${multiple ? 'jejich' : 'jeho'} OAuth připojení do manifestu workeru a proveď bezpečný reinstall; samotné připojení v Connections nestačí.`;
+  }
+  if (/^[a-z][a-z0-9-]*(?::[a-z0-9-]+)*$/i.test(message)) {
+    return 'Mac worker změnu odmítl. Otevři Události, zkontroluj konkrétní blokaci a změnu zopakuj až po jejím vyřešení.';
+  }
+  return message || 'Akci se nepodařilo dokončit. Ověř stav workeru a zkus ji znovu.';
+}

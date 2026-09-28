@@ -14,6 +14,9 @@ export type CopierCopiesOutcome =
   | 'unknown';
 
 export type CopierDisarmCode =
+  | 'config-change'
+  | 'unexplained-position-divergence'
+  | 'prop-limit'
   | 'follower-position-mismatch'
   | 'follower-transition-unverified'
   | 'follower-position-check-failed'
@@ -53,6 +56,18 @@ export interface CopierDisarmRecord {
 export const COPIER_DISARM_HISTORY_LIMIT = 20;
 
 const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }> = {
+  'config-change': {
+    title: 'Kopírka se vypnula kvůli uložení změny skupiny.',
+    nextStep: 'Zkontroluj uložené účty a pravidla; nový ARM zapni až po ověření skupiny.',
+  },
+  'unexplained-position-divergence': {
+    title: 'Pozice followerů se odchýlily od očekávané kopie.',
+    nextStep: 'Ověř pozice a ochranné příkazy všech dotčených účtů v Tradovate, potom spusť Kontrolu pozic.',
+  },
+  'prop-limit': {
+    title: 'Prop limit zablokoval nebo ukončil kopírování na účtu.',
+    nextStep: 'Ověř stav a limity účtu u prop firmy i v Tradovate; před novým ARM účet vyřaď nebo autoritativně ověř.',
+  },
   'follower-position-mismatch': {
     title: 'Pozice followera nesouhlasí s očekávaným násobkem leadera.',
     nextStep: 'Otevři Tradovate, porovnej pozice a potom spusť Kontrolu pozic.',
@@ -166,6 +181,11 @@ export function classifyCopierDisarmReason(
   if (trigger === 'transport') return 'transport-lost';
 
   const text = detail.replace(/\s+/g, ' ').trim();
+  if (/\bconfig-change\b|uložen(?:í|ím).*změn[ay] skupiny/i.test(text)) return 'config-change';
+  if (/unexplained-position-divergence|nevysvětlen[áou]+ (?:position )?divergenc/i.test(text)) {
+    return 'unexplained-position-divergence';
+  }
+  if (/\bprop[- ]limit\b|prop limitu|drawdown floor|liquidation-only/i.test(text)) return 'prop-limit';
   if (/flat sweep nedokončen.*deadline/i.test(text)) return 'flat-sweep-deadline';
   if (/flat sweep nedokončen/i.test(text)) return 'flat-sweep-failed';
   if (/modify.*(?:nebyl potvrzen|skončil).*filled|objednávka skončila jako filled/i.test(text)) {
@@ -222,4 +242,43 @@ export function createCopierDisarmRecord(input: {
     copiesOutcome: input.copiesOutcome,
     nextStep: copy.nextStep,
   };
+}
+
+/**
+ * Starší worker mohl uložit `unknown`, přestože detail nebo lastError nese
+ * známou příčinu. UI ji smí zpřesnit, ale nesmí měnit výsledek kopií.
+ */
+export function resolveCopierDisarmRecord(
+  record: CopierDisarmRecord | undefined,
+  lastError?: string | null,
+): CopierDisarmRecord | undefined {
+  if (!record) return undefined;
+  // Worker posílá stabilní kód; text vlastní UI, aby i nový `config-change`
+  // dostal přesnou českou hlášku bez závislosti na verzi workeru.
+  if (record.code !== 'unknown') {
+    return createCopierDisarmRecord({
+      at: record.at,
+      trigger: record.trigger,
+      detail: record.detail,
+      copiesOutcome: record.copiesOutcome,
+      code: record.code,
+    });
+  }
+  const detailCode = classifyCopierDisarmReason(record.detail, record.trigger);
+  const fallbackDetail = lastError?.trim() || '';
+  const fallbackCode = fallbackDetail
+    ? classifyCopierDisarmReason(fallbackDetail, record.trigger)
+    : 'unknown';
+  const detail = detailCode !== 'unknown' ? record.detail
+    : fallbackCode !== 'unknown' ? fallbackDetail
+      : record.detail;
+  const code = detailCode !== 'unknown' ? detailCode : fallbackCode;
+  if (code === 'unknown') return record;
+  return createCopierDisarmRecord({
+    at: record.at,
+    trigger: record.trigger,
+    detail,
+    copiesOutcome: record.copiesOutcome,
+    code,
+  });
 }

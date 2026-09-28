@@ -975,7 +975,7 @@ export const LiveDayRulesCard = ({
 
               <Rule
                 title="Cooldown po obchodu"
-                detail="Po uzavření obchodu leadera blokuje nový vstup na N minut — chvíle na nadechnutí, ne zámek."
+                detail="Po potvrzeném zploštění celé skupiny kopírku vypne a do konce odpočtu zablokuje nový ARM. Důvod zůstane viditelný; kopírka se sama znovu nezapne."
                 enabled={draft.cooldownEnabled}
                 triggered={false}
                 tightenOnly={tightenOnly}

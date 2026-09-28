@@ -208,6 +208,33 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-28 — UI-10c: worker manifest v editoru, lidské blokery a přesný DISARM důvod (Codex)
+
+- Editor skupiny spojuje webový OAuth katalog s čerstvým manifestem z
+  `status.devices` (legacy fallback `device` / `connectionUsage`) a drží tři
+  stavy: routovatelný, chybí v Mac workeru, nelze ověřit. Účet z jednoznačně
+  chybějícího připojení nejde nově vybrat ani uložit a dostane odznak s krokem
+  manifest + bezpečný reinstall; nečerstvý/neúplný status pouze varuje a výběr
+  neblokuje. `accountDisplay` se záměrně nepoužívá k rozhodování.
+- Odmítnutí změn už pro známé případy neukazuje interní kódy/ID: race radí
+  několik sekund počkat, ARMED radí bezpečně vypnout, outbox vede do Událostí
+  a chybějící OAuth jmenuje všechny známé účty a vysvětluje, že samotné
+  Connections bez manifestu nestačí. Neznámý broker reject drží originál jen
+  v detailu, ne v hlavním textu.
+- DISARM notice/panel/status strip zpřesní starý `unknown` z `lastDisarm.detail`
+  a poté `lastError`, aniž by domýšlel `copiesOutcome`. Přibyly UI kódy pro
+  nevysvětlenou divergenci, prop limit a budoucí `config-change`; text posledního
+  je přesně „Kopírka se vypnula kvůli uložení změny skupiny.“
+- Mobilní `Flatten All` je na samostatném řádku mimo primární ARM zónu;
+  potvrzovací sheet i příkaz zůstaly beze změny. Cooldown texty výslovně říkají:
+  po potvrzeném flat kopírku vypne, blokuje ARM a nikdy ji sám nezapne; jiná
+  risk pauza pouze blokuje nové vstupy.
+- Ověření: 10 cílených souborů, 106/106 testů. `npx tsc --noEmit` nemá chybu
+  mimo povolené staré `extension/` chyby (chybějící Chrome typy a
+  `@crxjs/vite-plugin`); `git diff --check` čistý. Neběželo `npm ci/install`,
+  plná sada ani build. Bez Tradovate/agent mutation, reinstallu, commitu,
+  pushnutí a nasazení; worker zdroj se neměnil.
+
 ### 2026-09-28 — UI-10b: DLL a denní P&L bez globálního pendingu (Codex)
 
 - Full enrichment se sleduje pro každé OAuth připojení zvlášť. Selhání už

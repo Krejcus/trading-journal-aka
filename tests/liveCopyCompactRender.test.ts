@@ -123,6 +123,10 @@ describe('LIVE kompaktní karty (telefon)', () => {
     // název skupiny, Flatten All i vypínač najednou.
     expect(markup).toContain('Firmy');
     expect(markup).toContain('>Flatten All<');
+    const primaryControls = markup.match(/<header data-mobile-primary-power="true"[\s\S]*?<\/header>/)?.[0];
+    expect(primaryControls).toBeDefined();
+    expect(primaryControls).not.toContain('Flatten All');
+    expect(markup).toContain('data-mobile-flatten-zone="true"');
 
     // Dvě sekce místo jedné tabulky. Rozlišuje je popisek pravého sloupce:
     // účty v trhu mají „Otevřený“, zbytek „Dnes“.

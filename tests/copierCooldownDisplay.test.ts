@@ -32,6 +32,8 @@ describe('cooldown display', () => {
     const model = buildCopierCooldownDisplay({ ...input, cooldownUntil: start + 30 * 60_000, cooldownMinutes: 30 }, start);
     expect(model.seconds).toBe(1800);
     expect(model.title).toBe('Cooldown po obchodu');
+    expect(model.subtitle).toContain('Cooldown blokuje ARM');
+    expect(model.subtitle).toContain('sám ji znovu nezapne');
     expect(buildCopierCooldownDisplay({ ...input, pause: null }, start).seconds).toBe(900);
   });
   it('expires exactly at deadline without claiming automatic ARM', () => {
@@ -79,11 +81,20 @@ describe('cooldown display', () => {
     const markup = renderToStaticMarkup(React.createElement(CopierCooldownPanel, input));
     const deadline = new Date(input.pause!.until);
     expect(markup).toContain('Konec pauzy v');
+    expect(markup).toContain('Nové vstupy pozastaveny');
+    expect(markup).not.toContain('ARM dočasně zablokován');
     expect(markup).toContain(`dateTime="${deadline.toISOString()}"`);
     expect(markup).toContain(deadline.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }));
     expect(markup).not.toContain('copier-cooldown-details');
     const unknown = renderToStaticMarkup(React.createElement(CopierCooldownPanel, { ...input, known: false }));
     expect(unknown).not.toContain('Konec pauzy v');
+  });
+  it('označí blokaci ARM jen po dobu aktivního cooldownu', () => {
+    vi.useFakeTimers(); vi.setSystemTime(start + 10 * 60_000);
+    const markup = renderToStaticMarkup(React.createElement(CopierCooldownPanel, input));
+    expect(markup).toContain('ARM dočasně zablokován');
+    expect(markup).toContain('Cooldown blokuje ARM');
+    expect(markup).toContain('sám ji znovu nezapne');
   });
   it.each([false, true])('shows pause in group even when cooldown ended; compact=%s', compact => {
     viewport.compact = compact;

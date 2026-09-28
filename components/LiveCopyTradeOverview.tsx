@@ -35,6 +35,14 @@ import {
   type CopyTradeAccountRole,
 } from '../lib/copyTradeAccountLabels';
 import { translateCopierRejectReason } from '../lib/copierRejectReason';
+import { formatCopierCommandError } from '../lib/copierBlockerMessages';
+import {
+  copierWorkerAccountRoute,
+  copierWorkerAccountSelectionBlocked,
+  copierWorkerMissingAccountIds,
+  type CopierWorkerAccountRoute,
+  type CopierWorkerAccountRoutes,
+} from '../lib/copierWorkerAccountRoutes';
 import {
   dismissRejection,
   getDismissedRejections,
@@ -425,6 +433,8 @@ interface Props {
   /** `marketPrices` z workeru (TradingView) — jen pro zobrazení vzdálenosti k limitu. */
   marketPrices?: readonly unknown[];
   runtimeGroup?: CopyGroupConfig | null;
+  /** Čerstvé spojení OAuth adresáře s manifestem Mac workeru; jen UI precheck. */
+  workerAccountRoutes?: CopierWorkerAccountRoutes;
   onGroupsChange?: (groups: CopyGroupConfig[]) => void;
 }
 
@@ -700,11 +710,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   onVerifyEligibility,
   executionGroupId = null,
   runtimeGroup = null,
+  workerAccountRoutes,
   marketPrices = [],
   onGroupsChange,
 }) => {
   const [initialViewSettings] = useState(loadViewSettings);
-  const showDisarmNotice = useCopierDisarmNotice(lastDisarm?.at);
+  const disarmNotice = useCopierDisarmNotice(lastDisarm, runtimeStatus?.lastError);
   const pauseActive = useCopierPauseActive(copierPauseDeadline(cooldownUntil, pause?.until));
   const cooldownPanel = <CopierCooldownPanel
     key={executionGroupId}
@@ -952,6 +963,15 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     profilesById,
     sourceGroupsById,
   }), [accountsById, profilesById, sourceGroupsById]);
+  const accountName = useCallback((accountId: number): string | null => {
+    const name = copyTradeAccountName({
+      accountId,
+      accountsById,
+      profilesById,
+      sourceGroupsById,
+    });
+    return name === `Účet ${accountId}` ? null : name;
+  }, [accountsById, profilesById, sourceGroupsById]);
   const knownAccountIds = useMemo(() => [...new Set([
     ...groups.flatMap(group => [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]),
     runtimeGroup?.leaderAccountId,
@@ -1391,7 +1411,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       });
       return true;
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : 'Akci se nepodařilo dokončit.';
+      const message = formatCopierCommandError(reason, accountName);
       if (onError) onError(message);
       else {
         setToast({
@@ -1898,8 +1918,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   templates={templates}
                   tightenOnly={tightenOnly}
                   cooldownPanel={selected ? cooldownPanel : null}
-                  disarmPanel={selected && !armed && showDisarmNotice && lastDisarm && lastDisarm.trigger !== 'manual'
-                    ? <CopierDisarmPanel lastDisarm={lastDisarm} />
+                  disarmPanel={selected && !armed && disarmNotice && disarmNotice.trigger !== 'manual'
+                    ? <CopierDisarmPanel lastDisarm={disarmNotice} />
                     : null}
                   {...compactGroupActions(group)}
                 />
@@ -2011,10 +2031,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         redaction={redaction}
                         groupColumns={visibleGroupColumns}
                       />
-                      {selected && !armed && showDisarmNotice && lastDisarm && lastDisarm.trigger !== 'manual' ? (
+                      {selected && !armed && disarmNotice && disarmNotice.trigger !== 'manual' ? (
                         <tr>
                           <td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">
-                            <CopierDisarmPanel lastDisarm={lastDisarm} />
+                            <CopierDisarmPanel lastDisarm={disarmNotice} />
                           </td>
                         </tr>
                       ) : null}
@@ -2123,6 +2143,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           tightenOnly={tightenOnly}
           armedWarning={copierArmed && editorGroup.id === executionGroupId}
           accounts={snapshot.accounts}
+          workerAccountRoutes={workerAccountRoutes}
           accountLabel={(accountId, role) => accountLabel(accountId, editorGroup.id, role)}
           onClose={() => setEditorGroup(null)}
           onSave={(group, onError) => saveGroup(group, message => onError(copyGroupLibraryErrorMessage(new Error(message))))}
@@ -3318,21 +3339,13 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
         ? `live-island-card live-island-card-${islandTone}`
         : armed ? 'border-emerald-500/40' : 'border-[var(--border-subtle)]'}`}
     >
-      {/* Název, Flatten a vypínač na jednom řádku. Název je jediný pružný
-          prvek, takže se zkrátí on a nikdy nevytlačí ovládání ze řádku.
+      {/* Název a vypínač jsou v bezpečné primární zóně. Destruktivní Flatten
+          je schválně až na samostatném řádku, aby vedle ARM nešlo ťuknout.
           Kolečka firem se přesunula do pruhu s čísly — čtou se při zakládání
           skupiny, ne každou minutu, a tady by ujídala šířku názvu. */}
-      <header className="flex items-center gap-2 px-3 py-2.5">
+      <header data-mobile-primary-power="true" className="flex items-center gap-3 px-3 py-2.5">
         <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
         <h4 className="min-w-0 flex-1 truncate text-[15px] font-black" style={{ color }}>{group.name}</h4>
-        <button
-          type="button"
-          onClick={onFlatten}
-          title="Uzavřít všechny pozice ve skupině"
-          className="h-8 shrink-0 rounded-lg border border-rose-500/30 bg-rose-500/[0.06] px-3 text-[11px] font-black text-rose-500"
-        >
-          Flatten All
-        </button>
         <CopierConnectionSwitch
           connected={armed}
           statusPending={statusPending}
@@ -3343,6 +3356,16 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
           powerDisplayKey={powerDisplayKey}
         />
       </header>
+      <div data-mobile-flatten-zone="true" className="flex justify-end border-t border-[var(--border-subtle)] px-3 py-2">
+        <button
+          type="button"
+          onClick={onFlatten}
+          title="Uzavřít všechny pozice ve skupině"
+          className="h-9 min-w-[132px] shrink-0 rounded-lg border border-rose-500/30 bg-rose-500/[0.06] px-4 text-[11px] font-black text-rose-500"
+        >
+          Flatten All
+        </button>
+      </div>
 
       {/* Varovné štítky mají vlastní řádek, ale jen když nějaké jsou; v klidu
           zůstane hlavička jednořádková. */}
@@ -5062,13 +5085,26 @@ type CompactEditorView =
   | { kind: 'add' }
   | { kind: 'follower'; accountId: number };
 
-export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = false, accounts, accountLabel, saving, libraryState, libraryError, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
+export const CopierWorkerRouteBadge = ({ route }: { route: CopierWorkerAccountRoute }) => (
+  route === 'missing-worker' ? (
+    <span data-worker-route="missing-worker" className="inline-flex rounded-full border border-rose-500/25 bg-rose-500/[0.08] px-1.5 py-0.5 text-[9px] font-black text-rose-600">
+      Není ve Mac workeru
+    </span>
+  ) : route === 'unknown' ? (
+    <span data-worker-route="unknown" className="inline-flex rounded-full border border-amber-500/25 bg-amber-500/[0.07] px-1.5 py-0.5 text-[9px] font-black text-amber-600">
+      Worker nelze ověřit
+    </span>
+  ) : null
+);
+
+export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = false, accounts, workerAccountRoutes, accountLabel, saving, libraryState, libraryError, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
   /** Upravovaná skupina právě kopíruje: uložení ji vypne (worker odzbrojí před změnou). */
   armedWarning?: boolean;
   group: CopyGroupConfig;
   isNew: boolean;
   tightenOnly: boolean;
   accounts: LiveAccount[];
+  workerAccountRoutes?: CopierWorkerAccountRoutes;
   accountLabel: (accountId: number, role?: CopyTradeAccountRole) => string;
   saving: boolean;
   libraryState: 'loading' | 'ready' | 'needs-import' | 'error';
@@ -5119,8 +5155,10 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = fa
    * vrátí se přesně tam, odkud byl vzat.
    */
   const displacedFollowers = useRef(new Map<number, CopyFollowerConfig>());
+  const routeFor = (accountId: number) => copierWorkerAccountRoute(workerAccountRoutes, accountId);
   const chooseLeader = (accountId: number) => setDraft(current => {
     if (current.leaderAccountId === accountId) return current;
+    if (routeFor(accountId) === 'missing-worker') return current;
     const promoted = current.followers.find(follower => follower.accountId === accountId);
     if (promoted) displacedFollowers.current.set(accountId, promoted);
     const returning = current.leaderAccountId != null
@@ -5137,7 +5175,8 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = fa
   const unavailableFollowers = draft.followers.filter(follower => unavailable.followerAccountIds.includes(follower.accountId));
   const followerCandidates = accounts.filter(account => account.id !== draft.leaderAccountId);
   const followerAdditionBlocked = (accountId: number) => (
-    tightenOnly && baselineHasFollowerCut && !baselineFollowers.has(accountId)
+    (tightenOnly && baselineHasFollowerCut && !baselineFollowers.has(accountId))
+    || routeFor(accountId) === 'missing-worker'
   );
   const selectableFollowerCandidates = followerCandidates.filter(account => !followerAdditionBlocked(account.id));
   const selectedCount = followerCandidates.filter(account => followerById.has(account.id)).length;
@@ -5178,6 +5217,17 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = fa
 
   const submit = () => {
     if (saving) return;
+    const missingWorkerIds = copierWorkerMissingAccountIds(
+      workerAccountRoutes,
+      [draft.leaderAccountId, ...draft.followers.map(follower => follower.accountId)],
+    );
+    if (missingWorkerIds.length > 0) {
+      const names = [...new Set(missingWorkerIds.map(accountId => (
+        accounts.find(account => account.id === accountId)?.name ?? accountLabel(accountId)
+      )))];
+      setErrors([`${names.join(', ')} ${names.length === 1 ? 'není' : 'nejsou'} ve Mac workeru. Přidej příslušné OAuth připojení do manifestu workeru a proveď bezpečný reinstall; potom změnu ulož znovu.`]);
+      return;
+    }
     const validation = validateCopyGroup(draft, accounts.map(account => account.id));
     if (!validation.valid) {
       setErrors(copyGroupValidationMessages(validation, accountId => accountLabel(accountId)));
@@ -5195,6 +5245,19 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = fa
   }));
   const enabledSafetyCount = SAFETY_OPTIONS.filter(([key]) => key === 'disableReplicationOnBreach' || safety[key]).length;
   const sectionLabel = 'text-[9.5px] font-black uppercase tracking-[.1em] text-[var(--text-muted)]';
+  const hasUnknownWorkerRoutes = !workerAccountRoutes?.known
+    || accounts.some(account => routeFor(account.id) === 'unknown');
+
+  const workerRouteNoticeBlock = (
+    <>
+      {hasUnknownWorkerRoutes ? (
+        <div role="status" className="mb-2.5 flex gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] p-3 text-amber-700">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+          <span className="text-[11px] font-bold leading-relaxed">Stav připojení Mac workeru se teď nedá úplně ověřit. Výběr účtů neblokujeme; při uložení má worker poslední slovo.</span>
+        </div>
+      ) : null}
+    </>
+  );
 
   // Bloky sdílené desktopovým dialogem i mobilním listem — stejná logika,
   // jen jiné rozložení kolem.
@@ -5234,7 +5297,10 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = fa
                     className="h-9 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-45"
                   >
                     <option value="">Vyber náhradu…</option>
-                    {replacementCandidates.map(account => <option key={account.id} value={account.id}>{account.name} · {account.firm}</option>)}
+                    {replacementCandidates.map(account => {
+                      const missingWorker = routeFor(account.id) === 'missing-worker';
+                      return <option key={account.id} value={account.id} disabled={missingWorker}>{account.name} · {account.firm}{missingWorker ? ' · není ve Mac workeru' : ''}</option>;
+                    })}
                   </select>
                   <button type="button" onClick={() => setDraft(current => ({ ...current, followers: current.followers.filter(item => item.accountId !== follower.accountId) }))} className="h-9 rounded-md border border-rose-500/25 px-3 text-xs font-bold text-rose-500 hover:bg-rose-500/10">Odebrat</button>
                 </div>
@@ -5363,6 +5429,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = fa
 
           <div key={view.kind === 'follower' ? `follower-${view.accountId}` : view.kind} data-dir={mobileViewDir} className="compact-editor-view min-h-0 flex-1 overflow-y-auto px-4 py-3">
             {view.kind === 'main' ? (<>
+              {workerRouteNoticeBlock}
               <div className={sectionLabel}>Název a barva</div>
               <div className="relative mt-1.5 flex items-center">
                 <button
@@ -5462,11 +5529,15 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = fa
               <ul className="divide-y divide-[var(--border-subtle)] overflow-hidden rounded-xl border border-[var(--border-subtle)]">
                 {accounts.map(account => {
                   const active = draft.leaderAccountId === account.id;
-                  const blocked = tightenOnly && baselineHasFollowerCut && !active;
+                  const route = routeFor(account.id);
+                  const blocked = (tightenOnly && baselineHasFollowerCut && !active)
+                    || copierWorkerAccountSelectionBlocked(route, active);
                   return (
                     <li key={account.id}>
                       <button
                         type="button" disabled={blocked} aria-pressed={active}
+                        data-worker-route={route}
+                        title={route === 'missing-worker' ? 'Připojení je potřeba přidat do manifestu Mac workeru a worker bezpečně přeinstalovat.' : undefined}
                         onClick={() => { chooseLeader(account.id); goto({ kind: 'main' }); }}
                         className={`${rowButton} disabled:opacity-45 ${active ? 'bg-amber-500/[0.1]' : ''}`}
                       >
@@ -5476,7 +5547,8 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = fa
                         </span>
                         <span className="min-w-0 flex-1">
                           <b className="block truncate text-[13px] text-[var(--text-primary)]">{account.name}</b>
-                          <span className="block truncate text-[11px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}{blocked ? ' · dnes jen zpřísnit' : ''}</span>
+                          <span className="block truncate text-[11px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}{blocked && route !== 'missing-worker' ? ' · dnes jen zpřísnit' : ''}</span>
+                          <CopierWorkerRouteBadge route={route} />
                         </span>
                         {active ? <Check size={16} className="shrink-0 text-amber-500" /> : null}
                       </button>
@@ -5490,16 +5562,20 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = fa
                 {followerCandidates.map(account => {
                   const selected = followerById.has(account.id);
                   const blocked = !selected && followerAdditionBlocked(account.id);
+                  const route = routeFor(account.id);
                   return (
                     <li key={account.id}>
-                      <button type="button" disabled={blocked} aria-pressed={selected} onClick={() => toggleFollower(account.id)} className={`${rowButton} disabled:opacity-45`}>
+                      <button type="button" disabled={blocked} aria-pressed={selected} data-worker-route={route}
+                        title={route === 'missing-worker' ? 'Připojení je potřeba přidat do manifestu Mac workeru a worker bezpečně přeinstalovat.' : undefined}
+                        onClick={() => toggleFollower(account.id)} className={`${rowButton} disabled:opacity-45`}>
                         <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border-2 ${selected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-[var(--border-subtle)]'}`}>
                           {selected ? <Check size={14} strokeWidth={3} /> : null}
                         </span>
                         <FirmMark firm={account.firm} size="h-8 w-8" />
                         <span className="min-w-0 flex-1">
                           <b className="block truncate text-[13px] text-[var(--text-primary)]">{account.name}</b>
-                          <span className="block truncate text-[11px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}{blocked ? ' · dnes jen zpřísnit' : ''}</span>
+                          <span className="block truncate text-[11px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}{blocked && route !== 'missing-worker' ? ' · dnes jen zpřísnit' : ''}</span>
+                          <CopierWorkerRouteBadge route={route} />
                         </span>
                       </button>
                     </li>
@@ -5629,11 +5705,16 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = fa
             <div className="mt-2 space-y-1">
               {accounts.map(account => {
                 const active = draft.leaderAccountId === account.id;
-                const blocked = tightenOnly && baselineHasFollowerCut && !active;
+                const route = routeFor(account.id);
+                const blocked = (tightenOnly && baselineHasFollowerCut && !active)
+                  || copierWorkerAccountSelectionBlocked(route, active);
                 return (
                   <button
                     key={account.id} type="button" disabled={blocked} aria-pressed={active}
-                    title={blocked ? 'dnes jen zpřísnit' : undefined}
+                    data-worker-route={route}
+                    title={route === 'missing-worker'
+                      ? 'Připojení je potřeba přidat do manifestu Mac workeru a worker bezpečně přeinstalovat.'
+                      : blocked ? 'dnes jen zpřísnit' : undefined}
                     onClick={() => chooseLeader(account.id)}
                     className={`flex w-full items-center gap-2 rounded-lg border p-2 text-left disabled:cursor-not-allowed disabled:opacity-45 ${
                       active ? 'border-amber-500/55 bg-amber-500/[0.12]' : 'border-transparent hover:bg-[var(--bg-card)]'
@@ -5653,6 +5734,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = fa
                     <span className="min-w-0">
                       <b className="block truncate text-[11px] font-bold text-[var(--text-primary)]">{account.name}</b>
                       <span className="block truncate text-[9.5px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span>
+                      <CopierWorkerRouteBadge route={route} />
                     </span>
                   </button>
                 );
@@ -5661,6 +5743,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = fa
           </div>
 
           <div className="min-w-0 flex-1 overflow-y-auto p-3">
+            {workerRouteNoticeBlock}
             <div className="flex flex-wrap items-center justify-between gap-2 px-0.5 pb-2">
               <span className={sectionLabel}>
                 Followeři — {selectedCount} vybráno{draft.leaderAccountId != null ? ` · expozice ${copyGroupExposureMultiple(draft)}× leadera` : ''}
@@ -5690,13 +5773,18 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = fa
                 const follower = followerById.get(account.id);
                 const baselineFollower = baselineFollowers.get(account.id);
                 const addBlocked = !follower && followerAdditionBlocked(account.id);
+                const route = routeFor(account.id);
                 return (
-                  <div key={account.id} className={`grid min-w-[416px] grid-cols-[minmax(0,1fr)_132px_74px_74px] items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-0 ${follower ? 'bg-indigo-500/[0.035]' : ''}`}>
-                    <label title={addBlocked ? 'dnes jen zpřísnit' : undefined} className={`flex min-w-0 items-center gap-2.5 ${addBlocked ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'}`}>
+                  <div key={account.id} data-worker-route={route} className={`grid min-w-[416px] grid-cols-[minmax(0,1fr)_132px_74px_74px] items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-0 ${follower ? 'bg-indigo-500/[0.035]' : ''}`}>
+                    <label title={route === 'missing-worker'
+                      ? 'Připojení je potřeba přidat do manifestu Mac workeru a worker bezpečně přeinstalovat.'
+                      : addBlocked ? 'dnes jen zpřísnit' : undefined}
+                      className={`flex min-w-0 items-center gap-2.5 ${addBlocked ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'}`}>
                       <input type="checkbox" checked={!!follower} disabled={addBlocked} onChange={() => toggleFollower(account.id)} className="h-3.5 w-3.5 shrink-0 accent-indigo-600" />
                       <span className="min-w-0">
                         <b className="block truncate text-[11.5px] text-[var(--text-primary)]">{account.name}</b>
                         <span className="block truncate text-[10px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span>
+                        <CopierWorkerRouteBadge route={route} />
                       </span>
                     </label>
                     {/* Nativní šipka selectu je jediný prvek, který v tabulce

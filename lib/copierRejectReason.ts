@@ -6,16 +6,8 @@ export interface CopierRejectReasonTranslation {
   original: string;
 }
 
-const UNKNOWN_REASON_MAX_LENGTH = 160;
-
 const originalReason = (reason: string | undefined): string => (
   reason?.trim() || 'Broker odmítl příkaz bez uvedení důvodu'
-);
-
-const shorten = (value: string): string => (
-  value.length <= UNKNOWN_REASON_MAX_LENGTH
-    ? value
-    : `${value.slice(0, UNKNOWN_REASON_MAX_LENGTH - 1).trimEnd()}…`
 );
 
 /**
@@ -57,5 +49,9 @@ export function translateCopierRejectReason(reason?: string): CopierRejectReason
   if (/^invalid\s*price\b/i.test(normalized)) {
     return { category: 'invalid-price', message: 'Broker odmítl: neplatná cena příkazu', original };
   }
-  return { category: 'unknown', message: shorten(normalized), original };
+  return {
+    category: 'unknown',
+    message: 'Broker příkaz odmítl; přesný důvod je v detailu',
+    original,
+  };
 }
