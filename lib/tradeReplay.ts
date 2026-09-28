@@ -67,6 +67,58 @@ export function tradeFillGroups(history: TradeExecutionHistory | undefined): Tra
   }));
 }
 
+/**
+ * Okamžik vstupu pro snímek „při vstupu“: konec prvního vstupního příkazu
+ * (dílčí plnění), průměrná cena a hranice, do které smí snímek vidět. Hranice
+ * pustí SL/TP odeslané s příkazem (do FILL_GROUP_MS), ale nikdy další plnění.
+ */
+export function entrySnapshotMoment(history: TradeExecutionHistory | undefined): { atMs: number; price: number; cutoffMs: number } | null {
+  if (!history) return null;
+  const groups = groupFills(history.fills);
+  const first = groups.find(group => group[0].role === 'entry');
+  if (!first) return null;
+  const atMs = first.at(-1)!.at;
+  const next = groups[groups.indexOf(first) + 1];
+  const cutoffMs = Math.min(atMs + FILL_GROUP_MS, next ? next[0].at - 1 : Infinity);
+  return { atMs, price: averagePrice(first), cutoffMs };
+}
+
+/** Po market vstupu se stop běžně pokládá do pár vteřin — do té doby platí „při vstupu“. */
+export const ENTRY_PROTECTION_GRACE_MS = 10_000;
+
+const shortDuration = (ms: number) => {
+  const total = Math.max(0, Math.round(ms / 1000));
+  if (total < 60) return `${total} s`;
+  const hours = Math.floor(total / 3600), minutes = Math.floor((total % 3600) / 60), seconds = total % 60;
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return hours ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
+};
+
+/**
+ * Co při vstupu chybělo (štítek u výsledkového boxu): SL/TP platné do
+ * `graceMs` po prvním vstupu. SL doplněný později ukáže prodlevu
+ * („SL po 2:40“). `warn` = chyběl SL (riziko); chybějící TP je jen informace.
+ * Obchod se SL i TP od vstupu štítek nemá.
+ */
+export function entryProtectionNote(history: TradeExecutionHistory | undefined, graceMs = ENTRY_PROTECTION_GRACE_MS): { text: string; warn: boolean } | null {
+  if (!history) return null;
+  const entry = history.fills.filter(fill => fill.role === 'entry').sort((a, b) => a.at - b.at)[0];
+  if (!entry) return null;
+  const until = entry.at + graceMs;
+  const slAtEntry = levelAt(history, 'sl', until) != null;
+  const tpAtEntry = levelAt(history, 'tp', until) != null;
+  if (slAtEntry && tpAtEntry) return null;
+  const placedLater = (kind: 'sl' | 'tp') => [...history.protection].sort((a, b) => a.at - b.at)
+    .find(event => event.kind === kind && event.price != null && event.at > until
+      && (event.status === 'confirmed' || (event.status === 'pending' && event.operation === 'new')));
+  const lateSl = slAtEntry ? undefined : placedLater('sl');
+  const hasTp = tpAtEntry || placedLater('tp') != null;
+  if (slAtEntry) return hasTp ? null : { text: 'bez TP', warn: false };
+  if (!lateSl) return { text: hasTp ? 'bez SL' : 'bez SL/TP', warn: true };
+  const late = `SL po ${shortDuration(lateSl.at - entry.at)}`;
+  return { text: hasTp ? late : `${late} · bez TP`, warn: true };
+}
+
 /** SL a TP platné v okamžiku `at` (pro štítky na cenové ose). */
 export function protectionLevelsAt(history: TradeExecutionHistory | undefined, at: number): { sl: number | null; tp: number | null } {
   if (!history) return { sl: null, tp: null };

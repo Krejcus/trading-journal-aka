@@ -208,6 +208,66 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-28 — Obchod bez celého SL/TP: výsledkový box + štítek (Claude)
+
+- Filip: vstup bez SL/TP (market in/out, jen SL, trailing stop položený po
+  vstupu) byl v grafu jen šipkami. Návrh `mockups/trade-partial-sltp.html`,
+  vybraná varianta C.
+- Journal primitiv: `resultBox` (true = výsledkový box vstup → výstup vždy,
+  když obchod nemá position box; dřív jen u obchodu úplně bez SL/TP) a
+  `protectionNote` — štítek v řádku s popiskem výsledku: „bez SL/TP“,
+  „bez SL“, „SL po 2:40“, „SL po 20 s · bez TP“ (jantarově = chyběl SL) nebo
+  „bez TP“ (šedě). `entryProtectionNote` (lib/tradeReplay.ts): SL/TP
+  platné do 10 s po prvním vstupu se počítají jako při vstupu
+  (`ENTRY_PROTECTION_GRACE_MS` — stop po market vstupu). Trailing stop dál
+  jako schody. CandleKit: detail/fullscreen/review/snímky; ostatní obchody
+  review dostanou výsledkový box bez štítku. Vypnuté position boxy
+  v nastavení → původní chování. Testy v `tests/snapshotRender.test.ts`.
+- Ověřeno živě: obchod 25. 9. 20:42 (SL 20 s po vstupu, bez TP) →
+  „SL po 20 s · bez TP“ + „+9,00 b. · +180,00 $“; obchod s celým position
+  boxem beze změny. Snímek při vstupu ukazuje stav v tu chvíli („bez SL/TP“,
+  pozdější SL do něj nepatří).
+
+### 2026-09-28 — Vykreslovací stránka automatických snímků (Claude)
+
+- Moje část náhrady kamery TradingView (návrh Codexe: noční fronta + worker
+  se skrytým prohlížečem). Stránka `/?snapshotRender=<id obchodu>&mode=
+  entry|exit&w=1600&h=900&theme=dark` (`lib/snapshotRender.ts`,
+  `components/SnapshotRenderPage.tsx`) vykreslí graf obchodu stejně jako
+  detail (`TradeMarketChart` prop `snapshotRender`): pevná velikost, bez
+  lišty, přehrávání, úvodní animace, myši a ovládání `data-snapshot-hide`
+  (nově i tlačítka měřítka A/L/% — platí i pro ruční Snímek), vždy s plnou
+  historií (levely). `index.tsx` ji pouští místo appky a neregistruje ani
+  neruší service worker (jeho `alert` by skrytý prohlížeč zablokoval).
+- Signál pro workera: `<html data-snapshot-status>` `loading` → `ready` |
+  `error`, detail ve `window.__alphatradeSnapshot` (tradeId, mode,
+  `renderVersion` 1, rozměry, `error`). Ready = svíčky + dotažená historie
+  + usazený záběr (`onViewportSettled` z CandleKitu) 400 ms v kuse + písma
+  + 2 snímky. Timeout 60 s → `error`, stránka nikdy nevisí.
+- `mode=entry` nevidí do budoucnosti: přehrávání stojí na svíčce vstupu,
+  historie končí koncem prvního vstupního příkazu (+ SL/TP odeslané s ním,
+  max 2 s, nikdy další plnění; `entrySnapshotMoment`), svíčka vstupu jen
+  otevření → cena vstupu (`candleUntilFill`, maxima uvnitř minuty jsou jen
+  odhad). Časová osa stejná jako u `exit` (snímky jdou porovnat).
+- Přihlášení: zatím session v prohlížeči. `token` v URL → `error`, dokud
+  Codex nedodá kontrakt jednorázového tokenu. Indikátory se berou z
+  localStorage prohlížeče — pro workera je bude potřeba uložit na server.
+- Ověřeno živě na obchodu z 25. 9. (1200×675): exit i entry `ready` za
+  ~2,8 s; jednou `error` „journal-facts-unavailable“ po 21 s ze čtení
+  obchodu (přechodné, další pokus prošel) — stránka chybu nahlásila. Pozor:
+  snímek náhledu v panelu u okna většího než panel ořezává (pixely plátna
+  byly v pořádku). Testy `tests/snapshotRender.test.ts`.
+- Doladěno podle náhledů 4 posledních obchodů (Filip: užší svíčky, vše ve
+  světlém režimu): výchozí motiv snímků světlý (`theme=dark` jen výslovně);
+  CandleKit `tradeViewFrame` — snímek celého obchodu 50 svíček kontextu na
+  obě strany (detail dál 15), snímek při vstupu 80 před a 20 za vstupem
+  (vstup vpravo, bez prázdné poloviny budoucnosti) a bez popisku výsledku
+  (`hideResultLabel`, průběžné „+0,00 $“). Čtení obchodu se na stránce
+  opakuje až 3× (po čerstvém načtení občas visí do 20s limitu dotazu,
+  `journal-facts-unavailable`; jde jen o čtení), timeout stránky 90 s.
+  Náhled: dočasný `public/snapshot-preview.html` (NEcommitovat) — 8 snímků
+  `ready` za 2,5–2,8 s.
+
 ### 2026-09-27 — Review týdne (Claude)
 
 - Historie → „Review týdne“ (`components/WeeklyReview.tsx`, návrh

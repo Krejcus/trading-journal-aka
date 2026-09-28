@@ -8,6 +8,12 @@ import { isNativeBuild } from './utils/runtimeConfig';
 import { registerNativeOAuthCallback } from './services/nativeOAuth';
 import { registerNativeNotificationActions } from './services/nativeNotifications';
 import NativePrivacyGate from './components/NativePrivacyGate';
+import { parseSnapshotRenderParams } from './lib/snapshotRender';
+
+// Vykreslovací stránka automatických snímků (skrytý prohlížeč workeru): jen
+// graf obchodu, bez appky, service workeru a jeho dialogu o nové verzi.
+const snapshotRenderParams = parseSnapshotRenderParams(window.location.search);
+const SnapshotRenderPage = React.lazy(() => import('./components/SnapshotRenderPage'));
 
 // iOS PWA (přidáno na plochu) detekce — `@media (display-mode: standalone)` je na
 // iOS nespolehlivá, proto přidáme třídu i přes navigator.standalone (legacy iOS API).
@@ -52,7 +58,9 @@ let forceUpdate = false;
 // V dev (vč. testu PWA na ploše přes LAN) SW jen kešuje a brání aktualizacím,
 // takže ho nejen neregistrujeme, ale i odregistrujeme případný starý + smažeme cache.
 let updateSW: ((reloadPage?: boolean) => Promise<void>) | undefined;
-if (import.meta.env.PROD && !isNativeBuild) {
+if (snapshotRenderParams) {
+  // Stránka snímku service worker neregistruje ani neruší (běžné cache appky nechá být).
+} else if (import.meta.env.PROD && !isNativeBuild) {
   updateSW = registerSW({
     onNeedRefresh() {
       console.log('[PWA] New version available!');
@@ -99,6 +107,16 @@ const renderApp = () => {
   }
 
   const root = ReactDOM.createRoot(rootElement);
+  if (snapshotRenderParams) {
+    root.render(
+      <ErrorBoundary name="SnapshotRender">
+        <React.Suspense fallback={null}>
+          <SnapshotRenderPage params={snapshotRenderParams} />
+        </React.Suspense>
+      </ErrorBoundary>
+    );
+    return;
+  }
   root.render(
     <React.StrictMode>
       <ErrorBoundary name="AppRoot">

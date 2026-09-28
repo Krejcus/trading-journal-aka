@@ -27,8 +27,8 @@ import ChartSnapshotButton from './ChartSnapshotButton';
 import { captureChartWorkspaceSnapshotDataUrl } from '../services/chartSnapshot';
 import { chartNotesOf, type ChartNote } from '../lib/chartNotes';
 import TradeReplayBar, { type TradeReplayGoTo, type TradeReplaySpeed } from './TradeReplayBar';
-import { historyAt, tradeTimelineEvents } from '../lib/tradeReplay';
-import { candleReplayPath, partialReplayCandle, type PathPoint } from '../lib/candleReplayPath';
+import { entrySnapshotMoment, historyAt, tradeTimelineEvents } from '../lib/tradeReplay';
+import { candleReplayPath, candleUntilFill, partialReplayCandle, type PathPoint } from '../lib/candleReplayPath';
 import { JOURNAL_BUY_COLOR, JOURNAL_SELL_COLOR } from '../services/journalChartPrimitive';
 import type { ChartViewApi } from '@getcandlekit/charts/react';
 import { Trade } from '../types';
@@ -82,8 +82,18 @@ interface TradeMarketChartProps {
      */
     data: MarketCandleResponse;
   };
+  /**
+   * Vykreslovací stránka automatických snímků: jen graf (bez lišty,
+   * přehrávání a úvodní animace), vždy s plnou historií. `entry` = stav
+   * v okamžiku vstupu — žádná svíčka, plnění ani úroveň po něm. `onReady`
+   * zazní jednou, až jsou data i záběr usazené; `onError`, když graf nebude.
+   */
+  snapshotRender?: { mode: 'entry' | 'exit'; onReady: () => void; onError: (message: string) => void };
 }
 
+/** Automatické snímky: svíčky kontextu kolem obchodu (užší svíčky než v detailu). */
+const SNAPSHOT_FRAME = { before: 50, after: 50 } as const;
+const SNAPSHOT_ENTRY_FRAME = { before: 80, after: 20 } as const;
 /** Krok přehrávání = jedna 1m svíčka; při 1x trvá půl vteřiny. */
 const REPLAY_STEP_S = 60;
 const REPLAY_TICK_MS = 500;
@@ -157,7 +167,7 @@ const focusChartOnTrade = (
   });
 };
 
-const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, variant = 'full', revealKey = 0, chartNotes, onChartNotesChange, onSaveSnapshot, review }) => {
+const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, variant = 'full', revealKey = 0, chartNotes, onChartNotesChange, onSaveSnapshot, review, snapshotRender }) => {
   const detail = variant === 'detail';
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -187,11 +197,14 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   // Detail načte nejdřív jen seanci obchodu (1 dotaz); plná historie (16 dní)
   // se dotáhne až po posunu grafu doleva nebo ve fullscreenu — vždy až po
   // dokončeném prvním načtení a ke stejnému kontraktu.
-  const [fullHistory, setFullHistory] = useState(!detail);
+  const snapshotMode = Boolean(snapshotRender);
+  const [fullHistory, setFullHistory] = useState(!detail || snapshotMode);
   const [loadedSymbol, setLoadedSymbol] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   // Plná historie je v grafu (levely PDH/PDL/PWH a VWAP z ní počítají).
   const [historyReady, setHistoryReady] = useState(!detail);
+  // Dotažení plné historie doběhlo (i neúspěšně) — snímek na něj čeká.
+  const [historySettled, setHistorySettled] = useState(false);
 
   // Indikátory detailu = indikátory fullscreenu obchodu (platí pro všechny
   // obchody). Přidávají se ve fullscreenu; v detailu je legenda upraví nebo
@@ -213,17 +226,22 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   // ── Přehrávání obchodu (jen v detailu) ─────────────────────────────────
   // Kurzor = čas otevření poslední odkryté 1m svíčky; null = celý obchod.
   const history = trade.executionHistory;
+  // Snímek „při vstupu“: přehrávání stojí na svíčce vstupu, historie končí vstupem.
+  const snapshotEntry = useMemo(() => snapshotRender?.mode === 'entry' ? entrySnapshotMoment(history) : null, [history, snapshotRender?.mode]);
+  const snapshotCursor = snapshotEntry ? floorMinute(Math.floor(snapshotEntry.atMs / 1000)) : null;
+  const snapshotFrame = useMemo(() => !snapshotRender ? undefined
+    : snapshotEntry ? { ...SNAPSHOT_ENTRY_FRAME, endMs: snapshotEntry.atMs } : SNAPSHOT_FRAME, [snapshotEntry, snapshotRender]);
   const events = useMemo(() => tradeTimelineEvents(history), [history]);
-  const [cursor, setCursor] = useState<number | null>(null);
+  const [cursor, setCursor] = useState<number | null>(snapshotCursor);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<TradeReplaySpeed>(1);
   const [focusRequest, setFocusRequest] = useState(0);
   const replayStart = floorMinute(Math.floor(entryMs / 1000)) - 10 * 60;
   const replayEnd = floorMinute(Math.floor(exitMs / 1000)) + 5 * 60;
   // Události v právě odkryté svíčce už proběhly — svíčka pokrývá celou minutu.
-  const cutoffMs = cursor == null ? null : (cursor + REPLAY_STEP_S) * 1000 - 1;
+  const cutoffMs = snapshotEntry ? snapshotEntry.cutoffMs : cursor == null ? null : (cursor + REPLAY_STEP_S) * 1000 - 1;
   const replayAnimationRef = useRef<{ time: number; progress: number } | null>(null);
-  useEffect(() => { setCursor(null); setPlaying(false); replayAnimationRef.current = null; }, [trade.id]);
+  useEffect(() => { setCursor(snapshotCursor); setPlaying(false); replayAnimationRef.current = null; }, [trade.id, snapshotCursor]);
   // Rozpracovaná svíčka přehrávání: během kroku „žije“ přímo v grafu (mimo
   // React) po cestě z candleReplayPath — plnění obchodu v ní padnou přesně
   // na svůj čas a cenu. Po dokončení kroku ji převezme kurzor (a indikátory).
@@ -404,7 +422,8 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
     setEstimatedCostUsd(null);
     setLoadedSymbol(null);
     // Fullscreen (i review týdne) chce vždy plnou historii.
-    if (detail) { setFullHistory(levelsWanted || isFullscreen); setHistoryReady(false); }
+    if (detail) { setFullHistory(levelsWanted || isFullscreen || snapshotMode); setHistoryReady(false); }
+    setHistorySettled(false);
     if (!tradeChartDataAvailable(timing)) {
       setError({ code: 'data-not-yet-historical', message: 'Databento historical feed zpřístupní tento obchod přibližně 24 hodin po trhu.' });
       setLoading(false);
@@ -436,7 +455,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
       if (cancelled) return;
       if (response.candles.length >= rawCandlesRef.current.length) setRawCandles(response.candles);
       setHistoryReady(true);
-    }).catch(() => { /* graf zůstane se seancí */ }).finally(() => { if (!cancelled) setHistoryLoading(false); });
+    }).catch(() => { /* graf zůstane se seancí */ }).finally(() => { if (!cancelled) { setHistoryLoading(false); setHistorySettled(true); } });
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- jednou po přepnutí na plnou historii
   }, [fullHistory, loadedSymbol, loading]);
@@ -446,8 +465,10 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   rawCandlesRef.current = rawCandles;
   const candles = useMemo(() => aggregateCandles(rawCandles, timeframe), [rawCandles, timeframe]);
   const replayRawCandles = useMemo(
-    () => cursor == null ? rawCandles : rawCandles.filter(candle => candle.time <= cursor),
-    [cursor, rawCandles],
+    () => cursor == null ? rawCandles : rawCandles.filter(candle => candle.time <= cursor)
+      // Snímek při vstupu: svíčka vstupu jen od otevření po cenu vstupu.
+      .map(candle => snapshotEntry && candle.time === cursor ? candleUntilFill(candle, snapshotEntry.price) : candle),
+    [cursor, rawCandles, snapshotEntry],
   );
   const replayCandles = useMemo(
     () => cursor == null ? candles : aggregateCandles(replayRawCandles, timeframe),
@@ -461,6 +482,40 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   // Úrovně na cenové ose: vstup, SL a TP platné v okamžiku přehrávání
   // (bez přehrávání poslední před výstupem). Samotné čáry kreslí historie.
   const [chartApi, setChartApi] = useState<ChartViewApi | null>(null);
+  // Vykreslovací stránka snímků: „připraveno“ až po svíčkách, plné historii
+  // a usazeném záběru, které vydrží 400 ms (indikátory a vrstvy se kreslí
+  // v dalších snímcích), a po načtení písem. Chyba se ohlásí hned.
+  const [chartSettled, setChartSettled] = useState(false);
+  const snapshotRenderRef = useRef(snapshotRender);
+  snapshotRenderRef.current = snapshotRender;
+  const snapshotReportedRef = useRef(false);
+  const snapshotReady = snapshotMode && !loading && !error && candles.length > 0 && historySettled && chartSettled && chartApi != null;
+  const snapshotProblem = !snapshotMode ? null
+    : error ? error.message
+      : snapshotRender?.mode === 'entry' && !snapshotEntry ? 'Obchod nemá vstupní plnění.'
+        : !loading && candles.length === 0 ? 'Pro obchod nejsou svíčky.' : null;
+  useEffect(() => {
+    if (!snapshotMode || snapshotReportedRef.current) return;
+    if (snapshotProblem) {
+      snapshotReportedRef.current = true;
+      snapshotRenderRef.current?.onError(snapshotProblem);
+      return;
+    }
+    if (!snapshotReady) return;
+    let frame = 0;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (document.fonts?.ready ?? Promise.resolve()).then(() => {
+        if (cancelled) return;
+        frame = window.requestAnimationFrame(() => { frame = window.requestAnimationFrame(() => {
+          if (cancelled || snapshotReportedRef.current) return;
+          snapshotReportedRef.current = true;
+          snapshotRenderRef.current?.onReady();
+        }); });
+      });
+    }, 400);
+    return () => { cancelled = true; window.clearTimeout(timer); window.cancelAnimationFrame(frame); };
+  }, [snapshotMode, snapshotProblem, snapshotReady]);
   // Poznámky v grafu (jen detail).
   const chartAreaRef = useRef<HTMLDivElement>(null);
   const [noteAddRequest, setNoteAddRequest] = useState<ChartNoteAddRequest | null>(null);
@@ -899,7 +954,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   // indikátory i kreslení jsou ve fullscreenu (stejný workspace jako backtest).
   const detailContent = (
     <div data-trade-chart className={`h-full min-h-[360px] flex flex-col ${isDark ? 'bg-[#090d12]' : 'bg-white'}`}>
-      <div className={`h-10 shrink-0 flex items-center gap-1 px-3 border-b ${isDark ? 'border-white/5' : 'border-slate-200'}`}>
+      {!snapshotMode && <div className={`h-10 shrink-0 flex items-center gap-1 px-3 border-b ${isDark ? 'border-white/5' : 'border-slate-200'}`}>
         <span className={`text-[12px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{root}</span>
         <span className="ml-1.5 whitespace-nowrap text-[11px] font-semibold text-slate-500">1m · CME</span>
         <span className="flex-1" />
@@ -921,7 +976,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
         <button type="button" className={detailButton} onClick={() => setIsFullscreen(true)} title="Otevřít ve fullscreenu — timeframy, indikátory, kreslení" aria-label="Otevřít fullscreen graf">
           <Maximize2 size={13} /> <span className="hidden sm:inline">Fullscreen</span>
         </button>
-      </div>
+      </div>}
       <div ref={chartAreaRef} className="relative flex-1 min-h-0">
         {candles.length > 0 && (
           <CandleKitTradeChart
@@ -950,7 +1005,12 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
             replayCursorTime={cursor}
             journalHistoryInReplay
             centeredTradeView
-            onNeedOlderHistory={!fullHistory ? () => setFullHistory(true) : undefined}
+            onNeedOlderHistory={!fullHistory && !snapshotMode ? () => setFullHistory(true) : undefined}
+            onViewportSettled={snapshotMode ? setChartSettled : undefined}
+            // Snímky: víc okolí obchodu (užší svíčky) než v detailu; při
+            // vstupu vstup vpravo, za ním jen malá rezerva prázdné budoucnosti.
+            tradeViewFrame={snapshotFrame}
+            hideTradeResult={Boolean(snapshotEntry)}
             olderHistoryLoading={historyLoading}
             onChartApiReady={setChartApi}
             onAddChartNote={onChartNotesChange ? (clientX, clientY) => setNoteAddRequest({ clientX, clientY, nonce: Date.now() }) : undefined}
@@ -973,12 +1033,12 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
           <div aria-hidden="true" onAnimationEnd={startFromBeginning} style={{ left: rewind.left, width: rewind.width }}
             className={`trade-chart-rewind pointer-events-none absolute top-0 bottom-[28px] z-10 ${isDark ? 'bg-[#090d12]' : 'bg-white'}`} />
         )}
-        {!loading && !error && candles.length > 0 && !introDone && (
+        {!loading && !error && candles.length > 0 && !introDone && !snapshotMode && (
           <div aria-hidden="true" onAnimationEnd={() => setIntroDone(true)}
             className={`trade-chart-reveal pointer-events-none absolute left-0 top-0 right-[84px] bottom-[28px] z-10 ${isDark ? 'bg-[#090d12]' : 'bg-white'}`} />
         )}
         {statusOverlays}
-        {!loading && !error && candles.length > 0 && history && (
+        {!loading && !error && candles.length > 0 && history && !snapshotMode && (
           <TradeReplayBar
             isDark={isDark}
             playing={playing}

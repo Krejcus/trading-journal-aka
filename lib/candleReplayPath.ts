@@ -67,3 +67,13 @@ export function partialReplayCandle(candle: ReplayCandle, path: readonly PathPoi
   }
   return { time: candle.time, open: candle.open, high, low, close: price, volume: candle.volume * t };
 }
+
+/**
+ * Svíčka v okamžiku plnění pro snímek „při vstupu“: jen to, co je jisté —
+ * otevření a cena plnění. Maxima a minima uvnitř minuty jsou u 1m dat jen
+ * odhad (mohla nastat až po vstupu), proto se nekreslí.
+ */
+export function candleUntilFill(candle: ReplayCandle, price: number): ReplayCandle {
+  const fill = Math.min(candle.high, Math.max(candle.low, price));
+  return { time: candle.time, open: candle.open, high: Math.max(candle.open, fill), low: Math.min(candle.open, fill), close: fill, volume: 0 };
+}

@@ -3,7 +3,7 @@ import type { TradeExecutionHistory } from '../lib/tradeExecutionHistory';
 import type { MarketCandle } from './marketData';
 import { ALPHATRADE_CHART_STYLE as style } from './chartVisualStyle';
 import { journalProtectionSegments } from '../lib/journalProtectionSegments';
-import { protectionValueAt, tradeFillGroups } from '../lib/tradeReplay';
+import { entryProtectionNote, protectionValueAt, tradeFillGroups } from '../lib/tradeReplay';
 import { createJournalTimeProjection, journalLogicalCoordinate, journalVisibleSpanCoordinates, type JournalCandleCoverage } from './journalChartTime';
 export { journalTimeLogical, journalLogicalCoordinate } from './journalChartTime';
 export const JOURNAL_SL_COLOR = '#ef4444';
@@ -23,6 +23,17 @@ export interface JournalChartOptions {
   instrument?: string;
   /** Review týdne: ostatní obchody — bez najetí, bez popisku výsledku a bez vlivu na osu. */
   muted?: boolean;
+  /** Bez popisku výsledku (snímek při vstupu — průběžné „+0,00 $“ nic neříká). */
+  hideResultLabel?: boolean;
+  /**
+   * Výsledkový box (vstup → výstup): `true` = vždy (obchod nemá position
+   * box — jen SL, jen TP, SL až po vstupu…), `false` = nikdy. Bez volby jen
+   * u obchodu úplně bez SL/TP.
+   */
+  resultBox?: boolean;
+  /** Štítek u výsledku, co při vstupu chybělo („bez SL“, „SL po 2:40“…). */
+  protectionNote?: boolean;
+  isDark?: boolean;
   /** Průhlednost celé kresby (výchozí 1). */
   alpha?: number;
   /** Dočasně nekreslit (review: obchod je právě vybraný a kreslí ho hlavní vrstva). */
@@ -113,7 +124,7 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
   // vstupu po průměrný výstup (cena) — ať se obchod v grafu neztratí jen se
   // šipkami. Otevřená pozice (přehrávání) končí na poslední odkryté svíčce.
   const resultBox = (() => {
-    if (segments.length) return null;
+    if (options.resultBox === false || (options.resultBox == null && segments.length)) return null;
     const entries = history.fills.filter(fill => fill.role === 'entry');
     const exits = history.fills.filter(fill => fill.role === 'exit');
     if (!entries.length) return null;
@@ -135,6 +146,7 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
     const usd = closed && history.grossPnl != null ? history.grossPnl : points * (options.pointValue ?? 2) * quantity;
     return { from, to, entry, exit, win: points >= 0, label: `${signed(points)} b. · ${signed(usd)} $`, spans: projection.spans(from, to) };
   })();
+  const note = options.protectionNote && resultBox ? entryProtectionNote(history) : null;
   const arrows = groups.map((group, index) => {
     const buy = history.fills.some(fill => fill.side != null) ? group.side === 'Buy' : (group.role === 'entry') === long;
     const role = group.role === 'entry' ? (index === groups.findIndex(item => item.role === 'entry') ? 'Vstup' : 'Přikoupeno')
@@ -310,19 +322,44 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
             labelLeft = labelLeft == null ? bounds.left : Math.min(labelLeft, bounds.left);
             labelRight = labelRight == null ? bounds.right : Math.max(labelRight, bounds.right);
           }
-          if (labelLeft != null && labelRight != null && !options.muted) {
+          const showResult = !options.muted && !options.hideResultLabel;
+          const showNote = !options.muted && note != null;
+          if (labelLeft != null && labelRight != null && (showResult || showNote)) {
+            // Jeden řádek nad boxem: [štítek chybějící ochrany] [výsledek] —
+            // u krátkého obchodu se nepřekryjí.
             context.font = '600 10.5px Inter, sans-serif';
-            const width = context.measureText?.(resultBox.label)?.width ?? resultBox.label.length * 5.5;
-            const pillW = width + 14; const pillH = 19;
+            const measure = (text: string) => (context.measureText?.(text)?.width ?? text.length * 5.5) + 14;
+            const noteW = showNote ? measure(note!.text) : 0;
+            const resultW = showResult ? measure(resultBox.label) : 0;
+            const gap = showNote && showResult ? 4 : 0;
+            const pillH = 19;
+            const rowW = noteW + gap + resultW;
             const paneW = mediaSize?.width ?? Infinity;
-            const left = Math.max(4, Math.min((labelLeft + labelRight) / 2 - pillW / 2, paneW - pillW - 4));
+            const left = Math.max(4, Math.min((labelLeft + labelRight) / 2 - rowW / 2, paneW - rowW - 4));
             const labelTop = top - 6 - pillH < 4 ? top + height + 6 : top - 6 - pillH;
-            context.fillStyle = tone;
-            context.beginPath();
-            if (context.roundRect) context.roundRect(left, labelTop, pillW, pillH, 4); else context.rect(left, labelTop, pillW, pillH);
-            context.fill();
-            context.fillStyle = '#ffffff'; context.textAlign = 'left'; context.textBaseline = 'middle';
-            context.fillText(resultBox.label, left + 7, labelTop + pillH / 2 + 0.5);
+            const pill = (x: number, w: number, fill: string, border: string | null) => {
+              context.beginPath();
+              if (context.roundRect) context.roundRect(x, labelTop, w, pillH, 4); else context.rect(x, labelTop, w, pillH);
+              context.fillStyle = fill; context.fill();
+              if (border) { context.strokeStyle = border; context.lineWidth = 1; context.stroke(); }
+            };
+            context.textAlign = 'left'; context.textBaseline = 'middle';
+            if (showNote) {
+              // Chybějící SL = riziko (jantarová), chybějící TP jen informace (šedá).
+              const dark = Boolean(options.isDark);
+              const [fill, border, text] = note!.warn
+                ? (dark ? ['#422006', '#b45309', '#fcd34d'] : ['#fef3c7', '#f59e0b', '#92400e'])
+                : (dark ? ['#1e293b', '#334155', '#cbd5e1'] : ['#f1f5f9', '#cbd5e1', '#475569']);
+              pill(left, noteW, fill, border);
+              context.fillStyle = text;
+              context.fillText(note!.text, left + 7, labelTop + pillH / 2 + 0.5);
+            }
+            if (showResult) {
+              const resultLeft = left + noteW + gap;
+              pill(resultLeft, resultW, tone, null);
+              context.fillStyle = '#ffffff';
+              context.fillText(resultBox.label, resultLeft + 7, labelTop + pillH / 2 + 0.5);
+            }
           }
         }
       }

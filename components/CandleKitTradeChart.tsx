@@ -251,6 +251,16 @@ interface CandleKitTradeChartProps {
    * přehrávání drží kurzor uprostřed a svíčky plynule odjíždějí doleva.
    */
   centeredTradeView?: boolean;
+  /** Detail: záběr je usazený na obchodu a graf se ukázal (vykreslovací stránka snímků). */
+  onViewportSettled?: (settled: boolean) => void;
+  /**
+   * Záběr detailu na obchod: nejméně tolik svíček kontextu před (`before`)
+   * a za (`after`) obchodem, `endMs` nahradí výstup (snímek při vstupu).
+   * Bez něj 15 na obě strany. Snímky víc — užší svíčky.
+   */
+  tradeViewFrame?: { before: number; after: number; endMs?: number };
+  /** Bez popisku výsledku obchodu (snímek při vstupu). */
+  hideTradeResult?: boolean;
   /**
    * Detail obchodu: hotové nastavení indikátorů zvenku — změny z jiných
    * grafů se ignorují. Bez `onIndicatorSettingsSaved` jen pro čtení.
@@ -1738,6 +1748,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   replayCursorTime = null,
   journalHistoryInReplay = false,
   centeredTradeView = false,
+  onViewportSettled,
+  tradeViewFrame,
+  hideTradeResult = false,
   indicatorSettingsOverride,
   onIndicatorSettingsSaved,
   replaySelecting = false,
@@ -2465,6 +2478,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   );
   // Detail: nový graf se ukáže až s vycentrovaným záběrem.
   const [viewportSettled, setViewportSettled] = useState(!centeredTradeView);
+  const onViewportSettledRef = useRef(onViewportSettled);
+  onViewportSettledRef.current = onViewportSettled;
+  useEffect(() => { onViewportSettledRef.current?.(viewportSettled); }, [viewportSettled]);
   const candlesRef = useRef(candles);
   candlesRef.current = candles;
   const renderedCandleWindowRef = useRef(renderedCandleWindow);
@@ -3022,14 +3038,16 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const lastTime = Number(visibleCandles[newest].time);
     const logicalAt = (unix: number) => unix > lastTime ? newest + (unix - lastTime) / intervalSeconds : nearestCandleIndex(visibleCandles, unix);
     const entryLogical = logicalAt(override ? Math.floor(override.entryMs / 1000) : asUnix(trade.entryTime || trade.entryDate, entryMs));
-    const exitLogical = logicalAt(override ? Math.floor(override.exitMs / 1000) : asUnix(trade.timestamp || trade.exitDate, exitMs));
+    const frameEnd = !override && tradeViewFrame?.endMs != null ? Math.floor(tradeViewFrame.endMs / 1000) : null;
+    const exitLogical = logicalAt(override ? Math.floor(override.exitMs / 1000) : frameEnd ?? asUnix(trade.timestamp || trade.exitDate, exitMs));
     const from = Math.min(entryLogical, exitLogical);
     const to = Math.max(entryLogical, exitLogical);
     const span = to - from;
-    const half = span / 2 + Math.max(reviewMode ? 30 : 15, Math.round(span * 0.5));
-    const mid = (from + to) / 2;
-    return { from: mid - half, to: mid + half };
-  }, [visibleCandles, timeframe, trade, entryMs, exitMs, reviewMode]);
+    const context = Math.round(span * 0.5);
+    const before = Math.max(reviewMode ? 30 : tradeViewFrame?.before ?? 15, context);
+    const after = Math.max(reviewMode ? 30 : tradeViewFrame?.after ?? 15, tradeViewFrame?.endMs != null ? 0 : context);
+    return { from: from - before, to: to + after };
+  }, [visibleCandles, timeframe, trade, entryMs, exitMs, reviewMode, tradeViewFrame]);
   const centeredTradeRangeRef = useRef(centeredTradeRange);
   centeredTradeRangeRef.current = centeredTradeRange;
 
@@ -4144,20 +4162,23 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     }
     const highlightMs = highlightRef.current?.id === id ? Math.max(0, highlightRef.current.until - performance.now()) : 0;
     const highlightContinues = highlightMs > 0 && Boolean(highlightRef.current?.continues);
-    const primitive = createJournalChartPrimitive(trade.executionHistory, visibleCandles,
-      MARKET_TIMEFRAME_MINUTES[timeframe] * 60, api.controller.getChart(), series, coverage,
-      { direction: trade.direction, autoscaleLevels: centeredTradeView, highlightMs, highlightContinues, arrowStacks: stackOptionOf(trade),
-        // Hodnota bodu podle kontraktu obchodu, ne podle zobrazeného grafu (MNQ/NQ).
-        pointValue: tradedRoot === 'NQ' ? 20 : 2, instrument: tradedRoot });
     const position = showManagedPositionBoxes ? createJournalPositionPrimitive(trade,
       // Barvy boxu jsou sdílené s nástrojem Long/Short Position z backtestu.
       getDrawingStyleDefault(trade.direction === 'Short' ? 'ShortPosition' : 'LongPosition', DEFAULT_STYLE),
       // Detail má na ose jen vstup a výstup (TradeMarketChart) — box bez štítků.
       visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60, chartSettings.trading.orderPriceLabels && !centeredTradeView, coverage) : null;
+    const primitive = createJournalChartPrimitive(trade.executionHistory, visibleCandles,
+      MARKET_TIMEFRAME_MINUTES[timeframe] * 60, api.controller.getChart(), series, coverage,
+      { direction: trade.direction, autoscaleLevels: centeredTradeView, highlightMs, highlightContinues, arrowStacks: stackOptionOf(trade), hideResultLabel: hideTradeResult,
+        // Obchod bez position boxu (jen SL, jen TP, SL až po vstupu, bez obou)
+        // dostane výsledkový box a štítek, co při vstupu chybělo.
+        resultBox: showManagedPositionBoxes ? position == null : undefined, protectionNote: true, isDark,
+        // Hodnota bodu podle kontraktu obchodu, ne podle zobrazeného grafu (MNQ/NQ).
+        pointValue: tradedRoot === 'NQ' ? 20 : 2, instrument: tradedRoot });
     if (position) series.attachPrimitive(position);
     series.attachPrimitive(primitive);
     return () => { try { series.detachPrimitive(primitive); if (position) series.detachPrimitive(position); } catch { /* Chart already disposed. */ } };
-  }, [chartApiEpoch, replayActive, journalHistoryInReplay, centeredTradeView, trade, timeframe, visibleCandles, rawCandles, showManagedPositionBoxes, chartSettings.trading.orderPriceLabels, reviewMode, arrowStacks]);
+  }, [chartApiEpoch, replayActive, journalHistoryInReplay, centeredTradeView, trade, timeframe, visibleCandles, rawCandles, showManagedPositionBoxes, chartSettings.trading.orderPriceLabels, reviewMode, arrowStacks, hideTradeResult, isDark]);
 
   // Review týdne: ostatní obchody týdne. Vytvoří se jednou pro týden (ne při
   // každém přepnutí — to by přepnutí zasekávalo); vybraný obchod se ve vrstvě
@@ -4171,26 +4192,25 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const coverage = { candles: rawCandles, intervalSeconds: 60 };
     const layersById = contextLayersRef.current;
     layersById.clear();
+    const boxes: ISeriesPrimitive<Time>[] = [];
     const others = contextTrades.filter(other => other.executionHistory).map(other => {
       const id = String(other.id);
+      const hidden = () => reviewSelectedIdRef.current === id;
+      // Position box (bez štítků na ose; vybraný kreslí hlavní vrstva).
+      const box = showManagedPositionBoxes ? createJournalPositionPrimitive(other,
+        getDrawingStyleDefault(other.direction === 'Short' ? 'ShortPosition' : 'LongPosition', DEFAULT_STYLE),
+        visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60, false, coverage) : null;
+      if (box) boxes.push({ ...box, paneViews: () => hidden() ? [] : box.paneViews?.() ?? [], priceAxisViews: () => [] } as ISeriesPrimitive<Time>);
       const root = resolveNasdaqFuturesRoot(undefined, other.symbol || other.instrument);
       const layer = createJournalChartPrimitive(other.executionHistory!, visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
         api.controller.getChart(), series, coverage,
-        { direction: other.direction, muted: true, pointValue: root === 'NQ' ? 20 : 2, instrument: root, isHidden: () => reviewSelectedIdRef.current === id,
+        { direction: other.direction, muted: true, pointValue: root === 'NQ' ? 20 : 2, instrument: root, isHidden: hidden,
+          // Bez position boxu výsledkový box, stejně jako u vybraného obchodu.
+          resultBox: showManagedPositionBoxes ? box == null : undefined,
           arrowStacks: stackOptionOf(other) });
       layersById.set(id, layer);
       return layer;
     });
-    // Position boxy ostatních obchodů (bez štítků na ose; vybraný kreslí hlavní vrstva).
-    const boxes = showManagedPositionBoxes ? contextTrades.filter(other => other.executionHistory).flatMap(other => {
-      const id = String(other.id);
-      const box = createJournalPositionPrimitive(other,
-        getDrawingStyleDefault(other.direction === 'Short' ? 'ShortPosition' : 'LongPosition', DEFAULT_STYLE),
-        visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60, false, coverage);
-      if (!box) return [];
-      const hidden = () => reviewSelectedIdRef.current === id;
-      return [{ ...box, paneViews: () => hidden() ? [] : box.paneViews?.() ?? [], priceAxisViews: () => [] } as ISeriesPrimitive<Time>];
-    }) : [];
     const layers = [...boxes, ...others];
     layers.forEach(layer => series.attachPrimitive(layer));
     return () => {
@@ -5027,6 +5047,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       {chartSettings.scales.scaleModeButtons !== 'never' && (
         <div
           data-price-scale-modes
+          data-snapshot-hide
           className={`absolute bottom-6 right-1 z-[60] flex gap-0.5 ${chartSettings.scales.scaleModeButtons === 'hover' ? 'opacity-0 transition-opacity hover:opacity-100 group-hover/chart:opacity-100' : ''}`}
         >
           <button
