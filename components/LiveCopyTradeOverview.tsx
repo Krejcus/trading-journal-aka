@@ -12,6 +12,7 @@ import { liveBalanceDisplay, liveCapitalDisplay, liveDailyLossRemainingDisplay, 
 import { useCopierDisarmNotice } from '../hooks/useCopierDisarmNotice';
 import { useCopierPowerDisplay } from '../hooks/useCopierPowerDisplay';
 import { copierPowerDisplayKey } from '../lib/copierPowerDisplay';
+import { isCopierBrakeQueuedError } from '../lib/copierBrakeDelivery';
 import { useFlipReorder, useIsomorphicLayoutEffect } from '../hooks/useFlipReorder';
 import { CopyGroupLibraryRequestFence } from '../lib/copyGroupLibraryRequestFence';
 import React, { useSyncExternalStore, useCallback, useMemo, useState, useEffect, useRef } from 'react';
@@ -1090,6 +1091,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         ? { tone: 'success', text: `Copier je připojený — příkazy leadera se kopírují naostro.${offNote}` }
         : { tone: 'info', text: 'Copier je bezpečně odpojený.' });
     } catch (reason) {
+      if (!connecting && isCopierBrakeQueuedError(reason)) {
+        setToast({ tone: 'info', text: reason.message });
+        return;
+      }
       const rejected = connecting ? copierArmRejection(reason) : null;
       const detail = reason instanceof Error
         ? reason.message
@@ -1345,7 +1350,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       await onEmergencyStop();
       setToast({ tone: 'error', text: 'Execution runtime potvrdil kill switch. Brokerové akce copieru jsou zablokované.' });
     } catch (reason) {
-      setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'Kill switch se nepodařilo potvrdit.' });
+      setToast({
+        tone: isCopierBrakeQueuedError(reason) ? 'info' : 'error',
+        text: reason instanceof Error ? reason.message : 'Kill switch se nepodařilo potvrdit.',
+      });
     }
   } : undefined;
 
@@ -1354,7 +1362,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       await onDayLock();
       setToast({ tone: 'info', text: 'Execution runtime potvrdil zámek do konce aktuální broker session.' });
     } catch (reason) {
-      setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'Denní zámek se nepodařilo potvrdit.' });
+      setToast({
+        tone: isCopierBrakeQueuedError(reason) ? 'info' : 'error',
+        text: reason instanceof Error ? reason.message : 'Denní zámek se nepodařilo potvrdit.',
+      });
     }
   } : undefined;
 

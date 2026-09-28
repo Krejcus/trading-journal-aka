@@ -25,7 +25,10 @@ describe('classifyCopierDisarmReason', () => {
     { detail: 'Leader-flat cílené zavření není autoritativně potvrzené', code: 'leader-flat-guard-failed' },
     { detail: 'Copier fail-closed: modify nebyl potvrzen; objednávka skončila jako filled', code: 'modify-unconfirmed-filled' },
     { detail: 'Flat sweep nedokončen — účet 200 MNQU6: postkontrola selhala: deadline 1500 ms', code: 'flat-sweep-deadline' },
+    { detail: 'Flat sweep nedokončen — účet 200 MNQU6: listOrders: celkový deadline 6000 ms', code: 'flat-sweep-deadline' },
     { detail: 'Flat sweep nedokončen — účet 200 MNQU6: cancel rejected', code: 'flat-sweep-failed' },
+    { detail: 'Copier fail-closed: follower drží SL, který leader zrušil (management-only)', code: 'protective-stop-retained' },
+    { detail: 'Copier fail-closed: ochranný cancel byl zastaven před odesláním; reconciliation required (manual-disarm)', code: 'protective-stop-retained' },
     { detail: 'Copier fail-closed: account-ineligible', code: 'blocked-account-ineligible' },
     { detail: 'Bracket leader-1 nemá bezpečně spárovaný SL i TP', code: 'protective-order-incomplete' },
     { detail: 'Pending OSO replace přišel mimo pořadí', code: 'sequence-broken' },
@@ -100,5 +103,44 @@ describe('classifyCopierDisarmReason', () => {
       title: 'technical placeholder',
       nextStep: 'technical placeholder',
     })?.title).toBe('Kopírka se vypnula kvůli uložení změny skupiny.');
+  });
+
+  it('V5 vysvětlí ponechaný ochranný SL stejnou větou v incident panelu', () => {
+    const record = createCopierDisarmRecord({
+      at: 789,
+      trigger: 'fail-closed',
+      detail: 'Copier fail-closed: follower drží SL, který leader zrušil (management-only)',
+      copiesOutcome: 'left-open-protected',
+    });
+    expect(record).toMatchObject({
+      code: 'protective-stop-retained',
+      title: 'Follower drží svůj SL, který leader zrušil — rozhodni ručně v Tradovate.',
+    });
+    expect(record.nextStep).toContain('ochranu neruš naslepo');
+  });
+
+  it.each([
+    ['Copier fail-closed: nevysvětlená divergence účtů 200 před leader exitem MNQU6', 'Pozice followerů se odchýlily od očekávané kopie.'],
+    ['Flat sweep nedokončen — účet 200 MNQU6: listOrders: celkový deadline 6000 ms', 'Úklid ochranných příkazů po zploštění překročil bezpečný časový limit.'],
+    ['Flat sweep nedokončen — účet 200 MNQU6: working SL zůstal otevřený', 'Úklid ochranných příkazů po zploštění se nepodařilo potvrdit.'],
+  ])('překládá aktuální core důvod do češtiny: %s', (detail, title) => {
+    expect(createCopierDisarmRecord({
+      at: 1,
+      trigger: 'fail-closed',
+      detail,
+      copiesOutcome: 'unknown',
+    }).title).toBe(title);
+  });
+
+  it('novější neznámý worker kód neshodí UI a použije známý detail', () => {
+    const record = createCopierDisarmRecord({
+      at: 1,
+      trigger: 'fail-closed',
+      detail: 'Flat sweep nedokončen — účet 200 MNQU6: cancel rejected',
+      copiesOutcome: 'unknown',
+      code: 'future-core-code' as CopierDisarmCode,
+    });
+    expect(record.code).toBe('flat-sweep-failed');
+    expect(record.title).toContain('Úklid ochranných příkazů');
   });
 });

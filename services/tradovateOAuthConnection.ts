@@ -31,6 +31,10 @@ import {
   type LocalCopierAgentCommandResult,
   type LocalCopierAgentStatus,
 } from '../lib/localCopierAgentProtocol';
+import {
+  CopierBrakeQueuedError,
+  isCopierBrakeCommandType,
+} from '../lib/copierBrakeDelivery';
 
 export interface TradovateOAuthConnectionStatus {
   id: string;
@@ -311,6 +315,7 @@ export async function executeTradovateCopierRelayCommand(
     && (command.command.type === 'flatten-group'
       || command.command.type === 'flatten-account'
       || command.command.type === 'flatten-follower-trade');
+  const queuedBrakeType = isCopierBrakeCommandType(command.type) ? command.type : null;
   const deadline = riskReducing
     ? Date.now() + 240_000
     : Math.min(Date.parse(queued.expiresAt) + 5_000, Date.now() + 35_000);
@@ -344,6 +349,9 @@ export async function executeTradovateCopierRelayCommand(
       }, 400);
       options.signal?.addEventListener('abort', onAbort, { once: true });
     });
+  }
+  if (queuedBrakeType) {
+    throw new CopierBrakeQueuedError(queuedBrakeType, queued.expiresAt);
   }
   throw new Error('Mac worker příkaz včas nepotvrdil. Výsledek není ověřený; zkontroluj stav kopírky a účtů. Příkaz nebude automaticky opakován.');
 }

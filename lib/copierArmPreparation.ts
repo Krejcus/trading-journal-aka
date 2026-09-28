@@ -114,10 +114,33 @@ export function assertCopierArmConnections(
 export function copierArmRejection(reason: unknown): string | null {
   if (reason instanceof CopierArmBlockedError) return reason.message;
   if (!(reason instanceof Error)) return null;
-  if (reason.message === 'tighten-only') {
+  const message = reason.message.replace(/\s+/g, ' ').trim();
+  if (message === 'tighten-only') {
     return 'Zapnutí bylo odmítnuto, protože požadovaná pravidla jsou mírnější než dnešní potvrzené nastavení. Obnov stav a zkontroluj Risk.';
   }
-  const match = /^Pravidla jdou dnes jen zpřísnit: (.+) \(reset po konci session\)$/.exec(reason.message);
+  if (message === 'copier-relay-arm-config-conflict') {
+    return 'Jiné zapnutí už čeká ve frontě. Nejdřív kopírku vypni a potom zapni požadovanou konfiguraci.';
+  }
+  if (/kopírka je zapnutá s jinou konfigurací.*nejdřív vypni/i.test(message)) {
+    return 'Kopírka je zapnutá s jinou konfigurací — nejdřív ji vypni.';
+  }
+  if (message === 'copier-relay-worker-disconnected'
+    || /ARM odmítnut: worker není připojen k brokeru/i.test(message)) {
+    return 'Zapnutí bylo odmítnuto: Mac worker není připojený k brokeru. Nic se nezapnulo; obnov spojení a potom ARM zopakuj.';
+  }
+  if (/ARM odmítnut: vypršel deadline potvrzení/i.test(message)
+    || message === 'command-expired-before-execution'
+    || message === 'command-expired-or-predates-worker-session') {
+    return 'Zapnutí nestihlo proběhnout včas — nic se nezapnulo. Obnov stav a potom ARM zopakuj.';
+  }
+  if (message === 'superseded-by-brake'
+    || /ARM odmítnut: během přípravy přišl[ao].*(?:DISARM|kill switch|denní lock|bezpečnostní brzda)/i.test(message)) {
+    return 'Zapnutí zrušila novější brzda (DISARM, kill switch nebo denní zámek) — nic se nezapnulo.';
+  }
+  if (/ARM odmítnut: příkaz je starší než poslední bezpečnostní brzda/i.test(message)) {
+    return 'Zapnutí bylo odmítnuto: ARM je starší než poslední brzda — nic se nezapnulo.';
+  }
+  const match = /^Pravidla jdou dnes jen zpřísnit: (.+) \(reset po konci session\)$/.exec(message);
   return match
     ? `Zapnutí bylo odmítnuto pravidly dne: ${[...new Set(match[1].split(', ').map(copierRiskRuleName))].join(', ')}. Obnov stav a zkontroluj Risk.`
     : null;

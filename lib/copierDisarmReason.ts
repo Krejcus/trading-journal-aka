@@ -25,6 +25,7 @@ export type CopierDisarmCode =
   | 'modify-unconfirmed-filled'
   | 'flat-sweep-deadline'
   | 'flat-sweep-failed'
+  | 'protective-stop-retained'
   | 'blocked-account-ineligible'
   | 'protective-order-incomplete'
   | 'sequence-broken'
@@ -99,6 +100,10 @@ const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }
   'flat-sweep-failed': {
     title: 'Úklid ochranných příkazů po zploštění se nepodařilo potvrdit.',
     nextStep: 'Ověř v Tradovate, že nezůstal working SL nebo target, a potom spusť Kontrolu pozic.',
+  },
+  'protective-stop-retained': {
+    title: 'Follower drží svůj SL, který leader zrušil — rozhodni ručně v Tradovate.',
+    nextStep: 'Ověř otevřenou pozici followera a jeho working SL přímo v Tradovate; ochranu neruš naslepo.',
   },
   'blocked-account-ineligible': {
     title: 'Do kopírování vstoupil účet, který nebyl způsobilý pro nový příkaz.',
@@ -188,6 +193,9 @@ export function classifyCopierDisarmReason(
   if (/\bprop[- ]limit\b|prop limitu|drawdown floor|liquidation-only/i.test(text)) return 'prop-limit';
   if (/flat sweep nedokončen.*deadline/i.test(text)) return 'flat-sweep-deadline';
   if (/flat sweep nedokončen/i.test(text)) return 'flat-sweep-failed';
+  if (/follower drží (?:svůj )?sl, který leader zrušil|ochranný cancel byl zastaven před odesláním/i.test(text)) {
+    return 'protective-stop-retained';
+  }
   if (/modify.*(?:nebyl potvrzen|skončil).*filled|objednávka skončila jako filled/i.test(text)) {
     return 'modify-unconfirmed-filled';
   }
@@ -231,7 +239,12 @@ export function createCopierDisarmRecord(input: {
   code?: CopierDisarmCode;
 }): CopierDisarmRecord {
   const detail = input.detail.trim() || 'Bez technického detailu';
-  const code = input.code ?? classifyCopierDisarmReason(detail, input.trigger);
+  const requestedCode = input.code ?? classifyCopierDisarmReason(detail, input.trigger);
+  // Status přichází z nezávisle nasazovaného workeru. Novější worker může
+  // poslat kód, který starší UI ještě nezná; nesmí tím shodit incident panel.
+  const code = Object.prototype.hasOwnProperty.call(COPY_BY_CODE, requestedCode)
+    ? requestedCode
+    : classifyCopierDisarmReason(detail, input.trigger);
   const copy = COPY_BY_CODE[code];
   return {
     at: input.at,
@@ -255,7 +268,7 @@ export function resolveCopierDisarmRecord(
   if (!record) return undefined;
   // Worker posílá stabilní kód; text vlastní UI, aby i nový `config-change`
   // dostal přesnou českou hlášku bez závislosti na verzi workeru.
-  if (record.code !== 'unknown') {
+  if (record.code !== 'unknown' && Object.prototype.hasOwnProperty.call(COPY_BY_CODE, record.code)) {
     return createCopierDisarmRecord({
       at: record.at,
       trigger: record.trigger,

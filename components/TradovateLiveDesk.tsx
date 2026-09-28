@@ -605,7 +605,10 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     }
     return result;
   }, [acceptAgentStatus, agentClient, agentTransport, relayConnectionId]);
-  const executeSafetyCommand = useCallback(async (command: { type: 'disarm' } | { type: 'kill-switch' }) => {
+  const executeSafetyCommand = useCallback(async (command:
+    | { type: 'disarm' }
+    | { type: 'kill-switch' }
+    | { type: 'lock-until-session-end'; reason: string }) => {
     const currentRoute = agentTransport
       ? { transport: agentTransport, relayConnectionId }
       : null;
@@ -617,13 +620,18 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     if (!route) throw new Error('Mac worker zatím nebyl nalezen. Pozice ověř a případně zavři přímo v Tradovate.');
     copyGroupStatusPollFence.invalidatePolls();
     const commandSequence = statusAckFenceRef.current.beginRequest();
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), COPIER_SAFETY_COMMAND_TIMEOUT_MS);
+    // Relay brzda je durable ve FIFO a má serverovou TTL 10 minut. Nesmíme ji
+    // po 10 s lokálně abortovat a vydávat za ztracenou; relay klient po 35 s
+    // vrátí přesný stav „čeká ve frontě“ a běžný status poll pokračuje dál.
+    const controller = route.transport === 'local' ? new AbortController() : null;
+    const timeout = controller
+      ? window.setTimeout(() => controller.abort(), COPIER_SAFETY_COMMAND_TIMEOUT_MS)
+      : null;
     try {
       const result = route.transport === 'local'
-        ? await agentClient.execute(command, { signal: controller.signal })
+        ? await agentClient.execute(command, { signal: controller?.signal })
         : route.relayConnectionId
-          ? await executeTradovateCopierRelayCommand(route.relayConnectionId, command, { signal: controller.signal })
+          ? await executeTradovateCopierRelayCommand(route.relayConnectionId, command)
           : null;
       if (!result) throw new Error('Chybí Tradovate připojení Mac workeru. Pozice ověř a případně zavři přímo v Tradovate.');
       copyGroupStatusPollFence.invalidatePolls();
@@ -633,12 +641,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       }
       return result;
     } catch (reason) {
-      if (controller.signal.aborted) {
+      if (controller?.signal.aborted) {
         throw new Error('Mac worker brzdu do 10 s nepotvrdil. Výsledek není ověřen; zkontroluj stav kopírky a účtů. Příkaz se automaticky neopakuje.');
       }
       throw reason;
     } finally {
-      window.clearTimeout(timeout);
+      if (timeout != null) window.clearTimeout(timeout);
     }
   }, [acceptAgentStatus, agentClient, agentTransport, relayConnectionId]);
   const acceptConfigAck = useCallback((status: LocalCopierAgentStatus) => {
@@ -1198,7 +1206,7 @@ acceptAgentStatus((await executeAgent({
                   confirmLabel: 'Zamknout den',
                   tone: 'danger',
                 }))) return;
-                acceptAgentStatus((await executeAgent({
+                acceptAgentStatus((await executeSafetyCommand({
                   type: 'lock-until-session-end',
                   reason: 'Ruční zámek dne z AlphaTrade LIVE UI',
                 })).status);

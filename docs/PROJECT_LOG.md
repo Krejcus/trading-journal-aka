@@ -208,6 +208,32 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — UI-10e: jisté ARM rejecty, durable brzdy a ochranný follower SL (Codex)
+
+- ARM dialog rozlišuje nové definitivní rejecty workeru/relay od neověřeného
+  výsledku: konflikt konfigurace, odpojený worker, vypršený deadline včetně
+  `command-expired-*`, `superseded-by-brake`, brzdu během přípravy a ARM starší
+  než poslední brzda. Každý říká česky, že se nic nezapnulo; síťový timeout
+  bez autoritativního výsledku dál zůstává neověřený.
+- DISARM, kill switch i ruční day-lock používají společnou safety cestu. Lokální
+  loopback si ponechal 10s timeout, relay brzda se už po 10 s neabortuje. Když
+  po 35 s stále čeká, UI ukáže informační text „Brzda čeká ve frontě workeru
+  (platí do HH:MM)“ ze serverového `expiresAt`; nevydává ji za chybu ani za
+  potvrzený úspěch a pravidelný status polling dál převezme pozdější výsledek.
+- Brokerový V5 audit/lastError „follower drží SL, který leader zrušil“ a závod
+  ochranného cancelu mají vlastní kód `protective-stop-retained` a v dashboardu
+  i Událostech text „Follower drží svůj SL, který leader zrušil — rozhodni
+  ručně v Tradovate.“ Historie se překládá přes aktuální UI mapu; neznámý nový
+  worker kód už incident panel neshodí a zkusí bezpečnou klasifikaci detailu.
+- Ověřeny přesné core texty V16 (`nevysvětlená divergence ... před leader
+  exitem`) a V13 (`Flat sweep nedokončen`, s/bez deadline) proti českým titulům.
+  Cílené regrese 87/87. Povinná sada: 149 souborů / 1744 testů v sandboxu;
+  jediný loopback soubor zde narazil na `listen EPERM`, samostatně mimo sandbox
+  prošel 49/49, tedy celkem 150 souborů / 1793 testů. `npx tsc --noEmit` hlásí
+  jen povolené staré chyby `extension/` (Chrome typy a `@crxjs/vite-plugin`),
+  `git diff --check` čistý. Bez npm install/ci, Tradovate/agent mutací, commitu,
+  pushnutí, deploye nebo reinstalace workeru.
+
 ### 2026-09-28 — UI-10d: adversariální hardening ovládání a LIVE dat (Codex)
 
 - Opraveny všechny vysoké a střední nálezy z `docs/reviews/copier-ui-review-20260928.md`
