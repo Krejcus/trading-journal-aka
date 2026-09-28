@@ -409,6 +409,9 @@ export const LiveAccountRiskTable = ({
           <Save size={12} /> {saving ? 'Ukládám…' : 'Uložit limity'}
         </button>
       </header>
+      {controllerStatus?.armed ? (
+        <div role="status" className="mx-4 mb-2 rounded-md border border-amber-500/25 bg-amber-500/[0.07] px-3 py-1.5 text-[11px] font-bold text-amber-600">Kopírka je zapnutá — uložení změny ji vypne (DISARM). Pak ji znovu zapni přepínačem skupiny.</div>
+      ) : null}
 
       {!riskConfigSupported ? (
         <p data-risk-unsupported="true" className="border-b border-amber-500/25 px-3 py-2 text-[11px] font-semibold text-amber-600">{runtimeAvailable

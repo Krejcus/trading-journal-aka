@@ -564,7 +564,7 @@ export const DayLockBanner = ({ until, at = null, trigger = null, reason = null,
       <div className="min-w-0 flex-1">
         <h2 className="text-[13px] font-black text-rose-500">Den je zamčený do {time.format(until)}</h2>
         <p className="mt-0.5 text-xs leading-relaxed text-rose-400">
-          {detail} Zámek skončí s koncem session (00:00 Chicago); pravidla jdou dnes jen zpřísnit.
+          {detail} Zámek skončí s koncem session (17:00 Chicago); pravidla jdou dnes jen zpřísnit.
         </p>
       </div>
     </section>
@@ -995,7 +995,7 @@ export const LiveDayRulesCard = ({
 
               <Rule
                 title="Konec session"
-                detail="V 00:00 (17:00 Chicago) se copier sám vypne. Co s otevřenými kopiemi: zavřít followery, nebo i leadera. Vypnuto = nechat otevřené (riziko)."
+                detail="Copier se sám vypne 8 h po zapnutí, nejpozději s koncem session (17:00 Chicago) — platí, co nastane dřív; přesný čas je vpravo. Ranní zapnutí proto vyprší ještě během NY session. Co s otevřenými kopiemi: zavřít followery, nebo i leadera. Vypnuto = nechat otevřené (riziko)."
                 enabled={draft.sessionExpiryEnabled}
                 triggered={false}
                 tightenOnly={tightenOnly}
@@ -1027,6 +1027,9 @@ export const LiveDayRulesCard = ({
             ) : null}
             {notice ? <div role="status" className="mt-2 flex items-center gap-2 rounded-md border border-emerald-500/25 bg-emerald-500/[0.06] px-3 py-1.5 text-[11px] font-bold text-emerald-600"><CheckCircle2 size={13} />{notice}</div> : null}
 
+            {armedAt > 0 ? (
+              <div role="status" className="mt-2 rounded-md border border-amber-500/25 bg-amber-500/[0.07] px-3 py-1.5 text-[11px] font-bold text-amber-600">Kopírka je zapnutá — uložení změny ji vypne (DISARM). Pak ji znovu zapni přepínačem skupiny.</div>
+            ) : null}
             <footer className="mt-2 flex items-center justify-between gap-3">
               <p className="min-w-0 truncate text-[10px] text-[var(--text-muted)]" title="Pravidla vyhodnocuje worker ze svého fill ledgeru a session, ne PWA. Zámek skončí až s koncem session; po prvním ARM jdou pravidla jen zpřísnit.">
                 Vyhodnocuje worker · zámek končí se session · po prvním ARM dnes jen zpřísnit.

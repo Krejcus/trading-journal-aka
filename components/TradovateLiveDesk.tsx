@@ -312,6 +312,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   }, [agentStatus]);
   const [agentTransport, setAgentTransport] = useState<'local' | 'relay' | null>(null);
   const [relayConnectionId, setRelayConnectionId] = useState<string | null>(null);
+  // Poslední ověřená cesta k workeru. Používá se VÝHRADNĚ pro jednosměrné
+  // brzdy (DISARM, kill switch), když čtení stavu dočasně selže — jinak by
+  // telefon při pomalém relay nemohl kopírku vypnout. ARM ani konfiguraci
+  // tudy poslat nejde; ty dál vyžadují čerstvý stav.
+  const lastAgentRouteRef = useRef<{ transport: 'local' | 'relay'; relayConnectionId: string | null } | null>(null);
   const [pairingNotice, setPairingNotice] = useState<string | null>(null);
   const runtimeAvailable = agentStatusFresh && agentTransport != null && agentStatus != null;
 
@@ -519,6 +524,22 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     setAgentStatus(result.status);
     return result;
   }, [agentClient, agentTransport, relayConnectionId]);
+  const executeSafetyCommand = useCallback(async (command: { type: 'disarm' } | { type: 'kill-switch' }) => {
+    const route = agentTransport
+      ? { transport: agentTransport, relayConnectionId }
+      : lastAgentRouteRef.current
+        ?? (canUseDirectLocalCopierAgent(window.location) ? { transport: 'local' as const, relayConnectionId: null } : null);
+    if (!route) throw new Error('Mac worker zatím nebyl nalezen. Pozice ověř a případně zavři přímo v Tradovate.');
+    if (route.transport === 'local') {
+      const result = await agentClient.execute(command);
+      setAgentStatus(result.status);
+      return result;
+    }
+    if (!route.relayConnectionId) throw new Error('Chybí Tradovate připojení Mac workeru. Pozice ověř a případně zavři přímo v Tradovate.');
+    const result = await executeTradovateCopierRelayCommand(route.relayConnectionId, command);
+    setAgentStatus(result.status);
+    return result;
+  }, [agentClient, agentTransport, relayConnectionId]);
   const acceptConfigAck = useCallback((status: LocalCopierAgentStatus) => {
     setAgentStatus(status);
     // Parent cache smí po konfiguračním zápisu převzít jen potvrzený worker
@@ -706,6 +727,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
             setAgentStatusResolved(true);
             setAgentTransport('local');
             setRelayConnectionId(next.device?.connectionId ?? next.devices?.[0]?.connectionId ?? null);
+            lastAgentRouteRef.current = { transport: 'local', relayConnectionId: next.device?.connectionId ?? next.devices?.[0]?.connectionId ?? null };
           }
           return;
         } catch {
@@ -728,6 +750,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
           setAgentStatusObservedAt(active ? Date.parse(active.remote!.lastSeenAt) : null);
           setAgentTransport(active ? 'relay' : null);
           setRelayConnectionId(active?.connectionId ?? null);
+          if (active) lastAgentRouteRef.current = { transport: 'relay', relayConnectionId: active.connectionId };
         }
       } catch {
         if (!stopped && isCurrent() && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
@@ -1031,8 +1054,8 @@ setAgentStatus((await executeAgent({
               onGroupsChange={setCopyGroups}
               onSwitchAndArm={armLiveGroup}
               onArmLive={executionGroup ? async () => armLiveGroup(executionGroup) : undefined}
-              onDisarm={async () => setAgentStatus((await executeAgent({ type: 'disarm' })).status)}
-              onEmergencyStop={async () => setAgentStatus((await executeAgent({ type: 'kill-switch' })).status)}
+              onDisarm={async () => { await executeSafetyCommand({ type: 'disarm' }); }}
+              onEmergencyStop={async () => { await executeSafetyCommand({ type: 'kill-switch' }); }}
               onDayLock={async () => {
                 if (!(await confirmAction({
                   title: 'Zamknout den',

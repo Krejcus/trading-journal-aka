@@ -1,6 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { copierPowerDisplayKey } from '../lib/copierPowerDisplay';
 import { CopierConnectionSwitch } from '../components/LiveCopyTradeOverview';
 
 const render = (props: Partial<Parameters<typeof CopierConnectionSwitch>[0]> = {}) =>
@@ -15,13 +16,45 @@ const render = (props: Partial<Parameters<typeof CopierConnectionSwitch>[0]> = {
   }));
 
 describe('Connect/Disconnect přepínač copieru', () => {
-  it('dokud stav runtime neznáme, netvrdí OFF ani nenabízí kliknutí', () => {
+  it('dokud stav runtime neznáme a nemáme potvrzený stav, netvrdí OFF a nabízí jen vypnutí', () => {
     const markup = render({ statusPending: true });
-    // Přepínač se v tomto stavu vůbec nevykreslí — armovaný copier by se
-    // jinak tvářil jako odpojený a kliknutí by ho zapnulo naostro.
+    // Přepínač se v tomto stavu nevykreslí — armovaný copier by se jinak
+    // tvářil jako odpojený a kliknutí by ho zapnulo naostro. Místo něj je
+    // „Neověřeno“, které smí otevřít jen potvrzení vypnutí (ST1).
     expect(markup).not.toContain('role="switch"');
-    expect(markup).toContain('role="status"');
-    expect(markup).toContain('Zjišťuji stav copieru');
+    expect(markup).toContain('Neověřeno');
+    expect(markup).toContain('aria-label="Stav kopírky neověřen — vypnout kopírku"');
+    expect(markup).not.toContain('Zapnout kopírovací skupinu');
+  });
+
+  it('neověřený stav s posledním potvrzeným ZAPNUTO ukazuje ON a nabízí jen vypnutí', () => {
+    const key = copierPowerDisplayKey('user-1', 'group-1');
+    const store = new Map<string, string>([[key, JSON.stringify({ connected: true, confirmedAt: Date.now() - 1_000 })]]);
+    vi.stubGlobal('window', { localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } } });
+    try {
+      const markup = render({ statusPending: true, powerDisplayKey: key, connected: false });
+      expect(markup).toContain('role="switch"');
+      expect(markup).toContain('aria-checked="true"');
+      expect(markup).toContain('data-copier-power-display="retained"');
+      expect(markup).toContain('Vypnout kopírovací skupinu (stav se ověřuje)');
+      expect(markup).not.toContain('disabled=""');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('neověřený stav s posledním potvrzeným VYPNUTO nedovolí zapnout', () => {
+    const key = copierPowerDisplayKey('user-1', 'group-2');
+    const store = new Map<string, string>([[key, JSON.stringify({ connected: false, confirmedAt: Date.now() - 1_000 })]]);
+    vi.stubGlobal('window', { localStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } } });
+    try {
+      const markup = render({ statusPending: true, powerDisplayKey: key, connected: true });
+      expect(markup).toContain('aria-checked="false"');
+      expect(markup).toContain('disabled=""');
+      expect(markup).toContain('Zapnout půjde až po ověření');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('armovaný runtime hlásí připojeno a nabízí odpojení', () => {

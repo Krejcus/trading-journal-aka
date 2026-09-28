@@ -10,6 +10,8 @@ import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
 import { isLiveAccountReadVerified, liveReadStaleLabel } from '../lib/liveReadFreshness';
 import { liveBalanceDisplay, liveCapitalDisplay, liveDailyPnlDisplay, liveGroupDailyPnlDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
 import { useCopierDisarmNotice } from '../hooks/useCopierDisarmNotice';
+import { useCopierPowerDisplay } from '../hooks/useCopierPowerDisplay';
+import { copierPowerDisplayKey } from '../lib/copierPowerDisplay';
 import { useFlipReorder, useIsomorphicLayoutEffect } from '../hooks/useFlipReorder';
 import { CopyGroupLibraryRequestFence } from '../lib/copyGroupLibraryRequestFence';
 import React, { useSyncExternalStore, useCallback, useMemo, useState, useEffect, useRef } from 'react';
@@ -1118,8 +1120,45 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     });
   };
 
+  // Worker každou změnu konfigurace zapnuté skupiny provede až po DISARM.
+  // Bez varování to vypadá, že se kopírka „sama vypnula“ (28. 9. 08:50).
+  const confirmArmedGroupChange = (group: CopyGroupConfig, proceed: () => void) => {
+    if (!(copierArmed && group.id === executionGroupId)) { proceed(); return; }
+    setPendingAction({
+      title: 'Změnit zapnutou skupinu?',
+      detail: 'Kopírka je zapnutá — uložení změny ji vypne (DISARM). Pak ji znovu zapni přepínačem skupiny. Uprostřed obchodu by followeři přestali dostávat posuny SL a výstupy.',
+      confirmLabel: 'Uložit a vypnout',
+      danger: true,
+      proceed,
+    });
+  };
+
   const requestGroupPower = (candidate: CopyGroupConfig) => {
-    if (copierTransition || copierStatusPending) return;
+    if (copierTransition) return;
+    if (copierStatusPending) {
+      // Neověřený stav (návrat z pozadí, pomalý relay, spící Mac): ARM se
+      // nikdy nenabízí. Vypnutí ano — je jednosměrné a worker ho provede i
+      // z neznámého stavu —, ale s varováním, protože vypnutí uprostřed
+      // obchodu nechá followery bez správy (posuny SL a výstupy se nezkopírují).
+      if (!onDisarm) {
+        setPendingAction({
+          title: 'Stav kopírky se ověřuje',
+          detail: 'Execution runtime teď není dostupný. Pro nouzové zastavení použij Kill switch v menu ⋮ nebo zavři pozice v Tradovate.',
+          confirmLabel: 'Rozumím',
+          danger: true,
+          blocked: true,
+        });
+        return;
+      }
+      setPendingAction({
+        title: 'Vypnout kopírku bez ověřeného stavu?',
+        detail: 'Aktuální stav kopírky ani pozic se teď nepodařilo ověřit. Vypnutí je bezpečné ve flat stavu; uprostřed obchodu by followeři přestali dostávat posuny SL a výstupy. Pozice nezavírá — k tomu slouží Flatten All, k úplnému zastavení brokerových akcí Kill switch.',
+        confirmLabel: 'Přesto vypnout',
+        danger: true,
+        proceed: () => { void runCopierTransition(candidate.id, false, onDisarm); },
+      });
+      return;
+    }
     const powered = copierArmed && candidate.id === executionGroupId;
     if (!powered && pauseActive) {
       setPendingAction({
@@ -1673,7 +1712,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           ),
         },
       };
-      void saveGroup(updated);
+      confirmArmedGroupChange(group, () => { void saveGroup(updated); });
     },
     onFlattenAccount: (accountId: number) => requestAccountFlatten(group, accountId),
     onCancelOrder: (orderId: number) => setPendingAction({
@@ -1832,6 +1871,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   runtimeReady={!!onSwitchAndArm || (!!commandAdapter && selected)}
                   transition={transitionGroupId === group.id ? copierTransition : null}
                   connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || pauseActive}
+                  powerDisplayKey={copierPowerDisplayKey(userId, group.id)}
                   dailyPnlPending={dailyPnlPending}
                   eligibility={group.followers
                     .filter(follower => follower.mode !== 'off')
@@ -1920,6 +1960,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         transition={transitionGroupId === group.id ? copierTransition : null}
                         connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || pauseActive}
                         onConnectionToggle={() => requestGroupPower(group)}
+                        powerDisplayKey={copierPowerDisplayKey(userId, group.id)}
                         open={expanded.has(group.id)}
                         onToggle={() => toggleGroup(group.id)}
                         onEdit={() => setEditorGroup(structuredClone(group))}
@@ -1957,7 +1998,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               ),
                             },
                           };
-                          void saveGroup(updated);
+                          confirmArmedGroupChange(group, () => { void saveGroup(updated); });
                         }}
                         onToggleEnabled={() => requestGroupPower(group)}
                         onFlatten={() => setPendingAction({
@@ -2004,7 +2045,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                                 if (!follower || follower.multiplier === next) return;
                                 setPendingAction({
                                   title: 'Změnit násobek účtu?',
-                                  detail: `Účet ${accountId}: ${follower.multiplier}× → ${next}×. Změna platí pouze pro tento účet; ostatní followeři zůstanou beze změny.`,
+                                  detail: `Účet ${accountId}: ${follower.multiplier}× → ${next}×. Změna platí pouze pro tento účet; ostatní followeři zůstanou beze změny.${copierArmed && group.id === executionGroupId ? ' Kopírka je zapnutá — potvrzení ji vypne (DISARM); pak ji znovu zapni přepínačem skupiny.' : ''}`,
                                   confirmLabel: 'Potvrdit násobek',
                                   accountIds: [accountId],
                                   command: { type: 'set-multiplier', groupId: group.id, accountId, multiplier: next },
@@ -2080,6 +2121,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           group={editorGroup}
           isNew={!groups.some(group => group.id === editorGroup.id)}
           tightenOnly={tightenOnly}
+          armedWarning={copierArmed && editorGroup.id === executionGroupId}
           accounts={snapshot.accounts}
           accountLabel={(accountId, role) => accountLabel(accountId, editorGroup.id, role)}
           onClose={() => setEditorGroup(null)}
@@ -2522,14 +2564,20 @@ function groupRows(
   return rows;
 }
 
-export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady, transition, connectBlocked, onToggle }: {
+export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady, transition, connectBlocked, onToggle, powerDisplayKey = '' }: {
   connected: boolean;
   statusPending: boolean;
   runtimeReady: boolean;
   transition: 'connecting' | 'disconnecting' | null;
   connectBlocked: boolean;
   onToggle: () => void;
+  /** Klíč pro zobrazení posledního potvrzeného stavu (jen prezentace, nikdy neautorizuje ARM). */
+  powerDisplayKey?: string;
 }) => {
+  // Při neověřeném stavu (návrat z pozadí, pomalý relay) ukazujeme poslední
+  // POTVRZENÝ stav místo „Neověřeno“. Retence je jen popisek: ARM se v tomto
+  // stavu nikdy nenabízí a vypnutí jde přes samostatný potvrzovací dialog.
+  const display = useCopierPowerDisplay(powerDisplayKey, connected, statusPending);
   const busy = transition != null;
   const disabled = statusPending || !runtimeReady || busy || (!connected && connectBlocked);
   // Knoflík ukazuje ZÁMĚR (hned po kliknutí sjede na novou stranu), kolej a
@@ -2559,16 +2607,58 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
         : connected ? 'Kliknutím bezpečně vypnout copier.' : 'Kliknutím zapnout copier naostro.';
 
   // Dokud stav neznáme, nesmí přepínač tvrdit OFF — armovaný copier by se
-  // tvářil jako odpojený. Neutrální „?" místo toho přiznává, že se ptáme.
+  // tvářil jako odpojený. Bez potvrzeného stavu proto „Neověřeno“; s ním
+  // poslední potvrzená poloha (tlumeně). Kliknout jde jen směrem k vypnutí:
+  // stav ZAPNUTO nebo neznámý stav otevře potvrzení vypnutí, ARM nikdy.
   if (statusPending) {
+    const retainedOn = display.connected === true;
+    const retainedOff = display.connected === false;
+    const warning = display.warning ? ' Stav není aktuální — spojení s workerem se nedaří obnovit.' : '';
+    if (display.connected == null) {
+      return (
+        <span className="inline-flex flex-col items-start">
+          <button
+            type="button"
+            title={`Stav kopírky se ověřuje.${warning} Kliknutím ji můžeš pro jistotu vypnout.`}
+            aria-label="Stav kopírky neověřen — vypnout kopírku"
+            onClick={event => {
+              event.stopPropagation();
+              onToggle();
+            }}
+            className="flex h-7 w-[108px] items-center justify-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] text-[9px] font-black uppercase tracking-[0.08em] text-[var(--text-secondary)] hover:border-rose-500/40 hover:text-rose-500"
+          >
+            <RefreshCw size={12} className="animate-spin" />
+            Neověřeno
+          </button>
+          {display.warning ? <span role="status" className="text-[10px] font-semibold text-amber-600">Stav není aktuální</span> : null}
+        </span>
+      );
+    }
     return (
-      <span
-        role="status"
-        title={title}
-        className="flex h-7 w-[108px] items-center justify-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] text-[9px] font-black uppercase tracking-[0.08em] text-[var(--text-secondary)]"
-      >
-        <RefreshCw size={12} className="animate-spin" />
-        Neověřeno
+      <span className="inline-flex flex-col items-start" data-copier-power-display="retained">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={retainedOn}
+          aria-label={retainedOn ? 'Vypnout kopírovací skupinu (stav se ověřuje)' : 'Kopírka vypnutá (stav se ověřuje)'}
+          title={retainedOn
+            ? `Poslední potvrzený stav: ZAPNUTO. Aktuální stav se ověřuje.${warning} Kliknutím kopírku vypneš.`
+            : `Poslední potvrzený stav: VYPNUTO. Aktuální stav se ověřuje.${warning} Zapnout půjde až po ověření.`}
+          disabled={retainedOff}
+          onClick={event => {
+            event.stopPropagation();
+            if (retainedOn) onToggle();
+          }}
+          data-intent={retainedOn}
+          className="copier-switch copier-switch-retained opacity-60 disabled:cursor-not-allowed"
+        >
+          <span className="copier-switch-label copier-switch-on" aria-hidden="true">ON</span>
+          <span className="copier-switch-label copier-switch-off" aria-hidden="true">OFF</span>
+          <span className="copier-switch-knob">
+            <span className="copier-switch-spinner" aria-hidden="true"><RefreshCw size={10} strokeWidth={2.8} className="animate-spin" /></span>
+          </span>
+        </button>
+        {display.warning ? <span role="status" className="text-[10px] font-semibold text-amber-600">Stav není aktuální</span> : null}
       </span>
     );
   }
@@ -2600,7 +2690,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
   );
 };
 
-const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsByAccount, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, tightenOnly, onApplyTemplate, onDelete, groupColumns }: {
+const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsByAccount, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, powerDisplayKey = '', open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, tightenOnly, onApplyTemplate, onDelete, groupColumns }: {
   group: CopyGroupConfig; rows: Row[]; armed: boolean; open: boolean; onToggle: () => void;
   dailyPnlPending: boolean;
   eligibility: (CopierAccountEligibility | undefined)[];
@@ -2611,6 +2701,7 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
   transition: 'connecting' | 'disconnecting' | null;
   connectBlocked: boolean;
   onConnectionToggle: () => void;
+  powerDisplayKey?: string;
   onEdit: () => void;
   onDelete: () => void;
   onToggleEnabled: () => void;
@@ -2661,6 +2752,7 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
                 transition={transition}
                 connectBlocked={connectBlocked}
                 onToggle={onConnectionToggle}
+                powerDisplayKey={powerDisplayKey}
               />
               {observingOnly ? (
                 <span title="Shadow režim pouze sleduje a nic neodesílá." className="inline-flex h-7 items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/10 px-1.5 text-[8px] font-black uppercase text-amber-600">
@@ -3107,7 +3199,7 @@ const CompactAccountSectionHead = ({ columns, indent = false }: { columns: 'mark
   </div>
 );
 
-const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, dailyPnlPending, eligibility, eligibilityByAccount, tradeCutsByAccount, participationByAccount = EMPTY_PARTICIPATION, onFollowerEnabled, onMultiplier, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onDelete, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel, islandTone = null }: {
+const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, powerDisplayKey = '', dailyPnlPending, eligibility, eligibilityByAccount, tradeCutsByAccount, participationByAccount = EMPTY_PARTICIPATION, onFollowerEnabled, onMultiplier, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onDelete, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel, islandTone = null }: {
   group: CopyGroupConfig;
   /** Fáze ze stavového ostrova. Karta je jeden box, takže tu rám obepne
    *  celou skupinu včetně účtů — na rozdíl od tabulkového rozložení. */
@@ -3135,6 +3227,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   onVerifyEligibility?: (accountId: number) => void;
   verifyingAccountId: number | null;
   onConnectionToggle: () => void;
+  powerDisplayKey?: string;
   onEdit: () => void;
   onDelete: () => void;
   onToggleEnabled: () => void;
@@ -3233,6 +3326,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
           transition={transition}
           connectBlocked={connectBlocked}
           onToggle={onConnectionToggle}
+          powerDisplayKey={powerDisplayKey}
         />
       </header>
 
@@ -3630,7 +3724,8 @@ const TopActionsMenu = ({ onTemplates, onKillSwitch, onDayLock, killSwitchActive
           <ShieldAlert size={13} />{dayLockActive ? 'Den je zamčený' : 'Zamknout den'}
         </button>
         <button
-          disabled={!runtimeReady || !onKillSwitch || killSwitchActive}
+          // Kill switch je jednosměrná brzda: nesmí čekat na ověřený stav runtime.
+          disabled={!onKillSwitch || killSwitchActive}
           onClick={() => { setOpen(false); void onKillSwitch?.(); }}
           className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-xs font-bold text-rose-600 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -4953,7 +5048,9 @@ type CompactEditorView =
   | { kind: 'add' }
   | { kind: 'follower'; accountId: number };
 
-export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, accountLabel, saving, libraryState, libraryError, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
+export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = false, accounts, accountLabel, saving, libraryState, libraryError, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
+  /** Upravovaná skupina právě kopíruje: uložení ji vypne (worker odzbrojí před změnou). */
+  armedWarning?: boolean;
   group: CopyGroupConfig;
   isNew: boolean;
   tightenOnly: boolean;
@@ -5630,6 +5727,11 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
         </div>
 
         {libraryNotice}
+        {armedWarning ? (
+          <div role="status" className="mx-5 mb-2 rounded-md border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-[11px] font-bold text-amber-600">
+            Kopírka je zapnutá — uložení změny ji vypne (DISARM). Pak ji znovu zapni přepínačem skupiny.
+          </div>
+        ) : null}
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)] px-5 py-3.5">
           <div>{onDelete ? <button onClick={onDelete} disabled={saving} className="flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-rose-500 hover:bg-rose-500/10"><Trash2 size={14} /> Smazat skupinu</button> : null}</div>
           <div className="flex gap-2">
@@ -6173,7 +6275,7 @@ const ConfirmActionDialog = ({ action, busy, apiReady, flattenPreview = null, on
       ) : !action.run && !action.proceed ? (
         <div className={`rounded-xl border px-3 py-2.5 text-[11px] font-bold mt-4 ${apiReady ? 'border-emerald-500/15 bg-emerald-500/[0.055] text-emerald-600' : 'border-blue-500/15 bg-blue-500/[0.055] text-blue-500'}`}>
           {apiReady
-            ? 'Execution adaptér je připojen. Potvrzená akce bude předána lokálnímu DEMO runtime.'
+            ? 'Execution adaptér je připojen. Potvrzená akce bude předána Mac workeru a provede se na skutečných účtech.'
             : 'Bez připojeného execution adaptéru se akce pouze uloží lokálně a žádný brokerový příkaz se neodešle.'}
         </div>
       ) : null}

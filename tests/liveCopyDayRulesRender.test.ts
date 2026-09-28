@@ -316,7 +316,7 @@ describe('Zámek dne', () => {
     expect(active).toContain('Den je zamčený do');
     expect(active).toContain('Automaticky');
     expect(active).toContain('Max obchodů za den');
-    expect(active).toContain('Zámek skončí s koncem session (00:00 Chicago); pravidla jdou dnes jen zpřísnit');
+    expect(active).toContain('Zámek skončí s koncem session (17:00 Chicago); pravidla jdou dnes jen zpřísnit');
     expect(active).not.toContain('Odemknout');
     expect(expired).toBe('');
   });

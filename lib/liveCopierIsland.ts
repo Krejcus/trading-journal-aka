@@ -144,6 +144,17 @@ export function buildLiveCopierIsland(input: LiveCopierIslandInput): LiveCopierI
   } = input;
 
   const label = groupName?.trim() || 'Skupina';
+  // ARM platí nejvýš 8 h od zapnutí (nejpozději do konce session). Expirace
+  // uprostřed obchodu zavře followery, proto se blížící konec zvýrazní.
+  const armLeftMs = armExpiresAt > 0 ? armExpiresAt - now : Number.POSITIVE_INFINITY;
+  const armExpiryField = (): LiveIslandField | null => {
+    const at = armTime(armExpiresAt);
+    if (!armed || !at) return null;
+    return {
+      label: 'ARM do', value: at,
+      ...(armLeftMs <= 15 * 60_000 ? { tone: 'danger' as const } : armLeftMs <= 30 * 60_000 ? { tone: 'warn' as const } : {}),
+    };
+  };
 
   // Stálé jádro rozbalení. Denní P&L se vynechá, dokud není potvrzené.
   // Pozor na záměnu s „X/Y zařazených“ v tabulce skupin — to je způsobilost
@@ -215,6 +226,8 @@ export function buildLiveCopierIsland(input: LiveCopierIslandInput): LiveCopierI
     if (tp) fields.push(tp);
     const reserve = tightestReserve(accounts);
     if (reserve) fields.push(reserve);
+    const positionExpiry = armLeftMs <= 30 * 60_000 ? armExpiryField() : null;
+    if (positionExpiry) fields.push(positionExpiry);
     return {
       phase: 'position', tone: 'active',
       title: `${size > 0 ? `${size}× ` : ''}${symbol}${side ? ` ${side}` : ''}`.trim() || 'Pozice běží',
@@ -252,6 +265,8 @@ export function buildLiveCopierIsland(input: LiveCopierIslandInput): LiveCopierI
     const tp = legField('TP', leaderLimit.price, legs.target, leaderLimit.symbol, leaderLimit.quantity, 'pnl-positive');
     if (sl) fields.push(sl);
     if (tp) fields.push(tp);
+    const limitExpiry = armLeftMs <= 30 * 60_000 ? armExpiryField() : null;
+    if (limitExpiry) fields.push(limitExpiry);
     return {
       phase: 'limit', tone: 'active',
       title: `Limit čeká · ${leaderLimit.symbol} ${side}`,
@@ -275,7 +290,8 @@ export function buildLiveCopierIsland(input: LiveCopierIslandInput): LiveCopierI
       fields.push({ label: 'Obchodů dnes', value: maxTradesPerDay ? `${tradesToday} / ${maxTradesPerDay}` : String(tradesToday) });
     }
     const expiry = armTime(armExpiresAt);
-    if (expiry) fields.push({ label: 'ARM do', value: expiry });
+    const expiryField = armExpiryField();
+    if (expiryField) fields.push(expiryField);
     return {
       phase: 'armed', tone: 'ok',
       title: `${label} zapnutá`,
