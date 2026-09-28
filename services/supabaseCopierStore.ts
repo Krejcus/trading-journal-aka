@@ -62,6 +62,7 @@ function validOutbox(value: unknown): boolean {
   return string(value.key) && string(value.tag) && string(value.leaderOrderId)
     && (value.leaderEventId == null || string(value.leaderEventId))
     && (value.leaderSequence == null || (integer(value.leaderSequence) && Number(value.leaderSequence) >= 0))
+    && (value.protectiveRole == null || value.protectiveRole === 'standalone-stop')
     && validRequest(value.request) && placeOutboxStatuses.has(String(value.status))
     && integer(value.attempts) && Number(value.attempts) >= 0
     && optionalString(value.brokerOrderId) && optionalString(value.reason)
@@ -125,7 +126,8 @@ function validLinkTuple(value: unknown): boolean {
   return value[1].every(link => isRecord(link) && string(link.key) && integer(link.accountId)
     && string(link.brokerOrderId) && integer(link.quantity) && Number(link.quantity) > 0
     && (link.limitPrice == null || finite(link.limitPrice))
-    && (link.stopPrice == null || finite(link.stopPrice)));
+    && (link.stopPrice == null || finite(link.stopPrice))
+    && (link.protectiveRole == null || link.protectiveRole === 'standalone-stop'));
 }
 
 function validNumberTuple(value: unknown): boolean {

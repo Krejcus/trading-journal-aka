@@ -364,7 +364,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const pendingCommandReports = new Map<number, TradovateCommandReportEntity[]>();
   const orderRejectReasons = new Map<number, string>();
   const fillTotals = new Map<number, number>();
-  const emittedFillIds = new Set<number>();
+  /** Fill IDs už započtená do order cumQty, ať při REST/WS závodu nezdvojíme qty. */
+  const accountedFillIds = new Set<number>();
+  /** Historický baseline z úvodního syncu; jeho pozdější WS Updated se nereplayuje. */
+  const baselineFillIds = new Set<number>();
+  /** Fill IDs skutečně doručená execution controlleru. */
   const deliveredFillIds = new Set<number>();
   const pendingFills = new Map<number, TradovateFillEntity[]>();
   const orders = new Map<string, BrokerOrder>();
@@ -734,8 +738,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   };
 
   const rememberFill = (fill: TradovateFillEntity): boolean => {
-    if (emittedFillIds.has(fill.id)) return false;
-    emittedFillIds.add(fill.id);
+    if (accountedFillIds.has(fill.id)) return false;
+    accountedFillIds.add(fill.id);
     fillTotals.set(fill.orderId, (fillTotals.get(fill.orderId) ?? 0) + fill.qty);
     return true;
   };
@@ -858,7 +862,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   };
   let orderGraphInFlight: Promise<TradovateRawOrderEntity[]> | null = null;
 
-  const loadOrderGraph = async (selectedOrderId?: number) => {
+  const loadOrderGraph = async (selectedOrderId?: number, establishFillBaseline = false) => {
+    if (establishFillBaseline) return loadOrderGraphUncached(selectedOrderId, true);
     if (selectedOrderId == null) {
       if (!orderGraphInFlight) {
         orderGraphInFlight = loadOrderGraphUncached()
@@ -952,7 +957,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     }
   };
 
-  const loadOrderGraphUncached = async (selectedOrderId?: number) => {
+  const loadOrderGraphUncached = async (
+    selectedOrderId?: number,
+    establishFillBaseline = false,
+  ) => {
     const suffix = selectedOrderId == null ? '/list' : `/deps?masterid=${selectedOrderId}`;
     const [rawResult, versionResult, commandResult, fillResult] = await Promise.all([
       selectedOrderId == null
@@ -981,7 +989,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (selectedIds.has(report.orderId)) rememberExecutionReport(report);
       }
     }
-    for (const fill of fillResult ?? []) rememberFill(fill);
+    for (const fill of fillResult ?? []) {
+      rememberFill(fill);
+      if (establishFillBaseline) baselineFillIds.add(fill.id);
+    }
     return rawList;
   };
 
@@ -1099,7 +1110,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         } });
       } else if (entityType === 'fill') {
         const fill = item.entity as TradovateFillEntity;
-        if (!rememberFill(fill)) continue;
+        // REST lookup smí fill započíst do Order grafu, ale nesmí jej označit
+        // jako doručený controlleru. Jen explicitní startovní baseline tlumí
+        // historické WS Updated; běžný REST→WS závod musí Fill emitovat právě
+        // jednou. `emitMappedFill` drží vlastní delivery dedup.
+        rememberFill(fill);
+        if (deliveredFillIds.has(fill.id) || baselineFillIds.has(fill.id)) continue;
         const changedAccount = (item.entity as { accountId?: number }).accountId ?? rawOrders.get(fill.orderId)?.accountId;
         if (changedAccount != null) notifyAccountDataChange(changedAccount, 'fill');
         else notifyAccountDataChange(null, 'resync');
@@ -1194,7 +1210,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       if (value.s !== 200) throw new TradovateTransportError(`WebSocket synchronization failed${socketFailureDetail(value)}`);
       if (Array.isArray(value.d)) await handleProps(value.d);
       if (!syncReady) {
-        const baseline = await loadOrderGraph();
+        const baseline = await loadOrderGraph(undefined, true);
         if (!isCurrent()) return;
         for (const raw of baseline) {
           const order = await composeOrder(raw.id);
@@ -1230,16 +1246,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const handleSocketData = async (raw: unknown, messages: readonly unknown[], isCurrent: () => boolean) => {
     if (!isCurrent()) return;
     if (typeof raw !== 'string' || raw.length === 0) return;
-    lastSocketMessageAt = clock();
-    emit({ type: 'heartbeat', at: lastSocketMessageAt });
     if (raw === 'o') {
       socketState = 'authorizing';
       const accessToken = await token();
       if (isCurrent()) socket?.send(`authorize\n0\n\n${accessToken}`);
-      return;
-    }
-    if (raw[0] === 'h') {
-      socket?.send('[]');
       return;
     }
     if (raw[0] !== 'a') return;
@@ -1441,6 +1451,26 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     candidate.onmessage = event => {
       if (socket !== candidate || socketState === 'closing') return;
       const receivedAt = clock();
+      // Transportní živost nesmí čekat za sémantickou Order/Fill hydratací.
+      // Controller tak dostane čerstvý heartbeat ještě před případným REST
+      // awaitem a broker timeout měří skutečný socket, ne délku handleru.
+      lastSocketMessageAt = receivedAt;
+      emit({ type: 'heartbeat', at: receivedAt });
+
+      // Tradovate heartbeat frame nemá sémantiku. Odpověď musí odejít v témže
+      // callbacku, ne až za `socketMessageTail`.
+      if (typeof event.data === 'string' && event.data[0] === 'h') {
+        try {
+          candidate.send('[]');
+          lastHeartbeatSentAt = receivedAt;
+        } catch (reason) {
+          emitOrHoldError(contextualError(reason, 'websocket'));
+          if (!renewalInProgress) emit({ type: 'connection', connected: false, at: clock() });
+          closeSocket(candidate, 'heartbeat-send-error');
+        }
+        return;
+      }
+
       let messages: unknown[] = [];
       let parseError: unknown;
       try {
@@ -1456,6 +1486,18 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           }
         }
       } catch (reason) { parseError = reason; }
+
+      // `o` pouze zahájí autorizaci. Serial tail patří výhradně sémantickým
+      // `a` zprávám, aby transportní provoz nebyl jejich backpressurem.
+      if (typeof event.data !== 'string' || event.data[0] !== 'a') {
+        void handleSocketData(event.data, messages, () => socket === candidate && socketState !== 'closing')
+          .catch(reason => {
+            if (socket !== candidate) return;
+            emitOrHoldError(contextualError(reason, 'websocket'));
+            closeSocket(candidate, 'socket-message-error');
+          });
+        return;
+      }
       socketMessageTail = socketMessageTail
         .then(() => {
           if (socket !== candidate) return;

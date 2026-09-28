@@ -208,6 +208,38 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — V5/V7/V8: durable standalone SL a oddělená broker liveness/fill dedup (Codex, balíček 5b)
+
+- Opraven lokálně balíček 5b bez commitu, deploye, reinstalu workeru,
+  produkční konfigurace nebo brokerového volání. Zakázané paralelně měněné
+  `copierRuntimeController.ts` a `brokerRouter.ts` zůstaly beze změny.
+- Samostatný Stop/StopLimit, který autoritativní otevřená leader epocha
+  klasifikuje jako redukující, nyní nese durable
+  `protectiveRole: standalone-stop` v place outboxu i follower linku. Jeho
+  leader cancel proto po DISARM/kill projde plnou fail-closed bránou; obyčejný
+  čekající Stop entry se dál smí risk-redukčně zrušit. Recovery dělá pouze
+  lookup podle tagu, neposílá druhý place a durable roli obnoví s linkem.
+- Tradovate transport zapisuje `lastSocketMessageAt`, emituje heartbeat a na
+  `h` odpovídá `[]` přímo v raw `onmessage`; serial tail zůstal jen pro
+  sémantické `a` zprávy. Pomalá REST hydratace Orderu tak už nevyrábí falešný
+  heartbeat timeout/stale-heartbeat. Skutečně stale posun SL dál skončí
+  viditelným kritickým `blocked` auditem a fail-closed, ne tichým skipem.
+- Fill dedup je rozdělen na započtené ID, explicitní úvodní REST baseline a
+  ID skutečně doručená controlleru. Běžný REST lookup už nepotlačí pozdější
+  WS Fill stejného ID, ale historický fill z úvodního sync baseline se
+  nereplayuje; order cumQty se v obou případech nezapočítá dvakrát.
+- Čtyři nové hlavní regrese před opravou padaly (DISARM, kill, REST→WS fill
+  race, heartbeat za pomalým handlerem). Po opravě cíleně 169/169 a širší
+  broker blok 212/212; scoped ESLint i `git diff --check` čisté, produkční
+  build prošel. Root `tsc --noEmit` má jen předem známé chybějící Chrome typy
+  a `@crxjs/vite-plugin` v `extension/` (závislosti se podle plánu
+  nedoinstalovávaly). Celá předepsaná copier sada prošla jednovláknově
+  136/136 souborů a 1620/1620 testů; první sandbox běh měl pouze
+  `listen EPERM 127.0.0.1`, paralelní loopback běh jeden zátěžový V13 timing
+  flake, který samostatně prošel 13/13 a ve finálním běhu se neopakoval.
+- Zbývá nezávislé review a až po výslovném souhlasu commit/reinstall a řízený
+  DEMO conformance test; nic z toho v tomto balíčku neproběhlo.
+
 ### 2026-09-28 — Konzervativní V13: serializovaný flat sweep bez background fencing regresí (Codex, balíček 3b-2)
 
 - Commit `1a59237` byl na `HEAD 90cee98` přepracován bez revertu V12

@@ -83,10 +83,32 @@ import {
   cancelLifecycleHaltReason,
   evaluateRiskGate,
   haltReason,
+  protectiveLifecycleHaltReason,
   type RiskGateContext,
 } from './copierRiskGate';
 import { snapshotToState, toSnapshot, type CopierSnapshot, type CopierStore } from './copierStore';
 import type { CopyGroupConfig } from './liveCopyTrading';
+
+const standaloneProtectiveRole = (
+  event: LeaderEvent,
+  state: CopierState,
+  group: CopyGroupConfig,
+): FollowerOrderLink['protectiveRole'] => {
+  if (event.kind !== 'submitted'
+    || (event.orderType !== 'Stop' && event.orderType !== 'StopLimit')) return undefined;
+  const epoch = state.safety.leaderExposureEpochs?.find(candidate => (
+    candidate.groupId === group.id
+    && candidate.leaderAccountId === event.accountId
+    && candidate.symbol === event.symbol
+    && candidate.phase === 'open'
+    && candidate.lastLeaderNet !== 0
+  ));
+  if (!epoch) return undefined;
+  const reduces = epoch.lastLeaderNet > 0 ? event.side === 'Sell' : event.side === 'Buy';
+  return reduces && event.quantity <= Math.abs(epoch.lastLeaderNet)
+    ? 'standalone-stop'
+    : undefined;
+};
 
 async function resolveBrokerLifecycleEntry(
   broker: BrokerPort,
@@ -1304,6 +1326,7 @@ export async function processLeaderEvent(
   let shadowLinks = new Map(runtime.shadowLinks ?? []);
   let state = runtime.state;
   let revision = runtime.revision;
+  const protectiveRole = standaloneProtectiveRole(event, state, group);
 
   const verdict = classifySequence(event.sequence, state.lastSequence);
   const deferredReplay = options.deferredReplay === true && verdict === 'out-of-order';
@@ -1386,17 +1409,23 @@ export async function processLeaderEvent(
       protectiveLegIds.add(entry.leaderStopOrderId);
       protectiveLegIds.add(entry.leaderTargetOrderId);
     }
-    const commandHalt = isTerminalCancel && !protectiveLegIds.has(event.orderId)
+    const durableStandaloneProtective = (planningState.links.get(event.orderId) ?? [])
+      .some(link => link.protectiveRole === 'standalone-stop');
+    const protectiveLifecycle = protectiveLegIds.has(event.orderId) || durableStandaloneProtective;
+    const commandContext = {
+      ...context,
+      sequenceBroken: context.sequenceBroken || sequenceBroken,
+      stuckOutbox: context.stuckOutbox
+        || stuckEntries(outbox.values()).length > 0
+        || stuckBracketEntries(bracketOutbox.values()).length > 0
+        || stuckOsoEntries(osoOutbox.values()).length > 0
+        || stuckCancelEntries(cancelOutbox.values()).some(entry => entry.leaderEventId !== event.id),
+    };
+    const commandHalt = isTerminalCancel && !protectiveLifecycle
       ? cancelLifecycleHaltReason(context)
-      : haltReason({
-          ...context,
-          sequenceBroken: context.sequenceBroken || sequenceBroken,
-          stuckOutbox: context.stuckOutbox
-            || stuckEntries(outbox.values()).length > 0
-            || stuckBracketEntries(bracketOutbox.values()).length > 0
-            || stuckOsoEntries(osoOutbox.values()).length > 0
-            || stuckCancelEntries(cancelOutbox.values()).some(entry => entry.leaderEventId !== event.id),
-        });
+      : protectiveLifecycle
+        ? protectiveLifecycleHaltReason(commandContext)
+        : haltReason(commandContext);
     if (commandHalt || (broker.environment === 'live' && !store)) {
       const reason = commandHalt ?? 'durable-store-required';
       for (const command of commands) {
@@ -1531,6 +1560,11 @@ export async function processLeaderEvent(
       };
     }
     const sendableKeys = new Set<string>();
+    const protectiveCancelKeys = new Set(
+      protectiveLifecycle
+        ? cancels.map(command => command.key)
+        : [],
+    );
     const sending = commands.map(command => {
       const existing = cancelOutbox.get(command.key);
       const entry = existing ?? (command.operation === 'cancel'
@@ -1565,6 +1599,10 @@ export async function processLeaderEvent(
       if (!sendableKeys.has(entry.key)) return;
       try {
         if (entry.operation === 'cancel') {
+          // `dispatchBroker` dává obyčejnému terminal cancelu výjimku z
+          // DISARM/kill. Pro protective cancel proto bez awaitu těsně před
+          // side effectem vyžadujeme plnou write bránu (`modify`).
+          if (protectiveCancelKeys.has(entry.key)) broker.assertDispatchAllowed?.('modify');
           await broker.cancelOrder(entry.accountId, entry.brokerOrderId);
         } else if (entry.changes) {
           // Incident 24. 8.: náš modify (total 6) čekal AtExecution, mezitím
@@ -1768,6 +1806,7 @@ export async function processLeaderEvent(
           quantity: request.quantity,
           ...(request.limitPrice != null ? { limitPrice: request.limitPrice } : {}),
           ...(request.stopPrice != null ? { stopPrice: request.stopPrice } : {}),
+          ...(protectiveRole ? { protectiveRole } : {}),
         });
         shadowLinks = new Map(shadowState.links);
       }
@@ -1820,6 +1859,7 @@ export async function processLeaderEvent(
           event.id,
           event.sequence,
         );
+      if (protectiveRole && entry.protectiveRole == null) entry = { ...entry, protectiveRole };
       const action = nextAction(entry);
 
       if (action.type === 'skip') {
@@ -1957,6 +1997,7 @@ export async function processLeaderEvent(
         quantity: result.entry.request.quantity,
         ...(result.entry.request.limitPrice != null ? { limitPrice: result.entry.request.limitPrice } : {}),
         ...(result.entry.request.stopPrice != null ? { stopPrice: result.entry.request.stopPrice } : {}),
+        ...(result.entry.protectiveRole ? { protectiveRole: result.entry.protectiveRole } : {}),
       });
     }
   }
@@ -2097,6 +2138,7 @@ export async function recoverOutbox(options: RecoverOutboxOptions): Promise<Copi
           quantity: resolved.request.quantity,
           ...(resolved.request.limitPrice != null ? { limitPrice: resolved.request.limitPrice } : {}),
           ...(resolved.request.stopPrice != null ? { stopPrice: resolved.request.stopPrice } : {}),
+          ...(resolved.protectiveRole ? { protectiveRole: resolved.protectiveRole } : {}),
         });
       }
       audit.push({

@@ -1950,6 +1950,143 @@ describe('zrušení objednávky u leadera', () => {
     expect(canceled.runtime.state.lastSequence).toBe(2);
   });
 
+  it.each([
+    ['DISARM', { armed: false }],
+    ['kill switch', { killSwitch: true }],
+  ] as const)('nezruší durable standalone protective stop po %s', async (_label, gateOverride) => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const clock = stepClock();
+    const protectedState = createCopierState([], 0, [], [], [], {
+      entryCooldownUntil: 0,
+      dayLockUntil: 0,
+      leaderExposureEpochs: [{
+        id: 'epoch-1',
+        groupId: soloGroup.id,
+        leaderAccountId: 100,
+        symbol: 'MNQU6',
+        openedAt: 1,
+        lastLeaderNet: 1,
+        generation: 1,
+        phase: 'open',
+        followers: [{
+          accountId: 200,
+          replicationModeAtOpen: 'on-submit',
+          eligibleAtOpen: true,
+          copyLineage: 'confirmed',
+        }],
+        leaderEntryOrderIds: ['entry-1'],
+        leaderExitOrderIds: [],
+      }],
+    });
+    const opened = await processLeaderEvent({
+      event: event({
+        id: 'stop-submit', orderId: 'standalone-stop', kind: 'submitted',
+        side: 'Sell', orderType: 'Stop', stopPrice: 29_450,
+      }),
+      group: soloGroup,
+      runtime: createRuntime(protectedState),
+      context: liveGate(),
+      broker,
+      clock,
+    });
+
+    expect(opened.runtime.state.links.get('standalone-stop')?.[0])
+      .toMatchObject({ protectiveRole: 'standalone-stop' });
+
+    const canceled = await processLeaderEvent({
+      event: event({
+        id: 'stop-cancel', orderId: 'standalone-stop', kind: 'canceled', sequence: 2,
+        side: 'Sell', orderType: 'Stop', stopPrice: 29_450,
+      }),
+      group: soloGroup,
+      runtime: opened.runtime,
+      context: liveGate(gateOverride),
+      broker,
+      clock,
+    });
+
+    expect(canceled.audit).toContainEqual(expect.objectContaining({
+      kind: 'blocked',
+      reason: 'killSwitch' in gateOverride ? 'kill-switch' : 'disarmed',
+    }));
+    expect(broker.orders()).toEqual([expect.objectContaining({ status: 'working' })]);
+    expect(canceled.runtime.state.lastSequence).toBe(1);
+  });
+
+  it('obnova standalone protective stopu dělá jen lookup a zachová durable roli', async () => {
+    const store = createMemoryCopierStore();
+    const broker = createMockBroker({ behavior: () => ({ kind: 'timeout-after-accept' }) });
+    const clock = stepClock();
+    const protectedState = createCopierState([], 0, [], [], [], {
+      entryCooldownUntil: 0,
+      dayLockUntil: 0,
+      leaderExposureEpochs: [{
+        id: 'epoch-recovery', groupId: soloGroup.id, leaderAccountId: 100,
+        symbol: 'MNQU6', openedAt: 1, lastLeaderNet: 1, generation: 1, phase: 'open',
+        followers: [{ accountId: 200, replicationModeAtOpen: 'on-submit',
+          eligibleAtOpen: true, copyLineage: 'confirmed' }],
+        leaderEntryOrderIds: ['entry-1'], leaderExitOrderIds: [],
+      }],
+    });
+    const uncertain = await processLeaderEvent({
+      event: event({
+        id: 'stop-submit-recovery', orderId: 'standalone-stop-recovery',
+        side: 'Sell', orderType: 'Stop', stopPrice: 29_450,
+      }),
+      group: soloGroup,
+      runtime: createRuntime(protectedState),
+      context: liveGate(),
+      broker,
+      clock,
+      store,
+    });
+    expect(uncertain.runtime.outbox.values().next().value).toMatchObject({
+      status: 'unknown', protectiveRole: 'standalone-stop',
+    });
+    expect(broker.placedRequests()).toHaveLength(1);
+
+    const restored = runtimeFromSnapshot(await store.load());
+    const recovered = await recoverOutbox({ runtime: restored, broker, clock, store });
+
+    expect(broker.placedRequests()).toHaveLength(1);
+    expect(recovered.runtime.outbox.values().next().value).toMatchObject({
+      status: 'acknowledged', protectiveRole: 'standalone-stop',
+    });
+    expect(recovered.runtime.state.links.get('standalone-stop-recovery')?.[0])
+      .toMatchObject({ protectiveRole: 'standalone-stop' });
+  });
+
+  it('čekající stop vstup zůstává po DISARM risk-redukujícím cancelem', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const clock = stepClock();
+    const opened = await processLeaderEvent({
+      event: event({
+        id: 'entry-submit', orderId: 'buy-stop-entry', kind: 'submitted',
+        side: 'Buy', orderType: 'Stop', stopPrice: 30_050,
+      }),
+      group: soloGroup,
+      runtime: createRuntime(createCopierState()),
+      context: liveGate(),
+      broker,
+      clock,
+    });
+
+    const canceled = await processLeaderEvent({
+      event: event({
+        id: 'entry-cancel', orderId: 'buy-stop-entry', kind: 'canceled', sequence: 2,
+        side: 'Buy', orderType: 'Stop', stopPrice: 30_050,
+      }),
+      group: soloGroup,
+      runtime: opened.runtime,
+      context: liveGate({ armed: false }),
+      broker,
+      clock,
+    });
+
+    expect(canceled.audit).toContainEqual(expect.objectContaining({ kind: 'canceled' }));
+    expect(broker.orders()).toEqual([expect.objectContaining({ status: 'canceled' })]);
+  });
+
   it('dokončí cancel dlouho čekající follower objednávky i po expiraci ARM TTL', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const clock = stepClock();
@@ -2622,6 +2759,36 @@ describe('změna pracovní objednávky', () => {
 
     expect(modified.audit).toContainEqual(expect.objectContaining({ kind: 'blocked', reason: 'disarmed' }));
     expect(broker.orders()[0]).toMatchObject({ quantity: 1, limitPrice: 29_500, status: 'working' });
+    expect(modified.runtime.state.lastSequence).toBe(1);
+  });
+
+  it('stale heartbeat posun SL nezahodí tiše: vrátí kritický blocked audit', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const clock = stepClock();
+    const opened = await processLeaderEvent({
+      event: event({ orderType: 'Stop', side: 'Sell', stopPrice: 29_500 }),
+      group: soloGroup,
+      runtime: createRuntime(createCopierState()),
+      context: liveGate(),
+      broker,
+      clock,
+    });
+    const modified = await processLeaderEvent({
+      event: event({
+        id: 'move-stop', kind: 'replaced', sequence: 2,
+        orderType: 'Stop', side: 'Sell', stopPrice: 29_600,
+      }),
+      group: soloGroup,
+      runtime: opened.runtime,
+      context: liveGate({ now: 30_000, lastHeartbeatAt: 0 }),
+      broker,
+      clock,
+    });
+
+    expect(modified.audit).toContainEqual(expect.objectContaining({
+      kind: 'blocked', reason: 'stale-heartbeat',
+    }));
+    expect(broker.modifyRequests()).toHaveLength(0);
     expect(modified.runtime.state.lastSequence).toBe(1);
   });
 });

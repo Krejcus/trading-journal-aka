@@ -531,6 +531,164 @@ describe('createTradovateBroker WebSocket', () => {
     unsubscribe();
   });
 
+  it('REST order lookup nepolkne pozdější WS Fill stejného ID', async () => {
+    const events: Array<{ type: string; fillId?: string; filledQuantity?: number }> = [];
+    const socket: WebSocketLike = {
+      readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+      send() {}, close() {},
+    };
+    const fetchImpl: typeof fetch = async input => {
+      const url = String(input);
+      if (url.includes('/order/item')) return jsonResponse({
+        id: 42, accountId: 100, contractId: 7, action: 'Buy', ordStatus: 'Filled',
+      });
+      if (url.includes('/orderVersion/deps')) return jsonResponse([{
+        id: 42, orderId: 42, orderQty: 1, orderType: 'Market',
+      }]);
+      if (url.includes('/command/list')) return jsonResponse([{
+        id: 10, orderId: 42, commandType: 'New', clOrdId: 'cpabc123',
+      }]);
+      if (url.includes('/fill/deps')) return jsonResponse([{
+        id: 12, orderId: 42, accountId: 100, contractId: 7,
+        action: 'Buy', qty: 1, price: 29_500,
+      }]);
+      if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
+      throw new Error(`unexpected url ${url}`);
+    };
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123', fetchImpl,
+      webSocketFactory: () => socket,
+      setIntervalImpl: (() => 1) as unknown as typeof setInterval,
+      clearIntervalImpl: (() => undefined) as unknown as typeof clearInterval,
+    });
+    const unsubscribe = broker.subscribe(event => events.push({
+      type: event.type,
+      ...(event.type === 'fill' ? { fillId: event.fill.fillId } : {}),
+      ...(event.type === 'order' ? { filledQuantity: event.order.filledQuantity } : {}),
+    }));
+
+    await expect(broker.findOrderById(100, '42')).resolves.toMatchObject({
+      order: { brokerOrderId: '42', filledQuantity: 1 },
+    });
+    expect(events.filter(item => item.type === 'fill')).toHaveLength(0);
+
+    socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [{
+      entityType: 'Fill', entity: {
+        id: 12, orderId: 42, accountId: 100, contractId: 7,
+        action: 'Buy', qty: 1, price: 29_500,
+      },
+    }] })}]` });
+
+    await expect.poll(() => events.filter(item => item.type === 'fill').length).toBe(1);
+    expect(events.filter(item => item.type === 'fill')).toEqual([
+      expect.objectContaining({ fillId: '12' }),
+    ]);
+    expect(events.filter(item => item.type === 'order').at(-1)?.filledQuantity).toBe(1);
+    unsubscribe();
+  });
+
+  it('úvodní REST baseline nereplayuje historický WS Fill', async () => {
+    let fills = 0;
+    let connected = false;
+    const socket: WebSocketLike = {
+      readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+      send() {}, close() {},
+    };
+    const rawOrder = { id: 42, accountId: 100, contractId: 7, action: 'Buy', ordStatus: 'Filled' };
+    const fill = {
+      id: 12, orderId: 42, accountId: 100, contractId: 7,
+      action: 'Buy', qty: 1, price: 29_500,
+    };
+    const fetchImpl: typeof fetch = async input => {
+      const url = String(input);
+      if (url.includes('/order/list')) return jsonResponse([rawOrder]);
+      if (url.includes('/orderVersion/list')) return jsonResponse([{
+        id: 42, orderId: 42, orderQty: 1, orderType: 'Market',
+      }]);
+      if (url.includes('/command/list')) return jsonResponse([]);
+      if (url.includes('/fill/list')) return jsonResponse([fill]);
+      if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
+      throw new Error(`unexpected url ${url}`);
+    };
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123', fetchImpl,
+      webSocketFactory: () => socket,
+      setIntervalImpl: (() => 1) as unknown as typeof setInterval,
+      clearIntervalImpl: (() => undefined) as unknown as typeof clearInterval,
+    });
+    const unsubscribe = broker.subscribe(event => {
+      if (event.type === 'fill') fills += 1;
+      if (event.type === 'connection') connected = event.connected;
+    });
+
+    socket.onmessage?.({ data: 'a[{"i":1,"s":200,"d":[]}]' });
+    await expect.poll(() => connected).toBe(true);
+    socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [{
+      entityType: 'Fill', entity: fill,
+    }] })}]` });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(fills).toBe(0);
+    unsubscribe();
+  });
+
+  it('heartbeat a transportní liveness nepřijdou za pomalou Order hydratací', async () => {
+    let now = 0;
+    let resolveVersions!: (value: Response) => void;
+    const slowVersions = new Promise<Response>(resolve => { resolveVersions = resolve; });
+    const intervals: Array<() => void> = [];
+    const sent: string[] = [];
+    const heartbeats: number[] = [];
+    const errors: string[] = [];
+    const socket: WebSocketLike = {
+      readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+      send: value => sent.push(value), close() {},
+    };
+    const fetchImpl: typeof fetch = async input => {
+      const url = String(input);
+      if (url.includes('/orderVersion/deps')) return slowVersions;
+      if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
+      throw new Error(`unexpected url ${url}`);
+    };
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123', fetchImpl,
+      clock: () => now,
+      webSocketFactory: () => socket,
+      socketIdleTimeoutMs: 10_000,
+      setIntervalImpl: ((handler: TimerHandler) => {
+        intervals.push(handler as () => void);
+        return intervals.length;
+      }) as unknown as typeof setInterval,
+      clearIntervalImpl: (() => undefined) as unknown as typeof clearInterval,
+    });
+    const unsubscribe = broker.subscribe(event => {
+      if (event.type === 'heartbeat') heartbeats.push(event.at);
+      if (event.type === 'error') errors.push(event.error.message);
+    });
+    socket.onopen?.();
+    socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [{
+      entityType: 'Order', entity: {
+        id: 42, accountId: 100, contractId: 7, action: 'Sell', ordStatus: 'Working',
+      },
+    }] })}]` });
+    await Promise.resolve();
+
+    now = 20_000;
+    socket.onmessage?.({ data: 'h' });
+
+    expect(sent.at(-1)).toBe('[]');
+    expect(heartbeats.at(-1)).toBe(20_000);
+    intervals.at(-1)?.();
+    expect(errors.some(message => message.includes('heartbeat timeout'))).toBe(false);
+
+    resolveVersions(jsonResponse([{
+      id: 42, orderId: 42, orderQty: 1, orderType: 'Stop', stopPrice: 29_450,
+    }]));
+    await expect.poll(() => heartbeats.at(-1)).toBe(20_000);
+    unsubscribe();
+  });
+
   it('fill doručený před Order neztratí a doplní accountId až po korelaci', async () => {
     const fills: Array<{ accountId: number; quantity: number }> = [];
     const socket: WebSocketLike = {

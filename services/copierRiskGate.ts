@@ -163,6 +163,17 @@ export function cancelLifecycleHaltReason(
   return null;
 }
 
+/**
+ * Ochranný stop není obyčejný risk-redukující cancel. Jeho odstranění může
+ * nechat otevřenou pozici bez SL, proto respektuje DISARM, kill switch i
+ * všechny ostatní fail-closed západky stejně jako nový broker write.
+ */
+export function protectiveLifecycleHaltReason(
+  context: RiskGateContext,
+): RiskBlockReason | null {
+  return haltReason(context);
+}
+
 function requestBlockReason(
   request: BrokerOrderRequest,
   context: RiskGateContext,
