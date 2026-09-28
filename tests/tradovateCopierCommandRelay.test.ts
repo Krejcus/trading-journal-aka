@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { LocalCopierAgentCommand, LocalCopierAgentStatus } from '../lib/localCopierAgentProtocol';
 import {
   claimTradovateCopierCommand,
+  claimTradovateCopierPriorityCommand,
   copierRelayValidationErrorStatus,
   enqueueTradovateCopierCommand,
   heartbeatTradovateCopierDevice,
@@ -36,8 +37,21 @@ function enqueueDb(
   };
   const runtimeQuery = {
     eq: () => runtimeQuery,
+    order: () => runtimeQuery,
+    limit: () => runtimeQuery,
     maybeSingle: async () => ({
-      data: runtimeStatus ? { status: runtimeStatus } : null,
+      data: {
+        device_id: deviceId,
+        status: runtimeStatus ?? ({
+          version: 1,
+          environment: 'demo',
+          nonce: '',
+          group: { id: 'group-1' },
+          controller: { connected: true },
+          startedAt: '2026-08-21T11:00:00.000Z',
+        } as unknown as LocalCopierAgentStatus),
+        last_seen_at: '2099-01-01T00:00:00.000Z',
+      },
       error: null,
     }),
   };
@@ -84,11 +98,160 @@ const workerStatus = (
   environment: 'demo',
   nonce: 'device-secret-must-not-persist',
   group,
-  controller: { sessionArmedAt } as LocalCopierAgentStatus['controller'],
+  controller: { sessionArmedAt, connected: true } as LocalCopierAgentStatus['controller'],
   startedAt: '2026-09-05T08:00:00.000Z',
 });
 
 describe('Tradovate copier command relay', () => {
+  it('směruje na device z nejčerstvějšího UI runtime snapshotu, ne podle last_used_at', async () => {
+    const runtimeDeviceId = '44444444-4444-4444-8444-444444444444';
+    const runtimeCalls: Array<[string, unknown[]]> = [];
+    const runtimeQuery: Record<string, unknown> = {};
+    for (const method of ['eq', 'order', 'limit']) {
+      runtimeQuery[method] = (...args: unknown[]) => { runtimeCalls.push([method, args]); return runtimeQuery; };
+    }
+    runtimeQuery.maybeSingle = async () => ({ data: {
+      device_id: runtimeDeviceId,
+      status: { group: { id: 'group-1' }, controller: { connected: true } },
+      last_seen_at: '2099-01-01T00:00:00.000Z',
+    }, error: null });
+    const deviceQuery: Record<string, unknown> = {};
+    for (const method of ['eq', 'is']) deviceQuery[method] = () => deviceQuery;
+    deviceQuery.maybeSingle = async () => ({ data: { id: runtimeDeviceId }, error: null });
+    const upsert = vi.fn();
+    const upsertQuery = { select: () => upsertQuery, maybeSingle: async () => ({ data: {
+      id: 'command-id', status: 'pending', expires_at: '2026-08-21T12:05:00.000Z',
+    }, error: null }) };
+    const db = {
+      from: (table: string) => {
+        if (table === 'tradovate_copier_device_runtime') return { select: () => runtimeQuery };
+        if (table === 'tradovate_copier_devices') return { select: () => deviceQuery };
+        if (table === 'tradovate_copier_commands') return { upsert: (row: unknown, options: unknown) => {
+          upsert(row, options); return upsertQuery;
+        } };
+        throw new Error(`unexpected-table:${table}`);
+      },
+    } as unknown as SupabaseClient;
+
+    const queued = await enqueueTradovateCopierCommand({
+      db, userId, connectionId, command: { type: 'disarm' }, now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    expect(queued.deviceId).toBe(runtimeDeviceId);
+    expect(upsert.mock.calls[0][0]).toMatchObject({ device_id: runtimeDeviceId });
+    expect(runtimeCalls).toContainEqual(['order', ['last_seen_at', { ascending: false }]]);
+  });
+
+  it('brzdy mají pětiminutové expiry a opakovaný ARM se přichytí k jednomu rozpracovanému', async () => {
+    const safetyUpsert = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(safetyUpsert), userId, connectionId,
+      command: { type: 'disarm' }, now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    expect(safetyUpsert.mock.calls[0][0].expires_at).toBe('2026-08-21T12:05:00.000Z');
+
+    const armUpsert = vi.fn();
+    const queued = await enqueueTradovateCopierCommand({
+      db: enqueueDb(armUpsert, null, {
+        id: 'running-arm', status: 'claimed', expires_at: '2026-08-21T12:00:30.000Z',
+      }),
+      userId,
+      connectionId,
+      command: { type: 'arm-live', group: {
+        id: 'group-1', name: 'Hlavní', enabled: true, leaderAccountId: 11,
+        followers: [{ accountId: 22, mode: 'on-submit', multiplier: 1 }],
+      } },
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    expect(queued).toMatchObject({ id: 'running-arm', status: 'claimed', deviceId });
+    expect(armUpsert).not.toHaveBeenCalled();
+  });
+
+  it('souběžně vložený druhý ARM expiruje a vrátí ID nejstaršího canonical ARMu', async () => {
+    const runtimeQuery: Record<string, unknown> = {};
+    for (const method of ['eq', 'order', 'limit']) runtimeQuery[method] = () => runtimeQuery;
+    runtimeQuery.maybeSingle = async () => ({ data: {
+      device_id: deviceId,
+      status: { group: { id: 'group-1' }, controller: { connected: true } },
+      last_seen_at: '2099-01-01T00:00:00.000Z',
+    }, error: null });
+    const deviceQuery: Record<string, unknown> = {};
+    for (const method of ['eq', 'is']) deviceQuery[method] = () => deviceQuery;
+    deviceQuery.maybeSingle = async () => ({ data: { id: deviceId }, error: null });
+    let commandLookup = 0;
+    const selected: Record<string, unknown> = {};
+    for (const method of ['eq', 'or', 'order', 'limit']) selected[method] = () => selected;
+    selected.maybeSingle = async () => ({
+      data: ++commandLookup === 1 ? null : {
+        id: 'older-arm', status: 'pending', expires_at: '2026-08-21T12:00:30.000Z',
+      },
+      error: null,
+    });
+    const inserted = {
+      select: () => inserted,
+      maybeSingle: async () => ({ data: {
+        id: 'newer-arm', status: 'pending', expires_at: '2026-08-21T12:00:30.000Z',
+      }, error: null }),
+    };
+    const expiredRows: unknown[] = [];
+    const updateQuery: Record<string, unknown> = { error: null };
+    updateQuery.eq = () => updateQuery;
+    const db = { from: (table: string) => {
+      if (table === 'tradovate_copier_device_runtime') return { select: () => runtimeQuery };
+      if (table === 'tradovate_copier_devices') return { select: () => deviceQuery };
+      if (table === 'tradovate_copier_commands') return {
+        select: () => selected,
+        upsert: () => inserted,
+        update: (value: unknown) => { expiredRows.push(value); return updateQuery; },
+      };
+      throw new Error(`unexpected-table:${table}`);
+    } } as unknown as SupabaseClient;
+    const queued = await enqueueTradovateCopierCommand({
+      db, userId, connectionId,
+      command: { type: 'arm-live', group: {
+        id: 'group-1', name: 'Hlavní', enabled: true, leaderAccountId: 11,
+        followers: [{ accountId: 22, mode: 'on-submit', multiplier: 1 }],
+      } },
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    expect(queued).toMatchObject({ id: 'older-arm', deviceId });
+    expect(expiredRows).toEqual([expect.objectContaining({ status: 'expired', error: 'duplicate-arm-superseded' })]);
+  });
+
+  it('ARM odmítne okamžitě, když UI runtime snapshot hlásí odpojený worker', async () => {
+    const disconnected = workerStatus({
+      id: 'group-1', name: 'Hlavní', enabled: true, leaderAccountId: 11,
+      followers: [{ accountId: 22, mode: 'on-submit', multiplier: 1 }],
+    }, 0);
+    disconnected.controller.connected = false;
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(vi.fn(), disconnected), userId, connectionId,
+      command: { type: 'arm-live', group: disconnected.group },
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    })).rejects.toThrow('copier-relay-worker-disconnected');
+  });
+
+  it('prioritní claim vezme jen brzdu a atomicky ji označí claimed', async () => {
+    const updates: unknown[] = [];
+    const candidateQuery: Record<string, unknown> = {};
+    for (const method of ['eq', 'in', 'gt', 'order', 'limit']) candidateQuery[method] = () => candidateQuery;
+    candidateQuery.maybeSingle = async () => ({ data: { id: 'priority-id' }, error: null });
+    const updateQuery: Record<string, unknown> = {};
+    for (const method of ['eq', 'gt', 'select']) updateQuery[method] = () => updateQuery;
+    updateQuery.maybeSingle = async () => ({ data: {
+      id: 'priority-id', command_type: 'kill-switch', payload: {},
+      expires_at: '2099-01-01T00:00:00.000Z', status: 'claimed', result: null, error: null,
+    }, error: null });
+    const db = { from: () => ({
+      select: () => candidateQuery,
+      update: (value: unknown) => { updates.push(value); return updateQuery; },
+    }) } as unknown as SupabaseClient;
+    await expect(claimTradovateCopierPriorityCommand({ db, deviceId }))
+      .resolves.toEqual({
+        id: 'priority-id', command: { type: 'kill-switch' }, expiresAt: '2099-01-01T00:00:00.000Z',
+      });
+    expect(updates).toEqual([{ status: 'claimed', claimed_at: expect.any(String) }]);
+  });
+
   it('snapshot-test ukládá prázdný neobchodní payload a při claimu dostane ID commandu', async () => {
     const upsert = vi.fn();
     await enqueueTradovateCopierCommand({

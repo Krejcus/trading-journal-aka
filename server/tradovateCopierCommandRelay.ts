@@ -95,14 +95,61 @@ const allowed = new Set<LocalCopierAgentCommand['type']>([
   'lock-until-session-end',
 ]);
 
+const PRIORITY_COMMAND_TYPES = ['disarm', 'kill-switch', 'lock-until-session-end'] as const;
+const PRIORITY_COMMAND_TTL_MS = 5 * 60_000;
+const STANDARD_COMMAND_TTL_MS = 30_000;
+const WORKER_CONNECTED_MAX_AGE_MS = 10_000;
+
+export const isTradovateCopierPriorityCommand = (command: LocalCopierAgentCommand): boolean =>
+  PRIORITY_COMMAND_TYPES.includes(command.type as (typeof PRIORITY_COMMAND_TYPES)[number]);
+
 /** Sdílené HTTP mapování validačních chyb relay vrstvy. */
 export const copierRelayValidationErrorStatus = (message: string): 400 | 409 | null => {
   if (message === 'tighten-only') return 409;
+  if (message === 'copier-relay-worker-disconnected'
+    || message === 'copier-relay-runtime-not-found') return 409;
   if (message === 'unsupported-command'
     || message === 'unsupported-relay-command'
     || message === 'unsupported-remote-copy-command'
     || message === 'invalid-relay-command-payload') return 400;
   return null;
+};
+
+interface RelayDeviceTarget {
+  id: string;
+  status?: LocalCopierAgentStatus;
+  lastSeenAt?: string;
+}
+
+/** Selects the exact freshest connection runtime row returned by the UI status endpoint. */
+const selectRelayDeviceTarget = async (options: {
+  db: SupabaseClient;
+  userId: string;
+  connectionId: string;
+  deviceId?: string;
+}): Promise<RelayDeviceTarget> => {
+  let runtimeQuery = options.db.from('tradovate_copier_device_runtime')
+    .select('device_id,status,last_seen_at')
+    .eq('user_id', options.userId)
+    .eq('connection_id', options.connectionId);
+  if (options.deviceId) runtimeQuery = runtimeQuery.eq('device_id', options.deviceId);
+  const { data: runtime, error: runtimeError } = await runtimeQuery
+    .order('last_seen_at', { ascending: false })
+    .limit(1)
+    .maybeSingle<{ device_id: string; status: LocalCopierAgentStatus; last_seen_at: string }>();
+  if (runtimeError) throw new Error(`copier-relay-runtime-status-failed: ${runtimeError.message}`);
+  if (!runtime) throw new Error('copier-relay-runtime-not-found');
+
+  const { data: device, error: deviceError } = await options.db.from('tradovate_copier_devices')
+    .select('id')
+    .eq('id', runtime.device_id)
+    .eq('user_id', options.userId)
+    .eq('connection_id', options.connectionId)
+    .is('revoked_at', null)
+    .maybeSingle<{ id: string }>();
+  if (deviceError) throw new Error(`copier-relay-device-lookup-failed: ${deviceError.message}`);
+  if (!device) throw new Error('copier-relay-device-not-found');
+  return { id: device.id, status: runtime.status, lastSeenAt: runtime.last_seen_at };
 };
 
 /**
@@ -384,19 +431,17 @@ export async function enqueueTradovateCopierCommand(options: {
   const idempotencyKey = options.idempotencyKey?.trim() || randomUUID();
   const payload = commandPayload(options.command);
   const nextRiskGroup = relayRiskGroup(options.command, payload);
-  let deviceQuery = options.db
-    .from('tradovate_copier_devices')
-    .select('id')
-    .eq('user_id', options.userId)
-    .eq('connection_id', options.connectionId)
-    .is('revoked_at', null);
-  if (options.deviceId) deviceQuery = deviceQuery.eq('id', options.deviceId);
-  const { data: device, error: deviceError } = await deviceQuery
-    .order('last_used_at', { ascending: false, nullsFirst: false })
-    .limit(1)
-    .maybeSingle<{ id: string }>();
-  if (deviceError) throw new Error(`copier-relay-device-lookup-failed: ${deviceError.message}`);
-  if (!device) throw new Error('copier-relay-device-not-found');
+  const device = await selectRelayDeviceTarget({
+    db: options.db,
+    userId: options.userId,
+    connectionId: options.connectionId,
+    ...(options.deviceId ? { deviceId: options.deviceId } : {}),
+  });
+  if (options.command.type === 'arm-live' && (
+    !device.status?.controller?.connected
+    || !device.lastSeenAt
+    || now - Date.parse(device.lastSeenAt) >= WORKER_CONNECTED_MAX_AGE_MS
+  )) throw new Error('copier-relay-worker-disconnected');
 
   if (nextRiskGroup) {
     await enforceRelayTightenOnly({
@@ -418,7 +463,14 @@ export async function enqueueTradovateCopierCommand(options: {
   });
   if (inFlight) return { ...inFlight, deviceId: device.id };
 
-  const expiresAt = new Date(now + 30_000).toISOString();
+  const inFlightArm = await findInFlightArm({
+    db: options.db, userId: options.userId, deviceId: device.id, command: options.command, now,
+  });
+  if (inFlightArm) return { ...inFlightArm, deviceId: device.id };
+
+  const expiresAt = new Date(now + (isTradovateCopierPriorityCommand(options.command)
+    ? PRIORITY_COMMAND_TTL_MS
+    : STANDARD_COMMAND_TTL_MS)).toISOString();
   const { data, error } = await options.db.from('tradovate_copier_commands').upsert({
     user_id: options.userId,
     device_id: device.id,
@@ -433,7 +485,19 @@ export async function enqueueTradovateCopierCommand(options: {
     .select('id,status,expires_at')
     .maybeSingle<{ id: string; status: string; expires_at: string }>();
   if (error) throw new Error(`copier-relay-enqueue-failed: ${error.message}`);
-  if (data) return { id: data.id, status: data.status, expiresAt: data.expires_at, deviceId: device.id };
+  if (data) {
+    if (options.command.type === 'arm-live') {
+      const canonical = await coalesceInsertedArm({
+        db: options.db,
+        userId: options.userId,
+        deviceId: device.id,
+        inserted: data,
+        now,
+      });
+      return { ...canonical, deviceId: device.id };
+    }
+    return { id: data.id, status: data.status, expiresAt: data.expires_at, deviceId: device.id };
+  }
   const { data: existing, error: existingError } = await options.db
     .from('tradovate_copier_commands')
     .select('id,status,expires_at')
@@ -443,6 +507,61 @@ export async function enqueueTradovateCopierCommand(options: {
     .single<{ id: string; status: string; expires_at: string }>();
   if (existingError || !existing) throw new Error(`copier-relay-idempotency-lookup-failed: ${existingError?.message ?? 'missing'}`);
   return { id: existing.id, status: existing.status, expiresAt: existing.expires_at, deviceId: device.id };
+}
+
+/**
+ * Closes the concurrent-enqueue race left by the pre-insert lookup. Every
+ * contender deterministically keeps the oldest live ARM and expires its own
+ * duplicate row; therefore two simultaneous clicks cannot build an ARM FIFO.
+ */
+async function coalesceInsertedArm(options: {
+  db: SupabaseClient;
+  userId: string;
+  deviceId: string;
+  inserted: { id: string; status: string; expires_at: string };
+  now: number;
+}): Promise<{ id: string; status: string; expiresAt: string }> {
+  const nowIso = new Date(options.now).toISOString();
+  const { data: canonical, error } = await options.db.from('tradovate_copier_commands')
+    .select('id,status,expires_at')
+    .eq('user_id', options.userId)
+    .eq('device_id', options.deviceId)
+    .eq('command_type', 'arm-live')
+    .or(`status.eq.claimed,and(status.eq.pending,expires_at.gt.${nowIso})`)
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true })
+    .limit(1)
+    .maybeSingle<{ id: string; status: string; expires_at: string }>();
+  if (error) throw new Error(`copier-relay-arm-coalesce-lookup-failed: ${error.message}`);
+  if (!canonical || canonical.id === options.inserted.id) {
+    return { id: options.inserted.id, status: options.inserted.status, expiresAt: options.inserted.expires_at };
+  }
+  const { error: expireError } = await options.db.from('tradovate_copier_commands')
+    .update({ status: 'expired', completed_at: nowIso, error: 'duplicate-arm-superseded' })
+    .eq('id', options.inserted.id)
+    .eq('device_id', options.deviceId)
+    .eq('status', 'pending');
+  if (expireError) throw new Error(`copier-relay-arm-coalesce-failed: ${expireError.message}`);
+  return { id: canonical.id, status: canonical.status, expiresAt: canonical.expires_at };
+}
+
+/** Repeated clicks attach to the one pending/running ARM instead of building an ARM FIFO. */
+async function findInFlightArm(options: {
+  db: SupabaseClient; userId: string; deviceId: string; command: LocalCopierAgentCommand; now: number;
+}): Promise<{ id: string; status: string; expiresAt: string } | null> {
+  if (options.command.type !== 'arm-live') return null;
+  const nowIso = new Date(options.now).toISOString();
+  const { data, error } = await options.db.from('tradovate_copier_commands')
+    .select('id,status,expires_at')
+    .eq('user_id', options.userId)
+    .eq('device_id', options.deviceId)
+    .eq('command_type', 'arm-live')
+    .or(`status.eq.claimed,and(status.eq.pending,expires_at.gt.${nowIso})`)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle<{ id: string; status: string; expires_at: string }>();
+  if (error) throw new Error(`copier-relay-inflight-arm-lookup-failed: ${error.message}`);
+  return data ? { id: data.id, status: data.status, expiresAt: data.expires_at } : null;
 }
 
 const IN_FLIGHT_FLATTEN_WINDOW_MS = 5 * 60_000;
@@ -491,6 +610,39 @@ export async function claimTradovateCopierCommand(options: { db: SupabaseClient;
   const { data, error } = await options.db.rpc('claim_tradovate_copier_command', { target_device_id: options.deviceId });
   if (error) throw new Error(`copier-relay-claim-failed: ${error.message}`);
   const row = (Array.isArray(data) ? data[0] : null) as CommandRow | undefined;
+  return row ? { id: row.id, command: rowCommand(row), expiresAt: row.expires_at } : null;
+}
+
+/**
+ * Independent safety lane. The conditional update is the atomic claim; a
+ * simultaneous legacy/v2 FIFO claim can win, but the same row is never run twice.
+ */
+export async function claimTradovateCopierPriorityCommand(options: {
+  db: SupabaseClient;
+  deviceId: string;
+  now?: number;
+}): Promise<CopierRelayCommand | null> {
+  const nowIso = new Date(options.now ?? Date.now()).toISOString();
+  const { data: candidate, error: candidateError } = await options.db.from('tradovate_copier_commands')
+    .select('id')
+    .eq('device_id', options.deviceId)
+    .eq('status', 'pending')
+    .in('command_type', [...PRIORITY_COMMAND_TYPES])
+    .gt('expires_at', nowIso)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle<{ id: string }>();
+  if (candidateError) throw new Error(`copier-relay-priority-lookup-failed: ${candidateError.message}`);
+  if (!candidate) return null;
+  const { data: row, error } = await options.db.from('tradovate_copier_commands')
+    .update({ status: 'claimed', claimed_at: nowIso })
+    .eq('id', candidate.id)
+    .eq('device_id', options.deviceId)
+    .eq('status', 'pending')
+    .gt('expires_at', nowIso)
+    .select('id,command_type,payload,expires_at,status,result,error')
+    .maybeSingle<CommandRow>();
+  if (error) throw new Error(`copier-relay-priority-claim-failed: ${error.message}`);
   return row ? { id: row.id, command: rowCommand(row), expiresAt: row.expires_at } : null;
 }
 

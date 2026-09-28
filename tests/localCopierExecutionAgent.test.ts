@@ -832,6 +832,123 @@ describe('local copier execution agent', () => {
       .toBeLessThan(vi.mocked(runtime.arm).mock.invocationCallOrder[0]);
   });
 
+  it.each(['disarm', 'kill-switch', 'lock-until-session-end'] as const)(
+    '%s obejde dlouhý broker command přes samostatnou emergency lane',
+    async commandType => {
+      const runtime = controller({ armed: true, shadowMode: false, sessionArmedAt: 1 });
+      let releaseFlatten!: () => void;
+      vi.mocked(runtime.flattenGroup).mockImplementationOnce(() => new Promise(resolve => {
+        releaseFlatten = () => resolve({ flat: true });
+      }));
+      running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+      const longCommand = running.execute({
+        type: 'copy-command',
+        command: { type: 'flatten-group', groupId: 'runtime-test', operationId: 'flatten-long-123' },
+      });
+      await vi.waitFor(() => expect(runtime.flattenGroup).toHaveBeenCalledOnce());
+
+      const brake = commandType === 'lock-until-session-end'
+        ? running.execute({ type: commandType, reason: 'Ruční zámek dne' })
+        : running.execute({ type: commandType });
+      await expect(brake).resolves.toMatchObject({ ok: true });
+      if (commandType === 'disarm') expect(runtime.disarm).toHaveBeenCalled();
+      if (commandType === 'kill-switch') expect(runtime.engageKillSwitch).toHaveBeenCalled();
+      if (commandType === 'lock-until-session-end') expect(runtime.lockUntil).toHaveBeenCalled();
+
+      releaseFlatten();
+      await expect(longCommand).resolves.toMatchObject({ ok: true });
+    },
+  );
+
+  it('deadline a souběžný DISARM zabrání pozdnímu ARM po pomalém preflightu', async () => {
+    const runtime = controller();
+    let releasePrepare!: () => void;
+    const prepareGroupAccounts = vi.fn(() => new Promise<{ missingOptional: [] }>(resolve => {
+      releasePrepare = () => resolve({ missingOptional: [] });
+    }));
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, prepareGroupAccounts });
+
+    const expired = running.execute({ type: 'arm-live' }, { deadlineAt: Date.now() + 20 });
+    const expiredCheck = expect(expired).rejects.toThrow('vypršel deadline');
+    await vi.waitFor(() => expect(prepareGroupAccounts).toHaveBeenCalledOnce());
+    await new Promise(resolve => setTimeout(resolve, 30));
+    releasePrepare();
+    await expiredCheck;
+    expect(runtime.arm).not.toHaveBeenCalled();
+
+    let releaseSecond!: () => void;
+    prepareGroupAccounts.mockImplementationOnce(() => new Promise(resolve => {
+      releaseSecond = () => resolve({ missingOptional: [] });
+    }));
+    const pending = running.execute({ type: 'arm-live' }, { deadlineAt: Date.now() + 1_000 });
+    const pendingCheck = expect(pending).rejects.toThrow('DISARM');
+    await vi.waitFor(() => expect(prepareGroupAccounts).toHaveBeenCalledTimes(2));
+    await expect(running.execute({ type: 'disarm' })).resolves.toMatchObject({ ok: true });
+    releaseSecond();
+    await pendingCheck;
+    expect(runtime.arm).not.toHaveBeenCalled();
+  });
+
+  it('souběžný druhý ARM odmítne a ARM už zapnuté kopírky je no-op bez prodloužení TTL', async () => {
+    const runtime = controller();
+    let releasePrepare!: () => void;
+    const prepareGroupAccounts = vi.fn(() => new Promise<{ missingOptional: [] }>(resolve => {
+      releasePrepare = () => resolve({ missingOptional: [] });
+    }));
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, prepareGroupAccounts });
+    const first = running.execute({ type: 'arm-live' }, { deadlineAt: Date.now() + 1_000 });
+    await vi.waitFor(() => expect(prepareGroupAccounts).toHaveBeenCalledOnce());
+    await expect(running.execute({ type: 'arm-live' })).rejects.toThrow('jiný ARM už čeká');
+    releasePrepare();
+    await expect(first).resolves.toMatchObject({ ok: true });
+
+    vi.clearAllMocks();
+    await expect(running.execute({ type: 'arm-live' })).resolves.toMatchObject({
+      ok: true,
+      status: { controller: { armed: true, shadowMode: false } },
+    });
+    expect(runtime.disarm).not.toHaveBeenCalled();
+    expect(runtime.reconcile).not.toHaveBeenCalled();
+    expect(runtime.arm).not.toHaveBeenCalled();
+  });
+
+  it('ARM bez broker spojení odmítne ihned bez zařazení do FIFO', async () => {
+    const runtime = controller({ connected: false });
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    await expect(running.execute({ type: 'arm-live' })).rejects.toThrow('worker není připojen k brokeru');
+    expect(runtime.disarm).not.toHaveBeenCalled();
+    expect(runtime.reconcile).not.toHaveBeenCalled();
+    expect(runtime.arm).not.toHaveBeenCalled();
+  });
+
+  it('dev origin má defaultně jen status a risk-redukční příkazy; instalační flag povolí plný přístup', async () => {
+    const runtime = controller();
+    const devOrigin = 'http://localhost:3000';
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    const nonce = running.status().nonce;
+    const request = (command: unknown) => fetch(`${running!.origin}/v1/command`, {
+      method: 'POST',
+      headers: { Origin: devOrigin, 'Content-Type': 'application/json', 'X-AlphaTrade-Agent-Nonce': nonce },
+      body: JSON.stringify(command),
+    });
+    expect((await request({ type: 'arm-live' })).status).toBe(409);
+    expect((await request({ type: 'disarm' })).status).toBe(200);
+    expect((await request({ type: 'copy-command', command: {
+      type: 'flatten-group', groupId: 'runtime-test', operationId: 'flatten-dev-123',
+    } })).status).toBe(200);
+    await running.close();
+
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, allowFullDevelopmentAccess: true,
+    });
+    const fullResponse = await fetch(`${running.origin}/v1/command`, {
+      method: 'POST',
+      headers: { Origin: devOrigin, 'Content-Type': 'application/json', 'X-AlphaTrade-Agent-Nonce': running.status().nonce },
+      body: JSON.stringify({ type: 'shadow' }),
+    });
+    expect(fullResponse.status).toBe(200);
+  });
+
   it.each(['arm-live', 'shadow'] as const)(
     '%s nepotvrdí příkaz před durable dokončením controller fronty',
     async commandType => {

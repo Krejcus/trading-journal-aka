@@ -2,7 +2,8 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { authorizeTradovateCopierDevice } from '../../../server/tradovateCopierDevice.js';
 import {
   claimTradovateCopierCommandV2, completeTradovateCopierCommandV2,
-  claimTradovateCopierCommand, completeTradovateCopierCommand, enqueueTradovateCopierCommand,
+  claimTradovateCopierCommand, claimTradovateCopierPriorityCommand,
+  completeTradovateCopierCommand, enqueueTradovateCopierCommand,
   copierRelayValidationErrorStatus,
   heartbeatTradovateCopierDevice, readTradovateCopierCommand, readTradovateCopierDeviceRuntime,
 } from '../../../server/tradovateCopierCommandRelay.js';
@@ -43,8 +44,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.method !== 'POST') return res.status(405).json({ error: 'method-not-allowed' });
       const action = String(req.body?.action ?? '');
       const device = await authorizeTradovateCopierDevice({ db, authorization: req.headers.authorization,
-        ...(['poll-v2', 'complete-v2'].includes(action) ? { touchLastUsed: false } : {}),
+        ...(['poll-v2', 'poll-priority', 'complete-v2'].includes(action) ? { touchLastUsed: false } : {}),
       });
+      if (action === 'poll-priority') {
+        const command = await claimTradovateCopierPriorityCommand({ db, deviceId: device.id });
+        return res.status(200).json({ command });
+      }
       if (action === 'poll-v2') {
         const deliveryId = String(req.body?.deliveryId ?? '');
         if (!SNAPSHOT_TEST_REQUEST_ID.test(deliveryId)) return res.status(400).json({ error: 'invalid-delivery-id' });

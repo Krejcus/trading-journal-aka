@@ -208,6 +208,40 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-28 — Balíček 7a: přednostní brzdy a bezpečný lokální relay (Codex)
+
+- Bez změny `services/copierRuntimeController.ts` a `services/copierRunner.ts`
+  dostaly DISARM, kill switch a ruční day-lock samostatnou lokální i cloudovou
+  prioritní linku. V2 worker polluje brzdy souběžně s recoverable FIFO; claim je
+  podmíněný na `pending` a ACK se smí opakovat, execution nikdy. Brzdy mají
+  pětiminutovou enqueue platnost místo 30 s.
+- ARM nyní přenáší serverové `expiresAt` až do agenta, lokální cesta má 30s
+  strop. Deadline a „brake epoch“ se kontrolují po každém async preflightu i
+  před/po durable potvrzení; souběžná brzda ARM zruší. Druhý pending ARM se
+  přichytí k nejstaršímu commandu nebo se lokálně odmítne, race po vložení
+  expiruje duplicitní řádek. ARM už ARMED workeru je čistý no-op bez DISARM,
+  reconciliation nebo prodloužení TTL. Odpojený worker ARM odmítne ihned.
+- Relay už nevybírá zařízení podle `last_used_at`, ale stejné nejčerstvější
+  heartbeat zařízení pro connection, které čte UI, a následně ověří, že není
+  revokované. Nevyžaduje nové párování. JWT pilot lease zůstává kvůli ručnímu
+  downloadu, ale smí zapečetit token jen na přesný veřejný klíč již spárovaného
+  nerevokovaného zařízení vlastníka.
+- Lokální CORS hranice nově odděluje produkční allowlist od dev originů.
+  `localhost:3000`, `127.0.0.1:3000` a `127.0.0.1:3011` mají defaultně jen
+  status, DISARM, kill switch a Flatten. Plnou dev sadu lze zapnout jen
+  instalačním env flagem `ALPHATRADE_COPIER_ALLOW_FULL_DEV_ORIGINS=1`.
+- Nové regrese proti base commitu selhaly v 9 scénářích. Po opravě cílený běh
+  prošel 7 souborů / 162 testů (včetně concurrent ARM race), scoped TypeScript
+  a ESLint jsou čisté, produkční build prošel.
+  Povinná celá copier sada prošla 136 souborů / 1619 testů; první běh odhalil
+  tři zastaralé DB mocky v `copierRiskDetailedReview`, po jejich aktualizaci
+  prošla celá. Root `tsc --noEmit` má pouze známé chybějící extension závislosti
+  (`chrome`, `@crxjs/vite-plugin`), které se v tomto worktree podle pravidel
+  nesmějí doinstalovat.
+- Nic nebylo commitnuto, pushnuto, nasazeno, párováno ani posláno brokerovi.
+  Aktivace prioritní cloudové linky a agentových ochran vyžaduje budoucí
+  schválený deploy/reinstall; zde proběhly jen lokální testy a build.
+
 ### 2026-09-28 — V12 follow-up: filled lineage, modify/partial mirror a reconcile fence (Codex, balíček 3a-2)
 
 - Opraveny regrese commitu `cb5cdf6` bez commitu, deploye, reinstalu workeru

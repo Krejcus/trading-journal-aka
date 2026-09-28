@@ -38,6 +38,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const publicKey = device?.publicKey
       ?? (typeof req.body?.publicKey === 'string' ? req.body.publicKey.trim() : '');
     if (!connectionId || !publicKey) return res.status(400).json({ error: 'missing-pilot-lease-input' });
+    // JWT větev zůstává kvůli existujícímu ručnímu downloadu lease, ale klíč
+    // už není volba browseru: musí přesně patřit dříve spárovanému a
+    // nerevokovanému workeru stejného vlastníka/připojení.
+    if (!device) {
+      const { data: pairedDevice, error: pairedDeviceError } = await db
+        .from('tradovate_copier_devices')
+        .select('public_key')
+        .eq('user_id', userId)
+        .eq('connection_id', connectionId)
+        .eq('environment', 'demo')
+        .eq('public_key', publicKey)
+        .is('revoked_at', null)
+        .limit(1)
+        .maybeSingle<{ public_key: string }>();
+      if (pairedDeviceError) throw new Error(`copier-device-key-lookup-failed: ${pairedDeviceError.message}`);
+      if (!pairedDevice) return res.status(403).json({ error: 'pilot-key-not-paired' });
+    }
     // Device auth already binds this request to one owned connection. Avoid an
     // additional full connection-list round trip on every worker renewal; the
     // targeted token lookup below still rejects missing/disconnected rows.

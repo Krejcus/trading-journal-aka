@@ -59,7 +59,11 @@ export function recoverableCopierDelivery(options: {
         if (options.isActive?.() === false) executionError = 'command-cancelled-worker-shutdown';
         else if (expires <= now()) executionError = 'command-expired-before-execution';
         else {
-          try { result = await options.agent.execute(remote.command); }
+          try {
+            result = remote.command.type === 'arm-live'
+              ? await options.agent.execute(remote.command, { deadlineAt: expires })
+              : await options.agent.execute(remote.command);
+          }
           catch (error) {
             executionError = error instanceof Error ? error.message : String(error);
             const details = localCopierAgentErrorDetails(error);

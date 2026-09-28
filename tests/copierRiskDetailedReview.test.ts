@@ -175,8 +175,14 @@ describe('detailed copier risk contracts', () => {
       };
       const runtimeQuery = {
         eq: () => runtimeQuery,
+        order: () => runtimeQuery,
+        limit: () => runtimeQuery,
         maybeSingle: async () => ({
-          data: { status: { group: previous, controller: { sessionArmedAt: NOW } } }, error: null,
+          data: {
+            device_id: deviceId,
+            status: { group: previous, controller: { sessionArmedAt: NOW, connected: true } },
+            last_seen_at: new Date(NOW).toISOString(),
+          }, error: null,
         }),
       };
       let attemptedCommandWrite = false;

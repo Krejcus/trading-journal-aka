@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  claimV2: vi.fn(), completeV2: vi.fn(), authorize: vi.fn(), heartbeat: vi.fn(), claim: vi.fn(), push: vi.fn(),
+  claimV2: vi.fn(), claimPriority: vi.fn(), completeV2: vi.fn(), complete: vi.fn(), authorize: vi.fn(), heartbeat: vi.fn(), claim: vi.fn(), push: vi.fn(),
   requireUser: vi.fn(), enqueue: vi.fn(), read: vi.fn(), snapshots: vi.fn(), tick: vi.fn(),
 }));
 vi.mock('../server/tradovateOAuthStore', () => ({
@@ -13,6 +13,8 @@ vi.mock('../server/tradovateCopierDevice', () => ({ authorizeTradovateCopierDevi
 vi.mock('../server/tradovateCopierCommandRelay', () => ({
   claimTradovateCopierCommandV2: mocks.claimV2, completeTradovateCopierCommandV2: mocks.completeV2,
   heartbeatTradovateCopierDevice: mocks.heartbeat, claimTradovateCopierCommand: mocks.claim,
+  claimTradovateCopierPriorityCommand: mocks.claimPriority,
+  completeTradovateCopierCommand: mocks.complete,
   enqueueTradovateCopierCommand: mocks.enqueue, readTradovateCopierCommand: mocks.read,
   copierRelayValidationErrorStatus: () => null,
 }));
@@ -125,6 +127,16 @@ describe('v2 control lane', () => {
     expect(mocks.heartbeat).not.toHaveBeenCalled(); expect(mocks.push).not.toHaveBeenCalled();
     expect(mocks.tick).not.toHaveBeenCalled(); expect(mocks.snapshots).not.toHaveBeenCalled();
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ protocol: 2, command: null }));
+  });
+  it('poll-priority používá samostatný claim bez heartbeat a běžného FIFO', async () => {
+    const command = { id: deliveryId, command: { type: 'disarm' }, expiresAt: '2099-01-01T00:00:00Z' };
+    mocks.claimPriority.mockResolvedValue(command);
+    const res = await invoke({ action: 'poll-priority' });
+    expect(mocks.authorize).toHaveBeenCalledWith(expect.objectContaining({ touchLastUsed: false }));
+    expect(mocks.claimPriority).toHaveBeenCalledWith(expect.objectContaining({ deviceId: 'device' }));
+    expect(mocks.claimV2).not.toHaveBeenCalled();
+    expect(mocks.heartbeat).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({ command });
   });
   it('ACKs through the atomic RPC without waiting for notifications or a second heartbeat', async () => {
     const res = await invoke({ action: 'complete-v2', deliveryId, commandId: deliveryId,

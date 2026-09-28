@@ -31,6 +31,15 @@ describe('recoverable copier delivery', () => {
     vi.mocked(f.options.agent.execute).mockImplementation(async () => { expect(f.saved?.phase).toBe('executing'); return { ok: true } as never; });
     await step(); expect(f.options.agent.execute).toHaveBeenCalledTimes(1); expect(f.saved).toBeNull();
   });
+  it('předá ARM serverový expiresAt jako nepřekročitelný execution deadline', async () => {
+    const f = fixture();
+    f.remote.command = { type: 'arm-live' };
+    await recoverableCopierDelivery(f.options)();
+    expect(f.options.agent.execute).toHaveBeenCalledWith(
+      { type: 'arm-live' },
+      { deadlineAt: Date.parse(f.remote.expiresAt) },
+    );
+  });
   it('recovers the SAME delivery after a claim response is lost', async () => {
     const f = fixture(); const step = recoverableCopierDelivery(f.options);
     f.options.request.mockRejectedValueOnce(new Error('response-lost'));
