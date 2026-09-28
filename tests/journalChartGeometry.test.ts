@@ -3,7 +3,7 @@ import { DEFAULT_STYLE } from '@getcandlekit/charts';
 import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import { createJournalTimeProjection, journalLogicalCoordinate, journalSpanCoordinates, journalTimeLogical, journalVisibleSpanCoordinates } from '../services/journalChartTime';
 import { createJournalPositionPrimitive, journalPositionDrawing } from '../services/journalPositionDrawing';
-import { createJournalArrowStacks, createJournalChartPrimitive } from '../services/journalChartPrimitive';
+import { createJournalArrowStacks, createJournalChartPrimitive, createReviewPriceFocus } from '../services/journalChartPrimitive';
 import type { MarketCandle } from '../services/marketData';
 import type { Trade } from '../types';
 
@@ -341,6 +341,29 @@ describe('journal position reference uses the actual CandleKit renderer', () => 
   });
 });
 
+describe('review týdne: zvýraznění hned při kliknutí', () => {
+  it('vrstva ostatních obchodů rozsvítí šipky i po připojení, pak zhasnou', () => {
+    vi.useFakeTimers();
+    try {
+      const chart = { timeScale: () => ({ logicalToCoordinate: x }), subscribeCrosshairMove: () => {}, unsubscribeCrosshairMove: () => {} } as unknown as IChartApi;
+      const series = { priceToCoordinate: (price: number) => 200 - price } as unknown as ISeriesApi<'Candlestick'>;
+      const primitive = createJournalChartPrimitive(trade().executionHistory!, candles, 60, chart, series, undefined, { direction: 'Long', muted: true });
+      primitive.attached!({ requestUpdate: () => {} } as unknown as Parameters<NonNullable<typeof primitive.attached>>[0]);
+      const context = new Proxy({}, { get: () => () => {} });
+      const draw = () => primitive.paneViews!()[0].renderer()!.draw({ useMediaCoordinateSpace: (callback: (scope: unknown) => void) => callback({ context }) } as never);
+      draw();
+      expect(primitive.priceAxisViews!()).toEqual([]);
+      primitive.highlight(500);
+      draw();
+      expect(primitive.priceAxisViews!().length).toBeGreaterThan(0);
+      vi.advanceTimersByTime(500);
+      draw();
+      expect(primitive.priceAxisViews!()).toEqual([]);
+      primitive.detached!();
+    } finally { vi.useRealTimers(); }
+  });
+});
+
 describe('review týdne: šipky víc obchodů v jedné svíčce', () => {
   it('skládají se podle pořadí obchodů, bez ohledu na pořadí registrace', () => {
     const stacks = createJournalArrowStacks();
@@ -354,5 +377,26 @@ describe('review týdne: šipky víc obchodů v jedné svíčce', () => {
     // Znovu vytvořená vrstva téhož obchodu (vybraný) dostane stejné místo.
     stacks.register('b', 20, [{ candle: 5, buy: true }, { candle: 5, buy: false }]);
     expect(stacks.before('b', 5, true)).toBe(2);
+  });
+});
+
+describe('review týdne: cenová osa zahrne celý obchod', () => {
+  it('rozsah se při přepnutí plynule přelije, obchod z jiné série osu neovlivní', () => {
+    const now = vi.spyOn(performance, 'now');
+    try {
+      const focus = createReviewPriceFocus();
+      const info = () => focus.primitive.autoscaleInfo!(0 as never, 10 as never)?.priceRange ?? null;
+      now.mockReturnValue(1000);
+      focus.focus({ min: 100, max: 110 }, 0);
+      expect(info()).toEqual({ minValue: 100, maxValue: 110 });
+      focus.focus({ min: 100, max: 190 }, 500);
+      expect(info()).toEqual({ minValue: 100, maxValue: 110 });
+      now.mockReturnValue(1250);
+      expect(info()!.maxValue).toBeCloseTo(150);
+      now.mockReturnValue(1600);
+      expect(info()).toEqual({ minValue: 100, maxValue: 190 });
+      focus.focus(null, 0);
+      expect(info()).toBeNull();
+    } finally { now.mockRestore(); }
   });
 });

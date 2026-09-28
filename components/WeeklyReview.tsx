@@ -162,8 +162,10 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
   const chartSwitchTimerRef = useRef<number | undefined>(undefined);
   const select = useCallback((trade: Trade | undefined) => {
     if (!trade) return;
-    const timing = tradeChartTiming(chartTradeOfRef.current(trade));
-    window.dispatchEvent(new CustomEvent(REVIEW_FOCUS_EVENT, { detail: { entryMs: timing.entryMs, exitMs: timing.exitMs } }));
+    // Graf zná obchody pod id zdroje (sloučený obchod → jeho zdroj), ne pod id ze seznamu.
+    const chartTarget = chartTradeOfRef.current(trade);
+    const timing = tradeChartTiming(chartTarget);
+    window.dispatchEvent(new CustomEvent(REVIEW_FOCUS_EVENT, { detail: { entryMs: timing.entryMs, exitMs: timing.exitMs, id: String(chartTarget.id) } }));
     const id = String(trade.id);
     setSelectedId(id); setSaveError(null);
     window.clearTimeout(chartSwitchTimerRef.current);

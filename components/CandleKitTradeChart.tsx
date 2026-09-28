@@ -1,4 +1,4 @@
-import { createJournalArrowStacks, createJournalChartPrimitive } from '../services/journalChartPrimitive';
+import { createJournalArrowStacks, createJournalChartPrimitive, createReviewPriceFocus, journalTradePriceRange, type JournalChartPrimitive } from '../services/journalChartPrimitive';
 import { createJournalPositionPrimitive } from '../services/journalPositionDrawing';
 import { retainEqualNumbers, uniqueStructureEvents } from '../services/chartReplayPaint';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -1701,7 +1701,7 @@ onChartAppearanceScopeBroadcast(() => {
 /** Review týdne: „přejeď na obchod“ hned při kliknutí (detail: entryMs, exitMs). */
 export const REVIEW_FOCUS_EVENT = 'alphatrade:review-focus';
 /** Jak dlouho jsou šipky obchodu po přepnutí v review „najeté“. */
-const REVIEW_HIGHLIGHT_MS = 1200;
+const REVIEW_HIGHLIGHT_MS = 1400;
 
 const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   trade,
@@ -3003,9 +3003,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     }
     chartRootRef.current?.setAttribute('data-replay-update-mode', 'incremental');
   }, [animateReplayViewportTo, centeredTradeView, compactMode, replayActive, replayCursorTime, timeframe, visibleCandles]);
+  // Nový objekt = nový DrawingController a nové API grafu (všechny vrstvy se
+  // připojí znovu). Review ukládá kresby pod klíčem týdne — přepnutí obchodu
+  // proto graf znovu nestaví.
+  const drawingStorageId = drawingKeyId ?? String(trade.id);
   const drawingOptions = useMemo(() => ({
-    storageKey: `alphatrade:candlekit:${drawingKeyId ?? trade.id}:${drawingScope || timeframe}`,
-  }), [drawingKeyId, drawingScope, trade.id, timeframe]);
+    storageKey: `alphatrade:candlekit:${drawingStorageId}:${drawingScope || timeframe}`,
+  }), [drawingStorageId, drawingScope, timeframe]);
 
   // Obchod uprostřed a celý vidět; okraje rostou s délkou obchodu (minimum
   // pokryje i 10 min před vstupem, odkud startuje přehrávání). Během
@@ -3979,23 +3983,70 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // překreslení panelů pak běží na pozadí a animaci nezdržuje. Kdyby událost
   // nepřišla (jiná cesta výběru), dojede záběr po změně obchodu.
   const reviewFocusRef = useRef<{ key: string; at: number } | null>(null);
-  const startReviewFocus = useCallback((target: { entryMs: number; exitMs: number }) => {
+  // Zvýraznění šipek po přepnutí (review). Začne hned při kliknutí ve vrstvě
+  // ostatních obchodů (`continues`), hlavní vrstva ho po převzetí obchodu
+  // dokončí bez nového nafouknutí. Čas se drží podle obchodu.
+  const highlightRef = useRef<{ id: string; until: number; continues?: boolean } | null>(null);
+  const highlightTradeIdRef = useRef<string | null>(reviewMode ? String(trade.id) : null);
+  const contextLayersRef = useRef(new Map<string, JournalChartPrimitive>());
+  // Cenová osa v review: svíčky v záběru + celý vybraný obchod (position box).
+  // Rozsah se přelévá souběžně s přejezdem; obchod z jiné série (jiný kontrakt)
+  // do osy nevstoupí, dokud nepřijdou jeho svíčky.
+  const reviewPriceFocusRef = useRef<ReturnType<typeof createReviewPriceFocus> | null>(null);
+  const reviewPriceIdRef = useRef<string | null>(null);
+  const reviewTradesRef = useRef({ trade, contextTrades });
+  reviewTradesRef.current = { trade, contextTrades };
+  const reviewPriceRangeOf = useCallback((id: string) => {
+    const { trade: shown, contextTrades: others } = reviewTradesRef.current;
+    if (String(shown.id) === id) return { range: journalTradePriceRange(shown.executionHistory), inSeries: true };
+    const other = others?.find(item => String(item.id) === id);
+    return { range: journalTradePriceRange(other?.executionHistory), inSeries: Boolean(other) };
+  }, []);
+  const focusReviewPrice = useCallback((id: string, animateMs: number) => {
+    const focus = reviewPriceFocusRef.current;
+    if (!focus) return;
+    const { range, inSeries } = reviewPriceRangeOf(id);
+    reviewPriceIdRef.current = inSeries ? id : null;
+    focus.focus(inSeries ? range : null, animateMs);
+  }, [reviewPriceRangeOf]);
+  useLayoutEffect(() => {
+    const api = apiRef.current;
+    if (!api || !reviewMode) return;
+    const series = api.controller.getSeries() as ISeriesApi<'Candlestick'>;
+    const focus = createReviewPriceFocus();
+    reviewPriceFocusRef.current = focus;
+    series.attachPrimitive(focus.primitive);
+    focusReviewPrice(String(reviewTradesRef.current.trade.id), 0);
+    return () => {
+      if (reviewPriceFocusRef.current === focus) reviewPriceFocusRef.current = null;
+      try { series.detachPrimitive(focus.primitive); } catch { /* Chart already disposed. */ }
+    };
+  }, [chartApiEpoch, focusReviewPrice, reviewMode]);
+  const startReviewFocus = useCallback((target: { entryMs: number; exitMs: number; id?: string }) => {
     const api = apiRef.current;
     const range = centeredTradeRangeRef.current(target);
     if (!api || !range) return false;
     try {
       const chart = api.controller.getChart();
       chart.priceScale('right').setAutoScale(true);
+      if (target.id != null) focusReviewPrice(target.id, 520);
       animateReplayViewportTo(chart, chart.timeScale().getVisibleLogicalRange(), range, 520);
       return true;
     } catch { return false; }
-  }, [animateReplayViewportTo]);
+  }, [animateReplayViewportTo, focusReviewPrice]);
   useEffect(() => {
     if (!reviewMode) return;
     const onFocus = (event: Event) => {
-      const detail = (event as CustomEvent<{ entryMs: number; exitMs: number }>).detail;
+      const detail = (event as CustomEvent<{ entryMs: number; exitMs: number; id?: string }>).detail;
       if (!detail || !startReviewFocus(detail)) return;
       reviewFocusRef.current = { key: `${detail.entryMs}:${detail.exitMs}`, at: performance.now() };
+      const layer = detail.id != null ? contextLayersRef.current.get(detail.id) : undefined;
+      const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      if (layer && detail.id !== highlightTradeIdRef.current && !reducedMotion) {
+        highlightTradeIdRef.current = detail.id!;
+        highlightRef.current = { id: detail.id!, until: performance.now() + REVIEW_HIGHLIGHT_MS, continues: true };
+        layer.highlight(REVIEW_HIGHLIGHT_MS);
+      }
     };
     window.addEventListener(REVIEW_FOCUS_EVENT, onFocus);
     return () => window.removeEventListener(REVIEW_FOCUS_EVENT, onFocus);
@@ -4020,9 +4071,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     // Přejezd už běží z kliknutí — nezačínat znovu.
     const started = reviewFocusRef.current;
     reviewFocusRef.current = null;
-    if (started && started.key === `${entryMs}:${exitMs}` && performance.now() - started.at < 2000) return;
-    startReviewFocus({ entryMs, exitMs });
-  }, [entryMs, exitMs, reviewMode, startReviewFocus, trade.id]);
+    if (started && started.key === `${entryMs}:${exitMs}` && performance.now() - started.at < 2000) {
+      // Obchod z jiného kontraktu: osa ho zahrne až teď, se svými svíčkami.
+      if (reviewPriceIdRef.current !== id) focusReviewPrice(id, 0);
+      return;
+    }
+    startReviewFocus({ entryMs, exitMs, id });
+  }, [entryMs, exitMs, focusReviewPrice, reviewMode, startReviewFocus, trade.id]);
 
   useEffect(() => {
     if (previousOverlayRebuildRef.current === overlayRebuildSignature) return;
@@ -4064,7 +4119,6 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
 
   // Review: po změně obchodu se jeho šipky na chvíli ukážou jako „najeté“.
   // Čas se drží podle obchodu, ať ho převezme i znovu vytvořená vrstva.
-  const highlightRef = useRef<{ id: string; until: number } | null>(null);
   // Review: šipky všech obchodů týdne se v jedné svíčce skládají nad sebe
   // (podle času obchodu — vybraný obchod po přepnutí neposkočí).
   const arrowStacks = useMemo(() => reviewMode ? createJournalArrowStacks() : null,
@@ -4074,7 +4128,6 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     registry: arrowStacks, key: String(other.id),
     order: other.executionHistory?.fills.reduce((min, fill) => Math.min(min, fill.at), Infinity) ?? Infinity,
   } : undefined;
-  const highlightTradeIdRef = useRef<string | null>(reviewMode ? String(trade.id) : null);
   useLayoutEffect(() => {
     const api = apiRef.current;
     if (!api || (replayActive && !journalHistoryInReplay) || !trade.executionHistory) return;
@@ -4090,9 +4143,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       highlightRef.current = reducedMotion ? null : { id, until: performance.now() + REVIEW_HIGHLIGHT_MS };
     }
     const highlightMs = highlightRef.current?.id === id ? Math.max(0, highlightRef.current.until - performance.now()) : 0;
+    const highlightContinues = highlightMs > 0 && Boolean(highlightRef.current?.continues);
     const primitive = createJournalChartPrimitive(trade.executionHistory, visibleCandles,
       MARKET_TIMEFRAME_MINUTES[timeframe] * 60, api.controller.getChart(), series, coverage,
-      { direction: trade.direction, autoscaleLevels: centeredTradeView, highlightMs, arrowStacks: stackOptionOf(trade),
+      { direction: trade.direction, autoscaleLevels: centeredTradeView, highlightMs, highlightContinues, arrowStacks: stackOptionOf(trade),
         // Hodnota bodu podle kontraktu obchodu, ne podle zobrazeného grafu (MNQ/NQ).
         pointValue: tradedRoot === 'NQ' ? 20 : 2, instrument: tradedRoot });
     const position = showManagedPositionBoxes ? createJournalPositionPrimitive(trade,
@@ -4115,13 +4169,17 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     if (!api || !reviewMode || replayActive || !contextTrades?.length) return;
     const series = api.controller.getSeries() as ISeriesApi<'Candlestick'>;
     const coverage = { candles: rawCandles, intervalSeconds: 60 };
+    const layersById = contextLayersRef.current;
+    layersById.clear();
     const others = contextTrades.filter(other => other.executionHistory).map(other => {
       const id = String(other.id);
       const root = resolveNasdaqFuturesRoot(undefined, other.symbol || other.instrument);
-      return createJournalChartPrimitive(other.executionHistory!, visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
+      const layer = createJournalChartPrimitive(other.executionHistory!, visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
         api.controller.getChart(), series, coverage,
         { direction: other.direction, muted: true, pointValue: root === 'NQ' ? 20 : 2, instrument: root, isHidden: () => reviewSelectedIdRef.current === id,
           arrowStacks: stackOptionOf(other) });
+      layersById.set(id, layer);
+      return layer;
     });
     // Position boxy ostatních obchodů (bez štítků na ose; vybraný kreslí hlavní vrstva).
     const boxes = showManagedPositionBoxes ? contextTrades.filter(other => other.executionHistory).flatMap(other => {
@@ -4135,7 +4193,10 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     }) : [];
     const layers = [...boxes, ...others];
     layers.forEach(layer => series.attachPrimitive(layer));
-    return () => { try { layers.forEach(layer => series.detachPrimitive(layer)); } catch { /* Chart already disposed. */ } };
+    return () => {
+      layersById.clear();
+      try { layers.forEach(layer => series.detachPrimitive(layer)); } catch { /* Chart already disposed. */ }
+    };
   }, [chartApiEpoch, contextTrades, rawCandles, replayActive, reviewMode, showManagedPositionBoxes, timeframe, visibleCandles, arrowStacks]);
 
   useLayoutEffect(() => {

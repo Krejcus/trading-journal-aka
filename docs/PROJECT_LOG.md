@@ -310,6 +310,30 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   (sdílený registr, option `arrowStacks`) skládá šipky všech obchodů podle
   času prvního plnění; vybraný obchod (hlavní vrstva) dostane stejné místo
   jako ve vrstvě ostatních → po přepnutí neposkočí. + test.
+- Nasazeno 2026-09-28 (80d54b9). Kolo 7 (Filip: obchod vždy celý vidět i s
+  position boxem, daleký TP → svíčky se smrsknou): fullscreen/review
+  CandleKit neměl `autoscaleLevels` (jen klasický detail). Review má vlastní
+  primitiv `createReviewPriceFocus` (rozsah = plnění + všechny SL/TP,
+  `journalTradePriceRange`): cenová osa = svíčky v záběru + vybraný obchod,
+  při přepnutí se rozsah přelije za 520 ms souběžně s přejezdem (easing,
+  `requestUpdate` → fullUpdate přepočte autoscale). Obchod z jiného
+  kontraktu do osy nevstoupí, dokud nepřijdou jeho svíčky. + test.
+- Kolo 8 (Filip: osa se při přepnutí „sekem zmenší a hned zase zvětší“;
+  prodleva, než se rozsvítí šipky):
+  - Měřeno po snímcích (`priceScale().getVisibleRange()`): horní hrana osy
+    skočila o 45 bodů v jednom snímku. Dvě příčiny: (1) událost přepnutí
+    nesla id obchodu ze seznamu, graf zná sloučené obchody pod id zdroje →
+    obchod „nenalezen“, rozsah vynulován, po převzetí obchodu zpět;
+    (2) `drawingOptions` v CandleKitu závisely na `trade.id` i s klíčem týdne
+    → každé přepnutí = nový DrawingController a nové API grafu → všechny
+    vrstvy (i ~60 primitivů ostatních obchodů, rozsah osy) se připojily
+    znovu. Oprava: id zdroje v události; klíč kreseb z `drawingKeyId ??
+    trade.id`. Po opravě: 0 nových připojení, přechod 78 snímků, max 9 bodů
+    za snímek, bez otočky osy.
+  - Zvýraznění šipek začíná hned při kliknutí ve vrstvě ostatních obchodů
+    (`highlight()` na journal primitivu), hlavní vrstva ho po převzetí
+    dokončí bez nového nafouknutí (`highlightContinues`); 1,4 s od kliknutí
+    (dřív start až ~0,54 s po kliknutí). + test.
 - Zatím ne: hvězdičková známka.
 
 ### 2026-09-27 — Detail obchodu otevírá rovnou graf (Claude)

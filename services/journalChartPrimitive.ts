@@ -37,7 +37,15 @@ export interface JournalChartOptions {
    * vlastní vrstva — bez toho by šipky dvou obchodů v jedné svíčce ležely přes sebe.
    */
   arrowStacks?: { registry: JournalArrowStacks; key: string; order: number };
+  /**
+   * Zvýraznění (`highlightMs`) začne rovnou naplno, bez nafouknutí — review:
+   * zvýraznění už běží ve vrstvě ostatních obchodů a tahle vrstva ho převezme.
+   */
+  highlightContinues?: boolean;
 }
+
+/** Journal primitiv; `highlight` spustí zvýraznění šipek i po připojení (review: hned při kliknutí). */
+export type JournalChartPrimitive = ISeriesPrimitive<Time> & { highlight: (ms: number) => void };
 
 type StackedArrow = { candle: number | null; buy: boolean };
 export interface JournalArrowStacks {
@@ -92,7 +100,7 @@ const priceText = (value: number) => value.toLocaleString('cs-CZ', { minimumFrac
 const timeText = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
 export function createJournalChartPrimitive(history: TradeExecutionHistory, candles: readonly MarketCandle[], intervalSeconds: number,
-  chart: IChartApi, series: ISeriesApi<'Candlestick'>, coverage?: JournalCandleCoverage, options: JournalChartOptions = {}): ISeriesPrimitive<Time> {
+  chart: IChartApi, series: ISeriesApi<'Candlestick'>, coverage?: JournalCandleCoverage, options: JournalChartOptions = {}): JournalChartPrimitive {
   const projection = createJournalTimeProjection(candles, intervalSeconds, coverage);
   const baseAlpha = options.alpha ?? 1;
   const segments = journalProtectionSegments(history).map(segment => ({ ...segment, spans: projection.spans(segment.from, segment.to) }));
@@ -437,25 +445,34 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
     });
   } };
   const views = [{ zOrder: () => 'top' as const, renderer: () => renderer }];
+  // Šipky na chvíli ve stavu „najeto“ (bez štítků), dokud neuplyne čas nebo
+  // nepřevezme skutečné najetí myší.
+  const highlight = (ms: number) => {
+    if (!(ms > 0) || !arrows.length) return;
+    if (highlightTimer != null) clearTimeout(highlightTimer);
+    highlightActive = true;
+    labelsQuiet = true;
+    hovered = new Set(arrows.map((_, index) => index));
+    animate();
+    highlightTimer = setTimeout(() => {
+      highlightTimer = null;
+      if (!highlightActive) return;
+      highlightActive = false;
+      hovered = new Set();
+      animate();
+    }, ms);
+  };
   return {
     attached: params => {
       requestUpdate = params.requestUpdate;
-      if (options.highlightMs && options.highlightMs > 0 && arrows.length) {
-        highlightActive = true;
-        labelsQuiet = true;
-        hovered = new Set(arrows.map((_, index) => index));
-        animate();
-        highlightTimer = setTimeout(() => {
-          highlightTimer = null;
-          if (!highlightActive) return;
-          highlightActive = false;
-          hovered = new Set();
-          animate();
-        }, options.highlightMs);
+      if (options.highlightMs && options.highlightMs > 0) {
+        if (options.highlightContinues) arrows.forEach((_, index) => progress.set(`a${index}`, 1));
+        highlight(options.highlightMs);
       }
       if (!options.muted) chart.subscribeCrosshairMove?.(onCrosshair);
       params.requestUpdate();
     },
+    highlight,
     detached: () => {
       chart.unsubscribeCrosshairMove?.(onCrosshair);
       if (frame != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
@@ -486,5 +503,62 @@ export function createJournalChartPrimitive(history: TradeExecutionHistory, cand
       if (!prices.length) return null;
       return { priceRange: { minValue: Math.min(...prices), maxValue: Math.max(...prices) } };
     } : undefined,
+  };
+}
+
+export interface JournalPriceRange { min: number; max: number }
+
+/** Cenový rozsah obchodu: plnění a všechny úrovně SL/TP (tedy i position box). */
+export function journalTradePriceRange(history: TradeExecutionHistory | undefined): JournalPriceRange | null {
+  if (!history) return null;
+  const prices = [...history.fills.map(fill => fill.price), ...journalProtectionSegments(history).map(segment => segment.price)]
+    .filter(price => Number.isFinite(price));
+  return prices.length ? { min: Math.min(...prices), max: Math.max(...prices) } : null;
+}
+
+/**
+ * Review týdne: cenová osa zahrne celý vybraný obchod včetně position boxu
+ * (daleký TP → svíčky se smrsknou). Při přepnutí se rozsah plynule přelije
+ * k novému obchodu souběžně s přejezdem záběru — bez skoku osy.
+ */
+export function createReviewPriceFocus() {
+  let from: JournalPriceRange | null = null;
+  let to: JournalPriceRange | null = null;
+  let start = 0; let duration = 0;
+  let requestUpdate: (() => void) | null = null;
+  let frame: number | null = null;
+  const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+  const current = (now = performance.now()): JournalPriceRange | null => {
+    if (!to) return null;
+    if (!from || duration <= 0) return to;
+    const t = ease(Math.min(1, Math.max(0, (now - start) / duration)));
+    return { min: from.min + (to.min - from.min) * t, max: from.max + (to.max - from.max) * t };
+  };
+  const tick = () => {
+    frame = null;
+    requestUpdate?.();
+    if (performance.now() - start < duration && typeof requestAnimationFrame === 'function') frame = requestAnimationFrame(tick);
+  };
+  const primitive: ISeriesPrimitive<Time> = {
+    attached: params => { requestUpdate = params.requestUpdate; params.requestUpdate(); },
+    detached: () => {
+      if (frame != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+      frame = null; requestUpdate = null;
+    },
+    autoscaleInfo: () => {
+      const range = current();
+      return range ? { priceRange: { minValue: range.min, maxValue: range.max } } : null;
+    },
+  };
+  return {
+    primitive,
+    /** Nový cílový rozsah; `animateMs` 0 = hned (první obchod, jiná série). */
+    focus(range: JournalPriceRange | null, animateMs: number) {
+      const now = performance.now();
+      const shown = current(now);
+      from = animateMs > 0 && shown && range ? shown : null;
+      to = range; start = now; duration = from ? animateMs : 0;
+      if (frame == null) tick();
+    },
   };
 }
