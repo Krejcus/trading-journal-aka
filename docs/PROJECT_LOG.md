@@ -208,6 +208,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-28 — UI-10a: stabilní stale stav kopírky a rychlejší relay poll (Codex)
+
+- `TradovateLiveDesk` už při jediném neúspěšném nebo starém relay čtení
+  nemaže poslední worker snapshot ani čas jeho pozorování. Okamžitě ho ale
+  označí jako nečerstvý, takže ARM, konfigurace a follower toggle zůstávají
+  fail-closed. Stav se zahazuje jen při změně identity uživatele; DISARM/kill
+  při stale stavu dál používá poslední skutečně ověřenou trasu.
+- Více relay připojení se čte souběžně: první odpověď s připojeným workerem se
+  zobrazí bez čekání na nejpomalejší spojení, přednostně se startuje poslední
+  použitá trasa a zbytek doběhne přes `Promise.allSettled` kvůli display feedům.
+- Poll a ACK snapshoty mají monotónní fence `(startedAt, controller.revision)`:
+  starší stav nepřepíše potvrzený DISARM/kill/toggle, ale restart workeru s
+  novějším `startedAt` může bezpečně začít od revision 0.
+- Čerstvost se odvozuje z tikajících hodin a `observedAt` s prahem 15 s.
+  Focus bez změny visibility stav nezneplatní, krátký shluk resume událostí se
+  slučuje a zahazují se jen čtení zahájená před posledním skrytím.
+- Desktop po pádu lokální cesty zkouší loopback znovu po 20 s a při návratu do
+  okna; nativní iOS build lokální sondu vůbec nespouští.
+- Ověřeno cíleně: 17 souborů / 144 testů včetně všech `liveCopy*`; typecheck má
+  jen předem známé chyby `extension/` kvůli chybějícím Chrome typům a
+  `@crxjs/vite-plugin`. Bez npm install/ci, Tradovate/agent volání, commitu,
+  push, deploye nebo reinstalace workeru.
+
 ### 2026-09-28 — Obchod bez celého SL/TP: výsledkový box + štítek (Claude)
 
 - Filip: vstup bez SL/TP (market in/out, jen SL, trailing stop položený po

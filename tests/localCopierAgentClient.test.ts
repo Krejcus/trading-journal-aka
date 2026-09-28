@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canUseDirectLocalCopierAgent, createLocalCopierAgentClient } from '../services/localCopierAgentClient';
+import { shouldProbeLocalCopierAgent } from '../lib/localCopierProbePolicy';
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -39,5 +40,24 @@ describe('canUseDirectLocalCopierAgent', () => {
   it('na produkční HTTPS stránce vždy použije zabezpečený relay', () => {
     expect(canUseDirectLocalCopierAgent({ protocol: 'https:', hostname: 'alphatrade-mentor-15.vercel.app' })).toBe(false);
     expect(canUseDirectLocalCopierAgent({ protocol: 'https:', hostname: '127.0.0.1' })).toBe(false);
+  });
+});
+
+describe('local copier reprobe policy', () => {
+  it('retries an unavailable desktop agent only after backoff or a visibility return', () => {
+    const base = { nativeBuild: false, state: 'unavailable' as const, lastAttemptAt: 10_000 };
+    expect(shouldProbeLocalCopierAgent({ ...base, now: 29_999 })).toBe(false);
+    expect(shouldProbeLocalCopierAgent({ ...base, now: 30_000 })).toBe(true);
+    expect(shouldProbeLocalCopierAgent({ ...base, now: 10_100, resumedFromHidden: true })).toBe(true);
+  });
+
+  it('never probes loopback in a native build', () => {
+    expect(shouldProbeLocalCopierAgent({
+      nativeBuild: true,
+      state: 'unknown',
+      now: 30_000,
+      lastAttemptAt: null,
+      resumedFromHidden: true,
+    })).toBe(false);
   });
 });
