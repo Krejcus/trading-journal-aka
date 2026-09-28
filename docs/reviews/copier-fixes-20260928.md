@@ -33,7 +33,7 @@ Oprava false-positive smí jen **zpřesnit klasifikaci** s autoritativním důka
 **Testy:**
 - Každá oprava má regresní test, který bez opravy padá a s opravou prochází. Ověř to.
 - Spouštěj cílené soubory: `npx vitest run tests/<soubor>`, plus `npx tsc --noEmit`.
-- Celou sadu spustí Claude.
+- **Na konci každého balíčku spusť celou sadu kopírky** (`npx vitest run tests/copier tests/pendingEntryProtection.test.ts tests/tradovate tests/localCopier tests/macCopier tests/liveCopy`) a nahlas každý pád. Lekce z 28. 9.: V12 prošel 4 cílenými soubory, ale rozbil `copierChaosScenarios` a `copierManagementOnly`.
 
 **Výstup každého běhu (česky):**
 - co a proč jsi změnil (soubor:řádek),

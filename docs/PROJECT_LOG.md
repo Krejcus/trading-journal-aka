@@ -208,6 +208,35 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-28 — V13: flat sweep po výstupu mimo eventTail a bez globálního order grafu (Codex, balíček 3b)
+
+- Opravena pouze V13 ve worktree `codex/copier-fixes-20260928`, bez commitu,
+  deploye, reinstalu workeru nebo brokerového volání. Flat sweep nyní běží
+  jako samostatná úloha pro `accountId+symbol` mimo `eventTail`, sdílí jeden
+  skutečný sedmisekundový budget a čte jednotlivá durable order ID přes
+  `findOrderStatusById`; terminální stav ze synchronizovaného streamu proto
+  nepotřebuje REST ani globální `listOrders`.
+- Před každým cancelem se znovu čte pozice a ověřuje safety generation,
+  revize skupiny, connection generation, trade epoch, leader/follower účet,
+  symbol, exposure epoch a stále platný flat. Po dobu čtení blokuje dispatch
+  nového vstupu jen dotčený účet+symbol. Nový leader entry starou práci
+  synchronně zneplatní; DISARM, kill, config change, reconnect i shutdown ji
+  rovněž zastaví před broker write.
+- Cancel se nejprve durable uloží jako `sending`; nejasný výsledek přejde do
+  `unknown` a rozhoduje výhradně následný cílený lookup. Stejné ID se nikdy
+  neposílá podruhé. Opakují se jen read-only dotazy. Postkontrola kombinuje
+  `listPositions` a stav každého jednotlivého ID; eventual/neúplný důkaz,
+  otevřená noha nebo vyčerpaný budget zůstává fail-closed.
+- Nová regrese před opravou padala, protože terminální stream přesto volal
+  `listOrders` dvakrát. Po opravě: V13 9/9, celý controller 128/128,
+  exposure-cap 7/7, review regrese 8/8, follower-cut 36/36 a původní
+  flat-sweep chaos blok 5/5; cílený TypeScript check čistý, ESLint 0 chyb
+  (2 starší warningy), `git diff --check` čistý. Celý chaos soubor má nadále
+  1 známý V12 setup fail (`follower close Market příkaz nebyl vytvořen`),
+  reprodukovaný beze změny i na výchozím `cb5cdf6`.
+- Zbývá nezávislé review, schválený commit/reinstall a řízený DEMO test;
+  nic z toho v tomto balíčku neproběhlo.
+
 ### 2026-09-28 — V12: zero-fill pending limit už nevyvolá falešnou divergenci (Codex, balíček 3a)
 
 - Opravena pouze V12 ve worktree `codex/copier-fixes-20260928`, bez commitu,
