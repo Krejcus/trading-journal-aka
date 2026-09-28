@@ -148,7 +148,7 @@ export function createExposureCappedBroker(
     findOrdersByTag: (accountId, tag) => broker.findOrdersByTag(accountId, tag),
     findOrderById: (accountId, brokerOrderId) => broker.findOrderById(accountId, brokerOrderId),
     findOrderStatusById: broker.findOrderStatusById
-      ? (accountId, brokerOrderId) => broker.findOrderStatusById!(accountId, brokerOrderId)
+      ? (accountId, brokerOrderId, options) => broker.findOrderStatusById!(accountId, brokerOrderId, options)
       : undefined,
     findModifiedOrderById: broker.findModifiedOrderById
       ? (accountId, brokerOrderId, changes) => broker.findModifiedOrderById!(accountId, brokerOrderId, changes)

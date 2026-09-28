@@ -344,6 +344,24 @@ describe('createTradovateBroker REST', () => {
     expect(calls[0]).toContain('/order/item?id=42');
   });
 
+  it('streamOnly cancel lookup bez terminálního streamového důkazu nikdy nevolá REST', async () => {
+    const calls: string[] = [];
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123',
+      fetchImpl: async input => {
+        calls.push(String(input));
+        throw new Error('streamOnly nesmí volat REST');
+      },
+    });
+
+    await expect(broker.findOrderStatusById!(200, '42', { streamOnly: true })).resolves.toEqual({
+      status: null,
+      completeness: 'eventual',
+      observedAt: expect.any(Number),
+    });
+    expect(calls).toEqual([]);
+  });
+
   it('modify-only lookup potvrzuje přesný Replaced report bez globálního Command a Fill listu', async () => {
     const calls: string[] = [];
     const broker = createTradovateBroker({

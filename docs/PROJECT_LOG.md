@@ -208,6 +208,39 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — V13 třetí iterace: návrat flat-sweepu na globální snapshot + stream-only filtr (Codex, balíček 3b-3)
+
+- Podle rozhodnutí v `docs/reviews/copier-v13c-review-20260928.md` byl V13
+  flat-sweep vrácen na osvědčený pre-V13 tok: jeden globální `listOrders`
+  snapshot účtu, cancel kandidátů bez blind retry a společná globální
+  postkontrola `listPositions` + `listOrders`. Odstraněny byly cílené historické
+  status read-y po každém ID, concurrency=2, dvě čtení/ID i per-call 1,5s timeout,
+  které po restartu vyráběly desítky REST požadavků.
+- Před globálním REST snapshotem se durable kandidáti filtrují pouze terminálním
+  stavem ze synchronizovaného streamu (`findOrderStatusById(..., {streamOnly:true})`).
+  Pokud jsou všichni terminální, flat incident končí bez REST, cancelu a DISARM.
+  Router, Tradovate i exposure wrapper přenášejí explicitní `streamOnly`; bez
+  streamového důkazu vrací neautoritativní `null` a nesmějí sáhnout na REST.
+- Celá flat událost má jediný 6s budget (pod 10s heartbeat bránou), sdílený
+  protective a exit-only sweepem. Reconciliation sdílí jeden budget napříč
+  followery a účtové sweepy spouští paralelně. Broker write se neopakuje;
+  nejasný cancel rozhodne jen následující read-only globální snapshot.
+- OSO pravidlo je úzké: vlastní `working` noha se nad flat followerem ruší vždy.
+  Vlastní `pending`/Suspended noha se zachová jen tehdy, když stejný autoritativní
+  snapshot obsahuje její otevřený/nevyplněný parent. Chybějící parent je hlasitý
+  fail-closed. Protective-fill hint již nesmí skrýt osiřelé nohy jiné OSO epizody.
+- Regrese v `tests/copierFlatSweepV13.test.ts` pokrývají sondy O1/O1b/O2/O3/O3b/O7,
+  R1a/R1b/R2/R3/R5/R6/R7, L1–L10, T1–T9, B1–B9 a incident s 0 REST;
+  `tests/tradovateMapping.test.ts` navíc hlídá nulový REST při stream-only missu.
+  Tentýž 24testový V13 soubor proti `fb9fb39` měl 12 failů, po opravě 24/24 pass.
+- Ověření: cílených 7 souborů 325/325 pass;
+  finální kopírková sada 137/137 souborů a 1641/1641 testů pass (136 souborů /
+  1588 testů v sandboxu, loopback `localCopierExecutionAgent` 53/53 samostatně
+  mimo sandbox kvůli `listen EPERM 127.0.0.1`). Cílený TypeScript config je čistý;
+  root `tsc` hlásí pouze známé chybějící `chrome`/`@crxjs/vite-plugin` typy v
+  `extension/`, které zadání výslovně dovolilo ignorovat. Žádný commit, push,
+  deploy, worker reinstall ani broker/produkční akce nebyly provedeny.
+
 ### 2026-09-29 — V12 třetí iterace: stream-only pending mirror bez REST hot-path (Codex, balíček 3a-3)
 
 - Odstraněno V12 ověřování přes `findOrderById` leader/follower orderu a

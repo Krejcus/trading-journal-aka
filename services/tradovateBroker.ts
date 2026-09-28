@@ -1781,7 +1781,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       if (!order) throw new TradovateTransportError(`Missing OrderVersion for order ${orderId}`);
       return { order, completeness: 'authoritative', observedAt: clock() };
     },
-    async findOrderStatusById(accountId, brokerOrderId) {
+    async findOrderStatusById(accountId, brokerOrderId, options) {
       const orderId = numberId(brokerOrderId);
       // `cancelOrder` už čeká na přesnou terminální Order událost. Pokud ji
       // autoritativní sync stream doručil, nepálíme po ní další REST burst.
@@ -1792,6 +1792,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         && ['canceled', 'filled', 'rejected'].includes(streamed.status)
       ) {
         return { status: streamed.status, completeness: 'authoritative', observedAt: clock() };
+      }
+      if (options?.streamOnly) {
+        return { status: null, completeness: 'eventual', observedAt: clock() };
       }
 
       // Po reconnectu/restartu stačí pro osud cancelu přesná Order entita.

@@ -327,8 +327,14 @@ export interface BrokerPort {
   /**
    * Volitelná oddělená cesta pro cancel-only potvrzení. Implementace nesmí
    * odvozovat Filled/Cancelled z chybějících fillů; vrací přímo stav Order.
+   * `streamOnly` nesmí sáhnout na REST a při chybějícím terminálním streamovém
+   * důkazu vrátí neautoritativní null.
    */
-  findOrderStatusById?(accountId: number, brokerOrderId: string): Promise<BrokerOrderStatusLookup>;
+  findOrderStatusById?(
+    accountId: number,
+    brokerOrderId: string,
+    options?: { streamOnly?: boolean },
+  ): Promise<BrokerOrderStatusLookup>;
   /**
    * Přesné potvrzení právě odeslaného modify bez globálního order grafu.
    * Musí doložit nejen shape, ale i broker execution potvrzení jeho verze.
