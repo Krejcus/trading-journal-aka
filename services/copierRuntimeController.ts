@@ -4,6 +4,7 @@ import {
   type BrokerEvent,
   type BrokerFill,
   type BrokerOrder,
+  type BrokerPosition,
   type BrokerOrderStatusLookup,
   type BrokerPort,
   type BrokerAccountRiskSnapshot,
@@ -1464,6 +1465,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     createdAt: number;
     leaderOrderId: string;
   }>();
+  interface EpisodeFollowerIsolationEvidence {
+    accountId: number;
+    symbol: string;
+    epochId: string;
+    eligibilityState: 'breached' | 'dll-locked';
+    observedAt: number;
+    observationVersion: number;
+  }
   const exitOnlyReservations = new Map<string, {
     accountId: number;
     symbol: string;
@@ -6506,6 +6515,112 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
   };
   const intentionalSuppressionKey = (accountId: number, symbol: string) => `${accountId}:${symbol}`;
+  const pendingIsolationCommandForAccount = (accountId: number): boolean => {
+    const live = currentRuntime();
+    const unresolvedPlaceStatus = (status: string) => (
+      status === 'planned' || status === 'sending' || status === 'unknown'
+    );
+    if ([...live.outbox.values()].some(entry => (
+      entry.request.accountId === accountId && unresolvedPlaceStatus(entry.status)
+    ))) return true;
+    if ([...live.bracketOutbox.values(), ...live.osoOutbox.values()].some(entry => (
+      entry.request.accountId === accountId && unresolvedPlaceStatus(entry.status)
+    ))) return true;
+    if ([...live.cancelOutbox.values()].some(entry => (
+      entry.accountId === accountId && unresolvedPlaceStatus(entry.status)
+    ))) return true;
+    if ([...currentRuntimePendingExposure.values()].some(pending => (
+      pending.accountId === accountId
+      && (pending.evidenceInvalid || pendingExposureRemaining(pending) > 0)
+    ))) return true;
+    return [...exitOnlyReservations.values()].some(reservation => (
+      reservation.accountId === accountId && reservation.remaining > 0
+    ));
+  };
+  const isolationEligibilityState = (
+    accountId: number,
+    at = clock(),
+  ): 'breached' | 'dll-locked' | null => {
+    const stored = accountEligibility.get(accountId);
+    if (!stored) return null;
+    const state = eligibilityAt(stored, at).state;
+    return state === 'breached' || state === 'dll-locked' ? state : null;
+  };
+  const episodeIsolationFromSnapshot = ({
+    accountId,
+    symbol,
+    positions,
+    orders,
+    observedAt,
+    observationVersion,
+  }: {
+    accountId: number;
+    symbol: string;
+    positions: readonly BrokerPosition[];
+    orders: readonly BrokerOrder[];
+    observedAt: number;
+    observationVersion: number;
+  }): EpisodeFollowerIsolationEvidence | null => {
+    const epoch = leaderExposureEpoch(symbol);
+    const eligibilityState = isolationEligibilityState(accountId, observedAt);
+    if (
+      !epoch
+      || epoch.phase !== 'open'
+      || !epoch.followers.some(follower => follower.accountId === accountId)
+      || eligibilityState == null
+      || positions.some(position => position.netQuantity !== 0)
+      || orders.some(order => isOpenOrderStatus(order.status))
+      || pendingIsolationCommandForAccount(accountId)
+    ) return null;
+    return {
+      accountId,
+      symbol,
+      epochId: epoch.id,
+      eligibilityState,
+      observedAt,
+      observationVersion,
+    };
+  };
+  const authoritativelyIsolateFollowerForEpisode = async (
+    accountId: number,
+    symbol: string,
+  ): Promise<EpisodeFollowerIsolationEvidence | null> => {
+    const epoch = leaderExposureEpoch(symbol);
+    if (!epoch || epoch.phase !== 'open' || isolationEligibilityState(accountId) == null) return null;
+    const epochId = epoch.id;
+    const generationAtStart = safetyGeneration;
+    const observationAtStart = tradeObservationVersionByAccount.get(accountId) ?? 0;
+    try {
+      const [positions, orders] = await Promise.all([
+        broker.listPositions(accountId),
+        broker.listOrders(accountId),
+      ]);
+      if (
+        stopped
+        || generationAtStart !== safetyGeneration
+        || observationAtStart !== (tradeObservationVersionByAccount.get(accountId) ?? 0)
+        || leaderExposureEpoch(symbol)?.id !== epochId
+        || leaderExposureEpoch(symbol)?.phase !== 'open'
+      ) return null;
+      const observedAt = clock();
+      const evidence = episodeIsolationFromSnapshot({
+        accountId,
+        symbol,
+        positions,
+        orders,
+        observedAt,
+        observationVersion: observationAtStart,
+      });
+      if (!evidence) return null;
+      positionsByAccount.set(accountId, new Map(
+        positions.map(position => [position.symbol, position.netQuantity]),
+      ));
+      rememberLiveOrderSnapshot(accountId, orders);
+      return evidence;
+    } catch {
+      return null;
+    }
+  };
   const rememberIntentionalEntrySuppression = (event: LeaderEvent): void => {
     for (const follower of group.followers) {
       const acceptsEvent = (event.kind === 'submitted' && follower.mode === 'on-submit')
@@ -7083,6 +7198,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const eligibilityIneligible = currentIneligibleAccounts(at);
     const unsafeDivergenceAccounts: number[] = [];
     const exitOnlyAccounts: number[] = [];
+    const episodeIsolationByAccount = new Map<number, EpisodeFollowerIsolationEvidence>();
+    await Promise.all(group.followers.map(async follower => {
+      if (isolationEligibilityState(follower.accountId, at) == null) return;
+      const evidence = await authoritativelyIsolateFollowerForEpisode(
+        follower.accountId,
+        event.symbol,
+      );
+      if (evidence) episodeIsolationByAccount.set(follower.accountId, evidence);
+    }));
     const followers = group.followers.map(follower => {
       const cut = activeFollowerCut(follower.accountId, at);
       const letRunCut = cut != null && (follower.onCut ?? 'close-copy') === 'let-run';
@@ -7161,11 +7285,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const documentedSuppression = suppression != null
         && hasPositionSnapshot
         && followerNet === suppression.allowedNet;
+      const episodeIsolation = episodeIsolationByAccount.get(follower.accountId);
+      const documentedEpisodeIsolation = episodeIsolation != null
+        && episodeIsolation.epochId === leaderExposureEpoch(event.symbol)?.id
+        && episodeIsolation.symbol === event.symbol
+        && followerNet === 0;
+      const unresolvedEligibilityIsolation = eligibilityIneligible.has(follower.accountId)
+        && !documentedEpisodeIsolation;
       if (
-        divergedFromLeaderTarget
+        (unresolvedEligibilityIsolation || (divergedFromLeaderTarget && !documentedSuppression))
         && !letRunCut
         && !entryRestrictionActive
-        && !documentedSuppression
+        && !documentedEpisodeIsolation
       ) {
         unsafeDivergenceAccounts.push(follower.accountId);
         ineligibleAccounts.set(
@@ -7182,6 +7313,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         );
         return { ...follower, mode: 'off' as const };
       }
+      if (documentedEpisodeIsolation) return follower;
       if (!letRunCut && !entryRestrictionActive && !documentedSuppression) return follower;
 
       const orderSign = event.side === 'Buy' ? 1 : -1;
@@ -8493,6 +8625,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     const cutAwareDispatch = await cutAwareDispatchFor(leaderEvent, eventIncreasesExposure);
     if (cutAwareDispatch.unsafeDivergenceAccounts.length > 0) {
+      gate = {
+        ...gate,
+        divergentAccounts: new Set([
+          ...gate.divergentAccounts,
+          ...cutAwareDispatch.unsafeDivergenceAccounts,
+        ]),
+      };
       const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
       runtime = recorded.runtime;
       if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
@@ -8693,12 +8832,25 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       const snapshotAccountIds = accountIds.filter(accountId => {
         const capability = byCapability.get(accountId);
-        if (!capability?.active || !capability.canTrade) return false;
         const state = eligibilityByAccount.get(accountId)?.state ?? 'active';
+        const needsOpenEpisodeIsolationProof = group.followers.some(follower => (
+          follower.accountId === accountId
+          && (state === 'breached' || state === 'dll-locked')
+          && (currentRuntime().state.safety.leaderExposureEpochs ?? []).some(epoch => (
+            epoch.groupId === group.id
+            && epoch.leaderAccountId === group.leaderAccountId
+            && epoch.phase === 'open'
+            && epoch.followers.some(participant => participant.accountId === accountId)
+          ))
+        ));
+        if (!capability || ((!capability.active || !capability.canTrade) && !needsOpenEpisodeIsolationProof)) {
+          return false;
+        }
         // BREACHED a stále platný DLL jsou známé exclusions. Expirující DLL
         // už eligibilityAt převedlo na `unverifiable`, takže se načte a po
         // úspěšném snapshotu může bezpečně vrátit do active.
-        return lineageParticipantIds.has(accountId)
+        return needsOpenEpisodeIsolationProof
+          || lineageParticipantIds.has(accountId)
           || (state !== 'breached' && state !== 'dll-locked');
       });
       const snapshots = await Promise.all(snapshotAccountIds.map(async accountId => {
@@ -8911,24 +9063,40 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       const ineligibleAfterReactivation = currentIneligibleAccounts();
       for (const follower of group.followers) {
+        const hasOpenEpisode = (currentRuntime().state.safety.leaderExposureEpochs ?? []).some(epoch => (
+          epoch.groupId === group.id
+          && epoch.leaderAccountId === group.leaderAccountId
+          && epoch.phase === 'open'
+          && epoch.followers.some(participant => participant.accountId === follower.accountId)
+        ));
         // Účet s autoritativní eligibility exclusion není participantem
         // copieru. Jeho chybějící snapshot proto není divergence zdravých
-        // participantů; po reaktivaci se automaticky vrátí do této kontroly.
+        // participantů mimo otevřenou epizodu. V otevřené epizodě ale musí
+        // projít stejným flat/no-working/no-pending důkazem jako hot-path.
         if (ineligibleAfterReactivation.has(follower.accountId)
-          && !lineageParticipantIds.has(follower.accountId)) continue;
+          && !lineageParticipantIds.has(follower.accountId)
+          && !hasOpenEpisode) continue;
+        const followerSnapshot = byAccount.get(follower.accountId);
         const followerPositions = new Map(
-          (byAccount.get(follower.accountId)?.positions ?? []).map(item => [item.symbol, item.netQuantity]),
+          (followerSnapshot?.positions ?? []).map(item => [item.symbol, item.netQuantity]),
         );
-        const symbols = new Set([...reconciledLeaderPositions.keys(), ...followerPositions.keys()]);
+        const symbols = new Set([
+          ...reconciledLeaderPositions.keys(),
+          ...followerPositions.keys(),
+          ...(currentRuntime().state.safety.leaderExposureEpochs ?? [])
+            .filter(epoch => (
+              epoch.groupId === group.id
+              && epoch.leaderAccountId === group.leaderAccountId
+              && epoch.phase === 'open'
+              && epoch.followers.some(participant => participant.accountId === follower.accountId)
+            ))
+            .map(epoch => epoch.symbol),
+        ]);
         const cut = activeFollowerCut(follower.accountId);
         const expectsFlatAfterCut = cut != null && (follower.onCut ?? 'close-copy') === 'close-copy';
-        // Účastník lineage, kterého mezitím zlikvidovala propka (breached),
-        // má být flat; pozice na něm je dál divergence.
-        const isolatedBreach = ineligibleAfterReactivation.has(follower.accountId)
-          && accountEligibility.get(follower.accountId)?.state === 'breached';
         for (const symbol of symbols) {
           const leaderNet = reconciledLeaderPositions.get(symbol) ?? 0;
-          const expected = follower.enabled === false || expectsFlatAfterCut || isolatedBreach
+          const expected = follower.enabled === false || expectsFlatAfterCut
             ? 0
             : Math.trunc(leaderNet * follower.multiplier);
           const actual = followerPositions.get(symbol) ?? 0;
@@ -8945,7 +9113,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             );
           const allowedPausePosition = pauseSuppression != null
             && actual === pauseSuppression.allowedNet;
-          if (actual !== expected && !allowedLetRunSubset && !allowedPausePosition) {
+          const isolationEvidence = followerSnapshot == null
+            ? null
+            : episodeIsolationFromSnapshot({
+              accountId: follower.accountId,
+              symbol,
+              positions: followerSnapshot.positions,
+              orders: followerSnapshot.orders,
+              observedAt: lastAuthoritativeReadAt,
+              observationVersion: accountObservationAtStart.get(follower.accountId) ?? 0,
+            });
+          if (
+            actual !== expected
+            && !allowedLetRunSubset
+            && !allowedPausePosition
+            && isolationEvidence == null
+          ) {
             divergent.add(follower.accountId);
             break;
           }

@@ -208,6 +208,37 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — V16: episode-bound izolace BREACHED/DLL followera (Codex, balíček 4)
+
+- Divergence před leader exitem nebo ochranným příkazem už nebere samotný
+  `breached`/`dll-locked` stav jako výjimku. Pro každý takový účet provede
+  čerstvou read-only kontrolu pozic a příkazů a izoluje jej pouze tehdy, když
+  autoritativně potvrdí celý účet flat, žádný working order, žádný pending
+  place/bracket/OSO/cancel command ani runtime pending/exit reservation a
+  nezměněnou aktuální otevřenou leader epochu. Čtyři izolované účty proto
+  neblokují SL ani exit zdravému followerovi; broker write se neopakuje.
+- `unverifiable`, selhané čtení, změna stream observation během čtení, pozice
+  z dřívější epizody, working order nebo pending command dál znamenají
+  fail-closed divergence. Hot-path nyní takovou divergenci zapíše i do
+  `divergentAccounts`; chybějící lokální position snapshot už ji nesmí skrýt.
+- Reconciliation používá tentýž episode/eligibility/flat/no-working/no-pending
+  predikát. BREACHED/DLL followera v otevřené epizodě zkusí read-only načíst
+  i při `active=false`/`canTrade=false`; chybějící či neověřitelný snapshot
+  není důkaz izolace. Mimo otevřenou epizodu zůstává dosavadní optional OAuth
+  chování zachované.
+- Nový `tests/copierV16EpisodeIsolation.test.ts` kryje čtyři breach skipy +
+  zdravý SL/exit bez DISARMu, starou kopii, `unverifiable`, DLL a pozitivní i
+  negativní reconcile. Původní pěti-testový V16 soubor před opravou skončil
+  5/5 fail; po opravě a doplnění reconcile parity je 6/6 pass. Dotčených pět
+  souborů 199/199 a samostatný V13 24/24 pass. Předepsaná copier sada má
+  137/137 souborů v sandboxu; jediný loopback soubor prošel samostatně mimo
+  sandbox 53/53 (v sandboxu očekávané `listen EPERM`). Cílený TypeScript je
+  čistý; root typecheck hlásí jen povolené chybějící `chrome`/CRX typy v
+  `extension/`; ESLint má 0 chyb a 3 starší warningy v controlleru.
+- Žádný commit, push, deploy, worker reinstall, ARM/DISARM, broker API ani
+  produkční změna nebyly provedeny. Zbývá nezávislé review a před nasazením
+  výslovně schválený commit/reinstall + řízené DEMO ověření.
+
 ### 2026-09-29 — V13 třetí iterace: návrat flat-sweepu na globální snapshot + stream-only filtr (Codex, balíček 3b-3)
 
 - Podle rozhodnutí v `docs/reviews/copier-v13c-review-20260928.md` byl V13
