@@ -122,8 +122,17 @@ describe('execution review: safety changes while durable sending commit is pendi
         expect(broker.modifyRequests()).toHaveLength(modifyCount);
         expect(broker.orders().reduce((sum, order) => sum + broker.cancelRequestCount(order.brokerOrderId), 0)).toBe(cancelCount);
         expect(broker.liquidateRequests()).toHaveLength(0);
-        expect(critical(audit)).toEqual([]);
-        expect(audit).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'skipped', reason: expect.stringContaining('dispatch-revoked:') })]));
+        if (kind === 'protective-cancel') {
+          expect(critical(audit)).toEqual([expect.objectContaining({
+            kind: 'cancel-failed',
+            reason: expect.stringContaining('reconciliation required'),
+          })]);
+        } else {
+          expect(critical(audit)).toEqual([]);
+          expect(audit).toEqual(expect.arrayContaining([expect.objectContaining({
+            kind: 'skipped', reason: expect.stringContaining('dispatch-revoked:'),
+          })]));
+        }
         const snapshot = await barrier.store.load();
         const entries = kind === 'standard' ? snapshot.outbox : kind === 'oso' ? snapshot.osoOutbox
           : kind === 'oco' ? snapshot.bracketOutbox : snapshot.cancelOutbox;

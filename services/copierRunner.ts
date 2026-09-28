@@ -1390,11 +1390,11 @@ export async function processLeaderEvent(
       };
     }
   }
-  const commands = [
+  const allCommands = [
     ...cancels.map(command => ({ ...command, operation: 'cancel' as const })),
     ...modifications.map(command => ({ ...command, operation: 'modify' as const })),
   ];
-  if (commands.length > 0) {
+  if (allCommands.length > 0) {
     const isTerminalCancel = durableCancels.length > 0 && modifications.length === 0;
     // Výjimka „risk-redukující cancel projde vždy" má chránit před osiřelou
     // čekající objednávkou — tam zrušení expozici snižuje. Ochranná noha
@@ -1409,9 +1409,11 @@ export async function processLeaderEvent(
       protectiveLegIds.add(entry.leaderStopOrderId);
       protectiveLegIds.add(entry.leaderTargetOrderId);
     }
-    const durableStandaloneProtective = (planningState.links.get(event.orderId) ?? [])
-      .some(link => link.protectiveRole === 'standalone-stop');
-    const protectiveLifecycle = protectiveLegIds.has(event.orderId) || durableStandaloneProtective;
+    const standaloneLinks = (planningState.links.get(event.orderId) ?? [])
+      .filter(link => link.protectiveRole === 'standalone-stop');
+    const standaloneLinkFor = (command: (typeof allCommands)[number]) => standaloneLinks.find(link => (
+      link.accountId === command.accountId && link.brokerOrderId === command.brokerOrderId
+    ));
     const commandContext = {
       ...context,
       sequenceBroken: context.sequenceBroken || sequenceBroken,
@@ -1421,19 +1423,77 @@ export async function processLeaderEvent(
         || stuckOsoEntries(osoOutbox.values()).length > 0
         || stuckCancelEntries(cancelOutbox.values()).some(entry => entry.leaderEventId !== event.id),
     };
-    const commandHalt = isTerminalCancel && !protectiveLifecycle
-      ? cancelLifecycleHaltReason(context)
-      : protectiveLifecycle
-        ? protectiveLifecycleHaltReason(commandContext)
-        : haltReason(commandContext);
-    if (commandHalt || (broker.environment === 'live' && !store)) {
-      const reason = commandHalt ?? 'durable-store-required';
-      for (const command of commands) {
+    const blockedCommandReasons = new Map<string, string>();
+    const protectiveCancelKeys = new Set<string>();
+    const positionReads = new Map<number, Promise<Awaited<ReturnType<BrokerPort['listPositions']>>>>();
+    const readPositions = (accountId: number) => {
+      const existing = positionReads.get(accountId);
+      if (existing) return existing;
+      const pending = broker.listPositions(accountId);
+      positionReads.set(accountId, pending);
+      return pending;
+    };
+
+    await Promise.all(allCommands.map(async command => {
+      let commandHalt: string | null;
+      const standaloneLink = command.operation === 'cancel' && isTerminalCancel
+        ? standaloneLinkFor(command)
+        : undefined;
+      if (standaloneLink) {
+        try {
+          const positions = await readPositions(command.accountId);
+          const matching = positions.filter(position => position.symbol === event.symbol);
+          const authoritative = matching.length <= 1
+            && matching.every(position => Number.isFinite(position.netQuantity));
+          if (!authoritative) {
+            commandHalt = 'pozice followera není autoritativně známá: nejednoznačný net v symbolu';
+          } else {
+            const net = matching[0]?.netQuantity ?? 0;
+            const reducesWithoutFlip = (
+              (net > 0 && event.side === 'Sell') || (net < 0 && event.side === 'Buy')
+            ) && standaloneLink.quantity <= Math.abs(net);
+            if (reducesWithoutFlip) {
+              protectiveCancelKeys.add(command.key);
+              const halt = protectiveLifecycleHaltReason(commandContext);
+              commandHalt = halt
+                ? `follower drží SL, který leader zrušil (${halt})`
+                : null;
+            } else {
+              // Flat účet, stejná strana jako pozice nebo stop větší než
+              // |net| by vytvořily či zvětšily expozici. Takový stop už není
+              // ochrana a jeho zrušení smí projít cancel-only branou.
+              commandHalt = cancelLifecycleHaltReason(context);
+            }
+          }
+        } catch (error) {
+          commandHalt = `pozice followera není autoritativně známá: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      } else if (isTerminalCancel && !protectiveLegIds.has(event.orderId)) {
+        commandHalt = cancelLifecycleHaltReason(context);
+      } else if (protectiveLegIds.has(event.orderId)) {
+        if (command.operation === 'cancel') protectiveCancelKeys.add(command.key);
+        commandHalt = protectiveLifecycleHaltReason(commandContext);
+      } else {
+        commandHalt = haltReason(commandContext);
+      }
+      if (!commandHalt && broker.environment === 'live' && !store) {
+        commandHalt = 'durable-store-required';
+      }
+      if (commandHalt) blockedCommandReasons.set(command.key, commandHalt);
+    }));
+
+    for (const command of allCommands) {
+      const reason = blockedCommandReasons.get(command.key);
+      if (reason) {
         audit.push({
           at: clock(), leaderEventId: event.id, kind: 'blocked', accountId: command.accountId,
           key: command.key, brokerOrderId: command.brokerOrderId, reason,
         });
       }
+    }
+    const commands = allCommands.filter(command => !blockedCommandReasons.has(command.key));
+    const hadBlockedCommands = blockedCommandReasons.size > 0;
+    if (commands.length === 0) {
       return {
         runtime: { state, outbox, bracketOutbox, osoOutbox, cancelOutbox, shadowLinks, revision },
         plan: { leaderEventId: event.id, orders: [], skipped: [] }, audit, metrics,
@@ -1560,11 +1620,6 @@ export async function processLeaderEvent(
       };
     }
     const sendableKeys = new Set<string>();
-    const protectiveCancelKeys = new Set(
-      protectiveLifecycle
-        ? cancels.map(command => command.key)
-        : [],
-    );
     const sending = commands.map(command => {
       const existing = cancelOutbox.get(command.key);
       const entry = existing ?? (command.operation === 'cancel'
@@ -1687,8 +1742,16 @@ export async function processLeaderEvent(
     let allConfirmed = true;
     for (const entry of [...cancelOutbox.values()].filter(item => item.leaderEventId === event.id)) {
       if (entry.status === 'waived') {
-        audit.push({ at: clock(), leaderEventId: event.id, kind: 'skipped',
-          accountId: entry.accountId, key: entry.key, reason: entry.reason });
+        const protectiveRace = protectiveCancelKeys.has(entry.key);
+        audit.push({
+          at: clock(), leaderEventId: event.id,
+          kind: protectiveRace ? 'cancel-failed' : 'skipped',
+          accountId: entry.accountId, key: entry.key,
+          reason: protectiveRace
+            ? `ochranný cancel byl zastaven před odesláním; reconciliation required (${entry.reason ?? 'dispatch-revoked'})`
+            : entry.reason,
+        });
+        if (protectiveRace) allConfirmed = false;
         continue;
       }
       // Výpadek sítě nebo expirace tokenu uprostřed ověřování nesmí vyhodit
@@ -1739,7 +1802,7 @@ export async function processLeaderEvent(
         });
       }
     }
-    if (allConfirmed) state = applyResolved(state, [], event.sequence);
+    if (allConfirmed && !hadBlockedCommands) state = applyResolved(state, [], event.sequence);
     revision = await persistRuntime(store, state, outbox, cancelOutbox, bracketOutbox, osoOutbox, revision);
     return {
       runtime: { state, outbox, bracketOutbox, osoOutbox, cancelOutbox, shadowLinks, revision },

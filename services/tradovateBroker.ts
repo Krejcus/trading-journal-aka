@@ -127,6 +127,11 @@ interface TradovateFillEntity {
   price: number;
   timestamp?: string;
 }
+interface PendingTradovateFill {
+  fill: TradovateFillEntity;
+  /** Čas původního Created frame, ne pozdější hydratace/Order update. */
+  receivedAt: number;
+}
 interface TradovateCommandResult { commandId?: number; failureReason?: string; failureText?: string }
 
 export interface WebSocketLike {
@@ -189,6 +194,8 @@ export interface TradovateBrokerConfig {
   onSessionSuspect?: (info: TradovateSessionSuspect) => void;
   syncTimeoutMs?: number;
   socketIdleTimeoutMs?: number;
+  /** Nejvyšší stáří nejstaršího nezpracovaného `a` frame. */
+  semanticLagTimeoutMs?: number;
   /**
    * Deadline jednoho REST volání včetně čtení těla. Bez něj visel hung
    * fetch až 5 minut (undici default) a blokoval eventTail: risk poll,
@@ -370,7 +377,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const baselineFillIds = new Set<number>();
   /** Fill IDs skutečně doručená execution controlleru. */
   const deliveredFillIds = new Set<number>();
-  const pendingFills = new Map<number, TradovateFillEntity[]>();
+  const pendingFills = new Map<number, PendingTradovateFill[]>();
   const orders = new Map<string, BrokerOrder>();
   const orderWaiters = new Map<number, Set<(order: BrokerOrder) => void>>();
   let socket: WebSocketLike | null = null;
@@ -384,6 +391,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   let syncTimeout: ReturnType<typeof setTimeout> | null = null;
   let syncRetry: ReturnType<typeof setTimeout> | null = null;
   let socketMessageTail: Promise<void> = Promise.resolve();
+  let semanticFrameSequence = 0;
+  let pendingSemanticFrames: Array<{ id: number; receivedAt: number }> = [];
   let lastSocketMessageAt = 0;
   /** Kdy se aktuální socket otevřel (diagnostika WS CLOSE). */
   let socketOpenedAt = 0;
@@ -804,17 +813,26 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     });
   };
 
-  const emitMappedFill = async (fill: TradovateFillEntity): Promise<boolean> => {
+  const emitMappedFill = async (fill: TradovateFillEntity, receivedAt: number): Promise<boolean> => {
     if (deliveredFillIds.has(fill.id)) return true;
     const linked = orders.get(String(fill.orderId));
     const accountId = fill.accountId ?? linked?.accountId ?? rawOrders.get(fill.orderId)?.accountId;
     if (accountId == null) {
       const waiting = pendingFills.get(fill.orderId) ?? [];
-      if (!waiting.some(item => item.id === fill.id)) pendingFills.set(fill.orderId, [...waiting, fill]);
+      if (!waiting.some(item => item.fill.id === fill.id)) {
+        pendingFills.set(fill.orderId, [...waiting, { fill, receivedAt }]);
+      }
       return false;
     }
-    await hydrateContracts([fill.contractId]);
+    // Rezervace musí vzniknout před prvním awaitem: dvě souběžné cesty
+    // (Order/ExecutionReport hydratace) jinak mohou tentýž fill emitovat 2x.
     deliveredFillIds.add(fill.id);
+    try {
+      await hydrateContracts([fill.contractId]);
+    } catch (error) {
+      deliveredFillIds.delete(fill.id);
+      throw error;
+    }
     const mapped: BrokerFill = {
       fillId: String(fill.id),
       tag: orderTags.get(fill.orderId) ?? linked?.tag ?? '',
@@ -826,7 +844,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       price: fill.price,
       filledAt: fill.timestamp ? Date.parse(fill.timestamp) : clock(),
     };
-    emit({ type: 'fill', fill: mapped });
+    emit({ type: 'fill', fill: mapped, receivedAt });
     return true;
   };
 
@@ -834,7 +852,15 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     const waiting = pendingFills.get(orderId) ?? [];
     if (waiting.length === 0) return;
     pendingFills.delete(orderId);
-    for (const fill of waiting) await emitMappedFill(fill);
+    for (const item of waiting) await emitMappedFill(item.fill, item.receivedAt);
+  };
+
+  const dropPendingFill = (orderId: number, fillId: number) => {
+    const waiting = pendingFills.get(orderId);
+    if (!waiting) return;
+    const remaining = waiting.filter(item => item.fill.id !== fillId);
+    if (remaining.length > 0) pendingFills.set(orderId, remaining);
+    else pendingFills.delete(orderId);
   };
 
   /**
@@ -1003,7 +1029,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     socket.send(`${endpoint}\n${id}\n\n${JSON.stringify(body)}`);
   };
 
-  const applyCommandReport = async (report: TradovateCommandReportEntity): Promise<boolean> => {
+  const applyCommandReport = async (
+    report: TradovateCommandReportEntity,
+    receivedAt = clock(),
+  ): Promise<boolean> => {
     const command = commands.get(report.commandId);
     if (command?.orderId == null) {
       const waiting = pendingCommandReports.get(report.commandId) ?? [];
@@ -1027,19 +1056,19 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       const raw = rawOrders.get(command.orderId);
       if (raw) rawOrders.set(command.orderId, { ...raw, ordStatus: 'Rejected' });
       const order = await composeOrder(command.orderId);
-      if (order) emit({ type: 'order', order });
+      if (order) emit({ type: 'order', order, receivedAt });
     }
     return true;
   };
 
-  const flushCommandReports = async (commandId: number) => {
+  const flushCommandReports = async (commandId: number, receivedAt: number) => {
     const waiting = pendingCommandReports.get(commandId) ?? [];
     if (waiting.length === 0) return;
     pendingCommandReports.delete(commandId);
-    for (const report of waiting) await applyCommandReport(report);
+    for (const report of waiting) await applyCommandReport(report, receivedAt);
   };
 
-  const handleProps = async (payload: unknown) => {
+  const handleProps = async (payload: unknown, receivedAt: number) => {
     const items = Array.isArray(payload) ? payload : [payload];
     for (const raw of items) {
       if (!raw || typeof raw !== 'object') continue;
@@ -1059,17 +1088,17 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (command.orderId != null && command.commandType === 'New' && correlationTag) {
           orderTags.set(command.orderId, correlationTag);
           const order = await composeOrder(command.orderId);
-          if (order) emit({ type: 'order', order });
+          if (order) emit({ type: 'order', order, receivedAt });
         }
-        await flushCommandReports(command.id);
+        await flushCommandReports(command.id, receivedAt);
       } else if (entityType === 'commandreport') {
-        await applyCommandReport(item.entity as TradovateCommandReportEntity);
+        await applyCommandReport(item.entity as TradovateCommandReportEntity, receivedAt);
       } else if (entityType === 'executionreport') {
         const report = item.entity as TradovateExecutionReportEntity;
         if (!rememberExecutionReport(report)) continue;
         await hydrateOrderVersion(report.orderId);
         const order = await composeOrder(report.orderId);
-        if (order) emit({ type: 'order', order });
+        if (order) emit({ type: 'order', order, receivedAt });
         await flushPendingFills(report.orderId);
       } else if (entityType === 'orderversion') {
         const version = item.entity as TradovateOrderVersionEntity;
@@ -1077,7 +1106,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         rememberVersion(version);
         if (orderVersions.get(version.orderId)?.id !== previous) {
           const order = await composeOrder(version.orderId);
-          if (order) emit({ type: 'order', order });
+          if (order) emit({ type: 'order', order, receivedAt });
           await flushPendingFills(version.orderId);
         }
       } else if (entityType === 'order') {
@@ -1097,7 +1126,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         rememberRawOrder(orderEntity);
         await hydrateOrderVersion(orderEntity.id);
         const order = await composeOrder(orderEntity.id);
-        if (order) emit({ type: 'order', order });
+        if (order) emit({ type: 'order', order, receivedAt });
         await flushPendingFills(orderEntity.id);
       } else if (entityType === 'position') {
         notifyAccountDataChange((item.entity as { accountId?: number }).accountId, 'position');
@@ -1116,17 +1145,27 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         // jednou. `emitMappedFill` drží vlastní delivery dedup.
         rememberFill(fill);
         if (deliveredFillIds.has(fill.id) || baselineFillIds.has(fill.id)) continue;
+        if (item.eventType != null && item.eventType !== 'Created') {
+          // Updated může dorazit hodiny po původním fillu. Nesmí teprve teď
+          // probudit pending on-fill kopii; starý Created intent zahodíme.
+          dropPendingFill(fill.orderId, fill.id);
+          continue;
+        }
         const changedAccount = (item.entity as { accountId?: number }).accountId ?? rawOrders.get(fill.orderId)?.accountId;
         if (changedAccount != null) notifyAccountDataChange(changedAccount, 'fill');
         else notifyAccountDataChange(null, 'resync');
-        await emitMappedFill(fill);
+        await emitMappedFill(fill, receivedAt);
         const updated = await composeOrder(fill.orderId);
-        if (updated) emit({ type: 'order', order: updated });
+        if (updated) emit({ type: 'order', order: updated, receivedAt });
       }
     }
   };
 
-  const handleMessageObject = async (message: unknown, isCurrent: () => boolean) => {
+  const handleMessageObject = async (
+    message: unknown,
+    isCurrent: () => boolean,
+    receivedAt: number,
+  ) => {
     if (!isCurrent()) return;
     if (!message || typeof message !== 'object') return;
     const value = message as { e?: string; d?: unknown; i?: number; s?: number };
@@ -1196,7 +1235,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       }
     }
     if (value.e === 'props') {
-      await handleProps(value.d);
+      await handleProps(value.d, receivedAt);
       return;
     }
     if (value.i === 0) {
@@ -1208,13 +1247,13 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     }
     if (value.i === 1) {
       if (value.s !== 200) throw new TradovateTransportError(`WebSocket synchronization failed${socketFailureDetail(value)}`);
-      if (Array.isArray(value.d)) await handleProps(value.d);
+      if (Array.isArray(value.d)) await handleProps(value.d, receivedAt);
       if (!syncReady) {
         const baseline = await loadOrderGraph(undefined, true);
         if (!isCurrent()) return;
         for (const raw of baseline) {
           const order = await composeOrder(raw.id);
-          if (order) emit({ type: 'order', order });
+          if (order) emit({ type: 'order', order, receivedAt });
         }
         if (!isCurrent()) return;
         if (syncTimeout) clearTimeouts(syncTimeout);
@@ -1239,11 +1278,16 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       return;
     }
     if (Array.isArray(value.d)) {
-      for (const item of value.d) await handleMessageObject(item, isCurrent);
+      for (const item of value.d) await handleMessageObject(item, isCurrent, receivedAt);
     }
   };
 
-  const handleSocketData = async (raw: unknown, messages: readonly unknown[], isCurrent: () => boolean) => {
+  const handleSocketData = async (
+    raw: unknown,
+    messages: readonly unknown[],
+    isCurrent: () => boolean,
+    receivedAt: number,
+  ) => {
     if (!isCurrent()) return;
     if (typeof raw !== 'string' || raw.length === 0) return;
     if (raw === 'o') {
@@ -1253,7 +1297,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       return;
     }
     if (raw[0] !== 'a') return;
-    for (const message of messages) await handleMessageObject(message, isCurrent);
+    for (const message of messages) await handleMessageObject(message, isCurrent, receivedAt);
   };
 
   const clearSocketTimers = () => {
@@ -1416,6 +1460,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     socket = candidate;
     syncReady = false;
     socketMessageTail = Promise.resolve();
+    pendingSemanticFrames = [];
     connectWatchdog = timeouts(() => {
       connectWatchdog = null;
       if (socket !== candidate || candidate.readyState === 1) return;
@@ -1455,7 +1500,15 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       // Controller tak dostane čerstvý heartbeat ještě před případným REST
       // awaitem a broker timeout měří skutečný socket, ne délku handleru.
       lastSocketMessageAt = receivedAt;
-      emit({ type: 'heartbeat', at: receivedAt });
+      try {
+        emit({ type: 'heartbeat', at: receivedAt });
+      } catch (reason) {
+        // Execution listener je součást transportní hranice. Jeho synchronní
+        // výjimka nesmí uniknout z nativního onmessage callbacku.
+        try { emitOrHoldError(contextualError(reason, 'websocket')); } catch { /* close still wins */ }
+        try { closeSocket(candidate, 'socket-listener-error'); } catch { /* callback must not throw */ }
+        return;
+      }
 
       // Tradovate heartbeat frame nemá sémantiku. Odpověď musí odejít v témže
       // callbacku, ne až za `socketMessageTail`.
@@ -1481,8 +1534,14 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           // Capture before metadata/REST awaits. Analytics-only orderVersion events
           // must never update execution caches or emit a requested price as confirmed.
           if (evidenceListeners.size) {
-            for (const message of messages) visitJournalSocketEvidence(message,
-              (type, entity, source, eventType) => observe(type, entity, source, eventType, receivedAt));
+            try {
+              for (const message of messages) visitJournalSocketEvidence(message,
+                (type, entity, source, eventType) => observe(type, entity, source, eventType, receivedAt));
+            } catch (reason) {
+              try { emitOrHoldError(contextualError(reason, 'websocket')); } catch { /* close still wins */ }
+              try { closeSocket(candidate, 'socket-observer-error'); } catch { /* callback must not throw */ }
+              return;
+            }
           }
         }
       } catch (reason) { parseError = reason; }
@@ -1490,7 +1549,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       // `o` pouze zahájí autorizaci. Serial tail patří výhradně sémantickým
       // `a` zprávám, aby transportní provoz nebyl jejich backpressurem.
       if (typeof event.data !== 'string' || event.data[0] !== 'a') {
-        void handleSocketData(event.data, messages, () => socket === candidate && socketState !== 'closing')
+        void handleSocketData(
+          event.data,
+          messages,
+          () => socket === candidate && socketState !== 'closing',
+          receivedAt,
+        )
           .catch(reason => {
             if (socket !== candidate) return;
             emitOrHoldError(contextualError(reason, 'websocket'));
@@ -1498,11 +1562,18 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           });
         return;
       }
+      const semanticFrame = { id: ++semanticFrameSequence, receivedAt };
+      pendingSemanticFrames.push(semanticFrame);
       socketMessageTail = socketMessageTail
         .then(() => {
           if (socket !== candidate) return;
           if (parseError) throw parseError;
-          return handleSocketData(event.data, messages, () => socket === candidate && socketState !== 'closing');
+          return handleSocketData(
+            event.data,
+            messages,
+            () => socket === candidate && socketState !== 'closing',
+            receivedAt,
+          );
         })
         .catch(reason => {
           if (socket !== candidate) return;
@@ -1515,6 +1586,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           }
           emitOrHoldError(error);
           closeSocket(candidate, 'socket-message-error', minimumDelayMs);
+        })
+        .finally(() => {
+          pendingSemanticFrames = pendingSemanticFrames.filter(frame => frame.id !== semanticFrame.id);
         });
     };
     candidate.onerror = () => {
@@ -1574,6 +1648,21 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       notOpenSince = 0;
       if (candidate.readyState !== 1) return;
       const now = clock();
+      const semanticLagLimitMs = Math.max(
+        1,
+        config.semanticLagTimeoutMs ?? config.socketIdleTimeoutMs ?? 15_000,
+      );
+      const oldestSemanticFrame = pendingSemanticFrames[0];
+      if (oldestSemanticFrame && now - oldestSemanticFrame.receivedAt >= semanticLagLimitMs) {
+        emitOrHoldError(contextualError(
+          new TradovateTransportError(withConnectionLabel(
+            `Tradovate WebSocket semantic lag (${now - oldestSemanticFrame.receivedAt} ms)`,
+          )),
+          'websocket',
+        ));
+        closeSocket(candidate, 'semantic-lag');
+        return;
+      }
       // Před dokončeným syncem rozhoduje sync deadline: pomalý server, který
       // připravuje syncrequest, nesmí spadnout na kratší heartbeat guard.
       const idleLimitMs = socketState === 'connected'

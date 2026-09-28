@@ -1992,6 +1992,7 @@ describe('zrušení objednávky u leadera', () => {
 
     expect(opened.runtime.state.links.get('standalone-stop')?.[0])
       .toMatchObject({ protectiveRole: 'standalone-stop' });
+    broker.setPosition(200, 'MNQU6', 1);
 
     const canceled = await processLeaderEvent({
       event: event({
@@ -2007,7 +2008,7 @@ describe('zrušení objednávky u leadera', () => {
 
     expect(canceled.audit).toContainEqual(expect.objectContaining({
       kind: 'blocked',
-      reason: 'killSwitch' in gateOverride ? 'kill-switch' : 'disarmed',
+      reason: expect.stringContaining('killSwitch' in gateOverride ? 'kill-switch' : 'disarmed'),
     }));
     expect(broker.orders()).toEqual([expect.objectContaining({ status: 'working' })]);
     expect(canceled.runtime.state.lastSequence).toBe(1);

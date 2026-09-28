@@ -205,8 +205,63 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - [ ] Chaos test recovery proti reálnému DEMO: běžný restart flat/DISARMED
       prošel 18. 8.; kill uprostřed odesílání a výpadek WS zůstávají ověřené
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
+- [ ] **Standalone SL sweep po pozdějším zploštění followera** — balíček 5b-2
+      umí při leader cancelu po účtech rozlišit skutečně ochranný SL od flat,
+      oversized nebo opačně orientovaného stopu. Když se ale SL za DISARM
+      správně podrží a follower se zploští až později přes TP, runner už
+      nedostane leader lifecycle událost. `sweepFollowerProtectiveLegs`
+      v controlleru musí v navazujícím controller balíčku zahrnout i durable
+      `protectiveRole: standalone-stop` pro přesný účet+symbol a zachovat
+      stejnou autoritativní postkontrolu jako bracket/OSO.
+- [ ] **V8 stáří execution eventu a ochranný reassert** — broker od 5b-2 nese
+      `receivedAt` na Order/Fill eventu a semantic-lag watchdog zavře přetížený
+      socket. Controller ještě musí blokovat staré události zvyšující expozici,
+      ochranný posun SL nesmí zamítnout jen kvůli stáří a neodeslaný ochranný
+      posun se musí po čerstvém lookupu znovu prosadit. Runner 5b-2 tyto body
+      záměrně nemění bez controller kontraktu.
 
 ## Deník
+
+### 2026-09-29 — V5/V8 adversariální follow-up: per-account SL cancel a semantic-lag (Codex, balíček 5b-2)
+
+- Opraven lokálně follow-up commitu `362b921`, bez commitu, deploye,
+  reinstalu workeru, produkční konfigurace nebo brokerového volání.
+  `services/copierRuntimeController.ts` ani `services/brokerRouter.ts` se
+  nezměnily.
+- Cancel durable standalone stopu se v okamžiku leader cancelu klasifikuje
+  zvlášť pro každý follower z autoritativního `listPositions`: flat účet,
+  stop na špatnou stranu a množství větší než `|net|` používají cancel-only
+  bránu; stop skutečně snižující otevřenou pozici používá plnou bránu.
+  Neznámý nebo nejednoznačný net je kritický `blocked`. Smíšený fan-out tak
+  zruší orphan stop jen bezpečným účtům a zachová SL otevřeným účtům. Audit
+  blokace za DISARM obsahuje text „follower drží SL, který leader zrušil“.
+- Protective cancel zahozený změnou safety generation těsně před side
+  effectem už není tichý `skipped`, ale kritický `cancel-failed` s požadavkem
+  na reconciliation; stávající controller tím invaliduje reconcile stav.
+- Tradovate transport eviduje nejstarší nezpracovaný `a` frame. Po 15 s
+  (konfigurovatelné `semanticLagTimeoutMs`, jinak socket idle limit) emituje
+  chybu a zavře socket důvodem `semantic-lag`; synchronní odpověď na `h` i
+  liveness heartbeat zůstávají mimo tail. Synchronní výjimka execution
+  listeneru/journal observeru se převádí na error + close místo úniku z
+  `onmessage`.
+- Order/Fill `BrokerEvent` nese `receivedAt` původního frame. Pending Fill se
+  doručí jen z `Created` (legacy event bez typu zůstává kompatibilní), pozdní
+  `Updated` jej zahodí; `deliveredFillIds` se rezervuje před hydratací
+  kontraktu, při chybě hydratace se rezervace uvolní.
+- Opraveno nepřesné tvrzení balíčku 5b: „stale posun SL → kritický audit“
+  nebyla změna proti base. Stejná věta v těle historického commitu `362b921`
+  zůstává kvůli zákazu commitu/rewrite pouze historickým chybným popisem a
+  nesmí se používat jako důkaz. Chybějící controller body V8 a standalone
+  sweep jsou vedené výše jako otevřené otázky.
+- Převzaté adversariální testy před opravou reprodukovaly 4 V5 a 5 V8 pádů.
+  Po opravě cílený blok 148/148 a execution review 20/20; scoped ESLint
+  i `git diff --check` čisté, produkční build prošel. Root `tsc --noEmit` má
+  jen předem známé chybějící Chrome typy a `@crxjs/vite-plugin` v `extension/`;
+  po jejich odfiltrování není žádná chyba. Celá předepsaná copier sada prošla
+  s loopbackem 143/143 vykonaných souborů a 1634/1634 vykonaných testů; jeden
+  záměrný `todo` kryje výše popsaný controller sweep. První sandbox běh měl
+  jen `listen EPERM 127.0.0.1` a dva staré auditní kontrakty, které byly
+  aktualizované na novou kritickou sémantiku.
 
 ### 2026-09-29 — V5/V7/V8: durable standalone SL a oddělená broker liveness/fill dedup (Codex, balíček 5b)
 
@@ -222,8 +277,9 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Tradovate transport zapisuje `lastSocketMessageAt`, emituje heartbeat a na
   `h` odpovídá `[]` přímo v raw `onmessage`; serial tail zůstal jen pro
   sémantické `a` zprávy. Pomalá REST hydratace Orderu tak už nevyrábí falešný
-  heartbeat timeout/stale-heartbeat. Skutečně stale posun SL dál skončí
-  viditelným kritickým `blocked` auditem a fail-closed, ne tichým skipem.
+  heartbeat timeout/stale-heartbeat. Původní tvrzení, že tím nově vznikl
+  kritický audit pro stale posun SL, bylo nepřesné: stejné chování měla base;
+  navazující body V8 jsou vedené jako otevřená otázka v zápisu 5b-2 výše.
 - Fill dedup je rozdělen na započtené ID, explicitní úvodní REST baseline a
   ID skutečně doručená controlleru. Běžný REST lookup už nepotlačí pozdější
   WS Fill stejného ID, ale historický fill z úvodního sync baseline se
