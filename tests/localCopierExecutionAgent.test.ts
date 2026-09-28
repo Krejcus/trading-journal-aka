@@ -530,6 +530,105 @@ describe('local copier execution agent', () => {
     expect(runtime.reconfigureGroup).not.toHaveBeenCalled();
   });
 
+  it('operátorsky vyřadí pouze celou starou OAuth-nedostupnou skupinu a novou neARMuje', async () => {
+    const runtime = controller();
+    const prepareGroupAccounts = vi.fn(async (request: PrepareGroupAccountsRequest) => {
+      expect(request).toEqual({ required: [33, 44], optional: [11, 22] });
+      return { missingOptional: [11, 22] };
+    });
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, prepareGroupAccounts,
+    });
+    const next = {
+      ...group(), id: 'new-group', leaderAccountId: 33,
+      followers: [{ accountId: 44, mode: 'on-submit' as const, multiplier: 1 }],
+    };
+    const retirement = {
+      groupId: 'runtime-test', accountIds: [11, 22],
+      reason: 'Majitel potvrzuje likvidaci všech starých účtů a přebírá jejich správu.',
+    };
+    const response = await post(running, running.status().nonce, {
+      type: 'activate-group', group: next, retireMissingOldGroup: retirement,
+    });
+    expect(response.status).toBe(200);
+    expect(runtime.activateGroup).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'new-group', leaderAccountId: 33,
+    }), {
+      missingOptionalAccountIds: [22], retireMissingOldGroup: retirement,
+    });
+    expect(runtime.arm).not.toHaveBeenCalled();
+    expect(running.status().group.id).toBe('new-group');
+  });
+
+  it('operátorské vyřazení odmítne, jestliže některý starý účet OAuth stále vrací', async () => {
+    const runtime = controller();
+    const prepareGroupAccounts = vi.fn(async () => ({ missingOptional: [22] }));
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, prepareGroupAccounts,
+    });
+    const response = await post(running, running.status().nonce, {
+      type: 'activate-group',
+      group: {
+        ...group(), id: 'new-group', leaderAccountId: 33,
+        followers: [{ accountId: 44, mode: 'on-submit', multiplier: 1 }],
+      },
+      retireMissingOldGroup: {
+        groupId: 'runtime-test', accountIds: [11, 22],
+        reason: 'Majitel potvrzuje likvidaci všech starých účtů a přebírá jejich správu.',
+      },
+    });
+    expect(response.status).toBe(409);
+    expect(runtime.activateGroup).not.toHaveBeenCalled();
+    expect(running.status().group.id).toBe('runtime-test');
+  });
+
+  it('operátorské vyřazení odmítne pro jiné než přesné ID aktivní staré skupiny', async () => {
+    const runtime = controller();
+    const prepareGroupAccounts = vi.fn(async () => ({ missingOptional: [11, 22] }));
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, prepareGroupAccounts,
+    });
+    const response = await post(running, running.status().nonce, {
+      type: 'activate-group',
+      group: {
+        ...group(), id: 'new-group', leaderAccountId: 33,
+        followers: [{ accountId: 44, mode: 'on-submit', multiplier: 1 }],
+      },
+      retireMissingOldGroup: {
+        groupId: 'jiná-stará-skupina', accountIds: [11, 22],
+        reason: 'Majitel potvrzuje likvidaci všech starých účtů a přebírá jejich správu.',
+      },
+    });
+    expect(response.status).toBe(409);
+    expect(prepareGroupAccounts).not.toHaveBeenCalled();
+    expect(runtime.activateGroup).not.toHaveBeenCalled();
+    expect(running.status().group.id).toBe('runtime-test');
+  });
+
+  it('operátorské vyřazení odmítne při zapnuté kopírce ještě před routing refreshem', async () => {
+    const runtime = controller();
+    runtime.arm({ shadowMode: false });
+    const prepareGroupAccounts = vi.fn(async () => ({ missingOptional: [11, 22] }));
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, prepareGroupAccounts,
+    });
+    const response = await post(running, running.status().nonce, {
+      type: 'activate-group',
+      group: {
+        ...group(), id: 'new-group', leaderAccountId: 33,
+        followers: [{ accountId: 44, mode: 'on-submit', multiplier: 1 }],
+      },
+      retireMissingOldGroup: {
+        groupId: 'runtime-test', accountIds: [11, 22],
+        reason: 'Majitel potvrzuje likvidaci všech starých účtů a přebírá jejich správu.',
+      },
+    });
+    expect(response.status).toBe(409);
+    expect(prepareGroupAccounts).not.toHaveBeenCalled();
+    expect(runtime.activateGroup).not.toHaveBeenCalled();
+    expect(runtime.status().armed).toBe(true);
+  });
+
   it('zmizelý follower, který v next zůstává, není optional', async () => {
     const runtime = controller();
     const prepareGroupAccounts = vi.fn(async (request: PrepareGroupAccountsRequest) => {

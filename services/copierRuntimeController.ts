@@ -423,6 +423,12 @@ export interface CopierGroupReconfigurationOptions {
   missingOptionalAccountIds?: readonly number[];
   /** Explicitní operátorské převzetí odpovědnosti za neověřitelnou kopii. */
   waiveUnverifiableFollowerOwnership?: true;
+  /** Explicitní, auditované vyřazení celé staré skupiny, jejíž účty zmizely z OAuth. Nikdy nepovoluje ARM. */
+  retireMissingOldGroup?: {
+    groupId: string;
+    accountIds: readonly number[];
+    reason: string;
+  };
 }
 
 export interface CopierAutoClose {
@@ -552,6 +558,15 @@ export interface BootstrapCopierOptions {
   broker: BrokerPort;
   store: CopierStore;
   group: CopyGroupConfig;
+  /**
+   * Jednorázová startup výjimka vystavená pouze po ověření CLI flagu a
+   * úplné OAuth absence přesné durable skupiny. Povoluje jen DISARMED
+   * bootstrap pro její pozdější auditované vyřazení.
+   */
+  missingGroupRetirementBootstrap?: {
+    groupId: string;
+    accountIds: readonly number[];
+  };
   clock?: () => number;
   /** Injektovatelné pouze pro deterministické testy statistického episode ID. */
   episodeIdFactory?: () => string;
@@ -688,7 +703,42 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   assertRuntimeGroup(options.group);
   const clock = options.clock ?? Date.now;
   let group = normalizedRuntimeGroup(options.group);
-  options.broker.setCriticalAccounts?.([group.leaderAccountId]);
+  let startupMissingLeaderRoute: Error | null = null;
+  try {
+    options.broker.setCriticalAccounts?.([group.leaderAccountId]);
+  } catch (reason) {
+    const error = errorOf(reason);
+    // Po odpojení zlikvidované prop firmy smí worker pouze naběhnout v
+    // DISARMED stavu, aby šlo starou skupinu administrativně vyřadit.
+    // Jakákoli jiná chyba bootstrapu zůstává fatální; samotný text
+    // missing leader chyby nikdy nestačí. Autorizace musí pojmenovat
+    // přesnou skupinu i celou topologii a každý její účet musí stejný
+    // router potvrdit jako chybějící.
+    const retirementBootstrap = options.missingGroupRetirementBootstrap;
+    const topology = [group.leaderAccountId, ...group.followers.map(item => item.accountId)]
+      .sort((a, b) => a - b);
+    const asserted = [...new Set(retirementBootstrap?.accountIds ?? [])]
+      .sort((a, b) => a - b);
+    const exactAuthorization = error.message.includes(
+      `Pro účet ${group.leaderAccountId} není nakonfigurované OAuth spojení`,
+    )
+      && retirementBootstrap?.groupId === group.id
+      && asserted.length === retirementBootstrap.accountIds.length
+      && asserted.length === topology.length
+      && asserted.every((accountId, index) => accountId === topology[index]);
+    const everyAccountMissing = exactAuthorization && topology.every(accountId => {
+      try {
+        options.broker.setCriticalAccounts?.([accountId]);
+        return false;
+      } catch (accountReason) {
+        return errorOf(accountReason).message.includes(
+          `Pro účet ${accountId} není nakonfigurované OAuth spojení`,
+        );
+      }
+    });
+    if (!everyAccountMissing) throw error;
+    startupMissingLeaderRoute = error;
+  }
   const broker = createExposureCappedBroker(
     options.broker,
     accountId => group.followers.find(item => item.accountId === accountId)?.maxContracts,
@@ -1262,7 +1312,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   // by the mandatory pre-ARM reconciliation (not a persisted "all safe" flag).
   const flatReconciledLeaderEpochIds = new Set<string>();
   let workingOrderAccounts = new Set<number>();
-  let lastError: Error | null = null;
+  let lastError: Error | null = startupMissingLeaderRoute;
   let lastDisarm: CopierDisarmRecord | undefined;
   const disarmHistory: CopierDisarmRecord[] = [];
   let lastOauthPreflight: NonNullable<CopierControllerStatus['oauthPreflight']> | undefined;
@@ -8576,6 +8626,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         nextGroup.leaderAccountId,
         ...nextGroup.followers.map(item => item.accountId),
       ]);
+      const retirement = switchOptions.retireMissingOldGroup;
+      if (retirement && (!Array.isArray(retirement.accountIds)
+        || retirement.accountIds.some(accountId => !Number.isSafeInteger(accountId) || accountId <= 0))) {
+        throw new Error('Vyřazení nedostupné skupiny obsahuje neplatná ID účtů');
+      }
+      const retiredAccountIds = new Set(retirement?.accountIds ?? []);
+      if (retirement) {
+        const reason = typeof retirement.reason === 'string' ? retirement.reason.trim() : '';
+        if (!switchOptions.allowGroupChange || !switchOptions.forceEpoch || gate.armed
+          || retirement.groupId !== group.id || reason.length < 20 || reason.length > 500
+          || retiredAccountIds.size !== retirement.accountIds.length
+          || retiredAccountIds.size !== currentTopology.size
+          || [...currentTopology].some(accountId => !retiredAccountIds.has(accountId))
+          || [...nextAccountIds].some(accountId => retiredAccountIds.has(accountId))) {
+          throw new Error('Vyřazení nedostupné skupiny má neplatné nebo změněné účty; runtime zůstává vypnutý');
+        }
+      }
       const removableFollowerIds = new Set(group.followers
         .map(item => item.accountId)
         .filter(accountId => !nextAccountIds.has(accountId) && !leaderIds.has(accountId)));
@@ -8584,6 +8651,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (!Number.isSafeInteger(accountId) || !removableFollowerIds.has(accountId)) {
           throw new Error(`${operation} dostala neplatný chybějící optional follower účet ${accountId}`);
         }
+      }
+      if (retirement && group.followers.some(follower => !optionalFollowerIds.has(follower.accountId))) {
+        throw new Error('Vyřazení odmítnuto: chybí potvrzená OAuth absence starého followera');
       }
       if (
         switchOptions.waiveUnverifiableFollowerOwnership !== undefined
@@ -8636,7 +8706,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (pendingReasons.length > 0) {
         throw new Error(`${operation} blokuje rozpracovaný lifecycle: ${pendingReasons.join(', ')}`);
       }
-      const requiredAccountIds = accountIds.filter(accountId => !optionalFollowerIds.has(accountId));
+      const requiredAccountIds = accountIds.filter(accountId => !optionalFollowerIds.has(accountId)
+        && !retiredAccountIds.has(accountId));
       const capabilities = await withLeaderEpochDeadline(
         'leader capability preflight',
         broker.listAccountCapabilities(requiredAccountIds),
@@ -8686,7 +8757,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           reason: `ownership waived by operator: účet ${item.accountId}, epocha ${item.epochId}`,
         })));
       }
-
       runtime = await processor.mutate(async current => {
         assertFreshPreflight();
         const {
@@ -8717,10 +8787,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return createRuntime(cleanState, [], [], committed.revision, [], []);
       });
 
+      // Audit smí tvrdit retirement až po úspěšném durable CAS. Při
+      // selhání commit() se sem tok nedostane a chyba se propaguje.
+      if (retirement) {
+        const retiredAt = clock();
+        options.onAudit?.([{
+          at: retiredAt,
+          leaderEventId: `manual-group-retirement:${group.id}:${retiredAt}`,
+          kind: 'blocked',
+          accountId: group.leaderAccountId,
+          reason: `operator-attested retirement of OAuth-missing group ${group.id}; accounts=${[...retiredAccountIds].sort((a, b) => a - b).join(',')}; reason=${retirement.reason.trim()}; no broker flat proof for retired accounts`,
+        }]);
+      }
+
       // Od tohoto bodu je durable stará epocha pryč a teprve teď se stává
       // nový leader autoritativní pro event source i risk vrstvu.
       group = nextGroup;
       options.broker.setCriticalAccounts?.([nextGroup.leaderAccountId]);
+      startupMissingLeaderRoute = null;
       bracketCorrelator = new CopierBracketCorrelator();
       osoCorrelator = new CopierOsoCorrelator(options.osoCorrelationWindowMs);
       recentCopyEvents.length = 0;
@@ -8828,6 +8912,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     arm({ shadowMode = false, ttlMs }: { shadowMode?: boolean; ttlMs?: number } = {}) {
       if (stopped) throw new Error('Copier runtime is stopped');
       if (shutdownRequested) throw new Error('Copier runtime se právě bezpečně ukončuje');
+      if (startupMissingLeaderRoute) throw new Error(`Copier nelze armovat: starý leader nemá OAuth route (${startupMissingLeaderRoute.message})`);
       if (gate.killSwitch) throw new Error('Copier nelze armovat: kill switch je aktivní');
       if (ttlMs != null && (!Number.isFinite(ttlMs) || ttlMs <= 0)) {
         throw new Error('ARM TTL musí být kladný počet milisekund');

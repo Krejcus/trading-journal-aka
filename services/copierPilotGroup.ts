@@ -2,7 +2,7 @@ import { constants } from 'node:fs';
 import { chmod, copyFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createFileCopyGroupStore } from './fileCopyGroupStore';
-import type { CopyFollowerConfig, CopyGroupConfig } from './liveCopyTrading';
+import { validateCopyGroup, type CopyFollowerConfig, type CopyGroupConfig } from './liveCopyTrading';
 
 export interface CopierCliGroup {
   leaderAccountId: number;
@@ -38,6 +38,22 @@ export const copierPilotGroupPath = (
   connectionId: string,
   leaderAccountId: number,
 ): string => resolve(root, `${copierPilotStateKey(connectionId, leaderAccountId)}.group.json`);
+
+/**
+ * One explicitly named, OAuth-vanished durable group may start DISARMED so it
+ * can be retired through the audited runtime command. This does not validate
+ * broker flatness or grant ARM: the runtime retains its missing-leader latch.
+ */
+export function canBootstrapMissingDurableGroupForRetirement(
+  group: CopyGroupConfig,
+  availableAccountIds: readonly number[],
+  requestedGroupId: string | undefined,
+): boolean {
+  if (!requestedGroupId || requestedGroupId !== group.id || group.leaderAccountId == null) return false;
+  const groupAccountIds = [group.leaderAccountId, ...group.followers.map(item => item.accountId)];
+  if (groupAccountIds.some(accountId => availableAccountIds.includes(accountId))) return false;
+  return validateCopyGroup(group, groupAccountIds).valid;
+}
 
 /** Parses the exact follower syntax shared by pilot startup and the Mac installer. */
 export function parseCopierFollowersFlag(raw: string, leaderAccountId: number): CopyFollowerConfig[] {

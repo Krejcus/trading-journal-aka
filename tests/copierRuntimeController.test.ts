@@ -807,6 +807,223 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
+  it('ruční vyřazení celé OAuth-nedostupné skupiny nečte staré účty, zachová DISARM a vyžaduje novou reconciliation', async () => {
+    const connection = createMockBroker();
+    const listPositions = vi.spyOn(connection, 'listPositions');
+    const listOrders = vi.spyOn(connection, 'listOrders');
+    const setCriticalAccounts = vi.fn();
+    const router = Object.assign(createBrokerRouter([{ broker: connection, accountIds: [300, 400] }]), {
+      setCriticalAccounts,
+    });
+    const audit = vi.fn();
+    const controller = await bootstrapCopierRuntime({
+      broker: router, store: createMemoryCopierStore(), group, clock: stepClock(), onAudit: audit,
+    });
+    connection.setConnected(true);
+    await controller.waitForIdle();
+    const nextGroup: CopyGroupConfig = {
+      id: 'g2', name: 'Hlavní', enabled: true, leaderAccountId: 300,
+      followers: [{ accountId: 400, mode: 'on-submit', multiplier: 1 }],
+    };
+    await controller.activateGroup(nextGroup, {
+      missingOptionalAccountIds: [200],
+      retireMissingOldGroup: {
+        groupId: group.id, accountIds: [100, 200],
+        reason: 'Majitel potvrzuje likvidaci celé staré skupiny a přebírá její správu.',
+      },
+    });
+    expect(listPositions).toHaveBeenCalledWith(300);
+    expect(listPositions).toHaveBeenCalledWith(400);
+    expect(listPositions).not.toHaveBeenCalledWith(100);
+    expect(listPositions).not.toHaveBeenCalledWith(200);
+    expect(listOrders).not.toHaveBeenCalledWith(100);
+    expect(listOrders).not.toHaveBeenCalledWith(200);
+    expect(setCriticalAccounts).toHaveBeenLastCalledWith([300]);
+    expect(audit).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({ leaderEventId: expect.stringContaining('manual-group-retirement:') }),
+    ]));
+    expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
+    expect(() => controller.arm()).toThrow('nutná kontrola pozic');
+    await controller.reconcile();
+    expect(controller.status().reconciliationRequired).toBe(false);
+    controller.stop();
+  });
+
+  it('worker s odpojeným starým leaderem naběhne jen DISARMED a dovolí auditovanou aktivaci jiné skupiny', async () => {
+    const connection = createMockBroker();
+    const router = createBrokerRouter([{ broker: connection, accountIds: [300, 400] }]);
+    const audit = vi.fn();
+    const controller = await bootstrapCopierRuntime({
+      broker: router, store: createMemoryCopierStore(), group, clock: stepClock(), onAudit: audit,
+      missingGroupRetirementBootstrap: { groupId: group.id, accountIds: [100, 200] },
+    });
+    connection.setConnected(true);
+    await controller.waitForIdle();
+    expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
+    expect(() => controller.arm()).toThrow('starý leader nemá OAuth route');
+    await controller.activateGroup({
+      id: 'g2', name: 'Hlavní', enabled: true, leaderAccountId: 300,
+      followers: [{ accountId: 400, mode: 'on-submit', multiplier: 1 }],
+    }, {
+      missingOptionalAccountIds: [200],
+      retireMissingOldGroup: {
+        groupId: group.id, accountIds: [100, 200],
+        reason: 'Majitel potvrzuje likvidaci celé staré skupiny a přebírá její správu.',
+      },
+    });
+    expect(audit).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({ leaderEventId: expect.stringContaining(`manual-group-retirement:${group.id}:`) }),
+    ]));
+    expect(() => controller.arm()).toThrow('nutná kontrola pozic');
+    await controller.reconcile();
+    controller.arm();
+    expect(controller.status().armed).toBe(true);
+    controller.stop();
+  });
+
+  it('nesouvisející missing leader route zůstává při startu fatální bez přesné retirement bootstrap autorizace', async () => {
+    const connection = createMockBroker();
+    const router = createBrokerRouter([{ broker: connection, accountIds: [300, 400] }]);
+
+    await expect(bootstrapCopierRuntime({
+      broker: router, store: createMemoryCopierStore(), group, clock: stepClock(),
+    })).rejects.toThrow('Pro účet 100 není nakonfigurované OAuth spojení');
+    await expect(bootstrapCopierRuntime({
+      broker: router, store: createMemoryCopierStore(), group, clock: stepClock(),
+      missingGroupRetirementBootstrap: { groupId: 'jiná-skupina', accountIds: [100, 200] },
+    })).rejects.toThrow('Pro účet 100 není nakonfigurované OAuth spojení');
+    await expect(bootstrapCopierRuntime({
+      broker: router, store: createMemoryCopierStore(), group, clock: stepClock(),
+      missingGroupRetirementBootstrap: { groupId: group.id, accountIds: [100] },
+    })).rejects.toThrow('Pro účet 100 není nakonfigurované OAuth spojení');
+
+    const partialRouter = createBrokerRouter([{ broker: connection, accountIds: [200, 300, 400] }]);
+    await expect(bootstrapCopierRuntime({
+      broker: partialRouter, store: createMemoryCopierStore(), group, clock: stepClock(),
+      missingGroupRetirementBootstrap: { groupId: group.id, accountIds: [100, 200] },
+    })).rejects.toThrow('Pro účet 100 není nakonfigurované OAuth spojení');
+  });
+
+  it('při selhání durable retirement zápisu nevznikne audit a chyba se propaguje v DISARMED stavu', async () => {
+    const connection = createMockBroker();
+    const router = Object.assign(createBrokerRouter([{ broker: connection, accountIds: [300, 400] }]), {
+      setCriticalAccounts: vi.fn(),
+    });
+    const memoryStore = createMemoryCopierStore();
+    let failCommit = false;
+    const store = {
+      load: () => memoryStore.load(),
+      commit: vi.fn((snapshot, expectedRevision) => {
+        if (failCommit) return Promise.reject(new Error('durable retirement write failed'));
+        return memoryStore.commit(snapshot, expectedRevision);
+      }),
+    };
+    const audit = vi.fn();
+    const controller = await bootstrapCopierRuntime({
+      broker: router, store, group, clock: stepClock(), onAudit: audit,
+    });
+    connection.setConnected(true);
+    await controller.waitForIdle();
+    failCommit = true;
+
+    await expect(controller.activateGroup({
+      id: 'g2', name: 'Hlavní', enabled: true, leaderAccountId: 300,
+      followers: [{ accountId: 400, mode: 'on-submit', multiplier: 1 }],
+    }, {
+      missingOptionalAccountIds: [200],
+      retireMissingOldGroup: {
+        groupId: group.id, accountIds: [100, 200],
+        reason: 'Majitel potvrzuje likvidaci celé staré skupiny a přebírá její správu.',
+      },
+    })).rejects.toThrow('durable retirement write failed');
+    expect(audit.mock.calls.flat(2).some(entry => (
+      typeof entry?.leaderEventId === 'string'
+      && entry.leaderEventId.startsWith('manual-group-retirement:')
+    ))).toBe(false);
+    expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
+    controller.stop();
+  });
+
+  it('ruční vyřazení odmítne neúplný seznam staré skupiny', async () => {
+    const connection = createMockBroker();
+    const router = Object.assign(createBrokerRouter([{ broker: connection, accountIds: [300, 400] }]), {
+      setCriticalAccounts: vi.fn(),
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker: router, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    connection.setConnected(true);
+    await controller.waitForIdle();
+    await expect(controller.activateGroup({
+      id: 'g2', name: 'Hlavní', enabled: true, leaderAccountId: 300,
+      followers: [{ accountId: 400, mode: 'on-submit', multiplier: 1 }],
+    }, {
+      missingOptionalAccountIds: [200],
+      retireMissingOldGroup: {
+        groupId: group.id, accountIds: [200],
+        reason: 'Majitel potvrzuje likvidaci celé staré skupiny a přebírá její správu.',
+      },
+    })).rejects.toThrow('neplatné nebo změněné účty');
+    expect(controller.status().armed).toBe(false);
+    controller.stop();
+  });
+
+  it('po restartu uprostřed ručního vyřazení zůstane nový profil DISARMED do nové kontroly', async () => {
+    const connection = createMockBroker();
+    const router = Object.assign(createBrokerRouter([{ broker: connection, accountIds: [300, 400] }]), {
+      setCriticalAccounts: vi.fn(),
+    });
+    const store = createMemoryCopierStore();
+    const first = await bootstrapCopierRuntime({ broker: router, store, group, clock: stepClock() });
+    connection.setConnected(true);
+    await first.waitForIdle();
+    const nextGroup: CopyGroupConfig = {
+      id: 'g2', name: 'Hlavní', enabled: true, leaderAccountId: 300,
+      followers: [{ accountId: 400, mode: 'on-submit', multiplier: 1 }],
+    };
+    await first.activateGroup(nextGroup, {
+      missingOptionalAccountIds: [200],
+      retireMissingOldGroup: {
+        groupId: group.id, accountIds: [100, 200],
+        reason: 'Majitel potvrzuje likvidaci celé staré skupiny a přebírá její správu.',
+      },
+    });
+    first.stop();
+    const second = await bootstrapCopierRuntime({ broker: router, store, group: nextGroup, clock: stepClock() });
+    await second.waitForIdle();
+    expect(second.status()).toMatchObject({ armed: false, reconciliationRequired: true });
+    expect(() => second.arm()).toThrow();
+    second.stop();
+  });
+
+  it('ruční vyřazení stále odmítne otevřenou pozici v nové skupině', async () => {
+    const connection = createMockBroker({ behavior: () => ({ kind: 'fill', price: 30_000 }) });
+    await connection.placeOrder({
+      tag: 'new-group-open-position', accountId: 300, symbol: 'MNQU6',
+      side: 'Buy', quantity: 1, orderType: 'Market',
+    });
+    const router = Object.assign(createBrokerRouter([{ broker: connection, accountIds: [300, 400] }]), {
+      setCriticalAccounts: vi.fn(),
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker: router, store: createMemoryCopierStore(), group, clock: stepClock(),
+    });
+    connection.setConnected(true);
+    await controller.waitForIdle();
+    await expect(controller.activateGroup({
+      id: 'g2', name: 'Hlavní', enabled: true, leaderAccountId: 300,
+      followers: [{ accountId: 400, mode: 'on-submit', multiplier: 1 }],
+    }, {
+      missingOptionalAccountIds: [200],
+      retireMissingOldGroup: {
+        groupId: group.id, accountIds: [100, 200],
+        reason: 'Majitel potvrzuje likvidaci celé staré skupiny a přebírá její správu.',
+      },
+    })).rejects.toThrow('nonFlat=300');
+    expect(controller.status().armed).toBe(false);
+    controller.stop();
+  });
+
   it('změnu leadera odmítne, dokud má kterýkoli starý nebo nový účet working order', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const seeded = await broker.placeOrder({

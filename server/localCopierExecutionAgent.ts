@@ -251,7 +251,10 @@ export async function startLocalCopierExecutionAgent(
   const applyGroup = async (
     next: CopyGroupConfig,
     mode: 'update' | 'activate' = 'update',
-    reconfigurationRequest: { waiveUnverifiableFollowerOwnership?: true } = {},
+    reconfigurationRequest: {
+      waiveUnverifiableFollowerOwnership?: true;
+      retireMissingOldGroup?: { groupId: string; accountIds: number[]; reason: string };
+    } = {},
   ): Promise<LiveCopyTradingCommandResult> => {
     const normalized = sanitizeCopyGroups([next]);
     if (!normalized || normalized.length !== 1) {
@@ -262,6 +265,27 @@ export async function startLocalCopierExecutionAgent(
     const leaderChanged = previous.leaderAccountId !== next.leaderAccountId;
     const topologyChanged = !sameAccountTopology(previous, next);
     let persistedNext = false;
+    const retirement = reconfigurationRequest.retireMissingOldGroup;
+    const previousIds = copyGroupAccountIds(previous);
+    if (retirement) {
+      if (!Array.isArray(retirement.accountIds)
+        || retirement.accountIds.some(accountId => !Number.isSafeInteger(accountId) || accountId <= 0)) {
+        throw new Error('Vyřazení staré skupiny obsahuje neplatná ID účtů');
+      }
+      const assertedIds = [...new Set(retirement.accountIds)].sort((a, b) => a - b);
+      if (mode !== 'activate' || next.id === previous.id || retirement.groupId !== previous.id
+        || assertedIds.length !== retirement.accountIds.length
+        || assertedIds.length !== previousIds.length
+        || assertedIds.some((accountId, index) => accountId !== previousIds[index])
+        || copyGroupAccountIds(next).some(accountId => assertedIds.includes(accountId))
+        || typeof retirement.reason !== 'string'
+        || retirement.reason.trim().length < 20 || retirement.reason.length > 500) {
+        throw new Error('Vyřazení staré skupiny vyžaduje přesné ID, všechny staré účty, jinou topologii a konkrétní důvod');
+      }
+      if (options.controller.status().armed) {
+        throw new Error('Vyřazení staré skupiny je možné jen z vypnuté kopírky');
+      }
+    }
 
     // Každá změna konfigurace zavře live dispatch ještě před jakýmkoli
     // durable zápisem nebo async preflightem. Lokální precheck chrání stejnou
@@ -281,11 +305,26 @@ export async function startLocalCopierExecutionAgent(
         // Routing se nikdy nemění za běžícího ARM. Nejdřív odzbrojit, potom
         // read-only discovery; teprve controller provede flat/no-working
         // preflight nad sjednocením staré a nové topologie.
-        const prepared = await prepareAccounts(accountsForRoutingChange(previous, next));
-        missingOptionalAccountIds = prepared.missingOptional;
+        const prepared = await prepareAccounts(retirement
+          ? { required: copyGroupAccountIds(next), optional: previousIds }
+          : accountsForRoutingChange(previous, next));
+        if (retirement) {
+          if (prepared.missingOptional.length !== previousIds.length
+            || previousIds.some(accountId => !prepared.missingOptional.includes(accountId))) {
+            throw new Error('Vyřazení odmítnuto: stará skupina není celá nedostupná v OAuth; ověř dostupné účty běžnou cestou');
+          }
+          missingOptionalAccountIds = previous.followers.map(follower => follower.accountId);
+        } else {
+          missingOptionalAccountIds = prepared.missingOptional;
+        }
       }
       const reconfigurationOptions = {
         missingOptionalAccountIds: [...missingOptionalAccountIds],
+        ...(retirement ? { retireMissingOldGroup: {
+          ...retirement,
+          accountIds: [...previousIds],
+          reason: retirement.reason.trim(),
+        } } : {}),
         ...(reconfigurationRequest.waiveUnverifiableFollowerOwnership === true
           ? { waiveUnverifiableFollowerOwnership: true as const }
           : {}),
@@ -417,6 +456,7 @@ export async function startLocalCopierExecutionAgent(
           ...(command.waiveUnverifiableFollowerOwnership === true
             ? { waiveUnverifiableFollowerOwnership: true as const }
             : {}),
+          ...(command.retireMissingOldGroup ? { retireMissingOldGroup: command.retireMissingOldGroup } : {}),
         });
         return;
       }

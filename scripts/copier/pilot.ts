@@ -20,6 +20,7 @@ import {
 import { createFileCopierStore } from '../../services/fileCopierStore';
 import { createFileCopyGroupStore } from '../../services/fileCopyGroupStore';
 import {
+  canBootstrapMissingDurableGroupForRetirement,
   copierPilotGroupPath,
   copierPilotStateKey,
   parseCopierFollowersFlag,
@@ -470,12 +471,19 @@ async function runLocalAgent(
     accounts,
     durableSnapshot.safety?.accountEligibility ?? [],
   );
-  if (!validation.valid) {
+  const retireMissingGroupId = stringFlag('retire-missing-group-id', false);
+  const retirementBootstrap = persistedGroup != null && canBootstrapMissingDurableGroupForRetirement(
+    group, accounts.map(account => account.id), retireMissingGroupId,
+  );
+  if (!validation.valid && !retirementBootstrap) {
     throw new Error(
       `Uložená copy group není bezpečně použitelná: ${validation.errors.join(' ')} `
       + `Durable soubor: ${groupPath}. Oprav ho ručně (nejdřív vytvoř zálohu), nebo po bezpečné kontrole spusť `
       + '`npm run copier:mac -- install ... --replace-durable-group`.',
     );
+  }
+  if (retirementBootstrap) {
+    console.warn(`Durable skupina ${group.id} chybí celá v OAuth; worker startuje pouze DISARMED pro auditované vyřazení. Staré účty tím nejsou potvrzené jako flat.`);
   }
   const releaseLock = await acquireProcessLock(resolve(root, `${key}.lock`));
   const journals: Array<Awaited<ReturnType<typeof startLocalCopierJournal>>> = [];
@@ -803,6 +811,12 @@ async function runLocalAgent(
         },
       },
       group,
+      ...(retirementBootstrap ? {
+        missingGroupRetirementBootstrap: {
+          groupId: group.id,
+          accountIds: [group.leaderAccountId!, ...group.followers.map(item => item.accountId)],
+        },
+      } : {}),
       metrics: createCopierMetrics(),
       // Všichni followeři musí odejít v JEDEN okamžik. Sériový dispatch
       // (pilotní `1`) rozprostřel marketové nohy přes stovky ms — každá

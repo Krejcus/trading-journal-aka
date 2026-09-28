@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFileCopyGroupStore } from '../services/fileCopyGroupStore';
 import {
+  canBootstrapMissingDurableGroupForRetirement,
   compareDurableGroupWithCli,
   copierPilotGroupPath,
   decideDurableGroupInstall,
@@ -54,6 +55,15 @@ const safeReplacementStatus = (): DurableGroupReplacementStatus => ({
 });
 
 describe('Mac copier durable group install guard', () => {
+  it('dovolí jen explicitně pojmenované úplně OAuth-zmizelé skupině naběhnout pro vyřazení', () => {
+    const group = durableGroup();
+    expect(canBootstrapMissingDurableGroupForRetirement(group, [], group.id)).toBe(true);
+    expect(canBootstrapMissingDurableGroupForRetirement(group, [], undefined)).toBe(false);
+    expect(canBootstrapMissingDurableGroupForRetirement(group, [], 'other')).toBe(false);
+    expect(canBootstrapMissingDurableGroupForRetirement(group, [11], group.id)).toBe(false);
+    expect(canBootstrapMissingDurableGroupForRetirement(group, [22], group.id)).toBe(false);
+    expect(canBootstrapMissingDurableGroupForRetirement({ ...group, leaderAccountId: null }, [], group.id)).toBe(false);
+  });
   it('sdílí stabilní connectionId-leader cestu a parser follower parametrů', () => {
     expect(copierPilotGroupPath('/tmp/copier', 'connection-1', 11))
       .toBe('/tmp/copier/connection-1-11.group.json');

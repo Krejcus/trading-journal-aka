@@ -218,6 +218,7 @@ async function install(): Promise<void> {
   const connectionId = manifest?.primaryConnectionId ?? required('connection-id');
   const adoptDurableGroup = flags.has('adopt-durable-group');
   const replaceDurableGroup = flags.has('replace-durable-group');
+  const retireMissingGroupId = flags.get('retire-missing-group-id')?.trim();
   if (adoptDurableGroup && replaceDurableGroup) {
     throw new Error('--adopt-durable-group a --replace-durable-group nelze použít současně');
   }
@@ -235,6 +236,9 @@ async function install(): Promise<void> {
   };
   const groupPath = copierPilotGroupPath(resolve(pilotRoot, '.copier-pilot'), connectionId, leader);
   const durableGroup = await createFileCopyGroupStore(groupPath).load();
+  if (retireMissingGroupId && (!adoptDurableGroup || durableGroup?.id !== retireMissingGroupId)) {
+    throw new Error('--retire-missing-group-id vyžaduje --adopt-durable-group a přesné ID uložené skupiny');
+  }
   const comparison = durableGroup ? compareDurableGroupWithCli(durableGroup, cliGroup) : null;
   if (comparison && !comparison.matches) {
     printDurableGroupDifference(groupPath, comparison.durable, comparison.cli);
@@ -345,6 +349,7 @@ async function install(): Promise<void> {
     '--minutes', '720',
     '--service-lifetime', 'persistent',
     '--port', flags.get('port')?.trim() || '3211',
+    ...(retireMissingGroupId ? ['--retire-missing-group-id', retireMissingGroupId] : []),
     ...connectionArguments,
   ];
   const plist = `<?xml version="1.0" encoding="UTF-8"?>

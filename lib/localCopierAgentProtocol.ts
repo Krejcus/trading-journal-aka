@@ -152,6 +152,12 @@ export type LocalCopierAgentCommand =
     type: 'activate-group';
     group: CopyGroupConfig;
     waiveUnverifiableFollowerOwnership?: true;
+    /** Jednorázové operátorské vyřazení celé předchozí skupiny chybějící v OAuth. */
+    retireMissingOldGroup?: {
+      groupId: string;
+      accountIds: number[];
+      reason: string;
+    };
   }
   | { type: 'shadow'; accountEligibilityExclusions?: LocalCopierAccountExclusion[] }
   | { type: 'disarm' }
