@@ -1390,6 +1390,14 @@ describe('bootstrapCopierRuntime', () => {
         ? { kind: 'fill', price: 30_550 }
         : { kind: 'working' },
     });
+    const authoritativeLeaderOrders = new Map<string, BrokerOrder>();
+    const originalFind = broker.findOrderById.bind(broker);
+    vi.spyOn(broker, 'findOrderById').mockImplementation(async (accountId, brokerOrderId) => (
+      accountId === 100
+        ? { order: authoritativeLeaderOrders.get(brokerOrderId) ?? null,
+          completeness: 'authoritative', observedAt: 500 }
+        : originalFind(accountId, brokerOrderId)
+    ));
     const controller = await bootstrapCopierRuntime({
       broker,
       store: createMemoryCopierStore(),
@@ -1406,10 +1414,12 @@ describe('bootstrapCopierRuntime', () => {
     await controller.reconcile();
     controller.arm();
 
-    broker.emitEvent({ type: 'order', order: leaderOrder({
+    const pendingLimit = leaderOrder({
       brokerOrderId: 'leader-working-sell-limit-8', side: 'Sell', quantity: 8,
       orderType: 'Limit', limitPrice: 30_618, sourceVersion: '1:Working',
-    }) });
+    });
+    authoritativeLeaderOrders.set(pendingLimit.brokerOrderId, pendingLimit);
+    broker.emitEvent({ type: 'order', order: pendingLimit });
     await controller.waitForIdle();
     expect(broker.placedRequests().filter(request => request.orderType === 'Limit')).toHaveLength(4);
 
@@ -1445,6 +1455,16 @@ describe('bootstrapCopierRuntime', () => {
         ? { kind: 'fill', price: 30_500 }
         : { kind: 'working' },
     });
+    const pendingLimit = leaderOrder({
+      brokerOrderId: 'leader-addon-buy-limit', side: 'Buy', quantity: 2,
+      orderType: 'Limit', limitPrice: 30_450, sourceVersion: '1:Working',
+    });
+    const originalFind = broker.findOrderById.bind(broker);
+    vi.spyOn(broker, 'findOrderById').mockImplementation(async (accountId, brokerOrderId) => (
+      accountId === 100 && brokerOrderId === pendingLimit.brokerOrderId
+        ? { order: pendingLimit, completeness: 'authoritative', observedAt: 500 }
+        : originalFind(accountId, brokerOrderId)
+    ));
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group, clock: stepClock(),
     });
@@ -1453,10 +1473,7 @@ describe('bootstrapCopierRuntime', () => {
     await controller.reconcile();
     controller.arm();
 
-    broker.emitEvent({ type: 'order', order: leaderOrder({
-      brokerOrderId: 'leader-addon-buy-limit', side: 'Buy', quantity: 2,
-      orderType: 'Limit', limitPrice: 30_450, sourceVersion: '1:Working',
-    }) });
+    broker.emitEvent({ type: 'order', order: pendingLimit });
     await controller.waitForIdle();
     broker.emitEvent({ type: 'order', order: leaderOrder({
       brokerOrderId: 'leader-market-entry', side: 'Buy', quantity: 2,
@@ -1581,9 +1598,13 @@ describe('bootstrapCopierRuntime', () => {
 
   it('V12 leader cancel při stále working follower kopii zůstává fail-closed', async () => {
     const broker = createMockBroker({
-      behavior: () => ({ kind: 'working' }),
-      cancelBehavior: () => 'timeout-before-cancel',
+      behavior: request => request.orderType === 'Market'
+        ? { kind: 'fill', price: 30_500 }
+        : { kind: 'working' },
     });
+    // Cancel ACK sám o sobě nesmí být důvod testu. Simulujeme potvrzený
+    // cancel leadera, zatímco follower order zůstane osiřele working.
+    broker.cancelOrder = vi.fn(async () => undefined);
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group, clock: stepClock(),
     });
@@ -1597,6 +1618,22 @@ describe('bootstrapCopierRuntime', () => {
       orderType: 'Limit', limitPrice: 30_600, sourceVersion: '1:Working',
     }) });
     await controller.waitForIdle();
+    const orphan = broker.orders().find(order => (
+      order.accountId === 200 && order.orderType === 'Limit'
+    ));
+    if (!orphan) throw new Error('Test setup: follower orphan nevznikl');
+    const originalFind = broker.findOrderById.bind(broker);
+    let reportCanceled = false;
+    vi.spyOn(broker, 'findOrderById').mockImplementation(async (accountId, brokerOrderId) => {
+      if (reportCanceled && accountId === 200 && brokerOrderId === orphan.brokerOrderId) {
+        return {
+          order: { ...orphan, status: 'canceled' },
+          completeness: 'authoritative', observedAt: 500,
+        };
+      }
+      return originalFind(accountId, brokerOrderId);
+    });
+    reportCanceled = true;
     broker.emitEvent({ type: 'order', order: leaderOrder({
       brokerOrderId: 'leader-canceled-limit', side: 'Sell', quantity: 2,
       orderType: 'Limit', limitPrice: 30_600, status: 'canceled',
@@ -1607,7 +1644,28 @@ describe('bootstrapCopierRuntime', () => {
     expect(broker.orders()).toContainEqual(expect.objectContaining({
       accountId: 200, status: 'working', orderType: 'Limit',
     }));
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-entry-after-orphan', side: 'Buy', quantity: 2,
+      orderType: 'Market', limitPrice: undefined, sourceVersion: '1:Working',
+    }) });
+    broker.setPosition(100, 'MNQU6', 2);
+    broker.emitEvent({ type: 'position', position: {
+      accountId: 100, symbol: 'MNQU6', netQuantity: 2,
+    } });
+    await controller.waitForIdle();
+    broker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-exit-after-orphan', side: 'Sell', quantity: 2,
+      orderType: 'Market', limitPrice: undefined, sourceVersion: '1:Working',
+    }) });
+    await controller.waitForIdle();
+
+    expect(broker.placedRequests().filter(request => (
+      request.side === 'Sell' && request.orderType === 'Market'
+    ))).toHaveLength(0);
     expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
+    expect(controller.status().lastError).toContain('nevysvětlená divergence');
     controller.stop();
   });
 
@@ -1658,27 +1716,57 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
-  it('V12 reconnect generation nikdy nepřevezme pending důkaz z předchozího syncu', async () => {
-    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+  it('V12 skrytý reconnect follower routy vyžádá autoritativní ordery a pozici', async () => {
+    const behavior = (request: { orderType: BrokerOrder['orderType'] }) => request.orderType === 'Market'
+      ? { kind: 'fill' as const, price: 30_500 }
+      : { kind: 'working' as const };
+    const leaderBroker = createMockBroker({ behavior });
+    const followerBroker = createMockBroker({ behavior });
+    const broker = createBrokerRouter([
+      { broker: leaderBroker, accountIds: [100], critical: true },
+      { broker: followerBroker, accountIds: [200], critical: false },
+    ], { reconnectGraceMs: 10_000 });
+    const followerPositionRead = vi.spyOn(followerBroker, 'listPositions');
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group, clock: stepClock(),
     });
-    broker.setConnected(true);
+    leaderBroker.setConnected(true);
+    followerBroker.setConnected(true);
     await controller.waitForIdle();
     await controller.reconcile();
     controller.arm();
-    broker.emitEvent({ type: 'order', order: leaderOrder({
-      brokerOrderId: 'leader-before-reconnect', side: 'Sell', quantity: 2,
+    leaderBroker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-before-reconnect', side: 'Sell', quantity: 8,
       orderType: 'Limit', limitPrice: 30_600, sourceVersion: '1:Working',
     }) });
     await controller.waitForIdle();
-
-    broker.setConnected(false);
-    broker.setConnected(true);
+    leaderBroker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-market-entry', side: 'Buy', quantity: 8,
+      orderType: 'Market', limitPrice: undefined, sourceVersion: '1:Working',
+    }) });
+    leaderBroker.setPosition(100, 'MNQU6', 8);
+    leaderBroker.emitEvent({ type: 'position', position: {
+      accountId: 100, symbol: 'MNQU6', netQuantity: 8,
+    } });
     await controller.waitForIdle();
 
-    expect(controller.status()).toMatchObject({ armed: false });
-    expect(() => controller.arm()).toThrow();
+    followerBroker.setConnected(false);
+    followerBroker.setPosition(200, 'MNQU6', 0);
+    followerBroker.setConnected(true);
+    await controller.waitForIdle();
+    expect(controller.status()).toMatchObject({ armed: true, connected: true });
+
+    leaderBroker.emitEvent({ type: 'order', order: leaderOrder({
+      brokerOrderId: 'leader-stop-after-hidden-reconnect', side: 'Sell', quantity: 8,
+      orderType: 'Stop', limitPrice: undefined, stopPrice: 30_450,
+      sourceVersion: '1:Working',
+    }) });
+    await controller.waitForIdle();
+
+    expect(followerPositionRead).toHaveBeenCalledWith(200);
+    expect(followerBroker.placedRequests().filter(request => request.orderType === 'Stop')).toHaveLength(0);
+    expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
+    expect(controller.status().lastError).toContain('nevysvětlená divergence');
     controller.stop();
   });
 
@@ -1688,6 +1776,14 @@ describe('bootstrapCopierRuntime', () => {
         ? { kind: 'fill', price: 30_500 }
         : { kind: 'working' },
     });
+    const authoritativeLeaderOrders = new Map<string, BrokerOrder>();
+    const originalFind = broker.findOrderById.bind(broker);
+    vi.spyOn(broker, 'findOrderById').mockImplementation(async (accountId, brokerOrderId) => (
+      accountId === 100
+        ? { order: authoritativeLeaderOrders.get(brokerOrderId) ?? null,
+          completeness: 'authoritative', observedAt: 500 }
+        : originalFind(accountId, brokerOrderId)
+    ));
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group, clock: stepClock(),
     });
@@ -1700,10 +1796,12 @@ describe('bootstrapCopierRuntime', () => {
       ['leader-pending-sell-3', 3, 30_610],
       ['leader-pending-sell-5', 5, 30_620],
     ] as const) {
-      broker.emitEvent({ type: 'order', order: leaderOrder({
+      const pendingOrder = leaderOrder({
         brokerOrderId, side: 'Sell', quantity, orderType: 'Limit', limitPrice,
         sourceVersion: '1:Working',
-      }) });
+      });
+      authoritativeLeaderOrders.set(pendingOrder.brokerOrderId, pendingOrder);
+      broker.emitEvent({ type: 'order', order: pendingOrder });
       await controller.waitForIdle();
     }
     broker.emitEvent({ type: 'order', order: leaderOrder({

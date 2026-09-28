@@ -208,6 +208,34 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-28 — V12 follow-up: filled lineage, modify/partial mirror a reconcile fence (Codex, balíček 3a-2)
+
+- Opraveny regrese commitu `cb5cdf6` bez commitu, deploye, reinstalu workeru
+  nebo brokerového volání. Pending lineage po fillu leaderova Market i Limit
+  orderu znovu používá původní remaining výpočet a po plném follower fillu se
+  retiroje i bez terminálního order eventu; skutečný overfill, shape mismatch
+  nebo orphan zůstává sticky fail-closed.
+- Zero-fill i symetrický partial-fill mirror se před redukujícím dispatchcem
+  opírá o autoritativní lookup konkrétního leader/follower orderu a čerstvé
+  `listPositions` followera. Kontroluje aktuální qty přes multiplier i cenu;
+  potvrzený modify aktualizuje uložený tvar. Partial zbytek se vyjme jen při
+  fill eventech na obou stranách, shodném zbytku a shodných pozicích. Tím je
+  bezpečná i follower route, jejíž krátký reconnect router zatím skryje.
+- Reconciliation zachytí observation version před čtením. Při souběžném
+  ingressu pending nemaže ani nepřerazítkuje a pouze jej označí invalidním.
+  Reconnect test nyní používá skutečný router; leader-cancel test už nepadá na
+  umělém cancel timeoutu, ale ověřuje orphan pending logiku.
+- Na stavu před opravou padalo 9/11 nových scénářů; po doplnění průkazného
+  reconcile race padalo 10/11. Současně padaly původní chaos scalp a
+  management-only testy. Po opravě: cílené 4 soubory 164/164, cílený
+  TypeScript check čistý, ESLint 0 chyb (2 starší warningy), root typecheck má
+  jen povolené chyby chybějících závislostí v `extension/`. Celá předepsaná
+  copier sada prošla 136/136 souborů a 1604/1604 testů; první sandboxovaný běh
+  měl pouze environmentální `listen EPERM 127.0.0.1`, opakování s loopbackem
+  bylo čisté.
+- Zbývá nezávislé review, schválený commit/reinstall a řízený DEMO test; nic
+  z toho v tomto balíčku neproběhlo.
+
 ### 2026-09-28 — V13: flat sweep po výstupu mimo eventTail a bez globálního order grafu (Codex, balíček 3b)
 
 - Opravena pouze V13 ve worktree `codex/copier-fixes-20260928`, bez commitu,
