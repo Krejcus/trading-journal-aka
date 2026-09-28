@@ -208,6 +208,32 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-28 — V12: zero-fill pending limit už nevyvolá falešnou divergenci (Codex, balíček 3a)
+
+- Opravena pouze V12 ve worktree `codex/copier-fixes-20260928`, bez commitu,
+  deploye, reinstalu workeru nebo brokerového volání. Dnešní sled Sell Limit
+  8 z flat → Market Buy 8 → Stop Sell 8 se čtyřmi followery nyní zkopíruje
+  Stop všem a controller zůstane ARMED.
+- Runtime pending lineage nově drží konkrétní leader/follower order ID, typ,
+  symbol, stranu, množství, leader i follower fill, obchodní epochu a broker
+  sync generation. Non-Market pending se z divergence vyjme jen při čerstvém
+  stejnogeneračním důkazu, že oba odpovídající ordery jsou stále otevřené a
+  oba mají nulový fill (`filledQuantity` i durable `leaderCumQty`). Chybějící,
+  terminální, částečně plněný, tvarově odlišný nebo pre-reconnect důkaz zůstává
+  fail-closed; původní ochrana proti zamaskování ruční follower pozice platí.
+- `reconfigureLeaderEpoch` pending lineage čistí; `runReconciliation` ji
+  prořezává podle autoritativního `listOrders` a orphan working kopii nepovýší
+  na bezpečný důkaz. Přidány regrese pro incident 4×8, add-on Buy Limit,
+  partial leader fill, follower fill při pending orderu, leader cancel,
+  stale/reconnect generation a více současných pending kopií.
+- Před opravou padaly 4 nové bugové regrese (incident, add-on, stale po
+  reconciliation, více pending). Po opravě: povinné 4 soubory 168/168,
+  cílený TypeScript check controlleru + testu čistý, ESLint 0 chyb (3 starší
+  warningy v controlleru), `git diff --check` čistý. Root `tsc --noEmit`
+  nebyl použit jako finální důkaz: worktree nemá závislosti Chrome extension
+  (`@types/chrome`, `@crxjs/vite-plugin`) a podle plánu se zde nesmí spouštět
+  `npm ci`/`npm install`.
+
 ### 2026-09-28 — Obchod bez celého SL/TP: výsledkový box + štítek (Claude)
 
 - Filip: vstup bez SL/TP (market in/out, jen SL, trailing stop položený po
