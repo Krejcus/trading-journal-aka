@@ -58,6 +58,7 @@ export function createExposureCappedBroker(
   return {
     environment: broker.environment,
     assertDispatchAllowed,
+    routeEpoch: broker.routeEpoch ? accountId => broker.routeEpoch!(accountId) : undefined,
     async placeOrder(request) {
       assertDispatchAllowed?.('place');
       try {

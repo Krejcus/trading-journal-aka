@@ -1390,14 +1390,7 @@ describe('bootstrapCopierRuntime', () => {
         ? { kind: 'fill', price: 30_550 }
         : { kind: 'working' },
     });
-    const authoritativeLeaderOrders = new Map<string, BrokerOrder>();
-    const originalFind = broker.findOrderById.bind(broker);
-    vi.spyOn(broker, 'findOrderById').mockImplementation(async (accountId, brokerOrderId) => (
-      accountId === 100
-        ? { order: authoritativeLeaderOrders.get(brokerOrderId) ?? null,
-          completeness: 'authoritative', observedAt: 500 }
-        : originalFind(accountId, brokerOrderId)
-    ));
+    const hotPathFindOrder = vi.spyOn(broker, 'findOrderById');
     const controller = await bootstrapCopierRuntime({
       broker,
       store: createMemoryCopierStore(),
@@ -1418,7 +1411,6 @@ describe('bootstrapCopierRuntime', () => {
       brokerOrderId: 'leader-working-sell-limit-8', side: 'Sell', quantity: 8,
       orderType: 'Limit', limitPrice: 30_618, sourceVersion: '1:Working',
     });
-    authoritativeLeaderOrders.set(pendingLimit.brokerOrderId, pendingLimit);
     broker.emitEvent({ type: 'order', order: pendingLimit });
     await controller.waitForIdle();
     expect(broker.placedRequests().filter(request => request.orderType === 'Limit')).toHaveLength(4);
@@ -1446,6 +1438,7 @@ describe('bootstrapCopierRuntime', () => {
       })),
     );
     expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    expect(hotPathFindOrder).not.toHaveBeenCalled();
     controller.stop();
   });
 
@@ -1459,12 +1452,7 @@ describe('bootstrapCopierRuntime', () => {
       brokerOrderId: 'leader-addon-buy-limit', side: 'Buy', quantity: 2,
       orderType: 'Limit', limitPrice: 30_450, sourceVersion: '1:Working',
     });
-    const originalFind = broker.findOrderById.bind(broker);
-    vi.spyOn(broker, 'findOrderById').mockImplementation(async (accountId, brokerOrderId) => (
-      accountId === 100 && brokerOrderId === pendingLimit.brokerOrderId
-        ? { order: pendingLimit, completeness: 'authoritative', observedAt: 500 }
-        : originalFind(accountId, brokerOrderId)
-    ));
+    const hotPathFindOrder = vi.spyOn(broker, 'findOrderById');
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group, clock: stepClock(),
     });
@@ -1497,6 +1485,7 @@ describe('bootstrapCopierRuntime', () => {
       expect.objectContaining({ side: 'Sell', orderType: 'Market', quantity: 2 }),
     ]);
     expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    expect(hotPathFindOrder).not.toHaveBeenCalled();
     controller.stop();
   });
 
@@ -1596,7 +1585,7 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
-  it('V12 leader cancel při stále working follower kopii zůstává fail-closed', async () => {
+  it('R8 V12 leader cancel při stále working follower kopii zůstává fail-closed', async () => {
     const broker = createMockBroker({
       behavior: request => request.orderType === 'Market'
         ? { kind: 'fill', price: 30_500 }
@@ -1716,7 +1705,7 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
-  it('V12 skrytý reconnect follower routy vyžádá autoritativní ordery a pozici', async () => {
+  it('S6 V12 skrytý reconnect follower routy zneplatní stream důkaz bez REST čtení', async () => {
     const behavior = (request: { orderType: BrokerOrder['orderType'] }) => request.orderType === 'Market'
       ? { kind: 'fill' as const, price: 30_500 }
       : { kind: 'working' as const };
@@ -1734,6 +1723,7 @@ describe('bootstrapCopierRuntime', () => {
     followerBroker.setConnected(true);
     await controller.waitForIdle();
     await controller.reconcile();
+    followerPositionRead.mockClear();
     controller.arm();
     leaderBroker.emitEvent({ type: 'order', order: leaderOrder({
       brokerOrderId: 'leader-before-reconnect', side: 'Sell', quantity: 8,
@@ -1763,7 +1753,7 @@ describe('bootstrapCopierRuntime', () => {
     }) });
     await controller.waitForIdle();
 
-    expect(followerPositionRead).toHaveBeenCalledWith(200);
+    expect(followerPositionRead).not.toHaveBeenCalled();
     expect(followerBroker.placedRequests().filter(request => request.orderType === 'Stop')).toHaveLength(0);
     expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
     expect(controller.status().lastError).toContain('nevysvětlená divergence');
@@ -1776,14 +1766,7 @@ describe('bootstrapCopierRuntime', () => {
         ? { kind: 'fill', price: 30_500 }
         : { kind: 'working' },
     });
-    const authoritativeLeaderOrders = new Map<string, BrokerOrder>();
-    const originalFind = broker.findOrderById.bind(broker);
-    vi.spyOn(broker, 'findOrderById').mockImplementation(async (accountId, brokerOrderId) => (
-      accountId === 100
-        ? { order: authoritativeLeaderOrders.get(brokerOrderId) ?? null,
-          completeness: 'authoritative', observedAt: 500 }
-        : originalFind(accountId, brokerOrderId)
-    ));
+    const hotPathFindOrder = vi.spyOn(broker, 'findOrderById');
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group, clock: stepClock(),
     });
@@ -1800,7 +1783,6 @@ describe('bootstrapCopierRuntime', () => {
         brokerOrderId, side: 'Sell', quantity, orderType: 'Limit', limitPrice,
         sourceVersion: '1:Working',
       });
-      authoritativeLeaderOrders.set(pendingOrder.brokerOrderId, pendingOrder);
       broker.emitEvent({ type: 'order', order: pendingOrder });
       await controller.waitForIdle();
     }
@@ -1823,6 +1805,7 @@ describe('bootstrapCopierRuntime', () => {
       accountId: 200, side: 'Sell', orderType: 'Market', quantity: 8,
     });
     expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    expect(hotPathFindOrder).not.toHaveBeenCalled();
     controller.stop();
   });
 

@@ -54,6 +54,13 @@ export function createBrokerRouter(
   let accountIdsByBroker = new Map<BrokerPort, Set<number>>();
   const fixedBrokers = routes.map(route => route.broker);
   const configuredBrokers = new Set(fixedBrokers);
+  let nextRouteEpoch = 0;
+  const routeEpochByBroker = new Map<BrokerPort, number>(
+    fixedBrokers.map(routeBroker => [routeBroker, ++nextRouteEpoch]),
+  );
+  const bumpRouteEpoch = (routeBroker: BrokerPort) => {
+    routeEpochByBroker.set(routeBroker, ++nextRouteEpoch);
+  };
   const criticalBrokers = new Set(
     routes.filter(route => route.critical !== false).map(route => route.broker),
   );
@@ -121,6 +128,9 @@ export function createBrokerRouter(
       for (const accountId of accountIds) next.add(brokerFor(accountId));
       criticalBrokers.clear();
       for (const broker of next) criticalBrokers.add(broker);
+    },
+    routeEpoch(accountId) {
+      return routeEpochByBroker.get(brokerFor(accountId)) ?? 0;
     },
     placeOrder: request => brokerFor(request.accountId).placeOrder(request),
     liquidatePosition: async request => {
@@ -237,6 +247,11 @@ export function createBrokerRouter(
       reevaluators.add(reevaluate);
 
       const unsubs = fixedBrokers.map(routeBroker => routeBroker.subscribe((event: BrokerEvent) => {
+        // Freshness must see even a follower-only outage that the public
+        // aggregate connection stream intentionally hides inside grace.
+        if (event.type === 'error' || event.type === 'connection') {
+          bumpRouteEpoch(routeBroker);
+        }
         if (!carriesAccounts(routeBroker)) {
           // Spojení bez účtů: jen si pamatujeme stav socketu pro případ,
           // že mu routing účty zase přidělí; chyby ani entity nepropouštíme.

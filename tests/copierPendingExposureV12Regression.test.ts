@@ -239,34 +239,25 @@ describe('V12 regression: filled leader lineage', () => {
 });
 
 describe('V12 regression: authoritative zero/partial-fill mirror', () => {
-  it('qty modify 8→6 refreshes the mirror and compares the current price too', async () => {
+  it('R5/R6/S3/S3p qty i price modify aktualizují čistě streamové zrcadlo', async () => {
     const behavior = (request: { orderType: BrokerOrder['orderType'] }) => request.orderType === 'Market'
       ? { kind: 'fill' as const, price: 30_550 }
       : { kind: 'working' as const };
     const { broker, controller, advance } = await setup({ behavior });
-    const authoritativeLeaderOrders = new Map<string, BrokerOrder>();
-    const originalFind = broker.findOrderById.bind(broker);
-    vi.spyOn(broker, 'findOrderById').mockImplementation(async (accountId, brokerOrderId) => {
-      if (accountId === 100) return {
-        order: authoritativeLeaderOrders.get(brokerOrderId) ?? null,
-        completeness: 'authoritative', observedAt: 500,
-      };
-      return originalFind(accountId, brokerOrderId);
-    });
+    const findOrderById = vi.spyOn(broker, 'findOrderById');
     const pending = leaderOrder({
       brokerOrderId: 'leader-pending-tp', side: 'Sell', quantity: 8,
       orderType: 'Limit', limitPrice: 30_618,
     });
-    authoritativeLeaderOrders.set(pending.brokerOrderId, pending);
     broker.emitEvent({ type: 'order', order: pending });
     await controller.waitForIdle();
     const modified = { ...pending, quantity: 6, limitPrice: 30_640, sourceVersion: '2:Working', updatedAt: 2 };
-    authoritativeLeaderOrders.set(modified.brokerOrderId, modified);
     broker.emitEvent({ type: 'order', order: modified });
     await controller.waitForIdle();
     expect(broker.modifyRequests()).toContainEqual(expect.objectContaining({
       changes: expect.objectContaining({ quantity: 6, limitPrice: 30_640 }),
     }));
+    findOrderById.mockClear();
 
     broker.emitEvent({ type: 'order', order: leaderOrder({
       brokerOrderId: 'leader-market-entry', side: 'Buy', quantity: 8,
@@ -281,9 +272,11 @@ describe('V12 regression: authoritative zero/partial-fill mirror', () => {
     expect({
       stops: followerOrders(broker, 'Stop'),
       status: controller.status(),
+      reads: findOrderById.mock.calls,
     }).toMatchObject({
       stops: [expect.objectContaining({ quantity: 8 })],
       status: { armed: true, lastError: null },
+      reads: [],
     });
     controller.stop();
   });
@@ -297,14 +290,7 @@ describe('V12 regression: authoritative zero/partial-fill mirror', () => {
       brokerOrderId: 'leader-partial-tp', side: 'Sell', quantity: 8,
       orderType: 'Limit', limitPrice: 30_618,
     });
-    let authoritativeLeader = leaderTp;
-    const originalFind = broker.findOrderById.bind(broker);
-    vi.spyOn(broker, 'findOrderById').mockImplementation(async (accountId, brokerOrderId) => {
-      if (accountId === 100 && brokerOrderId === leaderTp.brokerOrderId) return {
-        order: authoritativeLeader, completeness: 'authoritative', observedAt: 500,
-      };
-      return originalFind(accountId, brokerOrderId);
-    });
+    const findOrderById = vi.spyOn(broker, 'findOrderById');
     broker.emitEvent({ type: 'order', order: leaderTp });
     await controller.waitForIdle();
     broker.emitEvent({ type: 'order', order: leaderOrder({
@@ -316,7 +302,7 @@ describe('V12 regression: authoritative zero/partial-fill mirror', () => {
     await controller.waitForIdle();
     const followerTp = followerOrders(broker, 'Limit')[0];
     if (!followerTp) throw new Error('Test setup: follower TP nevznikl');
-    authoritativeLeader = { ...leaderTp, filledQuantity: 3, sourceVersion: '2:Working', updatedAt: 3 };
+    const authoritativeLeader = { ...leaderTp, filledQuantity: 3, sourceVersion: '2:Working', updatedAt: 3 };
     followerTp.filledQuantity = 3;
     broker.emitEvent({ type: 'fill', fill: {
       fillId: 'leader-tp-fill', tag: '', brokerOrderId: leaderTp.brokerOrderId,
@@ -340,14 +326,16 @@ describe('V12 regression: authoritative zero/partial-fill mirror', () => {
     expect({
       stops: followerOrders(broker, 'Stop'),
       status: controller.status(),
+      reads: findOrderById.mock.calls,
     }).toMatchObject({
       stops: [expect.objectContaining({ quantity: 5 })],
       status: { armed: true, lastError: null },
+      reads: [],
     });
     controller.stop();
   });
 
-  it('a hidden follower fill or price mismatch stays fail-closed after authoritative reads', async () => {
+  it('M2 streamový price/fill mismatch zůstává fail-closed bez REST čtení', async () => {
     const behavior = (request: { orderType: BrokerOrder['orderType'] }) => request.orderType === 'Market'
       ? { kind: 'fill' as const, price: 30_550 }
       : { kind: 'working' as const };
@@ -356,20 +344,14 @@ describe('V12 regression: authoritative zero/partial-fill mirror', () => {
       brokerOrderId: 'leader-hidden-fill-tp', side: 'Sell', quantity: 8,
       orderType: 'Limit', limitPrice: 30_618,
     });
-    const originalFind = broker.findOrderById.bind(broker);
-    vi.spyOn(broker, 'findOrderById').mockImplementation(async (accountId, brokerOrderId) => {
-      if (accountId === 100 && brokerOrderId === leaderTp.brokerOrderId) return {
-        order: leaderTp, completeness: 'authoritative', observedAt: 500,
-      };
-      const lookup = await originalFind(accountId, brokerOrderId);
-      if (accountId === 200 && lookup.order?.orderType === 'Limit') return {
-        ...lookup,
-        order: { ...lookup.order, limitPrice: 30_617, filledQuantity: 3 },
-      };
-      return lookup;
-    });
+    const findOrderById = vi.spyOn(broker, 'findOrderById');
     broker.emitEvent({ type: 'order', order: leaderTp });
     await controller.waitForIdle();
+    const followerTp = followerOrders(broker, 'Limit')[0];
+    if (!followerTp) throw new Error('Test setup: follower TP nevznikl');
+    broker.emitEvent({ type: 'order', order: {
+      ...followerTp, limitPrice: 30_617, filledQuantity: 3, sourceVersion: '2:Working', updatedAt: 2,
+    } });
     broker.emitEvent({ type: 'order', order: leaderOrder({
       brokerOrderId: 'leader-market-entry', side: 'Buy', quantity: 8,
       orderType: 'Market', limitPrice: undefined,
@@ -385,12 +367,13 @@ describe('V12 regression: authoritative zero/partial-fill mirror', () => {
     expect(followerOrders(broker, 'Stop')).toHaveLength(0);
     expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
     expect(controller.status().lastError).toContain('nevysvětlená divergence');
+    expect(findOrderById).not.toHaveBeenCalled();
     controller.stop();
   });
 });
 
 describe('V12 regression: reconciliation observation fence', () => {
-  it('does not prune or re-stamp pending lineage from a stale reconciliation snapshot', async () => {
+  it('ST4 stale reconciliation snapshot odmítne a nedovolí ARM', async () => {
     const { broker, controller } = await setup({
       behavior: request => request.orderType === 'Market'
         ? { kind: 'fill', price: 30_500 }
@@ -415,24 +398,9 @@ describe('V12 regression: reconciliation observation fence', () => {
     }) });
     await controller.waitForIdle();
     release();
-    await reconciliation;
-    controller.arm();
+    await expect(reconciliation).rejects.toThrow('zneplatněna novým stream eventem');
+    expect(() => controller.arm()).toThrow('kontrola pozic');
 
-    broker.emitEvent({ type: 'order', order: leaderOrder({
-      brokerOrderId: 'leader-market-entry', side: 'Buy', quantity: 2,
-      orderType: 'Market', limitPrice: undefined,
-    }) });
-    broker.setPosition(100, 'MNQU6', 2);
-    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 2 } });
-    await controller.waitForIdle();
-    broker.emitEvent({ type: 'order', order: leaderOrder({
-      brokerOrderId: 'leader-market-exit', side: 'Sell', quantity: 2,
-      orderType: 'Market', limitPrice: undefined,
-    }) });
-    await controller.waitForIdle();
-
-    expect(broker.placedRequests().filter(request => request.side === 'Sell' && request.orderType === 'Market'))
-      .toHaveLength(0);
     expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
     controller.stop();
   });

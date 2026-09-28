@@ -208,6 +208,33 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — V12 třetí iterace: stream-only pending mirror bez REST hot-path (Codex, balíček 3a-3)
+
+- Odstraněno V12 ověřování přes `findOrderById` leader/follower orderu a
+  `listPositions` followera před redukujícím zápisem. Výjimka pro zero-fill a
+  symetrický partial mirror nyní stojí jen na shodném streamovém tvaru,
+  množství/ceně/fillech, přesné follower pozici, prázdném per-account ingressu
+  a nepřerušené route epoše leadera i followera. Router epochu zvyšuje při
+  každém connection/error blipu, i když follower reconnect grace výpadek skryje.
+- Terminální validní follower kopie se retireuje; orphan working kopie zůstává
+  fail-closed. Sticky `evidenceInvalid` se respektuje i po plném leader fillu.
+  Zachované jsou remaining exposure po leader fillu, retire po follower full
+  fillu, potvrzený modify qty/ceny a partial mirror pouze s fill eventy obou
+  stran. S1b (filled Limit + working kopie + Market exit na flat followera)
+  zůstává záměrně blokovaný bez zápisu.
+- Reconciliation má account-scoped observation fence a stale snapshot odmítne
+  před přepsáním cache; žádný nový stream event během čtení se nesmí potvrdit
+  jako čerstvá kontrola. Přidána explicitní regresní matice C0, R1–R13,
+  R7b/R7c/O1/P1, S1b/S3–S7, N2–N4, F1/F2, M1–M4, router blip a test ~1119.
+- Ověření: nový V12-3 soubor proti `90cee98` prokazatelně 12 failed / 9 passed,
+  po opravě 21/21; dotčené čtyři soubory 175/175 (první post-fix běh měl jen
+  3 příliš úzké aserce textu při správném DISARM/no-write výsledku);
+  celá filtrovaná copier sada 1514/1514 — 1461 v sandboxu a jediný loopback
+  serverový soubor 53/53 mimo sandbox po očekávaném `listen EPERM`. Cílený
+  TypeScript check dotčeného grafu je čistý; root check hlásí jen povolené
+  chybějící Chrome typy/plugin v `extension/`; `git diff --check` čistý.
+  Nic nebylo commitnuto, nasazeno ani odesláno brokerovi.
+
 ### 2026-09-28 — Konzervativní V13: serializovaný flat sweep bez background fencing regresí (Codex, balíček 3b-2)
 
 - Commit `1a59237` byl na `HEAD 90cee98` přepracován bez revertu V12

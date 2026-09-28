@@ -185,6 +185,29 @@ describe('reconnect grace nekritických spojení', () => {
     unsubscribe();
   });
 
+  it('routeEpoch vidí i follower blip skrytý reconnect grace oknem', async () => {
+    const critical = createMockBroker();
+    const routedFollower = createMockBroker();
+    const router = createBrokerRouter([
+      { broker: critical, accountIds: [100], critical: true },
+      { broker: routedFollower, accountIds: [200], critical: false },
+    ], { reconnectGraceMs: 40 });
+    const routedEvents: BrokerEvent[] = [];
+    const routedUnsubscribe = router.subscribe(event => routedEvents.push(event));
+    critical.setConnected(true);
+    routedFollower.setConnected(true);
+    const before = router.routeEpoch(200);
+
+    routedFollower.setConnected(false);
+    routedFollower.setConnected(true);
+
+    expect(router.routeEpoch(200)).toBeGreaterThan(before);
+    expect(routedEvents.filter(event => event.type === 'connection')).toEqual([
+      expect.objectContaining({ type: 'connection', connected: true }),
+    ]);
+    routedUnsubscribe();
+  });
+
   it('výpadek delší než lhůta se ohlásí včetně zadržené chyby', async () => {
     const events: BrokerEvent[] = [];
     const { follower, unsubscribe } = graceRouter(events, 20);

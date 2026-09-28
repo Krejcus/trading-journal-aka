@@ -288,6 +288,13 @@ export interface BrokerPort {
    * spojení aktuálního leadera. Obyčejný broker metodu nepotřebuje.
    */
   setCriticalAccounts?(accountIds: readonly number[]): void;
+  /**
+   * Monotonic generation of the concrete transport route carrying an account.
+   * Routers bump it for every disconnect, transport error, reconnect/resync,
+   * including outages hidden by a reconnect grace window. Consumers may use
+   * it only as a freshness fence; it is not a connectivity guarantee.
+   */
+  routeEpoch?(accountId: number): number;
   placeOrder(request: BrokerOrderRequest): Promise<BrokerOrderAck>;
   /**
    * Preferovaná nouzová cesta pro Flatten. Chybějící implementace používá
