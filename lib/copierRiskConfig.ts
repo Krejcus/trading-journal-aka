@@ -2,6 +2,7 @@ import {
   sanitizeCopyGroupSafety,
   type CopierRuleAction,
   type CopyFollowerConfig,
+  type CopyGroupConfig,
   type CopyGroupSafetySettings,
 } from '../services/liveCopyTrading.js';
 
@@ -13,6 +14,69 @@ export interface CopierRiskConfig {
   safety?: CopyGroupSafetySettings;
   followers: CopyFollowerConfig[];
 }
+
+const sameFollowerOutsideCut = (left: CopyFollowerConfig, right: CopyFollowerConfig): boolean => (
+  left.accountId === right.accountId
+  && left.mode === right.mode
+  && (left.enabled !== false) === (right.enabled !== false)
+  && left.multiplier === right.multiplier
+  && left.maxContracts === right.maxContracts
+);
+
+const sameGroupOutsideMetadataAndCut = (left: CopyGroupConfig, right: CopyGroupConfig): boolean => {
+  if (left.id !== right.id || left.enabled !== right.enabled
+    || left.leaderAccountId !== right.leaderAccountId
+    || left.followers.length !== right.followers.length) return false;
+  const rightByAccount = new Map(right.followers.map(follower => [follower.accountId, follower]));
+  return left.followers.every(follower => {
+    const candidate = rightByAccount.get(follower.accountId);
+    return candidate != null && sameFollowerOutsideCut(follower, candidate);
+  });
+};
+
+/** Pouze name/color/safety se smějí měnit bez execution cesty. */
+export const isMetadataOnlyGroupChange = (
+  previous: CopyGroupConfig,
+  next: CopyGroupConfig,
+): boolean => {
+  if (!sameGroupOutsideMetadataAndCut(previous, next)) return false;
+  const nextByAccount = new Map(next.followers.map(follower => [follower.accountId, follower]));
+  return previous.followers.every(follower => {
+    const candidate = nextByAccount.get(follower.accountId)!;
+    return follower.dailyLossCutUsd === candidate.dailyLossCutUsd
+      && (follower.onCut ?? 'close-copy') === (candidate.onCut ?? 'close-copy');
+  });
+};
+
+/**
+ * Jediná execution změna povolená in-place za otevřené pozice: přidání či
+ * snížení follower cutu a let-run -> close-copy. Velikost, účty, leader,
+ * participation i replikační mód musejí zůstat přesně stejné.
+ */
+export const isInPlaceCutTightening = (
+  previous: CopyGroupConfig,
+  next: CopyGroupConfig,
+): boolean => {
+  if (!sameGroupOutsideMetadataAndCut(previous, next)) return false;
+  const nextByAccount = new Map(next.followers.map(follower => [follower.accountId, follower]));
+  let changed = false;
+  for (const follower of previous.followers) {
+    const candidate = nextByAccount.get(follower.accountId)!;
+    const previousCut = follower.dailyLossCutUsd ?? 0;
+    const nextCut = candidate.dailyLossCutUsd ?? 0;
+    if (previousCut !== nextCut) {
+      changed = true;
+      if (nextCut <= 0 || (previousCut > 0 && nextCut > previousCut)) return false;
+    }
+    const previousAction = follower.onCut ?? 'close-copy';
+    const nextAction = candidate.onCut ?? 'close-copy';
+    if (previousAction !== nextAction) {
+      changed = true;
+      if (previousAction !== 'let-run' || nextAction !== 'close-copy') return false;
+    }
+  }
+  return changed;
+};
 
 const followerField = (accountId: number, field?: string): string => (
   field ? `followers.${accountId}.${field}` : `followers.${accountId}`
@@ -51,6 +115,16 @@ export function isWeakerRiskConfig(previous: CopierRiskConfig, next: CopierRiskC
   const add = (field: string): void => {
     if (!violations.includes(field)) violations.push(field);
   };
+
+  for (const field of [
+    'autoCloseFollowerPositions',
+    'preventHedging',
+    'positionReconciler',
+    'disableReplicationOnBreach',
+  ] as const) {
+    const requestedNext = next.safety?.[field] ?? nextSafety[field];
+    if (previousSafety[field] && requestedNext === false) add(`safety.${field}`);
+  }
 
   const comparePositiveSafetyLimit = (
     field: 'dailyMaxLosingTrades' | 'dailyMaxTrades' | 'dailyLossLimitUsd',
@@ -158,11 +232,7 @@ export function isWeakerRiskConfig(previous: CopierRiskConfig, next: CopierRiskC
       continue;
     }
 
-    if (previousFollower.enabled === false && nextFollower.enabled !== false) {
-      add(followerField(nextFollower.accountId, 'enabled'));
-    }
-    if (previousFollower.mode !== nextFollower.mode
-      && nextFollower.mode !== 'off') {
+    if (previousFollower.mode === 'off' && nextFollower.mode !== 'off') {
       add(followerField(nextFollower.accountId, 'mode'));
     }
 

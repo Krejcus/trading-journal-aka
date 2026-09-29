@@ -17,6 +17,7 @@ import {
   type CopyFollowerCutAction,
   type CopyGroupConfig,
 } from '../services/liveCopyTrading';
+import { startLocalCopierExecutionAgent } from '../server/localCopierExecutionAgent';
 
 const START_AT = Date.parse('2026-09-08T16:00:00.000Z');
 
@@ -76,6 +77,7 @@ const riskSnapshot = ({
   at,
   realizedPnlUsd = null,
   netLiq = null,
+  cashBalanceUsd = null,
   minNetLiq = null,
   dailyLossAutoLiq = null,
 }: {
@@ -83,6 +85,7 @@ const riskSnapshot = ({
   at: number;
   realizedPnlUsd?: number | null;
   netLiq?: number | null;
+  cashBalanceUsd?: number | null;
   minNetLiq?: number | null;
   dailyLossAutoLiq?: number | null;
 }): BrokerAccountRiskSnapshot => ({
@@ -90,6 +93,7 @@ const riskSnapshot = ({
   at,
   realizedPnlUsd,
   netLiq,
+  cashBalanceUsd,
   minNetLiq,
   dailyLossAutoLiq,
   trailingMaxDrawdown: null,
@@ -361,6 +365,54 @@ describe('CopierRuntimeController — follower account cuts', () => {
         source: 'manual', scope: 'trade', operationId: 'manual-trade-cut-002',
       });
       expect(broker.placedRequests().slice(beforeReverse).some(request => request.accountId === 200)).toBe(false);
+    } finally {
+      runtime.controller.stop();
+    }
+  });
+
+  it('heartbeat neuvolní ruční trade cut, když za ním čeká obchodní event', async () => {
+    const time = manualClock();
+    const broker = createMockBroker({
+      clock: time.clock,
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'fill', price: 20_000 }),
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId, at: time.now(), realizedPnlUsd: 0,
+    }));
+    const runtime = await bootRuntime({
+      broker,
+      group: riskGroup({ mode: 'on-submit' }),
+      time,
+    });
+    try {
+      broker.setPosition(100, 'MNQU6', 1);
+      await emitLeaderFill({
+        ...runtime, time, side: 'Buy', price: 20_000, netQuantity: 1,
+      });
+      await runtime.controller.flattenFollowerTrade(200, 'manual-trade-cut-heartbeat');
+      await runtime.controller.waitForIdle();
+
+      broker.setPosition(201, 'MNQU6', 0);
+      broker.emitEvent({
+        type: 'position', position: { accountId: 201, symbol: 'MNQU6', netQuantity: 0 },
+      });
+      await runtime.controller.waitForIdle();
+      const placedBefore = broker.placedRequests().length;
+
+      broker.setPosition(100, 'MNQU6', 0);
+      broker.emitEvent(leaderPosition(0));
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      broker.emitEvent({
+        type: 'order',
+        order: leaderWorkingOrder({ brokerOrderId: 'entry-behind-heartbeat', at: time.now() }),
+      });
+      await runtime.controller.waitForIdle();
+
+      expect(followerCut(runtime.controller)).toMatchObject({
+        source: 'manual', operationId: 'manual-trade-cut-heartbeat',
+      });
+      expect(broker.placedRequests().slice(placedBefore).map(request => request.accountId)).toEqual([201]);
     } finally {
       runtime.controller.stop();
     }
@@ -2009,6 +2061,142 @@ describe('CopierRuntimeController — follower account cuts', () => {
       expect(runtime.controller.status()).toMatchObject({ armed: true, lastError: null });
       expect(followerCut(runtime.controller)).toBeUndefined();
     } finally {
+      runtime.controller.stop();
+    }
+  });
+
+  it.each([-60, -100, -150])(
+    'V15 nepočítá nerealizovanou ztrátu %i USD dvakrát proti prop rezervě',
+    async unrealizedPnlUsd => {
+      const time = manualClock();
+      const state = { unrealizedPnlUsd: 0 };
+      const broker = createMockBroker({
+        clock: time.clock,
+        nativeLiquidate: true,
+        behavior: () => ({ kind: 'fill', price: 20_000 }),
+      });
+      installRiskProvider(broker, accountId => riskSnapshot({
+        accountId,
+        at: time.now(),
+        realizedPnlUsd: 0,
+        netLiq: accountId === 200 ? 50_000 + state.unrealizedPnlUsd : null,
+        cashBalanceUsd: accountId === 200 ? 50_000 : null,
+        minNetLiq: accountId === 200 ? 49_700 : null,
+      }));
+      const runtime = await bootRuntime({ broker, group: riskGroup({ cutUsd: 200 }), time });
+      try {
+        await emitLeaderFill({
+          ...runtime, time, side: 'Buy', quantity: 1, price: 20_000, netQuantity: 1,
+        });
+        state.unrealizedPnlUsd = unrealizedPnlUsd;
+        time.advance(30_000);
+        broker.emitEvent({ type: 'heartbeat', at: time.now() });
+        await runtime.controller.waitForIdle();
+
+        expect(followerCut(runtime.controller)).toBeUndefined();
+        expect((await broker.listPositions(200))).toEqual([
+          expect.objectContaining({ netQuantity: 1 }),
+        ]);
+        expect(runtime.controller.status()).toMatchObject({ armed: true, lastError: null });
+      } finally {
+        runtime.controller.stop();
+      }
+    },
+  );
+
+  it('prop-reserve vynutí close-copy i při uživatelském onCut=let-run', async () => {
+    const time = manualClock();
+    let reserveUsd = 300;
+    const broker = createMockBroker({
+      clock: time.clock,
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'fill', price: 20_000 }),
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId,
+      at: time.now(),
+      realizedPnlUsd: 0,
+      dailyLossAutoLiq: accountId === 200 ? reserveUsd : null,
+    }));
+    const runtime = await bootRuntime({
+      broker,
+      group: riskGroup({ cutUsd: 100, onCut: 'let-run' }),
+      time,
+    });
+    try {
+      await emitLeaderFill({
+        ...runtime, time, side: 'Buy', quantity: 1, price: 20_000, netQuantity: 1,
+      });
+      reserveUsd = 50;
+      time.advance(30_000);
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await runtime.controller.waitForIdle();
+
+      expect(followerCut(runtime.controller)).toMatchObject({
+        source: 'prop-reserve', closed: expect.any(Number),
+      });
+      expect(await broker.listPositions(200)).toEqual([
+        expect.objectContaining({ netQuantity: 0 }),
+      ]);
+      expect(runtime.controller.status().armed).toBe(true);
+    } finally {
+      runtime.controller.stop();
+    }
+  });
+
+  it('zpřísnění aktivního cutu let-run → close-copy proběhne in-place za ARM', async () => {
+    const time = manualClock();
+    let breached = false;
+    const broker = createMockBroker({
+      clock: time.clock,
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'fill', price: 20_000 }),
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId,
+      at: time.now(),
+      realizedPnlUsd: accountId === 200 && breached ? -125 : 0,
+    }));
+    const initial = riskGroup({ cutUsd: 100, onCut: 'let-run' });
+    const runtime = await bootRuntime({ broker, group: initial, time });
+    const agent = await startLocalCopierExecutionAgent({
+      controller: runtime.controller,
+      group: initial,
+      port: 0,
+      onGroupChanged: async () => undefined,
+    });
+    try {
+      await emitLeaderFill({
+        ...runtime, time, side: 'Buy', quantity: 1, price: 20_000, netQuantity: 1,
+      });
+      breached = true;
+      time.advance(30_000);
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await runtime.controller.waitForIdle();
+      expect(followerCut(runtime.controller)).toMatchObject({ closed: null });
+
+      const next = structuredClone(initial);
+      next.followers[0].onCut = 'close-copy';
+      const response = await fetch(`${agent.origin}/v1/command`, {
+        method: 'POST',
+        headers: {
+          Origin: 'https://alphatrade-mentor-15.vercel.app',
+          'Content-Type': 'application/json',
+          'X-AlphaTrade-Agent-Nonce': agent.status().nonce,
+        },
+        body: JSON.stringify({ type: 'copy-command', command: { type: 'update-group', group: next } }),
+      });
+      const responseBody = await response.json();
+      await runtime.controller.waitForIdle();
+
+      expect(response.status, JSON.stringify(responseBody)).toBe(200);
+      expect(runtime.controller.status()).toMatchObject({ armed: true, lastError: null });
+      expect(followerCut(runtime.controller)).toMatchObject({ closed: expect.any(Number) });
+      expect(await broker.listPositions(200)).toEqual([
+        expect.objectContaining({ netQuantity: 0 }),
+      ]);
+    } finally {
+      await agent.close();
       runtime.controller.stop();
     }
   });

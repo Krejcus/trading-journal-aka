@@ -30,16 +30,20 @@ describe('createCopierRuntimeCommandAdapter', () => {
     controller.stop();
   });
 
-  it('propíše násobek do živého runtime a explicitní Flatten předá s operationId', async () => {
+  it('P-A odmítne násobek nad otevřenou pozicí a explicitní Flatten dál předá s operationId', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 30_000 }) });
     await broker.placeOrder({
       tag: 'seed-position', accountId: 200, symbol: 'MNQU6', side: 'Buy', quantity: 1, orderType: 'Market',
+    });
+    await broker.placeOrder({
+      tag: 'seed-leader-position', accountId: 100, symbol: 'MNQU6', side: 'Buy', quantity: 1, orderType: 'Market',
     });
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group: initialGroup,
     });
     broker.setConnected(true);
     await controller.waitForIdle();
+    await controller.reconcile();
     let group = initialGroup;
     const adapter = createCopierRuntimeCommandAdapter({
       controller,
@@ -47,15 +51,17 @@ describe('createCopierRuntimeCommandAdapter', () => {
       setGroup: next => { group = next; },
     });
 
-    await adapter.execute({ type: 'set-multiplier', groupId: 'g1', accountId: 200, multiplier: 2 });
-    expect(group.followers[0].multiplier).toBe(2);
+    await expect(adapter.execute({
+      type: 'set-multiplier', groupId: 'g1', accountId: 200, multiplier: 2,
+    })).rejects.toThrow();
+    expect(group.followers[0].multiplier).toBe(1);
 
     await adapter.execute({
       type: 'flatten-account', groupId: 'g1', accountId: 200,
       operationId: 'adapter-flat-001',
     });
     expect(await broker.listPositions(200)).toEqual([expect.objectContaining({ netQuantity: 0 })]);
-    expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
+    expect(controller.status()).toMatchObject({ armed: false });
     controller.stop();
   });
 

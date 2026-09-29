@@ -4,6 +4,11 @@ import {
   type CopyGroupConfig,
   type LiveCopyTradingAdapter,
 } from './liveCopyTrading';
+import {
+  isInPlaceCutTightening,
+  isMetadataOnlyGroupChange,
+  isWeakerRiskConfig,
+} from '../lib/copierRiskConfig';
 
 export interface CopierRuntimeCommandAdapterOptions {
   controller: CopierRuntimeController;
@@ -24,24 +29,18 @@ export function createCopierRuntimeCommandAdapter(
     request: { waiveUnverifiableFollowerOwnership?: true } = {},
   ) => {
     const current = options.getGroup();
-    const currentAccounts = new Set([
-      current.leaderAccountId,
-      ...current.followers.map(follower => follower.accountId),
-    ]);
-    const nextAccounts = new Set([
-      next.leaderAccountId,
-      ...next.followers.map(follower => follower.accountId),
-    ]);
-    const topologyChanged = currentAccounts.size !== nextAccounts.size
-      || [...currentAccounts].some(accountId => !nextAccounts.has(accountId));
-    if (current.leaderAccountId !== next.leaderAccountId || topologyChanged) {
+    options.controller.preflightGroupChange(next);
+    const weaker = isWeakerRiskConfig(current, next);
+    if (weaker.length === 0 && isMetadataOnlyGroupChange(current, next)) {
+      options.controller.updateGroupMetadata(next);
+    } else if (weaker.length === 0 && isInPlaceCutTightening(current, next)) {
+      await options.controller.updateGroupRiskInPlace(next);
+    } else {
       await options.controller.reconfigureGroup(next, {
         ...(request.waiveUnverifiableFollowerOwnership === true
           ? { waiveUnverifiableFollowerOwnership: true }
           : {}),
       });
-    } else {
-      options.controller.updateGroup(next);
     }
     options.setGroup(next);
   };
