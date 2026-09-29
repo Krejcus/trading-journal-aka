@@ -13955,8 +13955,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (stopped || shutdownRequested || gate.killSwitch) {
         throw new Error('Změnu konfigurace blokuje zastavený worker nebo kill switch');
       }
+      // Běžící recovery/reconciliation blokuje vždy. Samotný požadavek na
+      // reconciliation (po změně skupiny, po DISARM) za DISARMED ne: ARM cesta
+      // ho provede sama až po změně. Jinak ARM z UI, který posílá i konfiguraci
+      // skupiny, spadne dřív, než se k reconciliation dostane (29. 9. 2026).
       if (recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery
-        || reconciliationRequestsPending > 0 || source.needsReconciliation()) {
+        || reconciliationRequestsPending > 0 || (gate.armed && source.needsReconciliation())) {
         throw new Error('Změnu konfigurace blokuje probíhající connection recovery/reconciliation');
       }
       if (currentStuckOperations().length > 0 || hasBrokerUncertainOutbox()) {
