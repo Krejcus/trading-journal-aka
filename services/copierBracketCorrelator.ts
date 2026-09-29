@@ -97,6 +97,10 @@ export class CopierBracketCorrelator {
     if (!type || price == null || !Number.isFinite(price)) return null;
 
     const exact = event.parentOrderId ? this.entries.get(event.parentOrderId) : undefined;
+    // Explicitní parent je silnější důkaz než časové inference okno. Když
+    // parent ještě není známý jako vyplněný entry, jde o pending OSO dítě a
+    // musí zůstat OSO korelátoru; nesmí se přilepit ke staršímu fillu.
+    if (event.parentOrderId && !exact) return null;
     const inferred = exact ? [] : [...this.entries.values()].filter(entry =>
       event.receivedAt - entry.filledAt >= 0
       && event.receivedAt - entry.filledAt <= this.inferenceWindowMs
