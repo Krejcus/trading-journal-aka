@@ -5563,7 +5563,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     const protectiveIds = new Set<string>();
     for (const entry of [...currentRuntime().osoOutbox.values(), ...currentRuntime().bracketOutbox.values()]) {
-      if (entry.request.accountId !== accountId || entry.request.symbol !== epoch.symbol) continue;
+      if (
+        entry.request.accountId !== accountId
+        || entry.request.symbol !== epoch.symbol
+        || !epoch.leaderEntryOrderIds.includes(entry.leaderEntryOrderId)
+      ) continue;
       for (const id of [entry.firstBrokerOrderId, entry.secondBrokerOrderId]) {
         if (id) protectiveIds.add(id);
       }
@@ -5580,6 +5584,57 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       });
     }
     return evidence;
+  };
+
+  const leaderFlatProtectiveEntries = (
+    epoch: LeaderFlatEpoch,
+    accountId: number,
+  ): Array<{
+    leaderEntryOrderId: string;
+    firstBrokerOrderId?: string;
+    secondBrokerOrderId?: string;
+    entryBrokerOrderId?: string;
+  }> => {
+    const leaderEntryOrderIds = new Set(epoch.leaderEntryOrderIds);
+    const runtime = currentRuntime();
+    return [
+      ...[...runtime.bracketOutbox.values()].map(entry => ({
+        accountId: entry.request.accountId,
+        symbol: entry.request.symbol,
+        leaderEntryOrderId: entry.leaderEntryOrderId,
+        firstBrokerOrderId: entry.firstBrokerOrderId,
+        secondBrokerOrderId: entry.secondBrokerOrderId,
+      })),
+      ...[...runtime.osoOutbox.values()].map(entry => ({
+        accountId: entry.request.accountId,
+        symbol: entry.request.symbol,
+        leaderEntryOrderId: entry.leaderEntryOrderId,
+        firstBrokerOrderId: entry.firstBrokerOrderId,
+        secondBrokerOrderId: entry.secondBrokerOrderId,
+        entryBrokerOrderId: entry.entryBrokerOrderId,
+      })),
+    ].filter(entry => (
+      entry.accountId === accountId
+      && entry.symbol === epoch.symbol
+      && leaderEntryOrderIds.has(entry.leaderEntryOrderId)
+    ));
+  };
+
+  const leaderFlatActiveOrphanLeg = (
+    orders: readonly BrokerOrder[],
+    ownedLegIds: ReadonlySet<string>,
+    osoParentByLeg: ReadonlyMap<string, string>,
+  ): BrokerOrder | undefined => {
+    const byId = new Map(orders.map(order => [order.brokerOrderId, order]));
+    return orders.find(order => {
+      if (!ownedLegIds.has(order.brokerOrderId) || !isOpenOrderStatus(order.status)) return false;
+      if (order.status !== 'pending') return true;
+      const parentId = osoParentByLeg.get(order.brokerOrderId);
+      const parent = parentId ? byId.get(parentId) : undefined;
+      // Stejná jediná bezpečná výjimka jako ve sweepu: Suspended/pending dítě
+      // dosud nevyplněného working OSO vstupu není osiřelá ochranná noha.
+      return !(parent && isOpenOrderStatus(parent.status) && parent.filledQuantity === 0);
+    });
   };
 
   async function verifyLeaderFlatEpoch(
@@ -5606,21 +5661,60 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ...epoch.followers.map(follower => follower.accountId),
     ])];
     const rows = await Promise.all(accountIds.map(async accountId => {
-      try {
-        const [positions, orders] = await Promise.all([
-          broker.listPositions(accountId),
-          broker.listOrders(accountId),
-        ]);
-        return { accountId, ok: true as const, positions, orders };
-      } catch (reason) {
-        return { accountId, ok: false as const, error: errorOf(reason).message };
+      const maxSnapshotAttempts = 3;
+      for (let attempt = 1; attempt <= maxSnapshotAttempts; attempt += 1) {
+        try {
+          // Order graph musí předcházet pozici: opačné pořadí dovolovalo, aby
+          // se OSO parent vyplnil mezi REST čteními a guard zrušil SL/TP nové
+          // pozice podle staré nuly. Retry je pouze read-only a pevně omezený.
+          const orders = await broker.listOrders(accountId);
+          const positions = await broker.listPositions(accountId);
+          if (accountId !== epoch.leaderAccountId) {
+            const net = positions
+              .filter(position => position.symbol === epoch.symbol)
+              .reduce((sum, position) => sum + position.netQuantity, 0);
+            const filledParent = [...currentRuntime().osoOutbox.values()]
+              .filter(entry => (
+                entry.request.accountId === accountId
+                && entry.request.symbol === epoch.symbol
+                && entry.entryBrokerOrderId
+              ))
+              .filter(entry => [entry.firstBrokerOrderId, entry.secondBrokerOrderId].some(id => (
+                id != null && orders.some(order => (
+                  order.brokerOrderId === id && isOpenOrderStatus(order.status)
+                ))
+              )))
+              .map(entry => orders.find(order => order.brokerOrderId === entry.entryBrokerOrderId))
+              .find(order => order != null && order.filledQuantity > 0);
+            if (net === 0 && filledParent) {
+              if (attempt < maxSnapshotAttempts) continue;
+              return {
+                accountId,
+                ok: false as const,
+                inconsistentSnapshot: true as const,
+                error: `OSO parent ${filledParent.brokerOrderId} má fill, ale pozice ${epoch.symbol} je ve snapshotu 0`,
+              };
+            }
+          }
+          return { accountId, ok: true as const, positions, orders };
+        } catch (reason) {
+          return { accountId, ok: false as const, error: errorOf(reason).message };
+        }
       }
+      return { accountId, ok: false as const, error: 'leader-flat snapshot nemá výsledek' };
     }));
 
     const current = leaderExposureEpoch(epoch.symbol);
     if (!isLeaderFlatGuardTokenCurrent(current, token) || !gate.connected) return;
     if (safetyGeneration !== expectedSafetyGeneration) {
       await rescheduleLeaderFlatEpochAfterGenerationChange(current, token, allowWrites);
+      return;
+    }
+    const inconsistentSnapshot = rows.find(row => !row.ok && 'inconsistentSnapshot' in row);
+    if (inconsistentSnapshot && !inconsistentSnapshot.ok) {
+      failClosed(new Error(
+        `Leader-flat guard: nekonzistentní broker snapshot účtu ${inconsistentSnapshot.accountId} po 3 read-only pokusech (${inconsistentSnapshot.error})`,
+      ), { autoClose: false });
       return;
     }
 
@@ -5651,19 +5745,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         .filter(position => position.symbol === epoch.symbol)
         .reduce((sum, position) => sum + position.netQuantity, 0);
       if (net !== 0) continue;
-      const runtime = currentRuntime();
-      const ownedLegIds = new Set(
-        [...runtime.bracketOutbox.values(), ...runtime.osoOutbox.values()]
-          .filter(entry => (
-            entry.request.accountId === row.accountId
-            && entry.request.symbol === epoch.symbol
-          ))
-          .flatMap(entry => [entry.firstBrokerOrderId, entry.secondBrokerOrderId])
-          .filter((id): id is string => Boolean(id)),
-      );
-      if (!row.orders.some(order => (
-        ownedLegIds.has(order.brokerOrderId) && isOpenOrderStatus(order.status)
-      ))) continue;
+      const protectiveEntries = leaderFlatProtectiveEntries(epoch, row.accountId);
+      const ownedLegIds = new Set(protectiveEntries
+        .flatMap(entry => [entry.firstBrokerOrderId, entry.secondBrokerOrderId])
+        .filter((id): id is string => Boolean(id)));
+      const osoParentByLeg = new Map<string, string>();
+      for (const entry of protectiveEntries) {
+        if (!entry.entryBrokerOrderId) continue;
+        for (const id of [entry.firstBrokerOrderId, entry.secondBrokerOrderId]) {
+          if (id) osoParentByLeg.set(id, entry.entryBrokerOrderId);
+        }
+      }
+      if (!leaderFlatActiveOrphanLeg(row.orders, ownedLegIds, osoParentByLeg)) continue;
       await sweepFollowerProtectiveLegs(
         row.accountId,
         epoch.symbol,
@@ -5679,9 +5772,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ), { autoClose: false });
         return;
       }
-      const orphan = remaining.find(order => (
-        ownedLegIds.has(order.brokerOrderId) && isOpenOrderStatus(order.status)
-      ));
+      const orphan = leaderFlatActiveOrphanLeg(remaining, ownedLegIds, osoParentByLeg);
       if (orphan) {
         failClosed(new Error(
           `Leader-flat guard: doložená osiřelá ochranná noha ${orphan.brokerOrderId} zůstala aktivní nad flat followerem ${row.accountId}`,
@@ -5879,6 +5970,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const copierFootprintSymbols = (accountId: number): Set<string> => {
     const symbols = new Set<string>();
     const runtime = currentRuntime();
+    if (group.followers.some(follower => (
+      follower.accountId === accountId && follower.enabled !== false
+    ))) {
+      for (const [symbol, quantity] of positionsByAccount.get(group.leaderAccountId!) ?? []) {
+        if (quantity !== 0) symbols.add(symbol);
+      }
+    }
     for (const epoch of runtime.state.safety.leaderExposureEpochs ?? []) {
       if (
         epoch.groupId === group.id
@@ -5960,6 +6058,33 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       symbols.add(target.symbol);
       targetSymbolsByAccount.set(target.accountId, symbols);
     }
+    const participatingFollowerIdSet = new Set(participatingFollowerIds);
+    const unscopedExposure = accountIds.flatMap(accountId => {
+      if (!participatingFollowerIdSet.has(accountId) || !targetSymbolsByAccount.has(accountId)) return [];
+      const scopedSymbols = targetSymbolsByAccount.get(accountId)!;
+      return [...(positionsByAccount.get(accountId) ?? [])]
+        .filter(([symbol, quantity]) => quantity !== 0 && !scopedSymbols.has(symbol))
+        .map(([symbol, quantity]) => ({ accountId, symbol, quantity }));
+    });
+    const reportUnscopedExposure = () => {
+      const accountIdsWithUnscopedExposure = [...new Set(
+        unscopedExposure.map(exposure => exposure.accountId),
+      )];
+      for (const accountId of accountIdsWithUnscopedExposure) {
+        const detail = unscopedExposure
+          .filter(exposure => exposure.accountId === accountId)
+          .map(exposure => `${exposure.symbol}=${exposure.quantity}`)
+          .join(', ');
+        const error = new Error(
+          `Auto-close ${trigger}: follower ${accountId} má expozici mimo doloženou copier stopu (${detail}); výsledek zůstává neznámý, žádný broker write mimo stopu`,
+        );
+        options.onAudit?.([{
+          at: clock(), leaderEventId: `auto-close-unscoped:${trigger}:${seed}:${accountId}`,
+          accountId, kind: 'blocked', reason: error.message,
+        }]);
+        options.onError?.(error);
+      }
+    };
     const hasExposure = accountIds.some(accountId =>
       [...(positionsByAccount.get(accountId) ?? [])].some(([symbol, quantity]) => (
         quantity !== 0
@@ -5970,7 +6095,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       )));
     // Nulová lokální expozice nevyžaduje broker side effect; následující
     // reconciliation je právě autoritativní důkaz, že stav zůstal flat.
-    if (!hasExposure) return { flat: true, acted: false };
+    if (!hasExposure) {
+      if (unscopedExposure.length > 0) {
+        reportUnscopedExposure();
+        return { flat: false, acted: false };
+      }
+      return { flat: true, acted: false };
+    }
     if (autoCloseEpisodeAttempts >= AUTO_CLOSE_MAX_ATTEMPTS_PER_EPISODE) {
       options.onAudit?.([{
         at: clock(), leaderEventId: `auto-close-limit:${trigger}:${seed}`, kind: 'blocked',
@@ -5989,15 +6120,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         } : {}),
       });
       const acted = result.canceledOrders > 0 || result.submittedClosures > 0;
+      const flat = result.flat && unscopedExposure.length === 0;
+      if (unscopedExposure.length > 0) reportUnscopedExposure();
       lastAutoClose = {
-        at, operationId, trigger, scope, accountIds, flat: result.flat,
+        at, operationId, trigger, scope, accountIds, flat,
         canceledOrders: result.canceledOrders, submittedClosures: result.submittedClosures,
       };
       options.onAudit?.([{
         at: clock(), leaderEventId: operationId, kind: 'blocked',
         reason: `auto-close (${trigger}, ${scope}): zrušeno ${result.canceledOrders} příkazů, zavřeno ${result.submittedClosures} pozic`,
       }]);
-      if (result.flat) {
+      if (flat) {
         autoCloseEpisodeAttempts = 0;
         await syncLiveCopyExposureFlag('clear');
         if (acted) {
@@ -6011,7 +6144,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           });
         }
       }
-      return { flat: result.flat, acted };
+      return { flat, acted };
     } catch (error) {
       lastAutoClose = {
         at, operationId, trigger, scope, accountIds, flat: false,
@@ -10025,7 +10158,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     reconciliationRequestsPending += 1;
     const reconciliation = reconciliationTail.then(async () => {
       let lastStale: ReconciliationStaleSnapshotError | null = null;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
+      // První snapshot může zneplatnit order event z vlastního bezpečného
+      // sweep cancelu. Třetí a poslední běh ponechá ještě jeden omezený
+      // read-only pokus pro skutečný živý event; broker write se neopakuje,
+      // protože další snapshot už vidí terminální order.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
           return await runReconciliation(reconciliationOptions, requestedGeneration);
         } catch (reason) {

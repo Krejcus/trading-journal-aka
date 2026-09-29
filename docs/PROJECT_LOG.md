@@ -251,6 +251,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — Balíček 6b: review regrese leader-flat/auto-close/ST4 (Codex)
+
+- Leader-flat guard čte pro každý účet sekvenčně ordery a až potom pozice.
+  Vyplněný vlastní OSO parent s nulovou pozicí a stále aktivní ochranou je
+  nekonzistentní snapshot: nejvýše 3× se opakuje pouze read, pak fail-closed
+  bez cancelu. Ochranné nohy i exit evidence guardu jsou omezené na entry
+  linii dané epochy; pending dítě otevřeného nevyplněného OSO parentu používá
+  stejnou výjimku jako sweep a nezpůsobí falešný DISARM.
+- Auto-close stopa participujícího followera zahrnuje aktuálně otevřené symboly
+  leadera. Expozice mimo doloženou stopu se nikdy nevydá za flat: zůstane
+  nedotčená, vznikne blocked audit + onError, výsledek je unknown a durable
+  `liveCopyOpenSince` se nemaže. Reconciliation má třetí omezený pokus, aby
+  vlastní sweep cancel nespotřeboval jedinou rezervu pro živý stream event.
+- Review sondy PA/PB/PC a P1/P1c/P2–P6 byly převedeny na aserce. Před opravou
+  cílený soubor reprodukoval 7 pádů; po opravě 22/22, sousední sada 105/105.
+  Předepsaná celá copier sada mimo sandbox finálně prošla: 169 souborů + 1
+  skipped, 1946 testů + 1 todo, exit 0. První sandbox běh měl 89 očekávaných
+  `listen EPERM 127.0.0.1` pádů a 1 skutečnou epochovou regresi; ta byla
+  opravena. Časový B6/R6 jednou padl v plné sadě a 1/3 prvních izolovaných
+  běhů, potom celý soubor prošel 32/32 třikrát a finální plná sada byla čistá.
+- Root `tsc --noEmit` má pouze povolené chyby Chrome typů a
+  `@crxjs/vite-plugin` v `extension/`; controller/testy jsou bez TS chyby.
+  Bez commitu, push/deploye, instalace závislostí, broker API, ARM/Flatten ani
+  reinstalu workeru.
+
 ### 2026-09-29 — Balíček 6: V9 ownership auto-close, V4 durable guard a ST4 fence (Codex)
 
 - Auto-close nyní úplně vynechá pouze followery s `enabled=false`; jejich
