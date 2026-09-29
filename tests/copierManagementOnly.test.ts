@@ -147,7 +147,7 @@ describe('management-only after a protected target modify race', () => {
         .toEqual(expect.arrayContaining(Array.from({ length: 6 }, () => (
           expect.objectContaining({ status: 'waived', reason: expect.stringContaining('management-only') })
         ))));
-
+      // Kontrola pozic nesmí během správy otevřených kopií vypnout jejich řízení.
       await expect(controller.reconcile()).rejects.toThrow('správy otevřených kopií');
       expect(controller.status()).toMatchObject({ armed: true, managementOnly: expect.any(Object) });
 
@@ -202,10 +202,85 @@ describe('management-only after a protected target modify race', () => {
       expect(broker.placedRequests().length - ordinaryOrdersBeforeBlockedEntry).toBe(6);
       expect(controller.status()).toMatchObject({ armed: true, managementOnly: expect.any(Object) });
       expect(broker.liquidateRequests()).toEqual([]);
+
+      // Exity jsou odeslané, ale ještě nevyplněné: správa kopií pořád běží,
+      // takže Kontrola pozic se dál odmítá a nevypne ARM.
+      await expect(controller.reconcile()).rejects.toThrow('správy otevřených kopií');
+      expect(controller.status()).toMatchObject({ armed: true, managementOnly: expect.any(Object) });
     } finally {
       controller.stop();
     }
   }, 20_000);
+
+  it('venue-managed navýšení stopu s plnou OSO ochranou přejde do management-only bez auto-close', async () => {
+    let now = 9_000;
+    const clock = () => ++now;
+    const oneFollower: CopyGroupConfig = {
+      ...group,
+      id: 'management-only-stop-venue-coverage',
+      followers: [group.followers[0]],
+    };
+    const broker = createMockBroker({
+      behavior: () => ({ kind: 'working' }),
+      clock,
+      nativeLiquidate: true,
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: oneFollower,
+      clock,
+      osoCorrelationWindowMs: 5,
+    });
+    try {
+      broker.setConnected(true);
+      await controller.waitForIdle();
+      await controller.reconcile();
+      controller.arm();
+      broker.emitEvent({ type: 'order', order: leaderOrder('stop-race-entry', { quantity: 1 }) });
+      broker.emitEvent({ type: 'order', order: leaderOrder('stop-race-stop', {
+        parentOrderId: 'stop-race-entry', side: 'Sell', orderType: 'Stop', quantity: 1,
+        limitPrice: undefined, stopPrice: 30_100,
+      }) });
+      broker.emitEvent({ type: 'order', order: leaderOrder('stop-race-target', {
+        parentOrderId: 'stop-race-entry', side: 'Sell', quantity: 1, limitPrice: 30_170.25,
+      }) });
+      await controller.waitForIdle();
+
+      broker.setPosition(100, symbol, 1);
+      broker.emitEvent({ type: 'position', position: { accountId: 100, symbol, netQuantity: 1 } });
+      broker.setPosition(200, symbol, 2);
+      broker.emitEvent({ type: 'position', position: { accountId: 200, symbol, netQuantity: 1 } });
+      await controller.waitForIdle();
+
+      const followerStop = broker.orders().find(order => order.accountId === 200 && order.orderType === 'Stop');
+      const followerTarget = broker.orders().find(order => (
+        order.accountId === 200 && order.orderType === 'Limit' && order.parentOrderId != null
+      ));
+      expect(followerStop).toBeDefined();
+      expect(followerTarget).toBeDefined();
+      followerStop!.quantity = 2;
+      followerTarget!.quantity = 2;
+
+      broker.emitEvent({ type: 'order', order: leaderOrder('stop-race-stop', {
+        parentOrderId: 'stop-race-entry', side: 'Sell', orderType: 'Stop', quantity: 1,
+        limitPrice: undefined, stopPrice: 30_110, sourceVersion: '2:Working', updatedAt: 2,
+      }) });
+      await controller.waitForIdle();
+
+      expect(controller.status()).toMatchObject({
+        armed: true,
+        reconciliationRequired: false,
+        managementOnly: {
+          source: 'protected-target-modify',
+          accountIds: [200],
+        },
+      });
+      expect(broker.liquidateRequests()).toEqual([]);
+    } finally {
+      controller.stop();
+    }
+  });
 
   it('never enters management-only when the exact stop is not working', async () => {
     let now = 10_000;

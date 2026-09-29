@@ -749,6 +749,54 @@ describe('ostrý režim', () => {
     expect(modified.runtime.state.lastSequence).toBe(4);
   });
 
+  it('posun nativního OSO stopu přijme venue-managed quantity jen podle čerstvé pozice', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const clock = stepClock();
+    const store = createMemoryCopierStore();
+    const opened = await processOsoPair({
+      pair: {
+        entryOrderId: 'entry-venue-stop', stopOrderId: 'stop-venue-stop',
+        targetOrderId: 'target-venue-stop', accountId: 100, symbol: 'MNQU6',
+        entrySide: 'Buy', quantity: 13, entryOrderType: 'Limit', entryLimitPrice: 30_000,
+        stopPrice: 29_950, targetPrice: 30_100, detectedAt: 10,
+        correlation: 'inferred-window',
+      },
+      event: event({ id: 'oso-venue-stop', orderId: 'stop-venue-stop', sequence: 3 }),
+      group: soloGroup, runtime: createRuntime(createCopierState([], 2)),
+      context: liveGate(), broker, clock, store,
+    });
+    const mapped = opened.runtime.osoOutbox.get('oso:g1:entry-venue-stop:200');
+    expect(mapped?.firstBrokerOrderId).toBeTruthy();
+    broker.setPosition(200, 'MNQU6', 15);
+    const originalLookup = broker.findOrderById.bind(broker);
+    broker.findOrderById = async (accountId, brokerOrderId) => {
+      const lookup = await originalLookup(accountId, brokerOrderId);
+      return brokerOrderId === mapped?.firstBrokerOrderId && lookup.order
+        ? { ...lookup, order: { ...lookup.order, quantity: 15, filledQuantity: 0, status: 'working' as const } }
+        : lookup;
+    };
+
+    const modified = await processLeaderEvent({
+      event: event({
+        id: 'stop-venue-stop-move', orderId: 'stop-venue-stop', kind: 'replaced',
+        sequence: 4, side: 'Sell', orderType: 'Stop', limitPrice: undefined, stopPrice: 29_975,
+      }),
+      group: soloGroup, runtime: opened.runtime, context: liveGate(), broker, clock, store,
+    });
+
+    expect(broker.modifyRequests()).toEqual([]);
+    expect(modified.runtime.state.links.get('stop-venue-stop')?.[0]).toMatchObject({
+      quantity: 13,
+      stopPrice: 29_950,
+      nativeOsoRole: 'stop',
+    });
+    expect([...modified.runtime.cancelOutbox.values()]
+      .find(entry => entry.brokerOrderId === mapped?.firstBrokerOrderId)).toMatchObject({
+        status: expect.stringMatching(/unknown|abandoned/),
+        reason: expect.stringContaining('venue-managed OSO quantity 15'),
+      });
+  });
+
   it('zrušený OSO parent po modify nepustí korekci SL ani targetu', async () => {
     const broker = createMockBroker({
       behavior: () => ({ kind: 'working' }),

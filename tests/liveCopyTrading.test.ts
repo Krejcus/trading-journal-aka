@@ -183,6 +183,27 @@ describe('liveCopyTrading', () => {
     });
   });
 
+  it('povolí start workeru s ručně vypnutým followerem, který zmizel z OAuth', () => {
+    const stored: CopyGroupConfig = {
+      id: 'g', name: 'Test', enabled: true, leaderAccountId: 1,
+      followers: [
+        { accountId: 2, mode: 'on-submit', multiplier: 1 },
+        { accountId: 3, mode: 'on-submit', multiplier: 1, enabled: false },
+      ],
+    };
+    const accounts = [
+      { id: 1, active: true, canTrade: true },
+      { id: 2, active: true, canTrade: true },
+    ];
+
+    expect(validateStoredCopyGroupForStartup(stored, accounts, []))
+      .toEqual({ valid: true, errors: [] });
+    expect(validateStoredCopyGroupForStartup({
+      ...stored,
+      followers: stored.followers.map(follower => ({ ...follower, enabled: true })),
+    }, accounts, [])).toMatchObject({ valid: false });
+  });
+
   it('odhalí stale člena a náhradnímu účtu nepřenese násobek ani maxContracts', () => {
     const group: CopyGroupConfig = {
       id: 'g', name: 'Test', enabled: false, leaderAccountId: 1,

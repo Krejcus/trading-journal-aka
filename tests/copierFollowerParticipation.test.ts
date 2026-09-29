@@ -287,6 +287,23 @@ describe('manual follower participation', () => {
     h.controller.stop();
   });
 
+  it('flat followera lze po incidentu vždy ručně vypnout přes dvojitou read-only bariéru', async () => {
+    const h = await harness();
+    await h.controller.applyAccountEligibilityExclusions([{
+      accountId: 200, state: 'breached', reason: 'broker incident',
+    }]);
+
+    expect(h.controller.status().followerParticipation?.[0]).toMatchObject({
+      configuredEnabled: true,
+      canToggle: true,
+      automaticExclusion: expect.stringContaining('breached'),
+    });
+    const updated = await h.controller.setFollowerEnabled(200, false, h.persist);
+    expect(updated.followers[0]).toMatchObject({ accountId: 200, enabled: false });
+    expect(h.broker.placedRequests()).toEqual([]);
+    h.controller.stop();
+  });
+
   it('durable daily-loss cut nelze ručním zapnutím smazat', async () => {
     const now = Date.now();
     const initial = emptySnapshot();

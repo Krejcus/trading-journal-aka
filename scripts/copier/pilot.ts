@@ -77,6 +77,7 @@ import {
   markMacCopierDevicePaired,
 } from '../../server/macCopierDevice';
 import { retryTransient, type RetryTransientOptions } from '../../server/retryTransient';
+import { createHostSleepDetector } from '../../lib/hostSleepDetector';
 
 /**
  * Tradovate WebSocket `user/syncrequest` under load (17. 9. 2026) needed more
@@ -483,6 +484,10 @@ async function runLocalAgent(
     accounts,
     durableSnapshot.safety?.accountEligibility ?? [],
   );
+  const startupMissingDisabledFollowers = group.followers.filter(follower => (
+    follower.enabled === false
+    && !accounts.some(account => account.id === follower.accountId)
+  ));
   const retireMissingGroupId = stringFlag('retire-missing-group-id', false);
   const retirementBootstrap = persistedGroup != null && canBootstrapMissingDurableGroupForRetirement(
     group, accounts.map(account => account.id), retireMissingGroupId,
@@ -496,6 +501,12 @@ async function runLocalAgent(
   }
   if (retirementBootstrap) {
     console.warn(`Durable skupina ${group.id} chybí celá v OAuth; worker startuje pouze DISARMED pro auditované vyřazení. Staré účty tím nejsou potvrzené jako flat.`);
+  }
+  for (const follower of startupMissingDisabledFollowers) {
+    console.warn(
+      `${new Date().toISOString()} STARTUP OPTIONAL SKIP účet=${follower.accountId} `
+      + 'důvod=ručně vypnutý follower není viditelný v OAuth; execution zůstává zakázaná',
+    );
   }
   const releaseLock = await acquireProcessLock(resolve(root, `${key}.lock`));
   const journals: Array<Awaited<ReturnType<typeof startLocalCopierJournal>>> = [];
@@ -844,10 +855,27 @@ async function runLocalAgent(
       // Post-connect recovery musí vidět stejný optional-skip jako ruční
       // Kontrola pozic, jinak zmizelý breached follower shodí recovery.
       resolveMissingOptionalAccountIds: prepareGroupAccounts
-        ? async current => (await prepareGroupAccounts({
-          required: [current.leaderAccountId],
-          optional: current.followers.map(follower => follower.accountId),
-        })).missingOptional
+        ? async current => {
+          const freshSnapshot = await runtimeStore.load();
+          const knownIneligible = new Set(
+            (freshSnapshot.safety?.accountEligibility ?? [])
+              .filter(entry => entry.state !== 'active')
+              .map(entry => entry.accountId),
+          );
+          const optional = current.followers
+            .filter(follower => follower.enabled === false || knownIneligible.has(follower.accountId))
+            .map(follower => follower.accountId);
+          const optionalSet = new Set(optional);
+          return (await prepareGroupAccounts({
+            required: [
+              current.leaderAccountId,
+              ...current.followers
+                .map(follower => follower.accountId)
+                .filter(accountId => !optionalSet.has(accountId)),
+            ],
+            optional,
+          })).missingOptional;
+        }
         : undefined,
       // Trade event -> okamžitý poll s příznakem -> server pushne hned.
       onCopyEvent: event => {
@@ -905,6 +933,15 @@ async function runLocalAgent(
           failurePhase === 'storage' ? 'snapshot-spool-write-failed' : captureError));
       },
     });
+    if (startupMissingDisabledFollowers.length > 0) {
+      auditTail = auditTail.then(() => writeAudit(startupMissingDisabledFollowers.map(follower => ({
+        at: Date.now(),
+        leaderEventId: `startup-disabled-oauth-missing:${group.id}:${follower.accountId}`,
+        kind: 'skipped' as const,
+        accountId: follower.accountId,
+        reason: 'ručně vypnutý follower chybí v OAuth; worker nastartoval bez jeho execution route',
+      }))));
+    }
     if (await abortLateStartupIfStopping()) return;
     await waitUntil(
       () => stopPromise != null || controller?.status().connected === true,
@@ -1131,6 +1168,16 @@ async function runLocalAgent(
     }
     console.log(`LOCAL AGENT ${agent.origin} leader=${leaderId} followers=${group.followers.map(item => `${item.accountId}@${item.multiplier}${item.maxContracts != null ? `@max${item.maxContracts}` : ''}`).join(',')}`);
     console.log('Stav je DISARMED. ARM, Flatten, Flatten All a násobek vyžadují explicitní akci v AlphaTrade LIVE UI.');
+    const hostSleepDetector = createHostSleepDetector();
+    const detectHostSleep = () => {
+      const incident = hostSleepDetector.observe();
+      if (!incident) return;
+      console.warn(
+        `${new Date(incident.detectedAt).toISOString()} HOST SLEEP Mac neodpovídal od `
+        + `${new Date(incident.unresponsiveSince).toISOString()} (${Math.round(incident.sleepDurationMs / 1_000)} s)`,
+      );
+      controller?.reportHostSleep(incident);
+    };
     // Plynulá obměna WS před cyklem Tradovate access tokenu (~80 min):
     // po 50 min se čeká na flat/klidný moment, po 70 min se obměňuje i
     // uprostřed obchodu — řízený sub-sekundový swap je bezpečnější než
@@ -1159,6 +1206,7 @@ async function runLocalAgent(
       console.log('SERVICE LIFETIME persistent; plánovaný časový restart je vypnutý.');
       while (!stopPromise) {
         await delay(1_000);
+        detectHostSleep();
         maybeRenewSockets();
       }
       await stop('service-stop');
@@ -1169,6 +1217,7 @@ async function runLocalAgent(
       const deadline = Date.now() + lifetime.minutes * 60_000;
       while (Date.now() < deadline && !stopPromise) {
         await delay(1_000);
+        detectHostSleep();
         maybeRenewSockets();
       }
       await stop('time-limit');

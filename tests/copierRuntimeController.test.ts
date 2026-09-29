@@ -12,7 +12,7 @@ import { createOsoOutboxEntry, markOsoAcknowledged, markOsoRejected } from '../s
 import { createMockBroker } from '../services/mockBroker';
 import { createBrokerRouter } from '../services/brokerRouter';
 import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from '../services/liveCopyTrading';
-import { COPIER_DISARM_HISTORY_LIMIT } from '../lib/copierDisarmReason';
+import { COPIER_DISARM_HISTORY_LIMIT, createCopierDisarmRecord } from '../lib/copierDisarmReason';
 
 const group: CopyGroupConfig = {
   id: 'g1', name: 'Group', enabled: true, leaderAccountId: 100,
@@ -508,6 +508,105 @@ describe('bootstrapCopierRuntime', () => {
     expect(status.disarmHistory).toHaveLength(COPIER_DISARM_HISTORY_LIMIT);
     expect(status.disarmHistory?.every(record => record.code === 'manual')).toBe(true);
     expect(status.lastDisarm).toEqual(status.disarmHistory?.at(-1));
+    controller.stop();
+  });
+
+  it('historie odzbrojení přežije restart ze stejného durable snapshotu', async () => {
+    const broker = createMockBroker();
+    const store = createMemoryCopierStore();
+    const first = await bootstrapCopierRuntime({ broker, store, group, clock: stepClock() });
+    broker.setConnected(true);
+    await first.waitForIdle();
+    await first.reconcile();
+    first.arm();
+    first.disarm();
+    await first.waitForIdle();
+    const recorded = first.status().lastDisarm;
+    first.stop();
+
+    broker.setConnected(false);
+    const restarted = await bootstrapCopierRuntime({ broker, store, group, clock: stepClock() });
+    expect(restarted.status()).toMatchObject({
+      lastDisarm: recorded,
+      disarmHistory: [recorded],
+    });
+    restarted.stop();
+  });
+
+  it('veřejná read-only reconciliation za ARM nejprve auditovaně DISARMuje bez FAIL-CLOSED incidentu', async () => {
+    const broker = createMockBroker();
+    const controller = await bootstrapCopierRuntime({ broker, store: createMemoryCopierStore(), group, clock: stepClock() });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    await expect(controller.reconcile()).resolves.toMatchObject({ authoritativelyClean: true });
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      lastError: null,
+      lastDisarm: { code: 'reconcile-request' },
+      disarmHistory: [expect.objectContaining({ code: 'reconcile-request' })],
+    });
+    controller.stop();
+  });
+
+  it('po probuzení Macu zůstane DISARMED s pravdivým durable host-sleep důvodem', async () => {
+    const broker = createMockBroker();
+    const store = createMemoryCopierStore();
+    const controller = await bootstrapCopierRuntime({ broker, store, group, clock: stepClock() });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    controller.reportHostSleep({
+      unresponsiveSince: 1_000,
+      detectedAt: 61_000,
+      sleepDurationMs: 59_000,
+    });
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      connected: true,
+      lastError: expect.stringContaining('Mac neodpovídal od'),
+      lastDisarm: { code: 'host-sleep' },
+      hostSleep: { unresponsiveSince: 1_000, detectedAt: 61_000, sleepDurationMs: 59_000 },
+    });
+    expect((await store.load()).safety?.disarmHistory?.at(-1)).toMatchObject({ code: 'host-sleep' });
+    controller.stop();
+  });
+
+  it('ARM s follower risk pravidlem vyžaduje čerstvý ověřený snapshot stejné session', async () => {
+    const now = 1_000_000;
+    const broker = createMockBroker();
+    const riskGroup: CopyGroupConfig = {
+      ...group,
+      followers: [{ ...group.followers[0], dailyLossCutUsd: 500 }],
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker, store: createMemoryCopierStore(), group: riskGroup, clock: () => now,
+    });
+    broker.listAccountRiskSnapshots = async () => [];
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+
+    expect(() => controller.arm()).toThrow('nemá čerstvý ověřený risk snapshot');
+
+    broker.listAccountRiskSnapshots = async accountIds => accountIds.map(accountId => ({
+      accountId,
+      at: now,
+      realizedPnlUsd: 0,
+      netLiq: 50_000,
+      minNetLiq: 48_000,
+      dailyLossAutoLiq: 1_250,
+      trailingMaxDrawdown: 2_000,
+    }));
+    await controller.reconcile();
+    controller.arm();
+    expect(controller.status().armed).toBe(true);
     controller.stop();
   });
 
@@ -1681,6 +1780,7 @@ describe('bootstrapCopierRuntime', () => {
     if (!staleFollower) throw new Error('Test setup: follower order nevznikl');
     staleFollower.status = 'canceled';
 
+    controller.disarm();
     await controller.reconcile();
     controller.arm();
     broker.emitEvent({ type: 'order', order: leaderOrder({
@@ -3776,7 +3876,7 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     controller.stop();
   });
 
-  it('ruční Kontrola pozic za LIVE ARM vždy skončí DISARMED', async () => {
+  it('ruční Kontrola pozic za LIVE ARM auditovaně DISARMuje a zůstane read-only', async () => {
     const broker = createMockBroker();
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group, clock: stepClock(),
@@ -3786,11 +3886,12 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     await controller.reconcile();
     controller.arm();
 
-    await controller.reconcile();
+    await expect(controller.reconcile()).resolves.toMatchObject({ authoritativelyClean: true });
     expect(controller.status()).toMatchObject({
       armed: false,
       reconciliationRequired: false,
       lastError: null,
+      lastDisarm: { code: 'reconcile-request' },
     });
     expect(broker.placedRequests()).toHaveLength(0);
     controller.stop();
@@ -4900,6 +5001,28 @@ describe('autoritativní follower magnitude guard', () => {
     controller.stop();
   });
 
+  it('další divergence za DISARMED pouze audituje a nepřepíše původní lastError', async () => {
+    const { broker, controller, setNets } = await setup();
+    setNets(2, 5);
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 2 } });
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 5 } });
+    await controller.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    await controller.waitForIdle();
+    const originalCause = controller.status().lastError;
+    expect(originalCause).toContain('pozici 5');
+
+    setNets(2, 6);
+    broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 6 } });
+    await controller.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    await controller.waitForIdle();
+
+    expect(controller.status().lastError).toBe(originalCause);
+    expect(controller.status().lastDisarm?.detail).toContain('pozici 5');
+    controller.stop();
+  });
+
   it('nehlásí falešný drift, když follower scale-in event předběhne leader position event', async () => {
     const { broker, controller, setNets, store } = await setup();
     setNets(2, 2);
@@ -4943,9 +5066,11 @@ describe('LeaderFlatGuard runtime integrace', () => {
   const setupLeaderFlatGuard = async ({
     autoCloseFollowerPositions,
     graceMs,
+    leaderFlatReadTimeoutMs,
   }: {
     autoCloseFollowerPositions: boolean;
     graceMs: number;
+    leaderFlatReadTimeoutMs?: number;
   }) => {
     let now = 100;
     const clock = () => now;
@@ -4992,6 +5117,13 @@ describe('LeaderFlatGuard runtime integrace', () => {
       safety: {
         ...initial.safety!,
         liveCopyOpenSince: 90,
+        disarmHistory: [createCopierDisarmRecord({
+          at: 96,
+          trigger: 'fail-closed',
+          detail: 'Copier fail-closed: leader je flat, follower exit stále čeká',
+          copiesOutcome: 'unknown',
+          episodeId: 'guard-owned-epoch',
+        })],
         accountEligibility: [{
           accountId: 200,
           state: 'active',
@@ -5039,6 +5171,7 @@ describe('LeaderFlatGuard runtime integrace', () => {
       leaderFlatGraceMs: graceMs,
       leaderFlatExitSettlementGraceMs: 0,
       leaderFlatInflightRetryMs: 1,
+      leaderFlatReadTimeoutMs,
       flattenConfirmationAttempts: 2,
       flattenConfirmationPollMs: 0,
       followerTransitionCorrelationWindowMs: 1_000,
@@ -5113,7 +5246,74 @@ describe('LeaderFlatGuard runtime integrace', () => {
       armed: false,
       reconciliationRequired: true,
       divergentAccounts: [200],
+      lastDisarm: {
+        episodeId: 'guard-owned-epoch',
+        copiesOutcome: 'guard-flattened',
+      },
     });
+    controller.stop();
+  });
+
+  it('visící leader-flat REST čtení skončí deadlinem a netvrdí, že leader je flat', async () => {
+    const { broker, controller, closeLeader, settleGuard } = await setupLeaderFlatGuard({
+      autoCloseFollowerPositions: true,
+      graceMs: 0,
+      leaderFlatReadTimeoutMs: 10,
+    });
+    const originalListPositions = broker.listPositions.bind(broker);
+    broker.listPositions = accountId => accountId === 100
+      ? new Promise(() => undefined)
+      : originalListPositions(accountId);
+
+    await closeLeader();
+    await settleGuard();
+
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      reconciliationRequired: true,
+      lastDisarm: {
+        code: 'leader-flat-read-failed',
+        episodeId: 'guard-owned-epoch',
+      },
+    });
+    expect(controller.status().lastError).toContain('nedokázal ověřit, zda leader zůstal flat');
+    expect(controller.status().lastError).not.toContain('leader je autoritativně flat');
+    expect(broker.liquidateRequests()).toEqual([]);
+    controller.stop();
+  });
+
+  it('leader-flat snapshot nového vstupu nepřepíše cache denního počítadla', async () => {
+    const { broker, controller, closeLeader, settleGuard } = await setupLeaderFlatGuard({
+      autoCloseFollowerPositions: false,
+      graceMs: 30,
+    });
+    await closeLeader();
+    // REST už vidí nový vstup, ale jeho stream fill dorazí až za guardem.
+    // Guard ho nesmí uložit jako pre-existing pozici a vyřadit z počítadla.
+    broker.setPosition(100, MNQ, 1);
+    await settleGuard();
+    expect(controller.status().lastError).toContain('leader není flat');
+
+    broker.emitEvent({
+      type: 'fill',
+      fill: {
+        fillId: 'post-guard-entry', tag: 'post-guard-entry', brokerOrderId: 'post-guard-entry',
+        accountId: 100, symbol: MNQ, side: 'Buy', quantity: 1, price: 30_000, filledAt: 200,
+      },
+    });
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: MNQ, netQuantity: 1 } });
+    broker.setPosition(100, MNQ, 0);
+    broker.emitEvent({
+      type: 'fill',
+      fill: {
+        fillId: 'post-guard-exit', tag: 'post-guard-exit', brokerOrderId: 'post-guard-exit',
+        accountId: 100, symbol: MNQ, side: 'Sell', quantity: 1, price: 30_001, filledAt: 210,
+      },
+    });
+    broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: MNQ, netQuantity: 0 } });
+    await controller.waitForIdle();
+
+    expect(controller.status().dailyStats).toMatchObject({ tradesToday: 1 });
     controller.stop();
   });
 
@@ -5163,7 +5363,10 @@ describe('LeaderFlatGuard runtime integrace', () => {
     expect((await store.load()).safety?.leaderExposureEpochs).toEqual([
       expect.objectContaining({ id: 'guard-owned-epoch', phase: 'resolved' }),
     ]);
-    expect(controller.status().armed).toBe(false);
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      lastDisarm: { episodeId: 'guard-owned-epoch', copiesOutcome: 'flat' },
+    });
     controller.stop();
   });
 
