@@ -69,11 +69,16 @@ describe('native snapshot test runtime selection', () => {
       status: status('ready'),
       last_seen_at: new Date(now - 100).toISOString(),
     }];
+    // Supabase builder je thenable: výběr ready workeru čte seznam, relay
+    // (selectRelayDeviceTarget) si stejnou tabulku znovu čte přes maybeSingle.
     const runtimeChain: Record<string, unknown> = {};
     runtimeChain.eq = vi.fn(() => runtimeChain);
+    runtimeChain.in = vi.fn(() => runtimeChain);
     runtimeChain.gte = vi.fn(() => runtimeChain);
     runtimeChain.order = vi.fn(() => runtimeChain);
-    runtimeChain.limit = vi.fn(async () => ({ data: runtimeRows, error: null }));
+    runtimeChain.limit = vi.fn(() => runtimeChain);
+    runtimeChain.maybeSingle = vi.fn(async () => ({ data: runtimeRows[0], error: null }));
+    runtimeChain.then = (resolve: (value: unknown) => unknown) => resolve({ data: runtimeRows, error: null });
 
     const recentChain: Record<string, unknown> = {};
     recentChain.eq = vi.fn(() => recentChain);
@@ -89,6 +94,10 @@ describe('native snapshot test runtime selection', () => {
     deviceChain.maybeSingle = vi.fn(async () => ({
       data: { id: '33333333-3333-4333-8333-333333333333' }, error: null,
     }));
+    // Relay vybírá z nerevokovaných zařízení seznamem (await na builder).
+    deviceChain.then = (resolve: (value: unknown) => unknown) => resolve({
+      data: [{ id: '33333333-3333-4333-8333-333333333333' }], error: null,
+    });
     const upsertChain = {
       select: () => ({
         maybeSingle: async () => ({

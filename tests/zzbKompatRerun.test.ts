@@ -72,15 +72,17 @@ describe('K1: jiná ARM konfigurace se atomicky přepne', () => {
   });
 });
 
-describe('KOMPAT UI (nezměněné) ↔ nové chyby', () => {
-  it('nové odmítnutí ARM UI neklasifikuje jako odmítnutí → dialog „není potvrzené" + outcomeUnknown', () => {
+// Po sloučení s UI větví (UI-10e) už UI nová odmítnutí workeru/relay zná:
+// definitivní reject se ukáže jako „nic se nezapnulo“, ne jako neověřený výsledek.
+describe('KOMPAT UI (po UI-10e) ↔ nové chyby', () => {
+  it('nové odmítnutí ARM UI klasifikuje jako definitivní odmítnutí s českým textem', () => {
     for (const reason of [
       new TradovateRequestError('copier-relay-arm-config-conflict', 409),
       new TradovateRequestError('copier-relay-worker-disconnected', 409),
       new Error('kopírka je zapnutá s jinou konfigurací — nejdřív vypni'),
       new Error('ARM odmítnut: vypršel deadline potvrzení; kopírka zůstává DISARMED'),
       new Error('superseded-by-brake'),
-    ]) expect(copierArmRejection(reason)).toBeNull();
+    ]) expect(copierArmRejection(reason)).toEqual(expect.any(String));
   });
 });
 
