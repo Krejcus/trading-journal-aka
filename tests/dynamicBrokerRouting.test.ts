@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBrokerRouter } from '../services/brokerRouter';
 import {
+  previewDynamicBrokerRoutes,
   refreshDynamicBrokerRoutes,
   resolveDynamicBrokerRoutes,
   type DynamicOAuthConnection,
@@ -27,6 +28,27 @@ const account = (
 });
 
 describe('dynamic account -> OAuth routing', () => {
+  it('dry-run ověří budoucí účty bez router.replaceRoutes', async () => {
+    const first = connection('first', [account(11)]);
+    const second = connection('second', [account(22), account(33)]);
+    const router = createBrokerRouter([
+      { broker: first.broker, accountIds: [11] },
+      { broker: second.broker, accountIds: [22] },
+    ]);
+    const replaceRoutes = vi.spyOn(router, 'replaceRoutes');
+
+    await expect(previewDynamicBrokerRoutes([first, second], {
+      required: [11, 33], optional: [],
+    })).resolves.toEqual({
+      accounts: [
+        expect.objectContaining({ id: 11, connectionId: 'first' }),
+        expect.objectContaining({ id: 33, connectionId: 'second' }),
+      ],
+      missingOptional: [],
+    });
+    expect(replaceRoutes).not.toHaveBeenCalled();
+  });
+
   it('najde nově přidaný účet a přepne ho bez worker reinstallu', async () => {
     const tradeify = connection('tradeify', [account(11)]);
     const lucid = connection('lucid', [account(22), account(63338592)]);

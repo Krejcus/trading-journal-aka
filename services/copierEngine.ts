@@ -214,7 +214,7 @@ export interface CopierState {
       until: number;
       realizedPnlUsd: number;
       cutUsd: number;
-      source: 'broker' | 'ledger' | 'manual';
+      source: 'broker' | 'ledger' | 'manual' | 'prop-reserve';
       /** Legacy záznam bez scope je session cut. */
       scope?: 'session' | 'trade';
       /** Idempotency klíč ručního Flatten followera. */

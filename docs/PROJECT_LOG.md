@@ -276,6 +276,40 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   Bez commitu, push/deploye, instalace závislostí, broker API, ARM/Flatten ani
   reinstalu workeru.
 
+### 2026-09-29 — Balíček 8: V1 transakční config, V3 scoped fence a V15 prop-reserve (Codex)
+
+- Pracovní větev `codex/copier-config-20260929`, bez commitu/deploye/reinstalu
+  workeru. Změna konfigurace se nyní nejprve sanitizuje, ověří proti
+  tighten-only, streamovým blockerům a routing dry-runu bez `replaceRoutes`.
+  Odmítnutá změna zachová zdravý ARM. Execution změna teprve potom provede
+  DISARM s důvodem `config-change` a dvě read-only autoritativní kola; selhání
+  po DISARM zůstává vypnuté bez auto-ARM. Metadata a neexpoziční pravidla jdou
+  samostatnou cestou a ARM neruší.
+- Relay odmítá 409 ještě před enqueue, pokud zvýšení násobku, aktivace
+  followera nebo změna replikace poruší session tighten-only. Agent loguje
+  původ příkazu (`loopback`/`relay`/`internal`) bez payloadu.
+- Heartbeat už nezvyšuje broker-state fence ani pending trade count. Follower
+  toggle i změna skupiny čtou REST mimo `eventTail`; výsledek se aplikuje až
+  za mezitím přijatými eventy s kontrolou account-scoped verzí, connection,
+  safety generation a group revision. Dvě read-only kola jsou pod limitem tří
+  a nikdy neopakují broker write. Skutečný order/position/connection event
+  změnu dál odmítá fail-closed.
+- V15 porovnává `dailyLossCutUsd - dnešní realizovaná ztráta` s `0,95 ×`
+  čerstvé aktuální prop rezervy ve stejné Tradovate session. Disabled/off nebo
+  už cutnutý follower se vynechá. Periodický breach založí per-account cut se
+  zdrojem `prop-reserve`; skupina zůstává ARM podle §3.3, kromě existujícího
+  invariantního fail-close při neznámém broker write výsledku. Neplatný čerstvý
+  snapshot při bootstrapu už neukončí proces: runtime startuje DISARMED s
+  `lastDisarm.code=prop-reserve`.
+- Regrese před opravou reprodukovaly: keepalive falešně rušil fence, nízká
+  rezerva vypnula celou skupinu, bootstrap vyhodil výjimku a odmítnutý config
+  po předčasném DISARM zůstal vypnutý. Po opravě cíleně prošlo 221/221
+  controller, 117/117 V3/V15/routing/reason a 113/113 agent/relay testů.
+  Přesná plná copier sada: 169 souborů prošlo, 1 skipped; 1952 testů prošlo,
+  1 todo. UI/lib disarm/liveCopy: 15 souborů, 159/159. `npx tsc --noEmit`
+  hlásí jen výslovně ignorované chyby `extension/` (chybějící Chrome typy a
+  `@crxjs/vite-plugin`), žádnou chybu v kořenovém copier kódu.
+
 ### 2026-09-29 — Balíček 6: V9 ownership auto-close, V4 durable guard a ST4 fence (Codex)
 
 - Auto-close nyní úplně vynechá pouze followery s `enabled=false`; jejich

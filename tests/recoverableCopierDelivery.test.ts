@@ -40,6 +40,7 @@ describe('recoverable copier delivery', () => {
     expect(f.options.agent.execute).toHaveBeenCalledWith(
       { type: 'arm-live' },
       {
+        source: 'relay',
         createdAt: Date.parse(f.remote.createdAt),
         clockSkewReserveMs: 2_000,
         deadlineAt: Date.parse(f.remote.expiresAt) - 10_000,

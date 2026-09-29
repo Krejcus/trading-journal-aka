@@ -95,7 +95,7 @@ const followerCutCount = (value: unknown, now: number): number => {
     if (accountId == null || accountId <= 0 || at == null || until == null
       || at > until || until <= now || realizedPnlUsd == null || cutUsd == null
       || (!manualTradeCut && cutUsd <= 0)
-      || (cut.source !== 'broker' && cut.source !== 'ledger' && cut.source !== 'manual') || !closedValid
+      || (cut.source !== 'broker' && cut.source !== 'ledger' && cut.source !== 'manual' && cut.source !== 'prop-reserve') || !closedValid
       || accountIds.has(accountId)) continue;
     accountIds.add(accountId);
   }

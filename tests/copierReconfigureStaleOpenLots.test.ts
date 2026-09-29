@@ -120,6 +120,47 @@ describe('brána změny skupiny a durable openLots', () => {
     } finally { controller.stop(); }
   });
 
+  it('P37: REST preflight změny skupiny nezadrží connection event a změnu odmítne', async () => {
+    const now = Date.UTC(2026, 8, 3, 7);
+    const { controller, broker, store } = await harness(now + 3_600_000, now);
+    let releaseRead!: () => void;
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>(resolve => { markReadStarted = resolve; });
+    const heldRead = new Promise<void>(resolve => { releaseRead = resolve; });
+    vi.spyOn(broker, 'listPositions').mockImplementationOnce(async () => {
+      markReadStarted();
+      await heldRead;
+      return [];
+    });
+    const change = controller.reconfigureGroup(nextGroup);
+    try {
+      await readStarted;
+      broker.emitEvent({ type: 'connection', connected: false, at: now });
+      await vi.waitFor(() => expect(controller.status().connected).toBe(false), { timeout: 300 });
+      releaseRead();
+      await expect(change).rejects.toThrow('během kontroly');
+      expect((await store.load()).safety.dailyStats!.openLots).toHaveLength(1);
+      expect(broker.placedRequests()).toEqual([]);
+    } finally {
+      releaseRead();
+      await change.catch(() => undefined);
+      controller.stop();
+    }
+  });
+
+  it('keepalive během REST preflightu změny skupiny fence nezneplatní', async () => {
+    const now = Date.UTC(2026, 8, 3, 7);
+    const { controller, broker } = await harness(now - 3_600_000, now);
+    vi.spyOn(broker, 'listPositions').mockImplementationOnce(async () => {
+      broker.emitEvent({ type: 'heartbeat', at: now });
+      return [];
+    });
+    try {
+      await expect(controller.reconfigureGroup(nextGroup)).resolves.toBeUndefined();
+      expect(controller.status().armed).toBe(false);
+    } finally { controller.stop(); }
+  });
+
   it('working příkaz blokuje obnovu i při nulové pozici', async () => {
     const now = Date.UTC(2026, 8, 3, 7);
     const { controller, broker, store } = await harness(now + 3_600_000, now);
@@ -154,6 +195,21 @@ describe('brána změny skupiny a durable openLots', () => {
       expect((await store.load()).safety.dailyStats!.openLots).toHaveLength(1);
       expect((await store.load()).safety.dailyStats!.unconfirmedFlatLots).toBeUndefined();
       expect(controller.status().armed).toBe(false);
+    } finally { controller.stop(); }
+  });
+
+  it('broker event během durable commit hranice zabrání aplikaci nové group', async () => {
+    const now = Date.UTC(2026, 8, 3, 7);
+    const { controller, broker, store } = await harness(now + 3_600_000, now);
+    const commit = store.commit.bind(store);
+    vi.spyOn(store, 'commit').mockImplementationOnce(async (snapshot, expectedRevision) => {
+      broker.emitEvent({ type: 'connection', connected: false, at: now });
+      return commit(snapshot, expectedRevision);
+    });
+    try {
+      await expect(controller.reconfigureGroup(nextGroup)).rejects.toThrow('během kontroly');
+      expect(controller.status()).toMatchObject({ armed: false });
+      expect(broker.placedRequests()).toEqual([]);
     } finally { controller.stop(); }
   });
 

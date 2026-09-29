@@ -238,7 +238,7 @@ export interface CopierAuditEntry {
   limit?: number;
   /** Konec pauzy/cutu; additivní metadata pro nové auditní druhy. */
   until?: number;
-  source?: 'broker' | 'ledger' | 'manual';
+  source?: 'broker' | 'ledger' | 'manual' | 'prop-reserve';
   cutUsd?: number;
   /** Additivni observability; nema zadny vliv na rozhodnuti ani retry. */
   latency?: {

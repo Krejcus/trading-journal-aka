@@ -44,7 +44,9 @@ const controller = () => {
     verifyAccountEligibility: vi.fn(),
     activateGroup: vi.fn(async () => undefined),
     reconfigureGroup: vi.fn(async () => undefined),
+    preflightGroupChange: vi.fn(),
     updateGroup: vi.fn(async () => undefined),
+    updateGroupMetadata: vi.fn(),
     flattenAccount: vi.fn(async () => ({ flat: true })),
     flattenFollowerTrade: vi.fn(async () => ({ flat: true })),
     flattenGroup: vi.fn(async () => { await flattenGate; return { flat: true }; }),
@@ -116,6 +118,7 @@ async function start(lose?: { pollOnce?: boolean; ackOnce?: boolean }): Promise<
   const agent = await newAgentMod.startLocalCopierExecutionAgent({
     controller: ctl.runtime, group: groupA(), port: 0,
     prepareGroupAccounts: async () => ({ missingOptional: [] }) as never,
+    previewGroupAccounts: async () => ({ missingOptional: [] }) as never,
   });
   let saved: RelayDelivery | null = null;
   const relay = newRelayMod.startMacCopierCommandRelay({

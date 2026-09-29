@@ -1,6 +1,7 @@
 export type CopierDisarmTrigger =
   | 'fail-closed'
   | 'manual'
+  | 'config-change'
   | 'arm-expiry'
   | 'kill-switch'
   | 'transport';
@@ -15,6 +16,7 @@ export type CopierCopiesOutcome =
 
 export type CopierDisarmCode =
   | 'config-change'
+  | 'prop-reserve'
   | 'unexplained-position-divergence'
   | 'prop-limit'
   | 'follower-position-mismatch'
@@ -60,6 +62,10 @@ const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }
   'config-change': {
     title: 'Kopírka se vypnula kvůli uložení změny skupiny.',
     nextStep: 'Zkontroluj uložené účty a pravidla; nový ARM zapni až po ověření skupiny.',
+  },
+  'prop-reserve': {
+    title: 'Kopírka zůstala vypnutá kvůli nedostatečné rezervě followera nad prop floorem.',
+    nextStep: 'Ověř aktuální rezervu a denní P&L účtu u prop firmy; po opravě nastavení spusť Kontrolu pozic.',
   },
   'unexplained-position-divergence': {
     title: 'Pozice followerů se odchýlily od očekávané kopie.',
@@ -181,11 +187,13 @@ export function classifyCopierDisarmReason(
   trigger: CopierDisarmTrigger = 'fail-closed',
 ): CopierDisarmCode {
   if (trigger === 'manual') return 'manual';
+  if (trigger === 'config-change') return 'config-change';
   if (trigger === 'arm-expiry') return 'arm-expired';
   if (trigger === 'kill-switch') return 'kill-switch';
   if (trigger === 'transport') return 'transport-lost';
 
   const text = detail.replace(/\s+/g, ' ').trim();
+  if (/\bprop-reserve\b|rezerv[auy].*prop floor/i.test(text)) return 'prop-reserve';
   if (/\bconfig-change\b|uložen(?:í|ím).*změn[ay] skupiny/i.test(text)) return 'config-change';
   if (/unexplained-position-divergence|nevysvětlen[áou]+ (?:position )?divergenc/i.test(text)) {
     return 'unexplained-position-divergence';

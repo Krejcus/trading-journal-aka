@@ -31,6 +31,7 @@ import { createSessionRenewalPolicy, type SessionRenewalPolicy } from '../../ser
 import { createBrokerRouter } from '../../services/brokerRouter';
 import { isOpenOrderStatus, type BrokerPort } from '../../services/brokerPort';
 import {
+  previewDynamicBrokerRoutes,
   refreshDynamicBrokerRoutes,
   resolveDynamicBrokerRoutes,
   type DynamicOAuthConnection,
@@ -369,6 +370,10 @@ async function runMultiConnectionAgent(): Promise<void> {
       }
       return { missingOptional: refreshed.missingOptional };
     },
+    async request => {
+      const preview = await previewDynamicBrokerRoutes(routingConnections, request);
+      return { missingOptional: preview.missingOptional };
+    },
   );
 }
 
@@ -389,6 +394,7 @@ async function runLocalAgent(
   baseBroker: BrokerPort,
   renewableBrokers: ReadonlyArray<{ broker: TradovateBrokerPort; label: string; connectionId: string }> = [],
   prepareGroupAccounts?: (request: PrepareGroupAccountsRequest) => Promise<PrepareGroupAccountsResult>,
+  previewGroupAccounts?: (request: PrepareGroupAccountsRequest) => Promise<PrepareGroupAccountsResult>,
 ): Promise<void> {
   const context = contexts[0];
   if (!context) throw new Error('Lokální agent potřebuje alespoň jedno OAuth spojení');
@@ -1012,6 +1018,7 @@ async function runLocalAgent(
         activeDispatchGroup = changed;
       },
       prepareGroupAccounts,
+      previewGroupAccounts,
     });
     if (await abortLateStartupIfStopping()) return;
     const pendingPairingContexts = contexts.filter(candidate => (
