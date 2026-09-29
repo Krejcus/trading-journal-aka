@@ -258,6 +258,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — Balíček 7d: ověřovací opravy 7c/ST22 (Codex)
+
+- Emergency `liquidatePosition` i `cancelOrder` se nyní evidují ve stejné
+  per-account mapě raw broker write promise jako background follower cut. Ani
+  timeout čekání, retry stejného `operationId`, nový Flatten, auto-close nebo
+  leader-flat guard proto neposílá na účet druhý write, dokud první raw request
+  skutečně nedoběhl. Chráněný účet je pravdivě v `failedAccounts` i
+  `remainingPositionAccounts`; UI vypíše jeho ID a per-account chybu.
+- Leader-flat diagnostika nese `failedAccounts`, background syntetickou chybu
+  dostanou jen skutečně chráněné účty, ne-background cut neuloží `closed` po
+  neúplném Flattenu a neúplný auto-close ukládá konkrétní `lastAutoClose.error`.
+- Mac provenance guard bez výjimky povolí jen shodný SHA nebo candidate, jehož
+  předkem je nainstalovaný commit. Downgrade, divergence/rebase a dirty candidate
+  či instalace vyžadují dokumentovaný `--allow-downgrade`. Chybějící git nebo
+  ne-git strom mají českou chybu; nečitelný starý manifest toleruje pouze flag.
+  Worker čte manifest best-effort, zůstane DISARMED a status ukáže
+  `provenance neznámá`, takže poškozená provenance neodstaví panic cestu.
+- Regrese před opravou: 7c chráněný účet měl prázdné remaining účty a P4 retry
+  poslal druhý liquidate; ancestry, dirty i best-effort testy také padaly. Po
+  opravě cíleně `114/114`; úplný předepsaný copier gate `180 passed + 1 skipped`,
+  `2135 passed + 1 todo`, exit 0. TypeScript s explicitně vyloučeným
+  `extension/`, oba script bundly, `bash -n` a `git diff --check` prošly.
+  Bez npm install/ci, commitu, push/deploye, reinstalu workeru, broker API nebo
+  mutujícího lokálního agenta.
+
 ### 2026-09-29 — Balíček 7c + ST22 (Codex)
 
 - Nouzový `flattenGroup`, běžný `flatten`, auto-close a leader-flat guard nyní

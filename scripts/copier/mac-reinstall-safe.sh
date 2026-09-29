@@ -69,28 +69,50 @@ if [[ -z "$LEADER" || -z "$FOLLOWERS" || -z "$MANIFEST" ]]; then
 fi
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-COMMIT="$(git -C "$REPO" rev-parse HEAD)"
+if ! COMMIT="$(git -C "$REPO" rev-parse HEAD 2>/dev/null)"; then
+  echo "STOP: Git provenance kandidáta nelze načíst; ověř git a platný checkout v ${REPO}" >&2
+  exit 7
+fi
+if ! DIRTY_TREE="$(git -C "$REPO" status --porcelain=v1 --untracked-files=normal 2>/dev/null)"; then
+  echo "STOP: stav git checkoutu ${REPO} nelze bezpečně ověřit" >&2
+  exit 7
+fi
 INSTALLED_SHA="$(printf '%s' "$STATUS_JSON" | python3 -c '
 import sys, json
 d = json.load(sys.stdin)
 installation = d.get("installation") or {}
 print(installation.get("gitSha") or "")
 ')"
+INSTALLED_DIRTY="$(printf '%s' "$STATUS_JSON" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+installation = d.get("installation") or {}
+print("1" if installation.get("dirty") is True else "0")
+')"
+if [[ ${#ALLOW_DOWNGRADE_ARGS[@]} -eq 0 && ( -n "$DIRTY_TREE" || "$INSTALLED_DIRTY" == "1" ) ]]; then
+  echo "STOP: candidate nebo nainstalovaný strom obsahuje necommitnuté změny; použij vědomě --allow-downgrade" >&2
+  exit 7
+fi
 if [[ -n "$INSTALLED_SHA" && "$COMMIT" != "$INSTALLED_SHA" && ${#ALLOW_DOWNGRADE_ARGS[@]} -eq 0 ]]; then
   if ! git -C "$REPO" cat-file -e "${INSTALLED_SHA}^{commit}" 2>/dev/null; then
     echo "STOP: nainstalovaný SHA ${INSTALLED_SHA} nelze v tomto repu ověřit; použij vědomě --allow-downgrade" >&2
     exit 7
   fi
-  if git -C "$REPO" merge-base --is-ancestor "$COMMIT" "$INSTALLED_SHA"; then
-    echo "STOP: candidate HEAD ${COMMIT} je starší než nainstalovaný worker ${INSTALLED_SHA}; použij vědomě --allow-downgrade" >&2
-    exit 7
+  if git -C "$REPO" merge-base --is-ancestor "$INSTALLED_SHA" "$COMMIT"; then
+    :
   else
     ANCESTRY_RC=$?
-    if (( ANCESTRY_RC != 1 )); then
+    if (( ANCESTRY_RC == 1 )); then
+      echo "STOP: candidate HEAD ${COMMIT} neobsahuje nainstalovaný commit ${INSTALLED_SHA} (downgrade nebo divergentní/rebase historie); použij vědomě --allow-downgrade" >&2
+      exit 7
+    else
       echo "STOP: git ancestry candidate/nainstalované verze nelze bezpečně ověřit" >&2
       exit 7
     fi
   fi
+fi
+if [[ ${#ALLOW_DOWNGRADE_ARGS[@]} -gt 0 && ( -n "$DIRTY_TREE" || "$INSTALLED_DIRTY" == "1" ) ]]; then
+  echo "VAROVÁNÍ: dirty provenance byla explicitně tolerována přes --allow-downgrade" >&2
 fi
 echo "Reinstall z ${REPO} @ ${COMMIT}"
 echo "leader=${LEADER} followers=${FOLLOWERS} port=${AGENT_PORT}"

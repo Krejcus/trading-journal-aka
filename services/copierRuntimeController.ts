@@ -1487,7 +1487,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const followerCutBackgroundAccounts = new Set<number>();
   const followerCutBackgroundJobsByAccount = new Map<number, Promise<unknown>>();
   const followerCutBackgroundAbortByAccount = new Map<number, (reason: string) => void>();
-  const followerCutBrokerWritesByAccount = new Map<number, Set<Promise<unknown>>>();
+  /**
+   * Všechny raw broker write promises mimo hlavní processor lane. Deadline
+   * ukončí čekání volajícího, ne samotný request; dokud raw promise běží,
+   * další risk-redukční cesta musí stejný účet pouze označit jako nejasný.
+   */
+  const inFlightBrokerWritesByAccount = new Map<number, Set<Promise<unknown>>>();
+  const registerInFlightBrokerWrite = <T>(accountId: number, raw: Promise<T>): Promise<T> => {
+    const pending = inFlightBrokerWritesByAccount.get(accountId) ?? new Set<Promise<unknown>>();
+    pending.add(raw);
+    inFlightBrokerWritesByAccount.set(accountId, pending);
+    const cleanup = () => {
+      const current = inFlightBrokerWritesByAccount.get(accountId);
+      current?.delete(raw);
+      if (current?.size === 0) inFlightBrokerWritesByAccount.delete(accountId);
+    };
+    void raw.then(cleanup, cleanup);
+    return raw;
+  };
   const cancelFollowerCutBackgroundLanes = (reason: string) => {
     for (const abort of followerCutBackgroundAbortByAccount.values()) abort(reason);
   };
@@ -1501,7 +1518,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const jobs = [...new Set(jobsByAccount.values())];
     if (jobs.length === 0) {
       return new Set(accountIds.filter(accountId => (
-        (followerCutBrokerWritesByAccount.get(accountId)?.size ?? 0) > 0
+        (inFlightBrokerWritesByAccount.get(accountId)?.size ?? 0) > 0
       )));
     }
     const timeoutMs = Math.max(1, options.followerCutDeadlineMs ?? 90_000);
@@ -1519,7 +1536,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (timer) clearTimeout(timer);
     }
     return new Set(accountIds.filter(accountId => (
-      (followerCutBrokerWritesByAccount.get(accountId)?.size ?? 0) > 0
+      (inFlightBrokerWritesByAccount.get(accountId)?.size ?? 0) > 0
       || (!settled && jobsByAccount.has(accountId))
     )));
   };
@@ -4843,7 +4860,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         canceledOrders: processed?.canceledOrders ?? 0,
         submittedClosures: processed?.submittedClosures ?? 0,
         flat: protectedAccountIds.size === 0 && processed?.flat === true,
-        remainingPositionAccounts: processed?.remainingPositionAccounts ?? [],
+        remainingPositionAccounts: [...new Set([
+          ...(processed?.remainingPositionAccounts ?? []),
+          ...protectedAccountIds,
+        ])],
         workingOrderAccounts: processed?.workingOrderAccounts ?? [],
         accounts,
         failedAccounts: accounts.filter(account => !account.ok).map(account => account.accountId),
@@ -4993,11 +5013,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ...broker,
         liquidatePosition: request => withEmergencyDeadline(
           `liquidate ${request.accountId}/${request.symbol}`,
-          () => broker.liquidatePosition!(request),
+          () => registerInFlightBrokerWrite(
+            request.accountId,
+            broker.liquidatePosition!(request),
+          ),
         ),
         cancelOrder: (accountId, brokerOrderId) => withEmergencyDeadline(
           `cancel ${accountId}/${brokerOrderId}`,
-          () => broker.cancelOrder(accountId, brokerOrderId),
+          () => registerInFlightBrokerWrite(
+            accountId,
+            broker.cancelOrder(accountId, brokerOrderId),
+          ),
         ),
         listPositions: accountId => readWithRetry(
           `positions ${accountId}`,
@@ -5055,7 +5081,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         canceledOrders: processed?.result.canceledOrders ?? 0,
         submittedClosures: processed?.result.submittedClosures ?? 0,
         flat: protectedAccountIds.size === 0 && processed?.result.flat === true,
-        remainingPositionAccounts: processed?.result.remainingPositionAccounts ?? [],
+        remainingPositionAccounts: [...new Set([
+          ...(processed?.result.remainingPositionAccounts ?? []),
+          ...protectedAccountIds,
+        ])],
         workingOrderAccounts: processed?.result.workingOrderAccounts ?? [],
         accounts,
         failedAccounts: accounts.filter(account => !account.ok).map(account => account.accountId),
@@ -5767,16 +5796,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const write = <T>(label: string, operation: () => Promise<T>) => {
       assertReturnBarrier();
       return withDeadline(label, () => {
-        const raw = operation();
-        const tracked = raw.finally(() => {
-          const pending = followerCutBrokerWritesByAccount.get(accountId);
-          pending?.delete(tracked);
-          if (pending?.size === 0) followerCutBrokerWritesByAccount.delete(accountId);
-        });
-        const pending = followerCutBrokerWritesByAccount.get(accountId) ?? new Set<Promise<unknown>>();
-        pending.add(tracked);
-        followerCutBrokerWritesByAccount.set(accountId, pending);
-        return tracked;
+        return registerInFlightBrokerWrite(accountId, operation());
       });
     };
     const cutBroker: BrokerPort = {
@@ -6104,6 +6124,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           cut.operationId ?? `cut-${accountId}-${Math.floor(cut.until / 86_400_000)}`,
           { preserveArm: true, scopedFailure },
         );
+        if (!flattenResult.flat) {
+          const detail = flattenResult.accounts
+            .filter(account => !account.ok)
+            .map(account => `${account.accountId}: ${account.error ?? 'účet není autoritativně flat'}`)
+            .join('; ');
+          throw new Error(
+            `Flatten follower cut ${accountId} není autoritativně potvrzený${detail ? ` (${detail})` : ''}`,
+          );
+        }
       }
     } catch (reason) {
       if (background) {
@@ -7142,25 +7171,30 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         });
       }
       if (protectedAccountIds.size > 0) {
-        const processedByAccount = new Map(
-          closeResult?.accounts.map(account => [account.accountId, account]),
-        );
-        const accounts = targetAccountIds.map(accountId => processedByAccount.get(accountId) ?? {
-          accountId,
-          ok: false,
-          canceledOrders: 0,
-          submittedClosures: 0,
-          error: `Leader-flat ${epoch.id}: účet má nejasný broker write z background lane; nový write byl bezpečně vynechán a je nutná read-only reconciliation`,
-          remainingPositions: 0,
-          workingOrders: 0,
-        });
+        const processedAccounts = closeResult?.accounts ?? [];
+        const processedAccountIds = new Set(processedAccounts.map(account => account.accountId));
+        const protectedAccounts = [...protectedAccountIds]
+          .filter(accountId => !processedAccountIds.has(accountId))
+          .map(accountId => ({
+            accountId,
+            ok: false,
+            canceledOrders: 0,
+            submittedClosures: 0,
+            error: `Leader-flat ${epoch.id}: účet má nejasný broker write z background lane; nový write byl bezpečně vynechán a je nutná read-only reconciliation`,
+            remainingPositions: 0,
+            workingOrders: 0,
+          }));
+        const accounts = [...processedAccounts, ...protectedAccounts];
         closeResult = {
           operationId: `leader-flat:${epoch.id}`,
           accountIds: targetAccountIds,
           canceledOrders: closeResult?.canceledOrders ?? 0,
           submittedClosures: closeResult?.submittedClosures ?? 0,
           flat: false,
-          remainingPositionAccounts: closeResult?.remainingPositionAccounts ?? [],
+          remainingPositionAccounts: [...new Set([
+            ...(closeResult?.remainingPositionAccounts ?? []),
+            ...protectedAccountIds,
+          ])],
           workingOrderAccounts: closeResult?.workingOrderAccounts ?? [],
           accounts,
           failedAccounts: accounts.filter(account => !account.ok).map(account => account.accountId),
@@ -7181,7 +7215,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       || !finalEpoch
       || !isLeaderFlatGuardTokenCurrent(finalEpoch, closeToken)
     ) {
-      failClosed(new Error('Leader-flat cílené zavření není autoritativně potvrzené'), {
+      const failedAccounts = result?.failedAccounts ?? [];
+      failClosed(new Error(
+        `Leader-flat cílené zavření není autoritativně potvrzené${failedAccounts.length > 0
+          ? `; failedAccounts=${failedAccounts.join(',')}`
+          : ''}`,
+      ), {
         autoClose: false,
         episodeId: epoch.id,
         recordWhenDisarmed: true,
@@ -7386,6 +7425,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       lastAutoClose = {
         at, operationId, trigger, scope, accountIds, flat,
         canceledOrders: result.canceledOrders, submittedClosures: result.submittedClosures,
+        ...(!flat ? {
+          error: `Auto-close není autoritativně potvrzený; failedAccounts=${result.failedAccounts.join(',') || 'neznámé'}${result.accounts
+            .filter(account => !account.ok && account.error)
+            .map(account => `; ${account.accountId}: ${account.error}`)
+            .join('')}`,
+        } : {}),
       };
       options.onAudit?.([{
         at: clock(), leaderEventId: operationId, kind: 'blocked',

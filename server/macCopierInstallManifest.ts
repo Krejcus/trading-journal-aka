@@ -23,6 +23,19 @@ export async function loadMacCopierInstallManifest(path: string): Promise<MacCop
   return validate(raw);
 }
 
+export async function loadMacCopierInstallManifestBestEffort(
+  path: string,
+  onWarning: (message: string) => void = message => console.warn(message),
+): Promise<MacCopierInstallManifest | undefined> {
+  try {
+    return await loadMacCopierInstallManifest(path);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    onWarning(`Mac copier provenance neznámá: install manifest nelze načíst (${detail})`);
+    return undefined;
+  }
+}
+
 export async function writeMacCopierInstallManifest(
   path: string,
   manifest: MacCopierInstallManifest,
@@ -41,22 +54,33 @@ export async function assertMacCopierInstallNotDowngrade(options: {
   candidate: MacCopierInstallManifest;
   installed: MacCopierInstallManifest | null;
   allowDowngrade: boolean;
-  /** true = candidate je předek nainstalovaného SHA, false = není, null = nelze ověřit. */
-  isAncestor: (candidateSha: string, installedSha: string) => Promise<boolean | null>;
+  /** true = první SHA je předek druhého SHA, false = není, null = nelze ověřit. */
+  isAncestor: (ancestorSha: string, descendantSha: string) => Promise<boolean | null>;
 }): Promise<void> {
-  if (options.allowDowngrade || !options.installed) return;
+  if (options.allowDowngrade) return;
+  if (options.candidate.dirty || options.installed?.dirty) {
+    throw new Error(
+      'Candidate nebo nainstalovaný worker pochází z dirty stromu s necommitnutými změnami; '
+      + 'instalace je bez přesné ancestry odmítnutá (pro vědomou výjimku použij --allow-downgrade)',
+    );
+  }
+  if (!options.installed) return;
   if (options.candidate.gitSha === options.installed.gitSha) return;
-  const older = await options.isAncestor(options.candidate.gitSha, options.installed.gitSha);
-  if (older === null) {
+  const containsInstalled = await options.isAncestor(
+    options.installed.gitSha,
+    options.candidate.gitSha,
+  );
+  if (containsInstalled === null) {
     throw new Error(
       `Nelze bezpečně ověřit git ancestry candidate ${options.candidate.gitSha} proti nainstalovanému ${options.installed.gitSha}; `
       + 'instalace zůstává odmítnutá (pro vědomou výjimku použij --allow-downgrade)',
     );
   }
-  if (older) {
+  if (!containsInstalled) {
     throw new Error(
-      `Candidate HEAD ${options.candidate.gitSha} je starší než nainstalovaný worker ${options.installed.gitSha}; `
-      + 'downgrade je odmítnutý (pro vědomou výjimku použij --allow-downgrade)',
+      `Candidate HEAD ${options.candidate.gitSha} neobsahuje nainstalovaný commit ${options.installed.gitSha}; `
+      + 'downgrade nebo divergentní/rebase historie je odmítnutá '
+      + '(pro vědomou výjimku použij --allow-downgrade)',
     );
   }
 }

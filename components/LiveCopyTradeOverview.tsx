@@ -80,6 +80,7 @@ import {
   type CopyReplicationMode,
   type LiveCopyTradingAdapter,
   type LiveCopyTradingCommand,
+  type LiveCopyTradingCommandResult,
 } from '../services/liveCopyTrading';
 import {
   copyGroupLibraryErrorMessage,
@@ -115,6 +116,19 @@ const DEFAULT_REDACTION: RedactionSettings = { visibleStart: 4, visibleEnd: 4 };
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
 const moneyWhole = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+
+type FlattenCommandResult = Extract<LiveCopyTradingCommandResult, { type: 'flatten' }>;
+
+export const manualFlattenFailureMessage = (result: FlattenCommandResult): string => {
+  const failedAccounts = result.failedAccounts ?? [
+    ...new Set([...result.remainingPositionAccounts, ...result.workingOrderAccounts]),
+  ];
+  const detail = failedAccounts.map(accountId => {
+    const account = result.accounts?.find(candidate => candidate.accountId === accountId);
+    return account?.error ? `${accountId}: ${account.error}` : String(accountId);
+  }).join('; ');
+  return `Flatten není potvrzen jako flat: selhaly účty=${detail || 'neznámé'}; positions=${result.remainingPositionAccounts.join(',') || 'none'} working=${result.workingOrderAccounts.join(',') || 'none'}`;
+};
 
 /** Režim replikace follower účtu — hodnoty přebírají chování Tradecopie. */
 export type ReplicationMode = CopyReplicationMode;
@@ -1399,9 +1413,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         ? await commandAdapter.execute(command)
         : undefined;
       if (result && result.type === 'flatten' && !result.flat) {
-        throw new Error(
-          `Flatten není potvrzen jako flat: positions=${result.remainingPositionAccounts.join(',') || 'none'} working=${result.workingOrderAccounts.join(',') || 'none'}`,
-        );
+        throw new Error(manualFlattenFailureMessage(result));
       }
       await update?.();
       // Přepínač followera potvrzuje sám animací v řádku; toast by jen rušil.

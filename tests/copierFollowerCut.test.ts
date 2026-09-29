@@ -212,6 +212,11 @@ const bootRuntime = async ({
   followerCutConfirmationAttempts,
   followerCutConfirmationPollMs,
   followerCutConfirmationMaxPollMs,
+  flattenBrokerRequestTimeoutMs,
+  flattenDeadlineMs,
+  flattenLiquidateAttempts,
+  flattenRetryPollMs,
+  armTtlMs,
   wait,
 }: {
   broker: MockBroker;
@@ -225,6 +230,11 @@ const bootRuntime = async ({
   followerCutConfirmationAttempts?: number;
   followerCutConfirmationPollMs?: number;
   followerCutConfirmationMaxPollMs?: number;
+  flattenBrokerRequestTimeoutMs?: number;
+  flattenDeadlineMs?: number;
+  flattenLiquidateAttempts?: number;
+  flattenRetryPollMs?: number;
+  armTtlMs?: number;
   wait?: (ms: number) => Promise<void>;
 }): Promise<BootedRuntime> => {
   const audits: CopierAuditEntry[] = [];
@@ -241,12 +251,16 @@ const bootRuntime = async ({
     followerCutConfirmationAttempts,
     followerCutConfirmationPollMs,
     followerCutConfirmationMaxPollMs,
+    flattenBrokerRequestTimeoutMs,
+    flattenDeadlineMs,
+    flattenLiquidateAttempts,
+    flattenRetryPollMs,
     wait,
   });
   broker.setConnected(true);
   await controller.waitForIdle();
   await controller.reconcile();
-  controller.arm({ shadowMode });
+  controller.arm({ shadowMode, ...(armTtlMs != null ? { ttlMs: armTtlMs } : {}) });
   await controller.waitForIdle();
   return { broker, controller, store, audits };
 };
@@ -693,6 +707,7 @@ describe('CopierRuntimeController — follower account cuts', () => {
           accountIds: [100, 200, 201],
           flat: false,
           failedAccounts: [200],
+          remainingPositionAccounts: [200],
           accounts: [
             { accountId: 100, ok: true },
             { accountId: 200, ok: false, error: expect.stringMatching(/nejasn|background write/i) },
@@ -730,6 +745,212 @@ describe('CopierRuntimeController — follower account cuts', () => {
       }
     },
   );
+
+  it('P4: retry stejného operationId nepošle druhý emergency liquidate, dokud první raw write běží', async () => {
+    const time = manualClock();
+    const broker = createMockBroker({
+      clock: time.clock,
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'fill', price: 20_000 }),
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId, at: time.now(), realizedPnlUsd: 0,
+    }));
+    const runtime = await bootRuntime({
+      broker,
+      group: riskGroup(),
+      time,
+      flattenConfirmationAttempts: 2,
+      flattenBrokerRequestTimeoutMs: 250,
+      flattenDeadlineMs: 1_000,
+      flattenLiquidateAttempts: 1,
+      flattenRetryPollMs: 10,
+      wait: async milliseconds => { time.advance(milliseconds); },
+    });
+    await emitLeaderFill({
+      ...runtime, time, side: 'Buy', price: 20_000, netQuantity: 1,
+    });
+    broker.setPosition(100, 'MNQU6', 1);
+
+    const nativeLiquidate = broker.liquidatePosition!;
+    let release201!: () => void;
+    let mark201Started!: () => void;
+    const account201Started = new Promise<void>(resolve => { mark201Started = resolve; });
+    const account201Gate = new Promise<void>(resolve => { release201 = resolve; });
+    let liquidate201Calls = 0;
+    let inFlight201 = 0;
+    let maxInFlight201 = 0;
+    vi.spyOn(broker, 'liquidatePosition').mockImplementation(async request => {
+      if (request.accountId !== 201) return nativeLiquidate(request);
+      liquidate201Calls += 1;
+      inFlight201 += 1;
+      maxInFlight201 = Math.max(maxInFlight201, inFlight201);
+      try {
+        if (liquidate201Calls === 1) {
+          mark201Started();
+          await account201Gate;
+        }
+        return await nativeLiquidate(request);
+      } finally {
+        inFlight201 -= 1;
+      }
+    });
+
+    const operationId = 'p4-emergency-retry-raw-write-001';
+    try {
+      const first = runtime.controller.flattenGroup(operationId);
+      await account201Started;
+      await expect(first).rejects.toThrow(/Flatten selhal|timeout|potvrzen/i);
+
+      await expect(runtime.controller.flattenGroup(operationId)).resolves.toMatchObject({
+        flat: false,
+        failedAccounts: [201],
+        remainingPositionAccounts: [201],
+        accounts: [
+          { accountId: 100, ok: true },
+          { accountId: 200, ok: true },
+          { accountId: 201, ok: false, error: expect.stringMatching(/nejasn|běžící|write/i) },
+        ],
+      });
+      expect(liquidate201Calls).toBe(1);
+      expect(maxInFlight201).toBe(1);
+
+      release201();
+      await new Promise(resolve => setTimeout(resolve, 25));
+      await expect(runtime.controller.flattenGroup(operationId)).resolves.toMatchObject({
+        flat: true,
+        failedAccounts: [],
+      });
+      expect(liquidate201Calls).toBe(1);
+    } finally {
+      release201();
+      runtime.controller.stop();
+    }
+  });
+
+  it('auto-close s chráněným účtem uloží failedAccounts a account.error do lastAutoClose.error', async () => {
+    const time = manualClock();
+    const broker = createMockBroker({
+      clock: time.clock,
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'fill', price: 20_000 }),
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId, at: time.now(), realizedPnlUsd: 0,
+    }));
+    const autoCloseGroup = riskGroup();
+    autoCloseGroup.safety = { ...autoCloseGroup.safety!, armExpiryFlatten: 'followers' };
+    const runtime = await bootRuntime({
+      broker,
+      group: autoCloseGroup,
+      time,
+      armTtlMs: 1_000,
+      followerCutDeadlineMs: 50,
+    });
+    await emitLeaderFill({
+      ...runtime, time, side: 'Buy', price: 20_000, netQuantity: 1,
+    });
+    let release!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const nativeLiquidate = broker.liquidatePosition!;
+    vi.spyOn(broker, 'liquidatePosition').mockImplementation(async request => {
+      if (request.accountId === 200) {
+        markStarted();
+        await gate;
+      }
+      return nativeLiquidate(request);
+    });
+    const cut = runtime.controller.flattenFollowerTrade(200, 'auto-close-protected-write-001');
+    void cut.catch(() => undefined);
+    try {
+      await started;
+      time.advance(2_000);
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await runtime.controller.waitForIdle();
+
+      expect(runtime.controller.status().autoClose).toMatchObject({
+        trigger: 'arm-expiry',
+        flat: false,
+        error: expect.stringMatching(/failedAccounts=200.*200:.*background lane/i),
+      });
+    } finally {
+      release();
+      await cut.catch(() => undefined);
+      runtime.controller.stop();
+    }
+  });
+
+  it('retry stejného operationId nepošle druhý emergency cancel, dokud první raw write běží', async () => {
+    const time = manualClock();
+    const broker = createMockBroker({
+      clock: time.clock,
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'working' }),
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId, at: time.now(), realizedPnlUsd: 0,
+    }));
+    const runtime = await bootRuntime({
+      broker,
+      group: riskGroup(),
+      time,
+      flattenConfirmationAttempts: 1,
+      flattenBrokerRequestTimeoutMs: 250,
+      flattenDeadlineMs: 1_000,
+      flattenLiquidateAttempts: 1,
+      flattenRetryPollMs: 10,
+      wait: async milliseconds => { time.advance(milliseconds); },
+    });
+    const working = await broker.placeOrder({
+      tag: 'emergency-cancel-raw-write',
+      accountId: 201,
+      symbol: 'MNQU6',
+      side: 'Sell',
+      quantity: 1,
+      orderType: 'Limit',
+      limitPrice: 21_000,
+    });
+    const nativeCancel = broker.cancelOrder.bind(broker);
+    let release!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let cancelCalls = 0;
+    vi.spyOn(broker, 'cancelOrder').mockImplementation(async (accountId, brokerOrderId) => {
+      cancelCalls += 1;
+      if (cancelCalls === 1) {
+        markStarted();
+        await gate;
+      }
+      return nativeCancel(accountId, brokerOrderId);
+    });
+    const operationId = 'emergency-cancel-retry-raw-write-001';
+    try {
+      const first = runtime.controller.flattenAccount(201, operationId);
+      await started;
+      await expect(first).rejects.toThrow(/Flatten selhal|timeout|potvrzen/i);
+      await expect(runtime.controller.flattenAccount(201, operationId)).resolves.toMatchObject({
+        flat: false,
+        failedAccounts: [201],
+        remainingPositionAccounts: [201],
+      });
+      expect(cancelCalls).toBe(1);
+
+      release();
+      await new Promise(resolve => setTimeout(resolve, 25));
+      await expect(runtime.controller.flattenAccount(201, operationId)).resolves.toMatchObject({
+        flat: true,
+        failedAccounts: [],
+      });
+      expect(cancelCalls).toBe(1);
+      expect((await broker.findOrderById(201, working.brokerOrderId)).order?.status).toBe('canceled');
+    } finally {
+      release();
+      runtime.controller.stop();
+    }
+  }, 20_000);
 
   it('shutdown přeruší potvrzovací smyčku background lane a waitForIdle nečeká na broker call', async () => {
     const time = manualClock();
@@ -3205,6 +3426,73 @@ describe('CopierRuntimeController — follower account cuts', () => {
         kind: 'follower-cut', accountId: 200, closed: false,
       }));
     } finally {
+      runtime.controller.stop();
+    }
+  });
+
+  it('ne-background in-place close-copy neoznačí cut jako closed, když je účet chráněný běžícím raw write', async () => {
+    const time = manualClock();
+    let breached = false;
+    const broker = createMockBroker({
+      clock: time.clock,
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'fill', price: 20_000 }),
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId, at: time.now(), realizedPnlUsd: accountId === 200 && breached ? -125 : 0,
+    }));
+    const initial = riskGroup({ cutUsd: 100, onCut: 'let-run' });
+    const runtime = await bootRuntime({
+      broker,
+      group: initial,
+      time,
+      flattenBrokerRequestTimeoutMs: 250,
+      flattenConfirmationAttempts: 1,
+    });
+    let release!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const nativeLiquidate = broker.liquidatePosition!;
+    vi.spyOn(broker, 'liquidatePosition').mockImplementation(async request => {
+      if (request.accountId === 200) {
+        markStarted();
+        await gate;
+      }
+      return nativeLiquidate(request);
+    });
+    try {
+      await emitLeaderFill({ ...runtime, time, side: 'Buy', price: 20_000, netQuantity: 1 });
+      breached = true;
+      time.advance(30_000);
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await runtime.controller.waitForIdle();
+      expect(followerCut(runtime.controller)).toMatchObject({ closed: null });
+
+      const nativeListPositions = broker.listPositions.bind(broker);
+      let emergency: Promise<unknown> | undefined;
+      let injected = false;
+      vi.spyOn(broker, 'listPositions').mockImplementation(async accountId => {
+        if (accountId === 200 && !injected) {
+          injected = true;
+          emergency = runtime.controller.flattenAccount(200, 'in-place-protected-raw-write-001');
+          void emergency.catch(() => undefined);
+          await started;
+        }
+        return nativeListPositions(accountId);
+      });
+      const stricter = structuredClone(initial);
+      stricter.followers[0].onCut = 'close-copy';
+      await runtime.controller.updateGroupRiskInPlace(stricter);
+      await runtime.controller.waitForIdle();
+
+      expect(followerCut(runtime.controller)).toMatchObject({ closed: false });
+      expect(runtime.controller.status().recentCopyEvents).toContainEqual(expect.objectContaining({
+        kind: 'follower-cut', accountId: 200, closed: false,
+      }));
+    } finally {
+      release();
+      await new Promise(resolve => setTimeout(resolve, 0));
       runtime.controller.stop();
     }
   });

@@ -255,6 +255,17 @@ export type LiveCopyTradingCommandResult =
     flat: boolean;
     remainingPositionAccounts: number[];
     workingOrderAccounts: number[];
+    /** Per-account diagnostika novějšího execution runtime; starší workery ji nemusí poslat. */
+    failedAccounts?: number[];
+    accounts?: Array<{
+      accountId: number;
+      ok: boolean;
+      canceledOrders: number;
+      submittedClosures: number;
+      error?: string;
+      remainingPositions: number;
+      workingOrders: number;
+    }>;
   };
 
 export interface LiveCopyTradingAdapter {

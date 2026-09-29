@@ -54,6 +54,27 @@ Chceš-li plný přístup vývojových originů vypnout, spusť reinstall takto:
 COPIER_ALLOW_FULL_DEV_ORIGINS=0 scripts/copier/mac-reinstall-safe.sh
 ```
 
+### Provenance a ochrana proti downgrade
+
+Instalátor ukládá plný git SHA, příznak `dirty` a čas instalace do
+`install-manifest.json`. Bez výjimky je další instalace povolená pouze tehdy,
+když je nainstalovaný commit shodný s candidate HEAD nebo je jeho předkem.
+Starší candidate, sourozenecká/divergentní větev i historie po rebase se
+odmítnou. Stejně se odmítne candidate nebo nainstalovaný worker z dirty stromu,
+protože samotný SHA nepopisuje jeho skutečný obsah.
+
+Vědomá servisní výjimka pro downgrade, divergenci, dirty provenance nebo
+nečitelný starý manifest je jediný společný flag:
+
+```bash
+scripts/copier/mac-reinstall-safe.sh --allow-downgrade
+```
+
+Flag není náhrada za git: candidate checkout musí mít dostupný `git`, platné
+`.git` a čitelný HEAD. Chybějící nebo poškozený manifest už spuštěnému workeru
+nebrání v nouzové cestě; worker nastartuje DISARMED, zaloguje
+`provenance neznámá` a `copier:mac -- status` ji ukáže stejným textem.
+
 Instalátor:
 
 - zkopíruje bootstrap lease, privátní pilotní klíč a samostatně zabalený runtime

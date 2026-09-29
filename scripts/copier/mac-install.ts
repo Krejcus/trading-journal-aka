@@ -222,30 +222,49 @@ async function install(): Promise<void> {
   const follower = cliFollowers[0]!.accountId;
   const sourceManifest = flags.get('connections-manifest')?.trim();
   const manifest = sourceManifest ? await loadMacCopierConnectionManifest(sourceManifest) : null;
-  const [{ stdout: candidateShaRaw }, { stdout: dirtyRaw }] = await Promise.all([
-    execFileAsync('/usr/bin/git', ['-C', projectRoot, 'rev-parse', 'HEAD']),
-    execFileAsync('/usr/bin/git', ['-C', projectRoot, 'status', '--porcelain=v1', '--untracked-files=normal']),
-  ]);
+  let candidateShaRaw: string;
+  let dirtyRaw: string;
+  try {
+    [{ stdout: candidateShaRaw }, { stdout: dirtyRaw }] = await Promise.all([
+      execFileAsync('/usr/bin/git', ['-C', projectRoot, 'rev-parse', 'HEAD']),
+      execFileAsync('/usr/bin/git', ['-C', projectRoot, 'status', '--porcelain=v1', '--untracked-files=normal']),
+    ]);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Git provenance kandidáta nelze načíst. Ověř, že je nainstalovaný git a ${projectRoot} je platný git checkout (${detail})`,
+    );
+  }
   const candidateInstall: MacCopierInstallManifest = {
     version: 1,
     gitSha: candidateShaRaw.trim(),
     dirty: dirtyRaw.trim().length > 0,
     installedAt: new Date().toISOString(),
   };
+  const allowDowngrade = flags.has('allow-downgrade');
   let installed: MacCopierInstallManifest | null = null;
   try {
     installed = await loadMacCopierInstallManifest(installManifestPath);
   } catch (error) {
-    if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
+    const missing = error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT';
+    if (!missing && !allowDowngrade) {
+      throw new Error(
+        `Nainstalovaný provenance manifest nelze přečíst; instalace zůstává odmítnutá. `
+        + `Pro vědomou výjimku použij --allow-downgrade (${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
+    if (!missing) {
+      console.warn('VAROVÁNÍ: nečitelný nainstalovaný provenance manifest byl explicitně tolerován přes --allow-downgrade.');
+    }
   }
   await assertMacCopierInstallNotDowngrade({
     candidate: candidateInstall,
     installed,
-    allowDowngrade: flags.has('allow-downgrade'),
-    isAncestor: async (candidateSha, installedSha) => {
+    allowDowngrade,
+    isAncestor: async (ancestorSha, descendantSha) => {
       try {
         await execFileAsync('/usr/bin/git', [
-          '-C', projectRoot, 'merge-base', '--is-ancestor', candidateSha, installedSha,
+          '-C', projectRoot, 'merge-base', '--is-ancestor', ancestorSha, descendantSha,
         ]);
         return true;
       } catch (error) {
@@ -254,6 +273,9 @@ async function install(): Promise<void> {
       }
     },
   });
+  if (allowDowngrade && (candidateInstall.dirty || installed?.dirty)) {
+    console.warn('VAROVÁNÍ: instalace z dirty stromu byla explicitně povolena přes --allow-downgrade.');
+  }
   const connectionId = manifest?.primaryConnectionId ?? required('connection-id');
   const adoptDurableGroup = flags.has('adopt-durable-group');
   const replaceDurableGroup = flags.has('replace-durable-group');
@@ -464,6 +486,7 @@ async function status(): Promise<void> {
       : undefined;
     console.log(JSON.stringify({
       ...body,
+      ...(!body.installation ? { installation: 'provenance neznámá' } : {}),
       ...(device ? {
         device: {
           state: device.state,

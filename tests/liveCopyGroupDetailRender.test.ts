@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
   copyTradeDailyLossRemaining,
+  manualFlattenFailureMessage,
   LiveCopyTradeOverview,
 } from '../components/LiveCopyTradeOverview';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
@@ -464,5 +465,28 @@ describe('GroupDetail Positions integrace', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, { snapshot }));
     expect(markup).toContain('live-detail-tab');
     expect(markup).not.toContain('zařazení');
+  });
+
+  it('toast neúplného Flattenu vypíše failedAccounts i per-account chybu', () => {
+    expect(manualFlattenFailureMessage({
+      type: 'flatten',
+      operationId: 'flatten-ui-error-001',
+      accountIds: [100, 200],
+      canceledOrders: 0,
+      submittedClosures: 1,
+      flat: false,
+      remainingPositionAccounts: [200],
+      workingOrderAccounts: [],
+      failedAccounts: [200],
+      accounts: [{
+        accountId: 200,
+        ok: false,
+        canceledOrders: 0,
+        submittedClosures: 0,
+        remainingPositions: 1,
+        workingOrders: 0,
+        error: 'nejasný broker write stále běží',
+      }],
+    })).toContain('200: nejasný broker write stále běží');
   });
 });
