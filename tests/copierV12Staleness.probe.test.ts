@@ -194,7 +194,9 @@ describe('Z5 follower copy filled at broker, follower stream lagging (M3 with Ma
       expect(followerNet).toBe(0);
       expect(followerOpen).toHaveLength(0);
       if (exit === 'Market') {
-        expect(controller.status().armed).toBe(true);
+        // Follower TP se vyplnil bez leader TP; skutečná divergence zůstává
+        // fail-closed a nesmí vzniknout opačný Sell Market nad flat účtem.
+        expect(controller.status().armed).toBe(false);
         expect(broker.placedRequests().filter((r: any) => (
           r.accountId === 200 && r.side === 'Buy' && r.orderType === 'Market'
         ))).toHaveLength(1);
@@ -375,7 +377,7 @@ describe('Z10 S1b partial: follower copy partially filled, leader Limit fully fi
         accountId: 200, side: 'Sell', orderType: 'Market', quantity: 8,
       }));
       expect(controller.status().armed).toBe(followerFilled === 0);
-      expect(followerOpen).toHaveLength(0);
+      expect(followerOpen).toHaveLength(followerFilled === 0 ? 0 : 1);
       console.log('Z10', followerFilled, summary(broker, controller, { followerNet, followerOpen }));
       controller.stop();
     });

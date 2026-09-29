@@ -1760,7 +1760,7 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
-  it('V12 více současných zero-fill pending kopií neblokuje synchronní leader exit', async () => {
+  it('V12 více současných opačných pending kopií zůstává fail-closed bez přímého exitu', async () => {
     const broker = createMockBroker({
       behavior: request => request.orderType === 'Market'
         ? { kind: 'fill', price: 30_500 }
@@ -1801,10 +1801,13 @@ describe('bootstrapCopierRuntime', () => {
     }) });
     await controller.waitForIdle();
 
-    expect(broker.placedRequests().at(-1)).toMatchObject({
+    expect(broker.placedRequests()).not.toContainEqual(expect.objectContaining({
       accountId: 200, side: 'Sell', orderType: 'Market', quantity: 8,
+    }));
+    expect(controller.status()).toMatchObject({
+      armed: false,
+      lastError: expect.stringContaining('nevysvětlená divergence'),
     });
-    expect(controller.status()).toMatchObject({ armed: true, lastError: null });
     expect(hotPathFindOrder).not.toHaveBeenCalled();
     controller.stop();
   });

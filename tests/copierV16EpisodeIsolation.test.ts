@@ -191,7 +191,11 @@ describe('V16 — episode-bound izolace ineligible followera', () => {
         divergentAccounts: [300],
         lastError: expect.stringContaining('nevysvětlená divergence'),
       });
-      expect(broker.placedRequests()).toHaveLength(beforeExit);
+      expect(broker.placedRequests().slice(beforeExit)).toEqual([
+        expect.objectContaining({
+          accountId: 200, side: 'Sell', orderType: 'Market', quantity: 1,
+        }),
+      ]);
     } finally {
       controller.stop();
     }
