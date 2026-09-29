@@ -310,9 +310,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   produkční worker, web i iOS jsou beze změny; nasazení jen na Filipovo „nasaď“,
   z čistého stavu DISARMED + flat + reconciled a mimo obchodování.
 - Přehled balíčků a otevřených bodů: `docs/reviews/copier-fixes-20260928.md`.
-  Otevřené: 7c (flattenGroup/auto-close se nesmí zastavit kvůli jednomu účtu
-  s visícím write), ST22 (provenance/downgrade workeru), UI tlačítko Kontrola
-  pozic + relay allowlist, ověřovací review posledních iterací (V12 v6, V13 v6,
+  7c/7d a ST22 doplněny (bd4b5953, sada 2135/2135, build OK). Otevřené:
+  UI tlačítko Kontrola pozic + relay allowlist, ověřovací review posledních iterací (V12 v6, V13 v6,
   6c, 8c, 9b, 12) a závěrečné integrované review, sloučení s origin/main.
 - Politiky zvolené bezpečnější variantou (Filip může změnit):
   P-A změna velikosti/topologie při otevřené pozici se odmítne bez DISARM;
@@ -323,6 +322,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   management-only, kde se odmítne); zdravý follower dostane exit i když jiný
   diverguje (skupina se pak vypne). Neřešeno, čeká na Filipa: ST5, ST17, ST18,
   ST21, ST26, V14.
+- Nasazení (až na „nasaď“): sloučit s aktuálním origin/main, reinstall workeru
+  `scripts/copier/mac-reinstall-safe.sh` z ČISTÉHO stromu integrační větve
+  (guard nově odmítne dirty strom, downgrade i sourozeneckou větev), push na
+  main = web, pak iOS build. První instalace ještě nemá manifest pro porovnání.
 - Lekce: exporty repa z review zaplnily disk (30 GB) — viz paměť; sémantické
   konflikty při slučování paralelních větví (V12 per-follower dispatch vs 7b
   write-ahead store) zachytila až celá sada — po každém merge ji spouštět.

@@ -55,12 +55,12 @@ Od 29. 9. 02:38 jsou větve jádra, brokeru, agenta a UI sloučené v `codex/cop
 | 4 | V16 | Codex | ano | hotovo 0b13040 |
 | 5 | 5b V5/V7/V8 + rychlost; 5c V17, V18, ST28, ST31, standalone stop, receivedAt, ST6, N10 | Codex | ano | hotovo (32bb813, cdeec40) |
 | 6 | V9 + V4 + ST4 | Codex | ano | hotovo 6/6b/6c (20786d1), review 6c neproběhlo |
-| 7 | V10 + ST32 | Codex | ano | 7/7b (f8ce845); **otevřené 7c**: visící write na jednom účtu blokuje celý flattenGroup/auto-close (rozdělit účty, viz review 7b) |
+| 7 | V10 + ST32 | Codex | ano | hotovo 7/7b/7c/7d (bd4b5953): nouzový Flatten zavře vše kromě účtu s visícím write, retry bez souběhu |
 | 8 | V1 + V3 + V15 | Codex | ano | hotovo 8/8b/8c (2d7ca5a); review 8c neproběhlo |
 | 9 | V6 obměna spojení | Codex | ano | 9/9b (60b9462); review 9b neproběhlo |
 | 10 | UI DLL/P&L, editor, texty | Claude + Codex | ne | hotovo (UI větev) |
 | 11 | V11/ST25 rychlost, ST33–ST35 | Codex | ano/ne | hotovo kromě ST34 (vrácen, otevřený) |
-| 12 | ST7, ST8, ST9, ST19, ST24, ST27, ST29, ST30 | Codex (+ Claude oprava management-only reconcile) | ano | hotovo 50865e5; **ST22 (provenance workeru) neudělán**; review neproběhlo |
+| 12 | ST7, ST8, ST9, ST19, ST24, ST27, ST29, ST30, ST22 | Codex (+ Claude oprava management-only reconcile) | ano | hotovo 50865e5 + ST22 v 511d2f35/bd4b5953 (manifest instalace, guard proti downgrade/divergenci/dirty stromu) |
 | 13 | UI: tlačítko „Zkontrolovat pozice“ (+ relay allowlist reconcile), texty nových kódů vypnutí | Claude | ne | čeká |
 | 14 | Závěrečné integrované review celé větve, sloučení s origin/main, build, nasazení | Claude | ano | čeká na „nasaď“ |
 | — | Rozhodnutí o politice (V14 strop, V15, ST5, ST21, ST26, ST20) | Filip | — | nechat výchozí bezpečnější variantu, zapsat do PROJECT_LOG |
