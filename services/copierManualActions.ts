@@ -66,7 +66,7 @@ export interface ManualFlattenOptions {
   accountIds?: readonly number[];
   /** Přesný symbolový scope pro policy-gated automatické risk-reduction. */
   targets?: readonly ManualFlattenTarget[];
-  cleanupScope?: 'account' | 'target-symbol';
+  cleanupScope?: 'account' | 'target-symbol' | 'target-symbol-or-account';
   /** Guard nikdy nesmí spadnout na cancel + Market fallback. */
   nativeOnly?: boolean;
   operationId: string;
@@ -171,6 +171,7 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
     throw new Error('Nouzové zploštění vyžaduje broker-native liquidatePosition');
   }
   const symbolInScope = (accountId: number, symbol: string) => cleanupScope === 'account'
+    || (cleanupScope === 'target-symbol-or-account' && !targetSymbolsByAccount.has(accountId))
     || targetSymbolsByAccount.get(accountId)?.has(symbol) === true;
 
   // Mapy outboxů zůstávají sdílené mezi account workery; holder nese vždy
