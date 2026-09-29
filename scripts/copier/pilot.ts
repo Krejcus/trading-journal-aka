@@ -497,7 +497,35 @@ async function runLocalAgent(
   const retirementBootstrap = persistedGroup != null && canBootstrapMissingDurableGroupForRetirement(
     group, accounts.map(account => account.id), retireMissingGroupId,
   );
-  if (!validation.valid && !retirementBootstrap) {
+  // Breached/odpojený účet uložené skupiny nesmí shodit worker do launchd
+  // crash loopu (29. 9. 2026). Pokud je skupina nepoužitelná JEN kvůli
+  // účtům, které teď v OAuth chybí nebo nejsou aktivní, worker naběhne
+  // DISARMED v režimu opravy; ARM zůstane blokovaný do opravy v UI.
+  const unavailableGroupAccountIds = persistedGroup == null ? [] : [
+    group.leaderAccountId,
+    ...group.followers
+      .filter(follower => follower.enabled !== false)
+      .map(follower => follower.accountId),
+  ].filter((accountId): accountId is number => accountId != null && !accounts.some(account => (
+    account.id === accountId && account.active && account.canTrade
+  )));
+  const repairBootstrap = !validation.valid && !retirementBootstrap
+    && unavailableGroupAccountIds.length > 0
+    && validateStoredCopyGroupForStartup(
+      group,
+      [
+        ...accounts.filter(account => !unavailableGroupAccountIds.includes(account.id)),
+        ...unavailableGroupAccountIds.map(id => ({ id, active: true, canTrade: true })),
+      ],
+      durableSnapshot.safety?.accountEligibility ?? [],
+    ).valid;
+  if (repairBootstrap) {
+    console.warn(
+      `${new Date().toISOString()} STARTUP REPAIR skupina=${group.id} nedostupné účty=${unavailableGroupAccountIds.join(',')}; `
+      + 'worker startuje jen DISARMED, ARM je blokovaný do opravy skupiny v UI',
+    );
+  }
+  if (!validation.valid && !retirementBootstrap && !repairBootstrap) {
     throw new Error(
       `Uložená copy group není bezpečně použitelná: ${validation.errors.join(' ')} `
       + `Durable soubor: ${groupPath}. Oprav ho ručně (nejdřív vytvoř zálohu), nebo po bezpečné kontrole spusť `
@@ -839,6 +867,12 @@ async function runLocalAgent(
         },
       },
       group,
+      ...(repairBootstrap ? {
+        unusableGroupRepairBootstrap: {
+          groupId: group.id,
+          unavailableAccountIds: unavailableGroupAccountIds,
+        },
+      } : {}),
       ...(retirementBootstrap ? {
         missingGroupRetirementBootstrap: {
           groupId: group.id,

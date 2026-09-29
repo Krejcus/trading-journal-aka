@@ -317,6 +317,31 @@ export async function startLocalCopierExecutionAgent(
       retireMissingOldGroup?: { groupId: string; accountIds: number[]; reason: string };
     } = {},
   ): Promise<LiveCopyTradingCommandResult> => {
+    // Režim opravy po startu: uložená skupina má účty, které nejsou v OAuth
+    // (breached). Úprava stejné skupiny, která je všechny odebere, se provede
+    // jako auditované vyřazení právě těchto účtů; bez jejich odebrání se
+    // změna odmítne, jinak by ARM zůstal zablokovaný.
+    const startupRepair = options.controller.status().startupGroupRepair;
+    if (startupRepair && startupRepair.groupId === group.id && next.id === group.id
+      && !reconfigurationRequest.retireMissingOldGroup) {
+      const stillPresent = startupRepair.unavailableAccountIds
+        .filter(accountId => copyGroupAccountIds(next).includes(accountId));
+      if (stillPresent.length > 0) {
+        throw new Error(
+          `Skupina má nedostupné účty ${stillPresent.join(', ')} (breached nebo odpojené v OAuth). `
+          + 'Odeber je a vyber nového leadera z dostupných účtů.',
+        );
+      }
+      mode = 'activate';
+      reconfigurationRequest = {
+        ...reconfigurationRequest,
+        retireMissingOldGroup: {
+          groupId: group.id,
+          accountIds: [...startupRepair.unavailableAccountIds],
+          reason: `UI oprava skupiny po startu: účty ${startupRepair.unavailableAccountIds.join(', ')} nejsou v OAuth (breached/odpojené); vyřazeny bez broker flat důkazu`,
+        },
+      };
+    }
     const requested = next;
     const normalized = sanitizeCopyGroups([next]);
     if (!normalized || normalized.length !== 1) {
@@ -341,10 +366,18 @@ export async function startLocalCopierExecutionAgent(
         throw new Error('Vyřazení staré skupiny obsahuje neplatná ID účtů');
       }
       const assertedIds = [...new Set(retirement.accountIds)].sort((a, b) => a - b);
-      if (mode !== 'activate' || next.id === previous.id || retirement.groupId !== previous.id
+      const repairIds = startupRepair?.groupId === previous.id
+        ? [...startupRepair.unavailableAccountIds].sort((a, b) => a - b)
+        : null;
+      const partialRepair = repairIds != null
+        && assertedIds.length === repairIds.length
+        && assertedIds.every((accountId, index) => accountId === repairIds[index]);
+      if (mode !== 'activate' || (next.id === previous.id && !partialRepair)
+        || retirement.groupId !== previous.id
         || assertedIds.length !== retirement.accountIds.length
-        || assertedIds.length !== previousIds.length
-        || assertedIds.some((accountId, index) => accountId !== previousIds[index])
+        || (!partialRepair && (assertedIds.length !== previousIds.length
+          || assertedIds.some((accountId, index) => accountId !== previousIds[index])))
+        || assertedIds.some(accountId => !previousIds.includes(accountId))
         || copyGroupAccountIds(next).some(accountId => assertedIds.includes(accountId))
         || typeof retirement.reason !== 'string'
         || retirement.reason.trim().length < 20 || retirement.reason.length > 500) {
@@ -411,11 +444,13 @@ export async function startLocalCopierExecutionAgent(
         // Controller pak provede autoritativní flat/no-working kontrolu.
         const prepared = await prepareAccounts(routingRequest);
         if (retirement) {
-          if (prepared.missingOptional.length !== previousIds.length
-            || previousIds.some(accountId => !prepared.missingOptional.includes(accountId))) {
-            throw new Error('Vyřazení odmítnuto: stará skupina není celá nedostupná v OAuth; ověř dostupné účty běžnou cestou');
+          const retiredIds = retirement.accountIds;
+          if (retiredIds.some(accountId => !prepared.missingOptional.includes(accountId))) {
+            throw new Error('Vyřazení odmítnuto: vyřazované účty nejsou nedostupné v OAuth; ověř je běžnou cestou');
           }
-          missingOptionalAccountIds = previous.followers.map(follower => follower.accountId);
+          missingOptionalAccountIds = previous.followers
+            .map(follower => follower.accountId)
+            .filter(accountId => retiredIds.includes(accountId));
         } else {
           missingOptionalAccountIds = prepared.missingOptional;
         }
@@ -424,7 +459,7 @@ export async function startLocalCopierExecutionAgent(
         missingOptionalAccountIds: [...missingOptionalAccountIds],
         ...(retirement ? { retireMissingOldGroup: {
           ...retirement,
-          accountIds: [...previousIds],
+          accountIds: [...retirement.accountIds],
           reason: retirement.reason.trim(),
         } } : {}),
         ...(reconfigurationRequest.waiveUnverifiableFollowerOwnership === true

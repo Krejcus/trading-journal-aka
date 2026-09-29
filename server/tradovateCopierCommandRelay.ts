@@ -95,6 +95,11 @@ const allowed = new Set<LocalCopierAgentCommand['type']>([
   // konce broker session. Patří do stejné vzdálené třídy jako disarm a
   // kill-switch — bez něj „Zamknout den" z produkční PWA nikdy nedorazil.
   'lock-until-session-end',
+  // Kontrola pozic je čistě read-only u brokera. Za ARM ji worker nejdřív
+  // auditovaně vypne (kód reconcile-request) a během správy otevřených kopií
+  // ji odmítne; nikdy nic neobchoduje. Bez ní telefon nemá jak zrušit
+  // „Čeká kontrola pozic“.
+  'reconcile',
 ]);
 
 const BRAKE_COMMAND_TYPES = ['disarm', 'kill-switch', 'lock-until-session-end'] as const;

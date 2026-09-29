@@ -167,6 +167,8 @@ export interface CopierStuckOperation {
 }
 
 export interface CopierControllerStatus {
+  /** Režim opravy po startu s nepoužitelnou uloženou skupinou (null = normální běh). */
+  startupGroupRepair?: { groupId: string; unavailableAccountIds: number[] } | null;
   started: boolean;
   armed: boolean;
   killSwitch: boolean;
@@ -605,6 +607,16 @@ export interface BootstrapCopierOptions {
     groupId: string;
     accountIds: readonly number[];
   };
+  /**
+   * Uložená skupina má účty, které při startu nejsou v OAuth (typicky
+   * breached leader/followeři). Worker místo crash loopu naběhne jen
+   * DISARMED v režimu opravy: ARM je blokovaný, dokud se skupina neopraví
+   * a nedostupné účty se auditovaně nevyřadí.
+   */
+  unusableGroupRepairBootstrap?: {
+    groupId: string;
+    unavailableAccountIds: readonly number[];
+  };
   clock?: () => number;
   /** Klidové okno po leader trade eventu před plánovanou obměnou (default 5 s). */
   connectionRenewalQuietMs?: number;
@@ -804,9 +816,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         );
       }
     });
-    if (!everyAccountMissing) throw error;
+    const repairBootstrap = options.unusableGroupRepairBootstrap;
+    const repairAuthorizesMissingLeader = repairBootstrap?.groupId === group.id
+      && repairBootstrap.unavailableAccountIds.includes(group.leaderAccountId!)
+      && error.message.includes(`Pro účet ${group.leaderAccountId} není nakonfigurované OAuth spojení`);
+    if (!everyAccountMissing && !repairAuthorizesMissingLeader) throw error;
     startupMissingLeaderRoute = error;
   }
+  let startupGroupRepair: { groupId: string; unavailableAccountIds: number[] } | null = (
+    options.unusableGroupRepairBootstrap?.groupId === group.id
+    && options.unusableGroupRepairBootstrap.unavailableAccountIds.length > 0
+  )
+    ? {
+      groupId: group.id,
+      unavailableAccountIds: [...new Set(options.unusableGroupRepairBootstrap.unavailableAccountIds)]
+        .sort((a, b) => a - b),
+    }
+    : null;
   const broker = createExposureCappedBroker(
     options.broker,
     accountId => group.followers.find(item => item.accountId === accountId)?.maxContracts,
@@ -1397,7 +1423,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   // by the mandatory pre-ARM reconciliation (not a persisted "all safe" flag).
   const flatReconciledLeaderEpochIds = new Set<string>();
   let workingOrderAccounts = new Set<number>();
-  let lastError: Error | null = startupMissingLeaderRoute;
+  let lastError: Error | null = startupGroupRepair
+    ? new Error(
+      `Uložená skupina má nedostupné účty (${startupGroupRepair.unavailableAccountIds.join(', ')}); `
+      + 'worker běží jen VYPNUTÝ v režimu opravy. Uprav skupinu v UI a nedostupné účty z ní odeber.',
+    )
+    : startupMissingLeaderRoute;
   const disarmHistory: CopierDisarmRecord[] = (runtime.state.safety.disarmHistory ?? [])
     .filter(record => (
       Number.isFinite(record?.at)
@@ -8060,10 +8091,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
 
     invalidateReconciliation();
-    lastError = new Error(
-      `Po reconnectu se nepodařilo automaticky potvrdit flat/no-working stav: ${lastRecoveryError ?? 'bez důvodu'}`,
-    );
-    options.onError?.(lastError);
+    // V režimu opravy po startu je hlavní příčina už známá (nedostupné účty
+    // uložené skupiny); technická chyba recovery ji v UI nesmí přepsat.
+    if (!startupGroupRepair) {
+      lastError = new Error(
+        `Po reconnectu se nepodařilo automaticky potvrdit flat/no-working stav: ${lastRecoveryError ?? 'bez důvodu'}`,
+      );
+      options.onError?.(lastError);
+    }
     options.onAudit?.([{
       at: clock(), leaderEventId: 'connection-preflight', kind: 'blocked',
       reason: `automatická read-only kontrola po reconnectu selhala: ${lastRecoveryError ?? 'bez důvodu'}`,
@@ -13076,13 +13111,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         throw new Error('Vyřazení nedostupné skupiny obsahuje neplatná ID účtů');
       }
       const retiredAccountIds = new Set(retirement?.accountIds ?? []);
+      // Částečné vyřazení je dovolené jen v režimu opravy po startu a jen pro
+      // přesně ty účty, které worker při startu v OAuth neviděl. Ostatní účty
+      // staré skupiny dál procházejí autoritativní flat/no-working kontrolou.
+      const partialRepairRetirement = retirement != null
+        && startupGroupRepair?.groupId === group.id
+        && startupGroupRepair.unavailableAccountIds.length === retiredAccountIds.size
+        && startupGroupRepair.unavailableAccountIds.every(accountId => retiredAccountIds.has(accountId));
+      if (retirement && startupGroupRepair?.groupId === group.id && !partialRepairRetirement) {
+        throw new Error('V režimu opravy lze vyřadit jen účty nedostupné při startu; runtime zůstává vypnutý');
+      }
       if (retirement) {
         const reason = typeof retirement.reason === 'string' ? retirement.reason.trim() : '';
         if (!switchOptions.allowGroupChange || !switchOptions.forceEpoch || gate.armed
           || retirement.groupId !== group.id || reason.length < 20 || reason.length > 500
           || retiredAccountIds.size !== retirement.accountIds.length
-          || retiredAccountIds.size !== currentTopology.size
-          || [...currentTopology].some(accountId => !retiredAccountIds.has(accountId))
+          || (!partialRepairRetirement && retiredAccountIds.size !== currentTopology.size)
+          || [...retiredAccountIds].some(accountId => !currentTopology.has(accountId))
           || [...nextAccountIds].some(accountId => retiredAccountIds.has(accountId))) {
           throw new Error('Vyřazení nedostupné skupiny má neplatné nebo změněné účty; runtime zůstává vypnutý');
         }
@@ -13096,7 +13141,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           throw new Error(`${operation} dostala neplatný chybějící optional follower účet ${accountId}`);
         }
       }
-      if (retirement && group.followers.some(follower => !optionalFollowerIds.has(follower.accountId))) {
+      if (retirement && group.followers.some(follower => (
+        retiredAccountIds.has(follower.accountId) && !optionalFollowerIds.has(follower.accountId)
+      ))) {
         throw new Error('Vyřazení odmítnuto: chybí potvrzená OAuth absence starého followera');
       }
       if (
@@ -13283,6 +13330,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       options.broker.setCriticalAccounts?.([nextGroup.leaderAccountId]);
       startupMissingLeaderRoute = null;
+      if (startupGroupRepair) {
+        startupGroupRepair = null;
+        if (lastError?.message.startsWith('Uložená skupina má nedostupné účty')) lastError = null;
+      }
       bracketCorrelator = new CopierBracketCorrelator();
       osoCorrelator = new CopierOsoCorrelator(options.osoCorrelationWindowMs);
       recentCopyEvents.length = 0;
@@ -13525,6 +13576,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (processorRecovery.state !== 'ready') {
         throw new Error(
           `Copier nelze armovat: durable reload processoru není dokončen (${processorRecovery.reason})`,
+        );
+      }
+      if (startupGroupRepair) {
+        throw new Error(
+          `Copier nelze armovat: uložená skupina má nedostupné účty (${startupGroupRepair.unavailableAccountIds.join(', ')}); nejdřív je odeber v editoru skupiny`,
         );
       }
       if (startupMissingLeaderRoute) throw new Error(`Copier nelze armovat: starý leader nemá OAuth route (${startupMissingLeaderRoute.message})`);
@@ -14427,6 +14483,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ...(lastDisarm ? { lastDisarm: { ...lastDisarm } } : {}),
         disarmHistory: disarmHistory.map(record => ({ ...record })),
         hostSleep: lastHostSleep ? { ...lastHostSleep } : null,
+        startupGroupRepair: startupGroupRepair
+          ? { ...startupGroupRepair, unavailableAccountIds: [...startupGroupRepair.unavailableAccountIds] }
+          : null,
         revision: current.revision,
         lastSequence: current.state.lastSequence,
         groupFlat: groupIsFlat(),

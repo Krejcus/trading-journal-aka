@@ -420,6 +420,31 @@ describe('Tradovate copier command relay', () => {
     expect(claimed?.command).toEqual({ type: 'verify-account-eligibility', accountId: 63338752 });
   });
 
+  it('přenese read-only Kontrolu pozic z telefonu (reconcile) s prázdným payloadem', async () => {
+    const upsert = vi.fn();
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert),
+      userId,
+      connectionId,
+      command: { type: 'reconcile' },
+      idempotencyKey: 'reconcile-from-phone-001',
+      now: Date.parse('2026-08-21T12:00:00.000Z'),
+    });
+    expect(upsert.mock.calls[0][0]).toMatchObject({ command_type: 'reconcile', payload: {} });
+
+    const claimed = await claimTradovateCopierCommand({
+      db: claimDb({
+        id: 'reconcile-command-id',
+        command_type: 'reconcile',
+        payload: {},
+        expires_at: '2026-08-21T12:00:30.000Z',
+        status: 'claimed', result: null, error: null,
+      }),
+      deviceId,
+    });
+    expect(claimed?.command).toEqual({ type: 'reconcile' });
+  });
+
   it('odmítne neplatné ID cíleného ověření', async () => {
     const upsert = vi.fn();
     await expect(enqueueTradovateCopierCommand({

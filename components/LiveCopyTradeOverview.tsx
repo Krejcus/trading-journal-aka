@@ -444,6 +444,8 @@ interface Props {
   lastDisarm?: CopierDisarmRecord;
   /** Read-only broker reconciliation for a currently unverifiable account. */
   onVerifyEligibility?: (accountId: number) => Promise<void> | void;
+  /** Read-only Kontrola pozic celé skupiny (worker reconcile). */
+  onReconcile?: () => Promise<void>;
   executionGroupId?: string | null;
   /** `marketPrices` z workeru (TradingView) — jen pro zobrazení vzdálenosti k limitu. */
   marketPrices?: readonly unknown[];
@@ -723,6 +725,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   unverifiableFollowerOwnership = [],
   lastDisarm,
   onVerifyEligibility,
+  onReconcile,
   executionGroupId = null,
   runtimeGroup = null,
   workerAccountRoutes,
@@ -733,6 +736,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const copierStateVerifying = copierStatusPending || !runtimeAvailable;
   const disarmNotice = useCopierDisarmNotice(lastDisarm, runtimeStatus?.lastError);
   const pauseActive = useCopierPauseActive(copierPauseDeadline(cooldownUntil, pause?.until));
+  const maintenancePanel = (
+    <CopierMaintenancePanel
+      status={runtimeStatus}
+      known={runtimeAvailable && !copierStatusPending}
+      onReconcile={onReconcile}
+    />
+  );
   const cooldownPanel = <CopierCooldownPanel
     key={executionGroupId}
     cooldownUntil={cooldownUntil}
@@ -1950,7 +1960,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   redaction={redaction}
                   templates={templates}
                   tightenOnly={tightenOnly}
-                  cooldownPanel={selected ? cooldownPanel : null}
+                  cooldownPanel={selected ? <>{maintenancePanel}{cooldownPanel}</> : null}
                   disarmPanel={selected && !armed && disarmNotice && disarmNotice.trigger !== 'manual'
                     ? <CopierDisarmPanel lastDisarm={disarmNotice} />
                     : null}
@@ -2075,7 +2085,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                           </td>
                         </tr>
                       ) : null}
-                      {selected ? <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">{cooldownPanel}</td></tr> : null}
+                      {selected ? <tr><td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">{maintenancePanel}{cooldownPanel}</td></tr> : null}
                       <tr
                         aria-hidden={!expanded.has(group.id)}
                       >
@@ -4172,6 +4182,81 @@ const timeWithSecondsLabel = (at: number) => new Date(at).toLocaleTimeString('cs
  * výpadek): jedna věta co se stalo, výsledek kopií a další krok. Ruční
  * vypnutí panel nemá; technický detail i historie jsou v záložce Události.
  */
+const POSITION_CHECK_BLOCKERS = new Set(['Snapshot pozic není čerstvý', 'Čeká kontrola pozic']);
+
+/**
+ * Režim opravy po startu (breached/nedostupné účty uložené skupiny) a ruční
+ * read-only Kontrola pozic. Kontrola se nabízí jen za VYPNUTÉ kopírky: za ARM
+ * by ji worker nejdřív auditovaně vypnul.
+ */
+export const CopierMaintenancePanel = ({ status, known, onReconcile }: {
+  status: CopierControllerStatus | null | undefined;
+  known: boolean;
+  onReconcile?: () => Promise<void>;
+}) => {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  if (!known || !status) return null;
+  const repair = status.startupGroupRepair ?? null;
+  const needsCheck = !status.armed && (
+    status.reconciliationRequired
+    || (status.followerParticipation ?? []).some(item => item.blockers.some(blocker => POSITION_CHECK_BLOCKERS.has(blocker)))
+  );
+  if (!repair && !needsCheck && !result) return null;
+  const runCheck = async () => {
+    if (!onReconcile || busy) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      await onReconcile();
+      setResult({ ok: true, text: 'Kontrola pozic proběhla. Účty jsou ověřené u brokera, kopírka zůstává vypnutá.' });
+    } catch (reason) {
+      setResult({ ok: false, text: reason instanceof Error ? reason.message : String(reason) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section
+      aria-live="polite"
+      data-copier-maintenance-panel="true"
+      className={`mx-4 my-3 rounded-lg border px-4 py-2.5 ${repair
+        ? 'border-rose-500/35 bg-rose-500/[0.07] text-rose-700 dark:text-rose-300'
+        : 'border-sky-500/35 bg-sky-500/[0.07] text-sky-800 dark:text-sky-300'}`}
+    >
+      <div className="flex flex-wrap items-start gap-2.5">
+        <AlertTriangle aria-hidden="true" size={15} className="mt-0.5 shrink-0" />
+        <div className="min-w-0 flex-1 text-xs font-bold leading-relaxed">
+          {repair ? (
+            <p>
+              Uložená skupina má nedostupné účty ({repair.unavailableAccountIds.join(', ')}) — breached nebo odpojené v OAuth.
+              {' '}Kopírka běží jen vypnutá. <span className="font-black">Uprav skupinu: odeber tyto účty a vyber nového leadera.</span>
+              <span className="block font-medium text-[var(--text-secondary)]">Při uložení je worker auditovaně vyřadí bez ověření jejich pozic u brokera; ostatní účty projdou normální kontrolou.</span>
+            </p>
+          ) : needsCheck ? (
+            <p>
+              Před zapnutím je potřeba Kontrola pozic (read-only u brokera, nic neobchoduje).
+            </p>
+          ) : null}
+          {result ? (
+            <p className={`mt-1 font-medium ${result.ok ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`}>{result.text}</p>
+          ) : null}
+        </div>
+        {needsCheck && !repair && onReconcile ? (
+          <button
+            type="button"
+            onClick={() => { void runCheck(); }}
+            disabled={busy}
+            className="shrink-0 rounded-md border border-current px-2.5 py-1 text-[11px] font-black uppercase tracking-wide disabled:opacity-50"
+          >
+            {busy ? 'Kontroluji…' : 'Zkontrolovat pozice'}
+          </button>
+        ) : null}
+      </div>
+    </section>
+  );
+};
+
 export const CopierDisarmPanel = ({ lastDisarm }: { lastDisarm: CopierDisarmRecord }) => {
   const dangerous = lastDisarm.copiesOutcome === 'left-open-unprotected'
     || lastDisarm.copiesOutcome === 'unknown';

@@ -1191,6 +1191,17 @@ acceptAgentStatus((await executeAgent({
                   throw new Error(`Broker účet stále nepotvrdil jako způsobilý: ${remaining.reason ?? remaining.state}`);
                 }
               }}
+              onReconcile={copierUiDemo ? undefined : async () => {
+                const result = await executeAgent({ type: 'reconcile' });
+                acceptAgentStatus(result.status);
+                await live.refreshData();
+                const controller = result.status.controller;
+                if (controller.reconciliationRequired || controller.divergentAccounts.length > 0
+                  || controller.workingOrderAccounts.length > 0) {
+                  throw new Error(controller.lastError
+                    ?? 'Kontrola pozic nepotvrdila čistý stav: účty nejsou flat nebo mají pracovní příkazy.');
+                }
+              }}
               executionGroupId={executionGroup?.id ?? null}
               runtimeGroup={agentStatus?.group ?? null}
               workerAccountRoutes={workerAccountRoutes}
