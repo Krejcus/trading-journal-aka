@@ -258,6 +258,22 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — Nasazení oprav kopírky (Claude, na Filipovo „nasaď")
+
+- Web: main 34b8cda1 (Vercel READY), pak oprava 5f6bf7f2. Worker: reinstall
+  z čistého release worktree, finálně 5f6bf7f2 (status `installation.gitSha`,
+  dirty=false), DISARMED/flat/bez chyby. iOS: čistá reinstalace z 34b8cda1
+  (web v appce shodný s 5f6bf7f2), oznámení znovu povolena.
+- Při nasazení: breached leader 66142378 (+ followeři 66142377/81/82) shodil
+  nový worker do crash loopu (launchd, 10 s). Služba zastavena, durable skupina
+  „Hlavní“ zazálohována (`…64503883.group.json.bak-20260929-breached-66142378`)
+  a přepsána na leader 64503883 + follower 65333343 (Filip pak v UI přidal
+  65333277). Otevřené: breached/chybějící leader má nastartovat DISARMED
+  s výběrem skupiny v UI místo crash loopu.
+- Po úpravě skupiny ARM z UI padal v preflightGroupChange na čekající
+  reconciliation → opraveno v 5f6bf7f2 (za DISARMED samotný požadavek na
+  reconciliation změnu konfigurace neblokuje).
+
 ### 2026-09-29 — Balíček 7d: ověřovací opravy 7c/ST22 (Codex)
 
 - Emergency `liquidatePosition` i `cancelOrder` se nyní evidují ve stejné
