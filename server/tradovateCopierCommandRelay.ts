@@ -8,6 +8,7 @@ import { sanitizeCopyGroups } from '../services/liveCopyTrading.js';
 export interface CopierRelayCommand {
   id: string;
   command: LocalCopierAgentCommand;
+  createdAt?: string;
   expiresAt: string;
 }
 
@@ -19,6 +20,7 @@ interface CommandRow {
   status: string;
   result: unknown;
   error: string | null;
+  created_at?: string;
 }
 
 export interface PersistedCopierTradeInput {
@@ -95,14 +97,64 @@ const allowed = new Set<LocalCopierAgentCommand['type']>([
   'lock-until-session-end',
 ]);
 
+const BRAKE_COMMAND_TYPES = ['disarm', 'kill-switch', 'lock-until-session-end'] as const;
+const BRAKE_COMMAND_TTL_MS = 10 * 60_000;
+const STANDARD_COMMAND_TTL_MS = 30_000;
+const WORKER_CONNECTED_MAX_AGE_MS = 10_000;
+
+const isTradovateCopierBrakeCommand = (command: LocalCopierAgentCommand): boolean =>
+  BRAKE_COMMAND_TYPES.includes(command.type as (typeof BRAKE_COMMAND_TYPES)[number]);
+
 /** Sdílené HTTP mapování validačních chyb relay vrstvy. */
 export const copierRelayValidationErrorStatus = (message: string): 400 | 409 | null => {
   if (message === 'tighten-only') return 409;
+  if (message === 'copier-relay-worker-disconnected'
+    || message === 'copier-relay-runtime-not-found'
+    || message === 'copier-relay-arm-config-conflict') return 409;
   if (message === 'unsupported-command'
     || message === 'unsupported-relay-command'
     || message === 'unsupported-remote-copy-command'
     || message === 'invalid-relay-command-payload') return 400;
   return null;
+};
+
+interface RelayDeviceTarget {
+  id: string;
+  status?: LocalCopierAgentStatus;
+  lastSeenAt?: string;
+}
+
+/** Selects the freshest runtime only among non-revoked devices. */
+const selectRelayDeviceTarget = async (options: {
+  db: SupabaseClient;
+  userId: string;
+  connectionId: string;
+  deviceId?: string;
+}): Promise<RelayDeviceTarget> => {
+  let deviceQuery = options.db.from('tradovate_copier_devices')
+    .select('id')
+    .eq('user_id', options.userId)
+    .eq('connection_id', options.connectionId)
+    .is('revoked_at', null);
+  if (options.deviceId) deviceQuery = deviceQuery.eq('id', options.deviceId);
+  const { data: devices, error: deviceError } = await deviceQuery;
+  if (deviceError) throw new Error(`copier-relay-device-lookup-failed: ${deviceError.message}`);
+  const activeDeviceIds = (devices ?? []).map(device => device.id);
+  if (activeDeviceIds.length === 0) throw new Error('copier-relay-device-not-found');
+
+  const runtimeQuery = options.db.from('tradovate_copier_device_runtime')
+    .select('device_id,status,last_seen_at')
+    .eq('user_id', options.userId)
+    .eq('connection_id', options.connectionId)
+    .in('device_id', activeDeviceIds);
+  const { data: runtime, error: runtimeError } = await runtimeQuery
+    .order('last_seen_at', { ascending: false })
+    .limit(1)
+    .maybeSingle<{ device_id: string; status: LocalCopierAgentStatus; last_seen_at: string }>();
+  if (runtimeError) throw new Error(`copier-relay-runtime-status-failed: ${runtimeError.message}`);
+  if (!runtime) throw new Error('copier-relay-runtime-not-found');
+
+  return { id: runtime.device_id, status: runtime.status, lastSeenAt: runtime.last_seen_at };
 };
 
 /**
@@ -271,6 +323,18 @@ const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknow
   return {};
 };
 
+const canonicalJson = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => [key, canonicalJson(entry)]));
+};
+
+const sameRelayPayload = (left: unknown, right: unknown): boolean =>
+  JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right));
+
 const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
   if (row.command_type === 'unlock-day') throw new Error('unsupported-command');
   if (!allowed.has(row.command_type) || row.command_type === 'device-paired') throw new Error('unsupported-relay-command');
@@ -384,19 +448,17 @@ export async function enqueueTradovateCopierCommand(options: {
   const idempotencyKey = options.idempotencyKey?.trim() || randomUUID();
   const payload = commandPayload(options.command);
   const nextRiskGroup = relayRiskGroup(options.command, payload);
-  let deviceQuery = options.db
-    .from('tradovate_copier_devices')
-    .select('id')
-    .eq('user_id', options.userId)
-    .eq('connection_id', options.connectionId)
-    .is('revoked_at', null);
-  if (options.deviceId) deviceQuery = deviceQuery.eq('id', options.deviceId);
-  const { data: device, error: deviceError } = await deviceQuery
-    .order('last_used_at', { ascending: false, nullsFirst: false })
-    .limit(1)
-    .maybeSingle<{ id: string }>();
-  if (deviceError) throw new Error(`copier-relay-device-lookup-failed: ${deviceError.message}`);
-  if (!device) throw new Error('copier-relay-device-not-found');
+  const device = await selectRelayDeviceTarget({
+    db: options.db,
+    userId: options.userId,
+    connectionId: options.connectionId,
+    ...(options.deviceId ? { deviceId: options.deviceId } : {}),
+  });
+  if (options.command.type === 'arm-live' && (
+    !device.status?.controller?.connected
+    || !device.lastSeenAt
+    || now - Date.parse(device.lastSeenAt) >= WORKER_CONNECTED_MAX_AGE_MS
+  )) throw new Error('copier-relay-worker-disconnected');
 
   if (nextRiskGroup) {
     await enforceRelayTightenOnly({
@@ -418,7 +480,16 @@ export async function enqueueTradovateCopierCommand(options: {
   });
   if (inFlight) return { ...inFlight, deviceId: device.id };
 
-  const expiresAt = new Date(now + 30_000).toISOString();
+  const inFlightArm = await findInFlightArm({
+    db: options.db, userId: options.userId, deviceId: device.id,
+    command: options.command, payload, now,
+  });
+  if (inFlightArm) return { ...inFlightArm, deviceId: device.id };
+
+  const createdAt = new Date(now).toISOString();
+  const expiresAt = new Date(now + (isTradovateCopierBrakeCommand(options.command)
+    ? BRAKE_COMMAND_TTL_MS
+    : STANDARD_COMMAND_TTL_MS)).toISOString();
   const { data, error } = await options.db.from('tradovate_copier_commands').upsert({
     user_id: options.userId,
     device_id: device.id,
@@ -427,13 +498,40 @@ export async function enqueueTradovateCopierCommand(options: {
     payload,
     idempotency_key: idempotencyKey,
     status: 'pending',
-    created_at: new Date(now).toISOString(),
+    created_at: createdAt,
     expires_at: expiresAt,
   }, { onConflict: 'user_id,device_id,idempotency_key', ignoreDuplicates: true })
     .select('id,status,expires_at')
     .maybeSingle<{ id: string; status: string; expires_at: string }>();
   if (error) throw new Error(`copier-relay-enqueue-failed: ${error.message}`);
-  if (data) return { id: data.id, status: data.status, expiresAt: data.expires_at, deviceId: device.id };
+  if (data) {
+    if (options.command.type === 'arm-live') {
+      const canonical = await coalesceInsertedArm({
+        db: options.db,
+        userId: options.userId,
+        deviceId: device.id,
+        inserted: data,
+        payload,
+        now,
+      });
+      return { ...canonical, deviceId: device.id };
+    }
+    if (isTradovateCopierBrakeCommand(options.command)) {
+      try {
+        await expirePendingArmsSupersededByBrake({
+          db: options.db,
+          deviceId: device.id,
+          brakeCreatedAt: createdAt,
+        });
+      } catch (error) {
+        // Brzda už je durable ve FIFO. Vrátit 502 by klientovi tvrdilo opak
+        // a svádělo k dalšímu příkazu; workerový lastBrakeCreatedAt zůstává
+        // druhá pojistka proti staršímu ARMu.
+        console.error(`COPIER RELAY brake supersede failed after enqueue: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return { id: data.id, status: data.status, expiresAt: data.expires_at, deviceId: device.id };
+  }
   const { data: existing, error: existingError } = await options.db
     .from('tradovate_copier_commands')
     .select('id,status,expires_at')
@@ -444,6 +542,115 @@ export async function enqueueTradovateCopierCommand(options: {
   if (existingError || !existing) throw new Error(`copier-relay-idempotency-lookup-failed: ${existingError?.message ?? 'missing'}`);
   return { id: existing.id, status: existing.status, expiresAt: existing.expires_at, deviceId: device.id };
 }
+
+const expirePendingArmsSupersededByBrake = async (options: {
+  db: SupabaseClient;
+  deviceId: string;
+  brakeCreatedAt: string;
+}): Promise<void> => {
+  const { error } = await options.db.from('tradovate_copier_commands')
+    .update({
+      status: 'expired',
+      completed_at: options.brakeCreatedAt,
+      error: 'superseded-by-brake',
+    })
+    .eq('device_id', options.deviceId)
+    .eq('status', 'pending')
+    .in('command_type', ['arm-live', 'shadow'])
+    .lte('created_at', options.brakeCreatedAt);
+  if (error) throw new Error(`copier-relay-brake-supersede-failed: ${error.message}`);
+};
+
+/**
+ * Closes the concurrent-enqueue race left by the pre-insert lookup. Identical
+ * contenders deterministically keep the oldest live ARM and expire their
+ * duplicate. A different payload is expired and reported as a conflict.
+ */
+async function coalesceInsertedArm(options: {
+  db: SupabaseClient;
+  userId: string;
+  deviceId: string;
+  inserted: { id: string; status: string; expires_at: string };
+  payload: Record<string, unknown>;
+  now: number;
+}): Promise<{ id: string; status: string; expiresAt: string }> {
+  const nowIso = new Date(options.now).toISOString();
+  const lastBrakeCreatedAt = await newestBrakeCreatedAt(options.db, options.deviceId);
+  let canonicalQuery = options.db.from('tradovate_copier_commands')
+    .select('id,status,expires_at,payload')
+    .eq('user_id', options.userId)
+    .eq('device_id', options.deviceId)
+    .eq('command_type', 'arm-live')
+    .or('status.eq.claimed,status.eq.pending')
+    .gt('expires_at', nowIso);
+  if (lastBrakeCreatedAt) canonicalQuery = canonicalQuery.gt('created_at', lastBrakeCreatedAt);
+  const { data: canonical, error } = await canonicalQuery
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true })
+    .limit(1)
+    .maybeSingle<{ id: string; status: string; expires_at: string; payload: unknown }>();
+  if (error) throw new Error(`copier-relay-arm-coalesce-lookup-failed: ${error.message}`);
+  if (!canonical || canonical.id === options.inserted.id) {
+    return { id: options.inserted.id, status: options.inserted.status, expiresAt: options.inserted.expires_at };
+  }
+  const samePayload = sameRelayPayload(canonical.payload, options.payload);
+  const { error: expireError } = await options.db.from('tradovate_copier_commands')
+    .update({
+      status: 'expired',
+      completed_at: nowIso,
+      error: samePayload ? 'duplicate-arm-superseded' : 'conflicting-arm-payload',
+    })
+    .eq('id', options.inserted.id)
+    .eq('device_id', options.deviceId)
+    .eq('status', 'pending');
+  if (expireError) throw new Error(`copier-relay-arm-coalesce-failed: ${expireError.message}`);
+  if (!samePayload) throw new Error('copier-relay-arm-config-conflict');
+  return { id: canonical.id, status: canonical.status, expiresAt: canonical.expires_at };
+}
+
+/** Identical repeated clicks coalesce; a different active ARM payload is rejected. */
+async function findInFlightArm(options: {
+  db: SupabaseClient;
+  userId: string;
+  deviceId: string;
+  command: LocalCopierAgentCommand;
+  payload: Record<string, unknown>;
+  now: number;
+}): Promise<{ id: string; status: string; expiresAt: string } | null> {
+  if (options.command.type !== 'arm-live') return null;
+  const nowIso = new Date(options.now).toISOString();
+  const lastBrakeCreatedAt = await newestBrakeCreatedAt(options.db, options.deviceId);
+  let inFlightQuery = options.db.from('tradovate_copier_commands')
+    .select('id,status,expires_at,payload')
+    .eq('user_id', options.userId)
+    .eq('device_id', options.deviceId)
+    .eq('command_type', 'arm-live')
+    .or('status.eq.claimed,status.eq.pending')
+    .gt('expires_at', nowIso);
+  if (lastBrakeCreatedAt) inFlightQuery = inFlightQuery.gt('created_at', lastBrakeCreatedAt);
+  const { data, error } = await inFlightQuery
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle<{ id: string; status: string; expires_at: string; payload: unknown }>();
+  if (error) throw new Error(`copier-relay-inflight-arm-lookup-failed: ${error.message}`);
+  if (!data) return null;
+  if (!sameRelayPayload(data.payload, options.payload)) {
+    throw new Error('copier-relay-arm-config-conflict');
+  }
+  return { id: data.id, status: data.status, expiresAt: data.expires_at };
+}
+
+const newestBrakeCreatedAt = async (db: SupabaseClient, deviceId: string): Promise<string | null> => {
+  const { data, error } = await db.from('tradovate_copier_commands')
+    .select('created_at')
+    .eq('device_id', deviceId)
+    .in('command_type', [...BRAKE_COMMAND_TYPES])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle<{ created_at: string }>();
+  if (error) throw new Error(`copier-relay-brake-epoch-lookup-failed: ${error.message}`);
+  return typeof data?.created_at === 'string' ? data.created_at : null;
+};
 
 const IN_FLIGHT_FLATTEN_WINDOW_MS = 5 * 60_000;
 
@@ -491,7 +698,12 @@ export async function claimTradovateCopierCommand(options: { db: SupabaseClient;
   const { data, error } = await options.db.rpc('claim_tradovate_copier_command', { target_device_id: options.deviceId });
   if (error) throw new Error(`copier-relay-claim-failed: ${error.message}`);
   const row = (Array.isArray(data) ? data[0] : null) as CommandRow | undefined;
-  return row ? { id: row.id, command: rowCommand(row), expiresAt: row.expires_at } : null;
+  return row ? {
+    id: row.id,
+    command: rowCommand(row),
+    ...(row.created_at ? { createdAt: row.created_at } : {}),
+    expiresAt: row.expires_at,
+  } : null;
 }
 
 export async function claimTradovateCopierCommandV2(options: { db: SupabaseClient; deviceId: string; deliveryId: string }) {

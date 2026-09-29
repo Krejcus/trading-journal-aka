@@ -1,4 +1,4 @@
-import { recoverableCopierDelivery } from './recoverableCopierDelivery.js';
+import { COPIER_COMMAND_ACK_RESERVE_MS, recoverableCopierDelivery } from './recoverableCopierDelivery.js';
 import type { RelayDeliveryStore } from './copierRelayDeliveryStore.js';
 import type { LocalCopierExecutionAgent } from './localCopierExecutionAgent.js';
 import {
@@ -99,7 +99,6 @@ export function startMacCopierCommandRelay(options: {
       resolve();
     };
   });
-
   const clearKickSubscription = async () => {
     const unsubscribe = unsubscribeKick;
     unsubscribeKick = null;
@@ -265,16 +264,19 @@ export function startMacCopierCommandRelay(options: {
             });
             if (requests.length > 0) options.onSnapshotRequests(requests);
           }
-          const remote = response.command as { id?: string; command?: LocalCopierAgentCommand; expiresAt?: string } | null;
+          const remote = response.command as {
+            id?: string;
+            command?: LocalCopierAgentCommand;
+            createdAt?: string;
+            expiresAt?: string;
+          } | null;
           if (remote?.id && remote.command) {
-            // Telemetrie: enqueue čas = expiresAt - 30 s (server TTL). Čekání
-            // ve frontě přímo ukazuje, jestli realtime kick funguje (<300 ms).
+            // createdAt je autoritativní pro telemetrii i workerový brake fence;
+            // z expiresAt už enqueue čas odvodit nelze, protože brzdy mají delší TTL.
             const expiresAt = typeof remote.expiresAt === 'string' ? Date.parse(remote.expiresAt) : NaN;
-            if (Number.isFinite(expiresAt)) {
-              const queuedAt = expiresAt - 30_000;
-              if (Number.isFinite(queuedAt)) {
-                console.log(`${new Date().toISOString()} RELAY CMD ${remote.command.type} čekal ve frontě ${Math.max(0, Date.now() - queuedAt)} ms`);
-              }
+            const createdAt = typeof remote.createdAt === 'string' ? Date.parse(remote.createdAt) : NaN;
+            if (Number.isFinite(createdAt)) {
+              console.log(`${new Date().toISOString()} RELAY CMD ${remote.command.type} čekal ve frontě ${Math.max(0, Date.now() - createdAt)} ms`);
             }
             if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
               await complete(remote.id, undefined, 'command-expired-before-execution');
@@ -282,7 +284,15 @@ export function startMacCopierCommandRelay(options: {
               let result: unknown;
               let executionError: string | undefined;
               try {
-                result = await options.agent.execute(remote.command);
+                const executionContext = {
+                  ...(Number.isFinite(createdAt) ? { createdAt } : {}),
+                  ...(remote.command.type === 'arm-live'
+                    ? { deadlineAt: expiresAt - COPIER_COMMAND_ACK_RESERVE_MS }
+                    : {}),
+                };
+                result = Object.keys(executionContext).length > 0
+                  ? await options.agent.execute(remote.command, executionContext)
+                  : await options.agent.execute(remote.command);
               } catch (error) {
                 executionError = error instanceof Error ? error.message : String(error);
                 const errorDetails = localCopierAgentErrorDetails(error);

@@ -66,7 +66,14 @@ echo "leader=${LEADER} followers=${FOLLOWERS} port=${AGENT_PORT}"
 echo "manifest=${MANIFEST}"
 
 cd "$REPO"
-npm run copier:mac -- install --connections-manifest "$MANIFEST" --leader "$LEADER" --followers "$FOLLOWERS" --port "$AGENT_PORT" --adopt-durable-group
+# Filip používá localhost:3000 jako dev LIVE, proto bezpečný reinstall zachová
+# plný dev origin defaultně. Pro vypnutí spusť:
+# COPIER_ALLOW_FULL_DEV_ORIGINS=0 scripts/copier/mac-reinstall-safe.sh
+DEV_ORIGIN_ARGS=()
+if [[ "${COPIER_ALLOW_FULL_DEV_ORIGINS:-1}" != "0" ]]; then
+  DEV_ORIGIN_ARGS+=(--allow-full-dev-origins)
+fi
+npm run copier:mac -- install --connections-manifest "$MANIFEST" --leader "$LEADER" --followers "$FOLLOWERS" --port "$AGENT_PORT" --adopt-durable-group "${DEV_ORIGIN_ARGS[@]}"
 
 BUNDLE="$HOME/Library/Application Support/AlphaTrade/copier/copier-agent.mjs"
 echo "bundle sha256: $(shasum -a 256 "$BUNDLE" | cut -c1-16)…  commit: ${COMMIT}"

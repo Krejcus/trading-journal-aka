@@ -74,7 +74,7 @@ AlphaTrade Mac copier service
   npm run copier:mac -- add-connection --connection-id UUID --accounts "ID,ID" --lease /cesta/lease.json [--primary true]
   npm run copier:mac -- install --connection-id UUID --leader ID --follower ID --lease /cesta/lease.json
   npm run copier:mac -- install --connections-manifest /cesta/connections.json --leader ID --followers "ID@MULT,ID@MULT@MAX"
-    [--adopt-durable-group | --replace-durable-group]
+    [--adopt-durable-group | --replace-durable-group] [--allow-full-dev-origins]
   npm run copier:mac -- status
   npm run copier:mac -- reconcile
   npm run copier:mac -- resolve-stuck --kind cancel-or-modify --key KEY --reason "DŮVOD" --approval POTVRZUJI_RUCNI_RESOLUTION_BEZ_BROKER_PRIKAZU
@@ -341,6 +341,7 @@ async function install(): Promise<void> {
 
   const stdout = resolve(pilotRoot, 'mac-agent.stdout.log');
   const stderr = resolve(pilotRoot, 'mac-agent.stderr.log');
+  const allowFullDevelopmentOrigins = flags.get('allow-full-dev-origins') === 'true';
   const programArguments = [
     '/usr/bin/caffeinate', '-dimsu', process.execPath, runtimePath, 'agent',
     '--leader', String(leader),
@@ -368,6 +369,9 @@ async function install(): Promise<void> {
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>ALPHATRADE_TV_AUTO_LAUNCH</key><string>on</string>
+    ${allowFullDevelopmentOrigins
+    ? '<key>ALPHATRADE_COPIER_ALLOW_FULL_DEV_ORIGINS</key><string>1</string>'
+    : ''}
   </dict>
 </dict></plist>
 `;

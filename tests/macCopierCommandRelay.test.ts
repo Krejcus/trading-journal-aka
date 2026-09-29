@@ -474,6 +474,34 @@ describe('okamžité trade eventy', () => {
 });
 
 describe('recoverable relay lane isolation', () => {
+  it('s durable delivery storem nikdy nevolá odstraněný poll-priority transport', async () => {
+    let saved: import('../server/copierRelayDeliveryStore').RelayDelivery | null = null;
+    const agent = { status, execute: vi.fn(async () => ({ ok: true })) } as unknown as LocalCopierExecutionAgent;
+    const actions: string[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body ?? '{}')) as { action?: string };
+      actions.push(request.action ?? '');
+      if (request.action === 'poll-v2') return Response.json({ protocol: 2, command: null });
+      if (request.action === 'background-v2') return Response.json({ protocol: 2 });
+      return Response.json({ protocol: 2, accepted: true });
+    });
+    const relay = startMacCopierCommandRelay({
+      apiOrigin: 'https://offline.invalid',
+      agent,
+      authorizationHeader: async () => 'offline',
+      deliveryStore: { read: async () => saved, write: async row => { saved = row; } },
+      fetchImpl: fetchImpl as typeof fetch,
+      pollMs: 500,
+    });
+    try {
+      await vi.waitFor(() => expect(actions).toContain('poll-v2'));
+      await new Promise(resolve => setTimeout(resolve, 800));
+      expect(actions).not.toContain('poll-priority');
+    } finally {
+      await relay.close();
+    }
+  });
+
   it('executes and publishes fresh status while background enrichment is hung', async () => {
     const { randomUUID } = await import('node:crypto');
     let saved: import('../server/copierRelayDeliveryStore').RelayDelivery | null = null;

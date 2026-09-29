@@ -36,6 +36,24 @@ npm run copier:mac -- install \
   --lease </absolutni/cesta/pilot-lease.json>
 ```
 
+Pro vývojové LIVE UI na `http://localhost:3000` je potřeba explicitní instalační
+volba `--allow-full-dev-origins`. Zapíše do launchd plistu
+`ALPHATRADE_COPIER_ALLOW_FULL_DEV_ORIGINS=1`; bez ní smějí vývojové originy jen
+číst status a poslat DISARM, kill switch nebo Flatten.
+
+Bezpečný reinstalační skript tuto volbu kvůli současnému Filipovu localhost
+workflow předává ve výchozím stavu:
+
+```bash
+scripts/copier/mac-reinstall-safe.sh
+```
+
+Chceš-li plný přístup vývojových originů vypnout, spusť reinstall takto:
+
+```bash
+COPIER_ALLOW_FULL_DEV_ORIGINS=0 scripts/copier/mac-reinstall-safe.sh
+```
+
 Instalátor:
 
 - zkopíruje bootstrap lease, privátní pilotní klíč a samostatně zabalený runtime

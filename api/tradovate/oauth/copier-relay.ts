@@ -49,7 +49,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const deliveryId = String(req.body?.deliveryId ?? '');
         if (!SNAPSHOT_TEST_REQUEST_ID.test(deliveryId)) return res.status(400).json({ error: 'invalid-delivery-id' });
         const command = await claimTradovateCopierCommandV2({ db, deviceId: device.id, deliveryId });
-        return res.status(200).json({ protocol: 2, command, realtime: {
+        return res.status(200).json({ protocol: 2, command, serverNow: new Date().toISOString(), realtime: {
           url: config.supabaseUrl, anonKey: config.supabaseAnonKey, topic: `copier-kick-${device.id}`,
         } });
       }

@@ -171,12 +171,20 @@ describe('detailed copier risk contracts', () => {
       const deviceId = '33333333-3333-4333-8333-333333333333';
       const deviceQuery = {
         eq: () => deviceQuery, is: () => deviceQuery, order: () => deviceQuery, limit: () => deviceQuery,
+        then: (resolve: (value: unknown) => void) => resolve({ data: [{ id: deviceId }], error: null }),
         maybeSingle: async () => ({ data: { id: deviceId }, error: null }),
       };
       const runtimeQuery = {
         eq: () => runtimeQuery,
+        in: () => runtimeQuery,
+        order: () => runtimeQuery,
+        limit: () => runtimeQuery,
         maybeSingle: async () => ({
-          data: { status: { group: previous, controller: { sessionArmedAt: NOW } } }, error: null,
+          data: {
+            device_id: deviceId,
+            status: { group: previous, controller: { sessionArmedAt: NOW, connected: true } },
+            last_seen_at: new Date(NOW).toISOString(),
+          }, error: null,
         }),
       };
       let attemptedCommandWrite = false;

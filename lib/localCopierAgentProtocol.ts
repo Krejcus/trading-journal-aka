@@ -176,6 +176,31 @@ export type LocalCopierAgentCommand =
   | { type: 'unlock-day'; reason: string }
   | { type: 'device-paired'; deviceId: string };
 
+/**
+ * Transportní mez příkazu. Není součástí durable command payloadu: relay ji
+ * odvozuje ze serverového `expiresAt`, přímý loopback z UI timeoutu.
+ */
+export interface LocalCopierAgentExecutionContext {
+  /** created_at převedený do hodin workeru, případně čas lokálního HTTP ingressu. */
+  createdAt?: number;
+  deadlineAt?: number;
+  /** Konzervativní rezerva při porovnání relay času s lokálně přijatou brzdou. */
+  clockSkewReserveMs?: number;
+}
+
+export const isLocalCopierEmergencyCommand = (command: LocalCopierAgentCommand): boolean =>
+  command.type === 'disarm'
+  || command.type === 'kill-switch'
+  || command.type === 'lock-until-session-end';
+
+export const isLocalCopierRiskReducingCommand = (command: LocalCopierAgentCommand): boolean => {
+  if (isLocalCopierEmergencyCommand(command)) return true;
+  return command.type === 'copy-command'
+    && (command.command.type === 'flatten-account'
+      || command.command.type === 'flatten-follower-trade'
+      || command.command.type === 'flatten-group');
+};
+
 export interface LocalCopierAgentCommandResult {
   ok: true;
   status: LocalCopierAgentStatus;

@@ -58,7 +58,12 @@ describe('Tradovate pilot lease API', () => {
     vi.clearAllMocks();
     oauthStore.readTradovateServerConfig.mockReturnValue({ environment: 'demo' });
     oauthStore.requireSupabaseUserId.mockResolvedValue('user-1');
-    oauthStore.createTradovateAdminClient.mockReturnValue({ kind: 'db' });
+    const pairedDeviceQuery: Record<string, unknown> = {};
+    for (const method of ['eq', 'is', 'limit']) pairedDeviceQuery[method] = () => pairedDeviceQuery;
+    pairedDeviceQuery.maybeSingle = async () => ({ data: { public_key: 'PUBLIC KEY' }, error: null });
+    oauthStore.createTradovateAdminClient.mockReturnValue({
+      from: vi.fn(() => ({ select: () => pairedDeviceQuery })),
+    });
     oauthStore.listTradovateConnectionStatuses.mockResolvedValue([{
       id: 'connection-owned',
       connected: true,
@@ -127,6 +132,21 @@ describe('Tradovate pilot lease API', () => {
       envelope: expect.objectContaining({ ciphertext: 'ciphertext' }),
       expiresAt: '2026-08-17T08:00:00.000Z',
     }));
+  });
+
+  it('JWT vlastník může jako před ST34 stáhnout instalační lease pro dosud nespárovaný klíč', async () => {
+    const query: Record<string, unknown> = {};
+    for (const method of ['eq', 'is', 'limit']) query[method] = () => query;
+    query.maybeSingle = async () => ({ data: null, error: null });
+    oauthStore.createTradovateAdminClient.mockReturnValue({ from: () => ({ select: () => query }) });
+    const harness = responseHarness();
+    await handler(request({ body: { connectionId: 'connection-owned', publicKey: 'INSTALL PUBLIC KEY' } }), harness.res);
+    expect(harness.status()).toBe(200);
+    expect(oauthStore.getValidTradovateAccessToken).toHaveBeenCalledOnce();
+    expect(pilotLease.sealTradovatePilotLease).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionId: 'connection-owned' }),
+      'INSTALL PUBLIC KEY',
+    );
   });
 
   it('issues a lease for legacy OAuth rows without stored identity metadata', async () => {

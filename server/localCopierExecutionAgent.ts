@@ -7,14 +7,17 @@ import {
   localCopierAgentErrorDetails,
   localCopierAgentRestartBlockers,
   LocalCopierAgentCommandError,
+  isLocalCopierEmergencyCommand,
+  isLocalCopierRiskReducingCommand,
   type LocalCopierAgentCommand,
+  type LocalCopierAgentExecutionContext,
   type LocalCopierAgentCommandResult,
   type LocalCopierAgentStatus,
 } from '../lib/localCopierAgentProtocol.js';
 import { isWeakerRiskConfig } from '../lib/copierRiskConfig.js';
 import { COPIER_RISK_CONFIG_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
-import { msUntilTradovateSessionEnd } from '../services/copierArmSession.js';
-import type { CopierRuntimeController } from '../services/copierRuntimeController.js';
+import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
+import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
 import {
   normalizeMultiplier,
   sanitizeCopyGroups,
@@ -25,10 +28,21 @@ import {
 
 const DEFAULT_ALLOWED_ORIGINS = new Set([
   'https://alphatrade-mentor-15.vercel.app',
+]);
+
+const DEFAULT_DEVELOPMENT_ORIGINS = new Set([
   'http://localhost:3000',
   'http://127.0.0.1:3000',
   'http://127.0.0.1:3011',
 ]);
+const LOCAL_ARM_DEADLINE_MS = 30_000;
+
+export const boundedLocalArmDeadline = (rawDeadline: unknown, receivedAt = Date.now()): number => {
+  const parsed = typeof rawDeadline === 'string' ? Number(rawDeadline) : NaN;
+  return Number.isFinite(parsed)
+    ? Math.min(parsed, receivedAt + LOCAL_ARM_DEADLINE_MS)
+    : receivedAt + LOCAL_ARM_DEADLINE_MS;
+};
 
 export interface PrepareGroupAccountsRequest {
   required: readonly number[];
@@ -46,6 +60,9 @@ interface LocalCopierExecutionAgentOptions {
   port?: number;
   host?: '127.0.0.1';
   allowedOrigins?: ReadonlySet<string>;
+  developmentOrigins?: ReadonlySet<string>;
+  /** Explicit install-time opt-in. Otherwise dev origins are read/risk-reduction only. */
+  allowFullDevelopmentAccess?: boolean;
   startedAt?: string;
   device?: NonNullable<LocalCopierAgentStatus['device']>;
   devices?: NonNullable<LocalCopierAgentStatus['devices']>;
@@ -75,7 +92,7 @@ interface LocalCopierExecutionAgentOptions {
 export interface LocalCopierExecutionAgent {
   origin: string;
   status(): LocalCopierAgentStatus;
-  execute(command: LocalCopierAgentCommand): Promise<LocalCopierAgentCommandResult>;
+  execute(command: LocalCopierAgentCommand, context?: LocalCopierAgentExecutionContext): Promise<LocalCopierAgentCommandResult>;
   /** Synchronně odmítne nový/pending command ingress před graceful drainem. */
   beginShutdown(): void;
   close(): Promise<void>;
@@ -134,6 +151,18 @@ const sameAccountTopology = (left: CopyGroupConfig, right: CopyGroupConfig): boo
   return leftIds.length === rightIds.length && leftIds.every((value, index) => value === rightIds[index]);
 };
 
+const canonicalConfig = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonicalConfig);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => [key, canonicalConfig(entry)]));
+};
+
+const sameCopyGroupConfig = (left: CopyGroupConfig, right: CopyGroupConfig): boolean =>
+  JSON.stringify(canonicalConfig(left)) === JSON.stringify(canonicalConfig(right));
+
 const SNAPSHOT_TEST_REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const accountsForRoutingChange = (
@@ -188,6 +217,11 @@ export async function startLocalCopierExecutionAgent(
 ): Promise<LocalCopierExecutionAgent> {
   const host = options.host ?? '127.0.0.1';
   const allowedOrigins = options.allowedOrigins ?? DEFAULT_ALLOWED_ORIGINS;
+  const developmentOrigins = options.developmentOrigins ?? DEFAULT_DEVELOPMENT_ORIGINS;
+  // Instalační flag je záměrně explicitní. Bez něj localhost LIVE smí pouze
+  // číst status a poslat risk-redukční brzdy/Flatten.
+  const allowFullDevelopmentAccess = options.allowFullDevelopmentAccess
+    ?? process.env.ALPHATRADE_COPIER_ALLOW_FULL_DEV_ORIGINS === '1';
   const nonce = randomUUID();
   const startedAt = options.startedAt ?? new Date().toISOString();
   const normalizedGroups = sanitizeCopyGroups([options.group]);
@@ -203,6 +237,9 @@ export async function startLocalCopierExecutionAgent(
     throw new Error('Lokální execution agent dostal více zařízení pro stejné OAuth připojení');
   }
   let tail = Promise.resolve();
+  let brakeEpoch = 0;
+  let lastBrakeCreatedAt = Number.NEGATIVE_INFINITY;
+  let armPending = false;
   let shuttingDown = false;
   let serverClosePromise: Promise<void> | null = null;
   const shutdownError = () => new Error('Lokální execution agent se právě bezpečně ukončuje');
@@ -440,7 +477,72 @@ export async function startLocalCopierExecutionAgent(
     }
   };
 
-  const execute = async (command: LocalCopierAgentCommand): Promise<unknown> => {
+  const armDeadlineError = () => new Error('ARM odmítnut: vypršel deadline potvrzení; kopírka zůstává DISARMED');
+  const assertArmAdmissible = (
+    deadlineAt: number,
+    admittedBrakeEpoch: number,
+    commandCreatedAt: number,
+    clockSkewReserveMs = 0,
+  ): void => {
+    if (Date.now() >= deadlineAt) throw armDeadlineError();
+    if (commandCreatedAt <= lastBrakeCreatedAt + Math.max(0, clockSkewReserveMs)) {
+      throw new Error('ARM odmítnut: příkaz je starší než poslední bezpečnostní brzda (DISARM, kill switch nebo denní lock)');
+    }
+    if (brakeEpoch !== admittedBrakeEpoch) {
+      throw new Error('ARM odmítnut: během přípravy přišel DISARM, kill switch nebo denní lock');
+    }
+    if (!options.controller.status().connected) {
+      throw new Error('ARM odmítnut: worker není připojen k brokeru');
+    }
+  };
+  const recordExecutedBrake = (context: LocalCopierAgentExecutionContext): void => {
+    const createdAt = Number.isFinite(context.createdAt) ? context.createdAt! : Date.now();
+    lastBrakeCreatedAt = Math.max(lastBrakeCreatedAt, createdAt);
+  };
+  const armMatchesCurrentConfiguration = (
+    command: Extract<LocalCopierAgentCommand, { type: 'arm-live' }>,
+    current: CopierControllerStatus,
+  ): boolean => {
+    let requestedGroup = group;
+    if (command.group) {
+      const normalized = sanitizeCopyGroups([mappedGroup(group, command.group)]);
+      if (!normalized || normalized.length !== 1) return false;
+      requestedGroup = normalized[0];
+    }
+    if (!sameCopyGroupConfig(requestedGroup, group)) return false;
+    const requestedExclusions = validatedAccountEligibilityExclusions(command.accountEligibilityExclusions);
+    const applied = new Map((current.accountEligibility ?? []).map(entry => [entry.accountId, entry.state]));
+    const severity = (state: string | undefined): number => state === 'breached'
+      ? 3
+      : state === 'unverifiable'
+        ? 2
+        : state === 'dll-locked'
+          ? 1
+          : 0;
+    return requestedExclusions.every(exclusion => severity(applied.get(exclusion.accountId)) >= severity(exclusion.state));
+  };
+  const awaitArmDeadline = async <T>(pending: Promise<T>, deadlineAt: number): Promise<T> => {
+    const remaining = deadlineAt - Date.now();
+    if (remaining <= 0) throw armDeadlineError();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      return await Promise.race([
+        pending,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(armDeadlineError()), remaining);
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
+  const execute = async (
+    command: LocalCopierAgentCommand,
+    context: LocalCopierAgentExecutionContext = {},
+    admittedBrakeEpoch = brakeEpoch,
+  ): Promise<unknown> => {
     switch (command.type) {
       case 'copy-command':
         return executeCopyCommand(command.command);
@@ -461,6 +563,20 @@ export async function startLocalCopierExecutionAgent(
         return;
       }
       case 'arm-live': {
+        const deadlineAt = context.deadlineAt ?? (Date.now() + LOCAL_ARM_DEADLINE_MS);
+        const commandCreatedAt = context.createdAt ?? Date.now();
+        assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
+        const current = options.controller.status();
+        if (current.armed && !current.shadowMode) {
+          if (armMatchesCurrentConfiguration(command, current)) {
+            // Idempotentní potvrzení jen shodné konfigurace. Nevolat
+            // DISARM/reconcile/arm a neprodloužit existující session TTL.
+            return;
+          }
+          // Jiná konfigurace pokračuje stejnou atomickou cestou jako base:
+          // DISARM -> activate/preflight -> reconciliation -> ARM. Jakákoli
+          // chyba ji nechá explicitně DISARMED, nikdy jako falešný úspěch.
+        }
         // Volitelný atomický sync konfigurace: dřív UI posílalo update-group
         // + arm-live jako dva relay round-tripy (~5 s); teď jde obojí naráz.
         let routingPrepared = false;
@@ -476,21 +592,29 @@ export async function startLocalCopierExecutionAgent(
               localOnly: true,
             };
             await applyGroup(next, 'activate');
+            assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
             routingPrepared = true;
           } else {
             const next = mappedGroup(group, command.group);
             routingPrepared = !sameAccountTopology(group, next);
             await applyGroup(next);
+            assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
           }
         }
         options.controller.disarm();
         await options.controller.applyAccountEligibilityExclusions(
           validatedAccountEligibilityExclusions(command.accountEligibilityExclusions),
         );
+        assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
         if (!routingPrepared) {
-          await prepareAccounts(allAccountsRequired(copyGroupAccountIds(group)));
+          await awaitArmDeadline(
+            prepareAccounts(allAccountsRequired(copyGroupAccountIds(group))),
+            deadlineAt,
+          );
+          assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
         }
-        const reconciliation = await options.controller.reconcile();
+        const reconciliation = await awaitArmDeadline(options.controller.reconcile(), deadlineAt);
+        assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
         if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
           throw new Error('ARM odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
         }
@@ -498,7 +622,15 @@ export async function startLocalCopierExecutionAgent(
         // ARM tak nepřežije do dalšího dne; otevřené kopie expirace
         // risk-redukčně zavře podle `safety.armExpiryFlatten`.
         options.controller.arm({ shadowMode: false, ttlMs: msUntilTradovateSessionEnd(Date.now()) });
-        await options.controller.waitForIdle();
+        try {
+          await awaitArmDeadline(options.controller.waitForIdle(), deadlineAt);
+          assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
+        } catch (error) {
+          // `arm()` je synchronní, durable potvrzení nikoli. Po deadline nebo
+          // souběžné brzdě jej okamžitě stáhneme; pozdější tail nesmí zapnout.
+          options.controller.disarm();
+          throw error;
+        }
         const armedStatus = options.controller.status();
         if (!armedStatus.armed || armedStatus.shadowMode || !(armedStatus.sessionArmedAt && armedStatus.sessionArmedAt > 0)) {
           throw new Error(armedStatus.lastError ?? 'ARM nebyl durable potvrzen');
@@ -524,10 +656,14 @@ export async function startLocalCopierExecutionAgent(
         return;
       }
       case 'disarm':
+        brakeEpoch += 1;
         options.controller.disarm();
+        recordExecutedBrake(context);
         return;
       case 'kill-switch':
+        brakeEpoch += 1;
         options.controller.engageKillSwitch('Kill switch z AlphaTrade LIVE UI');
+        recordExecutedBrake(context);
         return;
       case 'reconcile':
         // Samostatná read-only kontrola musí obnovit stejné multi-OAuth
@@ -582,11 +718,17 @@ export async function startLocalCopierExecutionAgent(
         });
         return;
       case 'lock-until-session-end':
-        await options.controller.lockUntil(
-          Date.now() + msUntilTradovateSessionEnd(Date.now()),
-          command.reason,
-        );
-        return;
+        {
+          const commandCreatedAt = Number.isFinite(context.createdAt) ? context.createdAt! : Date.now();
+          const until = tradovateSessionEndAt(commandCreatedAt);
+          if (until <= Date.now()) {
+            throw new Error('Denní lock nebyl proveden: session skončila');
+          }
+          brakeEpoch += 1;
+          await options.controller.lockUntil(until, command.reason);
+          recordExecutedBrake(context);
+          return;
+        }
       case 'unlock-day':
         await options.controller.unlockDay(command.reason);
         return;
@@ -616,9 +758,67 @@ export async function startLocalCopierExecutionAgent(
     }
   };
 
+  const resultPayload = async (
+    command: LocalCopierAgentCommand,
+    context?: LocalCopierAgentExecutionContext,
+    admittedBrakeEpoch?: number,
+  ): Promise<LocalCopierAgentCommandResult> => {
+    const result = await execute(command, context, admittedBrakeEpoch);
+    return {
+      ok: true,
+      status: status(),
+      ...(result == null ? {} : { result: result as LiveCopyTradingCommandResult }),
+    };
+  };
+
+  const dispatch = (
+    command: LocalCopierAgentCommand,
+    context: LocalCopierAgentExecutionContext = {},
+    admittedBrakeEpochAtIngress?: number,
+  ): Promise<LocalCopierAgentCommandResult> => {
+    if (shuttingDown) return Promise.reject(shutdownError());
+    const executionContext = {
+      ...context,
+      createdAt: context.createdAt ?? Date.now(),
+    };
+    if (isLocalCopierEmergencyCommand(command)) {
+      // Brzdy nesdílejí FIFO s brokerovým příkazem ani s ARM preflightem.
+      return resultPayload(command, executionContext);
+    }
+    if (command.type === 'arm-live') {
+      const current = options.controller.status();
+      if (current.armed && !current.shadowMode && armMatchesCurrentConfiguration(command, current)) {
+        return resultPayload(command, executionContext);
+      }
+      if (!current.connected) {
+        return Promise.reject(new Error('ARM odmítnut: worker není připojen k brokeru'));
+      }
+      if (armPending) return Promise.reject(new Error('ARM odmítnut: jiný ARM už čeká na provedení'));
+      armPending = true;
+      const admittedBrakeEpoch = admittedBrakeEpochAtIngress ?? brakeEpoch;
+      const deadlineAt = executionContext.deadlineAt ?? (Date.now() + LOCAL_ARM_DEADLINE_MS);
+      const pending = tail.then(() => {
+        if (shuttingDown) throw shutdownError();
+        return resultPayload(command, { ...executionContext, deadlineAt }, admittedBrakeEpoch).then(result => {
+          if (brakeEpoch !== admittedBrakeEpoch) throw new Error('ARM odmítnut: během přípravy přišla bezpečnostní brzda');
+          return result;
+        });
+      });
+      tail = pending.then(() => undefined, () => undefined);
+      return pending.finally(() => { armPending = false; });
+    }
+    const pending = tail.then(() => {
+      if (shuttingDown) throw shutdownError();
+      return resultPayload(command, executionContext);
+    });
+    tail = pending.then(() => undefined, () => undefined);
+    return pending;
+  };
+
   const server: Server = createServer((request, response) => {
     const origin = request.headers.origin ?? '';
-    if (!allowedOrigins.has(origin)) {
+    const developmentOrigin = developmentOrigins.has(origin);
+    if (!allowedOrigins.has(origin) && !developmentOrigin) {
       json(response, 403, { error: 'Origin nemá přístup k lokálnímu execution agentovi' });
       return;
     }
@@ -626,7 +826,7 @@ export async function startLocalCopierExecutionAgent(
     response.setHeader('Vary', 'Origin');
     response.setHeader('Access-Control-Allow-Private-Network', 'true');
     response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    response.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-AlphaTrade-Agent-Nonce');
+    response.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-AlphaTrade-Agent-Nonce, X-AlphaTrade-Command-Deadline');
     if (request.method === 'OPTIONS') {
       response.statusCode = 204;
       response.end();
@@ -649,17 +849,24 @@ export async function startLocalCopierExecutionAgent(
       json(response, 401, { error: 'Neplatný session nonce lokálního execution agenta' });
       return;
     }
-    tail = tail.then(async () => {
+    // Zachytí se synchronně při příchodu HTTP requestu, ještě před
+    // asynchronním čtením body. Později parsovaný ARM proto nemůže
+    // převzít epochu brzdy, která dorazila a dokončila body mezitím.
+    const admittedBrakeEpoch = brakeEpoch;
+    const requestCreatedAt = Date.now();
+    void (async () => {
       try {
         if (shuttingDown) throw shutdownError();
         const command = await body(request) as LocalCopierAgentCommand;
         if (shuttingDown) throw shutdownError();
-        const result = await execute(command);
-        const payload: LocalCopierAgentCommandResult = {
-          ok: true,
-          status: status(),
-          ...(result == null ? {} : { result: result as LiveCopyTradingCommandResult }),
-        };
+        if (developmentOrigin && !allowFullDevelopmentAccess && !isLocalCopierRiskReducingCommand(command)) {
+          throw new Error('Vývojový origin smí pouze číst status nebo poslat DISARM, kill switch či Flatten');
+        }
+        const rawDeadline = request.headers['x-alphatrade-command-deadline'];
+        const localDeadline = boundedLocalArmDeadline(rawDeadline, requestCreatedAt);
+        const payload = await dispatch(command, command.type === 'arm-live'
+          ? { createdAt: requestCreatedAt, deadlineAt: localDeadline }
+          : { createdAt: requestCreatedAt }, admittedBrakeEpoch);
         json(response, 200, payload);
       } catch (reason) {
         json(response, 409, {
@@ -668,7 +875,7 @@ export async function startLocalCopierExecutionAgent(
           status: status(),
         });
       }
-    });
+    })();
   });
 
   await new Promise<void>((resolveStart, reject) => {
@@ -692,25 +899,7 @@ export async function startLocalCopierExecutionAgent(
   return {
     origin: `http://${host}:${address.port}`,
     status,
-    execute: async command => {
-      if (shuttingDown) throw shutdownError();
-      let resolveResult!: (value: LocalCopierAgentCommandResult) => void;
-      let rejectResult!: (reason: unknown) => void;
-      const resultPromise = new Promise<LocalCopierAgentCommandResult>((resolve, reject) => {
-        resolveResult = resolve;
-        rejectResult = reject;
-      });
-      tail = tail.then(async () => {
-        try {
-          if (shuttingDown) throw shutdownError();
-          const result = await execute(command);
-          resolveResult({ ok: true, status: status(), ...(result == null ? {} : { result: result as LiveCopyTradingCommandResult }) });
-        } catch (error) {
-          rejectResult(error);
-        }
-      });
-      return resultPromise;
-    },
+    execute: dispatch,
     beginShutdown,
     async close() {
       beginShutdown();
