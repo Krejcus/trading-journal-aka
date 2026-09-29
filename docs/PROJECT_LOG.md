@@ -279,6 +279,36 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   chybějící Chrome/CRX typy v `extension/`, žádnou chybu mimo extension.
 - Bez commitu, push/deploye, instalace závislostí, broker API, ARM/Flatten ani
 
+### 2026-09-29 — Balíček 7b: durable background flatten a account write fence (Codex)
+
+- Background follower cut už nepoužívá izolovaný memory store pro outbox:
+  každý `planned`/`sending`/výsledek cancelu či liquidation se před broker
+  write synchronně slučuje přes hlavní serial processor a durable store.
+  Selhání commitu broker write zastaví a celý runtime zůstane fail-closed;
+  restart u `sending` provádí jen read-only stavové dohledání, nikdy druhý
+  slepý liquidate.
+- Per-account lane fence nyní blokuje/odmítne reconcile, běžný Flatten,
+  auto-close, leader-flat recovery i cut re-run, dokud může na stejném účtu
+  běžet background broker write. DISARM, kill, shutdown a stop přeruší wait a
+  potvrzovací čtení, durable uloží `indeterminate` a `waitForIdle` nečeká na
+  90s deadline. Pozdní návrat po zneplatněné bariéře nemění `closed` ani
+  novější cut; pouze vynutí reconciliation. Outbox aktivní lane je neblokující
+  jen pro dispatch jiných followerů, takže P4 latence zůstala zachovaná.
+- Serial processor reloaduje jen po explicitně označené chybě/nejistotě
+  commitu, automaticky nejvýše 3× s exponenciálním backoffem. Po vyčerpání
+  zůstane `failed`, ARM je blokovaný, ale `waitForRecovery`/`waitForIdle`
+  resolvne; risk-snižující auto-close v `reloading/failed` používá nativní
+  izolovanou emergency lane.
+- Review sondy P1–P5b byly převedeny na aserce. Na exportu báze `bf76e24`
+  prošel P1; padly P2/P3/P4/shutdown/P5b a policy-reload regrese. P5a už na
+  bázi broker write zablokoval, ale nesplnil nový přesný durable-state assertion.
+  Nový stav cíleně prošel 140/140. Předepsaný plný gate měl v sandboxu jen
+  89 `listen EPERM 127.0.0.1` pádů ve 4 loopback souborech (165 passed + 1
+  skipped); stejné 4 soubory mimo sandbox prošly 94/94. `npx tsc --noEmit`
+  hlásí jen ignorované Chrome/CRX chyby v `extension/`; stejný root typecheck
+  s vyloučenou `extension/` prošel, `git diff --check` čistý. Bez commitu,
+  push/deploye, broker API, ARM/Flatten, reinstalu workeru či instalace balíčků.
+
 ### 2026-09-29 — Balíček 7: background follower cut a zotavení durable CAS (Codex)
 
 - Ruční „Flatten followera do konce obchodu“ i broker/ledger DLL close-copy

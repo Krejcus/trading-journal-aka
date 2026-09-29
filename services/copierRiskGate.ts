@@ -65,6 +65,11 @@ export interface RiskGateContext {
    * nesmí se posílat další — jinak se rozdíly začnou vrstvit.
    */
   stuckOutbox: boolean;
+  /**
+   * Durable klíče izolované risk-redukční lane. Smějí být neblokující jen
+   * pro dispatch jiných účtů; ARM/recovery je stále vidí jako stuck.
+   */
+  nonBlockingOutboxKeys?: ReadonlySet<string>;
   /** Strop množství na jednu objednávku, per účet. */
   maxQuantityPerAccount: ReadonlyMap<number, number>;
   /**
