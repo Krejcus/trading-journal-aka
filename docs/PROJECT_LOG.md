@@ -337,6 +337,36 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   Bez commitu, push/deploye, instalace závislostí, broker API, ARM/Flatten ani
   reinstalu workeru.
 
+### 2026-09-29 — Balíček 9b: V6 renewal/order parity, agregovaný resync a fail-closed snapshot (Codex)
+
+- Během plánované obměny se dál potlačují pouze Fill a Position entity;
+  Order lifecycle jde live cestou před route snapshotem, takže nový OCO SL/TP
+  i posun SL projdou existujícím durable runnerem. Jakýkoli leader gap fill je
+  divergence. Zbylá divergence s follower expozicí zakládá stávající
+  `pendingConnectionRecovery`; nevznikl doháněcí trade ani nový write retry.
+- Router předá scoped `resynced` jen nad `aggregateConnected=true` a controller
+  dílčím resyncem nikdy nepřejde z disconnected na connected. Renewal blocker
+  vidí přijaté eventy čekající v `eventTail` a používá oddělené monotónní hodiny
+  pro 5s klidové okno po dokončení každého leader trade eventu; první verze
+  omylem posouvala testovací trading clock a rozbila 5ms OCO korelaci, což
+  odhalila plná sada a následná oprava prošla izolovaně 3×.
+- Renewal snapshot už nevolá `/account/list`, skládá jen otevřené ordery účtů
+  svěřených route a terminální/cizí neúplné ordery přeskočí. Skutečně
+  nesložitelný otevřený route order nebo jiné selhání snapshotu se předá jako
+  neautoritativní `resync` a controller skončí `route-gap-divergence`; nový
+  synchronizovaný socket se kvůli tomu neroztáčí a nespotřebovává další
+  syncrequesty.
+- Sondy PA–PM byly převedeny do `tests/review/` a doplněny o přesné 5s okno
+  a nekompletní open-order snapshot. Na 48a8163 padalo 11/14 původních sond;
+  po opravě prošlo všech 16 finálních asercí. Změnová sada 183/183 a finální
+  předepsaná copier sada mimo sandbox 173 souborů + 1 skipped, 1998 testů +
+  1 todo, exit 0. První sandbox full run měl 91 `listen EPERM` pádů a jednu
+  skutečnou clock regresi; ta byla opravena, neoznačena za flake.
+- Finální `npx tsc --noEmit` končí exit 2 pouze na povolených chybějících
+  Chrome typech a `@crxjs/vite-plugin` v `extension/`; root-only typecheck bez
+  extension prošel exit 0. Bez commitu, push/deploye, npm install/ci, broker
+  API, ARM/Flatten nebo reinstalu workeru.
+
 ### 2026-09-29 — Balíček 9: V6 route-gap resync po obměně spojení (Codex)
 
 - Obměna Tradovate spojení nyní sestaví read-only snapshot dotčené route

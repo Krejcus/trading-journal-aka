@@ -148,6 +148,64 @@ describe('V6 route-gap resync', () => {
     controller.stop();
   });
 
+  it('neautoritativni renewal snapshot skonci route-gap-divergence, ne transport reconnectem', async () => {
+    const { broker, controller } = await setupArmed();
+
+    broker.emitEvent({
+      type: 'connection', connected: true, at: 4_500, resynced: true,
+      routeGap: false,
+      resync: {
+        ...cleanSnapshot([100, 200]),
+        complete: false,
+        failureReason: 'Resync snapshot nemá potvrzený tvar orderu 47',
+      },
+    } as BrokerEvent);
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({
+      connected: true,
+      armed: false,
+      lastDisarm: { code: 'route-gap-divergence' },
+    });
+    expect(controller.status().lastError).toContain('snapshot není autoritativní');
+    expect(broker.placedRequests()).toHaveLength(0);
+    expect(broker.liquidateRequests()).toHaveLength(0);
+    controller.stop();
+  });
+
+  it('router zachova neautoritativni marker scoped resyncu az do controlleru', async () => {
+    const leader = createMockBroker();
+    const follower = createMockBroker();
+    const router = createBrokerRouter([
+      { broker: leader, accountIds: [100], critical: true },
+      { broker: follower, accountIds: [200], critical: true },
+    ]);
+    const controller = await bootstrapCopierRuntime({
+      broker: router, store: createMemoryCopierStore(), group, clock: clock(),
+    });
+    leader.setConnected(true);
+    follower.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+
+    leader.emitEvent({
+      type: 'connection', connected: true, at: 4_600, resynced: true,
+      resync: {
+        ...cleanSnapshot([100]), complete: false,
+        failureReason: 'route order shape unavailable',
+      },
+    } as BrokerEvent);
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({
+      connected: true, armed: false,
+      lastDisarm: { code: 'route-gap-divergence' },
+    });
+    expect(controller.status().lastError).toContain('route order shape unavailable');
+    controller.stop();
+  });
+
   it('router preda follower resync uvnitr grace jako samostatny route-gap snapshot', () => {
     const leader = createMockBroker();
     const follower = createMockBroker();

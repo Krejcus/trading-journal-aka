@@ -232,6 +232,7 @@ export function createBrokerRouter(
           routeGap: !criticalBrokers.has(routeBroker),
           ...(event.resync ? {
             resync: {
+              ...event.resync,
               accountIds,
               positions: event.resync.positions.filter(item => assigned.has(item.accountId)),
               orders: event.resync.orders.filter(item => assigned.has(item.accountId)),
@@ -243,10 +244,11 @@ export function createBrokerRouter(
       const applyConnection = (broker: BrokerPort, event: Extract<BrokerEvent, { type: 'connection' }>) => {
         connected.set(broker, event.connected);
         publishAggregate(event.at);
-        // Každá route musí svůj resync předat samostatně i tehdy, když se
-        // agregované connected=true vůbec nezměnilo. Snapshot je účetově
-        // oříznutý, takže controller nemusí blokovat nesouvisející route.
-        if (event.resynced && event.connected) listener(scopedResync(broker, event));
+        // Scoped resync je platný jen nad živým agregátem. Dílčí route nesmí
+        // přepsat controller na connected, když kritický leader stream neběží.
+        if (event.resynced && event.connected && aggregateConnected) {
+          listener(scopedResync(broker, event));
+        }
       };
 
       const flushOutage = (broker: BrokerPort) => {
@@ -346,7 +348,7 @@ export function createBrokerRouter(
           clearTimeoutImpl(outage.timer);
           pendingOutage.delete(routeBroker);
           connected.set(routeBroker, true);
-          if (event.resynced) listener(scopedResync(routeBroker, event));
+          if (event.resynced && aggregateConnected) listener(scopedResync(routeBroker, event));
           return;
         }
         applyConnection(routeBroker, event);
