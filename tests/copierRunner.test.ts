@@ -4,6 +4,7 @@ import { createRiskGateContext, type RiskGateContext } from '../services/copierR
 import {
   createRuntime,
   attachCopierMetrics,
+  CopierProcessorCommitError,
   createCopierMetrics,
   createSerialCopierProcessor,
   percentile,
@@ -2805,6 +2806,64 @@ describe('změna pracovní objednávky', () => {
 });
 
 describe('serializace a live pojistka', () => {
+  it('chyba commitu automaticky zopakuje durable reload s omezeným backoffem', async () => {
+    const initial = createRuntime(createCopierState());
+    let attempts = 0;
+    const waits: number[] = [];
+    const processor = createSerialCopierProcessor(initial, {
+      reload: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('první load selhal');
+        return initial;
+      },
+      reloadMaxAttempts: 3,
+      reloadBackoffMs: 7,
+      waitForReloadBackoff: async ms => { waits.push(ms); },
+    });
+
+    await expect(processor.mutate(async () => {
+      throw new CopierProcessorCommitError('commit outcome uncertain');
+    })).rejects.toThrow('commit outcome uncertain');
+    await expect(processor.waitForRecovery()).resolves.toBeUndefined();
+
+    expect(attempts).toBe(2);
+    expect(waits).toEqual([7]);
+    expect(processor.recoveryStatus()).toEqual({ state: 'ready' });
+  });
+
+  it('po vyčerpání reload pokusů waitForRecovery resolvne a processor zůstane fail-closed failed', async () => {
+    const initial = createRuntime(createCopierState());
+    const processor = createSerialCopierProcessor(initial, {
+      reload: async () => { throw new Error('load stále selhává'); },
+      reloadMaxAttempts: 2,
+      reloadBackoffMs: 1,
+      waitForReloadBackoff: async () => undefined,
+    });
+
+    await expect(processor.mutate(async () => {
+      throw new CopierProcessorCommitError('commit outcome uncertain');
+    })).rejects.toThrow('commit outcome uncertain');
+    await expect(processor.waitForRecovery()).resolves.toBeUndefined();
+
+    expect(processor.recoveryStatus()).toMatchObject({ state: 'failed' });
+    await expect(processor.mutate(async current => current))
+      .rejects.toThrow(/čeká na durable reload/);
+  });
+
+  it('odmítnutí operace bez chyby commitu nespouští durable reload', async () => {
+    const initial = createRuntime(createCopierState());
+    const reload = vi.fn(async () => initial);
+    const processor = createSerialCopierProcessor(initial, { reload });
+
+    await expect(processor.mutate(async () => {
+      throw new Error('policy odmítla operaci před commitem');
+    })).rejects.toThrow('policy odmítla operaci před commitem');
+    await expect(processor.mutate(async current => current)).resolves.toBe(initial);
+
+    expect(reload).not.toHaveBeenCalled();
+    expect(processor.recoveryStatus()).toEqual({ state: 'ready' });
+  });
+
   it('živý broker bez durable store nic neodešle', async () => {
     const broker = createMockBroker({ environment: 'live' });
     const result = await processLeaderEvent({

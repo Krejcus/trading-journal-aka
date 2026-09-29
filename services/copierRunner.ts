@@ -1006,10 +1006,10 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
   // Posuzuj bezpečnost proti stavu před začátkem celé fan-out dávky.
   // Nové `sending` položky dřívějších followerů stejné dávky nejsou stuck.
   const hadUnsafeOutboxAtBatchStart = context.stuckOutbox
-    || stuckEntries(outbox.values()).length > 0
+    || stuckEntries(outbox.values()).some(entry => !context.nonBlockingOutboxKeys?.has(entry.key))
     || stuckBracketEntries(bracketOutbox.values()).length > 0
     || stuckOsoEntries(osoOutbox.values()).length > 0
-    || stuckCancelEntries(cancelOutbox.values()).length > 0;
+    || stuckCancelEntries(cancelOutbox.values()).some(entry => !context.nonBlockingOutboxKeys?.has(entry.key));
 
   for (const job of jobs) {
     const decision = evaluateRiskGate(job.gateRequests, {
@@ -1224,10 +1224,10 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
   // Stejné pravidlo jako u OCO: sourozenci v jedné atomické dávce se
   // navzájem neblokují, ale starší nevyřešený outbox blokuje všechny.
   const hadUnsafeOutboxAtBatchStart = context.stuckOutbox
-    || stuckEntries(outbox.values()).length > 0
+    || stuckEntries(outbox.values()).some(entry => !context.nonBlockingOutboxKeys?.has(entry.key))
     || stuckBracketEntries(bracketOutbox.values()).length > 0
     || stuckOsoEntries(osoOutbox.values()).length > 0
-    || stuckCancelEntries(cancelOutbox.values()).length > 0;
+    || stuckCancelEntries(cancelOutbox.values()).some(entry => !context.nonBlockingOutboxKeys?.has(entry.key));
   for (const follower of group.followers) {
     if (follower.enabled === false || follower.mode === 'off') continue;
     if (follower.mode !== 'on-submit') {
@@ -1489,10 +1489,12 @@ export async function processLeaderEvent(
       ...context,
       sequenceBroken: context.sequenceBroken || sequenceBroken,
       stuckOutbox: context.stuckOutbox
-        || stuckEntries(outbox.values()).length > 0
+        || stuckEntries(outbox.values()).some(entry => !context.nonBlockingOutboxKeys?.has(entry.key))
         || stuckBracketEntries(bracketOutbox.values()).length > 0
         || stuckOsoEntries(osoOutbox.values()).length > 0
-        || stuckCancelEntries(cancelOutbox.values()).some(entry => entry.leaderEventId !== event.id),
+        || stuckCancelEntries(cancelOutbox.values()).some(entry => (
+          entry.leaderEventId !== event.id && !context.nonBlockingOutboxKeys?.has(entry.key)
+        )),
     };
     const blockedCommandReasons = new Map<string, string>();
     const protectiveCancelKeys = new Set<string>();
@@ -1932,10 +1934,10 @@ export async function processLeaderEvent(
     ...context,
     sequenceBroken: context.sequenceBroken || sequenceBroken,
     stuckOutbox: context.stuckOutbox
-      || stuckEntries(outbox.values()).length > 0
+      || stuckEntries(outbox.values()).some(entry => !context.nonBlockingOutboxKeys?.has(entry.key))
       || stuckBracketEntries(bracketOutbox.values()).length > 0
       || stuckOsoEntries(osoOutbox.values()).length > 0
-      || stuckCancelEntries(cancelOutbox.values()).length > 0,
+      || stuckCancelEntries(cancelOutbox.values()).some(entry => !context.nonBlockingOutboxKeys?.has(entry.key)),
   };
 
   const byTag = new Map(plan.orders.map(order => [order.request.tag, order]));
@@ -2581,6 +2583,26 @@ export interface SerialCopierProcessorOptions {
    * pokračovat se starým in-memory CAS je zakázané.
    */
   reload?: () => Promise<CopierRuntime>;
+  /** Omezený počet automatických load pokusů po chybě/nejistotě commitu. */
+  reloadMaxAttempts?: number;
+  /** Základ exponenciálního backoffu mezi automatickými load pokusy. */
+  reloadBackoffMs?: number;
+  /** Injektovatelný wait pro deterministické testy recovery. */
+  waitForReloadBackoff?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Jediný typ chyby, po kterém serial processor zahazuje lokální CAS revizi.
+ * Policy/broker odmítnutí samo o sobě neznamená, že durable commit proběhl.
+ */
+export class CopierProcessorCommitError extends Error {
+  readonly cause: unknown;
+
+  constructor(reason: unknown) {
+    super(reason instanceof Error ? reason.message : String(reason));
+    this.name = 'CopierProcessorCommitError';
+    this.cause = reason;
+  }
 }
 
 class CopierProcessorReloadRequiredError extends Error {
@@ -2598,6 +2620,10 @@ export function createSerialCopierProcessor(
   let tail: Promise<void> = Promise.resolve();
   let recovery: CopierProcessorRecoveryStatus = { state: 'ready' };
   let recoveryPromise: Promise<void> | null = null;
+  const reloadMaxAttempts = Math.max(1, Math.trunc(options.reloadMaxAttempts ?? 3));
+  const reloadBackoffMs = Math.max(0, Math.trunc(options.reloadBackoffMs ?? 10));
+  const waitForReloadBackoff = options.waitForReloadBackoff
+    ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
 
   const errorMessage = (reason: unknown) => (
     reason instanceof Error ? reason.message : String(reason)
@@ -2608,17 +2634,27 @@ export function createSerialCopierProcessor(
     if (!force && recovery.state === 'reloading' && recoveryPromise) return recoveryPromise;
     const message = errorMessage(reason);
     recovery = { state: 'reloading', reason: message };
-    const run = options.reload().then(next => {
-      runtime = next;
-      recovery = { state: 'ready' };
-    }, reloadReason => {
-      const reloadMessage = errorMessage(reloadReason);
+    const run = (async () => {
+      let lastReloadReason: unknown;
+      for (let attempt = 1; attempt <= reloadMaxAttempts; attempt += 1) {
+        try {
+          runtime = await options.reload!();
+          recovery = { state: 'ready' };
+          return;
+        } catch (reloadReason) {
+          lastReloadReason = reloadReason;
+          if (attempt < reloadMaxAttempts) {
+            await waitForReloadBackoff(reloadBackoffMs * (2 ** (attempt - 1)));
+          }
+        }
+      }
+      const reloadMessage = errorMessage(lastReloadReason);
       recovery = {
         state: 'failed',
-        reason: `původní chyba: ${message}; durable reload selhal: ${reloadMessage}`,
+        reason: `původní chyba: ${message}; durable reload selhal po ${reloadMaxAttempts} pokusech: ${reloadMessage}`,
       };
-      throw reloadReason;
-    });
+      throw lastReloadReason;
+    })();
     const tracked = run.finally(() => {
       if (recoveryPromise === tracked) recoveryPromise = null;
     });
@@ -2635,6 +2671,7 @@ export function createSerialCopierProcessor(
 
   const settleFailure = (reason: unknown): Promise<void> => {
     if (reason instanceof CopierProcessorReloadRequiredError) return Promise.resolve();
+    if (!(reason instanceof CopierProcessorCommitError)) return Promise.resolve();
     return startReload(reason).catch(() => undefined);
   };
 
@@ -2692,9 +2729,8 @@ export function createSerialCopierProcessor(
       return runtime;
     },
     async waitForRecovery(): Promise<void> {
-      if (recovery.state === 'reloading' && recoveryPromise) await recoveryPromise;
-      if (recovery.state === 'failed') {
-        throw new CopierProcessorReloadRequiredError(recovery.reason);
+      if (recovery.state === 'reloading' && recoveryPromise) {
+        await recoveryPromise.catch(() => undefined);
       }
     },
   };

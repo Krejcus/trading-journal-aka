@@ -60,6 +60,7 @@ import {
   createCopierMetrics,
   createRuntime,
   createSerialCopierProcessor,
+  CopierProcessorCommitError,
   recoverOutbox,
   runtimeFromSnapshot,
   type CopierAuditEntry,
@@ -718,6 +719,18 @@ const normalizedRuntimeGroup = (group: CopyGroupConfig): CopyGroupConfig => {
 export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): Promise<CopierRuntimeController> {
   assertRuntimeGroup(options.group);
   const clock = options.clock ?? Date.now;
+  const durableStore: CopierStore = {
+    load: () => options.store.load(),
+    async commit(snapshot, expectedRevision) {
+      try {
+        return await options.store.commit(snapshot, expectedRevision);
+      } catch (reason) {
+        throw reason instanceof CopierProcessorCommitError
+          ? reason
+          : new CopierProcessorCommitError(reason);
+      }
+    },
+  };
   let group = normalizedRuntimeGroup(options.group);
   let startupMissingLeaderRoute: Error | null = null;
   try {
@@ -759,20 +772,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     options.broker,
     accountId => group.followers.find(item => item.accountId === accountId)?.maxContracts,
   );
-  let runtime: CopierRuntime = runtimeFromSnapshot(await options.store.load());
+  let runtime: CopierRuntime = runtimeFromSnapshot(await durableStore.load());
   const metrics = options.metrics ?? createCopierMetrics();
   const recovered = await recoverOutbox({
     runtime,
     broker,
     clock,
-    store: options.store,
+    store: durableStore,
     metrics,
   });
   runtime = recovered.runtime;
   if (recovered.audit.length > 0) options.onAudit?.(recovered.audit);
 
   const processor = createSerialCopierProcessor(runtime, {
-    reload: async () => runtimeFromSnapshot(await options.store.load()),
+    reload: async () => runtimeFromSnapshot(await durableStore.load()),
   });
   let sessionArmedAt = runtime.state.safety.sessionArmedAt ?? 0;
   // Durable záznamy prošly vlastním zápisem, ale při načtení se validují
@@ -1019,7 +1032,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         seenTerminalRejects,
       };
       const state = { ...currentRuntimeValue.state, safety };
-      const committed = await options.store.commit(
+      const committed = await durableStore.commit(
         toSnapshot(
           state,
           outbox.values(),
@@ -1393,6 +1406,48 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   /** Broker lifecycle follower cutu běží mimo eventTail; sada slouží jen waitForIdle/stop observabilitě. */
   const followerCutBackgroundJobs = new Set<Promise<unknown>>();
   const followerCutBackgroundAccounts = new Set<number>();
+  const followerCutBackgroundJobsByAccount = new Map<number, Promise<unknown>>();
+  const followerCutBackgroundAbortByAccount = new Map<number, (reason: string) => void>();
+  const followerCutBrokerWritesByAccount = new Map<number, Set<Promise<unknown>>>();
+  const cancelFollowerCutBackgroundLanes = (reason: string) => {
+    for (const abort of followerCutBackgroundAbortByAccount.values()) abort(reason);
+  };
+  const awaitFollowerCutBackgroundAccounts = async (
+    accountIds: readonly number[],
+    label: string,
+  ): Promise<void> => {
+    const jobs = [...new Set(accountIds.flatMap(accountId => {
+      const job = followerCutBackgroundJobsByAccount.get(accountId);
+      return job ? [job] : [];
+    }))];
+    const assertNoRawWriteInFlight = () => {
+      const accountId = accountIds.find(id => (
+        (followerCutBrokerWritesByAccount.get(id)?.size ?? 0) > 0
+      ));
+      if (accountId != null) {
+        throw new Error(
+          `${label}: účet ${accountId} má stále nejasný broker write z background lane; vyžaduje read-only reconciliation po jeho doběhnutí`,
+        );
+      }
+    };
+    if (jobs.length === 0) {
+      assertNoRawWriteInFlight();
+      return;
+    }
+    const timeoutMs = Math.max(1, options.followerCutDeadlineMs ?? 90_000);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(
+        `${label}: background follower cut nedokončil account lane do ${timeoutMs} ms`,
+      )), timeoutMs);
+    });
+    try {
+      await Promise.race([Promise.all(jobs), timeout]);
+      assertNoRawWriteInFlight();
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
   let brokerObservationVersion = 0;
   /** Jen události, které mohou změnit trade boundary; heartbeat čtení nesmí hladovět. */
   let tradeBoundaryObservationVersion = 0;
@@ -2158,6 +2213,39 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     ].sort((left, right) => left.updatedAt - right.updatedAt || left.key.localeCompare(right.key));
   };
   const hasStuckOutbox = () => currentStuckOperations().length > 0;
+  const backgroundNonBlockingOutboxKeys = () => {
+    const current = currentRuntime();
+    return new Set([
+      ...[...current.outbox.values()].flatMap(entry => (
+        followerCutBackgroundAccounts.has(entry.request.accountId)
+        && entry.leaderOrderId.startsWith('manual-flatten:')
+          ? [entry.key]
+          : []
+      )),
+      ...[...current.cancelOutbox.values()].flatMap(entry => (
+        followerCutBackgroundAccounts.has(entry.accountId)
+        && entry.leaderEventId.startsWith('manual-flatten:')
+          ? [entry.key]
+          : []
+      )),
+    ]);
+  };
+  const hasDispatchBlockingStuckOutbox = () => {
+    const current = currentRuntime();
+    const backgroundOwns = (accountId: number, marker: string | undefined) => (
+      followerCutBackgroundAccounts.has(accountId)
+      && marker?.startsWith('manual-flatten:') === true
+    );
+    const blocked = stuckEntries(current.outbox.values()).some(entry => (
+      !backgroundOwns(entry.request.accountId, entry.leaderOrderId)
+    ))
+      || stuckCancelEntries(current.cancelOutbox.values()).some(entry => (
+        !backgroundOwns(entry.accountId, entry.leaderEventId)
+      ))
+      || stuckBracketEntries(current.bracketOutbox.values()).length > 0
+      || stuckOsoEntries(current.osoOutbox.values()).length > 0;
+    return blocked;
+  };
 
   /**
    * Operace, u kterých NEVÍME, co u brokera existuje (`sending`/`unknown`).
@@ -2225,7 +2313,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       if (!changed) return current;
 
-      const committed = await options.store.commit(
+      const committed = await durableStore.commit(
         toSnapshot(
           current.state,
           outbox.values(),
@@ -2253,7 +2341,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     await processor.mutate(async current => {
       const safety = update(current.state.safety);
       const state = { ...current.state, safety: { ...safety } };
-      const committed = await options.store.commit(
+      const committed = await durableStore.commit(
         toSnapshot(
           state,
           current.outbox.values(),
@@ -2679,7 +2767,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         safety = { ...current.state.safety, liveCopyOpenSince: clock() };
       }
       const state = { ...current.state, safety };
-      const committed = await options.store.commit(
+      const committed = await durableStore.commit(
         toSnapshot(
           state,
           current.outbox.values(),
@@ -3263,6 +3351,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       shadowMode: true,
       ...(failure.transportLost ? { connected: false } : {}),
     };
+    cancelFollowerCutBackgroundLanes(
+      failure.transportLost ? 'transport-lost' : 'fail-closed',
+    );
     // Interní nejistota odzbrojí copier a vynutí novou autoritativní kontrolu,
     // ale nesmí předstírat fyzický disconnect. Živé spojení je potřeba právě
     // proto, aby mohly doběhnout risk-redukující cancely už známých objednávek.
@@ -3622,7 +3713,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         changed = true;
       }
       if (!changed) return current;
-      const committed = await options.store.commit(
+      const committed = await durableStore.commit(
         toSnapshot(
           current.state,
           outbox.values(),
@@ -3947,7 +4038,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           },
         },
       };
-      const committed = await options.store.commit(
+      const committed = await durableStore.commit(
         toSnapshot(
           state,
           current.outbox.values(),
@@ -4179,7 +4270,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (!preserveArm) {
       gate = { ...gate, armed: false };
       invalidateReconciliation();
+      cancelFollowerCutBackgroundLanes(`flatten:${operationId}`);
     }
+    await awaitFollowerCutBackgroundAccounts(accountIds, `Flatten ${operationId}`);
     // Flatten je poslední risk-redukční brzda. Kill switch, shozený WS gate
     // ani starý sending/unknown outbox nesmí zabránit ani pokusu o čerstvou
     // autoritativní REST likvidaci. Skutečný transport/rate-limit/broker
@@ -4190,7 +4283,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const processed = await processManualFlatten({
           runtime: current,
           broker,
-          store: options.store,
+          store: durableStore,
           groupId: group.id,
           accountIds,
           ...(targets ? { targets } : {}),
@@ -4246,18 +4339,27 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const emergencyFlatten = (
     accountIds: readonly number[],
     operationId: string,
+    emergencyOptions: {
+      targets?: readonly ManualFlattenTarget[];
+      cleanupScope?: 'account' | 'target-symbol' | 'target-symbol-or-account';
+    } = {},
   ): Promise<ManualFlattenResult> => {
     // Ne-Tradovate adaptéry bez stavového endpointu zachovají původní
     // durable cancel -> přesný Market close cestu. Produkční Tradovate
     // router liquidatePosition vždy poskytuje a používá prioritní lane níže.
-    if (!broker.liquidatePosition) return flatten(accountIds, operationId);
+    if (!broker.liquidatePosition) return flatten(accountIds, operationId, {
+      ...(emergencyOptions.targets ? { targets: emergencyOptions.targets } : {}),
+      ...(emergencyOptions.cleanupScope ? { cleanupScope: emergencyOptions.cleanupScope } : {}),
+    });
     const key = operationId.trim();
     const existing = emergencyFlattenOperations.get(key);
     if (existing) return existing;
 
     gate = { ...gate, armed: false };
     invalidateReconciliation();
+    cancelFollowerCutBackgroundLanes(`emergency-flatten:${key}`);
     const run = emergencyFlattenTail.then(async () => {
+      await awaitFollowerCutBackgroundAccounts(accountIds, `Nouzový Flatten ${key}`);
       const live = currentRuntime();
       const isolatedStore = createMemoryCopierStore(toSnapshot(
         live.state,
@@ -4335,6 +4437,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         store: isolatedStore,
         groupId: group.id,
         accountIds,
+        ...(emergencyOptions.targets ? { targets: emergencyOptions.targets } : {}),
+        ...(emergencyOptions.cleanupScope ? { cleanupScope: emergencyOptions.cleanupScope } : {}),
         nativeOnly: true,
         operationId: key,
         clock,
@@ -4743,12 +4847,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           now: clock(),
           shadowMode: false,
           sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
-          stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
+          stuckOutbox: gate.stuckOutbox || hasDispatchBlockingStuckOutbox(),
+          nonBlockingOutboxKeys: backgroundNonBlockingOutboxKeys(),
           ineligibleAccounts: new Map(),
         },
         broker: dispatchBroker(safetyGeneration, cancelEvent),
         clock,
-        store: options.store,
+        store: durableStore,
         metrics,
         maxConcurrentDispatches: options.maxConcurrentDispatches,
       });
@@ -4941,6 +5046,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     broker: BrokerPort;
     deadlineAt: number;
     assertReturnBarrier: () => void;
+    abort: (reason: string) => void;
+    wait: (ms: number) => Promise<void>;
   };
 
   const createBackgroundFollowerCutContext = (
@@ -4960,6 +5067,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       1,
       options.followerCutBrokerRequestTimeoutMs ?? 10_000,
     );
+    let abortBackground!: (reason: string) => void;
+    const backgroundAborted = new Promise<string>(resolve => {
+      abortBackground = resolve;
+    });
 
     const activeCutStillMatches = () => {
       const active = followerCuts.get(accountId);
@@ -5004,14 +5115,39 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           `Follower cut ${accountId} překročil deadline při ${label}`,
         )), remainingMs);
       });
-      return Promise.race([operation(), deadline]).finally(() => {
+      const aborted = backgroundAborted.then(reason => {
+        throw new CopierDispatchRevokedError(`follower-cut-aborted:${reason}`);
+      });
+      return Promise.race([operation(), deadline, aborted]).finally(() => {
         if (timer) clearTimeout(timer);
       });
+    };
+    const wait = (ms: number) => {
+      const pause = options.wait
+        ? options.wait(ms)
+        : new Promise<void>(resolve => setTimeout(resolve, ms));
+      return Promise.race([
+        pause,
+        backgroundAborted.then(reason => {
+          throw new CopierDispatchRevokedError(`follower-cut-aborted:${reason}`);
+        }),
+      ]);
     };
     const read = <T>(label: string, operation: () => Promise<T>) => withDeadline(label, operation);
     const write = <T>(label: string, operation: () => Promise<T>) => {
       assertReturnBarrier();
-      return withDeadline(label, operation);
+      return withDeadline(label, () => {
+        const raw = operation();
+        const tracked = raw.finally(() => {
+          const pending = followerCutBrokerWritesByAccount.get(accountId);
+          pending?.delete(tracked);
+          if (pending?.size === 0) followerCutBrokerWritesByAccount.delete(accountId);
+        });
+        const pending = followerCutBrokerWritesByAccount.get(accountId) ?? new Set<Promise<unknown>>();
+        pending.add(tracked);
+        followerCutBrokerWritesByAccount.set(accountId, pending);
+        return tracked;
+      });
     };
     const cutBroker: BrokerPort = {
       ...broker,
@@ -5047,49 +5183,80 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         },
       } : {}),
     };
-    return { broker: cutBroker, deadlineAt, assertReturnBarrier };
+    return {
+      broker: cutBroker,
+      deadlineAt,
+      assertReturnBarrier,
+      abort: abortBackground,
+      wait,
+    };
   };
 
-  const trackFollowerCutBackground = <T>(accountId: number, job: Promise<T>): Promise<T> => {
+  const trackFollowerCutBackground = <T>(
+    accountId: number,
+    context: BackgroundFollowerCutContext,
+    job: Promise<T>,
+  ): Promise<T> => {
     followerCutBackgroundJobs.add(job);
     followerCutBackgroundAccounts.add(accountId);
+    followerCutBackgroundJobsByAccount.set(accountId, job);
+    followerCutBackgroundAbortByAccount.set(accountId, context.abort);
     void job.finally(() => {
       followerCutBackgroundJobs.delete(job);
       followerCutBackgroundAccounts.delete(accountId);
+      if (followerCutBackgroundJobsByAccount.get(accountId) === job) {
+        followerCutBackgroundJobsByAccount.delete(accountId);
+        followerCutBackgroundAbortByAccount.delete(accountId);
+      }
     }).catch(() => undefined);
     return job;
   };
 
-  const mergeBackgroundFlattenRuntime = async (
-    backgroundRuntime: CopierRuntime,
-    operationId: string,
-  ): Promise<void> => {
+  /**
+   * Background lane smí číst ze svého snapshotu, ale každý její outbox
+   * přechod se před návratem z commit() atomicky sloučí do hlavního runtime.
+   * Tím `planned`/`sending` skutečně předchází broker write i pádu procesu.
+   */
+  const createBackgroundFlattenStore = (operationId: string): CopierStore => {
     const leaderPrefix = `manual-flatten:${operationId}`;
-    const backgroundOutbox = [...backgroundRuntime.outbox.values()].filter(entry => (
-      entry.leaderOrderId.startsWith(`${leaderPrefix}:`)
-    ));
-    const backgroundCancelOutbox = [...backgroundRuntime.cancelOutbox.values()].filter(entry => (
-      entry.leaderEventId === leaderPrefix
-    ));
-    if (backgroundOutbox.length === 0 && backgroundCancelOutbox.length === 0) return;
-    await processor.mutate(async current => {
-      const outbox = new Map(current.outbox);
-      const cancelOutbox = new Map(current.cancelOutbox);
-      for (const entry of backgroundOutbox) outbox.set(entry.key, entry);
-      for (const entry of backgroundCancelOutbox) cancelOutbox.set(entry.key, entry);
-      const committed = await options.store.commit(
-        toSnapshot(
-          current.state,
-          outbox.values(),
-          cancelOutbox.values(),
-          current.revision,
-          current.bracketOutbox.values(),
-          current.osoOutbox.values(),
-        ),
-        current.revision,
-      );
-      return { ...current, outbox, cancelOutbox, revision: committed.revision };
-    });
+    return {
+      load: () => durableStore.load(),
+      async commit(snapshot) {
+        const backgroundOutbox = snapshot.outbox.filter(entry => (
+          entry.leaderOrderId.startsWith(`${leaderPrefix}:`)
+        ));
+        const backgroundCancelOutbox = snapshot.cancelOutbox.filter(entry => (
+          entry.leaderEventId === leaderPrefix
+        ));
+        const merged = await processor.mutate(async current => {
+          if (backgroundOutbox.length === 0 && backgroundCancelOutbox.length === 0) return current;
+          const outbox = new Map(current.outbox);
+          const cancelOutbox = new Map(current.cancelOutbox);
+          for (const entry of backgroundOutbox) outbox.set(entry.key, entry);
+          for (const entry of backgroundCancelOutbox) cancelOutbox.set(entry.key, entry);
+          const committed = await durableStore.commit(
+            toSnapshot(
+              current.state,
+              outbox.values(),
+              cancelOutbox.values(),
+              current.revision,
+              current.bracketOutbox.values(),
+              current.osoOutbox.values(),
+            ),
+            current.revision,
+          );
+          return { ...current, outbox, cancelOutbox, revision: committed.revision };
+        });
+        return toSnapshot(
+          merged.state,
+          merged.outbox.values(),
+          merged.cancelOutbox.values(),
+          merged.revision,
+          merged.bracketOutbox.values(),
+          merged.osoOutbox.values(),
+        );
+      },
+    };
   };
 
   const executeFollowerCutAction = async (
@@ -5105,6 +5272,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // update-group cesty (emitCopyEvent=false) běží už DISARMED a nechávají
     // si původní fail-closed chování, aby se nic neobnovovalo naslepo.
     const scopedFailure = emitCopyEvent;
+    if (liveSideEffects && !background) {
+      await awaitFollowerCutBackgroundAccounts(
+        [accountId],
+        `Follower cut recovery ${accountId}`,
+      );
+    }
     if (!liveSideEffects) {
       // Shadow ARM smí risk data i cut stav pozorovat, nikdy však nesmí
       // vytvořit cancel/liquidation side effect.
@@ -5222,7 +5395,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     try {
       if (background) {
         const live = currentRuntime();
-        const isolatedStore = createMemoryCopierStore(toSnapshot(
+        const isolatedRuntime = runtimeFromSnapshot(toSnapshot(
           live.state,
           live.outbox.values(),
           live.cancelOutbox.values(),
@@ -5230,16 +5403,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           live.bracketOutbox.values(),
           live.osoOutbox.values(),
         ));
-        const isolatedRuntime = runtimeFromSnapshot(await isolatedStore.load());
         const ownedSymbols = Object.keys(
           followerCutExecutionProvenance.get(accountId)?.copiedExposureBySymbol ?? {},
         );
         const flattenOperationId = cut.operationId
           ?? `cut-${accountId}-${Math.floor(cut.until / 86_400_000)}`;
+        const backgroundStore = createBackgroundFlattenStore(flattenOperationId);
         const processed = await processManualFlatten({
           runtime: isolatedRuntime,
           broker: background.broker,
-          store: isolatedStore,
+          store: backgroundStore,
           groupId: group.id,
           accountIds: [accountId],
           ...(ownedSymbols.length > 0 ? {
@@ -5258,12 +5431,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           confirmationMaxPollMs: options.followerCutConfirmationMaxPollMs
             ?? (options.flattenConfirmationPollMs != null ? options.flattenConfirmationPollMs : 4_000),
           accountConcurrency: 1,
-          wait: options.wait,
+          wait: background.wait,
           deadlineAt: background.deadlineAt,
           retryPollMs: Math.max(100, options.flattenRetryPollMs ?? 1_000),
           liquidateAttempts: 1,
         });
-        await mergeBackgroundFlattenRuntime(processed.runtime, flattenOperationId);
+        // Pozdní broker výsledek po DISARM/KILL/novějším cutu už smí pouze
+        // zůstat v durable outboxu pro read-only recovery.
+        background.assertReturnBarrier();
         flattenResult = processed.result;
         if (!flattenResult.flat) {
           const detail = flattenResult.accounts
@@ -5285,7 +5460,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           }
           throw new Error(message);
         }
-        background.assertReturnBarrier();
         workingOrderAccounts.delete(accountId);
         positionsByAccount.set(accountId, new Map());
       } else {
@@ -5296,6 +5470,25 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         );
       }
     } catch (reason) {
+      if (background) {
+        try {
+          background.assertReturnBarrier();
+        } catch {
+          // Návratová bariéra odmítla stale lane: žádné closed=false ani
+          // přepis novějšího cutu, pouze povinná nová reconciliation.
+          invalidateReconciliation();
+          return null;
+        }
+      }
+      if (
+        reason instanceof CopierProcessorCommitError
+        || processor.recoveryStatus().state !== 'ready'
+      ) {
+        failClosed(new Error(
+          `Follower cut ${accountId}: durable write-ahead selhal: ${errorOf(reason).message}`,
+        ), { autoClose: false });
+        return null;
+      }
       // Jediný pokus, žádný druhý liquidation. Živě: když broker liquidate
       // ODMÍTL (nic neletí, stav účtu je známý), selhání se drží per účet
       // (closed=false, vstupy blokované, exity leadera se kopírují dál, aby
@@ -5358,13 +5551,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     follower: CopyGroupConfig['followers'][number],
     liveSideEffects: boolean,
     emitCopyEvent = true,
-  ) => trackFollowerCutBackground(cut.accountId, executeFollowerCutAction(
-    cut,
-    follower,
-    liveSideEffects,
-    emitCopyEvent,
-    createBackgroundFollowerCutContext(cut),
-  ));
+  ) => {
+    const context = createBackgroundFollowerCutContext(cut);
+    const job = executeFollowerCutAction(
+      cut,
+      follower,
+      liveSideEffects,
+      emitCopyEvent,
+      context,
+    );
+    return trackFollowerCutBackground(cut.accountId, context, job);
+  };
 
   const triggerFollowerCut = async (
     accountId: number,
@@ -6176,6 +6373,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
     let closeResult: ManualFlattenResult | null = null;
     try {
+      await awaitFollowerCutBackgroundAccounts(
+        evaluation.targets.map(target => target.accountId),
+        `Leader-flat ${epoch.id}`,
+      );
       await processor.mutate(async runtimeBeforeClose => {
         // Poslední fencing kontrola bezprostředně před durable write-ahead a
         // případným POSTem. Novější epocha ani safety incident nesmí proklouznout.
@@ -6186,7 +6387,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const processed = await processTargetedLiquidation({
           runtime: runtimeBeforeClose,
           broker,
-          store: options.store,
+          store: durableStore,
           groupId: group.id,
           targets: evaluation.targets,
           operationId: `leader-flat:${epoch.id}`,
@@ -6404,12 +6605,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const operationId = `auto-close:${trigger}:${seed}`;
     const at = clock();
     try {
-      const result = await flatten(accountIds, operationId, {
-        ...(targets.length > 0 ? {
-          targets,
-          cleanupScope: 'target-symbol-or-account' as const,
-        } : {}),
-      });
+      const flattenOptions = targets.length > 0 ? {
+        targets,
+        cleanupScope: 'target-symbol-or-account' as const,
+      } : {};
+      const result = processor.recoveryStatus().state === 'ready'
+        ? await flatten(accountIds, operationId, flattenOptions)
+        : await emergencyFlatten(accountIds, operationId, flattenOptions);
       const acted = result.canceledOrders > 0 || result.submittedClosures > 0;
       const flat = result.flat && unscopedExposure.length === 0;
       if (unscopedExposure.length > 0) reportUnscopedExposure();
@@ -7119,8 +7321,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (adjusted.unsafeDivergenceAccounts.length > 0) throw new Error('Samostatný SL: neověřená follower expozice');
     const result = await processor.process({ event, group: adjusted.dispatchGroup,
       context: { ...gate, now: clock(), sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
-        stuckOutbox: gate.stuckOutbox || hasStuckOutbox(), ineligibleAccounts: adjusted.ineligibleAccounts },
-      broker: dispatchBroker(admissionGeneration, event), clock, store: options.store, metrics,
+        stuckOutbox: gate.stuckOutbox || hasDispatchBlockingStuckOutbox(),
+        nonBlockingOutboxKeys: backgroundNonBlockingOutboxKeys(),
+        ineligibleAccounts: adjusted.ineligibleAccounts },
+      broker: dispatchBroker(admissionGeneration, event), clock, store: durableStore, metrics,
       maxConcurrentDispatches: options.maxConcurrentDispatches, deferredReplay: true });
     runtime = result.runtime;
     rememberConditionalMirrorWrites(event, result.audit);
@@ -7204,12 +7408,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           ...gate,
           now: clock(),
           sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
-          stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
+          stuckOutbox: gate.stuckOutbox || hasDispatchBlockingStuckOutbox(),
+          nonBlockingOutboxKeys: backgroundNonBlockingOutboxKeys(),
           ineligibleAccounts: adjustedDispatch.ineligibleAccounts,
         },
         broker: dispatchBroker(admissionGeneration, pending),
         clock,
-        store: options.store,
+        store: durableStore,
         metrics,
         maxConcurrentDispatches: options.maxConcurrentDispatches,
         // Událost byla zaznamenaná v pořadí; mezitím ji směly předběhnout
@@ -7657,7 +7862,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const splitExit = allowReducingSlice && leaderReducingQuantityFor(event) > 0;
       rememberIntentionalEntrySuppression(event);
       if (record && !splitExit) {
-        const recorded = await processor.record({ event: eventToRecord, group, clock, store: options.store });
+        const recorded = await processor.record({ event: eventToRecord, group, clock, store: durableStore });
         runtime = recorded.runtime;
         if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
       }
@@ -7674,7 +7879,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const splitExit = allowReducingSlice && leaderReducingQuantityFor(event) > 0;
       rememberIntentionalEntrySuppression(event);
       if (record && !splitExit) {
-        const recorded = await processor.record({ event: eventToRecord, group, clock, store: options.store });
+        const recorded = await processor.record({ event: eventToRecord, group, clock, store: durableStore });
         runtime = recorded.runtime;
         if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
       }
@@ -7692,7 +7897,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const splitExit = allowReducingSlice && leaderReducingQuantityFor(event) > 0;
     rememberIntentionalEntrySuppression(event);
     if (record && !splitExit) {
-      const recorded = await processor.record({ event: eventToRecord, group, clock, store: options.store });
+      const recorded = await processor.record({ event: eventToRecord, group, clock, store: durableStore });
       runtime = recorded.runtime;
       if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
     }
@@ -7720,7 +7925,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const splitExit = allowReducingSlice && leaderReducingQuantityFor(event) > 0;
     rememberIntentionalEntrySuppression(event);
     if (!splitExit) {
-      const recorded = await processor.record({ event, group, clock, store: options.store });
+      const recorded = await processor.record({ event, group, clock, store: durableStore });
       runtime = recorded.runtime;
       if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
     }
@@ -9425,7 +9630,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             event.order.brokerOrderId,
             event.order.quantity,
           );
-          const committed = await options.store.commit(
+          const committed = await durableStore.commit(
             toSnapshot(
               state,
               current.outbox.values(),
@@ -9750,7 +9955,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       eventIncreasesExposure
       && now - leaderEvent.receivedAt > MAX_EXPOSURE_EVENT_AGE_MS
     ) {
-      const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+      const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore });
       runtime = recorded.runtime;
       if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
       const ageMs = now - leaderEvent.receivedAt;
@@ -9779,7 +9984,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // přesná suppression lineage zabrání, aby následná Position projekce
         // tento očekávaný rozdíl mylně vyhodnotila jako incident a DISARM.
         rememberIntentionalEntrySuppression(leaderEvent);
-        const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+        const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore });
         runtime = recorded.runtime;
         if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
         options.onAudit?.([{
@@ -9818,7 +10023,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         blockedLeaderEntryOrderIds.has(leaderEvent.parentOrderId)
         || (!parentHasCopiedEntry && !parentIsPendingOso)
       )) {
-      const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+      const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore });
       runtime = recorded.runtime;
       if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
       options.onAudit?.([{
@@ -9833,7 +10038,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     const bracketPendingUpdated = bracketCorrelator.updatePending(leaderEvent);
     if (bracketPendingUpdated) {
-      const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+      const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore });
       runtime = recorded.runtime;
       if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
       if (recorded.audit.some(item => item.kind === 'sequence-broken')) {
@@ -9844,7 +10049,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const bracketPair = bracketCorrelator.observe(leaderEvent);
     const bracketEntryOrderId = bracketCorrelator.entryOrderIdForLeg(leaderEvent.orderId);
     if (bracketPair && blockedLeaderEntryOrderIds.has(bracketPair.entryOrderId)) {
-      const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+      const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore });
       runtime = recorded.runtime;
       if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
       const timer = pendingBracketTimers.get(bracketPair.entryOrderId);
@@ -9861,7 +10066,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     if (leaderEvent.kind === 'submitted' && bracketEntryOrderId) {
       if (blockedLeaderEntryOrderIds.has(bracketEntryOrderId)) {
-        const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+        const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore });
         runtime = recorded.runtime;
         if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
         options.onAudit?.([{
@@ -9873,7 +10078,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         return;
       }
       if (!bracketPair) {
-        const result = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+        const result = await processor.record({ event: leaderEvent, group, clock, store: durableStore });
         runtime = result.runtime;
         if (result.audit.length > 0) options.onAudit?.(result.audit);
         if (result.audit.some(item => item.kind === 'sequence-broken')) {
@@ -9915,12 +10120,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           ...gate,
           now,
           sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
-          stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
+          stuckOutbox: gate.stuckOutbox || hasDispatchBlockingStuckOutbox(),
+          nonBlockingOutboxKeys: backgroundNonBlockingOutboxKeys(),
           ineligibleAccounts: currentBracketIneligibleAccounts(bracketPair.entryOrderId),
         },
         broker: dispatchBroker(admissionGeneration, leaderEvent),
         clock,
-        store: options.store,
+        store: durableStore,
         metrics,
         maxConcurrentDispatches: options.maxConcurrentDispatches,
       });
@@ -9990,7 +10196,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           stopPrice: leaderEvent.stopPrice,
         });
       }
-      const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+      const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore });
       runtime = recorded.runtime;
       if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
       if (recorded.audit.some(item => item.kind === 'sequence-broken')) {
@@ -10077,12 +10283,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             ...gate,
             now,
             sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
-            stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
+            stuckOutbox: gate.stuckOutbox || hasDispatchBlockingStuckOutbox(),
+            nonBlockingOutboxKeys: backgroundNonBlockingOutboxKeys(),
             ineligibleAccounts: adjustedDispatch.ineligibleAccounts,
           },
           broker: dispatchBroker(admissionGeneration, leaderEvent),
           clock,
-          store: options.store,
+          store: durableStore,
           metrics,
           maxConcurrentDispatches: options.maxConcurrentDispatches,
         });
@@ -10095,7 +10302,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         );
         await failClosedOnCriticalAudit(exitResult.audit);
       } else {
-        const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+        const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore });
         runtime = recorded.runtime;
         if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
       }
@@ -10113,7 +10320,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
     if (osoObservation.kind === 'leg') {
-      const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+      const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore });
       runtime = recorded.runtime;
       if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
       return;
@@ -10132,7 +10339,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       pendingOsoEvents.delete(pair.entryOrderId);
       settleOsoFlush(pair.entryOrderId);
       if (entryWasBlocked) {
-        const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+        const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore });
         runtime = recorded.runtime;
         if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
         options.onAudit?.([{
@@ -10177,12 +10384,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             ...gate,
             now,
             sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
-            stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
+            stuckOutbox: gate.stuckOutbox || hasDispatchBlockingStuckOutbox(),
+            nonBlockingOutboxKeys: backgroundNonBlockingOutboxKeys(),
             ineligibleAccounts: adjustedEntryDispatch.ineligibleAccounts,
           },
           broker: dispatchBroker(entryAdmissionGeneration, pendingEntry),
           clock,
-          store: options.store,
+          store: durableStore,
           metrics,
           maxConcurrentDispatches: options.maxConcurrentDispatches,
           deferredReplay: true,
@@ -10219,13 +10427,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           ...gate,
           now,
           sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
-          stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
+          stuckOutbox: gate.stuckOutbox || hasDispatchBlockingStuckOutbox(),
+          nonBlockingOutboxKeys: backgroundNonBlockingOutboxKeys(),
           ineligibleAccounts: currentEntryIneligibleAccounts(),
         },
         broker: dispatchBroker(entryAdmissionGeneration, leaderEvent,
           [pair.entryOrderId, pair.stopOrderId, pair.targetOrderId]),
         clock,
-        store: options.store,
+        store: durableStore,
         metrics,
         maxConcurrentDispatches: options.maxConcurrentDispatches,
       });
@@ -10335,7 +10544,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           ...cutAwareDispatch.unsafeDivergenceAccounts,
         ]),
       };
-      const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+      const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore });
       runtime = recorded.runtime;
       if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
       const accounts = cutAwareDispatch.unsafeDivergenceAccounts.join(', ');
@@ -10366,12 +10575,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ...gate,
         now,
         sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
-        stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
+        stuckOutbox: gate.stuckOutbox || hasDispatchBlockingStuckOutbox(),
+        nonBlockingOutboxKeys: backgroundNonBlockingOutboxKeys(),
         ineligibleAccounts: cutAwareDispatch.ineligibleAccounts,
       },
       broker: dispatchBroker(admissionGeneration, leaderEvent),
       clock,
-      store: options.store,
+      store: durableStore,
       metrics,
       maxConcurrentDispatches: options.maxConcurrentDispatches,
     });
@@ -11197,7 +11407,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           };
         }
         const cleanState = createCopierState([], 0, [], [], [], preservedSafety);
-        const committed = await options.store.commit(
+        const committed = await durableStore.commit(
           toSnapshot(cleanState, [], [], current.revision, [], []),
           current.revision,
         );
@@ -11521,6 +11731,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (stopped) return Promise.resolve();
       shutdownRequested = true;
       gate = { ...gate, armed: false };
+      cancelFollowerCutBackgroundLanes('shutdown');
       lastResumeOffer = null;
       // Stejně jako DISARM: worker při shutdownu nesmí po restartu nabízet
       // automatické převzetí expozice. Rozpracovaný outbox/bracket/OSO drain
@@ -11540,6 +11751,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       safetyGeneration += 1;
       const wasArmed = gate.armed;
       gate = { ...gate, armed: false };
+      cancelFollowerCutBackgroundLanes('disarm');
       if (wasArmed) {
         recordDisarm(
           'manual',
@@ -11569,6 +11781,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Kill switch se v této runtime session nedá odjistit. Nový bootstrap znovu
       // startuje DISARMED a stále vyžaduje reconciliation před ostrým ARM.
       gate = { ...gate, armed: false, killSwitch: true };
+      cancelFollowerCutBackgroundLanes('kill-switch');
       lastResumeOffer = null;
       pendingConnectionRecovery = false;
       pendingReadOnlyConnectionRecovery = false;
@@ -12020,7 +12233,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             state = applyResolved(state, [], entry.leaderSequence);
           }
         }
-        const committed = await options.store.commit(
+        const committed = await durableStore.commit(
           toSnapshot(
             state,
             outbox.values(),
@@ -12278,6 +12491,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (stopped) return;
       stopped = true;
       gate = { ...gate, armed: false, connected: false };
+      cancelFollowerCutBackgroundLanes('stop');
       for (const timer of pendingBracketTimers.values()) clearTimeout(timer);
       pendingBracketTimers.clear();
       for (const timer of pendingOsoTimers.values()) clearTimeout(timer);
