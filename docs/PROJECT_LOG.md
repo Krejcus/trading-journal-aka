@@ -251,6 +251,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — Balíček 6c: oprava N1/N2 z ověřovacího review 6b (Codex)
+
+- Leader-flat snapshot nyní čte pozice → ordery → pozice. Filled OSO parent
+  nad stabilně flat followerem už není sám o sobě nekonzistence a doložená
+  osiřelá noha se sweepne; race je pouze změna pozice mezi čteními nebo parent
+  fill novější než první position read. Nejvýše dva retry mají read-only
+  backoff 25/50 ms. Read-only watchdog při nejistotě nebo nalezené owned noze
+  epochu durable zablokuje bez broker write, takže heartbeat nevyrábí smyčku.
+- Nekonzistentní účet je v batchi `ok:false`, ale už neukončí celý guard:
+  ostatní doložené orphan kopie mohou dostat symbolově cílený auto-close.
+  Exit evidence je znovu account+symbol; lineage dál omezuje pouze sweep a
+  kontrolu owned osiřelých noh.
+- Dodané sondy byly převedeny na 14 asertovaných regresí včetně R6/R6x/R6r,
+  R9-noLineage, počtu chyb po heartbeatech a doplňkové R6i pro nekonzistentní
+  účet vedle otevřeného followera. Před opravou padaly 4/13 (R6, R6x, R6r,
+  R9-noLineage); po opravě cíleně 35/35 a širší controller sada 249/249.
+  Předepsaná copier sada mimo sandbox prošla 170 souborů + 1 skipped,
+  1960 testů + 1 todo, exit 0. Sandboxový běh měl pouze 89× známé
+  `listen EPERM 127.0.0.1`. Root `tsc --noEmit` hlásí výhradně povolené
+  chybějící Chrome/CRX typy v `extension/`, žádnou chybu mimo extension.
+- Bez commitu, push/deploye, instalace závislostí, broker API, ARM/Flatten ani
+  reinstalu workeru.
+
 ### 2026-09-29 — Balíček 6b: review regrese leader-flat/auto-close/ST4 (Codex)
 
 - Leader-flat guard čte pro každý účet sekvenčně ordery a až potom pozice.

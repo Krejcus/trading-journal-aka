@@ -5653,7 +5653,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (
         entry.request.accountId !== accountId
         || entry.request.symbol !== epoch.symbol
-        || !epoch.leaderEntryOrderIds.includes(entry.leaderEntryOrderId)
       ) continue;
       for (const id of [entry.firstBrokerOrderId, entry.secondBrokerOrderId]) {
         if (id) protectiveIds.add(id);
@@ -5749,15 +5748,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     ])];
     const rows = await Promise.all(accountIds.map(async accountId => {
       const maxSnapshotAttempts = 3;
+      const retryWait = options.wait ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
       for (let attempt = 1; attempt <= maxSnapshotAttempts; attempt += 1) {
         try {
-          // Order graph musí předcházet pozici: opačné pořadí dovolovalo, aby
-          // se OSO parent vyplnil mezi REST čteními a guard zrušil SL/TP nové
-          // pozice podle staré nuly. Retry je pouze read-only a pevně omezený.
+          // Dvě position čtení svírají order graph. Samotná kombinace
+          // filled OSO parent + flat už není důkaz race: může jít o skutečně
+          // osiřelou sesterskou nohu po exitu. Nekonzistence je až změna netu
+          // mezi čteními nebo parent fill novější než první position snapshot.
+          const positionsBefore = await broker.listPositions(accountId);
+          const positionsBeforeObservedAt = clock();
           const orders = await broker.listOrders(accountId);
           const positions = await broker.listPositions(accountId);
           if (accountId !== epoch.leaderAccountId) {
-            const net = positions
+            const netBefore = positionsBefore
+              .filter(position => position.symbol === epoch.symbol)
+              .reduce((sum, position) => sum + position.netQuantity, 0);
+            const netAfter = positions
               .filter(position => position.symbol === epoch.symbol)
               .reduce((sum, position) => sum + position.netQuantity, 0);
             const filledParent = [...currentRuntime().osoOutbox.values()]
@@ -5773,13 +5779,32 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
               )))
               .map(entry => orders.find(order => order.brokerOrderId === entry.entryBrokerOrderId))
               .find(order => order != null && order.filledQuantity > 0);
-            if (net === 0 && filledParent) {
-              if (attempt < maxSnapshotAttempts) continue;
+            const positionsChanged = netBefore !== netAfter;
+            const parentFilledAfterFirstPositionRead = filledParent?.updatedAt != null
+              && filledParent.updatedAt > positionsBeforeObservedAt;
+            if (positionsChanged || parentFilledAfterFirstPositionRead) {
+              const inconsistency = positionsChanged
+                ? `pozice ${epoch.symbol} se mezi čteními změnila (${netBefore} -> ${netAfter})`
+                : `OSO parent ${filledParent?.brokerOrderId ?? 'unknown'} má fill novější než první čtení pozice ${epoch.symbol}`;
+              if (!allowWrites) {
+                return {
+                  accountId,
+                  ok: false as const,
+                  inconsistentSnapshot: true as const,
+                  error: `read-only watchdog nalezl nekonzistentní broker snapshot (${inconsistency})`,
+                };
+              }
+              if (attempt < maxSnapshotAttempts) {
+                // Pevně omezený read-only backoff dává broker snapshotu čas
+                // doběhnout; žádný broker write se nikdy neopakuje.
+                await retryWait(Math.min(25 * attempt, 50));
+                continue;
+              }
               return {
                 accountId,
                 ok: false as const,
                 inconsistentSnapshot: true as const,
-                error: `OSO parent ${filledParent.brokerOrderId} má fill, ale pozice ${epoch.symbol} je ve snapshotu 0`,
+                error: `nekonzistentní broker snapshot po ${maxSnapshotAttempts} read-only pokusech (${inconsistency})`,
               };
             }
           }
@@ -5797,14 +5822,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       await rescheduleLeaderFlatEpochAfterGenerationChange(current, token, allowWrites);
       return;
     }
-    const inconsistentSnapshot = rows.find(row => !row.ok && 'inconsistentSnapshot' in row);
-    if (inconsistentSnapshot && !inconsistentSnapshot.ok) {
-      failClosed(new Error(
-        `Leader-flat guard: nekonzistentní broker snapshot účtu ${inconsistentSnapshot.accountId} po 3 read-only pokusech (${inconsistentSnapshot.error})`,
-      ), { autoClose: false });
-      return;
-    }
-
     // Cache aktualizujeme až po ověření tokenu; pozdní snapshot staré epochy
     // nesmí přepsat novější obchod ani autorizovat jeho zavření.
     for (const row of rows) {
@@ -5868,12 +5885,39 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     }
 
+    const evaluationRows = allowWrites ? rows : rows.map(row => {
+      if (!row.ok || row.accountId === epoch.leaderAccountId) return row;
+      const net = row.positions
+        .filter(position => position.symbol === epoch.symbol)
+        .reduce((sum, position) => sum + position.netQuantity, 0);
+      if (net !== 0) return row;
+      const protectiveEntries = leaderFlatProtectiveEntries(epoch, row.accountId);
+      const ownedLegIds = new Set(protectiveEntries
+        .flatMap(entry => [entry.firstBrokerOrderId, entry.secondBrokerOrderId])
+        .filter((id): id is string => Boolean(id)));
+      const osoParentByLeg = new Map<string, string>();
+      for (const entry of protectiveEntries) {
+        if (!entry.entryBrokerOrderId) continue;
+        for (const id of [entry.firstBrokerOrderId, entry.secondBrokerOrderId]) {
+          if (id) osoParentByLeg.set(id, entry.entryBrokerOrderId);
+        }
+      }
+      const orphan = leaderFlatActiveOrphanLeg(row.orders, ownedLegIds, osoParentByLeg);
+      return orphan
+        ? {
+          accountId: row.accountId,
+          ok: false as const,
+          error: `read-only watchdog nalezl doloženou osiřelou ochrannou nohu ${orphan.brokerOrderId}; epocha je zablokovaná bez broker write`,
+        }
+        : row;
+    });
+
     if (safetyGeneration !== expectedSafetyGeneration) {
       await rescheduleLeaderFlatEpochAfterGenerationChange(current, token, allowWrites);
       return;
     }
 
-    const batchAccounts: LeaderFlatAccountBatchSnapshot[] = rows.map(row => row.ok
+    const batchAccounts: LeaderFlatAccountBatchSnapshot[] = evaluationRows.map(row => row.ok
       ? {
         accountId: row.accountId,
         ok: true,
@@ -5946,8 +5990,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ...gate,
       divergentAccounts: new Set([...gate.divergentAccounts, ...affected]),
     };
+    const snapshotErrors = evaluationRows
+      .filter((row): row is Extract<typeof evaluationRows[number], { ok: false }> => !row.ok)
+      .map(row => `${row.accountId}: ${row.error}`);
     failClosed(new Error(
-      `Copier fail-closed: leader je autoritativně flat, follower stav se neshoduje (${evaluation.reason})`,
+      `Copier fail-closed: leader je autoritativně flat, follower stav se neshoduje (${evaluation.reason}${snapshotErrors.length > 0 ? `; ${snapshotErrors.join('; ')}` : ''})`,
     ), { autoClose: false });
     const leaderFlatDisarmAt = lastDisarm?.code === 'leader-flat-follower-open'
       || lastDisarm?.trigger === 'transport'
