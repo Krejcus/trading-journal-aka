@@ -765,7 +765,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     for (const version of result.versions) rememberVersion(version);
   };
 
-  const prepareOrderVersionHydrations = (messages: readonly unknown[]): PreparedOrderVersions => {
+  const prepareOrderVersionHydrations = (
+    messages: readonly unknown[],
+    isCurrent: () => boolean,
+  ): PreparedOrderVersions => {
     const prepared: PreparedOrderVersions = new Map();
     const prepareProps = (payload: unknown) => {
       const items = Array.isArray(payload) ? payload : [payload];
@@ -789,6 +792,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           if (orderVersions.has(orderId)) continue;
         } else if (entityType === 'executionreport') {
           const report = item.entity as TradovateExecutionReportEntity;
+          if (!['New', 'Replaced'].includes(report.execType ?? '')
+            || report.commandId == null
+            || report.commandId <= (orderVersions.get(report.orderId)?.id ?? 0)
+            || requestedVersions.get(report.orderId)?.has(report.commandId)) continue;
           orderId = report.orderId;
           requiredVersionId = report.commandId;
         } else {
@@ -797,6 +804,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (!Number.isSafeInteger(orderId) || prepared.has(orderId)) continue;
         const supplied = siblingVersions.get(orderId) ?? [];
         if (supplied.some(version => requiredVersionId == null || version.id === requiredVersionId)) continue;
+        if (!isCurrent()) return;
         prepared.set(orderId, fetchOrderVersions(orderId));
       }
     };
@@ -1105,7 +1113,6 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       request<TradovateCommandEntity[]>(`/command/deps?masterid=${orderId}`).catch(() => []),
       request<TradovateFillEntity[]>(`/fill/deps?masterid=${orderId}`),
     ]);
-    if (raw) rememberRawOrder(raw);
     for (const command of dependentCommands ?? []) {
       commands.set(command.id, command);
       const correlationTag = commandCorrelationTag(command);
@@ -1126,11 +1133,18 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       // OrderVersion.id je commandId. Tohle zachova dukaz i kdyz command deps
       // chybi; initial verze se stejnym ID jako Order zadny report nepotrebuje.
       ...(versions ?? []).filter(version => version.id !== orderId).map(version => version.id),
-    ])];
+    ])].filter(commandId => (
+      commandId > (orderVersions.get(orderId)?.id ?? 0)
+      && !confirmedCommands.has(commandId)
+      && !rejectedCommands.has(commandId)
+    ));
     const reports = (await Promise.all(modifyCommandIds.map(commandId => (
       request<TradovateExecutionReportEntity[]>(`/executionReport/deps?masterid=${commandId}`)
     )))).flat().sort((left, right) => left.id - right.id);
-    for (const report of reports) rememberExecutionReport(report);
+    for (const report of reports) {
+      if (report.orderId === orderId) rememberExecutionReport(report);
+    }
+    if (raw) rememberRawOrder(raw);
     return raw;
   };
 
@@ -1657,7 +1671,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           // REST requesty zacinaji pri prijeti ramce, ne az kdyz na nej prijde
           // rada v semantic tailu. Vysledky se ale do cache aplikuji a eventy
           // emituji porad striktne v poradi ramcu.
-          preparedOrderVersions = prepareOrderVersionHydrations(messages);
+          preparedOrderVersions = prepareOrderVersionHydrations(
+            messages,
+            () => socket === candidate && socketState !== 'closing',
+          );
           // Capture before metadata/REST awaits. Analytics-only orderVersion events
           // must never update execution caches or emit a requested price as confirmed.
           if (evidenceListeners.size) {
@@ -1776,10 +1793,13 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       notOpenSince = 0;
       if (candidate.readyState !== 1) return;
       const now = clock();
-      const semanticLagLimitMs = Math.max(
+      const configuredSemanticLagLimitMs = Math.max(
         1,
         config.semanticLagTimeoutMs ?? config.socketIdleTimeoutMs ?? 15_000,
       );
+      const semanticLagLimitMs = syncReady
+        ? configuredSemanticLagLimitMs
+        : Math.max(configuredSemanticLagLimitMs, config.syncTimeoutMs ?? 5_000);
       const oldestSemanticFrame = pendingSemanticFrames[0];
       if (oldestSemanticFrame && now - oldestSemanticFrame.receivedAt >= semanticLagLimitMs) {
         emitOrHoldError(contextualError(

@@ -89,6 +89,49 @@ import {
 import { snapshotToState, toSnapshot, type CopierSnapshot, type CopierStore } from './copierStore';
 import type { CopyGroupConfig } from './liveCopyTrading';
 
+const STANDALONE_STOP_POSITION_READ_ATTEMPTS = 3;
+const STANDALONE_STOP_POSITION_READ_TIMEOUT_MS = 400;
+const STANDALONE_STOP_POSITION_READ_BACKOFF_MS = 75;
+
+const waitForStandaloneStopPositionRetry = (attempt: number) => new Promise<void>(resolve => {
+  setTimeout(resolve, STANDALONE_STOP_POSITION_READ_BACKOFF_MS * attempt);
+});
+
+const readPositionsWithDeadline = async (
+  broker: BrokerPort,
+  accountId: number,
+): Promise<Awaited<ReturnType<BrokerPort['listPositions']>>> => {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error(
+      `broker read deadline ${STANDALONE_STOP_POSITION_READ_TIMEOUT_MS} ms`,
+    )), STANDALONE_STOP_POSITION_READ_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([broker.listPositions(accountId), deadline]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+};
+
+const readStandaloneStopPositions = async (
+  broker: BrokerPort,
+  accountId: number,
+): Promise<Awaited<ReturnType<BrokerPort['listPositions']>>> => {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= STANDALONE_STOP_POSITION_READ_ATTEMPTS; attempt += 1) {
+    try {
+      return await readPositionsWithDeadline(broker, accountId);
+    } catch (error) {
+      lastError = error;
+      if (attempt < STANDALONE_STOP_POSITION_READ_ATTEMPTS) {
+        await waitForStandaloneStopPositionRetry(attempt);
+      }
+    }
+  }
+  throw lastError;
+};
+
 const standaloneProtectiveRole = (
   event: LeaderEvent,
   state: CopierState,
@@ -183,6 +226,8 @@ export interface CopierAuditEntry {
   key?: string;
   brokerOrderId?: string;
   reason?: string;
+  /** Strojově čitelná klasifikace incidentu; text `reason` zůstává pro operátora. */
+  reasonCode?: 'standalone-position-unknown';
   /** Ruční změna participation; u odmítnutí zůstává after shodné s before. */
   configuredEnabledBefore?: boolean;
   configuredEnabledAfter?: boolean;
@@ -1455,10 +1500,12 @@ export async function processLeaderEvent(
     const readPositions = (accountId: number) => {
       const existing = positionReads.get(accountId);
       if (existing) return existing;
-      const pending = broker.listPositions(accountId);
+      const pending = readStandaloneStopPositions(broker, accountId);
       positionReads.set(accountId, pending);
       return pending;
     };
+
+    const unknownStandalonePositionKeys = new Set<string>();
 
     await Promise.all(allCommands.map(async command => {
       let commandHalt: string | null;
@@ -1466,7 +1513,13 @@ export async function processLeaderEvent(
         ? standaloneLinkFor(command)
         : undefined;
       if (standaloneLink) {
-        try {
+        const protectiveHalt = protectiveLifecycleHaltReason(commandContext);
+        if (!protectiveHalt) {
+          // Za zdravého ARM je cancel stejný jako v původní lifecycle cestě:
+          // nesmí čekat na REST pozici a blokovat hned následující leader exit.
+          protectiveCancelKeys.add(command.key);
+          commandHalt = null;
+        } else try {
           const positions = await readPositions(command.accountId);
           const matching = positions.filter(position => position.symbol === event.symbol);
           const authoritative = matching.length <= 1
@@ -1480,10 +1533,7 @@ export async function processLeaderEvent(
             ) && standaloneLink.quantity <= Math.abs(net);
             if (reducesWithoutFlip) {
               protectiveCancelKeys.add(command.key);
-              const halt = protectiveLifecycleHaltReason(commandContext);
-              commandHalt = halt
-                ? `follower drží SL, který leader zrušil (${halt})`
-                : null;
+              commandHalt = `follower drží SL, který leader zrušil (${protectiveHalt})`;
             } else {
               // Flat účet, stejná strana jako pozice nebo stop větší než
               // |net| by vytvořily či zvětšily expozici. Takový stop už není
@@ -1492,7 +1542,9 @@ export async function processLeaderEvent(
             }
           }
         } catch (error) {
-          commandHalt = `pozice followera není autoritativně známá: ${error instanceof Error ? error.message : String(error)}`;
+          const message = `pozice followera není autoritativně známá po ${STANDALONE_STOP_POSITION_READ_ATTEMPTS} pokusech: ${error instanceof Error ? error.message : String(error)}`;
+          commandHalt = message;
+          unknownStandalonePositionKeys.add(command.key);
         }
       } else if (isTerminalCancel && !protectiveLegIds.has(event.orderId)) {
         commandHalt = cancelLifecycleHaltReason(context);
@@ -1514,8 +1566,17 @@ export async function processLeaderEvent(
         audit.push({
           at: clock(), leaderEventId: event.id, kind: 'blocked', accountId: command.accountId,
           key: command.key, brokerOrderId: command.brokerOrderId, reason,
+          ...(unknownStandalonePositionKeys.has(command.key)
+            ? { reasonCode: 'standalone-position-unknown' as const }
+            : {}),
         });
       }
+    }
+    if (unknownStandalonePositionKeys.size > 0) {
+      return {
+        runtime: { state, outbox, bracketOutbox, osoOutbox, cancelOutbox, shadowLinks, revision },
+        plan: { leaderEventId: event.id, orders: [], skipped: [] }, audit, metrics,
+      };
     }
     const commands = allCommands.filter(command => !blockedCommandReasons.has(command.key));
     const hadBlockedCommands = blockedCommandReasons.size > 0;

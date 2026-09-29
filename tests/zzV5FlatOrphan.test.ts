@@ -97,23 +97,27 @@ describe('V5 adversarial: standalone stop se při cancelu překlasifikuje po ú�
     const base = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const broker: BrokerPort = {
       ...base,
-      listPositions: async () => { throw new Error('position snapshot unavailable'); },
+      listPositions: async accountId => {
+        if (accountId === 200) throw new Error('position snapshot unavailable');
+        return base.listPositions(accountId);
+      },
     };
     const clock = stepClock();
-    const singleGroup = { ...group, followers: [group.followers[0]] };
     const opened = await processLeaderEvent({
-      event: event({}), group: singleGroup, runtime: createRuntime(protectedState()),
+      event: event({}), group, runtime: createRuntime(protectedState()),
       context: gate(true), broker, clock,
     });
 
     const canceled = await processLeaderEvent({
       event: event({ id: 'sl-cancel', kind: 'canceled', sequence: 2 }),
-      group: singleGroup, runtime: opened.runtime, context: gate(false), broker, clock,
+      group, runtime: opened.runtime, context: gate(false), broker, clock,
     });
 
     expect(canceled.audit).toContainEqual(expect.objectContaining({
-      kind: 'blocked', accountId: 200, reason: expect.stringContaining('pozice followera není autoritativně známá'),
+      kind: 'blocked', accountId: 200, reasonCode: 'standalone-position-unknown',
+      reason: expect.stringContaining('pozice followera není autoritativně známá'),
     }));
-    expect(base.orders()[0]?.status).toBe('working');
+    expect(base.orders().filter(order => order.orderType === 'Stop').map(order => order.status))
+      .toEqual(['working', 'working']);
   });
 });

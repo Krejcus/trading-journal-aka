@@ -163,6 +163,32 @@ async function runFlatten(
 }
 
 describe('processManualFlatten paralelně po účtech', () => {
+  it('potvrzuje běžný cancel nejdřív levným status lookupem', async () => {
+    const broker = fakeBroker({ orders: [workingOrder(9)] });
+    let statusLookups = 0;
+    let fullLookups = 0;
+    const fullLookup = broker.findOrderById.bind(broker);
+    broker.findOrderStatusById = async (accountId, brokerOrderId) => {
+      statusLookups += 1;
+      const lookup = await fullLookup(accountId, brokerOrderId);
+      return {
+        status: lookup.order?.status ?? null,
+        completeness: lookup.completeness,
+        observedAt: lookup.observedAt,
+      };
+    };
+    broker.findOrderById = async (accountId, brokerOrderId) => {
+      fullLookups += 1;
+      return fullLookup(accountId, brokerOrderId);
+    };
+
+    const { result } = await runFlatten(broker, [9]);
+
+    expect(result).toMatchObject({ flat: true, canceledOrders: 1 });
+    expect(statusLookups).toBe(1);
+    expect(fullLookups).toBe(0);
+  });
+
   it('pending objednávku považuje za aktivní, zruší ji a teprve pak potvrdí flat', async () => {
     const broker = fakeBroker({
       orders: [{ ...workingOrder(9), status: 'pending' }],

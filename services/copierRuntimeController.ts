@@ -3896,6 +3896,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     const critical = entries.filter(isCriticalAuditEntry);
     if (critical.length === 0) return;
+    const unknownStandalonePosition = critical.find(item => (
+      item.kind === 'blocked' && item.reasonCode === 'standalone-position-unknown'
+    ));
+    if (unknownStandalonePosition) {
+      // Runner vrací incident jako audit (stejně jako ostatní blokace), ne
+      // jako výjimku. Controller jej ale musí zveřejnit v lastError i tehdy,
+      // když už byl kvůli leader-flat/cooldownu DISARMED. Nikdy zde
+      // neplánujeme auto-close: neznámý je osud jednoho orphan stopu, nikoli
+      // důkaz, že zdravé follower pozice mají být zavřeny.
+      failClosed(new Error(
+        unknownStandalonePosition.reason
+          ? `Copier fail-closed: ${unknownStandalonePosition.reason}`
+          : 'Copier fail-closed: pozice followera není autoritativně známá',
+      ), { autoClose: false });
+      return;
+    }
     if (!gate.armed) {
       invalidateReconciliation();
       return;
