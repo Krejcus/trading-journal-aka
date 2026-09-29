@@ -251,6 +251,34 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — Balíček 6: V9 ownership auto-close, V4 durable guard a ST4 fence (Codex)
+
+- Auto-close nyní úplně vynechá pouze followery s `enabled=false`; jejich
+  expozici hlásí auditem/notifikací bez broker write. Eligibility/cut followeři
+  zůstávají v cílech. Známá durable stopa kopírky omezuje cleanup na přesné
+  account+symbol cíle, účet bez známé stopy zachovává fail-safe account-wide
+  fallback. Recovery hodnotí synchronní držení jen z participujících followerů
+  a cizí expozice vypnutého účtu už nezavře zdravé kopie. `copiesOutcome` je
+  `auto-closed` jen po skutečném cancelu/liquidation, jinak `flat`.
+- Leader-flat guard přežije změnu `safetyGeneration`: nejvýše třikrát se
+  přeplánuje s aktuální generací, potom skončí hlasitě fail-closed bez
+  auto-close. Heartbeat obnoví ztracený timer nedokončené epochy jako read-only
+  watchdog; restart/reconnect dál obnovuje plný durable guard. Flat followerovi
+  guard uklidí jen broker ID doložené durable OCO/OSO stopou pro přesný symbol
+  a po cancelu stav znovu autoritativně přečte.
+- Reconciliation má druhý account-scoped observation fence těsně před finálním
+  přepsáním gate/cache, takže pozdní event během sweep/persistence nemůže skončit
+  ARMED nad starým snapshotem (ST4). Nový 12testový soubor před opravou měl 4
+  reprodukované pády (disabled účet, cizí symbol, reconnect, DISARM guard); po
+  opravě 12/12. Cílená sada 263/263. Předepsaná kompletní copier sada mimo
+  sandbox prošla 169 souborů + 1 skipped, 1936 testů + 1 todo, exit 0. První
+  sandbox běh měl pouze 89 `listen EPERM 127.0.0.1` pádů ve čtyřech loopback
+  souborech; samostatné opakování mimo sandbox prošlo 94/94.
+- Finální root `tsc --noEmit` má jen výslovně povolené chyby Chrome typů a
+  `@crxjs/vite-plugin` v `extension/`; cílený typecheck bez extension prošel.
+  Bez commitu, push/deploye, instalace závislostí, broker API, ARM/Flatten nebo
+  reinstalu workeru.
+
 ### 2026-09-29 — V13 čtvrtá iterace: bezpečný flat sweep, wave budget a pravdivý audit (Codex, balíček 3b-4)
 
 - Opraveny N1–N5 a budget lens z `copier-v13d-review-20260929.md`: pending
