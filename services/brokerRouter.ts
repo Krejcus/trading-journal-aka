@@ -219,17 +219,32 @@ export function createBrokerRouter(
           listener({ type: 'connection', connected: next, at });
         }
       };
+      const scopedResync = (
+        routeBroker: BrokerPort,
+        event: Extract<BrokerEvent, { type: 'connection' }>,
+      ): Extract<BrokerEvent, { type: 'connection' }> => {
+        const accountIds = [...(accountIdsByBroker.get(routeBroker) ?? [])];
+        const assigned = new Set(accountIds);
+        return {
+          ...event,
+          routeGap: !criticalBrokers.has(routeBroker),
+          ...(event.resync ? {
+            resync: {
+              accountIds,
+              positions: event.resync.positions.filter(item => assigned.has(item.accountId)),
+              orders: event.resync.orders.filter(item => assigned.has(item.accountId)),
+              gapFills: event.resync.gapFills.filter(item => assigned.has(item.accountId)),
+            },
+          } : {}),
+        };
+      };
       const applyConnection = (broker: BrokerPort, event: Extract<BrokerEvent, { type: 'connection' }>) => {
-        const aggregateBefore = aggregateConnected;
         connected.set(broker, event.connected);
         publishAggregate(event.at);
-        // Plánovaná obnova může bumpnout routeEpoch, aniž změní agregované
-        // connected=true. Controller přesto musí dostat impuls k novému
-        // read-only důkazu pending lineage; běžné redundantní connection
-        // eventy dál nepropouštíme.
-        if (event.resynced && event.connected && aggregateBefore === aggregateConnected) {
-          listener({ type: 'heartbeat', at: event.at });
-        }
+        // Každá route musí svůj resync předat samostatně i tehdy, když se
+        // agregované connected=true vůbec nezměnilo. Snapshot je účetově
+        // oříznutý, takže controller nemusí blokovat nesouvisející route.
+        if (event.resynced && event.connected) listener(scopedResync(broker, event));
       };
 
       const flushOutage = (broker: BrokerPort) => {
@@ -329,7 +344,7 @@ export function createBrokerRouter(
           clearTimeoutImpl(outage.timer);
           pendingOutage.delete(routeBroker);
           connected.set(routeBroker, true);
-          if (event.resynced) listener({ type: 'heartbeat', at: event.at });
+          if (event.resynced) listener(scopedResync(routeBroker, event));
           return;
         }
         applyConnection(routeBroker, event);

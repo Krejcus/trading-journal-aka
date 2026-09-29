@@ -28,6 +28,7 @@ import {
 } from '../../services/copierPilotGroup';
 import { createTradovateBroker, type TradovateBrokerPort, type TradovateSessionSuspect } from '../../services/tradovateBroker';
 import { createSessionRenewalPolicy, type SessionRenewalPolicy } from '../../services/copierSessionRenewalPolicy';
+import { createCopierSocketRenewalCoordinator } from '../../services/copierSocketRenewal';
 import { createBrokerRouter } from '../../services/brokerRouter';
 import { isOpenOrderStatus, type BrokerPort } from '../../services/brokerPort';
 import {
@@ -1134,23 +1135,25 @@ async function runLocalAgent(
     // po 50 min se čeká na flat/klidný moment, po 70 min se obměňuje i
     // uprostřed obchodu — řízený sub-sekundový swap je bezpečnější než
     // nechat server tvrdě zavřít socket (DISARM + povinná reconciliation).
-    const RENEW_AFTER_MS = 50 * 60_000;
-    const RENEW_FORCE_MS = 70 * 60_000;
-    const renewalAt = new Map(renewableBrokers.map(item => [item, Date.now()]));
+    const socketRenewals = createCopierSocketRenewalCoordinator({
+      routes: renewableBrokers,
+      renewAfterMs: 50 * 60_000,
+      forceAfterMs: 70 * 60_000,
+      staggerMs: 30_000,
+    });
     const maybeRenewSockets = () => {
       const status = controller?.status();
       if (!status?.connected) return;
-      const now = Date.now();
-      for (const item of renewableBrokers) {
-        const age = now - (renewalAt.get(item) ?? now);
-        if (age < RENEW_AFTER_MS) continue;
-        const inTrade = status.armed && status.groupFlat === false;
-        if (inTrade && age < RENEW_FORCE_MS) continue;
-        if (item.broker.renewSocket()) {
-          renewalAt.set(item, now);
-          console.log(`${new Date().toISOString()} SOCKET RENEWAL ${item.label} (věk ${Math.round(age / 60_000)} min${inTrade ? ', vynuceno v obchodě' : ''})`);
-        }
-      }
+      const result = socketRenewals.poll({
+        connected: true,
+        groupFlat: status.groupFlat,
+        blocker: controller?.connectionRenewalBlocker() ?? 'controller unavailable',
+      });
+      if (!result) return;
+      console.log(
+        `${new Date().toISOString()} SOCKET RENEWAL ${result.label} `
+        + `(věk ${Math.round(result.ageMs / 60_000)} min${result.forced ? ', vynuceno po stropu odkladu' : ''})`,
+      );
     };
     if (lifetime.kind === 'persistent') {
       console.log('SERVICE LIFETIME persistent; plánovaný časový restart je vypnutý.');

@@ -3681,7 +3681,8 @@ describe('reconciliation vs abandoned cancel/modify', () => {
       return originalCapabilities(accountIds);
     };
 
-    broker.emitEvent({ type: 'connection', connected: true, resynced: true, at: 500 });
+    broker.setConnected(false);
+    broker.setConnected(true);
     await controller.waitForIdle();
     expect(reconciliationAttempts).toBe(5);
     expect(controller.status()).toMatchObject({
@@ -3702,7 +3703,7 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     controller.stop();
   });
 
-  it('plánovaný resync za LIVE ARM a flat účty skončí čistě DISARMED', async () => {
+  it('plánovaný resync za LIVE ARM a flat účty zachová ARM', async () => {
     const broker = createMockBroker();
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group, clock: stepClock(),
@@ -3712,11 +3713,14 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     await controller.reconcile();
     controller.arm();
 
-    broker.emitEvent({ type: 'connection', connected: true, resynced: true, at: 500 });
+    broker.emitEvent({
+      type: 'connection', connected: true, resynced: true, at: 500,
+      resync: { accountIds: [100, 200], positions: [], orders: [], gapFills: [] },
+    });
     await controller.waitForIdle();
 
     expect(controller.status()).toMatchObject({
-      armed: false,
+      armed: true,
       reconciliationRequired: false,
       divergentAccounts: [],
       workingOrderAccounts: [],
@@ -3726,7 +3730,7 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     controller.stop();
   });
 
-  it('plánovaný resync se synchronní otevřenou pozicí drží DISARMED bez auto-korekce', async () => {
+  it('plánovaný resync se synchronní otevřenou pozicí zachová ARM bez auto-korekce', async () => {
     const broker = createMockBroker();
     broker.listPositions = async accountId => [{
       accountId, symbol: 'MNQU6', netQuantity: 2,
@@ -3746,16 +3750,25 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     broker.emitEvent({ type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 2 } });
     await controller.waitForIdle();
 
-    broker.emitEvent({ type: 'connection', connected: true, resynced: true, at: 600 });
+    broker.emitEvent({
+      type: 'connection', connected: true, resynced: true, at: 600,
+      resync: {
+        accountIds: [100, 200],
+        positions: [
+          { accountId: 100, symbol: 'MNQU6', netQuantity: 2 },
+          { accountId: 200, symbol: 'MNQU6', netQuantity: 2 },
+        ],
+        orders: [], gapFills: [],
+      },
+    });
     await controller.waitForIdle();
 
     expect(controller.status()).toMatchObject({
-      armed: false,
+      armed: true,
       reconciliationRequired: false,
       divergentAccounts: [],
       autoClose: null,
     });
-    expect(() => controller.arm()).toThrow('všechny zapojené účty flat');
     expect(broker.placedRequests()).toHaveLength(0);
     controller.stop();
   });
