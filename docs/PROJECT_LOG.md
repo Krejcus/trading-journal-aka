@@ -1544,6 +1544,32 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   `@crxjs/vite-plugin`. Bez npm install/ci, Tradovate/agent volání, commitu,
   push, deploye nebo reinstalace workeru.
 
+### 2026-09-29 — Sklad svíček nasazen (Claude přebírá po Codexovi)
+
+- Codex stranou (bez limitu) → Claude převzal jeho lokální sklad svíček
+  (`supabase/functions/market-candle-store/`, migrace
+  `20260926071010_market_candle_private_store.sql`, klient už v appce).
+- Lokální zkouška migrace v PGlite s produkčními právy (13/13): zámek
+  období (souběžný požadavek → 202, jen jeden nákup), selhání a propadlý
+  zámek, cizí token, authenticated/anon bez přístupu k tabulce, funkcím
+  i bucketu, tagy backtestu ve stejném schématu dál čitelné.
+- Produkce: schéma `alphatrade_private` UŽ EXISTOVALO (backtest_tag_*) —
+  rollback smí mazat jen tabulku skladu, nikdy schéma. Cílená záloha
+  storage policies + bucketů a rollback SQL ve scratchpadu. Zápisy spustil
+  Filip (klasifikátor blokuje produkční DDL z Claude): migrace přes
+  `db query -f`, `migration repair 20260926071010`, secret
+  `CANDLE_STORE_OWNER_USER_ID`, `functions deploy market-candle-store`.
+- Chyba v Codexově funkci: `admin.rpc` volaný bez objektu (`this.rest`
+  undefined → TypeError → obecná 503). Oprava `admin.rpc.bind(admin)`,
+  druhý deploy. Testy Codexe kryly jen shared.ts, ne handler.
+- Ověřeno v produkci: 22. 9. filled 12 s / 0,005 $ → hit 1,3 s / 0 $;
+  souběh dvou požadavků na 23. 9. → jeden soubor (jeden nákup); 14 dní
+  filled 10,7 s / 0,05 $; 16 dní hit 1,0 s / 0 $ (stará cesta ~6 s a platí
+  pokaždé). Soubor ~22 kB/den. Security advisors přes MCP nešly
+  (neautorizováno) — práva ověřena `has_table_privilege`/`has_function_privilege`.
+- Pozor pro frontu snímků: den se uloží až 25 h po konci UTC dne; dřívější
+  požadavek dostane data „uncached“ (platí znovu).
+
 ### 2026-09-28 — Obchod bez celého SL/TP: výsledkový box + štítek (Claude)
 
 - Filip: vstup bez SL/TP (market in/out, jen SL, trailing stop položený po
