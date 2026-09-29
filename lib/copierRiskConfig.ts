@@ -148,17 +148,22 @@ export function isWeakerRiskConfig(previous: CopierRiskConfig, next: CopierRiskC
   const previousHasFollowerCut = previous.followers.some(
     follower => follower.dailyLossCutUsd != null && follower.dailyLossCutUsd > 0,
   );
-
   for (const nextFollower of next.followers) {
     const previousFollower = previousFollowers.get(nextFollower.accountId);
     if (!previousFollower) {
       if (
         previousHasFollowerCut
         && !(nextFollower.dailyLossCutUsd != null && nextFollower.dailyLossCutUsd > 0)
-      ) {
-        add(followerField(nextFollower.accountId));
-      }
+      ) add(followerField(nextFollower.accountId));
       continue;
+    }
+
+    if (previousFollower.enabled === false && nextFollower.enabled !== false) {
+      add(followerField(nextFollower.accountId, 'enabled'));
+    }
+    if (previousFollower.mode !== nextFollower.mode
+      && nextFollower.mode !== 'off') {
+      add(followerField(nextFollower.accountId, 'mode'));
     }
 
     if (positiveLimitIsWeaker(previousFollower.dailyLossCutUsd, nextFollower.dailyLossCutUsd)) {

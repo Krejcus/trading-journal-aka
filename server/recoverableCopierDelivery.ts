@@ -77,6 +77,7 @@ export function recoverableCopierDelivery(options: {
         else {
           try {
             result = await options.agent.execute(remote.command, {
+              source: 'relay',
               createdAt: created,
               clockSkewReserveMs,
               ...(remote.command.type === 'arm-live'

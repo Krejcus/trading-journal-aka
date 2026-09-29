@@ -1,7 +1,7 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { BrokerOrder } from '../services/brokerPort';
 import { createCopierState, planReplication } from '../services/copierEngine';
 import { bootstrapCopierRuntime } from '../services/copierRuntimeController';
@@ -122,6 +122,63 @@ describe('manual follower participation', () => {
     await h.controller.waitForIdle();
     expect(h.persisted().followers[0].enabled).not.toBe(false);
     expect(h.broker.placedRequests().map(request => request.accountId).sort()).toEqual([200, 300]);
+    expect(h.controller.status().armed).toBe(true);
+    h.controller.stop();
+  });
+
+  it('P37: leader submit se zkopíruje i během zadrženého read-only přepnutí followera', async () => {
+    const h = await harness({
+      ...group(), followers: group().followers.map(follower => ({ ...follower, mode: 'on-submit' })),
+    });
+    h.controller.arm();
+    let releaseRead!: () => void;
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>(resolve => { markReadStarted = resolve; });
+    const heldRead = new Promise<void>(resolve => { releaseRead = resolve; });
+    const original = h.broker.listPositions.bind(h.broker);
+    let held = false;
+    h.broker.listPositions = async id => {
+      if (!held) {
+        held = true;
+        markReadStarted();
+        await heldRead;
+      }
+      return original(id);
+    };
+    const toggle = h.controller.setFollowerEnabled(200, false, h.persist);
+    try {
+      await readStarted;
+      h.broker.emitEvent({
+        type: 'order',
+        order: { ...leaderOrder('entry-during-participation-read'), orderType: 'Market', limitPrice: undefined },
+      });
+      await vi.waitFor(() => expect(h.broker.placedRequests()).toHaveLength(2), { timeout: 300 });
+      releaseRead();
+      await expect(toggle).rejects.toThrow('Stav se během ověření změnil');
+      expect(h.persisted().followers[0].enabled).not.toBe(false);
+      expect(h.controller.status().armed).toBe(true);
+    } finally {
+      releaseRead();
+      await toggle.catch(() => undefined);
+      h.controller.stop();
+    }
+  });
+
+  it('keepalive během read-only kontroly nepředstírá změnu obchodního stavu', async () => {
+    const h = await harness();
+    h.controller.arm();
+    const original = h.broker.listPositions.bind(h.broker);
+    let injected = false;
+    h.broker.listPositions = async id => {
+      if (!injected) {
+        injected = true;
+        h.broker.emitEvent({ type: 'heartbeat', at: Date.now() });
+      }
+      return original(id);
+    };
+
+    const updated = await h.controller.setFollowerEnabled(200, false, h.persist);
+    expect(updated.followers[0]).toMatchObject({ accountId: 200, enabled: false });
     expect(h.controller.status().armed).toBe(true);
     h.controller.stop();
   });

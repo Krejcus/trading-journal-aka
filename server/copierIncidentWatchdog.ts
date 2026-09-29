@@ -126,7 +126,7 @@ export interface CopierCopyEventRow {
   accountId?: number;
   cutUsd?: number;
   realizedPnlUsd?: number;
-  source?: 'broker' | 'ledger' | 'manual';
+  source?: 'broker' | 'ledger' | 'manual' | 'prop-reserve';
   closed?: number | null | false;
 }
 

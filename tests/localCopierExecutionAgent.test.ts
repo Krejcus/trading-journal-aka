@@ -63,7 +63,9 @@ const controller = (overrides: Partial<CopierControllerStatus> = {}) => {
     })),
     activateGroup: vi.fn(async () => undefined),
     reconfigureGroup: vi.fn(async () => undefined),
+    preflightGroupChange: vi.fn(),
     updateGroup: vi.fn(),
+    updateGroupMetadata: vi.fn(),
     flattenAccount: vi.fn(async () => ({ flat: true })),
     flattenFollowerTrade: vi.fn(async () => ({ flat: true })),
     flattenGroup: vi.fn(async () => ({ flat: true })),
@@ -141,9 +143,53 @@ describe('local copier execution agent', () => {
       command: { type: 'set-multiplier', groupId: 'ui-test', accountId: 22, multiplier: 1.5 },
     });
     expect(response.status).toBe(200);
-    expect(runtime.updateGroup).toHaveBeenCalledWith(expect.objectContaining({
+    expect(runtime.reconfigureGroup).toHaveBeenCalledWith(expect.objectContaining({
       followers: [expect.objectContaining({ accountId: 22, multiplier: 1.5 })],
+    }), { missingOptionalAccountIds: [] });
+  });
+
+  it('P341: loopback příkaz zapíše do logu svůj zdroj a typ akce', async () => {
+    const runtime = controller({ armed: true, shadowMode: false });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+      const response = await post(running, running.status().nonce, { type: 'disarm' });
+      expect(response.status).toBe(200);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('AGENT COMMAND source=loopback type=disarm'));
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('změna názvu a neexpozičních pravidel za ARM používá metadata cestu bez DISARM', async () => {
+    const runtime = controller({ sessionArmedAt: 1 });
+    runtime.arm({ shadowMode: false });
+    runtime.arm.mockClear();
+    const onGroupChanged = vi.fn(async () => undefined);
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      onGroupChanged,
+    });
+
+    const changed = {
+      ...group(),
+      name: 'Nový název',
+      color: '#22c55e',
+      safety: { ...DEFAULT_COPY_GROUP_SAFETY, entryCooldownMinutes: 5 },
+    };
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command', command: { type: 'update-group', group: changed },
+    });
+
+    expect(response.status).toBe(200);
+    expect(runtime.disarm).not.toHaveBeenCalled();
+    expect(runtime.updateGroup).not.toHaveBeenCalled();
+    expect(runtime.updateGroupMetadata).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Nový název', color: '#22c55e',
     }));
+    expect(runtime.status().armed).toBe(true);
   });
 
   it('publishes current snapshot health without coupling it to controller state', async () => {
@@ -346,9 +392,11 @@ describe('local copier execution agent', () => {
     const runtime = controller();
     const onGroupChanged = vi.fn(async () => undefined);
     const prepareGroupAccounts = vi.fn(async () => ({ missingOptional: [] }));
+    const previewGroupAccounts = vi.fn(async () => ({ missingOptional: [] }));
     runtime.arm({ shadowMode: false });
     running = await startLocalCopierExecutionAgent({
-      controller: runtime, group: group(), port: 0, onGroupChanged, prepareGroupAccounts,
+      controller: runtime, group: group(), port: 0, onGroupChanged,
+      prepareGroupAccounts, previewGroupAccounts,
     });
     const expanded = {
       ...group(),
@@ -362,13 +410,16 @@ describe('local copier execution agent', () => {
       type: 'copy-command', command: { type: 'update-group', group: expanded },
     });
     expect(response.status).toBe(200);
-    expect(runtime.disarm).toHaveBeenCalled();
+    expect(runtime.disarm).toHaveBeenCalledWith('config-change');
+    expect(previewGroupAccounts).toHaveBeenCalledWith({ required: [11, 22, 33], optional: [] });
     expect(prepareGroupAccounts).toHaveBeenCalledWith({ required: [11, 22, 33], optional: [] });
     expect(runtime.reconfigureGroup).toHaveBeenCalledWith(expect.objectContaining({
       leaderAccountId: 11,
       followers: expect.arrayContaining([expect.objectContaining({ accountId: 33 })]),
     }), { missingOptionalAccountIds: [] });
     expect(runtime.updateGroup).not.toHaveBeenCalled();
+    expect(previewGroupAccounts.mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(runtime.disarm).mock.invocationCallOrder[0]);
     expect(vi.mocked(runtime.disarm).mock.invocationCallOrder[0])
       .toBeLessThan(prepareGroupAccounts.mock.invocationCallOrder[0]);
     expect(prepareGroupAccounts.mock.invocationCallOrder[0])
@@ -379,14 +430,16 @@ describe('local copier execution agent', () => {
     }));
   });
 
-  it('neviditelný nový účet skončí DISARMED ještě před změnou runtime', async () => {
+  it('neviditelný nový účet se odmítne před DISARM a zdravý ARM zůstane beze změny', async () => {
     const runtime = controller();
     runtime.arm({ shadowMode: false });
-    const prepareGroupAccounts = vi.fn(async () => {
+    runtime.arm.mockClear();
+    const previewGroupAccounts = vi.fn(async () => {
       throw new Error('Účet 33 není viditelný v žádném připojeném OAuth');
     });
+    const prepareGroupAccounts = vi.fn(async () => ({ missingOptional: [] }));
     running = await startLocalCopierExecutionAgent({
-      controller: runtime, group: group(), port: 0, prepareGroupAccounts,
+      controller: runtime, group: group(), port: 0, prepareGroupAccounts, previewGroupAccounts,
     });
 
     const response = await post(running, running.status().nonce, {
@@ -404,9 +457,16 @@ describe('local copier execution agent', () => {
     });
 
     expect(response.status).toBe(409);
-    expect(runtime.status().armed).toBe(false);
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining('Účet 33 není viditelný'),
+    });
+    // V1: routing/sanitize/tighten-only preflight je záměrně bez vedlejšího
+    // efektu. Odmítnutý config nesmí z běžící zdravé skupiny udělat DISARM.
+    expect(runtime.status().armed).toBe(true);
+    expect(runtime.disarm).not.toHaveBeenCalled();
     expect(runtime.reconfigureGroup).not.toHaveBeenCalled();
     expect(runtime.updateGroup).not.toHaveBeenCalled();
+    expect(prepareGroupAccounts).not.toHaveBeenCalled();
     expect(running.status().group.followers).toHaveLength(1);
   });
 
@@ -708,10 +768,10 @@ describe('local copier execution agent', () => {
     const result = await running.execute({ type: 'activate-group', group: next });
 
     expect(result.ok).toBe(true);
-    expect(runtime.disarm).toHaveBeenCalled();
+    // V1: profil je už DISARMED; validace a aktivace proto nemají vyrábět
+    // falešný ruční DISARM záznam.
+    expect(runtime.disarm).not.toHaveBeenCalled();
     expect(prepareGroupAccounts).toHaveBeenCalledWith({ required: [11, 33, 44], optional: [22] });
-    expect(vi.mocked(runtime.disarm).mock.invocationCallOrder[0])
-      .toBeLessThan(prepareGroupAccounts.mock.invocationCallOrder[0]);
     expect(prepareGroupAccounts.mock.invocationCallOrder[0])
       .toBeLessThan(vi.mocked(runtime.activateGroup).mock.invocationCallOrder[0]);
     expect(runtime.activateGroup).toHaveBeenCalledWith(expect.objectContaining({
@@ -731,6 +791,7 @@ describe('local copier execution agent', () => {
 
   it('keeps the previous runtime config when a tighter durable save fails mid-session', async () => {
     const runtime = controller({ sessionArmedAt: 1_788_595_200_000 });
+    runtime.arm({ shadowMode: false });
     const onGroupChanged = vi.fn(async () => { throw new Error('disk-full'); });
     running = await startLocalCopierExecutionAgent({
       controller: runtime,
@@ -744,7 +805,7 @@ describe('local copier execution agent', () => {
     });
     expect(response.status).toBe(409);
     expect(running.status().group.followers[0].multiplier).toBe(1);
-    expect(runtime.disarm).toHaveBeenCalled();
+    expect(runtime.disarm).toHaveBeenCalledWith('config-change');
     expect(onGroupChanged).toHaveBeenCalledOnce();
     expect(onGroupChanged).toHaveBeenCalledWith(expect.objectContaining({
       followers: [expect.objectContaining({ multiplier: 0.5 })],
@@ -754,6 +815,7 @@ describe('local copier execution agent', () => {
 
   it('rejects a weaker mid-session config before persistence or runtime mutation', async () => {
     const runtime = controller({ sessionArmedAt: 1_788_595_200_000 });
+    runtime.arm({ shadowMode: false });
     const onGroupChanged = vi.fn(async () => undefined);
     running = await startLocalCopierExecutionAgent({
       controller: runtime,
@@ -771,7 +833,10 @@ describe('local copier execution agent', () => {
     await expect(response.json()).resolves.toMatchObject({
       error: expect.stringContaining('followers.22.multiplier'),
     });
-    expect(runtime.disarm).toHaveBeenCalled();
+    // V1: záměrná změna proti starému testu — tighten-only odmítnutí je
+    // čistý preflight a nesmí vypnout dosud zdravý ARM.
+    expect(runtime.disarm).not.toHaveBeenCalled();
+    expect(runtime.status().armed).toBe(true);
     expect(onGroupChanged).not.toHaveBeenCalled();
     expect(runtime.updateGroup).not.toHaveBeenCalled();
     expect(running.status().group.followers[0].multiplier).toBe(1);
@@ -978,7 +1043,13 @@ describe('local copier execution agent', () => {
 
   it('ARM(B) na ARMED(A) atomicky přepne konfiguraci a znovu ARM', async () => {
     const runtime = controller({ armed: true, shadowMode: false, sessionArmedAt: 1 });
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      prepareGroupAccounts: async () => ({ missingOptional: [] }),
+      previewGroupAccounts: async () => ({ missingOptional: [] }),
+    });
     const other: CopyGroupConfig = {
       id: 'group-b', name: 'B', enabled: true, leaderAccountId: 33,
       followers: [{ accountId: 44, mode: 'on-submit', multiplier: 1 }], localOnly: true,
@@ -1426,7 +1497,7 @@ describe('atomický arm-live s konfigurací', () => {
       const result = await agent.execute({ type: 'arm-live', group: next });
       expect(result.ok).toBe(true);
       // Konfigurace prošla před ARMem a durable persist proběhl.
-      expect(runtime.updateGroup).toHaveBeenCalled();
+      expect(runtime.reconfigureGroup).toHaveBeenCalled();
       expect(saved).toHaveLength(1);
       expect(saved[0].followers[0].multiplier).toBe(2);
       expect(runtime.reconcile).toHaveBeenCalled();
@@ -1461,9 +1532,9 @@ describe('atomický arm-live s konfigurací', () => {
       await expect(response.json()).resolves.toMatchObject({
         error: expect.stringContaining('followers.22.multiplier'),
       });
-      // DISARM je fail-safe první krok; po tighten-only odmítnutí už nesmí
-      // nastat žádný durable zápis, routing preflight ani runtime/ARM změna.
-      expect(runtime.disarm).toHaveBeenCalledOnce();
+      // V1: tighten-only je čistý preflight. Odmítnutý atomický ARM/config
+      // sync nesmí shodit již běžící shodný runtime.
+      expect(runtime.disarm).not.toHaveBeenCalled();
       expect(onGroupChanged).not.toHaveBeenCalled();
       expect(prepareGroupAccounts).not.toHaveBeenCalled();
       expect(runtime.updateGroup).not.toHaveBeenCalled();
@@ -1555,14 +1626,26 @@ describe('atomický arm-live s konfigurací', () => {
 
   it('arm-live zůstane DISARMED, když bezpečný preflight jiného profilu selže', async () => {
     const runtime = controller();
+    runtime.arm({ shadowMode: false });
+    runtime.arm.mockClear();
     runtime.activateGroup.mockRejectedValueOnce(new Error('working=22'));
-    const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+    const agent = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      prepareGroupAccounts: async () => ({ missingOptional: [] }),
+      previewGroupAccounts: async () => ({ missingOptional: [] }),
+    });
     try {
       await expect(agent.execute({
         type: 'arm-live',
-        group: { ...group(), id: 'jiny-profil' },
+        group: {
+          ...group(),
+          id: 'jiny-profil',
+          leaderAccountId: 33,
+          followers: [{ accountId: 44, mode: 'on-submit', multiplier: 1 }],
+        },
       })).rejects.toThrow('working=22');
-      expect(runtime.disarm).toHaveBeenCalled();
+      expect(runtime.disarm).toHaveBeenCalledWith('config-change');
       expect(runtime.reconcile).not.toHaveBeenCalled();
       expect(runtime.arm).not.toHaveBeenCalled();
       expect(agent.status().group.id).toBe('runtime-test');

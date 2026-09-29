@@ -123,3 +123,18 @@ export async function refreshDynamicBrokerRoutes(
     missingOptional: resolution.missingOptional,
   };
 }
+
+/** Obnoví OAuth adresáře a validuje budoucí routes bez router.replaceRoutes. */
+export async function previewDynamicBrokerRoutes(
+  connections: readonly DynamicOAuthConnection[],
+  request?: DynamicBrokerRoutingRequest,
+): Promise<DynamicBrokerRouteRefresh> {
+  const refreshed = await Promise.all(connections.map(async connection => (
+    [connection.connectionId, await connection.broker.refreshAccountDirectory()] as const
+  )));
+  const resolution = resolveDynamicBrokerRoutes(connections, new Map(refreshed), request);
+  return {
+    accounts: resolution.accounts,
+    missingOptional: resolution.missingOptional,
+  };
+}

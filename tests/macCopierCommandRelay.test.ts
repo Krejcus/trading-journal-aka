@@ -103,7 +103,7 @@ describe('Mac copier command relay', () => {
     await completeStarted;
     await expect(relay.close()).resolves.toBeUndefined();
     expect(completeSignal?.aborted).toBe(true);
-    expect(agent.execute).toHaveBeenCalledWith({ type: 'disarm' });
+    expect(agent.execute).toHaveBeenCalledWith({ type: 'disarm' }, { source: 'relay' });
   });
 
   it('odešle testovací PNG jako samostatnou neobchodní relay akci', async () => {
@@ -198,7 +198,9 @@ describe('Mac copier command relay', () => {
     const execute = vi.fn(async () => ({ ok: true as const, status: status() }));
     const agent = { status, execute, origin: 'http://127.0.0.1:3211', close: vi.fn() } as unknown as LocalCopierExecutionAgent;
     const relay = startMacCopierCommandRelay({ apiOrigin: 'https://alpha.example', authorizationHeader: async () => 'Device id.secret', agent, fetchImpl: fetchImpl as typeof fetch, pollMs: 500 });
-    await vi.waitFor(() => expect(execute).toHaveBeenCalledWith({ type: 'shadow' }), { timeout: 2_000 });
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledWith(
+      { type: 'shadow' }, { source: 'relay' },
+    ), { timeout: 2_000 });
     await vi.waitFor(() => expect(calls).toContainEqual(expect.objectContaining({
       action: 'complete', commandId: 'command-1', status: expect.objectContaining({
         controller: expect.objectContaining({ armed: false }),

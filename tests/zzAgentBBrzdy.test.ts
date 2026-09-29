@@ -48,7 +48,9 @@ const controller = (overrides: Partial<CopierControllerStatus> = {}) => {
     verifyAccountEligibility: vi.fn(),
     activateGroup: vi.fn(async () => undefined),
     reconfigureGroup: vi.fn(async () => undefined),
+    preflightGroupChange: vi.fn(),
     updateGroup: vi.fn(),
+    updateGroupMetadata: vi.fn(),
     flattenAccount: vi.fn(async () => ({ flat: true })),
     flattenFollowerTrade: vi.fn(async () => ({ flat: true })),
     flattenGroup: vi.fn(async () => ({ flat: true })),
@@ -119,7 +121,11 @@ describe('AGENT B — re-test N1–N6 proti d226986 (očekává se bezpečný v�
     const runtime = controller();
     const flat = gate();
     runtime.flattenGroup.mockImplementationOnce(async () => { await flat.p; return { flat: true }; });
-    agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    agent = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0,
+      prepareGroupAccounts: async () => ({ missingOptional: [] }),
+      previewGroupAccounts: async () => ({ missingOptional: [] }),
+    });
     const w = world();
     relay = w.startRelay(agent);
     await new Promise(r => setTimeout(r, 10));
@@ -171,7 +177,11 @@ describe('AGENT B — re-test N1–N6 proti d226986 (očekává se bezpečný v�
 
   it('S2/K1: ARMED(A) + jiná konfigurace provede plnou cestu; shodný ARM je no-op', async () => {
     const runtime = controller({ armed: true, shadowMode: false, sessionArmedAt: 1 });
-    agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    agent = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0,
+      prepareGroupAccounts: async () => ({ missingOptional: [] }),
+      previewGroupAccounts: async () => ({ missingOptional: [] }),
+    });
     await expect(agent.execute({ type: 'arm-live', group: { ...group(), id: 'group-b', leaderAccountId: 33,
       followers: [{ accountId: 44, mode: 'on-submit', multiplier: 1 }] } })).resolves.toMatchObject({ ok: true });
     await expect(agent.execute({ type: 'arm-live', group: group(),

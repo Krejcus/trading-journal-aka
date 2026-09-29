@@ -31,7 +31,9 @@ const controller = (overrides: Partial<CopierControllerStatus> = {}) => {
     verifyAccountEligibility: vi.fn(),
     activateGroup: vi.fn(async () => undefined),
     reconfigureGroup: vi.fn(async () => undefined),
+    preflightGroupChange: vi.fn(),
     updateGroup: vi.fn(async () => undefined),
+    updateGroupMetadata: vi.fn(),
     flattenAccount: vi.fn(async () => ({ flat: true })),
     flattenFollowerTrade: vi.fn(async () => ({ flat: true })),
     flattenGroup: vi.fn(async () => ({ flat: true })),
@@ -49,7 +51,11 @@ afterEach(async () => { for (const agent of running) await agent.close(); runnin
 describe('K1: jiná ARM konfigurace se atomicky přepne', () => {
   it('ARM skupiny B na ARMED A provede activate/preflight a znovu ARM', async () => {
     const runtime = controller({ armed: true, shadowMode: false, sessionArmedAt: 1 });
-    const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    const agent = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0,
+      prepareGroupAccounts: async () => ({ missingOptional: [] }),
+      previewGroupAccounts: async () => ({ missingOptional: [] }),
+    });
     running.push(agent);
     const other: CopyGroupConfig = { id: 'group-b', name: 'B', enabled: true, leaderAccountId: 33,
       followers: [{ accountId: 44, mode: 'on-submit', multiplier: 1 }], localOnly: true };

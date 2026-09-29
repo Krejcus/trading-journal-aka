@@ -285,14 +285,13 @@ export function startMacCopierCommandRelay(options: {
               let executionError: string | undefined;
               try {
                 const executionContext = {
+                  source: 'relay' as const,
                   ...(Number.isFinite(createdAt) ? { createdAt } : {}),
                   ...(remote.command.type === 'arm-live'
                     ? { deadlineAt: expiresAt - COPIER_COMMAND_ACK_RESERVE_MS }
                     : {}),
                 };
-                result = Object.keys(executionContext).length > 0
-                  ? await options.agent.execute(remote.command, executionContext)
-                  : await options.agent.execute(remote.command);
+                result = await options.agent.execute(remote.command, executionContext);
               } catch (error) {
                 executionError = error instanceof Error ? error.message : String(error);
                 const errorDetails = localCopierAgentErrorDetails(error);

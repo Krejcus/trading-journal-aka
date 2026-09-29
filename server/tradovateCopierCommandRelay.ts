@@ -202,6 +202,8 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
     accountId?: unknown;
     operationId?: unknown;
     enabled?: unknown;
+    mode?: unknown;
+    multiplier?: unknown;
     waiveUnverifiableFollowerOwnership?: unknown;
   };
   if (typeof command.type !== 'string' || !remoteCopyCommands.has(command.type)) {
@@ -223,6 +225,17 @@ const validatedRemoteCopyCommand = (value: unknown): Record<string, unknown> => 
     typeof command.groupId !== 'string' || command.groupId.trim() === ''
     || typeof command.accountId !== 'number' || !Number.isSafeInteger(command.accountId) || command.accountId <= 0
     || typeof command.enabled !== 'boolean'
+  )) throw new Error('invalid-relay-command-payload');
+  if (command.type === 'set-multiplier' && (
+    typeof command.groupId !== 'string' || command.groupId.trim() === ''
+    || typeof command.accountId !== 'number' || !Number.isSafeInteger(command.accountId) || command.accountId <= 0
+    || typeof command.multiplier !== 'number' || !Number.isFinite(command.multiplier)
+    || command.multiplier <= 0 || command.multiplier > 100
+  )) throw new Error('invalid-relay-command-payload');
+  if (command.type === 'set-replication' && (
+    typeof command.groupId !== 'string' || command.groupId.trim() === ''
+    || typeof command.accountId !== 'number' || !Number.isSafeInteger(command.accountId) || command.accountId <= 0
+    || (command.mode !== 'off' && command.mode !== 'on-submit' && command.mode !== 'on-fill')
   )) throw new Error('invalid-relay-command-payload');
   if (
     command.type === 'update-group'
@@ -392,13 +405,48 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
 const relayRiskGroup = (
   command: LocalCopierAgentCommand,
   payload: Record<string, unknown>,
+  previousGroup: CopyGroupConfig,
 ): CopyGroupConfig | null => {
   if (command.type === 'arm-live' || command.type === 'activate-group') {
     return payload.group as CopyGroupConfig;
   }
   if (command.type !== 'copy-command') return null;
-  const nested = payload.command as { type?: unknown; group?: unknown } | undefined;
-  return nested?.type === 'update-group' ? validatedRelayGroup(nested.group) : null;
+  const nested = payload.command as {
+    type?: unknown;
+    group?: unknown;
+    groupId?: unknown;
+    accountId?: unknown;
+    multiplier?: unknown;
+    mode?: unknown;
+    enabled?: unknown;
+  } | undefined;
+  if (nested?.type === 'update-group') return validatedRelayGroup(nested.group);
+  if (nested?.type !== 'set-multiplier' && nested?.type !== 'set-replication'
+    && nested?.type !== 'set-follower-enabled') return null;
+  if (nested.groupId !== previousGroup.id || typeof nested.accountId !== 'number') {
+    throw new Error('invalid-relay-command-payload');
+  }
+  let found = false;
+  const followers = previousGroup.followers.map(follower => {
+    if (follower.accountId !== nested.accountId) return follower;
+    found = true;
+    if (nested.type === 'set-multiplier') return { ...follower, multiplier: nested.multiplier as number };
+    if (nested.type === 'set-replication') return { ...follower, mode: nested.mode as CopyGroupConfig['followers'][number]['mode'] };
+    return { ...follower, enabled: nested.enabled as boolean };
+  });
+  if (!found) throw new Error('invalid-relay-command-payload');
+  return validatedRelayGroup({ ...previousGroup, followers });
+};
+
+const relayNeedsTightenOnly = (
+  command: LocalCopierAgentCommand,
+  payload: Record<string, unknown>,
+): boolean => {
+  if (command.type === 'arm-live' || command.type === 'activate-group') return true;
+  if (command.type !== 'copy-command') return false;
+  const type = (payload.command as { type?: unknown } | undefined)?.type;
+  return type === 'update-group' || type === 'set-multiplier'
+    || type === 'set-replication' || type === 'set-follower-enabled';
 };
 
 const enforceRelayTightenOnly = async (options: {
@@ -406,7 +454,8 @@ const enforceRelayTightenOnly = async (options: {
   deviceId: string;
   userId: string;
   connectionId: string;
-  nextGroup: CopyGroupConfig;
+  command: LocalCopierAgentCommand;
+  payload: Record<string, unknown>;
 }): Promise<void> => {
   const { data, error } = await options.db.from('tradovate_copier_device_runtime')
     .select('status')
@@ -429,7 +478,9 @@ const enforceRelayTightenOnly = async (options: {
   } catch {
     throw new Error('tighten-only');
   }
-  if (isWeakerRiskConfig(previousGroup, options.nextGroup).length > 0) {
+  const nextGroup = relayRiskGroup(options.command, options.payload, previousGroup);
+  if (!nextGroup) return;
+  if (isWeakerRiskConfig(previousGroup, nextGroup).length > 0) {
     throw new Error('tighten-only');
   }
 };
@@ -447,7 +498,6 @@ export async function enqueueTradovateCopierCommand(options: {
   const now = options.now ?? Date.now();
   const idempotencyKey = options.idempotencyKey?.trim() || randomUUID();
   const payload = commandPayload(options.command);
-  const nextRiskGroup = relayRiskGroup(options.command, payload);
   const device = await selectRelayDeviceTarget({
     db: options.db,
     userId: options.userId,
@@ -460,13 +510,14 @@ export async function enqueueTradovateCopierCommand(options: {
     || now - Date.parse(device.lastSeenAt) >= WORKER_CONNECTED_MAX_AGE_MS
   )) throw new Error('copier-relay-worker-disconnected');
 
-  if (nextRiskGroup) {
+  if (relayNeedsTightenOnly(options.command, payload)) {
     await enforceRelayTightenOnly({
       db: options.db,
       deviceId: device.id,
       userId: options.userId,
       connectionId: options.connectionId,
-      nextGroup: nextRiskGroup,
+      command: options.command,
+      payload,
     });
   }
 

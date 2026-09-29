@@ -87,6 +87,8 @@ interface LocalCopierExecutionAgentOptions {
    * broker order side effect. Chyba musí nechat runtime DISARMED.
    */
   prepareGroupAccounts?: (request: PrepareGroupAccountsRequest) => Promise<PrepareGroupAccountsResult>;
+  /** Stejná OAuth/routing kontrola bez router.replaceRoutes; povinná před DISARM za ARM. */
+  previewGroupAccounts?: (request: PrepareGroupAccountsRequest) => Promise<PrepareGroupAccountsResult>;
 }
 
 export interface LocalCopierExecutionAgent {
@@ -149,6 +151,23 @@ const sameAccountTopology = (left: CopyGroupConfig, right: CopyGroupConfig): boo
   const leftIds = [...copyGroupAccountIds(left)].sort((a, b) => a - b);
   const rightIds = [...copyGroupAccountIds(right)].sort((a, b) => a - b);
   return leftIds.length === rightIds.length && leftIds.every((value, index) => value === rightIds[index]);
+};
+
+const sameExecutionConfiguration = (left: CopyGroupConfig, right: CopyGroupConfig): boolean => {
+  if (left.id !== right.id || left.enabled !== right.enabled
+    || left.leaderAccountId !== right.leaderAccountId
+    || left.followers.length !== right.followers.length) return false;
+  const rightByAccount = new Map(right.followers.map(follower => [follower.accountId, follower]));
+  return left.followers.every(follower => {
+    const candidate = rightByAccount.get(follower.accountId);
+    return candidate != null
+      && candidate.mode === follower.mode
+      && (candidate.enabled !== false) === (follower.enabled !== false)
+      && candidate.multiplier === follower.multiplier
+      && candidate.maxContracts === follower.maxContracts
+      && candidate.dailyLossCutUsd === follower.dailyLossCutUsd
+      && (candidate.onCut ?? 'close-copy') === (follower.onCut ?? 'close-copy');
+  });
 };
 
 const canonicalConfig = (value: unknown): unknown => {
@@ -256,6 +275,22 @@ export async function startLocalCopierExecutionAgent(
     }
     return { missingOptional };
   };
+  const previewAccounts = async (
+    request: PrepareGroupAccountsRequest,
+  ): Promise<PrepareGroupAccountsResult> => {
+    if (!options.previewGroupAccounts) {
+      throw new Error('Routing dry-run není dostupný; execution změna zůstává beze změny');
+    }
+    const prepared = await options.previewGroupAccounts(request);
+    const optional = new Set(request.optional);
+    const missingOptional = [...new Set(prepared?.missingOptional ?? [])];
+    for (const accountId of missingOptional) {
+      if (!Number.isSafeInteger(accountId) || !optional.has(accountId)) {
+        throw new Error(`Routing dry-run vrátil neplatný missing optional účet ${accountId}`);
+      }
+    }
+    return { missingOptional };
+  };
 
   const status = (): LocalCopierAgentStatus => ({
     version: 1,
@@ -301,6 +336,7 @@ export async function startLocalCopierExecutionAgent(
     const previous = group;
     const leaderChanged = previous.leaderAccountId !== next.leaderAccountId;
     const topologyChanged = !sameAccountTopology(previous, next);
+    const executionChanged = !sameExecutionConfiguration(previous, next);
     let persistedNext = false;
     const retirement = reconfigurationRequest.retireMissingOldGroup;
     const previousIds = copyGroupAccountIds(previous);
@@ -324,27 +360,61 @@ export async function startLocalCopierExecutionAgent(
       }
     }
 
-    // Každá změna konfigurace zavře live dispatch ještě před jakýmkoli
-    // durable zápisem nebo async preflightem. Lokální precheck chrání stejnou
-    // tighten-only hranici jako controller, ale bez nutnosti vracet runtime z
-    // nové (přísnější) konfigurace na starou (mírnější).
-    options.controller.disarm();
+    // V1: všechny synchronní validace a routing dry-run musí proběhnout před
+    // jakýmkoli DISARM. Odmítnutý config tak nezmění zdravý runtime.
     if ((options.controller.status().sessionArmedAt ?? 0) > 0) {
       const weaker = isWeakerRiskConfig(previous, next);
       if (weaker.length > 0) {
         throw new Error(`Pravidla jdou dnes jen zpřísnit: ${weaker.join(', ')} (reset po konci session)`);
       }
     }
+    options.controller.preflightGroupChange(next, { allowGroupChange: mode === 'activate' });
+    const routingRequest = retirement
+      ? { required: copyGroupAccountIds(next), optional: previousIds }
+      : accountsForRoutingChange(previous, next);
+    if ((mode === 'activate' || topologyChanged) && options.controller.status().armed) {
+      await previewAccounts(routingRequest);
+      // Broker event mohl doběhnout během OAuth discovery; před DISARM proto
+      // ještě jednou ověř čistě lokální streamové blockery.
+      options.controller.preflightGroupChange(next, { allowGroupChange: mode === 'activate' });
+    }
+
+    // Čistá metadata/pravidla bez změny execution konfigurace nemají důvod
+    // rušit ARM ani autoritativní preflight pozic.
+    if (!executionChanged && mode === 'update') {
+      if (options.onGroupChanged) {
+        await options.onGroupChanged(structuredClone(next));
+        persistedNext = true;
+      }
+      try {
+        options.controller.updateGroupMetadata(next);
+        group = next;
+      } catch (error) {
+        if (persistedNext && options.onGroupChanged) {
+          try {
+            await options.onGroupChanged(structuredClone(previous));
+          } catch (rollbackError) {
+            // Durable konfigurace je nejistá. I metadata/risk cesta musí v
+            // takovém případě zůstat fail-closed bez automatického návratu.
+            options.controller.disarm('config-change');
+            throw new Error(
+              `Metadata změna selhala a rollback je nejistý: ${String(error)}; rollback=${String(rollbackError)}`,
+            );
+          }
+        }
+        throw error;
+      }
+      return configurationResult();
+    }
+
+    if (options.controller.status().armed) options.controller.disarm('config-change');
 
     try {
       let missingOptionalAccountIds: readonly number[] = [];
       if (mode === 'activate' || topologyChanged) {
-        // Routing se nikdy nemění za běžícího ARM. Nejdřív odzbrojit, potom
-        // read-only discovery; teprve controller provede flat/no-working
-        // preflight nad sjednocením staré a nové topologie.
-        const prepared = await prepareAccounts(retirement
-          ? { required: copyGroupAccountIds(next), optional: previousIds }
-          : accountsForRoutingChange(previous, next));
+        // Teprve po úspěšném dry-runu a DISARM se atomicky přepnou routes.
+        // Controller pak provede autoritativní flat/no-working kontrolu.
+        const prepared = await prepareAccounts(routingRequest);
         if (retirement) {
           if (prepared.missingOptional.length !== previousIds.length
             || previousIds.some(accountId => !prepared.missingOptional.includes(accountId))) {
@@ -371,10 +441,7 @@ export async function startLocalCopierExecutionAgent(
         persistedNext = true;
       }
       if (mode === 'activate') await options.controller.activateGroup(next, reconfigurationOptions);
-      else if (leaderChanged || topologyChanged) {
-        await options.controller.reconfigureGroup(next, reconfigurationOptions);
-      }
-      else options.controller.updateGroup(next);
+      else await options.controller.reconfigureGroup(next, reconfigurationOptions);
       group = next;
     } catch (error) {
       // Controller se mění až po durable zápisu. Selže-li jeho validace nebo
@@ -601,6 +668,12 @@ export async function startLocalCopierExecutionAgent(
             assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
           }
         }
+        if (current.armed && options.controller.status().armed
+          && armMatchesCurrentConfiguration(command, options.controller.status())) {
+          // Pouze metadata/risk pravidla bez execution změny byla aplikována
+          // in-place; explicitní ARM sync nesmí zdravý runtime shodit.
+          return;
+        }
         options.controller.disarm();
         await options.controller.applyAccountEligibilityExclusions(
           validatedAccountEligibilityExclusions(command.accountEligibilityExclusions),
@@ -763,6 +836,7 @@ export async function startLocalCopierExecutionAgent(
     context?: LocalCopierAgentExecutionContext,
     admittedBrakeEpoch?: number,
   ): Promise<LocalCopierAgentCommandResult> => {
+    console.log(`${new Date().toISOString()} AGENT COMMAND source=${context?.source ?? 'internal'} type=${command.type}`);
     const result = await execute(command, context, admittedBrakeEpoch);
     return {
       ok: true,
@@ -865,8 +939,8 @@ export async function startLocalCopierExecutionAgent(
         const rawDeadline = request.headers['x-alphatrade-command-deadline'];
         const localDeadline = boundedLocalArmDeadline(rawDeadline, requestCreatedAt);
         const payload = await dispatch(command, command.type === 'arm-live'
-          ? { createdAt: requestCreatedAt, deadlineAt: localDeadline }
-          : { createdAt: requestCreatedAt }, admittedBrakeEpoch);
+          ? { source: 'loopback', createdAt: requestCreatedAt, deadlineAt: localDeadline }
+          : { source: 'loopback', createdAt: requestCreatedAt }, admittedBrakeEpoch);
         json(response, 200, payload);
       } catch (reason) {
         json(response, 409, {

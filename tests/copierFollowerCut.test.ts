@@ -9,7 +9,7 @@ import {
   bootstrapCopierRuntime,
   type CopierRuntimeController,
 } from '../services/copierRuntimeController';
-import { createMemoryCopierStore, type CopierStore } from '../services/copierStore';
+import { createMemoryCopierStore, emptySnapshot, type CopierStore } from '../services/copierStore';
 import type { CopierAuditEntry } from '../services/copierRunner';
 import { createMockBroker, type MockBroker } from '../services/mockBroker';
 import {
@@ -1958,7 +1958,7 @@ describe('CopierRuntimeController — follower account cuts', () => {
     }
   });
 
-  it('nově zjištěný prop limit slabší než aktivní cut disarmuje fail-closed', async () => {
+  it('nově zjištěná nízká prop rezerva cutne jen followera a skupinu nechá ARMED', async () => {
     const time = manualClock();
     let propLimitKnown = false;
     const broker = createMockBroker({ clock: time.clock });
@@ -1981,11 +1981,95 @@ describe('CopierRuntimeController — follower account cuts', () => {
       broker.emitEvent({ type: 'heartbeat', at: time.now() });
       await runtime.controller.waitForIdle();
 
-      expect(runtime.controller.status().armed).toBe(false);
-      expect(runtime.controller.status().lastError).toContain('nejvýše 95 % prop limitu');
+      expect(runtime.controller.status()).toMatchObject({ armed: true, lastError: null });
+      expect(followerCut(runtime.controller)).toMatchObject({
+        accountId: 200,
+        source: 'prop-reserve',
+        realizedPnlUsd: 0,
+        cutUsd: 100,
+      });
+      expect(runtime.controller.status().followerCuts).toHaveLength(1);
+    } finally {
+      runtime.controller.stop();
+    }
+  });
+
+  it('V15 porovnává zbývající prostor cutu po dnešní ztrátě, ne celý statický cut', async () => {
+    const time = manualClock();
+    const broker = createMockBroker({ clock: time.clock });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId,
+      at: time.now(),
+      realizedPnlUsd: accountId === 200 ? -10 : 0,
+      dailyLossAutoLiq: accountId === 200 ? 95 : null,
+    }));
+    const runtime = await bootRuntime({ broker, group: riskGroup({ cutUsd: 100 }), time });
+    try {
+      // remaining=90, 95 % z aktuální rezervy 95 je 90.25: konfigurace je platná.
+      expect(runtime.controller.status()).toMatchObject({ armed: true, lastError: null });
       expect(followerCut(runtime.controller)).toBeUndefined();
     } finally {
       runtime.controller.stop();
+    }
+  });
+
+  it.each(['disabled', 'off'] as const)('V15 vynechá %s followera', async state => {
+    const time = manualClock();
+    const broker = createMockBroker({ clock: time.clock });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId,
+      at: time.now(),
+      realizedPnlUsd: 0,
+      dailyLossAutoLiq: accountId === 200 ? 10 : null,
+    }));
+    const base = riskGroup({ cutUsd: 100 });
+    const configured: CopyGroupConfig = {
+      ...base,
+      followers: base.followers.map(follower => follower.accountId === 200
+        ? { ...follower, ...(state === 'disabled' ? { enabled: false } : { mode: 'off' as const }) }
+        : follower),
+    };
+    const runtime = await bootRuntime({ broker, group: configured, time });
+    try {
+      expect(runtime.controller.status()).toMatchObject({ armed: true, lastError: null });
+      expect(followerCut(runtime.controller)).toBeUndefined();
+    } finally {
+      runtime.controller.stop();
+    }
+  });
+
+  it('bootstrap nad čerstvou nízkou prop rezervou nastartuje DISARMED s důvodem místo pádu', async () => {
+    const time = manualClock();
+    const snapshot = emptySnapshot();
+    snapshot.safety = {
+      ...snapshot.safety!,
+      accountRisk: {
+        200: {
+          accountId: 200,
+          verifiedAt: time.now(),
+          realizedPnlUsd: 0,
+          netLiq: 50_000,
+          minNetLiq: 49_900,
+          dailyLossAutoLiq: null,
+          trailingMaxDrawdown: 2_500,
+          propLimitUsd: 100,
+        },
+      },
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker: createMockBroker({ clock: time.clock }),
+      store: createMemoryCopierStore(snapshot),
+      group: riskGroup({ cutUsd: 100 }),
+      clock: time.clock,
+    });
+    try {
+      expect(controller.status()).toMatchObject({
+        armed: false,
+        lastError: expect.stringContaining('prop-reserve'),
+        lastDisarm: expect.objectContaining({ code: 'prop-reserve' }),
+      });
+    } finally {
+      controller.stop();
     }
   });
 
