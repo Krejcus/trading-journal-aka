@@ -208,6 +208,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — V13 čtvrtá iterace: bezpečný flat sweep, wave budget a pravdivý audit (Codex, balíček 3b-4)
+
+- Opraveny N1–N5 a budget lens z `copier-v13d-review-20260929.md`: pending
+  bracket/OCO noha bez OSO parentu se ruší jako working; pending dítě partial
+  parentu se už nepřeskakuje; partial nebo leader-terminální OSO parent se nad
+  flat followerem risk-redukčně ruší spolu s dětmi. Neznámý parent a více než
+  šest noh nejdřív zruší prokazatelně working nohy (u stropu prvních šest),
+  potom hlasitě selžou bez auto-close zdravých followerů.
+- Protective-fill hint používá synchronizovaný stream k přímému cancelu
+  working sourozence před globálním readem. Jedna synchronní ingress vlna flat
+  eventů sdílí deadline i líně spuštěný globální order graf; broker write se
+  nikdy neopakuje a nejistotu řeší jen stream/globální read-only postkontrola.
+- Audit `kind=canceled` vzniká pouze pro nohy/parenty, na které sweep skutečně
+  poslal cancel a jejich terminální stav následně doložil. Pozdní fill
+  copied-entry parentu, který sweep rušil, při flat leaderovi nově zakládá
+  divergenci a `DISARM` s `autoClose:false`.
+- Regresní V13 soubor před opravou: 8/30 selhání; po opravě 32/32. Dotčená sada
+  270/270. Předepsaná kompletní copier sada 1759/1759; 53 loopback testů bylo
+  kvůli sandboxovému `listen EPERM` zopakováno mimo sandbox a prošlo 53/53.
+  Root typecheck má jen známé chyby v `extension/` (Chrome typy/CRX plugin),
+  žádnou chybu v aplikaci ani upravených službách.
+- Bez commitu, push/deploy, ARM/Flatten, broker spojení nebo worker reinstalace.
+
 ### 2026-09-29 — V12 čtvrtá iterace: tvarová lineage, cílené read-y a epoch refresh (Codex, balíček 3a-4)
 
 - Pending záznam nyní uchovává i dříve potvrzené follower tvary

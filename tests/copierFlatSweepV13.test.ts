@@ -51,6 +51,10 @@ interface ArmedOsoHarness {
   errors: Error[];
 }
 
+interface ArmedBracketHarness extends ArmedOsoHarness {
+  bracketIdsByAccount: Map<number, string[]>;
+}
+
 async function armedOsoHarness(
   group: CopyGroupConfig = baseGroup,
   options: { flatSweepBudgetMs?: number; leaderFlatGraceMs?: number } = {},
@@ -97,6 +101,126 @@ async function armedOsoHarness(
   return { broker, controller, store, entryIdsByAccount, protectiveIdsByAccount, audits, errors };
 }
 
+async function armedBracketHarness(group: CopyGroupConfig): Promise<ArmedBracketHarness> {
+  const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+  broker.findOrderStatusById = streamFirstStatusLookupFromMock(broker);
+  const store = createMemoryCopierStore();
+  const audits: CopierAuditEntry[] = [];
+  const errors: Error[] = [];
+  const controller = await bootstrapCopierRuntime({
+    broker,
+    store,
+    group,
+    osoCorrelationWindowMs: 5,
+    leaderFlatGraceMs: 50,
+    onAudit: entries => audits.push(...entries),
+    onError: error => errors.push(error),
+  });
+  broker.setConnected(true);
+  await controller.waitForIdle();
+  await controller.reconcile();
+  controller.arm();
+
+  const entry = leaderOrder({
+    brokerOrderId: 'bracket-entry',
+    orderType: 'Market',
+    sourceVersion: 'bracket-entry:working',
+  });
+  broker.emitEvent({ type: 'order', order: entry });
+  await controller.waitForIdle();
+  broker.emitEvent({ type: 'order', order: {
+    ...entry,
+    status: 'filled',
+    filledQuantity: 1,
+    sourceVersion: 'bracket-entry:filled',
+  } });
+  broker.emitEvent({ type: 'fill', fill: {
+    fillId: 'bracket-leader-fill',
+    tag: '',
+    brokerOrderId: entry.brokerOrderId,
+    accountId: 100,
+    symbol: 'MNQU6',
+    side: 'Buy',
+    quantity: 1,
+    price: 30_000,
+    filledAt: Date.now(),
+  } });
+  broker.setPosition(100, 'MNQU6', 1);
+  broker.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
+  await controller.waitForIdle();
+
+  for (const follower of group.followers) {
+    const followerEntry = broker.orders().find(order => (
+      order.accountId === follower.accountId
+      && order.orderType === 'Market'
+      && order.side === 'Buy'
+    ));
+    expect(followerEntry).toBeTruthy();
+    followerEntry!.status = 'filled';
+    followerEntry!.filledQuantity = 1;
+    broker.emitEvent({ type: 'order', order: { ...followerEntry! } });
+    broker.emitEvent({ type: 'fill', fill: {
+      fillId: `bracket-follower-fill-${follower.accountId}`,
+      tag: followerEntry!.tag,
+      brokerOrderId: followerEntry!.brokerOrderId,
+      accountId: follower.accountId,
+      symbol: 'MNQU6',
+      side: 'Buy',
+      quantity: 1,
+      price: 30_000,
+      filledAt: Date.now(),
+    } });
+    broker.setPosition(follower.accountId, 'MNQU6', 1);
+    broker.emitEvent({ type: 'position', position: {
+      accountId: follower.accountId,
+      symbol: 'MNQU6',
+      netQuantity: 1,
+    } });
+  }
+  await controller.waitForIdle();
+
+  broker.emitEvent({ type: 'order', order: leaderOrder({
+    brokerOrderId: 'bracket-stop',
+    parentOrderId: entry.brokerOrderId,
+    side: 'Sell',
+    orderType: 'Stop',
+    stopPrice: 29_950,
+    sourceVersion: 'bracket-stop:working',
+  }) });
+  broker.emitEvent({ type: 'order', order: leaderOrder({
+    brokerOrderId: 'bracket-target',
+    parentOrderId: entry.brokerOrderId,
+    side: 'Sell',
+    orderType: 'Limit',
+    limitPrice: 30_100,
+    sourceVersion: 'bracket-target:working',
+  }) });
+  await controller.waitForIdle();
+  await new Promise(resolve => setTimeout(resolve, 30));
+  await controller.waitForIdle();
+
+  const snapshot = await store.load();
+  const bracketIdsByAccount = new Map<number, string[]>();
+  for (const follower of group.followers) {
+    const ids = snapshot.bracketOutbox
+      .filter(item => item.request.accountId === follower.accountId)
+      .flatMap(item => [item.firstBrokerOrderId, item.secondBrokerOrderId])
+      .filter((id): id is string => Boolean(id));
+    expect(ids).toHaveLength(2);
+    bracketIdsByAccount.set(follower.accountId, ids);
+  }
+  return {
+    broker,
+    controller,
+    store,
+    entryIdsByAccount: new Map(),
+    protectiveIdsByAccount: bracketIdsByAccount,
+    bracketIdsByAccount,
+    audits,
+    errors,
+  };
+}
+
 function streamFirstStatusLookupFromMock(
   broker: MockBroker,
   onRest?: (accountId: number, orderId: string) => Promise<void>,
@@ -107,7 +231,7 @@ function streamFirstStatusLookupFromMock(
     options?: { streamOnly?: boolean },
   ): Promise<BrokerOrderStatusLookup> => {
     const streamed = broker.orders().find(item => item.accountId === accountId && item.brokerOrderId === orderId);
-    if (streamed && ['filled', 'canceled', 'rejected'].includes(streamed.status)) {
+    if (streamed) {
       return { status: streamed.status, completeness: 'authoritative', observedAt: Date.now() };
     }
     if (options?.streamOnly) return { status: null, completeness: 'eventual', observedAt: Date.now() };
@@ -547,6 +671,244 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
     }
   });
 
+  it('P4/N3: neznámý OSO parent nejdřív zruší prokazatelně working nohu a nesmí auto-close zdravé followery', async () => {
+    const group: CopyGroupConfig = {
+      ...baseGroup,
+      followers: [200, 300].map(accountId => ({ accountId, mode: 'on-submit' as const, multiplier: 1 })),
+    };
+    const harness = await armedOsoHarness(group);
+    try {
+      const parentId = harness.entryIdsByAccount.get(200)!;
+      const [pendingId, workingId] = harness.protectiveIdsByAccount.get(200)!;
+      harness.broker.orders().find(order => order.brokerOrderId === pendingId)!.status = 'pending';
+      harness.broker.orders().find(order => order.brokerOrderId === workingId)!.status = 'working';
+      const realListOrders = harness.broker.listOrders.bind(harness.broker);
+      harness.broker.listOrders = async accountId => (
+        (await realListOrders(accountId)).filter(order => order.brokerOrderId !== parentId)
+      );
+      harness.broker.setPosition(300, 'MNQU6', 1);
+      harness.broker.emitEvent({ type: 'position', position: {
+        accountId: 300, symbol: 'MNQU6', netQuantity: 1,
+      } });
+      await harness.controller.waitForIdle();
+      const marketWritesBefore = harness.broker.placedRequests().filter(request => (
+        request.accountId === 300 && request.orderType === 'Market'
+      )).length;
+
+      emitFollowerFlat(harness, 200);
+      await harness.controller.waitForIdle();
+
+      expect(harness.broker.cancelRequestCount(workingId)).toBe(1);
+      expect(harness.broker.cancelRequestCount(pendingId)).toBe(0);
+      expect(harness.controller.status().armed).toBe(false);
+      expect(harness.controller.status().lastError).toContain('parent');
+      expect(harness.broker.placedRequests().filter(request => (
+        request.accountId === 300 && request.orderType === 'Market'
+      ))).toHaveLength(marketWritesBefore);
+      expect(harness.broker.liquidateRequests()).toHaveLength(0);
+    } finally {
+      harness.controller.stop();
+    }
+  });
+
+  it('P5/N3: nad stropem se zruší prvních šest working noh, pak se hlasitě failne bez auto-close', async () => {
+    const harness = await armedOsoHarness();
+    try {
+      for (const entryId of ['cap-entry-2', 'cap-entry-3', 'cap-entry-4']) {
+        emitLeaderOso(harness.broker, entryId);
+        await harness.controller.waitForIdle();
+      }
+      const entries = (await harness.store.load()).osoOutbox.filter(item => item.request.accountId === 200);
+      const allLegIds = entries.flatMap(entry => [entry.firstBrokerOrderId!, entry.secondBrokerOrderId!]);
+      expect(allLegIds).toHaveLength(8);
+      for (const entry of entries) {
+        const parent = harness.broker.orders().find(order => order.brokerOrderId === entry.entryBrokerOrderId)!;
+        parent.status = 'filled';
+        parent.filledQuantity = parent.quantity;
+        for (const id of [entry.firstBrokerOrderId!, entry.secondBrokerOrderId!]) {
+          harness.broker.orders().find(order => order.brokerOrderId === id)!.status = 'working';
+        }
+      }
+
+      emitFollowerFlat(harness);
+      await harness.controller.waitForIdle();
+
+      expect(allLegIds.map(id => harness.broker.cancelRequestCount(id)))
+        .toEqual([1, 1, 1, 1, 1, 1, 0, 0]);
+      expect(harness.controller.status().armed).toBe(false);
+      expect(harness.controller.status().lastError).toContain('8 pracovních ochranných noh');
+      expect(harness.broker.liquidateRequests()).toHaveLength(0);
+    } finally {
+      harness.controller.stop();
+    }
+  });
+
+  it('P3/N4 + P1/N1: parciálně vyplněný OSO parent i jeho pending/working děti se nad flat followerem zruší', async () => {
+    const x2Group: CopyGroupConfig = {
+      ...baseGroup,
+      followers: [{ accountId: 200, mode: 'on-submit', multiplier: 2 }],
+    };
+    const harness = await armedOsoHarness(x2Group);
+    try {
+      const parentId = harness.entryIdsByAccount.get(200)!;
+      const parent = harness.broker.orders().find(order => order.brokerOrderId === parentId)!;
+      parent.status = 'working';
+      parent.filledQuantity = 1;
+      const [pendingId, workingId] = harness.protectiveIdsByAccount.get(200)!;
+      harness.broker.orders().find(order => order.brokerOrderId === pendingId)!.status = 'pending';
+      harness.broker.orders().find(order => order.brokerOrderId === workingId)!.status = 'working';
+
+      emitFollowerFlat(harness);
+      await harness.controller.waitForIdle();
+
+      expect(harness.broker.cancelRequestCount(parentId)).toBe(1);
+      expect(harness.broker.cancelRequestCount(pendingId)).toBe(1);
+      expect(harness.broker.cancelRequestCount(workingId)).toBe(1);
+      expect(harness.controller.status()).toMatchObject({ armed: true, lastError: null });
+    } finally {
+      harness.controller.stop();
+    }
+  });
+
+  it('N1: copied-entry fill, který otevře followera při flat leaderovi, je divergence bez auto-close', async () => {
+    const harness = await armedOsoHarness();
+    try {
+      const parentId = harness.entryIdsByAccount.get(200)!;
+      const parent = harness.broker.orders().find(order => order.brokerOrderId === parentId)!;
+      parent.status = 'working';
+      parent.filledQuantity = 1;
+      harness.broker.setPosition(200, 'MNQU6', 1);
+      harness.broker.emitEvent({ type: 'position', position: {
+        accountId: 200, symbol: 'MNQU6', netQuantity: 1,
+      } });
+      await harness.controller.waitForIdle();
+      harness.broker.setPosition(200, 'MNQU6', 0);
+      harness.broker.emitEvent({ type: 'position', position: {
+        accountId: 200, symbol: 'MNQU6', netQuantity: 0,
+      } });
+      await harness.controller.waitForIdle();
+      expect(harness.broker.cancelRequestCount(parentId)).toBe(1);
+      harness.broker.emitEvent({ type: 'fill', fill: {
+        fillId: 'late-copied-entry-fill',
+        tag: parent.tag,
+        brokerOrderId: parentId,
+        accountId: 200,
+        symbol: 'MNQU6',
+        side: 'Buy',
+        quantity: 1,
+        price: 30_000,
+        filledAt: Date.now(),
+      } });
+      harness.broker.setPosition(200, 'MNQU6', 1);
+      harness.broker.emitEvent({ type: 'position', position: {
+        accountId: 200, symbol: 'MNQU6', netQuantity: 1,
+      } });
+      await harness.controller.waitForIdle();
+
+      expect(harness.controller.status().armed).toBe(false);
+      expect(harness.controller.status().lastError).toContain('copied-entry');
+      expect(harness.controller.status().divergentAccounts).toContain(200);
+      expect(harness.broker.liquidateRequests()).toHaveLength(0);
+      expect(harness.broker.placedRequests().filter(request => (
+        request.accountId === 200 && request.orderType === 'Market' && request.side === 'Sell'
+      ))).toHaveLength(0);
+    } finally {
+      harness.controller.stop();
+    }
+  });
+
+  it('D-E/N2: protective fill hint zruší streamově working sourozence před globálním čtením', async () => {
+    const harness = await armedOsoHarness();
+    const sequence: string[] = [];
+    try {
+      const [stopId, targetId] = harness.protectiveIdsByAccount.get(200)!;
+      harness.broker.setPosition(200, 'MNQU6', 1);
+      harness.broker.emitEvent({ type: 'position', position: {
+        accountId: 200, symbol: 'MNQU6', netQuantity: 1,
+      } });
+      await harness.controller.waitForIdle();
+      const realCancel = harness.broker.cancelOrder.bind(harness.broker);
+      harness.broker.cancelOrder = async (accountId, orderId) => {
+        sequence.push('cancel:' + orderId);
+        return realCancel(accountId, orderId);
+      };
+      const realListOrders = harness.broker.listOrders.bind(harness.broker);
+      harness.broker.listOrders = async accountId => {
+        sequence.push('list:' + accountId);
+        return realListOrders(accountId);
+      };
+      harness.broker.findOrderStatusById = async (accountId, orderId, options) => {
+        const order = harness.broker.orders().find(item => (
+          item.accountId === accountId && item.brokerOrderId === orderId
+        ));
+        if (options?.streamOnly && order) {
+          return { status: order.status, completeness: 'authoritative', observedAt: Date.now() };
+        }
+        return { status: order?.status ?? null, completeness: 'authoritative', observedAt: Date.now() };
+      };
+
+      emitFollowerFill(harness, targetId, 'Sell', 1, 0, 'protective-target-fill');
+      await harness.controller.waitForIdle();
+
+      expect(harness.broker.cancelRequestCount(stopId)).toBe(1);
+      expect(sequence[0]).toBe('cancel:' + stopId);
+      expect(harness.controller.status()).toMatchObject({ armed: true, lastError: null });
+    } finally {
+      harness.controller.stop();
+    }
+  });
+
+  it('Q1/Q2/N3: pending bracket noha bez OSO parentu se ruší jako working a nezavírá zdravého followera', async () => {
+    const group: CopyGroupConfig = {
+      ...baseGroup,
+      followers: [200, 300].map(accountId => ({ accountId, mode: 'on-submit' as const, multiplier: 1 })),
+    };
+    const harness = await armedBracketHarness(group);
+    try {
+      const ids = harness.bracketIdsByAccount.get(200)!;
+      harness.broker.orders().find(order => order.brokerOrderId === ids[0])!.status = 'pending';
+      const marketWritesBefore = harness.broker.placedRequests().filter(request => (
+        request.accountId === 300 && request.orderType === 'Market'
+      )).length;
+      harness.broker.setPosition(200, 'MNQU6', 0);
+      harness.broker.emitEvent({ type: 'position', position: {
+        accountId: 200, symbol: 'MNQU6', netQuantity: 0,
+      } });
+      await harness.controller.waitForIdle();
+
+      expect(ids.map(id => harness.broker.cancelRequestCount(id))).toEqual([1, 1]);
+      expect(harness.controller.status()).toMatchObject({ armed: true, lastError: null });
+      expect(harness.broker.placedRequests().filter(request => (
+        request.accountId === 300 && request.orderType === 'Market'
+      ))).toHaveLength(marketWritesBefore);
+      expect(harness.broker.liquidateRequests()).toHaveLength(0);
+    } finally {
+      harness.controller.stop();
+    }
+  }, 15_000);
+
+  it('Q2/N3: pending bracket noha se zruší i po běžném leader exitu bez falešného DISARM', async () => {
+    const harness = await armedBracketHarness(baseGroup);
+    try {
+      const ids = harness.bracketIdsByAccount.get(200)!;
+      harness.broker.orders().find(order => order.brokerOrderId === ids[0])!.status = 'pending';
+      harness.broker.setPosition(100, 'MNQU6', 0);
+      harness.broker.emitEvent({ type: 'position', position: {
+        accountId: 100, symbol: 'MNQU6', netQuantity: 0,
+      } });
+      harness.broker.setPosition(200, 'MNQU6', 0);
+      harness.broker.emitEvent({ type: 'position', position: {
+        accountId: 200, symbol: 'MNQU6', netQuantity: 0,
+      } });
+      await harness.controller.waitForIdle();
+
+      expect(ids.map(id => harness.broker.cancelRequestCount(id))).toEqual([1, 1]);
+      expect(harness.controller.status()).toMatchObject({ armed: true, lastError: null });
+    } finally {
+      harness.controller.stop();
+    }
+  }, 15_000);
+
   it('L4/O7: protective-fill hint nezúží sweep a osiřelá working noha jiné OSO epizody se zruší', async () => {
     const harness = await armedOsoHarness();
     try {
@@ -612,7 +974,7 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
     }
   });
 
-  it('T8: postkontrola používá globální listOrders a nečte historii cíleně po ID', async () => {
+  it('T8: postkontrola potvrzuje cancel ze streamu a nečte historii cíleně přes REST', async () => {
     const harness = await armedOsoHarness();
     const calls = new Map<string, number>();
     try {
@@ -627,7 +989,7 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
       await harness.controller.waitForIdle();
 
       expect(calls.get(terminalId)).toBe(1);
-      expect(calls.get(workingId)).toBe(1);
+      expect(calls.get(workingId)).toBe(2);
       expect(harness.broker.cancelRequestCount(terminalId)).toBe(0);
       expect(harness.broker.cancelRequestCount(workingId)).toBe(1);
     } finally {
@@ -778,6 +1140,8 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
       expect(ids.map(id => harness.broker.cancelRequestCount(id))).toEqual([1, 1]);
       expect(harness.controller.status().armed).toBe(false);
       expect(harness.controller.status().lastError).toContain('broker stále hlásí pozici 1');
+      expect(harness.audits.filter(entry => entry.kind === 'canceled').map(entry => entry.brokerOrderId).sort())
+        .toEqual([...ids].sort());
     } finally {
       harness.controller.stop();
     }
@@ -794,7 +1158,7 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
     try {
       const realListOrders = harness.broker.listOrders.bind(harness.broker);
       harness.broker.listOrders = async accountId => {
-        await new Promise(resolve => setTimeout(resolve, 150));
+        await new Promise(resolve => setTimeout(resolve, 2_100));
         return realListOrders(accountId);
       };
       const osoBefore = harness.broker.placedOsoRequests().length;
@@ -810,7 +1174,66 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
       clearInterval(heartbeat);
       harness.controller.stop();
     }
-  }, 10_000);
+  }, 20_000);
+
+  it('D-C: dva pomalé flat sweepy nezestárnou heartbeat ani nezavřou zdravého followera', async () => {
+    const followers = [200, 300, 400];
+    const group: CopyGroupConfig = {
+      ...baseGroup,
+      followers: followers.map(accountId => ({ accountId, mode: 'on-submit' as const, multiplier: 1 })),
+    };
+    const harness = await armedOsoHarness(group);
+    const heartbeat = setInterval(() => harness.broker.emitEvent({ type: 'heartbeat', at: Date.now() }), 100);
+    try {
+      for (const accountId of [100, ...followers]) {
+        harness.broker.setPosition(accountId, 'MNQU6', 1);
+        harness.broker.emitEvent({ type: 'position', position: {
+          accountId, symbol: 'MNQU6', netQuantity: 1,
+        } });
+      }
+      await harness.controller.waitForIdle();
+      const realListOrders = harness.broker.listOrders.bind(harness.broker);
+      let activeReads = 0;
+      let maxActiveReads = 0;
+      harness.broker.listOrders = async accountId => {
+        activeReads += 1;
+        maxActiveReads = Math.max(maxActiveReads, activeReads);
+        await new Promise(resolve => setTimeout(resolve, 2_600));
+        const result = await realListOrders(accountId);
+        activeReads -= 1;
+        return result;
+      };
+      const marketWritesBefore = harness.broker.placedRequests().filter(request => (
+        request.accountId === 400 && request.orderType === 'Market'
+      )).length;
+      for (const accountId of [200, 300]) {
+        harness.broker.setPosition(accountId, 'MNQU6', 0);
+        harness.broker.emitEvent({ type: 'position', position: {
+          accountId, symbol: 'MNQU6', netQuantity: 0,
+        } });
+      }
+      harness.broker.emitEvent({ type: 'order', order: leaderOrder({
+        brokerOrderId: 'v13-stop',
+        parentOrderId: 'v13-entry',
+        side: 'Sell',
+        orderType: 'Stop',
+        stopPrice: 29_975,
+        sourceVersion: 'stop:d-c-modify',
+      }) });
+      await harness.controller.waitForIdle();
+
+      expect(maxActiveReads).toBe(3);
+      expect(harness.controller.status()).toMatchObject({ armed: true, lastError: null });
+      expect(harness.audits.some(entry => entry.reason?.includes('stale-heartbeat'))).toBe(false);
+      expect(harness.broker.placedRequests().filter(request => (
+        request.accountId === 400 && request.orderType === 'Market'
+      ))).toHaveLength(marketWritesBefore);
+      expect(harness.broker.modifyRequests().some(request => request.accountId === 400)).toBe(true);
+    } finally {
+      clearInterval(heartbeat);
+      harness.controller.stop();
+    }
+  }, 15_000);
 
   it('R5: breach jednoho followera nezavře zdravého followera a jeho SL management pokračuje', async () => {
     const group: CopyGroupConfig = {

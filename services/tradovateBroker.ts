@@ -1783,13 +1783,14 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     },
     async findOrderStatusById(accountId, brokerOrderId, options) {
       const orderId = numberId(brokerOrderId);
-      // `cancelOrder` už čeká na přesnou terminální Order událost. Pokud ji
-      // autoritativní sync stream doručil, nepálíme po ní další REST burst.
+      // Synchronizovaný stream je autoritativní i pro aktuální working stav.
+      // Flat sweep tak může po přesném protective fill hintu zrušit working
+      // sourozence bez čekání na globální REST graf. Bez syncReady se cache
+      // nikdy nepoužije jako důkaz.
       const streamed = orders.get(String(orderId));
       if (
         syncReady
         && streamed?.accountId === accountId
-        && ['canceled', 'filled', 'rejected'].includes(streamed.status)
       ) {
         return { status: streamed.status, completeness: 'authoritative', observedAt: clock() };
       }
