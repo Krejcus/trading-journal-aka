@@ -2151,14 +2151,15 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     },
     async findOrderStatusById(accountId, brokerOrderId, options) {
       const orderId = numberId(brokerOrderId);
-      // Synchronizovaný stream je autoritativní i pro aktuální working stav.
-      // Flat sweep tak může po přesném protective fill hintu zrušit working
-      // sourozence bez čekání na globální REST graf. Bez syncReady se cache
-      // nikdy nepoužije jako důkaz.
+      // Working stav ze streamu je autoritativní jen pro výslovný stream-only
+      // hot path. Běžný lookup musí nechat /order/item rozhodnout opožděný
+      // stream po cancelu; terminální streamový stav je absorpční a lze jej
+      // bezpečně vrátit i bez REST.
       const streamed = orders.get(String(orderId));
       if (
         syncReady
         && streamed?.accountId === accountId
+        && (options?.streamOnly || !isOpenOrderStatus(streamed.status))
       ) {
         return { status: streamed.status, completeness: 'authoritative', observedAt: clock() };
       }

@@ -419,6 +419,54 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - Bez commitu/pushe/deploye, npm install/ci, Supabase změny, broker write,
   ARM/Flatten nebo reinstalace workeru. Dočasný baseline export byl odstraněn.
 
+### 2026-09-29 — V13 v5b: deadline visícího flat-sweep cancelu (Codex, balíček 3b-6)
+
+- Každý protective/OSO i exit-only cancel ve flat sweepu má vlastní
+  `flatSweepCancelTimeoutMs` (default 2 s). Timeout je nejasný výsledek:
+  write se podruhé neposílá a výsledek rozhodne jen následný stream/REST
+  snapshot; working nebo neznámý stav skončí čitelně fail-closed.
+- Runtime tombstone drží nejvýše jeden cancel write na broker order ID i při
+  dalším flat eventu. Visící cancel jednoho účtu po svém deadlinu propustí
+  další účet ve stejné ingress vlně; brokerem už provedený cancel s visící
+  HTTP odpovědí se read-only potvrdí a navazující leader exit není blokován.
+- Nová B6/R6 hang regrese před opravou skončila timeoutem (`waitForIdle` se
+  neuvolnil); po opravě celý V13 soubor prošel 40/40 a související
+  follower-cut/V13 guard/exit-latency sada 39/39. Předepsaná plná copier sada
+  prošla mimo sandbox: 170 souborů + 1 skipped, 1956 testů + 1 todo, exit 0.
+  První sandbox běh měl pouze 89 `listen EPERM 127.0.0.1` pádů ve čtyřech
+  loopback souborech. Root `tsc --noEmit` má jen povolené chybějící Chrome
+  typy a `@crxjs/vite-plugin` v `extension/`; typecheck bez extension prošel
+  exit 0. Bez npm install/ci, commitu, broker volání, ARM/Flatten, deploye
+  nebo reinstalace workeru.
+
+### 2026-09-29 — V13 pátá iterace: pre-cancel flat proof, stream-first sweep a OSO lineage (Codex, balíček 3b-5)
+
+- Flat-sweep před prvním cancelem čte `listPositions` dotčeného followera
+  souběžně s order grafem. Ne-flat followera nejprve fail-closed odzbrojí a
+  auto-close; `autoClose:false` používá jen po autoritativním potvrzení flat.
+  Streamové working nohy se ruší bez čekání na REST budget a bez retry;
+  rozpočet omezuje jen REST a začíná pro každý účet až jeho sweepem. Všechny
+  streamové terminály končí bez falešného DISARM.
+- Terminální stav z REST/streamu má přednost; streamové `working` je autorita
+  jen pro explicitní `streamOnly`. Cizí/starý nebo dispatch-em překonaný
+  snapshot už neznamená terminál a neotráví `sweptProtectiveLegs`. OSO parent
+  se ruší jen podle leader vstupu/flat důkazu a má samostatný auditní důvod.
+  Noha s explicitním neznámým `parentOrderId` se nepovýší časovou heuristikou
+  na bracket, takže zůstane OSO korelátoru a follower nedostane holý Limit.
+- Nové hard regrese před opravou reprodukovaly 9 pádů: V1c, V3b/O4/P7, V4,
+  V5a, V5b, V6, V7, parent audit a S1 guard; po opravě cílená sada prošla
+  99/99. Původních 72 review probe souborů dalo 63 pass a 9 starých timeout
+  fixture pádů (B2 známý artefakt; B3/B5 čekají na dřívější horší chování),
+  zatímco bezpečnostní výstupy P6, V1c, V3b/c, V4–V7, Guard a RozpočetD jsou
+  stejné nebo lepší než `1a59237^`.
+- Předepsaná kompletní copier sada prošla mimo sandbox kvůli loopback socketu:
+  170 souborů + 1 skipped, 1953 testů + 1 todo, exit 0. První sandbox běh měl
+  jen 89 `listen EPERM 127.0.0.1` pádů a jednu opravenou starou BRK2 aserci,
+  která nově očekává povinný bezpečnostní read, ale dál hlídá market exit pod
+  200 ms. Root `tsc --noEmit` hlásí pouze povolené chybějící Chrome typy a
+  `@crxjs/vite-plugin` v `extension/`; `git diff --check` je čistý. Bez
+  commitu, push/deploye, instalace závislostí nebo broker/worker akce.
+
 ### 2026-09-29 — Balíček 6: V9 ownership auto-close, V4 durable guard a ST4 fence (Codex)
 
 - Auto-close nyní úplně vynechá pouze followery s `enabled=false`; jejich

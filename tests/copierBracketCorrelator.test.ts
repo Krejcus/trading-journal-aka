@@ -79,6 +79,23 @@ describe('CopierBracketCorrelator', () => {
     }))).toMatchObject({ entryOrderId: 'entry-a', correlation: 'broker-parent' });
   });
 
+  it('S1/zzV_Guard: explicitní neznámý parent neodvodí k cizímu vyplněnému vstupu', () => {
+    const correlator = new CopierBracketCorrelator();
+    correlator.observe(event({ orderId: 'filled-old-entry' }));
+
+    expect(correlator.observe(event({
+      id: 'new-sl', orderId: 'new-sl', kind: 'submitted', side: 'Buy', orderType: 'Stop',
+      stopPrice: 30_300, parentOrderId: 'pending-new-entry', cumulativeQuantity: undefined,
+      receivedAt: 1_100,
+    }))).toBeNull();
+    expect(correlator.observe(event({
+      id: 'new-tp', orderId: 'new-tp', kind: 'submitted', side: 'Buy', orderType: 'Limit',
+      limitPrice: 30_200, parentOrderId: 'pending-new-entry', cumulativeQuantity: undefined,
+      receivedAt: 1_120,
+    }))).toBeNull();
+    expect(correlator.hasPendingPair('filled-old-entry')).toBe(false);
+  });
+
   it('při více možných entry nic nehádá', () => {
     const correlator = new CopierBracketCorrelator();
     correlator.observe(event({ orderId: 'entry-a' }));

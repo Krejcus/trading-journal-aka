@@ -61,7 +61,9 @@ describe('BRK2 V5: Exit at Mkt & Cxl pod ARM, /position/list followera trvá 400
     console.log('EXITLAT', JSON.stringify(result));
     controller.stop();
     expect(result.armed).toBe(true);
-    expect(result.slowPositionReads).toBe(0);
+    // Flat-sweep musí followera před případným cancelem přečíst, ale toto
+    // bezpečnostní čtení nesmí zdržet už rozpoznaný follower market exit.
+    expect(result.slowPositionReads).toBe(1);
     expect(result.placedAt).toHaveLength(1);
     expect(result.placedAt[0]).toMatchObject({ what: '200 Sell Market' });
     expect(result.placedAt[0].t).toBeLessThan(200);

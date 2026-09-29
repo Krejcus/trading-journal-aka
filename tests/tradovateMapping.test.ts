@@ -362,6 +362,54 @@ describe('createTradovateBroker REST', () => {
     expect(calls).toEqual([]);
   });
 
+  it('N4/V4: běžný status lookup nepřebije terminální REST opožděným working streamem', async () => {
+    const calls: string[] = [];
+    const socket: WebSocketLike = {
+      readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+      send() {}, close() {},
+    };
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123',
+      webSocketFactory: () => socket,
+      setIntervalImpl: (() => 1) as unknown as typeof setInterval,
+      clearIntervalImpl: (() => undefined) as unknown as typeof clearInterval,
+      fetchImpl: async input => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes('/order/item?id=42')) return jsonResponse({
+          id: 42, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Canceled',
+        });
+        if (url.includes('/order/list')) return jsonResponse([]);
+        if (url.includes('/orderVersion/list')) return jsonResponse([]);
+        if (url.includes('/command/list')) return jsonResponse([]);
+        if (url.includes('/fill/list')) return jsonResponse([]);
+        if (url.includes('/contract/items')) return jsonResponse([{ id: 7, name: 'MNQU6' }]);
+        throw new Error(`unexpected url ${url}`);
+      },
+    });
+    const unsubscribe = broker.subscribe(() => undefined);
+    socket.onmessage?.({ data: 'a[{"i":1,"s":200,"d":[]}]' });
+    socket.onmessage?.({ data: `a[${JSON.stringify({ e: 'props', d: [{
+      entityType: 'OrderVersion', entity: {
+        id: 42, orderId: 42, orderQty: 1, orderType: 'Limit', price: 29_500,
+      },
+    }, {
+      entityType: 'Order', entity: {
+        id: 42, accountId: 200, contractId: 7, action: 'Buy', ordStatus: 'Working',
+      },
+    }] })}]` });
+
+    await expect.poll(async () => (
+      await broker.findOrderStatusById!(200, '42', { streamOnly: true })
+    ).status).toBe('working');
+    await expect(broker.findOrderStatusById!(200, '42', { streamOnly: true })).resolves
+      .toMatchObject({ status: 'working', completeness: 'authoritative' });
+    await expect(broker.findOrderStatusById!(200, '42')).resolves
+      .toMatchObject({ status: 'canceled', completeness: 'authoritative' });
+    expect(calls.filter(url => url.includes('/order/item?id=42'))).toHaveLength(1);
+    unsubscribe();
+  });
+
   it('modify-only lookup potvrzuje přesný Replaced report bez globálního Command a Fill listu', async () => {
     const calls: string[] = [];
     const broker = createTradovateBroker({
