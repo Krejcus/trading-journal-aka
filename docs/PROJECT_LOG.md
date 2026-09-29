@@ -208,6 +208,47 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — Controller balíček 5c: epoch suppression, partial exity a stale ingress (Codex)
+
+- V17/V18 jsou svázané s konkrétním leader orderem a otevřenou exposure
+  epochou. Historický `acknowledged` z jiné epizody už nepotlačí aktuální
+  broker reject; nová epizoda starou suppression přepíše. `allowedNet=0`
+  vznikne a zůstane platný jen po autoritativním potvrzení flat účtu, bez
+  working orderu a pending commandu, při nezměněné observation/generation.
+  Neověřitelná nula dál končí fail-closed bez broker write.
+- ST28 dovolí unmapped replace pouze followerovi, jehož škálované množství je
+  stále nula a broker snapshot potvrzuje flat/no-working/no-pending, nebo má
+  platnou suppression stejné epizody. Každý jiný chybějící link zůstává
+  fail-closed. ST31 sleduje počáteční net a už zpracované filly exit-only
+  rezervace, takže pořadí Position před Fillem neodečte partial exit dvakrát
+  a další redukce nezůstane neodeslaná.
+- Order/fill ingress nese skutečný `receivedAt`: risk-zvyšující leader event
+  starší než 5 s se durable zaznamená a kriticky zablokuje bez pozdního copy;
+  redukující/protective eventy se jen kvůli stáří neblokují. Bracket/OSO
+  časovače používají zbývající rozpočet od ingressu, ne nové celé okno po
+  doběhnutí fronty. Runnerův existující modify tok dál dělá čerstvý lookup
+  před jediným write; žádný blind retry nebyl přidán.
+- Flat sweep nyní zahrne i durable standard outbox/link s rolí
+  `standalone-stop`, takže pozdější TP→flat followera zruší osiřelý stop i za
+  DISARM a autoritativně zkontroluje výsledek. Změna je strukturálně
+  kompatibilní s brokerovou větví `codex/copier-broker-20260929`; větev nebyla
+  mergována a oblast controller auditu kolem `standalone-position-unknown`
+  zůstala nedotčená.
+- `maybeEngageDayLock` používá funkční `persistSafetyUpdate(current => ...)`;
+  deterministická race regrese blokuje commit `sessionArmedAt`, vloží souběžný
+  day-lock a potvrzuje zachování obou polí. Nové testy dále kryjí V17, V18,
+  ST28, ST31, stale entry, starý protective move, zbývající ST6 budget a
+  DISARM sweep standalone stopu. Před opravou cíleně padaly stale entry/ST6
+  (2/2), unmapped zero-scale replace a position-before-fill zanechal jen jeden
+  ze dvou potřebných exitů; po opravě jsou dotčené controller soubory 184/184.
+- Předepsaná úplná kopírková sada prošla mimo sandbox kvůli loopback socketu:
+  144/144 souborů a 1768/1768 testů. Root `tsc --noEmit` hlásí pouze výslovně
+  ignorované chybějící `chrome`/`@crxjs/vite-plugin` typy v `extension/`;
+  cílený typecheck bez `extension/` i root `npm run build` prošly a
+  `git diff --check` je čistý. Žádný commit,
+  merge, push, deploy, worker reinstall, ARM/DISARM ani broker/produkční akce
+  nebyly provedeny.
+
 ### 2026-09-29 — V13 čtvrtá iterace: bezpečný flat sweep, wave budget a pravdivý audit (Codex, balíček 3b-4)
 
 - Opraveny N1–N5 a budget lens z `copier-v13d-review-20260929.md`: pending

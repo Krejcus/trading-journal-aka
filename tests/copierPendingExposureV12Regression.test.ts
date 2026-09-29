@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { BrokerOrder } from '../services/brokerPort';
+import type { BrokerEvent, BrokerOrder } from '../services/brokerPort';
 import { bootstrapCopierRuntime } from '../services/copierRuntimeController';
-import { createMemoryCopierStore } from '../services/copierStore';
+import { createMemoryCopierStore, emptySnapshot } from '../services/copierStore';
+import { createOutboxEntry, markAcknowledged } from '../services/copierOutbox';
 import { createMockBroker, type MockBroker } from '../services/mockBroker';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
 
@@ -35,7 +36,12 @@ const setup = async ({
   await controller.waitForIdle();
   await controller.reconcile();
   controller.arm();
-  return { broker, controller, advance: (ms: number) => { now += ms; } };
+  return {
+    broker,
+    controller,
+    advance: (ms: number) => { now += ms; },
+    now: () => now,
+  };
 };
 
 const followerOrders = (broker: MockBroker, orderType?: BrokerOrder['orderType']) => broker.orders().filter(
@@ -236,7 +242,336 @@ describe('V12 regression: filled leader lineage', () => {
     expect(controller.status()).toMatchObject({ armed: true, lastError: null });
     controller.stop();
   });
+
+  it('ST6 uses the remaining standalone-SL correlation budget from broker ingress time', async () => {
+    const { broker, controller, advance } = await setup();
+    const entry = leaderOrder({
+      brokerOrderId: 'leader-ingress-budget-entry', orderType: 'Market', limitPrice: undefined,
+    });
+    broker.emitEvent({ type: 'order', order: entry });
+    await controller.waitForIdle();
+    const followerEntry = followerOrders(broker, 'Market')[0];
+    if (!followerEntry) throw new Error('Test setup: follower Market nevznikl');
+    followerEntry.status = 'filled';
+    followerEntry.filledQuantity = 2;
+    broker.setPosition(200, 'MNQU6', 2);
+    await emitLeaderFullFill(broker, controller, entry);
+
+    const startedAt = Date.now();
+    const leaderStop = broker.placeOrder({
+      tag: 'leader-ingress-budget-stop', accountId: 100, symbol: 'MNQU6', side: 'Sell',
+      quantity: 2, orderType: 'Stop', stopPrice: 30_400,
+    });
+    // Simuluje frontu, která event zpracuje až po vyčerpání korelačního okna.
+    // `receivedAt` musí controller zachytit synchronně při ingressu.
+    advance(2_000);
+    await leaderStop;
+    await controller.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    await controller.waitForIdle();
+
+    expect({
+      stops: followerOrders(broker, 'Stop'),
+      elapsedMs: Date.now() - startedAt,
+      status: controller.status(),
+    }).toMatchObject({
+      stops: [expect.anything()],
+      elapsedMs: expect.any(Number),
+      status: { armed: true, lastError: null },
+    });
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    controller.stop();
+  });
+
+  it('stale exposure-increasing leader event is blocked instead of copied late', async () => {
+    const { broker, controller, advance } = await setup();
+    advance(6_000);
+    broker.emitEvent({
+      type: 'order',
+      receivedAt: 100,
+      order: leaderOrder({
+        brokerOrderId: 'leader-stale-entry', orderType: 'Market', limitPrice: undefined,
+      }),
+    } as BrokerEvent & { receivedAt: number });
+    await controller.waitForIdle();
+
+    expect(broker.placedRequests()).toHaveLength(0);
+    expect(controller.status()).toMatchObject({ armed: false, reconciliationRequired: true });
+    expect(controller.status().lastError).toContain('stará risk-zvyšující událost');
+    controller.stop();
+  });
+
+  it('an old protective SL move is not blocked only because it waited in the event queue', async () => {
+    const { broker, controller, advance, now } = await setup();
+    broker.setPosition(100, 'MNQU6', 2);
+    broker.setPosition(200, 'MNQU6', 2);
+    broker.emitEvent({
+      type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 2 },
+    });
+    broker.emitEvent({
+      type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 2 },
+    });
+    await controller.waitForIdle();
+    const stop = leaderOrder({
+      brokerOrderId: 'leader-old-protective-move', side: 'Sell', quantity: 2,
+      orderType: 'Stop', limitPrice: undefined, stopPrice: 30_400,
+    });
+    broker.emitEvent({ type: 'order', order: stop });
+    await controller.waitForIdle();
+    const followerStop = followerOrders(broker, 'Stop')[0];
+    if (!followerStop) throw new Error('Test setup: follower Stop nevznikl');
+    const lookup = vi.spyOn(broker, 'findOrderById');
+    lookup.mockClear();
+
+    const receivedAt = now();
+    advance(6_000);
+    broker.emitEvent({
+      type: 'order',
+      receivedAt,
+      order: { ...stop, stopPrice: 30_390, sourceVersion: '2:Working', updatedAt: 2 },
+    } as BrokerEvent & { receivedAt: number });
+    await controller.waitForIdle();
+
+    expect(broker.modifyRequests()).toContainEqual(expect.objectContaining({
+      accountId: 200,
+      brokerOrderId: followerStop.brokerOrderId,
+      changes: expect.objectContaining({ stopPrice: 30_390 }),
+    }));
+    expect(lookup).toHaveBeenCalledWith(200, followerStop.brokerOrderId);
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    controller.stop();
+  });
+
+  it('ST28 does not fail an unmapped replace when authoritative scaling is still zero', async () => {
+    const { broker, controller } = await setup({ multiplier: 0.5 });
+    const entry = leaderOrder({
+      brokerOrderId: 'leader-zero-scaled-entry', quantity: 1, limitPrice: 29_500,
+    });
+    broker.emitEvent({ type: 'order', order: entry });
+    await controller.waitForIdle();
+    expect(followerOrders(broker)).toHaveLength(0);
+
+    broker.emitEvent({ type: 'order', order: {
+      ...entry,
+      limitPrice: 29_510,
+      sourceVersion: '2:Working',
+      updatedAt: 2,
+    } });
+    await controller.waitForIdle();
+
+    expect(followerOrders(broker)).toHaveLength(0);
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    controller.stop();
+  });
+
+  it('sweeps a durable standalone stop after the follower becomes flat while DISARMED', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    broker.setPosition(100, 'MNQU6', 1);
+    broker.setPosition(200, 'MNQU6', 1);
+    const ack = await broker.placeOrder({
+      tag: 'durable-standalone-stop',
+      accountId: 200,
+      symbol: 'MNQU6',
+      side: 'Sell',
+      quantity: 1,
+      orderType: 'Stop',
+      stopPrice: 30_400,
+    });
+    const snapshot = emptySnapshot();
+    snapshot.outbox = [{
+      ...markAcknowledged(createOutboxEntry(
+        'durable-standalone-stop',
+        'durable-standalone-stop',
+        'leader-standalone-stop',
+        {
+          tag: 'durable-standalone-stop', accountId: 200, symbol: 'MNQU6', side: 'Sell',
+          quantity: 1, orderType: 'Stop', stopPrice: 30_400,
+        },
+        1,
+      ), ack.brokerOrderId, 2),
+      protectiveRole: 'standalone-stop',
+    } as (typeof snapshot.outbox)[number]];
+    snapshot.links = [[
+      'leader-standalone-stop',
+      [{
+        key: 'durable-standalone-stop',
+        accountId: 200,
+        brokerOrderId: ack.brokerOrderId,
+        quantity: 1,
+        stopPrice: 30_400,
+        protectiveRole: 'standalone-stop',
+      } as (typeof snapshot.links)[number][1][number]],
+    ]];
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(snapshot),
+      group: group(),
+      clock: stepClockForSweep(),
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    expect(controller.status().armed).toBe(false);
+
+    broker.setPosition(200, 'MNQU6', 0);
+    broker.emitEvent({
+      type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 0 },
+    });
+    await controller.waitForIdle();
+
+    expect(broker.cancelRequestCount(ack.brokerOrderId)).toBe(1);
+    expect(broker.orders().find(order => order.brokerOrderId === ack.brokerOrderId))
+      .toMatchObject({ status: 'canceled' });
+    controller.stop();
+  });
+
+  it('V17 ignores acknowledged history when the current episode entry is rejected asynchronously', async () => {
+    let followerBuy = 0;
+    let now = 1_000;
+    const broker = createMockBroker({
+      clock: () => ++now,
+      behavior: request => {
+        if (request.accountId === 200 && request.side === 'Buy') {
+          followerBuy += 1;
+          return followerBuy === 1
+            ? { kind: 'fill', price: 30_500 }
+            : { kind: 'working' };
+        }
+        return { kind: 'fill', price: 30_500 };
+      },
+    });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: group('on-fill'),
+      clock: () => ++now,
+      followerTransitionCorrelationWindowMs: 20,
+      leaderFlatGraceMs: 5,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    const emitLeaderFillAndPosition = async (
+      orderId: string,
+      side: 'Buy' | 'Sell',
+      netQuantity: number,
+    ) => {
+      broker.emitEvent({
+        type: 'fill',
+        fill: {
+          fillId: `fill-${orderId}`, tag: '', brokerOrderId: orderId, accountId: 100,
+          symbol: 'MNQU6', side, quantity: 1, price: 30_500, filledAt: ++now,
+        },
+      });
+      broker.setPosition(100, 'MNQU6', netQuantity);
+      broker.emitEvent({
+        type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity },
+      });
+      await controller.waitForIdle();
+    };
+
+    await emitLeaderFillAndPosition('episode-one-entry', 'Buy', 1);
+    await emitLeaderFillAndPosition('episode-one-exit', 'Sell', 0);
+
+    broker.emitEvent({
+      type: 'fill',
+      fill: {
+        fillId: 'fill-episode-two-entry', tag: '', brokerOrderId: 'episode-two-entry',
+        accountId: 100, symbol: 'MNQU6', side: 'Buy', quantity: 1, price: 30_500,
+        filledAt: ++now,
+      },
+    });
+    await controller.waitForIdle();
+    const rejectedCopy = broker.orders().filter(order => (
+      order.accountId === 200 && order.side === 'Buy'
+    )).at(-1);
+    if (!rejectedCopy) throw new Error('Test setup: druhý follower entry nevznikl');
+    rejectedCopy.status = 'rejected';
+    rejectedCopy.rejectReason = 'DLL limit';
+    rejectedCopy.sourceVersion = '2:Rejected';
+    broker.emitEvent({ type: 'order', order: rejectedCopy });
+    broker.setPosition(100, 'MNQU6', 1);
+    broker.emitEvent({
+      type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 },
+    });
+    await controller.waitForIdle();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    await controller.waitForIdle();
+
+    expect(controller.status()).toMatchObject({ armed: true, divergentAccounts: [], lastError: null });
+    controller.stop();
+  });
+
+  it('V18 suppression from a skipped entry is replaced by the next leader episode', async () => {
+    let now = 2_000;
+    const broker = createMockBroker({
+      clock: () => ++now,
+      behavior: () => ({ kind: 'fill', price: 30_500 }),
+    });
+    const snapshot = emptySnapshot();
+    snapshot.safety = {
+      ...snapshot.safety!,
+      pauseUntil: 3_000,
+      pauseRule: 'max-trades',
+    };
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(snapshot),
+      group: group('on-fill'),
+      clock: () => ++now,
+      followerTransitionCorrelationWindowMs: 20,
+      leaderFlatGraceMs: 5,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+    controller.arm();
+    const episode = async (
+      prefix: string,
+      side: 'Buy' | 'Sell',
+      netQuantity: number,
+    ) => {
+      broker.emitEvent({
+        type: 'fill',
+        fill: {
+          fillId: `fill-${prefix}`, tag: '', brokerOrderId: prefix, accountId: 100,
+          symbol: 'MNQU6', side, quantity: 1, price: 30_500, filledAt: ++now,
+        },
+      });
+      broker.setPosition(100, 'MNQU6', netQuantity);
+      broker.emitEvent({
+        type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity },
+      });
+      await controller.waitForIdle();
+    };
+
+    await episode('episode-one-entry', 'Buy', 1);
+    await episode('episode-one-exit', 'Sell', 0);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    await controller.waitForIdle();
+    expect(broker.placedRequests().filter(request => request.accountId === 200)).toHaveLength(0);
+
+    now = 3_100;
+    broker.emitEvent({ type: 'heartbeat', at: now });
+    await controller.waitForIdle();
+
+    await episode('episode-two-entry', 'Buy', 1);
+    await episode('episode-two-exit', 'Sell', 0);
+
+    expect(broker.placedRequests().filter(request => request.accountId === 200))
+      .toEqual([
+        expect.objectContaining({ side: 'Buy', quantity: 1 }),
+        expect.objectContaining({ side: 'Sell', quantity: 1 }),
+      ]);
+    expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    controller.stop();
+  });
 });
+
+const stepClockForSweep = () => {
+  let now = 10_000;
+  return () => ++now;
+};
 
 describe('V12 regression: authoritative zero/partial-fill mirror', () => {
   it('R5/R6/S3/S3p qty i price modify aktualizují čistě streamové zrcadlo', async () => {

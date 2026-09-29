@@ -947,6 +947,83 @@ describe('CopierRuntimeController — follower account cuts', () => {
     }
   });
 
+  it('ST31 position-before-fill partial exit keeps the remaining let-run exposure visible', async () => {
+    const time = manualClock();
+    let breached = false;
+    const broker = createMockBroker({
+      clock: time.clock,
+      behavior: request => request.side === 'Buy'
+        ? { kind: 'fill', price: 20_000 }
+        : { kind: 'working' },
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId,
+      at: time.now(),
+      realizedPnlUsd: accountId === 200 && breached ? -125 : 0,
+    }));
+    const group = riskGroup({ onCut: 'let-run' });
+    group.followers = [group.followers[0]];
+    const runtime = await bootRuntime({ broker, group, time });
+    try {
+      await emitLeaderFill({
+        ...runtime, time, side: 'Buy', quantity: 2, price: 20_000, netQuantity: 2,
+      });
+      breached = true;
+      time.advance(30_000);
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await runtime.controller.waitForIdle();
+      expect(followerCut(runtime.controller)).toMatchObject({ source: 'broker' });
+
+      time.advance(1);
+      await emitLeaderFill({
+        ...runtime, time, side: 'Sell', quantity: 1, price: 19_990, netQuantity: 1,
+      });
+      const firstExit = broker.orders().find(order => (
+        order.accountId === 200 && order.side === 'Sell' && order.status === 'working'
+      ));
+      if (!firstExit) throw new Error('Test setup: první let-run exit nevznikl');
+
+      // Tradovate smí doručit Position projekci dřív než odpovídající Fill.
+      broker.setPosition(200, 'MNQU6', 1);
+      broker.emitEvent({
+        type: 'position', position: { accountId: 200, symbol: 'MNQU6', netQuantity: 1 },
+      });
+      broker.emitEvent({
+        type: 'fill',
+        fill: {
+          fillId: 'st31-position-before-fill',
+          tag: firstExit.tag,
+          brokerOrderId: firstExit.brokerOrderId,
+          accountId: 200,
+          symbol: 'MNQU6',
+          side: 'Sell',
+          quantity: 1,
+          price: 19_990,
+          filledAt: time.now(),
+        },
+      });
+      await runtime.controller.waitForIdle();
+
+      time.advance(1);
+      await emitLeaderFill({
+        ...runtime, time, side: 'Sell', quantity: 1, price: 19_985, netQuantity: 0,
+      });
+
+      expect({
+        exits: broker.placedRequests().filter(request => (
+          request.accountId === 200 && request.side === 'Sell'
+        )),
+        status: runtime.controller.status(),
+        audits: runtime.audits.slice(-8),
+      }).toMatchObject({
+        exits: [expect.anything(), expect.anything()],
+        status: { armed: true, lastError: null },
+      });
+    } finally {
+      runtime.controller.stop();
+    }
+  });
+
   it('let-run partial reversal přes flat nezkopíruje druhý fill stejné leader objednávky', async () => {
     const time = manualClock();
     let breached = false;
