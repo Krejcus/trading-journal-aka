@@ -251,6 +251,33 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — Balíček 3a-6 V12 šestá iterace: rychlý fan-out a bounded S1b settlement (Codex)
+
+- S1b multi-follower redukující Market znovu posílá účty bez REST kandidáta
+  jedním `processor.process` fan-outem; followeři čekající na read-only důkaz
+  běží odděleně a nikdy nejsou před rychlou skupinou. Při souběžném ingress
+  backlogu se zdravý účet odloží a po unsafe readu jiného účtu se neposílá.
+- Timeout cíleného readu/cancelu má nejvýše 3s stream settlement okno. Fill
+  vyžaduje čerstvé ověření pozice, zero-fill terminál suppressne exit a
+  neověřený výsledek haltne. Pozdní fill haltnuté kopie při flat leaderovi je
+  fail-closed orphan incident podle stávající auto-close politiky.
+- DISARMED/shadow větev nedělá S1b REST ani cancel; cancel jde přes
+  `dispatchBroker` a nikdy se naslepo neopakuje. Post-cancel používá exact
+  `findOrderById`, fresh `listOrders` a terminální status fallback pro brokery
+  bez `OrderVersion`.
+- Reconciliation conditional lookup je bounded a jeho chyba pouze označí
+  účet divergentní/fail-closed; S1b a conditional pomocné mapy se uklízejí
+  na terminálu, authoritative flat reconcile a stop/disconnect.
+- Nové regrese na původním `fb3459b`: hlavní sada měla 9/10 pádů a fresh
+  Tradovate test padal; opravený S1bSLOW izolovaně rovněž padal bez market
+  exitu. Po změně 61/61 nových+mapping, cílený průřez 423/423 a povinná sada
+  1969 passed + 1 todo (exit 0). První sandboxovaný úplný běh měl 89 pádů
+  pouze kvůli `listen EPERM 127.0.0.1`; mimo sandbox prošel. `tsc --noEmit`
+  má exit 2 výhradně kvůli ignorovanému `extension/` (`chrome` typy a
+  `@crxjs/vite-plugin`); v měněných souborech TypeScript chyba není.
+- Změny zůstávají necommitnuté; nebyl proveden push, deploy, broker akce ani
+  instalace závislostí. Jediný dočasný baseline worktree byl odstraněn.
+
 ### 2026-09-29 — Balíček 3a-5 V12 pátá iterace: ověřené cancely a podmíněná lineage (Codex)
 
 - S1b je per-follower: zdravý follower dostane Market exit bez čekání na

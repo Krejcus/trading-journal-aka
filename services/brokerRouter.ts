@@ -170,7 +170,9 @@ export function createBrokerRouter(
         broker.listAccountRiskSnapshots(ids)))).flat();
     },
     listPositions: accountId => brokerFor(accountId).listPositions(accountId),
-    listOrders: accountId => brokerFor(accountId).listOrders(accountId),
+    listOrders: (accountId, options) => options
+      ? brokerFor(accountId).listOrders(accountId, options)
+      : brokerFor(accountId).listOrders(accountId),
     findOrdersByTag: (accountId, tag) => brokerFor(accountId).findOrdersByTag(accountId, tag),
     findOrderById: (accountId, brokerOrderId) =>
       brokerFor(accountId).findOrderById(accountId, brokerOrderId),
