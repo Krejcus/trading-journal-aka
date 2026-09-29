@@ -7,9 +7,12 @@ import { buildLiveDaySummary, liveDayReadAnswered } from '../lib/liveDaySummary'
 import { buildLiveCopierIsland } from '../lib/liveCopierIsland';
 import { copierArmRejection } from '../lib/copierArmPreparation';
 import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
-import { isLiveAccountReadVerified, liveReadStaleLabel } from '../lib/liveReadFreshness';
-import { liveBalanceDisplay, liveCapitalDisplay, liveDailyPnlDisplay, liveGroupDailyPnlDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
+import { formatReadAge, isLiveAccountReadVerified, liveReadStaleLabel } from '../lib/liveReadFreshness';
+import { liveBalanceDisplay, liveCapitalDisplay, liveDailyLossRemainingDisplay, liveDailyPnlDisplay, liveGroupDailyPnlDisplay, type LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
 import { useCopierDisarmNotice } from '../hooks/useCopierDisarmNotice';
+import { useCopierPowerDisplay } from '../hooks/useCopierPowerDisplay';
+import { copierPowerDisplayKey } from '../lib/copierPowerDisplay';
+import { isCopierBrakeQueuedError } from '../lib/copierBrakeDelivery';
 import { useFlipReorder, useIsomorphicLayoutEffect } from '../hooks/useFlipReorder';
 import { CopyGroupLibraryRequestFence } from '../lib/copyGroupLibraryRequestFence';
 import React, { useSyncExternalStore, useCallback, useMemo, useState, useEffect, useRef } from 'react';
@@ -33,6 +36,14 @@ import {
   type CopyTradeAccountRole,
 } from '../lib/copyTradeAccountLabels';
 import { translateCopierRejectReason } from '../lib/copierRejectReason';
+import { formatCopierCommandError } from '../lib/copierBlockerMessages';
+import {
+  copierWorkerAccountRoute,
+  copierWorkerAccountSelectionBlocked,
+  copierWorkerMissingAccountIds,
+  type CopierWorkerAccountRoute,
+  type CopierWorkerAccountRoutes,
+} from '../lib/copierWorkerAccountRoutes';
 import {
   dismissRejection,
   getDismissedRejections,
@@ -385,8 +396,8 @@ interface Props {
   copierStatusPending?: boolean;
   /** Bootstrap má čerstvé pozice a balance, ale denní ledger se ještě doplňuje. */
   dailyPnlPending?: boolean;
-  /** Přesné current-day broker P&L; null znamená, že broker hodnotu nepotvrdil. */
-  brokerDailyPnlByAccount?: Readonly<Record<string, number | null>>;
+  /** Current-day broker P&L včetně čerstvosti a času potvrzení. */
+  brokerDailyPnlByAccount?: Readonly<Record<string, LiveBalanceDisplay>>;
   /** Durable leader-only copier ledger; never an aggregate of account P&L. */
   dailyStats?: CopierControllerStatus['dailyStats'];
   copierKillSwitch?: boolean;
@@ -423,6 +434,8 @@ interface Props {
   /** `marketPrices` z workeru (TradingView) — jen pro zobrazení vzdálenosti k limitu. */
   marketPrices?: readonly unknown[];
   runtimeGroup?: CopyGroupConfig | null;
+  /** Čerstvé spojení OAuth adresáře s manifestem Mac workeru; jen UI precheck. */
+  workerAccountRoutes?: CopierWorkerAccountRoutes;
   onGroupsChange?: (groups: CopyGroupConfig[]) => void;
 }
 
@@ -698,11 +711,13 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   onVerifyEligibility,
   executionGroupId = null,
   runtimeGroup = null,
+  workerAccountRoutes,
   marketPrices = [],
   onGroupsChange,
 }) => {
   const [initialViewSettings] = useState(loadViewSettings);
-  const showDisarmNotice = useCopierDisarmNotice(lastDisarm?.at);
+  const copierStateVerifying = copierStatusPending || !runtimeAvailable;
+  const disarmNotice = useCopierDisarmNotice(lastDisarm, runtimeStatus?.lastError);
   const pauseActive = useCopierPauseActive(copierPauseDeadline(cooldownUntil, pause?.until));
   const cooldownPanel = <CopierCooldownPanel
     key={executionGroupId}
@@ -950,6 +965,15 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     profilesById,
     sourceGroupsById,
   }), [accountsById, profilesById, sourceGroupsById]);
+  const accountName = useCallback((accountId: number): string | null => {
+    const name = copyTradeAccountName({
+      accountId,
+      accountsById,
+      profilesById,
+      sourceGroupsById,
+    });
+    return name === `Účet ${accountId}` ? null : name;
+  }, [accountsById, profilesById, sourceGroupsById]);
   const knownAccountIds = useMemo(() => [...new Set([
     ...groups.flatMap(group => [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]),
     runtimeGroup?.leaderAccountId,
@@ -1067,6 +1091,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         ? { tone: 'success', text: `Copier je připojený — příkazy leadera se kopírují naostro.${offNote}` }
         : { tone: 'info', text: 'Copier je bezpečně odpojený.' });
     } catch (reason) {
+      if (!connecting && isCopierBrakeQueuedError(reason)) {
+        setToast({ tone: 'info', text: reason.message });
+        return;
+      }
       const rejected = connecting ? copierArmRejection(reason) : null;
       const detail = reason instanceof Error
         ? reason.message
@@ -1118,8 +1146,45 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     });
   };
 
+  // Worker každou změnu konfigurace zapnuté skupiny provede až po DISARM.
+  // Bez varování to vypadá, že se kopírka „sama vypnula“ (28. 9. 08:50).
+  const confirmArmedGroupChange = (group: CopyGroupConfig, proceed: () => void) => {
+    if (!(copierArmed && group.id === executionGroupId)) { proceed(); return; }
+    setPendingAction({
+      title: 'Změnit zapnutou skupinu?',
+      detail: 'Kopírka je zapnutá — uložení změny ji vypne (DISARM). Pak ji znovu zapni přepínačem skupiny. Uprostřed obchodu by followeři přestali dostávat posuny SL a výstupy.',
+      confirmLabel: 'Uložit a vypnout',
+      danger: true,
+      proceed,
+    });
+  };
+
   const requestGroupPower = (candidate: CopyGroupConfig) => {
-    if (copierTransition || copierStatusPending) return;
+    if (copierTransition) return;
+    if (copierStatusPending) {
+      // Neověřený stav (návrat z pozadí, pomalý relay, spící Mac): ARM se
+      // nikdy nenabízí. Vypnutí ano — je jednosměrné a worker ho provede i
+      // z neznámého stavu —, ale s varováním, protože vypnutí uprostřed
+      // obchodu nechá followery bez správy (posuny SL a výstupy se nezkopírují).
+      if (!onDisarm) {
+        setPendingAction({
+          title: 'Stav kopírky se ověřuje',
+          detail: 'Execution runtime teď není dostupný. Pro nouzové zastavení použij Kill switch v menu ⋮ nebo zavři pozice v Tradovate.',
+          confirmLabel: 'Rozumím',
+          danger: true,
+          blocked: true,
+        });
+        return;
+      }
+      setPendingAction({
+        title: 'Vypnout kopírku bez ověřeného stavu?',
+        detail: 'Aktuální stav kopírky ani pozic se teď nepodařilo ověřit. Vypnutí je bezpečné ve flat stavu; uprostřed obchodu by followeři přestali dostávat posuny SL a výstupy. Pozice nezavírá — k tomu slouží Flatten All, k úplnému zastavení brokerových akcí Kill switch.',
+        confirmLabel: 'Přesto vypnout',
+        danger: true,
+        proceed: () => { void runCopierTransition(candidate.id, false, onDisarm); },
+      });
+      return;
+    }
     const powered = copierArmed && candidate.id === executionGroupId;
     if (!powered && pauseActive) {
       setPendingAction({
@@ -1285,7 +1350,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       await onEmergencyStop();
       setToast({ tone: 'error', text: 'Execution runtime potvrdil kill switch. Brokerové akce copieru jsou zablokované.' });
     } catch (reason) {
-      setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'Kill switch se nepodařilo potvrdit.' });
+      setToast({
+        tone: isCopierBrakeQueuedError(reason) ? 'info' : 'error',
+        text: reason instanceof Error ? reason.message : 'Kill switch se nepodařilo potvrdit.',
+      });
     }
   } : undefined;
 
@@ -1294,7 +1362,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       await onDayLock();
       setToast({ tone: 'info', text: 'Execution runtime potvrdil zámek do konce aktuální broker session.' });
     } catch (reason) {
-      setToast({ tone: 'error', text: reason instanceof Error ? reason.message : 'Denní zámek se nepodařilo potvrdit.' });
+      setToast({
+        tone: isCopierBrakeQueuedError(reason) ? 'info' : 'error',
+        text: reason instanceof Error ? reason.message : 'Denní zámek se nepodařilo potvrdit.',
+      });
     }
   } : undefined;
 
@@ -1352,7 +1423,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       });
       return true;
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : 'Akci se nepodařilo dokončit.';
+      const message = formatCopierCommandError(reason, accountName);
       if (onError) onError(message);
       else {
         setToast({
@@ -1374,6 +1445,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     onError?: (message: string) => void,
     waiveUnverifiableFollowerOwnership = false,
   ): Promise<boolean> => {
+    if (copierStateVerifying) {
+      const message = 'Stav se ověřuje. Uložení skupiny je dostupné až po potvrzení čerstvého stavu workeru.';
+      if (onError) onError(message); else setToast({ tone: 'error', text: message });
+      return false;
+    }
     if (groupSaveInFlight.current) return false;
     const pending = pendingCloudGroupSaves.current.get(group.id);
     const confirmedGroup = pending?.owner === userId ? pending.group : null;
@@ -1633,7 +1709,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         type: 'flatten-group', groupId: group.id, operationId: manualOperationId(),
       },
     }),
-    onMultiplier: async (accountId: number, multiplier: number): Promise<boolean> => {
+    onMultiplier: copierStateVerifying ? undefined : async (accountId: number, multiplier: number): Promise<boolean> => {
       const follower = group.followers.find(item => item.accountId === accountId);
       const next = normalizeMultiplier(multiplier);
       if (!follower || follower.multiplier === next) return false;
@@ -1643,6 +1719,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       );
     },
     onApplyTemplate: (template: CopyGroupTemplate) => {
+      if (copierStateVerifying) {
+        setToast({ tone: 'error', text: 'Stav se ověřuje. Šablonu lze uložit až po potvrzení čerstvého stavu workeru.' });
+        return;
+      }
       const currentSafety = group.safety ?? DEFAULT_COPY_GROUP_SAFETY;
       const currentFollowers = new Map(group.followers.map(follower => [follower.accountId, follower]));
       const updated: CopyGroupConfig = {
@@ -1673,7 +1753,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           ),
         },
       };
-      void saveGroup(updated);
+      confirmArmedGroupChange(group, () => { void saveGroup(updated); });
     },
     onFlattenAccount: (accountId: number) => requestAccountFlatten(group, accountId),
     onCancelOrder: (orderId: number) => setPendingAction({
@@ -1828,10 +1908,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                     ? islandModel.tone
                     : null}
                   observingOnly={selected && copierObservingOnly}
-                  statusPending={copierStatusPending && (executionGroupId == null || selected)}
+                  statusPending={copierStateVerifying}
                   runtimeReady={!!onSwitchAndArm || (!!commandAdapter && selected)}
                   transition={transitionGroupId === group.id ? copierTransition : null}
                   connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || pauseActive}
+                  powerDisplayKey={copierPowerDisplayKey(userId, group.id)}
                   dailyPnlPending={dailyPnlPending}
                   eligibility={group.followers
                     .filter(follower => follower.mode !== 'off')
@@ -1839,7 +1920,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   eligibilityByAccount={eligibilityByAccount}
                   tradeCutsByAccount={tradeCutsByAccount}
                   participationByAccount={selected ? participationByAccount : EMPTY_PARTICIPATION}
-                  onFollowerEnabled={selected && commandAdapter
+                  onFollowerEnabled={!copierStateVerifying && selected && commandAdapter
                     ? (accountId, enabled, onRejected) => toggleFollower(group.id, accountId, enabled, onRejected)
                     : undefined}
                   orders={orders}
@@ -1858,8 +1939,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   templates={templates}
                   tightenOnly={tightenOnly}
                   cooldownPanel={selected ? cooldownPanel : null}
-                  disarmPanel={selected && !armed && showDisarmNotice && lastDisarm && lastDisarm.trigger !== 'manual'
-                    ? <CopierDisarmPanel lastDisarm={lastDisarm} />
+                  disarmPanel={selected && !armed && disarmNotice && disarmNotice.trigger !== 'manual'
+                    ? <CopierDisarmPanel lastDisarm={disarmNotice} />
                     : null}
                   {...compactGroupActions(group)}
                 />
@@ -1915,11 +1996,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         observingOnly={selected && copierObservingOnly}
                         // Dokud stav neznáme, neznáme ani execution skupinu —
                         // neznámý stav proto platí pro všechny řádky.
-                        statusPending={copierStatusPending && (executionGroupId == null || selected)}
+                        statusPending={copierStateVerifying}
                         runtimeReady={!!onSwitchAndArm || (!!commandAdapter && selected)}
                         transition={transitionGroupId === group.id ? copierTransition : null}
                         connectBlocked={copierKillSwitch || dayLockUntil > Date.now() || pauseActive}
                         onConnectionToggle={() => requestGroupPower(group)}
+                        powerDisplayKey={copierPowerDisplayKey(userId, group.id)}
                         open={expanded.has(group.id)}
                         onToggle={() => toggleGroup(group.id)}
                         onEdit={() => setEditorGroup(structuredClone(group))}
@@ -1927,6 +2009,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         templates={templates}
                         tightenOnly={tightenOnly}
                         onApplyTemplate={template => {
+                          if (copierStateVerifying) {
+                            setToast({ tone: 'error', text: 'Stav se ověřuje. Šablonu lze uložit až po potvrzení čerstvého stavu workeru.' });
+                            return;
+                          }
                           const currentSafety = group.safety ?? DEFAULT_COPY_GROUP_SAFETY;
                           const currentFollowers = new Map(group.followers.map(follower => [follower.accountId, follower]));
                           const updated: CopyGroupConfig = {
@@ -1957,7 +2043,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               ),
                             },
                           };
-                          void saveGroup(updated);
+                          confirmArmedGroupChange(group, () => { void saveGroup(updated); });
                         }}
                         onToggleEnabled={() => requestGroupPower(group)}
                         onFlatten={() => setPendingAction({
@@ -1970,10 +2056,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                         redaction={redaction}
                         groupColumns={visibleGroupColumns}
                       />
-                      {selected && !armed && showDisarmNotice && lastDisarm && lastDisarm.trigger !== 'manual' ? (
+                      {selected && !armed && disarmNotice && disarmNotice.trigger !== 'manual' ? (
                         <tr>
                           <td colSpan={3 + GROUP_COLUMN_OPTIONS.length - hiddenGroupColumns.size} className="p-0">
-                            <CopierDisarmPanel lastDisarm={lastDisarm} />
+                            <CopierDisarmPanel lastDisarm={disarmNotice} />
                           </td>
                         </tr>
                       ) : null}
@@ -1991,20 +2077,20 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               eligibilityByAccount={eligibilityByAccount}
                               tradeCutsByAccount={tradeCutsByAccount}
                               participationByAccount={group.id === executionGroupId ? participationByAccount : EMPTY_PARTICIPATION}
-                              onFollowerEnabled={group.id === executionGroupId && commandAdapter
+                              onFollowerEnabled={!copierStateVerifying && group.id === executionGroupId && commandAdapter
                                 ? (accountId, enabled) => toggleFollower(group.id, accountId, enabled)
                                 : undefined}
                               onVerifyEligibility={verifyAccountEligibility}
                               verifyingAccountId={verifyingAccountId}
                               busyCommand={busyCommand}
                               onRefreshOrders={onRefreshOrders}
-                              onMultiplier={(accountId, multiplier) => {
+                              onMultiplier={copierStateVerifying ? undefined : (accountId, multiplier) => {
                                 const follower = group.followers.find(item => item.accountId === accountId);
                                 const next = normalizeMultiplier(multiplier);
                                 if (!follower || follower.multiplier === next) return;
                                 setPendingAction({
                                   title: 'Změnit násobek účtu?',
-                                  detail: `Účet ${accountId}: ${follower.multiplier}× → ${next}×. Změna platí pouze pro tento účet; ostatní followeři zůstanou beze změny.`,
+                                  detail: `Účet ${accountId}: ${follower.multiplier}× → ${next}×. Změna platí pouze pro tento účet; ostatní followeři zůstanou beze změny.${copierArmed && group.id === executionGroupId ? ' Kopírka je zapnutá — potvrzení ji vypne (DISARM); pak ji znovu zapni přepínačem skupiny.' : ''}`,
                                   confirmLabel: 'Potvrdit násobek',
                                   accountIds: [accountId],
                                   command: { type: 'set-multiplier', groupId: group.id, accountId, multiplier: next },
@@ -2068,7 +2154,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           open={apiPanelOpen}
           onToggle={() => setApiPanelOpen(v => !v)}
           dataActive={anyLive}
-          apiReady={!!commandAdapter}
+          apiReady={runtimeAvailable}
           onHelp={() => setHelpOpen(true)}
           telemetry={apiTelemetry}
           connectionUsage={connectionUsage}
@@ -2080,7 +2166,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           group={editorGroup}
           isNew={!groups.some(group => group.id === editorGroup.id)}
           tightenOnly={tightenOnly}
+          armedWarning={copierArmed && editorGroup.id === executionGroupId}
           accounts={snapshot.accounts}
+          workerAccountRoutes={workerAccountRoutes}
           accountLabel={(accountId, role) => accountLabel(accountId, editorGroup.id, role)}
           onClose={() => setEditorGroup(null)}
           onSave={(group, onError) => saveGroup(group, message => onError(copyGroupLibraryErrorMessage(new Error(message))))}
@@ -2137,7 +2225,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             detail: renderAccountMessage(pendingAction.detail, pendingAction.accountIds ?? knownAccountIds),
           }}
           busy={busyCommand != null}
-          apiReady={!!commandAdapter}
+          apiReady={runtimeAvailable}
           flattenPreview={compact && pendingAction.flattenGroupId ? flattenPreviewFor(pendingAction.flattenGroupId) : null}
           onClose={() => setPendingAction(null)}
           onConfirm={() => {
@@ -2218,7 +2306,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           }}
         />
       )}
-      {helpOpen && <CopyTradingHelpDialog onClose={() => setHelpOpen(false)} apiReady={!!commandAdapter} />}
+      {helpOpen && <CopyTradingHelpDialog onClose={() => setHelpOpen(false)} apiReady={runtimeAvailable} />}
       {tableSettingsOpen && (
         <TableSettingsDialog
           hiddenColumns={hiddenColumns}
@@ -2522,14 +2610,20 @@ function groupRows(
   return rows;
 }
 
-export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady, transition, connectBlocked, onToggle }: {
+export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady, transition, connectBlocked, onToggle, powerDisplayKey = '' }: {
   connected: boolean;
   statusPending: boolean;
   runtimeReady: boolean;
   transition: 'connecting' | 'disconnecting' | null;
   connectBlocked: boolean;
   onToggle: () => void;
+  /** Klíč pro zobrazení posledního potvrzeného stavu (jen prezentace, nikdy neautorizuje ARM). */
+  powerDisplayKey?: string;
 }) => {
+  // Při neověřeném stavu (návrat z pozadí, pomalý relay) ukazujeme poslední
+  // POTVRZENÝ stav místo „Neověřeno“. Retence je jen popisek: ARM se v tomto
+  // stavu nikdy nenabízí a vypnutí jde přes samostatný potvrzovací dialog.
+  const display = useCopierPowerDisplay(powerDisplayKey, connected, statusPending);
   const busy = transition != null;
   const disabled = statusPending || !runtimeReady || busy || (!connected && connectBlocked);
   // Knoflík ukazuje ZÁMĚR (hned po kliknutí sjede na novou stranu), kolej a
@@ -2559,16 +2653,58 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
         : connected ? 'Kliknutím bezpečně vypnout copier.' : 'Kliknutím zapnout copier naostro.';
 
   // Dokud stav neznáme, nesmí přepínač tvrdit OFF — armovaný copier by se
-  // tvářil jako odpojený. Neutrální „?" místo toho přiznává, že se ptáme.
+  // tvářil jako odpojený. Bez potvrzeného stavu proto „Neověřeno“; s ním
+  // poslední potvrzená poloha (tlumeně). Kliknout jde jen směrem k vypnutí:
+  // stav ZAPNUTO nebo neznámý stav otevře potvrzení vypnutí, ARM nikdy.
   if (statusPending) {
+    const retainedOn = display.connected === true;
+    const retainedOff = display.connected === false;
+    const warning = display.warning ? ' Stav není aktuální — spojení s workerem se nedaří obnovit.' : '';
+    if (display.connected == null) {
+      return (
+        <span className="inline-flex flex-col items-start">
+          <button
+            type="button"
+            title={`Stav kopírky se ověřuje.${warning} Kliknutím ji můžeš pro jistotu vypnout.`}
+            aria-label="Stav kopírky neověřen — vypnout kopírku"
+            onClick={event => {
+              event.stopPropagation();
+              onToggle();
+            }}
+            className="flex h-7 w-[108px] items-center justify-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] text-[9px] font-black uppercase tracking-[0.08em] text-[var(--text-secondary)] hover:border-rose-500/40 hover:text-rose-500"
+          >
+            <RefreshCw size={12} className="animate-spin" />
+            Neověřeno
+          </button>
+          {display.warning ? <span role="status" className="text-[10px] font-semibold text-amber-600">Stav není aktuální</span> : null}
+        </span>
+      );
+    }
     return (
-      <span
-        role="status"
-        title={title}
-        className="flex h-7 w-[108px] items-center justify-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] text-[9px] font-black uppercase tracking-[0.08em] text-[var(--text-secondary)]"
-      >
-        <RefreshCw size={12} className="animate-spin" />
-        Neověřeno
+      <span className="inline-flex flex-col items-start" data-copier-power-display="retained">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={retainedOn}
+          aria-label={retainedOn ? 'Vypnout kopírovací skupinu (stav se ověřuje)' : 'Kopírka vypnutá (stav se ověřuje)'}
+          title={retainedOn
+            ? `Poslední potvrzený stav: ZAPNUTO. Aktuální stav se ověřuje.${warning} Kliknutím kopírku vypneš.`
+            : `Poslední potvrzený stav: VYPNUTO. Aktuální stav se ověřuje.${warning} Zapnout půjde až po ověření.`}
+          disabled={retainedOff}
+          onClick={event => {
+            event.stopPropagation();
+            if (retainedOn) onToggle();
+          }}
+          data-intent={retainedOn}
+          className="copier-switch copier-switch-retained opacity-60 disabled:cursor-not-allowed"
+        >
+          <span className="copier-switch-label copier-switch-on" aria-hidden="true">ON</span>
+          <span className="copier-switch-label copier-switch-off" aria-hidden="true">OFF</span>
+          <span className="copier-switch-knob">
+            <span className="copier-switch-spinner" aria-hidden="true"><RefreshCw size={10} strokeWidth={2.8} className="animate-spin" /></span>
+          </span>
+        </button>
+        {display.warning ? <span role="status" className="text-[10px] font-semibold text-amber-600">Stav není aktuální</span> : null}
       </span>
     );
   }
@@ -2600,7 +2736,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
   );
 };
 
-const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsByAccount, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, tightenOnly, onApplyTemplate, onDelete, groupColumns }: {
+const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsByAccount, observingOnly, statusPending, runtimeReady, transition, connectBlocked, onConnectionToggle, powerDisplayKey = '', open, onToggle, onEdit, onToggleEnabled, onFlatten, redactNames, redaction, templates, tightenOnly, onApplyTemplate, onDelete, groupColumns }: {
   group: CopyGroupConfig; rows: Row[]; armed: boolean; open: boolean; onToggle: () => void;
   dailyPnlPending: boolean;
   eligibility: (CopierAccountEligibility | undefined)[];
@@ -2611,6 +2747,7 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
   transition: 'connecting' | 'disconnecting' | null;
   connectBlocked: boolean;
   onConnectionToggle: () => void;
+  powerDisplayKey?: string;
   onEdit: () => void;
   onDelete: () => void;
   onToggleEnabled: () => void;
@@ -2661,6 +2798,7 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
                 transition={transition}
                 connectBlocked={connectBlocked}
                 onToggle={onConnectionToggle}
+                powerDisplayKey={powerDisplayKey}
               />
               {observingOnly ? (
                 <span title="Shadow režim pouze sleduje a nic neodesílá." className="inline-flex h-7 items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/10 px-1.5 text-[8px] font-black uppercase text-amber-600">
@@ -2750,6 +2888,18 @@ export const BalanceValue = ({ display, compact = false }: { display: LiveBalanc
   </span>;
 };
 
+export const DailyPnlValue = ({ display, compact = false }: { display: LiveBalanceDisplay; compact?: boolean }) => {
+  if (display.value == null) return <span className="text-xs text-[var(--text-secondary)]">—</span>;
+  const age = display.confirmedAt ? Math.max(0, Date.now() - Date.parse(display.confirmedAt)) : 0;
+  return <span
+    data-daily-pnl-state={display.stale ? 'last-known' : 'confirmed'}
+    title={display.stale && display.confirmedAt
+      ? `Poslední potvrzené denní P&L před ${formatReadAge(age)} · ${new Date(display.confirmedAt).toLocaleString('cs-CZ')}`
+      : display.confirmedAt ? `Potvrzené denní P&L · ${new Date(display.confirmedAt).toLocaleString('cs-CZ')}` : undefined}
+    className={`text-xs tabular-nums ${display.stale ? 'text-[var(--text-secondary)]' : pnlClass(display.value)}`}
+  >{(compact ? moneyWhole : money).format(display.value)}</span>;
+};
+
 const CompactStat = ({ label, value, className = 'text-[var(--text-primary)]' }: {
   label: string; value: React.ReactNode; className?: string;
 }) => (
@@ -2786,21 +2936,22 @@ const eligibilityNeedsAttention = (eligibility: CopierAccountEligibility | undef
 const accountRiskValues = (a: LiveAccount | undefined, accountId: number | null, dailyPnlPending: boolean, sizeClass?: string) => {
   const cushion = a?.cushion ?? null;
   const cashKnown = !!a && isLiveAccountReadVerified(a, 'cash');
-  const rawDaily = liveDailyPnlDisplay(a ? { ...a, displayValues: undefined } : undefined, Date.now(), dailyPnlPending);
-  const dllRemaining = a && rawDaily.value != null ? copyTradeDailyLossRemaining(a) : null;
+  const dllDisplay = liveDailyLossRemainingDisplay(a, Date.now(), dailyPnlPending);
+  const dllRemaining = a && a.cashAvailability == null ? copyTradeDailyLossRemaining(a) : dllDisplay.value;
   const riskKey = `${accountId}:${a?.riskDisplayConfigKey ?? "legacy"}:${tradovateDisplayTradeDate()}`;
-  const dllAt = [a?.cashUpdatedAt, rawDaily.confirmedAt, a?.unrealizedPnlUpdatedAt].filter((at): at is string => !!at);
-  const dllConfirmedAt = dllAt.length === 3 ? dllAt.sort((x,y)=>Date.parse(x)-Date.parse(y))[0] : null;
   const dllShowsDrawdown = !!a?.riskDisplayDailyLossDisabled
     && (a.dailyLossLimit == null || a.dailyLossLimit === 0);
   const drawdown = <LiveRiskValue identity={`${riskKey}:dd`} label="Rezerva DD" storageScope={a?.riskDisplayStorageScope} legacy={!!a && a.cashAvailability == null}
     enabled={!!a && a.cashAvailability !== 'denied' && !a.riskDisplayDrawdownDisabled}
     value={dailyPnlPending || a?.riskDisplayPending ? null : cushion} confirmedAt={a?.cashUpdatedAt ?? null}
-    verified={cashKnown && a?.unrealizedPnlSource !== 'stale'} color={cushionClass} sizeClass={sizeClass} />;
+    verified={cashKnown && a?.unrealizedPnlSource !== 'stale'}
+    state={a?.riskDisplayDrawdownDisabled ? 'no-limit' : a?.dailyPnlPending ? 'loading' : a?.riskDisplayPending ? 'unavailable' : 'ready'}
+    reason={a?.riskDisplayUnavailableReason} color={cushionClass} sizeClass={sizeClass} />;
   const dll = <LiveRiskValue identity={`${riskKey}:dll`} label="DLL zbývá" storageScope={a?.riskDisplayStorageScope} legacy={!!a && a.cashAvailability == null}
-    enabled={!!a && a.cashAvailability !== 'denied' && (a.dailyLossLimit == null || a.dailyLossLimit > 0)}
-    value={dailyPnlPending || a?.riskDisplayPending || dllRemaining == null ? null : Math.max(0,dllRemaining)} confirmedAt={dllConfirmedAt}
-    verified={cashKnown && !dailyPnlPending && a?.unrealizedPnlSource !== 'stale'}
+    enabled={dllDisplay.state !== 'no-limit'}
+    value={dllRemaining == null ? null : Math.max(0,dllRemaining)} confirmedAt={dllDisplay.confirmedAt}
+    verified={dllDisplay.state === 'ready' && !dllDisplay.stale}
+    state={dllDisplay.state} reason={dllDisplay.reason}
     color={value=>dllRemainingClass(value,a?.dailyLossLimit)} sizeClass={sizeClass} />;
   return { dll, drawdown, dllShowsDrawdown };
 };
@@ -2875,7 +3026,8 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
   const compactRejection = visibleRejectedExecution(accountId, eligibility, compactFlat, dismissedRejections);
   const hasOpenPositions = a?.positions.some(position => position.netPosition !== 0) ?? false;
   const unavailableFollower = !a && accountId != null && !row.isLeader;
-  const daily = a ? liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value : null;
+  const dailyDisplay = liveDailyPnlDisplay(a, Date.now(), dailyPnlPending);
+  const daily = dailyDisplay.value;
   // Prokázaný klid je nula, ne neznámo. Pomlčka by tvrdila „nevím“ u účtu,
   // který se do celkového součtu nahoře započítává jako nula — a součet
   // s pomlčkami pod sebou vypadá jako rozbitá data.
@@ -2996,7 +3148,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
         </span>
         <span className={`compact-row-dim truncate text-right text-[12px] font-bold tabular-nums ${variant === 'market'
           ? (a ? pnlClass(a.unrealizedPnl) : 'text-[var(--text-secondary)]')
-          : (daily != null ? pnlClass(daily) : 'text-[var(--text-secondary)]')}`}>
+          : (daily != null && !dailyDisplay.stale ? pnlClass(daily) : 'text-[var(--text-secondary)]')}`}>
           {variant === 'market'
             ? (a ? (
               <span
@@ -3007,7 +3159,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
                 {unrealStale ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Čeká na snapshot" /> : null}
               </span>
             ) : '—')
-            : daily != null ? money.format(daily)
+            : daily != null ? <DailyPnlValue display={dailyDisplay} />
               : quiet ? <span title="Broker dnes u tohoto účtu nehlásí uzavřený obchod">{money.format(0)}</span>
                 : '—'}
         </span>
@@ -3107,7 +3259,7 @@ const CompactAccountSectionHead = ({ columns, indent = false }: { columns: 'mark
   </div>
 );
 
-const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, dailyPnlPending, eligibility, eligibilityByAccount, tradeCutsByAccount, participationByAccount = EMPTY_PARTICIPATION, onFollowerEnabled, onMultiplier, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onDelete, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel, islandTone = null }: {
+const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, powerDisplayKey = '', dailyPnlPending, eligibility, eligibilityByAccount, tradeCutsByAccount, participationByAccount = EMPTY_PARTICIPATION, onFollowerEnabled, onMultiplier, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onDelete, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel, islandTone = null }: {
   group: CopyGroupConfig;
   /** Fáze ze stavového ostrova. Karta je jeden box, takže tu rám obepne
    *  celou skupinu včetně účtů — na rozdíl od tabulkového rozložení. */
@@ -3135,6 +3287,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   onVerifyEligibility?: (accountId: number) => void;
   verifyingAccountId: number | null;
   onConnectionToggle: () => void;
+  powerDisplayKey?: string;
   onEdit: () => void;
   onDelete: () => void;
   onToggleEnabled: () => void;
@@ -3211,21 +3364,13 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
         ? `live-island-card live-island-card-${islandTone}`
         : armed ? 'border-emerald-500/40' : 'border-[var(--border-subtle)]'}`}
     >
-      {/* Název, Flatten a vypínač na jednom řádku. Název je jediný pružný
-          prvek, takže se zkrátí on a nikdy nevytlačí ovládání ze řádku.
+      {/* Název a vypínač jsou v bezpečné primární zóně. Destruktivní Flatten
+          je schválně až na samostatném řádku, aby vedle ARM nešlo ťuknout.
           Kolečka firem se přesunula do pruhu s čísly — čtou se při zakládání
           skupiny, ne každou minutu, a tady by ujídala šířku názvu. */}
-      <header className="flex items-center gap-2 px-3 py-2.5">
+      <header data-mobile-primary-power="true" className="flex items-center gap-3 px-3 py-2.5">
         <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
         <h4 className="min-w-0 flex-1 truncate text-[15px] font-black" style={{ color }}>{group.name}</h4>
-        <button
-          type="button"
-          onClick={onFlatten}
-          title="Uzavřít všechny pozice ve skupině"
-          className="h-8 shrink-0 rounded-lg border border-rose-500/30 bg-rose-500/[0.06] px-3 text-[11px] font-black text-rose-500"
-        >
-          Flatten All
-        </button>
         <CopierConnectionSwitch
           connected={armed}
           statusPending={statusPending}
@@ -3233,8 +3378,19 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
           transition={transition}
           connectBlocked={connectBlocked}
           onToggle={onConnectionToggle}
+          powerDisplayKey={powerDisplayKey}
         />
       </header>
+      <div data-mobile-flatten-zone="true" className="flex justify-end border-t border-[var(--border-subtle)] px-3 py-2">
+        <button
+          type="button"
+          onClick={onFlatten}
+          title="Uzavřít všechny pozice ve skupině"
+          className="h-9 min-w-[132px] shrink-0 rounded-lg border border-rose-500/30 bg-rose-500/[0.06] px-4 text-[11px] font-black text-rose-500"
+        >
+          Flatten All
+        </button>
+      </div>
 
       {/* Varovné štítky mají vlastní řádek, ale jen když nějaké jsou; v klidu
           zůstane hlavička jednořádková. */}
@@ -3630,7 +3786,8 @@ const TopActionsMenu = ({ onTemplates, onKillSwitch, onDayLock, killSwitchActive
           <ShieldAlert size={13} />{dayLockActive ? 'Den je zamčený' : 'Zamknout den'}
         </button>
         <button
-          disabled={!runtimeReady || !onKillSwitch || killSwitchActive}
+          // Kill switch je jednosměrná brzda: nesmí čekat na ověřený stav runtime.
+          disabled={!onKillSwitch || killSwitchActive}
           onClick={() => { setOpen(false); void onKillSwitch?.(); }}
           className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-xs font-bold text-rose-600 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -4659,7 +4816,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
           ? <CopyTradePositionsCell accountId={accountId} positions={a.positions} orders={orders} positionsVerified={isLiveAccountReadVerified(a, 'positions')} ordersVerified={isLiveAccountReadVerified(a, 'orders')} staleLabel={liveReadStaleLabel(a, 'positions') ?? liveReadStaleLabel(a, 'orders')} />
           : <span className="text-xs tabular-nums text-[var(--text-secondary)]">—</span>;
       case 'daily':
-        return <span className={`text-xs tabular-nums ${a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? pnlClass(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : 'text-[var(--text-secondary)]'}`}>{a && liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value != null ? money.format(liveDailyPnlDisplay(a, Date.now(), dailyPnlPending).value!) : '—'}</span>;
+        return <DailyPnlValue display={liveDailyPnlDisplay(a, Date.now(), dailyPnlPending)} />;
       case 'dllRemaining':
         if (showDrawdownInDll) return <span className="inline-flex items-center justify-end whitespace-nowrap"
           title="Účet nemá denní limit ztráty. Zobrazuje se zbývající rezerva drawdownu (DD).">
@@ -4953,11 +5110,26 @@ type CompactEditorView =
   | { kind: 'add' }
   | { kind: 'follower'; accountId: number };
 
-export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, accountLabel, saving, libraryState, libraryError, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
+export const CopierWorkerRouteBadge = ({ route }: { route: CopierWorkerAccountRoute }) => (
+  route === 'missing-worker' ? (
+    <span data-worker-route="missing-worker" className="inline-flex rounded-full border border-rose-500/25 bg-rose-500/[0.08] px-1.5 py-0.5 text-[9px] font-black text-rose-600">
+      Není ve Mac workeru
+    </span>
+  ) : route === 'unknown' ? (
+    <span data-worker-route="unknown" className="inline-flex rounded-full border border-amber-500/25 bg-amber-500/[0.07] px-1.5 py-0.5 text-[9px] font-black text-amber-600">
+      Worker nelze ověřit
+    </span>
+  ) : null
+);
+
+export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = false, accounts, workerAccountRoutes, accountLabel, saving, libraryState, libraryError, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
+  /** Upravovaná skupina právě kopíruje: uložení ji vypne (worker odzbrojí před změnou). */
+  armedWarning?: boolean;
   group: CopyGroupConfig;
   isNew: boolean;
   tightenOnly: boolean;
   accounts: LiveAccount[];
+  workerAccountRoutes?: CopierWorkerAccountRoutes;
   accountLabel: (accountId: number, role?: CopyTradeAccountRole) => string;
   saving: boolean;
   libraryState: 'loading' | 'ready' | 'needs-import' | 'error';
@@ -5008,8 +5180,10 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
    * vrátí se přesně tam, odkud byl vzat.
    */
   const displacedFollowers = useRef(new Map<number, CopyFollowerConfig>());
+  const routeFor = (accountId: number) => copierWorkerAccountRoute(workerAccountRoutes, accountId);
   const chooseLeader = (accountId: number) => setDraft(current => {
     if (current.leaderAccountId === accountId) return current;
+    if (routeFor(accountId) === 'missing-worker') return current;
     const promoted = current.followers.find(follower => follower.accountId === accountId);
     if (promoted) displacedFollowers.current.set(accountId, promoted);
     const returning = current.leaderAccountId != null
@@ -5026,7 +5200,8 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
   const unavailableFollowers = draft.followers.filter(follower => unavailable.followerAccountIds.includes(follower.accountId));
   const followerCandidates = accounts.filter(account => account.id !== draft.leaderAccountId);
   const followerAdditionBlocked = (accountId: number) => (
-    tightenOnly && baselineHasFollowerCut && !baselineFollowers.has(accountId)
+    (tightenOnly && baselineHasFollowerCut && !baselineFollowers.has(accountId))
+    || routeFor(accountId) === 'missing-worker'
   );
   const selectableFollowerCandidates = followerCandidates.filter(account => !followerAdditionBlocked(account.id));
   const selectedCount = followerCandidates.filter(account => followerById.has(account.id)).length;
@@ -5067,6 +5242,17 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
 
   const submit = () => {
     if (saving) return;
+    const missingWorkerIds = copierWorkerMissingAccountIds(
+      workerAccountRoutes,
+      [draft.leaderAccountId, ...draft.followers.map(follower => follower.accountId)],
+    );
+    if (missingWorkerIds.length > 0) {
+      const names = [...new Set(missingWorkerIds.map(accountId => (
+        accounts.find(account => account.id === accountId)?.name ?? accountLabel(accountId)
+      )))];
+      setErrors([`${names.join(', ')} ${names.length === 1 ? 'není' : 'nejsou'} ve Mac workeru. Přidej příslušné OAuth připojení do manifestu workeru a proveď bezpečný reinstall; potom změnu ulož znovu.`]);
+      return;
+    }
     const validation = validateCopyGroup(draft, accounts.map(account => account.id));
     if (!validation.valid) {
       setErrors(copyGroupValidationMessages(validation, accountId => accountLabel(accountId)));
@@ -5084,6 +5270,19 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
   }));
   const enabledSafetyCount = SAFETY_OPTIONS.filter(([key]) => key === 'disableReplicationOnBreach' || safety[key]).length;
   const sectionLabel = 'text-[9.5px] font-black uppercase tracking-[.1em] text-[var(--text-muted)]';
+  const hasUnknownWorkerRoutes = !workerAccountRoutes?.known
+    || accounts.some(account => routeFor(account.id) === 'unknown');
+
+  const workerRouteNoticeBlock = (
+    <>
+      {hasUnknownWorkerRoutes ? (
+        <div role="status" className="mb-2.5 flex gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] p-3 text-amber-700">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+          <span className="text-[11px] font-bold leading-relaxed">Stav připojení Mac workeru se teď nedá úplně ověřit. Výběr účtů neblokujeme; při uložení má worker poslední slovo.</span>
+        </div>
+      ) : null}
+    </>
+  );
 
   // Bloky sdílené desktopovým dialogem i mobilním listem — stejná logika,
   // jen jiné rozložení kolem.
@@ -5123,7 +5322,10 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
                     className="h-9 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-2 text-xs font-bold text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-45"
                   >
                     <option value="">Vyber náhradu…</option>
-                    {replacementCandidates.map(account => <option key={account.id} value={account.id}>{account.name} · {account.firm}</option>)}
+                    {replacementCandidates.map(account => {
+                      const missingWorker = routeFor(account.id) === 'missing-worker';
+                      return <option key={account.id} value={account.id} disabled={missingWorker}>{account.name} · {account.firm}{missingWorker ? ' · není ve Mac workeru' : ''}</option>;
+                    })}
                   </select>
                   <button type="button" onClick={() => setDraft(current => ({ ...current, followers: current.followers.filter(item => item.accountId !== follower.accountId) }))} className="h-9 rounded-md border border-rose-500/25 px-3 text-xs font-bold text-rose-500 hover:bg-rose-500/10">Odebrat</button>
                 </div>
@@ -5252,6 +5454,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
 
           <div key={view.kind === 'follower' ? `follower-${view.accountId}` : view.kind} data-dir={mobileViewDir} className="compact-editor-view min-h-0 flex-1 overflow-y-auto px-4 py-3">
             {view.kind === 'main' ? (<>
+              {workerRouteNoticeBlock}
               <div className={sectionLabel}>Název a barva</div>
               <div className="relative mt-1.5 flex items-center">
                 <button
@@ -5351,11 +5554,15 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
               <ul className="divide-y divide-[var(--border-subtle)] overflow-hidden rounded-xl border border-[var(--border-subtle)]">
                 {accounts.map(account => {
                   const active = draft.leaderAccountId === account.id;
-                  const blocked = tightenOnly && baselineHasFollowerCut && !active;
+                  const route = routeFor(account.id);
+                  const blocked = (tightenOnly && baselineHasFollowerCut && !active)
+                    || copierWorkerAccountSelectionBlocked(route, active);
                   return (
                     <li key={account.id}>
                       <button
                         type="button" disabled={blocked} aria-pressed={active}
+                        data-worker-route={route}
+                        title={route === 'missing-worker' ? 'Připojení je potřeba přidat do manifestu Mac workeru a worker bezpečně přeinstalovat.' : undefined}
                         onClick={() => { chooseLeader(account.id); goto({ kind: 'main' }); }}
                         className={`${rowButton} disabled:opacity-45 ${active ? 'bg-amber-500/[0.1]' : ''}`}
                       >
@@ -5365,7 +5572,8 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
                         </span>
                         <span className="min-w-0 flex-1">
                           <b className="block truncate text-[13px] text-[var(--text-primary)]">{account.name}</b>
-                          <span className="block truncate text-[11px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}{blocked ? ' · dnes jen zpřísnit' : ''}</span>
+                          <span className="block truncate text-[11px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}{blocked && route !== 'missing-worker' ? ' · dnes jen zpřísnit' : ''}</span>
+                          <CopierWorkerRouteBadge route={route} />
                         </span>
                         {active ? <Check size={16} className="shrink-0 text-amber-500" /> : null}
                       </button>
@@ -5379,16 +5587,20 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
                 {followerCandidates.map(account => {
                   const selected = followerById.has(account.id);
                   const blocked = !selected && followerAdditionBlocked(account.id);
+                  const route = routeFor(account.id);
                   return (
                     <li key={account.id}>
-                      <button type="button" disabled={blocked} aria-pressed={selected} onClick={() => toggleFollower(account.id)} className={`${rowButton} disabled:opacity-45`}>
+                      <button type="button" disabled={blocked} aria-pressed={selected} data-worker-route={route}
+                        title={route === 'missing-worker' ? 'Připojení je potřeba přidat do manifestu Mac workeru a worker bezpečně přeinstalovat.' : undefined}
+                        onClick={() => toggleFollower(account.id)} className={`${rowButton} disabled:opacity-45`}>
                         <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border-2 ${selected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-[var(--border-subtle)]'}`}>
                           {selected ? <Check size={14} strokeWidth={3} /> : null}
                         </span>
                         <FirmMark firm={account.firm} size="h-8 w-8" />
                         <span className="min-w-0 flex-1">
                           <b className="block truncate text-[13px] text-[var(--text-primary)]">{account.name}</b>
-                          <span className="block truncate text-[11px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}{blocked ? ' · dnes jen zpřísnit' : ''}</span>
+                          <span className="block truncate text-[11px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}{blocked && route !== 'missing-worker' ? ' · dnes jen zpřísnit' : ''}</span>
+                          <CopierWorkerRouteBadge route={route} />
                         </span>
                       </button>
                     </li>
@@ -5518,11 +5730,16 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
             <div className="mt-2 space-y-1">
               {accounts.map(account => {
                 const active = draft.leaderAccountId === account.id;
-                const blocked = tightenOnly && baselineHasFollowerCut && !active;
+                const route = routeFor(account.id);
+                const blocked = (tightenOnly && baselineHasFollowerCut && !active)
+                  || copierWorkerAccountSelectionBlocked(route, active);
                 return (
                   <button
                     key={account.id} type="button" disabled={blocked} aria-pressed={active}
-                    title={blocked ? 'dnes jen zpřísnit' : undefined}
+                    data-worker-route={route}
+                    title={route === 'missing-worker'
+                      ? 'Připojení je potřeba přidat do manifestu Mac workeru a worker bezpečně přeinstalovat.'
+                      : blocked ? 'dnes jen zpřísnit' : undefined}
                     onClick={() => chooseLeader(account.id)}
                     className={`flex w-full items-center gap-2 rounded-lg border p-2 text-left disabled:cursor-not-allowed disabled:opacity-45 ${
                       active ? 'border-amber-500/55 bg-amber-500/[0.12]' : 'border-transparent hover:bg-[var(--bg-card)]'
@@ -5542,6 +5759,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
                     <span className="min-w-0">
                       <b className="block truncate text-[11px] font-bold text-[var(--text-primary)]">{account.name}</b>
                       <span className="block truncate text-[9.5px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span>
+                      <CopierWorkerRouteBadge route={route} />
                     </span>
                   </button>
                 );
@@ -5550,6 +5768,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
           </div>
 
           <div className="min-w-0 flex-1 overflow-y-auto p-3">
+            {workerRouteNoticeBlock}
             <div className="flex flex-wrap items-center justify-between gap-2 px-0.5 pb-2">
               <span className={sectionLabel}>
                 Followeři — {selectedCount} vybráno{draft.leaderAccountId != null ? ` · expozice ${copyGroupExposureMultiple(draft)}× leadera` : ''}
@@ -5579,13 +5798,18 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
                 const follower = followerById.get(account.id);
                 const baselineFollower = baselineFollowers.get(account.id);
                 const addBlocked = !follower && followerAdditionBlocked(account.id);
+                const route = routeFor(account.id);
                 return (
-                  <div key={account.id} className={`grid min-w-[416px] grid-cols-[minmax(0,1fr)_132px_74px_74px] items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-0 ${follower ? 'bg-indigo-500/[0.035]' : ''}`}>
-                    <label title={addBlocked ? 'dnes jen zpřísnit' : undefined} className={`flex min-w-0 items-center gap-2.5 ${addBlocked ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'}`}>
+                  <div key={account.id} data-worker-route={route} className={`grid min-w-[416px] grid-cols-[minmax(0,1fr)_132px_74px_74px] items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-0 ${follower ? 'bg-indigo-500/[0.035]' : ''}`}>
+                    <label title={route === 'missing-worker'
+                      ? 'Připojení je potřeba přidat do manifestu Mac workeru a worker bezpečně přeinstalovat.'
+                      : addBlocked ? 'dnes jen zpřísnit' : undefined}
+                      className={`flex min-w-0 items-center gap-2.5 ${addBlocked ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'}`}>
                       <input type="checkbox" checked={!!follower} disabled={addBlocked} onChange={() => toggleFollower(account.id)} className="h-3.5 w-3.5 shrink-0 accent-indigo-600" />
                       <span className="min-w-0">
                         <b className="block truncate text-[11.5px] text-[var(--text-primary)]">{account.name}</b>
                         <span className="block truncate text-[10px] text-[var(--text-secondary)]">{account.firm} · {money.format(account.balance)}</span>
+                        <CopierWorkerRouteBadge route={route} />
                       </span>
                     </label>
                     {/* Nativní šipka selectu je jediný prvek, který v tabulce
@@ -5630,6 +5854,11 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, accounts, account
         </div>
 
         {libraryNotice}
+        {armedWarning ? (
+          <div role="status" className="mx-5 mb-2 rounded-md border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-[11px] font-bold text-amber-600">
+            Kopírka je zapnutá — uložení změny ji vypne (DISARM). Pak ji znovu zapni přepínačem skupiny.
+          </div>
+        ) : null}
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-subtle)] px-5 py-3.5">
           <div>{onDelete ? <button onClick={onDelete} disabled={saving} className="flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-rose-500 hover:bg-rose-500/10"><Trash2 size={14} /> Smazat skupinu</button> : null}</div>
           <div className="flex gap-2">
@@ -6173,7 +6402,7 @@ const ConfirmActionDialog = ({ action, busy, apiReady, flattenPreview = null, on
       ) : !action.run && !action.proceed ? (
         <div className={`rounded-xl border px-3 py-2.5 text-[11px] font-bold mt-4 ${apiReady ? 'border-emerald-500/15 bg-emerald-500/[0.055] text-emerald-600' : 'border-blue-500/15 bg-blue-500/[0.055] text-blue-500'}`}>
           {apiReady
-            ? 'Execution adaptér je připojen. Potvrzená akce bude předána lokálnímu DEMO runtime.'
+            ? 'Execution adaptér je připojen. Potvrzená akce bude předána Mac workeru a provede se na skutečných účtech.'
             : 'Bez připojeného execution adaptéru se akce pouze uloží lokálně a žádný brokerový příkaz se neodešle.'}
         </div>
       ) : null}
@@ -6221,10 +6450,13 @@ export const copyGroupExposureMultiple = (group: Pick<CopyGroupConfig, 'follower
     (sum, follower) => sum + (follower.mode === 'off' ? 0 : follower.multiplier), 0,
   ) * 100) / 100;
 
-export const copyTradeDailyLossRemaining = (account: Pick<LiveAccount, 'dailyLossLimit' | 'realizedPnl' | 'unrealizedPnl'>): number | null => {
+export const copyTradeDailyLossRemaining = (
+  account: Pick<LiveAccount, 'dailyLossLimit' | 'realizedPnl' | 'unrealizedPnl'>,
+  realizedPnl = account.realizedPnl,
+): number | null => {
   const limit = account.dailyLossLimit;
   if (limit == null || !Number.isFinite(limit) || limit <= 0) return null;
-  const currentDailyPnl = account.realizedPnl + account.unrealizedPnl;
+  const currentDailyPnl = realizedPnl + account.unrealizedPnl;
   return Number.isFinite(currentDailyPnl) ? limit + currentDailyPnl : null;
 };
 

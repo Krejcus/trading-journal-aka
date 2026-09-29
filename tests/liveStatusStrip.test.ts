@@ -180,4 +180,22 @@ describe('LiveStatusStrip + CopierEventsPanel render', () => {
     expect(markup).toContain('Uživatel vypnul kopírku ručně'.slice(0, 0) + 'Kopírka byla vypnuta ručně');
     expect(markup).toContain('je připravený pro ENTRY/EXIT');
   });
+
+  it('Události přeloží legacy unknown incident s ponechaným ochranným SL', () => {
+    const legacy = createCopierDisarmRecord({
+      at: now - 1_000,
+      trigger: 'fail-closed',
+      detail: 'legacy-unknown',
+      copiesOutcome: 'left-open-protected',
+    });
+    const lastError = 'Copier fail-closed: follower drží SL, který leader zrušil (management-only)';
+    const markup = renderToStaticMarkup(React.createElement(CopierEventsPanel, {
+      status: status({ lastError, lastDisarm: legacy }),
+      transport: 'relay',
+      disarmHistory: [legacy],
+    }));
+    expect(markup).toContain('Follower drží svůj SL, který leader zrušil — rozhodni ručně v Tradovate.');
+    expect(markup).toContain('ochranu neruš naslepo');
+    expect(markup).toContain(lastError);
+  });
 });

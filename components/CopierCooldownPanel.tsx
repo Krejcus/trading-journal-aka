@@ -42,7 +42,9 @@ export default function CopierCooldownPanel(input: CopierCooldownInput) {
   if (!model.active && !recentlyElapsed) return null;
   const phase = !model.known ? 'unknown' : model.active ? 'active' : model.blocker ? 'blocked' : 'elapsed';
   const showCompletion = phase === 'elapsed';
-  const label = !model.known ? 'Stav vyžaduje ověření' : model.active ? 'Kopírování pozastaveno' : 'Odpočet dokončen';
+  const label = !model.known ? 'Stav vyžaduje ověření'
+    : model.cooldown.active ? 'ARM dočasně zablokován'
+      : model.active ? 'Nové vstupy pozastaveny' : 'Odpočet dokončen';
   return (
     <section data-copier-cooldown={phase} className="copier-cooldown" aria-label="Pauza kopírování">
       <div className="copier-cooldown-main">
@@ -81,7 +83,7 @@ export default function CopierCooldownPanel(input: CopierCooldownInput) {
       </div>
       {expanded ? <div className="copier-cooldown-details">
         <p>Konec nejdelší pauzy: {new Date(displayUntil).toLocaleTimeString('cs-CZ')} · podle hodin tohoto zařízení.</p>
-        <p>Ruční objednávku na leaderovi může broker přijmout. Během pauzy se nezkopíruje a později se zpětně nedoplní.</p>
+        <p>Ruční objednávku na leaderovi může broker přijmout. Při cooldownu je kopírka vypnutá a ARM zablokovaný; během jiné pauzy se nový vstup nezkopíruje.</p>
         <p>Odpočet nic nezapíná. Rozhodující je ověřený stav workeru a všechna ostatní bezpečnostní pravidla.</p>
       </div> : null}
     </section>

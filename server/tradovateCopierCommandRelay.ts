@@ -790,5 +790,9 @@ export async function readTradovateCopierDeviceRuntime(options: { db: SupabaseCl
     .order('last_seen_at', { ascending: false }).limit(1).maybeSingle<{ status: LocalCopierAgentStatus; last_seen_at: string }>();
   if (error) throw new Error(`copier-relay-runtime-status-failed: ${error.message}`);
   if (!data) return null;
-  return { status: data.status, lastSeenAt: data.last_seen_at, connected: Date.now() - Date.parse(data.last_seen_at) < 10_000 };
+  const parsedLastSeenAt = Date.parse(data.last_seen_at);
+  const ageMs = Number.isFinite(parsedLastSeenAt)
+    ? Math.max(0, Date.now() - parsedLastSeenAt)
+    : 10_000;
+  return { status: data.status, lastSeenAt: data.last_seen_at, ageMs, connected: ageMs < 10_000 };
 }

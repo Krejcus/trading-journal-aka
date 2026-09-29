@@ -207,4 +207,17 @@ describe('buildLiveCopierIsland', () => {
     expect(model.phase).toBe('off');
     expect(model.action).toBeNull();
   });
+
+  it('blížící se konec ARM zvýrazní a během pozice ho ukáže až 30 min předem', () => {
+    const idle = buildLiveCopierIsland(input({ armed: true, armExpiresAt: NOW + 10 * 60_000, now: NOW }));
+    expect(idle.fields.find(field => field.label === 'ARM do')?.tone).toBe('danger');
+    const calm = buildLiveCopierIsland(input({ armed: true, armExpiresAt: NOW + 3 * 60 * 60_000, now: NOW }));
+    expect(calm.fields.find(field => field.label === 'ARM do')?.tone).toBeUndefined();
+    const position = { accountId: 1, symbol: 'MNQZ6', netPosition: 2, netPrice: 1, realizedPnl: 0, unrealizedPnl: 10, updatedAt: null };
+    const farInTrade = buildLiveCopierIsland(input({ armed: true, armExpiresAt: NOW + 2 * 60 * 60_000, now: NOW, accounts: [account(1, { positions: [position] })] }));
+    expect(farInTrade.phase).toBe('position');
+    expect(farInTrade.fields.some(field => field.label === 'ARM do')).toBe(false);
+    const soonInTrade = buildLiveCopierIsland(input({ armed: true, armExpiresAt: NOW + 20 * 60_000, now: NOW, accounts: [account(1, { positions: [position] })] }));
+    expect(soonInTrade.fields.find(field => field.label === 'ARM do')?.tone).toBe('warn');
+  });
 });

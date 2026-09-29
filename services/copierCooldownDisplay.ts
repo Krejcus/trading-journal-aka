@@ -45,7 +45,10 @@ export function buildCopierCooldownDisplay(input: CopierCooldownInput, now: numb
           : status.stuckOutbox || status.reconciliationRequired || status.divergentAccounts.length > 0
             ? 'Před dalším zapnutím je nutná kontrola účtů.'
             : null;
-  const subtitle = blocker ?? (active ? 'Nové vstupy se nekopírují.'
+  const cooldownActive = cooldownUntil > now;
+  const subtitle = blocker ?? (cooldownActive
+    ? 'Kopírka je vypnutá. Cooldown blokuje ARM do konce odpočtu; sám ji znovu nezapne.'
+    : active ? 'Nové vstupy se během pauzy nekopírují; správa otevřených kopií pokračuje.'
     : status?.armed ? (status.shadowMode ? 'Worker je ve sledovacím režimu, příkazy neodesílá.' : 'Další kopírování řídí aktuální stav workeru.')
       : 'Kopírka zůstává vypnutá. Sama se nezapne.');
   return {
@@ -53,7 +56,7 @@ export function buildCopierCooldownDisplay(input: CopierCooldownInput, now: numb
     title: active ? (pauseWins ? pauseNames[input.pause!.rule] ?? 'Pauza pravidel dne' : 'Cooldown po obchodu') : 'Čas pauzy uplynul',
     subtitle,
     progress: durationMs > 0 ? Math.min(1, Math.max(0, 1 - Math.max(0, until - now) / durationMs)) : null,
-    cooldown: { until: cooldownUntil, active: cooldownUntil > now, minutes: input.cooldownMinutes },
+    cooldown: { until: cooldownUntil, active: cooldownActive, minutes: input.cooldownMinutes },
     pause: { until: pauseUntil, active: pauseUntil > now, minutes: input.pause && pauseUntil > input.pause.at ? Math.round((pauseUntil - input.pause.at) / 60_000) : null },
   };
 }

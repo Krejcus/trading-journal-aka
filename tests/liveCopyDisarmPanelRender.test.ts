@@ -6,6 +6,7 @@ import {
   LiveCopyTradeOverview,
 } from '../components/LiveCopyTradeOverview';
 import { createCopierDisarmRecord } from '../lib/copierDisarmReason';
+import type { CopierControllerStatus } from '../services/copierRuntimeController';
 import type { LiveSnapshot } from '../services/tradecopiaLiveService';
 
 const at = Date.UTC(2026, 8, 3, 16, 7, 3);
@@ -89,6 +90,28 @@ describe('CopierDisarmPanel', () => {
     expect(markup).not.toContain('data-tone="rose"');
   });
 
+  it('starý unknown panel vezme známou příčinu z lastError, ale výsledek kopií nechá nepotvrzený', () => {
+    const legacyUnknown = createCopierDisarmRecord({
+      at,
+      trigger: 'fail-closed',
+      detail: 'legacy-unknown',
+      copiesOutcome: 'unknown',
+    });
+    const runtimeStatus: CopierControllerStatus = {
+      started: true, armed: false, killSwitch: false, shadowMode: false, connected: true,
+      reconciliationRequired: true, divergentAccounts: [], workingOrderAccounts: [],
+      stuckOutbox: false, stuckOperations: [], revision: 1, lastSequence: 1,
+      lastError: 'Copier fail-closed: unexplained-position-divergence účty 200',
+    };
+    const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
+      snapshot, runtimeGroup, executionGroupId: runtimeGroup.id,
+      lastDisarm: legacyUnknown, runtimeStatus, copierArmed: false,
+    }));
+    expect(markup).toContain('Pozice followerů se odchýlily od očekávané kopie.');
+    expect(markup).not.toContain('neznámého technického důvodu');
+    expect(markup).toContain('Výsledek kopií se nepodařilo potvrdit.');
+  });
+
   it('karta skupiny panel po automatickém DISARM ukáže vedle dostupného ARM, po ARM ho skryje', () => {
     const props = {
       snapshot,
@@ -96,6 +119,7 @@ describe('CopierDisarmPanel', () => {
       executionGroupId: runtimeGroup.id,
       lastDisarm: disarm,
       onSwitchAndArm: () => undefined,
+      runtimeAvailable: true,
     };
     const disarmed = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
       ...props,
@@ -126,6 +150,7 @@ describe('CopierDisarmPanel', () => {
       lastDisarm: manual,
       copierArmed: false,
       onSwitchAndArm: () => undefined,
+      runtimeAvailable: true,
     }));
     expect(markup).not.toContain('data-copier-disarm-panel="true"');
     expect(markup).toContain('aria-label="Zapnout kopírovací skupinu"');

@@ -1,5 +1,7 @@
 import { tradovateConnectionPresentation, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
-import { createCopierForegroundPoller } from '../lib/copierForegroundPoller';
+import { createCopierForegroundPoller, isCopierStatusFresh } from '../lib/copierForegroundPoller';
+import { copierRelayObservedAt, newestCopierRelaySnapshot, startCopierRelayStatusPoll } from '../lib/copierRelayStatusPoll';
+import { shouldProbeLocalCopierAgent } from '../lib/localCopierProbePolicy';
 import LiveMobileAccountDetail from './LiveMobileAccountDetail';
 import { useLiveLayout } from '../hooks/useLiveLayout';
 import { readTradovateDisplaySession, writeTradovateDisplaySession } from '../lib/tradovateDisplaySessionCache';
@@ -60,7 +62,6 @@ import {
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import { tradovateAccountFirm } from '../lib/tradovatePropPlanCatalog';
 import {
-  tradovateBrokerDailyPnlByAccount,
   tradovateCopyTradeOrders,
   tradovateCopyTradeSnapshot,
 } from '../lib/tradovateCopyTradeBridge';
@@ -95,14 +96,17 @@ import {
   type TradovateLiveTab,
 } from '../lib/tradovateLiveTab';
 import { supportsCopierRiskConfig, assertCopierRiskConfigAcknowledged } from '../lib/copierWorkerCapabilities';
-import { CopierStatusPollFence } from '../lib/copierStatusPollFence';
+import { CopierStatusAckFence, CopierStatusPollFence, shouldAcceptCopierStatus } from '../lib/copierStatusPollFence';
 import { assertCopierArmConnections, CopierArmBlockedError, prepareCopierArmGroup } from '../lib/copierArmPreparation';
 import {
   resolveLocalExecutionGroup,
   type LocalCopierAgentStatus,
 } from '../lib/localCopierAgentProtocol';
+import { buildCopierWorkerAccountRoutes } from '../lib/copierWorkerAccountRoutes';
 import { canUseDirectLocalCopierAgent, createLocalCopierAgentClient } from '../services/localCopierAgentClient';
+import { isNativeBuild } from '../utils/runtimeConfig';
 import { snapshotArmOffer } from '../services/copierSnapshotArmOffer';
+import { copierCommandAllowedWithoutFreshStatus, selectCopierSafetyRoute } from '../lib/copierSafetyControls';
 import {
   type CopyGroupConfig,
   type LiveCopyTradingAdapter,
@@ -141,6 +145,7 @@ const COPY_GROUP_CONFIG_COMMANDS = new Set<LiveCopyTradingCommand['type']>([
   'set-replication',
   'set-multiplier',
 ]);
+const COPIER_SAFETY_COMMAND_TIMEOUT_MS = 10_000;
 
 /**
  * Dev fixture LIVE přehledu s falešným execution adaptérem: přepínač followera
@@ -178,6 +183,7 @@ const DevLiveCopyFixtureOverview = () => {
       dailyStats={devLiveCopyFixtureDailyStats}
       copierArmed={false}
       copierStatusPending={false}
+      runtimeAvailable
       executionGroupId="group-main"
       cooldownUntil={Date.now() + 6 * 60_000}
       sessionArmedAt={0}
@@ -257,16 +263,19 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // Než doběhne první dotaz, `agentStatus` je null a armovaný copier by se
   // v přepínači ukázal jako OFF. Do té doby se stav zobrazuje jako neznámý.
   const [agentStatusResolved, setAgentStatusResolved] = useState(false);
-  const [agentStatusFresh, setAgentStatusFresh] = useState(false);
+  const [agentStatusReadHealthy, setAgentStatusReadHealthy] = useState(false);
+  const [freshnessNow, setFreshnessNow] = useState(() => Date.now());
+  const acceptedAgentStatusRef = useRef<LocalCopierAgentStatus | null>(null);
+  const statusAckFenceRef = useRef(new CopierStatusAckFence());
+  const ackSequenceByStatusRef = useRef(new WeakMap<LocalCopierAgentStatus, number>());
+  const agentStatusFresh = isCopierStatusFresh(agentStatusObservedAt, freshnessNow, agentStatusReadHealthy);
   const armStatusRef = useRef({ status: agentStatus, fresh: agentStatusFresh });
   armStatusRef.current = { status: agentStatus, fresh: agentStatusFresh };
   const [armRulesNotice, setArmRulesNotice] = useState<string | null>(null);
   useEffect(() => {
-    setAgentStatusFresh(agentStatus != null);
-    if (!agentStatus) return;
-    const timeout = window.setTimeout(() => setAgentStatusFresh(false), 15_000);
-    return () => window.clearTimeout(timeout);
-  }, [agentStatus]);
+    const timer = window.setInterval(() => setFreshnessNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const configMutationPendingRef = useRef(false);
   const [configMutationPending, setConfigMutationPending] = useState(false);
   const navigateToTab = useCallback((nextTab: TradovateLiveTab) => {
@@ -312,8 +321,58 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   }, [agentStatus]);
   const [agentTransport, setAgentTransport] = useState<'local' | 'relay' | null>(null);
   const [relayConnectionId, setRelayConnectionId] = useState<string | null>(null);
+  // Poslední ověřená cesta k workeru. Používá se VÝHRADNĚ pro jednosměrné
+  // brzdy (DISARM, kill switch), když čtení stavu dočasně selže — jinak by
+  // telefon při pomalém relay nemohl kopírku vypnout. ARM ani konfiguraci
+  // tudy poslat nejde; ty dál vyžadují čerstvý stav.
+  const lastAgentRouteRef = useRef<{ transport: 'local' | 'relay'; relayConnectionId: string | null } | null>(null);
+  const directAgentProbe = useRef<'unknown' | 'available' | 'unavailable'>('unknown');
+  const directAgentProbeLastAttemptAt = useRef<number | null>(null);
+  const forceDirectAgentProbeRef = useRef(false);
+  const statusIdentityRef = useRef(userId);
   const [pairingNotice, setPairingNotice] = useState<string | null>(null);
   const runtimeAvailable = agentStatusFresh && agentTransport != null && agentStatus != null;
+
+  const acceptAgentStatus = useCallback((
+    status: LocalCopierAgentStatus,
+    observedAt = Date.now(),
+    readHealthy = true,
+    commandSequence?: number,
+  ): boolean => {
+    if (statusIdentityRef.current !== userId) return false;
+    if (commandSequence != null && !statusAckFenceRef.current.accept(commandSequence)) return false;
+    if (!shouldAcceptCopierStatus(status, acceptedAgentStatusRef.current)) return false;
+    acceptedAgentStatusRef.current = status;
+    setAgentStatus(status);
+    setAgentStatusObservedAt(observedAt);
+    setAgentStatusReadHealthy(readHealthy);
+    setAgentStatusResolved(true);
+    setFreshnessNow(Date.now());
+    return true;
+  }, [userId]);
+  const markAgentStatusStale = useCallback(() => {
+    setAgentStatusReadHealthy(false);
+    setAgentStatusResolved(true);
+    setFreshnessNow(Date.now());
+  }, []);
+
+  useEffect(() => {
+    if (statusIdentityRef.current === userId) return;
+    statusIdentityRef.current = userId;
+    acceptedAgentStatusRef.current = null;
+    statusAckFenceRef.current.reset();
+    ackSequenceByStatusRef.current = new WeakMap();
+    directAgentProbe.current = 'unknown';
+    directAgentProbeLastAttemptAt.current = null;
+    forceDirectAgentProbeRef.current = false;
+    lastAgentRouteRef.current = null;
+    setAgentStatus(null);
+    setAgentStatusObservedAt(null);
+    setAgentStatusReadHealthy(false);
+    setAgentStatusResolved(false);
+    setAgentTransport(null);
+    setRelayConnectionId(null);
+  }, [userId]);
 
   useEffect(() => {
     if (!requestedTab) return;
@@ -365,6 +424,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     () => agentStatus?.devices ?? (agentStatus?.device ? [agentStatus.device] : []),
     [agentStatus],
   );
+  const workerAccountRoutes = useMemo(() => buildCopierWorkerAccountRoutes(
+    agentStatus,
+    runtimeAvailable,
+    live.connectionData,
+  ), [agentStatus, live.connectionData, runtimeAvailable]);
   // Pozice a aktivní příkazy účtů kopírky přednostně z heartbeatu workeru
   // (stream Tradovate, každou sekundu); REST přes Vercel zůstává zálohou.
   // Skutečné čerpání limitu Tradovate na login: server (tato aplikace) +
@@ -416,9 +480,18 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       const values = owner && displayCache.userId === userId
         ? displayCache.values[`${owner[1].environment}:${owner[0]}:${account.id}`]
           ?? restoredDisplay[`${owner[1].environment}:${owner[0]}:${account.id}`] : undefined;
-      return { ...account, ...(values ? { displayValues: values } : {}), riskDisplayStorageScope: owner ? `${userId}:${owner[1].environment}:${owner[0]}` : undefined, riskDisplayConfigKey: `${owner ? owner[1].environment + ':' + owner[0] : 'unavailable'}:${account.riskDisplayConfigKey}` };
+      return {
+        ...account,
+        ...(values ? { displayValues: values } : {}),
+        dailyPnlPending: owner ? live.dataEnrichmentByConnection[owner[0]]?.pending !== false : true,
+        dailyPnlUnavailableReason: owner
+          ? live.dataEnrichmentByConnection[owner[0]]?.error ?? undefined
+          : 'Účet není jednoznačně přiřazený k aktivnímu Tradovate připojení.',
+        riskDisplayStorageScope: owner ? `${userId}:${owner[1].environment}:${owner[0]}` : undefined,
+        riskDisplayConfigKey: `${owner ? owner[1].environment + ':' + owner[0] : 'unavailable'}:${account.riskDisplayConfigKey}`,
+      };
     }) };
-  }, [copyTradeSnapshot, displayMembership, displayCache, userId, restoredDisplay]);
+  }, [copyTradeSnapshot, displayMembership, displayCache, live.dataEnrichmentByConnection, userId, restoredDisplay]);
   useEffect(() => {
     // Wait for every connected account list before replacing the persisted view.
     // A partial bootstrap must not erase amounts for connections still loading.
@@ -429,7 +502,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       if (owners.length !== 1) continue;
       const [connectionId, connection] = owners[0];
       const balance = liveBalanceDisplay(account);
-      const daily = liveDailyPnlDisplay(account, Date.now(), live.dataEnrichmentPending);
+      const daily = liveDailyPnlDisplay(account);
       const entry: AccountDisplayCache[string] = {};
       if (balance.value != null && balance.confirmedAt) entry.totalCashValue = {
         value: balance.value, requestedAt: account.displayValues?.totalCashValue?.confirmedAt === balance.confirmedAt
@@ -442,11 +515,14 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       if (Object.keys(entry).length) values[`${connection.environment}:${connectionId}:${account.id}`] = entry;
     }
     writeTradovateDisplaySession(userId, values);
-  }, [userId, displaySnapshot, displayMembership, connectedConnectionIds, live.dataEnrichmentPending]);
-  const brokerDailyPnlByAccount = useMemo<Readonly<Record<string, number | null>>>(() => {
-    if (!liveData) return {};
-    return tradovateBrokerDailyPnlByAccount(liveData);
-  }, [liveData]);
+  }, [userId, displaySnapshot, displayMembership, connectedConnectionIds]);
+  const brokerDailyPnlByAccount = useMemo<Readonly<Record<string, ReturnType<typeof liveDailyPnlDisplay>>>>(() => {
+    if (!displaySnapshot) return {};
+    return Object.fromEntries(displaySnapshot.accounts.map(account => [
+      String(account.id),
+      liveDailyPnlDisplay(account, freshnessNow),
+    ]));
+  }, [displaySnapshot, freshnessNow]);
   const accountLabel = useMemo(() => createCopyTradeAccountLabelResolver({
     accountsById: new Map(copyTradeSnapshot?.accounts.map(account => [account.id, account]) ?? []),
     profilesById: new Map(live.profiles.flatMap(profile => {
@@ -468,14 +544,14 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     [liveData],
   );
   const effectiveAccountEligibility = useMemo(
-    () => copyTradeSnapshot && !live.dataEnrichmentPending
+    () => copyTradeSnapshot
       ? effectiveCopyTradeAccountEligibility(
-          copyTradeSnapshot.accounts,
+          (displaySnapshot ?? copyTradeSnapshot).accounts,
           live.profiles,
           agentStatus?.controller.accountEligibility ?? [],
         )
       : (agentStatus?.controller.accountEligibility ?? []),
-    [agentStatus?.controller.accountEligibility, copyTradeSnapshot, live.dataEnrichmentPending, live.profiles],
+    [agentStatus?.controller.accountEligibility, copyTradeSnapshot, displaySnapshot, live.profiles],
   );
   const accountEligibilityExclusions = useMemo(
     () => effectiveAccountEligibility
@@ -513,14 +589,69 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     onCopierJournalRefresh?.(agentStatus?.group ?? executionGroup ?? null);
   }, [agentStatus?.group, executionGroup, liveData?.capturedAt, onCopierJournalRefresh]);
   const executeAgent = useCallback(async (command: Parameters<typeof agentClient.execute>[0]) => {
-    if (agentTransport === 'local') return agentClient.execute(command);
-    if (!relayConnectionId) throw new Error('Chybí aktivní Tradovate připojení pro Mac worker relay.');
-    const result = await executeTradovateCopierRelayCommand(relayConnectionId, command);
-    setAgentStatus(result.status);
+    // Poll zahájený před příkazem nesmí po ACK vrátit starší stav (probliknutí zpět).
+    copyGroupStatusPollFence.invalidatePolls();
+    const commandSequence = statusAckFenceRef.current.beginRequest();
+    const result = agentTransport === 'local'
+      ? await agentClient.execute(command)
+      : relayConnectionId
+        ? await executeTradovateCopierRelayCommand(relayConnectionId, command)
+        : null;
+    if (!result) throw new Error('Chybí aktivní Tradovate připojení pro Mac worker relay.');
+    copyGroupStatusPollFence.invalidatePolls();
+    ackSequenceByStatusRef.current.set(result.status, commandSequence);
+    if (!acceptAgentStatus(result.status, Date.now(), true, commandSequence)) {
+      throw new Error('Příkaz doběhl po novější bezpečnostní akci. Výsledek není ověřen; UI zachovalo novější bezpečnější stav.');
+    }
     return result;
-  }, [agentClient, agentTransport, relayConnectionId]);
+  }, [acceptAgentStatus, agentClient, agentTransport, relayConnectionId]);
+  const executeSafetyCommand = useCallback(async (command:
+    | { type: 'disarm' }
+    | { type: 'kill-switch' }
+    | { type: 'lock-until-session-end'; reason: string }) => {
+    const currentRoute = agentTransport
+      ? { transport: agentTransport, relayConnectionId }
+      : null;
+    const route = selectCopierSafetyRoute(
+      lastAgentRouteRef.current,
+      currentRoute,
+      canUseDirectLocalCopierAgent(window.location),
+    );
+    if (!route) throw new Error('Mac worker zatím nebyl nalezen. Pozice ověř a případně zavři přímo v Tradovate.');
+    copyGroupStatusPollFence.invalidatePolls();
+    const commandSequence = statusAckFenceRef.current.beginRequest();
+    // Relay brzda je durable ve FIFO a má serverovou TTL 10 minut. Nesmíme ji
+    // po 10 s lokálně abortovat a vydávat za ztracenou; relay klient po 35 s
+    // vrátí přesný stav „čeká ve frontě“ a běžný status poll pokračuje dál.
+    const controller = route.transport === 'local' ? new AbortController() : null;
+    const timeout = controller
+      ? window.setTimeout(() => controller.abort(), COPIER_SAFETY_COMMAND_TIMEOUT_MS)
+      : null;
+    try {
+      const result = route.transport === 'local'
+        ? await agentClient.execute(command, { signal: controller?.signal })
+        : route.relayConnectionId
+          ? await executeTradovateCopierRelayCommand(route.relayConnectionId, command)
+          : null;
+      if (!result) throw new Error('Chybí Tradovate připojení Mac workeru. Pozice ověř a případně zavři přímo v Tradovate.');
+      copyGroupStatusPollFence.invalidatePolls();
+      ackSequenceByStatusRef.current.set(result.status, commandSequence);
+      if (!acceptAgentStatus(result.status, Date.now(), true, commandSequence)) {
+        throw new Error('Příkaz doběhl po novější bezpečnostní akci. Výsledek není ověřen; UI zachovalo novější bezpečnější stav.');
+      }
+      return result;
+    } catch (reason) {
+      if (controller?.signal.aborted) {
+        throw new Error('Mac worker brzdu do 10 s nepotvrdil. Výsledek není ověřen; zkontroluj stav kopírky a účtů. Příkaz se automaticky neopakuje.');
+      }
+      throw reason;
+    } finally {
+      if (timeout != null) window.clearTimeout(timeout);
+    }
+  }, [acceptAgentStatus, agentClient, agentTransport, relayConnectionId]);
   const acceptConfigAck = useCallback((status: LocalCopierAgentStatus) => {
-    setAgentStatus(status);
+    const commandSequence = ackSequenceByStatusRef.current.get(status);
+    if (!acceptAgentStatus(status, Date.now(), true, commandSequence)) return;
     // Parent cache smí po konfiguračním zápisu převzít jen potvrzený worker
     // snapshot. Jinak by následný ARM mohl sáhnout po starší same-id skupině.
     setCopyGroups(current => {
@@ -528,7 +659,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       if (!match) return current;
       return current.map(group => group.id === match.id ? status.group : group);
     });
-  }, []);
+  }, [acceptAgentStatus]);
   const runConfigMutation = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
     if (configMutationPendingRef.current || !copyGroupStatusPollFence.beginMutation()) {
       throw new Error('Jiná změna konfigurace skupiny čeká na potvrzení workeru.');
@@ -559,14 +690,14 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         continue;
       }
       if (!next) continue;
-      setAgentStatus(next);
+      if (!acceptAgentStatus(next)) continue;
       const state = next.snapshotHealth?.state;
       if (state === 'ready') return true;
       // Worker během restartu hlásí `checking`; jiný konečný stav = oprava selhala.
       if (state && state !== 'checking') return false;
     }
     return false;
-  }, [agentClient, agentTransport, relayConnectionId]);
+  }, [acceptAgentStatus, agentClient, agentTransport, relayConnectionId]);
   const armLiveGroup = useCallback(async (targetGroup: CopyGroupConfig) => {
     setArmRulesNotice(null);
     const prepare = () => {
@@ -617,7 +748,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
       });
       if (!armOffer.repairable && !repair) return;
       if (armOffer.repairable && repair) {
-        setAgentStatus((await executeAgent({
+        acceptAgentStatus((await executeAgent({
           type: 'snapshot-test',
           requestId: crypto.randomUUID(),
           repairCamera: true,
@@ -642,7 +773,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         setArmRulesNotice(`Při zapnutí zůstala zachována dnešní potvrzená pravidla: ${prepared.preservedRules.join(', ')}. Aktuální hodnoty najdeš v Risk.`);
       }
     });
-  }, [acceptConfigAck, accountEligibilityExclusions, agentStatus?.snapshotHealth, confirmAction, effectiveAccountEligibility, executeAgent, live.connectionData, runConfigMutation, waitForSnapshotReady]);
+  }, [acceptAgentStatus, acceptConfigAck, accountEligibilityExclusions, agentStatus?.snapshotHealth, confirmAction, effectiveAccountEligibility, executeAgent, live.connectionData, runConfigMutation, waitForSnapshotReady]);
   const commandAdapter = useMemo<LiveCopyTradingAdapter | undefined>(() => {
     if (!executionGroup) return undefined;
     return {
@@ -652,6 +783,9 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
           : 'groupId' in command ? command.groupId : null;
         if (groupId !== executionGroup.id) {
           throw new Error('Příkaz nemíří na skupinu připojenou k lokálnímu execution agentovi');
+        }
+        if (!armStatusRef.current.fresh && !copierCommandAllowedWithoutFreshStatus(command)) {
+          throw new Error('Stav se ověřuje. Dokud worker nepotvrdí čerstvý stav, lze použít jen DISARM, Kill switch nebo Flatten.');
         }
         const execute = async () => {
           const payload = await executeAgent({ type: 'copy-command', command });
@@ -688,78 +822,109 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   // Přímý loopback agent zkoušíme i z produkčního HTTPS webu: na Macu
   // s běžícím workerem to sráží ARM/Flatten z relay sekund na stovky ms
   // (agent má produkční origin v CORS allowlistu + private-network header).
-  // Na telefonu / bez workeru první pokus selže a napořád se přejde na
-  // relay; na localhostu se zkouší vždy (dev worker může startovat později).
-  const directAgentProbe = useRef<'unknown' | 'available' | 'unavailable'>('unknown');
+  // Nativní iOS build loopback nikdy nezkouší. Desktop po výpadku přejde na
+  // relay, ale lokální cestu znovu ověří s backoffem a při návratu do okna.
   useEffect(() => {
     let stopped = false;
     const poll = async (isCurrent: () => boolean) => {
       const pollGeneration = copyGroupStatusPollFence.beginPoll();
-      if (canUseDirectLocalCopierAgent(window.location) || directAgentProbe.current !== 'unavailable') {
+      const now = Date.now();
+      const probeLocal = shouldProbeLocalCopierAgent({
+        nativeBuild: isNativeBuild,
+        state: directAgentProbe.current,
+        now,
+        lastAttemptAt: directAgentProbeLastAttemptAt.current,
+        resumedFromHidden: forceDirectAgentProbeRef.current,
+      });
+      forceDirectAgentProbeRef.current = false;
+      if (probeLocal) {
+        directAgentProbeLastAttemptAt.current = now;
         try {
           const next = await agentClient.status();
           if (!stopped && isCurrent() && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
             directAgentProbe.current = 'available';
-            setAgentStatus(next);
-            setAgentStatusObservedAt(Date.now());
-            setDisplayFeedReceipt({ userId, receivedAt: Date.now(), feeds: next.accountDisplay ?? [] });
-            setAgentStatusResolved(true);
-            setAgentTransport('local');
-            setRelayConnectionId(next.device?.connectionId ?? next.devices?.[0]?.connectionId ?? null);
+            const observedAt = Date.now();
+            if (acceptAgentStatus(next, observedAt)) {
+              const connectionId = next.device?.connectionId ?? next.devices?.[0]?.connectionId ?? null;
+              setDisplayFeedReceipt({ userId, receivedAt: observedAt, feeds: next.accountDisplay ?? [] });
+              setAgentTransport('local');
+              setRelayConnectionId(connectionId);
+              lastAgentRouteRef.current = { transport: 'local', relayConnectionId: connectionId };
+            }
           }
           return;
         } catch {
-          // Lokální dev může pokračovat přes relay, pokud přímý agent neběží.
-          // Mimo localhost: první neúspěch = zařízení bez workeru (telefon),
-          // dál nezkoušíme; ztráta dříve fungujícího agenta (restart workeru)
-          // dostane ještě šanci v příštím cyklu.
-          directAgentProbe.current = directAgentProbe.current === 'available' ? 'unknown' : 'unavailable';
+          directAgentProbe.current = 'unavailable';
         }
       }
-      try {
-        const candidates = await Promise.all(connectedConnectionIds.map(async connectionId => ({
-          connectionId,
-          remote: await loadTradovateCopierRelayStatus(connectionId).catch(() => null),
-        })));
-        const active = candidates.find(candidate => candidate.remote?.connected) ?? null;
-        if (!stopped && isCurrent() && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
-          setAgentStatus(active?.remote?.status ?? null);
-          setDisplayFeedReceipt({ userId, receivedAt: Date.now(), feeds: candidates.flatMap(candidate => candidate.remote?.connected ? candidate.remote.status?.accountDisplay ?? [] : []) });
-          setAgentStatusObservedAt(active ? Date.parse(active.remote!.lastSeenAt) : null);
-          setAgentTransport(active ? 'relay' : null);
-          setRelayConnectionId(active?.connectionId ?? null);
-        }
-      } catch {
-        if (!stopped && isCurrent() && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
-          setAgentStatus(null);
-          setAgentStatusObservedAt(null);
-          setAgentTransport(null);
-          setRelayConnectionId(null);
-        }
-      } finally {
-        if (!stopped && isCurrent()) {
-          if (copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
-            setAgentStatusResolved(true);
-          }
+
+      const preferredConnectionId = lastAgentRouteRef.current?.transport === 'relay'
+        ? lastAgentRouteRef.current.relayConnectionId
+        : relayConnectionId;
+      const relayPoll = startCopierRelayStatusPoll(
+        connectedConnectionIds,
+        preferredConnectionId,
+        loadTradovateCopierRelayStatus,
+      );
+      const firstConnected = await relayPoll.firstConnected;
+      if (firstConnected?.remote && !stopped && isCurrent() && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
+        const receivedAt = Date.now();
+        const observedAt = copierRelayObservedAt(firstConnected.remote, receivedAt);
+        const fresh = firstConnected.remote.connected && isCopierStatusFresh(observedAt, receivedAt, true);
+        if (acceptAgentStatus(firstConnected.remote.status, observedAt, fresh)) {
+          setDisplayFeedReceipt({ userId, receivedAt, feeds: firstConnected.remote.status.accountDisplay ?? [] });
+          setAgentTransport('relay');
+          setRelayConnectionId(firstConnected.connectionId);
+          lastAgentRouteRef.current = { transport: 'relay', relayConnectionId: firstConnected.connectionId };
         }
       }
+
+      const candidates = await relayPoll.settled;
+      if (stopped || !isCurrent() || !copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) return;
+      setDisplayFeedReceipt({
+        userId,
+        receivedAt: Date.now(),
+        feeds: candidates.flatMap(candidate => candidate.remote?.connected
+          ? candidate.remote.status.accountDisplay ?? []
+          : []),
+      });
+      if (firstConnected) return;
+
+      const retained = newestCopierRelaySnapshot(candidates, preferredConnectionId);
+      if (retained?.remote) {
+        const receivedAt = Date.now();
+        const observedAt = copierRelayObservedAt(retained.remote, receivedAt);
+        if (acceptAgentStatus(retained.remote.status, observedAt, false)) {
+          setAgentTransport('relay');
+          setRelayConnectionId(retained.connectionId);
+        }
+      }
+      markAgentStatusStale();
     };
     const poller = createCopierForegroundPoller({
       visible: () => document.visibilityState !== 'hidden',
       read: poll,
-      invalidate: () => setAgentStatusFresh(false),
+      invalidate: markAgentStatusStale,
     });
-    document.addEventListener('visibilitychange', poller.resume);
+    let wasVisible = document.visibilityState !== 'hidden';
+    const resume = () => {
+      const visible = document.visibilityState !== 'hidden';
+      if (visible && !wasVisible) forceDirectAgentProbeRef.current = true;
+      wasVisible = visible;
+      setFreshnessNow(Date.now());
+      poller.resume();
+    };
+    document.addEventListener('visibilitychange', resume);
     window.addEventListener('online', poller.resume);
     window.addEventListener('focus', poller.resume);
     return () => {
       stopped = true;
       poller.stop();
-      document.removeEventListener('visibilitychange', poller.resume);
+      document.removeEventListener('visibilitychange', resume);
       window.removeEventListener('online', poller.resume);
       window.removeEventListener('focus', poller.resume);
     };
-  }, [agentClient, connectedConnectionIds, userId]);
+  }, [acceptAgentStatus, agentClient, connectedConnectionIds, markAgentStatusStale, relayConnectionId, userId]);
 
   useEffect(() => {
     const prefix = '#copier-pair=';
@@ -809,12 +974,12 @@ if (!(await confirmAction({
   message: 'Ulož nejdřív případné změny v TradingView. AlphaTrade aplikaci standardně ukončí a znovu spustí s připojením pro ENTRY/EXIT snímky. Kopírka ani brokerové příkazy se nezmění.',
   confirmLabel: 'Ukončit a znovu spustit',
 }))) return;
-setAgentStatus((await executeAgent({
+acceptAgentStatus((await executeAgent({
   type: 'snapshot-test',
   requestId: crypto.randomUUID(),
   repairCamera: true,
 })).status);
-  }, [confirmAction, executeAgent]);
+  }, [acceptAgentStatus, confirmAction, executeAgent]);
 
   const tabs: Array<{ id: TradovateLiveTab; label: string; icon: React.ElementType }> = [
     { id: 'connections', label: 'Připojení', icon: Link2 },
@@ -961,7 +1126,7 @@ setAgentStatus((await executeAgent({
                   publicKey: device.publicKey,
                   deviceName: device.deviceName,
                 });
-                setAgentStatus((await agentClient.execute({ type: 'device-paired', deviceId: device.deviceId })).status);
+                acceptAgentStatus((await agentClient.execute({ type: 'device-paired', deviceId: device.deviceId })).status);
                 return;
               }
               await downloadPilotLease(connectionId);
@@ -998,7 +1163,7 @@ setAgentStatus((await executeAgent({
               riskConfigSupported={supportsCopierRiskConfig(agentStatus)}
               copierArmed={copierUiDemo ? false : agentStatus?.controller.armed === true}
               copierStatusPending={!copierUiDemo && (!agentStatusResolved || !runtimeAvailable)}
-              dailyPnlPending={live.dataEnrichmentPending}
+              dailyPnlPending={false}
               brokerDailyPnlByAccount={brokerDailyPnlByAccount}
               dailyStats={agentStatus?.controller.dailyStats ?? null}
               marketPrices={agentStatus?.marketPrices ?? []}
@@ -1018,7 +1183,7 @@ setAgentStatus((await executeAgent({
               lastDisarm={copierUiDemo ? undefined : agentStatus?.controller.lastDisarm}
               onVerifyEligibility={async accountId => {
                 const result = await executeAgent({ type: 'verify-account-eligibility', accountId });
-                setAgentStatus(result.status);
+                acceptAgentStatus(result.status);
                 await live.refreshData();
                 const remaining = result.status.controller.accountEligibility
                   ?.find(entry => entry.accountId === accountId && entry.state !== 'active');
@@ -1028,11 +1193,12 @@ setAgentStatus((await executeAgent({
               }}
               executionGroupId={executionGroup?.id ?? null}
               runtimeGroup={agentStatus?.group ?? null}
+              workerAccountRoutes={workerAccountRoutes}
               onGroupsChange={setCopyGroups}
               onSwitchAndArm={armLiveGroup}
               onArmLive={executionGroup ? async () => armLiveGroup(executionGroup) : undefined}
-              onDisarm={async () => setAgentStatus((await executeAgent({ type: 'disarm' })).status)}
-              onEmergencyStop={async () => setAgentStatus((await executeAgent({ type: 'kill-switch' })).status)}
+              onDisarm={async () => { await executeSafetyCommand({ type: 'disarm' }); }}
+              onEmergencyStop={async () => { await executeSafetyCommand({ type: 'kill-switch' }); }}
               onDayLock={async () => {
                 if (!(await confirmAction({
                   title: 'Zamknout den',
@@ -1040,7 +1206,7 @@ setAgentStatus((await executeAgent({
                   confirmLabel: 'Zamknout den',
                   tone: 'danger',
                 }))) return;
-                setAgentStatus((await executeAgent({
+                acceptAgentStatus((await executeSafetyCommand({
                   type: 'lock-until-session-end',
                   reason: 'Ruční zámek dne z AlphaTrade LIVE UI',
                 })).status);
@@ -1059,7 +1225,7 @@ setAgentStatus((await executeAgent({
               group={agentStatus?.group ?? null}
               status={agentStatus?.controller ?? null}
               brokerDailyPnlByAccount={brokerDailyPnlByAccount}
-              brokerDailyPnlPending={live.dataEnrichmentPending}
+              brokerDailyPnlPending={false}
               disabled={configMutationPending || copyGroupStatusPollFence.inFlight || !runtimeAvailable || !supportsCopierRiskConfig(agentStatus)}
               onSaveGroup={agentStatus ? saveRiskGroup : undefined}
             />
@@ -1117,7 +1283,7 @@ setAgentStatus((await executeAgent({
         />
       ) : null}
       {mobileLayout && selectedLiveAccount ? <LiveMobileAccountDetail key={selectedLiveAccount.id} account={selectedLiveAccount} history={selectedAccount ?? undefined} orders={copyTradeOrders}
-        dailyPnlPending={live.dataEnrichmentPending} leader={selectedMembership?.leaderAccountId === selectedAccountId}
+        dailyPnlPending={false} leader={selectedMembership?.leaderAccountId === selectedAccountId}
         multiplier={selectedMembership?.followers.find(f => f.accountId === selectedAccountId)?.multiplier ?? 1}
         onClose={() => setSelectedAccountId(null)} /> : selectedAccount ? <AccountDetail account={selectedAccount} profile={profileMap(live.profiles).get(String(selectedAccount.id))} onClose={() => setSelectedAccountId(null)} /> : null}
     </div>

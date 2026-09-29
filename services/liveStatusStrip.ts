@@ -1,5 +1,6 @@
 import type { CopierControllerStatus } from './copierRuntimeController';
 import { isRecentCopierDisarm } from '../lib/copierDisarmNotice';
+import { resolveCopierDisarmRecord } from '../lib/copierDisarmReason';
 import type { CopierJournalRecorderStatus, CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
 
 export type LiveStatusTone = 'muted' | 'ok' | 'warn' | 'danger';
@@ -83,7 +84,7 @@ const copierValue = (current: CopierControllerStatus, now: number): { value: str
     };
   }
   if (!current.armed) {
-    const last = current.lastDisarm;
+    const last = resolveCopierDisarmRecord(current.lastDisarm, current.lastError);
     if (last && last.trigger !== 'manual' && isRecentCopierDisarm(last.at, now)) {
       return { value: 'Vypnuta automaticky', tone: 'warn', title: `${last.title} ${last.nextStep}` };
     }
@@ -175,7 +176,7 @@ export function buildLiveStatusStrip(input: LiveStatusStripInput): LiveStatusStr
       tone: positionLoss ? 'danger' : 'warn', title: journalHealthMessage(recorders) });
   }
 
-  const last = current?.lastDisarm;
+  const last = resolveCopierDisarmRecord(current?.lastDisarm, current?.lastError);
   const dangerous = Boolean(current && !current.armed && last && isRecentCopierDisarm(last.at, now) && last.trigger !== 'manual'
     && (last.copiesOutcome === 'left-open-unprotected' || last.copiesOutcome === 'unknown'));
   const notice = dangerous && last

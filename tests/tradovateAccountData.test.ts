@@ -257,6 +257,29 @@ describe('Tradovate read-only account data', () => {
     expect(paths.some(path => /fill|cashBalanceLog|RiskStatus|AutoLiq|cashBalance\/list/.test(path))).toBe(false);
   });
 
+  it('nečitelné tělo 200 odpovědi u pozic není prázdný seznam ani flat', async () => {
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith('/account/list')) return json([{ id: 10, name: 'FAST-10' }]);
+      if (path.endsWith('/position/list')) return new Response('<html>gateway</html>', { status: 200, headers: { 'content-type': 'text/html' } });
+      if (path.endsWith('/order/list')) return json([]);
+      if (path.endsWith('/orderVersion/list')) return json([]);
+      if (path.endsWith('/contract/items')) return json([]);
+      if (path.endsWith('/cashBalance/getcashbalancesnapshot')) return json({ totalCashValue: 50_000, netLiq: 50_000, openPnL: 0 });
+      return json({ error: 'unexpected bootstrap request' }, 500);
+    }) as typeof fetch;
+
+    const result = await loadTradovateAccountData({
+      baseUrl: 'https://demo.tradovateapi.com/v1',
+      accessToken: 'token',
+      fetchImpl,
+      detail: 'bootstrap',
+    });
+
+    expect(result.accounts[0].readState.positions.availability).not.toBe('empty');
+    expect(result.accounts[0].readState.positions.availability).not.toBe('available');
+  });
+
   it('doplní working order z nejnovější orderVersion a Suspended nepočítá jako aktivní', async () => {
     const fetchImpl = (async (input: string | URL | Request) => {
       const path = new URL(String(input)).pathname;

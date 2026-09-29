@@ -10,6 +10,11 @@ import type { CopierAccountRiskSnapshot, CopierControllerStatus } from '../servi
 import type { LiveAccount } from '../services/tradecopiaLiveService';
 
 const NOW = Date.UTC(2026, 8, 5, 14, 0);
+const pnlDisplay = (value: number, stale = false) => ({
+  value,
+  stale,
+  confirmedAt: new Date(NOW - (stale ? 120_000 : 1_000)).toISOString(),
+});
 
 const account = (id: number, name: string, realizedPnl: number): LiveAccount => ({
   id,
@@ -160,7 +165,10 @@ describe('LiveRiskSummaryCard', () => {
         account(300, 'Nejblíž limitu', 999),
         account(400, 'Vypnutý follower', -490),
       ],
-      brokerDailyPnlByAccount: { 100: -620, 200: -1_010, 300: -850, 400: -490 },
+      brokerDailyPnlByAccount: {
+        100: pnlDisplay(-620), 200: pnlDisplay(-1_010),
+        300: pnlDisplay(-850), 400: pnlDisplay(-490),
+      },
       now: NOW,
       onOpenRisk: () => undefined,
     }));
@@ -232,7 +240,7 @@ describe('LiveRiskSummaryCard', () => {
         account(200, 'Známý follower', -900),
         account(300, 'Chybějící follower', -990),
       ],
-      brokerDailyPnlByAccount: { 200: -900, 300: null },
+      brokerDailyPnlByAccount: { 200: pnlDisplay(-900) },
       now: NOW,
     }));
     const metricTag = markup.match(/<div[^>]*data-risk-summary-metric="Účet nejblíž limitu"[^>]*>/)?.[0] ?? '';
@@ -251,7 +259,7 @@ describe('LiveRiskSummaryCard', () => {
         account(300, 'Broker by vyhrál', -900),
       ],
       accountRisk: [risk(200, -950), risk(300, -200)],
-      brokerDailyPnlByAccount: { 200: -50, 300: -900 },
+      brokerDailyPnlByAccount: { 200: pnlDisplay(-50), 300: pnlDisplay(-900) },
       // Načítání PWA broker read-modelu nesmí zneplatnit čerstvý worker snapshot.
       brokerDailyPnlPending: true,
       now: NOW,
@@ -263,7 +271,7 @@ describe('LiveRiskSummaryCard', () => {
     expect(markup).not.toContain('Broker by vyhrál</b>');
   });
 
-  it('stale nebo chybějící worker P&L nepřekryje starší broker hodnotou', () => {
+  it('stale worker P&L ponechá jako šedou poslední známou hodnotu, chybějící nepřekryje brokerem', () => {
     const singleFollowerGroup: CopyGroupConfig = {
       ...group,
       followers: [group.followers[0]],
@@ -272,22 +280,27 @@ describe('LiveRiskSummaryCard', () => {
       group: singleFollowerGroup,
       accounts: [account(200, 'Stale worker', -950)],
       accountRisk: [risk(200, -950, { verifiedAt: NOW - 90_000 })],
-      brokerDailyPnlByAccount: { 200: -950 },
+      brokerDailyPnlByAccount: { 200: pnlDisplay(-950) },
       now: NOW,
     }));
     const missing = renderToStaticMarkup(summary({
       group: singleFollowerGroup,
       accounts: [account(200, 'Chybějící worker hodnota', -950)],
       accountRisk: [risk(200, null)],
-      brokerDailyPnlByAccount: { 200: -950 },
+      brokerDailyPnlByAccount: { 200: pnlDisplay(-950) },
       now: NOW,
     }));
 
-    for (const markup of [stale, missing]) {
-      const metricTag = markup.match(/<div[^>]*data-risk-summary-metric="Účet nejblíž limitu"[^>]*>/)?.[0] ?? '';
-      expect(metricTag).toContain('data-metric-known="false"');
-      expect(markup).toContain('Denní P&amp;L všech účtů není ověřené');
-      expect(markup).not.toContain('95 % ·');
-    }
+    const staleMetric = stale.match(/<div[^>]*data-risk-summary-metric="Účet nejblíž limitu"[^>]*>/)?.[0] ?? '';
+    expect(staleMetric).toContain('data-metric-known="true"');
+    expect(staleMetric).toContain('data-metric-state="last-known"');
+    expect(stale).toContain('95 % ·');
+    expect(stale).toContain('poslední potvrzení před 1 min');
+    expect(stale).toContain('text-[var(--text-secondary)]');
+
+    const missingMetric = missing.match(/<div[^>]*data-risk-summary-metric="Účet nejblíž limitu"[^>]*>/)?.[0] ?? '';
+    expect(missingMetric).toContain('data-metric-known="false"');
+    expect(missing).toContain('Denní P&amp;L všech účtů není ověřené');
+    expect(missing).not.toContain('95 % ·');
   });
 });

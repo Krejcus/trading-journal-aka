@@ -96,6 +96,7 @@ describe('LIVE kompaktní karty (telefon)', () => {
     const markup = renderToStaticMarkup(React.createElement(LiveCopyTradeOverview, {
       snapshot,
       orders: [workingLeaderLimit],
+      runtimeAvailable: true,
     }));
 
     expect(markup).toContain('data-testid="compact-group-list"');
@@ -123,6 +124,10 @@ describe('LIVE kompaktní karty (telefon)', () => {
     // název skupiny, Flatten All i vypínač najednou.
     expect(markup).toContain('Firmy');
     expect(markup).toContain('>Flatten All<');
+    const primaryControls = markup.match(/<header data-mobile-primary-power="true"[\s\S]*?<\/header>/)?.[0];
+    expect(primaryControls).toBeDefined();
+    expect(primaryControls).not.toContain('Flatten All');
+    expect(markup).toContain('data-mobile-flatten-zone="true"');
 
     // Dvě sekce místo jedné tabulky. Rozlišuje je popisek pravého sloupce:
     // účty v trhu mají „Otevřený“, zbytek „Dnes“.
@@ -250,6 +255,7 @@ describe('LIVE mobilní ovládání skupiny', () => {
       orders: [],
       executionGroupId: 'group-main',
       commandAdapter: adapter,
+      runtimeAvailable: true,
       followerParticipation: [participation(followerId, { configuredEnabled: false, effectiveEnabled: false })],
     }));
     expect(markup).toContain('aria-label="Zapnout kopírování na účet Follower DEMO"');
@@ -267,6 +273,7 @@ describe('LIVE mobilní ovládání skupiny', () => {
       orders: [],
       executionGroupId: 'group-main',
       commandAdapter: adapter,
+      runtimeAvailable: true,
       followerParticipation: [participation(followerId, { canToggle: false, blockers: ['Leader má otevřenou pozici'] })],
     }));
     const switchTag = markup.match(/<button[^>]*role="switch"[^>]*Follower DEMO[^>]*>/)?.[0] ?? '';

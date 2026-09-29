@@ -10,7 +10,7 @@ import type { LiveCopyTradingAdapter, LiveCopyTradingCommand } from './liveCopyT
 
 export interface LocalCopierAgentClient {
   status(): Promise<LocalCopierAgentStatus>;
-  execute(command: LocalCopierAgentCommand): Promise<LocalCopierAgentCommandResult>;
+  execute(command: LocalCopierAgentCommand, options?: { signal?: AbortSignal }): Promise<LocalCopierAgentCommandResult>;
   adapter(): LiveCopyTradingAdapter;
 }
 
@@ -52,7 +52,7 @@ export function createLocalCopierAgentClient(baseUrl = LOCAL_COPIER_AGENT_BASE_U
     }
   };
 
-  const execute = async (command: LocalCopierAgentCommand) => {
+  const execute = async (command: LocalCopierAgentCommand, options: { signal?: AbortSignal } = {}) => {
     if (!current) await status();
     const response = await fetch(`${baseUrl}/v1/command`, {
       method: 'POST',
@@ -61,6 +61,7 @@ export function createLocalCopierAgentClient(baseUrl = LOCAL_COPIER_AGENT_BASE_U
         'X-AlphaTrade-Agent-Nonce': current?.nonce ?? '',
       },
       body: JSON.stringify(command),
+      signal: options.signal,
     });
     const payload = await readJson(response) as LocalCopierAgentCommandResult;
     current = payload.status;

@@ -43,12 +43,12 @@ describe('translateCopierRejectReason', () => {
     });
   });
 
-  it('neznámý důvod zkrátí jen v prezentaci a neztratí originál', () => {
+  it('neznámý raw důvod schová z viditelné hlášky a zachová ho jen v detailu', () => {
     const original = `Unexpected  broker\nrejection ${'x'.repeat(220)}`;
     const translated = translateCopierRejectReason(original);
     expect(translated.category).toBe('unknown');
-    expect(translated.message).toHaveLength(160);
-    expect(translated.message.endsWith('…')).toBe(true);
+    expect(translated.message).toBe('Broker příkaz odmítl; přesný důvod je v detailu');
+    expect(translated.message).not.toContain('Unexpected');
     expect(translated.original).toBe(original);
   });
 });

@@ -14,6 +14,9 @@ export type CopierCopiesOutcome =
   | 'unknown';
 
 export type CopierDisarmCode =
+  | 'config-change'
+  | 'unexplained-position-divergence'
+  | 'prop-limit'
   | 'follower-position-mismatch'
   | 'follower-transition-unverified'
   | 'follower-position-check-failed'
@@ -22,6 +25,7 @@ export type CopierDisarmCode =
   | 'modify-unconfirmed-filled'
   | 'flat-sweep-deadline'
   | 'flat-sweep-failed'
+  | 'protective-stop-retained'
   | 'blocked-account-ineligible'
   | 'protective-order-incomplete'
   | 'sequence-broken'
@@ -53,6 +57,18 @@ export interface CopierDisarmRecord {
 export const COPIER_DISARM_HISTORY_LIMIT = 20;
 
 const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }> = {
+  'config-change': {
+    title: 'Kopírka se vypnula kvůli uložení změny skupiny.',
+    nextStep: 'Zkontroluj uložené účty a pravidla; nový ARM zapni až po ověření skupiny.',
+  },
+  'unexplained-position-divergence': {
+    title: 'Pozice followerů se odchýlily od očekávané kopie.',
+    nextStep: 'Ověř pozice a ochranné příkazy všech dotčených účtů v Tradovate, potom spusť Kontrolu pozic.',
+  },
+  'prop-limit': {
+    title: 'Prop limit zablokoval nebo ukončil kopírování na účtu.',
+    nextStep: 'Ověř stav a limity účtu u prop firmy i v Tradovate; před novým ARM účet vyřaď nebo autoritativně ověř.',
+  },
   'follower-position-mismatch': {
     title: 'Pozice followera nesouhlasí s očekávaným násobkem leadera.',
     nextStep: 'Otevři Tradovate, porovnej pozice a potom spusť Kontrolu pozic.',
@@ -84,6 +100,10 @@ const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }
   'flat-sweep-failed': {
     title: 'Úklid ochranných příkazů po zploštění se nepodařilo potvrdit.',
     nextStep: 'Ověř v Tradovate, že nezůstal working SL nebo target, a potom spusť Kontrolu pozic.',
+  },
+  'protective-stop-retained': {
+    title: 'Follower drží svůj SL, který leader zrušil — rozhodni ručně v Tradovate.',
+    nextStep: 'Ověř otevřenou pozici followera a jeho working SL přímo v Tradovate; ochranu neruš naslepo.',
   },
   'blocked-account-ineligible': {
     title: 'Do kopírování vstoupil účet, který nebyl způsobilý pro nový příkaz.',
@@ -166,8 +186,16 @@ export function classifyCopierDisarmReason(
   if (trigger === 'transport') return 'transport-lost';
 
   const text = detail.replace(/\s+/g, ' ').trim();
+  if (/\bconfig-change\b|uložen(?:í|ím).*změn[ay] skupiny/i.test(text)) return 'config-change';
+  if (/unexplained-position-divergence|nevysvětlen[áou]+ (?:position )?divergenc/i.test(text)) {
+    return 'unexplained-position-divergence';
+  }
+  if (/\bprop[- ]limit\b|prop limitu|drawdown floor|liquidation-only/i.test(text)) return 'prop-limit';
   if (/flat sweep nedokončen.*deadline/i.test(text)) return 'flat-sweep-deadline';
   if (/flat sweep nedokončen/i.test(text)) return 'flat-sweep-failed';
+  if (/follower drží (?:svůj )?sl, který leader zrušil|ochranný cancel byl zastaven před odesláním/i.test(text)) {
+    return 'protective-stop-retained';
+  }
   if (/modify.*(?:nebyl potvrzen|skončil).*filled|objednávka skončila jako filled/i.test(text)) {
     return 'modify-unconfirmed-filled';
   }
@@ -211,7 +239,12 @@ export function createCopierDisarmRecord(input: {
   code?: CopierDisarmCode;
 }): CopierDisarmRecord {
   const detail = input.detail.trim() || 'Bez technického detailu';
-  const code = input.code ?? classifyCopierDisarmReason(detail, input.trigger);
+  const requestedCode = input.code ?? classifyCopierDisarmReason(detail, input.trigger);
+  // Status přichází z nezávisle nasazovaného workeru. Novější worker může
+  // poslat kód, který starší UI ještě nezná; nesmí tím shodit incident panel.
+  const code = Object.prototype.hasOwnProperty.call(COPY_BY_CODE, requestedCode)
+    ? requestedCode
+    : classifyCopierDisarmReason(detail, input.trigger);
   const copy = COPY_BY_CODE[code];
   return {
     at: input.at,
@@ -222,4 +255,43 @@ export function createCopierDisarmRecord(input: {
     copiesOutcome: input.copiesOutcome,
     nextStep: copy.nextStep,
   };
+}
+
+/**
+ * Starší worker mohl uložit `unknown`, přestože detail nebo lastError nese
+ * známou příčinu. UI ji smí zpřesnit, ale nesmí měnit výsledek kopií.
+ */
+export function resolveCopierDisarmRecord(
+  record: CopierDisarmRecord | undefined,
+  lastError?: string | null,
+): CopierDisarmRecord | undefined {
+  if (!record) return undefined;
+  // Worker posílá stabilní kód; text vlastní UI, aby i nový `config-change`
+  // dostal přesnou českou hlášku bez závislosti na verzi workeru.
+  if (record.code !== 'unknown' && Object.prototype.hasOwnProperty.call(COPY_BY_CODE, record.code)) {
+    return createCopierDisarmRecord({
+      at: record.at,
+      trigger: record.trigger,
+      detail: record.detail,
+      copiesOutcome: record.copiesOutcome,
+      code: record.code,
+    });
+  }
+  const detailCode = classifyCopierDisarmReason(record.detail, record.trigger);
+  const fallbackDetail = lastError?.trim() || '';
+  const fallbackCode = fallbackDetail
+    ? classifyCopierDisarmReason(fallbackDetail, record.trigger)
+    : 'unknown';
+  const detail = detailCode !== 'unknown' ? record.detail
+    : fallbackCode !== 'unknown' ? fallbackDetail
+      : record.detail;
+  const code = detailCode !== 'unknown' ? detailCode : fallbackCode;
+  if (code === 'unknown') return record;
+  return createCopierDisarmRecord({
+    at: record.at,
+    trigger: record.trigger,
+    detail,
+    copiesOutcome: record.copiesOutcome,
+    code,
+  });
 }

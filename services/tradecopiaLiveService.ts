@@ -52,6 +52,10 @@ export interface LiveAccount {
   /** Confirmed profile/plan without DLL; missing broker data alone is not proof. Display only. */
   riskDisplayDailyLossDisabled?: boolean;
   riskDisplayPending?: boolean;
+  /** Per-connection full enrichment is still running; never an execution gate. */
+  dailyPnlPending?: boolean;
+  /** Human-readable cause for a definitive missing risk value. */
+  riskDisplayUnavailableReason?: string;
   id: number;
   entityId: string | null;
   name: string;
@@ -60,12 +64,17 @@ export interface LiveAccount {
   accountSize: number | null;
   /** Broker/profile daily loss limit used by copier eligibility read-model. */
   dailyLossLimit?: number | null;
+  /** Timestamp of the profile or broker limit actually used by the display. */
+  dailyLossLimitUpdatedAt?: string | null;
+  /** Profilový čas je čas konfigurace, ne čas posledního broker čtení. */
+  dailyLossLimitSource?: 'profile' | 'broker';
   balance: number;
   equity: number;
   realizedPnl: number;
   dailyPnlAvailable?: boolean;
   dailyPnlTradeDate?: string;
   dailyPnlUpdatedAt?: string | null;
+  dailyPnlUnavailableReason?: string;
   weekRealizedPnl: number;
   unrealizedPnl: number;
   unrealizedPnlSource?: 'broker' | 'estimated' | 'stale';

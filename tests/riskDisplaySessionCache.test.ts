@@ -30,11 +30,19 @@ describe('DLL/DD reload cache',()=>{
   vi.useFakeTimers();vi.setSystemTime(now);vi.stubGlobal('window',{sessionStorage:store});
   try {
    const html=renderToStaticMarkup(React.createElement(LiveRiskValue,{identity,storageScope:'u',enabled:true,value:null,confirmedAt:null,verified:false,color:()=>'text-emerald-500',label:'DLL zbývá'}));
-   expect(html).toContain('1,200');expect(html).toContain('text-emerald-500');expect(html).toContain('data-risk-display="last-known"');expect(html).not.toContain('Načítám');
+   expect(html).toContain('1,200');expect(html).toContain('text-[var(--text-secondary)]');expect(html).toContain('data-risk-display="last-known"');expect(html).toContain('poslední známá hodnota před 2 min');expect(html).not.toContain('Načítám');
   } finally {vi.unstubAllGlobals();vi.useRealTimers();}
  });
  it('tolerates blocked storage without affecting the dashboard',()=>{
   const blocked={getItem:()=>{throw Error();},setItem:()=>{throw Error();},removeItem:()=>{throw Error();}};
   expect(readRiskDisplaySession('u',identity,blocked,now)).toBeNull();expect(()=>writeRiskDisplaySession('u',identity,saved,blocked)).not.toThrow();
+ });
+ it.each([
+   ['unavailable','nedostupné','Broker čtení selhalo'],
+   ['unknown-limit','limit neznámý','Limit nepotvrzen'],
+   ['no-limit','bez limitu','Plán nemá DLL'],
+ ] as const)('vykreslí definitivní stav %s místo věčného skeletonu',(state,text,title)=>{
+   const html=renderToStaticMarkup(React.createElement(LiveRiskValue,{identity:`${identity}:${state}`,enabled:state!=='no-limit',value:null,confirmedAt:null,verified:false,state,reason:title,color:()=>'text-emerald-500',label:'DLL zbývá'}));
+   expect(html).toContain(text);expect(html).toContain(title);expect(html).not.toContain('Načítám');
  });
 });

@@ -113,6 +113,20 @@ describe('known rejection versus unknown outcome', () => {
     expect(copierArmRejection(new Error('tighten-only'))).toContain('odmítnuto');
     expect(copierArmRejection(new Error('Pravidla jdou dnes jen zpřísnit: safety.entryCooldownMinutes (reset po konci session)'))).toContain('pauza mezi obchody');
   });
+  it.each([
+    ['kopírka je zapnutá s jinou konfigurací — nejdřív vypni', 'jinou konfigurací'],
+    ['copier-relay-arm-config-conflict', 'Jiné zapnutí už čeká'],
+    ['copier-relay-worker-disconnected', 'Nic se nezapnulo'],
+    ['ARM odmítnut: worker není připojen k brokeru', 'není připojený k brokeru'],
+    ['ARM odmítnut: vypršel deadline potvrzení; kopírka zůstává DISARMED', 'Zapnutí nestihlo proběhnout včas — nic se nezapnulo'],
+    ['command-expired-before-execution', 'Zapnutí nestihlo proběhnout včas — nic se nezapnulo'],
+    ['command-expired-or-predates-worker-session', 'Zapnutí nestihlo proběhnout včas — nic se nezapnulo'],
+    ['superseded-by-brake', 'Zapnutí zrušila novější brzda'],
+    ['ARM odmítnut: během přípravy přišla bezpečnostní brzda', 'Zapnutí zrušila novější brzda'],
+    ['ARM odmítnut: příkaz je starší než poslední bezpečnostní brzda (DISARM, kill switch nebo denní lock)', 'ARM je starší než poslední brzda'],
+  ])('recognizes final ARM rejection %s', (message, expected) => {
+    expect(copierArmRejection(new Error(message))).toContain(expected);
+  });
   it.each(['Worker timeout', 'Příkaz včas nepotvrdil', 'network error', 'tighten-only timeout'])('keeps %s unknown', message => {
     expect(copierArmRejection(new Error(message))).toBeNull();
   });

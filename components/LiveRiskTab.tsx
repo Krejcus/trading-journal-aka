@@ -10,6 +10,7 @@ import type {
 import type { LiveSnapshot } from '../services/tradecopiaLiveService';
 import LiveAccountRiskTable from './LiveAccountRiskTable';
 import LiveDayRulesCard, { DayLockBanner } from './LiveDayRulesCard';
+import type { LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
 
 const time = new Intl.DateTimeFormat('cs-CZ', {
   hour: '2-digit',
@@ -32,7 +33,7 @@ export interface LiveRiskTabProps {
   accountProfiles?: TradovateAccountProfile[];
   group: CopyGroupConfig | null;
   status: CopierControllerStatus | null;
-  brokerDailyPnlByAccount?: Readonly<Record<string, number | null>>;
+  brokerDailyPnlByAccount?: Readonly<Record<string, LiveBalanceDisplay>>;
   brokerDailyPnlPending?: boolean;
   disabled?: boolean;
   runtimeAvailable?: boolean;

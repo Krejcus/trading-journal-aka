@@ -811,6 +811,133 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   (`@types/chrome`, `@crxjs/vite-plugin`) a podle plánu se zde nesmí spouštět
   `npm ci`/`npm install`.
 
+### 2026-09-29 — UI-10e: jisté ARM rejecty, durable brzdy a ochranný follower SL (Codex)
+
+- ARM dialog rozlišuje nové definitivní rejecty workeru/relay od neověřeného
+  výsledku: konflikt konfigurace, odpojený worker, vypršený deadline včetně
+  `command-expired-*`, `superseded-by-brake`, brzdu během přípravy a ARM starší
+  než poslední brzda. Každý říká česky, že se nic nezapnulo; síťový timeout
+  bez autoritativního výsledku dál zůstává neověřený.
+- DISARM, kill switch i ruční day-lock používají společnou safety cestu. Lokální
+  loopback si ponechal 10s timeout, relay brzda se už po 10 s neabortuje. Když
+  po 35 s stále čeká, UI ukáže informační text „Brzda čeká ve frontě workeru
+  (platí do HH:MM)“ ze serverového `expiresAt`; nevydává ji za chybu ani za
+  potvrzený úspěch a pravidelný status polling dál převezme pozdější výsledek.
+- Brokerový V5 audit/lastError „follower drží SL, který leader zrušil“ a závod
+  ochranného cancelu mají vlastní kód `protective-stop-retained` a v dashboardu
+  i Událostech text „Follower drží svůj SL, který leader zrušil — rozhodni
+  ručně v Tradovate.“ Historie se překládá přes aktuální UI mapu; neznámý nový
+  worker kód už incident panel neshodí a zkusí bezpečnou klasifikaci detailu.
+- Ověřeny přesné core texty V16 (`nevysvětlená divergence ... před leader
+  exitem`) a V13 (`Flat sweep nedokončen`, s/bez deadline) proti českým titulům.
+  Cílené regrese 87/87. Povinná sada: 149 souborů / 1744 testů v sandboxu;
+  jediný loopback soubor zde narazil na `listen EPERM`, samostatně mimo sandbox
+  prošel 49/49, tedy celkem 150 souborů / 1793 testů. `npx tsc --noEmit` hlásí
+  jen povolené staré chyby `extension/` (Chrome typy a `@crxjs/vite-plugin`),
+  `git diff --check` čistý. Bez npm install/ci, Tradovate/agent mutací, commitu,
+  pushnutí, deploye nebo reinstalace workeru.
+
+### 2026-09-28 — UI-10d: adversariální hardening ovládání a LIVE dat (Codex)
+
+- Opraveny všechny vysoké a střední nálezy z `docs/reviews/copier-ui-review-20260928.md`
+  a převzaty důkazní scratch scénáře do trvalých testů. Neověřený nebo retained
+  stav už dovolí pouze risk-snižující flatten/DISARM/kill akce; followery,
+  násobky, editor i šablony jsou do ověření blokované a všechny skupiny ukazují
+  `Neověřeno`. Dialogy odvozují API readiness z `runtimeAvailable`.
+- Relay čerstvost používá serverové `ageMs` (včetně tolerance budoucího času),
+  retention se zapisuje jen z přijatého runtime stavu a brzdy volí trasu
+  `poslední ověřená -> aktuální -> local`. Po zhruba 10 s timeoutu UI výslovně
+  hlásí neověřený výsledek. Lokální ACK fence odmítá starší odpověď; úplné
+  distribuované řešení zůstává worker `gateSeq` v balíčku 7.
+- LIVE full refresh je single-flight po connection, pending ruší starý retry,
+  retry timer i sloučený `visibilitychange`/`focus` respektují backoff a běžící
+  request. Explicitní broker `Retry-After` se nezkracuje, prefetch 429 se ukládá
+  a trvalá chyba ukončí loading stav textem chyby.
+- DLL se při full loadingu neztrácí, používá stejný live daily P&L zdroj jako
+  displej a konzervativně horší z dostupných hodnot. `profile.updatedAt` není
+  freshness důkaz limitu; stale P&L se nepovažuje za verified. Neplatný
+  `capturedAt` už neshodí render.
+- Ověření: adversariální/změnový balík 195/195; povinná plná sada
+  `npx vitest run tests/liveCopy tests/copier tests/tradovate tests/live tests/localCopier`
+  1771/1771 (150 souborů). `npx tsc --noEmit` hlásí jen předem povolené chyby
+  v `extension/` (chybějící Chrome typy a `@crxjs/vite-plugin`), žádnou chybu
+  aplikace/testů. `git diff --check` čistý. Bez `npm ci/install`, broker/agent
+  mutací, commitu, push/deploye nebo reinstalace workeru.
+
+### 2026-09-28 — UI-10c: worker manifest v editoru, lidské blokery a přesný DISARM důvod (Codex)
+
+- Editor skupiny spojuje webový OAuth katalog s čerstvým manifestem z
+  `status.devices` (legacy fallback `device` / `connectionUsage`) a drží tři
+  stavy: routovatelný, chybí v Mac workeru, nelze ověřit. Účet z jednoznačně
+  chybějícího připojení nejde nově vybrat ani uložit a dostane odznak s krokem
+  manifest + bezpečný reinstall; nečerstvý/neúplný status pouze varuje a výběr
+  neblokuje. `accountDisplay` se záměrně nepoužívá k rozhodování.
+- Odmítnutí změn už pro známé případy neukazuje interní kódy/ID: race radí
+  několik sekund počkat, ARMED radí bezpečně vypnout, outbox vede do Událostí
+  a chybějící OAuth jmenuje všechny známé účty a vysvětluje, že samotné
+  Connections bez manifestu nestačí. Neznámý broker reject drží originál jen
+  v detailu, ne v hlavním textu.
+- DISARM notice/panel/status strip zpřesní starý `unknown` z `lastDisarm.detail`
+  a poté `lastError`, aniž by domýšlel `copiesOutcome`. Přibyly UI kódy pro
+  nevysvětlenou divergenci, prop limit a budoucí `config-change`; text posledního
+  je přesně „Kopírka se vypnula kvůli uložení změny skupiny.“
+- Mobilní `Flatten All` je na samostatném řádku mimo primární ARM zónu;
+  potvrzovací sheet i příkaz zůstaly beze změny. Cooldown texty výslovně říkají:
+  po potvrzeném flat kopírku vypne, blokuje ARM a nikdy ji sám nezapne; jiná
+  risk pauza pouze blokuje nové vstupy.
+- Ověření: 10 cílených souborů, 106/106 testů. `npx tsc --noEmit` nemá chybu
+  mimo povolené staré `extension/` chyby (chybějící Chrome typy a
+  `@crxjs/vite-plugin`); `git diff --check` čistý. Neběželo `npm ci/install`,
+  plná sada ani build. Bez Tradovate/agent mutation, reinstallu, commitu,
+  pushnutí a nasazení; worker zdroj se neměnil.
+
+### 2026-09-28 — UI-10b: DLL a denní P&L bez globálního pendingu (Codex)
+
+- Full enrichment se sleduje pro každé OAuth připojení zvlášť. Selhání už
+  neschová DLL a denní P&L ostatních účtů; neúspěšný full refresh má vlastní
+  retry 15/30/60 s až 10 min, respektuje per-connection 429 a při návratu do
+  popředí se obnoví pending nebo nejméně pět minut staré připojení.
+- Server u 429 čte `p-time` z těla a bez `Retry-After` používá 5 minut. Klient
+  backoff omezuje na 10 minut a nepřenáší limit jednoho připojení na ostatní.
+- Daily P&L i `DLL zbývá` používají tentýž validovaný realized vstup: novější
+  worker display feed má přednost před OAuth snapshotem. DLL timestamp skládá
+  jen z realized, unrealized a skutečně použitého limitu; cash timestamp není
+  vstup. Stará čísla jsou šedá a mají stáří v title i v mobilním detailu.
+- Risk hodnota rozlišuje loading, nedostupné, neznámý limit a účet bez DLL.
+  Poslední známá worker risk hodnota v souhrnné kartě po 15 s nezmizí, ale je
+  výslovně šedá a označená stářím; execution/risk brány dál používají jen
+  striktně čerstvá data.
+- Daily záznamy se párují přes Chicago trade date. UI inference DLL locku je
+  povolená jen pro aktuální trade date, dostupné daily P&L a nestale open P&L,
+  takže rollover 17:00–19:00 CT nevyrábí falešný zámek.
+- Ověřeno cíleně: 11 souborů / 135 testů. `npx tsc --noEmit` hlásí jen předem
+  povolené chyby `extension/` (chybějící Chrome typy a `@crxjs/vite-plugin`).
+  Bez npm install/ci, broker/Tradovate volání, commitu, push, deploye či změny
+  produkční konfigurace.
+
+### 2026-09-28 — UI-10a: stabilní stale stav kopírky a rychlejší relay poll (Codex)
+
+- `TradovateLiveDesk` už při jediném neúspěšném nebo starém relay čtení
+  nemaže poslední worker snapshot ani čas jeho pozorování. Okamžitě ho ale
+  označí jako nečerstvý, takže ARM, konfigurace a follower toggle zůstávají
+  fail-closed. Stav se zahazuje jen při změně identity uživatele; DISARM/kill
+  při stale stavu dál používá poslední skutečně ověřenou trasu.
+- Více relay připojení se čte souběžně: první odpověď s připojeným workerem se
+  zobrazí bez čekání na nejpomalejší spojení, přednostně se startuje poslední
+  použitá trasa a zbytek doběhne přes `Promise.allSettled` kvůli display feedům.
+- Poll a ACK snapshoty mají monotónní fence `(startedAt, controller.revision)`:
+  starší stav nepřepíše potvrzený DISARM/kill/toggle, ale restart workeru s
+  novějším `startedAt` může bezpečně začít od revision 0.
+- Čerstvost se odvozuje z tikajících hodin a `observedAt` s prahem 15 s.
+  Focus bez změny visibility stav nezneplatní, krátký shluk resume událostí se
+  slučuje a zahazují se jen čtení zahájená před posledním skrytím.
+- Desktop po pádu lokální cesty zkouší loopback znovu po 20 s a při návratu do
+  okna; nativní iOS build lokální sondu vůbec nespouští.
+- Ověřeno cíleně: 17 souborů / 144 testů včetně všech `liveCopy*`; typecheck má
+  jen předem známé chyby `extension/` kvůli chybějícím Chrome typům a
+  `@crxjs/vite-plugin`. Bez npm install/ci, Tradovate/agent volání, commitu,
+  push, deploye nebo reinstalace workeru.
+
 ### 2026-09-28 — Obchod bez celého SL/TP: výsledkový box + štítek (Claude)
 
 - Filip: vstup bez SL/TP (market in/out, jen SL, trailing stop položený po

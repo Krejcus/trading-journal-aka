@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, Lock, Save, ShieldCheck } from 'lucide-rea
 import type { TradovateAccountProfile } from '../lib/tradovateAccountProfileTypes';
 import type { CopierAccountRiskSnapshot, CopierFollowerCut, CopierControllerStatus } from '../services/copierRuntimeController';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
+import type { LiveBalanceDisplay } from '../lib/liveBalanceDisplay';
 import { copierRuntimePresentation } from '../lib/copierRuntimePresentation';
 import { copierAccountEligibilityPresentation } from '../lib/copierAccountEligibilityPresentation';
 import {
@@ -81,7 +82,7 @@ export const verifiedAccountDailyPnl = ({
 }: {
   workerRisk?: CopierAccountRiskSnapshot;
   workerRiskFeedAvailable: boolean;
-  brokerPnl?: number | null;
+  brokerPnl?: LiveBalanceDisplay | null;
   brokerPending: boolean;
   now: number;
 }): number | null => {
@@ -92,9 +93,45 @@ export const verifiedAccountDailyPnl = ({
       ? workerRisk.realizedPnlUsd
       : null;
   }
-  return !brokerPending && typeof brokerPnl === 'number' && Number.isFinite(brokerPnl)
-    ? brokerPnl
+  return !brokerPending && brokerPnl != null && !brokerPnl.stale
+    && typeof brokerPnl.value === 'number' && Number.isFinite(brokerPnl.value)
+    ? brokerPnl.value
     : null;
+};
+
+/** Display-only retention for the Risk summary. A stale worker value may stay
+ * visible, but verifiedAccountDailyPnl above remains strict for gates/colors. */
+export const displayedAccountDailyPnl = ({
+  workerRisk,
+  workerRiskFeedAvailable,
+  brokerPnl,
+  brokerPending,
+  now,
+}: {
+  workerRisk?: CopierAccountRiskSnapshot;
+  workerRiskFeedAvailable: boolean;
+  brokerPnl?: LiveBalanceDisplay | null;
+  brokerPending: boolean;
+  now: number;
+}): { value: number; stale: boolean; confirmedAt: number | null } | null => {
+  if (workerRiskFeedAvailable || workerRisk != null) {
+    return workerRisk
+      && !workerRisk.error
+      && Number.isFinite(workerRisk.verifiedAt)
+      && workerRisk.verifiedAt > 0
+      && workerRisk.verifiedAt <= now
+      && typeof workerRisk.realizedPnlUsd === 'number'
+      && Number.isFinite(workerRisk.realizedPnlUsd)
+      ? { value: workerRisk.realizedPnlUsd, stale: !accountRiskSnapshotIsFresh(workerRisk, now), confirmedAt: workerRisk.verifiedAt }
+      : null;
+  }
+  if (brokerPending || brokerPnl == null || typeof brokerPnl.value !== 'number' || !Number.isFinite(brokerPnl.value)) return null;
+  const parsedConfirmedAt = Date.parse(brokerPnl.confirmedAt ?? '');
+  return {
+    value: brokerPnl.value,
+    stale: brokerPnl.stale,
+    confirmedAt: Number.isFinite(parsedConfirmedAt) ? parsedConfirmedAt : null,
+  };
 };
 
 const optionalDailyLossCut = (raw: string): { valid: boolean; value?: number } => {
@@ -231,7 +268,7 @@ export interface LiveAccountRiskTableProps {
   accountProfiles?: TradovateAccountProfile[];
   accountRisk?: CopierAccountRiskSnapshot[];
   followerCuts?: CopierFollowerCut[];
-  brokerDailyPnlByAccount?: Readonly<Record<string, number | null>>;
+  brokerDailyPnlByAccount?: Readonly<Record<string, LiveBalanceDisplay>>;
   brokerDailyPnlPending?: boolean;
   sessionArmedAt?: number;
   disabled?: boolean;
@@ -409,6 +446,9 @@ export const LiveAccountRiskTable = ({
           <Save size={12} /> {saving ? 'Ukládám…' : 'Uložit limity'}
         </button>
       </header>
+      {controllerStatus?.armed ? (
+        <div role="status" className="mx-4 mb-2 rounded-md border border-amber-500/25 bg-amber-500/[0.07] px-3 py-1.5 text-[11px] font-bold text-amber-600">Kopírka je zapnutá — uložení změny ji vypne (DISARM). Pak ji znovu zapni přepínačem skupiny.</div>
+      ) : null}
 
       {!riskConfigSupported ? (
         <p data-risk-unsupported="true" className="border-b border-amber-500/25 px-3 py-2 text-[11px] font-semibold text-amber-600">{runtimeAvailable

@@ -112,7 +112,10 @@ describe('detailed copier risk contracts', () => {
       const { default: DraftRiskTable } = await import('../components/LiveAccountRiskTable');
       const html = renderToStaticMarkup(React.createElement(DraftRiskTable, {
         group: configured, accounts: [], runtimeAvailable: true, riskConfigSupported: true, now: NOW,
-        status: controllerStatus({ accountEligibility: [] }), brokerDailyPnlByAccount: { 200: -400 },
+        status: controllerStatus({ accountEligibility: [] }),
+        brokerDailyPnlByAccount: {
+          200: { value: -400, stale: false, confirmedAt: new Date(NOW - 1_000).toISOString() },
+        },
       }));
       const row = html.match(/<tr[^>]*data-account-id="200"[^>]*>[\s\S]*?<\/tr>/)?.[0];
       expect(row).toContain('value="1000"');

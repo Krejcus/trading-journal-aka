@@ -64,7 +64,13 @@ describe('server account-data stop and rate-limit propagation', () => {
   it.each([null, 'not-a-duration'])('uses bounded conservative fallback for Retry-After=%s', async header => {
     await expect(loadTradovateAccountData({ ...options, fetchImpl: mockFetch({
       '/account/list': () => json({}, 429, header == null ? {} : { 'Retry-After': header }),
-    }) })).rejects.toMatchObject({ status: 429, retryAfterMs: 3_600_000 });
+    }) })).rejects.toMatchObject({ status: 429, retryAfterMs: 300_000 });
+  });
+
+  it('uses broker p-time from a 429 body before the five-minute fallback', async () => {
+    await expect(loadTradovateAccountData({ ...options, fetchImpl: mockFetch({
+      '/account/list': () => json({ 'p-ticket': 'private', 'p-time': 37 }, 429),
+    }) })).rejects.toMatchObject({ status: 429, retryAfterMs: 37_000 });
   });
 
   it('parses the HTTP-date Retry-After form', async () => {
@@ -108,5 +114,20 @@ describe('server account-data stop and rate-limit propagation', () => {
     expect(res.status).toHaveBeenLastCalledWith(429);
     expect(res.setHeader).toHaveBeenCalledWith('Retry-After', '120');
     expect(res.json).toHaveBeenLastCalledWith({ error: 'tradovate-rate-limited', retryAfterMs: 120_000 });
+  });
+
+  it('preflight forwards p-time and otherwise uses five minutes, never one hour', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.stubGlobal('fetch', mockFetch({ '/account/list': () => json({ 'p-ticket': 'private', 'p-time': 42 }, 429) }));
+    const timed = response();
+    await preflight({ method: 'POST', headers: {}, body: { connectionId: 'p-time', mode: 'bootstrap' } } as never, timed as never);
+    expect(timed.setHeader).toHaveBeenCalledWith('Retry-After', '42');
+    expect(timed.json).toHaveBeenLastCalledWith({ error: 'tradovate-rate-limited', retryAfterMs: 42_000 });
+
+    vi.stubGlobal('fetch', mockFetch({ '/account/list': () => json({}, 429) }));
+    const fallback = response();
+    await preflight({ method: 'POST', headers: {}, body: { connectionId: 'fallback', mode: 'bootstrap' } } as never, fallback as never);
+    expect(fallback.setHeader).toHaveBeenCalledWith('Retry-After', '300');
+    expect(fallback.json).toHaveBeenLastCalledWith({ error: 'tradovate-rate-limited', retryAfterMs: 300_000 });
   });
 });

@@ -10,12 +10,19 @@ import {
 } from './tradovateLiveView';
 import type { LiveAccount, LiveOrder, LiveSnapshot } from '../services/tradecopiaLiveService';
 import { findTradovatePropPlanPreset, tradovateAccountFirm } from './tradovatePropPlanCatalog';
+import { tradovateDisplayTradeDate } from './tradovateDisplayDay';
+
+const safeTradovateDisplayTradeDate = (value: string): string | null => {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? tradovateDisplayTradeDate(parsed) : null;
+};
 
 const dailyRealizedPnl = (
   account: TradovateAccountDataResult['accounts'][number],
   capturedAt: string,
 ) => {
-  const capturedDate = capturedAt.slice(0, 10);
+  const capturedDate = safeTradovateDisplayTradeDate(capturedAt);
+  if (!capturedDate) return 0;
   const day = account.daily.find(candidate => candidate.tradeDate === capturedDate);
   // This is the broker-reported current trade-date value from the latest
   // cashBalance.realizedPnL, including fees. Do not substitute copier stats.
@@ -30,10 +37,12 @@ const dailyRealizedPnl = (
 export const tradovateBrokerDailyPnlByAccount = (
   data: TradovateAccountDataResult,
 ): Readonly<Record<string, number | null>> => {
-  const currentTradeDate = data.capturedAt.slice(0, 10);
+  const currentTradeDate = safeTradovateDisplayTradeDate(data.capturedAt);
   return Object.fromEntries(data.accounts.map(account => [
     String(account.id),
-    account.daily.find(day => day.tradeDate === currentTradeDate)?.reportedRealizedPnl ?? null,
+    currentTradeDate == null
+      ? null
+      : account.daily.find(day => day.tradeDate === currentTradeDate)?.reportedRealizedPnl ?? null,
   ]));
 };
 
@@ -48,6 +57,27 @@ export function tradovateCopyTradeSnapshot(
     const dailyLossDisabled = profile?.dailyLossLimit === 0
       || (profile?.dailyLossLimit == null && plan != null && plan.dailyLossLimit == null);
     const readState = tradovateAccountReadState(account, data);
+    const currentTradeDate = safeTradovateDisplayTradeDate(data.capturedAt);
+    const dailyLossLimit = profile?.dailyLossLimit ?? account.risk.dailyLossAutoLiq;
+    const dailyLossLimitSource = profile?.dailyLossLimit != null
+      ? 'profile' as const
+      : account.risk.dailyLossAutoLiq != null
+        ? 'broker' as const
+        : undefined;
+    const dailyLossLimitUpdatedAt = profile?.dailyLossLimit != null
+      ? profile.updatedAt
+      : account.risk.dailyLossAutoLiq != null && hasCompleteTradovateRead(account.risk.limitsCoverage)
+        ? readState.requestedAt
+        : null;
+    const riskFailure = [account.risk.limitsCoverage, account.risk.statusCoverage]
+      .find(coverage => coverage != null && !hasCompleteTradovateRead(coverage));
+    const riskDisplayUnavailableReason = riskFailure
+      ? riskFailure.httpStatus === 401 || riskFailure.httpStatus === 403
+        ? 'Tradovate nepovolil čtení risk limitu.'
+        : riskFailure.httpStatus === 429
+          ? 'Tradovate dočasně omezuje čtení risk limitu.'
+          : 'Tradovate risk limit nepotvrdil.'
+      : undefined;
     const positions = account.positions
       .filter(position => position.netPosition !== 0)
       .map(position => ({
@@ -67,20 +97,24 @@ export function tradovateCopyTradeSnapshot(
       riskDisplayDailyLossDisabled: dailyLossDisabled,
       riskDisplayPending: [account.risk.limitsCoverage, account.risk.statusCoverage]
         .some(coverage => coverage != null && !hasCompleteTradovateRead(coverage)),
+      riskDisplayUnavailableReason,
       entityId: null,
       name: profile?.displayName?.trim() || account.name,
       firm: tradovateAccountFirm(profile, account.name) || 'Tradovate',
       phase: profile?.accountType ?? null,
       accountSize: profile?.accountSize ?? null,
-      dailyLossLimit: profile?.dailyLossLimit ?? account.risk.dailyLossAutoLiq,
+      dailyLossLimit,
+      dailyLossLimitUpdatedAt,
+      dailyLossLimitSource,
       balance: account.balance.totalCashValue ?? 0,
       equity: account.balance.netLiq ?? account.balance.totalCashValue ?? 0,
       // Copy Trade's Daily P&L must not reuse the lifetime/cumulative balance
       // snapshot. Use only the current captured trade date and include fees.
       realizedPnl: dailyRealizedPnl(account, data.capturedAt),
-      dailyPnlTradeDate: data.capturedAt.slice(0, 10),
+      dailyPnlTradeDate: currentTradeDate ?? undefined,
       dailyPnlUpdatedAt: account.readState?.dailyAsOf ?? null,
-      dailyPnlAvailable: account.daily.some(day => day.tradeDate === data.capturedAt.slice(0, 10) && day.reportedRealizedPnl != null),
+      dailyPnlAvailable: currentTradeDate != null
+        && account.daily.some(day => day.tradeDate === currentTradeDate && day.reportedRealizedPnl != null),
       weekRealizedPnl: account.balance.weekRealizedPnL ?? 0,
       unrealizedPnl: account.balance.openPnL ?? 0,
       unrealizedPnlSource: account.balance.openPnlSource

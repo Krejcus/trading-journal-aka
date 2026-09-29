@@ -1,9 +1,10 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
-import { liveBalanceDisplay, liveCapitalDisplay, liveDailyPnlDisplay, liveGroupDailyPnlDisplay } from '../lib/liveBalanceDisplay';
+import { describe, expect, it, vi } from 'vitest';
+import { liveBalanceDisplay, liveCapitalDisplay, liveDailyLossRemainingDisplay, liveDailyPnlDisplay, liveGroupDailyPnlDisplay } from '../lib/liveBalanceDisplay';
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
-import { BalanceValue } from '../components/LiveCopyTradeOverview';
+import { BalanceValue, DailyPnlValue } from '../components/LiveCopyTradeOverview';
+import { MobileMetric } from '../components/LiveMobileAccountDetail';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
 
 const now = Date.UTC(2026, 8, 10, 8);
@@ -82,5 +83,84 @@ describe('confirmed daily display', () => {
     const a = account({ realizedPnl: 125, cashUpdatedAt: new Date(boundary - 1_000).toISOString() });
     expect(liveDailyPnlDisplay(a, boundary + 1_000).value).toBeNull();
     expect(liveBalanceDisplay(a, boundary + 1_000).value).toBe(51_154.40);
+  });
+
+  it('počítá Daily i DLL ze stejného novějšího realized vstupu bez požadavku na cash timestamp', () => {
+    const limitAt = new Date(now - 2_000).toISOString();
+    const a = account({
+      cashUpdatedAt: null,
+      realizedPnl: -200,
+      dailyPnlAvailable: true,
+      dailyPnlTradeDate: '2026-09-10',
+      dailyPnlUpdatedAt: new Date(now - 1_000).toISOString(),
+      dailyLossLimit: 1_000,
+      dailyLossLimitUpdatedAt: limitAt,
+      unrealizedPnl: -50,
+      unrealizedPnlSource: 'broker',
+      unrealizedPnlUpdatedAt: new Date(now - 700).toISOString(),
+      displayValues: {
+        dailyRealizedPnL: {
+          value: -900,
+          requestedAt: new Date(now - 800).toISOString(),
+          confirmedAt: new Date(now - 500).toISOString(),
+        },
+      },
+    });
+    expect(liveDailyPnlDisplay(a, now)).toMatchObject({ value: -900, stale: false });
+    expect(liveDailyLossRemainingDisplay(a, now)).toMatchObject({
+      value: 50,
+      state: 'ready',
+      stale: false,
+      confirmedAt: limitAt,
+    });
+  });
+
+  it('nezapočítá datum uložení profilového limitu do stáří DLL', () => {
+    const a = account({
+      realizedPnl: -1_000,
+      dailyPnlAvailable: true,
+      dailyPnlTradeDate: '2026-09-10',
+      dailyPnlUpdatedAt: new Date(now - 1_000).toISOString(),
+      dailyLossLimit: 1_000,
+      dailyLossLimitUpdatedAt: new Date(now - 10 * 86_400_000).toISOString(),
+      dailyLossLimitSource: 'profile',
+      unrealizedPnl: 0,
+      unrealizedPnlSource: 'broker',
+      unrealizedPnlUpdatedAt: new Date(now - 800).toISOString(),
+    } as Partial<LiveAccount>);
+    expect(liveDailyLossRemainingDisplay(a, now)).toMatchObject({
+      value: 0,
+      state: 'ready',
+      stale: false,
+      confirmedAt: a.dailyPnlUpdatedAt,
+    });
+  });
+
+  it('stale denní P&L vykreslí šedě a s věkem místo barevného aktuálního čísla', () => {
+    const display = { value: -125, stale: true, confirmedAt: new Date(now - 60_000).toISOString() };
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      const markup = renderToStaticMarkup(React.createElement(DailyPnlValue, { display }));
+      expect(markup).toContain('data-daily-pnl-state="last-known"');
+      expect(markup).toContain('text-[var(--text-secondary)]');
+      expect(markup).toContain('před 1 min');
+      const mobile = renderToStaticMarkup(React.createElement(MobileMetric, {
+        label: 'Dnes realizováno', value: -125, pnl: true, stale: true, confirmedAt: display.confirmedAt,
+      }));
+      expect(mobile).toContain('data-mobile-metric-state="last-known"');
+      expect(mobile).toContain('text-[var(--text-secondary)]');
+      expect(mobile).toContain('před 1 min');
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each([
+    [{ dailyPnlPending: true, dailyLossLimit: 1_000 }, 'loading'],
+    [{ dailyPnlAvailable: false, dailyLossLimit: 1_000 }, 'unavailable'],
+    [{ dailyLossLimit: null, riskDisplayPending: false }, 'unknown-limit'],
+    [{ dailyLossLimit: null, riskDisplayDailyLossDisabled: true }, 'no-limit'],
+  ] as const)('rozliší DLL stav %s', (patch, state) => {
+    expect(liveDailyLossRemainingDisplay(account(patch as Partial<LiveAccount>), now).state).toBe(state);
   });
 });

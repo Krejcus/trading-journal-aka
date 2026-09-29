@@ -1,7 +1,11 @@
 import React from 'react';
 import type { CopierControllerStatus } from '../services/copierRuntimeController';
 import type { CopierSnapshotHealth } from '../lib/localCopierAgentProtocol';
-import { copierCopiesOutcomeText, type CopierDisarmRecord } from '../lib/copierDisarmReason';
+import {
+  copierCopiesOutcomeText,
+  resolveCopierDisarmRecord,
+  type CopierDisarmRecord,
+} from '../lib/copierDisarmReason';
 import { snapshotHealthMessage } from '../services/liveStatusStrip';
 
 const time = (at: number | null | undefined) => at
@@ -29,7 +33,12 @@ export default function CopierEventsPanel({ status, transport, snapshotHealth, d
   snapshotHealth?: CopierSnapshotHealth | null;
   disarmHistory: readonly CopierDisarmRecord[];
 }) {
-  const history = [...disarmHistory].sort((left, right) => right.at - left.at);
+  const history = disarmHistory
+    .map(record => resolveCopierDisarmRecord(
+      record,
+      record.at === status?.lastDisarm?.at ? status.lastError : null,
+    ) ?? record)
+    .sort((left, right) => right.at - left.at);
   return (
     <section data-copier-events-panel="true" className="overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)]">
       <div className="border-b border-[var(--border-subtle)] px-4 py-3">

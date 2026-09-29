@@ -57,7 +57,12 @@ const api = vi.hoisted(() => ({
 vi.mock('react', () => harness.react);
 vi.mock('../services/tradovateOAuthConnection', () => api);
 vi.mock('../services/storageService', () => ({ storageService: { saveAccounts: vi.fn() } }));
-import { useTradovateLiveData } from '../components/useTradovateLiveData';
+import {
+  tradovateClientBackoffMs,
+  tradovateForegroundRefreshIds,
+  tradovateFullRefreshBackoffMs,
+  useTradovateLiveData,
+} from '../components/useTradovateLiveData';
 import { loadTradovateAccountData } from '../server/tradovateAccountData';
 import { tradovateCopyTradeSnapshot } from '../lib/tradovateCopyTradeBridge';
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
@@ -88,14 +93,34 @@ const view = (userId: string, enabled = false) => {
   if (harness.dirty()) throw new Error('Hook state did not stabilize within 20 renders.');
   return value;
 };
+let timers: Array<{ callback: () => void; delay: number; cleared: boolean; id: number }> = [];
+let nextTimerId = 1;
+let listeners: Record<string, Array<() => void>> = {};
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(Date, 'now').mockReturnValue(now);
   harness.reset();
   const storage = new Map<string, string>();
-  vi.stubGlobal('document', { visibilityState: 'visible' });
+  timers = [];
+  listeners = {};
+  vi.stubGlobal('document', {
+    visibilityState: 'visible',
+    addEventListener: (type: string, listener: () => void) => { (listeners[`document:${type}`] ??= []).push(listener); },
+    removeEventListener: vi.fn(),
+  });
   vi.stubGlobal('window', {
-    setTimeout: vi.fn((_callback: () => void, _delay: number) => 1), clearTimeout: vi.fn(), setInterval: vi.fn(() => 1), clearInterval: vi.fn(),
+    setTimeout: vi.fn((callback: () => void, delay: number) => {
+      const id = nextTimerId++;
+      timers.push({ callback, delay, cleared: false, id });
+      return id;
+    }),
+    clearTimeout: vi.fn((id: number) => {
+      const timer = timers.find(candidate => candidate.id === id);
+      if (timer) timer.cleared = true;
+    }),
+    setInterval: vi.fn(() => 1), clearInterval: vi.fn(),
+    addEventListener: (type: string, listener: () => void) => { (listeners[`window:${type}`] ??= []).push(listener); },
+    removeEventListener: vi.fn(),
     location: { search: '', pathname: '/', hash: '' }, history: { replaceState: vi.fn() },
     sessionStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) } });
   api.loadTradovateAccountProfiles.mockResolvedValue({ profiles: [] });
@@ -154,8 +179,118 @@ describe('detailed LIVE data reliability regressions', () => {
       return keep;
     });
     await view('review-partial-429').refreshStatus();
+    await settle();
     expect(Object.keys(view('review-partial-429').connectionData)).toEqual(['keep']);
-    expect(api.runTradovateReadOnlyPreflight.mock.calls.every(call => call[1] === 'bootstrap')).toBe(true);
+    expect(api.runTradovateReadOnlyPreflight.mock.calls.filter(call => call[0] === 'gone').map(call => call[1])).toEqual(['bootstrap']);
+    expect(api.runTradovateReadOnlyPreflight.mock.calls.some(call => call[0] === 'keep' && call[1] === 'full')).toBe(true);
+    expect(view('review-partial-429').dataEnrichmentByConnection.keep.pending).toBe(false);
+    expect(view('review-partial-429').dataEnrichmentByConnection.gone.pending).toBe(false);
+    api.runTradovateReadOnlyPreflight.mockClear();
+    await view('review-partial-429').refreshData(true);
+    expect(api.runTradovateReadOnlyPreflight.mock.calls.map(call => call[0])).toEqual(['keep']);
+  });
+
+  it('retries failed full enrichment per connection after 15/30/60 seconds', async () => {
+    api.loadTradovateOAuthStatus.mockResolvedValue(status(['fast', 'slow']));
+    const fast = await dataset('fast');
+    const slow = await dataset('slow');
+    api.runTradovateReadOnlyPreflight.mockImplementation(async (id, detail) => {
+      if (detail === 'bootstrap') return id === 'fast' ? fast : slow;
+      if (id === 'slow') throw new Error('slow full failed');
+      return fast;
+    });
+    await view('review-per-connection-retry').refreshStatus();
+    await settle();
+    const state = view('review-per-connection-retry').dataEnrichmentByConnection;
+    expect(state.fast).toMatchObject({ pending: false, failureCount: 0 });
+    expect(state.slow).toMatchObject({ pending: false, failureCount: 1, retryAt: now + 15_000 });
+    view('review-per-connection-retry', true);
+    expect(vi.mocked(window.setTimeout).mock.calls.some(call => call[1] === 15_000)).toBe(true);
+    expect([1, 2, 3, 8].map(tradovateFullRefreshBackoffMs)).toEqual([15_000, 30_000, 60_000, 600_000]);
+  });
+
+  it('spustí retry timer nejvýše jednou, i když nový full request zůstane viset', async () => {
+    api.loadTradovateOAuthStatus.mockResolvedValue(status(['c']));
+    const current = await dataset('c');
+    let fullCalls = 0;
+    api.runTradovateReadOnlyPreflight.mockImplementation(async (_id, detail) => {
+      if (detail === 'bootstrap') return current;
+      fullCalls += 1;
+      if (fullCalls === 1) throw new Error('500 full failed');
+      return new Promise(() => {});
+    });
+    await view('review-real-retry-timer').refreshStatus();
+    await settle();
+    view('review-real-retry-timer', true);
+    expect(view('review-real-retry-timer', true).dataEnrichmentByConnection.c)
+      .toMatchObject({ pending: false, failureCount: 1, retryAt: now + 15_000 });
+
+    vi.mocked(Date.now).mockReturnValue(now + 15_000);
+    for (let round = 0; round < 20; round += 1) {
+      const due = timers.filter(timer => !timer.cleared && (timer.delay === 15_000 || timer.delay === 0));
+      if (due.length === 0) break;
+      for (const timer of due) {
+        timer.cleared = true;
+        timer.callback();
+      }
+      await settle();
+      view('review-real-retry-timer', true);
+    }
+    expect(fullCalls).toBe(2);
+  });
+
+  it('respects explicit Retry-After and keeps only the fallback bounded', () => {
+    expect(tradovateClientBackoffMs(null)).toBe(300_000);
+    expect(tradovateClientBackoffMs(60_000)).toBe(60_000);
+    expect(tradovateClientBackoffMs(3_600_000)).toBe(3_600_000);
+  });
+
+  it('na návratu do popředí obnoví pending a starší než pět minut, ne čerstvé spojení', () => {
+    expect(tradovateForegroundRefreshIds(['pending', 'stale', 'fresh'], {
+      pending: { pending: true, lastFullSuccessAt: null, retryAt: now + 15_000, failureCount: 1, error: 'failed' },
+      stale: { pending: false, lastFullSuccessAt: now - 5 * 60_000, retryAt: null, failureCount: 0, error: null },
+      fresh: { pending: false, lastFullSuccessAt: now - 60_000, retryAt: null, failureCount: 0, error: null },
+    }, now)).toEqual(['stale']);
+    expect(tradovateForegroundRefreshIds(['pending'], {
+      pending: { pending: false, lastFullSuccessAt: null, retryAt: now, failureCount: 1, error: 'failed' },
+    }, now)).toEqual(['pending']);
+  });
+
+  it('sloučí visibilitychange a focus a respektuje běžící full request', async () => {
+    api.loadTradovateOAuthStatus.mockResolvedValue(status(['c']));
+    const current = await dataset('c');
+    let fullCalls = 0;
+    let release!: (value: TradovatePreflightResult) => void;
+    api.runTradovateReadOnlyPreflight.mockImplementation(async (_id, detail) => {
+      if (detail === 'bootstrap') return current;
+      fullCalls += 1;
+      if (fullCalls === 1) return current;
+      return new Promise<TradovatePreflightResult>(resolve => { release = resolve; });
+    });
+    await view('review-foreground-coalesce', true).refreshStatus();
+    await settle();
+    view('review-foreground-coalesce', true);
+    vi.mocked(Date.now).mockReturnValue(now + 6 * 60_000);
+    const before = fullCalls;
+    listeners['document:visibilitychange']?.[0]?.();
+    listeners['window:focus']?.[0]?.();
+    await settle();
+    expect(fullCalls - before).toBe(1);
+    release(current);
+    await settle();
+  });
+
+  it('zapíše prefetch 429 do per-connection backoffu a entry ho neopakuje', async () => {
+    api.loadTradovateOAuthStatus.mockResolvedValue(status(['c']));
+    api.runTradovateReadOnlyPreflight.mockRejectedValue(
+      new api.TradovateRequestError('prefetch limited', 429, 90_000),
+    );
+    const hook = view('review-prefetch-429', false);
+    hook.prefetch();
+    await settle();
+    await view('review-prefetch-429', false).refreshStatus();
+    await settle();
+    expect(api.runTradovateReadOnlyPreflight).toHaveBeenCalledTimes(1);
   });
 
   it('honors a 429 embedded in partial HTTP 200 source coverage', async () => {
