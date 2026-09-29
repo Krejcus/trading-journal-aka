@@ -51,13 +51,13 @@ Od 29. 9. 02:38 jsou větve jádra, brokeru, agenta a UI sloučené v `codex/cop
 |---|---|---|---|---|
 | 1 | Večerní výjimka `retireMissingOldGroup`: přesunout audit za durable zápis, test, že jiná „missing leader route“ zůstane fatální | Codex | ne (commit) | hotovo 1802df6 |
 | 2 | UI: nouzový DISARM/kill i při neznámém stavu (ST1), skutečná expirace ARM (V14 UI), retence stavu přepínače (ST2), varování, že úprava skupiny vypne kopírku (V1 UI), UI-10a–e | Claude + Codex | ne | hotovo, větev claude/copier-ui-fixes-20260928 (687bb6b…7abec38) |
-| 3 | V12 + V13 + ST4 — po iteracích | Codex | ano | V12 v4 8c2591f: review našlo cesty horší než pre → V12 v5 čeká; V13 v4 1a742cd: review běží |
+| 3 | V12 + V13 + ST4 — po iteracích | Codex | ano | V12 v4 8c2591f a V13 v4 1a742cd: review (copier-v12d/v13e-review) našla cesty horší než pre → V12 v5 a V13 v5 rozpracováno (worktree alphatrade-copier-v12v5/v13v5-20260929) |
 | 4 | V16 (izolace breached/ineligible followeru pro divergenci) | Codex | ano | hotovo 0b13040 |
-| 5 | 5b: V5, V7, V8 + rychlost (broker větev); 5c: V17, V18, ST28, ST31, standalone-stop sweep, receivedAt, SL reassert, ST6, N10 | Codex | ano | 5b hotovo (větev codex/copier-broker-20260929, 32bb813); 5c rozpracováno |
-| 6 | V9 + V4 (+ ST4 kontrola) | Codex | ano | rozpracováno (worktree alphatrade-copier-autoclose-20260929) |
-| 7 | V10 + ST32 (flatten do konce obchodu mimo frontu s bariérou; rozjezd store); ST3 hotovo v agent větvi | Codex | ano | čeká |
-| 8 | V1 + V3 + V15 (validace před DISARM, fence jen na obchodní události, cut vs. rezerva, bootstrap) | Codex | ano | čeká |
-| 9 | V6 (resync, route-gap); V7 hotovo v broker větvi | Codex | ano | čeká |
+| 5 | 5b: V5, V7, V8 + rychlost (broker větev); 5c: V17, V18, ST28, ST31, standalone-stop sweep, receivedAt, SL reassert, ST6, N10 | Codex | ano | 5b hotovo (32bb813); 5c hotovo (cdeec40) |
+| 6 | V9 + V4 (+ ST4 kontrola) | Codex | ano | hotovo b762714 + oprava review 6b 68253a7 (copier-b6-review); ověřovací review běží |
+| 7 | V10 + ST32 (flatten do konce obchodu mimo frontu s bariérou; rozjezd store); ST3 hotovo v agent větvi | Codex | ano | rozpracováno (worktree alphatrade-copier-flatten-20260929) |
+| 8 | V1 + V3 + V15 (validace před DISARM, fence jen na obchodní události, cut vs. rezerva, bootstrap) | Codex | ano | hotovo ab4b310; review běží |
+| 9 | V6 (resync, route-gap); V7 hotovo v broker větvi | Codex | ano | rozpracováno (worktree alphatrade-copier-resync-20260929) |
 | 10 | UI: DLL a denní P&L (ST10–ST12), editor a hlášky (V2 UI, P116), texty | Claude + Codex | ne | hotovo v UI větvi (UI-10b–e) |
 | 11 | V11/ST25 rychlost (broker 8ac3cd6), hardening ST33–ST35 (agent větev; ST34 vrácen, otevřené) | Codex | ano/ne | hotovo kromě ST34 |
 | — | Rozhodnutí o politice (V14 strop, V15, ST5, ST21, ST26, ST20) | Filip | — | nechat výchozí bezpečnější variantu, zapsat do PROJECT_LOG |
