@@ -262,7 +262,9 @@ describe('V12c regrese — S1b varianty (leader limit vyplněn, pak leader Marke
     expect(broker.placedRequests()).not.toContainEqual(expect.objectContaining({
       accountId: 200, side: 'Sell', orderType: 'Market', quantity: 2,
     }));
-    expect(followerOpen(broker)).toHaveLength(0);
+    // Pátá iterace záměrně odstranila neověřený cancel: parciální kopie je
+    // `unsafe`, controller haltne bez dalšího broker write jako pre-V12.
+    expect(followerOpen(broker)).toEqual(['Buy:Limit:2@30500']);
     console.log('Q:O6m1', sum(broker, controller, { followerPos: await brokerPos(broker, 200), followerOpen: followerOpen(broker) }));
     controller.stop();
   });
@@ -295,7 +297,9 @@ describe('V12c regrese — S1b varianty (leader limit vyplněn, pak leader Marke
       expect(broker.placedRequests()).not.toContainEqual(expect.objectContaining({
         accountId: 200, side: 'Sell', orderType: 'Market', quantity: 2,
       }));
-      expect(followerOpen(broker)).toHaveLength(0);
+      // Unsafe parciál se nesmí rušit naslepo; důležitá invariantní podmínka
+      // je žádný Sell 2, tedy žádné otočení followera na -1.
+      expect(followerOpen(broker)).toEqual(['Buy:Limit:2@30500']);
       controller.stop();
     });
   }

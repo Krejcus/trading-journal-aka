@@ -251,6 +251,40 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — Balíček 3a-5 V12 pátá iterace: ověřené cancely a podmíněná lineage (Codex)
+
+- S1b je per-follower: zdravý follower dostane Market exit bez čekání na
+  pomalý účet; `unsafe` haltne bez cancelu. Risk-snižující cancel má deadline
+  1 s, nikdy se neopakuje a jediný následný snapshot `listOrders +
+  listPositions` rozliší zero-fill terminal, plný fill a parciál. Pozdější fill
+  autoritativně zero-fill zrušené kopie failne okamžitě. Více opačných pending
+  kopií zůstává bez zápisu fail-closed.
+- Podmíněné zápisy nesou leader order ID, multiplier, zdrojovou qty/fill a čas
+  dispatch. Legitimní zrcadlený nebo pozdější fill vazbu tiše uvolní; skutečné
+  vyvrácení ruší právě jednou jen risk-zvyšující non-Market order nad flat nebo
+  stejně orientovanou pozicí, nikdy ochranný order nad otevřenou pozicí.
+  Vazby přežívají disconnect/error a vyhodnotí je reconnect REST, cílené čtení
+  i epoch refresh. Async reject Market zdroje a copied-exit reverse mají
+  samostatné fail-closed důkazy a audit rozlišuje cancel/fill.
+- Route-epoch refresh ignoruje `evidenceInvalid`, běží jen za ARM, má jeden
+  pokus na dvojici epoch a nejméně 30s backoff. Snapshot nesmí přepsat novější
+  S1b read ani změněnou epochu. Market pending obchází pouze backlog vlastních
+  přesných order/fill klíčů; starý potvrzený modify tvar po přijetí aktuálního
+  tvaru už není platný a vypadlá bounded klasifikace defaultuje bezpečně na
+  `copied-entry`.
+- Nový 12testový regresní soubor proti čistému HEAD `b347d53` před opravou
+  skončil 12/12 červeně (11 společně, reconnect audit zvlášť); po opravě 12/12.
+  Staré K4/Z10/V16 očekávání byla upravena podle nové specifikace (halt bez
+  cancelu, per-follower dispatch). B6/R6 prošel izolovaně 3/3 a v závěrečné
+  plné sadě také, takže review pád byl zátěžový wall-clock flake bez změny kódu.
+- Předepsaná kompletní copier sada: 166 souborů zelených + 1 skipped, 1868
+  testů zelených + 1 todo; 89 testů ve čtyřech loopback souborech spadlo pouze
+  na sandboxovém `listen EPERM 127.0.0.1` (exit 1). Všechny controllerové
+  regrese jsou zelené. `npx tsc --noEmit` hlásí jen povolené chybějící Chrome
+  typy a `@crxjs/vite-plugin` v `extension/`; `git diff --check` čistý.
+- Bez commitu/pushe/deploye, npm install/ci, Supabase změny, broker write,
+  ARM/Flatten nebo reinstalace workeru. Dočasný baseline export byl odstraněn.
+
 ### 2026-09-29 — Balíček 6: V9 ownership auto-close, V4 durable guard a ST4 fence (Codex)
 
 - Auto-close nyní úplně vynechá pouze followery s `enabled=false`; jejich
