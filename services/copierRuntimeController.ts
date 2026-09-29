@@ -11320,12 +11320,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             ...gate,
             now,
             sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
-            stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
+            stuckOutbox: gate.stuckOutbox || hasDispatchBlockingStuckOutbox(),
+            nonBlockingOutboxKeys: backgroundNonBlockingOutboxKeys(),
             ineligibleAccounts: adjusted.ineligibleAccounts,
           },
           broker: dispatchBroker(admissionGeneration, leaderEvent),
           clock,
-          store: options.store,
+          store: durableStore,
           metrics,
           maxConcurrentDispatches: options.maxConcurrentDispatches,
         });
@@ -11344,7 +11345,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const unsafeAccounts = scoped.flatMap(item => item.adjusted.unsafeDivergenceAccounts);
       if (unsafeAccounts.length > 0) {
         if (!scoped.some(item => item.processed)) {
-          const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+          const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore });
           runtime = recorded.runtime;
           if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
         }
