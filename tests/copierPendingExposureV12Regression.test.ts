@@ -735,7 +735,7 @@ describe('V12 regression: reconciliation observation fence', () => {
     release();
     const result = await reconciliation;
     expect(captured).toBe(4);
-    expect(result).toMatchObject({ authoritativelyClean: false, workingOrderAccounts: [200] });
+    expect(result).toMatchObject({ authoritativelyClean: false, workingOrderAccounts: [] });
     expect(() => controller.arm()).toThrow();
 
     expect(controller.status()).toMatchObject({ armed: false, lastError: null });

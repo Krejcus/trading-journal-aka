@@ -532,9 +532,16 @@ export function validateStoredCopyGroupForStartup(
       .map(entry => entry.accountId)
       .filter(accountId => group.followers.some(follower => follower.accountId === accountId)),
   );
+  const manuallyDisabledFollowers = group.followers
+    .filter(follower => follower.enabled === false)
+    .map(follower => follower.accountId);
   const validation = validateCopyGroup(group, [
     ...available,
     ...knownIneligibleFollowers,
+    // Ručně vypnutý follower není execution participant. Jeho OAuth
+    // absence proto nesmí shodit celý worker; znovuzapnutí stejně vyžaduje
+    // novou autoritativní flat/no-working/no-pending kontrolu.
+    ...manuallyDisabledFollowers,
     // Disabled groups may start for configuration repair. This does not grant
     // eligibility: ARM still requires enabled + fresh broker preflight, and
     // removal of unresolved ownership still requires explicit confirmation.

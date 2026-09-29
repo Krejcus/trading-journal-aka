@@ -16,8 +16,11 @@ export type CopierCopiesOutcome =
 
 export type CopierDisarmCode =
   | 'config-change'
+  | 'reconcile-request'
   | 'prop-reserve'
   | 'route-gap-divergence'
+  | 'host-sleep'
+  | 'leader-flat-read-failed'
   | 'unexplained-position-divergence'
   | 'prop-limit'
   | 'follower-position-mismatch'
@@ -53,6 +56,8 @@ export interface CopierDisarmRecord {
   /** Původní technický text beze ztráty pro detail/tooltip. */
   detail: string;
   copiesOutcome: CopierCopiesOutcome;
+  /** Durable leader exposure episode, whose later guard may refine only this outcome. */
+  episodeId?: string;
   /** Jedna lidská věta: co má operátor udělat dál. */
   nextStep: string;
 }
@@ -64,6 +69,10 @@ const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }
     title: 'Kopírka se vypnula kvůli uložení změny skupiny.',
     nextStep: 'Zkontroluj uložené účty a pravidla; nový ARM zapni až po ověření skupiny.',
   },
+  'reconcile-request': {
+    title: 'Kopírka se vypnula před ruční Kontrolou pozic.',
+    nextStep: 'Počkej na dokončení read-only kontroly a nový ARM zapni jen po čistém výsledku.',
+  },
   'prop-reserve': {
     title: 'Kopírka zůstala vypnutá kvůli nedostatečné rezervě followera nad prop floorem.',
     nextStep: 'Ověř aktuální rezervu a denní P&L účtu u prop firmy; po opravě nastavení spusť Kontrolu pozic.',
@@ -71,6 +80,14 @@ const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }
   'route-gap-divergence': {
     title: 'Stav účtu se během obměny broker spojení změnil mimo stream kopírky.',
     nextStep: 'Ověř pozice a working příkazy dotčené route v Tradovate a potom spusť Kontrolu pozic.',
+  },
+  'host-sleep': {
+    title: 'Mac se uspal nebo přestal odpovídat; kopírka zůstala bezpečně vypnutá.',
+    nextStep: 'Otevři Tradovate, ověř pozice a working příkazy a potom spusť Kontrolu pozic.',
+  },
+  'leader-flat-read-failed': {
+    title: 'Dozor po flat leaderovi nedostal včas spolehlivý broker snapshot.',
+    nextStep: 'Oveř pozice leadera i followerů v Tradovate a potom spusť Kontrolu pozic.',
   },
   'unexplained-position-divergence': {
     title: 'Pozice followerů se odchýlily od očekávané kopie.',
@@ -191,15 +208,22 @@ export function classifyCopierDisarmReason(
   detail: string,
   trigger: CopierDisarmTrigger = 'fail-closed',
 ): CopierDisarmCode {
+  const text = detail.replace(/\s+/g, ' ').trim();
+  // Host sleep is a more truthful transport cause and must win over the
+  // generic transport trigger supplied by older controller call sites.
+  if (/\bhost-sleep\b|Mac neodpovídal od/i.test(text)) return 'host-sleep';
   if (trigger === 'manual') return 'manual';
   if (trigger === 'config-change') return 'config-change';
   if (trigger === 'arm-expiry') return 'arm-expired';
   if (trigger === 'kill-switch') return 'kill-switch';
   if (trigger === 'transport') return 'transport-lost';
 
-  const text = detail.replace(/\s+/g, ' ').trim();
+  if (/\breconcile-request\b|kontrolou pozic/i.test(text)) return 'reconcile-request';
   if (/\bprop-reserve\b|rezerv[auy].*prop floor/i.test(text)) return 'prop-reserve';
   if (/\broute-gap-divergence\b/i.test(text)) return 'route-gap-divergence';
+  if (/leader-flat-read-failed|leader-flat guard.*(?:read deadline|deadline.*(?:position|order)|čtení.*selhal)/i.test(text)) {
+    return 'leader-flat-read-failed';
+  }
   if (/\bconfig-change\b|uložen(?:í|ím).*změn[ay] skupiny/i.test(text)) return 'config-change';
   if (/unexplained-position-divergence|nevysvětlen[áou]+ (?:position )?divergenc/i.test(text)) {
     return 'unexplained-position-divergence';
@@ -228,6 +252,7 @@ export function classifyCopierDisarmReason(
   if (/leader-flat (?:cílené zavření|guard nelze bezpečně založit)/i.test(text)) {
     return 'leader-flat-guard-failed';
   }
+  if (/leader-flat guard/i.test(text)) return 'leader-flat-guard-failed';
   if (/auto-close kopií/i.test(text)) return 'auto-close-failed';
   if (/flatten (?:selhal|nedokončil)/i.test(text)) return 'flatten-failed';
   if (/pending (?:bracket|oso) replace přišel mimo pořadí|protective leg přišel mimo pořadí|sequence-broken/i.test(text)) {
@@ -251,6 +276,7 @@ export function createCopierDisarmRecord(input: {
   detail: string;
   copiesOutcome: CopierCopiesOutcome;
   code?: CopierDisarmCode;
+  episodeId?: string;
 }): CopierDisarmRecord {
   const detail = input.detail.trim() || 'Bez technického detailu';
   const requestedCode = input.code ?? classifyCopierDisarmReason(detail, input.trigger);
@@ -267,6 +293,7 @@ export function createCopierDisarmRecord(input: {
     title: copy.title,
     detail,
     copiesOutcome: input.copiesOutcome,
+    ...(input.episodeId ? { episodeId: input.episodeId } : {}),
     nextStep: copy.nextStep,
   };
 }
@@ -289,6 +316,7 @@ export function resolveCopierDisarmRecord(
       detail: record.detail,
       copiesOutcome: record.copiesOutcome,
       code: record.code,
+      ...(record.episodeId ? { episodeId: record.episodeId } : {}),
     });
   }
   const detailCode = classifyCopierDisarmReason(record.detail, record.trigger);
@@ -307,5 +335,6 @@ export function resolveCopierDisarmRecord(
     detail,
     copiesOutcome: record.copiesOutcome,
     code,
+    ...(record.episodeId ? { episodeId: record.episodeId } : {}),
   });
 }

@@ -251,6 +251,43 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — Balíček 12: pravdivé DISARM důvody a autoritativní bariéry (Codex)
+
+- Všechna controllerová vypnutí teď používají jeden durable záznam
+  `disarmHistory` (max. 20 položek) se stabilním kódem, technickým detailem,
+  výsledkem kopií a volitelným ID leader epizody. Ruční `reconcile` za ARM
+  nejprve auditovaně DISARMne kódem `reconcile-request` a pak provádí jen
+  broker read; odmítnutí/požadavek kontroly se nevydává za FAIL-CLOSED.
+- Klasifikace rozlišuje config/route/prop/divergence, `host-sleep`, selhání
+  leader-flat čtení a leader-flat guard. Výsledek později potvrzeného guardu
+  se doplňuje jen do stejné epizody. DISARMED divergence pouze zneplatní
+  reconciliation a zapíše audit, ale nepřepíše poslední příčinu vypnutí.
+- Pilot porovnává wall clock s monotónním časem. Po uspání zůstává bezpečně
+  DISARMED, status nese čas, od kdy Mac neodpovídal, ale skutečné broker
+  spojení se nefalšuje jako odpojené. Leader-flat REST čtení mají 2,5s
+  deadline a chybové/non-flat výsledky už netvrdí, že leader byl flat.
+- Follower toggle už nepoužívá pětiminutovou časovou brzdu: změnu dovolí až
+  dvě shodná read-only kola flat/no-working/no-pending pro leadera a dotčený
+  účet. Vypnutí ignoruje ARM/incident blokery, ale ne neověřený broker stav;
+  zapnutí zůstává přísné. Existující controller `reconcile` je použitelný pro
+  budoucí UI tlačítko bez nového write příkazu.
+- Ručně vypnutý follower chybějící v OAuth je při startu optional a dostane
+  startup audit; zapnutý chybějící účet zůstává povinný. ARM účtu s DLL cutem
+  vyžaduje čerstvý bezchybný risk snapshot stejné Tradovate session.
+- Venue-managed navýšení nativního STOP/targetu je výjimka jen při přesné
+  working coverage autoritativně načtené pozice. Runner neposílá zastaralé
+  množství zpět; celý working OSO pár přejde do management-only. Chybějící,
+  nepracující nebo nadměrná ochrana dál vede fail-closed/auto-close.
+- ST22 (instalační provenance/downgrade) nebyl měněn: podle dělby práce patří
+  paralelnímu balíčku 8b. Nebyl proveden commit, instalace workeru, broker write,
+  deploy ani změna extensionu.
+- Ověření: předepsaná copier sada 2038 passed / 1 todo (174 files passed,
+  1 skipped), dynamic routing 5/5, disarm/live 165/165 po závěrečném doplnění
+  klasifikace a cílená sada 364/364. Čtyři lokální HTTP soubory nejprve v
+  sandboxu spadly na `listen EPERM`; mimo socket sandbox prošel každý 3×.
+  `npx tsc --noEmit` hlásí pouze ignorované `extension/` chyby chybějících
+  Chrome typů a `@crxjs/vite-plugin`; mimo extension nevypisal chybu.
+
 ### 2026-09-29 — Balíček 6c: oprava N1/N2 z ověřovacího review 6b (Codex)
 
 - Leader-flat snapshot nyní čte pozice → ordery → pozice. Filled OSO parent

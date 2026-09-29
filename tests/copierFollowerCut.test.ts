@@ -1376,13 +1376,18 @@ describe('CopierRuntimeController — follower account cuts', () => {
   it('broker snapshot s neplatným časem je neověřený a nikdy nespustí cut', async () => {
     const time = manualClock();
     const broker = createMockBroker({ clock: time.clock });
+    let invalid = false;
     installRiskProvider(broker, accountId => riskSnapshot({
       accountId,
-      at: 0,
-      realizedPnlUsd: accountId === 200 ? -1_000 : 0,
+      at: invalid ? 0 : time.now(),
+      realizedPnlUsd: invalid && accountId === 200 ? -1_000 : 0,
     }));
     const runtime = await bootRuntime({ broker, group: riskGroup(), time });
     try {
+      invalid = true;
+      time.advance(30_000);
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await runtime.controller.waitForIdle();
       expect(followerCut(runtime.controller)).toBeUndefined();
       expect(accountRisk(runtime.controller, 200)).toMatchObject({
         verifiedAt: 0,
@@ -2133,13 +2138,18 @@ describe('CopierRuntimeController — follower account cuts', () => {
   it('zastaralý broker snapshot účet nevyřadí a ve statusu zůstane neověřený', async () => {
     const time = manualClock();
     const broker = createMockBroker({ clock: time.clock });
+    let stale = false;
     installRiskProvider(broker, accountId => riskSnapshot({
       accountId,
-      at: time.now() - 90_001,
-      realizedPnlUsd: accountId === 200 ? -1_000 : 0,
+      at: stale ? time.now() - 90_001 : time.now(),
+      realizedPnlUsd: stale && accountId === 200 ? -1_000 : 0,
     }));
     const runtime = await bootRuntime({ broker, group: riskGroup(), time });
     try {
+      stale = true;
+      time.advance(30_000);
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await runtime.controller.waitForIdle();
       expect(runtime.controller.status().followerCuts).toEqual([]);
       expect(accountRisk(runtime.controller, 200)).toMatchObject({
         verifiedAt: time.now() - 90_001,
@@ -2195,9 +2205,17 @@ describe('CopierRuntimeController — follower account cuts', () => {
   it('chyba risk pollu jde jen do accountRisk.error a nikdy do execution lastError', async () => {
     const time = manualClock();
     const broker = createMockBroker({ clock: time.clock });
-    vi.spyOn(broker, 'listAccountRiskSnapshots').mockRejectedValue(new Error('risk endpoint unavailable'));
+    let unavailable = false;
+    vi.spyOn(broker, 'listAccountRiskSnapshots').mockImplementation(async accountIds => {
+      if (unavailable) throw new Error('risk endpoint unavailable');
+      return [...new Set(accountIds)].map(accountId => riskSnapshot({ accountId, at: time.now() }));
+    });
     const runtime = await bootRuntime({ broker, group: riskGroup(), time });
     try {
+      unavailable = true;
+      time.advance(30_000);
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await runtime.controller.waitForIdle();
       expect(runtime.controller.status()).toMatchObject({
         armed: true,
         lastError: null,
@@ -2325,7 +2343,7 @@ describe('CopierRuntimeController — follower account cuts', () => {
       })]);
       await runtime.controller.waitForIdle();
 
-      expect(poll).toHaveBeenCalledTimes(9);
+      expect(poll).toHaveBeenCalledTimes(10);
       expect(runtime.controller.status()).toMatchObject({
         armed: true,
         followerCuts: [],
@@ -2461,19 +2479,19 @@ describe('CopierRuntimeController — follower account cuts', () => {
     }));
     const runtime = await bootRuntime({ broker, group: riskGroup(), time });
     try {
-      expect(poll).toHaveBeenCalledTimes(3);
-      expect(poll.mock.calls.slice(0, 3).map(([accountIds]) => accountIds)).toEqual([[100], [200], [201]]);
+      expect(poll).toHaveBeenCalledTimes(4);
+      expect(poll.mock.calls.slice(0, 4).map(([accountIds]) => accountIds)).toEqual([[200], [100], [200], [201]]);
 
       time.advance(29_999);
       broker.emitEvent({ type: 'heartbeat', at: time.now() });
       await runtime.controller.waitForIdle();
-      expect(poll).toHaveBeenCalledTimes(3);
+      expect(poll).toHaveBeenCalledTimes(4);
 
       time.advance(1);
       broker.emitEvent({ type: 'heartbeat', at: time.now() });
       await runtime.controller.waitForIdle();
-      expect(poll).toHaveBeenCalledTimes(6);
-      expect(poll.mock.calls.slice(3, 6).map(([accountIds]) => accountIds)).toEqual([[100], [200], [201]]);
+      expect(poll).toHaveBeenCalledTimes(7);
+      expect(poll.mock.calls.slice(4, 7).map(([accountIds]) => accountIds)).toEqual([[100], [200], [201]]);
 
       time.advance(1);
       broker.emitEvent({
@@ -2486,7 +2504,7 @@ describe('CopierRuntimeController — follower account cuts', () => {
         }),
       });
       await runtime.controller.waitForIdle();
-      expect(poll).toHaveBeenCalledTimes(7);
+      expect(poll).toHaveBeenCalledTimes(8);
       expect(poll).toHaveBeenLastCalledWith([200]);
     } finally {
       runtime.controller.stop();

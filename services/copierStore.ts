@@ -184,6 +184,9 @@ function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapsh
     ...(base.seenTerminalRejects
       ? { seenTerminalRejects: base.seenTerminalRejects.map(entry => ({ ...entry })) }
       : {}),
+    ...(base.disarmHistory
+      ? { disarmHistory: base.disarmHistory.map(record => ({ ...record })) }
+      : {}),
     ...(base.dailyStats
       ? {
         dailyStats: {

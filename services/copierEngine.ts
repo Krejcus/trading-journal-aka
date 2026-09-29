@@ -1,7 +1,8 @@
-import type { BrokerOrderRequest, BrokerPosition, OrderSide, OrderType } from './brokerPort';
+import type { BrokerOrder, BrokerOrderRequest, BrokerPosition, OrderSide, OrderType } from './brokerPort';
 import { brokerTag, replicationKey } from './copierKeys';
 import type { LeaderFlatEpoch } from './copierLeaderFlatGuard';
 import type { CopyGroupConfig, CopyReplicationMode, DayLockTrigger } from './liveCopyTrading';
+import type { CopierDisarmRecord } from '../lib/copierDisarmReason';
 
 /**
  * Deterministické jádro replikace.
@@ -183,6 +184,8 @@ export interface CopierState {
   safety: {
     entryCooldownUntil: number;
     dayLockUntil: number;
+    /** Durable bounded audit history; never authorizes execution. */
+    disarmHistory?: CopierDisarmRecord[];
     /**
      * Degraded live mode: no new exposure may be copied, but lifecycle and
      * risk-reducing management of already owned copies must keep running.
@@ -375,6 +378,9 @@ export function createCopierState(
       ...(safety.accountRisk
         ? { accountRisk: Object.fromEntries(Object.entries(safety.accountRisk).map(([key, value]) => [key, { ...value }])) }
         : {}),
+      ...(safety.disarmHistory
+        ? { disarmHistory: safety.disarmHistory.map(record => ({ ...record })) }
+        : {}),
     },
   };
 }
@@ -467,6 +473,26 @@ export function updateFollowerLinkQuantity(
     }
   }
   return state;
+}
+
+/**
+ * Úzká výjimka pro množství nativní OSO ochrany spravované venue. Vyšší
+ * quantity je legitimní jen tehdy, když čerstvý úplný position snapshot
+ * potvrzuje přesně stejně velkou otevřenou pozici a noha ji skutečně snižuje.
+ */
+export function venueManagedProtectiveCoverage(input: {
+  link: FollowerOrderLink | undefined;
+  order: BrokerOrder;
+  positions: readonly BrokerPosition[];
+}): boolean {
+  const { link, order, positions } = input;
+  if (!link || (link.nativeOsoRole !== 'stop' && link.nativeOsoRole !== 'target')) return false;
+  if (order.status !== 'working' || order.accountId !== link.accountId) return false;
+  const net = positions
+    .filter(position => position.accountId === order.accountId && position.symbol === order.symbol)
+    .reduce((sum, position) => sum + position.netQuantity, 0);
+  if (net === 0 || order.quantity !== Math.abs(net)) return false;
+  return (net > 0 && order.side === 'Sell') || (net < 0 && order.side === 'Buy');
 }
 
 export interface CancelCommand {

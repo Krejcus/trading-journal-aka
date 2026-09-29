@@ -19,6 +19,7 @@ import {
   planModify,
   planReplication,
   updateFollowerLink,
+  venueManagedProtectiveCoverage,
   type CopierState,
   type FollowerOrderLink,
   type LeaderEvent,
@@ -544,6 +545,19 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
+async function confirmVenueManagedCoverage(
+  broker: BrokerPort,
+  state: CopierState,
+  order: BrokerOrder,
+): Promise<boolean> {
+  const link = [...state.links.values()]
+    .flat()
+    .find(candidate => candidate.brokerOrderId === order.brokerOrderId);
+  if (!link || (link.nativeOsoRole !== 'stop' && link.nativeOsoRole !== 'target')) return false;
+  const positions = await broker.listPositions(order.accountId);
+  return venueManagedProtectiveCoverage({ link, order, positions });
+}
+
 async function processStagedLifecycleCommands(options: {
   commands: readonly StagedLifecycleCommand[];
   event: LeaderEvent;
@@ -639,8 +653,27 @@ async function processStagedLifecycleCommands(options: {
           assertedFollowerQuantity(state, cancelOutbox, entry.brokerOrderId) ?? 0,
         );
         if (live.quantity > asserted) {
-          cancelOutbox.set(entry.key, markCancelRefused(
-            entry, `cizí navýšení množství u brokera (${live.quantity} > ${asserted})`, clock(),
+          let venueManaged = false;
+          try {
+            venueManaged = await confirmVenueManagedCoverage(broker, state, live);
+          } catch (error) {
+            cancelOutbox.set(entry.key, markCancelRefused(
+              entry,
+              `modify neodeslán: venue-managed coverage nelze autoritativně ověřit (${error instanceof Error ? error.message : String(error)})`,
+              clock(),
+            ));
+            return;
+          }
+          if (!venueManaged) {
+            cancelOutbox.set(entry.key, markCancelRefused(
+              entry, `cizí navýšení množství u brokera (${live.quantity} > ${asserted})`, clock(),
+            ));
+            return;
+          }
+          cancelOutbox.set(entry.key, markCancelUnknown(
+            entry,
+            `venue-managed OSO quantity ${live.quantity} odpovídá autoritativní pozici; modify nebyl odeslán`,
+            clock(),
           ));
           return;
         }
@@ -1790,8 +1823,27 @@ export async function processLeaderEvent(
             assertedFollowerQuantity(state, cancelOutbox, entry.brokerOrderId) ?? 0,
           );
           if (live.quantity > asserted) {
-            cancelOutbox.set(entry.key, markCancelRefused(
-              entry, `cizí navýšení množství u brokera (${live.quantity} > ${asserted})`, clock(),
+            let venueManaged = false;
+            try {
+              venueManaged = await confirmVenueManagedCoverage(broker, state, live);
+            } catch (error) {
+              cancelOutbox.set(entry.key, markCancelRefused(
+                entry,
+                `modify neodeslán: venue-managed coverage nelze autoritativně ověřit (${error instanceof Error ? error.message : String(error)})`,
+                clock(),
+              ));
+              return;
+            }
+            if (!venueManaged) {
+              cancelOutbox.set(entry.key, markCancelRefused(
+                entry, `cizí navýšení množství u brokera (${live.quantity} > ${asserted})`, clock(),
+              ));
+              return;
+            }
+            cancelOutbox.set(entry.key, markCancelUnknown(
+              entry,
+              `venue-managed OSO quantity ${live.quantity} odpovídá autoritativní pozici; modify nebyl odeslán`,
+              clock(),
             ));
             return;
           }
