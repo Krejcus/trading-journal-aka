@@ -46,6 +46,8 @@ interface TradovateCashBalanceEntity {
   accountId?: number;
   /** Některé transportní vrstvy mohou propustit bohatší cash snapshot. */
   netLiq?: number;
+  /** Některé snapshoty nesou přímé otevřené P&L, běžná `/deps` entita ne. */
+  openPnL?: number;
   /** Realizovaný cash zůstatek; běžná `/deps` entita nic víc nenese. */
   amount?: number;
   realizedPnL?: number;
@@ -2114,6 +2116,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           accountId,
           at: clock(),
           realizedPnlUsd: finiteNumber(cashBalance?.realizedPnL),
+          openPnlUsd: finiteNumber(cashBalance?.openPnL),
           // Běžná GET /deps entita nese jen `amount` (realizovaný cash), ne net
           // liquidation; net liq se vydává jen tam, kde ho transport opravdu poslal.
           netLiq: finiteNumber(cashBalance?.netLiq),

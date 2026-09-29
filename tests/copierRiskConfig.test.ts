@@ -43,7 +43,6 @@ describe('isWeakerRiskConfig — pravidla skupiny', () => {
     'autoCloseFollowerPositions',
     'preventHedging',
     'positionReconciler',
-    'disableReplicationOnBreach',
   ] as const)('označí vypnutí bezpečnostní pojistky %s', field => {
     const previous = riskConfig();
     previous.safety![field] = true;
@@ -51,6 +50,15 @@ describe('isWeakerRiskConfig — pravidla skupiny', () => {
     next.safety![field] = false;
 
     expect(isWeakerRiskConfig(previous, next)).toContain(`safety.${field}`);
+  });
+
+  it('ignoruje syrové vypnutí disableReplicationOnBreach, protože sanitizer ho vždy vynutí', () => {
+    const previous = riskConfig();
+    previous.safety!.disableReplicationOnBreach = true;
+    const next = riskConfig();
+    next.safety!.disableReplicationOnBreach = false;
+
+    expect(isWeakerRiskConfig(previous, next)).not.toContain('safety.disableReplicationOnBreach');
   });
 
   it.each<readonly [PositiveSafetyLimit, number]>([
