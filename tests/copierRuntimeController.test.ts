@@ -3283,6 +3283,53 @@ describe('auto day-lock z denní ztráty leadera', () => {
     },
   });
 
+  it('N10 day-lock functional update preserves a concurrent sessionArmedAt commit', async () => {
+    const inner = createMemoryCopierStore();
+    let blockNextCommit = false;
+    let releaseCommit!: () => void;
+    let enteredCommit!: () => void;
+    const entered = new Promise<void>(resolve => { enteredCommit = resolve; });
+    const release = new Promise<void>(resolve => { releaseCommit = resolve; });
+    const store = {
+      load: () => inner.load(),
+      commit: async (...args: Parameters<typeof inner.commit>) => {
+        if (blockNextCommit) {
+          blockNextCommit = false;
+          enteredCommit();
+          await release;
+        }
+        return inner.commit(...args);
+      },
+    };
+    let now = 1_000;
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store,
+      group: lossGroup({}),
+      clock: () => ++now,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+    await controller.reconcile();
+
+    blockNextCommit = true;
+    controller.arm();
+    await entered;
+    const lock = controller.lockUntil(100_000, 'souběžný bezpečnostní lock');
+    releaseCommit();
+    await lock;
+    await controller.waitForIdle();
+
+    expect((await store.load()).safety).toMatchObject({
+      sessionArmedAt: expect.any(Number),
+      dayLockUntil: 100_000,
+      dayLockTrigger: 'manual',
+    });
+    expect((await store.load()).safety?.sessionArmedAt).toBeGreaterThan(0);
+    controller.stop();
+  });
+
   it('ztrátový obchod přes USD limit zamkne den až po zploštění skupiny', async () => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const store = createMemoryCopierStore();
@@ -4087,7 +4134,13 @@ describe('reconciliation vs abandoned cancel/modify', () => {
     await controller.waitForIdle();
     const followerEntry = (await broker.listOrders(200)).find(order => order.side === 'Buy');
     expect(followerEntry).toBeDefined();
-    broker.emitEvent({ type: 'order', order: { ...followerEntry!, status: 'rejected', rejectReason, updatedAt: 5_000 } });
+    // Autoritativní broker snapshot musí už také potvrzovat terminal reject;
+    // samotný stream event vedle stále working REST entity není důkaz pro allowedNet=0.
+    followerEntry!.status = 'rejected';
+    followerEntry!.rejectReason = rejectReason;
+    followerEntry!.updatedAt = 5_000;
+    followerEntry!.sourceVersion = '2:Rejected';
+    broker.emitEvent({ type: 'order', order: followerEntry! });
     broker.emitEvent({ type: 'fill', fill: {
       fillId: 'leader-fill-async-reject', tag: 'leader-entry-async-reject', brokerOrderId: 'leader-entry-async-reject',
       accountId: 100, symbol: 'MNQU6', side: 'Buy', quantity: 1, price: 29_500, filledAt: 101,

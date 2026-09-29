@@ -1401,6 +1401,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const accountRiskLastRequestedAt = new Map<number, number>();
   /** Jak starý smí být terminální reject vstupu, aby vysvětlil flat followera při otevřeném leaderu. */
   const REJECTED_ENTRY_ISOLATION_WINDOW_MS = 15 * 60_000;
+  const MAX_EXPOSURE_EVENT_AGE_MS = 5_000;
   const ACCOUNT_RISK_POLL_MS = 30_000;
   /** VYPNUTO/shadow: limity propek a PnL účtů chceme vidět vždy, jen pomaleji. */
   const ACCOUNT_RISK_IDLE_POLL_MS = 60_000;
@@ -1474,11 +1475,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * Po restartu se záměr neodhaduje: runtime startuje DISARMED a mismatch
    * musí projít novou autoritativní reconciliation.
    */
-  const intentionalEntrySuppressions = new Map<string, {
+  interface IntentionalEntrySuppression {
     allowedNet: number;
     createdAt: number;
     leaderOrderId: string;
-  }>();
+    /** Otevřená leader epizoda, ke které výjimka patří; před Position open může být null. */
+    epochId: string | null;
+    /** Nulová výjimka je platná jen nad stejným autoritativním broker snapshotem. */
+    observationVersion: number;
+    zeroEvidence: boolean;
+  }
+  const intentionalEntrySuppressions = new Map<string, IntentionalEntrySuppression>();
   interface EpisodeFollowerIsolationEvidence {
     accountId: number;
     symbol: string;
@@ -1491,6 +1498,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     accountId: number;
     symbol: string;
     remaining: number;
+    initialNet: number;
+    filled: number;
     /** OCO/OSO sourozenci sdílejí kapacitu: vyplnit se smí jen jeden. */
     groupKey: string;
   }>();
@@ -1710,6 +1719,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * nohou nestačí: po restartu v durable outboxu zůstávají staré strategie a
    * nová legitimní long kopie pak může vypadat jako fill staré Buy ochrany.
    */
+  const isStandaloneProtective = (value: unknown): boolean => (
+    (value as { protectiveRole?: string } | null)?.protectiveRole === 'standalone-stop'
+  );
   const followerFillRole = (accountId: number, brokerOrderId: string): FollowerFillRole | null => {
     const runtime = currentRuntime();
     for (const entry of runtime.osoOutbox.values()) {
@@ -1727,6 +1739,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     for (const entry of runtime.outbox.values()) {
       if (entry.request.accountId === accountId && entry.brokerOrderId === brokerOrderId) {
+        if (isStandaloneProtective(entry)) return 'protective';
         const increasesExposure = entry.leaderEventId == null
           ? undefined
           : leaderExposureIncreaseByEventId.get(entry.leaderEventId);
@@ -1801,10 +1814,25 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       entry.request.accountId === accountId && entry.request.symbol === symbol
     ));
     const protectiveEntries = [...bracketEntries, ...osoEntries];
+    const standaloneIds = [
+      ...[...runtime.outbox.values()]
+        .filter(entry => (
+          entry.request.accountId === accountId
+          && entry.request.symbol === symbol
+          && isStandaloneProtective(entry)
+        ))
+        .map(entry => entry.brokerOrderId),
+      ...[...runtime.state.links.values()].flat()
+        .filter(link => link.accountId === accountId && isStandaloneProtective(link))
+        .map(link => link.brokerOrderId),
+    ].filter((brokerOrderId): brokerOrderId is string => Boolean(brokerOrderId));
 
     const allLegIds = [...new Set(
-      protectiveEntries.flatMap(entry => [entry.firstBrokerOrderId, entry.secondBrokerOrderId])
-        .filter((brokerOrderId): brokerOrderId is string => Boolean(brokerOrderId)),
+      [
+        ...protectiveEntries.flatMap(entry => [entry.firstBrokerOrderId, entry.secondBrokerOrderId])
+          .filter((brokerOrderId): brokerOrderId is string => Boolean(brokerOrderId)),
+        ...standaloneIds,
+      ],
     )];
     const candidateIds = allLegIds.filter(brokerOrderId => (
       !sweptProtectiveLegs.has(brokerOrderId)
@@ -3169,13 +3197,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     dayLockPending = null;
     const until = pending.until ?? (now + msUntilTradovateSessionEnd(now));
     gate = { ...gate, armed: false };
-    await persistSafety({
-      ...currentRuntime().state.safety,
-      dayLockUntil: Math.max(currentRuntime().state.safety.dayLockUntil, until),
+    await persistSafetyUpdate(current => ({
+      ...current,
+      dayLockUntil: Math.max(current.dayLockUntil, until),
       dayLockReason: reason,
       dayLockTrigger: pending.trigger,
       dayLockAt: now,
-    });
+    }));
     options.onAudit?.([{
       at: now,
       leaderEventId: automatic ? `auto-day-lock:${pending.trigger}` : 'manual-day-lock',
@@ -3519,13 +3547,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const rejected: OutboxEntry[] = [];
     for (const entry of currentRuntime().outbox.values()) {
       if (entry.request.accountId !== accountId || entry.request.symbol !== symbol) continue;
+      // Historie jiné epizody (včetně acknowledged vstupu z rána) nesmí
+      // potlačit terminální reject aktuálního leader entry.
+      if (!epoch.leaderEntryOrderIds.includes(entry.leaderOrderId)) continue;
       if (
         entry.status === 'planned'
         || entry.status === 'sending'
         || entry.status === 'unknown'
         || entry.status === 'acknowledged'
       ) return null;
-      if (entry.status !== 'rejected' || !epoch.leaderEntryOrderIds.includes(entry.leaderOrderId)) continue;
+      if (entry.status !== 'rejected') continue;
       if (entry.rejectedBy !== 'broker' || entry.request.side !== entrySide || !entry.reason?.trim()) return null;
       if (now - entry.updatedAt > REJECTED_ENTRY_ISOLATION_WINDOW_MS) return null;
       rejected.push(entry);
@@ -3546,11 +3577,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const now = clock();
     const reason = rejections[0]?.reason?.trim() || 'broker odmítl vstup';
     const rejectedKeys = new Set(rejections.map(entry => entry.key));
-    intentionalEntrySuppressions.set(intentionalSuppressionKey(accountId, symbol), {
-      allowedNet: 0,
-      createdAt: now,
-      leaderOrderId: rejections[0]?.leaderOrderId ?? '',
-    });
+    const leaderOrderId = rejections[0]?.leaderOrderId ?? '';
+    if (
+      rejections.some(entry => entry.leaderOrderId !== leaderOrderId)
+      || !await authoritativelyConfirmSuppression(accountId, symbol, leaderOrderId)
+    ) {
+      throw new Error(
+        `Copier fail-closed: odmítnutý follower ${accountId} nemá autoritativní flat/no-working/no-pending důkaz pro aktuální epizodu`,
+      );
+    }
     for (const [key, timer] of pendingFollowerMagnitudeChecks) {
       if (!key.startsWith(`${accountId}:`)) continue;
       clearTimeout(timer);
@@ -3623,9 +3658,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       positionsByAccount.set(accountId, followerPositions);
 
       if (followerNet === expectedFollowerNet) return;
-      const suppression = intentionalEntrySuppressions.get(
-        intentionalSuppressionKey(accountId, symbol),
-      );
+      const suppression = currentIntentionalSuppression(accountId, symbol);
       if (suppression && followerNet === suppression.allowedNet) return;
       if (followerNet === 0 && leaderNet !== 0) {
         // Follower zmizel z trhu za otevřeného leadera. Než skupinu
@@ -4054,13 +4087,43 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     });
 
     if (plan.kind === 'opened' || plan.kind === 'updated') {
+      const pendingSuppressionEntryIds = plan.kind === 'opened'
+        ? [...new Set(group.followers.flatMap(follower => {
+          const suppression = intentionalEntrySuppressions.get(
+            intentionalSuppressionKey(follower.accountId, symbol),
+          );
+          return suppression != null && suppression.epochId == null && suppression.leaderOrderId
+            ? [suppression.leaderOrderId]
+            : [];
+        }))]
+        : [];
+      const epochToPersist = plan.kind === 'opened'
+        && plan.epoch.leaderEntryOrderIds.length === 0
+        && pendingSuppressionEntryIds.length === 1
+        ? mergeLeaderFlatEpochLineage(plan.epoch, {
+          leaderEntryOrderIds: pendingSuppressionEntryIds,
+        })
+        : plan.epoch;
       if (plan.kind === 'opened' && epoch) {
         const staleTimer = leaderFlatGuardTimers.get(epoch.id);
         if (staleTimer) clearTimeout(staleTimer);
         leaderFlatGuardTimers.delete(epoch.id);
         leaderFlatGuardGenerationRetries.delete(epoch.id);
       }
-      await persistLeaderExposureEpoch(plan.epoch);
+      if (plan.kind === 'opened') {
+        for (const follower of group.followers) {
+          const key = intentionalSuppressionKey(follower.accountId, symbol);
+          const suppression = intentionalEntrySuppressions.get(key);
+          if (!suppression) continue;
+          if (epochToPersist.leaderEntryOrderIds.includes(suppression.leaderOrderId)) {
+            intentionalEntrySuppressions.set(key, { ...suppression, epochId: epochToPersist.id });
+          } else {
+            // Nová epizoda přepisuje/ruší lineage předchozího obchodu.
+            intentionalEntrySuppressions.delete(key);
+          }
+        }
+      }
+      await persistLeaderExposureEpoch(epochToPersist);
       return;
     }
     if (plan.kind === 'scheduled') {
@@ -4635,6 +4698,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             accountId,
             symbol: order.symbol,
             remaining: Math.max(0, order.quantity - order.filledQuantity),
+            initialNet: positionSnapshot.get(order.symbol) ?? 0,
+            filled: 0,
             groupKey: bucket.groupKey,
           });
         }
@@ -6947,6 +7012,86 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       reservation.accountId === accountId && reservation.remaining > 0
     ));
   };
+  const hasAuthoritativeFlatNoWorking = (accountId: number, symbol: string): boolean => {
+    const positions = positionsByAccount.get(accountId);
+    const liveOrders = liveOrdersByAccount.get(accountId);
+    return positions != null
+      && (positions.get(symbol) ?? 0) === 0
+      && liveOrders != null
+      && ![...liveOrders.values()].some(order => (
+        order.symbol === symbol && isOpenOrderStatus(order.status)
+      ))
+      && !pendingIsolationCommandForAccount(accountId);
+  };
+  const currentIntentionalSuppression = (
+    accountId: number,
+    symbol: string,
+  ): IntentionalEntrySuppression | null => {
+    const key = intentionalSuppressionKey(accountId, symbol);
+    const suppression = intentionalEntrySuppressions.get(key);
+    const epoch = leaderExposureEpoch(symbol);
+    if (!suppression || !epoch || epoch.phase !== 'open') return null;
+    const belongsToEpoch = suppression.epochId === epoch.id
+      || (suppression.epochId == null
+        && epoch.leaderEntryOrderIds.includes(suppression.leaderOrderId));
+    if (!belongsToEpoch) return null;
+    if (suppression.epochId == null) {
+      suppression.epochId = epoch.id;
+      intentionalEntrySuppressions.set(key, suppression);
+    }
+    if (suppression.allowedNet !== 0) return suppression;
+    if (
+      !suppression.zeroEvidence
+      || suppression.observationVersion !== (tradeObservationVersionByAccount.get(accountId) ?? 0)
+      || !hasAuthoritativeFlatNoWorking(accountId, symbol)
+    ) return null;
+    return suppression;
+  };
+  const authoritativelyConfirmSuppression = async (
+    accountId: number,
+    symbol: string,
+    leaderOrderId: string,
+  ): Promise<boolean> => {
+    if (!leaderOrderId) return false;
+    const generationAtStart = safetyGeneration;
+    const observationAtStart = tradeObservationVersionByAccount.get(accountId) ?? 0;
+    const epochAtStart = leaderExposureEpoch(symbol);
+    if (
+      epochAtStart
+      && (epochAtStart.phase !== 'open'
+        || !epochAtStart.leaderEntryOrderIds.includes(leaderOrderId))
+    ) return false;
+    try {
+      const [positions, orders] = await Promise.all([
+        broker.listPositions(accountId),
+        broker.listOrders(accountId),
+      ]);
+      if (
+        stopped
+        || generationAtStart !== safetyGeneration
+        || observationAtStart !== (tradeObservationVersionByAccount.get(accountId) ?? 0)
+        || leaderExposureEpoch(symbol)?.id !== epochAtStart?.id
+        || positions.some(position => position.netQuantity !== 0)
+        || orders.some(order => isOpenOrderStatus(order.status))
+        || pendingIsolationCommandForAccount(accountId)
+      ) return false;
+      positionsByAccount.set(accountId, new Map(
+        positions.map(position => [position.symbol, position.netQuantity]),
+      ));
+      rememberLiveOrderSnapshot(accountId, orders);
+      intentionalEntrySuppressions.set(intentionalSuppressionKey(accountId, symbol), {
+        allowedNet: 0,
+        createdAt: clock(),
+        leaderOrderId,
+        epochId: epochAtStart?.id ?? null,
+        observationVersion: observationAtStart,
+        zeroEvidence: true,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
   const isolationEligibilityState = (
     accountId: number,
     at = clock(),
@@ -7037,13 +7182,27 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         || (event.kind === 'filled' && follower.mode === 'on-fill');
       if (!acceptsEvent || follower.enabled === false || currentIneligibleAccounts().has(follower.accountId)) continue;
       const key = intentionalSuppressionKey(follower.accountId, event.symbol);
-      if (intentionalEntrySuppressions.has(key)) continue;
       const authoritativePositions = positionsByAccount.get(follower.accountId);
       if (!authoritativePositions) continue;
+      const allowedNet = authoritativePositions.get(event.symbol) ?? 0;
+      const liveOrders = liveOrdersByAccount.get(follower.accountId);
+      const zeroEvidence = allowedNet === 0
+        && liveOrders != null
+        && ![...liveOrders.values()].some(order => (
+          order.symbol === event.symbol && isOpenOrderStatus(order.status)
+        ))
+        && !pendingIsolationCommandForAccount(follower.accountId);
+      if (allowedNet === 0 && !zeroEvidence) continue;
+      const epoch = leaderExposureEpoch(event.symbol);
       intentionalEntrySuppressions.set(key, {
-        allowedNet: authoritativePositions.get(event.symbol) ?? 0,
+        allowedNet,
         createdAt: event.receivedAt,
         leaderOrderId: event.orderId,
+        epochId: epoch?.phase === 'open' && epoch.leaderEntryOrderIds.includes(event.orderId)
+          ? epoch.id
+          : null,
+        observationVersion: tradeObservationVersionByAccount.get(follower.accountId) ?? 0,
+        zeroEvidence,
       });
     }
     while (intentionalEntrySuppressions.size > 2_000) {
@@ -8104,10 +8263,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           }
         }
         if (targeted.kind === 'working-flat') {
-          intentionalEntrySuppressions.set(
-            intentionalSuppressionKey(follower.accountId, event.symbol),
-            { allowedNet: 0, createdAt: clock(), leaderOrderId: event.orderId },
-          );
+          const currentEpochEntryOrderId = leaderExposureEpoch(event.symbol)?.leaderEntryOrderIds[0];
+          if (
+            !currentEpochEntryOrderId
+            || !await authoritativelyConfirmSuppression(
+              follower.accountId,
+              event.symbol,
+              currentEpochEntryOrderId,
+            )
+          ) {
+            pendingReadUnsafeAccounts.set(
+              follower.accountId,
+              'po cancelu pending vstupu chybí autoritativní flat/no-working/no-pending důkaz',
+            );
+            return;
+          }
           pendingReadSkipAccounts.add(follower.accountId);
           ineligibleAccounts.set(follower.accountId, 'pending-entry-copy-canceled-before-exit');
           return;
@@ -8187,7 +8357,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           : followerNet !== expectedPreNet
       );
       const suppressionKey = intentionalSuppressionKey(follower.accountId, event.symbol);
-      let suppression = intentionalEntrySuppressions.get(suppressionKey);
+      let suppression = currentIntentionalSuppression(follower.accountId, event.symbol) ?? undefined;
+      if (
+        suppression
+        && increasesExposure
+        && preNet === 0
+        && suppression.leaderOrderId !== event.orderId
+      ) {
+        // Nový vstup z leader flat je začátek nové epizody ještě předtím,
+        // než dorazí Position projekce. Stará výjimka nesmí tento vstup
+        // ani jeho pozdější exit zdědit.
+        intentionalEntrySuppressions.delete(suppressionKey);
+        suppression = undefined;
+      }
       const reservedByGroup = new Map<string, number>();
       for (const reservation of exitOnlyReservations.values()) {
         if (reservation.accountId !== follower.accountId || reservation.symbol !== event.symbol) continue;
@@ -8325,6 +8507,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         accountId: order.request.accountId,
         symbol: order.request.symbol,
         remaining: order.request.quantity,
+        initialNet: positionsByAccount.get(order.request.accountId)?.get(order.request.symbol) ?? 0,
+        filled: 0,
         groupKey: dispatched.brokerOrderId,
       });
     }
@@ -8486,6 +8670,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     event: BrokerEvent,
     admissionGeneration: number,
     ingressPerformanceAt: number,
+    eventReceivedAt: number,
     flatSweepIngressWave?: FlatSweepIngressWave,
   ) => {
     if (stopped) return;
@@ -8615,7 +8800,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const accountPositions = positionsByAccount.get(reservation.accountId);
         const cachedNet = accountPositions?.get(reservation.symbol) ?? 0;
         const signedFill = event.fill.side === 'Buy' ? applied : -applied;
-        const positionAlreadyApplied = exitOnlyPositionApplied.delete(event.fill.brokerOrderId);
+        const explicitPositionAlreadyApplied = exitOnlyPositionApplied.delete(event.fill.brokerOrderId);
+        const observedReductionFromInitial = reservation.initialNet !== 0
+          && (cachedNet === 0 || Math.sign(cachedNet) === Math.sign(reservation.initialNet))
+          && Math.abs(cachedNet) <= Math.abs(reservation.initialNet)
+          ? Math.abs(reservation.initialNet) - Math.abs(cachedNet)
+          : 0;
+        const positionAlreadyApplied = explicitPositionAlreadyApplied
+          || observedReductionFromInitial >= reservation.filled + applied;
         const reducesCachedPosition = cachedNet !== 0
           && Math.sign(cachedNet) !== Math.sign(signedFill)
           && applied <= Math.abs(cachedNet);
@@ -8633,7 +8825,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           reservation.accountId,
           reservation.symbol,
         );
-        const suppression = intentionalEntrySuppressions.get(suppressionKey);
+        const suppression = currentIntentionalSuppression(
+          reservation.accountId,
+          reservation.symbol,
+        );
         if (suppression && applied > 0 && (positionAlreadyApplied || reducesCachedPosition)) {
           const nextAllowedNet = suppression.allowedNet + signedFill;
           const safelyReduced = Math.abs(nextAllowedNet) <= Math.abs(suppression.allowedNet)
@@ -8654,7 +8849,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         }
         const remaining = Math.max(0, reservation.remaining - event.fill.quantity);
         if (remaining === 0) exitOnlyReservations.delete(event.fill.brokerOrderId);
-        else exitOnlyReservations.set(event.fill.brokerOrderId, { ...reservation, remaining });
+        else exitOnlyReservations.set(event.fill.brokerOrderId, {
+          ...reservation,
+          remaining,
+          filled: reservation.filled + event.fill.quantity,
+        });
         // OCO/OSO sourozenci jsou alternativy téže kapacity. Po částečném
         // fillu se jejich lokální rezervace smí nejvýš rovnat zbývající
         // skutečné expozici. Ve flat stavu se ale rezervace nesmí jen smazat:
@@ -9032,8 +9231,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         rememberLeaderPosition(event.position.symbol, event.position.netQuantity);
         for (const follower of group.followers) {
           const followerNet = positionsByAccount.get(follower.accountId)?.get(event.position.symbol) ?? 0;
-          const suppression = intentionalEntrySuppressions.get(
-            intentionalSuppressionKey(follower.accountId, event.position.symbol),
+          const suppression = currentIntentionalSuppression(
+            follower.accountId,
+            event.position.symbol,
           );
           if (follower.enabled === false
             || follower.mode === 'off'
@@ -9116,12 +9316,33 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     if (group.leaderAccountId == null) return;
     const sequence = currentRuntime().state.lastSequence + 1;
-    const leaderEvent = source.observe(event, group.leaderAccountId, sequence, now);
+    const leaderEvent = source.observe(event, group.leaderAccountId, sequence, eventReceivedAt);
     if (!leaderEvent) return;
     options.onLeaderEvent?.(leaderEvent);
     // Stabilní klasifikace pro všechny následující větve této události;
     // nesmí se změnit jen proto, že mezitím dorazí Position projekce.
     const eventIncreasesExposure = leaderEventIncreasesExposure(leaderEvent);
+    if (
+      eventIncreasesExposure
+      && now - leaderEvent.receivedAt > MAX_EXPOSURE_EVENT_AGE_MS
+    ) {
+      const recorded = await processor.record({ event: leaderEvent, group, clock, store: options.store });
+      runtime = recorded.runtime;
+      if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
+      const ageMs = now - leaderEvent.receivedAt;
+      options.onAudit?.([{
+        at: now,
+        leaderEventId: leaderEvent.id,
+        kind: 'blocked',
+        reason: `stale-exposure-increase:${ageMs}ms`,
+      }]);
+      const error = new Error(
+        `Copier fail-closed: stará risk-zvyšující událost leadera (${ageMs} ms) se nebude kopírovat pozdě`,
+      );
+      if (gate.armed) failClosed(error, { autoClose: false });
+      else invalidateReconciliation();
+      return;
+    }
     if (leaderEvent.kind === 'filled' && eventIncreasesExposure) {
       const previouslyBlockedEntry = blockedLeaderEntryOrderIds.has(leaderEvent.orderId);
       const blockedWithoutExitSlice = previouslyBlockedEntry
@@ -9249,7 +9470,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
                 else invalidateReconciliation();
               } finally { bracketCorrelator.abandonPendingPair(bracketEntryOrderId); }
             }).catch(reason => failClosed(reason));
-          }, bracketCorrelator.pendingTimeoutMs() + 250);
+          }, Math.max(
+            0,
+            leaderEvent.receivedAt + bracketCorrelator.pendingTimeoutMs() + 250 - clock(),
+          ));
           pendingBracketTimers.set(bracketEntryOrderId, timer);
         }
         return;
@@ -9374,7 +9598,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           pendingOsoGenerations.delete(leaderEvent.orderId);
           blockedOsoEntries.delete(leaderEvent.orderId);
           osoCorrelator.release(leaderEvent.orderId);
-        }, osoCorrelator.pendingWindowMs() + 50);
+        }, Math.max(
+          0,
+          leaderEvent.receivedAt + osoCorrelator.pendingWindowMs() + 50 - clock(),
+        ));
         pendingOsoTimers.set(leaderEvent.orderId, timer);
         return;
       }
@@ -9454,7 +9681,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       pendingOsoResolvers.set(leaderEvent.orderId, resolveFlush);
       const timer = setTimeout(() => {
         void flushStandaloneOsoEntry(leaderEvent.orderId);
-      }, osoCorrelator.pendingWindowMs() + 50);
+      }, Math.max(
+        0,
+        leaderEvent.receivedAt + osoCorrelator.pendingWindowMs() + 50 - clock(),
+      ));
       pendingOsoTimers.set(leaderEvent.orderId, timer);
       return;
     }
@@ -9609,15 +9839,29 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (await blockDuringPause(leaderEvent, true, leaderEvent, true)) return;
       if (await blockOutsideTradingWindow(leaderEvent, true)) return;
     }
+    const safelyUnmappedReplaceAccounts = new Set<number>();
     if (leaderEvent.kind === 'replaced' && leaderEvent.executionShapeChanged === true) {
-      const hasFollowerLink = (currentRuntime().state.links.get(leaderEvent.orderId)?.length ?? 0) > 0;
-      const needsSubmitLifecycle = group.followers.some(follower => (
+      const followerLinks = currentRuntime().state.links.get(leaderEvent.orderId) ?? [];
+      for (const follower of group.followers) {
+        if (followerLinks.some(link => link.accountId === follower.accountId)) continue;
+        if (
+          currentIntentionalSuppression(follower.accountId, leaderEvent.symbol) != null
+          || (
+            followerQuantity(leaderEvent.quantity, follower.multiplier) === 0
+            && hasAuthoritativeFlatNoWorking(follower.accountId, leaderEvent.symbol)
+          )
+        ) safelyUnmappedReplaceAccounts.add(follower.accountId);
+      }
+      const unmappedFollowers = group.followers.filter(follower => (
         follower.enabled !== false
         && follower.mode === 'on-submit' && !currentIneligibleAccounts().has(follower.accountId)
+        && !followerLinks.some(link => link.accountId === follower.accountId)
+        && !safelyUnmappedReplaceAccounts.has(follower.accountId)
       ));
-      if (!hasFollowerLink && needsSubmitLifecycle) {
+      if (unmappedFollowers.length > 0) {
         const error = new Error(
-          `Copier fail-closed: leader replace ${leaderEvent.orderId} nemá pending korelaci ani follower link`,
+          `Copier fail-closed: leader replace ${leaderEvent.orderId} nemá pending korelaci ani follower link `
+          + `pro účty ${unmappedFollowers.map(follower => follower.accountId).join(', ')}`,
         );
         options.onAudit?.([{
           at: now,
@@ -9684,7 +9928,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     const result = await processor.process({
       event: leaderEvent,
-      group: cutAwareDispatch.dispatchGroup,
+      group: safelyUnmappedReplaceAccounts.size === 0
+        ? cutAwareDispatch.dispatchGroup
+        : {
+          ...cutAwareDispatch.dispatchGroup,
+          followers: cutAwareDispatch.dispatchGroup.followers.map(follower => (
+            safelyUnmappedReplaceAccounts.has(follower.accountId)
+              ? { ...follower, mode: 'off' as const }
+              : follower
+          )),
+        },
       context: {
         ...gate,
         now,
@@ -10143,9 +10396,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             : Math.trunc(leaderNet * follower.multiplier);
           const actual = followerPositions.get(symbol) ?? 0;
           const intentionalLetRun = cut != null && (follower.onCut ?? 'close-copy') === 'let-run';
-          const pauseSuppression = intentionalEntrySuppressions.get(
-            intentionalSuppressionKey(follower.accountId, symbol),
-          );
+          const pauseSuppression = currentIntentionalSuppression(follower.accountId, symbol);
           const allowedLetRunSubset = intentionalLetRun
             && (
               actual === 0
@@ -10198,6 +10449,31 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           const hasWorkingLeg = [entry.firstBrokerOrderId, entry.secondBrokerOrderId]
             .some(id => id && workingIds.has(id));
           if (hasWorkingLeg) flatSymbols.add(entry.request.symbol);
+        }
+        for (const entry of runtime.outbox.values()) {
+          if (
+            entry.request.accountId !== follower.accountId
+            || !entry.brokerOrderId
+            || !isStandaloneProtective(entry)
+            || !workingIds.has(entry.brokerOrderId)
+          ) continue;
+          const net = snapshot.positions.find(item => item.symbol === entry.request.symbol)?.netQuantity ?? 0;
+          if (net === 0) flatSymbols.add(entry.request.symbol);
+        }
+        for (const links of runtime.state.links.values()) {
+          for (const link of links) {
+            if (
+              link.accountId !== follower.accountId
+              || !isStandaloneProtective(link)
+              || !workingIds.has(link.brokerOrderId)
+            ) continue;
+            const linkedEntry = [...runtime.outbox.values()].find(entry => (
+              entry.brokerOrderId === link.brokerOrderId
+            ));
+            if (!linkedEntry) continue;
+            const net = snapshot.positions.find(item => item.symbol === linkedEntry.request.symbol)?.netQuantity ?? 0;
+            if (net === 0) flatSymbols.add(linkedEntry.request.symbol);
+          }
         }
         for (const symbol of flatSymbols) {
           reconciliationSweepJobs.push(sweepFollowerProtectiveLegs(
@@ -10611,6 +10887,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
   const unsubscribe = broker.subscribe(event => {
     const ingressPerformanceAt = performance.now();
+    const explicitReceivedAt = (event as BrokerEvent & { receivedAt?: number }).receivedAt;
+    const eventReceivedAt = Number.isFinite(explicitReceivedAt)
+      ? explicitReceivedAt as number
+      : clock();
     const flatSweepIngressWave = event.type === 'position'
       && event.position.netQuantity === 0
       && group.followers.some(follower => follower.accountId === event.position.accountId)
@@ -10690,6 +10970,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           event,
           admissionGeneration,
           ingressPerformanceAt,
+          eventReceivedAt,
           flatSweepIngressWave,
         );
       })
