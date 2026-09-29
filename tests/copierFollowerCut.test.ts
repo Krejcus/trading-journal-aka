@@ -1632,7 +1632,7 @@ describe('CopierRuntimeController — follower account cuts', () => {
     }
   });
 
-  it('follower flat zruší stále working exit-only příkaz dřív, než by mohl otevřít reverse', async () => {
+  it('F1 exit-only: nový flat snapshot dovolí po nejasném cancelu nové rozhodnutí', async () => {
     const time = manualClock();
     let breached = false;
     const broker = createMockBroker({
@@ -1674,6 +1674,15 @@ describe('CopierRuntimeController — follower account cuts', () => {
         order.accountId === 200 && order.side === 'Sell' && order.status === 'working'
       ));
       expect(exitOrder).toBeDefined();
+      const realCancel = broker.cancelOrder.bind(broker);
+      let cancelAttempts = 0;
+      let recovered = false;
+      broker.cancelOrder = async (accountId, brokerOrderId) => {
+        if (brokerOrderId !== exitOrder?.brokerOrderId) return realCancel(accountId, brokerOrderId);
+        cancelAttempts += 1;
+        if (!recovered) throw new Error('mock exit-only cancel 503');
+        return realCancel(accountId, brokerOrderId);
+      };
 
       await broker.placeOrder({
         accountId: 200,
@@ -1684,11 +1693,29 @@ describe('CopierRuntimeController — follower account cuts', () => {
         tag: 'test-external-flat',
       });
       await runtime.controller.waitForIdle();
+      expect(cancelAttempts).toBe(1);
+      expect(runtime.controller.status().armed).toBe(false);
+      expect(broker.orders().find(order => order.brokerOrderId === exitOrder?.brokerOrderId))
+        .toMatchObject({ status: 'working' });
+
+      recovered = true;
+      broker.setPosition(200, 'MNQU6', 1);
+      broker.emitEvent({
+        type: 'position',
+        position: { accountId: 200, symbol: 'MNQU6', netQuantity: 1 },
+      });
+      broker.setPosition(200, 'MNQU6', 0);
+      broker.emitEvent({
+        type: 'position',
+        position: { accountId: 200, symbol: 'MNQU6', netQuantity: 0 },
+      });
+      await runtime.controller.waitForIdle();
 
       expect(broker.orders().find(order => order.brokerOrderId === exitOrder?.brokerOrderId))
         .toMatchObject({ status: 'canceled' });
+      expect(cancelAttempts).toBe(2);
       expect(broker.cancelRequestCount(exitOrder?.brokerOrderId ?? '')).toBe(1);
-      expect(runtime.controller.status().lastError).toBe(null);
+      expect(runtime.controller.status().lastError).toContain('exit-only sweep');
     } finally {
       runtime.controller.stop();
     }

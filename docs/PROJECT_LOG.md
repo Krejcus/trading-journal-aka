@@ -251,6 +251,36 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — V13 šestá iterace: obnovitelný cancel tombstone, OSO parent a okamžitý sibling cleanup (Codex, balíček 3b-7)
+
+- Nejasný flat-sweep cancel už nezablokuje broker order navždy: do nového
+  autoritativního account snapshotu zůstává write zakázaný, ale čerstvé
+  `flat + working` dovolí jediné nové risk-redukující rozhodnutí. Tombstones
+  se uzavírají terminální/absent evidencí a mažou při reconciliation i
+  runtime resetu; stejný kontrakt platí pro exit-only cleanup. Žádný cancel
+  se neopakuje bez nového read-only snapshotu.
+- Flat sweep před terminálním early returnem kontroluje stream-only stav OSO
+  parentu. Když ruší poslední živé děti otevřeného parentu, zruší s nimi
+  i parent; otevřený leader remainder je hlasitá fail-closed divergence.
+  Opožděný copied-entry fill po tomto cleanupu spouští policy auto-close.
+- Přesně korelovaný sourozenec vyplněné SL/TP nohy se ruší ještě před
+  pomalým `/position/list`; pre-read dál chrání všechny ostatní nohy.
+  Stream-only lookup má 250ms deadline a po timeoutu/chybě pokračuje jako
+  neznámý stav do autoritativního globálního čtení.
+- Osm nových/obrácených V13 regresí před opravou padalo (X1 fail/hang,
+  X5, F2 V2/P1/P2, X6/N1, X3 a B3 hang); samostatně červeně potvrzena
+  i exit-only tombstone regrese. Po opravě V13 + follower-cut 82/82
+  a širší controller/bracket/guard sada 223/223. Jedna stará chaos fixture
+  modelovala follower pozici při OSO parentu `Working/0`; po opravě fixture na
+  skutečně filled parent prošla izolovaně 3× i v širší sadě.
+- Předepsaná copier sada: sandbox 166 pass + 1 skipped, 89 loopback pádů
+  výhradně `listen EPERM 127.0.0.1`; opakování celého stejného příkazu mimo
+  sandbox prošlo 170 souborů + 1 skipped, 1961 testů + 1 todo, exit 0.
+  Root `tsc --noEmit` má jen povolené chybějící Chrome/CRX typy v
+  `extension/`; dočasný config bez `extension/` prošel exit 0 a byl smazán.
+  Bez npm install/ci, commitu, broker volání, ARM/Flatten, deploye nebo
+  reinstalace workeru; leader-flat guard F5 zůstal záměrně beze změny.
+
 ### 2026-09-29 — V13 v5b: deadline visícího flat-sweep cancelu (Codex, balíček 3b-6)
 
 - Každý protective/OSO i exit-only cancel ve flat sweepu má vlastní

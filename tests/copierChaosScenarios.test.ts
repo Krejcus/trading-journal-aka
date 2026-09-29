@@ -873,6 +873,15 @@ describe('flat sweep ochranných nohou (incident 24. 8.)', () => {
     if (!currentEntry?.firstBrokerOrderId || !currentEntry.secondBrokerOrderId) {
       throw new Error('Test setup: aktuální follower OSO nebyl potvrzen');
     }
+    // Protective fill může zavřít jen už vyplněný vstup. Původní fixture
+    // nechávala parent Working/0 a současně ručně vytvořila follower pozici,
+    // což po F2 správně vypadá jako otevřený parent bez živých dětí.
+    const currentParent = broker.orders().find(order => (
+      order.brokerOrderId === currentEntry.entryBrokerOrderId
+    ));
+    if (!currentParent) throw new Error('Test setup: aktuální follower OSO parent nebyl nalezen');
+    currentParent.status = 'filled';
+    currentParent.filledQuantity = currentParent.quantity;
     const currentStop = broker.orders().find(order => (
       order.brokerOrderId === currentEntry.firstBrokerOrderId && order.orderType === 'Stop'
     )) ?? broker.orders().find(order => (
