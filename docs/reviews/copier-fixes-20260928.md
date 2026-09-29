@@ -49,15 +49,18 @@ Od 29. 9. 02:38 jsou větve jádra, brokeru, agenta a UI sloučené v `codex/cop
 
 | # | Obsah | Kdo | Reinstall | Stav |
 |---|---|---|---|---|
-| 1 | Večerní výjimka `retireMissingOldGroup`: přesunout audit za durable zápis, test, že jiná „missing leader route“ zůstane fatální | Codex | ne (commit) | hotovo 1802df6 |
-| 2 | UI: nouzový DISARM/kill i při neznámém stavu (ST1), skutečná expirace ARM (V14 UI), retence stavu přepínače (ST2), varování, že úprava skupiny vypne kopírku (V1 UI), UI-10a–e | Claude + Codex | ne | hotovo, větev claude/copier-ui-fixes-20260928 (687bb6b…7abec38) |
-| 3 | V12 + V13 + ST4 — po iteracích | Codex | ano | V12 v4 8c2591f a V13 v4 1a742cd: review (copier-v12d/v13e-review) našla cesty horší než pre → V12 v5 a V13 v5 rozpracováno (worktree alphatrade-copier-v12v5/v13v5-20260929) |
-| 4 | V16 (izolace breached/ineligible followeru pro divergenci) | Codex | ano | hotovo 0b13040 |
-| 5 | 5b: V5, V7, V8 + rychlost (broker větev); 5c: V17, V18, ST28, ST31, standalone-stop sweep, receivedAt, SL reassert, ST6, N10 | Codex | ano | 5b hotovo (32bb813); 5c hotovo (cdeec40) |
-| 6 | V9 + V4 (+ ST4 kontrola) | Codex | ano | hotovo b762714 + oprava review 6b 68253a7 (copier-b6-review); ověřovací review běží |
-| 7 | V10 + ST32 (flatten do konce obchodu mimo frontu s bariérou; rozjezd store); ST3 hotovo v agent větvi | Codex | ano | rozpracováno (worktree alphatrade-copier-flatten-20260929) |
-| 8 | V1 + V3 + V15 (validace před DISARM, fence jen na obchodní události, cut vs. rezerva, bootstrap) | Codex | ano | hotovo ab4b310; review běží |
-| 9 | V6 (resync, route-gap); V7 hotovo v broker větvi | Codex | ano | rozpracováno (worktree alphatrade-copier-resync-20260929) |
-| 10 | UI: DLL a denní P&L (ST10–ST12), editor a hlášky (V2 UI, P116), texty | Claude + Codex | ne | hotovo v UI větvi (UI-10b–e) |
-| 11 | V11/ST25 rychlost (broker 8ac3cd6), hardening ST33–ST35 (agent větev; ST34 vrácen, otevřené) | Codex | ano/ne | hotovo kromě ST34 |
+| 1 | Večerní výjimka `retireMissingOldGroup` | Codex | ne | hotovo 1802df6 |
+| 2 | UI: brzdy bez ověřeného stavu (ST1), expirace ARM, retence přepínače (ST2), varování V1, UI-10a–e | Claude + Codex | ne | hotovo (UI větev) |
+| 3 | V12 + V13 + ST4 | Codex | ano | V12 6 iterací (f47a109), V13 6 iterací (4db7130); **ověřovací review 6. iterací neproběhlo** |
+| 4 | V16 | Codex | ano | hotovo 0b13040 |
+| 5 | 5b V5/V7/V8 + rychlost; 5c V17, V18, ST28, ST31, standalone stop, receivedAt, ST6, N10 | Codex | ano | hotovo (32bb813, cdeec40) |
+| 6 | V9 + V4 + ST4 | Codex | ano | hotovo 6/6b/6c (20786d1), review 6c neproběhlo |
+| 7 | V10 + ST32 | Codex | ano | 7/7b (f8ce845); **otevřené 7c**: visící write na jednom účtu blokuje celý flattenGroup/auto-close (rozdělit účty, viz review 7b) |
+| 8 | V1 + V3 + V15 | Codex | ano | hotovo 8/8b/8c (2d7ca5a); review 8c neproběhlo |
+| 9 | V6 obměna spojení | Codex | ano | 9/9b (60b9462); review 9b neproběhlo |
+| 10 | UI DLL/P&L, editor, texty | Claude + Codex | ne | hotovo (UI větev) |
+| 11 | V11/ST25 rychlost, ST33–ST35 | Codex | ano/ne | hotovo kromě ST34 (vrácen, otevřený) |
+| 12 | ST7, ST8, ST9, ST19, ST24, ST27, ST29, ST30 | Codex (+ Claude oprava management-only reconcile) | ano | hotovo 50865e5; **ST22 (provenance workeru) neudělán**; review neproběhlo |
+| 13 | UI: tlačítko „Zkontrolovat pozice“ (+ relay allowlist reconcile), texty nových kódů vypnutí | Claude | ne | čeká |
+| 14 | Závěrečné integrované review celé větve, sloučení s origin/main, build, nasazení | Claude | ano | čeká na „nasaď“ |
 | — | Rozhodnutí o politice (V14 strop, V15, ST5, ST21, ST26, ST20) | Filip | — | nechat výchozí bezpečnější variantu, zapsat do PROJECT_LOG |
