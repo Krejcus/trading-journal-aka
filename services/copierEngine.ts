@@ -226,11 +226,17 @@ export interface CopierState {
       accountId: number;
       verifiedAt: number;
       realizedPnlUsd: number | null;
+      openPnlUsd?: number | null;
       netLiq: number | null;
+      cashBalanceUsd?: number | null;
+      highWaterNetLiq?: number | null;
       minNetLiq: number | null;
       dailyLossAutoLiq: number | null;
       trailingMaxDrawdown: number | null;
+      trailingMaxDrawdownLimit?: number | null;
       propLimitUsd: number | null;
+      effectiveDailyLossCutUsd?: number | null;
+      configuredDailyLossCutUsd?: number | null;
       error?: string | null;
     }>;
     /**

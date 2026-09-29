@@ -161,9 +161,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       `userAccountAutoLiq` / `userAccountPositionLimit`? `changesLocked:false`
       nedokazuje právo na update a AutoLiq je post-trade, ne pre-trade contract cap.
       Read-only capability matice až po výslovném schválení uživatelem.
-- [ ] **Rezerva nad floorem u `drawdownType: 'trailing'`** — 8 z 35 presetů
-      (LucidDaily), kde se floor hýbe během obchodu. Funded presety v katalogu
-      dnes nejsou žádné.
+- [x] **Rezerva nad floorem u `drawdownType: 'trailing'`** — VYŘEŠENO
+      29. 9. politikou balíčku 8c níže: růst flooru sám kopii nezavírá;
+      session cut se durable omezí 95% rezervou a likvidace přijde až po
+      dosažení omezeného loss limitu.
 
 - [x] iOS 26 WidgetKit APNs registrace — VYŘEŠENO 21. 8. (zápis „widgety a
       notifikace dokončeny"): příčinou byl Postgres regex limit v CHECK
@@ -256,6 +257,38 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       zůstává fail-closed.
 
 ## Deník
+
+### 2026-09-29 — Balíček 8c: ověřovací opravy V15, in-place cutu a background lane (Codex)
+
+- V15 už nikdy neodvozuje otevřenou ztrátu z `cashBalance.amount − netLiq`.
+  Použije pouze přímé broker `openPnL`; čerstvý streamový flat stav vynutí
+  open loss 0. Chybějící open P&L se pro reserve cap hodnotí konzervativně
+  jako 0, aby se PR5 (realized ztráta už obsažená v net liq) neschovala
+  dvojím odečtem realizované ztráty.
+- Produktová politika prop-reserve: menší rezerva už config neodmítne ani
+  okamžitě nezavře ziskovou kopii po zvýšení trailing flooru. Runtime durable
+  a tighten-only sníží absolutní denní cut na nejvýše aktuální loss + 95 %
+  rezervy, vydá auditní upozornění a v téže session cap po restartu ani při
+  pozdějším růstu rezervy neuvolní. Close-copy nastane až když součet dnešní
+  realized a přímé otevřené ztráty dosáhne capu. Produkční `/cashBalance/deps`
+  obvykle neposílá `netLiq` ani `openPnL`; V15 tam proto reálně hlídá realized
+  loss a cash-derived vzdálenost od flooru, ale bez těchto polí nevidí
+  nerealizovanou ztrátu otevřené pozice.
+- In-place let-run→close-copy počítá kandidáty až uvnitř `eventTail`, změnou
+  `groupRevision` zastaví starou lane, počká na už rozběhnutý zápis daného
+  účtu a teprve potom zavírá. Let-run lane před každým cancel write ověřuje
+  revision i aktivní cut. Za ARM používá per-follower scoped failure a emituje
+  follower-cut event; SHADOW neposílá cancel/liquidate. Syrové
+  `disableReplicationOnBreach=false` už není tighten-only porušení, protože
+  sanitizer/runtime hodnotu stejně vždy vynutí na true.
+- Nové regrese před opravou padaly pro přímé `openPnL`, PR1/PR2, PR5,
+  dynamický cap, bootstrap, scoped failure, SHADOW a raw config. Merge race
+  bez lane broker bariéry provedl 2 cancel write místo 1. Po opravě cíleně
+  184/184 a širší controller/risk blok 195/195. Předepsaná copier sada prošla
+  174 souborů + 1 skipped, 2056 testů + 1 todo; dynamic routing 5/5, exit 0.
+  Root `tsc --noEmit` hlásí jen povolené chyby `extension/`; typecheck bez
+  extension prošel exit 0. Bez npm install/ci, commitu, push/deploye, broker
+  API, ARM/Flatten produkce nebo reinstalu workeru.
 
 ### 2026-09-29 — Balíček 6c: oprava N1/N2 z ověřovacího review 6b (Codex)
 

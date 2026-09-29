@@ -120,7 +120,6 @@ export function isWeakerRiskConfig(previous: CopierRiskConfig, next: CopierRiskC
     'autoCloseFollowerPositions',
     'preventHedging',
     'positionReconciler',
-    'disableReplicationOnBreach',
   ] as const) {
     const requestedNext = next.safety?.[field] ?? nextSafety[field];
     if (previousSafety[field] && requestedNext === false) add(`safety.${field}`);

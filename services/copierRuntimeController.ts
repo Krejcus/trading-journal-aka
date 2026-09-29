@@ -394,10 +394,16 @@ export interface CopierAccountRiskSnapshot {
   /** Čas broker dotazu; snapshot starší než 90 s je „neověřeno". */
   verifiedAt: number;
   realizedPnlUsd: number | null;
+  /** Přímé otevřené P&L; null = broker ho neposkytl. */
+  openPnlUsd?: number | null;
   /** Net liq jen když ho broker transport vydal; jinak null. */
   netLiq: number | null;
   /** Realizovaný cash zůstatek; u flat účtu rovný net liq. Starší snapshoty ho nemají. */
   cashBalanceUsd?: number | null;
+  /** Durable tighten-only runtime cap odvozený z prop rezervy pro tuto session. */
+  effectiveDailyLossCutUsd?: number | null;
+  /** Konfigurovaný cut, ke kterému durable cap náleží. */
+  configuredDailyLossCutUsd?: number | null;
   /** Brokerem vedený high-watermark net liq. */
   highWaterNetLiq?: number | null;
   /** Odvozený floor propky (high-watermark − trailing, nejvýš trailing limit). */
@@ -856,11 +862,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         accountId: snapshot.accountId,
         verifiedAt: snapshot.verifiedAt,
         realizedPnlUsd: finiteOrNullField(snapshot.realizedPnlUsd),
+        openPnlUsd: finiteOrNullField(snapshot.openPnlUsd),
         netLiq: finiteOrNullField(snapshot.netLiq),
+        cashBalanceUsd: finiteOrNullField(snapshot.cashBalanceUsd),
+        highWaterNetLiq: finiteOrNullField(snapshot.highWaterNetLiq),
         minNetLiq: finiteOrNullField(snapshot.minNetLiq),
         dailyLossAutoLiq: finiteOrNullField(snapshot.dailyLossAutoLiq),
         trailingMaxDrawdown: finiteOrNullField(snapshot.trailingMaxDrawdown),
+        trailingMaxDrawdownLimit: finiteOrNullField(snapshot.trailingMaxDrawdownLimit),
         propLimitUsd: finiteOrNullField(snapshot.propLimitUsd),
+        effectiveDailyLossCutUsd: finiteOrNullField(snapshot.effectiveDailyLossCutUsd),
+        configuredDailyLossCutUsd: finiteOrNullField(snapshot.configuredDailyLossCutUsd),
         ...(typeof snapshot.error === 'string' ? { error: snapshot.error } : {}),
       }] as const];
     }),
@@ -1422,6 +1434,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   /** Broker lifecycle follower cutu běží mimo eventTail; sada slouží jen waitForIdle/stop observabilitě. */
   const followerCutBackgroundJobs = new Set<Promise<unknown>>();
   const followerCutBackgroundAccounts = new Set<number>();
+  const followerCutBackgroundJobsByAccount = new Map<number, Set<Promise<unknown>>>();
   let brokerObservationVersion = 0;
   /** Connection/error/resync/route-gap ingress fence pro durable config zápisy. */
   let configurationControlVersion = 0;
@@ -2553,10 +2566,28 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     appliedRuleActionSignaturesInitialized = false;
     return true;
   };
-  const propReserveViolation = (
+  const followerLossAtRiskSnapshot = (
+    accountId: number,
+    snapshot: CopierAccountRiskSnapshot,
+  ): { realizedLossUsd: number; openLossUsd: number; totalLossUsd: number } => {
+    const realizedLossUsd = Math.max(0, -(snapshot.realizedPnlUsd ?? 0));
+    const livePositions = positionsByAccount.get(accountId);
+    const streamConfirmsFlat = livePositions != null
+      && [...livePositions.values()].every(quantity => quantity === 0);
+    // Chybějící open P&L se nikdy nenahrazuje cash−netLiq: `amount` může být
+    // startovní/stale cash a realizovaná ztráta by se odečetla podruhé (PR5).
+    // Nula je zde konzervativní pro reserve cap: ponechá největší nevyčerpaný
+    // konfigurovaný cut, takže překročení rezervy nezůstane skryté.
+    const openLossUsd = streamConfirmsFlat
+      ? 0
+      : Math.max(0, -(snapshot.openPnlUsd ?? 0));
+    return { realizedLossUsd, openLossUsd, totalLossUsd: realizedLossUsd + openLossUsd };
+  };
+
+  const applyPropReserveCap = (
     follower: CopyGroupConfig['followers'][number],
     at: number,
-  ): { remainingCutUsd: number; reserveUsd: number; maximumUsd: number } | null => {
+  ): { breached: boolean; totalLossUsd: number; reserveUsd: number; effectiveCutUsd: number } | null => {
     const cutUsd = follower.dailyLossCutUsd ?? 0;
     if (cutUsd <= 0 || follower.enabled === false || follower.mode === 'off'
       || activeFollowerCut(follower.accountId, at)) return null;
@@ -2566,38 +2597,47 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       || (snapshot.realizedPnlUsd != null && !Number.isFinite(snapshot.realizedPnlUsd))
       || at - snapshot.verifiedAt > ACCOUNT_RISK_STALE_MS
       || !sameTradovateSession(snapshot.verifiedAt, at)) return null;
-    // Chybějící dnešní P&L nesmí z validace udělat volnější bránu; nula je
-    // konzervativní horní odhad zbývajícího prostoru cutu.
-    const realizedLossUsd = Math.max(0, -(snapshot.realizedPnlUsd ?? 0));
-    // Tradovate netLiq už obsahuje otevřené P&L. Odečtením stejné otevřené
-    // ztráty i ze zbývajícího prostoru cutu porovnáváme dvě hodnoty ke
-    // stejnému okamžiku a nevyvoláme prop-reserve close dvakrát za tutéž ztrátu.
-    const openLossUsd = snapshot.netLiq != null && snapshot.cashBalanceUsd != null
-      ? Math.max(0, snapshot.cashBalanceUsd - snapshot.netLiq)
-      : 0;
-    const remainingCutUsd = Math.max(0, cutUsd - realizedLossUsd - openLossUsd);
-    const maximumUsd = Math.max(0, snapshot.propLimitUsd) * 0.95;
-    return remainingCutUsd > maximumUsd
-      ? {
-          remainingCutUsd,
-          reserveUsd: snapshot.propLimitUsd,
-          maximumUsd,
-        }
+    const { totalLossUsd } = followerLossAtRiskSnapshot(follower.accountId, snapshot);
+    const reserveUsd = Math.max(0, snapshot.propLimitUsd);
+    // Cap je pro session tighten-only. První nízká rezerva sníží absolutní
+    // loss limit; pozdější růst rezervy jej automaticky neuvolní. Tím se
+    // z pouhé změny trailing flooru nestane okamžitý close-copy, ale 5% buffer
+    // se zachová až do skutečného přiblížení ztráty.
+    const candidateCutUsd = Math.max(0, totalLossUsd + reserveUsd * 0.95);
+    const previousCap = snapshot.configuredDailyLossCutUsd === cutUsd
+      ? snapshot.effectiveDailyLossCutUsd
       : null;
-  };
-  const assertCutsWithinKnownPropLimits = (candidate: CopyGroupConfig): void => {
-    const at = clock();
-    for (const follower of candidate.followers) {
-      const violation = propReserveViolation(follower, at);
-      if (violation) {
-        throw new Error(
-          `prop-reserve follower ${follower.accountId}: zbývající prostor cutu `
-          + `${violation.remainingCutUsd.toFixed(2)} USD musí být nejvýše 95 % prop limitu / aktuální rezervy `
-          + `${violation.reserveUsd.toFixed(2)} USD (${violation.maximumUsd.toFixed(2)} USD)`,
-        );
-      }
+    const effectiveCutUsd = Math.min(
+      cutUsd,
+      candidateCutUsd,
+      previousCap != null && Number.isFinite(previousCap) ? previousCap : Number.POSITIVE_INFINITY,
+    );
+    const capTightened = effectiveCutUsd + 0.005 < (previousCap ?? cutUsd);
+    snapshot.effectiveDailyLossCutUsd = effectiveCutUsd;
+    snapshot.configuredDailyLossCutUsd = cutUsd;
+    if (capTightened) {
+      options.onAudit?.([{
+        at,
+        leaderEventId: `prop-reserve-cap:${follower.accountId}:${at}`,
+        kind: 'follower-cut',
+        accountId: follower.accountId,
+        source: 'prop-reserve',
+        current: totalLossUsd,
+        limit: effectiveCutUsd,
+        cutUsd,
+        reason: `prop-reserve follower ${follower.accountId}: denní cut dynamicky omezen `
+          + `${(previousCap ?? cutUsd).toFixed(2)} → ${effectiveCutUsd.toFixed(2)} USD; `
+          + `aktuální rezerva ${reserveUsd.toFixed(2)} USD, bez okamžité likvidace`,
+      }]);
     }
+    return {
+      breached: totalLossUsd + 0.005 >= effectiveCutUsd,
+      totalLossUsd,
+      reserveUsd,
+      effectiveCutUsd,
+    };
   };
+
   const assertTightenOnly = (candidate: CopyGroupConfig): void => {
     rollRiskSessionMemoryIfExpired(clock());
     if (!(sessionArmedAt > 0)) return;
@@ -4664,6 +4704,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // či vadný broker payload změnil na čerstvě ověřený cut signál.
       verifiedAt: validTimestamp ? snapshot.at : 0,
       realizedPnlUsd: finiteOrNull(snapshot.realizedPnlUsd),
+      openPnlUsd: finiteOrNull(snapshot.openPnlUsd ?? null),
       netLiq,
       cashBalanceUsd,
       highWaterNetLiq: finiteOrNull(snapshot.highWaterNetLiq ?? null),
@@ -4891,6 +4932,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     accountId: number,
     follower: CopyGroupConfig['followers'][number],
     cut: CopierFollowerCut,
+    background?: BackgroundFollowerCutContext,
   ): Promise<void> => {
     const live = currentRuntime();
     const leaderOrderByFollowerOrder = new Map<string, string>();
@@ -4904,8 +4946,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (leaderOrderByFollowerOrder.size === 0) return;
 
     const [positions, orders] = await Promise.all([
-      broker.listPositions(accountId),
-      broker.listOrders(accountId),
+      (background?.broker ?? broker).listPositions(accountId),
+      (background?.broker ?? broker).listOrders(accountId),
     ]);
     const positionSnapshot = new Map(
       positions.map(position => [position.symbol, position.netQuantity]),
@@ -5017,7 +5059,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           stuckOutbox: gate.stuckOutbox || hasStuckOutbox(),
           ineligibleAccounts: new Map(),
         },
-        broker: dispatchBroker(safetyGeneration, cancelEvent),
+        broker: background?.broker ?? dispatchBroker(safetyGeneration, cancelEvent),
         clock,
         store: options.store,
         metrics,
@@ -5326,11 +5368,26 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const trackFollowerCutBackground = <T>(accountId: number, job: Promise<T>): Promise<T> => {
     followerCutBackgroundJobs.add(job);
     followerCutBackgroundAccounts.add(accountId);
+    const accountJobs = followerCutBackgroundJobsByAccount.get(accountId) ?? new Set<Promise<unknown>>();
+    accountJobs.add(job);
+    followerCutBackgroundJobsByAccount.set(accountId, accountJobs);
     void job.finally(() => {
       followerCutBackgroundJobs.delete(job);
-      followerCutBackgroundAccounts.delete(accountId);
+      accountJobs.delete(job);
+      if (accountJobs.size === 0) {
+        followerCutBackgroundJobsByAccount.delete(accountId);
+        followerCutBackgroundAccounts.delete(accountId);
+      }
     }).catch(() => undefined);
     return job;
+  };
+
+  const waitForFollowerCutBackground = async (accountId: number): Promise<void> => {
+    while (true) {
+      const jobs = [...(followerCutBackgroundJobsByAccount.get(accountId) ?? [])];
+      if (jobs.length === 0) return;
+      await Promise.all(jobs.map(job => job.catch(() => undefined)));
+    }
   };
 
   const mergeBackgroundFlattenRuntime = async (
@@ -5406,7 +5463,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       try {
         // Let-run ponechá existující pozici a její čistě redukující ochranu,
         // ale copier-owned waiting entry/scale-in už po cutu nesmí fillnout.
-        await cancelOwnedOpeningOrdersForLetRunCut(accountId, follower, cut);
+        await cancelOwnedOpeningOrdersForLetRunCut(accountId, follower, cut, background);
       } catch (reason) {
         if (scopedFailure) await recordFollowerCutFailure(cut, errorOf(reason).message);
         else failClosed(new Error(`Follower cut ${accountId}: ${errorOf(reason).message}`), { autoClose: false });
@@ -5902,8 +5959,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           accountId,
           verifiedAt: previous?.verifiedAt ?? 0,
           realizedPnlUsd: previous?.realizedPnlUsd ?? null,
+          openPnlUsd: previous?.openPnlUsd ?? null,
           netLiq: previous?.netLiq ?? null,
           cashBalanceUsd: previous?.cashBalanceUsd ?? null,
+          effectiveDailyLossCutUsd: previous?.effectiveDailyLossCutUsd ?? null,
+          configuredDailyLossCutUsd: previous?.configuredDailyLossCutUsd ?? null,
           highWaterNetLiq: previous?.highWaterNetLiq ?? null,
           minNetLiq: previous?.minNetLiq ?? null,
           dailyLossAutoLiq: previous?.dailyLossAutoLiq ?? null,
@@ -5914,7 +5974,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         });
         continue;
       }
-      accountRisk.set(accountId, normalizeAccountRiskSnapshot(raw));
+      const previous = accountRisk.get(accountId);
+      const normalized = normalizeAccountRiskSnapshot(raw);
+      if (previous && sameTradovateSession(previous.verifiedAt, normalized.verifiedAt)) {
+        normalized.effectiveDailyLossCutUsd = previous.effectiveDailyLossCutUsd ?? null;
+        normalized.configuredDailyLossCutUsd = previous.configuredDailyLossCutUsd ?? null;
+      }
+      accountRisk.set(accountId, normalized);
+    }
+    const now = clock();
+    const propReserveByAccount = new Map<number, ReturnType<typeof applyPropReserveCap>>();
+    for (const follower of group.followers) {
+      propReserveByAccount.set(follower.accountId, applyPropReserveCap(follower, now));
     }
     try {
       await persistRiskSafety();
@@ -5924,7 +5995,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // musí vyhodnotit; teprve durable cut má vlastní fail-closed commit.
     }
     if (!gate.armed) return;
-    const now = clock();
     const preparedCuts: Array<{
       cut: CopierFollowerCut;
       follower: CopyGroupConfig['followers'][number];
@@ -5935,14 +6005,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         || snapshot.error
         || now - snapshot.verifiedAt > ACCOUNT_RISK_STALE_MS
         || !sameTradovateSession(snapshot.verifiedAt, now)) continue;
-      const reserveViolation = propReserveViolation(follower, now);
-      if (!reserveViolation && snapshot.realizedPnlUsd == null) continue;
+      const reserveDecision = propReserveByAccount.get(follower.accountId) ?? null;
+      const reserveBreach = reserveDecision?.breached === true;
+      if (!reserveBreach && snapshot.realizedPnlUsd == null) continue;
       const prepared = prepareFollowerCut(
         follower.accountId,
         snapshot.realizedPnlUsd ?? 0,
-        reserveViolation ? 'prop-reserve' : 'broker',
+        reserveBreach ? 'prop-reserve' : 'broker',
         now,
-        reserveViolation != null,
+        reserveBreach,
       );
       if (prepared) preparedCuts.push(prepared);
     }
@@ -11887,7 +11958,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   ): Promise<void> => {
     nextGroup = normalizedRuntimeGroup(nextGroup);
     assertTightenOnly(nextGroup);
-    assertCutsWithinKnownPropLimits(nextGroup);
     const operation = switchOptions.forceEpoch ? 'Aktivaci skupiny' : 'Změnu skupiny';
     const run = reconfigurationTail.then(async () => {
       // Čekáme jen na eventy přijaté před startem kontroly. Samotná REST čtení
@@ -11895,7 +11965,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       await eventTail;
       if (stopped) throw new Error('Copier runtime is stopped');
       assertTightenOnly(nextGroup);
-      assertCutsWithinKnownPropLimits(nextGroup);
       if (nextGroup.id !== group.id && !switchOptions.allowGroupChange) {
         throw new Error('Nelze změnit runtime na jinou copy group bez explicitní aktivace');
       }
@@ -12222,14 +12291,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   // Staré snapshoty dostanou additivní defaulty ještě před prvním heartbeatem;
   // žádná chybějící metadata se pak v DTO nesmějí odhadovat na serveru.
   await ensureDailySession(clock());
-  try {
-    assertCutsWithinKnownPropLimits(group);
-  } catch (reason) {
-    lastError = errorOf(reason);
-    gate = { ...gate, armed: false, shadowMode: true };
-    recordDisarm('fail-closed', lastError.message, groupIsFlat() ? 'flat' : 'unknown');
-    options.onError?.(lastError);
-  }
 
   const unsubscribe = broker.subscribe(event => {
     const explicitReceivedAt = (event as BrokerEvent & { receivedAt?: number }).receivedAt;
@@ -12367,7 +12428,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       const now = clock();
       const startedNewRiskSession = rollRiskSessionMemoryIfExpired(now);
-      assertCutsWithinKnownPropLimits(group);
       if (!group.enabled) throw new Error('Copier nelze armovat: skupina je vypnutá');
       if (!gate.connected) throw new Error('Copier nelze armovat bez dokončeného broker syncu');
       if (hasStuckOutbox()) throw new Error('Copier má nevyřešený outbox');
@@ -12740,7 +12800,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         throw new Error('Nelze změnit runtime na jinou copy group bez explicitní aktivace');
       }
       assertTightenOnly(nextGroup);
-      assertCutsWithinKnownPropLimits(nextGroup);
       if (stopped || shutdownRequested || gate.killSwitch) {
         throw new Error('Změnu konfigurace blokuje zastavený worker nebo kill switch');
       }
@@ -12937,7 +12996,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (nextGroup.id !== group.id) throw new Error('Nelze změnit runtime na jinou copy group');
       nextGroup = normalizedRuntimeGroup(nextGroup);
       assertTightenOnly(nextGroup);
-      assertCutsWithinKnownPropLimits(nextGroup);
       if (nextGroup.leaderAccountId !== group.leaderAccountId) {
         throw new Error('Změna leadera vyžaduje bezpečný reconfigureGroup preflight');
       }
@@ -12948,7 +13006,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (pendingCutClosures.length > 0) {
         const run = eventTail.then(async () => {
           for (const pending of pendingCutClosures) {
-            await executeFollowerCutAction(pending.cut, pending.follower, true, false);
+            await executeFollowerCutAction(pending.cut, pending.follower, !gate.shadowMode, true);
           }
         });
         eventTail = run.then(() => undefined, reason => {
@@ -12970,7 +13028,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         throw new Error(`Metadata cesta smí safety pouze zpřísnit: ${weaker.join(', ')}`);
       }
       assertTightenOnly(nextGroup);
-      assertCutsWithinKnownPropLimits(nextGroup);
       group = nextGroup;
       groupRevision += 1;
     },
@@ -12984,18 +13041,26 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         throw new Error('Zpřísnění cutu blokuje probíhající connection recovery/reconciliation');
       }
       assertTightenOnly(nextGroup);
-      assertCutsWithinKnownPropLimits(nextGroup);
       const expectedRevision = groupRevision;
-      const pendingCutClosures = tightenedCutClosures(group, nextGroup);
       const run = eventTail.then(async () => {
         if (groupRevision !== expectedRevision) {
           throw new Error('Zpřísnění cutu: konfigurace se změnila; opakuj uložení');
         }
+        // Kandidáty počítáme až za dříve přijatými eventy. Změna revision
+        // nejdřív zastaví starou background lane před jejím dalším broker
+        // zápisem; close-copy začne až po doběhnutí již rozběhnutého zápisu.
+        const pendingCutClosures = tightenedCutClosures(group, nextGroup);
         group = nextGroup;
         groupRevision += 1;
         for (const pending of pendingCutClosures) {
+          await waitForFollowerCutBackground(pending.cut.accountId);
           try {
-            await executeFollowerCutAction(pending.cut, pending.follower, true, false);
+            await executeFollowerCutAction(
+              pending.cut,
+              pending.follower,
+              !gate.shadowMode,
+              true,
+            );
           } catch (reason) {
             failClosed(reason, { autoClose: false });
           }

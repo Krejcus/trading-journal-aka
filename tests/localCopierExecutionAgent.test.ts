@@ -197,7 +197,6 @@ describe('local copier execution agent', () => {
     'autoCloseFollowerPositions',
     'preventHedging',
     'positionReconciler',
-    'disableReplicationOnBreach',
   ] as const)('metadata cesta za session odmítne vypnutí %s bez DISARM', async field => {
     const runtime = controller({ sessionArmedAt: 1 });
     runtime.arm({ shadowMode: false });
@@ -228,6 +227,40 @@ describe('local copier execution agent', () => {
     expect(runtime.updateGroupMetadata).not.toHaveBeenCalled();
     expect(runtime.reconfigureGroup).not.toHaveBeenCalled();
     expect(onGroupChanged).not.toHaveBeenCalled();
+    expect(runtime.status().armed).toBe(true);
+  });
+
+  it('editor smí poslat disableReplicationOnBreach=false bez 409; runtime ponechá vynucené true', async () => {
+    const runtime = controller({ sessionArmedAt: 1 });
+    runtime.arm({ shadowMode: false });
+    runtime.arm.mockClear();
+    const onGroupChanged = vi.fn(async () => undefined);
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: { ...group(), safety: DEFAULT_COPY_GROUP_SAFETY },
+      port: 0,
+      onGroupChanged,
+    });
+
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: {
+        type: 'update-group',
+        group: {
+          ...group(),
+          safety: { ...DEFAULT_COPY_GROUP_SAFETY, disableReplicationOnBreach: false },
+        },
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(runtime.disarm).not.toHaveBeenCalled();
+    expect(runtime.updateGroupMetadata).toHaveBeenCalledWith(expect.objectContaining({
+      safety: expect.objectContaining({ disableReplicationOnBreach: true }),
+    }));
+    expect(onGroupChanged).toHaveBeenCalledWith(expect.objectContaining({
+      safety: expect.objectContaining({ disableReplicationOnBreach: true }),
+    }));
     expect(runtime.status().armed).toBe(true);
   });
 

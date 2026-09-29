@@ -76,6 +76,7 @@ const riskSnapshot = ({
   accountId,
   at,
   realizedPnlUsd = null,
+  openPnlUsd = null,
   netLiq = null,
   cashBalanceUsd = null,
   minNetLiq = null,
@@ -84,6 +85,7 @@ const riskSnapshot = ({
   accountId: number;
   at: number;
   realizedPnlUsd?: number | null;
+  openPnlUsd?: number | null;
   netLiq?: number | null;
   cashBalanceUsd?: number | null;
   minNetLiq?: number | null;
@@ -92,6 +94,7 @@ const riskSnapshot = ({
   accountId,
   at,
   realizedPnlUsd,
+  ...({ openPnlUsd } as object),
   netLiq,
   cashBalanceUsd,
   minNetLiq,
@@ -2205,7 +2208,7 @@ describe('CopierRuntimeController — follower account cuts', () => {
     }
   });
 
-  it('propLimit používá broker auto-liq před fallbackem a validace odmítne cut nad 95 %', async () => {
+  it('propLimit používá broker auto-liq před fallbackem a cut nad 95 % dynamicky omezí bez 409', async () => {
     const time = manualClock();
     const broker = createMockBroker({ clock: time.clock });
     installRiskProvider(broker, accountId => {
@@ -2238,7 +2241,7 @@ describe('CopierRuntimeController — follower account cuts', () => {
       const boundary = riskGroup({ mode: 'on-submit', cutUsd: 950 });
       expect(() => runtime.controller.updateGroup(boundary)).not.toThrow();
       const tooHigh = riskGroup({ mode: 'on-submit', cutUsd: 950.01 });
-      expect(() => runtime.controller.updateGroup(tooHigh)).toThrow('nejvýše 95 % prop limitu');
+      expect(() => runtime.controller.updateGroup(tooHigh)).not.toThrow();
     } finally {
       runtime.controller.stop();
     }
@@ -2389,7 +2392,7 @@ describe('CopierRuntimeController — follower account cuts', () => {
     }
   });
 
-  it('nově zjištěná nízká prop rezerva cutne jen followera a skupinu nechá ARMED', async () => {
+  it('nově zjištěná nízká prop rezerva pouze omezí efektivní cut a skupinu nechá ARMED', async () => {
     const time = manualClock();
     let propLimitKnown = false;
     const broker = createMockBroker({ clock: time.clock });
@@ -2413,15 +2416,92 @@ describe('CopierRuntimeController — follower account cuts', () => {
       await runtime.controller.waitForIdle();
 
       expect(runtime.controller.status()).toMatchObject({ armed: true, lastError: null });
-      expect(followerCut(runtime.controller)).toMatchObject({
+      expect(followerCut(runtime.controller)).toBeUndefined();
+      expect((accountRisk(runtime.controller, 200) as { effectiveDailyLossCutUsd?: number }))
+        .toMatchObject({ effectiveDailyLossCutUsd: 95 });
+      expect(runtime.audits).toContainEqual(expect.objectContaining({
+        kind: 'follower-cut',
         accountId: 200,
         source: 'prop-reserve',
-        realizedPnlUsd: 0,
-        cutUsd: 100,
-      });
-      expect(runtime.controller.status().followerCuts).toHaveLength(1);
+        reason: expect.stringContaining('dynamicky omezen'),
+      }));
     } finally {
       runtime.controller.stop();
+    }
+  });
+
+  it('PR1/PR2: zvýšený trailing floor při otevřeném zisku jen sníží efektivní cut, kopii nezavře', async () => {
+    const time = manualClock();
+    const state = { floor: 48_500 };
+    const broker = createMockBroker({
+      clock: time.clock,
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'fill', price: 20_000 }),
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId,
+      at: time.now(),
+      realizedPnlUsd: 0,
+      openPnlUsd: accountId === 200 ? 100 : null,
+      cashBalanceUsd: accountId === 200 ? 50_000 : null,
+      netLiq: null,
+      minNetLiq: accountId === 200 ? state.floor : null,
+    }));
+    const runtime = await bootRuntime({
+      broker,
+      group: riskGroup({ cutUsd: 1_400, onCut: 'let-run' }),
+      time,
+    });
+    try {
+      await emitLeaderFill({ ...runtime, time, side: 'Buy', price: 20_000, netQuantity: 1 });
+      state.floor = 48_600;
+      time.advance(30_000);
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await runtime.controller.waitForIdle();
+
+      expect(followerCut(runtime.controller)).toBeUndefined();
+      expect((accountRisk(runtime.controller, 200) as { effectiveDailyLossCutUsd?: number }))
+        .toMatchObject({ effectiveDailyLossCutUsd: 1_330 });
+      expect(await broker.listPositions(200)).toEqual([
+        expect.objectContaining({ netQuantity: 1 }),
+      ]);
+      expect(broker.liquidateRequests()).toHaveLength(0);
+      expect(runtime.audits).toContainEqual(expect.objectContaining({
+        accountId: 200,
+        source: 'prop-reserve',
+        reason: expect.stringContaining('1400.00 → 1330.00 USD'),
+      }));
+    } finally {
+      runtime.controller.stop();
+    }
+  });
+
+  it('dynamicky omezený prop-reserve cut přežije restart a pozdější vyšší rezerva ho neuvolní', async () => {
+    const time = manualClock();
+    let reserveUsd = 100;
+    const broker = createMockBroker({ clock: time.clock });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId,
+      at: time.now(),
+      realizedPnlUsd: 0,
+      dailyLossAutoLiq: accountId === 200 ? reserveUsd : null,
+    }));
+    const store = createMemoryCopierStore();
+    const group = riskGroup({ cutUsd: 100 });
+    const first = await bootRuntime({ broker, group, time, store });
+    expect((accountRisk(first.controller, 200) as { effectiveDailyLossCutUsd?: number }))
+      .toMatchObject({ effectiveDailyLossCutUsd: 95 });
+    first.controller.stop();
+    broker.setConnected(false);
+    reserveUsd = 200;
+
+    const restarted = await bootRuntime({ broker, group, time, store });
+    try {
+      expect((accountRisk(restarted.controller, 200) as { effectiveDailyLossCutUsd?: number }))
+        .toMatchObject({ effectiveDailyLossCutUsd: 95 });
+      expect(followerCut(restarted.controller)).toBeUndefined();
+    } finally {
+      restarted.controller.stop();
     }
   });
 
@@ -2445,7 +2525,7 @@ describe('CopierRuntimeController — follower account cuts', () => {
   });
 
   it.each([-60, -100, -150])(
-    'V15 nepočítá nerealizovanou ztrátu %i USD dvakrát proti prop rezervě',
+    'V15 bere přímé open P&L %i USD a neodvozuje ho ze sémantiky cashBalance.amount',
     async unrealizedPnlUsd => {
       const time = manualClock();
       const state = { unrealizedPnlUsd: 0 };
@@ -2458,6 +2538,7 @@ describe('CopierRuntimeController — follower account cuts', () => {
         accountId,
         at: time.now(),
         realizedPnlUsd: 0,
+        openPnlUsd: accountId === 200 ? state.unrealizedPnlUsd : null,
         netLiq: accountId === 200 ? 50_000 + state.unrealizedPnlUsd : null,
         cashBalanceUsd: accountId === 200 ? 50_000 : null,
         minNetLiq: accountId === 200 ? 49_700 : null,
@@ -2483,9 +2564,9 @@ describe('CopierRuntimeController — follower account cuts', () => {
     },
   );
 
-  it('prop-reserve vynutí close-copy i při uživatelském onCut=let-run', async () => {
+  it('prop-reserve zavře let-run kopii až při skutečném dosažení dynamicky omezeného loss limitu', async () => {
     const time = manualClock();
-    let reserveUsd = 300;
+    const state = { openPnlUsd: 0, reserveUsd: 300 };
     const broker = createMockBroker({
       clock: time.clock,
       nativeLiquidate: true,
@@ -2495,18 +2576,20 @@ describe('CopierRuntimeController — follower account cuts', () => {
       accountId,
       at: time.now(),
       realizedPnlUsd: 0,
-      dailyLossAutoLiq: accountId === 200 ? reserveUsd : null,
+      openPnlUsd: accountId === 200 ? state.openPnlUsd : null,
+      dailyLossAutoLiq: accountId === 200 ? state.reserveUsd : null,
     }));
     const runtime = await bootRuntime({
       broker,
-      group: riskGroup({ cutUsd: 100, onCut: 'let-run' }),
+      group: riskGroup({ cutUsd: 300, onCut: 'let-run' }),
       time,
     });
     try {
       await emitLeaderFill({
         ...runtime, time, side: 'Buy', quantity: 1, price: 20_000, netQuantity: 1,
       });
-      reserveUsd = 50;
+      state.openPnlUsd = -285;
+      state.reserveUsd = 15;
       time.advance(30_000);
       broker.emitEvent({ type: 'heartbeat', at: time.now() });
       await runtime.controller.waitForIdle();
@@ -2518,6 +2601,73 @@ describe('CopierRuntimeController — follower account cuts', () => {
         expect.objectContaining({ netQuantity: 0 }),
       ]);
       expect(runtime.controller.status().armed).toBe(true);
+    } finally {
+      runtime.controller.stop();
+    }
+  });
+
+  it('PR5: realized ztrátu nepřičte podruhé z cash−netLiq; chybějící open P&L konzervativně zachová reserve cap', async () => {
+    const time = manualClock();
+    const state = { phase: 0 };
+    const broker = createMockBroker({
+      clock: time.clock,
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'fill', price: 20_000 }),
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId,
+      at: time.now(),
+      realizedPnlUsd: accountId === 200 && state.phase > 0 ? -100 : 0,
+      openPnlUsd: null,
+      cashBalanceUsd: accountId === 200 ? 50_000 : null,
+      netLiq: accountId === 200 ? (state.phase > 0 ? 49_900 : 50_000) : null,
+      minNetLiq: accountId === 200 ? (state.phase > 0 ? 49_700 : 49_600) : null,
+    }));
+    const runtime = await bootRuntime({ broker, group: riskGroup({ cutUsd: 300 }), time });
+    try {
+      await emitLeaderFill({
+        ...runtime, time, side: 'Buy', quantity: 1, price: 20_000, netQuantity: 1,
+      });
+      state.phase = 1;
+      time.advance(30_000);
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await runtime.controller.waitForIdle();
+
+      expect(followerCut(runtime.controller)).toBeUndefined();
+      expect((accountRisk(runtime.controller, 200) as { effectiveDailyLossCutUsd?: number }))
+        .toMatchObject({ effectiveDailyLossCutUsd: 290 });
+      expect(runtime.audits).toContainEqual(expect.objectContaining({
+        accountId: 200,
+        source: 'prop-reserve',
+        reason: expect.stringContaining('300.00 → 290.00 USD'),
+      }));
+      expect(broker.liquidateRequests()).toHaveLength(0);
+    } finally {
+      runtime.controller.stop();
+    }
+  });
+
+  it('flat stream ignoruje rozdíl cash−netLiq jako otevřenou ztrátu', async () => {
+    const time = manualClock();
+    const broker = createMockBroker({ clock: time.clock });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId,
+      at: time.now(),
+      realizedPnlUsd: accountId === 200 ? -150 : 0,
+      openPnlUsd: null,
+      cashBalanceUsd: accountId === 200 ? 50_000 : null,
+      netLiq: accountId === 200 ? 49_850 : null,
+      minNetLiq: accountId === 200 ? 49_650 : null,
+    }));
+    const runtime = await bootRuntime({ broker, group: riskGroup({ cutUsd: 400 }), time });
+    try {
+      expect(followerCut(runtime.controller)).toBeUndefined();
+      expect((accountRisk(runtime.controller, 200) as { effectiveDailyLossCutUsd?: number }))
+        .toMatchObject({ effectiveDailyLossCutUsd: 340 });
+      expect(runtime.audits).toContainEqual(expect.objectContaining({
+        accountId: 200,
+        reason: expect.stringContaining('400.00 → 340.00 USD'),
+      }));
     } finally {
       runtime.controller.stop();
     }
@@ -2580,6 +2730,170 @@ describe('CopierRuntimeController — follower account cuts', () => {
     }
   });
 
+  it('in-place close-copy drží odmítnutí jednoho followera scoped a emituje follower-cut event', async () => {
+    const time = manualClock();
+    let breached = false;
+    const broker = createMockBroker({
+      clock: time.clock,
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'fill', price: 20_000 }),
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId, at: time.now(), realizedPnlUsd: accountId === 200 && breached ? -125 : 0,
+    }));
+    const initial = riskGroup({ cutUsd: 100, onCut: 'let-run' });
+    const runtime = await bootRuntime({ broker, group: initial, time });
+    try {
+      await emitLeaderFill({ ...runtime, time, side: 'Buy', price: 20_000, netQuantity: 1 });
+      breached = true;
+      time.advance(30_000);
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await runtime.controller.waitForIdle();
+      vi.spyOn(broker, 'liquidatePosition').mockResolvedValue({
+        status: 'rejected', reason: 'review scoped rejection',
+      });
+
+      const stricter = structuredClone(initial);
+      stricter.followers[0].onCut = 'close-copy';
+      await runtime.controller.updateGroupRiskInPlace(stricter);
+      await runtime.controller.waitForIdle();
+
+      expect(runtime.controller.status()).toMatchObject({ armed: true, lastError: null });
+      expect(followerCut(runtime.controller)).toMatchObject({ closed: false });
+      expect(runtime.controller.status().recentCopyEvents).toContainEqual(expect.objectContaining({
+        kind: 'follower-cut', accountId: 200, closed: false,
+      }));
+    } finally {
+      runtime.controller.stop();
+    }
+  });
+
+  it('in-place close-copy v SHADOW pouze zaznamená event a neposílá liquidation', async () => {
+    const time = manualClock();
+    let breached = false;
+    const broker = createMockBroker({
+      clock: time.clock,
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'fill', price: 20_000 }),
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId, at: time.now(), realizedPnlUsd: accountId === 200 && breached ? -125 : 0,
+    }));
+    const initial = riskGroup({ cutUsd: 100, onCut: 'let-run' });
+    const runtime = await bootRuntime({ broker, group: initial, time });
+    try {
+      await emitLeaderFill({ ...runtime, time, side: 'Buy', price: 20_000, netQuantity: 1 });
+      breached = true;
+      time.advance(30_000);
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await runtime.controller.waitForIdle();
+      runtime.controller.disarm();
+      runtime.controller.arm({ shadowMode: true });
+
+      const stricter = structuredClone(initial);
+      stricter.followers[0].onCut = 'close-copy';
+      await runtime.controller.updateGroupRiskInPlace(stricter);
+      await runtime.controller.waitForIdle();
+
+      expect(runtime.controller.status()).toMatchObject({ armed: true, shadowMode: true });
+      expect(followerCut(runtime.controller)).toMatchObject({ closed: null });
+      expect(broker.liquidateRequests()).toHaveLength(0);
+      expect(runtime.controller.status().recentCopyEvents).toContainEqual(expect.objectContaining({
+        kind: 'follower-cut', accountId: 200, closed: null,
+      }));
+    } finally {
+      runtime.controller.stop();
+    }
+  });
+
+  it('in-place let-run → close-copy počká na právě zapisující background lane a nespustí druhý cancel', async () => {
+    const time = manualClock();
+    let breached = false;
+    const broker = createMockBroker({
+      clock: time.clock,
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'working' }),
+    });
+    installRiskProvider(broker, accountId => riskSnapshot({
+      accountId, at: time.now(), realizedPnlUsd: accountId === 200 && breached ? -125 : 0,
+    }));
+    const initial = riskGroup({ mode: 'on-submit', cutUsd: 100, onCut: 'let-run' });
+    const runtime = await bootRuntime({ broker, group: initial, time });
+    let releaseCancel!: () => void;
+    let markCancelStarted!: () => void;
+    const cancelGate = new Promise<void>(resolve => { releaseCancel = resolve; });
+    const cancelStarted = new Promise<void>(resolve => { markCancelStarted = resolve; });
+    const nativeCancel = broker.cancelOrder.bind(broker);
+    const cancelSpy = vi.spyOn(broker, 'cancelOrder').mockImplementation(async (accountId, brokerOrderId) => {
+      markCancelStarted();
+      await cancelGate;
+      return nativeCancel(accountId, brokerOrderId);
+    });
+    let releaseCloseRead: (() => void) | undefined;
+    try {
+      broker.emitEvent({
+        type: 'order',
+        order: leaderWorkingOrder({ brokerOrderId: 'lane-race-entry-1', at: time.now() }),
+      });
+      broker.emitEvent({
+        type: 'order',
+        order: leaderWorkingOrder({ brokerOrderId: 'lane-race-entry-2', at: time.now() + 1 }),
+      });
+      await runtime.controller.waitForIdle();
+      const followerOrders = broker.orders().filter(order => order.accountId === 200);
+      expect(followerOrders).toHaveLength(2);
+      expect(followerOrders).toEqual([
+        expect.objectContaining({ status: 'working' }),
+        expect.objectContaining({ status: 'working' }),
+      ]);
+
+      breached = true;
+      time.advance(30_000);
+      broker.emitEvent({ type: 'heartbeat', at: time.now() });
+      await cancelStarted;
+
+      const stricter = structuredClone(initial);
+      stricter.followers[0].onCut = 'close-copy';
+      const update = runtime.controller.updateGroupRiskInPlace(stricter);
+      for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+
+      expect(cancelSpy).toHaveBeenCalledTimes(1);
+      let markCloseReadStarted!: () => void;
+      const closeReadGate = new Promise<void>(resolve => { releaseCloseRead = resolve; });
+      const closeReadStarted = new Promise<void>(resolve => { markCloseReadStarted = resolve; });
+      const nativeListPositions = broker.listPositions.bind(broker);
+      vi.spyOn(broker, 'listPositions').mockImplementation(async accountId => {
+        if (accountId === 200) {
+          markCloseReadStarted();
+          await closeReadGate;
+        }
+        return nativeListPositions(accountId);
+      });
+      releaseCancel();
+      await closeReadStarted;
+
+      // Stará let-run lane směla dokončit pouze už rozběhnutý cancel. Druhý
+      // broker write patří až nové close-copy cestě, která je zde záměrně
+      // zastavená na read preflightu.
+      expect(cancelSpy).toHaveBeenCalledTimes(1);
+      releaseCloseRead?.();
+      await update;
+      await runtime.controller.waitForIdle();
+
+      expect(cancelSpy).toHaveBeenCalledTimes(2);
+      expect(followerOrders.map(order => broker.orders().find(item => item.brokerOrderId === order.brokerOrderId)))
+        .toEqual([
+          expect.objectContaining({ status: 'canceled' }),
+          expect.objectContaining({ status: 'canceled' }),
+        ]);
+      expect(runtime.controller.status().armed).toBe(true);
+    } finally {
+      releaseCancel();
+      releaseCloseRead?.();
+      runtime.controller.stop();
+    }
+  });
+
   it.each(['disabled', 'off'] as const)('V15 vynechá %s followera', async state => {
     const time = manualClock();
     const broker = createMockBroker({ clock: time.clock });
@@ -2605,7 +2919,7 @@ describe('CopierRuntimeController — follower account cuts', () => {
     }
   });
 
-  it('bootstrap nad čerstvou nízkou prop rezervou nastartuje DISARMED s důvodem místo pádu', async () => {
+  it('bootstrap nad čerstvou nízkou prop rezervou konfiguraci neodmítne ani nevydá falešný incident', async () => {
     const time = manualClock();
     const snapshot = emptySnapshot();
     snapshot.safety = {
@@ -2632,9 +2946,9 @@ describe('CopierRuntimeController — follower account cuts', () => {
     try {
       expect(controller.status()).toMatchObject({
         armed: false,
-        lastError: expect.stringContaining('prop-reserve'),
-        lastDisarm: expect.objectContaining({ code: 'prop-reserve' }),
+        lastError: null,
       });
+      expect(controller.status().lastDisarm?.code).not.toBe('prop-reserve');
     } finally {
       controller.stop();
     }

@@ -109,6 +109,8 @@ export interface BrokerAccountRiskSnapshot {
   at: number;
   /** Brokerem vykázané dnešní realized P&L včetně poplatků. */
   realizedPnlUsd: number | null;
+  /** Přímé otevřené P&L ze snapshotu; nikdy se neodvozuje z cash balance. */
+  openPnlUsd?: number | null;
   /** Net liquidation value, jen pokud ji transport skutečně vydal; jinak null. */
   netLiq: number | null;
   /**
