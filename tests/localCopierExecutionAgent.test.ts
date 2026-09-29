@@ -131,7 +131,15 @@ describe('local copier execution agent', () => {
 
   it('is loopback-only, exposes status to the approved origin and updates the follower multiplier', async () => {
     const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0 });
+    const installation = {
+      version: 1 as const,
+      gitSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      dirty: true,
+      installedAt: '2026-09-29T10:00:00.000Z',
+    };
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, installation,
+    });
     expect(running.origin).toMatch(/^http:\/\/127\.0\.0\.1:/);
 
     const statusResponse = await fetch(`${running.origin}/v1/status`, { headers: { Origin: origin } });
@@ -139,6 +147,7 @@ describe('local copier execution agent', () => {
     const status = await statusResponse.json();
     expect(status.version).toBe(1);
     expect(status.capabilities).toContain('risk-config-v1');
+    expect(status.installation).toEqual(installation);
     const response = await post(running, status.nonce, {
       type: 'copy-command',
       command: { type: 'set-multiplier', groupId: 'ui-test', accountId: 22, multiplier: 1.5 },

@@ -3184,6 +3184,41 @@ describe('flatten vs stuck outbox', () => {
     controller.stop();
   });
 
+  it('odmítnutý emergency Flatten necachuje operationId a stejný retry znovu ověří broker stav', async () => {
+    const broker = createMockBroker({
+      nativeLiquidate: true,
+      behavior: () => ({ kind: 'fill', price: 30_000 }),
+    });
+    broker.setPosition(200, 'MNQU6', 1);
+    const nativeLiquidate = broker.liquidatePosition!;
+    let reject = true;
+    const liquidate = vi.spyOn(broker, 'liquidatePosition').mockImplementation(request => (
+      reject
+        ? Promise.resolve({ status: 'rejected', reason: 'test reject' })
+        : nativeLiquidate(request)
+    ));
+    const controller = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group,
+      clock: stepClock(),
+      flattenConfirmationAttempts: 1,
+      flattenConfirmationPollMs: 0,
+    });
+    broker.setConnected(true);
+    await controller.waitForIdle();
+
+    const operationId = 'manual-flat-retry-rejected-001';
+    await expect(controller.flattenAccount(200, operationId)).rejects.toThrow('Flatten selhal');
+    reject = false;
+    await expect(controller.flattenAccount(200, operationId)).resolves.toMatchObject({
+      flat: true,
+      failedAccounts: [],
+    });
+    expect(liquidate).toHaveBeenCalledTimes(2);
+    controller.stop();
+  });
+
   it('unknown stuck, kill switch ani shozený websocket neblokují stavový nouzový Flatten', async () => {
     const unknown = markUnknown(
       createOutboxEntry('cp:g1:e1:200', 'cpabc123', 'leader-1', stuckRequest, 1, false, 'e1', 1),

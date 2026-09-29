@@ -258,6 +258,25 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — Balíček 7c + ST22 (Codex)
+
+- Nouzový `flattenGroup`, běžný `flatten`, auto-close a leader-flat guard nyní
+  oddělí účty s dosud běžícím/nejasným background broker write. Na chráněný
+  účet neposílají druhý write, vrátí ho jako `ok:false`/nejasný a fail-closed,
+  ale leadera a ostatní bezpečné účty dál zploští. Neúplný nebo odmítnutý
+  emergency výsledek se pod `operationId` necachuje, takže po doběhnutí ochrany
+  lze stejný příkaz znovu stavově ověřit bez blind retry.
+- Mac instalátor ukládá do `install-manifest.json` plný git SHA, dirty příznak
+  a čas instalace; worker provenance vystavuje v `/v1/status`. `mac-install.ts`
+  i `mac-reinstall-safe.sh` odmítnou candidate HEAD, který je předkem (starší)
+  nainstalovaného SHA, pokud operátor výslovně nepoužije `--allow-downgrade`.
+- Regrese před opravami padaly na celovolací background bariéře a chybějícím
+  modulu provenance. Po opravě: cílené 7c `247/247`, cílené ST22/agent `90/90`,
+  celá kopírková sada `180 passed + 1 skipped`, `2127 passed + 1 todo`, exit 0;
+  TypeScript bez `extension/` exit 0, oba instalační entrypointy bundle check
+  exit 0 a shell syntax exit 0. Nic nebylo commitnuto, instalováno ani nasazeno;
+  žádný broker ani mutující lokální agent endpoint nebyl volán.
+
 ### 2026-09-29 — Opravy kopírky podle ultra review: stav integrace (Claude + Codex)
 
 - Všechny opravy jsou v integrační větvi `codex/copier-release-20260929`

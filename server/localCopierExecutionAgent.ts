@@ -68,6 +68,7 @@ interface LocalCopierExecutionAgentOptions {
   /** Explicit install-time opt-in. Otherwise dev origins are read/risk-reduction only. */
   allowFullDevelopmentAccess?: boolean;
   startedAt?: string;
+  installation?: NonNullable<LocalCopierAgentStatus['installation']>;
   device?: NonNullable<LocalCopierAgentStatus['device']>;
   devices?: NonNullable<LocalCopierAgentStatus['devices']>;
   snapshotHealth?: () => NonNullable<LocalCopierAgentStatus['snapshotHealth']>;
@@ -287,6 +288,7 @@ export async function startLocalCopierExecutionAgent(
     group: structuredClone(group),
     controller: options.controller.status(),
     startedAt,
+    ...(options.installation ? { installation: structuredClone(options.installation) } : {}),
     ...(devices[0] ? { device: structuredClone(devices[0]) } : {}),
     ...(devices.length > 0 ? { devices: structuredClone(devices) } : {}),
     ...(options.accountDisplay ? { accountDisplay: structuredClone(options.accountDisplay()) } : {}),

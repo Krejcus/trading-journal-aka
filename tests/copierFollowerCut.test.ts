@@ -647,6 +647,90 @@ describe('CopierRuntimeController — follower account cuts', () => {
     },
   );
 
+  it.each(['disarm', 'kill'] as const)(
+    '7c %s: Flatten All přeskočí účet s visícím background write a zavře ostatní účty',
+    async brake => {
+      const time = manualClock();
+      const broker = createMockBroker({
+        clock: time.clock,
+        nativeLiquidate: true,
+        behavior: () => ({ kind: 'fill', price: 20_000 }),
+      });
+      installRiskProvider(broker, accountId => riskSnapshot({
+        accountId, at: time.now(), realizedPnlUsd: 0,
+      }));
+      const runtime = await bootRuntime({ broker, group: riskGroup(), time });
+      await emitLeaderFill({
+        ...runtime, time, side: 'Buy', price: 20_000, netQuantity: 1,
+      });
+      broker.setPosition(100, 'MNQU6', 1);
+
+      const nativeLiquidate = broker.liquidatePosition!;
+      let release200!: () => void;
+      let mark200Started!: () => void;
+      const account200Started = new Promise<void>(resolve => { mark200Started = resolve; });
+      const account200Gate = new Promise<void>(resolve => { release200 = resolve; });
+      const liquidate = vi.spyOn(broker, 'liquidatePosition').mockImplementation(async request => {
+        if (request.accountId === 200) {
+          mark200Started();
+          await account200Gate;
+        }
+        return nativeLiquidate(request);
+      });
+
+      const background = runtime.controller.flattenFollowerTrade(200, `7c-background-${brake}-001`);
+      void background.catch(() => undefined);
+      try {
+        await account200Started;
+        if (brake === 'kill') runtime.controller.engageKillSwitch('7c test kill');
+        else runtime.controller.disarm();
+
+        const operationId = `7c-flatten-group-${brake}-001`;
+        const result = await runtime.controller.flattenGroup(operationId);
+
+        expect(result).toMatchObject({
+          operationId,
+          accountIds: [100, 200, 201],
+          flat: false,
+          failedAccounts: [200],
+          accounts: [
+            { accountId: 100, ok: true },
+            { accountId: 200, ok: false, error: expect.stringMatching(/nejasn|background write/i) },
+            { accountId: 201, ok: true },
+          ],
+        });
+        expect(liquidate.mock.calls.filter(([request]) => request.accountId === 200)).toHaveLength(1);
+        expect(runtime.controller.status()).toMatchObject({
+          armed: false,
+          reconciliationRequired: true,
+          lastError: expect.stringMatching(/200.*background lane/i),
+        });
+        expect(await broker.listPositions(100)).toEqual([
+          expect.objectContaining({ netQuantity: 0 }),
+        ]);
+        expect(await broker.listPositions(201)).toEqual([
+          expect.objectContaining({ netQuantity: 0 }),
+        ]);
+
+        release200();
+        await background.catch(() => undefined);
+        await runtime.controller.waitForIdle();
+
+        // Neúplný výsledek nesmí zůstat pod operationId v cache. Stejný
+        // operátorský příkaz po doběhnutí nejasného write znovu ověří stav.
+        await expect(runtime.controller.flattenGroup(operationId)).resolves.toMatchObject({
+          flat: true,
+          failedAccounts: [],
+        });
+        expect(liquidate.mock.calls.filter(([request]) => request.accountId === 200)).toHaveLength(1);
+      } finally {
+        release200();
+        await background.catch(() => undefined);
+        runtime.controller.stop();
+      }
+    },
+  );
+
   it('shutdown přeruší potvrzovací smyčku background lane a waitForIdle nečeká na broker call', async () => {
     const time = manualClock();
     const broker = createMockBroker({

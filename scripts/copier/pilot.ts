@@ -97,6 +97,7 @@ import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../se
 import { startTradingViewMarketPriceFeed, type TradingViewMarketPriceFeed } from '../../services/tradingViewMarketPrice';
 import { ensureTradingViewCdp, restartTradingViewWithCdp } from '../../server/tradingViewCdpLifecycle';
 import { loadMacCopierConnectionManifest } from '../../server/macCopierConnectionManifest';
+import { loadMacCopierInstallManifest } from '../../server/macCopierInstallManifest';
 import {
   captureTradingViewAlertSnapshot,
   captureTradingViewCopierSnapshot,
@@ -400,6 +401,10 @@ async function runLocalAgent(
 ): Promise<void> {
   const context = contexts[0];
   if (!context) throw new Error('Lokální agent potřebuje alespoň jedno OAuth spojení');
+  const installManifestPath = stringFlag('install-manifest', false);
+  const installation = installManifestPath
+    ? await loadMacCopierInstallManifest(installManifestPath)
+    : undefined;
   const portValue = numberFlag('port', false) ?? LOCAL_COPIER_AGENT_PORT;
   const minutesValue = numberFlag('minutes', false) ?? 480;
   const multiplierValue = numberFlag('multiplier', false) ?? 1;
@@ -953,6 +958,7 @@ async function runLocalAgent(
       controller,
       group,
       port: Number(portValue),
+      ...(installation ? { installation } : {}),
       devices: contexts.flatMap(candidate => candidate.device ? [candidate.device] : []),
       snapshotHealth: () => snapshotHealth,
       journalHealth: () => journals.map(journal => {

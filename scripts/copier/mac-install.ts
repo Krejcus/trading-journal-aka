@@ -19,6 +19,12 @@ import {
   type DurableGroupReplacementStatus,
 } from '../../services/copierPilotGroup';
 import type { CopyFollowerConfig, CopyGroupConfig } from '../../services/liveCopyTrading';
+import {
+  assertMacCopierInstallNotDowngrade,
+  loadMacCopierInstallManifest,
+  writeMacCopierInstallManifest,
+  type MacCopierInstallManifest,
+} from '../../server/macCopierInstallManifest';
 
 const execFileAsync = promisify(execFile);
 const LABEL = 'com.alphatrade.copier';
@@ -28,6 +34,7 @@ const launchAgents = resolve(homedir(), 'Library/LaunchAgents');
 const plistPath = resolve(launchAgents, `${LABEL}.plist`);
 const deviceConfigPath = resolve(pilotRoot, 'mac-device.json');
 const connectionsManifestPath = resolve(pilotRoot, 'connections.json');
+const installManifestPath = resolve(pilotRoot, 'install-manifest.json');
 
 const args = process.argv.slice(2);
 const action = args[0] ?? 'help';
@@ -74,7 +81,7 @@ AlphaTrade Mac copier service
   npm run copier:mac -- add-connection --connection-id UUID --accounts "ID,ID" --lease /cesta/lease.json [--primary true]
   npm run copier:mac -- install --connection-id UUID --leader ID --follower ID --lease /cesta/lease.json
   npm run copier:mac -- install --connections-manifest /cesta/connections.json --leader ID --followers "ID@MULT,ID@MULT@MAX"
-    [--adopt-durable-group | --replace-durable-group] [--allow-full-dev-origins]
+    [--adopt-durable-group | --replace-durable-group] [--allow-full-dev-origins] [--allow-downgrade]
   npm run copier:mac -- status
   npm run copier:mac -- reconcile
   npm run copier:mac -- resolve-stuck --kind cancel-or-modify --key KEY --reason "DŮVOD" --approval POTVRZUJI_RUCNI_RESOLUTION_BEZ_BROKER_PRIKAZU
@@ -215,6 +222,38 @@ async function install(): Promise<void> {
   const follower = cliFollowers[0]!.accountId;
   const sourceManifest = flags.get('connections-manifest')?.trim();
   const manifest = sourceManifest ? await loadMacCopierConnectionManifest(sourceManifest) : null;
+  const [{ stdout: candidateShaRaw }, { stdout: dirtyRaw }] = await Promise.all([
+    execFileAsync('/usr/bin/git', ['-C', projectRoot, 'rev-parse', 'HEAD']),
+    execFileAsync('/usr/bin/git', ['-C', projectRoot, 'status', '--porcelain=v1', '--untracked-files=normal']),
+  ]);
+  const candidateInstall: MacCopierInstallManifest = {
+    version: 1,
+    gitSha: candidateShaRaw.trim(),
+    dirty: dirtyRaw.trim().length > 0,
+    installedAt: new Date().toISOString(),
+  };
+  let installed: MacCopierInstallManifest | null = null;
+  try {
+    installed = await loadMacCopierInstallManifest(installManifestPath);
+  } catch (error) {
+    if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
+  }
+  await assertMacCopierInstallNotDowngrade({
+    candidate: candidateInstall,
+    installed,
+    allowDowngrade: flags.has('allow-downgrade'),
+    isAncestor: async (candidateSha, installedSha) => {
+      try {
+        await execFileAsync('/usr/bin/git', [
+          '-C', projectRoot, 'merge-base', '--is-ancestor', candidateSha, installedSha,
+        ]);
+        return true;
+      } catch (error) {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 1) return false;
+        return null;
+      }
+    },
+  });
   const connectionId = manifest?.primaryConnectionId ?? required('connection-id');
   const adoptDurableGroup = flags.has('adopt-durable-group');
   const replaceDurableGroup = flags.has('replace-durable-group');
@@ -338,6 +377,7 @@ async function install(): Promise<void> {
     `--outfile=${runtimePath}`,
   ]);
   await chmod(runtimePath, 0o700);
+  await writeMacCopierInstallManifest(installManifestPath, candidateInstall);
 
   const stdout = resolve(pilotRoot, 'mac-agent.stdout.log');
   const stderr = resolve(pilotRoot, 'mac-agent.stderr.log');
@@ -349,6 +389,7 @@ async function install(): Promise<void> {
     ...(followers ? ['--followers', followers] : ['--multiplier', flags.get('multiplier')?.trim() || '1']),
     '--minutes', '720',
     '--service-lifetime', 'persistent',
+    '--install-manifest', installManifestPath,
     '--port', flags.get('port')?.trim() || '3211',
     ...(retireMissingGroupId ? ['--retire-missing-group-id', retireMissingGroupId] : []),
     ...connectionArguments,
@@ -383,6 +424,7 @@ async function install(): Promise<void> {
   await execFileAsync('/bin/launchctl', ['enable', `${domain}/${LABEL}`]);
   await execFileAsync('/bin/launchctl', ['kickstart', '-k', `${domain}/${LABEL}`]);
   console.log(`Mac copier service běží: ${LABEL}`);
+  console.log(`Instalace: ${candidateInstall.gitSha}${candidateInstall.dirty ? ' (dirty)' : ''} @ ${candidateInstall.installedAt}`);
   console.log(device
     ? `Device: ${device.deviceName} (${device.paired ? 'spárován' : 'čeká na kliknutí na klíč v LIVE Connections'})`
     : `Multi-OAuth manifest: ${connectionsManifestPath}`);

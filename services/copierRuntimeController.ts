@@ -1491,40 +1491,48 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const cancelFollowerCutBackgroundLanes = (reason: string) => {
     for (const abort of followerCutBackgroundAbortByAccount.values()) abort(reason);
   };
+  const settleFollowerCutBackgroundAccounts = async (
+    accountIds: readonly number[],
+  ): Promise<Set<number>> => {
+    const jobsByAccount = new Map(accountIds.flatMap(accountId => {
+      const job = followerCutBackgroundJobsByAccount.get(accountId);
+      return job ? [[accountId, job] as const] : [];
+    }));
+    const jobs = [...new Set(jobsByAccount.values())];
+    if (jobs.length === 0) {
+      return new Set(accountIds.filter(accountId => (
+        (followerCutBrokerWritesByAccount.get(accountId)?.size ?? 0) > 0
+      )));
+    }
+    const timeoutMs = Math.max(1, options.followerCutDeadlineMs ?? 90_000);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<false>(resolve => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    });
+    let settled = false;
+    try {
+      settled = await Promise.race([
+        Promise.allSettled(jobs).then(() => true as const),
+        timeout,
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    return new Set(accountIds.filter(accountId => (
+      (followerCutBrokerWritesByAccount.get(accountId)?.size ?? 0) > 0
+      || (!settled && jobsByAccount.has(accountId))
+    )));
+  };
   const awaitFollowerCutBackgroundAccounts = async (
     accountIds: readonly number[],
     label: string,
   ): Promise<void> => {
-    const jobs = [...new Set(accountIds.flatMap(accountId => {
-      const job = followerCutBackgroundJobsByAccount.get(accountId);
-      return job ? [job] : [];
-    }))];
-    const assertNoRawWriteInFlight = () => {
-      const accountId = accountIds.find(id => (
-        (followerCutBrokerWritesByAccount.get(id)?.size ?? 0) > 0
-      ));
-      if (accountId != null) {
-        throw new Error(
-          `${label}: účet ${accountId} má stále nejasný broker write z background lane; vyžaduje read-only reconciliation po jeho doběhnutí`,
-        );
-      }
-    };
-    if (jobs.length === 0) {
-      assertNoRawWriteInFlight();
-      return;
-    }
-    const timeoutMs = Math.max(1, options.followerCutDeadlineMs ?? 90_000);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error(
-        `${label}: background follower cut nedokončil account lane do ${timeoutMs} ms`,
-      )), timeoutMs);
-    });
-    try {
-      await Promise.race([Promise.all(jobs), timeout]);
-      assertNoRawWriteInFlight();
-    } finally {
-      if (timer) clearTimeout(timer);
+    const protectedAccounts = await settleFollowerCutBackgroundAccounts(accountIds);
+    const accountId = [...protectedAccounts][0];
+    if (accountId != null) {
+      throw new Error(
+        `${label}: účet ${accountId} má stále nejasný broker write z background lane; vyžaduje read-only reconciliation po jeho doběhnutí`,
+      );
     }
   };
   let brokerObservationVersion = 0;
@@ -4812,42 +4820,75 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       invalidateReconciliation();
       cancelFollowerCutBackgroundLanes(`flatten:${operationId}`);
     }
-    await awaitFollowerCutBackgroundAccounts(accountIds, `Flatten ${operationId}`);
+    const protectedAccountIds = await settleFollowerCutBackgroundAccounts(accountIds);
+    const writableAccountIds = accountIds.filter(accountId => !protectedAccountIds.has(accountId));
+    const writableTargets = targets?.filter(target => !protectedAccountIds.has(target.accountId));
+    const mergeProtectedAccounts = (
+      processed: ManualFlattenResult | null,
+      label: string,
+    ): ManualFlattenResult => {
+      const processedByAccount = new Map(processed?.accounts.map(account => [account.accountId, account]));
+      const accounts = accountIds.map(accountId => processedByAccount.get(accountId) ?? {
+        accountId,
+        ok: false,
+        canceledOrders: 0,
+        submittedClosures: 0,
+        error: `${label}: účet má nejasný broker write z background lane; nový write byl bezpečně vynechán a je nutná read-only reconciliation`,
+        remainingPositions: 0,
+        workingOrders: 0,
+      });
+      return {
+        operationId,
+        accountIds: [...accountIds],
+        canceledOrders: processed?.canceledOrders ?? 0,
+        submittedClosures: processed?.submittedClosures ?? 0,
+        flat: protectedAccountIds.size === 0 && processed?.flat === true,
+        remainingPositionAccounts: processed?.remainingPositionAccounts ?? [],
+        workingOrderAccounts: processed?.workingOrderAccounts ?? [],
+        accounts,
+        failedAccounts: accounts.filter(account => !account.ok).map(account => account.accountId),
+      };
+    };
     // Flatten je poslední risk-redukční brzda. Kill switch, shozený WS gate
     // ani starý sending/unknown outbox nesmí zabránit ani pokusu o čerstvou
     // autoritativní REST likvidaci. Skutečný transport/rate-limit/broker
     // reject se projeví per-account výsledkem a nikdy se nevydává za flat.
     let result: ManualFlattenResult | null = null;
     try {
-      await processor.mutate(async current => {
-        const processed = await processManualFlatten({
-          runtime: current,
-          broker,
-          store: durableStore,
-          groupId: group.id,
-          accountIds,
-          ...(targets ? { targets } : {}),
-          ...(cleanupScope ? { cleanupScope } : {}),
-          operationId,
-          clock,
-          confirmationAttempts: options.flattenConfirmationAttempts,
-          confirmationPollMs: options.flattenConfirmationPollMs,
-          accountConcurrency: options.flattenAccountConcurrency,
-          wait: options.wait,
+      if (writableAccountIds.length > 0) {
+        await processor.mutate(async current => {
+          const processed = await processManualFlatten({
+            runtime: current,
+            broker,
+            store: durableStore,
+            groupId: group.id,
+            accountIds: writableAccountIds,
+            ...(writableTargets && writableTargets.length > 0 ? { targets: writableTargets } : {}),
+            ...(cleanupScope ? { cleanupScope } : {}),
+            operationId,
+            clock,
+            confirmationAttempts: options.flattenConfirmationAttempts,
+            confirmationPollMs: options.flattenConfirmationPollMs,
+            accountConcurrency: options.flattenAccountConcurrency,
+            wait: options.wait,
+          });
+          result = processed.result;
+          return processed.runtime;
         });
-        result = processed.result;
-        return processed.runtime;
-      });
+      }
     } catch (error) {
       if (!scopedFailure) failClosed(error, preserveArm ? { autoClose: false } : undefined);
       throw error;
     }
-    if (!result) throw new Error('Flatten nedokončil žádný výsledek');
+    result = mergeProtectedAccounts(result, `Flatten ${operationId}`);
     if (preserveArm) {
-      for (const accountId of accountIds) workingOrderAccounts.delete(accountId);
+      for (const accountId of writableAccountIds) workingOrderAccounts.delete(accountId);
       for (const accountId of result.workingOrderAccounts) workingOrderAccounts.add(accountId);
     } else {
-      workingOrderAccounts = new Set(result.workingOrderAccounts);
+      workingOrderAccounts = new Set([
+        ...[...workingOrderAccounts].filter(accountId => protectedAccountIds.has(accountId)),
+        ...result.workingOrderAccounts,
+      ]);
     }
     if (!result.flat) {
       const failed = result.accounts.filter(account => !account.ok);
@@ -4858,10 +4899,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         `Flatten selhal: zavřeno ${result.accounts.length - failed.length}/${result.accounts.length} účtů; selhaly ${detail || 'neznámé účty'}`,
       );
       if (!scopedFailure) failClosed(error, preserveArm ? { autoClose: false } : undefined);
-      throw error;
+      if (failed.some(account => !protectedAccountIds.has(account.accountId))) throw error;
     }
     if (preserveArm) {
-      for (const accountId of accountIds) positionsByAccount.set(accountId, new Map());
+      for (const accountId of writableAccountIds) positionsByAccount.set(accountId, new Map());
     }
     return result;
   };
@@ -4899,7 +4940,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     invalidateReconciliation();
     cancelFollowerCutBackgroundLanes(`emergency-flatten:${key}`);
     const run = emergencyFlattenTail.then(async () => {
-      await awaitFollowerCutBackgroundAccounts(accountIds, `Nouzový Flatten ${key}`);
+      const protectedAccountIds = await settleFollowerCutBackgroundAccounts(accountIds);
+      const writableAccountIds = accountIds.filter(accountId => !protectedAccountIds.has(accountId));
+      const writableTargets = emergencyOptions.targets?.filter(target => (
+        !protectedAccountIds.has(target.accountId)
+      ));
       const live = currentRuntime();
       const isolatedStore = createMemoryCopierStore(toSnapshot(
         live.state,
@@ -4971,37 +5016,66 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           () => broker.findOrdersByTag(accountId, tag),
         ),
       };
-      const processed = await processManualFlatten({
-        runtime: isolatedRuntime,
-        broker: emergencyBroker,
-        store: isolatedStore,
-        groupId: group.id,
-        accountIds,
-        ...(emergencyOptions.targets ? { targets: emergencyOptions.targets } : {}),
-        ...(emergencyOptions.cleanupScope ? { cleanupScope: emergencyOptions.cleanupScope } : {}),
-        nativeOnly: true,
-        operationId: key,
-        clock,
-        confirmationAttempts: options.flattenConfirmationAttempts,
-        confirmationPollMs: options.flattenConfirmationPollMs,
-        accountConcurrency: options.flattenAccountConcurrency,
-        wait: options.wait,
-        deadlineAt: flattenDeadlineAt,
-        retryPollMs: options.flattenRetryPollMs,
-        liquidateAttempts: options.flattenLiquidateAttempts,
+      const processed = writableAccountIds.length > 0
+        ? await processManualFlatten({
+          runtime: isolatedRuntime,
+          broker: emergencyBroker,
+          store: isolatedStore,
+          groupId: group.id,
+          accountIds: writableAccountIds,
+          ...(writableTargets && writableTargets.length > 0 ? { targets: writableTargets } : {}),
+          ...(emergencyOptions.cleanupScope ? { cleanupScope: emergencyOptions.cleanupScope } : {}),
+          nativeOnly: true,
+          operationId: key,
+          clock,
+          confirmationAttempts: options.flattenConfirmationAttempts,
+          confirmationPollMs: options.flattenConfirmationPollMs,
+          accountConcurrency: options.flattenAccountConcurrency,
+          wait: options.wait,
+          deadlineAt: flattenDeadlineAt,
+          retryPollMs: options.flattenRetryPollMs,
+          liquidateAttempts: options.flattenLiquidateAttempts,
+        })
+        : null;
+      const processedByAccount = new Map(
+        processed?.result.accounts.map(account => [account.accountId, account]),
+      );
+      const accounts = accountIds.map(accountId => processedByAccount.get(accountId) ?? {
+        accountId,
+        ok: false,
+        canceledOrders: 0,
+        submittedClosures: 0,
+        error: `Nouzový Flatten ${key}: účet má nejasný broker write z background lane; nový write byl bezpečně vynechán a je nutná read-only reconciliation`,
+        remainingPositions: 0,
+        workingOrders: 0,
       });
-      const result = processed.result;
-      workingOrderAccounts = new Set(result.workingOrderAccounts);
+      const result: ManualFlattenResult = {
+        operationId: key,
+        accountIds: [...accountIds],
+        canceledOrders: processed?.result.canceledOrders ?? 0,
+        submittedClosures: processed?.result.submittedClosures ?? 0,
+        flat: protectedAccountIds.size === 0 && processed?.result.flat === true,
+        remainingPositionAccounts: processed?.result.remainingPositionAccounts ?? [],
+        workingOrderAccounts: processed?.result.workingOrderAccounts ?? [],
+        accounts,
+        failedAccounts: accounts.filter(account => !account.ok).map(account => account.accountId),
+      };
+      workingOrderAccounts = new Set([
+        ...[...workingOrderAccounts].filter(accountId => protectedAccountIds.has(accountId)),
+        ...result.workingOrderAccounts,
+      ]);
       if (!result.flat) {
         const failed = result.accounts.filter(account => !account.ok);
         const detail = failed
           .map(account => `${account.accountId} (${account.error ?? 'účet není autoritativně flat'})`)
           .join(', ');
-        throw new Error(
+        const error = new Error(
           `Flatten selhal: zavřeno ${result.accounts.length - failed.length}/${result.accounts.length} účtů; selhaly ${detail || 'neznámé účty'}`,
         );
+        if (failed.some(account => !protectedAccountIds.has(account.accountId))) throw error;
+        failClosed(error, { autoClose: false });
       }
-      for (const accountId of accountIds) positionsByAccount.set(accountId, new Map());
+      for (const accountId of writableAccountIds) positionsByAccount.set(accountId, new Map());
       return result;
     });
     const guarded = run.catch(error => {
@@ -5009,6 +5083,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       throw error;
     });
     emergencyFlattenOperations.set(key, guarded);
+    // Chyba ani neúplný per-account výsledek nejsou idempotentní úspěch.
+    // Po odpadnutí ochrany smí operátor zopakovat stejný operationId; čerstvý
+    // stavový read zabrání druhému write na už zploštěném účtu.
+    void guarded.then(result => {
+      if (!result.flat && emergencyFlattenOperations.get(key) === guarded) {
+        emergencyFlattenOperations.delete(key);
+      }
+    }, () => {
+      if (emergencyFlattenOperations.get(key) === guarded) {
+        emergencyFlattenOperations.delete(key);
+      }
+    });
     // Další odlišná nouzová operace může čekat pouze za jiným Flattenem,
     // nikdy za leader eventem, journalem ani reconciliation frontou.
     emergencyFlattenTail = guarded.then(() => undefined, () => undefined);
@@ -7025,33 +7111,61 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
     let closeResult: ManualFlattenResult | null = null;
     try {
-      await awaitFollowerCutBackgroundAccounts(
-        evaluation.targets.map(target => target.accountId),
-        `Leader-flat ${epoch.id}`,
-      );
-      await processor.mutate(async runtimeBeforeClose => {
-        // Poslední fencing kontrola bezprostředně před durable write-ahead a
-        // případným POSTem. Novější epocha ani safety incident nesmí proklouznout.
-        if (
-          !isLeaderFlatGuardTokenCurrent(leaderExposureEpoch(epoch.symbol), closeToken)
-          || safetyGeneration !== closeSafetyGeneration
-        ) return runtimeBeforeClose;
-        const processed = await processTargetedLiquidation({
-          runtime: runtimeBeforeClose,
-          broker,
-          store: durableStore,
-          groupId: group.id,
-          targets: evaluation.targets,
-          operationId: `leader-flat:${epoch.id}`,
-          clock,
-          confirmationAttempts: options.flattenConfirmationAttempts,
-          confirmationPollMs: options.flattenConfirmationPollMs,
-          accountConcurrency: options.flattenAccountConcurrency,
-          wait: options.wait,
+      const targetAccountIds = [...new Set(evaluation.targets.map(target => target.accountId))];
+      const protectedAccountIds = await settleFollowerCutBackgroundAccounts(targetAccountIds);
+      const writableTargets = evaluation.targets.filter(target => (
+        !protectedAccountIds.has(target.accountId)
+      ));
+      if (writableTargets.length > 0) {
+        await processor.mutate(async runtimeBeforeClose => {
+          // Poslední fencing kontrola bezprostředně před durable write-ahead a
+          // případným POSTem. Novější epocha ani safety incident nesmí proklouznout.
+          if (
+            !isLeaderFlatGuardTokenCurrent(leaderExposureEpoch(epoch.symbol), closeToken)
+            || safetyGeneration !== closeSafetyGeneration
+          ) return runtimeBeforeClose;
+          const processed = await processTargetedLiquidation({
+            runtime: runtimeBeforeClose,
+            broker,
+            store: durableStore,
+            groupId: group.id,
+            targets: writableTargets,
+            operationId: `leader-flat:${epoch.id}`,
+            clock,
+            confirmationAttempts: options.flattenConfirmationAttempts,
+            confirmationPollMs: options.flattenConfirmationPollMs,
+            accountConcurrency: options.flattenAccountConcurrency,
+            wait: options.wait,
+          });
+          closeResult = processed.result;
+          return processed.runtime;
         });
-        closeResult = processed.result;
-        return processed.runtime;
-      });
+      }
+      if (protectedAccountIds.size > 0) {
+        const processedByAccount = new Map(
+          closeResult?.accounts.map(account => [account.accountId, account]),
+        );
+        const accounts = targetAccountIds.map(accountId => processedByAccount.get(accountId) ?? {
+          accountId,
+          ok: false,
+          canceledOrders: 0,
+          submittedClosures: 0,
+          error: `Leader-flat ${epoch.id}: účet má nejasný broker write z background lane; nový write byl bezpečně vynechán a je nutná read-only reconciliation`,
+          remainingPositions: 0,
+          workingOrders: 0,
+        });
+        closeResult = {
+          operationId: `leader-flat:${epoch.id}`,
+          accountIds: targetAccountIds,
+          canceledOrders: closeResult?.canceledOrders ?? 0,
+          submittedClosures: closeResult?.submittedClosures ?? 0,
+          flat: false,
+          remainingPositionAccounts: closeResult?.remainingPositionAccounts ?? [],
+          workingOrderAccounts: closeResult?.workingOrderAccounts ?? [],
+          accounts,
+          failedAccounts: accounts.filter(account => !account.ok).map(account => account.accountId),
+        };
+      }
     } catch (reason) {
       failClosed(new Error(
         `Leader-flat cílené zavření selhalo: ${errorOf(reason).message}`,

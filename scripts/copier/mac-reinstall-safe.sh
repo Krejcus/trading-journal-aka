@@ -9,6 +9,15 @@
 # aby se nic nepřepisovalo ručně.
 set -euo pipefail
 
+ALLOW_DOWNGRADE_ARGS=()
+if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != "--allow-downgrade" ]]; }; then
+  echo "Použití: scripts/copier/mac-reinstall-safe.sh [--allow-downgrade]" >&2
+  exit 1
+fi
+if (( $# == 1 )); then
+  ALLOW_DOWNGRADE_ARGS+=(--allow-downgrade)
+fi
+
 PORT="${COPIER_PORT:-3211}"
 STATUS_JSON="$(curl -s -m 5 -H "Origin: http://localhost:3000" "http://127.0.0.1:${PORT}/v1/status" || true)"
 if [[ -z "$STATUS_JSON" ]]; then
@@ -60,7 +69,29 @@ if [[ -z "$LEADER" || -z "$FOLLOWERS" || -z "$MANIFEST" ]]; then
 fi
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-COMMIT="$(git -C "$REPO" rev-parse --short HEAD)"
+COMMIT="$(git -C "$REPO" rev-parse HEAD)"
+INSTALLED_SHA="$(printf '%s' "$STATUS_JSON" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+installation = d.get("installation") or {}
+print(installation.get("gitSha") or "")
+')"
+if [[ -n "$INSTALLED_SHA" && "$COMMIT" != "$INSTALLED_SHA" && ${#ALLOW_DOWNGRADE_ARGS[@]} -eq 0 ]]; then
+  if ! git -C "$REPO" cat-file -e "${INSTALLED_SHA}^{commit}" 2>/dev/null; then
+    echo "STOP: nainstalovaný SHA ${INSTALLED_SHA} nelze v tomto repu ověřit; použij vědomě --allow-downgrade" >&2
+    exit 7
+  fi
+  if git -C "$REPO" merge-base --is-ancestor "$COMMIT" "$INSTALLED_SHA"; then
+    echo "STOP: candidate HEAD ${COMMIT} je starší než nainstalovaný worker ${INSTALLED_SHA}; použij vědomě --allow-downgrade" >&2
+    exit 7
+  else
+    ANCESTRY_RC=$?
+    if (( ANCESTRY_RC != 1 )); then
+      echo "STOP: git ancestry candidate/nainstalované verze nelze bezpečně ověřit" >&2
+      exit 7
+    fi
+  fi
+fi
 echo "Reinstall z ${REPO} @ ${COMMIT}"
 echo "leader=${LEADER} followers=${FOLLOWERS} port=${AGENT_PORT}"
 echo "manifest=${MANIFEST}"
@@ -73,7 +104,7 @@ DEV_ORIGIN_ARGS=()
 if [[ "${COPIER_ALLOW_FULL_DEV_ORIGINS:-1}" != "0" ]]; then
   DEV_ORIGIN_ARGS+=(--allow-full-dev-origins)
 fi
-npm run copier:mac -- install --connections-manifest "$MANIFEST" --leader "$LEADER" --followers "$FOLLOWERS" --port "$AGENT_PORT" --adopt-durable-group "${DEV_ORIGIN_ARGS[@]}"
+npm run copier:mac -- install --connections-manifest "$MANIFEST" --leader "$LEADER" --followers "$FOLLOWERS" --port "$AGENT_PORT" --adopt-durable-group "${DEV_ORIGIN_ARGS[@]}" "${ALLOW_DOWNGRADE_ARGS[@]}"
 
 BUNDLE="$HOME/Library/Application Support/AlphaTrade/copier/copier-agent.mjs"
 echo "bundle sha256: $(shasum -a 256 "$BUNDLE" | cut -c1-16)…  commit: ${COMMIT}"

@@ -247,6 +247,12 @@ describe('Mac copier agent lifecycle', () => {
     expect(safeReinstall).toContain('--adopt-durable-group');
     expect(safeReinstall).toContain('DEV_ORIGIN_ARGS+=(--allow-full-dev-origins)');
     expect(safeReinstall).toContain('COPIER_ALLOW_FULL_DEV_ORIGINS:-1');
+    expect(safeReinstall).toContain('merge-base --is-ancestor "$COMMIT" "$INSTALLED_SHA"');
+    expect(safeReinstall).toContain('ALLOW_DOWNGRADE_ARGS+=(--allow-downgrade)');
+    expect(installer).toContain("'--install-manifest', installManifestPath");
+    expect(installer).toContain("flags.has('allow-downgrade')");
+    expect(installer.indexOf('await assertMacCopierInstallNotDowngrade({'))
+      .toBeLessThan(installer.indexOf('await replaceDurableGroupWithBackup({'));
     expect(pilot).toContain('Durable soubor: ${groupPath}');
     expect(pilot).toContain('--replace-durable-group');
   });

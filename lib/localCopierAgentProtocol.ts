@@ -67,6 +67,15 @@ export interface CopierJournalRecorderStatus {
   error: string | null;
 }
 
+export interface LocalCopierAgentInstallation {
+  version: 1;
+  /** Plný commit SHA zdrojového stromu použitého pro bundle. */
+  gitSha: string;
+  /** true = bundle vznikl ze stromu s necommitnutými nebo untracked změnami. */
+  dirty: boolean;
+  installedAt: string;
+}
+
 export interface LocalCopierAgentStatus {
   version: 1;
   /** Additive feature negotiation. Older version-1 workers omit this field. */
@@ -76,6 +85,8 @@ export interface LocalCopierAgentStatus {
   group: CopyGroupConfig;
   controller: CopierControllerStatus;
   startedAt: string;
+  /** Durable provenance instalačního bundle; starší workery pole nemají. */
+  installation?: LocalCopierAgentInstallation;
   /** Primární relay zařízení; zachováno kvůli kompatibilitě starších UI. */
   device?: LocalCopierAgentDevice;
   /** Jedno odvolatelné zařízení pro každé samostatné OAuth připojení. */
