@@ -251,6 +251,26 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-29 — V13 v5b: deadline visícího flat-sweep cancelu (Codex, balíček 3b-6)
+
+- Každý protective/OSO i exit-only cancel ve flat sweepu má vlastní
+  `flatSweepCancelTimeoutMs` (default 2 s). Timeout je nejasný výsledek:
+  write se podruhé neposílá a výsledek rozhodne jen následný stream/REST
+  snapshot; working nebo neznámý stav skončí čitelně fail-closed.
+- Runtime tombstone drží nejvýše jeden cancel write na broker order ID i při
+  dalším flat eventu. Visící cancel jednoho účtu po svém deadlinu propustí
+  další účet ve stejné ingress vlně; brokerem už provedený cancel s visící
+  HTTP odpovědí se read-only potvrdí a navazující leader exit není blokován.
+- Nová B6/R6 hang regrese před opravou skončila timeoutem (`waitForIdle` se
+  neuvolnil); po opravě celý V13 soubor prošel 40/40 a související
+  follower-cut/V13 guard/exit-latency sada 39/39. Předepsaná plná copier sada
+  prošla mimo sandbox: 170 souborů + 1 skipped, 1956 testů + 1 todo, exit 0.
+  První sandbox běh měl pouze 89 `listen EPERM 127.0.0.1` pádů ve čtyřech
+  loopback souborech. Root `tsc --noEmit` má jen povolené chybějící Chrome
+  typy a `@crxjs/vite-plugin` v `extension/`; typecheck bez extension prošel
+  exit 0. Bez npm install/ci, commitu, broker volání, ARM/Flatten, deploye
+  nebo reinstalace workeru.
+
 ### 2026-09-29 — V13 pátá iterace: pre-cancel flat proof, stream-first sweep a OSO lineage (Codex, balíček 3b-5)
 
 - Flat-sweep před prvním cancelem čte `listPositions` dotčeného followera

@@ -620,6 +620,8 @@ export interface BootstrapCopierOptions {
   flattenRetryPollMs?: number;
   /** Celkový budget jedné flat události napříč účty a oběma sweepy. */
   flatSweepBudgetMs?: number;
+  /** Deadline každého jednotlivého cancel write ve flat sweepu; timeout se nikdy naslepo neopakuje. */
+  flatSweepCancelTimeoutMs?: number;
   wait?: (ms: number) => Promise<void>;
   /**
    * Read-only zdroj „followeři právě neviditelní v žádném připojeném OAuth
@@ -1653,6 +1655,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const sweptProtectiveLegs = new Set<string>();
   /** OSO entry parent, na který flat sweep už odeslal risk-redukující cancel. */
   const flatSweepEntryCancelAttempts = new Set<string>();
+  /** Každý flat-sweep cancel write nejvýše jednou za běh; nejistý výsledek se už jen čte. */
+  const flatSweepCancelAttempts = new Set<string>();
   /** Rušení právě běží; brání smyčce cancel → position event → cancel. */
   const sweepingProtectiveLegs = new Set<string>();
   const FLAT_SWEEP_TOTAL_BUDGET_MS = options.flatSweepBudgetMs ?? 6_000;
@@ -1661,6 +1665,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   }
   if (FLAT_SWEEP_TOTAL_BUDGET_MS >= 10_000) {
     throw new Error('flatSweepBudgetMs musí být bezpečně pod heartbeat bránou 10000 ms');
+  }
+  const FLAT_SWEEP_CANCEL_TIMEOUT_MS = options.flatSweepCancelTimeoutMs ?? 2_000;
+  if (!Number.isFinite(FLAT_SWEEP_CANCEL_TIMEOUT_MS) || FLAT_SWEEP_CANCEL_TIMEOUT_MS <= 0) {
+    throw new Error('flatSweepCancelTimeoutMs musí být kladné číslo');
+  }
+  if (FLAT_SWEEP_CANCEL_TIMEOUT_MS >= 10_000) {
+    throw new Error('flatSweepCancelTimeoutMs musí být bezpečně pod heartbeat bránou 10000 ms');
   }
   /** Horní mez skutečně pracovních noh v jedné okamžité sweep dávce. */
   const SWEEP_MAX_LEGS_PER_CALL = 6;
@@ -1690,6 +1701,29 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           timer = setTimeout(
             () => reject(new Error(label + ': celkový deadline ' + FLAT_SWEEP_TOTAL_BUDGET_MS + ' ms')),
             remaining,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const withFlatSweepCancelDeadline = async <T>(
+    accountId: number,
+    brokerOrderId: string,
+    work: () => Promise<T>,
+  ): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        work(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(
+              `cancel deadline ${FLAT_SWEEP_CANCEL_TIMEOUT_MS} ms (${accountId}/${brokerOrderId})`,
+            )),
+            FLAT_SWEEP_CANCEL_TIMEOUT_MS,
           );
         }),
       ]);
@@ -1858,6 +1892,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     )];
     const candidateIds = allLegIds.filter(brokerOrderId => (
       !sweptProtectiveLegs.has(brokerOrderId)
+      && !flatSweepCancelAttempts.has(brokerOrderId)
       && !sweepingProtectiveLegs.has(brokerOrderId)
     ));
     if (candidateIds.length === 0) return;
@@ -1909,6 +1944,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const fresh = [...new Set(brokerOrderIds)].filter(id => !attemptedIds.includes(id));
         for (const brokerOrderId of fresh) {
           attemptedIds.push(brokerOrderId);
+          flatSweepCancelAttempts.add(brokerOrderId);
           sweepingProtectiveLegs.add(brokerOrderId);
           if (osoEntries.some(entry => entry.entryBrokerOrderId === brokerOrderId)) {
             flatSweepEntryCancelAttempts.add(brokerOrderId);
@@ -1916,10 +1952,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         }
         await Promise.all(fresh.map(async brokerOrderId => {
           try {
-            // Budget chrání jen read-only REST. První risk-redukující cancel
-            // pro streamově working order se nesmí zahodit jen proto, že event
-            // čekal ve frontě nebo jiný účet měl pomalý broker I/O.
-            await broker.cancelOrder(accountId, brokerOrderId);
+            // Write má vlastní deadline oddělený od read-only REST budgetu.
+            // Timeout je nejasný výsledek: tentýž cancel se nikdy neopakuje a
+            // o výsledku rozhodne pouze následující stream/REST postkontrola.
+            await withFlatSweepCancelDeadline(
+              accountId,
+              brokerOrderId,
+              () => broker.cancelOrder(accountId, brokerOrderId),
+            );
           } catch (reason) {
             // Broker write se nikdy neopakuje. Nejasný výsledek rozhodne jen
             // následující read-only snapshot.
@@ -8650,19 +8690,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const reservedIds = [...exitOnlyReservations]
       .filter(([, reservation]) => (
         reservation.accountId === accountId && reservation.symbol === symbol
-    ))
+      ))
       .map(([brokerOrderId]) => brokerOrderId);
-    if (reservedIds.length === 0) return;
+    const retrySafeReservedIds = reservedIds.filter(id => !flatSweepCancelAttempts.has(id));
+    if (retrySafeReservedIds.length === 0) return;
     const budget = sharedBudget ?? createFlatSweepBudget();
     try {
-      const streamStatuses = await streamSweepStatuses(accountId, reservedIds);
+      const streamStatuses = await streamSweepStatuses(accountId, retrySafeReservedIds);
       const streamTerminal = new Map([...streamStatuses].filter(([, lookup]) => (
         !isOpenOrderStatus(lookup.status)
       )));
       for (const [brokerOrderId, lookup] of streamTerminal) {
         recordTerminalSweepState(accountId, brokerOrderId, lookup.status);
       }
-      const unresolvedIds = reservedIds.filter(id => !streamTerminal.has(id));
+      const unresolvedIds = retrySafeReservedIds.filter(id => !streamTerminal.has(id));
       if (unresolvedIds.length === 0) return;
 
       const orders = await withFlatSweepBudget(
@@ -8691,11 +8732,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       {
         const cancelErrors = new Map<string, Error>();
+        for (const brokerOrderId of workingIds) flatSweepCancelAttempts.add(brokerOrderId);
         await Promise.all(workingIds.map(async brokerOrderId => {
           try {
-            await withFlatSweepBudget(
-              budget,
-              'cancel exit-only ' + brokerOrderId,
+            await withFlatSweepCancelDeadline(
+              accountId,
+              brokerOrderId,
               () => broker.cancelOrder(accountId, brokerOrderId),
             );
           } catch (reason) {
