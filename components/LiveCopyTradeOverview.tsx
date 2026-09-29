@@ -4182,8 +4182,6 @@ const timeWithSecondsLabel = (at: number) => new Date(at).toLocaleTimeString('cs
  * výpadek): jedna věta co se stalo, výsledek kopií a další krok. Ruční
  * vypnutí panel nemá; technický detail i historie jsou v záložce Události.
  */
-const POSITION_CHECK_BLOCKERS = new Set(['Snapshot pozic není čerstvý', 'Čeká kontrola pozic']);
-
 /**
  * Režim opravy po startu (breached/nedostupné účty uložené skupiny) a ruční
  * read-only Kontrola pozic. Kontrola se nabízí jen za VYPNUTÉ kopírky: za ARM
@@ -4198,10 +4196,9 @@ export const CopierMaintenancePanel = ({ status, known, onReconcile }: {
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   if (!known || !status) return null;
   const repair = status.startupGroupRepair ?? null;
-  const needsCheck = !status.armed && (
-    status.reconciliationRequired
-    || (status.followerParticipation ?? []).some(item => item.blockers.some(blocker => POSITION_CHECK_BLOCKERS.has(blocker)))
-  );
+  // Jen skutečný požadavek workeru. Zastaralý snímek pro zapnutí vypnutého
+  // followera platí za DISARMED skoro pořád a panel by svítil zbytečně.
+  const needsCheck = !status.armed && status.reconciliationRequired;
   if (!repair && !needsCheck && !result) return null;
   const runCheck = async () => {
     if (!onReconcile || busy) return;

@@ -25,14 +25,14 @@ describe('CopierMaintenancePanel', () => {
     expect(html).toContain('read-only');
   });
 
-  it('nabídne Kontrolu pozic i při zastaralém snapshotu přepínače followera', () => {
+  it('zastaralý snapshot pro zapnutí vypnutého followera panel nerozsvítí', () => {
     const html = render(status({
       followerParticipation: [{
         accountId: 200, configuredEnabled: true, effectiveEnabled: true, canToggle: false,
         blockers: ['Snapshot pozic není čerstvý'],
       }],
     }));
-    expect(html).toContain('Zkontrolovat pozice');
+    expect(html).toBe('');
   });
 
   it('za ARM tlačítko nenabízí (Kontrola by kopírku vypnula)', () => {
