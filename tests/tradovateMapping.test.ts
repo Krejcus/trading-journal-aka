@@ -48,6 +48,42 @@ describe('toPlaceOrderPayload', () => {
   });
 });
 
+describe('fresh order graph reads', () => {
+  it('post-cancel fresh listOrders se nepřipojí k dříve běžícímu globálnímu requestu', async () => {
+    let orderListCalls = 0;
+    let releaseFirst!: () => void;
+    const fetchImpl: typeof fetch = async input => {
+      const url = String(input);
+      if (url.includes('/order/list')) {
+        orderListCalls += 1;
+        if (orderListCalls === 1) {
+          return new Promise<Response>(resolve => {
+            releaseFirst = () => resolve(jsonResponse([]));
+          });
+        }
+        return jsonResponse([]);
+      }
+      if (url.includes('/orderVersion/list')
+        || url.includes('/command/list')
+        || url.includes('/fill/list')) return jsonResponse([]);
+      throw new Error(`unexpected url ${url}`);
+    };
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'test-token', accountSpec: 'DEMO123', fetchImpl,
+      setIntervalImpl: (() => 1) as unknown as typeof setInterval,
+      clearIntervalImpl: (() => undefined) as unknown as typeof clearInterval,
+    });
+
+    const ordinary = broker.listOrders(200);
+    await expect.poll(() => orderListCalls).toBe(1);
+    const fresh = broker.listOrders(200, { fresh: true });
+    await expect.poll(() => orderListCalls).toBe(2);
+    releaseFirst();
+
+    await expect(Promise.all([ordinary, fresh])).resolves.toEqual([[], []]);
+  });
+});
+
 describe('OCO mapping', () => {
   const ocoRequest = {
     tag: 'cpoco123', accountId: 200, symbol: 'MNQU6', quantity: 1,

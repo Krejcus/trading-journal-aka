@@ -2111,8 +2111,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         netQuantity: item.netPos,
       }));
     },
-    async listOrders(accountId): Promise<BrokerOrder[]> {
-      const rawList = await loadOrderGraph();
+    async listOrders(accountId, options): Promise<BrokerOrder[]> {
+      const rawList = options?.fresh
+        ? await loadOrderGraphUncached()
+        : await loadOrderGraph();
       const selected = rawList.filter(item => item.accountId === accountId);
       return (await Promise.all(selected.map(async item => {
         const order = await composeOrder(item.id);

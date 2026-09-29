@@ -340,7 +340,7 @@ export interface BrokerPort {
   listAccountRiskSnapshots(accountIds: readonly number[]): Promise<BrokerAccountRiskSnapshot[]>;
   listPositions(accountId: number): Promise<BrokerPosition[]>;
   /** Autoritativní seznam objednávek účtu pro pre-arm kontrolu. */
-  listOrders(accountId: number): Promise<BrokerOrder[]>;
+  listOrders(accountId: number, options?: { fresh?: boolean }): Promise<BrokerOrder[]>;
   /**
    * Dohledání objednávek podle tagu. Volá se po timeoutu, aby se zjistilo,
    * jestli objednávka k brokerovi přece jen dorazila.

@@ -151,7 +151,9 @@ export function createExposureCappedBroker(
     listAccountCapabilities: accountIds => broker.listAccountCapabilities(accountIds),
     listAccountRiskSnapshots: accountIds => broker.listAccountRiskSnapshots(accountIds),
     listPositions: accountId => broker.listPositions(accountId),
-    listOrders: accountId => broker.listOrders(accountId),
+    listOrders: (accountId, options) => options
+      ? broker.listOrders(accountId, options)
+      : broker.listOrders(accountId),
     findOrdersByTag: (accountId, tag) => broker.findOrdersByTag(accountId, tag),
     findOrderById: (accountId, brokerOrderId) => broker.findOrderById(accountId, brokerOrderId),
     findOrderStatusById: broker.findOrderStatusById
