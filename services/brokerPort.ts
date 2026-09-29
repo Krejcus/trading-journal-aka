@@ -156,8 +156,9 @@ export function brokerRiskEquity(snapshot: Pick<BrokerAccountRiskSnapshot, 'netL
 }
 
 export type BrokerEvent =
-  | { type: 'order'; order: BrokerOrder }
-  | { type: 'fill'; fill: BrokerFill }
+  /** `receivedAt` je čas přijetí zdrojového WS frame; legacy/mock emitery jej mohou vynechat. */
+  | { type: 'order'; order: BrokerOrder; receivedAt?: number }
+  | { type: 'fill'; fill: BrokerFill; receivedAt?: number }
   | { type: 'position'; position: BrokerPosition }
   | { type: 'heartbeat'; at: number }
   | { type: 'error'; error: Error; at: number }

@@ -82,6 +82,7 @@ export interface ReplicationPlan {
 
 /** Follower objednávka vzniklá z konkrétní leader objednávky. */
 export type NativeOsoRole = 'entry' | 'stop' | 'target';
+export type FollowerOrderProtectiveRole = 'standalone-stop';
 
 export interface FollowerOrderLink {
   key: string;
@@ -95,6 +96,12 @@ export interface FollowerOrderLink {
    * mají parent, stop i target a lifecycle modify je musí rozlišit fail-closed.
    */
   nativeOsoRole?: NativeOsoRole;
+  /**
+   * Durable klasifikace samostatné ochranné nohy. Nestačí ji odvozovat z
+   * aktuálního DISARMED runtime: po restartu i po kill switchi musí cancel
+   * stejného leader orderu pořád projít plnou bezpečnostní bránou.
+   */
+  protectiveRole?: FollowerOrderProtectiveRole;
 }
 
 /**

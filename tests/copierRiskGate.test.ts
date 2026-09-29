@@ -5,6 +5,7 @@ import {
   createRiskGateContext,
   evaluateRiskGate,
   haltReason,
+  protectiveLifecycleHaltReason,
   type RiskGateContext,
 } from '../services/copierRiskGate';
 
@@ -101,6 +102,17 @@ describe('cancelLifecycleHaltReason', () => {
     ['jiné prostředí', { brokerEnvironment: 'live', expectedEnvironment: 'demo' }, 'environment-mismatch'],
   ] as const)('zablokuje cancel při problému: %s', (_label, overrides, expected) => {
     expect(cancelLifecycleHaltReason(openGate(overrides))).toBe(expected);
+  });
+});
+
+describe('protectiveLifecycleHaltReason', () => {
+  it.each([
+    ['DISARM', { armed: false }, 'disarmed'],
+    ['kill switch', { killSwitch: true }, 'kill-switch'],
+    ['stale heartbeat', { now: 30_000, lastHeartbeatAt: 0 }, 'stale-heartbeat'],
+    ['nejasný outbox', { stuckOutbox: true }, 'stuck-outbox'],
+  ] as const)('ochranný stop respektuje plnou bránu: %s', (_label, overrides, expected) => {
+    expect(protectiveLifecycleHaltReason(openGate(overrides))).toBe(expected);
   });
 });
 

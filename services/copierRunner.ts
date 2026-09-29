@@ -83,10 +83,75 @@ import {
   cancelLifecycleHaltReason,
   evaluateRiskGate,
   haltReason,
+  protectiveLifecycleHaltReason,
   type RiskGateContext,
 } from './copierRiskGate';
 import { snapshotToState, toSnapshot, type CopierSnapshot, type CopierStore } from './copierStore';
 import type { CopyGroupConfig } from './liveCopyTrading';
+
+const STANDALONE_STOP_POSITION_READ_ATTEMPTS = 3;
+const STANDALONE_STOP_POSITION_READ_TIMEOUT_MS = 400;
+const STANDALONE_STOP_POSITION_READ_BACKOFF_MS = 75;
+
+const waitForStandaloneStopPositionRetry = (attempt: number) => new Promise<void>(resolve => {
+  setTimeout(resolve, STANDALONE_STOP_POSITION_READ_BACKOFF_MS * attempt);
+});
+
+const readPositionsWithDeadline = async (
+  broker: BrokerPort,
+  accountId: number,
+): Promise<Awaited<ReturnType<BrokerPort['listPositions']>>> => {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error(
+      `broker read deadline ${STANDALONE_STOP_POSITION_READ_TIMEOUT_MS} ms`,
+    )), STANDALONE_STOP_POSITION_READ_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([broker.listPositions(accountId), deadline]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+};
+
+const readStandaloneStopPositions = async (
+  broker: BrokerPort,
+  accountId: number,
+): Promise<Awaited<ReturnType<BrokerPort['listPositions']>>> => {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= STANDALONE_STOP_POSITION_READ_ATTEMPTS; attempt += 1) {
+    try {
+      return await readPositionsWithDeadline(broker, accountId);
+    } catch (error) {
+      lastError = error;
+      if (attempt < STANDALONE_STOP_POSITION_READ_ATTEMPTS) {
+        await waitForStandaloneStopPositionRetry(attempt);
+      }
+    }
+  }
+  throw lastError;
+};
+
+const standaloneProtectiveRole = (
+  event: LeaderEvent,
+  state: CopierState,
+  group: CopyGroupConfig,
+): FollowerOrderLink['protectiveRole'] => {
+  if (event.kind !== 'submitted'
+    || (event.orderType !== 'Stop' && event.orderType !== 'StopLimit')) return undefined;
+  const epoch = state.safety.leaderExposureEpochs?.find(candidate => (
+    candidate.groupId === group.id
+    && candidate.leaderAccountId === event.accountId
+    && candidate.symbol === event.symbol
+    && candidate.phase === 'open'
+    && candidate.lastLeaderNet !== 0
+  ));
+  if (!epoch) return undefined;
+  const reduces = epoch.lastLeaderNet > 0 ? event.side === 'Sell' : event.side === 'Buy';
+  return reduces && event.quantity <= Math.abs(epoch.lastLeaderNet)
+    ? 'standalone-stop'
+    : undefined;
+};
 
 async function resolveBrokerLifecycleEntry(
   broker: BrokerPort,
@@ -161,6 +226,8 @@ export interface CopierAuditEntry {
   key?: string;
   brokerOrderId?: string;
   reason?: string;
+  /** Strojově čitelná klasifikace incidentu; text `reason` zůstává pro operátora. */
+  reasonCode?: 'standalone-position-unknown';
   /** Ruční změna participation; u odmítnutí zůstává after shodné s before. */
   configuredEnabledBefore?: boolean;
   configuredEnabledAfter?: boolean;
@@ -173,7 +240,29 @@ export interface CopierAuditEntry {
   until?: number;
   source?: 'broker' | 'ledger' | 'manual';
   cutUsd?: number;
+  /** Additivni observability; nema zadny vliv na rozhodnuti ani retry. */
+  latency?: {
+    leaderReceivedAt: number;
+    dispatchStartedAt: number;
+    ackAt: number;
+    queueMs: number;
+    brokerMs: number;
+    totalMs: number;
+  };
 }
+
+const auditLatency = (
+  leaderReceivedAt: number,
+  dispatchStartedAt: number,
+  ackAt: number,
+): NonNullable<CopierAuditEntry['latency']> => ({
+  leaderReceivedAt,
+  dispatchStartedAt,
+  ackAt,
+  queueMs: dispatchStartedAt - leaderReceivedAt,
+  brokerMs: ackAt - dispatchStartedAt,
+  totalMs: ackAt - leaderReceivedAt,
+});
 
 /**
  * Jen follower vyřazený už ve vstupním planning snapshotu je očekávaný
@@ -1007,7 +1096,7 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
           entry = ack.definitive
             ? markBracketRejected(entry, ack.rejectReason ?? 'OCO rejected', at)
             : markBracketUnknown(entry, ack.rejectReason ?? 'nejednoznačná OCO odpověď', at);
-          return { entry, at };
+          return { entry, at, startedAt: item.startedAt };
         }
         entry = markBracketAcknowledged(
           entry,
@@ -1015,13 +1104,13 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
           ack.secondBrokerOrderId,
           at,
         );
-        return { entry, at };
+        return { entry, at, startedAt: item.startedAt };
       } catch (error) {
         const at = clock();
         entry = error instanceof CopierDispatchRevokedError
           ? waiveBracketOutboxEntry(entry, error.message, at)
           : markBracketUnknown(entry, error instanceof Error ? error.message : String(error), at);
-        return { entry, at };
+        return { entry, at, startedAt: item.startedAt };
       }
     },
   );
@@ -1050,6 +1139,7 @@ export async function processBracketPair(options: ProcessBracketPairOptions): Pr
         at: result.at, leaderEventId: event.id, kind: 'dispatched', accountId: entry.request.accountId,
         key: entry.key, brokerOrderId: `${entry.firstBrokerOrderId},${entry.secondBrokerOrderId}`,
         reason: 'native-oco',
+        latency: auditLatency(event.receivedAt, result.startedAt, result.at),
       });
     } else if (entry.status === 'waived') {
       resolvedKeys.push(entry.key);
@@ -1129,7 +1219,7 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
     };
   }
 
-  const dispatchable: OsoOutboxEntry[] = [];
+  const dispatchable: Array<{ entry: OsoOutboxEntry; startedAt: number }> = [];
   const resolvedKeys: string[] = [];
   // Stejné pravidlo jako u OCO: sourozenci v jedné atomické dávce se
   // navzájem neblokují, ale starší nevyřešený outbox blokuje všechny.
@@ -1217,16 +1307,17 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
       continue;
     }
     if (action.type === 'lookup') continue;
-    entry = markOsoSending(entry, clock());
+    const startedAt = clock();
+    entry = markOsoSending(entry, startedAt);
     osoOutbox.set(key, entry);
-    dispatchable.push(entry);
+    dispatchable.push({ entry, startedAt });
   }
 
   if (dispatchable.length > 0) {
     revision = await persistRuntime(store, state, outbox, cancelOutbox, bracketOutbox, osoOutbox, revision);
   }
   const results = await mapWithConcurrency(dispatchable, options.maxConcurrentDispatches ?? 4, async initial => {
-    let entry = initial;
+    let entry = initial.entry;
     try {
       const ack = await broker.placeOso!(entry.request);
       const at = clock();
@@ -1235,16 +1326,17 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
         : ack.definitive
           ? markOsoRejected(entry, ack.rejectReason ?? 'OSO rejected', at)
           : markOsoUnknown(entry, ack.rejectReason ?? 'nejednoznačná OSO odpověď', at);
-      return { entry, at };
+      return { entry, at, startedAt: initial.startedAt };
     } catch (error) {
       const at = clock();
       return { entry: error instanceof CopierDispatchRevokedError
         ? waiveOsoOutboxEntry(entry, error.message, at)
-        : markOsoUnknown(entry, error instanceof Error ? error.message : String(error), at), at };
+        : markOsoUnknown(entry, error instanceof Error ? error.message : String(error), at), at,
+        startedAt: initial.startedAt };
     }
   });
 
-  for (const { entry, at } of results) {
+  for (const { entry, at, startedAt } of results) {
     osoOutbox.set(entry.key, entry);
     if (entry.status === 'acknowledged' && entry.entryBrokerOrderId && entry.firstBrokerOrderId && entry.secondBrokerOrderId) {
       metrics.dispatched += 3;
@@ -1263,7 +1355,8 @@ export async function processOsoPair(options: ProcessOsoPairOptions): Promise<Co
         quantity: entry.request.quantity, limitPrice: entry.request.second.limitPrice, nativeOsoRole: 'target',
       });
       audit.push({ at, leaderEventId: event.id, kind: 'dispatched', accountId: entry.request.accountId, key: entry.key,
-        brokerOrderId: `${entry.entryBrokerOrderId},${entry.firstBrokerOrderId},${entry.secondBrokerOrderId}`, reason: 'native-oso' });
+        brokerOrderId: `${entry.entryBrokerOrderId},${entry.firstBrokerOrderId},${entry.secondBrokerOrderId}`, reason: 'native-oso',
+        latency: auditLatency(event.receivedAt, startedAt, at) });
     } else if (entry.status === 'waived') {
       resolvedKeys.push(entry.key);
       audit.push({ at, leaderEventId: event.id, kind: 'skipped',
@@ -1304,6 +1397,7 @@ export async function processLeaderEvent(
   let shadowLinks = new Map(runtime.shadowLinks ?? []);
   let state = runtime.state;
   let revision = runtime.revision;
+  const protectiveRole = standaloneProtectiveRole(event, state, group);
 
   const verdict = classifySequence(event.sequence, state.lastSequence);
   const deferredReplay = options.deferredReplay === true && verdict === 'out-of-order';
@@ -1367,11 +1461,11 @@ export async function processLeaderEvent(
       };
     }
   }
-  const commands = [
+  const allCommands = [
     ...cancels.map(command => ({ ...command, operation: 'cancel' as const })),
     ...modifications.map(command => ({ ...command, operation: 'modify' as const })),
   ];
-  if (commands.length > 0) {
+  if (allCommands.length > 0) {
     const isTerminalCancel = durableCancels.length > 0 && modifications.length === 0;
     // Výjimka „risk-redukující cancel projde vždy" má chránit před osiřelou
     // čekající objednávkou — tam zrušení expozici snižuje. Ochranná noha
@@ -1386,25 +1480,107 @@ export async function processLeaderEvent(
       protectiveLegIds.add(entry.leaderStopOrderId);
       protectiveLegIds.add(entry.leaderTargetOrderId);
     }
-    const commandHalt = isTerminalCancel && !protectiveLegIds.has(event.orderId)
-      ? cancelLifecycleHaltReason(context)
-      : haltReason({
-          ...context,
-          sequenceBroken: context.sequenceBroken || sequenceBroken,
-          stuckOutbox: context.stuckOutbox
-            || stuckEntries(outbox.values()).length > 0
-            || stuckBracketEntries(bracketOutbox.values()).length > 0
-            || stuckOsoEntries(osoOutbox.values()).length > 0
-            || stuckCancelEntries(cancelOutbox.values()).some(entry => entry.leaderEventId !== event.id),
-        });
-    if (commandHalt || (broker.environment === 'live' && !store)) {
-      const reason = commandHalt ?? 'durable-store-required';
-      for (const command of commands) {
+    const standaloneLinks = (planningState.links.get(event.orderId) ?? [])
+      .filter(link => link.protectiveRole === 'standalone-stop');
+    const standaloneLinkFor = (command: (typeof allCommands)[number]) => standaloneLinks.find(link => (
+      link.accountId === command.accountId && link.brokerOrderId === command.brokerOrderId
+    ));
+    const commandContext = {
+      ...context,
+      sequenceBroken: context.sequenceBroken || sequenceBroken,
+      stuckOutbox: context.stuckOutbox
+        || stuckEntries(outbox.values()).length > 0
+        || stuckBracketEntries(bracketOutbox.values()).length > 0
+        || stuckOsoEntries(osoOutbox.values()).length > 0
+        || stuckCancelEntries(cancelOutbox.values()).some(entry => entry.leaderEventId !== event.id),
+    };
+    const blockedCommandReasons = new Map<string, string>();
+    const protectiveCancelKeys = new Set<string>();
+    const positionReads = new Map<number, Promise<Awaited<ReturnType<BrokerPort['listPositions']>>>>();
+    const readPositions = (accountId: number) => {
+      const existing = positionReads.get(accountId);
+      if (existing) return existing;
+      const pending = readStandaloneStopPositions(broker, accountId);
+      positionReads.set(accountId, pending);
+      return pending;
+    };
+
+    const unknownStandalonePositionKeys = new Set<string>();
+
+    await Promise.all(allCommands.map(async command => {
+      let commandHalt: string | null;
+      const standaloneLink = command.operation === 'cancel' && isTerminalCancel
+        ? standaloneLinkFor(command)
+        : undefined;
+      if (standaloneLink) {
+        const protectiveHalt = protectiveLifecycleHaltReason(commandContext);
+        if (!protectiveHalt) {
+          // Za zdravého ARM je cancel stejný jako v původní lifecycle cestě:
+          // nesmí čekat na REST pozici a blokovat hned následující leader exit.
+          protectiveCancelKeys.add(command.key);
+          commandHalt = null;
+        } else try {
+          const positions = await readPositions(command.accountId);
+          const matching = positions.filter(position => position.symbol === event.symbol);
+          const authoritative = matching.length <= 1
+            && matching.every(position => Number.isFinite(position.netQuantity));
+          if (!authoritative) {
+            commandHalt = 'pozice followera není autoritativně známá: nejednoznačný net v symbolu';
+          } else {
+            const net = matching[0]?.netQuantity ?? 0;
+            const reducesWithoutFlip = (
+              (net > 0 && event.side === 'Sell') || (net < 0 && event.side === 'Buy')
+            ) && standaloneLink.quantity <= Math.abs(net);
+            if (reducesWithoutFlip) {
+              protectiveCancelKeys.add(command.key);
+              commandHalt = `follower drží SL, který leader zrušil (${protectiveHalt})`;
+            } else {
+              // Flat účet, stejná strana jako pozice nebo stop větší než
+              // |net| by vytvořily či zvětšily expozici. Takový stop už není
+              // ochrana a jeho zrušení smí projít cancel-only branou.
+              commandHalt = cancelLifecycleHaltReason(context);
+            }
+          }
+        } catch (error) {
+          const message = `pozice followera není autoritativně známá po ${STANDALONE_STOP_POSITION_READ_ATTEMPTS} pokusech: ${error instanceof Error ? error.message : String(error)}`;
+          commandHalt = message;
+          unknownStandalonePositionKeys.add(command.key);
+        }
+      } else if (isTerminalCancel && !protectiveLegIds.has(event.orderId)) {
+        commandHalt = cancelLifecycleHaltReason(context);
+      } else if (protectiveLegIds.has(event.orderId)) {
+        if (command.operation === 'cancel') protectiveCancelKeys.add(command.key);
+        commandHalt = protectiveLifecycleHaltReason(commandContext);
+      } else {
+        commandHalt = haltReason(commandContext);
+      }
+      if (!commandHalt && broker.environment === 'live' && !store) {
+        commandHalt = 'durable-store-required';
+      }
+      if (commandHalt) blockedCommandReasons.set(command.key, commandHalt);
+    }));
+
+    for (const command of allCommands) {
+      const reason = blockedCommandReasons.get(command.key);
+      if (reason) {
         audit.push({
           at: clock(), leaderEventId: event.id, kind: 'blocked', accountId: command.accountId,
           key: command.key, brokerOrderId: command.brokerOrderId, reason,
+          ...(unknownStandalonePositionKeys.has(command.key)
+            ? { reasonCode: 'standalone-position-unknown' as const }
+            : {}),
         });
       }
+    }
+    if (unknownStandalonePositionKeys.size > 0) {
+      return {
+        runtime: { state, outbox, bracketOutbox, osoOutbox, cancelOutbox, shadowLinks, revision },
+        plan: { leaderEventId: event.id, orders: [], skipped: [] }, audit, metrics,
+      };
+    }
+    const commands = allCommands.filter(command => !blockedCommandReasons.has(command.key));
+    const hadBlockedCommands = blockedCommandReasons.size > 0;
+    if (commands.length === 0) {
       return {
         runtime: { state, outbox, bracketOutbox, osoOutbox, cancelOutbox, shadowLinks, revision },
         plan: { leaderEventId: event.id, orders: [], skipped: [] }, audit, metrics,
@@ -1561,10 +1737,16 @@ export async function processLeaderEvent(
       revision = await persistRuntime(store, state, outbox, cancelOutbox, bracketOutbox, osoOutbox, revision);
     }
 
+    const lifecycleLatencies = new Map<string, NonNullable<CopierAuditEntry['latency']>>();
     await Promise.all(sending.map(async entry => {
       if (!sendableKeys.has(entry.key)) return;
+      let modifyAckAt: number | undefined;
       try {
         if (entry.operation === 'cancel') {
+          // `dispatchBroker` dává obyčejnému terminal cancelu výjimku z
+          // DISARM/kill. Pro protective cancel proto bez awaitu těsně před
+          // side effectem vyžadujeme plnou write bránu (`modify`).
+          if (protectiveCancelKeys.has(entry.key)) broker.assertDispatchAllowed?.('modify');
           await broker.cancelOrder(entry.accountId, entry.brokerOrderId);
         } else if (entry.changes) {
           // Incident 24. 8.: náš modify (total 6) čekal AtExecution, mezitím
@@ -1636,8 +1818,17 @@ export async function processLeaderEvent(
           // a odeslání, zachytí stream detekce (qty > asserted) — okno bez
           // CAS na venue API zavřít nejde, jen ho držet v milisekundách.
           await broker.modifyOrder(entry.accountId, entry.brokerOrderId, changes);
+          // Pouzijeme stejny clock tick, ktery uz drive znackoval prechod do
+          // unknown. Observability nesmi pridat dalsi volani injektovanych
+          // hodin a tim menit deterministicke race/fence testy.
+          modifyAckAt = clock();
+          lifecycleLatencies.set(entry.key, auditLatency(event.receivedAt, entry.updatedAt, modifyAckAt));
         }
-        cancelOutbox.set(entry.key, markCancelUnknown(entry, 'čeká na potvrzení order streamem', clock()));
+        cancelOutbox.set(entry.key, markCancelUnknown(
+          entry,
+          'čeká na potvrzení order streamem',
+          modifyAckAt ?? clock(),
+        ));
       } catch (error) {
         cancelOutbox.set(entry.key, error instanceof CopierDispatchRevokedError
           ? waiveCancelEntry({ ...entry, neverSent: true }, error.message, clock())
@@ -1649,8 +1840,16 @@ export async function processLeaderEvent(
     let allConfirmed = true;
     for (const entry of [...cancelOutbox.values()].filter(item => item.leaderEventId === event.id)) {
       if (entry.status === 'waived') {
-        audit.push({ at: clock(), leaderEventId: event.id, kind: 'skipped',
-          accountId: entry.accountId, key: entry.key, reason: entry.reason });
+        const protectiveRace = protectiveCancelKeys.has(entry.key);
+        audit.push({
+          at: clock(), leaderEventId: event.id,
+          kind: protectiveRace ? 'cancel-failed' : 'skipped',
+          accountId: entry.accountId, key: entry.key,
+          reason: protectiveRace
+            ? `ochranný cancel byl zastaven před odesláním; reconciliation required (${entry.reason ?? 'dispatch-revoked'})`
+            : entry.reason,
+        });
+        if (protectiveRace) allConfirmed = false;
         continue;
       }
       // Výpadek sítě nebo expirace tokenu uprostřed ověřování nesmí vyhodit
@@ -1692,6 +1891,9 @@ export async function processLeaderEvent(
           accountId: entry.accountId,
           key: entry.key, brokerOrderId: entry.brokerOrderId,
           ...(resolved.outcome === 'rejected' && resolved.reason ? { reason: resolved.reason } : {}),
+          ...(entry.operation === 'modify' && lifecycleLatencies.has(entry.key)
+            ? { latency: lifecycleLatencies.get(entry.key) }
+            : {}),
         });
       } else {
         allConfirmed = false;
@@ -1701,7 +1903,7 @@ export async function processLeaderEvent(
         });
       }
     }
-    if (allConfirmed) state = applyResolved(state, [], event.sequence);
+    if (allConfirmed && !hadBlockedCommands) state = applyResolved(state, [], event.sequence);
     revision = await persistRuntime(store, state, outbox, cancelOutbox, bracketOutbox, osoOutbox, revision);
     return {
       runtime: { state, outbox, bracketOutbox, osoOutbox, cancelOutbox, shadowLinks, revision },
@@ -1768,6 +1970,7 @@ export async function processLeaderEvent(
           quantity: request.quantity,
           ...(request.limitPrice != null ? { limitPrice: request.limitPrice } : {}),
           ...(request.stopPrice != null ? { stopPrice: request.stopPrice } : {}),
+          ...(protectiveRole ? { protectiveRole } : {}),
         });
         shadowLinks = new Map(shadowState.links);
       }
@@ -1820,6 +2023,7 @@ export async function processLeaderEvent(
           event.id,
           event.sequence,
         );
+      if (protectiveRole && entry.protectiveRole == null) entry = { ...entry, protectiveRole };
       const action = nextAction(entry);
 
       if (action.type === 'skip') {
@@ -1905,6 +2109,7 @@ export async function processLeaderEvent(
             accountId: request.accountId,
             key: entry.key,
             brokerOrderId: ack.brokerOrderId,
+            latency: auditLatency(event.receivedAt, startedAt, ackAt),
           },
         };
       } catch (error) {
@@ -1957,6 +2162,7 @@ export async function processLeaderEvent(
         quantity: result.entry.request.quantity,
         ...(result.entry.request.limitPrice != null ? { limitPrice: result.entry.request.limitPrice } : {}),
         ...(result.entry.request.stopPrice != null ? { stopPrice: result.entry.request.stopPrice } : {}),
+        ...(result.entry.protectiveRole ? { protectiveRole: result.entry.protectiveRole } : {}),
       });
     }
   }
@@ -2097,6 +2303,7 @@ export async function recoverOutbox(options: RecoverOutboxOptions): Promise<Copi
           quantity: resolved.request.quantity,
           ...(resolved.request.limitPrice != null ? { limitPrice: resolved.request.limitPrice } : {}),
           ...(resolved.request.stopPrice != null ? { stopPrice: resolved.request.stopPrice } : {}),
+          ...(resolved.protectiveRole ? { protectiveRole: resolved.protectiveRole } : {}),
         });
       }
       audit.push({

@@ -7,6 +7,44 @@ const request = (side: 'Buy' | 'Sell', quantity: number) => ({
 });
 
 describe('exposure capped broker', () => {
+  it('modify bez maxContracts neplatí cenu plného exposure grafu', async () => {
+    const base = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const placed = await base.placeOrder({
+      ...request('Sell', 1), tag: 'protective-stop', orderType: 'Stop', stopPrice: 30_000,
+    });
+    const findOrderById = vi.spyOn(base, 'findOrderById');
+    const listPositions = vi.spyOn(base, 'listPositions');
+    const listOrders = vi.spyOn(base, 'listOrders');
+    const broker = createExposureCappedBroker(base, () => undefined);
+
+    await broker.modifyOrder(22, placed.brokerOrderId, {
+      quantity: 1, orderType: 'Stop', stopPrice: 30_010,
+    });
+
+    expect(findOrderById).not.toHaveBeenCalled();
+    expect(listPositions).not.toHaveBeenCalled();
+    expect(listOrders).not.toHaveBeenCalled();
+  });
+
+  it('modify s maxContracts dál provede plnou fail-closed cap kontrolu', async () => {
+    const base = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const placed = await base.placeOrder({
+      ...request('Sell', 1), tag: 'capped-protective-stop', orderType: 'Stop', stopPrice: 30_000,
+    });
+    const findOrderById = vi.spyOn(base, 'findOrderById');
+    const listPositions = vi.spyOn(base, 'listPositions');
+    const listOrders = vi.spyOn(base, 'listOrders');
+    const broker = createExposureCappedBroker(base, () => 2);
+
+    await broker.modifyOrder(22, placed.brokerOrderId, {
+      quantity: 1, orderType: 'Stop', stopPrice: 30_010,
+    });
+
+    expect(findOrderById).toHaveBeenCalledTimes(1);
+    expect(listPositions).toHaveBeenCalledTimes(1);
+    expect(listOrders).toHaveBeenCalledTimes(1);
+  });
+
   it('forwards read-only risk snapshots without applying the exposure gate', async () => {
     const snapshot = {
       accountId: 22,

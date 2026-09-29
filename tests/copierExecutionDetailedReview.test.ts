@@ -122,8 +122,17 @@ describe('execution review: safety changes while durable sending commit is pendi
         expect(broker.modifyRequests()).toHaveLength(modifyCount);
         expect(broker.orders().reduce((sum, order) => sum + broker.cancelRequestCount(order.brokerOrderId), 0)).toBe(cancelCount);
         expect(broker.liquidateRequests()).toHaveLength(0);
-        expect(critical(audit)).toEqual([]);
-        expect(audit).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'skipped', reason: expect.stringContaining('dispatch-revoked:') })]));
+        if (kind === 'protective-cancel') {
+          expect(critical(audit)).toEqual([expect.objectContaining({
+            kind: 'cancel-failed',
+            reason: expect.stringContaining('reconciliation required'),
+          })]);
+        } else {
+          expect(critical(audit)).toEqual([]);
+          expect(audit).toEqual(expect.arrayContaining([expect.objectContaining({
+            kind: 'skipped', reason: expect.stringContaining('dispatch-revoked:'),
+          })]));
+        }
         const snapshot = await barrier.store.load();
         const entries = kind === 'standard' ? snapshot.outbox : kind === 'oso' ? snapshot.osoOutbox
           : kind === 'oco' ? snapshot.bracketOutbox : snapshot.cancelOutbox;
@@ -226,7 +235,11 @@ describe('execution review: safety changes while durable sending commit is pendi
   });
 
 
-  it.each([0, 1, 2])('modify lookup %s failure after DISARM/re-ARM is terminal no-send, not auto-close', async lookupNumber => {
+  // Bez maxContracts ma modify uz jen jeden povinny pre-write lookup v runneru.
+  // Drive byl lookup 2 duplicitni cap read v exposure wrapperu; balicek 11b
+  // jej zamerne odstranil. Post-write confirmation uz logicky nemuze dokazat
+  // "no-send", proto zde zustavaji jen pre-write failure body 0/1.
+  it.each([0, 1])('modify lookup %s failure after DISARM/re-ARM is terminal no-send, not auto-close', async lookupNumber => {
     const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
     const started = deferred();
     const release = deferred();

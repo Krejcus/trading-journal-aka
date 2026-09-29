@@ -205,6 +205,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 - [ ] Chaos test recovery proti reálnému DEMO: běžný restart flat/DISARMED
       prošel 18. 8.; kill uprostřed odesílání a výpadek WS zůstávají ověřené
       jen deterministicky a nesmí se vyrábět zbytečnou broker objednávkou.
+- [ ] **Standalone SL sweep po pozdějším zploštění followera** — balíček 5b-2
+      umí při leader cancelu po účtech rozlišit skutečně ochranný SL od flat,
+      oversized nebo opačně orientovaného stopu. Když se ale SL za DISARM
+      správně podrží a follower se zploští až později přes TP, runner už
+      nedostane leader lifecycle událost. `sweepFollowerProtectiveLegs`
+      v controlleru musí v navazujícím controller balíčku zahrnout i durable
+      `protectiveRole: standalone-stop` pro přesný účet+symbol a zachovat
+      stejnou autoritativní postkontrolu jako bracket/OSO.
+- [ ] **V8 stáří execution eventu a ochranný reassert** — broker od 5b-2 nese
+      `receivedAt` na Order/Fill eventu a semantic-lag watchdog zavře přetížený
+      socket. Controller ještě musí blokovat staré události zvyšující expozici,
+      ochranný posun SL nesmí zamítnout jen kvůli stáří a neodeslaný ochranný
+      posun se musí po čerstvém lookupu znovu prosadit. Runner 5b-2 tyto body
+      záměrně nemění bez controller kontraktu.
+- [ ] **ST6 pending okno musí běžet od přijetí leader eventu** — balíček 11b
+      odstranil serializovanou REST hydrataci před doručením eventu, ale timer
+      v `copierRuntimeController.ts` se stále zakládá až po zpracování eventu
+      na plných `pendingWindowMs() + 50`. Navazující controller změna má počítat
+      jen zbývající rozpočet z `leaderEvent.receivedAt`, včetně testu, kde
+      brokerová hydratace spotřebuje celé okno. Soubor je záměrně beze změny,
+      protože ho v této worktree vlastní paralelní Codex.
 
 ## Deník
 
@@ -357,6 +378,195 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   TypeScript check dotčeného grafu je čistý; root check hlásí jen povolené
   chybějící Chrome typy/plugin v `extension/`; `git diff --check` čistý.
   Nic nebylo commitnuto, nasazeno ani odesláno brokerovi.
+
+### 2026-09-29 — 5b-3 follow-up: unknown standalone pozice jako audit bez broker write (Codex)
+
+- Claudeho plná sada odhalila rozpor kontraktu: po třech neúspěšných
+  read-only čteních follower pozice `processLeaderEvent` vyhazoval výjimku,
+  zatímco runner kontrakt očekával kritický `blocked` audit. Výjimka přes
+  controllerový `.catch(failClosed)` sice zapsala `lastError`; auto-close se
+  nespustil jen proto, že read větev je dosažitelná až za DISARM. To byla
+  správná současná vlastnost, ale nepřímá a křehká vůči budoucím změnám.
+- Runner nyní vrací `blocked` audit se strojovým
+  `reasonCode: standalone-position-unknown`. Pokud je neznámý byť jeden účet,
+  celá dávka se vrátí před dispatchí: nevznikne cancel, modify, place ani
+  liquidation ani pro jiného followera, jehož stop by jinak šel bezpečně
+  zrušit. Controller tento konkrétní audit explicitně převádí na DISARMED
+  fail-closed `lastError` s `autoClose:false` a vynutí novou reconciliation.
+- Přímá runner regrese ověřuje dva followery: read účtu 200 selže třikrát,
+  účet 300 je autoritativně flat, ale oba stop příkazy zůstanou working.
+  Controllerová regrese ověřuje tři pokusy/deadline, DISARMED,
+  `reconciliationRequired`, `lastError`, nulové nové place/liquidation a
+  zachovaný working stop. Zdravý ARM cancel dál nečte REST a neDISARMuje.
+- Cíleně prošly samostatně `zzV5FlatOrphan` 4/4,
+  `brk2DisarmReadFail` 3/3 a `brk2ArmedReadFail` 1/1. Předepsaná celá copier
+  sada po finální změně prošla mimo loopback sandbox: 156 souborů, 1694
+  vykonaných testů, 1 skipped soubor a 1 záměrný todo, exit 0. První sandbox
+  běh měl pouze očekávaný `listen EPERM 127.0.0.1`; ostatních 155 souborů a
+  1641 testů prošlo. Produkční build a root typecheck bez `extension/` prošly;
+  plný root `tsc` dál hlásí jen známé chybějící Chrome typy/plugin. Scoped
+  ESLint má 0 chyb a 2 starší unused-import warningy v controlleru.
+- Změny jsou pouze lokální: žádný commit, push, deploy, worker reinstall,
+  produkční konfigurace ani brokerové volání.
+
+### 2026-09-29 — Balíček 5b-3: ARM cancel bez REST brzdy, sync watchdog a targeted lookup (Codex)
+
+- Změny jsou pouze lokální, bez commitu, push/deploye, reinstalu workeru,
+  produkční konfigurace nebo brokerového volání. Výslovně zakázané
+  `services/copierRuntimeController.ts` a `services/brokerRouter.ts` zůstaly
+  beze změny.
+- Standalone SL cancel nejdřív vyhodnotí plnou protective bránu. Za zdravého
+  ARM jde rovnou do cancel lifecycle bez čtení pozic; těsně před side effectem
+  dál platí plný dispatch fence. Jen když brána blokuje (DISARM/kill apod.),
+  čte se follower pozice nejvýše 3x, každý pokus má 400ms deadline a backoff
+  75/150 ms (celkem pod 2 s). Jedna přechodná chyba se zotaví; po třech
+  chybách se žádný broker write neprovede, stop zůstane a controller dostane
+  výjimku do `lastError` i v DISARMED. ARM regrese už nezpůsobí fail-closed
+  auto-close zdravé pozice a bezprostřední market exit nečeká na REST.
+- Semantic-lag watchdog před `syncReady` používá maximum semantic limitu a
+  `syncTimeoutMs`; 20s `/order/list` při produkčním 45s sync budgetu naváže
+  spojení. Po syncu zůstává přísnější 15s semantic guard beze změny.
+- Targeted `findOrderById` stahuje execution report jen pro dosud
+  nepotvrzené/neodmítnuté command ID nad povýšenou verzí, cizí `orderId`
+  reporty ignoruje a čerstvý `/order/item` aplikuje až po reportech. Opakovaný
+  lookup je konstantní (4 REST čtení i po 20 modify). ExecutionReport prefetch
+  běží jen pro `New`/`Replaced`, chybějící vyšší command version a aktuální
+  socket. Manual Flatten potvrzuje cancel nejdřív přes status-only lookup;
+  celý Order+Fill graf potřebuje jen autoritativní `Rejected`.
+- Devět převzatých `zzLookupLens*`/`brk2*` sond bylo změněno z diagnostických
+  `expect(true)` na skutečné regrese a přibyl status-only Flatten kontrakt.
+  Před opravou sondy naměřily 403ms zdržení exitu, ARM -> DISARM + Market
+  auto-close, osiřelý working stop bez `lastError`, sync kill v 15 s, 2
+  zbytečné prefetch requesty a repeat lookup 24 requestů po 20 modify.
+  Po opravě všechny cílené soubory prošly samostatně; širší runner/broker/
+  lifecycle/follower-cut blok prošel. Předepsaná celá copier sada mimo
+  loopback sandbox prošla 137/137 souborů a 1623/1623 testů. První sandbox
+  běh měl pouze `listen EPERM 127.0.0.1` (136 souborů a 1570 testů prošlo).
+  Scoped ESLint je bez warningů/chyb, produkční build prošel.
+- Root `tsc --noEmit` skončil exit 2 pouze na předem známých chybějících
+  Chrome typech a `@crxjs/vite-plugin` v `extension/`; v měněných root
+  souborech chybu nehlásil. Stejný typecheck s vyloučenou `extension/`
+  prošel exit 0. `npm ci`/`npm install` se podle pravidel nespouštěly.
+- Otevřený bod zůstává beze změny: controller sweep musí později zahrnout
+  durable `protectiveRole: standalone-stop`, protože stop podržený za DISARM
+  nedostane nový leader event, pokud follower zploští až následně přes TP.
+
+### 2026-09-29 — Balíček 11b: rychlost kopírování bez oslabení bezpečnosti (Codex)
+
+- Změny jsou pouze lokální, bez commitu, push/deploye, reinstalu workeru,
+  produkční konfigurace nebo brokerového volání. Paralelně vlastněné
+  `services/copierRuntimeController.ts` a `services/brokerRouter.ts` zůstaly
+  beze změny.
+- V11 byl nejdřív reprodukován řízeným testem se dvěma Order eventy a 60ms
+  REST latencí: druhý `/orderVersion/deps` se před opravou spustil až po prvním
+  a kritická cesta měla 120 ms. Po opravě se read-only hydratace obou frameů
+  překrývá na 60 ms; aplikace výsledků a emise do controlleru zůstávají ve
+  stávajícím serial tailu a v původním pořadí. Bez kompletní OrderVersion se
+  žádný event neemituje. Nečiní se obecný závěr, že každý order získá pevně
+  0,6–2,9 s — test dokazuje jen odstranění konkrétní serializace.
+- P142: `ExposureCappedBroker.modifyOrder` při chybějícím `maxContracts`
+  přestal dělat duplicitní order/position/order-graph čtení; při nastaveném
+  limitu zůstává celý fail-closed exposure výpočet. Povinný pre-write lookup
+  runneru se nemění.
+- P334: Tradovate `findOrderById` už pro pre-modify lookup nestahuje globální
+  `/command/list` ani `/executionReport/list`. Používá přesné order ID,
+  `/orderVersion/deps`, `/command/deps`, `/fill/deps` a execution-report deps
+  jen pro konkrétní modify command/version. Requested modify bez potvrzujícího
+  execution reportu se dál nepovažuje za broker-confirmed; lookup-before-retry
+  zůstává povinný a blind retry nevznikl.
+- P143: limit paralelních dispatchů je getter odvozený z aktuální durable
+  skupiny, ne startup snapshot. Test mění aktivní followery za běhu 2 -> 7 -> 3
+  a ověřuje limity 4 -> 7 -> 4; skupina se do runtime promítne až po úspěšném
+  durable save.
+- P145: úspěšné place, native OCO/OSO a modify audit záznamy nesou
+  `leaderReceivedAt`, `dispatchStartedAt`, `ackAt`, `queueMs`, `brokerMs` a
+  `totalMs`. Hodnoty pouze znovu používají existující časové body; řídicí
+  logika je nečte a nevznikly další clock tick/race změny.
+- Baseline testy před opravou měly očekávané 3 pády (P142 duplicitní lookup,
+  V11 serializace 120 ms, P334 globální seznamy). Po opravě cílené bloky
+  prošly 11/11, 173/173 a execution/cap review 41/41. Celá předepsaná copier
+  sada prošla mimo loopback sandbox 137/137 souborů a 1622/1622 testů;
+  produkční build a `git diff --check` prošly, scoped ESLint má 0 chyb.
+  Root `tsc --noEmit` hlásí pouze předem známé chybějící Chrome typy a
+  `@crxjs/vite-plugin` v `extension/`, nikoli chybu změněných root souborů.
+- ST6 bod 1 zůstává otevřený výše: controller musí timer zkrátit o stáří
+  `leaderEvent.receivedAt`. ST6 bod 2 je pokryt V11. V `brokerRouter.ts` není
+  pro tento balíček potřeba žádná změna, protože cílený lookup zachovává
+  existující broker rozhraní.
+
+### 2026-09-29 — V5/V8 adversariální follow-up: per-account SL cancel a semantic-lag (Codex, balíček 5b-2)
+
+- Opraven lokálně follow-up commitu `362b921`, bez commitu, deploye,
+  reinstalu workeru, produkční konfigurace nebo brokerového volání.
+  `services/copierRuntimeController.ts` ani `services/brokerRouter.ts` se
+  nezměnily.
+- Cancel durable standalone stopu se v okamžiku leader cancelu klasifikuje
+  zvlášť pro každý follower z autoritativního `listPositions`: flat účet,
+  stop na špatnou stranu a množství větší než `|net|` používají cancel-only
+  bránu; stop skutečně snižující otevřenou pozici používá plnou bránu.
+  Neznámý nebo nejednoznačný net je kritický `blocked`. Smíšený fan-out tak
+  zruší orphan stop jen bezpečným účtům a zachová SL otevřeným účtům. Audit
+  blokace za DISARM obsahuje text „follower drží SL, který leader zrušil“.
+- Protective cancel zahozený změnou safety generation těsně před side
+  effectem už není tichý `skipped`, ale kritický `cancel-failed` s požadavkem
+  na reconciliation; stávající controller tím invaliduje reconcile stav.
+- Tradovate transport eviduje nejstarší nezpracovaný `a` frame. Po 15 s
+  (konfigurovatelné `semanticLagTimeoutMs`, jinak socket idle limit) emituje
+  chybu a zavře socket důvodem `semantic-lag`; synchronní odpověď na `h` i
+  liveness heartbeat zůstávají mimo tail. Synchronní výjimka execution
+  listeneru/journal observeru se převádí na error + close místo úniku z
+  `onmessage`.
+- Order/Fill `BrokerEvent` nese `receivedAt` původního frame. Pending Fill se
+  doručí jen z `Created` (legacy event bez typu zůstává kompatibilní), pozdní
+  `Updated` jej zahodí; `deliveredFillIds` se rezervuje před hydratací
+  kontraktu, při chybě hydratace se rezervace uvolní.
+- Opraveno nepřesné tvrzení balíčku 5b: „stale posun SL → kritický audit“
+  nebyla změna proti base. Stejná věta v těle historického commitu `362b921`
+  zůstává kvůli zákazu commitu/rewrite pouze historickým chybným popisem a
+  nesmí se používat jako důkaz. Chybějící controller body V8 a standalone
+  sweep jsou vedené výše jako otevřené otázky.
+- Převzaté adversariální testy před opravou reprodukovaly 4 V5 a 5 V8 pádů.
+  Po opravě cílený blok 148/148 a execution review 20/20; scoped ESLint
+  i `git diff --check` čisté, produkční build prošel. Root `tsc --noEmit` má
+  jen předem známé chybějící Chrome typy a `@crxjs/vite-plugin` v `extension/`;
+  po jejich odfiltrování není žádná chyba. Celá předepsaná copier sada prošla
+  s loopbackem 143/143 vykonaných souborů a 1634/1634 vykonaných testů; jeden
+  záměrný `todo` kryje výše popsaný controller sweep. První sandbox běh měl
+  jen `listen EPERM 127.0.0.1` a dva staré auditní kontrakty, které byly
+  aktualizované na novou kritickou sémantiku.
+
+### 2026-09-29 — V5/V7/V8: durable standalone SL a oddělená broker liveness/fill dedup (Codex, balíček 5b)
+
+- Opraven lokálně balíček 5b bez commitu, deploye, reinstalu workeru,
+  produkční konfigurace nebo brokerového volání. Zakázané paralelně měněné
+  `copierRuntimeController.ts` a `brokerRouter.ts` zůstaly beze změny.
+- Samostatný Stop/StopLimit, který autoritativní otevřená leader epocha
+  klasifikuje jako redukující, nyní nese durable
+  `protectiveRole: standalone-stop` v place outboxu i follower linku. Jeho
+  leader cancel proto po DISARM/kill projde plnou fail-closed bránou; obyčejný
+  čekající Stop entry se dál smí risk-redukčně zrušit. Recovery dělá pouze
+  lookup podle tagu, neposílá druhý place a durable roli obnoví s linkem.
+- Tradovate transport zapisuje `lastSocketMessageAt`, emituje heartbeat a na
+  `h` odpovídá `[]` přímo v raw `onmessage`; serial tail zůstal jen pro
+  sémantické `a` zprávy. Pomalá REST hydratace Orderu tak už nevyrábí falešný
+  heartbeat timeout/stale-heartbeat. Původní tvrzení, že tím nově vznikl
+  kritický audit pro stale posun SL, bylo nepřesné: stejné chování měla base;
+  navazující body V8 jsou vedené jako otevřená otázka v zápisu 5b-2 výše.
+- Fill dedup je rozdělen na započtené ID, explicitní úvodní REST baseline a
+  ID skutečně doručená controlleru. Běžný REST lookup už nepotlačí pozdější
+  WS Fill stejného ID, ale historický fill z úvodního sync baseline se
+  nereplayuje; order cumQty se v obou případech nezapočítá dvakrát.
+- Čtyři nové hlavní regrese před opravou padaly (DISARM, kill, REST→WS fill
+  race, heartbeat za pomalým handlerem). Po opravě cíleně 169/169 a širší
+  broker blok 212/212; scoped ESLint i `git diff --check` čisté, produkční
+  build prošel. Root `tsc --noEmit` má jen předem známé chybějící Chrome typy
+  a `@crxjs/vite-plugin` v `extension/` (závislosti se podle plánu
+  nedoinstalovávaly). Celá předepsaná copier sada prošla jednovláknově
+  136/136 souborů a 1620/1620 testů; první sandbox běh měl pouze
+  `listen EPERM 127.0.0.1`, paralelní loopback běh jeden zátěžový V13 timing
+  flake, který samostatně prošel 13/13 a ve finálním běhu se neopakoval.
+- Zbývá nezávislé review a až po výslovném souhlasu commit/reinstall a řízený
+  DEMO conformance test; nic z toho v tomto balíčku neproběhlo.
 
 ### 2026-09-28 — Konzervativní V13: serializovaný flat sweep bez background fencing regresí (Codex, balíček 3b-2)
 

@@ -75,6 +75,8 @@ export interface OutboxEntry {
   request: BrokerOrderRequest;
   /** Tato place order představuje přírůstek on-fill cíle followera. */
   tracksFillTarget?: boolean;
+  /** Durable provenance pro obnovení follower linku po lookupu, bez resend. */
+  protectiveRole?: 'standalone-stop';
   status: PlaceOutboxStatus;
   /** Počet pokusů o odeslání. Chrání před nekonečnou smyčkou. */
   attempts: number;

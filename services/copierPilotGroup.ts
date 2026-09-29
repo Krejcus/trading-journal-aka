@@ -33,6 +33,16 @@ export const copierPilotStateKey = (connectionId: string, leaderAccountId: numbe
   `${connectionId}-${leaderAccountId}`
 );
 
+/**
+ * Fan-out limit pro prave aktivni topologii. Minimum 4 zachovava dosavadni
+ * omezeni API, ale vetsi skupina nesmi byt rozdelena do pozdejsi vlny jen
+ * proto, ze mela pri startu mene followeru.
+ */
+export const copierDispatchConcurrency = (group: CopyGroupConfig): number => Math.max(
+  4,
+  group.followers.filter(follower => follower.enabled !== false && follower.mode !== 'off').length,
+);
+
 export const copierPilotGroupPath = (
   root: string,
   connectionId: string,

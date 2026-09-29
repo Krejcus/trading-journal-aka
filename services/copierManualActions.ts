@@ -10,6 +10,7 @@ import {
   markCancelSending,
   markCancelUnknown,
   resolveCancelLookup,
+  resolveCancelStatusLookup,
   type CancelOutboxEntry,
 } from './copierCancelOutbox';
 import {
@@ -237,8 +238,19 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
         if (pastDeadline()) break;
         await wait(confirmationPollMs);
       }
-      const lookup = await options.broker.findOrderById(accountId, brokerOrderId);
-      entry = resolveCancelLookup(entry, lookup.order, lookup.completeness, options.clock());
+      if (options.broker.findOrderStatusById) {
+        const lookup = await options.broker.findOrderStatusById(accountId, brokerOrderId);
+        if (lookup.status !== 'rejected' || lookup.completeness !== 'authoritative') {
+          entry = resolveCancelStatusLookup(entry, lookup.status, lookup.completeness, options.clock());
+        } else {
+          // Rejected může nést partial fill; teprve tady je nutný celý graf.
+          const full = await options.broker.findOrderById(accountId, brokerOrderId);
+          entry = resolveCancelLookup(entry, full.order, full.completeness, options.clock());
+        }
+      } else {
+        const lookup = await options.broker.findOrderById(accountId, brokerOrderId);
+        entry = resolveCancelLookup(entry, lookup.order, lookup.completeness, options.clock());
+      }
       runtime.current.cancelOutbox.set(entry.key, entry);
       await commitSerialized();
       if (entry.status === 'confirmed' || entry.status === 'abandoned') break;
