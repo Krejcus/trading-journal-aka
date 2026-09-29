@@ -19,8 +19,14 @@ const runScenario = async (failedReads: number, hangReads = false) => {
   let failFollowerReads = 0;
   let hangFollowerReads = false;
   let retryReads = 0;
+  let failurePhase = false;
+  let cancelsDuringFailure = 0;
   const broker: BrokerPort = {
     ...mock,
+    cancelOrder: async (accountId, brokerOrderId) => {
+      if (failurePhase) cancelsDuringFailure += 1;
+      return mock.cancelOrder(accountId, brokerOrderId);
+    },
     listPositions: async accountId => {
       if (accountId === 200 && hangFollowerReads) {
         retryReads += 1;
@@ -61,6 +67,9 @@ const runScenario = async (failedReads: number, hangReads = false) => {
   await controller.waitForIdle();
 
   const armedAfterFlat = controller.status().armed;
+  const stopBeforeFailure = mock.orders()
+    .find(order => order.accountId === 200 && order.orderType === 'Stop')?.status;
+  failurePhase = true;
   const placedBefore = mock.placedRequests().length;
   const liquidationsBefore = mock.liquidateRequests().length;
   failFollowerReads = failedReads;
@@ -78,6 +87,8 @@ const runScenario = async (failedReads: number, hangReads = false) => {
     retryReads,
     elapsedMs: Date.now() - cancelStartedAt,
     stop: stop?.status,
+    stopBeforeFailure,
+    cancelsDuringFailure,
     lastError: controller.status().lastError,
     followerNet: (await mock.listPositions(200)).find(position => position.symbol === 'MNQU6')?.netQuantity ?? 0,
     newPlaced: mock.placedRequests().length - placedBefore,
@@ -102,14 +113,19 @@ describe('BRK2 V5: standalone SL za DISARM a selhání čtení pozice', () => {
     });
   });
 
-  it('po třech selháních zachová stop a zveřejní incident v lastError', async () => {
+  // Od balíčku 5c flat sweep zruší durable standalone stop už při
+  // autoritativně potvrzeném flat followerovi (čtení ještě fungují). Fáze se
+  // selháním čtení pak nesmí poslat žádný další write a musí incident ohlásit.
+  it('po třech selháních nepošle žádný write a zveřejní incident v lastError', async () => {
     const result = await runScenario(3);
     expect(result).toMatchObject({
       armedAfterFlat: false,
       armedAfterFailure: false,
       reconciliationRequired: true,
       retryReads: 3,
-      stop: 'working',
+      stopBeforeFailure: 'canceled',
+      cancelsDuringFailure: 0,
+      stop: 'canceled',
       followerNet: 0,
       newPlaced: 0,
       newLiquidations: 0,
@@ -119,7 +135,7 @@ describe('BRK2 V5: standalone SL za DISARM a selhání čtení pozice', () => {
 
   it('visící broker read ukončí v krátkém celkovém rozpočtu', async () => {
     const result = await runScenario(0, true);
-    expect(result).toMatchObject({ retryReads: 3, stop: 'working' });
+    expect(result).toMatchObject({ retryReads: 3, stopBeforeFailure: 'canceled', cancelsDuringFailure: 0 });
     expect(result.elapsedMs).toBeLessThan(2_000);
     expect(result.lastError).toContain('broker read deadline 400 ms');
   });
