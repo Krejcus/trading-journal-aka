@@ -721,6 +721,8 @@ describe('balíček 6b — adversariální review sondy', () => {
     let skewFill = false;
     let guardProbeActive = false;
     let guardedPositionReads = 0;
+    const errors: string[] = [];
+    const retryWaits: number[] = [];
     broker.listOrders = async accountId => {
       let orders = await originalListOrders(accountId);
       if (guardProbeActive && accountId === 200) {
@@ -730,7 +732,13 @@ describe('balíček 6b — adversariální review sondy', () => {
         }
         orders = orders.map(order => (
           order.orderType === 'Limit' && !order.parentOrderId && order.status === 'working'
-            ? { ...order, status: 'filled' as const, filledQuantity: order.quantity }
+            ? {
+              ...order,
+              status: 'filled' as const,
+              filledQuantity: order.quantity,
+              // Fill nastal po prvním position snapshotu guardu.
+              updatedAt: now + 1,
+            }
             : order
         ));
       }
@@ -763,7 +771,8 @@ describe('balíček 6b — adversariální review sondy', () => {
       osoCorrelationWindowMs: 5,
       flattenConfirmationAttempts: 2,
       flattenConfirmationPollMs: 0,
-      wait: async () => undefined,
+      wait: async ms => { retryWaits.push(ms); },
+      onError: error => errors.push(error.message),
     });
     broker.setConnected(true);
     await controller.waitForIdle();
@@ -806,13 +815,21 @@ describe('balíček 6b — adversariální review sondy', () => {
     await tick(60);
     await controller.waitForIdle();
 
-    expect(guardedPositionReads).toBe(3);
+    expect(guardedPositionReads).toBe(6);
     expect(followerLegs.map(order => broker.cancelRequestCount(order.brokerOrderId))).toEqual([0, 0]);
     expect(followerLegs.every(order => order.status === 'working')).toBe(true);
     expect(controller.status()).toMatchObject({
       armed: false,
       lastError: expect.stringContaining('nekonzistentní broker snapshot'),
     });
+    expect(retryWaits).toEqual([25, 50]);
+    expect(errors).toHaveLength(1);
+    for (let heartbeat = 0; heartbeat < 3; heartbeat += 1) {
+      broker.emitEvent({ type: 'heartbeat', at: now + heartbeat + 1 });
+      await tick(10);
+      await controller.waitForIdle();
+    }
+    expect(errors).toHaveLength(1);
     guardProbeActive = false;
     expect(await broker.listPositions(200)).toEqual([
       expect.objectContaining({ symbol: MNQ, netQuantity: 1 }),
