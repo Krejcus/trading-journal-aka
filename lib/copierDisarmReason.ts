@@ -17,6 +17,7 @@ export type CopierCopiesOutcome =
 export type CopierDisarmCode =
   | 'config-change'
   | 'prop-reserve'
+  | 'route-gap-divergence'
   | 'unexplained-position-divergence'
   | 'prop-limit'
   | 'follower-position-mismatch'
@@ -66,6 +67,10 @@ const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }
   'prop-reserve': {
     title: 'Kopírka zůstala vypnutá kvůli nedostatečné rezervě followera nad prop floorem.',
     nextStep: 'Ověř aktuální rezervu a denní P&L účtu u prop firmy; po opravě nastavení spusť Kontrolu pozic.',
+  },
+  'route-gap-divergence': {
+    title: 'Stav účtu se během obměny broker spojení změnil mimo stream kopírky.',
+    nextStep: 'Ověř pozice a working příkazy dotčené route v Tradovate a potom spusť Kontrolu pozic.',
   },
   'unexplained-position-divergence': {
     title: 'Pozice followerů se odchýlily od očekávané kopie.',
@@ -194,6 +199,7 @@ export function classifyCopierDisarmReason(
 
   const text = detail.replace(/\s+/g, ' ').trim();
   if (/\bprop-reserve\b|rezerv[auy].*prop floor/i.test(text)) return 'prop-reserve';
+  if (/\broute-gap-divergence\b/i.test(text)) return 'route-gap-divergence';
   if (/\bconfig-change\b|uložen(?:í|ím).*změn[ay] skupiny/i.test(text)) return 'config-change';
   if (/unexplained-position-divergence|nevysvětlen[áou]+ (?:position )?divergenc/i.test(text)) {
     return 'unexplained-position-divergence';

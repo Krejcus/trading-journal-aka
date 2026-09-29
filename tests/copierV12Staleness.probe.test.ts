@@ -68,6 +68,12 @@ const summary = (broker: any, controller: any, extra: Record<string, unknown> = 
   followerPos: broker.positions ? undefined : undefined,
   ...extra,
 });
+const resyncSnapshot = async (broker: any, accountIds: number[]) => ({
+  accountIds,
+  positions: (await Promise.all(accountIds.map(accountId => broker.listPositions(accountId)))).flat(),
+  orders: (await Promise.all(accountIds.map(accountId => broker.listOrders(accountId)))).flat(),
+  gapFills: [],
+});
 
 /** C0 prefix: TP Sell Limit 8 from flat (copied), 60 s later Market Buy 8 (copied), follower synced. */
 async function prefix(broker: any, controller: any, opts: { holdFollowerEntry?: ReturnType<typeof withFollowerLag> } = {}) {
@@ -230,10 +236,16 @@ describe('Z6 socket renewal / blip through router bumps routeEpoch permanently',
       const controller = await bootstrapCopierRuntime({ broker: router, store: createMemoryCopierStore(), group, clock });
       L.setConnected(true); F.setConnected(true);
       await controller.waitForIdle(); await controller.reconcile(); controller.arm();
-      await prefix(L, controller);
+      const pendingLeaderOrder = await prefix(L, controller);
       await tick(L, controller, 40_000);
-      if (variant === 'leader-renewal') L.emitEvent({ type: 'connection', connected: true, at: base, resynced: true });
-      if (variant.startsWith('follower-renewal')) F.emitEvent({ type: 'connection', connected: true, at: base, resynced: true });
+      if (variant === 'leader-renewal') L.emitEvent({
+        type: 'connection', connected: true, at: base, resynced: true,
+        resync: { ...await resyncSnapshot(L, [100]), orders: [pendingLeaderOrder] },
+      });
+      if (variant.startsWith('follower-renewal')) F.emitEvent({
+        type: 'connection', connected: true, at: base, resynced: true,
+        resync: await resyncSnapshot(F, [200]),
+      });
       await controller.waitForIdle();
       let reconcileErr: string | null = null;
       if (variant === 'follower-renewal-then-reconcile') {
@@ -334,10 +346,15 @@ describe('Z9 resynced (planned renewal) reaches the controller only without rout
       L.setConnected(true); if (F !== L) F.setConnected(true);
       await controller.waitForIdle(); await controller.reconcile(); controller.arm();
       const src = via === 'router-noncritical-follower' ? F : L;
-      src.emitEvent({ type: 'connection', connected: true, at: base, resynced: true });
+      const accountIds = via === 'router-noncritical-follower' ? [200]
+        : via === 'direct-broker' ? [100, 200] : [100];
+      src.emitEvent({
+        type: 'connection', connected: true, at: base, resynced: true,
+        resync: await resyncSnapshot(src, accountIds),
+      });
       await controller.waitForIdle();
       const s: any = controller.status();
-      expect(s.armed).toBe(via !== 'direct-broker');
+      expect(s.armed).toBe(true);
       console.log('Z9', via, JSON.stringify({ armedAfterResync: s.armed, reconciliationRequired: s.reconciliationRequired, lastError: s.lastError ?? null }));
       controller.stop();
     });

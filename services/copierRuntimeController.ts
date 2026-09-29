@@ -559,6 +559,8 @@ export interface CopierRuntimeController {
     key: string;
     reason: string;
   }): Promise<void>;
+  /** Důvod, proč teď nesmí začít plánovaná obměna broker socketu. */
+  connectionRenewalBlocker(): string | null;
   status(): CopierControllerStatus;
   waitForIdle(): Promise<void>;
   stop(): void;
@@ -2223,6 +2225,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     || [...runtime.bracketOutbox.values()].some(entry => entry.status === 'sending' || entry.status === 'unknown')
     || [...runtime.osoOutbox.values()].some(entry => entry.status === 'sending' || entry.status === 'unknown');
   const hasBrokerUncertainOutbox = () => brokerUncertainInRuntime(currentRuntime());
+  const hasInFlightOutbox = () => {
+    const current = currentRuntime();
+    const inFlight = (status: string) => status === 'planned' || status === 'sending' || status === 'unknown';
+    return [...current.outbox.values()].some(entry => inFlight(entry.status))
+      || [...current.cancelOutbox.values()].some(entry => inFlight(entry.status))
+      || [...current.bracketOutbox.values()].some(entry => inFlight(entry.status))
+      || [...current.osoOutbox.values()].some(entry => inFlight(entry.status));
+  };
 
   /**
    * Reject je konečný, známý výsledek bez nejasného side effectu. Během
@@ -9522,6 +9532,111 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return wave;
   };
 
+  const routeGapPositionShape = (positions: readonly BrokerPosition[]) => positions
+    .filter(position => position.netQuantity !== 0)
+    .map(position => `${position.symbol}:${position.netQuantity}`)
+    .sort();
+  const routeGapOrderShape = (orders: readonly BrokerOrder[]) => orders
+    .filter(order => isOpenOrderStatus(order.status))
+    .map(order => [
+      order.brokerOrderId,
+      order.symbol,
+      order.side,
+      order.orderType,
+      order.quantity,
+      order.filledQuantity,
+      order.limitPrice ?? '',
+      order.stopPrice ?? '',
+      order.parentOrderId ?? '',
+      order.ocoId ?? '',
+      order.linkedOrderId ?? '',
+    ].join(':'))
+    .sort();
+
+  /**
+   * Porovná autoritativní route snapshot s modelem před mezerou a teprve
+   * potom cache přepíše čerstvými daty. Neprovádí žádný broker read/write;
+   * V12 pending lineage si svůj jediný read-only refresh plánuje zvlášť přes
+   * `scheduleRouteEpochRefresh` nad stejným routeEpoch bumpem.
+   */
+  const applyRouteGapSnapshot = (
+    event: Extract<BrokerEvent, { type: 'connection' }>,
+  ): string | null => {
+    const snapshot = event.resync;
+    if (!snapshot) return 'route-gap-divergence: resync neobsahuje autoritativní snapshot';
+    const groupAccounts = new Set([
+      group.leaderAccountId,
+      ...group.followers.map(follower => follower.accountId),
+    ].filter((accountId): accountId is number => accountId != null));
+    const accountIds = [...new Set(snapshot.accountIds.filter(accountId => groupAccounts.has(accountId)))];
+    const declared = new Set(snapshot.accountIds);
+    const foreignEntity = [...snapshot.positions, ...snapshot.orders, ...snapshot.gapFills]
+      .find(item => !declared.has(item.accountId));
+    const differences: string[] = foreignEntity
+      ? [`snapshot obsahuje nedeklarovaný účet ${foreignEntity.accountId}`]
+      : [];
+    if (accountIds.length === 0) differences.push('snapshot neobsahuje žádný účet aktivní skupiny');
+
+    const firstSeenLeaderGapFill = snapshot.gapFills.find(fill => (
+      fill.accountId === group.leaderAccountId
+      && !liveOrdersByAccount.get(fill.accountId)?.has(fill.brokerOrderId)
+      && !observedOrderStatusesByAccount.get(fill.accountId)?.has(fill.brokerOrderId)
+    ));
+    if (firstSeenLeaderGapFill) {
+      differences.push(
+        `leader příkaz ${firstSeenLeaderGapFill.brokerOrderId} je poprvé viditelný až jako filled (${firstSeenLeaderGapFill.fillId})`,
+      );
+    }
+
+    for (const accountId of accountIds) {
+      const previousPositions = positionsByAccount.get(accountId);
+      const previousOrders = liveOrdersByAccount.get(accountId);
+      if (!previousPositions || !previousOrders) {
+        differences.push(`účet ${accountId} nemá úplný lokální model před mezerou`);
+        continue;
+      }
+      const actualPositions = snapshot.positions.filter(position => position.accountId === accountId);
+      const actualOrders = snapshot.orders.filter(order => order.accountId === accountId);
+      const expectedPositionShape = routeGapPositionShape(
+        [...previousPositions].map(([symbol, netQuantity]) => ({ accountId, symbol, netQuantity })),
+      );
+      const actualPositionShape = routeGapPositionShape(actualPositions);
+      if (JSON.stringify(expectedPositionShape) !== JSON.stringify(actualPositionShape)) {
+        differences.push(
+          `účet ${accountId} pozice model=${expectedPositionShape.join(',') || 'flat'} broker=${actualPositionShape.join(',') || 'flat'}`,
+        );
+      }
+      const expectedOrderShape = routeGapOrderShape([...previousOrders.values()]);
+      const actualOrderShape = routeGapOrderShape(actualOrders);
+      if (JSON.stringify(expectedOrderShape) !== JSON.stringify(actualOrderShape)) {
+        differences.push(
+          `účet ${accountId} working ordery model=${expectedOrderShape.join(',') || 'žádné'} broker=${actualOrderShape.join(',') || 'žádné'}`,
+        );
+      }
+    }
+
+    // Cache po porovnání vždy odpovídá read-only broker důkazu. Případný
+    // failClosed tak nesmí chybně tvrdit, že divergentní účet je flat.
+    for (const accountId of accountIds) {
+      positionsByAccount.set(accountId, new Map(
+        snapshot.positions
+          .filter(position => position.accountId === accountId)
+          .map(position => [position.symbol, position.netQuantity]),
+      ));
+      rememberLiveOrderSnapshot(
+        accountId,
+        snapshot.orders.filter(order => order.accountId === accountId),
+      );
+      if (snapshot.orders.some(order => order.accountId === accountId && isOpenOrderStatus(order.status))) {
+        workingOrderAccounts.add(accountId);
+      } else {
+        workingOrderAccounts.delete(accountId);
+      }
+    }
+    lastBrokerPositionAt = event.at;
+    return differences.length > 0 ? `route-gap-divergence: ${differences.join('; ')}` : null;
+  };
+
   const handleBrokerEvent = async (
     event: BrokerEvent,
     admissionGeneration: number,
@@ -9552,6 +9667,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
     if (event.type === 'connection') {
+      if (event.connected && event.resynced) {
+        const wasArmed = gate.armed;
+        source.connection(true);
+        gate = { ...gate, connected: true, lastHeartbeatAt: now };
+        const divergence = applyRouteGapSnapshot(event);
+        scheduleRouteEpochRefresh();
+        if (divergence) {
+          if (wasArmed) failClosed(new Error(`Copier fail-closed: ${divergence}`), { autoClose: false });
+          else {
+            lastError = new Error(`Copier fail-closed: ${divergence}`);
+            invalidateReconciliation();
+            options.onError?.(lastError);
+          }
+        }
+        return;
+      }
       connectionSyncGeneration += 1;
       const wasArmed = gate.armed;
       const needsStatefulRecovery = wasArmed && !gate.shadowMode && hasFollowerExposure();
@@ -9581,24 +9712,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         connected: event.connected,
         lastHeartbeatAt: event.connected ? now : gate.lastHeartbeatAt,
         // Každý disconnect ruší ARM; reconnect ho nikdy sám neobnoví.
-        armed: event.connected && !event.resynced ? gate.armed : false,
+        armed: event.connected ? gate.armed : false,
       };
-      // Plánovaná obměna socketu výpadek nehlásí, aby nedělala falešné
-      // poplachy — jenže v mezeře mezi zavřením a resyncem mohl leader
-      // stihnout celý tržní příkaz a ten se pak nezkopíruje. Při zavírání
-      // by se ale zkopíroval a follower by otevřel opačnou pozici. Po
-      // obnově proto vždy vynutíme kontrolu pozic; když jsou účty
-      // synchronní, runtime je bezpečně drží DISARMED. Nový LIVE ARM je navíc
-      // povolen jen z autoritativně flat stavu.
-      if (!event.connected || source.needsReconciliation() || event.resynced) {
+      // Skutečný disconnect dál zneplatní preflight a vyžaduje plnou
+      // recovery. Plánovaný `resynced` skončil v account-scoped větvi výše
+      // a při shodě modelu ARM zachoval.
+      if (!event.connected || source.needsReconciliation()) {
         leaderPositionSnapshotComplete = false;
         invalidateReconciliation();
-        if (event.resynced && needsStatefulRecovery) {
-          pendingConnectionRecovery = true;
-          pendingReadOnlyConnectionRecovery = false;
-        } else if (event.resynced && !pendingConnectionRecovery) {
-          pendingReadOnlyConnectionRecovery = true;
-        }
       }
       if (event.connected) {
         // Boot po pádu: durable stopa říká, že kopie vznikly za živého ARM.
@@ -12007,6 +12128,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   });
 
   return {
+    connectionRenewalBlocker() {
+      if (autoCloseInFlight) return 'auto-close';
+      if (recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery
+        || reconciliationRequestsPending > 0) return 'connection recovery';
+      if (hasInFlightOutbox()) return 'durable outbox';
+      if (pendingOsoTimers.size > 0 || pendingOsoEvents.size > 0 || pendingOsoFlushes.size > 0) {
+        return 'OSO correlation';
+      }
+      return null;
+    },
     arm({ shadowMode = false, ttlMs }: { shadowMode?: boolean; ttlMs?: number } = {}) {
       if (stopped) throw new Error('Copier runtime is stopped');
       if (shutdownRequested) throw new Error('Copier runtime se právě bezpečně ukončuje');

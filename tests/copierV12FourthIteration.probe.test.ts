@@ -93,6 +93,12 @@ const stop8 = () => lo({ brokerOrderId: 'L-stop', side: 'Sell', quantity: 8, ord
 const brokerPos = async (broker: any, a: number) => (await broker.listPositions(a)).map((p: any) => `${p.symbol}:${p.netQuantity}`);
 const followerOpen = (broker: any, a = 200) => broker.orders().filter((o: any) => o.accountId === a && ['working', 'pending', 'accepted'].includes(o.status))
   .map((o: any) => `${o.side}:${o.orderType}:${o.quantity}@${o.limitPrice ?? o.stopPrice ?? ''}`);
+const resyncSnapshot = async (broker: any, accountIds: number[]) => ({
+  accountIds,
+  positions: (await Promise.all(accountIds.map(accountId => broker.listPositions(accountId)))).flat(),
+  orders: (await Promise.all(accountIds.map(accountId => broker.listOrders(accountId)))).flat(),
+  gapFills: [],
+});
 
 describe('V12c regrese — modify závody (R12 okno: leader limit vyplněn, kopie ještě pracuje)', () => {
   for (const variant of ['MOD0-single', 'MOD1-late-placement-event', 'MOD2-double-modify', 'MOD2h-double-modify-held'] as const) {
@@ -400,9 +406,15 @@ describe('V12c regrese — router planned renewal (connected:true resynced) mezi
       await controller.waitForIdle();
       await controller.reconcile();
       controller.arm();
-      await incidentPrefix(leaderBroker, controller);
-      if (variant === 'EP1-follower-renewal') followerBroker.emitEvent({ type: 'connection', connected: true, at: base, resynced: true } as any);
-      if (variant === 'EP2-leader-renewal') leaderBroker.emitEvent({ type: 'connection', connected: true, at: base, resynced: true } as any);
+      const pendingLeaderOrder = await incidentPrefix(leaderBroker, controller);
+      if (variant === 'EP1-follower-renewal') followerBroker.emitEvent({
+        type: 'connection', connected: true, at: base, resynced: true,
+        resync: await resyncSnapshot(followerBroker, [200]),
+      } as any);
+      if (variant === 'EP2-leader-renewal') leaderBroker.emitEvent({
+        type: 'connection', connected: true, at: base, resynced: true,
+        resync: { ...await resyncSnapshot(leaderBroker, [100]), orders: [pendingLeaderOrder] },
+      } as any);
       await controller.waitForIdle();
       const armedAfterRenewal = controller.status().armed;
       await tick(leaderBroker, controller, 2_000);

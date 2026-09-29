@@ -155,6 +155,19 @@ export function brokerRiskEquity(snapshot: Pick<BrokerAccountRiskSnapshot, 'netL
   return cash != null && Number.isFinite(cash) ? cash : null;
 }
 
+/**
+ * Úplný read-only stav jedné OAuth route po plánované obměně socketu.
+ * `gapFills` jsou filly, které nebyly před zavřením starého socketu doručené
+ * controlleru. Jsou pouze důkaz mezery — nikdy se nesmějí přehrát jako live
+ * `fill`, protože by tím vznikl dohánějící follower obchod.
+ */
+export interface BrokerResyncSnapshot {
+  accountIds: readonly number[];
+  positions: readonly BrokerPosition[];
+  orders: readonly BrokerOrder[];
+  gapFills: readonly BrokerFill[];
+}
+
 export type BrokerEvent =
   /** `receivedAt` je čas přijetí zdrojového WS frame; legacy/mock emitery jej mohou vynechat. */
   | { type: 'order'; order: BrokerOrder; receivedAt?: number }
@@ -168,7 +181,16 @@ export type BrokerEvent =
    * resyncem mohly uniknout události — příjemce si proto musí vynutit
    * kontrolu pozic, jinak by mu unikl vstup vyplněný celý uvnitř mezery.
    */
-  | { type: 'connection'; connected: boolean; at: number; resynced?: boolean };
+  | {
+      type: 'connection';
+      connected: boolean;
+      at: number;
+      resynced?: boolean;
+      /** `true` = mezera se týká follower-only route skryté reconnect grace. */
+      routeGap?: boolean;
+      /** Account-scoped autoritativní stav načtený po dokončení resyncu. */
+      resync?: BrokerResyncSnapshot;
+    };
 
 /**
  * Odpověď na `placeOrder`.

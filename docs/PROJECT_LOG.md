@@ -301,6 +301,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   Bez commitu, push/deploye, instalace závislostí, broker API, ARM/Flatten ani
   reinstalu workeru.
 
+### 2026-09-29 — Balíček 9: V6 route-gap resync po obměně spojení (Codex)
+
+- Obměna Tradovate spojení nyní sestaví read-only snapshot dotčené route
+  (účty, pozice, working ordery a filly vzniklé v mezeře). Gap fill se nikdy
+  nepřehraje do živého event streamu; router předá `resynced` samostatně pro
+  každé spojení i během follower grace okna a snapshot omezí na jeho účty.
+- Controller porovná pouze účty dotčené route se svým lokálním modelem.
+  Shoda zachová ARMED, neshoda nebo leader order poprvé viděný až jako filled
+  skončí fail-closed důvodem `route-gap-divergence`, bez doháněcího broker
+  write, auto-close nebo blokování jiné route. Pro následný refresh používá
+  existující V12 `scheduleRouteEpochRefresh`; nevznikl druhý refresh mechanismus.
+- Scheduler obměn respektuje hard blockery auto-close, recovery/reconciliation,
+  rozpracovaného durable outboxu a OSO korelace nezávisle na ARM. Jedno spojení
+  obnovuje nejdřív po 50 min, při otevřené pozici nejpozději po 70 min, route
+  jsou rozložené nejméně o 30 s a plánovaná obměna nepoužívá reconnect backoff.
+- Před opravou cílená sada měla 6 pádů: chyběl scheduler, čistá obměna
+  DISARMovala, divergence ani leader gap fill neměly nový důvod, router zahodil
+  `resynced` a broker neměl snapshot. Po opravě cílená/sousední sada prošla
+  323/323. Předepsaná celá copier sada mimo sandbox prošla 171 souborů + 1
+  skipped, 1980 testů + 1 todo, exit 0; první sandbox běh měl pouze 91
+  `listen EPERM 127.0.0.1` pádů. Root `tsc --noEmit` končí exit 2 pouze na
+  povolených chybějících Chrome typech a `@crxjs/vite-plugin` v `extension/`.
+  Bez commitu, push/deploye, instalace závislostí, broker write, ARM/Flatten
+  ani reinstalu workeru.
+
 ### 2026-09-29 — Balíček 6b: review regrese leader-flat/auto-close/ST4 (Codex)
 
 - Leader-flat guard čte pro každý účet sekvenčně ordery a až potom pozice.
