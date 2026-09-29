@@ -41,19 +41,23 @@ Oprava false-positive smí jen **zpřesnit klasifikaci** s autoritativním důka
 - zbylá rizika a otevřené otázky,
 - co jsi záměrně NEudělal.
 
+## Integrace
+
+Od 29. 9. 02:38 jsou větve jádra, brokeru, agenta a UI sloučené v `codex/copier-release-20260929` (worktree `/private/tmp/alphatrade-copier-release-20260929`). Další balíčky vznikají nad ní (případně v odbočce s vlastním worktree) a slučují se zpět.
+
 ## Balíčky (pořadí z oponentury)
 
 | # | Obsah | Kdo | Reinstall | Stav |
 |---|---|---|---|---|
-| 1 | Večerní výjimka `retireMissingOldGroup`: přesunout audit za durable zápis, test, že jiná „missing leader route“ zůstane fatální | Codex | ne (commit) | hotovo 1802df6 (182/182) |
-| 2 | UI: nouzový DISARM/kill i při neznámém stavu (ST1), skutečná expirace ARM (V14 UI), retence stavu přepínače (ST2), varování, že úprava skupiny vypne kopírku (V1 UI) | Claude | ne | hotovo 687bb6b ve větvi claude/copier-ui-fixes-20260928; UI-10a (relay stav, poller, revision fence, re-probe) Codex rozpracováno |
-| 3 | V12 + V13 + ST4 (dnešní incidenty + reconcile fence) — po částech 3a/3b/3c | Codex | ano | 3a (V12) rozpracováno |
-| 4 | V16 (izolace breached/ineligible followeru pro divergenci) | Codex | ano | čeká |
-| 5 | V5, V8, V17, V18, ST28, ST31 | Codex | ano | čeká |
-| 6 | V9 + V4 (auto-close jen doložené vlastnictví, guard přežije DISARM) | Codex | ano | čeká |
-| 7 | V10 + ST32, ST3 (práce mimo eventTail s bariérou, přednost brzd) | Codex | ano | čeká |
-| 8 | V1 + V3 (validace před DISARM, fence jen na obchodní události) | Codex | ano | čeká |
-| 9 | V6 + V7 (resync, dedup fillů) | Codex | ano | čeká |
-| 10 | UI: DLL a denní P&L (ST10–ST12), editor a hlášky (V2 UI, P116), texty | Claude | ne | čeká |
-| 11 | V11/ST25 rychlost, hardening ST33–ST35 | Codex | ano/ne | čeká |
+| 1 | Večerní výjimka `retireMissingOldGroup`: přesunout audit za durable zápis, test, že jiná „missing leader route“ zůstane fatální | Codex | ne (commit) | hotovo 1802df6 |
+| 2 | UI: nouzový DISARM/kill i při neznámém stavu (ST1), skutečná expirace ARM (V14 UI), retence stavu přepínače (ST2), varování, že úprava skupiny vypne kopírku (V1 UI), UI-10a–e | Claude + Codex | ne | hotovo, větev claude/copier-ui-fixes-20260928 (687bb6b…7abec38) |
+| 3 | V12 + V13 + ST4 — po iteracích | Codex | ano | V12 v4 8c2591f: review našlo cesty horší než pre → V12 v5 čeká; V13 v4 1a742cd: review běží |
+| 4 | V16 (izolace breached/ineligible followeru pro divergenci) | Codex | ano | hotovo 0b13040 |
+| 5 | 5b: V5, V7, V8 + rychlost (broker větev); 5c: V17, V18, ST28, ST31, standalone-stop sweep, receivedAt, SL reassert, ST6, N10 | Codex | ano | 5b hotovo (větev codex/copier-broker-20260929, 32bb813); 5c rozpracováno |
+| 6 | V9 + V4 (+ ST4 kontrola) | Codex | ano | rozpracováno (worktree alphatrade-copier-autoclose-20260929) |
+| 7 | V10 + ST32 (flatten do konce obchodu mimo frontu s bariérou; rozjezd store); ST3 hotovo v agent větvi | Codex | ano | čeká |
+| 8 | V1 + V3 + V15 (validace před DISARM, fence jen na obchodní události, cut vs. rezerva, bootstrap) | Codex | ano | čeká |
+| 9 | V6 (resync, route-gap); V7 hotovo v broker větvi | Codex | ano | čeká |
+| 10 | UI: DLL a denní P&L (ST10–ST12), editor a hlášky (V2 UI, P116), texty | Claude + Codex | ne | hotovo v UI větvi (UI-10b–e) |
+| 11 | V11/ST25 rychlost (broker 8ac3cd6), hardening ST33–ST35 (agent větev; ST34 vrácen, otevřené) | Codex | ano/ne | hotovo kromě ST34 |
 | — | Rozhodnutí o politice (V14 strop, V15, ST5, ST21, ST26, ST20) | Filip | — | nechat výchozí bezpečnější variantu, zapsat do PROJECT_LOG |
