@@ -622,6 +622,14 @@ export interface BootstrapCopierOptions {
   flattenLiquidateAttempts?: number;
   /** Prodleva mezi dalšími průchody účtů, které selhaly na přechodnou chybu. */
   flattenRetryPollMs?: number;
+  /** Testovatelný celkový deadline background follower cutu (produkčně 90 s). */
+  followerCutDeadlineMs?: number;
+  /** Deadline jednoho broker callu v background follower cut lane. */
+  followerCutBrokerRequestTimeoutMs?: number;
+  /** Omezené read-only konfirmace follower cutu s exponenciálním backoffem. */
+  followerCutConfirmationAttempts?: number;
+  followerCutConfirmationPollMs?: number;
+  followerCutConfirmationMaxPollMs?: number;
   /** Celkový budget jedné flat události napříč účty a oběma sweepy. */
   flatSweepBudgetMs?: number;
   wait?: (ms: number) => Promise<void>;
@@ -784,7 +792,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   runtime = recovered.runtime;
   if (recovered.audit.length > 0) options.onAudit?.(recovered.audit);
 
-  const processor = createSerialCopierProcessor(runtime);
+  const processor = createSerialCopierProcessor(runtime, {
+    reload: async () => runtimeFromSnapshot(await options.store.load()),
+  });
   let sessionArmedAt = runtime.state.safety.sessionArmedAt ?? 0;
   // Durable záznamy prošly vlastním zápisem, ale při načtení se validují
   // stejně přísně jako provenance níže: poškozený cut/snapshot se zahodí,
@@ -1404,6 +1414,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   let eventTail: Promise<void> = Promise.resolve();
   /** Konfigurační read-only preflighty jsou sériové, broker eventy ale neblokují. */
   let reconfigurationTail: Promise<void> = Promise.resolve();
+
+  /** Broker lifecycle follower cutu běží mimo eventTail; sada slouží jen waitForIdle/stop observabilitě. */
+  const followerCutBackgroundJobs = new Set<Promise<unknown>>();
+  const followerCutBackgroundAccounts = new Set<number>();
   let brokerObservationVersion = 0;
   /** Jen události, které mohou změnit trade boundary; heartbeat čtení nesmí hladovět. */
   let tradeBoundaryObservationVersion = 0;
@@ -4503,7 +4517,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     options.onCopyEvent?.(event);
   };
 
-  const followerHasCopyToClose = async (accountId: number): Promise<boolean> => {
+  const followerHasCopyToClose = async (
+    accountId: number,
+    readBroker: Pick<BrokerPort, 'listPositions' | 'listOrders'> = broker,
+  ): Promise<boolean> => {
     const live = currentRuntime();
     const confirmedEpochParticipants = new Map(
       (live.state.safety.leaderExposureEpochs ?? [])
@@ -4555,8 +4572,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     }
     const [positions, orders] = await Promise.all([
-      broker.listPositions(accountId),
-      broker.listOrders(accountId),
+      readBroker.listPositions(accountId),
+      readBroker.listOrders(accountId),
     ]);
     const positionSnapshot = new Map(
       positions.map(position => [position.symbol, position.netQuantity]),
@@ -5004,11 +5021,174 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
   };
 
+  class FollowerCutDeadlineError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'FollowerCutDeadlineError';
+    }
+  }
+
+  type BackgroundFollowerCutContext = {
+    broker: BrokerPort;
+    deadlineAt: number;
+    assertReturnBarrier: () => void;
+  };
+
+  const createBackgroundFollowerCutContext = (
+    cut: CopierFollowerCut,
+  ): BackgroundFollowerCutContext => {
+    const accountId = cut.accountId;
+    const operationId = cut.operationId ?? `cut-${accountId}-${Math.floor(cut.until / 86_400_000)}`;
+    const admittedSafetyGeneration = safetyGeneration;
+    const admittedGroupRevision = groupRevision;
+    const admittedConnectionGeneration = connectionSyncGeneration;
+    const admittedTradeEpoch = tradeEpochGeneration;
+    const admittedGroupId = group.id;
+    const deadlineMs = Math.max(1, options.followerCutDeadlineMs ?? 90_000);
+    const deadlineAt = clock() + deadlineMs;
+    const wallDeadlineAt = performance.now() + deadlineMs;
+    const requestTimeoutMs = Math.max(
+      1,
+      options.followerCutBrokerRequestTimeoutMs ?? 10_000,
+    );
+
+    const activeCutStillMatches = () => {
+      const active = followerCuts.get(accountId);
+      return active?.at === cut.at
+        && active.until === cut.until
+        && active.operationId === cut.operationId
+        && active.closed === null;
+    };
+    const assertReturnBarrier = () => {
+      if (stopped || shutdownRequested) throw new CopierDispatchRevokedError('runtime-stopped');
+      if (gate.killSwitch) throw new CopierDispatchRevokedError('kill-switch');
+      if (!gate.armed || gate.shadowMode) throw new CopierDispatchRevokedError('disarmed');
+      if (!gate.connected) throw new CopierDispatchRevokedError('disconnected');
+      if (group.id !== admittedGroupId || groupRevision !== admittedGroupRevision) {
+        throw new CopierDispatchRevokedError('group-revision-changed');
+      }
+      if (safetyGeneration !== admittedSafetyGeneration) {
+        throw new CopierDispatchRevokedError('safety-generation-changed');
+      }
+      if (connectionSyncGeneration !== admittedConnectionGeneration) {
+        throw new CopierDispatchRevokedError('connection-generation-changed');
+      }
+      if (tradeEpochGeneration !== admittedTradeEpoch) {
+        throw new CopierDispatchRevokedError('trade-epoch-changed');
+      }
+      if (!activeCutStillMatches()) throw new CopierDispatchRevokedError('follower-cut-changed');
+    };
+    const withDeadline = <T>(label: string, operation: () => Promise<T>): Promise<T> => {
+      const remainingMs = Math.min(
+        requestTimeoutMs,
+        deadlineAt - clock(),
+        wallDeadlineAt - performance.now(),
+      );
+      if (remainingMs <= 0) {
+        return Promise.reject(new FollowerCutDeadlineError(
+          `Follower cut ${accountId} překročil deadline ${deadlineMs} ms (${label})`,
+        ));
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new FollowerCutDeadlineError(
+          `Follower cut ${accountId} překročil deadline při ${label}`,
+        )), remainingMs);
+      });
+      return Promise.race([operation(), deadline]).finally(() => {
+        if (timer) clearTimeout(timer);
+      });
+    };
+    const read = <T>(label: string, operation: () => Promise<T>) => withDeadline(label, operation);
+    const write = <T>(label: string, operation: () => Promise<T>) => {
+      assertReturnBarrier();
+      return withDeadline(label, operation);
+    };
+    const cutBroker: BrokerPort = {
+      ...broker,
+      listPositions: id => read(`positions ${id}`, () => broker.listPositions(id)),
+      listOrders: id => read(`orders ${id}`, () => broker.listOrders(id)),
+      findOrderById: (id, brokerOrderId) => read(
+        `order ${id}/${brokerOrderId}`,
+        () => broker.findOrderById(id, brokerOrderId),
+      ),
+      findOrdersByTag: (id, tag) => read(
+        `orders-by-tag ${id}/${tag}`,
+        () => broker.findOrdersByTag(id, tag),
+      ),
+      ...(broker.findOrderStatusById ? {
+        findOrderStatusById: (id: number, brokerOrderId: string) => read(
+          `order-status ${id}/${brokerOrderId}`,
+          () => broker.findOrderStatusById!(id, brokerOrderId),
+        ),
+      } : {}),
+      cancelOrder: (id, brokerOrderId) => write(
+        `cancel ${id}/${brokerOrderId}`,
+        () => broker.cancelOrder(id, brokerOrderId),
+      ),
+      ...(broker.liquidatePosition ? {
+        liquidatePosition: (request: Parameters<NonNullable<BrokerPort['liquidatePosition']>>[0]) => {
+          if (request.accountId !== accountId) {
+            return Promise.reject(new Error(`Follower cut ${operationId} míří na cizí účet`));
+          }
+          return write(
+            `liquidate ${request.accountId}/${request.symbol}`,
+            () => broker.liquidatePosition!(request),
+          );
+        },
+      } : {}),
+    };
+    return { broker: cutBroker, deadlineAt, assertReturnBarrier };
+  };
+
+  const trackFollowerCutBackground = <T>(accountId: number, job: Promise<T>): Promise<T> => {
+    followerCutBackgroundJobs.add(job);
+    followerCutBackgroundAccounts.add(accountId);
+    void job.finally(() => {
+      followerCutBackgroundJobs.delete(job);
+      followerCutBackgroundAccounts.delete(accountId);
+    }).catch(() => undefined);
+    return job;
+  };
+
+  const mergeBackgroundFlattenRuntime = async (
+    backgroundRuntime: CopierRuntime,
+    operationId: string,
+  ): Promise<void> => {
+    const leaderPrefix = `manual-flatten:${operationId}`;
+    const backgroundOutbox = [...backgroundRuntime.outbox.values()].filter(entry => (
+      entry.leaderOrderId.startsWith(`${leaderPrefix}:`)
+    ));
+    const backgroundCancelOutbox = [...backgroundRuntime.cancelOutbox.values()].filter(entry => (
+      entry.leaderEventId === leaderPrefix
+    ));
+    if (backgroundOutbox.length === 0 && backgroundCancelOutbox.length === 0) return;
+    await processor.mutate(async current => {
+      const outbox = new Map(current.outbox);
+      const cancelOutbox = new Map(current.cancelOutbox);
+      for (const entry of backgroundOutbox) outbox.set(entry.key, entry);
+      for (const entry of backgroundCancelOutbox) cancelOutbox.set(entry.key, entry);
+      const committed = await options.store.commit(
+        toSnapshot(
+          current.state,
+          outbox.values(),
+          cancelOutbox.values(),
+          current.revision,
+          current.bracketOutbox.values(),
+          current.osoOutbox.values(),
+        ),
+        current.revision,
+      );
+      return { ...current, outbox, cancelOutbox, revision: committed.revision };
+    });
+  };
+
   const executeFollowerCutAction = async (
     cut: CopierFollowerCut,
     follower: CopyGroupConfig['followers'][number],
     liveSideEffects: boolean,
     emitCopyEvent = true,
+    background?: BackgroundFollowerCutContext,
   ): Promise<ManualFlattenResult | null> => {
     const { accountId, at } = cut;
     // Živý cut (spuštěný daty za ARM, emitCopyEvent=true) drží selhání per
@@ -5054,7 +5234,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     let hasKnownCopy: boolean;
     try {
-      hasKnownCopy = await followerHasCopyToClose(accountId);
+      hasKnownCopy = await followerHasCopyToClose(accountId, background?.broker ?? broker);
     } catch (reason) {
       // Neověřitelný stav kopie = closed:false (žádný slepý liquidation pokus).
       const detail = `stav kopie nelze autoritativně ověřit: ${errorOf(reason).message}`;
@@ -5082,8 +5262,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // pokračují; operátor dostane pravdivé per-account selhání.
         try {
           const [positions, orders] = await Promise.all([
-            broker.listPositions(accountId),
-            broker.listOrders(accountId),
+            (background?.broker ?? broker).listPositions(accountId),
+            (background?.broker ?? broker).listOrders(accountId),
           ]);
           const hasUnownedExposure = positions.some(position => position.netQuantity !== 0)
             || orders.some(order => isOpenOrderStatus(order.status));
@@ -5131,11 +5311,81 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     let flattenResult: ManualFlattenResult;
     try {
-      flattenResult = await flatten(
-        [accountId],
-        cut.operationId ?? `cut-${accountId}-${Math.floor(cut.until / 86_400_000)}`,
-        { preserveArm: true, scopedFailure },
-      );
+      if (background) {
+        const live = currentRuntime();
+        const isolatedStore = createMemoryCopierStore(toSnapshot(
+          live.state,
+          live.outbox.values(),
+          live.cancelOutbox.values(),
+          live.revision,
+          live.bracketOutbox.values(),
+          live.osoOutbox.values(),
+        ));
+        const isolatedRuntime = runtimeFromSnapshot(await isolatedStore.load());
+        const ownedSymbols = Object.keys(
+          followerCutExecutionProvenance.get(accountId)?.copiedExposureBySymbol ?? {},
+        );
+        const flattenOperationId = cut.operationId
+          ?? `cut-${accountId}-${Math.floor(cut.until / 86_400_000)}`;
+        const processed = await processManualFlatten({
+          runtime: isolatedRuntime,
+          broker: background.broker,
+          store: isolatedStore,
+          groupId: group.id,
+          accountIds: [accountId],
+          ...(ownedSymbols.length > 0 ? {
+            targets: ownedSymbols.map(symbol => ({ accountId, symbol })),
+            cleanupScope: 'target-symbol' as const,
+          } : {}),
+          nativeOnly: true,
+          operationId: flattenOperationId,
+          clock,
+          confirmationAttempts: options.followerCutConfirmationAttempts
+            ?? options.flattenConfirmationAttempts
+            ?? 12,
+          confirmationPollMs: options.followerCutConfirmationPollMs
+            ?? options.flattenConfirmationPollMs
+            ?? 250,
+          confirmationMaxPollMs: options.followerCutConfirmationMaxPollMs
+            ?? (options.flattenConfirmationPollMs != null ? options.flattenConfirmationPollMs : 4_000),
+          accountConcurrency: 1,
+          wait: options.wait,
+          deadlineAt: background.deadlineAt,
+          retryPollMs: Math.max(100, options.flattenRetryPollMs ?? 1_000),
+          liquidateAttempts: 1,
+        });
+        await mergeBackgroundFlattenRuntime(processed.runtime, flattenOperationId);
+        flattenResult = processed.result;
+        if (!flattenResult.flat) {
+          const detail = flattenResult.accounts
+            .filter(account => !account.ok)
+            .map(account => account.error ?? `účet ${account.accountId} není flat`)
+            .join('; ');
+          const message = `Flatten selhal pro follower cut ${accountId}: ${detail || 'neznámý stav'}`;
+          const operationEntries = [...processed.runtime.outbox.values()].filter(entry => (
+            entry.request.accountId === accountId
+            && entry.leaderOrderId.startsWith(`manual-flatten:${flattenOperationId}:`)
+          ));
+          const uncertainOperation = operationEntries.some(entry => (
+            entry.status === 'sending'
+            || entry.status === 'unknown'
+            || entry.liquidationAttempt?.status === 'indeterminate'
+          ));
+          if (uncertainOperation || /deadline|timeout|indeterminate/i.test(detail)) {
+            throw new FollowerCutDeadlineError(`Follower cut deadline/nejistý výsledek: ${message}`);
+          }
+          throw new Error(message);
+        }
+        background.assertReturnBarrier();
+        workingOrderAccounts.delete(accountId);
+        positionsByAccount.set(accountId, new Map());
+      } else {
+        flattenResult = await flatten(
+          [accountId],
+          cut.operationId ?? `cut-${accountId}-${Math.floor(cut.until / 86_400_000)}`,
+          { preserveArm: true, scopedFailure },
+        );
+      }
     } catch (reason) {
       // Jediný pokus, žádný druhý liquidation. Živě: když broker liquidate
       // ODMÍTL (nic neletí, stav účtu je známý), selhání se drží per účet
@@ -5145,7 +5395,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // výsledek liquidate NEZNÁMÝ (odeslán, flat nepotvrzen), platí obecný
       // invariant: neznámý broker stav = fail-closed celé skupiny.
       // Recovery: `flatten` už nastavil fail-closed stav i lastError.
-      const unknownBrokerState = currentStuckOperations().some(operation => operation.accountId === accountId);
+      const liveAfterFailure = currentRuntime();
+      const unknownBrokerState = reason instanceof FollowerCutDeadlineError
+        || [...liveAfterFailure.outbox.values()].some(entry => (
+          entry.request.accountId === accountId
+          && (entry.status === 'sending' || entry.status === 'unknown')
+        ))
+        || [...liveAfterFailure.cancelOutbox.values()].some(entry => (
+          entry.accountId === accountId
+          && !entry.neverSent
+          && (entry.status === 'sending' || entry.status === 'unknown')
+        ));
       if (scopedFailure && !unknownBrokerState) {
         await recordFollowerCutFailure(cut, errorOf(reason).message);
       } else if (scopedFailure) {
@@ -5184,6 +5444,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return flattenResult;
   };
 
+  const scheduleBackgroundFollowerCutAction = (
+    cut: CopierFollowerCut,
+    follower: CopyGroupConfig['followers'][number],
+    liveSideEffects: boolean,
+    emitCopyEvent = true,
+  ) => trackFollowerCutBackground(cut.accountId, executeFollowerCutAction(
+    cut,
+    follower,
+    liveSideEffects,
+    emitCopyEvent,
+    createBackgroundFollowerCutContext(cut),
+  ));
+
   const triggerFollowerCut = async (
     accountId: number,
     realizedPnlUsd: number,
@@ -5203,7 +5476,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       throw error;
     }
     recordFollowerCutAudit(prepared.cut);
-    await executeFollowerCutAction(prepared.cut, prepared.follower, liveSideEffects);
+    const background = scheduleBackgroundFollowerCutAction(
+      prepared.cut,
+      prepared.follower,
+      liveSideEffects,
+    );
+    // Broker lifecycle nesmí držet eventTail. Chyba se uvnitř akce převede
+    // na durable closed=false/fail-closed; catch zde jen zavře unhandled okno.
+    void background.catch(() => undefined);
   };
 
   const manualFollowerTradeOperations = new Map<string, Promise<ManualFlattenResult>>();
@@ -5219,7 +5499,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const existing = manualFollowerTradeOperations.get(operationKey);
     if (existing) return existing;
 
-    const run = eventTail.then(async () => {
+    const prepared = eventTail.then(async () => {
       const follower = group.followers.find(item => item.accountId === accountId);
       if (!follower) throw new Error('Do konce obchodu lze vyřadit pouze follower účet');
       if (!gate.connected) throw new Error('Follower nelze zavřít: worker nemá živé spojení s brokerem');
@@ -5271,7 +5551,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         throw error;
       }
       recordFollowerCutAudit(cut);
-      const result = await executeFollowerCutAction(cut, follower, true);
+      return { cut, follower };
+    });
+    // Jen durable admission cutu je serializovaná s leader eventy. Samotné
+    // read/liquidate/confirm běží v izolované background lane.
+    eventTail = prepared.then(() => undefined, () => undefined);
+    const run = prepared.then(({ cut, follower }) => {
+      const action = scheduleBackgroundFollowerCutAction(cut, follower, true);
+      return action;
+    }).then(result => {
       if (result) return result;
       const state = followerCuts.get(accountId);
       if (state?.closed === false) {
@@ -5279,7 +5567,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       throw new Error(`Kopii followera ${accountId} se nepodařilo potvrzeně uzavřít`);
     });
-    eventTail = run.then(() => undefined, () => undefined);
     manualFollowerTradeOperations.set(operationKey, run);
     if (manualFollowerTradeOperations.size > 64) {
       const oldest = manualFollowerTradeOperations.keys().next().value as string | undefined;
@@ -5299,7 +5586,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * okamžitý reverz tak zůstane součástí stejné epizody.
    */
   const maybeReleaseManualTradeCuts = async (): Promise<void> => {
-    const cuts = activeManualTradeCuts();
+    const cuts = activeManualTradeCuts().filter(cut => !followerCutBackgroundAccounts.has(cut.accountId));
     if (cuts.length === 0 || !gate.connected || !managementOnlyGroupPositionsAreKnownFlat()) return;
     // Během handleru je jedna událost právě zpracovávaná. Vyšší počet
     // znamená, že za ní už čeká např. okamžitý reverz, který musíme nejdřív
@@ -5492,7 +5779,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     for (const prepared of preparedCuts) recordFollowerCutAudit(prepared.cut);
     for (const prepared of preparedCuts) {
-      await executeFollowerCutAction(prepared.cut, prepared.follower, liveSideEffects);
+      const background = scheduleBackgroundFollowerCutAction(
+        prepared.cut,
+        prepared.follower,
+        liveSideEffects,
+      );
+      void background.catch(() => undefined);
     }
   };
 
@@ -11718,6 +12010,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     arm({ shadowMode = false, ttlMs }: { shadowMode?: boolean; ttlMs?: number } = {}) {
       if (stopped) throw new Error('Copier runtime is stopped');
       if (shutdownRequested) throw new Error('Copier runtime se právě bezpečně ukončuje');
+      const processorRecovery = processor.recoveryStatus();
+      if (processorRecovery.state !== 'ready') {
+        throw new Error(
+          `Copier nelze armovat: durable reload processoru není dokončen (${processorRecovery.reason})`,
+        );
+      }
       if (startupMissingLeaderRoute) throw new Error(`Copier nelze armovat: starý leader nemá OAuth route (${startupMissingLeaderRoute.message})`);
       if (gate.killSwitch) throw new Error('Copier nelze armovat: kill switch je aktivní');
       if (ttlMs != null && (!Number.isFinite(ttlMs) || ttlMs <= 0)) {
@@ -11966,6 +12264,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (changed) await persistEligibility();
     },
     async reconcile(reconciliationOptions = {}) {
+      const processorRecovery = processor.recoveryStatus();
+      if (processorRecovery.state === 'failed') await processor.recover();
+      else if (processorRecovery.state === 'reloading') await processor.waitForRecovery();
       const managementOnly = currentRuntime().state.safety.managementOnly;
       if (
         gate.armed
@@ -12613,10 +12914,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       while (true) {
         const observed = eventTail;
         await observed;
+        await processor.waitForRecovery();
         const observedRiskPoll = accountRiskPollTail;
         await observedRiskPoll;
         const observedRouteEpochRefresh = routeEpochRefreshTail;
         await observedRouteEpochRefresh;
+        const observedFollowerCuts = [...followerCutBackgroundJobs];
+        if (observedFollowerCuts.length > 0) {
+          await Promise.all(observedFollowerCuts.map(job => job.catch(() => undefined)));
+        }
         const observedShutdown = shutdownPromise;
         if (observedShutdown) await observedShutdown;
         const pendingFlushes = [...pendingOsoFlushes.values()];
@@ -12625,6 +12931,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           observed === eventTail
           && observedRiskPoll === accountRiskPollTail
           && observedRouteEpochRefresh === routeEpochRefreshTail
+          && followerCutBackgroundJobs.size === 0
           && observedShutdown === shutdownPromise
           && pendingOsoFlushes.size === 0
         ) return;

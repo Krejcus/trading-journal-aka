@@ -74,6 +74,8 @@ export interface ManualFlattenOptions {
   /** Počet read-only kontrol autoritativního Order/Position stavu. */
   confirmationAttempts?: number;
   confirmationPollMs?: number;
+  /** Horní mez exponenciálního backoffu read-only potvrzení. */
+  confirmationMaxPollMs?: number;
   accountConcurrency?: number;
   wait?: (ms: number) => Promise<void>;
   /**
@@ -179,6 +181,14 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
   const runtime = { current: options.runtime };
   const confirmationAttempts = Math.max(1, Math.trunc(options.confirmationAttempts ?? 50));
   const confirmationPollMs = Math.max(0, Math.trunc(options.confirmationPollMs ?? 100));
+  const confirmationMaxPollMs = Math.max(
+    confirmationPollMs,
+    Math.trunc(options.confirmationMaxPollMs ?? confirmationPollMs),
+  );
+  const confirmationDelayMs = (attempt: number) => Math.min(
+    confirmationMaxPollMs,
+    confirmationPollMs * (2 ** Math.max(0, attempt - 1)),
+  );
   const requestedConcurrency = Math.trunc(options.accountConcurrency ?? 5);
   const accountConcurrency = Number.isFinite(requestedConcurrency)
     ? Math.max(1, requestedConcurrency)
@@ -237,7 +247,7 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
     for (let attempt = 0; attempt < confirmationAttempts; attempt += 1) {
       if (attempt > 0) {
         if (pastDeadline()) break;
-        await wait(confirmationPollMs);
+        await wait(confirmationDelayMs(attempt));
       }
       if (options.broker.findOrderStatusById) {
         const lookup = await options.broker.findOrderStatusById(accountId, brokerOrderId);
@@ -265,7 +275,7 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
     for (let attempt = 0; attempt < confirmationAttempts; attempt += 1) {
       if (attempt > 0) {
         if (pastDeadline()) break;
-        await wait(confirmationPollMs);
+        await wait(confirmationDelayMs(attempt));
       }
       const positionsBefore = await options.broker.listPositions(accountId);
       const orders = await options.broker.listOrders(accountId);
@@ -572,7 +582,7 @@ export async function processManualFlatten(options: ManualFlattenOptions): Promi
   for (let attempt = 0; attempt < confirmationAttempts; attempt += 1) {
     if (attempt > 0) {
       if (pastDeadline()) break;
-      await wait(confirmationPollMs);
+      await wait(confirmationDelayMs(attempt));
     }
     finalState = await Promise.all(accountIds.map(async accountId => {
       try {

@@ -272,6 +272,33 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   `listen EPERM 127.0.0.1`. Root `tsc --noEmit` hlásí výhradně povolené
   chybějící Chrome/CRX typy v `extension/`, žádnou chybu mimo extension.
 - Bez commitu, push/deploye, instalace závislostí, broker API, ARM/Flatten ani
+
+### 2026-09-29 — Balíček 7: background follower cut a zotavení durable CAS (Codex)
+
+- Ruční „Flatten followera do konce obchodu“ i broker/ledger DLL close-copy
+  nyní po krátkém durable admission běží mimo `eventTail`. Aktivní cut okamžitě
+  vyřadí účet z nových vstupů, zatímco leader exit/ochranné změny ostatních
+  followerů pokračují. Broker lane má produkční 90s celkový deadline, 10s
+  per-call deadline, omezené read-only konfirmace s backoffem a jediný
+  liquidate pokus; nejistý výsledek se uloží do hlavního outboxu a skončí
+  fail-closed. Návratová bariéra ověřuje safety/group/connection/trade epochu,
+  aktivní cut, ARM a kill latch; DISARM/kill nečekají na běžící broker call.
+- Serial processor po odmítnuté operaci zastaví další mutace a načte čerstvý
+  durable snapshot včetně nové CAS revize. ARM se po dobu reloadu explicitně
+  odmítá; neúspěšný reload lze znovu vyvolat přes reconciliation. Tradovate
+  native emergency Flatten zůstává v izolované lane bez závislosti na stale
+  processor CAS. Regrese simuluje post-commit výjimku: ARM je do odblokování
+  loadu zamítnut, Flatten účtu projde a po reloadu + reconciliation lze znovu
+  ARM.
+- Dvě základní regrese před opravou padaly (leader exit čekal za liquidate;
+  ARM po post-commit chybě neměl durable-reload blokaci). Po opravě cíleně
+  prošlo 154/154 a širší controller sada 406/406; agent mimo sandbox 66/66.
+  První kompletní copier gate měl jediný známý timing pád V13 B6/R6
+  (1960 passed, exit 1); izolovaný test dal 2/3, celý V13 soubor potom 3×
+  32/32 a opakovaný kompletní gate prošel 169 souborů + 1 skipped,
+  1961 testů + 1 todo, exit 0. Root `tsc --noEmit` má pouze povolené chyby
+  Chrome typů a `@crxjs/vite-plugin` v `extension/`; `git diff --check` čistý.
+  Bez commitu, push/deploye, instalace závislostí, broker API, ARM/Flatten ani
   reinstalu workeru.
 
 ### 2026-09-29 — Balíček 6b: review regrese leader-flat/auto-close/ST4 (Codex)

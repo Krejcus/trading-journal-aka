@@ -2569,48 +2569,133 @@ export async function replayLeaderEvents(
  * sériově, takže dva callbacky WebSocketu nemohou závodit o stejný snapshot.
  * CAS ve store zůstává druhá obranná vrstva proti druhému procesu/VPS.
  */
-export function createSerialCopierProcessor(initialRuntime: CopierRuntime) {
+export type CopierProcessorRecoveryStatus =
+  | { state: 'ready' }
+  | { state: 'reloading'; reason: string }
+  | { state: 'failed'; reason: string };
+
+export interface SerialCopierProcessorOptions {
+  /**
+   * Čerstvý durable snapshot pro zotavení po odmítnuté operaci. Operace
+   * mohla před výjimkou úspěšně posunout store revizi (write-ahead), takže
+   * pokračovat se starým in-memory CAS je zakázané.
+   */
+  reload?: () => Promise<CopierRuntime>;
+}
+
+class CopierProcessorReloadRequiredError extends Error {
+  constructor(reason: string) {
+    super(`Copier processor čeká na durable reload: ${reason}`);
+    this.name = 'CopierProcessorReloadRequiredError';
+  }
+}
+
+export function createSerialCopierProcessor(
+  initialRuntime: CopierRuntime,
+  options: SerialCopierProcessorOptions = {},
+) {
   let runtime = initialRuntime;
   let tail: Promise<void> = Promise.resolve();
+  let recovery: CopierProcessorRecoveryStatus = { state: 'ready' };
+  let recoveryPromise: Promise<void> | null = null;
+
+  const errorMessage = (reason: unknown) => (
+    reason instanceof Error ? reason.message : String(reason)
+  );
+
+  const startReload = (reason: unknown, force = false): Promise<void> => {
+    if (!options.reload) return Promise.resolve();
+    if (!force && recovery.state === 'reloading' && recoveryPromise) return recoveryPromise;
+    const message = errorMessage(reason);
+    recovery = { state: 'reloading', reason: message };
+    const run = options.reload().then(next => {
+      runtime = next;
+      recovery = { state: 'ready' };
+    }, reloadReason => {
+      const reloadMessage = errorMessage(reloadReason);
+      recovery = {
+        state: 'failed',
+        reason: `původní chyba: ${message}; durable reload selhal: ${reloadMessage}`,
+      };
+      throw reloadReason;
+    });
+    const tracked = run.finally(() => {
+      if (recoveryPromise === tracked) recoveryPromise = null;
+    });
+    recoveryPromise = tracked;
+    return tracked;
+  };
+
+  const beforeOperation = async () => {
+    if (recovery.state === 'reloading' && recoveryPromise) await recoveryPromise;
+    if (recovery.state === 'failed') {
+      throw new CopierProcessorReloadRequiredError(recovery.reason);
+    }
+  };
+
+  const settleFailure = (reason: unknown): Promise<void> => {
+    if (reason instanceof CopierProcessorReloadRequiredError) return Promise.resolve();
+    return startReload(reason).catch(() => undefined);
+  };
+
+  const schedule = <T>(
+    operation: (current: CopierRuntime) => Promise<T>,
+    accept: (result: T) => void,
+  ): Promise<T> => {
+    const run = tail.then(async () => {
+      await beforeOperation();
+      return operation(runtime);
+    });
+    tail = run.then(accept, settleFailure);
+    return run;
+  };
 
   return {
     process(options: Omit<ProcessLeaderEventOptions, 'runtime'>): Promise<CopierRunResult> {
-      const run = tail.then(() => processLeaderEvent({ ...options, runtime }));
-      tail = run.then(result => {
+      return schedule(current => processLeaderEvent({ ...options, runtime: current }), result => {
         runtime = result.runtime;
-      }, () => undefined);
-      return run;
+      });
     },
     processBracket(options: Omit<ProcessBracketPairOptions, 'runtime'>): Promise<CopierRunResult> {
-      const run = tail.then(() => processBracketPair({ ...options, runtime }));
-      tail = run.then(result => {
+      return schedule(current => processBracketPair({ ...options, runtime: current }), result => {
         runtime = result.runtime;
-      }, () => undefined);
-      return run;
+      });
     },
     processOso(options: Omit<ProcessOsoPairOptions, 'runtime'>): Promise<CopierRunResult> {
-      const run = tail.then(() => processOsoPair({ ...options, runtime }));
-      tail = run.then(result => {
+      return schedule(current => processOsoPair({ ...options, runtime: current }), result => {
         runtime = result.runtime;
-      }, () => undefined);
-      return run;
+      });
     },
     record(options: Omit<Parameters<typeof recordLeaderEventOnly>[0], 'runtime'>): Promise<CopierRunResult> {
-      const run = tail.then(() => recordLeaderEventOnly({ ...options, runtime }));
-      tail = run.then(result => {
+      return schedule(current => recordLeaderEventOnly({ ...options, runtime: current }), result => {
         runtime = result.runtime;
-      }, () => undefined);
-      return run;
+      });
     },
     mutate(operation: (current: CopierRuntime) => Promise<CopierRuntime>): Promise<CopierRuntime> {
-      const run = tail.then(() => operation(runtime));
-      tail = run.then(next => {
+      return schedule(operation, next => {
         runtime = next;
-      }, () => undefined);
-      return run;
+      });
     },
     currentRuntime(): CopierRuntime {
       return runtime;
+    },
+    recoveryStatus(): CopierProcessorRecoveryStatus {
+      return { ...recovery };
+    },
+    async recover(): Promise<CopierRuntime> {
+      if (recovery.state === 'ready') return runtime;
+      if (recovery.state === 'reloading' && recoveryPromise) {
+        await recoveryPromise;
+        return runtime;
+      }
+      await startReload(recovery.reason, true);
+      return runtime;
+    },
+    async waitForRecovery(): Promise<void> {
+      if (recovery.state === 'reloading' && recoveryPromise) await recoveryPromise;
+      if (recovery.state === 'failed') {
+        throw new CopierProcessorReloadRequiredError(recovery.reason);
+      }
     },
   };
 }
