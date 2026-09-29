@@ -166,6 +166,10 @@ export interface BrokerResyncSnapshot {
   positions: readonly BrokerPosition[];
   orders: readonly BrokerOrder[];
   gapFills: readonly BrokerFill[];
+  /** `false` znamená, že read-only snapshot nešel autoritativně sestavit. */
+  complete?: boolean;
+  /** Diagnostika neúplnosti; controller ji smí použít jen pro fail-closed audit. */
+  failureReason?: string;
 }
 
 export type BrokerEvent =

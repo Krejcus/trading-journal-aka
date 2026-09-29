@@ -171,6 +171,8 @@ export interface TradovateBrokerConfig {
   accountSpec?: string;
   /** Exact Tradovate Account.name keyed by Account.id for multi-account connections. */
   accountSpecsByAccountId?: Readonly<Record<number, string>>;
+  /** Účty svěřené této execution route; může být širší než dostupné názvy. */
+  routeAccountIds?: readonly number[];
   fetchImpl?: typeof fetch;
   webSocketFactory?: (url: string) => WebSocketLike;
   clock?: () => number;
@@ -515,9 +517,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     for (const listener of listeners) listener(event);
   };
   const emitBrokerState = (event: Extract<BrokerEvent, { type: 'order' | 'fill' | 'position' }>) => {
-    // Během plánovaného syncu jsou entity jen snapshot důkaz mezery. Jejich
-    // přehrání jako live eventu by mohlo založit opožděný follower obchod.
-    if (renewalInProgress && !syncReady) return;
+    // Opožděný Fill/Position z mezery se nesmí přehrát jako nový obchod.
+    // Order lifecycle ale musí zůstat live: může založit nebo posunout
+    // ochranný SL/TP dřív, než controller porovná následný snapshot.
+    if (renewalInProgress && !syncReady && event.type !== 'order') return;
     emit(event);
   };
 
@@ -1120,18 +1123,28 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const buildRenewalSnapshot = async (
     rawOrderList: readonly TradovateRawOrderEntity[],
   ): Promise<BrokerResyncSnapshot> => {
-    const [positionEntities, accountEntities] = await Promise.all([
-      request<TradovatePositionEntity[]>('/position/list'),
-      request<TradovateAccountEntity[]>('/account/list'),
-    ]);
+    const positionEntities = await request<TradovatePositionEntity[]>('/position/list');
+    const configuredAccountIds = new Set(
+      config.routeAccountIds?.filter(accountId => Number.isSafeInteger(accountId) && accountId > 0)
+      ?? accountSpecsByAccountId.keys(),
+    );
+    const routeOwns = (accountId: number) => configuredAccountIds.size === 0
+      || configuredAccountIds.has(accountId);
     const gapFillEntities = [...rawFills.values()]
       .filter(fill => !(renewalKnownFillIds?.has(fill.id) ?? true))
+      .filter(fill => {
+        const accountId = fill.accountId ?? rawOrders.get(fill.orderId)?.accountId;
+        return accountId != null && routeOwns(accountId);
+      })
       .sort((left, right) => left.id - right.id);
+    const openRouteOrders = rawOrderList.filter(raw => (
+      routeOwns(raw.accountId) && !terminalOrderStatus(raw.ordStatus)
+    ));
     await hydrateContracts([
-      ...(positionEntities ?? []).map(item => item.contractId),
+      ...(positionEntities ?? []).filter(item => routeOwns(item.accountId)).map(item => item.contractId),
       ...gapFillEntities.map(item => item.contractId),
     ]);
-    const composedOrders = await Promise.all(rawOrderList.map(async raw => {
+    const composedOrders = await Promise.all(openRouteOrders.map(async raw => {
       const order = await composeOrder(raw.id);
       if (!order) {
         throw new TradovateTransportError(`Resync snapshot nemá potvrzený tvar orderu ${raw.id}`);
@@ -1157,7 +1170,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         filledAt: fill.timestamp ? Date.parse(fill.timestamp) : clock(),
       } satisfies BrokerFill;
     });
-    const positions = (positionEntities ?? []).map(position => {
+    const positions = (positionEntities ?? []).filter(position => routeOwns(position.accountId)).map(position => {
       const symbol = contracts.get(position.contractId);
       if (!symbol) throw new TradovateTransportError(`Resync snapshot neumí namapovat position contract ${position.contractId}`);
       return {
@@ -1167,15 +1180,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       } satisfies BrokerPosition;
     });
     const accountIds = [...new Set([
-      ...accountSpecsByAccountId.keys(),
-      ...(accountEntities ?? [])
-        .filter(account => config.accountSpec != null && account.name === config.accountSpec)
-        .map(account => account.id),
+      ...configuredAccountIds,
       ...positions.map(item => item.accountId),
       ...composedOrders.map(item => item.accountId),
       ...gapFills.map(item => item.accountId),
     ])].sort((left, right) => left - right);
-    return { accountIds, positions, orders: composedOrders, gapFills };
+    return { accountIds, positions, orders: composedOrders, gapFills, complete: true };
   };
 
   /**
@@ -1468,7 +1478,22 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
           if (order) emitBrokerState({ type: 'order', order, receivedAt });
         }
         if (!isCurrent()) return;
-        const resync = wasRenewal ? await buildRenewalSnapshot(baseline) : undefined;
+        let resync: BrokerResyncSnapshot | undefined;
+        if (wasRenewal) {
+          try {
+            resync = await buildRenewalSnapshot(baseline);
+          } catch (reason) {
+            // Snapshot failure is a route-gap safety result, not a transport
+            // failure. Keep the newly synchronized socket and let the
+            // controller fail closed without another syncrequest/reconnect.
+            resync = {
+              accountIds: [...new Set(config.routeAccountIds ?? accountSpecsByAccountId.keys())]
+                .sort((left, right) => left - right),
+              positions: [], orders: [], gapFills: [], complete: false,
+              failureReason: reason instanceof Error ? reason.message : String(reason),
+            };
+          }
+        }
         // Deadline během read-only snapshotu už přiznal skutečný výpadek.
         // Pozdní dokončení nesmí vydat falešný úspěšný resync.
         if (!isCurrent() || (wasRenewal && !renewalInProgress)) return;

@@ -580,6 +580,10 @@ export interface BootstrapCopierOptions {
     accountIds: readonly number[];
   };
   clock?: () => number;
+  /** Klidové okno po leader trade eventu před plánovanou obměnou (default 5 s). */
+  connectionRenewalQuietMs?: number;
+  /** Monotónní hodiny renewal scheduleru oddělené od trading/event hodin. */
+  connectionRenewalClock?: () => number;
   /** Injektovatelné pouze pro deterministické testy statistického episode ID. */
   episodeIdFactory?: () => string;
   risk?: Partial<RiskGateContext>;
@@ -1411,6 +1415,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   let tradeBoundaryObservationVersion = 0;
   /** Aktuální + už přijaté, ale serializací ještě nezpracované broker eventy. */
   let pendingBrokerEvents = 0;
+  const connectionRenewalQuietMs = Math.max(0, options.connectionRenewalQuietMs ?? 5_000);
+  const connectionRenewalClock = options.connectionRenewalClock ?? Date.now;
+  let leaderEventQuietUntil = 0;
   /**
    * Trade ingress čekající před eventTail, po účtech. Zpracovávaná událost
    * už v čítači není; V12 streamový důkaz tak vidí pouze backlog za sebou.
@@ -8894,6 +8901,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   ): string | null => {
     const snapshot = event.resync;
     if (!snapshot) return 'route-gap-divergence: resync neobsahuje autoritativní snapshot';
+    if (snapshot.complete === false) {
+      return `route-gap-divergence: resync snapshot není autoritativní${snapshot.failureReason ? ` (${snapshot.failureReason})` : ''}`;
+    }
     const groupAccounts = new Set([
       group.leaderAccountId,
       ...group.followers.map(follower => follower.accountId),
@@ -8907,11 +8917,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       : [];
     if (accountIds.length === 0) differences.push('snapshot neobsahuje žádný účet aktivní skupiny');
 
-    const firstSeenLeaderGapFill = snapshot.gapFills.find(fill => (
-      fill.accountId === group.leaderAccountId
-      && !liveOrdersByAccount.get(fill.accountId)?.has(fill.brokerOrderId)
-      && !observedOrderStatusesByAccount.get(fill.accountId)?.has(fill.brokerOrderId)
-    ));
+    const leaderGapFill = snapshot.gapFills.find(fill => fill.accountId === group.leaderAccountId);
+    if (leaderGapFill) {
+      differences.push(`leader gap fill ${leaderGapFill.fillId} order ${leaderGapFill.brokerOrderId}`);
+    }
+    const firstSeenLeaderGapFill = leaderGapFill && (
+      !liveOrdersByAccount.get(leaderGapFill.accountId)?.has(leaderGapFill.brokerOrderId)
+      && !observedOrderStatusesByAccount.get(leaderGapFill.accountId)?.has(leaderGapFill.brokerOrderId)
+    ) ? leaderGapFill : undefined;
     if (firstSeenLeaderGapFill) {
       differences.push(
         `leader příkaz ${firstSeenLeaderGapFill.brokerOrderId} je poprvé viditelný až jako filled (${firstSeenLeaderGapFill.fillId})`,
@@ -8999,18 +9012,28 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     if (event.type === 'connection') {
       if (event.connected && event.resynced) {
+        // Scoped resync není důkaz agregovaného spojení. Router jej za
+        // odpojeného leadera zahazuje; controller drží stejnou fail-closed
+        // hranici i pro přímý/legacy broker.
+        if (!gate.connected) return;
         const wasArmed = gate.armed;
         source.connection(true);
-        gate = { ...gate, connected: true, lastHeartbeatAt: now };
+        gate = { ...gate, lastHeartbeatAt: now };
         const divergence = applyRouteGapSnapshot(event);
         scheduleRouteEpochRefresh();
         if (divergence) {
+          const needsStatefulRecovery = hasFollowerExposure();
+          if (needsStatefulRecovery) {
+            pendingConnectionRecovery = true;
+            pendingReadOnlyConnectionRecovery = false;
+          }
           if (wasArmed) failClosed(new Error(`Copier fail-closed: ${divergence}`), { autoClose: false });
           else {
             lastError = new Error(`Copier fail-closed: ${divergence}`);
             invalidateReconciliation();
             options.onError?.(lastError);
           }
+          if (needsStatefulRecovery) scheduleConnectionRecovery();
         }
         return;
       }
@@ -11295,6 +11318,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const tradeIngress = (event.type === 'position' || event.type === 'order' || event.type === 'fill')
       && ingressAccountId != null
       && affectedAccountIds.has(ingressAccountId);
+    const leaderTradeIngress = tradeIngress && ingressAccountId === group.leaderAccountId;
+    if (leaderTradeIngress) {
+      leaderEventQuietUntil = Math.max(
+        leaderEventQuietUntil,
+        connectionRenewalClock() + connectionRenewalQuietMs,
+      );
+    }
     if (tradeIngress || event.type === 'connection' || event.type === 'error') {
       // Keepalive `h` pouze dokládá liveness. Nesmí zneplatnit broker-state
       // fence ani předstírat rozpracovanou obchodní událost.
@@ -11339,6 +11369,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       .catch(failClosed)
       .finally(() => {
         if (tradeIngress) pendingBrokerEvents = Math.max(0, pendingBrokerEvents - 1);
+        if (leaderTradeIngress) {
+          leaderEventQuietUntil = Math.max(
+            leaderEventQuietUntil,
+            connectionRenewalClock() + connectionRenewalQuietMs,
+          );
+        }
       });
   });
 
@@ -11348,9 +11384,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery
         || reconciliationRequestsPending > 0) return 'connection recovery';
       if (hasInFlightOutbox()) return 'durable outbox';
+      if (pendingBrokerEvents > 0) return 'leader event queue';
       if (pendingOsoTimers.size > 0 || pendingOsoEvents.size > 0 || pendingOsoFlushes.size > 0) {
         return 'OSO correlation';
       }
+      if (connectionRenewalClock() < leaderEventQuietUntil) return 'leader event quiet window';
       return null;
     },
     arm({ shadowMode = false, ttlMs }: { shadowMode?: boolean; ttlMs?: number } = {}) {

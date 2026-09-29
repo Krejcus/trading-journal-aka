@@ -92,6 +92,7 @@ export async function startMultiTradovateCopier(
         environment: options.environment,
         accountSpec: connection.accountSpec,
         accountSpecsByAccountId: connection.accountSpecsByAccountId,
+        routeAccountIds: connection.accountIds,
         getAccessToken: connection.getAccessToken,
         ...connection.transport,
         connectionLabel: connection.transport?.connectionLabel ?? `conn:${connection.id.slice(0, 8)}`,
