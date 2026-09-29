@@ -935,32 +935,86 @@ describe('ARM přes relay nese konfiguraci skupiny', () => {
     expect(upsert).not.toHaveBeenCalled();
   });
 
+  it('tighten-only dál odmítne zvýšení násobku před enqueue', async () => {
+    const upsert = vi.fn();
+    await expect(enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert, workerStatus(skupina, 1_788_595_200_000)),
+      userId,
+      connectionId,
+      deviceId,
+      command: {
+        type: 'copy-command',
+        command: { type: 'set-multiplier', groupId: skupina.id, accountId: 62364057, multiplier: 3 },
+      },
+    })).rejects.toThrow('tighten-only');
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
   it.each([
-    ['set-multiplier', skupina, {
-      type: 'copy-command',
-      command: { type: 'set-multiplier', groupId: skupina.id, accountId: 62364057, multiplier: 3 },
-    }],
-    ['set-replication', skupina, {
-      type: 'copy-command',
-      command: { type: 'set-replication', groupId: skupina.id, accountId: 62364057, mode: 'on-fill' },
-    }],
-    ['set-follower-enabled', {
+    ['re-enable followera', {
       ...skupina,
       followers: [{ ...skupina.followers[0], enabled: false }],
     }, {
       type: 'copy-command',
       command: { type: 'set-follower-enabled', groupId: skupina.id, accountId: 62364057, enabled: true },
     }],
-  ] as const)('P340: tighten-only odmítne %s v relay před enqueue', async (_label, current, command) => {
+    ['on-submit → on-fill', skupina, {
+      type: 'copy-command',
+      command: { type: 'set-replication', groupId: skupina.id, accountId: 62364057, mode: 'on-fill' },
+    }],
+  ] as const)('P-B relay dovolí %s a worker pak autoritativně ověří flat', async (_label, current, command) => {
     const upsert = vi.fn();
-    await expect(enqueueTradovateCopierCommand({
+    await enqueueTradovateCopierCommand({
       db: enqueueDb(upsert, workerStatus({ ...current, followers: [...current.followers] }, 1_788_595_200_000)),
       userId,
       connectionId,
       deviceId,
       command: command as LocalCopierAgentCommand,
-    })).rejects.toThrow('tighten-only');
-    expect(upsert).not.toHaveBeenCalled();
+    });
+    expect(upsert).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['vypnutí followera bez čitelné group', {
+      type: 'copy-command',
+      command: { type: 'set-follower-enabled', groupId: skupina.id, accountId: 62364057, enabled: false },
+    }],
+    ['mode off při statusu jiné group', {
+      type: 'copy-command',
+      command: { type: 'set-replication', groupId: skupina.id, accountId: 62364057, mode: 'off' },
+    }],
+  ] as const)('risk-snižující %s projde relay bez baseline', async (_label, command) => {
+    const upsert = vi.fn();
+    const unreadable = _label.includes('nečitelné')
+      ? ({ id: 'broken' } as LocalCopierAgentStatus['group'])
+      : ({ ...skupina, id: 'other-group' } as LocalCopierAgentStatus['group']);
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert, workerStatus(unreadable, 1_788_595_200_000)),
+      userId,
+      connectionId,
+      deviceId,
+      command: command as LocalCopierAgentCommand,
+    });
+    expect(upsert).toHaveBeenCalledOnce();
+  });
+
+  it.each(['update-group', 'arm-live'] as const)('%s mapuje stale enabled z runtime baseline', async type => {
+    const upsert = vi.fn();
+    const runtimeGroup = {
+      ...skupina,
+      followers: [{ ...skupina.followers[0], enabled: false }],
+    };
+    const command = type === 'arm-live'
+      ? { type, group: skupina }
+      : { type: 'copy-command', command: { type, group: { ...skupina, name: 'Přejmenováno' } } };
+    await enqueueTradovateCopierCommand({
+      db: enqueueDb(upsert, workerStatus(runtimeGroup, 1_788_595_200_000)),
+      userId,
+      connectionId,
+      deviceId,
+      command: command as LocalCopierAgentCommand,
+    });
+    expect(upsert).toHaveBeenCalledOnce();
   });
 
   it('před prvním ARM relay dovolí i zmírnění a worker zůstává autoritou', async () => {

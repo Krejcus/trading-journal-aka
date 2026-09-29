@@ -66,6 +66,7 @@ const controller = (overrides: Partial<CopierControllerStatus> = {}) => {
     preflightGroupChange: vi.fn(),
     updateGroup: vi.fn(),
     updateGroupMetadata: vi.fn(),
+    updateGroupRiskInPlace: vi.fn(async () => undefined),
     flattenAccount: vi.fn(async () => ({ flat: true })),
     flattenFollowerTrade: vi.fn(async () => ({ flat: true })),
     flattenGroup: vi.fn(async () => ({ flat: true })),
@@ -189,6 +190,44 @@ describe('local copier execution agent', () => {
     expect(runtime.updateGroupMetadata).toHaveBeenCalledWith(expect.objectContaining({
       name: 'Nový název', color: '#22c55e',
     }));
+    expect(runtime.status().armed).toBe(true);
+  });
+
+  it.each([
+    'autoCloseFollowerPositions',
+    'preventHedging',
+    'positionReconciler',
+    'disableReplicationOnBreach',
+  ] as const)('metadata cesta za session odmítne vypnutí %s bez DISARM', async field => {
+    const runtime = controller({ sessionArmedAt: 1 });
+    runtime.arm({ shadowMode: false });
+    runtime.arm.mockClear();
+    const onGroupChanged = vi.fn(async () => undefined);
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: { ...group(), safety: DEFAULT_COPY_GROUP_SAFETY },
+      port: 0,
+      onGroupChanged,
+    });
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: {
+        type: 'update-group',
+        group: {
+          ...group(),
+          safety: { ...DEFAULT_COPY_GROUP_SAFETY, [field]: false },
+        },
+      },
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining(`safety.${field}`),
+    });
+    expect(runtime.disarm).not.toHaveBeenCalled();
+    expect(runtime.updateGroupMetadata).not.toHaveBeenCalled();
+    expect(runtime.reconfigureGroup).not.toHaveBeenCalled();
+    expect(onGroupChanged).not.toHaveBeenCalled();
     expect(runtime.status().armed).toBe(true);
   });
 
@@ -1446,6 +1485,18 @@ describe('local copier execution agent', () => {
 });
 
 describe('atomický arm-live s konfigurací', () => {
+  it('arm-live ze SHADOW ARM skutečně přepne runtime do LIVE', async () => {
+    const runtime = controller({ armed: true, shadowMode: true });
+    const agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group() });
+    try {
+      await agent.execute({ type: 'arm-live' });
+      expect(runtime.arm).toHaveBeenCalledWith(expect.objectContaining({ shadowMode: false }));
+      expect(runtime.status()).toMatchObject({ armed: true, shadowMode: false });
+    } finally {
+      await agent.close();
+    }
+  });
+
   it('prepared cross-group ARM retains the cooldown and still runs worker preflight and reconciliation', async () => {
     const current = { ...group(), safety: { ...structuredClone(DEFAULT_COPY_GROUP_SAFETY), entryCooldownMinutes: 1 } };
     const runtime = controller({ sessionArmedAt: 1 });
@@ -1651,6 +1702,93 @@ describe('atomický arm-live s konfigurací', () => {
       expect(agent.status().group.id).toBe('runtime-test');
     } finally {
       await agent.close();
+    }
+  });
+});
+
+describe('P-A změny velikosti za otevřené pozice', () => {
+  it('přidání a snížení follower cutu proběhne in-place bez DISARM', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const runtime = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: group(),
+    });
+    broker.setConnected(true);
+    await runtime.waitForIdle();
+    await runtime.reconcile();
+    runtime.arm({ shadowMode: false });
+    broker.setPosition(11, 'MNQU6', 1);
+    broker.setPosition(22, 'MNQU6', 1);
+    broker.emitEvent({ type: 'position', position: { accountId: 22, symbol: 'MNQU6', netQuantity: 1 } });
+    broker.emitEvent({ type: 'position', position: { accountId: 11, symbol: 'MNQU6', netQuantity: 1 } });
+    await runtime.waitForIdle();
+    const agent = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      onGroupChanged: async () => undefined,
+    });
+    try {
+      for (const dailyLossCutUsd of [100, 50]) {
+        const response = await post(agent, agent.status().nonce, {
+          type: 'copy-command',
+          command: {
+            type: 'update-group',
+            group: {
+              ...group(),
+              followers: [{ ...group().followers[0], dailyLossCutUsd, onCut: 'close-copy' }],
+            },
+          },
+        });
+        expect(response.status).toBe(200);
+        expect(agent.status().group.followers[0]).toMatchObject({ dailyLossCutUsd });
+        expect(runtime.status().armed).toBe(true);
+      }
+    } finally {
+      await agent.close();
+      runtime.stop();
+    }
+  });
+
+  it('odmítne změnu násobku bez DISARM a vrátí jasnou flat-only hlášku', async () => {
+    const broker = createMockBroker({ behavior: () => ({ kind: 'fill', price: 20_000 }) });
+    const runtime = await bootstrapCopierRuntime({
+      broker,
+      store: createMemoryCopierStore(),
+      group: group(),
+    });
+    broker.setConnected(true);
+    await runtime.waitForIdle();
+    await runtime.reconcile();
+    runtime.arm({ shadowMode: false });
+    broker.setPosition(11, 'MNQU6', 1);
+    broker.setPosition(22, 'MNQU6', 1);
+    broker.emitEvent({ type: 'position', position: { accountId: 22, symbol: 'MNQU6', netQuantity: 1 } });
+    broker.emitEvent({ type: 'position', position: { accountId: 11, symbol: 'MNQU6', netQuantity: 1 } });
+    await runtime.waitForIdle();
+    const agent = await startLocalCopierExecutionAgent({
+      controller: runtime,
+      group: group(),
+      port: 0,
+      onGroupChanged: async () => undefined,
+    });
+    try {
+      const response = await post(agent, agent.status().nonce, {
+        type: 'copy-command',
+        command: {
+          type: 'set-multiplier', groupId: group().id, accountId: 22, multiplier: 0.5,
+        },
+      });
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({
+        error: expect.stringContaining('uložit jde jen ve flat stavu — kopírka zůstává zapnutá se stávajícím nastavením'),
+      });
+      expect(runtime.status().armed).toBe(true);
+      expect(agent.status().group.followers[0].multiplier).toBe(1);
+    } finally {
+      await agent.close();
+      runtime.stop();
     }
   });
 });

@@ -14,7 +14,11 @@ import {
   type LocalCopierAgentCommandResult,
   type LocalCopierAgentStatus,
 } from '../lib/localCopierAgentProtocol.js';
-import { isWeakerRiskConfig } from '../lib/copierRiskConfig.js';
+import {
+  isInPlaceCutTightening,
+  isMetadataOnlyGroupChange,
+  isWeakerRiskConfig,
+} from '../lib/copierRiskConfig.js';
 import { COPIER_RISK_CONFIG_CAPABILITY } from '../lib/copierWorkerCapabilities.js';
 import { msUntilTradovateSessionEnd, tradovateSessionEndAt } from '../services/copierArmSession.js';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController.js';
@@ -151,23 +155,6 @@ const sameAccountTopology = (left: CopyGroupConfig, right: CopyGroupConfig): boo
   const leftIds = [...copyGroupAccountIds(left)].sort((a, b) => a - b);
   const rightIds = [...copyGroupAccountIds(right)].sort((a, b) => a - b);
   return leftIds.length === rightIds.length && leftIds.every((value, index) => value === rightIds[index]);
-};
-
-const sameExecutionConfiguration = (left: CopyGroupConfig, right: CopyGroupConfig): boolean => {
-  if (left.id !== right.id || left.enabled !== right.enabled
-    || left.leaderAccountId !== right.leaderAccountId
-    || left.followers.length !== right.followers.length) return false;
-  const rightByAccount = new Map(right.followers.map(follower => [follower.accountId, follower]));
-  return left.followers.every(follower => {
-    const candidate = rightByAccount.get(follower.accountId);
-    return candidate != null
-      && candidate.mode === follower.mode
-      && (candidate.enabled !== false) === (follower.enabled !== false)
-      && candidate.multiplier === follower.multiplier
-      && candidate.maxContracts === follower.maxContracts
-      && candidate.dailyLossCutUsd === follower.dailyLossCutUsd
-      && (candidate.onCut ?? 'close-copy') === (follower.onCut ?? 'close-copy');
-  });
 };
 
 const canonicalConfig = (value: unknown): unknown => {
@@ -328,6 +315,7 @@ export async function startLocalCopierExecutionAgent(
       retireMissingOldGroup?: { groupId: string; accountIds: number[]; reason: string };
     } = {},
   ): Promise<LiveCopyTradingCommandResult> => {
+    const requested = next;
     const normalized = sanitizeCopyGroups([next]);
     if (!normalized || normalized.length !== 1) {
       throw new Error('Copy group obsahuje neplatná pravidla dne');
@@ -336,7 +324,12 @@ export async function startLocalCopierExecutionAgent(
     const previous = group;
     const leaderChanged = previous.leaderAccountId !== next.leaderAccountId;
     const topologyChanged = !sameAccountTopology(previous, next);
-    const executionChanged = !sameExecutionConfiguration(previous, next);
+    const weaker = [...new Set([
+      ...isWeakerRiskConfig(previous, requested),
+      ...isWeakerRiskConfig(previous, next),
+    ])];
+    const metadataOnly = weaker.length === 0 && isMetadataOnlyGroupChange(previous, next);
+    const inPlaceCutTightening = weaker.length === 0 && isInPlaceCutTightening(previous, next);
     let persistedNext = false;
     const retirement = reconfigurationRequest.retireMissingOldGroup;
     const previousIds = copyGroupAccountIds(previous);
@@ -363,7 +356,6 @@ export async function startLocalCopierExecutionAgent(
     // V1: všechny synchronní validace a routing dry-run musí proběhnout před
     // jakýmkoli DISARM. Odmítnutý config tak nezmění zdravý runtime.
     if ((options.controller.status().sessionArmedAt ?? 0) > 0) {
-      const weaker = isWeakerRiskConfig(previous, next);
       if (weaker.length > 0) {
         throw new Error(`Pravidla jdou dnes jen zpřísnit: ${weaker.join(', ')} (reset po konci session)`);
       }
@@ -381,13 +373,14 @@ export async function startLocalCopierExecutionAgent(
 
     // Čistá metadata/pravidla bez změny execution konfigurace nemají důvod
     // rušit ARM ani autoritativní preflight pozic.
-    if (!executionChanged && mode === 'update') {
+    if ((metadataOnly || inPlaceCutTightening) && mode === 'update') {
       if (options.onGroupChanged) {
         await options.onGroupChanged(structuredClone(next));
         persistedNext = true;
       }
       try {
-        options.controller.updateGroupMetadata(next);
+        if (inPlaceCutTightening) await options.controller.updateGroupRiskInPlace(next);
+        else options.controller.updateGroupMetadata(next);
         group = next;
       } catch (error) {
         if (persistedNext && options.onGroupChanged) {
@@ -668,7 +661,8 @@ export async function startLocalCopierExecutionAgent(
             assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
           }
         }
-        if (current.armed && options.controller.status().armed
+        if (current.armed && !current.shadowMode
+          && options.controller.status().armed && !options.controller.status().shadowMode
           && armMatchesCurrentConfiguration(command, options.controller.status())) {
           // Pouze metadata/risk pravidla bez execution změny byla aplikována
           // in-place; explicitní ARM sync nesmí zdravý runtime shodit.

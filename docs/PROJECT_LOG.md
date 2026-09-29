@@ -248,6 +248,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       jen zbývající rozpočet z `leaderEvent.receivedAt`, včetně testu, kde
       brokerová hydratace spotřebuje celé okno. Soubor je záměrně beze změny,
       protože ho v této worktree vlastní paralelní Codex.
+- [ ] **ST17 baseline množiny účtů pro session tighten-only** — balíček 8b
+      sjednotil relay/loopback podle P-B pro ruční re-enable followera a změnu
+      on-submit/on-fill, ale záměrně nerozhodl, zda má session držet zvláštní
+      baseline množiny účtů proti pozdějšímu odebrání/přidání. Vyžaduje
+      samostatné produktové rozhodnutí; současná flat-only execution brána
+      zůstává fail-closed.
 
 ## Deník
 
@@ -350,6 +356,46 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   `@crxjs/vite-plugin` v `extension/`; controller/testy jsou bez TS chyby.
   Bez commitu, push/deploye, instalace závislostí, broker API, ARM/Flatten ani
   reinstalu workeru.
+
+### 2026-09-29 — Balíček 8b: review V1/V3/V15, politika P-A/P-B (Codex)
+
+- Rozhodnutí P-A: změny velikosti/topologie (`multiplier`, `maxContracts`,
+  replikační mode, účty, leader) se za otevřené pozice dál odmítají ještě před
+  DISARM s českou hláškou, že uložení jde jen ve flat stavu a běžící kopírka
+  zůstává na starém nastavení. In-place změna násobku uprostřed obchodu se
+  nezavádí, protože by vytvořila zbytek pozice. Rozhodnutí P-B: ruční re-enable
+  followera a přechody on-submit/on-fill nejsou session tighten-only porušení;
+  worker je dál pustí jen po dvojím read-only flat/no-working ověření. ST17
+  baseline množiny účtů zůstává otevřený.
+- Metadata cesta má explicitní whitelist `name`, `color` a pouze zpřísňující
+  safety změny. Vypnutí `autoCloseFollowerPositions`, `preventHedging`,
+  `positionReconciler` nebo `disableReplicationOnBreach` je oslabení a po
+  prvním LIVE ARM se odmítne bez persistence, DISARM či runtime mutace.
+  Přidání/snížení follower cutu a let-run→close-copy mají oddělenou in-place
+  cestu serializovanou na `eventTail`; aktivní let-run cut se opravdu dokončí.
+- Relay mapuje stale follower `enabled` z runtime skupiny jako worker, P-B
+  příkazy neblokuje a risk-snižující `enabled=false`/`mode=off` pustí i bez
+  čitelného baseline; worker zůstává autoritou. SHADOW ARM→LIVE už není no-op.
+- V15 odečítá z cut prostoru realizovanou i otevřenou ztrátu odvozenou jako
+  `max(0, cashBalanceUsd - netLiq)`, takže stejný open P&L není započten dvakrát
+  proti rezervě založené na net liq. `prop-reserve` vždy používá close-copy i
+  při uživatelském let-run; bezpečnější jednoduchá varianta nenechá pozici nad
+  likvidací bez leader exitů.
+- Connection/error a budoucí `resynced`/`route-gap` zvyšují ingress control
+  verzi, durable follower toggle ji kontroluje a při race vrátí původní zápis.
+  Heartbeat release ručního trade cutu čeká už při jediném queued trade eventu.
+  Poslední group preflight je před durable CAS; event během fsyncu proto
+  dokončí konzistentní DISARMED přepnutí místo staré group nad clean stavem.
+- Převzaté sondy před opravou reprodukovaly očekávané pády A1/A1b/A2/A3/A,
+  D(-100/-150), R1-R5 a post-commit stav; heartbeat regrese po dočasném návratu
+  staré podmínky také padla. Po opravě cíleně prošlo 254/254 a navazující
+  risk/adapter sada 97/97. Předepsaná plná copier sada: 169 souborů prošlo,
+  1 skipped; 1978 testů prošlo, 1 todo, exit 0. `dynamicBrokerRouting` 5/5,
+  exit 0. `npx tsc --noEmit` hlásí jen povolené staré chyby `extension/`
+  (Chrome typy a `@crxjs/vite-plugin`); stejný root typecheck s vyloučenou
+  `extension/` prošel exit 0. Bez commitu, push/deploye, npm instalace,
+  broker API, ARM/Flatten produkce či reinstalu workeru; `brokerRouter.ts`
+  zůstal beze změny.
 
 ### 2026-09-29 — Balíček 8: V1 transakční config, V3 scoped fence a V15 prop-reserve (Codex)
 

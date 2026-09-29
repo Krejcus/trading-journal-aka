@@ -203,6 +203,42 @@ describe('manual follower participation', () => {
     h.controller.stop();
   });
 
+  it('connection výpadek během durable zápisu vrátí původní účast', async () => {
+    const h = await harness();
+    h.controller.arm();
+    let calls = 0;
+    await expect(h.controller.setFollowerEnabled(200, false, async next => {
+      calls += 1;
+      await h.persist(next);
+      if (calls === 1) {
+        h.broker.emitEvent({ type: 'connection', connected: false, at: Date.now() });
+      }
+    })).rejects.toThrow('Stav se během ověření změnil');
+    await h.controller.waitForIdle();
+    expect(calls).toBe(2);
+    expect(h.persisted().followers[0].enabled).not.toBe(false);
+    expect(h.controller.status()).toMatchObject({ armed: false, lastDisarm: { code: 'transport-lost' } });
+    h.controller.stop();
+  });
+
+  it.each([
+    ['resynced', { type: 'connection', connected: true, resynced: true, at: Date.now() }],
+    ['route-gap', { type: 'route-gap', at: Date.now() }],
+  ] as const)('%s ingress během durable zápisu vrátí původní účast', async (_name, event) => {
+    const h = await harness();
+    h.controller.arm();
+    let calls = 0;
+    await expect(h.controller.setFollowerEnabled(200, false, async next => {
+      calls += 1;
+      await h.persist(next);
+      if (calls === 1) h.broker.emitEvent(event as never);
+    })).rejects.toThrow('Stav se během ověření změnil');
+    await h.controller.waitForIdle();
+    expect(calls).toBe(2);
+    expect(h.persisted().followers[0].enabled).not.toBe(false);
+    h.controller.stop();
+  });
+
   it('zapnutí zachová on-fill a kopie začne až u následujícího vstupu', async () => {
     const h = await harness();
     await h.controller.setFollowerEnabled(200, false, h.persist);

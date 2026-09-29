@@ -407,8 +407,20 @@ const relayRiskGroup = (
   payload: Record<string, unknown>,
   previousGroup: CopyGroupConfig,
 ): CopyGroupConfig | null => {
+  const mapRuntimeParticipation = (incoming: CopyGroupConfig): CopyGroupConfig => (
+    incoming.id !== previousGroup.id
+      ? incoming
+      : {
+          ...incoming,
+          followers: incoming.followers.map(follower => ({
+            ...follower,
+            enabled: previousGroup.followers.find(item => item.accountId === follower.accountId)?.enabled !== false,
+          })),
+        }
+  );
   if (command.type === 'arm-live' || command.type === 'activate-group') {
-    return payload.group as CopyGroupConfig;
+    if (payload.group == null && command.type === 'arm-live') return null;
+    return mapRuntimeParticipation(validatedRelayGroup(payload.group));
   }
   if (command.type !== 'copy-command') return null;
   const nested = payload.command as {
@@ -420,7 +432,9 @@ const relayRiskGroup = (
     mode?: unknown;
     enabled?: unknown;
   } | undefined;
-  if (nested?.type === 'update-group') return validatedRelayGroup(nested.group);
+  if (nested?.type === 'update-group') {
+    return mapRuntimeParticipation(validatedRelayGroup(nested.group));
+  }
   if (nested?.type !== 'set-multiplier' && nested?.type !== 'set-replication'
     && nested?.type !== 'set-follower-enabled') return null;
   if (nested.groupId !== previousGroup.id || typeof nested.accountId !== 'number') {
@@ -436,6 +450,12 @@ const relayRiskGroup = (
   });
   if (!found) throw new Error('invalid-relay-command-payload');
   return validatedRelayGroup({ ...previousGroup, followers });
+};
+
+const relayCommandReducesRiskWithoutBaseline = (payload: Record<string, unknown>): boolean => {
+  const nested = payload.command as { type?: unknown; enabled?: unknown; mode?: unknown } | undefined;
+  return (nested?.type === 'set-follower-enabled' && nested.enabled === false)
+    || (nested?.type === 'set-replication' && nested.mode === 'off');
 };
 
 const relayNeedsTightenOnly = (
@@ -476,9 +496,16 @@ const enforceRelayTightenOnly = async (options: {
   try {
     previousGroup = validatedRelayGroup(data.status.group);
   } catch {
+    if (relayCommandReducesRiskWithoutBaseline(options.payload)) return;
     throw new Error('tighten-only');
   }
-  const nextGroup = relayRiskGroup(options.command, options.payload, previousGroup);
+  let nextGroup: CopyGroupConfig | null;
+  try {
+    nextGroup = relayRiskGroup(options.command, options.payload, previousGroup);
+  } catch (reason) {
+    if (relayCommandReducesRiskWithoutBaseline(options.payload)) return;
+    throw reason;
+  }
   if (!nextGroup) return;
   if (isWeakerRiskConfig(previousGroup, nextGroup).length > 0) {
     throw new Error('tighten-only');

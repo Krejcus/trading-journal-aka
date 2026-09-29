@@ -198,7 +198,7 @@ describe('brána změny skupiny a durable openLots', () => {
     } finally { controller.stop(); }
   });
 
-  it('broker event během durable commit hranice zabrání aplikaci nové group', async () => {
+  it('broker event během durable commit hranice nenechá starou group nad vyčištěným stavem', async () => {
     const now = Date.UTC(2026, 8, 3, 7);
     const { controller, broker, store } = await harness(now + 3_600_000, now);
     const commit = store.commit.bind(store);
@@ -207,8 +207,12 @@ describe('brána změny skupiny a durable openLots', () => {
       return commit(snapshot, expectedRevision);
     });
     try {
-      await expect(controller.reconfigureGroup(nextGroup)).rejects.toThrow('během kontroly');
-      expect(controller.status()).toMatchObject({ armed: false });
+      await expect(controller.reconfigureGroup(nextGroup)).resolves.toBeUndefined();
+      expect(controller.status()).toMatchObject({
+        armed: false,
+      });
+      expect(controller.status().followerParticipation?.map(item => item.accountId)).toEqual([200]);
+      expect((await store.load()).safety.dailyStats!.openLots).toHaveLength(0);
       expect(broker.placedRequests()).toEqual([]);
     } finally { controller.stop(); }
   });

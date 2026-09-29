@@ -39,6 +39,20 @@ const riskConfig = (): CopierRiskConfig => ({
 type PositiveSafetyLimit = 'dailyMaxLosingTrades' | 'dailyMaxTrades' | 'dailyLossLimitUsd';
 
 describe('isWeakerRiskConfig — pravidla skupiny', () => {
+  it.each([
+    'autoCloseFollowerPositions',
+    'preventHedging',
+    'positionReconciler',
+    'disableReplicationOnBreach',
+  ] as const)('označí vypnutí bezpečnostní pojistky %s', field => {
+    const previous = riskConfig();
+    previous.safety![field] = true;
+    const next = riskConfig();
+    next.safety![field] = false;
+
+    expect(isWeakerRiskConfig(previous, next)).toContain(`safety.${field}`);
+  });
+
   it.each<readonly [PositiveSafetyLimit, number]>([
     ['dailyMaxLosingTrades', 3],
     ['dailyMaxTrades', 11],
@@ -232,6 +246,26 @@ describe('isWeakerRiskConfig — akce pravidel dne', () => {
 });
 
 describe('isWeakerRiskConfig — followeři', () => {
+  it('P-B nepovažuje ruční re-enable ani přepnutí on-submit/on-fill za session oslabení', () => {
+    const previous = riskConfig();
+    previous.followers[0].enabled = false;
+    previous.followers[0].mode = 'on-submit';
+    const next = riskConfig();
+    next.followers[0].enabled = true;
+    next.followers[0].mode = 'on-fill';
+
+    expect(isWeakerRiskConfig(previous, next)).toEqual([]);
+  });
+
+  it('mode off → aktivní dál považuje za oslabení', () => {
+    const previous = riskConfig();
+    previous.followers[0].mode = 'off';
+    const next = riskConfig();
+    next.followers[0].mode = 'on-fill';
+
+    expect(isWeakerRiskConfig(previous, next)).toEqual(['followers.22.mode']);
+  });
+
   it('označí vyšší nebo vypnutý dailyLossCutUsd, ale dovolí nižší či nově zapnutý limit', () => {
     const previous = riskConfig();
     const higher = riskConfig();
