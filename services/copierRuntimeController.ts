@@ -577,8 +577,16 @@ export interface CopierRuntimeController {
   ): Promise<CopyGroupConfig>;
   /** Explicitní ruční Flatten jednoho účtu. Nikdy se nespouští automaticky. */
   flattenAccount(accountId: number, operationId: string): Promise<ManualFlattenResult>;
-  /** Zavře potvrzenou kopii followera a vyřadí jej jen do čistého konce obchodu. */
-  flattenFollowerTrade(accountId: number, operationId: string): Promise<ManualFlattenResult>;
+  /**
+   * Zavře potvrzenou kopii followera a vyřadí jej jen do čistého konce obchodu.
+   * `onAdmitted` se zavolá po durable přijetí cutu, ještě před zavíráním
+   * (B1: příkazová fronta agenta nesmí čekat na celé zavření).
+   */
+  flattenFollowerTrade(
+    accountId: number,
+    operationId: string,
+    options?: { onAdmitted?: () => void },
+  ): Promise<ManualFlattenResult>;
   /** Explicitní ruční Flatten leadera i všech followerů ve skupině. */
   flattenGroup(operationId: string): Promise<ManualFlattenResult>;
   /** Ruční uzavření nejasné operace; nikdy nic neposílá a vynutí novou reconciliation. */
@@ -6309,6 +6317,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const flattenFollowerForCurrentTrade = (
     accountId: number,
     operationId: string,
+    onAdmitted?: () => void,
   ): Promise<ManualFlattenResult> => {
     const normalizedOperationId = operationId.trim();
     if (!/^[a-zA-Z0-9:_-]{8,120}$/.test(normalizedOperationId)) {
@@ -6370,6 +6379,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         throw error;
       }
       recordFollowerCutAudit(cut);
+      onAdmitted?.();
       return { cut, follower };
     });
     // Jen durable admission cutu je serializovaná s leader eventy. Samotné
@@ -14393,8 +14403,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (!allowed.has(accountId)) throw new Error('Účet není součástí této copy group');
       return emergencyFlatten([accountId], operationId);
     },
-    async flattenFollowerTrade(accountId, operationId) {
-      return flattenFollowerForCurrentTrade(accountId, operationId);
+    async flattenFollowerTrade(accountId, operationId, flattenOptions) {
+      return flattenFollowerForCurrentTrade(accountId, operationId, flattenOptions?.onAdmitted);
     },
     async flattenGroup(operationId) {
       if (group.leaderAccountId == null) throw new Error('Copy group nemá leader účet');

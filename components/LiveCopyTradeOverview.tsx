@@ -1422,6 +1422,18 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       const result = commandAdapter && targetsExecutionRuntime
         ? await commandAdapter.execute(command)
         : undefined;
+      if (result && result.type === 'flatten' && result.pending) {
+        // B1: worker cut přijal a zavírá na pozadí; výsledek ukáže řádek účtu.
+        await update?.();
+        setToast({
+          tone: 'info',
+          text: 'Follower se zavírá na pozadí a čeká na další obchod. Výsledek uvidíš u účtu; ostatní účty i kopírka pokračují.',
+          ...('accountId' in command && typeof command.accountId === 'number'
+            ? { accountIds: [command.accountId] }
+            : {}),
+        });
+        return true;
+      }
       if (result && result.type === 'flatten' && !result.flat) {
         throw new Error(manualFlattenFailureMessage(result));
       }

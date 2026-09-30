@@ -420,7 +420,7 @@ describe('local copier execution agent', () => {
       type: 'copy-command',
       command: { type: 'flatten-follower-trade', groupId: 'runtime-test', accountId: 22, operationId: 'flatten-trade-123' },
     })).status).toBe(200);
-    expect(runtime.flattenFollowerTrade).toHaveBeenCalledWith(22, 'flatten-trade-123');
+    expect(runtime.flattenFollowerTrade).toHaveBeenCalledWith(22, 'flatten-trade-123', expect.objectContaining({ onAdmitted: expect.any(Function) }));
 
     expect((await post(running, nonce, {
       type: 'copy-command',

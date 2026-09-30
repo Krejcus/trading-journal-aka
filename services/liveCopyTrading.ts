@@ -253,6 +253,12 @@ export type LiveCopyTradingCommandResult =
     canceledOrders: number;
     submittedClosures: number;
     flat: boolean;
+    /**
+     * B1: Flatten followera do konce obchodu je přijatý a zavírání běží na
+     * pozadí workeru. Nejde o potvrzený flat ani o selhání; výsledek ukáže
+     * stav cutu followera. Starší worker pole neposílá.
+     */
+    pending?: boolean;
     remainingPositionAccounts: number[];
     workingOrderAccounts: number[];
     /** Per-account diagnostika novějšího execution runtime; starší workery ji nemusí poslat. */

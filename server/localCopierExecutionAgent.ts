@@ -40,6 +40,7 @@ const DEFAULT_DEVELOPMENT_ORIGINS = new Set([
   'http://127.0.0.1:3011',
 ]);
 const LOCAL_ARM_DEADLINE_MS = 30_000;
+const FOLLOWER_TRADE_FLATTEN_ACK_MS = 3_000;
 
 export const boundedLocalArmDeadline = (rawDeadline: unknown, receivedAt = Date.now()): number => {
   const parsed = typeof rawDeadline === 'string' ? Number(rawDeadline) : NaN;
@@ -60,6 +61,12 @@ export interface PrepareGroupAccountsResult {
 
 interface LocalCopierExecutionAgentOptions {
   controller: CopierRuntimeController;
+  /**
+   * B1: jak dlouho po durable přijetí čekat na potvrzené zavření followera,
+   * než příkaz vrátí `pending`. Relay i FIFO agenta jsou sériové; dřív tu
+   * DISARM, kill switch i Flatten All z telefonu čekaly až 90 s.
+   */
+  followerTradeFlattenAckMs?: number;
   group: CopyGroupConfig;
   port?: number;
   host?: '127.0.0.1';
@@ -485,6 +492,41 @@ export async function startLocalCopierExecutionAgent(
     return configurationResult();
   };
 
+  const flattenFollowerTradeWithBoundedWait = async (
+    accountId: number,
+    operationId: string,
+  ): Promise<Extract<LiveCopyTradingCommandResult, { type: 'flatten' }>> => {
+    let markAdmitted!: () => void;
+    const admitted = new Promise<'admitted'>(resolve => { markAdmitted = () => resolve('admitted'); });
+    const completion = options.controller.flattenFollowerTrade(accountId, operationId, { onAdmitted: markAdmitted });
+    // Odmítnutí před přijetím (není ARM, kill switch, visící operace…) se
+    // vrací hned jako chyba; teprve přijatý cut smí doběhnout na pozadí.
+    const first = await Promise.race([admitted, completion]);
+    if (first !== 'admitted') return { type: 'flatten', ...first };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const quick = await Promise.race([
+      completion,
+      new Promise<null>(resolve => {
+        timer = setTimeout(() => resolve(null), options.followerTradeFlattenAckMs ?? FOLLOWER_TRADE_FLATTEN_ACK_MS);
+      }),
+    ]).finally(() => { if (timer) clearTimeout(timer); });
+    if (quick) return { type: 'flatten', ...quick };
+    void completion.then(
+      result => console.log(`${new Date().toISOString()} FLATTEN-FOLLOWER-TRADE done accountId=${accountId} operationId=${operationId} flat=${result.flat}`),
+      reason => console.error(`${new Date().toISOString()} FLATTEN-FOLLOWER-TRADE failed accountId=${accountId} operationId=${operationId}: ${reason instanceof Error ? reason.message : String(reason)}`),
+    );
+    return {
+      type: 'flatten',
+      operationId,
+      accountIds: [accountId],
+      canceledOrders: 0,
+      submittedClosures: 0,
+      flat: false,
+      pending: true,
+      remainingPositionAccounts: [],
+      workingOrderAccounts: [],
+    };
+  };
   const executeCopyCommand = async (command: LiveCopyTradingCommand): Promise<LiveCopyTradingCommandResult> => {
     switch (command.type) {
       case 'update-group': {
@@ -552,7 +594,7 @@ export async function startLocalCopierExecutionAgent(
         if (!group.followers.some(follower => follower.accountId === command.accountId)) {
           throw new Error('Do konce obchodu lze vyřadit pouze follower účet');
         }
-        return { type: 'flatten', ...await options.controller.flattenFollowerTrade(command.accountId, command.operationId) };
+        return flattenFollowerTradeWithBoundedWait(command.accountId, command.operationId);
       case 'flatten-group':
         assertGroupTarget(group, command.groupId);
         return { type: 'flatten', ...await options.controller.flattenGroup(command.operationId) };
