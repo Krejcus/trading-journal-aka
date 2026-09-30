@@ -19,6 +19,13 @@ export interface DynamicBrokerRoutingRequest {
   required: readonly number[];
   /** Účty, které se smějí vynechat výhradně tehdy, když je nevrátí žádný OAuth adresář. */
   optional: readonly number[];
+  /**
+   * Jen auditované vyřazení nedostupných účtů (režim opravy, večerní
+   * výjimka): optional účet, který OAuth sice vrací, ale je neaktivní nebo
+   * bez execution oprávnění (breached), se bere jako nedostupný. Jinde by
+   * takový účet dál zablokoval refresh.
+   */
+  inactiveOptionalAsMissing?: boolean;
 }
 
 interface AccountOwner {
@@ -85,6 +92,14 @@ export function resolveDynamicBrokerRoutes(
       throw new Error(`Účet ${accountId} je viditelný ve více OAuth spojeních; routing nelze bezpečně určit.`);
     }
     const match = matches[0];
+    if (
+      request?.inactiveOptionalAsMissing === true
+      && optionalSet.has(accountId)
+      && (!match.account.active || !match.account.canTrade)
+    ) {
+      missingOptional.push(accountId);
+      continue;
+    }
     if (!match.account.active) throw new Error(`Účet ${accountId} není u Tradovate aktivní`);
     if (!match.account.canTrade) throw new Error(`Účet ${accountId} nemá execution oprávnění`);
     if (!match.account.accountSpec) throw new Error(`Účet ${accountId} nemá platné Tradovate Account.name`);

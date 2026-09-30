@@ -676,7 +676,7 @@ describe('local copier execution agent', () => {
   it('operátorsky vyřadí pouze celou starou OAuth-nedostupnou skupinu a novou neARMuje', async () => {
     const runtime = controller();
     const prepareGroupAccounts = vi.fn(async (request: PrepareGroupAccountsRequest) => {
-      expect(request).toEqual({ required: [33, 44], optional: [11, 22] });
+      expect(request).toEqual({ required: [33, 44], optional: [11, 22], inactiveOptionalAsMissing: true });
       return { missingOptional: [11, 22] };
     });
     running = await startLocalCopierExecutionAgent({

@@ -52,6 +52,8 @@ export const boundedLocalArmDeadline = (rawDeadline: unknown, receivedAt = Date.
 export interface PrepareGroupAccountsRequest {
   required: readonly number[];
   optional: readonly number[];
+  /** Viz DynamicBrokerRoutingRequest: jen auditované vyřazení nedostupných účtů. */
+  inactiveOptionalAsMissing?: boolean;
 }
 
 export interface PrepareGroupAccountsResult {
@@ -322,6 +324,8 @@ export async function startLocalCopierExecutionAgent(
     reconfigurationRequest: {
       waiveUnverifiableFollowerOwnership?: true;
       retireMissingOldGroup?: { groupId: string; accountIds: number[]; reason: string };
+      /** Jen explicitní uložení skupiny smí provést vyřazení z režimu opravy (E6). */
+      allowStartupRepair?: true;
     } = {},
   ): Promise<LiveCopyTradingCommandResult> => {
     // Režim opravy po startu: uložená skupina má účty, které nejsou v OAuth
@@ -330,14 +334,35 @@ export async function startLocalCopierExecutionAgent(
     // změna odmítne, jinak by ARM zůstal zablokovaný.
     const startupRepair = options.controller.status().startupGroupRepair;
     if (startupRepair && startupRepair.groupId === group.id && next.id === group.id
+      && !reconfigurationRequest.retireMissingOldGroup
+      && reconfigurationRequest.allowStartupRepair !== true) {
+      // E6 (review 30. 9.): vyřazení bez broker flat důkazu nesmí proběhnout
+      // implicitně v rámci ARM (jeden příkaz z telefonu = vyřazení + ARM).
+      throw new Error(
+        `Skupina je v režimu opravy (nedostupné účty ${startupRepair.unavailableAccountIds.join(', ')}). `
+        + 'Nejdřív ulož opravenou skupinu v editoru, teprve potom kopírku zapni.',
+      );
+    }
+    if (startupRepair && startupRepair.groupId === group.id && next.id === group.id
       && !reconfigurationRequest.retireMissingOldGroup) {
       const stillPresent = startupRepair.unavailableAccountIds
         .filter(accountId => copyGroupAccountIds(next).includes(accountId));
       if (stillPresent.length > 0) {
-        throw new Error(
-          `Skupina má nedostupné účty ${stillPresent.join(', ')} (breached nebo odpojené v OAuth). `
-          + 'Odeber je a vyber nového leadera z dostupných účtů.',
-        );
+        // E3 (review 30. 9.): při dočasném výpadku OAuth během startu jsou
+        // účty zdravé a po obnově znovu vidět; worker je ale načte až po
+        // restartu. Radíme proto správný krok, ne jejich odebrání.
+        let availableAgain = false;
+        try {
+          await previewAccounts({ required: stillPresent, optional: [] });
+          availableAgain = true;
+        } catch {
+          availableAgain = false;
+        }
+        throw new Error(availableAgain
+          ? `Účty ${stillPresent.join(', ')} jsou v OAuth znovu dostupné, při startu workeru ale nebyly. `
+            + 'Restartuj Mac worker, aby skupinu načetl znovu; kopírka zůstává VYPNUTO.'
+          : `Skupina má nedostupné účty ${stillPresent.join(', ')} (breached nebo odpojené v OAuth). `
+            + 'Odeber je a vyber nového leadera z dostupných účtů.');
       }
       mode = 'activate';
       reconfigurationRequest = {
@@ -403,8 +428,14 @@ export async function startLocalCopierExecutionAgent(
       }
     }
     options.controller.preflightGroupChange(next, { allowGroupChange: mode === 'activate' });
+    // E1 (review 30. 9.): částečná oprava ponechává část starých účtů;
+    // účet nesmí být současně required (nová skupina) i optional (stará).
     const routingRequest = retirement
-      ? { required: copyGroupAccountIds(next), optional: previousIds }
+      ? {
+        required: copyGroupAccountIds(next),
+        optional: previousIds.filter(accountId => !copyGroupAccountIds(next).includes(accountId)),
+        inactiveOptionalAsMissing: true,
+      }
       : accountsForRoutingChange(previous, next);
     if ((mode === 'activate' || topologyChanged) && options.controller.status().armed) {
       await previewAccounts(routingRequest);
@@ -532,6 +563,7 @@ export async function startLocalCopierExecutionAgent(
       case 'update-group': {
         const next = mappedGroup(group, command.group);
         return applyGroup(next, 'update', {
+          allowStartupRepair: true,
           ...(command.waiveUnverifiableFollowerOwnership === true
             ? { waiveUnverifiableFollowerOwnership: true as const }
             : {}),

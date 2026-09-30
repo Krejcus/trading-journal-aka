@@ -13286,7 +13286,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           !ownershipRisks.some(item => item.epochId === epochId)
         )) ? 'leader-flat guard' : '',
         autoCloseInFlight ? 'auto-close' : '',
-        recoveryInFlight || (pendingConnectionRecovery && !waivesBlockedRecovery)
+        // E2 (review 30. 9.): v režimu opravy recovery nikdy neuspěje, protože
+        // nedostupný leader nemá route. Vyřazení právě nedostupných účtů ji
+        // nahrazuje; zbylé účty níže projdou autoritativní flat kontrolou.
+        recoveryInFlight || (pendingConnectionRecovery && !waivesBlockedRecovery && !partialRepairRetirement)
           ? 'connection recovery'
           : '',
         cooldownPending ? 'cooldown transition' : '',
