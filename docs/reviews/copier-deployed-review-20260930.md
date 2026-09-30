@@ -67,5 +67,6 @@ Pořadí schválené Filipem: D1, A3, A2, A1, B1, pak Flatten dialog a režim op
 | F1 | caa63392 | Dialog Flatten používá stejná pravidla odeslání jako `runCommand`; při neověřeném stavu varuje, že se akce přesto odešle. |
 | E1–E3, E6, C4 | ec335564 | Oprava skupiny s ponechanými účty projde routingem; breached účet viditelný jako neaktivní jde vyřadit; connection recovery nezablokuje opravu; E3 radí restart workeru; ARM nikdy implicitně nevyřazuje. |
 | ověřovací review | ae5213be | D1 porovnává followera s živým leaderem místo přičítání gap fillů; A3 odkládá fail-closed na fill u on-fill followerů; A2 bere jako neškodné jen canceled/rejected bez fillu u známého orderu; B1 hlásí přijetí i opakované operaci a UI ukáže selhané zavření. |
+| 2. ověřovací review | 064065d3 | A3: replace zpožděného reversalu čekajícího na on-fill fill vypne kopírku před dispatchem (modify by kopii zvětšil na celý reversal); D1: změnu followera vysvětlí jen filly známých orderů a ne u followera s nulovou výjimkou; A2: i `waived` odmítnutí je známý order. |
 
 Zbývá (neopraveno v tomto kole): A4, A5, A6, B2–B5, C1–C3, D2–D5, F2–F7, E4/E5 a nízké položky.

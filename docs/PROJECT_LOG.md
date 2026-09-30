@@ -264,7 +264,8 @@ Filip chtěl review celé nasazené verze (6 paralelních reviewerů, bez
 Codexe). Výsledek a tabulka 25 nálezů: `docs/reviews/copier-deployed-review-20260930.md`.
 Opraveno v pořadí, které Filip schválil (D1, A3, A2, A1, B1, Flatten dialog,
 režim opravy), větev `claude/copier-review-fixes-20260930`; ověřovací review
-našlo mezery v D1/A3/A2/B1 a ty jsou opravené v ae5213be.
+našlo mezery v D1/A3/A2/B1 a ty jsou opravené v ae5213be, druhé kolo
+(A3 replace, D1 cizí gap fill) v 064065d3.
 
 Rozhodnutí a proč:
 - **D1:** skutečný reconnect nekritické route v 10s lhůtě routeru dostane
