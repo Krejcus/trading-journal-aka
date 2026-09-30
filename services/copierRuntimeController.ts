@@ -10850,6 +10850,39 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return differences.length > 0 ? `route-gap-divergence: ${differences.join('; ')}` : null;
   };
 
+  /**
+   * A2 (review 30. 9.): nulová výjimka vyřazeného followera je vázaná na
+   * verzi obchodních událostí účtu. Neškodná událost, která flat stav
+   * nemění (Position 0, pozdní echo odmítnutého/zrušeného orderu bez fillu),
+   * ji nesmí zneplatnit, jinak nový SL/TP leadera nedostane nikdo a skupina
+   * se vypne. Posouvá se jen o právě jednu událost, fill nikdy.
+   */
+  const restampZeroSuppressionAfterBenignIngress = (
+    event: BrokerEvent,
+    ingressObservationVersion: number | undefined,
+  ): void => {
+    if (ingressObservationVersion == null) return;
+    const accountId = event.type === 'position'
+      ? event.position.accountId
+      : event.type === 'order'
+        ? event.order.accountId
+        : null;
+    if (accountId == null || accountId === group.leaderAccountId) return;
+    const benign = event.type === 'position'
+      ? event.position.netQuantity === 0
+      : event.type === 'order'
+        && !isOpenOrderStatus(event.order.status)
+        && (event.order.filledQuantity ?? 0) === 0;
+    if (!benign) return;
+    const prefix = intentionalSuppressionKey(accountId, '');
+    for (const [key, suppression] of intentionalEntrySuppressions) {
+      if (!key.startsWith(prefix)) continue;
+      if (suppression.allowedNet !== 0 || !suppression.zeroEvidence) continue;
+      if (suppression.observationVersion !== ingressObservationVersion - 1) continue;
+      intentionalEntrySuppressions.set(key, { ...suppression, observationVersion: ingressObservationVersion });
+    }
+  };
+
   const flushDeferredStaleFailClosed = (): void => {
     const error = deferredStaleFailClosed;
     deferredStaleFailClosed = null;
@@ -10863,8 +10896,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     admissionGeneration: number,
     eventReceivedAt: number,
     flatSweepIngressWave?: FlatSweepIngressWave,
+    ingressObservationVersion?: number,
   ) => {
     if (stopped) return;
+    restampZeroSuppressionAfterBenignIngress(event, ingressObservationVersion);
     const now = clock();
     if (event.type === 'order') rememberLiveOrder(event.order);
     scheduleRouteEpochRefresh();
@@ -13569,6 +13604,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     if (tradeIngress) pendingBrokerEvents += 1;
     const admissionGeneration = safetyGeneration;
+    const ingressObservationVersion = tradeIngress && ingressAccountId != null
+      ? tradeObservationVersionByAccount.get(ingressAccountId)
+      : undefined;
     eventTail = eventTail
       .then(() => {
         if (tradeIngress && ingressAccountId != null) {
@@ -13586,6 +13624,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           admissionGeneration,
           eventReceivedAt,
           flatSweepIngressWave,
+          ingressObservationVersion,
         ).finally(flushDeferredStaleFailClosed);
       })
       .catch(failClosed)
