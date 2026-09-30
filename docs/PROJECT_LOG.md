@@ -260,6 +260,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ### 2026-09-30 — Review nasazené kopírky 061836f6 a opravy nejvážnějších nálezů (Claude)
 
+**Nasazeno 30. 9. na Filipovo „nasaď“:** web acaf509d dopoledne; worker
+a iPhone až večer (18:57), protože Filip mezitím kopírku zapnul a brána
+reinstallu správně zastavila. Před reinstallem read-only reconcile vyčistil
+divergenci leadera 65333277 po transport chybě; worker adoptoval durable
+skupinu leader 65333343 + follower 65333277, po restartu reconcile čistý.
+iPhone čistou reinstalací (znovu povolit oznámení).
+
 Filip chtěl review celé nasazené verze (6 paralelních reviewerů, bez
 Codexe). Výsledek a tabulka 25 nálezů: `docs/reviews/copier-deployed-review-20260930.md`.
 Opraveno v pořadí, které Filip schválil (D1, A3, A2, A1, B1, Flatten dialog,
