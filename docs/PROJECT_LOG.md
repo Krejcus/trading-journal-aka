@@ -258,6 +258,41 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-30 — Review nasazené kopírky 061836f6 a opravy nejvážnějších nálezů (Claude)
+
+Filip chtěl review celé nasazené verze (6 paralelních reviewerů, bez
+Codexe). Výsledek a tabulka 25 nálezů: `docs/reviews/copier-deployed-review-20260930.md`.
+Opraveno v pořadí, které Filip schválil (D1, A3, A2, A1, B1, Flatten dialog,
+režim opravy), větev `claude/copier-review-fixes-20260930`; ověřovací review
+našlo mezery v D1/A3/A2/B1 a ty jsou opravené v ae5213be.
+
+Rozhodnutí a proč:
+- **D1:** skutečný reconnect nekritické route v 10s lhůtě routeru dostane
+  stejný route snapshot jako plánovaná obměna. Změna pozice followera v mezeře
+  je v pořádku jen tehdy, když teď sedí na cíl podle živého leadera — přičítat
+  gap filly k modelu nejde, model je může mít už z REST čtení (dvojí započtení).
+- **A3:** zpožděný reversal kopíruje jen exit (risk-redukující), vstup pozdě
+  ne; fail-closed až po dispatchi, u on-fill followerů až po fillu téhož orderu.
+- **A2:** neškodná událost vyřazeného followera je jen Position 0 nebo
+  canceled/rejected bez fillu u známého orderu. Tradovate Order(Filled) může
+  přijít dřív než Fill s filledQuantity 0 — nikdy ho nebrat jako neškodný.
+- **B1:** Flatten followera do konce obchodu vrací po durable přijetí + max 3 s
+  `pending`; relay i FIFO agenta jsou sériové a brzdy z telefonu dřív čekaly
+  až 90 s. Starší iOS shell `pending` nezná a ukáže falešnou chybu → při
+  nasazení přeinstalovat i iPhone.
+- **Režim opravy:** vyřazení bez flat důkazu jen explicitním uložením skupiny,
+  nikdy v rámci ARM (E6); neaktivní (breached) optional účet se bere jako
+  nedostupný jen při auditovaném vyřazení.
+
+Neopraveno (další kolo): A4 samostatný TP před vyplněním limitního vstupu
+followera, A5 rozpočet sweepu 6 s > limit stáří 5 s, A6 unhandled rejection
+při ENOSPC, B2 souběžný liquidate nouzového Flattenu s hlavní lane, B3 ARM
+během nouzového Flattenu, B5 ruční day-lock v obchodu nepřežije restart,
+C1–C3 prop cap V15 (DLL jako zbývající rezerva, nerealizovaný zisk), D2
+deadline obměny 15 s < sync 45 s, F2 odmítnutý ARM jako „nepotvrzené“, F3
+toast po „Zrušit“, F4 starý výsledek Kontroly pozic. Pozice vzniklá na
+vyřazeném followerovi bez order eventu se neodhalí ani při TP (starší).
+
 ### 2026-09-29 — Nasazení oprav kopírky (Claude, na Filipovo „nasaď")
 
 - Web: main 34b8cda1 (Vercel READY), pak oprava 5f6bf7f2. Worker: reinstall

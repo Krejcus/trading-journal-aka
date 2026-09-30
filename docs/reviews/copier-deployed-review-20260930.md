@@ -52,3 +52,20 @@ v session nejde obejít, router neposílá příkaz přes cizí spojení, V7, V1
 - Po „Flatten followera do konce obchodu“ počítat s tím, že brzdy z telefonu mohou čekat;
   v nouzi Flatten/DISARM z Macu nebo přímo v Tradovate (B1).
 - „Zamknout den“ během obchodu nepřežije restart workeru (B5).
+
+## Stav oprav (30. 9., větev `claude/copier-review-fixes-20260930`, Claude)
+
+Pořadí schválené Filipem: D1, A3, A2, A1, B1, pak Flatten dialog a režim opravy.
+
+| Nález | Commit | Co se změnilo |
+|---|---|---|
+| D1 | f5e5345f | Broker po skutečném reconnectu synchronizovaného socketu vrací stejný route snapshot jako po plánované obměně (`resynced` + `reconnected`); router ho předá jen v reconnect lhůtě, controller ho porovná s modelem (rozdíl → fail-closed bez auto-close). |
+| A3 | a50822fa | Zpožděný mixed reversal: exit slice odejde exit-only, vstupní část se pozdě nekopíruje, fail-closed až po dispatchi. |
+| A2 | 1b062017 | Nulová suppression vyřazeného followera se posune o právě jednu neškodnou událost (Position 0, nepracovní order bez fillu); fill a skutečná pozice ji dál ruší. |
+| A1 | 25153fd5 | Synchronní sideline ignoruje acknowledged záznamy jiných epizod; důkaz suppression bere epochu v grace/closing jako předchozí obchod. |
+| B1 | 3c22c771 | Flatten followera do konce obchodu drží frontu agenta i relay jen do durable přijetí + max 3 s, pak vrátí `pending` a zavírá na pozadí. |
+| F1 | caa63392 | Dialog Flatten používá stejná pravidla odeslání jako `runCommand`; při neověřeném stavu varuje, že se akce přesto odešle. |
+| E1–E3, E6, C4 | ec335564 | Oprava skupiny s ponechanými účty projde routingem; breached účet viditelný jako neaktivní jde vyřadit; connection recovery nezablokuje opravu; E3 radí restart workeru; ARM nikdy implicitně nevyřazuje. |
+| ověřovací review | ae5213be | D1 porovnává followera s živým leaderem místo přičítání gap fillů; A3 odkládá fail-closed na fill u on-fill followerů; A2 bere jako neškodné jen canceled/rejected bez fillu u známého orderu; B1 hlásí přijetí i opakované operaci a UI ukáže selhané zavření. |
+
+Zbývá (neopraveno v tomto kole): A4, A5, A6, B2–B5, C1–C3, D2–D5, F2–F7, E4/E5 a nízké položky.
