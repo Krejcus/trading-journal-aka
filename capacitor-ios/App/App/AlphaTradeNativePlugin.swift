@@ -43,6 +43,7 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
         CAPPluginMethod(name: "setShellTheme", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setShellWorld", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setShellPage", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setShellCapture", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getShellTabs", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setShellTabs", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "reportRefreshComplete", returnType: CAPPluginReturnPromise),
@@ -226,6 +227,18 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
             }
             shell.applyPageFromWeb(page)
             call.resolve(["page": page])
+        }
+    }
+
+    @objc public func setShellCapture(_ call: CAPPluginCall) {
+        let open = call.getBool("open") ?? false
+        DispatchQueue.main.async { [weak self] in
+            guard let shell = self?.shellController else {
+                call.reject("Nativní shell není připravený.")
+                return
+            }
+            shell.applyCaptureFromWeb(open)
+            call.resolve(["open": open])
         }
     }
 

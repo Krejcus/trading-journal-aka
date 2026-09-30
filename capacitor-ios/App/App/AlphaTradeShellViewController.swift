@@ -36,6 +36,23 @@ enum AlphaTradeTabCatalog {
     static let barItemCount = slotCount + 2
     static let storageKey = "AlphaTradeShellTabSlots"
 
+    /// Krátký popis pod názvem v menu Více.
+    static func menuSubtitle(_ id: String, isBacktest: Bool) -> String {
+        switch id {
+        case "dashboard": return "Přehled výkonu"
+        case "history": return "Všechny obchody"
+        case "journal": return "Denní zápisy"
+        case "live": return "Živé pozice a kopírování"
+        case "ai": return "Rozbor a otázky"
+        case "lab": return "Analýzy a testy"
+        case "business": return "Finance a cíle"
+        case "network": return "Sledovaní tradeři"
+        case "accounts": return isBacktest ? "Backtest session" : "Prop účty"
+        case "settings": return "Vzhled a upozornění"
+        default: return ""
+        }
+    }
+
     static func destination(_ id: String) -> AlphaTradeTabDestination? {
         destinations.first { $0.id == id }
     }
@@ -119,6 +136,11 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
     private var activeTheme = "dark"
     private var activeWorld = "live"
     private var systemRouteObserver: NSObjectProtocol?
+    private var moreMenuHost: UIHostingController<AlphaTradeMoreMenuView>?
+    private var moreMenuScrim: UIView?
+    /// Zapsat drží výběr, dokud web hlásí otevřený zápis (`applyCaptureFromWeb`).
+    private var captureSelected = false
+    private var captureConfirmTimeout: DispatchWorkItem?
 #if DEBUG
     private var lastTabBarDiagnostic: String?
 #endif
@@ -179,7 +201,7 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
         shellTabBar.delegate = self
         shellTabBar.translatesAutoresizingMaskIntoConstraints = false
         shellTabBar.items = makeTabItems()
-        shellTabBar.selectedItem = tabItem(for: activePage)
+        syncTabSelection()
         configureTabBarAppearance(for: activeTheme)
         view.addSubview(shellTabBar)
         let height = shellTabBar.heightAnchor.constraint(equalToConstant: 49 + view.safeAreaInsets.bottom)
@@ -590,12 +612,37 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
         }
     }
 
-    /// The bar item that represents a web page, or nil when the page lives in More.
-    private func tabItem(for page: String) -> UITabBarItem? {
-        guard let index = barLayout.firstIndex(where: { $0.id == page }),
+    private func tabItem(forDestination id: String) -> UITabBarItem? {
+        guard let index = barLayout.firstIndex(where: { $0.id == id }),
               let items = shellTabBar.items,
               items.indices.contains(index) else { return nil }
         return items[index]
+    }
+
+    /// Jediné místo, které rozhoduje, kde stojí skleněná pilulka výběru:
+    /// otevřený zápis → Zapsat, otevřené menu → Více, jinak aktuální stránka;
+    /// stránka, která žije jen v menu (Lab, LIVE, Nastavení…), svítí na Více.
+    private func syncTabSelection() {
+        let target: UITabBarItem?
+        if captureSelected {
+            target = tabItem(forDestination: AlphaTradeTabCatalog.capture.id)
+        } else if moreMenuHost != nil {
+            target = tabItem(forDestination: AlphaTradeTabCatalog.more.id)
+        } else {
+            target = tabItem(forDestination: activePage) ?? tabItem(forDestination: AlphaTradeTabCatalog.more.id)
+        }
+        if shellTabBar.selectedItem !== target {
+            shellTabBar.selectedItem = target
+        }
+    }
+
+    /// Web hlásí otevření a zavření zápisu obchodu; pilulka pak zůstane na
+    /// Zapsat po celou dobu a po zavření sklouzne zpět na stránku.
+    func applyCaptureFromWeb(_ open: Bool) {
+        captureConfirmTimeout?.cancel()
+        captureConfirmTimeout = nil
+        captureSelected = open
+        syncTabSelection()
     }
 
     private func refreshTabAvailability() {
@@ -609,32 +656,39 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
     func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
         let layout = barLayout
         guard layout.indices.contains(item.tag) else { return }
-        if !handle(layout[item.tag]) {
-            // UIKit commits the tapped selection after this delegate callback.
-            // Action-only tabs (capture/more) therefore restore the real page
-            // on the next main-loop turn instead of appearing as destinations.
-            // A page that only lives in More keeps the bar without selection.
-            let restore = tabItem(for: activePage)
-            DispatchQueue.main.async { [weak tabBar] in
-                tabBar?.selectedItem = restore
-            }
+        handle(layout[item.tag])
+        // UIKit commits the tapped selection after this delegate callback, so
+        // the bar is re-synced on the next main-loop turn (e.g. Více tapped
+        // again closes the menu and the pill slides back to the page).
+        DispatchQueue.main.async { [weak self] in
+            self?.syncTabSelection()
         }
     }
 
-    private func handle(_ destination: AlphaTradeTabDestination) -> Bool {
+    private func handle(_ destination: AlphaTradeTabDestination) {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        if destination.id != AlphaTradeTabCatalog.more.id { closeMoreMenu() }
 
         switch destination.id {
         case AlphaTradeTabCatalog.capture.id:
+            // Pilulka zůstane na Zapsat; když web do chvíle nepotvrdí otevřený
+            // zápis (bridge ještě nenaběhl), vrátí se na stránku.
+            captureSelected = true
+            let timeout = DispatchWorkItem { [weak self] in
+                self?.captureSelected = false
+                self?.syncTabSelection()
+            }
+            captureConfirmTimeout?.cancel()
+            captureConfirmTimeout = timeout
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: timeout)
             evaluate("window.__alphaTradeNative?.addTrade()")
-            return false
         case AlphaTradeTabCatalog.more.id:
-            presentMoreMenu()
-            return false
+            if moreMenuHost == nil { openMoreMenu() } else { closeMoreMenu() }
         default:
+            captureConfirmTimeout?.cancel()
+            captureSelected = false
             activePage = destination.id
             evaluate("window.__alphaTradeNative?.navigate('\(destination.id)')")
-            return true
         }
     }
 
@@ -681,43 +735,133 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
         }
     }
 
-    private func presentMoreMenu() {
+    /// Menu Více je bublina nad lištou, ne systémový sheet: vyskočí pružinou
+    /// z tlačítka Více a výběr položky přepne stránku hned, souběžně se
+    /// zavíráním (sheet nejdřív celý zajel a teprve pak se navigovalo).
+    private func openMoreMenu() {
+        guard moreMenuHost == nil else { return }
         let isBacktest = activeWorld == "backtest"
+        let isLight = activeTheme == "light"
         // Everything the bar does not show. Backtest hides LIVE-only surfaces
         // and, like the web sidebar, presents Účty as the backtest Session.
         let inBar = Set(tabSlots)
         let items: [AlphaTradeMoreMenuItem] = AlphaTradeTabCatalog.destinations
             .filter { !inBar.contains($0.id) && (!isBacktest || !$0.liveOnly) }
-            .map { AlphaTradeMoreMenuItem(id: $0.id, title: $0.id == "accounts" && isBacktest ? "Session" : $0.title, symbol: $0.symbol) }
-
-        let menu = AlphaTradeMoreMenuView(theme: activeTheme, isBacktest: isBacktest, items: items) { [weak self] action in
-            guard let self else { return }
-            self.dismiss(animated: true) {
-                switch action {
-                case .toggleWorld:
-                    self.evaluate("window.__alphaTradeNative?.toggleWorld()")
-                case .navigate(let page):
-                    self.evaluate("window.__alphaTradeNative?.navigate('\(page)')")
-                }
+            .map {
+                AlphaTradeMoreMenuItem(
+                    id: $0.id,
+                    title: $0.id == "accounts" && isBacktest ? "Session" : $0.title,
+                    subtitle: AlphaTradeTabCatalog.menuSubtitle($0.id, isBacktest: isBacktest),
+                    symbol: $0.symbol
+                )
             }
+
+        let menu = AlphaTradeMoreMenuView(theme: activeTheme, isBacktest: isBacktest, activePage: activePage, items: items) { [weak self] action in
+            self?.performMoreMenuAction(action)
         }
+
+        // UIControl, ne tap gesto: gesto nad WebView se v praxi nespustilo.
+        let scrim = UIControl(frame: view.bounds)
+        scrim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        scrim.backgroundColor = isLight
+            ? UIColor(red: 15 / 255, green: 23 / 255, blue: 42 / 255, alpha: 0.2)
+            : UIColor(red: 2 / 255, green: 6 / 255, blue: 23 / 255, alpha: 0.58)
+        scrim.alpha = 0
+        scrim.accessibilityLabel = "Zavřít menu"
+        scrim.addTarget(self, action: #selector(moreMenuScrimTapped), for: .touchUpInside)
+        view.addSubview(scrim)
+
         let host = UIHostingController(rootView: menu)
         host.view.backgroundColor = .clear
-        host.overrideUserInterfaceStyle = activeTheme == "light" ? .light : .dark
-        if let sheet = host.sheetPresentationController {
-            // Výška podle počtu položek; nad ~9 položek se panel posouvá.
-            let height = CGFloat(items.count + 1) * 54 + 64
-            if #available(iOS 16.0, *) {
-                sheet.detents = [.custom(identifier: .init("alphatrade.more")) { context in
-                    min(height, context.maximumDetentValue)
-                }]
-            } else {
-                sheet.detents = [.medium()]
-            }
-            sheet.prefersGrabberVisible = true
-            sheet.preferredCornerRadius = 30
+        host.overrideUserInterfaceStyle = isLight ? .light : .dark
+        addChild(host)
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(host.view)
+        host.didMove(toParent: self)
+
+        let width: CGFloat = 272
+        let fitting = host.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude))
+        let available = shellTabBar.frame.minY - view.safeAreaInsets.top - 24
+        NSLayoutConstraint.activate([
+            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            host.view.bottomAnchor.constraint(equalTo: shellTabBar.topAnchor, constant: -8),
+            host.view.widthAnchor.constraint(equalToConstant: width),
+            host.view.heightAnchor.constraint(equalToConstant: min(fitting.height, max(available, 200))),
+        ])
+        view.bringSubviewToFront(shellTabBar)
+        view.layoutIfNeeded()
+
+        moreMenuHost = host
+        moreMenuScrim = scrim
+        setMoreTabIcon(open: true)
+        syncTabSelection()
+
+        let reduceMotion = UIAccessibility.isReduceMotionEnabled
+        host.view.alpha = 0
+        host.view.transform = reduceMotion ? .identity : moreMenuGrowTransform(for: host.view.bounds.size, scale: 0.35)
+        UIView.animate(withDuration: 0.42, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0.3, options: [.allowUserInteraction, .beginFromCurrentState]) {
+            host.view.transform = .identity
         }
-        present(host, animated: true)
+        UIView.animate(withDuration: 0.16, delay: 0, options: [.allowUserInteraction, .curveEaseOut]) {
+            host.view.alpha = 1
+        }
+        UIView.animate(withDuration: 0.22, delay: 0, options: [.allowUserInteraction, .curveEaseOut]) {
+            scrim.alpha = 1
+        }
+    }
+
+    private func closeMoreMenu() {
+        guard let host = moreMenuHost, let scrim = moreMenuScrim else { return }
+        moreMenuHost = nil
+        moreMenuScrim = nil
+        setMoreTabIcon(open: false)
+        syncTabSelection()
+        let shrink = UIAccessibility.isReduceMotionEnabled ? .identity : moreMenuGrowTransform(for: host.view.bounds.size, scale: 0.6)
+        UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
+            host.view.alpha = 0
+            host.view.transform = shrink
+            scrim.alpha = 0
+        } completion: { _ in
+            host.willMove(toParent: nil)
+            host.view.removeFromSuperview()
+            host.removeFromParent()
+            scrim.removeFromSuperview()
+        }
+    }
+
+    @objc private func moreMenuScrimTapped() {
+        closeMoreMenu()
+    }
+
+    private func performMoreMenuAction(_ action: AlphaTradeMoreMenuAction) {
+        UISelectionFeedbackGenerator().selectionChanged()
+        switch action {
+        case .navigate(let page):
+            evaluate("window.__alphaTradeNative?.navigate('\(page)')")
+            closeMoreMenu()
+        case .toggleWorld:
+            // Nech doběhnout posun přepínače, pak zavři a přepni svět.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                self?.closeMoreMenu()
+                self?.evaluate("window.__alphaTradeNative?.toggleWorld()")
+            }
+        }
+    }
+
+    /// Zmenšení s pevným bodem u tlačítka Více (pravý dolní roh pod bublinou),
+    /// takže menu vypadá, že z tlačítka vyrůstá.
+    private func moreMenuGrowTransform(for size: CGSize, scale: CGFloat) -> CGAffineTransform {
+        let anchor = CGPoint(x: size.width / 2 - 30, y: size.height / 2 + 28)
+        return CGAffineTransform(translationX: anchor.x * (1 - scale), y: anchor.y * (1 - scale))
+            .scaledBy(x: scale, y: scale)
+    }
+
+    private func setMoreTabIcon(open: Bool) {
+        guard let index = barLayout.firstIndex(where: { $0.id == AlphaTradeTabCatalog.more.id }),
+              let item = shellTabBar.items?[safe: index] else { return }
+        let image = UIImage(systemName: open ? "xmark" : AlphaTradeTabCatalog.more.symbol)
+        item.image = image
+        item.selectedImage = image
     }
 
     #if DEBUG
@@ -726,7 +870,7 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
         guard arguments.contains("--alphatrade-world-menu-smoke") else { return }
         activeWorld = arguments.contains("--alphatrade-world-backtest") ? "backtest" : "live"
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.presentMoreMenu()
+            self?.openMoreMenu()
         }
     }
 
@@ -771,7 +915,7 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
         tabSlots = normalized
         AlphaTradeTabCatalog.saveSlots(normalized)
         shellTabBar.items = makeTabItems()
-        shellTabBar.selectedItem = tabItem(for: activePage)
+        syncTabSelection()
         return true
     }
 
@@ -779,7 +923,7 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
     /// links) so the bar highlights the real page or nothing at all.
     func applyPageFromWeb(_ page: String) {
         activePage = page
-        shellTabBar.selectedItem = tabItem(for: page)
+        syncTabSelection()
     }
 }
 
@@ -788,6 +932,7 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
 struct AlphaTradeMoreMenuItem: Identifiable {
     let id: String
     let title: String
+    let subtitle: String
     let symbol: String
 }
 
@@ -796,85 +941,186 @@ enum AlphaTradeMoreMenuAction {
     case navigate(String)
 }
 
-/// Vlastní spodní panel místo systémového action sheetu: stejné barvy jako
-/// web (navy / paper), ikony cílů, přepínač světa nahoře. Žádná broker akce.
+private extension Array {
+    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
+}
+
+/// Skleněná bublina nad lištou ve stylu webu: přepínač LIVE / BACKTEST nahoře,
+/// pod ním sekce s ikonou a krátkým popisem, Nastavení oddělené. Žádná broker akce.
 struct AlphaTradeMoreMenuView: View {
     let theme: String
     let isBacktest: Bool
+    let activePage: String
     let items: [AlphaTradeMoreMenuItem]
     let onAction: (AlphaTradeMoreMenuAction) -> Void
 
+    @State private var backtestSelected: Bool
+    @Namespace private var worldThumb
+
+    init(theme: String, isBacktest: Bool, activePage: String, items: [AlphaTradeMoreMenuItem], onAction: @escaping (AlphaTradeMoreMenuAction) -> Void) {
+        self.theme = theme
+        self.isBacktest = isBacktest
+        self.activePage = activePage
+        self.items = items
+        self.onAction = onAction
+        _backtestSelected = State(initialValue: isBacktest)
+    }
+
     private var isLight: Bool { theme == "light" }
-    private var background: Color {
-        isLight ? Color(red: 248 / 255, green: 250 / 255, blue: 252 / 255)
-            : theme == "oled" ? .black : Color(red: 2 / 255, green: 6 / 255, blue: 23 / 255)
+    private var ink: Color { isLight ? Color(red: 15 / 255, green: 23 / 255, blue: 42 / 255) : Color(red: 248 / 255, green: 250 / 255, blue: 252 / 255) }
+    private var secondary: Color { isLight ? Color(red: 71 / 255, green: 85 / 255, blue: 105 / 255) : Color(red: 148 / 255, green: 163 / 255, blue: 184 / 255) }
+    private var muted: Color { isLight ? Color(red: 148 / 255, green: 163 / 255, blue: 184 / 255) : Color(red: 100 / 255, green: 116 / 255, blue: 139 / 255) }
+    private var line: Color { isLight ? Color(red: 226 / 255, green: 232 / 255, blue: 240 / 255) : Color.white.opacity(0.07) }
+    private var raised: Color { isLight ? .white : Color.white.opacity(0.045) }
+    private var emerald: Color { isLight ? Color(red: 5 / 255, green: 150 / 255, blue: 105 / 255) : Color(red: 16 / 255, green: 185 / 255, blue: 129 / 255) }
+    private var violet: Color { isLight ? Color(red: 124 / 255, green: 58 / 255, blue: 237 / 255) : Color(red: 139 / 255, green: 92 / 255, blue: 246 / 255) }
+    private var tint: LinearGradient {
+        isLight
+            ? LinearGradient(colors: [Color.white.opacity(0.78), Color(red: 248 / 255, green: 250 / 255, blue: 252 / 255).opacity(0.72)], startPoint: .top, endPoint: .bottom)
+            : LinearGradient(colors: [Color(red: 40 / 255, green: 44 / 255, blue: 56 / 255).opacity(0.55), Color(red: 14 / 255, green: 17 / 255, blue: 28 / 255).opacity(0.62)], startPoint: .top, endPoint: .bottom)
     }
-    private var card: Color { isLight ? .white : Color.white.opacity(0.06) }
-    private var ink: Color { isLight ? Color(red: 15 / 255, green: 23 / 255, blue: 42 / 255) : .white }
-    private var muted: Color { isLight ? Color(red: 100 / 255, green: 116 / 255, blue: 139 / 255) : Color.white.opacity(0.55) }
-    private var accent: Color { isLight ? Color(red: 79 / 255, green: 70 / 255, blue: 229 / 255) : Color(red: 165 / 255, green: 160 / 255, blue: 250 / 255) }
-    private var worldColor: Color {
-        isBacktest ? Color(red: 52 / 255, green: 211 / 255, blue: 153 / 255) : Color(red: 167 / 255, green: 139 / 255, blue: 250 / 255)
-    }
+    private var panelShape: RoundedRectangle { RoundedRectangle(cornerRadius: 24, style: .continuous) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Více")
-                .font(.system(size: 13, weight: .black))
-                .tracking(1.2)
-                .foregroundStyle(muted)
-                .padding(.horizontal, 6)
-
-            Button { onAction(.toggleWorld) } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: isBacktest ? "dot.radiowaves.left.and.right" : "flask")
-                        .font(.system(size: 15, weight: .bold))
-                        .frame(width: 34, height: 34)
-                        .background(worldColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 10))
-                        .foregroundStyle(worldColor)
-                    Text(isBacktest ? "Zpět na LIVE" : "Přejít do Backtestu")
-                        .font(.system(size: 15, weight: .heavy))
-                        .foregroundStyle(worldColor)
-                    Spacer()
-                    Image(systemName: "arrow.left.arrow.right").font(.system(size: 12, weight: .bold)).foregroundStyle(muted)
+        VStack(spacing: 0) {
+            worldSwitch
+                .padding(.horizontal, 2)
+                .padding(.top, 2)
+                .padding(.bottom, 8)
+            ForEach(items) { item in
+                if item.id == "settings" && items.count > 1 {
+                    Rectangle().fill(line).frame(height: 1).padding(.horizontal, 10).padding(.vertical, 4)
                 }
-                .padding(.horizontal, 12)
-                .frame(height: 52)
-                .background(card, in: RoundedRectangle(cornerRadius: 14))
+                row(item)
             }
-            .buttonStyle(.plain)
-
-            VStack(spacing: 0) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    Button { onAction(.navigate(item.id)) } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: item.symbol)
-                                .font(.system(size: 15, weight: .semibold))
-                                .frame(width: 34, height: 34)
-                                .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-                                .foregroundStyle(accent)
-                            Text(item.title)
-                                .font(.system(size: 15, weight: .bold))
-                                .foregroundStyle(ink)
-                            Spacer()
-                            Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)).foregroundStyle(muted)
-                        }
-                        .padding(.horizontal, 12)
-                        .frame(height: 52)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    if index < items.count - 1 {
-                        Rectangle().fill(muted.opacity(0.18)).frame(height: 1).padding(.leading, 58)
-                    }
-                }
-            }
-            .background(card, in: RoundedRectangle(cornerRadius: 14))
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 18)
-        .padding(.bottom, 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(background.ignoresSafeArea())
+        .padding(8)
+        .background(tint)
+        .background(.ultraThinMaterial)
+        .clipShape(panelShape)
+        .overlay(
+            panelShape.strokeBorder(
+                LinearGradient(
+                    colors: isLight ? [Color.white.opacity(0.95), Color.black.opacity(0.08)] : [Color.white.opacity(0.22), Color.white.opacity(0.08)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                ),
+                lineWidth: 1
+            )
+        )
+        .shadow(color: .black.opacity(isLight ? 0.16 : 0.5), radius: 24, x: 0, y: 14)
+    }
+
+    private var worldSwitch: some View {
+        HStack(spacing: 0) {
+            worldButton(backtest: false)
+            worldButton(backtest: true)
+        }
+        .padding(3)
+        .background(raised, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(line, lineWidth: 1))
+    }
+
+    private func worldButton(backtest: Bool) -> some View {
+        let selected = backtestSelected == backtest
+        let color = backtest ? violet : emerald
+        return Button {
+            guard !selected else { return }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { backtestSelected = backtest }
+            onAction(.toggleWorld)
+        } label: {
+            HStack(spacing: 6) {
+                if backtest {
+                    Image(systemName: "flask").font(.system(size: 11, weight: .bold))
+                } else {
+                    AlphaTradePulseDot(color: selected ? emerald : muted, pulsing: selected)
+                }
+                Text(backtest ? "BACKTEST" : "LIVE")
+                    .font(.system(size: 10, weight: .black))
+                    .tracking(1.2)
+            }
+            .foregroundStyle(selected ? color : muted)
+            .frame(maxWidth: .infinity)
+            .frame(height: 34)
+            .background {
+                if selected {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(color.opacity(0.14))
+                        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(color.opacity(0.45), lineWidth: 1))
+                        .matchedGeometryEffect(id: "thumb", in: worldThumb)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(backtest ? "alphatrade.more.world.backtest" : "alphatrade.more.world.live")
+    }
+
+    private func row(_ item: AlphaTradeMoreMenuItem) -> some View {
+        let isLive = item.id == "live"
+        let isActive = item.id == activePage
+        let accent = isLive || isActive
+        return Button { onAction(.navigate(item.id)) } label: {
+            HStack(spacing: 11) {
+                Image(systemName: item.symbol)
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 30, height: 30)
+                    .background(accent ? emerald.opacity(0.14) : Color(red: 148 / 255, green: 163 / 255, blue: 184 / 255).opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .foregroundStyle(accent ? emerald : secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.title.uppercased())
+                        .font(.system(size: 12, weight: .heavy))
+                        .tracking(0.5)
+                        .foregroundStyle(ink)
+                    if !item.subtitle.isEmpty {
+                        Text(item.subtitle)
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(muted)
+                    }
+                }
+                Spacer(minLength: 0)
+                if isLive { AlphaTradePulseDot(color: emerald) }
+            }
+            .padding(8)
+            .background(isActive ? raised : .clear, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(AlphaTradeMenuPressStyle(highlight: raised))
+        .accessibilityIdentifier("alphatrade.more.\(item.id)")
+    }
+}
+
+private struct AlphaTradeMenuPressStyle: ButtonStyle {
+    let highlight: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? highlight : .clear, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+/// Tečka „živě" — zelená s rozbíhajícím se kruhem, jako na webu.
+private struct AlphaTradePulseDot: View {
+    let color: Color
+    var pulsing = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var expanded = false
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 6, height: 6)
+            .background(
+                Circle()
+                    .fill(color.opacity(0.5))
+                    .scaleEffect(expanded ? 2.6 : 1)
+                    .opacity(pulsing && !reduceMotion ? (expanded ? 0 : 1) : 0)
+            )
+            .onAppear {
+                guard pulsing, !reduceMotion else { return }
+                withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) { expanded = true }
+            }
     }
 }

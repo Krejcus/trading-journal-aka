@@ -140,7 +140,7 @@ import type { Session } from '@supabase/supabase-js';
 import type { BacktestRun } from './services/backtestTypes';
 import { playNativeHapticIfAvailable, type NativeTradeDraft } from './services/nativeCapabilities';
 import MorningBriefBanner from './components/MorningBriefBanner';
-import { isNativeShell, registerNativeShellBridge, reportNativeRefreshComplete, reportNativeShellTheme, reportNativeShellWorld, reportNativeShellPage } from './utils/nativeShell';
+import { isNativeShell, registerNativeShellBridge, reportNativeRefreshComplete, reportNativeShellTheme, reportNativeShellWorld, reportNativeShellPage, reportNativeShellCapture } from './utils/nativeShell';
 import { syncNativeSessionReminders } from './services/nativeSessionReminders';
 import {
   initializeNativeRemoteNotifications,
@@ -1345,6 +1345,11 @@ const App: React.FC = () => {
     () =>
       registerNativeShellBridge({
         navigate: (page) => {
+          // Přechod z nativní lišty nebo menu Více zavře otevřený zápis stejně
+          // jako křížek — jinak by formulář zůstal viset nad novou stránkou.
+          setIsManualEntryOpen(false);
+          setNativeTradeDraft(null);
+          setIsGuardianOverlayOpen(false);
           if (page === 'native-system') {
             window.dispatchEvent(new Event('alphatrade:open-native-system'));
             return;
@@ -1478,6 +1483,10 @@ const App: React.FC = () => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
   const [nativeTradeDraft, setNativeTradeDraft] = useState<NativeTradeDraft | null>(null);
+  const isNativeCaptureOpen = isManualEntryOpen || isGuardianOverlayOpen;
+  useEffect(() => {
+    if (inNativeShell) reportNativeShellCapture(isNativeCaptureOpen);
+  }, [inNativeShell, isNativeCaptureOpen]);
   const [isDashboardEditing, setIsDashboardEditing] = useState(false);
   const [isMobileEditing, setIsMobileEditing] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);

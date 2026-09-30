@@ -74,6 +74,17 @@ export function reportNativeShellPage(page: string): void {
 }
 
 /**
+ * Ohlásí, jestli je otevřený zápis obchodu: nativní lišta pak drží výběr na
+ * Zapsat a po zavření ho vrátí na stránku. Mimo shell je to no-op.
+ */
+export function reportNativeShellCapture(open: boolean): void {
+  if (!isNativeShell()) return;
+  void alphaTradeNativePlugin.setShellCapture({ open }).catch(error => {
+    console.warn('[Native shell] Capture sync failed:', error instanceof Error ? error.message : error);
+  });
+}
+
+/**
  * Načte volbu tří karet spodního menu. Autoritou je nativní UserDefaults;
  * když plugin není dostupný (web s `?native=1`), použije se lokální kopie.
  */

@@ -1544,6 +1544,56 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   `@crxjs/vite-plugin`. Bez npm install/ci, Tradovate/agent volání, commitu,
   push, deploye nebo reinstalace workeru.
 
+### 2026-09-30 — iOS menu Více: skleněná bublina místo sheetu (Claude)
+Filip vybral variantu C z náhledu `mockups/more-menu.html` (lokální, necommitovat).
+`capacitor-ios/App/App/AlphaTradeShellViewController.swift`: menu Více už není
+systémový sheet, ale bublina nad lištou (UIHostingController + ztmavení), vyskočí
+pružinou z tlačítka Více (ikona se mění na křížek). Navigace startuje hned při
+klepnutí souběžně se zavíráním (dřív až po zajetí sheetu). Nahoře posuvný
+přepínač LIVE/BACKTEST, řádky s ikonou, kapitálkami a popisem
+(`AlphaTradeTabCatalog.menuSubtitle`), LIVE s pulzující tečkou, Nastavení
+oddělené. Past: `UITapGestureRecognizer` na ztmavení nad WKWebView se nespustil
+(hitTest vracel správný view) → ztmavení je `UIControl` s `.touchUpInside`.
+Ověřeno v simulátoru (otevření, zavření klepnutím mimo i tlačítkem, přepnutí do
+backtestu skryje LIVE-only a ukáže Session) a nainstalováno na iPhone (čistá
+reinstalace z worktree nad origin/main 0105913d + jen tento soubor). Zatím
+necommitováno; webová BottomNav má pořád starý vzhled.
+Doplněk: na iOS 26 posouvá lišta skleněnou lupu výběru vlastním gestem
+(`_UIContinuousSelectionGestureRecognizer` na UITabBar) už při dotyku, takže
+Zapsat/Více poskočily a výběr se vracel. `gestureRecognizerShouldBegin` na liště
+nepomohl (lupa reaguje dřív) → nad Zapsat/Více leží průhledné `UIControl`
+mimo hierarchii lišty (rámy z `_UITabButton`, záloha rovnoměrné dělení),
+VoiceOver je přeskočí a platí záloha v `didSelect`. Ověřeno videem ze
+simulátoru snímek po snímku. Nekonečný spinner po reinstalaci se vyřešil sám
+(Filip: „už mi appka jede“), příčina neověřena.
+Změna na přání Filipa: pilulka MÁ jezdit i na Zapsat/Více → průhledná tlačítka
+zrušena, výběr řídí jediné `syncTabSelection()`: otevřený zápis → Zapsat,
+otevřené menu → Více, jinak stránka; stránka jen z menu (Lab, LIVE…) svítí na
+Více. Web hlásí otevřený zápis (`isManualEntryOpen || isGuardianOverlayOpen`)
+novou metodou pluginu `setShellCapture` (`reportNativeShellCapture` v
+utils/nativeShell.ts, efekt v App.tsx, test v nativeShellBridge.test.ts);
+když web do 1,5 s nepotvrdí, pilulka se vrátí. Ověřeno v simulátoru (logy),
+nainstalováno na iPhone. Navíc: přechod z nativní lišty / menu Více
+(bridge `navigate`) zavře otevřený zápis i Guardian stejně jako křížek —
+formulář dřív visel nad novou stránkou. Pushnuto přes worktree nad origin/main
+(jen tyto soubory, tsc + 4680 testů + build zelené, copier DISARMED);
+telefon přestavěn z téhož worktree a čistě přeinstalován.
+
+### 2026-09-30 — Automatické snímky zahozeny (rozhodnutí Filipa) (Claude)
+
+- Filip: „automatické snímky zahodit a nechat jen to, co máme v grafu“.
+  Graf v detailu se ze skladu svíček načte ~1 s a je interaktivní; noční
+  worker (skrytý Chrome s vlastním přihlášením, fronta, další tabulky) by
+  byl složitost navíc. Kamera TradingView v copieru běží dál beze změny.
+- Rozpracovaný krok 3 (fronta, worker, instalátor LaunchAgentu, migrace
+  trade_chart_snapshots) smazán — nebyl v gitu ani v produkci. Zjištění
+  pro případný návrat: skrytý Chrome (headless=new) proti produkci občas
+  nedočkal stránky fronty (cdp-timeout / queue-timeout), proti localhost OK
+  — nevyřešeno. Klasifikátor odmítl variantu, kde server vydá Macu session.
+- Zůstává (užitečné i bez snímků): sklad svíček, profil grafu na serveru,
+  soukromé preference. Vykreslovací stránka `/?snapshotRender=…` zůstává
+  nasazená, ale nic ji nepoužívá.
+
 ### 2026-09-30 — Soukromé preference v profiles (bezpečnost) (Claude)
 
 - Díra: `profiles` má SELECT policy `true` (role public) a anon i
@@ -1584,6 +1634,16 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   synchronizovaný (dřív mohla další úprava uložit prázdné preference);
   PullRefresh chybu preferencí spolkne a obnoví obchody. Test
   `tests/profilePreferencesPrivacy.test.ts`.
+- Nasazeno 2026-09-30: kód 0105913d (READY), pak krok 2 (Filip). Ověřeno
+  přes veřejné REST API bez přihlášení: preferences / email / `*` / RPC
+  → 401 (42501); id+jméno+avatar 200. Přihlášený: přímé čtení preferences
+  42501, vlastní přes RPC 18 položek, profil a feed sítě OK. Občasné `null`
+  z `getPreferences` jen při obnově přihlášení (getUserId) — beze změny
+  proti dřívějšku, pojistky brání uložení.
+- iPhone appka přestavěna z origin/main 0105913d (worktree + symlink
+  node_modules a .env.local, `ios:sync`, xcodebuild, čistá reinstalace):
+  balíček obsahuje `get_profile_preferences_v1`, žádné přímé čtení
+  preferences; na telefonu přihlášený dashboard s preferencemi (layout).
 
 ### 2026-09-30 — Profil grafu na serveru (krok 2 automatických snímků) (Claude)
 

@@ -4,12 +4,13 @@ const setShellTheme = vi.fn(() => Promise.resolve({ theme: 'light' }));
 const reportRefreshComplete = vi.fn(() => Promise.resolve());
 const setShellWorld = vi.fn(() => Promise.resolve({ world: 'backtest' }));
 const setShellPage = vi.fn(() => Promise.resolve({ page: 'live' }));
+const setShellCapture = vi.fn(() => Promise.resolve({ open: true }));
 const getShellTabs = vi.fn(() => Promise.resolve({ slots: ['dashboard', 'history', 'live'] }));
 const setShellTabs = vi.fn(() => Promise.resolve({ slots: ['dashboard', 'history', 'live'] }));
 
 vi.mock('../utils/runtimeConfig', () => ({ isNativeBuild: true }));
 vi.mock('../services/alphaTradeNativePlugin', () => ({
-  alphaTradeNativePlugin: { setShellTheme, reportRefreshComplete, setShellWorld, setShellPage, getShellTabs, setShellTabs },
+  alphaTradeNativePlugin: { setShellTheme, reportRefreshComplete, setShellWorld, setShellPage, setShellCapture, getShellTabs, setShellTabs },
 }));
 
 describe('native shell Capacitor bridge', () => {
@@ -45,6 +46,12 @@ describe('native shell Capacitor bridge', () => {
     const { reportNativeShellPage } = await import('../utils/nativeShell');
     reportNativeShellPage('live');
     await vi.waitFor(() => expect(setShellPage).toHaveBeenCalledWith({ page: 'live' }));
+  });
+
+  it('reports the open trade capture so the native bar keeps Zapsat selected', async () => {
+    const { reportNativeShellCapture } = await import('../utils/nativeShell');
+    reportNativeShellCapture(true);
+    await vi.waitFor(() => expect(setShellCapture).toHaveBeenCalledWith({ open: true }));
   });
 
   it('reads the configurable tab slots from the native shell', async () => {
