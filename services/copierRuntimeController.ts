@@ -1764,6 +1764,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     zeroEvidence: boolean;
   }
   const intentionalEntrySuppressions = new Map<string, IntentionalEntrySuppression>();
+  /**
+   * A3 (review 30. 9.): zpožděný leader reversal (mixed exit+entry) nesmí
+   * zablokovat i svou exitovou část. Followeři dostanou jen exit slice,
+   * vstup se nekopíruje a fail-closed proběhne až po jeho dispatchi.
+   */
+  const staleExitOnlyEventIds = new Set<string>();
+  let deferredStaleFailClosed: Error | null = null;
   interface EpisodeFollowerIsolationEvidence {
     accountId: number;
     symbol: string;
@@ -10105,6 +10112,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       || (tradingWindow.enabled
         && tradingWindowStateAt(tradingWindow, event.receivedAt) !== 'inside')
       || blockedLeaderEntryOrderIds.has(event.orderId)
+      || staleExitOnlyEventIds.has(event.id)
     );
     const eligibilityIneligible = currentIneligibleAccounts(at);
     const unsafeDivergenceAccounts: number[] = [];
@@ -10842,6 +10850,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return differences.length > 0 ? `route-gap-divergence: ${differences.join('; ')}` : null;
   };
 
+  const flushDeferredStaleFailClosed = (): void => {
+    const error = deferredStaleFailClosed;
+    deferredStaleFailClosed = null;
+    if (!error) return;
+    if (gate.armed) failClosed(error, { autoClose: false });
+    else invalidateReconciliation();
+  };
+
   const handleBrokerEvent = async (
     event: BrokerEvent,
     admissionGeneration: number,
@@ -11570,6 +11586,31 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // nesmí se změnit jen proto, že mezitím dorazí Position projekce.
     const eventIncreasesExposure = leaderEventIncreasesExposure(leaderEvent);
     if (
+      eventIncreasesExposure
+      && now - leaderEvent.receivedAt > MAX_EXPOSURE_EVENT_AGE_MS
+      && leaderReducingQuantityFor(leaderEvent) > 0
+    ) {
+      // A3: zpožděný reversal. Exit slice je risk-redukující a musí
+      // followerům odejít i pozdě (jinak zůstanou v původním směru proti
+      // leaderovi); pozdě se nekopíruje jen vstupní část. Fail-closed až
+      // po dispatchi exitu, viz `flushDeferredStaleFailClosed`.
+      const ageMs = now - leaderEvent.receivedAt;
+      staleExitOnlyEventIds.add(leaderEvent.id);
+      while (staleExitOnlyEventIds.size > 200) {
+        const oldest = staleExitOnlyEventIds.values().next().value as string | undefined;
+        if (!oldest) break;
+        staleExitOnlyEventIds.delete(oldest);
+      }
+      options.onAudit?.([{
+        at: now,
+        leaderEventId: leaderEvent.id,
+        kind: 'blocked',
+        reason: `stale-exposure-increase-entry-slice:${ageMs}ms`,
+      }]);
+      deferredStaleFailClosed ??= new Error(
+        `Copier fail-closed: stará risk-zvyšující část reversalu leadera (${ageMs} ms) se nebude kopírovat pozdě; followerům odešel jen exit`,
+      );
+    } else if (
       eventIncreasesExposure
       && now - leaderEvent.receivedAt > MAX_EXPOSURE_EVENT_AGE_MS
     ) {
@@ -13545,7 +13586,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           admissionGeneration,
           eventReceivedAt,
           flatSweepIngressWave,
-        );
+        ).finally(flushDeferredStaleFailClosed);
       })
       .catch(failClosed)
       .finally(() => {
