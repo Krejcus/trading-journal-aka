@@ -23,7 +23,8 @@ export const deferredDashboardTradeFields = [
 export const DASHBOARD_PAGE_SIZE = 500;
 
 export const dashboardTables = {
-  profiles: 'id,email,full_name,avatar_url,role,preferences',
+  // `preferences` už sloupcem číst nejde (soukromé) — viz readPreferences.
+  profiles: 'id,email,full_name,avatar_url,role',
   accounts: '*',
   trades: ['id,user_id,account_id,instrument,pnl,direction,date,timestamp,is_public,created_at',
     ...dashboardTradeFields.map(field => `${field}:data->${field}`),
@@ -38,6 +39,8 @@ export type DashboardRawRow = Record<string, unknown>;
 
 export async function loadDashboardFallback(
   readPage: (table: DashboardTable, offset: number, limit: number) => Promise<DashboardRawRow[]>,
+  /** Vlastní preference přes get_profile_preferences_v1 (sloupec je soukromý). */
+  readPreferences: () => Promise<unknown> = async () => null,
 ) {
   const readAll = async (table: DashboardTable) => {
     const rows: DashboardRawRow[] = [];
@@ -47,12 +50,13 @@ export async function loadDashboardFallback(
       if (page.length < DASHBOARD_PAGE_SIZE) return rows;
     }
   };
-  const [profiles, accounts, trades, preps, reviews, weeklyFocus] = await Promise.all(
-    (Object.keys(dashboardTables) as DashboardTable[]).map(readAll),
-  );
+  const [[profiles, accounts, trades, preps, reviews, weeklyFocus], preferences] = await Promise.all([
+    Promise.all((Object.keys(dashboardTables) as DashboardTable[]).map(readAll)),
+    readPreferences(),
+  ]);
   if (profiles.length !== 1) throw new Error('dashboard-profile-unavailable');
   return {
-    user: profiles[0], preferences: profiles[0].preferences || null, accounts,
+    user: profiles[0], preferences: preferences || null, accounts,
     trades: trades.map(row => ({
       ...row,
       data: Object.fromEntries(dashboardTradeFields.map(field => [field, row[field]])),

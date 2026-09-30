@@ -257,6 +257,10 @@ export const storageService = {
         if (result.error) throw new Error(`dashboard-read-failed:${table}:${result.error.code || 'request-error'}:${result.error.message}`);
         if (ownerVersion !== authStateVersion || signal?.aborted || result.data === null) throw new Error('dashboard-read-invalidated');
         return result.data as unknown as DashboardRawRow[];
+      }, async () => {
+        const result = await supabase.rpc('get_profile_preferences_v1');
+        if (result.error) throw new Error(`dashboard-read-failed:preferences:${result.error.code || 'request-error'}:${result.error.message}`);
+        return result.data;
       });
       console.info('[Dashboard] Base pages loaded; loading private notes');
     }
@@ -474,9 +478,10 @@ export const storageService = {
     const userId = await getUserId();
     if (!userId) return null;
 
+    // Bez `*`: sloupec preferences je soukromý (jen get_profile_preferences_v1).
     const { data, error } = await supabase
       .from('profiles')
-      .select('*')
+      .select('id,email,full_name,avatar_url,role')
       .eq('id', userId)
       .single();
 
@@ -510,7 +515,7 @@ export const storageService = {
 
   async getProfile(userId: string): Promise<User | null> {
     if (!userId || !isUUID(userId)) return null;
-    const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
+    const { data, error } = await supabase.from('profiles').select('id,email,full_name,avatar_url,role').eq('id', userId).single();
     if (error || !data) return null;
     return {
       id: data.id,
@@ -1273,11 +1278,12 @@ export const storageService = {
     if (tradeRow.user_id) {
       const { data: profile } = await supabase
         .from('profiles')
-        .select('full_name, avatar_url, email')
+        // Nepřihlášený divák vidí z profilu jen jméno a avatar (e-mail je soukromý).
+        .select('full_name, avatar_url')
         .eq('id', tradeRow.user_id)
         .maybeSingle();
       if (profile) {
-        ownerName = profile.full_name || (profile.email ? profile.email.split('@')[0] : undefined);
+        ownerName = profile.full_name || undefined;
         ownerAvatar = profile.avatar_url || undefined;
       }
     }
@@ -1706,28 +1712,32 @@ export const storageService = {
     const userId = targetUserId || await getUserId();
     if (!userId) return null;
 
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('preferences')
-      .eq('id', userId)
-      .single();
-
-    if (error || !data) return null;
+    // Sloupec je soukromý: vlastní preference, nebo sledovaného při přijatém spojení.
+    const { data, error } = await supabase.rpc('get_profile_preferences_v1', targetUserId ? { p_user_id: userId } : {});
+    // Chyba čtení NENÍ „prázdné preference“: kdo čte, upravuje a zapisuje
+    // zpět, by jinak uložil prázdný objekt a smazal všechno ostatní.
+    if (error) throw new Error(`preferences-read-failed:${error.code || 'request-error'}`);
+    if (data == null) return null;
+    const preferences = data as UserPreferences;
 
     // CRITICAL FIX: Update localStorage cache with fresh data from Supabase
     // This prevents data loss when page reloads
     const localKey = userId ? `alphatrade_preferences_${userId}` : 'alphatrade_preferences';
-    if (data.preferences) {
-      safeSetItem(localKey, data.preferences);
+    if (preferences) {
+      safeSetItem(localKey, preferences);
     }
 
-    return data.preferences;
+    return preferences;
   },
 
   async savePreferences(prefs: UserPreferences): Promise<void> {
     const userId = await getUserId();
     const localKey = userId ? `alphatrade_preferences_${userId}` : 'alphatrade_preferences';
 
+    // Pojistka: null / pole / text by v databázi přepsal všechny preference.
+    if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs)) {
+      throw new Error('preferences-save-invalid');
+    }
     if (!userId) {
       // Still save locally even if not logged in (e.g. login page theme)
       safeSetItem(localKey, prefs);
@@ -1740,14 +1750,15 @@ export const storageService = {
       .from('profiles')
       .update({ preferences: prefs })
       .eq('id', userId)
-      .select('preferences')
+      // Ověření zápisu přes id — sloupec preferences zpět číst nejde (soukromý).
+      .select('id')
       .single();
     if (error) {
       console.error('[savePreferences] DB error:', error);
       throw error;
     }
-    if (!data || !data.preferences) {
-      const msg = '[savePreferences] Verification failed — DB returned no preferences after update';
+    if (!data || data.id !== userId) {
+      const msg = '[savePreferences] Verification failed — DB updated no profile row';
       console.error(msg);
       throw new Error(msg);
     }
@@ -2474,7 +2485,7 @@ export const storageService = {
   },
 
   async getPlaybookItems(): Promise<PlaybookItem[]> {
-    const prefs = await this.getPreferences();
+    const prefs = await this.getPreferences().catch(() => null);
     return prefs?.playbookItems || [];
   },
 
@@ -2613,7 +2624,7 @@ export const storageService = {
   },
 
   async getBusinessSettings(): Promise<BusinessSettings> {
-    const prefs = await this.getPreferences();
+    const prefs = await this.getPreferences().catch(() => null);
     return prefs?.businessSettings || { taxRatePct: 15, defaultPropThreshold: 150 };
   },
 
@@ -2744,8 +2755,10 @@ export const storageService = {
   async updateNetworkNotifications(networkNotifications: Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }>): Promise<void> {
     const userId = await getUserId();
     if (!userId) return;
-    const { data: profile } = await supabase.from('profiles').select('preferences').eq('id', userId).single();
-    const prefs = profile?.preferences || {};
+    const { data: current, error: readError } = await supabase.rpc('get_profile_preferences_v1');
+    // Bez úspěšného čtení nezapisovat (prázdný základ by smazal ostatní preference).
+    if (readError) throw new Error(`preferences-read-failed:${readError.code || 'request-error'}`);
+    const prefs = (current as Record<string, unknown> | null) || {};
     prefs.networkNotifications = networkNotifications;
     await supabase.from('profiles').update({ preferences: prefs }).eq('id', userId);
   },
@@ -2775,12 +2788,15 @@ export const storageService = {
     });
 
     // Fetch profile names for all followed users
-    const { data: profilesData } = await supabase
-      .from('profiles')
-      .select('id, full_name, avatar_url, preferences')
-      .in('id', followingIds);
+    const [{ data: profilesData }, { data: ironRulesData }] = await Promise.all([
+      supabase.from('profiles').select('id, full_name, avatar_url').in('id', followingIds),
+      // Jen železná pravidla a jen u přijatých spojení (preferences jsou soukromé).
+      supabase.rpc('get_followed_iron_rules_v1', { p_ids: followingIds }),
+    ]);
+    const ironRulesRows = Array.isArray(ironRulesData) ? ironRulesData as Array<{ id: string; iron_rules: unknown }> : [];
+    const ironRulesById = new Map(ironRulesRows.map(row => [row.id, row.iron_rules]));
     const profileMap: Record<string, { full_name: string; avatar_url: string | null; ironRules?: any[] }> = {};
-    (profilesData || []).forEach(p => { profileMap[p.id] = { full_name: p.full_name || 'Neznámý', avatar_url: p.avatar_url, ironRules: (p.preferences as any)?.ironRules }; });
+    (profilesData || []).forEach(p => { profileMap[p.id] = { full_name: p.full_name || 'Neznámý', avatar_url: p.avatar_url, ironRules: ironRulesById.get(p.id) as any[] | undefined }; });
 
     // The RPC applies sharing permissions before any trade facts reach the client.
     const stillFeedOwner = async () => feedAuthVersion === authStateVersion && await getUserId() === currentUserId;
@@ -3108,7 +3124,7 @@ export const storageService = {
 
   // Drawing Templates
   async getDrawingTemplates(): Promise<DrawingTemplate[]> {
-    const prefs = await this.getPreferences();
+    const prefs = await this.getPreferences().catch(() => null);
     return (prefs as any)?.drawingTemplates || [];
   },
 

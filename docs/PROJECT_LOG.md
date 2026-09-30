@@ -1544,6 +1544,47 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   `@crxjs/vite-plugin`. Bez npm install/ci, Tradovate/agent volání, commitu,
   push, deploye nebo reinstalace workeru.
 
+### 2026-09-30 — Soukromé preference v profiles (bezpečnost) (Claude)
+
+- Díra: `profiles` má SELECT policy `true` (role public) a anon i
+  authenticated měli SELECT na celou tabulku → kdokoli s veřejným klíčem
+  četl `preferences` všech (železná pravidla, emoce, business nastavení,
+  kariérní plán…) a anon i e-maily a role. Registrace je otevřená, takže
+  i „jen pro přihlášené“ = veřejné.
+- Oprava ve dvou krocích (starý kód se sloupcovým čtením by po zavření
+  spadl, nový potřebuje funkce):
+  1. `20260930070000_profiles_preferences_rpcs.sql` (jen přidává):
+     `get_profile_preferences_v1(p_user_id default null)` — vlastní, nebo
+     sledovaného při přijatém spojení (režim diváka); `get_followed_iron_rules_v1(p_ids)`
+     — jen `ironRules` sledovaných pro feed sítě.
+  2. `20260930071000_profiles_private_columns.sql` (až po nasazení kódu):
+     anon jen id/jméno/avatar, authenticated navíc e-mail, roli, časy
+     (vyhledávání přátel); preferences nikdo přímo; anon bez zápisu.
+- Kód: getUser/getProfile bez `*`, getPreferences a notifikace sítě přes
+  funkci, savePreferences ověřuje zápis přes `id`, feed sítě bere železná
+  pravidla z funkce, záložní načtení dashboardu čte preference funkcí,
+  sdílený obchod už nebere e-mail jako náhradní jméno autora.
+- PGlite 18/18 (včetně: po kroku 1 funguje starý i nový kód). Testy appky
+  31/31. Pozor: iPhone appka má zabalený starý kód — po kroku 2 na ní
+  selže ukládání preferencí a feed sítě, dokud se nepřestaví.
+- INCIDENT 2026-09-30 ~06:30: při ověřování v náhledu (proti produkci) Claude
+  zavolal `getPreferences()` hned po načtení stránky → `null` (getUserId při
+  inicializaci přihlášení krátce vrací null) a testem ho uložil zpět
+  `savePreferences(null)` → preference Filipa v produkci = NULL na pár minut.
+  Obnoveno z kopie v localStorage náhledu (`alphatrade_preferences_<uid>`,
+  uložená při načtení stránky těsně předtím; 18 položek) + záloha do
+  scratchpadu. Ověřeno: 18 položek, 5 železných pravidel, 2 seance.
+  Poučení: proti produkci nikdy nezapisovat v testu; zapisovat jen
+  ověřený objekt.
+- Pojistky (i proti starší pasti): `savePreferences` odmítne ne-objekt;
+  `getPreferences` při chybě RPC vyhodí výjimku (ne „prázdno“), čtecí
+  pomocníci (playbook, business, šablony) mají vlastní `.catch`; zápisy
+  „přečti–uprav–zapiš“ (šablony kreseb, notifikace sítě) při chybě čtení nic
+  nezapíšou; FocusSync v App při `null` už nepoužije `{}` a neoznačí stav jako
+  synchronizovaný (dřív mohla další úprava uložit prázdné preference);
+  PullRefresh chybu preferencí spolkne a obnoví obchody. Test
+  `tests/profilePreferencesPrivacy.test.ts`.
+
 ### 2026-09-30 — Profil grafu na serveru (krok 2 automatických snímků) (Claude)
 
 - Nová tabulka `public.user_chart_profiles` (migrace 20260929180000, pustil

@@ -2667,11 +2667,13 @@ const App: React.FC = () => {
               dashboardLayouts: freshPrefs.dashboardLayouts ? Object.keys(freshPrefs.dashboardLayouts) : freshPrefs.dashboardLayout?.length,
             });
             applyPreferences(freshPrefs);
+            isSyncedWithDbRef.current = true;
           } else {
-            console.log('[FocusSync] applying empty fresh prefs from DB');
-            applyPreferences({});
+            // null = nic nepřišlo (přihlášení se zrovna obnovuje, nový účet) —
+            // NE „prázdné preference“: jejich použití a pozdější uložení by
+            // v databázi smazalo všechny preference. Stav se nechá, jak je.
+            console.log('[FocusSync] no prefs from DB — keeping current');
           }
-          isSyncedWithDbRef.current = true;
         } else {
           console.log('[FocusSync] SKIPPED prefs fetch — dirty=true (uživatel má rozdělanou změnu)');
         }
@@ -3192,7 +3194,8 @@ const App: React.FC = () => {
         storageService.getAccounts(),
         storageService.getDailyPreps(),
         storageService.getDailyReviews(),
-        storageService.getPreferences(),
+        // Chyba čtení preferencí nezastaví obnovení obchodů; null se níž nepoužije.
+        storageService.getPreferences().catch(() => null),
         storageService.getUser(),
         storageService.getWeeklyFocusList(),
         storageService.getBusinessPayouts(),

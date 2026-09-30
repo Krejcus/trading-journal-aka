@@ -12,13 +12,13 @@ describe('complete dashboard fallback', () => {
 
   it('pages past the first five hundred trades and keeps the RPC mapping shape', async () => {
     const readPage = vi.fn(async (table: DashboardTable, offset: number) => {
-      if (table === 'profiles') return [{ id: 'owner', preferences: { theme: 'dark' } }];
+      if (table === 'profiles') return [{ id: 'owner' }];
       if (table === 'trades') return Array.from({ length: offset === 0 ? 500 : 1 }, (_, index) => ({
         id: String(offset + index), quantity: 10, needsReview: true, setupType: 'test',
       }));
       return [];
     });
-    const result = await loadDashboardFallback(readPage);
+    const result = await loadDashboardFallback(readPage, async () => ({ theme: 'dark' }));
     expect(result.trades).toHaveLength(501);
     expect(result.trades[500].data).toMatchObject({ quantity: 10, needsReview: true, setupType: 'test' });
     expect(readPage).toHaveBeenCalledWith('trades', 500, 500);
@@ -28,6 +28,8 @@ describe('complete dashboard fallback', () => {
     }
     expect(result.preferences).toEqual({ theme: 'dark' });
     expect(dashboardTables.trades).not.toContain('drawings');
+    // Preference jsou soukromý sloupec — nikdy se nečtou přímo z profiles.
+    expect(dashboardTables.profiles).not.toContain('preferences');
   });
 
   it('rejects instead of claiming a partial or cached result is fresh', async () => {
