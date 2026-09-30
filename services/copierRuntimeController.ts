@@ -4450,11 +4450,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     ) return null;
     // Nic dalšího pro účet a symbol nesmí být rozpracované (částečné plnění,
     // nejasný nebo přijatý vstup) — jinak flat není důkaz, že nikdy nevstoupil.
+    // A1 (review 30. 9.): přijatý (acknowledged) příkaz jiné, už uzavřené
+    // epizody nic nevysvětluje — `acknowledged` je konečný stav a outbox se
+    // nečistí, takže by jinak sideline zablokoval každý dřívější obchod na
+    // symbolu. Rozpracované stavy blokují dál bez ohledu na epizodu a
+    // sideline stejně potvrzuje flat autoritativním čtením u brokera.
+    const epoch = leaderExposureEpoch(entry.request.symbol);
+    const currentEpisodeOrderIds = new Set(
+      epoch?.phase === 'open' ? epoch.leaderEntryOrderIds : [],
+    );
+    currentEpisodeOrderIds.add(entry.leaderOrderId);
     for (const other of runtime.outbox.values()) {
       if (other.key === entry.key || other.request.accountId !== item.accountId
         || other.request.symbol !== entry.request.symbol) continue;
-      if (other.status === 'planned' || other.status === 'sending' || other.status === 'unknown'
-        || other.status === 'acknowledged') return null;
+      if (other.status === 'planned' || other.status === 'sending' || other.status === 'unknown') return null;
+      if (other.status === 'acknowledged' && currentEpisodeOrderIds.has(other.leaderOrderId)) return null;
     }
     const positions = positionsByAccount.get(item.accountId);
     if (!positions || (positions.get(entry.request.symbol) ?? 0) !== 0) return null;
@@ -8562,10 +8572,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const generationAtStart = safetyGeneration;
     const observationAtStart = tradeObservationVersionByAccount.get(accountId) ?? 0;
     const epochAtStart = leaderExposureEpoch(symbol);
+    // A1: epocha předchozího obchodu na symbolu (uzavřená nebo ve flat
+    // grace/closing po exitu leadera) není překážka: on-submit reject přichází
+    // dřív, než Position leadera otevře novou, a flat followera níže stejně
+    // potvrzuje autoritativní čtení. Blokovaná epocha dál blokuje.
+    const liveEpochAtStart = epochAtStart
+      && (epochAtStart.phase === 'open' || epochAtStart.phase === 'blocked')
+      ? epochAtStart
+      : null;
     if (
-      epochAtStart
-      && (epochAtStart.phase !== 'open'
-        || !epochAtStart.leaderEntryOrderIds.includes(leaderOrderId))
+      liveEpochAtStart
+      && (liveEpochAtStart.phase !== 'open'
+        || !liveEpochAtStart.leaderEntryOrderIds.includes(leaderOrderId))
     ) return false;
     try {
       const [positions, orders] = await Promise.all([
@@ -8589,7 +8607,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         allowedNet: 0,
         createdAt: clock(),
         leaderOrderId,
-        epochId: epochAtStart?.id ?? null,
+        epochId: liveEpochAtStart?.id ?? null,
         observationVersion: observationAtStart,
         zeroEvidence: true,
       });
