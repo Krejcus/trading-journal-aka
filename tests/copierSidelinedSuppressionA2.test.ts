@@ -122,4 +122,42 @@ describe('A2: vyřazený follower a neškodné události jeho účtu', () => {
       controller.stop();
     }
   });
+  it('první výskyt ručního orderu jako filled s nulovým fillem výjimku neposune', async () => {
+    let now = 1_000_000;
+    const clock = () => ++now;
+    let rejectEntryFor200 = false;
+    const broker: any = createMockBroker({
+      behavior: request => {
+        if (rejectEntryFor200 && request.accountId === 200 && request.side === 'Buy') {
+          return { kind: 'reject', reason: 'Exceeds max position size' };
+        }
+        return request.orderType === 'Market' ? { kind: 'fill', price: 30_500 } : { kind: 'working' };
+      },
+    });
+    const controller = await bootstrapCopierRuntime({ broker, store: createMemoryCopierStore(), group, clock });
+    try {
+      broker.setConnected(true);
+      await controller.waitForIdle();
+      await controller.reconcile();
+      controller.arm();
+      rejectEntryFor200 = true;
+      await leaderTrade(broker, controller, order({ brokerOrderId: 'e2' }), 1, 'e2f');
+      now += 3_000;
+      broker.emitEvent({ type: 'heartbeat', at: now });
+      await controller.waitForIdle();
+      // Tradovate Order(Filled) ručního marketu může přijít dřív než jeho Fill.
+      broker.setPosition(200, SYM, 1);
+      broker.emitEvent({ type: 'order', order: order({
+        brokerOrderId: 'man1', accountId: 200, status: 'filled', filledQuantity: 0, sourceVersion: 'm:Filled',
+      }) });
+      await controller.waitForIdle();
+      broker.emitEvent({ type: 'order', order: order({
+        brokerOrderId: 'sl', side: 'Sell', orderType: 'Stop', stopPrice: 30_400,
+      }) });
+      await controller.waitForIdle();
+      expect(controller.status().armed).toBe(false);
+    } finally {
+      controller.stop();
+    }
+  });
 });

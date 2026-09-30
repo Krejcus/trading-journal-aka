@@ -998,6 +998,24 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   const participationByAccount = useMemo(() => new Map(
     (followerParticipation ?? []).map(item => [item.accountId, item]),
   ), [followerParticipation]);
+  // B1: zavírání followera do konce obchodu doběhne na pozadí. Selhání
+  // (`closed === false`) musí být vidět hned, ne jen v řádku účtu.
+  const seenTradeCutCloseRef = useRef(new Map<string, ActiveFollowerCut['closed']>());
+  useEffect(() => {
+    const seen = seenTradeCutCloseRef.current;
+    for (const cut of tradeCutsByAccount.values()) {
+      const key = `${cut.accountId}:${cut.operationId ?? cut.at}`;
+      const previous = seen.get(key);
+      seen.set(key, cut.closed);
+      if (cut.closed === false && previous !== undefined && previous !== false) {
+        setToast({
+          tone: 'error',
+          text: 'Kopii followera se nepodařilo potvrzeně zavřít. Kopírka ji už neřídí, zkontroluj účet v Tradovate.',
+          accountIds: [cut.accountId],
+        });
+      }
+    }
+  }, [tradeCutsByAccount]);
 
   const profilesById = useMemo(() => {
     const next = new Map<number, TradovateAccountProfile>();
@@ -1451,7 +1469,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         await update?.();
         setToast({
           tone: 'info',
-          text: 'Follower se zavírá na pozadí a čeká na další obchod. Výsledek uvidíš u účtu; ostatní účty i kopírka pokračují.',
+          text: 'Follower se zavírá na pozadí a čeká na další obchod. Když se zavření nepovede, ukáže se to u účtu i hláškou; ostatní účty i kopírka pokračují.',
           ...('accountId' in command && typeof command.accountId === 'number'
             ? { accountIds: [command.accountId] }
             : {}),
@@ -3023,10 +3041,30 @@ const accountRiskValues = (a: LiveAccount | undefined, accountId: number | null,
   return { dll, drawdown, dllShowsDrawdown };
 };
 
-const TradeCutPill = () => (
-  <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/[0.08] px-2 py-1 text-[10px] font-black leading-none text-amber-600">
-    <Clock3 aria-hidden="true" size={10} strokeWidth={2.5} /> ČEKÁ NA DALŠÍ OBCHOD
-  </span>
+/**
+ * B1 (review 30. 9.): zavírání followera do konce obchodu běží na pozadí,
+ * řádek proto musí rozlišit hotové zavření, běžící zavírání a selhání.
+ * `closed === false` = kopii se nepodařilo potvrzeně zavřít; kopírka ji už
+ * neřídí a účet je nutné zkontrolovat v Tradovate.
+ */
+export const tradeCutNoteText = (cut: Pick<ActiveFollowerCut, 'closed'>): string => (
+  cut.closed === false
+    ? 'Zavření kopie selhalo · zkontroluj účet v Tradovate'
+    : cut.closed == null
+      ? 'Vyřazeno do konce obchodu · znovu se připojí po flat skupiny'
+      : 'Ručně zavřeno · znovu se připojí po flat skupiny'
+);
+
+const TradeCutPill = ({ cut }: { cut?: Pick<ActiveFollowerCut, 'closed'> }) => (
+  cut?.closed === false ? (
+    <span className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/[0.08] px-2 py-1 text-[10px] font-black leading-none text-rose-600">
+      <AlertTriangle aria-hidden="true" size={10} strokeWidth={2.5} /> ZAVŘENÍ SELHALO
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/[0.08] px-2 py-1 text-[10px] font-black leading-none text-amber-600">
+      <Clock3 aria-hidden="true" size={10} strokeWidth={2.5} /> ČEKÁ NA DALŠÍ OBCHOD
+    </span>
+  )
 );
 
 /** Kódy automatického vyřazení z workeru → věta pro člověka. */
@@ -3123,7 +3161,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
   const showSwitchNote = (next: CompactSwitchNote) => { setSwitchNote(next); setSwitchNoteOpen(true); };
 
   const note = tradeCut
-    ? <p className="text-[10px] font-semibold leading-tight text-amber-600">Ručně zavřeno · znovu se připojí po flat skupiny</p>
+    ? <p className={`text-[10px] font-semibold leading-tight ${tradeCut.closed === false ? 'text-rose-600' : 'text-amber-600'}`}>{tradeCutNoteText(tradeCut)}</p>
     : compactRejection
     ? <RejectedExecutionStatus
         execution={compactRejection}
@@ -3268,7 +3306,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
           ) : null}
           {flatReadWarning}
           {attention ? (
-            tradeCut ? <TradeCutPill /> : <AccountEligibilityPill
+            tradeCut ? <TradeCutPill cut={tradeCut} /> : <AccountEligibilityPill
               eligibility={eligibility}
               live={live}
               unavailable={!a && accountId != null}
@@ -4902,7 +4940,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
             </span>
             {stateIsDeviation ? (
               <span className="mt-1 flex flex-wrap items-center gap-1.5 pl-3.5">
-                {tradeCut ? <TradeCutPill /> : <AccountEligibilityPill
+                {tradeCut ? <TradeCutPill cut={tradeCut} /> : <AccountEligibilityPill
                   eligibility={eligibility}
                   live={live}
                   unavailable={accountUnavailable}
@@ -4914,8 +4952,8 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
               </span>
             ) : null}
             {tradeCut ? (
-              <span className="block pl-3.5 text-[10px] font-semibold leading-tight text-amber-600">
-                Ručně zavřeno · znovu se připojí po flat skupiny
+              <span className={`block pl-3.5 text-[10px] font-semibold leading-tight ${tradeCut.closed === false ? 'text-rose-600' : 'text-amber-600'}`}>
+                {tradeCutNoteText(tradeCut)}
               </span>
             ) : rowRejection ? (
               <RejectedExecutionStatus
@@ -4935,7 +4973,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
           </span>
         );
       case 'status':
-        return tradeCut ? <TradeCutPill /> : <AccountEligibilityPill
+        return tradeCut ? <TradeCutPill cut={tradeCut} /> : <AccountEligibilityPill
           eligibility={eligibility}
           live={live}
           unavailable={!a && accountId != null}

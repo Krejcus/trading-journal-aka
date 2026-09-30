@@ -38,3 +38,12 @@ describe('F1: dialog Flatten říká pravdu o odeslání', () => {
     expect(html).not.toContain('žádný brokerový příkaz se neodešle');
   });
 });
+
+describe('B1: řádek followera rozliší stav zavírání na pozadí', () => {
+  it('selhání, běžící zavírání i hotové zavření mají vlastní text', async () => {
+    const { tradeCutNoteText } = await import('../components/LiveCopyTradeOverview');
+    expect(tradeCutNoteText({ closed: false })).toContain('Zavření kopie selhalo');
+    expect(tradeCutNoteText({ closed: null })).toContain('Vyřazeno do konce obchodu');
+    expect(tradeCutNoteText({ closed: 1_790_000_000_000 })).toContain('Ručně zavřeno');
+  });
+});

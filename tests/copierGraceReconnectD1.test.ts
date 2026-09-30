@@ -5,6 +5,7 @@ import { bootstrapCopierRuntime } from '../services/copierRuntimeController';
 import { createMemoryCopierStore } from '../services/copierStore';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
 import { createMockBroker } from '../services/mockBroker';
+import { createMockBroker as createLeaderMockBroker } from './_laMock';
 
 // Review 30. 9. 2026, D1: skutečný výpadek follower route kratší než
 // reconnect lhůta routeru (10 s) controller vůbec neviděl. Když se follower
@@ -22,13 +23,13 @@ const order = (x: Partial<BrokerOrder>): BrokerOrder => ({
 });
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-const reconnectSnapshot = (netQuantity: number): BrokerEvent => ({
+const reconnectSnapshot = (netQuantity: number, withGapFill = netQuantity === 0): BrokerEvent => ({
   type: 'connection', connected: true, at: 5_000, resynced: true, reconnected: true,
   resync: {
     accountIds: [200],
     positions: netQuantity === 0 ? [] : [{ accountId: 200, symbol: 'MNQU6', netQuantity }],
     orders: [],
-    gapFills: netQuantity === 0 ? [{
+    gapFills: withGapFill ? [{
       fillId: 'ff9', tag: '', brokerOrderId: 'FSL', accountId: 200, symbol: 'MNQU6',
       side: 'Sell', quantity: 1, price: 29_900, filledAt: 4_000,
     }] : [],
@@ -37,8 +38,11 @@ const reconnectSnapshot = (netQuantity: number): BrokerEvent => ({
 });
 
 async function armedWithCopiedEntry() {
-  const leader = createMockBroker({ nativeLiquidate: true });
-  const follower = createMockBroker({ nativeLiquidate: true, behavior: () => ({ kind: 'fill', price: 30_000 }) });
+  const leader = createLeaderMockBroker({ nativeLiquidate: true });
+  const follower = createMockBroker({
+    nativeLiquidate: true,
+    behavior: request => request.orderType === 'Market' ? { kind: 'fill', price: 30_000 } : { kind: 'working' },
+  });
   const router = createBrokerRouter([
     { broker: leader, accountIds: [100], critical: true },
     { broker: follower, accountIds: [200], critical: false },
@@ -46,6 +50,7 @@ async function armedWithCopiedEntry() {
   let now = 1_000;
   const controller = await bootstrapCopierRuntime({
     broker: router, store: createMemoryCopierStore(), group, clock: () => ++now,
+    followerTransitionCorrelationWindowMs: 10,
   });
   leader.setConnected(true);
   follower.setConnected(true);
@@ -68,13 +73,13 @@ async function armedWithCopiedEntry() {
 }
 
 describe('D1: skutečný reconnect follower route v reconnect lhůtě', () => {
-  it('follower zavřený v mezeře: snapshot vypne kopírku a exit leadera ho neotočí', async () => {
+  it('follower zavřený v mezeře cizím fillem: snapshot vypne kopírku a exit leadera ho neotočí', async () => {
     const { leader, follower, controller } = await armedWithCopiedEntry();
     try {
       follower.setConnected(false);
       follower.setPosition(200, 'MNQU6', 0);
       follower.emitEvent(reconnectSnapshot(0));
-      await controller.waitForIdle(); await sleep(20); await controller.waitForIdle();
+      await controller.waitForIdle(); await sleep(50); await controller.waitForIdle();
       expect(controller.status()).toMatchObject({
         armed: false,
         connected: true,
@@ -133,6 +138,73 @@ describe('D1: skutečný reconnect follower route v reconnect lhůtě', () => {
       broker.emitEvent(reconnectSnapshot(0));
       await controller.waitForIdle();
       expect(controller.status()).toMatchObject({ connected: true, armed: false });
+    } finally {
+      controller.stop();
+    }
+  });
+  it('pozice změněná v mezeře bez vysvětlujícího fillu vypne kopírku hned', async () => {
+    const { follower, controller } = await armedWithCopiedEntry();
+    try {
+      follower.setConnected(false);
+      follower.setPosition(200, 'MNQU6', 0);
+      follower.emitEvent(reconnectSnapshot(0, false));
+      await controller.waitForIdle();
+      expect(controller.status()).toMatchObject({
+        armed: false, lastError: expect.stringContaining('route-gap-divergence'),
+      });
+    } finally {
+      controller.stop();
+    }
+  });
+  it('fill kopie odeslané těsně před výpadkem mezeru vysvětlí a kopírka zůstane zapnutá', async () => {
+    const leader = createLeaderMockBroker({ nativeLiquidate: true });
+    // Kopie vstupu followera zůstane pracovní a vyplní se až v mezeře.
+    const follower = createMockBroker({ nativeLiquidate: true, behavior: () => ({ kind: 'working' }) });
+    const router = createBrokerRouter([
+      { broker: leader, accountIds: [100], critical: true },
+      { broker: follower, accountIds: [200], critical: false },
+    ], { reconnectGraceMs: 10_000 });
+    let now = 1_000;
+    const controller = await bootstrapCopierRuntime({
+      broker: router, store: createMemoryCopierStore(), group, clock: () => ++now,
+      followerTransitionCorrelationWindowMs: 10,
+    });
+    try {
+      leader.setConnected(true);
+      follower.setConnected(true);
+      await controller.waitForIdle();
+      await controller.reconcile();
+      controller.arm();
+      leader.emitEvent({ type: 'order', order: order({ brokerOrderId: 'L1', sourceVersion: 'a' }) });
+      await controller.waitForIdle(); await sleep(20); await controller.waitForIdle();
+      const copy = follower.orders().find(item => item.accountId === 200);
+      expect(copy?.status).toBe('working');
+
+      follower.setConnected(false);
+      follower.setPosition(200, 'MNQU6', 1);
+      // Mock nemá fill API: stav jeho orderu srovnáme s brokerem po mezeře.
+      Object.assign(copy!, { status: 'filled', filledQuantity: 1 });
+      leader.setPosition(100, 'MNQU6', 1);
+      leader.emitEvent({ type: 'order', order: order({ brokerOrderId: 'L1', status: 'filled', filledQuantity: 1, sourceVersion: 'b' }) });
+      leader.emitEvent({ type: 'fill', fill: {
+        fillId: 'lf1', tag: '', brokerOrderId: 'L1', accountId: 100, symbol: 'MNQU6',
+        side: 'Buy', quantity: 1, price: 30_000, filledAt: 2_000,
+      } });
+      leader.emitEvent({ type: 'position', position: { accountId: 100, symbol: 'MNQU6', netQuantity: 1 } });
+      await controller.waitForIdle(); await sleep(20); await controller.waitForIdle();
+      follower.emitEvent({
+        type: 'connection', connected: true, at: 5_000, resynced: true, reconnected: true,
+        resync: {
+          accountIds: [200], orders: [], complete: true,
+          positions: [{ accountId: 200, symbol: 'MNQU6', netQuantity: 1 }],
+          gapFills: [{
+            fillId: 'ff1', tag: copy!.tag, brokerOrderId: copy!.brokerOrderId, accountId: 200, symbol: 'MNQU6',
+            side: 'Buy', quantity: 1, price: 30_000, filledAt: 4_000,
+          }],
+        },
+      } as BrokerEvent);
+      await controller.waitForIdle(); await sleep(50); await controller.waitForIdle();
+      expect(controller.status()).toMatchObject({ armed: true, lastError: null });
     } finally {
       controller.stop();
     }

@@ -7,9 +7,9 @@ import { createMockBroker } from './_laMock';
 
 
 const SYM = 'MNQU6';
-const group = (followers = [200, 300]): CopyGroupConfig => ({
+const group = (mode: 'on-submit' | 'on-fill', followers = [200, 300]): CopyGroupConfig => ({
   id: 'probe-a', name: 'probe A', enabled: true, leaderAccountId: 100,
-  followers: followers.map(accountId => ({ accountId, mode: 'on-submit', multiplier: 1 })),
+  followers: followers.map(accountId => ({ accountId, mode, multiplier: 1 })),
 });
 const order = (patch: Partial<BrokerOrder> = {}): BrokerOrder => ({
   tag: '', brokerOrderId: 'leader-order', accountId: 100, symbol: SYM, side: 'Buy',
@@ -33,13 +33,15 @@ async function leaderFill(broker: any, controller: any, source: BrokerOrder, net
 // leader short a nic je nezavřelo. Exit slice teď odejde, pozdě se nekopíruje
 // jen vstupní část a kopírka se potom vypne.
 describe('A3: zpožděný reversal leadera', () => {
-  it.each([6_000, 0])('reversal Market Sell 4 (long 2 -> short 2) delayed %i ms in the queue', async delay => {
+  it.each([
+    [6_000, 'on-submit'], [0, 'on-submit'], [6_000, 'on-fill'], [0, 'on-fill'],
+  ] as const)('reversal Market Sell 4 (long 2 -> short 2) zdržený %i ms, followeři %s', async (delay, mode) => {
     let now = 1_000_000;
     const clock = () => ++now;
     const broker: any = createMockBroker({ behavior: r => r.orderType === 'Market' ? { kind: 'fill', price: 30_500 } : { kind: 'working' } });
     const audit: any[] = [];
     const controller = await bootstrapCopierRuntime({
-      broker, store: createMemoryCopierStore(), group: group(), clock,
+      broker, store: createMemoryCopierStore(), group: group(mode), clock,
       onAudit: entries => audit.push(...entries),
     });
     try {

@@ -1779,6 +1779,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    */
   const staleExitOnlyEventIds = new Set<string>();
   let deferredStaleFailClosed: Error | null = null;
+  /**
+   * On-fill followeři dostanou exit slice až z `filled`. Zpožděný `submitted`
+   * reversalu proto fail-closed odloží na fill téhož orderu (který se
+   * nezávisle na stáří kopíruje jen exit-only).
+   */
+  const staleReversalOrderIds = new Map<string, Error>();
   interface EpisodeFollowerIsolationEvidence {
     accountId: number;
     symbol: string;
@@ -6314,6 +6320,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   };
 
   const manualFollowerTradeOperations = new Map<string, Promise<ManualFlattenResult>>();
+  /** B1: durable přijetí cutu dané operace; opakovaný dotaz na ni nesmí čekat na celé zavření. */
+  const manualFollowerTradeAdmissions = new Map<string, Promise<void>>();
   const flattenFollowerForCurrentTrade = (
     accountId: number,
     operationId: string,
@@ -6325,7 +6333,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     const operationKey = `${accountId}:${normalizedOperationId}`;
     const existing = manualFollowerTradeOperations.get(operationKey);
-    if (existing) return existing;
+    if (existing) {
+      if (onAdmitted) void manualFollowerTradeAdmissions.get(operationKey)?.then(onAdmitted, () => undefined);
+      return existing;
+    }
 
     const prepared = eventTail.then(async () => {
       const follower = group.followers.find(item => item.accountId === accountId);
@@ -6385,6 +6396,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // Jen durable admission cutu je serializovaná s leader eventy. Samotné
     // read/liquidate/confirm běží v izolované background lane.
     eventTail = prepared.then(() => undefined, () => undefined);
+    // Odmítnuté přijetí se nikdy neohlásí jako přijaté (a nevisí jako
+    // neošetřený reject); chybu volající dostane z `run`.
+    manualFollowerTradeAdmissions.set(operationKey, prepared.then(() => undefined, () => new Promise<void>(() => undefined)));
     const run = prepared.then(({ cut, follower }) => {
       const action = scheduleBackgroundFollowerCutAction(cut, follower, true);
       return action;
@@ -6399,7 +6413,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     manualFollowerTradeOperations.set(operationKey, run);
     if (manualFollowerTradeOperations.size > 64) {
       const oldest = manualFollowerTradeOperations.keys().next().value as string | undefined;
-      if (oldest && oldest !== operationKey) manualFollowerTradeOperations.delete(oldest);
+      if (oldest && oldest !== operationKey) {
+        manualFollowerTradeOperations.delete(oldest);
+        manualFollowerTradeAdmissions.delete(oldest);
+      }
     }
     return run;
   };
@@ -10838,16 +10855,37 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       const actualPositions = snapshot.positions.filter(position => position.accountId === accountId);
       const actualOrders = snapshot.orders.filter(order => order.accountId === accountId);
+      // D1 (review 30. 9.): skutečný reconnect přichází i uprostřed obchodu.
+      // Follower, jehož pozice se v mezeře změnila (typicky fill zkopírovaného
+      // SL nebo kopie odeslané těsně před výpadkem), je v pořádku jen tehdy,
+      // když teď přesně odpovídá cíli podle živého leadera. Order vyplněný
+      // v mezeře už mezi pracovními být nemá.
+      const gapFilledOrderIds = new Set(snapshot.gapFills
+        .filter(fill => fill.accountId === accountId && accountId !== group.leaderAccountId)
+        .map(fill => fill.brokerOrderId));
       const expectedPositionShape = routeGapPositionShape(
         [...previousPositions].map(([symbol, netQuantity]) => ({ accountId, symbol, netQuantity })),
       );
       const actualPositionShape = routeGapPositionShape(actualPositions);
-      if (JSON.stringify(expectedPositionShape) !== JSON.stringify(actualPositionShape)) {
+      const gapFollower = group.followers.find(item => item.accountId === accountId);
+      const matchesLiveLeader = gapFollower != null
+        && gapFollower.enabled !== false
+        && gapFollower.mode !== 'off'
+        && !currentIneligibleAccounts().has(accountId)
+        && !activeFollowerCut(accountId)
+        && [...new Set([...leaderPositions.keys(), ...actualPositions.map(item => item.symbol)])]
+          .every(symbol => (
+            (actualPositions.find(item => item.symbol === symbol)?.netQuantity ?? 0)
+            === Math.trunc((leaderPositions.get(symbol) ?? 0) * gapFollower.multiplier)
+          ));
+      if (JSON.stringify(expectedPositionShape) !== JSON.stringify(actualPositionShape) && !matchesLiveLeader) {
         differences.push(
           `účet ${accountId} pozice model=${expectedPositionShape.join(',') || 'flat'} broker=${actualPositionShape.join(',') || 'flat'}`,
         );
       }
-      const expectedOrderShape = routeGapOrderShape([...previousOrders.values()]);
+      const expectedOrderShape = routeGapOrderShape(
+        [...previousOrders.values()].filter(order => !gapFilledOrderIds.has(order.brokerOrderId)),
+      );
       const actualOrderShape = routeGapOrderShape(actualOrders);
       if (JSON.stringify(expectedOrderShape) !== JSON.stringify(actualOrderShape)) {
         differences.push(
@@ -10896,11 +10934,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ? event.order.accountId
         : null;
     if (accountId == null || accountId === group.leaderAccountId) return;
+    // Order je neškodný jen jako canceled/rejected bez fillu u příkazu, který
+    // controller už zná (dřív viděný order nebo vlastní odmítnutá kopie).
+    // Nikdy `filled` a nikdy první výskyt orderu: Tradovate Order(Filled)
+    // může přijít dřív než jeho Fill, tedy ještě s filledQuantity 0.
+    const knownOrder = (order: BrokerOrder): boolean => (
+      observedOrderStatusesByAccount.get(order.accountId)?.has(order.brokerOrderId) === true
+      || [...currentRuntime().outbox.values()].some(entry => (
+        entry.request.accountId === order.accountId
+        && entry.brokerOrderId === order.brokerOrderId
+        && entry.status === 'rejected'
+      ))
+    );
     const benign = event.type === 'position'
       ? event.position.netQuantity === 0
       : event.type === 'order'
-        && !isOpenOrderStatus(event.order.status)
-        && (event.order.filledQuantity ?? 0) === 0;
+        && (event.order.status === 'canceled' || event.order.status === 'rejected')
+        && (event.order.filledQuantity ?? 0) === 0
+        && knownOrder(event.order);
     if (!benign) return;
     const prefix = intentionalSuppressionKey(accountId, '');
     for (const [key, suppression] of intentionalEntrySuppressions) {
@@ -11648,6 +11699,17 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // Stabilní klasifikace pro všechny následující větve této události;
     // nesmí se změnit jen proto, že mezitím dorazí Position projekce.
     const eventIncreasesExposure = leaderEventIncreasesExposure(leaderEvent);
+    const pendingStaleReversal = staleReversalOrderIds.get(leaderEvent.orderId);
+    if (pendingStaleReversal && leaderEvent.kind === 'filled') {
+      // I čerstvý fill zpožděného reversalu se kopíruje jen exit-only.
+      staleReversalOrderIds.delete(leaderEvent.orderId);
+      if (eventIncreasesExposure && leaderReducingQuantityFor(leaderEvent) > 0) {
+        staleExitOnlyEventIds.add(leaderEvent.id);
+      }
+      deferredStaleFailClosed ??= pendingStaleReversal;
+    } else if (pendingStaleReversal && (leaderEvent.kind === 'canceled' || leaderEvent.kind === 'rejected')) {
+      staleReversalOrderIds.delete(leaderEvent.orderId);
+    }
     if (
       eventIncreasesExposure
       && now - leaderEvent.receivedAt > MAX_EXPOSURE_EVENT_AGE_MS
@@ -11670,9 +11732,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         kind: 'blocked',
         reason: `stale-exposure-increase-entry-slice:${ageMs}ms`,
       }]);
-      deferredStaleFailClosed ??= new Error(
+      const staleError = new Error(
         `Copier fail-closed: stará risk-zvyšující část reversalu leadera (${ageMs} ms) se nebude kopírovat pozdě; followerům odešel jen exit`,
       );
+      const hasOnFillFollower = group.followers.some(follower => (
+        follower.enabled !== false && follower.mode === 'on-fill'
+      ));
+      if (leaderEvent.kind === 'submitted' && hasOnFillFollower) {
+        staleReversalOrderIds.set(leaderEvent.orderId, staleError);
+        while (staleReversalOrderIds.size > 200) {
+          const oldest = staleReversalOrderIds.keys().next().value as string | undefined;
+          if (!oldest) break;
+          staleReversalOrderIds.delete(oldest);
+        }
+      } else {
+        deferredStaleFailClosed ??= staleError;
+      }
     } else if (
       eventIncreasesExposure
       && now - leaderEvent.receivedAt > MAX_EXPOSURE_EVENT_AGE_MS
