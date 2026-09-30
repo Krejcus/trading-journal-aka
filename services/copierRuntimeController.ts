@@ -11754,7 +11754,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         at: now, leaderEventId: leaderEvent.id, kind: 'blocked',
         reason: `stale-reversal-replaced:${leaderEvent.orderId}`,
       }]);
-      if (gate.armed) failClosed(pendingStaleReversal, { autoClose: false });
+      const replacedError = new Error(
+        'Copier fail-closed: leader změnil zpožděný reversal dřív, než se vyplnil; on-submit followerům odešel jen exit, '
+        + 'on-fill followeři exit nedostanou — zkontroluj jejich pozice v Tradovate',
+      );
+      if (gate.armed) failClosed(replacedError, { autoClose: false });
       else invalidateReconciliation();
       return;
     }

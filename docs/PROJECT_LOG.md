@@ -265,7 +265,12 @@ Codexe). Výsledek a tabulka 25 nálezů: `docs/reviews/copier-deployed-review-2
 Opraveno v pořadí, které Filip schválil (D1, A3, A2, A1, B1, Flatten dialog,
 režim opravy), větev `claude/copier-review-fixes-20260930`; ověřovací review
 našlo mezery v D1/A3/A2/B1 a ty jsou opravené v ae5213be, druhé kolo
-(A3 replace, D1 cizí gap fill) v 064065d3.
+(A3 replace, D1 cizí gap fill) v 064065d3; třetí kolo commit schválilo.
+Známý kompromis A3: když leader zpožděný limitní reversal změní dřív, než se
+vyplní, kopírka se vypne a on-fill followeři exit nedostanou (hláška to
+říká) — lepší než dřívější zvětšení kopie na celý reversal. D1:
+`observedOrderStatusesByAccount` bere jako známý i ruční order viděný před
+výpadkem; drží to přesná shoda s cílem podle leadera.
 
 Rozhodnutí a proč:
 - **D1:** skutečný reconnect nekritické route v 10s lhůtě routeru dostane
