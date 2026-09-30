@@ -133,5 +133,11 @@ const renderApp = () => {
   );
 };
 
+// Profil grafu (indikátory, styl, nastavení grafu) na server — pro automatické
+// snímky a nová zařízení. Stránka snímku ho jen čte.
+if (!snapshotRenderParams) {
+  void import('./services/chartProfileSync').then(({ startChartProfileSync }) => startChartProfileSync());
+}
+
 // Initial render
 renderApp();

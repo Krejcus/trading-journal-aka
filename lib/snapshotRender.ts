@@ -29,6 +29,8 @@ export interface SnapshotRenderStatus {
   renderVersion: number;
   width: number;
   height: number;
+  /** Odkud je vzhled grafu: profil ze serveru, nebo místní/výchozí (worker bez profilu). */
+  chartProfile?: 'server' | 'local';
   error?: string;
 }
 

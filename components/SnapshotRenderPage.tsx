@@ -4,6 +4,24 @@ import { storageService } from '../services/storageService';
 import { supabase } from '../services/supabase';
 import { loadJournalChartDetail } from '../services/journalChartDetail';
 import { publishSnapshotStatus, SNAPSHOT_RENDER_VERSION, type SnapshotRenderParams, type SnapshotRenderStatus } from '../lib/snapshotRender';
+import { setChartAppearanceUserId } from '../services/chartAppearanceScope';
+import { applyChartProfile, parseChartProfile } from '../services/chartProfile';
+
+/**
+ * Profil grafu ze serveru (indikátory, styl, nastavení grafu) → do místního
+ * úložiště dřív, než se graf vykreslí. Bez profilu platí místní/výchozí.
+ */
+async function applyServerChartProfile(): Promise<'server' | 'local'> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const owner = session?.user.id;
+  if (!owner) return 'local';
+  setChartAppearanceUserId(owner);
+  const { data, error } = await supabase.from('user_chart_profiles').select('profile').eq('user_id', owner).maybeSingle();
+  const profile = error ? null : parseChartProfile(data?.profile);
+  if (!profile) return 'local';
+  applyChartProfile(profile);
+  return 'server';
+}
 
 const TradeMarketChart = React.lazy(() => import('./TradeMarketChart'));
 
@@ -56,7 +74,11 @@ export default function SnapshotRenderPage({ params }: { params: SnapshotRenderP
       await supabase.auth.getSession();
       const found = await load(params.tradeId);
       if (!found) throw new Error('Obchod nenalezen nebo chybí přihlášení.');
-      return loadJournalChartDetail(found, load);
+      const detail = await loadJournalChartDetail(found, load);
+      // Vzhled grafu jako u uživatele; chyba profilu snímek nezastaví.
+      const profile = await applyServerChartProfile().catch(() => 'local' as const);
+      if (!cancelled) setStatus(current => ({ ...current, chartProfile: profile }));
+      return detail;
     };
     void (async () => {
       let lastError: unknown = null;

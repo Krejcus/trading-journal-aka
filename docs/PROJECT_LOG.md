@@ -1544,6 +1544,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   `@crxjs/vite-plugin`. Bez npm install/ci, Tradovate/agent volání, commitu,
   push, deploye nebo reinstalace workeru.
 
+### 2026-09-30 — Profil grafu na serveru (krok 2 automatických snímků) (Claude)
+
+- Nová tabulka `public.user_chart_profiles` (migrace 20260929180000, pustil
+  Filip): jeden řádek na uživatele, RLS jen vlastník (select/insert/update,
+  bez delete), anon nic, service_role čte (worker). Záměrně NE
+  `profiles.preferences` — ta má veřejné čtení (viz níže). PGlite 11/11.
+- `services/chartProfile.ts`: profil = zapnuté indikátory, jejich styl
+  (`detailIndicatorStyleSnapshot`) a obálka nastavení grafu; kontrola tvaru
+  ze serveru, otisk se seřazenými klíči (jsonb je přeskládá).
+- `services/chartProfileSync.ts` (start v index.tsx mimo stránku snímku):
+  po přihlášení zařízení bez vlastního nastavení (styl, volby indikátorů,
+  nastavení grafu) profil převezme, jinak se místní nahraje; pak každých
+  30 s a při skrytí stránky jen při změně. Chyba/tabulka chybí → ticho.
+  Past: dotaz uvnitř `onAuthStateChange` čeká na zámek přihlášení →
+  práce odložená `setTimeout(0)`.
+- Zjištění: vykreslovací stránka dosud nekreslila tvůj vzhled — uživatel
+  pro vzhled grafu se nastavoval až modulem grafu, takže snímky měly výchozí
+  barvy a styl. Teď stránka nastaví uživatele a použije profil ze serveru
+  (`chartProfile: 'server' | 'local'` ve stavu). Ověřeno živě: `server`,
+  ready. Testy `tests/chartProfile.test.ts`.
+- BEZPEČNOST (starší, neopraveno): `profiles` má SELECT policy `true` pro
+  roli public a anon má SELECT na sloupec `preferences` → kdokoli s veřejným
+  klíčem čte preference všech uživatelů (železná pravidla, emoce, business
+  nastavení…). Řešit zvlášť (RPC pro vlastní preference + revoke).
+
 ### 2026-09-29 — Sklad svíček nasazen (Claude přebírá po Codexovi)
 
 - Codex stranou (bez limitu) → Claude převzal jeho lokální sklad svíček

@@ -29,6 +29,12 @@ export function rememberLatestIndicatorSettingsIfMissing(settings: AlphaTradeInd
   } catch { /* bez úložiště */ }
 }
 
+/** Má tento prohlížeč uložený vlastní styl indikátorů (pro profil grafu)? */
+export function hasLatestIndicatorSettings(): boolean {
+  if (chartAppearanceUserId() === undefined) return false;
+  try { return window.localStorage.getItem(scopedKey(LATEST_STYLE_KEY)) != null; } catch { return false; }
+}
+
 /** Snapshot pro detail: naposledy použitý styl → globální sdílený → výchozí. */
 export function detailIndicatorStyleSnapshot(): AlphaTradeIndicatorSettings {
   try {
@@ -61,6 +67,11 @@ export function readTradeChartIndicators(): TradeChartIndicators {
   } catch {
     return { ...NO_TRADE_CHART_INDICATORS };
   }
+}
+
+/** Má tento prohlížeč uložené vlastní volby indikátorů (pro profil grafu)? */
+export function hasSavedTradeChartIndicators(): boolean {
+  try { return window.localStorage.getItem(DETAIL_TOGGLES_KEY) != null; } catch { return false; }
 }
 
 export function writeTradeChartIndicators(next: TradeChartIndicators): void {
