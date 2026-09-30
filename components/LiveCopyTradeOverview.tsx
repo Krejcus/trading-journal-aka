@@ -61,6 +61,7 @@ import {
 } from '../lib/copierDisarmReason';
 import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import { stabilizeCopyGroups } from '../lib/stabilizeCopyGroups';
+import { copierCommandAllowedWithoutFreshStatus } from '../lib/copierSafetyControls';
 import { useCompactViewport } from '../utils/useCompactViewport';
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import {
@@ -128,6 +129,29 @@ export const manualFlattenFailureMessage = (result: FlattenCommandResult): strin
     return account?.error ? `${accountId}: ${account.error}` : String(accountId);
   }).join('; ');
   return `Flatten není potvrzen jako flat: selhaly účty=${detail || 'neznámé'}; positions=${result.remainingPositionAccounts.join(',') || 'none'} working=${result.workingOrderAccounts.join(',') || 'none'}`;
+};
+
+/**
+ * F1 (review 30. 9.): dojde potvrzená akce workeru? Stejná pravidla jako
+ * `runCommand`: adaptér cílí na execution runtime, bez čerstvého stavu
+ * projdou jen risk-redukující příkazy a Flatten followera / cancel vyžadují ARM.
+ * Dřív dialog při neověřeném stavu tvrdil, že se nic neodešle, a Flatten
+ * přitom odešel.
+ */
+export const confirmActionReachesWorker = ({ command, hasAdapter, executionGroupId, runtimeAvailable, armed }: {
+  command?: LiveCopyTradingCommand;
+  hasAdapter: boolean;
+  executionGroupId: string | null;
+  runtimeAvailable: boolean;
+  armed: boolean;
+}): boolean => {
+  if (!command || !hasAdapter || executionGroupId == null) return false;
+  const groupId = command.type === 'create-group' || command.type === 'update-group'
+    ? command.group.id
+    : 'groupId' in command ? command.groupId : null;
+  if (groupId !== executionGroupId) return false;
+  if ((command.type === 'cancel-order' || command.type === 'flatten-follower-trade') && !armed) return false;
+  return runtimeAvailable || copierCommandAllowedWithoutFreshStatus(command);
 };
 
 /** Režim replikace follower účtu — hodnoty přebírají chování Tradecopie. */
@@ -2259,7 +2283,16 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
             detail: renderAccountMessage(pendingAction.detail, pendingAction.accountIds ?? knownAccountIds),
           }}
           busy={busyCommand != null}
-          apiReady={runtimeAvailable}
+          apiReady={pendingAction.command
+            ? confirmActionReachesWorker({
+              command: pendingAction.command,
+              hasAdapter: commandAdapter != null,
+              executionGroupId,
+              runtimeAvailable,
+              armed: copierArmed,
+            })
+            : runtimeAvailable}
+          stateUnverified={!runtimeAvailable}
           flattenPreview={compact && pendingAction.flattenGroupId ? flattenPreviewFor(pendingAction.flattenGroupId) : null}
           onClose={() => setPendingAction(null)}
           onConfirm={() => {
@@ -6423,10 +6456,11 @@ const czechCount = (count: number, one: string, few: string, many: string) =>
  * nečeká. Příkaz i následné „Pokračovat v kopírování?“ jsou stejné jako
  * v dialogu na desktopu.
  */
-const CompactFlattenSheet = ({ preview, busy, apiReady, onClose, onConfirm }: {
+const CompactFlattenSheet = ({ preview, busy, apiReady, stateUnverified = false, onClose, onConfirm }: {
   preview: FlattenGroupPreview;
   busy: boolean;
   apiReady: boolean;
+  stateUnverified?: boolean;
   onClose: () => void;
   onConfirm: () => void;
 }) => {
@@ -6479,6 +6513,10 @@ const CompactFlattenSheet = ({ preview, busy, apiReady, onClose, onConfirm }: {
         <p className="mb-3 rounded-xl border border-blue-500/15 bg-blue-500/[0.055] px-3 py-2.5 text-[11px] font-bold text-blue-500">
           Bez připojeného execution adaptéru se akce pouze uloží lokálně a žádný brokerový příkaz se neodešle.
         </p>
+      ) : stateUnverified ? (
+        <p className="mb-3 rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2.5 text-[11px] font-bold text-amber-600">
+          {FLATTEN_UNVERIFIED_STATE_TEXT}
+        </p>
       ) : null}
       <button type="button" disabled={busy} onClick={onConfirm} className="h-12 w-full rounded-xl bg-rose-600 text-sm font-black text-white disabled:opacity-50">
         {busy ? 'Připravuji…' : confirmLabel}
@@ -6490,8 +6528,10 @@ const CompactFlattenSheet = ({ preview, busy, apiReady, onClose, onConfirm }: {
   );
 };
 
-const ConfirmActionDialog = ({ action, busy, apiReady, flattenPreview = null, onClose, onConfirm }: { action: PendingAction; busy: boolean; apiReady: boolean; flattenPreview?: FlattenGroupPreview | null; onClose: () => void; onConfirm: () => void }) => flattenPreview
-  ? <CompactFlattenSheet preview={flattenPreview} busy={busy} apiReady={apiReady} onClose={onClose} onConfirm={onConfirm} />
+const FLATTEN_UNVERIFIED_STATE_TEXT = 'Stav kopírky teď není ověřený, akce se přesto odešle Mac workeru a provede se na skutečných účtech.';
+
+export const ConfirmActionDialog = ({ action, busy, apiReady, stateUnverified = false, flattenPreview = null, onClose, onConfirm }: { action: PendingAction; busy: boolean; apiReady: boolean; stateUnverified?: boolean; flattenPreview?: FlattenGroupPreview | null; onClose: () => void; onConfirm: () => void }) => flattenPreview
+  ? <CompactFlattenSheet preview={flattenPreview} busy={busy} apiReady={apiReady} stateUnverified={stateUnverified} onClose={onClose} onConfirm={onConfirm} />
   : createPortal(
   <div className="fixed inset-0 z-[160] bg-slate-950/35 flex items-center justify-center p-4" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <section role="alertdialog" aria-modal="true" className="w-full max-w-md rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl p-5">
@@ -6506,9 +6546,11 @@ const ConfirmActionDialog = ({ action, busy, apiReady, flattenPreview = null, on
             : 'Žádný brokerový příkaz ani změna runtime nebyly odeslány.'}
         </div>
       ) : !action.run && !action.proceed ? (
-        <div className={`rounded-xl border px-3 py-2.5 text-[11px] font-bold mt-4 ${apiReady ? 'border-emerald-500/15 bg-emerald-500/[0.055] text-emerald-600' : 'border-blue-500/15 bg-blue-500/[0.055] text-blue-500'}`}>
+        <div className={`rounded-xl border px-3 py-2.5 text-[11px] font-bold mt-4 ${apiReady ? stateUnverified ? 'border-amber-500/20 bg-amber-500/[0.06] text-amber-600' : 'border-emerald-500/15 bg-emerald-500/[0.055] text-emerald-600' : 'border-blue-500/15 bg-blue-500/[0.055] text-blue-500'}`}>
           {apiReady
-            ? 'Execution adaptér je připojen. Potvrzená akce bude předána Mac workeru a provede se na skutečných účtech.'
+            ? stateUnverified
+              ? FLATTEN_UNVERIFIED_STATE_TEXT
+              : 'Execution adaptér je připojen. Potvrzená akce bude předána Mac workeru a provede se na skutečných účtech.'
             : 'Bez připojeného execution adaptéru se akce pouze uloží lokálně a žádný brokerový příkaz se neodešle.'}
         </div>
       ) : null}
