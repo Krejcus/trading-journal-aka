@@ -10811,6 +10811,26 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
    * V12 pending lineage si svůj jediný read-only refresh plánuje zvlášť přes
    * `scheduleRouteEpochRefresh` nad stejným routeEpoch bumpem.
    */
+  const controllerCopyOrderIds = (accountId: number): string[] => {
+    const live = currentRuntime();
+    const ids: string[] = [];
+    for (const entry of live.outbox.values()) {
+      if (entry.request.accountId === accountId && entry.brokerOrderId) ids.push(entry.brokerOrderId);
+    }
+    for (const entry of [...live.bracketOutbox.values(), ...live.osoOutbox.values()]) {
+      if (entry.request.accountId !== accountId) continue;
+      const legs: Array<string | undefined> = [
+        'entryBrokerOrderId' in entry ? entry.entryBrokerOrderId as string | undefined : undefined,
+        entry.firstBrokerOrderId, entry.secondBrokerOrderId,
+      ];
+      for (const id of legs) if (id) ids.push(id);
+    }
+    for (const links of live.state.links.values()) {
+      for (const link of links) if (link.accountId === accountId) ids.push(link.brokerOrderId);
+    }
+    return ids;
+  };
+
   const applyRouteGapSnapshot = (
     event: Extract<BrokerEvent, { type: 'connection' }>,
   ): string | null => {
@@ -10868,11 +10888,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       );
       const actualPositionShape = routeGapPositionShape(actualPositions);
       const gapFollower = group.followers.find(item => item.accountId === accountId);
+      // Vysvětlit smí jen filly orderů, které kopírka zná (model před mezerou,
+      // dřív viděné ordery, vlastní kopie). Cizí fill (ruční obchod) nebo
+      // vyřazený follower se zápornou výjimkou zůstává rozdílem.
+      const knownGapOrderIds = new Set([
+        ...previousOrders.keys(),
+        ...(observedOrderStatusesByAccount.get(accountId)?.keys() ?? []),
+        ...controllerCopyOrderIds(accountId),
+      ]);
       const matchesLiveLeader = gapFollower != null
         && gapFollower.enabled !== false
         && gapFollower.mode !== 'off'
         && !currentIneligibleAccounts().has(accountId)
         && !activeFollowerCut(accountId)
+        && snapshot.gapFills
+          .filter(fill => fill.accountId === accountId)
+          .every(fill => knownGapOrderIds.has(fill.brokerOrderId))
+        && ![...new Set([...previousPositions.keys(), ...actualPositions.map(item => item.symbol)])]
+          .some(symbol => currentIntentionalSuppression(accountId, symbol) != null)
         && [...new Set([...leaderPositions.keys(), ...actualPositions.map(item => item.symbol)])]
           .every(symbol => (
             (actualPositions.find(item => item.symbol === symbol)?.netQuantity ?? 0)
@@ -10943,7 +10976,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       || [...currentRuntime().outbox.values()].some(entry => (
         entry.request.accountId === order.accountId
         && entry.brokerOrderId === order.brokerOrderId
-        && entry.status === 'rejected'
+        && (entry.status === 'rejected' || entry.status === 'waived')
       ))
     );
     const benign = event.type === 'position'
@@ -11709,6 +11742,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       deferredStaleFailClosed ??= pendingStaleReversal;
     } else if (pendingStaleReversal && (leaderEvent.kind === 'canceled' || leaderEvent.kind === 'rejected')) {
       staleReversalOrderIds.delete(leaderEvent.orderId);
+    } else if (pendingStaleReversal && leaderEvent.kind === 'replaced') {
+      // Modify by přepočítal exit-only kopii on-submit followerů z celé
+      // quantity reversalu a zkopíroval by tak pozdní vstup. Fail-closed
+      // ještě před jakýmkoli dispatchem.
+      staleReversalOrderIds.delete(leaderEvent.orderId);
+      const recorded = await processor.record({ event: leaderEvent, group, clock, store: durableStore });
+      runtime = recorded.runtime;
+      if (recorded.audit.length > 0) options.onAudit?.(recorded.audit);
+      options.onAudit?.([{
+        at: now, leaderEventId: leaderEvent.id, kind: 'blocked',
+        reason: `stale-reversal-replaced:${leaderEvent.orderId}`,
+      }]);
+      if (gate.armed) failClosed(pendingStaleReversal, { autoClose: false });
+      else invalidateReconciliation();
+      return;
     }
     if (
       eventIncreasesExposure
