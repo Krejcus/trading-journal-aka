@@ -446,6 +446,19 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   let renewalInProgress = false;
   /** Fill IDs, které už controller znal před začátkem plánované mezery. */
   let renewalKnownFillIds: Set<number> | null = null;
+  /**
+   * D1 (review 30. 9.): skutečný výpadek synchronizovaného socketu. Fill IDs
+   * známé controlleru před mezerou; po reconnectu z nich vznikne stejný
+   * route-gap snapshot jako po plánované obměně. Router výpadek nekritické
+   * route do 10 s controlleru neukáže, takže bez snapshotu by filly
+   * a pozice z mezery zmizely beze stopy.
+   */
+  let gapKnownFillIds: Set<number> | null = null;
+  let hasSyncedOnce = false;
+  const rememberSyncLoss = () => {
+    if (!syncReady || gapKnownFillIds) return;
+    gapKnownFillIds = new Set(renewalKnownFillIds ?? [...baselineFillIds, ...deliveredFillIds]);
+  };
   let renewalDeadline: ReturnType<typeof setTimeout> | null = null;
   let renewalHeldEvents: BrokerEvent[] = [];
   const withConnectionLabel = (message: string): string =>
@@ -1132,8 +1145,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     );
     const routeOwns = (accountId: number) => configuredAccountIds.size === 0
       || configuredAccountIds.has(accountId);
+    const knownFillIds = renewalKnownFillIds ?? gapKnownFillIds;
     const gapFillEntities = [...rawFills.values()]
-      .filter(fill => !(renewalKnownFillIds?.has(fill.id) ?? true))
+      .filter(fill => !(knownFillIds?.has(fill.id) ?? true))
       .filter(fill => {
         const accountId = fill.accountId ?? rawOrders.get(fill.orderId)?.accountId;
         return accountId != null && routeOwns(accountId);
@@ -1471,6 +1485,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     if (value.i === 1) {
       if (value.s !== 200) throw new TradovateTransportError(`WebSocket synchronization failed${socketFailureDetail(value)}`);
       const wasRenewal = renewalInProgress;
+      const wasReconnect = !wasRenewal && hasSyncedOnce && gapKnownFillIds != null;
       if (Array.isArray(value.d)) await handleProps(value.d, receivedAt, preparedOrderVersions);
       if (!syncReady) {
         const baseline = await loadOrderGraph(undefined, true);
@@ -1481,7 +1496,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         }
         if (!isCurrent()) return;
         let resync: BrokerResyncSnapshot | undefined;
-        if (wasRenewal) {
+        if (wasRenewal || wasReconnect) {
           try {
             resync = await buildRenewalSnapshot(baseline);
           } catch (reason) {
@@ -1504,6 +1519,8 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         if (syncRetry) clearTimeouts(syncRetry);
         syncRetry = null;
         syncReady = true;
+        hasSyncedOnce = true;
+        gapKnownFillIds = null;
         socketState = 'connected';
         observe('connection', { state: 'synced' }, 'transport');
         notifyAccountDataChange(null, 'resync');
@@ -1517,6 +1534,9 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
         emit({
           type: 'connection', connected: true, at: clock(),
           ...(wasRenewal ? { resynced: true, resync } : {}),
+          // Skutečný reconnect: stejný snapshot, ale příjemce ví, že výpadek
+          // nebyl plánovaný (router ho mimo reconnect lhůtu nepředává).
+          ...(wasReconnect ? { resynced: true, reconnected: true, resync } : {}),
         });
         void captureJournalPositions();
       }
@@ -1644,6 +1664,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     candidate.onmessage = null;
     candidate.onerror = null;
     candidate.onclose = null;
+    rememberSyncLoss();
     socket = null;
     socketState = 'idle';
     syncReady = false;
@@ -1710,6 +1731,7 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       scheduleReconnect('factory-throw');
       return;
     }
+    rememberSyncLoss();
     socket = candidate;
     syncReady = false;
     socketMessageTail = Promise.resolve();

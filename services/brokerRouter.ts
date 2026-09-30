@@ -246,7 +246,9 @@ export function createBrokerRouter(
         publishAggregate(event.at);
         // Scoped resync je platný jen nad živým agregátem. Dílčí route nesmí
         // přepsat controller na connected, když kritický leader stream neběží.
-        if (event.resynced && event.connected && aggregateConnected) {
+        // Snapshot po skutečném reconnectu mimo lhůtu nic nepřidá: controller
+        // disconnect viděl a běží plná reconnect recovery.
+        if (event.resynced && !event.reconnected && event.connected && aggregateConnected) {
           listener(scopedResync(broker, event));
         }
       };
@@ -343,8 +345,10 @@ export function createBrokerRouter(
           return;
         }
         if (outage) {
-          // Reconnect ve lhůtě: mrknutí se nikdy nestalo — zadržené eventy
-          // se zahodí a agregát zůstává beze změny.
+          // Reconnect ve lhůtě: controller výpadek neviděl — zadržené eventy
+          // se zahodí a agregát zůstává beze změny. Mezera ale skutečná byla
+          // (D1, 30. 9.): route snapshot proto controller musí porovnat
+          // s modelem stejně jako po plánované obměně.
           clearTimeoutImpl(outage.timer);
           pendingOutage.delete(routeBroker);
           connected.set(routeBroker, true);

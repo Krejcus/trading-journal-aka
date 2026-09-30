@@ -10876,7 +10876,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
     if (event.type === 'connection') {
-      if (event.connected && event.resynced) {
+      // Snapshot po skutečném reconnectu, jehož disconnect controller viděl
+      // (přímý broker bez routeru), je obyčejné obnovení spojení s plnou
+      // reconnect recovery; snapshot sám nic neautorizuje.
+      if (event.connected && event.resynced && !(event.reconnected && !gate.connected)) {
         // Scoped resync není důkaz agregovaného spojení. Router jej za
         // odpojeného leadera zahazuje; controller drží stejnou fail-closed
         // hranici i pro přímý/legacy broker.

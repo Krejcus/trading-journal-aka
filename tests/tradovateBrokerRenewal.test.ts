@@ -212,6 +212,62 @@ describe('plynulá obměna socketu', () => {
     unsubscribe();
   });
 
+  it('D1: skutečný reconnect vrátí route snapshot s filly z mezery a označí ho jako reconnect', async () => {
+    const sockets: FakeSocket[] = [];
+    const rawOrder = { id: 43, accountId: 200, contractId: 7, action: 'Sell', ordStatus: 'Filled' };
+    const fill = { id: 13, orderId: 43, accountId: 200, contractId: 7, action: 'Sell', qty: 1, price: 29_900 };
+    let exposeGap = false;
+    const broker = createTradovateBroker({
+      environment: 'demo', accessToken: 'token', accountSpecsByAccountId: { 200: 'F1' },
+      fetchImpl: (async (input: unknown) => {
+        const url = String(input);
+        if (url.includes('/order/list')) return response(exposeGap ? [rawOrder] : []);
+        if (url.includes('/orderVersion/list')) return response(exposeGap ? [{
+          id: 43, orderId: 43, orderQty: 1, orderType: 'Stop',
+        }] : []);
+        if (url.includes('/fill/list')) return response(exposeGap ? [fill] : []);
+        if (url.includes('/position/list')) return response(exposeGap ? [{ accountId: 200, contractId: 7, netPos: 0 }] : []);
+        if (url.includes('/contract/items')) return response([{ id: 7, name: 'MNQU6' }]);
+        return response([]);
+      }) as unknown as typeof fetch,
+      webSocketFactory: () => {
+        const socket = createFakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      reconnectDelayMs: 1,
+      reconnectJitterRatio: 0,
+    });
+    const events: BrokerEvent[] = [];
+    const unsubscribe = broker.subscribe(event => events.push(event));
+    await completeHandshake(sockets[0]);
+    const first = events.find(event => event.type === 'connection');
+    expect(first).toMatchObject({ connected: true });
+    expect((first as Extract<BrokerEvent, { type: 'connection' }>).resynced).toBeUndefined();
+    events.length = 0;
+
+    // Skutečný výpadek (ne plánovaná obměna); v mezeře se follower zavřel.
+    exposeGap = true;
+    sockets[0].close();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    expect(sockets).toHaveLength(2);
+    await completeHandshake(sockets[1]);
+    await flush();
+
+    expect(events.filter(event => event.type === 'fill')).toEqual([]);
+    const reconnect = events.find(event => event.type === 'connection' && event.connected);
+    expect(reconnect).toMatchObject({
+      type: 'connection', connected: true, resynced: true, reconnected: true,
+      resync: {
+        accountIds: [200],
+        positions: [{ accountId: 200, symbol: 'MNQU6', netQuantity: 0 }],
+        gapFills: [expect.objectContaining({ fillId: '13', brokerOrderId: '43', quantity: 1 })],
+        complete: true,
+      },
+    });
+    unsubscribe();
+  });
+
   it('nezdařená obnova se po deadline přizná jako výpadek', async () => {
     const { broker, sockets, connections, errors, unsubscribe } = harness();
     await completeHandshake(sockets[0]);

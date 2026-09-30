@@ -192,6 +192,12 @@ export type BrokerEvent =
       connected: boolean;
       at: number;
       resynced?: boolean;
+      /**
+       * `true` = snapshot po skutečném (neplánovaném) reconnectu. Má smysl
+       * jen tam, kde příjemce výpadek neviděl (reconnect lhůta routeru);
+       * jinak už běží plná reconnect recovery a snapshot se zahodí.
+       */
+      reconnected?: boolean;
       /** `true` = mezera se týká follower-only route skryté reconnect grace. */
       routeGap?: boolean;
       /** Account-scoped autoritativní stav načtený po dokončení resyncu. */
