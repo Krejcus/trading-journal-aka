@@ -1064,6 +1064,9 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     ?? groups[0]
     ?? null;
   const tightenOnly = sessionArmedAt > 0;
+  // Filip 1. 10.: násobek jde za vypnuté kopírky měnit libovolně, za zapnuté
+  // vůbec (ani snížit). Ostatní denní pravidla dál jen zpřísnit.
+  const multiplierLockedFor = (groupId: string) => copierArmed && groupId === executionGroupId;
   const renderAccountMessage = (message: string, accountIds: Iterable<number> = knownAccountIds) =>
     formatKnownCopyTradeAccountIds(message, accountIds, accountId => accountLabel(accountId));
   const connectionByFirm = useMemo(
@@ -2187,7 +2190,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               redactNames={redactNames}
                               redaction={redaction}
                               orderColumns={visibleOrderColumns}
-                              tightenOnly={tightenOnly}
+                              tightenOnly={multiplierLockedFor(group.id)}
                             /></div>
                           </div>
                         </td>
@@ -2242,6 +2245,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           group={editorGroup}
           isNew={!groups.some(group => group.id === editorGroup.id)}
           tightenOnly={tightenOnly}
+          multiplierLocked={multiplierLockedFor(editorGroup.id)}
           armedWarning={copierArmed && editorGroup.id === executionGroupId}
           accounts={snapshot.accounts}
           workerAccountRoutes={workerAccountRoutes}
@@ -3708,7 +3712,6 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
           accountId={multiplierRow.accountId}
           accountName={redactAccountName(multiplierRow.name, redactNames, redaction)}
           value={multiplierRow.scale}
-          tightenOnly={tightenOnly}
           armed={armed}
           busy={busyCommand != null}
           onClose={() => setMultiplierRow(null)}
@@ -3750,11 +3753,11 @@ const CompactSheet = ({ label, busy = false, onClose, children }: {
  * Rychlá změna násobku z telefonu — stejný příkaz `set-multiplier` jako
  * políčko v desktopové tabulce. Tlačítko s „2× → 1.5×“ je samo potvrzením.
  */
-const CompactMultiplierSheet = ({ accountId, accountName, value, tightenOnly, armed, busy, onClose, onCommit }: {
+const CompactMultiplierSheet = ({ accountId, accountName, value, armed, busy, onClose, onCommit }: {
   accountId: number;
   accountName: string;
   value: number;
-  tightenOnly: boolean;
+  /** Zapnutá kopírka: násobek nejde měnit vůbec (1. 10.). */
   armed: boolean;
   busy: boolean;
   onClose: () => void;
@@ -3769,25 +3772,24 @@ const CompactMultiplierSheet = ({ accountId, accountName, value, tightenOnly, ar
       <h4 className="text-[15px] font-black text-[var(--text-primary)]">Násobek</h4>
       <p className="mt-0.5 truncate text-[11px] text-[var(--text-secondary)]">{accountName}</p>
       <p className="mt-3 text-[11.5px] leading-relaxed text-[var(--text-secondary)]">
-        Kolik kontraktů dostane tento účet na jeden kontrakt leadera.{tightenOnly ? ' Dnes jde násobek jen snížit.' : ''}
+        Kolik kontraktů dostane tento účet na jeden kontrakt leadera.
       </p>
       <div className="mt-3">
         <NumberStepper
           size="lg" ariaLabel={`Násobek ${accountName}`}
-          value={draft} step={0.25} min={0.25} max={tightenOnly ? value : 100}
+          value={draft} step={0.25} min={0.25} max={100} disabled={armed}
           onChange={nextValue => setDraft(nextValue ?? 0.25)}
         />
       </div>
-      {/* Worker každou změnu konfigurace provádí až po odzbrojení — i tuhle. */}
       {armed ? (
         <p className="mt-3 flex gap-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2.5 text-[11px] font-bold leading-relaxed text-amber-600">
           <AlertTriangle aria-hidden="true" size={14} className="mt-px shrink-0" />
-          Změna násobku kopírku vypne. Znovu ji zapneš přepínačem skupiny.
+          Kopírka je zapnutá. Násobek změníš, až ji vypneš.
         </p>
       ) : null}
       <button
         type="button"
-        disabled={!changed || busy || submitting}
+        disabled={armed || !changed || busy || submitting}
         onClick={async () => {
           setSubmitting(true);
           const ok = await onCommit(accountId, next);
@@ -3796,7 +3798,7 @@ const CompactMultiplierSheet = ({ accountId, accountName, value, tightenOnly, ar
         }}
         className="mt-4 h-12 w-full rounded-xl bg-indigo-600 text-sm font-black text-white disabled:opacity-40"
       >
-        {submitting ? 'Čekám na potvrzení…' : changed ? `Změnit ${value}× → ${next}×` : 'Nejdřív změň násobek'}
+        {armed ? 'Nejdřív vypni kopírku' : submitting ? 'Čekám na potvrzení…' : changed ? `Změnit ${value}× → ${next}×` : 'Nejdřív změň násobek'}
       </button>
       <button type="button" disabled={submitting} onClick={onClose} className="mt-2 h-11 w-full rounded-xl border border-[var(--border-subtle)] text-[13px] font-bold text-[var(--text-secondary)]">
         Zrušit
@@ -4816,14 +4818,14 @@ const MultiplierEditor = ({ accountId, accountName, value, tightenOnly, disabled
   const [draft, setDraft] = useState(String(value));
   useEffect(() => setDraft(String(value)), [accountId, value]);
   const parsed = Number(draft);
+  // `tightenOnly` tu znamená zapnutou skupinu: násobek je zamčený (1. 10.).
   const valid = Number.isFinite(parsed)
     && parsed >= 0.01
-    && parsed <= 100
-    && (!tightenOnly || parsed <= value);
+    && parsed <= 100;
   const next = valid ? normalizeMultiplier(parsed) : null;
   const changed = next != null && next !== value;
   const commit = () => {
-    if (!changed || next == null || disabled) return;
+    if (!changed || next == null || disabled || tightenOnly) return;
     onCommit(accountId, next);
     // Hodnota se v řádku změní až po explicitním potvrzení dialogu. Tady
     // draft vrátíme na poslední potvrzený stav, aby zrušený dialog nikdy
@@ -4837,11 +4839,11 @@ const MultiplierEditor = ({ accountId, accountName, value, tightenOnly, disabled
         aria-label={`Násobek ${accountName}`}
         type="number"
         min="0.01"
-        max={tightenOnly ? value : 100}
+        max={100}
         step="0.25"
         value={draft}
-        disabled={disabled}
-        title={tightenOnly ? 'dnes jen zpřísnit' : 'Změnu potvrď tlačítkem Uložit'}
+        disabled={disabled || tightenOnly}
+        title={tightenOnly ? 'Násobek změníš po vypnutí kopírky' : 'Změnu potvrď tlačítkem Uložit'}
         onFocus={event => event.currentTarget.select()}
         onChange={event => setDraft(event.target.value)}
         onKeyDown={event => {
@@ -5299,12 +5301,14 @@ export const CopierWorkerRouteBadge = ({ route }: { route: CopierWorkerAccountRo
   ) : null
 );
 
-export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = false, accounts, workerAccountRoutes, accountLabel, saving, libraryState, libraryError, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
+export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLocked = false, armedWarning = false, accounts, workerAccountRoutes, accountLabel, saving, libraryState, libraryError, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
   /** Upravovaná skupina právě kopíruje: uložení ji vypne (worker odzbrojí před změnou). */
   armedWarning?: boolean;
   group: CopyGroupConfig;
   isNew: boolean;
   tightenOnly: boolean;
+  /** Zapnutá skupina: násobek nejde měnit vůbec (1. 10.). */
+  multiplierLocked?: boolean;
   accounts: LiveAccount[];
   workerAccountRoutes?: CopierWorkerAccountRoutes;
   accountLabel: (accountId: number, role?: CopyTradeAccountRole) => string;
@@ -5797,9 +5801,9 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, armedWarning = fa
               <div className="mt-1.5">
                 <NumberStepper
                   size="lg" ariaLabel={`Násobek ${detailAccount?.name ?? detailFollower.accountId}`}
-                  title={tightenOnly && detailBaseline ? 'dnes jen zpřísnit' : undefined}
+                  title={multiplierLocked ? 'Násobek změníš po vypnutí kopírky' : undefined}
+                  disabled={multiplierLocked}
                   value={detailFollower.multiplier} step={0.25} min={0.25}
-                  max={tightenOnly && detailBaseline ? detailBaseline.multiplier : undefined}
                   onChange={next => patchFollower(detailFollower.accountId, { multiplier: next ?? 0.25 })}
                 />
               </div>

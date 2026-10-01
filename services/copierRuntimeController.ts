@@ -2966,10 +2966,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     }
   };
-  const assertTightenOnly = (candidate: CopyGroupConfig): void => {
+  const assertTightenOnly = (
+    candidate: CopyGroupConfig,
+    allowMultiplierIncrease = !gate.armed,
+  ): void => {
     rollRiskSessionMemoryIfExpired(clock());
     if (!(sessionArmedAt > 0)) return;
-    const weaker = isWeakerRiskConfig(group, candidate);
+    // Násobek smí růst jen za kopírky, která byla vypnutá už před změnou.
+    const weaker = isWeakerRiskConfig(group, candidate, { allowMultiplierIncrease });
     if (weaker.length > 0) {
       throw new Error(`Pravidla jdou dnes jen zpřísnit: ${weaker.join(', ')} (reset po konci session)`);
     }
@@ -14444,6 +14448,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     },
     updateGroup(nextGroup) {
+      const wasArmed = gate.armed;
       // Jakýkoli pokus o změnu konfigurace nejdřív zavře live dispatch.
       gate = { ...gate, armed: false };
       if (recoveryInFlight || pendingConnectionRecovery || reconciliationRequestsPending > 0) {
@@ -14451,7 +14456,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
       if (nextGroup.id !== group.id) throw new Error('Nelze změnit runtime na jinou copy group');
       nextGroup = normalizedRuntimeGroup(nextGroup);
-      assertTightenOnly(nextGroup);
+      assertTightenOnly(nextGroup, !wasArmed);
       if (nextGroup.leaderAccountId !== group.leaderAccountId) {
         throw new Error('Změna leadera vyžaduje bezpečný reconfigureGroup preflight');
       }

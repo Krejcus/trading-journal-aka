@@ -308,6 +308,17 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   main (stash `documents-dirty-tree-20261001` + záloha v AlphaTrade-backups).
 - **Vlastní chyba:** f09271d5 commitnul `CapApp-SPM/Package.swift` s absolutními
   cestami z worktree (`git add -A` po `ios:sync`), opraveno v 6c2daec6.
+### 2026-10-01 — Násobek followera: za vypnuté kopírky libovolně, za zapnuté vůbec (Claude, rozhodnutí Filipa)
+
+Filip na telefonu nemohl zvýšit násobek: od prvního ARM dne platilo pro
+násobek „jen snížit“ (tighten-only proti tiltu). Filipovo rozhodnutí: když je
+kopírka VYPNUTÁ, násobek jde měnit libovolně (i zvýšit); když je ZAPNUTÁ,
+nejde měnit vůbec — ani snížit (dřív snížení skupinu odzbrojilo). Vynucuje
+worker (`applyGroup` odmítne změnu násobku za ARM), controller (tighten-only
+pro násobek podle ARM stavu na začátku změny), relay a příprava ARM
+(`isWeakerRiskConfig(..., { allowMultiplierIncrease })`); UI násobek za ARM
+zamkne (telefon, tabulka, editor). Ostatní denní pravidla (DLL, cut,
+maxContracts, okno, cooldown) dál jdou během session jen zpřísnit.
 
 ### 2026-09-30 — Hodnotit místo ručního zápisu, konec Guardiana, předběžné svíčky z TradingView (Claude)
 

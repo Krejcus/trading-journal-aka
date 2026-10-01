@@ -870,9 +870,8 @@ describe('local copier execution agent', () => {
     expect(onGroupChanged).toHaveBeenCalledWith(expect.objectContaining({ id: 'lucid-profile' }));
   });
 
-  it('keeps the previous runtime config when a tighter durable save fails mid-session', async () => {
+  it('keeps the previous runtime config when a durable multiplier save fails mid-session', async () => {
     const runtime = controller({ sessionArmedAt: 1_788_595_200_000 });
-    runtime.arm({ shadowMode: false });
     const onGroupChanged = vi.fn(async () => { throw new Error('disk-full'); });
     running = await startLocalCopierExecutionAgent({
       controller: runtime,
@@ -886,7 +885,6 @@ describe('local copier execution agent', () => {
     });
     expect(response.status).toBe(409);
     expect(running.status().group.followers[0].multiplier).toBe(1);
-    expect(runtime.disarm).toHaveBeenCalledWith('config-change');
     expect(onGroupChanged).toHaveBeenCalledOnce();
     expect(onGroupChanged).toHaveBeenCalledWith(expect.objectContaining({
       followers: [expect.objectContaining({ multiplier: 0.5 })],
@@ -894,7 +892,7 @@ describe('local copier execution agent', () => {
     expect(runtime.updateGroup).not.toHaveBeenCalled();
   });
 
-  it('rejects a weaker mid-session config before persistence or runtime mutation', async () => {
+  it('za zapnuté kopírky odmítne jakoukoli změnu násobku před persistem i DISARM (1. 10.)', async () => {
     const runtime = controller({ sessionArmedAt: 1_788_595_200_000 });
     runtime.arm({ shadowMode: false });
     const onGroupChanged = vi.fn(async () => undefined);
@@ -912,7 +910,7 @@ describe('local copier execution agent', () => {
 
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toMatchObject({
-      error: expect.stringContaining('followers.22.multiplier'),
+      error: expect.stringContaining('Násobek jde měnit jen při vypnuté kopírce'),
     });
     // V1: záměrná změna proti starému testu — tighten-only odmítnutí je
     // čistý preflight a nesmí vypnout dosud zdravý ARM.
@@ -921,6 +919,19 @@ describe('local copier execution agent', () => {
     expect(onGroupChanged).not.toHaveBeenCalled();
     expect(runtime.updateGroup).not.toHaveBeenCalled();
     expect(running.status().group.followers[0].multiplier).toBe(1);
+  });
+
+  it('za vypnuté kopírky po prvním ARM dne dovolí násobek i zvýšit (1. 10.)', async () => {
+    const runtime = controller({ sessionArmedAt: 1_788_595_200_000 });
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: group(), port: 0, onGroupChanged: async () => undefined,
+    });
+    const response = await post(running, running.status().nonce, {
+      type: 'copy-command',
+      command: { type: 'set-multiplier', groupId: 'runtime-test', accountId: 22, multiplier: 2 },
+    });
+    expect(response.status).toBe(200);
+    expect(running.status().group.followers[0].multiplier).toBe(2);
   });
 
   it('rolls durable config back when the leader preflight fails without a reverse runtime transition', async () => {
@@ -1606,9 +1617,10 @@ describe('atomický arm-live s konfigurací', () => {
     const runtime = controller({ sessionArmedAt });
     const onGroupChanged = vi.fn(async () => undefined);
     const prepareGroupAccounts = vi.fn(async () => ({ missingOptional: [] }));
+    // Násobek za vypnuté kopírky smí růst (1. 10.); mírnější je tu zrušený cut.
     const agent = await startLocalCopierExecutionAgent({
       controller: runtime,
-      group: group(),
+      group: { ...group(), followers: [{ accountId: 22, mode: 'on-submit', multiplier: 1, dailyLossCutUsd: 100 }] },
       onGroupChanged,
       prepareGroupAccounts,
     });
@@ -1617,13 +1629,13 @@ describe('atomický arm-live s konfigurací', () => {
         type: 'arm-live',
         group: {
           ...group(),
-          followers: [{ accountId: 22, mode: 'on-submit', multiplier: 2 }],
+          followers: [{ accountId: 22, mode: 'on-submit', multiplier: 1 }],
         },
       });
 
       expect(response.status).toBe(409);
       await expect(response.json()).resolves.toMatchObject({
-        error: expect.stringContaining('followers.22.multiplier'),
+        error: expect.stringContaining('followers.22.dailyLossCutUsd'),
       });
       // V1: tighten-only je čistý preflight. Odmítnutý atomický ARM/config
       // sync nesmí shodit již běžící shodný runtime.
@@ -1824,7 +1836,7 @@ describe('P-A změny velikosti za otevřené pozice', () => {
       });
       expect(response.status).toBe(409);
       await expect(response.json()).resolves.toMatchObject({
-        error: expect.stringContaining('uložit jde jen ve flat stavu — kopírka zůstává zapnutá se stávajícím nastavením'),
+        error: expect.stringContaining('Násobek jde měnit jen při vypnuté kopírce'),
       });
       expect(runtime.status().armed).toBe(true);
       expect(agent.status().group.followers[0].multiplier).toBe(1);

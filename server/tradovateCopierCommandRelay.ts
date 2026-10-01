@@ -512,7 +512,11 @@ const enforceRelayTightenOnly = async (options: {
     throw reason;
   }
   if (!nextGroup) return;
-  if (isWeakerRiskConfig(previousGroup, nextGroup).length > 0) {
+  // Násobek smí za vypnuté kopírky i růst (1. 10.); autoritativně to
+  // hlídá worker podle svého skutečného ARM stavu.
+  if (isWeakerRiskConfig(previousGroup, nextGroup, {
+    allowMultiplierIncrease: data.status?.controller?.armed === false,
+  }).length > 0) {
     throw new Error('tighten-only');
   }
 };

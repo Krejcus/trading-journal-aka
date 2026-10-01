@@ -106,7 +106,20 @@ const ruleActionIsWeaker = (
  * tighten-only rule. Inputs normally arrive sanitized. Invalid safety is
  * nevertheless rejected as a single fail-closed `safety` violation.
  */
-export function isWeakerRiskConfig(previous: CopierRiskConfig, next: CopierRiskConfig): string[] {
+export interface WeakerRiskConfigOptions {
+  /**
+   * Filip 1. 10. 2026: za VYPNUTÉ kopírky smí násobek followera i zvýšit.
+   * Tighten-only pro násobek platí jen pro zapnutou skupinu; ostatní
+   * pravidla (DLL, cut, maxContracts, okno…) dál jdou jen zpřísnit.
+   */
+  allowMultiplierIncrease?: boolean;
+}
+
+export function isWeakerRiskConfig(
+  previous: CopierRiskConfig,
+  next: CopierRiskConfig,
+  options: WeakerRiskConfigOptions = {},
+): string[] {
   const previousSafety = sanitizeCopyGroupSafety(previous.safety);
   const nextSafety = sanitizeCopyGroupSafety(next.safety);
   if (!previousSafety || !nextSafety) return ['safety'];
@@ -250,7 +263,7 @@ export function isWeakerRiskConfig(previous: CopierRiskConfig, next: CopierRiskC
     ) {
       add(followerField(nextFollower.accountId, 'onCut'));
     }
-    if (nextFollower.multiplier > previousFollower.multiplier) {
+    if (!options.allowMultiplierIncrease && nextFollower.multiplier > previousFollower.multiplier) {
       add(followerField(nextFollower.accountId, 'multiplier'));
     }
   }

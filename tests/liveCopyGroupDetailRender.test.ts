@@ -263,7 +263,7 @@ describe('GroupDetail Positions integrace', () => {
     expect(markup).not.toContain('Execution aktivní');
   });
 
-  it('po prvním ARM dovolí inline násobek jen snížit', () => {
+  it('za zapnuté kopírky je inline násobek zamčený (1. 10.)', () => {
     const runtimeGroup = {
       id: 'group-main',
       name: 'Hlavni',
@@ -285,12 +285,13 @@ describe('GroupDetail Positions integrace', () => {
       executionGroupId: 'group-main',
       runtimeGroup,
       sessionArmedAt: 1,
+      copierArmed: true,
     }));
     const followerRow = tableRows(markup).find(row => row.includes('Follower DEMO'));
 
     expect(followerRow).toContain(`aria-label="Násobek Follower DEMO"`);
-    expect(followerRow).toContain('max="2"');
-    expect(followerRow).toContain('title="dnes jen zpřísnit"');
+    expect(followerRow).toContain('title="Násobek změníš po vypnutí kopírky"');
+    expect(followerRow).toMatch(/aria-label="Násobek Follower DEMO"[^>]*disabled=""/);
   });
 
   it('jedinou ZAPNUTOU skupinu řadí před ostatní vypnuté profily', () => {

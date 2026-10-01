@@ -76,8 +76,15 @@ describe('ARM preserves the session risk floor', () => {
     const requested = group('fn', 0);
     requested.followers = [{ accountId: 33, mode: 'on-submit', multiplier: 1 }];
     expect(() => prepareCopierArmGroup(requested, runtime(previous))).toThrow(CopierArmBlockedError);
-    requested.followers = [{ ...previous.followers[0], multiplier: 2 }];
+    requested.followers = [{ ...previous.followers[0], dailyLossCutUsd: undefined }];
     expect(() => prepareCopierArmGroup(requested, runtime(previous))).toThrow('omezení follower účtu');
+  });
+
+  it('ARM z vypnuté kopírky smí nést vyšší násobek (1. 10.)', () => {
+    const previous = group('main', 1);
+    const requested = group('main', 1);
+    requested.followers = [{ ...previous.followers[0], multiplier: 2 }];
+    expect(prepareCopierArmGroup(requested, runtime(previous)).group.followers[0].multiplier).toBe(2);
   });
 
   it('rejects invalid safety rather than replacing it with defaults', () => {

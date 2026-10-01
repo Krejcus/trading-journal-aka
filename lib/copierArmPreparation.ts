@@ -49,7 +49,9 @@ export function prepareCopierArmGroup(
   const next = sanitizeCopyGroupSafety(group.safety);
   if (!previous || !next) throw new CopierArmBlockedError('Pravidla kopírky nejsou úplná. Obnov stav a zkontroluj záložku Risk.');
   group.safety = next;
-  const weaker = isWeakerRiskConfig(runtime.group, group);
+  // ARM vychází z vypnuté kopírky: násobek se smí změnit libovolně (1. 10.).
+  const multiplierOptions = { allowMultiplierIncrease: !runtime.controller.armed };
+  const weaker = isWeakerRiskConfig(runtime.group, group, multiplierOptions);
   for (const field of weaker) {
     switch (field) {
       case 'safety.entryCooldownMinutes': next.entryCooldownMinutes = previous.entryCooldownMinutes; break;
@@ -78,8 +80,8 @@ export function prepareCopierArmGroup(
     }
   }
   const unresolved = [...new Set([
-    ...isWeakerRiskConfig(runtime.group, group),
-    ...isWeakerRiskConfig(requested, group),
+    ...isWeakerRiskConfig(runtime.group, group, multiplierOptions),
+    ...isWeakerRiskConfig(requested, group, multiplierOptions),
   ])];
   if (unresolved.length) {
     throw new CopierArmBlockedError(`Skupina má neslučitelná pravidla: ${[...new Set(unresolved.map(copierRiskRuleName))].join(', ')}. Zkontroluj Risk; dnešní potvrzená omezení se při zapnutí nesnižují.`);

@@ -381,11 +381,20 @@ export async function startLocalCopierExecutionAgent(
     }
     next = normalized[0];
     const previous = group;
+    // Filip 1. 10.: násobek se za zapnuté kopírky nemění vůbec (ani snížení,
+    // které by jinak skupinu odzbrojilo); za vypnuté libovolně.
+    const multiplierChanged = next.followers.some(follower => {
+      const before = previous.followers.find(item => item.accountId === follower.accountId);
+      return before != null && before.multiplier !== follower.multiplier;
+    });
+    if (multiplierChanged && options.controller.status().armed) {
+      throw new Error('Násobek jde měnit jen při vypnuté kopírce. Vypni kopírku a změň ho znovu.');
+    }
     const leaderChanged = previous.leaderAccountId !== next.leaderAccountId;
     const topologyChanged = !sameAccountTopology(previous, next);
     const weaker = [...new Set([
-      ...isWeakerRiskConfig(previous, requested),
-      ...isWeakerRiskConfig(previous, next),
+      ...isWeakerRiskConfig(previous, requested, { allowMultiplierIncrease: !options.controller.status().armed }),
+      ...isWeakerRiskConfig(previous, next, { allowMultiplierIncrease: !options.controller.status().armed }),
     ])];
     const metadataOnly = weaker.length === 0 && isMetadataOnlyGroupChange(previous, next);
     const inPlaceCutTightening = weaker.length === 0 && isInPlaceCutTightening(previous, next);
