@@ -258,6 +258,26 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-01 — Hodnotit: tlustá čára, přehrávač, dotyková gesta grafu (Claude)
+
+- **Fronta Hodnotit jen od 1. 10. 2026** (Filip: měsíc starý obchod nemá smysl
+  hodnotit) — `inReviewQueue` v `lib/tradeReviewFacts.ts`; starší obchody jdou
+  otevřít jednotlivě z Historie, data v DB beze změny.
+- **Přehrávač v hodnocení (web):** Bar Replay lišta je vidět hned, ▶/⏭ startuje
+  15 min před vstupem, přepnutí obchodu replay ukončí.
+- **Boční panely hodnocení scrollují** (položky se dřív flex-shrinkem mačkaly),
+  rozbalování má pružnou animaci (obsah zůstává do konce sbalení).
+- **Dotyk na grafu (telefon):** `services/chartTouchPriceAxis.ts` — `touch-action:
+  none` na grafu (stránka se pod prstem nehne ani při dojíždějícím scrollu) +
+  `vertTouchDrag: true` (lightweight-charts jinak zahodil každý tah strmější než
+  ~27° → rychlé šoupání palcem „na chvíli nefungovalo“). Auto-scale drží cenu,
+  tah po cenové ose roztahuje. Ověřeno Filipem na iPhonu.
+- **Úklid:** Loss Day Debrief a automatický Daily Start pryč; dnešní předběžné
+  svíčky doplněny jednorázově přes `supabase storage cp`; Documents převeden na
+  main (stash `documents-dirty-tree-20261001` + záloha v AlphaTrade-backups).
+- **Vlastní chyba:** f09271d5 commitnul `CapApp-SPM/Package.swift` s absolutními
+  cestami z worktree (`git add -A` po `ios:sync`), opraveno v 6c2daec6.
+
 ### 2026-09-30 — Hodnotit místo ručního zápisu, konec Guardiana, předběžné svíčky z TradingView (Claude)
 
 **Rozhodnutí Filipa (produktové):** AlphaTrade se bude prodávat čistě jako
