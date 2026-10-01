@@ -503,7 +503,7 @@ export default function TradeReview({
   );
 
   const toastEl = toast && (
-    <div key={toast.key} className={`tr-toast fixed left-5 bottom-5 z-[320] flex items-center gap-3 h-10 pl-3 pr-2 rounded-md text-[12px] shadow-xl ${isDark ? 'bg-slate-100 text-slate-900' : 'bg-slate-900 text-white'}`}>
+    <div key={toast.key} className={`tr-toast native-fixed-above-tab-bar fixed left-5 bottom-5 z-[320] flex items-center gap-3 h-10 pl-3 pr-2 rounded-md text-[12px] shadow-xl ${isDark ? 'bg-slate-100 text-slate-900' : 'bg-slate-900 text-white'}`}>
       <span className="grid h-[18px] w-[18px] place-items-center rounded-full bg-emerald-500 text-white"><Check size={11} strokeWidth={4} /></span>
       <span>Uloženo · <b>{toast.text}</b></span>
       <button type="button" onClick={toast.undo} className="h-[26px] rounded px-2 text-[11.5px] font-bold bg-black/10">Vrátit</button>
@@ -522,7 +522,8 @@ export default function TradeReview({
       <Shell isDark={isDark}>
         <div className="absolute inset-0 flex flex-col">
           {header}{progress}
-          <div className="flex-1 min-h-0 overflow-y-auto">
+          {/* Konec panelů (poznámka) musí jít odscrollovat nad nativní lištu. */}
+          <div className="native-page-scroll-content flex-1 min-h-0 overflow-y-auto pb-[max(1rem,env(safe-area-inset-bottom))]">
             <div className="h-[46vh] min-h-[260px]">
               {currentChartTrade && <AccountExecutionChart key={String(currentChartTrade.id)} trade={currentChartTrade} verifiedDetail={currentChartTrade.executionHistory ? currentChartTrade : undefined}
                 isDark={isDark} variant="detail" chartNotes={chartNotes} onChartNotesChange={notesChange} />}
