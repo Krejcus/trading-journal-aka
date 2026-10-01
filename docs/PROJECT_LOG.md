@@ -277,8 +277,8 @@ akordeon, poznámka). **Mimo plán** vyžaduje důvod + popis ≥ 5 znaků,
 vyřazuje obchod ze statistik strategie, ale P&L účtu zůstává. Nová pole
 `plannedStopLoss/plannedTakeProfit/invalidReasons/invalidNote` —
 migrace `20260930200000_journal_review_plan_fields.sql` rozšiřuje whitelist
-triggeru `protect_journal_trade_identity` (spouští Filip: DDL + migration
-repair, `db push` zakázán). Hotovo → animace + toast s „Vrátit“ (undo vrací
+triggeru `protect_journal_trade_identity` (1. 10. spuštěna na produkci
+a zapsaná přes `migration repair --workdir <worktree>`). Hotovo → animace + toast s „Vrátit“ (undo vrací
 i `needsReview`).
 
 **Opravená past:** kombinovaná skupina (`combined_<id>`) nese v `notes`
@@ -315,6 +315,13 @@ blokuje uložení; nová pole doplněna do `dashboardTradeFields`; cílený
 `review()` (notifikace) při otevřeném hodnocení přepne obchod, rozepsané
 hodnocení se ptá; staré soubory `tv-bars` (> 3 dny) server maže při uložení.
 Svíčky sdílí limit snímků 12/min/zařízení — při 2 čteních na výstup stačí.
+
+**1. 10., další úklid (Filip):** pryč je i Loss Day Debrief (automatické
+okno při P&L < −250 USD s „Tohle se neuloží“) a automatický ranní Daily
+Start rituál (6–12 h bez přípravy) — obojí vyskakovalo samo; ranní příprava
+zůstává v Deníku. Z cronu zmizel testovací push „Alpha Guard: PŘÍSTUP
+BLOKOVÁN“. Ponechané: připomínky přípravy 60/15 min (vypínatelné), push
+k seancím, večerní review a sociální notifikace; pojistky copieru beze změny.
 
 ### 2026-09-30 — Review nasazené kopírky 061836f6 a opravy nejvážnějších nálezů (Claude)
 

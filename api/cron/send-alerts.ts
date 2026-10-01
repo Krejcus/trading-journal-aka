@@ -143,13 +143,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                                     </div>
                                     <span class="text-[10px] opacity-30 group-hover:opacity-100 transition-opacity">⌛</span>
                                 </a>
-                                <a href="?debug=true&type=g_start" class="btn block w-full p-4 bg-rose-500/5 border border-rose-500/10 hover:bg-rose-500/10 rounded-2xl flex items-center justify-between group">
-                                    <div class="flex flex-col text-left">
-                                        <span class="text-[10px] font-black italic tracking-tight text-rose-500 uppercase leading-none mb-1">🚫 Alpha Guard: PŘÍSTUP BLOKOVÁN</span>
-                                        <span class="text-[8px] text-zinc-500 font-medium tracking-tight">Stage 3: Zákaz obchodování</span>
-                                    </div>
-                                    <span class="text-[10px]">🛑</span>
-                                </a>
                             </div>
                         </div>
 
@@ -303,9 +296,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                         break;
                     case 'g_10m':
                         alerts.push({ title: '⚡ Alpha: Poslední výzva', body: 'Seance startuje za 10 minut. Stále ti chybí hotová příprava!', type: 'g_10m' });
-                        break;
-                    case 'g_start':
-                        alerts.push({ title: '🚫 Alpha Guard: PŘÍSTUP BLOKOVÁN', body: 'Střežený režim aktivní. Nemáte herní plán - dnes jen sledujte.', type: 'g_start' });
                         break;
                     case 'review_detox':
                         alerts.push({ title: '📊 KONEC DNE', body: 'Grafy tě už nepotřebují. Uzavři deník a vypni terminál.', type: 'review_detox' });
