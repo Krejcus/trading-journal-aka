@@ -1,3 +1,4 @@
+import { createEntryOrdersPrimitive } from '../services/journalEntryOrdersPrimitive';
 import { attachChartTouchGestures } from '../services/chartTouchPriceAxis';
 import { createJournalArrowStacks, createJournalChartPrimitive, createReviewPoint, createReviewPriceFocus, journalTradePriceRange, type JournalChartPrimitive } from '../services/journalChartPrimitive';
 import { createJournalPositionPrimitive } from '../services/journalPositionDrawing';
@@ -4204,9 +4205,20 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         resultBox: showManagedPositionBoxes ? position == null : undefined, protectionNote: true, isDark,
         // Hodnota bodu podle kontraktu obchodu, ne podle zobrazeného grafu (MNQ/NQ).
         pointValue: tradedRoot === 'NQ' ? 20 : 2, instrument: tradedRoot });
+    // Vstupní limity/stopy (i zrušené pokusy před vstupem) pod šipkami obchodu.
+    const entryOrders = trade.executionHistory.entryOrders?.length
+      ? createEntryOrdersPrimitive(trade.executionHistory.entryOrders, visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
+        api.controller.getChart(), series, coverage, { isDark }) : null;
     if (position) series.attachPrimitive(position);
+    if (entryOrders) series.attachPrimitive(entryOrders);
     series.attachPrimitive(primitive);
-    return () => { try { series.detachPrimitive(primitive); if (position) series.detachPrimitive(position); } catch { /* Chart already disposed. */ } };
+    return () => {
+      try {
+        series.detachPrimitive(primitive);
+        if (entryOrders) series.detachPrimitive(entryOrders);
+        if (position) series.detachPrimitive(position);
+      } catch { /* Chart already disposed. */ }
+    };
   }, [chartApiEpoch, replayActive, journalHistoryInReplay, centeredTradeView, trade, timeframe, visibleCandles, rawCandles, showManagedPositionBoxes, chartSettings.trading.orderPriceLabels, reviewMode, arrowStacks, hideTradeResult, isDark]);
 
   // Review týdne: ostatní obchody týdne. Vytvoří se jednou pro týden (ne při

@@ -362,7 +362,7 @@ export default function TradeReview({
             <li key={i} onMouseEnter={() => window.dispatchEvent(new CustomEvent(REVIEW_POINT_EVENT, { detail: pointOf(step) }))}
               className={`grid grid-cols-[56px_1fr_auto] items-center h-6 px-1.5 rounded text-[11px] transition-colors ${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-100'}`}>
               <time className={`text-[10px] tabular-nums ${muted}`}>{clockS(step.at)}</time>
-              <span className={isDark ? 'text-slate-300' : 'text-slate-600'}>{step.label}</span>
+              <span className={step.kind === 'cancel' ? 'text-slate-400 line-through decoration-slate-300' : isDark ? 'text-slate-300' : 'text-slate-600'}>{step.label}</span>
               <b className="font-semibold tabular-nums" style={{ color: STEP_COLOR[step.kind] }}>{price(step.price)}</b>
             </li>
           ))}
@@ -524,7 +524,7 @@ function draftOf(trade: Trade, noteSource?: Trade | null, initialNote?: string):
   };
 }
 
-const STEP_COLOR: Record<ReviewStep['kind'], string> = { entry: '#3b82f6', sl: '#f43f5e', tp: '#10b981', exit: '#64748b' };
+const STEP_COLOR: Record<ReviewStep['kind'], string> = { entry: '#3b82f6', sl: '#f43f5e', tp: '#10b981', exit: '#64748b', order: '#a855f7', cancel: '#94a3b8' };
 
 const numberOrNull = (value: string): number | null => {
   const n = Number(String(value).replace(',', '.').replace(/\s/g, ''));

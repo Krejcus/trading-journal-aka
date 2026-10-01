@@ -1,5 +1,6 @@
 import { journalCurrencyCode, latestJournalEvidence, projectJournalEvidence, type JournalEvidence, type JournalFill, type JournalProtectionEvent } from './tradovateJournalEvidence.js';
 import { pointValueUsd } from '../services/futuresContractSpecs.js';
+import type { TradeEntryOrder } from './journalEntryOrders.js';
 
 export interface TradeExecutionHistory {
   connectionId: string;
@@ -7,6 +8,8 @@ export interface TradeExecutionHistory {
   accountId: number;
   fills: Array<JournalFill & { role: 'entry' | 'exit'; allocatedQuantity: number }>;
   protection: JournalProtectionEvent[];
+  /** Vstupní limit/stop příkazy obchodu včetně zrušených pokusů před vstupem. */
+  entryOrders?: TradeEntryOrder[];
   gaps: Array<{ from: number; to: number | null }>;
   grossPnl: number | null;
   fees: number | null;

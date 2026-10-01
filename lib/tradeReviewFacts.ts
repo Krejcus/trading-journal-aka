@@ -4,7 +4,7 @@ import type { TradeExecutionHistory } from './tradeExecutionHistory.js';
 /** Krok „Průběh obchodu“: čas a cena z plnění a objednávek Tradovate. */
 export interface ReviewStep {
   at: number;
-  kind: 'entry' | 'sl' | 'tp' | 'exit';
+  kind: 'entry' | 'sl' | 'tp' | 'exit' | 'order' | 'cancel';
   label: string;
   price: number;
 }
@@ -109,6 +109,14 @@ export function reviewFacts(trade: Trade, history?: TradeExecutionHistory | null
   if (exitPrice != null) {
     steps.push({ at: exitAt, kind: 'exit', label: exitKind === 'sl' ? 'Výstup · SL' : exitKind === 'tp' ? 'Výstup · TP' : 'Výstup · ručně', price: exitPrice });
   }
+  // Vstupní limity/stopy: zadání, posuny a zrušené pokusy (vyplnění = „Vstup“).
+  for (const order of history?.entryOrders ?? []) {
+    const name = `${order.side} ${order.type}`;
+    order.legs.forEach((leg, index) => steps.push({ at: leg.at, kind: 'order', label: `${name} ${index ? 'posunut' : 'zadán'}`, price: leg.price }));
+    const last = order.legs[order.legs.length - 1];
+    if (order.end?.kind === 'cancel' && last) steps.push({ at: order.end.at, kind: 'cancel', label: `${name} zrušen`, price: last.price });
+  }
+  steps.sort((a, b) => a.at - b.at);
   return { long, entryPrice, exitPrice, entryAt, exitAt, move, brokerSL: firstSL ?? null, brokerTP: firstTP ?? null, exitKind, steps };
 }
 

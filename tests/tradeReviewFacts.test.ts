@@ -69,6 +69,17 @@ describe('reviewFacts', () => {
     expect(facts.exitKind).toBe('manual');
   });
 
+  it('adds entry orders (placed, moved, cancelled) to the timeline in time order', () => {
+    const facts = reviewFacts(trade(), history({
+      entryOrders: [
+        { orderId: 'c', side: 'Buy', type: 'Limit', quantity: 2, placedAt: T0 - 300_000, legs: [{ at: T0 - 300_000, price: 30790 }, { at: T0 - 200_000, price: 30795 }], end: { kind: 'cancel', at: T0 - 100_000 } },
+        { orderId: 'f', side: 'Buy', type: 'Limit', quantity: 2, placedAt: T0 - 50_000, legs: [{ at: T0 - 50_000, price: 30801 }], end: { kind: 'fill', at: T0 } },
+      ],
+    }));
+    expect(facts.steps.slice(0, 5).map(step => step.label)).toEqual(['Buy Limit zadán', 'Buy Limit posunut', 'Buy Limit zrušen', 'Buy Limit zadán', 'Vstup']);
+    expect(facts.steps[2]).toMatchObject({ kind: 'cancel', price: 30795 });
+  });
+
   it('falls back to stored prices when the trade has no execution history', () => {
     const facts = reviewFacts(trade({ entryPrice: 100, exitPrice: 110, stopLoss: 95 }), undefined);
     expect(facts.entryPrice).toBe(100);

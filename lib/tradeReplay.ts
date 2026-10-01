@@ -1,3 +1,4 @@
+import { entryOrdersAt } from './journalEntryOrders.js';
 import type { TradeExecutionHistory } from './tradeExecutionHistory.js';
 
 /**
@@ -227,6 +228,7 @@ export function historyAt(history: TradeExecutionHistory, at: number): TradeExec
     ...history,
     fills,
     protection: history.protection.filter(event => event.at <= at),
+    ...(history.entryOrders ? { entryOrders: entryOrdersAt(history.entryOrders, at) } : {}),
     gaps: history.gaps.filter(gap => gap.from <= at).map(gap => ({ ...gap, to: gap.to != null && gap.to > at ? at : gap.to })),
     grossPnl: closed ? history.grossPnl : null,
     fees: closed ? history.fees : null,

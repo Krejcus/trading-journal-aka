@@ -1,3 +1,4 @@
+import { episodeEntryOrders } from './journalEntryOrders.js';
 import { journalSnapshotAnchors } from './journalPositionSnapshot.js';
 import { buildJournalAccountTrades, type JournalAccountTrade, type TradeExecutionHistory } from './tradeExecutionHistory.js';
 import { journalCurrencyCode, latestJournalEvidence, orderedJournalEvidence, projectJournalEvidence, type JournalEvidence, type JournalFill } from './tradovateJournalEvidence.js';
@@ -180,6 +181,16 @@ export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[
       const rows = childrenByParent.get(key) ?? []; rows.push(String(event.entity.id)); childrenByParent.set(key, rows);
     }
   }
+  // Výstup předchozí pozice na stejném účtu/kontraktu — starší příkazy patří jí.
+  const previousExitOf = (episode: (typeof working)[number]) => {
+    let best: number | null = null;
+    for (const other of working) {
+      if (other === episode || other.accountId !== episode.accountId || other.contractId !== episode.contractId
+        || other.exitAt == null || other.exitAt > episode.entryAt) continue;
+      if (best == null || other.exitAt > best) best = other.exitAt;
+    }
+    return best;
+  };
   const episodes = working.map((episode): JournalPositionEpisode => {
     if (episode.status === 'open') episode.observedThrough = Math.max(episode.observedThrough, lastObservationAt);
     const entryFills = episode.fills.filter(fill => fill.role === 'entry');
@@ -233,6 +244,13 @@ export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[
       && (protectiveOrders.has(event.orderId) || standaloneOrders.has(event.orderId))
       && event.at >= episode.baselineAt && event.at <= through)
       .map(event => standaloneOrders.has(event.orderId) ? { ...event, source: 'standalone' as const } : event);
+    const entryFillAtByOrder = new Map<string, number>();
+    for (const fill of entryFills) entryFillAtByOrder.set(fill.orderId, Math.min(fill.at, entryFillAtByOrder.get(fill.orderId) ?? Infinity));
+    const entryOrders = episodeEntryOrders({
+      accountId: episode.accountId, contractId: episode.contractId, entryAt: episode.entryAt, through,
+      previousExitAt: previousExitOf(episode), entryFillAtByOrder,
+      protectiveOrderIds: new Set([...protectiveOrders, ...standaloneOrders]),
+    }, protectionByOrder, latest, childrenByParent);
     const gaps = projection.gaps.filter(gap => gap.from >= episode.entryAt && gap.from <= through);
     const ownIssues = [...new Set([...episode.issues, ...realizations.flatMap(pair => pair.history.issues)
       .filter(issue => issue !== 'protection-history-unavailable'), ...projection.issues,
@@ -243,7 +261,7 @@ export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[
       ? realizations.reduce((sum, pair) => sum + pair.history.grossPnl!, 0) : null;
     const history: TradeExecutionHistory = {
       connectionId: evidence[0].connectionId, environment: evidence[0].environment, accountId: episode.accountId,
-      fills: episode.fills, protection, gaps, grossPnl: gross, fees, netPnl: gross == null || fees == null ? null : gross - fees,
+      fills: episode.fills, protection, ...(entryOrders.length ? { entryOrders } : {}), gaps, grossPnl: gross, fees, netPnl: gross == null || fees == null ? null : gross - fees,
       complete: episode.status === 'closed' && ownIssues.length === 0 && gross != null && fees != null,
       issues: ownIssues,
       position: { id: episode.id, status: episode.status, openedAt: episode.entryAt, closedAt: episode.exitAt,
