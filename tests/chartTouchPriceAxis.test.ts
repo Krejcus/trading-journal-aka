@@ -4,6 +4,7 @@ import { attachTouchPriceAxisScale } from '../services/chartTouchPriceAxis';
 function fakeElement() {
   const listeners = new Map<string, (event: unknown) => void>();
   return {
+    style: { touchAction: '' } as { touchAction: string },
     getBoundingClientRect: () => ({ left: 0, right: 400, top: 0, bottom: 300 }),
     addEventListener: (type: string, listener: (event: unknown) => void) => { listeners.set(type, listener); },
     removeEventListener: (type: string) => { listeners.delete(type); },
@@ -36,5 +37,13 @@ describe('attachTouchPriceAxisScale', () => {
     element.fire('touchstart', 390);
     detach();
     expect(applyOptions).toHaveBeenLastCalledWith({ handleScroll: { vertTouchDrag: false } });
+  });
+
+  it('keeps the page still under the chart while attached', () => {
+    const element = fakeElement();
+    const detach = attachTouchPriceAxisScale({ chartElement: () => element as never, priceScale: () => ({ width: () => 60 }) as never, applyOptions: vi.fn() });
+    expect(element.style.touchAction).toBe('none');
+    detach();
+    expect(element.style.touchAction).toBe('');
   });
 });
