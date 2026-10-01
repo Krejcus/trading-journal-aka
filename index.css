@@ -3674,6 +3674,54 @@ body.chart-note-dragging * {
 .tr-row-in > *:nth-child(2) { animation-delay: .03s; } .tr-row-in > *:nth-child(3) { animation-delay: .06s; }
 .tr-row-in > *:nth-child(4) { animation-delay: .09s; } .tr-row-in > *:nth-child(5) { animation-delay: .12s; }
 .tr-row-in > *:nth-child(6) { animation-delay: .15s; } .tr-row-in > *:nth-child(7) { animation-delay: .18s; }
+/* Rozbalování v hodnocení: pružná výška, obsah se zaostří a vyjede, řádky
+   a štítky najíždějí postupně, šipka dojede s lehkým přeskokem. */
+.tr-fold { transition: box-shadow .35s ease, border-color .35s ease; }
+.tr-fold[data-open="true"] { box-shadow: 0 10px 24px -16px rgba(15, 23, 42, .45); }
+.tr-fold-chevron { transition: transform .5s cubic-bezier(.34, 1.56, .64, 1); }
+.tr-fold-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows .5s cubic-bezier(.22, 1, .36, 1);
+}
+.tr-fold-body[data-open="true"] { grid-template-rows: 1fr; }
+.tr-fold-body > div { overflow: hidden; min-height: 0; }
+.tr-fold-body .tr-fold-content {
+  opacity: 0;
+  transform: translateY(-8px) scale(.98);
+  filter: blur(3px);
+  transform-origin: top center;
+  transition: opacity .22s ease, transform .35s cubic-bezier(.22, 1, .36, 1), filter .25s ease;
+}
+.tr-fold-body[data-open="true"] .tr-fold-content {
+  opacity: 1;
+  transform: none;
+  filter: none;
+  transition: opacity .32s ease .06s, transform .5s cubic-bezier(.22, 1, .36, 1) .04s, filter .35s ease .06s;
+}
+.tr-fold-body[data-open="true"] :is(.tr-fold-rows, .tr-fold-pills) > * {
+  animation: tr-fold-row .5s cubic-bezier(.22, 1, .36, 1) backwards;
+  animation-delay: .1s;
+}
+.tr-fold-body[data-open="true"] .tr-fold-pills > * { animation-name: tr-fold-pill; }
+.tr-fold-body[data-open="true"] :is(.tr-fold-rows, .tr-fold-pills) > *:nth-child(2) { animation-delay: 0.14s; }
+.tr-fold-body[data-open="true"] :is(.tr-fold-rows, .tr-fold-pills) > *:nth-child(3) { animation-delay: 0.18s; }
+.tr-fold-body[data-open="true"] :is(.tr-fold-rows, .tr-fold-pills) > *:nth-child(4) { animation-delay: 0.22s; }
+.tr-fold-body[data-open="true"] :is(.tr-fold-rows, .tr-fold-pills) > *:nth-child(5) { animation-delay: 0.26s; }
+.tr-fold-body[data-open="true"] :is(.tr-fold-rows, .tr-fold-pills) > *:nth-child(6) { animation-delay: 0.30s; }
+.tr-fold-body[data-open="true"] :is(.tr-fold-rows, .tr-fold-pills) > *:nth-child(7) { animation-delay: 0.34s; }
+.tr-fold-body[data-open="true"] :is(.tr-fold-rows, .tr-fold-pills) > *:nth-child(8) { animation-delay: 0.38s; }
+.tr-fold-body[data-open="true"] :is(.tr-fold-rows, .tr-fold-pills) > *:nth-child(9) { animation-delay: 0.42s; }
+.tr-fold-body[data-open="true"] :is(.tr-fold-rows, .tr-fold-pills) > *:nth-child(10) { animation-delay: 0.46s; }
+.tr-fold-body[data-open="true"] :is(.tr-fold-rows, .tr-fold-pills) > *:nth-child(11) { animation-delay: 0.50s; }
+.tr-fold-body[data-open="true"] :is(.tr-fold-rows, .tr-fold-pills) > *:nth-child(12) { animation-delay: 0.54s; }
+@keyframes tr-fold-row { from { opacity: 0; transform: translateY(6px); filter: blur(2px); } }
+@keyframes tr-fold-pill { from { opacity: 0; transform: translateY(4px) scale(.85); } }
+@media (prefers-reduced-motion: reduce) {
+  .tr-fold-body, .tr-fold-body .tr-fold-content, .tr-fold-chevron { transition: none; }
+  .tr-fold-body .tr-fold-content { filter: none; transform: none; }
+  .tr-fold-body[data-open="true"] :is(.tr-fold-rows, .tr-fold-pills) > * { animation: none; }
+}
 .tr-pill-x { display: none; }
 .tr-pill:hover .tr-pill-x { display: grid; animation: tr-pop .15s ease-out; }
 @keyframes tr-pop { from { opacity: 0; transform: scale(.5); } }

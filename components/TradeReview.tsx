@@ -421,7 +421,7 @@ export default function TradeReview({
       <Section title="Průběh obchodu" aux={<><Lock size={10} /> objednávky</>} />
       <Fold open={openFold.steps} onToggle={() => setOpenFold(state => ({ ...state, steps: !state.steps }))} line={line} bg={cellBg}
         summary={<>{facts.steps.length} kroků · {noSL ? <b className="text-amber-600">bez SL</b> : facts.steps.some(step => step.label === 'SL posunut') ? 'SL posunut' : 'SL beze změny'} · {facts.exitKind === 'tp' ? 'TP' : facts.exitKind === 'sl' ? 'stop loss' : 'ruční výstup'} {clock(facts.exitAt)}</>}>
-        <ol className="tr-row-in -mx-1.5 py-1" onMouseLeave={() => window.dispatchEvent(new CustomEvent(REVIEW_POINT_EVENT, { detail: null }))}>
+        <ol className="tr-fold-rows -mx-1.5 py-1" onMouseLeave={() => window.dispatchEvent(new CustomEvent(REVIEW_POINT_EVENT, { detail: null }))}>
           {facts.steps.map((step, i) => (
             <li key={i} onMouseEnter={() => window.dispatchEvent(new CustomEvent(REVIEW_POINT_EVENT, { detail: pointOf(step) }))}
               className={`grid grid-cols-[56px_1fr_auto] items-center h-6 px-1.5 rounded text-[11px] transition-colors ${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-100'}`}>
@@ -437,7 +437,7 @@ export default function TradeReview({
         summary={<span className="flex flex-wrap items-center gap-1.5"><b className={ink}>{members.length} {members.length === 1 ? 'účet' : members.length < 5 ? 'účty' : 'účtů'}</b>
           {firmGroups(accountRows).map(group => <span key={group.firm} className={`inline-flex h-[22px] items-center gap-1 rounded-full border pl-0.5 pr-2 text-[10.5px] font-semibold ${line} ${isDark ? 'bg-white/[0.03]' : 'bg-white'}`}><FirmMark firm={group.firm} size={18} />{firmLabel(group.firm)}{group.count > 1 ? ` ×${group.count}` : ''}</span>)}
           {maxLatency > 0 && <span className={muted}>· kopie do {maxLatency} ms</span>}</span>}>
-        <div className="tr-row-in py-1">
+        <div className="tr-fold-rows py-1">
           {accountRows.map(row => (
             <div key={row.id} className={`grid grid-cols-[auto_1fr_auto] items-center gap-2 h-[30px] text-[11.5px] border-b border-dashed last:border-0 ${line}`}>
               <FirmMark firm={row.firm} size={22} />
@@ -739,14 +739,18 @@ function InputCell({ label, value, placeholder, onChange }: { label: string; val
 }
 
 function Fold({ open, onToggle, summary, children, line, bg }: { open: boolean; onToggle: () => void; summary: React.ReactNode; children: React.ReactNode; line: string; bg: string }) {
+  // Obsah zůstane vykreslený, dokud sbalení nedoběhne — jinak by zmizel naráz.
+  const [shown, setShown] = useState(open);
+  useEffect(() => { if (open) setShown(true); }, [open]);
   return (
-    <div className={`mx-3 overflow-hidden rounded-md border ${line} ${bg}`}>
+    <div className={`tr-fold mx-3 overflow-hidden rounded-md border ${line} ${bg}`} data-open={open}>
       <button type="button" onClick={onToggle} aria-expanded={open} className="flex w-full items-center gap-2 px-2.5 py-2 text-left text-[11.5px]">
         <span className="flex-1 min-w-0 leading-snug">{summary}</span>
-        <ChevronDown size={13} className={`shrink-0 text-slate-400 transition-transform duration-300 ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown size={13} className={`tr-fold-chevron shrink-0 text-slate-400 ${open ? 'rotate-180' : ''}`} />
       </button>
-      <div className="review-section-body" data-open={open} inert={!open}>
-        <div><div className={`border-t px-2.5 ${line}`}>{open && children}</div></div>
+      <div className="tr-fold-body" data-open={open} inert={!open}
+        onTransitionEnd={event => { if (event.target === event.currentTarget && !open) setShown(false); }}>
+        <div><div className={`tr-fold-content border-t px-2.5 ${line}`}>{(open || shown) && children}</div></div>
       </div>
     </div>
   );
@@ -778,7 +782,7 @@ function TagGroup({ title, color, options, value, set, labelOf = (id: string) =>
         <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
         <span className="flex-1 text-[8.5px] font-black uppercase tracking-[0.11em] text-slate-500">{title}</span>
         {value.length > 0 && <span className="text-[10px] font-bold" style={{ color }}>{value.length}</span>}
-        <ChevronDown size={12} className={`text-slate-400 transition-transform duration-300 ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown size={12} className={`tr-fold-chevron text-slate-400 ${open ? 'rotate-180' : ''}`} />
       </button>
       {!open && (
         <div className="flex flex-wrap gap-1 px-2 pb-2">
@@ -791,9 +795,9 @@ function TagGroup({ title, color, options, value, set, labelOf = (id: string) =>
           )) : <span className="px-0.5 text-[11px] text-slate-400">Klikni a vyber</span>}
         </div>
       )}
-      <div className="review-section-body" data-open={open} inert={!open}>
-        <div>
-          <div className="flex flex-wrap gap-1 px-2 pb-2">
+      <div className="tr-fold-body" data-open={open} inert={!open}>
+        <div className="tr-fold-content">
+          <div className="tr-fold-pills flex flex-wrap gap-1 px-2 pb-2">
             {all.map(item => (
               <button key={item} type="button" onClick={() => toggle(item)} aria-pressed={value.includes(item)} className={pill(item, value.includes(item))} style={value.includes(item) ? onStyle : undefined}>
                 {tagIcon(labelOf(item))}{labelOf(item)}
