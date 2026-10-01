@@ -4044,10 +4044,12 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     };
   }, [chartApiEpoch, focusReviewPrice, reviewMode]);
   // Hodnocení: najetí na krok průběhu obchodu zvýrazní jeho bod v grafu.
+  // Platí pro každý graf (hodnocení na webu i v telefonu je graf detailu);
+  // bez události z hodnocení primitivum nic nekreslí.
   const reviewPointRef = useRef<ReturnType<typeof createReviewPoint> | null>(null);
   useLayoutEffect(() => {
     const api = apiRef.current;
-    if (!api || !reviewMode) return;
+    if (!api) return;
     const chart = api.controller.getChart();
     const series = api.controller.getSeries() as ISeriesApi<'Candlestick'>;
     const point = createReviewPoint(chart, series);
@@ -4063,7 +4065,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       if (reviewPointRef.current === point) reviewPointRef.current = null;
       try { series.detachPrimitive(point.primitive); } catch { /* Chart already disposed. */ }
     };
-  }, [chartApiEpoch, reviewMode]);
+  }, [chartApiEpoch]);
   useEffect(() => {
     reviewPointRef.current?.setCandles(visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60);
   }, [visibleCandles, timeframe, chartApiEpoch, reviewMode]);

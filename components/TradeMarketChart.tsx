@@ -431,10 +431,14 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
     if (detail) { setFullHistory(levelsWanted || isFullscreen || snapshotMode); setHistoryReady(false); }
     setHistorySettled(false);
     if (!tradeChartDataAvailable(timing)) {
+      let retryTimer: number | undefined;
       loadProvisionalCandles(trade, timing).then(response => {
         if (cancelled) return;
         if (!response) {
           setError({ code: 'data-not-yet-historical', message: 'Databento historical feed zpřístupní tento obchod přibližně 24 hodin po trhu.' });
+          // Čerstvý obchod: worker čte svíčky z TradingView 65 s a 20 min po
+          // výstupu — dokud může ještě přijít, zkusit to znovu.
+          if (Date.now() - timing.exitMs < 25 * 60_000) retryTimer = window.setTimeout(() => setRetry(value => value + 1), 45_000);
           return;
         }
         setRawCandles(response.candles);
@@ -445,7 +449,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
         setHistoryReady(true);
         setHistorySettled(true);
       }).finally(() => { if (!cancelled) setLoading(false); });
-      return () => { cancelled = true; };
+      return () => { cancelled = true; window.clearTimeout(retryTimer); };
     }
     Promise.resolve().then(() => loadTradeChartCandles(trade, root, detail ? 'session' : 'full', timing)).then(response => {
       if (cancelled) return;

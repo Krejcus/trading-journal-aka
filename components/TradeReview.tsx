@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import {
   AlertTriangle, Brackets, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Droplet, Flame, GitCompare, Loader2, Lock,
   LogOut, Meh, Moon, MoveVertical, RotateCcw, Smile, Square, Tag, TrendingDown, TrendingUp, X, Zap,
@@ -7,7 +6,6 @@ import {
 import type { Account, CustomEmotion, Trade } from '../types';
 import AccountExecutionChart from './AccountExecutionChart';
 import { REVIEW_FOCUS_EVENT, REVIEW_POINT_EVENT } from './CandleKitTradeChart';
-import type { ReviewSlotElements } from './AlphaTradeChartWorkspace';
 import ConfirmationModal from './ConfirmationModal';
 import { QuantumSpinner } from './QuantumLoader';
 import { shotTargetIds } from './HistoryScreenshotSlot';
@@ -15,9 +13,7 @@ import { storageService } from '../services/storageService';
 import { isEvidenceJournalTrade } from '../lib/journalTradeFacts';
 import { aggregateHistoryTrades, explicitTradeMaster, isCombinedTrade, tradeDetailMembers, tradeDetailSource } from '../lib/tradeHistoryPresentation';
 import { chartNotesOf, type ChartNote } from '../lib/chartNotes';
-import { loadReviewWeekCandles, tradeChartDataAvailable, tradeChartTiming } from '../services/tradeChartData';
-import { loadProvisionalCandles } from '../services/provisionalCandles';
-import type { MarketCandleResponse } from '../services/marketData';
+import { tradeChartTiming } from '../services/tradeChartData';
 import { planChoiceOf, planPatch } from '../lib/weeklyReview';
 import { REVIEW_INVALID_REASONS, monthlyInvalidSummary, planSideError, reviewFacts, reviewR, undoPatch, type ReviewStep } from '../lib/tradeReviewFacts';
 import { FIRM_LOGOS, firmColor, firmInitials, firmLabel, firmOf } from '../utils/accountFirm';
@@ -106,55 +102,10 @@ export default function TradeReview({
       });
   }, [detailRetry, items, membersOf, settledIndex]);
 
-  // ── Svíčky pro všechny obchody fronty (kontrakt ověřený pro každý zvlášť) ─
+  // ── Graf: obchod s historií plnění (svíčky si načte graf detailu sám) ──
   const sources = useMemo(() => items.map(trade => tradeDetailSource(trade, allTrades) ?? trade), [allTrades, items]);
   const chartTrades = useMemo(() => sources.map(source => details.get(String(source.id)) ?? source), [details, sources]);
-  // Svíčky po jednotlivých obchodech (aktuální + další): fronta může mít
-  // stovky obchodů přes měsíce, jedno společné okno by bylo obří.
-  const [candleMap, setCandleMap] = useState<Map<string, MarketCandleResponse | null>>(new Map());
-  const candleRequested = useRef(new Set<string>());
-  const candleRetryTimers = useRef(new Map<string, number>());
-  const [candleRetry, setCandleRetry] = useState(0);
-  useEffect(() => () => { for (const timer of candleRetryTimers.current.values()) window.clearTimeout(timer); }, []);
-  useEffect(() => {
-    if (narrow) return;
-    for (const i of [settledIndex, settledIndex + 1]) {
-      const source = sources[i];
-      const trade = chartTrades[i];
-      if (!source || !trade) continue;
-      const id = String(trade.id);
-      // Journal obchod čeká na historii plnění — z ní se volí kontrakt (rollover).
-      if (candleRequested.current.has(id) || (isEvidenceJournalTrade(source) && !details.has(String(source.id)))) continue;
-      candleRequested.current.add(id);
-      loadReviewWeekCandles([trade])
-        // Databento data ještě nemá (~24 h) → předběžné svíčky z TradingView.
-        .then(async byTrade => {
-          const timing = tradeChartTiming(trade);
-          return byTrade.get(id) ?? (tradeChartDataAvailable(timing) ? null : await loadProvisionalCandles(trade, timing));
-        })
-        .then(data => {
-          if (!mountedRef.current) return;
-          setCandleMap(map => new Map(map).set(id, data));
-          // Čerstvý obchod: worker čte svíčky 65 s a 20 min po výstupu — zkusit znovu.
-          const { exitMs } = tradeChartTiming(trade);
-          const retryAt = !data ? Date.now() + 45_000 : data.provider === 'tradingview' ? exitMs + 21 * 60_000 : 0;
-          if (retryAt > Date.now() && Date.now() - exitMs < 24 * 3_600_000) {
-            window.clearTimeout(candleRetryTimers.current.get(id));
-            candleRetryTimers.current.set(id, window.setTimeout(() => {
-              candleRequested.current.delete(id);
-              setCandleRetry(value => value + 1);
-            }, retryAt - Date.now()));
-          }
-        })
-        .catch(() => { if (mountedRef.current) setCandleMap(map => new Map(map).set(id, null)); });
-    }
-  }, [candleRetry, chartTrades, details, narrow, settledIndex, sources]);
-  const candleOf = (trade: Trade | null | undefined) => trade ? candleMap.get(String(trade.id)) ?? undefined : undefined;
   const currentChartTrade = chartTrades[Math.min(chartIndex, chartTrades.length - 1)] ?? null;
-  const panelChartTrade = current ? chartTrades[items.indexOf(current)] ?? null : null;
-  const candlesReady = panelChartTrade ? candleMap.has(String(panelChartTrade.id)) : false;
-  const chartData = candleOf(currentChartTrade);
-  const contextTrades = useMemo(() => currentChartTrade && chartData ? [currentChartTrade] : [], [chartData, currentChartTrade]);
 
   // ── Rozepsané hodnocení ───────────────────────────────────────────────────
   const [draftState, setDraftState] = useState<{ id: string; draft: ReviewDraft } | null>(null);
@@ -284,19 +235,13 @@ export default function TradeReview({
       if (target?.closest?.('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return;
       if (event.key === 'ArrowRight') { event.preventDefault(); keysRef.current.move(1); }
       if (event.key === 'ArrowLeft') { event.preventDefault(); keysRef.current.move(-1); }
-      if (event.key === 'Escape' && narrow) { event.preventDefault(); keysRef.current.close(); }
+      if (event.key === 'Escape') { event.preventDefault(); keysRef.current.close(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [narrow]);
 
-  // ── Graf (desktop): workspace s místy pro panely ──────────────────────────
-  const [slots, setSlots] = useState<ReviewSlotElements | null>(null);
-  const closeRef = useRef(close);
-  closeRef.current = close;
-  const stableClose = useCallback(() => closeRef.current(), []);
-  const review = useMemo(() => chartData ? { onSlotsReady: setSlots, onClose: stableClose, trades: contextTrades, drawingKey: 'review-queue', data: chartData } : null,
-    [chartData, contextTrades, stableClose]);
+  // ── Graf: poznámky v grafu a snímek patří hodnocenému obchodu ─────────────
   const [notesOverride, setNotesOverride] = useState<Map<string, ChartNote[]>>(new Map());
   const chartNotes = useMemo(() => currentChartTrade ? notesOverride.get(String(currentChartTrade.id)) ?? chartNotesOf(currentChartTrade) : [], [currentChartTrade, notesOverride]);
   const notesChange = useMemo(() => onSaveChartNotes && current && currentChartTrade ? (next: ChartNote[]) => {
@@ -311,11 +256,6 @@ export default function TradeReview({
     const url = await storageService.uploadScreenshot(dataUrl, ids[0]);
     return onAttachScreenshot(ids, url);
   } : undefined, [current, onAttachScreenshot]);
-  const chartElement = useMemo(() => !narrow && currentChartTrade && review ? (
-    <AccountExecutionChart trade={currentChartTrade} verifiedDetail={currentChartTrade.executionHistory ? currentChartTrade : undefined}
-      isDark={isDark} variant="detail" chartNotes={chartNotes} onChartNotesChange={notesChange} onSaveSnapshot={snapshotSave} review={review} />
-  ) : null, [chartNotes, currentChartTrade, isDark, narrow, notesChange, review, snapshotSave]);
-
   // ── Panely ────────────────────────────────────────────────────────────────
   const [openFold, setOpenFold] = useState<{ steps: boolean; accounts: boolean }>({ steps: false, accounts: false });
   const [openTag, setOpenTag] = useState<string | null>(null);
@@ -367,11 +307,6 @@ export default function TradeReview({
       <Pill isDark={isDark}>{new Date(facts.entryAt).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric' })} · {clock(facts.entryAt)}–{clock(facts.exitAt)}</Pill>
       {noSL && <Pill className="text-amber-600 bg-amber-500/10 border-amber-500/40">⚠ Bez SL</Pill>}
       {!narrow && <Pill isDark={isDark}><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Tradovate</Pill>}
-      {!narrow && chartData?.provider === 'tradingview' && (
-        <span title="Svíčky z TradingView přečtené po výstupu. Databento je nahradí zhruba 24 h po trhu.">
-          <Pill className="text-amber-600 bg-amber-500/10 border-amber-500/40">Předběžný graf · TradingView</Pill>
-        </span>
-      )}
       <span className="flex-1" />
       {narrow && <button type="button" onClick={close} aria-label="Zavřít hodnocení" className={`h-8 w-8 -mr-1.5 grid place-items-center rounded-md ${muted}`}><X size={17} /></button>}
       {narrow && <span className="basis-full h-0" />}
@@ -383,6 +318,7 @@ export default function TradeReview({
       </div>
       {!narrow && <button type="button" onClick={() => move(1)} className={`h-8 px-3 rounded-md border text-[12px] font-bold ${line} ${muted} ${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-50'}`}>Přeskočit</button>}
       <DoneButton phase={phase} blocked={blocked} last={items.filter(trade => trade.needsReview === true).length <= 1} onClick={() => { void markDone(); }} />
+      {!narrow && <button type="button" onClick={close} aria-label="Zavřít hodnocení" title="Zavřít (Esc)" className={`h-8 w-8 grid place-items-center rounded-md ${muted} ${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-100'}`}><X size={17} /></button>}
     </div>
   );
 
@@ -517,6 +453,11 @@ export default function TradeReview({
   );
 
   // Telefon: vložený graf a panely pod sebou, Hotovo dole.
+  const chart = currentChartTrade && (
+    <AccountExecutionChart key={String(currentChartTrade.id)} trade={currentChartTrade} verifiedDetail={currentChartTrade.executionHistory ? currentChartTrade : undefined}
+      isDark={isDark} variant="detail" chartNotes={chartNotes} onChartNotesChange={notesChange} onSaveSnapshot={snapshotSave} />
+  );
+
   if (narrow) {
     return (
       <Shell isDark={isDark}>
@@ -524,10 +465,7 @@ export default function TradeReview({
           {header}{progress}
           {/* Konec panelů (poznámka) musí jít odscrollovat nad nativní lištu. */}
           <div className="native-page-scroll-content flex-1 min-h-0 overflow-y-auto pb-[max(1rem,env(safe-area-inset-bottom))]">
-            <div className="h-[46vh] min-h-[260px]">
-              {currentChartTrade && <AccountExecutionChart key={String(currentChartTrade.id)} trade={currentChartTrade} verifiedDetail={currentChartTrade.executionHistory ? currentChartTrade : undefined}
-                isDark={isDark} variant="detail" chartNotes={chartNotes} onChartNotesChange={notesChange} />}
-            </div>
+            <div className="h-[46vh] min-h-[260px]">{chart}</div>
             {left}{right}
           </div>
         </div>
@@ -536,33 +474,20 @@ export default function TradeReview({
     );
   }
 
+  // Web: jeden minutový graf jako v detailu obchodu (přehrávač, Go To, poznámky
+  // do grafu) mezi panely hodnocení.
   return (
     <Shell isDark={isDark}>
-      {chartElement ? (
-        <div className="absolute inset-0">
-          {chartElement}
-          {slots && createPortal(<>{header}{progress}</>, slots.header)}
-          {slots && createPortal(left, slots.left)}
-          {slots && createPortal(right, slots.side)}
-        </div>
-      ) : (
-        <div className="absolute inset-0 flex flex-col">
-          {header}{progress}
-          <div className="flex flex-1 min-h-0">
-            {left}
-            <div className="relative flex-1 min-w-0 grid place-items-center">
-              {!candlesReady ? <QuantumSpinner /> : (
-                <div className={`w-[340px] rounded-lg border p-4 shadow-lg ${line} ${isDark ? 'bg-[#0b1017]' : 'bg-white'}`}>
-                  <p className={`text-[13px] font-bold ${ink}`}>Graf dorazí zítra v {clock(facts.exitAt)}</p>
-                  <p className={`mt-1 text-[11.5px] leading-relaxed ${muted}`}>K tomuto obchodu zatím nejsou svíčky. Doplní je přesná data z Databentu (zpoždění 24 h). Hodnotit můžeš hned, poznámky do grafu až zítra.</p>
-                </div>
-              )}
-              <button type="button" onClick={close} aria-label="Zavřít hodnocení" className={`absolute right-3 top-3 h-8 w-8 grid place-items-center rounded-md ${muted}`}><X size={17} /></button>
-            </div>
-            {right}
+      <div className="absolute inset-0 flex flex-col">
+        {header}{progress}
+        <div className="flex flex-1 min-h-0">
+          {left}
+          <div key={currentChartTrade ? String(currentChartTrade.id) : 'none'} className={`relative flex-1 min-w-0 ${isDark ? 'bg-[#090d12]' : 'bg-white'}`}>
+            {chart}
           </div>
+          {right}
         </div>
-      )}
+      </div>
       {toastEl}{confirm}
     </Shell>
   );
