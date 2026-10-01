@@ -12,11 +12,11 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "8.5.0"),
-        .package(name: "CapacitorApp", path: "../../../../../../Users/filipkrejca/Documents/trading-journal-aka/node_modules/@capacitor/app"),
-        .package(name: "CapacitorBrowser", path: "../../../../../../Users/filipkrejca/Documents/trading-journal-aka/node_modules/@capacitor/browser"),
-        .package(name: "CapacitorFilesystem", path: "../../../../../../Users/filipkrejca/Documents/trading-journal-aka/node_modules/@capacitor/filesystem"),
-        .package(name: "CapacitorLocalNotifications", path: "../../../../../../Users/filipkrejca/Documents/trading-journal-aka/node_modules/@capacitor/local-notifications"),
-        .package(name: "CapacitorPushNotifications", path: "../../../../../../Users/filipkrejca/Documents/trading-journal-aka/node_modules/@capacitor/push-notifications")
+        .package(name: "CapacitorApp", path: "../../../node_modules/@capacitor/app"),
+        .package(name: "CapacitorBrowser", path: "../../../node_modules/@capacitor/browser"),
+        .package(name: "CapacitorFilesystem", path: "../../../node_modules/@capacitor/filesystem"),
+        .package(name: "CapacitorLocalNotifications", path: "../../../node_modules/@capacitor/local-notifications"),
+        .package(name: "CapacitorPushNotifications", path: "../../../node_modules/@capacitor/push-notifications")
     ],
     targets: [
         .target(
