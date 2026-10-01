@@ -36,6 +36,38 @@ export default function TradeReplayBar({ isDark, playing, atEnd, speed, goTo, on
   }, [menu]);
   const toggle = (id: 'goto' | 'speed') => setMenu(current => current === id ? null : id);
 
+  // Lištu jde chytit za úchyt a přesunout (myš i prst); drží se uvnitř grafu.
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const dragRef = useRef<{ id: number; x: number; y: number; base: { x: number; y: number }; bounds: { minX: number; maxX: number; minY: number; maxY: number } } | null>(null);
+  const startDrag = (event: React.PointerEvent<HTMLSpanElement>) => {
+    const bar = barRef.current;
+    const parent = bar?.offsetParent as HTMLElement | null;
+    if (!bar || !parent) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const barRect = bar.getBoundingClientRect();
+    const parentRect = parent.getBoundingClientRect();
+    dragRef.current = {
+      id: event.pointerId, x: event.clientX, y: event.clientY, base: offset,
+      bounds: {
+        minX: offset.x - (barRect.left - parentRect.left), maxX: offset.x + (parentRect.right - barRect.right),
+        minY: offset.y - (barRect.top - parentRect.top), maxY: offset.y + (parentRect.bottom - barRect.bottom),
+      },
+    };
+  };
+  const moveDrag = (event: React.PointerEvent<HTMLSpanElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.id !== event.pointerId) return;
+    const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+    setOffset({
+      x: clamp(drag.base.x + event.clientX - drag.x, drag.bounds.minX, drag.bounds.maxX),
+      y: clamp(drag.base.y + event.clientY - drag.y, drag.bounds.minY, drag.bounds.maxY),
+    });
+  };
+  const endDrag = (event: React.PointerEvent<HTMLSpanElement>) => {
+    if (dragRef.current?.id === event.pointerId) dragRef.current = null;
+  };
+
   const topButton = `h-8 inline-flex items-center gap-1.5 px-2 rounded-md text-[9px] font-bold transition-colors ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'}`;
   const menuPanel = `trade-menu-up absolute bottom-10 z-[700] overflow-hidden rounded-lg border py-1 shadow-2xl ${isDark ? 'border-white/10 bg-[#101720] text-slate-200' : 'border-slate-200 bg-white text-slate-800'}`;
   const menuItem = `flex h-9 w-full items-center justify-between gap-3 px-3 text-left text-[11px] font-bold transition-colors ${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-100'}`;
@@ -44,10 +76,15 @@ export default function TradeReplayBar({ isDark, playing, atEnd, speed, goTo, on
     <div ref={barRef}
       data-snapshot-hide
       className={`absolute bottom-3 left-1/2 z-30 flex h-10 -translate-x-1/2 items-center gap-0.5 rounded-lg border p-1 shadow-xl backdrop-blur-md ${isDark ? 'border-white/10 bg-[#101720]/95 text-slate-300 shadow-black/40' : 'border-slate-200 bg-white/95 text-slate-700 shadow-slate-900/10'}`}
+      // Tailwind v4 centruje vlastností `translate` — posun musí jít do ní, ne do `transform`.
+      style={offset.x || offset.y ? { translate: `calc(-50% + ${offset.x}px) ${offset.y}px` } : undefined}
       role="toolbar"
       aria-label="Přehrávání obchodu"
     >
-      <span className={`flex h-8 w-5 shrink-0 items-center justify-center rounded ${isDark ? 'text-slate-600' : 'text-slate-300'}`} aria-hidden="true"><GripVertical size={14} /></span>
+      <span onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}
+        title="Přetáhnout panel přehrávání"
+        className={`flex h-8 w-5 shrink-0 touch-none cursor-grab items-center justify-center rounded active:cursor-grabbing ${isDark ? 'text-slate-600 hover:bg-white/5 hover:text-slate-300' : 'text-slate-300 hover:bg-slate-100 hover:text-slate-500'}`}
+        aria-hidden="true"><GripVertical size={14} /></span>
       <button type="button" className={`${topButton} px-2`} onClick={onPlayPause}
         title={playing ? 'Pozastavit' : atEnd ? 'Přehrát obchod od začátku' : 'Přehrát'} aria-label={playing ? 'Pozastavit přehrávání' : 'Přehrát obchod'}>
         {playing ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}
