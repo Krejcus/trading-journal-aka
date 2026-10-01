@@ -4210,8 +4210,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       ? createEntryOrdersPrimitive(trade.executionHistory.entryOrders, visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
         api.controller.getChart(), series, coverage, { isDark }) : null;
     if (position) series.attachPrimitive(position);
-    if (entryOrders) series.attachPrimitive(entryOrders);
     series.attachPrimitive(primitive);
+    // Až po obchodu: bublina příkazu musí být nad šipkami (linky jsou pod nimi).
+    if (entryOrders) series.attachPrimitive(entryOrders);
     return () => {
       try {
         series.detachPrimitive(primitive);

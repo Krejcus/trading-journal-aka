@@ -70,4 +70,21 @@ describe('episodeEntryOrders', () => {
     expect(at[0].end).toBeNull();
     expect(entryOrdersAt(undefined, 0)).toBeUndefined();
   });
+
+  it('pairs an unlinked manual OSO bracket by creation time and keeps pending bracket prices', () => {
+    const at = (iso: string) => ({ timestamp: `2026-10-01T${iso}Z` });
+    const prot = new Map<string, JournalProtectionEvent[]>([
+      ['700', [event('700', '07:37:49', 'tp', 30900), cancel('700', '07:47:32', 'tp')]],
+      ['702', [event('702', '07:37:49', 'tp', 30761.25, { status: 'pending' })]],
+      ['704', [event('704', '07:37:49', 'sl', 30926, { status: 'pending' })]],
+      // jiný příkaz opačné strany o 5 s později — není bracket
+      ['706', [event('706', '07:37:54', 'sl', 30999, { status: 'pending' })]],
+    ]);
+    const lat = new Map<string, JournalEvidence>([
+      order('700', 'Sell', at('07:37:49.871')), order('702', 'Buy', at('07:37:49.877')),
+      order('704', 'Buy', at('07:37:49.877')), order('706', 'Buy', at('07:37:54.000')),
+    ]);
+    const [limit] = episodeEntryOrders(episode({ entryFillAtByOrder: new Map(), protectiveOrderIds: new Set() }), prot, lat, new Map());
+    expect(limit).toMatchObject({ orderId: '700', bracket: { sl: 30926, tp: 30761.25 } });
+  });
 });

@@ -25,6 +25,8 @@ export interface TradeEntryOrder {
 /** Jak daleko před vstupem ještě hledat zrušené pokusy o vstup. */
 export const ENTRY_ORDER_LOOKBACK_MS = 2 * 60 * 60_000;
 const MAX_ENTRY_ORDERS = 12;
+/** Ruční OSO bez propojení: SL/TP vznikají v řádu milisekund po vstupním příkazu. */
+const BRACKET_SIBLING_MS = 1_000;
 
 export interface EntryOrderEpisode {
   accountId: number;
@@ -78,10 +80,25 @@ export function episodeEntryOrders(
       end = { kind: 'cancel', at: cancel.at };
     }
     const kind = sorted[0].kind;
-    const children = childrenByParent.get(`${episode.accountId}:${orderId}`) ?? [];
+    // Bracket (OSO): děti přes parentId; Tradovate je u ručních OSO nemusí
+    // propojit vůbec — pak SL/TP opačné strany vytvořené do 1 s po vstupu.
+    let children = childrenByParent.get(`${episode.accountId}:${orderId}`) ?? [];
+    if (!children.length) {
+      const created = Date.parse(String(order.timestamp ?? ''));
+      if (Number.isFinite(created)) children = [...protectionByOrder.keys()].filter(id => {
+        if (id === orderId || episode.protectiveOrderIds.has(id)) return false;
+        const sibling = latest.get(`order:${id}`)?.entity;
+        const at = Date.parse(String(sibling?.timestamp ?? ''));
+        return sibling != null && sibling.accountId === episode.accountId && sibling.contractId === episode.contractId
+          && sibling.parentId == null && sibling.action !== side && (sibling.action === 'Buy' || sibling.action === 'Sell')
+          && Number.isFinite(at) && at >= created && at - created <= BRACKET_SIBLING_MS;
+      });
+    }
+    // OSO děti čekají („pending“), dokud se vstup nevyplní — cena platí i tak.
     const bracketPrice = (want: 'sl' | 'tp') => {
-      const legs = children.flatMap(id => legsOf((protectionByOrder.get(id) ?? []).filter(event => event.kind === want)));
-      return legs.length ? legs.sort((a, b) => a.at - b.at)[legs.length - 1].price : null;
+      const priced = children.flatMap(id => (protectionByOrder.get(id) ?? [])
+        .filter(event => event.kind === want && event.status !== 'rejected' && event.operation !== 'cancel' && event.price != null && Number.isFinite(event.price)));
+      return priced.length ? priced.sort((a, b) => a.at - b.at)[priced.length - 1].price : null;
     };
     const sl = bracketPrice('sl'), tp = bracketPrice('tp');
     result.push({
