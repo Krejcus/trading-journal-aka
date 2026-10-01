@@ -66,7 +66,6 @@ import {
   stopNativeDictation,
   type NativeHapticStyle,
   type NativePermissionStatus,
-  type NativeTradeDraft,
   nativePermissionLabel,
   clearNativeBadgeCount,
   getNativeBadgeCount,
@@ -123,7 +122,6 @@ interface SettingsProps {
   /** Promítne atomicky uložený importní incident také do živého stavu a offline cache. */
   onImportIncidentSaved?: (review: DailyReview) => void | Promise<void>;
   /** Otevře nový obchod s lokálně rozpoznanými hodnotami; nic automaticky neukládá. */
-  onOpenTradeDraft?: (draft: NativeTradeDraft) => void;
 }
 
 // Global Helper for Weekly Focus Consistency
@@ -293,7 +291,6 @@ const Settings: React.FC<SettingsProps> = ({
   onTabChange,
   onCreateAccount,
   onImportIncidentSaved,
-  onOpenTradeDraft,
 }) => {
   const isDark = theme !== 'light';
 
@@ -679,10 +676,7 @@ const Settings: React.FC<SettingsProps> = ({
     showToast(`Haptika: ${style}`);
   };
 
-  const openNativeDictationDraft = () => {
-    if (!nativeDictationText || !onOpenTradeDraft) return;
-    onOpenTradeDraft({ notes: `Nativní diktování:\n${nativeDictationText}` });
-  };
+
 
   const handleNativeDictation = async () => {
     if (nativeDictating) {
@@ -892,7 +886,7 @@ const Settings: React.FC<SettingsProps> = ({
     { id: 'strategy', label: 'Strategie', icon: Target, desc: 'Confluence, Chyby & Emoce' },
     { id: 'market', label: 'Trh', icon: Clock, desc: 'Seance & Čas' },
     { id: 'notifications', label: 'Notifikace', icon: Bell, desc: 'Copier & Push' },
-    { id: 'system', label: 'Systém', icon: Shield, desc: 'Alpha Guardian' },
+    { id: 'system', label: 'Systém', icon: Shield, desc: 'Připomínky a paměť' },
   ] as const;
 
   return (
@@ -1561,7 +1555,6 @@ const Settings: React.FC<SettingsProps> = ({
                       {nativeDictationText && (
                         <div className="mt-3 rounded-xl bg-[var(--bg-page)] p-3 text-[10px] font-semibold text-[var(--text-muted)]">
                           <p>{nativeDictationText}</p>
-                          {onOpenTradeDraft && <button type="button" onClick={openNativeDictationDraft} className="mt-3 w-full rounded-lg bg-emerald-600 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-white">Použít jako poznámku obchodu</button>}
                         </div>
                       )}
                     </div>
@@ -1629,27 +1622,22 @@ const Settings: React.FC<SettingsProps> = ({
               </Card>
 
               <div className="grid grid-cols-1 gap-6">
-                {/* Alpha Guardian */}
+                {/* Připomínky přípravy (dříve Alpha Guardian — zůstaly jen notifikace) */}
                 <Card isDark={isDark}>
-                  <SectionHeader icon={Shield} title="Alpha Guardian" subtitle="Hlídač disciplíny a procesu" color="bg-emerald-600" isDark={isDark} />
+                  <SectionHeader icon={Shield} title="Připomínky přípravy" subtitle="Notifikace před startem seance" color="bg-emerald-600" isDark={isDark} />
                   <div className="space-y-2">
                     <Toggle
                       active={systemSettings.guardianEnabled}
                       onClick={() => updateSystem('guardianEnabled', !systemSettings.guardianEnabled)}
-                      label="Aktivovat Alpha Guardian"
-                      desc="Integrovaný risk manager a mentor."
+                      label="Připomínat přípravu"
+                      desc="Když před seancí ještě nemáš hotovou přípravu."
                       isDark={isDark}
                     />
                     <AnimatePresence>
                       {systemSettings.guardianEnabled && (
                         <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="space-y-2 pl-4 border-l border-emerald-500/20 ml-2 py-2">
-                          <p className="text-[8px] font-black uppercase text-[var(--text-muted)] tracking-widest mb-2 px-4">Upozornění na přípravu</p>
                           <Toggle active={systemSettings.morningPrepAlert60m} onClick={() => updateSystem('morningPrepAlert60m', !systemSettings.morningPrepAlert60m)} label="60 minut před startem" desc="Informační připomínka" isDark={isDark} />
                           <Toggle active={systemSettings.morningPrepAlert15m} onClick={() => updateSystem('morningPrepAlert15m', !systemSettings.morningPrepAlert15m)} label="15 minut před startem" desc="Důrazná připomínka" isDark={isDark} />
-                          <Toggle active={systemSettings.morningPrepAlertCritical} onClick={() => updateSystem('morningPrepAlertCritical', !systemSettings.morningPrepAlertCritical)} label="Start seance (Kritické)" desc="Pruhy na dashboardu" isDark={isDark} />
-
-                          <div className={`h-px my-4 ${isDark ? 'bg-white/5' : 'bg-[var(--border-subtle)]'}`} />
-                          <Toggle active={systemSettings.strictModeEnabled} onClick={() => updateSystem('strictModeEnabled', !systemSettings.strictModeEnabled)} label="Strict Enforcement" desc="Blokovat zápis obchodu bez přípravy" isDark={isDark} />
                         </motion.div>
                       )}
                     </AnimatePresence>
@@ -1683,19 +1671,6 @@ const Settings: React.FC<SettingsProps> = ({
                   </div>
                 </Card>
 
-                {/* Resty z minulosti */}
-                <Card isDark={isDark}>
-                  <SectionHeader icon={AlertCircle} title="Backlog Guardian" subtitle="Vymahač dluhů z minulosti" color="bg-rose-600" isDark={isDark} />
-                  <div className="space-y-2">
-                    <Toggle
-                      active={systemSettings.morningWakeUpDebtAlert}
-                      onClick={() => updateSystem('morningWakeUpDebtAlert', !systemSettings.morningWakeUpDebtAlert)}
-                      label="Morning Debt Collector"
-                      desc="Ranní upozornění na neuzavřený audit z včerejška."
-                      isDark={isDark}
-                    />
-                  </div>
-                </Card>
               </div>
 
               {/* Coach Memory Management */}

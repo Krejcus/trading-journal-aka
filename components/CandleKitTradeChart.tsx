@@ -1,4 +1,4 @@
-import { createJournalArrowStacks, createJournalChartPrimitive, createReviewPriceFocus, journalTradePriceRange, type JournalChartPrimitive } from '../services/journalChartPrimitive';
+import { createJournalArrowStacks, createJournalChartPrimitive, createReviewPoint, createReviewPriceFocus, journalTradePriceRange, type JournalChartPrimitive } from '../services/journalChartPrimitive';
 import { createJournalPositionPrimitive } from '../services/journalPositionDrawing';
 import { retainEqualNumbers, uniqueStructureEvents } from '../services/chartReplayPaint';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -1710,6 +1710,8 @@ onChartAppearanceScopeBroadcast(() => {
 
 /** Review týdne: „přejeď na obchod“ hned při kliknutí (detail: entryMs, exitMs). */
 export const REVIEW_FOCUS_EVENT = 'alphatrade:review-focus';
+/** Hodnocení: zvýraznit bod obchodu (detail `{ atMs, price, color }`, `null` = skrýt). */
+export const REVIEW_POINT_EVENT = 'alphatrade:review-point';
 /** Jak dlouho jsou šipky obchodu po přepnutí v review „najeté“. */
 const REVIEW_HIGHLIGHT_MS = 1400;
 
@@ -4040,6 +4042,30 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
       try { series.detachPrimitive(focus.primitive); } catch { /* Chart already disposed. */ }
     };
   }, [chartApiEpoch, focusReviewPrice, reviewMode]);
+  // Hodnocení: najetí na krok průběhu obchodu zvýrazní jeho bod v grafu.
+  const reviewPointRef = useRef<ReturnType<typeof createReviewPoint> | null>(null);
+  useLayoutEffect(() => {
+    const api = apiRef.current;
+    if (!api || !reviewMode) return;
+    const chart = api.controller.getChart();
+    const series = api.controller.getSeries() as ISeriesApi<'Candlestick'>;
+    const point = createReviewPoint(chart, series);
+    reviewPointRef.current = point;
+    series.attachPrimitive(point.primitive);
+    const onPoint = (event: Event) => {
+      const detail = (event as CustomEvent<{ atMs: number; price: number; color: string } | null>).detail;
+      point.show(detail && Number.isFinite(detail.atMs) && Number.isFinite(detail.price) ? detail : null);
+    };
+    window.addEventListener(REVIEW_POINT_EVENT, onPoint);
+    return () => {
+      window.removeEventListener(REVIEW_POINT_EVENT, onPoint);
+      if (reviewPointRef.current === point) reviewPointRef.current = null;
+      try { series.detachPrimitive(point.primitive); } catch { /* Chart already disposed. */ }
+    };
+  }, [chartApiEpoch, reviewMode]);
+  useEffect(() => {
+    reviewPointRef.current?.setCandles(visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60);
+  }, [visibleCandles, timeframe, chartApiEpoch, reviewMode]);
   const startReviewFocus = useCallback((target: { entryMs: number; exitMs: number; id?: string }) => {
     const api = apiRef.current;
     const range = centeredTradeRangeRef.current(target);

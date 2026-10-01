@@ -32,13 +32,13 @@ struct OpenAlphaTradeLiveControlIntent: AppIntent {
 
 @available(iOS 18.0, *)
 struct OpenAlphaTradeCaptureControlIntent: AppIntent {
-    static let title: LocalizedStringResource = "Zapsat obchod v AlphaTrade"
-    static let description = IntentDescription("Otevře formulář nového obchodu bez automatického uložení.")
+    static let title: LocalizedStringResource = "Ohodnotit obchody v AlphaTrade"
+    static let description = IntentDescription("Otevře obchody z Tradovate čekající na hodnocení.")
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult {
 #if ALPHATRADE_APP
-        await MainActor.run { AlphaTradeSystemRouter.shared.request("capture") }
+        await MainActor.run { AlphaTradeSystemRouter.shared.request("review") }
 #endif
         return .result()
     }

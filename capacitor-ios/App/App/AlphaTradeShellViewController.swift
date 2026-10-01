@@ -13,7 +13,7 @@ struct AlphaTradeTabDestination: Equatable {
     let liveOnly: Bool
 }
 
-/// The user picks three destinations for the bottom bar; „Zapsat" and „Více"
+/// The user picks three destinations for the bottom bar; „Hodnotit" and „Více"
 /// are fixed. The choice lives in UserDefaults so it survives relaunches and
 /// is mirrored to the web app through the AlphaTradeNative plugin.
 enum AlphaTradeTabCatalog {
@@ -29,7 +29,8 @@ enum AlphaTradeTabCatalog {
         .init(id: "accounts", title: "Účty", symbol: "wallet.pass", liveOnly: false),
         .init(id: "settings", title: "Nastavení", symbol: "gearshape", liveOnly: false),
     ]
-    static let capture = AlphaTradeTabDestination(id: "capture", title: "Zapsat", symbol: "plus.circle.fill", liveOnly: false)
+    /// Hodnocení obchodů z Tradovate (fronta „k revizi“) — ruční zápis už není.
+    static let review = AlphaTradeTabDestination(id: "review", title: "Hodnotit", symbol: "checkmark.seal", liveOnly: false)
     static let more = AlphaTradeTabDestination(id: "more", title: "Více", symbol: "ellipsis", liveOnly: false)
     static let defaultSlots = ["dashboard", "history", "journal"]
     static let slotCount = 3
@@ -74,10 +75,10 @@ enum AlphaTradeTabCatalog {
         UserDefaults.standard.set(slots, forKey: storageKey)
     }
 
-    /// Bar order keeps the capture action in the middle: slot, slot, Zapsat, slot, Více.
+    /// Bar order keeps the review action in the middle: slot, slot, Hodnotit, slot, Více.
     static func barLayout(for slots: [String]) -> [AlphaTradeTabDestination] {
         let resolved = normalizedSlots(slots).compactMap(destination)
-        return [resolved[0], resolved[1], capture, resolved[2], more]
+        return [resolved[0], resolved[1], review, resolved[2], more]
     }
 }
 
@@ -138,9 +139,11 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
     private var systemRouteObserver: NSObjectProtocol?
     private var moreMenuHost: UIHostingController<AlphaTradeMoreMenuView>?
     private var moreMenuScrim: UIView?
-    /// Zapsat drží výběr, dokud web hlásí otevřený zápis (`applyCaptureFromWeb`).
-    private var captureSelected = false
-    private var captureConfirmTimeout: DispatchWorkItem?
+    /// Hodnotit drží výběr, dokud web hlásí otevřené hodnocení (`applyReviewFromWeb`).
+    private var reviewSelected = false
+    private var reviewConfirmTimeout: DispatchWorkItem?
+    /// Počet obchodů k hodnocení — odznak na kartě Hodnotit.
+    private var reviewCount = 0
 #if DEBUG
     private var lastTabBarDiagnostic: String?
 #endif
@@ -620,12 +623,12 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
     }
 
     /// Jediné místo, které rozhoduje, kde stojí skleněná pilulka výběru:
-    /// otevřený zápis → Zapsat, otevřené menu → Více, jinak aktuální stránka;
+    /// otevřené hodnocení → Hodnotit, otevřené menu → Více, jinak aktuální stránka;
     /// stránka, která žije jen v menu (Lab, LIVE, Nastavení…), svítí na Více.
     private func syncTabSelection() {
         let target: UITabBarItem?
-        if captureSelected {
-            target = tabItem(forDestination: AlphaTradeTabCatalog.capture.id)
+        if reviewSelected {
+            target = tabItem(forDestination: AlphaTradeTabCatalog.review.id)
         } else if moreMenuHost != nil {
             target = tabItem(forDestination: AlphaTradeTabCatalog.more.id)
         } else {
@@ -636,13 +639,23 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
         }
     }
 
-    /// Web hlásí otevření a zavření zápisu obchodu; pilulka pak zůstane na
-    /// Zapsat po celou dobu a po zavření sklouzne zpět na stránku.
-    func applyCaptureFromWeb(_ open: Bool) {
-        captureConfirmTimeout?.cancel()
-        captureConfirmTimeout = nil
-        captureSelected = open
+    /// Web hlásí otevření a zavření hodnocení; pilulka pak zůstane na
+    /// Hodnotit po celou dobu a po zavření sklouzne zpět na stránku.
+    func applyReviewFromWeb(_ open: Bool) {
+        reviewConfirmTimeout?.cancel()
+        reviewConfirmTimeout = nil
+        reviewSelected = open
         syncTabSelection()
+    }
+
+    /// Odznak s počtem obchodů k hodnocení (0 = bez odznaku).
+    func applyReviewCountFromWeb(_ count: Int) {
+        reviewCount = max(0, count)
+        applyReviewBadge()
+    }
+
+    private func applyReviewBadge() {
+        tabItem(forDestination: AlphaTradeTabCatalog.review.id)?.badgeValue = reviewCount > 0 ? String(reviewCount) : nil
     }
 
     private func refreshTabAvailability() {
@@ -670,23 +683,23 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
         if destination.id != AlphaTradeTabCatalog.more.id { closeMoreMenu() }
 
         switch destination.id {
-        case AlphaTradeTabCatalog.capture.id:
-            // Pilulka zůstane na Zapsat; když web do chvíle nepotvrdí otevřený
-            // zápis (bridge ještě nenaběhl), vrátí se na stránku.
-            captureSelected = true
+        case AlphaTradeTabCatalog.review.id:
+            // Pilulka zůstane na Hodnotit; když web do chvíle nepotvrdí otevřené
+            // hodnocení (bridge ještě nenaběhl), vrátí se na stránku.
+            reviewSelected = true
             let timeout = DispatchWorkItem { [weak self] in
-                self?.captureSelected = false
+                self?.reviewSelected = false
                 self?.syncTabSelection()
             }
-            captureConfirmTimeout?.cancel()
-            captureConfirmTimeout = timeout
+            reviewConfirmTimeout?.cancel()
+            reviewConfirmTimeout = timeout
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: timeout)
-            evaluate("window.__alphaTradeNative?.addTrade()")
+            evaluate("window.__alphaTradeNative?.review()")
         case AlphaTradeTabCatalog.more.id:
             if moreMenuHost == nil { openMoreMenu() } else { closeMoreMenu() }
         default:
-            captureConfirmTimeout?.cancel()
-            captureSelected = false
+            reviewConfirmTimeout?.cancel()
+            reviewSelected = false
             activePage = destination.id
             evaluate("window.__alphaTradeNative?.navigate('\(destination.id)')")
         }
@@ -704,8 +717,9 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
 
     private func deliverSystemRoute() {
         guard let route = AlphaTradeSystemRouter.shared.pendingRoute() else { return }
-        let action = route == "capture"
-            ? "window.__alphaTradeNative.addTrade()"
+        // `capture` = stará cesta ze zkratek a widgetů; obě otevřou hodnocení.
+        let action = route == "review" || route == "capture"
+            ? "window.__alphaTradeNative.review()"
             : "window.__alphaTradeNative.navigate('\(route)')"
         let script = """
             (() => {
@@ -915,6 +929,7 @@ final class AlphaTradeShellViewController: UIViewController, UITabBarDelegate {
         tabSlots = normalized
         AlphaTradeTabCatalog.saveSlots(normalized)
         shellTabBar.items = makeTabItems()
+        applyReviewBadge()
         syncTabSelection()
         return true
     }

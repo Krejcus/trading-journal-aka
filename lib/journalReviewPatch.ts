@@ -7,6 +7,8 @@ export const JOURNAL_REVIEW_FIELDS = new Set([
   'setupType', 'tags', 'htfConfluence', 'ltfConfluence', 'enrichmentSkipped', 'isBE',
   'slPlacement', 'targetType', 'targetLevel', 'management', 'shareNotes', 'isPublic',
   'miniViewRange', 'miniViewLayout', 'miniViewSecondaryRange', 'miniViewSecondaryTimeframe',
+  // Hodnocení z 30. 9. 2026: vlastní plán (jen R) a důvod „mimo plán“.
+  'plannedStopLoss', 'plannedTakeProfit', 'invalidReasons', 'invalidNote',
 ]);
 export const journalReviewOnly = (trade: Partial<Trade>) => trade.copierTradeId?.startsWith('journal:') === true;
 

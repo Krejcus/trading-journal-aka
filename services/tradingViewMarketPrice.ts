@@ -79,7 +79,7 @@ const normalizeSymbol = (raw: unknown): string | null => {
 
 async function evaluateOnTarget(
   target: CdpTarget,
-  options: { timeoutMs: number; webSocketFactory: (url: string) => WebSocketLike },
+  options: { timeoutMs: number; webSocketFactory: (url: string) => WebSocketLike; expression?: string },
 ): Promise<unknown> {
   const socket = options.webSocketFactory(target.webSocketDebuggerUrl!);
   return new Promise<unknown>((resolve, reject) => {
@@ -104,7 +104,7 @@ async function evaluateOnTarget(
         socket.send(JSON.stringify({
           id: 1,
           method: 'Runtime.evaluate',
-          params: { expression: MARKET_PRICE_EXPRESSION, returnByValue: true },
+          params: { expression: options.expression ?? MARKET_PRICE_EXPRESSION, returnByValue: true },
         }));
       } catch (error) {
         finish(reject, error);
@@ -134,18 +134,17 @@ async function evaluateOnTarget(
 }
 
 /**
- * Jedno čtení přes všechny otevřené chart targety (obchodní graf i snímkový
- * layout). Vrací jen platné páry symbol + cena; chyby jednotlivých targetů
- * i nedostupný CDP končí tiše.
+ * Read-only výraz na všech otevřených chart targetech (max. 4). Chyby
+ * jednotlivých targetů i nedostupný CDP končí tiše jako `null` / `[]`.
  */
-export async function readTradingViewMarketPrices(
+export async function evaluateTradingViewChartTargets(
+  expression: string,
   options: TradingViewMarketPriceOptions = {},
-): Promise<TradingViewMarketPrice[]> {
+): Promise<unknown[]> {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const webSocketFactory = options.webSocketFactory
     ?? ((url: string) => new WebSocket(url) as unknown as WebSocketLike);
   const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  const now = options.now ?? Date.now;
   let targets: CdpTarget[];
   try {
     const response = await fetchImpl(`${options.cdpOrigin ?? DEFAULT_CDP_ORIGIN}/json/list`, {
@@ -162,13 +161,25 @@ export async function readTradingViewMarketPrices(
     && typeof candidate.url === 'string'
     && candidate.url.includes('tradingview.com/chart')
     && typeof candidate.webSocketDebuggerUrl === 'string').slice(0, MAX_CHART_TARGETS);
-  const readings = await Promise.all(chartTargets.map(async target => {
+  return Promise.all(chartTargets.map(async target => {
     try {
-      return await evaluateOnTarget(target, { timeoutMs, webSocketFactory });
+      return await evaluateOnTarget(target, { timeoutMs, webSocketFactory, expression });
     } catch {
       return null;
     }
   }));
+}
+
+/**
+ * Jedno čtení přes všechny otevřené chart targety (obchodní graf i snímkový
+ * layout). Vrací jen platné páry symbol + cena; chyby jednotlivých targetů
+ * i nedostupný CDP končí tiše.
+ */
+export async function readTradingViewMarketPrices(
+  options: TradingViewMarketPriceOptions = {},
+): Promise<TradingViewMarketPrice[]> {
+  const now = options.now ?? Date.now;
+  const readings = await evaluateTradingViewChartTargets(MARKET_PRICE_EXPRESSION, options);
   const at = now();
   const seen = new Set<string>();
   return readings.flatMap(reading => {

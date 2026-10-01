@@ -14,13 +14,13 @@ import {
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
 import { Trade, Account, CustomEmotion } from '../types';
-import type { NativeTradeDraft } from '../services/nativeCapabilities';
 
+/**
+ * Úprava existujícího obchodu (a hodnocení importovaného). Nové obchody se
+ * ručně nezapisují — všechny přicházejí z Tradovate.
+ */
 interface ManualTradeFormProps {
-  // Create mode (default)
-  onAdd?: (trades: Trade | Trade[]) => void;
-  // Edit mode — pokud je nastaveno, form předvyplní z trade a Save volá onUpdate místo onAdd
-  editTrade?: Trade;
+  editTrade: Trade;
   onUpdate?: (updates: Partial<Trade>) => Promise<void> | void;
 
   onClose: () => void;
@@ -33,7 +33,8 @@ interface ManualTradeFormProps {
   availableLtfOptions: string[];
   instrumentFees?: Record<string, number>;
   viewMode?: 'individual' | 'combined';
-  initialDraft?: NativeTradeDraft | null;
+  /** Hlásí, jestli má formulář neuložené změny (App se podle toho ptá před odchodem). */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const INSTRUMENTS = [
@@ -47,13 +48,12 @@ const INSTRUMENTS = [
 ];
 
 const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
-  onAdd, editTrade, onUpdate, onClose, theme, accounts, activeAccountId,
+  editTrade, onUpdate, onClose, theme, accounts, activeAccountId,
   availableEmotions, availableMistakes, availableHtfOptions, availableLtfOptions,
-  instrumentFees, viewMode = 'individual', initialDraft
+  instrumentFees, viewMode = 'individual', onDirtyChange
 }) => {
-  // Edit mode: pokud je editTrade nastaveno, nezobrazujeme multi-account, draft,
-  // a Save volá onUpdate s diff místo onAdd s novými trades.
-  const isEditMode = !!editTrade;
+  // Formulář je jen pro úpravu: Save volá onUpdate s diffem.
+  const isEditMode = true;
   const reviewOnly = !!editTrade && journalReviewOnly(editTrade);
   const [saving, setSaving] = useState(false);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
@@ -61,7 +61,6 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
   const [expandedSection, setExpandedSection] = useState<'emotions' | 'htf' | 'ltf' | 'mistakes' | null>('emotions');
   const [isZoomed, setIsZoomed] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
-  const [isDeleteDraftModalOpen, setIsDeleteDraftModalOpen] = useState(false);
   const isDark = theme !== 'light';
 
   const getLocalISOString = (date?: Date) => {
@@ -72,7 +71,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
 
   // Lazy initializer — pokud edit mode, pre-fill z editTrade
   const [formData, setFormData] = useState(() => {
-    if (editTrade) {
+    {  // předvyplnění z upravovaného obchodu
       // Entry timestamp — preferuj entryDate (ISO string, spolehlivější),
       // pak entryTime (number ms), nakonec date jako fallback.
       // POZN.: dříve byl bug že entryTime byl občas přepsaný na exit timestamp,
@@ -103,28 +102,19 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
         executionStatus: (editTrade.executionStatus as any) || (editTrade.isValid === false ? 'Invalid' : 'Valid'),
       };
     }
-    return {
-      accountIds: [activeAccountId],
-      instrument: initialDraft?.instrument || 'MNQ',
-      customMultiplier: '1',
-      entryDate: getLocalISOString(),
-      exitDate: getLocalISOString(new Date(Date.now() + 15 * 60000)),
-      entryPrice: initialDraft?.entryPrice || '',
-      exitPrice: '',
-      stopLoss: initialDraft?.stopLoss || '',
-      takeProfit: initialDraft?.takeProfit || '',
-      positionSize: initialDraft?.positionSize || '1',
-      pnl: initialDraft?.pnl || '',
-      notes: initialDraft?.notes || '',
-      htfConfluence: [] as string[],
-      ltfConfluence: [] as string[],
-      mistakes: [] as string[],
-      screenshots: [] as string[],
-      emotions: [] as string[],
-      planAdherence: 'Yes' as 'Yes' | 'No' | 'Partial',
-      executionStatus: 'Valid' as 'Valid' | 'Invalid' | 'Missed'
-    };
   });
+
+  // Neuložené změny = formulář se liší od stavu při otevření. Zavření křížkem
+  // nebo „Zrušit“ se pak nejdřív zeptá; zavření po uložení (onClose) ne.
+  const initialFormJson = useRef(JSON.stringify(formData));
+  const isDirty = useMemo(() => JSON.stringify(formData) !== initialFormJson.current, [formData]);
+  const [isDiscardOpen, setIsDiscardOpen] = useState(false);
+  useEffect(() => { onDirtyChange?.(isDirty); }, [isDirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+  const requestClose = () => {
+    if (isDirty && !saving) setIsDiscardOpen(true);
+    else onClose();
+  };
 
   const initialReview = useRef<Partial<Trade>>({
     copierTradeId: editTrade?.copierTradeId,
@@ -173,11 +163,6 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
     return () => window.removeEventListener('paste', handlePaste);
   }, [handlePaste]);
 
-  // Save draft whenever formData changes — POUZE v create modu (v edit modu nemá smysl)
-  useEffect(() => {
-    if (isEditMode) return;
-    safeSetItem('alphatrade_trade_draft', JSON.stringify(formData));
-  }, [formData, isEditMode]);
 
   const calculations = useMemo(() => {
     const entry = parseFloat(formData.entryPrice);
@@ -306,32 +291,8 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
 
     const hasCalculatedPnL = !isNaN(parseFloat(formData.entryPrice)) && !isNaN(parseFloat(formData.exitPrice)) && !isNaN(parseFloat(formData.positionSize));
     const pnlNum = hasCalculatedPnL ? calculations.pnl : parseFloat(formData.pnl || calculations.pnl.toString());
-    const groupId = formData.accountIds.length > 1 ? 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-      const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-      return v.toString(16);
-    }) : undefined;
 
-    const masterAccount = accounts.find(a => formData.accountIds.includes(a.id) && !a.parentAccountId && accounts.some(other => other.parentAccountId === a.id));
-
-    // Use proper UUIDs to prevent sync issues
-    const generateUUID = () => {
-      try {
-        return crypto.randomUUID();
-      } catch (e) {
-        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-          const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
-          return v.toString(16);
-        });
-      }
-    };
-
-    const masterTradeId = masterAccount ? generateUUID() : undefined;
-
-    // Draft mažeme jen v create modu (v edit modu by smazal uživatelův draft pro novÝ obchod)
-    if (!isEditMode) localStorage.removeItem('alphatrade_trade_draft');
-
-    // Create new trade(s):
-    // EDIT MODE: nestavíme nové trades, pošleme jen diff přes onUpdate
+    // Úprava: pošleme jen diff přes onUpdate.
     if (isEditMode && editTrade && onUpdate) {
       // Helper: convert form date string → ISO. Fallback na original pokud parse selže.
       const safeIsoFromForm = (formStr: string, fallback?: string | number): string => {
@@ -407,58 +368,6 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
       return;
     }
 
-    const tradesToCreate: Trade[] = formData.accountIds.map(accId => {
-      const acc = accounts.find(a => a.id === accId);
-      const isThisMaster = accId === masterAccount?.id;
-      const isChildOfMaster = acc?.parentAccountId && acc.parentAccountId === masterAccount?.id;
-
-      // Risk multiplikátor per účet — stejná sémantika jako AlphaBridge extension (TradeForm).
-      // Bez tohohle by manuálně zapsaný obchod na 2× kopii uložil 1× a divergoval od extension.
-      const mult = Math.max(1, Math.round(Number(acc?.copyMultiplier) || 1));
-      const baseSize = parseFloat(formData.positionSize) || 1;
-
-      return {
-        id: (isThisMaster && masterTradeId ? masterTradeId : generateUUID()),
-        accountId: accId,
-        groupId: groupId,
-        isMaster: isThisMaster,
-        masterTradeId: isChildOfMaster ? masterTradeId : undefined,
-        instrument: formData.instrument,
-        date: new Date(formData.exitDate).toISOString(),
-        timestamp: new Date(formData.exitDate).getTime(),
-        signal: 'Manuální obchod',
-        direction: calculations.direction,
-        pnl: pnlNum * mult,
-        riskAmount: calculations.risk * mult,
-        targetAmount: Math.abs(pnlNum) * mult,
-        riskPercent: 0,
-        runUp: 0,
-        drawdown: 0,
-        durationMinutes: calculations.durationMinutes,
-        duration: `${Math.floor(calculations.durationMinutes)}m`,
-        entryTime: new Date(formData.entryDate).getTime(),
-        entryDate: new Date(formData.entryDate).toISOString(),
-        notes: formData.notes,
-        htfConfluence: formData.htfConfluence,
-        ltfConfluence: formData.ltfConfluence,
-        mistakes: formData.mistakes,
-        screenshot: formData.screenshots[0],
-        screenshots: formData.screenshots,
-        emotions: formData.emotions,
-        planAdherence: formData.executionStatus === 'Valid' ? 'Yes' : 'No',
-        isValid: formData.executionStatus === 'Valid',
-        executionStatus: formData.executionStatus,
-        session: calculations.session,
-        entryPrice: parseFloat(formData.entryPrice) || 0,
-        exitPrice: parseFloat(formData.exitPrice) || 0,
-        stopLoss: parseFloat(formData.stopLoss) || 0,
-        takeProfit: parseFloat(formData.takeProfit) || 0,
-        positionSize: baseSize * mult,
-        phase: acc?.phase || 'Challenge'
-      };
-    });
-
-    if (onAdd) onAdd(tradesToCreate);
   };
 
   const inputContainerClass = `relative h-[42px] rounded-xl border transition-all flex items-center overflow-hidden ${theme !== 'light' ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] focus-within:border-blue-500/50' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] focus-within:border-[var(--border-active)]'}`;
@@ -486,17 +395,8 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
               <div>
                 <h2 className={`text-sm md:text-lg font-black tracking-tighter uppercase text-[var(--text-primary)]`}>{reviewOnly ? 'HODNOCENÍ OBCHODU' : isEditMode ? 'UPRAVIT OBCHOD' : 'NOVÝ OBCHOD'}</h2>
               </div>
-              {!isEditMode && localStorage.getItem('alphatrade_trade_draft') && (
-                <button
-                  type="button"
-                  onClick={() => setIsDeleteDraftModalOpen(true)}
-                  className="ml-4 px-3 py-1.5 rounded-lg bg-rose-500/10 text-rose-500 text-[9px] font-black uppercase hover:bg-rose-500 hover:text-white transition-all border border-rose-500/20"
-                >
-                  Smazat koncept
-                </button>
-              )}
             </div>
-            <button type="button" onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-all active:scale-90"><X size={20} className="text-slate-500" /></button>
+            <button type="button" onClick={requestClose} className="p-2 hover:bg-white/10 rounded-full transition-all active:scale-90"><X size={20} className="text-slate-500" /></button>
           </div>
 
           <div className="flex-1 overflow-y-auto custom-scrollbar p-5 md:p-8 lg:p-10 bg-gradient-to-b from-transparent to-[var(--bg-page)]/40">
@@ -709,22 +609,26 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
           </div>
 
           <div className={`p-5 md:p-8 shrink-0 border-t flex flex-col sm:flex-row gap-3 md:gap-6 bg-[var(--bg-page)]/50 border-[var(--border-subtle)] backdrop-blur-xl`}>
-            <button type="button" onClick={onClose} className="w-full sm:w-[180px] h-[52px] bg-white/5 text-slate-500 rounded-2xl font-black text-xs uppercase tracking-widest border border-white/5 hover:bg-white/10 transition-all">Zrušit</button>
+            <button type="button" onClick={requestClose} className="w-full sm:w-[180px] h-[52px] bg-white/5 text-slate-500 rounded-2xl font-black text-xs uppercase tracking-widest border border-white/5 hover:bg-white/10 transition-all">Zrušit</button>
             <button onClick={handleSubmit} disabled={saving || uploadingScreenshot} type="button" className={`flex-1 h-[52px] rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl transition-all flex items-center justify-center gap-3 ${formData.executionStatus === 'Valid' ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20' : formData.executionStatus === 'Invalid' ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/20' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'}`}><Save size={18} /> {saving ? 'UKLÁDÁM…' : reviewOnly ? 'ULOŽIT HODNOCENÍ' : isEditMode ? 'ULOŽIT ZMĚNY' : 'ULOŽIT OBCHOD'}</button>
           </div>
         </div >
       </div >
       {isZoomed && (<div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in duration-300" onClick={() => setIsZoomed(null)}><button className="absolute top-10 right-10 p-4 bg-white/10 hover:bg-white/20 rounded-full transition-all"><X size={32} className="text-white" /></button><img src={isZoomed} className="max-w-full max-h-full object-contain rounded-xl shadow-2xl" onClick={e => e.stopPropagation()} /></div>)}
 
+
       <ConfirmationModal
-        isOpen={isDeleteDraftModalOpen}
-        onClose={() => setIsDeleteDraftModalOpen(false)}
+        isOpen={isDiscardOpen}
+        onClose={() => setIsDiscardOpen(false)}
         onConfirm={() => {
-          localStorage.removeItem('alphatrade_trade_draft');
-          window.location.reload();
+          setIsDiscardOpen(false);
+          onClose();
         }}
-        title="Smazat koncept"
-        message="Opravdu chcete smazat rozpracovaný koncept obchodu? Tato akce je nevratná."
+        title={isEditMode ? 'Zahodit neuložené změny?' : 'Zahodit rozepsaný obchod?'}
+        message={isEditMode ? 'Změny v obchodu nejsou uložené. Když okno zavřeš, ztratí se.' : 'Obchod ještě není uložený. Když okno zavřeš, vyplněné údaje se ztratí.'}
+        confirmText="Zahodit"
+        cancelText={isEditMode ? 'Pokračovat v úpravách' : 'Pokračovat v zápisu'}
+        variant="warning"
         theme={theme}
       />
     </>

@@ -3654,3 +3654,30 @@ body.chart-note-dragging * {
   .review-section-body { transition: none; }
   .review-tile-in { animation: none; }
 }
+
+/* ── Hodnocení obchodu (TradeReview) ─────────────────────────────────────── */
+.tr-enter { animation: tr-enter .38s cubic-bezier(.2, .9, .25, 1) both; }
+.tr-leave { animation: tr-leave .24s cubic-bezier(.4, 0, 1, 1) both; }
+@keyframes tr-enter { from { opacity: 0; transform: translateX(28px); } }
+@keyframes tr-leave { to { opacity: 0; transform: translateX(-28px); } }
+.tr-check path { stroke-dasharray: 22; stroke-dashoffset: 22; animation: tr-draw .38s .05s cubic-bezier(.3, .7, .3, 1) forwards; }
+.tr-done-ring circle { stroke-dasharray: 230; stroke-dashoffset: 230; animation: tr-draw .7s cubic-bezier(.3, .7, .3, 1) forwards; }
+.tr-done-ring path { stroke-dasharray: 50; stroke-dashoffset: 50; animation: tr-draw .4s .55s cubic-bezier(.3, .7, .3, 1) forwards; }
+@keyframes tr-draw { to { stroke-dashoffset: 0; } }
+.tr-rise { opacity: 0; animation: tr-rise .45s cubic-bezier(.2, .9, .25, 1) forwards; }
+@keyframes tr-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.tr-toast { animation: tr-toast 4.2s cubic-bezier(.2, .9, .25, 1) forwards; }
+@keyframes tr-toast { 0% { opacity: 0; transform: translateY(12px); } 8%, 88% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translateY(6px); } }
+.tr-flip { display: inline-block; animation: tr-flip .4s cubic-bezier(.2, .9, .25, 1); }
+@keyframes tr-flip { from { opacity: 0; transform: translateY(-70%); } }
+.tr-row-in > * { animation: tr-rise .35s cubic-bezier(.2, .9, .25, 1) backwards; }
+.tr-row-in > *:nth-child(2) { animation-delay: .03s; } .tr-row-in > *:nth-child(3) { animation-delay: .06s; }
+.tr-row-in > *:nth-child(4) { animation-delay: .09s; } .tr-row-in > *:nth-child(5) { animation-delay: .12s; }
+.tr-row-in > *:nth-child(6) { animation-delay: .15s; } .tr-row-in > *:nth-child(7) { animation-delay: .18s; }
+.tr-pill-x { display: none; }
+.tr-pill:hover .tr-pill-x { display: grid; animation: tr-pop .15s ease-out; }
+@keyframes tr-pop { from { opacity: 0; transform: scale(.5); } }
+@media (prefers-reduced-motion: reduce) {
+  .tr-enter, .tr-leave, .tr-rise, .tr-toast, .tr-flip, .tr-row-in > * { animation: none; opacity: 1; }
+  .tr-check path, .tr-done-ring circle, .tr-done-ring path { animation: none; stroke-dashoffset: 0; }
+}

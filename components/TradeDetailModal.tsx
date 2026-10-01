@@ -149,6 +149,8 @@ interface TradeDetailModalProps {
     loadTradeDetail?: (id: string) => Promise<Trade | null>;
     signCopierSnapshots?: typeof storageService.createCopierSnapshotSignedUrls;
     onUpdateTrade?: (updates: Partial<Trade>) => void | boolean | Promise<void | boolean>;
+    /** Hodnocení obchodu z Tradovate v nové obrazovce (místo formuláře). */
+    onOpenReview?: () => void;
     pnlDisplayMode?: PnLDisplayMode;
     accounts?: Account[];
     initialBalance?: number;
@@ -171,7 +173,7 @@ const defaultVisualMode = (trade: Trade): 'chart' | 'screenshots' =>
 
 const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     trade, accountName, theme, onClose, onDelete, emotions, onPrev, onNext, onPrefetchPrev, onPrefetchNext, preparedJournalDetail, hasPrev, hasNext,
-    onUpdateTrade, pnlDisplayMode = 'usd', accounts = [], initialBalance, user, exchangeRates,
+    onUpdateTrade, onOpenReview, pnlDisplayMode = 'usd', accounts = [], initialBalance, user, exchangeRates,
     allTrades = EMPTY_TRADES, startInEditMode = false, onSaved, onAttachScreenshotFile, onSaveChartNotes, loadJournalDetails = defaultLoadJournalDetails, loadTradeDetail = defaultLoadTradeDetail, signCopierSnapshots = storageService.createCopierSnapshotSignedUrls
 }) => {
     const isDark = theme !== 'light';
@@ -419,6 +421,8 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
 
     // Full Edit Mode — ManualTradeForm overlay
     const [isFullEditOpen, setIsFullEditOpen] = useState(!!startInEditMode);
+    // Obchod z Tradovate se hodnotí v nové obrazovce; ruční obchody dál formulářem.
+    const openReviewOrEdit = () => { if (onOpenReview && journalReviewOnly(activeTrade)) onOpenReview(); else setIsFullEditOpen(true); };
     // Průvodce: rozliš uložení (→ další obchod) od zrušení (→ konec průvodce).
     const wizardSavedRef = useRef(false);
     // Při přechodu na další obchod v průvodci znovu otevři editační formulář.
@@ -780,7 +784,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             </span>
                         )}
                         {onUpdateTrade && (
-                            <button type="button" onClick={(e) => { e.stopPropagation(); setIsFullEditOpen(true); }}
+                            <button type="button" onClick={(e) => { e.stopPropagation(); openReviewOrEdit(); }}
                                 className={`h-8 px-2.5 sm:px-3 rounded-md text-[12px] font-bold whitespace-nowrap transition-colors ${needsReview ? 'bg-indigo-600 text-white hover:bg-indigo-500' : isDark ? 'border border-white/10 text-slate-300 hover:bg-white/5' : 'border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
                                 title={journalReviewOnly(activeTrade) ? 'Upravit hodnocení obchodu' : String(activeTrade.id).startsWith('combined_') ? 'Upravit obchod (změny se propíší na účty v aktuálním výběru)' : 'Upravit obchod'}>
                                 {needsReview ? 'Zkontrolovat' : 'Upravit'}
@@ -920,7 +924,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                             <span key={chip.key} className={`h-[26px] px-2 rounded inline-flex items-center text-[11px] font-semibold border ${chip.tone === 'purple' ? 'bg-purple-500/10 border-purple-500/20 text-purple-500' : 'bg-rose-500/10 border-rose-500/20 text-rose-500'}`}>{chip.label}</span>
                                         ))}
                                         {onUpdateTrade && (reviewChips.length === 0 ? ['+ Setup', '+ Emoce', '+ Chyby', '+ Tagy'] : ['+ Doplnit']).map(label => (
-                                            <button key={label} type="button" onClick={() => setIsFullEditOpen(true)}
+                                            <button key={label} type="button" onClick={openReviewOrEdit}
                                                 className={`h-[26px] px-2 rounded border border-dashed text-[11px] transition-colors ${isDark ? 'border-slate-600 text-slate-500 hover:border-slate-400 hover:text-slate-300' : 'border-slate-300 text-slate-400 hover:border-slate-400 hover:text-slate-600'}`}>{label}</button>
                                         ))}
                                     </div>

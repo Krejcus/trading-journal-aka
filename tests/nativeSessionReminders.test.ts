@@ -15,11 +15,8 @@ const settings: SystemSettings = {
   guardianEnabled: true,
   morningPrepAlert60m: true,
   morningPrepAlert15m: true,
-  morningPrepAlertCritical: true,
-  strictModeEnabled: false,
   eveningAuditAlertEnabled: true,
   eveningAuditAlertTime: '21:00',
-  morningWakeUpDebtAlert: true,
 };
 
 const sessions: SessionConfig[] = [

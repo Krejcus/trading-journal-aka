@@ -271,6 +271,12 @@ export interface Trade {
   executionStatus?: 'Valid' | 'Invalid' | 'Missed';
   /** Draft z automatického copier ledgeru čeká na uživatelovu reflexi. */
   needsReview?: boolean;
+  /** Tvůj plánovaný SL/TP u obchodu z Tradovate — mění jen R, nikdy P&L. */
+  plannedStopLoss?: number;
+  plannedTakeProfit?: number;
+  /** Důvody „mimo plán“ a krátký popis (co se stalo, co příště jinak). */
+  invalidReasons?: string[];
+  invalidNote?: string;
   /** Brokerem odvozený důvod uzavření copier obchodu. */
   exitReason?: 'sl' | 'tp' | 'manual';
   /** Stabilní logické ID copier close události; DB `trades.id` zůstává UUID. */
@@ -876,11 +882,8 @@ export interface SystemSettings {
   guardianEnabled: boolean;
   morningPrepAlert60m: boolean;
   morningPrepAlert15m: boolean;
-  morningPrepAlertCritical: boolean;
-  strictModeEnabled: boolean;
   eveningAuditAlertEnabled: boolean;
   eveningAuditAlertTime: string; // HH:mm
-  morningWakeUpDebtAlert: boolean;
   testModeEnabled?: boolean;
   tradecopiaNotifications?: import('./services/tradecopiaNotificationPreferences').TradecopiaNotificationPreferences;
 }

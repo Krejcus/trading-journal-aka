@@ -1,3 +1,4 @@
+import type { TvBarsCapture } from '../lib/tradingViewBars.js';
 import { COPIER_COMMAND_ACK_RESERVE_MS, recoverableCopierDelivery } from './recoverableCopierDelivery.js';
 import type { RelayDeliveryStore } from './copierRelayDeliveryStore.js';
 import type { LocalCopierExecutionAgent } from './localCopierExecutionAgent.js';
@@ -32,6 +33,8 @@ export interface MacCopierCommandRelay {
     requestId: string;
     png: string;
   }): Promise<{ devices: number; sent: number }>;
+  /** Předběžné 1m svíčky z TradingView pro graf hodnocení (jen zobrazení). */
+  uploadBars(capture: TvBarsCapture): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -365,6 +368,10 @@ export function startMacCopierCommandRelay(options: {
         }
       }
       throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    },
+    async uploadBars(capture) {
+      const response = await request({ action: 'bars', ...capture }, 8_000);
+      if (response.accepted !== true) throw new Error('copier-bars-store-rejected');
     },
     async close() {
       stopped = true;

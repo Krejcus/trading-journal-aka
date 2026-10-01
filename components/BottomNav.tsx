@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LayoutDashboard, History, BookOpen, Bot, Plus, MoreHorizontal, Globe, Wallet, Settings, X, Briefcase, Lock, FlaskConical, Radio, Layers, Microscope, RadioTower } from 'lucide-react';
+import { LayoutDashboard, History, BookOpen, Bot, ClipboardCheck, MoreHorizontal, Globe, Wallet, Settings, X, Briefcase, Lock, FlaskConical, Radio, Layers, Microscope, RadioTower } from 'lucide-react';
 import type { UserRole } from '../types';
 import { isLocked } from '../utils/featureGating';
 
@@ -8,7 +8,10 @@ interface BottomNavProps {
   activePage: string;
   onNavigate: (page: string) => void;
   onLiveIntent?: () => void;
-  onAddTrade: () => void;
+  /** Otevře hodnocení obchodů z Tradovate. */
+  onReview: () => void;
+  /** Počet obchodů k hodnocení (odznak). */
+  reviewCount?: number;
   theme: 'dark' | 'light' | 'oled';
   userRole?: UserRole;
   onLockedFeature?: (featureId: string) => void;
@@ -20,7 +23,7 @@ interface BottomNavProps {
   onToggleBacktest?: () => void;
 }
 
-const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onLiveIntent, onAddTrade, theme, userRole, onLockedFeature, enrichCount = 0, dashboardMode, onToggleBacktest }) => {
+const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onLiveIntent, onReview, reviewCount = 0, theme, userRole, onLockedFeature, enrichCount = 0, dashboardMode, onToggleBacktest }) => {
   const [moreOpen, setMoreOpen] = useState(false);
   const isDark = theme !== 'light';
   const isBacktest = dashboardMode === 'backtesting';
@@ -151,15 +154,16 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onLiveInt
             );
           })}
 
-          {/* FAB - Zapsat obchod */}
+          {/* Hodnotit — fronta obchodů z Tradovate k hodnocení */}
           <button
-            onClick={onAddTrade}
+            onClick={onReview}
             className="flex flex-col items-center gap-1 py-2 px-2 -mt-4"
           >
-            <div className={`w-11 h-11 rounded-2xl border-2 border-emerald-500 flex items-center justify-center active:scale-90 transition-transform ${isDark ? 'bg-emerald-500/10' : 'bg-emerald-50'}`}>
-              <Plus size={20} strokeWidth={2} className="text-emerald-400" />
+            <div className={`relative w-11 h-11 rounded-2xl border-2 border-emerald-500 flex items-center justify-center active:scale-90 transition-transform ${isDark ? 'bg-emerald-500/10' : 'bg-emerald-50'}`}>
+              <ClipboardCheck size={20} strokeWidth={2} className="text-emerald-400" />
+              {reviewCount > 0 && <span className="absolute -top-1.5 -right-1.5 min-w-[17px] h-[17px] px-1 rounded-full bg-emerald-500 text-white text-[9px] font-black flex items-center justify-center tabular-nums">{reviewCount}</span>}
             </div>
-            <span className={`text-[9px] font-bold uppercase tracking-wider mt-0.5 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>Zapsat</span>
+            <span className={`text-[9px] font-bold uppercase tracking-wider mt-0.5 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>Hodnotit</span>
           </button>
 
           {mainItems.slice(2, 4).map((item) => {

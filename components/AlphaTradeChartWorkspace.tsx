@@ -276,7 +276,7 @@ export interface WorkspaceReviewSlots {
   /** Kresby v review patří týdnu (klíč úložiště). */
   drawingKey: string;
 }
-export interface ReviewSlotElements { header: HTMLElement; side: HTMLElement; bottom: HTMLElement }
+export interface ReviewSlotElements { header: HTMLElement; side: HTMLElement; bottom: HTMLElement; /** Panel vlevo od grafu (hodnocení obchodu). */ left: HTMLElement }
 
 interface WorkspacePanelConfig extends Record<string, unknown> {
   root: MarketRoot;
@@ -1205,11 +1205,12 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   const reviewHeaderRef = useRef<HTMLDivElement>(null);
   const reviewSideRef = useRef<HTMLDivElement>(null);
   const reviewBottomRef = useRef<HTMLDivElement>(null);
+  const reviewLeftRef = useRef<HTMLDivElement>(null);
   const onReviewSlotsReady = review?.onSlotsReady;
   useLayoutEffect(() => {
     if (!onReviewSlotsReady) return;
-    const header = reviewHeaderRef.current, side = reviewSideRef.current, bottom = reviewBottomRef.current;
-    if (header && side && bottom) onReviewSlotsReady({ header, side, bottom });
+    const header = reviewHeaderRef.current, side = reviewSideRef.current, bottom = reviewBottomRef.current, left = reviewLeftRef.current;
+    if (header && side && bottom && left) onReviewSlotsReady({ header, side, bottom, left });
     return () => onReviewSlotsReady(null);
   }, [onReviewSlotsReady]);
   const context = useMemo<WorkspaceDataContextValue>(() => ({
@@ -2032,6 +2033,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
       </div>
       {review && <div ref={reviewHeaderRef} className="shrink-0" />}
       <div className="flex flex-1 min-h-0">
+      {review && <div ref={reviewLeftRef} className="shrink-0 flex min-h-0" />}
       <WorkspaceDataContext.Provider value={context}>
         <div ref={workspaceViewportRef} className={`relative flex-1 min-w-0 min-h-0 ${isDark ? 'bg-[#070a0f]' : 'bg-white'}`}>
           {quickOrderFeedback && <div

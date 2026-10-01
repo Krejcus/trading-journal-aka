@@ -4,7 +4,7 @@ import type { MarketCandle } from './marketData';
 import { ALPHATRADE_CHART_STYLE as style } from './chartVisualStyle';
 import { journalProtectionSegments } from '../lib/journalProtectionSegments';
 import { entryProtectionNote, protectionValueAt, tradeFillGroups } from '../lib/tradeReplay';
-import { createJournalTimeProjection, journalLogicalCoordinate, journalVisibleSpanCoordinates, type JournalCandleCoverage } from './journalChartTime';
+import { createJournalTimeProjection, journalLogicalCoordinate, journalTimeLogical, journalVisibleSpanCoordinates, type JournalCandleCoverage } from './journalChartTime';
 export { journalTimeLogical, journalLogicalCoordinate } from './journalChartTime';
 export const JOURNAL_SL_COLOR = '#ef4444';
 export const JOURNAL_TP_COLOR = '#10b981';
@@ -596,6 +596,81 @@ export function createReviewPriceFocus() {
       from = animateMs > 0 && shown && range ? shown : null;
       to = range; start = now; duration = from ? animateMs : 0;
       if (frame == null) tick();
+    },
+  };
+}
+
+/**
+ * Zvýraznění jednoho bodu obchodu (vstup, SL, TP, posun, výstup) při najetí
+ * na krok „Průběh obchodu“ v hodnocení: pulzující kroužek a vodítka k cenové
+ * ose a k času. Čas se mapuje přes svíčky stejně jako šipky plnění.
+ */
+export function createReviewPoint(chart: IChartApi, series: ISeriesApi<'Candlestick'>) {
+  let point: { atMs: number; price: number; color: string } | null = null;
+  let candles: readonly { time: number }[] = [];
+  let intervalSeconds = 60;
+  let requestUpdate: (() => void) | null = null;
+  let frame: number | null = null;
+  let shownAt = 0;
+  const tick = () => {
+    frame = null;
+    requestUpdate?.();
+    if (point && typeof requestAnimationFrame === 'function') frame = requestAnimationFrame(tick);
+  };
+  const renderer: IPrimitivePaneRenderer = { draw: target => {
+    if (!point) return;
+    const shown = point;
+    target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+      const x = journalLogicalCoordinate(journalTimeLogical(candles, shown.atMs, intervalSeconds), index => chart.timeScale().logicalToCoordinate(index as Logical));
+      const y = series.priceToCoordinate(shown.price);
+      if (x == null || y == null) return;
+      const t = (performance.now() - shownAt) / 1000;
+      const appear = Math.min(1, t / 0.18);
+      context.save();
+      context.globalAlpha = appear;
+      context.strokeStyle = shown.color;
+      context.lineWidth = 1;
+      context.setLineDash([2, 3]);
+      context.beginPath(); context.moveTo(x, y); context.lineTo(mediaSize.width, y); context.stroke();
+      context.globalAlpha = appear * 0.45;
+      context.beginPath(); context.moveTo(x, 0); context.lineTo(x, mediaSize.height); context.stroke();
+      context.setLineDash([]);
+      const pulse = (t % 1.4) / 1.4;
+      context.globalAlpha = appear * 0.35 * (1 - pulse);
+      context.fillStyle = shown.color;
+      context.beginPath(); context.arc(x, y, 6 + pulse * 12, 0, Math.PI * 2); context.fill();
+      context.globalAlpha = appear;
+      context.fillStyle = '#ffffff';
+      context.lineWidth = 2.2;
+      context.beginPath(); context.arc(x, y, 4.5, 0, Math.PI * 2); context.fill(); context.stroke();
+      context.restore();
+    });
+  } };
+  const views = [{ zOrder: () => 'top' as const, renderer: () => renderer }];
+  const primitive: ISeriesPrimitive<Time> = {
+    attached: params => { requestUpdate = params.requestUpdate; },
+    detached: () => {
+      if (frame != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+      frame = null; requestUpdate = null; point = null;
+    },
+    paneViews: () => views,
+    priceAxisViews: () => {
+      if (!point) return [];
+      const y = series.priceToCoordinate(point.price);
+      const shown = point;
+      return y == null ? [] : [{ coordinate: () => y, text: () => shown.price.toFixed(2), textColor: () => '#ffffff', backColor: () => shown.color, visible: () => true, tickVisible: () => true }];
+    },
+  };
+  return {
+    primitive,
+    /** Svíčky série a jejich interval (bod se mapuje na stejné sloty jako šipky). */
+    setCandles(next: readonly { time: number }[], seconds: number) { candles = next; intervalSeconds = seconds; },
+    show(next: { atMs: number; price: number; color: string } | null) {
+      const same = point && next && point.atMs === next.atMs && point.price === next.price;
+      point = next;
+      if (!same) shownAt = performance.now();
+      if (next && frame == null) tick();
+      if (!next) requestUpdate?.();
     },
   };
 }

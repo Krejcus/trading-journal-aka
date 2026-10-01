@@ -258,6 +258,64 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-09-30 — Hodnotit místo ručního zápisu, konec Guardiana, předběžné svíčky z TradingView (Claude)
+
+**Rozhodnutí Filipa (produktové):** AlphaTrade se bude prodávat čistě jako
+Tradovate kopírka → ruční zápis obchodu (včetně missed trades) i Guardian
+(strict mode, DebtCollector, ranní dluh) jsou **pryč**. Místo „Zapsat“ je
+„Hodnotit“: fronta `needsReview` obchodů z kopírky (sidebar, FAB, iOS tab
+s badge, notifikace „Ohodnotit obchod“, Siri/Spotlight/widget/control).
+Ceny z brokera se **neupravují** — fakta jsou zamčená; `ManualTradeForm`
+zůstal jen jako editace existujícího obchodu.
+
+**Obrazovka hodnocení** (`components/TradeReview.tsx`, návrh
+odsouhlasený přes mockup): workspace graf + levý panel (výsledek, plnění
+z Tradovate, „Tvůj plán“ = plánovaný SL/TP mění jen R, nikdy P&L; průběh
+obchodu z historie plnění/ochran — hover zvýrazní bod v grafu; účty
+s logy propek) a pravý panel (Podle plánu / Mimo plán, štítky jako
+akordeon, poznámka). **Mimo plán** vyžaduje důvod + popis ≥ 5 znaků,
+vyřazuje obchod ze statistik strategie, ale P&L účtu zůstává. Nová pole
+`plannedStopLoss/plannedTakeProfit/invalidReasons/invalidNote` —
+migrace `20260930200000_journal_review_plan_fields.sql` rozšiřuje whitelist
+triggeru `protect_journal_trade_identity` (spouští Filip: DDL + migration
+repair, `db push` zakázán). Hotovo → animace + toast s „Vrátit“ (undo vrací
+i `needsReview`).
+
+**Opravená past:** kombinovaná skupina (`combined_<id>`) nese v `notes`
+syntetický text „(Kombinováno z N účtů)“ — hodnocení i WeeklyReview ho
+dřív mohly uložit do všech členů. Poznámka se teď bere ze zdrojového řádku.
+Produkční data ověřena read-only: žádný poškozený řádek.
+
+**Připomínky přípravy** (60/15 min před seancí) zůstaly — server by je
+jinak posílal dál bez možnosti vypnutí; v Nastavení je sekce „Připomínky
+přípravy“ místo „Alpha Guardian“.
+
+**Předběžné svíčky:** Databento historical má data až ~24 h po trhu, takže
+hodnocení dnešních obchodů nemělo graf. Worker po výstupu (65 s a 20 min)
+read-only přes CDP přečte 1m svíčky z grafu TradingView (Filipův layout:
+graf 1 = MNQ1! 1m, ~6 h), relay akce `bars` je uloží jako JSON do
+soukromého bucketu `copier-snapshots` (`<user>/tv-bars/<UTC den>/`),
+existující policy „vlastní složka“ stačí — bez nové tabulky. Klient
+(`services/provisionalCandles.ts`) je použije v hodnocení i v detailu
+obchodu, jen když Databento ještě nemá data; jinak „Graf dorazí zítra“.
+Žádný Yahoo ani kostra grafu (Filip). **Jen zobrazení — nikdy do copieru.**
+Chyba čtení/uploadu = log `TV BARS …`, nic neblokuje; vypnutí
+`ALPHATRADE_TV_BARS=off`. Worker část začne platit až po reinstallu workeru
+(obchodní den → čeká na „nasaď“).
+
+**Review před pushem (nezávislý reviewer) a opravy:** „Vrátit“ volalo
+handler se starým `trades` → nic nevrátilo (teď přes ref, prázdná pole se
+vrací na neutrální hodnoty, `executionStatus` na `Valid`, protože trigger
+`null` zahodí; toast sám zmizí po 8 s); předběžný graf se po prvním
+neúspěchu už nezkusil znovu (retry 45 s, po druhém čtení workeru znovu);
+typ výstupu se bere z objednávky, která výstup vyplnila (stop-market
+skluz), záloha tolerance = 1 tick podle kořene a jen proti ochraně, která
+ve chvíli výstupu ještě stála; plánovaný SL/TP na špatné straně vstupu
+blokuje uložení; nová pole doplněna do `dashboardTradeFields`; cílený
+`review()` (notifikace) při otevřeném hodnocení přepne obchod, rozepsané
+hodnocení se ptá; staré soubory `tv-bars` (> 3 dny) server maže při uložení.
+Svíčky sdílí limit snímků 12/min/zařízení — při 2 čteních na výstup stačí.
+
 ### 2026-09-30 — Review nasazené kopírky 061836f6 a opravy nejvážnějších nálezů (Claude)
 
 **Nasazeno 30. 9. na Filipovo „nasaď“:** web acaf509d dopoledne; worker

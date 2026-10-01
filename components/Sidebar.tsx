@@ -12,7 +12,7 @@ import {
     User as UserIcon,
     ChevronLeft,
     ChevronRight,
-    Plus,
+    ClipboardCheck,
     Globe,
     Briefcase,
     Bot,
@@ -37,7 +37,10 @@ interface SidebarProps {
     isCollapsed: boolean;
     setIsCollapsed: (isCollapsed: boolean) => void;
     theme: 'dark' | 'light' | 'oled';
-    onAddTrade: () => void;
+    /** Otevře hodnocení obchodů z Tradovate (fronta „k revizi“). */
+    onReview: () => void;
+    /** Počet obchodů čekajících na hodnocení. */
+    reviewCount?: number;
     user: User;
     onLogout: () => void;
     onOpenProfile: () => void;
@@ -60,7 +63,8 @@ const Sidebar: React.FC<SidebarProps> = ({
     isCollapsed,
     setIsCollapsed,
     theme,
-    onAddTrade,
+    onReview,
+    reviewCount = 0,
     user,
     onLogout,
     onOpenProfile,
@@ -171,14 +175,14 @@ const Sidebar: React.FC<SidebarProps> = ({
                     {/* Mobilní zavírací tlačítko */}
                     <button onClick={() => setIsOpen(false)} className="lg:hidden absolute top-3 right-3 z-20 p-2 hover:bg-white/10 rounded-lg text-slate-400"><X size={18} /></button>
 
-                    {/* ZAPSAT OBCHOD - EMERALD GLASS STYLE */}
+                    {/* HODNOTIT - EMERALD GLASS STYLE */}
                     <div className="px-2 pt-4 mb-2 h-10 flex items-center shrink-0">
                         <button
                             onClick={() => {
                                 setIsClicked(true);
-                                onAddTrade();
+                                onReview();
                             }}
-                            title={!isExpanded ? "Zapsat obchod" : ""}
+                            title={!isExpanded ? (reviewCount ? `Hodnotit (${reviewCount})` : 'Hodnotit') : ''}
                             className={`flex items-center justify-center gap-3 transition-all duration-300 border liquid-glass-lens hover:scale-[0.98] active:scale-95 group h-10 relative z-10
                 ${isDark
                                 ? 'bg-transparent border-emerald-500/25 text-emerald-400 shadow-[inset_0_1.5px_1.5px_rgba(0,0,0,0.05),inset_0_-1.5px_1.5px_rgba(255,255,255,0.2),0_3px_1.5px_-1.5px_rgba(16,185,129,0.15),0_0_1px_2px_inset_rgba(255,255,255,0.1)] hover:border-emerald-500/55 hover:text-emerald-300'
@@ -187,7 +191,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                 ${!isExpanded ? 'w-10 rounded-lg mx-auto' : 'w-full rounded-lg px-6'}
               `}
                         >
-                            <Plus size={18} strokeWidth={3} className="group-hover:rotate-90 transition-transform duration-500" />
+                            <span className="relative">
+                                <ClipboardCheck size={18} strokeWidth={2.4} className="group-hover:scale-110 transition-transform duration-300" />
+                                {reviewCount > 0 && !isExpanded && <span className="absolute -top-2 -right-2.5 min-w-[15px] h-[15px] px-1 rounded-full bg-emerald-500 text-white text-[8.5px] font-black flex items-center justify-center tabular-nums">{reviewCount}</span>}
+                            </span>
                             <AnimatePresence>
                                 {isExpanded && (
                                     <motion.span
@@ -196,7 +203,8 @@ const Sidebar: React.FC<SidebarProps> = ({
                                         exit={{ opacity: 0, x: -10 }}
                                         className="font-black text-[11px] uppercase tracking-[0.2em] whitespace-nowrap"
                                     >
-                                        Zapsat obchod
+                                        Hodnotit
+                                        {reviewCount > 0 && <span className="ml-2 inline-flex min-w-[18px] h-[18px] px-1.5 items-center justify-center rounded-full bg-emerald-500 text-white text-[9.5px] tracking-normal tabular-nums">{reviewCount}</span>}
                                     </motion.span>
                                 )}
                             </AnimatePresence>

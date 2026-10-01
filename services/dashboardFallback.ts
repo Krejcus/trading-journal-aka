@@ -11,7 +11,7 @@ export const dashboardTradeFields = [
   'excursionAvailable', 'excursionComplete', 'executionPathComplete',
   'outcomeAmbiguous', 'excursionAmbiguous', 'slPlacement', 'targetType', 'targetLevel',
   'management', 'sessionBias', 'sessionPreNotes', 'sessionPostNotes', 'biasAligned',
-  'schemaVersion',
+  'schemaVersion', 'plannedStopLoss', 'plannedTakeProfit', 'invalidReasons', 'invalidNote',
 ];
 
 /** Fields the light dashboard read defers (see lib/tradeAnalyticsMerge). */

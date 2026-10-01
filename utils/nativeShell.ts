@@ -7,7 +7,6 @@
  */
 
 import { isNativeBuild } from './runtimeConfig';
-import type { NativeTradeDraft } from '../services/nativeCapabilities';
 import { alphaTradeNativePlugin } from '../services/alphaTradeNativePlugin';
 import {
   normalizeNativeShellTabSlots,
@@ -15,9 +14,17 @@ import {
   writeStoredNativeShellTabSlots,
 } from '../lib/nativeShellTabs';
 
+/** Otevření hodnocení z nativní lišty, notifikace nebo zkratky. */
+export interface NativeReviewRequest {
+  /** Konkrétní obchod (např. z notifikace o zavřeném obchodu). */
+  tradeId?: string;
+  /** Poznámka napsaná přímo v notifikaci — předvyplní se do hodnocení. */
+  note?: string;
+}
+
 export interface NativeShellBridge {
   navigate: (page: string) => void;
-  addTrade: (draft?: NativeTradeDraft) => void;
+  review: (request?: NativeReviewRequest) => void;
   toggleWorld: () => void;
   refresh: () => void;
 }
@@ -26,7 +33,7 @@ declare global {
   interface Window {
     __alphaTradeNative?: NativeShellBridge;
     __alphaTradePendingRoute?: string;
-    __alphaTradePendingTradeDraft?: NativeTradeDraft;
+    __alphaTradePendingReview?: NativeReviewRequest;
   }
 }
 
@@ -74,13 +81,21 @@ export function reportNativeShellPage(page: string): void {
 }
 
 /**
- * Ohlásí, jestli je otevřený zápis obchodu: nativní lišta pak drží výběr na
- * Zapsat a po zavření ho vrátí na stránku. Mimo shell je to no-op.
+ * Ohlásí, jestli je otevřené hodnocení: nativní lišta pak drží výběr na
+ * Hodnotit a po zavření ho vrátí na stránku. Mimo shell je to no-op.
  */
-export function reportNativeShellCapture(open: boolean): void {
+export function reportNativeShellReview(open: boolean): void {
   if (!isNativeShell()) return;
-  void alphaTradeNativePlugin.setShellCapture({ open }).catch(error => {
-    console.warn('[Native shell] Capture sync failed:', error instanceof Error ? error.message : error);
+  void alphaTradeNativePlugin.setShellReview({ open }).catch(error => {
+    console.warn('[Native shell] Review sync failed:', error instanceof Error ? error.message : error);
+  });
+}
+
+/** Počet obchodů k hodnocení — odznak na kartě Hodnotit. */
+export function reportNativeShellReviewCount(count: number): void {
+  if (!isNativeShell()) return;
+  void alphaTradeNativePlugin.setShellReviewCount({ count: Math.max(0, Math.floor(count)) }).catch(error => {
+    console.warn('[Native shell] Review count sync failed:', error instanceof Error ? error.message : error);
   });
 }
 
@@ -123,10 +138,11 @@ export function registerNativeShellBridge(bridge: NativeShellBridge): () => void
   const pendingRoute = window.__alphaTradePendingRoute;
   if (pendingRoute) {
     delete window.__alphaTradePendingRoute;
-    const pendingDraft = window.__alphaTradePendingTradeDraft;
-    delete window.__alphaTradePendingTradeDraft;
+    const pendingReview = window.__alphaTradePendingReview;
+    delete window.__alphaTradePendingReview;
     window.setTimeout(() => {
-      if (pendingRoute === 'capture') bridge.addTrade(pendingDraft);
+      // `capture` je stará cesta (widgety a zkratky z doby ručního zápisu).
+      if (pendingRoute === 'review' || pendingRoute === 'capture') bridge.review(pendingReview);
       else bridge.navigate(pendingRoute);
     }, 0);
   }
@@ -144,12 +160,12 @@ export function navigateNativeShell(route: string): void {
   }
 }
 
-export function openNativeTradeCapture(draft?: NativeTradeDraft): void {
+export function openNativeReview(request?: NativeReviewRequest): void {
   if (!isNativeShell()) return;
   if (window.__alphaTradeNative) {
-    window.__alphaTradeNative.addTrade(draft);
+    window.__alphaTradeNative.review(request);
   } else {
-    window.__alphaTradePendingRoute = 'capture';
-    if (draft) window.__alphaTradePendingTradeDraft = draft;
+    window.__alphaTradePendingRoute = 'review';
+    if (request) window.__alphaTradePendingReview = request;
   }
 }

@@ -1,3 +1,4 @@
+import { tvBarsStoragePath, type TvBarsCapture } from '../lib/tradingViewBars.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export const COPIER_SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024;
@@ -153,4 +154,44 @@ export async function storeCopierSnapshotTest(options: {
     // Cleanup nikdy nesmí změnit doručení právě uložené testovací notifikace.
   }
   return { storagePath };
+}
+
+/**
+ * Předběžné 1m svíčky z TradingView (jen zobrazení v hodnocení). Stejný
+ * soukromý bucket, složka `<user>/tv-bars/<den>/` — čtení hlídá existující
+ * policy „vlastní složka", nová tabulka ani migrace nejsou potřeba.
+ */
+export async function storeTvBarsCapture(options: {
+  db: SupabaseClient;
+  userId: string;
+  capture: TvBarsCapture;
+}): Promise<{ storagePath: string }> {
+  const storagePath = tvBarsStoragePath(options.userId, options.capture);
+  const body = JSON.stringify({ v: 1, ...options.capture });
+  const { error } = await options.db.storage
+    .from('copier-snapshots')
+    .upload(storagePath, Buffer.from(body), { contentType: 'application/json', upsert: true });
+  if (error) throw new Error(`tv-bars-upload-failed: ${error.message}`);
+  await pruneTvBars(options.db, options.userId, options.capture.at);
+  return { storagePath };
+}
+
+/** Předběžné svíčky po ~3 dnech nahradí Databento — starší dny se mažou. */
+export const TV_BARS_RETENTION_DAYS = 3;
+
+async function pruneTvBars(db: SupabaseClient, userId: string, now: number): Promise<void> {
+  try {
+    const bucket = db.storage.from('copier-snapshots');
+    const cutoff = new Date(now - TV_BARS_RETENTION_DAYS * 86_400_000).toISOString().slice(0, 10);
+    const { data: days } = await bucket.list(`${userId}/tv-bars`, { limit: 100 });
+    for (const day of days ?? []) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day.name) || day.name >= cutoff) continue;
+      const folder = `${userId}/tv-bars/${day.name}`;
+      const { data: files } = await bucket.list(folder, { limit: 200 });
+      const paths = (files ?? []).filter(file => file.name.endsWith('.json')).map(file => `${folder}/${file.name}`);
+      if (paths.length) await bucket.remove(paths);
+    }
+  } catch {
+    // Úklid nikdy nesmí změnit přijetí právě uložených svíček.
+  }
 }

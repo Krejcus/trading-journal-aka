@@ -12,8 +12,9 @@ export interface MarketCandle {
 }
 
 export interface MarketCandleResponse {
-  provider: 'databento';
-  dataset: 'GLBX.MDP3';
+  /** `tradingview` = předběžné svíčky z workeru, jen pro graf hodnocení do příchodu Databenta. */
+  provider: 'databento' | 'tradingview';
+  dataset: 'GLBX.MDP3' | 'tradingview';
   schema: MarketDataSchema;
   symbol: string;
   sourceSymbol?: string;

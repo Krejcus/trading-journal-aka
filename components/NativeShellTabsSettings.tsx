@@ -13,7 +13,7 @@ import { loadNativeShellTabs, saveNativeShellTabs } from '../utils/nativeShell';
 const SLOT_LABELS = ['Karta 1', 'Karta 2', 'Karta 3'];
 
 /**
- * Volba tří karet spodního menu nativní iOS appky. „Zapsat" a „Více" zůstávají
+ * Volba tří karet spodního menu nativní iOS appky. „Hodnotit" a „Více" zůstávají
  * pevné; ostatní cíle jsou dostupné v menu Více. Uložení přestaví nativní lištu
  * okamžitě, bez restartu appky.
  */
@@ -52,7 +52,7 @@ const NativeShellTabsSettings: React.FC = () => {
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">Karty spodního menu</p>
-          <p className="mt-1 text-[9px] font-bold text-[var(--text-muted)]">Vyber tři karty. Zapsat a Více zůstávají, zbytek najdeš v menu Více.</p>
+          <p className="mt-1 text-[9px] font-bold text-[var(--text-muted)]">Vyber tři karty. Hodnotit a Více zůstávají, zbytek najdeš v menu Více.</p>
         </div>
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-500/10 text-blue-500"><LayoutGrid size={16} /></span>
       </div>
@@ -61,7 +61,7 @@ const NativeShellTabsSettings: React.FC = () => {
         {layout.map((item, index) => (
           <span
             key={`${item.id}-${index}`}
-            className={`truncate rounded-lg px-1 py-1.5 text-center text-[8px] font-black uppercase tracking-wider ${item.id === 'capture' || item.id === 'more' ? 'text-[var(--text-muted)]' : 'bg-blue-500/10 text-blue-500'}`}
+            className={`truncate rounded-lg px-1 py-1.5 text-center text-[8px] font-black uppercase tracking-wider ${item.id === 'review' || item.id === 'more' ? 'text-[var(--text-muted)]' : 'bg-blue-500/10 text-blue-500'}`}
           >
             {item.title}
           </span>

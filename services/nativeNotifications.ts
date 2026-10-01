@@ -2,14 +2,14 @@ import { LocalNotifications } from '@capacitor/local-notifications';
 import type { PermissionState } from '@capacitor/core';
 
 import { isNativeBuild } from '../utils/runtimeConfig';
-import { navigateNativeShell, openNativeTradeCapture } from '../utils/nativeShell';
-import type { NativeTradeDraft } from './nativeCapabilities';
+import { navigateNativeShell, openNativeReview } from '../utils/nativeShell';
 import { clearNativeBadgeCount, setNativeBadgeCount } from './nativeCapabilities';
 
 export const NATIVE_NOTIFICATION_ACTIONS = {
   openLive: 'OPEN_LIVE',
   openJournal: 'OPEN_JOURNAL',
   openCoach: 'OPEN_COACH',
+  // Id akce zůstává kvůli kategoriím uloženým v iOS; teď otevírá hodnocení.
   captureTrade: 'CAPTURE_TRADE',
   addNote: 'ADD_TRADE_NOTE',
 } as const;
@@ -296,14 +296,14 @@ export async function registerNativeNotificationActions(): Promise<() => void> {
         iosCustomDismissAction: true,
         actions: [
           { id: NATIVE_NOTIFICATION_ACTIONS.openJournal, title: 'Otevřít Deník', foreground: true },
-          { id: NATIVE_NOTIFICATION_ACTIONS.captureTrade, title: 'Zapsat obchod', foreground: true },
+          { id: NATIVE_NOTIFICATION_ACTIONS.captureTrade, title: 'Ohodnotit obchod', foreground: true },
           {
             id: NATIVE_NOTIFICATION_ACTIONS.addNote,
             title: 'Přidat poznámku',
             foreground: true,
             requiresAuthentication: true,
             input: true,
-            inputButtonTitle: 'Otevřít koncept',
+            inputButtonTitle: 'Otevřít hodnocení',
             inputPlaceholder: 'Co se v obchodu stalo?',
           },
           { id: NATIVE_NOTIFICATION_ACTIONS.openCoach, title: 'Otevřít Coach', foreground: true },
@@ -341,20 +341,14 @@ export function dispatchNativeNotificationAction(action: {
   if (!isNativeBuild || action.actionId === 'dismiss') return;
   void clearNativeBadgeCount().catch(() => undefined);
   const data = action.data && typeof action.data === 'object' ? action.data as Record<string, unknown> : {};
-  const rawDraft = data.draft && typeof data.draft === 'object' ? data.draft as Record<string, unknown> : {};
-  const draft: NativeTradeDraft = {};
-  if (rawDraft.instrument === 'NQ' || rawDraft.instrument === 'MNQ') draft.instrument = rawDraft.instrument;
-  for (const key of ['entryPrice', 'stopLoss', 'takeProfit', 'positionSize', 'pnl', 'notes'] as const) {
-    if (typeof rawDraft[key] === 'string') draft[key] = rawDraft[key];
-  }
+  const tradeId = typeof data.tradeId === 'string' && data.tradeId ? data.tradeId : undefined;
   if (action.actionId === NATIVE_NOTIFICATION_ACTIONS.captureTrade) {
-    openNativeTradeCapture(Object.keys(draft).length ? draft : undefined);
+    openNativeReview(tradeId ? { tradeId } : undefined);
     return;
   }
   if (action.actionId === NATIVE_NOTIFICATION_ACTIONS.addNote) {
     const note = action.inputValue?.trim();
-    if (note) draft.notes = [draft.notes, `Poznámka z iOS notifikace:\n${note}`].filter(Boolean).join('\n\n');
-    openNativeTradeCapture(Object.keys(draft).length ? draft : undefined);
+    openNativeReview({ ...(tradeId ? { tradeId } : {}), ...(note ? { note } : {}) });
     return;
   }
   const actionRoutes: Record<string, string> = {

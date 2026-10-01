@@ -138,7 +138,7 @@ for (const intent of ['OpenAlphaTradeLiveControlIntent', 'OpenAlphaTradeCaptureC
   requireMatch(controlIntents, new RegExp(`struct ${intent}: AppIntent`), `Chybí App Intent ${intent}`);
 }
 requireMatch(controlIntents, /#if ALPHATRADE_APP[\s\S]*AlphaTradeSystemRouter\.shared\.request\("live"\)/, 'LIVE control musí routovat pouze v hlavním procesu aplikace');
-requireMatch(controlIntents, /AlphaTradeSystemRouter\.shared\.request\("capture"\)/, 'Capture control neotevírá kontrolovaný formulář obchodu');
+requireMatch(controlIntents, /AlphaTradeSystemRouter\.shared\.request\("review"\)/, 'Control Hodnotit neotevírá hodnocení obchodů');
 requireMatch(project, /SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG ALPHATRADE_APP";/, 'Debug app target nemá oddělenou ALPHATRADE_APP větev');
 requireMatch(project, /SWIFT_ACTIVE_COMPILATION_CONDITIONS = ALPHATRADE_APP;/, 'Release app target nemá oddělenou ALPHATRADE_APP větev');
 const controlIntentSourceMemberships = project.match(/AlphaTradeControlIntents\.swift in Sources/g) ?? [];

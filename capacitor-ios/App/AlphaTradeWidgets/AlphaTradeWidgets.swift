@@ -572,7 +572,7 @@ private struct ActionsView: View {
         VStack(alignment: .leading, spacing: 10) {
             ATHeader(title: "RYCHLÉ AKCE", icon: "bolt.fill")
             HStack(spacing: 8) {
-                action("Zapsat", "square.and.pencil", "capture")
+                action("Hodnotit", "checkmark.seal", "review")
                 action("Coach", "brain.head.profile", "ai")
                 action("LIVE", "waveform.path.ecg", "live")
                 action("Deník", "book", "journal")
@@ -997,11 +997,11 @@ struct AlphaTradeCaptureControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "AlphaTradeControlCapture") {
             ControlWidgetButton(action: OpenAlphaTradeCaptureControlIntent()) {
-                Label("Zapsat obchod", systemImage: "square.and.pencil")
+                Label("Hodnotit obchody", systemImage: "checkmark.seal")
             }
         }
-        .displayName("Zapsat obchod")
-        .description("Otevře kontrolovaný formulář; obchod nikdy automaticky neuloží.")
+        .displayName("Hodnotit obchody")
+        .description("Otevře obchody z Tradovate k hodnocení; nic neodesílá.")
     }
 }
 

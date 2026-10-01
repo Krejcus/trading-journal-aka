@@ -139,15 +139,18 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
   // Odvozené přímo (ne efektem) — přepnutí obchodu = jediný render.
   const draftTradeId = selected ? String(selected.id) : null;
   const [draftState, setDraftState] = useState<{ id: string; draft: ReviewDraft } | null>(null);
-  const draft = selected ? (draftState?.id === draftTradeId ? draftState.draft : draftOf(selected)) : null;
+  // Sloučená skupina nese v `notes` pomocný text „(Kombinováno z N účtů)“ —
+  // poznámka se bere ze skutečného řádku (zdroj detailu), jinak by se uložila.
+  const noteSource = selected ? sources[weekTrades.indexOf(selected)] ?? selected : null;
+  const draft = selected ? (draftState?.id === draftTradeId ? draftState.draft : draftOf(selected, noteSource)) : null;
   const setDraft = useCallback((update: (current: ReviewDraft | null) => ReviewDraft | null) => {
     if (!selected || !draftTradeId) return;
     setDraftState(previous => {
-      const base = previous?.id === draftTradeId ? previous.draft : draftOf(selected);
+      const base = previous?.id === draftTradeId ? previous.draft : draftOf(selected, noteSource);
       const next = update(base);
       return next ? { id: draftTradeId, draft: next } : null;
     });
-  }, [draftTradeId, selected]);
+  }, [draftTradeId, noteSource, selected]);
   // Vybraná karta v pásu vždy na očích.
   useEffect(() => {
     if (!draftTradeId) return;
@@ -406,11 +409,11 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
 const CHART_SWITCH_DELAY_MS = 540;
 
 interface ReviewDraft { plan: PlanChoice | null; htf: string[]; ltf: string[]; emotions: string[]; mistakes: string[]; notes: string }
-const draftOf = (trade: Trade): ReviewDraft => ({
+const draftOf = (trade: Trade, noteSource?: Trade | null): ReviewDraft => ({
   plan: planChoiceOf(trade),
   htf: [...(trade.htfConfluence ?? [])], ltf: [...(trade.ltfConfluence ?? [])],
   emotions: [...(trade.emotions ?? [])], mistakes: [...(trade.mistakes ?? [])],
-  notes: trade.notes ?? '',
+  notes: (String(trade.id).startsWith('combined_') ? noteSource?.notes : trade.notes) ?? '',
 });
 const clock = (ms: number) => new Date(ms).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
 const fmtPrice = (value: unknown) => { const n = Number(value); return Number.isFinite(n) && n > 0 ? n.toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'; };

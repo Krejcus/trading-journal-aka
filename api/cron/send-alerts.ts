@@ -354,7 +354,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     }
                 }
 
-                // === MORNING PREP ALERTS (Guardian) ===
+                // === MORNING PREP ALERTS (připomínky přípravy) ===
                 if (settings.guardianEnabled && firstSessionStart < Infinity) {
                     const minsToFirst = firstSessionStart - currentMinutesTotal;
 
@@ -364,9 +364,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     if (settings.morningPrepAlert15m && Math.abs(minsToFirst - 15) <= 1 && !hasPrep) {
                         alerts.push({ title: '⚡ Alpha: Poslední výzva', body: `${firstSessionName} za 15 minut a nemáš přípravu! Otevři deník.`, type: 'guardian-t15' });
                     }
-                    if (settings.morningPrepAlertCritical && Math.abs(minsToFirst) <= 1 && !hasPrep) {
-                        alerts.push({ title: '🚫 Alpha Guard: BEZ PŘÍPRAVY', body: 'Seance začala a nemáš herní plán. Dnes jen sleduj.', type: 'guardian-critical' });
-                    }
                 }
 
                 // === EVENING AUDIT ALERT ===
@@ -375,18 +372,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     const auditMinutes = auditH * 60 + auditM;
                     if (Math.abs(currentMinutesTotal - auditMinutes) <= 1 && !hasReview) {
                         alerts.push({ title: '📊 Čas na denní review', body: 'Uzavři dnešní den. Zapiš si co šlo dobře a co zlepšit.', type: 'evening-audit' });
-                    }
-                }
-
-                // === MORNING DEBT ALERT ===
-                if (settings.morningWakeUpDebtAlert && currentHour >= 6 && currentHour <= 7 && currentMinute === 0) {
-                    // Debt check requires per-user query (different last prep dates), but only fires once a day
-                    const { data: lastPrep } = await supabase.from('daily_preps').select('date').eq('user_id', profile.id).lt('date', todayStr).order('date', { ascending: false }).limit(1);
-                    if (lastPrep && lastPrep.length > 0) {
-                        const { count } = await supabase.from('daily_reviews').select('id', { count: 'exact', head: true }).eq('user_id', profile.id).eq('date', lastPrep[0].date);
-                        if ((count || 0) === 0) {
-                            alerts.push({ title: '⚠️ Dluh z předchozího dne', body: 'Nemáš hotový review za poslední obchodní den. Dokonči ho před dnešní seancí.', type: 'morning-debt' });
-                        }
                     }
                 }
 

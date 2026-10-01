@@ -95,6 +95,8 @@ const leaseRetry = (connectionId: string): RetryTransientOptions => ({
 });
 import { startMacCopierCommandRelay, type MacCopierCommandRelay } from '../../server/macCopierCommandRelay';
 import { startTradingViewMarketPriceFeed, type TradingViewMarketPriceFeed } from '../../services/tradingViewMarketPrice';
+import { scheduleTradingViewBarsCapture } from '../../services/tradingViewBars';
+import { tvSymbolRoot } from '../../lib/tradingViewBars';
 import { ensureTradingViewCdp, restartTradingViewWithCdp } from '../../server/tradingViewCdpLifecycle';
 import { loadMacCopierConnectionManifest } from '../../server/macCopierConnectionManifest';
 import { loadMacCopierInstallManifestBestEffort } from '../../server/macCopierInstallManifest';
@@ -696,6 +698,24 @@ async function runLocalAgent(
   const snapshotDeliveryTimer = snapshotsEnabled ? setInterval(flushSnapshots, 30_000) : null;
   snapshotDeliveryTimer?.unref();
   const tvSnapshotHandledUntil = new Map<string, number>();
+  // Předběžné 1m svíčky pro graf hodnocení (jen zobrazení, nikdy do copieru).
+  // Další výstup na stejném kořeni přeplánuje čtení — pozdější čtení pokryje obě.
+  const tvBarsEnabled = process.env.ALPHATRADE_TV_BARS?.trim().toLowerCase() !== 'off';
+  const tvBarsSchedules = new Map<string, () => void>();
+  const scheduleTvBars = (symbol: string, exitAt: number) => {
+    const key = tvSymbolRoot(symbol);
+    if (!key) return;
+    tvBarsSchedules.get(key)?.();
+    tvBarsSchedules.set(key, scheduleTradingViewBarsCapture({
+      symbol,
+      exitAt,
+      upload: async capture => {
+        if (!relay) throw new Error('relay-unavailable');
+        await relay.uploadBars(capture);
+      },
+      log: message => console.log(`${new Date().toISOString()} ${message}`),
+    }));
+  };
   let snapshotTestInFlight = false;
   let stopPromise: Promise<void> | null = null;
   let pairingProbeTimer: ReturnType<typeof setInterval> | null = null;
@@ -718,6 +738,7 @@ async function runLocalAgent(
     if (pairingRestartTimer) clearTimeout(pairingRestartTimer);
     if (snapshotHealthTimer) clearInterval(snapshotHealthTimer);
     if (snapshotDeliveryTimer) clearInterval(snapshotDeliveryTimer);
+    for (const cancel of tvBarsSchedules.values()) cancel();
     // Do not delay broker shutdown for an image request; the disk spool survives restart.
     void snapshotDelivery?.close().catch(() => {});
     marketPriceFeed?.stop();
@@ -920,6 +941,7 @@ async function runLocalAgent(
       onCopyEvent: event => {
         relay?.nudgeCopyEvents();
         if (!snapshotsEnabled) return;
+        if (event.kind === 'exit' && tvBarsEnabled) scheduleTvBars(event.symbol, event.at);
         // Jen vstup a výstup (rozhodnutí uživatele 2026-08-22): posun SL je
         // vlastní akce — notifikace stačí textová a snímek by byl jen šum.
         if (event.kind !== 'entry' && event.kind !== 'exit') return;

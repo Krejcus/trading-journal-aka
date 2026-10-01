@@ -120,6 +120,8 @@ interface TradeHistoryProps {
   onAttachScreenshot?: (tradeIds: readonly string[], url: string) => Promise<boolean>;
   /** Poznámky v grafu — u sloučené karty ke všem účtům (jeden obchod, jeden graf). */
   onSaveChartNotes?: (tradeIds: readonly string[], notes: ChartNote[]) => Promise<boolean>;
+  /** Otevře hodnocení obchodu z Tradovate (nová obrazovka). */
+  onOpenReview?: (trade: Trade) => void;
   allTrades?: Trade[];
   viewMode: 'grid' | 'table';
   setViewMode?: (mode: 'grid' | 'table') => void;
@@ -134,7 +136,7 @@ interface TradeHistoryProps {
 }
 
 const TradeHistory: React.FC<TradeHistoryProps> = ({
-  trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade, onAttachScreenshot, onSaveChartNotes,
+  trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade, onAttachScreenshot, onSaveChartNotes, onOpenReview,
   pnlDisplayMode = 'usd', initialBalance, user, exchangeRates, allTrades = [],
   viewMode, setViewMode, enrichSignal, userMistakes = [],
 }) => {
@@ -1836,6 +1838,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           onDelete={() => { onDelete(selectedTrade.id); setSelectedTrade(null); }}
           emotions={emotions}
           onUpdateTrade={(updates) => onUpdateTrade?.(selectedTrade.id, updates)}
+          onOpenReview={onOpenReview ? () => { const target = selectedTrade; handleCloseDetail(); onOpenReview(target); } : undefined}
           onAttachScreenshotFile={onAttachScreenshot ? file => attachScreenshot(selectedTrade, file) : undefined}
           onSaveChartNotes={onSaveChartNotes ? notes => saveChartNotes(selectedTrade, notes) : undefined}
           pnlDisplayMode={pnlDisplayMode}

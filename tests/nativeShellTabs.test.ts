@@ -17,7 +17,7 @@ describe('nativní karty spodního menu', () => {
     expect(normalizeNativeShellTabSlots(['dashboard', 'history', 'live'])).toEqual(['dashboard', 'history', 'live']);
     expect(normalizeNativeShellTabSlots(['dashboard', 'dashboard', 'live'])).toEqual(DEFAULT_NATIVE_SHELL_TAB_SLOTS);
     expect(normalizeNativeShellTabSlots(['dashboard', 'history'])).toEqual(DEFAULT_NATIVE_SHELL_TAB_SLOTS);
-    expect(normalizeNativeShellTabSlots(['dashboard', 'history', 'capture'])).toEqual(DEFAULT_NATIVE_SHELL_TAB_SLOTS);
+    expect(normalizeNativeShellTabSlots(['dashboard', 'history', 'review'])).toEqual(DEFAULT_NATIVE_SHELL_TAB_SLOTS);
     expect(normalizeNativeShellTabSlots(['dashboard', 'history', 'nope'])).toEqual(DEFAULT_NATIVE_SHELL_TAB_SLOTS);
     expect(normalizeNativeShellTabSlots('dashboard')).toEqual(DEFAULT_NATIVE_SHELL_TAB_SLOTS);
   });
@@ -37,9 +37,9 @@ describe('nativní karty spodního menu', () => {
     expect(replaceNativeShellTabSlot(['dashboard', 'history', 'live'], 1, 'more')).toEqual(['dashboard', 'history', 'live']);
   });
 
-  it('lišta má pevné Zapsat uprostřed a Více vpravo', () => {
+  it('lišta má pevné Hodnotit uprostřed a Více vpravo', () => {
     expect(nativeShellTabLayout(['dashboard', 'history', 'live']).map(item => item.title))
-      .toEqual(['Dashboard', 'Historie', 'Zapsat', 'LIVE', 'Více']);
+      .toEqual(['Dashboard', 'Historie', 'Hodnotit', 'LIVE', 'Více']);
   });
 
   it('katalog zrcadlí Swift AlphaTradeTabCatalog', () => {

@@ -82,11 +82,11 @@
 			<key>UIApplicationShortcutItemType</key>
 			<string>app.alphatrade.native.quick.capture</string>
 			<key>UIApplicationShortcutItemTitle</key>
-			<string>Zapsat obchod</string>
+			<string>Hodnotit obchody</string>
 			<key>UIApplicationShortcutItemSubtitle</key>
-			<string>Rychlý vstup do deníku</string>
+			<string>Obchody z Tradovate k hodnocení</string>
 			<key>UIApplicationShortcutItemIconSymbolName</key>
-			<string>plus.circle.fill</string>
+			<string>checkmark.seal</string>
 		</dict>
 		<dict>
 			<key>UIApplicationShortcutItemType</key>

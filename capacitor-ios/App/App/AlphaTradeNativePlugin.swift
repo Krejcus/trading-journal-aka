@@ -43,7 +43,8 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
         CAPPluginMethod(name: "setShellTheme", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setShellWorld", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setShellPage", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "setShellCapture", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setShellReview", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setShellReviewCount", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getShellTabs", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setShellTabs", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "reportRefreshComplete", returnType: CAPPluginReturnPromise),
@@ -230,15 +231,27 @@ public final class AlphaTradeNativePlugin: CAPPlugin, CAPBridgedPlugin, EKEventE
         }
     }
 
-    @objc public func setShellCapture(_ call: CAPPluginCall) {
+    @objc public func setShellReview(_ call: CAPPluginCall) {
         let open = call.getBool("open") ?? false
         DispatchQueue.main.async { [weak self] in
             guard let shell = self?.shellController else {
                 call.reject("Nativní shell není připravený.")
                 return
             }
-            shell.applyCaptureFromWeb(open)
+            shell.applyReviewFromWeb(open)
             call.resolve(["open": open])
+        }
+    }
+
+    @objc public func setShellReviewCount(_ call: CAPPluginCall) {
+        let count = max(0, call.getInt("count") ?? 0)
+        DispatchQueue.main.async { [weak self] in
+            guard let shell = self?.shellController else {
+                call.reject("Nativní shell není připravený.")
+                return
+            }
+            shell.applyReviewCountFromWeb(count)
+            call.resolve(["count": count])
         }
     }
 

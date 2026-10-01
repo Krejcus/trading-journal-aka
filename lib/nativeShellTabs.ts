@@ -1,7 +1,7 @@
 /**
  * Volitelné karty spodního menu nativní iOS appky.
  *
- * Nativní `UITabBar` zobrazuje pět položek: tři volitelné cíle, pevné „Zapsat"
+ * Nativní `UITabBar` zobrazuje pět položek: tři volitelné cíle, pevné „Hodnotit"
  * uprostřed a pevné „Více" vpravo. Seznam cílů zrcadlí
  * `AlphaTradeTabCatalog` v `AlphaTradeShellViewController.swift` — Swift je
  * autorita pro ikony, tady žijí jen id a české popisky pro nastavení ve webu.
@@ -29,7 +29,7 @@ export const NATIVE_SHELL_TAB_SLOT_COUNT = 3;
 export const DEFAULT_NATIVE_SHELL_TAB_SLOTS: readonly string[] = ['dashboard', 'history', 'journal'];
 export const NATIVE_SHELL_TABS_STORAGE_KEY = 'alphatrade_native_shell_tabs';
 
-const FIXED_CAPTURE: NativeShellTabDestination = { id: 'capture', title: 'Zapsat' };
+const FIXED_CAPTURE: NativeShellTabDestination = { id: 'review', title: 'Hodnotit' };
 const FIXED_MORE: NativeShellTabDestination = { id: 'more', title: 'Více' };
 
 const knownIds = new Set(NATIVE_SHELL_TAB_DESTINATIONS.map(destination => destination.id));
@@ -63,7 +63,7 @@ export function replaceNativeShellTabSlot(slots: readonly string[], index: numbe
   return normalizeNativeShellTabSlots(next);
 }
 
-/** Pořadí v liště: slot, slot, Zapsat, slot, Více — shodné s `barLayout` ve Swiftu. */
+/** Pořadí v liště: slot, slot, Hodnotit, slot, Více — shodné s `barLayout` ve Swiftu. */
 export function nativeShellTabLayout(slots: readonly string[]): NativeShellTabDestination[] {
   const [first, second, third] = normalizeNativeShellTabSlots(slots)
     .map(id => nativeShellTabDestination(id) as NativeShellTabDestination);

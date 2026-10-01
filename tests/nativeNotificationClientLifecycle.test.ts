@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../utils/runtimeConfig', () => ({isNativeBuild:true, apiUrl:(path:string) => `https://review.invalid${path}`}));
-vi.mock('../utils/nativeShell', () => ({navigateNativeShell:mocks.navigate, openNativeTradeCapture:mocks.capture}));
+vi.mock('../utils/nativeShell', () => ({navigateNativeShell:mocks.navigate, openNativeReview:mocks.capture}));
 vi.mock('../services/nativeCapabilities', () => ({clearNativeBadgeCount:mocks.clearBadge, setNativeBadgeCount:mocks.setBadge}));
 vi.mock('../services/supabase', () => ({supabase:{auth:{getSession:mocks.session}}}));
 vi.mock('../services/alphaTradeNativePlugin', () => ({alphaTradeNativePlugin:{getPushEnvironment:async () => ({environment:'development'})}}));
@@ -69,18 +69,18 @@ describe('notification source and shared actions', () => {
     expect(mocks.clearBadge).not.toHaveBeenCalled();
   });
 
-  it('remote actions override route and retain typed notes plus the draft', async () => {
+  it('remote actions override route and open the review with the typed note', async () => {
     const push = await import('../services/nativePushNotifications');
     expect(await push.initializeNativeRemoteNotifications('user-a')).toBe(true);
     const callback = mocks.listeners.get('pushNotificationActionPerformed')!;
     callback({actionId:'OPEN_JOURNAL',notification:{data:{route:'live'}}});
     expect(mocks.navigate).toHaveBeenLastCalledWith('journal');
-    callback({actionId:'ADD_TRADE_NOTE',inputValue:'  Avoid chasing  ',notification:{data:{route:'live',draft:{instrument:'MNQ',entryPrice:'20000',notes:'Existing'}}}});
-    expect(mocks.capture).toHaveBeenLastCalledWith({instrument:'MNQ',entryPrice:'20000',notes:'Existing\n\nPoznámka z iOS notifikace:\nAvoid chasing'});
+    callback({actionId:'ADD_TRADE_NOTE',inputValue:'  Avoid chasing  ',notification:{data:{route:'live',tradeId:'trade-7'}}});
+    expect(mocks.capture).toHaveBeenLastCalledWith({tradeId:'trade-7',note:'Avoid chasing'});
     callback({actionId:'OPEN_COACH',notification:{data:{route:'live'}}});
     expect(mocks.navigate).toHaveBeenLastCalledWith('ai');
-    callback({actionId:'CAPTURE_TRADE',notification:{data:{draft:{instrument:'NQ',positionSize:'2'}}}});
-    expect(mocks.capture).toHaveBeenLastCalledWith({instrument:'NQ',positionSize:'2'});
+    callback({actionId:'CAPTURE_TRADE',notification:{data:{}}});
+    expect(mocks.capture).toHaveBeenLastCalledWith(undefined);
     expect(mocks.clearBadge).toHaveBeenCalledTimes(4);
     callback({actionId:'dismiss',notification:{data:{route:'live'}}});
     expect(mocks.clearBadge).toHaveBeenCalledTimes(4);

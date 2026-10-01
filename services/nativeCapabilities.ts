@@ -65,16 +65,6 @@ export interface NativeCalendarEventResult {
   action: 'saved' | 'cancelled' | 'deleted';
 }
 
-export interface NativeTradeDraft {
-  instrument?: 'NQ' | 'MNQ';
-  entryPrice?: string;
-  stopLoss?: string;
-  takeProfit?: string;
-  positionSize?: string;
-  pnl?: string;
-  notes?: string;
-}
-
 interface AlphaTradeNativePlugin {
   authenticate(options?: { reason?: string }): Promise<{ success: boolean; available: boolean; error?: string }>;
   haptic(options: { style: NativeHapticStyle }): Promise<void>;

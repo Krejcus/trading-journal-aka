@@ -52,6 +52,7 @@ import {
 import { onChartAppearanceScopeBroadcast } from '../services/chartAppearanceScope';
 import { detailIndicatorStyleSnapshot, onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators, type TradeChartIndicators } from '../services/detailIndicators';
 import { loadTradeChartCandles, loadTradeChartHistory, tradeChartDataAvailable, tradeChartTiming } from '../services/tradeChartData';
+import { loadProvisionalCandles } from '../services/provisionalCandles';
 import { ALPHATRADE_CHART_STYLE as chartStyle } from '../services/chartVisualStyle';
 import { formatNqMnqTickPrice } from '../services/chartPriceTick';
 import { chartAxisTickLabel, chartCrosshairTimeLabel } from '../services/chartTimeAxisFormat';
@@ -177,6 +178,8 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   const [rawCandles, setRawCandles] = useState<MarketCandle[]>([]);
   const [providerSymbol, setProviderSymbol] = useState('');
   const [estimatedCostUsd, setEstimatedCostUsd] = useState<number | null>(null);
+  /** Předběžné svíčky z TradingView (worker po výstupu) — Databento je ještě nemá. */
+  const [provisional, setProvisional] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
   const [retry, setRetry] = useState(0);
@@ -409,6 +412,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
     setLoadedSymbol(reviewData.symbol);
     setProviderSymbol(reviewData.sourceSymbol || reviewData.symbol);
     setEstimatedCostUsd(null);
+    setProvisional(reviewData.provider === 'tradingview');
     setError(null);
     setLoading(false);
     setHistoryReady(true);
@@ -421,12 +425,25 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
     setRawCandles([]);
     setEstimatedCostUsd(null);
     setLoadedSymbol(null);
+    setProvisional(false);
     // Fullscreen (i review týdne) chce vždy plnou historii.
     if (detail) { setFullHistory(levelsWanted || isFullscreen || snapshotMode); setHistoryReady(false); }
     setHistorySettled(false);
     if (!tradeChartDataAvailable(timing)) {
-      setError({ code: 'data-not-yet-historical', message: 'Databento historical feed zpřístupní tento obchod přibližně 24 hodin po trhu.' });
-      setLoading(false);
+      loadProvisionalCandles(trade, timing).then(response => {
+        if (cancelled) return;
+        if (!response) {
+          setError({ code: 'data-not-yet-historical', message: 'Databento historical feed zpřístupní tento obchod přibližně 24 hodin po trhu.' });
+          return;
+        }
+        setRawCandles(response.candles);
+        setLoadedSymbol(response.symbol);
+        setProviderSymbol(response.sourceSymbol || response.symbol);
+        setProvisional(true);
+        // Plná historie přijde až s Databentem — nedotahovat.
+        setHistoryReady(true);
+        setHistorySettled(true);
+      }).finally(() => { if (!cancelled) setLoading(false); });
       return () => { cancelled = true; };
     }
     Promise.resolve().then(() => loadTradeChartCandles(trade, root, detail ? 'session' : 'full', timing)).then(response => {
@@ -448,7 +465,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
 
   // Dotažení plné historie ke kontraktu, který vybralo první načtení.
   useEffect(() => {
-    if (reviewData || !fullHistory || !loadedSymbol || loading) return;
+    if (reviewData || provisional || !fullHistory || !loadedSymbol || loading) return;
     let cancelled = false;
     setHistoryLoading(true);
     loadTradeChartHistory(loadedSymbol, timing).then(response => {
@@ -1065,7 +1082,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
               <button key={option} onClick={() => setRoot(option)} className={`px-2 py-1 text-[9px] font-black transition-colors ${root === option ? 'bg-emerald-500 text-white' : 'text-slate-500 hover:text-slate-300'}`}>{option}</button>
             ))}
           </div>
-          <span className="hidden md:inline text-[9px] font-mono text-slate-500 truncate">{providerSymbol || marketSymbol} · CME</span>
+          <span className="hidden md:inline text-[9px] font-mono text-slate-500 truncate">{providerSymbol || marketSymbol} · {provisional ? 'předběžně · TV' : 'CME'}</span>
           {isFullscreen && <span className="hidden md:inline text-[8px] font-black uppercase tracking-[0.18em] text-violet-400">Workspace</span>}
           <div className="hidden lg:flex rounded-lg overflow-hidden border border-white/10 shrink-0">
             <button
@@ -1163,7 +1180,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
         )}
       </div>
       <div className={`h-7 shrink-0 px-3 flex items-center gap-4 border-t text-[8px] font-bold uppercase tracking-wider ${isDark ? 'border-white/5 text-slate-600' : 'border-slate-200 text-slate-400'}`}>
-        <span className="text-amber-500">VWAP ±1σ</span><span className="text-blue-400">PDH / PDL</span><span className="text-violet-400">PWH / PWL</span><span>Časy Praha</span><span className="ml-auto">Databento · GLBX.MDP3{estimatedCostUsd !== null ? ` · request ≤ $${estimatedCostUsd.toFixed(4)}` : ''}</span>
+        <span className="text-amber-500">VWAP ±1σ</span><span className="text-blue-400">PDH / PDL</span><span className="text-violet-400">PWH / PWL</span><span>Časy Praha</span><span className="ml-auto">{provisional ? 'Předběžně · TradingView — Databento do 24 h' : `Databento · GLBX.MDP3${estimatedCostUsd !== null ? ` · request ≤ $${estimatedCostUsd.toFixed(4)}` : ''}`}</span>
       </div>
       <TradeExecutionTimeline history={trade.executionHistory} isDark={isDark} candleCoverage={!loading && !error ? { candles: rawCandles, intervalSeconds: 60 } : undefined} />
     </div>

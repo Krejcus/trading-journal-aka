@@ -12,7 +12,8 @@ final class AlphaTradeSystemRouter {
 
     private let pendingRouteKey = "AlphaTradePendingSystemRoute"
     private let supportedRoutes: Set<String> = [
-        "dashboard", "history", "capture", "journal", "ai", "live",
+        // `capture` = stará cesta (zápis obchodu) z widgetů a zkratek; otevře hodnocení.
+        "dashboard", "history", "review", "capture", "journal", "ai", "live",
         "business", "network", "accounts", "settings", "lab",
     ]
 
@@ -59,7 +60,7 @@ enum AlphaTradeQuickAction {
     static func route(from shortcutItem: UIApplicationShortcutItem) -> String? {
         switch shortcutItem.type {
         case "\(prefix)live": return "live"
-        case "\(prefix)capture": return "capture"
+        case "\(prefix)capture", "\(prefix)review": return "review"
         case "\(prefix)coach": return "ai"
         default: return nil
         }
@@ -87,13 +88,13 @@ struct OpenAlphaTradeLiveIntent: AppIntent {
 
 @available(iOS 16.0, *)
 struct CaptureAlphaTradeTradeIntent: AppIntent {
-    static let title: LocalizedStringResource = "Zapsat obchod v AlphaTrade"
-    static let description = IntentDescription("Otevře rychlý zápis nového obchodu.")
+    static let title: LocalizedStringResource = "Ohodnotit obchody v AlphaTrade"
+    static let description = IntentDescription("Otevře obchody z Tradovate, které čekají na hodnocení.")
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        await MainActor.run { AlphaTradeSystemRouter.shared.request("capture") }
-        return .result(dialog: "Otevírám zápis obchodu.")
+        await MainActor.run { AlphaTradeSystemRouter.shared.request("review") }
+        return .result(dialog: "Otevírám hodnocení obchodů.")
     }
 }
 
@@ -124,11 +125,11 @@ struct AlphaTradeAppShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: CaptureAlphaTradeTradeIntent(),
             phrases: [
-                "Zapiš obchod v \(.applicationName)",
-                "Přidej obchod do \(.applicationName)",
+                "Ohodnoť obchody v \(.applicationName)",
+                "Otevři hodnocení v \(.applicationName)",
             ],
-            shortTitle: "Zapsat obchod",
-            systemImageName: "plus.circle.fill"
+            shortTitle: "Hodnotit obchody",
+            systemImageName: "checkmark.seal"
         )
         AppShortcut(
             intent: OpenAlphaTradeCoachIntent(),
@@ -148,7 +149,7 @@ enum AlphaTradeSpotlight {
     static func indexDestinations() {
         let definitions: [(id: String, title: String, description: String, keywords: [String])] = [
             ("live", "AlphaTrade LIVE", "Živý obchodní přehled a řízení relace", ["trading", "live", "NQ", "MNQ"]),
-            ("capture", "Zapsat obchod", "Rychle přidat nový obchod do deníku", ["obchod", "trade", "zapsat"]),
+            ("review", "Hodnotit obchody", "Obchody z Tradovate čekající na hodnocení", ["hodnotit", "review", "obchod"]),
             ("journal", "Obchodní deník", "Denní příprava, review a obchodní poznámky", ["deník", "journal", "review"]),
             ("ai", "AlphaTrade Coach", "Otevřít AI Coach pro analýzu obchodování", ["coach", "kouč", "AI"]),
             ("dashboard", "AlphaTrade Dashboard", "Výsledky, equity a denní P&L", ["dashboard", "equity", "P&L"]),

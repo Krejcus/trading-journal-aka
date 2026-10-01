@@ -46,7 +46,7 @@ import { isEvidenceJournalTrade, isRetiredJournalTrade } from './lib/journalTrad
 import { loadTradovateOAuthStatus, importTradovateJournalConnection } from './services/tradovateOAuthConnection';
 import { Trade, Account, TradeFilters, CustomEmotion, User, DailyPrep, DailyReview, UserPreferences, DashboardWidgetConfig, DashboardLayouts, SessionConfig, IronRule, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, DashboardMode, WeeklyFocus, PnLDisplayMode, ConstitutionRule, CareerCheckpoint, SystemSettings, LabExperiment } from './types';
 const Dashboard = React.lazy(() => import('./components/Dashboard'));
-const ManualTradeForm = React.lazy(() => import('./components/ManualTradeForm'));
+const TradeReview = React.lazy(() => import('./components/TradeReview'));
 const TradeHistory = React.lazy(() => import('./components/TradeHistory'));
 const JournalReviewInbox = React.lazy(() => import('./components/JournalReviewInbox'));
 const LiveJournalHistory = React.lazy(() => import('./components/LiveJournalHistory'));
@@ -90,7 +90,7 @@ import {
 import type { TradovateLiveTab } from './lib/tradovateLiveTab';
 import FilterDropdown from './components/FilterDropdown';
 import Auth from './components/Auth';
-import QuantumLoader from './components/QuantumLoader';
+import QuantumLoader, { QuantumSpinner } from './components/QuantumLoader';
 import { PullToRefresh } from './components/PullToRefresh';
 import ConfirmationModal from './components/ConfirmationModal';
 import TradeDetailModal from './components/TradeDetailModal';
@@ -98,15 +98,13 @@ import SharedTradeView from './components/SharedTradeView';
 import SharedLiveDayView from './components/SharedLiveDayView';
 import { currencyService, ExchangeRates } from './services/currencyService';
 import { t } from './services/translations';
-import { GuardianIntervention, GuardianOverlay, DebtCollector } from './components/GuardianSystem';
-import { getGuardianState, GuardianState } from './utils/guardianLogic';
+import { getPrepReminderState } from './utils/prepReminders';
 import { sendLocalNotification } from './utils/notificationHelper';
 import { syncPushSubscription, hasLocalPushEndpoint } from './services/pushSubscriptionService';
 import {
   Sun,
   Moon,
   BarChart3,
-  Plus,
   Menu,
   LayoutGrid,
   ChevronRight,
@@ -138,9 +136,9 @@ import {
 import { isSupabaseConfigured, supabase } from './services/supabase';
 import type { Session } from '@supabase/supabase-js';
 import type { BacktestRun } from './services/backtestTypes';
-import { playNativeHapticIfAvailable, type NativeTradeDraft } from './services/nativeCapabilities';
+import { playNativeHapticIfAvailable } from './services/nativeCapabilities';
 import MorningBriefBanner from './components/MorningBriefBanner';
-import { isNativeShell, registerNativeShellBridge, reportNativeRefreshComplete, reportNativeShellTheme, reportNativeShellWorld, reportNativeShellPage, reportNativeShellCapture } from './utils/nativeShell';
+import { isNativeShell, registerNativeShellBridge, reportNativeRefreshComplete, reportNativeShellTheme, reportNativeShellWorld, reportNativeShellPage, reportNativeShellReview, reportNativeShellReviewCount, type NativeReviewRequest } from './utils/nativeShell';
 import { syncNativeSessionReminders } from './services/nativeSessionReminders';
 import {
   initializeNativeRemoteNotifications,
@@ -921,28 +919,10 @@ const App: React.FC = () => {
     guardianEnabled: true,
     morningPrepAlert60m: true,
     morningPrepAlert15m: true,
-    morningPrepAlertCritical: true,
-    strictModeEnabled: false,
     eveningAuditAlertEnabled: true,
     eveningAuditAlertTime: '21:00',
-    morningWakeUpDebtAlert: true
   });
 
-  const [guardian, setGuardian] = useState<GuardianState>({
-    isCriticalAlert: false,
-    isPrepMissing: true,
-    activeSession: null,
-    nextSession: null,
-    isDebtActive: false,
-    showMorningIntervention: false,
-    showEveningIntervention: false
-  });
-  const [isMorningInterventionOpen, setIsMorningInterventionOpen] = useState(false);
-  const [isEveningInterventionOpen, setIsEveningInterventionOpen] = useState(false);
-  const hasTriggeredMorning = useRef(false);
-  const hasTriggeredEvening = useRef(false);
-  const [isGuardianOverlayOpen, setIsGuardianOverlayOpen] = useState(false);
-  const [isDebtCollectorOpen, setIsDebtCollectorOpen] = useState(false);
   const lastCheckTime = useRef<string>("");
 
   // Ověření push odběru při startu. iOS odběry po delší nečinnosti nebo po
@@ -1015,10 +995,9 @@ const App: React.FC = () => {
       sendLocalNotification(title, body, icon);
     };
 
-    const checkGuardian = () => {
+    const checkReminders = () => {
       if (!isCurrentSession()) return;
-      const state = getGuardianState(systemSettings, sessions, dailyPreps, dailyReviews);
-      setGuardian(state);
+      const state = getPrepReminderState(sessions, dailyPreps);
 
       // Notification Logic
       const now = new Date();
@@ -1050,42 +1029,27 @@ const App: React.FC = () => {
           }
         });
 
-        // Guardian Alerts
+        // Připomínky přípravy (guardianEnabled = hlavní vypínač, název klíče zůstal kvůli uloženým preferencím)
         if (state.nextSession && state.isPrepMissing && systemSettings.guardianEnabled) {
           if (systemSettings.morningPrepAlert60m && state.nextSession.minutesToStart === 60) {
-            notifyLocal("Alpha Guardian: 60m do startu", "Máš dost času na kvalitní přípravu.");
+            notifyLocal("Příprava: 60 min do startu", "Máš dost času na kvalitní přípravu.");
           }
           if (systemSettings.morningPrepAlert15m && state.nextSession.minutesToStart === 15) {
-            notifyLocal("Alpha Guardian: 15m do startu", "VAROVÁNÍ: Stále nemáš hotovou přípravu!", "/logos/at_logo_light_clean.png");
+            notifyLocal("Příprava: 15 min do startu", "Ještě nemáš hotovou přípravu.", "/logos/at_logo_light_clean.png");
           }
         }
       }
-
-      if (isInitialLoadDone) {
-        if (state.showMorningIntervention && !hasTriggeredMorning.current) {
-          setIsMorningInterventionOpen(true);
-          hasTriggeredMorning.current = true;
-        }
-        if (state.showEveningIntervention && !hasTriggeredEvening.current) {
-          setIsEveningInterventionOpen(true);
-          hasTriggeredEvening.current = true;
-        }
-      }
-
-      // Reset triggers when conditions no longer met (to allow re-triggering if user ignores but session changes etc)
-      if (!state.showMorningIntervention) hasTriggeredMorning.current = false;
-      if (!state.showEveningIntervention) hasTriggeredEvening.current = false;
 
       // Test Mode Notification
       if (systemSettings.testModeEnabled) {
-        notifyLocal(`Test: ${timeKey}`, "Alpha Guardian Test Notifikace");
+        notifyLocal(`Test: ${timeKey}`, "Testovací notifikace");
       }
     };
 
-    const timer = setInterval(checkGuardian, 30000);
-    checkGuardian();
+    const timer = setInterval(checkReminders, 30000);
+    checkReminders();
     return () => clearInterval(timer);
-  }, [systemSettings, sessions, dailyPreps, dailyReviews, isInitialLoadDone, isPushActive, session?.user.id, captureSessionRequest]);
+  }, [systemSettings, sessions, dailyPreps, isPushActive, session?.user.id, captureSessionRequest]);
 
   useEffect(() => {
     if (!isNativeShell() || !isInitialLoadDone || !session?.user?.id || logoutInProgressRef.current || sessionRef.current?.user.id !== session.user.id) return;
@@ -1094,19 +1058,6 @@ const App: React.FC = () => {
     });
   }, [isInitialLoadDone, session?.user?.id, sessions, systemSettings]);
 
-  useEffect(() => {
-    if (isInitialLoadDone && guardian.isDebtActive && systemSettings.morningWakeUpDebtAlert) {
-      setIsDebtCollectorOpen(true);
-    }
-  }, [isInitialLoadDone, guardian.isDebtActive, systemSettings.morningWakeUpDebtAlert]);
-
-  const handleTryAddTrade = () => {
-    if (systemSettings.strictModeEnabled && guardian.isPrepMissing) {
-      setIsGuardianOverlayOpen(true);
-    } else {
-      setIsManualEntryOpen(true);
-    }
-  };
 
   const handleHardRefresh = async () => {
     if (confirm("Opravdu chcete vyčistit mezipaměť a restartovat aplikaci?")) {
@@ -1329,34 +1280,48 @@ const App: React.FC = () => {
   // Nativní iOS shell nahrazuje BottomNav systémovým TabView a přepíná sekce
   // přes tento most — bez reloadu, takže session i stav zůstávají.
   const inNativeShell = useMemo(() => isNativeShell(), []);
-  const openNativeTradeDraft = useCallback((draft?: NativeTradeDraft) => {
-    setNativeTradeDraft(draft ?? null);
-    if (systemSettings.strictModeEnabled && guardian.isPrepMissing) {
-      playNativeHapticIfAvailable('warning');
-      setIsGuardianOverlayOpen(true);
-    } else {
-      playNativeHapticIfAvailable('medium');
-      setIsManualEntryOpen(true);
-    }
-  }, [systemSettings.strictModeEnabled, guardian.isPrepMissing]);
-  const nativeActions = useRef({ navigate: navigateTo, addTrade: openNativeTradeDraft, toggleWorld: toggleBacktestMode });
-  nativeActions.current = { navigate: navigateTo, addTrade: openNativeTradeDraft, toggleWorld: toggleBacktestMode };
+  // Hodnocení obchodů z Tradovate (fronta „k revizi“). Nahrazuje ruční zápis.
+  const [review, setReview] = useState<NativeReviewRequest | null>(null);
+  const reviewDirtyRef = useRef(false);
+  const reviewOpenRef = useRef(false);
+  reviewOpenRef.current = review != null;
+  // Nový klíč = hodnocení začne znovu na požadovaném obchodu (notifikace, detail).
+  const [reviewKey, setReviewKey] = useState(0);
+  // Cílený požadavek (notifikace) během rozepsaného hodnocení čeká na potvrzení.
+  const [pendingReviewRequest, setPendingReviewRequest] = useState<NativeReviewRequest | null>(null);
+  const openReview = useCallback((request?: NativeReviewRequest) => {
+    playNativeHapticIfAvailable('medium');
+    const targeted = Boolean(request?.tradeId || request?.note);
+    // Opakované klepnutí na Hodnotit nechá rozpracovanou frontu, jak je.
+    if (reviewOpenRef.current && !targeted) return;
+    if (reviewOpenRef.current && reviewDirtyRef.current) { setPendingReviewRequest(request ?? {}); return; }
+    reviewDirtyRef.current = false;
+    setReview(request ?? {});
+    setReviewKey(key => key + 1);
+  }, []);
+  const handleReviewDirty = useCallback((dirty: boolean) => { reviewDirtyRef.current = dirty; }, []);
+  // Stránka, na kterou chtěla nativní lišta přejít během rozepsaného hodnocení.
+  const [pendingReviewNav, setPendingReviewNav] = useState<string | null>(null);
+  const nativeActions = useRef({ navigate: navigateTo, review: openReview, toggleWorld: toggleBacktestMode });
+  nativeActions.current = { navigate: navigateTo, review: openReview, toggleWorld: toggleBacktestMode };
   useEffect(
     () =>
       registerNativeShellBridge({
         navigate: (page) => {
-          // Přechod z nativní lišty nebo menu Více zavře otevřený zápis stejně
-          // jako křížek — jinak by formulář zůstal viset nad novou stránkou.
-          setIsManualEntryOpen(false);
-          setNativeTradeDraft(null);
-          setIsGuardianOverlayOpen(false);
+          // Rozepsané hodnocení se nezahodí potichu: nejdřív potvrzení.
+          if (reviewOpenRef.current && reviewDirtyRef.current) {
+            setPendingReviewNav(page);
+            return;
+          }
+          // Přechod z nativní lišty nebo menu Více zavře hodnocení stejně jako křížek.
+          setReview(null);
           if (page === 'native-system') {
             window.dispatchEvent(new Event('alphatrade:open-native-system'));
             return;
           }
           nativeActions.current.navigate(page);
         },
-        addTrade: (draft) => nativeActions.current.addTrade(draft),
+        review: (request) => nativeActions.current.review(request),
         toggleWorld: () => nativeActions.current.toggleWorld(),
         refresh: () => window.dispatchEvent(new Event('alphatrade:native-refresh')),
       }),
@@ -1481,12 +1446,9 @@ const App: React.FC = () => {
     }
   };
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
-  const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
-  const [nativeTradeDraft, setNativeTradeDraft] = useState<NativeTradeDraft | null>(null);
-  const isNativeCaptureOpen = isManualEntryOpen || isGuardianOverlayOpen;
   useEffect(() => {
-    if (inNativeShell) reportNativeShellCapture(isNativeCaptureOpen);
-  }, [inNativeShell, isNativeCaptureOpen]);
+    if (inNativeShell) reportNativeShellReview(review != null);
+  }, [inNativeShell, review]);
   const [isDashboardEditing, setIsDashboardEditing] = useState(false);
   const [isMobileEditing, setIsMobileEditing] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -3446,61 +3408,13 @@ const App: React.FC = () => {
     setEnrichSignal(s => s + 1);
   }, []);
 
-  const handleManualTrade = (tradeOrTrades: Trade | Trade[]) => {
-    const newTradesArray = Array.isArray(tradeOrTrades) ? tradeOrTrades : [tradeOrTrades];
-
-    setTrades(prev => {
-      let updated = [...prev];
-
-      // CRITICAL FIX: Detect if we're editing a grouped trade
-      // If so, FIRST remove ALL old trades from that group to prevent duplicates
-      const firstNewTrade = newTradesArray[0];
-      if (firstNewTrade) {
-        // Check for master/copy group
-        if (firstNewTrade.isMaster || firstNewTrade.masterTradeId) {
-          const groupKey = firstNewTrade.isMaster ? firstNewTrade.id : firstNewTrade.masterTradeId;
-          // Remove all trades that are part of this master/copy group
-          updated = updated.filter(t => {
-            const isPartOfGroup = t.id === groupKey || t.masterTradeId === groupKey;
-            return !isPartOfGroup;
-          });
-        }
-        // Check for bulk-entry group
-        else if (firstNewTrade.groupId) {
-          const groupId = firstNewTrade.groupId;
-          // Remove all trades with this groupId
-          updated = updated.filter(t => t.groupId !== groupId);
-        }
-      }
-
-      // Now add/update all new trades
-      newTradesArray.forEach(t => {
-        const idx = updated.findIndex(existing => existing.id === t.id);
-        if (idx !== -1) {
-          updated[idx] = { ...t, id: t.id }; // Update existing
-        } else {
-          updated.push({ ...t, id: t.id || crypto.randomUUID() }); // Add new
-        }
-      });
-
-      return updated;
-    });
-
-    // Save ONLY the new/changed trades (not ALL trades — prevents screenshot data loss)
-    storageService.saveTrades(newTradesArray)
-      .then(saved => {
-        if (!saved || saved.length === 0) throw new Error('Uložení nevrátilo žádný obchod.');
-        playNativeHapticIfAvailable('success');
-      })
-      .catch(err => {
-        console.error("Manual trade save failed:", err);
-        setSyncError("Nepodařilo se uložit obchod.");
-        playNativeHapticIfAvailable('error');
-      });
-
-    setIsManualEntryOpen(false);
-    setNativeTradeDraft(null);
-  };
+  // Fronta hodnocení: obchody z Tradovate „k revizi“, kopírované skupiny jako
+  // jeden obchod (hodnocení se propíše na všechny účty skupiny).
+  const reviewQueue = useMemo(() => aggregateHistoryTrades(trades)
+    .filter(trade => trade.needsReview === true && trade.source === 'copier'), [trades]);
+  useEffect(() => {
+    if (inNativeShell) reportNativeShellReviewCount(reviewQueue.length);
+  }, [inNativeShell, reviewQueue.length]);
 
   // Vrací, jestli se všechno uložilo — vložený snímek na to čeká, než pustí
   // detail obchodu číst z databáze.
@@ -3546,10 +3460,13 @@ const App: React.FC = () => {
   }, [trades, handleUpdateTrades]);
 
   const handleUpdateTrade = useCallback(async (tradeId: string | number, updates: Partial<Trade>) => {
-    const reviewedUpdates: Partial<Trade> = { ...updates, needsReview: false };
+    // Uložení = zkontrolováno; výslovné needsReview (Vrátit v hodnocení) má přednost.
+    const reviewedUpdates: Partial<Trade> = { needsReview: false, ...updates };
     // Shared review affects only visible group members. Broker facts stay account-specific.
     if (typeof tradeId === 'string' && tradeId.startsWith('combined_')) {
-      const combinedView = filteredDisplayTrades.find(trade => trade.id === tradeId);
+      // Hodnocení pracuje se skupinou mimo filtry Historie (fronta „k revizi“).
+      const combinedView = filteredDisplayTrades.find(trade => trade.id === tradeId)
+        ?? aggregateHistoryTrades(trades).find(trade => trade.id === tradeId);
       if (!combinedView) {
         setSyncError('Skupina již není v aktuálním výběru. Otevři ji znovu z historie.');
         return false;
@@ -4013,7 +3930,8 @@ const App: React.FC = () => {
           isCollapsed={isSidebarCollapsed}
           setIsCollapsed={setIsSidebarCollapsed}
           theme={theme}
-          onAddTrade={handleTryAddTrade}
+          onReview={() => openReview()}
+          reviewCount={reviewQueue.length}
           user={currentUser}
           onLogout={handleLogout}
           onOpenProfile={() => setIsProfileOpen(true)}
@@ -4035,7 +3953,8 @@ const App: React.FC = () => {
         activePage={activePage}
         onNavigate={navigateTo}
         onLiveIntent={prepareLiveNavigation}
-        onAddTrade={handleTryAddTrade}
+        onReview={() => openReview()}
+        reviewCount={reviewQueue.length}
         theme={theme}
         userRole={currentUser.role}
         enrichCount={enrichCount}
@@ -4541,14 +4460,6 @@ const App: React.FC = () => {
                         <div className="w-full max-w-md h-64">
                           <div className="flex h-full items-center justify-center text-center text-sm text-[var(--text-secondary)]">Zatím tu nejsou žádné obchody. Obchody z připojeného Tradovate se doplní automaticky.</div>
                         </div>
-                        <div className="flex items-center gap-4 w-full max-w-md">
-                          <div className="h-px bg-slate-800 flex-1"></div>
-                          <span className="text-xs text-slate-500 font-bold uppercase">Nebo</span>
-                          <div className="h-px bg-slate-800 flex-1"></div>
-                        </div>
-                        <button onClick={handleTryAddTrade} className="flex items-center gap-2 px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-blue-500/20 transition-all active:scale-95">
-                          <Plus size={18} /> Zapsat první obchod
-                        </button>
                       </div>
                     ) : (
                       <TradeHistory
@@ -4558,6 +4469,7 @@ const App: React.FC = () => {
                         onUpdateTrade={handleUpdateTrade}
                         onAttachScreenshot={handleAttachTradeScreenshot}
                         onSaveChartNotes={handleSaveChartNotes}
+                        onOpenReview={(trade) => openReview({ tradeId: String(trade.id) })}
                         onClear={handleClearTrades}
                         theme={theme}
                         emotions={userEmotions}
@@ -4822,10 +4734,6 @@ const App: React.FC = () => {
                       onAccentColorChange={handleAccentColorChange}
                       onCreateAccount={(account) => setAccounts(prev => [...prev, account])}
 
-                      onOpenTradeDraft={(draft) => {
-                        setNativeTradeDraft(draft);
-                        setIsManualEntryOpen(true);
-                      }}
                     />
                   )}
 
@@ -4869,62 +4777,74 @@ const App: React.FC = () => {
         </div>
       </main>
 
-      {/* Alpha Guardian System Components */}
-      <GuardianIntervention
-        type="morning"
-        isOpen={isMorningInterventionOpen}
-        onClose={() => setIsMorningInterventionOpen(false)}
-        onAction={() => {
-          setIsMorningInterventionOpen(false);
-          setActivePage('journal');
-        }}
-      />
 
-      <GuardianIntervention
-        type="evening"
-        isOpen={isEveningInterventionOpen}
-        onClose={() => setIsEveningInterventionOpen(false)}
-        onAction={() => {
-          setIsEveningInterventionOpen(false);
-          setActivePage('journal');
-        }}
-      />
 
-      <GuardianOverlay
-        isOpen={isGuardianOverlayOpen}
-        onClose={() => setIsGuardianOverlayOpen(false)}
-        onGoToJournal={() => {
-          setIsGuardianOverlayOpen(false);
-          setActivePage('journal');
-        }}
-      />
-
-      <DebtCollector
-        isOpen={isDebtCollectorOpen}
-        onClose={() => setIsDebtCollectorOpen(false)}
-        onGoToAudit={() => {
-          setIsDebtCollectorOpen(false);
-          setActivePage('journal');
-        }}
-      />
-
-      {
-        isManualEntryOpen && (
-          <ManualTradeForm
-            onAdd={handleManualTrade}
-            onClose={() => { setIsManualEntryOpen(false); setNativeTradeDraft(null); }}
-            theme={theme}
-            accounts={accounts}
-            activeAccountId={activeAccountId}
-            availableEmotions={userEmotions}
-            availableMistakes={userMistakes}
-            availableHtfOptions={htfOptions}
-            availableLtfOptions={ltfOptions}
-            viewMode={viewMode}
-            initialDraft={nativeTradeDraft}
+      {review && (
+        <React.Suspense fallback={<div className={`fixed inset-0 z-[290] flex items-center justify-center ${theme === 'light' ? 'bg-[#f4f6f8]' : 'bg-[#070a0f]'}`}><QuantumSpinner /></div>}>
+          <TradeReview
+            key={reviewKey}
+            queue={reviewQueue}
+            allTrades={trades}
+            accounts={[...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))]}
+            isDark={theme !== 'light'}
+            emotions={userEmotions}
+            htfOptions={htfOptions}
+            ltfOptions={ltfOptions}
+            mistakeOptions={userMistakes}
+            initialTradeId={review.tradeId}
+            initialNote={review.note}
+            onUpdateTrade={handleUpdateTrade}
+            onSaveChartNotes={handleSaveChartNotes}
+            onAttachScreenshot={handleAttachTradeScreenshot}
+            onDirtyChange={handleReviewDirty}
+            onClose={() => { reviewDirtyRef.current = false; setReview(null); }}
           />
-        )
-      }
+        </React.Suspense>
+      )}
+
+      {/* Notifikace chce otevřít jiný obchod během rozepsaného hodnocení. */}
+      <ConfirmationModal
+        isOpen={pendingReviewRequest !== null}
+        onClose={() => setPendingReviewRequest(null)}
+        onConfirm={() => {
+          const request = pendingReviewRequest;
+          setPendingReviewRequest(null);
+          reviewDirtyRef.current = false;
+          setReview(request ?? {});
+          setReviewKey(key => key + 1);
+        }}
+        title="Zahodit rozepsané hodnocení?"
+        message="Chceš otevřít jiný obchod, ale aktuální hodnocení ještě není uložené."
+        confirmText="Zahodit a otevřít"
+        cancelText="Pokračovat v hodnocení"
+        variant="warning"
+        theme={theme}
+      />
+
+      {/* Nativní lišta chce odejít od rozepsaného hodnocení. */}
+      <ConfirmationModal
+        isOpen={pendingReviewNav !== null}
+        onClose={() => {
+          setPendingReviewNav(null);
+          // Lišta už ukázala cílovou stránku — vrať ji na skutečný stav.
+          reportNativeShellPage(activePage);
+          reportNativeShellReview(true);
+        }}
+        onConfirm={() => {
+          const page = pendingReviewNav;
+          setPendingReviewNav(null);
+          reviewDirtyRef.current = false;
+          reviewOpenRef.current = false;
+          setReview(null);
+          if (page) window.__alphaTradeNative?.navigate(page);
+        }}
+        title="Zahodit rozepsané hodnocení?"
+        message="Hodnocení obchodu ještě není uložené. Když odejdeš, ztratí se."
+        confirmText="Zahodit a odejít"
+        cancelText="Pokračovat v hodnocení"
+        variant="warning"
+        theme={theme}
+      />
 
 
       {/* Warning modal — pokud user odchází z AI stránky během streamu. */}

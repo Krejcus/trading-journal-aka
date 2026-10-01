@@ -37,7 +37,7 @@ describe('runtimeConfig', () => {
   it('replays a notification route registered before the React shell is ready', async () => {
     vi.stubEnv('VITE_NATIVE_BUILD', 'true');
     const navigate = vi.fn();
-    const addTrade = vi.fn();
+    const review = vi.fn();
     const refresh = vi.fn();
     const nativeWindow = {
       location: { search: '' },
@@ -52,15 +52,16 @@ describe('runtimeConfig', () => {
     navigateNativeShell('journal');
     expect((nativeWindow as typeof nativeWindow & { __alphaTradePendingRoute?: string }).__alphaTradePendingRoute).toBe('journal');
 
-    registerNativeShellBridge({ navigate, addTrade, toggleWorld: vi.fn(), refresh });
+    registerNativeShellBridge({ navigate, review, toggleWorld: vi.fn(), refresh });
     expect(navigate).toHaveBeenCalledWith('journal');
+    expect(review).not.toHaveBeenCalled();
     expect((nativeWindow as typeof nativeWindow & { __alphaTradePendingRoute?: string }).__alphaTradePendingRoute).toBeUndefined();
   });
 
-  it('replays a notification trade draft registered before the React shell is ready', async () => {
+  it('replays a notification review request registered before the React shell is ready', async () => {
     vi.stubEnv('VITE_NATIVE_BUILD', 'true');
     const navigate = vi.fn();
-    const addTrade = vi.fn();
+    const review = vi.fn();
     const refresh = vi.fn();
     const nativeWindow = {
       location: { search: '' },
@@ -71,13 +72,14 @@ describe('runtimeConfig', () => {
     };
     vi.stubGlobal('window', nativeWindow);
 
-    const { openNativeTradeCapture, registerNativeShellBridge } = await import('../utils/nativeShell');
-    const draft = { notes: 'Poznámka z iOS notifikace:\nDržel jsem plán.' };
-    openNativeTradeCapture(draft);
-    registerNativeShellBridge({ navigate, addTrade, toggleWorld: vi.fn(), refresh });
+    const { openNativeReview, registerNativeShellBridge } = await import('../utils/nativeShell');
+    const request = { tradeId: 'trade-1', note: 'Držel jsem plán.' };
+    openNativeReview(request);
+    registerNativeShellBridge({ navigate, review, toggleWorld: vi.fn(), refresh });
 
-    expect(addTrade).toHaveBeenCalledWith(draft);
-    expect((nativeWindow as typeof nativeWindow & { __alphaTradePendingTradeDraft?: unknown }).__alphaTradePendingTradeDraft).toBeUndefined();
+    expect(review).toHaveBeenCalledWith(request);
+    expect(navigate).not.toHaveBeenCalled();
+    expect((nativeWindow as typeof nativeWindow & { __alphaTradePendingReview?: unknown }).__alphaTradePendingReview).toBeUndefined();
   });
 
   it('exposes native refresh without reloading the web view', async () => {
@@ -87,7 +89,7 @@ describe('runtimeConfig', () => {
     const refresh = vi.fn();
     const { registerNativeShellBridge } = await import('../utils/nativeShell');
 
-    registerNativeShellBridge({ navigate: vi.fn(), addTrade: vi.fn(), toggleWorld: vi.fn(), refresh });
+    registerNativeShellBridge({ navigate: vi.fn(), review: vi.fn(), toggleWorld: vi.fn(), refresh });
     (nativeWindow as typeof nativeWindow & { __alphaTradeNative?: { refresh: () => void } }).__alphaTradeNative?.refresh();
 
     expect(refresh).toHaveBeenCalledOnce();
