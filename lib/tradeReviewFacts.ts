@@ -170,3 +170,17 @@ export function undoPatch(before: Trade, patch: Partial<Trade>): Partial<Trade> 
     return [key, null];
   })) as Partial<Trade>;
 }
+
+/**
+ * „Tlustá čára“ (Filip, 1. 10. 2026): fronta Hodnotit a její odznak počítají
+ * jen obchody uzavřené od 1. 10. 2026 (půlnoc Praha). Starší neohodnocené
+ * obchody se nehodnotí — měsíc starý obchod už nemá smysl rozebírat. Jednotlivě
+ * jdou otevřít dál z detailu v Historii.
+ */
+export const REVIEW_QUEUE_SINCE_MS = Date.parse('2026-09-30T22:00:00Z');
+
+export function inReviewQueue(trade: Pick<Trade, 'needsReview' | 'source' | 'timestamp' | 'date'>): boolean {
+  if (trade.needsReview !== true || trade.source !== 'copier') return false;
+  const closedAt = trade.timestamp || Date.parse(trade.date);
+  return Number.isFinite(closedAt) && closedAt >= REVIEW_QUEUE_SINCE_MS;
+}

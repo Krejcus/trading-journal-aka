@@ -1,3 +1,4 @@
+import { inReviewQueue } from './lib/tradeReviewFacts';
 import { coalescedJournalRead } from './services/coalescedJournalRead';
 import { filterHistoryTrades } from './lib/historyTradeFilter';
 import { journalSourceConnections } from './services/journalSourceStatus';
@@ -3353,10 +3354,9 @@ const App: React.FC = () => {
     setEnrichSignal(s => s + 1);
   }, []);
 
-  // Fronta hodnocení: obchody z Tradovate „k revizi“, kopírované skupiny jako
-  // jeden obchod (hodnocení se propíše na všechny účty skupiny).
-  const reviewQueue = useMemo(() => aggregateHistoryTrades(trades)
-    .filter(trade => trade.needsReview === true && trade.source === 'copier'), [trades]);
+  // Fronta hodnocení: obchody z Tradovate „k revizi“ od tlusté čáry (1. 10.),
+  // kopírované skupiny jako jeden obchod (hodnocení se propíše na všechny účty).
+  const reviewQueue = useMemo(() => aggregateHistoryTrades(trades).filter(inReviewQueue), [trades]);
   useEffect(() => {
     if (inNativeShell) reportNativeShellReviewCount(reviewQueue.length);
   }, [inNativeShell, reviewQueue.length]);

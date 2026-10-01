@@ -129,3 +129,15 @@ describe('undoPatch', () => {
     });
   });
 });
+
+describe('inReviewQueue', () => {
+  it('queues only pending copier trades closed since the 1 October cut-off (Prague midnight)', async () => {
+    const { inReviewQueue } = await import('../lib/tradeReviewFacts');
+    const at = (iso: string) => trade({ needsReview: true, source: 'copier', timestamp: Date.parse(iso) } as never);
+    expect(inReviewQueue(at('2026-09-30T22:00:00Z'))).toBe(true);
+    expect(inReviewQueue(at('2026-09-30T21:59:59Z'))).toBe(false);
+    expect(inReviewQueue(at('2026-08-31T15:00:00Z'))).toBe(false);
+    expect(inReviewQueue({ ...at('2026-10-01T08:00:00Z'), needsReview: false })).toBe(false);
+    expect(inReviewQueue({ ...at('2026-10-01T08:00:00Z'), source: 'manual' } as never)).toBe(false);
+  });
+});
