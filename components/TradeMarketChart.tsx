@@ -53,6 +53,7 @@ import { onChartAppearanceScopeBroadcast } from '../services/chartAppearanceScop
 import { detailIndicatorStyleSnapshot, onTradeChartIndicatorsChange, readTradeChartIndicators, writeTradeChartIndicators, type TradeChartIndicators } from '../services/detailIndicators';
 import { loadTradeChartCandles, loadTradeChartHistory, tradeChartDataAvailable, tradeChartTiming } from '../services/tradeChartData';
 import { loadProvisionalCandles } from '../services/provisionalCandles';
+import { attachChartTouchGestures } from '../services/chartTouchPriceAxis';
 import { ALPHATRADE_CHART_STYLE as chartStyle } from '../services/chartVisualStyle';
 import { formatNqMnqTickPrice } from '../services/chartPriceTick';
 import { chartAxisTickLabel, chartCrosshairTimeLabel } from '../services/chartTimeAxisFormat';
@@ -643,7 +644,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
         priceFormatter: formatNqMnqTickPrice,
       },
       crosshair: { vertLine: { color: 'rgba(148,163,184,0.45)' }, horzLine: { color: 'rgba(148,163,184,0.45)' } },
-      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
       handleScale: {
         axisPressedMouseMove: true,
         axisDoubleClickReset: false,
@@ -653,6 +654,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
       kineticScroll: { mouse: true, touch: true },
     });
     chartRef.current = chart;
+    const detachTouchGestures = attachChartTouchGestures(chart);
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: isDark ? chartStyle.bullBodyDark : chartStyle.bullBodyLight,
@@ -933,6 +935,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
       chartElement.removeEventListener('dblclick', handlePriceScaleDoubleClick, true);
       if (priceWheelFrame !== null) window.cancelAnimationFrame(priceWheelFrame);
       chartDrawings.forEach(drawing => drawing.detach());
+      detachTouchGestures();
       chart.remove();
       chartRef.current = null;
       candleSeriesRef.current = null;

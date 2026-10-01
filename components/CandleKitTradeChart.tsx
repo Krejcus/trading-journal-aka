@@ -1,4 +1,4 @@
-import { attachTouchPriceAxisScale } from '../services/chartTouchPriceAxis';
+import { attachChartTouchGestures } from '../services/chartTouchPriceAxis';
 import { createJournalArrowStacks, createJournalChartPrimitive, createReviewPoint, createReviewPriceFocus, journalTradePriceRange, type JournalChartPrimitive } from '../services/journalChartPrimitive';
 import { createJournalPositionPrimitive } from '../services/journalPositionDrawing';
 import { retainEqualNumbers, uniqueStructureEvents } from '../services/chartReplayPaint';
@@ -4490,11 +4490,11 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
    * časová osa počítá se všemi sériemi v grafu, takže stačí k protažení.
    * `autoscaleInfoProvider: () => null` drží cenovou osu mimo hru.
    */
-  // Telefon: tah po cenové ose roztahuje graf (jinak by ho sebral scroll stránky).
+  // Telefon: prst na grafu hýbe jen grafem, stránka stojí (viz chartTouchPriceAxis).
   useEffect(() => {
     const chart = apiRef.current?.controller.getChart();
     if (!chart) return;
-    return attachTouchPriceAxisScale(chart);
+    return attachChartTouchGestures(chart);
   }, [chartApiEpoch]);
 
   useEffect(() => {
@@ -4841,7 +4841,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
             barSpacing: 8,
             minBarSpacing: 0.5,
           },
-          handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+          handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
           handleScale: { axisPressedMouseMove: true, axisDoubleClickReset: true, mouseWheel: true, pinch: true },
           kineticScroll: { mouse: true, touch: true },
         }}
