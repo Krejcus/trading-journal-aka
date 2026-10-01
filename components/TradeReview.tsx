@@ -393,7 +393,7 @@ export default function TradeReview({
   );
 
   const left = (
-    <aside key={`l${enterKey}`} className={`w-full lg:w-[272px] shrink-0 lg:border-r flex flex-col min-h-0 overflow-y-auto ${line} ${isDark ? 'bg-[#0b1017]' : 'bg-slate-50/70'} ${leaving ? 'tr-leave' : 'tr-enter'}`}>
+    <aside key={`l${enterKey}`} className={`w-full lg:w-[272px] shrink-0 lg:border-r flex flex-col min-h-0 overflow-y-auto [&>*]:shrink-0 ${line} ${isDark ? 'bg-[#0b1017]' : 'bg-slate-50/70'} ${leaving ? 'tr-leave' : 'tr-enter'}`}>
       <div className={`px-4 pt-3.5 pb-3 border-b ${line}`}>
         <p className={label}>Čistý výsledek{members.length > 1 ? ` · skupina ${members.length} účty` : ''}</p>
         <p className={`mt-1.5 text-[32px] font-light tracking-[-0.04em] leading-none tabular-nums ${tone(net)}`}>{money(net)}</p>
@@ -460,7 +460,7 @@ export default function TradeReview({
   ];
 
   const right = (
-    <aside key={`r${enterKey}`} className={`w-full lg:w-[264px] shrink-0 lg:border-l flex flex-col min-h-0 overflow-y-auto ${line} ${isDark ? 'bg-[#0b1017]' : 'bg-slate-50/70'} ${leaving ? 'tr-leave' : 'tr-enter'}`}>
+    <aside key={`r${enterKey}`} className={`w-full lg:w-[264px] shrink-0 lg:border-l flex flex-col min-h-0 overflow-y-auto [&>*]:shrink-0 ${line} ${isDark ? 'bg-[#0b1017]' : 'bg-slate-50/70'} ${leaving ? 'tr-leave' : 'tr-enter'}`}>
       <Section title="Validita" aux="P / M" />
       <div className={`mx-3 grid grid-cols-2 overflow-hidden rounded-md border ${line}`} role="radiogroup" aria-label="Validita">
         {(['ok', 'bad'] as const).map(value => (
