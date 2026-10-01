@@ -108,6 +108,7 @@ import {
   type ChartReplayStepMinutes,
 } from '../services/chartReplay';
 import ReplayGoToMenu from './ReplayGoToMenu';
+import { tradeChartTiming } from '../services/tradeChartData';
 import { prepareBacktestReplayGoTo, prepareBacktestReplayStep, ReplayDataRequestCoordinator } from '../services/backtestReplayData';
 import {
   CHART_SETTINGS_EVENT,
@@ -1202,6 +1203,27 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
   }, [backtestSession, replay.cursorTime]);
   const reviewTrades = review?.trades;
   const reviewDrawingKey = review?.drawingKey;
+  // Hodnocení: Bar Replay je připravený na obchod jako přehrávač v detailu —
+  // ▶ spustí přehrávání 15 min před vstupem (zarovnáno na 15 min, ať sedí
+  // na svíčku 1m/5m/15m grafu).
+  const reviewReplayStart = useMemo(() => {
+    const first = reviewTrades?.[0];
+    if (!first || backtestSession) return null;
+    const { entryMs } = tradeChartTiming(first);
+    return Number.isFinite(entryMs) ? Math.floor((entryMs - 15 * 60_000) / 900_000) * 900 : null;
+  }, [backtestSession, reviewTrades]);
+  // Jiný obchod ve frontě = přehrávání předchozího obchodu končí.
+  useEffect(() => {
+    if (reviewReplayStart == null) return;
+    replayDataRequestsRef.current.cancel();
+    setReplay(DEFAULT_CHART_REPLAY_STATE);
+  }, [reviewReplayStart]);
+  const startReviewReplay = useCallback((action: 'play' | 'step') => {
+    if (reviewReplayStart == null) return;
+    selectReplayStart(reviewReplayStart);
+    if (action === 'play') setReplay(current => current.phase === 'active' ? { ...current, playing: true } : current);
+  }, [reviewReplayStart, selectReplayStart]);
+  const reviewReplayIdle = reviewReplayStart != null && replay.phase === 'off';
   const reviewHeaderRef = useRef<HTMLDivElement>(null);
   const reviewSideRef = useRef<HTMLDivElement>(null);
   const reviewBottomRef = useRef<HTMLDivElement>(null);
@@ -2081,7 +2103,7 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
               {tradingPanel}
             </div>
           )}
-          {replay.phase !== 'off' && (
+          {(replay.phase !== 'off' || reviewReplayIdle) && (
             <div
               ref={replayToolbarRef}
               data-snapshot-hide
@@ -2102,16 +2124,16 @@ const AlphaTradeChartWorkspace: React.FC<AlphaTradeChartWorkspaceProps> = ({
               <button
                 type="button"
                 className={`${topButton} px-2 disabled:opacity-30`}
-                disabled={replay.phase !== 'active' || replayAtEnd}
-                onClick={() => setReplay(current => ({ ...current, playing: !current.playing }))}
+                disabled={!reviewReplayIdle && (replay.phase !== 'active' || replayAtEnd)}
+                onClick={() => reviewReplayIdle ? startReviewReplay('play') : setReplay(current => ({ ...current, playing: !current.playing }))}
                 title={replay.playing ? 'Pozastavit' : 'Přehrát'}
                 aria-label={replay.playing ? 'Pozastavit Bar Replay' : 'Přehrát Bar Replay'}
               >{replay.playing ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}</button>
               <button
                 type="button"
                 className={`${topButton} px-2 disabled:opacity-30`}
-                disabled={replay.phase !== 'active' || replayAtEnd}
-                onClick={advanceReplay}
+                disabled={!reviewReplayIdle && (replay.phase !== 'active' || replayAtEnd)}
+                onClick={() => reviewReplayIdle ? startReviewReplay('step') : advanceReplay()}
                 title="O jednu svíčku dopředu"
                 aria-label="Bar Replay krok dopředu"
               ><StepForward size={15} /></button>
