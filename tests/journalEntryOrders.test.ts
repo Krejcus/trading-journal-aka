@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { entryOrdersAt, episodeEntryOrders, journalUntakenOrders, type EntryOrderEpisode } from '../lib/journalEntryOrders';
+import { entryBracketOrderIds, entryOrdersAt, episodeEntryOrders, journalUntakenOrders, type EntryOrderEpisode } from '../lib/journalEntryOrders';
 import type { JournalEvidence, JournalProtectionEvent } from '../lib/tradovateJournalEvidence';
 import { positionWindowEnd } from '../lib/journalPositionEpisodes';
 
@@ -28,6 +28,23 @@ describe('episodeEntryOrders', () => {
     expect(orders.map(o => o.orderId)).toEqual(['300']);
     expect(orders[0]).toMatchObject({ side: 'Sell', type: 'Limit', end: { kind: 'fill', at: T('07:44:26') } });
     expect(orders[0].legs.map(leg => leg.price)).toEqual([30845, 30842.75]);
+  });
+});
+
+describe('episodeEntryOrders bracket', () => {
+  it('keeps the OSO bracket that became the trade protection, as it stood at the fill', () => {
+    // 1. 10. 9:25: ruční OSO bez parentId, kopírka ve shadow módu (bez vazeb).
+    const protection = new Map<string, JournalProtectionEvent[]>([
+      ['147', [event('147', '07:25:01', 'tp', 30884.75)]],
+      ['150', [event('150', '07:25:01', 'tp', 30929.5, { status: 'pending' }), event('150', '07:25:43', 'tp', 30990.5, { operation: 'modify' }),
+        event('150', '07:30:00', 'tp', 31000, { operation: 'modify' })]],
+      ['152', [event('152', '07:25:01', 'sl', 30878, { status: 'pending' }), event('152', '07:25:43', 'sl', 30878, { operation: 'modify' })]],
+    ]);
+    const latest = new Map([order('147', 'Buy', at('07:25:01.538')), order('150', 'Sell', at('07:25:01.543')), order('152', 'Sell', at('07:25:01.543'))]);
+    const episode: EntryOrderEpisode = { accountId: 1, contractId: 9, entryFillAtByOrder: new Map([['147', T('07:25:43')]]), protectiveOrderIds: new Set(['150', '152']) };
+    const [entry] = episodeEntryOrders(episode, protection, latest, new Map());
+    expect(entry.bracket).toEqual({ sl: 30878, tp: 30990.5 });
+    expect(entryBracketOrderIds('147', 1, 9, { protectionByOrder: protection, latest, childrenByParent: new Map(), excluded: new Set(['147']) }).sort()).toEqual(['150', '152']);
   });
 });
 

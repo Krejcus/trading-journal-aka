@@ -1,4 +1,4 @@
-import { episodeEntryOrders, journalUntakenOrders, type JournalUntakenOrder } from './journalEntryOrders.js';
+import { entryBracketOrderIds, episodeEntryOrders, journalUntakenOrders, type JournalUntakenOrder } from './journalEntryOrders.js';
 import { journalSnapshotAnchors } from './journalPositionSnapshot.js';
 import { buildJournalAccountTrades, type JournalAccountTrade, type TradeExecutionHistory } from './tradeExecutionHistory.js';
 import { journalCurrencyCode, latestJournalEvidence, orderedJournalEvidence, projectJournalEvidence, type JournalEvidence, type JournalFill } from './tradovateJournalEvidence.js';
@@ -211,6 +211,12 @@ export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[
     const protectiveOrders = new Set([...entryOrderIds].flatMap(id => childrenByParent.get(`${episode.accountId}:${id}`) ?? []));
     for (const event of linkRows) if (['stop', 'target'].includes(String(event.entity.role))
       && leaderOrders.has(`${event.entity.leaderConnectionId}:${event.entity.leaderOrderId}`)) protectiveOrders.add(String(event.entity.orderId));
+    // Ruční OSO bez parentId a bez vazeb kopírky (shadow mód): SL/TP zadané
+    // s vstupním příkazem se párují stejně jako v detailu příkazu.
+    if (!protectiveOrders.size) for (const id of entryOrderIds) {
+      for (const child of entryBracketOrderIds(id, episode.accountId, episode.contractId,
+        { protectionByOrder, latest, childrenByParent, excluded: entryOrderIds })) protectiveOrders.add(child);
+    }
     const through = episode.exitAt ?? episode.observedThrough;
     // SL/TP přidané až během obchodu samostatnou objednávkou: stop (SL) nebo
     // limit (TP) na opačné straně, stejný účet i kontrakt, vzniklý při otevřené

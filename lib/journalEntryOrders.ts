@@ -52,12 +52,35 @@ const legsOf = (events: readonly JournalProtectionEvent[]) => {
   return legs;
 };
 
-interface OrderContext {
+export interface OrderContext {
   protectionByOrder: ReadonlyMap<string, readonly JournalProtectionEvent[]>;
   latest: ReadonlyMap<string, JournalEvidence>;
   childrenByParent: ReadonlyMap<string, readonly string[]>;
   /** Příkazy, které nesmí být bracketem (ochrana pozic, vstupy obchodů). */
   excluded: ReadonlySet<string>;
+}
+
+/**
+ * SL/TP (OSO) vstupního příkazu: děti přes parentId; Tradovate je u ručních
+ * OSO nemusí propojit vůbec — pak SL/TP opačné strany vytvořené do 1 s po
+ * vstupním příkazu. Sdílí to detail příkazu i ochrana obchodu (jinak by
+ * obchod s bracketem hlásil „bez SL/TP“).
+ */
+export function entryBracketOrderIds(orderId: string, accountId: number, contractId: number, ctx: OrderContext): string[] {
+  const children = ctx.childrenByParent.get(`${accountId}:${orderId}`) ?? [];
+  if (children.length) return [...children];
+  const order = ctx.latest.get(`order:${orderId}`)?.entity;
+  const side = order?.action;
+  const created = Date.parse(String(order?.timestamp ?? ''));
+  if (!order || (side !== 'Buy' && side !== 'Sell') || !Number.isFinite(created)) return [];
+  return [...ctx.protectionByOrder.keys()].filter(id => {
+    if (id === orderId || ctx.excluded.has(id)) return false;
+    const sibling = ctx.latest.get(`order:${id}`)?.entity;
+    const at = Date.parse(String(sibling?.timestamp ?? ''));
+    return sibling != null && sibling.accountId === accountId && sibling.contractId === contractId
+      && sibling.parentId == null && sibling.action !== side && (sibling.action === 'Buy' || sibling.action === 'Sell')
+      && Number.isFinite(at) && at >= created && at - created <= BRACKET_SIBLING_MS;
+  });
 }
 
 /** Vstupní příkaz z verzí Tradovate: ceny v čase a zamýšlený bracket. */
@@ -72,24 +95,14 @@ function buildEntryOrder(orderId: string, accountId: number, contractId: number,
   if (!legs.length) return null;
   const finish = end(sorted);
   if (finish === undefined) return null;
-  // Bracket (OSO): děti přes parentId; Tradovate je u ručních OSO nemusí
-  // propojit vůbec — pak SL/TP opačné strany vytvořené do 1 s po vstupu.
-  let children = ctx.childrenByParent.get(`${accountId}:${orderId}`) ?? [];
-  if (!children.length) {
-    const created = Date.parse(String(order.timestamp ?? ''));
-    if (Number.isFinite(created)) children = [...ctx.protectionByOrder.keys()].filter(id => {
-      if (id === orderId || ctx.excluded.has(id)) return false;
-      const sibling = ctx.latest.get(`order:${id}`)?.entity;
-      const at = Date.parse(String(sibling?.timestamp ?? ''));
-      return sibling != null && sibling.accountId === accountId && sibling.contractId === contractId
-        && sibling.parentId == null && sibling.action !== side && (sibling.action === 'Buy' || sibling.action === 'Sell')
-        && Number.isFinite(at) && at >= created && at - created <= BRACKET_SIBLING_MS;
-    });
-  }
+  const children = entryBracketOrderIds(orderId, accountId, contractId, ctx);
   // OSO děti čekají („pending“), dokud se vstup nevyplní — cena platí i tak.
+  // Bracket = stav při vyplnění/zrušení (aktivace dětí doběhne do vteřiny);
+  // pozdější posuny SL/TP patří průběhu obchodu, ne příkazu.
+  const bracketUntil = finish ? finish.at + 1_000 : Infinity;
   const bracketPrice = (want: 'sl' | 'tp') => {
     const priced = children.flatMap(id => (ctx.protectionByOrder.get(id) ?? [])
-      .filter(event => event.kind === want && event.status !== 'rejected' && event.operation !== 'cancel' && event.price != null && Number.isFinite(event.price)));
+      .filter(event => event.kind === want && event.at <= bracketUntil && event.status !== 'rejected' && event.operation !== 'cancel' && event.price != null && Number.isFinite(event.price)));
     return priced.length ? priced.sort((a, b) => a.at - b.at)[priced.length - 1].price : null;
   };
   const sl = bracketPrice('sl'), tp = bracketPrice('tp');
@@ -107,7 +120,8 @@ export function episodeEntryOrders(
   latest: ReadonlyMap<string, JournalEvidence>,
   childrenByParent: ReadonlyMap<string, readonly string[]>,
 ): TradeEntryOrder[] {
-  const ctx: OrderContext = { protectionByOrder, latest, childrenByParent, excluded: episode.protectiveOrderIds };
+  // Ochrana obchodu je právě bracket jeho vstupu — z párování se vylučují jen vstupy.
+  const ctx: OrderContext = { protectionByOrder, latest, childrenByParent, excluded: new Set(episode.entryFillAtByOrder.keys()) };
   const result: TradeEntryOrder[] = [];
   for (const [orderId, fillAt] of episode.entryFillAtByOrder) {
     if (episode.protectiveOrderIds.has(orderId)) continue;
