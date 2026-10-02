@@ -319,6 +319,9 @@ pro násobek podle ARM stavu na začátku změny), relay a příprava ARM
 (`isWeakerRiskConfig(..., { allowMultiplierIncrease })`); UI násobek za ARM
 zamkne (telefon, tabulka, editor). Ostatní denní pravidla (DLL, cut,
 maxContracts, okno, cooldown) dál jdou během session jen zpřísnit.
+Doplněk 2. 10. (Filip): v LIVE (tabulka i karta na telefonu) je násobek jen
+ke čtení v běžné velikosti; měnit jde výhradně v nastavení skupiny (editor
+skupiny → účet → Násobek). Inline editor i telefonní list násobku odstraněny.
 
 ### 2026-09-30 — Hodnotit místo ručního zápisu, konec Guardiana, předběžné svíčky z TradingView (Claude)
 

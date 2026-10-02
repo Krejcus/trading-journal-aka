@@ -263,7 +263,7 @@ describe('GroupDetail Positions integrace', () => {
     expect(markup).not.toContain('Execution aktivní');
   });
 
-  it('za zapnuté kopírky je inline násobek zamčený (1. 10.)', () => {
+  it('násobek je v LIVE jen ke čtení, mění se v nastavení skupiny (2. 10.)', () => {
     const runtimeGroup = {
       id: 'group-main',
       name: 'Hlavni',
@@ -289,9 +289,8 @@ describe('GroupDetail Positions integrace', () => {
     }));
     const followerRow = tableRows(markup).find(row => row.includes('Follower DEMO'));
 
-    expect(followerRow).toContain(`aria-label="Násobek Follower DEMO"`);
-    expect(followerRow).toContain('title="Násobek změníš po vypnutí kopírky"');
-    expect(followerRow).toMatch(/aria-label="Násobek Follower DEMO"[^>]*disabled=""/);
+    expect(followerRow).toContain('title="Násobek změníš v nastavení skupiny">2×</span>');
+    expect(followerRow).not.toContain('aria-label="Násobek Follower DEMO"');
   });
 
   it('jedinou ZAPNUTOU skupinu řadí před ostatní vypnuté profily', () => {

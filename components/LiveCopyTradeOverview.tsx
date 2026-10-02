@@ -1788,15 +1788,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         type: 'flatten-group', groupId: group.id, operationId: manualOperationId(),
       },
     }),
-    onMultiplier: copierStateVerifying ? undefined : async (accountId: number, multiplier: number): Promise<boolean> => {
-      const follower = group.followers.find(item => item.accountId === accountId);
-      const next = normalizeMultiplier(multiplier);
-      if (!follower || follower.multiplier === next) return false;
-      return runCommand(
-        { type: 'set-multiplier', groupId: group.id, accountId, multiplier: next },
-        () => updateFollower(group.id, accountId, { multiplier: next }),
-      );
-    },
     onApplyTemplate: (template: CopyGroupTemplate) => {
       if (copierStateVerifying) {
         setToast({ tone: 'error', text: 'Stav se ověřuje. Šablonu lze uložit až po potvrzení čerstvého stavu workeru.' });
@@ -2163,18 +2154,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               verifyingAccountId={verifyingAccountId}
                               busyCommand={busyCommand}
                               onRefreshOrders={onRefreshOrders}
-                              onMultiplier={copierStateVerifying ? undefined : (accountId, multiplier) => {
-                                const follower = group.followers.find(item => item.accountId === accountId);
-                                const next = normalizeMultiplier(multiplier);
-                                if (!follower || follower.multiplier === next) return;
-                                setPendingAction({
-                                  title: 'Změnit násobek účtu?',
-                                  detail: `Účet ${accountId}: ${follower.multiplier}× → ${next}×. Změna platí pouze pro tento účet; ostatní followeři zůstanou beze změny.${copierArmed && group.id === executionGroupId ? ' Kopírka je zapnutá — potvrzení ji vypne (DISARM); pak ji znovu zapni přepínačem skupiny.' : ''}`,
-                                  confirmLabel: 'Potvrdit násobek',
-                                  accountIds: [accountId],
-                                  command: { type: 'set-multiplier', groupId: group.id, accountId, multiplier: next },
-                                });
-                              }}
                               onFlattenAccount={accountId => requestAccountFlatten(group, accountId)}
                               onRemoveUnavailableFollower={() => requestUnavailableFollowerRemoval(
                                 group,
@@ -2190,7 +2169,6 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               redactNames={redactNames}
                               redaction={redaction}
                               orderColumns={visibleOrderColumns}
-                              tightenOnly={multiplierLockedFor(group.id)}
                             /></div>
                           </div>
                         </td>
@@ -3103,7 +3081,7 @@ export const participationBlockerHint = (blockers: string[]): string | null => {
 
 type CompactSwitchNote = { tone: 'lock' | 'reject'; lines: string[]; hint: string | null };
 
-const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, participation, showSwitchSlot = false, onFollowerEnabled, onMultiplierTap, orders, dailyPnlPending, busyCommand, verifying, onVerifyEligibility, onAccount, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, style }: {
+const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, participation, showSwitchSlot = false, onFollowerEnabled, orders, dailyPnlPending, busyCommand, verifying, onVerifyEligibility, onAccount, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, style }: {
   row: Row;
   /** Jen zpoždění náběhu při rozbalení seznamu. */
   style?: React.CSSProperties;
@@ -3116,7 +3094,6 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
   /** Rezervuje místo přepínače i u leadera (tam sedí korunka), aby jména lícovala. */
   showSwitchSlot?: boolean;
   onFollowerEnabled?: (accountId: number, enabled: boolean, onRejected: (message: string) => void) => Promise<boolean>;
-  onMultiplierTap?: (row: Row) => void;
   orders: LiveOrder[];
   dailyPnlPending: boolean;
   busyCommand: string | null;
@@ -3185,17 +3162,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
       </span>
     : null;
 
-  const multiplierBadge = onMultiplierTap && a && !row.isLeader && accountId != null
-    ? (
-      <button
-        type="button"
-        title="Změnit násobek"
-        aria-label={`Násobek ${row.scale}×, změnit`}
-        onClick={event => { event.stopPropagation(); onMultiplierTap(row); }}
-        className="compact-row-dim -my-0.5 shrink-0 rounded border border-[var(--border-subtle)] px-1 py-px text-[9.5px] font-bold tabular-nums text-[var(--text-secondary)]"
-      >×{row.scale}</button>
-    )
-    : <span title="Násobek množství" className="compact-row-dim shrink-0 rounded bg-[var(--bg-page)] px-1 text-[9.5px] font-bold tabular-nums text-[var(--text-secondary)]">×{row.scale}</span>;
+  const multiplierBadge = <span title="Násobek změníš v nastavení skupiny" className="compact-row-dim shrink-0 rounded bg-[var(--bg-page)] px-1 text-[9.5px] font-bold tabular-nums text-[var(--text-secondary)]">×{row.scale}</span>;
 
   return (
     <li className={`px-3 ${tradeCut ? 'bg-amber-500/[0.035] opacity-80' : ''} ${copyOff ? 'compact-row-off' : ''}`} style={style} data-copy-off={copyOff || undefined}>
@@ -3368,7 +3335,7 @@ const CompactAccountSectionHead = ({ columns, indent = false }: { columns: 'mark
   </div>
 );
 
-const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, powerDisplayKey = '', dailyPnlPending, eligibility, eligibilityByAccount, tradeCutsByAccount, participationByAccount = EMPTY_PARTICIPATION, onFollowerEnabled, onMultiplier, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onDelete, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel, islandTone = null }: {
+const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, runtimeReady, transition, connectBlocked, powerDisplayKey = '', dailyPnlPending, eligibility, eligibilityByAccount, tradeCutsByAccount, participationByAccount = EMPTY_PARTICIPATION, onFollowerEnabled, orders, isLive, onAccount, busyCommand, onVerifyEligibility, verifyingAccountId, onConnectionToggle, onEdit, onDelete, onToggleEnabled, onFlatten, onFlattenAccount, onCancelOrder, onRefreshOrders, onRemoveUnavailableFollower, onApplyTemplate, redactNames, redaction, templates, tightenOnly, disarmPanel, cooldownPanel, islandTone = null }: {
   group: CopyGroupConfig;
   /** Fáze ze stavového ostrova. Karta je jeden box, takže tu rám obepne
    *  celou skupinu včetně účtů — na rozdíl od tabulkového rozložení. */
@@ -3388,7 +3355,6 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   participationByAccount?: ReadonlyMap<number, FollowerParticipation>;
   onFollowerEnabled?: (accountId: number, enabled: boolean, onRejected: (message: string) => void) => Promise<boolean>;
   /** Přímá změna násobku přes worker; vrací, zda ji runtime potvrdil. */
-  onMultiplier?: (accountId: number, multiplier: number) => Promise<boolean>;
   orders: LiveOrder[];
   isLive: (a?: LiveAccount) => boolean;
   onAccount?: (a: LiveAccount) => void;
@@ -3439,7 +3405,6 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   const dllCount = eligibility.filter(entry => entry?.state === 'dll-locked').length;
   const breachedCount = eligibility.filter(entry => entry?.state === 'breached').length;
   const unavailableLeader = rows.some(row => row.isLeader && row.accountId != null && !row.account);
-  const [multiplierRow, setMultiplierRow] = useState<Row | null>(null);
   const showSwitchSlot = participationByAccount.size > 0;
   const unrealStale = rows.some(row => row.account?.unrealizedPnlSource === 'stale');
   const accountIds = new Set(rows.flatMap(row => row.accountId != null ? [row.accountId] : []));
@@ -3462,7 +3427,6 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
     participation: row.accountId != null && !row.isLeader ? participationByAccount.get(row.accountId) : undefined,
     showSwitchSlot,
     onFollowerEnabled,
-    onMultiplierTap: onMultiplier ? setMultiplierRow : undefined,
   });
 
   return (
@@ -3707,17 +3671,6 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
         </button>
         <GroupActionMenu active={armed} onToggleEnabled={onToggleEnabled} onEdit={onEdit} onDelete={onDelete} templates={templates} tightenOnly={tightenOnly} onApplyTemplate={onApplyTemplate} />
       </footer>
-      {multiplierRow && onMultiplier && multiplierRow.accountId != null ? (
-        <CompactMultiplierSheet
-          accountId={multiplierRow.accountId}
-          accountName={redactAccountName(multiplierRow.name, redactNames, redaction)}
-          value={multiplierRow.scale}
-          armed={armed}
-          busy={busyCommand != null}
-          onClose={() => setMultiplierRow(null)}
-          onCommit={onMultiplier}
-        />
-      ) : null}
     </article>
   );
 };
@@ -3748,65 +3701,6 @@ const CompactSheet = ({ label, busy = false, onClose, children }: {
     document.body,
   );
 };
-
-/**
- * Rychlá změna násobku z telefonu — stejný příkaz `set-multiplier` jako
- * políčko v desktopové tabulce. Tlačítko s „2× → 1.5×“ je samo potvrzením.
- */
-const CompactMultiplierSheet = ({ accountId, accountName, value, armed, busy, onClose, onCommit }: {
-  accountId: number;
-  accountName: string;
-  value: number;
-  /** Zapnutá kopírka: násobek nejde měnit vůbec (1. 10.). */
-  armed: boolean;
-  busy: boolean;
-  onClose: () => void;
-  onCommit: (accountId: number, multiplier: number) => Promise<boolean>;
-}) => {
-  const [draft, setDraft] = useState(value);
-  const [submitting, setSubmitting] = useState(false);
-  const next = normalizeMultiplier(draft);
-  const changed = next !== value;
-  return (
-    <CompactSheet label={`Násobek účtu ${accountName}`} busy={submitting} onClose={onClose}>
-      <h4 className="text-[15px] font-black text-[var(--text-primary)]">Násobek</h4>
-      <p className="mt-0.5 truncate text-[11px] text-[var(--text-secondary)]">{accountName}</p>
-      <p className="mt-3 text-[11.5px] leading-relaxed text-[var(--text-secondary)]">
-        Kolik kontraktů dostane tento účet na jeden kontrakt leadera.
-      </p>
-      <div className="mt-3">
-        <NumberStepper
-          size="lg" ariaLabel={`Násobek ${accountName}`}
-          value={draft} step={0.25} min={0.25} max={100} disabled={armed}
-          onChange={nextValue => setDraft(nextValue ?? 0.25)}
-        />
-      </div>
-      {armed ? (
-        <p className="mt-3 flex gap-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2.5 text-[11px] font-bold leading-relaxed text-amber-600">
-          <AlertTriangle aria-hidden="true" size={14} className="mt-px shrink-0" />
-          Kopírka je zapnutá. Násobek změníš, až ji vypneš.
-        </p>
-      ) : null}
-      <button
-        type="button"
-        disabled={armed || !changed || busy || submitting}
-        onClick={async () => {
-          setSubmitting(true);
-          const ok = await onCommit(accountId, next);
-          setSubmitting(false);
-          if (ok) onClose();
-        }}
-        className="mt-4 h-12 w-full rounded-xl bg-indigo-600 text-sm font-black text-white disabled:opacity-40"
-      >
-        {armed ? 'Nejdřív vypni kopírku' : submitting ? 'Čekám na potvrzení…' : changed ? `Změnit ${value}× → ${next}×` : 'Nejdřív změň násobek'}
-      </button>
-      <button type="button" disabled={submitting} onClick={onClose} className="mt-2 h-11 w-full rounded-xl border border-[var(--border-subtle)] text-[13px] font-bold text-[var(--text-secondary)]">
-        Zrušit
-      </button>
-    </CompactSheet>
-  );
-};
-
 export const GroupActionMenu = ({ active, onToggleEnabled, onEdit, onDelete, templates, tightenOnly, onApplyTemplate }: {
   active: boolean;
   onToggleEnabled: () => void;
@@ -4586,7 +4480,7 @@ export const AccountEligibilityPill = ({ eligibility, live, unavailable = false,
     <CheckCircle2 aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Aktivní</span>;
 };
 
-const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eligibilityByAccount, tradeCutsByAccount, participationByAccount, onFollowerEnabled, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, dailyPnlPending, onMultiplier, onFlattenAccount, onRemoveUnavailableFollower, onCancelOrder, redactNames, redaction, orderColumns, tightenOnly }: {
+const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eligibilityByAccount, tradeCutsByAccount, participationByAccount, onFollowerEnabled, busyCommand, onRefreshOrders, onVerifyEligibility, verifyingAccountId, dailyPnlPending, onFlattenAccount, onRemoveUnavailableFollower, onCancelOrder, redactNames, redaction, orderColumns }: {
   rows: Row[];
   tab: 'accounts' | 'orders';
   isLive: (a?: LiveAccount) => boolean;
@@ -4603,14 +4497,12 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
   onVerifyEligibility?: (accountId: number) => void;
   verifyingAccountId: number | null;
   dailyPnlPending: boolean;
-  onMultiplier: (accountId: number, multiplier: number) => void;
   onFlattenAccount: (accountId: number) => void;
   onRemoveUnavailableFollower: (accountId: number) => void;
   onCancelOrder: (orderId: number) => void;
   redactNames: boolean;
   redaction: RedactionSettings;
   orderColumns: Array<{ key: OrderColumnKey; label: string }>;
-  tightenOnly: boolean;
 }) => {
   const accountIds = new Set(rows.flatMap(row => row.accountId != null ? [row.accountId] : []));
   const groupOrders = orders.filter(order => order.accountId != null && accountIds.has(order.accountId));
@@ -4709,10 +4601,9 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
                 busyCommand={busyCommand}
                 onVerifyEligibility={onVerifyEligibility}
                 verifying={row.accountId != null && verifyingAccountId === row.accountId}
-                onMultiplier={onMultiplier} onFlatten={onFlattenAccount}
+                onFlatten={onFlattenAccount}
                 onRemoveUnavailableFollower={onRemoveUnavailableFollower}
                 redactNames={redactNames} redaction={redaction}
-                tightenOnly={tightenOnly}
               />
             ))}
           </tbody>
@@ -4807,66 +4698,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
   );
 };
 
-const MultiplierEditor = ({ accountId, accountName, value, tightenOnly, disabled, onCommit }: {
-  accountId: number;
-  accountName: string;
-  value: number;
-  tightenOnly: boolean;
-  disabled: boolean;
-  onCommit: (accountId: number, multiplier: number) => void;
-}) => {
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [accountId, value]);
-  const parsed = Number(draft);
-  // `tightenOnly` tu znamená zapnutou skupinu: násobek je zamčený (1. 10.).
-  const valid = Number.isFinite(parsed)
-    && parsed >= 0.01
-    && parsed <= 100;
-  const next = valid ? normalizeMultiplier(parsed) : null;
-  const changed = next != null && next !== value;
-  const commit = () => {
-    if (!changed || next == null || disabled || tightenOnly) return;
-    onCommit(accountId, next);
-    // Hodnota se v řádku změní až po explicitním potvrzení dialogu. Tady
-    // draft vrátíme na poslední potvrzený stav, aby zrušený dialog nikdy
-    // nevypadal jako uložená změna.
-    setDraft(String(value));
-  };
-
-  return (
-    <div onClick={event => event.stopPropagation()} className="inline-flex items-center justify-end gap-1">
-      <input
-        aria-label={`Násobek ${accountName}`}
-        type="number"
-        min="0.01"
-        max={100}
-        step="0.25"
-        value={draft}
-        disabled={disabled || tightenOnly}
-        title={tightenOnly ? 'Násobek změníš po vypnutí kopírky' : 'Změnu potvrď tlačítkem Uložit'}
-        onFocus={event => event.currentTarget.select()}
-        onChange={event => setDraft(event.target.value)}
-        onKeyDown={event => {
-          if (event.key === 'Enter') commit();
-          if (event.key === 'Escape') setDraft(String(value));
-        }}
-        className={`w-14 rounded-md border bg-[var(--bg-card)] px-1.5 py-1 text-center tabular-nums outline-none focus:border-indigo-500 ${valid ? 'border-[var(--border-subtle)]' : 'border-rose-500'}`}
-      />
-      <button
-        type="button"
-        aria-label={`Uložit násobek ${accountName}`}
-        title={changed ? `Potvrdit změnu ${value}× → ${next}×` : 'Nejdřív změň násobek'}
-        disabled={disabled || !changed}
-        onClick={commit}
-        className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border-subtle)] text-indigo-500 hover:border-indigo-500/40 hover:bg-indigo-500/10 disabled:cursor-default disabled:opacity-25"
-      >
-        <Save size={11} />
-      </button>
-    </div>
-  );
-};
-
-const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeCut, participation, showSwitchSlot = false, onFollowerEnabled, busyCommand, onVerifyEligibility, verifying, dailyPnlPending, onMultiplier, onFlatten, onRemoveUnavailableFollower, redactNames, redaction, tightenOnly }: {
+const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeCut, participation, showSwitchSlot = false, onFollowerEnabled, busyCommand, onVerifyEligibility, verifying, dailyPnlPending, onFlatten, onRemoveUnavailableFollower, redactNames, redaction }: {
   row: Row; live: boolean; onAccount?: (a: LiveAccount) => void; columns: ColumnDef[];
   orders: LiveOrder[];
   eligibility?: CopierAccountEligibility;
@@ -4879,12 +4711,10 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
   onVerifyEligibility?: (accountId: number) => void;
   verifying: boolean;
   dailyPnlPending: boolean;
-  onMultiplier: (accountId: number, multiplier: number) => void;
   onFlatten: (accountId: number) => void;
   onRemoveUnavailableFollower: (accountId: number) => void;
   redactNames: boolean;
   redaction: RedactionSettings;
-  tightenOnly: boolean;
 }) => {
   const a = row.account;
   const accountId = row.accountId;
@@ -5019,14 +4849,8 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
       case 'qtyMult':
         return row.isLeader || accountId == null
           ? <span className="mx-auto flex w-full items-center justify-center text-center text-[11px] text-[var(--text-secondary)]">—</span>
-          : <MultiplierEditor
-              accountId={accountId}
-              accountName={row.name}
-              value={row.scale}
-              tightenOnly={tightenOnly}
-              disabled={busyCommand != null}
-              onCommit={onMultiplier}
-            />;
+          // Filip 2. 10.: v LIVE jen ke čtení; mění se v nastavení skupiny.
+          : <span className="text-xs font-semibold tabular-nums text-[var(--text-primary)]" title="Násobek změníš v nastavení skupiny">{row.scale}×</span>;
       case 'actions':
         return null;
     }
