@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { entryOrdersAt, episodeEntryOrders, journalUntakenOrders, type EntryOrderEpisode } from '../lib/journalEntryOrders';
 import type { JournalEvidence, JournalProtectionEvent } from '../lib/tradovateJournalEvidence';
+import { positionWindowEnd } from '../lib/journalPositionEpisodes';
 
 const T = (hhmmss: string) => Date.parse(`2026-10-01T${hhmmss}Z`);
 const event = (orderId: string, at: string, kind: 'sl' | 'tp', price: number | null, extra: Partial<JournalProtectionEvent> = {}): JournalProtectionEvent => ({
@@ -90,3 +91,16 @@ function journalUntakenOrdersFixture() {
   return [{ orderId: '700', side: 'Sell' as const, type: 'Limit' as const, quantity: 5, placedAt: T('07:37:49'),
     legs: [{ at: T('07:37:49'), price: 30900 }, { at: T('07:39:00'), price: 30898 }], end: { kind: 'cancel' as const, at: T('07:47:32') } }];
 }
+
+describe('positionWindowEnd', () => {
+  const episode = (exitAt: number | null, status: 'open' | 'closed' | 'incomplete', fills: number[]) => ({
+    entryAt: fills[0], exitAt, history: { position: { status }, fills: fills.map(at => ({ at })) },
+  }) as unknown as Parameters<typeof positionWindowEnd>[0];
+
+  it('keeps an incomplete old episode from hiding every later cancelled entry', () => {
+    // 2. 10.: neúplné epizody ze 16. 9. bez výstupu „držely otevřeno“ navždy.
+    expect(positionWindowEnd(episode(null, 'incomplete', [T('07:00:00'), T('07:05:00')]))).toBe(T('07:05:00'));
+    expect(positionWindowEnd(episode(null, 'open', [T('07:00:00')]))).toBe(Infinity);
+    expect(positionWindowEnd(episode(T('07:10:00'), 'closed', [T('07:00:00')]))).toBe(T('07:10:00'));
+  });
+});

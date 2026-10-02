@@ -285,8 +285,19 @@ export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[
   const untakenOrders = journalUntakenOrders({
     protectionByOrder, latest, childrenByParent: bracketChildren, usedOrderIds, copiedOrderKeys,
     positionWindows: episodes.map(episode => ({ accountId: episode.accountId, contractId: episode.contractId,
-      from: episode.entryAt, to: episode.exitAt ?? Infinity })),
+      from: episode.entryAt, to: positionWindowEnd(episode) })),
   });
   return { episodes: episodes.sort((a, b) => a.entryAt - b.entryAt || a.id.localeCompare(b.id)),
     untakenOrders, unassignedFillIds: [...unassigned].sort(), issues: [...issues] };
+}
+
+/**
+ * Do kdy pozice stála. Bez výstupu do nekonečna jen skutečně otevřená pozice:
+ * neúplná epizoda (chybí část plnění, 2. 10. jich leader měl sedm ze 16.–17. 9.)
+ * by jinak „držela otevřeno“ navždy a schovala každý pozdější zrušený vstup.
+ */
+export function positionWindowEnd(episode: JournalPositionEpisode): number {
+  if (episode.exitAt != null) return episode.exitAt;
+  if (episode.history.position?.status === 'open') return Infinity;
+  return episode.history.fills.reduce((last, fill) => Math.max(last, fill.at), episode.entryAt);
 }
