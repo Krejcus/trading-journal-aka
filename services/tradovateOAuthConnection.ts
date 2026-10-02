@@ -145,12 +145,35 @@ export const parseTradovateOAuthStatus = (value: unknown): TradovateOAuthStatus 
   return candidate as TradovateOAuthStatus;
 };
 
-const authenticatedRequest = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
+/** Výchozí deadline čtení. Read-only POSTy (preflight, live-pnl, historie)
+ * ho dostávají výslovně přes `readTimeoutMs`, aby zaseknuté čtení nedrželo
+ * LIVE kostru donekonečna. */
+export const TRADOVATE_READ_TIMEOUT_MS = 20_000;
+/** Plný preflight čte fills, fees, historii a risk všech účtů. */
+export const TRADOVATE_FULL_READ_TIMEOUT_MS = 60_000;
+/** Historický report/backfill může stránkovat déle; klient jen přestane
+ * čekat, serverová synchronizace je idempotentní. */
+export const TRADOVATE_HISTORY_READ_TIMEOUT_MS = 120_000;
+
+const authenticatedRequest = async <T>(path: string, init: RequestInit = {}, readTimeoutMs?: number): Promise<T> => {
   const telemetry = beginTradovateApiRequest();
   let completed = false;
   // Only reads get a deadline: never reinterpret an uncertain execution write.
-  const readController = (!init.method || init.method.toUpperCase() === 'GET') && !init.signal ? new AbortController() : null;
-  const readTimeout = readController ? setTimeout(() => readController.abort(), 20_000) : null;
+  // GET je vždy čtení; POST jen tehdy, když volající výslovně řekne, že je
+  // read-only (readTimeoutMs). Execution zápisy deadline nikdy nedostanou.
+  // GET s vlastním signálem volajícího (např. čtení výsledku execution
+  // příkazu přes relay) si životnost řídí sám — deadline mu nepřidáváme,
+  // aby se výklad nejistého příkazu nezměnil.
+  const isGet = !init.method || init.method.toUpperCase() === 'GET';
+  const readDeadlineMs = readTimeoutMs ?? (isGet && !init.signal ? TRADOVATE_READ_TIMEOUT_MS : null);
+  const readController = readDeadlineMs != null ? new AbortController() : null;
+  const callerSignal = init.signal ?? null;
+  const forwardCallerAbort = () => readController?.abort(callerSignal?.reason);
+  if (readController && callerSignal) {
+    if (callerSignal.aborted) forwardCallerAbort();
+    else callerSignal.addEventListener('abort', forwardCallerAbort, { once: true });
+  }
+  const readTimeout = readController ? setTimeout(() => readController.abort(), readDeadlineMs!) : null;
   try {
     // V Capacitor buildu je origin capacitor://localhost — relativní /api/
     // cesta by skončila v bundlu (vrátí index.html místo API odpovědi).
@@ -158,7 +181,7 @@ const authenticatedRequest = async <T>(path: string, init: RequestInit = {}): Pr
     const response = await fetch(apiUrl(path), {
       ...init,
       credentials: 'same-origin',
-      signal: init.signal ?? readController?.signal,
+      signal: readController?.signal ?? callerSignal,
       headers: {
         Accept: 'application/json',
         Authorization: await authorization(),
@@ -187,6 +210,7 @@ const authenticatedRequest = async <T>(path: string, init: RequestInit = {}): Pr
     throw reason;
   } finally {
     if (readTimeout != null) clearTimeout(readTimeout);
+    callerSignal?.removeEventListener('abort', forwardCallerAbort);
   }
 };
 
@@ -235,7 +259,7 @@ export function runTradovateReadOnlyPreflight(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ connectionId, mode }),
     ...(signal ? { signal } : {}),
-  });
+  }, mode === 'bootstrap' ? TRADOVATE_READ_TIMEOUT_MS : TRADOVATE_FULL_READ_TIMEOUT_MS);
 }
 
 export function createTradovatePilotLease(
@@ -364,7 +388,7 @@ export function runTradovateLivePnlTick(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ connectionId, contractCursor }),
-  });
+  }, TRADOVATE_READ_TIMEOUT_MS);
 }
 
 export function runTradovateLivePnlAnchor(
@@ -376,7 +400,7 @@ export function runTradovateLivePnlAnchor(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ connectionId, mode: 'anchor', accountId, contractId }),
-  });
+  }, TRADOVATE_READ_TIMEOUT_MS);
 }
 
 export function runTradovatePerformanceHistory(options: {
@@ -389,7 +413,7 @@ export function runTradovatePerformanceHistory(options: {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(options),
-  });
+  }, TRADOVATE_HISTORY_READ_TIMEOUT_MS);
 }
 
 export function runTradovateHistoricalBackfill(options: {
@@ -402,7 +426,7 @@ export function runTradovateHistoricalBackfill(options: {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(options),
-  });
+  }, TRADOVATE_HISTORY_READ_TIMEOUT_MS);
 }
 
 export function loadTradovateHistoricalSnapshot(

@@ -1,6 +1,9 @@
 import { tradovateConnectionPresentation, type TradovateConnectionHealthMap } from '../lib/tradovateConnectionHealth';
 import { createCopierForegroundPoller, isCopierStatusFresh } from '../lib/copierForegroundPoller';
-import { copierRelayObservedAt, newestCopierRelaySnapshot, startCopierRelayStatusPoll } from '../lib/copierRelayStatusPoll';
+import { copierRelayObservedAt, newestCopierRelaySnapshot } from '../lib/copierRelayStatusPoll';
+import { CopierRelayInFlight, runCopierRelayStatusRound } from '../lib/copierRelayPollSources';
+import { isAppForeground, subscribeAppForeground } from '../lib/appForeground';
+import { clearCopierAgentStatusStore, copierRelayFeedSourcesFor, readCopierAgentStatusSnapshot, writeCopierAgentStatusSnapshot } from '../lib/copierAgentStatusStore';
 import { shouldProbeLocalCopierAgent } from '../lib/localCopierProbePolicy';
 import LiveMobileAccountDetail from './LiveMobileAccountDetail';
 import { useLiveLayout } from '../hooks/useLiveLayout';
@@ -106,7 +109,7 @@ import { buildCopierWorkerAccountRoutes } from '../lib/copierWorkerAccountRoutes
 import { canUseDirectLocalCopierAgent, createLocalCopierAgentClient } from '../services/localCopierAgentClient';
 import { isNativeBuild } from '../utils/runtimeConfig';
 import { snapshotArmOffer } from '../services/copierSnapshotArmOffer';
-import { copierCommandAllowedWithoutFreshStatus, selectCopierSafetyRoute } from '../lib/copierSafetyControls';
+import { copierAgentCommandAllowedWhileRestored, copierCommandAllowedWithoutFreshStatus, selectCopierSafetyRoute } from '../lib/copierSafetyControls';
 import {
   type CopyGroupConfig,
   type LiveCopyTradingAdapter,
@@ -255,22 +258,32 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [copyGroups, setCopyGroups] = useState<CopyGroupConfig[]>([]);
-  const [displayFeedReceipt, setDisplayFeedReceipt] = useState<{ userId: string; receivedAt: number; feeds: TradovateAccountDisplayFeedState[] } | null>(null);
+  // Poslední přijatý stav workeru z předchozí návštěvy LIVE (jen paměť,
+  // user-scoped). Slouží výhradně zobrazení — příkazy čekají na vlastní
+  // čerstvé čtení této instance (viz `agentStatusRestored`).
+  const [restoredAgent] = useState(() => readCopierAgentStatusSnapshot<LocalCopierAgentStatus, TradovateAccountDisplayFeedState>(userId));
+  const [displayFeedReceipt, setDisplayFeedReceipt] = useState<{ userId: string; receivedAt: number; feeds: TradovateAccountDisplayFeedState[] } | null>(() => restoredAgent?.feedReceipt ?? null);
   const restoredDisplay = useMemo(() => readTradovateDisplaySession(userId), [userId]);
   const [displayCache, setDisplayCache] = useState<{ userId: string; values: AccountDisplayCache }>({ userId, values: {} });
-  const [agentStatus, setAgentStatus] = useState<LocalCopierAgentStatus | null>(null);
-  const [agentStatusObservedAt, setAgentStatusObservedAt] = useState<number | null>(null);
+  const [agentStatus, setAgentStatus] = useState<LocalCopierAgentStatus | null>(() => restoredAgent?.status ?? null);
+  const [agentStatusObservedAt, setAgentStatusObservedAt] = useState<number | null>(() => restoredAgent?.observedAt ?? null);
   // Než doběhne první dotaz, `agentStatus` je null a armovaný copier by se
   // v přepínači ukázal jako OFF. Do té doby se stav zobrazuje jako neznámý.
-  const [agentStatusResolved, setAgentStatusResolved] = useState(false);
-  const [agentStatusReadHealthy, setAgentStatusReadHealthy] = useState(false);
+  const [agentStatusResolved, setAgentStatusResolved] = useState(() => restoredAgent != null);
+  const [agentStatusReadHealthy, setAgentStatusReadHealthy] = useState(() => restoredAgent?.readHealthy ?? false);
+  // Obnovený stav z paměti: zobrazuje se, ale ARM, konfigurace ani jiné
+  // příkazy vyžadující čerstvý stav neprojdou, dokud tato instance sama
+  // nepřijme odpověď workeru. Brzdy (DISARM, kill, Flatten) fungují dál.
+  const [agentStatusRestored, setAgentStatusRestored] = useState(() => restoredAgent != null);
+  const agentStatusRestoredRef = useRef(agentStatusRestored);
+  agentStatusRestoredRef.current = agentStatusRestored;
   const [freshnessNow, setFreshnessNow] = useState(() => Date.now());
-  const acceptedAgentStatusRef = useRef<LocalCopierAgentStatus | null>(null);
+  const acceptedAgentStatusRef = useRef<LocalCopierAgentStatus | null>(restoredAgent?.status ?? null);
   const statusAckFenceRef = useRef(new CopierStatusAckFence());
   const ackSequenceByStatusRef = useRef(new WeakMap<LocalCopierAgentStatus, number>());
   const agentStatusFresh = isCopierStatusFresh(agentStatusObservedAt, freshnessNow, agentStatusReadHealthy);
-  const armStatusRef = useRef({ status: agentStatus, fresh: agentStatusFresh });
-  armStatusRef.current = { status: agentStatus, fresh: agentStatusFresh };
+  const armStatusRef = useRef({ status: agentStatus, fresh: agentStatusFresh && !agentStatusRestored });
+  armStatusRef.current = { status: agentStatus, fresh: agentStatusFresh && !agentStatusRestored };
   const [armRulesNotice, setArmRulesNotice] = useState<string | null>(null);
   useEffect(() => {
     const timer = window.setInterval(() => setFreshnessNow(Date.now()), 1_000);
@@ -319,13 +332,21 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   useEffect(() => {
     void syncCopierNativeNotifications(agentStatus?.controller ?? null);
   }, [agentStatus]);
-  const [agentTransport, setAgentTransport] = useState<'local' | 'relay' | null>(null);
-  const [relayConnectionId, setRelayConnectionId] = useState<string | null>(null);
+  const [agentTransport, setAgentTransport] = useState<'local' | 'relay' | null>(() => restoredAgent?.transport ?? null);
+  const [relayConnectionId, setRelayConnectionId] = useState<string | null>(() => restoredAgent?.relayConnectionId ?? null);
+  // Poll čte preferované spojení přes ref, aby změna trasy nerestartovala
+  // celý poller (restart = okamžité další čtení navíc).
+  const relayConnectionIdRef = useRef<string | null>(restoredAgent?.relayConnectionId ?? null);
+  const relayInFlightRef = useRef(new CopierRelayInFlight());
+  // Přepnutí na lokální worker zneplatní všechny ještě běžící relay kola —
+  // jejich pozdní feedy nesmí přepsat novější lokální.
+  const relayFeedRouteEpochRef = useRef(0);
+  const relayFeedSourcesRef = useRef(copierRelayFeedSourcesFor<TradovateAccountDisplayFeedState>(userId));
   // Poslední ověřená cesta k workeru. Používá se VÝHRADNĚ pro jednosměrné
   // brzdy (DISARM, kill switch), když čtení stavu dočasně selže — jinak by
   // telefon při pomalém relay nemohl kopírku vypnout. ARM ani konfiguraci
   // tudy poslat nejde; ty dál vyžadují čerstvý stav.
-  const lastAgentRouteRef = useRef<{ transport: 'local' | 'relay'; relayConnectionId: string | null } | null>(null);
+  const lastAgentRouteRef = useRef<{ transport: 'local' | 'relay'; relayConnectionId: string | null } | null>(restoredAgent?.lastRoute ?? null);
   const directAgentProbe = useRef<'unknown' | 'available' | 'unavailable'>('unknown');
   const directAgentProbeLastAttemptAt = useRef<number | null>(null);
   const forceDirectAgentProbeRef = useRef(false);
@@ -347,6 +368,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     setAgentStatusObservedAt(observedAt);
     setAgentStatusReadHealthy(readHealthy);
     setAgentStatusResolved(true);
+    setAgentStatusRestored(false);
     setFreshnessNow(Date.now());
     return true;
   }, [userId]);
@@ -370,9 +392,33 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     setAgentStatusObservedAt(null);
     setAgentStatusReadHealthy(false);
     setAgentStatusResolved(false);
+    setAgentStatusRestored(false);
     setAgentTransport(null);
     setRelayConnectionId(null);
+    relayConnectionIdRef.current = null;
+    clearCopierAgentStatusStore();
+    relayFeedSourcesRef.current = copierRelayFeedSourcesFor<TradovateAccountDisplayFeedState>(userId);
+    setDisplayFeedReceipt(null);
   }, [userId]);
+
+  // Přijatý stav přežije odchod z LIVE (stránka se unmountuje). Zapisuje se
+  // jen stav aktuálního uživatele; změnu uživatele řeší efekt výše.
+  useEffect(() => {
+    // Jen stav, který tato instance pro tohoto uživatele skutečně přijala.
+    // Po změně uživatele drží `agentStatus` ještě jeden commit starou hodnotu,
+    // ale `acceptedAgentStatusRef` už reset vynuloval.
+    if (!agentStatus || statusIdentityRef.current !== userId || acceptedAgentStatusRef.current !== agentStatus) return;
+    writeCopierAgentStatusSnapshot<LocalCopierAgentStatus, TradovateAccountDisplayFeedState>({
+      userId,
+      status: agentStatus,
+      observedAt: agentStatusObservedAt,
+      readHealthy: agentStatusReadHealthy,
+      transport: agentTransport,
+      relayConnectionId,
+      lastRoute: lastAgentRouteRef.current,
+      feedReceipt: displayFeedReceipt?.userId === userId ? displayFeedReceipt : null,
+    });
+  }, [agentStatus, agentStatusObservedAt, agentStatusReadHealthy, agentTransport, displayFeedReceipt, relayConnectionId, userId]);
 
   useEffect(() => {
     if (!requestedTab) return;
@@ -589,6 +635,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
     onCopierJournalRefresh?.(agentStatus?.group ?? executionGroup ?? null);
   }, [agentStatus?.group, executionGroup, liveData?.capturedAt, onCopierJournalRefresh]);
   const executeAgent = useCallback(async (command: Parameters<typeof agentClient.execute>[0]) => {
+    // Stav obnovený z paměti po návratu na LIVE je jen zobrazení. Dokud tato
+    // instance sama nepřijme odpověď workeru, projdou jen riziko snižující
+    // příkazy (Flatten); DISARM a kill switch jdou přes executeSafetyCommand.
+    if (agentStatusRestoredRef.current && !copierAgentCommandAllowedWhileRestored(command)) {
+      throw new Error('Stav kopírky se po návratu na LIVE ještě ověřuje. Zkus to za okamžik znovu; vypnutí a Flatten fungují i teď.');
+    }
     // Poll zahájený před příkazem nesmí po ACK vrátit starší stav (probliknutí zpět).
     copyGroupStatusPollFence.invalidatePolls();
     const commandSequence = statusAckFenceRef.current.beginRequest();
@@ -803,6 +855,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   }, [acceptConfigAck, executeAgent, executionGroup, runConfigMutation]);
   const saveRiskGroup = useCallback(async (group: CopyGroupConfig) => {
     if (!agentStatus) throw new Error('Worker není dostupný pro uložení Risk nastavení.');
+    // Změna konfigurace jen nad čerstvým stavem workeru (ne obnoveným ani
+    // zestárlým) — stejné pravidlo jako ARM, vynucené i mimo disabled UI.
+    if (!armStatusRef.current.fresh) {
+      throw new Error('Čekám na čerstvý stav kopírky. Risk nastavení ulož, až ho worker potvrdí.');
+    }
     if (!supportsCopierRiskConfig(agentStatus)) throw new Error('Risk nastavení vyžaduje aktualizaci Mac workeru.');
     if (group.id !== agentStatus.group.id) {
       throw new Error('Risk nastavení nemíří na skupinu připojenou k execution workeru.');
@@ -846,9 +903,12 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
             const observedAt = Date.now();
             if (acceptAgentStatus(next, observedAt)) {
               const connectionId = next.device?.connectionId ?? next.devices?.[0]?.connectionId ?? null;
+              relayFeedRouteEpochRef.current += 1;
+              relayFeedSourcesRef.current.clear();
               setDisplayFeedReceipt({ userId, receivedAt: observedAt, feeds: next.accountDisplay ?? [] });
               setAgentTransport('local');
               setRelayConnectionId(connectionId);
+              relayConnectionIdRef.current = connectionId;
               lastAgentRouteRef.current = { transport: 'local', relayConnectionId: connectionId };
             }
           }
@@ -860,35 +920,56 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
 
       const preferredConnectionId = lastAgentRouteRef.current?.transport === 'relay'
         ? lastAgentRouteRef.current.relayConnectionId
-        : relayConnectionId;
-      const relayPoll = startCopierRelayStatusPoll(
-        connectedConnectionIds,
-        preferredConnectionId,
-        loadTradovateCopierRelayStatus,
-      );
-      const firstConnected = await relayPoll.firstConnected;
-      if (firstConnected?.remote && !stopped && isCurrent() && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) {
-        const receivedAt = Date.now();
-        const observedAt = copierRelayObservedAt(firstConnected.remote, receivedAt);
-        const fresh = firstConnected.remote.connected && isCopierStatusFresh(observedAt, receivedAt, true);
-        if (acceptAgentStatus(firstConnected.remote.status, observedAt, fresh)) {
-          setDisplayFeedReceipt({ userId, receivedAt, feeds: firstConnected.remote.status.accountDisplay ?? [] });
-          setAgentTransport('relay');
-          setRelayConnectionId(firstConnected.connectionId);
-          lastAgentRouteRef.current = { transport: 'relay', relayConnectionId: firstConnected.connectionId };
-        }
-      }
-
-      const candidates = await relayPoll.settled;
-      if (stopped || !isCurrent() || !copyGroupStatusPollFence.canAcceptPoll(pollGeneration)) return;
-      setDisplayFeedReceipt({
+        : relayConnectionIdRef.current;
+      // Spojení, jehož předchozí čtení ještě běží, se znovu nečte. Jeho
+      // výsledek patří kolu, které ho spustilo, a soudí ho fence toho kola.
+      const pollSequence = relayFeedSourcesRef.current.beginRound();
+      const routeEpoch = relayFeedRouteEpochRef.current;
+      const pollStillCurrent = () => !stopped && isCurrent() && copyGroupStatusPollFence.canAcceptPoll(pollGeneration)
+        && relayFeedRouteEpochRef.current === routeEpoch;
+      const publishFeeds = () => setDisplayFeedReceipt({
         userId,
         receivedAt: Date.now(),
-        feeds: candidates.flatMap(candidate => candidate.remote?.connected
-          ? candidate.remote.status.accountDisplay ?? []
-          : []),
+        feeds: relayFeedSourcesRef.current.feeds(connectedConnectionIds),
       });
-      if (firstConnected) return;
+      // Spojení, jehož předchozí čtení ještě běží, se znovu nečte; jeho
+      // výsledek patří kolu, které ho spustilo, a soudí ho fence toho kola.
+      const round = await runCopierRelayStatusRound({
+        connectionIds: connectedConnectionIds,
+        preferredConnectionId,
+        inFlight: relayInFlightRef.current,
+        load: loadTradovateCopierRelayStatus,
+        onFirstConnected: firstConnected => {
+          if (!firstConnected.remote || !pollStillCurrent()) return;
+          const receivedAt = Date.now();
+          const observedAt = copierRelayObservedAt(firstConnected.remote, receivedAt);
+          const fresh = firstConnected.remote.connected && isCopierStatusFresh(observedAt, receivedAt, true);
+          if (acceptAgentStatus(firstConnected.remote.status, observedAt, fresh)) {
+            relayFeedSourcesRef.current.set(firstConnected.connectionId, pollSequence, firstConnected.remote.status.accountDisplay ?? []);
+            publishFeeds();
+            setAgentTransport('relay');
+            setRelayConnectionId(firstConnected.connectionId);
+            relayConnectionIdRef.current = firstConnected.connectionId;
+            lastAgentRouteRef.current = { transport: 'relay', relayConnectionId: firstConnected.connectionId };
+          }
+        },
+        // Pomalejší spojení dočítají jen zobrazovací feedy.
+        onSettled: settled => {
+          if (!pollStillCurrent()) return;
+          let changed = false;
+          for (const candidate of settled) {
+            changed = (candidate.remote?.connected
+              ? relayFeedSourcesRef.current.set(candidate.connectionId, pollSequence, candidate.remote.status.accountDisplay ?? [])
+              : relayFeedSourcesRef.current.drop(candidate.connectionId, pollSequence)) || changed;
+          }
+          if (changed) publishFeeds();
+        },
+      });
+      if (round.outcome !== 'settled' || !pollStillCurrent()) return;
+      // Žádné z právě čtených spojení nemá živý worker, ale starší čtení ještě
+      // běží: o stavu rozhodne to kolo. Stáří statusu mezitím hlídá freshness.
+      if (round.skippedPending) return;
+      const candidates = round.candidates;
 
       const retained = newestCopierRelaySnapshot(candidates, preferredConnectionId);
       if (retained?.remote) {
@@ -897,34 +978,37 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         if (acceptAgentStatus(retained.remote.status, observedAt, false)) {
           setAgentTransport('relay');
           setRelayConnectionId(retained.connectionId);
+          relayConnectionIdRef.current = retained.connectionId;
         }
       }
       markAgentStatusStale();
     };
+    // Popředí = viditelný dokument A (v iOS shellu) aktivní appka. Čtení
+    // zahájené před uspáním poller po návratu nepřijme (hidden generation).
     const poller = createCopierForegroundPoller({
-      visible: () => document.visibilityState !== 'hidden',
+      visible: isAppForeground,
       read: poll,
       invalidate: markAgentStatusStale,
     });
-    let wasVisible = document.visibilityState !== 'hidden';
+    let wasVisible = isAppForeground();
     const resume = () => {
-      const visible = document.visibilityState !== 'hidden';
+      const visible = isAppForeground();
       if (visible && !wasVisible) forceDirectAgentProbeRef.current = true;
       wasVisible = visible;
       setFreshnessNow(Date.now());
       poller.resume();
     };
-    document.addEventListener('visibilitychange', resume);
+    const unsubscribeForeground = subscribeAppForeground(resume);
     window.addEventListener('online', poller.resume);
     window.addEventListener('focus', poller.resume);
     return () => {
       stopped = true;
       poller.stop();
-      document.removeEventListener('visibilitychange', resume);
+      unsubscribeForeground();
       window.removeEventListener('online', poller.resume);
       window.removeEventListener('focus', poller.resume);
     };
-  }, [acceptAgentStatus, agentClient, connectedConnectionIds, markAgentStatusStale, relayConnectionId, userId]);
+  }, [acceptAgentStatus, agentClient, connectedConnectionIds, markAgentStatusStale, userId]);
 
   useEffect(() => {
     const prefix = '#copier-pair=';
@@ -1163,6 +1247,7 @@ acceptAgentStatus((await executeAgent({
               riskConfigSupported={supportsCopierRiskConfig(agentStatus)}
               copierArmed={copierUiDemo ? false : agentStatus?.controller.armed === true}
               copierStatusPending={!copierUiDemo && (!agentStatusResolved || !runtimeAvailable)}
+              workerStatusKnown={copierUiDemo != null || agentStatus != null}
               dailyPnlPending={false}
               brokerDailyPnlByAccount={brokerDailyPnlByAccount}
               dailyStats={agentStatus?.controller.dailyStats ?? null}
@@ -1237,7 +1322,7 @@ acceptAgentStatus((await executeAgent({
               status={agentStatus?.controller ?? null}
               brokerDailyPnlByAccount={brokerDailyPnlByAccount}
               brokerDailyPnlPending={false}
-              disabled={configMutationPending || copyGroupStatusPollFence.inFlight || !runtimeAvailable || !supportsCopierRiskConfig(agentStatus)}
+              disabled={configMutationPending || copyGroupStatusPollFence.inFlight || !runtimeAvailable || agentStatusRestored || !supportsCopierRiskConfig(agentStatus)}
               onSaveGroup={agentStatus ? saveRiskGroup : undefined}
             />
           ) : null}

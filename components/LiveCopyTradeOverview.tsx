@@ -432,6 +432,9 @@ interface Props {
   copierObservingOnly?: boolean;
   /** Stav runtime ještě nebyl zjištěn — nesmí se vydávat za odpojený. */
   copierStatusPending?: boolean;
+  /** Worker už aspoň jednou poslal stav (i když teď třeba není čerstvý).
+   * Bez něj chybějící způsobilost účtu znamená „ověřuji“, ne „aktivní“. */
+  workerStatusKnown?: boolean;
   /** Bootstrap má čerstvé pozice a balance, ale denní ledger se ještě doplňuje. */
   dailyPnlPending?: boolean;
   /** Current-day broker P&L včetně čerstvosti a času potvrzení. */
@@ -722,6 +725,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   copierArmed = false,
   copierObservingOnly = false,
   copierStatusPending = false,
+  workerStatusKnown = true,
   dailyPnlPending = false,
   brokerDailyPnlByAccount,
   dailyStats = null,
@@ -1864,6 +1868,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
 
   return (
+    <WorkerEligibilityUnknownContext.Provider value={!workerStatusKnown}>
     <div key={userId} className="space-y-5">
       <LiveCopierIsland
         model={islandModel}
@@ -2416,6 +2421,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       />}
       {toast && <StatusToast tone={toast.tone} text={renderAccountMessage(toast.text, toast.accountIds ?? knownAccountIds)} />}
     </div>
+    </WorkerEligibilityUnknownContext.Provider>
   );
 };
 
@@ -2850,7 +2856,13 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
     && !(!row.account
       || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
       || tradeCutsByAccount.has(row.accountId))).length;
-  const activeFollowerCount = Math.max(0, enabledFollowerCount - inactiveFollowerCount - manuallyOffCount);
+  // Před první odpovědí workeru: follower bez potvrzeného stavu není
+  // „zařazený“ ani vyřazený — nezapočítá se a počty se neukazují.
+  const eligibilityUnknown = React.useContext(WorkerEligibilityUnknownContext);
+  const unknownFollowerCount = eligibilityUnknown ? enabledFollowerRows.filter((row, index) =>
+    row.account != null && eligibility[index] == null
+    && !(row.accountId != null && (manuallyOffIds.has(row.accountId) || tradeCutsByAccount.has(row.accountId)))).length : 0;
+  const activeFollowerCount = Math.max(0, enabledFollowerCount - inactiveFollowerCount - manuallyOffCount - unknownFollowerCount);
   const dllCount = eligibility.filter(entry => entry?.state === 'dll-locked').length;
   const breachedCount = eligibility.filter(entry => entry?.state === 'breached').length;
 
@@ -2905,7 +2917,11 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
           <span className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs font-bold text-[var(--text-primary)]">
           {group.name}
           {/* Plný počet nic neříká; chip se ukáže, teprve když někdo vypadne. */}
-          {inactiveFollowerCount > 0 ? (
+          {unknownFollowerCount > 0 ? (
+            <span title={VERIFYING_ACCOUNT_TONE.detail} className="whitespace-nowrap rounded-full bg-slate-500/12 px-1.5 py-0.5 text-[9px] font-black text-slate-500">
+              ověřuji followery…
+            </span>
+          ) : inactiveFollowerCount > 0 ? (
             <span
               title="Způsobilých followerů z těch, co mají kopírování zapnuté"
               className="whitespace-nowrap rounded-full bg-amber-500/12 px-1.5 py-0.5 text-[9px] font-black text-amber-600"
@@ -3112,6 +3128,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
   const compactRejection = visibleRejectedExecution(accountId, eligibility, compactFlat, dismissedRejections);
   const hasOpenPositions = a?.positions.some(position => position.netPosition !== 0) ?? false;
   const unavailableFollower = !a && accountId != null && !row.isLeader;
+  const eligibilityUnknown = React.useContext(WorkerEligibilityUnknownContext);
   const dailyDisplay = liveDailyPnlDisplay(a, Date.now(), dailyPnlPending);
   const daily = dailyDisplay.value;
   // Prokázaný klid je nula, ne neznámo. Pomlčka by tvrdila „nevím“ u účtu,
@@ -3196,7 +3213,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
           ) : showSwitchSlot ? <span aria-hidden="true" className="w-8 shrink-0" /> : null}
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 items-center gap-2">
-              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${live ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${!live ? 'bg-rose-500' : !eligibility && eligibilityUnknown ? 'bg-slate-400' : 'bg-emerald-500'}`} />
               <span className={`truncate text-[12px] font-semibold leading-tight tracking-tight transition-colors ${live && !copyOff ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
                 {redactAccountName(row.name, redactNames, redaction)}
               </span>
@@ -3380,6 +3397,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   cooldownPanel?: React.ReactNode;
 }) => {
   const [showAllFlat, setShowAllFlat] = useState(false);
+  const eligibilityUnknown = React.useContext(WorkerEligibilityUnknownContext);
   const capital = liveCapitalDisplay(rows.map(row => row.account));
   const daily = liveGroupDailyPnlDisplay(rows.map(row => row.account), Date.now(), dailyPnlPending);
   const unreal = rows.reduce((sum, row) => sum + (row.account?.unrealizedPnl || 0), 0);
@@ -3399,13 +3417,18 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
     && !(!row.account
       || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
       || tradeCutsByAccount.has(row.accountId))).length;
-  const activeFollowerCount = Math.max(0, enabledFollowerRows.length - inactiveFollowerCount - manuallyOffCount);
+  const unknownFollowerCount = eligibilityUnknown ? enabledFollowerRows.filter((row, index) =>
+    row.account != null && eligibility[index] == null
+    && !(row.accountId != null && (manuallyOffIds.has(row.accountId) || tradeCutsByAccount.has(row.accountId)))).length : 0;
+  const activeFollowerCount = Math.max(0, enabledFollowerRows.length - inactiveFollowerCount - manuallyOffCount - unknownFollowerCount);
   const unavailableFollowerCount = enabledFollowerRows.filter((row, index) =>
     !row.account && (eligibility[index]?.state ?? 'active') === 'active').length;
   const dllCount = eligibility.filter(entry => entry?.state === 'dll-locked').length;
   const breachedCount = eligibility.filter(entry => entry?.state === 'breached').length;
   const unavailableLeader = rows.some(row => row.isLeader && row.accountId != null && !row.account);
-  const showSwitchSlot = participationByAccount.size > 0;
+  // Místo přepínače followera je vyhrazené vždy, když skupina followery má —
+  // přepínače dorazí až s odpovědí workeru a řádky nesmí poskočit.
+  const showSwitchSlot = participationByAccount.size > 0 || rows.some(row => !row.isLeader);
   const unrealStale = rows.some(row => row.account?.unrealizedPnlSource === 'stale');
   const accountIds = new Set(rows.flatMap(row => row.accountId != null ? [row.accountId] : []));
   const groupOrders = orders.filter(order => order.accountId != null && accountIds.has(order.accountId));
@@ -3467,11 +3490,19 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
 
       {/* Varovné štítky mají vlastní řádek, ale jen když nějaké jsou; v klidu
           zůstane hlavička jednořádková. */}
-      {inactiveFollowerCount > 0 || manuallyOffCount > 0 || dllCount > 0 || breachedCount > 0 || unavailableFollowerCount > 0 || unavailableLeader || observingOnly ? (
+      {/* Než worker poprvé odpoví, řádek se štítky drží místo neutrálním
+          „ověřuji“ — DLL/BREACHED pak naskočí do stejného řádku bez poskoku. */}
+      {inactiveFollowerCount > 0 || manuallyOffCount > 0 || dllCount > 0 || breachedCount > 0 || unavailableFollowerCount > 0 || unavailableLeader || observingOnly
+        || (eligibilityUnknown && enabledFollowerRows.length > 0) ? (
         <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2.5">
           {/* Stejné štítky jako desktop: jantarově jen automatické vyřazení,
-              ručně vypnutý follower je volba, ne problém — ten je šedý. */}
-          {inactiveFollowerCount > 0 ? (
+              ručně vypnutý follower je volba, ne problém — ten je šedý.
+              Dokud některý follower čeká na worker, počty se neukazují. */}
+          {unknownFollowerCount > 0 ? (
+            <span title={VERIFYING_ACCOUNT_TONE.detail} className="rounded-full bg-slate-500/12 px-2 py-0.5 text-[10px] font-black text-slate-500">
+              ověřuji followery…
+            </span>
+          ) : inactiveFollowerCount > 0 ? (
             <span
               title="Způsobilých followerů z těch, co mají kopírování zapnuté"
               className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[10px] font-black text-amber-600"
@@ -3487,7 +3518,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
             </span>
           ) : null}
           {/* Při souběhu obou druhů vyřazení zůstane vidět, kolik je ručních. */}
-          {inactiveFollowerCount > 0 && manuallyOffCount > 0 ? (
+          {unknownFollowerCount === 0 && inactiveFollowerCount > 0 && manuallyOffCount > 0 ? (
             <span title="Ručně vypnuté přepínačem v řádku účtu" className="rounded-full bg-slate-500/15 px-2 py-0.5 text-[10px] font-black text-[var(--text-secondary)]">
               {manuallyOffCount}× vypnutý
             </span>
@@ -4343,6 +4374,21 @@ export const RejectedExecutionStatus = ({ execution, accountAuthoritativelyFlat,
 };
 
 /**
+ * Worker zatím neposlal žádný stav (studený start, první čtení ještě
+ * neproběhlo). Chybějící záznam způsobilosti pak NEZNAMENÁ „Aktivní“ —
+ * řádky ukážou neutrální „Ověřuji“. Odvozené stavy z broker dat (DLL
+ * z vlastního snapshotu) se ukazují i tak, ty jsou potvrzené.
+ */
+const WorkerEligibilityUnknownContext = React.createContext(false);
+
+const VERIFYING_ACCOUNT_TONE: AccountStateTone = {
+  dotClass: 'bg-slate-400',
+  accentClass: 'text-slate-400',
+  label: 'Ověřuji',
+  detail: 'Stav kopírky z workeru ještě nedorazil. Dokud ho worker nepotvrdí, účet se jako aktivní neoznačí.',
+};
+
+/**
  * Eligibility pill. Connection status (tečka), způsobilost účtu (pill)
  * a poslední execution událost (řádek pod jménem) jsou tři různé věci —
  * záměrně se neslučují do jednoho zašedlého řádku.
@@ -4426,6 +4472,7 @@ export const AccountEligibilityPill = ({ eligibility, live, unavailable = false,
   onVerify?: () => void;
   verifying?: boolean;
 }) => {
+  const eligibilityUnknown = React.useContext(WorkerEligibilityUnknownContext);
   const state = eligibility?.state ?? 'active';
   if (state === 'dll-locked') {
     return <span title={eligibility?.reason} className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[10px] font-black leading-none text-amber-600">
@@ -4475,6 +4522,10 @@ export const AccountEligibilityPill = ({ eligibility, live, unavailable = false,
   if (!live) {
     return <span className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 py-1 text-[10px] font-bold leading-none text-[var(--text-secondary)]">
       <Unplug aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Odpojeno</span>;
+  }
+  if (!eligibility && eligibilityUnknown) {
+    return <span title={VERIFYING_ACCOUNT_TONE.detail} className="inline-flex items-center gap-1 rounded-md border border-slate-500/30 bg-slate-500/10 px-2 py-1 text-[10px] font-bold leading-none text-slate-500">
+      <Clock3 aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Ověřuji…</span>;
   }
   return <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[10px] font-bold leading-none text-emerald-600">
     <CheckCircle2 aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Aktivní</span>;
@@ -4596,7 +4647,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
                 eligibility={row.accountId != null ? eligibilityByAccount.get(row.accountId) : undefined}
                 tradeCut={row.accountId != null ? tradeCutsByAccount.get(row.accountId) : undefined}
                 participation={row.accountId != null && !row.isLeader ? participationByAccount.get(row.accountId) : undefined}
-                showSwitchSlot={participationByAccount.size > 0}
+                showSwitchSlot={participationByAccount.size > 0 || rows.some(candidate => !candidate.isLeader)}
                 onFollowerEnabled={onFollowerEnabled}
                 busyCommand={busyCommand}
                 onVerifyEligibility={onVerifyEligibility}
@@ -4723,6 +4774,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
   const copyOff = participation != null && !participation.configuredEnabled;
   const rowFlat = live && a != null && a.positions.every(position => position.netPosition === 0);
   const rowRejection = visibleRejectedExecution(accountId, eligibility, rowFlat, dismissedRejections);
+  const eligibilityUnknown = React.useContext(WorkerEligibilityUnknownContext);
   const eligibilityState = eligibility?.state ?? 'active';
   const accountUnavailable = !a && accountId != null;
   // Odchylka = cokoli, co není „živý a způsobilý účet“. Jen ta se vykreslí.
@@ -4739,6 +4791,8 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
     : accountUnavailable
     ? { dotClass: 'bg-slate-400', accentClass: 'text-slate-400', label: 'Chybí v OAuth snapshotu',
         detail: 'Účet se v aktuálním snapshotu připojení neobjevil. Zkontroluj připojení firmy v záložce Připojení.' }
+    : live && !eligibility && eligibilityUnknown
+    ? VERIFYING_ACCOUNT_TONE
     : live
     ? { dotClass: 'bg-emerald-500', accentClass: 'text-emerald-500', label: 'Aktivní',
         detail: 'Účet je v aktuálním OAuth snapshotu a je způsobilý ke kopírování. Hodnoty v řádku pocházejí z potvrzeného broker snapshotu.' }

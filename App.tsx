@@ -36,6 +36,7 @@ import { reconcileDashboardRows } from './utils/dashboardRefresh';
 import { createDashboardRecovery } from './services/dashboardRecovery';
 import { createSessionRequestGuard } from './utils/sessionRequestGuard';
 import { clearNativeSessionSurfaces, waitForNativeSessionCleanup } from './services/nativeSessionCleanup';
+import { clearCopierAgentStatusStore } from './lib/copierAgentStatusStore';
 import { firmOf } from './utils/accountFirm';
 import { adjustmentTotal, getFinancialAdjustments } from './services/tradingIncidents';
 import { calculateAccountDrawdown, portfolioFloorForDate } from './services/propDrawdown';
@@ -446,6 +447,7 @@ const App: React.FC = () => {
     logoutInProgressRef.current = true;
     authEpochRef.current += 1;
     sessionRef.current = null;
+    clearCopierAgentStatusStore();
     setSession(null); // Unmount producers before clearing their native surfaces.
     setLogoutBusy(true);
     setLogoutError(null);
@@ -515,7 +517,11 @@ const App: React.FC = () => {
     supabase.auth.getSession().then(({ data: { session: activeSession } }) => {
       if (authEpochRef.current !== initialAuthEpoch) return;
       if (activeSession) {
-        if (sessionRef.current?.user.id !== activeSession.user.id) authEpochRef.current += 1;
+        if (sessionRef.current?.user.id !== activeSession.user.id) {
+          authEpochRef.current += 1;
+          // Stav kopírky předchozího uživatele se nesmí ukázat ani na okamžik.
+          clearCopierAgentStatusStore();
+        }
         sessionRef.current = activeSession;
         setSession(activeSession);
         // INSTANT user z cached snapshot předchozí session — žádný flash avatara/jména/role.
@@ -556,7 +562,11 @@ const App: React.FC = () => {
       if (logoutInProgressRef.current && activeSession) return;
 
       if (activeSession) {
-        if (sessionRef.current?.user.id !== activeSession.user.id) authEpochRef.current += 1;
+        if (sessionRef.current?.user.id !== activeSession.user.id) {
+          authEpochRef.current += 1;
+          // Stav kopírky předchozího uživatele se nesmí ukázat ani na okamžik.
+          clearCopierAgentStatusStore();
+        }
         sessionRef.current = activeSession;
         // Only trigger session update if it's actually different to avoid loops
         setSession(prev => {
@@ -572,6 +582,7 @@ const App: React.FC = () => {
       if (event === 'SIGNED_OUT') {
         const signedOutUserId = sessionRef.current?.user.id;
         sessionRef.current = null;
+        clearCopierAgentStatusStore();
         authEpochRef.current += 1;
         // Do not call async auth methods from inside Supabase's auth callback.
         if (signedOutUserId && !logoutInProgressRef.current) {
@@ -4645,7 +4656,10 @@ const App: React.FC = () => {
                       onSpectatingChange={setIsNetworkSpectating}
                     />
                   )}
-                  {activePage === 'live' && (
+                  {/* Přímá změna účtu (A→B bez SIGNED_OUT): dokud se nenačte nový
+                      uživatel, LIVE nevykreslujeme — stav kopírky A nesmí být vidět
+                      pod session B ani na okamžik. */}
+                  {activePage === 'live' && session?.user.id === currentUser.id && (
                     <LiveDesk
                       key={currentUser.id}
                       userId={currentUser.id}

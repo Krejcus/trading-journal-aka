@@ -258,6 +258,29 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-02 — LIVE kopírka: načítání bez problikávání, fáze 1 (Claude, oponentura Codex)
+
+Filip: na LIVE „naskočí data, pak problikne a až pak naskočí ON / DLL do konce
+session“; studený start horší. Zadání a dohodnutý rozsah:
+`docs/reviews/live-copier-loading-20261002.md` (měření, dvě nezávislé Codex
+analýzy, povinné podmínky). Větev `claude/live-loading-20261002`, NEnasazeno.
+
+- **Příčina probliknutí:** řádek účtu bral `eligibility?.state ?? 'active'` —
+  před první odpovědí workeru ukazoval „Aktivní“. Nově „Ověřuji“ přes
+  `WorkerEligibilityUnknownContext`; sloty přepínačů vyhrazené předem.
+- **Nespolehlivost:** relay poll čekal na nejpomalejší spojení
+  (`relayPoll.settled`) → stav workeru zestárl přes 15 s. Nově
+  `runCopierRelayStatusRound` (první živý worker hned, zbytek na pozadí).
+- **Návrat na LIVE:** stav workeru v paměti (`copierAgentStatusStore`) — jen
+  zobrazení; příkazy kromě Flatten (a brzd přes vlastní cestu) čekají na
+  čerstvou odpověď této instance. Úložiště se maže při odhlášení/změně uživatele.
+- **Deadline čtení** pro read-only POSTy; execution zápisy beze změny.
+  iOS popředí autoritativně z `@capacitor/app` (`lib/appForeground.ts`).
+- Rozhodnutí: obnovený stav mladší 15 s se zobrazuje bez ztlumení (stejné
+  pravidlo čerstvosti jako dosud; ztlumení by problikávalo při každém
+  návratu). Pevné čekání a trvalý DLL zámek vědomě NE (viz review).
+- Mimo rozsah, pre-existující: globální App brána při přímé změně účtu A→B.
+
 ### 2026-10-02 — Vstupní příkazy v grafu (varianta D) a nevzaté obchody (Claude)
 
 - **Limity/stopy v grafu:** najetí jen animuje (jedna SL/TP linka, box jen

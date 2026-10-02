@@ -2,6 +2,7 @@ import { applyTradovateConnectionHealth, type TradovateConnectionHealthMap } fro
 import { createTradovateIntentPrefetch } from '../lib/tradovateIntentPrefetch';
 import { consumeTradovateReads } from '../lib/tradovateReadCoordinator';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { isAppForeground, subscribeAppForeground } from '../lib/appForeground';
 import type { TradovateAccountProfile, TradovateAccountProfilesResult } from '../lib/tradovateAccountProfileTypes';
 import type { Account } from '../types';
 import type { TradovateSourceCoverage } from '../lib/tradovateAccountDataTypes';
@@ -785,7 +786,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   useEffect(() => {
     if (!enabled) return;
     const refreshIfNeeded = () => {
-      if (document.visibilityState !== 'visible') return;
+      if (!isAppForeground()) return;
       const now = Date.now();
       const activeIds = statusRef.current?.connections
         .filter(connection => connection.connected)
@@ -798,12 +799,13 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       );
       if (ids.length > 0) void refreshData(ids, true, 'merge', 'full');
     };
-    const listensDocument = typeof document.addEventListener === 'function';
     const listensWindow = typeof window.addEventListener === 'function';
-    if (listensDocument) document.addEventListener('visibilitychange', refreshIfNeeded);
+    const unsubscribeForeground = subscribeAppForeground(foreground => {
+      if (foreground) refreshIfNeeded();
+    });
     if (listensWindow) window.addEventListener('focus', refreshIfNeeded);
     return () => {
-      if (listensDocument) document.removeEventListener('visibilitychange', refreshIfNeeded);
+      unsubscribeForeground();
       if (listensWindow) window.removeEventListener('focus', refreshIfNeeded);
     };
   }, [enabled, refreshData]);
@@ -815,13 +817,20 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     let cancelled = false;
     const pollUserId = activeUserIdRef.current;
     let timer: number | null = null;
+    // Každý odchod do pozadí zneplatní rozpracované čtení: tick zahájený před
+    // uspáním se po návratu nepoužije, místo něj se hned čte znovu.
+    let foregroundGeneration = 0;
+    let rereadAfterBusy = false;
 
     const schedule = (delay: number) => {
       if (!cancelled) timer = window.setTimeout(() => void poll(), delay);
     };
     const poll = async () => {
       if (cancelled || activeUserIdRef.current !== pollUserId) return;
-      if (document.visibilityState === 'hidden') {
+      const readGeneration = foregroundGeneration;
+      const readIsCurrent = () => !cancelled && activeUserIdRef.current === pollUserId
+        && foregroundGeneration === readGeneration;
+      if (!isAppForeground()) {
         schedule(IDLE_POSITION_INTERVAL_MS);
         return;
       }
@@ -866,7 +875,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
             available,
             connectionId => readWithHealth(connectionId, () => runTradovateLivePnlTick(connectionId, livePnlCursorsRef.current[connectionId] ?? 0)),
             (connectionId, tick) => {
-              if (cancelled || activeUserIdRef.current !== pollUserId) return;
+              if (!readIsCurrent()) return;
               recordTradovateBrokerCalls(connectionId, tick.brokerCalls);
               // Partial success must still honor the broker's rate-limit signal.
               if (tick.anchorErrorStatus === 429) {
@@ -885,7 +894,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
               setConnectionData(next);
             },
           );
-          if (cancelled || activeUserIdRef.current !== pollUserId) return;
+          if (!readIsCurrent()) return;
           livePnlLastFullTickAtRef.current = Date.now();
           if (becameFlat.length > 0) await refreshData(becameFlat, true, 'merge');
         } else {
@@ -905,7 +914,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
               return readWithHealth(connectionId, () => runTradovateLivePnlAnchor(connectionId, candidate.accountId, candidate.contractId));
             },
             (connectionId, tick) => {
-              if (cancelled || activeUserIdRef.current !== pollUserId) return;
+              if (!readIsCurrent()) return;
               recordTradovateBrokerCalls(connectionId, tick.brokerCalls);
               const current = connectionDataRef.current;
               const dataset = current[connectionId];
@@ -921,7 +930,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
             },
           );
         }
-        if (cancelled || activeUserIdRef.current !== pollUserId) return;
+        if (!readIsCurrent()) return;
         rateLimitResults.forEach((result, index) => {
           if (result.status !== 'rejected' || !(result.reason instanceof TradovateRequestError) || result.reason.status !== 429) return;
           const id = rateLimitIds[index];
@@ -932,7 +941,15 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         });
       } finally {
         livePnlBusyRef.current = false;
+        if (rereadAfterBusy && !cancelled) {
+          // Návrat z pozadí přišel během čtení: zahozený tick nahradí hned nový.
+          rereadAfterBusy = false;
+          if (timer != null) window.clearTimeout(timer);
+          timer = null;
+          schedule(0);
+        }
       }
+      if (!readIsCurrent()) return;
       const hasOpenPosition = Object.values(connectionDataRef.current)
         .some(dataset => dataset.accounts.some(account => account.netPositionCount > 0));
       schedule(hasOpenPosition ? FAST_PNL_INTERVAL_MS : IDLE_POSITION_INTERVAL_MS);
@@ -940,19 +957,24 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
 
     // Návrat do popředí (telefon po spánku, přepnutí záložky) čte hned,
     // ne až za další interval; poslední známé hodnoty tak nahradí do sekundy.
-    const onVisible = () => {
-      if (document.visibilityState !== 'visible' || cancelled) return;
+    const onVisible = (foreground: boolean) => {
+      if (cancelled) return;
+      foregroundGeneration += 1;
+      if (!foreground) return;
+      if (livePnlBusyRef.current) {
+        rereadAfterBusy = true;
+        return;
+      }
       if (timer != null) window.clearTimeout(timer);
       timer = null;
       void poll();
     };
-    // Testovací prostředí stubuje `document` bez event API.
-    const listens = typeof document.addEventListener === 'function';
-    if (listens) document.addEventListener('visibilitychange', onVisible);
+    // Web: visibilitychange; iOS shell navíc nativní appStateChange.
+    const unsubscribeForeground = subscribeAppForeground(onVisible);
     schedule(1_000);
     return () => {
       cancelled = true;
-      if (listens) document.removeEventListener('visibilitychange', onVisible);
+      unsubscribeForeground();
       if (timer != null) window.clearTimeout(timer);
     };
   }, [enabled, refreshData, status?.connections]);

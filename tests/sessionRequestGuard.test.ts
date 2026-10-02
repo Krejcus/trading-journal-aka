@@ -114,12 +114,15 @@ it('actual logout invalidates the session before awaiting native cleanup and the
     clearNativeSessionSurfaces: vi.fn(() => cleanup.promise),
     supabase: { auth: { signOut: vi.fn().mockResolvedValue({ error: null }) } },
     clearAppStorage: vi.fn(), isFetchingRef: { current: true },
+    clearCopierAgentStatusStore: vi.fn(),
     window: { location: { reload: vi.fn() } },
   };
   const running = callback('handleLogout', context)();
   expect(context.sessionRef.current).toBeNull();
   expect(context.authEpochRef.current).toBe(2);
   expect(context.setSession).toHaveBeenCalledWith(null);
+  // Stav kopírky odcházejícího uživatele zmizí hned, ne až po úklidu.
+  expect(context.clearCopierAgentStatusStore).toHaveBeenCalledOnce();
   expect(context.logoutInProgressRef.current).toBe(true);
   expect(context.supabase.auth.signOut).not.toHaveBeenCalled();
   cleanup.resolve(); await running;
@@ -136,6 +139,7 @@ it('actual failed logout restores the captured session after cleanup for a visib
     clearNativeSessionSurfaces: vi.fn().mockResolvedValue(undefined),
     supabase: { auth: { signOut: vi.fn().mockResolvedValue({ error: new Error('offline') }) } },
     clearAppStorage: vi.fn(), isFetchingRef: { current: true },
+    clearCopierAgentStatusStore: vi.fn(),
     window: { location: { reload: vi.fn() } },
   };
   await callback('handleLogout', context)();
