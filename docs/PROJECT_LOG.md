@@ -282,6 +282,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   navždy — 7 leaderových ze 16.–17. 9. schovalo všechny pozdější nevzaté.
   Do nekonečna teď jen skutečně `open` pozice. Lokální sondy nad výřezem
   evidence to neodhalí, server projektuje celou historii.
+- Ruční OSO (49d06f6e): Tradovate nedá dětem parentId a kopírka ve shadow
+  módu nepíše vazby → obchod z limitu se SL/TP hlásil „bez SL/TP“. Obchod
+  teď páruje SL/TP opačné strany do 1 s po vstupním příkazu (stejně jako
+  detail příkazu); bracket příkazu = stav při vyplnění.
 - Otevřené: 5 nevzatých na followerovém připojení (53157614, před 1. 10.)
   — ověřit, že to nejsou nepoznané kopie, až se objeví v říjnu.
 
