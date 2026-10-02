@@ -97,6 +97,8 @@ export function createEntryOrdersPrimitive(orders: readonly TradeEntryOrder[], c
   let hovered: number | null = null;
   let hoverStart = 0;
   let pointer: { x: number; y: number } | null = null;
+  // Oblast najetého příkazu a jeho „co by se stalo“ — bublina ji nesmí zakrýt.
+  let avoid: Rect | null = null;
   let requestUpdate: (() => void) | null = null;
   let frame: number | null = null;
 
@@ -343,6 +345,36 @@ export function createEntryOrdersPrimitive(orders: readonly TradeEntryOrder[], c
           }
         }
       });
+
+      // Co bublina nesmí zakrýt: cedulka, linka příkazu, bracket, dráha a výsledek.
+      avoid = null;
+      if (active) {
+        const order = active.order;
+        const xs: number[] = [], ys: number[] = [];
+        const addX = (value: number | null | undefined) => { if (value != null && Number.isFinite(value)) xs.push(value); };
+        const addY = (value: number | null | undefined) => { if (value != null && Number.isFinite(value)) ys.push(value); };
+        const chip = hitChips.find(box => box.index === hovered);
+        if (chip) { addX(chip.left); addX(chip.right); addY(chip.top); addY(chip.bottom); }
+        for (const leg of order.legs) { addX(x(leg.at)); addY(series.priceToCoordinate(leg.price)); }
+        addX(order.end ? x(order.end.at) : null);
+        if (order.bracket) { addY(order.bracket.sl == null ? null : series.priceToCoordinate(order.bracket.sl)); addY(order.bracket.tp == null ? null : series.priceToCoordinate(order.bracket.tp)); }
+        const outcome = active.outcome;
+        let badgeRight = 0;
+        if (outcome?.kind === 'fill') {
+          addX(x(outcome.fillAt));
+          const rx = outcome.resultAt != null ? x(outcome.resultAt) : null;
+          addX(rx); addY(outcome.exitPrice == null ? null : series.priceToCoordinate(outcome.exitPrice));
+          if (rx != null) badgeRight = rx + 170;
+        } else if (outcome?.kind === 'nofill') {
+          const kx = x(outcome.closestAt);
+          addX(kx); addY(series.priceToCoordinate(outcome.closestPrice));
+          if (kx != null) badgeRight = kx + 110;
+        }
+        if (badgeRight) xs.push(badgeRight);
+        if (xs.length && ys.length) {
+          avoid = { left: Math.min(...xs) - 8, right: Math.min(mediaSize.width, Math.max(...xs) + 8), top: Math.min(...ys) - 12, bottom: Math.max(...ys) + 12 };
+        }
+      }
       context.restore();
     });
   } };
@@ -354,7 +386,7 @@ export function createEntryOrdersPrimitive(orders: readonly TradeEntryOrder[], c
     const at = pointer;
     target.useMediaCoordinateSpace(({ context, mediaSize }) => {
       context.save();
-      drawTooltip(context, mediaSize, at, active.order, active.outcome, active.color, dark, pointValue, easeOut(clamp01((reducedMotion() ? ANIM_MS : performance.now() - hoverStart) / 200)));
+      drawTooltip(context, mediaSize, at, avoid, active.order, active.outcome, active.color, dark, pointValue, easeOut(clamp01((reducedMotion() ? ANIM_MS : performance.now() - hoverStart) / 200)));
       context.restore();
     });
   } };
@@ -382,6 +414,39 @@ export function createEntryOrdersPrimitive(orders: readonly TradeEntryOrder[], c
 }
 
 type Tone = { bg: string; border: string; ink: string };
+type Rect = { left: number; right: number; top: number; bottom: number };
+
+/**
+ * Místo pro bublinu: u kurzoru, nebo vedle/nad/pod oblastí příkazu — tam,
+ * kde nejméně zakryje příkaz a jeho „co by se stalo“, a co nejblíž kurzoru.
+ */
+export function placeTooltip(size: { width: number; height: number }, at: { x: number; y: number }, avoid: Rect | null, width: number, height: number) {
+  const M = 6, G = 14;
+  const clampX = (value: number) => Math.min(Math.max(M, value), Math.max(M, size.width - width - M));
+  const clampY = (value: number) => Math.min(Math.max(M, value), Math.max(M, size.height - height - M));
+  const candidates: Array<{ left: number; top: number }> = [
+    { left: at.x + G, top: at.y + G }, { left: at.x - G - width, top: at.y + G },
+    { left: at.x + G, top: at.y - G - height }, { left: at.x - G - width, top: at.y - G - height },
+  ];
+  if (avoid) {
+    candidates.push(
+      { left: avoid.left - G - width, top: at.y - height / 2 }, { left: avoid.right + G, top: at.y - height / 2 },
+      { left: at.x - width / 2, top: avoid.top - G - height }, { left: at.x - width / 2, top: avoid.bottom + G },
+    );
+  }
+  let best: { left: number; top: number; score: number } | null = null;
+  // Pořadí kandidátů je preference (vpravo dole od kurzoru první); rozhoduje překryv.
+  for (const [index, candidate] of candidates.entries()) {
+    const left = clampX(candidate.left), top = clampY(candidate.top);
+    const overlap = avoid ? Math.max(0, Math.min(left + width, avoid.right) - Math.max(left, avoid.left))
+      * Math.max(0, Math.min(top + height, avoid.bottom) - Math.max(top, avoid.top)) : 0;
+    // Kurzor pod bublinou by bránil dalšímu najetí — také penalizovat.
+    const coversPointer = at.x >= left && at.x <= left + width && at.y >= top && at.y <= top + height ? 1 : 0;
+    const score = overlap * 10 + coversPointer * 1e6 + index;
+    if (!best || score < best.score) best = { left, top, score };
+  }
+  return { left: best!.left, top: best!.top };
+}
 
 function drawBadge(context: CanvasRenderingContext2D, width: number, text: string, bx: number, by: number, tone: Tone, alpha: number) {
   if (alpha <= 0) return;
@@ -398,7 +463,7 @@ function drawBadge(context: CanvasRenderingContext2D, width: number, text: strin
 }
 
 /** Bublina příkazu: hlavička, časová osa, bracket a karta „Kdybys nezrušil“. */
-function drawTooltip(context: CanvasRenderingContext2D, size: { width: number; height: number }, at: { x: number; y: number },
+function drawTooltip(context: CanvasRenderingContext2D, size: { width: number; height: number }, at: { x: number; y: number }, avoid: Rect | null,
   order: TradeEntryOrder, outcome: EntryOrderOutcome | null, color: string, dark: boolean, pointValue: number, appear: number) {
   const ink = dark ? '#f1f5f9' : '#0f172a', muted = dark ? '#94a3b8' : '#64748b', line = dark ? 'rgba(255,255,255,.08)' : '#e2e8f0';
   const W = 252, PAD = 12;
@@ -411,10 +476,9 @@ function drawTooltip(context: CanvasRenderingContext2D, size: { width: number; h
   const bracket = order.bracket && (order.bracket.sl != null || order.bracket.tp != null) ? order.bracket : null;
   const height = PAD + 22 + 8 + steps.length * 19 + (order.end ? 16 : 0) + (bracket ? 10 + 22 : 0) + (card ? 12 + 58 : 0) + PAD;
 
-  let left = at.x + 16, top = at.y + 16;
-  if (left + W > size.width - 6) left = at.x - 16 - W;
-  if (top + height > size.height - 6) top = at.y - 16 - height;
-  left = Math.max(6, left); top = Math.max(6, top) + (1 - appear) * 6;
+  const place = placeTooltip(size, at, avoid, W, height);
+  const left = place.left;
+  const top = place.top + (1 - appear) * 6;
   context.globalAlpha = appear;
 
   // Karta
