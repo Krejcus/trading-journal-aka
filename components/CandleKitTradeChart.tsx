@@ -4208,7 +4208,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     // Vstupní limity/stopy (i zrušené pokusy před vstupem) pod šipkami obchodu.
     const entryOrders = trade.executionHistory.entryOrders?.length
       ? createEntryOrdersPrimitive(trade.executionHistory.entryOrders, visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
-        api.controller.getChart(), series, coverage, { isDark }) : null;
+        api.controller.getChart(), series, coverage, { isDark, pointValue: tradedRoot === 'NQ' ? 20 : 2 }) : null;
     if (position) series.attachPrimitive(position);
     series.attachPrimitive(primitive);
     // Až po obchodu: bublina příkazu musí být nad šipkami (linky jsou pod nimi).

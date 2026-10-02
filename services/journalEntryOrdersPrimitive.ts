@@ -1,5 +1,6 @@
 import type { IChartApi, ISeriesApi, ISeriesPrimitive, IPrimitivePaneRenderer, Logical, MouseEventParams, Time } from 'lightweight-charts';
 import type { TradeEntryOrder } from '../lib/journalEntryOrders';
+import { cancelledOrderOutcome, type EntryOrderOutcome, type OutcomeCandle } from '../lib/entryOrderOutcome';
 import type { MarketCandle } from './marketData';
 import { createJournalTimeProjection, journalLogicalCoordinate, journalVisibleSpanCoordinates, type JournalCandleCoverage } from './journalChartTime';
 import { JOURNAL_BUY_COLOR, JOURNAL_SELL_COLOR, JOURNAL_SL_COLOR, JOURNAL_TP_COLOR } from './journalChartPrimitive';
@@ -31,8 +32,21 @@ const durationText = (ms: number) => {
   return h ? `${h} h ${m} min` : m ? `${m} min ${s} s` : `${s} s`;
 };
 
+const moneyText = (value: number) => `${value >= 0 ? '+' : '−'}$${Math.abs(value).toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const clockText = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+
+/** „Kdybys nezrušil“ jednou větou (bublina i štítek v grafu). */
+export function entryOrderOutcomeText(outcome: EntryOrderOutcome, quantity: number | null, pointValue: number): string {
+  if (outcome.kind === 'nofill') return `nevyplnil by se · chybělo ${outcome.missBy.toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} b.`;
+  const filled = `vyplnil ${clockText(outcome.fillAt)}`;
+  if (outcome.result === 'open') return `${filled} · SL/TP nedosaženo`;
+  if (outcome.result === 'ambiguous') return `${filled} · SL i TP v jedné svíčce`;
+  const usd = outcome.points != null && quantity != null ? ` · ${moneyText(outcome.points * quantity * pointValue)}` : '';
+  return `${filled} → ${outcome.result === 'tp' ? 'TP' : 'SL'} ${clockText(outcome.resultAt!)}${usd}`;
+}
+
 /** Řádky bubliny: [popisek, hodnota]; první řádek je titulek. */
-export function entryOrderTooltip(order: TradeEntryOrder): Array<[string, string]> {
+export function entryOrderTooltip(order: TradeEntryOrder, outcome?: EntryOrderOutcome | null, pointValue = 2): Array<[string, string]> {
   const rows: Array<[string, string]> = [[`${order.side} ${order.type}${order.quantity != null ? ` · ${order.quantity} ks` : ''}`, '']];
   order.legs.forEach((leg, index) => rows.push([`${index ? 'Posunut' : 'Zadán'} ${timeText(leg.at)}`, priceText(leg.price)]));
   if (order.end) rows.push([`${order.end.kind === 'fill' ? 'Vyplněn' : 'Zrušen'} ${timeText(order.end.at)}`, '']);
@@ -40,19 +54,26 @@ export function entryOrderTooltip(order: TradeEntryOrder): Array<[string, string
   if (order.end) rows.push([order.end.kind === 'fill' ? 'Čekal na vyplnění' : 'Stál', durationText(order.end.at - order.placedAt)]);
   if (order.bracket?.sl != null) rows.push(['Bracket SL', priceText(order.bracket.sl)]);
   if (order.bracket?.tp != null) rows.push(['Bracket TP', priceText(order.bracket.tp)]);
+  if (outcome) rows.push(['Kdybys nezrušil', entryOrderOutcomeText(outcome, order.quantity, pointValue)]);
   return rows;
 }
 
 export function createEntryOrdersPrimitive(orders: readonly TradeEntryOrder[], candles: readonly MarketCandle[], intervalSeconds: number,
-  chart: IChartApi, series: ISeriesApi<'Candlestick'>, coverage?: JournalCandleCoverage, options: { isDark?: boolean } = {}): ISeriesPrimitive<Time> {
+  chart: IChartApi, series: ISeriesApi<'Candlestick'>, coverage?: JournalCandleCoverage, options: { isDark?: boolean; pointValue?: number } = {}): ISeriesPrimitive<Time> {
   const projection = createJournalTimeProjection(candles, intervalSeconds, coverage);
   const lastAt = candles.length ? (candles[candles.length - 1].time + intervalSeconds) * 1000 - 1 : 0;
+  // Pokrytí nese 1m svíčky grafu (typově jen časy) — s cenami je přesnější.
+  const coverageCandles = coverage?.candles as readonly Partial<OutcomeCandle>[] | undefined;
+  const outcomeCandles: readonly OutcomeCandle[] = coverageCandles?.length && coverageCandles.every(candle => typeof candle.high === 'number' && typeof candle.low === 'number')
+    ? coverageCandles as readonly OutcomeCandle[] : candles;
   const shapes = orders.map(order => {
     const until = order.end?.at ?? lastAt;
     return {
       order,
       until,
       bracketSpans: projection.spans(order.placedAt, until),
+      // 1m svíčky (pokrytí) dávají přesnější „co by se stalo“ než vyšší timeframe.
+      outcome: cancelledOrderOutcome(order, outcomeCandles),
       color: order.end?.kind === 'cancel' ? CANCEL_COLOR : order.side === 'Buy' ? JOURNAL_BUY_COLOR : JOURNAL_SELL_COLOR,
       legs: order.legs.map((leg, index) => {
         const to = Math.max(leg.at, index + 1 < order.legs.length ? order.legs[index + 1].at : until);
@@ -111,6 +132,74 @@ export function createEntryOrdersPrimitive(orders: readonly TradeEntryOrder[], c
             context.setLineDash([]); context.globalAlpha = 1;
             context.fillStyle = color; context.font = CHIP.font; context.textBaseline = 'middle';
             context.fillText(`${label} ${priceText(price)}`, Math.min(right + 4, mediaSize.width - 70), y);
+          }
+        }
+      }
+
+      // „Kdybys nezrušil“: tečkovaná dráha od zrušení, vyplnění a výsledek bracketu.
+      if (active?.outcome && active.order.end) {
+        const outcome = active.outcome;
+        const price = active.order.legs[active.order.legs.length - 1].price;
+        const py = series.priceToCoordinate(price);
+        const cx = x(active.order.end.at);
+        const pointValue = options.pointValue ?? 2;
+        const badge = (text: string, bx: number, by: number, fill: string, stroke: string, color: string) => {
+          context.setLineDash([]); context.globalAlpha = 1; context.font = CHIP.font;
+          const w = context.measureText(text).width + 12;
+          const left = Math.min(Math.max(2, bx), mediaSize.width - w - 2);
+          context.fillStyle = fill; context.strokeStyle = stroke; context.lineWidth = 1;
+          context.beginPath(); context.roundRect(left, by - 9, w, 18, 9); context.fill(); context.stroke();
+          context.fillStyle = color; context.textBaseline = 'middle'; context.fillText(text, left + 6, by + 0.5);
+        };
+        if (py != null && cx != null) {
+          if (outcome.kind === 'nofill') {
+            const kx = x(outcome.closestAt), ky = series.priceToCoordinate(outcome.closestPrice);
+            if (kx != null && ky != null) {
+              context.globalAlpha = 0.8; context.strokeStyle = CANCEL_COLOR; context.lineWidth = 1.2; context.setLineDash([1, 4]);
+              context.beginPath(); context.moveTo(cx, py); context.lineTo(kx, py); context.stroke();
+              context.setLineDash([]); context.strokeStyle = '#f59e0b'; context.lineWidth = 1.5; context.globalAlpha = 1;
+              context.beginPath(); context.moveTo(kx, py); context.lineTo(kx, ky); context.stroke();
+              badge(`chybělo ${outcome.missBy.toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} b.`, kx + 8, (py + ky) / 2, '#fffbeb', '#fcd34d', '#b45309');
+            }
+          } else {
+            const fx = x(outcome.fillAt);
+            if (fx != null) {
+              context.globalAlpha = 0.85; context.strokeStyle = CANCEL_COLOR; context.lineWidth = 1.2; context.setLineDash([1, 4]);
+              context.beginPath(); context.moveTo(cx, py); context.lineTo(fx, py); context.stroke();
+              const rx = outcome.resultAt != null ? x(outcome.resultAt) : null;
+              const bracket = active.order.bracket;
+              if (rx != null && bracket) {
+                for (const [level, fill, stroke] of [[bracket.sl, 'rgba(239,68,68,.12)', 'rgba(239,68,68,.55)'], [bracket.tp, 'rgba(16,185,129,.12)', 'rgba(16,185,129,.55)']] as const) {
+                  const ly = level == null ? null : series.priceToCoordinate(level);
+                  if (ly == null) continue;
+                  context.globalAlpha = 1; context.fillStyle = fill; context.strokeStyle = stroke; context.lineWidth = 1; context.setLineDash([4, 3]);
+                  context.beginPath(); context.rect(fx, Math.min(py, ly), Math.max(1, rx - fx), Math.abs(ly - py)); context.fill(); context.stroke();
+                }
+              }
+              context.setLineDash([]); context.globalAlpha = 1;
+              context.fillStyle = bg; context.strokeStyle = '#64748b'; context.lineWidth = 1.6;
+              context.beginPath(); context.arc(fx, py, 4.5, 0, Math.PI * 2); context.fill(); context.stroke();
+              if (rx != null && outcome.exitPrice != null) {
+                const ey = series.priceToCoordinate(outcome.exitPrice);
+                const win = outcome.result === 'tp';
+                const color = win ? FILL_COLOR : JOURNAL_SL_COLOR;
+                if (ey != null) {
+                  context.strokeStyle = color; context.lineWidth = 1.4; context.setLineDash([5, 4]);
+                  context.beginPath(); context.moveTo(fx, py); context.lineTo(rx, ey); context.stroke();
+                  context.setLineDash([]); context.fillStyle = color; context.strokeStyle = bg; context.lineWidth = 2;
+                  context.beginPath(); context.arc(rx, ey, 7, 0, Math.PI * 2); context.fill(); context.stroke();
+                  context.strokeStyle = '#ffffff'; context.lineWidth = 1.8; context.lineCap = 'round'; context.beginPath();
+                  if (win) { context.moveTo(rx - 3, ey); context.lineTo(rx - 0.8, ey + 2.4); context.lineTo(rx + 3.2, ey - 2.4); }
+                  else { context.moveTo(rx - 2.5, ey - 2.5); context.lineTo(rx + 2.5, ey + 2.5); context.moveTo(rx + 2.5, ey - 2.5); context.lineTo(rx - 2.5, ey + 2.5); }
+                  context.stroke();
+                  const usd = outcome.points != null && active.order.quantity != null ? ` · ${moneyText(outcome.points * active.order.quantity * pointValue)}` : '';
+                  badge(`${win ? 'TP' : 'SL'} ${clockText(outcome.resultAt!)}${usd}`, rx + 11, ey,
+                    win ? '#ecfdf5' : '#fff1f2', win ? '#6ee7b7' : '#fda4af', win ? '#047857' : '#be123c');
+                }
+              } else {
+                badge(outcome.result === 'ambiguous' ? 'SL i TP v jedné svíčce' : `vyplnil by se ${clockText(outcome.fillAt)}`, fx + 8, py - 16, '#ffffff', '#e2e8f0', '#475569');
+              }
+            }
           }
         }
       }
@@ -207,7 +296,7 @@ export function createEntryOrdersPrimitive(orders: readonly TradeEntryOrder[], c
       context.save();
       // Bublina s průběhem najetého příkazu u kurzoru.
       {
-        const rows = entryOrderTooltip(active.order);
+        const rows = entryOrderTooltip(active.order, active.outcome, options.pointValue ?? 2);
         context.setLineDash([]); context.globalAlpha = 1;
         context.font = TIP.font;
         const labelWidth = Math.max(...rows.slice(1).map(([label]) => context.measureText(label).width), 0);
