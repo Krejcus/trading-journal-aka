@@ -278,6 +278,12 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   poznámku. Výsledek se při hodnocení ukládá jako snímek do `review`.
 - Skutečný obchod drží jen svůj vyplněný vstupní příkaz. Starší uložené
   historie ukazují zrušené pokusy, dokud neproběhne nový import.
+- Past (1cbb8397): neúplná epizoda bez výstupu se brala jako otevřená
+  navždy — 7 leaderových ze 16.–17. 9. schovalo všechny pozdější nevzaté.
+  Do nekonečna teď jen skutečně `open` pozice. Lokální sondy nad výřezem
+  evidence to neodhalí, server projektuje celou historii.
+- Otevřené: 5 nevzatých na followerovém připojení (53157614, před 1. 10.)
+  — ověřit, že to nejsou nepoznané kopie, až se objeví v říjnu.
 
 ### 2026-10-01 — Hodnotit: tlustá čára, přehrávač, dotyková gesta grafu (Claude)
 
