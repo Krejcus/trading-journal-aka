@@ -6,6 +6,7 @@ import { journalPositionWrite } from '../lib/journalTradeFacts.js';
 import type { JournalFeedScope } from '../lib/journalEvidenceFeed.js';
 import { persistStagedJournalPositions } from './journalStagedImport.js';
 import { prepareJournalInput } from './journalIncrementalInput.js';
+import { persistJournalUntakenOrders } from './journalUntakenOrders.js';
 
 export interface JournalImportResult {
   accepted: boolean;
@@ -82,6 +83,7 @@ async function importWithLease(db: SupabaseClient, scope: JournalFeedScope): Pro
     if (!staged.accepted) return 'processing' in staged
       ? { accepted: false, processing: true, through, targetThrough: through, confirmed: 0, pending: 0, unassigned: 0 }
       : { accepted: false, stale: true, through, confirmed: 0, pending: 0, unassigned: 0 };
+    await persistJournalUntakenOrders(db, scope, projection.untaken);
     return { accepted: true, through, confirmed: receipt.confirmed, pending: receipt.pending, unassigned: receipt.unassigned };
   }
   const { data: ack, error: persistError } = await db.rpc('persist_tradovate_journal_positions', {
@@ -98,6 +100,7 @@ async function importWithLease(db: SupabaseClient, scope: JournalFeedScope): Pro
   }
   if (ack?.accepted !== true || !Array.isArray(ack.tradeIds) || ack.tradeIds.length !== positions.length
     || new Set(ack.tradeIds).size !== positions.length) throw new Error('journal-position-write-not-confirmed');
+  await persistJournalUntakenOrders(db, scope, projection.untaken);
   return { accepted: true, through, confirmed: projection.ready.length, pending: projection.pending.length,
     unassigned: projection.unassignedFillIds.length };
 }

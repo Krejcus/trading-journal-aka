@@ -1,4 +1,5 @@
 import { createEntryOrdersPrimitive } from '../services/journalEntryOrdersPrimitive';
+import { cancelledOrderOutcome } from '../lib/entryOrderOutcome';
 import { attachChartTouchGestures } from '../services/chartTouchPriceAxis';
 import { createJournalArrowStacks, createJournalChartPrimitive, createReviewPoint, createReviewPriceFocus, journalTradePriceRange, type JournalChartPrimitive } from '../services/journalChartPrimitive';
 import { createJournalPositionPrimitive } from '../services/journalPositionDrawing';
@@ -3035,6 +3036,14 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // pokryje i 10 min před vstupem, odkud startuje přehrávání). Během
   // přehrávání už výstup v datech není — vezme se z obchodu. Review týdne
   // nechává víc okolí (kontext obchodu).
+  // Nevzatý obchod: záběr až po výsledek „kdybys nezrušil“ (nejdéle 2 h po zrušení).
+  const untakenFrameEndMs = useMemo(() => {
+    const order = trade.untaken ? trade.executionHistory?.entryOrders?.[0] : undefined;
+    const outcome = order?.end ? cancelledOrderOutcome(order, rawCandles) : null;
+    if (!order?.end || !outcome) return null;
+    const end = outcome.kind === 'nofill' ? outcome.closestAt : outcome.resultAt ?? outcome.fillAt;
+    return Math.min(end, order.end.at + 2 * 60 * 60_000);
+  }, [rawCandles, trade]);
   const centeredTradeRange = useCallback((override?: { entryMs: number; exitMs: number }): { from: number; to: number } | null => {
     if (visibleCandles.length === 0) return null;
     const intervalSeconds = MARKET_TIMEFRAME_MINUTES[timeframe] * 60;
@@ -3043,7 +3052,9 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const logicalAt = (unix: number) => unix > lastTime ? newest + (unix - lastTime) / intervalSeconds : nearestCandleIndex(visibleCandles, unix);
     const entryLogical = logicalAt(override ? Math.floor(override.entryMs / 1000) : asUnix(trade.entryTime || trade.entryDate, entryMs));
     const frameEnd = !override && tradeViewFrame?.endMs != null ? Math.floor(tradeViewFrame.endMs / 1000) : null;
-    const exitLogical = logicalAt(override ? Math.floor(override.exitMs / 1000) : frameEnd ?? asUnix(trade.timestamp || trade.exitDate, exitMs));
+    const tradeEnd = asUnix(trade.timestamp || trade.exitDate, exitMs);
+    const exitLogical = logicalAt(override ? Math.floor(override.exitMs / 1000) : frameEnd
+      ?? (untakenFrameEndMs != null ? Math.max(tradeEnd, Math.floor(untakenFrameEndMs / 1000)) : tradeEnd));
     const from = Math.min(entryLogical, exitLogical);
     const to = Math.max(entryLogical, exitLogical);
     const span = to - from;
@@ -3051,7 +3062,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
     const before = Math.max(reviewMode ? 30 : tradeViewFrame?.before ?? 15, context);
     const after = Math.max(reviewMode ? 30 : tradeViewFrame?.after ?? 15, tradeViewFrame?.endMs != null ? 0 : context);
     return { from: from - before, to: to + after };
-  }, [visibleCandles, timeframe, trade, entryMs, exitMs, reviewMode, tradeViewFrame]);
+  }, [visibleCandles, timeframe, trade, entryMs, exitMs, reviewMode, tradeViewFrame, untakenFrameEndMs]);
   const centeredTradeRangeRef = useRef(centeredTradeRange);
   centeredTradeRangeRef.current = centeredTradeRange;
 
@@ -4010,6 +4021,7 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
   // dokončí bez nového nafouknutí. Čas se drží podle obchodu.
   const highlightRef = useRef<{ id: string; until: number; continues?: boolean } | null>(null);
   const highlightTradeIdRef = useRef<string | null>(reviewMode ? String(trade.id) : null);
+  const autoPinnedRef = useRef<string | null>(null);
   const contextLayersRef = useRef(new Map<string, JournalChartPrimitive>());
   // Cenová osa v review: svíčky v záběru + celý vybraný obchod (position box).
   // Rozsah se přelévá souběžně s přejezdem; obchod z jiné série (jiný kontrakt)
@@ -4206,9 +4218,13 @@ const CandleKitTradeChart: React.FC<CandleKitTradeChartProps> = ({
         // Hodnota bodu podle kontraktu obchodu, ne podle zobrazeného grafu (MNQ/NQ).
         pointValue: tradedRoot === 'NQ' ? 20 : 2, instrument: tradedRoot });
     // Vstupní limity/stopy (i zrušené pokusy před vstupem) pod šipkami obchodu.
+    // Nevzatý obchod (bez plnění, jen zrušený vstup) má příkaz rovnou připnutý.
+    const autoPin = trade.untaken && trade.executionHistory.entryOrders?.length === 1
+      ? autoPinnedRef.current === id ? 'static' as const : 'animate' as const : undefined;
+    if (autoPin) autoPinnedRef.current = id;
     const entryOrders = trade.executionHistory.entryOrders?.length
       ? createEntryOrdersPrimitive(trade.executionHistory.entryOrders, visibleCandles, MARKET_TIMEFRAME_MINUTES[timeframe] * 60,
-        api.controller.getChart(), series, coverage, { isDark, pointValue: tradedRoot === 'NQ' ? 20 : 2 }) : null;
+        api.controller.getChart(), series, coverage, { isDark, pointValue: tradedRoot === 'NQ' ? 20 : 2, autoPin }) : null;
     if (position) series.attachPrimitive(position);
     series.attachPrimitive(primitive);
     // Až po obchodu: bublina příkazu musí být nad šipkami (linky jsou pod nimi).

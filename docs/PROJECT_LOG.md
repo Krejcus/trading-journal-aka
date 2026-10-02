@@ -258,6 +258,27 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-02 — Vstupní příkazy v grafu (varianta D) a nevzaté obchody (Claude)
+
+- **Limity/stopy v grafu:** najetí jen animuje (jedna SL/TP linka, box jen
+  po vyplnění, „kdybys nezrušil“ tečkovaně). Klik příkaz připne a detail
+  ukáže seznam: v Hodnotit levý „Průběh obchodu“, v Historii dropdown
+  „Průběh“ v grafu. Tooltip v grafu zrušen (překrýval obchod, dole vypadal
+  jako chyba). Objevitelnost: kurzor ruky, „›“ v cedulce, nápověda
+  „Klikni pro detail“ jen na první 4 použití (`at:entry-order-hint`).
+- **Nevzaté obchody = samostatné karty**, ne součást následujícího obchodu.
+  Patří sem jen zrušený vstup **s bracketem** (bez SL/TP se ignoruje —
+  rozhodnutí Filipa), zadaný bez otevřené pozice, ne kopie kopírky. Leader
+  bracket: ruční OSO nemá parentId → copylinky leaderova vlastního účtu
+  (role stop/target) + záloha přes sourozence do 1 s.
+- Import je best-effort ukládá do `tradovate_journal_untaken_orders`
+  (migrace `20261002120000`, uživatel smí měnit jen sloupec `review`).
+  Do statistik strategie ani P&L se nepočítají; Hodnotit chce jen důvod
+  zrušení (návrh z dat podle výsledku „kdybys nezrušil“) a nepovinnou
+  poznámku. Výsledek se při hodnocení ukládá jako snímek do `review`.
+- Skutečný obchod drží jen svůj vyplněný vstupní příkaz. Starší uložené
+  historie ukazují zrušené pokusy, dokud neproběhne nový import.
+
 ### 2026-10-01 — Hodnotit: tlustá čára, přehrávač, dotyková gesta grafu (Claude)
 
 - **Fronta Hodnotit jen od 1. 10. 2026** (Filip: měsíc starý obchod nemá smysl

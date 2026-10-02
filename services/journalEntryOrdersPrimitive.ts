@@ -4,6 +4,10 @@ import { cancelledOrderOutcome, type EntryOrderOutcome, type OutcomeCandle } fro
 import type { MarketCandle } from './marketData';
 import { createJournalTimeProjection, journalLogicalCoordinate, journalVisibleSpanCoordinates, type JournalCandleCoverage } from './journalChartTime';
 import { JOURNAL_BUY_COLOR, JOURNAL_SELL_COLOR, JOURNAL_SL_COLOR, JOURNAL_TP_COLOR } from './journalChartPrimitive';
+import {
+  ENTRY_ORDER_FOCUS_EVENT, ENTRY_ORDER_HOVER_EVENT, ENTRY_ORDER_SELECT_EVENT, emitEntryOrder, entryOrderHintAllowed, markEntryOrderHint, retireEntryOrderHint,
+  type EntryOrderFocusDetail, type EntryOrderHoverDetail, type EntryOrderSelectDetail,
+} from './entryOrderEvents';
 
 /**
  * Vstupní příkazy obchodu ve stylu příkazu v TradingView: přerušovaná linka
@@ -12,8 +16,10 @@ import { JOURNAL_BUY_COLOR, JOURNAL_SELL_COLOR, JOURNAL_SL_COLOR, JOURNAL_TP_COL
  * příkaz zešedne a končí ✕. Limit čárkovaně, stop tečkovaně.
  *
  * Najetí na linku nebo cedulku (animovaně): linka zesílí, bracket SL/TP je
- * jedna souvislá čára od zadání po výsledek, u zrušeného příkazu se dokreslí
- * „kdybys ho nezrušil“ (vyplnění, slabý box pozice, výsledek) a bublina.
+ * jedna souvislá čára od zadání po výsledek a u zrušeného příkazu se dokreslí
+ * „kdybys ho nezrušil“ (vyplnění, slabý box pozice, výsledek). Kurzor ruky,
+ * „›“ v cedulce a na začátku nápověda říkají, že jde kliknout: klik příkaz
+ * připne a detail ukáže seznam „Průběh obchodu“ (viz entryOrderEvents).
  */
 const FILL_COLOR = '#10b981';
 const CANCEL_COLOR = '#94a3b8';
@@ -23,21 +29,17 @@ const CHIP = { height: 16, padX: 5, gap: 4, font: `700 9.5px ${FONT}`, radius: 3
 const HIT_Y = 5;
 /** Délka nástupní animace po najetí (ms). */
 const ANIM_MS = 900;
+/** Po jak dlouhém najetí se ukáže „Klikni pro detail“. */
+const HINT_DELAY_MS = 550;
 
 export function entryOrderLabel(order: Pick<TradeEntryOrder, 'side' | 'type' | 'quantity'>): string {
   return `${order.side === 'Buy' ? 'BUY' : 'SELL'} ${order.type === 'Limit' ? 'LMT' : 'STP'}${order.quantity != null ? ` ${order.quantity}` : ''}`;
 }
 
 const priceText = (value: number) => value.toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const timeText = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const clockText = (at: number) => new Date(at).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
 const pointsText = (value: number) => value.toLocaleString('cs-CZ', { maximumFractionDigits: 2 });
 const moneyText = (value: number) => `${value >= 0 ? '+' : '−'}$${Math.abs(value).toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const durationText = (ms: number) => {
-  const total = Math.max(0, Math.round(ms / 1000));
-  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
-  return h ? `${h} h ${m} min` : m ? `${m} min ${s} s` : `${s} s`;
-};
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 const easeOut = (t: number) => 1 - (1 - t) ** 3;
 const backOut = (t: number) => { const c = 1.7; return 1 + (c + 1) * (t - 1) ** 3 + c * (t - 1) ** 2; };
@@ -65,7 +67,7 @@ const TONES = {
 };
 
 export function createEntryOrdersPrimitive(orders: readonly TradeEntryOrder[], candles: readonly MarketCandle[], intervalSeconds: number,
-  chart: IChartApi, series: ISeriesApi<'Candlestick'>, coverage?: JournalCandleCoverage, options: { isDark?: boolean; pointValue?: number } = {}): ISeriesPrimitive<Time> {
+  chart: IChartApi, series: ISeriesApi<'Candlestick'>, coverage?: JournalCandleCoverage, options: { isDark?: boolean; pointValue?: number; autoPin?: 'animate' | 'static' } = {}): ISeriesPrimitive<Time> {
   const projection = createJournalTimeProjection(candles, intervalSeconds, coverage);
   const lastAt = candles.length ? (candles[candles.length - 1].time + intervalSeconds) * 1000 - 1 : 0;
   const dark = Boolean(options.isDark);
@@ -94,45 +96,89 @@ export function createEntryOrdersPrimitive(orders: readonly TradeEntryOrder[], c
   // Poslední vykreslená geometrie pro najetí: úseky linek a cedulky.
   const hitLines: Array<{ index: number; left: number; right: number; y: number }> = [];
   const hitChips: Array<{ index: number; left: number; right: number; top: number; bottom: number }> = [];
+  /** Pod kurzorem v grafu. */
   let hovered: number | null = null;
-  let hoverStart = 0;
-  let pointer: { x: number; y: number } | null = null;
-  // Oblast najetého příkazu a jeho „co by se stalo“ — bublina ji nesmí zakrýt.
-  let avoid: Rect | null = null;
+  /** Najetí na řádek v seznamu „Průběh obchodu“. */
+  let listHover: number | null = null;
+  /** Připnutý klikem (v grafu nebo v seznamu) — drží animaci a detail v seznamu. */
+  let pinned: number | null = null;
+  let shown: number | null = null;
+  let shownSince = 0;
+  let hintFor: number | null = null;
   let requestUpdate: (() => void) | null = null;
   let frame: number | null = null;
+  const indexOf = (orderId: string | null | undefined) => orderId == null ? null : (() => { const i = shapes.findIndex(shape => shape.order.orderId === orderId); return i < 0 ? null : i; })();
 
   const animate = () => {
     if (frame != null || typeof requestAnimationFrame !== 'function') { requestUpdate?.(); return; }
     const tick = () => {
       frame = null;
       requestUpdate?.();
-      if (hovered != null && performance.now() - hoverStart < ANIM_MS) frame = requestAnimationFrame(tick);
+      // Doběh animace a nápovědy (ta naskočí po chvilce najetí).
+      if (shown != null && performance.now() - shownSince < ANIM_MS + HINT_DELAY_MS + 300) frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
+  };
+  /** Co se právě ukazuje: najetí má přednost před připnutím. */
+  const refresh = () => {
+    const next = hovered ?? listHover ?? pinned;
+    if (next !== shown) {
+      // Návrat z najetí na připnutý příkaz už animaci nepřehrává znovu.
+      shownSince = next != null && next === pinned && shown != null ? performance.now() - ANIM_MS : performance.now();
+      shown = next;
+    }
+    animate();
+  };
+  const select = (index: number | null) => {
+    pinned = index;
+    const shape = index == null ? null : shapes[index];
+    emitEntryOrder<EntryOrderSelectDetail>(ENTRY_ORDER_SELECT_EVENT, shape
+      ? { orderId: shape.order.orderId, order: shape.order, outcome: shape.outcome, pointValue }
+      : { orderId: null });
+    refresh();
+  };
+
+  const hitAt = (px: number, py: number): { index: number; chip: boolean } | null => {
+    const chip = hitChips.find(box => px >= box.left && px <= box.right && py >= box.top - 2 && py <= box.bottom + 2);
+    if (chip) return { index: chip.index, chip: true };
+    const line = hitLines
+      .filter(item => px >= item.left - 4 && px <= item.right + 4 && Math.abs(py - item.y) <= HIT_Y)
+      .sort((a, b) => Math.abs(py - a.y) - Math.abs(py - b.y))[0];
+    return line ? { index: line.index, chip: false } : null;
   };
 
   const onCrosshair = (param: MouseEventParams<Time>) => {
     const point = param.point ?? null;
-    let next: number | null = null;
-    if (point) {
-      const chip = hitChips.find(box => point.x >= box.left && point.x <= box.right && point.y >= box.top - 2 && point.y <= box.bottom + 2);
-      const line = chip ? null : hitLines
-        .filter(item => point.x >= item.left - 4 && point.x <= item.right + 4 && Math.abs(point.y - item.y) <= HIT_Y)
-        .sort((a, b) => Math.abs(point.y - a.y) - Math.abs(point.y - b.y))[0];
-      next = chip?.index ?? line?.index ?? null;
-    }
-    const moved = next != null && (pointer?.x !== point?.x || pointer?.y !== point?.y);
-    pointer = point ? { x: point.x, y: point.y } : null;
-    if (next !== hovered) {
-      hovered = next;
-      hoverStart = performance.now();
-      animate();
-    } else if (moved) requestUpdate?.();
+    const next = point ? hitAt(point.x, point.y)?.index ?? null : null;
+    if (next === hovered) return;
+    hovered = next;
+    emitEntryOrder<EntryOrderHoverDetail>(ENTRY_ORDER_HOVER_EVENT, { orderId: next == null ? null : shapes[next].order.orderId });
+    refresh();
   };
+  const onClick = (param: MouseEventParams<Time>) => {
+    const point = param.point ?? null;
+    const hit = point ? hitAt(point.x, point.y) : null;
+    if (hit) {
+      retireEntryOrderHint();
+      select(pinned === hit.index ? null : hit.index);
+    } else if (pinned != null) select(null);
+  };
+  const onFocus = (event: Event) => {
+    const detail = (event as CustomEvent<EntryOrderFocusDetail>).detail;
+    const index = indexOf(detail?.orderId);
+    if (detail?.mode === 'pin') {
+      if (detail.orderId != null && index == null) return;
+      select(index);
+    } else {
+      listHover = index;
+      refresh();
+    }
+  };
+  // Esc odepne. Hodnocení na Esc samo pošle odepnutí (a nezavře se), jinde to dělá tenhle posluchač.
+  const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && pinned != null) { event.preventDefault(); select(null); } };
 
   const reducedMotion = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  const progress = () => reducedMotion() ? 1 : clamp01((performance.now() - hoverStart) / ANIM_MS);
+  const progress = () => reducedMotion() ? 1 : clamp01((performance.now() - shownSince) / ANIM_MS);
 
   const renderer: IPrimitivePaneRenderer = { draw: target => {
     target.useMediaCoordinateSpace(({ context, mediaSize }) => {
@@ -144,7 +190,7 @@ export function createEntryOrdersPrimitive(orders: readonly TradeEntryOrder[], c
       hitChips.length = 0;
       context.save();
 
-      const active = hovered != null ? shapes[hovered] : null;
+      const active = shown != null ? shapes[shown] : null;
       if (active) {
         const order = active.order;
         const price = order.legs[order.legs.length - 1].price;
@@ -262,10 +308,10 @@ export function createEntryOrdersPrimitive(orders: readonly TradeEntryOrder[], c
       context.font = CHIP.font;
       context.lineCap = 'butt';
       const chips: Array<{ left: number; right: number; top: number; bottom: number }> = [];
-      const dimOthers = hovered != null ? easeOut(phase(t, 0, 0.3)) : 0;
+      const dimOthers = shown != null ? easeOut(phase(t, 0, 0.3)) : 0;
       shapes.forEach(({ order, color, legs }, index) => {
         const cancelled = order.end?.kind === 'cancel';
-        const isHot = hovered === index;
+        const isHot = shown === index;
         const baseAlpha = cancelled ? 0.85 : 1;
         const alpha = isHot ? 1 : baseAlpha * (1 - 0.65 * dimOthers);
         context.globalAlpha = alpha;
@@ -301,8 +347,10 @@ export function createEntryOrdersPrimitive(orders: readonly TradeEntryOrder[], c
         const fx = first ? x(first.at) : null;
         if (first && fy != null && fx != null) {
           context.font = CHIP.font;
+          // Najetý/připnutý příkaz má v cedulce „›“ — dá se rozkliknout.
+          const open = isHot ? easeOut(phase(t, 0, 0.35)) : 0;
           const text = entryOrderLabel(order);
-          const width = context.measureText(text).width + CHIP.padX * 2;
+          const width = context.measureText(text).width + CHIP.padX * 2 + 9 * open;
           const left = fx - CHIP.gap - width >= 0 ? fx - CHIP.gap - width : fx + CHIP.gap;
           // Cedulky se nevrství: další příkaz na stejné ceně (přezadání) jde nad linku.
           let top = fy - CHIP.height / 2;
@@ -324,6 +372,27 @@ export function createEntryOrdersPrimitive(orders: readonly TradeEntryOrder[], c
             context.fillStyle = cancelled ? '#64748b' : '#ffffff';
             context.textBaseline = 'middle';
             context.fillText(text, left + CHIP.padX, top + CHIP.height / 2 + 0.5);
+            if (open > 0) {
+              context.globalAlpha = (isHot ? 1 : 0.45) * open;
+              context.fillText('›', left + width - CHIP.padX - 5, top + CHIP.height / 2);
+            }
+            // Nápověda na prvních pár najetí (ne u připnutého — to už uživatel zná).
+            if (isHot && hovered === index && pinned !== index && (hintFor === index || entryOrderHintAllowed())) {
+              const hint = phase(performance.now() - shownSince, HINT_DELAY_MS, HINT_DELAY_MS + 250);
+              if (hint > 0) {
+                if (hintFor !== index) { hintFor = index; markEntryOrderHint(); }
+                const label = 'Klikni pro detail';
+                context.font = `700 10px ${FONT}`;
+                const hw = context.measureText(label).width + 16;
+                const hx = Math.min(Math.max(2, left), mediaSize.width - hw - 2);
+                const hy = top + CHIP.height + 6 + (1 - easeOut(hint)) * 4;
+                context.globalAlpha = easeOut(hint);
+                context.fillStyle = '#6366f1';
+                context.beginPath(); context.roundRect(hx, hy, hw, 18, 9); context.fill();
+                context.fillStyle = '#ffffff'; context.fillText(label, hx + 8, hy + 9.5);
+                context.font = CHIP.font;
+              }
+            }
           }
         }
         // Konec: vyplnění (tečka) nebo zrušení (✕). Čekající příkaz bez značky.
@@ -346,54 +415,11 @@ export function createEntryOrdersPrimitive(orders: readonly TradeEntryOrder[], c
         }
       });
 
-      // Co bublina nesmí zakrýt: cedulka, linka příkazu, bracket, dráha a výsledek.
-      avoid = null;
-      if (active) {
-        const order = active.order;
-        const xs: number[] = [], ys: number[] = [];
-        const addX = (value: number | null | undefined) => { if (value != null && Number.isFinite(value)) xs.push(value); };
-        const addY = (value: number | null | undefined) => { if (value != null && Number.isFinite(value)) ys.push(value); };
-        const chip = hitChips.find(box => box.index === hovered);
-        if (chip) { addX(chip.left); addX(chip.right); addY(chip.top); addY(chip.bottom); }
-        for (const leg of order.legs) { addX(x(leg.at)); addY(series.priceToCoordinate(leg.price)); }
-        addX(order.end ? x(order.end.at) : null);
-        if (order.bracket) { addY(order.bracket.sl == null ? null : series.priceToCoordinate(order.bracket.sl)); addY(order.bracket.tp == null ? null : series.priceToCoordinate(order.bracket.tp)); }
-        const outcome = active.outcome;
-        let badgeRight = 0;
-        if (outcome?.kind === 'fill') {
-          addX(x(outcome.fillAt));
-          const rx = outcome.resultAt != null ? x(outcome.resultAt) : null;
-          addX(rx); addY(outcome.exitPrice == null ? null : series.priceToCoordinate(outcome.exitPrice));
-          if (rx != null) badgeRight = rx + 170;
-        } else if (outcome?.kind === 'nofill') {
-          const kx = x(outcome.closestAt);
-          addX(kx); addY(series.priceToCoordinate(outcome.closestPrice));
-          if (kx != null) badgeRight = kx + 110;
-        }
-        if (badgeRight) xs.push(badgeRight);
-        if (xs.length && ys.length) {
-          avoid = { left: Math.min(...xs) - 8, right: Math.min(mediaSize.width, Math.max(...xs) + 8), top: Math.min(...ys) - 12, bottom: Math.max(...ys) + 12 };
-        }
-      }
       context.restore();
     });
   } };
 
-  // Bublina má vlastní vrstvu nad vším (i nad šipkami obchodu); linky jsou pod nimi.
-  const tooltipRenderer: IPrimitivePaneRenderer = { draw: target => {
-    const active = hovered != null ? shapes[hovered] : null;
-    if (!active || !pointer) return;
-    const at = pointer;
-    target.useMediaCoordinateSpace(({ context, mediaSize }) => {
-      context.save();
-      drawTooltip(context, mediaSize, at, avoid, active.order, active.outcome, active.color, dark, pointValue, easeOut(clamp01((reducedMotion() ? ANIM_MS : performance.now() - hoverStart) / 200)));
-      context.restore();
-    });
-  } };
-  const views = [
-    { zOrder: () => 'normal' as const, renderer: () => renderer },
-    { zOrder: () => 'top' as const, renderer: () => tooltipRenderer },
-  ];
+  const views = [{ zOrder: () => 'normal' as const, renderer: () => renderer }];
   // Čekající příkaz (při přehrávání) má štítek na cenové ose.
   const axisViews = () => shapes.filter(shape => !shape.order.end).flatMap(({ order, color }) => {
     const price = order.legs.at(-1)?.price;
@@ -402,52 +428,38 @@ export function createEntryOrdersPrimitive(orders: readonly TradeEntryOrder[], c
       textColor: () => '#ffffff', backColor: () => color, visible: () => true, tickVisible: () => true }];
   });
   return {
-    attached: params => { requestUpdate = params.requestUpdate; chart.subscribeCrosshairMove(onCrosshair); },
+    attached: params => {
+      requestUpdate = params.requestUpdate;
+      chart.subscribeCrosshairMove(onCrosshair);
+      chart.subscribeClick(onClick);
+      window.addEventListener(ENTRY_ORDER_FOCUS_EVENT, onFocus);
+      window.addEventListener('keydown', onKey);
+      // Nevzatý obchod: jediný příkaz je celý obsah grafu — rovnou připnutý
+      // s „kdybys nezrušil“. Při překreslení (nové svíčky) bez nové animace.
+      if (options.autoPin && shapes.length) {
+        select(0);
+        if (options.autoPin === 'static') shownSince = performance.now() - ANIM_MS;
+      }
+    },
     detached: () => {
       chart.unsubscribeCrosshairMove(onCrosshair);
+      chart.unsubscribeClick(onClick);
+      window.removeEventListener(ENTRY_ORDER_FOCUS_EVENT, onFocus);
+      window.removeEventListener('keydown', onKey);
       if (frame != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
-      frame = null; requestUpdate = null; hovered = null; pointer = null;
+      frame = null; requestUpdate = null; hovered = null; listHover = null; pinned = null; shown = null;
     },
     paneViews: () => views,
     priceAxisViews: axisViews,
+    // Kurzor ruky nad cedulkou a linkou příkazu: dá se kliknout.
+    hitTest: (px, py) => {
+      const hit = hitAt(px, py);
+      return hit ? { externalId: `entry-order:${shapes[hit.index].order.orderId}`, cursorStyle: 'pointer', zOrder: 'top', hitTestPriority: hit.chip ? 2 : 1 } : null;
+    },
   };
 }
 
 type Tone = { bg: string; border: string; ink: string };
-type Rect = { left: number; right: number; top: number; bottom: number };
-
-/**
- * Místo pro bublinu: u kurzoru, nebo vedle/nad/pod oblastí příkazu — tam,
- * kde nejméně zakryje příkaz a jeho „co by se stalo“, a co nejblíž kurzoru.
- */
-export function placeTooltip(size: { width: number; height: number }, at: { x: number; y: number }, avoid: Rect | null, width: number, height: number) {
-  const M = 6, G = 14;
-  const clampX = (value: number) => Math.min(Math.max(M, value), Math.max(M, size.width - width - M));
-  const clampY = (value: number) => Math.min(Math.max(M, value), Math.max(M, size.height - height - M));
-  const candidates: Array<{ left: number; top: number }> = [
-    { left: at.x + G, top: at.y + G }, { left: at.x - G - width, top: at.y + G },
-    { left: at.x + G, top: at.y - G - height }, { left: at.x - G - width, top: at.y - G - height },
-  ];
-  if (avoid) {
-    candidates.push(
-      { left: avoid.left - G - width, top: at.y - height / 2 }, { left: avoid.right + G, top: at.y - height / 2 },
-      { left: at.x - width / 2, top: avoid.top - G - height }, { left: at.x - width / 2, top: avoid.bottom + G },
-    );
-  }
-  let best: { left: number; top: number; score: number } | null = null;
-  // Pořadí kandidátů je preference (vpravo dole od kurzoru první); rozhoduje překryv.
-  for (const [index, candidate] of candidates.entries()) {
-    const left = clampX(candidate.left), top = clampY(candidate.top);
-    const overlap = avoid ? Math.max(0, Math.min(left + width, avoid.right) - Math.max(left, avoid.left))
-      * Math.max(0, Math.min(top + height, avoid.bottom) - Math.max(top, avoid.top)) : 0;
-    // Kurzor pod bublinou by bránil dalšímu najetí — také penalizovat.
-    const coversPointer = at.x >= left && at.x <= left + width && at.y >= top && at.y <= top + height ? 1 : 0;
-    const score = overlap * 10 + coversPointer * 1e6 + index;
-    if (!best || score < best.score) best = { left, top, score };
-  }
-  return { left: best!.left, top: best!.top };
-}
-
 function drawBadge(context: CanvasRenderingContext2D, width: number, text: string, bx: number, by: number, tone: Tone, alpha: number) {
   if (alpha <= 0) return;
   context.save();
@@ -460,107 +472,4 @@ function drawBadge(context: CanvasRenderingContext2D, width: number, text: strin
   context.beginPath(); context.roundRect(left, top, w, 20, 10); context.fill(); context.stroke();
   context.fillStyle = tone.ink; context.textBaseline = 'middle'; context.fillText(text, left + 7, top + 10.5);
   context.restore();
-}
-
-/** Bublina příkazu: hlavička, časová osa, bracket a karta „Kdybys nezrušil“. */
-function drawTooltip(context: CanvasRenderingContext2D, size: { width: number; height: number }, at: { x: number; y: number }, avoid: Rect | null,
-  order: TradeEntryOrder, outcome: EntryOrderOutcome | null, color: string, dark: boolean, pointValue: number, appear: number) {
-  const ink = dark ? '#f1f5f9' : '#0f172a', muted = dark ? '#94a3b8' : '#64748b', line = dark ? 'rgba(255,255,255,.08)' : '#e2e8f0';
-  const W = 252, PAD = 12;
-  const steps: Array<{ label: string; time: string; price?: string; dot: string }> = order.legs.map((leg, index) => ({
-    label: index ? 'Posunut' : 'Zadán', time: timeText(leg.at), price: priceText(leg.price), dot: index ? '#a855f7' : color === CANCEL_COLOR ? '#64748b' : color,
-  }));
-  if (order.end) steps.push({ label: order.end.kind === 'fill' ? 'Vyplněn' : 'Zrušen', time: timeText(order.end.at), dot: order.end.kind === 'fill' ? FILL_COLOR : CANCEL_COLOR });
-  else steps.push({ label: 'Stále čeká', time: '', dot: AMBER });
-  const card = outcome ? entryOrderOutcomeCard(outcome, order.quantity, pointValue) : null;
-  const bracket = order.bracket && (order.bracket.sl != null || order.bracket.tp != null) ? order.bracket : null;
-  const height = PAD + 22 + 8 + steps.length * 19 + (order.end ? 16 : 0) + (bracket ? 10 + 22 : 0) + (card ? 12 + 58 : 0) + PAD;
-
-  const place = placeTooltip(size, at, avoid, W, height);
-  const left = place.left;
-  const top = place.top + (1 - appear) * 6;
-  context.globalAlpha = appear;
-
-  // Karta
-  context.shadowColor = dark ? 'rgba(0,0,0,.55)' : 'rgba(15,23,42,.18)'; context.shadowBlur = 24; context.shadowOffsetY = 8;
-  context.fillStyle = dark ? '#0f172a' : '#ffffff';
-  context.beginPath(); context.roundRect(left, top, W, height, 12); context.fill();
-  context.shadowColor = 'transparent'; context.shadowBlur = 0; context.shadowOffsetY = 0;
-  context.strokeStyle = line; context.lineWidth = 1; context.stroke();
-  context.textBaseline = 'middle';
-
-  // Hlavička: pilulka strany a typu, kusy, stav
-  let y = top + PAD + 11;
-  context.font = `800 10px ${FONT}`;
-  const pill = `${order.side === 'Buy' ? 'BUY' : 'SELL'} ${order.type === 'Limit' ? 'LIMIT' : 'STOP'}`;
-  const pw = context.measureText(pill).width + 14;
-  const pillColor = order.side === 'Buy' ? JOURNAL_BUY_COLOR : JOURNAL_SELL_COLOR;
-  context.fillStyle = pillColor; context.beginPath(); context.roundRect(left + PAD, y - 10, pw, 20, 10); context.fill();
-  context.fillStyle = '#ffffff'; context.fillText(pill, left + PAD + 7, y + 0.5);
-  if (order.quantity != null) { context.font = `700 11.5px ${FONT}`; context.fillStyle = ink; context.fillText(`${order.quantity} ks`, left + PAD + pw + 8, y + 0.5); }
-  const status = order.end?.kind === 'fill' ? ['Vyplněn', TONES.green] : order.end ? ['Zrušen', TONES.slate] : ['Čeká', TONES.amber];
-  const tone = (status[1] as typeof TONES.green)[dark ? 'dark' : 'light'];
-  context.font = `800 9.5px ${FONT}`;
-  const sw = context.measureText(String(status[0])).width + 14;
-  context.fillStyle = tone.bg; context.strokeStyle = tone.border;
-  context.beginPath(); context.roundRect(left + W - PAD - sw, y - 9, sw, 18, 9); context.fill(); context.stroke();
-  context.fillStyle = tone.ink; context.fillText(String(status[0]), left + W - PAD - sw + 7, y + 0.5);
-  y += 11 + 8;
-
-  // Časová osa příkazu
-  const railX = left + PAD + 4;
-  steps.forEach((step, index) => {
-    const cy = y + 9.5 + index * 19;
-    if (index < steps.length - 1) { context.strokeStyle = line; context.lineWidth = 1.5; context.beginPath(); context.moveTo(railX, cy + 4); context.lineTo(railX, cy + 15); context.stroke(); }
-    context.fillStyle = step.dot; context.beginPath(); context.arc(railX, cy, 3.5, 0, Math.PI * 2); context.fill();
-    context.font = `600 11px ${FONT}`; context.fillStyle = ink; context.fillText(step.label, railX + 11, cy + 0.5);
-    const labelW = context.measureText(step.label).width;
-    context.font = `500 10.5px ${FONT}`; context.fillStyle = muted;
-    context.fillText(step.time, railX + 11 + labelW + 8, cy + 0.5);
-    if (step.price) {
-      context.font = `700 11px ${FONT}`; context.fillStyle = ink;
-      context.fillText(step.price, left + W - PAD - context.measureText(step.price).width, cy + 0.5);
-    }
-  });
-  y += steps.length * 19;
-  if (order.end) {
-    context.font = `500 10.5px ${FONT}`; context.fillStyle = muted;
-    context.fillText(`${order.end.kind === 'fill' ? 'Čekal na vyplnění' : 'Stál'} ${durationText(order.end.at - order.placedAt)}`, railX + 11, y + 6);
-    y += 16;
-  }
-
-  // Bracket
-  if (bracket) {
-    y += 10;
-    let bx = left + PAD;
-    for (const [label, value, tone2] of [['SL', bracket.sl, TONES.red], ['TP', bracket.tp, TONES.green]] as const) {
-      if (value == null) continue;
-      const tn = tone2[dark ? 'dark' : 'light'];
-      const text = `${label} ${priceText(value)}`;
-      context.font = `800 10.5px ${FONT}`;
-      const w = context.measureText(text).width + 16;
-      context.fillStyle = tn.bg; context.strokeStyle = tn.border;
-      context.beginPath(); context.roundRect(bx, y, w, 22, 6); context.fill(); context.stroke();
-      context.fillStyle = tn.ink; context.fillText(text, bx + 8, y + 11.5);
-      bx += w + 6;
-    }
-    y += 22;
-  }
-
-  // Kdybys nezrušil
-  if (card) {
-    y += 12;
-    const tn = TONES[card.tone][dark ? 'dark' : 'light'];
-    context.fillStyle = tn.bg; context.strokeStyle = tn.border;
-    context.beginPath(); context.roundRect(left + PAD, y, W - PAD * 2, 58, 9); context.fill(); context.stroke();
-    context.font = `900 8.5px ${FONT}`; context.fillStyle = tn.ink; context.globalAlpha = appear * 0.8;
-    context.fillText('KDYBYS NEZRUŠIL', left + PAD + 10, y + 13);
-    context.globalAlpha = appear;
-    context.font = `800 17px ${FONT}`; context.fillStyle = tn.ink;
-    context.fillText(card.value, left + PAD + 10, y + 31);
-    context.font = `500 10px ${FONT}`; context.fillStyle = muted;
-    let sub = card.sub;
-    while (context.measureText(sub).width > W - PAD * 2 - 20 && sub.length > 4) sub = `${sub.slice(0, -2)}…`;
-    context.fillText(sub, left + PAD + 10, y + 47);
-  }
 }

@@ -91,6 +91,8 @@ interface TradeMarketChartProps {
    * zazní jednou, až jsou data i záběr usazené; `onError`, když graf nebude.
    */
   snapshotRender?: { mode: 'entry' | 'exit'; onReady: () => void; onError: (message: string) => void };
+  /** Detail vstupního příkazu po kliku v grafu ukazuje „Průběh“ (v hodnocení ho má levý panel). */
+  entryOrderDetails?: boolean;
 }
 
 /** Automatické snímky: svíčky kontextu kolem obchodu (užší svíčky než v detailu). */
@@ -169,7 +171,7 @@ const focusChartOnTrade = (
   });
 };
 
-const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, variant = 'full', revealKey = 0, chartNotes, onChartNotesChange, onSaveSnapshot, review, snapshotRender }) => {
+const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, variant = 'full', revealKey = 0, chartNotes, onChartNotesChange, onSaveSnapshot, review, snapshotRender, entryOrderDetails = true }) => {
   const detail = variant === 'detail';
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -985,7 +987,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
         <button type="button" className={detailButton} onClick={() => setFocusRequest(value => value + 1)} title="Vycentrovat graf na obchod" aria-label="Vycentrovat na obchod">
           <LocateFixed size={13} /> <span className="hidden sm:inline">Obchod</span>
         </button>
-        <TradeProgress events={events} cursorMs={cutoffMs} isDark={isDark} />
+        <TradeProgress events={events} cursorMs={cutoffMs} isDark={isDark} orderDetails={entryOrderDetails} />
         {onSaveSnapshot && candles.length > 0 && !loading && !error && (
           <ChartSnapshotButton
             className={detailButton}

@@ -1,4 +1,5 @@
-import { inReviewQueue } from './lib/tradeReviewFacts';
+import { loadUntakenOrders, saveUntakenReview, type UntakenReview } from './services/untakenOrders';
+import { inReviewQueue, REVIEW_QUEUE_SINCE_MS } from './lib/tradeReviewFacts';
 import { coalescedJournalRead } from './services/coalescedJournalRead';
 import { filterHistoryTrades } from './lib/historyTradeFilter';
 import { journalSourceConnections } from './services/journalSourceStatus';
@@ -725,6 +726,24 @@ const App: React.FC = () => {
   const copierJournalLastSyncRef = useRef(0);
   const journalVerifiedReadsRef = useRef(new Map<string, string>());
 
+  // Nevzaté obchody (zrušené vstupy s bracketem) — samostatné karty v Hodnotit.
+  const [untakenTrades, setUntakenTrades] = useState<Trade[]>([]);
+  const refreshUntaken = useCallback(async () => {
+    const userId = session?.user?.id;
+    if (!userId) { setUntakenTrades([]); return; }
+    const rows = await loadUntakenOrders(REVIEW_QUEUE_SINCE_MS);
+    if (session?.user?.id === userId) setUntakenTrades(rows);
+  }, [session?.user?.id]);
+  useEffect(() => { if (isInitialLoadDone) void refreshUntaken(); }, [isInitialLoadDone, refreshUntaken]);
+  const handleSaveUntaken = useCallback(async (trade: Trade, review: UntakenReview | null) => {
+    const meta = trade.untaken;
+    if (!meta) return false;
+    const ok = await saveUntakenReview(meta, review);
+    if (ok) setUntakenTrades(list => list.map(item => item.id === trade.id
+      ? { ...item, needsReview: review == null, notes: review?.note ?? '', untaken: { ...meta, review } } : item));
+    return ok;
+  }, []);
+
   const runCopierJournalSync = useCallback(async (force = false) => {
     const userId = session?.user?.id;
     if (!userId || copierJournalSyncBusyRef.current) return;
@@ -746,6 +765,7 @@ const App: React.FC = () => {
       setCopierImportError(false);
       if (result.trades) setTrades(current => isCurrentSession()
         ? mergeImportedJournalTrades(current, before, result.trades!) : current);
+      void refreshUntaken();
     } catch {
       if (isCurrentSession() && !abort.signal.aborted) setCopierImportError(true);
     } finally {
@@ -756,7 +776,7 @@ const App: React.FC = () => {
         copierImportAbortRef.current = null;
       }
     }
-  }, [accounts, session?.user?.id, captureSessionRequest]);
+  }, [accounts, session?.user?.id, captureSessionRequest, refreshUntaken]);
 
   useEffect(() => {
     copierJournalSyncBusyRef.current = false;
@@ -3356,7 +3376,11 @@ const App: React.FC = () => {
 
   // Fronta hodnocení: obchody z Tradovate „k revizi“ od tlusté čáry (1. 10.),
   // kopírované skupiny jako jeden obchod (hodnocení se propíše na všechny účty).
-  const reviewQueue = useMemo(() => aggregateHistoryTrades(trades).filter(inReviewQueue), [trades]);
+  const reviewQueue = useMemo(() => [
+    ...aggregateHistoryTrades(trades).filter(inReviewQueue),
+    ...untakenTrades.filter(trade => trade.needsReview === true),
+  ], [trades, untakenTrades]);
+  const reviewTrades = useMemo(() => untakenTrades.length ? [...trades, ...untakenTrades] : trades, [trades, untakenTrades]);
   useEffect(() => {
     if (inNativeShell) reportNativeShellReviewCount(reviewQueue.length);
   }, [inNativeShell, reviewQueue.length]);
@@ -4729,7 +4753,7 @@ const App: React.FC = () => {
           <TradeReview
             key={reviewKey}
             queue={reviewQueue}
-            allTrades={trades}
+            allTrades={reviewTrades}
             accounts={[...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))]}
             isDark={theme !== 'light'}
             emotions={userEmotions}
@@ -4739,6 +4763,7 @@ const App: React.FC = () => {
             initialTradeId={review.tradeId}
             initialNote={review.note}
             onUpdateTrade={handleUpdateTrade}
+            onSaveUntaken={handleSaveUntaken}
             onSaveChartNotes={handleSaveChartNotes}
             onAttachScreenshot={handleAttachTradeScreenshot}
             onDirtyChange={handleReviewDirty}

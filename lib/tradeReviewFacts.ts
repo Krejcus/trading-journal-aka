@@ -7,6 +7,8 @@ export interface ReviewStep {
   kind: 'entry' | 'sl' | 'tp' | 'exit' | 'order' | 'cancel';
   label: string;
   price: number;
+  /** Krok vstupního příkazu (zadán/posunut/zrušen) — propojení s grafem. */
+  orderId?: string;
 }
 
 export interface ReviewFacts {
@@ -112,9 +114,9 @@ export function reviewFacts(trade: Trade, history?: TradeExecutionHistory | null
   // Vstupní limity/stopy: zadání, posuny a zrušené pokusy (vyplnění = „Vstup“).
   for (const order of history?.entryOrders ?? []) {
     const name = `${order.side} ${order.type}`;
-    order.legs.forEach((leg, index) => steps.push({ at: leg.at, kind: 'order', label: `${name} ${index ? 'posunut' : 'zadán'}`, price: leg.price }));
+    order.legs.forEach((leg, index) => steps.push({ at: leg.at, kind: 'order', label: `${name} ${index ? 'posunut' : 'zadán'}`, price: leg.price, orderId: order.orderId }));
     const last = order.legs[order.legs.length - 1];
-    if (order.end?.kind === 'cancel' && last) steps.push({ at: order.end.at, kind: 'cancel', label: `${name} zrušen`, price: last.price });
+    if (order.end?.kind === 'cancel' && last) steps.push({ at: order.end.at, kind: 'cancel', label: `${name} zrušen`, price: last.price, orderId: order.orderId });
   }
   steps.sort((a, b) => a.at - b.at);
   return { long, entryPrice, exitPrice, entryAt, exitAt, move, brokerSL: firstSL ?? null, brokerTP: firstTP ?? null, exitKind, steps };

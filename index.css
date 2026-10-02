@@ -3722,6 +3722,9 @@ body.chart-note-dragging * {
   .tr-fold-body .tr-fold-content { filter: none; transform: none; }
   .tr-fold-body[data-open="true"] :is(.tr-fold-rows, .tr-fold-pills) > * { animation: none; }
 }
+.tr-order-detail { animation: tr-order-detail .45s cubic-bezier(.22, 1, .36, 1) both; transform-origin: top center; }
+@keyframes tr-order-detail { from { opacity: 0; transform: translateY(-6px) scale(.98); filter: blur(2px); } }
+@media (prefers-reduced-motion: reduce) { .tr-order-detail { animation: none; } }
 .tr-pill-x { display: none; }
 .tr-pill:hover .tr-pill-x { display: grid; animation: tr-pop .15s ease-out; }
 @keyframes tr-pop { from { opacity: 0; transform: scale(.5); } }

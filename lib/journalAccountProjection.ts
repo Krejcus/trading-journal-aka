@@ -27,5 +27,11 @@ export function projectJournalAccounts(events: readonly JournalEvidence[], accou
     if (reason) pending.push({ position, reason, ...(journalAccountId ? { journalAccountId } : {}) });
     else ready.push({ ...position, journalAccountId: journalAccountId! });
   }
-  return { ready, pending, unassignedFillIds: projection.unassignedFillIds, issues: projection.issues };
+  // Nevzaté obchody: jen na propojených účtech (účet v aplikaci = vlastník karty).
+  const untaken = projection.untakenOrders.flatMap(order => {
+    const matches = accounts.filter(account => account.oauth?.provider === 'tradovate'
+      && account.oauth.externalAccountId === String(order.accountId));
+    return matches.length === 1 ? [{ order, journalAccountId: matches[0].id }] : [];
+  });
+  return { ready, pending, untaken, unassignedFillIds: projection.unassignedFillIds, issues: projection.issues };
 }

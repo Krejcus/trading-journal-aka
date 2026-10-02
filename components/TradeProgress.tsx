@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, ListOrdered } from 'lucide-react';
 import type { TradeTimelineEvent } from '../lib/tradeReplay';
+import EntryOrderDetail from './EntryOrderDetail';
+import {
+  ENTRY_ORDER_FOCUS_EVENT, ENTRY_ORDER_SELECT_EVENT, emitEntryOrder, type EntryOrderFocusDetail, type EntryOrderSelectDetail,
+} from '../services/entryOrderEvents';
 
 const EVENT_COLOR: Record<TradeTimelineEvent['kind'], string> = {
   order: '#94a3b8', entry: '#2563eb', add: '#2563eb', partial: '#f97316', exit: '#f97316', sl: '#ef4444', tp: '#10b981',
@@ -22,12 +26,31 @@ interface Pop { key: number; event: TradeTimelineEvent; leaving: boolean }
  * kliknutím se otevře celý seznam. Kurzor přehrávání `cursorMs` = null znamená
  * celý obchod bez přehrávání.
  */
-export default function TradeProgress({ events, cursorMs, isDark }: {
+export default function TradeProgress({ events, cursorMs, isDark, orderDetails = false }: {
   events: readonly TradeTimelineEvent[];
   cursorMs: number | null;
   isDark: boolean;
+  /** Klik na vstupní příkaz v grafu otevře seznam s jeho detailem. */
+  orderDetails?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [order, setOrder] = useState<EntryOrderSelectDetail | null>(null);
+  const orderRef = useRef(order);
+  orderRef.current = order;
+  useEffect(() => {
+    if (!orderDetails) return;
+    const onSelect = (event: Event) => {
+      const detail = (event as CustomEvent<EntryOrderSelectDetail>).detail;
+      if (detail?.orderId && detail.order) { setOrder(detail); setOpen(true); } else setOrder(null);
+    };
+    window.addEventListener(ENTRY_ORDER_SELECT_EVENT, onSelect);
+    return () => window.removeEventListener(ENTRY_ORDER_SELECT_EVENT, onSelect);
+  }, [orderDetails]);
+  /** Zavření seznamu odepne i příkaz v grafu. */
+  const closeList = useCallback(() => {
+    setOpen(false);
+    if (orderRef.current) emitEntryOrder<EntryOrderFocusDetail>(ENTRY_ORDER_FOCUS_EVENT, { orderId: null, mode: 'pin' });
+  }, []);
   const [pops, setPops] = useState<Pop[]>([]);
   const [ping, setPing] = useState(0);
   const [seriesOpen, setSeriesOpen] = useState<Record<string, boolean>>({});
@@ -83,10 +106,10 @@ export default function TradeProgress({ events, cursorMs, isDark }: {
 
   useEffect(() => {
     if (!open) return;
-    const close = (event: MouseEvent) => { if (!rootRef.current?.contains(event.target as Node)) setOpen(false); };
+    const close = (event: MouseEvent) => { if (!rootRef.current?.contains(event.target as Node)) closeList(); };
     window.addEventListener('mousedown', close);
     return () => window.removeEventListener('mousedown', close);
-  }, [open]);
+  }, [closeList, open]);
 
   const rows = useMemo(() => {
     const out: Array<{ type: 'event'; event: TradeTimelineEvent } | { type: 'series'; key: string; items: TradeTimelineEvent[] }> = [];
@@ -107,7 +130,7 @@ export default function TradeProgress({ events, cursorMs, isDark }: {
     <span ref={rootRef} className="relative inline-flex">
       <button
         type="button"
-        onClick={() => { setOpen(value => !value); timers.current.forEach(window.clearTimeout); timers.current.clear(); setPops([]); }}
+        onClick={() => { if (open) closeList(); else setOpen(true); timers.current.forEach(window.clearTimeout); timers.current.clear(); setPops([]); }}
         className={`h-7 inline-flex items-center gap-1.5 px-2 rounded-md text-[11px] font-bold transition-colors ${open
           ? isDark ? 'bg-white/10 text-white' : 'bg-slate-100 text-slate-950'
           : isDark ? 'text-slate-300 hover:bg-white/5 hover:text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'}`}
@@ -148,6 +171,11 @@ export default function TradeProgress({ events, cursorMs, isDark }: {
             <b className={`text-[12px] ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>Průběh</b>
             <span className="text-[10.5px] text-slate-400">{events.length} událostí</span>
           </div>
+          {order?.order && (
+            <div data-entry-order-detail className="tr-order-detail px-2 pt-2">
+              <EntryOrderDetail order={order.order} outcome={order.outcome} pointValue={order.pointValue} isDark={isDark} onClose={closeList} />
+            </div>
+          )}
           <div className="py-1">
             {rows.map(row => {
               if (row.type === 'event') {

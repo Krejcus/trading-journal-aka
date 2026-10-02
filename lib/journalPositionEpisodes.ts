@@ -1,4 +1,4 @@
-import { episodeEntryOrders } from './journalEntryOrders.js';
+import { episodeEntryOrders, journalUntakenOrders, type JournalUntakenOrder } from './journalEntryOrders.js';
 import { journalSnapshotAnchors } from './journalPositionSnapshot.js';
 import { buildJournalAccountTrades, type JournalAccountTrade, type TradeExecutionHistory } from './tradeExecutionHistory.js';
 import { journalCurrencyCode, latestJournalEvidence, orderedJournalEvidence, projectJournalEvidence, type JournalEvidence, type JournalFill } from './tradovateJournalEvidence.js';
@@ -46,7 +46,7 @@ const finite = (value: unknown): value is number => typeof value === 'number' &&
  * Reversal fills are split by quantity; their fees are split in the same ratio.
  */
 export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[]): {
-  episodes: JournalPositionEpisode[]; unassignedFillIds: string[]; issues: string[];
+  episodes: JournalPositionEpisode[]; untakenOrders: JournalUntakenOrder[]; unassignedFillIds: string[]; issues: string[];
 } {
   const projection = projectJournalEvidence(evidence);
   const latest = latestJournalEvidence(evidence);
@@ -181,16 +181,8 @@ export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[
       const rows = childrenByParent.get(key) ?? []; rows.push(String(event.entity.id)); childrenByParent.set(key, rows);
     }
   }
-  // Výstup předchozí pozice na stejném účtu/kontraktu — starší příkazy patří jí.
-  const previousExitOf = (episode: (typeof working)[number]) => {
-    let best: number | null = null;
-    for (const other of working) {
-      if (other === episode || other.accountId !== episode.accountId || other.contractId !== episode.contractId
-        || other.exitAt == null || other.exitAt > episode.entryAt) continue;
-      if (best == null || other.exitAt > best) best = other.exitAt;
-    }
-    return best;
-  };
+  // Příkazy obchodů (vstupy a ochrana) — zbytek zrušených vstupů jsou nevzaté obchody.
+  const usedOrderIds = new Set<string>();
   const episodes = working.map((episode): JournalPositionEpisode => {
     if (episode.status === 'open') episode.observedThrough = Math.max(episode.observedThrough, lastObservationAt);
     const entryFills = episode.fills.filter(fill => fill.role === 'entry');
@@ -246,10 +238,10 @@ export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[
       .map(event => standaloneOrders.has(event.orderId) ? { ...event, source: 'standalone' as const } : event);
     const entryFillAtByOrder = new Map<string, number>();
     for (const fill of entryFills) entryFillAtByOrder.set(fill.orderId, Math.min(fill.at, entryFillAtByOrder.get(fill.orderId) ?? Infinity));
+    const protectiveOrderIds = new Set([...protectiveOrders, ...standaloneOrders]);
+    for (const id of [...protectiveOrderIds, ...entryFillAtByOrder.keys()]) usedOrderIds.add(id);
     const entryOrders = episodeEntryOrders({
-      accountId: episode.accountId, contractId: episode.contractId, entryAt: episode.entryAt, through,
-      previousExitAt: previousExitOf(episode), entryFillAtByOrder,
-      protectiveOrderIds: new Set([...protectiveOrders, ...standaloneOrders]),
+      accountId: episode.accountId, contractId: episode.contractId, entryFillAtByOrder, protectiveOrderIds,
     }, protectionByOrder, latest, childrenByParent);
     const gaps = projection.gaps.filter(gap => gap.from >= episode.entryAt && gap.from <= through);
     const ownIssues = [...new Set([...episode.issues, ...realizations.flatMap(pair => pair.history.issues)
@@ -277,6 +269,24 @@ export function buildJournalPositionEpisodes(evidence: readonly JournalEvidence[
         isMaster: root.leaderConnectionId === history.connectionId && root.leaderAccountId === episode.accountId } : {}),
     };
   });
+  // Kopírka zapisuje vazby i u vlastních příkazů leadera (vazba sama na sebe).
+  // Kopie = vazba na jiném účtu než leaderově; vazby leadera stop/target říkají,
+  // které SL/TP k jeho vstupu patří (přesněji než párování podle času).
+  const copiedOrderKeys = new Set<string>();
+  const bracketChildren = new Map<string, string[]>(childrenByParent);
+  for (const [accountId, rows] of linksByAccount) for (const row of rows) {
+    const own = Number(row.entity.leaderAccountId) === Number(accountId);
+    if (!own) { copiedOrderKeys.add(`${accountId}:${row.entity.orderId}`); continue; }
+    if (['stop', 'target'].includes(String(row.entity.role))) {
+      const key = `${accountId}:${row.entity.leaderOrderId}`;
+      bracketChildren.set(key, [...new Set([...(bracketChildren.get(key) ?? []), String(row.entity.orderId)])]);
+    }
+  }
+  const untakenOrders = journalUntakenOrders({
+    protectionByOrder, latest, childrenByParent: bracketChildren, usedOrderIds, copiedOrderKeys,
+    positionWindows: episodes.map(episode => ({ accountId: episode.accountId, contractId: episode.contractId,
+      from: episode.entryAt, to: episode.exitAt ?? Infinity })),
+  });
   return { episodes: episodes.sort((a, b) => a.entryAt - b.entryAt || a.id.localeCompare(b.id)),
-    unassignedFillIds: [...unassigned].sort(), issues: [...issues] };
+    untakenOrders, unassignedFillIds: [...unassigned].sort(), issues: [...issues] };
 }
