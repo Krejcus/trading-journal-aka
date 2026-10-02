@@ -162,3 +162,23 @@ lint chyba `preserve-caught-error` v `executeSafetyCommand` (existuje na main).
 
 Zbývá: vizuální ověření na localhost / iPhonu, druhé kolo review oprav,
 rozhodnutí uživatele o commitu a nasazení.
+
+## Ověření na localhost a druhý zdroj probliknutí (2026-10-02 večer)
+
+Měření na `localhost:3000` (mobilní i desktopové rozložení, studený start na
+`?page=live`) ukázalo, že stav workeru tu dorazí okamžitě (lokální worker),
+a přesto karta poskočila: DLL se neodvozuje z workeru, ale z broker dat —
+`inferredCopyTradeAccountEligibility` potřebuje dnešní denní report
+(`dailyPnlAvailable`), který přichází až s plným preflightem, a limit DLL
+z plánů účtů (`/account-profiles`). Worker přitom u těchto účtů hlásí
+`active` (DISARMED worker DLL nesleduje), takže jeho „active“ není konečné.
+
+Oprava (jen zobrazení): `copyTradeDailyLossPendingAccountIds` — účet s DLL
+bez dnešního denního reportu, nebo jakýkoli účet před načtením plánů
+(`profilesLoaded` v `useTradovateLiveData`), je „Ověřuji“ i při workerově
+`active`; řádek drží místo štítku a DLL do něj naskočí.
+
+Naměřený průběh po opravě (mobil, studený start): kostra 0,5 s → „Ověřuji“
+1,2 s → DLL 2,0 s; žádné „Aktivní“ před potvrzením. Karta ještě naroste
+o ~60 px o řádek s důvodem DLL („LIVE denní P&L … dosáhlo DLL …“). SPA
+návrat na LIVE: finální stav za 0,24 s bez mezistavu.

@@ -163,3 +163,26 @@ describe('počty followerů před odpovědí workeru', () => {
     expect(markup).not.toContain('ověřuji followery…');
   });
 });
+
+describe('DLL čeká na dnešní denní report', () => {
+  const withDll = (account: LiveAccount, extra: Partial<LiveAccount> = {}): LiveAccount => ({
+    ...account, dailyLossLimit: 1_250, ...extra,
+  });
+
+  it('účet s DLL bez přečteného denního reportu ukáže „Ověřuji“, i když worker hlásí active', async () => {
+    const markup = await render({
+      snapshot: { ...snapshot, accounts: [withDll(snapshot.accounts[0]), withDll(snapshot.accounts[1])] },
+      workerStatusKnown: true,
+      runtimeAvailable: true,
+      accountEligibility: [{ accountId: followerId, state: 'active' }],
+    });
+    expect(followerRow(markup)).toContain('Stav účtu: Ověřuji');
+    expect(markup).not.toContain('Stav účtu: Aktivní');
+  });
+
+  it('dokud nedorazí plány účtů, žádný účet není předčasně „Aktivní“', async () => {
+    const markup = await render({ workerStatusKnown: true, runtimeAvailable: true, accountProfilesLoaded: false });
+    expect(markup).not.toContain('Stav účtu: Aktivní');
+    expect(markup).toContain('Stav účtu: Ověřuji');
+  });
+});

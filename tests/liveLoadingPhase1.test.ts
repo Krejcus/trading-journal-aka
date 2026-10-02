@@ -13,6 +13,9 @@ import {
   writeCopierAgentStatusSnapshot,
 } from '../lib/copierAgentStatusStore';
 import { copierAgentCommandAllowedWhileRestored } from '../lib/copierSafetyControls';
+import { copyTradeDailyLossPendingAccountIds } from '../lib/copyTradeAccountEligibility';
+import { tradovateDisplayTradeDate } from '../lib/tradovateDisplayDay';
+import type { LiveAccount } from '../services/tradecopiaLiveService';
 import {
   __resetAppForegroundForTests,
   __setNativeAppActiveForTests,
@@ -328,5 +331,28 @@ describe('iOS: nativní stav appky je autoritativní', () => {
     expect(isAppForeground()).toBe(false);
     __setNativeAppActiveForTests(true);
     expect(isAppForeground()).toBe(true);
+  });
+});
+
+describe('DLL rozhodnutelnost z broker dat', () => {
+  const now = Date.parse('2026-10-02T15:00:00.000Z');
+  const account = (id: number, extra: Partial<LiveAccount> = {}) => ({
+    id, dailyLossLimit: 1_250, realizedPnl: 0, unrealizedPnl: 0, ...extra,
+  }) as LiveAccount;
+
+  it('nerozhodnuté jsou jen účty s DLL bez dnešního denního reportu', () => {
+    const today = tradovateDisplayTradeDate(now);
+    const pending = copyTradeDailyLossPendingAccountIds([
+      account(1),
+      account(2, { dailyPnlAvailable: true, dailyPnlTradeDate: today }),
+      account(3, { dailyLossLimit: null }),
+      account(4, { dailyPnlAvailable: true, dailyPnlTradeDate: '2026-10-01' }),
+    ], [], now);
+    expect([...pending].sort()).toEqual([1, 4]);
+  });
+
+  it('bez načtených plánů je nerozhodnutý každý účet', () => {
+    const pending = copyTradeDailyLossPendingAccountIds([account(1, { dailyLossLimit: null }), account(2)], [], now, false);
+    expect([...pending].sort()).toEqual([1, 2]);
   });
 });

@@ -280,6 +280,9 @@ analýzy, povinné podmínky). Větev `claude/live-loading-20261002`, NEnasazeno
   pravidlo čerstvosti jako dosud; ztlumení by problikávalo při každém
   návratu). Pevné čekání a trvalý DLL zámek vědomě NE (viz review).
 - Mimo rozsah, pre-existující: globální App brána při přímé změně účtu A→B.
+- Localhost odhalil druhý zdroj: DLL se odvozuje z broker denního reportu
+  (až plný preflight) a z plánů účtů; DISARMED worker hlásí `active`. Účty
+  s nerozhodnutelným DLL (nebo před načtením plánů) jsou proto „Ověřuji“.
 
 ### 2026-10-02 — Vstupní příkazy v grafu (varianta D) a nevzaté obchody (Claude)
 

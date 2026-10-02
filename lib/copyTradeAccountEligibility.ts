@@ -3,6 +3,7 @@ import type { CopierAccountEligibility } from '../services/copierEngine';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
 import { tradovateDisplayTradeDate } from './tradovateDisplayDay';
 import { liveDailyPnlDisplay } from './liveBalanceDisplay';
+import { liveDayReadAnswered } from './liveDaySummary';
 
 const eligibilitySeverity: Record<CopierAccountEligibility['state'], number> = {
   active: 0,
@@ -99,4 +100,37 @@ export function effectiveCopyTradeAccountEligibility(
   }
 
   return [...merged.values()];
+}
+
+/**
+ * Účty, u kterých LIVE zatím nemůže rozhodnout o DLL: mají nastavený denní
+ * limit, ale dnešní denní report brokera ještě nebyl přečten (první rychlé
+ * načtení ho nečte, doplní ho až plné). Jejich „aktivní“ stav — i když ho
+ * hlásí worker — je jen předběžný; DLL zámek může dorazit vzápětí. Slouží
+ * VÝHRADNĚ zobrazení („Ověřuji“), bezpečnostní logiku nemění.
+ */
+export function copyTradeDailyLossPendingAccountIds(
+  accounts: readonly LiveAccount[],
+  profiles: readonly TradovateAccountProfile[],
+  now = Date.now(),
+  profilesLoaded = true,
+): Set<number> {
+  // Bez plánů účtů nevíme, který účet DLL (či drawdown floor) vůbec má —
+  // „aktivní“ by bylo jen předběžné.
+  if (!profilesLoaded) return new Set(accounts.map(account => account.id));
+  const limits = new Map<number, number | null | undefined>();
+  for (const profile of profiles) {
+    const accountId = Number(profile.externalAccountId);
+    if (Number.isSafeInteger(accountId)) limits.set(accountId, profile.dailyLossLimit);
+  }
+  const today = tradovateDisplayTradeDate(now);
+  const pending = new Set<number>();
+  for (const account of accounts) {
+    const dailyLossLimit = limits.get(account.id) ?? account.dailyLossLimit;
+    if (dailyLossLimit == null || !Number.isFinite(dailyLossLimit) || dailyLossLimit <= 0) continue;
+    if (account.dailyPnlAvailable === true && account.dailyPnlTradeDate === today) continue;
+    if (liveDayReadAnswered(account, now)) continue;
+    pending.add(account.id);
+  }
+  return pending;
 }

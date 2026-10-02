@@ -62,6 +62,8 @@ interface TradovateLiveCacheEntry {
   status: TradovateOAuthStatus | null;
   connectionData: Record<string, TradovatePreflightResult>;
   profiles: TradovateAccountProfile[];
+  /** Plány účtů už aspoň jednou dorazily ze serveru ([] = účty bez plánu). */
+  profilesLoaded: boolean;
   historySnapshots: Record<string, TradovateHistorySnapshot>;
 }
 
@@ -201,6 +203,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   const [storedStatus, setStatus] = useState<TradovateOAuthStatus | null>(() => cached?.status ?? persisted?.status ?? null);
   const [storedConnectionData, setConnectionData] = useState<Record<string, TradovatePreflightResult>>(() => cached?.connectionData ?? {});
   const [storedProfiles, setProfiles] = useState<TradovateAccountProfile[]>(() => cached?.profiles ?? []);
+  const [storedProfilesLoaded, setProfilesLoaded] = useState(() => cached?.profilesLoaded ?? false);
   const [storedHistorySnapshots, setHistorySnapshots] = useState<Record<string, TradovateHistorySnapshot>>(() => cached?.historySnapshots ?? {});
   // Identity changes must be safe during render, before reset effects run.
   // Otherwise both children and the new user's cache can receive old data.
@@ -209,6 +212,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   const status = identityReady ? storedStatus : cached?.status ?? persisted?.status ?? null;
   const connectionData = identityReady ? storedConnectionData : cached?.connectionData ?? EMPTY_CONNECTION_DATA;
   const profiles = identityReady ? storedProfiles : cached?.profiles ?? EMPTY_PROFILES;
+  const profilesLoaded = identityReady ? storedProfilesLoaded : cached?.profilesLoaded ?? false;
   const historySnapshots = identityReady ? storedHistorySnapshots : cached?.historySnapshots ?? EMPTY_HISTORY_SNAPSHOTS;
   const [historyError, setHistoryError] = useState<string | null>(null);
   const historyBusyRef = useRef(false);
@@ -303,6 +307,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     connectionDataRef.current = cached?.connectionData ?? {};
     setConnectionData(connectionDataRef.current);
     setProfiles(cached?.profiles ?? []);
+    setProfilesLoaded(cached?.profilesLoaded ?? false);
     setHistorySnapshots(cached?.historySnapshots ?? {});
     setHistoryError(null);
     setError(null);
@@ -317,8 +322,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
 
   useEffect(() => {
     if (!userId) return;
-    tradovateLiveCache.set(userId, { status, connectionData, profiles, historySnapshots, connectionHealth });
-  }, [connectionData, historySnapshots, profiles, status, userId, connectionHealth]);
+    tradovateLiveCache.set(userId, { status, connectionData, profiles, profilesLoaded, historySnapshots, connectionHealth });
+  }, [connectionData, historySnapshots, profiles, profilesLoaded, status, userId, connectionHealth]);
 
   const data = useMemo(() => {
     const merged = mergePreflights(Object.values(connectionData));
@@ -356,7 +361,10 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       if (!isCurrent()) return;
       journalOptions.onAccountsChanged(savedAccounts);
       const savedProfiles = await saveTradovateAccountProfiles(plan.profiles);
-      if (isCurrent()) setProfiles(savedProfiles.profiles);
+      if (isCurrent()) {
+        setProfiles(savedProfiles.profiles);
+        setProfilesLoaded(true);
+      }
     }).catch(reason => {
       if (isCurrent()) {
         setError(reason instanceof Error ? reason.message : 'OAuth účet se nepodařilo propojit s journalem.');
@@ -518,7 +526,10 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       const profilesPromise = prestartedProfiles
         ?? loadTradovateAccountProfiles().catch(() => null);
       void profilesPromise.then(stored => {
-        if (stored && isCurrent()) setProfiles(stored.profiles);
+        if (stored && isCurrent()) {
+          setProfiles(stored.profiles);
+          setProfilesLoaded(true);
+        }
       });
 
       // Every connection is applied as soon as it completes. A slow prop firm
@@ -585,6 +596,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
               const saved = await saveTradovateAccountProfiles([...stored.profiles, ...missing]);
               if (!isCurrent()) return;
               setProfiles(saved.profiles);
+              setProfilesLoaded(true);
               setProfileSetupOpen(false);
             }
           } else {
@@ -684,7 +696,10 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
           dataEnrichmentByConnectionRef.current = {};
           setDataEnrichmentByConnection({});
           const stored = await profilesPromise;
-          if (isCurrent()) setProfiles(stored?.profiles ?? []);
+          if (isCurrent()) {
+            setProfiles(stored?.profiles ?? []);
+            if (stored) setProfilesLoaded(true);
+          }
         }
         return nextStatus;
       } catch (reason) {
@@ -1009,6 +1024,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     connectionSummaries,
     connectionHealth,
     profiles,
+    profilesLoaded,
     historySnapshots,
     historyError,
     apiTelemetry,

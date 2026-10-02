@@ -1248,6 +1248,7 @@ acceptAgentStatus((await executeAgent({
               copierArmed={copierUiDemo ? false : agentStatus?.controller.armed === true}
               copierStatusPending={!copierUiDemo && (!agentStatusResolved || !runtimeAvailable)}
               workerStatusKnown={copierUiDemo != null || agentStatus != null}
+              accountProfilesLoaded={live.profilesLoaded !== false}
               dailyPnlPending={false}
               brokerDailyPnlByAccount={brokerDailyPnlByAccount}
               dailyStats={agentStatus?.controller.dailyStats ?? null}

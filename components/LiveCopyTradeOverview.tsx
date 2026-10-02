@@ -59,7 +59,7 @@ import {
   copierCopiesOutcomeText,
   type CopierDisarmRecord,
 } from '../lib/copierDisarmReason';
-import { effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
+import { copyTradeDailyLossPendingAccountIds, effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
 import { stabilizeCopyGroups } from '../lib/stabilizeCopyGroups';
 import { copierCommandAllowedWithoutFreshStatus } from '../lib/copierSafetyControls';
 import { useCompactViewport } from '../utils/useCompactViewport';
@@ -435,6 +435,8 @@ interface Props {
   /** Worker už aspoň jednou poslal stav (i když teď třeba není čerstvý).
    * Bez něj chybějící způsobilost účtu znamená „ověřuji“, ne „aktivní“. */
   workerStatusKnown?: boolean;
+  /** Plány účtů už dorazily; do té doby nejde rozhodnout o DLL. */
+  accountProfilesLoaded?: boolean;
   /** Bootstrap má čerstvé pozice a balance, ale denní ledger se ještě doplňuje. */
   dailyPnlPending?: boolean;
   /** Current-day broker P&L včetně čerstvosti a času potvrzení. */
@@ -726,6 +728,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   copierObservingOnly = false,
   copierStatusPending = false,
   workerStatusKnown = true,
+  accountProfilesLoaded = true,
   dailyPnlPending = false,
   brokerDailyPnlByAccount,
   dailyStats = null,
@@ -787,6 +790,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     () => new Map(effectiveEligibility.map(entry => [entry.accountId, entry])),
     [effectiveEligibility],
   );
+  const eligibilityContext = useMemo(() => ({
+    workerUnknown: !workerStatusKnown,
+    dllPending: copyTradeDailyLossPendingAccountIds(snapshot.accounts, accountProfiles, Date.now(), accountProfilesLoaded),
+  }), [accountProfiles, accountProfilesLoaded, snapshot.accounts, workerStatusKnown]);
   const [groupTab, setGroupTab] = useState<Record<string, 'accounts' | 'orders'>>({});
   // Telefon a úzký viewport dostanou karty místo 900px tabulky; desktop se nemění.
   const compact = useCompactViewport();
@@ -1868,7 +1875,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
 
   return (
-    <WorkerEligibilityUnknownContext.Provider value={!workerStatusKnown}>
+    <WorkerEligibilityUnknownContext.Provider value={eligibilityContext}>
     <div key={userId} className="space-y-5">
       <LiveCopierIsland
         model={islandModel}
@@ -2858,10 +2865,10 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
       || tradeCutsByAccount.has(row.accountId))).length;
   // Před první odpovědí workeru: follower bez potvrzeného stavu není
   // „zařazený“ ani vyřazený — nezapočítá se a počty se neukazují.
-  const eligibilityUnknown = React.useContext(WorkerEligibilityUnknownContext);
-  const unknownFollowerCount = eligibilityUnknown ? enabledFollowerRows.filter((row, index) =>
-    row.account != null && eligibility[index] == null
-    && !(row.accountId != null && (manuallyOffIds.has(row.accountId) || tradeCutsByAccount.has(row.accountId)))).length : 0;
+  const eligibilityUndecided = useEligibilityUndecided();
+  const unknownFollowerCount = enabledFollowerRows.filter((row, index) =>
+    row.account != null && eligibilityUndecided(row.accountId, eligibility[index])
+    && !(row.accountId != null && (manuallyOffIds.has(row.accountId) || tradeCutsByAccount.has(row.accountId)))).length;
   const activeFollowerCount = Math.max(0, enabledFollowerCount - inactiveFollowerCount - manuallyOffCount - unknownFollowerCount);
   const dllCount = eligibility.filter(entry => entry?.state === 'dll-locked').length;
   const breachedCount = eligibility.filter(entry => entry?.state === 'breached').length;
@@ -3128,14 +3135,15 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
   const compactRejection = visibleRejectedExecution(accountId, eligibility, compactFlat, dismissedRejections);
   const hasOpenPositions = a?.positions.some(position => position.netPosition !== 0) ?? false;
   const unavailableFollower = !a && accountId != null && !row.isLeader;
-  const eligibilityUnknown = React.useContext(WorkerEligibilityUnknownContext);
+  const eligibilityUndecided = useEligibilityUndecided()(accountId, eligibility);
   const dailyDisplay = liveDailyPnlDisplay(a, Date.now(), dailyPnlPending);
   const daily = dailyDisplay.value;
   // Prokázaný klid je nula, ne neznámo. Pomlčka by tvrdila „nevím“ u účtu,
   // který se do celkového součtu nahoře započítává jako nula — a součet
   // s pomlčkami pod sebou vypadá jako rozbitá data.
   const quiet = daily == null && a != null && liveDayReadAnswered(a, Date.now(), dailyPnlPending);
-  const attention = eligibilityNeedsAttention(eligibility, live, !a && accountId != null) || tradeCut != null;
+  const attention = eligibilityNeedsAttention(eligibility, live, !a && accountId != null) || tradeCut != null
+    || (live && eligibilityUndecided);
   // Stejná pravidla čerstvosti jako desktop: staré čtení nesmí nést zelený
   // štít ani tvářit se jako „flat“.
   const positionsVerified = a ? isLiveAccountReadVerified(a, 'positions') : true;
@@ -3213,7 +3221,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
           ) : showSwitchSlot ? <span aria-hidden="true" className="w-8 shrink-0" /> : null}
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 items-center gap-2">
-              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${!live ? 'bg-rose-500' : !eligibility && eligibilityUnknown ? 'bg-slate-400' : 'bg-emerald-500'}`} />
+              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${!live ? 'bg-rose-500' : eligibilityUndecided ? 'bg-slate-400' : 'bg-emerald-500'}`} />
               <span className={`truncate text-[12px] font-semibold leading-tight tracking-tight transition-colors ${live && !copyOff ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
                 {redactAccountName(row.name, redactNames, redaction)}
               </span>
@@ -3295,6 +3303,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
           {flatReadWarning}
           {attention ? (
             tradeCut ? <TradeCutPill cut={tradeCut} /> : <AccountEligibilityPill
+              accountId={accountId}
               eligibility={eligibility}
               live={live}
               unavailable={!a && accountId != null}
@@ -3397,7 +3406,8 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   cooldownPanel?: React.ReactNode;
 }) => {
   const [showAllFlat, setShowAllFlat] = useState(false);
-  const eligibilityUnknown = React.useContext(WorkerEligibilityUnknownContext);
+  const { workerUnknown: eligibilityUnknown } = React.useContext(WorkerEligibilityUnknownContext);
+  const eligibilityUndecided = useEligibilityUndecided();
   const capital = liveCapitalDisplay(rows.map(row => row.account));
   const daily = liveGroupDailyPnlDisplay(rows.map(row => row.account), Date.now(), dailyPnlPending);
   const unreal = rows.reduce((sum, row) => sum + (row.account?.unrealizedPnl || 0), 0);
@@ -3417,9 +3427,9 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
     && !(!row.account
       || (eligibility[index]?.state != null && eligibility[index]?.state !== 'active')
       || tradeCutsByAccount.has(row.accountId))).length;
-  const unknownFollowerCount = eligibilityUnknown ? enabledFollowerRows.filter((row, index) =>
-    row.account != null && eligibility[index] == null
-    && !(row.accountId != null && (manuallyOffIds.has(row.accountId) || tradeCutsByAccount.has(row.accountId)))).length : 0;
+  const unknownFollowerCount = enabledFollowerRows.filter((row, index) =>
+    row.account != null && eligibilityUndecided(row.accountId, eligibility[index])
+    && !(row.accountId != null && (manuallyOffIds.has(row.accountId) || tradeCutsByAccount.has(row.accountId)))).length;
   const activeFollowerCount = Math.max(0, enabledFollowerRows.length - inactiveFollowerCount - manuallyOffCount - unknownFollowerCount);
   const unavailableFollowerCount = enabledFollowerRows.filter((row, index) =>
     !row.account && (eligibility[index]?.state ?? 'active') === 'active').length;
@@ -3493,7 +3503,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
       {/* Než worker poprvé odpoví, řádek se štítky drží místo neutrálním
           „ověřuji“ — DLL/BREACHED pak naskočí do stejného řádku bez poskoku. */}
       {inactiveFollowerCount > 0 || manuallyOffCount > 0 || dllCount > 0 || breachedCount > 0 || unavailableFollowerCount > 0 || unavailableLeader || observingOnly
-        || (eligibilityUnknown && enabledFollowerRows.length > 0) ? (
+        || (eligibilityUnknown && enabledFollowerRows.length > 0) || unknownFollowerCount > 0 ? (
         <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2.5">
           {/* Stejné štítky jako desktop: jantarově jen automatické vyřazení,
               ručně vypnutý follower je volba, ne problém — ten je šedý.
@@ -4379,7 +4389,22 @@ export const RejectedExecutionStatus = ({ execution, accountAuthoritativelyFlat,
  * řádky ukážou neutrální „Ověřuji“. Odvozené stavy z broker dat (DLL
  * z vlastního snapshotu) se ukazují i tak, ty jsou potvrzené.
  */
-const WorkerEligibilityUnknownContext = React.createContext(false);
+const WorkerEligibilityUnknownContext = React.createContext<{
+  /** Worker zatím neposlal žádný stav. */
+  workerUnknown: boolean;
+  /** Účty s DLL, u kterých dnešní denní report ještě nebyl přečten. */
+  dllPending: ReadonlySet<number>;
+}>({ workerUnknown: false, dllPending: new Set() });
+
+/** Stav účtu ještě nejde rozhodnout: buď chybí worker, nebo DLL čeká na
+ * dnešní denní report (pak ani workerovo „active“ není konečné). */
+const useEligibilityUndecided = () => {
+  const { workerUnknown, dllPending } = React.useContext(WorkerEligibilityUnknownContext);
+  return useCallback((accountId: number | null | undefined, eligibility: CopierAccountEligibility | undefined) =>
+    (eligibility == null && workerUnknown)
+    || (accountId != null && dllPending.has(accountId) && (eligibility == null || eligibility.state === 'active')),
+  [dllPending, workerUnknown]);
+};
 
 const VERIFYING_ACCOUNT_TONE: AccountStateTone = {
   dotClass: 'bg-slate-400',
@@ -4465,14 +4490,15 @@ const AccountStateDot = ({ tone, reason, confirmedAt }: {
   );
 };
 
-export const AccountEligibilityPill = ({ eligibility, live, unavailable = false, onVerify, verifying = false }: {
+export const AccountEligibilityPill = ({ accountId = null, eligibility, live, unavailable = false, onVerify, verifying = false }: {
+  accountId?: number | null;
   eligibility?: CopierAccountEligibility;
   live: boolean;
   unavailable?: boolean;
   onVerify?: () => void;
   verifying?: boolean;
 }) => {
-  const eligibilityUnknown = React.useContext(WorkerEligibilityUnknownContext);
+  const eligibilityUndecided = useEligibilityUndecided();
   const state = eligibility?.state ?? 'active';
   if (state === 'dll-locked') {
     return <span title={eligibility?.reason} className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[10px] font-black leading-none text-amber-600">
@@ -4523,7 +4549,7 @@ export const AccountEligibilityPill = ({ eligibility, live, unavailable = false,
     return <span className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 py-1 text-[10px] font-bold leading-none text-[var(--text-secondary)]">
       <Unplug aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Odpojeno</span>;
   }
-  if (!eligibility && eligibilityUnknown) {
+  if (eligibilityUndecided(accountId ?? eligibility?.accountId, eligibility)) {
     return <span title={VERIFYING_ACCOUNT_TONE.detail} className="inline-flex items-center gap-1 rounded-md border border-slate-500/30 bg-slate-500/10 px-2 py-1 text-[10px] font-bold leading-none text-slate-500">
       <Clock3 aria-hidden="true" size={10} strokeWidth={2.5} className="shrink-0" />Ověřuji…</span>;
   }
@@ -4774,11 +4800,13 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
   const copyOff = participation != null && !participation.configuredEnabled;
   const rowFlat = live && a != null && a.positions.every(position => position.netPosition === 0);
   const rowRejection = visibleRejectedExecution(accountId, eligibility, rowFlat, dismissedRejections);
-  const eligibilityUnknown = React.useContext(WorkerEligibilityUnknownContext);
+  const eligibilityUndecided = useEligibilityUndecided()(accountId, eligibility);
   const eligibilityState = eligibility?.state ?? 'active';
   const accountUnavailable = !a && accountId != null;
   // Odchylka = cokoli, co není „živý a způsobilý účet“. Jen ta se vykreslí.
-  const stateIsDeviation = tradeCut != null || eligibilityState !== 'active' || accountUnavailable || !live;
+  // „Ověřuji“ drží řádek se štítkem už předem — DLL do něj jen naskočí.
+  const stateIsDeviation = tradeCut != null || eligibilityState !== 'active' || accountUnavailable || !live
+    || eligibilityUndecided;
   const stateTone: AccountStateTone = eligibilityState === 'breached'
     ? { dotClass: 'bg-rose-500', accentClass: 'text-rose-500', label: 'Breached',
         detail: 'Účet je trvale vyřazen z kopírování. Zrušit to může jen read-only důkaz od brokera — že je účet aktivní a equity nad floorem propky.' }
@@ -4791,7 +4819,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
     : accountUnavailable
     ? { dotClass: 'bg-slate-400', accentClass: 'text-slate-400', label: 'Chybí v OAuth snapshotu',
         detail: 'Účet se v aktuálním snapshotu připojení neobjevil. Zkontroluj připojení firmy v záložce Připojení.' }
-    : live && !eligibility && eligibilityUnknown
+    : live && eligibilityUndecided
     ? VERIFYING_ACCOUNT_TONE
     : live
     ? { dotClass: 'bg-emerald-500', accentClass: 'text-emerald-500', label: 'Aktivní',
@@ -4827,6 +4855,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
             {stateIsDeviation ? (
               <span className="mt-1 flex flex-wrap items-center gap-1.5 pl-3.5">
                 {tradeCut ? <TradeCutPill cut={tradeCut} /> : <AccountEligibilityPill
+                  accountId={accountId}
                   eligibility={eligibility}
                   live={live}
                   unavailable={accountUnavailable}
@@ -4860,6 +4889,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
         );
       case 'status':
         return tradeCut ? <TradeCutPill cut={tradeCut} /> : <AccountEligibilityPill
+          accountId={accountId}
           eligibility={eligibility}
           live={live}
           unavailable={!a && accountId != null}
