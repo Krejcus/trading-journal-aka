@@ -2,6 +2,7 @@ import { tradovateConnectionPresentation, type TradovateConnectionHealthMap } fr
 import { createCopierForegroundPoller, isCopierStatusFresh } from '../lib/copierForegroundPoller';
 import { copierRelayObservedAt, newestCopierRelaySnapshot } from '../lib/copierRelayStatusPoll';
 import { CopierRelayInFlight, runCopierRelayStatusRound } from '../lib/copierRelayPollSources';
+import { readCopyGroupCache } from '../services/copyGroupLibrary';
 import { isAppForeground, subscribeAppForeground } from '../lib/appForeground';
 import { clearCopierAgentStatusStore, copierRelayFeedSourcesFor, readCopierAgentStatusSnapshot, writeCopierAgentStatusSnapshot } from '../lib/copierAgentStatusStore';
 import { shouldProbeLocalCopierAgent } from '../lib/localCopierProbePolicy';
@@ -257,7 +258,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const { compact: mobileLayout } = useLiveLayout();
   const [addConnectionOpen, setAddConnectionOpen] = useState(false);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
-  const [copyGroups, setCopyGroups] = useState<CopyGroupConfig[]>([]);
+  // Skupiny hned z lokální cache (stejný zdroj, ze kterého startuje přehled).
+  // S prázdným seznamem by první snímek neznal execution skupinu: zapnutá
+  // kopírka by mrkla jako OFF a „najela“ na ON a přepínače followerů by
+  // naskočily až po chvíli. Autoritou zůstává worker a cloudová knihovna.
+  const [copyGroups, setCopyGroups] = useState<CopyGroupConfig[]>(() => readCopyGroupCache(userId, []));
   // Poslední přijatý stav workeru z předchozí návštěvy LIVE (jen paměť,
   // user-scoped). Slouží výhradně zobrazení — příkazy čekají na vlastní
   // čerstvé čtení této instance (viz `agentStatusRestored`).
