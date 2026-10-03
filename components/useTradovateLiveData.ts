@@ -118,6 +118,10 @@ const mergePreflights = (datasets: TradovatePreflightResult[]): TradovatePreflig
 const FAST_PNL_INTERVAL_MS = 3_000;
 const ACTIVE_PNL_INTERVAL_MS = 6_000;
 const IDLE_POSITION_INTERVAL_MS = 15_000;
+/** Mimo LIVE (data už jednou načtená, appka v popředí) se pozice čtou na
+ * pozadí, aby po návratu nebyly starší než ověřovací okno (45 s) a LIVE
+ * neukazovalo „Pozice neověřeny“. ~4 požadavky za minutu na dvě připojení. */
+const BACKGROUND_POSITION_INTERVAL_MS = 30_000;
 // At 20 accounts the full preflight is expensive (risk, history, fees, etc.).
 // Ten minutes keeps it useful for reconciliation without consuming the budget
 // reserved for the 2-second position/P&L read model.
@@ -826,12 +830,15 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   }, [enabled, refreshData]);
 
   useEffect(() => {
-    if (!enabled) return;
+    // Mimo LIVE jen udržovací čtení pozic, a to až když už data existují.
+    const background = !enabled;
+    if (background && Object.keys(connectionDataRef.current).length === 0) return;
     const ids = status?.connections.filter(connection => connection.connected).map(connection => connection.id) ?? [];
     if (ids.length === 0) return;
     let cancelled = false;
     const pollUserId = activeUserIdRef.current;
     let timer: number | null = null;
+    const idleDelay = background ? BACKGROUND_POSITION_INTERVAL_MS : IDLE_POSITION_INTERVAL_MS;
     // Každý odchod do pozadí zneplatní rozpracované čtení: tick zahájený před
     // uspáním se po návratu nepoužije, místo něj se hned čte znovu.
     let foregroundGeneration = 0;
@@ -846,7 +853,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       const readIsCurrent = () => !cancelled && activeUserIdRef.current === pollUserId
         && foregroundGeneration === readGeneration;
       if (!isAppForeground()) {
-        schedule(IDLE_POSITION_INTERVAL_MS);
+        schedule(idleDelay);
         return;
       }
       if (livePnlBusyRef.current) {
@@ -858,7 +865,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       if (available.length === 0) {
         const nextRateLimit = ids.map(id => rateLimitUntilByConnectionRef.current[id] ?? 0)
           .filter(until => until > Date.now()).sort((a, b) => a - b)[0];
-        schedule(nextRateLimit ? Math.min(IDLE_POSITION_INTERVAL_MS, nextRateLimit - Date.now()) : 1_000);
+        schedule(nextRateLimit ? Math.min(idleDelay, nextRateLimit - Date.now()) : background ? idleDelay : 1_000);
         return;
       }
 
@@ -866,7 +873,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       try {
         const hasOpenPosition = available.some(connectionId =>
           connectionDataRef.current[connectionId]?.accounts.some(account => account.netPositionCount > 0));
-        const runFullTick = !hasOpenPosition
+        // Na pozadí vždy plný tick: jde o čerstvost pozic a příkazů, ne o P&L.
+        const runFullTick = background || !hasOpenPosition
           || Date.now() - livePnlLastFullTickAtRef.current >= ACTIVE_PNL_INTERVAL_MS;
         let rateLimitResults: PromiseSettledResult<unknown>[];
         let rateLimitIds: string[];
@@ -967,7 +975,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       if (!readIsCurrent()) return;
       const hasOpenPosition = Object.values(connectionDataRef.current)
         .some(dataset => dataset.accounts.some(account => account.netPositionCount > 0));
-      schedule(hasOpenPosition ? FAST_PNL_INTERVAL_MS : IDLE_POSITION_INTERVAL_MS);
+      schedule(background ? idleDelay : hasOpenPosition ? FAST_PNL_INTERVAL_MS : IDLE_POSITION_INTERVAL_MS);
     };
 
     // Návrat do popředí (telefon po spánku, přepnutí záložky) čte hned,
@@ -988,7 +996,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     const unsubscribeForeground = subscribeAppForeground(onVisible);
     // Návrat na LIVE s daty z dřívějška: první tick hned, ať zastaralé
     // čtení pozic nahradí čerstvé co nejdřív. Bez dat počká na bootstrap.
-    schedule(Object.keys(connectionDataRef.current).length > 0 ? 0 : 1_000);
+    // Na pozadí první čtení až po intervalu — data jsou z odchodu z LIVE čerstvá.
+    schedule(background ? idleDelay : Object.keys(connectionDataRef.current).length > 0 ? 0 : 1_000);
     return () => {
       cancelled = true;
       unsubscribeForeground();

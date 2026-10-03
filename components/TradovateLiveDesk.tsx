@@ -141,6 +141,8 @@ const TRADOVATE_OFFICIAL_LOGO = 'https://www.tradovate.com/favicon-48.png';
 // Přežije i odmountování LIVE stránky během čekajícího relay requestu. Žádný
 // další full-group zápis nesmí před potvrzením prvního vytvořit lost update.
 const copyGroupStatusPollFence = new CopierStatusPollFence();
+const RESTORED_STATUS_DISPLAY_GRACE_MS = 1_200;
+const RESTORED_STATUS_DISPLAY_MAX_AGE_MS = 10 * 60_000;
 const COPY_GROUP_CONFIG_COMMANDS = new Set<LiveCopyTradingCommand['type']>([
   'create-group',
   'update-group',
@@ -287,6 +289,22 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const statusAckFenceRef = useRef(new CopierStatusAckFence());
   const ackSequenceByStatusRef = useRef(new WeakMap<LocalCopierAgentStatus, number>());
   const agentStatusFresh = isCopierStatusFresh(agentStatusObservedAt, freshnessNow, agentStatusReadHealthy);
+  // Krátká lhůta po návratu na LIVE: obnovený stav (ne starší než 10 min) se
+  // první ~1,2 s ZOBRAZUJE jako platný, než ho potvrdí první čtení — jinak by
+  // přepínač, ostrov i souhrny na okamžik bliknuly „neověřeno“. Jen zobrazení:
+  // příkazy dál hlídá `armStatusRef` (obnovený stav nikdy nepustí ARM ani
+  // konfiguraci) a když potvrzení nepřijde, lhůta vyprší a „neověřeno“ se ukáže.
+  const [restoredDisplayGrace, setRestoredDisplayGrace] = useState(() => (
+    restoredAgent != null
+    && restoredAgent.observedAt != null
+    && Date.now() - restoredAgent.observedAt < RESTORED_STATUS_DISPLAY_MAX_AGE_MS
+  ));
+  useEffect(() => {
+    if (!restoredDisplayGrace) return;
+    const timer = window.setTimeout(() => setRestoredDisplayGrace(false), RESTORED_STATUS_DISPLAY_GRACE_MS);
+    return () => window.clearTimeout(timer);
+  }, [restoredDisplayGrace]);
+  const agentStatusDisplayFresh = agentStatusFresh || (restoredDisplayGrace && agentStatusRestored);
   const armStatusRef = useRef({ status: agentStatus, fresh: agentStatusFresh && !agentStatusRestored });
   armStatusRef.current = { status: agentStatus, fresh: agentStatusFresh && !agentStatusRestored };
   const [armRulesNotice, setArmRulesNotice] = useState<string | null>(null);
@@ -357,7 +375,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const forceDirectAgentProbeRef = useRef(false);
   const statusIdentityRef = useRef(userId);
   const [pairingNotice, setPairingNotice] = useState<string | null>(null);
-  const runtimeAvailable = agentStatusFresh && agentTransport != null && agentStatus != null;
+  const runtimeAvailable = agentStatusDisplayFresh && agentTransport != null && agentStatus != null;
 
   const acceptAgentStatus = useCallback((
     status: LocalCopierAgentStatus,
@@ -477,9 +495,11 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   );
   const workerAccountRoutes = useMemo(() => buildCopierWorkerAccountRoutes(
     agentStatus,
-    runtimeAvailable,
+    // Editor skupin validuje proti přísně čerstvému stavu, ne proti
+    // zobrazovací lhůtě obnoveného stavu.
+    agentStatusFresh && agentTransport != null && agentStatus != null,
     live.connectionData,
-  ), [agentStatus, live.connectionData, runtimeAvailable]);
+  ), [agentStatus, agentStatusFresh, agentTransport, live.connectionData]);
   // Pozice a aktivní příkazy účtů kopírky přednostně z heartbeatu workeru
   // (stream Tradovate, každou sekundu); REST přes Vercel zůstává zálohou.
   // Skutečné čerpání limitu Tradovate na login: server (tato aplikace) +
@@ -1316,7 +1336,7 @@ acceptAgentStatus((await executeAgent({
             />
           ) : null}
           {mobileLayout && tab === 'overview' && copyTradeSnapshot ? <button type="button" onClick={() => navigateToTab('events')} className="flex min-h-14 w-full items-center gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 text-left text-xs font-bold text-[var(--text-secondary)]">
-            <Camera size={21} className="shrink-0" /><span className="flex-1">{!agentStatusFresh || !agentStatus?.snapshotHealth ? 'Stav snímků neověřen' : !agentStatus.snapshotHealth.enabled ? 'Snímky vypnuté' : agentStatus.snapshotHealth.state === 'ready' ? 'Snímky připravené' : agentStatus.snapshotHealth.state === 'checking' ? 'Kontroluji snímky' : 'Snímky nejsou připravené'}</span><span className="text-[10px]">Detail</span><ChevronRight size={14} />
+            <Camera size={21} className="shrink-0" /><span className="flex-1">{!agentStatusDisplayFresh || !agentStatus?.snapshotHealth ? 'Stav snímků neověřen' : !agentStatus.snapshotHealth.enabled ? 'Snímky vypnuté' : agentStatus.snapshotHealth.state === 'ready' ? 'Snímky připravené' : agentStatus.snapshotHealth.state === 'checking' ? 'Kontroluji snímky' : 'Snímky nejsou připravené'}</span><span className="text-[10px]">Detail</span><ChevronRight size={14} />
           </button> : null}
           {tab === 'risk' && copyTradeSnapshot ? (
             <LiveRiskTab
