@@ -104,6 +104,9 @@ describe('adversariální review stale ovládání', () => {
     expect(markup).not.toContain('aria-label="Vypnout kopírování na účet Follower DEMO"');
     expect(markup).not.toContain('aria-label="Zapnout kopírování na účet Follower DEMO"');
     expect(markup).not.toContain('aria-label="Násobek 1×, změnit"');
+    // Poslední potvrzená poloha zůstane vidět (nic nenaskočí), ale jen ke čtení.
+    expect(markup).toContain('aria-label="Kopírování na účet Follower DEMO: zapnuto (stav se ověřuje)"');
+    expect(markup).toContain('Nelze přepnout: Stav kopírky se ověřuje');
   });
 
   it('označí jako neověřené všechny skupiny, nejen poslední execution skupinu', () => {

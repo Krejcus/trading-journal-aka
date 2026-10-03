@@ -186,3 +186,17 @@ describe('DLL čeká na dnešní denní report', () => {
     expect(markup).toContain('Stav účtu: Ověřuji');
   });
 });
+
+describe('otevření LIVE bez rušivých animací', () => {
+  it('detail skupiny se při prvním vykreslení nevysouvá zprava', async () => {
+    const markup = await render({ workerStatusKnown: true, runtimeAvailable: true });
+    expect(markup).not.toContain('live-detail-pane');
+  });
+
+  it('„Přidat skupinu“ není šedé, zatímco se knihovna skupin načítá', async () => {
+    const markup = await render({ userId: 'user-loading', workerStatusKnown: true, runtimeAvailable: true });
+    const button = markup.match(/<button[^>]*>(?:(?!<\/button>)[\s\S])*Přidat skupinu<\/button>/)?.[0] ?? '';
+    expect(button).not.toBe('');
+    expect(button).not.toMatch(/\sdisabled=""/);
+  });
+});

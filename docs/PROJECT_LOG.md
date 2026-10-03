@@ -283,6 +283,11 @@ analýzy, povinné podmínky). Větev `claude/live-loading-20261002`, NEnasazeno
 - Localhost odhalil druhý zdroj: DLL se odvozuje z broker denního reportu
   (až plný preflight) a z plánů účtů; DISARMED worker hlásí `active`. Účty
   s nerozhodnutelným DLL (nebo před načtením plánů) jsou proto „Ověřuji“.
+- Otevření LIVE bez rušivých efektů: detail skupiny vjížděl zprava
+  (`live-detail-pane-in` i při mountu) — animuje se jen přepnutí Účty/Příkazy;
+  „Přidat skupinu“ nešedne (knihovna skupin si pamatuje načtení, klik během
+  prvního načtení otevře editor po dokončení); kolečko u přepínače kopírky až
+  po 1,2 s ověřování; přepínače followerů zůstanou vidět zamčené („ověřuje se“).
 
 ### 2026-10-02 — Vstupní příkazy v grafu (varianta D) a nevzaté obchody (Claude)
 

@@ -508,12 +508,22 @@ type ActiveFollowerCut = NonNullable<CopierControllerStatus['followerCuts']>[num
 type FollowerParticipation = NonNullable<CopierControllerStatus['followerParticipation']>[number];
 const EMPTY_PARTICIPATION: ReadonlyMap<number, FollowerParticipation> = new Map();
 
+/** Uživatelé, jejichž cloudová knihovna skupin se v této session už načetla.
+ * Návrat na LIVE pak nezačíná ve stavu „loading“ (šedé „Přidat skupinu“);
+ * knihovna se jen tiše obnoví na pozadí. Jen paměť, user-scoped. */
+const copyGroupLibraryLoadedUsers = new Set<string>();
+
 /**
  * Ruční zapnutí/vypnutí kopírování jednoho followera. Knoflík hned sjede na
  * stranu záměru a točí se v něm kolečko, dokud worker nepotvrdí; potvrzení =
  * pulz, odmítnutí = návrat a zatřesení (důvod ukáže toast). Rozhoduje vždy
  * worker — `canToggle` jen zamyká přepínač a vysvětluje proč.
  */
+/** Stav kopírky se právě ověřuje: přepínače followerů zůstanou vidět
+ * v poslední potvrzené poloze, ale nepřepínají se. */
+const FollowerSwitchVerifyingContext = React.createContext(false);
+const VERIFYING_SWITCH_BLOCKER = 'Stav kopírky se ověřuje — přepnout půjde za okamžik';
+
 const FollowerCopySwitch = ({ accountName, participation, onToggle, onBlockedTap, touch = false }: {
   accountName: string;
   participation: FollowerParticipation;
@@ -545,9 +555,13 @@ const FollowerCopySwitch = ({ accountName, participation, onToggle, onBlockedTap
     return () => window.clearTimeout(timer);
   }, [settle]);
 
+  const statusVerifying = React.useContext(FollowerSwitchVerifyingContext);
   const shown = intent ?? confirmed;
-  const locked = !participation.canToggle && !pending;
-  const reasons = participation.blockers.length > 0 ? participation.blockers.join(' · ') : null;
+  const lockedByRules = !participation.canToggle && !pending;
+  // Ověřování není zámek pravidel: bez ikony zámku, jen nejde přepnout.
+  const locked = (lockedByRules || statusVerifying) && !pending;
+  const blockers = lockedByRules ? participation.blockers : [VERIFYING_SWITCH_BLOCKER];
+  const reasons = blockers.length > 0 ? blockers.join(' · ') : null;
   const title = pending
     ? 'Čeká na potvrzení workerem…'
     : locked
@@ -562,18 +576,21 @@ const FollowerCopySwitch = ({ accountName, participation, onToggle, onBlockedTap
       role="switch"
       aria-checked={shown}
       aria-busy={pending || undefined}
-      aria-label={`${shown ? 'Vypnout' : 'Zapnout'} kopírování na účet ${accountName}`}
+      // Během ověřování přepínač žádnou akci nenabízí — popisek říká stav.
+      aria-label={statusVerifying && !lockedByRules && !pending
+        ? `Kopírování na účet ${accountName}: ${shown ? 'zapnuto' : 'vypnuto'} (stav se ověřuje)`
+        : `${shown ? 'Vypnout' : 'Zapnout'} kopírování na účet ${accountName}`}
       title={title}
       disabled={pending || (locked && !onBlockedTap)}
       // Na telefonu zamčený přepínač po klepnutí vysvětlí důvod, takže pro
       // čtečku není „nedostupný“ — důvod nese title.
       aria-disabled={(locked && !onBlockedTap) || undefined}
-      data-locked={locked || undefined}
+      data-locked={lockedByRules || undefined}
       onClick={async event => {
         event.stopPropagation();
         if (locked) {
           setSettle('rejected');
-          onBlockedTap?.(participation.blockers);
+          onBlockedTap?.(blockers);
           return;
         }
         const next = !shown;
@@ -587,7 +604,7 @@ const FollowerCopySwitch = ({ accountName, participation, onToggle, onBlockedTap
       className={`follower-switch${touch ? ' follower-switch-touch' : ''}${pending ? ' follower-switch-pending' : ''}${settle ? ` follower-switch-${settle}` : ''}`}
     >
       <span className="follower-switch-knob" aria-hidden="true">
-        {pending ? <span className="follower-switch-spinner" /> : locked ? <Lock size={9} strokeWidth={3} /> : null}
+        {pending ? <span className="follower-switch-spinner" /> : lockedByRules ? <Lock size={9} strokeWidth={3} /> : null}
       </span>
     </button>
   );
@@ -812,7 +829,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   });
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(groups.map(group => group.id)));
   const didAutoExpandGroups = useRef(groups.length > 0);
-  const [groupLibraryState, setGroupLibraryState] = useState<'loading' | 'ready' | 'needs-import' | 'error'>(userId ? 'loading' : 'ready');
+  const [groupLibraryState, setGroupLibraryState] = useState<'loading' | 'ready' | 'needs-import' | 'error'>(
+    () => !userId || copyGroupLibraryLoadedUsers.has(userId) ? 'ready' : 'loading',
+  );
+  // Klik na „Přidat skupinu“ během prvního načtení knihovny se nezahodí —
+  // editor se otevře, jakmile je knihovna připravená.
+  const [addGroupRequested, setAddGroupRequested] = useState(false);
   const [groupLibraryError, setGroupLibraryError] = useState<string | null>(null);
   const [groupLibraryBusy, setGroupLibraryBusy] = useState(false);
   const [groupSaveBusy, setGroupSaveBusy] = useState(false);
@@ -866,9 +888,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         : loaded.groups;
       setGroups(next);
       setGroupLibraryState(loaded.needsLegacyImport ? 'needs-import' : 'ready');
+      if (loaded.needsLegacyImport) copyGroupLibraryLoadedUsers.delete(userId);
+      else copyGroupLibraryLoadedUsers.add(userId);
       setGroupLibraryError(null);
     } catch (reason) {
       if (!groupLibraryFence.canAcceptRead(token)) return;
+      copyGroupLibraryLoadedUsers.delete(userId);
       setGroupLibraryState('error');
       setGroupLibraryError(copyGroupLibraryErrorMessage(reason));
     }
@@ -891,7 +916,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   }, [columnOrder, confirmRearmAfterFlatten, hiddenGroupColumns, hiddenOrderColumns, redaction]);
 
   useEffect(() => {
-    void refreshGroupLibrary(true);
+    void refreshGroupLibrary(!copyGroupLibraryLoadedUsers.has(userId));
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') void refreshGroupLibrary();
     };
@@ -904,7 +929,17 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       window.removeEventListener('online', refreshWhenVisible);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
-  }, [groupLibraryFence, refreshGroupLibrary]);
+  }, [groupLibraryFence, refreshGroupLibrary, userId]);
+
+  const openNewGroupEditor = useCallback(() => setEditorGroup({
+    id: createLocalCopyGroupId(), name: '', enabled: false, leaderAccountId: null,
+    followers: [], color: GROUP_COLORS[0], safety: { ...DEFAULT_COPY_GROUP_SAFETY }, localOnly: true,
+  }), []);
+  useEffect(() => {
+    if (!addGroupRequested || groupLibraryState === 'loading') return;
+    setAddGroupRequested(false);
+    if (groupLibraryState === 'ready') openNewGroupEditor();
+  }, [addGroupRequested, groupLibraryState, openNewGroupEditor]);
 
   useEffect(() => {
     setGroups(current => {
@@ -1398,6 +1433,10 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       if (onRejected) onRejected(text);
       else setToast({ tone: 'error', text, accountIds: [accountId] });
     };
+    if (copierStateVerifying) {
+      report(VERIFYING_SWITCH_BLOCKER);
+      return false;
+    }
     const sleep = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms));
     const attempts = 4;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -1876,6 +1915,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
 
   return (
     <WorkerEligibilityUnknownContext.Provider value={eligibilityContext}>
+    <FollowerSwitchVerifyingContext.Provider value={copierStateVerifying}>
     <div key={userId} className="space-y-5">
       <LiveCopierIsland
         model={islandModel}
@@ -1937,11 +1977,12 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           </div>
           <div className="flex items-center gap-2">
             <button
-              disabled={groupLibraryState !== 'ready'}
-              onClick={() => setEditorGroup({
-                id: createLocalCopyGroupId(), name: '', enabled: false, leaderAccountId: null,
-                followers: [], color: GROUP_COLORS[0], safety: { ...DEFAULT_COPY_GROUP_SAFETY }, localOnly: true,
-              })}
+              disabled={groupLibraryState === 'error' || groupLibraryState === 'needs-import'}
+              aria-busy={addGroupRequested || undefined}
+              onClick={() => {
+                if (groupLibraryState === 'loading') setAddGroupRequested(true);
+                else openNewGroupEditor();
+              }}
               className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-2 text-xs font-bold text-[var(--text-secondary)] transition-colors hover:border-indigo-500/30 hover:bg-indigo-500/[0.06] hover:text-indigo-500 disabled:cursor-not-allowed disabled:opacity-45"
             >
               <Plus size={14} /> Přidat skupinu
@@ -2002,7 +2043,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                   eligibilityByAccount={eligibilityByAccount}
                   tradeCutsByAccount={tradeCutsByAccount}
                   participationByAccount={selected ? participationByAccount : EMPTY_PARTICIPATION}
-                  onFollowerEnabled={!copierStateVerifying && selected && commandAdapter
+                  onFollowerEnabled={selected && commandAdapter
                     ? (accountId, enabled, onRejected) => toggleFollower(group.id, accountId, enabled, onRejected)
                     : undefined}
                   orders={orders}
@@ -2159,7 +2200,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
                               eligibilityByAccount={eligibilityByAccount}
                               tradeCutsByAccount={tradeCutsByAccount}
                               participationByAccount={group.id === executionGroupId ? participationByAccount : EMPTY_PARTICIPATION}
-                              onFollowerEnabled={!copierStateVerifying && group.id === executionGroupId && commandAdapter
+                              onFollowerEnabled={group.id === executionGroupId && commandAdapter
                                 ? (accountId, enabled) => toggleFollower(group.id, accountId, enabled)
                                 : undefined}
                               onVerifyEligibility={verifyAccountEligibility}
@@ -2428,6 +2469,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
       />}
       {toast && <StatusToast tone={toast.tone} text={renderAccountMessage(toast.text, toast.accountIds ?? knownAccountIds)} />}
     </div>
+    </FollowerSwitchVerifyingContext.Provider>
     </WorkerEligibilityUnknownContext.Provider>
   );
 };
@@ -2690,6 +2732,20 @@ function groupRows(
   return rows;
 }
 
+/** Krátké ověření (návrat na LIVE, běžný relay ~0,3–0,8 s) nemá blikat
+ * kolečkem; indikátor se ukáže, až když ověřování opravdu trvá. */
+const COPIER_VERIFYING_INDICATOR_DELAY_MS = 1_200;
+
+const useDelayedFlag = (active: boolean, delayMs: number): boolean => {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (!active) { setShown(false); return; }
+    const timer = window.setTimeout(() => setShown(true), delayMs);
+    return () => window.clearTimeout(timer);
+  }, [active, delayMs]);
+  return active && shown;
+};
+
 export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady, transition, connectBlocked, onToggle, powerDisplayKey = '' }: {
   connected: boolean;
   statusPending: boolean;
@@ -2704,6 +2760,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
   // POTVRZENÝ stav místo „Neověřeno“. Retence je jen popisek: ARM se v tomto
   // stavu nikdy nenabízí a vypnutí jde přes samostatný potvrzovací dialog.
   const display = useCopierPowerDisplay(powerDisplayKey, connected, statusPending);
+  const verifyingVisible = useDelayedFlag(statusPending, COPIER_VERIFYING_INDICATOR_DELAY_MS);
   const busy = transition != null;
   const disabled = statusPending || !runtimeReady || busy || (!connected && connectBlocked);
   // Knoflík ukazuje ZÁMĚR (hned po kliknutí sjede na novou stranu), kolej a
@@ -2776,12 +2833,17 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
             if (retainedOn) onToggle();
           }}
           data-intent={retainedOn}
-          className="copier-switch copier-switch-retained opacity-60 disabled:cursor-not-allowed"
+          data-verifying={verifyingVisible || undefined}
+          // Ovládání je zamčené hned (viz výše); ztlumení a kolečko až po
+          // prodlevě, aby běžné rychlé ověření nebylo vidět jako probliknutí.
+          className={`copier-switch copier-switch-retained disabled:cursor-not-allowed transition-opacity duration-200 ${verifyingVisible ? 'opacity-60' : ''}`}
         >
           <span className="copier-switch-label copier-switch-on" aria-hidden="true">ON</span>
           <span className="copier-switch-label copier-switch-off" aria-hidden="true">OFF</span>
           <span className="copier-switch-knob">
-            <span className="copier-switch-spinner" aria-hidden="true"><RefreshCw size={10} strokeWidth={2.8} className="animate-spin" /></span>
+            {verifyingVisible
+              ? <span className="copier-switch-spinner" aria-hidden="true"><RefreshCw size={10} strokeWidth={2.8} className="animate-spin" /></span>
+              : null}
           </span>
         </button>
         {display.warning ? <span role="status" className="text-[10px] font-semibold text-amber-600">Stav není aktuální</span> : null}
@@ -4593,7 +4655,10 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
   // kurzoru — u dvaceti účtů skoro o 400 px.
   const morphRef = useRef<HTMLDivElement>(null);
   const heightBeforeSwitch = useRef<number | null>(null);
-  const [switchDirection, setSwitchDirection] = useState<'forward' | 'back'>('forward');
+  // `null` = ještě se nepřepínalo. Při prvním vykreslení (otevření LIVE,
+  // rozbalení skupiny) obsah nesmí „přijet zprava“ — animuje se jen
+  // skutečné přepnutí záložky.
+  const [switchDirection, setSwitchDirection] = useState<'forward' | 'back' | null>(null);
   const selectTab = (next: 'accounts' | 'orders') => {
     if (next === tab) return;
     heightBeforeSwitch.current = morphRef.current?.getBoundingClientRect().height ?? null;
@@ -4633,7 +4698,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
   return (
   <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-app)]/40">
     <div ref={morphRef} className="live-detail-morph">
-    <div key={tab} className={`live-detail-pane${switchDirection === 'back' ? ' live-detail-pane-back' : ''}`}>
+    <div key={tab} className={switchDirection == null ? undefined : `live-detail-pane${switchDirection === 'back' ? ' live-detail-pane-back' : ''}`}>
     {tab === 'accounts' ? (
       // Rozbalený detail leží v animačním obalu `overflow-hidden`; bez vlastního
       // vodorovného posuvníku by se širší tabulka jen ořízla (3.–6. 9. 2026).
