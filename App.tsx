@@ -13,7 +13,7 @@ import { withAttachedScreenshot } from './components/HistoryScreenshotSlot';
 import { withChartNotes, type ChartNote } from './lib/chartNotes';
 import { collectBacktestTagSuggestions } from './services/backtestTagCatalog';
 
-import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback, useLayoutEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { calculateStats } from './services/analysis';
 import { buildLabDataset, detectLeaks, prepBiasFromPreps, prepDaysFromPreps, type LeakFinding } from './services/labAnalytics';
@@ -1133,6 +1133,20 @@ const App: React.FC = () => {
     appDeepLinkIntentFromSearch(window.location.search)
   ));
   const [activePage, setActivePage] = useState<string>(() => pendingDeepLink?.page ?? 'dashboard');
+  // Každé přepnutí stránky začíná nahoře. Obsah všech stránek sdílí jeden
+  // posuvný kontejner, takže bez resetu nová stránka zdědila pozici staré
+  // (sjel jsi dolů na Dashboardu → Historie se otevřela dole).
+  const pageScrollRef = useRef<HTMLDivElement>(null);
+  const previousScrollPageRef = useRef(activePage);
+  useLayoutEffect(() => {
+    if (previousScrollPageRef.current === activePage) return;
+    previousScrollPageRef.current = activePage;
+    const outer = pageScrollRef.current;
+    if (!outer) return;
+    outer.scrollTop = 0;
+    // Vlastní posuvník má i obsah uvnitř PullToRefresh.
+    outer.querySelectorAll<HTMLElement>('[data-page-scroll]').forEach(node => { node.scrollTop = 0; });
+  }, [activePage]);
   const [requestedLiveTab, setRequestedLiveTab] = useState<TradovateLiveTab | null>(null);
   const [macCompanionPairingIntent, setMacCompanionPairingIntent] = useState(() => {
     const requestedByUrl = isMacCompanionPairingSearch(window.location.search);
@@ -4315,7 +4329,7 @@ const App: React.FC = () => {
           </div>
         )}
 
-        <div className={`flex-1 no-scrollbar overflow-y-auto ${activePage === 'ai' ? 'hidden' : ''}`}>
+        <div ref={pageScrollRef} className={`flex-1 no-scrollbar overflow-y-auto ${activePage === 'ai' ? 'hidden' : ''}`}>
           <PullToRefresh
             onRefresh={handleRefreshData}
             disabled={inNativeShell || !session || loading}

@@ -314,6 +314,7 @@ export const PullToRefresh: React.FC<PullToRefreshProps> = ({
             {/* Scrollable Content — overflow-hidden when disabled so children manage their own scroll */}
             <div
                 ref={containerRef}
+                data-page-scroll=""
                 className="flex-1 overflow-y-auto overscroll-none"
             >
                 {children}

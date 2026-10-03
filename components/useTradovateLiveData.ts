@@ -986,7 +986,9 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     };
     // Web: visibilitychange; iOS shell navíc nativní appStateChange.
     const unsubscribeForeground = subscribeAppForeground(onVisible);
-    schedule(1_000);
+    // Návrat na LIVE s daty z dřívějška: první tick hned, ať zastaralé
+    // čtení pozic nahradí čerstvé co nejdřív. Bez dat počká na bootstrap.
+    schedule(Object.keys(connectionDataRef.current).length > 0 ? 0 : 1_000);
     return () => {
       cancelled = true;
       unsubscribeForeground();
