@@ -50,16 +50,34 @@ export default function LiveCopierIsland({ model, onAction, offsetTop = 92, anch
   // vyscrolluje z dohledu.
   const always = model?.phase === 'divergence' || model?.tone === 'danger';
   useEffect(() => {
-    if (!mounted || always || !anchorId) { setAnchorVisible(false); return; }
-    const anchor = document.querySelector(`[data-flip-id="${CSS.escape(anchorId)}"]`);
-    if (!anchor || typeof IntersectionObserver === 'undefined') { setAnchorVisible(false); return; }
-    const observer = new IntersectionObserver(
-      entries => setAnchorVisible(entries.some(entry => entry.isIntersecting)),
-      // Kotvu bereme za viditelnou, jen když není schovaná pod hlavičkou.
-      { rootMargin: `-${offsetTop}px 0px 0px 0px`, threshold: 0 },
-    );
-    observer.observe(anchor);
-    return () => observer.disconnect();
+    if (!mounted) return;
+    if (always) { setAnchorVisible(false); return; }
+    // Bez kotvy (skupina ještě není známá nebo vykreslená) zůstává ostrov
+    // v posledním stavu — na začátku skrytý. Dřív se tu rovnou ukázal a vzápětí
+    // ho observer schoval: při otevření LIVE to problikávalo.
+    if (!anchorId || typeof IntersectionObserver === 'undefined') return;
+    let observer: IntersectionObserver | null = null;
+    let frame = 0;
+    let attempts = 0;
+    const attach = () => {
+      const anchor = document.querySelector(`[data-flip-id="${CSS.escape(anchorId)}"]`);
+      if (!anchor) {
+        // Karta skupiny se může vykreslit o snímek později (data, knihovna skupin).
+        if (attempts < 60) { attempts += 1; frame = requestAnimationFrame(attach); }
+        return;
+      }
+      observer = new IntersectionObserver(
+        entries => setAnchorVisible(entries.some(entry => entry.isIntersecting)),
+        // Kotvu bereme za viditelnou, jen když není schovaná pod hlavičkou.
+        { rootMargin: `-${offsetTop}px 0px 0px 0px`, threshold: 0 },
+      );
+      observer.observe(anchor);
+    };
+    attach();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
   }, [mounted, always, anchorId, offsetTop, model?.phase]);
 
   // Pulz při změně fáze. Třída se odstraní časovačem, ale i kdyby se
