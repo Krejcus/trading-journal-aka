@@ -263,7 +263,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 Filip: na LIVE „naskočí data, pak problikne a až pak naskočí ON / DLL do konce
 session“; studený start horší. Zadání a dohodnutý rozsah:
 `docs/reviews/live-copier-loading-20261002.md` (měření, dvě nezávislé Codex
-analýzy, povinné podmínky). Větev `claude/live-loading-20261002`, NEnasazeno.
+analýzy, povinné podmínky). Větev `claude/live-loading-20261002`; nasazeno
+3. 10. 2026 (`4ec99534` na main, Vercel READY) + čistá reinstalace iPhonu.
 
 - **Příčina probliknutí:** řádek účtu bral `eligibility?.state ?? 'active'` —
   před první odpovědí workeru ukazoval „Aktivní“. Nově „Ověřuji“ přes
