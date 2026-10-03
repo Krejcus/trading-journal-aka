@@ -258,6 +258,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-03 — LIVE na telefonu bez probliknutí, scroll stránek, pozice na pozadí (Claude)
+
+Filip po nasazení fáze 1 (telefon): krátce problikne zapnutý účet, zapnutá
+kopírka po návratu „najede“ jako při zapínání, svítí „Pozice neověřeny“,
+a stránky po přepnutí v navbaru nezačínají nahoře.
+
+- **Příčina mrknutí OFF→ON a přepínačů:** `TradovateLiveDesk` startoval
+  s prázdným `copyGroups` → první snímek bez execution skupiny. Na webu
+  neviditelné (klik = diskrétní událost, efekty před paintem), v iOS shellu
+  navigace přes `window.__alphaTradeNative.navigate` → snímek se vykreslí.
+  Reprodukce na webu: `?native=1` + `__alphaTradeNative.navigate('live')`.
+  Oprava: start z `readCopyGroupCache`.
+- **Scroll:** všechny stránky sdílí kontejner (`PullToRefresh`
+  `[data-page-scroll]`) → reset `scrollTop` při změně `activePage`.
+- **„Pozice neověřeny“ (varianta 1, rozhodnutí Filipa):** mimo LIVE se pozice
+  čtou na pozadí po 30 s (jen s načtenými daty a appkou v popředí, ~4 req/min);
+  bezpečnostní pravidlo „starý snapshot se netváří jako ověřený“ zůstává
+  (test `liveCopyCompactRender`). Varianta s lhůtou zamítnuta kvůli němu.
+- **„Stav neověřen“ po návratu:** obnovený stav workeru (≤ 10 min) se 1,2 s
+  zobrazuje jako platný; příkazy zamčené do vlastního potvrzení, editor skupin
+  validuje proti přísně čerstvému stavu.
+- **Past iOS buildu:** worktree bez `.env.local` → bundle bez Supabase →
+  věčný splash. Stavět s `.env.local`, kontrola `grep kopinlpdvjfgmvxydohk
+  dist-native/assets/*.js`.
+
 ### 2026-10-02 — LIVE kopírka: načítání bez problikávání, fáze 1 (Claude, oponentura Codex)
 
 Filip: na LIVE „naskočí data, pak problikne a až pak naskočí ON / DLL do konce
