@@ -340,6 +340,14 @@ Podle náhledu `mockups/business-redesign.html` (Filip schvaloval po krocích).
   14 skupin bez leadera (16.–17. 9. leaderovy neúplné epizody) → $ z menšího
   followera, `leaderKnown=false`; svíčka vstupu nese pohyb před vstupem →
   MAE/MFE stropem SL/TP; „kdybys držel“ ne u výstupu na původním SL.
+- Sekce A + B postavené (`lib/labAnalysis.ts`, `components/LabLivePage.tsx`;
+  živý režim = nový Lab, backtest dál starý `LabPage`). Tilt = eskalace
+  velikosti ≥ 2× úvodní velikost dne po ztrátě / v mínusu — rychlé návraty
+  a otočení jsou Filipův běžný skalpovací styl (s nimi vycházel tilt 10/15
+  dní, teď 4: 17., 22., 28., 30. 9.). Simulace pravidel na reálných datech:
+  „max 2 ztráty“ by stálo −$219, „max 3“ +$653 — UI nevybírá „nejlepší“,
+  když nic nepomáhá. R potřebuje historii plnění (SL u OSO není v řádku
+  obchodu) — Lab ji dotahuje dávkou (153/172 s R).
 - G (účty): v `accounts.meta` jsou pole challengeCost/totalWithdrawals/
   failureReason, ale u účtů z Tradovate prázdná; stav „Active“ i u spálených;
   `copier_runtime_state` v produkci neexistuje (důvod spálení zná jen lokální

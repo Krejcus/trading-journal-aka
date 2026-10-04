@@ -74,6 +74,7 @@ const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
 const AICoachPage = React.lazy(() => import('./components/AICoachPage'));
 const InsightsPanel = React.lazy(() => import('./components/InsightsPanel'));
 const LabPage = React.lazy(() => import('./components/LabPage'));
+const LabLivePage = React.lazy(() => import('./components/LabLivePage'));
 
 
 
@@ -4503,9 +4504,14 @@ const App: React.FC = () => {
                           Lab
                         </h2>
                         <p className="text-xs text-slate-500 font-bold">
-                          Analytická laboratoř · counterfactual · bias · leaky — čísla počítá kód, ne AI
+                          {dashboardMode === 'backtesting'
+                            ? 'Analytická laboratoř · counterfactual · bias · leaky — čísla počítá kód, ne AI'
+                            : 'Tvoje rozhodnutí z deníku Tradovate · kopie se nesčítají · čísla počítá kód, ne AI'}
                         </p>
                       </div>
+                      {dashboardMode !== 'backtesting' ? (
+                        <LabLivePage trades={trades} accounts={allAccountsWithArchived} theme={theme} onOpenTrade={(trade) => setAiChatTrade(trade)} />
+                      ) : (
                       <LabPage
                         trades={analyticsTrades}
                         accounts={allAccountsWithArchived}
@@ -4544,6 +4550,7 @@ const App: React.FC = () => {
                         }}
                         onOpenTrade={(trade) => setAiChatTrade(trade)}
                       />
+                      )}
                     </div>
                   )}
 
