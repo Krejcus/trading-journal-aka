@@ -291,7 +291,9 @@ export async function startLocalCopierExecutionAgent(
 
   const status = (): LocalCopierAgentStatus => ({
     version: 1,
-    capabilities: [COPIER_RISK_CONFIG_CAPABILITY, ...(options.accountDisplay ? ['account-display-v1'] : [])],
+    capabilities: [COPIER_RISK_CONFIG_CAPABILITY,
+      ...(options.controller.prepareArm ? ['arm-preparation-v1'] : []),
+      ...(options.accountDisplay ? ['account-display-v1'] : [])],
     environment: 'demo',
     nonce,
     group: structuredClone(group),
@@ -788,27 +790,36 @@ export async function startLocalCopierExecutionAgent(
           // in-place; explicitní ARM sync nesmí zdravý runtime shodit.
           return;
         }
-        options.controller.disarm();
+        // A no-op DISARM would invalidate the already prepared snapshot.
+        if (options.controller.status().armed || !options.controller.prepareArm) options.controller.disarm();
         await options.controller.applyAccountEligibilityExclusions(
           validatedAccountEligibilityExclusions(command.accountEligibilityExclusions),
         );
         assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
-        if (!routingPrepared) {
+        const preparation = options.controller.status().armPreparation;
+        if (!routingPrepared && (!options.controller.prepareArm
+          || (preparation?.state !== 'ready' && preparation?.state !== 'checking'))) {
           await awaitArmDeadline(
             prepareAccounts(allAccountsRequired(copyGroupAccountIds(group))),
             deadlineAt,
           );
           assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
         }
-        const reconciliation = await awaitArmDeadline(options.controller.reconcile(), deadlineAt);
-        assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
-        if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
-          throw new Error('ARM odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
+        if (options.controller.prepareArm) {
+          await awaitArmDeadline(options.controller.prepareArm(), deadlineAt);
+        } else {
+          // Compatibility for controller adapters without preparation support.
+          const reconciliation = await awaitArmDeadline(options.controller.reconcile(), deadlineAt);
+          if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
+            throw new Error('ARM odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
+          }
         }
+        assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
         // Ostrý ARM končí nejpozději s broker session (17:00 CT). Zapomenutý
         // ARM tak nepřežije do dalšího dne; otevřené kopie expirace
         // risk-redukčně zavře podle `safety.armExpiryFlatten`.
-        options.controller.arm({ shadowMode: false, ttlMs: msUntilTradovateSessionEnd(Date.now()) });
+        options.controller.arm({ shadowMode: false, ttlMs: msUntilTradovateSessionEnd(Date.now()),
+          ...(options.controller.prepareArm ? { requirePreparation: true } : {}) });
         try {
           await awaitArmDeadline(options.controller.waitForIdle(), deadlineAt);
           assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
@@ -1074,6 +1085,7 @@ export async function startLocalCopierExecutionAgent(
     });
   });
   const address = server.address() as AddressInfo;
+  options.controller.startArmPreparation?.();
   const beginShutdown = () => {
     if (shuttingDown && serverClosePromise) return;
     shuttingDown = true;

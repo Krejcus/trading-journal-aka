@@ -175,6 +175,13 @@ export interface CopierControllerStatus {
   shadowMode: boolean;
   connected: boolean;
   reconciliationRequired: boolean;
+  /** Worker-local read-only readiness. Never an authorization token for the UI. */
+  armPreparation?: {
+    state: 'needed' | 'checking' | 'ready' | 'blocked';
+    verifiedAt: number | null;
+    reason: string | null;
+    manualRecoveryRequired: boolean;
+  };
   divergentAccounts: number[];
   workingOrderAccounts: number[];
   stuckOutbox: boolean;
@@ -513,7 +520,11 @@ export interface CopierRuntimeController {
    * Bez něj platí výchozí TTL z risk gate. Expirace odzbrojí a podle
    * `safety.armExpiryFlatten` risk-redukčně zavře otevřené kopie.
    */
-  arm(options?: { shadowMode?: boolean; ttlMs?: number }): void;
+  arm(options?: { shadowMode?: boolean; ttlMs?: number; requirePreparation?: boolean }): void;
+  /** Deduplicated read-only preparation; never acknowledges an incident or arms. */
+  prepareArm?(): Promise<void>;
+  /** Enable background warming when an execution agent starts serving ON/OFF. */
+  startArmPreparation?(): void;
   /** Irreversibly freezes new ARM and durably clears restart-recovery exposure state. */
   beginShutdown(): Promise<void>;
   disarm(trigger?: 'manual' | 'config-change'): void;
@@ -1644,6 +1655,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   );
   const seenFollowerRiskFillIds = new Set(restoredRiskLedger.ledger?.seenFillIds ?? []);
   let reconciliationTail: Promise<void> = Promise.resolve();
+  const ARM_PREPARATION_MAX_AGE_MS = 30_000;
+  const ARM_PREPARATION_REFRESH_MS = 20_000;
+  let armPreparationReceipt: {
+    generation: number;
+    observation: number;
+    connection: number;
+    configuration: string;
+    verifiedAt: number;
+    accountIds: number[];
+    routes: string | null;
+  } | null = null;
+  let armPreparationInFlight: Promise<void> | null = null;
+  let armPreparationError: string | null = null;
+  let armPreparationIncidentRequiresRecovery = false;
+  let armPreparationLastAttemptAt = -Infinity;
+  let automaticArmPreparation = false;
   let reconciliationRequestsPending = 0;
   const admittedLeaderOrders = new Set<string>();
   const admittedFlatExitOrders = new Set<string>();
@@ -3894,6 +3921,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const invalidateReconciliation = () => {
     safetyGeneration += 1;
     positionCheckComplete = false;
+    armPreparationReceipt = null;
+    armPreparationLastAttemptAt = -Infinity;
     source.requireReconciliation();
   };
 
@@ -3909,6 +3938,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   ) => {
     const wasArmed = gate.armed;
     const wasLiveArmed = gate.armed && !gate.shadowMode;
+    if (!failure.transportLost) armPreparationIncidentRequiresRecovery = true;
     invalidateReconciliation();
     lastError = errorOf(reason);
     const existingSameIncident = lastDisarm
@@ -7905,6 +7935,63 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return null;
   };
 
+  const armPreparationConfiguration = () => JSON.stringify({
+    id: group.id, leaderAccountId: group.leaderAccountId,
+    followers: group.followers, safety: group.safety,
+    ineligibleAccounts: [...currentIneligibleAccounts().keys()].sort((a, b) => a - b),
+  });
+  const armPreparationBlocker = (): string | null => {
+    if (stopped || shutdownRequested) return 'Worker se ukončuje';
+    if (gate.killSwitch) return 'Kill switch je aktivní';
+    if (startupGroupRepair || startupMissingLeaderRoute) return 'Nejdřív oprav uloženou skupinu';
+    if (processor.recoveryStatus().state !== 'ready') return 'Durable stav workeru není připravený';
+    if (armPreparationIncidentRequiresRecovery) return 'Po incidentu je potřeba ruční Kontrola pozic';
+    if (lastError) return `Nejdřív vyřeš incident a proveď Kontrolu pozic: ${lastError.message}`;
+    if (pendingConnectionRecovery || currentRuntime().state.safety.managementOnly) {
+      return 'Nejdřív dokonči obnovu otevřených kopií';
+    }
+    return readOnlyRecoveryBlocker();
+  };
+  const armPreparationRoutes = (accountIds: readonly number[]): string | null => {
+    try {
+      const epochs = accountIds.map(accountId => [accountId,
+        broker.routeEpoch ? broker.routeEpoch(accountId) : connectionSyncGeneration]);
+      return epochs.some(([, epoch]) => epoch == null) ? null : JSON.stringify(epochs);
+    } catch { return null; }
+  };
+  const hasFreshArmPreparation = (checkRisk = true): boolean => {
+    const receipt = armPreparationReceipt;
+    const now = clock();
+    if (!receipt || !gate.connected || gate.armed || armPreparationBlocker()
+      || receipt.generation !== safetyGeneration
+      || receipt.observation !== brokerObservationVersion
+      || receipt.connection !== connectionSyncGeneration
+      || receipt.routes == null || receipt.routes !== armPreparationRoutes(receipt.accountIds)
+      || receipt.configuration !== armPreparationConfiguration()
+      || [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)]
+        .some(accountId => accountId == null || (!currentIneligibleAccounts(now).has(accountId)
+          && !receipt.accountIds.includes(accountId)))
+      || now < receipt.verifiedAt || now - receipt.verifiedAt > ARM_PREPARATION_MAX_AGE_MS
+      || !sameTradovateSession(receipt.verifiedAt, now)
+      || !positionCheckComplete || source.needsReconciliation()) return false;
+    if (checkRisk) {
+      try { assertVerifiedArmRisk(now); } catch { return false; }
+    }
+    return true;
+  };
+  const recordArmPreparation = (accountIds: number[], routes: string | null) => {
+    armPreparationReceipt = {
+      generation: safetyGeneration, observation: brokerObservationVersion,
+      connection: connectionSyncGeneration, configuration: armPreparationConfiguration(),
+      verifiedAt: clock(), accountIds, routes,
+    };
+    armPreparationError = null;
+  };
+  const withArmReadDeadline = <T>(read: Promise<T>): Promise<T> => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Předběžné ověření brokera překročilo 10 s')), 10_000);
+    read.then(value => { clearTimeout(timer); resolve(value); }, reason => { clearTimeout(timer); reject(reason); });
+  });
+
   // Unlike connection recovery, a participation toggle does not require
   // every OTHER follower's previously opened copy to have finished. The
   // leader and the selected follower must be flat; unfinished operations
@@ -7955,6 +8042,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (group.leaderAccountId == null) throw new Error('Copy group nemá leader účet');
     const generationAtStart = safetyGeneration;
     const observationAtStart = brokerObservationVersion;
+    const configurationAtStart = armPreparationConfiguration();
+    const connectionAtStart = connectionSyncGeneration;
     const accountIds = [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)];
     const followerIds = new Set(group.followers.map(follower => follower.accountId));
     const explicitOptional = new Set(missingOptionalAccountIds);
@@ -7968,7 +8057,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       .filter(follower => ineligible.has(follower.accountId))
       .map(follower => follower.accountId));
     const routedAccountIds = accountIds.filter(accountId => !explicitOptional.has(accountId));
-    const capabilities = await broker.listAccountCapabilities(routedAccountIds);
+    const capabilities = await withArmReadDeadline(broker.listAccountCapabilities(routedAccountIds));
     const capabilityByAccount = new Map(capabilities.map(capability => [capability.accountId, capability]));
     const missingRequired = routedAccountIds.filter(accountId => (
       !capabilityByAccount.has(accountId) && !optionalFollowers.has(accountId)
@@ -7997,19 +8086,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const snapshotAccountIds = routedAccountIds.filter(accountId => {
       const capability = capabilityByAccount.get(accountId);
       return capability?.active === true
-        && capability.canTrade === true
+        && (accountId === group.leaderAccountId || capability.canTrade === true)
         && (accountId === group.leaderAccountId || !optionalFollowers.has(accountId));
     });
-    const snapshots = await Promise.all(snapshotAccountIds.map(async accountId => {
+    const routesAtStart = armPreparationRoutes(snapshotAccountIds);
+    const snapshots = await withArmReadDeadline(Promise.all(snapshotAccountIds.map(async accountId => {
       const [positions, orders] = await Promise.all([
         broker.listPositions(accountId),
         broker.listOrders(accountId),
       ]);
       return { accountId, positions, orders };
-    }));
+    })));
     if (
       generationAtStart !== safetyGeneration
       || observationAtStart !== brokerObservationVersion
+      || configurationAtStart !== armPreparationConfiguration()
+      || connectionAtStart !== connectionSyncGeneration
+      || routesAtStart !== armPreparationRoutes(snapshotAccountIds)
+      || stopped || shutdownRequested || gate.killSwitch
       || !gate.connected
       || gate.armed
     ) throw new Error('stav se změnil během read-only preflightu');
@@ -8072,11 +8166,67 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       nextWorkingOrderAccounts.size > 0 ? `working=${[...nextWorkingOrderAccounts].join(',')}` : '',
       !allFlat ? 'některý účet není flat' : '',
     ].filter(Boolean).join('; ');
+    if (positionCheckComplete) recordArmPreparation(snapshotAccountIds, routesAtStart);
     return { clean: positionCheckComplete, reason: reason || null };
+  };
+
+  const prepareArm = (refresh = false): Promise<void> => {
+    if (armPreparationInFlight) return armPreparationInFlight;
+    if (!refresh && hasFreshArmPreparation()) return Promise.resolve();
+    const admittedGeneration = safetyGeneration;
+    const assertCurrent = () => {
+      if (admittedGeneration !== safetyGeneration) throw new Error('Přípravu zapnutí zneplatnila změna stavu nebo DISARM');
+      if (gate.armed) throw new Error('Příprava vyžaduje vypnutou kopírku');
+      if (!gate.connected) throw new Error('Worker není připojen k brokeru');
+      const blocker = armPreparationBlocker();
+      if (blocker) throw new Error(blocker);
+    };
+    armPreparationLastAttemptAt = clock();
+    const admittedEvents = eventTail;
+    const run = admittedEvents.then(async () => {
+      // Startup/reconnect recovery lives on the event lane. Never run the
+      // generic read in parallel with it, or occupy its reconciliation lane
+      // while waiting for those events (recovery itself needs that lane).
+      assertCurrent();
+      if (!refresh && hasFreshArmPreparation()) return;
+      if (refresh || !hasFreshArmPreparation(false)) {
+        const read = reconciliationTail.then(() => {
+          assertCurrent();
+          return readFlatPreflightSnapshot([]);
+        });
+        reconciliationTail = read.then(() => undefined, () => undefined);
+        const snapshot = await read;
+        assertCurrent();
+        if (!snapshot.clean) throw new Error(snapshot.reason ?? 'Účty nejsou flat nebo mají pracovní příkazy');
+      }
+      try { assertVerifiedArmRisk(clock()); } catch {
+        scheduleAccountRiskPoll(followersRequiringVerifiedRisk(clock()).map(follower => follower.accountId), true);
+        await accountRiskPollTail;
+      }
+      assertCurrent();
+      if (!hasFreshArmPreparation()) throw new Error('Předběžné ověření není aktuální; zapnutí zůstává vypnuté');
+      armPreparationError = null;
+    });
+    const tracked = run.catch(reason => {
+      armPreparationError = errorOf(reason).message;
+      throw reason;
+    }).finally(() => { armPreparationInFlight = null; });
+    armPreparationInFlight = tracked;
+    return tracked;
+  };
+  const scheduleArmPreparation = () => {
+    if (!automaticArmPreparation || gate.armed || !gate.connected || stopped || armPreparationInFlight
+      || armPreparationBlocker() || recoveryInFlight || pendingReadOnlyConnectionRecovery
+      || clock() - armPreparationLastAttemptAt < ARM_PREPARATION_REFRESH_MS) return;
+    if (hasFreshArmPreparation() && armPreparationReceipt
+      && clock() - armPreparationReceipt.verifiedAt < ARM_PREPARATION_REFRESH_MS) return;
+    void prepareArm(true).catch(() => undefined);
   };
 
   const runReadOnlyConnectionRecovery = async () => {
     if (!pendingReadOnlyConnectionRecovery || stopped || pendingConnectionRecovery) return;
+    // A subsequent transport reconnect cannot acknowledge an earlier incident.
+    if (armPreparationIncidentRequiresRecovery) return;
     if (gate.killSwitch || group.leaderAccountId == null) {
       pendingReadOnlyConnectionRecovery = false;
       return;
@@ -8163,6 +8313,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           else await runReadOnlyConnectionRecovery();
         } finally {
           recoveryInFlight = false;
+          scheduleArmPreparation();
         }
       })
       .catch(reason => {
@@ -11028,6 +11179,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)],
       );
       await maybeReleaseManualTradeCuts(0);
+      scheduleArmPreparation();
       return;
     }
     if (event.type === 'error') {
@@ -13805,7 +13957,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     connectionRenewalBlocker() {
       if (autoCloseInFlight) return 'auto-close';
       if (recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery
-        || reconciliationRequestsPending > 0) return 'connection recovery';
+        || reconciliationRequestsPending > 0 || armPreparationInFlight) return 'connection recovery';
       if (hasInFlightOutbox()) return 'durable outbox';
       if (pendingBrokerEvents > 0) return 'leader event queue';
       if (pendingOsoTimers.size > 0 || pendingOsoEvents.size > 0 || pendingOsoFlushes.size > 0) {
@@ -13814,7 +13966,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (connectionRenewalClock() < leaderEventQuietUntil) return 'leader event quiet window';
       return null;
     },
-    arm({ shadowMode = false, ttlMs }: { shadowMode?: boolean; ttlMs?: number } = {}) {
+    prepareArm,
+    startArmPreparation() {
+      automaticArmPreparation = true;
+      scheduleArmPreparation();
+    },
+    arm({ shadowMode = false, ttlMs, requirePreparation = false } = {}) {
       if (stopped) throw new Error('Copier runtime is stopped');
       if (shutdownRequested) throw new Error('Copier runtime se právě bezpečně ukončuje');
       const processorRecovery = processor.recoveryStatus();
@@ -13834,6 +13991,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         throw new Error('ARM TTL musí být kladný počet milisekund');
       }
       const now = clock();
+      if (requirePreparation && !hasFreshArmPreparation()) {
+        throw new Error('ARM blokován: předběžné ověření bylo zneplatněno');
+      }
       const startedNewRiskSession = rollRiskSessionMemoryIfExpired(now);
       if (!shadowMode) assertVerifiedArmRisk(now);
       if (!group.enabled) throw new Error('Copier nelze armovat: skupina je vypnutá');
@@ -13919,9 +14079,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           .then(() => ensureDailySession(now).then(() => undefined))
           .catch(reason => failClosed(reason, { autoClose: false }));
       }
-      scheduleAccountRiskPoll(
-        [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)],
-        true,
+      if (requirePreparation) {
+        // Enforce the verified risk limits immediately, before newly queued
+        // leader events, without another REST round-trip. Merely deferring
+        // the old forced poll would leave cuts unenforced until a heartbeat.
+        eventTail = eventTail.then(() => applyAccountRiskPoll(
+          [], currentDailyStats(clock()).sessionEndAt, [],
+        )).catch(reason => failClosed(reason, { autoClose: false }));
+      } else scheduleAccountRiskPoll(
+        [group.leaderAccountId, ...group.followers.map(follower => follower.accountId)], true,
       );
       lastResumeOffer = null;
       // Nová epizoda: ARM prošel všemi branami (flat, žádný stuck outbox),
@@ -13951,6 +14117,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     },
     disarm(trigger = 'manual') {
       safetyGeneration += 1;
+      armPreparationLastAttemptAt = -Infinity;
       const wasArmed = gate.armed;
       gate = { ...gate, armed: false };
       cancelFollowerCutBackgroundLanes('disarm');
@@ -14131,6 +14298,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Pouze její čistý výsledek smí odstranit starou chybu; automatické
       // reconnect/terminal-fill kontroly incident uživateli neschovávají.
       const result = await performReconciliation({ ...reconciliationOptions, clearLastError: true });
+      if (result.authoritativelyClean) armPreparationIncidentRequiresRecovery = false;
       const riskAccountIds = followersRequiringVerifiedRisk(clock()).map(follower => follower.accountId);
       if (result.authoritativelyClean && riskAccountIds.length > 0) {
         // Kontrola pozic je jediná explicitní read-only brána před ARM.
@@ -14625,6 +14793,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         shadowMode: gate.shadowMode,
         connected: gate.connected,
         reconciliationRequired: source.needsReconciliation() || !positionCheckComplete,
+        armPreparation: {
+          state: armPreparationInFlight || recoveryInFlight ? 'checking'
+            : armPreparationBlocker() ? 'blocked'
+              : hasFreshArmPreparation() ? 'ready' : 'needed',
+          verifiedAt: armPreparationReceipt?.verifiedAt ?? null,
+          reason: armPreparationBlocker() ?? armPreparationError,
+          manualRecoveryRequired: armPreparationBlocker() != null,
+        },
         divergentAccounts: [...gate.divergentAccounts],
         workingOrderAccounts: [...workingOrderAccounts],
         stuckOutbox: stuckOperations.length > 0,
@@ -14838,6 +15014,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const observedDisarmPersistence = disarmPersistenceTail;
         await observedDisarmPersistence;
         await processor.waitForRecovery();
+        const observedPreparation = armPreparationInFlight;
+        if (observedPreparation) await observedPreparation.catch(() => undefined);
         const observedRiskPoll = accountRiskPollTail;
         await observedRiskPoll;
         const observedRouteEpochRefresh = routeEpochRefreshTail;
@@ -14857,6 +15035,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           && observedRouteEpochRefresh === routeEpochRefreshTail
           && followerCutBackgroundJobs.size === 0
           && observedShutdown === shutdownPromise
+          && observedPreparation === armPreparationInFlight
           && pendingOsoFlushes.size === 0
         ) return;
       }

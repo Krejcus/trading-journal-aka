@@ -81,12 +81,23 @@ describe('Connect/Disconnect přepínač copieru', () => {
     expect(markup).toContain('disabled=""');
   });
 
-  it('během přechodu točí spinner v knoflíku a nepustí další kliknutí', () => {
+  it('během zapínání točí spinner a dovolí zrušení přes OFF', () => {
     const markup = render({ transition: 'connecting' });
     expect(markup).toContain('copier-switch-busy');
     expect(markup).toContain('copier-switch-spinner');
     expect(markup).toContain('animate-spin');
     expect(markup).toContain('aria-busy="true"');
-    expect(markup).toContain('disabled=""');
+    expect(markup).not.toContain('disabled=""');
+    expect(markup).toContain('Zrušit zapínání kopírky');
+  });
+
+  it('zrušení zapínání zůstává dostupné i při ztrátě ověřeného stavu', () => {
+    const markup = render({ transition: 'connecting', statusPending: true, runtimeReady: false });
+    expect(markup).toContain('Zrušit zapínání kopírky');
+    expect(markup).not.toContain('disabled=""');
+  });
+
+  it('během vypínání nedovolí zahájit další akci', () => {
+    expect(render({ transition: 'disconnecting' })).toContain('disabled=""');
   });
 });

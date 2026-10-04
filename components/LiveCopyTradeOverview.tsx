@@ -877,6 +877,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   }, []);
   const [verifyingAccountId, setVerifyingAccountId] = useState<number | null>(null);
   const [copierTransition, setCopierTransition] = useState<'connecting' | 'disconnecting' | null>(null);
+  const copierTransitionRequest = useRef(0);
+  const copierTransitionRef = useRef<'connecting' | 'disconnecting' | null>(null);
   const [transitionGroupId, setTransitionGroupId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ tone: 'success' | 'info' | 'error'; text: string; accountIds?: number[] } | null>(null);
   const groupLibraryFence = useRef(new CopyGroupLibraryRequestFence(userId)).current;
@@ -1200,11 +1202,14 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     connecting: boolean,
     action: () => Promise<void> | void,
   ) => {
-    if (copierTransition) return;
+    if (copierTransitionRef.current && (connecting || copierTransitionRef.current === 'disconnecting')) return;
+    const request = ++copierTransitionRequest.current;
+    copierTransitionRef.current = connecting ? 'connecting' : 'disconnecting';
     setTransitionGroupId(groupId);
     setCopierTransition(connecting ? 'connecting' : 'disconnecting');
     try {
       await action();
+      if (request !== copierTransitionRequest.current) return;
       // Ručně vypnutý follower se snadno zapomene — při zapnutí to řekneme.
       const armedGroup = groups.find(group => group.id === groupId)
         ?? (runtimeGroup?.id === groupId ? runtimeGroup : null);
@@ -1222,6 +1227,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         ? { tone: 'success', text: `Copier je připojený — příkazy leadera se kopírují naostro.${offNote}` }
         : { tone: 'info', text: 'Copier je bezpečně odpojený.' });
     } catch (reason) {
+      if (request !== copierTransitionRequest.current) return;
       if (!connecting && isCopierBrakeQueuedError(reason)) {
         setToast({ tone: 'info', text: reason.message });
         return;
@@ -1246,8 +1252,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           : undefined,
       });
     } finally {
-      setCopierTransition(null);
-      setTransitionGroupId(null);
+      if (request === copierTransitionRequest.current) {
+        copierTransitionRef.current = null;
+        setCopierTransition(null);
+        setTransitionGroupId(null);
+      }
     }
   };
 
@@ -1291,7 +1300,11 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   };
 
   const requestGroupPower = (candidate: CopyGroupConfig) => {
-    if (copierTransition) return;
+    if (copierTransitionRef.current === 'connecting') {
+      if (onDisarm) void runCopierTransition(candidate.id, false, onDisarm);
+      return;
+    }
+    if (copierTransitionRef.current) return;
     if (copierStatusPending) {
       // Neověřený stav (návrat z pozadí, pomalý relay, spící Mac): ARM se
       // nikdy nenabízí. Vypnutí ano — je jednosměrné a worker ho provede i
@@ -2778,7 +2791,8 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
   const display = useCopierPowerDisplay(powerDisplayKey, connected, statusPending);
   const verifyingVisible = useDelayedFlag(statusPending, COPIER_VERIFYING_INDICATOR_DELAY_MS);
   const busy = transition != null;
-  const disabled = statusPending || !runtimeReady || busy || (!connected && connectBlocked);
+  const cancelConnecting = transition === 'connecting';
+  const disabled = !cancelConnecting && (statusPending || !runtimeReady || busy || (!connected && connectBlocked));
   // Knoflík ukazuje ZÁMĚR (hned po kliknutí sjede na novou stranu), kolej a
   // popisky ON/OFF dál jen potvrzený stav. Dokud worker ARM/DISARM nepotvrdí,
   // kolej tedy nezezelená a v knoflíku se točí kolečko.
@@ -2797,7 +2811,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
     const timer = window.setTimeout(() => setSettle(null), 650);
     return () => window.clearTimeout(timer);
   }, [transition, connected]);
-  const title = statusPending
+  const title = cancelConnecting ? 'Kliknutím zrušit zapínání kopírky.' : statusPending
     ? 'Zjišťuji stav copieru…'
     : !runtimeReady
       ? 'Execution runtime není pro tuto skupinu dostupný.'
@@ -2809,7 +2823,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
   // tvářil jako odpojený. Bez potvrzeného stavu proto „Neověřeno“; s ním
   // poslední potvrzená poloha (tlumeně). Kliknout jde jen směrem k vypnutí:
   // stav ZAPNUTO nebo neznámý stav otevře potvrzení vypnutí, ARM nikdy.
-  if (statusPending) {
+  if (statusPending && !cancelConnecting) {
     const retainedOn = display.connected === true;
     const retainedOff = display.connected === false;
     const warning = display.warning ? ' Stav není aktuální — spojení s workerem se nedaří obnovit.' : '';
@@ -2875,7 +2889,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
       role="switch"
       aria-checked={connected}
       aria-busy={busy || undefined}
-      aria-label={connected ? 'Vypnout kopírovací skupinu' : 'Zapnout kopírovací skupinu'}
+      aria-label={cancelConnecting ? 'Zrušit zapínání kopírky' : connected ? 'Vypnout kopírovací skupinu' : 'Zapnout kopírovací skupinu'}
       title={title}
       disabled={disabled}
       onClick={event => {
@@ -4293,7 +4307,11 @@ export const CopierMaintenancePanel = ({ status, known, onReconcile }: {
   const repair = status.startupGroupRepair ?? null;
   // Jen skutečný požadavek workeru. Zastaralý snímek pro zapnutí vypnutého
   // followera platí za DISARMED skoro pořád a panel by svítil zbytečně.
-  const needsCheck = !status.armed && status.reconciliationRequired;
+  const preparation = status.armPreparation;
+  const needsCheck = !status.armed && (preparation?.manualRecoveryRequired
+    || (status.reconciliationRequired && !preparation));
+  // Background warming must not insert/remove a panel every refresh. The
+  // ON switch owns progress; this panel is only for operator recovery.
   if (!repair && !needsCheck && !result) return null;
   const runCheck = async () => {
     if (!onReconcile || busy) return;
@@ -4327,7 +4345,7 @@ export const CopierMaintenancePanel = ({ status, known, onReconcile }: {
             </p>
           ) : needsCheck ? (
             <p>
-              Před zapnutím je potřeba Kontrola pozic (read-only u brokera, nic neobchoduje).
+              {preparation?.reason ?? 'Před zapnutím je potřeba Kontrola pozic (read-only u brokera, nic neobchoduje).'}
             </p>
           ) : null}
           {result ? (

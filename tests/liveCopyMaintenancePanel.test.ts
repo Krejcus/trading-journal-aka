@@ -52,4 +52,18 @@ describe('CopierMaintenancePanel', () => {
   it('bez ověřeného stavu nic netvrdí', () => {
     expect(render(status({ reconciliationRequired: true }), false)).toBe('');
   });
+
+  it.each(['needed', 'checking'] as const)('běžná příprava %s nevyžaduje ruční kontrolu', state => {
+    const html = render(status({ reconciliationRequired: true,
+      armPreparation: { state, verifiedAt: null, reason: null, manualRecoveryRequired: false } }));
+    expect(html).toBe('');
+  });
+
+  it('po incidentu zachová ruční obnovu i s podporou automatické přípravy', () => {
+    const html = render(status({ reconciliationRequired: true,
+      armPreparation: { state: 'blocked', verifiedAt: null,
+        reason: 'Po incidentu je potřeba ruční Kontrola pozic', manualRecoveryRequired: true } }));
+    expect(html).toContain('Po incidentu');
+    expect(html).toContain('Zkontrolovat pozice');
+  });
 });

@@ -258,6 +258,42 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-04 — Předběžná read-only příprava ON/OFF kopírky (Codex)
+
+- Po souhlasu s implementací doplněna lokální příprava ve workeru. Úzký
+  startup/reconnect preflight se využije předem; execution agent aktivuje
+  obnovování za DISARMED přes heartbeat nejdříve po 20 s. Samostatní runtime
+  klienti si zachovají původní frekvenci risk dotazů. Příprava se deduplikuje
+  mezi pozadím a ON a nikdy nevolá veřejné recovery `reconcile()`.
+- Potvrzení platí nejvýše 30 s v jedné broker session. Fence zahrnuje safety
+  generation, obchodní ingress, connection sync generation, konfiguraci,
+  eligibility, skutečně ověřené účty a per-account route epoch. Missing
+  optional follower při reconnectu nesmí potvrdit LIVE ARM; read-only leader
+  zůstává součástí flat kontroly. Čtení mají 10s deadline a pozdní výsledek
+  nemůže publikovat potvrzení.
+- Připravené ON vynechá další routing refresh, pozice/orders i nový risk REST
+  poll, zachová všechny ARM brány a čeká na durable potvrzení. Ověřené risk
+  limity se uplatní ihned před dalšími událostmi leadera, bez čekání na
+  heartbeat. Incident vyžaduje ruční kontrolu a benigní reconnect jej nesmaže.
+- UI běžnou přípravou nevkládá panel ani neposouvá obsah. Během ON jde
+  přepínačem poslat OFF; starý výsledek ON nepřepíše novější přechod OFF.
+  Brzdy dál obcházejí FIFO a deadline/brake epoch blokují pozdní ARM. Starší
+  worker si zachová původní ruční Kontrolu pozic.
+- Ověření: `npm ci --offline --no-audit --no-fund`, typecheck, produkční build
+  a **4 869 testů / 523 souborů PASS** (1 soubor skipped, 1 test todo).
+  Nových 17 bezpečnostních scénářů v `copierWorkerArmPreparation.test.ts`;
+  navíc UI testy přípravy bez panelu, staršího workeru, incidentu a zrušení ON.
+  Cílený lint má 1 dřívější `preserve-caught-error` v metadata rollbacku
+  agenta, potvrzenou i na nezměněném HEAD; žádná nová chyba. Diff-check čistý.
+- Skutečná localhost LIVE stránka vykreslena bez execution akcí. Exportované
+  komponenty ověřeny v oddělené simulaci a dočasná simulace odstraněna.
+  Podrobnosti: `docs/COPIER_ARM_PREPARATION_20261004.md`; screenshot simulace
+  `/private/tmp/alphatrade-copier-preparation-20261004.jpg`.
+- Bez commitu, push, nasazení, instalace workeru nebo brokerové akce.
+  Nainstalovaný worker ani iPhone tuto opravu zatím nemají. Latence telefonu
+  přes relay není změřená; offline test prokazuje vynechaná čtení, nikoli
+  konkrétní zrychlení v sekundách. OFF transport se sám touto změnou nezrychlí.
+
 ### 2026-10-04 — Profil: okno ve stylu appky, karta v panelu bez odhlášení (Claude)
 
 - Karta profilu v bočním panelu: bez ikony odhlášení a bez blikajícího
