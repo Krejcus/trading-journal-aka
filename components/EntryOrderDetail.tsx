@@ -37,7 +37,7 @@ export default function EntryOrderDetail({ order, outcome, pointValue = 2, isDar
     ...(order.end ? [{ label: order.end.kind === 'fill' ? 'Vyplněn' : 'Zrušen', at: order.end.at, price: null, dot: order.end.kind === 'fill' ? '#10b981' : '#94a3b8' }] : []),
   ];
   return (
-    <div className={`entry-order-detail rounded-lg border px-3 py-2.5 text-[11px] ${isDark ? 'border-white/10 bg-white/[0.03]' : 'border-slate-200 bg-white'}`}>
+    <div className={`entry-order-detail rounded-lg border px-3 py-2.5 text-[11px] ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}>
       <div className="mb-2 flex items-center gap-1.5">
         <span className={`rounded-full px-2 py-[3px] text-[9.5px] font-extrabold tracking-[0.02em] text-white ${order.side === 'Buy' ? 'bg-[#2962ff]' : 'bg-[#f23645]'}`}>
           {order.side === 'Buy' ? 'BUY' : 'SELL'} {order.type === 'Limit' ? 'LIMIT' : 'STOP'}
@@ -65,7 +65,7 @@ export default function EntryOrderDetail({ order, outcome, pointValue = 2, isDar
       )}
       {card && (
         <div className={`rounded-lg border px-2.5 py-2 ${tone(card.tone)}`}>
-          <small className="block text-[8.5px] font-black tracking-[0.1em] opacity-80">KDYBYS NEZRUŠIL</small>
+          <small className="block text-[10px] font-semibold opacity-80">Kdybys nezrušil</small>
           <strong className="block text-[16px] font-extrabold tracking-[-0.01em] tabular-nums">{card.value}</strong>
           <span className={`block text-[10px] leading-snug ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{card.sub}</span>
         </div>

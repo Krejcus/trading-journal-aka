@@ -62,7 +62,7 @@ interface CustomTooltipProps {
 }
 
 const CustomEquityTooltip = (props: any) => {
-  const { active, payload, label, theme, isRR } = props;
+  const { active, payload, label, isRR } = props;
   if (!active || !payload || !payload.length) return null;
   // Suppress tooltip briefly after a click — prevents stale tooltip overlaying the trade detail modal
   if (Date.now() < _suppressTooltipUntil) return null;
@@ -88,17 +88,14 @@ const CustomEquityTooltip = (props: any) => {
 
   return createPortal(
     <div style={chartTooltipStyle(230)} className={`border p-4 rounded-2xl shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150
-      ${theme === 'oled' ? 'bg-black border-white/10 text-white' :
-        theme === 'dark' ? 'bg-theme-page-95 border-slate-700 text-white' :
-          'bg-white/95 border-slate-200 text-slate-900'
-      }`}>
-      <p className="text-[10px] font-black uppercase tracking-widest mb-2 opacity-50">{label}</p>
+      bg-[var(--bg-card)] border-[var(--border-subtle)] text-[var(--text-primary)]`}>
+      <p className="text-[11px] font-semibold mb-2 opacity-50">{label}</p>
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-1.5 mb-0.5">
               <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
-              <span className="text-[9px] font-black uppercase tracking-tight text-slate-400">Portfolio</span>
+              <span className="text-[11px] font-semibold tracking-tight text-slate-400">Portfolio</span>
             </div>
             <p className={`font-black text-base leading-none ${isPositive ? COLORS.textProfit : COLORS.textLoss}`}>
               {fmtPortfolio(Number(val))}
@@ -106,7 +103,7 @@ const CustomEquityTooltip = (props: any) => {
           </div>
           {trade && (
             <div className="text-right">
-              <span className="text-[9px] font-black uppercase tracking-tight text-slate-400 block mb-0.5">{trade.instrument} <span className={trade.direction === 'Long' ? COLORS.textLong : COLORS.textShort}>{trade.direction}</span></span>
+              <span className="text-[11px] font-semibold tracking-tight text-slate-400 block mb-0.5">{trade.instrument} <span className={trade.direction === 'Long' ? COLORS.textLong : COLORS.textShort}>{trade.direction}</span></span>
               <p className={`font-black text-base leading-none ${trade.pnl >= 0 ? COLORS.textProfit : COLORS.textLoss}`}>
                 {fmtTrade(trade.pnl, trade.riskAmount)}
               </p>
@@ -115,7 +112,7 @@ const CustomEquityTooltip = (props: any) => {
           {/* Netradový propad equity (výplata / incident) — ať je poznat, že to nebyla ztráta z obchodu */}
           {!trade && data?.event && (
             <div className="text-right">
-              <span className={`text-[9px] font-black uppercase tracking-tight block mb-0.5 ${data.event.kind === 'payout' ? 'text-emerald-500' : 'text-rose-400'}`}>
+              <span className={`text-[11px] font-semibold tracking-tight block mb-0.5 ${data.event.kind === 'payout' ? 'text-emerald-500' : 'text-rose-400'}`}>
                 {data.event.kind === 'payout' ? '💸 Výplata' : '⚠️ Incident'}
               </span>
               <p className="font-black text-base leading-none text-slate-400">
@@ -138,7 +135,7 @@ const CustomEquityTooltip = (props: any) => {
           <div className="pt-2 border-t border-white/5">
             <div className="flex items-center gap-2 mb-1">
               <div className="w-1.5 h-1.5 rounded-full bg-amber-400"></div>
-              <span className="text-[10px] font-black uppercase tracking-tight text-amber-500/80">Disciplinovaná</span>
+              <span className="text-[11px] font-semibold tracking-tight text-amber-500/80">Disciplinovaná</span>
             </div>
             <p className="font-black text-lg leading-none text-amber-400">
               ${Number(validVal).toLocaleString(undefined, { maximumFractionDigits: 0 })}
@@ -148,7 +145,7 @@ const CustomEquityTooltip = (props: any) => {
         {!isRR && Number.isFinite(data?.propDrawdownFloor) && (
           <div className="pt-2 border-t border-white/5 space-y-1.5">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-[9px] font-black uppercase tracking-tight text-rose-400">
+              <span className="text-[11px] font-semibold tracking-tight text-rose-400">
                 {data.propDrawdownCombined ? 'Portfolio DD floor' : 'Trailing drawdown'}
               </span>
               <span className="font-black text-sm text-rose-500">${Number(data.propDrawdownFloor).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
@@ -190,10 +187,7 @@ const CustomBarTooltip = (props: any) => {
 
   return createPortal(
     <div style={chartTooltipStyle(220)} className={`border p-4 rounded-lg shadow-xl
-      ${theme === 'oled' ? 'bg-black border-white/10 text-white' :
-        theme === 'dark' ? 'bg-theme-card border-slate-700 text-white' :
-          'bg-white border-slate-200 text-slate-900'
-      }`}>
+      bg-[var(--bg-card)] border-[var(--border-subtle)] text-[var(--text-primary)]`}>
       <div className="flex justify-between items-center mb-2 pb-2 border-b border-gray-700/50">
         <span className="font-bold text-white">{label}</span>
         <span className="text-xs text-slate-400">{count} Obchodů</span>
@@ -400,7 +394,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
         <div className="p-6 rounded-lg transition-all overflow-visible h-full flex flex-col glass-panel">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
             <div>
-              <h3 className={`text-xs font-black uppercase tracking-widest flex items-center gap-2 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
+              <h3 className={`text-xs font-semibold flex items-center gap-2 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
                 <Activity size={16} className="text-blue-500" /> Equity křivka
               </h3>
             </div>
@@ -409,7 +403,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
               <div className="flex items-center gap-3">
                 <button
                   onClick={onToggleDisciplined}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[10px] font-black uppercase transition-all active:scale-95 animate-in slide-in-from-right-4 duration-300 ${showDisciplinedCurve
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[11px] font-semibold transition-all active:scale-95 animate-in slide-in-from-right-4 duration-300 ${showDisciplinedCurve
                     ? 'bg-amber-500/20 border-amber-500/50 text-amber-500 ring-2 ring-amber-500/20'
                     : (theme !== 'light' ? 'bg-slate-800 border-slate-700 text-slate-500' : 'bg-slate-100 border-slate-200 text-slate-400')
                     }`}
@@ -538,7 +532,7 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
             <div className="mt-4 flex justify-center">
               <div className="flex items-center gap-2">
                 <div className="w-3 h-0.5 border-t-2 border-dashed border-amber-400"></div>
-                <span className="text-[9px] font-black uppercase text-amber-500/80">Disciplinovaný (Zlatá cesta)</span>
+                <span className="text-[11px] font-semibold text-amber-500/80">Disciplinovaný (Zlatá cesta)</span>
               </div>
             </div>
           )}
@@ -548,12 +542,9 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
       {/* 2. PERFORMANCE BY HOUR & DAY */}
       {!onlyEquity && (
         <div className="space-y-8">
-          <div className={`p-6 rounded-[32px] border ${theme === 'oled' ? 'bg-black border-white/10' :
-            theme === 'dark' ? 'bg-theme-card-90 border-white/5 backdrop-blur-xl' :
-              'bg-white border-slate-200 shadow-sm'
-            }`}>
+          <div className={`p-6 rounded-[32px] border bg-[var(--bg-card)] border-[var(--border-subtle)] backdrop-blur-xl`}>
             <div className="flex justify-between items-center mb-6">
-              <h3 className={`text-xs font-black uppercase tracking-widest flex items-center gap-2 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
+              <h3 className={`text-xs font-semibold flex items-center gap-2 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
                 <Clock className="w-5 h-5 text-blue-500" /> Výkonnost podle hodin
               </h3>
             </div>
@@ -577,12 +568,9 @@ const Charts: React.FC<ChartsProps> = ({ stats, theme, onlyEquity, onlyDistribut
             </div>
           </div>
 
-          <div className={`p-6 rounded-[32px] border ${theme === 'oled' ? 'bg-black border-white/10' :
-            theme === 'dark' ? 'bg-theme-card-90 border-white/5 backdrop-blur-xl' :
-              'bg-white border-slate-200 shadow-sm'
-            }`}>
+          <div className={`p-6 rounded-[32px] border bg-[var(--bg-card)] border-[var(--border-subtle)] backdrop-blur-xl`}>
             <div className="flex justify-between items-center mb-6">
-              <h3 className={`text-xs font-black uppercase tracking-widest flex items-center gap-2 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
+              <h3 className={`text-xs font-semibold flex items-center gap-2 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
                 <Calendar className="w-5 h-5 text-purple-500" /> Výkonnost podle dnů
               </h3>
             </div>

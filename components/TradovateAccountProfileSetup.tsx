@@ -184,7 +184,7 @@ const ProfileRow = ({
   <div className={`grid min-w-[2100px] grid-cols-[210px_190px_150px_150px_140px_120px_150px_120px_120px_120px_120px_100px_100px] items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2 text-xs last:border-0 ${bulkAction ? 'bg-indigo-500/[0.055]' : 'bg-[var(--bg-card)]'}`}>
     <div className="min-w-0">
       <div className="truncate font-black text-[var(--text-primary)]">{accountLabel}</div>
-      {accountId ? <div className="mt-0.5 font-mono text-[9px] text-[var(--text-secondary)]">ID {accountId}</div> : <button type="button" onClick={bulkAction} className="mt-1 h-7 rounded-md bg-indigo-600 px-2.5 text-[9px] font-black uppercase text-white">Použít na všechny</button>}
+      {accountId ? <div className="mt-0.5 font-mono text-[9px] text-[var(--text-secondary)]">ID {accountId}</div> : <button type="button" onClick={bulkAction} className="mt-1 h-7 rounded-md bg-indigo-600 px-2.5 text-[11px] font-semibold text-white">Použít na všechny</button>}
     </div>
     {'displayName' in profile ? text(profile.displayName, displayName => onChange({ displayName }), 'Vlastní název') : <span className="text-[10px] text-[var(--text-secondary)]">Ponechá individuální názvy</span>}
     <PropFirmInput value={profile.propFirm} onChange={propFirm => changeIdentity({ propFirm })} />
@@ -280,7 +280,7 @@ export default function TradovateAccountProfileSetup({
             <span>Vyber firmu, přesný plán a fázi účtu. Podporujeme <b className="text-[var(--text-primary)]">Tradeify, Lucid a FundedNext Futures</b>. FundedNext: Flex, Legacy, Rapid Pro DLL ON/OFF, Rapid Daily a starší Rapid/Bolt (ověřeno 15. 9. 2026). Evaluace a Funded doplní odlišná pravidla; reálný Live účet nastav ručně podle přidělených limitů. LucidDaily vyber včetně EOD/Intraday a DLL ON/OFF. Hodnoty můžeš ručně upravit. <a className="inline-flex items-center gap-1 font-bold text-indigo-500 hover:underline" href={FUNDEDNEXT_FUTURES_SOURCE} target="_blank" rel="noreferrer">FundedNext pravidla <ExternalLink size={11} /></a> · <a className="font-bold text-indigo-500 hover:underline" href={LUCID_FLEX_SOURCE} target="_blank" rel="noreferrer">Lucid pravidla</a></span>
           </div>
           <div className="overflow-x-auto rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-sm">
-            <div className="sticky top-0 z-10 grid min-w-[2100px] grid-cols-[210px_190px_150px_150px_140px_120px_150px_120px_120px_120px_120px_100px_100px] gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2.5 text-[9px] font-black uppercase tracking-[0.1em] text-[var(--text-secondary)]">
+            <div className="sticky top-0 z-10 grid min-w-[2100px] grid-cols-[210px_190px_150px_150px_140px_120px_150px_120px_120px_120px_120px_100px_100px] gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2.5 text-[11px] font-semibold text-[var(--text-secondary)]">
               <span>Account</span><span>Vlastní název</span><span>Prop firma</span><span>Plán</span><span>Typ účtu</span><span>Velikost</span><span>Drawdown</span><span>Max loss</span><span>Daily loss</span><span>Consistency %</span><span>Profit target</span><span>Max mini</span><span>Max micro</span>
             </div>
             <ProfileRow profile={bulk} accountLabel="Společné hodnoty" bulkAction={applyBulk} onChange={patch => setBulk(current => ({ ...current, ...patch }))} />

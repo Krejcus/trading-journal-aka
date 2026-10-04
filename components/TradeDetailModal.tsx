@@ -12,7 +12,7 @@ import { motion } from 'framer-motion';
 import {
     Play, X, Edit3, Trash2, Clock, Image as ImageIcon,
     Maximize2, ArrowRight, Timer, Terminal, ArrowUpRight, ArrowDownRight,
-    Share2, Check, ChevronLeft, ChevronRight, ChevronDown, Zap, Brain, FileText, Target,
+    Share2, ChevronLeft, ChevronRight, ChevronDown, Zap, Brain, FileText, Target,
     ShieldCheck, Layers, Wallet, Save, CornerDownLeft, AlertOctagon, MoreHorizontal, BarChart3
 } from 'lucide-react';
 import { Trade, Account, CustomEmotion, PnLDisplayMode, User } from '../types';
@@ -49,10 +49,10 @@ const Property = React.memo(({ label, value, subValue, color, icon: Icon, isDark
     <div className={`flex items-baseline justify-between gap-2 py-1 group/prop border-b [&:nth-last-child(-n+2)]:border-0 ${isDark ? 'border-white/[0.03]' : 'border-slate-100'}`}>
         <span className="flex items-center gap-1 shrink-0 opacity-40 group-hover/prop:opacity-60 transition-opacity">
             {Icon && <Icon size={9} className="text-slate-400" />}
-            <span className="text-[8px] font-black uppercase tracking-[0.15em]">{label}</span>
+            <span className="text-[11px] font-semibold">{label}</span>
         </span>
         <span className="flex items-baseline gap-1.5 min-w-0">
-            {subValue && <span className="text-[7px] font-bold text-slate-500 uppercase tracking-wide opacity-60 shrink-0">{subValue}</span>}
+            {subValue && <span className="text-[10px] font-bold text-slate-500 opacity-60 shrink-0">{subValue}</span>}
             <span className={`text-[11px] lg:text-[12px] font-black font-mono tracking-tighter truncate ${color || (isDark ? 'text-slate-200' : 'text-slate-900')}`}>{value}</span>
         </span>
     </div>
@@ -93,10 +93,10 @@ const EditableNumberProperty: React.FC<{
       <span className="flex items-center gap-1 shrink-0">
         <span className="flex items-center gap-1 opacity-40 group-hover/prop:opacity-60 transition-opacity">
           {Icon && <Icon size={9} className="text-slate-400" />}
-          <span className="text-[8px] font-black uppercase tracking-[0.15em]">{label}</span>
+          <span className="text-[11px] font-semibold">{label}</span>
         </span>
         {value === undefined && !editing && (
-          <span className={`text-[7px] font-black uppercase tracking-widest px-1 rounded ${isDark ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'}`}>+</span>
+          <span className={`text-[10px] font-semibold px-1 rounded ${isDark ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'}`}>+</span>
         )}
       </span>
       {editing ? (
@@ -733,9 +733,24 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
     const selectedShot = visualMode === 'screenshots' ? (displayedImageIndex >= 0 ? displayedImageIndex : activeImageIndex) : -1;
     const panel = isDark ? 'bg-theme-card border-white/10' : 'bg-white border-slate-200';
     const hairline = isDark ? 'border-white/[0.06]' : 'border-slate-200/80';
-    const labelCls = 'text-[9.5px] font-black uppercase tracking-[0.12em] text-slate-500';
+    const labelCls = 'text-[9.5px] font-semibold text-slate-500';
     const ghostBase = `h-8 w-8 items-center justify-center rounded-md transition-colors ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-900'}`;
-    const ghostBtn = `inline-flex ${ghostBase}`;
+    const capsuleBtn = `h-[30px] w-[30px] items-center justify-center rounded-lg transition-colors ${isDark ? 'text-slate-400 hover:bg-white/[0.08] hover:text-white' : 'text-slate-400 hover:bg-white/70 hover:text-slate-900'}`;
+    // Skleněná vrstva: barvy podle motivu, záře podle výsledku a její síla podle R
+    // (malý obchod září jemně, velký výrazně). Třídy td-* jsou v index.css.
+    const glassVars = {
+        '--td-res': pnlHex,
+        '--td-res2': isMissed ? '#818cf8' : isBEOverride ? '#fbbf24' : isWin ? '#06b6d4' : '#fb923c',
+        '--td-glow': Math.min(1, 0.45 + Math.abs(tileR != null && Number.isFinite(tileR) ? tileR : 0.3) / 3).toFixed(2),
+        '--td-glass': isDark ? 'rgba(15,23,42,0.42)' : 'rgba(255,255,255,0.55)',
+        '--td-glass-line': isDark ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.8)',
+        '--td-glass-edge': isDark ? 'rgba(0,0,0,0.3)' : 'rgba(15,23,42,0.07)',
+        '--td-glass-hi': isDark ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.95)',
+        '--td-modal-shadow': isDark ? '0 50px 120px -30px rgba(0,0,0,0.95)' : '0 50px 100px -40px rgba(15,23,42,0.55)',
+    } as React.CSSProperties;
+    const glassEdge = isDark ? 'border-white/[0.06]' : 'border-slate-900/[0.06]';
+    // Vybraný náhled / graf: neutrální obrys — zelená a červená patří penězům.
+    const selectedRing = isDark ? 'border-slate-100 shadow-[0_0_0_1px_#f1f5f9]' : 'border-slate-900 shadow-[0_0_0_1px_#0f172a]';
 
     return (
         <ErrorBoundary name="TradeDetailModal">
@@ -751,7 +766,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className="absolute inset-0 bg-theme-page-95 backdrop-blur-2xl"
+                    className="absolute inset-0 bg-[color-mix(in_srgb,var(--bg-page)_55%,transparent)] backdrop-blur-xl"
                     onClick={onClose}
                 />
 
@@ -759,49 +774,47 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                     initial={{ opacity: 0, scale: 0.97, y: 16 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.97, y: 16 }}
-                    className={`relative w-full max-w-[1600px] h-full lg:h-[85vh] rounded-none md:rounded-lg overflow-hidden shadow-[0_40px_80px_-40px_rgba(15,23,42,0.55)] flex flex-col border ${panel}`}
+                    style={glassVars}
+                    className="td-modal relative w-full max-w-[1600px] h-full lg:h-[85vh] rounded-none md:rounded-[14px] overflow-hidden flex flex-col border"
                 >
                     {/* ── Hlavička ───────────────────────────────────────────── */}
-                    <div className={`h-14 shrink-0 border-b flex items-center gap-2.5 px-3 md:px-5 z-20 ${hairline}`}>
+                    <div className={`td-head-glow h-14 shrink-0 border-b flex items-center gap-2.5 px-3 md:px-5 z-20 ${glassEdge}`}>
                         <h2 className={`text-[19px] font-black tracking-tight shrink-0 ${isDark ? 'text-white' : 'text-slate-900'}`}>{activeTrade.instrument}</h2>
-                        <span className={`h-[22px] px-2 rounded border inline-flex items-center gap-1 shrink-0 text-[9.5px] font-black uppercase tracking-[0.07em] ${directionColor}`}>
+                        <span className={`h-6 px-2 rounded-[7px] border inline-flex items-center gap-1 shrink-0 text-[9.5px] font-semibold ${directionColor}`}>
                             {isMissed ? <Clock size={10} /> : (activeTrade.direction === 'Long' ? <ArrowUpRight size={11} strokeWidth={3} /> : <ArrowDownRight size={11} strokeWidth={3} />)}
                             {isMissed ? 'Missed' : activeTrade.direction}
                         </span>
-                        {!isMissed && (
-                            <span className={`hidden sm:inline-flex h-[22px] px-2 rounded border items-center gap-1 shrink-0 text-[9.5px] font-black uppercase tracking-[0.07em] ${status === 'Invalid' ? 'text-rose-500 bg-rose-500/10 border-rose-500/20' : isDark ? 'text-slate-300 bg-white/5 border-white/10' : 'text-slate-600 bg-slate-100 border-slate-200'}`}>
-                                {status === 'Invalid' ? <AlertOctagon size={10} strokeWidth={3} /> : <Check size={10} strokeWidth={3} />}
-                                {status === 'Invalid' ? 'Nevalidní' : 'Validní'}
+                        {/* Validita jen jako výjimka — „Validní“ je výchozí stav a jen by zabíral místo. */}
+                        {status === 'Invalid' && (
+                            <span className="hidden sm:inline-flex h-6 px-2 rounded-[7px] border items-center gap-1 shrink-0 text-[9.5px] font-semibold text-rose-500 bg-rose-500/10 border-rose-500/20">
+                                <AlertOctagon size={10} strokeWidth={3} /> Nevalidní
                             </span>
                         )}
                         <span className={`hidden md:inline text-[12.5px] whitespace-nowrap ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                             <b className={`font-semibold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{dateLabel}</b> · {formatTime(tradeEntryTime)} → {formatTime(exitTime)}
                         </span>
                         <span className="flex-1" />
-                        {needsReview && (
-                            <span className="hidden lg:inline-flex h-[22px] px-2 rounded border items-center gap-1.5 text-[9.5px] font-black uppercase tracking-[0.07em] text-amber-600 bg-amber-500/10 border-amber-500/30">
-                                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />Nezkontrolováno
-                            </span>
-                        )}
                         {onUpdateTrade && (
                             <button type="button" onClick={(e) => { e.stopPropagation(); openReviewOrEdit(); }}
-                                className={`h-8 px-2.5 sm:px-3 rounded-md text-[12px] font-bold whitespace-nowrap transition-colors ${needsReview ? 'bg-indigo-600 text-white hover:bg-indigo-500' : isDark ? 'border border-white/10 text-slate-300 hover:bg-white/5' : 'border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                                className={`h-8 px-2.5 sm:px-3.5 rounded-[9px] text-[12px] font-bold whitespace-nowrap transition-colors ${needsReview ? 'td-primary text-white' : `td-card border ${isDark ? 'text-slate-300 hover:text-white' : 'text-slate-600 hover:text-slate-900'}`}`}
                                 title={journalReviewOnly(activeTrade) ? 'Upravit hodnocení obchodu' : String(activeTrade.id).startsWith('combined_') ? 'Upravit obchod (změny se propíší na účty v aktuálním výběru)' : 'Upravit obchod'}>
                                 {needsReview ? 'Zkontrolovat' : 'Upravit'}
                             </button>
                         )}
-                        <span className={`hidden sm:block h-5 w-px ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
-                        <span className={`flex rounded-md border overflow-hidden ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
+                        {/* Navigace a akce v jedné skleněné kapsli, zavřít zvlášť. */}
+                        <span className="td-card inline-flex shrink-0 items-center rounded-[11px] border p-0.5">
+                        <span className="flex">
                             <button onPointerEnter={onPrefetchPrev} onPointerDown={onPrefetchPrev} onFocus={onPrefetchPrev} onClick={onPrev} disabled={!hasPrev} title="Předchozí obchod (←)"
-                                className={`h-8 w-8 inline-flex items-center justify-center disabled:opacity-25 ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-900'}`}><ChevronLeft size={15} /></button>
+                                className={`h-[30px] w-[30px] rounded-lg inline-flex items-center justify-center disabled:opacity-25 ${isDark ? 'text-slate-400 hover:bg-white/[0.08] hover:text-white' : 'text-slate-400 hover:bg-white/70 hover:text-slate-900'}`}><ChevronLeft size={15} /></button>
                             <button onPointerEnter={onPrefetchNext} onPointerDown={onPrefetchNext} onFocus={onPrefetchNext} onClick={onNext} disabled={!hasNext} title="Další obchod (→)"
-                                className={`h-8 w-8 inline-flex items-center justify-center border-l disabled:opacity-25 ${isDark ? 'border-white/10 text-slate-400 hover:bg-white/5 hover:text-white' : 'border-slate-200 text-slate-400 hover:bg-slate-50 hover:text-slate-900'}`}><ChevronRight size={15} /></button>
+                                className={`h-[30px] w-[30px] rounded-lg inline-flex items-center justify-center disabled:opacity-25 ${isDark ? 'text-slate-400 hover:bg-white/[0.08] hover:text-white' : 'text-slate-400 hover:bg-white/70 hover:text-slate-900'}`}><ChevronRight size={15} /></button>
                         </span>
-                        <button onClick={() => setIsShareCardOpen(true)} title="Sdílet jako kartu" className={`hidden sm:inline-flex ${ghostBase}`}><Share2 size={15} /></button>
+                        <span className={`hidden sm:block mx-0.5 h-4 w-px ${isDark ? 'bg-white/10' : 'bg-slate-900/[0.08]'}`} />
+                        <button onClick={() => setIsShareCardOpen(true)} title="Sdílet jako kartu" className={`hidden sm:inline-flex ${capsuleBtn}`}><Share2 size={15} /></button>
                         <span className="relative">
-                            <button type="button" onClick={() => setMoreOpen(value => !value)} title="Další akce" aria-expanded={moreOpen} className={ghostBtn}><MoreHorizontal size={16} /></button>
+                            <button type="button" onClick={() => setMoreOpen(value => !value)} title="Další akce" aria-expanded={moreOpen} className={`inline-flex ${capsuleBtn}`}><MoreHorizontal size={16} /></button>
                             {moreOpen && (
-                                <div className={`absolute right-0 top-10 z-50 w-52 rounded-lg border py-1 shadow-2xl ${panel}`} onMouseLeave={() => setMoreOpen(false)}>
+                                <div className={`td-card absolute right-0 top-10 z-50 w-52 rounded-xl border py-1 backdrop-blur-xl backdrop-saturate-150 shadow-2xl ${isDark ? 'bg-[#0c1222]/80' : 'bg-white/80'}`} onMouseLeave={() => setMoreOpen(false)}>
                                     <button type="button" onClick={() => { setMoreOpen(false); setIsShareCardOpen(true); }} className={`sm:hidden w-full h-9 px-3 flex items-center gap-2 text-left text-[12px] font-semibold ${isDark ? 'text-slate-200 hover:bg-white/5' : 'text-slate-700 hover:bg-slate-50'}`}><Share2 size={13} /> Sdílet jako kartu</button>
                                     {onUpdateTrade && <button type="button" onClick={() => { setMoreOpen(false); setIsFullEditOpen(true); }} className={`w-full h-9 px-3 flex items-center gap-2 text-left text-[12px] font-semibold ${isDark ? 'text-slate-200 hover:bg-white/5' : 'text-slate-700 hover:bg-slate-50'}`}><Edit3 size={13} /> Upravit obchod</button>}
                                     {onUpdateTrade && !isMissed && <button type="button" onClick={() => { setMoreOpen(false); onUpdateTrade({ isBE: !isBEOverride } as any); }} className={`w-full h-9 px-3 flex items-center gap-2 text-left text-[12px] font-semibold ${isDark ? 'text-slate-200 hover:bg-white/5' : 'text-slate-700 hover:bg-slate-50'}`}
@@ -810,17 +823,17 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                 </div>
                             )}
                         </span>
-                        <span className={`hidden sm:block h-5 w-px ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
-                        <button onClick={onClose} title="Zavřít (Esc)" className={ghostBtn}><X size={17} /></button>
+                        </span>
+                        <button onClick={onClose} title="Zavřít (Esc)" className={`inline-flex ${ghostBase} !h-[34px] !w-[34px] !rounded-full`}><X size={17} /></button>
                     </div>
 
                     <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
 
                         {/* ── Levý sloupec: výsledek, fakta, účty, hodnocení, snímky ── */}
-                        <div className={`order-2 lg:order-1 w-full lg:w-[330px] flex-1 lg:flex-none shrink-0 border-t lg:border-t-0 lg:border-r flex flex-col z-10 overflow-y-auto no-scrollbar ${hairline} ${isDark ? 'bg-white/[0.015]' : 'bg-slate-50/70'}`}>
-                            <div className={`px-5 pt-5 pb-4 border-b ${hairline}`} style={{ background: `linear-gradient(180deg, ${pnlHex}14, transparent)` }}>
+                        <div className={`td-side order-2 lg:order-1 w-full lg:w-[330px] flex-1 lg:flex-none shrink-0 border-t lg:border-t-0 lg:border-r flex flex-col z-10 overflow-y-auto no-scrollbar ${glassEdge}`}>
+                            <div className="px-5 pt-5 pb-3.5">
                                 <p className={labelCls}>{isCombined ? 'Čistý výsledek · vybrané účty' : 'Čistý výsledek · tento účet'}</p>
-                                <h3 className="mt-2 text-[40px] font-light tracking-[-0.04em] leading-none tabular-nums whitespace-nowrap" style={{ color: pnlHex }}>{formattedPnL || '—'}</h3>
+                                <h3 className="td-pnl-glow mt-2 text-[40px] font-light tracking-[-0.04em] leading-none tabular-nums whitespace-nowrap" style={{ color: pnlHex }}>{formattedPnL || '—'}</h3>
                                 {grossFees && (
                                     <p className={`mt-2.5 text-[12px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                                         Hrubě <b className={`font-medium tabular-nums ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{fmtUsd(grossFees.gross)}</b>
@@ -832,9 +845,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             </div>
 
                             {journalReviewOnly(activeTrade) && isCombined && visualMode === 'chart' && (
-                                <p className="px-5 pt-3 text-[9px] font-bold uppercase tracking-wider text-slate-500">Plnění · {accounts.find(account => account.id === executionTrade.accountId)?.name ?? accountName}</p>
+                                <p className="px-5 pt-3 text-[11px] font-bold text-slate-500">Plnění · {accounts.find(account => account.id === executionTrade.accountId)?.name ?? accountName}</p>
                             )}
-                            <div className={`grid grid-cols-2 border-b ${hairline} ${isDark ? 'bg-white/[0.02]' : 'bg-white'}`}>
+                            {/* Fakta jako samostatné skleněné dlaždice nad září — bez čar mezi nimi. */}
+                            <div className="grid grid-cols-2 gap-1.5 px-3.5 pb-2">
                                 {([
                                     ['Vstup', entryPrice > 0 ? fmtPrice(entryPrice) : '—', formatTimeSeconds(tradeEntryTime), undefined],
                                     ['Výstup', exitPrice > 0 ? fmtPrice(exitPrice) : '—', formatTimeSeconds(exitTime), undefined],
@@ -843,9 +857,9 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                     ['Držení', String(holdTime).replace(/m$/, ' min'), undefined, undefined],
                                     ['R', tileR == null || !Number.isFinite(tileR) ? '—' : `${tileR.toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} R`,
                                         tileRiskUsd != null ? `riziko ${fmtUsd(tileRiskUsd, false)}` : 'bez stopu', undefined],
-                                ] as Array<[string, string, string | undefined, string | undefined]>).map(([label, value, sub, color], index) => (
-                                    <div key={label} className={`px-4 py-2 ${index % 2 === 0 ? `border-r ${hairline}` : ''} ${index > 1 ? `border-t ${hairline}` : ''}`}>
-                                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">{label}</p>
+                                ] as Array<[string, string, string | undefined, string | undefined]>).map(([label, value, sub, color]) => (
+                                    <div key={label} className="td-card rounded-lg border px-3 py-2">
+                                        <p className="text-[11px] font-semibold text-slate-500">{label}</p>
                                         <p className={`mt-0.5 text-[13.5px] font-medium tabular-nums whitespace-nowrap ${value === '—' ? 'text-slate-500' : isDark ? 'text-slate-100' : 'text-slate-900'}`} style={color ? { color } : undefined}>
                                             {value}{sub && <span className="ml-1.5 text-[10.5px] font-normal text-slate-500">{sub}</span>}
                                         </p>
@@ -853,7 +867,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                 ))}
                             </div>
                             {!journalReviewOnly(activeTrade) && onUpdateTrade && (
-                                <div className={`px-5 py-2 border-b grid grid-cols-2 gap-x-5 ${hairline}`}>
+                                <div className="px-5 py-1.5 grid grid-cols-2 gap-x-5">
                                     <EditableNumberProperty label="STOP" value={executionTrade.stopLoss} placeholder="—" color="text-rose-500/80" icon={ShieldCheck} isDark={isDark}
                                         onSave={(val) => {
                                             const updates: Partial<Trade> = { stopLoss: val };
@@ -892,7 +906,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                             <>
                                                 <span className={`h-[7px] w-[7px] rounded-full shrink-0 ${acc?.type === 'Funded' ? 'bg-purple-500' : 'bg-blue-500'}`} />
                                                 <span className={`text-[12.5px] font-semibold truncate ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{acc?.name || (gt.accountId === activeTrade.accountId ? accountName : gt.accountId)}</span>
-                                                {master && visibleAccountTrades.length > 1 && <span className="text-[8px] font-black uppercase tracking-widest text-blue-500 shrink-0">Master</span>}
+                                                {master && visibleAccountTrades.length > 1 && <span className="text-[11px] font-semibold text-blue-500 shrink-0">Master</span>}
                                                 <span className={`ml-auto text-[12.5px] font-semibold tabular-nums shrink-0 ${pnlVal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{gt.pnlEstimated ? '≈ ' : ''}{formatValue(gt)}</span>
                                             </>
                                         );
@@ -903,14 +917,14 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                                 <p className={labelCls}>{hasCopies ? 'Účty' : 'Účet'}</p>
                                                 {hasCopies && <span className="text-[10.5px] font-semibold text-slate-500">{tradeAccountLabel(visibleAccountTrades)} · <span className={`tabular-nums ${totalPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{visibleAccountTrades.some(member => member.pnlEstimated) ? '≈ ' : ''}{formatValue({ ...activeTrade, pnl: totalPnl })}</span></span>}
                                             </div>
-                                            <div className={`rounded-md border overflow-hidden ${panel}`}>
+                                            <div className="td-card rounded-lg border overflow-hidden">
                                                 <button type="button" onClick={hasCopies ? () => setAccountsExpanded(v => !v) : undefined} aria-expanded={hasCopies ? accountsExpanded : undefined} disabled={!hasCopies}
-                                                    className={`w-full px-3 py-2 flex items-center gap-2.5 text-left ${hasCopies ? (isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-slate-50') : 'cursor-default'}`}>
+                                                    className={`w-full px-3 py-2 flex items-center gap-2.5 text-left ${hasCopies ? (isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-white/60') : 'cursor-default'}`}>
                                                     {row(masterTrade, isMasterTrade(masterTrade))}
-                                                    {hasCopies && <span className={`flex items-center gap-1 pl-2.5 border-l text-[10.5px] font-bold shrink-0 ${hairline} text-slate-500`}>+{copyTrades.length}<ChevronDown size={12} className={`transition-transform ${accountsExpanded ? 'rotate-180' : ''}`} /></span>}
+                                                    {hasCopies && <span className={`flex items-center gap-1 pl-2.5 border-l text-[10.5px] font-bold shrink-0 ${glassEdge} text-slate-500`}>+{copyTrades.length}<ChevronDown size={12} className={`transition-transform ${accountsExpanded ? 'rotate-180' : ''}`} /></span>}
                                                 </button>
                                                 {hasCopies && accountsExpanded && copyTrades.map(gt => (
-                                                    <div key={gt.id} className={`px-3 py-2 flex items-center gap-2.5 border-t ${hairline}`}>{row(gt, false)}</div>
+                                                    <div key={gt.id} className={`px-3 py-2 flex items-center gap-2.5 border-t ${glassEdge}`}>{row(gt, false)}</div>
                                                 ))}
                                             </div>
                                         </div>
@@ -939,27 +953,27 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                     <div className="grid grid-cols-3 gap-1.5">
                                         {images.slice(0, 5).map((url, index) => (
                                             <button key={url} type="button" onClick={() => { setVisualMode('screenshots'); setActiveImageIndex(index); }}
-                                                className={`relative aspect-[16/10] rounded-md overflow-hidden border transition-[box-shadow,border-color,opacity] ${selectedShot === index ? 'border-emerald-500 shadow-[0_0_0_1px_#10b981]' : hairline} ${visualMode === 'chart' ? 'opacity-55' : ''} ${isDark ? 'bg-black/30' : 'bg-slate-100'}`}>
+                                                className={`relative aspect-[16/10] rounded-lg overflow-hidden border transition-[box-shadow,border-color,opacity] ${selectedShot === index ? selectedRing : 'td-card'} ${visualMode === 'chart' ? 'opacity-85' : ''}`}>
                                                 <img src={url} alt="" className="h-full w-full object-cover object-[30%_50%]" loading="lazy" />
-                                                <span className={`absolute left-1 bottom-1 rounded px-1 text-[8.5px] font-black uppercase tracking-wide ${isDark ? 'bg-black/70 text-slate-200' : 'bg-white/90 text-slate-600'}`}>{shotLabel(index)}</span>
+                                                <span className={`absolute left-1 bottom-1 rounded px-1 text-[8.5px] font-semibold ${isDark ? 'bg-black/70 text-slate-200' : 'bg-white/90 text-slate-600'}`}>{shotLabel(index)}</span>
                                             </button>
                                         ))}
                                         {onAttachScreenshotFile && (
                                             <button type="button" onClick={() => shotInputRef.current?.click()} title="Vložit snímek ze schránky (⌘V) nebo vybrat soubor"
-                                                className={`aspect-[16/10] rounded-md border border-dashed flex flex-col items-center justify-center gap-0.5 text-[10.5px] font-semibold transition-colors ${isDark ? 'border-slate-600 text-slate-500 hover:text-slate-300' : 'border-slate-300 text-slate-400 hover:text-slate-600'}`}>
+                                                className={`aspect-[16/10] rounded-lg border border-dashed flex flex-col items-center justify-center gap-0.5 text-[10.5px] font-semibold transition-colors ${isDark ? 'border-slate-600 text-slate-500 hover:text-slate-300' : 'border-slate-300 text-slate-400 hover:text-slate-600'}`}>
                                                 <span className="text-[13px] leading-none">＋</span>Vložit
                                             </button>
                                         )}
                                     </div>
                                     <input ref={shotInputRef} type="file" accept="image/*" className="hidden" onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void attachShot(file); }} />
                                     <button type="button" onClick={() => setVisualMode('chart')}
-                                        className={`mt-2 w-full flex items-center gap-3 px-3 py-2.5 rounded-md border text-left transition-[border-color,box-shadow] ${visualMode === 'chart' ? 'border-emerald-500 shadow-[0_0_0_1px_#10b981]' : hairline} ${isDark ? 'bg-white/[0.02]' : 'bg-white'}`}>
-                                        <span className={`h-[30px] w-[30px] shrink-0 rounded-md grid place-items-center ${visualMode === 'chart' ? 'bg-emerald-500/10 text-emerald-500' : isDark ? 'bg-white/5 text-slate-400' : 'bg-slate-100 text-slate-500'}`}><BarChart3 size={16} /></span>
+                                        className={`td-card mt-2 w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-[border-color,box-shadow] ${visualMode === 'chart' ? selectedRing : ''}`}>
+                                        <span className={`h-[30px] w-[30px] shrink-0 rounded-md grid place-items-center ${visualMode === 'chart' ? isDark ? 'bg-slate-100 text-slate-900' : 'bg-slate-900 text-white' : isDark ? 'bg-white/5 text-slate-400' : 'bg-slate-900/[0.05] text-slate-500'}`}><BarChart3 size={16} /></span>
                                         <span className="min-w-0">
                                             <b className={`block text-[12.5px] ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>Interaktivní graf</b>
                                             <span className="block truncate text-[11px] text-slate-500">{activeTrade.instrument} · 1 min · průběh SL/TP</span>
                                         </span>
-                                        <span className={`ml-auto shrink-0 text-[10px] font-black uppercase tracking-[0.08em] ${visualMode === 'chart' ? 'text-emerald-500' : 'text-slate-500'}`}>{visualMode === 'chart' ? 'Zobrazeno' : 'Otevřít'}</span>
+                                        <span className={`ml-auto shrink-0 text-[11px] font-semibold ${visualMode === 'chart' ? isDark ? 'text-slate-100' : 'text-slate-900' : 'text-slate-500'}`}>{visualMode === 'chart' ? 'Zobrazeno' : 'Otevřít'}</span>
                                     </button>
                                 </div>
                             </div>
@@ -974,7 +988,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                     <button onClick={() => setVisualMode('chart')} className={`px-3 py-1.5 text-[10.5px] font-bold ${visualMode === 'chart' ? (isDark ? 'bg-white text-slate-900' : 'bg-slate-900 text-white') : 'text-slate-500'}`}>Graf</button>
                                 </div>
                             </div>
-                            <div className={`relative group flex-none h-[420px] lg:flex-1 lg:h-auto lg:min-h-0 overflow-hidden ${isDark ? 'bg-black/20' : 'bg-slate-100/70'}`}>
+                            <div className={`relative group flex-none h-[420px] lg:flex-1 lg:h-auto lg:min-h-0 overflow-hidden bg-[var(--bg-page)]`}>
 
 
                                 {/* Snímek */}
@@ -993,7 +1007,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                             <img src={displayedImageUrl} className="absolute inset-0 w-full h-full object-contain cursor-zoom-in" onClick={() => setIsZoomed(true)} onError={() => { setImageLoadError(true); setDisplayedImage(null); }} />
                                             {activeCopierSnapshot && (
                                                 <div className="absolute top-3 left-3 z-20 rounded-md border border-white/10 bg-black/65 px-2.5 py-1.5 text-white backdrop-blur-md">
-                                                    <p className="text-[9px] font-black uppercase tracking-widest">Auto · {activeCopierSnapshot.kind === 'entry' ? 'vstup' : activeCopierSnapshot.kind === 'exit' ? 'výstup' : activeCopierSnapshot.kind}</p>
+                                                    <p className="text-[11px] font-semibold">Auto · {activeCopierSnapshot.kind === 'entry' ? 'vstup' : activeCopierSnapshot.kind === 'exit' ? 'výstup' : activeCopierSnapshot.kind}</p>
                                                     <p className="mt-0.5 text-[9px] font-mono text-white/60">{new Date(activeCopierSnapshot.at).toLocaleTimeString('cs-CZ')}</p>
                                                 </div>
                                             )}
@@ -1007,7 +1021,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                         ) : (
                                             <div className="absolute inset-0 flex flex-col items-center justify-center opacity-40 text-slate-500 p-8 text-center">
                                                 <ImageIcon size={40} strokeWidth={1} />
-                                                <p className="text-[11px] font-black uppercase tracking-[0.25em] mt-4">{snapshotError ? 'Chyba načítání' : 'Bez screenshotu'}</p>
+                                                <p className="text-[11px] font-semibold mt-4">{snapshotError ? 'Chyba načítání' : 'Bez screenshotu'}</p>
                                             </div>
                                         )
                                     ) : null}
@@ -1026,7 +1040,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                                 </div>
 
                                 {/* Graf — připojí se při prvním otevření a pak zůstává, aby přepnutí zpět bylo okamžité. */}
-                                <div className={`trade-stage-layer absolute inset-0 flex flex-col ${visualMode === 'chart' ? '' : 'is-off'} ${isDark ? 'bg-[#090d12]' : 'bg-white'}`}>
+                                <div className={`trade-stage-layer absolute inset-0 flex flex-col ${visualMode === 'chart' ? '' : 'is-off'} bg-[var(--bg-card)]`}>
                                     {chartMounted && (
                                         <React.Suspense fallback={<div className="absolute inset-0 flex items-center justify-center"><div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-emerald-500 animate-spin" /></div>}>
                                             {chartTrade ? <>
@@ -1050,17 +1064,17 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({
                             </div>
 
                             {/* Poznámka */}
-                            <div className={`shrink-0 border-t px-4 py-3 flex items-start gap-3 ${hairline}`}>
+                            <div className={`shrink-0 border-t px-4 py-3 flex items-start gap-3 ${glassEdge}`}>
                                 <span className={`${labelCls} pt-2.5 shrink-0`}>Poznámka</span>
                                 {isEditingNotes ? (
                                     <textarea autoFocus value={editedNotes} onChange={event => setEditedNotes(event.target.value)}
                                         onBlur={handleSaveNotes}
                                         onKeyDown={event => { if (event.key === 'Escape') { setEditedNotes(activeTrade.notes || ''); setIsEditingNotes(false); } if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) handleSaveNotes(); }}
                                         rows={3} placeholder="Co se v obchodu stalo?"
-                                        className={`flex-1 min-h-[72px] resize-y rounded-md border px-3 py-2 text-[12.5px] leading-relaxed outline-none ${isDark ? 'bg-black/30 border-white/10 text-slate-200' : 'bg-white border-slate-200 text-slate-700'}`} />
+                                        className={`flex-1 min-h-[72px] resize-y rounded-md border px-3 py-2 text-[12.5px] leading-relaxed outline-none ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-200' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-700'}`} />
                                 ) : (
                                     <button type="button" disabled={!onUpdateTrade} onClick={() => setIsEditingNotes(true)}
-                                        className={`flex-1 text-left rounded-md border px-3 py-2 text-[12.5px] leading-relaxed max-h-[120px] overflow-y-auto whitespace-pre-wrap ${isDark ? 'bg-black/20 border-white/10 text-slate-300' : 'bg-white border-slate-200 text-slate-600'} ${onUpdateTrade ? 'cursor-text' : 'cursor-default'}`}>
+                                        className={`td-card flex-1 text-left rounded-lg border px-3 py-2 text-[12.5px] leading-relaxed max-h-[120px] overflow-y-auto whitespace-pre-wrap ${isDark ? 'text-slate-300' : 'text-slate-600'} ${onUpdateTrade ? 'cursor-text' : 'cursor-default'}`}>
                                         {activeTrade.notes || <span className="text-slate-400">Co se v obchodu stalo?</span>}
                                     </button>
                                 )}

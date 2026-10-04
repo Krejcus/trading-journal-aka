@@ -199,7 +199,7 @@ export const ColumnOrderList = ({ tableKey, items, onMove, onToggle }: {
             </span>
             <span className="flex-1 truncate">{item.label}</span>
             {item.locked ? (
-              <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">
+              <span className="flex items-center gap-1 text-[11px] font-semibold text-[var(--text-muted)]">
                 <Lock size={9} /> vždy
               </span>
             ) : (

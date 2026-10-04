@@ -100,7 +100,7 @@ const ConfluenceCapsuleEditor: React.FC<{
   return (
     <div className="mt-2 flex min-h-8 flex-wrap items-center gap-1.5">
       {tags.map(tag => (
-        <span key={tag} className={`inline-flex items-center gap-1 rounded-lg border py-1 pl-2 pr-1 text-[9px] font-black uppercase tracking-wide ${getConfluenceTone(tag, isDark)}`}>
+        <span key={tag} className={`inline-flex items-center gap-1 rounded-lg border py-1 pl-2 pr-1 text-[11px] font-semibold ${getConfluenceTone(tag, isDark)}`}>
           {tag}
           {autoTags.includes(tag) && <span className="text-[7px] opacity-60" title="Automaticky z indikátoru">Auto</span>}
           <button disabled={disabled} type="button" onClick={() => onChange(tags.filter(item => item !== tag).join(', '))} className="flex h-4 w-4 items-center justify-center rounded hover:bg-black/10" aria-label={`Odebrat ${tag}`}><X size={10} /></button>
@@ -127,14 +127,14 @@ const ConfluenceCapsuleEditor: React.FC<{
             }}
             aria-label={addLabel}
             placeholder="Napiš vlastní tag nebo vyber níže"
-            className={`h-8 w-full rounded-lg border px-2 text-[10px] font-bold outline-none focus:border-blue-500 ${isDark ? 'border-white/10 bg-white/[0.04]' : 'border-slate-200 bg-white'}`}
+            className={`h-8 w-full rounded-lg border px-2 text-[10px] font-bold outline-none focus:border-blue-500 ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}
           />
           {choices.length > 0 && <div className="mt-1 flex max-h-24 flex-wrap gap-1 overflow-y-auto" aria-label="Dříve použité tagy">
             {choices.map(tag => <button disabled={disabled} key={tag} type="button" onMouseDown={event => event.preventDefault()} onClick={() => addTags([tag])} className={`rounded border px-2 py-1 text-[10px] ${getConfluenceTone(tag, isDark)}`}>{tag}</button>)}
           </div>}
         </div>
       ) : (
-        <button disabled={disabled} type="button" onClick={() => { cancelled.current = false; setAdding(true); }} className={`inline-flex h-7 items-center gap-1 rounded-lg border border-dashed px-2 text-[9px] font-black uppercase tracking-wide ${isDark ? 'border-white/15 text-slate-400 hover:border-white/30' : 'border-slate-300 text-slate-500 hover:border-slate-400'}`}><Plus size={11} /> {addLabel}</button>
+        <button disabled={disabled} type="button" onClick={() => { cancelled.current = false; setAdding(true); }} className={`inline-flex h-7 items-center gap-1 rounded-lg border border-dashed px-2 text-[11px] font-semibold ${isDark ? 'border-white/15 text-slate-400 hover:border-white/30' : 'border-slate-300 text-slate-500 hover:border-slate-400'}`}><Plus size={11} /> {addLabel}</button>
       )}
     </div>
   );
@@ -458,7 +458,7 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
       if (!saving && event.target === event.currentTarget) onClose();
     }}>
       <section data-backtest-trade-review role="dialog" aria-modal="true" aria-labelledby="backtest-trade-review-title" className={`flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-md border shadow-2xl ${panel}`}>
-        <header className={`border-b px-5 py-4 ${isDark ? 'border-white/10 bg-white/[0.02]' : 'border-slate-200 bg-slate-50/70'}`}>
+        <header className={`border-b px-5 py-4 border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
           <div className="flex items-start gap-4">
             <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded ${isLong ? (isDark ? 'bg-emerald-400/10 text-emerald-300' : 'bg-emerald-50 text-emerald-600') : (isDark ? 'bg-rose-400/10 text-rose-300' : 'bg-rose-50 text-rose-600')}`}>
               {isLong ? <ArrowUpRight size={21} /> : <ArrowDownRight size={21} />}
@@ -466,13 +466,13 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <h2 id="backtest-trade-review-title" className="text-xl font-black tracking-tight">{trade.instrument ?? trade.symbol}</h2>
-                <span className={`rounded border px-2 py-1 text-[9px] font-black uppercase tracking-wider ${isLong ? (isDark ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300' : 'border-emerald-200 bg-emerald-50 text-emerald-700') : (isDark ? 'border-rose-400/25 bg-rose-400/10 text-rose-300' : 'border-rose-200 bg-rose-50 text-rose-700')}`}>{trade.direction}</span>
-                <span className={`rounded border px-2 py-1 text-[9px] font-black uppercase tracking-wider ${isValid ? (isDark ? 'border-emerald-400/25 text-emerald-300' : 'border-emerald-200 text-emerald-700') : (isDark ? 'border-rose-400/25 text-rose-300' : 'border-rose-200 text-rose-700')}`}>{isValid ? 'Validní' : 'Mimo plán'}</span>
+                <span className={`rounded border px-2 py-1 text-[11px] font-semibold ${isLong ? (isDark ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300' : 'border-emerald-200 bg-emerald-50 text-emerald-700') : (isDark ? 'border-rose-400/25 bg-rose-400/10 text-rose-300' : 'border-rose-200 bg-rose-50 text-rose-700')}`}>{trade.direction}</span>
+                <span className={`rounded border px-2 py-1 text-[11px] font-semibold ${isValid ? (isDark ? 'border-emerald-400/25 text-emerald-300' : 'border-emerald-200 text-emerald-700') : (isDark ? 'border-rose-400/25 text-rose-300' : 'border-rose-200 text-rose-700')}`}>{isValid ? 'Validní' : 'Mimo plán'}</span>
               </div>
-              <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">{tradeDate} · {trade.session ?? 'Bez session'}{trade.signal ? ` · ${trade.signal}` : ''}</p>
+              <p className="mt-1 text-[11px] font-bold text-slate-500">{tradeDate} · {trade.session ?? 'Bez session'}{trade.signal ? ` · ${trade.signal}` : ''}</p>
             </div>
             <div className="text-right">
-              <p className="text-[8px] font-black uppercase tracking-[0.18em] text-slate-500">Výsledek</p>
+              <p className="text-[11px] font-semibold text-slate-500">Výsledek</p>
               <p className={`mt-0.5 text-xl font-black tabular-nums ${trade.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{trade.pnl >= 0 ? '+' : '−'}${Math.abs(trade.pnl).toFixed(2)}</p>
             </div>
             <button type="button" disabled={saving} onClick={onClose} className={`flex h-8 w-8 shrink-0 items-center justify-center rounded ${isDark ? 'hover:bg-white/10' : 'hover:bg-slate-100'}`} aria-label="Zavřít review"><X size={17} /></button>
@@ -482,14 +482,14 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
         <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto p-4 lg:grid-cols-[0.88fr_1.12fr]">
           <div className="space-y-4">
             <section className={`overflow-hidden rounded border ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
-              <div className={`flex items-center gap-2 border-b px-3 py-2.5 ${isDark ? 'border-white/10 bg-white/[0.025]' : 'border-slate-200 bg-slate-50'}`}>
+              <div className={`flex items-center gap-2 border-b px-3 py-2.5 border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
                 <Target size={14} className="text-blue-500" />
-                <h3 className="text-[10px] font-black uppercase tracking-[0.14em]">Exekuce obchodu</h3>
+                <h3 className="text-[11px] font-semibold">Exekuce obchodu</h3>
               </div>
               <dl className={`grid grid-cols-2 gap-px ${isDark ? 'bg-white/10' : 'bg-slate-200'}`}>
                 {executionValues.map(item => (
-                  <div key={item.label} className={`px-3 py-2.5 ${isDark ? 'bg-[#10161f]' : 'bg-white'}`}>
-                    <dt className="text-[8px] font-black uppercase tracking-wider text-slate-500">{item.label}</dt>
+                  <div key={item.label} className={`px-3 py-2.5 bg-[var(--bg-card)]`}>
+                    <dt className="text-[11px] font-semibold text-slate-500">{item.label}</dt>
                     <dd className="mt-1 text-sm font-black tabular-nums">{item.value}</dd>
                   </div>
                 ))}
@@ -499,8 +499,8 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
               {collectedValues.length ? (
                 <dl className={`grid grid-cols-2 gap-px border-t ${isDark ? 'border-white/10 bg-white/10' : 'border-slate-200 bg-slate-200'}`}>
                   {collectedValues.map(item => (
-                    <div key={item.label} className={`min-w-0 px-3 py-2 ${isDark ? 'bg-[#151b24]' : 'bg-slate-50/80'}`}>
-                      <dt className="text-[8px] font-black uppercase tracking-wider text-slate-500">{item.label}</dt>
+                    <div key={item.label} className={`min-w-0 px-3 py-2 ${isDark ? 'bg-[var(--bg-card)]' : 'bg-[var(--bg-page)]'}`}>
+                      <dt className="text-[11px] font-semibold text-slate-500">{item.label}</dt>
                       <dd className="mt-0.5 truncate text-[11px] font-bold tabular-nums">{item.value}</dd>
                     </div>
                   ))}
@@ -508,14 +508,14 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
               ) : null}
             </section>
 
-            <section className={`rounded border p-3 ${isDark ? 'border-white/10 bg-white/[0.02]' : 'border-slate-200 bg-white'}`}>
-              <div className="mb-2 flex items-center gap-2"><Check size={14} className="text-emerald-500" /><h3 className="text-[10px] font-black uppercase tracking-[0.14em]">Vyhodnocení plánu</h3></div>
+            <section className={`rounded border p-3 ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}>
+              <div className="mb-2 flex items-center gap-2"><Check size={14} className="text-emerald-500" /><h3 className="text-[11px] font-semibold">Vyhodnocení plánu</h3></div>
               <div className="grid grid-cols-2 gap-2">
-                <button type="button" disabled={saving} onClick={() => setIsValid(true)} className={`h-10 rounded border text-[10px] font-black uppercase tracking-wide ${isValid ? 'border-emerald-500 bg-emerald-500 text-white' : field}`}>Validní / podle plánu</button>
-                <button type="button" disabled={saving} onClick={() => setIsValid(false)} className={`h-10 rounded border text-[10px] font-black uppercase tracking-wide ${!isValid ? 'border-rose-500 bg-rose-500 text-white' : field}`}>Nevalidní / mimo plán</button>
+                <button type="button" disabled={saving} onClick={() => setIsValid(true)} className={`h-10 rounded border text-[11px] font-semibold ${isValid ? 'border-emerald-500 bg-emerald-500 text-white' : field}`}>Validní / podle plánu</button>
+                <button type="button" disabled={saving} onClick={() => setIsValid(false)} className={`h-10 rounded border text-[11px] font-semibold ${!isValid ? 'border-rose-500 bg-rose-500 text-white' : field}`}>Nevalidní / mimo plán</button>
               </div>
               <div className={`my-3 border-t ${isDark ? 'border-white/10' : 'border-slate-200'}`} />
-              <div className="mb-2 flex items-center gap-2"><Waves size={14} className="text-blue-500" /><h3 className="text-[10px] font-black uppercase tracking-[0.14em]">Typ setupu — ručně</h3></div>
+              <div className="mb-2 flex items-center gap-2"><Waves size={14} className="text-blue-500" /><h3 className="text-[11px] font-semibold">Typ setupu — ručně</h3></div>
               <p className="mb-2 text-[9px] font-semibold text-slate-500">Tvoje interpretace setupu. Přepočet ji nikdy nepřepíše.</p>
               <div className="grid grid-cols-3 gap-2" data-backtest-setup-type>
                 {([
@@ -529,23 +529,23 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
                     disabled={saving}
                     onClick={() => setSetupType(value)}
                     aria-pressed={setupType === value}
-                    className={`h-9 rounded border text-[9px] font-black uppercase tracking-wide ${setupType === value ? 'border-blue-600 bg-blue-600 text-white' : field}`}
+                    className={`h-9 rounded border text-[11px] font-semibold ${setupType === value ? 'border-blue-600 bg-blue-600 text-white' : field}`}
                   >{label}</button>
                 ))}
               </div>
             </section>
 
-            <section className={`rounded border p-3 ${isDark ? 'border-white/10 bg-white/[0.02]' : 'border-slate-200 bg-white'}`}>
-              <div className="flex items-center gap-2"><Tags size={14} className="text-violet-500" /><h3 className="text-[10px] font-black uppercase tracking-[0.14em]">Vlastní tagy</h3></div>
+            <section className={`rounded border p-3 ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}>
+              <div className="flex items-center gap-2"><Tags size={14} className="text-violet-500" /><h3 className="text-[11px] font-semibold">Vlastní tagy</h3></div>
               <p className="mt-1 text-[10px] text-slate-500">Setup, chyba nebo vlastní téma. Uložené tagy se nabídnou i u dalších obchodů.</p>
               <ConfluenceCapsuleEditor disabled={saving || recalculating} value={tags} onChange={setTags} isDark={isDark} addLabel="Přidat vlastní tag" suggestions={tagSuggestions?.tags} />
             </section>
 
-            <section className={`rounded border p-3 ${isDark ? 'border-white/10 bg-white/[0.02]' : 'border-slate-200 bg-white'}`}>
-              <div className="mb-2 flex items-center gap-2"><FileText size={14} className="text-slate-400" /><label htmlFor="backtest-review-notes" className="text-[10px] font-black uppercase tracking-[0.14em]">Poznámka k obchodu</label></div>
+            <section className={`rounded border p-3 ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}>
+              <div className="mb-2 flex items-center gap-2"><FileText size={14} className="text-slate-400" /><label htmlFor="backtest-review-notes" className="text-[11px] font-semibold">Poznámka k obchodu</label></div>
               <textarea disabled={saving} id="backtest-review-notes" value={notes} onChange={event => setNotes(event.target.value)} rows={5} placeholder="Co jsem viděl, proč jsem vstoupil, co bych příště změnil…" className={`w-full resize-y rounded border px-3 py-2.5 text-sm outline-none focus:border-blue-500 ${field}`} />
             </section>
-            <section className={`rounded border p-3 ${isDark ? 'border-white/10 bg-white/[0.02]' : 'border-slate-200 bg-white'}`}>
+            <section className={`rounded border p-3 ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}>
               <TradeNoteHistoryEditor baseHistory={originalTrade.noteHistory} legacyNotes={originalTrade.notes}
                 captureContext={noteContext} drafts={noteDrafts} disabled={saving} isDark={isDark}
                 onChange={next => { setNoteDrafts(next); noteOperationRef.current = undefined; }} />
@@ -557,10 +557,10 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
               <section className={`rounded border p-3 ${isDark ? 'border-blue-400/20 bg-blue-400/[0.04]' : 'border-blue-200 bg-blue-50/50'}`}>
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <div className="flex items-center gap-2"><RefreshCw size={14} className="text-blue-500" /><h3 className="text-[10px] font-black uppercase tracking-[0.14em]">Data z indikátoru</h3></div>
+                    <div className="flex items-center gap-2"><RefreshCw size={14} className="text-blue-500" /><h3 className="text-[11px] font-semibold">Data z indikátoru</h3></div>
                     <p className="mt-1 text-[10px] font-semibold text-slate-500">Znovu načte strukturu, FVG, levely a metriky ze stejných replay dat.</p>
                   </div>
-                  <button type="button" onClick={() => void recalculate()} disabled={saving || recalculating} className="flex h-9 shrink-0 items-center gap-2 rounded border border-blue-500 px-3 text-[10px] font-black uppercase tracking-wide text-blue-500 hover:bg-blue-500 hover:text-white disabled:opacity-50">
+                  <button type="button" onClick={() => void recalculate()} disabled={saving || recalculating} className="flex h-9 shrink-0 items-center gap-2 rounded border border-blue-500 px-3 text-[11px] font-semibold text-blue-500 hover:bg-blue-500 hover:text-white disabled:opacity-50">
                     {recalculating ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                     Přepočítat
                   </button>
@@ -569,11 +569,11 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
                   <div className={`mt-3 border-t pt-3 ${isDark ? 'border-white/10' : 'border-blue-200'}`} data-backtest-recalculation-preview>
                     {recalculationChanges.length ? (
                       <>
-                        <p className="mb-2 text-[9px] font-black uppercase tracking-wide text-blue-500">Náhled změn · zatím neuloženo</p>
+                        <p className="mb-2 text-[11px] font-semibold text-blue-500">Náhled změn · zatím neuloženo</p>
                         <div className="max-h-40 space-y-1.5 overflow-y-auto pr-1">
                           {recalculationChanges.map(change => (
-                            <div key={change.label} className={`grid grid-cols-[6rem_1fr_auto_1fr] items-center gap-2 rounded px-2 py-1.5 text-[9px] ${isDark ? 'bg-black/20' : 'bg-white'}`}>
-                              <span className="font-black uppercase tracking-wide text-slate-500">{change.label}</span>
+                            <div key={change.label} className={`grid grid-cols-[6rem_1fr_auto_1fr] items-center gap-2 rounded px-2 py-1.5 text-[9px] ${isDark ? 'bg-[var(--bg-page)]' : 'bg-[var(--bg-card)]'}`}>
+                              <span className="font-semibold text-slate-500">{change.label}</span>
                               <span className="min-w-0 truncate text-slate-400 line-through" title={change.before}>{change.before}</span>
                               <span className="text-blue-500">→</span>
                               <span className="min-w-0 truncate font-bold" title={change.after}>{change.after}</span>
@@ -588,7 +588,7 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
             ) : null}
             <section className={`rounded border ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
               <div className={`border-b px-3 py-3 ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
-                <div className="flex items-center gap-2"><Zap size={14} className="text-violet-500" /><h3 className="text-[10px] font-black uppercase tracking-[0.14em]">Entry Confluence</h3></div>
+                <div className="flex items-center gap-2"><Zap size={14} className="text-violet-500" /><h3 className="text-[11px] font-semibold">Entry Confluence</h3></div>
                 <ConfluenceCapsuleEditor disabled={saving || recalculating} value={ltfConfluence} onChange={setLtfConfluence} isDark={isDark} addLabel="Přidat Entry Confluence" suggestions={tagSuggestions?.ltf} autoTags={autoTags.ltf} onManualAdd={added => { manualTags.current.ltf.push(...added); }} />
                 <div className="mt-3 grid gap-2 sm:grid-cols-2" data-backtest-entry-audit>
                   {entryAudit.map(item => {
@@ -606,9 +606,9 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
                       <div key={item.label} className={`min-w-0 rounded border px-2.5 py-2 ${tone}`}>
                         <div className="flex items-center gap-1.5">
                           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
-                          <p className="text-[8px] font-black uppercase tracking-[0.12em] text-slate-500">{item.label}</p>
+                          <p className="text-[11px] font-semibold text-slate-500">{item.label}</p>
                         </div>
-                        <p className="mt-1 truncate text-[10px] font-black uppercase tracking-wide" title={item.value}>{item.value}</p>
+                        <p className="mt-1 truncate text-[11px] font-semibold" title={item.value}>{item.value}</p>
                         <p className="mt-0.5 truncate text-[9px] font-semibold text-slate-500" title={item.detail}>{item.detail}</p>
                       </div>
                     );
@@ -616,32 +616,32 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
                 </div>
               </div>
               <div className={`px-3 py-3 ${levelTags.length ? (isDark ? 'border-b border-white/10' : 'border-b border-slate-200') : ''}`}>
-                <div className="flex items-center gap-2"><Layers3 size={14} className="text-sky-500" /><h3 className="text-[10px] font-black uppercase tracking-[0.14em]">HTF Confluence</h3></div>
+                <div className="flex items-center gap-2"><Layers3 size={14} className="text-sky-500" /><h3 className="text-[11px] font-semibold">HTF Confluence</h3></div>
                 <ConfluenceCapsuleEditor disabled={saving || recalculating} value={htfConfluence} onChange={setHtfConfluence} isDark={isDark} addLabel="Přidat HTF Confluence" suggestions={tagSuggestions?.htf} autoTags={autoTags.htf} onManualAdd={added => { manualTags.current.htf.push(...added); }} />
               </div>
               {levelTags.length ? (
                 <div className="px-3 py-3">
-                  <div className="flex items-center gap-2"><Waves size={14} className="text-amber-500" /><h3 className="text-[10px] font-black uppercase tracking-[0.14em]">Levely</h3></div>
+                  <div className="flex items-center gap-2"><Waves size={14} className="text-amber-500" /><h3 className="text-[11px] font-semibold">Levely</h3></div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
-                    {levelTags.map(tag => <span key={tag} className={`rounded-lg border px-2 py-1 text-[9px] font-black uppercase tracking-wide ${isDark ? 'border-amber-400/20 bg-amber-400/10 text-amber-400' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>{tag}</span>)}
+                    {levelTags.map(tag => <span key={tag} className={`rounded-lg border px-2 py-1 text-[11px] font-semibold ${isDark ? 'border-amber-400/20 bg-amber-400/10 text-amber-400' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>{tag}</span>)}
                   </div>
                 </div>
               ) : null}
             </section>
 
             <section className={`overflow-hidden rounded border ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
-              <div className={`flex items-center gap-2 border-b px-3 py-2.5 ${isDark ? 'border-white/10 bg-white/[0.025]' : 'border-slate-200 bg-slate-50'}`}><Camera size={14} className="text-blue-500" /><h3 className="text-[10px] font-black uppercase tracking-[0.14em]">Snapshot grafů</h3></div>
+              <div className={`flex items-center gap-2 border-b px-3 py-2.5 border-[var(--border-subtle)] bg-[var(--bg-page)]`}><Camera size={14} className="text-blue-500" /><h3 className="text-[11px] font-semibold">Snapshot grafů</h3></div>
               {snapshotPreview ? (
                 <div className="relative bg-slate-950">
                   <button type="button" onClick={() => setSnapshotZoomOpen(true)} className="group block w-full cursor-zoom-in" aria-label="Zvětšit náhled snapshotu">
                     <img src={snapshotPreview} alt={snapshot ? 'Nový snapshot všech otevřených grafů' : 'Uložený snapshot obchodu'} className="aspect-video w-full object-contain" />
-                    <span className="pointer-events-none absolute left-2 top-2 rounded bg-slate-950/75 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-white">{snapshot ? 'Nový náhled · všechny grafy' : 'Uložený snapshot'}</span>
-                    <span className="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1 rounded bg-slate-950/75 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-white opacity-80 transition-opacity group-hover:opacity-100"><Maximize2 size={12} /> Zvětšit</span>
+                    <span className="pointer-events-none absolute left-2 top-2 rounded bg-slate-950/75 px-2 py-1 text-[11px] font-semibold text-white">{snapshot ? 'Nový náhled · všechny grafy' : 'Uložený snapshot'}</span>
+                    <span className="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1 rounded bg-slate-950/75 px-2 py-1 text-[11px] font-semibold text-white opacity-80 transition-opacity group-hover:opacity-100"><Maximize2 size={12} /> Zvětšit</span>
                   </button>
                   {snapshot ? <button type="button" disabled={saving} onClick={() => { setSnapshot(undefined); setSnapshotZoomOpen(false); }} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded bg-slate-950/75 text-white" aria-label="Zahodit nový snapshot"><X size={14} /></button> : null}
                 </div>
               ) : (
-                <div className={`flex aspect-video flex-col items-center justify-center gap-2 ${isDark ? 'bg-white/[0.025]' : 'bg-slate-50'}`}>
+                <div className={`flex aspect-video flex-col items-center justify-center gap-2 bg-[var(--bg-page)]`}>
                   <ImageIcon size={24} className="text-slate-400" />
                   <p className="text-center text-[11px] font-semibold text-slate-500">Vyfotí se celý viditelný layout se všemi grafy.<br />Nahraje se až při uložení review.</p>
                 </div>
@@ -670,7 +670,7 @@ const BacktestTradeReviewContent: React.FC<Props> = ({
         >
           <button type="button" onClick={() => setSnapshotZoomOpen(false)} className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-md border border-white/15 bg-black/60 text-white hover:bg-white/10" aria-label="Zavřít zvětšený náhled"><X size={20} /></button>
           <img src={snapshotPreview} alt="Zvětšený snapshot všech otevřených grafů" className="max-h-[calc(100vh-5rem)] max-w-[calc(100vw-2rem)] object-contain shadow-2xl" />
-          <p className="mt-3 text-[10px] font-bold uppercase tracking-wider text-white/60">Klikni mimo obrázek nebo stiskni Esc</p>
+          <p className="mt-3 text-[11px] font-bold text-white/60">Klikni mimo obrázek nebo stiskni Esc</p>
         </div>
       ) : null}
     </div>

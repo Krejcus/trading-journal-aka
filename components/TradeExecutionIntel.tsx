@@ -51,10 +51,10 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
       rose: 'bg-rose-500/10 border-rose-500/20 text-rose-500',
       slate: isDark ? 'bg-white/5 border-white/10 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-600',
     };
-    return <span className={`px-2 py-1 rounded-lg border text-[9px] font-black uppercase tracking-wide ${tones[tone]}`}>{label}</span>;
+    return <span className={`px-2 py-1 rounded-lg border text-[11px] font-semibold ${tones[tone]}`}>{label}</span>;
   };
 
-  const label = (t: string) => <p className="text-[9px] font-black uppercase text-slate-500 tracking-[0.18em] mb-1.5">{t}</p>;
+  const label = (t: string) => <p className="text-[11px] font-semibold text-slate-500 mb-1.5">{t}</p>;
   const cardBg = isDark ? 'bg-black/20 border-white/5' : 'bg-white border-slate-100';
 
   // 3 varianty counterfactual SL (co kdyby SL byl na swing/OTE/FVG) → realizedR.
@@ -67,10 +67,10 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
   return (
     <div className={`pt-4 border-t ${isDark ? 'border-white/[0.03]' : 'border-slate-100'}`}>
       <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between mb-2.5 group/intel">
-        <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] flex items-center gap-2">
+        <p className="text-[11px] font-semibold text-slate-500 flex items-center gap-2">
           <Activity size={11} /> AlphaBridge Intel
-          {excPending && <span className="px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-500 text-[7px] font-black uppercase tracking-widest">pending</span>}
-          {pathPending && <span className="px-1.5 py-0.5 rounded-md bg-sky-500/15 border border-sky-500/30 text-sky-500 text-[7px] font-black uppercase tracking-widest">1m path pending</span>}
+          {excPending && <span className="px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-500 text-[10px] font-semibold">pending</span>}
+          {pathPending && <span className="px-1.5 py-0.5 rounded-md bg-sky-500/15 border border-sky-500/30 text-sky-500 text-[10px] font-semibold">1m path pending</span>}
         </p>
         <ChevronDown size={14} className={`text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -80,11 +80,11 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
       {hasMetrics && (
         <div className="grid grid-cols-2 gap-2 mb-2">
           <div className={`p-2.5 rounded-xl border ${cardBg}`}>
-            <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">MFE (dosah ve prospěch)</p>
+            <p className="text-[11px] font-semibold text-slate-500 mb-0.5">MFE (dosah ve prospěch)</p>
             <p className={`text-lg font-black font-mono tracking-tighter leading-none ${rColor(trade.mfeR)}`}>{trade.excursionAmbiguous && trade.mfeR != null ? '≥ ' : ''}{fmtR(trade.mfeR)}</p>
           </div>
           <div className={`p-2.5 rounded-xl border ${cardBg}`}>
-            <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">MAE (dosah proti)</p>
+            <p className="text-[11px] font-semibold text-slate-500 mb-0.5">MAE (dosah proti)</p>
             <p className={`text-lg font-black font-mono tracking-tighter leading-none ${trade.maeR != null ? 'text-rose-500' : 'text-slate-400'}`}>
               {trade.maeR != null ? `${trade.excursionAmbiguous ? '≥ ' : ''}${Math.abs(Number(trade.maeR)).toFixed(2)}R` : '—'}
             </p>
@@ -97,15 +97,15 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
       {hasPath && (
         <div className={`p-2.5 rounded-xl border ${cardBg} grid grid-cols-3 gap-2 text-center mb-2`}>
           <div>
-            <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">Max do SL</p>
+            <p className="text-[11px] font-semibold text-slate-500 mb-0.5">Max do SL</p>
             <p className="text-sm font-black font-mono text-rose-500">{Math.round(Number(path.maxAdverseR || 0) * 100)} %</p>
           </div>
           <div>
-            <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">Dotyk entry</p>
+            <p className="text-[11px] font-semibold text-slate-500 mb-0.5">Dotyk entry</p>
             <p className="text-sm font-black font-mono text-sky-500">{Number(path.entryTouchBars || 0)}×</p>
           </div>
           <div>
-            <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">U entry ±0.1R</p>
+            <p className="text-[11px] font-semibold text-slate-500 mb-0.5">U entry ±0.1R</p>
             <p className="text-sm font-black font-mono text-violet-500">{Number(path.minutesNearEntry || 0)} min</p>
           </div>
         </div>
@@ -139,7 +139,7 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
                     if (!v) return null;
                     return (
                       <div key={key} className={`flex justify-between items-center px-2.5 py-1.5 rounded-lg border ${cardBg}`}>
-                        <span className="text-[9px] font-black uppercase text-slate-400">SL za {idx === 0 ? '1.' : 'prvními 2'} kompletní 1m</span>
+                        <span className="text-[11px] font-semibold text-slate-400">SL za {idx === 0 ? '1.' : 'prvními 2'} kompletní 1m</span>
                         <span className={`text-[10px] font-black font-mono ${v.outcome === 'WIN' ? 'text-emerald-500' : v.outcome === 'LOSS' ? 'text-rose-500' : 'text-slate-500'}`}>
                           {OUTCOME_LABEL[v.outcome] || v.outcome}{v.realizedR != null ? ` · ${fmtR(v.realizedR)}` : ''}
                         </span>
@@ -163,15 +163,15 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
               )}
               <div className={`p-2.5 rounded-xl border ${cardBg} grid grid-cols-3 gap-2 text-center`}>
                 <div>
-                  <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">Původní cíl</p>
+                  <p className="text-[11px] font-semibold text-slate-500 mb-0.5">Původní cíl</p>
                   <p className={`text-sm font-black font-mono ${rColor(exc.tpR)}`}>{fmtR(exc.tpR)}</p>
                 </div>
                 <div>
-                  <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">Potenciál</p>
+                  <p className="text-[11px] font-semibold text-slate-500 mb-0.5">Potenciál</p>
                   <p className={`text-sm font-black font-mono ${rColor(exc.mfePotentialR)}`}>{fmtR(exc.mfePotentialR)}</p>
                 </div>
                 <div>
-                  <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">Na stole</p>
+                  <p className="text-[11px] font-semibold text-slate-500 mb-0.5">Na stole</p>
                   <p className={`text-sm font-black font-mono ${exc.leftOnTableR != null && Number(exc.leftOnTableR) > 0 ? 'text-amber-500' : 'text-slate-400'}`}>{fmtR(exc.leftOnTableR)}</p>
                 </div>
               </div>
@@ -194,11 +194,11 @@ const TradeExecutionIntel: React.FC<Props> = ({ trade, isDark = true }) => {
               <div className={`rounded-xl border overflow-hidden ${cardBg}`}>
                 {cfVariants.map(({ key, name, v }, i) => (
                   <div key={key} className={`flex items-center justify-between px-2.5 py-1.5 ${i > 0 ? (isDark ? 'border-t border-white/5' : 'border-t border-slate-100') : ''}`}>
-                    <span className="text-[10px] font-black uppercase tracking-wide text-slate-400 flex items-center gap-1.5"><Crosshair size={10} /> {name}</span>
+                    <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5"><Crosshair size={10} /> {name}</span>
                     <div className="flex items-center gap-2">
                       {v.ambiguous && <span className="text-[8px] text-amber-500">Neurčité pořadí</span>}
                       {v.complete === false && <span className="text-[8px] text-amber-500">Neúplné</span>}
-                      {v.outcome && <span className={`text-[8px] font-black uppercase tracking-widest ${v.outcome === 'WIN' ? 'text-emerald-500' : v.outcome === 'LOSS' ? 'text-rose-500' : 'text-slate-500'}`}>{OUTCOME_LABEL[v.outcome] || v.outcome}</span>}
+                      {v.outcome && <span className={`text-[11px] font-semibold ${v.outcome === 'WIN' ? 'text-emerald-500' : v.outcome === 'LOSS' ? 'text-rose-500' : 'text-slate-500'}`}>{OUTCOME_LABEL[v.outcome] || v.outcome}</span>}
                       <span className={`text-xs font-black font-mono ${rColor(v.netRealizedR ?? (v.realizedR != null ? v.realizedR : v.rr))}`}>{fmtR(v.netRealizedR ?? (v.realizedR != null ? v.realizedR : v.rr))}</span>
                     </div>
                   </div>

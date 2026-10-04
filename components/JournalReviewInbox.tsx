@@ -23,13 +23,15 @@ const defaultLoadReview: typeof storageService.getJournalRetainedReview = async 
 
 /** Review records stay accessible outside confirmed trade/P&L collections.
  * Closed by default; list pages and screenshots are fetched only on demand. */
-export default function JournalReviewInbox({ accounts, refreshVersion, loadPage = defaultLoadPage, loadReview = defaultLoadReview }: {
+export default function JournalReviewInbox({ accounts, refreshVersion, loadPage = defaultLoadPage, loadReview = defaultLoadReview, defaultOpen = false }: {
   accounts: Account[];
+  /** V okně z menu Historie se archiv otevře rovnou. */
+  defaultOpen?: boolean;
   refreshVersion?: number;
   loadPage?: typeof storageService.getJournalReviewInbox;
   loadReview?: typeof storageService.getJournalRetainedReview;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [kind, setKind] = useState<JournalInboxKind>('pending');
   const [account, setAccount] = useState('');
   const [after, setAfter] = useState<string | null>(null);

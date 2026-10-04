@@ -209,13 +209,13 @@ export default function TradovateAccountOnboarding({
           {Object.entries(accountTypeLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
         <PlanSelect value={bulkPlanPresetKey} firm={bulkFirm} accountType={bulkType} onChange={changeBulkPlan} />
-        <button type="button" disabled={selectedIds.size === 0 || !bulkFirm.trim()} onClick={applyBulk} className="h-9 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-4 text-[10px] font-black uppercase text-indigo-500 disabled:opacity-50">Použít pro vybrané</button>
+        <button type="button" disabled={selectedIds.size === 0 || !bulkFirm.trim()} onClick={applyBulk} className="h-9 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-4 text-[11px] font-semibold text-indigo-500 disabled:opacity-50">Použít pro vybrané</button>
       </div>
     </div>
 
     <div className="overflow-x-auto">
       <table className="w-full min-w-[1040px] text-left text-xs">
-        <thead className="bg-[var(--bg-card)] text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]"><tr>
+        <thead className="bg-[var(--bg-card)] text-[11px] font-semibold text-[var(--text-secondary)]"><tr>
           <th className="w-12 p-0"><label className="flex h-11 w-11 cursor-pointer items-center justify-center"><input type="checkbox" aria-label="Vybrat všechny nové účty" checked={allSelected} onChange={() => setSelectedIds(allSelected ? new Set() : new Set(newProfiles.map(profile => profile.id)))} /></label></th>
           <th className="px-2 py-2">Jméno</th><th className="px-2 py-2">Firma</th><th className="px-2 py-2">Typ</th><th className="px-2 py-2">Plán</th>
         </tr></thead>

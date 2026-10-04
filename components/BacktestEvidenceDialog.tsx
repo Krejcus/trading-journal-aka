@@ -14,7 +14,7 @@ export default function BacktestEvidenceDialog({ load, onClose, isDark }: { load
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   return <div className="fixed inset-0 z-[600] flex items-center justify-center bg-black/60 p-4" onKeyDown={event => { event.stopPropagation(); if (event.key === 'Escape') onClose(); }}>
-    <section role="dialog" aria-modal="true" aria-label="Kvalita dat a exekuce replaye" className={`max-h-[85vh] w-full max-w-3xl overflow-auto rounded-xl border p-5 shadow-xl ${isDark ? 'border-slate-700 bg-[#11161f] text-slate-100' : 'border-slate-200 bg-white text-slate-900'}`}>
+    <section role="dialog" aria-modal="true" aria-label="Kvalita dat a exekuce replaye" className={`max-h-[85vh] w-full max-w-3xl overflow-auto rounded-xl border p-5 shadow-xl ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-100' : 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-900'}`}>
       <header className="mb-4 flex items-center justify-between"><h2 className="text-base font-bold">Kvalita dat a exekuce</h2><button autoFocus aria-label="Zavřít kvalitu dat" onClick={onClose}><X size={18} /></button></header>
       <p className="mb-4 text-xs text-slate-500">Snímek dat dostupných do aktuálního kurzoru. Mezera sama o sobě neprokazuje výpadek poskytovatele.</p>
       {error && <p role="alert" className="text-sm text-rose-500">{error}</p>}

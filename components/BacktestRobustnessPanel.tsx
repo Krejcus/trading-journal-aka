@@ -26,7 +26,7 @@ export default function BacktestRobustnessPanel({ trades, options, isDark }: Bac
   }, [trades, options, applied]);
   const muted = isDark ? 'text-slate-400' : 'text-slate-500';
   const border = isDark ? 'border-white/10' : 'border-slate-200';
-  const inputClass = `rounded-lg border px-3 py-2 text-sm ${isDark ? 'border-white/10 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-900'}`;
+  const inputClass = `rounded-lg border px-3 py-2 text-sm ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-white' : 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-900'}`;
   const report = result.report;
   const money = (value: number | null) => value === null ? '—' : `${value.toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} ${report?.currency ?? ''}`;
   const factor = (value: number | null, state: string) => state === 'no-losses' ? '∞ (bez ztráty)' : value === null ? '—' : value.toFixed(2);

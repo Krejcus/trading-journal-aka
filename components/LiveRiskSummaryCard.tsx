@@ -83,7 +83,7 @@ const MiniBar = ({ label, value, detail, percent, tone, disabled = false, stale 
       className="min-w-0 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-input)] px-2.5 py-2"
     >
       <div className="flex min-w-0 items-baseline justify-between gap-2">
-        <span className="truncate text-[9.5px] font-black uppercase tracking-[0.08em] text-[var(--text-muted)]">{label}</span>
+        <span className="truncate text-[9.5px] font-semibold text-[var(--text-muted)]">{label}</span>
         <b className={`truncate text-right text-[11px] font-black tabular-nums ${known && !stale ? valueColor[tone] : 'text-[var(--text-secondary)]'}`}>{value}</b>
       </div>
       <div

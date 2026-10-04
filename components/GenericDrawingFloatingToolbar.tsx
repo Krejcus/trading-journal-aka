@@ -96,7 +96,7 @@ const GenericDrawingFloatingToolbar: React.FC<GenericDrawingFloatingToolbarProps
       data-chart-overlay-menu
       className={`absolute z-[121] flex items-center gap-0.5 rounded-md border p-0.5 shadow-md ${
         position ? '' : 'left-1/2 top-1 -translate-x-1/2'
-      } ${isDark ? 'border-white/15 bg-[#1e222d]' : 'border-[#d1d4dc] bg-white'}`}
+      } ${isDark ? 'border-white/15 bg-[var(--bg-card)]' : 'border-[#d1d4dc] bg-[var(--bg-card)]'}`}
       style={position ?? undefined}
       onPointerDown={event => event.stopPropagation()}
       onDoubleClick={event => event.stopPropagation()}

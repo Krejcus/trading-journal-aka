@@ -333,7 +333,7 @@ const Graveyard: React.FC<Props> = ({ accounts, allAccounts = accounts, trades, 
             <div className={`rounded-xl border overflow-hidden ${isDark ? 'bg-gradient-to-br from-rose-500/[0.07] to-transparent border-rose-500/15' : 'bg-rose-50/50 border-rose-200'}`}>
                 <div className="px-6 py-3 flex items-center gap-2 border-b border-rose-500/10">
                     <Skull size={15} className="text-rose-500" />
-                    <p className="text-[10px] font-black uppercase tracking-[0.25em] text-rose-500">Hřbitov účtů</p>
+                    <p className="text-[11px] font-semibold text-rose-500">Hřbitov účtů</p>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-5 divide-x divide-y md:divide-y-0 divide-rose-500/10">
                     <SummaryCell label="Pohřbeno" value={summary.buried.toString()} isDark={isDark} />
@@ -346,20 +346,20 @@ const Graveyard: React.FC<Props> = ({ accounts, allAccounts = accounts, trades, 
 
             {/* ── Action bar ── */}
             <div className="flex items-center justify-between flex-wrap gap-3">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                <p className="text-[11px] font-semibold text-slate-500">
                     {selected.size > 0 ? `${selected.size} vybráno` : `${accounts.length} náhrobků`}
                 </p>
                 <div className="flex items-center gap-2">
                     {selected.size >= 2 && (
-                        <button onClick={() => setShowCompare(true)} className="flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/20 active:scale-95 transition-all">
+                        <button onClick={() => setShowCompare(true)} className="flex items-center gap-2 px-4 py-2 rounded-xl text-[11px] font-semibold bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/20 active:scale-95 transition-all">
                             <Scale size={13} /> Porovnat ({selected.size})
                         </button>
                     )}
                     {selected.size > 0 && (
-                        <button onClick={() => setSelected(new Set())} className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-slate-300">Zrušit výběr</button>
+                        <button onClick={() => setSelected(new Set())} className="px-4 py-2 rounded-xl text-[11px] font-semibold text-slate-500 hover:text-slate-300">Zrušit výběr</button>
                     )}
                     {allLessons.length > 0 && (
-                        <button onClick={() => setShowLessons(true)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${isDark ? 'border-amber-500/30 text-amber-500 hover:bg-amber-500/10' : 'border-amber-300 text-amber-600 hover:bg-amber-50'}`}>
+                        <button onClick={() => setShowLessons(true)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[11px] font-semibold border transition-all ${isDark ? 'border-amber-500/30 text-amber-500 hover:bg-amber-500/10' : 'border-amber-300 text-amber-600 hover:bg-amber-50'}`}>
                             <BookOpen size={13} /> Zeď lekcí ({allLessons.length})
                         </button>
                     )}
@@ -376,8 +376,8 @@ const Graveyard: React.FC<Props> = ({ accounts, allAccounts = accounts, trades, 
                                 {logo
                                     ? <img src={logo} alt="" className="w-6 h-6 rounded-md object-contain bg-white/90 p-0.5 border border-black/5 shrink-0 opacity-90" />
                                     : <div className="w-6 h-6 rounded-md shrink-0 flex items-center justify-center text-[9px] font-black text-white opacity-90" style={{ background: firmColor(g.firm).bg }}>{firmInitials(g.firm)}</div>}
-                                <h4 className={`text-xs font-black uppercase tracking-tight ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{firmLabel(g.firm)}</h4>
-                                <span className="text-[10px] font-black uppercase tracking-widest text-rose-500/70">{g.accts.length} ☠</span>
+                                <h4 className={`text-xs font-semibold tracking-tight ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{firmLabel(g.firm)}</h4>
+                                <span className="text-[11px] font-semibold text-rose-500/70">{g.accts.length} ☠</span>
                                 <span className="ml-auto text-[11px] font-black font-mono text-rose-500">−{fmt(g.totalLost)}</span>
                             </div>
                             <div className="space-y-3">
@@ -403,11 +403,11 @@ const Graveyard: React.FC<Props> = ({ accounts, allAccounts = accounts, trades, 
                                                     <p className="text-[10px] font-bold text-slate-500 truncate">† {fmtDate(first.failureDate)} · {funeral.accts.map(a => a.name).join(', ')}</p>
                                                 </div>
                                                 <div className="hidden sm:block text-right">
-                                                    <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Spáleno celkem</p>
+                                                    <p className="text-[11px] font-semibold text-slate-500">Spáleno celkem</p>
                                                     <p className="text-sm font-black font-mono text-rose-500">−{fmt(funeral.totalLost)}</p>
                                                 </div>
                                                 <div className="hidden md:block text-right">
-                                                    <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Ø k cíli</p>
+                                                    <p className="text-[11px] font-semibold text-slate-500">Ø k cíli</p>
                                                     <p className="text-sm font-black font-mono text-amber-500">{avgProgress}%</p>
                                                 </div>
                                                 {expanded ? <ChevronDown size={18} className="text-slate-500 shrink-0" /> : <ChevronRight size={18} className="text-slate-500 shrink-0" />}
@@ -478,7 +478,7 @@ const SummaryCell: React.FC<{ label: string; value: string; sub?: string; accent
     const color = accent === 'rose' ? 'text-rose-500' : accent === 'amber' ? 'text-amber-500' : (isDark ? 'text-white' : 'text-slate-900');
     return (
         <div className="px-5 py-4">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1">{label}</p>
+            <p className="text-[11px] font-semibold text-slate-500 mb-1">{label}</p>
             <p className={`font-black font-mono tracking-tight ${small ? 'text-sm' : 'text-xl'} ${color} ${small ? 'truncate' : ''}`}>{value}</p>
             {sub && <p className="text-[9px] font-bold text-slate-500 mt-0.5">{sub}</p>}
         </div>
@@ -489,7 +489,7 @@ const TombStat: React.FC<{ label: string; value: string; accent?: 'rose' | 'ambe
     const color = accent === 'rose' ? 'text-rose-500' : accent === 'amber' ? 'text-amber-500' : (isDark ? 'text-slate-200' : 'text-slate-700');
     return (
         <div>
-            <p className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-0.5">{label}</p>
+            <p className="text-[11px] font-semibold text-slate-500 mb-0.5">{label}</p>
             <p className={`text-sm font-black font-mono tracking-tighter ${color}`}>{value}</p>
         </div>
     );
@@ -527,14 +527,14 @@ export const MemorialModal: React.FC<{ account: Account; stats: AccountStats; tr
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.96, y: 12 }}
                 transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-                className={`max-w-3xl w-full max-h-[90vh] overflow-y-auto rounded-[32px] border shadow-2xl ${isDark ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'}`}
+                className={`max-w-3xl w-full max-h-[90vh] overflow-y-auto rounded-[32px] border shadow-2xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}
                 onClick={e => e.stopPropagation()}
             >
                 {/* header */}
                 <div className={`relative p-6 lg:p-8 border-b ${headerBorder} bg-gradient-to-b ${headerGrad} to-transparent`}>
                     <div className="absolute top-4 right-4 flex items-center gap-2">
                         {onOpenInDashboard && (
-                            <button onClick={() => onOpenInDashboard(account.id)} className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 border border-blue-500/20 transition-all" title="Otevřít v dashboardu">
+                            <button onClick={() => onOpenInDashboard(account.id)} className="px-3 py-2 rounded-xl text-[11px] font-semibold flex items-center gap-1.5 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 border border-blue-500/20 transition-all" title="Otevřít v dashboardu">
                                 <BarChart3 size={12} /> Dashboard
                             </button>
                         )}
@@ -543,7 +543,7 @@ export const MemorialModal: React.FC<{ account: Account; stats: AccountStats; tr
                     <div className="flex items-center gap-4">
                         <div className={`p-3 border rounded-2xl ${iconWrap}`}><HeaderIcon size={26} className={iconColor} /></div>
                         <div>
-                            <p className={`text-[9px] font-black uppercase tracking-[0.3em] mb-1 ${labelColor}`}>{label}</p>
+                            <p className={`text-[11px] font-semibold mb-1 ${labelColor}`}>{label}</p>
                             <h2 className={`text-2xl font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>{account.name}</h2>
                             <p className="text-[11px] font-bold text-slate-500 mt-0.5">{headerDate}</p>
                             {successorName && <p className="mt-1 text-[10px] font-bold text-indigo-400">Nástupce: {successorName}</p>}
@@ -556,9 +556,9 @@ export const MemorialModal: React.FC<{ account: Account; stats: AccountStats; tr
                     <div>
                         <div className="flex items-center gap-2 mb-3">
                             <BarChart3 size={13} className="text-slate-500" />
-                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Equity křivka</p>
+                            <p className="text-[11px] font-semibold text-slate-500">Equity křivka</p>
                         </div>
-                        <div className={`rounded-2xl border p-4 ${isDark ? 'bg-slate-800/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                        <div className={`rounded-2xl border p-4 bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
                             <EquityCurve data={stats.equityCurve} initial={account.initialBalance} isDark={isDark} />
                         </div>
                     </div>
@@ -584,14 +584,14 @@ export const MemorialModal: React.FC<{ account: Account; stats: AccountStats; tr
                                 </div>
                             )}
                             {account.failureWhatHappened && (
-                                <div className={`p-4 rounded-2xl border ${isDark ? 'bg-slate-800/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Co se stalo</p>
+                                <div className={`p-4 rounded-2xl border bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
+                                    <p className="text-[11px] font-semibold text-slate-500 mb-2">Co se stalo</p>
                                     <p className={`text-sm leading-relaxed whitespace-pre-wrap ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{account.failureWhatHappened}</p>
                                 </div>
                             )}
                             {account.failureKeyLesson && (
                                 <div className={`p-4 rounded-2xl border-2 ${isDark ? 'bg-amber-500/5 border-amber-500/30' : 'bg-amber-50 border-amber-300'}`}>
-                                    <p className="text-[10px] font-black uppercase tracking-widest text-amber-500 mb-2"><Lightbulb size={11} className="inline mr-1" /> Klíčová lekce</p>
+                                    <p className="text-[11px] font-semibold text-amber-500 mb-2"><Lightbulb size={11} className="inline mr-1" /> Klíčová lekce</p>
                                     <p className={`text-sm leading-relaxed font-medium ${isDark ? 'text-amber-100' : 'text-amber-900'}`}>{account.failureKeyLesson}</p>
                                 </div>
                             )}
@@ -600,7 +600,7 @@ export const MemorialModal: React.FC<{ account: Account; stats: AccountStats; tr
 
                     {/* trades list */}
                     <div>
-                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">Obchody ({sorted.length})</p>
+                        <p className="text-[11px] font-semibold text-slate-500 mb-3">Obchody ({sorted.length})</p>
                         {sorted.length === 0 ? (
                             <p className="text-xs text-slate-500 italic">Žádné obchody na tomto účtu.</p>
                         ) : (
@@ -613,7 +613,7 @@ export const MemorialModal: React.FC<{ account: Account; stats: AccountStats; tr
                                         title="Otevřít náhled obchodu"
                                     >
                                         <div className="flex items-center gap-3 min-w-0">
-                                            <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${t.direction === 'Long' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-rose-500/15 text-rose-500'}`}>{t.direction === 'Long' ? 'L' : 'S'}</span>
+                                            <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded ${t.direction === 'Long' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-rose-500/15 text-rose-500'}`}>{t.direction === 'Long' ? 'L' : 'S'}</span>
                                             <span className={`text-xs font-bold truncate ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{t.instrument || t.symbol || '—'}</span>
                                             <span className="text-[10px] text-slate-500 shrink-0">{t.date}</span>
                                         </div>
@@ -725,22 +725,22 @@ const MemorialTradePreview: React.FC<{
         >
             <motion.div
                 initial={{ opacity: 0, scale: 0.96, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 10 }}
-                className={`relative w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-[28px] border shadow-2xl ${isDark ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'}`}
+                className={`relative w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-[28px] border shadow-2xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}
                 onClick={e => e.stopPropagation()}
             >
                 <div className="absolute z-20 top-4 right-4 flex items-center gap-2">
                     {tradeCount > 1 && (
                         <>
-                            <button onClick={onPreviousTrade} className={`p-2 rounded-full border shadow-lg ${isDark ? 'bg-slate-900/85 hover:bg-white/10 text-slate-200 border-white/10' : 'bg-white/90 hover:bg-slate-100 text-slate-600 border-slate-200'}`} title="Předchozí obchod (←)"><ChevronLeft size={18} /></button>
+                            <button onClick={onPreviousTrade} className={`p-2 rounded-full border shadow-lg ${isDark ? 'bg-[var(--bg-page)] hover:bg-white/10 text-slate-200 border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] hover:bg-slate-100 text-slate-600 border-[var(--border-subtle)]'}`} title="Předchozí obchod (←)"><ChevronLeft size={18} /></button>
                             <span className="px-2.5 py-2 rounded-full bg-slate-950/80 border border-white/10 text-[9px] font-black tracking-widest text-white">{tradePosition} / {tradeCount}</span>
-                            <button onClick={onNextTrade} className={`p-2 rounded-full border shadow-lg ${isDark ? 'bg-slate-900/85 hover:bg-white/10 text-slate-200 border-white/10' : 'bg-white/90 hover:bg-slate-100 text-slate-600 border-slate-200'}`} title="Další obchod (→)"><ChevronRight size={18} /></button>
+                            <button onClick={onNextTrade} className={`p-2 rounded-full border shadow-lg ${isDark ? 'bg-[var(--bg-page)] hover:bg-white/10 text-slate-200 border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] hover:bg-slate-100 text-slate-600 border-[var(--border-subtle)]'}`} title="Další obchod (→)"><ChevronRight size={18} /></button>
                         </>
                     )}
-                    <button onClick={onClose} className={`p-2 rounded-full border shadow-lg ${isDark ? 'bg-slate-900/85 hover:bg-white/10 text-slate-300 border-white/10' : 'bg-white/90 hover:bg-slate-100 text-slate-500 border-slate-200'}`}><X size={18} /></button>
+                    <button onClick={onClose} className={`p-2 rounded-full border shadow-lg ${isDark ? 'bg-[var(--bg-page)] hover:bg-white/10 text-slate-300 border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] hover:bg-slate-100 text-slate-500 border-[var(--border-subtle)]'}`}><X size={18} /></button>
                 </div>
 
                 {loadingImages && images.length === 0 ? (
-                    <div className={`h-44 flex flex-col items-center justify-center border-b ${isDark ? 'bg-slate-800/40 border-white/5 text-slate-500' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
+                    <div className={`h-44 flex flex-col items-center justify-center border-b ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-500' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-400'}`}>
                         <div className="w-6 h-6 mb-3 rounded-full border-2 border-slate-500/30 border-t-blue-500 animate-spin" />
                         <p className="text-xs font-bold">Načítám screenshoty…</p>
                     </div>
@@ -770,7 +770,7 @@ const MemorialTradePreview: React.FC<{
                         )}
                     </div>
                 ) : (
-                    <div className={`h-44 flex flex-col items-center justify-center border-b ${isDark ? 'bg-slate-800/40 border-white/5 text-slate-500' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
+                    <div className={`h-44 flex flex-col items-center justify-center border-b ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-500' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-400'}`}>
                         <BarChart3 size={30} className="mb-2 opacity-40" />
                         <p className="text-xs font-bold">K tomuto obchodu není uložený screenshot</p>
                     </div>
@@ -778,7 +778,7 @@ const MemorialTradePreview: React.FC<{
 
                 <div className="p-5 lg:p-6 space-y-5">
                     <div className="flex items-start gap-3 pr-10">
-                        <span className={`mt-0.5 text-[10px] font-black uppercase px-2 py-1 rounded-lg ${directionLong ? 'bg-emerald-500/15 text-emerald-500' : 'bg-rose-500/15 text-rose-500'}`}>{directionLong ? 'LONG' : 'SHORT'}</span>
+                        <span className={`mt-0.5 text-[11px] font-semibold px-2 py-1 rounded-lg ${directionLong ? 'bg-emerald-500/15 text-emerald-500' : 'bg-rose-500/15 text-rose-500'}`}>{directionLong ? 'LONG' : 'SHORT'}</span>
                         <div className="min-w-0 flex-1">
                             <h3 className={`text-xl font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{trade.instrument || trade.symbol || 'Obchod'}</h3>
                             <p className="text-[11px] font-bold text-slate-500">{accountName} · {dateLabel}</p>
@@ -795,8 +795,8 @@ const MemorialTradePreview: React.FC<{
                     </div>
 
                     {trade.notes && (
-                        <div className={`p-4 rounded-2xl border ${isDark ? 'bg-slate-800/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-                            <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-2">Poznámka</p>
+                        <div className={`p-4 rounded-2xl border bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
+                            <p className="text-[11px] font-semibold text-slate-500 mb-2">Poznámka</p>
                             <p className={`text-sm leading-relaxed whitespace-pre-wrap ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{trade.notes}</p>
                         </div>
                     )}
@@ -807,8 +807,8 @@ const MemorialTradePreview: React.FC<{
 };
 
 const PreviewStat: React.FC<{ label: string; value: string; isDark: boolean; accent?: 'rose' | 'emerald' }> = ({ label, value, isDark, accent }) => (
-    <div className={`p-3 rounded-xl border ${isDark ? 'bg-slate-800/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-        <p className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-1">{label}</p>
+    <div className={`p-3 rounded-xl border bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
+        <p className="text-[11px] font-semibold text-slate-500 mb-1">{label}</p>
         <p className={`text-sm font-black font-mono ${accent === 'rose' ? 'text-rose-500' : accent === 'emerald' ? 'text-emerald-500' : isDark ? 'text-slate-200' : 'text-slate-800'}`}>{value}</p>
     </div>
 );
@@ -824,7 +824,7 @@ const MStat: React.FC<{ label: string; value: string; icon: any; color: 'emerald
         <div className={`p-3 rounded-2xl border ${colorMap[color]}`}>
             <div className="flex items-center gap-1.5 mb-1.5">
                 <Icon size={11} />
-                <p className="text-[9px] font-black uppercase tracking-widest opacity-70 truncate">{label}</p>
+                <p className="text-[11px] font-semibold opacity-70 truncate">{label}</p>
             </div>
             <p className={`${small ? 'text-xs' : 'text-lg'} font-black font-mono tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>{value}</p>
         </div>
@@ -860,7 +860,7 @@ const CompareModal: React.FC<{ accounts: Account[]; statsMap: Map<string, Accoun
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.96, y: 12 }}
                 transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-                className={`max-w-4xl w-full max-h-[90vh] overflow-y-auto rounded-[32px] border shadow-2xl ${isDark ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'}`}
+                className={`max-w-4xl w-full max-h-[90vh] overflow-y-auto rounded-[32px] border shadow-2xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}
                 onClick={e => e.stopPropagation()}
             >
                 <div className="relative p-6 lg:p-8 border-b border-blue-500/20 bg-gradient-to-b from-blue-500/5 to-transparent">
@@ -868,7 +868,7 @@ const CompareModal: React.FC<{ accounts: Account[]; statsMap: Map<string, Accoun
                     <div className="flex items-center gap-4">
                         <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-2xl"><Scale size={24} className="text-blue-500" /></div>
                         <div>
-                            <p className="text-[9px] font-black uppercase tracking-[0.3em] text-blue-500 mb-1">Porovnání · {accounts.length} účtů</p>
+                            <p className="text-[11px] font-semibold text-blue-500 mb-1">Porovnání · {accounts.length} účtů</p>
                             <h2 className={`text-2xl font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>Co mají společného?</h2>
                         </div>
                     </div>
@@ -885,10 +885,10 @@ const CompareModal: React.FC<{ accounts: Account[]; statsMap: Map<string, Accoun
 
                     {/* recurring patterns */}
                     <div>
-                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">Opakující se příčiny</p>
+                        <p className="text-[11px] font-semibold text-slate-500 mb-3">Opakující se příčiny</p>
                         <div className="space-y-2">
                             {agg.reasons.map(([reason, count]) => (
-                                <div key={reason} className={`flex items-center gap-3 p-3 rounded-xl border ${isDark ? 'bg-slate-800/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                                <div key={reason} className={`flex items-center gap-3 p-3 rounded-xl border bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
                                     <div className="flex-1">
                                         <div className="flex items-center justify-between mb-1.5">
                                             <span className={`text-xs font-bold ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>{reason}</span>
@@ -910,7 +910,7 @@ const CompareModal: React.FC<{ accounts: Account[]; statsMap: Map<string, Accoun
 
                     {/* per-account row */}
                     <div>
-                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">Vybrané účty</p>
+                        <p className="text-[11px] font-semibold text-slate-500 mb-3">Vybrané účty</p>
                         <div className={`rounded-2xl border divide-y overflow-hidden ${isDark ? 'border-white/5 divide-white/5' : 'border-slate-200 divide-slate-100'}`}>
                             {accounts.map(a => {
                                 const s = statsMap.get(a.id)!;
@@ -929,7 +929,7 @@ const CompareModal: React.FC<{ accounts: Account[]; statsMap: Map<string, Accoun
                     {/* lessons of selected */}
                     {accounts.some(a => a.failureKeyLesson) && (
                         <div>
-                            <p className="text-[10px] font-black uppercase tracking-widest text-amber-500 mb-3"><Lightbulb size={11} className="inline mr-1" /> Lekce z těchto účtů</p>
+                            <p className="text-[11px] font-semibold text-amber-500 mb-3"><Lightbulb size={11} className="inline mr-1" /> Lekce z těchto účtů</p>
                             <div className="space-y-2">
                                 {accounts.filter(a => a.failureKeyLesson).map(a => (
                                     <div key={a.id} className={`p-3 rounded-xl border ${isDark ? 'bg-amber-500/5 border-amber-500/20' : 'bg-amber-50 border-amber-200'}`}>
@@ -955,7 +955,7 @@ const LessonsModal: React.FC<{ lessons: { id: string; name: string; date?: strin
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.96, y: 12 }}
                 transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-                className={`max-w-2xl w-full max-h-[90vh] overflow-y-auto rounded-[32px] border shadow-2xl ${isDark ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'}`}
+                className={`max-w-2xl w-full max-h-[90vh] overflow-y-auto rounded-[32px] border shadow-2xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}
                 onClick={e => e.stopPropagation()}
             >
                 <div className="relative p-6 lg:p-8 border-b border-amber-500/20 bg-gradient-to-b from-amber-500/5 to-transparent">
@@ -963,7 +963,7 @@ const LessonsModal: React.FC<{ lessons: { id: string; name: string; date?: strin
                     <div className="flex items-center gap-4">
                         <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl"><BookOpen size={24} className="text-amber-500" /></div>
                         <div>
-                            <p className="text-[9px] font-black uppercase tracking-[0.3em] text-amber-500 mb-1">Zeď lekcí</p>
+                            <p className="text-[11px] font-semibold text-amber-500 mb-1">Zeď lekcí</p>
                             <h2 className={`text-2xl font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>Co tě to stálo naučit</h2>
                         </div>
                     </div>

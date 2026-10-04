@@ -86,7 +86,7 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onLiveInt
                 <>
                   <button
                     onClick={() => { onToggleBacktest(); setMoreOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-5 py-4 text-sm font-black uppercase tracking-wider transition-colors ${
+                    className={`flex items-center gap-3 w-full px-5 py-4 text-sm font-semibold transition-colors ${
                       isBacktest
                         ? 'text-emerald-500 hover:bg-emerald-500/10'
                         : 'text-violet-500 hover:bg-violet-500/10'
@@ -109,7 +109,7 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onLiveInt
                     onPointerEnter={item.id === 'live' && !locked && !isActive ? onLiveIntent : undefined}
                     onFocus={item.id === 'live' && !locked && !isActive ? onLiveIntent : undefined}
                     onPointerDown={item.id === 'live' && !locked && !isActive ? onLiveIntent : undefined}
-                    className={`flex items-center gap-3 w-full px-5 py-4 text-sm font-bold uppercase tracking-wider transition-colors ${locked ? 'opacity-50' : ''} ${
+                    className={`flex items-center gap-3 w-full px-5 py-4 text-sm font-bold transition-colors ${locked ? 'opacity-50' : ''} ${
                       isActive && !locked
                         ? isDark ? 'text-white bg-white/10' : 'text-slate-900 bg-slate-100'
                         : isDark ? 'text-slate-400 hover:text-white hover:bg-white/5' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
@@ -149,7 +149,7 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onLiveInt
                     <span className="absolute -top-1.5 -left-1.5 min-w-[15px] h-[15px] px-1 rounded-full border border-amber-500/60 text-amber-500 text-[8px] font-black flex items-center justify-center">{enrichCount}</span>
                   )}
                 </div>
-                <span className={`text-[9px] font-bold uppercase tracking-wider ${isActive ? 'opacity-100' : 'opacity-60'}`}>{item.label}</span>
+                <span className={`text-[11px] font-bold ${isActive ? 'opacity-100' : 'opacity-60'}`}>{item.label}</span>
               </button>
             );
           })}
@@ -163,7 +163,7 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onLiveInt
               <ClipboardCheck size={20} strokeWidth={2} className="text-emerald-400" />
               {reviewCount > 0 && <span className="absolute -top-1.5 -right-1.5 min-w-[17px] h-[17px] px-1 rounded-full bg-emerald-500 text-white text-[9px] font-black flex items-center justify-center tabular-nums">{reviewCount}</span>}
             </div>
-            <span className={`text-[9px] font-bold uppercase tracking-wider mt-0.5 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>Hodnotit</span>
+            <span className={`text-[11px] font-bold mt-0.5 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>Hodnotit</span>
           </button>
 
           {mainItems.slice(2, 4).map((item) => {
@@ -180,7 +180,7 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onLiveInt
                   <Icon size={20} strokeWidth={isActive ? 2 : 1.8} />
                   {locked && <Lock size={9} className="absolute -top-0.5 -right-0.5 text-amber-400/80 bg-[var(--bg-page)] rounded-full p-0.5" />}
                 </div>
-                <span className={`text-[9px] font-bold uppercase tracking-wider ${isActive ? 'opacity-100' : 'opacity-60'}`}>{item.label}</span>
+                <span className={`text-[11px] font-bold ${isActive ? 'opacity-100' : 'opacity-60'}`}>{item.label}</span>
               </button>
             );
           })}
@@ -197,7 +197,7 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onLiveInt
             <div className={`relative p-1.5 rounded-xl transition-colors ${(moreItems.some(i => i.id === activePage) || moreOpen) ? (isDark ? 'bg-white/10' : 'bg-slate-100') : ''}`}>
               {moreOpen ? <X size={20} strokeWidth={2} /> : <MoreHorizontal size={20} strokeWidth={1.8} />}
             </div>
-            <span className="text-[9px] font-bold uppercase tracking-wider opacity-60">Více</span>
+            <span className="text-[11px] font-bold opacity-60">Více</span>
           </button>
         </div>
       </nav>

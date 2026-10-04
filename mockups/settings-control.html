@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nastavení — přehled</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --base: #eceff7;
+  --card: rgba(255,255,255,.55);
+  --page: rgba(241,245,249,.65);
+  --input: rgba(255,255,255,.75);
+  --glass-border: rgba(255,255,255,.8);
+  --line: rgba(15,23,42,.08);
+  --line2: rgba(15,23,42,.05);
+  --ink: #0f172a; --ink2: #475569; --ink3: #94a3b8;
+  --shadow: 0 8px 24px -12px rgba(31,38,135,.18), inset 0 1px 0 rgba(255,255,255,.9);
+  --accent: #6366f1; --accent-soft: rgba(99,102,241,.12);
+  --win: #10b981; --loss: #f43f5e; --warn: #f59e0b;
+  --hover: rgba(255,255,255,.5);
+  --l1: #a5b4fc; --l2: #7dd3fc; --l3: #f0abfc; --bg-op: .9;
+  --r: 8px; --r2: 6px;
+  color-scheme: light;
+}
+.dark {
+  --base: #05070f;
+  --card: rgba(15,20,40,.55);
+  --page: rgba(2,6,23,.45);
+  --input: rgba(255,255,255,.05);
+  --glass-border: rgba(255,255,255,.09);
+  --line: rgba(255,255,255,.08);
+  --line2: rgba(255,255,255,.045);
+  --ink: #f1f5f9; --ink2: #94a3b8; --ink3: #64748b;
+  --shadow: 0 16px 36px -18px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.06);
+  --accent-soft: rgba(99,102,241,.22);
+  --hover: rgba(255,255,255,.04);
+  --l1: #6366f1; --l2: #0ea5e9; --l3: #d946ef; --bg-op: .5;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--base); color: var(--ink); font-size: 13px; -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+svg { stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.bg { position: fixed; inset: 0; z-index: -1; opacity: var(--bg-op); pointer-events: none; filter: blur(10px);
+  background: radial-gradient(42% 46% at 12% 8%, var(--l1), transparent 70%), radial-gradient(36% 42% at 88% 26%, var(--l2), transparent 70%), radial-gradient(44% 40% at 46% 108%, var(--l3), transparent 70%); }
+
+.glass { background: var(--card); border: 1px solid var(--glass-border); box-shadow: var(--shadow); border-radius: var(--r); }
+.app { display: grid; grid-template-columns: 56px minmax(0,1fr); gap: 12px; padding: 12px; }
+.rail { position: sticky; top: 12px; height: calc(100vh - 24px); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.rail i { width: 36px; height: 36px; border-radius: var(--r2); display: grid; place-items: center; color: var(--ink3); }
+.rail i.on { background: var(--hover); color: var(--ink); box-shadow: inset 0 0 0 1px var(--glass-border); }
+.rail .logo { font-weight: 900; font-size: 13px; color: var(--ink); margin-bottom: 8px; }
+.rail .grow { flex: 1; }
+.rail svg { width: 16px; height: 16px; }
+
+.top { position: sticky; top: 12px; z-index: 10; display: flex; align-items: center; gap: 12px; padding: 8px 8px 8px 16px; margin-bottom: 12px; backdrop-filter: blur(14px) saturate(140%); -webkit-backdrop-filter: blur(14px) saturate(140%); }
+.top h1 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -.02em; }
+.search { position: relative; flex: 1; max-width: 420px; margin-left: 8px; }
+.search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--ink3); }
+.search input { width: 100%; height: 34px; padding: 0 60px 0 32px; border-radius: var(--r2); border: 1px solid var(--line); background: var(--input); outline: none; font-size: 12.5px; }
+.search input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.search kbd { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font: 600 10.5px 'JetBrains Mono', monospace; color: var(--ink3); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+.top .grow { flex: 1; }
+.ibtn { width: 34px; height: 34px; border-radius: var(--r2); border: 1px solid var(--line); background: var(--page); display: grid; place-items: center; color: var(--ink2); }
+.ibtn svg { width: 15px; height: 15px; }
+
+.app > *, .layout > * { min-width: 0; }
+.layout { display: block; }
+/* záložky jako na LIVE: text + ikona, aktivní = indigo + 2px podtržení */
+.ltabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--line); margin: 0 0 14px; scrollbar-width: none; }
+.ltabs button { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; border: 0; border-bottom: 2px solid transparent; background: transparent; padding: 10px 14px; font-size: 12px; font-weight: 700; color: var(--ink2); margin-bottom: -1px; }
+.ltabs button:hover { color: var(--ink); }
+.ltabs button.on { color: var(--accent); border-bottom-color: var(--accent); }
+.dark .ltabs button.on { color: #818cf8; border-bottom-color: #818cf8; }
+.ltabs svg { width: 14px; height: 14px; }
+.ltabs em { font-style: normal; font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 99px; background: var(--page); color: var(--ink3); }
+.ltabs button.on em { background: var(--accent-soft); color: inherit; }
+body:not(.searching) .area > h3 { display: none; }
+.searching .ltabs button { opacity: .45; }
+.area[data-p]:not(.on) { display: none; }
+.searching .area[data-p] { display: block; }
+
+/* obsah vlevo */
+.index { position: sticky; top: 70px; padding: 8px; max-height: calc(100vh - 82px); overflow: auto; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.index h4 { margin: 10px 8px 4px; font-size: 11px; font-weight: 600; color: var(--ink3); }
+.index h4:first-child { margin-top: 2px; }
+.index a { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-radius: var(--r2); color: var(--ink2); text-decoration: none; font-size: 12.5px; font-weight: 500; }
+.index a:hover { background: var(--hover); color: var(--ink); }
+.index a.on { background: var(--input); color: var(--ink); font-weight: 600; box-shadow: inset 0 0 0 1px var(--line); }
+.dark .index a.on { background: rgba(255,255,255,.07); }
+.index a em { margin-left: auto; font-style: normal; font-size: 11px; font-weight: 600; color: var(--ink3); font-variant-numeric: tabular-nums; }
+.index a em.ok { color: var(--win); }
+.index a em.off { color: var(--ink3); }
+
+/* přehled stavu */
+.overview { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 8px; margin-bottom: 20px; }
+.tile { padding: 11px 12px; text-decoration: none; color: inherit; display: flex; flex-direction: column; gap: 3px; min-width: 0; transition: transform .15s, box-shadow .15s; }
+.tile:hover { transform: translateY(-1px); }
+.tile .k { font-size: 11px; font-weight: 600; color: var(--ink2); display: flex; align-items: center; gap: 6px; }
+.tile .k svg { width: 13px; height: 13px; color: var(--ink3); }
+.tile .v { font-size: 17px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.tile .s { font-size: 11px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; }
+.pill i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pill.ok { color: var(--win); } .pill.warn { color: var(--warn); } .pill.off { color: var(--ink3); }
+
+/* sekce */
+.area { margin-bottom: 26px; }
+.area > h3 { margin: 0 2px 10px; font-size: 11.5px; font-weight: 700; color: var(--ink3); display: flex; align-items: center; gap: 10px; }
+.area > h3::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.sec { margin-bottom: 12px; overflow: hidden; }
+.sec-h { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+.sec-h h2 { margin: 0; font-size: 13.5px; font-weight: 700; }
+.sec-h .meta { font-size: 12px; color: var(--ink3); font-weight: 500; }
+.sec-h .act { margin-left: auto; display: flex; gap: 6px; }
+.sec-desc { padding: 9px 14px 0; margin: 0; font-size: 12px; color: var(--ink2); }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.two .sec { margin-bottom: 0; }
+.two + .sec, .two + .two { margin-top: 12px; }
+
+/* řádky nastavení */
+.row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 48px; }
+.row + .row { border-top: 1px solid var(--line2); }
+.row .lbl { min-width: 0; flex: 1; }
+.row .lbl b { display: block; font-size: 12.5px; font-weight: 600; }
+.row .lbl small { display: block; margin-top: 1px; font-size: 11.5px; color: var(--ink2); }
+.row .ctl { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.row.sub { padding-left: 34px; }
+.row.sub .lbl b::before { content: '↳ '; color: var(--ink3); font-weight: 500; }
+
+/* tabulky */
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th { text-align: left; font-size: 11px; font-weight: 600; color: var(--ink3); padding: 8px 14px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--page) 50%, transparent); white-space: nowrap; }
+td { padding: 0 14px; height: 42px; border-bottom: 1px solid var(--line2); }
+tr:last-child td { border-bottom: 0; }
+tbody tr:hover td { background: var(--hover); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+td.act { width: 40px; text-align: right; padding-right: 8px; }
+.type { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink2); }
+.type i { width: 7px; height: 7px; border-radius: 2px; }
+.k-ritual { background: #818cf8; } .k-rule { background: #f43f5e; } .k-exp { background: #f59e0b; }
+
+/* ovládání */
+.tg { width: 34px; height: 20px; border-radius: 99px; border: 0; padding: 0; position: relative; background: rgba(120,130,150,.35); transition: background .2s; flex-shrink: 0; }
+.tg::after { content: ''; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .2s; }
+.tg.on { background: var(--accent); }
+.tg.on::after { transform: translateX(14px); }
+.btn { height: 30px; padding: 0 11px; border-radius: var(--r2); border: 1px solid var(--line); background: var(--input); font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.btn svg { width: 13px; height: 13px; }
+.btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--ink2); }
+.btn.ghost:hover { background: var(--hover); color: var(--ink); }
+.btn.danger { color: var(--loss); background: transparent; border-color: color-mix(in srgb, var(--loss) 30%, transparent); }
+.field { height: 30px; padding: 0 10px; border-radius: var(--r2); border: 1px solid var(--line); background: var(--input); font-size: 12.5px; outline: none; min-width: 0; }
+.field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.field.time { width: 70px; text-align: center; font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 0 4px; }
+.seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--r2); background: var(--page); border: 1px solid var(--line2); }
+.seg button { border: 0; background: transparent; height: 24px; padding: 0 9px; border-radius: 4px; font-size: 11.5px; font-weight: 600; color: var(--ink2); display: inline-flex; align-items: center; gap: 4px; }
+.seg button.on { background: var(--input); color: var(--ink); box-shadow: 0 1px 2px rgba(15,23,42,.1); }
+.dark .seg button.on { background: rgba(255,255,255,.1); }
+.seg button:disabled { opacity: .45; cursor: not-allowed; }
+.seg svg { width: 11px; height: 11px; }
+.del { width: 26px; height: 26px; border-radius: 4px; border: 0; background: transparent; color: var(--ink3); display: inline-grid; place-items: center; opacity: 0; }
+.del svg { width: 13px; height: 13px; }
+tr:hover .del, .chip:hover .del { opacity: 1; }
+.del:hover { color: var(--loss); }
+@media (hover: none) { .del { opacity: 1; } }
+.adder { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--page) 50%, transparent); flex-wrap: wrap; }
+.adder .field { flex: 1; min-width: 150px; }
+
+/* štítky — hranaté */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 14px; }
+.chip { display: inline-flex; align-items: center; height: 28px; padding: 0 2px 0 10px; border-radius: var(--r2); border: 1px solid var(--line); background: var(--input); font-size: 12px; font-weight: 500; }
+.chip .del { width: 22px; height: 22px; }
+.chip.add { padding: 0 4px; border-style: dashed; background: transparent; color: var(--ink2); }
+.chip.add input { border: 0; background: transparent; outline: none; width: 110px; padding: 0 6px; font-size: 12px; }
+.chip.add svg { width: 13px; height: 13px; }
+
+/* seance */
+.tl { padding: 12px 14px 4px; }
+.tl-axis { display: flex; justify-content: space-between; font: 500 10.5px 'JetBrains Mono', monospace; color: var(--ink3); margin-bottom: 6px; }
+.tl-bar { position: relative; border-radius: var(--r2); background: var(--page); border: 1px solid var(--line2); background-image: repeating-linear-gradient(90deg, transparent 0 calc(12.5% - 1px), var(--line2) calc(12.5% - 1px) 12.5%); }
+.tl-bar b { position: absolute; height: 14px; border-radius: 3px; font-size: 10px; font-weight: 600; color: #fff; display: flex; align-items: center; padding: 0 6px; white-space: nowrap; overflow: hidden; }
+.tl-now { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); opacity: .5; border-radius: 1px; }
+.sw { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px; margin-right: 8px; position: relative; }
+.sw input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.cell-in { border: 0; background: transparent; outline: none; font-weight: 600; font-size: 12.5px; width: 120px; }
+
+.mono { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.dim { color: var(--ink3); }
+.note { padding: 8px 14px; font-size: 11.5px; color: var(--ink2); border-top: 1px solid var(--line2); }
+.ios { font-size: 10.5px; font-weight: 600; color: var(--ink3); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; }
+details summary { list-style: none; cursor: pointer; }
+details summary::-webkit-details-marker { display: none; }
+details summary .chev { width: 14px; height: 14px; color: var(--ink3); transition: transform .2s; }
+details[open] summary .chev { transform: rotate(90deg); }
+details[open] summary { border-bottom: 1px solid var(--line); }
+.pal { width: 22px; height: 22px; border-radius: 5px; box-shadow: 0 0 0 1px var(--line); }
+.pal.on { box-shadow: 0 0 0 2px var(--accent); }
+.range { display: flex; align-items: center; gap: 8px; width: 300px; font-size: 11px; color: var(--ink2); }
+.range input { flex: 1; accent-color: var(--accent); }
+
+.hidden-by-search { display: none !important; }
+.empty-search { display: none; padding: 30px; text-align: center; color: var(--ink2); }
+
+.mock-ctl { position: fixed; right: 14px; bottom: 14px; z-index: 20; padding: 5px; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+
+@media (max-width: 1100px) { .overview { grid-template-columns: repeat(3, minmax(0,1fr)); } }
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .two { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .app { grid-template-columns: 1fr; padding: 8px; }
+  .rail { display: none; }
+  .top { top: 8px; padding: 8px; }
+  .top h1 { display: none; }
+  .search { margin-left: 0; max-width: none; }
+  .search kbd { display: none; }
+  .overview { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .row { padding: 10px 12px; }
+  .row.sub { padding-left: 24px; }
+  td { padding: 0 10px; } th { padding: 8px 10px; }
+  .hide-sm, .sec-h .act.hide-sm { display: none; }
+  .top .grow { display: none; }
+  .sec-h { flex-wrap: wrap; }
+  .adder .seg { order: 3; }
+  .tl-axis span:nth-child(even) { visibility: hidden; }
+  .range { width: 160px; }
+}
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-tag" viewBox="0 0 24 24"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></symbol>
+  <symbol id="i-palette" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/><path d="M12 2a10 10 0 0 0 0 20c1 0 2-1 2-2 0-1-1-1-1-2s1-2 2-2h2a5 5 0 0 0 5-5c0-5-4-9-10-9z"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4z"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-scroll" viewBox="0 0 24 24"><path d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v3h4"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10 21h4"/></symbol>
+  <symbol id="i-tv" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="m17 2-5 5-5-5"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></symbol>
+  <symbol id="i-hist" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l4 2"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M2 4h7a3 3 0 0 1 3 3v14a2 2 0 0 0-2-2H2zM22 4h-7a3 3 0 0 0-3 3v14a2 2 0 0 1 2-2h8z"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></symbol>
+  <symbol id="i-live" viewBox="0 0 24 24"><path d="M4.9 19.1a10 10 0 0 1 0-14.2M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4M19.1 4.9a10 10 0 0 1 0 14.2"/><circle cx="12" cy="12" r="2"/></symbol>
+  <symbol id="i-brain" viewBox="0 0 24 24"><path d="M12 5a3 3 0 1 0-6 .1A4 4 0 0 0 4 12a4 4 0 0 0 2 7 3 3 0 0 0 6 0zM12 5a3 3 0 1 1 6 .1A4 4 0 0 1 20 12a4 4 0 0 1-2 7 3 3 0 0 1-6 0z"/></symbol>
+  <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0 5 5L22 14l-8 8-2.3-2.3a4 4 0 0 0-5-5L4 12l8-8z"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="rail glass">
+    <div class="logo">AT</div>
+    <i><svg><use href="#i-grid"/></svg></i><i><svg><use href="#i-hist"/></svg></i><i><svg><use href="#i-book"/></svg></i><i><svg><use href="#i-live"/></svg></i>
+    <div class="grow"></div><i class="on"><svg><use href="#i-gear"/></svg></i>
+  </aside>
+
+  <div>
+    <header class="top glass">
+      <h1>Nastavení</h1>
+      <label class="search"><svg><use href="#i-search"/></svg><input id="q" placeholder="Hledat v nastavení…" autocomplete="off"><kbd>/</kbd></label>
+      <div class="grow"></div>
+      <button class="ibtn" id="themeBtn" title="Světlý / tmavý"><svg><use href="#i-moon"/></svg></button>
+    </header>
+
+    <div class="layout">
+
+      <main id="content">
+        <nav class="ltabs" id="ltabs">
+          <button data-t="trading" class="on"><svg><use href="#i-scroll"/></svg>Obchodování</button>
+          <button data-t="tags"><svg><use href="#i-tag"/></svg>Štítky</button>
+          <button data-t="alerts"><svg><use href="#i-bell"/></svg>Upozornění</button>
+          <button data-t="look"><svg><use href="#i-palette"/></svg>Vzhled</button>
+          <button data-t="app"><svg><use href="#i-user"/></svg>Účet a aplikace</button>
+        </nav>
+
+        <!-- OBCHODOVÁNÍ -->
+        <div class="area on" data-area data-p="trading">
+          <h3>Obchodování</h3>
+
+          <section class="sec glass" id="rules" data-sec>
+            <div class="sec-h"><h2>Železná pravidla</h2><span class="meta">5</span><span class="act hide-sm"><span class="dim" style="font-size:11.5px">Ukazují se v ranní přípravě a na dashboardu</span></span></div>
+            <table>
+              <thead><tr><th>Pravidlo</th><th style="width:130px">Typ</th><th class="hide-sm" style="width:150px" title="V náhledu ilustrační čísla — v appce z ranní přípravy a večerního review">Dodrženo (30 dní) *</th><th></th></tr></thead>
+              <tbody>
+                <tr data-s><td>Ranní meditace / klid</td><td><span class="type"><i class="k-ritual"></i>Rituál</span></td><td class="hide-sm num">18 / 21</td><td class="act"><button class="del"><svg><use href="#i-trash"/></svg></button></td></tr>
+                <tr data-s><td>Kontrola high impact news</td><td><span class="type"><i class="k-ritual"></i>Rituál</span></td><td class="hide-sm num">20 / 21</td><td class="act"><button class="del"><svg><use href="#i-trash"/></svg></button></td></tr>
+                <tr data-s><td>Max 1 % risk na trade</td><td><span class="type"><i class="k-rule"></i>Pravidlo</span></td><td class="hide-sm num">19 / 21</td><td class="act"><button class="del"><svg><use href="#i-trash"/></svg></button></td></tr>
+                <tr data-s><td>Žádný revenge trading</td><td><span class="type"><i class="k-rule"></i>Pravidlo</span></td><td class="hide-sm num">17 / 21</td><td class="act"><button class="del"><svg><use href="#i-trash"/></svg></button></td></tr>
+                <tr data-s><td>Neposouvat SL do ztráty</td><td><span class="type"><i class="k-rule"></i>Pravidlo</span></td><td class="hide-sm num">21 / 21</td><td class="act"><button class="del"><svg><use href="#i-trash"/></svg></button></td></tr>
+              </tbody>
+            </table>
+            <div class="adder"><input class="field" placeholder="Nové pravidlo…"><div class="seg" data-seg><button class="on">Rituál</button><button>Pravidlo</button><button>Experiment</button></div><button class="btn primary"><svg><use href="#i-plus"/></svg>Přidat</button></div>
+          </section>
+
+          <div class="two" id="goals">
+            <section class="sec glass" data-sec>
+              <div class="sec-h"><h2>Výchozí cíle dne</h2><span class="meta">3</span></div>
+              <p class="sec-desc">Předvyplní se v každé ranní přípravě.</p>
+              <div class="chips">
+                <span class="chip" data-s>Dodržet max risk 1 %<button class="del"><svg><use href="#i-x"/></svg></button></span>
+                <span class="chip" data-s>Žádný obchod po 11:00<button class="del"><svg><use href="#i-x"/></svg></button></span>
+                <span class="chip" data-s>Počkat na setup A+<button class="del"><svg><use href="#i-x"/></svg></button></span>
+                <label class="chip add"><svg><use href="#i-plus"/></svg><input placeholder="Přidat cíl"></label>
+              </div>
+            </section>
+            <section class="sec glass" data-sec>
+              <div class="sec-h"><h2>Týdenní focus</h2><span class="meta">Týden 40 · 28. 9.–4. 10.</span><span class="act"><button class="btn ghost" style="padding:0 7px"><svg><use href="#i-left"/></svg></button><button class="btn ghost" style="padding:0 7px"><svg><use href="#i-right"/></svg></button></span></div>
+              <div class="row"><div class="lbl"><small>Na tento týden zatím nemáš focus.</small></div><div class="ctl"><button class="btn"><svg><use href="#i-plus"/></svg>Přidat cíl týdne</button></div></div>
+            </section>
+          </div>
+
+          <section class="sec glass" id="sessions" data-sec style="margin-top:12px">
+            <div class="sec-h"><h2>Seance</h2><span class="meta">3 · Live</span>
+              <span class="act"><div class="seg"><button class="on">Live</button><button disabled title="Pro úpravu se přepni do backtest světa"><svg><use href="#i-lock"/></svg>Backtest</button></div><button class="btn"><svg><use href="#i-plus"/></svg>Přidat</button></span></div>
+            <div class="tl"><div class="tl-axis"><span>0</span><span>3</span><span>6</span><span>9</span><span>12</span><span>15</span><span>18</span><span>21</span><span>24</span></div><div class="tl-bar" id="tl"></div></div>
+            <table>
+              <thead><tr><th>Seance</th><th class="num" style="width:90px">Od</th><th class="num" style="width:90px">Do</th><th class="num hide-sm" style="width:90px">Délka</th><th class="hide-sm" style="width:170px">Překryv</th><th></th></tr></thead>
+              <tbody id="sessRows"></tbody>
+            </table>
+          </section>
+        </div>
+
+        <!-- ŠTÍTKY -->
+        <div class="area" data-area data-p="tags">
+          <h3>Štítky pro zápis obchodu</h3>
+          <div class="two" id="confluence">
+            <section class="sec glass" data-sec>
+              <div class="sec-h"><h2>HTF konfluence</h2><span class="meta">4 · vyšší časové rámce</span></div>
+              <div class="chips"><span class="chip" data-s>4H Demand<button class="del"><svg><use href="#i-x"/></svg></button></span><span class="chip" data-s>4H Supply<button class="del"><svg><use href="#i-x"/></svg></button></span><span class="chip" data-s>Daily Level<button class="del"><svg><use href="#i-x"/></svg></button></span><span class="chip" data-s>Weekly High/Low<button class="del"><svg><use href="#i-x"/></svg></button></span><label class="chip add"><svg><use href="#i-plus"/></svg><input placeholder="Přidat"></label></div>
+            </section>
+            <section class="sec glass" data-sec>
+              <div class="sec-h"><h2>LTF konfluence</h2><span class="meta">4 · potvrzení vstupu</span></div>
+              <div class="chips"><span class="chip" data-s>M5 BoS<button class="del"><svg><use href="#i-x"/></svg></button></span><span class="chip" data-s>M1 Choch<button class="del"><svg><use href="#i-x"/></svg></button></span><span class="chip" data-s>Liquidity Sweep<button class="del"><svg><use href="#i-x"/></svg></button></span><span class="chip" data-s>FVG Entry<button class="del"><svg><use href="#i-x"/></svg></button></span><label class="chip add"><svg><use href="#i-plus"/></svg><input placeholder="Přidat"></label></div>
+            </section>
+          </div>
+          <div class="two" id="mistakes">
+            <section class="sec glass" data-sec>
+              <div class="sec-h"><h2>Katalog chyb</h2><span class="meta">5</span></div>
+              <div class="chips"><span class="chip" data-s>Early Exit<button class="del"><svg><use href="#i-x"/></svg></button></span><span class="chip" data-s>Chase<button class="del"><svg><use href="#i-x"/></svg></button></span><span class="chip" data-s>No Stop Loss<button class="del"><svg><use href="#i-x"/></svg></button></span><span class="chip" data-s>Overrisking<button class="del"><svg><use href="#i-x"/></svg></button></span><span class="chip" data-s>Impulsive Entry<button class="del"><svg><use href="#i-x"/></svg></button></span><label class="chip add"><svg><use href="#i-plus"/></svg><input placeholder="Přidat"></label></div>
+            </section>
+            <section class="sec glass" data-sec>
+              <div class="sec-h"><h2>Emoce</h2><span class="meta">6</span></div>
+              <div class="chips"><span class="chip" data-s>FOMO<button class="del"><svg><use href="#i-x"/></svg></button></span><span class="chip" data-s>Strach<button class="del"><svg><use href="#i-x"/></svg></button></span><span class="chip" data-s>Chamtivost<button class="del"><svg><use href="#i-x"/></svg></button></span><span class="chip" data-s>Revenge<button class="del"><svg><use href="#i-x"/></svg></button></span><span class="chip" data-s>Flow<button class="del"><svg><use href="#i-x"/></svg></button></span><span class="chip" data-s>Nuda<button class="del"><svg><use href="#i-x"/></svg></button></span><label class="chip add"><svg><use href="#i-plus"/></svg><input placeholder="Přidat"></label></div>
+            </section>
+          </div>
+        </div>
+
+        <!-- UPOZORNĚNÍ -->
+        <div class="area" data-area data-p="alerts">
+          <h3>Upozornění</h3>
+          <div class="two">
+            <section class="sec glass" id="reminders" data-sec>
+              <div class="sec-h"><h2>Připomínky</h2></div>
+              <div class="row" data-s><div class="lbl"><b>Připomenout přípravu</b><small>Když před seancí nemáš hotovou ranní přípravu</small></div><div class="ctl"><button class="tg on" data-tg data-sub="prep"></button></div></div>
+              <div class="row sub" data-s data-prep><div class="lbl"><b>60 minut před startem</b></div><div class="ctl"><button class="tg on" data-tg></button></div></div>
+              <div class="row sub" data-s data-prep><div class="lbl"><b>15 minut před startem</b></div><div class="ctl"><button class="tg on" data-tg></button></div></div>
+              <div class="row" data-s><div class="lbl"><b>Večerní audit</b><small>Připomínka uzavřít den v deníku</small></div><div class="ctl"><input class="field time" value="21:00"><button class="tg on" data-tg></button></div></div>
+            </section>
+            <section class="sec glass" id="delivery" data-sec>
+              <div class="sec-h"><h2>Doručení</h2><span class="meta">push i při zavřené appce</span></div>
+              <div class="row" data-s><div class="lbl"><b>Aktivní zařízení</b><small>2 vypršela — znovu je zapni na daném zařízení</small></div><div class="ctl"><span class="pill ok"><i></i>2 / 4</span></div></div>
+              <div class="row" data-s><div class="lbl"><b>Tento prohlížeč</b><small>Zatím neodebírá</small></div><div class="ctl"><button class="btn primary">Zapnout</button></div></div>
+              <div class="row" data-s><div class="lbl"><b>Zkušební notifikace</b><small>Na všechna aktivní zařízení</small></div><div class="ctl"><button class="btn"><svg><use href="#i-send"/></svg>Poslat</button></div></div>
+            </section>
+          </div>
+          <section class="sec glass" id="tradingview" data-sec style="margin-top:12px">
+            <div class="sec-h"><h2>TradingView alerty</h2><span class="meta">webhook → push notifikace s obrázkem grafu</span></div>
+            <div class="row" data-s><div class="lbl"><b>Webhook URL</b><span class="mono">https://alphatrade-mentor-15.vercel.app/api/tradingview/alert-webhook?token=8e9c…96ced</span></div><div class="ctl"><button class="btn ghost"><svg><use href="#i-eye"/></svg><span class="hide-sm">Zobrazit</span></button><button class="btn"><svg><use href="#i-copy"/></svg>Kopírovat</button></div></div>
+            <div class="row" data-s><div class="lbl"><b>Přijímat alerty</b><small>Vypnuté alerty webhook potvrdí, ale nic neuloží ani nepošle</small></div><div class="ctl"><button class="tg on" data-tg></button></div></div>
+            <div class="row" data-s><div class="lbl"><b>Přidávat obrázek grafu</b><small>Text přijde hned, snímek grafu dorazí následně</small></div><div class="ctl"><button class="tg on" data-tg></button></div></div>
+            <div class="note">Poslední přijatý alert 23. 8. 2026 17:26</div>
+          </section>
+        </div>
+
+        <!-- APLIKACE -->
+        <div class="area" data-area data-p="look">
+          <h3>Vzhled</h3>
+          <section class="sec glass" id="look" data-sec>
+            <div class="sec-h"><h2>Vzhled</h2><span class="meta">Aurora · Hlubiny</span></div>
+            <div class="row" data-s><div class="lbl"><b>Režim</b></div><div class="ctl"><div class="seg" id="modeSeg"><button data-m="light" class="on">Světlý</button><button data-m="dark">Tmavý</button><button>OLED</button></div></div></div>
+            <div class="row" data-s><div class="lbl"><b>Pozadí a barvy</b><small>Hlubiny · Výchozí</small></div><div class="ctl"><span class="pal on" style="background:linear-gradient(135deg,#a5b4fc,#7dd3fc,#f0abfc)"></span><span class="pal" style="background:linear-gradient(135deg,#8d9bff,#6fe3d4,#ffb7d5)"></span><span class="pal" style="background:linear-gradient(135deg,#7cc4ff,#5eead4,#a5b4fc)"></span><span class="pal" style="background:linear-gradient(135deg,#ffb38a,#ff9fc8,#c7a6ff)"></span><span class="pal" style="background:linear-gradient(135deg,#a7d8c0,#b8d8a0,#9ccfd8)"></span><span class="pal" style="background:linear-gradient(135deg,#c9d0dc,#d8dde6,#b9c2d0)"></span></div></div>
+            <div class="row" data-s><div class="lbl"><b>Síla pozadí</b></div><div class="ctl"><div class="range">Jemné<input type="range" value="80">Výrazné</div></div></div>
+            <div class="row" data-s><div class="lbl"><b>Průhlednost karet</b></div><div class="ctl"><div class="range">Neprůhledné<input type="range" value="54">Průhledné</div></div></div>
+          </section>
+        </div>
+
+        <div class="area" data-area data-p="app">
+          <h3>Účet a aplikace</h3>
+          <div class="two">
+            <section class="sec glass" id="coach" data-sec>
+              <div class="sec-h"><h2>Paměť AI Coache</h2><span class="meta">co si o tobě pamatuje</span></div>
+              <table>
+                <tbody>
+                  <tr data-s><td>Fakta o tobě</td><td class="num" style="width:60px">5</td><td class="act" style="width:96px"><button class="btn ghost">Zobrazit</button></td></tr>
+                  <tr data-s><td>Preference komunikace</td><td class="num">2</td><td class="act"><button class="btn ghost">Zobrazit</button></td></tr>
+                  <tr data-s><td>Dlouhodobá paměť <span class="dim">· pozorování, epizody, závazky</span></td><td class="num">112</td><td class="act"><button class="btn">Spravovat</button></td></tr>
+                </tbody>
+              </table>
+              <div class="note" style="display:flex;align-items:center;justify-content:space-between;gap:8px">Smazání je nevratné.<button class="btn danger">Vymazat paměť…</button></div>
+            </section>
+            <section class="sec glass" id="iphone" data-sec>
+              <div class="sec-h"><h2>Tento iPhone</h2><span class="ios">jen v appce pro iPhone</span></div>
+              <div class="row" data-s><div class="lbl"><b>Soukromý režim</b><small>Skryje obsah, návrat přes Face ID</small></div><div class="ctl"><button class="tg on" data-tg></button></div></div>
+              <div class="row" data-s><div class="lbl"><b>LIVE bez uspání displeje</b></div><div class="ctl"><button class="tg" data-tg></button></div></div>
+              <div class="row" data-s><div class="lbl"><b>Spodní lišta</b></div><div class="ctl"><button class="btn ghost">Upravit<svg><use href="#i-right"/></svg></button></div></div>
+              <div class="row" data-s><div class="lbl"><b>Oprávnění</b><small>notifikace ✓ · mikrofon ✓ · řeč ?</small></div><div class="ctl"><button class="btn ghost">Nastavení iOS</button></div></div>
+            </section>
+          </div>
+
+          <div class="two" style="margin-top:12px">
+            <section class="sec glass" id="account" data-sec>
+              <div class="sec-h"><h2>Účet</h2></div>
+              <div class="row" data-s><div class="lbl"><b>filipkrejca1@gmail.com</b><small>Přihlášen</small></div><div class="ctl"><button class="btn">Odhlásit se</button></div></div>
+              <div class="row" data-s><div class="lbl"><b>Verze aplikace</b><small class="mono">2026.10.03</small></div><div class="ctl"><button class="btn ghost">Vynutit obnovení</button></div></div>
+            </section>
+            <details class="sec glass" id="diag" data-sec>
+              <summary class="sec-h"><h2>Diagnostika</h2><span class="meta">testy pro ladění</span><span class="act"><svg class="chev"><use href="#i-right"/></svg></span></summary>
+              <div class="row" data-s><div class="lbl"><b>Test snapshotu TradingView</b><small>Bez ARMu, nic nezapíše do deníku</small></div><div class="ctl"><button class="btn">Poslat</button></div></div>
+              <div class="row" data-s><div class="lbl"><b>Galerie iOS alertů kopírky</b></div><div class="ctl"><button class="btn">Naplánovat</button></div></div>
+              <div class="row" data-s><div class="lbl"><b>Live Activity · haptika · diktování · badge</b></div><div class="ctl"><button class="btn ghost">Otevřít<svg><use href="#i-right"/></svg></button></div></div>
+            </details>
+          </div>
+        </div>
+        <div class="empty-search glass" id="emptySearch">Nic nenalezeno.</div>
+      </main>
+    </div>
+  </div>
+</div>
+
+
+<script>
+const root = document.documentElement;
+const setDark = d => {
+  root.classList.toggle('dark', d);
+  document.querySelector('#themeBtn use').setAttribute('href', d ? '#i-sun' : '#i-moon');
+  document.querySelectorAll('#modeSeg [data-m]').forEach(b => b.classList.toggle('on', b.dataset.m === (d ? 'dark' : 'light')));
+};
+document.getElementById('themeBtn').onclick = () => setDark(!root.classList.contains('dark'));
+document.getElementById('modeSeg').addEventListener('click', e => { if (e.target.dataset.m) setDark(e.target.dataset.m === 'dark'); });
+document.querySelectorAll('[data-tg]').forEach(t => t.addEventListener('click', () => {
+  t.classList.toggle('on');
+  if (t.dataset.sub) document.querySelectorAll('[data-' + t.dataset.sub + ']').forEach(r => r.style.display = t.classList.contains('on') ? '' : 'none');
+}));
+document.querySelectorAll('[data-seg]').forEach(s => s.addEventListener('click', e => { const b = e.target.closest('button'); if (b) s.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); }));
+
+// seance
+const sessions = [
+  { name: 'Asia', color: '#64748b', start: '02:00', end: '08:00' },
+  { name: 'London', color: '#3b82f6', start: '09:00', end: '16:00' },
+  { name: 'New York', color: '#f97316', start: '15:30', end: '22:00' },
+];
+const mins = t => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+const dur = m => m < 60 ? `${m} min` : `${Math.floor(m / 60)}${m % 60 ? ':' + String(m % 60).padStart(2, '0') : ''} h`;
+const tl = document.getElementById('tl');
+tl.style.height = `${sessions.length * 18 + 8}px`;
+const now = new Date(); const nowM = now.getHours() * 60 + now.getMinutes();
+tl.innerHTML = sessions.map((s, i) => `<b style="left:${mins(s.start) / 14.4}%;width:${(mins(s.end) - mins(s.start)) / 14.4}%;top:${5 + i * 18}px;background:${s.color}">${s.name}</b>`).join('')
+  + `<span class="tl-now" style="left:${nowM / 14.4}%" title="Teď"></span>`;
+document.getElementById('sessRows').innerHTML = sessions.map((s, i) => {
+  const ov = sessions.filter((o, j) => j !== i && mins(o.start) < mins(s.end) && mins(s.start) < mins(o.end))
+    .map(o => `${o.name} ${dur(Math.min(mins(s.end), mins(o.end)) - Math.max(mins(s.start), mins(o.start)))}`).join(', ');
+  return `<tr data-s><td><span class="sw" style="background:${s.color}"><input type="color" value="${s.color}"></span><input class="cell-in" value="${s.name}"></td>
+    <td class="num"><input class="field time" value="${s.start}"></td><td class="num"><input class="field time" value="${s.end}"></td>
+    <td class="num hide-sm">${dur(mins(s.end) - mins(s.start))}</td><td class="hide-sm dim">${ov || '—'}</td>
+    <td class="act"><button class="del"><svg><use href="#i-trash"/></svg></button></td></tr>`;
+}).join('');
+
+// záložky (jako LIVE)
+const tabBtns = [...document.querySelectorAll('#ltabs button')];
+const showTab = t => {
+  tabBtns.forEach(b => b.classList.toggle('on', b.dataset.t === t));
+  document.querySelectorAll('.area[data-p]').forEach(a => a.classList.toggle('on', a.dataset.p === t));
+};
+tabBtns.forEach(b => b.addEventListener('click', () => { showTab(b.dataset.t); if (q.value) { q.value = ''; q.dispatchEvent(new Event('input')); } }));
+
+// hledání: nechá jen řádky/sekce, které obsahují hledaný text
+const q = document.getElementById('q');
+addEventListener('keydown', e => { if (e.key === '/' && document.activeElement !== q) { e.preventDefault(); q.focus(); } });
+q.addEventListener('input', () => {
+  const v = q.value.trim().toLowerCase();
+  document.body.classList.toggle('searching', !!v);
+  let any = false;
+  document.querySelectorAll('[data-sec]').forEach(sec => {
+    const head = sec.querySelector('.sec-h').textContent.toLowerCase();
+    const headHit = v && head.includes(v);
+    let hit = false;
+    sec.querySelectorAll('[data-s]').forEach(r => { const h = !v || headHit || r.textContent.toLowerCase().includes(v) || [...r.querySelectorAll('input')].some(i => i.value.toLowerCase().includes(v)); r.classList.toggle('hidden-by-search', !h); hit ||= h; });
+    const show = !v || headHit || hit;
+    sec.classList.toggle('hidden-by-search', !show);
+    if (v && show && sec.tagName === 'DETAILS') sec.open = true;
+    any ||= show;
+  });
+  document.querySelectorAll('.two').forEach(t => t.classList.toggle('hidden-by-search', ![...t.children].some(c => !c.classList.contains('hidden-by-search'))));
+  document.querySelectorAll('[data-area]').forEach(a => a.classList.toggle('hidden-by-search', !a.querySelector('[data-sec]:not(.hidden-by-search)')));
+  document.getElementById('emptySearch').style.display = any ? 'none' : 'block';
+});
+</script>
+</body>
+</html>

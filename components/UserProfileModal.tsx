@@ -221,7 +221,7 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
                            <motion.div
                               initial={{ opacity: 0, y: -10 }}
                               animate={{ opacity: 1, y: 0 }}
-                              className={`p-4 rounded-2xl text-center text-[10px] font-black uppercase tracking-[0.2em] ${msg.type === 'success' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}
+                              className={`p-4 rounded-2xl text-center text-[11px] font-semibold ${msg.type === 'success' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}
                            >
                               {msg.text}
                            </motion.div>
@@ -229,7 +229,7 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                            <div className="space-y-2">
-                              <label className="text-[9px] font-black uppercase text-slate-500 ml-4 tracking-widest flex items-center gap-2">
+                              <label className="text-[11px] font-semibold text-slate-500 ml-4 flex items-center gap-2">
                                  <UserIcon size={12} /> Jméno
                               </label>
                               <input
@@ -242,7 +242,7 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
                            </div>
 
                            <div className="space-y-2">
-                              <label className="text-[9px] font-black uppercase text-slate-500 ml-4 tracking-widest flex items-center gap-2">
+                              <label className="text-[11px] font-semibold text-slate-500 ml-4 flex items-center gap-2">
                                  <Globe size={12} /> Jazyk
                               </label>
                               <select
@@ -258,7 +258,7 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                            <div className="space-y-2">
-                              <label className="text-[9px] font-black uppercase text-slate-500 ml-4 tracking-widest flex items-center gap-2">
+                              <label className="text-[11px] font-semibold text-slate-500 ml-4 flex items-center gap-2">
                                  <DollarSign size={12} /> Hlavní měna
                               </label>
                               <select
@@ -272,7 +272,7 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
                               </select>
                            </div>
                            <div className="space-y-2">
-                              <label className="text-[9px] font-black uppercase text-slate-500 ml-4 tracking-widest flex items-center gap-2">
+                              <label className="text-[11px] font-semibold text-slate-500 ml-4 flex items-center gap-2">
                                  <Globe size={12} /> Časové pásmo
                               </label>
                               <select
@@ -289,7 +289,7 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
                         </div>
 
                         <div className="space-y-2 opacity-60">
-                           <label className="text-[9px] font-black uppercase text-slate-500 ml-4 tracking-widest flex items-center gap-2">
+                           <label className="text-[11px] font-semibold text-slate-500 ml-4 flex items-center gap-2">
                               <Mail size={12} /> Emailový Login
                            </label>
                            <div className="relative">
@@ -311,7 +311,7 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
                                  <Hash size={16} />
                               </div>
                               <div>
-                                 <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-0.5">Trader ID</p>
+                                 <p className="text-[11px] font-semibold text-slate-500 mb-0.5">Trader ID</p>
                                  <p className={`text-xs font-mono font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
                                     {user.id.slice(0, 16).toUpperCase()}
                                  </p>
@@ -328,7 +328,7 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
 
                         {/* Security Section */}
                         <div className="pt-6 border-t border-white/5">
-                           <h4 className="text-[10px] font-black uppercase text-slate-500 mb-4 px-4 tracking-widest flex items-center gap-2">
+                           <h4 className="text-[11px] font-semibold text-slate-500 mb-4 px-4 flex items-center gap-2">
                               <Lock size={12} /> Změna hesla
                            </h4>
                            <div className="space-y-4">
@@ -389,14 +389,14 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
                            <button
                               type="button"
                               onClick={onClose}
-                              className={`py-4 rounded-[22px] border text-[10px] font-black uppercase tracking-widest transition-all ${isDark ? 'border-white/5 hover:bg-white/5 text-slate-400' : 'border-slate-200 hover:bg-slate-50 text-slate-500'}`}
+                              className={`py-4 rounded-[22px] border text-[11px] font-semibold transition-all ${isDark ? 'border-white/5 hover:bg-white/5 text-slate-400' : 'border-slate-200 hover:bg-slate-50 text-slate-500'}`}
                            >
                               Zrušit
                            </button>
                            <button
                               type="submit"
                               disabled={isSaving}
-                              className={`py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-[22px] text-[10px] font-black uppercase tracking-widest shadow-xl shadow-blue-500/20 transition-all active:scale-95 flex items-center justify-center gap-2 ${isSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
+                              className={`py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-[22px] text-[11px] font-semibold shadow-xl shadow-blue-500/20 transition-all active:scale-95 flex items-center justify-center gap-2 ${isSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
                            >
                               {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
                               {isSaving ? 'Ukládám...' : 'Uložit nastavení'}

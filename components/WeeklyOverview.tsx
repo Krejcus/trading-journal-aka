@@ -143,8 +143,8 @@ const WeeklyOverview: React.FC<WeeklyOverviewProps> = ({
 
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6">
           <div>
-            <p className="text-[10px] font-black uppercase text-blue-500 tracking-[0.3em] mb-2">Weekly Story</p>
-            <h2 className={`text-4xl md:text-6xl font-black italic tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'} mb-2`}>
+            <p className="text-[11px] font-semibold text-blue-500 mb-2">Weekly Story</p>
+            <h2 className={`text-4xl md:text-6xl font-bold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'} mb-2`}>
               TÝDEN {weekNumber}
             </h2>
             <p className={`text-[13px] ${isDark ? 'text-slate-400' : 'text-slate-600'} max-w-md`}>
@@ -163,7 +163,7 @@ const WeeklyOverview: React.FC<WeeklyOverviewProps> = ({
             <p className={`text-5xl md:text-6xl font-black ${stats.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
               {stats.pnl >= 0 ? '+' : ''}${stats.pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </p>
-            <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest mt-1">Total PnL</p>
+            <p className="text-[11px] font-semibold text-slate-500 mt-1">Total PnL</p>
           </div>
         </div>
 
@@ -178,7 +178,7 @@ const WeeklyOverview: React.FC<WeeklyOverviewProps> = ({
 
       {/* ═══════════════ HORIZONTAL WEEK STRIP ═══════════════ */}
       <div>
-        <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.3em] mb-4 flex items-center gap-2">
+        <p className="text-[11px] font-semibold text-slate-500 mb-4 flex items-center gap-2">
           <Clock size={12} /> Týden v pěti kapitolách · klikni pro detail
         </p>
 
@@ -255,8 +255,8 @@ const WeeklyOverview: React.FC<WeeklyOverviewProps> = ({
       {/* ═══════════════ WEEKLY FOCUS + IRON RULES ═══════════════ */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {stats.weeklyGoalStats.length > 0 && (
-          <div className={`p-6 md:p-8 rounded-[32px] border ${isDark ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
-            <p className="text-[10px] font-black uppercase text-emerald-500 tracking-[0.25em] mb-5 flex items-center gap-2">
+          <div className={`p-6 md:p-8 rounded-[32px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-sm'}`}>
+            <p className="text-[11px] font-semibold text-emerald-500 mb-5 flex items-center gap-2">
               <Sparkles size={13} /> Weekly Focus
             </p>
             <div className="space-y-3">
@@ -290,18 +290,18 @@ const WeeklyOverview: React.FC<WeeklyOverviewProps> = ({
         )}
 
         {stats.ritualCompliance.length > 0 && (
-          <div className={`p-6 md:p-8 rounded-[32px] border ${isDark ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
-            <p className="text-[10px] font-black uppercase text-amber-500 tracking-[0.25em] mb-5 flex items-center gap-2">
+          <div className={`p-6 md:p-8 rounded-[32px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-sm'}`}>
+            <p className="text-[11px] font-semibold text-amber-500 mb-5 flex items-center gap-2">
               <Target size={13} /> Iron Rules
             </p>
             <div className="space-y-2.5">
               {stats.ritualCompliance.map((rule, idx) => (
                 <div key={idx}>
-                  <div className="flex justify-between text-[10px] font-black uppercase tracking-tighter mb-1.5">
+                  <div className="flex justify-between text-[11px] font-semibold tracking-tighter mb-1.5">
                     <span className={isDark ? 'text-slate-300' : 'text-slate-700'}>{rule.label}</span>
                     <span className={rule.count >= 4 ? 'text-emerald-500' : rule.count >= 2 ? 'text-blue-400' : 'text-slate-500'}>{rule.count}/5</span>
                   </div>
-                  <div className={`h-1.5 w-full rounded-full overflow-hidden flex gap-0.5 p-0.5 ${isDark ? 'bg-white/5' : 'bg-slate-100'}`}>
+                  <div className={`h-1.5 w-full rounded-full overflow-hidden flex gap-0.5 p-0.5 bg-[var(--bg-page)]`}>
                     {[...Array(5)].map((_, i) => (
                       <div key={i} className={`flex-1 rounded-full ${i < rule.count
                         ? rule.count >= 4 ? 'bg-emerald-500' : 'bg-blue-500'
@@ -319,7 +319,7 @@ const WeeklyOverview: React.FC<WeeklyOverviewProps> = ({
       {(stats.lessons.length > 0 || stats.mistakes.length > 0) && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className={`p-6 rounded-[28px] border ${isDark ? 'bg-amber-500/5 border-amber-500/20' : 'bg-amber-50 border-amber-100'}`}>
-            <p className="text-[10px] font-black uppercase text-amber-500 tracking-[0.25em] mb-4 flex items-center gap-2">
+            <p className="text-[11px] font-semibold text-amber-500 mb-4 flex items-center gap-2">
               <Lightbulb size={13} /> Lessons Learned · {stats.lessons.length}
             </p>
             {stats.lessons.length > 0 ? (
@@ -327,8 +327,8 @@ const WeeklyOverview: React.FC<WeeklyOverviewProps> = ({
                 {stats.lessons.map((l, i) => {
                   const dayLabel = new Date(l.date).toLocaleDateString('cs-CZ', { weekday: 'short' });
                   return (
-                    <div key={i} className={`p-3 rounded-2xl ${isDark ? 'bg-white/[0.02]' : 'bg-white'}`}>
-                      <p className="text-[9px] font-black uppercase text-amber-500 tracking-widest mb-1">{dayLabel}</p>
+                    <div key={i} className={`p-3 rounded-2xl ${isDark ? 'bg-[var(--bg-page)]' : 'bg-[var(--bg-card)]'}`}>
+                      <p className="text-[11px] font-semibold text-amber-500 mb-1">{dayLabel}</p>
                       <p className={`text-[11px] leading-relaxed whitespace-pre-wrap ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{l.text}</p>
                     </div>
                   );
@@ -338,13 +338,13 @@ const WeeklyOverview: React.FC<WeeklyOverviewProps> = ({
           </div>
 
           <div className={`p-6 rounded-[28px] border ${isDark ? 'bg-rose-500/5 border-rose-500/20' : 'bg-rose-50 border-rose-100'}`}>
-            <p className="text-[10px] font-black uppercase text-rose-500 tracking-[0.25em] mb-4 flex items-center gap-2">
+            <p className="text-[11px] font-semibold text-rose-500 mb-4 flex items-center gap-2">
               <AlertTriangle size={13} /> Mistakes · {stats.totalMistakes}
             </p>
             {stats.mistakes.length > 0 ? (
               <div className="flex flex-wrap gap-2">
                 {stats.mistakes.map((m, i) => (
-                  <div key={i} className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border ${isDark ? 'bg-white/[0.02] border-rose-500/20' : 'bg-white border-rose-100'}`}>
+                  <div key={i} className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border ${isDark ? 'bg-[var(--bg-page)] border-rose-500/20' : 'bg-[var(--bg-card)] border-rose-100'}`}>
                     <span className={`text-[11px] font-bold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{m.text}</span>
                     {m.count > 1 && (
                       <span className="px-1.5 py-0.5 bg-rose-500 text-white rounded-full text-[8px] font-black">{m.count}×</span>
@@ -372,7 +372,7 @@ const StatTile: React.FC<{
   isDark: boolean;
 }> = ({ label, value, sub, highlight, colorOverride, isDark }) => (
   <div>
-    <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest mb-1">{label}</p>
+    <p className="text-[11px] font-semibold text-slate-500 mb-1">{label}</p>
     <p className={`text-xl md:text-2xl font-black ${colorOverride || (highlight ? 'text-emerald-500' : isDark ? 'text-white' : 'text-slate-900')}`}>{value}</p>
     {sub && <p className="text-[9px] font-bold text-slate-500 mt-0.5">{sub}</p>}
   </div>
@@ -427,10 +427,10 @@ const DayChip: React.FC<DayChipProps> = React.memo(({
       <div className="p-3 md:p-4">
         <div className="flex items-start justify-between mb-2">
           <div>
-            <p className={`text-[10px] font-black uppercase tracking-widest ${isToday ? 'text-blue-500' : 'text-slate-500'}`}>
+            <p className={`text-[11px] font-semibold ${isToday ? 'text-blue-500' : 'text-slate-500'}`}>
               {dayName} {dayNum}.
             </p>
-            <p className="text-[7px] font-black uppercase text-slate-600 tracking-widest mt-0.5">CH.{chapterNum}</p>
+            <p className="text-[10px] font-semibold text-slate-600 mt-0.5">CH.{chapterNum}</p>
           </div>
           <div className="text-2xl md:text-3xl leading-none">{emoji}</div>
         </div>
@@ -442,7 +442,7 @@ const DayChip: React.FC<DayChipProps> = React.memo(({
         <p className="text-[9px] font-bold italic text-slate-500 lowercase mb-2">· {mood}</p>
 
         {trades.length > 0 && (
-          <div className="flex items-center gap-1.5 text-[9px] font-black uppercase text-slate-400 mb-2">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 mb-2">
             <span>{trades.length}T</span>
             <span className="text-slate-700">·</span>
             <span className={wr >= 50 ? 'text-emerald-400' : ''}>{wr.toFixed(0)}%</span>
@@ -525,7 +525,7 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
   const hasContent = trades.length > 0 || prep || review;
 
   return (
-    <div className={`relative rounded-[28px] border overflow-hidden ${isDark ? 'bg-[var(--bg-card)]/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
+    <div className={`relative rounded-[28px] border overflow-hidden ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-sm'}`}>
       <div className={`absolute left-0 top-0 bottom-0 w-1 ${accentBar}`} />
 
       {/* Hlavička */}
@@ -533,15 +533,15 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
         <div className="flex items-start gap-4 flex-1 min-w-0">
           <div className="flex flex-col items-center shrink-0">
             <div className="text-4xl md:text-5xl leading-none">{emoji}</div>
-            <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mt-1">CH.{chapterNum}</p>
+            <p className="text-[11px] font-semibold text-slate-500 mt-1">CH.{chapterNum}</p>
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap mb-1">
-              <h3 className={`text-lg md:text-xl font-black italic tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>
+              <h3 className={`text-lg md:text-xl font-bold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
                 {dayName}
               </h3>
               <span className="text-[11px] font-bold text-slate-500">{dayDate}</span>
-              {isToday && <span className="px-2 py-0.5 bg-blue-600 rounded-md text-[8px] font-black uppercase text-white tracking-widest">Dnes</span>}
+              {isToday && <span className="px-2 py-0.5 bg-blue-600 rounded-md text-[11px] font-semibold text-white">Dnes</span>}
               <span className="text-[10px] font-bold italic text-slate-500 lowercase">· {mood}</span>
             </div>
             <div className="flex items-baseline gap-3 flex-wrap">
@@ -570,7 +570,7 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
         </div>
         <button
           onClick={onClose}
-          className={`p-2 rounded-xl transition-all active:scale-95 shrink-0 ${isDark ? 'bg-white/5 hover:bg-white/10 text-slate-400' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'}`}
+          className={`p-2 rounded-xl transition-all active:scale-95 shrink-0 ${isDark ? 'bg-[var(--bg-page)] hover:bg-white/10 text-slate-400' : 'bg-[var(--bg-page)] hover:bg-slate-200 text-slate-600'}`}
           aria-label="Zavřít detail"
         >
           <X size={16} />
@@ -604,7 +604,7 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
               )}
               {prep.scenarios?.scenarioImages && prep.scenarios.scenarioImages.length > 0 && (
                 <div>
-                  <p className="text-[9px] font-black uppercase tracking-widest mb-2 text-cyan-500">DALŠÍ SCÉNÁŘE</p>
+                  <p className="text-[11px] font-semibold mb-2 text-cyan-500">DALŠÍ SCÉNÁŘE</p>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                     {prep.scenarios.scenarioImages.map((img, i) => (
                       <img key={i} src={thumbMedium(img)} alt={`Scenario ${i + 1}`} className="w-full rounded-lg border border-white/10 cursor-pointer hover:opacity-80 transition-opacity" loading="lazy" onClick={() => window.open(fullSize(img), '_blank')} />
@@ -618,7 +618,7 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
               {prep.confidence !== undefined && prep.confidence !== null && (
                 <div>
                   <div className="flex justify-between mb-1">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-purple-500">CONFIDENCE</p>
+                    <p className="text-[11px] font-semibold text-purple-500">CONFIDENCE</p>
                     <p className={`text-[9px] font-black ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{prep.confidence}/100</p>
                   </div>
                   <div className={`h-1.5 rounded-full overflow-hidden ${isDark ? 'bg-white/10' : 'bg-slate-200'}`}>
@@ -686,13 +686,13 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
                     return (
                       <div key={session.id || idx} className={`rounded-2xl border overflow-hidden ${isDark ? 'border-white/5' : 'border-slate-200'}`}>
                         {/* Session header */}
-                        <div className={`px-4 py-2.5 flex items-center justify-between flex-wrap gap-2 ${isDark ? 'bg-white/[0.03]' : 'bg-slate-50'}`}>
+                        <div className={`px-4 py-2.5 flex items-center justify-between flex-wrap gap-2 bg-[var(--bg-page)]`}>
                           <div className="flex items-center gap-2">
                             <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: session.color || '#6366f1' }} />
-                            <p className={`text-[11px] font-black uppercase tracking-widest ${isDark ? 'text-white' : 'text-slate-900'}`}>{session.name}</p>
+                            <p className={`text-[11px] font-semibold ${isDark ? 'text-white' : 'text-slate-900'}`}>{session.name}</p>
                             <span className="text-[9px] font-bold text-slate-500">{session.startTime}–{session.endTime}</span>
                             {plan?.bias && (
-                              <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${plan.bias === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : plan.bias === 'Short' ? 'bg-rose-500/10 text-rose-500' : 'bg-slate-500/10 text-slate-500'}`}>
+                              <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded ${plan.bias === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : plan.bias === 'Short' ? 'bg-rose-500/10 text-rose-500' : 'bg-slate-500/10 text-slate-500'}`}>
                                 {plan.bias}
                               </span>
                             )}
@@ -713,7 +713,7 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
                           <div className="p-3 md:p-4">
                             <div className="flex items-center gap-1.5 mb-2">
                               <Sun size={10} className="text-blue-500" />
-                              <p className="text-[9px] font-black uppercase tracking-widest text-blue-500">Plán</p>
+                              <p className="text-[11px] font-semibold text-blue-500">Plán</p>
                             </div>
                             {plan ? (
                               <div className="space-y-2">
@@ -733,7 +733,7 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
                           <div className="p-3 md:p-4">
                             <div className="flex items-center gap-1.5 mb-2">
                               <Moon size={10} className="text-indigo-500" />
-                              <p className="text-[9px] font-black uppercase tracking-widest text-indigo-500">Co se stalo</p>
+                              <p className="text-[11px] font-semibold text-indigo-500">Co se stalo</p>
                             </div>
                             {breakdown ? (
                               <div className="space-y-2">
@@ -752,10 +752,10 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
 
                         {/* Trades v této session */}
                         {sessTrades.length > 0 && (
-                          <div className={`px-3 md:px-4 py-2 border-t ${isDark ? 'border-white/5 bg-white/[0.01]' : 'border-slate-100 bg-slate-50/50'}`}>
+                          <div className={`px-3 md:px-4 py-2 border-t border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
                             <div className="flex items-center gap-2 flex-wrap">
                               <BarChart3 size={10} className="text-amber-500" />
-                              <span className="text-[9px] font-black uppercase tracking-widest text-amber-500 mr-1">Trades</span>
+                              <span className="text-[11px] font-semibold text-amber-500 mr-1">Trades</span>
                               {sessTrades.map(t => (
                                 <button
                                   key={t.id}
@@ -795,7 +795,7 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
                     <button
                       key={t.id}
                       onClick={() => onOpenTrade?.(String(t.id))}
-                      className={`w-full flex items-center justify-between gap-2.5 p-2.5 rounded-xl text-left transition-all active:scale-[0.99] ${isDark ? 'bg-white/[0.02] hover:bg-white/5' : 'bg-slate-50 hover:bg-slate-100'}`}
+                      className={`w-full flex items-center justify-between gap-2.5 p-2.5 rounded-xl text-left transition-all active:scale-[0.99] ${isDark ? 'bg-[var(--bg-page)] hover:bg-white/5' : 'bg-[var(--bg-page)] hover:bg-slate-100'}`}
                     >
                       <div className="flex items-center gap-2.5 flex-1 min-w-0">
                         <div className={`w-1 h-10 rounded-full shrink-0 ${t.pnl > 0 ? 'bg-emerald-500' : t.pnl < 0 ? 'bg-rose-500' : 'bg-slate-500'}`} />
@@ -813,8 +813,8 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span className={`text-[11px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{t.instrument}</span>
-                            <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded ${t.direction === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>{t.direction}</span>
-                            {t.isValid === false && <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500">Invalid</span>}
+                            <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded ${t.direction === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>{t.direction}</span>
+                            {t.isValid === false && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500">Invalid</span>}
                           </div>
                           <p className="text-[9px] font-bold text-slate-500 mt-0.5">{time}</p>
                         </div>
@@ -851,7 +851,7 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
               )}
               {review.mistakes && review.mistakes.filter(m => m.trim()).length > 0 && (
                 <div>
-                  <p className="text-[9px] font-black uppercase text-rose-500 tracking-widest mb-1.5">MISTAKES</p>
+                  <p className="text-[11px] font-semibold text-rose-500 mb-1.5">MISTAKES</p>
                   <div className="flex flex-wrap gap-1.5">
                     {review.mistakes.filter(m => m.trim()).map((m, i) => (
                       <span key={i} className="px-2 py-0.5 bg-rose-500/10 text-rose-400 rounded-md text-[10px] font-bold">{m}</span>
@@ -861,23 +861,23 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
               )}
               {(review.psycho?.stressors?.trim() || review.psycho?.gratitude?.trim() || review.psycho?.notes?.trim()) && (
                 <div>
-                  <p className="text-[9px] font-black uppercase text-pink-500 tracking-widest mb-1.5">PSYCHO POZNÁMKY</p>
+                  <p className="text-[11px] font-semibold text-pink-500 mb-1.5">PSYCHO POZNÁMKY</p>
                   <div className="space-y-1.5">
                     {review.psycho?.stressors?.trim() && (
                       <div className={`p-2 rounded-lg ${isDark ? 'bg-rose-500/5 border border-rose-500/10' : 'bg-rose-50'}`}>
-                        <p className="text-[8px] font-black uppercase tracking-widest text-rose-400 mb-1">Stresory</p>
+                        <p className="text-[11px] font-semibold text-rose-400 mb-1">Stresory</p>
                         <p className={`text-[10px] whitespace-pre-wrap ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{review.psycho.stressors}</p>
                       </div>
                     )}
                     {review.psycho?.gratitude?.trim() && (
                       <div className={`p-2 rounded-lg ${isDark ? 'bg-emerald-500/5 border border-emerald-500/10' : 'bg-emerald-50'}`}>
-                        <p className="text-[8px] font-black uppercase tracking-widest text-emerald-400 mb-1">Gratitude</p>
+                        <p className="text-[11px] font-semibold text-emerald-400 mb-1">Gratitude</p>
                         <p className={`text-[10px] whitespace-pre-wrap ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{review.psycho.gratitude}</p>
                       </div>
                     )}
                     {review.psycho?.notes?.trim() && (
-                      <div className={`p-2 rounded-lg ${isDark ? 'bg-white/[0.02]' : 'bg-slate-50'}`}>
-                        <p className="text-[8px] font-black uppercase tracking-widest text-slate-400 mb-1">Další pozn.</p>
+                      <div className={`p-2 rounded-lg bg-[var(--bg-page)]`}>
+                        <p className="text-[11px] font-semibold text-slate-400 mb-1">Další pozn.</p>
                         <p className={`text-[10px] whitespace-pre-wrap ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{review.psycho.notes}</p>
                       </div>
                     )}
@@ -886,7 +886,7 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
               )}
               {review.ruleAdherence && review.ruleAdherence.length > 0 && (
                 <div>
-                  <p className="text-[9px] font-black uppercase text-emerald-500 tracking-widest mb-1.5">IRON RULES</p>
+                  <p className="text-[11px] font-semibold text-emerald-500 mb-1.5">IRON RULES</p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
                     {review.ruleAdherence.map((a, i) => {
                       const rule = ironRules.find(r => r.id === a.ruleId);
@@ -910,12 +910,12 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
           {(!prep || !review) && (
             <div className="flex gap-2 pt-2 flex-wrap">
               {!prep && (
-                <button onClick={onEditPrep} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all active:scale-95">
+                <button onClick={onEditPrep} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-lg text-[11px] font-semibold transition-all active:scale-95">
                   <Sun size={11} /> Vytvořit prep
                 </button>
               )}
               {!review && (
-                <button onClick={onEditReview} className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all active:scale-95">
+                <button onClick={onEditReview} className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-lg text-[11px] font-semibold transition-all active:scale-95">
                   <Moon size={11} /> Vytvořit audit
                 </button>
               )}
@@ -927,10 +927,10 @@ const DayDetailPanel: React.FC<DayDetailPanelProps> = ({
           <Coffee size={28} className="text-slate-500" />
           <p className="text-[12px] text-slate-500 italic">Klidný den. Žádné záznamy.</p>
           <div className="flex gap-2 mt-3">
-            <button onClick={onEditPrep} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all active:scale-95">
+            <button onClick={onEditPrep} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-lg text-[11px] font-semibold transition-all active:scale-95">
               <Sun size={11} /> Vytvořit prep
             </button>
-            <button onClick={onEditReview} className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all active:scale-95">
+            <button onClick={onEditReview} className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 rounded-lg text-[11px] font-semibold transition-all active:scale-95">
               <Moon size={11} /> Vytvořit audit
             </button>
           </div>
@@ -961,10 +961,10 @@ const DetailSection: React.FC<{
       <div className="flex items-center justify-between mb-2.5">
         <div className="flex items-center gap-1.5">
           {icon}
-          <p className={`text-[10px] font-black uppercase tracking-widest ${accentColors[accent]}`}>{title}</p>
+          <p className={`text-[11px] font-semibold ${accentColors[accent]}`}>{title}</p>
         </div>
         {onEdit && (
-          <button onClick={onEdit} className={`flex items-center gap-1 px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-widest transition-all active:scale-95 ${isDark ? 'bg-white/5 hover:bg-white/10 text-slate-400' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'}`}>
+          <button onClick={onEdit} className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold transition-all active:scale-95 ${isDark ? 'bg-[var(--bg-page)] hover:bg-white/10 text-slate-400' : 'bg-[var(--bg-page)] hover:bg-slate-200 text-slate-600'}`}>
             <Edit3 size={9} /> Editovat
           </button>
         )}
@@ -986,7 +986,7 @@ const Block: React.FC<{
   italic?: boolean;
 }> = ({ label, color, text, isDark, image, italic }) => (
   <div>
-    <p className={`text-[9px] font-black uppercase tracking-widest mb-1 ${color}`}>{label}</p>
+    <p className={`text-[11px] font-semibold mb-1 ${color}`}>{label}</p>
     {text && (
       <p className={`text-[11px] leading-relaxed whitespace-pre-wrap mb-2 ${italic ? 'italic' : ''} ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
         {italic ? `"${text}"` : text}

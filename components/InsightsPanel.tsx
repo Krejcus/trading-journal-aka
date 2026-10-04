@@ -90,18 +90,18 @@ const InsightCard: React.FC<{
                 </div>
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${
+                        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${
                             isLeak
                                 ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
                                 : 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20'
                         }`}>
                             {insight.dimension}
                         </span>
-                        <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">
+                        <span className="text-[11px] font-bold text-slate-400">
                             n={insight.metrics.sampleSize}
                         </span>
                     </div>
-                    <h4 className={`text-sm font-black uppercase tracking-tight ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>
+                    <h4 className={`text-sm font-semibold tracking-tight ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>
                         {insight.title}
                     </h4>
                 </div>
@@ -119,7 +119,7 @@ const InsightCard: React.FC<{
                 {onAddRule && isLeak && (
                     <button
                         onClick={() => onAddRule(insight.actionSuggestion)}
-                        className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${
+                        className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all ${
                             isDark ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30' : 'bg-rose-500 text-white hover:bg-rose-600'
                         }`}
                     >
@@ -129,7 +129,7 @@ const InsightCard: React.FC<{
                 {onAskAI && (
                     <button
                         onClick={() => onAskAI(buildAIPrompt(insight))}
-                        className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${
+                        className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 ${
                             isDark ? 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30' : 'bg-blue-500 text-white hover:bg-blue-600 shadow-md shadow-blue-500/20'
                         }`}
                     >
@@ -139,7 +139,7 @@ const InsightCard: React.FC<{
                 )}
                 <button
                     onClick={() => setExpanded(!expanded)}
-                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-1 ${
+                    className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1 ${
                         isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                     }`}
                 >
@@ -159,23 +159,23 @@ const InsightCard: React.FC<{
                         {/* Stat grid */}
                         <div className={`mt-3 pt-3 border-t grid grid-cols-2 md:grid-cols-4 gap-3 ${isDark ? 'border-white/5' : 'border-slate-200'}`}>
                             <div>
-                                <p className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-0.5">Sample</p>
+                                <p className="text-[11px] font-semibold text-slate-500 mb-0.5">Sample</p>
                                 <p className={`text-sm font-black font-mono ${isDark ? 'text-slate-200' : 'text-slate-900'}`}>{insight.metrics.sampleSize}</p>
                             </div>
                             <div>
-                                <p className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-0.5">Winrate</p>
+                                <p className="text-[11px] font-semibold text-slate-500 mb-0.5">Winrate</p>
                                 <p className={`text-sm font-black font-mono text-${accentColor}-500`}>
                                     {insight.metrics.winRate.toFixed(0)}%
                                 </p>
                             </div>
                             <div>
-                                <p className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-0.5">Δ od base</p>
+                                <p className="text-[11px] font-semibold text-slate-500 mb-0.5">Δ od base</p>
                                 <p className={`text-sm font-black font-mono text-${accentColor}-500`}>
                                     {insight.metrics.deviation > 0 ? '+' : ''}{insight.metrics.deviation.toFixed(0)}pp
                                 </p>
                             </div>
                             <div>
-                                <p className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-0.5">Avg R</p>
+                                <p className="text-[11px] font-semibold text-slate-500 mb-0.5">Avg R</p>
                                 <p className={`text-sm font-black font-mono ${insight.metrics.avgR >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                                     {insight.metrics.avgR >= 0 ? '+' : ''}{insight.metrics.avgR.toFixed(2)}
                                 </p>
@@ -185,7 +185,7 @@ const InsightCard: React.FC<{
                         {/* List konkrétních tradů */}
                         {bucketTrades.length > 0 && (
                             <div className={`mt-4 pt-3 border-t ${isDark ? 'border-white/5' : 'border-slate-200'}`}>
-                                <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-2">
+                                <p className="text-[11px] font-semibold text-slate-500 mb-2">
                                     Konkrétní trades ({bucketTrades.length})
                                 </p>
                                 <div className="space-y-1 max-h-[200px] overflow-y-auto no-scrollbar">
@@ -205,11 +205,11 @@ const InsightCard: React.FC<{
                                             >
                                                 <div className="flex items-center gap-2 min-w-0">
                                                     <span className="text-[9px] font-mono font-bold text-slate-400 shrink-0">{formatDate(t.date)}</span>
-                                                    <span className={`text-[9px] font-black uppercase tracking-wider shrink-0 ${tIsLong ? 'text-emerald-500' : 'text-rose-500'} flex items-center gap-0.5`}>
+                                                    <span className={`text-[11px] font-semibold shrink-0 ${tIsLong ? 'text-emerald-500' : 'text-rose-500'} flex items-center gap-0.5`}>
                                                         {tIsLong ? <ArrowUpRight size={8} strokeWidth={3} /> : <ArrowDownRight size={8} strokeWidth={3} />}
                                                         {t.direction}
                                                     </span>
-                                                    <span className={`text-[10px] font-black uppercase tracking-tight truncate ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                                                    <span className={`text-[11px] font-semibold tracking-tight truncate ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
                                                         {t.instrument}
                                                     </span>
                                                 </div>
@@ -241,9 +241,9 @@ const InsightsPanel: React.FC<InsightsPanelProps> = ({ trades, theme, onAddRule,
 
     if (result.insufficientData) {
         return (
-            <div className={`p-8 rounded-3xl border text-center ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+            <div className={`p-8 rounded-3xl border text-center bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
                 <Brain size={32} className="text-slate-400 mx-auto mb-3" />
-                <h3 className={`text-base font-black uppercase tracking-tight mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                <h3 className={`text-base font-semibold tracking-tight mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
                     Málo dat pro analýzu
                 </h3>
                 <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">{result.insufficientData}</p>
@@ -254,32 +254,32 @@ const InsightsPanel: React.FC<InsightsPanelProps> = ({ trades, theme, onAddRule,
     return (
         <div className="space-y-6">
             {/* Header s baseline */}
-            <div className={`p-5 rounded-3xl border ${isDark ? 'bg-white/[0.03] border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+            <div className={`p-5 rounded-3xl border bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
                 <div className="flex items-center gap-2 mb-3">
                     <BarChart3 size={14} className="text-blue-500" />
-                    <h3 className={`text-xs font-black uppercase tracking-[0.2em] ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                    <h3 className={`text-xs font-semibold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
                         Baseline · Tvoje historie
                     </h3>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div>
-                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1">Trades</p>
+                        <p className="text-[11px] font-semibold text-slate-500 mb-1">Trades</p>
                         <p className={`text-2xl font-black font-mono ${isDark ? 'text-white' : 'text-slate-900'}`}>{result.baseline.totalTrades}</p>
                     </div>
                     <div>
-                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1">Winrate</p>
+                        <p className="text-[11px] font-semibold text-slate-500 mb-1">Winrate</p>
                         <p className={`text-2xl font-black font-mono ${result.baseline.winRate >= 50 ? 'text-emerald-500' : 'text-rose-500'}`}>
                             {result.baseline.winRate.toFixed(0)}%
                         </p>
                     </div>
                     <div>
-                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1">Avg R</p>
+                        <p className="text-[11px] font-semibold text-slate-500 mb-1">Avg R</p>
                         <p className={`text-2xl font-black font-mono ${result.baseline.avgR >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                             {result.baseline.avgR >= 0 ? '+' : ''}{result.baseline.avgR.toFixed(2)}
                         </p>
                     </div>
                     <div>
-                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1">Total PnL</p>
+                        <p className="text-[11px] font-semibold text-slate-500 mb-1">Total PnL</p>
                         <p className={`text-2xl font-black font-mono ${result.baseline.totalPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                             {result.baseline.totalPnl >= 0 ? '+' : ''}${result.baseline.totalPnl.toFixed(0)}
                         </p>
@@ -298,7 +298,7 @@ const InsightsPanel: React.FC<InsightsPanelProps> = ({ trades, theme, onAddRule,
                     <button
                         key={opt.key}
                         onClick={() => setFilter(opt.key)}
-                        className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${
+                        className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 ${
                             filter === opt.key
                                 ? opt.key === 'leaks' ? 'bg-rose-500 text-white'
                                   : opt.key === 'strengths' ? 'bg-emerald-500 text-white'
@@ -318,7 +318,7 @@ const InsightsPanel: React.FC<InsightsPanelProps> = ({ trades, theme, onAddRule,
 
             {/* Insight cards */}
             {visibleInsights.length === 0 ? (
-                <div className={`p-8 rounded-2xl border text-center ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                <div className={`p-8 rounded-2xl border text-center bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
                     <Activity size={28} className="text-slate-400 mx-auto mb-2" />
                     <p className={`text-sm font-bold ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
                         {filter === 'leaks' ? 'Žádné leaks!' : filter === 'strengths' ? 'Zatím žádné strengths.' : 'Žádné insights.'}

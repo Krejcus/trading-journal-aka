@@ -17,17 +17,17 @@ export default function NetworkTradeAccountSelect({ members, selectedId, unit, c
   const count = new Set(members.map(row => row.accountId).filter(Boolean)).size;
   const known = unit !== 'hidden' && members.every(row => typeof row.pnl === 'number' && Number.isFinite(row.pnl));
   const total = known ? members.reduce((sum, row) => sum + row.pnl!, 0) : null;
-  return <div className={`mb-6 rounded-2xl border p-4 space-y-3 ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-card)]' : 'border-slate-100 bg-slate-50'}`}>
+  return <div className={`mb-6 rounded-2xl border p-4 space-y-3 ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-card)]' : 'border-[var(--border-subtle)] bg-[var(--bg-page)]'}`}>
     <div className="flex justify-between gap-3 text-xs">
       <span className="text-slate-500">{count} {count === 1 ? 'účet' : count < 5 ? 'účty' : 'účtů'} · Součet zobrazených účtů</span>
       <span className={`font-mono font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatSharedPnL(total, unit, currency, exchangeRates)}</span>
     </div>
-    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+    <label className="block text-[11px] font-bold text-slate-500">
       Účet v detailu
       <select aria-label="Účet ve sdíleném obchodu" value={String(selectedId)} onChange={event => {
         const member = members.find(row => String(row.id) === event.target.value);
         if (member) onSelect(member);
-      }} className={`mt-2 w-full rounded-xl border p-3 text-xs normal-case tracking-normal ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-white' : 'bg-white border-slate-200 text-slate-900'}`}>
+      }} className={`mt-2 w-full rounded-xl border p-3 text-xs normal-case tracking-normal ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-white' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-900'}`}>
         {members.map(row => <option key={String(row.id)} value={String(row.id)}>
           {row.accountName || `Účet ${row.accountId}`} · {formatSharedPnL(row.pnl, unit, currency, exchangeRates)} · {networkTradeTime(row.timestamp ?? row.date)}
         </option>)}

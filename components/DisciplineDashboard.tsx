@@ -147,19 +147,16 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
   };
 
   return (
-    <div className={`p-5 rounded-[32px] border transition-all flex flex-col h-full overflow-hidden ${theme === 'oled' ? 'bg-black border-white/10' :
-      theme === 'dark' ? 'bg-[var(--bg-card)]/90 border-[var(--border-subtle)] backdrop-blur-xl' :
-        'bg-white border-slate-200 shadow-sm'
-      }`}>
+    <div className={`p-5 rounded-[32px] border transition-all flex flex-col h-full overflow-hidden bg-[var(--bg-card)] border-[var(--border-subtle)] backdrop-blur-xl`}>
 
       {/* Header Widgetu */}
       <div className="flex justify-between items-center mb-4 shrink-0">
-        <h3 className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2">
+        <h3 className="text-[11px] font-semibold flex items-center gap-2">
           <Target size={14} className="text-blue-500" /> Rituály
         </h3>
         <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full ${theme !== 'light' ? 'bg-[var(--bg-page)]/50 border border-[var(--border-subtle)]' : 'bg-slate-50 border border-slate-200'}`}>
           <Flame size={10} className={stats.currentStreak > 0 ? 'text-orange-500' : 'text-slate-600'} />
-          <span className="text-[8px] font-black uppercase text-slate-400">Streak: <span className={theme !== 'light' ? 'text-white' : 'text-slate-900'}>{stats.currentStreak}</span></span>
+          <span className="text-[11px] font-semibold text-slate-400">Streak: <span className={theme !== 'light' ? 'text-white' : 'text-slate-900'}>{stats.currentStreak}</span></span>
         </div>
       </div>
 
@@ -184,15 +181,15 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
                 </svg>
                 <div className="text-center">
                   <p className="text-xs font-black leading-none">{stats.disciplineScore}</p>
-                  <p className="text-[6px] font-bold text-slate-500 uppercase">Score</p>
+                  <p className="text-[6px] font-bold text-slate-500">Score</p>
                 </div>
               </div>
             </div>
 
             {/* Stats Summary */}
             <div className="flex-1 text-right">
-              <p className="text-[10px] font-black text-blue-500 uppercase">Disciplína</p>
-              <p className="text-[8px] font-bold text-slate-500 uppercase tracking-tighter">Posledních 30 dní</p>
+              <p className="text-[11px] font-semibold text-blue-500">Disciplína</p>
+              <p className="text-[11px] font-bold text-slate-500 tracking-tighter">Posledních 30 dní</p>
             </div>
           </div>
 
@@ -238,7 +235,7 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
                   </div>
 
                   {/* Label */}
-                  <p className={`text-[9px] font-black uppercase tracking-tighter leading-tight flex-1 min-w-0 truncate ${isActive ? (theme !== 'light' ? 'text-slate-200' : 'text-slate-700') : 'text-slate-500'}`}>
+                  <p className={`text-[11px] font-semibold tracking-tighter leading-tight flex-1 min-w-0 truncate ${isActive ? (theme !== 'light' ? 'text-slate-200' : 'text-slate-700') : 'text-slate-500'}`}>
                     {data.label}
                   </p>
                 </div>
@@ -246,7 +243,7 @@ const DisciplineDashboard: React.FC<DisciplineDashboardProps> = ({ theme, preps,
             })}
           </div>
           {Object.keys(stats.ruleStreaks).length === 0 && (
-            <div className="text-center py-4 opacity-40 text-[9px] uppercase font-black tracking-widest text-slate-500">
+            <div className="text-center py-4 opacity-40 text-[11px] font-semibold text-slate-500">
               Definuj pravidla v nastavení pro aktivaci trackerů
             </div>
           )}

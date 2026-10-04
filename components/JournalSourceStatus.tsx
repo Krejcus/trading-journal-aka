@@ -15,11 +15,13 @@ const status = (source: Source) => !source.metadata ? 'Bez záznamu'
   : source.metadata.scope === 'known-parents' ? 'Načtená dávka' : 'Načteno · rozsah neurčen';
 const loadStoredSources = (ids: readonly string[], signal?: AbortSignal) => storageService.getJournalSourceStatus(ids, signal);
 
-export default function JournalSourceStatus({ connections, loadSources = loadStoredSources }: {
+export default function JournalSourceStatus({ connections, loadSources = loadStoredSources, defaultOpen = false }: {
   connections: readonly JournalSourceConnection[];
+  /** V okně z menu Historie se přehled otevře rovnou. */
+  defaultOpen?: boolean;
   loadSources?: (ids: readonly string[], signal?: AbortSignal) => Promise<JournalConnectionSources[]>;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [refresh, setRefresh] = useState(0);
   const [result, setResult] = useState<{ key: string; refresh: number; rows?: JournalConnectionSources[]; error?: boolean } | null>(null);
   const contentId = useId();
@@ -53,7 +55,7 @@ export default function JournalSourceStatus({ connections, loadSources = loadSto
             <span className="font-normal text-[var(--text-secondary)]">Propojené účty: {connections.find(row => row.connectionId === connection.connectionId)?.accountCount ?? 0}</span>
           </div>
           <div className="overflow-x-auto"><table className="w-full min-w-[640px] text-left">
-            <thead className="border-b border-[var(--border-subtle)] text-[10px] uppercase tracking-wide text-[var(--text-secondary)]"><tr><th className="py-2 font-bold">Podklad</th><th className="py-2 font-bold">Poslední pokus</th><th className="py-2 font-bold">Rozsah načtení</th><th className="py-2 text-right font-bold">Čas čtení</th></tr></thead>
+            <thead className="border-b border-[var(--border-subtle)] text-[11px] text-[var(--text-secondary)]"><tr><th className="py-2 font-bold">Podklad</th><th className="py-2 font-bold">Poslední pokus</th><th className="py-2 font-bold">Rozsah načtení</th><th className="py-2 text-right font-bold">Čas čtení</th></tr></thead>
             <tbody>{connection.sources.map(source => <tr key={source.type} className="border-b border-[var(--border-subtle)] last:border-0">
               <td className="py-2.5 pr-3 font-medium">{labels[source.type]}</td>
               <td className={`py-2.5 pr-3 ${source.metadata?.kind === 'unavailable' ? 'text-amber-600' : 'text-[var(--text-secondary)]'}`}>{status(source)}</td>

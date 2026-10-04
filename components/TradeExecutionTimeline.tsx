@@ -17,7 +17,7 @@ export default function TradeExecutionTimeline({ history, isDark, candleCoverage
   const border = isDark ? 'border-white/10' : 'border-slate-200';
   if (!history) return <div className={`shrink-0 border-t ${border} px-3 py-2 text-[10px] text-slate-500`}>Historie SL/TP u tohoto obchodu zatím není doložená.</div>;
   const groups = groupProtectionMarkers(history.protection);
-  return <div className={`shrink-0 max-h-[35%] overflow-y-auto border-t ${border} px-3 py-2 text-[10px] ${isDark ? 'bg-theme-card text-slate-300' : 'bg-white text-slate-600'}`}>
+  return <div className={`shrink-0 max-h-[35%] overflow-y-auto border-t ${border} px-3 py-2 text-[10px] ${isDark ? 'bg-[var(--bg-card)] text-slate-300' : 'bg-[var(--bg-card)] text-slate-600'}`}>
     <div className="flex flex-wrap items-center gap-x-5 gap-y-1 mb-2 tabular-nums">
       <span>Hrubé P&L <strong>{money(history.grossPnl)}</strong></span>
       <span>Poplatky <strong>{money(history.fees)}</strong></span>

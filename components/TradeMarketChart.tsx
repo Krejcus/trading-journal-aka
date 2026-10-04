@@ -22,6 +22,7 @@ import {
 } from 'lightweight-charts-drawing';
 import { Activity, AlertTriangle, BarChart3, LocateFixed, Loader2, Maximize2, Minimize2, RefreshCw } from 'lucide-react';
 import TradeProgress from './TradeProgress';
+import TradeEventPings from './TradeEventPings';
 import ChartNotesLayer, { type ChartNoteAddRequest } from './ChartNotesLayer';
 import ChartSnapshotButton from './ChartSnapshotButton';
 import { captureChartWorkspaceSnapshotDataUrl } from '../services/chartSnapshot';
@@ -956,18 +957,18 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   const statusOverlays = (
     <>
       {loading && (
-        <div className={`absolute inset-0 z-20 flex flex-col items-center justify-center ${isDark ? 'bg-[#090d12]' : 'bg-white'}`}>
+        <div className={`absolute inset-0 z-20 flex flex-col items-center justify-center bg-[var(--bg-card)]`}>
           <Loader2 size={28} className="animate-spin text-emerald-500" />
-          <p className="mt-3 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Načítám reálné MNQ svíčky</p>
+          <p className="mt-3 text-[11px] font-semibold text-slate-500">Načítám reálné MNQ svíčky</p>
         </div>
       )}
       {!loading && error && (
-        <div className={`absolute inset-0 z-20 flex items-center justify-center p-8 ${isDark ? 'bg-[#090d12]' : 'bg-white'}`}>
+        <div className={`absolute inset-0 z-20 flex items-center justify-center p-8 bg-[var(--bg-card)]`}>
           <div className="max-w-md text-center">
             {error.code === 'data-not-yet-historical' ? <Activity size={34} className="mx-auto text-blue-400" /> : <AlertTriangle size={34} className="mx-auto text-amber-400" />}
             <p className={`mt-4 text-sm font-black ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{setupMessage}</p>
             <p className="mt-2 text-[10px] leading-relaxed text-slate-500">Žádná náhradní ani syntetická data se nezobrazují, aby analýza nebyla zavádějící.</p>
-            <button onClick={() => setRetry(value => value + 1)} className="mt-4 inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-500/10 text-blue-400 text-[10px] font-black uppercase tracking-wider hover:bg-blue-500/20">
+            <button onClick={() => setRetry(value => value + 1)} className="mt-4 inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-500/10 text-blue-400 text-[11px] font-semibold hover:bg-blue-500/20">
               <RefreshCw size={12} /> Zkusit znovu
             </button>
           </div>
@@ -979,7 +980,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   // Detail obchodu: jen trh, Obchod, Průběh a Fullscreen. Timeframy,
   // indikátory i kreslení jsou ve fullscreenu (stejný workspace jako backtest).
   const detailContent = (
-    <div data-trade-chart className={`h-full min-h-[360px] flex flex-col ${isDark ? 'bg-[#090d12]' : 'bg-white'}`}>
+    <div data-trade-chart className={`h-full min-h-[360px] flex flex-col bg-[var(--bg-card)]`}>
       {!snapshotMode && <div className={`h-10 shrink-0 flex items-center gap-1 px-3 border-b ${isDark ? 'border-white/5' : 'border-slate-200'}`}>
         <span className={`text-[12px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{root}</span>
         <span className="ml-1.5 whitespace-nowrap text-[11px] font-semibold text-slate-500">1m · CME</span>
@@ -1055,13 +1056,16 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
             onChange={next => onChartNotesChange?.(next)}
           />
         )}
+        {candles.length > 0 && !loading && !error && !snapshotMode && (
+          <TradeEventPings chartApi={chartApi} containerRef={chartAreaRef} events={events} cutoffMs={cutoffMs} barTimes={noteBarTimes} />
+        )}
         {rewind && (
           <div aria-hidden="true" onAnimationEnd={startFromBeginning} style={{ left: rewind.left, width: rewind.width }}
-            className={`trade-chart-rewind pointer-events-none absolute top-0 bottom-[28px] z-10 ${isDark ? 'bg-[#090d12]' : 'bg-white'}`} />
+            className={`trade-chart-rewind pointer-events-none absolute top-0 bottom-[28px] z-10 bg-[var(--bg-card)]`} />
         )}
         {!loading && !error && candles.length > 0 && !introDone && !snapshotMode && (
           <div aria-hidden="true" onAnimationEnd={() => setIntroDone(true)}
-            className={`trade-chart-reveal pointer-events-none absolute left-0 top-0 right-[84px] bottom-[28px] z-10 ${isDark ? 'bg-[#090d12]' : 'bg-white'}`} />
+            className={`trade-chart-reveal pointer-events-none absolute left-0 top-0 right-[84px] bottom-[28px] z-10 bg-[var(--bg-card)]`} />
         )}
         {statusOverlays}
         {!loading && !error && candles.length > 0 && history && !snapshotMode && (
@@ -1082,8 +1086,8 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
   );
 
   const chartContent = (
-    <div className={`${isFullscreen ? 'fixed inset-0 z-[300] min-h-0' : 'h-full min-h-[360px]'} flex flex-col ${isDark ? 'bg-[#090d12]' : 'bg-white'}`}>
-      <div className={`h-11 shrink-0 flex items-center justify-between gap-3 px-3 border-b ${isDark ? 'border-white/5 bg-black/20' : 'border-slate-200 bg-slate-50'}`}>
+    <div className={`${isFullscreen ? 'fixed inset-0 z-[300] min-h-0' : 'h-full min-h-[360px]'} flex flex-col bg-[var(--bg-card)]`}>
+      <div className={`h-11 shrink-0 flex items-center justify-between gap-3 px-3 border-b border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
         <div className="flex items-center gap-2 min-w-0">
           <BarChart3 size={14} className="text-emerald-500 shrink-0" />
           <div className="flex rounded-lg overflow-hidden border border-white/10 shrink-0">
@@ -1092,28 +1096,28 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
             ))}
           </div>
           <span className="hidden md:inline text-[9px] font-mono text-slate-500 truncate">{providerSymbol || marketSymbol} · {provisional ? 'předběžně · TV' : 'CME'}</span>
-          {isFullscreen && <span className="hidden md:inline text-[8px] font-black uppercase tracking-[0.18em] text-violet-400">Workspace</span>}
+          {isFullscreen && <span className="hidden md:inline text-[11px] font-semibold text-violet-400">Workspace</span>}
           <div className="hidden lg:flex rounded-lg overflow-hidden border border-white/10 shrink-0">
             <button
               type="button"
               onClick={() => setChartEngine('candlekit')}
-              className={`px-2 py-1 text-[8px] font-black uppercase tracking-wider transition-colors ${chartEngine === 'candlekit' ? 'bg-violet-500 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+              className={`px-2 py-1 text-[11px] font-semibold transition-colors ${chartEngine === 'candlekit' ? 'bg-violet-500 text-white' : 'text-slate-500 hover:text-slate-300'}`}
             >
               CandleKit
             </button>
             <button
               type="button"
               onClick={() => setChartEngine('classic')}
-              className={`px-2 py-1 text-[8px] font-black uppercase tracking-wider transition-colors ${chartEngine === 'classic' ? 'bg-slate-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+              className={`px-2 py-1 text-[11px] font-semibold transition-colors ${chartEngine === 'classic' ? 'bg-slate-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}
             >
               Původní
             </button>
           </div>
         </div>
         <div className="flex items-center gap-1.5">
-          <button onClick={() => setShowFvg(value => !value)} className={`px-2 py-1 rounded-md text-[8px] font-black uppercase tracking-wider border ${showFvg ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/25' : 'text-slate-500 border-white/10'}`}>FVG</button>
-          <button onClick={() => setShowLevels(value => !value)} className={`px-2 py-1 rounded-md text-[8px] font-black uppercase tracking-wider border ${showLevels ? 'text-blue-400 bg-blue-500/10 border-blue-500/25' : 'text-slate-500 border-white/10'}`}>Levels</button>
-          {timeframe === '1m' && <button onClick={() => setShowStructure(value => !value)} className={`px-2 py-1 rounded-md text-[8px] font-black uppercase tracking-wider border ${showStructure ? 'text-teal-400 bg-teal-500/10 border-teal-500/25' : 'text-slate-500 border-white/10'}`}>CHoCH/BOS</button>}
+          <button onClick={() => setShowFvg(value => !value)} className={`px-2 py-1 rounded-md text-[11px] font-semibold border ${showFvg ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/25' : 'text-slate-500 border-white/10'}`}>FVG</button>
+          <button onClick={() => setShowLevels(value => !value)} className={`px-2 py-1 rounded-md text-[11px] font-semibold border ${showLevels ? 'text-blue-400 bg-blue-500/10 border-blue-500/25' : 'text-slate-500 border-white/10'}`}>Levels</button>
+          {timeframe === '1m' && <button onClick={() => setShowStructure(value => !value)} className={`px-2 py-1 rounded-md text-[11px] font-semibold border ${showStructure ? 'text-teal-400 bg-teal-500/10 border-teal-500/25' : 'text-slate-500 border-white/10'}`}>CHoCH/BOS</button>}
           <ChartTimeframePicker value={timeframe} onChange={setTimeframe} isDark={isDark} compact />
           <button
             type="button"
@@ -1157,7 +1161,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
               asUnix(trade.entryTime || trade.entryDate, entryMs),
               asUnix(trade.timestamp || trade.exitDate, exitMs),
             )}
-            className={`absolute left-3 top-3 z-20 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border backdrop-blur-md text-[8px] font-black uppercase tracking-wider shadow-sm transition-colors ${isDark ? 'bg-black/65 border-white/10 text-slate-300 hover:text-white' : 'bg-white/85 border-slate-200 text-slate-600 hover:text-slate-900'}`}
+            className={`absolute left-3 top-3 z-20 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border backdrop-blur-md text-[11px] font-semibold shadow-sm transition-colors ${isDark ? 'bg-black/65 border-white/10 text-slate-300 hover:text-white' : 'bg-white/85 border-slate-200 text-slate-600 hover:text-slate-900'}`}
             title="Vrátit graf na vstup obchodu"
             aria-label="Vycentrovat na obchod"
           >
@@ -1165,18 +1169,18 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
           </button>
         )}
         {loading && (
-          <div className={`absolute inset-0 z-20 flex flex-col items-center justify-center ${isDark ? 'bg-[#090d12]' : 'bg-white'}`}>
+          <div className={`absolute inset-0 z-20 flex flex-col items-center justify-center bg-[var(--bg-card)]`}>
             <Loader2 size={28} className="animate-spin text-emerald-500" />
-            <p className="mt-3 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Načítám reálné MNQ svíčky</p>
+            <p className="mt-3 text-[11px] font-semibold text-slate-500">Načítám reálné MNQ svíčky</p>
           </div>
         )}
         {!loading && error && (
-          <div className={`absolute inset-0 z-20 flex items-center justify-center p-8 ${isDark ? 'bg-[#090d12]' : 'bg-white'}`}>
+          <div className={`absolute inset-0 z-20 flex items-center justify-center p-8 bg-[var(--bg-card)]`}>
             <div className="max-w-md text-center">
               {error.code === 'data-not-yet-historical' ? <Activity size={34} className="mx-auto text-blue-400" /> : <AlertTriangle size={34} className="mx-auto text-amber-400" />}
               <p className={`mt-4 text-sm font-black ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{setupMessage}</p>
               <p className="mt-2 text-[10px] leading-relaxed text-slate-500">Žádná náhradní ani syntetická data se nezobrazují, aby analýza nebyla zavádějící.</p>
-              <button onClick={() => setRetry(value => value + 1)} className="mt-4 inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-500/10 text-blue-400 text-[10px] font-black uppercase tracking-wider hover:bg-blue-500/20">
+              <button onClick={() => setRetry(value => value + 1)} className="mt-4 inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-500/10 text-blue-400 text-[11px] font-semibold hover:bg-blue-500/20">
                 <RefreshCw size={12} /> Zkusit znovu
               </button>
             </div>
@@ -1188,7 +1192,7 @@ const TradeMarketChart: React.FC<TradeMarketChartProps> = ({ trade, isDark, vari
           </div>
         )}
       </div>
-      <div className={`h-7 shrink-0 px-3 flex items-center gap-4 border-t text-[8px] font-bold uppercase tracking-wider ${isDark ? 'border-white/5 text-slate-600' : 'border-slate-200 text-slate-400'}`}>
+      <div className={`h-7 shrink-0 px-3 flex items-center gap-4 border-t text-[11px] font-bold ${isDark ? 'border-white/5 text-slate-600' : 'border-slate-200 text-slate-400'}`}>
         <span className="text-amber-500">VWAP ±1σ</span><span className="text-blue-400">PDH / PDL</span><span className="text-violet-400">PWH / PWL</span><span>Časy Praha</span><span className="ml-auto">{provisional ? 'Předběžně · TradingView — Databento do 24 h' : `Databento · GLBX.MDP3${estimatedCostUsd !== null ? ` · request ≤ $${estimatedCostUsd.toFixed(4)}` : ''}`}</span>
       </div>
       <TradeExecutionTimeline history={trade.executionHistory} isDark={isDark} candleCoverage={!loading && !error ? { candles: rawCandles, intervalSeconds: 60 } : undefined} />

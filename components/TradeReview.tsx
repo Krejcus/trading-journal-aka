@@ -387,14 +387,14 @@ export default function TradeReview({
   const muted = isDark ? 'text-slate-500' : 'text-slate-500';
   const ink = isDark ? 'text-slate-100' : 'text-slate-900';
   const cellBg = isDark ? 'bg-white/[0.02]' : 'bg-white';
-  const label = 'text-[9px] font-black uppercase tracking-[0.12em] text-slate-500';
+  const label = 'text-[11px] font-semibold text-slate-500';
   const tone = (v: number | null) => v == null ? '' : v > 0 ? 'text-emerald-500' : v < 0 ? 'text-rose-500' : ink;
   const long = facts.long;
   const leaving = phase === 'leaving';
   const pointOf = (step: ReviewStep) => ({ atMs: step.at, price: step.price, color: STEP_COLOR[step.kind] });
 
   const header = (
-    <div className={`shrink-0 flex flex-wrap items-center gap-2 px-4 py-2 border-b ${line} ${isDark ? 'bg-[#0b1017]' : 'bg-white'}`}>
+    <div className={`shrink-0 flex flex-wrap items-center gap-2 px-4 py-2 border-b ${line} bg-[var(--bg-card)]`}>
       <span className={`text-[13.5px] font-extrabold mr-1 ${ink}`}>{narrow ? 'Hodnocení' : 'Hodnocení obchodu'}</span>
       {untaken && <Pill className="text-violet-500 bg-violet-500/10 border-violet-500/30">Nevzatý</Pill>}
       <Pill className={long ? 'text-emerald-500 bg-emerald-500/10 border-emerald-500/30' : 'text-rose-500 bg-rose-500/10 border-rose-500/30'}>{long ? '↗ Long' : '↘ Short'}</Pill>
@@ -424,12 +424,12 @@ export default function TradeReview({
   );
 
   const tradeLeft = (
-    <aside key={`l${enterKey}`} className={`w-full lg:w-[272px] shrink-0 lg:border-r flex flex-col min-h-0 overflow-y-auto [&>*]:shrink-0 ${line} ${isDark ? 'bg-[#0b1017]' : 'bg-slate-50/70'} ${leaving ? 'tr-leave' : 'tr-enter'}`}>
+    <aside key={`l${enterKey}`} className={`w-full lg:w-[272px] shrink-0 lg:border-r flex flex-col min-h-0 overflow-y-auto [&>*]:shrink-0 ${line} ${isDark ? 'bg-[var(--bg-card)]' : 'bg-[var(--bg-page)]'} ${leaving ? 'tr-leave' : 'tr-enter'}`}>
       <div className={`px-4 pt-3.5 pb-3 border-b ${line}`}>
         <p className={label}>Čistý výsledek{members.length > 1 ? ` · skupina ${members.length} účty` : ''}</p>
         <p className={`mt-1.5 text-[32px] font-light tracking-[-0.04em] leading-none tabular-nums ${tone(net)}`}>{money(net)}</p>
         {hasFees && <p className={`mt-2 text-[11.5px] ${muted}`}>Hrubě <b className={`font-medium tabular-nums ${ink}`}>{money(net + feeTotal)}</b> · poplatky <b className={`font-medium tabular-nums ${ink}`}>${fmt(feeTotal)}</b></p>}
-        {draft.valid === 'bad' && <span className="mt-2 inline-flex h-[22px] items-center whitespace-nowrap rounded border border-rose-500/30 bg-rose-500/10 px-2 text-[9.5px] font-black uppercase tracking-[0.07em] text-rose-500">✕ Mimo plán · mimo statistiky</span>}
+        {draft.valid === 'bad' && <span className="mt-2 inline-flex h-[22px] items-center whitespace-nowrap rounded border border-rose-500/30 bg-rose-500/10 px-2 text-[9.5px] font-semibold text-rose-500">✕ Mimo plán · mimo statistiky</span>}
       </div>
       <Section title="Plnění" aux={<><Lock size={10} /> z Tradovate</>} />
       <Cells isDark={isDark}>
@@ -493,14 +493,14 @@ export default function TradeReview({
       <Section title="Účty" aux={<><Lock size={10} /> kopírka</>} />
       <Fold open={openFold.accounts} onToggle={() => setOpenFold(state => ({ ...state, accounts: !state.accounts }))} line={line} bg={cellBg}
         summary={<span className="flex flex-wrap items-center gap-1.5"><b className={ink}>{members.length} {members.length === 1 ? 'účet' : members.length < 5 ? 'účty' : 'účtů'}</b>
-          {firmGroups(accountRows).map(group => <span key={group.firm} className={`inline-flex h-[22px] items-center gap-1 rounded-full border pl-0.5 pr-2 text-[10.5px] font-semibold ${line} ${isDark ? 'bg-white/[0.03]' : 'bg-white'}`}><FirmMark firm={group.firm} size={18} />{firmLabel(group.firm)}{group.count > 1 ? ` ×${group.count}` : ''}</span>)}
+          {firmGroups(accountRows).map(group => <span key={group.firm} className={`inline-flex h-[22px] items-center gap-1 rounded-full border pl-0.5 pr-2 text-[10.5px] font-semibold ${line} ${isDark ? 'bg-[var(--bg-page)]' : 'bg-[var(--bg-card)]'}`}><FirmMark firm={group.firm} size={18} />{firmLabel(group.firm)}{group.count > 1 ? ` ×${group.count}` : ''}</span>)}
           {maxLatency > 0 && <span className={muted}>· kopie do {maxLatency} ms</span>}</span>}>
         <div className="tr-fold-rows py-1">
           {accountRows.map(row => (
             <div key={row.id} className={`grid grid-cols-[auto_1fr_auto] items-center gap-2 h-[30px] text-[11.5px] border-b border-dashed last:border-0 ${line}`}>
               <FirmMark firm={row.firm} size={22} />
               <span className={`flex items-center gap-1.5 min-w-0 font-semibold whitespace-nowrap ${ink}`}><span className="truncate">{row.name}</span>
-                <span className={`rounded border px-1 text-[8px] font-black uppercase tracking-[0.08em] leading-[14px] ${row.leader ? 'border-blue-500/30 bg-blue-500/10 text-blue-500' : `${line} ${muted}`}`}>{row.leader ? 'Leader' : 'Follower'}</span></span>
+                <span className={`rounded border px-1 text-[11px] font-semibold leading-[14px] ${row.leader ? 'border-blue-500/30 bg-blue-500/10 text-blue-500' : `${line} ${muted}`}`}>{row.leader ? 'Leader' : 'Follower'}</span></span>
               <b className={`font-semibold tabular-nums ${tone(row.pnl)}`} title={row.latency != null ? `kopie +${row.latency} ms` : 'leader'}>{money(row.pnl)}</b>
             </div>
           ))}
@@ -518,7 +518,7 @@ export default function TradeReview({
   ];
 
   const tradeRight = (
-    <aside key={`r${enterKey}`} className={`w-full lg:w-[264px] shrink-0 lg:border-l flex flex-col min-h-0 overflow-y-auto [&>*]:shrink-0 ${line} ${isDark ? 'bg-[#0b1017]' : 'bg-slate-50/70'} ${leaving ? 'tr-leave' : 'tr-enter'}`}>
+    <aside key={`r${enterKey}`} className={`w-full lg:w-[264px] shrink-0 lg:border-l flex flex-col min-h-0 overflow-y-auto [&>*]:shrink-0 ${line} ${isDark ? 'bg-[var(--bg-card)]' : 'bg-[var(--bg-page)]'} ${leaving ? 'tr-leave' : 'tr-enter'}`}>
       <Section title="Validita" aux="P / M" />
       <div className={`mx-3 grid grid-cols-2 overflow-hidden rounded-md border ${line}`} role="radiogroup" aria-label="Validita">
         {(['ok', 'bad'] as const).map(value => (
@@ -535,11 +535,11 @@ export default function TradeReview({
             {REVIEW_INVALID_REASONS.map(reason => {
               const on = draft.reasons.includes(reason);
               return <button key={reason} type="button" onClick={() => setDraft(d => ({ ...d, reasons: on ? d.reasons.filter(x => x !== reason) : [...d.reasons, reason] }))}
-                className={`h-[22px] rounded-full border px-2 text-[10.5px] font-semibold transition-colors ${on ? 'border-rose-500 bg-rose-500 text-white' : `${line} ${isDark ? 'bg-white/[0.03] text-slate-400' : 'bg-white text-slate-500'}`}`}>{reason}</button>;
+                className={`h-[22px] rounded-full border px-2 text-[10.5px] font-semibold transition-colors ${on ? 'border-rose-500 bg-rose-500 text-white' : `${line} ${isDark ? 'bg-[var(--bg-page)] text-slate-400' : 'bg-[var(--bg-card)] text-slate-500'}`}`}>{reason}</button>;
             })}
           </div>
           <textarea value={draft.why} onChange={event => setDraft(d => ({ ...d, why: event.target.value }))} rows={2} placeholder="Co se stalo a co příště udělám jinak… (povinné)"
-            className={`mt-1.5 w-full resize-y rounded-md border px-2 py-1.5 text-[11.5px] outline-none ${draft.why.trim().length < 5 ? 'border-rose-500/40' : line} ${isDark ? 'bg-white/[0.03] text-slate-200' : 'bg-white text-slate-800'}`} />
+            className={`mt-1.5 w-full resize-y rounded-md border px-2 py-1.5 text-[11.5px] outline-none ${draft.why.trim().length < 5 ? 'border-rose-500/40' : line} ${isDark ? 'bg-[var(--bg-page)] text-slate-200' : 'bg-[var(--bg-card)] text-slate-800'}`} />
           <div className="mt-1 flex flex-col gap-0.5 border-t border-dashed border-rose-500/30 pt-1.5 text-[10.5px]">
             <p className="flex justify-between gap-2"><span className={muted}>Statistiky strategie</span><b className="text-rose-500">nepočítá se</b></p>
             <p className="flex justify-between gap-2"><span className={muted}>P&amp;L účtu a výplaty</span><b className="text-emerald-500">počítá se</b></p>
@@ -555,7 +555,7 @@ export default function TradeReview({
       </div>
       <Section title="Poznámka" />
       <textarea value={draft.notes} onChange={event => setDraft(d => ({ ...d, notes: event.target.value }))} rows={4} placeholder="Co se dělo, proč vstup, co příště jinak…"
-        className={`mx-3 mb-3 resize-y rounded-md border px-2.5 py-2 text-[12px] leading-relaxed outline-none focus:border-indigo-500/50 ${line} ${isDark ? 'bg-white/[0.03] text-slate-200' : 'bg-white text-slate-800'}`} />
+        className={`mx-3 mb-3 resize-y rounded-md border px-2.5 py-2 text-[12px] leading-relaxed outline-none focus:border-indigo-500/50 ${line} ${isDark ? 'bg-[var(--bg-page)] text-slate-200' : 'bg-[var(--bg-card)] text-slate-800'}`} />
       {error && <p className="mx-3 mb-3 text-[11px] font-semibold text-rose-500" role="alert">{error}</p>}
     </aside>
   );
@@ -587,16 +587,16 @@ export default function TradeReview({
   ] : [];
   const untakenMonth = untakenMonthSummary(allTrades);
   const untakenLeft = uOrder && (
-    <aside key={`l${enterKey}`} className={`w-full lg:w-[272px] shrink-0 lg:border-r flex flex-col min-h-0 overflow-y-auto [&>*]:shrink-0 ${line} ${isDark ? 'bg-[#0b1017]' : 'bg-slate-50/70'} ${leaving ? 'tr-leave' : 'tr-enter'}`}>
+    <aside key={`l${enterKey}`} className={`w-full lg:w-[272px] shrink-0 lg:border-r flex flex-col min-h-0 overflow-y-auto [&>*]:shrink-0 ${line} ${isDark ? 'bg-[var(--bg-card)]' : 'bg-[var(--bg-page)]'} ${leaving ? 'tr-leave' : 'tr-enter'}`}>
       <Section title="Nevzatý obchod" aux={<><Lock size={10} /> z Tradovate</>} />
       <div className={`px-4 pb-3 border-b ${line}`}>
-        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-violet-500">Zrušený vstup</p>
+        <p className="text-[11px] font-semibold text-violet-500">Zrušený vstup</p>
         <p className={`mt-1 text-[19px] font-semibold tracking-[-0.02em] tabular-nums ${ink}`}>
           <span className={uOrder.side === 'Buy' ? 'text-[#2962ff]' : 'text-[#f23645]'}>{uOrder.side} {uOrder.type}</span> {price(uLimit)}{uOrder.quantity != null ? ` × ${uOrder.quantity}` : ''}
         </p>
         <p className={`mt-1 text-[11px] ${muted}`}>zadán {clockS(uOrder.placedAt)}{uOrder.end ? ` · zrušen ${clockS(uOrder.end.at)} · stál ${holdText(uOrder.end.at - uOrder.placedAt)}` : ''}</p>
         <div className={`mt-2.5 rounded-lg border px-2.5 py-2 ${uCard ? cardTone(uCard.tone) : cardTone('slate')}`}>
-          <small className="block text-[8.5px] font-black tracking-[0.1em] opacity-80">KDYBYS NEZRUŠIL</small>
+          <small className="block text-[10px] font-semibold opacity-80">Kdybys nezrušil</small>
           {uCard ? <>
             <strong className="block text-[18px] font-extrabold tracking-[-0.01em] tabular-nums">{uCard.value}</strong>
             <span className={`block text-[10.5px] leading-snug ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{uCard.sub}{uOutcome?.kind === 'fill' && uOutcome.points != null && uRisk ? ` · ${uOutcome.points >= 0 ? '' : '−'}${fmt(Math.abs(uOutcome.points / uRisk), 1)} R` : ''}</span>
@@ -634,7 +634,7 @@ export default function TradeReview({
     </aside>
   );
   const untakenRight = uOrder && (
-    <aside key={`r${enterKey}`} className={`w-full lg:w-[264px] shrink-0 lg:border-l flex flex-col min-h-0 overflow-y-auto [&>*]:shrink-0 ${line} ${isDark ? 'bg-[#0b1017]' : 'bg-slate-50/70'} ${leaving ? 'tr-leave' : 'tr-enter'}`}>
+    <aside key={`r${enterKey}`} className={`w-full lg:w-[264px] shrink-0 lg:border-l flex flex-col min-h-0 overflow-y-auto [&>*]:shrink-0 ${line} ${isDark ? 'bg-[var(--bg-card)]' : 'bg-[var(--bg-page)]'} ${leaving ? 'tr-leave' : 'tr-enter'}`}>
       <Section title="Proč jsi ho zrušil?" aux="povinné" />
       <div className="mx-3 flex flex-wrap gap-1" role="radiogroup" aria-label="Důvod zrušení">
         {UNTAKEN_REASONS.map(reason => {
@@ -642,9 +642,9 @@ export default function TradeReview({
           return (
             <button key={reason} type="button" role="radio" aria-checked={on} onClick={() => setDraft(d => ({ ...d, untakenReason: reason }))}
               className={`inline-flex h-[24px] items-center gap-1 rounded-full border px-2.5 text-[11px] font-semibold transition-colors ${on
-                ? 'border-violet-500 bg-violet-500 text-white' : `${line} ${isDark ? 'bg-white/[0.03] text-slate-400' : 'bg-white text-slate-500'}`}`}>
+                ? 'border-violet-500 bg-violet-500 text-white' : `${line} ${isDark ? 'bg-[var(--bg-page)] text-slate-400' : 'bg-[var(--bg-card)] text-slate-500'}`}`}>
               {reason}
-              {reason === suggestedReason && <span className={`rounded-full px-1.5 text-[8.5px] font-black uppercase tracking-[0.06em] leading-[14px] ${on ? 'bg-white/25' : 'bg-violet-500/15 text-violet-500'}`}>návrh</span>}
+              {reason === suggestedReason && <span className={`rounded-full px-1.5 text-[8.5px] font-semibold leading-[14px] ${on ? 'bg-white/25' : 'bg-violet-500/15 text-violet-500'}`}>návrh</span>}
             </button>
           );
         })}
@@ -655,7 +655,7 @@ export default function TradeReview({
       </p>}
       <Section title="Poznámka" aux="dobrovolná" />
       <textarea value={draft.notes} onChange={event => setDraft(d => ({ ...d, notes: event.target.value }))} rows={3} placeholder="Co tě vedlo ke zrušení…"
-        className={`mx-3 resize-y rounded-md border px-2.5 py-2 text-[12px] leading-relaxed outline-none focus:border-violet-500/50 ${line} ${isDark ? 'bg-white/[0.03] text-slate-200' : 'bg-white text-slate-800'}`} />
+        className={`mx-3 resize-y rounded-md border px-2.5 py-2 text-[12px] leading-relaxed outline-none focus:border-violet-500/50 ${line} ${isDark ? 'bg-[var(--bg-page)] text-slate-200' : 'bg-[var(--bg-card)] text-slate-800'}`} />
       <div className={`mx-3 mt-3 flex flex-col gap-0.5 rounded-md border border-dashed px-2.5 py-2 text-[10.5px] ${line}`}>
         <p className="flex justify-between gap-2"><span className={muted}>Statistiky strategie</span><b className="text-slate-400">nepočítá se</b></p>
         <p className="flex justify-between gap-2"><span className={muted}>P&amp;L účtu</span><b className="text-slate-400">nepočítá se</b></p>
@@ -718,7 +718,7 @@ export default function TradeReview({
         {header}{progress}
         <div className="flex flex-1 min-h-0">
           {left}
-          <div key={currentChartTrade ? String(currentChartTrade.id) : 'none'} className={`relative flex-1 min-w-0 ${isDark ? 'bg-[#090d12]' : 'bg-white'}`}>
+          <div key={currentChartTrade ? String(currentChartTrade.id) : 'none'} className={`relative flex-1 min-w-0 bg-[var(--bg-card)]`}>
             {chart}
           </div>
           {right}
@@ -855,7 +855,7 @@ function DoneScreen({ isDark, reviewed, total, onClose }: { isDark: boolean; rev
       <div className={`grid grid-cols-2 sm:grid-cols-4 overflow-hidden rounded-md border ${line}`}>
         {cells.map(([name, value], i) => (
           <div key={name} className={`tr-rise px-3.5 py-2.5 sm:min-w-[150px] border-r last:border-r-0 ${line}`} style={{ animationDelay: `${0.5 + i * 0.08}s` }}>
-            <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">{name}</p>
+            <p className="text-[11px] font-semibold text-slate-500">{name}</p>
             <p className={`mt-0.5 text-[17px] font-medium tabular-nums ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{value}</p>
           </div>
         ))}
@@ -879,11 +879,11 @@ function DoneButton({ phase, blocked, last, onClick }: { phase: 'idle' | 'saving
 }
 
 function Pill({ children, className, isDark }: { children: React.ReactNode; className?: string; isDark?: boolean }) {
-  return <span className={`inline-flex h-[22px] items-center gap-1.5 rounded border px-2 text-[9.5px] font-black uppercase tracking-[0.07em] whitespace-nowrap ${className ?? (isDark ? 'border-white/10 text-slate-400' : 'border-slate-200 text-slate-500')}`}>{children}</span>;
+  return <span className={`inline-flex h-[22px] items-center gap-1.5 rounded border px-2 text-[9.5px] font-semibold whitespace-nowrap ${className ?? (isDark ? 'border-white/10 text-slate-400' : 'border-slate-200 text-slate-500')}`}>{children}</span>;
 }
 
 function Section({ title, aux }: { title: string; aux?: React.ReactNode }) {
-  return <div className="flex items-center justify-between gap-2 px-4 pt-2.5 pb-1.5"><span className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">{title}</span>{aux && <span className="flex items-center gap-1 text-[10px] text-slate-500">{aux}</span>}</div>;
+  return <div className="flex items-center justify-between gap-2 px-4 pt-2.5 pb-1.5"><span className="text-[11px] font-semibold text-slate-500">{title}</span>{aux && <span className="flex items-center gap-1 text-[10px] text-slate-500">{aux}</span>}</div>;
 }
 
 /** Mřížka buněk s vlasovými linkami (mezera 1 px na podkladu barvy linky). */
@@ -895,7 +895,7 @@ function Cells({ children, isDark }: { children: React.ReactNode; isDark: boolea
 function Cell({ label, value, sub, wide, inline, className }: { label: string; value: React.ReactNode; sub?: string; wide?: boolean; inline?: boolean; className?: string }) {
   return (
     <div className={`px-3.5 py-1.5 bg-[var(--tr-cell)] ${wide ? 'col-span-2' : ''}`}>
-      <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">{label}</p>
+      <p className="text-[11px] font-semibold text-slate-500">{label}</p>
       <p className={`mt-px text-[13px] font-medium tabular-nums whitespace-nowrap ${className || ''}`}>{value}
         {sub && (inline ? <span className="ml-1.5 text-[10.5px] font-normal text-slate-500">{sub}</span> : <span className="block text-[10px] font-normal text-slate-500">{sub}</span>)}</p>
     </div>
@@ -905,7 +905,7 @@ function Cell({ label, value, sub, wide, inline, className }: { label: string; v
 function InputCell({ label, value, placeholder, onChange }: { label: string; value: string; placeholder: string; onChange: (value: string) => void }) {
   return (
     <label className="block px-3.5 py-1.5 bg-[var(--tr-cell)] shadow-[inset_2px_0_0_#6366f1]">
-      <span className="block text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">{label}</span>
+      <span className="block text-[11px] font-semibold text-slate-500">{label}</span>
       <input inputMode="decimal" value={value} placeholder={placeholder} onChange={event => onChange(event.target.value)}
         className="mt-px w-full bg-transparent text-[13px] font-medium tabular-nums outline-none placeholder:text-slate-400/70" />
     </label>
@@ -950,11 +950,11 @@ function TagGroup({ title, color, options, value, set, labelOf = (id: string) =>
   const onStyle = { color, borderColor: `${color}73`, background: `${color}1f` };
   return (
     <div onClick={open ? undefined : onToggle} role={open ? undefined : 'button'}
-      className={`mx-3 rounded-[10px] border transition-[border-color,box-shadow] ${open ? '' : 'cursor-pointer'} ${isDark ? 'bg-white/[0.02]' : 'bg-white'} ${line}`}
+      className={`mx-3 rounded-[10px] border transition-[border-color,box-shadow] ${open ? '' : 'cursor-pointer'} ${isDark ? 'bg-[var(--bg-page)]' : 'bg-[var(--bg-card)]'} ${line}`}
       style={open ? { borderColor: `${color}73`, boxShadow: `0 0 0 3px ${color}1a` } : undefined}>
       <button type="button" onClick={event => { event.stopPropagation(); onToggle(); }} className="flex w-full items-center gap-1.5 px-2.5 pt-2 pb-1.5 text-left">
         <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
-        <span className="flex-1 text-[8.5px] font-black uppercase tracking-[0.11em] text-slate-500">{title}</span>
+        <span className="flex-1 text-[8.5px] font-semibold text-slate-500">{title}</span>
         {value.length > 0 && <span className="text-[10px] font-bold" style={{ color }}>{value.length}</span>}
         <ChevronDown size={12} className={`tr-fold-chevron text-slate-400 ${open ? 'rotate-180' : ''}`} />
       </button>

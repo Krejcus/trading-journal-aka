@@ -60,7 +60,7 @@ export default function CopierEventsPanel({ status, transport, snapshotHealth, d
         </div>
       </div>
       <div className="border-t border-[var(--border-subtle)] px-4 py-3">
-        <p className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Historie odzbrojení ({history.length})</p>
+        <p className="text-[11px] font-semibold text-[var(--text-secondary)]">Historie odzbrojení ({history.length})</p>
         {history.length === 0 ? (
           <p className="mt-2 text-[11px] text-[var(--text-secondary)]">Kopírka se od startu workeru nevypnula.</p>
         ) : (

@@ -258,6 +258,155 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-03 — Styl Aurora v celé aplikaci + Nastavení → Vzhled, fáze 1 (Claude)
+
+Filip po dlouhém výběru (náhled `mockups/app-styles.html`: 5 stylů → 5 skel →
+Aurora; Liquid Glass zamítnut kvůli čitelnosti čísel, terminál/papír/bento/
+monochrom „hrozné“, nálada podle P&L ne, svíčky/záře/likvidita/vrstevnice/
+seance/vlastní obrázek jako pozadí ne) vybral **Auroru s pozadím Hlubiny**.
+Stejná větev/worktree jako glass detail (`claude/trade-detail-glass-20261003`),
+NEcommitnuto, nenasazeno.
+
+- **Jak to funguje:** třída `aurora` na `<html>` (světlé + tmavé téma; OLED
+  zůstává čistě černé) přepíše `--bg-card`/`--glass-bg`/`--bg-page` na
+  průsvitné (`color-mix` s `--aurora-card-opacity`). Tím zesklovatí všech ~220
+  míst s `bg-[var(--bg-card)]` + `.glass-panel`/`.theme-card` najednou.
+  Selektory `html.aurora.aurora.aurora…` s `!important` — musí přebít
+  `[data-accent]` palety (ty u světlého/OLED mají `!important`).
+- **Karty bez backdrop-filter** (stejný výkonový důvod jako `.glass-panel`,
+  83→51 ms): leží nad plynulým pozadím, kde by blur vypadal stejně.
+- **Pozadí** `components/AppBackground.tsx`: pevná vrstva `z-index:-1` za
+  obsahem (bez třídy `flex` kvůli `.fixed.inset-0.flex` v nativním shellu).
+  Hlubiny = jednou nakreslené plátno (3 světla + prach, žádná animace);
+  Barevné pole = 5 rozmazaných skvrn s pomalým driftem.
+- **Nastavení → Vzhled** (`components/AppearanceSettings.tsx`, nový tab
+  `appearance`): režim (Světlý/Tmavý/OLED), pozadí, palety + vlastní barva,
+  posuvníky Síla (Jemné↔Výrazné) a Průhlednost karet (Neprůhledné↔Průhledné,
+  10–90 %), zmenšený dashboard jako náhled. Kompaktní, bez scrollu.
+  Posuvníky mění CSS proměnné živě a do stavu ukládají až po puštění
+  (jinak by se celé App překreslovalo při každém pohybu).
+- **Ukládání:** `profiles.preferences.appearance` (bez migrace), cache
+  `alphatrade_appearance` pro okamžitý start. Na rozdíl od tématu se vzhled
+  v `applyPreferences` APLIKUJE — má platit na všech zařízeních.
+  `lib/appearance.ts` normalizuje vstup (poškozené/staré hodnoty → výchozí),
+  testy `tests/appearance.test.ts`.
+- **Fáze 2 (nehotové):** natvrdo zapsané plochy (`bg-white`, `bg-[#…]`,
+  `bg-slate-9xx` — stovky míst, nejvíc NetworkHub, DashboardCalendar,
+  DailyJournal, TradeHistory vnitřky) a malá písmena v nadpisech (818×
+  `uppercase tracking-` v 77 souborech, Filip chce malá písmena) — stránku po
+  stránce. Akcentový picker zůstává v Systému (palety Vzhledu ho de facto
+  nahrazují — rozhodnout).
+- **Fáze 2 · kalendář (hotovo):** `DashboardCalendar` — plochy widgetu i
+  detailu týdne/dne/obchodu z `--bg-card`/`--bg-page`/`--border-subtle` místo
+  větvení bílá/slate/černá podle tématu; všech 41 `uppercase` popisků → malá
+  písmena (`text-[11px] font-semibold`). Zbývá: anglické popisky v detailech
+  (Week, Net Result, Daily Overview…) — Filip zatím nezadal překlad.
+- **Fáze 2 · dashboard (hotovo):** Dashboard, Charts, DisciplineDashboard,
+  DailyFocus/DailyInsight, MonteCarloLab, WidgetEditOverlay — 79 verzálkových
+  popisků → malá písmena (skript na řetězce tříd s `uppercase`; mění jen
+  třídy, diff ověřen), nadpisy karet `text-[13px] font-bold` v barvě textu,
+  trojcestné větvení `theme === 'oled' ? … : 'dark' ? … : …` u ploch/tooltipů
+  → `--bg-card`/`--border-subtle`. Rituály a Monte Carlo má Filip v uloženém
+  rozložení skryté (`visible:false`) — vizuálně neověřeno.
+- **Fáze 2 · LIVE + Historie (hotovo):** 13 souborů LIVE/kopírky/historie —
+  popisky na malá písmena (jen třídy, žádná logika kopírky), plochy historie
+  (menu, seznamové zobrazení, hromadné tagy, slot snímku) z proměnných;
+  štítky karet Validní/Nevalidní/Missed/Funded bez verzálek; nadpis stránky v
+  horní liště (App.tsx) bez `uppercase`; LIVE ostrůvek (`.live-island-*`).
+  ON/OFF na spínači kopírky ZÁMĚRNĚ ponecháno (značka spínače).
+  **Nové globální pravidlo:** v Auroře `fixed inset-0` ztmavení modálů
+  (`bg-black/…`, `bg-slate-950/…`, `bg-theme-page…`, ne pointer-events-none)
+  dostane `backdrop-filter: blur(10px)` — průsvitná okna by jinak ukazovala
+  ostrý obsah pod textem.
+  Lint ověřen JSON porovnáním před/po (pozor: `eslint -f unix` v ESLint 9
+  neexistuje a vrací prázdno).
+- **Fáze 2 · ostatní stránky (hotovo):** 46 souborů (Síť, Portfolio/účty,
+  Deník, Byznys, Lab, Insights, AI Coach, Nastavení, Graveyard, backtest
+  dialogy, formulář obchodu, výplaty, modály, Sidebar/BottomNav, App.tsx
+  přepínače záložek) — ~930 verzálkových popisků → malá písmena, 247
+  větvení ploch podle tématu → `--bg-card`/`--bg-page`/`--border-subtle`,
+  `Card` v Nastavení sjednocena. Nadpisy psané verzálkami přímo v textu
+  (DENNÍ PŘEHLED, BACKTEST DENÍK, NOVÝ OBCHOD, ULOŽIT…, OTEVŘENÉ POZICE…)
+  přepsány ručně; kurzíva + `tracking-tighter` u `<h1–h4>` pryč (styl starého
+  „terminálu“). ZÁMĚRNĚ beze změny: Auth, sdílecí karty/stránka, grafový
+  workspace a jeho dialogy, NativePrivacyGate, WorldShiftOverlay, popisky v
+  grafu (ENTRY, LONG/SHORT), PDF export Deníku, ErrorBoundary. Ověřeno: tsc,
+  4790 testů, lint parita, vizuálně světlé/tmavé/OLED.
+  **Pozor při ověřování v živém náhledu:** „poslední `header button`“ je na
+  Portfoliu „Potvrdit vybrané (27)“ onboardingu, ne přepínač motivu —
+  tlačítka vybírat jen podle přesného `title`/`aria-label` (zápis nenastal,
+  ověřeno SQL).
+- **Sidebar + kalendář (dotaženo):** položky postranního panelu v Auroře
+  bez vlastních bílých „kapek“ (`.glass-lens-light` 90 % bílá) — průhledné
+  řádky ve skle panelu, najetí jemný tón, aktivní světlejší sklo (CSS
+  `html.aurora .liquid-glass-lens…`, Sidebar.tsx beze změny). Kalendář:
+  záhlaví dnů bez krabiček, stejná mezera jako mřížka (dřív `gap-3` vs
+  `gap-2` = posunuté sloupce), dny se ziskem/ztrátou už ne plnou barvou —
+  tón 8–40 % podle velikosti P&L, číslo v barvě výsledku; `.cal-cell` má v
+  Auroře horní světelnou hranu. Detaily týdne/dne/obchodu přeloženy do
+  češtiny (Týden N, Čistý výsledek, Exekuce, Výhry/Ztráty, Ranní příprava,
+  Večerní review…, `tradeWord()` pro 1 obchod / 2–4 obchody / 5 obchodů);
+  opraveny bílé texty neviditelné ve světlém tématu („N Trades“, MetricCell).
+- **Nastavení — přestavba (hotovo):** podle náhledu `mockups/settings-control.html`
+  (Filip zamítl oblé „iOS“ karty → hranaté `rounded-lg` jako zbytek appky,
+  záložky nahoře ve stylu LIVE, bez dlaždic přehledu). Záložky
+  `SettingsTab = 'trading' | 'tags' | 'alerts' | 'appearance' | 'app'`
+  (Obchodování · Štítky · Upozornění · Vzhled · Účet a aplikace) se vykreslují
+  přímo ve stránce (border-b-2 indigo jako LIVE); přepínač v hlavičce App.tsx
+  zrušen, `alphatrade:open-native-system` → `'app'`. Hledání (klávesa `/`)
+  prochází všechny záložky: `SettingsSearchContext` + `searchIndex` v
+  Settings.tsx; sekce, která neodpovídá, se nevykreslí, v nalezené zůstanou jen
+  odpovídající řádky. Prvky v `components/SettingsUi.tsx` (sekce, řádek,
+  přepínač, segment, štítky s přidáváním v řadě) používají i
+  TradingViewAlertSettings a NativeShellTabsSettings.
+  Železná pravidla = tabulka se sloupcem **Dodrženo** (`lib/ruleAdherence.ts`:
+  posledních 30 *vyhodnocených* dní, review má přednost před přípravou —
+  kalendářních 30 dní by po pauze v deníku bylo prázdné); seance = časová osa
+  s pruhem pro každou seanci + tabulka s délkou a překryvem
+  (`lib/sessionSchedule.ts`, umí seance přes půlnoc); testy
+  `tests/settingsHelpers.test.ts`. Testovací nástroje (snapshot, galerie iOS
+  alertů, badge, Live Activity, haptika, kalendář, sdílení, diktování) jsou ve
+  sbalené Diagnostice. **Barva zvýraznění zrušena**: picker pryč, App drží
+  `data-accent="blue"` a maže `alphatrade_accent_color` (barvy pozadí řeší
+  Vzhled). Vzhled: radius `rounded-lg`, řádky se na telefonu zalomí (dřív
+  přetékaly). Ukládání dat beze změny.
+- **Historie bez rušivých bloků:** stav načtení (`JournalImportStatus`),
+  Podklady historie a archiv Neúplné záznamy už nejsou nad seznamem obchodů.
+  Stav je malá ikona vedle ⋯ (`compact`; jen při problému / zpracování,
+  zpráva + Obnovit v bublině), podklady a archiv jsou položky menu ⋯
+  (`TradeHistory` props `toolbarStatus`, `menuItems`) a otevřou se v
+  `HistoryPanelModal` rovnou rozbalené (`defaultOpen`). Bez obchodů (žádná
+  lišta) se bloky dál ukazují na stránce — vysvětlují prázdnou Historii. LIVE
+  je má dál dole beze změny. Aktivní položka bočního panelu v Auroře zjemněna.
+
+### 2026-10-03 — Detail obchodu: skleněná vrstva, události u Průběhu (Claude)
+
+Podle náhledu `mockups/trade-detail-glass.html` (Filip si vybral glass).
+Větev `claude/trade-detail-glass-20261003` ve worktree
+`/private/tmp/alphatrade-trade-detail-glass`, NEcommitnuto, nenasazeno.
+
+- **Sklo jen jako vrstva:** okno detailu je průsvitné nad rozmazanou stránkou
+  (`.td-modal`), levý sloupec má záři v barvě výsledku (`.td-side`, síla podle
+  |R|), dlaždice/karty jsou jen průsvitné BEZ backdrop-filter (pod nimi je
+  plynulá záře, blur by nic nezměnil a stál by GPU na telefonu). Skutečný
+  blur mají jen věci nad grafem: lišta přehrávání, menu, seznam Průběhu.
+  Bez vlastního přepínače i bez `prefers-reduced-transparency` (Filip:
+  nestojí za údržbu; Safari/iOS ho stejně nepodporuje).
+- **Hlavička:** „Validní“ pryč (výchozí stav = šum), ukazuje se jen
+  „Nevalidní“; „Nezkontrolováno“ pryč, stav nese samo tlačítko Zkontrolovat.
+  ‹ › sdílet ⋯ v jedné kapsli, zavřít zvlášť, bez svislých čar.
+- **Výběr náhledu/grafu neutrální** (tmavý obrys) — zelená/červená jen pro peníze.
+- **Průběh:** bubliny pod tlačítkem zrušeny (zakrývaly pravý horní roh grafu,
+  kde se posouvá SL). Poslední událost se ukazuje vlevo od tlačítka Průběh
+  (`TradeProgress`, „ostrůvek“), v grafu jen krátce problikne kroužek v místě
+  události (`TradeEventPings`). Seznam má jednořádkové řádky (šíře 300 px).
+  Varianty zamítnuté Filipem: událost v liště Bar Replay (lišta je
+  přetahovatelná, zbytečně široká) a pruh na časové ose.
+- Ověřeno: tsc (bez `extension/`, ve worktree chybí její node_modules),
+  eslint beze změny počtu warningů, 39 souvisejících testů, náhled na 5273.
+  Při ověřování jsem omylem klikl na „Snímek“ → k obchodu MNQ 2. 10. přibyl
+  snímek grafu (Filip ho případně smaže sám).
+
 ### 2026-10-03 — LIVE na telefonu bez probliknutí, scroll stránek, pozice na pozadí (Claude)
 
 Filip po nasazení fáze 1 (telefon): krátce problikne zapnutý účet, zapnutá

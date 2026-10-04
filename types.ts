@@ -870,6 +870,8 @@ export interface UserPreferences {
   labExperiments?: LabExperiment[];
   theme?: 'dark' | 'light' | 'oled';
   accentColor?: AccentColor;
+  /** Vzhled Aurora (pozadí, barvy, síla, průhlednost karet) — sdílený mezi zařízeními. */
+  appearance?: import('./lib/appearance').AppearanceSettings;
   systemSettings?: SystemSettings;
   pushSubscription?: any; // Stores the Web Push Subscription object (endpoint, keys)
   networkNotifications?: Record<string, { newTrade: boolean; newPrep: boolean; newReview: boolean }>;

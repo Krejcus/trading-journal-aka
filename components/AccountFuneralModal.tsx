@@ -230,7 +230,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, initialSelect
                 initial={{ opacity: 0, scale: 0.95, y: 10 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-                className={`max-w-2xl w-full max-h-[90vh] overflow-y-auto rounded-[32px] border shadow-2xl ${isDark ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'}`}
+                className={`max-w-2xl w-full max-h-[90vh] overflow-y-auto rounded-[32px] border shadow-2xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}
                 onClick={e => e.stopPropagation()}
             >
                 {/* Header */}
@@ -243,20 +243,20 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, initialSelect
                             <Skull size={28} className="text-rose-500" />
                         </div>
                         <div>
-                            <p className="text-[9px] font-black uppercase tracking-[0.3em] text-rose-500 mb-1">Account Funeral</p>
+                            <p className="text-[11px] font-semibold text-rose-500 mb-1">Account Funeral</p>
                             <h2 className={`text-2xl font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>{displayName}</h2>
-                            {isGroup && <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-slate-500">{targetAccounts.length} aktivních účtů</p>}
+                            {isGroup && <p className="mt-1 text-[11px] font-bold text-slate-500">{targetAccounts.length} aktivních účtů</p>}
                         </div>
                     </div>
                 </div>
 
                 <div className="p-6 lg:p-8 space-y-6">
                     {availableAccounts.length > 1 && (
-                        <div className={`rounded-lg border p-4 ${isDark ? 'border-white/10 bg-slate-950/40' : 'border-slate-200 bg-slate-50'}`}>
-                            <p className="mb-3 text-[10px] font-black uppercase tracking-widest text-slate-500">Účty k pohřbení</p>
+                        <div className={`rounded-lg border p-4 border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
+                            <p className="mb-3 text-[11px] font-semibold text-slate-500">Účty k pohřbení</p>
                             <div className="space-y-3">
                                 {accountGroups.map(([firm, firmAccounts]) => <div key={firm}>
-                                  <p className="mb-1.5 text-[9px] font-black uppercase tracking-widest text-slate-500">{firmLabel(firm)}</p>
+                                  <p className="mb-1.5 text-[11px] font-semibold text-slate-500">{firmLabel(firm)}</p>
                                   <div className="grid gap-2 sm:grid-cols-2">{firmAccounts.map(item => {
                                     const checked = selectedIds.has(item.id);
                                     return <label key={item.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-xs font-bold ${checked ? 'border-rose-500/35 bg-rose-500/8' : isDark ? 'border-white/5' : 'border-slate-200'}`}>
@@ -285,14 +285,14 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, initialSelect
                     <div className="space-y-4">
                         {/* Reason */}
                         {!compactMulti && <div>
-                            <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                            <label className={`text-[11px] font-semibold mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
                                 <AlertTriangle size={11} className="inline mr-1.5" />
                                 Důvod spálení
                             </label>
                             <select
                                 value={reason}
                                 onChange={e => setReason(e.target.value)}
-                                className={`w-full px-4 py-3 rounded-xl border text-sm ${isDark ? 'bg-slate-800 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}
+                                className={`w-full px-4 py-3 rounded-xl border text-sm ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-white' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-900'}`}
                             >
                                 {REASON_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
                             </select>
@@ -300,7 +300,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, initialSelect
 
                         {/* What happened */}
                         <div>
-                            <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                            <label className={`text-[11px] font-semibold mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
                                 Co se stalo <span className="text-rose-500">*</span>
                             </label>
                             <textarea
@@ -308,7 +308,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, initialSelect
                                 onChange={e => setWhatHappened(e.target.value)}
                                 placeholder="Stručně popiš co se stalo. Trigger, eskalace, finální moment..."
                                 rows={4}
-                                className={`w-full px-4 py-3 rounded-xl border text-sm resize-none ${isDark ? 'bg-slate-800 border-white/10 text-white placeholder:text-slate-600' : 'bg-white border-slate-200 text-slate-900 placeholder:text-slate-400'}`}
+                                className={`w-full px-4 py-3 rounded-xl border text-sm resize-none ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-white placeholder:text-slate-600' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-900 placeholder:text-slate-400'}`}
                             />
                         </div>
 
@@ -316,7 +316,7 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, initialSelect
                             Často účet padne večer/noc a Funeral se vyplní druhý den → uživatel
                             si může opravit datum ručně. */}
                         <div>
-                            <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                            <label className={`text-[11px] font-semibold mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
                                 <Calendar size={11} className="inline mr-1.5" />
                                 Datum spálení <span className="text-rose-500">*</span>
                                 <span className="ml-2 font-normal normal-case tracking-normal text-[9px] opacity-60">(opraf pokud Funeral vyplňuješ až další den)</span>
@@ -326,14 +326,14 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, initialSelect
                                 value={failureDate}
                                 max={today}
                                 onChange={e => setFailureDate(e.target.value)}
-                                className={`w-full px-4 py-3 rounded-xl border text-sm font-mono ${isDark ? 'bg-slate-800 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}
+                                className={`w-full px-4 py-3 rounded-xl border text-sm font-mono ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-white' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-900'}`}
                             />
                         </div>
 
                         {/* Amount lost + days */}
                         {!compactMulti && <div className="grid grid-cols-2 gap-3">
                             <div>
-                                <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                                <label className={`text-[11px] font-semibold mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
                                     <DollarSign size={11} className="inline mr-1" />
                                     Spálená částka ($)
                                 </label>
@@ -341,27 +341,27 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, initialSelect
                                     type="number"
                                     value={amountLost}
                                     onChange={e => setAmountLost(Number(e.target.value) || 0)}
-                                    className={`w-full px-4 py-3 rounded-xl border text-sm font-mono ${isDark ? 'bg-slate-800 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}
+                                    className={`w-full px-4 py-3 rounded-xl border text-sm font-mono ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-white' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-900'}`}
                                 />
                             </div>
                             <div>
-                                <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                                <label className={`text-[11px] font-semibold mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
                                     <Calendar size={11} className="inline mr-1" />
                                     Dní konzistence
                                 </label>
                                 <div
                                     title="Automaticky spočítáno z obchodních dní — nelze upravit"
-                                    className={`w-full px-4 py-3 rounded-xl border text-sm font-mono flex items-center gap-2 ${isDark ? 'bg-slate-800/50 border-white/5 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'}`}
+                                    className={`w-full px-4 py-3 rounded-xl border text-sm font-mono flex items-center gap-2 ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-300' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-700'}`}
                                 >
                                     <span>{stats.daysConsistency}</span>
-                                    <span className="text-[9px] uppercase tracking-widest opacity-50 ml-auto">auto</span>
+                                    <span className="text-[11px] opacity-50 ml-auto">auto</span>
                                 </div>
                             </div>
                         </div>}
 
                         {/* Key lesson */}
                         {!compactMulti && <div>
-                            <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block text-amber-500`}>
+                            <label className={`text-[11px] font-semibold mb-2 block text-amber-500`}>
                                 <Lightbulb size={11} className="inline mr-1.5" />
                                 Klíčová lekce <span className="text-rose-500">*</span>
                             </label>
@@ -376,8 +376,8 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, initialSelect
 
                         {successorCandidates.length > 0 && targetAccounts.length > 0 && (
                             <div>
-                                <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Volitelný nástupce per účet</label>
-                                <div className="space-y-2">{targetAccounts.map(item => <label key={item.id} className="grid items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]"><span className="truncate text-xs font-bold">{item.name}</span><select value={successorByAccountId[item.id] ?? ''} onChange={event => setSuccessorByAccountId(current => ({ ...current, [item.id]: event.target.value }))} className={`w-full px-3 py-2 rounded-lg border text-sm ${isDark ? 'bg-slate-800 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}><option value="">Bez nástupce</option>{successorCandidates.filter(candidate => !selectedIds.has(candidate.id)).map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label>)}</div>
+                                <label className={`text-[11px] font-semibold mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Volitelný nástupce per účet</label>
+                                <div className="space-y-2">{targetAccounts.map(item => <label key={item.id} className="grid items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]"><span className="truncate text-xs font-bold">{item.name}</span><select value={successorByAccountId[item.id] ?? ''} onChange={event => setSuccessorByAccountId(current => ({ ...current, [item.id]: event.target.value }))} className={`w-full px-3 py-2 rounded-lg border text-sm ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-white' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-900'}`}><option value="">Bez nástupce</option>{successorCandidates.filter(candidate => !selectedIds.has(candidate.id)).map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label>)}</div>
                             </div>
                         )}
                     </div>
@@ -401,14 +401,14 @@ const AccountFuneralModal: React.FC<Props> = ({ account, accounts, initialSelect
                         <button
                             onClick={onClose}
                             disabled={saving}
-                            className={`flex-1 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all ${isDark ? 'bg-white/5 hover:bg-white/10 text-slate-400' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'} disabled:opacity-50`}
+                            className={`flex-1 py-3 rounded-xl text-[11px] font-semibold transition-all ${isDark ? 'bg-[var(--bg-page)] hover:bg-white/10 text-slate-400' : 'bg-[var(--bg-page)] hover:bg-slate-200 text-slate-600'} disabled:opacity-50`}
                         >
                             Zrušit
                         </button>
                         <button
                             onClick={handleSave}
                             disabled={!canSave || saving}
-                            className="flex-1 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest bg-gradient-to-r from-rose-600 to-rose-500 text-white shadow-lg shadow-rose-500/30 hover:shadow-rose-500/50 transition-all active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="flex-1 py-3 rounded-xl text-[11px] font-semibold bg-gradient-to-r from-rose-600 to-rose-500 text-white shadow-lg shadow-rose-500/30 hover:shadow-rose-500/50 transition-all active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                             {saving ? 'Ukládám…' : isGroup ? '⚰️ Pohřbít skupinu' : '⚰️ Pohřbít účet'}
                         </button>
@@ -430,7 +430,7 @@ const StatCard: React.FC<{ label: string; value: string; icon: any; color: 'emer
         <div className={`p-3 rounded-2xl border ${colorMap[color]}`}>
             <div className="flex items-center gap-1.5 mb-1.5">
                 <Icon size={11} />
-                <p className="text-[9px] font-black uppercase tracking-widest opacity-70">{label}</p>
+                <p className="text-[11px] font-semibold opacity-70">{label}</p>
             </div>
             <p className={`text-lg font-black font-mono tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>{value}</p>
         </div>

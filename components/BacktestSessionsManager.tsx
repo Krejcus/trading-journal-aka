@@ -115,7 +115,7 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
     return m;
   }, [trades]);
 
-  const inputCls = `w-full rounded-lg px-3 py-2.5 text-sm outline-none border transition-all ${isDark ? 'bg-white/5 border-white/10 text-white placeholder:text-slate-500 focus:border-violet-500/50' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400 focus:border-violet-400'}`;
+  const inputCls = `w-full rounded-lg px-3 py-2.5 text-sm outline-none border transition-all ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-white placeholder:text-slate-500 focus:border-violet-500/50' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-800 placeholder:text-slate-400 focus:border-violet-400'}`;
   const cardCls = isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm';
 
   const [exporting, setExporting] = useState(false);
@@ -253,7 +253,7 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
           <Layers size={20} />
         </div>
         <div className="flex-1">
-          <h2 className="text-2xl md:text-3xl font-black tracking-tighter italic">SESSIONS</h2>
+          <h2 className="text-2xl md:text-3xl font-bold tracking-tight">SESSIONS</h2>
           <p className="text-[11px] font-bold text-slate-500 tracking-wide">{runs.filter(run => run.status !== 'archived').length} replay session{runs.length === 1 ? '' : 's'}</p>
         </div>
         <div className="flex items-center gap-2">
@@ -277,19 +277,19 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
 
       {/* Nová obnovitelná session */}
       {showCreateForm && <div className={`p-4 rounded-lg border mb-6 animate-in fade-in slide-in-from-top-2 duration-200 ${cardCls}`}>
-        <p className={`text-[10px] font-black uppercase tracking-widest mb-3 ${isDark ? 'text-violet-400' : 'text-violet-600'}`}>Nová session</p>
+        <p className={`text-[11px] font-semibold mb-3 ${isDark ? 'text-violet-400' : 'text-violet-600'}`}>Nová session</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="sm:col-span-2">
-            <label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Název session</label>
+            <label className="text-[11px] font-semibold text-slate-500 mb-1 block">Název session</label>
             <input aria-label="Název session" value={name} onChange={e => setName(e.target.value)} placeholder="např. NQ Silver Bullet" className={inputCls}
               onKeyDown={e => { if (e.key === 'Enter') void create(); }} />
           </div>
           <div>
-            <label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Velikost účtu ($)</label>
+            <label className="text-[11px] font-semibold text-slate-500 mb-1 block">Velikost účtu ($)</label>
             <input type="number" aria-label="Velikost účtu" value={size} onChange={e => setSize(e.target.value)} placeholder="50000" className={inputCls}
               onKeyDown={e => { if (e.key === 'Enter') void create(); }} />
           </div>
-          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Strategie / playbook</label><input aria-label="Strategie / playbook" value={strategy} onChange={event => setStrategy(event.target.value)} placeholder="volitelné" className={inputCls} /></div>
+          <div><label className="text-[11px] font-semibold text-slate-500 mb-1 block">Strategie / playbook</label><input aria-label="Strategie / playbook" value={strategy} onChange={event => setStrategy(event.target.value)} placeholder="volitelné" className={inputCls} /></div>
           <div className="sm:col-span-2 rounded-lg border border-violet-500/20 p-3 space-y-2">
             <label className="block text-xs font-semibold">Výzkumný případ
               <select aria-label="Výzkumný případ" className={`${inputCls} mt-1`} value={researchCaseId} disabled={researchLoading} onChange={event=>{
@@ -312,13 +312,13 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
               <p className="sm:col-span-2 text-xs text-amber-500">Uloží se tato konkrétní verze. Plánované ověření zatím není uzamčený neviděný vzorek; úplná historie předchozího zobrazení není doložená.</p>
             </div>}
           </div>
-          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Od</label><input type="date" aria-label="Od" value={startDate} onChange={event => setStartDate(event.target.value)} className={inputCls} /></div>
-          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Do</label><input type="date" aria-label="Do" value={endDate} max={latestHistoricalDate} onChange={event => setEndDate(event.target.value)} className={inputCls} /></div>
-          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Komise MNQ / strana</label><input type="number" step="0.01" min="0" aria-label="Komise MNQ / strana" value={commission} onChange={event => setCommission(event.target.value)} className={inputCls} /></div>
-          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Slippage (ticky)</label><input type="number" step="1" min="0" aria-label="Slippage v ticích" value={slippage} onChange={event => setSlippage(event.target.value)} className={inputCls} /></div>
-          <div><label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Timezone</label><select aria-label="Timezone" value={timezone} onChange={event => setTimezone(event.target.value)} className={inputCls}><option value="Europe/Prague">Praha</option><option value="America/New_York">New York</option><option value="UTC">UTC</option></select></div>
+          <div><label className="text-[11px] font-semibold text-slate-500 mb-1 block">Od</label><input type="date" aria-label="Od" value={startDate} onChange={event => setStartDate(event.target.value)} className={inputCls} /></div>
+          <div><label className="text-[11px] font-semibold text-slate-500 mb-1 block">Do</label><input type="date" aria-label="Do" value={endDate} max={latestHistoricalDate} onChange={event => setEndDate(event.target.value)} className={inputCls} /></div>
+          <div><label className="text-[11px] font-semibold text-slate-500 mb-1 block">Komise MNQ / strana</label><input type="number" step="0.01" min="0" aria-label="Komise MNQ / strana" value={commission} onChange={event => setCommission(event.target.value)} className={inputCls} /></div>
+          <div><label className="text-[11px] font-semibold text-slate-500 mb-1 block">Slippage (ticky)</label><input type="number" step="1" min="0" aria-label="Slippage v ticích" value={slippage} onChange={event => setSlippage(event.target.value)} className={inputCls} /></div>
+          <div><label className="text-[11px] font-semibold text-slate-500 mb-1 block">Timezone</label><select aria-label="Timezone" value={timezone} onChange={event => setTimezone(event.target.value)} className={inputCls}><option value="Europe/Prague">Praha</option><option value="America/New_York">New York</option><option value="UTC">UTC</option></select></div>
           <div>
-            <label className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 block">Výchozí layout</label>
+            <label className="text-[11px] font-semibold text-slate-500 mb-1 block">Výchozí layout</label>
             <select
               value={selectedTemplate === 'preset' ? startingLayout : selectedTemplate}
               onChange={event => {
@@ -338,9 +338,9 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
             </select>
             <p className="mt-1 text-[10px] text-slate-500">{workspaceLibrary.error || 'Šablony uložené v grafu obsahují i kresby, indikátory a vzhled. Knihovna je lokální pro tento účet.'}</p>
           </div>
-          <div className={`sm:col-span-2 flex items-center justify-between rounded-lg border px-3 py-2 ${isDark ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-slate-50'}`}><div><p className="text-xs font-black">Instrumenty</p><p className="text-[10px] text-slate-500">Entry vždy MNQ · společný 1m replay clock</p></div><div className="flex gap-2"><span className="rounded-lg bg-violet-500/15 px-2 py-1 text-[10px] font-black text-violet-500">MNQ</span><label className="flex cursor-pointer items-center gap-1 text-[10px] font-black"><input type="checkbox" checked={includeNq} onChange={event => setIncludeNq(event.target.checked)} /> NQ</label></div></div>
+          <div className={`sm:col-span-2 flex items-center justify-between rounded-lg border px-3 py-2 border-[var(--border-subtle)] bg-[var(--bg-page)]`}><div><p className="text-xs font-black">Instrumenty</p><p className="text-[10px] text-slate-500">Entry vždy MNQ · společný 1m replay clock</p></div><div className="flex gap-2"><span className="rounded-lg bg-violet-500/15 px-2 py-1 text-[10px] font-black text-violet-500">MNQ</span><label className="flex cursor-pointer items-center gap-1 text-[10px] font-black"><input type="checkbox" checked={includeNq} onChange={event => setIncludeNq(event.target.checked)} /> NQ</label></div></div>
           <button onClick={() => void create()} disabled={!name.trim() || !Number(size) || creating}
-            className="sm:col-span-2 flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white text-[11px] font-black uppercase tracking-widest transition-all active:scale-95">
+            className="sm:col-span-2 flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white text-[11px] font-semibold transition-all active:scale-95">
             {creating ? <RefreshCw size={14} className="animate-spin" /> : <Plus size={14} />} Vytvořit a otevřít
           </button>
         </div>
@@ -352,7 +352,7 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
       {loadingRuns ? <div className="py-10 text-center text-xs text-slate-500">Načítám sessions…</div> : runs.filter(run => run.status !== 'archived').length === 0 ? (
         <div className={`text-center py-14 px-6 rounded-lg border border-dashed ${isDark ? 'border-slate-700 text-slate-500' : 'border-slate-300 text-slate-400'}`}>
           <p>Zatím žádná obnovitelná session.</p>
-          <button onClick={() => setShowCreateForm(true)} className="mt-3 rounded-lg bg-violet-600 px-4 py-2 text-[10px] font-black uppercase tracking-wider text-white hover:bg-violet-500">Vytvořit první session</button>
+          <button onClick={() => setShowCreateForm(true)} className="mt-3 rounded-lg bg-violet-600 px-4 py-2 text-[11px] font-semibold text-white hover:bg-violet-500">Vytvořit první session</button>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -369,29 +369,29 @@ const BacktestSessionsManager: React.FC<Props> = ({ theme, accounts, trades, onU
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <p className="text-sm font-black truncate">{run.name}</p>
-                      <span className={`rounded-full px-2 py-0.5 text-[8px] font-black uppercase ${run.status === 'completed' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-amber-500/15 text-amber-500'}`}>{run.status === 'completed' ? 'Dokončeno' : run.cursorAt ? 'Pozastaveno' : 'Nová'}</span>
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${run.status === 'completed' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-amber-500/15 text-amber-500'}`}>{run.status === 'completed' ? 'Dokončeno' : run.cursorAt ? 'Pozastaveno' : 'Nová'}</span>
                     </div>
                     <p className="mt-0.5 text-[10px] font-bold text-slate-500">${run.initialCapital.toLocaleString('en-US')} · {run.config.instruments.join(' + ')}</p>
                   </div>
                 </div>
 
                 <div className="mt-4 grid grid-cols-3 gap-2">
-                  <div className={`rounded-lg border px-3 py-2.5 ${isDark ? 'border-white/5 bg-white/[0.025]' : 'border-slate-100 bg-slate-50'}`}>
-                    <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">P&amp;L</p>
+                  <div className={`rounded-lg border px-3 py-2.5 border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
+                    <p className="text-[11px] font-semibold text-slate-500">P&amp;L</p>
                     <p className={`mt-1 truncate font-mono text-sm font-bold ${pnlPos ? 'text-emerald-500' : 'text-rose-500'}`}>{pnlPos ? '+' : ''}${run.runtimeState.realizedPnl.toFixed(2)}</p>
                   </div>
-                  <div className={`rounded-lg border px-3 py-2.5 ${isDark ? 'border-white/5 bg-white/[0.025]' : 'border-slate-100 bg-slate-50'}`}>
-                    <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Obchody</p>
+                  <div className={`rounded-lg border px-3 py-2.5 border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
+                    <p className="text-[11px] font-semibold text-slate-500">Obchody</p>
                     <p className="mt-1 text-sm font-black">{st.count}</p>
                   </div>
-                  <div className={`rounded-lg border px-3 py-2.5 ${isDark ? 'border-white/5 bg-white/[0.025]' : 'border-slate-100 bg-slate-50'}`}>
-                    <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Splněno</p>
+                  <div className={`rounded-lg border px-3 py-2.5 border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
+                    <p className="text-[11px] font-semibold text-slate-500">Splněno</p>
                     <p className="mt-1 text-sm font-black">{pct.toFixed(1)} %</p>
                   </div>
                 </div>
 
                 <div className="mt-4">
-                  <div className={`h-1.5 overflow-hidden rounded-full ${isDark ? 'bg-white/5' : 'bg-slate-100'}`}><div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${pct}%` }} /></div>
+                  <div className={`h-1.5 overflow-hidden rounded-full bg-[var(--bg-page)]`}><div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${pct}%` }} /></div>
                   <div className="mt-1.5 flex justify-between text-[9px] font-bold text-slate-500"><span>{new Date(run.startAt).toLocaleDateString('cs-CZ')}</span><span>{new Date(run.endAt).toLocaleDateString('cs-CZ')}</span></div>
                 </div>
 

@@ -31,7 +31,7 @@ export const ChartWorkspaceLibraryDialog: React.FC<Props> = ({ mode, isDark, onC
     finally { setBusy(false); }
   };
   return <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/45 p-4" onKeyDown={event => { if (event.key === 'Escape' && !busy) onClose(); }}>
-    <section role="dialog" aria-modal="true" aria-label="Knihovna workspace šablon" className={`w-full max-w-lg rounded-xl border p-4 shadow-2xl ${isDark ? 'border-slate-700 bg-[#11161f] text-slate-100' : 'border-slate-200 bg-white text-slate-900'}`}>
+    <section role="dialog" aria-modal="true" aria-label="Knihovna workspace šablon" className={`w-full max-w-lg rounded-xl border p-4 shadow-2xl ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-100' : 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-900'}`}>
       <header className="mb-3 flex items-center justify-between"><h2 className="text-sm font-bold">{mode === 'save' ? 'Uložit workspace šablonu' : 'Načíst workspace šablonu'}</h2><button aria-label="Zavřít knihovnu" disabled={busy} onClick={onClose}><X size={17} /></button></header>
       <p className="mb-3 text-[11px] text-slate-500">Knihovna tohoto uživatele v tomto prohlížeči. Výchozí šablona je dostupná při vytvoření nové session.</p>
       <div className="max-h-56 space-y-1 overflow-auto">
@@ -56,7 +56,7 @@ export const ChartWorkspaceLibraryDialog: React.FC<Props> = ({ mode, isDark, onC
 
 export const WorkspaceImportPreview: React.FC<{ input: unknown; error?: string; isDark: boolean; busy: boolean; onCancel: () => void; onApply: () => void }> = ({ input, error, isDark, busy, onCancel, onApply }) => {
   const summary = useMemo(() => summarizeWorkspaceDocument(input), [input]);
-  return <div className="fixed inset-0 z-[230] flex items-center justify-center bg-black/45 p-4" onKeyDown={event => { if (event.key === 'Escape' && !busy) onCancel(); }}><section role="dialog" aria-modal="true" aria-label="Náhled importu workspace" className={`w-full max-w-md rounded-xl border p-4 shadow-2xl ${isDark ? 'border-slate-700 bg-[#11161f] text-slate-100' : 'border-slate-200 bg-white text-slate-900'}`}>
+  return <div className="fixed inset-0 z-[230] flex items-center justify-center bg-black/45 p-4" onKeyDown={event => { if (event.key === 'Escape' && !busy) onCancel(); }}><section role="dialog" aria-modal="true" aria-label="Náhled importu workspace" className={`w-full max-w-md rounded-xl border p-4 shadow-2xl ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-100' : 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-900'}`}>
     <h2 className="text-sm font-bold">Náhled workspace</h2><p className="my-3 text-xs">{summary.roots.join(' + ')} · {summary.panels} grafy · {summary.drawings} kresby · {summary.indicators} indikátory</p>
     <p className="text-[11px] text-slate-500">{summary.kind === 'complete' ? 'Obnoví rozložení, kresby, indikátory, vzhled i synchronizaci.' : 'Starší soubor obsahuje pouze rozložení grafů; neobsahuje kresby ani vzhled.'} Aktuální workspace bude před použitím uložen jako návratová kopie.</p>
     {error && <p role="alert" className="mt-3 text-xs text-rose-500">{error}</p>}

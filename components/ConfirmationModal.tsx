@@ -113,13 +113,13 @@ const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
                     <div className="p-8">
                         <div className="flex flex-col items-center text-center gap-6">
                             {/* Icon Halo */}
-                            <div className={`p-5 rounded-full ${isDark ? 'bg-white/5' : 'bg-slate-50'} border ${isDark ? 'border-white/5' : 'border-slate-100'} relative`}>
+                            <div className={`p-5 rounded-full bg-[var(--bg-page)] border ${isDark ? 'border-white/5' : 'border-slate-100'} relative`}>
                                 {styles.icon}
                                 <div className="absolute inset-0 animate-ping rounded-full border border-rose-500/20" />
                             </div>
 
                             <div className="space-y-3">
-                                <h3 className="text-xl font-black uppercase tracking-tighter italic">
+                                <h3 className="text-xl font-bold tracking-tight">
                                     {title}
                                 </h3>
                                 <p className={`text-sm font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'} leading-relaxed`}>
@@ -130,7 +130,7 @@ const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
                             <div className="flex gap-3 w-full mt-4">
                                 <button
                                     onClick={onClose}
-                                    className={`flex-1 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest border transition-all active:scale-95 ${isDark
+                                    className={`flex-1 py-4 rounded-2xl text-[11px] font-semibold border transition-all active:scale-95 ${isDark
                                         ? 'bg-white/5 border-white/10 text-slate-400 hover:text-white hover:bg-white/10'
                                         : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-900'
                                         }`}
@@ -142,7 +142,7 @@ const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
                                         onConfirm();
                                         onClose();
                                     }}
-                                    className={`flex-1 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2 ${styles.button}`}
+                                    className={`flex-1 py-4 rounded-2xl text-[11px] font-semibold transition-all active:scale-95 flex items-center justify-center gap-2 ${styles.button}`}
                                 >
                                     <Trash2 size={14} />
                                     {confirmText}
@@ -152,9 +152,9 @@ const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
                     </div>
 
                     {/* Bottom Terminal Decoration */}
-                    <div className={`px-6 py-3 border-t flex justify-between items-center ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-100 bg-slate-50/50'}`}>
-                        <span className="text-[8px] font-mono font-bold text-slate-500 uppercase tracking-widest">Action: Destroy_Object</span>
-                        <span className="text-[8px] font-mono font-bold text-slate-500 uppercase tracking-widest">Security: Alpha_Locked</span>
+                    <div className={`px-6 py-3 border-t flex justify-between items-center border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
+                        <span className="text-[11px] font-mono font-bold text-slate-500">Action: Destroy_Object</span>
+                        <span className="text-[11px] font-mono font-bold text-slate-500">Security: Alpha_Locked</span>
                     </div>
                 </motion.div>
             </div>

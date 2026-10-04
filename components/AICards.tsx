@@ -119,7 +119,7 @@ export const TradeMiniCard: React.FC<{ trade: Trade; onClick?: () => void }> = (
         <div onClick={onClick} className="flex items-center gap-3 p-3 cursor-pointer">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-0.5">
-              <span className="text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)]">{trade.instrument}</span>
+              <span className="text-[11px] font-semibold text-[var(--text-secondary)]">{trade.instrument}</span>
               <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${isWin ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>{trade.direction}</span>
               {trade.signal && <span className="text-[8px] text-[var(--text-secondary)] bg-[var(--bg-card)] px-1.5 py-0.5 rounded border border-[var(--border-subtle)] truncate max-w-[70px]">{trade.signal}</span>}
             </div>
@@ -213,7 +213,7 @@ export const PrepMiniCard: React.FC<{ prep: DailyPrep; onOpen?: () => void }> = 
           <div className="flex items-center gap-2">
             <div className="p-1.5 rounded-lg bg-indigo-500/10"><Sun size={11} className="text-indigo-400" /></div>
             <div>
-              <div className="text-[9px] font-black uppercase tracking-widest text-indigo-400">Příprava</div>
+              <div className="text-[11px] font-semibold text-indigo-400">Příprava</div>
               <div className="text-[11px] font-bold text-[var(--text-primary)]">{prep.date}</div>
             </div>
           </div>
@@ -276,13 +276,13 @@ export const PrepMiniCard: React.FC<{ prep: DailyPrep; onOpen?: () => void }> = 
             <div className="grid grid-cols-2 gap-1.5 mt-1">
               {prep.scenarios.bullish && (
                 <div className="p-1.5 rounded-lg bg-emerald-500/5 border border-emerald-500/10">
-                  <div className="text-[8px] font-black text-emerald-500/60 uppercase mb-0.5">Bullish</div>
+                  <div className="text-[11px] font-semibold text-emerald-500/60 mb-0.5">Bullish</div>
                   <div className="text-[9px] text-[var(--text-secondary)] line-clamp-2">{prep.scenarios.bullish}</div>
                 </div>
               )}
               {prep.scenarios.bearish && (
                 <div className="p-1.5 rounded-lg bg-rose-500/5 border border-rose-500/10">
-                  <div className="text-[8px] font-black text-rose-500/60 uppercase mb-0.5">Bearish</div>
+                  <div className="text-[11px] font-semibold text-rose-500/60 mb-0.5">Bearish</div>
                   <div className="text-[9px] text-[var(--text-secondary)] line-clamp-2">{prep.scenarios.bearish}</div>
                 </div>
               )}
@@ -359,7 +359,7 @@ export const ReviewMiniCard: React.FC<{ review: DailyReview; onOpen?: () => void
           <div className="flex items-center gap-2">
             <div className="p-1.5 rounded-lg bg-violet-500/10"><Moon size={11} className="text-violet-400" /></div>
             <div>
-              <div className="text-[9px] font-black uppercase tracking-widest text-violet-400">Audit</div>
+              <div className="text-[11px] font-semibold text-violet-400">Audit</div>
               <div className="text-[11px] font-bold text-[var(--text-primary)]">{review.date}</div>
             </div>
           </div>
@@ -383,7 +383,7 @@ export const ReviewMiniCard: React.FC<{ review: DailyReview; onOpen?: () => void
         <div className="px-3 py-2 space-y-2">
           {review.mainTakeaway && (
             <div className="p-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)]">
-              <div className="text-[8px] font-black uppercase text-[var(--text-secondary)] mb-0.5">Hlavní poznatek</div>
+              <div className="text-[11px] font-semibold text-[var(--text-secondary)] mb-0.5">Hlavní poznatek</div>
               <div className="text-[10px] text-[var(--text-primary)] leading-relaxed">{review.mainTakeaway}</div>
             </div>
           )}
@@ -546,7 +546,7 @@ const mdComponents = {
   ol: ({ children }: any) => <ol className="space-y-0.5 my-1 pl-3 list-decimal">{children}</ol>,
   li: ({ children }: any) => <li className="text-[var(--text-primary)] before:content-['–'] before:mr-1.5 before:text-[var(--text-secondary)]">{children}</li>,
   hr: () => <hr className="border-[var(--border-subtle)] my-2" />,
-  h3: ({ children }: any) => <h3 className="font-black text-[var(--text-primary)] text-xs uppercase tracking-wide mt-2 mb-1">{children}</h3>,
+  h3: ({ children }: any) => <h3 className="font-semibold text-[var(--text-primary)] text-xs mt-2 mb-1">{children}</h3>,
   code: ({ children }: any) => <code className="bg-[var(--bg-card)] px-1 rounded text-xs font-mono">{children}</code>,
 };
 
@@ -652,11 +652,11 @@ export const ActionPanel: React.FC<{
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1 flex-wrap">
-                <span className="text-[8px] font-black uppercase tracking-[0.2em] text-[var(--text-muted)]">
+                <span className="text-[11px] font-semibold text-[var(--text-muted)]">
                   {ActionTypeLabel[action.type]}
                 </span>
                 {action.duration && (
-                  <span className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 border border-amber-500/20">
+                  <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 border border-amber-500/20">
                     {action.duration}
                   </span>
                 )}
@@ -691,8 +691,8 @@ export const ActionPanel: React.FC<{
               )}
               {action.type === 'lab_experiment' && (
                 <div className="mt-2 space-y-1 text-[10px] leading-snug text-[var(--text-secondary)]">
-                  <p><span className="font-black uppercase tracking-wider">Hypotéza:</span> {action.hypothesis}</p>
-                  <p><span className="font-black uppercase tracking-wider">Pravidlo:</span> {action.rule}</p>
+                  <p><span className="font-semibold">Hypotéza:</span> {action.hypothesis}</p>
+                  <p><span className="font-semibold">Pravidlo:</span> {action.rule}</p>
                   <p className="font-bold text-blue-500">Vyhodnotit po {action.targetTrades} obchodech</p>
                 </div>
               )}
@@ -701,7 +701,7 @@ export const ActionPanel: React.FC<{
               onClick={() => !applied && onApply(action, i)}
               disabled={applied}
               title={applied ? 'Akce již aplikována' : ActionDestinationHint[action.type]}
-              className={`shrink-0 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all shadow-md flex items-center gap-1.5 ${btnClasses}`}
+              className={`shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all shadow-md flex items-center gap-1.5 ${btnClasses}`}
             >
               {applied ? (
                 <>
@@ -751,7 +751,7 @@ const CollapsibleCardSection: React.FC<{
       >
         <div className="flex items-center gap-2">
           {icon}
-          <span className="text-[11px] font-black uppercase tracking-widest">{label}</span>
+          <span className="text-[11px] font-semibold">{label}</span>
           <span className="text-[9px] font-mono font-black px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-500">
             {count}
           </span>

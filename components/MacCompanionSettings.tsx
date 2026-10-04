@@ -162,7 +162,7 @@ export function MacCompanionSettingsView({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 id="mac-companion-settings-title" className="text-base font-black text-[var(--text-primary)]">AlphaTrade Status pro Mac</h2>
-              <span className="rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-emerald-600">Pouze čtení</span>
+              <span className="rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-600">Pouze čtení</span>
             </div>
             <p className="mt-0.5 text-[11px] text-[var(--text-secondary)]">Stav copieru přímo v horní liště macOS</p>
           </div>
@@ -194,7 +194,7 @@ export function MacCompanionSettingsView({
       {error ? (
         <div role="alert" className="flex items-center gap-3 border-b border-rose-500/20 bg-rose-500/[0.055] px-4 py-3 text-xs font-bold text-rose-600">
           <span className="flex-1">{error}</span>
-          {devices === null ? <button type="button" onClick={onRefresh} disabled={listLoading} className="shrink-0 font-black uppercase">Zkusit znovu</button> : null}
+          {devices === null ? <button type="button" onClick={onRefresh} disabled={listLoading} className="shrink-0 font-semibold">Zkusit znovu</button> : null}
           <button type="button" onClick={onDismissError} aria-label="Zavřít chybu" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-rose-500/10"><X aria-hidden="true" size={14} /></button>
         </div>
       ) : null}
@@ -203,9 +203,9 @@ export function MacCompanionSettingsView({
         <form onSubmit={onPair} className="bg-[var(--bg-card)] p-4">
           <div className="flex items-center gap-2">
             <KeyRound aria-hidden="true" size={15} className="text-indigo-500" />
-            <h3 className="text-xs font-black uppercase tracking-wider text-[var(--text-primary)]">Spárovat nový Mac</h3>
+            <h3 className="text-xs font-semibold text-[var(--text-primary)]">Spárovat nový Mac</h3>
           </div>
-          <label htmlFor="mac-companion-pairing-code" className="mt-4 block text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Párovací kód z Mac aplikace</label>
+          <label htmlFor="mac-companion-pairing-code" className="mt-4 block text-[11px] font-semibold text-[var(--text-secondary)]">Párovací kód z Mac aplikace</label>
           <input
             id="mac-companion-pairing-code"
             value={pairingCode}
@@ -218,7 +218,7 @@ export function MacCompanionSettingsView({
             inputMode="text"
             placeholder="7K2D-P9HX-W3QM"
             aria-describedby="mac-companion-pairing-help"
-            className="mt-2 h-10 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 font-mono text-sm font-black uppercase tracking-[0.12em] text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-secondary)]/45 focus:border-indigo-500 disabled:opacity-55"
+            className="mt-2 h-10 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 font-mono text-sm font-semibold text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-secondary)]/45 focus:border-indigo-500 disabled:opacity-55"
           />
           <p id="mac-companion-pairing-help" className="mt-2 text-[10px] leading-4 text-[var(--text-secondary)]">Kód se v AlphaTrade Status na Macu zobrazí automaticky. Je jednorázový a brzy vyprší.</p>
           <button
@@ -234,7 +234,7 @@ export function MacCompanionSettingsView({
         <div className="min-w-0 bg-[var(--bg-card)]">
           <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] px-4 py-3">
             <div>
-              <h3 className="text-xs font-black uppercase tracking-wider text-[var(--text-primary)]">Spárované Macy</h3>
+              <h3 className="text-xs font-semibold text-[var(--text-primary)]">Spárované Macy</h3>
               <p className="mt-0.5 text-[10px] text-[var(--text-secondary)]">Aktivní zařízení: {activeCount}</p>
             </div>
           </div>
@@ -303,7 +303,7 @@ export function MacCompanionSettingsView({
                         </button>
                       </div>
                     ) : revoked ? (
-                      <span className="rounded-md bg-rose-500/10 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-rose-500">Odvoláno</span>
+                      <span className="rounded-md bg-rose-500/10 px-2 py-1 text-[11px] font-semibold text-rose-500">Odvoláno</span>
                     ) : (
                       <div className="flex items-center gap-1">
                         <button

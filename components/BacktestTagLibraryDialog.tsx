@@ -216,7 +216,7 @@ function OwnerTagLibraryDialog({ ownerId, accounts, open, isDark, onClose, onCom
   if (!open) return null;
   return <div className="fixed inset-0 z-[960] flex items-center justify-center bg-slate-950/50 p-4" role="presentation">
     <section ref={initialDialog} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="backtest-tag-library-load-title"
-      className={`w-full max-w-xl rounded-xl border p-5 shadow-xl ${isDark ? 'border-slate-700 bg-slate-950 text-slate-100' : 'border-slate-200 bg-slate-50 text-slate-900'}`}
+      className={`w-full max-w-xl rounded-xl border p-5 shadow-xl ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-100' : 'border-[var(--border-subtle)] bg-[var(--bg-page)] text-slate-900'}`}
       onKeyDown={event => {
         event.stopPropagation();
         if (event.key === 'Escape') { event.preventDefault(); onClose(); }

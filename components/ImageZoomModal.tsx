@@ -332,7 +332,7 @@ const ImageZoomModal: React.FC<ImageZoomModalProps> = ({ images: imagesProp, ini
           className="absolute bottom-20 left-1/2 -translate-x-1/2 z-10 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-sm pointer-events-none select-none transition-opacity duration-700"
           style={{ opacity: showHint ? 1 : 0 }}
         >
-          <span className="text-white/40 text-[10px] font-bold uppercase tracking-widest">
+          <span className="text-white/40 text-[11px] font-bold">
             Klik · Kolečko · Pinch · Tažení
           </span>
         </div>

@@ -233,10 +233,10 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
   const tone = (value: number) => value > 0 ? 'text-emerald-500' : value < 0 ? 'text-rose-500' : isDark ? 'text-slate-300' : 'text-slate-600';
   const line = isDark ? 'border-white/10' : 'border-slate-200';
   const muted = isDark ? 'text-slate-500' : 'text-slate-500';
-  const label = 'text-[9px] font-black uppercase tracking-[0.12em] text-slate-500';
+  const label = 'text-[11px] font-semibold text-slate-500';
 
   const header = (
-    <div className={`shrink-0 flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-2 border-b ${line} ${isDark ? 'bg-[#0b1017]' : 'bg-white'}`}>
+    <div className={`shrink-0 flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-2 border-b ${line} bg-[var(--bg-card)]`}>
       <div className="flex items-center gap-1.5">
         <button type="button" onClick={() => changeWeek(-1)} disabled={weekIndex <= 0} aria-label="Předchozí týden"
           className={`h-7 w-7 grid place-items-center rounded-md border disabled:opacity-30 ${line}`}><ChevronLeft size={14} /></button>
@@ -271,7 +271,7 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
   );
 
   const bottom = (
-    <div className={`shrink-0 flex gap-4 overflow-x-auto border-t px-3 py-2.5 ${line} ${isDark ? 'bg-[#0b1017]' : 'bg-white'}`}>
+    <div className={`shrink-0 flex gap-4 overflow-x-auto border-t px-3 py-2.5 ${line} bg-[var(--bg-card)]`}>
       {days.map(day => (
         <div key={day.key} className="shrink-0">
           <p className={`${label} mb-1.5 ml-0.5`}>{day.label}<span className={`ml-1.5 normal-case tracking-normal font-bold ${tone(day.pnl)}`}>{money(day.pnl)}</span></p>
@@ -287,7 +287,7 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
 
   const holdText = selected ? formatHoldDuration(tradeTimeMs(selected), selected.timestamp || Date.parse(selected.date)) ?? '—' : '—';
   const side = (
-    <aside className={`w-[252px] shrink-0 border-l flex flex-col min-h-0 ${line} ${isDark ? 'bg-[#0b1017]' : 'bg-white'}`}>
+    <aside className={`w-[252px] shrink-0 border-l flex flex-col min-h-0 ${line} bg-[var(--bg-card)]`}>
       {selected && draft ? (
         <>
           {/* Děti se nesmí smrsknout (sloupec se posouvá, ne zmenšuje). */}
@@ -296,7 +296,7 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
               <span className="truncate">{new Date(tradeTimeMs(selected)).toLocaleDateString('cs-CZ', { weekday: 'short', day: 'numeric', month: 'numeric' })} · {clock(tradeTimeMs(selected))}</span>
               <span className={`rounded border px-1 py-px text-[8.5px] font-black ${String(selected.direction).toLowerCase() === 'long' ? 'border-emerald-500/30 text-emerald-500' : 'border-rose-500/30 text-rose-500'}`}>
                 {String(selected.direction).toUpperCase()}</span>
-              <span className={`ml-auto rounded px-1.5 py-0.5 text-[8.5px] font-black uppercase tracking-wide transition-colors ${selected.needsReview ? 'bg-amber-500/10 text-amber-600' : 'bg-emerald-500/10 text-emerald-500'}`}>
+              <span className={`ml-auto rounded px-1.5 py-0.5 text-[8.5px] font-semibold transition-colors ${selected.needsReview ? 'bg-amber-500/10 text-amber-600' : 'bg-emerald-500/10 text-emerald-500'}`}>
                 {selected.needsReview ? 'K revizi' : 'Hotovo'}</span>
             </div>
             <div className="flex items-baseline justify-between">
@@ -322,7 +322,7 @@ export default function WeeklyReview({ trades, allTrades, isDark, emotions, init
               onChange={mistakes => setDraft(current => current && { ...current, mistakes })} isDark={isDark} bad />
             <textarea value={draft.notes} onChange={event => setDraft(current => current && { ...current, notes: event.target.value })}
               placeholder="Poznámka — co příště jinak…" rows={2}
-              className={`w-full resize-y rounded-lg border px-2.5 py-1.5 text-[11.5px] outline-none transition-colors focus:border-amber-500 ${line} ${isDark ? 'bg-white/[0.03] text-slate-200' : 'bg-slate-50 text-slate-800'}`} />
+              className={`w-full resize-y rounded-lg border px-2.5 py-1.5 text-[11.5px] outline-none transition-colors focus:border-amber-500 ${line} ${isDark ? 'bg-[var(--bg-page)] text-slate-200' : 'bg-[var(--bg-page)] text-slate-800'}`} />
             {candlesReady && !selectedHasChart && <p className="text-[10.5px] font-semibold text-amber-600">Graf tohoto obchodu bude k dispozici zhruba 24 h po obchodu — v grafu zůstává předchozí.</p>}
             {saveError && <p className="text-[11px] font-semibold text-rose-500" role="alert">{saveError}</p>}
           </div>
@@ -474,7 +474,7 @@ const ReviewCard = React.memo(function ReviewCard({ trade, on, isDark, onSelect 
   const line = isDark ? 'border-white/10' : 'border-slate-200';
   return (
     <button type="button" onClick={() => onSelect(trade)} data-review-card={String(trade.id)}
-      className={`relative w-[96px] rounded-lg border px-2 py-1.5 text-left transition-[border-color,box-shadow,transform] hover:-translate-y-px ${on ? 'border-amber-500 shadow-[0_0_0_1px_#f59e0b]' : line} ${isDark ? 'bg-white/[0.03]' : 'bg-slate-50'}`}>
+      className={`relative w-[96px] rounded-lg border px-2 py-1.5 text-left transition-[border-color,box-shadow,transform] hover:-translate-y-px ${on ? 'border-amber-500 shadow-[0_0_0_1px_#f59e0b]' : line} bg-[var(--bg-page)]`}>
       {!trade.needsReview && <span className="absolute right-1.5 top-1.5 grid h-3 w-3 place-items-center rounded-full bg-emerald-500 text-white"><Check size={8} strokeWidth={4} /></span>}
       <span className="block text-[9.5px] tabular-nums text-slate-500">{clock(tradeTimeMs(trade))}</span>
       <span className={`block text-[13px] font-extrabold tabular-nums ${pnl > 0 ? 'text-emerald-500' : pnl < 0 ? 'text-rose-500' : isDark ? 'text-slate-300' : 'text-slate-600'}`}>

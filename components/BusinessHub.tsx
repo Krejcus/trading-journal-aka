@@ -315,7 +315,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                     <button
                         key={tab.id}
                         onClick={() => onTabChange(tab.id)}
-                        className={`relative flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${
+                        className={`relative flex-1 py-2 rounded-xl text-xs font-semibold transition-all ${
                             activeTab === tab.id
                                 ? (theme !== 'light' ? 'bg-slate-700/60 text-white shadow-sm' : 'bg-white text-slate-900 shadow-sm border border-slate-200/60')
                                 : (theme !== 'light' ? 'text-slate-500' : 'text-slate-400')
@@ -335,23 +335,23 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                 className={cardClass + ` border-blue-500/20 shadow-[0_0_20px_rgba(59,130,246,0.1)] cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] ${showCashBreakdown ? 'ring-2 ring-blue-500/50 bg-blue-500/5' : ''}`}
                             >
                                 <div className="flex justify-between items-start mb-4">
-                                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t('net_cash', lang)}</span>
+                                    <span className="text-[11px] font-semibold text-slate-500">{t('net_cash', lang)}</span>
                                     <div className={`p-2 rounded-lg transition-colors ${showCashBreakdown ? 'bg-blue-600 text-white' : 'bg-emerald-500/10 text-emerald-500'}`}><Wallet size={16} /></div>
                                 </div>
                                 <div className={`text-3xl font-black tracking-tighter ${netBusinessCashValue >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                                     {formatValue(netBusinessCashValue)}
                                 </div>
                                 <div className="flex justify-between items-center mt-2">
-                                    <p className="text-[9px] font-bold text-slate-500 uppercase tracking-tight">Realizovaný zisk HQ</p>
-                                    <span className={`text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md ${showCashBreakdown ? 'bg-blue-600 text-white' : 'bg-slate-500/10 text-slate-500'}`}>
-                                        {showCashBreakdown ? 'ZAVŘÍT DETAIL' : 'UKÁZAT DETAIL'}
+                                    <p className="text-[11px] font-bold text-slate-500 tracking-tight">Realizovaný zisk HQ</p>
+                                    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-md ${showCashBreakdown ? 'bg-blue-600 text-white' : 'bg-slate-500/10 text-slate-500'}`}>
+                                        {showCashBreakdown ? 'Zavřít detail' : 'Ukázat detail'}
                                     </span>
                                 </div>
                             </div>
 
                             <div className={cardClass}>
                                 <div className="flex justify-between items-start mb-4">
-                                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t('tax_reserve', lang)} ({settings.taxRatePct}%)</span>
+                                    <span className="text-[11px] font-semibold text-slate-500">{t('tax_reserve', lang)} ({settings.taxRatePct}%)</span>
                                     <div className="p-2 bg-amber-500/10 text-amber-500 rounded-lg"><PieChartIcon size={16} /></div>
                                 </div>
                                 <div className={`text-3xl font-black tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>
@@ -368,13 +368,13 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
                             <div className={cardClass}>
                                 <div className="flex justify-between items-start mb-4">
-                                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t('realized_income', lang)}</span>
+                                    <span className="text-[11px] font-semibold text-slate-500">{t('realized_income', lang)}</span>
                                     <div className="p-2 bg-blue-500/10 text-blue-500 rounded-lg"><DollarSign size={16} /></div>
                                 </div>
                                 <div className={`text-3xl font-black tracking-tighter text-blue-500`}>
                                     {formatValue(totalPayouts)}
                                 </div>
-                                <p className="text-[9px] font-bold text-slate-500 mt-2 uppercase tracking-tight">Celkové obdržené výplaty</p>
+                                <p className="text-[11px] font-bold text-slate-500 mt-2 tracking-tight">Celkové obdržené výplaty</p>
                             </div>
                         </div>
 
@@ -386,8 +386,8 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                             <TrendingUp size={20} />
                                         </div>
                                         <div>
-                                            <h3 className="text-xl font-black italic tracking-tight uppercase">Měsíční Cashflow Analýza</h3>
-                                            <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Podrobné rozdělení nákladů a příjmů</p>
+                                            <h3 className="text-xl font-bold tracking-tight">Měsíční Cashflow Analýza</h3>
+                                            <p className="text-[11px] font-semibold text-slate-500">Podrobné rozdělení nákladů a příjmů</p>
                                         </div>
                                     </div>
                                     <button
@@ -405,24 +405,24 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                         const netMonth = data.payouts - data.expenses;
 
                                         return (
-                                            <div key={monthKey} className={`p-6 rounded-3xl border transition-all hover:scale-[1.02] ${isDark ? 'bg-slate-900/60 border-white/5' : 'bg-white border-slate-100 shadow-sm'}`}>
+                                            <div key={monthKey} className={`p-6 rounded-3xl border transition-all hover:scale-[1.02] ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-sm'}`}>
                                                 <div className="flex justify-between items-center mb-4">
-                                                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{monthLabel} {year}</p>
-                                                    <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-widest ${netMonth >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                                                    <p className="text-[11px] font-semibold text-slate-500">{monthLabel} {year}</p>
+                                                    <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${netMonth >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
                                                         {netMonth >= 0 ? 'PROFIT' : 'BURN'}
                                                     </span>
                                                 </div>
                                                 <div className="space-y-3">
                                                     <div className="flex justify-between items-center">
-                                                        <span className="text-[9px] font-bold text-slate-500 uppercase">Příjmy</span>
+                                                        <span className="text-[11px] font-bold text-slate-500">Příjmy</span>
                                                         <span className="text-xs font-mono font-black text-emerald-500">+{formatValue(data.payouts)}</span>
                                                     </div>
                                                     <div className="flex justify-between items-center">
-                                                        <span className="text-[9px] font-bold text-slate-500 uppercase">Náklady</span>
+                                                        <span className="text-[11px] font-bold text-slate-500">Náklady</span>
                                                         <span className="text-xs font-mono font-black text-rose-500">-{formatValue(data.expenses)}</span>
                                                     </div>
                                                     <div className={`mt-3 pt-3 border-t flex justify-between items-center ${isDark ? 'border-white/5' : 'border-slate-50'}`}>
-                                                        <span className="text-[9px] font-black uppercase text-slate-400">Čistý výsledek</span>
+                                                        <span className="text-[11px] font-semibold text-slate-400">Čistý výsledek</span>
                                                         <span className={`text-sm font-black font-mono tracking-tighter ${netMonth >= 0 ? 'text-white' : 'text-rose-500'}`}>
                                                             {formatValue(netMonth)}
                                                         </span>
@@ -438,7 +438,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
                             <div className={cardClass}>
                                 <div className="flex flex-col gap-3 mb-8">
-                                    <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                                    <h3 className="text-xs font-semibold flex items-center gap-2">
                                         <Layers size={16} className="text-blue-500" /> {t('operating_expenses', lang)}
                                     </h3>
                                     <div className="flex flex-wrap items-center gap-2">
@@ -447,7 +447,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                 <Zap size={14} />
                                             </div>
                                             <div>
-                                                <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Tento měsíc</p>
+                                                <p className="text-[11px] font-semibold text-slate-500">Tento měsíc</p>
                                                 <p className={`text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(expensesThisMonthValue)}</p>
                                             </div>
                                         </div>
@@ -459,13 +459,13 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                 <Layers size={14} />
                                             </div>
                                             <div>
-                                                <p className={`text-[8px] font-black uppercase tracking-widest ${showMonthlyExpenseBreakdown ? 'text-blue-100' : 'text-slate-500'}`}>Dohromady</p>
+                                                <p className={`text-[11px] font-semibold ${showMonthlyExpenseBreakdown ? 'text-blue-100' : 'text-slate-500'}`}>Dohromady</p>
                                                 <p className={`text-xs font-black`}>{formatValue(normalizedTotalExpenses)}</p>
                                             </div>
                                         </div>
                                         <button
                                             onClick={() => setIsAddingExpense(true)}
-                                            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all hover:bg-blue-500 hover:shadow-lg hover:shadow-blue-500/20 whitespace-nowrap"
+                                            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-2xl text-[11px] font-semibold transition-all hover:bg-blue-500 hover:shadow-lg hover:shadow-blue-500/20 whitespace-nowrap"
                                         >
                                             <Plus size={16} /> {t('add_expense', lang)}
                                         </button>
@@ -475,7 +475,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                 {showMonthlyExpenseBreakdown && (
                                     <div className={`mb-8 p-6 rounded-3xl border animate-in slide-in-from-top-4 duration-300 ${isDark ? 'bg-blue-500/5 border-blue-500/20 shadow-inner' : 'bg-blue-50/50 border-blue-100'}`}>
                                         <div className="flex justify-between items-center mb-6">
-                                            <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500 flex items-center gap-2">
+                                            <h4 className="text-[11px] font-semibold text-blue-500 flex items-center gap-2">
                                                 <Calendar size={14} /> Měsíční historie nákladů
                                             </h4>
                                             <button onClick={() => setShowMonthlyExpenseBreakdown(false)} className="text-slate-500 hover:text-rose-500 transition-all">
@@ -488,7 +488,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                 const monthLabel = new Date(Number(year), Number(month) - 1).toLocaleString(lang === 'cs' ? 'cs-CZ' : 'en-US', { month: 'long' });
                                                 return (
                                                     <div key={monthKey} className={`p-4 rounded-2xl border transition-all hover:scale-105 ${isDark ? 'bg-[var(--bg-page)]/60 border-white/5 hover:border-blue-500/30' : 'bg-white border-slate-100 shadow-sm hover:border-blue-200'}`}>
-                                                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{monthLabel} {year}</p>
+                                                        <p className="text-[11px] font-semibold text-slate-500 mb-1">{monthLabel} {year}</p>
                                                         <p className={`text-sm font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(total)}</p>
                                                     </div>
                                                 );
@@ -501,10 +501,10 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                     <table className="w-full text-left">
                                         <thead>
                                             <tr className={`border-b ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-                                                <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Datum</th>
-                                                <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Popis</th>
-                                                <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Kategorie</th>
-                                                <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Částka</th>
+                                                <th className="pb-4 text-[11px] font-semibold text-slate-500">Datum</th>
+                                                <th className="pb-4 text-[11px] font-semibold text-slate-500">Popis</th>
+                                                <th className="pb-4 text-[11px] font-semibold text-slate-500">Kategorie</th>
+                                                <th className="pb-4 text-[11px] font-semibold text-slate-500">Částka</th>
                                                 <th className="pb-4"></th>
                                             </tr>
                                         </thead>
@@ -518,7 +518,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                     <tr key={exp.id}>
                                                         <td className={`py-4 text-[10px] font-bold ${isDark ? 'text-white' : 'text-slate-900'} italic`}>{formatHubDate(exp.date)}</td>
                                                         <td className={`py-4 text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{exp.label}</td>
-                                                        <td className="py-4 text-[10px] font-bold text-slate-500 uppercase">{exp.category}</td>
+                                                        <td className="py-4 text-[11px] font-bold text-slate-500">{exp.category}</td>
                                                         <td className={`py-4 text-xs font-mono font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(exp.amount)}</td>
                                                         <td className="py-4 text-right">
                                                             <button onClick={() => setItemToDelete({ id: exp.id, type: 'expense' })} className="p-2 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"><Trash2 size={14} /></button>
@@ -533,7 +533,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
                             <div className={cardClass}>
                                 <div className="flex justify-between items-center mb-8">
-                                    <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                                    <h3 className="text-xs font-semibold flex items-center gap-2">
                                         <DollarSign size={16} className="text-emerald-500" /> {t('payout_history', lang)}
                                     </h3>
                                     <div className="flex items-center gap-4">
@@ -553,7 +553,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                         </div>
                                         <button
                                             onClick={() => setIsAddingPayout(true)}
-                                            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-[10px] font-black uppercase transition-all hover:bg-emerald-500"
+                                            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-[11px] font-semibold transition-all hover:bg-emerald-500"
                                         >
                                             <Plus size={14} /> {t('add_payout', lang) || 'Přidat výplatu'}
                                         </button>
@@ -590,10 +590,10 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                         <table className="w-full text-left">
                                             <thead>
                                                 <tr className={`border-b ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-                                                    <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Datum</th>
-                                                    <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Účet</th>
-                                                    <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Částka</th>
-                                                    <th className="pb-4 text-[10px] font-black uppercase text-slate-500">Důkaz</th>
+                                                    <th className="pb-4 text-[11px] font-semibold text-slate-500">Datum</th>
+                                                    <th className="pb-4 text-[11px] font-semibold text-slate-500">Účet</th>
+                                                    <th className="pb-4 text-[11px] font-semibold text-slate-500">Částka</th>
+                                                    <th className="pb-4 text-[11px] font-semibold text-slate-500">Důkaz</th>
                                                     <th className="pb-4"></th>
                                                 </tr>
                                             </thead>
@@ -621,7 +621,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                                 <td className="py-4">
                                                                     <div className="flex items-center gap-3">
                                                                         {isLegacy && (
-                                                                            <span className="px-3 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest bg-emerald-500/10 text-emerald-500/60">ARCHIVOVÁNO</span>
+                                                                            <span className="px-3 py-1 rounded-lg text-[11px] font-semibold bg-emerald-500/10 text-emerald-500/60">ARCHIVOVÁNO</span>
                                                                         )}
                                                                         {/* Miniatura řekne na první pohled, co za důkaz je přiložený;
                                                                             ikona trofeje zůstává jen jako fallback bez fotky. */}
@@ -662,7 +662,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                         {unifiedPayouts.length === 0 ? (
                                             <div className="col-span-full py-20 text-center opacity-30">
                                                 <LayoutGrid size={48} className="mx-auto text-slate-700 mb-4" />
-                                                <p className="text-slate-500 font-bold uppercase tracking-widest text-xs">Zatím nebyly zaznamenány žádné výplaty.</p>
+                                                <p className="text-slate-500 font-bold text-xs">Zatím nebyly zaznamenány žádné výplaty.</p>
                                             </div>
                                         ) : (
                                             unifiedPayouts.map(p => {
@@ -672,23 +672,23 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                     <div
                                                         key={p.id}
                                                         onClick={() => setDetailPayoutId(p.id)}
-                                                        className={`aspect-square rounded-2xl border overflow-hidden relative group transition-all cursor-pointer hover:border-blue-500/50 hover:shadow-2xl hover:shadow-blue-500/10 ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-100 bg-slate-50'}`}
+                                                        className={`aspect-square rounded-2xl border overflow-hidden relative group transition-all cursor-pointer hover:border-blue-500/50 hover:shadow-2xl hover:shadow-blue-500/10 border-[var(--border-subtle)] bg-[var(--bg-page)]`}
                                                     >
                                                         {p.image ? (
                                                             <img src={p.image} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" alt="Payout proof" />
                                                         ) : (
                                                             <div className="w-full h-full flex flex-col items-center justify-center p-4">
                                                                 <DollarSign size={24} className="text-emerald-500/40 mb-2" />
-                                                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Bez fotky</span>
+                                                                <span className="text-[11px] font-semibold text-slate-500">Bez fotky</span>
                                                             </div>
                                                         )}
                                                         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
-                                                            <p className="text-[8px] font-black text-white uppercase">{formatHubDate(p.date)}</p>
+                                                            <p className="text-[11px] font-semibold text-white">{formatHubDate(p.date)}</p>
                                                             <p className="text-[11px] font-black text-emerald-400 font-mono tracking-tighter">{formatValue(p.amount)}</p>
-                                                            <p className="text-[7px] font-black text-white uppercase truncate">{acc?.name || 'Neznámý'}</p>
+                                                            <p className="text-[10px] font-semibold text-white truncate">{acc?.name || 'Neznámý'}</p>
                                                         </div>
                                                         {isLegacy && (
-                                                            <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-black/60 backdrop-blur-md text-[6px] font-black text-white/50 uppercase tracking-widest border border-white/5">ARCHIV</div>
+                                                            <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-black/60 backdrop-blur-md text-[6px] font-semibold text-white/50 border border-white/5">ARCHIV</div>
                                                         )}
                                                     </div>
                                                 );
@@ -705,12 +705,12 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
             {activeTab === 'goals' && (
                 <div className="animate-in fade-in duration-500 space-y-8">
                     <div className="flex justify-between items-center">
-                        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                        <h3 className="text-xs font-semibold flex items-center gap-2">
                             <Target size={16} className="text-blue-500" /> Strategické Cíle
                         </h3>
                         <button
                             onClick={() => setIsAddingGoal(true)}
-                            className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase transition-all hover:bg-blue-500 shadow-lg shadow-blue-600/20"
+                            className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-2xl text-[11px] font-semibold transition-all hover:bg-blue-500 shadow-lg shadow-blue-600/20"
                         >
                             <Plus size={16} /> Nový Cíl
                         </button>
@@ -720,7 +720,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                         {goals.length === 0 ? (
                             <div className={cardClass + " col-span-full py-20 text-center opacity-30"}>
                                 <Target size={48} className="mx-auto text-slate-700 mb-4" />
-                                <p className="text-slate-500 font-bold uppercase tracking-widest text-xs">Zatím nebyly nastaveny žádné cíle.</p>
+                                <p className="text-slate-500 font-bold text-xs">Zatím nebyly nastaveny žádné cíle.</p>
                             </div>
                         ) : (
                             goals.map((goal) => {
@@ -764,17 +764,17 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
                                             <div className="flex-1 min-w-0">
                                                 <div className="flex items-center gap-2 mb-1">
-                                                    <span className={`px-2 py-0.5 rounded text-[7px] font-black uppercase tracking-widest ${bgColorClass} ${colorClass}`}>
+                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${bgColorClass} ${colorClass}`}>
                                                         {goal.type}
                                                     </span>
-                                                    <span className="text-[7px] font-bold text-slate-500 uppercase tracking-widest leading-none">
+                                                    <span className="text-[10px] font-bold text-slate-500 leading-none">
                                                         {goal.deadline ? (() => {
                                                             const days = getDaysRemaining(goal.deadline);
                                                             return days > 0 ? `${days} dní zbývá` : 'Termín vypršel';
                                                         })() : goal.category}
                                                     </span>
                                                 </div>
-                                                <h4 className={`text-xs font-black uppercase truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>{goal.label}</h4>
+                                                <h4 className={`text-xs font-semibold truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>{goal.label}</h4>
                                                 <p className="text-[10px] font-mono font-black text-slate-400 mt-1">
                                                     {goal.metric === 'PnL' ? formatValue(goal.current) : goal.current.toLocaleString()}
                                                     <span className="text-slate-600 ml-1">/</span>
@@ -805,7 +805,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                                     />
                                                     <button
                                                         onClick={() => handleUpdateGoalProgress(goal.id, incrementValue)}
-                                                        className="px-4 py-2 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase transition-all hover:bg-blue-500 active:scale-95"
+                                                        className="px-4 py-2 bg-blue-600 text-white rounded-xl text-[11px] font-semibold transition-all hover:bg-blue-500 active:scale-95"
                                                     >
                                                         Přidat
                                                     </button>
@@ -816,8 +816,8 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                         {goal.logs && goal.logs.length > 0 && (
                                             <div className={`mt-4 pt-4 border-t ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
                                                 <div className="flex items-center justify-between mb-2 px-1">
-                                                    <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Historie záznamů</span>
-                                                    <span className="text-[8px] font-bold text-slate-600 uppercase">{goal.logs.length} zápisů</span>
+                                                    <span className="text-[11px] font-semibold text-slate-500">Historie záznamů</span>
+                                                    <span className="text-[11px] font-bold text-slate-600">{goal.logs.length} zápisů</span>
                                                 </div>
                                                 <div className="max-h-[100px] overflow-y-auto space-y-1.5 pr-2 custom-scrollbar">
                                                     {[...goal.logs].reverse().map((log, idx) => (
@@ -846,7 +846,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                     <Trophy size={32} className="text-white" />
                                 </div>
                                 <div>
-                                    <h4 className={`text-lg font-black uppercase tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>Strategické Zaměření</h4>
+                                    <h4 className={`text-lg font-semibold tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>Strategické Zaměření</h4>
                                     <p className="text-xs text-slate-400 max-w-[400px] leading-relaxed">
                                         Sledujete {goals.length} klíčových OKR.
                                         {goals.length > 0 && ` Vaše průměrné plnění je ${Math.round(goals.reduce((acc, g) => acc + (g.current / g.target), 0) / (goals.length || 1) * 100)}%.`}
@@ -855,11 +855,11 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                             </div>
                             <div className="flex gap-4">
                                 <div className={`px-6 py-3 rounded-2xl border text-center min-w-[120px] ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                                    <p className="text-[8px] font-black text-slate-500 uppercase mb-1">Celkem Cílů</p>
+                                    <p className="text-[11px] font-semibold text-slate-500 mb-1">Celkem Cílů</p>
                                     <p className={`text-xl font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{goals.length}</p>
                                 </div>
                                 <div className={`px-6 py-3 rounded-2xl border text-center min-w-[120px] ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                                    <p className="text-[8px] font-black text-slate-500 uppercase mb-1">Splněno</p>
+                                    <p className="text-[11px] font-semibold text-slate-500 mb-1">Splněno</p>
                                     <p className={`text-xl font-black ${isDark ? 'text-emerald-500' : 'text-emerald-600'}`}>{goals.filter(g => g.current >= g.target).length}</p>
                                 </div>
                             </div>
@@ -870,15 +870,15 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
             {isAddingExpense && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-300">
-                    <div className={`w-full max-w-md p-8 rounded-[32px] border shadow-2xl ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+                    <div className={`w-full max-w-md p-8 rounded-[32px] border shadow-2xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
                         <div className="flex justify-between items-center mb-6">
-                            <h3 className="text-xl font-black italic tracking-tight">PŘIDAT NÁKLAD</h3>
+                            <h3 className="text-xl font-bold tracking-tight">Přidat náklad</h3>
                             <button onClick={() => setIsAddingExpense(false)} className="p-2 text-slate-500 hover:text-white transition-all"><X size={20} /></button>
                         </div>
 
                         <div className="space-y-6">
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Popis nákladu</label>
+                                <label className="text-[11px] font-semibold text-slate-500">Popis nákladu</label>
                                 <input
                                     type="text" value={newExpense.label}
                                     onChange={(e) => setNewExpense({ ...newExpense, label: e.target.value })}
@@ -888,7 +888,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Částka (USD)</label>
+                                    <label className="text-[11px] font-semibold text-slate-500">Částka (USD)</label>
                                     <input
                                         type="number" value={newExpense.amount}
                                         onChange={(e) => setNewExpense({ ...newExpense, amount: Number(e.target.value) })}
@@ -896,7 +896,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Kategorie</label>
+                                    <label className="text-[11px] font-semibold text-slate-500">Kategorie</label>
                                     <select
                                         value={newExpense.category}
                                         onChange={(e) => setNewExpense({ ...newExpense, category: e.target.value as any })}
@@ -914,7 +914,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Frekvence</label>
+                                    <label className="text-[11px] font-semibold text-slate-500">Frekvence</label>
                                     <select
                                         value={newExpense.recurring}
                                         onChange={(e) => setNewExpense({ ...newExpense, recurring: e.target.value as any })}
@@ -926,7 +926,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                     </select>
                                 </div>
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Datum</label>
+                                    <label className="text-[11px] font-semibold text-slate-500">Datum</label>
                                     <input
                                         type="date" value={newExpense.date}
                                         onChange={(e) => setNewExpense({ ...newExpense, date: e.target.value })}
@@ -937,7 +937,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
                             <button
                                 onClick={handleAddExpense}
-                                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]"
+                                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-semibold text-xs transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]"
                             >
                                 Uložit náklad
                             </button>
@@ -948,15 +948,15 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
             {isAddingGoal && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-300">
-                    <div className={`w-full max-w-md p-8 rounded-[32px] border shadow-2xl ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+                    <div className={`w-full max-w-md p-8 rounded-[32px] border shadow-2xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
                         <div className="flex justify-between items-center mb-6">
-                            <h3 className="text-xl font-black italic tracking-tight">NOVÝ CÍL</h3>
+                            <h3 className="text-xl font-bold tracking-tight">Nový cíl</h3>
                             <button onClick={() => setIsAddingGoal(false)} className="p-2 text-slate-500 hover:text-white transition-all"><X size={20} /></button>
                         </div>
 
                         <div className="space-y-6">
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Název Cíle</label>
+                                <label className="text-[11px] font-semibold text-slate-500">Název Cíle</label>
                                 <input
                                     type="text" value={newGoal.label}
                                     onChange={(e) => setNewGoal({ ...newGoal, label: e.target.value })}
@@ -966,7 +966,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Typ</label>
+                                    <label className="text-[11px] font-semibold text-slate-500">Typ</label>
                                     <select
                                         value={newGoal.type}
                                         onChange={(e) => setNewGoal({ ...newGoal, type: e.target.value as any })}
@@ -979,7 +979,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                     </select>
                                 </div>
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Kategorie</label>
+                                    <label className="text-[11px] font-semibold text-slate-500">Kategorie</label>
                                     <select
                                         value={newGoal.category}
                                         onChange={(e) => setNewGoal({ ...newGoal, category: e.target.value as any })}
@@ -994,7 +994,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Cílová Hodnota</label>
+                                    <label className="text-[11px] font-semibold text-slate-500">Cílová Hodnota</label>
                                     <input
                                         type="number" value={newGoal.target}
                                         onChange={(e) => setNewGoal({ ...newGoal, target: Number(e.target.value) })}
@@ -1002,7 +1002,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                                     />
                                 </div>
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Termín</label>
+                                    <label className="text-[11px] font-semibold text-slate-500">Termín</label>
                                     <input
                                         type="date" value={newGoal.deadline}
                                         onChange={(e) => setNewGoal({ ...newGoal, deadline: e.target.value })}
@@ -1013,7 +1013,7 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
 
                             <button
                                 onClick={handleAddGoal}
-                                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]"
+                                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-semibold text-xs transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]"
                             >
                                 Nastavit Cíl
                             </button>

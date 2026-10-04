@@ -47,7 +47,7 @@ const WidgetEditOverlay: React.FC<WidgetEditOverlayProps> = ({
       </div>
 
       {/* Label badge */}
-      <div className="absolute -top-2.5 left-3 z-50 bg-indigo-500/90 text-white text-[8px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity shadow-lg pointer-events-none">
+      <div className="absolute -top-2.5 left-3 z-50 bg-indigo-500/90 text-white text-[11px] font-semibold px-2.5 py-0.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-lg pointer-events-none">
         {label}
       </div>
 

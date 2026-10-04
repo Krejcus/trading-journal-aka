@@ -218,13 +218,13 @@ const DailyInsightWidget: React.FC<Props> = ({ theme, trades, onOpenTrade }) => 
       <Wrapper>
         <div className="h-full flex flex-col items-center justify-center text-center gap-2">
           <Sparkles size={20} className={isDark ? 'text-slate-600' : 'text-slate-400'} />
-          <p className={`text-[10px] font-bold uppercase tracking-widest ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+          <p className={`text-[11px] font-bold ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
             Žádný insight zatím
           </p>
           <button
             onClick={() => refresh(true)}
             disabled={generating}
-            className="px-3 py-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-500 text-[10px] font-black uppercase tracking-widest border border-blue-500/20 transition-all disabled:opacity-50"
+            className="px-3 py-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-500 text-[11px] font-semibold border border-blue-500/20 transition-all disabled:opacity-50"
           >
             {generating ? 'Generuju…' : 'Vygenerovat'}
           </button>
@@ -248,7 +248,7 @@ const DailyInsightWidget: React.FC<Props> = ({ theme, trades, onOpenTrade }) => 
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
-              <span className={`${labelClass} font-black uppercase tracking-widest ${cat.color}`}>{cat.label}</span>
+              <span className={`${labelClass} font-semibold ${cat.color}`}>{cat.label}</span>
               <span className={`${labelClass} font-bold ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>· {ageLabel}</span>
             </div>
             {insight.headline && (

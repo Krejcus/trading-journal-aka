@@ -122,12 +122,9 @@ interface GridCell {
 }
 
 const Tooltip: React.FC<{ text: string; theme: 'dark' | 'light' | 'oled'; subtext?: string }> = ({ text, theme, subtext }) => (
-   <div className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-48 p-3 rounded-lg border shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-2xl z-[400] opacity-0 pointer-events-none transition-all duration-200 translate-y-2 scale-95 group-hover:opacity-100 group-hover:translate-y-0 group-hover:scale-100 ${theme === 'oled' ? 'bg-black border-white/10 text-slate-200' :
-      theme === 'dark' ? 'bg-slate-900/95 border-slate-700 text-slate-200' :
-         'bg-white/95 border-slate-200 text-slate-700'
-      }`}>
+   <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-48 p-3 rounded-lg border shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-2xl z-[400] opacity-0 pointer-events-none transition-all duration-200 translate-y-2 scale-95 group-hover:opacity-100 group-hover:translate-y-0 group-hover:scale-100 bg-[var(--bg-card)] border-[var(--border-subtle)] text-[var(--text-primary)]">
       <div className="flex flex-col items-center gap-1">
-         <div className="text-[10px] font-black uppercase tracking-widest opacity-60 text-center">{text}</div>
+         <div className="text-[10px] font-semibold opacity-60 text-center">{text}</div>
          {subtext && <div className="text-sm font-black text-center">{subtext}</div>}
       </div>
       <div className={`absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent ${theme !== 'light' ? 'border-t-slate-700' : 'border-t-slate-200'}`}></div>
@@ -373,20 +370,18 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
    const DAY_LABELS = ['Po', 'Út', 'St', 'Čt', 'Pá', 'Týden'];
 
    return (
-      <div className={`rounded-lg border shadow-sm overflow-visible transition-all flex flex-col h-full ${theme === 'oled' ? 'bg-black border-white/10 shadow-none' :
-         theme === 'dark' ? 'bg-theme-card-90 border-white/5 shadow-2xl backdrop-blur-xl' :
-            'bg-white border-slate-200'
-         }`}>
+      <div className="rounded-lg border overflow-visible transition-all flex flex-col h-full bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-[var(--shadow-card)]">
+         {/* Plochy z proměnných motivu: ve stylu Aurora sklo, v OLED čistá černá. */}
          {/* Mobile compact header */}
-         <div className={`px-4 pt-4 pb-3 md:hidden border-b ${theme !== 'light' ? 'border-white/5' : 'border-slate-100'}`}>
+         <div className={`px-4 pt-4 pb-3 md:hidden border-b border-[var(--border-subtle)]`}>
             <div className="flex items-center justify-between">
                <div className="flex items-center gap-2 select-none">
-                  <button onClick={onPrev} disabled={!canPrev} className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all active:scale-90 ${!canPrev ? 'opacity-20 pointer-events-none' : (theme !== 'light' ? 'bg-white/8 text-slate-300' : 'bg-slate-100')}`}><ChevronLeft size={16} /></button>
-                  <span className={`text-base font-black capitalize tracking-tight ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>{monthName}</span>
-                  <button onClick={onNext} disabled={!canNext} className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all active:scale-90 ${!canNext ? 'opacity-20 pointer-events-none' : (theme !== 'light' ? 'bg-white/8 text-slate-300' : 'bg-slate-100')}`}><ChevronRight size={16} /></button>
+                  <button onClick={onPrev} disabled={!canPrev} className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all active:scale-90 ${!canPrev ? 'opacity-20 pointer-events-none' : 'bg-[var(--bg-page)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'}`}><ChevronLeft size={16} /></button>
+                  <span className={`text-base font-extrabold capitalize tracking-tight text-[var(--text-primary)]`}>{monthName}</span>
+                  <button onClick={onNext} disabled={!canNext} className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all active:scale-90 ${!canNext ? 'opacity-20 pointer-events-none' : 'bg-[var(--bg-page)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'}`}><ChevronRight size={16} /></button>
                </div>
                <div className="flex flex-col items-end">
-                  <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Měsíční PnL</span>
+                  <span className="text-[11px] font-semibold text-[var(--text-secondary)]">Měsíční P&amp;L</span>
                   <span className={`text-lg font-mono font-bold tracking-tight leading-tight ${totalMonthColorMetric === null || !Number.isFinite(totalMonthColorMetric) ? 'text-slate-400' : monthIsPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
                      {formatVal(totalMonthPnl, pnlFormat as PnLDisplayMode, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed')) : undefined)}
                   </span>
@@ -395,34 +390,29 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
          </div>
 
          {/* Desktop header */}
-         <div className={`hidden md:flex px-6 py-3 border-b flex-row justify-between items-center gap-4 ${theme !== 'light' ? 'border-white/5' : 'border-slate-100'}`}>
+         <div className={`hidden md:flex px-6 py-3 border-b flex-row justify-between items-center gap-4 border-[var(--border-subtle)]`}>
             <div className="flex flex-col gap-4">
-               <h3 className={`text-[10px] font-black uppercase tracking-[0.2em] flex items-center gap-2 ${theme !== 'light' ? 'text-slate-400' : 'text-slate-500'}`}>
-                  <LayoutGrid size={14} className="text-blue-500" /> Obchodní Kalendář
+               <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)]">
+                  <LayoutGrid size={14} className="text-blue-500" /> Obchodní kalendář
                   <InfoIcon text="Denní přehled výsledků v kalendářním zobrazení. Zmeškané obchody neovlivňují statistiky ani barvu." theme={theme} />
                </h3>
                <div className="flex items-center gap-3 select-none ml-0.5">
-                  <button onClick={onPrev} disabled={!canPrev} className={`p-1.5 rounded-lg transition-all ${!canPrev ? 'opacity-20 pointer-events-none' : (theme !== 'light' ? 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5' : 'bg-slate-100 hover:bg-slate-200')}`}><ChevronLeft size={18} /></button>
-                  <div className="min-w-[130px]"><h3 className={`text-xl font-black capitalize leading-none tracking-tighter ${theme !== 'light' ? 'text-white' : 'text-black'}`}>{monthName}</h3></div>
-                  <button onClick={onNext} disabled={!canNext} className={`p-1.5 rounded-lg transition-all ${!canNext ? 'opacity-20 pointer-events-none' : (theme !== 'light' ? 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5' : 'bg-slate-100 hover:bg-slate-200')}`}><ChevronRight size={18} /></button>
+                  <button onClick={onPrev} disabled={!canPrev} className={`p-1.5 rounded-lg transition-all ${!canPrev ? 'opacity-20 pointer-events-none' : 'bg-[var(--bg-page)] hover:text-[var(--text-primary)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'}`}><ChevronLeft size={18} /></button>
+                  <div className="min-w-[130px]"><h3 className={`text-xl font-extrabold capitalize leading-none tracking-tight text-[var(--text-primary)]`}>{monthName}</h3></div>
+                  <button onClick={onNext} disabled={!canNext} className={`p-1.5 rounded-lg transition-all ${!canNext ? 'opacity-20 pointer-events-none' : 'bg-[var(--bg-page)] hover:text-[var(--text-primary)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'}`}><ChevronRight size={18} /></button>
                </div>
             </div>
-            <div className={`flex flex-col items-end gap-1 px-5 py-3 rounded-lg border ${theme === 'oled' ? 'bg-black border-white/10' : theme === 'dark' ? 'bg-slate-900/50 border-white/5' : 'bg-white border-slate-200'}`}>
-               <span className="text-[8px] font-black uppercase tracking-[0.2em] text-slate-500">Měsíční PnL</span>
+            <div className="flex flex-col items-end gap-1 px-5 py-3 rounded-lg border bg-[var(--bg-page)] border-[var(--border-subtle)]">
+               <span className="text-[11px] font-semibold text-[var(--text-secondary)]">Měsíční P&amp;L</span>
                <span className={`text-2xl font-mono font-bold tracking-tight ${totalMonthColorMetric === null || !Number.isFinite(totalMonthColorMetric) ? 'text-slate-400' : monthIsPositive ? 'text-emerald-500' : 'text-rose-500'}`}>
                   {formatVal(totalMonthPnl, pnlFormat as PnLDisplayMode, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(trades.filter(t => t.executionStatus !== 'Missed')) : undefined)}
                </span>
             </div>
          </div>
 
-         <div className="grid grid-cols-6 gap-1.5 md:gap-3 px-3 md:px-4 pt-3 md:pt-4 pb-0">
+         <div className="grid grid-cols-6 gap-1.5 md:gap-2 px-3 md:px-4 pt-3 md:pt-4 pb-0">
             {DAY_LABELS.map((label, idx) => (
-               <div key={label} className={`py-1.5 md:py-2 rounded-lg text-center text-[9px] md:text-[10px] font-black uppercase tracking-widest border transition-colors ${idx === 5
-                  ? `${theme === 'light' ? 'text-black' : 'text-white'} bg-blue-500/5 border-blue-500/20`
-                  : (theme === 'oled' ? 'text-slate-500 bg-black border-white/10' :
-                     theme === 'dark' ? 'text-slate-500 bg-white/5 border-white/5' :
-                        'text-slate-400 bg-slate-50 border-slate-100')
-                  }`}>
+               <div key={label} className={`py-1 text-center text-[11px] md:text-xs font-semibold ${idx === 5 ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}>
                   {label}
                </div>
             ))}
@@ -430,7 +420,7 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
 
          <div className="px-3 md:px-4 pb-3 md:pb-4 pt-2 flex-1 min-h-0 flex flex-col gap-1.5 md:gap-2">
             {gridRows.map((row, rIdx) => (
-               <div key={rIdx} className="grid grid-cols-6 gap-2 flex-1 min-h-0">
+               <div key={rIdx} className="grid grid-cols-6 gap-1.5 md:gap-2 flex-1 min-h-0">
                   {row.map((cell, cIdx) => (
                      <CalendarCell key={cIdx} cell={cell} theme={theme} maxPnL={maxDayPnL} onDayClick={onDayClick} onWeekClick={onWeekClick} pnlFormat={pnlFormat as PnLDisplayMode} accounts={accounts} initialBalance={initialBalance} currency={currency} rates={rates} />
                   ))}
@@ -440,6 +430,8 @@ const SingleMonthView: React.FC<SingleMonthViewProps & { currency: any, rates: a
       </div>
    );
 };
+
+const tradeWord = (count: number) => count === 1 ? 'obchod' : count >= 2 && count <= 4 ? 'obchody' : 'obchodů';
 
 const formatPnLCompact = (val: number, mode: PnLDisplayMode, trades?: Trade[], initialBalance?: number): string => {
    if (mode === 'rr') {
@@ -476,15 +468,11 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
          ? 'border-emerald-500/25 bg-emerald-500/[0.045] hover:bg-emerald-500/[0.08]'
          : isNegative
             ? 'border-rose-500/25 bg-rose-500/[0.045] hover:bg-rose-500/[0.08]'
-            : (theme === 'oled'
-               ? 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'
-               : theme === 'dark'
-                  ? 'border-white/5 bg-white/[0.025] hover:bg-white/[0.05]'
-                  : 'border-slate-200 bg-slate-50/70 hover:bg-slate-100');
+            : 'border-[var(--border-subtle)] bg-[var(--bg-page)]';
       const summaryPnlColor = isPositive ? 'text-emerald-500' : isNegative ? 'text-rose-500' : 'text-slate-400';
       return (
-         <div onClick={() => onWeekClick(week)} className={`rounded-lg flex flex-col items-center justify-center p-2 border transition-colors cursor-pointer relative overflow-hidden group text-slate-500 hover:ring-1 hover:ring-blue-500/30 ${summaryTone}`}>
-            <span className="text-[8px] font-black uppercase tracking-widest opacity-60 mb-0.5">T{weekIndex}</span>
+         <div onClick={() => onWeekClick(week)} className={`cal-cell rounded-lg flex flex-col items-center justify-center p-2 border transition-colors cursor-pointer relative overflow-hidden group text-[var(--text-secondary)] ${summaryTone}`}>
+            <span className="text-[10px] font-semibold opacity-70 mb-0.5">T{weekIndex}</span>
             <span className={`font-semibold font-mono text-[11px] md:text-sm leading-tight ${summaryPnlColor}`}>
                {formatPnLCompact(pnl, pnlFormat, weekTrades, initialBalance)}
             </span>
@@ -502,7 +490,7 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
          <div
             onClick={() => onDayClick(gday)}
             title={`${gday.dateObj.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'long' })} (jiný měsíc)`}
-            className={`rounded-lg p-1 md:p-3 flex flex-col cursor-pointer border border-dashed relative overflow-hidden transition-all opacity-40 hover:opacity-70 ${theme === 'oled' ? 'border-white/10 bg-transparent' : theme === 'dark' ? 'border-white/10 bg-white/[0.015]' : 'border-slate-200 bg-slate-50/40'}`}
+            className={`rounded-lg p-1 md:p-3 flex flex-col cursor-pointer border border-dashed relative overflow-hidden transition-all opacity-40 hover:opacity-70 border-[var(--border-subtle)] bg-transparent`}
          >
             <div className="flex justify-end">
                <span className={`font-mono text-[9px] md:text-xs font-black leading-none ${theme !== 'light' ? 'text-slate-600' : 'text-slate-400'}`}>{gday.dayNum}</span>
@@ -523,24 +511,26 @@ const CalendarCell: React.FC<{ cell: GridCell; theme: 'dark' | 'light' | 'oled';
    const dayIsPositive = dayColorMetric !== null && dayColorMetric >= 0;
    const intensity = day.hasTrades && dayColorMetric !== null && Number.isFinite(dayColorMetric) && Number.isFinite(day.pnl) ? Math.max(0.15, Math.min(1, Math.abs(day.pnl) / maxPnL)) : 0;
    let bgStyle = {};
-   let borderClass = theme !== 'light' ? 'border-white/5' : 'border-slate-100';
+   let borderClass = 'border-[var(--border-subtle)]';
    if (day.hasTrades && dayColorMetric !== null && Number.isFinite(dayColorMetric) && Number.isFinite(day.pnl)) {
       const color = dayIsPositive ? '16, 185, 129' : '244, 63, 94';
-      bgStyle = { backgroundColor: `rgba(${color}, ${intensity})` };
+      // Tón roste s velikostí výsledku, ale nikdy není plný — buňka zůstává sklem
+      // a číslo se čte v barvě výsledku (P&L vždy zelená/červená).
+      bgStyle = { backgroundColor: `rgba(${color}, ${(0.08 + 0.32 * intensity).toFixed(3)})` };
       borderClass = dayIsPositive ? 'border-emerald-500/30' : 'border-rose-500/30';
    }
    const pnlCompact = day.hasTrades ? formatPnLCompact(day.pnl, pnlFormat, day.trades, initialBalance) : null;
-   const textColor = dayColorMetric === null || !Number.isFinite(dayColorMetric) ? 'text-slate-400' : intensity > 0.6 ? 'text-white' : (dayIsPositive ? 'text-emerald-400' : 'text-rose-400');
+   const textColor = dayColorMetric === null || !Number.isFinite(dayColorMetric) ? 'text-slate-400' : dayIsPositive ? (theme === 'light' ? 'text-emerald-700' : 'text-emerald-300') : (theme === 'light' ? 'text-rose-700' : 'text-rose-300');
    return (
-      <div onClick={() => onDayClick(day)} className={`rounded-lg p-1 md:p-3 flex flex-col cursor-pointer border relative overflow-hidden transition-all active:scale-95 md:hover:ring-2 md:hover:ring-slate-500/30 ${borderClass} ${theme === 'oled' ? 'bg-black shadow-none' : theme === 'dark' ? 'bg-white/5' : 'bg-white shadow-sm'}`} style={bgStyle}>
+      <div onClick={() => onDayClick(day)} className={`cal-cell rounded-lg p-1 md:p-3 flex flex-col cursor-pointer border relative overflow-hidden transition-all active:scale-95 md:hover:ring-2 md:hover:ring-slate-500/20 ${borderClass} bg-[var(--bg-page)]`} style={bgStyle}>
          {/* Day number */}
          <div className="flex justify-end">
-            <span className={`font-mono text-[9px] md:text-xs font-black leading-none ${!day.hasTrades ? (theme !== 'light' ? 'text-slate-600' : 'text-slate-300') : (intensity > 0.5 ? 'text-white/70' : (theme !== 'light' ? 'text-slate-400' : 'text-slate-500'))}`}>{day.dayNum}</span>
+            <span className={`font-mono text-[9px] md:text-xs font-semibold leading-none ${!day.hasTrades ? (theme !== 'light' ? 'text-slate-600' : 'text-slate-400') : 'text-[var(--text-secondary)]'}`}>{day.dayNum}</span>
          </div>
          {/* PNL centered — compact k-format on mobile */}
          <div className="flex-1 flex items-center justify-center py-0.5">
             {pnlCompact && (
-               <span className={`font-semibold text-[11px] md:text-sm tracking-tight leading-none text-center ${textColor}`}>
+               <span className={`font-bold text-[11px] md:text-sm tracking-tight leading-none text-center tabular-nums ${textColor}`}>
                   {pnlCompact}
                </span>
             )}
@@ -606,10 +596,10 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
 
    // Stat Card Component
    const StatCard = ({ icon, label, value, subValue, color, subColor }: any) => (
-      <div className={`p-4 rounded-2xl border flex flex-col justify-between ${isDark ? 'bg-white/5 border-white/5' : 'bg-white border-slate-100'}`}>
+      <div className={`p-4 rounded-2xl border flex flex-col justify-between bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
          <div className="flex justify-between items-start mb-2">
-            <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">{label}</p>
-            <div className={`p-1.5 rounded-lg ${isDark ? 'bg-white/5' : 'bg-slate-50'} ${color}`}>{icon}</div>
+            <p className="text-[11px] font-semibold text-slate-500">{label}</p>
+            <div className={`p-1.5 rounded-lg bg-[var(--bg-page)] ${color}`}>{icon}</div>
          </div>
          <div>
             <p className={`text-lg font-black tracking-tight ${color}`}>{value}</p>
@@ -621,13 +611,13 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
    return (
       <>
          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-theme-page-95 backdrop-blur-xl animate-in fade-in duration-300">
-            <div className={`w-full max-w-6xl h-[85vh] rounded-[32px] overflow-hidden shadow-2xl flex flex-col border ${isDark ? 'bg-theme-card border-white/10' : 'bg-white border-slate-200'}`}>
-               <div className={`h-20 shrink-0 border-b flex items-center justify-between px-8 ${isDark ? 'border-white/5 bg-theme-card' : 'bg-white border-slate-100'}`}>
+            <div className={`w-full max-w-6xl h-[85vh] rounded-[32px] overflow-hidden shadow-2xl flex flex-col border bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
+               <div className={`h-20 shrink-0 border-b flex items-center justify-between px-8 border-[var(--border-subtle)] bg-[var(--bg-card)]`}>
                   <div className="flex items-center gap-4">
                      <div className="p-2.5 rounded-xl bg-blue-600 text-white shadow-lg shadow-blue-500/20"><CalendarIcon size={20} /></div>
                      <div>
-                        <h2 className={`text-xl font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>WEEK {week.weekIndex}</h2>
-                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{monthName} Report</p>
+                        <h2 className={`text-xl font-extrabold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>Týden {week.weekIndex}</h2>
+                        <p className="text-[10px] font-bold text-slate-500">Přehled · {monthName}</p>
                      </div>
                   </div>
                   <div className="flex items-center gap-4">
@@ -644,7 +634,7 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                               onAnalyzeWithAI(prompt);
                               onClose();
                            }}
-                           className="flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 text-[11px] font-black uppercase tracking-wider transition-all hover:scale-105 border border-blue-500/30"
+                           className="flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 text-[11px] font-semibold transition-all hover:scale-105 border border-blue-500/30"
                            title="Otevře AI Coach s analýzou tohoto týdne"
                         >
                            <Sparkles size={14} />
@@ -652,7 +642,7 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                         </button>
                      )}
                      <div className="text-right">
-                        <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Net Result</p>
+                        <p className="text-[11px] font-semibold text-slate-500">Čistý výsledek</p>
                         <p className={`text-3xl font-black font-mono leading-none ${resultTextColor(week.pnl, pnlFormat, allWeekTrades)}`}>
                            {formatPnL(
                               week.pnl,
@@ -667,20 +657,20 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                </div>
 
                <div className="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
-                  <div className={`w-full lg:w-[40%] lg:overflow-y-auto custom-scrollbar border-r p-6 flex flex-col gap-6 ${isDark ? 'bg-[#0F172A]/50 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                  <div className={`w-full lg:w-[40%] lg:overflow-y-auto custom-scrollbar border-r p-6 flex flex-col gap-6 bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
                      <div className="grid grid-cols-2 gap-4">
                         <div className="col-span-2 p-5 rounded-[24px] border border-blue-500/20 bg-blue-500/5 relative overflow-hidden">
                            <div className="flex justify-between items-center mb-4 relative z-10">
-                              <span className="text-[10px] font-black uppercase text-blue-400 tracking-widest flex items-center gap-2"><Target size={14} /> Execution</span>
-                              <span className="text-xs font-black text-white">{week.tradeCount} Trades</span>
+                              <span className="text-[10px] font-semibold text-blue-400 flex items-center gap-2"><Target size={14} /> Exekuce</span>
+                              <span className="text-xs font-bold text-[var(--text-primary)]">{week.tradeCount} {tradeWord(week.tradeCount)}</span>
                            </div>
                            <div className="grid grid-cols-2 gap-4 relative z-10">
                               <div>
-                                 <p className="text-[9px] font-bold text-slate-500 uppercase">Valid</p>
+                                 <p className="text-[11px] font-bold text-slate-500">Validní</p>
                                  <p className="text-xl font-black text-emerald-500">{validTrades}</p>
                               </div>
                               <div>
-                                 <p className="text-[9px] font-bold text-slate-500 uppercase">Invalid</p>
+                                 <p className="text-[11px] font-bold text-slate-500">Nevalidní</p>
                                  <p className="text-xl font-black text-rose-500">{invalidTrades}</p>
                               </div>
                               <div className="col-span-2 h-2 rounded-full bg-slate-900 overflow-hidden flex">
@@ -689,31 +679,31 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                               </div>
                            </div>
                         </div>
-                        <StatCard icon={<TrendingUp size={16} />} label="Wins" value={resultsKnown ? wins : '—'} color="text-emerald-500" subValue={resultsKnown ? `${((wins / week.tradeCount) * 100).toFixed(0)}% Rate` : '—'} subColor="text-emerald-500/60" />
-                        <StatCard icon={<TrendingDown size={16} />} label="Losses" value={resultsKnown ? losses : '—'} color="text-rose-500" subValue={resultsKnown ? `${((losses / week.tradeCount) * 100).toFixed(0)}% Rate` : '—'} subColor="text-rose-500/60" />
-                        <StatCard icon={<Trophy size={16} />} label="Max Win" value={maxWin ? formatTradePnL(maxWin, pnlFormat, accounts.find(a => a.id === maxWin.accountId)?.initialBalance, tradeRMultiple(maxWin), true, currency, rates) : '-'} color="text-emerald-400" subValue={maxWin?.instrument} />
-                        <StatCard icon={<Trophy size={16} />} label="Max Loss" value={maxLoss ? formatTradePnL(maxLoss, pnlFormat, accounts.find(a => a.id === maxLoss.accountId)?.initialBalance, tradeRMultiple(maxLoss), true, currency, rates) : '-'} color="text-rose-400" subValue={maxLoss?.instrument} />
+                        <StatCard icon={<TrendingUp size={16} />} label="Výhry" value={resultsKnown ? wins : '—'} color="text-emerald-500" subValue={resultsKnown ? `${((wins / week.tradeCount) * 100).toFixed(0)} %` : '—'} subColor="text-emerald-500/60" />
+                        <StatCard icon={<TrendingDown size={16} />} label="Ztráty" value={resultsKnown ? losses : '—'} color="text-rose-500" subValue={resultsKnown ? `${((losses / week.tradeCount) * 100).toFixed(0)} %` : '—'} subColor="text-rose-500/60" />
+                        <StatCard icon={<Trophy size={16} />} label="Největší výhra" value={maxWin ? formatTradePnL(maxWin, pnlFormat, accounts.find(a => a.id === maxWin.accountId)?.initialBalance, tradeRMultiple(maxWin), true, currency, rates) : '-'} color="text-emerald-400" subValue={maxWin?.instrument} />
+                        <StatCard icon={<Trophy size={16} />} label="Největší ztráta" value={maxLoss ? formatTradePnL(maxLoss, pnlFormat, accounts.find(a => a.id === maxLoss.accountId)?.initialBalance, tradeRMultiple(maxLoss), true, currency, rates) : '-'} color="text-rose-400" subValue={maxLoss?.instrument} />
                      </div>
                   </div>
 
-                  <div className={`lg:flex-1 flex flex-col lg:overflow-hidden ${isDark ? 'bg-[#050914]' : 'bg-slate-100'}`}>
-                     <div className={`flex p-1 mx-6 mt-6 mb-2 rounded-xl border ${isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
-                        <button onClick={() => setActiveTab('overview')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${activeTab === 'overview' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}><LayoutGrid size={12} /> Daily Overview</button>
-                        <button onClick={() => setActiveTab('trades')} className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${activeTab === 'trades' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}><List size={12} /> Trade Feed ({allWeekTrades.length})</button>
+                  <div className={`lg:flex-1 flex flex-col lg:overflow-hidden bg-[var(--bg-page)]`}>
+                     <div className={`flex p-1 mx-6 mt-6 mb-2 rounded-xl border bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
+                        <button onClick={() => setActiveTab('overview')} className={`flex-1 py-2 rounded-lg text-[10px] font-semibold transition-all flex items-center justify-center gap-2 ${activeTab === 'overview' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}><LayoutGrid size={12} /> Přehled dnů</button>
+                        <button onClick={() => setActiveTab('trades')} className={`flex-1 py-2 rounded-lg text-[10px] font-semibold transition-all flex items-center justify-center gap-2 ${activeTab === 'trades' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}><List size={12} /> Obchody ({allWeekTrades.length})</button>
                      </div>
                      <div className="lg:flex-1 lg:overflow-y-auto custom-scrollbar p-6 pt-2">
                         {activeTab === 'overview' ? (
                            <div className="space-y-2">
                               {week.days.map((day) => (
-                                 <div key={day.dateStr} className={`p-4 rounded-2xl border flex items-center justify-between transition-all hover:scale-[1.01] ${isDark ? 'bg-theme-card border-white/5' : 'bg-white border-slate-200 shadow-sm'}`}>
+                                 <div key={day.dateStr} className={`p-4 rounded-2xl border flex items-center justify-between transition-all hover:scale-[1.01] bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
                                     <div className="flex items-center gap-4">
                                        <div className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center border font-black ${day.hasTrades && Number.isFinite(day.pnl) && (pnlFormat !== 'rr' || calculateTotalRR(day.trades) !== null) ? ((pnlFormat === 'rr' ? calculateTotalRR(day.trades)! : day.pnl) >= 0 ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-rose-500/10 border-rose-500/20 text-rose-500') : (isDark ? 'bg-slate-800 border-slate-700 text-slate-500' : 'bg-slate-100 border-slate-200 text-slate-400')}`}>
-                                          <span className="text-[10px] uppercase leading-none">{day.dateObj.toLocaleString('cs-CZ', { weekday: 'short' })}</span>
+                                          <span className="text-[10px] leading-none">{day.dateObj.toLocaleString('cs-CZ', { weekday: 'short' })}</span>
                                           <span className="text-xs leading-none mt-0.5">{day.dayNum}</span>
                                        </div>
                                        <div>
-                                          <div className="flex items-center gap-2"><span className="text-xs font-black uppercase tracking-tight">{day.trades.filter(t => t.executionStatus !== 'Missed').length} Trades</span>{day.hasPrep && day.hasReview && <CheckCircle2 size={12} className="text-blue-500" />}</div>
-                                          <p className="text-[10px] text-slate-500 truncate max-w-[200px] italic">{day.review?.mainTakeaway || (day.prep?.goals[0] ? `Goal: ${day.prep.goals[0]}` : "No notes")}</p>
+                                          <div className="flex items-center gap-2"><span className="text-xs font-semibold tracking-tight">{day.trades.filter(t => t.executionStatus !== 'Missed').length} {tradeWord(day.trades.filter(t => t.executionStatus !== 'Missed').length)}</span>{day.hasPrep && day.hasReview && <CheckCircle2 size={12} className="text-blue-500" />}</div>
+                                          <p className="text-[10px] text-slate-500 truncate max-w-[200px] italic">{day.review?.mainTakeaway || (day.prep?.goals[0] ? `Cíl: ${day.prep.goals[0]}` : "Bez poznámek")}</p>
                                        </div>
                                     </div>
                                     <div className="text-right"><span className={`text-lg font-black font-mono ${day.hasTrades ? resultTextColor(day.pnl, pnlFormat, day.trades) : 'text-slate-500'}`}>
@@ -725,19 +715,19 @@ const WeekDetailModal: React.FC<{ week: WeekData; monthName: string; theme: 'dar
                         ) : (
                            <div className="space-y-2">
                               {allWeekTrades.length > 0 ? allWeekTrades.map((trade) => (
-                                 <button type="button" aria-label={`Otevřít obchod ${calendarAccountName(trade, accounts)} · ${trade.instrument}`} key={trade.id} onClick={() => onOpenTrade ? onOpenTrade(trade) : setSelectedTrade(trade)} className={`w-full text-left p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all hover:scale-[1.01] hover:border-blue-500/30 ${isDark ? 'bg-theme-card border-white/5' : 'bg-white border-slate-200'} ${trade.executionStatus === 'Missed' ? 'opacity-60' : ''}`}>
+                                 <button type="button" aria-label={`Otevřít obchod ${calendarAccountName(trade, accounts)} · ${trade.instrument}`} key={trade.id} onClick={() => onOpenTrade ? onOpenTrade(trade) : setSelectedTrade(trade)} className={`w-full text-left p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all hover:scale-[1.01] hover:border-blue-500/30 bg-[var(--bg-card)] border-[var(--border-subtle)] ${trade.executionStatus === 'Missed' ? 'opacity-60' : ''}`}>
                                     <div className="flex items-center gap-3">
                                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center border ${trade.executionStatus === 'Missed' ? 'bg-blue-500/10 border-blue-500/20 text-blue-400' : (trade.pnl >= 0 ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-rose-500/10 border-rose-500/20 text-rose-500')}`}>{trade.executionStatus === 'Missed' ? <Clock size={16} /> : (trade.direction === 'Long' ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />)}</div>
                                        <div>
-                                          <div className="flex items-center gap-2"><span className="text-xs font-black uppercase">{trade.instrument}</span><span className="text-[9px] font-mono text-slate-500">{new Date(trade.timestamp).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })}</span></div><p className="text-[9px] text-slate-500">{calendarAccountName(trade, accounts)}</p>
-                                          <div className="flex gap-1 mt-0.5">{trade.executionStatus === 'Missed' && <span className="text-[8px] bg-blue-500/20 text-blue-400 px-1.5 rounded uppercase font-bold">Missed</span>}{trade.mistakes && trade.mistakes.length > 0 && <span className="text-[8px] bg-rose-500/20 text-rose-500 px-1.5 rounded uppercase font-bold">Mistake</span>}</div>
+                                          <div className="flex items-center gap-2"><span className="text-xs font-semibold">{trade.instrument}</span><span className="text-[9px] font-mono text-slate-500">{new Date(trade.timestamp).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })}</span></div><p className="text-[9px] text-slate-500">{calendarAccountName(trade, accounts)}</p>
+                                          <div className="flex gap-1 mt-0.5">{trade.executionStatus === 'Missed' && <span className="text-[11px] bg-blue-500/20 text-blue-400 px-1.5 rounded font-bold">Zmeškaný</span>}{trade.mistakes && trade.mistakes.length > 0 && <span className="text-[11px] bg-rose-500/20 text-rose-500 px-1.5 rounded font-bold">Chyba</span>}</div>
                                        </div>
                                     </div>
                                     <div className="text-right"><span className={`text-sm font-black font-mono ${trade.executionStatus === 'Missed' ? 'text-blue-400' : resultTextColor(trade.pnl, pnlFormat, [trade])}`}>
                                        {trade.executionStatus === 'Missed' ? '±' : formatTradePnL(trade, pnlFormat, accounts.find(a => a.id === trade.accountId)?.initialBalance, tradeRMultiple(trade), true, currency, rates)}
                                     </span></div>
                                  </button>
-                              )) : <div className="text-center py-10 opacity-30"><p className="text-[10px] font-black uppercase">No trades this week</p></div>}
+                              )) : <div className="text-center py-10 opacity-30"><p className="text-[10px] font-semibold">Tento týden bez obchodů</p></div>}
                            </div>
                         )}
                      </div>
@@ -774,15 +764,15 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
    return (
       <>
          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-theme-page-95 backdrop-blur-xl animate-in fade-in duration-300">
-            <div className={`w-full max-w-7xl h-[85vh] rounded-[32px] overflow-hidden shadow-2xl flex flex-col border ${isDark ? 'bg-theme-card border-white/10' : 'bg-white border-slate-200'}`}>
-               <div className={`h-20 shrink-0 border-b flex items-center justify-between px-8 ${isDark ? 'border-white/5 bg-theme-card' : 'bg-white border-slate-100'}`}>
+            <div className={`w-full max-w-7xl h-[85vh] rounded-[32px] overflow-hidden shadow-2xl flex flex-col border bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
+               <div className={`h-20 shrink-0 border-b flex items-center justify-between px-8 border-[var(--border-subtle)] bg-[var(--bg-card)]`}>
                   <div className="flex items-center gap-4">
                      <div className={`p-2.5 rounded-xl text-white shadow-lg ${hasTrades && Number.isFinite(pnl) && (pnlFormat !== 'rr' || calculateTotalRR(trades) !== null) ? ((pnlFormat === 'rr' ? calculateTotalRR(trades)! : pnl) >= 0 ? 'bg-emerald-500 shadow-emerald-500/20' : 'bg-rose-500 shadow-rose-500/20') : 'bg-slate-700'}`}>
                         <Activity size={20} />
                      </div>
                      <div>
-                        <h2 className={`text-lg font-black tracking-tight uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>{formattedDate}</h2>
-                        <div className="flex items-center gap-2">{review?.rating && <div className="flex gap-0.5">{[1, 2, 3, 4, 5].map(s => <div key={s} className={`w-1 h-1 rounded-full ${s <= review.rating ? 'bg-yellow-500' : 'bg-slate-700'}`} />)}</div>}<span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Daily Log</span></div>
+                        <h2 className={`text-lg font-bold tracking-tight first-letter:uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>{formattedDate}</h2>
+                        <div className="flex items-center gap-2">{review?.rating && <div className="flex gap-0.5">{[1, 2, 3, 4, 5].map(s => <div key={s} className={`w-1 h-1 rounded-full ${s <= review.rating ? 'bg-yellow-500' : 'bg-slate-700'}`} />)}</div>}<span className="text-[11px] font-bold text-slate-500">Denní záznam</span></div>
                      </div>
                   </div>
                   <div className="flex items-center gap-4">
@@ -793,7 +783,7 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                               onAnalyzeWithAI(prompt);
                               onClose();
                            }}
-                           className="flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 text-[11px] font-black uppercase tracking-wider transition-all hover:scale-105 border border-blue-500/30"
+                           className="flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 text-[11px] font-semibold transition-all hover:scale-105 border border-blue-500/30"
                            title="Otevře AI Coach s analýzou tohoto dne"
                         >
                            <Sparkles size={14} />
@@ -801,7 +791,7 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                         </button>
                      )}
                      <div className="text-right">
-                        <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Daily PnL</p>
+                        <p className="text-[11px] font-semibold text-slate-500">Denní P&amp;L</p>
                         <p className={`text-3xl font-black font-mono leading-none ${hasTrades ? resultTextColor(pnl, pnlFormat, trades) : 'text-slate-500'}`}>
                            {hasTrades ? formatVal(day.pnl, pnlFormat, initialBalance, pnlFormat === 'rr' ? calculateTotalRR(day.trades) : undefined) : ''}
                         </p>
@@ -811,14 +801,14 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                </div>
 
                <div className="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
-                  <div className={`w-full lg:w-[35%] flex flex-col border-r ${isDark ? 'bg-[#0F172A]/50 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                  <div className={`w-full lg:w-[35%] flex flex-col border-r bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
                      <div className={`grid grid-cols-2 border-b ${isDark ? 'border-white/5' : 'border-slate-200'}`}>
-                        <div className={`p-4 border-r text-center ${isDark ? 'border-white/5' : 'border-slate-200'}`}><p className="text-[9px] font-black uppercase text-slate-500 mb-1">Trades</p><p className="text-xl font-black">{realDayTrades.length}</p></div>
-                        <div className="p-4 text-center"><p className="text-[9px] font-black uppercase text-slate-500 mb-1">Win Rate</p><p className="text-xl font-black text-blue-500">{realDayTrades.length > 0 && realDayTrades.every(t => Number.isFinite(t.pnl)) ? `${((realDayTrades.filter(t => t.pnl > 0).length / realDayTrades.length) * 100).toFixed(0)}%` : '—'}</p></div>
+                        <div className={`p-4 border-r text-center ${isDark ? 'border-white/5' : 'border-slate-200'}`}><p className="text-[11px] font-semibold text-slate-500 mb-1">Obchody</p><p className="text-xl font-black">{realDayTrades.length}</p></div>
+                        <div className="p-4 text-center"><p className="text-[11px] font-semibold text-slate-500 mb-1">Úspěšnost</p><p className="text-xl font-black text-blue-500">{realDayTrades.length > 0 && realDayTrades.every(t => Number.isFinite(t.pnl)) ? `${((realDayTrades.filter(t => t.pnl > 0).length / realDayTrades.length) * 100).toFixed(0)}%` : '—'}</p></div>
                      </div>
-                     <div className={`flex p-1 border-b ${isDark ? 'border-white/5 bg-slate-900/50' : 'border-slate-200 bg-slate-100'}`}>
-                        <button onClick={() => setActiveTab('narrative')} className={`flex-1 py-2 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all ${activeTab === 'narrative' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Context Feed</button>
-                        <button onClick={() => setActiveTab('trades')} className={`flex-1 py-2 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all ${activeTab === 'trades' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Trade List ({trades.length})</button>
+                     <div className={`flex p-1 border-b border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
+                        <button onClick={() => setActiveTab('narrative')} className={`flex-1 py-2 text-[11px] font-semibold rounded-lg transition-all ${activeTab === 'narrative' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Příprava a review</button>
+                        <button onClick={() => setActiveTab('trades')} className={`flex-1 py-2 text-[11px] font-semibold rounded-lg transition-all ${activeTab === 'trades' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Obchody ({trades.length})</button>
                      </div>
                      <div className="lg:flex-1 lg:overflow-y-auto custom-scrollbar p-6 space-y-6">
                         {activeTab === 'narrative' ? (
@@ -830,8 +820,8 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                               const showOverallBias = prep.bias && !(prep.bias === 'Neutral' && hasSessionBias);
                               return (
                                  <div className="space-y-3">
-                                    <p className="text-[9px] font-black uppercase text-blue-500 flex items-center gap-2"><Sun size={12} /> Morning Prep</p>
-                                    <div className={`p-4 rounded-xl text-xs leading-relaxed border space-y-2 ${isDark ? 'bg-blue-500/5 border-blue-500/10 text-slate-300' : 'bg-white border-blue-100 text-slate-600'}`}>
+                                    <p className="text-[11px] font-semibold text-blue-500 flex items-center gap-2"><Sun size={12} /> Ranní příprava</p>
+                                    <div className={`p-4 rounded-xl text-xs leading-relaxed border space-y-2 ${isDark ? 'bg-blue-500/5 border-blue-500/10 text-slate-300' : 'bg-blue-500/5 border-blue-100 text-slate-600'}`}>
                                        {showOverallBias && <div><span className="font-black text-blue-500">Bias:</span> {prep.bias}</div>}
                                        {typeof prep.confidence === 'number' && prep.confidence > 0 && <div><span className="font-black text-blue-500">Sebevědomí:</span> {prep.confidence}/100</div>}
                                        {prep.goals && prep.goals.length > 0 && <div><span className="font-black text-blue-500">Cíle:</span> {prep.goals.join(' · ')}</div>}
@@ -844,7 +834,7 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                                              <div className="italic">{s.plan}</div>
                                           </div>
                                        ))}
-                                       {!hasContent && <span className="opacity-60">No notes.</span>}
+                                       {!hasContent && <span className="opacity-60">Bez poznámek.</span>}
                                     </div>
                                  </div>
                               );
@@ -853,8 +843,8 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                               const hasContent = review.mainTakeaway || review.lessons || review.rating || (review.mistakes && review.mistakes.length > 0 && review.mistakes[0]) || breakdowns.some(b => b.notes?.trim());
                               return (
                                  <div className="space-y-3">
-                                    <p className="text-[9px] font-black uppercase text-indigo-500 flex items-center gap-2"><Moon size={12} /> Evening Audit</p>
-                                    <div className={`p-4 rounded-xl text-xs leading-relaxed border space-y-2 ${isDark ? 'bg-indigo-500/5 border-indigo-500/10 text-slate-300' : 'bg-white border-indigo-100 text-slate-600'}`}>
+                                    <p className="text-[11px] font-semibold text-indigo-500 flex items-center gap-2"><Moon size={12} /> Večerní review</p>
+                                    <div className={`p-4 rounded-xl text-xs leading-relaxed border space-y-2 ${isDark ? 'bg-indigo-500/5 border-indigo-500/10 text-slate-300' : 'bg-indigo-500/5 border-indigo-100 text-slate-600'}`}>
                                        {review.rating > 0 && <div><span className="font-black text-indigo-500">Hodnocení:</span> {review.rating}/5</div>}
                                        {review.scenarioResult && <div><span className="font-black text-indigo-500">Výsledek scénáře:</span> {review.scenarioResult}</div>}
                                        {review.mainTakeaway && <div className="italic">{review.mainTakeaway}</div>}
@@ -865,21 +855,21 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                                              <div className="italic">{b.notes}</div>
                                           </div>
                                        ))}
-                                       {!hasContent && <span className="opacity-60">No review.</span>}
+                                       {!hasContent && <span className="opacity-60">Bez review.</span>}
                                     </div>
                                     {review.mistakes.length > 0 && review.mistakes[0] && (
-                                       <div className="flex flex-wrap gap-2 pt-2">{review.mistakes.map(m => <span key={m} className="px-2 py-1 rounded bg-rose-500/10 text-rose-500 text-[9px] font-black uppercase border border-rose-500/20">{m}</span>)}</div>
+                                       <div className="flex flex-wrap gap-2 pt-2">{review.mistakes.map(m => <span key={m} className="px-2 py-1 rounded bg-rose-500/10 text-rose-500 text-[11px] font-semibold border border-rose-500/20">{m}</span>)}</div>
                                     )}
                                  </div>
                               );
-                           })()}{!prep && !review && <div className="text-center opacity-30 mt-10"><FileText size={32} className="mx-auto mb-2" /><p className="text-[10px] uppercase font-black">No Data</p></div>}</>
+                           })()}{!prep && !review && <div className="text-center opacity-30 mt-10"><FileText size={32} className="mx-auto mb-2" /><p className="text-[11px] font-semibold">Žádná data</p></div>}</>
                         ) : (
                            <div className="space-y-2">
                               {trades.map((t) => (
-                                 <button type="button" aria-label={`Otevřít obchod ${calendarAccountName(t, accounts)} · ${t.instrument}`} key={t.id} onClick={() => onOpenTrade ? onOpenTrade(t) : setSelectedTrade(t)} className={`w-full text-left p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all hover:scale-[1.02] ${isDark ? 'bg-white/5 border-white/5 hover:bg-white/10' : 'bg-white border-slate-100 hover:shadow-md'} ${t.executionStatus === 'Missed' ? 'opacity-60' : ''}`}>
+                                 <button type="button" aria-label={`Otevřít obchod ${calendarAccountName(t, accounts)} · ${t.instrument}`} key={t.id} onClick={() => onOpenTrade ? onOpenTrade(t) : setSelectedTrade(t)} className={`w-full text-left p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all hover:scale-[1.02] bg-[var(--bg-page)] border-[var(--border-subtle)] hover:shadow-md ${t.executionStatus === 'Missed' ? 'opacity-60' : ''}`}>
                                     <div className="flex items-center gap-3">
-                                       <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${t.executionStatus === 'Missed' ? 'bg-blue-500/20 text-blue-400' : (t.direction === 'Long' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-rose-500/20 text-rose-500')}`}>{t.executionStatus === 'Missed' ? 'MISSED' : t.direction}</span>
-                                       <div><p className="text-[10px] font-black uppercase">{t.instrument}</p><p className="text-[9px] text-slate-500">{calendarAccountName(t, accounts)}</p><p className="text-[9px] text-slate-500 font-mono">{t.duration}</p></div>
+                                       <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${t.executionStatus === 'Missed' ? 'bg-blue-500/20 text-blue-400' : (t.direction === 'Long' ? 'bg-emerald-500/20 text-emerald-500' : 'bg-rose-500/20 text-rose-500')}`}>{t.executionStatus === 'Missed' ? 'Zmeškaný' : t.direction}</span>
+                                       <div><p className="text-[10px] font-semibold">{t.instrument}</p><p className="text-[9px] text-slate-500">{calendarAccountName(t, accounts)}</p><p className="text-[9px] text-slate-500 font-mono">{t.duration}</p></div>
                                     </div>
                                     <div className="flex items-center gap-3"><span className={`text-sm font-black font-mono ${t.executionStatus === 'Missed' ? 'text-blue-400' : resultTextColor(t.pnl, pnlFormat, [t])}`}>{t.executionStatus === 'Missed' ? '±' : formatTradePnL(t, pnlFormat, accounts.find(a => a.id === t.accountId)?.initialBalance, tradeRMultiple(t), true, currency, rates)}</span><ArrowRight size={12} className="text-slate-600" /></div>
                                  </button>
@@ -888,9 +878,9 @@ const DayDeepDiveModal: React.FC<{ day: DayData; theme: 'dark' | 'light' | 'oled
                         )}
                      </div>
                   </div>
-                  <div className={`lg:flex-1 relative flex flex-col h-[60vh] lg:h-auto ${isDark ? 'bg-[#050914]' : 'bg-slate-100'}`}>
-                     <div className="flex-1 relative overflow-hidden flex items-center justify-center p-4 group/mainimg">{screenshots.length > 0 ? (<><img src={zoomImg || screenshots[0]} className="max-w-full max-h-full object-contain rounded-xl shadow-2xl cursor-pointer" onClick={() => setFullscreenImg(zoomImg || screenshots[0])} /><div className="absolute top-6 right-6 opacity-0 group-hover/mainimg:opacity-100 transition-opacity"><button onClick={() => setFullscreenImg(zoomImg || screenshots[0])} className="p-3 rounded-xl bg-black/50 backdrop-blur-md text-white border border-white/10 hover:bg-blue-600 transition-colors shadow-xl"><Maximize2 size={18} /></button></div></>) : (<div className="text-center opacity-20"><ImageIcon size={64} className="mx-auto mb-4" /><p className="text-xs font-black uppercase tracking-[0.2em]">Visual Data Missing</p></div>)}</div>
-                     {screenshots.length > 1 && (<div className={`h-24 border-t shrink-0 flex items-center gap-3 px-4 overflow-x-auto ${isDark ? 'bg-theme-card border-white/5' : 'bg-white border-slate-200'}`}>{screenshots.map((src, i) => (<div key={i} onClick={() => setZoomImg(src)} className={`h-16 aspect-video rounded-lg border overflow-hidden cursor-pointer transition-all ${src === (zoomImg || screenshots[0]) ? 'ring-2 ring-blue-500' : 'opacity-50 hover:opacity-100'}`}><img src={src} className="w-full h-full object-cover" /></div>))}</div>)}
+                  <div className={`lg:flex-1 relative flex flex-col h-[60vh] lg:h-auto bg-[var(--bg-page)]`}>
+                     <div className="flex-1 relative overflow-hidden flex items-center justify-center p-4 group/mainimg">{screenshots.length > 0 ? (<><img src={zoomImg || screenshots[0]} className="max-w-full max-h-full object-contain rounded-xl shadow-2xl cursor-pointer" onClick={() => setFullscreenImg(zoomImg || screenshots[0])} /><div className="absolute top-6 right-6 opacity-0 group-hover/mainimg:opacity-100 transition-opacity"><button onClick={() => setFullscreenImg(zoomImg || screenshots[0])} className="p-3 rounded-xl bg-black/50 backdrop-blur-md text-white border border-white/10 hover:bg-blue-600 transition-colors shadow-xl"><Maximize2 size={18} /></button></div></>) : (<div className="text-center opacity-20"><ImageIcon size={64} className="mx-auto mb-4" /><p className="text-xs font-semibold">Bez snímku</p></div>)}</div>
+                     {screenshots.length > 1 && (<div className={`h-24 border-t shrink-0 flex items-center gap-3 px-4 overflow-x-auto bg-[var(--bg-card)] border-[var(--border-subtle)]`}>{screenshots.map((src, i) => (<div key={i} onClick={() => setZoomImg(src)} className={`h-16 aspect-video rounded-lg border overflow-hidden cursor-pointer transition-all ${src === (zoomImg || screenshots[0]) ? 'ring-2 ring-blue-500' : 'opacity-50 hover:opacity-100'}`}><img src={src} className="w-full h-full object-cover" /></div>))}</div>)}
                   </div>
                </div>
             </div>
@@ -926,25 +916,25 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
    const pnlColor = isMissed ? 'text-blue-400' : resultTextColor(trade.pnl, pnlFormat, [trade]);
    const directionColor = isMissed ? 'text-blue-400 bg-blue-500/10 border-blue-500/20' : (trade.direction === 'Long' ? 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20' : 'text-orange-500 bg-orange-500/10 border-orange-500/20');
 
-   const MetricCell = ({ label, value, color = 'text-white' }: { label: string, value: string | number, color?: string }) => (
+   const MetricCell = ({ label, value, color = 'text-[var(--text-primary)]' }: { label: string, value: string | number, color?: string }) => (
       <div className={`p-4 border-r border-b ${isDark ? 'border-white/5' : 'border-slate-100'} flex flex-col justify-center`}>
-         <span className="text-[9px] font-black uppercase text-slate-500 tracking-wider mb-1">{label}</span>
+         <span className="text-[11px] font-semibold text-slate-500 mb-1">{label}</span>
          <span className={`text-sm font-black font-mono tracking-tight ${color}`}>{value}</span>
       </div>
    );
 
    return (
       <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-theme-page-95 backdrop-blur-xl animate-in fade-in duration-300">
-         <div className={`w-full max-w-7xl h-[85vh] rounded-[32px] overflow-hidden shadow-2xl flex flex-col border ${isDark ? 'bg-theme-card border-white/10' : 'bg-white border-slate-200'}`}>
-            <div className={`h-20 shrink-0 border-b flex items-center justify-between px-6 lg:px-8 ${isDark ? 'border-white/5 bg-theme-card' : 'bg-white border-slate-100'}`}>
+         <div className={`w-full max-w-7xl h-[85vh] rounded-[32px] overflow-hidden shadow-2xl flex flex-col border bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
+            <div className={`h-20 shrink-0 border-b flex items-center justify-between px-6 lg:px-8 border-[var(--border-subtle)] bg-[var(--bg-card)]`}>
                <div className="flex items-center gap-6">
                   <div className={`px-3 py-1.5 rounded-lg border flex items-center gap-2 ${directionColor}`}>
                      {isMissed ? <Clock size={14} /> : (trade.direction === 'Long' ? <ArrowUpRight size={14} strokeWidth={3} /> : <ArrowDownRight size={14} strokeWidth={3} />)}
-                     <span className="text-[10px] font-black uppercase tracking-widest">{isMissed ? 'Missed' : trade.direction}</span>
+                     <span className="text-[10px] font-semibold">{isMissed ? 'Missed' : trade.direction}</span>
                   </div>
                   <div>
-                     <h2 className={`text-lg font-black tracking-tighter uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>{trade.instrument}</h2>
-                     <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{new Date(trade.date).toLocaleString('cs-CZ')}</p>
+                     <h2 className={`text-lg font-black tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>{trade.instrument}</h2>
+                     <p className="text-[11px] font-bold text-slate-500">{new Date(trade.date).toLocaleString('cs-CZ')}</p>
                   </div>
                </div>
                <div className={`text-3xl font-black font-mono tracking-tighter ${pnlColor}`}>{isMissed ? '±' : formatTradePnL(trade, pnlFormat, accounts.find(a => a.id === trade.accountId)?.initialBalance, tradeRMultiple(trade), true, currency, rates)}</div>
@@ -952,41 +942,41 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
             </div>
 
             <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
-               <div className={`w-full lg:w-[30%] flex flex-col overflow-y-auto custom-scrollbar border-r ${isDark ? 'bg-[#0F172A]/50 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-                  <div className={`grid grid-cols-2 border-b ${isDark ? 'border-white/5 bg-theme-card' : 'border-slate-200 bg-white'}`}>
-                     <MetricCell label="Entry Price" value={entryPrice || '-'} />
-                     <MetricCell label="Exit Price" value={exitPrice || '-'} />
+               <div className={`w-full lg:w-[30%] flex flex-col overflow-y-auto custom-scrollbar border-r bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
+                  <div className={`grid grid-cols-2 border-b border-[var(--border-subtle)] bg-[var(--bg-card)]`}>
+                     <MetricCell label="Vstup" value={entryPrice || '-'} />
+                     <MetricCell label="Výstup" value={exitPrice || '-'} />
                      <MetricCell label="Stop Loss" value={stopLoss || '-'} color="text-rose-500" />
                      <MetricCell label="Take Profit" value={takeProfit || '-'} color="text-emerald-500" />
-                     <MetricCell label="Size" value={trade.positionSize || 1} />
-                     <MetricCell label="Duration" value={holdTime} color="text-blue-400" />
+                     <MetricCell label="Velikost" value={trade.positionSize || 1} />
+                     <MetricCell label="Doba" value={holdTime} color="text-blue-400" />
                      <MetricCell label="Risk" value={riskMultiple === null ? '—' : formatVal(riskAmount, 'usd')} color="text-slate-400" />
-                     <MetricCell label="Realized RR" value={riskMultiple === null ? '—' : `${realRRR}R`} color={parseFloat(realRRR) > 1 ? 'text-emerald-500' : 'text-slate-400'} />
+                     <MetricCell label="Realizované RR" value={riskMultiple === null ? '—' : `${realRRR}R`} color={parseFloat(realRRR) > 1 ? 'text-emerald-500' : 'text-slate-400'} />
                   </div>
                   <div className="p-6 space-y-6">
                      <div className="space-y-3">
-                        <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest flex items-center gap-2"><Monitor size={12} /> Context</p>
+                        <p className="text-[11px] font-semibold text-slate-500 flex items-center gap-2"><Monitor size={12} /> Kontext</p>
                         <div className="flex flex-wrap gap-2">
-                           {trade.htfConfluence?.length ? trade.htfConfluence.map(t => <span key={t} className="px-2 py-1 rounded-md bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[9px] font-bold uppercase">{t}</span>) : <span className="text-[10px] text-slate-600 italic">No HTF data</span>}
+                           {trade.htfConfluence?.length ? trade.htfConfluence.map(t => <span key={t} className="px-2 py-1 rounded-md bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[11px] font-bold">{t}</span>) : <span className="text-[10px] text-slate-600 ">Bez HTF kontextu</span>}
                         </div>
                      </div>
                      <div className="space-y-3">
-                        <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest flex items-center gap-2"><Brain size={12} /> Psycho</p>
+                        <p className="text-[11px] font-semibold text-slate-500 flex items-center gap-2"><Brain size={12} /> Psychika</p>
                         <div className="flex flex-wrap gap-2">
                            {trade.emotions?.length ? trade.emotions.map(e => {
                               const det = emotions.find(em => em.id === e) || { label: e };
-                              return <span key={e} className="px-2 py-1 rounded-md bg-purple-500/10 border border-purple-500/20 text-purple-400 text-[9px] font-bold uppercase">{det.label}</span>
+                              return <span key={e} className="px-2 py-1 rounded-md bg-purple-500/10 border border-purple-500/20 text-purple-400 text-[11px] font-bold">{det.label}</span>
                            }) : null}
-                           {trade.mistakes?.length ? trade.mistakes.map(m => <span key={m} className="px-2 py-1 rounded-md bg-rose-500/10 border border-rose-500/20 text-rose-500 text-[9px] font-bold uppercase">{m}</span>) : null}
+                           {trade.mistakes?.length ? trade.mistakes.map(m => <span key={m} className="px-2 py-1 rounded-md bg-rose-500/10 border border-rose-500/20 text-rose-500 text-[11px] font-bold">{m}</span>) : null}
                         </div>
                      </div>
                      <div className="space-y-3">
-                        <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest flex items-center gap-2"><FileText size={12} /> Notes</p>
-                        <div className={`p-4 rounded-xl border text-xs font-medium leading-relaxed ${isDark ? 'bg-black/20 border-white/5 text-slate-300' : 'bg-white border-slate-200 text-slate-700'}`}>{trade.notes || "No notes."}</div>
+                        <p className="text-[11px] font-semibold text-slate-500 flex items-center gap-2"><FileText size={12} /> Poznámky</p>
+                        <div className={`p-4 rounded-xl border text-xs font-medium leading-relaxed bg-[var(--bg-page)] border-[var(--border-subtle)] ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{trade.notes || "Bez poznámek."}</div>
                      </div>
                   </div>
                </div>
-               <div className={`flex-1 relative flex items-center justify-center overflow-hidden group ${isDark ? 'bg-[#050914]' : 'bg-slate-100'}`}>
+               <div className={`flex-1 relative flex items-center justify-center overflow-hidden group bg-[var(--bg-page)]`}>
                   <div className="flex-1 relative overflow-hidden flex items-center justify-center p-4">
                      {images.length > 0 ? (
                         <>
@@ -1000,11 +990,11 @@ const TradeDetailOverlay: React.FC<{ trade: Trade, theme: 'dark' | 'light' | 'ol
                      ) : (
                         <div className="text-center opacity-30">
                            <ImageIcon size={64} className="mx-auto mb-4 text-slate-500" />
-                           <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-500">Visual Data Missing</p>
+                           <p className="text-xs font-semibold text-slate-500">Bez snímku</p>
                         </div>
                      )}
                   </div>
-                  {images.length > 1 && (<div className={`h-24 border-t shrink-0 flex items-center gap-3 px-4 overflow-x-auto ${isDark ? 'bg-theme-card border-white/5' : 'bg-white border-slate-200'}`}>{images.map((src, i) => (<div key={i} onClick={() => setActiveImageIndex(i)} className={`h-16 aspect-video rounded-lg border overflow-hidden cursor-pointer transition-all ${activeImageIndex === i ? 'ring-2 ring-blue-500 opacity-100' : 'opacity-50 hover:opacity-100'}`}><img src={src} className="w-full h-full object-cover" /></div>))}</div>)}
+                  {images.length > 1 && (<div className={`h-24 border-t shrink-0 flex items-center gap-3 px-4 overflow-x-auto bg-[var(--bg-card)] border-[var(--border-subtle)]`}>{images.map((src, i) => (<div key={i} onClick={() => setActiveImageIndex(i)} className={`h-16 aspect-video rounded-lg border overflow-hidden cursor-pointer transition-all ${activeImageIndex === i ? 'ring-2 ring-blue-500 opacity-100' : 'opacity-50 hover:opacity-100'}`}><img src={src} className="w-full h-full object-cover" /></div>))}</div>)}
                </div>
             </div>
          </div>

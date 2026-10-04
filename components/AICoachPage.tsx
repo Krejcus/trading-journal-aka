@@ -28,7 +28,7 @@ const SessionStartCards: React.FC<{
 }> = ({ onStart }) => {
   return (
     <div className="w-full space-y-2.5">
-      <div className="text-[9px] font-black uppercase tracking-widest text-[var(--text-secondary)] text-center mb-1">
+      <div className="text-[11px] font-semibold text-[var(--text-secondary)] text-center mb-1">
         Řízené seance (Live synchronizace)
       </div>
       <div className="grid grid-cols-1 gap-2">
@@ -1550,9 +1550,9 @@ const AICoachPage: React.FC<Props> = ({
           <div className="w-7 h-7 rounded-lg bg-blue-600/15 border border-blue-500/25 flex items-center justify-center">
             <Sparkles size={13} className="text-blue-400" />
           </div>
-          <span className="text-sm font-black uppercase tracking-widest text-[var(--text-primary)]">AI Coach</span>
+          <span className="text-sm font-semibold text-[var(--text-primary)]">AI Coach</span>
           {coachScope === 'backtest' && (
-            <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 text-[9px] font-black uppercase tracking-wider border border-emerald-500/20">
+            <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 text-[11px] font-semibold border border-emerald-500/20">
               BT
             </span>
           )}
@@ -1625,7 +1625,7 @@ const AICoachPage: React.FC<Props> = ({
         ) : (
           groupedConversations.map(group => (
             <div key={group.label}>
-              <div className="px-4 py-1.5 text-[9px] font-black uppercase tracking-widest text-[var(--text-secondary)]">
+              <div className="px-4 py-1.5 text-[11px] font-semibold text-[var(--text-secondary)]">
                 {group.label}
               </div>
               {group.items.map(conv => (
@@ -1841,7 +1841,7 @@ const AICoachPage: React.FC<Props> = ({
             <div className="w-full">
               {isTodayWeekend ? (
                 <div className="p-4 text-center border border-[var(--border-subtle)] bg-[var(--bg-card)] rounded-xl">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-amber-500 mb-1">
+                  <p className="text-[11px] font-semibold text-amber-500 mb-1">
                     ☕ Víkendový režim
                   </p>
                   <p className="text-[9px] text-[var(--text-secondary)] leading-relaxed">
@@ -1855,7 +1855,7 @@ const AICoachPage: React.FC<Props> = ({
 
             {readyExperimentReviews.length > 0 && (
               <div className="w-full space-y-2">
-                <div className="text-[10px] font-black uppercase tracking-widest text-emerald-500 text-center">Čeká na vyhodnocení</div>
+                <div className="text-[11px] font-semibold text-emerald-500 text-center">Čeká na vyhodnocení</div>
                 {readyExperimentReviews.slice(0, 3).map(({ exp, report }) => (
                   <button
                     key={exp.id}
@@ -1870,7 +1870,7 @@ const AICoachPage: React.FC<Props> = ({
             )}
 
             <div className="w-full space-y-2">
-              <div className="text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)] text-center mb-1">Rychlé dotazy</div>
+              <div className="text-[11px] font-semibold text-[var(--text-secondary)] text-center mb-1">Rychlé dotazy</div>
               {QUICK_PROMPTS.map(q => (
                 <button
                   key={q}
@@ -1915,7 +1915,7 @@ const AICoachPage: React.FC<Props> = ({
                 <div className="w-full">
                   {isTodayWeekend ? (
                     <div className="p-4 text-center border border-[var(--border-subtle)] bg-[var(--bg-card)] rounded-xl">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-amber-500 mb-1">
+                      <p className="text-[11px] font-semibold text-amber-500 mb-1">
                         ☕ Víkendový režim
                       </p>
                       <p className="text-[9px] text-[var(--text-secondary)] leading-relaxed">
@@ -1929,7 +1929,7 @@ const AICoachPage: React.FC<Props> = ({
 
                 {readyExperimentReviews.length > 0 && (
                   <div className="w-full space-y-2">
-                    <div className="text-[10px] font-black uppercase tracking-widest text-emerald-500 text-center">Čeká na vyhodnocení</div>
+                    <div className="text-[11px] font-semibold text-emerald-500 text-center">Čeká na vyhodnocení</div>
                     {readyExperimentReviews.slice(0, 3).map(({ exp, report }) => (
                       <button
                         key={exp.id}
@@ -1944,7 +1944,7 @@ const AICoachPage: React.FC<Props> = ({
                 )}
 
                 <div className="w-full space-y-2">
-                  <div className="text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)] text-center mb-1">Rychlé dotazy</div>
+                  <div className="text-[11px] font-semibold text-[var(--text-secondary)] text-center mb-1">Rychlé dotazy</div>
                   {(proactive?.suggestions && proactive.suggestions.length > 0 ? proactive.suggestions : QUICK_PROMPTS).map(q => (
                     <button
                       key={q}
@@ -2002,7 +2002,7 @@ const AICoachPage: React.FC<Props> = ({
       {showScrollToBottom && (
         <button
           onClick={() => scrollToBottom('smooth', true)}
-          className="absolute right-6 bottom-24 z-20 flex items-center gap-1.5 px-3 py-2 rounded-full bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/30 transition-all text-[10px] font-black uppercase tracking-widest"
+          className="absolute right-6 bottom-24 z-20 flex items-center gap-1.5 px-3 py-2 rounded-full bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/30 transition-all text-[11px] font-semibold"
           title="Skočit na poslední zprávu"
         >
           <ChevronDown size={14} strokeWidth={3} />

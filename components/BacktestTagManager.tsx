@@ -119,11 +119,11 @@ export default function BacktestTagManager({ library, trades, ownerId, onCommit,
   if (!open) return null;
   if (draftOwner !== ownerId) return <section role="dialog" aria-modal="true" aria-label="Správa tagů" className="fixed inset-0 z-[960] flex items-center justify-center bg-slate-950 text-white"><p role="alert">Uživatel se změnil. Znovu otevři správu tagů pro aktuální účet.</p>{onClose && <button type="button" onClick={onClose}>Zavřít</button>}</section>;
   const disabled = busy || Boolean(state.error);
-  const field = `rounded border px-3 py-2 text-sm ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-300 bg-white text-slate-900'}`;
+  const field = `rounded border px-3 py-2 text-sm ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-100' : 'border-slate-300 bg-[var(--bg-card)] text-slate-900'}`;
   const muted = isDark ? 'text-slate-400' : 'text-slate-600';
   return <div className="fixed inset-0 z-[960] flex items-center justify-center bg-slate-950/50 p-4" role="presentation">
     <section ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="backtest-tag-manager-title"
-      className={`max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-xl border p-5 shadow-xl ${isDark ? 'border-slate-700 bg-slate-950 text-slate-100' : 'border-slate-200 bg-slate-50 text-slate-900'}`}
+      className={`max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-xl border p-5 shadow-xl ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-100' : 'border-[var(--border-subtle)] bg-[var(--bg-page)] text-slate-900'}`}
       onKeyDown={event => {
         event.stopPropagation();
         if (event.key === 'Escape' && !busy) { event.preventDefault(); onClose?.(); }

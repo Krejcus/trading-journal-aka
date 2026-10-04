@@ -77,13 +77,13 @@ const BacktestSessionsView: React.FC<Props> = ({ theme, accounts, trades }) => {
             <FlaskConical size={20} />
           </div>
           <div>
-            <h2 className="text-2xl md:text-3xl font-black tracking-tighter italic">BACKTEST DENÍK</h2>
+            <h2 className="text-2xl md:text-3xl font-extrabold tracking-tight">Backtest deník</h2>
             <p className="text-[11px] font-bold text-slate-500 tracking-wide">{sessions.length} session{sessions.length === 1 ? '' : 's'} · pre/post poznámky</p>
           </div>
         </div>
         <button
           onClick={load}
-          className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all active:scale-90 ${isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+          className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all active:scale-90 ${isDark ? 'bg-[var(--bg-page)] text-slate-400 hover:bg-white/10' : 'bg-[var(--bg-page)] text-slate-500 hover:bg-slate-200'}`}
           title="Obnovit"
         >
           <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} />
@@ -104,7 +104,7 @@ const BacktestSessionsView: React.FC<Props> = ({ theme, accounts, trades }) => {
         <div className="space-y-6">
           {grouped.map(([date, list]) => (
             <div key={date}>
-              <div className="text-[11px] font-black uppercase tracking-widest text-slate-500 mb-2 px-1">{date}</div>
+              <div className="text-[11px] font-semibold text-slate-500 mb-2 px-1">{date}</div>
               <div className="space-y-3">
                 {list.map(s => {
                   const b = biasBadge(s.bias);
@@ -117,8 +117,8 @@ const BacktestSessionsView: React.FC<Props> = ({ theme, accounts, trades }) => {
                   return (
                     <div key={s.id} className={`p-4 rounded-2xl border ${cardCls}`}>
                       <div className="flex items-center gap-2 mb-3 flex-wrap">
-                        <span className={`text-xs font-black uppercase tracking-wider ${isDark ? 'text-violet-400' : 'text-violet-600'}`}>{s.block}</span>
-                        <span className={`inline-flex items-center gap-1 text-[10px] font-black uppercase px-2 py-0.5 rounded-full border ${b.cls}`}>{b.icon}{b.label}</span>
+                        <span className={`text-xs font-semibold ${isDark ? 'text-violet-400' : 'text-violet-600'}`}>{s.block}</span>
+                        <span className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full border ${b.cls}`}>{b.icon}{b.label}</span>
                         {accNameById.size > 1 && <span className="text-[10px] font-bold text-slate-400 ml-auto">{accNameById.get(String(s.accountId)) || ''}</span>}
                       </div>
 
@@ -136,11 +136,11 @@ const BacktestSessionsView: React.FC<Props> = ({ theme, accounts, trades }) => {
 
                       <div className="space-y-2">
                         <div>
-                          <p className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-0.5">Pre — na co koukám</p>
+                          <p className="text-[11px] font-semibold text-slate-500 mb-0.5">Pre — na co koukám</p>
                           <p className={`text-sm leading-relaxed ${s.preNotes ? '' : 'italic text-slate-400'}`}>{s.preNotes || 'bez poznámky'}</p>
                         </div>
                         <div>
-                          <p className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-0.5">Post — čeho jsem si všiml / co doladit</p>
+                          <p className="text-[11px] font-semibold text-slate-500 mb-0.5">Post — čeho jsem si všiml / co doladit</p>
                           <p className={`text-sm leading-relaxed ${s.postNotes ? '' : 'italic text-slate-400'}`}>{s.postNotes || 'bez poznámky'}</p>
                         </div>
                       </div>

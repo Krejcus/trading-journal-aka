@@ -137,8 +137,8 @@ const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
     const navBtn =`p-2 rounded-xl transition-all disabled:opacity-20 disabled:cursor-not-allowed ${isDark ? 'hover:bg-white/10 text-white' : 'hover:bg-slate-100 text-slate-900'}`;
 
     const Stat: React.FC<{ label: string; value: React.ReactNode; accent?: string; hint?: string }> = ({ label, value, accent, hint }) => (
-        <div className={`px-4 py-3 rounded-2xl border ${isDark ? 'bg-white/[0.03] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">{label}</p>
+        <div className={`px-4 py-3 rounded-2xl border bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
+            <p className="text-[11px] font-semibold text-slate-500">{label}</p>
             <p className={`mt-1 text-sm font-mono font-black ${accent || (isDark ? 'text-white' : 'text-slate-900')}`}>{value}</p>
             {hint && <p className="mt-0.5 text-[9px] font-bold text-slate-500 truncate">{hint}</p>}
         </div>
@@ -152,18 +152,18 @@ const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
             >
                 <div
                     onClick={(e) => e.stopPropagation()}
-                    className={`w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-[32px] border shadow-2xl ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}
+                    className={`w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-[32px] border shadow-2xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}
                 >
                     {/* Hlavička: identita výplaty + listování */}
-                    <div className={`sticky top-0 z-10 flex items-center gap-4 px-6 py-5 border-b backdrop-blur-xl ${isDark ? 'bg-[var(--bg-card)]/90 border-[var(--border-subtle)]' : 'bg-white/90 border-slate-100'}`}>
-                        <div className={`w-11 h-11 shrink-0 rounded-2xl border overflow-hidden flex items-center justify-center ${isDark ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
+                    <div className={`sticky top-0 z-10 flex items-center gap-4 px-6 py-5 border-b backdrop-blur-xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
+                        <div className={`w-11 h-11 shrink-0 rounded-2xl border overflow-hidden flex items-center justify-center bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
                             {logo
                                 ? <img src={logo} alt={firm} className="w-full h-full object-contain p-1.5" />
                                 : <span className="text-[10px] font-black text-slate-500">{firmInitials(firm || '?')}</span>}
                         </div>
                         <div className="min-w-0 flex-1">
                             <p className={`text-sm font-black truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>{acc?.name || 'Neznámý účet'}</p>
-                            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 italic">{formatFullDate(payout.date)}</p>
+                            <p className="text-[11px] font-bold text-slate-500 italic">{formatFullDate(payout.date)}</p>
                         </div>
 
                         <div className="flex items-center gap-1">
@@ -181,16 +181,16 @@ const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
                                         <MoreHorizontal size={19} />
                                     </button>
                                     {actionsOpen && (
-                                        <div className={`absolute right-0 top-full z-30 mt-2 w-44 overflow-hidden rounded-2xl border p-1.5 shadow-2xl ${isDark ? 'border-white/10 bg-slate-900' : 'border-slate-200 bg-white'}`}>
+                                        <div className={`absolute right-0 top-full z-30 mt-2 w-44 overflow-hidden rounded-2xl border p-1.5 shadow-2xl border-[var(--border-subtle)] bg-[var(--bg-card)]`}>
                                             <button
                                                 onClick={() => { setActionsOpen(false); onEdit(payout); }}
-                                                className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-[10px] font-black uppercase tracking-widest transition-colors ${isDark ? 'text-slate-200 hover:bg-white/10' : 'text-slate-700 hover:bg-slate-100'}`}
+                                                className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-[11px] font-semibold transition-colors ${isDark ? 'text-slate-200 hover:bg-white/10' : 'text-slate-700 hover:bg-slate-100'}`}
                                             >
                                                 <Pencil size={14} /> Upravit
                                             </button>
                                             <button
                                                 onClick={() => { setActionsOpen(false); onDelete(payout); }}
-                                                className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-[10px] font-black uppercase tracking-widest text-rose-500 transition-colors hover:bg-rose-500/10"
+                                                className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-[11px] font-semibold text-rose-500 transition-colors hover:bg-rose-500/10"
                                             >
                                                 <Trash2 size={14} /> Smazat
                                             </button>
@@ -205,21 +205,21 @@ const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
                     <div className="grid gap-5 p-5 sm:p-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)] lg:items-start">
                         {/* Důkaz je na desktopu hlavní vizuál, na mobilu následuje až po souhrnu. */}
                         <div className="order-2 space-y-2 lg:order-1">
-                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Důkaz výplaty</p>
+                            <p className="text-[11px] font-semibold text-slate-500">Důkaz výplaty</p>
                             {payout.image ? (
                                 <button
                                     onClick={() => setZoomOpen(true)}
-                                    className={`group relative flex min-h-64 w-full items-center justify-center overflow-hidden rounded-3xl border transition-all hover:border-blue-500/50 lg:min-h-[430px] ${isDark ? 'border-white/10 bg-black/20' : 'border-slate-200 bg-slate-50'}`}
+                                    className={`group relative flex min-h-64 w-full items-center justify-center overflow-hidden rounded-3xl border transition-all hover:border-blue-500/50 lg:min-h-[430px] border-[var(--border-subtle)] bg-[var(--bg-page)]`}
                                 >
                                     <img src={payout.image} alt="Důkaz výplaty" className="max-h-[430px] w-full object-contain" />
-                                    <span className="absolute inset-0 flex items-center justify-center gap-2 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity text-white text-[10px] font-black uppercase tracking-widest">
+                                    <span className="absolute inset-0 flex items-center justify-center gap-2 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity text-white text-[11px] font-semibold">
                                         <Maximize2 size={14} /> Zvětšit
                                     </span>
                                 </button>
                             ) : (
                                 <div className={`flex flex-col items-center justify-center gap-2 py-10 rounded-2xl border border-dashed ${isDark ? 'border-white/10 text-slate-600' : 'border-slate-200 text-slate-400'}`}>
                                     <Trophy size={22} className="opacity-40" />
-                                    <span className="text-[10px] font-black uppercase tracking-widest">Bez důkazu</span>
+                                    <span className="text-[11px] font-semibold">Bez důkazu</span>
                                 </div>
                             )}
                         </div>
@@ -227,10 +227,10 @@ const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
                         <div className="order-1 space-y-4 lg:order-2">
                             {/* Čistá výplata — hlavní číslo */}
                             <div className={`px-5 py-5 rounded-3xl border text-center ${isDark ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-emerald-50 border-emerald-200'}`}>
-                                <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Čistá výplata</p>
+                                <p className="text-[11px] font-semibold text-emerald-500">Čistá výplata</p>
                                 <p className="mt-1 text-3xl font-black font-mono tracking-tighter text-emerald-500">{formatValue(payout.amount)}</p>
                                 {payoutProgress && (
-                                    <p className="mt-1 text-[9px] font-black uppercase tracking-wider text-emerald-600/70">
+                                    <p className="mt-1 text-[11px] font-semibold text-emerald-600/70">
                                         {payoutProgress.number}. výplata z účtu · celkem {formatValue(payoutProgress.cumulative)}
                                     </p>
                                 )}
@@ -253,15 +253,15 @@ const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
 
                             {payout.notes && (
                                 <div className="space-y-2">
-                                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Poznámky</p>
-                                    <p className={`px-4 py-3 rounded-2xl border text-xs font-bold leading-relaxed whitespace-pre-wrap ${isDark ? 'bg-white/[0.03] border-[var(--border-subtle)] text-slate-300' : 'bg-slate-50 border-slate-100 text-slate-700'}`}>
+                                    <p className="text-[11px] font-semibold text-slate-500">Poznámky</p>
+                                    <p className={`px-4 py-3 rounded-2xl border text-xs font-bold leading-relaxed whitespace-pre-wrap ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-300' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-700'}`}>
                                         {payout.notes}
                                     </p>
                                 </div>
                             )}
 
                             {legacy && (
-                                <p className="text-center text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                <p className="text-center text-[11px] font-semibold text-slate-500">
                                     Archivovaná výplata — nelze upravovat
                                 </p>
                             )}

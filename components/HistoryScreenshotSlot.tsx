@@ -68,7 +68,7 @@ export const HistoryScreenshotSlot: React.FC<{
       style={{ backgroundImage: `repeating-linear-gradient(135deg, ${stripe} 0 10px, transparent 10px 20px)` }}
     >
       <span className={`inline-flex items-center gap-2 rounded-full border ${detail ? 'px-4 py-2' : 'px-3 py-1.5'} ${text} font-extrabold whitespace-nowrap shadow-[0_6px_16px_-10px_rgba(15,23,42,0.35)] ${
-        light ? 'bg-white border-slate-200 text-slate-600' : 'bg-[var(--bg-card)] border-white/10 text-slate-300'
+        light ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-600' : 'bg-[var(--bg-card)] border-white/10 text-slate-300'
       }`}>
         <ImageOff size={detail ? 16 : 13} className={light ? 'text-slate-400' : 'text-slate-500'} /> Bez screenshotu
       </span>

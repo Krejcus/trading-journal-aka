@@ -63,7 +63,7 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-full overflow-y-auto pr-1 pb-4 scrollbar-thin">
         {/* Checklist Card (Real Rituals) */}
         <div className={`p-4 rounded-2xl border bg-[var(--bg-card)] flex flex-col gap-3 transition-all duration-300 ${pulseClass('ritualCompletions')}`}>
-          <span className="text-xs font-black text-[var(--text-secondary)] uppercase tracking-wider block mb-1">Ranní rituály</span>
+          <span className="text-xs font-semibold text-[var(--text-secondary)] block mb-1">Ranní rituály</span>
           
           <div className="space-y-2.5">
             {rituals.map(ritual => {
@@ -100,7 +100,7 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
 
         {/* Trading Rules Card */}
         <div className={`p-4 rounded-2xl border bg-[var(--bg-card)] flex flex-col gap-3 transition-all duration-300 ${pulseClass('committedRuleIds')}`}>
-          <span className="text-xs font-black text-[var(--text-secondary)] uppercase tracking-wider block mb-1">Trading pravidla k dodržení</span>
+          <span className="text-xs font-semibold text-[var(--text-secondary)] block mb-1">Trading pravidla k dodržení</span>
           
           <div className="space-y-2.5">
             {tradingRules.map(rule => {
@@ -135,7 +135,7 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
 
         {/* Daily Goals Card */}
         <div className={`p-4 rounded-2xl border bg-[var(--bg-card)] transition-all duration-300 ${pulseClass('goals')}`}>
-          <span className="text-xs font-black text-[var(--text-secondary)] uppercase tracking-wider block mb-2">Cíle dne</span>
+          <span className="text-xs font-semibold text-[var(--text-secondary)] block mb-2">Cíle dne</span>
           <div className="space-y-2">
             {(p.goals || []).map((goal: string, idx: number) => (
               <div key={idx} className="flex items-center justify-between gap-2 bg-[var(--bg-page)] px-3 py-2 rounded-xl border border-[var(--border-subtle)]">
@@ -168,10 +168,10 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
 
         {/* Affirmation & Focus Card */}
         <div className={`p-4 md:col-span-2 rounded-2xl border bg-[var(--bg-card)] transition-all duration-300 ${pulseClass('mindsetState')}`}>
-          <span className="text-xs font-black text-[var(--text-secondary)] uppercase tracking-wider block mb-3">Mentální nastavení a afirmace</span>
+          <span className="text-xs font-semibold text-[var(--text-secondary)] block mb-3">Mentální nastavení a afirmace</span>
           <div className="space-y-3">
             <div>
-              <span className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest block mb-1">Dnešní afirmace</span>
+              <span className="text-[11px] font-bold text-[var(--text-secondary)] block mb-1">Dnešní afirmace</span>
               <textarea 
                 value={p.mindsetState || ''} 
                 onChange={(e) => updateField('mindsetState', e.target.value)}
@@ -181,7 +181,7 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
               />
             </div>
             <div>
-              <span className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest block mb-1">Heslo dne / Focus</span>
+              <span className="text-[11px] font-bold text-[var(--text-secondary)] block mb-1">Heslo dne / Focus</span>
               <input 
                 type="text"
                 value={p.dailyFocus || ''} 
@@ -204,7 +204,7 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-full overflow-y-auto pr-1 pb-4 scrollbar-thin">
         {/* Rating Card */}
         <div className={`p-4 rounded-2xl border bg-[var(--bg-card)] flex flex-col justify-between transition-all duration-300 ${pulseClass('rating')}`}>
-          <span className="text-xs font-black text-[var(--text-secondary)] uppercase tracking-wider block mb-1">Hodnocení dne</span>
+          <span className="text-xs font-semibold text-[var(--text-secondary)] block mb-1">Hodnocení dne</span>
           <div className="flex gap-1.5 my-3">
             {[1, 2, 3, 4, 5].map(star => (
               <button
@@ -226,7 +226,7 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
 
         {/* Scenario Result Card */}
         <div className={`p-4 rounded-2xl border bg-[var(--bg-card)] flex flex-col justify-between transition-all duration-300 ${pulseClass('scenarioResult')}`}>
-          <span className="text-xs font-black text-[var(--text-secondary)] uppercase tracking-wider block mb-1">Skutečný scénář trhu</span>
+          <span className="text-xs font-semibold text-[var(--text-secondary)] block mb-1">Skutečný scénář trhu</span>
           <div className="grid grid-cols-2 gap-2 my-2">
             {(['Bullish', 'Bearish', 'Range', 'Unpredicted'] as const).map(res => (
               <button
@@ -247,10 +247,10 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
 
         {/* Main Takeaway & Lessons */}
         <div className={`p-4 md:col-span-2 rounded-2xl border bg-[var(--bg-card)] transition-all duration-300 ${pulseClass('mainTakeaway')}`}>
-          <span className="text-xs font-black text-[var(--text-secondary)] uppercase tracking-wider block mb-3">Zhodnocení dne</span>
+          <span className="text-xs font-semibold text-[var(--text-secondary)] block mb-3">Zhodnocení dne</span>
           <div className="space-y-3">
             <div>
-              <span className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest block mb-1">Hlavní poznatek</span>
+              <span className="text-[11px] font-bold text-[var(--text-secondary)] block mb-1">Hlavní poznatek</span>
               <textarea 
                 value={r.mainTakeaway || ''} 
                 onChange={(e) => updateField('mainTakeaway', e.target.value)}
@@ -260,7 +260,7 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
               />
             </div>
             <div>
-              <span className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest block mb-1">Ponaučení / Lekce</span>
+              <span className="text-[11px] font-bold text-[var(--text-secondary)] block mb-1">Ponaučení / Lekce</span>
               <textarea 
                 value={r.lessons || ''} 
                 onChange={(e) => updateField('lessons', e.target.value)}
@@ -274,7 +274,7 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
 
         {/* Goals Accomplishment */}
         <div className={`p-4 md:col-span-2 rounded-2xl border bg-[var(--bg-card)] transition-all duration-300 ${pulseClass('goalResults')}`}>
-          <span className="text-xs font-black text-[var(--text-secondary)] uppercase tracking-wider block mb-2">Vyhodnocení cílů</span>
+          <span className="text-xs font-semibold text-[var(--text-secondary)] block mb-2">Vyhodnocení cílů</span>
           <div className="space-y-2">
             {(r.goalResults || []).map((goal: any, idx: number) => (
               <div key={idx} className="flex items-center justify-between gap-3 bg-[var(--bg-page)] px-3 py-2.5 rounded-xl border border-[var(--border-subtle)]">
@@ -305,7 +305,7 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
 
         {/* Rule Adherence Card */}
         <div className={`p-4 md:col-span-2 rounded-2xl border bg-[var(--bg-card)] transition-all duration-300 ${pulseClass('ruleAdherence')}`}>
-          <span className="text-xs font-black text-[var(--text-secondary)] uppercase tracking-wider block mb-2">Dodržení obchodních pravidel</span>
+          <span className="text-xs font-semibold text-[var(--text-secondary)] block mb-2">Dodržení obchodních pravidel</span>
           <div className="space-y-2.5">
             {tradingRules.map(rule => {
               const comp = r.ruleAdherence?.find((a: any) => a.ruleId === rule.id);
@@ -390,7 +390,7 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
 
         {/* Mistakes Card */}
         <div className={`p-4 md:col-span-2 rounded-2xl border bg-[var(--bg-card)] transition-all duration-300 ${pulseClass('mistakes')}`}>
-          <span className="text-xs font-black text-[var(--text-secondary)] uppercase tracking-wider block mb-2">Chyby dne</span>
+          <span className="text-xs font-semibold text-[var(--text-secondary)] block mb-2">Chyby dne</span>
           <div className="flex flex-wrap gap-2">
             {(r.mistakes || []).map((mistake: string, idx: number) => (
               <span 
@@ -424,10 +424,10 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
 
         {/* Psycho details */}
         <div className={`p-4 md:col-span-2 rounded-2xl border bg-[var(--bg-card)] transition-all duration-300 ${pulseClass('psycho')}`}>
-          <span className="text-xs font-black text-[var(--text-secondary)] uppercase tracking-wider block mb-3">Psychologický stav</span>
+          <span className="text-xs font-semibold text-[var(--text-secondary)] block mb-3">Psychologický stav</span>
           <div className="space-y-3">
             <div>
-              <span className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest block mb-1">Stresory (co mě dnes vyvedlo z míry)</span>
+              <span className="text-[11px] font-bold text-[var(--text-secondary)] block mb-1">Stresory (co mě dnes vyvedlo z míry)</span>
               <input 
                 type="text"
                 value={r.psycho?.stressors || ''} 
@@ -437,7 +437,7 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
               />
             </div>
             <div>
-              <span className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest block mb-1">Vděčnost (za co jsem dnes vděčný)</span>
+              <span className="text-[11px] font-bold text-[var(--text-secondary)] block mb-1">Vděčnost (za co jsem dnes vděčný)</span>
               <input 
                 type="text"
                 value={r.psycho?.gratitude || ''} 
@@ -447,7 +447,7 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
               />
             </div>
             <div>
-              <span className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest block mb-1">Mentální poznámky</span>
+              <span className="text-[11px] font-bold text-[var(--text-secondary)] block mb-1">Mentální poznámky</span>
               <textarea
                 value={r.psycho?.notes || ''}
                 onChange={(e) => updateField('psycho', { ...r.psycho, notes: e.target.value })}
@@ -461,11 +461,11 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
 
         {/* Rozbor po seancích — coach plní notes ke každé seanci (Londýn/NY/Asia) */}
         <div className={`p-4 md:col-span-2 rounded-2xl border bg-[var(--bg-card)] transition-all duration-300 ${pulseClass('sessionBreakdowns')}`}>
-          <span className="text-xs font-black text-[var(--text-secondary)] uppercase tracking-wider block mb-3">Rozbor po seancích</span>
+          <span className="text-xs font-semibold text-[var(--text-secondary)] block mb-3">Rozbor po seancích</span>
           <div className="space-y-3">
             {(r.sessionBreakdowns || []).map((b: any, idx: number) => (
               <div key={b.sessionId || idx}>
-                <span className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest block mb-1">{b.sessionLabel || b.sessionId}</span>
+                <span className="text-[11px] font-bold text-[var(--text-secondary)] block mb-1">{b.sessionLabel || b.sessionId}</span>
                 <textarea
                   value={b.notes || ''}
                   onChange={(e) => {
@@ -494,7 +494,7 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
       <div className="flex flex-col gap-4 h-full pr-1 pb-4 overflow-y-auto">
         {/* Session Selector Card */}
         <div className={`p-4 rounded-2xl border bg-[var(--bg-card)] transition-all duration-300 ${pulseClass('sessionId')}`}>
-          <span className="text-xs font-black text-[var(--text-secondary)] uppercase tracking-wider block mb-2">Aktivní seance</span>
+          <span className="text-xs font-semibold text-[var(--text-secondary)] block mb-2">Aktivní seance</span>
           <div className="flex gap-2">
             {(['london', 'ny', 'asia'] as const).map(id => (
               <button
@@ -514,7 +514,7 @@ export const CoachSessionPreview: React.FC<CoachSessionPreviewProps> = ({
 
         {/* Notes Card */}
         <div className={`p-4 rounded-2xl border bg-[var(--bg-card)] flex-1 flex flex-col transition-all duration-300 ${pulseClass('notes')}`}>
-          <span className="text-xs font-black text-[var(--text-secondary)] uppercase tracking-wider block mb-2">Hlavní poznatky ze seance</span>
+          <span className="text-xs font-semibold text-[var(--text-secondary)] block mb-2">Hlavní poznatky ze seance</span>
           <textarea 
             value={s.notes || ''} 
             onChange={(e) => updateField('notes', e.target.value)}

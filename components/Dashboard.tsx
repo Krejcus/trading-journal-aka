@@ -184,10 +184,10 @@ const DistanceToTargetWidget: React.FC<{ stats: TradeStats, accounts: Account[],
   return (
     <div className="p-6 rounded-[32px] glass-panel relative overflow-visible h-full flex flex-col justify-between">
       <div className="flex justify-between items-start mb-4">
-        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
+        <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)]">
           <Flag size={16} className="text-blue-500" /> Challenge Cíl
         </h3>
-        <div className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase ${isPassed ? 'bg-emerald-500 text-white' : (isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-100 text-slate-600')}`}>
+        <div className={`px-2 py-1 rounded-lg text-[11px] font-semibold ${isPassed ? 'bg-emerald-500 text-white' : (isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-100 text-slate-600')}`}>
           {isPassed ? 'Splněno' : 'In Progress'}
         </div>
       </div>
@@ -196,14 +196,14 @@ const DistanceToTargetWidget: React.FC<{ stats: TradeStats, accounts: Account[],
         <div className="flex justify-between items-end mb-2">
           <span className={`text-3xl font-black tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>{format(current)}</span>
           <div className="text-right">
-            <span className="text-[10px] font-bold text-slate-500 uppercase block">Cíl ({targetPctLabel}%)</span>
+            <span className="text-[11px] font-bold text-slate-500 block">Cíl ({targetPctLabel}%)</span>
             <span className={`text-sm font-black ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{format(target)}</span>
           </div>
         </div>
         
         <div className="relative w-full h-5 my-2">
           {/* Track and Progress Fill */}
-          <div className={`h-full w-full rounded-full overflow-hidden relative border ${isDark ? 'bg-slate-950/60 border-white/5 shadow-[inset_0_2px_4px_rgba(0,0,0,0.6)]' : 'bg-slate-100 border-slate-200 shadow-[inset_0_1px_2px_rgba(0,0,0,0.1)]'}`}>
+          <div className={`h-full w-full rounded-full overflow-hidden relative border ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] shadow-[inset_0_2px_4px_rgba(0,0,0,0.6)]' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.1)]'}`}>
             <div 
               className="absolute top-0 bottom-0 left-0 transition-all duration-1000 ease-out flex items-center justify-end pr-3" 
               style={{ 
@@ -278,7 +278,7 @@ const SmartTooltip: React.FC<{
         >
           <div className="flex flex-col items-center gap-1">
             {color && <div className="w-2 h-2 rounded-full mb-1" style={{ backgroundColor: color }}></div>}
-            <div className="text-[10px] font-black uppercase tracking-widest opacity-60 text-center text-wrap">{text}</div>
+            <div className="text-[11px] font-semibold opacity-60 text-center text-wrap">{text}</div>
             {subtext && <div className="text-sm font-black text-center text-wrap">{subtext}</div>}
           </div>
         </div>,
@@ -316,7 +316,7 @@ const AvgWinLossWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 
   return (
     <div className="p-6 rounded-[32px] glass-panel h-full flex flex-col justify-between">
       <div className="flex justify-between items-start mb-2">
-        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
+        <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)]">
           Avg win/loss trade <InfoIcon text="Poměr průměrného zisku a ztráty. V režimu R se každý obchod přepočítá podle vlastního původního risku." theme={theme} />
         </h3>
       </div>
@@ -370,7 +370,7 @@ const StreakWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'ole
   return (
     <div className="p-6 rounded-[32px] glass-panel flex flex-col h-full">
       <div className="flex justify-between items-start mb-4">
-        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
+        <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)]">
           Current streak <InfoIcon text="Aktuální série ziskových/ztrátových dnů a obchodů." theme={theme} />
         </h3>
       </div>
@@ -384,7 +384,7 @@ const StreakWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'ole
             </div>
           </SmartTooltip>
           <div className="flex flex-col gap-1">
-            <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">DAYS</span>
+            <span className="text-[11px] font-semibold text-slate-500">DAYS</span>
             <div className="flex flex-col gap-1 text-[9px] font-bold">
               <SmartTooltip text="Nejhorší série" subtext="Nejvíce ztrátových dní v řadě" theme={theme} color={COLORS.loss}>
                 <span className="bg-rose-500/20 text-rose-500 px-1.5 py-0.5 rounded w-fit cursor-pointer hover:opacity-80 transition-opacity">{stats.maxLosingDayStreak} days</span>
@@ -404,7 +404,7 @@ const StreakWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'ole
             </div>
           </SmartTooltip>
           <div className="flex flex-col gap-1">
-            <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">TRADES</span>
+            <span className="text-[11px] font-semibold text-slate-500">TRADES</span>
             <div className="flex flex-col gap-1 text-[9px] font-bold">
               <SmartTooltip text="Nejhorší série" subtext="Nejvíce ztrát v řadě" theme={theme} color={COLORS.loss}>
                 <span className="bg-rose-500/20 text-rose-500 px-1.5 py-0.5 rounded w-fit cursor-pointer hover:opacity-80 transition-opacity">{stats.maxConsecutiveLosses} trades</span>
@@ -476,7 +476,7 @@ const DisciplineStreakWidget: React.FC<{ trades: Trade[], theme: 'dark' | 'light
   return (
     <div className="p-5 rounded-[24px] flex flex-col justify-between h-full relative overflow-hidden glass-panel">
       <div className="flex justify-between items-start mb-2">
-        <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1.5 whitespace-nowrap">
+        <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5 whitespace-nowrap">
           Discipline Streak
           <SmartTooltip text="Info" subtext="Počet po sobě jdoucích obchodních dní bez nevalidního obchodu (isValid = false)." theme={theme}>
             <div className="p-1 -m-1 cursor-help"><Info size={14} className="text-slate-500 opacity-40 hover:opacity-100 transition-opacity" /></div>
@@ -487,7 +487,7 @@ const DisciplineStreakWidget: React.FC<{ trades: Trade[], theme: 'dark' | 'light
         <div className={`w-20 h-20 rounded-full border-[5px] ${color.ring} flex items-center justify-center shadow-lg ${color.glow} transition-all duration-500`}>
           <div className="flex flex-col items-center">
             <span className={`text-2xl font-black leading-none ${isDark ? 'text-white' : 'text-slate-900'}`}>{currentStreak}</span>
-            <span className="text-[7px] font-black uppercase tracking-widest text-slate-500 mt-0.5">
+            <span className="text-[10px] font-semibold text-slate-500 mt-0.5">
               {currentStreak === 1 ? 'den' : currentStreak >= 2 && currentStreak <= 4 ? 'dny' : 'dní'}
             </span>
           </div>
@@ -521,7 +521,6 @@ function _sampleTier(n: number): { label: string; cls: string; pct: number } {
 
 // Win rate dle počtu confluencí
 const BtConfluenceWrWidget: React.FC<{ stats: TradeStats; theme: any }> = ({ stats, theme }) => {
-  const isDark = theme !== 'light';
   const buckets = useMemo(() => {
     const m = new Map<string, { count: number; wins: number; losses: number; pnl: number }>();
     for (const t of stats.trades) {
@@ -540,7 +539,7 @@ const BtConfluenceWrWidget: React.FC<{ stats: TradeStats; theme: any }> = ({ sta
 
   return (
     <div className="p-6 rounded-[32px] glass-panel h-full flex flex-col">
-      <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400 mb-4">
+      <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)] mb-4">
         WR dle počtu confluencí <InfoIcon text="Win rate podle počtu HTF+LTF confluencí. Testuje hypotézu víc confluencí = vyšší WR." theme={theme} />
       </h3>
       <div className="flex-1 flex flex-col justify-center gap-3 min-h-0">
@@ -552,7 +551,7 @@ const BtConfluenceWrWidget: React.FC<{ stats: TradeStats; theme: any }> = ({ sta
               <span className="text-[11px] font-bold">{b.k} {b.k === '1' ? 'confluence' : 'confluencí'}</span>
               <span className="text-[10px] font-bold text-slate-500">{b.count}× ({b.wins}/{b.losses})</span>
             </div>
-            <div className={`relative h-5 rounded-lg overflow-hidden ${isDark ? 'bg-white/5' : 'bg-slate-100'}`}>
+            <div className={`relative h-5 rounded-lg overflow-hidden bg-[var(--bg-page)]`}>
               <div className={`absolute inset-y-0 left-0 ${b.wr >= 50 ? 'bg-emerald-500' : 'bg-rose-500'} opacity-80`} style={{ width: `${Math.max(b.wr, 3)}%` }} />
               <span className="absolute inset-0 flex items-center px-2 text-[10px] font-black text-white mix-blend-luminosity">{b.wr.toFixed(0)}% WR</span>
             </div>
@@ -579,7 +578,7 @@ const BtSampleSizeWidget: React.FC<{ stats: TradeStats; theme: any }> = ({ stats
   const tier = _sampleTier(total);
   return (
     <div className="p-6 rounded-[32px] glass-panel h-full flex flex-col justify-between">
-      <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
+      <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)]">
         Sample-size <InfoIcon text="Statistická důvěra: pod 30 obchodů ber výsledky s rezervou. Pod 5 je to jen náhoda." theme={theme} />
       </h3>
       <div className="flex-1 flex flex-col justify-center gap-3">
@@ -591,7 +590,7 @@ const BtSampleSizeWidget: React.FC<{ stats: TradeStats; theme: any }> = ({ stats
           <div className={`absolute inset-y-0 left-0 ${total >= 30 ? 'bg-emerald-500' : total >= 10 ? 'bg-sky-500' : total >= 5 ? 'bg-amber-500' : 'bg-rose-500'}`} style={{ width: `${Math.min(tier.pct, 100)}%` }} />
         </div>
         <div className="flex items-center justify-between">
-          <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded border ${tier.cls}`}>{tier.label}</span>
+          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded border ${tier.cls}`}>{tier.label}</span>
           <span className="text-[10px] font-bold text-slate-500">{wins}V · {losses}P{be ? ` · ${be}BE` : ''}</span>
         </div>
         {total < 30 && <p className="text-[9px] text-slate-500">Do „solidního" vzorku zbývá {30 - total} obchodů.</p>}
@@ -618,7 +617,7 @@ const BtMonteCarloWidget: React.FC<{ stats: TradeStats; theme: any; onExpand?: (
     return (
       <div className="p-6 rounded-[32px] glass-panel h-full flex flex-col">
         <div className="flex items-start justify-between mb-1">
-          <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
+          <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)]">
             Monte Carlo <InfoIcon text="Simuluje stovky náhodných pořadí tvých obchodů (bootstrap) — ukáže rozptyl výsledků, drawdown a riziko. Odpoví: je edge reálná, nebo klika?" theme={theme} />
           </h3>
           {onExpand && (
@@ -651,7 +650,7 @@ const BtMonteCarloWidget: React.FC<{ stats: TradeStats; theme: any; onExpand?: (
 
   const Metric: React.FC<{ label: string; value: string; sub?: string; cls?: string }> = ({ label, value, sub, cls }) => (
     <div className="min-w-0">
-      <div className="text-[8px] font-black uppercase tracking-widest text-slate-500 truncate">{label}</div>
+      <div className="text-[11px] font-semibold text-slate-500 truncate">{label}</div>
       <div className={`text-[15px] font-black font-mono leading-tight ${cls || (isDark ? 'text-white' : 'text-slate-800')}`}>{value}</div>
       {sub && <div className="text-[8px] font-bold text-slate-500 truncate">{sub}</div>}
     </div>
@@ -660,7 +659,7 @@ const BtMonteCarloWidget: React.FC<{ stats: TradeStats; theme: any; onExpand?: (
   return (
     <div className="p-6 rounded-[32px] glass-panel h-full flex flex-col">
       <div className="flex items-start justify-between mb-0.5">
-        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
+        <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)]">
           Monte Carlo <InfoIcon text="Bootstrap: stovky náhodných přeskládání tvých obchodů. Tmavé pásmo = pravděpodobná zóna (P25–P75), světlé = krajní (P5–P95), čára = medián. Tenké čáry jsou ukázkové simulace. Ukazuje, kolik z výsledku je edge a kolik náhoda." theme={theme} />
         </h3>
         <div className="flex items-center gap-2 shrink-0">
@@ -714,7 +713,7 @@ const BtMonteCarloWidget: React.FC<{ stats: TradeStats; theme: any; onExpand?: (
 
         {/* Rozpětí konečných výsledků */}
         <div>
-          <div className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-1">Konečný výsledek (rozpětí 90 % scénářů)</div>
+          <div className="text-[11px] font-semibold text-slate-500 mb-1">Konečný výsledek (rozpětí 90 % scénářů)</div>
           <div className="grid grid-cols-3 gap-2">
             <Metric label="Nepříznivý · P5" value={_money(sim.p5)} sub="1 z 20 horší" cls={sim.p5 >= 0 ? COLORS.textProfit : COLORS.textLoss} />
             <Metric label="Pravděpodobný · P50" value={_money(sim.p50)} sub="medián" cls={sim.p50 >= 0 ? COLORS.textProfit : COLORS.textLoss} />
@@ -744,13 +743,13 @@ const LabTopLeakWidget: React.FC<{ top: LeakFinding | null; nTrades: number; the
 
   return (
     <div className="p-6 rounded-[32px] glass-panel h-full flex flex-col">
-      <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400 mb-1">
+      <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)] mb-1">
         <Droplets size={13} className="text-rose-400" /> Největší leak
         <InfoIcon text="Top nález deterministických Lab detektorů (revenge, sizing po ztrátě, slabé hodiny/session, bias flip, overtrading…). Skóre = |$ dopad| × konfidence (z-test) × trend. Detail v záložce Lab → Leaky." theme={theme} />
       </h3>
       {top ? (
         <div className="flex-1 flex flex-col justify-center min-h-0">
-          <p className={`text-sm font-black uppercase tracking-tight leading-snug ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>{top.title}</p>
+          <p className={`text-sm font-semibold tracking-tight leading-snug ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>{top.title}</p>
           <p className={`text-xl font-black font-mono mt-1 ${top.usdImpact < 0 ? 'text-rose-500' : 'text-emerald-500'}`}>{labFmtUsd(top.usdImpact)}</p>
           <p className="text-[10px] font-bold text-slate-500 truncate mt-0.5">{top.statLine}</p>
         </div>
@@ -863,7 +862,7 @@ const CustomKpiTooltip = (props: any) => {
 
   return createPortal(
     <div style={chartTooltipStyle(180)} className="px-3 py-2 rounded-xl border shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 duration-150 theme-card theme-border">
-      <p className="text-[10px] font-black uppercase tracking-widest mb-1 opacity-50">{data.name || data.label}</p>
+      <p className="text-[11px] font-semibold mb-1 opacity-50">{data.name || data.label}</p>
       <p className="text-xs font-black flex items-center gap-2">
         <span className="w-2 h-2 rounded-full" style={{ backgroundColor: data.fill || payload[0].color }}></span>
         {value > 0 ? '+' : value < 0 ? '-' : ''}{Number(Math.abs(value)).toLocaleString(undefined, { maximumFractionDigits: 0 })} {data.unit || '$'}
@@ -887,7 +886,7 @@ const CustomEdgeTooltip = (props: any) => {
         'bg-[var(--bg-card)]/95 border-[var(--border-subtle)] text-[var(--text-primary)]'
       }`}>
       <div className={`flex justify-between items-center mb-3 pb-2 border-b ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-        <span className="font-black text-sm uppercase tracking-tight">{label}</span>
+        <span className="font-semibold text-sm tracking-tight">{label}</span>
         <span className="text-[10px] font-bold text-slate-500">{data.trades} Trades</span>
       </div>
       <div className="space-y-1.5">
@@ -900,13 +899,13 @@ const CustomEdgeTooltip = (props: any) => {
           <span className={`${COLORS.textLoss} font-black`}>-${loss.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
         </div>
         <div className={`flex justify-between items-center pt-2 mt-1 border-t ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-          <span className="text-[10px] font-black uppercase text-slate-400">Čisté PnL:</span>
+          <span className="text-[11px] font-semibold text-slate-400">Čisté PnL:</span>
           <p className={`text-sm font-black font-mono ${net >= 0 ? COLORS.textProfit : COLORS.textLoss}`}>
             {net >= 0 ? '+' : '-'}${Math.abs(net).toLocaleString(undefined, { maximumFractionDigits: 0 })}
           </p>
         </div>
         <div className="flex justify-between items-center mt-1">
-          <span className="text-[9px] font-black uppercase text-slate-500">Win Rate:</span>
+          <span className="text-[11px] font-semibold text-slate-500">Win Rate:</span>
           <span className="text-xs font-black text-blue-500">{(data.winRate || 0).toFixed(1)}%</span>
         </div>
       </div>
@@ -1162,7 +1161,7 @@ const ProKpiCard: React.FC<{
   return (
     <div className="p-4 rounded-lg flex flex-col justify-between h-full relative overflow-visible border border-[var(--border-subtle)] bg-[var(--bg-card)] transition-colors">
       <div className="flex justify-between items-start mb-2">
-        <div className="text-[9px] font-black uppercase tracking-[0.13em] text-[var(--text-secondary)] flex items-center gap-1.5">
+        <div className="text-[11px] font-semibold text-[var(--text-secondary)] flex items-center gap-1.5">
           {label}
           {info && <SmartTooltip text="Info" subtext={info} theme={theme}><div className="p-1 -m-1 cursor-help"><Info size={13} className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors" /></div></SmartTooltip>}
         </div>
@@ -1259,7 +1258,7 @@ const WinnersLosersWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light'
   };
   const Row = ({ label, value, color, info }: any) => (
     <div className={`flex justify-between items-center py-2 border-b last:border-0 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-      <span className="text-[10px] font-bold text-slate-500 flex items-center gap-1 uppercase tracking-tight">
+      <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1 tracking-tight">
         {label}
         {info && <InfoIcon text={info} theme={theme} />}
       </span>
@@ -1269,14 +1268,14 @@ const WinnersLosersWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light'
   return (
     <div className="p-6 rounded-[32px] transition-all relative h-full flex flex-col justify-between overflow-hidden glass-panel">
       <div className="flex justify-between items-center mb-6">
-        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2 text-slate-400">
+        <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)]">
           <TrendingUp size={16} className="text-emerald-500" /> Výhry a Prohry
           <SmartTooltip text="Info" subtext="Detailní statistický rozbor vašich ziskových a ztrátových obchodů." theme={theme}><div className="p-1 -m-1 cursor-help"><Info size={14} className="text-slate-500 opacity-40 hover:opacity-100 transition-opacity" /></div></SmartTooltip>
         </h3>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 flex-1">
         <div className={`p-4 rounded-2xl border ${isDark ? 'bg-emerald-500/5 border-emerald-500/10' : 'bg-emerald-50 border-emerald-100'}`}>
-          <h4 className={`text-[10px] font-black uppercase tracking-widest ${COLORS.textProfit} mb-4 flex items-center gap-2`}><ArrowUp size={12} /> Ziskové Obchody</h4>
+          <h4 className={`text-[11px] font-semibold ${COLORS.textProfit} mb-4 flex items-center gap-2`}><ArrowUp size={12} /> Ziskové Obchody</h4>
           <div className="space-y-1">
             <Row label="Nejlepší zisk" value={formatVal(stats.maxWin, pnlDisplayMode, initialBalance, riskStats.maxWin)} color={COLORS.textProfit} />
             <Row label="Průměrný zisk" value={formatVal(stats.avgWin, pnlDisplayMode, initialBalance, riskStats.avgWin)} color={COLORS.textProfit} />
@@ -1285,7 +1284,7 @@ const WinnersLosersWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light'
           </div>
         </div>
         <div className={`p-4 rounded-2xl border ${isDark ? 'bg-rose-500/5 border-rose-500/10' : 'bg-rose-50 border-rose-100'}`}>
-          <h4 className={`text-[10px] font-black uppercase tracking-widest ${COLORS.textLoss} mb-4 flex items-center gap-2`}><ArrowDown size={12} /> Ztrátové Obchody</h4>
+          <h4 className={`text-[11px] font-semibold ${COLORS.textLoss} mb-4 flex items-center gap-2`}><ArrowDown size={12} /> Ztrátové Obchody</h4>
           <div className="space-y-1">
             <Row label="Nejhorší ztráta" value={formatVal(stats.maxLoss, pnlDisplayMode, initialBalance, riskStats.maxLoss)} color={COLORS.textLoss} />
             <Row label="Průměrná ztráta" value={formatVal(-stats.avgLoss, pnlDisplayMode, initialBalance, riskStats.avgLoss)} color={COLORS.textLoss} />
@@ -1321,16 +1320,16 @@ const PerformanceByMonthWidget: React.FC<{ monthlyData: MonthlyData[], theme: 'd
   return (
     <div className="p-6 rounded-[32px] h-full flex flex-col overflow-hidden glass-panel">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
-        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+        <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)]">
           Měsíční Výkonnost
           <InfoIcon text="Měsíční přehled vaší ziskovosti. Intenzita barvy odpovídá velikosti zisku nebo ztráty." theme={theme} />
         </h3>
         <div className="flex gap-4 items-center">
-          <div className={`flex ${isDark ? 'bg-theme-page/50 border-white/5' : 'bg-slate-200/50 border-slate-300'} p-1 rounded-lg border text-[9px] font-black uppercase`}>
+          <div className={`flex ${isDark ? 'bg-theme-page/50 border-white/5' : 'bg-slate-200/50 border-slate-300'} p-1 rounded-lg border text-[11px] font-semibold`}>
             <button onClick={() => setView('individual')} className={`px-2 py-1 rounded ${view === 'individual' ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>Individual</button>
             <button onClick={() => setView('accum')} className={`px-2 py-1 rounded ${view === 'accum' ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>Accum</button>
           </div>
-          <div className={`flex ${isDark ? 'bg-theme-page/50 border-white/5' : 'bg-slate-200/50 border-slate-300'} p-1 rounded-lg border text-[9px] font-black uppercase`}>
+          <div className={`flex ${isDark ? 'bg-theme-page/50 border-white/5' : 'bg-slate-200/50 border-slate-300'} p-1 rounded-lg border text-[11px] font-semibold`}>
             <button onClick={() => setUnit('pct')} className={`px-2 py-1 rounded ${unit === 'pct' ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>% Gain</button>
             <button onClick={() => setUnit('val')} className={`px-2 py-1 rounded ${unit === 'val' ? 'bg-blue-600 text-white' : 'text-slate-500'}`}>$ Value</button>
           </div>
@@ -1341,8 +1340,8 @@ const PerformanceByMonthWidget: React.FC<{ monthlyData: MonthlyData[], theme: 'd
           <thead>
             <tr>
               <th className="w-16"></th>
-              {months.map(m => <th key={m} className={`p-3 rounded-xl text-[10px] font-black uppercase text-slate-500 ${theme !== 'light' ? 'bg-[var(--bg-page)]/30' : 'bg-slate-50'}`}>{m}</th>)}
-              <th className="p-3 rounded-xl bg-blue-600/10 text-[10px] font-black uppercase text-blue-500">Total</th>
+              {months.map(m => <th key={m} className={`p-3 rounded-xl text-[11px] font-semibold text-slate-500 ${theme !== 'light' ? 'bg-[var(--bg-page)]/30' : 'bg-slate-50'}`}>{m}</th>)}
+              <th className="p-3 rounded-xl bg-blue-600/10 text-[11px] font-semibold text-blue-500">Total</th>
             </tr>
           </thead>
           <tbody>
@@ -1390,12 +1389,12 @@ const EdgeDrilldownModal: React.FC<{
     <div className="fixed inset-0 z-[120] flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
       <div
-        className={`relative w-full max-w-md max-h-[80vh] flex flex-col rounded-[24px] overflow-hidden shadow-2xl ${isDark ? 'bg-theme-card border border-white/10' : 'bg-white border border-slate-200'}`}
+        className={`relative w-full max-w-md max-h-[80vh] flex flex-col rounded-[24px] overflow-hidden shadow-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] backdrop-blur-2xl`}
         onClick={e => e.stopPropagation()}
       >
         <div className={`flex items-center justify-between p-5 border-b ${isDark ? 'border-white/10' : 'border-slate-100'}`}>
           <div className="flex flex-col">
-            <h3 className="text-sm font-black uppercase tracking-widest">{title}</h3>
+            <h3 className="text-sm font-semibold">{title}</h3>
             <span className="text-[10px] font-bold text-slate-500 mt-0.5">
               {subtitle ? subtitle + ' · ' : ''}{trades.length} {trades.length === 1 ? 'obchod' : (trades.length >= 2 && trades.length <= 4 ? 'obchody' : 'obchodů')}
               {' · '}<span className={totalPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}>{totalPnl >= 0 ? '+' : ''}${Math.round(totalPnl).toLocaleString('en-US')}</span>
@@ -1413,7 +1412,7 @@ const EdgeDrilldownModal: React.FC<{
               <div
                 key={t.id}
                 onClick={() => onOpenTrade(t)}
-                className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all hover:scale-[1.01] ${isDark ? 'bg-white/5 border-white/5 hover:bg-white/10' : 'bg-white border-slate-100 hover:shadow-md'} ${isMissed ? 'opacity-60' : ''}`}
+                className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all hover:scale-[1.01] bg-[var(--bg-page)] border-[var(--border-subtle)] hover:shadow-md ${isMissed ? 'opacity-60' : ''}`}
               >
                 <div className="flex flex-col min-w-0">
                   <span className="text-xs font-black truncate">{String(t.direction || '').toUpperCase()} {t.instrument || ''}</span>
@@ -1453,11 +1452,11 @@ const HourlyEdgeWidget: React.FC<{
   return (
     <div className="p-6 rounded-[32px] flex flex-col h-full overflow-visible glass-panel">
       <div className="flex justify-between items-center mb-8">
-        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+        <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)]">
           <Clock size={16} className="text-blue-500" /> Hodinový Výkon
           <InfoIcon text="Statistický výkon podle hodin. Zjistěte, ve které hodiny dne generujete největší zisk. Klikni na sloupec pro obchody dané hodiny." theme={theme} />
         </h3>
-        <div className="flex gap-4 text-[9px] font-black uppercase text-slate-500">
+        <div className="flex gap-4 text-[11px] font-semibold text-slate-500">
           <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-500"></div> Profit</div>
           <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-rose-500"></div> Loss</div>
         </div>
@@ -1528,7 +1527,7 @@ const DailyEdgeWidget: React.FC<{
   return (
     <div className="p-6 rounded-[32px] flex flex-col h-full overflow-visible glass-panel">
       <div className="flex justify-between items-center mb-8">
-        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+        <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)]">
           <CalendarIcon size={16} className="text-indigo-500" /> Denní Výkon
           <InfoIcon text="Které dny v týdnu jsou pro vaši strategii nejziskovější? Pomáhá identifikovat dny pro zvýšení nebo snížení expozice." theme={theme} />
         </h3>
@@ -1593,7 +1592,7 @@ const SessionBreakdownWidget: React.FC<{ trades: any[], theme: 'dark' | 'light' 
   return (
     <div className="p-4 lg:p-6 rounded-[24px] lg:rounded-[32px] h-full flex flex-col overflow-visible glass-panel">
       <div className="flex justify-between items-center mb-4 lg:mb-6">
-        <h3 className={`text-xs lg:text-sm font-black uppercase tracking-widest flex items-center gap-2 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
+        <h3 className={`text-xs lg:text-sm font-semibold flex items-center gap-2 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
           <Globe size={16} className="text-blue-500" /> Výkon Sessions
           <InfoIcon text="Výkon podle obchodních seancí (Asie, Londýn, New York). Každá seance má jinou volatilitu a charakteristiku." theme={theme} />
         </h3>
@@ -1623,7 +1622,7 @@ const SessionBreakdownWidget: React.FC<{ trades: any[], theme: 'dark' | 'light' 
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: sessionColor }} />
-                    <p className={`text-[9px] lg:text-[10px] font-black uppercase tracking-widest ${isLive ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : 'text-slate-500'}`}>{cfg.name}</p>
+                    <p className={`text-[11px] lg:text-[10px] font-semibold ${isLive ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : 'text-slate-500'}`}>{cfg.name}</p>
                   </div>
                   <p className={`text-base lg:text-lg font-black ${pnl >= 0 ? COLORS.textProfit : COLORS.textLoss}`}>{pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
                 </div>
@@ -2130,7 +2129,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           </div>
           {isEditing && (
             <div className="flex gap-2">
-              <button onClick={onCloseEdit} className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full font-black text-xs uppercase tracking-widest shadow-xl shadow-emerald-500/20 active:scale-95 transition-all flex items-center gap-2">
+              <button onClick={onCloseEdit} className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full font-semibold text-xs shadow-xl shadow-emerald-500/20 active:scale-95 transition-all flex items-center gap-2">
                 <CheckCircle2 size={16} /> Hotovo
               </button>
             </div>
@@ -2286,17 +2285,17 @@ const Dashboard: React.FC<DashboardProps> = ({
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', stiffness: 350, damping: 30 }}
-              className={`native-bottom-sheet fixed bottom-0 left-0 right-0 z-[110] rounded-t-3xl border-t max-h-[85vh] flex flex-col lg:hidden ${isDark ? 'bg-[#0d0d14] border-white/10' : 'bg-white border-slate-200'}`}
+              className={`native-bottom-sheet fixed bottom-0 left-0 right-0 z-[110] rounded-t-3xl border-t max-h-[85vh] flex flex-col lg:hidden bg-[var(--bg-card)] border-[var(--border-subtle)] backdrop-blur-2xl`}
             >
               {/* Header */}
               <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-white/5 shrink-0">
                 <div>
-                  <h3 className="text-sm font-black uppercase tracking-widest">Upravit dashboard</h3>
+                  <h3 className="text-sm font-semibold">Upravit dashboard</h3>
                   <p className="text-[10px] text-slate-500 mt-0.5">Zapni/vypni widgety a změň pořadí</p>
                 </div>
                 <button
                   onClick={() => setIsMobileEditing(false)}
-                  className="px-4 py-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-xl text-[11px] font-black uppercase tracking-widest"
+                  className="px-4 py-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-xl text-[11px] font-semibold"
                 >
                   Hotovo
                 </button>
@@ -2369,7 +2368,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                   return (
                     <>
                       <div className="px-1 pt-4 pb-2">
-                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Přidat další</p>
+                        <p className="text-[11px] font-semibold text-slate-500">Přidat další</p>
                       </div>
                       {missingWidgets.map(master => (
                         <button
@@ -2377,17 +2376,17 @@ const Dashboard: React.FC<DashboardProps> = ({
                           onClick={() => updateWidgetStatus(master.id, true)}
                           className={`flex items-center gap-3 px-4 py-3 rounded-2xl border border-dashed transition-all active:scale-95 ${isDark ? 'border-white/15 hover:bg-white/5 hover:border-emerald-500/40' : 'border-slate-300 hover:bg-slate-50 hover:border-emerald-500/40'}`}
                         >
-                          <div className={`w-10 h-6 rounded-full border flex items-center justify-start shrink-0 ${isDark ? 'bg-white/5 border-white/10' : 'bg-slate-100 border-slate-200'}`}>
+                          <div className={`w-10 h-6 rounded-full border flex items-center justify-start shrink-0 bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
                             <div className="w-4 h-4 rounded-full bg-emerald-500 mx-1 shadow-sm" />
                           </div>
-                          <div className={`p-1.5 rounded-lg ${isDark ? 'bg-white/5' : 'bg-slate-100'}`}>
+                          <div className={`p-1.5 rounded-lg bg-[var(--bg-page)]`}>
                             {React.cloneElement(master.icon as React.ReactElement<any>, { size: 14 })}
                           </div>
                           <div className="flex-1 text-left">
                             <span className="text-xs font-bold block">{master.label}</span>
                             <span className="text-[9px] text-slate-500 line-clamp-1">{master.description}</span>
                           </div>
-                          <span className="text-[9px] font-black uppercase tracking-widest text-emerald-500 shrink-0">Přidat</span>
+                          <span className="text-[11px] font-semibold text-emerald-500 shrink-0">Přidat</span>
                         </button>
                       ))}
                     </>
@@ -2407,7 +2406,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             animate={{ y: 0, opacity: 1, scale: 1 }}
             exit={{ y: 100, opacity: 0, scale: 0.95 }}
             transition={{ type: "spring", stiffness: 400, damping: 30 }}
-            className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[150] w-[95%] max-w-4xl p-3 md:p-4 rounded-3xl border shadow-2xl backdrop-blur-3xl flex items-center gap-4 ${isDark ? 'bg-slate-800/90 border-slate-700/50 shadow-black/80' : 'bg-white/95 border-slate-200 shadow-slate-300/50'}`}
+            className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[150] w-[95%] max-w-4xl p-3 md:p-4 rounded-3xl border shadow-2xl backdrop-blur-3xl flex items-center gap-4 bg-[var(--bg-card)] border-[var(--border-subtle)] ${isDark ? 'shadow-black/80' : 'shadow-slate-300/50'}`}
           >
             <div className="flex-1 overflow-x-auto no-scrollbar flex items-center gap-3 snap-x px-2">
               {visibleMaster.filter(master => !activeLayout.find(w => w.id === master.id)?.visible).length === 0 && (
@@ -2419,13 +2418,13 @@ const Dashboard: React.FC<DashboardProps> = ({
                   whileTap={{ scale: 0.95 }}
                   key={master.id}
                   onClick={(e) => { e.stopPropagation(); updateWidgetStatus(master.id, true); }}
-                  className={`snap-center shrink-0 flex flex-col items-center justify-center p-3 w-24 h-24 rounded-2xl border transition-colors group cursor-pointer ${isDark ? 'bg-white/5 border-white/5 hover:bg-white/10 hover:border-white/10' : 'bg-slate-50 border-slate-200 hover:bg-white hover:shadow-md'}`}
+                  className={`snap-center shrink-0 flex flex-col items-center justify-center p-3 w-24 h-24 rounded-2xl border transition-colors group cursor-pointer ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] hover:bg-white/10 hover:border-white/10' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] hover:bg-white hover:shadow-md'}`}
                   title={master.description}
                 >
-                  <div className={`p-2.5 rounded-xl border mb-2 transition-colors ${isDark ? 'bg-slate-800 border-white/5 text-slate-400 group-hover:text-blue-400' : 'bg-white shadow-sm border-slate-100 text-slate-500 group-hover:text-blue-500'}`}>
+                  <div className={`p-2.5 rounded-xl border mb-2 transition-colors ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-400 group-hover:text-blue-400' : 'bg-[var(--bg-card)] shadow-sm border-[var(--border-subtle)] text-slate-500 group-hover:text-blue-500'}`}>
                     {React.cloneElement(master.icon as React.ReactElement<any>, { size: 18 })}
                   </div>
-                  <span className={`text-[9px] font-black uppercase tracking-tight text-center leading-tight line-clamp-2 ${isDark ? 'text-slate-400 group-hover:text-white' : 'text-slate-600 group-hover:text-slate-900'}`}>{master.label}</span>
+                  <span className={`text-[11px] font-semibold tracking-tight text-center leading-tight line-clamp-2 ${isDark ? 'text-slate-400 group-hover:text-white' : 'text-slate-600 group-hover:text-slate-900'}`}>{master.label}</span>
                 </motion.button>
               ))}
             </div>
@@ -2435,7 +2434,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             <div className="shrink-0 pl-2">
               <button onClick={onCloseEdit} className="w-16 h-16 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-lg shadow-emerald-500/20 flex flex-col items-center justify-center gap-1 hover:scale-105 active:scale-95 transition-all">
                 <CheckCircle2 size={24} />
-                <span className="text-[9px] font-black uppercase tracking-widest">Hotovo</span>
+                <span className="text-[11px] font-semibold">Hotovo</span>
               </button>
             </div>
           </motion.div>

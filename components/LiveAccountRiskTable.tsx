@@ -484,7 +484,7 @@ export const LiveAccountRiskTable = ({
 
       <div className="overflow-x-auto">
         <table className="w-full min-w-[980px] border-collapse [&_th:last-child]:sticky [&_th:last-child]:right-0 [&_th:last-child]:bg-[var(--bg-card)] [&_td:last-child]:sticky [&_td:last-child]:right-0 [&_td:last-child]:bg-[var(--bg-card)]">
-          <thead className="bg-[var(--bg-page)] text-left text-[9px] font-black uppercase tracking-[0.1em] text-[var(--text-secondary)]">
+          <thead className="bg-[var(--bg-page)] text-left text-[11px] font-semibold text-[var(--text-secondary)]">
             <tr>
               <th data-risk-column="account" className="px-3 py-2">Účet</th>
               <th data-risk-column="prop" className="px-3 py-2">Propka</th>

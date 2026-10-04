@@ -279,7 +279,7 @@ export const DynamicChart: React.FC<Props> = ({
 
     return (
       <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 my-2">
-        <div className="text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)] mb-3">
+        <div className="text-[11px] font-semibold text-[var(--text-secondary)] mb-3">
           {title}
         </div>
         <div style={{ height: 200 }}>
@@ -396,7 +396,7 @@ export const DynamicChart: React.FC<Props> = ({
 
   return (
     <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 my-2">
-      <div className="text-[10px] font-black uppercase tracking-widest text-[var(--text-secondary)] mb-3">
+      <div className="text-[11px] font-semibold text-[var(--text-secondary)] mb-3">
         {title}
       </div>
       <div style={{ height: 240 }}>

@@ -153,7 +153,7 @@ const FirmSelect: React.FC<{
   placeholder?: string;
 }> = ({ value, onChange, isDark, placeholder }) => {
   const [open, setOpen] = useState(false);
-  const triggerCls = `w-full px-4 py-2.5 rounded-xl border outline-none transition-all flex items-center gap-2 text-left ${isDark ? 'bg-slate-900 border-white/10 text-white' : 'bg-slate-50 border-slate-200 text-slate-900'}`;
+  const triggerCls = `w-full px-4 py-2.5 rounded-xl border outline-none transition-all flex items-center gap-2 text-left ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-white' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-900'}`;
   const key = value ? firmOf({ name: '', firmOverride: value }) : '';
   const known = KNOWN_FIRMS.find(f => f.label.toUpperCase() === (value || '').toUpperCase() || f.key === key);
   const customText = known ? '' : (value || '');
@@ -172,7 +172,7 @@ const FirmSelect: React.FC<{
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setOpen(false); }} />
-          <div className={`absolute z-50 mt-1 left-0 min-w-full w-max max-w-[280px] rounded-xl border shadow-2xl overflow-hidden ${isDark ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'}`}>
+          <div className={`absolute z-50 mt-1 left-0 min-w-full w-max max-w-[280px] rounded-xl border shadow-2xl overflow-hidden bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
             {KNOWN_FIRMS.map(f => (
               <button
                 key={f.key}
@@ -191,7 +191,7 @@ const FirmSelect: React.FC<{
                 value={customText}
                 placeholder="Jiná firma…"
                 onChange={e => onChange(e.target.value || undefined)}
-                className={`w-full px-3 py-1.5 rounded-lg text-sm outline-none border ${isDark ? 'bg-slate-800 border-white/10 text-white placeholder-slate-600' : 'bg-slate-50 border-slate-200 text-slate-900 placeholder-slate-400'}`}
+                className={`w-full px-3 py-1.5 rounded-lg text-sm outline-none border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-white placeholder-slate-600' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-900 placeholder-slate-400'}`}
               />
             </div>
           </div>
@@ -621,7 +621,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
     return <Activity className="text-emerald-500" size={size} />;
   };
 
-  const inputClass = `w-full px-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-blue-500/40 outline-none transition-all ${theme !== 'light' ? 'bg-slate-900 border-white/10 text-white placeholder-slate-700' : 'bg-slate-50 border-slate-200 text-slate-900 placeholder-slate-400'}`;
+  const inputClass = `w-full px-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-blue-500/40 outline-none transition-all ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-white placeholder-slate-700' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-900 placeholder-slate-400'}`;
 
   const renderOAuthAccountCard = (acc: Account, model: AccountCockpitModel) => {
     const profile = profileByAccountId.get(acc.id) ?? null;
@@ -642,15 +642,15 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       <div className="flex items-start gap-2">
         <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${oauthState?.status === 'connected' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,.8)]' : 'bg-slate-500'}`} />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2"><h3 className="truncate text-sm font-black text-[var(--text-primary)]">{acc.name}</h3>{model.breached && <span className="rounded-full border border-rose-500/35 bg-rose-500/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-rose-500">Breach?</span>}</div>
+          <div className="flex items-center gap-2"><h3 className="truncate text-sm font-black text-[var(--text-primary)]">{acc.name}</h3>{model.breached && <span className="rounded-full border border-rose-500/35 bg-rose-500/10 px-2 py-0.5 text-[11px] font-semibold text-rose-500">Breach?</span>}</div>
           <p className="mt-0.5 truncate text-[10px] font-semibold text-[var(--text-secondary)] tabular-nums">{acc.oauth?.externalAccountId}{profile?.accountSize != null ? ` · ${money(profile.accountSize)}` : ''}{(acc.copyMultiplier ?? 1) > 1 ? ` · ×${acc.copyMultiplier}` : ''}{oauthState?.status === 'disconnected' && oauthLastSeen ? ` · naposledy ${oauthLastSeen}` : ''}</p>
         </div>
-        <span className={`rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wider ${phaseFunded ? 'border-violet-500/30 bg-violet-500/10 text-violet-400' : 'border-amber-500/30 bg-amber-500/10 text-amber-500'}`}>{phaseFunded ? 'Funded' : 'Challenge'}</span>
+        <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${phaseFunded ? 'border-violet-500/30 bg-violet-500/10 text-violet-400' : 'border-amber-500/30 bg-amber-500/10 text-amber-500'}`}>{phaseFunded ? 'Funded' : 'Challenge'}</span>
         <button type="button" onClick={event => { event.stopPropagation(); startEditing(event, acc); }} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-indigo-500/10 hover:text-indigo-500" aria-label={`Upravit ${acc.name}`}><Settings2 size={14} /></button>
       </div>
 
       <div className="mt-4 flex items-end justify-between gap-3">
-        <div><p className="text-[9px] font-black uppercase tracking-widest text-slate-500">{model.balance == null ? 'Poslední balance' : 'Balance'}</p><p className="mt-0.5 text-2xl font-black text-[var(--text-primary)] tabular-nums">{model.balance == null ? '—' : money(model.balance)}</p>{model.todayPnl != null && <p className={`text-xs font-bold tabular-nums ${model.todayPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>dnes {signed(model.todayPnl)}</p>}</div>
+        <div><p className="text-[11px] font-semibold text-slate-500">{model.balance == null ? 'Poslední balance' : 'Balance'}</p><p className="mt-0.5 text-2xl font-black text-[var(--text-primary)] tabular-nums">{model.balance == null ? '—' : money(model.balance)}</p>{model.todayPnl != null && <p className={`text-xs font-bold tabular-nums ${model.todayPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>dnes {signed(model.todayPnl)}</p>}</div>
         {model.equity.length >= 2 ? <SnapshotSparkline values={model.equity} /> : <div className="relative h-10 w-[120px] overflow-hidden"><AccountSparkline trades={accTrades} initialBalance={acc.initialBalance} color={(accTrades.reduce((sum, trade) => sum + trade.pnl, 0) >= 0) ? 'emerald' : 'rose'} theme={theme} /></div>}
       </div>
 
@@ -664,13 +664,13 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
       </div>}
 
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--border-subtle)] pt-3">
-        {model.breached && <><span className="rounded border border-rose-500/35 px-2 py-1 text-[10px] font-bold text-rose-500">Breach: floor protnut</span><button type="button" onClick={event => { event.stopPropagation(); const breachedIds = accounts.filter(candidate => candidate.status === 'Active' && cockpitByAccount.get(candidate.id)?.breached).map(candidate => candidate.id); setFuneralCandidateIds(breachedIds.length ? breachedIds : [acc.id]); setFirmFuneralTarget('Breached účty'); }} className="rounded-lg bg-rose-600 px-3 py-1.5 text-[10px] font-black uppercase text-white">Pohřbít</button></>}
+        {model.breached && <><span className="rounded border border-rose-500/35 px-2 py-1 text-[10px] font-bold text-rose-500">Breach: floor protnut</span><button type="button" onClick={event => { event.stopPropagation(); const breachedIds = accounts.filter(candidate => candidate.status === 'Active' && cockpitByAccount.get(candidate.id)?.breached).map(candidate => candidate.id); setFuneralCandidateIds(breachedIds.length ? breachedIds : [acc.id]); setFirmFuneralTarget('Breached účty'); }} className="rounded-lg bg-rose-600 px-3 py-1.5 text-[11px] font-semibold text-white">Pohřbít</button></>}
         {model.payout?.eligible && <span className="rounded border border-emerald-500/30 px-2 py-1 text-[10px] font-bold text-emerald-500">Payout připraven</span>}
         {!model.breached && model.risk === 'ok' && <span className="rounded border border-emerald-500/25 px-2 py-1 text-[10px] font-bold text-emerald-500">V bezpečí</span>}
         <div className="ml-auto flex items-center gap-2">
           {phaseFunded && <button type="button" onClick={event => { event.stopPropagation(); setPayoutTargetAccountId(acc.id); }} className="flex h-11 w-11 items-center justify-center rounded-lg text-emerald-500 hover:bg-emerald-500/10" aria-label="Výplata"><HandCoins size={14} /></button>}
 
-          <button type="button" onClick={event => toggleAccountStatus(event, acc.id)} className="text-[9px] font-black uppercase text-slate-500 hover:text-amber-500">Archivovat</button>
+          <button type="button" onClick={event => toggleAccountStatus(event, acc.id)} className="text-[11px] font-semibold text-slate-500 hover:text-amber-500">Archivovat</button>
         </div>
       </div>
     </div>;
@@ -712,7 +712,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
 
           <div className={`flex justify-between items-start ${isSlave ? 'mb-4' : 'mb-6'} gap-2`}>
             <div className="flex items-center gap-3 min-w-0">
-              <div className={`${isSlave ? 'p-2 rounded-xl' : 'p-3 rounded-2xl'} ${theme !== 'light' ? 'bg-white/5 shadow-inner' : 'bg-slate-100'} flex-shrink-0`}>
+              <div className={`${isSlave ? 'p-2 rounded-xl' : 'p-3 rounded-2xl'} ${theme !== 'light' ? 'bg-[var(--bg-page)] shadow-inner' : 'bg-[var(--bg-page)]'} flex-shrink-0`}>
                 {(() => {
                   // Logo firmy u názvu účtu; fallback na status ikonu (backtest / neznámá firma).
                   const fk = firmOf(acc);
@@ -724,10 +724,10 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <h3 className={`font-black uppercase tracking-tight truncate ${isSlave ? 'text-xs' : 'text-sm'} ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>{acc.name}</h3>
-                  {isSlave && <span className="px-1.5 py-0.5 rounded-md bg-blue-500/10 text-[8px] font-black text-blue-500 uppercase flex items-center gap-1 flex-shrink-0"><Link size={8} /> Copy</span>}
+                  <h3 className={`font-semibold tracking-tight truncate ${isSlave ? 'text-xs' : 'text-sm'} ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>{acc.name}</h3>
+                  {isSlave && <span className="px-1.5 py-0.5 rounded-md bg-blue-500/10 text-[11px] font-semibold text-blue-500 flex items-center gap-1 flex-shrink-0"><Link size={8} /> Copy</span>}
                 </div>
-                <div className="flex items-center gap-1.5 mt-0.5 whitespace-nowrap overflow-hidden text-[8px] font-black uppercase tracking-widest text-slate-500">
+                <div className="flex items-center gap-1.5 mt-0.5 whitespace-nowrap overflow-hidden text-[11px] font-semibold text-slate-500">
                   {isBacktest
                     ? <span className="text-violet-400">Backtesting</span>
                     : <span className={`${acc.phase === 'Funded' ? 'text-purple-500' : 'text-amber-500'}`}>{acc.phase || 'Challenge'}</span>
@@ -735,7 +735,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                 </div>
                 {acc.oauth && (
                   <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[8px] font-bold text-slate-500">
-                    <span className="rounded-md border border-blue-500/20 bg-blue-500/10 px-1.5 py-0.5 uppercase tracking-wider text-blue-400">
+                    <span className="rounded-md border border-blue-500/20 bg-blue-500/10 px-1.5 py-0.5 text-blue-400">
                       Tradovate{acc.oauth.firm ? ` · ${acc.oauth.firm}` : ''}
                     </span>
                     <span className="flex items-center gap-1">
@@ -765,13 +765,13 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
-              <span className="text-[8px] uppercase font-black text-slate-500 tracking-wider">Balance</span>
+              <span className="text-[11px] font-semibold text-slate-500">Balance</span>
               <p className={`${isSlave ? 'text-xl' : 'text-2xl'} font-black font-mono tracking-tighter ${currentPlatformBalance >= acc.initialBalance ? 'text-emerald-500' : 'text-rose-500'}`}>
                 ${currentPlatformBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })}
               </p>
             </div>
             <div className="flex flex-col items-end space-y-1">
-              <span className="text-[8px] uppercase font-black text-slate-500 tracking-wider">Net PnL</span>
+              <span className="text-[11px] font-semibold text-slate-500">Net PnL</span>
               {/* Vyplacené peníze se odečítají, ať platí balance = initial + Net PnL.
                   Dřív balance výplatu odečetla, ale Net PnL ne → čísla si protiřečila. */}
               {(() => {
@@ -794,7 +794,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
             {propDrawdown && !isBacktest && (
               <button type="button" onClick={(event) => { event.stopPropagation(); setDrawdownDetailAccountId(acc.id); }} className="mb-3 w-full text-left rounded-xl hover:bg-rose-500/5 transition-colors p-1 -m-1">
                 <div className="flex items-center justify-between mb-1.5 gap-2">
-                  <span className={`text-[8px] font-black uppercase ${propDrawdown.remainingPct <= 25 ? 'text-rose-500' : propDrawdown.remainingPct <= 50 ? 'text-amber-500' : 'text-emerald-500'}`}>DD prostor</span>
+                  <span className={`text-[11px] font-semibold ${propDrawdown.remainingPct <= 25 ? 'text-rose-500' : propDrawdown.remainingPct <= 50 ? 'text-amber-500' : 'text-emerald-500'}`}>DD prostor</span>
                   <span className="text-[8px] font-black text-slate-500 truncate">
                     ${Math.round(propDrawdown.remainingRoom).toLocaleString('en-US')} · floor ${Math.round(propDrawdown.currentFloor).toLocaleString('en-US')} · {propDrawdown.locked ? 'LOCKED' : 'TRAILING'}
                   </span>
@@ -812,14 +812,14 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
             )}
             {isBacktest ? (
               <div className="flex items-center justify-between">
-                <span className="text-[8px] font-black uppercase text-violet-400">Backtest účet</span>
+                <span className="text-[11px] font-semibold text-violet-400">Backtest účet</span>
                 <span className="text-[8px] font-black text-slate-500">{accTrades.length} obchodů</span>
               </div>
             ) : isChallenge && acc.status === 'Active' ? (
               <div className="flex items-center gap-4">
                 <div className="flex-1">
                   <div className="flex justify-between items-center mb-1">
-                    <span className="text-[8px] font-black uppercase text-blue-500">Cíl Profitu</span>
+                    <span className="text-[11px] font-semibold text-blue-500">Cíl Profitu</span>
                     <span className="text-[8px] font-black text-slate-500">{(totalPnL / (acc.initialBalance * ((acc.profitTarget || 10) / 100)) * 100).toFixed(1)}%</span>
                   </div>
                   <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
@@ -835,12 +835,12 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
               <div className="flex items-center gap-4">
                 <div className="flex-1">
                   <div className="flex justify-between items-center mb-1">
-                    <span className="text-[8px] font-black uppercase text-emerald-500">Profit Split</span>
+                    <span className="text-[11px] font-semibold text-emerald-500">Profit Split</span>
                     <span className="text-[8px] font-black text-slate-500">{acc.profitSplit || 90}%</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-[8px] font-black uppercase text-slate-600">Výplata</span>
-                    <span className="text-[8px] font-black text-emerald-500 uppercase">Aktivní</span>
+                    <span className="text-[11px] font-semibold text-slate-600">Výplata</span>
+                    <span className="text-[11px] font-semibold text-emerald-500">Aktivní</span>
                   </div>
                 </div>
                 {/* Funded účet se nepassuje — jen padne. Bez tohohle tlačítka nešlo spálený funded pohřbít. */}
@@ -852,17 +852,17 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
 
         <div className={`flex justify-between items-center ${isSlave ? 'mt-2' : 'mt-5'} pt-3 border-t border-white/5 opacity-0 group-hover:opacity-100 transition-all duration-500 h-[24px]`}>
           <div className="flex gap-2">
-            <button onClick={(e) => toggleAccountStatus(e, acc.id)} className={`text-[8px] font-black uppercase tracking-wider flex items-center gap-1 transition-all ${acc.status === 'Active' ? 'text-slate-500 hover:text-amber-500' : 'text-emerald-500 hover:text-emerald-400'}`}>
+            <button onClick={(e) => toggleAccountStatus(e, acc.id)} className={`text-[11px] font-semibold flex items-center gap-1 transition-all ${acc.status === 'Active' ? 'text-slate-500 hover:text-amber-500' : 'text-emerald-500 hover:text-emerald-400'}`}>
               {acc.status === 'Active' ? <><Archive size={10} /> Archivovat</> : <><Check size={10} /> Obnovit</>}
             </button>
             {acc.status === 'Inactive' && onOpenInDashboard && (
-              <button onClick={(e) => { e.stopPropagation(); onOpenInDashboard(acc.id); }} className="text-[8px] font-black uppercase tracking-wider flex items-center gap-1 text-blue-500 hover:text-blue-400 transition-all" title="Otevřít v dashboardu">
+              <button onClick={(e) => { e.stopPropagation(); onOpenInDashboard(acc.id); }} className="text-[11px] font-semibold flex items-center gap-1 text-blue-500 hover:text-blue-400 transition-all" title="Otevřít v dashboardu">
                 <LayoutDashboard size={10} /> Dashboard
               </button>
             )}
 
           </div>
-          <button onClick={(e) => { e.stopPropagation(); setAccountToDelete(acc); }} className="text-[8px] font-black uppercase text-slate-600 hover:text-rose-500 transition-all flex items-center gap-1">
+          <button onClick={(e) => { e.stopPropagation(); setAccountToDelete(acc); }} className="text-[11px] font-semibold text-slate-600 hover:text-rose-500 transition-all flex items-center gap-1">
             {acc.oauth ? <><Archive size={10} /> Archivovat</> : <><Trash2 size={10} /> Smazat</>}
           </button>
         </div>
@@ -890,31 +890,31 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         }))}
       />}
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4"><p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Celková equity</p><p className="mt-1 text-2xl font-black text-[var(--text-primary)] tabular-nums">{cockpitSummary.totalEquity == null ? '—' : `$${Math.round(cockpitSummary.totalEquity).toLocaleString('en-US')}`}</p><p className="mt-1 text-xs text-[var(--text-secondary)]">{activeCockpitModels.length} OAuth účtů · {new Set(accounts.filter(account => account.status === 'Active' && account.oauth).map(firmOf)).size} firem</p></div>
-        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4"><p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Dnes</p><p className={`mt-1 text-2xl font-black tabular-nums ${cockpitSummary.todayPnl == null ? 'text-[var(--text-primary)]' : cockpitSummary.todayPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{cockpitSummary.todayPnl == null ? '—' : `${cockpitSummary.todayPnl >= 0 ? '+' : '−'}$${Math.round(Math.abs(cockpitSummary.todayPnl)).toLocaleString('en-US')}`}</p><p className="mt-1 text-xs text-[var(--text-secondary)]">z denních snapshot ledgerů</p></div>
-        <div className={`rounded-xl border p-4 ${cockpitSummary.riskCount > 0 ? 'border-rose-500/35 bg-gradient-to-b from-rose-500/10 to-[var(--bg-card)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}><p className="text-[9px] font-black uppercase tracking-widest text-slate-500">V riziku</p><p className={`mt-1 text-2xl font-black ${cockpitSummary.riskCount ? 'text-rose-500' : 'text-emerald-500'}`}>{cockpitSummary.riskCount} {cockpitSummary.riskCount === 1 ? 'účet' : 'účtů'}</p><p className="mt-1 truncate text-xs text-[var(--text-secondary)]">{riskAccount ? riskAccount.name : 'žádný aktivní semafor'}</p></div>
-        <div className={`rounded-xl border p-4 ${payoutCandidateAccount ? 'border-emerald-500/35 bg-gradient-to-b from-emerald-500/10 to-[var(--bg-card)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}><p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Payout</p><p className={`mt-1 text-2xl font-black tabular-nums ${payoutCandidateAccount ? 'text-emerald-500' : 'text-[var(--text-primary)]'}`}>{cockpitSummary.payoutCandidate ? cockpitSummary.payoutCandidate.amountUsd === 0 ? 'připraven' : `za ~$${Math.round(cockpitSummary.payoutCandidate.amountUsd).toLocaleString('en-US')}` : '—'}</p><p className="mt-1 truncate text-xs text-[var(--text-secondary)]">{payoutCandidateAccount?.name ?? 'chybí úplná payout pravidla'}</p></div>
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4"><p className="text-[11px] font-semibold text-slate-500">Celková equity</p><p className="mt-1 text-2xl font-black text-[var(--text-primary)] tabular-nums">{cockpitSummary.totalEquity == null ? '—' : `$${Math.round(cockpitSummary.totalEquity).toLocaleString('en-US')}`}</p><p className="mt-1 text-xs text-[var(--text-secondary)]">{activeCockpitModels.length} OAuth účtů · {new Set(accounts.filter(account => account.status === 'Active' && account.oauth).map(firmOf)).size} firem</p></div>
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4"><p className="text-[11px] font-semibold text-slate-500">Dnes</p><p className={`mt-1 text-2xl font-black tabular-nums ${cockpitSummary.todayPnl == null ? 'text-[var(--text-primary)]' : cockpitSummary.todayPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{cockpitSummary.todayPnl == null ? '—' : `${cockpitSummary.todayPnl >= 0 ? '+' : '−'}$${Math.round(Math.abs(cockpitSummary.todayPnl)).toLocaleString('en-US')}`}</p><p className="mt-1 text-xs text-[var(--text-secondary)]">z denních snapshot ledgerů</p></div>
+        <div className={`rounded-xl border p-4 ${cockpitSummary.riskCount > 0 ? 'border-rose-500/35 bg-gradient-to-b from-rose-500/10 to-[var(--bg-card)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}><p className="text-[11px] font-semibold text-slate-500">V riziku</p><p className={`mt-1 text-2xl font-black ${cockpitSummary.riskCount ? 'text-rose-500' : 'text-emerald-500'}`}>{cockpitSummary.riskCount} {cockpitSummary.riskCount === 1 ? 'účet' : 'účtů'}</p><p className="mt-1 truncate text-xs text-[var(--text-secondary)]">{riskAccount ? riskAccount.name : 'žádný aktivní semafor'}</p></div>
+        <div className={`rounded-xl border p-4 ${payoutCandidateAccount ? 'border-emerald-500/35 bg-gradient-to-b from-emerald-500/10 to-[var(--bg-card)]' : 'border-[var(--border-subtle)] bg-[var(--bg-card)]'}`}><p className="text-[11px] font-semibold text-slate-500">Payout</p><p className={`mt-1 text-2xl font-black tabular-nums ${payoutCandidateAccount ? 'text-emerald-500' : 'text-[var(--text-primary)]'}`}>{cockpitSummary.payoutCandidate ? cockpitSummary.payoutCandidate.amountUsd === 0 ? 'připraven' : `za ~$${Math.round(cockpitSummary.payoutCandidate.amountUsd).toLocaleString('en-US')}` : '—'}</p><p className="mt-1 truncate text-xs text-[var(--text-secondary)]">{payoutCandidateAccount?.name ?? 'chybí úplná payout pravidla'}</p></div>
       </section>
 
       {snapshotError && <div className="flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-4 py-2 text-xs text-amber-500"><AlertTriangle size={14} />{snapshotError} Karty nezobrazují odhadované hodnoty.</div>}
 
       <div className="flex justify-between items-center">
         <div className="flex gap-2">
-          <button onClick={() => setShowInactive(false)} className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${!showInactive ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Aktivní ({portfolioStats.activeCount})</button>
-          <button onClick={() => setShowInactive(true)} className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${showInactive ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Archiv ({portfolioStats.inactiveCount})</button>
+          <button onClick={() => setShowInactive(false)} className={`px-5 py-2 rounded-xl text-[11px] font-semibold transition-all ${!showInactive ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Aktivní ({portfolioStats.activeCount})</button>
+          <button onClick={() => setShowInactive(true)} className={`px-5 py-2 rounded-xl text-[11px] font-semibold transition-all ${showInactive ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Archiv ({portfolioStats.inactiveCount})</button>
         </div>
-        {!isAdding && !showInactive && <button onClick={() => setIsAdding(true)} className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-black text-[10px] uppercase tracking-widest shadow-lg shadow-blue-600/20 active:scale-95 transition-all"><Plus size={16} /> Vložit Kapitál</button>}
+        {!isAdding && !showInactive && <button onClick={() => setIsAdding(true)} className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-semibold text-[11px] shadow-lg shadow-blue-600/20 active:scale-95 transition-all"><Plus size={16} /> Vložit Kapitál</button>}
       </div>
 
       {isAdding && (
-        <div className={`p-8 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200 shadow-xl'}`}>
-          <div className="flex items-center gap-3 mb-6"><div className="p-2 bg-blue-600/10 text-blue-500 rounded-xl"><Activity size={20} /></div><h3 className="text-lg font-black italic uppercase">Nový obchodní účet</h3></div>
+        <div className={`p-8 rounded-[32px] border ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-xl'}`}>
+          <div className="flex items-center gap-3 mb-6"><div className="p-2 bg-blue-600/10 text-blue-500 rounded-xl"><Activity size={20} /></div><h3 className="text-lg font-bold">Nový obchodní účet</h3></div>
 
           {/* Account type selector */}
           <div className="flex gap-3 mb-6">
             <button
               onClick={() => setNewAccount({ ...newAccount, type: 'Funded', phase: 'Challenge' })}
-              className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border ${
+              className={`flex-1 py-3 rounded-xl text-[11px] font-semibold transition-all border ${
                 newAccount.type !== 'Backtest' ? 'bg-blue-600/20 border-blue-500/40 text-blue-400' : (theme !== 'light' ? 'border-white/10 text-slate-500' : 'border-slate-200 text-slate-400')
               }`}
             >
@@ -922,7 +922,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
             </button>
             <button
               onClick={() => setNewAccount({ ...newAccount, type: 'Backtest', phase: undefined, challengeCost: 0, profitSplit: 100 })}
-              className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all border ${
+              className={`flex-1 py-3 rounded-xl text-[11px] font-semibold transition-all border ${
                 newAccount.type === 'Backtest' ? 'bg-violet-600/20 border-violet-500/40 text-violet-400' : (theme !== 'light' ? 'border-white/10 text-slate-500' : 'border-slate-200 text-slate-400')
               }`}
             >
@@ -931,22 +931,22 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-5 mb-8">
-            <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-slate-500 tracking-widest">Název účtu</label><input type="text" value={newAccount.name} onChange={e => setNewAccount({ ...newAccount, name: e.target.value })} className={inputClass} placeholder="Např. FX Replay BT" /></div>
-            <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-slate-500 tracking-widest">Počáteční Balance ($)</label><input type="number" value={newAccount.initialBalance} onChange={e => setNewAccount({ ...newAccount, initialBalance: Number(e.target.value) })} className={inputClass} /></div>
+            <div className="space-y-1.5"><label className="text-[11px] font-semibold text-slate-500">Název účtu</label><input type="text" value={newAccount.name} onChange={e => setNewAccount({ ...newAccount, name: e.target.value })} className={inputClass} placeholder="Např. FX Replay BT" /></div>
+            <div className="space-y-1.5"><label className="text-[11px] font-semibold text-slate-500">Počáteční Balance ($)</label><input type="number" value={newAccount.initialBalance} onChange={e => setNewAccount({ ...newAccount, initialBalance: Number(e.target.value) })} className={inputClass} /></div>
             {newAccount.type !== 'Backtest' && (
               <>
                 <div className="space-y-1.5">
-                  <label className="text-[9px] uppercase font-black text-blue-500 tracking-widest">Firma</label>
+                  <label className="text-[11px] font-semibold text-blue-500">Firma</label>
                   <FirmSelect value={newAccount.firmOverride} onChange={v => setNewAccount({ ...newAccount, firmOverride: v })} isDark={theme !== 'light'} placeholder="Vyber firmu" />
                 </div>
-                <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-slate-500 tracking-widest">Fáze</label><select value={newAccount.phase} onChange={e => setNewAccount({ ...newAccount, phase: e.target.value as any })} className={inputClass}><option value="Challenge">Challenge</option><option value="Funded">Funded</option></select></div>
-                <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-rose-500 tracking-widest">Cena Pořízení ($)</label><input type="number" value={newAccount.challengeCost} onChange={e => setNewAccount({ ...newAccount, challengeCost: Number(e.target.value) })} className={`${inputClass} border-rose-500/20`} /></div>
-                <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-emerald-500 tracking-widest">Profit Split (%)</label><input type="number" value={newAccount.profitSplit} onChange={e => setNewAccount({ ...newAccount, profitSplit: Number(e.target.value) })} className={inputClass} /></div>
-                <div className="space-y-1.5"><label className="text-[9px] uppercase font-black text-blue-500 tracking-widest">Profit Cíl (%)</label><input type="number" value={newAccount.profitTarget} onChange={e => setNewAccount({ ...newAccount, profitTarget: Number(e.target.value) })} className={inputClass} placeholder="napr. 6" /></div>
+                <div className="space-y-1.5"><label className="text-[11px] font-semibold text-slate-500">Fáze</label><select value={newAccount.phase} onChange={e => setNewAccount({ ...newAccount, phase: e.target.value as any })} className={inputClass}><option value="Challenge">Challenge</option><option value="Funded">Funded</option></select></div>
+                <div className="space-y-1.5"><label className="text-[11px] font-semibold text-rose-500">Cena Pořízení ($)</label><input type="number" value={newAccount.challengeCost} onChange={e => setNewAccount({ ...newAccount, challengeCost: Number(e.target.value) })} className={`${inputClass} border-rose-500/20`} /></div>
+                <div className="space-y-1.5"><label className="text-[11px] font-semibold text-emerald-500">Profit Split (%)</label><input type="number" value={newAccount.profitSplit} onChange={e => setNewAccount({ ...newAccount, profitSplit: Number(e.target.value) })} className={inputClass} /></div>
+                <div className="space-y-1.5"><label className="text-[11px] font-semibold text-blue-500">Profit Cíl (%)</label><input type="number" value={newAccount.profitTarget} onChange={e => setNewAccount({ ...newAccount, profitTarget: Number(e.target.value) })} className={inputClass} placeholder="napr. 6" /></div>
               </>
             )}
           </div>
-          <div className="flex justify-end gap-3"><button onClick={() => setIsAdding(false)} className="px-6 py-2.5 rounded-xl font-black uppercase text-[10px] text-slate-500 tracking-widest hover:text-slate-300">Zrušit</button><button onClick={handleAddAccount} className="px-8 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black uppercase text-[10px] tracking-widest shadow-lg active:scale-95 transition-all">Aktivovat</button></div>
+          <div className="flex justify-end gap-3"><button onClick={() => setIsAdding(false)} className="px-6 py-2.5 rounded-xl font-semibold text-[11px] text-slate-500 hover:text-slate-300">Zrušit</button><button onClick={handleAddAccount} className="px-8 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-semibold text-[11px] shadow-lg active:scale-95 transition-all">Aktivovat</button></div>
         </div>
       )}
 
@@ -960,7 +960,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
           const collapsed = collapsedFirms.has(g.firm);
           const canBuryFirm = !showInactive && g.visible.some(a => a.type !== 'Backtest');
           return (
-            <section key={g.firm} className={`rounded-xl border overflow-hidden ${theme !== 'light' ? 'bg-slate-900/25 border-white/5' : 'bg-slate-50/60 border-slate-200'}`}>
+            <section key={g.firm} className={`rounded-xl border overflow-hidden bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
               <button
                 onClick={() => toggleFirmCollapsed(g.firm)}
                 aria-expanded={!collapsed}
@@ -978,23 +978,23 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                       aria-hidden="true"
                     >{firmInitials(g.firm)}</div>
                   )}
-                  <h3 className={`text-sm font-black uppercase tracking-tight ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>{firmLabel(g.firm)}</h3>
-                  {g.multiplierLabel && <span className="px-1.5 py-0.5 rounded-md bg-violet-500/10 border border-violet-500/25 text-violet-400 text-[8px] font-black uppercase tracking-widest">{g.multiplierLabel} risk</span>}
-                  <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                  <h3 className={`text-sm font-semibold tracking-tight ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>{firmLabel(g.firm)}</h3>
+                  {g.multiplierLabel && <span className="px-1.5 py-0.5 rounded-md bg-violet-500/10 border border-violet-500/25 text-violet-400 text-[11px] font-semibold">{g.multiplierLabel} risk</span>}
+                  <span className="text-[11px] font-semibold text-slate-500">
                     {g.activeCount} akt{g.failedCount > 0 && <span className="text-rose-500/80"> · {g.failedCount} ☠</span>}
                   </span>
                   <div className="ml-auto flex items-center gap-5">
                     <div className="text-right">
-                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Equity</p>
+                      <p className="text-[11px] font-semibold text-slate-500">Equity</p>
                       <p className={`text-sm font-black tabular-nums ${(g.liveEquity ?? g.sumBalance) >= 0 ? 'text-slate-200' : 'text-rose-500'} ${theme === 'light' ? '!text-slate-900' : ''}`}>${(g.liveEquity ?? g.sumBalance).toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Dnes</p>
+                      <p className="text-[11px] font-semibold text-slate-500">Dnes</p>
                       {/* Bez denního ledgeru (víkend, první den sběru) žádný fallback —
                           celoživotní P&L labelovaný „Dnes" mate. Pomlčka jako v souhrnu. */}
                       <p className={`text-sm font-black tabular-nums ${g.liveToday == null ? 'text-[var(--text-secondary)]' : g.liveToday >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{g.liveToday == null ? '—' : `${g.liveToday >= 0 ? '+' : ''}$${g.liveToday.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}</p>
                     </div>
-                    {g.visible.some(account => account.oauth) && <span role="button" tabIndex={0} onClick={event => { event.stopPropagation(); setRulesError(null); setRulesDialogFirm(g.firm); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); setRulesError(null); setRulesDialogFirm(g.firm); } }} className="flex cursor-pointer items-center gap-1 rounded-lg border border-indigo-500/25 bg-indigo-500/10 px-2.5 py-2 text-[9px] font-black uppercase tracking-wider text-indigo-400 hover:bg-indigo-500/20"><SlidersHorizontal size={13} /> Pravidla</span>}
+                    {g.visible.some(account => account.oauth) && <span role="button" tabIndex={0} onClick={event => { event.stopPropagation(); setRulesError(null); setRulesDialogFirm(g.firm); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); setRulesError(null); setRulesDialogFirm(g.firm); } }} className="flex cursor-pointer items-center gap-1 rounded-lg border border-indigo-500/25 bg-indigo-500/10 px-2.5 py-2 text-[11px] font-semibold text-indigo-400 hover:bg-indigo-500/20"><SlidersHorizontal size={13} /> Pravidla</span>}
                     {canBuryFirm && (
                       <span
                         role="button"
@@ -1010,7 +1010,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                   </div>
                 </div>
                 {/* Byznys řádek — lifetime přes všechny účty firmy (i pohřbené) */}
-                <div className="mt-2 pl-8 flex items-center gap-x-4 gap-y-1 flex-wrap text-[9px] font-black uppercase tracking-widest text-slate-500">
+                <div className="mt-2 pl-8 flex items-center gap-x-4 gap-y-1 flex-wrap text-[11px] font-semibold text-slate-500">
                   <span>Koupeno <span className="text-slate-300">{g.bought} účtů</span></span>
                   <span className="opacity-30">·</span>
                   <span>Zaplaceno <span className="text-rose-500 font-mono">−${g.paid.toLocaleString()}</span></span>
@@ -1039,19 +1039,19 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         if (!summary) return null;
         return (
           <div className="fixed inset-0 z-[450] flex items-center justify-center p-4 bg-black/65 backdrop-blur-md" role="dialog" aria-label="Historie prop drawdownu" onClick={() => setDrawdownDetailAccountId(null)}>
-            <div className={`w-full max-w-3xl max-h-[88vh] overflow-hidden rounded-[30px] border shadow-2xl ${theme !== 'light' ? 'bg-slate-950 border-white/10' : 'bg-white border-slate-200'}`} onClick={event => event.stopPropagation()}>
+            <div className={`w-full max-w-3xl max-h-[88vh] overflow-hidden rounded-[30px] border shadow-2xl bg-[var(--bg-card)] border-[var(--border-subtle)]`} onClick={event => event.stopPropagation()}>
               <div className="p-6 border-b border-white/10 flex items-start justify-between gap-4">
-                <div><p className="text-[9px] font-black uppercase tracking-widest text-rose-500">EOD Drawdown</p><h3 className="text-xl font-black">{summary.accountName}</h3><p className="text-xs text-slate-500">{summary.locked ? 'LOCKED' : 'TRAILING'} · floor ${Math.round(summary.currentFloor).toLocaleString('en-US')}</p></div>
+                <div><p className="text-[11px] font-semibold text-rose-500">EOD Drawdown</p><h3 className="text-xl font-black">{summary.accountName}</h3><p className="text-xs text-slate-500">{summary.locked ? 'LOCKED' : 'TRAILING'} · floor ${Math.round(summary.currentFloor).toLocaleString('en-US')}</p></div>
                 <button type="button" aria-label="Zavřít drawdown" onClick={() => setDrawdownDetailAccountId(null)} className="p-2 rounded-xl text-slate-500 hover:text-rose-500 hover:bg-rose-500/10"><X size={20} /></button>
               </div>
               <div className="p-6 grid grid-cols-3 gap-3">
-                <div className="p-4 rounded-2xl bg-blue-500/8 border border-blue-500/15"><p className="text-[8px] font-black uppercase text-slate-500">Balance</p><p className="text-lg font-black font-mono">${Math.round(summary.currentBalance).toLocaleString('en-US')}</p></div>
-                <div className="p-4 rounded-2xl bg-rose-500/8 border border-rose-500/15"><p className="text-[8px] font-black uppercase text-slate-500">Hard breach floor</p><p className="text-lg font-black font-mono text-rose-500">${Math.round(summary.currentFloor).toLocaleString('en-US')}</p></div>
-                <div className="p-4 rounded-2xl bg-emerald-500/8 border border-emerald-500/15"><p className="text-[8px] font-black uppercase text-slate-500">Zbývající prostor</p><p className={`text-lg font-black font-mono ${summary.remainingPct <= 25 ? 'text-rose-500' : summary.remainingPct <= 50 ? 'text-amber-500' : 'text-emerald-500'}`}>${Math.round(summary.remainingRoom).toLocaleString('en-US')}</p></div>
+                <div className="p-4 rounded-2xl bg-blue-500/8 border border-blue-500/15"><p className="text-[11px] font-semibold text-slate-500">Balance</p><p className="text-lg font-black font-mono">${Math.round(summary.currentBalance).toLocaleString('en-US')}</p></div>
+                <div className="p-4 rounded-2xl bg-rose-500/8 border border-rose-500/15"><p className="text-[11px] font-semibold text-slate-500">Hard breach floor</p><p className="text-lg font-black font-mono text-rose-500">${Math.round(summary.currentFloor).toLocaleString('en-US')}</p></div>
+                <div className="p-4 rounded-2xl bg-emerald-500/8 border border-emerald-500/15"><p className="text-[11px] font-semibold text-slate-500">Zbývající prostor</p><p className={`text-lg font-black font-mono ${summary.remainingPct <= 25 ? 'text-rose-500' : summary.remainingPct <= 50 ? 'text-amber-500' : 'text-emerald-500'}`}>${Math.round(summary.remainingRoom).toLocaleString('en-US')}</p></div>
               </div>
               <div className="px-6 pb-6 overflow-auto max-h-[52vh]">
                 <table className="w-full text-left text-xs">
-                  <thead className="sticky top-0 bg-inherit"><tr className="text-[8px] uppercase tracking-widest text-slate-500"><th className="py-2">Den</th><th>EOD balance</th><th>Floor před</th><th>Floor po</th><th className="text-right">Prostor</th></tr></thead>
+                  <thead className="sticky top-0 bg-inherit"><tr className="text-[11px] text-slate-500"><th className="py-2">Den</th><th>EOD balance</th><th>Floor před</th><th>Floor po</th><th className="text-right">Prostor</th></tr></thead>
                   <tbody>{[...summary.history].reverse().map(day => <tr key={day.date} className="border-t border-white/5"><td className="py-3 font-bold">{day.date}</td><td className="font-mono">${Math.round(day.closingBalance).toLocaleString('en-US')}</td><td className="font-mono text-slate-500">${Math.round(day.floorBefore).toLocaleString('en-US')}</td><td className="font-mono text-rose-400">${Math.round(day.projectedFloorAfter ?? day.floorAfter).toLocaleString('en-US')}{day.projectedFloorAfter != null ? ' odhad' : ''}</td><td className="font-mono font-black text-right">${Math.round(day.roomAfter).toLocaleString('en-US')}</td></tr>)}</tbody>
                 </table>
               </div>
@@ -1062,24 +1062,24 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
 
       {editingAccount && (
         <div className="fixed inset-0 z-[400] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md" onClick={() => setEditingAccount(null)}>
-          <div className={`max-w-2xl w-full max-h-[90vh] overflow-y-auto p-8 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200 shadow-2xl'}`} onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between items-center mb-8"><div className="flex items-center gap-3"><div className="p-3 bg-blue-500/10 text-blue-500 rounded-2xl"><Settings2 size={24} /></div><h3 className="text-xl font-black italic uppercase">Nastavení Účtu</h3></div><button onClick={() => setEditingAccount(null)} className="text-slate-500 hover:text-white"><X size={24} /></button></div>
+          <div className={`max-w-2xl w-full max-h-[90vh] overflow-y-auto p-8 rounded-[32px] border ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-2xl'}`} onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-8"><div className="flex items-center gap-3"><div className="p-3 bg-blue-500/10 text-blue-500 rounded-2xl"><Settings2 size={24} /></div><h3 className="text-xl font-bold">Nastavení Účtu</h3></div><button onClick={() => setEditingAccount(null)} className="text-slate-500 hover:text-white"><X size={24} /></button></div>
             <div className="grid grid-cols-2 gap-6 mb-8">
-              <div className="space-y-2"><label className="text-[10px] font-black uppercase text-slate-500">Název účtu</label><input type="text" value={editFormData.name || ''} onChange={e => setEditFormData({ ...editFormData, name: e.target.value })} className={inputClass} /></div>
-              <div className="space-y-2"><label className="text-[10px] font-black uppercase text-slate-500">Počáteční Balance</label><input type="number" value={editFormData.initialBalance || ''} onChange={e => setEditFormData({ ...editFormData, initialBalance: Number(e.target.value) })} className={inputClass} /></div>
-              <div className="space-y-2"><label className="text-[10px] font-black uppercase text-slate-500">Cena Pořízení</label><input type="number" value={editFormData.challengeCost || 0} onChange={e => setEditFormData({ ...editFormData, challengeCost: Number(e.target.value) })} className={inputClass} /></div>
-              <div className="space-y-2"><label className="text-[10px] font-black uppercase text-slate-500">Profit Split (%)</label><input type="number" value={editFormData.profitSplit || 90} onChange={e => setEditFormData({ ...editFormData, profitSplit: Number(e.target.value) })} className={inputClass} /></div>
-              <div className="space-y-2"><label className="text-[10px] font-black uppercase text-blue-500">Profit Cíl (%)</label><input type="number" value={editFormData.profitTarget ?? 10} onChange={e => setEditFormData({ ...editFormData, profitTarget: Number(e.target.value) })} className={inputClass} /></div>
+              <div className="space-y-2"><label className="text-[11px] font-semibold text-slate-500">Název účtu</label><input type="text" value={editFormData.name || ''} onChange={e => setEditFormData({ ...editFormData, name: e.target.value })} className={inputClass} /></div>
+              <div className="space-y-2"><label className="text-[11px] font-semibold text-slate-500">Počáteční Balance</label><input type="number" value={editFormData.initialBalance || ''} onChange={e => setEditFormData({ ...editFormData, initialBalance: Number(e.target.value) })} className={inputClass} /></div>
+              <div className="space-y-2"><label className="text-[11px] font-semibold text-slate-500">Cena Pořízení</label><input type="number" value={editFormData.challengeCost || 0} onChange={e => setEditFormData({ ...editFormData, challengeCost: Number(e.target.value) })} className={inputClass} /></div>
+              <div className="space-y-2"><label className="text-[11px] font-semibold text-slate-500">Profit Split (%)</label><input type="number" value={editFormData.profitSplit || 90} onChange={e => setEditFormData({ ...editFormData, profitSplit: Number(e.target.value) })} className={inputClass} /></div>
+              <div className="space-y-2"><label className="text-[11px] font-semibold text-blue-500">Profit Cíl (%)</label><input type="number" value={editFormData.profitTarget ?? 10} onChange={e => setEditFormData({ ...editFormData, profitTarget: Number(e.target.value) })} className={inputClass} /></div>
               <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase text-slate-500">Fáze Účtu</label>
+                <label className="text-[11px] font-semibold text-slate-500">Fáze Účtu</label>
                 <select value={editFormData.phase || 'Challenge'} onChange={e => setEditFormData({ ...editFormData, phase: e.target.value as any })} className={inputClass}><option value="Challenge">Challenge</option><option value="Funded">Funded</option></select>
               </div>
               <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase text-slate-500">Master Účet (Link)</label>
+                <label className="text-[11px] font-semibold text-slate-500">Master Účet (Link)</label>
                 <select value={editFormData.parentAccountId || ''} onChange={e => setEditFormData({ ...editFormData, parentAccountId: e.target.value || undefined })} className={inputClass}><option value="">-- Žádný --</option>{accounts.filter(a => a.id !== editingAccount.id && !a.parentAccountId).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
               </div>
               <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase text-slate-500">Firma (skupina)</label>
+                <label className="text-[11px] font-semibold text-slate-500">Firma (skupina)</label>
                 <FirmSelect
                   value={editFormData.firmOverride}
                   onChange={v => setEditFormData({ ...editFormData, firmOverride: v })}
@@ -1089,7 +1089,7 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                 <p className="text-[9px] text-slate-500 font-semibold">Prázdné = automaticky první slovo názvu. Vyber ze seznamu (spáruje logo) nebo napiš vlastní.</p>
               </div>
               <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase text-slate-500">Risk Multiplikátor (AlphaBridge)</label>
+                <label className="text-[11px] font-semibold text-slate-500">Risk Multiplikátor (AlphaBridge)</label>
                 <input
                   type="number" min={1} step={1}
                   value={editFormData.copyMultiplier ?? 1}
@@ -1101,10 +1101,10 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
               <div className="col-span-2 p-4 rounded-2xl border border-rose-500/20 bg-rose-500/5 space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-[10px] font-black uppercase text-rose-500">Prop-firm drawdown</p>
+                    <p className="text-[11px] font-semibold text-rose-500">Prop-firm drawdown</p>
                     <p className="text-[9px] text-slate-500 font-semibold">Preset se odvodí podle firmy; tady jej můžeš potvrdit nebo upravit.</p>
                   </div>
-                  <label className="flex items-center gap-2 text-[9px] font-black uppercase text-slate-500">
+                  <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-500">
                     <input
                       type="checkbox"
                       checked={editFormData.drawdownConfig?.enabled !== false && !!editFormData.drawdownConfig}
@@ -1119,17 +1119,17 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
                 </div>
                 {editFormData.drawdownConfig?.enabled !== false && editFormData.drawdownConfig && (
                   <div className="grid grid-cols-2 gap-3">
-                    <div><label className="text-[9px] font-black uppercase text-slate-500">Typ</label><select value={editFormData.drawdownConfig.mode} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, mode: e.target.value as any } })} className={inputClass}><option value="eod_trailing">EOD trailing</option><option value="intraday_trailing">Intraday trailing</option><option value="static">Static</option></select></div>
-                    <div><label className="text-[9px] font-black uppercase text-slate-500">DD částka ($)</label><input type="number" value={editFormData.drawdownConfig.amount} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, amount: Number(e.target.value) } })} className={inputClass} /></div>
-                    <div><label className="text-[9px] font-black uppercase text-slate-500">Lock trigger balance</label><input type="number" value={editFormData.drawdownConfig.lockTriggerBalance ?? ''} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, lockTriggerBalance: e.target.value ? Number(e.target.value) : undefined } })} className={inputClass} /></div>
-                    <div><label className="text-[9px] font-black uppercase text-slate-500">Locked floor</label><input type="number" value={editFormData.drawdownConfig.lockedFloor ?? ''} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, lockedFloor: e.target.value ? Number(e.target.value) : undefined } })} className={inputClass} /></div>
-                    <div><label className="text-[9px] font-black uppercase text-slate-500">Aktuální floor (volitelné)</label><input type="number" value={editFormData.drawdownConfig.manualCurrentFloor ?? ''} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, manualCurrentFloor: e.target.value ? Number(e.target.value) : undefined } })} className={inputClass} /></div>
-                    <label className="flex items-end pb-3 gap-2 text-[9px] font-black uppercase text-slate-500"><input type="checkbox" checked={!!editFormData.drawdownConfig.forceLocked} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, forceLocked: e.target.checked } })} /> Už zamčeno</label>
+                    <div><label className="text-[11px] font-semibold text-slate-500">Typ</label><select value={editFormData.drawdownConfig.mode} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, mode: e.target.value as any } })} className={inputClass}><option value="eod_trailing">EOD trailing</option><option value="intraday_trailing">Intraday trailing</option><option value="static">Static</option></select></div>
+                    <div><label className="text-[11px] font-semibold text-slate-500">DD částka ($)</label><input type="number" value={editFormData.drawdownConfig.amount} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, amount: Number(e.target.value) } })} className={inputClass} /></div>
+                    <div><label className="text-[11px] font-semibold text-slate-500">Lock trigger balance</label><input type="number" value={editFormData.drawdownConfig.lockTriggerBalance ?? ''} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, lockTriggerBalance: e.target.value ? Number(e.target.value) : undefined } })} className={inputClass} /></div>
+                    <div><label className="text-[11px] font-semibold text-slate-500">Locked floor</label><input type="number" value={editFormData.drawdownConfig.lockedFloor ?? ''} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, lockedFloor: e.target.value ? Number(e.target.value) : undefined } })} className={inputClass} /></div>
+                    <div><label className="text-[11px] font-semibold text-slate-500">Aktuální floor (volitelné)</label><input type="number" value={editFormData.drawdownConfig.manualCurrentFloor ?? ''} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, manualCurrentFloor: e.target.value ? Number(e.target.value) : undefined } })} className={inputClass} /></div>
+                    <label className="flex items-end pb-3 gap-2 text-[11px] font-semibold text-slate-500"><input type="checkbox" checked={!!editFormData.drawdownConfig.forceLocked} onChange={e => setEditFormData({ ...editFormData, drawdownConfig: { ...editFormData.drawdownConfig!, forceLocked: e.target.checked } })} /> Už zamčeno</label>
                   </div>
                 )}
               </div>
             </div>
-            <div className="flex gap-4"><button onClick={() => setEditingAccount(null)} className="flex-1 py-4 font-black uppercase text-[10px] text-slate-500 bg-white/5 rounded-2xl">Zrušit</button><button onClick={saveEdit} className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase text-[10px] shadow-lg shadow-blue-600/20 active:scale-95 transition-all">Uložit Změny</button></div>
+            <div className="flex gap-4"><button onClick={() => setEditingAccount(null)} className="flex-1 py-4 font-semibold text-[11px] text-slate-500 bg-white/5 rounded-2xl">Zrušit</button><button onClick={saveEdit} className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-semibold text-[11px] shadow-lg shadow-blue-600/20 active:scale-95 transition-all">Uložit Změny</button></div>
           </div>
         </div>
       )}
@@ -1138,9 +1138,9 @@ const AccountsManager: React.FC<AccountsManagerProps> = ({
         <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md" onClick={() => setPassConfirmTarget(null)}>
           <div className="max-w-md w-full p-8 rounded-[32px] bg-slate-900 border border-white/10 text-center space-y-6" onClick={e => e.stopPropagation()}>
             <div className="p-4 bg-blue-500/10 text-blue-500 rounded-full inline-block"><PartyPopper size={32} /></div>
-            <h3 className="text-xl font-black italic uppercase">Challenge Splněna!</h3>
+            <h3 className="text-xl font-bold">Challenge Splněna!</h3>
             <p className="text-slate-500 text-sm">Povýšit účet <span className="text-blue-500 font-bold">{passConfirmTarget.name}</span> na Funded?</p>
-            <div className="flex gap-4"><button onClick={() => setPassConfirmTarget(null)} className="flex-1 py-3 text-[10px] font-black uppercase text-slate-500 bg-white/5 rounded-xl">Zrušit</button><button onClick={executePass} className="flex-1 py-3 text-[10px] font-black uppercase bg-blue-600 text-white rounded-xl">Potvrdit</button></div>
+            <div className="flex gap-4"><button onClick={() => setPassConfirmTarget(null)} className="flex-1 py-3 text-[11px] font-semibold text-slate-500 bg-white/5 rounded-xl">Zrušit</button><button onClick={executePass} className="flex-1 py-3 text-[11px] font-semibold bg-blue-600 text-white rounded-xl">Potvrdit</button></div>
           </div>
         </div>
       )}

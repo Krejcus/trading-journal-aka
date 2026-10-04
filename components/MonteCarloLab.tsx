@@ -207,7 +207,7 @@ const MonteCarloLab: React.FC<Props> = ({ theme, trades, initialBalance, onClose
 
   const profCol = result.p50 >= result.start ? 'text-emerald-400' : 'text-rose-400';
   const sliderCls = 'w-full accent-violet-500';
-  const fieldCls = `w-full h-9 rounded-lg px-2.5 text-sm outline-none border ${isDark ? 'bg-white/5 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-800'}`;
+  const fieldCls = `w-full h-9 rounded-lg px-2.5 text-sm outline-none border ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-white' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-800'}`;
 
   const Slider: React.FC<{ label: string; val: string; children: React.ReactNode }> = ({ label, val, children }) => (
     <div>
@@ -216,7 +216,7 @@ const MonteCarloLab: React.FC<Props> = ({ theme, trades, initialBalance, onClose
     </div>
   );
   const Stat: React.FC<{ label: string; value: string; sub?: string; cls?: string }> = ({ label, value, sub, cls }) => (
-    <div className={`rounded-xl p-3 ${isDark ? 'bg-white/[0.04]' : 'bg-slate-50'}`}>
+    <div className={`rounded-xl p-3 bg-[var(--bg-page)]`}>
       <div className="text-[10px] font-bold text-slate-500 mb-1">{label}</div>
       <div className={`text-lg font-black font-mono leading-none ${cls || (isDark ? 'text-white' : 'text-slate-800')}`}>{value}</div>
       {sub && <div className="text-[9px] font-bold text-slate-500 mt-1">{sub}</div>}
@@ -230,13 +230,13 @@ const MonteCarloLab: React.FC<Props> = ({ theme, trades, initialBalance, onClose
         <div className="flex items-center gap-3">
           <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${isDark ? 'bg-violet-500/15 text-violet-400' : 'bg-violet-100 text-violet-600'}`}><Activity size={18} /></div>
           <div>
-            <h2 className="text-lg font-black tracking-tight italic">MONTE CARLO LAB</h2>
+            <h2 className="text-lg font-bold tracking-tight">Monte Carlo lab</h2>
             <p className="text-[11px] font-bold text-slate-500">Stress-test strategie · {sims} simulací</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={applyPrefill} disabled={!prefill}
-            className={`flex items-center gap-1.5 px-3 h-9 rounded-lg text-[11px] font-black uppercase tracking-wider transition-all ${prefill ? 'bg-violet-600 hover:bg-violet-500 text-white' : 'opacity-40 cursor-not-allowed bg-white/5 text-slate-500'}`}
+            className={`flex items-center gap-1.5 px-3 h-9 rounded-lg text-[11px] font-semibold transition-all ${prefill ? 'bg-violet-600 hover:bg-violet-500 text-white' : 'opacity-40 cursor-not-allowed bg-white/5 text-slate-500'}`}
             title={prefill ? 'Předvyplní win rate, R:R, risk a počet z tvých obchodů' : 'Potřebuješ aspoň 5 uzavřených obchodů'}>
             <Sparkles size={13} /> Načíst z mých obchodů
           </button>
@@ -248,14 +248,14 @@ const MonteCarloLab: React.FC<Props> = ({ theme, trades, initialBalance, onClose
       <div className="flex-1 overflow-y-auto p-5 grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5">
         {/* Controls */}
         <div className="space-y-4">
-          <div className={`rounded-2xl p-4 border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'} space-y-3.5`}>
+          <div className={`rounded-2xl p-4 border bg-[var(--bg-card)] border-[var(--border-subtle)] space-y-3.5`}>
             <Slider label="Win rate" val={`${wr} %`}><input type="range" min={10} max={90} step={1} value={wr} onChange={e => setWr(+e.target.value)} className={sliderCls} /></Slider>
             <Slider label="Avg win / loss (R:R)" val={rr.toFixed(1)}><input type="range" min={0.3} max={5} step={0.1} value={rr} onChange={e => setRr(+e.target.value)} className={sliderCls} /></Slider>
             <Slider label="Risk na obchod" val={`${risk.toFixed(1)} %`}><input type="range" min={0.1} max={5} step={0.1} value={risk} onChange={e => setRisk(+e.target.value)} className={sliderCls} /></Slider>
             <Slider label="Počet obchodů" val={`${n}`}><input type="range" min={20} max={500} step={10} value={n} onChange={e => setN(+e.target.value)} className={sliderCls} /></Slider>
             <Slider label="Ruin při poklesu o" val={`${ruin} %`}><input type="range" min={10} max={90} step={5} value={ruin} onChange={e => setRuin(+e.target.value)} className={sliderCls} /></Slider>
           </div>
-          <div className={`rounded-2xl p-4 border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'} grid grid-cols-3 gap-2.5`}>
+          <div className={`rounded-2xl p-4 border bg-[var(--bg-card)] border-[var(--border-subtle)] grid grid-cols-3 gap-2.5`}>
             <div className="col-span-3"><div className="text-[10px] font-bold text-slate-500 mb-1">Počáteční zůstatek</div><input type="number" step={1000} value={bal} onChange={e => setBal(+e.target.value || 0)} className={fieldCls} /></div>
             <div><div className="text-[10px] font-bold text-slate-500 mb-1">Náklady $</div><input type="number" step={1} value={cost} onChange={e => setCost(+e.target.value || 0)} className={fieldCls} /></div>
             <div className="col-span-2"><div className="text-[10px] font-bold text-slate-500 mb-1">Simulací</div>
@@ -268,9 +268,9 @@ const MonteCarloLab: React.FC<Props> = ({ theme, trades, initialBalance, onClose
 
         {/* Charts + stats */}
         <div className="space-y-4 min-w-0">
-          <div className={`rounded-2xl p-4 border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
+          <div className={`rounded-2xl p-4 border bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
             <div className="flex items-center justify-between mb-2">
-              <span className={`text-[10px] font-black uppercase tracking-widest ${isDark ? 'text-violet-400' : 'text-violet-600'}`}>Equity křivky</span>
+              <span className={`text-[11px] font-semibold ${isDark ? 'text-violet-400' : 'text-violet-600'}`}>Equity křivky</span>
               <div className="flex gap-3.5 text-[10px] font-bold">
                 <span style={{ color: BEST }}><span className="inline-block w-3 h-0.5 align-middle mr-1" style={{ background: BEST }} />Nejlepší</span>
                 <span style={{ color: MOST }}><span className="inline-block w-3 h-0.5 align-middle mr-1" style={{ background: MOST }} />Nejpravděpodobnější</span>
@@ -316,8 +316,8 @@ const MonteCarloLab: React.FC<Props> = ({ theme, trades, initialBalance, onClose
           </p>
           {/* Dvě distribuce — interaktivní s hoverem */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className={`rounded-2xl p-4 border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
-              <span className={`text-[10px] font-black uppercase tracking-widest ${isDark ? 'text-violet-400' : 'text-violet-600'}`}>Rozdělení konečných zůstatků</span>
+            <div className={`rounded-2xl p-4 border bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
+              <span className={`text-[11px] font-semibold ${isDark ? 'text-violet-400' : 'text-violet-600'}`}>Rozdělení konečných zůstatků</span>
               <div className="relative h-[140px] mt-2">
                 <canvas ref={histRef} className="w-full h-full block cursor-crosshair"
                   onMouseMove={e => setHistBin(barBin(e, histGeom.current, histRef.current))}
@@ -337,8 +337,8 @@ const MonteCarloLab: React.FC<Props> = ({ theme, trades, initialBalance, onClose
               <div className="text-center text-[9px] font-bold text-slate-500 mt-1">Konečný zůstatek ($)</div>
             </div>
 
-            <div className={`rounded-2xl p-4 border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
-              <span className={`text-[10px] font-black uppercase tracking-widest ${isDark ? 'text-violet-400' : 'text-violet-600'}`}>Rozdělení drawdownu</span>
+            <div className={`rounded-2xl p-4 border bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
+              <span className={`text-[11px] font-semibold ${isDark ? 'text-violet-400' : 'text-violet-600'}`}>Rozdělení drawdownu</span>
               <div className="relative h-[140px] mt-2">
                 <canvas ref={ddRef} className="w-full h-full block cursor-crosshair"
                   onMouseMove={e => setDdBin(barBin(e, ddGeom.current, ddRef.current))}
@@ -356,11 +356,11 @@ const MonteCarloLab: React.FC<Props> = ({ theme, trades, initialBalance, onClose
           </div>
 
           {/* Scénář toggle + per-scénář staty */}
-          <div className={`rounded-2xl p-4 border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
+          <div className={`rounded-2xl p-4 border bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
             <div className="flex gap-2 mb-4">
               {([['med', 'Nejpravděpodobnější', MOST], ['worst', 'Nejhorší', WORST], ['best', 'Nejlepší', BEST]] as const).map(([k, label, col]) => (
                 <button key={k} onClick={() => setScen(k)}
-                  className={`flex-1 h-9 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all border ${scen === k ? 'text-white' : (isDark ? 'border-white/10 text-slate-400 hover:bg-white/5' : 'border-slate-200 text-slate-500 hover:bg-slate-50')}`}
+                  className={`flex-1 h-9 rounded-xl text-[11px] font-semibold transition-all border ${scen === k ? 'text-white' : (isDark ? 'border-white/10 text-slate-400 hover:bg-white/5' : 'border-slate-200 text-slate-500 hover:bg-slate-50')}`}
                   style={scen === k ? { background: col, borderColor: col } : undefined}>
                   {label}
                 </button>

@@ -85,11 +85,11 @@ const TradeConfluence: React.FC<Props> = ({ trade, isDark = true }) => {
       rose: 'bg-rose-500/10 border-rose-500/20 text-rose-500',
       slate: isDark ? 'bg-white/5 border-white/10 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-600',
     };
-    return <span key={key ?? label} className={`px-2 py-1 rounded-lg border text-[9px] font-black uppercase tracking-wide ${tones[tone]}`}>{label}</span>;
+    return <span key={key ?? label} className={`px-2 py-1 rounded-lg border text-[11px] font-semibold ${tones[tone]}`}>{label}</span>;
   };
 
   const heading = (Icon: any, text: string) => (
-    <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] mb-2.5 flex items-center gap-2"><Icon size={11} /> {text}</p>
+    <p className="text-[11px] font-semibold text-slate-500 mb-2.5 flex items-center gap-2"><Icon size={11} /> {text}</p>
   );
   const sectionCls = `pt-4 border-t ${isDark ? 'border-white/[0.03]' : 'border-slate-100'}`;
   const cardBg = isDark ? 'bg-black/20 border-white/5' : 'bg-white border-slate-100';
@@ -178,7 +178,7 @@ const TradeConfluence: React.FC<Props> = ({ trade, isDark = true }) => {
           {heading(Waves, 'Levely')}
           <div className={`rounded-xl border grid grid-cols-2 overflow-hidden ${cardBg}`}>
             <div className={`p-2.5 border-r ${isDark ? 'border-white/5' : 'border-slate-100'}`}>
-              <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-1.5">Za námi</p>
+              <p className="text-[11px] font-semibold text-slate-500 mb-1.5">Za námi</p>
               {sweepList.length ? (
                 <div className="space-y-1">
                   {sweepList.slice(0, 5).map((s, i) => {
@@ -186,7 +186,7 @@ const TradeConfluence: React.FC<Props> = ({ trade, isDark = true }) => {
                     const dist = distOf(s.level);
                     return (
                       <div key={`sw${i}`} className="flex items-baseline justify-between gap-1.5">
-                        <span className="text-[10px] font-black uppercase tracking-tight text-amber-500 truncate">{s.level}</span>
+                        <span className="text-[11px] font-semibold tracking-tight text-amber-500 truncate">{s.level}</span>
                         <span className="flex items-baseline gap-1.5 shrink-0 font-mono">
                           {dist && <span className="text-[9px] font-bold text-slate-400">{dist}</span>}
                           {age && <span className="text-[9px] font-bold text-slate-500">{age}</span>}
@@ -198,7 +198,7 @@ const TradeConfluence: React.FC<Props> = ({ trade, isDark = true }) => {
               ) : <p className="text-[10px] font-bold text-slate-500 italic">nic vzatého</p>}
             </div>
             <div className="p-2.5">
-              <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest mb-1.5">Před námi</p>
+              <p className="text-[11px] font-semibold text-slate-500 mb-1.5">Před námi</p>
               <div className="space-y-1">
                 {([
                   { key: 'above' as const, dir: '↑', n: ec.untappedAbove || 0, near: ec.nearestUntappedAbove, list: ec.untappedAboveList as { level: string; dist: number }[] | undefined },
@@ -216,7 +216,7 @@ const TradeConfluence: React.FC<Props> = ({ trade, isDark = true }) => {
                       </span>
                       {near && (
                         <span className="flex items-baseline gap-1.5 min-w-0">
-                          <span className="text-[9px] font-black uppercase text-violet-400 truncate">{near}</span>
+                          <span className="text-[11px] font-semibold text-violet-400 truncate">{near}</span>
                           {dist && <span className="text-[9px] font-bold font-mono text-slate-400 shrink-0">{dist.replace(/^[↑↓]/, '')}</span>}
                         </span>
                       )}
@@ -237,7 +237,7 @@ const TradeConfluence: React.FC<Props> = ({ trade, isDark = true }) => {
                         <div className="mt-1 pl-2 space-y-0.5 border-l border-violet-400/20">
                           {list.map((u, i) => (
                             <div key={`u${i}`} className="flex items-baseline justify-between gap-1.5">
-                              <span className="text-[9px] font-black uppercase text-violet-400/80 truncate">{u.level}</span>
+                              <span className="text-[11px] font-semibold text-violet-400/80 truncate">{u.level}</span>
                               <span className="text-[9px] font-bold font-mono text-slate-400 shrink-0">{Math.round(u.dist)} b</span>
                             </div>
                           ))}

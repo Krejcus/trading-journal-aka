@@ -42,11 +42,11 @@ interface NetworkHubProps {
 const DetailModal = ({ title, icon: Icon, onClose, children, isDark }: { title: string, icon: any, onClose: () => void, children: React.ReactNode, isDark: boolean }) => createPortal(
    <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 animate-in fade-in duration-300">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-md" onClick={onClose} />
-      <div className={`relative w-full max-w-2xl max-h-[90vh] overflow-y-auto p-8 rounded-[32px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'} animate-in zoom-in-95 duration-300`}>
+      <div className={`relative w-full max-w-2xl max-h-[90vh] overflow-y-auto p-8 rounded-[32px] border bg-[var(--bg-card)] border-[var(--border-subtle)] animate-in zoom-in-95 duration-300`}>
          <div className={`flex justify-between items-center mb-8 border-b pb-6 ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
             <div className="flex items-center gap-4">
                <div className="p-3 rounded-2xl bg-blue-600/10 text-blue-500"><Icon size={24} /></div>
-               <h3 className={`text-xl font-black italic tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>{title}</h3>
+               <h3 className={`text-xl font-bold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>{title}</h3>
             </div>
             <button onClick={onClose} className={`p-2 rounded-xl text-slate-500 hover:text-[var(--text-primary)] transition-all ${isDark ? 'hover:bg-[var(--text-primary)]/5' : 'hover:bg-slate-50'}`}><X size={24} /></button>
          </div>
@@ -462,7 +462,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`flex-shrink-0 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
+                  className={`flex-shrink-0 px-3 py-2 rounded-xl text-[11px] font-semibold transition-all ${
                      activeTab === tab.id
                         ? (theme !== 'light' ? 'bg-slate-700/60 text-white shadow-sm' : 'bg-white text-slate-900 shadow-sm border border-slate-200/60')
                         : (theme !== 'light' ? 'text-slate-500' : 'text-slate-400')
@@ -495,15 +495,15 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                         <div className="flex items-center gap-6">
                            <div className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 ${directionColor}`}>
                               {selectedTrade.direction === 'Long' ? <ArrowUpRight size={16} strokeWidth={3} /> : <ArrowDownRight size={16} strokeWidth={3} />}
-                              <span className="text-[10px] font-black uppercase tracking-widest">{selectedTrade.direction}</span>
+                              <span className="text-[11px] font-semibold">{selectedTrade.direction}</span>
                            </div>
                            <div>
-                              <h2 className={`text-xl font-black tracking-tighter uppercase leading-none ${isDark ? 'text-white' : 'text-slate-900'}`}>{selectedTrade.instrument}</h2>
-                              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">{networkTradeTime(selectedTrade.timestamp ?? selectedTrade.date)}</p>
+                              <h2 className={`text-xl font-semibold tracking-tighter leading-none ${isDark ? 'text-white' : 'text-slate-900'}`}>{selectedTrade.instrument}</h2>
+                              <p className="text-[11px] font-bold text-slate-500 mt-1">{networkTradeTime(selectedTrade.timestamp ?? selectedTrade.date)}</p>
                            </div>
                         </div>
                         <div className="text-right">
-                           <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest mb-1">Výsledek</p>
+                           <p className="text-[11px] font-semibold text-slate-500 mb-1">Výsledek</p>
                            <div className={`text-2xl font-black font-mono tracking-tighter leading-none ${pnlColor}`}>
                               {formatSharedPnL(selectedTrade.pnl, format, user.currency, exchangeRates)}
                            </div>
@@ -512,22 +512,22 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
                      {/* Stats Grid */}
                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div className={`p-4 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                           <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Vstupní cena</p>
+                        <div className={`p-4 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-page)] border-[var(--border-subtle)]'}`}>
+                           <p className="text-[11px] font-semibold text-slate-500 mb-1">Vstupní cena</p>
                            <p className={`text-lg font-black font-mono ${isDark ? 'text-white' : 'text-slate-900'}`}>{selectedTrade.entryPrice ?? '—'}</p>
                            <p className="text-[9px] text-slate-500 mt-1">{networkTradeTime(selectedTrade.entryTime ?? selectedTrade.entryDate)}</p>
                         </div>
-                        <div className={`p-4 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                           <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Výstupní cena</p>
+                        <div className={`p-4 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-page)] border-[var(--border-subtle)]'}`}>
+                           <p className="text-[11px] font-semibold text-slate-500 mb-1">Výstupní cena</p>
                            <p className={`text-lg font-black font-mono ${isDark ? 'text-white' : 'text-slate-900'}`}>{selectedTrade.exitPrice ?? '—'}</p>
                            <p className="text-[9px] text-slate-500 mt-1">{networkTradeTime(selectedTrade.timestamp ?? selectedTrade.exitDate)}</p>
                         </div>
-                        <div className={`p-4 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                           <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Realizované RRR</p>
+                        <div className={`p-4 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-page)] border-[var(--border-subtle)]'}`}>
+                           <p className="text-[11px] font-semibold text-slate-500 mb-1">Realizované RRR</p>
                            <p className={`text-lg font-black font-mono ${realRRR !== null && realRRR > 1 ? 'text-emerald-500' : 'text-slate-400'}`}>{formatSharedPnL(realRRR, 'rr')}</p>
                         </div>
-                        <div className={`p-4 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                           <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Doba držení</p>
+                        <div className={`p-4 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-page)] border-[var(--border-subtle)]'}`}>
+                           <p className="text-[11px] font-semibold text-slate-500 mb-1">Doba držení</p>
                            <p className="text-lg font-black text-blue-400 font-mono">{holdTime}</p>
                         </div>
                      </div>
@@ -535,15 +535,15 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="space-y-6">
                            <div className="space-y-3">
-                              <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest flex items-center gap-2"><Zap size={14} /> Kontext a Signál</p>
+                              <p className="text-[11px] font-semibold text-slate-500 flex items-center gap-2"><Zap size={14} /> Kontext a Signál</p>
                               <p className={`text-sm font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{selectedTrade.signal || 'Bez signálu'}</p>
                               <div className="flex flex-wrap gap-2">
-                                 {selectedTrade.htfConfluence?.map(t => <span key={t} className="px-2 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[8px] font-black uppercase">{t}</span>)}
-                                 {selectedTrade.ltfConfluence?.map(t => <span key={t} className="px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[8px] font-black uppercase">{t}</span>)}
+                                 {selectedTrade.htfConfluence?.map(t => <span key={t} className="px-2 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[11px] font-semibold">{t}</span>)}
+                                 {selectedTrade.ltfConfluence?.map(t => <span key={t} className="px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[11px] font-semibold">{t}</span>)}
                               </div>
                            </div>
                            <div className="space-y-3">
-                              <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest flex items-center gap-2"><FileText size={14} /> Poznámky Tradera</p>
+                              <p className="text-[11px] font-semibold text-slate-500 flex items-center gap-2"><FileText size={14} /> Poznámky Tradera</p>
                               <div className={`p-4 rounded-xl border text-xs italic leading-relaxed ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)] text-slate-300' : 'bg-slate-50 border-slate-100 text-slate-600'}`}>
                                  {selectedTrade.notes || "Bez poznámek."}
                               </div>
@@ -551,7 +551,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                         </div>
 
                         <div className="space-y-3">
-                           <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest flex items-center gap-2"><Monitor size={14} /> Vizuální důkazy</p>
+                           <p className="text-[11px] font-semibold text-slate-500 flex items-center gap-2"><Monitor size={14} /> Vizuální důkazy</p>
                            {(selectedTrade.screenshots?.length || selectedTrade.screenshot) ? (
                               <div className="space-y-2">
                                  {(selectedTrade.screenshots || [selectedTrade.screenshot]).map((src, i) => src && (
@@ -566,7 +566,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                            ) : (
                               <div className={`p-8 rounded-2xl border border-dashed text-center flex flex-col items-center justify-center gap-2 ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]/20' : 'border-slate-200 bg-slate-50'}`}>
                                  <BarChart2 size={32} className={isDark ? 'text-slate-800' : 'text-slate-300'} />
-                                 <p className={`text-[9px] font-black uppercase ${isDark ? 'text-slate-700' : 'text-slate-400'}`}>Chybí vizuály</p>
+                                 <p className={`text-[11px] font-semibold ${isDark ? 'text-slate-700' : 'text-slate-400'}`}>Chybí vizuály</p>
                               </div>
                            )}
                         </div>
@@ -591,7 +591,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                        <Search size={16} className="text-white" />
                                     </div>
                                     <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 backdrop-blur-md rounded-lg border border-white/10">
-                                       <p className="text-[7px] font-black uppercase text-white tracking-widest">{session.label}</p>
+                                       <p className="text-[10px] font-semibold text-white">{session.label}</p>
                                     </div>
                                  </div>
                               )}
@@ -599,7 +599,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                  {!session.image && (
                                     <div className="flex items-center gap-2 mb-2">
                                        <Activity size={10} style={session.color ? { color: session.color } : { color: '#3b82f6' }} />
-                                       <span className="text-[8px] font-black uppercase text-slate-500 tracking-widest">{session.label}</span>
+                                       <span className="text-[11px] font-semibold text-slate-500">{session.label}</span>
                                     </div>
                                  )}
                                  {session.plan ? (
@@ -648,8 +648,8 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
                   {/* Ritual Completions */}
                   {selectedPrep.ritualCompletions && selectedPrep.ritualCompletions.length > 0 && (
-                     <div className={`p-5 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2"><ShieldCheck size={14} /> Ranní rituály</p>
+                     <div className={`p-5 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-page)] border-[var(--border-subtle)]'}`}>
+                        <p className="text-[11px] font-semibold text-slate-500 mb-3 flex items-center gap-2"><ShieldCheck size={14} /> Ranní rituály</p>
                         <div className="space-y-2">
                            {selectedPrep.ritualCompletions.map((ritual: any, ri: number) => {
                               const rules = spectatorData?.preferences?.ironRules || feedIronRules;
@@ -657,7 +657,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                               return (
                                  <div key={ri} className={`flex items-center justify-between p-2 rounded-lg ${isDark ? 'bg-black/20' : 'bg-white/50'}`}>
                                     <span className="text-[10px] font-bold text-slate-400 truncate pr-2">{ritualLabel}</span>
-                                    <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${ritual.status === 'Pass' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                                    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${ritual.status === 'Pass' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
                                        {ritual.status === 'Pass' ? 'Pass' : 'Pending'}
                                     </span>
                                  </div>
@@ -676,7 +676,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                <div className="space-y-6">
                   {/* Discipline Rating Header */}
                   <div className={`p-8 rounded-[32px] border text-center ${isDark ? 'bg-blue-600/10 border-blue-500/20' : 'bg-blue-50 border-blue-100'}`}>
-                     <p className="text-[10px] font-black text-blue-500 uppercase tracking-widest mb-3">Rating Disciplíny</p>
+                     <p className="text-[11px] font-semibold text-blue-500 mb-3">Rating Disciplíny</p>
                      <div className="flex justify-center gap-1.5">
                         {[1, 2, 3, 4, 5].map(s => (
                            <Star key={s} size={28} className={s <= (selectedReview.rating || 0) ? 'text-yellow-500 fill-yellow-500' : (isDark ? 'text-slate-700' : 'text-slate-200')} />
@@ -687,8 +687,8 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                   {/* Rules and Mistakes Grid */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                      {/* Rule Adherence */}
-                     <div className={`p-6 rounded-2xl border space-y-4 ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2"><ShieldCheck size={14} /> Dodržení pravidel</p>
+                     <div className={`p-6 rounded-2xl border space-y-4 ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-page)] border-[var(--border-subtle)]'}`}>
+                        <p className="text-[11px] font-semibold text-slate-500 flex items-center gap-2"><ShieldCheck size={14} /> Dodržení pravidel</p>
                         <div className="space-y-2">
                            {selectedReview.ruleAdherence && selectedReview.ruleAdherence.length > 0 ? (
                               selectedReview.ruleAdherence.map((rule, idx) => {
@@ -697,7 +697,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                  return (
                                     <div key={idx} className={`flex items-center justify-between p-2 rounded-lg ${isDark ? 'bg-black/20' : 'bg-white/50'}`}>
                                        <span className="text-[10px] font-bold text-slate-400 truncate pr-2">{ruleLabel}</span>
-                                       <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${rule.status === 'Pass' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                                       <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${rule.status === 'Pass' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
                                           {rule.status}
                                        </span>
                                     </div>
@@ -710,12 +710,12 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                      </div>
 
                      {/* Mistakes */}
-                     <div className={`p-6 rounded-2xl border space-y-4 ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2"><AlertTriangle size={14} /> Chyby dne</p>
+                     <div className={`p-6 rounded-2xl border space-y-4 ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-page)] border-[var(--border-subtle)]'}`}>
+                        <p className="text-[11px] font-semibold text-slate-500 flex items-center gap-2"><AlertTriangle size={14} /> Chyby dne</p>
                         <div className="flex flex-wrap gap-2">
                            {selectedReview.mistakes && selectedReview.mistakes.length > 0 ? (
                               selectedReview.mistakes.filter(m => m.trim() !== '').map((m, idx) => (
-                                 <span key={idx} className="px-2.5 py-1 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-500 text-[10px] font-black uppercase">
+                                 <span key={idx} className="px-2.5 py-1 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-500 text-[11px] font-semibold">
                                     {m}
                                  </span>
                               ))
@@ -725,7 +725,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                            {(!selectedReview.mistakes || selectedReview.mistakes.filter(m => m.trim() !== '').length === 0) && (
                               <div className="flex items-center gap-2 text-emerald-500/50">
                                  <Check size={14} />
-                                 <span className="text-[10px] font-black uppercase">Bez chyb</span>
+                                 <span className="text-[11px] font-semibold">Bez chyb</span>
                               </div>
                            )}
                         </div>
@@ -734,13 +734,13 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
                   {/* Goal Results */}
                   {selectedReview.goalResults && selectedReview.goalResults.length > 0 && (
-                     <div className={`p-6 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2"><Target size={14} /> Denní cíle</p>
+                     <div className={`p-6 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-page)] border-[var(--border-subtle)]'}`}>
+                        <p className="text-[11px] font-semibold text-slate-500 mb-3 flex items-center gap-2"><Target size={14} /> Denní cíle</p>
                         <div className="space-y-2">
                            {selectedReview.goalResults.map((gr: any, gi: number) => (
                               <div key={gi} className={`flex items-center justify-between p-2 rounded-lg ${isDark ? 'bg-black/20' : 'bg-white/50'}`}>
                                  <span className={`text-[10px] font-bold truncate pr-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{gr.text}</span>
-                                 <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded shrink-0 ${gr.achieved ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                                 <span className={`text-[11px] font-semibold px-2 py-0.5 rounded shrink-0 ${gr.achieved ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
                                     {gr.achieved ? 'Splněno' : 'Nesplněno'}
                                  </span>
                               </div>
@@ -750,12 +750,12 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                   )}
 
                   {/* Personal Reflections */}
-                  <div className={`p-6 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                     <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2"><FileText size={14} /> Reflexe & Poznámky</p>
+                  <div className={`p-6 rounded-2xl border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-page)] border-[var(--border-subtle)]'}`}>
+                     <p className="text-[11px] font-semibold text-slate-500 mb-3 flex items-center gap-2"><FileText size={14} /> Reflexe & Poznámky</p>
                      {selectedReview.mainTakeaway === null ? (
                         <div className="flex flex-col items-center justify-center py-8 opacity-40 select-none">
                            <Lock size={24} className="mb-2" />
-                           <p className="text-xs font-black uppercase tracking-widest">Tento obsah je soukromý</p>
+                           <p className="text-xs font-semibold">Tento obsah je soukromý</p>
                         </div>
                      ) : (
                         <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap italic">
@@ -771,11 +771,11 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
          {/* Permission Modal */}
          {editingPermissions && (
             <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-               <div className={`w-full max-w-sm p-6 rounded-[24px] border shadow-2xl animate-in zoom-in-95 duration-200 ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+               <div className={`w-full max-w-sm p-6 rounded-[24px] border shadow-2xl animate-in zoom-in-95 duration-200 bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
                   <div className="flex items-start justify-between mb-6">
                      <div>
                         <h3 className={`text-lg font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{editingPermissions.isAccepting ? 'Přijmout žádost' : 'Nastavení soukromí'}</h3>
-                        <p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-1">
+                        <p className="text-xs text-slate-500 font-bold mt-1">
                            {editingPermissions.isAccepting ? `Co uvidí: ${editingPermissions.name}?` : `pro: ${editingPermissions.name}`}
                         </p>
                      </div>
@@ -786,7 +786,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                      {/* Section: ACCOUNTS */}
                      {accounts.length > 1 && (
                         <div className="space-y-3">
-                           <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest pl-1">Viditelné účty</p>
+                           <p className="text-[11px] font-semibold text-slate-500 pl-1">Viditelné účty</p>
                            <div className={`p-3 rounded-xl border flex flex-col gap-2 ${isDark ? 'bg-[var(--bg-input)]/30 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'}`}>
                               {accounts.filter(a => a.status === 'Active').map(acc => {
                                  const allowed = editingPermissions.permissions.allowedAccountIds;
@@ -831,7 +831,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
                      {/* Section: TRADES */}
                      <div className="space-y-3">
-                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest pl-1">Obchody</p>
+                        <p className="text-[11px] font-semibold text-slate-500 pl-1">Obchody</p>
 
                         {/* PnL Format Selector */}
                         <div className={`p-4 rounded-xl border flex flex-col gap-3 ${isDark ? 'bg-[var(--bg-input)]/30 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'}`}>
@@ -864,7 +864,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                           updatePermissionsSafe(editingPermissions.connectionId, newPerms, snap);
                                        }
                                     }}
-                                    className={`py-2 rounded-lg text-[10px] font-black uppercase flex flex-col items-center gap-1 transition-all border ${editingPermissions.permissions.pnlFormat === mode.id ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-600/20' : 'bg-transparent border-transparent text-slate-500 hover:bg-slate-200 dark:hover:bg-white/5'}`}
+                                    className={`py-2 rounded-lg text-[11px] font-semibold flex flex-col items-center gap-1 transition-all border ${editingPermissions.permissions.pnlFormat === mode.id ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-600/20' : 'bg-transparent border-transparent text-slate-500 hover:bg-slate-200 dark:hover:bg-white/5'}`}
                                  >
                                     <mode.icon size={14} /> {mode.label}
                                  </button>
@@ -900,7 +900,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
                      {/* Section: PREP */}
                      <div className="space-y-3">
-                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest pl-1">Ranní Příprava</p>
+                        <p className="text-[11px] font-semibold text-slate-500 pl-1">Ranní Příprava</p>
                         <div className={`p-3 rounded-xl border flex items-center justify-between cursor-pointer transition-all ${editingPermissions.permissions.canSeePrep ? 'bg-amber-500/10 border-amber-500/30' : 'bg-transparent border-transparent hover:bg-slate-50 dark:hover:bg-white/5'}`}
                            onClick={() => {
                               const newPerms = {
@@ -951,7 +951,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
                      {/* Section: REVIEW */}
                      <div className="space-y-3">
-                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest pl-1">Večerní Review</p>
+                        <p className="text-[11px] font-semibold text-slate-500 pl-1">Večerní Review</p>
                         <div className="grid grid-cols-2 gap-3">
                            {/* Rating & Stats */}
                            <div className={`p-3 rounded-xl border flex flex-col gap-2 cursor-pointer transition-all ${editingPermissions.permissions.canSeeReviewStats ? 'bg-indigo-500/10 border-indigo-500/30' : 'bg-transparent border-transparent hover:bg-slate-50 dark:hover:bg-white/5'}`}
@@ -970,7 +970,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                               }}
                            >
                               <div className={`self-start p-1.5 rounded-lg ${editingPermissions.permissions.canSeeReviewStats ? 'bg-indigo-500 text-white' : 'bg-slate-200 text-slate-500 dark:bg-white/10'}`}><Star size={14} /></div>
-                              <p className={`text-[10px] font-black uppercase ${editingPermissions.permissions.canSeeReviewStats ? 'text-indigo-400' : 'text-slate-500'}`}>Rating & Chyby</p>
+                              <p className={`text-[11px] font-semibold ${editingPermissions.permissions.canSeeReviewStats ? 'text-indigo-400' : 'text-slate-500'}`}>Rating & Chyby</p>
                            </div>
 
                            {/* Notes & Psycho */}
@@ -990,7 +990,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                               }}
                            >
                               <div className={`self-start p-1.5 rounded-lg ${editingPermissions.permissions.canSeeReviewNotes ? 'bg-rose-500 text-white' : 'bg-slate-200 text-slate-500 dark:bg-white/10'}`}><Brain size={14} /></div>
-                              <p className={`text-[10px] font-black uppercase ${editingPermissions.permissions.canSeeReviewNotes ? 'text-rose-400' : 'text-slate-500'}`}>Poznámky & Psycho</p>
+                              <p className={`text-[11px] font-semibold ${editingPermissions.permissions.canSeeReviewNotes ? 'text-rose-400' : 'text-slate-500'}`}>Poznámky & Psycho</p>
                            </div>
                         </div>
                      </div>
@@ -1013,12 +1013,12 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                  showToast(err instanceof Error ? err.message : 'Žádost nebyla přijata.', 'error');
                               } finally { setAcceptingRequest(false); }
                            }}
-                           className="w-full py-3 rounded-xl bg-emerald-600 text-white font-black text-xs uppercase tracking-widest hover:bg-emerald-500 transition-all hover:scale-[1.02] shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2"
+                           className="w-full py-3 rounded-xl bg-emerald-600 text-white font-semibold text-xs hover:bg-emerald-500 transition-all hover:scale-[1.02] shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2"
                         >
                            <CheckCircle2 size={16} /> {acceptingRequest ? 'Potvrzuji…' : 'Potvrdit a přijmout'}
                         </button>
                      ) : (
-                        <button onClick={() => setEditingPermissions(null)} className="w-full py-3 rounded-xl bg-slate-900 text-white font-black text-xs uppercase tracking-widest hover:bg-slate-800 transition-all dark:bg-white dark:text-slate-900 hover:scale-[1.02]">
+                        <button onClick={() => setEditingPermissions(null)} className="w-full py-3 rounded-xl bg-slate-900 text-white font-semibold text-xs hover:bg-slate-800 transition-all dark:bg-white dark:text-slate-900 hover:scale-[1.02]">
                            Uložit nastavení
                         </button>
                      )}
@@ -1046,7 +1046,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                   {searchResults.map(user => (
                      <div key={user.id} className={`flex items-center justify-between p-4 rounded-xl transition-all ${isDark ? 'hover:bg-[var(--text-primary)]/5' : 'hover:bg-slate-50'}`}>
                         <div className="flex items-center gap-3">
-                           <div className="w-10 h-10 rounded-xl bg-blue-500/20 text-blue-500 flex items-center justify-center font-black text-xs uppercase">{user.full_name?.substring(0, 2) || 'UT'}</div>
+                           <div className="w-10 h-10 rounded-xl bg-blue-500/20 text-blue-500 flex items-center justify-center font-semibold text-xs">{user.full_name?.substring(0, 2) || 'UT'}</div>
                            <div>
                               <p className={`text-sm font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{user.full_name || 'Uživatel'}</p>
                               <p className="text-[10px] text-slate-500 font-bold">{user.email}</p>
@@ -1054,7 +1054,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                         </div>
                         <button
                            onClick={() => sendRequest(user.id)}
-                           className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2"
+                           className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-[11px] font-semibold transition-all flex items-center gap-2"
                         >
                            <UserPlus size={14} /> Sledovat
                         </button>
@@ -1068,13 +1068,13 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
          {/* LEADERBOARD CONTENT */}
          {activeTab === 'leaderboard' && (
             <div className="space-y-6">
-               <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><Trophy size={14} className="text-yellow-500" /> Elitní Žebříček</h3>
+               <h3 className="text-xs font-semibold text-slate-500 flex items-center gap-2"><Trophy size={14} className="text-yellow-500" /> Elitní Žebříček</h3>
                <p className="text-xs text-slate-500">Výsledky z posledních 100 sdílených obchodů každého tradera. Bez známé úspěšnosti se pořadí neurčuje.</p>
 
                {loadingLeaderboard ? (
                   <div className="py-20 flex flex-col items-center justify-center opacity-50">
                      <Loader2 size={40} className="animate-spin text-blue-500 mb-4" />
-                     <p className="text-xs font-black uppercase tracking-widest">Počítám statistiky...</p>
+                     <p className="text-xs font-semibold">Počítám statistiky...</p>
                   </div>
                ) : leaderboardError ? <div className="p-6 text-center text-slate-500">Žebříček se nepodařilo načíst. <button className="text-blue-500 font-bold" onClick={loadConnections}>Zkusit znovu</button></div> : leaderboardStats.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-20 text-center space-y-6 opacity-60">
@@ -1082,20 +1082,20 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                         <Trophy size={48} />
                      </div>
                      <div>
-                        <h3 className="text-xl font-black uppercase tracking-widest text-slate-500">Žádná data</h3>
+                        <h3 className="text-xl font-semibold text-slate-500">Žádná data</h3>
                         <p className="text-xs text-slate-600 mt-2 max-w-sm mx-auto">Sledujte tradery pro porovnání výsledků.</p>
                      </div>
                   </div>
                ) : (
-                  <div className={`overflow-hidden rounded-[24px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+                  <div className={`overflow-hidden rounded-[24px] border bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
                      <table className="w-full">
                         <thead>
                            <tr className={`border-b ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]/50' : 'border-slate-100 bg-slate-50'}`}>
-                              <th className="px-6 py-4 text-left text-[9px] font-black uppercase tracking-widest text-slate-500">Rank</th>
-                              <th className="px-6 py-4 text-left text-[9px] font-black uppercase tracking-widest text-slate-500">Trader</th>
-                              <th className="px-6 py-4 text-right text-[9px] font-black uppercase tracking-widest text-slate-500">Win Rate</th>
-                              <th className="px-6 py-4 text-right text-[9px] font-black uppercase tracking-widest text-slate-500">Disciplína</th>
-                              <th className="px-6 py-4 text-right text-[9px] font-black uppercase tracking-widest text-slate-500">Obchody</th>
+                              <th className="px-6 py-4 text-left text-[11px] font-semibold text-slate-500">Rank</th>
+                              <th className="px-6 py-4 text-left text-[11px] font-semibold text-slate-500">Trader</th>
+                              <th className="px-6 py-4 text-right text-[11px] font-semibold text-slate-500">Win Rate</th>
+                              <th className="px-6 py-4 text-right text-[11px] font-semibold text-slate-500">Disciplína</th>
+                              <th className="px-6 py-4 text-right text-[11px] font-semibold text-slate-500">Obchody</th>
                            </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-white/5">
@@ -1112,7 +1112,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                  </td>
                                  <td className="px-6 py-4">
                                     <div className="flex items-center gap-3">
-                                       <div className="w-8 h-8 rounded-lg bg-blue-600/20 text-blue-500 flex items-center justify-center text-xs font-black uppercase">{user.name?.substring(0, 2)}</div>
+                                       <div className="w-8 h-8 rounded-lg bg-blue-600/20 text-blue-500 flex items-center justify-center text-xs font-semibold">{user.name?.substring(0, 2)}</div>
                                        <span className={`font-black text-sm ${isDark ? 'text-white' : 'text-slate-900'}`}>{user.name}</span>
                                     </div>
                                  </td>
@@ -1141,7 +1141,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
          {activeTab === 'feed' && (
             <div className="space-y-4">
                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><Activity size={14} /> Live Feed</h3>
+                  <h3 className="text-xs font-semibold text-slate-500 flex items-center gap-2"><Activity size={14} /> Live Feed</h3>
                   <button onClick={loadFeed} className={`p-2 rounded-xl transition-all ${isDark ? 'bg-[var(--bg-input)] text-slate-400 hover:text-blue-400' : 'bg-slate-100 text-slate-600 hover:text-blue-600'}`}>
                      <Loader2 size={14} className={loadingFeed ? 'animate-spin' : ''} />
                   </button>
@@ -1162,7 +1162,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                               else next.add(f.key);
                               return next;
                            })}
-                           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${active
+                           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-semibold transition-all ${active
                               ? (isDark ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30' : 'bg-blue-50 text-blue-600 border border-blue-200')
                               : (isDark ? 'bg-[var(--bg-input)] text-slate-600 border border-transparent' : 'bg-slate-100 text-slate-400 border border-transparent')
                               }`}
@@ -1184,7 +1184,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                         <Activity size={48} />
                      </div>
                      <div>
-                        <h3 className="text-xl font-black uppercase tracking-widest text-slate-500">Žádná aktivita</h3>
+                        <h3 className="text-xl font-semibold text-slate-500">Žádná aktivita</h3>
                         <p className="text-xs text-slate-600 mt-2 max-w-sm mx-auto">Sledujte tradery pro zobrazení jejich aktivity.</p>
                      </div>
                   </div>
@@ -1242,22 +1242,22 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                     {/* User header + time */}
                                     <div className="flex items-center justify-between">
                                        <div className="flex items-center gap-2">
-                                          <div className={`w-6 h-6 rounded-md flex items-center justify-center font-black uppercase text-[8px] ${isDark ? 'bg-blue-600/10 text-blue-500' : 'bg-blue-50 text-blue-600'}`}>
+                                          <div className={`w-6 h-6 rounded-md flex items-center justify-center font-semibold text-[11px] ${isDark ? 'bg-blue-600/10 text-blue-500' : 'bg-blue-50 text-blue-600'}`}>
                                              {item.user?.name?.substring(0, 2) || '??'}
                                           </div>
                                           <span className={`text-[11px] font-black ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{item.user?.name || 'Trader'}</span>
                                        </div>
-                                       <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">{timeStr}</span>
+                                       <span className="text-[11px] text-slate-500 font-bold">{timeStr}</span>
                                     </div>
 
                                     {/* Instrument + Direction + PnL */}
                                     <div className="flex items-center justify-between">
                                        <div className="flex items-center gap-2">
-                                          <h3 className={`text-lg font-black uppercase tracking-tighter truncate leading-none ${isDark ? 'text-white group-hover:text-trade-accent' : 'text-slate-900'} transition-colors duration-300`}>
+                                          <h3 className={`text-lg font-semibold tracking-tighter truncate leading-none ${isDark ? 'text-white group-hover:text-trade-accent' : 'text-slate-900'} transition-colors duration-300`}>
                                              {item.data?.instrument || '—'}
                                           </h3>
                                           {item.data?.direction && (
-                                             <span className={`px-1.5 py-0.5 rounded text-[7px] font-black uppercase border tracking-tighter ${item.data.direction === 'Long' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border-rose-500/20'}`}>
+                                             <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border tracking-tighter ${item.data.direction === 'Long' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border-rose-500/20'}`}>
                                                 {item.data.direction}
                                              </span>
                                           )}
@@ -1275,7 +1275,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                                    {formatSharedPnL(cardPnl, item.meta?.pnlFormat, user.currency, exchangeRates)}
                                                 </span>
                                              ) : (
-                                                <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Skryto</span>
+                                                <span className="text-[11px] font-semibold text-slate-600">Skryto</span>
                                              )}
                                           </div>
                                        )}
@@ -1317,7 +1317,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                           </span>
                                        )}
                                        {!(item.members?.length > 1) && item.meta?.pnlFormat !== 'hidden' && item.data?.entryPrice != null && (
-                                          <span className={`text-[7px] font-bold px-1.5 py-0.5 rounded border ${isDark ? 'bg-white/[0.03] text-slate-400 border-white/5' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+                                          <span className={`text-[7px] font-bold px-1.5 py-0.5 rounded border ${isDark ? 'bg-[var(--bg-page)] text-slate-400 border-[var(--border-subtle)]' : 'bg-[var(--bg-page)] text-slate-500 border-[var(--border-subtle)]'}`}>
                                              <span className="font-mono">{Number(item.data.entryPrice).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 5 })}</span>
                                              {item.data?.exitPrice != null && <> <span className="opacity-40">→</span> <span className="font-mono">{Number(item.data.exitPrice).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 5 })}</span></>}
                                           </span>
@@ -1342,12 +1342,12 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                            >
                               <div className="flex items-center justify-between mb-2">
                                  <div className="flex items-center gap-2">
-                                    <div className={`w-6 h-6 rounded-md flex items-center justify-center font-black uppercase text-[8px] ${isPrepItem ? 'bg-blue-500/10 text-blue-400' : 'bg-amber-500/10 text-amber-500'}`}>
+                                    <div className={`w-6 h-6 rounded-md flex items-center justify-center font-semibold text-[11px] ${isPrepItem ? 'bg-blue-500/10 text-blue-400' : 'bg-amber-500/10 text-amber-500'}`}>
                                        {item.user?.name?.substring(0, 2) || '??'}
                                     </div>
                                     <div>
                                        <span className={`text-[11px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{item.user?.name || 'Trader'}</span>
-                                       <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">
+                                       <p className="text-[11px] text-slate-500 font-bold">
                                           {isPrepItem ? (item.meta?.locked ? 'Příprava (zamčeno)' : 'Příprava') : 'Review'}
                                        </p>
                                     </div>
@@ -1363,7 +1363,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                     {isPrepItem && !item.meta?.locked && item.data?.mindsetState && (
                                        <span className="text-sm">{item.data.mindsetState === 'positive' ? '🟢' : item.data.mindsetState === 'negative' ? '🔴' : '🟡'}</span>
                                     )}
-                                    <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">{timeStr}</span>
+                                    <span className="text-[11px] text-slate-500 font-bold">{timeStr}</span>
                                  </div>
                               </div>
                               {isPrepItem && !item.meta?.locked && (
@@ -1378,11 +1378,11 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                                       {s.image ? (
                                                          <div className="aspect-video relative">
                                                             <img src={s.image} className="w-full h-full object-cover" alt={s.label} loading="lazy" />
-                                                            <div className="absolute top-0.5 left-0.5 px-1 py-0.5 bg-black/60 backdrop-blur-sm rounded text-[5px] font-black uppercase text-white tracking-widest">{s.label}</div>
+                                                            <div className="absolute top-0.5 left-0.5 px-1 py-0.5 bg-black/60 backdrop-blur-sm rounded text-[5px] font-semibold text-white">{s.label}</div>
                                                          </div>
                                                       ) : (
-                                                         <div className={`aspect-video flex items-center justify-center ${isDark ? 'bg-slate-800/50' : 'bg-slate-100'}`}>
-                                                            <span className="text-[7px] font-black uppercase text-slate-500 tracking-widest">{s.label}</span>
+                                                         <div className={`aspect-video flex items-center justify-center bg-[var(--bg-page)]`}>
+                                                            <span className="text-[10px] font-semibold text-slate-500">{s.label}</span>
                                                          </div>
                                                       )}
                                                    </div>
@@ -1397,7 +1397,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                               {isReviewItem && !item.meta?.statsHidden && (
                                  <div className="flex items-center gap-1 flex-wrap">
                                     {item.data?.scenarioResult && (
-                                       <span className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded border ${item.data.scenarioResult === 'Bullish' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' :
+                                       <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${item.data.scenarioResult === 'Bullish' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' :
                                           item.data.scenarioResult === 'Bearish' ? 'bg-rose-500/10 text-rose-500 border-rose-500/20' :
                                              item.data.scenarioResult === 'Unpredicted' ? 'bg-orange-500/10 text-orange-500 border-orange-500/20' :
                                                 isDark ? 'bg-slate-700/50 text-slate-400 border-white/5' : 'bg-slate-100 text-slate-600 border-slate-200'
@@ -1433,20 +1433,20 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
          {/* Content Tabs */}
          {activeTab === 'requests' && (
             <div className="space-y-6">
-               <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><MessageSquare size={14} /> Žádosti o propojení</h3>
+               <h3 className="text-xs font-semibold text-slate-500 flex items-center gap-2"><MessageSquare size={14} /> Žádosti o propojení</h3>
                {incomingRequests.length === 0 ? (
                   <div className={`p-12 text-center rounded-[32px] border border-dashed ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)]/50 text-slate-600' : 'border-slate-200 bg-slate-50 text-slate-400'}`}>
-                     <p className="text-sm font-black uppercase tracking-widest">Žádné nové žádosti</p>
+                     <p className="text-sm font-semibold">Žádné nové žádosti</p>
                   </div>
                ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                      {incomingRequests.map(req => (
-                        <div key={req.id} className={`p-6 rounded-[24px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'} flex items-center justify-between`}>
+                        <div key={req.id} className={`p-6 rounded-[24px] border bg-[var(--bg-card)] border-[var(--border-subtle)] flex items-center justify-between`}>
                            <div className="flex items-center gap-4">
-                              <div className="w-12 h-12 rounded-2xl bg-blue-600/10 text-blue-500 flex items-center justify-center font-black uppercase">{req.sender?.name?.substring(0, 2) || 'UT'}</div>
+                              <div className="w-12 h-12 rounded-2xl bg-blue-600/10 text-blue-500 flex items-center justify-center font-semibold">{req.sender?.name?.substring(0, 2) || 'UT'}</div>
                               <div>
                                  <p className="font-black text-white">{req.sender?.name || 'Trader'}</p>
-                                 <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest">Vás chce sledovat</p>
+                                 <p className="text-[11px] text-slate-500 font-semibold">Vás chce sledovat</p>
                               </div>
                            </div>
                            <div className="flex gap-2">
@@ -1465,15 +1465,15 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
                {outgoingRequests.length > 0 && (
                   <>
-                     <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2 mt-8"><Clock size={14} /> Odeslané žádosti</h3>
+                     <h3 className="text-xs font-semibold text-slate-500 flex items-center gap-2 mt-8"><Clock size={14} /> Odeslané žádosti</h3>
                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {outgoingRequests.map(req => (
-                           <div key={req.id} className={`p-6 rounded-[24px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'} flex items-center justify-between`}>
+                           <div key={req.id} className={`p-6 rounded-[24px] border bg-[var(--bg-card)] border-[var(--border-subtle)] flex items-center justify-between`}>
                               <div className="flex items-center gap-4">
-                                 <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center font-black uppercase">{req.receiver?.name?.substring(0, 2) || 'UT'}</div>
+                                 <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center font-semibold">{req.receiver?.name?.substring(0, 2) || 'UT'}</div>
                                  <div>
                                     <p className={`font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{req.receiver?.name || 'Trader'}</p>
-                                    <p className="text-[10px] text-amber-500 uppercase font-black tracking-widest">Čeká na schválení</p>
+                                    <p className="text-[11px] text-amber-500 font-semibold">Čeká na schválení</p>
                                  </div>
                               </div>
                               <button onClick={() => handleRequestAction(req.id, 'rejected')} className="p-2 rounded-lg bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white transition-all" title="Zrušit žádost"><X size={20} /></button>
@@ -1487,14 +1487,14 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
          {activeTab === 'following' && (
             <div className="space-y-6">
-               <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><Shield size={14} /> Sledovaní Tradeři</h3>
+               <h3 className="text-xs font-semibold text-slate-500 flex items-center gap-2"><Shield size={14} /> Sledovaní Tradeři</h3>
                {following.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-20 text-center space-y-6 opacity-60">
                      <div className={`p-6 rounded-full border ${isDark ? 'bg-[var(--bg-input)] text-slate-600 border-[var(--border-subtle)]' : 'bg-slate-100 text-slate-400 border-slate-200'}`}>
                         <Terminal size={48} />
                      </div>
                      <div>
-                        <h3 className="text-xl font-black uppercase tracking-widest text-slate-500">Nikdo k propojení</h3>
+                        <h3 className="text-xl font-semibold text-slate-500">Nikdo k propojení</h3>
                         <p className="text-xs text-slate-600 mt-2 max-w-sm mx-auto">Zatím nesledujete žádné jiné tradery. Vyhledejte je e-mailem výše.</p>
                      </div>
                   </div>
@@ -1508,14 +1508,14 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                         const notifPrefs = localNotifPrefs[targetId];
                         const hasAnyNotif = notifPrefs && (notifPrefs.newTrade || notifPrefs.newPrep || notifPrefs.newReview);
                         return (
-                           <div key={conn.id} className={`group p-5 rounded-[24px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+                           <div key={conn.id} className={`group p-5 rounded-[24px] border bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
                               {/* Header */}
                               <div className="flex justify-between items-start mb-4">
                                  <div className="flex items-center gap-3">
-                                    <div className="w-12 h-12 rounded-2xl bg-blue-600/10 text-blue-500 flex items-center justify-center font-black uppercase text-lg">{target.name?.substring(0, 2)}</div>
+                                    <div className="w-12 h-12 rounded-2xl bg-blue-600/10 text-blue-500 flex items-center justify-center font-semibold text-lg">{target.name?.substring(0, 2)}</div>
                                     <div>
                                        <h4 className={`text-base font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{target.name}</h4>
-                                       <span className="text-[9px] font-bold text-emerald-500 uppercase tracking-widest">Sleduji</span>
+                                       <span className="text-[11px] font-bold text-emerald-500">Sleduji</span>
                                     </div>
                                  </div>
                                  <div className="relative" ref={notifDropdownId === conn.id ? notifDropdownRef : undefined}>
@@ -1526,8 +1526,8 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                        {hasAnyNotif ? <Bell size={16} /> : <BellOff size={16} />}
                                     </button>
                                     {notifDropdownId === conn.id && (
-                                       <div onClick={(e) => e.stopPropagation()} className={`absolute right-0 top-11 z-50 p-3 rounded-2xl border shadow-xl min-w-[200px] ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-                                          <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-2">Notifikace</p>
+                                       <div onClick={(e) => e.stopPropagation()} className={`absolute right-0 top-11 z-50 p-3 rounded-2xl border shadow-xl min-w-[200px] bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
+                                          <p className="text-[11px] font-semibold text-slate-500 mb-2">Notifikace</p>
                                           {[
                                              { key: 'newTrade', label: 'Nové obchody', icon: '📈' },
                                              { key: 'newPrep', label: 'Přípravy', icon: '📋' },
@@ -1568,11 +1568,11 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                               {stats && (
                                  <div className={`grid grid-cols-2 gap-2 mb-4 p-3 rounded-xl ${isDark ? 'bg-[var(--bg-input)]/50' : 'bg-slate-50'}`}>
                                     <div className="text-center">
-                                       <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Win Rate</p>
+                                       <p className="text-[11px] font-semibold text-slate-500">Win Rate</p>
                                        <p className={`text-sm font-black font-mono ${stats.winRate == null ? 'text-slate-400' : stats.winRate >= 50 ? 'text-emerald-500' : 'text-rose-500'}`}>{formatSharedMetric(stats.winRate, 0, '%')}</p>
                                     </div>
                                     <div className="text-center">
-                                       <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Obchody</p>
+                                       <p className="text-[11px] font-semibold text-slate-500">Obchody</p>
                                        <p className={`text-sm font-black font-mono ${isDark ? 'text-white' : 'text-slate-900'}`}>{stats.tradeCount}</p>
                                     </div>
                                  </div>
@@ -1581,7 +1581,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                               {/* Actions */}
                               <div className="flex gap-2">
                                  <button
-                                    className={`flex-1 py-3 border rounded-xl text-xs font-black uppercase transition-all flex items-center justify-center gap-2 ${isDark ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] hover:bg-blue-600 hover:text-white text-slate-400' : 'bg-slate-50 border-slate-200 hover:bg-blue-600 hover:text-white text-slate-600'}`}
+                                    className={`flex-1 py-3 border rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2 ${isDark ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] hover:bg-blue-600 hover:text-white text-slate-400' : 'bg-slate-50 border-slate-200 hover:bg-blue-600 hover:text-white text-slate-600'}`}
                                     onClick={() => enterSpectatorMode(target.id)}
                                  >
                                     <Monitor size={14} /> Vstoupit
@@ -1598,20 +1598,20 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
          {activeTab === 'followers' && (
             <div className="space-y-6">
-               <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><UserIcon size={14} /> Vaši Sledující</h3>
+               <h3 className="text-xs font-semibold text-slate-500 flex items-center gap-2"><UserIcon size={14} /> Vaši Sledující</h3>
                {followers.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-20 text-center opacity-40">
-                     <p className="text-xs font-black uppercase tracking-widest">Zatím vás nikdo nesleduje</p>
+                     <p className="text-xs font-semibold">Zatím vás nikdo nesleduje</p>
                   </div>
                ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                      {followers.map(conn => (
-                        <div key={conn.id} className={`p-6 rounded-[24px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'} flex items-center justify-between`}>
+                        <div key={conn.id} className={`p-6 rounded-[24px] border bg-[var(--bg-card)] border-[var(--border-subtle)] flex items-center justify-between`}>
                            <div className="flex items-center gap-4">
-                              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black uppercase ${isDark ? 'bg-[var(--bg-input)] text-white' : 'bg-slate-100 text-slate-600'}`}>{conn.sender?.name?.substring(0, 2)}</div>
+                              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-semibold ${isDark ? 'bg-[var(--bg-input)] text-white' : 'bg-slate-100 text-slate-600'}`}>{conn.sender?.name?.substring(0, 2)}</div>
                               <div>
                                  <p className="font-black text-white">{conn.sender?.name}</p>
-                                 <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Sleduje váš deník</p>
+                                 <p className="text-[11px] text-slate-500 font-bold">Sleduje váš deník</p>
                               </div>
                            </div>
                            <div className="flex gap-2">
@@ -1644,37 +1644,37 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: 20 }}
-                  className={`fixed inset-0 z-[9999] flex flex-col ${isDark ? 'bg-theme-page' : 'bg-slate-50'}`}
+                  className={`fixed inset-0 z-[9999] flex flex-col ${isDark ? 'bg-[var(--bg-card)]' : 'bg-[var(--bg-page)]'}`}
                >
                   {/* Spectator Header */}
                   <div className={`p-4 border-b flex items-center justify-between ${isDark ? 'bg-slate-900/50 border-white/5' : 'bg-white/50 border-slate-200'}`}>
                      <div className="flex items-center gap-4">
                         <button
                            onClick={() => { spectatorRequest.current += 1; setIsSpectating(false); setSpectatorData(null); }}
-                           className={`p-3 rounded-2xl transition-all shadow-lg ${isDark ? 'bg-slate-800 text-slate-400 hover:text-white border border-white/5' : 'bg-white text-slate-600 border border-slate-200'} active:scale-95`}
+                           className={`p-3 rounded-2xl transition-all shadow-lg ${isDark ? 'bg-[var(--bg-card)] text-slate-400 hover:text-white border border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] text-slate-600 border border-[var(--border-subtle)]'} active:scale-95`}
                         >
                            <ChevronLeft size={24} />
                         </button>
                         <div className="flex items-center gap-3">
-                           <div className="w-10 h-10 rounded-2xl bg-blue-600/20 text-blue-500 flex items-center justify-center text-sm font-black uppercase shadow-inner">{spectatingUser?.name?.substring(0, 2)}</div>
+                           <div className="w-10 h-10 rounded-2xl bg-blue-600/20 text-blue-500 flex items-center justify-center text-sm font-semibold shadow-inner">{spectatingUser?.name?.substring(0, 2)}</div>
                            <div>
                               <div className="flex items-center gap-2">
-                                 <h4 className={`text-sm font-black uppercase tracking-widest ${isDark ? 'text-white' : 'text-slate-900'}`}>{spectatingUser?.name}</h4>
-                                 <div className="px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-500 text-[9px] font-black uppercase border border-emerald-500/20 shadow-sm shadow-emerald-500/10">PRO SPECTATOR</div>
+                                 <h4 className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-slate-900'}`}>{spectatingUser?.name}</h4>
+                                 <div className="px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-500 text-[11px] font-semibold border border-emerald-500/20 shadow-sm shadow-emerald-500/10">PRO SPECTATOR</div>
                               </div>
-                              <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">Zabezpečená relace AlphaNetwork v2.0</p>
+                              <p className="text-[11px] text-slate-500 font-bold mt-0.5">Zabezpečená relace AlphaNetwork v2.0</p>
                            </div>
                         </div>
                      </div>
                      <div className="flex items-center gap-4">
-                        <div className={`hidden md:flex items-center gap-8 px-6 py-2.5 rounded-2xl border ${isDark ? 'bg-slate-800/50 border-white/5 shadow-inner' : 'bg-slate-50 border-slate-100 shadow-inner'}`}>
+                        <div className={`hidden md:flex items-center gap-8 px-6 py-2.5 rounded-2xl border bg-[var(--bg-page)] border-[var(--border-subtle)] shadow-inner`}>
                            <div className="text-center">
-                              <p className="text-[9px] text-slate-500 font-black uppercase tracking-tighter mb-0.5 opacity-60">Portfolio</p>
+                              <p className="text-[11px] text-slate-500 font-semibold tracking-tighter mb-0.5 opacity-60">Portfolio</p>
                               {spectatorData && spectatorData.accounts.length > 1 ? (
                                  <select
                                     value={activeSpectatorAccountId || ''}
                                     onChange={(e) => setActiveSpectatorAccountId(e.target.value)}
-                                    className="bg-transparent text-white font-black text-xs uppercase outline-none border-none cursor-pointer transition-all hover:text-blue-400 appearance-none text-center"
+                                    className="bg-transparent text-white font-semibold text-xs outline-none border-none cursor-pointer transition-all hover:text-blue-400 appearance-none text-center"
                                  >
                                     {spectatorData.accounts.map(acc => (
                                        <option key={acc.id} value={acc.id} className={isDark ? 'bg-slate-900 text-white' : 'bg-white text-slate-900'}>
@@ -1683,22 +1683,22 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                     ))}
                                  </select>
                               ) : (
-                                 <p className={`text-xs ${isDark ? 'text-white' : 'text-slate-900'} font-black uppercase`}>
+                                 <p className={`text-xs ${isDark ? 'text-white' : 'text-slate-900'} font-semibold`}>
                                     {spectatorData?.accounts.find(a => a.id === activeSpectatorAccountId)?.name || 'Default'}
                                  </p>
                               )}
                            </div>
                            <div className={`w-px h-8 ${isDark ? 'bg-white/5' : 'bg-slate-200'}`} />
                            <div className="text-center">
-                              <p className="text-[9px] font-black text-slate-500 uppercase tracking-tighter mb-0.5 opacity-60">Archive</p>
-                              <p className="text-xs text-emerald-400 font-black uppercase tabular-nums">
+                              <p className="text-[11px] font-semibold text-slate-500 tracking-tighter mb-0.5 opacity-60">Archive</p>
+                              <p className="text-xs text-emerald-400 font-semibold tabular-nums">
                                  {spectatorData?.trades.filter(t => t.accountId === activeSpectatorAccountId).length || 0} Trds
                               </p>
                            </div>
                         </div>
                         <button
                            onClick={() => { spectatorRequest.current += 1; setIsSpectating(false); setSpectatorData(null); }}
-                           className="hidden md:flex px-6 py-3 bg-rose-600 hover:bg-rose-500 text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] transition-all shadow-xl shadow-rose-900/20 active:scale-95 group items-center gap-2"
+                           className="hidden md:flex px-6 py-3 bg-rose-600 hover:bg-rose-500 text-white rounded-2xl text-[11px] font-semibold transition-all shadow-xl shadow-rose-900/20 active:scale-95 group items-center gap-2"
                         >
                            <LogOut size={16} className="group-hover:-translate-x-1 transition-transform" /> Zavřít Profil
                         </button>
@@ -1719,7 +1719,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                  <button
                                     key={tab.id}
                                     onClick={() => setSpectatorTab(tab.id as any)}
-                                    className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 ${spectatorTab === tab.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-slate-500 hover:text-slate-300'}`}
+                                    className={`px-6 py-2.5 rounded-xl text-[11px] font-semibold transition-all flex items-center gap-2 ${spectatorTab === tab.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-slate-500 hover:text-slate-300'}`}
                                  >
                                     <tab.icon size={12} /> {tab.label}
                                  </button>
@@ -1731,7 +1731,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                         {spectatorTab === 'overview' && (
                            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                               {/* Date Navigation Bar */}
-                              <div className={`p-4 rounded-[24px] border flex items-center justify-between ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+                              <div className={`p-4 rounded-[24px] border flex items-center justify-between bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
                                  <button
                                     onClick={() => {
                                        const d = new Date(spectatorDate);
@@ -1767,8 +1767,8 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
                               <div className="space-y-8">
                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                    <div className={`p-6 rounded-[24px] border ${isDark ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-                                       <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Dnešní PnL</p>
+                                    <div className={`p-6 rounded-[24px] border bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
+                                       <p className="text-[11px] font-semibold text-slate-500 mb-1">Dnešní PnL</p>
                                        <span className={`text-xl font-black font-mono tracking-tighter ${dayPnL === null ? 'text-slate-400' : dayPnL >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                                           {formatSharedPnL(dayPnL, spectatorData?.meta?.pnlFormat, user.currency, exchangeRates)}
                                        </span>
@@ -1778,8 +1778,8 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                        className={`p-6 rounded-[24px] border cursor-pointer hover:scale-[1.02] transition-all duration-500 ${dayPrep ? 'neon-border-blue neon-glow-blue' : ''} ${isDark ? 'glass-panel' : 'bg-white border-slate-200 shadow-md'} flex items-center justify-between`}
                                     >
                                        <div>
-                                          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Ranní Příprava</p>
-                                          <p className={`text-[10px] font-black uppercase ${dayPrep ? 'text-blue-500' : 'text-slate-600'}`}>
+                                          <p className="text-[11px] font-semibold text-slate-500 mb-1">Ranní Příprava</p>
+                                          <p className={`text-[11px] font-semibold ${dayPrep ? 'text-blue-500' : 'text-slate-600'}`}>
                                              {dayPrep ? 'DOKONČENA' : 'CHYBÍ'}
                                           </p>
                                        </div>
@@ -1790,8 +1790,8 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                        className={`p-6 rounded-[24px] border cursor-pointer hover:scale-[1.02] transition-all duration-500 ${dayReview ? 'neon-border-amber neon-glow-amber' : ''} ${isDark ? 'glass-panel' : 'bg-white border-slate-200 shadow-md'} flex items-center justify-between`}
                                     >
                                        <div>
-                                          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Večerní Review</p>
-                                          <p className={`text-[10px] font-black uppercase ${dayReview ? 'text-amber-500' : 'text-slate-600'}`}>
+                                          <p className="text-[11px] font-semibold text-slate-500 mb-1">Večerní Review</p>
+                                          <p className={`text-[11px] font-semibold ${dayReview ? 'text-amber-500' : 'text-slate-600'}`}>
                                              {dayReview ? 'DOKONČENO' : 'CHYBÍ'}
                                           </p>
                                        </div>
@@ -1801,8 +1801,8 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
                                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                                     {/* Daily Trades List */}
-                                    <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
-                                       <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 mb-6 flex items-center gap-2"><Activity size={14} /> Dnešní obchody</h3>
+                                    <div className={`p-8 rounded-[32px] border bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
+                                       <h3 className="text-xs font-semibold text-slate-500 mb-6 flex items-center gap-2"><Activity size={14} /> Dnešní obchody</h3>
                                        <div className="space-y-3">
                                           {filteredRemoteTrades.length > 0 ? filteredRemoteTrades.map(trade => {
                                              const tradeGlow = !Number.isFinite(trade.pnl) ? '' : trade.pnl >= 0 ? 'neon-border-green neon-glow-green' : 'neon-border-red neon-glow-red';
@@ -1821,10 +1821,10 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                                    </div>
                                                    <div>
                                                       <p className={`text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{trade.instrument}</p>
-                                                      <p className="text-[9px] text-slate-500 font-bold uppercase">{trade.signal || 'Bez signálu'}</p>
+                                                      <p className="text-[11px] text-slate-500 font-bold">{trade.signal || 'Bez signálu'}</p>
                                                    </div>
                                                 </div>
-                                                <div className={`px-3 py-1 rounded-md text-[8px] font-black uppercase border ${trade.direction === 'Long' ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' : 'bg-amber-500/10 text-amber-500 border-amber-500/20'}`}>
+                                                <div className={`px-3 py-1 rounded-md text-[11px] font-semibold border ${trade.direction === 'Long' ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' : 'bg-amber-500/10 text-amber-500 border-amber-500/20'}`}>
                                                    {trade.direction}
                                                 </div>
                                              </div>
@@ -1832,7 +1832,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                           }) : (
                                              <div className="py-12 text-center opacity-30">
                                                 <Skull size={32} className="mx-auto mb-2" />
-                                                <p className="text-[10px] font-black uppercase tracking-widest">Žádná aktivita v tento den</p>
+                                                <p className="text-[11px] font-semibold">Žádná aktivita v tento den</p>
                                              </div>
                                           )}
                                        </div>
@@ -1851,7 +1851,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
                                           return (
                                              <div className="mt-6">
-                                                <h4 className="text-[9px] font-black uppercase tracking-widest text-slate-600 mb-3 flex items-center gap-2"><Clock size={12} /> Nedávná aktivita</h4>
+                                                <h4 className="text-[11px] font-semibold text-slate-600 mb-3 flex items-center gap-2"><Clock size={12} /> Nedávná aktivita</h4>
                                                 <div className="space-y-2">
                                                    {recentTrades.map(trade => {
                                                       const dateStr = (() => {
@@ -1870,10 +1870,10 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                                                </div>
                                                                <div>
                                                                   <p className={`text-[11px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{trade.instrument}</p>
-                                                                  <p className="text-[8px] text-slate-600 font-bold uppercase">{dateStr}</p>
+                                                                  <p className="text-[11px] text-slate-600 font-bold">{dateStr}</p>
                                                                </div>
                                                             </div>
-                                                            <div className={`px-2 py-0.5 rounded text-[7px] font-black uppercase border ${trade.direction === 'Long' ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' : 'bg-amber-500/10 text-amber-500 border-amber-500/20'}`}>
+                                                            <div className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${trade.direction === 'Long' ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' : 'bg-amber-500/10 text-amber-500 border-amber-500/20'}`}>
                                                                {trade.direction}
                                                             </div>
                                                          </div>
@@ -1886,7 +1886,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                     </div>
 
                                     {/* Calendar Integration */}
-                                    <div className={`h-[750px] overflow-hidden rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5 shadow-2xl shadow-black/40' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/50'} animate-in zoom-in-95 duration-500`}>
+                                    <div className={`h-[750px] overflow-hidden rounded-[32px] border ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-2xl shadow-black/40' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-xl shadow-slate-200/50'} animate-in zoom-in-95 duration-500`}>
                                        <div className="h-full overflow-y-auto scrollbar-hide p-2">
                                           <DashboardCalendar
                                              trades={spectatorData?.trades.filter(t => t.accountId === activeSpectatorAccountId) || []}
@@ -1915,16 +1915,16 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                            <div className="space-y-8 animate-in slide-in-from-right-4 duration-500">
                               {/* Master Career Cards */}
                               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                                 <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'} shadow-xl`}>
-                                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><Briefcase size={14} /> Career PnL</p>
-                                    <h3 className={`text-3xl font-black italic tracking-tighter ${globalCareerStats.totalPnL == null ? 'text-slate-400' : globalCareerStats.totalPnL >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                 <div className={`p-8 rounded-[32px] border bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-xl`}>
+                                    <p className="text-[11px] font-semibold text-slate-500 mb-1 flex items-center gap-2"><Briefcase size={14} /> Career PnL</p>
+                                    <h3 className={`text-3xl font-bold tracking-tight ${globalCareerStats.totalPnL == null ? 'text-slate-400' : globalCareerStats.totalPnL >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                                        {formatSharedPnL(globalCareerStats.totalPnL, spectatorData?.meta?.pnlFormat, user.currency, exchangeRates)}
                                     </h3>
-                                    <p className="text-[9px] font-bold text-slate-600 mt-2 uppercase">Total from {globalCareerStats.accountCount} accounts</p>
+                                    <p className="text-[11px] font-bold text-slate-600 mt-2">Total from {globalCareerStats.accountCount} accounts</p>
                                  </div>
-                                 <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'} shadow-xl border-emerald-500/10`}>
-                                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><DollarSign size={14} className="text-emerald-500" /> Total Payouts</p>
-                                    <h3 className="text-3xl font-black italic tracking-tighter text-emerald-500">
+                                 <div className={`p-8 rounded-[32px] border bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-xl border-emerald-500/10`}>
+                                    <p className="text-[11px] font-semibold text-slate-500 mb-1 flex items-center gap-2"><DollarSign size={14} className="text-emerald-500" /> Total Payouts</p>
+                                    <h3 className="text-3xl font-bold tracking-tight text-emerald-500">
                                        {formatSharedPnL(globalCareerStats.totalPayouts, spectatorData?.meta?.pnlFormat === 'usd' ? 'usd' : 'hidden', user.currency, exchangeRates)}
                                     </h3>
                                     {globalCareerStats.totalPayouts != null && globalCareerStats.totalPnL != null && globalCareerStats.totalPnL > 0 && (
@@ -1932,61 +1932,61 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                           <div className="h-1 flex-1 bg-slate-800 rounded-full overflow-hidden">
                                              <div className="h-full bg-emerald-500" style={{ width: `${Math.max(0, Math.min(100, globalCareerStats.totalPayouts / globalCareerStats.totalPnL * 100))}%` }} />
                                           </div>
-                                          <span className="text-[8px] font-black text-emerald-500 uppercase">Paid Out</span>
+                                          <span className="text-[11px] font-semibold text-emerald-500">Paid Out</span>
                                        </div>
                                     )}
                                  </div>
-                                 <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'} shadow-xl`}>
-                                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><Trophy size={14} className="text-amber-500" /> Global Winrate</p>
-                                    <h3 className="text-3xl font-black italic tracking-tighter text-white">
+                                 <div className={`p-8 rounded-[32px] border bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-xl`}>
+                                    <p className="text-[11px] font-semibold text-slate-500 mb-1 flex items-center gap-2"><Trophy size={14} className="text-amber-500" /> Global Winrate</p>
+                                    <h3 className="text-3xl font-bold tracking-tight text-white">
                                        {formatSharedMetric(globalCareerStats.winRate, 1, '%')}
                                     </h3>
-                                    <p className="text-[9px] font-bold text-slate-600 mt-2 uppercase">{globalCareerStats.totalTrades} Total Trades</p>
+                                    <p className="text-[11px] font-bold text-slate-600 mt-2">{globalCareerStats.totalTrades} Total Trades</p>
                                  </div>
-                                 <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'} shadow-xl`}>
-                                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1 flex items-center gap-2"><Activity size={14} className="text-blue-500" /> Profit Factor</p>
-                                    <h3 className={`text-3xl font-black italic tracking-tighter ${globalCareerStats.profitFactor == null ? 'text-slate-400' : globalCareerStats.profitFactor >= 1.5 ? 'text-emerald-500' : 'text-blue-500'}`}>
+                                 <div className={`p-8 rounded-[32px] border bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-xl`}>
+                                    <p className="text-[11px] font-semibold text-slate-500 mb-1 flex items-center gap-2"><Activity size={14} className="text-blue-500" /> Profit Factor</p>
+                                    <h3 className={`text-3xl font-bold tracking-tight ${globalCareerStats.profitFactor == null ? 'text-slate-400' : globalCareerStats.profitFactor >= 1.5 ? 'text-emerald-500' : 'text-blue-500'}`}>
                                        {formatSharedMetric(globalCareerStats.profitFactor, 2)}
                                     </h3>
-                                    <p className="text-[9px] font-bold text-slate-600 mt-2 uppercase">Efficiency Score</p>
+                                    <p className="text-[11px] font-bold text-slate-600 mt-2">Efficiency Score</p>
                                  </div>
                               </div>
 
                               {/* Consistency & Detailed Metrics */}
                               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                                 <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900/40 border-white/5' : 'bg-white border-slate-200'} space-y-6`}>
-                                    <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><Target size={14} /> Consistency Hub</h3>
+                                 <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)]'} space-y-6`}>
+                                    <h3 className="text-xs font-semibold text-slate-500 flex items-center gap-2"><Target size={14} /> Consistency Hub</h3>
                                     <div className="grid grid-cols-2 gap-4">
                                        <div className="p-4 rounded-2xl bg-white/5 border border-white/5">
-                                          <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Average RR</p>
+                                          <p className="text-[11px] font-semibold text-slate-500 mb-1">Average RR</p>
                                           <p className="text-xl font-black text-white font-mono">{formatPnL(0, 'rr', undefined, globalCareerStats.avgRR)}</p>
                                        </div>
                                        <div className="p-4 rounded-2xl bg-white/5 border border-white/5">
-                                          <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Day Winrate</p>
+                                          <p className="text-[11px] font-semibold text-slate-500 mb-1">Day Winrate</p>
                                           <p className="text-xl font-black text-white font-mono">{formatSharedMetric(globalCareerStats.dayWinRate, 1, '%')}</p>
                                        </div>
                                        <div className="p-4 rounded-2xl bg-emerald-500/5 border border-emerald-500/10">
-                                          <p className="text-[9px] font-black text-emerald-500 uppercase mb-1">Best Trading Day</p>
+                                          <p className="text-[11px] font-semibold text-emerald-500 mb-1">Best Trading Day</p>
                                           <p className="text-xl font-black text-emerald-500 font-mono">{formatSharedPnL(globalCareerStats.bestDay.pnl, spectatorData?.meta?.pnlFormat, user.currency, exchangeRates)}</p>
-                                          <p className="text-[8px] font-bold text-slate-600 mt-1 uppercase">{globalCareerStats.bestDay.date || '-'}</p>
+                                          <p className="text-[11px] font-bold text-slate-600 mt-1">{globalCareerStats.bestDay.date || '-'}</p>
                                        </div>
                                        <div className="p-4 rounded-2xl bg-rose-500/5 border border-rose-500/10">
-                                          <p className="text-[9px] font-black text-rose-500 uppercase mb-1">Worst Trading Day</p>
+                                          <p className="text-[11px] font-semibold text-rose-500 mb-1">Worst Trading Day</p>
                                           <p className="text-xl font-black text-rose-500 font-mono">{formatSharedPnL(globalCareerStats.worstDay.pnl, spectatorData?.meta?.pnlFormat, user.currency, exchangeRates)}</p>
-                                          <p className="text-[8px] font-bold text-slate-600 mt-1 uppercase">{globalCareerStats.worstDay.date || '-'}</p>
+                                          <p className="text-[11px] font-bold text-slate-600 mt-1">{globalCareerStats.worstDay.date || '-'}</p>
                                        </div>
                                     </div>
                                  </div>
 
-                                 <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900/40 border-white/5' : 'bg-white border-slate-200'} space-y-6`}>
-                                    <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><ShieldCheck size={14} /> Account Management</h3>
+                                 <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)]'} space-y-6`}>
+                                    <h3 className="text-xs font-semibold text-slate-500 flex items-center gap-2"><ShieldCheck size={14} /> Account Management</h3>
                                     <div className="p-6 rounded-[24px] bg-white/5 border border-white/5 flex items-center justify-between">
                                        <div className="space-y-1">
-                                          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Challenge Pass Rate</p>
-                                          <h4 className="text-2xl font-black text-white italic">{globalCareerStats.passRate.toFixed(1)}%</h4>
+                                          <p className="text-[11px] font-semibold text-slate-500">Challenge Pass Rate</p>
+                                          <h4 className="text-2xl font-bold text-white">{globalCareerStats.passRate.toFixed(1)}%</h4>
                                        </div>
                                        <div className="text-right">
-                                          <p className="text-[9px] font-black text-slate-500 uppercase mb-1">Pass / Fail</p>
+                                          <p className="text-[11px] font-semibold text-slate-500 mb-1">Pass / Fail</p>
                                           <div className="flex items-center gap-2">
                                              <div className={`px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[10px] font-black`}>{spectatorData.accounts.filter(a => a.type === 'Funded').length}</div>
                                              <div className="w-2 h-0.5 bg-slate-700" />
@@ -1997,7 +1997,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
 
                                     <div className={`p-6 rounded-[24px] bg-blue-600/5 border border-blue-500/10 flex items-center justify-between`}>
                                        <div>
-                                          <p className="text-[10px] font-black text-blue-500 uppercase tracking-widest mb-1">Active Portfolio Value</p>
+                                          <p className="text-[11px] font-semibold text-blue-500 mb-1">Active Portfolio Value</p>
                                           <p className="text-xl font-black text-white font-mono">
                                              {formatSharedPnL(spectatorData.accounts.filter(a => a.status === 'Active').reduce((sum, a) => sum + a.initialBalance, 0), spectatorData.meta?.pnlFormat === 'usd' ? 'usd' : 'hidden', user.currency, exchangeRates)}
                                           </p>
@@ -2008,13 +2008,13 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                               </div>
 
                               {/* Global Equity Curve */}
-                              <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'} shadow-xl`}>
+                              <div className={`p-8 rounded-[32px] border bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-xl`}>
                                  <div className="flex justify-between items-center mb-8">
                                     <div>
-                                       <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 flex items-center gap-2"><ArrowUpRight size={14} /> Global Equity Growth</h3>
-                                       <p className="text-[10px] text-slate-500 font-bold uppercase mt-1">Aggregate Performance across all accounts</p>
+                                       <h3 className="text-xs font-semibold text-slate-500 flex items-center gap-2"><ArrowUpRight size={14} /> Global Equity Growth</h3>
+                                       <p className="text-[11px] text-slate-500 font-bold mt-1">Aggregate Performance across all accounts</p>
                                     </div>
-                                    <div className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[10px] font-black uppercase">
+                                    <div className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[11px] font-semibold">
                                        Career Path
                                     </div>
                                  </div>
@@ -2040,8 +2040,8 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                              content={({ active, payload }) => {
                                                 if (active && payload && payload.length) {
                                                    return (
-                                                      <div className={`p-4 rounded-2xl border shadow-2xl ${isDark ? 'bg-theme-page border-white/10' : 'bg-white border-slate-200'}`}>
-                                                         <p className="text-[10px] font-black text-slate-500 uppercase mb-1">
+                                                      <div className={`p-4 rounded-2xl border shadow-2xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
+                                                         <p className="text-[11px] font-semibold text-slate-500 mb-1">
                                                             {new Date(payload[0].payload.timestamp).toLocaleString('cs-CZ', {
                                                                day: 'numeric',
                                                                month: 'numeric',
@@ -2074,8 +2074,8 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                               </div>
 
                               {/* Global Directional Bias */}
-                              <div className={`p-8 rounded-[32px] border ${isDark ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'}`}>
-                                 <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 mb-6 flex items-center gap-2 font-black uppercase"><TrendingUp size={14} /> Long vs Short (Global Archive)</h3>
+                              <div className={`p-8 rounded-[32px] border bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
+                                 <h3 className="text-xs font-semibold text-slate-500 mb-6 flex items-center gap-2 font-semibold"><TrendingUp size={14} /> Long vs Short (Global Archive)</h3>
                                  <div className="space-y-6">
                                     {(() => {
                                        const longs = spectatorData.trades.filter(t => t.direction === 'Long');
@@ -2088,11 +2088,11 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                           <>
                                              <div className="flex justify-between items-end">
                                                 <div className="space-y-1">
-                                                   <p className="text-[8px] font-black text-slate-500 uppercase">Long Performance</p>
+                                                   <p className="text-[11px] font-semibold text-slate-500">Long Performance</p>
                                                    <p className={`text-xl font-black ${longPnL == null ? 'text-slate-400' : longPnL >= 0 ? 'text-blue-500' : 'text-rose-500'}`}>{longs.length} trades ({formatSharedPnL(longPnL, spectatorData.meta?.pnlFormat, user.currency, exchangeRates)})</p>
                                                 </div>
                                                 <div className="text-right space-y-1">
-                                                   <p className="text-[8px] font-black text-slate-500 uppercase">Short Performance</p>
+                                                   <p className="text-[11px] font-semibold text-slate-500">Short Performance</p>
                                                    <p className={`text-xl font-black ${shortPnL == null ? 'text-slate-400' : shortPnL >= 0 ? 'text-amber-500' : 'text-rose-500'}`}>{shorts.length} trades ({formatSharedPnL(shortPnL, spectatorData.meta?.pnlFormat, user.currency, exchangeRates)})</p>
                                                 </div>
                                              </div>
@@ -2100,7 +2100,7 @@ const NetworkHub: React.FC<NetworkHubProps> = ({ theme, accounts, emotions, user
                                                 <div className="bg-gradient-to-r from-blue-600 to-blue-400 h-full border-r border-black/20" style={{ width: `${(longs.length / total) * 100}%` }} />
                                                 <div className="bg-gradient-to-l from-amber-600 to-amber-400 h-full" style={{ width: `${(shorts.length / total) * 100}%` }} />
                                              </div>
-                                             <div className="flex justify-between text-[8px] font-black uppercase tracking-widest text-slate-600">
+                                             <div className="flex justify-between text-[11px] font-semibold text-slate-600">
                                                 <span>{(longs.length / total * 100).toFixed(0)}% Buy Bias</span>
                                                 <span>{(shorts.length / total * 100).toFixed(0)}% Sell Bias</span>
                                              </div>

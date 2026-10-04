@@ -868,7 +868,7 @@ export const LiveDayRulesCard = ({
 
         {collapsed ? null : (
           <fieldset disabled={disabled || !runtimeAvailable || saving || !onSave} className="min-w-0">
-            <div className="mt-1 hidden grid-cols-[auto_minmax(0,300px)_minmax(120px,1fr)_auto_auto] gap-x-4 px-2.5 text-[9px] font-black uppercase tracking-[0.08em] text-[var(--text-muted)] sm:grid">
+            <div className="mt-1 hidden grid-cols-[auto_minmax(0,300px)_minmax(120px,1fr)_auto_auto] gap-x-4 px-2.5 text-[11px] font-semibold text-[var(--text-muted)] sm:grid">
               <span />
               <span>Pravidlo</span>
               <span className="text-right">Dnešní průběh</span>

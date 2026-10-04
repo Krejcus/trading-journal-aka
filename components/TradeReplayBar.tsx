@@ -68,14 +68,17 @@ export default function TradeReplayBar({ isDark, playing, atEnd, speed, goTo, on
     if (dragRef.current?.id === event.pointerId) dragRef.current = null;
   };
 
-  const topButton = `h-8 inline-flex items-center gap-1.5 px-2 rounded-md text-[9px] font-bold transition-colors ${isDark ? 'text-slate-400 hover:bg-white/5 hover:text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'}`;
-  const menuPanel = `trade-menu-up absolute bottom-10 z-[700] overflow-hidden rounded-lg border py-1 shadow-2xl ${isDark ? 'border-white/10 bg-[#101720] text-slate-200' : 'border-slate-200 bg-white text-slate-800'}`;
-  const menuItem = `flex h-9 w-full items-center justify-between gap-3 px-3 text-left text-[11px] font-bold transition-colors ${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-100'}`;
+  const topButton = `h-8 inline-flex items-center gap-1.5 px-2 rounded-lg text-[9px] font-bold transition-colors ${isDark ? 'text-slate-400 hover:bg-white/[0.08] hover:text-white' : 'text-slate-600 hover:bg-white/60 hover:text-slate-950'}`;
+  // Lišta i menu jsou skleněné: leží nad svíčkami, které pod nimi rozmazaně prosvítají.
+  const menuPanel = `trade-menu-up absolute bottom-10 z-[700] overflow-hidden rounded-xl border py-1 backdrop-blur-xl backdrop-saturate-150 ${isDark ? 'border-white/10 bg-[#101720]/75 text-slate-200 shadow-[0_24px_50px_-20px_rgba(0,0,0,0.8),inset_0_1px_0_rgba(255,255,255,0.06)]' : 'border-white/80 bg-white/75 text-slate-800 shadow-[0_24px_50px_-20px_rgba(15,23,42,0.45),0_0_0_1px_rgba(15,23,42,0.06),inset_0_1px_0_rgba(255,255,255,0.95)]'}`;
+  const menuItem = `flex h-9 w-full items-center justify-between gap-3 px-3 text-left text-[11px] font-bold transition-colors ${isDark ? 'hover:bg-white/[0.08]' : 'hover:bg-white/70'}`;
 
   return (
     <div ref={barRef}
       data-snapshot-hide
-      className={`absolute bottom-3 left-1/2 z-30 flex h-10 -translate-x-1/2 items-center gap-0.5 rounded-lg border p-1 shadow-xl backdrop-blur-md ${isDark ? 'border-white/10 bg-[#101720]/95 text-slate-300 shadow-black/40' : 'border-slate-200 bg-white/95 text-slate-700 shadow-slate-900/10'}`}
+      className={`absolute bottom-3 left-1/2 z-30 flex h-10 -translate-x-1/2 items-center gap-0.5 rounded-xl border p-1 backdrop-blur-xl backdrop-saturate-[1.8] ${isDark
+        ? 'border-white/[0.12] bg-[#101720]/45 text-slate-300 shadow-[0_22px_40px_-14px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.08)]'
+        : 'border-white/85 bg-white/50 text-slate-700 shadow-[0_22px_40px_-18px_rgba(15,23,42,0.4),0_0_0_1px_rgba(15,23,42,0.06),inset_0_1px_0_rgba(255,255,255,0.95)]'}`}
       // Tailwind v4 centruje vlastností `translate` — posun musí jít do ní, ne do `transform`.
       style={offset.x || offset.y ? { translate: `calc(-50% + ${offset.x}px) ${offset.y}px` } : undefined}
       role="toolbar"

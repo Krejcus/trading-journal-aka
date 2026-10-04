@@ -1024,14 +1024,14 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
   if (!appearanceReady) return null;
   const noData = !loading && initialCandles.length === 0 && candleStore.getSnapshot().loadedUntilMs >= run.endAt;
   if (loading && initialCandles.length === 0) return (
-    <div className={`fixed inset-0 z-[400] flex flex-col items-center justify-center gap-4 ${isDark ? 'bg-[#070a0f] text-white' : 'bg-white text-slate-900'}`}>
+    <div className={`fixed inset-0 z-[400] flex flex-col items-center justify-center gap-4 ${isDark ? 'bg-[var(--bg-card)] text-white' : 'bg-[var(--bg-card)] text-slate-900'}`}>
       <Loader2 className="animate-spin text-blue-500" size={30} />
       <div className="text-center"><p className="font-black">Načítám backtest session</p><p className="text-xs text-slate-500">MNQ + NQ · první datový segment</p></div>
       <button onClick={() => void closeWorkspace()} className="absolute right-4 top-4 rounded-lg p-2 text-slate-500 hover:bg-slate-500/10"><X size={20} /></button>
     </div>
   );
   if ((error || noData) && initialCandles.length === 0) return (
-    <div className={`fixed inset-0 z-[400] flex flex-col items-center justify-center gap-4 p-6 ${isDark ? 'bg-[#070a0f] text-white' : 'bg-white text-slate-900'}`}>
+    <div className={`fixed inset-0 z-[400] flex flex-col items-center justify-center gap-4 p-6 ${isDark ? 'bg-[var(--bg-card)] text-white' : 'bg-[var(--bg-card)] text-slate-900'}`}>
       <p className="max-w-lg text-center text-sm font-bold text-rose-500">{error ?? 'Ve zvoleném období nejsou dostupné svíčky.'}</p>
       <div className="flex gap-2"><button onClick={() => void loadSegment(run.cursorAt ?? run.startAt)} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-black text-white">Zkusit znovu</button><button onClick={() => void closeWorkspace()} className="rounded-lg border px-4 py-2 text-xs font-black">Zavřít</button></div>
     </div>
@@ -1044,7 +1044,7 @@ const BacktestWorkspaceSession: React.FC<Props & { onReloadRun: (run: BacktestRu
         className="fixed inset-0 z-[550] flex items-center justify-center bg-black/60 p-4"
         onKeyDown={event => { event.stopPropagation(); if (event.key === 'Escape') setSessionInfoOpen(false); }}
       >
-        <section role="dialog" aria-modal="true" aria-label="Stav session" className={`max-h-[85vh] w-full max-w-md overflow-auto rounded-xl border p-5 text-xs shadow-xl ${isDark ? 'border-slate-700 bg-[#11161f] text-slate-100' : 'border-slate-200 bg-white text-slate-900'}`}>
+        <section role="dialog" aria-modal="true" aria-label="Stav session" className={`max-h-[85vh] w-full max-w-md overflow-auto rounded-xl border p-5 text-xs shadow-xl ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-100' : 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-900'}`}>
           <header className="mb-4 flex items-center justify-between">
             <h2 className="text-base font-bold">Stav session</h2>
             <button autoFocus aria-label="Zavřít stav session" onClick={() => setSessionInfoOpen(false)}><X size={18} /></button>
@@ -1130,7 +1130,7 @@ const BacktestTradingPanel: React.FC<TradingPanelProps> = ({ run, candle, isDark
   useEffect(() => { setPositionStop(position?.stopLoss?.toString() ?? ''); }, [position?.positionId, position?.stopLoss]);
   useEffect(() => { setPositionTarget(position?.takeProfit?.toString() ?? ''); }, [position?.positionId, position?.takeProfit]);
   const pending = runtime.orders.filter(order => order.status === 'pending');
-  const field = `h-7 rounded border px-2 text-[10px] outline-none ${isDark ? 'border-white/10 bg-white/5 text-white' : 'border-slate-200 bg-white text-slate-900'}`;
+  const field = `h-7 rounded border px-2 text-[10px] outline-none ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-page)] text-white' : 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-900'}`;
   const num = (value: string) => value.trim() && Number.isFinite(Number(value)) ? Number(value) : undefined;
   const submit = (side: 'buy' | 'sell') => {
     const orderPrice = num(price);

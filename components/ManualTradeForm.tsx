@@ -371,9 +371,9 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
   };
 
   const inputContainerClass = `relative h-[42px] rounded-xl border transition-all flex items-center overflow-hidden ${theme !== 'light' ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] focus-within:border-blue-500/50' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] focus-within:border-[var(--border-active)]'}`;
-  const inlineLabelClass = `px-3 text-[9px] font-black uppercase text-[var(--text-muted)] whitespace-nowrap border-r border-[var(--border-subtle)] h-full flex items-center bg-[var(--bg-page)]/50 min-w-[85px]`;
+  const inlineLabelClass = `px-3 text-[11px] font-semibold text-[var(--text-muted)] whitespace-nowrap border-r border-[var(--border-subtle)] h-full flex items-center bg-[var(--bg-page)]/50 min-w-[85px]`;
   const inputClass = `w-full px-3 py-2 bg-transparent text-sm font-black tabular-nums outline-none text-[var(--text-primary)] placeholder-[var(--text-secondary)]`;
-  const pilarHeaderClass = "text-[10px] font-black uppercase tracking-[0.2em] text-blue-500 mb-4 flex items-center gap-2";
+  const pilarHeaderClass = "text-[11px] font-semibold text-blue-500 mb-4 flex items-center gap-2";
 
   const displayedPnl = reviewOnly ? editTrade!.pnl : calculations.pnl;
   const displayedFees = reviewOnly ? (String(editTrade!.id).startsWith('combined_') ? null : editTrade!.executionHistory?.fees ?? null) : calculations.totalFees;
@@ -393,7 +393,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
             <div className="flex items-center gap-3 md:gap-4">
               <div className={`p-2.5 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 shadow-lg shadow-blue-500/20`}><Plus size={18} className="text-white" /></div>
               <div>
-                <h2 className={`text-sm md:text-lg font-black tracking-tighter uppercase text-[var(--text-primary)]`}>{reviewOnly ? 'HODNOCENÍ OBCHODU' : isEditMode ? 'UPRAVIT OBCHOD' : 'NOVÝ OBCHOD'}</h2>
+                <h2 className={`text-sm md:text-lg font-semibold tracking-tighter text-[var(--text-primary)]`}>{reviewOnly ? 'Hodnocení obchodu' : isEditMode ? 'Upravit obchod' : 'Nový obchod'}</h2>
               </div>
             </div>
             <button type="button" onClick={requestClose} className="p-2 hover:bg-white/10 rounded-full transition-all active:scale-90"><X size={20} className="text-slate-500" /></button>
@@ -402,15 +402,15 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
           <div className="flex-1 overflow-y-auto custom-scrollbar p-5 md:p-8 lg:p-10 bg-gradient-to-b from-transparent to-[var(--bg-page)]/40">
             <div className={`flex flex-col lg:flex-row gap-6 mb-8 justify-between items-start lg:items-center p-4 rounded-3xl border ${theme !== 'light' ? 'bg-[var(--bg-page)]/60 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'}`}>
               <div className="flex flex-wrap gap-4 md:gap-6 w-full relative">
-                <div className="flex flex-col"><span className="text-[8px] font-black text-slate-500 uppercase">{formData.executionStatus === 'Missed' ? 'Ušlý zisk' : 'Výsledek (Net)'}</span><span className={`text-xl font-mono font-black ${displayedPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'} ${formData.executionStatus === 'Missed' ? 'opacity-50' : ''}`}>${displayedPnl.toLocaleString(undefined, { minimumFractionDigits: reviewOnly ? 2 : 0, maximumFractionDigits: 2 })}</span></div>
+                <div className="flex flex-col"><span className="text-[11px] font-semibold text-slate-500">{formData.executionStatus === 'Missed' ? 'Ušlý zisk' : 'Výsledek (Net)'}</span><span className={`text-xl font-mono font-black ${displayedPnl >= 0 ? 'text-emerald-500' : 'text-rose-500'} ${formData.executionStatus === 'Missed' ? 'opacity-50' : ''}`}>${displayedPnl.toLocaleString(undefined, { minimumFractionDigits: reviewOnly ? 2 : 0, maximumFractionDigits: 2 })}</span></div>
                 <div className="hidden md:block w-px h-8 bg-white/5"></div>
-                <div className="flex flex-col"><span className="text-[8px] font-black text-slate-500 uppercase">Fees</span><span className="text-sm font-mono font-black text-rose-400">{displayedFees == null ? '—' : `-$${displayedFees.toFixed(2)}`}</span></div>
+                <div className="flex flex-col"><span className="text-[11px] font-semibold text-slate-500">Fees</span><span className="text-sm font-mono font-black text-rose-400">{displayedFees == null ? '—' : `-$${displayedFees.toFixed(2)}`}</span></div>
                 <div className="hidden md:block w-px h-8 bg-white/5"></div>
-                <div className="flex flex-col"><span className="text-[8px] font-black text-slate-500 uppercase">R:R Ratio</span><span className="text-sm font-mono font-black text-blue-400">{displayedRR} R</span></div>
+                <div className="flex flex-col"><span className="text-[11px] font-semibold text-slate-500">R:R Ratio</span><span className="text-sm font-mono font-black text-blue-400">{displayedRR} R</span></div>
                 <div className="hidden md:block w-px h-8 bg-white/5"></div>
-                <div className="flex flex-col"><span className="text-[8px] font-black text-slate-500 uppercase">Seance</span><span className={`text-[10px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{reviewOnly ? editTrade!.session || '—' : calculations.session}</span></div>
+                <div className="flex flex-col"><span className="text-[11px] font-semibold text-slate-500">Seance</span><span className={`text-[10px] font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{reviewOnly ? editTrade!.session || '—' : calculations.session}</span></div>
                 <div className="ml-auto flex items-center">
-                  <div className={`px-2 py-1 rounded text-[9px] font-black uppercase flex items-center gap-1 ${displayedDirection === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-orange-500/10 text-orange-500'}`}>
+                  <div className={`px-2 py-1 rounded text-[11px] font-semibold flex items-center gap-1 ${displayedDirection === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-orange-500/10 text-orange-500'}`}>
                     {displayedDirection === 'Long' ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />} {displayedDirection}
                   </div>
                 </div>
@@ -418,7 +418,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                 {validationError && (
                   <div className="absolute inset-0 bg-rose-600 rounded-2xl flex items-center justify-center gap-3 px-6 animate-in slide-in-from-top-4 duration-300 z-50">
                     <AlertTriangle size={20} className="text-white animate-pulse" />
-                    <span className="text-xs font-black text-white uppercase tracking-widest">{validationError}</span>
+                    <span className="text-xs font-semibold text-white">{validationError}</span>
                   </div>
                 )}
               </div>
@@ -445,14 +445,14 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                       </button>
                     </div>
                     {isAccountOpen && (
-                      <div className={`absolute top-full left-0 right-0 mt-2 z-[200] rounded-xl border shadow-2xl overflow-hidden animate-in fade-in duration-200 ${theme !== 'light' ? 'bg-[var(--bg-card)]/95 border-[var(--border-subtle)] backdrop-blur-xl' : 'bg-white border-slate-200'}`}>
+                      <div className={`absolute top-full left-0 right-0 mt-2 z-[200] rounded-xl border shadow-2xl overflow-hidden animate-in fade-in duration-200 ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] backdrop-blur-xl' : 'bg-[var(--bg-card)] border-[var(--border-subtle)]'}`}>
                         <button
                           type="button"
                           onClick={() => {
                             const allIds = activeAccounts.map(a => a.id);
                             setFormData(prev => ({ ...prev, accountIds: prev.accountIds.length === allIds.length ? [] : allIds }));
                           }}
-                          className={`w-full px-4 py-2 text-[9px] font-black text-left hover:bg-blue-600/20 text-blue-500 uppercase border-b ${theme === 'light' ? 'border-slate-100' : 'border-white/5'}`}
+                          className={`w-full px-4 py-2 text-[11px] font-semibold text-left hover:bg-blue-600/20 text-blue-500 border-b ${theme === 'light' ? 'border-slate-100' : 'border-white/5'}`}
                         >
                           {formData.accountIds.length === accounts.length ? 'Zrušit vše' : 'Vybrat vše'}
                         </button>
@@ -486,7 +486,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                                 accountIds: newSelection
                               }));
                             }}
-                            className={`w-full px-4 py-3 text-[10px] font-black text-left hover:bg-blue-600 ${theme === 'light' ? 'text-slate-600' : 'text-slate-400'} hover:text-white uppercase border-b ${theme === 'light' ? 'border-slate-100' : 'border-white/5'} last:border-0 flex items-center justify-between`}
+                            className={`w-full px-4 py-3 text-[11px] font-semibold text-left hover:bg-blue-600 ${theme === 'light' ? 'text-slate-600' : 'text-slate-400'} hover:text-white border-b ${theme === 'light' ? 'border-slate-100' : 'border-white/5'} last:border-0 flex items-center justify-between`}
                           >
                             <div className="flex items-center gap-2">
                               {acc.name}
@@ -507,7 +507,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                     {formData.accountIds.length > 1 && (
                       <div className="mt-2 px-3 py-1.5 bg-blue-600/10 border border-blue-500/20 rounded-xl flex items-center gap-2">
                         <Zap size={10} className="text-blue-500" />
-                        <span className="text-[9px] font-black uppercase text-blue-400 tracking-widest">
+                        <span className="text-[11px] font-semibold text-blue-400">
                           {accounts.find(a => formData.accountIds.includes(a.id) && !a.parentAccountId && accounts.some(other => other.parentAccountId === a.id)) ? 'Master + ' : ''}
                           {formData.accountIds.length - (accounts.find(a => formData.accountIds.includes(a.id) && !a.parentAccountId && accounts.some(other => other.parentAccountId === a.id)) ? 1 : 0)} kopie zvoleny
                         </span>
@@ -529,7 +529,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                         {currentInst?.name} <ChevronDown size={12} className="text-slate-600" />
                       </button>
                     </div>
-                    {isInstrumentOpen && (<div className={`absolute top-full left-0 right-0 mt-2 z-[200] rounded-xl border shadow-2xl overflow-hidden animate-in fade-in duration-200 ${theme !== 'light' ? 'bg-[var(--bg-card)]/95 border-[var(--border-subtle)] backdrop-blur-xl' : 'bg-white border-slate-200'}`}>{INSTRUMENTS.map(i => (<button key={i.id} type="button" onClick={() => { setFormData({ ...formData, instrument: i.id }); setIsInstrumentOpen(false); }} className={`w-full px-4 py-3 text-[10px] font-black text-left hover:bg-blue-600 ${theme === 'light' ? 'text-slate-600' : 'text-slate-400'} hover:text-white uppercase border-b ${theme === 'light' ? 'border-slate-100' : 'border-white/5'} last:border-0`}>{i.name}</button>))}</div>)}
+                    {isInstrumentOpen && (<div className={`absolute top-full left-0 right-0 mt-2 z-[200] rounded-xl border shadow-2xl overflow-hidden animate-in fade-in duration-200 ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] backdrop-blur-xl' : 'bg-[var(--bg-card)] border-[var(--border-subtle)]'}`}>{INSTRUMENTS.map(i => (<button key={i.id} type="button" onClick={() => { setFormData({ ...formData, instrument: i.id }); setIsInstrumentOpen(false); }} className={`w-full px-4 py-3 text-[11px] font-semibold text-left hover:bg-blue-600 ${theme === 'light' ? 'text-slate-600' : 'text-slate-400'} hover:text-white border-b ${theme === 'light' ? 'border-slate-100' : 'border-white/5'} last:border-0`}>{i.name}</button>))}</div>)}
                   </div>
                   <div className={inputContainerClass}><div className={inlineLabelClass}>Výstup</div><input type="number" step="any" value={formData.exitPrice} onChange={e => setFormData({ ...formData, exitPrice: e.target.value })} className={inputClass} placeholder="0.00" /></div>
                   <div className={inputContainerClass}><div className={inlineLabelClass}>Cíl (TP)</div><input type="number" step="any" value={formData.takeProfit} onChange={e => setFormData({ ...formData, takeProfit: e.target.value })} className={`${inputClass} text-emerald-500`} placeholder="0.00" /></div>
@@ -539,12 +539,12 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                   <div className={inputContainerClass}><div className={inlineLabelClass}>Konec</div><input type="datetime-local" value={formData.exitDate} onChange={e => setFormData({ ...formData, exitDate: e.target.value })} className={`${inputClass} text-[10px]`} /></div>
 
                   <div className="space-y-1.5">
-                    <label className="text-[9px] font-black uppercase text-slate-500 tracking-widest ml-1">Execution Status</label>
+                    <label className="text-[11px] font-semibold text-slate-500 ml-1">Execution Status</label>
                     <div className={`p-1 rounded-xl border flex relative overflow-hidden transition-all duration-300 ${formData.executionStatus === 'Valid' ? 'bg-emerald-500/10 border-emerald-500/20' : formData.executionStatus === 'Invalid' ? 'bg-rose-500/10 border-rose-500/20' : 'bg-blue-500/10 border-blue-500/20'}`}>
                       <div className={`absolute top-1 bottom-1 w-[calc(33.33%-3px)] rounded-lg transition-all duration-500 z-0 ${formData.executionStatus === 'Valid' ? 'bg-emerald-600' : formData.executionStatus === 'Invalid' ? 'bg-rose-600' : 'bg-blue-600'} shadow-lg ${formData.executionStatus === 'Valid' ? 'left-1' : formData.executionStatus === 'Invalid' ? 'left-[calc(33.33%+1px)]' : 'left-[calc(66.66%+1px)]'}`}></div>
-                      <button type="button" onClick={() => setFormData({ ...formData, executionStatus: 'Valid' })} className={`flex-1 py-2 flex items-center justify-center gap-1.5 text-[8px] font-black uppercase relative z-10 transition-colors ${formData.executionStatus === 'Valid' ? 'text-white' : 'text-slate-600'}`}><CheckCircle2 size={10} /> Validní</button>
-                      <button type="button" onClick={() => setFormData({ ...formData, executionStatus: 'Invalid' })} className={`flex-1 py-2 flex items-center justify-center gap-1.5 text-[8px] font-black uppercase relative z-10 transition-colors ${formData.executionStatus === 'Invalid' ? 'text-white' : 'text-slate-600'}`}><AlertOctagon size={10} /> Nevalidní</button>
-                      <button type="button" onClick={() => setFormData({ ...formData, executionStatus: 'Missed' })} className={`flex-1 py-2 flex items-center justify-center gap-1.5 text-[8px] font-black uppercase relative z-10 transition-colors ${formData.executionStatus === 'Missed' ? 'text-white' : 'text-slate-600'}`}><Clock size={10} /> Missed</button>
+                      <button type="button" onClick={() => setFormData({ ...formData, executionStatus: 'Valid' })} className={`flex-1 py-2 flex items-center justify-center gap-1.5 text-[11px] font-semibold relative z-10 transition-colors ${formData.executionStatus === 'Valid' ? 'text-white' : 'text-slate-600'}`}><CheckCircle2 size={10} /> Validní</button>
+                      <button type="button" onClick={() => setFormData({ ...formData, executionStatus: 'Invalid' })} className={`flex-1 py-2 flex items-center justify-center gap-1.5 text-[11px] font-semibold relative z-10 transition-colors ${formData.executionStatus === 'Invalid' ? 'text-white' : 'text-slate-600'}`}><AlertOctagon size={10} /> Nevalidní</button>
+                      <button type="button" onClick={() => setFormData({ ...formData, executionStatus: 'Missed' })} className={`flex-1 py-2 flex items-center justify-center gap-1.5 text-[11px] font-semibold relative z-10 transition-colors ${formData.executionStatus === 'Missed' ? 'text-white' : 'text-slate-600'}`}><Clock size={10} /> Missed</button>
                     </div>
                   </div>
                 </div>
@@ -562,20 +562,20 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                   </div>}
                   <h3 className={pilarHeaderClass}><Brain size={12} /> {reviewOnly ? 'Kontext obchodu' : '03 Tactical Engine'}</h3>
                   <div className="space-y-2">
-                    <div className={`rounded-2xl border overflow-hidden ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
-                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'emotions' ? null : 'emotions')} className={`w-full px-4 py-3 flex items-center justify-between text-[10px] font-black uppercase tracking-widest ${isDark ? 'bg-white/5' : 'bg-slate-100/50'}`}><span className="flex items-center gap-2"><Brain size={12} className="text-purple-500" /> Emoce</span>{expandedSection === 'emotions' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
+                    <div className={`rounded-2xl border overflow-hidden border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
+                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'emotions' ? null : 'emotions')} className={`w-full px-4 py-3 flex items-center justify-between text-[11px] font-semibold bg-[var(--bg-page)]`}><span className="flex items-center gap-2"><Brain size={12} className="text-purple-500" /> Emoce</span>{expandedSection === 'emotions' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
                       {expandedSection === 'emotions' && (<div className="p-3 grid grid-cols-2 gap-2 animate-in slide-in-from-top-2 duration-200">{availableEmotions.map(emo => (<button key={emo.id} type="button" onClick={() => { setFormData(p => ({ ...p, emotions: p.emotions.includes(emo.id) ? p.emotions.filter(e => e !== emo.id) : [...p.emotions, emo.id] })) }} className={`py-2 px-2 rounded-lg border text-[9px] font-black transition-all ${formData.emotions.includes(emo.id) ? 'bg-purple-600 text-white border-purple-500' : (isDark ? 'bg-theme-page/50 text-slate-500 border-slate-800' : 'bg-white text-slate-400 border-slate-200')}`}>{emo.label}</button>))}</div>)}
                     </div>
-                    <div className={`rounded-2xl border overflow-hidden ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
-                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'htf' ? null : 'htf')} className={`w-full px-4 py-3 flex items-center justify-between text-[10px] font-black uppercase tracking-widest ${isDark ? 'bg-white/5' : 'bg-slate-100/50'}`}><span className="flex items-center gap-2"><Monitor size={12} className="text-blue-500" /> HTF Kontext</span>{expandedSection === 'htf' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
+                    <div className={`rounded-2xl border overflow-hidden border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
+                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'htf' ? null : 'htf')} className={`w-full px-4 py-3 flex items-center justify-between text-[11px] font-semibold bg-[var(--bg-page)]`}><span className="flex items-center gap-2"><Monitor size={12} className="text-blue-500" /> HTF Kontext</span>{expandedSection === 'htf' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
                       {expandedSection === 'htf' && (<div className="p-3 grid grid-cols-2 gap-2 animate-in slide-in-from-top-2 duration-200">{availableHtfOptions.map(opt => (<button key={opt} type="button" onClick={() => toggleConfluence('htf', opt)} className={`py-2 px-2 rounded-lg border text-[8px] font-black transition-all ${formData.htfConfluence.includes(opt) ? 'bg-blue-600 text-white border-blue-500' : (isDark ? 'bg-theme-page/50 text-slate-500 border-slate-800' : 'bg-white text-slate-400 border-slate-200')}`}>{opt}</button>))}</div>)}
                     </div>
-                    <div className={`rounded-2xl border overflow-hidden ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
-                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'ltf' ? null : 'ltf')} className={`w-full px-4 py-3 flex items-center justify-between text-[10px] font-black uppercase tracking-widest ${isDark ? 'bg-white/5' : 'bg-slate-100/50'}`}><span className="flex items-center gap-2"><Zap size={12} className="text-amber-500" /> LTF Trigger</span>{expandedSection === 'ltf' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
+                    <div className={`rounded-2xl border overflow-hidden border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
+                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'ltf' ? null : 'ltf')} className={`w-full px-4 py-3 flex items-center justify-between text-[11px] font-semibold bg-[var(--bg-page)]`}><span className="flex items-center gap-2"><Zap size={12} className="text-amber-500" /> LTF Trigger</span>{expandedSection === 'ltf' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
                       {expandedSection === 'ltf' && (<div className="p-3 grid grid-cols-2 gap-2 animate-in slide-in-from-top-2 duration-200">{availableLtfOptions.map(opt => (<button key={opt} type="button" onClick={() => toggleConfluence('ltf', opt)} className={`py-2 px-2 rounded-lg border text-[8px] font-black transition-all ${formData.ltfConfluence.includes(opt) ? 'bg-amber-600 text-white border-amber-500' : (isDark ? 'bg-theme-page/50 text-slate-500 border-slate-800' : 'bg-white text-slate-400 border-slate-200')}`}>{opt}</button>))}</div>)}
                     </div>
-                    <div className={`rounded-2xl border overflow-hidden ${isDark ? 'border-white/5 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
-                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'mistakes' ? null : 'mistakes')} className={`w-full px-4 py-3 flex items-center justify-between text-[10px] font-black uppercase tracking-widest ${isDark ? 'bg-white/5' : 'bg-slate-100/50'}`}><span className="flex items-center gap-2"><AlertOctagon size={12} className="text-rose-500" /> Chyby Exekuce</span>{expandedSection === 'mistakes' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
+                    <div className={`rounded-2xl border overflow-hidden border-[var(--border-subtle)] bg-[var(--bg-page)]`}>
+                      <button type="button" onClick={() => setExpandedSection(expandedSection === 'mistakes' ? null : 'mistakes')} className={`w-full px-4 py-3 flex items-center justify-between text-[11px] font-semibold bg-[var(--bg-page)]`}><span className="flex items-center gap-2"><AlertOctagon size={12} className="text-rose-500" /> Chyby Exekuce</span>{expandedSection === 'mistakes' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
                       {expandedSection === 'mistakes' && (<div className="p-3 grid grid-cols-2 gap-2 animate-in slide-in-from-top-2 duration-200">{availableMistakes.map(opt => (<button key={opt} type="button" onClick={() => toggleConfluence('mistake', opt)} className={`py-2 px-2 rounded-lg border text-[8px] font-black transition-all ${formData.mistakes.includes(opt) ? 'bg-rose-600 text-white border-rose-500 shadow-lg shadow-rose-500/20' : (isDark ? 'bg-theme-page/50 text-slate-500 border-slate-800' : 'bg-white text-slate-400 border-slate-200')}`}>{opt}</button>))}</div>)}
                     </div>
                   </div>
@@ -584,7 +584,7 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                 <div className="space-y-4">
                   <h3 className={pilarHeaderClass}><ImageIcon size={12} /> {reviewOnly ? 'Obrázky a poznámky' : '04 Evidence'}</h3>
                   {uploadingScreenshot && (
-                    <div className="flex items-center gap-2 text-[10px] font-black text-blue-400 uppercase tracking-widest mb-2">
+                    <div className="flex items-center gap-2 text-[11px] font-semibold text-blue-400 mb-2">
                       <div className="w-3 h-3 rounded-full border border-blue-400 border-t-transparent animate-spin" />
                       Nahrávám screenshot...
                     </div>
@@ -597,20 +597,20 @@ const ManualTradeForm: React.FC<ManualTradeFormProps> = ({
                           <button type="button" onClick={(e) => { e.stopPropagation(); handleRemoveScreenshot(index); }} className="absolute top-1 right-1 p-1 bg-red-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"><X size={12} /></button>
                         </div>
                       ))}
-                      <label className="flex flex-col items-center justify-center aspect-video rounded-xl border-2 border-dashed border-white/10 hover:border-blue-500/50 hover:bg-white/5 cursor-pointer transition-all"><Plus size={20} className="text-slate-500" /><span className="text-[8px] font-black uppercase text-slate-500 mt-1">Add</span><input type="file" className="hidden" accept="image/*" onChange={handleAddScreenshot} /></label>
+                      <label className="flex flex-col items-center justify-center aspect-video rounded-xl border-2 border-dashed border-white/10 hover:border-blue-500/50 hover:bg-white/5 cursor-pointer transition-all"><Plus size={20} className="text-slate-500" /><span className="text-[11px] font-semibold text-slate-500 mt-1">Add</span><input type="file" className="hidden" accept="image/*" onChange={handleAddScreenshot} /></label>
                     </div>
                   ) : (
-                    <div className={`relative group rounded-2xl border-2 border-dashed h-[140px] overflow-hidden transition-all ${formData.screenshots.length > 0 ? 'border-blue-500/50 cursor-pointer' : 'border-white/10 hover:border-blue-500/50 bg-white/5'}`}><label className="flex flex-col items-center justify-center h-full cursor-pointer p-4 text-center"><ImageIcon size={24} className="text-slate-700 mb-1" /><span className="text-[9px] font-black uppercase text-slate-600 tracking-tighter">Vložit graf (CTRL+V)</span><input type="file" className="hidden" accept="image/*" onChange={handleAddScreenshot} /></label></div>
+                    <div className={`relative group rounded-2xl border-2 border-dashed h-[140px] overflow-hidden transition-all ${formData.screenshots.length > 0 ? 'border-blue-500/50 cursor-pointer' : 'border-white/10 hover:border-blue-500/50 bg-white/5'}`}><label className="flex flex-col items-center justify-center h-full cursor-pointer p-4 text-center"><ImageIcon size={24} className="text-slate-700 mb-1" /><span className="text-[11px] font-semibold text-slate-600 tracking-tighter">Vložit graf (CTRL+V)</span><input type="file" className="hidden" accept="image/*" onChange={handleAddScreenshot} /></label></div>
                   )}
-                  <textarea value={formData.notes} onChange={e => setFormData({ ...formData, notes: e.target.value })} className={`w-full h-[120px] px-4 py-3 rounded-2xl border transition-all resize-none placeholder-slate-700 outline-none focus:border-blue-500/50 text-[11px] font-black ${isDark ? 'bg-white/5 border-white/5 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'}`} placeholder="Poznámky k chybám nebo mindsetu..." />
+                  <textarea value={formData.notes} onChange={e => setFormData({ ...formData, notes: e.target.value })} className={`w-full h-[120px] px-4 py-3 rounded-2xl border transition-all resize-none placeholder-slate-700 outline-none focus:border-blue-500/50 text-[11px] font-black ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-300' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-700'}`} placeholder="Poznámky k chybám nebo mindsetu..." />
                 </div>
               </div>
             </form>
           </div>
 
           <div className={`p-5 md:p-8 shrink-0 border-t flex flex-col sm:flex-row gap-3 md:gap-6 bg-[var(--bg-page)]/50 border-[var(--border-subtle)] backdrop-blur-xl`}>
-            <button type="button" onClick={requestClose} className="w-full sm:w-[180px] h-[52px] bg-white/5 text-slate-500 rounded-2xl font-black text-xs uppercase tracking-widest border border-white/5 hover:bg-white/10 transition-all">Zrušit</button>
-            <button onClick={handleSubmit} disabled={saving || uploadingScreenshot} type="button" className={`flex-1 h-[52px] rounded-2xl font-black text-xs uppercase tracking-widest shadow-2xl transition-all flex items-center justify-center gap-3 ${formData.executionStatus === 'Valid' ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20' : formData.executionStatus === 'Invalid' ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/20' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'}`}><Save size={18} /> {saving ? 'UKLÁDÁM…' : reviewOnly ? 'ULOŽIT HODNOCENÍ' : isEditMode ? 'ULOŽIT ZMĚNY' : 'ULOŽIT OBCHOD'}</button>
+            <button type="button" onClick={requestClose} className="w-full sm:w-[180px] h-[52px] bg-white/5 text-slate-500 rounded-2xl font-semibold text-xs border border-white/5 hover:bg-white/10 transition-all">Zrušit</button>
+            <button onClick={handleSubmit} disabled={saving || uploadingScreenshot} type="button" className={`flex-1 h-[52px] rounded-2xl font-semibold text-xs shadow-2xl transition-all flex items-center justify-center gap-3 ${formData.executionStatus === 'Valid' ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20' : formData.executionStatus === 'Invalid' ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/20' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20'}`}><Save size={18} /> {saving ? 'Ukládám…' : reviewOnly ? 'Uložit hodnocení' : isEditMode ? 'Uložit změny' : 'Uložit obchod'}</button>
           </div>
         </div >
       </div >

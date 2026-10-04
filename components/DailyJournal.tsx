@@ -1181,7 +1181,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
   useEffect(() => { window.addEventListener('paste', handlePaste); return () => window.removeEventListener('paste', handlePaste); }, [handlePaste]);
 
   const inputClass = `w-full px-4 py-3 rounded-xl border transition-all text-sm outline-none focus:ring-2 focus:ring-blue-500/40 ${theme !== 'light' ? 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-white placeholder-slate-600' : 'bg-slate-50 border-slate-200 text-slate-900'}`;
-  const labelClass = `block text-[10px] font-black uppercase tracking-widest mb-2 text-slate-500`;
+  const labelClass = `block text-[11px] font-semibold mb-2 text-slate-500`;
 
   return (
     <div className="space-y-6 lg:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 pb-20">
@@ -1196,7 +1196,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
           <button
             key={tab.id}
             onClick={() => onTabChange(tab.id)}
-            className={`relative flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${
+            className={`relative flex-1 py-2 rounded-xl text-xs font-semibold transition-all ${
               activeTab === tab.id
                 ? (theme !== 'light' ? 'bg-slate-700/60 text-white shadow-sm' : 'bg-white text-slate-900 shadow-sm border border-slate-200/60')
                 : (theme !== 'light' ? 'text-slate-500' : 'text-slate-400')
@@ -1215,8 +1215,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             <div className={`flex flex-col md:flex-row justify-between items-start md:items-end gap-3 border-b pb-3 lg:pb-6 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
               <div className="space-y-2">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6">
-                  <h2 className="hidden lg:inline-flex text-3xl md:text-5xl font-black tracking-tighter italic items-center gap-4">
-                    DENNÍ PŘEHLED
+                  <h2 className="hidden lg:inline-flex text-3xl md:text-4xl font-extrabold tracking-tight items-center gap-4">
+                    Denní přehled
                   </h2>
                   {(() => {
                     const dt = new Date(selectedDate + 'T00:00:00');
@@ -1226,7 +1226,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                       <div className="flex items-center gap-3 theme-card px-2 py-2 rounded-2xl border theme-border shadow-inner self-start min-w-[260px]">
                         <button onClick={() => navigateDate('prev')} className="p-2 hover:bg-white/10 rounded-xl theme-text-secondary hover:text-[var(--text-primary)] transition-all active:scale-90 shrink-0"><ChevronLeft size={20} /></button>
                         <div className="flex-1 text-center">
-                          <p className="text-xl md:text-2xl font-black italic tracking-tight uppercase leading-tight">{weekday}</p>
+                          <p className="text-xl md:text-2xl font-bold tracking-tight leading-tight">{weekday}</p>
                           <p className="text-[10px] md:text-xs font-semibold text-slate-500 tracking-wide lowercase">{fullDate}</p>
                         </div>
                         <button onClick={() => navigateDate('next')} disabled={selectedDate === today} className={`p-2 rounded-xl transition-all active:scale-90 shrink-0 ${selectedDate === today ? 'opacity-20 cursor-not-allowed' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}><ChevronRight size={20} /></button>
@@ -1252,7 +1252,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                     ☕
                   </div>
                   <div>
-                    <h3 className="text-sm font-black uppercase tracking-widest text-[var(--text-primary)]">
+                    <h3 className="text-sm font-semibold text-[var(--text-primary)]">
                       Víkendový režim
                     </h3>
                     <p className="text-xs text-[var(--text-secondary)] mt-1 max-w-md mx-auto leading-relaxed">
@@ -1271,7 +1271,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 >
                   <div className="flex items-center gap-2.5">
                     <FileText size={16} className="text-amber-500" />
-                    <h3 className="text-xs font-black uppercase tracking-widest text-[var(--text-primary)]">
+                    <h3 className="text-xs font-semibold text-[var(--text-primary)]">
                       Poznámky & Studium
                     </h3>
                   </div>
@@ -1385,11 +1385,11 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 const colorClass = (s: string) => s === 'full' ? 'bg-emerald-500' : s === 'partial' ? 'bg-amber-500' : s === 'trades-only' ? 'bg-rose-500' : (theme !== 'light' ? 'bg-white/5' : 'bg-slate-200');
                 return (
                   <>
-                    <div className="text-[7px] font-black uppercase tracking-widest text-slate-500">Score</div>
+                    <div className="text-[10px] font-semibold text-slate-500">Score</div>
                     <div className="w-9 h-9 rounded-full border-[3px] border-slate-200 dark:border-slate-700 flex items-center justify-center">
                       <span className="text-xs font-black text-blue-500">{streak}</span>
                     </div>
-                    <div className="text-[7px] font-black uppercase text-orange-500 tracking-widest">🔥 streak</div>
+                    <div className="text-[10px] font-semibold text-orange-500">🔥 streak</div>
 
                     {/* Mini heatmap 2×10 */}
                     <div className="grid grid-cols-2 gap-0.5 mt-1 w-full px-1" title="Posledních 20 obchodních dní">
@@ -1423,8 +1423,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
           <div className={`flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b pb-6 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
             <div className="space-y-2">
               <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6">
-                <h2 className="text-3xl md:text-5xl font-black tracking-tighter italic flex items-center gap-4">
-                  {activeTab === 'daily' ? 'DENNÍ PŘEHLED' : (activeTab === 'weekly' ? 'WEEKLY HUB' : 'DENÍK')}
+                <h2 className="text-3xl md:text-4xl font-extrabold tracking-tight flex items-center gap-4">
+                  {activeTab === 'daily' ? 'Denní přehled' : (activeTab === 'weekly' ? 'Týdenní přehled' : 'Deník')}
                   {activeTab === 'archives' && (
                     <button
                       onClick={() => setIsExportModalOpen(true)}
@@ -1439,7 +1439,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                   <div className="flex items-center gap-2 theme-card p-1 rounded-2xl border theme-border shadow-inner">
                     <button onClick={() => activeTab === 'daily' ? navigateDate('prev') : navigateWeek('prev')} className="p-2 hover:bg-white/10 rounded-xl theme-text-secondary hover:text-[var(--text-primary)] transition-all active:scale-90"><ChevronLeft size={20} /></button>
                     <div className="px-3 py-1 text-center min-w-[100px]">
-                      <p className="text-[8px] font-black text-blue-500 uppercase tracking-[0.2em] mb-0.5">{activeTab === 'daily' ? 'Taktický Datum' : `Týden ${currentWeekInfo.weekNumber}`}</p>
+                      <p className="text-[11px] font-semibold text-blue-500 mb-0.5">{activeTab === 'daily' ? 'Taktický Datum' : `Týden ${currentWeekInfo.weekNumber}`}</p>
                       <p className="text-xs font-black font-mono">{activeTab === 'daily' ? selectedDate : currentWeekInfo.mondayDate}</p>
                     </div>
                     <button onClick={() => activeTab === 'daily' ? navigateDate('next') : navigateWeek('next')} disabled={activeTab === 'daily' && selectedDate === today} className={`p-2 rounded-xl transition-all active:scale-90 ${activeTab === 'daily' && selectedDate === today ? 'opacity-20 cursor-not-allowed' : 'hover:bg-white/10 text-slate-400 hover:text-white'}`}><ChevronRight size={20} /></button>
@@ -1447,7 +1447,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 )}
               </div>
               {activeTab !== 'daily' && (
-                <p className="text-slate-500 font-black uppercase text-[9px] tracking-[0.3em]">
+                <p className="text-slate-500 font-semibold text-[11px]">
                   {activeTab === 'weekly' ? `Weekly Debrief • Týden ${currentWeekInfo.weekNumber} ` : `Psycho Archives • Emoční Historie`}
                 </p>
               )}
@@ -1540,13 +1540,13 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 const dayPnl = dayTrades.reduce((s, t) => s + t.pnl, 0);
 
                 return (
-                  <div key={review.id} className={`p-6 rounded-[32px] border relative overflow-hidden flex flex-col h-full ${theme !== 'light' ? 'bg-[var(--bg-card)]/40 border-[var(--border-subtle)] hover:border-blue-500/30' : 'bg-white border-slate-200 shadow-sm hover:shadow-xl'} transition-all group`}>
+                  <div key={review.id} className={`p-6 rounded-[32px] border relative overflow-hidden flex flex-col h-full ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] hover:border-blue-500/30' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-sm hover:shadow-xl'} transition-all group`}>
                     <div className="flex justify-between items-start mb-6">
                       <div>
-                        <p className="text-[10px] font-black uppercase text-blue-500 mb-1 tracking-widest">{new Date(review.date).toLocaleDateString('cs-CZ', { weekday: 'long' })}</p>
-                        <h4 className={`text-xl font-black italic tracking-tighter uppercase ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>{new Date(review.date).toLocaleDateString('cs-CZ')}</h4>
+                        <p className="text-[11px] font-semibold text-blue-500 mb-1">{new Date(review.date).toLocaleDateString('cs-CZ', { weekday: 'long' })}</p>
+                        <h4 className={`text-xl font-bold tracking-tight ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>{new Date(review.date).toLocaleDateString('cs-CZ')}</h4>
                       </div>
-                      <div className={`px-3 py-1 rounded-full text-[9px] font-black tracking-widest uppercase ${dayPnl >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
+                      <div className={`px-3 py-1 rounded-full text-[11px] font-semibold ${dayPnl >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
                         ${dayPnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                       </div>
                     </div>
@@ -1554,27 +1554,27 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                     <div className="space-y-4 flex-1">
                       {review.psycho?.stressors && (
                         <div className="space-y-1">
-                          <p className="text-[8px] font-black uppercase text-rose-500 flex items-center gap-1.5"><AlertCircle size={10} /> Stresory</p>
+                          <p className="text-[11px] font-semibold text-rose-500 flex items-center gap-1.5"><AlertCircle size={10} /> Stresory</p>
                           <p className="text-[11px] text-slate-400 leading-relaxed italic">"{review.psycho.stressors}"</p>
                         </div>
                       )}
 
                       {review.psycho?.gratitude && (
                         <div className="space-y-1">
-                          <p className="text-[8px] font-black uppercase text-emerald-500 flex items-center gap-1.5"><Sun size={10} /> Vděčnost</p>
+                          <p className="text-[11px] font-semibold text-emerald-500 flex items-center gap-1.5"><Sun size={10} /> Vděčnost</p>
                           <p className="text-[11px] text-slate-400 leading-relaxed italic">"{review.psycho.gratitude}"</p>
                         </div>
                       )}
 
                       <div className="space-y-1">
-                        <p className="text-[8px] font-black uppercase text-slate-500 flex items-center gap-1.5"><FileText size={10} /> Reflexe & Poznámky</p>
+                        <p className="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5"><FileText size={10} /> Reflexe & Poznámky</p>
                         <p className={`text-[11px] leading-relaxed line-clamp-4 whitespace-pre-wrap ${theme !== 'light' ? 'text-slate-300' : 'text-slate-600'}`}>{review.psycho?.notes}</p>
                       </div>
                     </div>
 
                     <button
                       onClick={() => { setSelectedDate(review.date); setView('timeline'); onTabChange('daily'); window.scrollTo(0, 0); }}
-                      className="mt-6 w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[9px] font-black uppercase tracking-widest transition-all shadow-lg shadow-blue-600/10"
+                      className="mt-6 w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[11px] font-semibold transition-all shadow-lg shadow-blue-600/10"
                     >
                       Otevřít Detail
                     </button>
@@ -1585,7 +1585,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             {reviews.length === 0 && (
               <div className={`col-span-full h-64 flex flex-col items-center justify-center border-2 border-dashed rounded-[40px] opacity-30 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'border-slate-200'}`}>
                 <History size={48} className="mb-4" />
-                <p className="text-xl font-black uppercase tracking-[0.2em]">Žádné záznamy k zobrazení</p>
+                <p className="text-xl font-semibold">Žádné záznamy k zobrazení</p>
               </div>
             )}
           </div>
@@ -1612,8 +1612,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                         <Sparkles size={24} className="animate-pulse" />
                       </div>
                       <div>
-                        <h3 className="text-2xl md:text-3xl font-black italic uppercase tracking-tight">SESSION ANALÝZA</h3>
-                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.3em] opacity-70">Taktické plánování seancí</p>
+                        <h3 className="text-2xl md:text-3xl font-bold tracking-tight">Analýza session</h3>
+                        <p className="text-[11px] font-semibold text-slate-500 opacity-70">Taktické plánování seancí</p>
                       </div>
                     </div>
 
@@ -1622,18 +1622,18 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                         {isSaving ? (
                           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 text-blue-500 animate-pulse">
                             <div className="w-2 h-2 rounded-full bg-blue-500" />
-                            <span className="text-[9px] font-black uppercase tracking-widest">Ukládám...</span>
+                            <span className="text-[11px] font-semibold">Ukládám...</span>
                           </div>
                         ) : lastSaved ? (
                           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-500 transition-all duration-1000">
                             <Check size={12} />
-                            <span className="text-[9px] font-black uppercase tracking-widest">Uloženo {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                            <span className="text-[11px] font-semibold">Uloženo {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                           </div>
                         ) : null}
                       </div>
 
                       {/* Tactical Tabs Switcher */}
-                      <div className={`flex items-center p-1.5 rounded-[20px] border transition-all duration-500 ${theme !== 'light' ? 'bg-black/40 border-[var(--border-subtle)]' : 'bg-slate-100 border-slate-200'}`}>
+                      <div className={`flex items-center p-1.5 rounded-[20px] border transition-all duration-500 bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
                         {prepForm.scenarios.sessions?.map((session) => {
                           const isActive = activeSessionTab === session.id;
                           const sessionColor = session.color || '#3b82f6'; // Default to blue
@@ -1641,7 +1641,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                             <button
                               key={session.id}
                               onClick={() => setActiveSessionTab(session.id)}
-                              className={`relative px-6 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all duration-300 ${isActive ? 'text-white' : 'text-slate-500 hover:text-slate-400 hover:bg-white/5'}`}
+                              className={`relative px-6 py-2.5 rounded-2xl text-[11px] font-semibold transition-all duration-300 ${isActive ? 'text-white' : 'text-slate-500 hover:text-slate-400 hover:bg-white/5'}`}
                             >
                               {isActive && (
                                 <motion.div
@@ -1685,7 +1685,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                                       sessions: prev.scenarios.sessions?.map(s => s.id === session.id ? { ...s, image: '' } : s)
                                     }
                                   }))}
-                                  className="px-3 py-1.5 bg-rose-500/10 text-rose-500 rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-rose-500 hover:text-white transition-all duration-300"
+                                  className="px-3 py-1.5 bg-rose-500/10 text-rose-500 rounded-xl text-[11px] font-semibold hover:bg-rose-500 hover:text-white transition-all duration-300"
                                 >
                                   Clear
                                 </button>
@@ -1718,8 +1718,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                                   <div className={`w-12 h-12 rounded-full mx-auto mb-4 flex items-center justify-center transition-all duration-500 ${activeImageField === `session_${session.id}` ? 'bg-blue-500 text-white' : 'bg-slate-800/50 text-slate-600'}`}>
                                     <ImageIcon size={20} />
                                   </div>
-                                  <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest mb-1">Visual Analysis</p>
-                                  <p className="text-[7px] font-bold text-slate-600 uppercase italic">CTRL+V to paste</p>
+                                  <p className="text-[11px] font-semibold text-slate-500 mb-1">Visual Analysis</p>
+                                  <p className="text-[10px] font-bold text-slate-600 italic">CTRL+V to paste</p>
                                 </div>
                               )}
                             </div>
@@ -1729,7 +1729,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                           <div className="w-full xl:w-[45%] flex flex-col">
                             <div className="flex items-center gap-2 mb-4 opacity-50">
                               <FileText size={12} className="text-slate-500" />
-                              <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Tactical Game Plan</span>
+                              <span className="text-[11px] font-bold text-slate-500">Tactical Game Plan</span>
                             </div>
                             <textarea
                               value={session.plan}
@@ -1741,7 +1741,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                                 }
                               }))}
                               placeholder="Tvůj plán pro tuto seanci..."
-                              className={`w-full flex-1 min-h-[220px] rounded-3xl p-6 border focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500/30 text-sm leading-relaxed transition-all placeholder:text-slate-500 ${theme !== 'light' ? 'bg-theme-card-40 border-[var(--border-subtle)] text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700 shadow-inner'}`}
+                              className={`w-full flex-1 min-h-[220px] rounded-3xl p-6 border focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500/30 text-sm leading-relaxed transition-all placeholder:text-slate-500 ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-300' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-700 shadow-inner'}`}
                             />
                           </div>
                         </div>
@@ -1754,11 +1754,11 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                     <div className="mt-8 p-5 rounded-[28px] bg-white/[0.03] border border-[var(--border-subtle)] backdrop-blur-sm relative z-10">
                       <div className="flex items-center gap-3 mb-3">
                         <div className="p-2 rounded-lg bg-amber-500/10 text-amber-500"><AlertTriangle size={14} /></div>
-                        <p className="text-[10px] font-black uppercase text-amber-500/80 tracking-widest">Legacy Analysis Records</p>
+                        <p className="text-[11px] font-semibold text-amber-500/80">Legacy Analysis Records</p>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 opacity-60">
-                        {prepForm.scenarios.bullish && <div className="space-y-1"><p className="text-[8px] font-black uppercase text-slate-600">Bullish Scenario</p><p className="text-[11px] text-slate-400 italic font-medium leading-relaxed">"{prepForm.scenarios.bullish}"</p></div>}
-                        {prepForm.scenarios.bearish && <div className="space-y-1"><p className="text-[8px] font-black uppercase text-slate-600">Bearish Scenario</p><p className="text-[11px] text-slate-400 italic font-medium leading-relaxed">"{prepForm.scenarios.bearish}"</p></div>}
+                        {prepForm.scenarios.bullish && <div className="space-y-1"><p className="text-[11px] font-semibold text-slate-600">Bullish Scenario</p><p className="text-[11px] text-slate-400 italic font-medium leading-relaxed">"{prepForm.scenarios.bullish}"</p></div>}
+                        {prepForm.scenarios.bearish && <div className="space-y-1"><p className="text-[11px] font-semibold text-slate-600">Bearish Scenario</p><p className="text-[11px] text-slate-400 italic font-medium leading-relaxed">"{prepForm.scenarios.bearish}"</p></div>}
                       </div>
                     </div>
                   )}
@@ -1767,7 +1767,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                     <button
                       onClick={() => void handleCompletePrep()}
                       disabled={isSaving}
-                      className={`w-full py-5 rounded-[24px] font-black text-[12px] uppercase tracking-[0.3em] text-white shadow-2xl active:scale-95 transition-all duration-500 bg-blue-600 hover:bg-blue-500 shadow-blue-500/30`}
+                      className={`w-full py-5 rounded-[24px] font-semibold text-[12px] text-white shadow-2xl active:scale-95 transition-all duration-500 bg-blue-600 hover:bg-blue-500 shadow-blue-500/30`}
                     >
                       DOKONČIT PŘÍPRAVU
                     </button>
@@ -1779,14 +1779,14 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
               <div className="lg:col-span-4 space-y-6 order-1 lg:order-2">
 
                 {/* Market Bias selector */}
-                <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/20'}`}>
+                <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-[var(--bg-page)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-xl shadow-slate-200/20'}`}>
                   <div className="flex items-center gap-3 mb-5">
                     <div className={`p-3 rounded-2xl ${prepForm.bias === 'Bullish' ? 'bg-emerald-500/10 text-emerald-500' : prepForm.bias === 'Bearish' ? 'bg-rose-500/10 text-rose-500' : 'bg-slate-500/10 text-slate-400'}`}>
                       <TrendingUp size={20} />
                     </div>
                     <div>
-                      <h3 className="text-xl font-black italic uppercase">MARKET BIAS</h3>
-                      <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Dnešní tržní pohled</p>
+                      <h3 className="text-xl font-bold">Market bias</h3>
+                      <p className="text-[11px] font-semibold text-slate-500">Dnešní tržní pohled</p>
                     </div>
                   </div>
                   <div className="grid grid-cols-3 gap-2">
@@ -1802,7 +1802,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                         <button
                           key={b}
                           onClick={() => editPrepForm(prev => ({ ...prev, bias: b }))}
-                          className={`py-3 rounded-2xl border font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 flex flex-col items-center gap-1 ${colors[b]}`}
+                          className={`py-3 rounded-2xl border font-semibold text-[11px] transition-all active:scale-95 flex flex-col items-center gap-1 ${colors[b]}`}
                         >
                           <span className="text-lg">{emoji[b]}</span>
                           <span>{b}</span>
@@ -1812,13 +1812,13 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                   </div>
                 </section>
 
-                <section className={`p-6 md:p-8 rounded-[32px] md:rounded-[40px] border ${theme !== 'light' ? 'bg-slate-900/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/20'}`}>
+                <section className={`p-6 md:p-8 rounded-[32px] md:rounded-[40px] border ${theme !== 'light' ? 'bg-[var(--bg-page)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-xl shadow-slate-200/20'}`}>
                   <div className="flex items-center justify-between mb-6">
                     <div className="flex items-center gap-4">
                       <div className="p-3 rounded-2xl bg-blue-500/10 text-blue-500"><Zap size={20} /></div>
                       <div>
-                        <h3 className="text-xl font-black italic uppercase">RANNÍ CHECKLIST</h3>
-                        <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Aktivace před trhy</p>
+                        <h3 className="text-xl font-bold">Ranní checklist</h3>
+                        <p className="text-[11px] font-semibold text-slate-500">Aktivace před trhy</p>
                       </div>
                     </div>
                   </div>
@@ -1832,7 +1832,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                           onClick={() => handleToggleRitual(ritual.id)}
                           className={`p-4 rounded-xl border flex items-center justify-between transition-all active:scale-95 ${isDone ? 'bg-emerald-600 border-emerald-500 text-white shadow-lg shadow-emerald-600/20' : (theme !== 'light' ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-400' : 'bg-slate-50 border-slate-200 text-slate-600')} `}
                         >
-                          <span className="text-[10px] font-black uppercase tracking-tight text-left pr-2">{ritual.label}</span>
+                          <span className="text-[11px] font-semibold tracking-tight text-left pr-2">{ritual.label}</span>
                           {isDone ? <Check size={16} /> : <div className={`w-4 h-4 rounded-full border shrink-0 ${theme !== 'light' ? 'border-[var(--border-subtle)]' : 'bg-slate-200'} `} />}
                         </button>
                       );
@@ -1841,12 +1841,12 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 </section>
 
                 {/* Confidence slider */}
-                <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/20'}`}>
+                <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-[var(--bg-page)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-xl shadow-slate-200/20'}`}>
                   <div className="flex items-center gap-4 mb-5">
                     <div className="p-3 rounded-2xl bg-violet-500/10 text-violet-500"><Brain size={20} /></div>
                     <div>
-                      <h3 className="text-xl font-black italic uppercase">SEBEVĚDOMÍ</h3>
-                      <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Jak se dnes cítíš?</p>
+                      <h3 className="text-xl font-bold">Sebevědomí</h3>
+                      <p className="text-[11px] font-semibold text-slate-500">Jak se dnes cítíš?</p>
                     </div>
                   </div>
                   <div className="flex items-center justify-between mb-3">
@@ -1878,7 +1878,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                 <div className="p-6 rounded-[32px] bg-blue-500/5 border border-blue-500/10 backdrop-blur-sm">
                   <div className="flex items-center gap-3 mb-2">
                     <Info size={14} className="text-blue-500" />
-                    <p className="text-[10px] font-black uppercase text-blue-500 tracking-widest">Command Center</p>
+                    <p className="text-[11px] font-semibold text-blue-500">Command Center</p>
                   </div>
                   <p className="text-[10px] text-slate-500 leading-relaxed font-medium">Dokonči ranní rituály a vypiluj taktický plán pro nadcházející seanci.</p>
                 </div>
@@ -1890,25 +1890,25 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
               {/* Psycho-Cybernetics (Mindset & Emoční Audit) odstraněno — nepoužíváme. */}
               <div className="space-y-6">
                 {/* EXECUTION AUDIT - Compact Grid */}
-                <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-slate-900/50 border-[var(--border-subtle)]' : 'bg-white border-slate-200 shadow-sm'}`}>
+                <section className={`p-6 rounded-[32px] border ${theme !== 'light' ? 'bg-[var(--bg-page)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-sm'}`}>
                   <div className="flex items-center justify-between mb-6">
                     <div className="flex items-center gap-3">
                       <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-500"><ShieldAlert size={18} /></div>
                       <div>
-                        <h3 className="text-lg font-black italic uppercase">EXECUTION</h3>
-                        <p className="text-[8px] font-black uppercase text-slate-500 tracking-widest">Dodržení pravidel</p>
+                        <h3 className="text-lg font-bold">Exekuce</h3>
+                        <p className="text-[11px] font-semibold text-slate-500">Dodržení pravidel</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       {isSaving ? (
                         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-500/10 text-blue-500 animate-pulse">
                           <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-                          <span className="text-[8px] font-black uppercase tracking-widest">Saving...</span>
+                          <span className="text-[11px] font-semibold">Saving...</span>
                         </div>
                       ) : lastSaved ? (
                         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-500">
                           <Check size={10} />
-                          <span className="text-[8px] font-black uppercase tracking-widest">{lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          <span className="text-[11px] font-semibold">{lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                         </div>
                       ) : null}
                     </div>
@@ -1920,17 +1920,17 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                       const status = comp?.status || 'Pending';
                       return (
                         <div key={rule.id} className={`p-3 rounded-xl border flex flex-col justify-between gap-3 ${theme !== 'light' ? 'bg-[var(--bg-page)]/50 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'} `}>
-                          <h4 className="text-[9px] font-black uppercase tracking-widest leading-tight h-7 line-clamp-2">{rule.label}</h4>
+                          <h4 className="text-[11px] font-semibold leading-tight h-7 line-clamp-2">{rule.label}</h4>
                           <div className="flex gap-1.5">
                             <button
                               onClick={() => handleSetRuleStatus(rule.id, 'Pass')}
-                              className={`flex-1 py-1.5 rounded-lg font-black text-[8px] uppercase tracking-widest transition-all ${status === 'Pass' ? 'bg-emerald-600 text-white' : (theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-500 hover:bg-white/5' : 'bg-white text-slate-400 hover:bg-slate-100 shadow-sm')} `}
+                              className={`flex-1 py-1.5 rounded-lg font-semibold text-[11px] transition-all ${status === 'Pass' ? 'bg-emerald-600 text-white' : (theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-500 hover:bg-white/5' : 'bg-white text-slate-400 hover:bg-slate-100 shadow-sm')} `}
                             >
                               Pass
                             </button>
                             <button
                               onClick={() => handleSetRuleStatus(rule.id, 'Fail')}
-                              className={`flex-1 py-1.5 rounded-lg font-black text-[8px] uppercase tracking-widest transition-all ${status === 'Fail' ? 'bg-rose-600 text-white' : (theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-500 hover:bg-white/5' : 'bg-white text-slate-400 hover:bg-slate-100 shadow-sm')} `}
+                              className={`flex-1 py-1.5 rounded-lg font-semibold text-[11px] transition-all ${status === 'Fail' ? 'bg-rose-600 text-white' : (theme !== 'light' ? 'bg-[var(--bg-card)] text-slate-500 hover:bg-white/5' : 'bg-white text-slate-400 hover:bg-slate-100 shadow-sm')} `}
                             >
                               Fail
                             </button>
@@ -1945,7 +1945,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                     <div className={`mt-6 p-5 rounded-[28px] border ${theme !== 'light' ? 'bg-emerald-500/5 border-emerald-500/10' : 'bg-emerald-50 border-emerald-100'}`}>
                       <div className="flex items-center gap-3 mb-4">
                         <div className="p-2 rounded-lg bg-emerald-500 text-white"><ClipboardCheck size={14} /></div>
-                        <h4 className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Weekly Focus</h4>
+                        <h4 className="text-[11px] font-semibold text-emerald-500">Weekly Focus</h4>
                       </div>
                       <div className="space-y-1.5">
                         {currentWeekFocus.goals.map((goal, idx) => {
@@ -1982,7 +1982,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                     <button
                       onClick={() => void handleCompleteReview()}
                       disabled={isSaving}
-                      className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-indigo-500/20 active:scale-95 transition-all"
+                      className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-semibold text-[11px] shadow-xl shadow-indigo-500/20 active:scale-95 transition-all"
                     >
                       DOKONČIT REVIEW
                     </button>
@@ -1998,11 +1998,11 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       {/* Export Modal */}
       {isExportModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className={`w-full max-w-md p-8 rounded-[40px] border shadow-2xl ${theme !== 'light' ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+          <div className={`w-full max-w-md p-8 rounded-[40px] border shadow-2xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
             <div className="flex justify-between items-center mb-8">
               <div>
-                <h3 className={`text-2xl font-black italic tracking-tighter uppercase ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>Export Deníku</h3>
-                <p className="text-[10px] font-black uppercase text-blue-500 tracking-widest">Vyberte parametry exportu</p>
+                <h3 className={`text-2xl font-bold tracking-tight ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>Export Deníku</h3>
+                <p className="text-[11px] font-semibold text-blue-500">Vyberte parametry exportu</p>
               </div>
               <button
                 onClick={() => setIsExportModalOpen(false)}
@@ -2015,7 +2015,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
             <div className="space-y-8">
               {/* Range Selection */}
               <div className="space-y-4">
-                <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Časové období</p>
+                <p className="text-[11px] font-semibold text-slate-500">Časové období</p>
                 <div className="grid grid-cols-2 gap-2">
                   {[
                     { id: '7', label: '7 dní' },
@@ -2026,9 +2026,9 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                     <button
                       key={r.id}
                       onClick={() => setExportRange(r.id as any)}
-                      className={`relative px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${exportRange === r.id
+                      className={`relative px-4 py-3 rounded-2xl text-[11px] font-semibold transition-all ${exportRange === r.id
                         ? 'text-white shadow-lg shadow-blue-600/20 scale-[1.02]'
-                        : `${theme !== 'light' ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`
+                        : `${theme !== 'light' ? 'bg-[var(--bg-page)] text-slate-400 hover:bg-white/10' : 'bg-[var(--bg-page)] text-slate-600 hover:bg-slate-200'}`
                         }`}
                     >
                       {exportRange === r.id && (
@@ -2046,7 +2046,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
               {/* Field Selection */}
               <div className="space-y-4">
-                <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Data k exportu</p>
+                <p className="text-[11px] font-semibold text-slate-500">Data k exportu</p>
                 <div className="grid grid-cols-2 gap-3">
                   {[
                     { id: 'notes', label: 'Reflexe' },
@@ -2062,9 +2062,9 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                     <button
                       key={field.id}
                       onClick={() => setExportFields(prev => ({ ...prev, [field.id]: !prev[field.id as keyof typeof prev] }))}
-                      className={`px-4 py-2.5 rounded-xl border text-[9px] font-black uppercase tracking-widest transition-all flex items-center justify-between ${exportFields[field.id as keyof typeof exportFields]
+                      className={`px-4 py-2.5 rounded-xl border text-[11px] font-semibold transition-all flex items-center justify-between ${exportFields[field.id as keyof typeof exportFields]
                         ? 'bg-blue-600/10 border-blue-600/50 text-blue-500'
-                        : `${theme !== 'light' ? 'bg-white/5 border-white/5 text-slate-500 hover:bg-white/10' : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100'}`
+                        : `${theme !== 'light' ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-500 hover:bg-white/10' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-400 hover:bg-slate-100'}`
                         }`}
                     >
                       {field.label}
@@ -2081,7 +2081,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
               {/* Format Selection */}
               <div className="space-y-4">
-                <p className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Formát exportu</p>
+                <p className="text-[11px] font-semibold text-slate-500">Formát exportu</p>
                 <div className="space-y-2">
                   {[
                     { id: 'pdf', label: 'Vizuální PDF Report', sub: 'Ideální pro čtení a tisk', icon: FileText },
@@ -2100,8 +2100,8 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
                         <f.icon size={18} />
                       </div>
                       <div className="flex-1">
-                        <p className={`text-[10px] font-black uppercase tracking-widest ${exportFormat === f.id ? 'text-blue-500' : 'text-slate-400'}`}>{f.label}</p>
-                        <p className="text-[9px] text-slate-500 font-bold uppercase">{f.sub}</p>
+                        <p className={`text-[11px] font-semibold ${exportFormat === f.id ? 'text-blue-500' : 'text-slate-400'}`}>{f.label}</p>
+                        <p className="text-[11px] text-slate-500 font-bold">{f.sub}</p>
                       </div>
                     </button>
                   ))}
@@ -2110,7 +2110,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
 
               <button
                 onClick={handleExport}
-                className="w-full py-5 rounded-[28px] bg-blue-600 hover:bg-blue-500 text-white text-[12px] font-black uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-[0.98] shadow-xl shadow-blue-600/30 flex items-center justify-center gap-3 mt-4"
+                className="w-full py-5 rounded-[28px] bg-blue-600 hover:bg-blue-500 text-white text-[12px] font-semibold transition-all hover:scale-[1.02] active:scale-[0.98] shadow-xl shadow-blue-600/30 flex items-center justify-center gap-3 mt-4"
               >
                 Stáhnout Export <Download size={18} />
               </button>
@@ -2122,7 +2122,7 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
       {/* Unsaved Changes Warning Modal */}
       {showUnsavedWarning && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className={`w-full max-w-md rounded-3xl shadow-2xl p-6 ${theme !== 'light' ? 'bg-[var(--bg-card)] border border-[var(--border-subtle)]' : 'bg-white border border-slate-200'}`}>
+          <div className={`w-full max-w-md rounded-3xl shadow-2xl p-6 bg-[var(--bg-card)] border border-[var(--border-subtle)]`}>
             <div className="flex items-center gap-3 mb-4">
               <div className="p-3 rounded-2xl bg-orange-500/20">
                 <AlertTriangle size={24} className="text-orange-400" />
@@ -2133,9 +2133,9 @@ const DailyJournal: React.FC<DailyJournalProps> = ({
               </div>
             </div>
             <div className="flex gap-3">
-              <button onClick={handleSaveAndProceed} className="flex-1 py-3 rounded-2xl bg-green-600 hover:bg-green-500 text-white font-black text-xs uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2"><Check size={16} /> {(view === 'edit-prep' || view === 'edit-review') ? 'Dokončit' : 'Uložit'}</button>
-              <button onClick={handleDiscardAndProceed} className="flex-1 py-3 rounded-2xl bg-red-600/20 hover:bg-red-600/30 text-red-400 font-black text-xs uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2 border border-red-500/30"><X size={16} /> Odejít</button>
-              <button onClick={handleCancelNavigation} className={`flex-1 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all active:scale-95 ${theme !== 'light' ? 'bg-[var(--bg-page)] text-slate-300 border border-[var(--border-subtle)] hover:bg-[var(--bg-input)]' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>Zrušit</button>
+              <button onClick={handleSaveAndProceed} className="flex-1 py-3 rounded-2xl bg-green-600 hover:bg-green-500 text-white font-semibold text-xs transition-all active:scale-95 flex items-center justify-center gap-2"><Check size={16} /> {(view === 'edit-prep' || view === 'edit-review') ? 'Dokončit' : 'Uložit'}</button>
+              <button onClick={handleDiscardAndProceed} className="flex-1 py-3 rounded-2xl bg-red-600/20 hover:bg-red-600/30 text-red-400 font-semibold text-xs transition-all active:scale-95 flex items-center justify-center gap-2 border border-red-500/30"><X size={16} /> Odejít</button>
+              <button onClick={handleCancelNavigation} className={`flex-1 py-3 rounded-2xl font-semibold text-xs transition-all active:scale-95 ${theme !== 'light' ? 'bg-[var(--bg-page)] text-slate-300 border border-[var(--border-subtle)] hover:bg-[var(--bg-input)]' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>Zrušit</button>
             </div>
           </div>
         </div>

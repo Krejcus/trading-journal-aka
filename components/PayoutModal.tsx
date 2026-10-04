@@ -132,16 +132,16 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
 
     return (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-300">
-            <div className={`w-full max-w-lg p-8 rounded-[32px] border shadow-2xl ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-white border-slate-200'}`}>
+            <div className={`w-full max-w-lg p-8 rounded-[32px] border shadow-2xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
                 <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-xl font-black italic tracking-tight uppercase">{payout ? 'Upravit výplatu' : 'Nová výplata'}</h3>
+                    <h3 className="text-xl font-bold tracking-tight">{payout ? 'Upravit výplatu' : 'Nová výplata'}</h3>
                     <button onClick={onClose} className="p-2 text-slate-500 hover:text-white transition-all"><X size={20} /></button>
                 </div>
 
                 <div className="space-y-6">
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Účet</label>
+                            <label className="text-[11px] font-semibold text-slate-500">Účet</label>
                             <select
                                 value={formData.accountId}
                                 onChange={(e) => {
@@ -175,7 +175,7 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
                             </select>
                         </div>
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Datum</label>
+                            <label className="text-[11px] font-semibold text-slate-500">Datum</label>
                             <input
                                 type="date" value={formData.date}
                                 onChange={(e) => setFormData({ ...formData, date: e.target.value })}
@@ -187,7 +187,7 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
                     <div className={`p-4 rounded-2xl border ${isDark ? 'bg-blue-600/5 border-blue-500/20' : 'bg-blue-50 border-blue-200'}`}>
                         <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black uppercase text-blue-500 tracking-widest pl-1">Hrubý Zisk (Gross)</label>
+                                <label className="text-[11px] font-semibold text-blue-500 pl-1">Hrubý Zisk (Gross)</label>
                                 <div className="relative">
                                     <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">$</span>
                                     <input
@@ -208,7 +208,7 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
                                 </div>
                             </div>
                             <div className="space-y-2">
-                                <label className="text-[10px] font-black uppercase text-blue-500 tracking-widest pl-1">Profit Split (%)</label>
+                                <label className="text-[11px] font-semibold text-blue-500 pl-1">Profit Split (%)</label>
                                 <div className="relative">
                                     <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">%</span>
                                     <input
@@ -231,7 +231,7 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
                         </div>
 
                         <div className="mt-4 pt-4 border-t border-blue-500/20 flex justify-between items-center">
-                            <span className="text-[10px] font-black uppercase text-emerald-500 tracking-widest">Čistá Výplata (Net)</span>
+                            <span className="text-[11px] font-semibold text-emerald-500">Čistá Výplata (Net)</span>
                             <span className="text-2xl font-black font-mono text-emerald-500">
                                 ${formData.amount?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>
@@ -239,7 +239,7 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
                     </div>
 
                     <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Foto / Důkaz výplaty</label>
+                        <label className="text-[11px] font-semibold text-slate-500">Foto / Důkaz výplaty</label>
                         <div className="flex gap-4 items-start">
                             {formData.image ? (
                                 <div className="relative w-32 h-32 rounded-xl border border-white/10 overflow-hidden group">
@@ -254,12 +254,12 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
                             ) : (
                                 <label className={`w-32 h-32 rounded-xl border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition-all hover:border-blue-500/50 hover:bg-white/5 ${isDark ? 'border-white/10' : 'border-slate-200'}`}>
                                     <Plus size={24} className="text-slate-500" />
-                                    <span className="text-[9px] font-black text-slate-500 uppercase mt-2">Nahrát foto</span>
+                                    <span className="text-[11px] font-semibold text-slate-500 mt-2">Nahrát foto</span>
                                     <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
                                 </label>
                             )}
                             <div className="flex-1">
-                                <p className="text-[9px] font-bold text-slate-500 uppercase leading-relaxed text-slate-500">
+                                <p className="text-[11px] font-bold text-slate-500 leading-relaxed text-slate-500">
                                     Přiložte potvrzení o výplatě (screenshot z banky nebo prop firmy) jako důkaz do obchodního deníku.
                                 </p>
                             </div>
@@ -267,7 +267,7 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
                     </div>
 
                     <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Poznámky</label>
+                        <label className="text-[11px] font-semibold text-slate-500">Poznámky</label>
                         <textarea
                             value={formData.notes}
                             onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
@@ -285,7 +285,7 @@ const PayoutModal: React.FC<PayoutModalProps> = ({
                     <button
                         onClick={handleSave}
                         disabled={isSaving}
-                        className={`w-full py-4 rounded-2xl font-black uppercase text-xs tracking-widest transition-all shadow-lg active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait ${payout ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20' : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20'}`}
+                        className={`w-full py-4 rounded-2xl font-semibold text-xs transition-all shadow-lg active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait ${payout ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/20' : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20'}`}
                     >
                         {isSaving ? 'Ukládám…' : (payout ? 'Uložit změny' : 'Potvrdit výplatu')}
                     </button>

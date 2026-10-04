@@ -37,7 +37,7 @@ const PerformanceCalendar: React.FC<PerformanceCalendarProps> = ({ calendarData,
             }`}>
             <div className="flex justify-between items-center mb-4">
               <h4 className={`text-xl font-black capitalize tracking-tighter ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>{monthName}</h4>
-              <div className="text-slate-500 text-xs font-black uppercase tracking-widest">
+              <div className="text-slate-500 text-xs font-semibold">
                 Celkové PnL: <span className={`font-mono ${days.reduce((acc, d) => acc + d.pnl, 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
                   ${days.reduce((acc, d) => acc + d.pnl, 0).toFixed(0)}
                 </span>

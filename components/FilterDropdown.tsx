@@ -170,7 +170,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
     filters.mistakes.length
   );
 
-  const sectionLabelClass = `flex items-center gap-1.5 text-[8px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-slate-500' : 'text-slate-400'}`;
+  const sectionLabelClass = `flex items-center gap-1.5 text-[11px] font-semibold mb-2 ${isDark ? 'text-slate-500' : 'text-slate-400'}`;
 
   const renderCollapsible = (
     id: string,
@@ -190,7 +190,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
         >
           <Icon size={10} className={`shrink-0 ${badge ? (isDark ? 'text-slate-300' : 'text-slate-700') : 'text-slate-500'}`} />
           {/* nowrap — „Dny & hodiny" se v úzkém sloupci lámalo na dva řádky */}
-          <span className="text-[8px] font-black uppercase tracking-wider text-slate-500 whitespace-nowrap">{label}</span>
+          <span className="text-[11px] font-semibold text-slate-500 whitespace-nowrap">{label}</span>
           {badge ? (
             <span className={`min-w-[15px] h-[15px] px-1 rounded-full text-[7px] font-black flex items-center justify-center ${isDark ? 'bg-white/15 text-white' : 'bg-slate-800 text-white'}`}>{badge}</span>
           ) : null}
@@ -214,7 +214,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
   };
 
   const getGlassBtnClass = (isActive: boolean, type: 'neutral' | 'win' | 'loss' | 'status-valid' | 'status-invalid' | 'status-missed' = 'neutral') => {
-    const base = "transition-all duration-300 border backdrop-blur-md relative overflow-hidden text-[8px] font-black uppercase tracking-wider h-7 flex items-center justify-center rounded-lg px-1.5";
+    const base = "transition-all duration-300 border backdrop-blur-md relative overflow-hidden text-[11px] font-semibold h-7 flex items-center justify-center rounded-lg px-1.5";
     if (!isActive) {
       return isDark
         ? `${base} bg-white/[0.02] border-white/5 text-slate-500 hover:bg-white/[0.05] hover:text-slate-300`
@@ -309,7 +309,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
 
             <div className={`px-4 py-3 border-b flex justify-between items-center relative z-10 shrink-0 ${isDark ? 'border-white/5 bg-white/[0.03]' : 'border-black/[0.06] bg-white/[0.04]'}`}>
               <div className="flex flex-col">
-                <h4 className={`font-black text-[9px] uppercase tracking-[0.2em] flex items-center gap-1.5 ${isDark ? 'text-slate-200' : 'text-slate-900'}`}>
+                <h4 className={`font-semibold text-[11px] flex items-center gap-1.5 ${isDark ? 'text-slate-200' : 'text-slate-900'}`}>
                   <Filter size={11} className="text-indigo-500" /> Filtry
                 </h4>
               </div>
@@ -342,7 +342,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 return (
                   <motion.div variants={itemVariants}>
                     <div className={sectionLabelClass}><Monitor size={10} /> Režim</div>
-                    <div className={`flex p-0.5 rounded-lg border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
+                    <div className={`flex p-0.5 rounded-lg border relative bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
                       <motion.div
                         animate={{ x: (idx * 100) + '%' }}
                         transition={{ type: 'spring', stiffness: 400, damping: 35 }}
@@ -357,7 +357,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                         <button
                           key={m}
                           onClick={() => setDashboardMode(m as DashboardMode)}
-                          className={`flex-1 relative z-10 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-colors ${
+                          className={`flex-1 relative z-10 py-1.5 rounded-lg text-[11px] font-semibold transition-colors ${
                             dashboardMode === m
                               ? (isDark
                                 ? m === 'funded' ? 'text-emerald-400' : m === 'combined' ? 'text-orange-400' : m === 'archive' ? 'text-slate-300' : 'text-blue-400'
@@ -375,7 +375,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <motion.div variants={itemVariants}>
                   <div className={sectionLabelClass}><Layers size={10} /> Seskupení</div>
-                  <div className={`flex p-0.5 rounded-lg border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
+                  <div className={`flex p-0.5 rounded-lg border relative bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
                     <motion.div
                       animate={{ x: (viewMode === 'individual' ? 0 : 100) + '%' }}
                       transition={{ type: 'spring', stiffness: 400, damping: 35 }}
@@ -385,7 +385,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                       <button
                         key={v.id}
                         onClick={() => setViewMode(v.id as any)}
-                        className={`flex-1 relative z-10 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-colors ${viewMode === v.id ? (isDark ? 'text-white' : 'text-slate-900') : 'text-slate-500 hover:text-slate-400'}`}
+                        className={`flex-1 relative z-10 py-1.5 rounded-lg text-[11px] font-semibold transition-colors ${viewMode === v.id ? (isDark ? 'text-white' : 'text-slate-900') : 'text-slate-500 hover:text-slate-400'}`}
                       >
                         {v.label}
                       </button>
@@ -396,7 +396,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 {pnlDisplayMode && setPnlDisplayMode && (
                   <motion.div variants={itemVariants}>
                     <div className={sectionLabelClass}><TrendingUp size={10} /> P&L</div>
-                    <div className={`flex p-0.5 rounded-lg border relative ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-100 border-slate-200'}`}>
+                    <div className={`flex p-0.5 rounded-lg border relative bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
                       <motion.div
                         animate={{ x: (pnlDisplayMode === 'usd' ? 0 : pnlDisplayMode === 'percent' ? 100 : 200) + '%' }}
                         transition={{ type: 'spring', stiffness: 400, damping: 35 }}
@@ -473,7 +473,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                     <div className="space-y-2.5">
                       {tagGroups.map(g => (
                         <div key={g.id}>
-                          <div className="flex items-center gap-1.5 mb-1.5 text-[8px] font-black uppercase tracking-widest text-slate-500">
+                          <div className="flex items-center gap-1.5 mb-1.5 text-[11px] font-semibold text-slate-500">
                             <g.icon size={9} className={g.selected.length > 0 ? g.iconColor : 'text-slate-500'} /> {g.label}
                           </div>
                           <div className="flex flex-wrap gap-1.5">
@@ -481,7 +481,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                               <button
                                 key={tag}
                                 onClick={() => setFilters(f => ({ ...f, [g.key]: toggleItem((f as any)[g.key], tag) }))}
-                                className={`px-2.5 py-1.5 rounded-lg border text-[8px] font-black uppercase transition-all ${g.selected.includes(tag)
+                                className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all ${g.selected.includes(tag)
                                   ? g.activeClass
                                   : (isDark ? 'bg-white/5 border-white/5 text-slate-500 hover:text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-500')}`}
                               >
@@ -502,7 +502,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                   return renderCollapsible('cas', Clock, 'Dny & Hodiny', badge || null, (
                     <div className="space-y-3">
                       <div>
-                        <div className="mb-1.5 flex items-center gap-1.5 text-[8px] font-black uppercase tracking-widest text-slate-500"><Calendar size={9} /> Dny</div>
+                        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-slate-500"><Calendar size={9} /> Dny</div>
                         <div className="grid grid-cols-5 gap-1">
                           {TRADING_DAYS.map(day => (
                             <button key={day} onClick={() => setFilters(f => ({ ...f, days: toggleItem(f.days, day) }))} className={`aspect-square rounded-lg text-[8px] font-black flex items-center justify-center ${getGlassBtnClass(filters.days.includes(day))}`}>{day}</button>
@@ -510,7 +510,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                         </div>
                       </div>
                       <div>
-                        <div className="mb-1.5 flex items-center gap-1.5 text-[8px] font-black uppercase tracking-widest text-slate-500"><Clock size={9} /> Hodiny</div>
+                        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-slate-500"><Clock size={9} /> Hodiny</div>
                         <div className="space-y-2">
                           <div className="flex justify-between text-[8px] font-black text-slate-500">
                             <span className={isDark ? 'text-indigo-400' : 'text-indigo-600'}>{hourRange[0]}:00</span>
@@ -590,7 +590,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                       <button
                         onClick={selectAllVisible}
                         disabled={allVisibleSelected}
-                        className={`px-2 py-0.5 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all ${
+                        className={`px-2 py-0.5 rounded-lg text-[11px] font-semibold transition-all ${
                           allVisibleSelected
                             ? 'opacity-30 cursor-default'
                             : (isDark ? 'bg-white/10 text-slate-200 hover:bg-white/20' : 'bg-slate-200 text-slate-700 hover:bg-slate-300')
@@ -626,13 +626,13 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
             </div>
 
             <div className={`px-4 py-3 border-t flex items-center justify-between relative z-10 ${isDark ? 'border-white/5 bg-white/[0.03]' : 'border-black/[0.06] bg-white/[0.04]'}`}>
-              <span className={`text-[8px] font-black uppercase tracking-widest ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}>{activeFilterCount} aktivních</span>
+              <span className={`text-[11px] font-semibold ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}>{activeFilterCount} aktivních</span>
               <div className="flex items-center gap-2">
                 {/* Desktop: edit grid layout */}
                 {setIsDashboardEditing && (
                   <button
                     onClick={() => { setIsDashboardEditing(!isDashboardEditing); setIsOpen(false); }}
-                    className={`hidden md:flex items-center gap-1.5 px-3 py-2 rounded-lg font-black text-[9px] uppercase tracking-widest transition-all active:scale-95 border ${
+                    className={`hidden md:flex items-center gap-1.5 px-3 py-2 rounded-lg font-semibold text-[11px] transition-all active:scale-95 border ${
                       isDashboardEditing
                         ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-lg shadow-emerald-500/20'
                         : (isDark
@@ -648,7 +648,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 {setIsMobileEditing && (
                   <button
                     onClick={() => { setIsMobileEditing(!isMobileEditing); setIsOpen(false); }}
-                    className={`flex md:hidden items-center gap-1.5 px-3 py-2 rounded-lg font-black text-[9px] uppercase tracking-widest transition-all active:scale-95 border ${
+                    className={`flex md:hidden items-center gap-1.5 px-3 py-2 rounded-lg font-semibold text-[11px] transition-all active:scale-95 border ${
                       isMobileEditing
                         ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-lg shadow-emerald-500/20'
                         : (isDark
@@ -662,7 +662,7 @@ const FilterDropdown: React.FC<FilterDropdownProps> = ({
                 )}
                 <button
                   onClick={() => setIsOpen(false)}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-black text-[9px] uppercase tracking-widest transition-all active:scale-95"
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-semibold text-[11px] transition-all active:scale-95"
                 >
                   Hotovo
                 </button>

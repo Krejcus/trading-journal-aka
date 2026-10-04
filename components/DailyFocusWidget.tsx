@@ -141,7 +141,7 @@ const ChecklistCard: React.FC<{
                         {allDone ? <Check size={11} strokeWidth={3} /> : <FileText size={11} strokeWidth={2.5} />}
                     </div>
                     <div className="flex flex-col items-start min-w-0">
-                        <span className={`text-[8px] font-black uppercase tracking-[0.2em] ${allDone ? 'text-emerald-500/80' : 'text-purple-500/80'}`}>
+                        <span className={`text-[11px] font-semibold ${allDone ? 'text-emerald-500/80' : 'text-purple-500/80'}`}>
                             Checklist · {checkedCount}/{itemCount}
                         </span>
                         <span className={`text-[11px] font-black truncate text-left ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{rule.title}</span>
@@ -195,11 +195,11 @@ const SimpleRuleRow: React.FC<{ rule: ParsedRule; isDark: boolean }> = ({ rule, 
             </div>
             <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5 mb-0.5">
-                    <span className={`text-[7px] font-black uppercase tracking-widest text-${color}-500/80`}>
+                    <span className={`text-[10px] font-semibold text-${color}-500/80`}>
                         {rule.type === 'experiment' ? 'Experiment' : 'Iron Rule'}
                     </span>
                     {rule.duration && (
-                        <span className="text-[7px] font-black uppercase tracking-widest px-1 rounded bg-amber-500/15 text-amber-600 flex items-center gap-0.5">
+                        <span className="text-[10px] font-semibold px-1 rounded bg-amber-500/15 text-amber-600 flex items-center gap-0.5">
                             <Clock size={7} /> {rule.duration}
                         </span>
                     )}
@@ -241,7 +241,7 @@ const DailyFocusWidget: React.FC<Props> = ({ ironRules, theme, onManage }) => {
 
     if (activeRules.length === 0) {
         return (
-            <div className={`h-full rounded-3xl border p-5 flex flex-col items-center justify-center text-center ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+            <div className={`h-full rounded-3xl border p-5 flex flex-col items-center justify-center text-center bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
                 <Target size={28} className="text-slate-400 mb-2" />
                 <p className={`text-xs font-bold ${isDark ? 'text-slate-400' : 'text-slate-600'} mb-1`}>
                     Žádná aktivní pravidla
@@ -258,7 +258,7 @@ const DailyFocusWidget: React.FC<Props> = ({ ironRules, theme, onManage }) => {
     const simpleRules = activeRules.filter(r => r.type !== 'checklist');
 
     return (
-        <div className={`h-full rounded-3xl border flex flex-col overflow-hidden ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-white border-slate-200'}`}>
+        <div className={`h-full rounded-3xl border flex flex-col overflow-hidden bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
             {/* Header */}
             <div className={`flex items-center justify-between px-4 py-3 border-b ${isDark ? 'border-white/5' : 'border-slate-100'}`}>
                 <div className="flex items-center gap-2">
@@ -266,8 +266,8 @@ const DailyFocusWidget: React.FC<Props> = ({ ironRules, theme, onManage }) => {
                         <Target size={14} strokeWidth={2.5} />
                     </div>
                     <div>
-                        <p className={`text-[12px] font-black uppercase tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>Dnes hlídat</p>
-                        <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                        <p className={`text-[12px] font-semibold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>Dnes hlídat</p>
+                        <p className="text-[11px] font-bold text-slate-500">
                             {activeRules.length} {activeRules.length === 1 ? 'pravidlo' : activeRules.length < 5 ? 'pravidla' : 'pravidel'}
                         </p>
                     </div>
@@ -275,7 +275,7 @@ const DailyFocusWidget: React.FC<Props> = ({ ironRules, theme, onManage }) => {
                 {onManage && (
                     <button
                         onClick={onManage}
-                        className={`text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-lg transition-all ${isDark ? 'text-slate-400 hover:text-slate-200 hover:bg-white/5' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'}`}
+                        className={`text-[11px] font-semibold px-2 py-1 rounded-lg transition-all ${isDark ? 'text-slate-400 hover:text-slate-200 hover:bg-white/5' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'}`}
                         title="Spravovat v Settings"
                     >
                         Spravovat

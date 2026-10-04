@@ -47,7 +47,7 @@ const LockedFeatureModal: React.FC<Props> = ({ featureId, onClose }) => {
                     </div>
 
                     <div className="space-y-2">
-                        <p className="text-[9px] font-black uppercase tracking-[0.3em] text-amber-400">Uzamčeno</p>
+                        <p className="text-[11px] font-semibold text-amber-400">Uzamčeno</p>
                         <h2 className="text-2xl font-black tracking-tight">{info.name}</h2>
                     </div>
 
@@ -63,7 +63,7 @@ const LockedFeatureModal: React.FC<Props> = ({ featureId, onClose }) => {
 
                     <button
                         onClick={onClose}
-                        className="w-full py-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 text-sm font-black uppercase tracking-widest transition-all active:scale-[0.98]"
+                        className="w-full py-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 text-sm font-semibold transition-all active:scale-[0.98]"
                     >
                         Rozumím
                     </button>

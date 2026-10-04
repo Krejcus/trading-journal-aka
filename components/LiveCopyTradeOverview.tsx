@@ -1965,7 +1965,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
         <div className="flex items-center gap-3 rounded-lg border border-rose-500/30 bg-rose-500/[0.08] p-4 text-rose-500">
           <AlertTriangle size={16} className="shrink-0" />
           <span className="flex-1 text-xs font-bold">{groupLibraryError ?? 'Cloudová knihovna skupin není dostupná.'}</span>
-          <button type="button" onClick={() => void refreshGroupLibrary(true)} className="text-xs font-black uppercase">Zkusit znovu</button>
+          <button type="button" onClick={() => void refreshGroupLibrary(true)} className="text-xs font-semibold">Zkusit znovu</button>
         </div>
       ) : null}
 
@@ -2077,7 +2077,7 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
               style={{ minWidth: '900px' }}
             >
               <thead>
-                <tr className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)] border-y border-[var(--border-subtle)]">
+                <tr className="text-[11px] font-semibold text-[var(--text-secondary)] border-y border-[var(--border-subtle)]">
                   <th className="w-8" />
                   <th className="px-3 py-2.5">Skupina</th>
                   {visibleGroupColumns.map(column => (
@@ -2638,8 +2638,8 @@ const StuckOperationsPanel = ({ operations, busy, onResolve }: {
       <div className="mt-2 divide-y divide-amber-500/15">
         {operations.map(operation => (
           <div key={`${operation.kind}:${operation.key}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
-            <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-amber-700">{STUCK_KIND_LABEL[operation.kind]}</span>
-            <span className="rounded bg-[var(--bg-page)] px-1.5 py-0.5 text-[9px] font-black uppercase text-[var(--text-secondary)]">{operation.status}</span>
+            <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700">{STUCK_KIND_LABEL[operation.kind]}</span>
+            <span className="rounded bg-[var(--bg-page)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--text-secondary)]">{operation.status}</span>
             {operation.accountId != null ? <span className="text-[10px] font-bold text-[var(--text-secondary)]">účet {operation.accountId}</span> : null}
             <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--text-primary)]" title={operation.reason}>{operation.reason ?? operation.key}</span>
             <button
@@ -2808,7 +2808,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
               event.stopPropagation();
               onToggle();
             }}
-            className="flex h-7 w-[108px] items-center justify-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] text-[9px] font-black uppercase tracking-[0.08em] text-[var(--text-secondary)] hover:border-rose-500/40 hover:text-rose-500"
+            className="flex h-7 w-[108px] items-center justify-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] text-[11px] font-semibold text-[var(--text-secondary)] hover:border-rose-500/40 hover:text-rose-500"
           >
             <RefreshCw size={12} className="animate-spin" />
             Neověřeno
@@ -2949,7 +2949,7 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
                 powerDisplayKey={powerDisplayKey}
               />
               {observingOnly ? (
-                <span title="Shadow režim pouze sleduje a nic neodesílá." className="inline-flex h-7 items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/10 px-1.5 text-[8px] font-black uppercase text-amber-600">
+                <span title="Shadow režim pouze sleduje a nic neodesílá." className="inline-flex h-7 items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/10 px-1.5 text-[11px] font-semibold text-amber-600">
                   <ShieldAlert size={10} /> Shadow
                 </span>
               ) : null}
@@ -3056,7 +3056,7 @@ const CompactStat = ({ label, value, className = 'text-[var(--text-primary)]' }:
   label: string; value: React.ReactNode; className?: string;
 }) => (
   <div className="min-w-0 px-2 py-2.5">
-    <div className="text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">{label}</div>
+    <div className="text-[11px] font-semibold text-[var(--text-secondary)]">{label}</div>
     <div className={`mt-0.5 truncate text-[13px] font-black tabular-nums ${className}`}>{value}</div>
   </div>
 );
@@ -3416,7 +3416,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
 const COMPACT_FLAT_PREVIEW = 6;
 
 const CompactAccountSectionHead = ({ columns, indent = false }: { columns: 'market' | 'flat'; indent?: boolean }) => (
-  <div className="grid grid-cols-[minmax(0,1fr)_84px] gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-page)]/60 px-3 py-1 text-[9px] font-black uppercase tracking-[0.1em] text-[var(--text-secondary)]">
+  <div className="grid grid-cols-[minmax(0,1fr)_84px] gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-page)]/60 px-3 py-1 text-[11px] font-semibold text-[var(--text-secondary)]">
     {/* S přepínači lícuje popisek se jménem, ne s přepínačem. */}
     <span className={indent ? 'pl-[42px]' : undefined}>Účet</span>
     <span className="text-right">{columns === 'market' ? 'Otevřený' : 'Dnes'}</span>
@@ -3600,7 +3600,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
           {unavailableFollowerCount > 0 ? <span className="rounded-full bg-slate-500/15 px-2 py-0.5 text-[10px] font-black text-slate-500">{unavailableFollowerCount}× nedostupný</span> : null}
           {unavailableLeader ? <span className="rounded-full bg-rose-500/12 px-2 py-0.5 text-[10px] font-black text-rose-600">leader nedostupný</span> : null}
           {observingOnly ? (
-            <span title="Shadow režim pouze sleduje a nic neodesílá." className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-black uppercase text-amber-600">
+            <span title="Shadow režim pouze sleduje a nic neodesílá." className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[11px] font-semibold text-amber-600">
               <ShieldAlert size={10} /> Shadow
             </span>
           ) : null}
@@ -3612,7 +3612,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
         : 'grid-cols-[62px_repeat(3,minmax(0,1fr))]'}`}
       >
         <div className="min-w-0 overflow-hidden px-2 py-2.5">
-          <div className="text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Firmy</div>
+          <div className="text-[11px] font-semibold text-[var(--text-secondary)]">Firmy</div>
           <div className="mt-1 flex"><FirmStack firms={groupFirmList(rows)} marksOnly /></div>
         </div>
         {hasOpenExposure ? null : <CompactStat label="Kapitál" value={<BalanceValue display={capital} compact />} />}
@@ -3722,7 +3722,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
       {groupOrders.length > 0 ? (
         <section className="border-t border-[var(--border-subtle)]">
           <div className="flex items-center justify-between px-4 py-2">
-            <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Příkazy · {workingCount} working</span>
+            <span className="text-[11px] font-semibold text-[var(--text-secondary)]">Příkazy · {workingCount} working</span>
             <button
               type="button"
               onClick={() => void onRefreshOrders?.()}
@@ -3745,7 +3745,7 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
                     <span className="truncate">{redactAccountName(order.accountName, redactNames, redaction)}</span>
                     <span>·</span>
                     <span className="tabular-nums">{order.price ?? order.stopPrice ?? '—'}</span>
-                    <span className={`rounded-md px-1.5 py-0.5 text-[9px] font-black uppercase ${order.working ? 'bg-blue-500/10 text-blue-500' : 'bg-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>{order.status}</span>
+                    <span className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${order.working ? 'bg-blue-500/10 text-blue-500' : 'bg-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>{order.status}</span>
                   </div>
                 </div>
                 <button
@@ -3832,7 +3832,7 @@ export const GroupActionMenu = ({ active, onToggleEnabled, onEdit, onDelete, tem
         <button onClick={() => { setOpen(false); onToggleEnabled(); }} className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-bold hover:bg-[var(--bg-page)] ${active ? 'text-amber-600' : 'text-emerald-600'}`}><Power size={13} />{active ? 'Vypnout skupinu' : 'Zapnout skupinu'}</button>
         {templates.length ? <>
           <div className="my-1 border-t border-[var(--border-subtle)]" />
-          <div className="px-3 pb-1 pt-1 text-[9px] font-black uppercase tracking-wider text-[var(--text-muted)]">Použít šablonu</div>
+          <div className="px-3 pb-1 pt-1 text-[11px] font-semibold text-[var(--text-muted)]">Použít šablonu</div>
           {templates.map(template => <button key={template.id} disabled={tightenOnly} title={tightenOnly ? 'dnes jen zpřísnit' : undefined} onClick={() => { setOpen(false); onApplyTemplate(template); }} className="w-full truncate px-3 py-2 text-left text-xs font-bold text-[var(--text-primary)] hover:bg-[var(--bg-page)] disabled:cursor-not-allowed disabled:opacity-45">{template.name}</button>)}
         </> : null}
         {/* Mazání stojí pod čarou a úplně dole, aby se na něj nedalo trefit
@@ -4326,7 +4326,7 @@ export const CopierMaintenancePanel = ({ status, known, onReconcile }: {
             type="button"
             onClick={() => { void runCheck(); }}
             disabled={busy}
-            className="shrink-0 rounded-md border border-current px-2.5 py-1 text-[11px] font-black uppercase tracking-wide disabled:opacity-50"
+            className="shrink-0 rounded-md border border-current px-2.5 py-1 text-[11px] font-semibold disabled:opacity-50"
           >
             {busy ? 'Kontroluji…' : 'Zkontrolovat pozice'}
           </button>
@@ -4531,7 +4531,7 @@ const AccountStateDot = ({ tone, reason, confirmedAt }: {
           style={{ top: tip.top, left: tip.left, width: 260 }}
           className="pointer-events-none fixed z-[10050] rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-2.5 shadow-[0_12px_32px_rgba(0,0,0,0.28)]"
         >
-          <span className={`flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wide ${tone.accentClass}`}>
+          <span className={`flex items-center gap-1.5 text-[11px] font-semibold ${tone.accentClass}`}>
             <span className={`h-1.5 w-1.5 rounded-full ${tone.dotClass}`} />{tone.label}
           </span>
           <p className="mt-1.5 text-[10px] leading-snug text-[var(--text-secondary)]">{tone.detail}</p>
@@ -4718,7 +4718,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
             {columns.map(column => <col key={column.key} style={{ width: `${column.widthPx}px` }} />)}
           </colgroup>
           <thead>
-            <tr className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">
+            <tr className="text-[11px] font-semibold text-[var(--text-secondary)]">
               {columns.map(col => (
                 <th
                   key={col.key}
@@ -4781,7 +4781,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
       ) : (
         <div className="pt-2 overflow-x-auto">
           <table className="w-full min-w-[760px] text-left">
-            <thead><tr className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)] border-b border-[var(--border-subtle)]">
+            <thead><tr className="text-[11px] font-semibold text-[var(--text-secondary)] border-b border-[var(--border-subtle)]">
               {orderColumns.map(column => <th key={column.key} className={`px-3 py-1.5${ORDER_COLUMNS_RIGHT.has(column.key) ? ' text-right' : ''}`}>{column.label}</th>)}
               <th className="px-3 py-1.5" />
             </tr></thead>
@@ -4798,7 +4798,7 @@ const GroupDetail = ({ rows, tab, isLive, onTab, onAccount, columns, orders, eli
                     qty: <td className="px-3 py-1.5 text-right tabular-nums">{order.quantity}</td>,
                     limit: <td className="px-3 py-1.5 text-right tabular-nums">{order.price ?? '—'}</td>,
                     stop: <td className="px-3 py-1.5 text-right tabular-nums">{order.stopPrice ?? '—'}</td>,
-                    status: <td className="px-3 py-1.5"><span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${order.working ? 'bg-blue-500/10 text-blue-500' : 'bg-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>{order.status}</span></td>,
+                    status: <td className="px-3 py-1.5"><span className={`px-1.5 py-0.5 rounded text-[11px] font-semibold ${order.working ? 'bg-blue-500/10 text-blue-500' : 'bg-[var(--border-subtle)] text-[var(--text-secondary)]'}`}>{order.status}</span></td>,
                     timestamp: <td className="px-3 py-1.5 text-[var(--text-secondary)]">{order.placedAt ? new Date(order.placedAt).toLocaleString() : '—'}</td>,
                     orderId: <td className="px-3 py-1.5 text-right tabular-nums text-[var(--text-secondary)]">{order.id}</td>,
                   };
@@ -5165,7 +5165,7 @@ export const CopyGroupChangePreview = ({ saved, draft, accountLabel }: {
           <div key={`${change.kind}-${change.accountId}`} className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2">
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <b className="text-[var(--text-primary)]">{accountLabel(change.accountId, 'follower')}</b>
-              <span className={`rounded px-1.5 py-0.5 text-[9px] font-black uppercase ${change.kind === 'added' ? 'bg-emerald-500/12 text-emerald-700' : change.kind === 'removed' ? 'bg-rose-500/12 text-rose-600' : 'bg-amber-500/12 text-amber-700'}`}>
+              <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${change.kind === 'added' ? 'bg-emerald-500/12 text-emerald-700' : change.kind === 'removed' ? 'bg-rose-500/12 text-rose-600' : 'bg-amber-500/12 text-amber-700'}`}>
                 {change.kind === 'added' ? 'Přidán' : change.kind === 'removed' ? 'Odebrán' : 'Změněn'}
               </span>
             </div>
@@ -5423,7 +5423,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLocked 
     safety: { ...(current.safety ?? DEFAULT_COPY_GROUP_SAFETY), [key]: value },
   }));
   const enabledSafetyCount = SAFETY_OPTIONS.filter(([key]) => key === 'disableReplicationOnBreach' || safety[key]).length;
-  const sectionLabel = 'text-[9.5px] font-black uppercase tracking-[.1em] text-[var(--text-muted)]';
+  const sectionLabel = 'text-[9.5px] font-semibold text-[var(--text-muted)]';
   const hasUnknownWorkerRoutes = !workerAccountRoutes?.known
     || accounts.some(account => routeFor(account.id) === 'unknown');
 
@@ -5501,7 +5501,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLocked 
               <label key={key} className={`flex items-start gap-3 px-3.5 py-2.5 ${mandatory ? 'cursor-not-allowed bg-emerald-500/[0.025]' : 'cursor-pointer'}`}>
                 <input type="checkbox" checked={mandatory ? true : safety[key]} disabled={mandatory} onChange={event => updateSafety(key, event.target.checked)} className="mt-0.5 accent-indigo-600" />
                 <span>
-                  <b className="block text-[11.5px] text-[var(--text-primary)]">{title}{mandatory ? <span className="ml-2 text-[9px] uppercase text-emerald-600">Povinné</span> : null}</b>
+                  <b className="block text-[11.5px] text-[var(--text-primary)]">{title}{mandatory ? <span className="ml-2 text-[11px] text-emerald-600">Povinné</span> : null}</b>
                   <span className="mt-0.5 block text-[10.5px] leading-relaxed text-[var(--text-secondary)]">{detail}</span>
                 </span>
               </label>
@@ -5944,7 +5944,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLocked 
             {unavailableFollowersBlock}
 
             <div className="overflow-x-auto rounded-lg border border-[var(--border-subtle)]">
-              <div className="grid min-w-[416px] grid-cols-[minmax(0,1fr)_132px_74px_74px] gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 py-2 text-[9px] font-black uppercase tracking-wider text-[var(--text-secondary)]">
+              <div className="grid min-w-[416px] grid-cols-[minmax(0,1fr)_132px_74px_74px] gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 py-2 text-[11px] font-semibold text-[var(--text-secondary)]">
                 <span>Účet</span><span>Replikace</span><span className="text-right">Násobek</span>
                 <span className="text-right" title="Tvrdý strop expozice; překročení odmítne celý příkaz a odzbrojí copier">Max</span>
               </div>
@@ -6117,13 +6117,13 @@ export const TableSettingsDialog = ({ hiddenColumns, hiddenGroupColumns, hiddenO
         {/* Pevná výška: přepnutí sekce nemá dialogem poskočit pod kurzorem. */}
         <div className="grid h-[388px] grid-cols-[168px_1fr]">
           <nav className="border-r border-[var(--border-subtle)] bg-[var(--bg-page)] p-2">
-            <div className="px-2.5 pb-1 pt-2 text-[9px] font-black uppercase tracking-[.12em] text-[var(--text-muted)]">Sloupce</div>
+            <div className="px-2.5 pb-1 pt-2 text-[11px] font-semibold text-[var(--text-muted)]">Sloupce</div>
             {(['accounts', 'groups', 'orders'] as const).map(key => railButton(
               key,
               tables[key].label,
               `${tables[key].items.filter(item => item.visible).length}/${tables[key].items.length}`,
             ))}
-            <div className="px-2.5 pb-1 pt-3 text-[9px] font-black uppercase tracking-[.12em] text-[var(--text-muted)]">Ostatní</div>
+            <div className="px-2.5 pb-1 pt-3 text-[11px] font-semibold text-[var(--text-muted)]">Ostatní</div>
             {railButton('privacy', 'Soukromí')}
             {railButton('safety', 'Bezpečnost')}
           </nav>
@@ -6273,18 +6273,18 @@ const GroupTemplatesDialog = ({ templates, accounts, onChange, onClose }: {
           ) : (
             <div className="space-y-5">
               <label className="block space-y-1.5">
-                <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Template name</span>
+                <span className="text-[11px] font-semibold text-[var(--text-secondary)]">Template name</span>
                 <input autoFocus value={draft.name} onChange={event => setDraft(current => current ? { ...current, name: event.target.value } : current)} placeholder="e.g. Scalp set-up" className="h-10 w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 text-sm font-bold text-[var(--text-primary)]" />
               </label>
               <label className="block space-y-1.5">
-                <span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Leader (optional)</span>
+                <span className="text-[11px] font-semibold text-[var(--text-secondary)]">Leader (optional)</span>
                 <select value={draft.leaderAccountId ?? ''} onChange={event => setDraft(current => current ? { ...current, leaderAccountId: event.target.value ? Number(event.target.value) : null, followers: current.followers.filter(follower => follower.accountId !== Number(event.target.value)) } : current)} className="h-10 w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 text-xs font-bold text-[var(--text-primary)]">
                   <option value="">No leader · keep target group leader</option>
                   {accounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
                 </select>
               </label>
               <div>
-                <div className="mb-2 flex items-center justify-between gap-3"><span className="text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Followers</span><button type="button" onClick={selectVisibleFollowers} className="text-[10px] font-black text-indigo-500 hover:underline">Select all</button></div>
+                <div className="mb-2 flex items-center justify-between gap-3"><span className="text-[11px] font-semibold text-[var(--text-secondary)]">Followers</span><button type="button" onClick={selectVisibleFollowers} className="text-[10px] font-black text-indigo-500 hover:underline">Select all</button></div>
                 <input aria-label="Search followers" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search accounts" className="mb-2 h-9 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] px-3 text-xs text-[var(--text-primary)] outline-none focus:border-indigo-500" />
                 <div className="max-h-64 overflow-y-auto rounded-lg border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)]">
                   {visibleFollowerAccounts.map(account => {
@@ -6306,7 +6306,7 @@ const GroupTemplatesDialog = ({ templates, accounts, onChange, onClose }: {
                 </div>
               </div>
               <div>
-                <div className="mb-2 text-[10px] font-black uppercase tracking-wider text-[var(--text-secondary)]">Group safety</div>
+                <div className="mb-2 text-[11px] font-semibold text-[var(--text-secondary)]">Group safety</div>
                 <div className="overflow-hidden rounded-lg border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)]">
                   {([
                     ['positionReconciler', 'Position reconciler'],
@@ -6485,7 +6485,7 @@ const CompactFlattenSheet = ({ preview, busy, apiReady, stateUnverified = false,
     ? `Flatten All · ${czechCount(positions, 'pozice', 'pozice', 'pozic')}`
     : orders > 0 ? `Flatten All · zrušit ${czechCount(orders, 'příkaz', 'příkazy', 'příkazů')}` : 'Flatten All';
   const listClass = 'mb-3 divide-y divide-[var(--border-subtle)] overflow-hidden rounded-xl border border-[var(--border-subtle)]';
-  const headClass = 'mb-1.5 text-[9.5px] font-black uppercase tracking-[0.1em] text-[var(--text-secondary)]';
+  const headClass = 'mb-1.5 text-[9.5px] font-semibold text-[var(--text-secondary)]';
   return (
     <CompactSheet label={`Flatten All · ${preview.groupName}`} busy={busy} onClose={onClose}>
       <h4 className="text-[15px] font-black text-[var(--text-primary)]">Flatten All · {preview.groupName}</h4>
@@ -6580,7 +6580,7 @@ export const ConfirmActionDialog = ({ action, busy, apiReady, stateUnverified = 
 const CopyTradingHelpDialog = ({ onClose, apiReady }: { onClose: () => void; apiReady: boolean }) => createPortal(
   <div className="fixed inset-0 z-[150] bg-slate-950/35 flex items-center justify-center p-4" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
     <section role="dialog" aria-modal="true" className="w-full max-w-lg rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-2xl overflow-hidden">
-      <header className="p-5 border-b border-[var(--border-subtle)] flex items-center justify-between"><div><div className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-500">LIVE CONTROL</div><h3 className="text-lg font-black text-[var(--text-primary)] mt-1">Připravenost funkcí</h3></div><button onClick={onClose} className="w-9 h-9 rounded-xl text-[var(--text-secondary)] hover:bg-[var(--bg-page)] flex items-center justify-center"><X size={18} /></button></header>
+      <header className="p-5 border-b border-[var(--border-subtle)] flex items-center justify-between"><div><div className="text-[11px] font-semibold text-indigo-500">Live control</div><h3 className="text-lg font-black text-[var(--text-primary)] mt-1">Připravenost funkcí</h3></div><button onClick={onClose} className="w-9 h-9 rounded-xl text-[var(--text-secondary)] hover:bg-[var(--bg-page)] flex items-center justify-center"><X size={18} /></button></header>
       <div className="p-5 space-y-3">
         {[['Skupiny a účty', 'Vytvoření, leader, followeři, režim On Submit / On Fill a multiplier.'], ['Řízení rizika', 'Enable/Disable, Flatten účtu a Flatten All s povinným potvrzením.'], ['Příkazy', 'Skupinové ordery, refresh a příprava zrušení pracovního příkazu.'], ['Pohled', 'Skrývání sloupců, offline skupin, rozbalení a lokální uložení konfigurace.']].map(([title, detail]) => <div key={title} className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] p-3.5 flex gap-3"><CheckCircle2 size={17} className="text-emerald-500 shrink-0 mt-0.5" /><div><div className="text-xs font-black text-[var(--text-primary)]">{title}</div><div className="text-[11px] text-[var(--text-secondary)] mt-1 leading-relaxed">{detail}</div></div></div>)}
         <div className={`rounded-md border p-3.5 flex gap-3 ${apiReady ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-amber-500/20 bg-amber-500/5'}`}><SlidersHorizontal size={17} className={apiReady ? 'text-emerald-500' : 'text-amber-500'} /><div><div className="text-xs font-black text-[var(--text-primary)]">{apiReady ? 'Execution adapter připojen' : 'Lokální přípravný režim'}</div><div className="text-[11px] text-[var(--text-secondary)] mt-1">{apiReady ? 'Příkazy lze předat připojenému broker adaptéru až po explicitním zapnutí.' : 'UI je kompletní, ale žádné akce se neposílají brokerovi.'}</div></div></div>

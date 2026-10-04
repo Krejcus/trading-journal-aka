@@ -13,16 +13,13 @@ import {
 } from '../services/coachMemoryService';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Trash2, Plus, Brain, X, Target,
-  Monitor, Zap, Globe, Clock, AlertOctagon, ShieldCheck,
-  ShieldAlert, Activity, Check, ChevronLeft,
-  ChevronRight, Sparkles, Sliders, Shield, Bell, AlertCircle, FileText, Lock, Link2,
-  Smartphone, Share2, CalendarPlus
+  Trash2, Plus, X, Check, ChevronLeft, ChevronRight, Lock, Bell, Palette,
+  ScrollText, Tags, UserRound, Search, Send, Wrench, Share2, CalendarPlus
 } from 'lucide-react';
 import ConfirmationModal from './ConfirmationModal';
 
 
-import { CustomEmotion, SessionConfig, IronRule, WeeklyFocus, SystemSettings, Account, DailyReview } from '../types';
+import { CustomEmotion, SessionConfig, IronRule, WeeklyFocus, SystemSettings, Account, DailyPrep, DailyReview } from '../types';
 import { getPushDiagnostics } from '../utils/notificationHelper';
 import { enablePush, disablePush, listPushDevices, sendTestPush, type PushDevice } from '../services/pushSubscriptionService';
 import { initializeNativeRemoteNotifications, sendNativeRemoteTestPush, sendNativeSnapshotTestPush } from '../services/nativePushNotifications';
@@ -81,8 +78,16 @@ import { shareTextNative } from '../services/nativeShare';
 import TradingViewAlertSettings from './TradingViewAlertSettings';
 import NativeShellTabsSettings from './NativeShellTabsSettings';
 import { requestNativeLiveActivityRestart } from '../services/nativeLiveActivityPush';
+import AppearanceSettings from './AppearanceSettings';
+import type { AppearanceSettings as AppearanceValue } from '../lib/appearance';
+import { ruleAdherenceRecent } from '../lib/ruleAdherence';
+import { formatSessionDuration, sessionDurationMinutes, sessionOverlapMinutes, sessionSegments } from '../lib/sessionSchedule';
+import {
+  SettingsChips, SettingsRow, SettingsSearchContext, SettingsSection, SettingsSegment, SettingsSwitch, StatusPill,
+  btn, btnDanger, btnGhost, btnPrimary, field, normalizeSearch, revealOnHover, td, th, timeField,
+} from './SettingsUi';
 
-export type SettingsTab = 'psychology' | 'strategy' | 'market' | 'notifications' | 'system';
+export type SettingsTab = 'trading' | 'tags' | 'alerts' | 'appearance' | 'app';
 
 interface SettingsProps {
   accountEmail?: string;
@@ -113,8 +118,13 @@ interface SettingsProps {
   setStandardGoals: (goals: string[]) => void;
   appVersion?: string;
   onHardRefresh?: () => void;
-  accentColor?: string;
-  onAccentColorChange?: (color: string) => void;
+  /** Ranní přípravy a večerní review — pro sloupec „Dodrženo“ u železných pravidel. */
+  dailyPreps?: DailyPrep[];
+  dailyReviews?: DailyReview[];
+  /** Vzhled Aurora (Nastavení → Vzhled). */
+  appearance?: AppearanceValue;
+  onAppearanceChange?: (next: AppearanceValue) => void;
+  onThemeChange?: (theme: 'dark' | 'light' | 'oled') => void;
   activeTab?: SettingsTab;
   onTabChange?: (tab: SettingsTab) => void;
   /** Vytvoří účet — auto-import ho volá při zakládání účtu z detekované challenge. */
@@ -164,20 +174,26 @@ const NATIVE_ALERT_GALLERY_COUNT = NATIVE_COPIER_ALERT_SAMPLES.length;
 const NATIVE_ALERT_GALLERY_FIRST_DELAY_MS = 4_000;
 const NATIVE_ALERT_GALLERY_INTERVAL_MS = 5_000;
 
-const EmojiPicker = ({ onSelect, onClose, isDark }: { onSelect: (e: string) => void, onClose: () => void, isDark: boolean }) => (
-  <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
+const EXPERIMENT_DURATION_LABELS: Record<string, string> = { '1w': '1 týden', '2w': '2 týdny', '1m': '1 měsíc' };
+
+type SettingsSectionId = 'rules' | 'goals' | 'weekly' | 'sessions' | 'htf' | 'ltf' | 'mistakes' | 'emotions'
+  | 'reminders' | 'delivery' | 'tradingview' | 'appearance' | 'account' | 'iphone' | 'coach' | 'diagnostics';
+
+const EmojiPicker = ({ onSelect, onClose }: { onSelect: (e: string) => void, onClose: () => void }) => (
+  <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose}>
     <motion.div
-      initial={{ scale: 0.9, opacity: 0 }}
+      initial={{ scale: 0.95, opacity: 0 }}
       animate={{ scale: 1, opacity: 1 }}
-      className={`p-6 rounded-[32px] border shadow-2xl max-w-[280px] ${isDark ? 'bg-slate-900 border-white/10' : 'bg-[var(--bg-card)] border-[var(--border-subtle)]'}`}
+      className="theme-card max-w-[280px] rounded-lg p-4 shadow-2xl"
       onClick={e => e.stopPropagation()}
     >
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-5 gap-1.5">
         {COMMON_EMOJIS.map(emoji => (
           <button
             key={emoji}
+            type="button"
             onClick={() => { onSelect(emoji); onClose(); }}
-            className={`w-10 h-10 rounded-xl text-xl flex items-center justify-center transition-all ${isDark ? 'hover:bg-white/10 active:bg-white/20' : 'hover:bg-[var(--bg-page)] active:bg-[var(--border-subtle)]'}`}
+            className="flex h-10 w-10 items-center justify-center rounded-md text-xl transition-colors hover:bg-[var(--bg-page)]"
           >
             {emoji}
           </button>
@@ -187,91 +203,8 @@ const EmojiPicker = ({ onSelect, onClose, isDark }: { onSelect: (e: string) => v
   </div>
 );
 
-// Visual Components defined OUTSIDE to prevent remounting on every parent render
-const SectionHeader = ({ icon: Icon, title, subtitle, color, isDark }: any) => (
-  <div className="flex items-center gap-4 mb-6">
-    <div className={`p-3 rounded-2xl ${color} text-white shadow-lg`}>
-      <Icon size={20} />
-    </div>
-    <div>
-      <h3 className={`text-lg font-black tracking-tight uppercase ${isDark ? 'text-white' : 'text-[var(--text-primary)]'}`}>{title}</h3>
-      <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)]">{subtitle}</p>
-    </div>
-  </div>
-);
-
-const InputField = ({ value, onChange, placeholder, onKeyDown, icon: Icon, type = "text", isDark }: any) => (
-  <div className="relative group/input flex-1">
-    {Icon && <Icon size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within/input:text-blue-500 transition-colors" />}
-    <input
-      type={type}
-      value={value}
-      onChange={onChange}
-      onKeyDown={onKeyDown}
-      placeholder={placeholder}
-      className={`w-full ${Icon ? 'pl-11' : 'px-4'} py-3.5 rounded-2xl text-xs font-bold outline-none border transition-all ${isDark ? 'bg-white/5 border-white/5 focus:bg-white/10 focus:border-blue-500/50 text-white' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] focus:border-[var(--border-active)] text-[var(--text-primary)]'
-        }`}
-    />
-  </div>
-);
-
-const Card = ({ children, className = "", isDark }: any) => (
-  <div className={`p-6 rounded-[32px] border ${isDark ? 'bg-theme-card-60 border-white/5 shadow-2xl backdrop-blur-xl' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-sm backdrop-blur-md'} ${className}`}>
-    {children}
-  </div>
-);
-
-const Toggle = ({ active, onClick, label, desc, isDark }: any) => (
-  <div className={`flex items-center justify-between p-4 rounded-2xl border transition-all group cursor-pointer ${isDark ? 'border-white/5 hover:bg-white/5' : 'border-[var(--border-subtle)] hover:bg-[var(--bg-page)]'}`} onClick={onClick}>
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">{label}</span>
-      {desc && <span className="text-[9px] text-[var(--text-muted)] font-bold">{desc}</span>}
-    </div>
-    <div className={`w-10 h-5 rounded-full transition-all relative ${active ? 'bg-[var(--text-secondary)] shadow-[0_0_12px_var(--border-active)]' : (isDark ? 'bg-slate-800' : 'bg-[var(--border-subtle)]')}`}>
-      <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${active ? 'left-6' : 'left-1'}`} />
-    </div>
-  </div>
-);
-
-// Sjednocený akcentový systém — jeden zdroj pravdy pro barvy chipů, add-lišt a tlačítek.
-// Tailwind potřebuje literální třídy, proto explicitní mapa (žádné dynamické stringy).
-const ACCENT: Record<string, { dot: string; chipDark: string; chipLight: string; wrap: string; btn: string }> = {
-  indigo:  { dot: '#6366f1', chipDark: 'bg-indigo-500/10 border-indigo-500/20 text-indigo-300 hover:bg-indigo-500 hover:text-white hover:border-transparent', chipLight: 'bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-600 hover:text-white', wrap: 'bg-indigo-500/5 border-indigo-500/10', btn: 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/30' },
-  rose:    { dot: '#f43f5e', chipDark: 'bg-rose-500/10 border-rose-500/20 text-rose-300 hover:bg-rose-500 hover:text-white hover:border-transparent', chipLight: 'bg-rose-50 border-rose-100 text-rose-600 hover:bg-rose-600 hover:text-white', wrap: 'bg-rose-500/5 border-rose-500/10', btn: 'bg-rose-600 hover:bg-rose-500 shadow-rose-600/30' },
-  purple:  { dot: '#a855f7', chipDark: 'bg-purple-500/10 border-purple-500/20 text-purple-300 hover:bg-purple-500 hover:text-white hover:border-transparent', chipLight: 'bg-purple-50 border-purple-100 text-purple-600 hover:bg-purple-600 hover:text-white', wrap: 'bg-purple-500/5 border-purple-500/10', btn: 'bg-purple-600 hover:bg-purple-500 shadow-purple-600/30' },
-  blue:    { dot: '#3b82f6', chipDark: 'bg-blue-500/10 border-blue-500/20 text-blue-300 hover:bg-blue-500 hover:text-white hover:border-transparent', chipLight: 'bg-blue-50 border-blue-100 text-blue-600 hover:bg-blue-600 hover:text-white', wrap: 'bg-blue-500/5 border-blue-500/10', btn: 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/30' },
-  emerald: { dot: '#10b981', chipDark: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300 hover:bg-emerald-500 hover:text-white hover:border-transparent', chipLight: 'bg-emerald-50 border-emerald-100 text-emerald-600 hover:bg-emerald-600 hover:text-white', wrap: 'bg-emerald-500/5 border-emerald-500/10', btn: 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/30' },
-  orange:  { dot: '#f97316', chipDark: 'bg-orange-500/10 border-orange-500/20 text-orange-300 hover:bg-orange-500 hover:text-white hover:border-transparent', chipLight: 'bg-orange-50 border-orange-100 text-orange-600 hover:bg-orange-600 hover:text-white', wrap: 'bg-orange-500/5 border-orange-500/10', btn: 'bg-orange-600 hover:bg-orange-500 shadow-orange-600/30' },
-  teal:    { dot: '#14b8a6', chipDark: 'bg-teal-500/10 border-teal-500/20 text-teal-300 hover:bg-teal-500 hover:text-white hover:border-transparent', chipLight: 'bg-teal-50 border-teal-100 text-teal-600 hover:bg-teal-600 hover:text-white', wrap: 'bg-teal-500/5 border-teal-500/10', btn: 'bg-teal-600 hover:bg-teal-500 shadow-teal-600/30' },
-};
-
-// Sjednocený chip pro krátké štítky (chyby, cíle, HTF, LTF…)
-const Chip = ({ label, accent = 'blue', isDark, onRemove }: { label: string; accent?: string; isDark: boolean; onRemove: () => void }) => {
-  const a = ACCENT[accent] || ACCENT.blue;
-  return (
-    <div className={`group flex items-center gap-2 pl-3.5 pr-2.5 py-1.5 rounded-full border text-[10px] font-black tracking-wide transition-all ${isDark ? a.chipDark : a.chipLight}`}>
-      <span>{label}</span>
-      <button onClick={onRemove} className="opacity-40 group-hover:opacity-100 transition-all"><X size={11} /></button>
-    </div>
-  );
-};
-
-// Sjednocená "add" lišta — stejný radius, padding i tlačítko napříč všemi sekcemi.
-const AddBar = ({ value, onChange, onAdd, placeholder, accent = 'blue', isDark }: { value: string; onChange: (e: any) => void; onAdd: () => void; placeholder: string; accent?: string; isDark: boolean }) => {
-  const a = ACCENT[accent] || ACCENT.blue;
-  return (
-    <div className={`flex gap-2 p-1.5 rounded-2xl border ${a.wrap}`}>
-      <input
-        value={value}
-        onChange={onChange}
-        onKeyDown={e => e.key === 'Enter' && onAdd()}
-        placeholder={placeholder}
-        className={`flex-1 bg-transparent px-4 py-2.5 text-[11px] font-bold outline-none ${isDark ? 'text-white placeholder:text-slate-500' : 'text-[var(--text-primary)] placeholder:text-slate-400'}`}
-      />
-      <button onClick={onAdd} className={`w-11 h-11 shrink-0 rounded-xl text-white flex items-center justify-center shadow-lg active:scale-90 transition-all ${a.btn}`}><Plus size={20} /></button>
-    </div>
-  );
-};
+const EMPTY_PREPS: DailyPrep[] = [];
+const EMPTY_REVIEWS: DailyReview[] = [];
 
 const Settings: React.FC<SettingsProps> = ({
   accountEmail, onLogout, logoutBusy, logoutError,
@@ -285,32 +218,30 @@ const Settings: React.FC<SettingsProps> = ({
   systemSettings, setSystemSettings,
   standardGoals, setStandardGoals,
   appVersion, onHardRefresh,
-  accentColor = 'blue',
-  onAccentColorChange,
-  activeTab = 'psychology',
+  dailyPreps = EMPTY_PREPS,
+  dailyReviews = EMPTY_REVIEWS,
+  appearance, onAppearanceChange, onThemeChange,
+  activeTab = 'trading',
   onTabChange,
   onCreateAccount,
   onImportIncidentSaved,
 }) => {
-  const isDark = theme !== 'light';
+  // Hledání napříč záložkami a rozbalený panel paměti coache
+  const [search, setSearch] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [coachPanel, setCoachPanel] = useState<'facts' | 'preferences' | 'memories' | null>(null);
 
-  // Local State for adding items
-  const [newHtf, setNewHtf] = useState('');
-  const [newLtf, setNewLtf] = useState('');
   // Editovat lze JEN sadu světa, ve kterém právě jsi (live vs backtest). Scope je proto
   // zamčený na aktuální svět — druhá sada je vidět jen jako zamčená (přepni svět pro editaci).
   const sessionScope: 'live' | 'backtest' = isBacktestWorld ? 'backtest' : 'live';
   const curSessions = sessionScope === 'backtest' ? backtestSessions : sessions;
   const setCurSessions = sessionScope === 'backtest' ? setBacktestSessions : setSessions;
   const otherScope: 'live' | 'backtest' = sessionScope === 'backtest' ? 'live' : 'backtest';
-  const [newMistake, setNewMistake] = useState('');
-  const [newEmoLabel, setNewEmoLabel] = useState('');
   const [newRuleLabel, setNewRuleLabel] = useState('');
   // 'experiment' je UI volba — ukládá se jako trading rule s prefixem ⏱ [duration]
   // (konzistentní s tím, jak experiment přidává AI Coach).
   const [newRuleType, setNewRuleType] = useState<'ritual' | 'trading' | 'experiment'>('ritual');
   const [newRuleDuration, setNewRuleDuration] = useState<'1w' | '2w' | '1m'>('2w');
-  const [newStandardGoal, setNewStandardGoal] = useState('');
   const [emojiPickerTarget, setEmojiPickerTarget] = useState<{ goalIdx: number } | null>(null);
 
   const [itemToDelete, setItemToDelete] = useState<{ id: string | number, type: 'rule' | 'emotion' | 'mistake' | 'session' | 'goal' } | null>(null);
@@ -334,8 +265,8 @@ const Settings: React.FC<SettingsProps> = ({
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'system') refreshCoachMemory();
-  }, [activeTab, refreshCoachMemory]);
+    if (activeTab === 'app' || search) refreshCoachMemory();
+  }, [activeTab, refreshCoachMemory, search]);
 
   const handleForgetMemory = useCallback(async (id: string) => {
     const ok = await forgetCoachMemory(id);
@@ -429,28 +360,28 @@ const Settings: React.FC<SettingsProps> = ({
   }, [sessions, systemSettings]);
 
   useEffect(() => {
-    if (activeTab === 'notifications') void refreshPushState();
-  }, [activeTab, refreshPushState]);
+    if (activeTab === 'alerts' || activeTab === 'app' || search) void refreshPushState();
+  }, [activeTab, refreshPushState, search]);
 
   useEffect(() => {
-    if (isNativeBuild && activeTab === 'system') {
+    if (isNativeBuild && (activeTab === 'app' || search)) {
       void getNativePrivacyEnabled().then(setNativePrivacyEnabledState).catch(() => undefined);
       void refreshNativeKeepAwakeState();
       void refreshNativePermissionStatus();
       void refreshNativeLiveActivityState();
     }
-  }, [activeTab, refreshNativeKeepAwakeState, refreshNativeLiveActivityState, refreshNativePermissionStatus]);
+  }, [activeTab, refreshNativeKeepAwakeState, refreshNativeLiveActivityState, refreshNativePermissionStatus, search]);
 
   useEffect(() => {
     if (!isNativeBuild) return;
     const refreshAfterSettings = () => {
       if (document.visibilityState !== 'visible') return;
       void refreshNativePermissionStatus();
-      if (activeTab === 'system') {
+      if (activeTab === 'app') {
         void refreshNativeKeepAwakeState();
         void refreshNativeLiveActivityState();
       }
-      if (activeTab === 'notifications') void refreshPushState();
+      if (activeTab === 'alerts' || activeTab === 'app') void refreshPushState();
     };
     document.addEventListener('visibilitychange', refreshAfterSettings);
     window.addEventListener('focus', refreshAfterSettings);
@@ -464,7 +395,7 @@ const Settings: React.FC<SettingsProps> = ({
     if (!isNativeBuild) return;
     const handleReminderSync = (event: Event) => {
       setNativeReminderSync((event as CustomEvent<NativeSessionReminderSyncResult>).detail);
-      if (activeTab === 'notifications') void refreshPushState();
+      if (activeTab === 'alerts' || activeTab === 'app') void refreshPushState();
     };
     window.addEventListener(NATIVE_SESSION_REMINDERS_SYNCED_EVENT, handleReminderSync);
     return () => window.removeEventListener(NATIVE_SESSION_REMINDERS_SYNCED_EVENT, handleReminderSync);
@@ -857,8 +788,6 @@ const Settings: React.FC<SettingsProps> = ({
   }, [weeklyFocusList, selectedWeek]);
 
   // Handlers
-  const addMistake = () => { if (newMistake && !userMistakes.includes(newMistake)) { setUserMistakes([...userMistakes, newMistake]); setNewMistake(''); showToast('Chyba přidána'); } };
-  const addEmo = () => { if (newEmoLabel) { setUserEmotions([...userEmotions, { id: Date.now().toString(), label: newEmoLabel, icon: '' }]); setNewEmoLabel(''); showToast('Emoce přidána'); } };
   const addIronRule = () => {
     if (!newRuleLabel) return;
     // Experiment = trading rule s prefixem ⏱ [duration] (parsuje se zpět v render logice).
@@ -869,9 +798,6 @@ const Settings: React.FC<SettingsProps> = ({
     setNewRuleLabel('');
     showToast(isExp ? 'Experiment přidán' : 'Pravidlo přidáno');
   };
-  const addHtf = () => { if (newHtf && !htfOptions.includes(newHtf)) { setHtfOptions([...htfOptions, newHtf]); setNewHtf(''); showToast('HTF přidána'); } };
-  const addLtf = () => { if (newLtf && !ltfOptions.includes(newLtf)) { setLtfOptions([...ltfOptions, newLtf]); setNewLtf(''); showToast('LTF přidána'); } };
-  const addStandardGoal = () => { if (newStandardGoal && !standardGoals.includes(newStandardGoal)) { setStandardGoals([...standardGoals, newStandardGoal]); setNewStandardGoal(''); showToast('Cíl přidán'); } };
   const addSession = () => { setCurSessions([...curSessions, { id: `session_${Date.now()}`, name: 'Nová Seance', startTime: '09:00', endTime: '17:00', color: '#6366f1' }]); showToast('Seance vytvořena'); };
   const updateSession = (id: string, up: Partial<SessionConfig>) => { setCurSessions(curSessions.map(s => s.id === id ? { ...s, ...up } : s)); showToast('Seance aktualizována'); };
   const copyLiveToBacktest = () => { setBacktestSessions(sessions.map(s => ({ ...s, id: `session_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }))); showToast('Zkopírováno z Live sessionů'); };
@@ -881,958 +807,704 @@ const Settings: React.FC<SettingsProps> = ({
     showToast('Nastavení aktualizováno');
   };
 
-  const tabs = [
-    { id: 'psychology', label: 'Psychologie', icon: Brain, desc: 'Pravidla, Cíle & Focus' },
-    { id: 'strategy', label: 'Strategie', icon: Target, desc: 'Confluence, Chyby & Emoce' },
-    { id: 'market', label: 'Trh', icon: Clock, desc: 'Seance & Čas' },
-    { id: 'notifications', label: 'Notifikace', icon: Bell, desc: 'Copier & Push' },
-    { id: 'system', label: 'Systém', icon: Shield, desc: 'Připomínky a paměť' },
-  ] as const;
+  const searchQuery = normalizeSearch(search);
+  const searching = searchQuery.length > 0;
+
+  // Co se dá v každé sekci najít (názvy + položky) — hledání prochází všechny záložky.
+  const searchIndex = useMemo<Record<SettingsSectionId, string>>(() => ({
+    rules: `zelezna pravidla ritual pravidlo experiment checklist dodrzeno ${ironRules.map(rule => rule.label).join(' ')}`,
+    goals: `vychozi cile dne ranni priprava ${standardGoals.join(' ')}`,
+    weekly: `tydenni focus cile tydne ${weeklyFocusList.flatMap(focus => focus.goals.map(goal => goal.text)).join(' ')}`,
+    sessions: `seance session harmonogram casova osa live backtest prekryv ${[...sessions, ...backtestSessions].map(item => item.name).join(' ')}`,
+    htf: `htf konfluence vyssi casove ramce stitky ${htfOptions.join(' ')}`,
+    ltf: `ltf konfluence potvrzeni vstupu stitky ${ltfOptions.join(' ')}`,
+    mistakes: `katalog chyb chyby stitky ${userMistakes.join(' ')}`,
+    emotions: `emoce emocni mapa stitky ${userEmotions.map(emotion => emotion.label).join(' ')}`,
+    reminders: 'pripominky pripomenout pripravu 60 15 minut pred startem vecerni audit notifikace cas',
+    delivery: 'doruceni push notifikace zarizeni prohlizec zapnout vypnout zkusebni test apns ios',
+    tradingview: 'tradingview alerty webhook url obrazek grafu prijimat',
+    appearance: 'vzhled rezim svetly tmavy oled pozadi hlubiny barevne pole barvy paleta sila pruhlednost karet aurora',
+    account: `ucet prihlaseny email odhlasit verze aplikace obnovit mezipamet ${accountEmail ?? ''}`,
+    iphone: 'iphone spodni lista karty opravneni mikrofon rec soukromy rezim privacy face id displej uspani live ovladaci centrum',
+    coach: 'pamet ai coache coach fakta preference komunikace dlouhodoba pamet pozorovani epizody zavazky vymazat',
+    diagnostics: 'diagnostika test snapshot tradingview galerie alertu kopirky badge live activity haptika kalendar sdileni diktovani',
+  }), [accountEmail, backtestSessions, htfOptions, ironRules, ltfOptions, sessions, standardGoals, userEmotions, userMistakes, weeklyFocusList]);
+
+  const sectionMatches = useCallback((id: string) => {
+    if (!searching) return true;
+    if (id === 'iphone' && !isNativeBuild) return false;
+    return normalizeSearch(searchIndex[id as SettingsSectionId] ?? '').includes(searchQuery);
+  }, [searchIndex, searchQuery, searching]);
+  const searchContext = useMemo(() => ({ query: searchQuery, matches: sectionMatches }), [searchQuery, sectionMatches]);
+
+  // Klávesa „/“ skočí do hledání (mimo psaní do jiného pole), Escape hledání zruší.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== '/' || event.metaKey || event.ctrlKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return;
+      event.preventDefault();
+      searchInputRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const today = new Date().toLocaleDateString('sv-SE');
+  const adherence = useMemo(
+    () => ruleAdherenceRecent(ironRules.map(rule => rule.id), dailyPreps, dailyReviews, today),
+    [dailyPreps, dailyReviews, ironRules, today],
+  );
+
+  const tabs: ReadonlyArray<{ id: SettingsTab; label: string; icon: React.ElementType; sections: SettingsSectionId[] }> = [
+    { id: 'trading', label: 'Obchodování', icon: ScrollText, sections: ['rules', 'goals', 'weekly', 'sessions'] },
+    { id: 'tags', label: 'Štítky', icon: Tags, sections: ['htf', 'ltf', 'mistakes', 'emotions'] },
+    { id: 'alerts', label: 'Upozornění', icon: Bell, sections: ['reminders', 'delivery', 'tradingview'] },
+    { id: 'appearance', label: 'Vzhled', icon: Palette, sections: ['appearance'] },
+    { id: 'app', label: 'Účet a aplikace', icon: UserRound, sections: ['account', 'iphone', 'coach', 'diagnostics'] },
+  ];
+
+  const weekNumber = Number(selectedWeek.split('-W')[1]) || 0;
+  const addWeeklyGoal = () => {
+    const nl = [...weeklyFocusList];
+    const i = nl.findIndex(wf => wf.weekISO === selectedWeek);
+    const newGoal = { id: crypto.randomUUID(), text: '', emoji: '🎯' };
+    if (i !== -1) nl[i] = { ...nl[i], goals: [...nl[i].goals, newGoal] };
+    else nl.push({ id: crypto.randomUUID(), weekISO: selectedWeek, goals: [newGoal] });
+    setWeeklyFocusList(nl);
+    showToast('Cíl přidán');
+  };
+  const updateWeeklyGoal = (idx: number, text: string) => {
+    const newList = [...weeklyFocusList];
+    const exIdx = newList.findIndex(wf => wf.weekISO === selectedWeek);
+    if (exIdx === -1) return;
+    const newGoals = [...newList[exIdx].goals];
+    newGoals[idx] = { ...newGoals[idx], text };
+    newList[exIdx] = { ...newList[exIdx], goals: newGoals };
+    setWeeklyFocusList(newList);
+  };
+  const removeWeeklyGoal = (idx: number) => {
+    const nl = [...weeklyFocusList];
+    const i = nl.findIndex(wf => wf.weekISO === selectedWeek);
+    if (i === -1) return;
+    nl[i] = { ...nl[i], goals: nl[i].goals.filter((_, gx) => gx !== idx) };
+    setWeeklyFocusList(nl);
+    showToast('Odstraněno');
+  };
+
+  const nowMinutes = (() => { const now = new Date(); return now.getHours() * 60 + now.getMinutes(); })();
+  const permissionText = (state: string | undefined) => nativePermissionLabel((state ?? 'unknown') as never);
+
+  const renderTrading = () => (
+    <div className="space-y-3">
+      <SettingsSection
+        id="rules"
+        title="Železná pravidla"
+        meta={ironRules.length}
+        actions={<span className="hidden text-[11.5px] text-[var(--text-muted)] md:inline">Ukazují se v ranní přípravě a na dashboardu</span>}
+      >
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12.5px] [&_tbody_tr:last-child_td]:border-b-0">
+            <thead><tr>
+              <th className={th}>Pravidlo</th>
+              <th className={`${th} w-[92px] sm:w-[170px]`}>Typ</th>
+              <th className={`${th} hidden w-[150px] text-right sm:table-cell`} title="Posledních 30 dní, kdy bylo pravidlo vyhodnocené v ranní přípravě nebo večerním review">Dodrženo</th>
+              <th className={`${th} w-10`}><span className="sr-only">Akce</span></th>
+            </tr></thead>
+            <tbody>
+              {ironRules.map(rule => {
+                const label = rule.label || '';
+                const isChecklist = label.startsWith('📋 ');
+                const expMatch = label.match(/^⏱\s*\[([^\]]+)\]\s*(.+)$/);
+                let title = label;
+                let items: string[] = [];
+                if (isChecklist) {
+                  const lines = label.split('\n');
+                  title = lines[0].replace(/^📋\s+/, '').trim();
+                  items = lines.slice(1).map(l => l.replace(/^\s*▢\s*/, '').trim()).filter(Boolean);
+                } else if (expMatch) {
+                  title = expMatch[2].trim();
+                }
+                const kind = isChecklist
+                  ? { dot: 'bg-purple-500', text: 'Checklist' }
+                  : expMatch
+                    ? { dot: 'bg-amber-500', text: `Experiment · ${EXPERIMENT_DURATION_LABELS[expMatch[1]] ?? expMatch[1]}` }
+                    : rule.type === 'ritual'
+                      ? { dot: 'bg-indigo-400', text: 'Rituál' }
+                      : { dot: 'bg-rose-500', text: 'Pravidlo' };
+                const stat = adherence[rule.id];
+                return (
+                  <tr key={rule.id} className="group hover:bg-[var(--bg-page)]/60">
+                    <td className={`${td} py-2.5`}>
+                      <p className="font-medium text-[var(--text-primary)]">{title}</p>
+                      {items.length > 0 && (
+                        <ul className="mt-1 space-y-0.5">
+                          {items.map((item, i) => <li key={i} className="text-[11.5px] text-[var(--text-secondary)]">▢ {item}</li>)}
+                        </ul>
+                      )}
+                    </td>
+                    <td className={`${td} pr-0 sm:pr-4`}><span className="inline-flex items-center gap-1.5 text-xs text-[var(--text-secondary)]"><i className={`h-[7px] w-[7px] shrink-0 rounded-sm ${kind.dot}`} />{kind.text}</span></td>
+                    <td
+                      className={`${td} hidden text-right font-mono text-xs tabular-nums text-[var(--text-primary)] sm:table-cell`}
+                      title={stat?.since ? `${stat.passed} z ${stat.evaluated} vyhodnocených dní od ${new Date(`${stat.since}T00:00:00`).toLocaleDateString('cs-CZ')}` : 'Zatím nevyhodnoceno'}
+                    >
+                      {stat && stat.evaluated > 0 ? `${stat.passed} / ${stat.evaluated}` : <span className="text-[var(--text-muted)]">—</span>}
+                    </td>
+                    <td className={`${td} text-right`}>
+                      <button type="button" onClick={() => setItemToDelete({ id: rule.id, type: 'rule' })} aria-label={`Smazat ${title}`} className={`inline-grid h-7 w-7 place-items-center rounded text-[var(--text-muted)] hover:text-rose-500 ${revealOnHover}`}><Trash2 size={13} /></button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {ironRules.length === 0 && <tr><td colSpan={4} className={`${td} text-[var(--text-muted)]`}>Zatím žádná pravidla.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-[var(--border-subtle)] bg-[var(--bg-page)]/50 px-3 py-2.5">
+          <input value={newRuleLabel} onChange={e => setNewRuleLabel(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addIronRule(); }} placeholder="Nové pravidlo…" className={`${field} min-w-[160px] flex-1`} />
+          <SettingsSegment
+            label="Typ pravidla"
+            value={newRuleType}
+            onChange={setNewRuleType}
+            options={[{ value: 'ritual', label: 'Rituál' }, { value: 'trading', label: 'Pravidlo' }, { value: 'experiment', label: 'Experiment' }]}
+          />
+          {newRuleType === 'experiment' && (
+            <select value={newRuleDuration} onChange={e => setNewRuleDuration(e.target.value as '1w' | '2w' | '1m')} aria-label="Délka experimentu" className={field}>
+              <option value="1w">1 týden</option>
+              <option value="2w">2 týdny</option>
+              <option value="1m">1 měsíc</option>
+            </select>
+          )}
+          <button type="button" onClick={addIronRule} disabled={!newRuleLabel.trim()} className={btnPrimary}><Plus size={14} /> Přidat</button>
+        </div>
+      </SettingsSection>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <SettingsSection id="goals" title="Výchozí cíle dne" meta={standardGoals.length}>
+          <p className="px-4 pt-3 text-xs text-[var(--text-secondary)]">Předvyplní se v každé ranní přípravě.</p>
+          <SettingsChips
+            items={standardGoals.map(goal => ({ key: goal, label: goal }))}
+            onRemove={goal => { setStandardGoals(standardGoals.filter(x => x !== goal)); showToast('Odstraněno'); }}
+            onAdd={goal => { if (standardGoals.includes(goal)) return false; setStandardGoals([...standardGoals, goal]); showToast('Cíl přidán'); return true; }}
+            addLabel="Přidat cíl"
+          />
+        </SettingsSection>
+
+        <SettingsSection
+          id="weekly"
+          title="Týdenní focus"
+          meta={`Týden ${weekNumber} · ${getWeekRange(selectedWeek).replace(' - ', '–')}`}
+          actions={<>
+            <button type="button" onClick={() => handleWeekChange(-1)} aria-label="Předchozí týden" className={btnGhost}><ChevronLeft size={15} /></button>
+            <button type="button" onClick={() => handleWeekChange(1)} aria-label="Další týden" className={btnGhost}><ChevronRight size={15} /></button>
+          </>}
+        >
+          {currentWeeklyFocus.goals.length === 0 ? (
+            <p className="px-4 py-3.5 text-xs text-[var(--text-secondary)]">Na tento týden zatím nemáš focus.</p>
+          ) : currentWeeklyFocus.goals.map((goal, idx) => (
+            <div key={`${selectedWeek}-${goal.id}`} className="group flex items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
+              <button type="button" onClick={() => setEmojiPickerTarget({ goalIdx: idx })} aria-label="Změnit ikonu" className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-[var(--bg-page)] text-base">{goal.emoji || '🎯'}</button>
+              <input
+                value={goal.text}
+                onChange={e => updateWeeklyGoal(idx, e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && currentWeeklyFocus.goals.length < 5) addWeeklyGoal(); }}
+                placeholder="Zadej týdenní focus…"
+                className="min-w-0 flex-1 bg-transparent text-[12.5px] font-medium text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)]"
+              />
+              <button type="button" onClick={() => removeWeeklyGoal(idx)} aria-label="Smazat cíl" className={`grid h-7 w-7 place-items-center rounded text-[var(--text-muted)] hover:text-rose-500 ${revealOnHover}`}><Trash2 size={13} /></button>
+            </div>
+          ))}
+          {currentWeeklyFocus.goals.length < 5 && (
+            <div className="px-3 py-2"><button type="button" onClick={addWeeklyGoal} className={btn}><Plus size={13} /> Přidat cíl týdne</button></div>
+          )}
+        </SettingsSection>
+      </div>
+
+      <SettingsSection
+        id="sessions"
+        title="Seance"
+        meta={`${curSessions.length} · ${sessionScope === 'backtest' ? 'Backtest' : 'Live'}`}
+        actions={<>
+          <SettingsSegment
+            label="Sada seancí"
+            value={sessionScope}
+            onChange={() => undefined}
+            options={(['live', 'backtest'] as const).map(scope => ({
+              value: scope,
+              disabled: scope !== sessionScope,
+              title: scope !== sessionScope ? `Pro úpravu se přepni do ${scope === 'backtest' ? 'backtest' : 'live'} světa` : undefined,
+              label: <>{scope !== sessionScope && <Lock size={10} />}{scope === 'live' ? 'Live' : 'Backtest'}</>,
+            }))}
+          />
+          {sessionScope === 'backtest' && <button type="button" onClick={copyLiveToBacktest} className={btn}>Zkopírovat z Live</button>}
+          <button type="button" onClick={addSession} className={btn}><Plus size={13} /> Přidat</button>
+        </>}
+      >
+        <div className="px-4 pb-1 pt-3">
+          <div className="mb-1.5 flex justify-between font-mono text-[10.5px] text-[var(--text-muted)]">
+            {[0, 3, 6, 9, 12, 15, 18, 21, 24].map(hour => <span key={hour}>{hour}</span>)}
+          </div>
+          <div
+            className="relative rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)]"
+            style={{ height: Math.max(1, curSessions.length) * 18 + 8, backgroundImage: 'repeating-linear-gradient(90deg, transparent 0 calc(12.5% - 1px), var(--border-subtle) calc(12.5% - 1px) 12.5%)' }}
+            aria-hidden="true"
+          >
+            {curSessions.map((session, lane) => sessionSegments(session.startTime, session.endTime).map(([from, to], part) => (
+              <span
+                key={`${session.id}-${part}`}
+                className="absolute flex h-3.5 items-center overflow-hidden whitespace-nowrap rounded-[3px] px-1.5 text-[10px] font-semibold text-white"
+                style={{ left: `${(from / 1440) * 100}%`, width: `${((to - from) / 1440) * 100}%`, top: 5 + lane * 18, backgroundColor: session.color || '#3b82f6' }}
+              >
+                {part === 0 ? session.name : ''}
+              </span>
+            )))}
+            <span className="absolute -bottom-1 -top-1 w-0.5 rounded bg-[var(--text-primary)] opacity-50" style={{ left: `${(nowMinutes / 1440) * 100}%` }} title="Teď" />
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12.5px] [&_tbody_tr:last-child_td]:border-b-0">
+            <thead><tr>
+              <th className={th}>Seance</th>
+              <th className={`${th} w-[110px] text-right`}>Od</th>
+              <th className={`${th} w-[110px] text-right`}>Do</th>
+              <th className={`${th} hidden w-[80px] text-right sm:table-cell`}>Délka</th>
+              <th className={`${th} hidden w-[190px] md:table-cell`}>Překryv</th>
+              <th className={`${th} w-10`}><span className="sr-only">Akce</span></th>
+            </tr></thead>
+            <tbody>
+              {curSessions.map(session => {
+                const overlaps = curSessions
+                  .filter(other => other.id !== session.id)
+                  .map(other => ({ name: other.name, minutes: sessionOverlapMinutes(session, other) }))
+                  .filter(item => item.minutes > 0);
+                return (
+                  <tr key={session.id} className="group hover:bg-[var(--bg-page)]/60">
+                    <td className={td}>
+                      <div className="flex items-center gap-2">
+                        <span className="relative h-3.5 w-3.5 shrink-0 rounded-[3px]" style={{ backgroundColor: session.color || '#3b82f6' }}>
+                          <input type="color" value={session.color || '#3b82f6'} onChange={e => updateSession(session.id, { color: e.target.value })} aria-label={`Barva seance ${session.name}`} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" />
+                        </span>
+                        <input value={session.name} onChange={e => updateSession(session.id, { name: e.target.value })} aria-label="Název seance" className="min-w-0 flex-1 border-b border-transparent bg-transparent py-1 font-semibold text-[var(--text-primary)] outline-none focus:border-indigo-500" />
+                      </div>
+                    </td>
+                    <td className={`${td} text-right`}><input type="time" value={session.startTime} onChange={e => updateSession(session.id, { startTime: e.target.value })} aria-label={`Začátek ${session.name}`} className={timeField} /></td>
+                    <td className={`${td} text-right`}><input type="time" value={session.endTime} onChange={e => updateSession(session.id, { endTime: e.target.value })} aria-label={`Konec ${session.name}`} className={timeField} /></td>
+                    <td className={`${td} hidden text-right font-mono text-xs tabular-nums sm:table-cell`}>{formatSessionDuration(sessionDurationMinutes(session.startTime, session.endTime))}</td>
+                    <td className={`${td} hidden text-xs text-[var(--text-secondary)] md:table-cell`}>{overlaps.length ? overlaps.map(item => `${item.name} ${formatSessionDuration(item.minutes)}`).join(', ') : '—'}</td>
+                    <td className={`${td} text-right`}>
+                      <button type="button" onClick={() => { setCurSessions(prev => prev.filter(x => x.id !== session.id)); showToast('Odstraněno'); }} aria-label={`Smazat seanci ${session.name}`} className={`inline-grid h-7 w-7 place-items-center rounded text-[var(--text-muted)] hover:text-rose-500 ${revealOnHover}`}><Trash2 size={13} /></button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {curSessions.length === 0 && <tr><td colSpan={6} className={`${td} text-[var(--text-muted)]`}>Žádné seance{sessionScope === 'backtest' ? ' — backtest teď jede na Live sadě.' : '.'}</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <p className="border-t border-[var(--border-subtle)] px-4 py-2 text-[11.5px] text-[var(--text-secondary)]">
+          Upravuješ sadu pro {sessionScope === 'backtest' ? 'Backtest' : 'Live'}. {otherScope === 'backtest' ? 'Backtest' : 'Live'} sadu uprav z {otherScope === 'backtest' ? 'backtest' : 'live'} světa.
+        </p>
+      </SettingsSection>
+    </div>
+  );
+
+  const renderTags = () => (
+    <div className="grid gap-3 md:grid-cols-2">
+      <SettingsSection id="htf" title="HTF konfluence" meta={`${htfOptions.length} · vyšší časové rámce`}>
+        <SettingsChips
+          items={htfOptions.map(opt => ({ key: opt, label: opt }))}
+          onRemove={opt => { setHtfOptions(prev => prev.filter(x => x !== opt)); showToast('Odstraněno'); }}
+          onAdd={opt => { if (htfOptions.includes(opt)) return false; setHtfOptions([...htfOptions, opt]); showToast('HTF přidána'); return true; }}
+          addLabel="Přidat"
+        />
+      </SettingsSection>
+      <SettingsSection id="ltf" title="LTF konfluence" meta={`${ltfOptions.length} · potvrzení vstupu`}>
+        <SettingsChips
+          items={ltfOptions.map(opt => ({ key: opt, label: opt }))}
+          onRemove={opt => { setLtfOptions(prev => prev.filter(x => x !== opt)); showToast('Odstraněno'); }}
+          onAdd={opt => { if (ltfOptions.includes(opt)) return false; setLtfOptions([...ltfOptions, opt]); showToast('LTF přidána'); return true; }}
+          addLabel="Přidat"
+        />
+      </SettingsSection>
+      <SettingsSection id="mistakes" title="Katalog chyb" meta={userMistakes.length}>
+        <SettingsChips
+          items={userMistakes.map(m => ({ key: m, label: m }))}
+          onRemove={m => { setUserMistakes(prev => prev.filter(x => x !== m)); showToast('Odstraněno'); }}
+          onAdd={m => { if (userMistakes.includes(m)) return false; setUserMistakes([...userMistakes, m]); showToast('Chyba přidána'); return true; }}
+          addLabel="Přidat"
+        />
+      </SettingsSection>
+      <SettingsSection id="emotions" title="Emoce" meta={userEmotions.length}>
+        <SettingsChips
+          items={userEmotions.map(emo => ({ key: emo.id, label: emo.label }))}
+          onRemove={id => { setUserEmotions(prev => prev.filter(e => e.id !== id)); showToast('Odstraněno'); }}
+          onAdd={label => { setUserEmotions([...userEmotions, { id: Date.now().toString(), label, icon: '' }]); showToast('Emoce přidána'); return true; }}
+          addLabel="Přidat"
+        />
+      </SettingsSection>
+    </div>
+  );
+
+  const activeDevices = pushDevices.filter(device => !device.expiredAt).length;
+  const renderAlerts = () => (
+    <div className="space-y-3">
+      <div className="grid gap-3 md:grid-cols-2">
+        <SettingsSection id="reminders" title="Připomínky">
+          <SettingsRow label="Připomenout přípravu" desc="Když před seancí nemáš hotovou ranní přípravu." keywords="60 15 minut">
+            <SettingsSwitch on={systemSettings.guardianEnabled} onChange={() => updateSystem('guardianEnabled', !systemSettings.guardianEnabled)} label="Připomenout přípravu" />
+          </SettingsRow>
+          {systemSettings.guardianEnabled && <>
+            <SettingsRow sub label="60 minut před startem" desc="Informační">
+              <SettingsSwitch on={systemSettings.morningPrepAlert60m} onChange={() => updateSystem('morningPrepAlert60m', !systemSettings.morningPrepAlert60m)} label="60 minut před startem" />
+            </SettingsRow>
+            <SettingsRow sub label="15 minut před startem" desc="Důrazná">
+              <SettingsSwitch on={systemSettings.morningPrepAlert15m} onChange={() => updateSystem('morningPrepAlert15m', !systemSettings.morningPrepAlert15m)} label="15 minut před startem" />
+            </SettingsRow>
+          </>}
+          <SettingsRow label="Večerní audit" desc="Připomínka uzavřít den v deníku." keywords="cas notifikace">
+            {systemSettings.eveningAuditAlertEnabled && (
+              <input type="time" value={systemSettings.eveningAuditAlertTime} onChange={e => updateSystem('eveningAuditAlertTime', e.target.value)} aria-label="Čas večerního auditu" className={timeField} />
+            )}
+            <SettingsSwitch on={systemSettings.eveningAuditAlertEnabled} onChange={() => updateSystem('eveningAuditAlertEnabled', !systemSettings.eveningAuditAlertEnabled)} label="Večerní audit" />
+          </SettingsRow>
+        </SettingsSection>
+
+        <SettingsSection id="delivery" title="Doručení" meta="push i při zavřené appce">
+          {isNativeBuild ? <>
+            <SettingsRow label="Notifikace iOS" desc={`Oprávnění: ${nativeNotificationPermission === 'granted' ? 'povoleno' : nativeNotificationPermission}`} keywords="zapnout registrace">
+              <button type="button" onClick={handleEnablePush} disabled={pushBusy} className={nativeNotificationPermission === 'granted' ? btn : btnPrimary}>
+                {pushBusy ? 'Ověřuji…' : nativeNotificationPermission === 'granted' ? (nativeRemoteRegistered ? 'Ověřit registraci' : 'Obnovit registraci') : 'Zapnout'}
+              </button>
+            </SettingsRow>
+            <SettingsRow label="Zkušební notifikace" desc="APNs ze serveru — funguje i se zavřenou appkou." keywords="test">
+              <button type="button" onClick={handleTestPush} disabled={pushBusy} className={btn}><Send size={13} /> Poslat</button>
+            </SettingsRow>
+            {nativeNotificationPermission === 'granted' && (
+              <SettingsRow
+                label="Plán připomínek v iPhonu"
+                desc={nativeReminderSync?.omittedCount
+                  ? `${nativeReminderSync.scheduledCount} aktivních, ${nativeReminderSync.omittedCount} vynecháno kvůli limitu iOS — omez počet připomínek.`
+                  : `Funguje i při vypnuté aplikaci${nativeReminderSync ? ` · ${nativeReminderSync.scheduledCount} opakování Po–Pá` : ''}.`}
+              >
+                <StatusPill tone={nativeReminderSync?.omittedCount ? 'warn' : 'ok'}>{nativeReminderSync?.omittedCount ? 'Částečně' : 'Aktivní'}</StatusPill>
+              </SettingsRow>
+            )}
+          </> : <>
+            <SettingsRow label="Aktivní zařízení" desc={pushDevices.length > activeDevices ? `${pushDevices.length - activeDevices} vypršela — znovu je zapni na daném zařízení.` : 'Telefony a počítače, kam chodí upozornění.'} keywords="zarizeni">
+              <StatusPill tone={activeDevices > 0 ? 'ok' : 'off'}>{activeDevices} / {pushDevices.length}</StatusPill>
+            </SettingsRow>
+            <SettingsRow
+              label="Tento prohlížeč"
+              desc={pushDiag?.isApple && !pushDiag?.isStandalone
+                ? <span className="text-amber-500">Na iPhonu nejdřív v Safari použij Sdílet → Přidat na plochu a otevři AlphaTrade z nové ikony.</span>
+                : pushDiag?.ready ? 'Upozornění odebírá.' : 'Zatím neodebírá upozornění.'}
+              keywords="zapnout vypnout"
+            >
+              {pushDiag?.hasActiveSubscription && <button type="button" onClick={handleDisablePush} disabled={pushBusy} className={btnGhost}>Vypnout</button>}
+              {!pushDiag?.ready && <button type="button" onClick={handleEnablePush} disabled={pushBusy} className={btnPrimary}>{pushBusy ? 'Ověřuji…' : 'Zapnout'}</button>}
+            </SettingsRow>
+            {pushDevices.length > 0 && (
+              <SettingsRow label="Zkušební notifikace" desc="Pošle se na všechna aktivní zařízení." keywords="test">
+                <button type="button" onClick={handleTestPush} disabled={pushBusy} className={btn}><Send size={13} /> {pushBusy ? 'Odesílám…' : 'Poslat'}</button>
+              </SettingsRow>
+            )}
+          </>}
+        </SettingsSection>
+      </div>
+      <TradingViewAlertSettings onToast={showToast} />
+    </div>
+  );
+
+  const renderCoachEntries = (entries: Record<string, unknown>, empty: string) => (
+    <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-page)]/50 px-4 py-3">
+      {Object.keys(entries).length > 0 ? (
+        <dl className="grid gap-x-4 gap-y-1.5 text-xs sm:grid-cols-[160px_1fr]">
+          {Object.entries(entries).map(([key, value]) => (
+            <React.Fragment key={key}>
+              <dt className="font-semibold text-[var(--text-secondary)]">{key}</dt>
+              <dd className="text-[var(--text-primary)]">{Array.isArray(value) ? value.join(', ') : typeof value === 'object' ? JSON.stringify(value) : String(value)}</dd>
+            </React.Fragment>
+          ))}
+        </dl>
+      ) : <p className="text-xs text-[var(--text-secondary)]">{empty}</p>}
+    </div>
+  );
+
+  const activeMemoryCount = coachMemories.filter(m => isCoachMemoryActive(m)).length;
+  const renderApp = () => (
+    <div className="space-y-3">
+      <div className="grid gap-3 md:grid-cols-2">
+        <SettingsSection id="account" title="Účet">
+          {accountEmail && (
+            <SettingsRow label={accountEmail} desc="Přihlášený účet" keywords="odhlasit email">
+              {onLogout && <button type="button" disabled={logoutBusy} onClick={() => void onLogout()} className={btn}>{logoutBusy ? 'Odhlašuji…' : 'Odhlásit se'}</button>}
+            </SettingsRow>
+          )}
+          {logoutError && <p role="alert" className="border-b border-[var(--border-subtle)] px-4 py-2 text-xs text-rose-500">{logoutError}</p>}
+          <SettingsRow label="Verze aplikace" desc={<span className="font-mono">{appVersion ?? '—'}</span>} keywords="obnovit mezipamet">
+            {onHardRefresh && <button type="button" onClick={onHardRefresh} className={btnGhost}>Vynutit obnovení</button>}
+          </SettingsRow>
+        </SettingsSection>
+
+        {isNativeBuild && (
+          <SettingsSection id="iphone" title="Tento iPhone">
+            <NativeShellTabsSettings />
+            <SettingsRow
+              label="Oprávnění"
+              desc={`Notifikace ${permissionText(nativePermissionStatus?.notifications)} · mikrofon ${permissionText(nativePermissionStatus?.microphone)} · řeč ${permissionText(nativePermissionStatus?.speech)}`}
+              keywords="mikrofon rec notifikace"
+            >
+              <button type="button" onClick={() => void refreshNativePermissionStatus()} className={btnGhost}>Obnovit</button>
+              <button type="button" disabled={nativeCapabilityBusy} onClick={() => void handleOpenNativeSettings()} className={btn}>Nastavení iOS</button>
+            </SettingsRow>
+            <SettingsRow label="Soukromý režim" desc="Při odchodu z appky skryje obsah, návrat chrání Face ID nebo kód." keywords="privacy face id">
+              {nativePrivacyEnabled && <button type="button" onClick={() => void handleNativePrivacyLock()} className={btnGhost}>Zamknout teď</button>}
+              <SettingsSwitch on={nativePrivacyEnabled} disabled={nativeCapabilityBusy} onChange={() => void handleNativePrivacyToggle()} label="Soukromý režim" />
+            </SettingsRow>
+            <SettingsRow
+              label="LIVE bez uspání displeje"
+              desc={nativeKeepAwakeEnabled
+                ? (nativeKeepAwakeEffective ? <span className="text-emerald-500">iOS právě drží displej vzhůru.</span> : 'Teď neaktivní — Backtest nebo appka na pozadí.')
+                : 'V LIVE světě nezhasne obrazovka; v Backtestu a na pozadí se vypne.'}
+              keywords="displej uspani"
+            >
+              <SettingsSwitch on={nativeKeepAwakeEnabled} disabled={nativeCapabilityBusy} onChange={() => void handleNativeKeepAwakeToggle()} label="LIVE bez uspání displeje" />
+            </SettingsRow>
+            <SettingsRow label="Ovládací centrum" desc="Ovladače AlphaTrade LIVE a Zapsat obchod přidáš přes úpravu Ovládacího centra. Jen otevřou appku, nic neodesílají brokerovi." />
+          </SettingsSection>
+        )}
+
+        {!isNativeBuild && renderDiagnostics()}
+      </div>
+
+      <SettingsSection id="coach" title="Paměť AI Coache" meta="co si o tobě pamatuje">
+        <SettingsRow label="Fakta o tobě" desc="Věk, situace, limity, plán odpovědnosti…">
+          <span className="font-mono text-xs font-bold tabular-nums text-[var(--text-primary)]">{Object.keys(coachProfile.facts).length}</span>
+          <button type="button" onClick={() => setCoachPanel(panel => panel === 'facts' ? null : 'facts')} aria-expanded={coachPanel === 'facts'} className={btnGhost}>{coachPanel === 'facts' ? 'Skrýt' : 'Zobrazit'}</button>
+        </SettingsRow>
+        {coachPanel === 'facts' && renderCoachEntries(coachProfile.facts, 'Coach si zatím nezapamatoval žádná fakta. Bude je přidávat během konverzací.')}
+        <SettingsRow label="Preference komunikace" desc={'Např. „ukazuj v R“, „buď stručnější“ — stačí to Coachovi říct v chatu.'}>
+          <span className="font-mono text-xs font-bold tabular-nums text-[var(--text-primary)]">{Object.keys(coachProfile.preferences).length}</span>
+          <button type="button" onClick={() => setCoachPanel(panel => panel === 'preferences' ? null : 'preferences')} aria-expanded={coachPanel === 'preferences'} className={btnGhost}>{coachPanel === 'preferences' ? 'Skrýt' : 'Zobrazit'}</button>
+        </SettingsRow>
+        {coachPanel === 'preferences' && renderCoachEntries(coachProfile.preferences, 'Žádné preference.')}
+        <SettingsRow label="Dlouhodobá paměť" desc={`Pozorování, epizody, shrnutí a závazky · ${coachMemories.length - activeMemoryCount} v historii`}>
+          <span className="font-mono text-xs font-bold tabular-nums text-[var(--text-primary)]">{activeMemoryCount}</span>
+          <button type="button" onClick={() => setCoachPanel(panel => panel === 'memories' ? null : 'memories')} aria-expanded={coachPanel === 'memories'} className={btn}>{coachPanel === 'memories' ? 'Skrýt' : 'Spravovat'}</button>
+        </SettingsRow>
+        {coachPanel === 'memories' && (
+          <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-page)]/50 px-4 py-3">
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              <SettingsSegment label="Stav vzpomínek" value={memoryStatusFilter} onChange={setMemoryStatusFilter} options={[{ value: 'active', label: 'Aktivní' }, { value: 'history', label: 'Historie' }]} />
+              <SettingsSegment
+                label="Typ vzpomínek"
+                value={memoryFilter}
+                onChange={setMemoryFilter}
+                options={[{ value: 'all', label: 'Vše' }, { value: 'observation', label: 'Pozorování' }, { value: 'episode', label: 'Epizody' }, { value: 'conversation_summary', label: 'Shrnutí' }, { value: 'commitment', label: 'Závazky' }]}
+              />
+            </div>
+            {filteredMemories.length === 0 ? (
+              <p className="text-xs text-[var(--text-secondary)]">Žádné záznamy v této kategorii. Coach si je vytvoří při konverzacích a po důležitých obchodech.</p>
+            ) : (
+              <div className="max-h-96 space-y-1.5 overflow-y-auto pr-1">
+                {filteredMemories.map(m => {
+                  const typeLabel = m.type === 'observation' ? 'Pozorování' : m.type === 'episode' ? 'Epizoda' : m.type === 'commitment' ? 'Závazek' : 'Shrnutí';
+                  const validation = String(m.metadata?.validation_state || (m.type === 'commitment' ? 'user_stated' : 'hypothesis'));
+                  const confidence = typeof m.metadata?.confidence === 'number' ? Math.round(m.metadata.confidence * 100) : null;
+                  const evidenceCount = Array.isArray(m.metadata?.evidence) ? m.metadata.evidence.length : 0;
+                  const counterCount = Array.isArray(m.metadata?.counter_evidence) ? m.metadata.counter_evidence.length : 0;
+                  const status = String(m.metadata?.status || 'active');
+                  return (
+                    <div key={m.id} className="group flex items-start gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-input)] p-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+                          <span className="font-semibold text-[var(--text-primary)]">{typeLabel}</span>
+                          <span className={validation === 'supported' || validation === 'user_stated' ? 'text-emerald-500' : validation === 'contested' ? 'text-rose-500' : 'text-amber-500'}>
+                            {validation === 'supported' ? 'podloženo' : validation === 'user_stated' ? 'řečeno uživatelem' : validation === 'contested' ? 'sporné' : 'hypotéza'}
+                          </span>
+                          {status !== 'active' && <span className="text-[var(--text-muted)]">{status === 'superseded' ? 'nahrazeno' : 'staženo'}</span>}
+                          {m.memory_date && <span className="font-mono text-[var(--text-muted)]">{m.memory_date}</span>}
+                          {m.importance >= 8 && <span className="font-semibold text-amber-500">důležité</span>}
+                        </div>
+                        <p className="whitespace-pre-line text-xs leading-relaxed text-[var(--text-primary)]">{m.content}</p>
+                        <p className="mt-1.5 text-[11px] text-[var(--text-muted)]">
+                          {confidence != null ? `Jistota ${confidence} % · ` : ''}důkazy {evidenceCount}{counterCount ? ` · protidůkazy ${counterCount}` : ''}
+                          {m.metadata?.validation_note ? ` · ${String(m.metadata.validation_note)}` : ''}
+                        </p>
+                      </div>
+                      <button type="button" onClick={() => handleForgetMemory(m.id)} title="Smazat tuto vzpomínku" aria-label="Smazat tuto vzpomínku" className={`grid h-7 w-7 shrink-0 place-items-center rounded text-[var(--text-muted)] hover:text-rose-500 ${revealOnHover}`}><Trash2 size={13} /></button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+        {coachMemories.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5">
+            {!confirmClearMemory ? <>
+              <span className="text-[11.5px] text-[var(--text-secondary)]">Smazání paměti je nevratné.</span>
+              <button type="button" onClick={() => setConfirmClearMemory(true)} className={btnDanger}>Vymazat paměť…</button>
+            </> : <>
+              <span className="text-xs font-semibold text-rose-500">Smazat všech {coachMemories.length} záznamů? Nejde to vrátit.</span>
+              <span className="flex gap-1.5">
+                <button type="button" onClick={() => setConfirmClearMemory(false)} className={btnGhost}>Zrušit</button>
+                <button type="button" onClick={handleClearAllMemory} className="inline-flex h-[30px] items-center rounded-md bg-rose-600 px-3 text-xs font-semibold text-white hover:bg-rose-500">Smazat</button>
+              </span>
+            </>}
+          </div>
+        )}
+      </SettingsSection>
+
+      {isNativeBuild && renderDiagnostics()}
+    </div>
+  );
+
+  function renderDiagnostics() {
+    if (!sectionMatches('diagnostics')) return null;
+    const pendingTests = nativePendingNotifications.filter(notification => notification.source === 'test').length;
+    const kindTone = (kind: string) => kind === 'risk' ? 'text-rose-500' : kind === 'trade' ? 'text-emerald-500' : 'text-indigo-500';
+    return (
+      <details open={searching || undefined} className="theme-card group/diag min-w-0 self-start overflow-hidden rounded-lg">
+        <summary className="flex min-h-[46px] cursor-pointer list-none items-center gap-2.5 px-4 py-2.5 group-open/diag:border-b group-open/diag:border-[var(--border-subtle)] [&::-webkit-details-marker]:hidden">
+          <Wrench size={14} className="text-[var(--text-muted)]" />
+          <h2 className="text-[13.5px] font-bold text-[var(--text-primary)]">Diagnostika</h2>
+          <span className="text-xs font-medium text-[var(--text-muted)]">testy pro ladění</span>
+          <ChevronRight size={15} className="ml-auto text-[var(--text-muted)] transition-transform group-open/diag:rotate-90" />
+        </summary>
+        <SettingsRow label="Test snapshotu TradingView" desc="Bez ARMu a bez obchodu: vyfotí layout AlphaTrade Snapshoty, pošle obrázkový APNs test a nic nezapíše do deníku." keywords="snapshot">
+          <button type="button" onClick={handleSnapshotTestPush} disabled={pushBusy} className={btn}>{pushBusy ? 'Čekám…' : 'Poslat'}</button>
+        </SettingsRow>
+        {isNativeBuild && <>
+          <SettingsRow label="Galerie iOS alertů kopírky" desc={`${NATIVE_ALERT_GALLERY_COUNT} scénářů během dvou minut — patří současnému copieru.`} keywords="galerie alertu">
+            <button type="button" disabled={pushBusy} onClick={() => void handleNativeAlertGallery()} className={btn}>{pushBusy ? 'Plánuji…' : 'Naplánovat'}</button>
+          </SettingsRow>
+          <SettingsRow label="Čekající testy" desc={`${pendingTests} čeká v iOS`} keywords="zrusit">
+            <button type="button" disabled={pushBusy || pendingTests === 0} onClick={() => void handleCancelNativeAlerts()} className={btnGhost}>Zrušit</button>
+          </SettingsRow>
+          {!searching && (nativePendingNotifications.length > 0 || nativeDeliveredNotifications.length > 0) && (
+            <div className="space-y-1.5 border-b border-[var(--border-subtle)] bg-[var(--bg-page)]/50 px-4 py-3">
+              {nativePendingNotifications.map(notification => (
+                <div key={`p-${notification.id}`} className="flex items-start gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-input)] p-2.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-semibold text-[var(--text-primary)]">{notification.title} <span className={`font-medium ${kindTone(notification.kind)}`}>· {notification.source === 'sessionReminder' ? 'plán' : notification.kind}</span></p>
+                    <p className="mt-0.5 line-clamp-2 text-[11px] text-[var(--text-secondary)]">{notification.body}</p>
+                    <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">čeká · {notification.scheduledAt ? new Date(notification.scheduledAt).toLocaleTimeString('cs-CZ') : 'čas řídí iOS'}{notification.route ? ` · otevře ${notification.route}` : ''}</p>
+                  </div>
+                  {notification.source === 'test' && <button type="button" disabled={pushBusy} onClick={() => void handleCancelNativeAlert(notification.id)} aria-label={`Zrušit ${notification.title}`} className="grid h-7 w-7 place-items-center rounded text-rose-500 disabled:opacity-40"><X size={13} /></button>}
+                </div>
+              ))}
+              {nativeDeliveredNotifications.map(notification => (
+                <div key={`d-${notification.id}`} className="flex items-start gap-2 rounded-md border border-emerald-500/20 bg-[var(--bg-input)] p-2.5">
+                  <button type="button" onClick={() => handleOpenDeliveredNativeAlert(notification)} className="min-w-0 flex-1 text-left">
+                    <p className="truncate text-xs font-semibold text-[var(--text-primary)]">{notification.title} <span className={`font-medium ${kindTone(notification.kind)}`}>· {notification.kind}</span>{notification.hasAttachment && <span className="font-medium text-indigo-500"> · obrázek</span>}</p>
+                    <p className="mt-0.5 line-clamp-2 text-[11px] text-[var(--text-secondary)]">{notification.body}</p>
+                    <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">doručeno · {notification.deliveredAt ? new Date(notification.deliveredAt).toLocaleTimeString('cs-CZ') : 'systémem'} · klepnutím otevřít {notification.route || 'dashboard'}</p>
+                  </button>
+                  <button type="button" disabled={pushBusy} onClick={() => void handleRemoveDeliveredNativeAlert(notification.id)} aria-label={`Odstranit doručenou notifikaci ${notification.title}`} className="grid h-7 w-7 place-items-center rounded text-rose-500 disabled:opacity-40"><Trash2 size={13} /></button>
+                </div>
+              ))}
+            </div>
+          )}
+          <SettingsRow label="Badge na ikoně" desc={`Teď ${nativeBadgeCount} · testovací notifikace nastaví 1, otevření ho vymaže.`} keywords="badge">
+            {[1, 5].map(count => <button key={count} type="button" disabled={pushBusy} onClick={() => void handleNativeBadge(count)} className={btn}>{count}</button>)}
+            <button type="button" disabled={pushBusy || nativeBadgeCount === 0} onClick={() => void handleNativeBadge(0)} className={btnGhost}>Vymazat</button>
+          </SettingsRow>
+          <SettingsRow
+            label="Live Activity"
+            desc={<>Test seance a P&amp;L na zamčené obrazovce · {nativeLiveActivityState?.activeCount ? <span className="text-emerald-500">aktivní</span> : nativeLiveActivityState?.enabled === false ? <span className="text-rose-500">vypnuto v iOS</span> : 'připraveno'}</>}
+            keywords="live activity dynamic island"
+          >
+            <button type="button" disabled={nativeCapabilityBusy || !!nativeLiveActivityState?.activeCount || nativeLiveActivityState?.enabled === false} onClick={() => void handleNativeLiveActivity('start')} className={btn}>Spustit</button>
+            <button type="button" disabled={nativeCapabilityBusy || !nativeLiveActivityState?.activeCount} onClick={() => void handleNativeLiveActivity('profit')} className={btnGhost}>+P&amp;L</button>
+            <button type="button" disabled={nativeCapabilityBusy || !nativeLiveActivityState?.activeCount} onClick={() => void handleNativeLiveActivity('risk')} className={btnGhost}>Risk</button>
+            <button type="button" disabled={nativeCapabilityBusy || !nativeLiveActivityState?.activeCount} onClick={() => void handleNativeLiveActivity('end')} className={btnGhost}>Ukončit</button>
+          </SettingsRow>
+          <SettingsRow label="Haptika" keywords="haptika">
+            {(['selection', 'success', 'warning', 'error'] as NativeHapticStyle[]).map(style => (
+              <button key={style} type="button" onClick={() => void handleHapticTest(style)} className={btnGhost}>{style}</button>
+            ))}
+          </SettingsRow>
+          <SettingsRow label="Apple Kalendář" desc="Otevře editor s LIVE seancí na příští celou hodinu. Bez klepnutí na Přidat nic neuloží." keywords="kalendar">
+            <button type="button" disabled={nativeCapabilityBusy} onClick={() => void handleNativeCalendarEvent()} className={btn}><CalendarPlus size={13} /> Naplánovat</button>
+          </SettingsRow>
+          <SettingsRow label="Sdílení iOS" keywords="sdileni">
+            <button type="button" disabled={nativeCapabilityBusy} onClick={() => void handleNativeShareTest()} className={btn}><Share2 size={13} /> Otevřít</button>
+          </SettingsRow>
+          <SettingsRow label="Diktování poznámky" desc={nativeDictationText || 'Apple Speech poslouchá nejvýš 30 sekund; nic neukládá ani neposílá.'} keywords="diktovani">
+            <button type="button" disabled={nativeCapabilityBusy} onClick={() => void handleNativeDictation()} className={nativeDictating ? btnDanger : btn}>{nativeDictating ? 'Zastavit' : 'Začít diktovat'}</button>
+          </SettingsRow>
+        </>}
+      </details>
+    );
+  }
+
+  const renderTab = (tab: SettingsTab) => {
+    switch (tab) {
+      case 'trading': return renderTrading();
+      case 'tags': return renderTags();
+      case 'alerts': return renderAlerts();
+      case 'appearance': return appearance && onAppearanceChange && onThemeChange && sectionMatches('appearance')
+        ? <AppearanceSettings appearance={appearance} onChange={onAppearanceChange} theme={theme} onThemeChange={onThemeChange} />
+        : null;
+      case 'app': return renderApp();
+    }
+  };
+  const visibleSearchTabs = tabs.filter(tab => tab.sections.some(section => sectionMatches(section)));
 
   return (
-    <div className="max-w-7xl mx-auto pb-20 space-y-6">
+    <div className="mx-auto max-w-7xl space-y-4 pb-20">
+      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-end">
+        <nav role="tablist" aria-label="Sekce nastavení" className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto border-b border-[var(--border-subtle)]">
+          {tabs.map(tab => {
+            const active = !searching && activeTab === tab.id;
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => { setSearch(''); onTabChange?.(tab.id); }}
+                className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-3.5 py-2.5 text-xs font-bold transition-colors ${active ? 'border-indigo-500 text-indigo-500' : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'} ${searching ? 'opacity-50' : ''}`}
+              >
+                <Icon size={14} /> {tab.label}
+              </button>
+            );
+          })}
+        </nav>
+        <label className="relative block sm:mb-1.5 sm:w-64">
+          <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
+          <input
+            ref={searchInputRef}
+            type="search"
+            value={search}
+            onChange={event => setSearch(event.target.value)}
+            onKeyDown={event => { if (event.key === 'Escape') { setSearch(''); event.currentTarget.blur(); } }}
+            placeholder="Hledat v nastavení…"
+            aria-label="Hledat v nastavení"
+            className={`${field} h-8 w-full pl-8 pr-8`}
+          />
+          <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border border-[var(--border-subtle)] px-1.5 font-mono text-[10px] text-[var(--text-muted)] sm:block">/</kbd>
+        </label>
+      </div>
 
-      {/* Kompaktní přepínač — do lg breakpointu, kde by se pět tabů nevešlo do headeru. */}
-      {onTabChange && (
-        <div className="flex lg:hidden w-full p-1 rounded-2xl border gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
-          {([
-            { id: 'psychology', label: 'Psycho' },
-            { id: 'strategy', label: 'Strategie' },
-            { id: 'market', label: 'Trh' },
-            { id: 'notifications', label: 'Notifikace' },
-            { id: 'system', label: 'Systém' }
-          ] as const).map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => onTabChange(tab.id)}
-              className={`relative flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
-                activeTab === tab.id
-                  ? (isDark ? 'bg-slate-700/60 text-white shadow-sm' : 'bg-white text-slate-900 shadow-sm border border-slate-200/60')
-                  : (isDark ? 'text-slate-500' : 'text-slate-400')
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <main className="min-w-0">
-        <div className="space-y-6">
-          {onLogout && <section aria-label="Přihlášený účet" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--border-subtle)] p-4">
-            <div className="min-w-0"><p className="text-xs font-bold">Přihlášený účet</p><p className="break-all text-xs text-[var(--text-muted)]">{accountEmail}</p></div>
-            <button type="button" disabled={logoutBusy} onClick={() => void onLogout()} className="min-h-11 rounded-xl border border-[var(--border-subtle)] px-4 text-sm font-bold disabled:opacity-50">{logoutBusy ? 'Odhlašuji…' : 'Odhlásit se'}</button>
-            {logoutError && <p role="alert" className="w-full text-sm text-rose-500">{logoutError}</p>}
-          </section>}
-          {activeTab === 'psychology' && (
+      <SettingsSearchContext.Provider value={searchContext}>
+        {searching ? (
+          visibleSearchTabs.length > 0 ? (
             <div className="space-y-6">
-              <Card isDark={isDark}>
-                <SectionHeader icon={ShieldCheck} title="Železná Pravidla" subtitle="Tvůj denní kodex disciplíny" color="bg-blue-600" isDark={isDark} />
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 mb-6">
-                  {ironRules.map(rule => {
-                    // Parse label — detekce typu (checklist 📋 / experiment ⏱ / standard rule)
-                    const label = rule.label || '';
-                    const isChecklist = label.startsWith('📋 ');
-                    const expMatch = label.match(/^⏱\s*\[([^\]]+)\]\s*(.+)$/);
-                    const isExperiment = !!expMatch;
-
-                    let title = label;
-                    let items: string[] = [];
-                    let duration = '';
-                    if (isChecklist) {
-                      const lines = label.split('\n');
-                      title = lines[0].replace(/^📋\s+/, '').trim();
-                      items = lines.slice(1)
-                        .map(l => l.replace(/^\s*▢\s*/, '').trim())
-                        .filter(Boolean);
-                    } else if (isExperiment && expMatch) {
-                      duration = expMatch[1];
-                      title = expMatch[2].trim();
-                    }
-
-                    // Visual styling per typ — checklist = purple, experiment = amber, ritual = indigo, default = blue
-                    const accentBg = isChecklist
-                      ? 'bg-purple-600 shadow-purple-600/20'
-                      : isExperiment
-                        ? 'bg-amber-500 shadow-amber-500/20'
-                        : rule.type === 'ritual'
-                          ? 'bg-indigo-600 shadow-indigo-600/20'
-                          : 'bg-blue-600 shadow-blue-600/20';
-                    const accentChip = isChecklist
-                      ? 'bg-purple-500/20 text-purple-500'
-                      : isExperiment
-                        ? 'bg-amber-500/20 text-amber-600'
-                        : rule.type === 'ritual'
-                          ? 'bg-indigo-500/20 text-indigo-400'
-                          : 'bg-blue-500/20 text-blue-400';
-                    const typeLabel = isChecklist
-                      ? 'Checklist'
-                      : isExperiment
-                        ? 'Experiment'
-                        : (rule.type === 'ritual' ? 'Ritual' : 'Hard Rule');
-                    const Icon = isChecklist ? FileText : isExperiment ? Zap : (rule.type === 'ritual' ? Zap : ShieldAlert);
-
-                    return (
-                    <div key={rule.id} className={`relative p-3.5 rounded-2xl border group transition-all ${isDark ? 'bg-white/5 border-white/5 hover:border-blue-500/30' : 'bg-slate-50 border-slate-100 hover:shadow-lg'}`}>
-                      <div className="flex items-start gap-3">
-                        <div className={`w-9 h-9 shrink-0 rounded-xl flex items-center justify-center shadow-md text-white ${accentBg}`}>
-                          <Icon size={16} />
-                        </div>
-                        <div className="flex-1 min-w-0 pr-6">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <p className="text-[11px] font-black tracking-tight leading-tight">{title}</p>
-                            <span className={`text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md ${accentChip}`}>
-                              {typeLabel}
-                            </span>
-                            {isExperiment && (
-                              <span className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-600 flex items-center gap-1">
-                                ⏱ {duration}
-                              </span>
-                            )}
-                          </div>
-                          {isChecklist && items.length > 0 && (
-                            <ul className="space-y-0.5 mt-1.5 pl-0.5">
-                              {items.map((item, i) => (
-                                <li key={i} className="text-[10px] flex items-start gap-1.5 leading-snug">
-                                  <span className="text-purple-500/60 shrink-0 font-mono mt-px">▢</span>
-                                  <span className={isDark ? 'text-slate-300' : 'text-slate-700'}>{item}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                      </div>
-                      <button onClick={() => setItemToDelete({ id: rule.id, type: 'rule' })} className="absolute top-2.5 right-2.5 p-1.5 text-slate-600 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"><Trash2 size={13} /></button>
-                    </div>);
-                  })}
+              {visibleSearchTabs.map(tab => (
+                <div key={tab.id}>
+                  <h3 className="mb-2.5 flex items-center gap-2.5 px-0.5 text-[11.5px] font-bold text-[var(--text-muted)] after:h-px after:flex-1 after:bg-[var(--border-subtle)]">{tab.label}</h3>
+                  {renderTab(tab.id)}
                 </div>
-                <div className="flex flex-col sm:flex-row gap-2 p-1.5 rounded-2xl bg-blue-500/5 border border-blue-500/10">
-                  <InputField value={newRuleLabel} onChange={(e: any) => setNewRuleLabel(e.target.value)} onKeyDown={(e: any) => e.key === 'Enter' && addIronRule()} placeholder="Nadefinuj nové pravidlo..." isDark={isDark} />
-                  <select value={newRuleType} onChange={e => setNewRuleType(e.target.value as any)} className={`px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest outline-none border transition-all ${isDark ? 'bg-white/5 border-white/10 text-white' : 'bg-white border-slate-200 text-slate-900'}`}>
-                    <option value="ritual">Rituál</option>
-                    <option value="trading">Pravidlo</option>
-                    <option value="experiment">Experiment</option>
-                  </select>
-                  {newRuleType === 'experiment' && (
-                    <select value={newRuleDuration} onChange={e => setNewRuleDuration(e.target.value as any)} className={`px-4 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest outline-none border transition-all ${isDark ? 'bg-amber-500/10 border-amber-500/20 text-amber-300' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
-                      <option value="1w">1 týden</option>
-                      <option value="2w">2 týdny</option>
-                      <option value="1m">1 měsíc</option>
-                    </select>
-                  )}
-                  <button onClick={addIronRule} className="px-8 py-3 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-blue-600/30 hover:bg-blue-500 active:scale-95 transition-all">{newRuleType === 'experiment' ? 'Přidat Experiment' : newRuleType === 'ritual' ? 'Přidat Rituál' : 'Přidat Pravidlo'}</button>
-                </div>
-              </Card>
-
-              <Card isDark={isDark}>
-                <SectionHeader icon={Target} title="Výchozí Cíle Dne" subtitle="Automaticky předvyplněno v deníku" color="bg-orange-600" isDark={isDark} />
-                <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
-                  {standardGoals.map(goal => (
-                    <Chip key={goal} label={goal} accent="orange" isDark={isDark} onRemove={() => { setStandardGoals(standardGoals.filter(x => x !== goal)); showToast('Odstraněno'); }} />
-                  ))}
-                </div>
-                <AddBar value={newStandardGoal} onChange={(e: any) => setNewStandardGoal(e.target.value)} onAdd={addStandardGoal} placeholder="Nový výchozí cíl..." accent="orange" isDark={isDark} />
-              </Card>
-
-              <Card isDark={isDark}>
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
-                  <SectionHeader icon={Target} title="Weekly Focus" subtitle="Tvůj hlavní směr pro tento týden" color="bg-emerald-600" isDark={isDark} />
-                  <div className={`flex items-center gap-2 p-1.5 rounded-[22px] border ${isDark ? 'bg-black/30 border-white/10' : 'bg-slate-50 border-slate-200 shadow-inner'}`}>
-                    <button onClick={() => handleWeekChange(-1)} className="p-2 rounded-xl hover:bg-white/5 transition-all text-slate-400"><ChevronLeft size={18} /></button>
-                    <div className="px-4 text-center">
-                      <p className={`text-[10px] font-black uppercase tracking-widest whitespace-nowrap ${isDark ? 'text-emerald-500' : 'text-emerald-600'}`}>{selectedWeek}</p>
-                      <p className="text-[7px] font-black text-slate-500 leading-none">{getWeekRange(selectedWeek)}</p>
-                    </div>
-                    <button onClick={() => handleWeekChange(1)} className="p-2 rounded-xl hover:bg-white/5 transition-all text-slate-400"><ChevronRight size={18} /></button>
-                  </div>
-                </div>
-
-                <div className="space-y-3 mb-8 min-h-[100px] flex flex-col items-center justify-center">
-                  <AnimatePresence mode="popLayout">
-                    {currentWeeklyFocus.goals.length === 0 ? (
-                      <motion.div key={`empty-${selectedWeek}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="py-12 flex flex-col items-center text-slate-500 gap-2">
-                        <Sparkles size={24} className="opacity-20" />
-                        <p className="text-[9px] font-black uppercase tracking-[0.2em]">Žádné cíle pro tento týden</p>
-                      </motion.div>
-                    ) : (
-                      currentWeeklyFocus.goals.map((goal, idx) => (
-                        <motion.div
-                          key={`${selectedWeek}-${goal.id}`}
-                          layout
-                          initial={{ opacity: 0, scale: 0.95 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.95 }}
-                          className={`w-full flex items-center gap-4 p-4 rounded-2xl border transition-all ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-100'}`}
-                        >
-                          <button
-                            onClick={() => setEmojiPickerTarget({ goalIdx: idx })}
-                            className="w-10 h-10 rounded-xl bg-emerald-500/10 text-xl flex items-center justify-center hover:scale-105 active:scale-95 transition-all text-center"
-                          >
-                            {goal.emoji || '🎯'}
-                          </button>
-                          <input
-                            value={goal.text}
-                            onChange={(e) => {
-                              const newList = [...weeklyFocusList];
-                              const exIdx = newList.findIndex(wf => wf.weekISO === selectedWeek);
-                              const val = e.target.value;
-
-                              if (exIdx !== -1) {
-                                const newGoals = [...newList[exIdx].goals];
-                                newGoals[idx] = { ...newGoals[idx], text: val };
-                                newList[exIdx] = { ...newList[exIdx], goals: newGoals };
-                                setWeeklyFocusList(newList);
-                              }
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' && currentWeeklyFocus.goals.length < 5) {
-                                const nl = [...weeklyFocusList];
-                                const i = nl.findIndex(wf => wf.weekISO === selectedWeek);
-                                const newGoal = { id: crypto.randomUUID(), text: '', emoji: '🎯' };
-                                if (i !== -1) nl[i] = { ...nl[i], goals: [...nl[i].goals, newGoal] };
-                                else nl.push({ id: crypto.randomUUID(), weekISO: selectedWeek, goals: [newGoal] });
-                                setWeeklyFocusList(nl);
-                                showToast('Cíl přidán');
-                              }
-                            }}
-                            className="flex-1 bg-transparent border-0 outline-none text-xs font-bold"
-                            placeholder="Zadej týdenní focus..."
-                          />
-                          <button onClick={() => {
-                            const nl = [...weeklyFocusList];
-                            const i = nl.findIndex(wf => wf.weekISO === selectedWeek);
-                            if (i !== -1) {
-                              nl[i] = { ...nl[i], goals: nl[i].goals.filter((_, gx) => gx !== idx) };
-                              setWeeklyFocusList(nl);
-                              showToast('Odstraněno');
-                            }
-                          }} className="p-2 text-slate-600 hover:text-rose-500 transition-colors"><Trash2 size={14} /></button>
-                        </motion.div>
-                      ))
-                    )}
-                  </AnimatePresence>
-
-                  {currentWeeklyFocus.goals.length < 5 && (
-                    <button onClick={() => {
-                      const nl = [...weeklyFocusList];
-                      const i = nl.findIndex(wf => wf.weekISO === selectedWeek);
-                      const newGoal = { id: crypto.randomUUID(), text: '', emoji: '🎯' };
-                      if (i !== -1) nl[i] = { ...nl[i], goals: [...nl[i].goals, newGoal] };
-                      else nl.push({ id: crypto.randomUUID(), weekISO: selectedWeek, goals: [newGoal] });
-                      setWeeklyFocusList(nl);
-                      showToast('Cíl přidán');
-                    }} className={`w-full py-5 mt-4 rounded-[22px] border border-dashed text-[10px] font-black uppercase tracking-[0.2em] transition-all ${isDark ? 'border-white/10 text-slate-500 hover:border-emerald-500/50 hover:text-emerald-500 hover:bg-emerald-500/5' : 'border-slate-300 text-slate-400 hover:border-emerald-500/50 hover:bg-emerald-50 hover:text-emerald-600'}`}>
-                      + Další Týdenní Cíl
-                    </button>
-                  )}
-                </div>
-              </Card>
+              ))}
             </div>
-          )}
-
-          {activeTab === 'strategy' && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <Card isDark={isDark}>
-                  <SectionHeader icon={Activity} title="HTF Confluence" subtitle="Vyšší časové rámce" color="bg-teal-600" isDark={isDark} />
-                  <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
-                    {htfOptions.map(opt => (
-                      <Chip key={opt} label={opt} accent="teal" isDark={isDark} onRemove={() => { setHtfOptions(prev => prev.filter(x => x !== opt)); showToast('Odstraněno'); }} />
-                    ))}
-                  </div>
-                  <AddBar value={newHtf} onChange={(e: any) => setNewHtf(e.target.value)} onAdd={addHtf} placeholder="Nová HTF..." accent="teal" isDark={isDark} />
-                </Card>
-                <Card isDark={isDark}>
-                  <SectionHeader icon={Monitor} title="LTF Confluence" subtitle="Potvrzení vstupu" color="bg-blue-600" isDark={isDark} />
-                  <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
-                    {ltfOptions.map(opt => (
-                      <Chip key={opt} label={opt} accent="blue" isDark={isDark} onRemove={() => { setLtfOptions(prev => prev.filter(x => x !== opt)); showToast('Odstraněno'); }} />
-                    ))}
-                  </div>
-                  <AddBar value={newLtf} onChange={(e: any) => setNewLtf(e.target.value)} onAdd={addLtf} placeholder="Nová LTF..." accent="blue" isDark={isDark} />
-                </Card>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <Card isDark={isDark}>
-                  <SectionHeader icon={AlertOctagon} title="Katalog Chyb" subtitle="Identifikace slabých stránek" color="bg-rose-600" isDark={isDark} />
-                  <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
-                    {userMistakes.map(m => (
-                      <Chip key={m} label={m} accent="rose" isDark={isDark} onRemove={() => { setUserMistakes(prev => prev.filter(x => x !== m)); showToast('Odstraněno'); }} />
-                    ))}
-                  </div>
-                  <AddBar value={newMistake} onChange={(e: any) => setNewMistake(e.target.value)} onAdd={addMistake} placeholder="Přidat chybu (např. Overtrading)" accent="rose" isDark={isDark} />
-                </Card>
-                <Card isDark={isDark}>
-                  <SectionHeader icon={Brain} title="Emoční Mapa" subtitle="Vliv emocí na rozhodování" color="bg-purple-600" isDark={isDark} />
-                  <div className="flex flex-wrap gap-2 mb-6 pr-2 max-h-[140px] overflow-y-auto custom-scrollbar">
-                    {userEmotions.map(emo => (
-                      <Chip key={emo.id} label={emo.label} accent="purple" isDark={isDark} onRemove={() => { setUserEmotions(prev => prev.filter(e => e.id !== emo.id)); showToast('Odstraněno'); }} />
-                    ))}
-                  </div>
-                  <AddBar value={newEmoLabel} onChange={(e: any) => setNewEmoLabel(e.target.value)} onAdd={addEmo} placeholder="Nová emoce..." accent="purple" isDark={isDark} />
-                </Card>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'market' && (
-            <div className="space-y-6">
-              <Card isDark={isDark}>
-                <div className="flex items-center justify-between mb-8">
-                  <SectionHeader icon={Globe} title="Obchodní Seance" subtitle="Harmonogram tvého dne" color="bg-indigo-600" isDark={isDark} />
-                  <button onClick={addSession} className="px-6 py-3 bg-indigo-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-xl shadow-indigo-600/30 hover:bg-indigo-500 active:scale-95 transition-all flex items-center gap-2"><Plus size={16} /> Přidat seanci</button>
-                </div>
-
-                {/* Editovat lze JEN sadu světa, ve kterém právě jsi. Aktuální svět = editovatelný,
-                    druhý = zamčený (přepni svět pro jeho úpravu). */}
-                <div className="mb-6 flex flex-col sm:flex-row sm:items-center gap-3">
-                  <div className={`inline-flex p-1 rounded-2xl ${isDark ? 'bg-black/40' : 'bg-slate-100'}`}>
-                    {(['live', 'backtest'] as const).map(scope => {
-                      const isCurrent = scope === sessionScope;
-                      return (
-                        <div
-                          key={scope}
-                          title={isCurrent ? undefined : `Pro editaci se přepni do ${scope === 'backtest' ? 'backtest' : 'live'} světa`}
-                          className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${isCurrent ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30' : 'text-slate-500 opacity-50 cursor-not-allowed'}`}
-                        >
-                          {!isCurrent && <Lock size={11} />}
-                          {scope === 'live' ? 'Live sessiony' : 'Backtest sessiony'}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <p className="text-[10px] text-slate-500 font-semibold">
-                    Edituješ sadu pro <span className="text-indigo-400">{sessionScope === 'backtest' ? 'BACKTEST' : 'LIVE'}</span>. Pro úpravu {otherScope === 'backtest' ? 'backtest' : 'live'} sady se přepni do {otherScope === 'backtest' ? 'backtest' : 'live'} světa.
-                    {sessionScope === 'backtest' && backtestSessions.length === 0 && ' (Sada je prázdná → backtest teď jede na Live.)'}
-                  </p>
-                  {sessionScope === 'backtest' && (
-                    <button onClick={copyLiveToBacktest} className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${isDark ? 'bg-white/5 text-slate-300 hover:bg-white/10' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Zkopírovat z Live</button>
-                  )}
-                </div>
-
-                <div className={`mb-10 p-8 rounded-[40px] border ${isDark ? 'bg-black/30 border-white/5' : 'bg-slate-50 border-slate-100'} overflow-hidden relative group`}>
-                  <div className="flex justify-between text-[8px] font-black text-slate-500 uppercase mb-5 px-3">
-                    {[0, 3, 6, 9, 12, 15, 18, 21].map(h => <span key={h}>{h}h</span>)}
-                    <span>24h</span>
-                  </div>
-                  <div className={`h-4 w-full rounded-full relative shadow-inner flex items-center ${isDark ? 'bg-black/50' : 'bg-slate-200'}`}>
-                    <div className={`absolute inset-x-0 h-[1px] top-1/2 ${isDark ? 'bg-white/5' : 'bg-white/60'}`} />
-                    {curSessions.map(s => {
-                      const [sh, sm] = (s.startTime || '09:00').split(':').map(Number);
-                      const [eh, em] = (s.endTime || '17:00').split(':').map(Number);
-                      const start = ((sh * 60 + sm) / 1440) * 100;
-                      const end = ((eh * 60 + em) / 1440) * 100;
-                      const width = end >= start ? end - start : (100 - start) + end;
-                      return (
-                        <div key={s.id} className="absolute h-full opacity-80 rounded-full transition-all duration-500 hover:opacity-100 group-hover:h-[120%]" style={{ left: `${start}%`, width: `${width}%`, backgroundColor: s.color || '#3b82f6', boxShadow: `0 0 15px ${s.color}40` }} />
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {curSessions.map(s => (
-                    <div key={s.id} className={`p-4 rounded-3xl border relative group transition-all duration-300 hover:scale-[1.02] ${isDark ? 'bg-white/5 border-white/5 hover:border-indigo-500/40' : 'bg-white border-slate-100 hover:shadow-xl'}`}>
-                      <div className="space-y-3.5">
-                        <div className="flex items-center gap-2.5">
-                          <div className="relative group shrink-0">
-                            <input type="color" value={s.color || '#3b82f6'} onChange={e => updateSession(s.id, { color: e.target.value })} className="absolute inset-0 opacity-0 cursor-pointer w-full h-full" />
-                            <div className="w-7 h-7 rounded-lg border-2 border-white/10 shadow-lg" style={{ backgroundColor: s.color || '#3b82f6' }} />
-                          </div>
-                          <input value={s.name} onChange={e => updateSession(s.id, { name: e.target.value })} className={`flex-1 bg-transparent text-sm font-black tracking-tight outline-none border-b border-transparent focus:border-indigo-500 py-0.5 transition-all ${isDark ? 'text-white' : 'text-slate-900'}`} />
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div className="space-y-1">
-                            <label className="text-[8px] font-black uppercase text-slate-500 tracking-widest">Start Time</label>
-                            <input type="time" value={s.startTime} onChange={e => updateSession(s.id, { startTime: e.target.value })} className={`w-full px-3 py-2 rounded-xl text-xs font-bold ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-200'}`} />
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-[8px] font-black uppercase text-slate-500 tracking-widest">End Time</label>
-                            <input type="time" value={s.endTime} onChange={e => updateSession(s.id, { endTime: e.target.value })} className={`w-full px-3 py-2 rounded-xl text-xs font-bold ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-50 border-slate-200'}`} />
-                          </div>
-                        </div>
-                      </div>
-                      <button onClick={() => { setCurSessions(prev => prev.filter(x => x.id !== s.id)); showToast('Odstraněno'); }} className="absolute -top-2 -right-2 w-8 h-8 rounded-full bg-rose-600 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all shadow-lg active:scale-90"><Trash2 size={14} /></button>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            </div>
-          )}
-
-          {activeTab === 'notifications' && (
-            <div className="space-y-6">
-              <TradingViewAlertSettings isDark={isDark} onToast={showToast} />
-
-              {isNativeBuild && (
-                <Card isDark={isDark} className="!rounded-lg !p-0 overflow-hidden border-violet-500/30">
-                  <div className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-5 py-4 border-b ${isDark ? 'bg-violet-500/5 border-white/10' : 'bg-violet-50 border-violet-100'}`}>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="px-2 py-1 rounded-md bg-violet-600 text-white text-[8px] font-black uppercase tracking-[0.18em]">{isNativeBuild ? 'iOS Lab' : 'Pouze localhost'}</span>
-                        <h3 className="text-sm font-black uppercase tracking-tight text-[var(--text-primary)]">Alert test lab</h3>
-                      </div>
-                      <p className="mt-1.5 text-[10px] font-bold text-[var(--text-muted)]">{isNativeBuild ? 'Diagnostika a testy současného copieru na tomto iPhonu.' : 'Vyber jednu ukázku pro odeslání na registrovaná zařízení.'}</p>
-                    </div>
-                    <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-[var(--text-muted)]">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                      {isNativeBuild ? 'Nativní iOS alert · toto zařízení' : 'Skutečný Web Push · všechna zařízení'}
-                    </div>
-                  </div>
-
-                  {isNativeBuild && (
-                    <details className="border-t border-[var(--border-subtle)] px-5 py-4">
-                      <summary className="cursor-pointer text-xs font-bold text-[var(--text-muted)]">Hromadný test · {NATIVE_ALERT_GALLERY_COUNT} scénářů</summary>
-                      <p className="mt-3 text-xs leading-relaxed text-[var(--text-muted)]">Tato volba naplánuje všechny ukázky během dvou minut. Testy patří současnému copieru.</p>
-                      <button
-                        type="button"
-                        disabled={pushBusy}
-                        onClick={() => void handleNativeAlertGallery()}
-                        className="mt-3 min-h-11 rounded-xl border border-[var(--border-subtle)] px-4 py-3 text-xs font-bold text-[var(--text-primary)] disabled:opacity-40"
-                      >
-                        {pushBusy ? 'Plánuji galerii…' : `Naplánovat všech ${NATIVE_ALERT_GALLERY_COUNT} scénářů`}
-                      </button>
-                    </details>
-                  )}
-                  {isNativeBuild && (
-                    <div className="px-5 py-4 border-b border-[var(--border-subtle)]">
-                      <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        disabled={pushBusy || !nativePendingNotifications.some(notification => notification.source === 'test')}
-                        onClick={() => void handleCancelNativeAlerts()}
-                        className="px-4 py-3 rounded-xl border border-[var(--border-subtle)] text-[9px] font-black uppercase tracking-widest text-[var(--text-primary)] disabled:opacity-40"
-                      >
-                        Zrušit čekající testy ({nativePendingNotifications.filter(notification => notification.source === 'test').length})
-                      </button>
-                      </div>
-                      {nativePendingNotifications.length > 0 && (
-                        <div className="mt-4 space-y-2">
-                          <p className="text-[8px] font-black uppercase tracking-[0.18em] text-[var(--text-muted)]">Skutečně čeká v iOS</p>
-                          {nativePendingNotifications.map(notification => (
-                            <div key={notification.id} className="flex items-start gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-page)] p-3">
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="truncate text-[10px] font-black text-[var(--text-primary)]">{notification.title}</p>
-                                  <span className={`rounded px-1.5 py-0.5 text-[7px] font-black uppercase ${notification.kind === 'risk' ? 'bg-red-500/10 text-red-500' : notification.kind === 'trade' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-blue-500/10 text-blue-500'}`}>{notification.source === 'sessionReminder' ? 'plán' : notification.kind}</span>
-                                </div>
-                                <p className="mt-1 line-clamp-2 text-[9px] font-semibold text-[var(--text-muted)]">{notification.body}</p>
-                                <p className="mt-1 text-[8px] font-black uppercase tracking-wider text-[var(--text-muted)]">{notification.scheduledAt ? new Date(notification.scheduledAt).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Čas řídí iOS'}{notification.route ? ` · otevře ${notification.route}` : ''}</p>
-                              </div>
-                              {notification.source === 'test' && <button type="button" disabled={pushBusy} onClick={() => void handleCancelNativeAlert(notification.id)} aria-label={`Zrušit ${notification.title}`} className="shrink-0 rounded-lg border border-red-500/20 p-2 text-red-500 disabled:opacity-40"><X size={13} /></button>}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {nativeDeliveredNotifications.length > 0 && (
-                        <div className="mt-4 space-y-2 border-t border-[var(--border-subtle)] pt-4">
-                          <div className="flex items-center justify-between gap-3">
-                            <p className="text-[8px] font-black uppercase tracking-[0.18em] text-[var(--text-muted)]">Doručeno do centra iOS</p>
-                            <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[8px] font-black text-emerald-500">{nativeDeliveredNotifications.length}</span>
-                          </div>
-                          {nativeDeliveredNotifications.map(notification => (
-                            <div key={notification.id} className="flex items-start gap-3 rounded-xl border border-emerald-500/15 bg-emerald-500/[0.04] p-3">
-                              <button type="button" onClick={() => handleOpenDeliveredNativeAlert(notification)} className="min-w-0 flex-1 text-left">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="truncate text-[10px] font-black text-[var(--text-primary)]">{notification.title}</p>
-                                  <span className={`rounded px-1.5 py-0.5 text-[7px] font-black uppercase ${notification.kind === 'risk' ? 'bg-red-500/10 text-red-500' : notification.kind === 'trade' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-blue-500/10 text-blue-500'}`}>{notification.kind}</span>
-                                  {notification.hasAttachment && <span className="rounded bg-violet-500/10 px-1.5 py-0.5 text-[7px] font-black uppercase text-violet-500">screen</span>}
-                                </div>
-                                <p className="mt-1 line-clamp-2 text-[9px] font-semibold text-[var(--text-muted)]">{notification.body}</p>
-                                <p className="mt-1 text-[8px] font-black uppercase tracking-wider text-[var(--text-muted)]">{notification.deliveredAt ? new Date(notification.deliveredAt).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Doručeno systémem'} · klepnutím otevřít {notification.route || 'dashboard'}</p>
-                              </button>
-                              <button type="button" disabled={pushBusy} onClick={() => void handleRemoveDeliveredNativeAlert(notification.id)} aria-label={`Odstranit doručenou notifikaci ${notification.title}`} className="shrink-0 rounded-lg border border-red-500/20 p-2 text-red-500 disabled:opacity-40"><Trash2 size={13} /></button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                </Card>
-              )}
-
-              <Card isDark={isDark}>
-                <SectionHeader icon={Smartphone} title="Doručení na zařízení" subtitle={isNativeBuild ? 'Nativní iOS notifikace' : 'Web Push i při zavřené aplikaci'} color="bg-gradient-to-br from-blue-600 to-indigo-600" isDark={isDark} />
-                <p className={`text-xs mb-5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  {isNativeBuild
-                    ? 'Povol systémová upozornění. Testy se naplánují přímo v iPhonu a fungují i po zavření aplikace.'
-                    : 'Zapni odběr na každém telefonu nebo počítači, kam mají upozornění chodit.'}
-                </p>
-                {!isNativeBuild && pushDiag?.isApple && !pushDiag?.isStandalone && (
-                  <div className="mb-5 p-4 rounded-xl border border-amber-500/20 bg-amber-500/5 text-[10px] font-bold text-amber-500">
-                    Na iPhonu nejdřív v Safari použij Sdílet → Přidat na plochu a otevři AlphaTrade z nové ikony.
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <button onClick={handleEnablePush} disabled={pushBusy || (!isNativeBuild && !!pushDiag?.ready)} className="flex-1 py-3 rounded-xl bg-[var(--text-secondary)] text-[var(--bg-page)] text-[10px] font-black uppercase tracking-widest disabled:opacity-40">
-                    {pushBusy ? 'Ověřuji…' : isNativeBuild && nativeNotificationPermission === 'granted' ? (nativeRemoteRegistered ? 'Ověřit registraci' : 'Obnovit registraci') : pushDiag?.ready ? 'Notifikace aktivní' : 'Zapnout notifikace'}
-                  </button>
-                  {!isNativeBuild && pushDiag?.hasActiveSubscription && <button onClick={handleDisablePush} disabled={pushBusy} className="px-4 py-3 rounded-xl border border-[var(--border-subtle)] text-[10px] font-black uppercase text-[var(--text-muted)]">Vypnout</button>}
-                </div>
-                {/* Test lze spustit i z počítače bez vlastního odběru; endpoint
-                    ho pošle na všechna registrovaná zařízení uživatele. */}
-                {(isNativeBuild || pushDevices.length > 0) && <button onClick={handleTestPush} disabled={pushBusy} className="mt-2 w-full py-3 rounded-xl border border-[var(--border-subtle)] text-[10px] font-black uppercase tracking-widest text-[var(--text-primary)]">{pushBusy ? 'Odesílám…' : (isNativeBuild ? 'Poslat APNs test ze serveru' : `Poslat zkušební notifikaci (${pushDevices.length})`)}</button>}
-                <button onClick={handleSnapshotTestPush} disabled={pushBusy} className="mt-2 w-full py-3 rounded-xl border border-indigo-500/30 bg-indigo-500/5 text-[10px] font-black uppercase tracking-widest text-indigo-400 disabled:opacity-40">{pushBusy ? 'Čekám na worker…' : 'Poslat test snapshotu TradingView'}</button>
-                <p className="mt-2 text-[9px] leading-relaxed text-[var(--text-muted)]">Bez ARMu a bez obchodu: vyfotí pouze layout AlphaTrade Snapshoty, pošle obrázkový APNs test a nic nezapíše do journalu.</p>
-                {isNativeBuild && (
-                  <div className="mt-4 rounded-xl border border-[var(--border-subtle)] p-3">
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <p className="text-[9px] font-black uppercase tracking-widest text-[var(--text-primary)]">Badge na ikoně</p>
-                      <span className="rounded-full bg-rose-600 px-2 py-0.5 text-[9px] font-black text-white">{nativeBadgeCount}</span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2">
-                      {[1, 5].map(count => (
-                        <button key={count} type="button" disabled={pushBusy} onClick={() => void handleNativeBadge(count)} className="rounded-lg bg-rose-600 py-2.5 text-[9px] font-black uppercase tracking-wider text-white disabled:opacity-40">Nastavit {count}</button>
-                      ))}
-                      <button type="button" disabled={pushBusy || nativeBadgeCount === 0} onClick={() => void handleNativeBadge(0)} className="rounded-lg border border-[var(--border-subtle)] py-2.5 text-[9px] font-black uppercase tracking-wider text-[var(--text-primary)] disabled:opacity-40">Vymazat</button>
-                    </div>
-                    <p className="mt-2 text-[9px] font-bold text-[var(--text-muted)]">Testovací notifikace nastaví 1; po jejím otevření se badge automaticky vymaže.</p>
-                  </div>
-                )}
-                <p className="mt-4 text-[10px] font-bold text-[var(--text-muted)]">
-                  {isNativeBuild
-                    ? `Oprávnění iOS: ${nativeNotificationPermission === 'granted' ? 'povoleno' : nativeNotificationPermission}`
-                    : `Aktivní zařízení: ${pushDevices.filter(device => !device.expiredAt).length} / ${pushDevices.length}`}
-                </p>
-                {isNativeBuild && nativeNotificationPermission === 'granted' && (
-                  <div className={`mt-3 rounded-xl border px-3 py-2.5 text-[9px] font-bold ${nativeReminderSync?.omittedCount ? 'border-amber-500/25 bg-amber-500/5 text-amber-500' : 'border-emerald-500/20 bg-emerald-500/5 text-emerald-500'}`}>
-                    {nativeReminderSync?.omittedCount
-                      ? `iOS plán: ${nativeReminderSync.scheduledCount} aktivních, ${nativeReminderSync.omittedCount} vynecháno kvůli systémovému limitu. Omez počet session alertů.`
-                      : `iOS plán session a auditu je aktivní${nativeReminderSync ? ` · ${nativeReminderSync.scheduledCount} opakování Po–Pá` : ''}. Funguje i při vypnuté aplikaci.`}
-                  </div>
-                )}
-              </Card>
-            </div>
-          )}
-
-          {activeTab === 'system' && (
-            <div className="space-y-6">
-              {isNativeBuild && (
-                <Card isDark={isDark} className="border-blue-500/25">
-                  <SectionHeader icon={Smartphone} title="Tento iPhone" subtitle="Ovládání · Soukromí · Oprávnění" color="bg-gradient-to-br from-blue-600 to-cyan-600" isDark={isDark} />
-                  <div className="space-y-5">
-                    <NativeShellTabsSettings />
-                    <div className="rounded-2xl border border-[var(--border-subtle)] p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <p className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">Oprávnění tohoto iPhonu</p>
-                          <p className="mt-1 text-[9px] font-bold text-[var(--text-muted)]">Skutečný systémový stav, ne pouze stav uložený ve webové části.</p>
-                        </div>
-                        <button type="button" onClick={() => void refreshNativePermissionStatus()} className="rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-[8px] font-black uppercase tracking-wider text-[var(--text-primary)]">Obnovit</button>
-                      </div>
-                      <div className="mt-3 grid grid-cols-2 gap-2">
-                        {([
-                          ['notifications', 'Notifikace'],
-                          ['microphone', 'Mikrofon'],
-                          ['speech', 'Rozpoznávání řeči'],
-                        ] as const).map(([key, label]) => {
-                          const state = nativePermissionStatus?.[key] ?? 'unknown';
-                          const allowed = state === 'authorized' || state === 'provisional' || state === 'ephemeral';
-                          return (
-                            <div key={key} className="rounded-xl bg-[var(--bg-page)] p-3">
-                              <p className="text-[8px] font-black uppercase tracking-wider text-[var(--text-muted)]">{label}</p>
-                              <p className={`mt-1 text-[10px] font-black ${allowed ? 'text-emerald-500' : state === 'denied' || state === 'restricted' ? 'text-red-500' : 'text-amber-500'}`}>{nativePermissionLabel(state)}</p>
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <button type="button" disabled={nativeCapabilityBusy} onClick={() => void handleOpenNativeSettings()} className="mt-3 w-full rounded-xl bg-blue-600 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-white disabled:opacity-40">Otevřít Nastavení iOS</button>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--border-subtle)] p-4">
-                      <div>
-                        <p className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">Privacy Mode</p>
-                        <p className="mt-1 text-[9px] font-bold text-[var(--text-muted)]">Při odchodu z appky skryje obsah a návrat chrání Face ID nebo kód zařízení.</p>
-                      </div>
-                      <button
-                        type="button"
-                        disabled={nativeCapabilityBusy}
-                        onClick={() => void handleNativePrivacyToggle()}
-                        className={`shrink-0 rounded-xl px-4 py-2.5 text-[9px] font-black uppercase tracking-wider text-white ${nativePrivacyEnabled ? 'bg-emerald-600' : 'bg-slate-600'}`}
-                      >
-                        {nativePrivacyEnabled ? 'Aktivní' : 'Zapnout'}
-                      </button>
-                    </div>
-                    {nativePrivacyEnabled && (
-                      <button type="button" onClick={() => void handleNativePrivacyLock()} className="w-full rounded-xl border border-[var(--border-subtle)] py-3 text-[9px] font-black uppercase tracking-widest text-[var(--text-primary)]">Uzamknout a vyzkoušet teď</button>
-                    )}
-
-                    <div className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--border-subtle)] p-4">
-                      <div>
-                        <p className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">LIVE bez uspání displeje</p>
-                        <p className="mt-1 text-[9px] font-bold text-[var(--text-muted)]">V LIVE světě nezhasne obrazovka. V Backtestu a na pozadí se zákaz uspání automaticky vypne.</p>
-                        {nativeKeepAwakeEnabled && (
-                          <p className={`mt-2 text-[9px] font-black uppercase tracking-wider ${nativeKeepAwakeEffective ? 'text-emerald-500' : 'text-amber-500'}`}>
-                            {nativeKeepAwakeEffective ? 'iOS právě drží displej vzhůru' : 'Nyní neaktivní — Backtest nebo pozadí'}
-                          </p>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        disabled={nativeCapabilityBusy}
-                        onClick={() => void handleNativeKeepAwakeToggle()}
-                        className={`shrink-0 rounded-xl px-4 py-2.5 text-[9px] font-black uppercase tracking-wider text-white ${nativeKeepAwakeEnabled ? 'bg-emerald-600' : 'bg-slate-600'}`}
-                      >
-                        {nativeKeepAwakeEnabled ? 'Aktivní' : 'Zapnout'}
-                      </button>
-                    </div>
-
-                    <div className="rounded-2xl border border-cyan-500/25 bg-cyan-500/[0.035] p-4">
-                      <div className="flex items-start gap-3">
-                        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-cyan-500/10 text-cyan-500"><Activity size={17} /></span>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">Live Activity</p>
-                            <span className={`rounded-full px-2 py-1 text-[8px] font-black uppercase ${nativeLiveActivityState?.activeCount ? 'bg-emerald-500/10 text-emerald-500' : nativeLiveActivityState?.enabled === false ? 'bg-red-500/10 text-red-500' : 'bg-slate-500/10 text-[var(--text-muted)]'}`}>
-                              {nativeLiveActivityState?.activeCount ? 'Aktivní' : nativeLiveActivityState?.enabled === false ? 'Vypnuto v iOS' : 'Připraveno'}
-                            </span>
-                          </div>
-                          <p className="mt-1 text-[9px] font-bold leading-4 text-[var(--text-muted)]">Test seance a P&amp;L na zamčené obrazovce; na podporovaných iPhonech také Dynamic Island. Data jsou označená TEST a nic neposílají brokerovi.</p>
-                        </div>
-                      </div>
-                      <div className="mt-3 grid grid-cols-2 gap-2">
-                        <button type="button" disabled={nativeCapabilityBusy || !!nativeLiveActivityState?.activeCount || nativeLiveActivityState?.enabled === false} onClick={() => void handleNativeLiveActivity('start')} className="rounded-xl bg-cyan-600 px-3 py-3 text-[9px] font-black uppercase tracking-wider text-white disabled:opacity-35">Spustit test</button>
-                        <button type="button" disabled={nativeCapabilityBusy || !nativeLiveActivityState?.activeCount} onClick={() => void handleNativeLiveActivity('profit')} className="rounded-xl bg-emerald-600 px-3 py-3 text-[9px] font-black uppercase tracking-wider text-white disabled:opacity-35">Update +P&amp;L</button>
-                        <button type="button" disabled={nativeCapabilityBusy || !nativeLiveActivityState?.activeCount} onClick={() => void handleNativeLiveActivity('risk')} className="rounded-xl bg-orange-600 px-3 py-3 text-[9px] font-black uppercase tracking-wider text-white disabled:opacity-35">Risk alert</button>
-                        <button type="button" disabled={nativeCapabilityBusy || !nativeLiveActivityState?.activeCount} onClick={() => void handleNativeLiveActivity('end')} className="rounded-xl border border-[var(--border-subtle)] px-3 py-3 text-[9px] font-black uppercase tracking-wider text-[var(--text-primary)] disabled:opacity-35">Ukončit</button>
-                      </div>
-                    </div>
-
-                    <div>
-                      <p className="mb-2 text-[9px] font-black uppercase tracking-widest text-[var(--text-muted)]">Haptická odezva</p>
-                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                        {(['selection', 'success', 'warning', 'error'] as NativeHapticStyle[]).map(style => (
-                          <button key={style} type="button" onClick={() => void handleHapticTest(style)} className="rounded-xl border border-[var(--border-subtle)] px-3 py-3 text-[9px] font-black uppercase tracking-wider text-[var(--text-primary)]">{style}</button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-indigo-500/25 bg-indigo-500/[0.035] p-4">
-                      <div className="flex items-start gap-3">
-                        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-500"><CalendarPlus size={17} /></span>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">Apple Kalendář</p>
-                          <p className="mt-1 text-[9px] font-bold leading-4 text-[var(--text-muted)]">Otevře systémový editor s LIVE seancí na příští celou hodinu. AlphaTrade nečte tvoje kalendáře a bez klepnutí na Přidat nic neuloží.</p>
-                        </div>
-                      </div>
-                      <button type="button" disabled={nativeCapabilityBusy} onClick={() => void handleNativeCalendarEvent()} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-white disabled:opacity-40">
-                        <CalendarPlus size={14} /> Naplánovat LIVE seanci
-                      </button>
-                    </div>
-
-                    <div className="rounded-2xl border border-blue-500/25 bg-blue-500/[0.035] p-4">
-                      <div className="flex items-start gap-3">
-                        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-500/10 text-blue-500"><Zap size={17} /></span>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">Ovládací centrum iOS</p>
-                          <p className="mt-1 text-[9px] font-bold leading-4 text-[var(--text-muted)]">Přidej si ovladače AlphaTrade LIVE a Zapsat obchod přes upravení Ovládacího centra. Oba pouze otevřou správnou část appky; nikdy neposílají příkaz brokerovi ani samy neukládají obchod.</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      disabled={nativeCapabilityBusy}
-                      onClick={() => void handleNativeShareTest()}
-                      className="flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--border-subtle)] py-3 text-[9px] font-black uppercase tracking-widest text-[var(--text-primary)] disabled:opacity-40"
-                    >
-                      <Share2 size={14} /> Otevřít iOS sdílení
-                    </button>
-
-                    <div className="rounded-2xl border border-[var(--border-subtle)] p-4">
-                      <p className="text-[11px] font-black uppercase tracking-widest text-[var(--text-primary)]">Nativní diktování poznámky</p>
-                      <p className="mt-1 text-[9px] font-bold text-[var(--text-muted)]">Apple Speech poslouchá maximálně 30 sekund. Test nic automaticky neukládá ani neposílá.</p>
-                      <button
-                        type="button"
-                        disabled={nativeCapabilityBusy}
-                        onClick={() => void handleNativeDictation()}
-                        className={`mt-3 w-full rounded-xl px-4 py-3 text-[9px] font-black uppercase tracking-widest text-white ${nativeDictating ? 'bg-red-600' : 'bg-blue-600'}`}
-                      >
-                        {nativeDictating ? 'Zastavit diktování' : 'Začít diktovat'}
-                      </button>
-                      {nativeDictationText && (
-                        <div className="mt-3 rounded-xl bg-[var(--bg-page)] p-3 text-[10px] font-semibold text-[var(--text-muted)]">
-                          <p>{nativeDictationText}</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </Card>
-              )}
-              {/* Accent Color Picker */}
-              <Card isDark={isDark}>
-                <SectionHeader icon={Sliders} title="Accent Color" subtitle="Personalizuj barvu rozhraní" color="bg-gradient-to-br from-purple-600 to-pink-600" isDark={isDark} />
-                <p className={`text-xs mb-6 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  Vyber akcentovou barvu, která se objeví na buttonech, aktivních prvcích a zvýrazněních v celé aplikaci.
-                </p>
-                <div className="grid grid-cols-4 sm:grid-cols-7 gap-3">
-                  {[
-                    { id: 'blue', color: '#3b82f6', label: 'Modrá' },
-                    { id: 'purple', color: '#a855f7', label: 'Fialová' },
-                    { id: 'pink', color: '#ec4899', label: 'Růžová' },
-                    { id: 'green', color: '#10b981', label: 'Zelená' },
-                    { id: 'orange', color: '#f97316', label: 'Oranžová' },
-                    { id: 'red', color: '#ef4444', label: 'Červená' },
-                    { id: 'cyan', color: '#06b6d4', label: 'Cyan' },
-                  ].map(ac => (
-                    <button
-                      key={ac.id}
-                      onClick={() => {
-                        if (onAccentColorChange) {
-                          onAccentColorChange(ac.id);
-                          showToast(`${ac.label} aktivována`);
-                        }
-                      }}
-                      className={`group relative flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all duration-300 ${accentColor === ac.id
-                        ? 'border-white/40 scale-105'
-                        : isDark
-                          ? 'border-white/5 hover:border-white/20'
-                          : 'border-slate-200 hover:border-slate-300'
-                        }`}
-                      style={{
-                        backgroundColor: accentColor === ac.id ? `${ac.color}20` : 'transparent'
-                      }}
-                    >
-                      <div
-                        className="w-12 h-12 rounded-xl shadow-lg transition-all duration-300 group-hover:scale-110"
-                        style={{
-                          backgroundColor: ac.color,
-                          boxShadow: accentColor === ac.id ? `0 0 20px ${ac.color}80` : `0 4px 12px ${ac.color}40`
-                        }}
-                      />
-                      <span className={`text-[9px] font-black uppercase tracking-widest transition-all ${accentColor === ac.id
-                        ? isDark ? 'text-white' : 'text-slate-900'
-                        : 'text-slate-500'
-                        }`}>
-                        {ac.label}
-                      </span>
-                      {accentColor === ac.id && (
-                        <motion.div
-                          layoutId="accent-indicator"
-                          className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-white shadow-lg flex items-center justify-center"
-                        >
-                          <Check size={14} style={{ color: ac.color }} strokeWidth={3} />
-                        </motion.div>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </Card>
-
-              <div className="grid grid-cols-1 gap-6">
-                {/* Připomínky přípravy (dříve Alpha Guardian — zůstaly jen notifikace) */}
-                <Card isDark={isDark}>
-                  <SectionHeader icon={Shield} title="Připomínky přípravy" subtitle="Notifikace před startem seance" color="bg-emerald-600" isDark={isDark} />
-                  <div className="space-y-2">
-                    <Toggle
-                      active={systemSettings.guardianEnabled}
-                      onClick={() => updateSystem('guardianEnabled', !systemSettings.guardianEnabled)}
-                      label="Připomínat přípravu"
-                      desc="Když před seancí ještě nemáš hotovou přípravu."
-                      isDark={isDark}
-                    />
-                    <AnimatePresence>
-                      {systemSettings.guardianEnabled && (
-                        <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="space-y-2 pl-4 border-l border-emerald-500/20 ml-2 py-2">
-                          <Toggle active={systemSettings.morningPrepAlert60m} onClick={() => updateSystem('morningPrepAlert60m', !systemSettings.morningPrepAlert60m)} label="60 minut před startem" desc="Informační připomínka" isDark={isDark} />
-                          <Toggle active={systemSettings.morningPrepAlert15m} onClick={() => updateSystem('morningPrepAlert15m', !systemSettings.morningPrepAlert15m)} label="15 minut před startem" desc="Důrazná připomínka" isDark={isDark} />
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                </Card>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <Card isDark={isDark}>
-                  <SectionHeader icon={Check} title="Večerní Audit" subtitle="Uzavření obchodního dne" color="bg-indigo-600" isDark={isDark} />
-                  <div className="space-y-4">
-                    <Toggle
-                      active={systemSettings.eveningAuditAlertEnabled}
-                      onClick={() => updateSystem('eveningAuditAlertEnabled', !systemSettings.eveningAuditAlertEnabled)}
-                      label="Připomínka Auditu"
-                      desc="Kdy chcete uzavřít deník?"
-                      isDark={isDark}
-                    />
-                    {systemSettings.eveningAuditAlertEnabled && (
-                      <div className="px-4">
-                        <label className="text-[8px] font-black uppercase text-[var(--text-muted)] tracking-widest mb-1.5 block">Čas notifikace</label>
-                        <input
-                          type="time"
-                          value={systemSettings.eveningAuditAlertTime}
-                          onChange={(e) => updateSystem('eveningAuditAlertTime', e.target.value)}
-                          className={`w-full max-w-[120px] px-4 py-2.5 rounded-2xl text-xs font-bold outline-none border transition-all ${isDark ? 'bg-white/5 border-white/10 text-white' : 'bg-[var(--bg-input)] border-[var(--border-subtle)] text-[var(--text-primary)]'
-                            }`}
-                        />
-                      </div>
-                    )}
-                  </div>
-                </Card>
-
-              </div>
-
-              {/* Coach Memory Management */}
-              <Card isDark={isDark}>
-                <SectionHeader icon={Brain} title="Paměť AI Coache" subtitle="Hluboká dlouhodobá paměť — fakta, pozorování, epizody" color="bg-gradient-to-br from-indigo-600 to-purple-600" isDark={isDark} />
-
-                {/* Profile (facts + preferences) */}
-                <div className="space-y-4 mb-6">
-                  <div className={`p-4 rounded-2xl border ${isDark ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
-                    <h4 className={`text-[10px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}>Fakta o tobě (Layer 1)</h4>
-                    {Object.keys(coachProfile.facts).length > 0 ? (
-                      <div className="space-y-1 text-xs">
-                        {Object.entries(coachProfile.facts).map(([k, v]) => (
-                          <div key={k} className="flex gap-2">
-                            <span className={`font-bold min-w-[140px] ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>{k}:</span>
-                            <span className={isDark ? 'text-slate-300' : 'text-slate-800'}>{Array.isArray(v) ? v.join(', ') : typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className={`text-xs italic ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>Coach si zatím nezapamatoval žádná fakta. Bude přidávat během konverzací.</p>
-                    )}
-                  </div>
-
-                  <div className={`p-4 rounded-2xl border ${isDark ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
-                    <h4 className={`text-[10px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}>Preference komunikace (Layer 2)</h4>
-                    {Object.keys(coachProfile.preferences).length > 0 ? (
-                      <div className="space-y-1 text-xs">
-                        {Object.entries(coachProfile.preferences).map(([k, v]) => (
-                          <div key={k} className="flex gap-2">
-                            <span className={`font-bold min-w-[140px] ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>{k}:</span>
-                            <span className={isDark ? 'text-slate-300' : 'text-slate-800'}>{Array.isArray(v) ? v.join(', ') : typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className={`text-xs italic ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>Žádné preference. Můžeš Coachovi v chatu říct: "Vždy ukazuj v R", "Buď stručnější", atd.</p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Long-term memory list */}
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <h4 className={`text-[10px] font-black uppercase tracking-widest ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`}>
-                      Dlouhodobá paměť ({coachMemories.filter(m => isCoachMemoryActive(m)).length} aktivních · {coachMemories.filter(m => !isCoachMemoryActive(m)).length} v historii)
-                    </h4>
-                    <div className="flex gap-1 text-[9px] flex-wrap justify-end">
-                      {(['active', 'history'] as const).map(status => (
-                        <button
-                          key={status}
-                          onClick={() => setMemoryStatusFilter(status)}
-                          className={`px-2.5 py-1 rounded-lg font-black uppercase tracking-wider transition-all ${memoryStatusFilter === status
-                            ? status === 'active' ? 'bg-emerald-600 text-white' : 'bg-slate-600 text-white'
-                            : isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                          }`}
-                        >
-                          {status === 'active' ? 'Aktivní' : 'Historie'}
-                        </button>
-                      ))}
-                      {(['all', 'observation', 'episode', 'conversation_summary', 'commitment'] as const).map(t => (
-                        <button
-                          key={t}
-                          onClick={() => setMemoryFilter(t)}
-                          className={`px-2.5 py-1 rounded-lg font-black uppercase tracking-wider transition-all ${memoryFilter === t
-                            ? 'bg-indigo-600 text-white'
-                            : isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                          }`}
-                        >
-                          {t === 'all' ? 'Vše' : t === 'observation' ? 'Pozorování' : t === 'episode' ? 'Epizody' : t === 'commitment' ? 'Závazky' : 'Shrnutí'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {filteredMemories.length === 0 ? (
-                    <p className={`text-xs italic p-4 rounded-2xl ${isDark ? 'bg-white/5 text-slate-500' : 'bg-slate-50 text-slate-500'}`}>
-                      Žádné záznamy v této kategorii. Coach si je sám vytvoří při konverzacích a po důležitých obchodech.
-                    </p>
-                  ) : (
-                    <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
-                      {filteredMemories.map(m => {
-                        const typeLabel = m.type === 'observation' ? 'Pozorování' : m.type === 'episode' ? 'Epizoda' : m.type === 'commitment' ? 'Závazek' : 'Shrnutí';
-                        const typeClass = m.type === 'episode'
-                          ? 'bg-amber-500/10 text-amber-500 border-amber-500/20'
-                          : m.type === 'conversation_summary'
-                            ? 'bg-blue-500/10 text-blue-500 border-blue-500/20'
-                            : m.type === 'commitment'
-                              ? 'bg-purple-500/10 text-purple-500 border-purple-500/20'
-                              : 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20';
-                        const validation = String(m.metadata?.validation_state || (m.type === 'commitment' ? 'user_stated' : 'hypothesis'));
-                        const confidence = typeof m.metadata?.confidence === 'number' ? Math.round(m.metadata.confidence * 100) : null;
-                        const evidenceCount = Array.isArray(m.metadata?.evidence) ? m.metadata.evidence.length : 0;
-                        const counterCount = Array.isArray(m.metadata?.counter_evidence) ? m.metadata.counter_evidence.length : 0;
-                        const status = String(m.metadata?.status || 'active');
-                        return (
-                          <div key={m.id} className={`p-3 rounded-xl border flex items-start gap-3 group ${isDark ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1 flex-wrap">
-                                <span className={`text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded border ${typeClass}`}>
-                                  {typeLabel}
-                                </span>
-                                <span className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded border ${validation === 'supported' || validation === 'user_stated'
-                                  ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
-                                  : validation === 'contested'
-                                    ? 'bg-rose-500/10 text-rose-500 border-rose-500/20'
-                                    : 'bg-amber-500/10 text-amber-500 border-amber-500/20'
-                                }`}>
-                                  {validation === 'supported' ? 'podloženo' : validation === 'user_stated' ? 'řečeno uživatelem' : validation === 'contested' ? 'sporné' : 'hypotéza'}
-                                </span>
-                                {status !== 'active' && <span className="text-[9px] font-black uppercase text-slate-500">{status === 'superseded' ? 'nahrazeno' : 'staženo'}</span>}
-                                {m.memory_date && (
-                                  <span className={`text-[9px] font-mono ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>{m.memory_date}</span>
-                                )}
-                                {m.importance >= 8 && (
-                                  <span className="text-[9px] font-black text-amber-500">⚡ důležité</span>
-                                )}
-                              </div>
-                              <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{m.content}</p>
-                              <div className={`mt-2 text-[9px] font-bold ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                                {confidence != null ? `Confidence ${confidence}% · ` : ''}evidence {evidenceCount}{counterCount ? ` · counter-evidence ${counterCount}` : ''}
-                                {m.metadata?.validation_note ? ` · ${String(m.metadata.validation_note)}` : ''}
-                              </div>
-                            </div>
-                            <button
-                              onClick={() => handleForgetMemory(m.id)}
-                              className={`opacity-0 group-hover:opacity-100 p-1.5 rounded-lg transition-all ${isDark ? 'hover:bg-rose-500/20 text-slate-500 hover:text-rose-400' : 'hover:bg-rose-50 text-slate-400 hover:text-rose-600'}`}
-                              title="Smazat tuto vzpomínku"
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {coachMemories.length > 0 && (
-                  <div className="mt-4 pt-4 border-t border-slate-700/30 flex flex-col gap-2">
-                    {!confirmClearMemory ? (
-                      <button
-                        onClick={() => setConfirmClearMemory(true)}
-                        className={`self-start text-[9px] font-black uppercase tracking-widest px-3 py-2 rounded-xl transition-all ${isDark ? 'text-rose-400 hover:bg-rose-500/10 border border-rose-500/20' : 'text-rose-600 hover:bg-rose-50 border border-rose-200'}`}
-                      >
-                        Vymazat veškerou paměť
-                      </button>
-                    ) : (
-                      <div className={`flex items-center gap-2 p-3 rounded-xl border ${isDark ? 'bg-rose-500/10 border-rose-500/20' : 'bg-rose-50 border-rose-200'}`}>
-                        <span className={`text-xs ${isDark ? 'text-rose-300' : 'text-rose-700'}`}>Smazat všech {coachMemories.length} záznamů? Tato akce je nevratná.</span>
-                        <button onClick={handleClearAllMemory} className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-[10px] font-black uppercase">Smazat</button>
-                        <button onClick={() => setConfirmClearMemory(false)} className="px-3 py-1.5 rounded-lg bg-slate-600 text-white text-[10px] font-black uppercase">Zrušit</button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </Card>
-
-            </div>
-          )}
-        </div>
-      </main>
+          ) : (
+            <p className="theme-card rounded-lg px-4 py-8 text-center text-sm text-[var(--text-secondary)]">Nic nenalezeno pro „{search.trim()}“.</p>
+          )
+        ) : renderTab(activeTab)}
+      </SettingsSearchContext.Provider>
 
       <ConfirmationModal
         isOpen={!!itemToDelete}
@@ -1851,47 +1523,43 @@ const Settings: React.FC<SettingsProps> = ({
           showToast('Odstraněno');
         }}
         title={
-            itemToDelete?.type === 'rule' ? 'Smazat pravidlo' :
-              itemToDelete?.type === 'emotion' ? 'Smazat emoci' :
-                itemToDelete?.type === 'session' ? 'Smazat seanci' : 'Smazat položku'
+          itemToDelete?.type === 'rule' ? 'Smazat pravidlo' :
+            itemToDelete?.type === 'emotion' ? 'Smazat emoci' :
+              itemToDelete?.type === 'session' ? 'Smazat seanci' : 'Smazat položku'
         }
         message="Opravdu chcete tuto položku trvale odstranit? Tato akce je nevratná."
         theme={theme}
       />
 
-      {/* Emoji Picker Modal */}
-      {
-        emojiPickerTarget && (
-          <EmojiPicker
-            isDark={isDark}
-            onClose={() => setEmojiPickerTarget(null)}
-            onSelect={(emoji) => {
-              const newList = [...weeklyFocusList];
-              const exIdx = newList.findIndex(wf => wf.weekISO === selectedWeek);
-              if (exIdx !== -1) {
-                const newGoals = [...newList[exIdx].goals];
-                newGoals[emojiPickerTarget.goalIdx] = { ...newGoals[emojiPickerTarget.goalIdx], emoji };
-                newList[exIdx] = { ...newList[exIdx], goals: newGoals };
-                setWeeklyFocusList(newList);
-              }
-            }}
-          />
-        )
-      }
+      {emojiPickerTarget && (
+        <EmojiPicker
+          onClose={() => setEmojiPickerTarget(null)}
+          onSelect={(emoji) => {
+            const newList = [...weeklyFocusList];
+            const exIdx = newList.findIndex(wf => wf.weekISO === selectedWeek);
+            if (exIdx !== -1) {
+              const newGoals = [...newList[exIdx].goals];
+              newGoals[emojiPickerTarget.goalIdx] = { ...newGoals[emojiPickerTarget.goalIdx], emoji };
+              newList[exIdx] = { ...newList[exIdx], goals: newGoals };
+              setWeeklyFocusList(newList);
+            }
+          }}
+        />
+      )}
 
-      {/* Persistence Notification Toast */}
+      {/* Potvrzení uložení */}
       <AnimatePresence>
         {toast && (
           <motion.div
             key={toast.id}
-            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+            initial={{ opacity: 0, y: 30, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.9, y: 20 }}
-            className="native-fixed-above-tab-bar fixed bottom-12 left-1/2 -translate-x-1/2 z-[300] pointer-events-none"
+            exit={{ opacity: 0, scale: 0.95, y: 10 }}
+            className="native-fixed-above-tab-bar pointer-events-none fixed bottom-12 left-1/2 z-[300] -translate-x-1/2"
           >
-            <div className={`px-6 py-3 rounded-2xl border shadow-2xl flex items-center gap-3 backdrop-blur-xl ${isDark ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400' : 'bg-emerald-600 border-emerald-500 text-white'}`}>
-              <Check size={16} strokeWidth={3} className={isDark ? 'text-emerald-400' : 'text-white'} />
-              <span className="text-[10px] font-black uppercase tracking-[0.2em]">{toast.message}</span>
+            <div role="status" className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-[var(--bg-card)] px-4 py-2.5 text-emerald-500 shadow-2xl backdrop-blur-xl">
+              <Check size={15} strokeWidth={3} />
+              <span className="text-xs font-semibold">{toast.message}</span>
             </div>
           </motion.div>
         )}

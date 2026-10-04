@@ -106,7 +106,7 @@ export const LiveDayTrigger = ({ summary, onOpen }: { summary: LiveDaySummary; o
       title={note ?? 'Karta dne — rozpad dnešního P&L po účtech'}
       className="live-day-trigger flex items-center gap-2.5 rounded-lg border border-[var(--border-subtle)] py-1.5 pl-3 pr-2.5"
     >
-      <span className="whitespace-nowrap text-[9px] font-black uppercase tracking-[0.12em] text-[var(--text-secondary)]">Dnešní P&L</span>
+      <span className="whitespace-nowrap text-[11px] font-semibold text-[var(--text-secondary)]">Dnešní P&L</span>
       <span className={`text-sm font-extrabold tabular-nums ${summary.confirmed == null
         ? 'text-[var(--text-secondary)]'
         : summary.confirmed > 0 ? 'text-emerald-500' : summary.confirmed < 0 ? 'text-rose-500' : 'text-[var(--text-primary)]'}`}>

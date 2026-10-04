@@ -128,7 +128,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
 
     const isUsd = unit === '$';
     const cardCls = isDark ? 'bg-white/[0.03] border-white/5' : 'bg-white border-slate-200';
-    const eyebrow = 'text-[9px] font-black uppercase tracking-[0.2em] text-slate-500';
+    const eyebrow = 'text-[11px] font-semibold text-slate-500';
     const bigMono = 'font-mono font-black tracking-tighter tabular-nums';
 
     const worldAccounts = useMemo(
@@ -280,7 +280,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
         return (
             <div className={`p-10 rounded-3xl border text-center ${cardCls}`}>
                 <FlaskConical size={32} className="text-slate-400 mx-auto mb-3" />
-                <h3 className={`text-base font-black uppercase tracking-tight mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                <h3 className={`text-base font-semibold tracking-tight mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
                     Zatím žádná data pro Lab
                 </h3>
                 <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
@@ -337,7 +337,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
     // ── Pomocné UI kusy ─────────────────────────────────────────────────────
     const coverageChip = (label: string, covered: number, total: number) => (
         <span
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[9px] font-black uppercase tracking-widest ${
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold ${
                 covered === 0
                     ? 'border-rose-500/30 text-rose-500 bg-rose-500/5'
                     : covered < total
@@ -353,7 +353,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
     const askCoachButton = (prompt: string) => onAskAI ? (
         <button
             onClick={() => onAskAI(prompt)}
-            className={`mt-3 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${
+            className={`mt-3 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 ${
                 isDark ? 'bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25' : 'bg-cyan-500 text-white hover:bg-cyan-600'
             }`}
         >
@@ -427,7 +427,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                     : isDark ? 'bg-white/[0.03] border-white/5 hover:border-white/15' : 'bg-white border-slate-200 hover:border-slate-300'
                             }`}
                         >
-                            <p className={`text-[10px] font-black uppercase tracking-[0.18em] flex items-center gap-1.5 ${active ? (isDark ? 'text-white' : 'text-slate-900') : 'text-slate-400'}`}>
+                            <p className={`text-[11px] font-semibold flex items-center gap-1.5 ${active ? (isDark ? 'text-white' : 'text-slate-900') : 'text-slate-400'}`}>
                                 <Icon size={11} /> {tb.label}
                             </p>
                             <p className="text-[10px] text-slate-500 mt-0.5">{tb.sub}</p>
@@ -474,7 +474,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                 return (
                                     <div key={s.name} className={`flex items-center gap-3 py-2.5 border-t ${isDark ? 'border-white/5' : 'border-slate-100'}`}>
                                         <span className={`w-24 text-xs font-bold truncate ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>{s.name}</span>
-                                        <div className={`flex-1 h-2 rounded-full overflow-hidden ${isDark ? 'bg-white/5' : 'bg-slate-100'}`}>
+                                        <div className={`flex-1 h-2 rounded-full overflow-hidden bg-[var(--bg-page)]`}>
                                             <div
                                                 className="h-full rounded-full transition-all duration-500"
                                                 style={{
@@ -499,7 +499,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                 onClick={() => setTab('stole')}
                                 className="text-left rounded-2xl p-5 border border-emerald-500/25 bg-gradient-to-br from-emerald-500/10 to-transparent hover:border-emerald-500/50 transition-all"
                             >
-                                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-500">Necháváš peníze na stole?</p>
+                                <p className="text-[11px] font-semibold text-emerald-500">Necháváš peníze na stole?</p>
                                 <p className={`text-sm mt-2 leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
                                     {cf.bestFixed
                                         ? <>Nejlepší varianta SL by přinesla <b className={isDark ? 'text-white' : 'text-slate-900'}>{fmtVal(unit, cf.bestFixed.r, cf.bestFixed.usd)}</b> místo tvých <b className={isDark ? 'text-white' : 'text-slate-900'}>{fmtVal(unit, cf.real.r, cf.real.usd)}</b> <ChevronRight size={12} className="inline" /></>
@@ -510,7 +510,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                 onClick={() => setTab('bias')}
                                 className="text-left rounded-2xl p-5 border border-cyan-500/25 bg-gradient-to-br from-cyan-500/10 to-transparent hover:border-cyan-500/50 transition-all"
                             >
-                                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-500">Pomáhá ti bias?</p>
+                                <p className="text-[11px] font-semibold text-cyan-500">Pomáhá ti bias?</p>
                                 <p className={`text-sm mt-2 leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
                                     {bias.alignedSharePct != null
                                         ? <>Obchody ve směru biasu udělaly <b className={isDark ? 'text-white' : 'text-slate-900'}>{bias.alignedSharePct} %</b> celkového výsledku <ChevronRight size={12} className="inline" /></>
@@ -528,7 +528,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                     {cf.covered === 0 ? (
                         <div className={`p-10 rounded-3xl border text-center ${cardCls}`}>
                             <Scale size={32} className="text-slate-400 mx-auto mb-3" />
-                            <h3 className={`text-base font-black uppercase tracking-tight mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>Chybí counterfactual data</h3>
+                            <h3 className={`text-base font-semibold tracking-tight mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>Chybí counterfactual data</h3>
                             <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
                                 Žádný z {ds.trades.length} obchodů nemá counterfactual blok (varianty SL dopočítané z barů).
                                 Sbírá ho AlphaBridge extension při zápisu obchodu z grafu — manuální a importované obchody ho nemají.
@@ -545,17 +545,17 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                             {/* 3 hero karty */}
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
                                 <div className={`p-5 rounded-2xl border ${cardCls}`}>
-                                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Tvoje realita</p>
+                                    <p className="text-[11px] font-semibold text-slate-500">Tvoje realita</p>
                                     <p className={`${bigMono} text-[26px] mt-2 text-cyan-500`}>{fmtVal(unit, cf.real.r, cf.real.usd)}</p>
                                     <p className="text-[10px] text-slate-500 mt-1.5">skutečně zapsané výsledky ({cf.real.n} obchodů)</p>
                                 </div>
-                                <div className={`p-5 rounded-2xl border border-emerald-500/25 ${isDark ? 'bg-white/[0.03]' : 'bg-white'}`}>
-                                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-500">Nejlepší varianta</p>
+                                <div className={`p-5 rounded-2xl border border-emerald-500/25 ${isDark ? 'bg-[var(--bg-page)]' : 'bg-[var(--bg-card)]'}`}>
+                                    <p className="text-[11px] font-semibold text-emerald-500">Nejlepší varianta</p>
                                     <p className={`${bigMono} text-[26px] mt-2 text-emerald-500`}>{cf.bestFixed ? fmtVal(unit, cf.bestFixed.r, cf.bestFixed.usd) : '—'}</p>
                                     <p className="text-[10px] text-slate-500 mt-1.5">{cf.bestFixed ? `${cf.bestFixed.label} · ${cf.bestFixed.sub} (${cf.bestFixed.n} obchodů)` : ''}</p>
                                 </div>
                                 <div className="p-5 rounded-2xl border border-amber-500/30 bg-gradient-to-br from-amber-500/10 to-transparent">
-                                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-500">Na stole</p>
+                                    <p className="text-[11px] font-semibold text-amber-500">Na stole</p>
                                     <p className={`${bigMono} text-[26px] mt-2 text-amber-500`}>{isUsd ? fmtUsd(cf.deltaUsd) : fmtR(cf.deltaR)}</p>
                                     <p className="text-[10px] text-slate-500 mt-1.5">rozdíl mezi realitou a optimem</p>
                                 </div>
@@ -569,7 +569,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                         <span className="text-[10px] text-slate-500">z {cf.covered} obchodů · dopočítáno z barů</span>
                                         <button
                                             onClick={() => setShowTrail(s => !s)}
-                                            className={`px-2.5 py-1 rounded-lg border text-[9px] font-black uppercase tracking-widest transition-all ${
+                                            className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-all ${
                                                 showTrail
                                                     ? 'border-cyan-500/40 text-cyan-500 bg-cyan-500/10'
                                                     : isDark ? 'border-white/10 text-slate-500' : 'border-slate-200 text-slate-400'
@@ -584,8 +584,8 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                         <div className="w-32 md:w-36 shrink-0">
                                             <p className={`text-xs font-bold flex items-center gap-1.5 flex-wrap ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>
                                                 {v.label}
-                                                {v.isReal && <span className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-500">Realita</span>}
-                                                {isBest && <span className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-500">Nejlepší</span>}
+                                                {v.isReal && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-500">Realita</span>}
+                                                {isBest && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-500">Nejlepší</span>}
                                             </p>
                                             <p className="text-[10px] text-slate-500">
                                                 {v.sub}
@@ -593,7 +593,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                                 {!v.isReal && v.n < cf.covered ? ` · ${v.n}/${cf.covered}` : ''}
                                             </p>
                                         </div>
-                                        <div className={`flex-1 h-7 rounded-lg overflow-hidden ${isDark ? 'bg-white/[0.03]' : 'bg-slate-100'}`}>
+                                        <div className={`flex-1 h-7 rounded-lg overflow-hidden bg-[var(--bg-page)]`}>
                                             <div className="h-full rounded-lg transition-all duration-500" style={{ width: `${pct}%`, background: fill }} />
                                         </div>
                                         <span className={`w-20 md:w-24 text-right text-sm font-mono font-black tabular-nums ${valCls}`}>{valStr}</span>
@@ -605,14 +605,14 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
                                 {trailInsight && (
                                     <div className={`p-5 rounded-2xl border border-l-[3px] border-l-rose-500 ${cardCls}`}>
-                                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-rose-500">Set & forget vs. trailing</p>
+                                        <p className="text-[11px] font-semibold text-rose-500">Set & forget vs. trailing</p>
                                         <p className={`text-[13px] mt-2 leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>{trailInsight}</p>
                                         {askCoachButton(`V Labu (Na stole) mi vyšlo tohle srovnání řízení pozice — čísla jsou spočítaná deterministicky z counterfactual dat (${cf.covered} obchodů): ${trailInsight} Co z toho plyne pro můj playbook?`)}
                                     </div>
                                 )}
                                 {leftInsight && (
                                     <div className={`p-5 rounded-2xl border border-l-[3px] border-l-emerald-500 ${cardCls}`}>
-                                        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-500">Kde utekl zisk</p>
+                                        <p className="text-[11px] font-semibold text-emerald-500">Kde utekl zisk</p>
                                         <p className={`text-[13px] mt-2 leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>{leftInsight}</p>
                                         {askCoachButton(`V Labu (Na stole) mi vyšlo: ${leftInsight} Jak mám upravit výběr TP targetů?`)}
                                     </div>
@@ -629,7 +629,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                     {ds.coverage.withBias === 0 ? (
                         <div className={`p-10 rounded-3xl border text-center ${cardCls}`}>
                             <FlaskConical size={32} className="text-slate-400 mx-auto mb-3" />
-                            <h3 className={`text-base font-black uppercase tracking-tight mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>Chybí bias data</h3>
+                            <h3 className={`text-base font-semibold tracking-tight mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>Chybí bias data</h3>
                             <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
                                 {world === 'live'
                                     ? 'Žádný obchod nejde spárovat s biasem. Na live se bias bere z ranní přípravy (Market bias, případně bias na session kartě) — vyplň ho v Deníku před obchodováním a Lab změří, jestli ti pomáhá. Neutral se nepočítá jako bias.'
@@ -646,8 +646,8 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                         ? (isDark ? 'border-white/5' : 'border-slate-200')
                                         : g.key === 'aligned' ? 'border-emerald-500/30' : g.key === 'neutral' ? 'border-blue-500/25' : 'border-rose-500/30';
                                     return (
-                                        <div key={g.key} className={`p-5 rounded-2xl border ${borderCls} ${isDark ? 'bg-white/[0.03]' : 'bg-white'}`}>
-                                            <p className={`text-[10px] font-black uppercase tracking-[0.18em] flex items-center gap-2 ${g.n === 0 ? 'text-slate-500' : accentText}`}>
+                                        <div key={g.key} className={`p-5 rounded-2xl border ${borderCls} ${isDark ? 'bg-[var(--bg-page)]' : 'bg-[var(--bg-card)]'}`}>
+                                            <p className={`text-[11px] font-semibold flex items-center gap-2 ${g.n === 0 ? 'text-slate-500' : accentText}`}>
                                                 <span className={`w-2 h-2 rounded-full ${g.n === 0 ? 'bg-slate-500' : `bg-${accent}-500`}`} style={g.n > 0 ? { boxShadow: '0 0 8px currentColor' } : undefined} />
                                                 {g.label}
                                             </p>
@@ -659,11 +659,11 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                             </p>
                                             <div className={`flex gap-5 mt-4 pt-3 border-t ${isDark ? 'border-white/5' : 'border-slate-100'}`}>
                                                 <div>
-                                                    <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Obchody</p>
+                                                    <p className="text-[11px] font-semibold text-slate-500">Obchody</p>
                                                     <p className={`text-sm font-mono font-black mt-0.5 ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>{g.n}</p>
                                                 </div>
                                                 <div>
-                                                    <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Win rate</p>
+                                                    <p className="text-[11px] font-semibold text-slate-500">Win rate</p>
                                                     <p className={`text-sm font-mono font-black mt-0.5 ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>{g.n ? `${Math.round(g.winRate)}%` : '—'}</p>
                                                 </div>
                                             </div>
@@ -676,7 +676,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                             {bias.contribution.length > 0 && (
                                 <div className={`p-5 rounded-3xl border ${cardCls}`}>
                                     <p className={`${eyebrow} mb-3`}>Podíl na celkovém kladném R</p>
-                                    <div className={`flex h-10 rounded-xl overflow-hidden ${isDark ? 'bg-white/[0.03]' : 'bg-slate-100'}`}>
+                                    <div className={`flex h-10 rounded-xl overflow-hidden bg-[var(--bg-page)]`}>
                                         {bias.contribution.map(seg => (
                                             <div
                                                 key={seg.key}
@@ -725,7 +725,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                     {leaks.length === 0 ? (
                         <div className={`p-10 rounded-3xl border text-center ${cardCls}`}>
                             <Droplets size={32} className="text-slate-400 mx-auto mb-3" />
-                            <h3 className={`text-base font-black uppercase tracking-tight mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                            <h3 className={`text-base font-semibold tracking-tight mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
                                 Žádný detektor nezabral
                             </h3>
                             <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
@@ -736,7 +736,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                         </div>
                     ) : (
                         <>
-                            <div className={`px-4 py-2.5 rounded-xl border text-[11px] ${isDark ? 'bg-white/[0.02] border-white/5 text-slate-500' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
+                            <div className={`px-4 py-2.5 rounded-xl border text-[11px] bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-500`}>
                                 Deterministické detektory nad {ds.trades.length} obchody. Skóre = |$ dopad| × konfidence (z-test win rate) × trend.
                                 Dopad = co skupina udělala vs. kdyby ty samé obchody běžely na tvém průměru.
                             </div>
@@ -761,25 +761,25 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                                 </div>
                                                 <div className="flex-1 min-w-0">
                                                     <div className="flex items-center gap-1.5 flex-wrap mb-1">
-                                                        <span className={`text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded border ${isCostly ? 'bg-rose-500/10 text-rose-500 border-rose-500/20' : 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'}`}>
+                                                        <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded border ${isCostly ? 'bg-rose-500/10 text-rose-500 border-rose-500/20' : 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'}`}>
                                                             {LEAK_CATEGORY_LABEL[f.category]}
                                                         </span>
-                                                        <span className={`text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded border ${
+                                                        <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded border ${
                                                             f.confidence === 'high' ? 'bg-amber-500/10 text-amber-500 border-amber-500/20' : (isDark ? 'bg-white/5 text-slate-400 border-white/10' : 'bg-slate-100 text-slate-500 border-slate-200')
                                                         }`}>
                                                             konfidence {CONF_LABEL[f.confidence]}{f.z != null ? ` · z=${Math.abs(f.z).toFixed(1)}` : ''}
                                                         </span>
-                                                        <span className={`text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded border flex items-center gap-1 ${
+                                                        <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded border flex items-center gap-1 ${
                                                             f.trend === 'worsening' ? 'bg-rose-500/10 text-rose-500 border-rose-500/20' : (isDark ? 'bg-white/5 text-slate-400 border-white/10' : 'bg-slate-100 text-slate-500 border-slate-200')
                                                         }`}>
                                                             <TrendIcon size={8} /> {TREND_LABEL[f.trend]}
                                                         </span>
                                                     </div>
-                                                    <h4 className={`text-sm font-black uppercase tracking-tight ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{f.title}</h4>
+                                                    <h4 className={`text-sm font-semibold tracking-tight ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{f.title}</h4>
                                                 </div>
                                                 <div className="text-right shrink-0">
                                                     <p className={`font-mono text-lg font-black tabular-nums ${isCostly ? 'text-rose-500' : 'text-emerald-500'}`}>{fmtUsd(f.usdImpact)}</p>
-                                                    <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">dopad</p>
+                                                    <p className="text-[11px] font-semibold text-slate-500">dopad</p>
                                                 </div>
                                             </div>
                                             <p className={`text-xs font-mono mt-3 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{f.statLine}</p>
@@ -788,18 +788,18 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                                 {onAskAI && (
                                                     <button
                                                         onClick={() => onAskAI(buildLeakCoachPrompt(f))}
-                                                        className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${isDark ? 'bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25' : 'bg-cyan-500 text-white hover:bg-cyan-600'}`}
+                                                        className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 ${isDark ? 'bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25' : 'bg-cyan-500 text-white hover:bg-cyan-600'}`}
                                                     >
                                                         <Sparkles size={10} strokeWidth={2.5} /> Probrat s coachem
                                                     </button>
                                                 )}
                                                 <button
                                                     onClick={() => startExperimentFromLeak(f)}
-                                                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${isDark ? 'bg-violet-500/15 text-violet-400 hover:bg-violet-500/25' : 'bg-violet-500 text-white hover:bg-violet-600'}`}
+                                                    className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 ${isDark ? 'bg-violet-500/15 text-violet-400 hover:bg-violet-500/25' : 'bg-violet-500 text-white hover:bg-violet-600'}`}
                                                 >
                                                     <TestTubes size={10} strokeWidth={2.5} /> Vytvořit experiment
                                                 </button>
-                                                <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">n={f.n} vs. {f.restN}</span>
+                                                <span className="text-[11px] font-bold text-slate-500">n={f.n} vs. {f.restN}</span>
                                             </div>
                                         </div>
                                     );
@@ -816,7 +816,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                     {psycho.tagRows.length === 0 && !psycho.confidence && !psycho.sleep && !psycho.ratingNextDay ? (
                         <div className={`p-10 rounded-3xl border text-center ${cardCls}`}>
                             <Brain size={32} className="text-slate-400 mx-auto mb-3" />
-                            <h3 className={`text-base font-black uppercase tracking-tight mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                            <h3 className={`text-base font-semibold tracking-tight mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
                                 Zatím málo psychologických dat
                             </h3>
                             <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
@@ -835,8 +835,8 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                     </p>
                                     <div className="space-y-1.5">
                                         {psycho.tagRows.map(row => (
-                                            <div key={`${row.kind}_${row.tag}`} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl ${isDark ? 'bg-white/[0.02]' : 'bg-slate-50'}`}>
-                                                <span className={`text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded border shrink-0 ${
+                                            <div key={`${row.kind}_${row.tag}`} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl bg-[var(--bg-page)]`}>
+                                                <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded border shrink-0 ${
                                                     row.kind === 'emotion' ? 'bg-violet-500/10 text-violet-400 border-violet-500/20' : 'bg-rose-500/10 text-rose-500 border-rose-500/20'
                                                 }`}>
                                                     {row.kind === 'emotion' ? 'Emoce' : 'Chyba'}
@@ -923,12 +923,12 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
             {/* ══════════ EXPERIMENTY ══════════ */}
             {tab === 'experimenty' && (
                 <motion.div {...fadeIn} className="space-y-4">
-                    <div className={`px-4 py-2.5 rounded-xl border text-[11px] flex items-center justify-between gap-3 flex-wrap ${isDark ? 'bg-white/[0.02] border-white/5 text-slate-500' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
+                    <div className={`px-4 py-2.5 rounded-xl border text-[11px] flex items-center justify-between gap-3 flex-wrap bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-500`}>
                         <span>{world === 'backtest' ? 'Baseline tvoří nyní známé obchody. Nový replay se zařadí podle času zápisu, i když přehráváš starší trh.' : 'Známé obchody tvoří baseline; nové obchody po startu měří průběh experimentu.'}</span>
                         {!draft && (
                             <button
                                 onClick={() => setDraft({ ...EMPTY_DRAFT })}
-                                className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 shrink-0 ${isDark ? 'bg-violet-500/15 text-violet-400 hover:bg-violet-500/25' : 'bg-violet-500 text-white hover:bg-violet-600'}`}
+                                className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 shrink-0 ${isDark ? 'bg-violet-500/15 text-violet-400 hover:bg-violet-500/25' : 'bg-violet-500 text-white hover:bg-violet-600'}`}
                             >
                                 <Plus size={10} strokeWidth={3} /> Nový experiment
                             </button>
@@ -945,55 +945,55 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                             <p className="text-xs text-slate-500 mb-3">Baseline: {ds.trades.length} známých obchodů · {accountSel === 'all' ? 'všechny účty tohoto světa' : worldAccounts.find(account => account.id === accountSel)?.name}</p>
                             <div className="space-y-3">
                                 <div>
-                                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1">Název</p>
+                                    <p className="text-[11px] font-semibold text-slate-500 mb-1">Název</p>
                                     <input
                                         value={draft.title}
                                         onChange={e => setDraft({ ...draft, title: e.target.value })}
                                         placeholder="např. Neobchoduji London session"
-                                        className={`w-full rounded-xl px-3 py-2.5 text-sm outline-none border transition-all ${isDark ? 'bg-white/5 border-white/10 text-white placeholder:text-slate-500 focus:border-violet-500/50' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400 focus:border-violet-400'}`}
+                                        className={`w-full rounded-xl px-3 py-2.5 text-sm outline-none border transition-all ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-white placeholder:text-slate-500 focus:border-violet-500/50' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-800 placeholder:text-slate-400 focus:border-violet-400'}`}
                                     />
                                 </div>
                                 <div>
-                                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1">Pravidlo (co od teď dodržuji)</p>
+                                    <p className="text-[11px] font-semibold text-slate-500 mb-1">Pravidlo (co od teď dodržuji)</p>
                                     <input
                                         value={draft.rule}
                                         onChange={e => setDraft({ ...draft, rule: e.target.value })}
                                         placeholder="např. Vstupuji jen v NY session, London pouze sleduji"
-                                        className={`w-full rounded-xl px-3 py-2.5 text-sm outline-none border transition-all ${isDark ? 'bg-white/5 border-white/10 text-white placeholder:text-slate-500 focus:border-violet-500/50' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400 focus:border-violet-400'}`}
+                                        className={`w-full rounded-xl px-3 py-2.5 text-sm outline-none border transition-all ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-white placeholder:text-slate-500 focus:border-violet-500/50' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-800 placeholder:text-slate-400 focus:border-violet-400'}`}
                                     />
                                 </div>
                                 <div>
-                                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1">Hypotéza (co očekávám)</p>
+                                    <p className="text-[11px] font-semibold text-slate-500 mb-1">Hypotéza (co očekávám)</p>
                                     <textarea
                                         value={draft.hypothesis}
                                         onChange={e => setDraft({ ...draft, hypothesis: e.target.value })}
                                         rows={2}
                                         placeholder="např. Ø výsledek na obchod se zlepší, protože London mi dlouhodobě prodělává"
-                                        className={`w-full rounded-xl px-3 py-2.5 text-sm outline-none border transition-all resize-none ${isDark ? 'bg-white/5 border-white/10 text-white placeholder:text-slate-500 focus:border-violet-500/50' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400 focus:border-violet-400'}`}
+                                        className={`w-full rounded-xl px-3 py-2.5 text-sm outline-none border transition-all resize-none ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-white placeholder:text-slate-500 focus:border-violet-500/50' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-800 placeholder:text-slate-400 focus:border-violet-400'}`}
                                     />
                                 </div>
                                 {world === 'backtest' && <label className="block text-xs text-slate-500">Co by hypotézu vyvrátilo<textarea value={draft.falsification??''} onChange={event=>setDraft({...draft,falsification:event.target.value})} rows={2} placeholder="Předem stanov, jaký výsledek povede k odmítnutí pravidla." className={`mt-1 w-full rounded border px-3 py-2 text-sm ${isDark?'bg-white/5 border-white/10 text-white':'bg-white border-slate-300 text-slate-900'}`} /></label>}
                                 <div className="flex items-end gap-3 flex-wrap">
                                     <div>
-                                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1">Vyhodnotit po (obchodů)</p>
+                                        <p className="text-[11px] font-semibold text-slate-500 mb-1">Vyhodnotit po (obchodů)</p>
                                         <input
                                             type="number"
                                             min={5}
                                             value={draft.targetTrades}
                                             onChange={e => setDraft({ ...draft, targetTrades: e.target.value })}
-                                            className={`w-28 rounded-xl px-3 py-2.5 text-sm outline-none border font-mono transition-all ${isDark ? 'bg-white/5 border-white/10 text-white focus:border-violet-500/50' : 'bg-white border-slate-200 text-slate-800 focus:border-violet-400'}`}
+                                            className={`w-28 rounded-xl px-3 py-2.5 text-sm outline-none border font-mono transition-all ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-white focus:border-violet-500/50' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-800 focus:border-violet-400'}`}
                                         />
                                     </div>
                                     <button
                                         onClick={() => void saveDraft()}
                                         disabled={savingExperiment || !draft.title.trim() || !draft.rule.trim() || (world === 'backtest' && (!draft.hypothesis.trim() || !draft.falsification?.trim()))}
-                                        className={`px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all disabled:opacity-40 disabled:cursor-not-allowed ${isDark ? 'bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 border border-violet-500/40' : 'bg-violet-500 text-white hover:bg-violet-600'}`}
+                                        className={`px-4 py-2.5 rounded-xl text-[11px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${isDark ? 'bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 border border-violet-500/40' : 'bg-violet-500 text-white hover:bg-violet-600'}`}
                                     >
                                         Spustit experiment
                                     </button>
                                     <button
                                         onClick={() => setDraft(null)}
-                                        className={`px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                                        className={`px-4 py-2.5 rounded-xl text-[11px] font-semibold transition-all ${isDark ? 'bg-[var(--bg-page)] text-slate-400 hover:bg-white/10' : 'bg-[var(--bg-page)] text-slate-500 hover:bg-slate-200'}`}
                                     >
                                         Zrušit
                                     </button>
@@ -1006,7 +1006,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                     {worldExperiments.length === 0 && !draft ? (
                         <div className={`p-10 rounded-3xl border text-center ${cardCls}`}>
                             <TestTubes size={32} className="text-slate-400 mx-auto mb-3" />
-                            <h3 className={`text-base font-black uppercase tracking-tight mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                            <h3 className={`text-base font-semibold tracking-tight mb-2 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
                                 Žádný experiment neběží
                             </h3>
                             <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
@@ -1030,8 +1030,8 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                         ? { label: 'Vyhodnoceno', cls: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/25' }
                                         : { label: 'Zrušeno', cls: isDark ? 'bg-white/5 text-slate-400 border-white/10' : 'bg-slate-100 text-slate-500 border-slate-200' };
                                 const sideCell = (label: string, s: typeof report.before) => (
-                                    <div className={`p-3.5 rounded-xl border ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-slate-50 border-slate-100'}`}>
-                                        <p className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label} · {s.n} obchodů</p>
+                                    <div className={`p-3.5 rounded-xl border bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
+                                        <p className="text-[11px] font-semibold text-slate-500 mb-1.5">{label} · {s.n} obchodů</p>
                                         {s.n === 0 ? (
                                             <p className="text-xs text-slate-500">zatím nic</p>
                                         ) : (
@@ -1048,22 +1048,22 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                         <div className="flex items-start justify-between gap-3 flex-wrap">
                                             <div className="min-w-0">
                                                 <div className="flex items-center gap-2 flex-wrap mb-1">
-                                                    <span className={`text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded border ${statusChip.cls}`}>{statusChip.label}</span>
+                                                    <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded border ${statusChip.cls}`}>{statusChip.label}</span>
                                                     <span className="text-[9px] font-bold text-slate-500">od {new Date(exp.startTs).toLocaleDateString('cs-CZ')}</span>
                                                 </div>
-                                                <h4 className={`text-sm font-black uppercase tracking-tight ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{exp.title}</h4>
+                                                <h4 className={`text-sm font-semibold tracking-tight ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{exp.title}</h4>
                                                 <p className="text-[11px] text-slate-500 mt-1"><b>Pravidlo{revision ? ` v${revision.version}` : ''}:</b> {reportExperiment.rule}</p>
                                                 {reportExperiment.hypothesis && <p className="text-[11px] text-slate-500 mt-0.5"><b>Hypotéza:</b> {reportExperiment.hypothesis}</p>}
                                             </div>
                                             <div className="text-right shrink-0">
                                                 <p className={`font-mono text-lg font-black tabular-nums ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>{report.targetProgressN ?? '—'}<span className="text-slate-500 text-sm">/{reportExperiment.targetTrades}</span></p>
-                                                <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">{exp.research ? 'úplných pozic vybrané verze' : 'obchodů po startu'}</p>
+                                                <p className="text-[11px] font-semibold text-slate-500">{exp.research ? 'úplných pozic vybrané verze' : 'obchodů po startu'}</p>
                                             </div>
                                         </div>
 
                                         {/* Progress bar */}
                                         {running && (
-                                            <div className={`mt-3 h-1.5 rounded-full overflow-hidden ${isDark ? 'bg-white/5' : 'bg-slate-100'}`}>
+                                            <div className={`mt-3 h-1.5 rounded-full overflow-hidden bg-[var(--bg-page)]`}>
                                                 <div
                                                     className={`h-full rounded-full transition-all duration-500 ${report.ready ? 'bg-emerald-500' : 'bg-violet-500'}`}
                                                     style={{ width: `${report.progress * 100}%` }}
@@ -1086,7 +1086,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                             </p>
                                         )}
                                         {running && report.verdict && (
-                                            <p className={`mt-3 px-3.5 py-2.5 rounded-xl border text-[12px] leading-relaxed ${isDark ? 'bg-white/[0.02] border-white/5 text-slate-400' : 'bg-slate-50 border-slate-100 text-slate-500'}`}>
+                                            <p className={`mt-3 px-3.5 py-2.5 rounded-xl border text-[12px] leading-relaxed ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-400' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-500'}`}>
                                                 <b>Průběžně:</b> {report.verdict}{!report.ready ? ' (vzorek ještě neúplný)' : ''}
                                             </p>
                                         )}
@@ -1100,7 +1100,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                                     onClick={() => void commitExperiments(experiments.map(e => e.id === exp.id
                                                         ? { ...e, status: 'evaluated' as const, endTs: Date.now(), evaluatedAt: Date.now(), conclusion: report.verdict || `Vyhodnoceno ručně po ${report.after.n} obchodech.` }
                                                         : e))}
-                                                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${
+                                                    className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 ${
                                                         report.ready
                                                             ? (isDark ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30' : 'bg-emerald-500 text-white hover:bg-emerald-600')
                                                             : (isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-500 hover:bg-slate-200')
@@ -1112,7 +1112,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                             {running && (
                                                 <button
                                                     onClick={() => void commitExperiments(experiments.map(e => e.id === exp.id ? { ...e, status: 'cancelled' as const, endTs: Date.now() } : e))}
-                                                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                                                    className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 ${isDark ? 'bg-[var(--bg-page)] text-slate-400 hover:bg-white/10' : 'bg-[var(--bg-page)] text-slate-500 hover:bg-slate-200'}`}
                                                 >
                                                     <XCircle size={10} strokeWidth={2.5} /> Zrušit
                                                 </button>
@@ -1120,7 +1120,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                             {onAskAI && (
                                                 <button
                                                     onClick={() => onAskAI(buildExperimentCoachPrompt(reportExperiment, report))}
-                                                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${isDark ? 'bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25' : 'bg-cyan-500 text-white hover:bg-cyan-600'}`}
+                                                    className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 ${isDark ? 'bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25' : 'bg-cyan-500 text-white hover:bg-cyan-600'}`}
                                                 >
                                                     <Sparkles size={10} strokeWidth={2.5} /> Probrat s coachem
                                                 </button>
@@ -1128,7 +1128,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                             {!running && !exp.research && (
                                                 <button
                                                     onClick={() => void commitExperiments(experiments.filter(e => e.id !== exp.id))}
-                                                    className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all flex items-center gap-1.5 ${isDark ? 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/20' : 'bg-rose-50 text-rose-500 hover:bg-rose-100'}`}
+                                                    className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 ${isDark ? 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/20' : 'bg-rose-50 text-rose-500 hover:bg-rose-100'}`}
                                                 >
                                                     <Trash2 size={10} strokeWidth={2.5} /> Smazat
                                                 </button>
@@ -1149,7 +1149,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                     <div className="flex gap-4 flex-wrap">
                         {filterGroups.map(fg => (
                             <div key={fg.key}>
-                                <p className="text-[8px] font-black uppercase tracking-[0.18em] text-slate-500 mb-1.5">{fg.label}</p>
+                                <p className="text-[11px] font-semibold text-slate-500 mb-1.5">{fg.label}</p>
                                 <div className="flex gap-1.5 flex-wrap">
                                     {fg.opts.map(([val, lab]) => {
                                         const active = filters[fg.key] === val;
@@ -1174,7 +1174,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
 
                     {/* Tabulka */}
                     <div className={`rounded-2xl border overflow-hidden ${cardCls}`}>
-                        <div className={`hidden md:grid grid-cols-[100px_90px_70px_75px_1fr_85px_32px] gap-3 px-5 py-2.5 border-b text-[8px] font-black uppercase tracking-[0.15em] text-slate-500 ${isDark ? 'border-white/5' : 'border-slate-100'}`}>
+                        <div className={`hidden md:grid grid-cols-[100px_90px_70px_75px_1fr_85px_32px] gap-3 px-5 py-2.5 border-b text-[11px] font-semibold text-slate-500 ${isDark ? 'border-white/5' : 'border-slate-100'}`}>
                             <span>Čas</span><span>Session</span><span>Směr</span><span>Výsledek</span><span>SL · Cíl · Bias</span><span className="text-right">{isUsd ? '$' : 'R'}</span><span />
                         </div>
                         {visibleRows.length === 0 && (
@@ -1194,8 +1194,8 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                     >
                                         <span className={`font-mono text-[11px] ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>{fmtDayTime(t.date)}</span>
                                         <span className="hidden md:block text-[11px] text-slate-500 truncate">{t.session || '—'}</span>
-                                        <span className="hidden md:block"><span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-md ${dirCls}`}>{t.direction}</span></span>
-                                        <span className="hidden md:block"><span className={`text-[9px] font-black uppercase tracking-wider px-2 py-1 rounded-md ${outCls}`}>{t.outcome}</span></span>
+                                        <span className="hidden md:block"><span className={`text-[11px] font-semibold px-2 py-1 rounded-md ${dirCls}`}>{t.direction}</span></span>
+                                        <span className="hidden md:block"><span className={`text-[11px] font-semibold px-2 py-1 rounded-md ${outCls}`}>{t.outcome}</span></span>
                                         <span className="hidden md:flex items-center gap-2 flex-wrap text-[11px] text-slate-500 min-w-0">
                                             <span className="truncate">{setup}</span>
                                             <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${biasCls}`}>
@@ -1216,17 +1216,17 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                                 exit={{ height: 0, opacity: 0 }}
                                                 className="overflow-hidden"
                                             >
-                                                <div className={`px-5 pb-5 pt-1 ${isDark ? 'bg-black/20' : 'bg-slate-50/60'}`}>
+                                                <div className={`px-5 pb-5 pt-1 bg-[var(--bg-page)]`}>
                                                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
                                                         {/* Co kdyby — varianty SL */}
-                                                        <div className={`p-4 rounded-xl border ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-white border-slate-200'}`}>
+                                                        <div className={`p-4 rounded-xl border ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)]'}`}>
                                                             <p className={`${eyebrow} mb-3`}>Co kdyby — varianty SL</p>
                                                             {t.cf ? (
                                                                 <>
                                                                     <div className="grid grid-cols-[1fr_auto_auto] gap-x-5 gap-y-2 text-xs items-center">
                                                                         <span />
-                                                                        <span className="text-[8px] font-black uppercase tracking-widest text-slate-500 text-right">Fix TP</span>
-                                                                        <span className="text-[8px] font-black uppercase tracking-widest text-slate-500 text-right">Trailing</span>
+                                                                        <span className="text-[11px] font-semibold text-slate-500 text-right">Fix TP</span>
+                                                                        <span className="text-[11px] font-semibold text-slate-500 text-right">Trailing</span>
                                                                         {([['Swing', t.cf.swing], ['OTE', t.cf.ote], ['FVG', t.cf.fvg]] as const).map(([name, v]) => (
                                                                             <React.Fragment key={name}>
                                                                                 <span className={`font-bold ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>{name}</span>
@@ -1247,28 +1247,28 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                                         </div>
 
                                                         {/* Průběh & kontext */}
-                                                        <div className={`p-4 rounded-xl border ${isDark ? 'bg-white/[0.02] border-white/5' : 'bg-white border-slate-200'}`}>
+                                                        <div className={`p-4 rounded-xl border ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)]'}`}>
                                                             <p className={`${eyebrow} mb-3`}>Průběh & kontext</p>
                                                             <div className="flex gap-5 flex-wrap">
                                                                 <div>
-                                                                    <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">MFE</p>
+                                                                    <p className="text-[11px] font-semibold text-slate-500">MFE</p>
                                                                     <p className="font-mono text-sm font-black text-emerald-500 mt-0.5">{fmtR(t.mfeR)}</p>
                                                                 </div>
                                                                 <div>
-                                                                    <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">MAE</p>
+                                                                    <p className="text-[11px] font-semibold text-slate-500">MAE</p>
                                                                     <p className="font-mono text-sm font-black text-rose-500 mt-0.5">{t.maeR != null ? `−${Math.abs(t.maeR).toFixed(1)}R` : '—'}</p>
                                                                 </div>
                                                                 <div>
-                                                                    <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Trvání</p>
+                                                                    <p className="text-[11px] font-semibold text-slate-500">Trvání</p>
                                                                     <p className={`font-mono text-sm font-black mt-0.5 ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>{t.durationMinutes != null ? `${t.durationMinutes}m` : '—'}</p>
                                                                 </div>
                                                                 <div>
-                                                                    <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Došlo až na</p>
+                                                                    <p className="text-[11px] font-semibold text-slate-500">Došlo až na</p>
                                                                     <p className={`font-mono text-xs font-bold mt-1 ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>{t.exc?.topReached || '—'}</p>
                                                                 </div>
                                                                 {t.exc?.leftR != null && (
                                                                     <div>
-                                                                        <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Na stole</p>
+                                                                        <p className="text-[11px] font-semibold text-slate-500">Na stole</p>
                                                                         <p className={`font-mono text-sm font-black mt-0.5 ${t.exc.leftR > 0 ? 'text-amber-500' : 'text-slate-400'}`}>{fmtR(t.exc.leftR)}</p>
                                                                     </div>
                                                                 )}
@@ -1281,7 +1281,7 @@ const LabPage: React.FC<LabPageProps> = ({ trades, accounts, theme, dashboardMod
                                                             {onOpenTrade && (
                                                                 <button
                                                                     onClick={() => onOpenTrade(t.raw)}
-                                                                    className={`mt-3 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${isDark ? 'bg-white/5 text-slate-300 hover:bg-white/10' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                                                    className={`mt-3 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all ${isDark ? 'bg-[var(--bg-page)] text-slate-300 hover:bg-white/10' : 'bg-[var(--bg-page)] text-slate-600 hover:bg-slate-200'}`}
                                                                 >
                                                                     Otevřít detail obchodu
                                                                 </button>

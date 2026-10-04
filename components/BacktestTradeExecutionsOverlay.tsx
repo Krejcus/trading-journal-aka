@@ -370,7 +370,7 @@ const BacktestTradeExecutionsOverlay: React.FC<Props> = ({
         <div
           role="tooltip"
           data-backtest-execution-marker-tooltip
-          className={`absolute z-10 -translate-x-1/2 -translate-y-[calc(100%+9px)] whitespace-nowrap rounded-[4px] border px-2 py-1 text-[10px] font-bold shadow-lg ${isDark ? 'border-white/10 bg-[#151a22] text-white' : 'border-slate-200 bg-white text-slate-800'}`}
+          className={`absolute z-10 -translate-x-1/2 -translate-y-[calc(100%+9px)] whitespace-nowrap rounded-[4px] border px-2 py-1 text-[10px] font-bold shadow-lg ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-white' : 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-800'}`}
           style={{ left: hoveredMarker.x, top: hoveredMarker.y }}
         >
           {hoveredExecutionMarker.side.toUpperCase()} {hoveredExecutionMarker.quantity} {hoveredExecutionMarker.instrument}
@@ -382,7 +382,7 @@ const BacktestTradeExecutionsOverlay: React.FC<Props> = ({
       {hovered && hoveredTrade && (
         <div
           role="tooltip"
-          className={`absolute z-10 -translate-x-1/2 -translate-y-[calc(100%+10px)] whitespace-nowrap rounded-[4px] border px-2.5 py-1.5 text-[10px] font-bold shadow-lg ${isDark ? 'border-white/10 bg-[#151a22] text-white' : 'border-slate-200 bg-white text-slate-800'}`}
+          className={`absolute z-10 -translate-x-1/2 -translate-y-[calc(100%+10px)] whitespace-nowrap rounded-[4px] border px-2.5 py-1.5 text-[10px] font-bold shadow-lg ${isDark ? 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-white' : 'border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-800'}`}
           style={{ left: hovered.x, top: hovered.y }}
         >
           <span>Entry {hoveredTrade.entryPrice.toFixed(2)}</span>

@@ -55,7 +55,9 @@ const JournalReviewInbox = React.lazy(() => import('./components/JournalReviewIn
 const LiveJournalHistory = React.lazy(() => import('./components/LiveJournalHistory'));
 const JournalImportStatus = React.lazy(() => import('./components/JournalImportStatus'));
 const JournalSourceStatus = React.lazy(() => import('./components/JournalSourceStatus'));
+const HistoryPanelModal = React.lazy(() => import('./components/HistoryPanelModal'));
 const Settings = React.lazy(() => import('./components/Settings'));
+import type { SettingsTab } from './components/Settings';
 const AccountsManager = React.lazy(() => import('./components/AccountsManager'));
 const Graveyard = React.lazy(() => import('./components/Graveyard'));
 import WorldShiftOverlay, { WORLD_SHIFT_TIMING } from './components/WorldShiftOverlay';
@@ -127,12 +129,13 @@ import {
   Trophy,
   MessageSquare,
   Activity,
-  Brain,
-  Bell,
   WifiOff,
-  Shield,
-  Sparkles
+  Sparkles,
+  Database,
+  FileText
 } from 'lucide-react';
+import AppBackground from './components/AppBackground';
+import { APPEARANCE_CACHE_KEY, normalizeAppearance, readCachedAppearance, type AppearanceSettings } from './lib/appearance';
 
 import { isSupabaseConfigured, supabase } from './services/supabase';
 import type { Session } from '@supabase/supabase-js';
@@ -1124,6 +1127,7 @@ const App: React.FC = () => {
     careerRoadmap,
     businessSettings,
     theme,
+    appearance,
     dashboardMode,
     systemSettings,
     ...(networkNotifications ? { networkNotifications } : {}),
@@ -1396,31 +1400,32 @@ const App: React.FC = () => {
     return 'dark';
   });
 
-  const [accentColor, setAccentColor] = useState<string>(() => {
-    try {
-      const stored = localStorage.getItem('alphatrade_accent_color');
-      if (stored) {
-        document.documentElement.dataset.accent = stored;
-        return stored;
-      }
-      const prefs = localStorage.getItem('alphatrade_preferences');
-      if (prefs) {
-        const parsed = JSON.parse(prefs);
-        if (parsed.accentColor) {
-          document.documentElement.dataset.accent = parsed.accentColor;
-          return parsed.accentColor;
-        }
-      }
-    } catch (e) { }
+  // Barva zvýraznění (dřív Nastavení → Systém) je zrušená: appka drží výchozí
+  // modrou a barvy pozadí řeší Vzhled. Starou volbu z localStorage uklidíme.
+  useState(() => {
     document.documentElement.dataset.accent = 'blue';
-    return 'blue';
+    try { localStorage.removeItem('alphatrade_accent_color'); } catch { /* bez úložiště */ }
+    return null;
   });
 
-  const handleAccentColorChange = (color: string) => {
-    setAccentColor(color);
-    document.documentElement.dataset.accent = color;
-    safeSetItem('alphatrade_accent_color', color);
-  };
+  // Vzhled Aurora (pozadí, barvy, síla, průhlednost karet) — ukládá se k účtu.
+  // Cache v localStorage dovolí nastavit vzhled hned při startu, ještě před načtením profilu.
+  const [appearance, setAppearance] = useState<AppearanceSettings>(() => {
+    const cached = readCachedAppearance();
+    document.documentElement.style.setProperty('--aurora-card-opacity', `${100 - cached.cardTransparency}%`);
+    document.documentElement.style.setProperty('--aurora-strength', String(cached.strength / 100));
+    if (localStorage.getItem('alphatrade_theme') !== 'oled') document.documentElement.classList.add('aurora');
+    return cached;
+  });
+  useEffect(() => {
+    const root = document.documentElement;
+    // OLED zůstává čistě černé (bez pozadí a skla); světlé a tmavé téma mají Auroru.
+    root.classList.toggle('aurora', theme !== 'oled');
+    root.style.setProperty('--aurora-card-opacity', `${100 - appearance.cardTransparency}%`);
+    root.style.setProperty('--aurora-strength', String(appearance.strength / 100));
+    safeSetItem(APPEARANCE_CACHE_KEY, JSON.stringify(appearance));
+  }, [appearance, theme]);
+
 
   // Fix theme switching - properly manage CSS classes
   useEffect(() => {
@@ -1878,6 +1883,8 @@ const App: React.FC = () => {
     // to prevent cross-tab sync or focus sync from reverting user's theme choice.
     // Theme is applied only on initial load (useState initializer).
     if (prefs.dashboardMode) setDashboardMode(prefs.dashboardMode);
+    // Vzhled se na rozdíl od tématu synchronizuje mezi zařízeními (uživatel to tak chce).
+    if (prefs.appearance) setAppearance(normalizeAppearance(prefs.appearance));
     if (prefs.systemSettings) setSystemSettings(prefs.systemSettings);
     if ((prefs as any).networkNotifications) setNetworkNotifications((prefs as any).networkNotifications);
     // Mark prefs as applied — autosave se teď může spustit, nehrozí přepsání DB
@@ -2839,7 +2846,7 @@ const App: React.FC = () => {
     }
     // currentUserPreferences reads the listed state; depending on the function would reset the debounce every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userEmotions, userMistakes, standardGoals, liveLayoutsByMode, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, theme, dashboardMode, systemSettings, networkNotifications, canSave]);
+  }, [userEmotions, userMistakes, standardGoals, liveLayoutsByMode, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, theme, appearance, dashboardMode, systemSettings, networkNotifications, canSave]);
 
   // ⚡ PERIODIC AUTO-SAVE (Google Docs-like protection)
   // Backup save every 30s if user is still editing
@@ -2942,7 +2949,7 @@ const App: React.FC = () => {
     };
     // Save callbacks consume the explicitly listed state and weekly focus through refs/current render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canSave, dailyPreps, dailyReviews, userEmotions, userMistakes, standardGoals, liveLayoutsByMode, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, theme, dashboardMode, systemSettings, networkNotifications]);
+  }, [canSave, dailyPreps, dailyReviews, userEmotions, userMistakes, standardGoals, liveLayoutsByMode, backtestDashboardLayouts, sessions, htfOptions, ltfOptions, ironRules, playbookItems, constitutionRules, careerRoadmap, businessSettings, theme, appearance, dashboardMode, systemSettings, networkNotifications]);
 
   // Handle Dashboard Mode Switching
   // Sleduj POUZE skutečnou změnu módu — bez tohoto se efekt spouští při každé změně
@@ -3127,16 +3134,22 @@ const App: React.FC = () => {
   const [quickNote, setQuickNote] = useState('');
 
   const [journalActiveTab, setJournalActiveTab] = useState<'daily' | 'weekly' | 'archives'>('daily');
-  const [settingsActiveTab, setSettingsActiveTab] = useState<'psychology' | 'strategy' | 'market' | 'notifications' | 'system'>('psychology');
+  const [settingsActiveTab, setSettingsActiveTab] = useState<SettingsTab>('trading');
   const [businessActiveTab, setBusinessActiveTab] = useState<'financials' | 'goals'>('financials');
   const [historyLayoutMode, setHistoryLayoutMode] = useState<'grid' | 'table'>('grid');
+  // Podklady historie / archiv neúplných záznamů — otevírané z menu ⋯ v Historii.
+  const [historyPanel, setHistoryPanel] = useState<'sources' | 'inbox' | null>(null);
+  const historySourceConnections = useMemo(
+    () => journalSourceConnections([...accounts, ...archivedAccounts], copierImportReport?.connections.map(row => row.connectionId)),
+    [accounts, archivedAccounts, copierImportReport],
+  );
   const [networkActiveTab, setNetworkActiveTab] = useState<'leaderboard' | 'feed' | 'following' | 'followers' | 'requests' | 'share'>('feed');
   const [isNetworkSpectating, setIsNetworkSpectating] = useState(false);
 
   useEffect(() => {
     if (!inNativeShell) return;
     const openNativeSystem = () => {
-      setSettingsActiveTab('system');
+      setSettingsActiveTab('app');
       nativeActions.current.navigate('settings');
     };
     window.addEventListener('alphatrade:open-native-system', openNativeSystem);
@@ -3888,6 +3901,7 @@ const App: React.FC = () => {
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
     >
+      {theme !== 'oled' && <AppBackground settings={appearance} dark={theme !== 'light'} />}
 
       {worldShift.active && <WorldShiftOverlay to={worldShift.to} />}
 
@@ -3988,7 +4002,7 @@ const App: React.FC = () => {
               />
               <div className={`hidden xl:block h-6 w-px ${theme !== 'light' ? 'bg-white/15' : 'bg-slate-300/60'}`}></div>
             </div>
-            <h2 className={`text-xl font-black uppercase tracking-tighter whitespace-nowrap ${theme !== 'light' ? 'text-white' : 'text-slate-800'}`}>
+            <h2 className={`text-xl font-extrabold tracking-tight whitespace-nowrap ${theme !== 'light' ? 'text-white' : 'text-slate-800'}`}>
               {activePage === 'dashboard' && 'Dashboard'}
               {activePage === 'history' && 'Historie obchodu'}
               {activePage === 'insights' && 'Insights'}
@@ -4014,7 +4028,7 @@ const App: React.FC = () => {
                   <button
                     key={tab.id}
                     onClick={() => setJournalActiveTab(tab.id as any)}
-                    className={`relative flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold uppercase transition-all ${journalActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
+                    className={`relative flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${journalActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
                   >
                     {journalActiveTab === tab.id && (
                       <motion.div
@@ -4042,7 +4056,7 @@ const App: React.FC = () => {
                   <button
                     key={tab.id}
                     onClick={() => setBusinessActiveTab(tab.id as any)}
-                    className={`relative flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold uppercase transition-all ${businessActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
+                    className={`relative flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${businessActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
                   >
                     {businessActiveTab === tab.id && (
                       <motion.div
@@ -4073,42 +4087,11 @@ const App: React.FC = () => {
                   <button
                     key={tab.id}
                     onClick={() => setNetworkActiveTab(tab.id as any)}
-                    className={`relative flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold uppercase transition-all ${networkActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
+                    className={`relative flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${networkActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
                   >
                     {networkActiveTab === tab.id && (
                       <motion.div
                         layoutId="activeNetworkTab"
-                        className={`absolute inset-0 rounded-lg shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
-                        transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
-                      />
-                    )}
-                    <span className="relative z-10 flex items-center gap-2">
-                      <tab.icon size={14} /> {tab.label}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {activePage === 'settings' && (
-            <div className="hidden lg:flex flex-1 justify-center relative z-10">
-              <div className="p-1 rounded-lg border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
-                {[
-                  { id: 'psychology', label: 'Psychologie', icon: Brain },
-                  { id: 'strategy', label: 'Strategie', icon: Target },
-                  { id: 'market', label: 'Trh', icon: Clock },
-                  { id: 'notifications', label: 'Notifikace', icon: Bell },
-                  { id: 'system', label: 'Systém', icon: Shield }
-                ].map(tab => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setSettingsActiveTab(tab.id as any)}
-                    className={`relative flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold uppercase transition-all ${settingsActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
-                  >
-                    {settingsActiveTab === tab.id && (
-                      <motion.div
-                        layoutId="activeSettingsTab"
                         className={`absolute inset-0 rounded-lg shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
                         transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                       />
@@ -4144,7 +4127,7 @@ const App: React.FC = () => {
                     'bg-orange-500'
                   }`}></span>
                 </div>
-                <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${
+                <span className={`text-[11px] font-semibold ${
                   dashboardMode === 'funded' ? 'text-emerald-400' :
                   dashboardMode === 'challenge' ? 'text-blue-400' :
                   dashboardMode === 'backtesting' ? 'text-violet-400' :
@@ -4362,7 +4345,7 @@ const App: React.FC = () => {
                   <p className="text-slate-400 mb-6 max-w-md">{appError}</p>
                   <button
                     onClick={() => window.location.reload()}
-                    className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase text-xs"
+                    className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-semibold text-xs"
                   >
                     Restartovat aplikaci
                   </button>
@@ -4437,17 +4420,27 @@ const App: React.FC = () => {
                     />
                   )}
 
-                  {activePage === 'history' && dashboardMode !== 'backtesting' && (
+                  {/* Bez obchodů nemá Historie lištu s menu ⋯ — stav načtení, podklady a archiv
+                      pak zůstávají vidět přímo na stránce (vysvětlují, proč je prázdná). */}
+                  {activePage === 'history' && dashboardMode !== 'backtesting' && trades.length === 0 && (
                     <>
                     <JournalImportStatus report={copierImportReport} running={copierImportRunning} error={copierImportError}
                       onRetry={() => void runCopierJournalSync(true)} onAccounts={() => setActivePage('accounts')} />
-                    <JournalSourceStatus key={currentUser.id} connections={journalSourceConnections([...accounts, ...archivedAccounts], copierImportReport?.connections.map(row => row.connectionId))} />
+                    <JournalSourceStatus key={currentUser.id} connections={historySourceConnections} />
                     </>
+                  )}
+
+                  {activePage === 'history' && historyPanel && (
+                    <HistoryPanelModal title={historyPanel === 'sources' ? 'Podklady historie' : 'Neúplné záznamy a původní poznámky'} onClose={() => setHistoryPanel(null)}>
+                      {historyPanel === 'sources'
+                        ? <JournalSourceStatus key={currentUser.id} connections={historySourceConnections} defaultOpen />
+                        : <JournalReviewInbox key={currentUser.id} refreshVersion={copierImportReport?.completedAt} accounts={[...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))]} defaultOpen />}
+                    </HistoryPanelModal>
                   )}
 
                   {activePage === 'history' && (
                     <>
-                    {dashboardMode !== 'backtesting' && <JournalReviewInbox key={currentUser.id} refreshVersion={copierImportReport?.completedAt} accounts={[...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))]} />}
+                    {dashboardMode !== 'backtesting' && trades.length === 0 && <JournalReviewInbox key={currentUser.id} refreshVersion={copierImportReport?.completedAt} accounts={[...accounts, ...archivedAccounts.filter(a => !accounts.some(x => x.id === a.id))]} />}
                     {
                     trades.length === 0 ? (
                       <div className="flex flex-col items-center justify-center h-[60vh] space-y-6">
@@ -4464,6 +4457,14 @@ const App: React.FC = () => {
                         onAttachScreenshot={handleAttachTradeScreenshot}
                         onSaveChartNotes={handleSaveChartNotes}
                         onOpenReview={(trade) => openReview({ tradeId: String(trade.id) })}
+                        toolbarStatus={dashboardMode !== 'backtesting' ? (
+                          <JournalImportStatus compact report={copierImportReport} running={copierImportRunning} error={copierImportError}
+                            onRetry={() => void runCopierJournalSync(true)} onAccounts={() => setActivePage('accounts')} />
+                        ) : undefined}
+                        menuItems={dashboardMode !== 'backtesting' ? [
+                          ...(historySourceConnections.length ? [{ id: 'sources', label: 'Podklady historie', icon: Database, onSelect: () => setHistoryPanel('sources') }] : []),
+                          { id: 'inbox', label: 'Neúplné záznamy', icon: FileText, onSelect: () => setHistoryPanel('inbox') },
+                        ] : undefined}
                         onClear={handleClearTrades}
                         theme={theme}
                         emotions={userEmotions}
@@ -4486,10 +4487,10 @@ const App: React.FC = () => {
                   {activePage === 'insights' && (
                     <div className="p-4 md:p-8 max-w-7xl mx-auto w-full">
                       <div className="mb-6">
-                        <h2 className={`text-3xl font-black tracking-tighter uppercase mb-1 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
+                        <h2 className={`text-3xl font-extrabold tracking-tight mb-1 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
                           Insights
                         </h2>
-                        <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">
+                        <p className="text-xs text-slate-500 font-bold">
                           Pattern analýza nad tvojí historií · detekce leaks & strengths
                         </p>
                       </div>
@@ -4518,10 +4519,10 @@ const App: React.FC = () => {
                   {activePage === 'lab' && (
                     <div className="p-4 md:p-8 max-w-7xl mx-auto w-full">
                       <div className="mb-6">
-                        <h2 className={`text-3xl font-black tracking-tighter uppercase mb-1 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
+                        <h2 className={`text-3xl font-extrabold tracking-tight mb-1 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
                           Lab
                         </h2>
-                        <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">
+                        <p className="text-xs text-slate-500 font-bold">
                           Analytická laboratoř · counterfactual · bias · leaky — čísla počítá kód, ne AI
                         </p>
                       </div>
@@ -4727,8 +4728,11 @@ const App: React.FC = () => {
                       setStandardGoals={(v) => { setStandardGoals(v); markPreferencesDirty(); }}
                       appVersion={APP_VERSION}
                       onHardRefresh={handleHardRefresh}
-                      accentColor={accentColor}
-                      onAccentColorChange={handleAccentColorChange}
+                      dailyPreps={dailyPreps}
+                      dailyReviews={dailyReviews}
+                      appearance={appearance}
+                      onAppearanceChange={(next) => { setAppearance(normalizeAppearance(next)); markPreferencesDirty(); }}
+                      onThemeChange={setTheme}
                       onCreateAccount={(account) => setAccounts(prev => [...prev, account])}
 
                     />
@@ -4917,7 +4921,7 @@ const App: React.FC = () => {
             >
               <span style={{ color: col, fontSize: 20, fontWeight: 900, lineHeight: 1 }}>✓</span>
               <div>
-                <div className={`text-[10px] font-black uppercase tracking-wider ${theme === 'light' ? 'text-slate-500' : 'text-slate-400'}`}>Nový obchod přidán</div>
+                <div className={`text-[11px] font-semibold ${theme === 'light' ? 'text-slate-500' : 'text-slate-400'}`}>Nový obchod přidán</div>
                 <div className="text-sm font-bold flex items-center gap-2 mt-0.5">
                   <span className={theme === 'light' ? 'text-slate-900' : 'text-white'}>{tradeToast.instrument}</span>
                   <span style={{ color: col }}>{pnlTxt}</span>

@@ -297,7 +297,7 @@ const TacticalTimelineV2: React.FC<Props> = ({
               />
 
               <div className="flex items-center justify-between mb-3 relative">
-                <p className={`text-[10px] font-black uppercase tracking-widest ${isDark ? 'text-violet-300' : 'text-violet-700'}`}>💭 Rychlá myšlenka</p>
+                <p className={`text-[11px] font-semibold ${isDark ? 'text-violet-300' : 'text-violet-700'}`}>💭 Rychlá myšlenka</p>
                 <button onClick={() => setQuickNoteOpen(false)} className={`text-lg leading-none ${isDark ? 'text-slate-400 hover:text-white' : 'text-slate-400 hover:text-slate-700'}`}>×</button>
               </div>
 
@@ -338,7 +338,7 @@ const TacticalTimelineV2: React.FC<Props> = ({
               <div className="flex gap-2 mt-3 relative">
                 <button
                   onClick={() => setQuickNoteOpen(false)}
-                  className={`flex-1 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest backdrop-blur-sm transition-all ${
+                  className={`flex-1 py-2.5 rounded-2xl text-[11px] font-semibold backdrop-blur-sm transition-all ${
                     isDark ? 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10' : 'bg-white/60 hover:bg-white/80 text-slate-600 border border-white/80'
                   }`}
                   style={!isDark ? { boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.9)' } : undefined}
@@ -348,7 +348,7 @@ const TacticalTimelineV2: React.FC<Props> = ({
                 <button
                   onClick={handleSaveQuickNote}
                   disabled={!quickNoteText.trim()}
-                  className="flex-[2] py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all hover:brightness-110 active:scale-95 relative overflow-hidden"
+                  className="flex-[2] py-2.5 rounded-2xl text-[11px] font-semibold text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all hover:brightness-110 active:scale-95 relative overflow-hidden"
                   style={{
                     background: 'linear-gradient(135deg, #a78bfa 0%, #8b5cf6 50%, #7c3aed 100%)',
                     boxShadow: '0 6px 20px -4px rgba(124,58,237,0.5), inset 0 1px 0 rgba(255,255,255,0.4), inset 0 -2px 4px rgba(0,0,0,0.15)',
@@ -414,7 +414,7 @@ const TimelineNode: React.FC<{ time: string; color: string; children: React.Reac
   return (
     <div className="relative flex items-center pl-16">
       <div className={`absolute left-10 -translate-x-1/2 w-3 h-3 rounded-full border-2 border-black/50 ${dotColors[color] || 'bg-slate-400'}`}>
-        <div className="absolute -top-6 text-[9px] font-black uppercase text-slate-500 tracking-widest whitespace-nowrap">{time}</div>
+        <div className="absolute -top-6 text-[11px] font-semibold text-slate-500 whitespace-nowrap">{time}</div>
       </div>
       <div className="flex-1 min-w-0">{children}</div>
     </div>
@@ -435,10 +435,10 @@ const CollapsedCard: React.FC<{
     ? `border-[var(--border-subtle)] bg-${borderColor}-500/5`
     : `border-${borderColor}-200 bg-${borderColor}-50/30`;
   const statusBadge = status === 'done'
-    ? <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 text-[9px] font-black uppercase">✓ Hotovo</span>
+    ? <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 text-[11px] font-semibold">✓ Hotovo</span>
     : status === 'live'
-      ? <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 text-[9px] font-black uppercase animate-pulse">● Live</span>
-      : <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[9px] font-black uppercase">Čeká</span>;
+      ? <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 text-[11px] font-semibold animate-pulse">● Live</span>
+      : <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[11px] font-semibold">Čeká</span>;
   return (
     <button
       onClick={onClick}
@@ -448,7 +448,7 @@ const CollapsedCard: React.FC<{
         <div className="flex items-center gap-3 min-w-0 flex-1">
           <div className={`w-9 h-9 rounded-xl border grid place-items-center shrink-0 ${iconBg}`}>{icon}</div>
           <div className="min-w-0 flex-1">
-            <h3 className="text-xs font-black uppercase tracking-widest truncate">{title}</h3>
+            <h3 className="text-xs font-semibold truncate">{title}</h3>
             <p className="text-[10px] text-slate-500 truncate">{subtitle}</p>
           </div>
         </div>
@@ -487,7 +487,7 @@ const CollapsedSessionCard: React.FC<{
           <div className="w-6 h-6 rounded-lg border grid place-items-center shrink-0 text-white font-black text-[10px]" style={{ backgroundColor: sessionColor, borderColor: sessionColor }}>
             {session.name[0]}
           </div>
-          <h3 className="text-xs font-black uppercase tracking-widest truncate flex items-center gap-1.5">
+          <h3 className="text-xs font-semibold truncate flex items-center gap-1.5">
             <span>{session.name}</span>
             <span className="font-normal text-slate-400 normal-case tracking-normal text-[10px]">{session.startTime}–{session.endTime}</span>
             {trades.length > 0 && (
@@ -498,9 +498,9 @@ const CollapsedSessionCard: React.FC<{
           </h3>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          {status === 'done' && <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 text-[9px] font-black uppercase">✓</span>}
-          {status === 'live' && <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 text-[9px] font-black uppercase animate-pulse">● Live</span>}
-          {status === 'pending' && <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[9px] font-black uppercase">Čeká</span>}
+          {status === 'done' && <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 text-[11px] font-semibold">✓</span>}
+          {status === 'live' && <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 text-[11px] font-semibold animate-pulse">● Live</span>}
+          {status === 'pending' && <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[11px] font-semibold">Čeká</span>}
           <ChevronDown size={14} className="text-slate-400" />
         </div>
       </div>
@@ -510,7 +510,7 @@ const CollapsedSessionCard: React.FC<{
         <div className="flex gap-2 px-4 pb-4 items-stretch overflow-x-auto">
           {/* Analýza screen */}
           <div className="shrink-0 flex flex-col gap-1">
-            <p className="text-[8px] font-black uppercase text-slate-400 tracking-widest text-center">Analýza</p>
+            <p className="text-[11px] font-semibold text-slate-400 text-center">Analýza</p>
             {prepSession?.image ? (
               <div
                 className="w-28 h-20 rounded-lg overflow-hidden border border-slate-200 cursor-zoom-in"
@@ -539,7 +539,7 @@ const CollapsedSessionCard: React.FC<{
                 const screen = t.screenshot || (t.screenshots && t.screenshots[0]);
                 return (
                   <div key={t.id} className="shrink-0 flex flex-col gap-1">
-                    <p className="text-[8px] font-black uppercase text-slate-400 tracking-widest text-center font-mono">{time}</p>
+                    <p className="text-[11px] font-semibold text-slate-400 text-center font-mono">{time}</p>
                     <div
                       className={`relative w-24 h-16 rounded-lg overflow-hidden border ${isWin ? 'border-emerald-200' : 'border-rose-200'} ${screen ? 'cursor-zoom-in' : ''} bg-gradient-to-br from-slate-100 to-slate-200`}
                       onClick={(e) => { if (screen) { e.stopPropagation(); onZoom(fullSize(screen)); } }}
@@ -564,7 +564,7 @@ const CollapsedSessionCard: React.FC<{
 
           {/* Breakdown screen */}
           <div className="shrink-0 flex flex-col gap-1">
-            <p className="text-[8px] font-black uppercase text-slate-400 tracking-widest text-center">Breakdown</p>
+            <p className="text-[11px] font-semibold text-slate-400 text-center">Breakdown</p>
             {breakdown?.screenshot ? (
               <div
                 className="w-28 h-20 rounded-lg overflow-hidden border border-violet-200 cursor-zoom-in"
@@ -642,7 +642,7 @@ const ExpandedMorningCard: React.FC<{
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/30 grid place-items-center"><Sun size={16} className="text-amber-500" /></div>
           <div>
-            <h3 className="text-sm font-black uppercase tracking-widest">Ranní aktivace</h3>
+            <h3 className="text-sm font-semibold">Ranní aktivace</h3>
             <p className="text-[10px] text-slate-500">{completedRituals}/{rituals.length} rituálů · {commitments.length} závazků</p>
           </div>
         </div>
@@ -657,7 +657,7 @@ const ExpandedMorningCard: React.FC<{
       {/* RITUÁLY — checkboxy */}
       {rituals.length > 0 && (
         <div className="mb-3">
-          <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-2">✓ Rituály</p>
+          <p className="text-[11px] font-semibold text-slate-500 mb-2">✓ Rituály</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {rituals.map(r => {
               const comp = localCompletions.find((c: any) => c.ruleId === r.id);
@@ -687,7 +687,7 @@ const ExpandedMorningCard: React.FC<{
       {/* TRADING PRAVIDLA — checkboxy (commit dodržet dnes) */}
       {tradeRules.length > 0 && (
         <div className="mb-3">
-          <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-2">⚖ Trading pravidla</p>
+          <p className="text-[11px] font-semibold text-slate-500 mb-2">⚖ Trading pravidla</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {tradeRules.map(r => {
               const comp = localCompletions.find((c: any) => c.ruleId === r.id);
@@ -716,7 +716,7 @@ const ExpandedMorningCard: React.FC<{
 
       {/* CÍLE DNE — editovatelné */}
       <div className="mb-3">
-        <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-2">🎯 Cíle dne</p>
+        <p className="text-[11px] font-semibold text-slate-500 mb-2">🎯 Cíle dne</p>
         <div className="space-y-1.5">
           {localGoals.map((g, i) => (
             <div key={i} className="flex items-center gap-2">
@@ -728,7 +728,7 @@ const ExpandedMorningCard: React.FC<{
                 onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
                 disabled={!onUpdatePrep}
                 placeholder="Napiš cíl…"
-                className={`flex-1 text-xs font-medium rounded-lg border px-2.5 py-2 outline-none ${isDark ? 'bg-white/5 border-white/10 text-slate-200' : 'bg-white border-slate-200 text-slate-700'} focus:border-amber-400`}
+                className={`flex-1 text-xs font-medium rounded-lg border px-2.5 py-2 outline-none ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-200' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-700'} focus:border-amber-400`}
               />
               {onUpdatePrep && (
                 <button onClick={() => commitGoals(localGoals.filter((_, idx) => idx !== i))} className="p-1 rounded text-slate-400 hover:text-rose-500 shrink-0"><Trash2 size={12} /></button>
@@ -744,7 +744,7 @@ const ExpandedMorningCard: React.FC<{
       {/* COMMITMENTS — read-only */}
       {commitments.length > 0 && (
         <div className="mb-3 p-3 rounded-xl bg-blue-50 border border-blue-100">
-          <p className="text-[9px] font-black uppercase tracking-widest text-blue-600 mb-2">⚡ Aktivní závazky</p>
+          <p className="text-[11px] font-semibold text-blue-600 mb-2">⚡ Aktivní závazky</p>
           <ul className="space-y-1">
             {commitments.slice(0, 4).map((c, i) => (
               <li key={i} className="text-[11px] text-slate-700">▸ {c.content}</li>
@@ -798,7 +798,7 @@ const QuickNoteRow: React.FC<{
   const time = new Date(note.timestamp).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
 
   return (
-    <div className={`p-2.5 rounded-lg border ${isDark ? 'bg-white/5 border-violet-500/20' : 'bg-white border-violet-100'}`}>
+    <div className={`p-2.5 rounded-lg border ${isDark ? 'bg-[var(--bg-page)] border-violet-500/20' : 'bg-[var(--bg-card)] border-violet-100'}`}>
       <div className="flex items-start gap-2">
         <span className="text-[10px] font-mono font-black text-violet-500 shrink-0 mt-0.5">{time}</span>
         {editing && onUpdate ? (
@@ -848,7 +848,7 @@ const QuickNoteRow: React.FC<{
             {confirmDelete && (
               <button
                 onClick={onDelete}
-                className="px-2 py-1 rounded bg-rose-500 hover:bg-rose-600 text-white text-[9px] font-black uppercase tracking-widest animate-in fade-in slide-in-from-left-2 duration-150"
+                className="px-2 py-1 rounded bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-semibold animate-in fade-in slide-in-from-left-2 duration-150"
               >
                 Smazat
               </button>
@@ -900,12 +900,12 @@ const MorningAffirmationBlock: React.FC<{
     <>
       <div className="mb-3">
         <div className="flex items-center justify-between mb-1.5">
-          <p className="text-[9px] font-black uppercase tracking-widest text-violet-600">✨ Ranní afirmace (AI)</p>
+          <p className="text-[11px] font-semibold text-violet-600">✨ Ranní afirmace (AI)</p>
           {!disabled && (
             <button
               onClick={fetchAffirmation}
               disabled={loading}
-              className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-widest transition-all ${
+              className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition-all ${
                 loading
                   ? 'bg-slate-200 text-slate-400 cursor-wait'
                   : 'bg-violet-500 hover:bg-violet-600 text-white shadow-sm'
@@ -937,7 +937,7 @@ const MorningAffirmationBlock: React.FC<{
 
       {/* CÍL DNE — auto-vyplněn AI, ale editovatelný */}
       <div>
-        <p className="text-[9px] font-black uppercase tracking-widest text-amber-600 mb-1.5">🎯 Co dnes hlídat</p>
+        <p className="text-[11px] font-semibold text-amber-600 mb-1.5">🎯 Co dnes hlídat</p>
         <input
           type="text"
           value={focus}
@@ -974,12 +974,12 @@ const ExpandedSessionCard: React.FC<{
   const [editingDebrief, setEditingDebrief] = useState(false);
 
   return (
-    <div className={`rounded-3xl border overflow-hidden ${isDark ? 'bg-[var(--bg-card)] border-white/10' : 'bg-white border-slate-200 shadow-sm'}`}>
+    <div className={`rounded-3xl border overflow-hidden ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-sm'}`}>
       {/* Header — compact: malé logo + name + čas inline */}
       <div className="flex items-center justify-between p-3 border-b border-slate-100">
         <div className="flex items-center gap-2.5 min-w-0 flex-1">
           <div className="w-7 h-7 rounded-lg text-white font-black grid place-items-center text-[11px] shrink-0" style={{ backgroundColor: sessionColor }}>{session.name[0]}</div>
-          <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-1.5 min-w-0 truncate">
+          <h3 className="text-xs font-semibold flex items-center gap-1.5 min-w-0 truncate">
             <span>{session.name}</span>
             <span className="font-normal text-slate-400 normal-case tracking-normal text-[10px]">{session.startTime}–{session.endTime}</span>
           </h3>
@@ -995,10 +995,10 @@ const ExpandedSessionCard: React.FC<{
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: sessionColor }}></div>
-            <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: sessionColor }}>① Kick-off — Plán</p>
+            <p className="text-[11px] font-semibold" style={{ color: sessionColor }}>① Kick-off — Plán</p>
           </div>
           {(prepSession?.plan || prepSession?.image) && !editingKickoff && (
-            <button onClick={() => setEditingKickoff(true)} className="text-[9px] font-black uppercase tracking-widest text-slate-500 hover:text-slate-700">Upravit</button>
+            <button onClick={() => setEditingKickoff(true)} className="text-[11px] font-semibold text-slate-500 hover:text-slate-700">Upravit</button>
           )}
         </div>
 
@@ -1017,7 +1017,7 @@ const ExpandedSessionCard: React.FC<{
         ) : (prepSession?.image || prepSession?.plan) ? (
           <>
             {prepSession.bias && (
-              <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full mb-3 text-[10px] font-black uppercase tracking-widest ${
+              <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full mb-3 text-[11px] font-semibold ${
                 prepSession.bias === 'Bullish' ? 'bg-emerald-500/10 text-emerald-600' :
                 prepSession.bias === 'Bearish' ? 'bg-rose-500/10 text-rose-600' :
                 'bg-slate-500/10 text-slate-600'
@@ -1027,7 +1027,7 @@ const ExpandedSessionCard: React.FC<{
             )}
             <div className={prepSession.plan && prepSession.image ? 'grid gap-3 md:grid-cols-2 md:items-start' : ''}>
               {prepSession.plan && (
-                <div className={`h-full p-3 rounded-xl ${isDark ? 'bg-white/5' : 'bg-slate-50'}`}>
+                <div className={`h-full p-3 rounded-xl bg-[var(--bg-page)]`}>
                   <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">{prepSession.plan}</p>
                 </div>
               )}
@@ -1039,7 +1039,7 @@ const ExpandedSessionCard: React.FC<{
                   aria-label="Zvětšit screenshot analýzy"
                 >
                   <img src={thumbLarge(prepSession.image)} className="w-full h-full object-cover transition-transform group-hover:scale-[1.02]" loading="lazy" alt="Analýza" />
-                  <span className="absolute right-2 bottom-2 inline-flex items-center gap-1 rounded-lg bg-slate-950/75 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-white backdrop-blur-sm">
+                  <span className="absolute right-2 bottom-2 inline-flex items-center gap-1 rounded-lg bg-slate-950/75 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur-sm">
                     <Maximize2 size={11} /> Zvětšit
                   </span>
                 </button>
@@ -1063,7 +1063,7 @@ const ExpandedSessionCard: React.FC<{
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600">② Live — {trades.length} trade{trades.length !== 1 ? 's' : ''}</p>
+              <p className="text-[11px] font-semibold text-emerald-600">② Live — {trades.length} trade{trades.length !== 1 ? 's' : ''}</p>
             </div>
             <span className={`text-xs font-black font-mono ${pnlClass}`}>{pnl >= 0 ? '+' : ''}${pnl.toFixed(0)}</span>
           </div>
@@ -1075,7 +1075,7 @@ const ExpandedSessionCard: React.FC<{
                 <div key={t.id} className={`flex items-center gap-3 p-2.5 rounded-lg ${isWin ? 'bg-emerald-50 border border-emerald-100' : 'bg-rose-50 border border-rose-100'}`}>
                   <span className={`text-[10px] font-mono ${isWin ? 'text-emerald-600' : 'text-rose-600'}`}>●</span>
                   <span className="text-[11px] font-mono text-slate-600">{time}</span>
-                  <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase ${isWin ? 'bg-emerald-500/10 text-emerald-600' : 'bg-rose-500/10 text-rose-600'}`}>{t.direction}</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[11px] font-semibold ${isWin ? 'bg-emerald-500/10 text-emerald-600' : 'bg-rose-500/10 text-rose-600'}`}>{t.direction}</span>
                   <span className="text-[10px] text-slate-500">{t.instrument}</span>
                   <span className={`ml-auto text-xs font-black font-mono ${isWin ? 'text-emerald-600' : 'text-rose-600'}`}>{(t.pnl || 0) >= 0 ? '+' : ''}${(t.pnl || 0).toFixed(0)}</span>
                 </div>
@@ -1090,10 +1090,10 @@ const ExpandedSessionCard: React.FC<{
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <div className="w-1.5 h-1.5 rounded-full bg-violet-500"></div>
-            <p className="text-[10px] font-black uppercase tracking-widest text-violet-600">③ Debrief — Reflexe</p>
+            <p className="text-[11px] font-semibold text-violet-600">③ Debrief — Reflexe</p>
           </div>
           {(breakdown?.notes || breakdown?.screenshot) && !editingDebrief && (
-            <button onClick={() => setEditingDebrief(true)} className="text-[9px] font-black uppercase tracking-widest text-slate-500 hover:text-slate-700">Upravit</button>
+            <button onClick={() => setEditingDebrief(true)} className="text-[11px] font-semibold text-slate-500 hover:text-slate-700">Upravit</button>
           )}
         </div>
 
@@ -1123,7 +1123,7 @@ const ExpandedSessionCard: React.FC<{
                 aria-label="Zvětšit screenshot debriefu"
               >
                 <img src={thumbLarge(breakdown.screenshot)} className="w-full h-full object-cover transition-transform group-hover:scale-[1.02]" loading="lazy" alt="Breakdown" />
-                <span className="absolute right-2 bottom-2 inline-flex items-center gap-1 rounded-lg bg-slate-950/75 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-white backdrop-blur-sm">
+                <span className="absolute right-2 bottom-2 inline-flex items-center gap-1 rounded-lg bg-slate-950/75 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur-sm">
                   <Maximize2 size={11} /> Zvětšit
                 </span>
               </button>
@@ -1135,7 +1135,7 @@ const ExpandedSessionCard: React.FC<{
             className="w-full py-6 border-2 border-dashed border-slate-300 rounded-2xl text-xs text-slate-500 hover:bg-slate-50"
           >
             {trades.length > 0 ? `${session.name} skončil. Jak to dopadlo vs. plán?` : `Žádné trades. Stojí to za poznámku?`}
-            <span className="block text-[10px] mt-1 text-violet-500 font-black uppercase tracking-widest">Udělej debrief →</span>
+            <span className="block text-[11px] mt-1 text-violet-500 font-semibold">Udělej debrief →</span>
           </button>
         )}
       </div>
@@ -1202,15 +1202,15 @@ const KickoffEditor: React.FC<{
   }, [session.id]);
 
   return (
-    <div className={`p-4 rounded-2xl border ${isDark ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
+    <div className={`p-4 rounded-2xl border bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
       {/* HTF Bias */}
-      <p className={`text-[9px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>HTF Bias</p>
+      <p className={`text-[11px] font-semibold mb-2 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>HTF Bias</p>
       <div className="flex gap-2 mb-4">
         {(['Bullish', 'Neutral', 'Bearish'] as const).map(b => (
           <button
             key={b}
             onClick={() => setBias(b)}
-            className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+            className={`flex-1 py-2 rounded-xl text-[11px] font-semibold transition-all ${
               bias === b
                 ? b === 'Bullish' ? 'bg-emerald-500 text-white' : b === 'Bearish' ? 'bg-rose-500 text-white' : 'bg-slate-500 text-white'
                 : isDark ? 'bg-white/5 text-slate-400 hover:bg-white/10' : 'bg-white text-slate-600 hover:bg-slate-100'
@@ -1225,7 +1225,7 @@ const KickoffEditor: React.FC<{
           dropzone byla aspect-video přes celou šířku (~425 px). Teď kompaktní. */}
       <div className="grid lg:grid-cols-2 gap-3 mb-4">
         <div>
-          <p className={`text-[9px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Plán</p>
+          <p className={`text-[11px] font-semibold mb-2 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Plán</p>
           <div className="relative">
             <textarea
               value={plan}
@@ -1250,7 +1250,7 @@ const KickoffEditor: React.FC<{
         </div>
 
         <div>
-          <p className={`text-[9px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Screenshot analýzy</p>
+          <p className={`text-[11px] font-semibold mb-2 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Screenshot analýzy</p>
           {image ? (
             <div className="relative">
               <div className="aspect-video rounded-xl overflow-hidden border border-slate-200">
@@ -1258,7 +1258,7 @@ const KickoffEditor: React.FC<{
               </div>
               <button
                 onClick={() => setImage(undefined)}
-                className="absolute top-2 right-2 px-2 py-1 rounded-lg bg-rose-500 text-white text-[9px] font-black uppercase tracking-widest"
+                className="absolute top-2 right-2 px-2 py-1 rounded-lg bg-rose-500 text-white text-[11px] font-semibold"
               >
                 Smazat
               </button>
@@ -1268,7 +1268,7 @@ const KickoffEditor: React.FC<{
             <label className={`flex flex-col items-center justify-center gap-1.5 h-[110px] rounded-xl border-2 border-dashed cursor-pointer text-slate-400 hover:bg-slate-100/50 transition-colors ${uploading ? 'opacity-50' : ''}`}>
               <input type="file" accept="image/*" className="hidden" onChange={handleFileChange} disabled={uploading} />
               <ImageIcon size={20} />
-              <p className="text-[9px] font-black uppercase tracking-widest">{uploading ? 'Nahrávám...' : 'Klikni nebo Ctrl+V'}</p>
+              <p className="text-[11px] font-semibold">{uploading ? 'Nahrávám...' : 'Klikni nebo Ctrl+V'}</p>
             </label>
           )}
         </div>
@@ -1276,12 +1276,12 @@ const KickoffEditor: React.FC<{
 
       {/* Akce */}
       <div className="flex gap-2">
-        <button onClick={onCancel} className={`flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest ${
+        <button onClick={onCancel} className={`flex-1 py-2.5 rounded-xl text-[11px] font-semibold ${
           isDark ? 'bg-white/5 hover:bg-white/10 text-slate-400' : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
         }`}>Zrušit</button>
         <button
           onClick={() => onSave({ id: session.id, label: session.name, bias, plan, image, color: sessionColor })}
-          className="flex-[2] py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest text-white"
+          className="flex-[2] py-2.5 rounded-xl text-[11px] font-semibold text-white"
           style={{ backgroundColor: sessionColor }}
         >
           Uložit plán
@@ -1349,7 +1349,7 @@ const DebriefEditor: React.FC<{
     <div className={`p-4 rounded-2xl border ${isDark ? 'bg-violet-500/5 border-violet-500/20' : 'bg-violet-50 border-violet-200'}`}>
       <div className="grid lg:grid-cols-2 gap-3 mb-4">
         <div>
-          <p className={`text-[9px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-violet-400' : 'text-violet-700'}`}>Plán vs realita</p>
+          <p className={`text-[11px] font-semibold mb-2 ${isDark ? 'text-violet-400' : 'text-violet-700'}`}>Plán vs realita</p>
           <div className="relative">
             <textarea
               value={notes}
@@ -1374,7 +1374,7 @@ const DebriefEditor: React.FC<{
         </div>
 
         <div>
-          <p className={`text-[9px] font-black uppercase tracking-widest mb-2 ${isDark ? 'text-violet-400' : 'text-violet-700'}`}>Screenshot výsledku (nepovinné)</p>
+          <p className={`text-[11px] font-semibold mb-2 ${isDark ? 'text-violet-400' : 'text-violet-700'}`}>Screenshot výsledku (nepovinné)</p>
           {screenshot ? (
             <div className="relative">
               <div className="aspect-video rounded-xl overflow-hidden border border-violet-200">
@@ -1382,7 +1382,7 @@ const DebriefEditor: React.FC<{
               </div>
               <button
                 onClick={() => setScreenshot(undefined)}
-                className="absolute top-2 right-2 px-2 py-1 rounded-lg bg-rose-500 text-white text-[9px] font-black uppercase tracking-widest"
+                className="absolute top-2 right-2 px-2 py-1 rounded-lg bg-rose-500 text-white text-[11px] font-semibold"
               >
                 Smazat
               </button>
@@ -1391,20 +1391,20 @@ const DebriefEditor: React.FC<{
             <label className={`flex flex-col items-center justify-center gap-1.5 h-[110px] rounded-xl border-2 border-dashed cursor-pointer text-slate-400 hover:bg-violet-50 transition-colors ${uploading ? 'opacity-50' : ''}`}>
               <input type="file" accept="image/*" className="hidden" onChange={handleFileChange} disabled={uploading} />
               <ImageIcon size={20} />
-              <p className="text-[9px] font-black uppercase tracking-widest">{uploading ? 'Nahrávám...' : 'Klikni nebo Ctrl+V'}</p>
+              <p className="text-[11px] font-semibold">{uploading ? 'Nahrávám...' : 'Klikni nebo Ctrl+V'}</p>
             </label>
           )}
         </div>
       </div>
 
       <div className="flex gap-2">
-        <button onClick={onCancel} className={`flex-1 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest ${
+        <button onClick={onCancel} className={`flex-1 py-2.5 rounded-xl text-[11px] font-semibold ${
           isDark ? 'bg-white/5 hover:bg-white/10 text-slate-400' : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
         }`}>Zrušit</button>
         <button
           onClick={() => onSave(notes, screenshot)}
           disabled={!notes.trim()}
-          className="flex-[2] py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest text-white bg-violet-600 hover:bg-violet-700 disabled:opacity-40"
+          className="flex-[2] py-2.5 rounded-xl text-[11px] font-semibold text-white bg-violet-600 hover:bg-violet-700 disabled:opacity-40"
         >
           Uložit debrief
         </button>
@@ -1472,7 +1472,7 @@ const IncidentComposer: React.FC<{
     <div className={`p-4 rounded-2xl border mb-4 ${isDark ? 'bg-rose-500/5 border-rose-500/20' : 'bg-rose-50/70 border-rose-200'}`}>
       <div className="flex items-center justify-between mb-3">
         <div>
-          <p className="text-[9px] font-black uppercase tracking-widest text-rose-500">Zapsat incident bez tradů</p>
+          <p className="text-[11px] font-semibold text-rose-500">Zapsat incident bez tradů</p>
           <p className="text-[10px] text-slate-500 mt-0.5">Ztráta se nepočítá do WR, RR ani počtu obchodů.</p>
         </div>
         <button onClick={onCancel} aria-label="Zavřít formulář" className="p-1.5 text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button>
@@ -1490,7 +1490,7 @@ const IncidentComposer: React.FC<{
         <textarea value={trigger} onChange={e => setTrigger(e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Trigger (např. nuda + chtěl jsem víc)" />
         <textarea value={lesson} onChange={e => setLesson(e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Co si z toho odnáším / ochranné pravidlo" />
       </div>
-      <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-2">Rozpad ztráty</p>
+      <p className="text-[11px] font-semibold text-slate-500 mb-2">Rozpad ztráty</p>
       <div className="space-y-2">
         {rows.map(row => (
           <div key={row.id} className="grid grid-cols-[1fr_105px_28px] gap-2">
@@ -1512,10 +1512,10 @@ const IncidentComposer: React.FC<{
         ))}
       </div>
       <div className="flex items-center justify-between mt-3 gap-3">
-        <button onClick={() => setRows(prev => [...prev, { id: crypto.randomUUID(), target: '', amount: '' }])} className="text-[9px] font-black uppercase tracking-widest text-blue-500 hover:text-blue-600">+ Přidat účet/skupinu</button>
+        <button onClick={() => setRows(prev => [...prev, { id: crypto.randomUUID(), target: '', amount: '' }])} className="text-[11px] font-semibold text-blue-500 hover:text-blue-600">+ Přidat účet/skupinu</button>
         <div className="flex items-center gap-3">
           <span className="font-mono text-sm font-black text-rose-500">Celkem -${total.toFixed(0)}</span>
-          <button onClick={submit} disabled={!canSave} className="px-4 py-2.5 rounded-xl bg-rose-500 text-white text-[9px] font-black uppercase tracking-widest disabled:opacity-40">Uložit incident</button>
+          <button onClick={submit} disabled={!canSave} className="px-4 py-2.5 rounded-xl bg-rose-500 text-white text-[11px] font-semibold disabled:opacity-40">Uložit incident</button>
         </div>
       </div>
     </div>
@@ -1560,7 +1560,7 @@ const ExpandedAuditCard: React.FC<{
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 grid place-items-center"><Moon size={16} className="text-indigo-500" /></div>
           <div>
-            <h3 className="text-sm font-black uppercase tracking-widest">Večerní audit</h3>
+            <h3 className="text-sm font-semibold">Večerní audit</h3>
             <p className="text-[10px] text-slate-500">Co si odnášíš · plán na zítra</p>
           </div>
         </div>
@@ -1573,7 +1573,7 @@ const ExpandedAuditCard: React.FC<{
       {/* Quick notes summary */}
       {quickNotes.length > 0 && (
         <div className="p-4 rounded-xl bg-violet-50 border border-violet-200 mb-4">
-          <p className="text-[9px] font-black uppercase tracking-widest text-violet-600 mb-3">💭 Myšlenky z dnešku ({quickNotes.length})</p>
+          <p className="text-[11px] font-semibold text-violet-600 mb-3">💭 Myšlenky z dnešku ({quickNotes.length})</p>
           <div className="space-y-2">
             {quickNotes.map(n => (
               <QuickNoteRow
@@ -1592,11 +1592,11 @@ const ExpandedAuditCard: React.FC<{
       )}
 
       {/* Den P&L — incidenty zůstávají oddělené od trade statistik. */}
-      <div className={`p-3 rounded-xl border mb-4 ${isDark ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
+      <div className={`p-3 rounded-xl border mb-4 ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)]'}`}>
         <div className="grid grid-cols-3 gap-3">
-          <div><p className="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-1">Trade P&L</p><p className={`text-lg font-black font-mono ${pnlClass}`}>{pnl >= 0 ? '+' : ''}${pnl.toFixed(0)}</p></div>
-          <div><p className="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-1">Mimo trady</p><p className="text-lg font-black font-mono text-rose-500">-${incidentLoss.toFixed(0)}</p></div>
-          <div><p className="text-[8px] font-black uppercase text-slate-400 tracking-widest mb-1">Známý výsledek</p><p className={`text-lg font-black font-mono ${knownDayPnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{knownDayPnl >= 0 ? '+' : ''}${knownDayPnl.toFixed(0)}</p></div>
+          <div><p className="text-[11px] font-semibold text-slate-400 mb-1">Trade P&L</p><p className={`text-lg font-black font-mono ${pnlClass}`}>{pnl >= 0 ? '+' : ''}${pnl.toFixed(0)}</p></div>
+          <div><p className="text-[11px] font-semibold text-slate-400 mb-1">Mimo trady</p><p className="text-lg font-black font-mono text-rose-500">-${incidentLoss.toFixed(0)}</p></div>
+          <div><p className="text-[11px] font-semibold text-slate-400 mb-1">Známý výsledek</p><p className={`text-lg font-black font-mono ${knownDayPnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{knownDayPnl >= 0 ? '+' : ''}${knownDayPnl.toFixed(0)}</p></div>
         </div>
       </div>
 
@@ -1606,7 +1606,7 @@ const ExpandedAuditCard: React.FC<{
           <div key={incident.id} className={`p-4 rounded-2xl border mb-3 ${isDark ? 'bg-rose-500/5 border-rose-500/20' : 'bg-rose-50/70 border-rose-200'}`}>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-[9px] font-black uppercase tracking-widest text-rose-500">⚠ Gambling incident · bez tradů</p>
+                <p className="text-[11px] font-semibold text-rose-500">⚠ Gambling incident · bez tradů</p>
                 <h4 className="font-black text-sm mt-1">{incident.title}</h4>
                 <p className="text-xs text-slate-500 mt-1 leading-relaxed">{incident.whatHappened}</p>
               </div>
@@ -1616,7 +1616,7 @@ const ExpandedAuditCard: React.FC<{
               </div>
             </div>
             <div className="flex flex-wrap gap-1.5 mt-3">
-              {incident.allocations.map(a => <span key={a.id} className={`px-2 py-1 rounded-lg text-[9px] font-black ${isDark ? 'bg-white/5 text-slate-300' : 'bg-white text-slate-600 border border-rose-100'}`}>{a.label} −${a.lossAmount.toFixed(0)}</span>)}
+              {incident.allocations.map(a => <span key={a.id} className={`px-2 py-1 rounded-lg text-[9px] font-black ${isDark ? 'bg-[var(--bg-page)] text-slate-300' : 'bg-[var(--bg-card)] text-slate-600 border border-rose-100'}`}>{a.label} −${a.lossAmount.toFixed(0)}</span>)}
             </div>
             {incident.trigger && <p className="text-[10px] text-amber-600 mt-2"><b>Trigger:</b> {incident.trigger}</p>}
             {incident.lesson && <p className="text-[10px] text-blue-600 mt-1"><b>Poučení:</b> {incident.lesson}</p>}
@@ -1636,14 +1636,14 @@ const ExpandedAuditCard: React.FC<{
           }}
         />
       ) : onUpdateReview && (
-        <button onClick={() => setIncidentOpen(true)} className={`w-full mb-4 py-3 rounded-xl border border-dashed text-[9px] font-black uppercase tracking-widest transition-colors ${isDark ? 'border-rose-500/30 text-rose-400 hover:bg-rose-500/10' : 'border-rose-300 text-rose-600 hover:bg-rose-50'}`}>
+        <button onClick={() => setIncidentOpen(true)} className={`w-full mb-4 py-3 rounded-xl border border-dashed text-[11px] font-semibold transition-colors ${isDark ? 'border-rose-500/30 text-rose-400 hover:bg-rose-500/10' : 'border-rose-300 text-rose-600 hover:bg-rose-50'}`}>
           + Zapsat gambling / ztrátu bez tradů
         </button>
       )}
 
       {/* CO SI ODNÁŠÍŠ */}
       <div className="mb-3">
-        <p className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1.5">📝 Co si odnášíš</p>
+        <p className="text-[11px] font-semibold text-slate-500 mb-1.5">📝 Co si odnášíš</p>
         <div className="relative">
           <textarea
             value={takeaway}

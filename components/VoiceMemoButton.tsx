@@ -165,7 +165,7 @@ const VoiceMemoButton: React.FC<VoiceMemoButtonProps> = ({
         <div className={`${sizeClass} rounded-full bg-blue-500 text-white flex items-center justify-center`}>
           <Loader2 size={iconSize} className="animate-spin" />
         </div>
-        <span className="text-[9px] font-black uppercase tracking-widest text-blue-500">{state === 'starting' ? 'Zapínám mikrofon…' : 'Přepisuji…'}</span>
+        <span className="text-[11px] font-semibold text-blue-500">{state === 'starting' ? 'Zapínám mikrofon…' : 'Přepisuji…'}</span>
       </div>
     );
   }

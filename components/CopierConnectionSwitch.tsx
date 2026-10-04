@@ -31,7 +31,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
       <span
         role="status"
         title={title}
-        className="flex h-7 w-[108px] items-center justify-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] text-[9px] font-black uppercase tracking-[0.08em] text-[var(--text-secondary)]"
+        className="flex h-7 w-[108px] items-center justify-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] text-[11px] font-semibold text-[var(--text-secondary)]"
       >
         <RefreshCw size={12} className="animate-spin" />
         Neověřeno
@@ -52,7 +52,7 @@ export const CopierConnectionSwitch = ({ connected, statusPending, runtimeReady,
         event.stopPropagation();
         if (!disabled) onToggle();
       }}
-      className={`group flex h-11 w-[108px] items-center justify-center text-[9px] font-black uppercase tracking-[0.08em] disabled:cursor-not-allowed ${retaining && !display.warning ? '' : 'disabled:opacity-45'}`}
+      className={`group flex h-11 w-[108px] items-center justify-center text-[11px] font-semibold disabled:cursor-not-allowed ${retaining && !display.warning ? '' : 'disabled:opacity-45'}`}
     >
       <span className={`relative flex h-7 w-full items-center justify-center overflow-hidden rounded-md border px-2 transition-all duration-300 ${displayedConnected
         ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500 group-enabled:group-hover:border-rose-500/40 group-enabled:group-hover:bg-rose-500/10 group-enabled:group-hover:text-rose-500'

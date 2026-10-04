@@ -63,14 +63,14 @@ const entryMs = (t: any): number => {
 const EnrichBadge = ({ variant }: { variant: 'card' | 'inline' }) => (
   variant === 'card' ? (
     <div
-      className="absolute top-3 right-3 z-20 flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500 text-white text-[9px] font-black uppercase tracking-wider shadow-lg shadow-amber-500/30"
+      className="absolute top-3 right-3 z-20 flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500 text-white text-[11px] font-semibold shadow-lg shadow-amber-500/30"
       title="Importováno — doplň screenshot a konfluence"
     >
       <Sparkles size={10} /> Doplnit
     </div>
   ) : (
     <span
-      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-500 text-[8px] font-black uppercase tracking-wider"
+      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-500 text-[11px] font-semibold"
       title="Importováno — doplň screenshot a konfluence"
     >
       <Sparkles size={8} /> Doplnit
@@ -84,14 +84,14 @@ const PENDING_TITLE = 'Excursion se dopočítá, až graf pokryje celý den — 
 const PendingBadge = ({ variant }: { variant: 'card' | 'inline' }) => (
   variant === 'card' ? (
     <div
-      className="absolute top-3 left-3 z-20 flex items-center gap-1 px-2 py-1 rounded-full bg-violet-500 text-white text-[9px] font-black uppercase tracking-wider shadow-lg shadow-violet-500/30"
+      className="absolute top-3 left-3 z-20 flex items-center gap-1 px-2 py-1 rounded-full bg-violet-500 text-white text-[11px] font-semibold shadow-lg shadow-violet-500/30"
       title={PENDING_TITLE}
     >
       <Clock size={10} /> Čeká se
     </div>
   ) : (
     <span
-      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-400 text-[8px] font-black uppercase tracking-wider"
+      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-400 text-[11px] font-semibold"
       title={PENDING_TITLE}
     >
       <Clock size={8} /> Čeká
@@ -101,7 +101,7 @@ const PendingBadge = ({ variant }: { variant: 'card' | 'inline' }) => (
 
 const CopierReviewBadge = ({ variant }: { variant: 'card' | 'inline' }) => (
   <span className={`inline-flex items-center gap-1 rounded-full border border-indigo-500/30 bg-indigo-500/15 font-black text-indigo-400 ${
-    variant === 'card' ? 'px-2 py-1 text-[8px] uppercase tracking-wider' : 'px-1.5 py-0.5 text-[8px]'
+    variant === 'card' ? 'px-2 py-1 text-[11px]' : 'px-1.5 py-0.5 text-[8px]'
   }`} title="Fakta doplnila kopírka; otevři obchod a ulož vlastní reflexi">
     <Inbox size={variant === 'card' ? 9 : 8} /> Kopírka · nezkontrolováno
   </span>
@@ -122,6 +122,10 @@ interface TradeHistoryProps {
   onSaveChartNotes?: (tradeIds: readonly string[], notes: ChartNote[]) => Promise<boolean>;
   /** Otevře hodnocení obchodu z Tradovate (nová obrazovka). */
   onOpenReview?: (trade: Trade) => void;
+  /** Malý ukazatel stavu načtení historie vedle menu ⋯ (vykreslí se jen při problému). */
+  toolbarStatus?: React.ReactNode;
+  /** Další položky menu ⋯ (podklady historie, archiv neúplných záznamů). */
+  menuItems?: ReadonlyArray<{ id: string; label: string; icon: React.ElementType; onSelect: () => void }>;
   allTrades?: Trade[];
   viewMode: 'grid' | 'table';
   setViewMode?: (mode: 'grid' | 'table') => void;
@@ -136,7 +140,7 @@ interface TradeHistoryProps {
 }
 
 const TradeHistory: React.FC<TradeHistoryProps> = ({
-  trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade, onAttachScreenshot, onSaveChartNotes, onOpenReview,
+  trades, accounts, onDelete, onClear, theme, emotions, onUpdateTrade, onAttachScreenshot, onSaveChartNotes, onOpenReview, toolbarStatus, menuItems,
   pnlDisplayMode = 'usd', initialBalance, user, exchangeRates, allTrades = [],
   viewMode, setViewMode, enrichSignal, userMistakes = [],
 }) => {
@@ -998,7 +1002,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
         {!isMultiSelectMode && onUpdateTrade && sortedTrades.length > 0 && (
           <button
             onClick={() => setWeeklyReviewOpen(true)}
-            className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-bold transition-all active:scale-95 ${isDark ? 'border border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.08]' : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
+            className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-bold transition-all active:scale-95 ${isDark ? 'border border-[var(--border-subtle)] bg-[var(--bg-page)] text-slate-200 hover:bg-white/[0.08]' : 'border border-[var(--border-subtle)] bg-[var(--bg-card)] text-slate-700 hover:bg-slate-50'}`}
             title="Projít obchody týdne v jednom grafu a rychle je ohodnotit"
           >
             <CalendarRange size={14} /> Review týdne
@@ -1025,8 +1029,10 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           </button>
         )}
 
+        {!isMultiSelectMode && toolbarStatus && <div className="ml-auto">{toolbarStatus}</div>}
+
         {!isMultiSelectMode && (
-          <div className="ml-auto relative" ref={kebabRef}>
+          <div className={`${toolbarStatus ? '' : 'ml-auto '}relative`} ref={kebabRef}>
             <button
               onClick={() => setKebabOpen(v => !v)}
               className={`flex items-center justify-center w-9 h-9 rounded-lg transition-all active:scale-95 ${
@@ -1051,18 +1057,14 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: -4, scale: 0.96 }}
                   transition={{ duration: 0.12 }}
-                  className={`absolute right-0 mt-2 w-56 rounded-xl shadow-lg border overflow-hidden z-30 ${
-                    theme === 'light'
-                      ? 'bg-white border-slate-200'
-                      : 'bg-slate-800 border-slate-700'
-                  }`}
+                  className="absolute right-0 mt-2 w-56 rounded-xl shadow-lg border overflow-hidden z-30 bg-[var(--bg-card)] border-[var(--border-subtle)] backdrop-blur-2xl"
                 >
                   {setViewMode && (
                     <div className={`px-3 pt-3 pb-2 ${theme === 'light' ? 'border-b border-slate-200' : 'border-b border-slate-700'}`}>
-                      <div className={`text-[9px] font-black uppercase tracking-widest mb-1.5 px-1 ${theme === 'light' ? 'text-slate-400' : 'text-slate-500'} flex items-center gap-1.5`}>
+                      <div className={`text-[11px] font-semibold mb-1.5 px-1 ${theme === 'light' ? 'text-slate-400' : 'text-slate-500'} flex items-center gap-1.5`}>
                         <LayoutGrid size={10} /> Zobrazení
                       </div>
-                      <div className={`flex p-0.5 rounded-lg relative ${theme === 'light' ? 'bg-slate-100' : 'bg-slate-900/60'}`}>
+                      <div className={`flex p-0.5 rounded-lg relative bg-[var(--bg-page)]`}>
                         <motion.div
                           animate={{ x: (viewMode === 'grid' ? 0 : 100) + '%' }}
                           transition={{ type: 'spring', stiffness: 400, damping: 35 }}
@@ -1072,7 +1074,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                           <button
                             key={v.id}
                             onClick={() => setViewMode(v.id)}
-                            className={`flex-1 relative z-10 py-1.5 rounded-md text-[10px] font-black uppercase tracking-wider transition-colors flex items-center justify-center gap-1.5 ${
+                            className={`flex-1 relative z-10 py-1.5 rounded-md text-[11px] font-semibold transition-colors flex items-center justify-center gap-1.5 ${
                               viewMode === v.id
                                 ? (theme === 'light' ? 'text-slate-900' : 'text-white')
                                 : (theme === 'light' ? 'text-slate-500' : 'text-slate-400')
@@ -1092,6 +1094,17 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                   >
                     <CheckSquare size={16} className="opacity-70" /> Vybrat více
                   </button>
+                  {menuItems?.map(item => (
+                    <button
+                      key={item.id}
+                      onClick={() => { setKebabOpen(false); item.onSelect(); }}
+                      className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm font-semibold text-left transition-colors border-t border-[var(--border-subtle)] ${
+                        theme === 'light' ? 'hover:bg-slate-100 text-slate-700' : 'hover:bg-slate-700/60 text-slate-200'
+                      }`}
+                    >
+                      <item.icon size={16} className="opacity-70" /> {item.label}
+                    </button>
+                  ))}
 
 
                 </motion.div>
@@ -1165,7 +1178,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                     <div className={`text-sm font-black ${theme !== 'light' ? 'text-slate-100' : 'text-slate-800'}`}>
                       Neplatné / mimo plán
                     </div>
-                    <div className="text-[11px] font-bold text-amber-600/80 uppercase tracking-wider">
+                    <div className="text-[11px] font-bold text-amber-600/80">
                       {day.label} · {day.items.length} {day.items.length === 1 ? 'obchod' : day.items.length < 5 ? 'obchody' : 'obchodů'}
                     </div>
                   </div>
@@ -1192,7 +1205,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         >
                           <span className="font-mono text-slate-500 w-[42px] shrink-0">{hhmm}</span>
                           <span className={`font-bold ${theme !== 'light' ? 'text-slate-200' : 'text-slate-700'}`}>{t.instrument}</span>
-                          <span className={`text-[10px] font-black uppercase ${isLong ? 'text-emerald-500' : 'text-rose-500'} shrink-0`}>
+                          <span className={`text-[11px] font-semibold ${isLong ? 'text-emerald-500' : 'text-rose-500'} shrink-0`}>
                             {isLong ? '▲' : '▼'} {t.direction}
                           </span>
                           <span className="flex-1 min-w-0 truncate text-slate-500">{getAccountName(t.accountId)}</span>
@@ -1302,7 +1315,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                     </div>
 
                     {/* Row 2: Instrument (hero) — hned pod datem pro maximální důraz */}
-                    <h3 className={`text-2xl font-black uppercase tracking-tighter truncate leading-none ${theme !== 'light' ? 'text-white group-hover:text-trade-accent' : 'text-slate-900'} transition-colors duration-300`}>
+                    <h3 className={`text-2xl font-semibold tracking-tighter truncate leading-none ${theme !== 'light' ? 'text-white group-hover:text-trade-accent' : 'text-slate-900'} transition-colors duration-300`}>
                       {trade.instrument}
                     </h3>
 
@@ -1311,7 +1324,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       {(() => {
                         const isLong = String(trade.direction || '').toLowerCase() === 'long';
                         return (
-                          <span className={`px-2 py-0.5 rounded-md text-[7px] font-black uppercase border tracking-tighter flex items-center gap-1 ${
+                          <span className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border flex items-center gap-1 ${
                             isLong ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border-rose-500/20'
                           }`}>
                             {isLong ? <ArrowUpRight size={9} strokeWidth={3} /> : <ArrowDownRight size={9} strokeWidth={3} />}
@@ -1320,36 +1333,36 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         );
                       })()}
                       {trade.source === 'copier' && trade.needsReview === true && <CopierReviewBadge variant="card" />}
-                      {isLegacyJournalTrade(trade) && <span className="px-2 py-0.5 rounded-md border border-amber-500/20 bg-amber-500/10 text-amber-500 text-[8px] font-black uppercase" title={tradeEstimateNotice(trade) || undefined}>Starší záznam</span>}
-                      {trade.pnlEstimated && <span className="px-2 py-0.5 rounded-md border border-amber-500/20 bg-amber-500/10 text-amber-500 text-[8px] font-black uppercase" title={tradeEstimateNotice(trade) || undefined}>Odhad</span>}
+                      {isLegacyJournalTrade(trade) && <span className="px-2 py-0.5 rounded-md border border-amber-500/20 bg-amber-500/10 text-amber-500 text-[11px] font-semibold" title={tradeEstimateNotice(trade) || undefined}>Starší záznam</span>}
+                      {trade.pnlEstimated && <span className="px-2 py-0.5 rounded-md border border-amber-500/20 bg-amber-500/10 text-amber-500 text-[11px] font-semibold" title={tradeEstimateNotice(trade) || undefined}>Odhad</span>}
                       {/* Execution Status badge — always show */}
                       {(() => {
                         const status = trade.executionStatus || (trade.isValid === false ? 'Invalid' : 'Valid');
                         if (status === 'Missed') return (
-                          <span className="px-2 py-0.5 rounded-md text-[7px] font-black uppercase border tracking-tighter flex items-center gap-1 bg-blue-500/10 text-blue-400 border-blue-500/20">
-                            <Clock size={9} strokeWidth={3} /> MISSED
+                          <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold border flex items-center gap-1 bg-blue-500/10 text-blue-400 border-blue-500/20">
+                            <Clock size={9} strokeWidth={3} /> Missed
                           </span>
                         );
                         if (status === 'Invalid') return (
-                          <span className="px-2 py-0.5 rounded-md text-[7px] font-black uppercase border tracking-tighter flex items-center gap-1 bg-rose-500/10 text-rose-500 border-rose-500/20">
-                            <AlertOctagon size={9} strokeWidth={3} /> NEVALIDNÍ
+                          <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold border flex items-center gap-1 bg-rose-500/10 text-rose-500 border-rose-500/20">
+                            <AlertOctagon size={9} strokeWidth={3} /> Nevalidní
                           </span>
                         );
                         return (
-                          <span className="px-2 py-0.5 rounded-md text-[7px] font-black uppercase border tracking-tighter flex items-center gap-1 bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
-                            <CheckCircle2 size={9} strokeWidth={3} /> VALIDNÍ
+                          <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold border flex items-center gap-1 bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
+                            <CheckCircle2 size={9} strokeWidth={3} /> Validní
                           </span>
                         );
                       })()}
                       {getTradePhase(trade) && (
-                        <span className={`px-1.5 py-0.5 rounded text-[7px] font-black tracking-widest border ${
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
                             getTradePhase(trade) === 'Funded'
                               ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
                               : getTradePhase(trade) === 'Backtesting'
                                 ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
                                 : 'bg-amber-500/10 text-amber-500 border-amber-500/20'
                           }`}>
-                          {getTradePhase(trade)!.toUpperCase()}
+                          {getTradePhase(trade)}
                         </span>
                       )}
                     </div>
@@ -1357,7 +1370,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                     {/* Row 4: Account pill — kompaktní, stejný styl jako ostatní badge */}
                     <div className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border w-fit ${isGroupTrade
                         ? 'bg-blue-500/5 border-blue-500/15'
-                        : theme !== 'light' ? 'bg-white/[0.03] border-white/5' : 'bg-slate-50 border-slate-200'
+                        : 'bg-[var(--bg-page)] border-[var(--border-subtle)]'
                       }`}>
                       <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                         tradeAccount?.type === 'Funded' ? 'bg-purple-500' :
@@ -1366,17 +1379,17 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       }`} />
                       {isCombinedCard ? (
                         <>
-                          <span className={`text-[8px] font-black uppercase tracking-tighter truncate max-w-[120px] ${theme !== 'light' ? 'text-slate-300' : 'text-slate-600'}`}>
+                          <span className={`text-[11px] font-semibold tracking-tighter truncate max-w-[120px] ${theme !== 'light' ? 'text-slate-300' : 'text-slate-600'}`}>
                             {masterAcc?.name || 'Skupina obchodu'}
                           </span>
                           <ArrowRight size={8} className="text-blue-400/60" />
-                          <span className="text-[7px] font-black text-blue-400 uppercase tracking-widest">
+                          <span className="text-[10px] font-semibold text-blue-400">
                             {tradeAccountLabel(groupTrades)}
                           </span>
                         </>
                       ) : (
                         <>
-                          <span className={`text-[8px] font-black uppercase tracking-tighter truncate max-w-[120px] ${theme !== 'light' ? 'text-slate-300' : 'text-slate-600'}`}>
+                          <span className={`text-[11px] font-semibold tracking-tighter truncate max-w-[120px] ${theme !== 'light' ? 'text-slate-300' : 'text-slate-600'}`}>
                             {getAccountName(trade.accountId)}
                           </span>
                           {isMasterCard && (
@@ -1394,7 +1407,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
                         {(trade.emotions || []).slice(0, 3).map(eId => {
                           const e = getEmotionDetails(eId);
-                          return <span key={eId} className="text-[9px] font-black uppercase text-purple-500/70 bg-purple-500/5 px-2 py-0.5 rounded border border-purple-500/15">{e.label}</span>;
+                          return <span key={eId} className="text-[11px] font-semibold text-purple-500/70 bg-purple-500/5 px-2 py-0.5 rounded border border-purple-500/15">{e.label}</span>;
                         })}
                       </div>
                     )}
@@ -1456,7 +1469,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                         <div className="p-4 bg-white/10 rounded-full text-white shadow-2xl border border-white/20 animate-in zoom-in-95"><Maximize2 size={24} /></div>
                       </div>
                       {tradeScreenshots && tradeScreenshots.length > 1 && (
-                        <div className="absolute bottom-3 right-3 px-2 py-1 bg-black/60 rounded-md text-[8px] font-black text-white uppercase tracking-widest backdrop-blur-md z-40">
+                        <div className="absolute bottom-3 right-3 px-2 py-1 bg-black/60 rounded-md text-[11px] font-semibold text-white backdrop-blur-md z-40">
                           +{tradeScreenshots.length - 1} more
                         </div>
                       )}
@@ -1476,11 +1489,11 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
           })}
         </div>
       ) : (
-        <div className={`rounded-lg border overflow-hidden ${theme !== 'light' ? 'bg-white/[0.02] border-white/10' : 'bg-white border-slate-200'} backdrop-blur-md`}>
+        <div className={`rounded-lg border overflow-hidden bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className={`${theme !== 'light' ? 'bg-white/[0.03]' : 'bg-slate-50'} border-b ${theme !== 'light' ? 'border-white/10' : 'border-slate-200'}`}>
+                <tr className="bg-[var(--bg-page)] border-b border-[var(--border-subtle)]">
                   {isMultiSelectMode && (
                     <th className="px-4 py-4 w-12">
                       <input
@@ -1491,13 +1504,13 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       />
                     </th>
                   )}
-                  <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Vizual</th>
-                  <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Instrument</th>
-                  <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Typ</th>
-                  <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Datum & Čas</th>
-                  <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Účet</th>
-                  <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 text-right">PnL / R</th>
-                  <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 text-right">Akce</th>
+                  <th className="px-6 py-4 text-[11px] font-semibold text-slate-500">Vizual</th>
+                  <th className="px-6 py-4 text-[11px] font-semibold text-slate-500">Instrument</th>
+                  <th className="px-6 py-4 text-[11px] font-semibold text-slate-500">Typ</th>
+                  <th className="px-6 py-4 text-[11px] font-semibold text-slate-500">Datum & Čas</th>
+                  <th className="px-6 py-4 text-[11px] font-semibold text-slate-500">Účet</th>
+                  <th className="px-6 py-4 text-[11px] font-semibold text-slate-500 text-right">PnL / R</th>
+                  <th className="px-6 py-4 text-[11px] font-semibold text-slate-500 text-right">Akce</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
@@ -1575,19 +1588,19 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                       </td>
                       <td className="px-6 py-3">
                         <div className="flex flex-col">
-                          <span className={`flex items-center gap-1.5 text-sm font-black uppercase tracking-tight ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
+                          <span className={`flex items-center gap-1.5 text-sm font-semibold tracking-tight ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
                             {trade.instrument}
                             {enrichIds.has(String(trade.id)) && <EnrichBadge variant="inline" />}
                             {(trade as any).excursionComplete === false && <PendingBadge variant="inline" />}
                             {trade.source === 'copier' && trade.needsReview === true && <CopierReviewBadge variant="inline" />}
-                            {isLegacyJournalTrade(trade) && <span className="text-[8px] font-black text-amber-500" title={tradeEstimateNotice(trade) || undefined}>STARŠÍ ZÁZNAM</span>}
+                            {isLegacyJournalTrade(trade) && <span className="text-[10px] font-semibold text-amber-500" title={tradeEstimateNotice(trade) || undefined}>Starší záznam</span>}
                             {trade.pnlEstimated && <span className="text-[8px] font-black text-amber-500" title={tradeEstimateNotice(trade) || undefined}>ODHAD</span>}
                           </span>
-                          <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">{getTradePhase(trade) || 'Standard'}</span>
+                          <span className="text-[11px] font-bold text-slate-500">{getTradePhase(trade) || 'Standard'}</span>
                         </div>
                       </td>
                       <td className="px-6 py-3">
-                        <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase border tracking-tighter ${isMissed ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                        <span className={`px-2 py-0.5 rounded text-[11px] font-semibold border tracking-tighter ${isMissed ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
                           isWin ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' :
                             'bg-rose-500/10 text-rose-500 border-rose-500/20'
                           }`}>
@@ -1607,15 +1620,15 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                           <Terminal size={10} className={tblIsGroup ? 'text-blue-400' : 'text-slate-600'} />
                           {tblIsCombined ? (
                             <>
-                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest max-w-[100px] truncate">{tblMasterAcc?.name || 'Skupina obchodu'}</span>
+                              <span className="text-[11px] font-bold text-slate-500 max-w-[100px] truncate">{tblMasterAcc?.name || 'Skupina obchodu'}</span>
                               <ArrowRight size={8} className="text-blue-400/60" />
-                              <span className="text-[8px] font-bold text-blue-400 uppercase tracking-wider">
+                              <span className="text-[11px] font-bold text-blue-400">
                                 {tradeAccountLabel(tblGroup)}
                               </span>
                             </>
                           ) : (
                             <>
-                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest max-w-[100px] truncate">{getAccountName(trade.accountId)}</span>
+                              <span className="text-[11px] font-bold text-slate-500 max-w-[100px] truncate">{getAccountName(trade.accountId)}</span>
                               {tblIsMaster && (
                                 <span className="px-1 py-0.5 bg-blue-600/20 text-blue-400 rounded text-[7px] font-black tracking-widest border border-blue-500/30">MASTER</span>
                               )}
@@ -1666,7 +1679,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
               style={{ animationDuration: '2s' }}
             />
           </div>
-          <span className={`mt-3 text-[10px] font-black uppercase tracking-[0.3em] ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+          <span className={`mt-3 text-[11px] font-semibold ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
             {isLoadingMore ? 'Načítám další obchody...' : `${sortedTrades.length - visibleCount} dalších`}
           </span>
         </div>
@@ -1674,7 +1687,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
 
       {!hasMore && sortedTrades.length > PAGE_SIZE && (
         <div className="flex justify-center py-6">
-          <span className={`text-[10px] font-black uppercase tracking-[0.3em] ${isDark ? 'text-slate-600' : 'text-slate-400'}`}>
+          <span className={`text-[11px] font-semibold ${isDark ? 'text-slate-600' : 'text-slate-400'}`}>
             Zobrazeno všech {sortedTrades.length} obchodů
           </span>
         </div>
@@ -1692,7 +1705,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className={`max-w-lg w-full rounded-[32px] border shadow-2xl overflow-hidden ${isDark ? 'bg-slate-900 border-white/10' : 'bg-white border-slate-200'}`}
+              className={`max-w-lg w-full rounded-[32px] border shadow-2xl overflow-hidden bg-[var(--bg-card)] border-[var(--border-subtle)] backdrop-blur-2xl`}
               onClick={e => e.stopPropagation()}
             >
               <div className="p-6 border-b border-amber-500/20 bg-gradient-to-b from-amber-500/5 to-transparent">
@@ -1701,7 +1714,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                     <Sparkles size={20} className="text-amber-500" />
                   </div>
                   <div>
-                    <p className="text-[9px] font-black uppercase tracking-[0.3em] text-amber-500 mb-0.5">Hromadné otagování</p>
+                    <p className="text-[11px] font-semibold text-amber-500 mb-0.5">Hromadné otagování</p>
                     <h2 className={`text-lg font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
                       {selectedTradeIds.size} importovaných obchodů
                     </h2>
@@ -1715,7 +1728,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
               <div className="p-6 space-y-5">
                 {/* Chyby — checklist */}
                 <div>
-                  <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  <label className={`text-[11px] font-semibold mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
                     Chyby (vyber co se opakovalo)
                   </label>
                   <div className="flex flex-wrap gap-1.5">
@@ -1734,7 +1747,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                             if (active) next.delete(m); else next.add(m);
                             setBulkTagMistakes(next);
                           }}
-                          className={`px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wide transition-all border ${active
+                          className={`px-3 py-1.5 rounded-full text-[11px] font-semibold transition-all border ${active
                             ? 'bg-rose-500 text-white border-rose-500 shadow-md'
                             : (isDark ? 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100')
                           }`}
@@ -1748,20 +1761,20 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
 
                 {/* Tag */}
                 <div>
-                  <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  <label className={`text-[11px] font-semibold mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
                     Tag (volitelný — např. „MFF spálení 1.6.")
                   </label>
                   <input
                     value={bulkTagText}
                     onChange={e => setBulkTagText(e.target.value)}
                     placeholder="MFF spálení 1.6."
-                    className={`w-full px-4 py-2.5 rounded-xl border text-sm font-bold outline-none ${isDark ? 'bg-white/5 border-white/10 text-white placeholder:text-slate-600' : 'bg-slate-50 border-slate-200 text-slate-900 placeholder:text-slate-400'}`}
+                    className={`w-full px-4 py-2.5 rounded-xl border text-sm font-bold outline-none ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-white placeholder:text-slate-600' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-900 placeholder:text-slate-400'}`}
                   />
                 </div>
 
                 {/* Note */}
                 <div>
-                  <label className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  <label className={`text-[11px] font-semibold mb-2 block ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
                     Poznámka (volitelná — co se stalo, jedním řádkem)
                   </label>
                   <textarea
@@ -1769,7 +1782,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                     onChange={e => setBulkTagNotes(e.target.value)}
                     placeholder="Po prvním lossu jsem začal honit a do konce dne nedokázal přestat."
                     rows={2}
-                    className={`w-full px-4 py-2.5 rounded-xl border text-xs resize-none outline-none ${isDark ? 'bg-white/5 border-white/10 text-white placeholder:text-slate-600' : 'bg-slate-50 border-slate-200 text-slate-900 placeholder:text-slate-400'}`}
+                    className={`w-full px-4 py-2.5 rounded-xl border text-xs resize-none outline-none ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-white placeholder:text-slate-600' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-900 placeholder:text-slate-400'}`}
                   />
                 </div>
 
@@ -1782,7 +1795,7 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                     className="w-4 h-4 accent-emerald-500"
                   />
                   <div className="flex-1">
-                    <p className={`text-[11px] font-black uppercase tracking-wide ${bulkTagMarkDone ? 'text-emerald-500' : (isDark ? 'text-slate-300' : 'text-slate-700')}`}>
+                    <p className={`text-[11px] font-semibold ${bulkTagMarkDone ? 'text-emerald-500' : (isDark ? 'text-slate-300' : 'text-slate-700')}`}>
                       Označit jako doplněno (odebrat z fronty „K doplnění")
                     </p>
                     <p className={`text-[10px] mt-0.5 ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>
@@ -1795,14 +1808,14 @@ const TradeHistory: React.FC<TradeHistoryProps> = ({
                 <div className="flex gap-3 pt-2">
                   <button
                     onClick={() => setBulkTagOpen(false)}
-                    className={`flex-1 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all ${isDark ? 'bg-white/5 hover:bg-white/10 text-slate-400' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'}`}
+                    className={`flex-1 py-3 rounded-xl text-[11px] font-semibold transition-all ${isDark ? 'bg-[var(--bg-page)] hover:bg-white/10 text-slate-400' : 'bg-[var(--bg-page)] hover:bg-slate-200 text-slate-600'}`}
                   >
                     Zrušit
                   </button>
                   <button
                     onClick={applyBulkTag}
                     disabled={bulkTagMistakes.size === 0 && !bulkTagText.trim() && !bulkTagNotes.trim()}
-                    className="flex-1 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-lg shadow-amber-500/30 hover:shadow-amber-500/50 transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="flex-1 py-3 rounded-xl text-[11px] font-semibold bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-lg shadow-amber-500/30 hover:shadow-amber-500/50 transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     Aplikovat na {selectedTradeIds.size}
                   </button>

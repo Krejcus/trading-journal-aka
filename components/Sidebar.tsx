@@ -122,7 +122,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   `;
 
     const navItemClass = (isActive: boolean) => `
-    flex items-center gap-3 rounded-lg text-[11px] font-black uppercase tracking-widest transition-all duration-300 relative group overflow-hidden h-10 liquid-glass-lens
+    flex items-center gap-3 rounded-lg text-[11px] font-semibold transition-all duration-300 relative group overflow-hidden h-10 liquid-glass-lens
     ${isActive
             ? (isDark
                 ? 'glass-lens-active-dark text-white'
@@ -201,7 +201,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                         initial={{ opacity: 0, x: -10 }}
                                         animate={{ opacity: 1, x: 0 }}
                                         exit={{ opacity: 0, x: -10 }}
-                                        className="font-black text-[11px] uppercase tracking-[0.2em] whitespace-nowrap"
+                                        className="font-semibold text-[11px] whitespace-nowrap"
                                     >
                                         Hodnotit
                                         {reviewCount > 0 && <span className="ml-2 inline-flex min-w-[18px] h-[18px] px-1.5 items-center justify-center rounded-full bg-emerald-500 text-white text-[9.5px] tracking-normal tabular-nums">{reviewCount}</span>}
@@ -273,7 +273,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                         onClick={onToggleBacktest}
                                         onMouseEnter={() => setWorldHover(true)}
                                         onMouseLeave={() => setWorldHover(false)}
-                                        className={`flex items-center gap-3 rounded-lg text-[11px] font-black uppercase tracking-widest transition-all duration-300 h-10 border ${!isExpanded ? 'justify-center w-10 mx-auto' : 'w-[calc(100%_-_1rem)] px-6 mx-2'} ${
+                                        className={`flex items-center gap-3 rounded-lg text-[11px] font-semibold transition-all duration-300 h-10 border ${!isExpanded ? 'justify-center w-10 mx-auto' : 'w-[calc(100%_-_1rem)] px-6 mx-2'} ${
                                             showBacktest
                                                 ? 'bg-violet-500/10 border-violet-500/40 text-violet-500 hover:bg-violet-500/20'
                                                 : 'bg-emerald-500/10 border-emerald-500/40 text-emerald-500 hover:bg-emerald-500/20'
@@ -343,8 +343,8 @@ const Sidebar: React.FC<SidebarProps> = ({
                                         exit={{ opacity: 0, width: 0 }}
                                         className="min-w-0"
                                     >
-                                        <p className="text-[10px] font-black uppercase truncate tracking-wider">{user.name}</p>
-                                        <p className="text-[8px] font-bold uppercase text-emerald-500 tracking-[0.2em] mt-0.5 flex items-center gap-1.5 whitespace-nowrap">
+                                        <p className="text-[11px] font-semibold truncate">{user.name}</p>
+                                        <p className="text-[11px] font-bold text-emerald-500 mt-0.5 flex items-center gap-1.5 whitespace-nowrap">
                                             <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"></span>
                                             {t('online_profile', lang)}
                                         </p>
