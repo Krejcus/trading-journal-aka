@@ -45,4 +45,13 @@ describe('DLL/DD reload cache',()=>{
    const html=renderToStaticMarkup(React.createElement(LiveRiskValue,{identity:`${identity}:${state}`,enabled:state!=='no-limit',value:null,confirmedAt:null,verified:false,state,reason:title,color:()=>'text-emerald-500',label:'DLL zbývá'}));
    expect(html).toContain(text);expect(html).toContain(title);expect(html).not.toContain('Načítám');
  });
+ it('ověřená hodnota mladší než 45 s se po návratu obnoví jako ověřená, starší jako poslední známá',()=>{
+  const store=storage();
+  const fresh={key:identity,value:546,confirmedAt:new Date(now-14_000).toISOString(),stale:false};
+  writeRiskDisplaySession('scope',identity,fresh,store);
+  expect(readRiskDisplaySession('scope',identity,store,now)?.stale).toBe(false);
+  expect(readRiskDisplaySession('scope',identity,store,now+60_000)?.stale).toBe(true);
+  writeRiskDisplaySession('scope',identity,{...fresh,stale:true},store);
+  expect(readRiskDisplaySession('scope',identity,store,now)?.stale).toBe(true);
+ });
 });

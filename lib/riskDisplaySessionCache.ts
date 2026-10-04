@@ -1,5 +1,6 @@
 import type { RetainedRiskDisplay } from './retainedRiskDisplay';
 import { tradovateDisplayTradeDate } from './tradovateDisplayDay';
+import { LIVE_READ_MAX_AGE_MS } from './liveReadFreshness';
 interface StorageLike { getItem(key:string):string|null; setItem(key:string,value:string):void; removeItem(key:string):void }
 function storageSafe(): StorageLike | undefined {
   try { return typeof window === 'undefined' ? undefined : window.sessionStorage; } catch { return undefined; }
@@ -13,7 +14,9 @@ export function readRiskDisplaySession(scope:string|undefined,identity:string,st
     if (!raw || raw.key!==identity || typeof raw.value!=='number' || !Number.isFinite(raw.value)
       || !Number.isFinite(at) || at>now+1000 || now-at>86400000
       || tradovateDisplayTradeDate(at)!==tradovateDisplayTradeDate(now)) return null;
-    return {key:identity,value:raw.value,confirmedAt:raw.confirmedAt,stale:true};
+    // Ověřená hodnota zůstává ověřená jen v rámci ověřovacího okna; starší
+    // nebo neověřená je vždy „poslední známá“. Načítání ji pak nezešedí.
+    return {key:identity,value:raw.value,confirmedAt:raw.confirmedAt,stale:raw.stale!==false || now-at>LIVE_READ_MAX_AGE_MS};
   } catch { return null; }
 }
 export function writeRiskDisplaySession(scope:string|undefined,identity:string,value:RetainedRiskDisplay|null,storage=storageSafe()):void {
@@ -21,6 +24,6 @@ export function writeRiskDisplaySession(scope:string|undefined,identity:string,v
   try {
     if (!value) { storage.removeItem(storageKey(scope,identity)); return; }
     if (value.key!==identity || !Number.isFinite(value.value) || !Number.isFinite(Date.parse(value.confirmedAt))) return;
-    storage.setItem(storageKey(scope,identity),JSON.stringify({key:identity,value:value.value,confirmedAt:value.confirmedAt}));
+    storage.setItem(storageKey(scope,identity),JSON.stringify({key:identity,value:value.value,confirmedAt:value.confirmedAt,stale:value.stale}));
   } catch { /* A blocked/full cache must not interrupt the dashboard. */ }
 }

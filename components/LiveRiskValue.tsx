@@ -16,7 +16,7 @@ export function LiveRiskValue(props: {
   const scopedKey=JSON.stringify([props.storageScope,props.identity]);
   const [previous,setPrevious]=useState<{scope:string;value:RetainedRiskDisplay|null}>({scope:scopedKey,value:restored});
   const base=previous.scope===scopedKey ? previous.value : restored;
-  const display=retainedRiskDisplay(base,{key:props.identity,enabled:props.enabled,value:props.value,confirmedAt:props.confirmedAt,verified:props.verified});
+  const display=retainedRiskDisplay(base,{key:props.identity,enabled:props.enabled,value:props.value,confirmedAt:props.confirmedAt,verified:props.verified,pending:props.state==='loading'});
   const amount=display?.value ?? null;
   const confirmedAt=display?.confirmedAt ?? null;
   const stale=display?.stale ?? true;

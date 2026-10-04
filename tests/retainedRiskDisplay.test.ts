@@ -24,4 +24,24 @@ describe('retained risk amounts are display only',()=>{
    expect(retainedRiskDisplay(previous,{...input,value:9999,confirmedAt},now)).toEqual({...previous,stale:true});
   expect(retainedRiskDisplay(null,{...input,value:NaN},now)).toBeNull();
  });
+ it('během načítání zůstane čerstvá ověřená hodnota ověřená, ne šedá',()=>{
+  const now=Date.parse('2026-10-04T09:26:17Z');
+  const old={key:'k',value:546,confirmedAt:'2026-10-04T09:26:00Z',stale:false};
+  const input={key:'k',enabled:true,value:null,confirmedAt:null,verified:false};
+  expect(retainedRiskDisplay(old,{...input,pending:true},now)).toEqual({...old,stale:false});
+  // Bez načítání (selhání čtení) dál „poslední známá“.
+  expect(retainedRiskDisplay(old,input,now)?.stale).toBe(true);
+  // Po ověřovacím okně ani načítání nepomůže.
+  expect(retainedRiskDisplay(old,{...input,pending:true},now+60_000)?.stale).toBe(true);
+  // Už zastaralá hodnota se načítáním neoživí.
+  expect(retainedRiskDisplay({...old,stale:true},{...input,pending:true},now)?.stale).toBe(true);
+ });
+ it('o chvíli starší ověřený důkaz o stejné částce novější hodnotu nezešedí; jiná částka ano',()=>{
+  const now=Date.parse('2026-10-04T07:29:10Z');
+  const old={key:'k',value:546.04,confirmedAt:'2026-10-04T07:28:59Z',stale:false};
+  const older={key:'k',enabled:true,value:546.0400000000009,confirmedAt:'2026-10-04T07:28:52Z',verified:true};
+  expect(retainedRiskDisplay(old,older,now)).toEqual({...old,stale:false});
+  expect(retainedRiskDisplay(old,{...older,value:400},now)?.stale).toBe(true);
+  expect(retainedRiskDisplay(old,{...older,verified:false},now)?.stale).toBe(true);
+ });
 });
