@@ -265,7 +265,7 @@ Aurora; Liquid Glass zamítnut kvůli čitelnosti čísel, terminál/papír/bent
 monochrom „hrozné“, nálada podle P&L ne, svíčky/záře/likvidita/vrstevnice/
 seance/vlastní obrázek jako pozadí ne) vybral **Auroru s pozadím Hlubiny**.
 Stejná větev/worktree jako glass detail (`claude/trade-detail-glass-20261003`),
-NEcommitnuto, nenasazeno.
+Nasazeno 2026-10-04 jako `ed592837` (push na main → Vercel).
 
 - **Jak to funguje:** třída `aurora` na `<html>` (světlé + tmavé téma; OLED
   zůstává čistě černé) přepíše `--bg-card`/`--glass-bg`/`--bg-page` na
@@ -383,7 +383,7 @@ NEcommitnuto, nenasazeno.
 
 Podle náhledu `mockups/trade-detail-glass.html` (Filip si vybral glass).
 Větev `claude/trade-detail-glass-20261003` ve worktree
-`/private/tmp/alphatrade-trade-detail-glass`, NEcommitnuto, nenasazeno.
+`/private/tmp/alphatrade-trade-detail-glass`, nasazeno 2026-10-04 jako `ed592837`.
 
 - **Sklo jen jako vrstva:** okno detailu je průsvitné nad rozmazanou stránkou
   (`.td-modal`), levý sloupec má záři v barvě výsledku (`.td-side`, síla podle
