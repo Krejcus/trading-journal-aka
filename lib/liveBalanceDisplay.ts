@@ -11,6 +11,21 @@ export interface LiveBalanceDisplay {
 
 export type LiveRiskDisplayState = 'ready' | 'loading' | 'unavailable' | 'unknown-limit' | 'no-limit';
 
+/**
+ * Prokazatelně přečtený denní report BEZ záznamu pro dnešek = žádný uzavřený
+ * obchod. Důkazem musí být čas čtení DENNÍHO reportu (`dailyPnlUpdatedAt`,
+ * tedy `readState.dailyAsOf`) v aktuální broker session — ne čerstvost čtení
+ * zůstatku. Zůstatek a denní report chodí z jiných endpointů: cash může být
+ * čerstvý, zatímco denní se ještě nenačetl, a z toho by „nic se neobchodovalo“
+ * byla domněnka vydávaná za fakt.
+ */
+export function liveDayReadAnswered(account: LiveAccount, now = Date.now(), pending = false): boolean {
+  if (pending || account.dailyPnlAvailable !== false) return false;
+  const readAt = Date.parse(account.dailyPnlUpdatedAt ?? '');
+  return Number.isFinite(readAt) && readAt <= now + 1_000 && sameTradovateSession(readAt, now);
+}
+
+
 export interface LiveDailyLossDisplay extends LiveBalanceDisplay {
   state: LiveRiskDisplayState;
   reason: string | null;
@@ -92,7 +107,14 @@ export function liveDailyLossRemainingDisplay(
       reason: pending ? 'Načítá se risk limit tohoto připojení.' : account.riskDisplayUnavailableReason ?? 'Tradovate ani profil nepotvrdily denní limit ztráty.',
     };
   }
-  const realized = liveDailyPnlDisplay(account, now, pending);
+  let realized = liveDailyPnlDisplay(account, now, pending);
+  // Denní report je v aktuální session přečtený a dnešní záznam v něm není:
+  // prokazatelně žádný uzavřený obchod, realizované P&L dne je 0 (stejné
+  // pravidlo jako sloupec „Dnes“). DLL zbývá je pak celý limit + otevřený P&L.
+  if (realized.value == null && liveDayReadAnswered(account, now, pending)) {
+    const readAt = account.dailyPnlUpdatedAt!;
+    realized = { value: 0, stale: now - Date.parse(readAt) > LIVE_READ_MAX_AGE_MS, confirmedAt: readAt };
+  }
   if (realized.value == null) {
     return {
       value: null, stale: false, confirmedAt: null,

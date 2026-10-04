@@ -1,7 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { liveBalanceDisplay, liveCapitalDisplay, liveDailyLossRemainingDisplay, liveDailyPnlDisplay, liveGroupDailyPnlDisplay } from '../lib/liveBalanceDisplay';
+import { liveBalanceDisplay, liveCapitalDisplay, liveDailyLossRemainingDisplay, liveDailyPnlDisplay, liveDayReadAnswered, liveGroupDailyPnlDisplay } from '../lib/liveBalanceDisplay';
 import { isLiveAccountReadVerified } from '../lib/liveReadFreshness';
 import { BalanceValue, DailyPnlValue } from '../components/LiveCopyTradeOverview';
 import { MobileMetric } from '../components/LiveMobileAccountDetail';
@@ -153,6 +153,53 @@ describe('confirmed daily display', () => {
     } finally {
       clock.mockRestore();
     }
+  });
+
+  describe('DLL bez dnešního obchodu', () => {
+    const noTradeToday = (patch: Partial<LiveAccount> = {}) => account({
+      realizedPnl: 0,
+      dailyPnlAvailable: false,
+      dailyPnlUpdatedAt: new Date(now - 1_000).toISOString(),
+      dailyLossLimit: 1_250,
+      dailyLossLimitSource: 'profile',
+      unrealizedPnl: 0,
+      unrealizedPnlSource: 'broker',
+      unrealizedPnlUpdatedAt: new Date(now - 800).toISOString(),
+      ...patch,
+    } as Partial<LiveAccount>);
+
+    it('přečtený denní report bez dnešního záznamu = celý limit, ne „nedostupné“', () => {
+      expect(liveDailyLossRemainingDisplay(noTradeToday(), now)).toMatchObject({
+        value: 1_250, state: 'ready', stale: false,
+      });
+      // Stejný fakt jako sloupec „Dnes“: prokazatelně nula.
+      expect(liveDayReadAnswered(noTradeToday(), now)).toBe(true);
+    });
+
+    it('otevřená ztráta zbývající DLL snižuje', () => {
+      expect(liveDailyLossRemainingDisplay(noTradeToday({ unrealizedPnl: -200 }), now)).toMatchObject({
+        value: 1_050, state: 'ready',
+      });
+    });
+
+    it('report z předchozí session nic nedokazuje — zůstává „nedostupné“', () => {
+      const old = noTradeToday({ dailyPnlUpdatedAt: new Date(now - 3 * 86_400_000).toISOString() });
+      expect(liveDailyLossRemainingDisplay(old, now)).toMatchObject({ value: null, state: 'unavailable' });
+    });
+
+    it('bez času čtení denního reportu se nula nedomýšlí', () => {
+      expect(liveDailyLossRemainingDisplay(noTradeToday({ dailyPnlUpdatedAt: null }), now))
+        .toMatchObject({ value: null, state: 'unavailable' });
+    });
+
+    it('starý (ale dnešní) report je jen poslední známá hodnota', () => {
+      const stale = noTradeToday({ dailyPnlUpdatedAt: new Date(now - 5 * 60_000).toISOString() });
+      expect(liveDailyLossRemainingDisplay(stale, now)).toMatchObject({ value: 1_250, stale: true });
+    });
+
+    it('během načítání dál „loading“', () => {
+      expect(liveDailyLossRemainingDisplay(noTradeToday({ dailyPnlPending: true }), now).state).toBe('loading');
+    });
   });
 
   it.each([

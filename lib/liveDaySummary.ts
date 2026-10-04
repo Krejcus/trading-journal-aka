@@ -1,5 +1,4 @@
-import { liveDailyPnlDisplay } from './liveBalanceDisplay';
-import { sameTradovateSession } from '../services/copierArmSession';
+import { liveDailyPnlDisplay, liveDayReadAnswered } from './liveBalanceDisplay';
 import type { LiveAccount } from '../services/tradecopiaLiveService';
 
 /**
@@ -44,19 +43,8 @@ export interface LiveDaySummary {
   unconfirmedCount: number;
 }
 
-/**
- * Prokazatelně přečtený denní report BEZ záznamu pro dnešek = žádný uzavřený
- * obchod. Důkazem musí být čas čtení DENNÍHO reportu (`dailyPnlUpdatedAt`,
- * tedy `readState.dailyAsOf`) v aktuální broker session — ne čerstvost čtení
- * zůstatku. Zůstatek a denní report chodí z jiných endpointů: cash může být
- * čerstvý, zatímco denní se ještě nenačetl, a z toho by „nic se neobchodovalo“
- * byla domněnka vydávaná za fakt.
- */
-export function liveDayReadAnswered(account: LiveAccount, now = Date.now(), pending = false): boolean {
-  if (pending || account.dailyPnlAvailable !== false) return false;
-  const readAt = Date.parse(account.dailyPnlUpdatedAt ?? '');
-  return Number.isFinite(readAt) && readAt <= now + 1_000 && sameTradovateSession(readAt, now);
-}
+// Přesunuto do liveBalanceDisplay (sdílí ho i DLL zbývá); export zůstává.
+export { liveDayReadAnswered } from './liveBalanceDisplay';
 
 /**
  * Denní přehled napříč účty pro kartu dne a spouštěč v hlavičce LIVE.
