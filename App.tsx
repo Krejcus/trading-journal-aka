@@ -4499,7 +4499,8 @@ const App: React.FC = () => {
 
                   {activePage === 'lab' && (
                     <div className="p-4 md:p-8 max-w-7xl mx-auto w-full">
-                      <div className="mb-6">
+                      {/* Nový Lab má nadpis jen v hlavičce (jako Historie); starý backtest Lab si ho nechává. */}
+                      <div className={dashboardMode === 'backtesting' ? 'mb-6' : 'hidden'}>
                         <h2 className={`text-3xl font-extrabold tracking-tight mb-1 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
                           Lab
                         </h2>

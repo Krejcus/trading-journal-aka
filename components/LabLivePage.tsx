@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, Loader2, X } from 'lucide-react';
+import { CalendarDays, ChevronRight, CircleSlash, ClipboardCheck, Clock3, Loader2, SlidersHorizontal, Tags, Wallet, X } from 'lucide-react';
 import type { Account, Trade } from '../types';
 import type { TradeExecutionHistory } from '../lib/tradeExecutionHistory';
 import { buildLabDecisions, labMissingHistoryIds, type LabDecision } from '../lib/labDataset';
@@ -192,11 +192,13 @@ export default function LabLivePage({ trades, accounts, theme, onOpenTrade }: {
   const tradeById = useMemo(() => new Map(trades.map(trade => [String(trade.id), trade])), [trades]);
   const open = (decision: LabDecision) => { const trade = tradeById.get(decision.leaderTradeId); if (trade) onOpenTrade?.(trade); };
 
-  const line = isDark ? 'border-white/[0.08]' : 'border-slate-200';
-  const card = `rounded-2xl border ${line} ${isDark ? 'bg-[#0d1219]' : 'bg-white'} p-4 md:p-5`;
-  const ink = isDark ? 'text-slate-100' : 'text-slate-900';
-  const muted = 'text-slate-500';
-  const segBtn = (on: boolean) => `px-3 py-1.5 text-[11px] font-extrabold transition-colors ${on ? isDark ? 'bg-indigo-500/20 text-indigo-300' : 'bg-indigo-50 text-indigo-600' : 'text-slate-400 hover:text-slate-500'}`;
+  // Stavební prvky appky (Dashboard/Historie): karta 8 px na tokenech motivu,
+  // ať Lab sedí ke všem motivům (světlý, tmavý, OLED i barevné).
+  const line = 'border-[var(--border-subtle)]';
+  const card = 'rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4';
+  const ink = 'text-[var(--text-primary)]';
+  const muted = 'text-[var(--text-secondary)]';
+  const segBtn = (on: boolean) => `rounded-md px-3 py-1.5 text-xs font-bold transition-all active:scale-95 ${on ? 'bg-indigo-600 text-white' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`;
   const ui = { line, card, ink, muted, isDark };
 
   const first = base[0]?.entryAt;
@@ -210,31 +212,37 @@ export default function LabLivePage({ trades, accounts, theme, onOpenTrade }: {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end gap-3">
-        <p className={`text-xs ${muted}`}>
+      <div className="flex flex-wrap items-center gap-3">
+        <p className={`text-xs font-medium ${muted}`}>
           <b className={ink}>{decisions.length}</b> rozhodnutí · <b className={ink}>{reviewed}</b> ohodnocených · R u <b className={ink}>{withR}</b>
           {first ? <> · data z Tradovate od {new Date(first).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'numeric' })}</> : null}
           {historyState === 'loading' && <span className="ml-2 inline-flex items-center gap-1 text-indigo-500"><Loader2 size={11} className="animate-spin" />dotahuji SL z historie</span>}
           {historyState === 'error' && <span className="ml-2 text-amber-600">historii se nepodařilo načíst — R může chybět</span>}
         </p>
         <div className="ml-auto flex flex-wrap gap-2">
-          <div className={`flex overflow-hidden rounded-xl border ${line}`}>
+          <div className="flex rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-0.5">
             {([[7, '7 dní'], [30, '30 dní'], [0, 'Vše']] as const).map(([value, label]) => <button key={value} type="button" className={segBtn(period === value)} onClick={() => setPeriod(value)}>{label}</button>)}
           </div>
-          <div className={`flex overflow-hidden rounded-xl border ${line}`} title="$ = výsledek leader účtu (kopie se nesčítají) · R jen u obchodů se SL">
+          <div className="flex rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-0.5" title="$ = výsledek leader účtu (kopie se nesčítají) · R jen u obchodů se SL">
             <button type="button" className={segBtn(unit === 'usd')} onClick={() => setUnit('usd')}>$ leader</button>
             <button type="button" className={segBtn(unit === 'r')} onClick={() => setUnit('r')}>R</button>
           </div>
         </div>
       </div>
 
-      <nav className="flex flex-wrap gap-1.5">
-        {[['a', 'A · Plán vs. mimo plán'], ['b', 'B · Disciplína dne'], ['c', 'C · Řízení obchodu'], ['d', 'D · Nevzaté'], ['e', 'E · Čas'], ['f', 'F · Setupy']].map(([id, label]) => (
-          <a key={id} href={`#lab-${id}`} className={`rounded-full border px-3 py-1.5 text-[11.5px] font-extrabold ${line} ${isDark ? 'bg-white/[0.03] text-slate-200' : 'bg-white text-slate-700'}`}>{label}</a>
-        ))}
-        {['G · Účty'].map(label => (
-          <span key={label} className={`rounded-full border border-dashed px-3 py-1.5 text-[11.5px] font-bold ${line} text-slate-400`} title="Připravujeme">{label}</span>
-        ))}
+      {/* Telefon: jeden řádek posuvný do strany; desktop: zalomení. */}
+      <nav className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 md:mx-0 md:flex-wrap md:overflow-visible md:px-0">
+        {(['a', 'b', 'c', 'd', 'e', 'f'] as const).map(id => {
+          const { icon: Icon, title, color } = SECTION[id];
+          return (
+            <a key={id} href={`#lab-${id}`} className="flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-1.5 text-[12px] font-bold text-[var(--text-primary)] transition-all hover:border-indigo-500/30 active:scale-95">
+              <Icon size={13} className={color} />{title}
+            </a>
+          );
+        })}
+        <span className="flex shrink-0 items-center gap-1.5 rounded-lg border border-dashed border-[var(--border-subtle)] px-3 py-1.5 text-[12px] font-bold text-[var(--text-muted)]" title="Připravujeme">
+          <Wallet size={13} />Účty
+        </span>
       </nav>
 
       <PlanSection decisions={decisions} unit={unit} ui={ui} onDrill={(title, list) => setDrawer({ title, decisions: list })} />
@@ -251,12 +259,25 @@ export default function LabLivePage({ trades, accounts, theme, onOpenTrade }: {
 
 type Ui = { line: string; card: string; ink: string; muted: string; isDark: boolean };
 
+const SECTION = {
+  a: { icon: ClipboardCheck, title: 'Plán vs. mimo plán', color: 'text-indigo-500', bg: 'bg-indigo-500/10' },
+  b: { icon: CalendarDays, title: 'Disciplína dne', color: 'text-rose-500', bg: 'bg-rose-500/10' },
+  c: { icon: SlidersHorizontal, title: 'Řízení obchodu', color: 'text-amber-500', bg: 'bg-amber-500/10' },
+  d: { icon: CircleSlash, title: 'Nevzaté', color: 'text-violet-500', bg: 'bg-violet-500/10' },
+  e: { icon: Clock3, title: 'Čas', color: 'text-sky-500', bg: 'bg-sky-500/10' },
+  f: { icon: Tags, title: 'Setupy', color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
+} as const;
+
 function SectionHead({ letter, title, sub, ui }: { letter: string; title: string; sub: string; ui: Ui }) {
+  const section = SECTION[letter.toLowerCase() as keyof typeof SECTION];
+  const Icon = section.icon;
   return (
-    <div className="mb-3 flex flex-wrap items-baseline gap-2.5">
-      <span className={`grid h-[22px] w-[22px] place-items-center rounded-md text-[11px] font-black ${ui.isDark ? 'bg-white text-slate-900' : 'bg-slate-900 text-white'}`}>{letter}</span>
-      <h3 className={`text-[17px] font-black tracking-tight ${ui.ink}`}>{title}</h3>
-      <p className={`text-xs ${ui.muted}`}>{sub}</p>
+    <div className="mb-3 flex items-center gap-2.5">
+      <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg ${section.bg} ${section.color}`}><Icon size={15} /></span>
+      <div className="min-w-0">
+        <h3 className={`text-[15px] font-bold tracking-tight ${ui.ink}`}>{title}</h3>
+        <p className={`text-[11px] font-medium ${ui.muted}`}>{sub}</p>
+      </div>
     </div>
   );
 }
@@ -265,12 +286,13 @@ function Meta({ children, onDrill, label = 'Zobrazit obchody', ui }: { children:
   return (
     <div className={`mt-3 flex items-center justify-between gap-2 border-t border-dashed pt-2.5 text-[11px] ${ui.line} ${ui.muted}`}>
       <span>{children}</span>
-      {onDrill && <button type="button" onClick={onDrill} className="font-extrabold text-indigo-500 hover:text-indigo-400">{label} ›</button>}
+      {onDrill && <button type="button" onClick={onDrill} className="font-bold text-indigo-500 hover:text-indigo-400">{label} ›</button>}
     </div>
   );
 }
 
-const eyebrow = 'text-[9.5px] font-black uppercase tracking-[0.16em] text-slate-500';
+/** Popisek karty jako u KPI na Dashboardu. */
+const eyebrow = 'text-[11px] font-semibold text-[var(--text-secondary)]';
 
 // ── A ────────────────────────────────────────────────────────────────────────
 
@@ -297,12 +319,12 @@ function PlanSection({ decisions, unit, ui, onDrill }: { decisions: LabDecision[
             { label: 'mimo plán', color: '#f43f5e', stats: plan.no },
             { label: 'neohodnocené', color: '#94a3b8', stats: plan.unreviewed, dashed: true },
           ]} unit={unit} />
-          <div className={`mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-xl border ${ui.line} ${ui.isDark ? 'bg-white/[0.08]' : 'bg-slate-200'}`}>
+          <div className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--border-subtle)]">
             <PlanCell label="Podle plánu" color="text-indigo-500" stats={plan.yes} unit={unit} ui={ui} />
             <PlanCell label="Mimo plán" color="text-rose-500" stats={plan.no} unit={unit} ui={ui} />
           </div>
           <Meta ui={ui} onDrill={plan.reviewed ? () => onDrill('Ohodnocené obchody', [...yesList, ...noList]) : undefined}>
-            z <b className="text-slate-600 dark:text-slate-300">{plan.reviewed}</b> ohodnocených · neohodnocených {plan.unreviewed.count}
+            z <b className="text-[var(--text-primary)]">{plan.reviewed}</b> ohodnocených · neohodnocených {plan.unreviewed.count}
             {unit === 'r' && ` · R jen se SL`}
           </Meta>
         </div>
@@ -315,7 +337,7 @@ function PlanSection({ decisions, unit, ui, onDrill }: { decisions: LabDecision[
                 const width = reasons[0].total ? Math.max(4, row.total / reasons[0].total * 100) : 4;
                 return (
                   <button key={row.reason} type="button" onClick={() => onDrill(`Mimo plán · ${row.reason}`, row.decisions)} className="grid grid-cols-[1fr_96px_72px] items-center gap-2.5 text-left text-xs">
-                    <span className={row.reason === LAB_NO_REASON ? 'text-slate-400' : ui.ink}>{row.reason} <span className="text-slate-400">{row.count}×</span></span>
+                    <span className={row.reason === LAB_NO_REASON ? 'text-[var(--text-muted)]' : ui.ink}>{row.reason} <span className="text-[var(--text-muted)]">{row.count}×</span></span>
                     <span className={`h-2 overflow-hidden rounded ${ui.isDark ? 'bg-rose-500/10' : 'bg-rose-50'}`}><span className="block h-full bg-rose-500" style={{ width: `${row.total < 0 ? width : 0}%` }} /></span>
                     <b className={`text-right tabular-nums ${tone(row.total)}`}>{valueFmt(row.total, unit)}</b>
                   </button>
@@ -323,7 +345,7 @@ function PlanSection({ decisions, unit, ui, onDrill }: { decisions: LabDecision[
               })}
             </div>
           </> : <p className={`mt-2 text-xs leading-relaxed ${ui.muted}`}>Zatím žádný obchod označený „mimo plán“. Důvody a jejich cena se objeví tady, jakmile nějaký ohodnotíš.</p>}
-          <Meta ui={ui} onDrill={noList.length ? () => onDrill('Mimo plán', noList) : undefined}>z <b className="text-slate-600 dark:text-slate-300">{noList.length}</b> obchodů mimo plán</Meta>
+          <Meta ui={ui} onDrill={noList.length ? () => onDrill('Mimo plán', noList) : undefined}>z <b className="text-[var(--text-primary)]">{noList.length}</b> obchodů mimo plán</Meta>
         </div>
       </div>
     </section>
@@ -332,10 +354,10 @@ function PlanSection({ decisions, unit, ui, onDrill }: { decisions: LabDecision[
 
 function PlanCell({ label, color, stats, unit, ui }: { label: string; color: string; stats: LabStats; unit: LabUnit; ui: Ui }) {
   return (
-    <div className={ui.isDark ? 'bg-[#0d1219] p-3' : 'bg-white p-3'}>
-      <p className={`text-[9.5px] font-black uppercase tracking-[0.12em] ${color}`}>{label}</p>
-      <p className={`mt-1.5 font-mono text-[20px] font-bold tabular-nums ${stats.average == null ? 'text-slate-400' : color}`}>{stats.average == null ? '—' : valueFmt(stats.average, unit)}</p>
-      <p className="mt-0.5 text-[10.5px] text-slate-500">na obchod · {stats.winRate == null ? 'WR —' : `WR ${Math.round(stats.winRate * 100)} %`} · {plural(stats.count, 'obchod', 'obchody', 'obchodů')}{unit === 'r' && stats.covered < stats.count ? ` (${stats.covered} se SL)` : ''}</p>
+    <div className="bg-[var(--bg-card)] p-3">
+      <p className={`text-[11px] font-semibold ${color}`}>{label}</p>
+      <p className={`mt-1.5 text-xl font-bold tracking-tight tabular-nums ${stats.average == null ? 'text-[var(--text-muted)]' : color}`}>{stats.average == null ? '—' : valueFmt(stats.average, unit)}</p>
+      <p className="mt-0.5 text-[10.5px] text-[var(--text-secondary)]">na obchod · {stats.winRate == null ? 'WR —' : `WR ${Math.round(stats.winRate * 100)} %`} · {plural(stats.count, 'obchod', 'obchody', 'obchodů')}{unit === 'r' && stats.covered < stats.count ? ` (${stats.covered} se SL)` : ''}</p>
     </div>
   );
 }
@@ -343,7 +365,7 @@ function PlanCell({ label, color, stats, unit, ui }: { label: string; color: str
 function EquityChart({ series, unit, ui }: { series: { label: string; color: string; stats: LabStats; dashed?: boolean }[]; unit: LabUnit; ui: Ui }) {
   const W = 560, H = 160, P = 8;
   const points = series.flatMap(s => s.stats.equity);
-  if (!points.length) return <div className={`grid h-[160px] place-items-center rounded-xl border border-dashed text-xs ${ui.line} text-slate-400`}>Zatím bez dat</div>;
+  if (!points.length) return <div className={`grid h-[160px] place-items-center rounded-lg border border-dashed text-xs ${ui.line} text-[var(--text-muted)]`}>Zatím bez dat</div>;
   const t0 = Math.min(...points.map(p => p.at)), t1 = Math.max(...points.map(p => p.at));
   const values = [0, ...points.map(p => p.value)];
   const lo = Math.min(...values), hi = Math.max(...values);
@@ -358,7 +380,7 @@ function EquityChart({ series, unit, ui }: { series: { label: string; color: str
             points={[`${x(s.stats.equity[0].at)},${y(0)}`, ...s.stats.equity.map(p => `${x(p.at)},${y(p.value)}`)].join(' ')} />
         ))}
       </svg>
-      <div className="mt-1 flex flex-wrap gap-3 text-[10.5px] text-slate-500">
+      <div className="mt-1 flex flex-wrap gap-3 text-[10.5px] text-[var(--text-secondary)]">
         {series.map(s => <span key={s.label} className="inline-flex items-center gap-1.5"><i className="inline-block h-[3px] w-3 rounded" style={{ background: s.color }} />{s.label} {s.stats.covered ? <b className={tone(s.stats.total)}>{valueFmt(s.stats.total, unit)}</b> : '—'}</span>)}
       </div>
     </div>
@@ -386,10 +408,10 @@ function DisciplineSection({ decisions, ui, onDrill }: { decisions: LabDecision[
             const weekday = WEEKDAY[item.decisions[0]?.weekday ?? 0];
             return (
               <button key={item.dayKey} type="button" onClick={() => setSelected(item.dayKey)}
-                className={`w-[58px] shrink-0 rounded-xl border px-1 pb-1.5 pt-1.5 text-center text-[10px] transition-transform hover:-translate-y-px ${on ? ui.isDark ? 'border-white ring-1 ring-white' : 'border-slate-900 ring-1 ring-slate-900' : ui.line}`}>
-                <span className="text-slate-400">{weekday}</span>
+                className={`w-[60px] shrink-0 rounded-lg border bg-[var(--bg-card)] px-1 pb-1.5 pt-1.5 text-center text-[10px] transition-all hover:-translate-y-px active:scale-95 ${on ? 'border-indigo-500 ring-1 ring-indigo-500' : ui.line}`}>
+                <span className="text-[var(--text-muted)]">{weekday}</span>
                 <b className={`block text-[11px] ${ui.ink}`}>{dayLabel(item.dayKey)}</b>
-                <span className={`font-extrabold ${tone(item.pnlUsd)}`}>{usd(item.pnlUsd)}</span>
+                <span className={`font-bold ${tone(item.pnlUsd)}`}>{usd(item.pnlUsd)}</span>
                 {item.tilt && <span className="font-black text-rose-500"> ⚠</span>}
                 <i className="mt-1 block h-1 rounded" style={{ background: item.pnlUsd < 0 ? '#f43f5e' : '#10b981', opacity: Math.min(1, 0.25 + Math.abs(item.pnlUsd) / 2500) }} />
               </button>
@@ -410,7 +432,7 @@ function DisciplineSection({ decisions, ui, onDrill }: { decisions: LabDecision[
         </p>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[560px] text-xs">
-            <thead><tr className="text-left text-[9px] font-black uppercase tracking-[0.13em] text-slate-400">
+            <thead><tr className="text-left text-[11px] font-semibold text-[var(--text-secondary)]">
               <th className="pb-2 pr-2">Pravidlo</th><th className="pb-2 text-right">Dny, kdy zasáhne</th><th className="pb-2 text-right">Přidá</th><th className="pb-2 text-right">Vezme</th><th className="pb-2 text-right">Čistě</th><th className="w-6" />
             </tr></thead>
             <tbody>
@@ -428,11 +450,11 @@ function RuleRow({ rule, best, ui, onDrill }: { rule: LabRuleResult; best: boole
   const affected = rule.days.flatMap(day => day.affected);
   return (
     <tr className={`border-t border-dashed ${ui.line} ${best ? ui.isDark ? 'bg-emerald-500/10' : 'bg-emerald-50' : ''}`}>
-      <td className={`py-2.5 pr-2 ${best ? 'font-extrabold' : ''} ${ui.ink}`}>{rule.label}</td>
+      <td className={`py-2.5 pr-2 ${best ? 'font-bold' : ''} ${ui.ink}`}>{rule.label}</td>
       <td className="py-2.5 text-right font-bold tabular-nums">{rule.affectedDays}</td>
       <td className="py-2.5 text-right font-bold tabular-nums text-emerald-500">{rule.added ? usd(rule.added) : '$0'}</td>
       <td className="py-2.5 text-right font-bold tabular-nums text-rose-500">{rule.taken ? usd(rule.taken) : '$0'}</td>
-      <td className={`py-2.5 text-right font-extrabold tabular-nums ${tone(rule.net)}`}>{usd(rule.net)}</td>
+      <td className={`py-2.5 text-right font-bold tabular-nums ${tone(rule.net)}`}>{usd(rule.net)}</td>
       <td className="py-2.5 text-right">{affected.length > 0 && <button type="button" aria-label="Obchody, které by pravidlo nepustilo" onClick={() => onDrill(`${rule.label} · obchody, které by nepustilo`, affected)} className="text-indigo-500"><ChevronRight size={14} /></button>}</td>
     </tr>
   );
@@ -477,11 +499,11 @@ function DayTimeline({ day, ui }: { day: LabDay; ui: Ui }) {
           );
         })}
       </svg>
-      <div className="mt-1 flex flex-wrap gap-3.5 text-[10.5px] text-slate-500">
+      <div className="mt-1 flex flex-wrap gap-3.5 text-[10.5px] text-[var(--text-secondary)]">
         <span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-emerald-500" />zisk</span><span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-rose-500" />ztráta</span>
         <span>výška = velikost (ks)</span><span><b className="text-rose-500">⇧</b> ≥ 2× úvodní velikost v mínusu</span>
         <span><b className="text-rose-500">↺</b> otočení po ztrátě</span><span><b className="text-amber-600">⏱</b> vstup do 5 min po ztrátě</span>
-        <span className="font-extrabold text-indigo-500">čas modře = NY open (tvoje okno)</span>
+        <span className="font-bold text-indigo-500">čas modře = NY open (tvoje okno)</span>
       </div>
     </div>
   );
@@ -495,14 +517,14 @@ function DayStory({ day, rule, ui }: { day: LabDay; rule: LabRuleResult; ui: Ui 
   const rows: [string, React.ReactNode][] = [
     [day.decisions[0] ? clock(day.decisions[0].entryAt) : '', <>Začátek dne: úvodní velikost <b>{day.baseSize} ks</b>, celkem {plural(day.count, 'rozhodnutí', 'rozhodnutí', 'rozhodnutí')}, výsledek <b className={tone(day.pnlUsd)}>{usd(day.pnlUsd)}</b>.</>],
   ];
-  if (broke) rows.push([clock(broke.entryAt), <><span className="font-extrabold text-rose-500">Zlom:</span> po ztrátě {broke.size} ks = {(broke.size / day.baseSize).toLocaleString('cs-CZ', { maximumFractionDigits: 1 })}× úvodní velikost. Od té chvíle {usd(day.decisions.slice(day.breakIndex!).reduce((sum, d) => sum + d.pnlUsd, 0))}.</>]);
+  if (broke) rows.push([clock(broke.entryAt), <><span className="font-bold text-rose-500">Zlom:</span> po ztrátě {broke.size} ks = {(broke.size / day.baseSize).toLocaleString('cs-CZ', { maximumFractionDigits: 1 })}× úvodní velikost. Od té chvíle {usd(day.decisions.slice(day.breakIndex!).reduce((sum, d) => sum + d.pnlUsd, 0))}.</>]);
   if (quick || flips) rows.push(['', <>Po ztrátě: {quick ? <b className="text-amber-600">{quick}× vstup do 5 min</b> : 'žádný rychlý návrat'}{flips ? <>, <b className="text-rose-500">{flips}× otočení směru</b></> : ''}.</>]);
   if (ruleDay && ruleDay.stopAt) rows.push(['', <>„{rule.label}“ by den ukončilo v <b>{clock(ruleDay.stopAt.entryAt)}</b> → <b className={tone(ruleDay.simulated)}>{usd(ruleDay.simulated)}</b> místo {usd(ruleDay.actual)}.</>]);
   return (
     <div className="mt-3 grid gap-1.5">
       {rows.map(([time, text], i) => (
         <div key={i} className="grid grid-cols-[46px_1fr] gap-2 text-xs leading-relaxed">
-          <time className="font-bold tabular-nums text-slate-500">{time}</time><span className={ui.isDark ? 'text-slate-300' : 'text-slate-700'}>{text}</span>
+          <time className="font-bold tabular-nums text-[var(--text-secondary)]">{time}</time><span className="text-[var(--text-primary)]">{text}</span>
         </div>
       ))}
     </div>
@@ -513,13 +535,13 @@ function DayStory({ day, rule, ui }: { day: LabDay; rule: LabRuleResult; ui: Ui 
 // ── C ────────────────────────────────────────────────────────────────────────
 
 function Claim({ children, ui }: { children: React.ReactNode; ui: Ui }) {
-  return <p className={`mt-1.5 text-[13.5px] font-bold leading-snug ${ui.ink}`}>{children}</p>;
+  return <p className={`mt-2 text-[13px] font-semibold leading-snug ${ui.ink}`}>{children}</p>;
 }
 function Big({ value, className }: { value: string; className: string }) {
-  return <p className={`mt-2 font-mono text-[26px] font-bold leading-none tabular-nums ${className}`}>{value}</p>;
+  return <p className={`mt-2 text-2xl font-bold leading-none tracking-tight tabular-nums lg:text-[28px] ${className}`}>{value}</p>;
 }
 function LowData() {
-  return <span className="ml-1.5 inline-block rounded-full border border-amber-300/60 bg-amber-50 px-1.5 text-[9.5px] font-extrabold text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">málo dat</span>;
+  return <span className="ml-1.5 inline-block rounded-md bg-amber-500/10 px-1.5 py-px text-[10px] font-bold text-amber-600">málo dat</span>;
 }
 
 function ManagementSection({ decisions, excursions, candlesLoading, ui, onDrill }: { decisions: LabDecision[]; excursions: Map<string, LabExcursion>; candlesLoading: boolean; ui: Ui; onDrill: (title: string, list: LabDecision[]) => void }) {
@@ -598,7 +620,7 @@ function UntakenSection({ items, candlesLoading, ui }: { items: LabUntakenItem[]
         <div className={ui.card}>
           <p className={eyebrow}>Kdybys je nezrušil</p>
           <Claim ui={ui}>Rušením jsi přišel o <span className="text-rose-500">{usd(u.missed, false)}</span> ({u.tp}× by šel do TP) a ušetřil <span className="text-emerald-500">{usd(u.saved, false)}</span> ({u.sl}× do SL). {u.nofill ? `${u.nofill}× by se nevyplnil.` : ''}</Claim>
-          {judged > 0 && <div className="mt-3 flex h-7 overflow-hidden rounded-lg text-[10.5px] font-extrabold text-white">
+          {judged > 0 && <div className="mt-3 flex h-7 overflow-hidden rounded-lg text-[10.5px] font-bold text-white">
             {u.tp > 0 && <span className="grid place-items-center bg-rose-500" style={{ flex: u.tp }}>{u.tp} × TP</span>}
             {u.sl > 0 && <span className="grid place-items-center bg-emerald-500" style={{ flex: u.sl }}>{u.sl} × SL</span>}
             {u.nofill > 0 && <span className="grid place-items-center bg-amber-500" style={{ flex: u.nofill }}>{u.nofill} × nevyplnil</span>}
@@ -607,7 +629,7 @@ function UntakenSection({ items, candlesLoading, ui }: { items: LabUntakenItem[]
             {u.buckets.filter(b => b.items.length).map(b => (
               <div key={b.label} className="grid grid-cols-[84px_1fr_72px] items-center gap-2 text-xs">
                 <span className={ui.muted}>stál {b.label}</span>
-                <span className={`flex h-4 overflow-hidden rounded ${ui.isDark ? 'bg-white/5' : 'bg-slate-100'}`}>
+                <span className={`flex h-4 overflow-hidden rounded bg-[var(--border-subtle)]`}>
                   <span className="bg-rose-500" style={{ flex: b.tp }} /><span className="bg-emerald-500" style={{ flex: b.sl }} /><span className="bg-amber-500" style={{ flex: b.nofill }} />
                   <span style={{ flex: Math.max(0, b.items.length - b.tp - b.sl - b.nofill) }} />
                 </span>
@@ -624,8 +646,8 @@ function UntakenSection({ items, candlesLoading, ui }: { items: LabUntakenItem[]
             <div className="mt-3 grid gap-2">
               {u.reasons.map(row => (
                 <div key={row.reason} className="grid grid-cols-[1fr_auto] items-center gap-2 text-xs">
-                  <span className={ui.ink}>{row.reason} <span className="text-slate-400">{row.items.length}×</span></span>
-                  <b className={`rounded-full px-2 py-0.5 text-[11px] ${row.judged ? row.hits / row.judged >= 0.6 ? 'bg-emerald-500/10 text-emerald-600' : 'bg-rose-500/10 text-rose-500' : 'bg-slate-500/10 text-slate-400'}`}>{row.judged ? `${row.hits} / ${row.judged}` : '—'}</b>
+                  <span className={ui.ink}>{row.reason} <span className="text-[var(--text-muted)]">{row.items.length}×</span></span>
+                  <b className={`rounded-full px-2 py-0.5 text-[11px] ${row.judged ? row.hits / row.judged >= 0.6 ? 'bg-emerald-500/10 text-emerald-600' : 'bg-rose-500/10 text-rose-500' : 'bg-[var(--border-subtle)] text-[var(--text-muted)]'}`}>{row.judged ? `${row.hits} / ${row.judged}` : '—'}</b>
                 </div>
               ))}
             </div>
@@ -633,7 +655,7 @@ function UntakenSection({ items, candlesLoading, ui }: { items: LabUntakenItem[]
           <Meta ui={ui}>{u.unreviewed ? `${u.unreviewed} bez důvodu (Hodnotit je bere od 1. 10.)` : 'všechny ohodnocené'} · nepočítá se do P&L ani statistik</Meta>
         </div>
       </div>
-      <p className="mt-2 text-[10.5px] text-slate-400">Seznam nevzatých obchodů s grafem je v Hodnotit. {items.filter(i => labUntakenUsd(i) == null && i.outcome?.kind !== 'nofill').length > 0 && 'Část zatím bez výsledku (chybí svíčky).'}</p>
+      <p className="mt-2 text-[10.5px] text-[var(--text-muted)]">Seznam nevzatých obchodů s grafem je v Hodnotit. {items.filter(i => labUntakenUsd(i) == null && i.outcome?.kind !== 'nofill').length > 0 && 'Část zatím bez výsledku (chybí svíčky).'}</p>
     </section>
   );
 }
@@ -657,15 +679,15 @@ function TimeSection({ decisions, unit, ui, onDrill }: { decisions: LabDecision[
           <p className={eyebrow}>{unit === 'usd' ? '$' : 'R'} na obchod podle hodiny a dne</p>
           <div className="mt-2 overflow-x-auto">
             <table className="w-full border-separate border-spacing-[3px] text-[10px]">
-              <thead><tr><th />{t.hours.map(h => <th key={h} className="font-bold text-slate-400">{h}h</th>)}</tr></thead>
+              <thead><tr><th />{t.hours.map(h => <th key={h} className="font-bold text-[var(--text-muted)]">{h}h</th>)}</tr></thead>
               <tbody>{t.heat.map(row => (
-                <tr key={row.weekday}><td className="pr-1 font-bold text-slate-400">{WEEKDAY_SHORT[row.weekday]}</td>
+                <tr key={row.weekday}><td className="pr-1 font-bold text-[var(--text-muted)]">{WEEKDAY_SHORT[row.weekday]}</td>
                   {row.cells.map((c, i) => {
                     const avg = c.stats.average, a = avg == null ? 0 : Math.min(1, Math.abs(avg) / maxAbs);
                     return <td key={i}>
                       <button type="button" disabled={!c.decisions.length} onClick={() => onDrill(`${WEEKDAY_SHORT[row.weekday]} ${t.hours[i]}:00`, c.decisions)}
                         title={c.decisions.length ? `${c.decisions.length}× · ${valueFmt(c.stats.total, unit)}` : ''}
-                        className="grid h-7 w-full min-w-[34px] place-items-center rounded-md font-extrabold tabular-nums"
+                        className="grid h-7 w-full min-w-[34px] place-items-center rounded-md font-bold tabular-nums"
                         style={{ background: avg == null ? (ui.isDark ? 'rgba(255,255,255,.03)' : '#f8fafc') : avg >= 0 ? `rgba(16,185,129,${0.12 + a * 0.55})` : `rgba(244,63,94,${0.12 + a * 0.55})`, color: a > 0.6 ? '#fff' : ui.isDark ? '#cbd5e1' : '#334155' }}>
                         {avg == null ? '' : unit === 'usd' ? `${avg < 0 ? '−' : avg > 0 ? '+' : ''}${Math.abs(Math.round(avg))}` : avg.toLocaleString('cs-CZ', { maximumFractionDigits: 1 })}
                       </button></td>;
@@ -684,7 +706,7 @@ function TimeSection({ decisions, unit, ui, onDrill }: { decisions: LabDecision[
             {t.order.map(row => (
               <button key={row.label} type="button" disabled={!row.decisions.length} onClick={() => onDrill(`${row.label} obchod dne`, row.decisions)} className="grid grid-cols-[76px_1fr_auto] items-center gap-2 text-left text-xs">
                 <span className={ui.muted}>{row.label} obchod</span>
-                <span className="text-slate-400">{plural(row.decisions.length, 'obchod', 'obchody', 'obchodů')}{row.stats.winRate != null ? ` · WR ${Math.round(row.stats.winRate * 100)} %` : ''}</span>
+                <span className="text-[var(--text-muted)]">{plural(row.decisions.length, 'obchod', 'obchody', 'obchodů')}{row.stats.winRate != null ? ` · WR ${Math.round(row.stats.winRate * 100)} %` : ''}</span>
                 <b className={`tabular-nums ${tone(row.stats.average)}`}>{row.stats.average == null ? '—' : valueFmt(row.stats.average, unit)}</b>
               </button>
             ))}
@@ -697,8 +719,8 @@ function TimeSection({ decisions, unit, ui, onDrill }: { decisions: LabDecision[
             <div className="mt-2 grid gap-1.5">
               {t.bySession.map(row => (
                 <button key={row.session} type="button" onClick={() => onDrill(`Seance ${row.session}`, row.decisions)} className="grid grid-cols-[76px_1fr_auto] items-center gap-2 text-left text-xs">
-                  <span className={row.session === 'NY open' ? 'font-extrabold text-indigo-500' : ui.muted}>{row.session}</span>
-                  <span className="text-slate-400">{plural(row.decisions.length, 'obchod', 'obchody', 'obchodů')}</span>
+                  <span className={row.session === 'NY open' ? 'font-bold text-indigo-500' : ui.muted}>{row.session}</span>
+                  <span className="text-[var(--text-muted)]">{plural(row.decisions.length, 'obchod', 'obchody', 'obchodů')}</span>
                   <b className={`tabular-nums ${tone(row.stats.average)}`}>{row.stats.average == null ? '—' : valueFmt(row.stats.average, unit)}</b>
                 </button>
               ))}
@@ -721,8 +743,8 @@ function SetupSection({ decisions, unit, ui, onDrill }: { decisions: LabDecision
         <div className={`${ui.card} border-dashed text-center`}>
           <p className={eyebrow}>Zatím málo dat</p>
           <Claim ui={ui}>Štítky HTF/LTF má {plural(f.tagged, 'ohodnocený obchod', 'ohodnocené obchody', 'ohodnocených obchodů')}. Jednotlivý štítek se ukáže od {LAB_TAG_MIN} obchodů, kombinace od {LAB_SETUP_MIN}.</Claim>
-          <div className={`mx-auto mt-3 h-2 max-w-[320px] overflow-hidden rounded ${ui.isDark ? 'bg-white/5' : 'bg-slate-100'}`}><span className="block h-full bg-indigo-500" style={{ width: `${Math.min(100, f.largestCombo / LAB_SETUP_MIN * 100)}%` }} /></div>
-          <p className="mt-1 text-[11px] text-slate-500">nejčastější kombinace {f.largestCombo} / {LAB_SETUP_MIN}</p>
+          <div className={`mx-auto mt-3 h-2 max-w-[320px] overflow-hidden rounded bg-[var(--border-subtle)]`}><span className="block h-full bg-indigo-500" style={{ width: `${Math.min(100, f.largestCombo / LAB_SETUP_MIN * 100)}%` }} /></div>
+          <p className="mt-1 text-[11px] text-[var(--text-secondary)]">nejčastější kombinace {f.largestCombo} / {LAB_SETUP_MIN}</p>
         </div>
       ) : (
         <div className="grid gap-3 lg:grid-cols-2">
@@ -731,8 +753,8 @@ function SetupSection({ decisions, unit, ui, onDrill }: { decisions: LabDecision
             <div className="mt-3 grid gap-2">
               {f.tags.map(row => (
                 <button key={`${row.kind}:${row.tag}`} type="button" onClick={() => onDrill(`${row.kind} ${row.tag}`, row.decisions)} className="grid grid-cols-[1fr_auto_auto] items-center gap-3 text-left text-xs">
-                  <span className={ui.ink}><span className="mr-1 text-[9.5px] font-black text-slate-400">{row.kind}</span>{row.tag}</span>
-                  <span className="text-slate-400">{row.decisions.length}× · WR {row.stats.winRate == null ? '—' : `${Math.round(row.stats.winRate * 100)} %`}</span>
+                  <span className={ui.ink}><span className="mr-1 text-[9.5px] font-black text-[var(--text-muted)]">{row.kind}</span>{row.tag}</span>
+                  <span className="text-[var(--text-muted)]">{row.decisions.length}× · WR {row.stats.winRate == null ? '—' : `${Math.round(row.stats.winRate * 100)} %`}</span>
                   <b className={`tabular-nums ${tone(row.stats.average)}`}>{row.stats.average == null ? '—' : valueFmt(row.stats.average, unit)}</b>
                 </button>
               ))}
@@ -743,7 +765,7 @@ function SetupSection({ decisions, unit, ui, onDrill }: { decisions: LabDecision
             <p className={eyebrow}>Kombinace (od {LAB_SETUP_MIN} obchodů)</p>
             {f.combos.length ? f.combos.map(row => (
               <button key={row.combo} type="button" onClick={() => onDrill(row.combo, row.decisions)} className="mt-2 grid w-full grid-cols-[1fr_auto] gap-3 text-left text-xs">
-                <span className={ui.ink}>{row.combo} <span className="text-slate-400">{row.decisions.length}×</span></span>
+                <span className={ui.ink}>{row.combo} <span className="text-[var(--text-muted)]">{row.decisions.length}×</span></span>
                 <b className={`tabular-nums ${tone(row.stats.average)}`}>{row.stats.average == null ? '—' : valueFmt(row.stats.average, unit)}</b>
               </button>
             )) : <Claim ui={ui}>Žádná kombinace zatím nemá {LAB_SETUP_MIN} obchodů (nejčastější {f.largestCombo}).</Claim>}
@@ -766,26 +788,26 @@ function Drawer({ title, decisions, unit, ui, onClose, onOpen }: { title: string
   return (
     <>
       <div className="fixed inset-0 z-[100] bg-slate-900/20" onClick={onClose} />
-      <aside className={`native-page-scroll-content fixed inset-y-0 right-0 z-[101] flex w-full max-w-[420px] flex-col border-l shadow-2xl ${ui.line} ${ui.isDark ? 'bg-[#0b1017]' : 'bg-white'}`}>
+      <aside className={`native-page-scroll-content fixed inset-y-0 right-0 z-[101] flex w-full max-w-[420px] flex-col border-l shadow-2xl ${ui.line} bg-[var(--bg-card)]`}>
         <header className={`flex items-center gap-2 border-b px-4 py-3.5 ${ui.line}`}>
-          <h3 className={`flex-1 text-sm font-black ${ui.ink}`}>{title} <span className="font-bold text-slate-400">({decisions.length})</span></h3>
-          <button type="button" onClick={onClose} aria-label="Zavřít" className="grid h-7 w-7 place-items-center rounded-lg text-slate-400 hover:bg-slate-500/10"><X size={15} /></button>
+          <h3 className={`flex-1 text-sm font-black ${ui.ink}`}>{title} <span className="font-bold text-[var(--text-muted)]">({decisions.length})</span></h3>
+          <button type="button" onClick={onClose} aria-label="Zavřít" className="grid h-7 w-7 place-items-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--border-subtle)]"><X size={15} /></button>
         </header>
         <div className="flex-1 overflow-y-auto p-2 pb-[max(1rem,env(safe-area-inset-bottom))]">
           {sorted.map(decision => {
             const value = unit === 'usd' ? decision.pnlUsd : decision.r;
             return (
-              <button key={decision.id} type="button" onClick={() => onOpen(decision)} className="grid w-full grid-cols-[56px_1fr_auto] items-center gap-2.5 rounded-xl px-2 py-2.5 text-left hover:bg-slate-500/5">
-                <span className="text-[10.5px] leading-tight text-slate-500"><b className={`block text-[11.5px] ${ui.ink}`}>{dayLabel(decision.dayKey)}</b>{clock(decision.entryAt)}</span>
+              <button key={decision.id} type="button" onClick={() => onOpen(decision)} className="grid w-full grid-cols-[56px_1fr_auto] items-center gap-2.5 rounded-lg px-2 py-2.5 text-left hover:bg-[var(--border-subtle)]">
+                <span className="text-[10.5px] leading-tight text-[var(--text-secondary)]"><b className={`block text-[11.5px] ${ui.ink}`}>{dayLabel(decision.dayKey)}</b>{clock(decision.entryAt)}</span>
                 <span className="min-w-0 text-xs font-bold">
                   <span className={decision.direction === 'Long' ? 'text-emerald-500' : 'text-rose-500'}>{decision.direction}</span> <span className={ui.ink}>{decision.instrument} · {decision.size} ks</span>
-                  <span className="mt-0.5 block truncate text-[10.5px] font-medium text-slate-500">
+                  <span className="mt-0.5 block truncate text-[10.5px] font-medium text-[var(--text-secondary)]">
                     {decision.exitKind === 'sl' ? 'SL' : decision.exitKind === 'tp' ? 'TP' : 'ruční výstup'}
                     {decision.plan === 'no' ? ` · mimo plán${decision.invalidReasons.length ? ` · ${decision.invalidReasons.join(', ')}` : ''}` : decision.plan === 'yes' ? ' · podle plánu' : ' · neohodnocený'}
                     {decision.accountIds.length > 1 ? ` · ${decision.accountIds.length} účty` : ''}
                   </span>
                 </span>
-                <span className={`text-right font-mono text-[12.5px] font-bold ${tone(value)}`}>{value == null ? '— R' : valueFmt(value, unit)}<span className="block text-[10px] font-semibold text-slate-400">detail ›</span></span>
+                <span className={`text-right font-mono text-[12.5px] font-bold ${tone(value)}`}>{value == null ? '— R' : valueFmt(value, unit)}<span className="block text-[10px] font-semibold text-[var(--text-muted)]">detail ›</span></span>
               </button>
             );
           })}
