@@ -72,7 +72,6 @@ const LiveDesk = React.lazy(loadLiveDesk);
 const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
 
 const AICoachPage = React.lazy(() => import('./components/AICoachPage'));
-const InsightsPanel = React.lazy(() => import('./components/InsightsPanel'));
 const LabPage = React.lazy(() => import('./components/LabPage'));
 const LabLivePage = React.lazy(() => import('./components/LabLivePage'));
 
@@ -4014,7 +4013,6 @@ const App: React.FC = () => {
             <h2 className={`text-xl font-extrabold tracking-tight whitespace-nowrap ${theme !== 'light' ? 'text-white' : 'text-slate-800'}`}>
               {activePage === 'dashboard' && 'Dashboard'}
               {activePage === 'history' && 'Historie obchodu'}
-              {activePage === 'insights' && 'Insights'}
               {activePage === 'lab' && 'Lab'}
               {activePage === 'journal' && 'Deník'}
               {activePage === 'accounts' && 'Portfolio'}
@@ -4465,37 +4463,6 @@ const App: React.FC = () => {
                     </>
                   )}
 
-                  {activePage === 'insights' && (
-                    <div className="p-4 md:p-8 max-w-7xl mx-auto w-full">
-                      <div className="mb-6">
-                        <h2 className={`text-3xl font-extrabold tracking-tight mb-1 ${theme !== 'light' ? 'text-white' : 'text-slate-900'}`}>
-                          Insights
-                        </h2>
-                        <p className="text-xs text-slate-500 font-bold">
-                          Pattern analýza nad tvojí historií · detekce leaks & strengths
-                        </p>
-                      </div>
-                      <InsightsPanel
-                        trades={trades}
-                        theme={theme}
-                        onAddRule={(rule) => {
-                          // Přidá insight jako nové Iron Rule (type:'trading' — jinak propadne filtry).
-                          const newRule: IronRule = { id: `rule_${Date.now()}`, label: rule, type: 'trading' };
-                          setIronRules(prev => [...prev, newRule]);
-                          markPreferencesDirty();
-                        }}
-                        onAskAI={(prompt) => {
-                          // Otevře AI Coach s pre-fill promptem
-                          setAiInitialPrompt(prompt);
-                          setActivePage('ai');
-                        }}
-                        onOpenTrade={(trade) => {
-                          // Otevře trade detail modal (existující flow pro AI chat trade)
-                          setAiChatTrade(trade);
-                        }}
-                      />
-                    </div>
-                  )}
 
                   {activePage === 'lab' && (
                     <div className="p-4 md:p-8 max-w-7xl mx-auto w-full">

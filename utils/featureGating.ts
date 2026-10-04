@@ -10,13 +10,12 @@
  *
  * Bezpečnost: gating v UI je jen UX — skutečná data isolation je v Supabase RLS
  * (kde každý user vidí jen své řádky). Locked feature pro friend roli nicméně
- * znemožní generování AI nákladů, otevření Insights které čtou z trades atd.
+ * znemožní generování AI nákladů, otevření Labu, který čte z trades atd.
  */
 import type { UserRole } from '../types';
 
 /** Pages locked pro friend roli (visible ale neklikatelné — show modal) */
 export const LOCKED_FOR_FRIEND: readonly string[] = [
-    'insights',
     'lab',
     'ai',
     'business',
@@ -37,10 +36,6 @@ export function isLocked(featureId: string, role: UserRole | undefined): boolean
 
 /** Human-readable popisy pro lock modal */
 export const FEATURE_DESCRIPTIONS: Record<string, { name: string; description: string }> = {
-    insights: {
-        name: 'Insights',
-        description: 'Hloubková analýza patternů — kdy obchoduješ nejlépe, které setupy ti vydělávají, kde děláš opakované chyby.',
-    },
     lab: {
         name: 'Lab',
         description: 'Analytická laboratoř — counterfactual srovnání SL/TP variant, bias analýza, deterministické leak detektory a experimenty nad tvými obchody.',

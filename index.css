@@ -9,7 +9,7 @@
 @source inline("bg-{blue,amber,purple}-500/[0.04] bg-{blue,amber,purple}-500/15 border-{blue,amber,purple}-500/{15,20} text-{blue,amber,purple}-500 text-{blue,amber,purple}-500/80");
 /* CoachSessionPreview: fast/AI coach accents are amber/blue. */
 @source inline("border-{amber,blue}-500/50 bg-{amber,blue}-500/5 text-{amber,blue}-600 focus:border-{amber,blue}-500/50 bg-{amber,blue}-500/10 text-{amber,blue}-400 border-{amber,blue}-500/{20,30} bg-{amber,blue}-600 hover:bg-{amber,blue}-500");
-/* LabPage bias groups and InsightsPanel severity select these finite colors. */
+/* LabPage bias groups select these finite colors. */
 @source inline("bg-{emerald,blue,rose}-500 text-{rose,emerald}-{400,500}");
 /* TacticalTimelineV2: morning/evening cards and fallback session colors. */
 @source inline("bg-{amber,indigo}-500/5 border-{amber,indigo}-200 bg-{amber,indigo}-50/30 border-{blue,orange}-200 bg-{blue,orange}-50/30 hover:bg-{blue,orange}-50/50");

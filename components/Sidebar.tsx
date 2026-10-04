@@ -15,7 +15,6 @@ import {
     Globe,
     Briefcase,
     Bot,
-    Activity,
     Lock,
     FlaskConical,
     Radio,
@@ -87,7 +86,6 @@ const Sidebar: React.FC<SidebarProps> = ({
     const mainItems = [
         { id: 'dashboard', label: t('dashboard', lang), icon: LayoutDashboard },
         { id: 'history', label: t('history', lang) || 'Historie', icon: History },
-        { id: 'insights', label: 'Insights', icon: Activity },
         { id: 'lab', label: 'Lab', icon: Microscope },
         { id: 'journal', label: t('journal', lang), icon: BookOpen },
         { id: 'business', label: t('business', lang), icon: Briefcase },
