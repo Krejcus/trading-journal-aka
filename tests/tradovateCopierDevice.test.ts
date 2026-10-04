@@ -61,6 +61,8 @@ describe('Tradovate copier device credential', () => {
       connectionId,
       publicKey: expect.stringContaining('BEGIN PUBLIC KEY'),
       deviceName: 'Test Mac',
+      // Řádek bez sloupce scope (DB před migrací) = jen vlastní připojení.
+      scope: 'connection',
     });
   });
 

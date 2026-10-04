@@ -192,6 +192,64 @@ describe('Tradovate pilot lease API', () => {
     );
   });
 
+  describe('spárovaný Mac a další připojení vlastníka (4. 10.)', () => {
+    const deviceAuth = (scope: 'owner' | 'connection' = 'owner') => copierDevice.authorizeTradovateCopierDevice.mockResolvedValue({
+      id: 'device-1', userId: 'user-1', connectionId: 'connection-owned', publicKey: 'DEVICE PUBLIC KEY', deviceName: 'MacBook Air', scope,
+    });
+
+    it('bez souhlasu vlastníka (scope connection) jiné připojení odmítne', async () => {
+      deviceAuth('connection');
+      const harness = responseHarness();
+      await handler(request({
+        headers: { authorization: 'Device device.secret' },
+        body: { connectionId: 'connection-fundednext' },
+      }), harness.res);
+      expect(harness.status()).toBe(403);
+      expect(oauthStore.getValidTradovateAccessToken).not.toHaveBeenCalled();
+    });
+
+    it('vydá lease pro jiné připojené demo připojení téhož vlastníka, zapečetěný klíčem zařízení', async () => {
+      deviceAuth();
+      oauthStore.listTradovateConnectionStatuses.mockResolvedValue([
+        { id: 'connection-owned', connected: true },
+        { id: 'connection-fundednext', connected: true, tradovateEmail: 'fn@example.com' },
+      ]);
+      const harness = responseHarness();
+      await handler(request({
+        headers: { authorization: 'Device device.secret' },
+        body: { connectionId: 'connection-fundednext' },
+      }), harness.res);
+
+      expect(harness.status()).toBe(200);
+      expect(oauthStore.listTradovateConnectionStatuses).toHaveBeenCalledWith(expect.anything(), 'user-1', 'demo');
+      expect(oauthStore.getValidTradovateAccessToken).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user-1', connectionId: 'connection-fundednext',
+      }));
+      expect(pilotLease.sealTradovatePilotLease).toHaveBeenCalledWith(
+        expect.objectContaining({ connectionId: 'connection-fundednext' }),
+        'DEVICE PUBLIC KEY',
+      );
+    });
+
+    it('odmítne cizí nebo odpojené připojení', async () => {
+      deviceAuth();
+      oauthStore.listTradovateConnectionStatuses.mockResolvedValue([
+        { id: 'connection-owned', connected: true },
+        { id: 'connection-disconnected', connected: false },
+      ]);
+      for (const connectionId of ['connection-foreign', 'connection-disconnected']) {
+        const harness = responseHarness();
+        await handler(request({
+          headers: { authorization: 'Device device.secret' },
+          body: { connectionId },
+        }), harness.res);
+        expect(harness.status()).toBe(404);
+      }
+      expect(oauthStore.getValidTradovateAccessToken).not.toHaveBeenCalled();
+      expect(pilotLease.sealTradovatePilotLease).not.toHaveBeenCalled();
+    });
+  });
+
   describe('vynucená obnova tokenu (mrtvá Tradovate session)', () => {
     const deviceAuth = () => copierDevice.authorizeTradovateCopierDevice.mockResolvedValue({
       id: 'device-1', userId: 'user-1', connectionId: 'connection-owned', publicKey: 'DEVICE PUBLIC KEY', deviceName: 'MacBook Air',
