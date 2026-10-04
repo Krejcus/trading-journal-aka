@@ -87,8 +87,14 @@ export interface ConnectionPollDecision {
 export function evaluateConnectionPoll(options: {
   serverConnectionIds: readonly string[];
   loadedConnectionIds: readonly string[];
-  /** Připojení z manifestu: jejich odebrání ze serveru hlídá lease, ne poll. */
+  /** Připojení z manifestu. */
   manifestConnectionIds: readonly string[];
+  /**
+   * Jen se scope `owner` vrací server úplný seznam připojení vlastníka; pak
+   * je zmizení i manifestového připojení důkaz odpojení. Se scope
+   * `connection` vrací jen připojení zařízení, ostatní tedy neposuzujeme.
+   */
+  scope: 'owner' | 'connection';
   state: ConnectionDiscoveryState;
   now: number;
 }): ConnectionPollDecision {
@@ -100,7 +106,7 @@ export function evaluateConnectionPoll(options: {
       .filter(connectionId => !loaded.has(connectionId) && !coolingDown(options.state, connectionId, options.now))
       .sort(),
     removed: [...loaded]
-      .filter(connectionId => !server.has(connectionId) && !manifest.has(connectionId))
+      .filter(connectionId => !server.has(connectionId) && (options.scope === 'owner' || !manifest.has(connectionId)))
       .sort(),
   };
 }

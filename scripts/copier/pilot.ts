@@ -66,7 +66,6 @@ import {
 } from '../../server/localCopierExecutionAgent';
 import {
   canSafelyRestartLocalCopierAgent,
-  copyGroupAccountIds,
   LOCAL_COPIER_AGENT_PORT,
   type CopierSnapshotHealth,
 } from '../../lib/localCopierAgentProtocol';
@@ -171,8 +170,6 @@ interface ConnectionWatch {
   loadedConnectionIds: string[];
   state: ConnectionDiscoveryState;
   scope: 'owner' | 'connection' | null;
-  /** Účty načtené z adresáře každého připojení (pro odpojení za ARM). */
-  accountIdsByConnection: Map<string, number[]>;
 }
 
 interface PilotContextOptions {
@@ -336,6 +333,8 @@ async function runMultiConnectionAgent(): Promise<void> {
       accessToken: await context.getAccessToken(),
     }))(), {
       ...STARTUP_RETRY,
+      // Nově objevená propfirma nesmí start workeru zdržet o celých 10 min.
+      ...(loadOptions.strictDirectory ? { deadlineMs: 60_000, maxDelayMs: 20_000 } : {}),
       onRetry: (error, attempt, delayMs) => console.warn(`${new Date().toISOString()} STARTUP ${connectionLabel(connectionId)} načtení účtů selhalo (pokus ${attempt}): ${error.message}; další pokus za ${Math.round(delayMs / 1_000)} s`),
     }).catch((error: unknown) => {
       // Nově objevené připojení bez účtů by se tvářilo jako načtené a už by
@@ -387,11 +386,6 @@ async function runMultiConnectionAgent(): Promise<void> {
     ),
     onLoaded: item => loaded.push(item),
   });
-  if (connectionWatch) {
-    for (const item of loaded) {
-      connectionWatch.accountIdsByConnection.set(item.context.connectionId, item.accounts.map(account => account.id));
-    }
-  }
   const leaderId = integerFlag('leader');
   const followerId = integerFlag('follower');
   const routingFor = (items: typeof loaded) => ({
@@ -409,27 +403,31 @@ async function runMultiConnectionAgent(): Promise<void> {
       })),
     ])),
   });
-  let routing = routingFor(loaded);
-  let initialRouting: ReturnType<typeof resolveDynamicBrokerRoutes>;
-  try {
-    initialRouting = resolveDynamicBrokerRoutes(routing.connections, routing.snapshots);
-  } catch (error) {
-    // Nově objevená propfirma nesmí rozbít routing stávající skupiny (např.
-    // stejný účet viditelný ve dvou OAuth). Bez ní worker nastartuje jako
-    // dřív a připojení se zkusí znovu až po cooldownu.
-    const discovered = loaded.filter(item => item.context.discovered);
-    if (discovered.length === 0 || !connectionWatch) throw error;
-    console.error(`${new Date().toISOString()} DISCOVERY routing s novými připojeními selhal, startuji bez nich: ${error instanceof Error ? error.message : String(error)}`);
-    for (const item of discovered) {
-      connectionWatch.state = recordConnectionDiscoveryFailure(connectionWatch.state, item.context.connectionId, error, Date.now());
-      connectionWatch.loadedConnectionIds = connectionWatch.loadedConnectionIds
-        .filter(connectionId => connectionId !== item.context.connectionId);
-      item.context.displayFeed?.close();
+  // Nově objevené propfirmy se do routingu přidávají po jedné: kolize jedné
+  // (např. stejný účet ve dvou OAuth) vyřadí jen ji, ne ostatní ani skupinu.
+  const baseItems = loaded.filter(item => !item.context.discovered);
+  let routedItems = [...baseItems];
+  let routing = routingFor(routedItems);
+  let initialRouting = resolveDynamicBrokerRoutes(routing.connections, routing.snapshots);
+  if (connectionWatch) {
+    for (const item of loaded.filter(candidate => candidate.context.discovered)) {
+      const candidateRouting = routingFor([...routedItems, item]);
+      try {
+        initialRouting = resolveDynamicBrokerRoutes(candidateRouting.connections, candidateRouting.snapshots);
+        routedItems = [...routedItems, item];
+        routing = candidateRouting;
+      } catch (error) {
+        console.error(`${new Date().toISOString()} DISCOVERY připojení ${connectionLabel(item.context.connectionId)} koliduje s routingem, startuji bez něj: ${error instanceof Error ? error.message : String(error)}`);
+        connectionWatch.state = recordConnectionDiscoveryFailure(connectionWatch.state, item.context.connectionId, error, Date.now());
+        connectionWatch.loadedConnectionIds = connectionWatch.loadedConnectionIds
+          .filter(connectionId => connectionId !== item.context.connectionId);
+        item.context.displayFeed?.close();
+      }
     }
-    await saveConnectionDiscoveryState(connectionWatch.statePath, connectionWatch.state).catch(() => undefined);
-    loaded.splice(0, loaded.length, ...loaded.filter(item => !item.context.discovered));
-    routing = routingFor(loaded);
-    initialRouting = resolveDynamicBrokerRoutes(routing.connections, routing.snapshots);
+    if (routedItems.length !== loaded.length) {
+      await saveConnectionDiscoveryState(connectionWatch.statePath, connectionWatch.state).catch(() => undefined);
+      loaded.splice(0, loaded.length, ...routedItems);
+    }
   }
   const routingConnections = routing.connections;
   const accounts = initialRouting.accounts;
@@ -497,7 +495,6 @@ async function discoverOwnerConnections<T extends { context: PilotContext }>(opt
     loadedConnectionIds: options.manifest.connections.map(entry => entry.connectionId),
     state: await loadConnectionDiscoveryState(statePath),
     scope: null,
-    accountIdsByConnection: new Map(),
   };
   let listed: Awaited<ReturnType<typeof listMacCopierDeviceConnections>>;
   try {
@@ -513,19 +510,22 @@ async function discoverOwnerConnections<T extends { context: PilotContext }>(opt
     state: watch.state,
     now: Date.now(),
   });
-  for (const connectionId of pending) {
-    try {
-      const item = await options.load(device, connectionId);
-      options.onLoaded(item);
+  // Souběžně: každé připojení má vlastní krátký rozpočet (lease 60 s,
+  // adresář 60 s), takže víc mrtvých propfirem se nesčítá do zdržení startu.
+  const results = await Promise.allSettled(pending.map(connectionId => options.load(device, connectionId)));
+  results.forEach((result, index) => {
+    const connectionId = pending[index];
+    if (result.status === 'fulfilled') {
+      options.onLoaded(result.value);
       watch.loadedConnectionIds.push(connectionId);
       watch.state = recordConnectionDiscoverySuccess(watch.state, connectionId);
       console.log(`${new Date().toISOString()} DISCOVERY načteno nové připojení ${connectionLabel(connectionId)}`);
-    } catch (error) {
-      watch.state = recordConnectionDiscoveryFailure(watch.state, connectionId, error, Date.now());
-      const failure = watch.state.failures[connectionId];
-      console.error(`${new Date().toISOString()} DISCOVERY připojení ${connectionLabel(connectionId)} se nepodařilo načíst (pokus ${failure?.attempts}, další ${new Date(failure?.nextAttemptAt ?? 0).toISOString()}): ${error instanceof Error ? error.message : String(error)}`);
+      return;
     }
-  }
+    watch.state = recordConnectionDiscoveryFailure(watch.state, connectionId, result.reason, Date.now());
+    const failure = watch.state.failures[connectionId];
+    console.error(`${new Date().toISOString()} DISCOVERY připojení ${connectionLabel(connectionId)} se nepodařilo načíst (pokus ${failure?.attempts}, další ${new Date(failure?.nextAttemptAt ?? 0).toISOString()}): ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+  });
   await saveConnectionDiscoveryState(statePath, watch.state).catch(error => {
     console.warn(`${new Date().toISOString()} DISCOVERY stav nejde uložit: ${error instanceof Error ? error.message : String(error)}`);
   });
@@ -549,6 +549,9 @@ async function discoveredPilotContext(device: MacCopierDeviceConfig, connectionI
     renewable: true,
     getAccessToken: provider.getAccessToken,
     forceTokenRenewal: async () => { await provider.refresh({ forceRenewal: true }); },
+    // Jen pro upload evidence obchodů této propfirmy (owner-scope device);
+    // command relay běží dál výhradně přes primární připojení.
+    relay: { apiOrigin: device.apiOrigin, authorizationHeader: provider.authorizationHeader },
     discovered: true,
   };
 }
@@ -1179,11 +1182,34 @@ async function runLocalAgent(
       }))));
     }
     if (await abortLateStartupIfStopping()) return;
-    await waitUntil(
-      () => stopPromise != null || controller?.status().connected === true,
-      15_000,
-      'WebSocket sync timeout',
-    );
+    try {
+      await waitUntil(
+        () => stopPromise != null || controller?.status().connected === true,
+        15_000,
+        'WebSocket sync timeout',
+      );
+    } catch (error) {
+      // Nově objevená propfirma, jejíž stream se nesynchronizoval, nesmí
+      // roztočit launchd crash loop: zapíše se do backoffu, takže příští
+      // start ji přeskočí a nastartuje se stávajícími připojeními.
+      if (connectionWatch) {
+        const stalled = contexts
+          .filter(candidate => candidate.discovered)
+          .map(candidate => candidate.connectionId)
+          .filter(connectionId => {
+            const owner = renewableBrokers.find(item => item.connectionId === connectionId);
+            return !owner || !owner.broker.usage().streamConnected;
+          });
+        for (const connectionId of stalled) {
+          connectionWatch.state = recordConnectionDiscoveryFailure(connectionWatch.state, connectionId, error, Date.now());
+          console.error(`${new Date().toISOString()} DISCOVERY připojení ${connectionLabel(connectionId)} se při startu nesynchronizovalo; příští start ho přeskočí`);
+        }
+        if (stalled.length > 0) {
+          await saveConnectionDiscoveryState(connectionWatch.statePath, connectionWatch.state).catch(() => undefined);
+        }
+      }
+      throw error;
+    }
     if (await abortLateStartupIfStopping()) return;
     agent = await startLocalCopierExecutionAgent({
       controller,
@@ -1207,7 +1233,10 @@ async function runLocalAgent(
         connectionDiscovery: () => ({
           scope: connectionWatch.scope,
           deviceId: connectionWatch.device.deviceId,
-          loadedConnectionIds: [...connectionWatch.loadedConnectionIds],
+          // Jen připojení načtená přes souhlas; manifestová (i nespárovaná)
+          // UI posuzuje dál podle `devices`, aby nespárované nevypadalo zapojeně.
+          loadedConnectionIds: connectionWatch.loadedConnectionIds
+            .filter(connectionId => !connectionWatch.manifestConnectionIds.includes(connectionId)),
           pendingConnectionIds: [...connectionWatchPending],
           failedConnections: Object.entries(connectionWatch.state.failures)
             .map(([connectionId, failure]) => ({ connectionId, ...failure })),
@@ -1341,6 +1370,7 @@ async function runLocalAgent(
       // po spárování); odpojené připojení s účty skupiny za ARM kopírku vypne.
       let pollInFlight = false;
       let lastPollWarningAt = 0;
+      let manifestRemovalLogged = false;
       const pollConnections = async () => {
         if (pollInFlight || stopPromise) return;
         pollInFlight = true;
@@ -1351,30 +1381,42 @@ async function runLocalAgent(
             serverConnectionIds: listed.connectionIds,
             loadedConnectionIds: connectionWatch.loadedConnectionIds,
             manifestConnectionIds: connectionWatch.manifestConnectionIds,
+            scope: listed.scope,
             state: connectionWatch.state,
             now: Date.now(),
           });
           connectionWatchPending = decision.added;
-          if (decision.removed.length > 0) {
-            const groupAccounts = new Set(agent ? copyGroupAccountIds(agent.status().group) : []);
-            const carriesGroup = decision.removed.some(connectionId => (
-              (connectionWatch.accountIdsByConnection.get(connectionId) ?? []).some(accountId => groupAccounts.has(accountId))
-            ));
-            if (carriesGroup && controller?.status().armed) {
-              controller.disarm('connection-removed');
-              console.error(`${new Date().toISOString()} DISCOVERY odpojené připojení ${decision.removed.map(connectionLabel).join(',')} nese účty skupiny; kopírka vypnuta`);
-            }
+          if (decision.removed.length > 0 && controller?.status().armed) {
+            // Odpojená propfirma: kopírka se za ARM vypne vždy. Účty se mohly
+            // objevit až po startu, takže nespoléháme na seznam z adresáře.
+            controller.disarm('connection-removed');
+            console.error(`${new Date().toISOString()} DISCOVERY připojení ${decision.removed.map(connectionLabel).join(',')} bylo odpojeno; kopírka vypnuta`);
           }
-          if (decision.added.length > 0 || decision.removed.length > 0) {
+          const removedDiscovered = decision.removed
+            .filter(connectionId => !connectionWatch.manifestConnectionIds.includes(connectionId));
+          if (decision.removed.length > removedDiscovered.length && !manifestRemovalLogged) {
+            manifestRemovalLogged = true;
+            // Restart by skončil na obnově lease odpojeného manifestového
+            // připojení; worker proto běží dál vypnutý a čeká na nové připojení.
+            console.error(`${new Date().toISOString()} DISCOVERY odpojené primární připojení; restart neplánuji, znovu připoj propfirmu nebo přeinstaluj worker`);
+          }
+          if (decision.added.length > 0 || removedDiscovered.length > 0) {
             if (!pairingRestartPending) {
-              console.log(`${new Date().toISOString()} DISCOVERY změna připojení +[${decision.added.map(connectionLabel).join(',')}] -[${decision.removed.map(connectionLabel).join(',')}]; restart, až bude kopírka vypnutá a flat`);
+              console.log(`${new Date().toISOString()} DISCOVERY změna připojení +[${decision.added.map(connectionLabel).join(',')}] -[${removedDiscovered.map(connectionLabel).join(',')}]; restart, až bude kopírka vypnutá a flat`);
             }
             requestSafePairingRestart();
           }
         } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          // Odvolaný Mac: web už k workeru nedostane ani DISARM/kill switch
+          // (relay odpovídá 401). Kopírka se proto vypne hned tady.
+          if (/invalid-copier-device-auth|connections-http-401/.test(message) && controller?.status().armed) {
+            controller.disarm('connection-removed');
+            console.error(`${new Date().toISOString()} DISCOVERY zařízení Macu bylo odvoláno; kopírka vypnuta`);
+          }
           if (Date.now() - lastPollWarningAt > 30 * 60_000) {
             lastPollWarningAt = Date.now();
-            console.warn(`${new Date().toISOString()} DISCOVERY seznam připojení nedostupný: ${error instanceof Error ? error.message : String(error)}`);
+            console.warn(`${new Date().toISOString()} DISCOVERY seznam připojení nedostupný: ${message}`);
           }
         } finally {
           pollInFlight = false;

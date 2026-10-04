@@ -66,6 +66,20 @@ describe('journal transport with exact durable acknowledgement', () => {
     expect(validateJournalBatch([seal()], device.connectionId, 'demo')).toHaveLength(1);
   });
 
+  it('owner-scope Mac zapíše evidenci jiného připojení vlastníka, connection-scope ne (4. 10.)', async () => {
+    const rpc = vi.fn(async (_name: string, input: { p_connection_id: string; p_events: JournalEvidence[] }) => ({
+      error: null, data: { accepted: true, ids: input.p_events.map(event => event.id) },
+    }));
+    const db = { rpc } as unknown as SupabaseClient;
+    const other = seal({ connectionId: 'fundednext-connection' });
+    await expect(storeJournalBatch(db, device, [other])).rejects.toThrow('invalid-journal-connection');
+    expect(rpc).not.toHaveBeenCalled();
+    await storeJournalBatch(db, { ...device, scope: 'owner' }, [other]);
+    expect(rpc).toHaveBeenCalledWith('append_tradovate_journal_evidence', expect.objectContaining({
+      p_connection_id: 'fundednext-connection', p_device_id: device.id,
+    }));
+  });
+
   it('replays a lost response after restart with identical ids and owner-scoped deduplication', async () => {
     const root = await mkdtemp(join(tmpdir(), 'journal-transport-')); roots.push(root);
     const options = { path: join(root, 'events.jsonl'), connectionId: device.connectionId, environment: 'demo' as const };

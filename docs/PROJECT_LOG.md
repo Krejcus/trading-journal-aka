@@ -258,6 +258,36 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-04 — Nová propfirma bez CLI: Mac worker ji načte sám (Claude, konzultace s Codexem)
+
+Filip přidal FundedNext a nešlo ji dát do skupiny („není ve Mac workeru“);
+dřív to chtělo `copier:mac add-connection`, párování a reinstall — nepoužitelné
+pro veřejnost. Konkurence (Tradesyncer, Tradecopia, PickMyTrade) kopíruje
+v cloudu, účet přidá jen OAuth loginem.
+
+Rozhodnutí a proč:
+- **Výslovný souhlas, ne tichý rozšířený přístup** (Codex): nový sloupec
+  `tradovate_copier_devices.scope` (`connection` default / `owner`). Tlačítko
+  „Povolit Macu načítat propfirmy“ v editoru skupiny. Jen `owner` smí brát
+  krátké lease (zapečetěné klíčem zařízení) i pro další připojená demo
+  připojení vlastníka a zapisovat jejich evidenci (RPC journalu rozšířeno).
+- **Bezpečný restart místo hot-add do routeru**: router má pevnou sadu brokerů;
+  worker při startu načte připojení navíc k manifestu, poll 60 s při změně
+  volá existující `requestSafePairingRestart` (DISARMED, flat, reconciled).
+- **Nikdy crash loop**: selhání nové propfirmy (lease, adresář, kolize účtů,
+  nesynchronizovaný stream při startu) jde do perzistentního backoffu
+  (`connection-discovery.json`, 5 min → 6 h); načítání je souběžné s 60s
+  rozpočtem, takže mrtvá firma start nezdrží o 10 min.
+- **Odpojení za ARM** (i primárního připojení se scope owner) nebo odvolaný
+  Mac (401) → `disarm('connection-removed')`; restart se kvůli odpojenému
+  manifestovému připojení neplánuje (spadl by na jeho lease).
+- Device auth čte `select('*')`, takže web nasazený před migrací nerozbije
+  lease workeru. Pořadí nasazení: migrace → web → worker → iPhone.
+
+Známé limity: odpojení nesouvisející propfirmy za ARM vypne kopírku (fail-safe);
+souhlas přežije re-pair stejného device id; command relay běží dál jen přes
+primární připojení.
+
 ### 2026-10-04 — Nasazení oprav review přípravy ON/OFF (Claude)
 
 - Filip „ano nasaď a nainstaluj do telefonu“. `6f0e9b9c` fast-forward na main

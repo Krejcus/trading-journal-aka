@@ -116,6 +116,7 @@ export interface CopierConnectionDiscoveryStatus {
   /** null = seznam připojení se zatím nepodařilo načíst. */
   scope: 'owner' | 'connection' | null;
   deviceId: string;
+  /** Připojení načtená přes souhlas (mimo manifest); manifestová určují `devices`. */
   loadedConnectionIds: string[];
   /** Připojení čekající na bezpečný restart (kopírka vypnutá, flat). */
   pendingConnectionIds: string[];
