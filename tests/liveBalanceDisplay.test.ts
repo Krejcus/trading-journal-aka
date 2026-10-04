@@ -197,6 +197,29 @@ describe('confirmed daily display', () => {
       expect(liveDailyLossRemainingDisplay(stale, now)).toMatchObject({ value: 1_250, stale: true });
     });
 
+    it('DLL zbývá nikdy nepřesáhne rezervu DD (max loss je blíž)', () => {
+      const display = liveDailyLossRemainingDisplay(noTradeToday({ cushion: 546 }), now);
+      expect(display).toMatchObject({ value: 546, state: 'ready', cappedByDrawdown: true, stale: false });
+    });
+
+    it('když je rezerva DD větší, platí denní limit', () => {
+      const display = liveDailyLossRemainingDisplay(noTradeToday({ cushion: 3_998 }), now);
+      expect(display).toMatchObject({ value: 1_250 });
+      expect(display.cappedByDrawdown).toBeUndefined();
+    });
+
+    it('vypnutý nebo načítaný drawdown DLL neomezuje', () => {
+      expect(liveDailyLossRemainingDisplay(noTradeToday({ cushion: 100, riskDisplayDrawdownDisabled: true }), now).value).toBe(1_250);
+      expect(liveDailyLossRemainingDisplay(noTradeToday({ cushion: 100, riskDisplayPending: true }), now).value).toBe(1_250);
+    });
+
+    it('omezení starým zůstatkem je jen poslední známá hodnota', () => {
+      const display = liveDailyLossRemainingDisplay(noTradeToday({
+        cushion: 546, cashUpdatedAt: new Date(now - 5 * 60_000).toISOString(),
+      }), now);
+      expect(display).toMatchObject({ value: 546, stale: true, cappedByDrawdown: true });
+    });
+
     it('během načítání dál „loading“', () => {
       expect(liveDailyLossRemainingDisplay(noTradeToday({ dailyPnlPending: true }), now).state).toBe('loading');
     });

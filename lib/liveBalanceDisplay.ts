@@ -29,6 +29,8 @@ export function liveDayReadAnswered(account: LiveAccount, now = Date.now(), pend
 export interface LiveDailyLossDisplay extends LiveBalanceDisplay {
   state: LiveRiskDisplayState;
   reason: string | null;
+  /** Max loss (rezerva DD) je blíž než denní limit — hodnota je rezerva DD. */
+  cappedByDrawdown?: boolean;
 }
 
 /** Presentation only: retained cash is not fresh risk/execution evidence. */
@@ -140,13 +142,24 @@ export function liveDailyLossRemainingDisplay(
     };
   }
   const at = Date.parse(confirmedAt);
-  return {
-    value: limit + realized.value + account.unrealizedPnl,
-    stale: realized.stale || account.unrealizedPnlSource === 'stale' || now - at > LIVE_READ_MAX_AGE_MS,
-    confirmedAt,
-    state: 'ready',
-    reason: null,
-  };
+  const stale = realized.stale || account.unrealizedPnlSource === 'stale' || now - at > LIVE_READ_MAX_AGE_MS;
+  const remaining = limit + realized.value + account.unrealizedPnl;
+  // Víc, než zbývá do max loss, se za den ztratit nedá: když je rezerva DD
+  // menší než zbývající denní limit, DLL zbývá je rezerva DD. Bez
+  // potvrzeného drawdownu (vypnutý, nebo se ještě načítá) se nic neomezuje.
+  const cushion = account.riskDisplayDrawdownDisabled || account.riskDisplayPending ? null : account.cushion;
+  if (cushion != null && Number.isFinite(cushion) && cushion < remaining) {
+    const cappedAt = oldestConfirmedInput([confirmedAt, account.cashUpdatedAt], now) ?? confirmedAt;
+    return {
+      value: cushion,
+      stale: stale || !isLiveAccountReadVerified(account, 'cash', now),
+      confirmedAt: cappedAt,
+      state: 'ready',
+      reason: null,
+      cappedByDrawdown: true,
+    };
+  }
+  return { value: remaining, stale, confirmedAt, state: 'ready', reason: null };
 }
 
 export function liveGroupDailyPnlDisplay(accounts: Array<LiveAccount | null | undefined>, now = Date.now(), pending = false): number | null {

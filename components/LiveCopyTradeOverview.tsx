@@ -3089,7 +3089,12 @@ const accountRiskValues = (a: LiveAccount | undefined, accountId: number | null,
   const cushion = a?.cushion ?? null;
   const cashKnown = !!a && isLiveAccountReadVerified(a, 'cash');
   const dllDisplay = liveDailyLossRemainingDisplay(a, Date.now(), dailyPnlPending);
-  const dllRemaining = a && a.cashAvailability == null ? copyTradeDailyLossRemaining(a) : dllDisplay.value;
+  // Legacy účty bez OAuth read-state: stejné pravidlo jako liveDailyLossRemainingDisplay —
+  // DLL zbývá nikdy nepřesáhne rezervu DD.
+  const legacyDll = a && a.cashAvailability == null ? copyTradeDailyLossRemaining(a) : null;
+  const dllRemaining = a && a.cashAvailability == null
+    ? (legacyDll != null && cushion != null && Number.isFinite(cushion) && !a.riskDisplayDrawdownDisabled ? Math.min(legacyDll, cushion) : legacyDll)
+    : dllDisplay.value;
   const riskKey = `${accountId}:${a?.riskDisplayConfigKey ?? "legacy"}:${tradovateDisplayTradeDate()}`;
   const dllShowsDrawdown = !!a?.riskDisplayDailyLossDisabled
     && (a.dailyLossLimit == null || a.dailyLossLimit === 0);
@@ -3104,6 +3109,7 @@ const accountRiskValues = (a: LiveAccount | undefined, accountId: number | null,
     value={dllRemaining == null ? null : Math.max(0,dllRemaining)} confirmedAt={dllDisplay.confirmedAt}
     verified={dllDisplay.state === 'ready' && !dllDisplay.stale}
     state={dllDisplay.state} reason={dllDisplay.reason}
+    detail={dllDisplay.cappedByDrawdown ? 'omezeno rezervou DD — max loss je blíž než denní limit' : undefined}
     color={value=>dllRemainingClass(value,a?.dailyLossLimit)} sizeClass={sizeClass} />;
   return { dll, drawdown, dllShowsDrawdown };
 };
