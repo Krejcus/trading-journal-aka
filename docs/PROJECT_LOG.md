@@ -258,6 +258,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-04 — Nasazení oprav review přípravy ON/OFF (Claude)
+
+- Filip „ano nasaď a nainstaluj do telefonu“. `6f0e9b9c` fast-forward na main
+  (4 875 testů + build PASS), Vercel READY.
+- Mac worker přeinstalován `scripts/copier/mac-reinstall-safe.sh` z čistého
+  release worktree na `6f0e9b9c`; brána prošla (DISARMED, connected, bez
+  reconciliation/divergence/working/stuck/lastError), `--adopt-durable-group`
+  zachovalo skupinu Hlavní (leader 65333277, follower 65333343). Po startu
+  `armPreparation.state=ready`, `blockedBy=null`.
+- Zátěž API naměřená ve workeru (`connectionUsage`, Tradeify login): před
+  opravou 18 REST/min (~1 080/h, ~22 % z 5 000/h), po opravě 48 za 5 min
+  klidu (~9,6/min, ~12 %) včetně krátkého aktivního režimu vyvolaného měřicím
+  čtením `/v1/status` (každé čtení = „zájem“). Zbytek jsou risk/display čtení.
+- iPhone: čistá reinstalace z `6f0e9b9c` (bundle ověřen na Supabase URL).
+
 ### 2026-10-04 — Opravy review přípravy ON/OFF kopírky (Codex)
 
 - P2 API zátěž: DISARMED background preflight zůstává 20s jen v aktivním
@@ -276,6 +291,39 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   (1 soubor skipped, 1 todo); produkční build PASS. `npx tsc --noEmit` hlásí
   pouze očekávané worktree chyby v `extension/` kvůli chybějícím `chrome`
   typům a `@crxjs/vite-plugin`.
+
+### 2026-10-04 — Nasazení předběžné přípravy kopírky na web i worker (Codex)
+
+- Filip výslovně schválil „dobře,udělej to i nasaď“. Oprava oddělena na
+  `codex/copier-arm-preparation-20261004`; commit `bd02de3963c65949487dd53f9721b763d34c3316`
+  zahrnuje jen 8 souborů této opravy. Cizí `.claude/launch.json`, mockupy
+  a review brief zachovány mimo vydání. Main aktualizován fast-forwardem.
+- Čisté vydání znovu ověřeno: instalace z lockfile, tsc, produkční build,
+  **4 869 testů / 523 souborů PASS**, 1 soubor skipped a 1 test todo.
+- Preview `dpl_GVVv3RCpMCQ2Qb9YGH3sQBEFHk35` READY; dočasný přístupový
+  odkaz automatická kontrola odmítla kvůli změně přístupu k chráněné aplikaci.
+  Ochrana nezměněna, UI ověřeno na localhost LIVE a následně na produkci.
+- Před instalací read-only reconciliation autoritativně potvrdila DISARMED,
+  connected, flat, bez pozic/příkazů/divergence/stuck outbox/chyby.
+  Návratová záloha: `.copier-pilot/release-backups/20261004-arm-preparation/`
+  (soukromá, gitignored; obsahuje starý bundle, manifest, plist, durable stav
+  a routování). Neobsahuje vzdálenou DB, která se při vydání neměnila.
+- Mac worker instalován z čistého stejného commitu, bez downgrade výjimky.
+  `--adopt-durable-group` zachovalo přesně uloženou skupinu Hlavní;
+  původní CLI bootstrap účty nepřepsaly aktuální skupinu. Nová capability
+  `arm-preparation-v1`, `dirty=false`, instalovaný bundle SHA-256
+  `7b724218739e52f76c13569c5bc6da070a824bfc6106e68434de9062ae528c69`.
+  Po instalaci connected, DISARMED, groupFlat, bez chyb a pracovních příkazů;
+  příprava automaticky `ready` a její čas se dále obnovuje na pozadí.
+- Produkce `dpl_4LH8Asv4xuWFCqdDXDFQ7tuyyCbp` READY na
+  `https://alphatrade-mentor-15.vercel.app`. Publikovaný LIVE bundle obsahuje
+  zrušení ON i novou přípravu. Přihlášené LIVE ověřeno, kopírka vypnutá,
+  bez console errors. Cílený vzorek runtime logů po deployi: relay 200,
+  žádné error události; historické ranní DB chyby nejsou nový regresní nález.
+  Screenshot: `/private/tmp/alphatrade-copier-production-20261004.png`.
+- Bez ARM, Flatten, brokerových obchodních příkazů nebo instalace iPhonu.
+  Reálná latence ON stále neměřena; ověřená je nasazená automatická příprava.
+  Podrobnosti: `docs/COPIER_ARM_PREPARATION_20261004.md`.
 
 ### 2026-10-04 — Předběžná read-only příprava ON/OFF kopírky (Codex)
 
