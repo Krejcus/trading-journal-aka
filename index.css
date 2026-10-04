@@ -4235,6 +4235,15 @@ html.aurora .compact-sheet-scrim {
   backdrop-filter: blur(10px) saturate(140%);
 }
 
+/* Aurora: celoobrazovková okna s pozadím karty/stránky (editor kopírovací
+   skupiny v LIVE, graf přes celou obrazovku, Síť, Backtest) by byla průsvitná
+   jako karty a pod textem by prosvítala stránka (4. 10. 2026, iPhone: „Upravit
+   skupinu“ přes LIVE). Tón karty se položí na pevný základ Aurory. Ztmavení
+   s průhledností (bg-theme-page-95 apod.) se netýká — `~=` bere jen přesnou třídu. */
+html.aurora .fixed.inset-0:is([class*="bg-[var(--bg-card)]"], [class*="bg-[var(--bg-page)]"], [class~="bg-theme-card"], [class~="bg-theme-page"]) {
+  background: linear-gradient(var(--bg-card), var(--bg-card)), var(--aurora-base);
+}
+
 /* Aurora: položky postranního panelu bez vlastních „kapek“. Panel je jedno
    sklo a položky jsou v něm jen řádky (jako v náhledu mockups/app-styles.html);
    najetí = jemný tón, aktivní položka = světlejší sklo s horní hranou.
