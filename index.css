@@ -3864,3 +3864,24 @@ html.aurora .liquid-glass-lens.glass-lens-active-dark {
 
 /* Aurora: buňky kalendáře jako skleněné dlaždice — horní světelná hrana. */
 html.aurora .cal-cell { box-shadow: inset 0 1px 0 var(--aurora-sheen); }
+
+/* Aurora: postranní panel nesmí stát jen na backdrop-filter. Chrome bez
+   hardwarové akcelerace (a některé GPU) rozmazání nevykreslí a panel s 10%
+   výplní pak byl skoro průhledný — obsah pod ním prosvítal ostře. Vlastní
+   mléčná výplň drží panel matný všude; kde blur funguje (Safari), jen dokreslí. */
+html.aurora.light-theme aside .floating-glass-header {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.74) 0%, rgba(248, 250, 252, 0.64) 100%) !important;
+}
+html.aurora:not(.light-theme) aside .floating-glass-header {
+  background: linear-gradient(180deg, rgba(15, 20, 38, 0.76) 0%, rgba(8, 11, 22, 0.70) 100%) !important;
+}
+
+/* Totéž pro horní lištu (.header-clear): bez funkčního rozmazání by obsah
+   stránky jel pod 12% výplní ostře pod nadpisem. Lupa (#liquid-glass) na Chromiu
+   zůstává, jen už na ní nezávisí čitelnost. */
+html.aurora.light-theme .floating-glass-header.header-clear {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72) 0%, rgba(248, 250, 252, 0.62) 100%) !important;
+}
+html.aurora:not(.light-theme) .floating-glass-header.header-clear {
+  background: linear-gradient(180deg, rgba(15, 20, 38, 0.74) 0%, rgba(8, 11, 22, 0.68) 100%) !important;
+}
