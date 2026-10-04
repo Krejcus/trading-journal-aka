@@ -78,7 +78,7 @@ describe('buildLabDecisions', () => {
       ],
     } as unknown as TradeExecutionHistory;
     const [decision] = buildLabDecisions({ accounts, trades: [journal('a', { pnl: -1 })], histories: new Map([['a', history]]) });
-    expect(decision.management).toEqual({ slMoves: 2, movedToBreakEven: true, noStopAtEntry: false });
+    expect(decision.management).toEqual({ slMoves: 2, movedToBreakEven: true, stopDelaySec: 0.9 });
     expect(decision.feesUsd).toBe(4.2);
   });
 

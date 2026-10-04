@@ -13,7 +13,7 @@ function day(dayKey: string, rows: Array<{ t: string; pnl: number; size?: number
     const previous = out[out.length - 1];
     out.push({
       id: `d${++seq}`, leaderTradeId: `t${seq}`, memberTradeIds: [`t${seq}`], accountIds: ['a'], leaderAccountId: 'a', leaderKnown: true,
-      instrument: 'MNQ', pointValue: 2, direction: row.dir ?? 'Long', entryAt, exitAt, holdMs: exitAt - entryAt,
+      instrument: 'MNQ', symbol: 'MNQZ6', pointValue: 2, direction: row.dir ?? 'Long', entryAt, exitAt, holdMs: exitAt - entryAt,
       dayKey, weekday: 2, entryMinute: h * 60 + m, session: 'NY open',
       orderInDay: out.length + 1, minutesSincePrevExit: previous ? (entryAt - previous.exitAt) / 60_000 : null,
       afterLoss: previous ? previous.pnlUsd < 0 : false, directionFlip: previous ? previous.direction !== (row.dir ?? 'Long') : false,

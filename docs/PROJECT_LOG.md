@@ -348,6 +348,14 @@ Podle náhledu `mockups/business-redesign.html` (Filip schvaloval po krocích).
   „max 2 ztráty“ by stálo −$219, „max 3“ +$653 — UI nevybírá „nejlepší“,
   když nic nepomáhá. R potřebuje historii plnění (SL u OSO není v řádku
   obchodu) — Lab ji dotahuje dávkou (153/172 s R).
+- Sekce C–F (`lib/labSections.ts`): C řízení (BE, ruční výstup vs. původní
+  SL/TP, kam došla cena po výstupu, bez SL, držet vítěze do TP), D nevzaté
+  (od 14. 9., kopie z followerů sloučené do 2 s), E čas (hodina × den,
+  pořadí ve dni, seance), F setupy (štítek od 5, kombinace od 30 obchodů).
+  „Bez SL“ = SL nikdy (14 obchodů, −$3 380); ruční SL po pár sekundách je
+  běžný (42×), pozdní až po 30 s. Svíčky Lab tahá po dnech přes
+  `loadMarketCandles` (3 souběžně, 1 opakování; rozběhnutý den doběhne i při
+  změně seznamu) — 172/172 do ~9 s.
 - G (účty): v `accounts.meta` jsou pole challengeCost/totalWithdrawals/
   failureReason, ale u účtů z Tradovate prázdná; stav „Active“ i u spálených;
   `copier_runtime_state` v produkci neexistuje (důvod spálení zná jen lokální

@@ -25,8 +25,9 @@ export interface LabManagement {
   slMoves: number;
   /** SL posunut na vstup nebo do zisku (riziko ≤ 0). */
   movedToBreakEven: boolean;
-  /** Obchod neměl při vstupu žádný SL (ani do 2 s po něm). */
-  noStopAtEntry: boolean;
+  /** Za kolik sekund po vstupu stál první SL; `null` = obchod SL nikdy neměl.
+   *  (2. 10.: 116 obchodů do 2 s, 42 ručně po pár sekundách, 14 nikdy.) */
+  stopDelaySec: number | null;
 }
 
 export interface LabDecision {
@@ -39,6 +40,8 @@ export interface LabDecision {
   /** Leader určený kopírkou (`isMaster`); jinak odhad podle nejdřívějšího vstupu. */
   leaderKnown: boolean;
   instrument: string;
+  /** Kontrakt leadera (např. `MNQZ6`) — podle něj se načítají svíčky. */
+  symbol: string;
   pointValue: number | null;
   direction: 'Long' | 'Short';
   entryAt: number;
@@ -142,7 +145,7 @@ function managementOf(history: TradeExecutionHistory, entryAt: number, exitAt: n
     last = price;
     if (entryPrice != null && (long ? price >= entryPrice - tick / 2 : price <= entryPrice + tick / 2)) movedToBreakEven = true;
   }
-  return { slMoves, movedToBreakEven, noStopAtEntry: atEntry.length === 0 };
+  return { slMoves, movedToBreakEven, stopDelaySec: stops.length ? Math.max(0, (stops[0].at - entryAt) / 1000) : null };
 }
 
 const entryMsOf = (trade: Trade) => {
@@ -216,6 +219,7 @@ export function buildLabDecisions({ trades, accounts, histories }: LabDatasetInp
       leaderAccountId: String(leader.accountId),
       leaderKnown: masters.length === 1 || members.length === 1,
       instrument: futuresSymbolRoot(String(leader.instrument || symbol)),
+      symbol,
       pointValue,
       direction: long ? 'Long' : 'Short',
       entryAt, exitAt, holdMs: Math.max(0, exitAt - entryAt),
