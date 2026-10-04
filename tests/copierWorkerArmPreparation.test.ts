@@ -2,12 +2,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bootstrapCopierRuntime, type CopierRuntimeController } from '../services/copierRuntimeController';
 import { createMemoryCopierStore } from '../services/copierStore';
 import { createMockBroker } from '../services/mockBroker';
-import type { CopyGroupConfig } from '../services/liveCopyTrading';
+import { DEFAULT_COPY_GROUP_SAFETY, type CopyGroupConfig } from '../services/liveCopyTrading';
 import { startLocalCopierExecutionAgent, type LocalCopierExecutionAgent } from '../server/localCopierExecutionAgent';
 
 const group = (): CopyGroupConfig => ({
   id: 'arm-preparation', name: 'Preparation', enabled: true, leaderAccountId: 11,
   followers: [{ accountId: 22, mode: 'on-submit', multiplier: 1 }], localOnly: true,
+});
+const groupWithTradingWindow = (from: string, to: string): CopyGroupConfig => ({
+  ...group(),
+  safety: {
+    ...DEFAULT_COPY_GROUP_SAFETY,
+    tradingWindow: { enabled: true, from, to, timeZone: 'UTC' },
+  },
 });
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -19,8 +26,8 @@ describe('worker read-only ARM preparation', () => {
   let runtime: CopierRuntimeController;
   let agent: LocalCopierExecutionAgent | null = null;
   let now = Date.now();
-  const boot = async (config = group(), routeEpoch?: () => number) => {
-    now = Date.now();
+  const boot = async (config = group(), routeEpoch?: () => number, at = Date.now()) => {
+    now = at;
     const broker = createMockBroker({ clock: () => now, behavior: () => ({ kind: 'working' }), accountRiskSnapshots: [] });
     if (routeEpoch) broker.routeEpoch = routeEpoch;
     runtime = await bootstrapCopierRuntime({ broker, store: createMemoryCopierStore(), group: config, clock: () => now });
@@ -112,14 +119,50 @@ describe('worker read-only ARM preparation', () => {
     expect(runtime.status().armed).toBe(false);
   });
 
-  it('keeps readiness warm with bounded background reads and deduplicates heartbeats', async () => {
-    const broker = await boot();
+  it('keeps readiness warm in the trading window and deduplicates heartbeats', async () => {
+    const broker = await boot(
+      groupWithTradingWindow('11:00', '13:00'),
+      undefined,
+      Date.parse('2026-10-05T12:00:00Z'),
+    );
     const positions = vi.spyOn(broker, 'listPositions');
     now += 21_000;
     broker.emitEvent({ type: 'heartbeat', at: now });
     await runtime.waitForIdle();
     expect(positions).toHaveBeenCalledTimes(2);
     for (let i = 0; i < 10; i++) broker.emitEvent({ type: 'heartbeat', at: now });
+    await runtime.waitForIdle();
+    expect(positions).toHaveBeenCalledTimes(2);
+    expect(runtime.status().armPreparation?.state).toBe('ready');
+  });
+
+  it('uses a five-minute idle interval outside the trading window', async () => {
+    const broker = await boot(
+      groupWithTradingWindow('13:00', '14:00'),
+      undefined,
+      Date.parse('2026-10-05T12:00:00Z'),
+    );
+    const positions = vi.spyOn(broker, 'listPositions');
+    now += 21_000;
+    broker.emitEvent({ type: 'heartbeat', at: now });
+    await runtime.waitForIdle();
+    expect(positions).not.toHaveBeenCalled();
+
+    now += 5 * 60_000;
+    broker.emitEvent({ type: 'heartbeat', at: now });
+    await runtime.waitForIdle();
+    expect(positions).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns to the active interval after the LIVE client reads local status', async () => {
+    const broker = await boot(
+      groupWithTradingWindow('13:00', '14:00'),
+      undefined,
+      Date.parse('2026-10-05T12:00:00Z'),
+    );
+    const positions = vi.spyOn(broker, 'listPositions');
+    now += 21_000;
+    runtime.noteArmPreparationInterest!();
     await runtime.waitForIdle();
     expect(positions).toHaveBeenCalledTimes(2);
     expect(runtime.status().armPreparation?.state).toBe('ready');
@@ -240,6 +283,47 @@ describe('worker read-only ARM preparation', () => {
     await runtime.reconcile();
     await runtime.prepareArm!();
     expect(runtime.status()).toMatchObject({ armed: false, lastError: null, armPreparation: { state: 'ready' } });
+  });
+
+  it('keeps an incident blocked across restart until a clean manual reconciliation', async () => {
+    now = Date.parse('2026-10-05T12:00:00Z');
+    const store = createMemoryCopierStore();
+    const broker = createMockBroker({ clock: () => now, behavior: () => ({ kind: 'working' }), accountRiskSnapshots: [] });
+    runtime = await bootstrapCopierRuntime({ broker, store, group: group(), clock: () => now });
+    broker.setConnected(true);
+    await runtime.waitForIdle();
+    runtime.reportHostSleep({ unresponsiveSince: now - 1_000, detectedAt: now, sleepDurationMs: 1_000 });
+    await runtime.waitForIdle();
+    expect((await store.load()).safety?.manualRecoveryRequired).toMatchObject({
+      at: now,
+      reason: expect.stringContaining('host-sleep'),
+    });
+    runtime.stop();
+
+    const restarted = await bootstrapCopierRuntime({ broker, store, group: group(), clock: () => now });
+    runtime = restarted;
+    broker.setConnected(false);
+    broker.setConnected(true);
+    restarted.startArmPreparation!();
+    await restarted.waitForIdle();
+    expect(restarted.status()).toMatchObject({
+      armed: false,
+      lastError: expect.stringContaining('host-sleep'),
+      armPreparation: {
+        state: 'blocked',
+        blockedBy: 'incident',
+        manualRecoveryRequired: true,
+      },
+    });
+    await expect(restarted.prepareArm!()).rejects.toThrow('incidentu');
+
+    await restarted.reconcile();
+    expect((await store.load()).safety?.manualRecoveryRequired).toBeUndefined();
+    await restarted.prepareArm!();
+    expect(restarted.status()).toMatchObject({
+      lastError: null,
+      armPreparation: { state: 'ready', blockedBy: null, manualRecoveryRequired: false },
+    });
   });
 
   it('does not accept open positions as prepared and does not close them automatically', async () => {

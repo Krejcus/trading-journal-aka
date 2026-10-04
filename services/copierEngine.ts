@@ -187,6 +187,14 @@ export interface CopierState {
     /** Durable bounded audit history; never authorizes execution. */
     disarmHistory?: CopierDisarmRecord[];
     /**
+     * Fail-closed incident that must survive a worker restart. Only a clean,
+     * explicitly requested reconciliation may remove this marker.
+     */
+    manualRecoveryRequired?: {
+      at: number;
+      reason: string;
+    };
+    /**
      * Degraded live mode: no new exposure may be copied, but lifecycle and
      * risk-reducing management of already owned copies must keep running.
      * It is entered only after authoritative proof that every affected open

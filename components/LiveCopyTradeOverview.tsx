@@ -4308,7 +4308,10 @@ export const CopierMaintenancePanel = ({ status, known, onReconcile }: {
   // Jen skutečný požadavek workeru. Zastaralý snímek pro zapnutí vypnutého
   // followera platí za DISARMED skoro pořád a panel by svítil zbytečně.
   const preparation = status.armPreparation;
-  const needsCheck = !status.armed && (preparation?.manualRecoveryRequired
+  const preparationRequiresCheck = preparation?.blockedBy != null
+    ? preparation.blockedBy === 'incident'
+    : preparation?.manualRecoveryRequired === true;
+  const needsCheck = !status.armed && (preparationRequiresCheck
     || (status.reconciliationRequired && !preparation));
   // Background warming must not insert/remove a panel every refresh. The
   // ON switch owns progress; this panel is only for operator recovery.

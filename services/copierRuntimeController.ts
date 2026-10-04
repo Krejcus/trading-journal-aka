@@ -149,6 +149,14 @@ export function criticalAuditAllowsTerminalFillRecovery(
  */
 export type { CopierAccountEligibility, CopierAccountEligibilityState } from './copierEngine';
 
+export type CopierArmPreparationBlocker =
+  | 'incident'
+  | 'kill-switch'
+  | 'starting'
+  | 'recovery'
+  | 'configuration'
+  | 'shutdown';
+
 const cloneRejectedExecution = (execution: CopierRejectedExecution): CopierRejectedExecution => ({
   ...execution,
   ...(execution.resolution ? { resolution: { ...execution.resolution } } : {}),
@@ -180,6 +188,7 @@ export interface CopierControllerStatus {
     state: 'needed' | 'checking' | 'ready' | 'blocked';
     verifiedAt: number | null;
     reason: string | null;
+    blockedBy: CopierArmPreparationBlocker | null;
     manualRecoveryRequired: boolean;
   };
   divergentAccounts: number[];
@@ -525,6 +534,8 @@ export interface CopierRuntimeController {
   prepareArm?(): Promise<void>;
   /** Enable background warming when an execution agent starts serving ON/OFF. */
   startArmPreparation?(): void;
+  /** Keep preparation warm briefly after an operator reads local LIVE status. */
+  noteArmPreparationInterest?(): void;
   /** Irreversibly freezes new ARM and durably clears restart-recovery exposure state. */
   beginShutdown(): Promise<void>;
   disarm(trigger?: 'manual' | 'config-change'): void;
@@ -1442,12 +1453,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   // by the mandatory pre-ARM reconciliation (not a persisted "all safe" flag).
   const flatReconciledLeaderEpochIds = new Set<string>();
   let workingOrderAccounts = new Set<number>();
+  const storedManualRecovery = runtime.state.safety.manualRecoveryRequired;
+  const restoredManualRecovery = storedManualRecovery == null
+    ? null
+    : typeof storedManualRecovery === 'object'
+      && Number.isFinite(storedManualRecovery.at)
+      && storedManualRecovery.at > 0
+      && typeof storedManualRecovery.reason === 'string'
+      && storedManualRecovery.reason.trim().length > 0
+      ? { at: storedManualRecovery.at, reason: storedManualRecovery.reason.trim() }
+      : { at: clock(), reason: 'Durable příznak ruční obnovy je neplatný; proveď Kontrolu pozic' };
   let lastError: Error | null = startupGroupRepair
     ? new Error(
       `Uložená skupina má nedostupné účty (${startupGroupRepair.unavailableAccountIds.join(', ')}); `
       + 'worker běží jen VYPNUTÝ v režimu opravy. Uprav skupinu v UI a nedostupné účty z ní odeber.',
     )
-    : startupMissingLeaderRoute;
+    : startupMissingLeaderRoute ?? (restoredManualRecovery
+      ? new Error(restoredManualRecovery.reason)
+      : null);
   const disarmHistory: CopierDisarmRecord[] = (runtime.state.safety.disarmHistory ?? [])
     .filter(record => (
       Number.isFinite(record?.at)
@@ -1656,7 +1679,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const seenFollowerRiskFillIds = new Set(restoredRiskLedger.ledger?.seenFillIds ?? []);
   let reconciliationTail: Promise<void> = Promise.resolve();
   const ARM_PREPARATION_MAX_AGE_MS = 30_000;
-  const ARM_PREPARATION_REFRESH_MS = 20_000;
+  const ARM_PREPARATION_ACTIVE_REFRESH_MS = 20_000;
+  const ARM_PREPARATION_IDLE_REFRESH_MS = 5 * 60_000;
+  const ARM_PREPARATION_INTEREST_MS = 60_000;
   let armPreparationReceipt: {
     generation: number;
     observation: number;
@@ -1668,8 +1693,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   } | null = null;
   let armPreparationInFlight: Promise<void> | null = null;
   let armPreparationError: string | null = null;
-  let armPreparationIncidentRequiresRecovery = false;
+  let armPreparationIncidentRequiresRecovery = restoredManualRecovery != null;
   let armPreparationLastAttemptAt = -Infinity;
+  let armPreparationInterestUntil = -Infinity;
   let automaticArmPreparation = false;
   let reconciliationRequestsPending = 0;
   const admittedLeaderOrders = new Set<string>();
@@ -3938,9 +3964,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   ) => {
     const wasArmed = gate.armed;
     const wasLiveArmed = gate.armed && !gate.shadowMode;
-    if (!failure.transportLost) armPreparationIncidentRequiresRecovery = true;
     invalidateReconciliation();
     lastError = errorOf(reason);
+    if (!failure.transportLost) {
+      armPreparationIncidentRequiresRecovery = true;
+      const manualRecoveryRequired = { at: clock(), reason: lastError.message };
+      disarmPersistenceTail = disarmPersistenceTail.then(() => persistSafetyUpdate(current => ({
+        ...current,
+        manualRecoveryRequired,
+      }))).catch(persistenceError => {
+        options.onError?.(new Error(
+          `Požadavek ruční obnovy se nepodařilo durable uložit: ${errorOf(persistenceError).message}`,
+        ));
+      });
+    }
     const existingSameIncident = lastDisarm
       && lastDisarm.detail === lastError.message
       && lastDisarm.episodeId === failure.episodeId;
@@ -7940,17 +7977,29 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     followers: group.followers, safety: group.safety,
     ineligibleAccounts: [...currentIneligibleAccounts().keys()].sort((a, b) => a - b),
   });
-  const armPreparationBlocker = (): string | null => {
-    if (stopped || shutdownRequested) return 'Worker se ukončuje';
-    if (gate.killSwitch) return 'Kill switch je aktivní';
-    if (startupGroupRepair || startupMissingLeaderRoute) return 'Nejdřív oprav uloženou skupinu';
-    if (processor.recoveryStatus().state !== 'ready') return 'Durable stav workeru není připravený';
-    if (armPreparationIncidentRequiresRecovery) return 'Po incidentu je potřeba ruční Kontrola pozic';
-    if (lastError) return `Nejdřív vyřeš incident a proveď Kontrolu pozic: ${lastError.message}`;
-    if (pendingConnectionRecovery || currentRuntime().state.safety.managementOnly) {
-      return 'Nejdřív dokonči obnovu otevřených kopií';
+  const armPreparationBlocker = (): { blockedBy: CopierArmPreparationBlocker; reason: string } | null => {
+    if (stopped || shutdownRequested) return { blockedBy: 'shutdown', reason: 'Worker se ukončuje' };
+    if (gate.killSwitch) return { blockedBy: 'kill-switch', reason: 'Kill switch je aktivní' };
+    if (startupGroupRepair || startupMissingLeaderRoute) {
+      return { blockedBy: 'configuration', reason: 'Nejdřív oprav uloženou skupinu' };
     }
-    return readOnlyRecoveryBlocker();
+    if (processor.recoveryStatus().state !== 'ready') {
+      return { blockedBy: 'starting', reason: 'Durable stav workeru není připravený' };
+    }
+    if (armPreparationIncidentRequiresRecovery) {
+      return { blockedBy: 'incident', reason: 'Po incidentu je potřeba ruční Kontrola pozic' };
+    }
+    if (lastError) {
+      return {
+        blockedBy: 'incident',
+        reason: `Nejdřív vyřeš incident a proveď Kontrolu pozic: ${lastError.message}`,
+      };
+    }
+    if (pendingConnectionRecovery || currentRuntime().state.safety.managementOnly) {
+      return { blockedBy: 'recovery', reason: 'Nejdřív dokonči obnovu otevřených kopií' };
+    }
+    const recoveryBlocker = readOnlyRecoveryBlocker();
+    return recoveryBlocker ? { blockedBy: 'recovery', reason: recoveryBlocker } : null;
   };
   const armPreparationRoutes = (accountIds: readonly number[]): string | null => {
     try {
@@ -8179,7 +8228,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (gate.armed) throw new Error('Příprava vyžaduje vypnutou kopírku');
       if (!gate.connected) throw new Error('Worker není připojen k brokeru');
       const blocker = armPreparationBlocker();
-      if (blocker) throw new Error(blocker);
+      if (blocker) throw new Error(blocker.reason);
     };
     armPreparationLastAttemptAt = clock();
     const admittedEvents = eventTail;
@@ -8215,11 +8264,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     return tracked;
   };
   const scheduleArmPreparation = () => {
+    const now = clock();
+    const tradingWindow = group.safety?.tradingWindow ?? DEFAULT_COPY_GROUP_SAFETY.tradingWindow;
+    const activePreparation = tradingWindowStateAt(tradingWindow, now) === 'inside'
+      || now <= armPreparationInterestUntil;
+    const refreshMs = activePreparation
+      ? ARM_PREPARATION_ACTIVE_REFRESH_MS
+      : ARM_PREPARATION_IDLE_REFRESH_MS;
     if (!automaticArmPreparation || gate.armed || !gate.connected || stopped || armPreparationInFlight
       || armPreparationBlocker() || recoveryInFlight || pendingReadOnlyConnectionRecovery
-      || clock() - armPreparationLastAttemptAt < ARM_PREPARATION_REFRESH_MS) return;
+      || now - armPreparationLastAttemptAt < refreshMs) return;
     if (hasFreshArmPreparation() && armPreparationReceipt
-      && clock() - armPreparationReceipt.verifiedAt < ARM_PREPARATION_REFRESH_MS) return;
+      && now - armPreparationReceipt.verifiedAt < refreshMs) return;
     void prepareArm(true).catch(() => undefined);
   };
 
@@ -13971,6 +14027,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       automaticArmPreparation = true;
       scheduleArmPreparation();
     },
+    noteArmPreparationInterest() {
+      armPreparationInterestUntil = Math.max(
+        armPreparationInterestUntil,
+        clock() + ARM_PREPARATION_INTEREST_MS,
+      );
+      scheduleArmPreparation();
+    },
     arm({ shadowMode = false, ttlMs, requirePreparation = false } = {}) {
       if (stopped) throw new Error('Copier runtime is stopped');
       if (shutdownRequested) throw new Error('Copier runtime se právě bezpečně ukončuje');
@@ -14298,7 +14361,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Pouze její čistý výsledek smí odstranit starou chybu; automatické
       // reconnect/terminal-fill kontroly incident uživateli neschovávají.
       const result = await performReconciliation({ ...reconciliationOptions, clearLastError: true });
-      if (result.authoritativelyClean) armPreparationIncidentRequiresRecovery = false;
+      if (result.authoritativelyClean) {
+        await persistSafetyUpdate(current => {
+          const { manualRecoveryRequired: _cleared, ...rest } = current;
+          return rest;
+        });
+        armPreparationIncidentRequiresRecovery = false;
+      }
       const riskAccountIds = followersRequiringVerifiedRisk(clock()).map(follower => follower.accountId);
       if (result.authoritativelyClean && riskAccountIds.length > 0) {
         // Kontrola pozic je jediná explicitní read-only brána před ARM.
@@ -14793,14 +14862,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         shadowMode: gate.shadowMode,
         connected: gate.connected,
         reconciliationRequired: source.needsReconciliation() || !positionCheckComplete,
-        armPreparation: {
-          state: armPreparationInFlight || recoveryInFlight ? 'checking'
-            : armPreparationBlocker() ? 'blocked'
-              : hasFreshArmPreparation() ? 'ready' : 'needed',
-          verifiedAt: armPreparationReceipt?.verifiedAt ?? null,
-          reason: armPreparationBlocker() ?? armPreparationError,
-          manualRecoveryRequired: armPreparationBlocker() != null,
-        },
+        armPreparation: (() => {
+          const blocker = armPreparationBlocker();
+          return {
+            state: armPreparationInFlight || recoveryInFlight ? 'checking'
+              : blocker ? 'blocked'
+                : hasFreshArmPreparation() ? 'ready' : 'needed',
+            verifiedAt: armPreparationReceipt?.verifiedAt ?? null,
+            reason: blocker?.reason ?? armPreparationError,
+            blockedBy: blocker?.blockedBy ?? null,
+            manualRecoveryRequired: blocker?.blockedBy === 'incident',
+          };
+        })(),
         divergentAccounts: [...gate.divergentAccounts],
         workingOrderAccounts: [...workingOrderAccounts],
         stuckOutbox: stuckOperations.length > 0,

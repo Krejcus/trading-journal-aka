@@ -55,14 +55,28 @@ describe('CopierMaintenancePanel', () => {
 
   it.each(['needed', 'checking'] as const)('běžná příprava %s nevyžaduje ruční kontrolu', state => {
     const html = render(status({ reconciliationRequired: true,
-      armPreparation: { state, verifiedAt: null, reason: null, manualRecoveryRequired: false } }));
+      armPreparation: { state, verifiedAt: null, reason: null, blockedBy: null, manualRecoveryRequired: false } }));
     expect(html).toBe('');
   });
+
+  it.each(['kill-switch', 'starting', 'recovery'] as const)(
+    'blokátor %s nenabízí Kontrolu pozic',
+    blockedBy => {
+      const html = render(status({ reconciliationRequired: true,
+        armPreparation: {
+          state: 'blocked', verifiedAt: null, reason: `Blokováno: ${blockedBy}`,
+          blockedBy, manualRecoveryRequired: blockedBy === 'kill-switch',
+        } }));
+      expect(html).not.toContain('Zkontrolovat pozice');
+      expect(html).toBe('');
+    },
+  );
 
   it('po incidentu zachová ruční obnovu i s podporou automatické přípravy', () => {
     const html = render(status({ reconciliationRequired: true,
       armPreparation: { state: 'blocked', verifiedAt: null,
-        reason: 'Po incidentu je potřeba ruční Kontrola pozic', manualRecoveryRequired: true } }));
+        reason: 'Po incidentu je potřeba ruční Kontrola pozic', blockedBy: 'incident',
+        manualRecoveryRequired: true } }));
     expect(html).toContain('Po incidentu');
     expect(html).toContain('Zkontrolovat pozice');
   });

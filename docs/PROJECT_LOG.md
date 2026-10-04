@@ -258,6 +258,25 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-04 — Opravy review přípravy ON/OFF kopírky (Codex)
+
+- P2 API zátěž: DISARMED background preflight zůstává 20s jen v aktivním
+  obchodním okně nebo 60 s po lokálním čtení LIVE statusu; jinak běží po
+  5 minutách. Explicitní ON stále načte chybějící data hned a OFF na nic
+  nečeká. Pro dva účty klesá samotná klidová příprava zhruba z 1 080 na
+  60 REST čtení/hod.
+- P3 restart incidentu: ne-transportní fail-closed ukládá durable marker
+  ruční obnovy s důvodem. Bootstrap jej obnoví fail-closed a odstranit jej smí
+  jen autoritativně čistá veřejná Kontrola pozic; reconnect ani background
+  příprava jej nemažou.
+- P3 UI: stav přípravy rozlišuje incident, kill switch, start, recovery,
+  konfiguraci a shutdown. Panel s tlačítkem „Zkontrolovat pozice“ se vkládá
+  jen pro incident (plus legacy fallback), ne pro přechodné/neřešitelné stavy.
+- Ověření: cílené nové regrese PASS; celá sada 4 875 testů / 523 souborů PASS
+  (1 soubor skipped, 1 todo); produkční build PASS. `npx tsc --noEmit` hlásí
+  pouze očekávané worktree chyby v `extension/` kvůli chybějícím `chrome`
+  typům a `@crxjs/vite-plugin`.
+
 ### 2026-10-04 — Předběžná read-only příprava ON/OFF kopírky (Codex)
 
 - Po souhlasu s implementací doplněna lokální příprava ve workeru. Úzký

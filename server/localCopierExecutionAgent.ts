@@ -1033,6 +1033,7 @@ export async function startLocalCopierExecutionAgent(
     }
     const url = new URL(request.url ?? '/', `http://${host}`);
     if (request.method === 'GET' && url.pathname === '/v1/status') {
+      options.controller.noteArmPreparationInterest?.();
       json(response, 200, status());
       return;
     }

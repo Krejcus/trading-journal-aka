@@ -71,6 +71,7 @@ const controller = (overrides: Partial<CopierControllerStatus> = {}) => {
     flattenFollowerTrade: vi.fn(async () => ({ flat: true })),
     flattenGroup: vi.fn(async () => ({ flat: true })),
     waiveStuckOperation: vi.fn(),
+    noteArmPreparationInterest: vi.fn(),
     status: vi.fn(() => status),
     waitForIdle: vi.fn(),
     stop: vi.fn(),
@@ -145,6 +146,7 @@ describe('local copier execution agent', () => {
     const statusResponse = await fetch(`${running.origin}/v1/status`, { headers: { Origin: origin } });
     expect(statusResponse.status).toBe(200);
     const status = await statusResponse.json();
+    expect(runtime.noteArmPreparationInterest).toHaveBeenCalledTimes(1);
     expect(status.version).toBe(1);
     expect(status.capabilities).toContain('risk-config-v1');
     expect(status.installation).toEqual(installation);
