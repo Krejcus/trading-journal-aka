@@ -114,11 +114,12 @@ describe('LIVE desktop: neznámý stav workeru', () => {
 });
 
 describe('LIVE mobil: neznámý stav workeru', () => {
-  it('tečka účtu není zelená a řádek štítků drží místo „ověřuji followery“', async () => {
+  it('tečka účtu není zelená, ale žádný řádek „ověřuji“ navíc nepřibude (nic neposkočí)', async () => {
     compactViewport = true;
     const markup = await render({ workerStatusKnown: false, copierStatusPending: true });
     expect(markup).toContain('data-testid="compact-group-card"');
-    expect(markup).toContain('ověřuji followery…');
+    expect(markup).not.toContain('ověřuji followery…');
+    expect(markup).not.toContain('Ověřuji…');
     expect(markup).toContain('h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400');
     expect(markup).not.toContain('h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500');
   });
@@ -150,8 +151,8 @@ describe('počty followerů před odpovědí workeru', () => {
     const markup = await render({
       snapshot: twoFollowers, workerStatusKnown: false, copierStatusPending: true, accountEligibility: dllOnFirst,
     });
-    expect(markup).toContain('ověřuji followery…');
     expect(markup).toContain('1× DLL');
+    // Dokud o jednom followerovi nejde rozhodnout, počet „zařazených“ se neukáže.
     expect(markup).not.toContain('zařazených');
   });
 

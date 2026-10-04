@@ -60,6 +60,7 @@ import {
   type CopierDisarmRecord,
 } from '../lib/copierDisarmReason';
 import { copyTradeDailyLossPendingAccountIds, effectiveCopyTradeAccountEligibility } from '../lib/copyTradeAccountEligibility';
+import { readRetainedEligibility, resolveDisplayEligibility, writeRetainedEligibility } from '../lib/retainedEligibilityDisplay';
 import { stabilizeCopyGroups } from '../lib/stabilizeCopyGroups';
 import { copierCommandAllowedWithoutFreshStatus } from '../lib/copierSafetyControls';
 import { useCompactViewport } from '../utils/useCompactViewport';
@@ -803,14 +804,29 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
     () => effectiveCopyTradeAccountEligibility(snapshot.accounts, accountProfiles, accountEligibility),
     [accountEligibility, accountProfiles, snapshot.accounts],
   );
-  const eligibilityByAccount = useMemo(
+  const effectiveEligibilityByAccount = useMemo(
     () => new Map(effectiveEligibility.map(entry => [entry.accountId, entry])),
     [effectiveEligibility],
   );
-  const eligibilityContext = useMemo(() => ({
-    workerUnknown: !workerStatusKnown,
-    dllPending: copyTradeDailyLossPendingAccountIds(snapshot.accounts, accountProfiles, Date.now(), accountProfilesLoaded),
-  }), [accountProfiles, accountProfilesLoaded, snapshot.accounts, workerStatusKnown]);
+  // Co jde rozhodnout hned, a co se převezme z dnešní paměti (jen zobrazení).
+  const eligibilityTradeDate = tradovateDisplayTradeDate();
+  const displayEligibility = useMemo(() => {
+    const workerUnknown = !workerStatusKnown;
+    const dllPending = copyTradeDailyLossPendingAccountIds(snapshot.accounts, accountProfiles, Date.now(), accountProfilesLoaded);
+    return resolveDisplayEligibility({
+      accountIds: snapshot.accounts.map(account => account.id),
+      effective: effectiveEligibilityByAccount,
+      isUndecided: (accountId, eligibility) => (eligibility == null && workerUnknown)
+        || (dllPending.has(accountId) && (eligibility == null || eligibility.state === 'active')),
+      retained: readRetainedEligibility(userId, eligibilityTradeDate),
+    });
+  }, [accountProfiles, accountProfilesLoaded, effectiveEligibilityByAccount, eligibilityTradeDate, snapshot.accounts, userId, workerStatusKnown]);
+  useEffect(() => {
+    writeRetainedEligibility(userId, displayEligibility.retained);
+  }, [displayEligibility, userId]);
+  // Řádky, hlavičky a štítky čtou zobrazovací verzi (s pamětí dne).
+  const eligibilityByAccount = displayEligibility.byAccount;
+  const eligibilityContext = useMemo(() => ({ undecided: displayEligibility.undecided }), [displayEligibility]);
   const [groupTab, setGroupTab] = useState<Record<string, 'accounts' | 'orders'>>({});
   // Telefon a úzký viewport dostanou karty místo 900px tabulky; desktop se nemění.
   const compact = useCompactViewport();
@@ -2986,11 +3002,9 @@ const GroupRow = ({ group, rows, armed, dailyPnlPending, eligibility, tradeCutsB
           <span className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs font-bold text-[var(--text-primary)]">
           {group.name}
           {/* Plný počet nic neříká; chip se ukáže, teprve když někdo vypadne. */}
-          {unknownFollowerCount > 0 ? (
-            <span title={VERIFYING_ACCOUNT_TONE.detail} className="whitespace-nowrap rounded-full bg-slate-500/12 px-1.5 py-0.5 text-[9px] font-black text-slate-500">
-              ověřuji followery…
-            </span>
-          ) : inactiveFollowerCount > 0 ? (
+          {/* Dokud o některém followerovi nejde rozhodnout, počty se neukazují
+              (žádný štítek navíc, který by vzápětí zmizel). */}
+          {unknownFollowerCount > 0 ? null : inactiveFollowerCount > 0 ? (
             <span
               title="Způsobilých followerů z těch, co mají kopírování zapnuté"
               className="whitespace-nowrap rounded-full bg-amber-500/12 px-1.5 py-0.5 text-[9px] font-black text-amber-600"
@@ -3210,8 +3224,7 @@ const CompactAccountRow = ({ row, variant, live, eligibility, tradeCut, particip
   // který se do celkového součtu nahoře započítává jako nula — a součet
   // s pomlčkami pod sebou vypadá jako rozbitá data.
   const quiet = daily == null && a != null && liveDayReadAnswered(a, Date.now(), dailyPnlPending);
-  const attention = eligibilityNeedsAttention(eligibility, live, !a && accountId != null) || tradeCut != null
-    || (live && eligibilityUndecided);
+  const attention = eligibilityNeedsAttention(eligibility, live, !a && accountId != null) || tradeCut != null;
   // Stejná pravidla čerstvosti jako desktop: staré čtení nesmí nést zelený
   // štít ani tvářit se jako „flat“.
   const positionsVerified = a ? isLiveAccountReadVerified(a, 'positions') : true;
@@ -3474,7 +3487,6 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
   cooldownPanel?: React.ReactNode;
 }) => {
   const [showAllFlat, setShowAllFlat] = useState(false);
-  const { workerUnknown: eligibilityUnknown } = React.useContext(WorkerEligibilityUnknownContext);
   const eligibilityUndecided = useEligibilityUndecided();
   const capital = liveCapitalDisplay(rows.map(row => row.account));
   const daily = liveGroupDailyPnlDisplay(rows.map(row => row.account), Date.now(), dailyPnlPending);
@@ -3570,17 +3582,12 @@ const CompactGroupCard = ({ group, rows, armed, observingOnly, statusPending, ru
           zůstane hlavička jednořádková. */}
       {/* Než worker poprvé odpoví, řádek se štítky drží místo neutrálním
           „ověřuji“ — DLL/BREACHED pak naskočí do stejného řádku bez poskoku. */}
-      {inactiveFollowerCount > 0 || manuallyOffCount > 0 || dllCount > 0 || breachedCount > 0 || unavailableFollowerCount > 0 || unavailableLeader || observingOnly
-        || (eligibilityUnknown && enabledFollowerRows.length > 0) || unknownFollowerCount > 0 ? (
+      {(unknownFollowerCount === 0 && (inactiveFollowerCount > 0 || manuallyOffCount > 0)) || dllCount > 0 || breachedCount > 0 || unavailableFollowerCount > 0 || unavailableLeader || observingOnly ? (
         <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2.5">
           {/* Stejné štítky jako desktop: jantarově jen automatické vyřazení,
               ručně vypnutý follower je volba, ne problém — ten je šedý.
               Dokud některý follower čeká na worker, počty se neukazují. */}
-          {unknownFollowerCount > 0 ? (
-            <span title={VERIFYING_ACCOUNT_TONE.detail} className="rounded-full bg-slate-500/12 px-2 py-0.5 text-[10px] font-black text-slate-500">
-              ověřuji followery…
-            </span>
-          ) : inactiveFollowerCount > 0 ? (
+          {unknownFollowerCount > 0 ? null : inactiveFollowerCount > 0 ? (
             <span
               title="Způsobilých followerů z těch, co mají kopírování zapnuté"
               className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[10px] font-black text-amber-600"
@@ -4458,20 +4465,16 @@ export const RejectedExecutionStatus = ({ execution, accountAuthoritativelyFlat,
  * z vlastního snapshotu) se ukazují i tak, ty jsou potvrzené.
  */
 const WorkerEligibilityUnknownContext = React.createContext<{
-  /** Worker zatím neposlal žádný stav. */
-  workerUnknown: boolean;
-  /** Účty s DLL, u kterých dnešní denní report ještě nebyl přečten. */
-  dllPending: ReadonlySet<number>;
-}>({ workerUnknown: false, dllPending: new Set() });
+  /** Účty, o kterých zatím nejde rozhodnout a dnes ještě rozhodnuto nebylo. */
+  undecided: ReadonlySet<number>;
+}>({ undecided: new Set() });
 
 /** Stav účtu ještě nejde rozhodnout: buď chybí worker, nebo DLL čeká na
  * dnešní denní report (pak ani workerovo „active“ není konečné). */
 const useEligibilityUndecided = () => {
-  const { workerUnknown, dllPending } = React.useContext(WorkerEligibilityUnknownContext);
-  return useCallback((accountId: number | null | undefined, eligibility: CopierAccountEligibility | undefined) =>
-    (eligibility == null && workerUnknown)
-    || (accountId != null && dllPending.has(accountId) && (eligibility == null || eligibility.state === 'active')),
-  [dllPending, workerUnknown]);
+  const { undecided } = React.useContext(WorkerEligibilityUnknownContext);
+  return useCallback((accountId: number | null | undefined, _eligibility?: CopierAccountEligibility) =>
+    accountId != null && undecided.has(accountId), [undecided]);
 };
 
 const VERIFYING_ACCOUNT_TONE: AccountStateTone = {
@@ -4876,8 +4879,7 @@ const AccountRow = ({ row, live, onAccount, columns, orders, eligibility, tradeC
   const accountUnavailable = !a && accountId != null;
   // Odchylka = cokoli, co není „živý a způsobilý účet“. Jen ta se vykreslí.
   // „Ověřuji“ drží řádek se štítkem už předem — DLL do něj jen naskočí.
-  const stateIsDeviation = tradeCut != null || eligibilityState !== 'active' || accountUnavailable || !live
-    || eligibilityUndecided;
+  const stateIsDeviation = tradeCut != null || eligibilityState !== 'active' || accountUnavailable || !live;
   const stateTone: AccountStateTone = eligibilityState === 'breached'
     ? { dotClass: 'bg-rose-500', accentClass: 'text-rose-500', label: 'Breached',
         detail: 'Účet je trvale vyřazen z kopírování. Zrušit to může jen read-only důkaz od brokera — že je účet aktivní a equity nad floorem propky.' }
