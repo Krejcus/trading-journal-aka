@@ -258,6 +258,17 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-04 — Profil: okno ve stylu appky, karta v panelu bez odhlášení (Claude)
+
+- Karta profilu v bočním panelu: bez ikony odhlášení a bez blikajícího
+  „Online • Profil“ (podtitulek „Profil a účet“). Odhlášení je v Nastavení →
+  Účet a nově v okně profilu (`UserProfileModal` prop `onLogout`).
+- `UserProfileModal` podle `mockups/profile-redesign.html`: `.glass-modal`,
+  řádky jako v Nastavení, jazyk/měna jako segmenty, změna hesla za tlačítkem
+  (zavřením se pole vyčistí). Ztmavení pod oknem lehké + blur
+  (`bg-slate-900/20`), ne černé — Filipovo přání „klasický glassmorphism“.
+  Logika ukládání, ověření hesla a zmenšení avataru beze změny.
+
 ### 2026-10-04 — Důkazy výplat v Supabase Storage + opakované načtení (Claude)
 
 Spouštěč: po restartu DB (2× za ~25 min, statement timeout) se nenačetly

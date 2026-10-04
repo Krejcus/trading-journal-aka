@@ -8,7 +8,6 @@ import {
     BarChart2,
     Wallet,
     BookOpen,
-    LogOut,
     User as UserIcon,
     ChevronLeft,
     ChevronRight,
@@ -66,7 +65,6 @@ const Sidebar: React.FC<SidebarProps> = ({
     onReview,
     reviewCount = 0,
     user,
-    onLogout,
     onOpenProfile,
     onNavigate,
     onLiveIntent,
@@ -344,29 +342,12 @@ const Sidebar: React.FC<SidebarProps> = ({
                                         className="min-w-0"
                                     >
                                         <p className="text-[11px] font-semibold truncate">{user.name}</p>
-                                        <p className="text-[11px] font-bold text-emerald-500 mt-0.5 flex items-center gap-1.5 whitespace-nowrap">
-                                            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"></span>
-                                            {t('online_profile', lang)}
-                                        </p>
+                                        <p className="mt-0.5 whitespace-nowrap text-[11px] font-medium text-[var(--text-muted)]">Profil a účet</p>
                                     </motion.div>
                                 )}
                             </AnimatePresence>
                         </div>
 
-                        <AnimatePresence>
-                            {isExpanded && (
-                                <motion.button
-                                    initial={{ opacity: 0 }}
-                                    animate={{ opacity: 1 }}
-                                    exit={{ opacity: 0 }}
-                                    onClick={(e) => { e.stopPropagation(); onLogout(); }}
-                                    className="p-2 text-slate-500 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all relative z-10"
-                                    title="Odhlásit se"
-                                >
-                                    <LogOut size={16} />
-                                </motion.button>
-                            )}
-                        </AnimatePresence>
                         {/* Subtle profile glow */}
                         <div className="absolute -inset-0 bg-gradient-to-br from-cyan-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div>
                     </div>

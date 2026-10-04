@@ -2,11 +2,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { downscaleAvatar } from '../lib/avatarImage';
 import { motion, AnimatePresence } from 'framer-motion';
-import {
-   X, User as UserIcon, Camera, Mail, Hash,
-   Lock, Upload, Trash2, Check, Copy, Globe, DollarSign, Loader2,
-   Eye, EyeOff
-} from 'lucide-react';
+import { X, Camera, Lock, Check, Copy, Loader2, Eye, EyeOff, LogOut } from 'lucide-react';
+import { SettingsSegment, btn, btnGhost, btnPrimary, field } from './SettingsUi';
 import { User } from '../types';
 import { supabase } from '../services/supabase';
 
@@ -16,9 +13,11 @@ interface UserProfileModalProps {
    onClose: () => void;
    onUpdate: (updatedUser: User) => void | Promise<void>;
    theme: 'dark' | 'light' | 'oled';
+   /** Odhlášení (dřív ikona na kartě v bočním panelu). */
+   onLogout?: () => void;
 }
 
-const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClose, onUpdate, theme }) => {
+const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClose, onUpdate, onLogout }) => {
    const [formData, setFormData] = useState({
       name: user.name || '',
       email: user.email || '',
@@ -52,7 +51,8 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
    const [msg, setMsg] = useState<{ text: string, type: 'error' | 'success' } | null>(null);
 
    const fileInputRef = useRef<HTMLInputElement>(null);
-   const isDark = theme !== 'light';
+   // Změna hesla je schovaná za tlačítkem; zavřením se pole vyčistí.
+   const [passwordOpen, setPasswordOpen] = useState(false);
    const [isSaving, setIsSaving] = useState(false);
    const [showCurrentPassword, setShowCurrentPassword] = useState(false);
    const [showNewPassword, setShowNewPassword] = useState(false);
@@ -150,269 +150,123 @@ const UserProfileModal: React.FC<UserProfileModalProps> = ({ user, isOpen, onClo
       setTimeout(() => setCopied(false), 2000);
    };
 
-   const glassBg = isDark
-      ? 'bg-slate-900/60 backdrop-blur-3xl border-white/10'
-      : 'bg-white/80 backdrop-blur-3xl border-slate-200 shadow-2xl';
-
-   const inputBg = isDark
-      ? 'bg-white/5 border-white/5 focus:border-blue-500/50 text-white'
-      : 'bg-slate-900/5 border-slate-900/5 focus:border-blue-500/50 text-slate-900';
+   const lab = 'text-[12.5px] font-semibold text-[var(--text-primary)]';
+   const row = 'flex min-h-[46px] flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-[var(--border-subtle)] px-4 py-2 last:border-b-0';
+   const groupTitle = 'px-4 pb-1.5 pt-3 text-[11.5px] font-semibold text-[var(--text-muted)]';
+   const passwordInput = (value: string, onChange: (v: string) => void, shown: boolean, toggle: () => void, placeholder: string) => (
+      <div className="relative">
+         <input type={shown ? 'text' : 'password'} placeholder={placeholder} value={value} onChange={e => onChange(e.target.value)} className={`${field} w-full pr-9`} autoComplete="new-password" />
+         <button type="button" onClick={toggle} aria-label={shown ? 'Skrýt heslo' : 'Zobrazit heslo'} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+            {shown ? <EyeOff size={14} /> : <Eye size={14} />}
+         </button>
+      </div>
+   );
 
    return (
       <AnimatePresence>
          {isOpen && (
-            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-               {/* Backdrop */}
+            <div className="fixed inset-0 z-[200] flex items-start justify-center overflow-y-auto p-4 pt-[8vh]">
+               {/* Ztmavení: lehké a rozmazané (sklo), ne černé. */}
                <motion.div
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   onClick={onClose}
-                  className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                  className="fixed inset-0 bg-slate-900/20 backdrop-blur-md"
                />
-
-               {/* Modal Content */}
                <motion.div
-                  initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                  role="dialog" aria-modal="true" aria-label="Profil"
+                  initial={{ opacity: 0, scale: 0.97, y: 8 }}
                   animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                  className={`relative w-full max-w-xl overflow-hidden rounded-[40px] border ${glassBg}`}
+                  exit={{ opacity: 0, scale: 0.97, y: 8 }}
+                  className="glass-modal relative w-full max-w-[480px] overflow-hidden"
                >
-                  {/* Closing Button */}
-                  <button
-                     onClick={onClose}
-                     className="absolute top-6 right-6 p-2 rounded-full hover:bg-white/10 transition-colors z-20 text-slate-500 hover:text-white"
-                  >
-                     <X size={20} />
-                  </button>
-
-                  <div className="p-8 md:p-10 max-h-[90vh] overflow-y-auto custom-scrollbar">
-                     <div className="text-center mb-8">
-                        <div className="relative inline-block group">
-                           <div
-                              onClick={() => fileInputRef.current?.click()}
-                              className="w-24 h-24 rounded-[32px] border-2 border-blue-500/30 overflow-hidden mx-auto cursor-pointer relative group/avatar transition-transform active:scale-95 shadow-2xl"
-                           >
-                              {formData.avatar ? (
-                                 <img src={formData.avatar} alt="Profile" className="w-full h-full object-cover" />
-                              ) : (
-                                 <div className="w-full h-full bg-gradient-to-br from-blue-500/10 to-cyan-500/10 flex items-center justify-center text-blue-500">
-                                    <UserIcon size={32} />
-                                 </div>
-                              )}
-
-                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/avatar:opacity-100 flex items-center justify-center transition-opacity">
-                                 <Camera size={20} className="text-white" />
-                              </div>
-                           </div>
-                           <button
-                              type="button"
-                              onClick={() => fileInputRef.current?.click()}
-                              className="absolute -bottom-1 -right-1 p-2 bg-blue-600 text-white rounded-2xl shadow-lg hover:bg-blue-500 transition-colors"
-                           >
-                              <Upload size={12} />
-                           </button>
+                  <form onSubmit={handleSubmit}>
+                     <div className="flex items-center gap-3.5 border-b border-[var(--border-subtle)] px-4 py-4">
+                        <button type="button" onClick={() => fileInputRef.current?.click()} title="Změnit fotku" aria-label="Změnit fotku"
+                           className="group/avatar relative h-14 w-14 shrink-0 overflow-hidden rounded-full bg-gradient-to-br from-slate-700 to-slate-900 text-lg font-extrabold text-slate-100 shadow-[0_0_0_2px_var(--glass-border,var(--border-subtle)),0_4px_12px_rgba(0,0,0,0.18)]">
+                           {formData.avatar
+                              ? <img src={formData.avatar} alt="" className="h-full w-full object-cover" />
+                              : <span className="grid h-full w-full place-items-center">{(formData.name || '?').slice(0, 1).toUpperCase()}</span>}
+                           <span className="absolute inset-0 grid place-items-center bg-slate-950/50 text-white opacity-0 transition-opacity group-hover/avatar:opacity-100"><Camera size={18} /></span>
+                        </button>
+                        <div className="min-w-0">
+                           <h2 className="truncate text-base font-bold text-[var(--text-primary)]">{formData.name || 'Bez jména'}</h2>
+                           <p className="truncate text-xs text-[var(--text-secondary)]">{formData.email}</p>
+                           <span className="mt-0.5 inline-flex items-center gap-1.5 font-mono text-[11.5px] font-semibold text-[var(--text-secondary)]">
+                              ID {user.id.slice(0, 16).toUpperCase()}
+                              <button type="button" onClick={() => copyToClipboard(user.id)} title="Kopírovat Trader ID" aria-label="Kopírovat Trader ID"
+                                 className={`grid h-6 w-6 place-items-center rounded ${copied ? 'text-emerald-500' : 'text-[var(--text-muted)] hover:bg-[var(--bg-page)] hover:text-[var(--text-primary)]'}`}>
+                                 {copied ? <Check size={13} /> : <Copy size={13} />}
+                              </button>
+                           </span>
                         </div>
+                        <button type="button" onClick={onClose} aria-label="Zavřít" className={`${btnGhost} ml-auto w-[30px] self-start px-0`}><X size={16} /></button>
                      </div>
 
-                     <form onSubmit={handleSubmit} className="space-y-6">
-                        {/* Status Message */}
-                        {msg && (
-                           <motion.div
-                              initial={{ opacity: 0, y: -10 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              className={`p-4 rounded-2xl text-center text-[11px] font-semibold ${msg.type === 'success' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}
-                           >
-                              {msg.text}
-                           </motion.div>
+                     {msg && (
+                        <p role={msg.type === 'error' ? 'alert' : 'status'} className={`border-b border-[var(--border-subtle)] px-4 py-2.5 text-xs font-semibold ${msg.type === 'success' ? 'text-emerald-500' : 'text-rose-500'}`}>{msg.text}</p>
+                     )}
+
+                     <p className={groupTitle}>Profil</p>
+                     <div className={row}>
+                        <label htmlFor="profile-name" className={`${lab} flex-1`}>Jméno</label>
+                        <input id="profile-name" type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="Tvoje jméno" className={`${field} w-full sm:w-[200px]`} />
+                     </div>
+                     <div className={row}>
+                        <span className={`${lab} flex-1`}>Jazyk</span>
+                        <SettingsSegment label="Jazyk" value={formData.language as 'cs' | 'en'} onChange={v => setFormData({ ...formData, language: v })}
+                           options={[{ value: 'cs', label: 'Čeština' }, { value: 'en', label: 'English' }]} />
+                     </div>
+                     <div className={row}>
+                        <span className="flex-1"><span className={`${lab} block`}>Měna</span><span className="text-[11.5px] text-[var(--text-secondary)]">Jak se zobrazují částky v appce</span></span>
+                        <SettingsSegment label="Měna" value={formData.currency as 'USD' | 'CZK' | 'EUR'} onChange={v => setFormData({ ...formData, currency: v })}
+                           options={[{ value: 'USD', label: 'USD' }, { value: 'CZK', label: 'CZK' }, { value: 'EUR', label: 'EUR' }]} />
+                     </div>
+                     <div className={row}>
+                        <label htmlFor="profile-tz" className={`${lab} flex-1`}>Časové pásmo</label>
+                        <select id="profile-tz" value={formData.timezone} onChange={e => setFormData({ ...formData, timezone: e.target.value })} className={`${field} w-full sm:w-[200px]`}>
+                           <option value="Europe/Prague">Praha (GMT+1)</option>
+                           <option value="Europe/London">Londýn (GMT+0)</option>
+                           <option value="America/New_York">New York (EST)</option>
+                           <option value="UTC">UTC</option>
+                        </select>
+                     </div>
+
+                     <p className={groupTitle}>Přihlášení</p>
+                     <div className={row}>
+                        <span className={`${lab} flex-1`}>E-mail</span>
+                        <span className="inline-flex min-w-0 items-center gap-1.5 text-[12.5px] text-[var(--text-secondary)]"><Lock size={13} className="shrink-0 text-[var(--text-muted)]" /><span className="truncate">{formData.email}</span></span>
+                     </div>
+                     <div className={row}>
+                        <span className={`${lab} flex-1`}>Heslo</span>
+                        <button type="button" className={btn} onClick={() => {
+                           if (passwordOpen) setPasswords({ currentPassword: '', newPassword: '', confirmPassword: '' });
+                           setPasswordOpen(open => !open);
+                        }}>{passwordOpen ? 'Zrušit změnu' : 'Změnit heslo'}</button>
+                     </div>
+                     {passwordOpen && (
+                        <div className="grid gap-2 border-b border-[var(--border-subtle)] px-4 pb-3 pt-1">
+                           {passwordInput(passwords.currentPassword, v => setPasswords({ ...passwords, currentPassword: v }), showCurrentPassword, () => setShowCurrentPassword(x => !x), 'Současné heslo')}
+                           {passwordInput(passwords.newPassword, v => setPasswords({ ...passwords, newPassword: v }), showNewPassword, () => setShowNewPassword(x => !x), 'Nové heslo')}
+                           {passwordInput(passwords.confirmPassword, v => setPasswords({ ...passwords, confirmPassword: v }), showConfirmPassword, () => setShowConfirmPassword(x => !x), 'Nové heslo znovu')}
+                           <span className="text-[11.5px] text-[var(--text-muted)]">Aspoň 6 znaků. Současné heslo se ověří před změnou.</span>
+                        </div>
+                     )}
+
+                     <div className="flex items-center gap-1.5 border-t border-[var(--border-subtle)] bg-[var(--bg-page)]/40 px-4 py-3">
+                        {onLogout && (
+                           <button type="button" onClick={() => { onClose(); onLogout(); }} className={`${btnGhost} text-rose-500 hover:bg-rose-500/10 hover:text-rose-500`}><LogOut size={14} /> Odhlásit se</button>
                         )}
+                        <span className="flex-1" />
+                        <button type="button" onClick={onClose} className={btnGhost}>Zrušit</button>
+                        <button type="submit" disabled={isSaving} className={btnPrimary}>
+                           {isSaving ? <><Loader2 size={14} className="animate-spin" /> Ukládám…</> : 'Uložit'}
+                        </button>
+                     </div>
+                  </form>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                           <div className="space-y-2">
-                              <label className="text-[11px] font-semibold text-slate-500 ml-4 flex items-center gap-2">
-                                 <UserIcon size={12} /> Jméno
-                              </label>
-                              <input
-                                 type="text"
-                                 value={formData.name}
-                                 onChange={e => setFormData({ ...formData, name: e.target.value })}
-                                 className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all ${inputBg}`}
-                                 placeholder="Trader Name"
-                              />
-                           </div>
-
-                           <div className="space-y-2">
-                              <label className="text-[11px] font-semibold text-slate-500 ml-4 flex items-center gap-2">
-                                 <Globe size={12} /> Jazyk
-                              </label>
-                              <select
-                                 value={formData.language}
-                                 onChange={e => setFormData({ ...formData, language: e.target.value as any })}
-                                 className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all appearance-none cursor-pointer ${inputBg}`}
-                              >
-                                 <option value="cs">Čeština (CS)</option>
-                                 <option value="en">English (EN)</option>
-                              </select>
-                           </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                           <div className="space-y-2">
-                              <label className="text-[11px] font-semibold text-slate-500 ml-4 flex items-center gap-2">
-                                 <DollarSign size={12} /> Hlavní měna
-                              </label>
-                              <select
-                                 value={formData.currency}
-                                 onChange={e => setFormData({ ...formData, currency: e.target.value as any })}
-                                 className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all appearance-none cursor-pointer ${inputBg}`}
-                              >
-                                 <option value="USD">Americký Dolar (USD)</option>
-                                 <option value="CZK">Česká Koruna (CZK)</option>
-                                 <option value="EUR">Euro (EUR)</option>
-                              </select>
-                           </div>
-                           <div className="space-y-2">
-                              <label className="text-[11px] font-semibold text-slate-500 ml-4 flex items-center gap-2">
-                                 <Globe size={12} /> Časové pásmo
-                              </label>
-                              <select
-                                 value={formData.timezone}
-                                 onChange={e => setFormData({ ...formData, timezone: e.target.value })}
-                                 className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all appearance-none cursor-pointer ${inputBg}`}
-                              >
-                                 <option value="Europe/Prague">Praha (GMT+1)</option>
-                                 <option value="Europe/London">Londýn (GMT+0)</option>
-                                 <option value="America/New_York">New York (EST)</option>
-                                 <option value="UTC">UTC</option>
-                              </select>
-                           </div>
-                        </div>
-
-                        <div className="space-y-2 opacity-60">
-                           <label className="text-[11px] font-semibold text-slate-500 ml-4 flex items-center gap-2">
-                              <Mail size={12} /> Emailový Login
-                           </label>
-                           <div className="relative">
-                              <input
-                                 type="email"
-                                 value={formData.email}
-                                 readOnly
-                                 disabled
-                                 className={`w-full pl-6 pr-12 py-4 rounded-[22px] border text-xs font-bold cursor-not-allowed ${inputBg}`}
-                              />
-                              <Lock size={14} className="absolute right-5 top-1/2 -translate-y-1/2 text-slate-600" />
-                           </div>
-                        </div>
-
-                        {/* ID & Copy */}
-                        <div className={`p-5 rounded-[26px] border ${isDark ? 'bg-white/5 border-white/5' : 'bg-slate-900/5 border-slate-900/5'} flex justify-between items-center group`}>
-                           <div className="flex items-center gap-4">
-                              <div className="p-3 bg-blue-500/10 text-blue-500 rounded-2xl">
-                                 <Hash size={16} />
-                              </div>
-                              <div>
-                                 <p className="text-[11px] font-semibold text-slate-500 mb-0.5">Trader ID</p>
-                                 <p className={`text-xs font-mono font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                                    {user.id.slice(0, 16).toUpperCase()}
-                                 </p>
-                              </div>
-                           </div>
-                           <button
-                              type="button"
-                              onClick={() => copyToClipboard(user.id)}
-                              className={`p-3 rounded-2xl transition-all ${copied ? 'bg-emerald-500/20 text-emerald-500' : 'hover:bg-blue-500/10 text-slate-500 hover:text-blue-500'}`}
-                           >
-                              {copied ? <Check size={18} /> : <Copy size={18} />}
-                           </button>
-                        </div>
-
-                        {/* Security Section */}
-                        <div className="pt-6 border-t border-white/5">
-                           <h4 className="text-[11px] font-semibold text-slate-500 mb-4 px-4 flex items-center gap-2">
-                              <Lock size={12} /> Změna hesla
-                           </h4>
-                           <div className="space-y-4">
-                              <div className="relative">
-                                 <input
-                                    type={showCurrentPassword ? "text" : "password"}
-                                    placeholder="Současné heslo"
-                                    value={passwords.currentPassword}
-                                    onChange={e => setPasswords({ ...passwords, currentPassword: e.target.value })}
-                                    className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all pr-12 ${inputBg}`}
-                                 />
-                                 <button
-                                    type="button"
-                                    onClick={() => setShowCurrentPassword(!showCurrentPassword)}
-                                    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-blue-500 transition-colors p-1"
-                                 >
-                                    {showCurrentPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                                 </button>
-                              </div>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                 <div className="relative">
-                                    <input
-                                       type={showNewPassword ? "text" : "password"}
-                                       placeholder="Nové heslo"
-                                       value={passwords.newPassword}
-                                       onChange={e => setPasswords({ ...passwords, newPassword: e.target.value })}
-                                       className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all pr-12 ${inputBg}`}
-                                    />
-                                    <button
-                                       type="button"
-                                       onClick={() => setShowNewPassword(!showNewPassword)}
-                                       className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-blue-500 transition-colors p-1"
-                                    >
-                                       {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                                    </button>
-                                 </div>
-                                 <div className="relative">
-                                    <input
-                                       type={showConfirmPassword ? "text" : "password"}
-                                       placeholder="Potvrzení hesla"
-                                       value={passwords.confirmPassword}
-                                       onChange={e => setPasswords({ ...passwords, confirmPassword: e.target.value })}
-                                       className={`w-full px-6 py-4 rounded-[22px] border text-xs font-bold outline-none transition-all pr-12 ${inputBg}`}
-                                    />
-                                    <button
-                                       type="button"
-                                       onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                                       className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-blue-500 transition-colors p-1"
-                                    >
-                                       {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                                    </button>
-                                 </div>
-                              </div>
-                           </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4 pt-6">
-                           <button
-                              type="button"
-                              onClick={onClose}
-                              className={`py-4 rounded-[22px] border text-[11px] font-semibold transition-all ${isDark ? 'border-white/5 hover:bg-white/5 text-slate-400' : 'border-slate-200 hover:bg-slate-50 text-slate-500'}`}
-                           >
-                              Zrušit
-                           </button>
-                           <button
-                              type="submit"
-                              disabled={isSaving}
-                              className={`py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-[22px] text-[11px] font-semibold shadow-xl shadow-blue-500/20 transition-all active:scale-95 flex items-center justify-center gap-2 ${isSaving ? 'opacity-50 cursor-not-allowed' : ''}`}
-                           >
-                              {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-                              {isSaving ? 'Ukládám...' : 'Uložit nastavení'}
-                           </button>
-                        </div>
-                     </form>
-                  </div>
-
-                  {/* Hidden File Input */}
-                  <input
-                     type="file"
-                     ref={fileInputRef}
-                     className="hidden"
-                     accept="image/*"
-                     onChange={handleImageUpload}
-                  />
+                  <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleImageUpload} />
                </motion.div>
             </div>
          )}

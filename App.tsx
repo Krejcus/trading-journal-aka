@@ -4850,6 +4850,7 @@ const App: React.FC = () => {
         onClose={() => setIsProfileOpen(false)}
         user={currentUser}
         onUpdate={handleUpdateUser}
+        onLogout={handleLogout}
         theme={theme}
       />
 
