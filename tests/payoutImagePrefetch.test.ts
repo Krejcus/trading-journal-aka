@@ -33,7 +33,7 @@ describe('payout image prefetch', () => {
 
     await expect(storageService.prefetchPayoutImages()).rejects.toThrow('Failed to fetch payout images');
     expect(database.from).toHaveBeenCalledWith('business_payouts');
-    expect(database.select).toHaveBeenCalledWith('id, description');
+    expect(database.select).toHaveBeenCalledWith('id, description, updated_at');
     expect(database.eq).toHaveBeenCalledWith('user_id', 'payout-user');
   });
 

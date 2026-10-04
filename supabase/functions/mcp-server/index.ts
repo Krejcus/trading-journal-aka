@@ -894,7 +894,7 @@ mcp.tool('get_coach_records', {
       const payoutRecords = (payoutResult.data || []).map((row: any) => {
         let meta: any = {};
         try { meta = typeof row.description === 'string' ? JSON.parse(row.description) : (row.description || {}); } catch { meta = {}; }
-        return { source_type: 'payout', record_id: row.id, date: row.date, count: meta.image ? 1 : 0, media: meta.image ? [mediaDescriptor(meta.image)] : [], evidence: `[PAYOUT:${row.id}]` };
+        return { source_type: 'payout', record_id: row.id, date: row.date, count: (meta.image || meta.imagePath) ? 1 : 0, media: (meta.image || meta.imagePath) ? [mediaDescriptor(meta.image || meta.imagePath)] : [], evidence: `[PAYOUT:${row.id}]` };
       }).filter((record: any) => record.count > 0);
       const records = [
         ...tradeRecords.map((record: any) => ({ source_type: 'trade', record_id: record.trade_id, ...record })),
@@ -991,7 +991,7 @@ mcp.tool('get_coach_records', {
       const payoutRows = (payouts.data || []).map((row: any) => {
         let meta: any = {};
         try { meta = typeof row.description === 'string' && row.description.startsWith('{') ? JSON.parse(row.description) : {}; } catch { /* malformed legacy row */ }
-        return { ...row, description: undefined, meta: { ...meta, image: mediaDescriptor(meta.image) } };
+        return { ...row, description: undefined, meta: { ...meta, image: mediaDescriptor(meta.image || meta.imagePath) } };
       });
       const expensesPage = expenses.error ? null : page(expenses.data || []);
       const payoutsPage = payouts.error ? null : page(payoutRows);
@@ -1034,7 +1034,7 @@ mcp.tool('get_coach_records', {
         payout_method: row.payout_method, account_id: meta.accountId || null,
         gross_amount: meta.grossAmount ?? null, profit_split_used: meta.profitSplitUsed ?? null,
         status: meta.status || 'Received', notes: meta.notes || null,
-        media: mediaDescriptor(meta.image), evidence: `[PAYOUT:${row.id}]`,
+        media: mediaDescriptor(meta.image || meta.imagePath), evidence: `[PAYOUT:${row.id}]`,
       };
     });
     const payoutPage = payoutsResult.error ? null : page(payoutRows);
@@ -1101,7 +1101,13 @@ mcp.tool('get_coach_media', {
       if (!payout) return text(`Payout ${recordId} nebyl nalezen.`);
       let meta: any = {};
       try { meta = typeof payout.description === 'string' ? JSON.parse(payout.description) : (payout.description || {}); } catch { meta = {}; }
-      media = uniqueMedia([meta.image]);
+      // Nové důkazy jsou v úložišti payout-proofs (meta.imagePath) → podepsaný odkaz.
+      let proof = typeof meta.image === 'string' ? meta.image : undefined;
+      if (!proof && typeof meta.imagePath === 'string' && meta.imagePath.startsWith(`${USER_ID}/`)) {
+        const { data: signed } = await db.storage.from('payout-proofs').createSignedUrl(meta.imagePath, 600);
+        proof = signed?.signedUrl;
+      }
+      media = uniqueMedia([proof]);
       label = `Důkaz payoutu ${payout.date || ''}`.trim();
       evidence = `[PAYOUT:${payout.id}]`;
     }

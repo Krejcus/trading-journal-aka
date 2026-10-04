@@ -258,6 +258,32 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-04 — Důkazy výplat v Supabase Storage + opakované načtení (Claude)
+
+Spouštěč: po restartu DB (2× za ~25 min, statement timeout) se nenačetly
+screenshoty výplat. Data byla v pořádku — příčina: base64 obrázky přímo v
+`business_payouts.description` (0,3–2 MB/řádek, ~13 MB celkem), které
+`getBusinessPayouts` i `prefetchPayoutImages` stahovaly při každém načtení
+(19× za 25 min ≈ 13 MB/dotaz).
+- **Bucket `payout-proofs`** (soukromý, 10 MB, jen obrázky, RLS: vlastní složka
+  `<uid>/…`): migrace `20261004090000_payout_proofs_bucket.sql`, aplikováno
+  `db query -f` + `migration repair` (ne db push). Řádek drží `imagePath`,
+  appka bere podepsané odkazy (12 h) — `services/payoutProofStorage.ts`.
+- **Ukládání/úprava/mazání** (`storageService`): data URL → upload, v řádku jen
+  cesta; `''` = odebrat; podepsaná URL = beze změny; při chybě se nahraný soubor
+  uklidí, po výměně/smazání se starý soubor odstraní.
+- **Přesun starých** probíhá v appce na pozadí po prvním načtení (upload →
+  přepis řádku jen při shodném `updated_at`). Filipových 11 výplat přesunuto
+  a ověřeno proti záloze (velikost i MIME 11/11); záloha
+  `~/Documents/AlphaTrade-backups/2026-10-04-payout-proofs/business_payouts.json`.
+  Načtení důkazů: ~0,5 s místo 10–30 s.
+- **Opakování**: nepovedený prefetch důkazů se sám zopakuje 3 s → 6 s → … max
+  60 s, dokud je otevřený Byznys (App.tsx).
+- AI Coach (`coachTools`) i MCP server umí `imagePath` (podepsaný odkaz pro
+  vision). Testy `tests/payoutProofStorage.test.ts`.
+- **Pozor iOS:** zabalený web v telefonu čte jen starý base64 → důkazy výplat
+  v iPhone appce se ukážou až po novém buildu.
+
 ### 2026-10-04 — Byznys přestavěn: měsíce, prop firmy, galerie výplat, nová okna (Claude)
 
 Podle náhledu `mockups/business-redesign.html` (Filip schvaloval po krocích).

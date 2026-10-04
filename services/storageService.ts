@@ -7,6 +7,7 @@ import { loadLabExperiments, persistLabExperiment, removeLabExperiment } from '.
 
 import { Trade, Account, UserPreferences, DailyPrep, DailyReview, WeeklyReview, MonthlyReview, User, SocialConnection, UserSearch, BusinessExpense, BusinessPayout, PlaybookItem, BusinessGoal, BusinessResource, BusinessSettings, WeeklyFocus, DrawingTemplate, AIConversation, LabExperiment } from '../types';
 import { supabase } from './supabase';
+import { isDataUrl, removePayoutProofs, signPayoutProofs, uploadPayoutProof } from './payoutProofStorage';
 import { dashboardTables, loadDashboardFallback, type DashboardRawRow } from './dashboardFallback';
 import { tradeAnalyticsById, type TradeAnalytics } from '../lib/tradeAnalyticsMerge';
 import { get, set } from 'idb-keyval';
@@ -2358,9 +2359,10 @@ export const storageService = {
         profitSplitUsed: meta.profitSplitUsed != null ? Number(meta.profitSplitUsed) : undefined,
         accountId: meta.accountId || undefined,
         notes: meta.notes,
-        // Obrázek chodí rovnou s výplatou → screenshot je k dispozici hned a
-        // editace ho nemůže přepsat prázdnem (prefetch dobíhal až po renderu).
+        // Starý záznam má screenshot přímo v description (base64); nový jen cestu
+        // v úložišti — odkaz k ní doplní prefetchPayoutImages.
         image: meta.image,
+        imagePath: typeof meta.imagePath === 'string' ? meta.imagePath : undefined,
         status: meta.status || 'Received',
         created_at: d.created_at,
         updated_at: d.updated_at
@@ -2368,8 +2370,8 @@ export const storageService = {
     });
   },
 
-  // Prefetch payout proof images in background (like trade screenshots)
-  // description is TEXT column containing JSON with base64 image - must parse client-side
+  // Důkazy výplat k zobrazení: nové v úložišti (podepsaný odkaz), staré jako
+  // base64 v description. Staré se zároveň na pozadí přesunou do úložiště.
   async prefetchPayoutImages(): Promise<Map<string, string>> {
     const result = new Map<string, string>();
     const userId = await getUserId();
@@ -2377,30 +2379,62 @@ export const storageService = {
 
     const { data, error } = await supabase
       .from('business_payouts')
-      .select('id, description')
+      .select('id, description, updated_at')
       .eq('user_id', userId);
 
     // Callers cache successful reads; a failed read must remain retryable.
     if (error) throw new Error('Failed to fetch payout images');
     if (!data) return result;
 
+    const stored = new Map<string, string>();
+    const legacy: Array<{ id: string; meta: Record<string, any>; updatedAt?: string }> = [];
     data.forEach((row: any) => {
+      let meta: Record<string, any> = {};
       try {
-        if (row.description?.startsWith('{')) {
-          const parsed = JSON.parse(row.description);
-          if (parsed.image) {
-            result.set(String(row.id), parsed.image);
-          }
-        }
-      } catch { }
+        const raw = row.description;
+        if (raw && typeof raw === 'object') meta = raw;
+        else if (typeof raw === 'string' && raw.startsWith('{')) meta = JSON.parse(raw);
+      } catch { return; }
+      if (typeof meta.imagePath === 'string' && meta.imagePath) stored.set(String(row.id), meta.imagePath);
+      else if (meta.image) {
+        result.set(String(row.id), meta.image);
+        if (isDataUrl(meta.image)) legacy.push({ id: String(row.id), meta, updatedAt: row.updated_at });
+      }
     });
 
+    if (stored.size) {
+      const urls = await signPayoutProofs([...stored.values()]);
+      stored.forEach((path, id) => { const url = urls.get(path); if (url) result.set(id, url); });
+    }
+    if (legacy.length) void this.migrateLegacyPayoutProofs(userId, legacy);
     return result;
+  },
+
+  // Přesun starých base64 důkazů do úložiště. Řádek se přepíše až po úspěšném
+  // nahrání a jen když se mezitím nezměnil (updated_at) — nic se neztratí.
+  async migrateLegacyPayoutProofs(userId: string, rows: Array<{ id: string; meta: Record<string, any>; updatedAt?: string }>): Promise<void> {
+    for (const row of rows) {
+      try {
+        const path = await uploadPayoutProof(userId, row.meta.image);
+        const { image: _image, ...rest } = row.meta;
+        let query = supabase.from('business_payouts')
+          .update({ description: JSON.stringify({ ...rest, imagePath: path }) })
+          .eq('id', row.id).eq('user_id', userId);
+        if (row.updatedAt) query = query.eq('updated_at', row.updatedAt);
+        const { data, error } = await query.select('id').maybeSingle();
+        if (error || !data) await removePayoutProofs([path]);
+      } catch (err) {
+        console.warn('[Storage] Payout proof migration skipped:', err);
+      }
+    }
   },
 
   async saveBusinessPayout(payout: Omit<BusinessPayout, 'id' | 'created_at' | 'updated_at'>): Promise<void> {
     const userId = await getUserId();
     if (!userId) throw new Error('Not authenticated');
+
+    // Screenshot jde do úložiště; v řádku zůstane jen cesta.
+    const imagePath = isDataUrl(payout.image) ? await uploadPayoutProof(userId, payout.image) : payout.imagePath;
 
     const { data, error } = await supabase
       .from('business_payouts')
@@ -2412,7 +2446,7 @@ export const storageService = {
           grossAmount: payout.grossAmount,
           profitSplitUsed: payout.profitSplitUsed,
           accountId: payout.accountId,
-          image: payout.image,
+          imagePath,
           notes: payout.notes,
           status: payout.status
         }),
@@ -2423,6 +2457,7 @@ export const storageService = {
 
     if (error || !data) {
       console.error('[Storage] Failed to save payout:', error);
+      if (imagePath && imagePath !== payout.imagePath) await removePayoutProofs([imagePath]);
       throw new Error('Failed to save payout');
     }
   },
@@ -2460,9 +2495,21 @@ export const storageService = {
     } catch { merged = {}; }
 
     // Zapisujeme jen to, co volající skutečně poslal (undefined = "neměň").
-    const fields: (keyof BusinessPayout)[] = ['grossAmount', 'profitSplitUsed', 'accountId', 'image', 'notes', 'status'];
+    const fields: (keyof BusinessPayout)[] = ['grossAmount', 'profitSplitUsed', 'accountId', 'notes', 'status'];
     for (const key of fields) {
       if (updates[key] !== undefined) merged[key] = updates[key];
+    }
+    // Screenshot: nový (data URL) → nahrát a nahradit cestu; '' → odebrat;
+    // podepsaný odkaz z načteného stavu = beze změny.
+    const previousPath: string | undefined = typeof merged.imagePath === 'string' ? merged.imagePath : undefined;
+    let uploadedPath: string | undefined;
+    if (isDataUrl(updates.image)) {
+      uploadedPath = await uploadPayoutProof(userId, updates.image);
+      merged.imagePath = uploadedPath;
+      delete merged.image;
+    } else if (updates.image === '') {
+      delete merged.image;
+      delete merged.imagePath;
     }
     dbUpdates.description = JSON.stringify(merged);
 
@@ -2476,13 +2523,22 @@ export const storageService = {
 
     if (error || !updated) {
       console.error('[Storage] Failed to update payout:', error);
+      if (uploadedPath) await removePayoutProofs([uploadedPath]);
       throw new Error('Failed to update payout');
     }
+    if (previousPath && previousPath !== merged.imagePath) await removePayoutProofs([previousPath]);
   },
 
   async deleteBusinessPayout(id: string): Promise<void> {
     const userId = await getUserId();
     if (!userId) throw new Error('Not authenticated');
+
+    const { data: existing } = await supabase
+      .from('business_payouts')
+      .select('description')
+      .eq('id', id)
+      .eq('user_id', userId)
+      .maybeSingle();
 
     const { error } = await supabase
       .from('business_payouts')
@@ -2494,6 +2550,11 @@ export const storageService = {
       console.error('[Storage] Failed to delete payout:', error);
       throw new Error('Failed to delete payout');
     }
+    try {
+      const raw = (existing as any)?.description;
+      const meta = typeof raw === 'string' && raw.startsWith('{') ? JSON.parse(raw) : (raw && typeof raw === 'object' ? raw : {});
+      if (typeof meta.imagePath === 'string' && meta.imagePath) await removePayoutProofs([meta.imagePath]);
+    } catch { /* soubor jen zůstane v úložišti */ }
   },
 
   async getPlaybookItems(): Promise<PlaybookItem[]> {

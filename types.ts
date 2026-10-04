@@ -679,6 +679,8 @@ export interface BusinessPayout {
   description?: string;
   notes?: string;
   image?: string;
+  /** Cesta důkazu v úložišti `payout-proofs` (image je pak podepsaný odkaz). */
+  imagePath?: string;
   status?: 'Received' | 'Pending';
   payout_method?: string;
   created_at?: string;

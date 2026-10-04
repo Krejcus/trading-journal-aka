@@ -2572,10 +2572,15 @@ const App: React.FC = () => {
   businessImagesKeyRef.current = businessImagesKey;
   const businessImagesAppliedRef = useRef<string | null>(null);
   const businessImagesReadRef = useRef<{ key: string; promise: Promise<Map<string, string>> } | null>(null);
+  // Nepovedené načtení důkazů (např. databáze po restartu) se samo zopakuje
+  // s rostoucí pauzou 3 s → 6 s → … max 60 s, dokud je otevřený Byznys.
+  const [businessImagesRetry, setBusinessImagesRetry] = useState(0);
+  const businessImagesFailuresRef = useRef(0);
   useEffect(() => {
     if (activePage !== 'business' || !businessUserId || !isBusinessDataLoaded
       || businessImagesAppliedRef.current === businessImagesKey) return;
     let cancelled = false;
+    let retryTimer: number | null = null;
     const isCurrentSession = captureSessionRequest(businessUserId);
     let request = businessImagesReadRef.current;
     if (!request || request.key !== businessImagesKey) {
@@ -2585,6 +2590,7 @@ const App: React.FC = () => {
     void request.promise.then(imageMap => {
       if (cancelled || !isCurrentSession() || businessImagesKeyRef.current !== businessImagesKey) return;
       businessImagesAppliedRef.current = businessImagesKey;
+      businessImagesFailuresRef.current = 0;
       if (imageMap.size === 0) return;
       setBusinessPayouts(prev => !isCurrentSession() ? prev : prev.map(payout => {
         const image = imageMap.get(String(payout.id));
@@ -2592,9 +2598,13 @@ const App: React.FC = () => {
       }));
     }).catch(() => {
       if (businessImagesReadRef.current === request) businessImagesReadRef.current = null;
+      if (cancelled || !isCurrentSession()) return;
+      const delay = Math.min(60_000, 3_000 * 2 ** businessImagesFailuresRef.current);
+      businessImagesFailuresRef.current += 1;
+      retryTimer = window.setTimeout(() => setBusinessImagesRetry(n => n + 1), delay);
     });
-    return () => { cancelled = true; };
-  }, [activePage, businessUserId, businessImagesKey, isBusinessDataLoaded, captureSessionRequest]);
+    return () => { cancelled = true; if (retryTimer) window.clearTimeout(retryTimer); };
+  }, [activePage, businessUserId, businessImagesKey, isBusinessDataLoaded, captureSessionRequest, businessImagesRetry]);
 
   // Cross-device sync: refresh stale data when user returns to tab after 30+ seconds
   const lastVisibleAt = useRef(Date.now());
