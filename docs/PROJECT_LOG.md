@@ -321,6 +321,30 @@ Podle náhledu `mockups/business-redesign.html` (Filip schvaloval po krocích).
 - Důkazy výplat se načítají 10–30 s (base64 z `description`, stávající
   chování) — dlaždice do té doby ukazují neutrální ikonu.
 
+### 2026-10-04 — Nový Lab: rozbor, preview a datový základ (Claude)
+
+- Filip: starý Lab „je k ničemu a ukazuje špatná data“. Audit: počítá z polí
+  AlphaBridge (counterfactual, excursion, riskAmount, session), která obchody
+  z deníku Tradovate nemají → R vždy null, „Na stole“ prázdné; P&L sčítá kopie
+  přes všechny účty; míchá mimo plán, neohodnocené a legacy. Rozhodnuto:
+  nový Lab od nuly (preview `mockups/lab-redesign.html`, lokální), sekce
+  A plán vs. mimo plán · B disciplína dne + simulace pravidel · C řízení ·
+  D nevzaté · E čas · F setupy (až data) · G účty.
+- Jednotka = ROZHODNUTÍ (skupina kopírky = 1 obchod); peníze = $ na leaderovi
+  (výchozí, vždy k dispozici), R jen přepínač s pokrytím „z N se SL“ — Filip
+  nechtěl R jako hlavní, protože obchody bez SL by kazily statistiku.
+- `lib/labDataset.ts` (buildLabDecisions) + `lib/labExcursion.ts` (MFE/MAE,
+  kam došla cena po výstupu, „kdybys držel“). Ověřeno na produkčních datech
+  (read-only export): 588 řádků → 172 rozhodnutí. Pasti nalezené na datech:
+  vstupy na 2 Tradeify účty ve stejné ms bez groupId (spárováno do 2 s);
+  14 skupin bez leadera (16.–17. 9. leaderovy neúplné epizody) → $ z menšího
+  followera, `leaderKnown=false`; svíčka vstupu nese pohyb před vstupem →
+  MAE/MFE stropem SL/TP; „kdybys držel“ ne u výstupu na původním SL.
+- G (účty): v `accounts.meta` jsou pole challengeCost/totalWithdrawals/
+  failureReason, ale u účtů z Tradovate prázdná; stav „Active“ i u spálených;
+  `copier_runtime_state` v produkci neexistuje (důvod spálení zná jen lokální
+  agent). Životní cyklus jde ze snímků `copier_account_snapshots` a obchodů.
+
 ### 2026-10-03 — Styl Aurora v celé aplikaci + Nastavení → Vzhled, fáze 1 (Claude)
 
 Filip po dlouhém výběru (náhled `mockups/app-styles.html`: 5 stylů → 5 skel →
