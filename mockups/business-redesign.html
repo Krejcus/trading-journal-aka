@@ -1,0 +1,813 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Byznys — návrh</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+
+:root {
+  --base: #eceff7;
+  --card: rgba(255,255,255,.55);
+  --page: rgba(241,245,249,.65);
+  --input: rgba(255,255,255,.75);
+  --glass-border: rgba(255,255,255,.8);
+  --line: rgba(15,23,42,.08);
+  --line2: rgba(15,23,42,.05);
+  --ink: #0f172a; --ink2: #475569; --ink3: #94a3b8;
+  --shadow: 0 8px 24px -12px rgba(31,38,135,.18), inset 0 1px 0 rgba(255,255,255,.9);
+  --accent: #6366f1; --accent-soft: rgba(99,102,241,.12);
+  --win: #10b981; --loss: #f43f5e; --warn: #f59e0b;
+  --hover: rgba(255,255,255,.5);
+  --l1: #a5b4fc; --l2: #7dd3fc; --l3: #f0abfc; --bg-op: .9;
+  --r: 8px; --r2: 6px;
+  color-scheme: light;
+}
+.dark {
+  --base: #05070f;
+  --card: rgba(15,20,40,.55);
+  --page: rgba(2,6,23,.45);
+  --input: rgba(255,255,255,.05);
+  --glass-border: rgba(255,255,255,.09);
+  --line: rgba(255,255,255,.08);
+  --line2: rgba(255,255,255,.045);
+  --ink: #f1f5f9; --ink2: #94a3b8; --ink3: #64748b;
+  --shadow: 0 16px 36px -18px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.06);
+  --accent-soft: rgba(99,102,241,.22);
+  --hover: rgba(255,255,255,.04);
+  --l1: #6366f1; --l2: #0ea5e9; --l3: #d946ef; --bg-op: .5;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--base); color: var(--ink); font-size: 13px; -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+svg { stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.bg { position: fixed; inset: 0; z-index: -1; opacity: var(--bg-op); pointer-events: none; filter: blur(10px);
+  background: radial-gradient(42% 46% at 12% 8%, var(--l1), transparent 70%), radial-gradient(36% 42% at 88% 26%, var(--l2), transparent 70%), radial-gradient(44% 40% at 46% 108%, var(--l3), transparent 70%); }
+
+.glass { background: var(--card); border: 1px solid var(--glass-border); box-shadow: var(--shadow); border-radius: var(--r); }
+.app { display: grid; grid-template-columns: 56px minmax(0,1fr); gap: 12px; padding: 12px; }
+.rail { position: sticky; top: 12px; height: calc(100vh - 24px); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.rail i { width: 36px; height: 36px; border-radius: var(--r2); display: grid; place-items: center; color: var(--ink3); }
+.rail i.on { background: var(--hover); color: var(--ink); box-shadow: inset 0 0 0 1px var(--glass-border); }
+.rail .logo { font-weight: 900; font-size: 13px; color: var(--ink); margin-bottom: 8px; }
+.rail .grow { flex: 1; }
+.rail svg { width: 16px; height: 16px; }
+
+.top { position: sticky; top: 12px; z-index: 10; display: flex; align-items: center; gap: 12px; padding: 8px 8px 8px 16px; margin-bottom: 12px; backdrop-filter: blur(14px) saturate(140%); -webkit-backdrop-filter: blur(14px) saturate(140%); }
+.top h1 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -.02em; }
+.search { position: relative; flex: 1; max-width: 420px; margin-left: 8px; }
+.search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--ink3); }
+.search input { width: 100%; height: 34px; padding: 0 60px 0 32px; border-radius: var(--r2); border: 1px solid var(--line); background: var(--input); outline: none; font-size: 12.5px; }
+.search input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.search kbd { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font: 600 10.5px 'JetBrains Mono', monospace; color: var(--ink3); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+.top .grow { flex: 1; }
+.ibtn { width: 34px; height: 34px; border-radius: var(--r2); border: 1px solid var(--line); background: var(--page); display: grid; place-items: center; color: var(--ink2); }
+.ibtn svg { width: 15px; height: 15px; }
+
+.app > *, .layout > * { min-width: 0; }
+.layout { display: block; }
+/* záložky jako na LIVE: text + ikona, aktivní = indigo + 2px podtržení */
+.ltabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--line); margin: 0 0 14px; scrollbar-width: none; }
+.ltabs button { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; border: 0; border-bottom: 2px solid transparent; background: transparent; padding: 10px 14px; font-size: 12px; font-weight: 700; color: var(--ink2); margin-bottom: -1px; }
+.ltabs button:hover { color: var(--ink); }
+.ltabs button.on { color: var(--accent); border-bottom-color: var(--accent); }
+.dark .ltabs button.on { color: #818cf8; border-bottom-color: #818cf8; }
+.ltabs svg { width: 14px; height: 14px; }
+.ltabs em { font-style: normal; font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 99px; background: var(--page); color: var(--ink3); }
+.ltabs button.on em { background: var(--accent-soft); color: inherit; }
+body:not(.searching) .area > h3 { display: none; }
+.searching .ltabs button { opacity: .45; }
+.area[data-p]:not(.on) { display: none; }
+.searching .area[data-p] { display: block; }
+
+/* obsah vlevo */
+.index { position: sticky; top: 70px; padding: 8px; max-height: calc(100vh - 82px); overflow: auto; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.index h4 { margin: 10px 8px 4px; font-size: 11px; font-weight: 600; color: var(--ink3); }
+.index h4:first-child { margin-top: 2px; }
+.index a { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-radius: var(--r2); color: var(--ink2); text-decoration: none; font-size: 12.5px; font-weight: 500; }
+.index a:hover { background: var(--hover); color: var(--ink); }
+.index a.on { background: var(--input); color: var(--ink); font-weight: 600; box-shadow: inset 0 0 0 1px var(--line); }
+.dark .index a.on { background: rgba(255,255,255,.07); }
+.index a em { margin-left: auto; font-style: normal; font-size: 11px; font-weight: 600; color: var(--ink3); font-variant-numeric: tabular-nums; }
+.index a em.ok { color: var(--win); }
+.index a em.off { color: var(--ink3); }
+
+/* přehled stavu */
+.overview { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 8px; margin-bottom: 20px; }
+.tile { padding: 11px 12px; text-decoration: none; color: inherit; display: flex; flex-direction: column; gap: 3px; min-width: 0; transition: transform .15s, box-shadow .15s; }
+.tile:hover { transform: translateY(-1px); }
+.tile .k { font-size: 11px; font-weight: 600; color: var(--ink2); display: flex; align-items: center; gap: 6px; }
+.tile .k svg { width: 13px; height: 13px; color: var(--ink3); }
+.tile .v { font-size: 17px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.tile .s { font-size: 11px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; }
+.pill i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pill.ok { color: var(--win); } .pill.warn { color: var(--warn); } .pill.off { color: var(--ink3); }
+
+/* sekce */
+.area { margin-bottom: 26px; }
+.area > h3 { margin: 0 2px 10px; font-size: 11.5px; font-weight: 700; color: var(--ink3); display: flex; align-items: center; gap: 10px; }
+.area > h3::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.sec { margin-bottom: 12px; overflow: hidden; }
+.sec-h { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+.sec-h h2 { margin: 0; font-size: 13.5px; font-weight: 700; }
+.sec-h .meta { font-size: 12px; color: var(--ink3); font-weight: 500; }
+.sec-h .act { margin-left: auto; display: flex; gap: 6px; }
+.sec-desc { padding: 9px 14px 0; margin: 0; font-size: 12px; color: var(--ink2); }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.two .sec { margin-bottom: 0; }
+.two + .sec, .two + .two { margin-top: 12px; }
+
+/* řádky nastavení */
+.row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 48px; }
+.row + .row { border-top: 1px solid var(--line2); }
+.row .lbl { min-width: 0; flex: 1; }
+.row .lbl b { display: block; font-size: 12.5px; font-weight: 600; }
+.row .lbl small { display: block; margin-top: 1px; font-size: 11.5px; color: var(--ink2); }
+.row .ctl { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.row.sub { padding-left: 34px; }
+.row.sub .lbl b::before { content: '↳ '; color: var(--ink3); font-weight: 500; }
+
+/* tabulky */
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th { text-align: left; font-size: 11px; font-weight: 600; color: var(--ink3); padding: 8px 14px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--page) 50%, transparent); white-space: nowrap; }
+td { padding: 0 14px; height: 42px; border-bottom: 1px solid var(--line2); }
+tr:last-child td { border-bottom: 0; }
+tbody tr:hover td { background: var(--hover); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+td.act { width: 40px; text-align: right; padding-right: 8px; }
+.type { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink2); }
+.type i { width: 7px; height: 7px; border-radius: 2px; }
+.k-ritual { background: #818cf8; } .k-rule { background: #f43f5e; } .k-exp { background: #f59e0b; }
+
+/* ovládání */
+.tg { width: 34px; height: 20px; border-radius: 99px; border: 0; padding: 0; position: relative; background: rgba(120,130,150,.35); transition: background .2s; flex-shrink: 0; }
+.tg::after { content: ''; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .2s; }
+.tg.on { background: var(--accent); }
+.tg.on::after { transform: translateX(14px); }
+.btn { height: 30px; padding: 0 11px; border-radius: var(--r2); border: 1px solid var(--line); background: var(--input); font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.btn svg { width: 13px; height: 13px; }
+.btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--ink2); }
+.btn.ghost:hover { background: var(--hover); color: var(--ink); }
+.btn.danger { color: var(--loss); background: transparent; border-color: color-mix(in srgb, var(--loss) 30%, transparent); }
+.field { height: 30px; padding: 0 10px; border-radius: var(--r2); border: 1px solid var(--line); background: var(--input); font-size: 12.5px; outline: none; min-width: 0; }
+.field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.field.time { width: 70px; text-align: center; font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 0 4px; }
+.seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--r2); background: var(--page); border: 1px solid var(--line2); }
+.seg button { border: 0; background: transparent; height: 24px; padding: 0 9px; border-radius: 4px; font-size: 11.5px; font-weight: 600; color: var(--ink2); display: inline-flex; align-items: center; gap: 4px; }
+.seg button.on { background: var(--input); color: var(--ink); box-shadow: 0 1px 2px rgba(15,23,42,.1); }
+.dark .seg button.on { background: rgba(255,255,255,.1); }
+.seg button:disabled { opacity: .45; cursor: not-allowed; }
+.seg svg { width: 11px; height: 11px; }
+.del { width: 26px; height: 26px; border-radius: 4px; border: 0; background: transparent; color: var(--ink3); display: inline-grid; place-items: center; opacity: 0; }
+.del svg { width: 13px; height: 13px; }
+tr:hover .del, .chip:hover .del { opacity: 1; }
+.del:hover { color: var(--loss); }
+@media (hover: none) { .del { opacity: 1; } }
+.adder { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--page) 50%, transparent); flex-wrap: wrap; }
+.adder .field { flex: 1; min-width: 150px; }
+
+/* štítky — hranaté */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 14px; }
+.chip { display: inline-flex; align-items: center; height: 28px; padding: 0 2px 0 10px; border-radius: var(--r2); border: 1px solid var(--line); background: var(--input); font-size: 12px; font-weight: 500; }
+.chip .del { width: 22px; height: 22px; }
+.chip.add { padding: 0 4px; border-style: dashed; background: transparent; color: var(--ink2); }
+.chip.add input { border: 0; background: transparent; outline: none; width: 110px; padding: 0 6px; font-size: 12px; }
+.chip.add svg { width: 13px; height: 13px; }
+
+/* seance */
+.tl { padding: 12px 14px 4px; }
+.tl-axis { display: flex; justify-content: space-between; font: 500 10.5px 'JetBrains Mono', monospace; color: var(--ink3); margin-bottom: 6px; }
+.tl-bar { position: relative; border-radius: var(--r2); background: var(--page); border: 1px solid var(--line2); background-image: repeating-linear-gradient(90deg, transparent 0 calc(12.5% - 1px), var(--line2) calc(12.5% - 1px) 12.5%); }
+.tl-bar b { position: absolute; height: 14px; border-radius: 3px; font-size: 10px; font-weight: 600; color: #fff; display: flex; align-items: center; padding: 0 6px; white-space: nowrap; overflow: hidden; }
+.tl-now { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); opacity: .5; border-radius: 1px; }
+.sw { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px; margin-right: 8px; position: relative; }
+.sw input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.cell-in { border: 0; background: transparent; outline: none; font-weight: 600; font-size: 12.5px; width: 120px; }
+
+.mono { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.dim { color: var(--ink3); }
+.note { padding: 8px 14px; font-size: 11.5px; color: var(--ink2); border-top: 1px solid var(--line2); }
+.ios { font-size: 10.5px; font-weight: 600; color: var(--ink3); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; }
+details summary { list-style: none; cursor: pointer; }
+details summary::-webkit-details-marker { display: none; }
+details summary .chev { width: 14px; height: 14px; color: var(--ink3); transition: transform .2s; }
+details[open] summary .chev { transform: rotate(90deg); }
+details[open] summary { border-bottom: 1px solid var(--line); }
+.pal { width: 22px; height: 22px; border-radius: 5px; box-shadow: 0 0 0 1px var(--line); }
+.pal.on { box-shadow: 0 0 0 2px var(--accent); }
+.range { display: flex; align-items: center; gap: 8px; width: 300px; font-size: 11px; color: var(--ink2); }
+.range input { flex: 1; accent-color: var(--accent); }
+
+.hidden-by-search { display: none !important; }
+.empty-search { display: none; padding: 30px; text-align: center; color: var(--ink2); }
+
+.mock-ctl { position: fixed; right: 14px; bottom: 14px; z-index: 20; padding: 5px; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+
+@media (max-width: 1100px) { .overview { grid-template-columns: repeat(3, minmax(0,1fr)); } }
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .two { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .app { grid-template-columns: 1fr; padding: 8px; }
+  .rail { display: none; }
+  .top { top: 8px; padding: 8px; }
+  .top h1 { display: none; }
+  .search { margin-left: 0; max-width: none; }
+  .search kbd { display: none; }
+  .overview { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .row { padding: 10px 12px; }
+  .row.sub { padding-left: 24px; }
+  td { padding: 0 10px; } th { padding: 8px 10px; }
+  .hide-sm, .sec-h .act.hide-sm { display: none; }
+  .top .grow { display: none; }
+  .sec-h { flex-wrap: wrap; }
+  .adder .seg { order: 3; }
+  .tl-axis span:nth-child(even) { visibility: hidden; }
+  .range { width: 160px; }
+}
+
+/* ---- Byznys ---- */
+.layout { display: block; }
+.toprow { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.toprow .grow { flex: 1; }
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); margin-bottom: 12px; overflow: hidden; }
+.kpi { padding: 14px 16px; min-width: 0; }
+.kpi + .kpi { border-left: 1px solid var(--line); }
+.kpi .k { font-size: 11.5px; font-weight: 600; color: var(--ink2); }
+.kpi .v { margin-top: 6px; font-size: 24px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; font-family: 'JetBrains Mono', monospace; }
+.kpi .s { margin-top: 4px; font-size: 11.5px; color: var(--ink2); }
+.kpi .s b { color: var(--ink); font-weight: 600; }
+.pos { color: var(--win); } .neg { color: var(--loss); }
+
+/* měsíce místo grafu */
+.months { display: grid; grid-template-columns: repeat(var(--n), minmax(0,1fr)); gap: 6px; padding: 12px 14px 14px; }
+.mcell { position: relative; border-radius: 6px; border: 1px solid var(--line); padding: 9px 10px 10px; cursor: pointer; text-align: left; background: var(--input); box-shadow: inset 0 1px 0 var(--sheen); transition: border-color .15s, transform .15s; min-width: 0; }
+.mcell:hover { border-color: var(--accent); }
+.mcell.sel { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.mcell .mn { font-size: 11px; font-weight: 600; color: var(--ink2); }
+.mcell .mv { margin-top: 3px; font: 700 14px 'JetBrains Mono', monospace; letter-spacing: -.02em; white-space: nowrap; }
+.mcell .ms { margin-top: 5px; display: grid; gap: 3px; }
+.mcell .ms span { display: block; height: 4px; border-radius: 2px; }
+.mcell .mc { margin-top: 6px; font: 500 10px 'JetBrains Mono', monospace; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mcell.win { background: color-mix(in srgb, var(--win) 12%, var(--input)); }
+
+/* firmy */
+.firm { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; min-width: 0; }
+.logo { width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; font-size: 9.5px; font-weight: 800; color: #fff; flex-shrink: 0; }
+.logo.lg { width: 38px; height: 38px; border-radius: 8px; font-size: 14px; }
+.nbar { position: relative; height: 8px; border-radius: 2px; background: var(--page); overflow: hidden; }
+.nbar i { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
+.nbar .mid { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--ink3); opacity: .5; }
+.bar-cell { width: 130px; }
+tr.click { cursor: pointer; }
+tr.click .go { width: 14px; height: 14px; color: var(--ink3); }
+
+/* výplaty — galerie */
+.gal { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; padding: 12px 14px 14px; }
+.shot { position: relative; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); aspect-ratio: 4 / 3; cursor: pointer; background: var(--page); }
+.shot img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .3s; }
+.shot:hover img { transform: scale(1.04); }
+.shot .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 9px 7px; background: linear-gradient(to top, rgba(2,6,23,.85), transparent); color: #fff; display: flex; align-items: flex-end; justify-content: space-between; gap: 6px; }
+.shot .cap b { font: 700 13px 'JetBrains Mono', monospace; color: #6ee7b7; }
+.shot .cap span { font-size: 10.5px; opacity: .85; text-align: right; line-height: 1.25; }
+.proof { width: 36px; height: 27px; border-radius: 4px; overflow: hidden; border: 1px solid var(--line); display: block; }
+.proof img { width: 100%; height: 100%; object-fit: cover; }
+.scroll { max-height: 440px; overflow: auto; }
+.scroll thead th { position: sticky; top: 0; z-index: 1; background: var(--card); backdrop-filter: blur(10px); }
+.month-row td { height: 36px; background: color-mix(in srgb, var(--page) 70%, transparent); cursor: pointer; font-weight: 600; }
+.month-row .mrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.month-row .msum { font: 700 12px 'JetBrains Mono', monospace; }
+.month-row .mlabel { display: inline-flex; align-items: center; gap: 6px; }
+.month-row .chev { width: 13px; height: 13px; color: var(--ink3); transition: transform .15s; }
+.month-row.open .chev { transform: rotate(90deg); }
+.month-row.flash td { animation: flash 1.2s ease; }
+@keyframes flash { 0%, 40% { background: var(--accent-soft); } }
+.note-box { padding: 10px 14px; font-size: 11.5px; color: var(--ink2); border-top: 1px solid var(--line2); }
+
+/* okna */
+.scrim { position: fixed; inset: 0; z-index: 50; background: rgba(2,6,23,.45); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); display: none; align-items: flex-start; justify-content: center; padding: 7vh 16px 16px; overflow: auto; }
+.scrim.on { display: flex; }
+.dark .scrim { background: rgba(0,0,0,.6); }
+.modal { width: 100%; max-width: 520px; background: color-mix(in srgb, var(--base) 82%, white 18%); border: 1px solid var(--glass-border); box-shadow: 0 30px 80px -20px rgba(0,0,0,.45); border-radius: 8px; overflow: hidden; }
+.dark .modal { background: #0d1224; }
+.modal.wide { max-width: 760px; }
+.m-h { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.m-h h2 { margin: 0; font-size: 15px; font-weight: 700; }
+.m-h .x { margin-left: auto; width: 30px; height: 30px; border-radius: 6px; border: 0; background: transparent; color: var(--ink2); display: grid; place-items: center; }
+.m-h .x:hover { background: var(--page); }
+.m-b { padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.m-b > *, .row2 > * { min-width: 0; }
+.m-f { display: flex; justify-content: flex-end; gap: 6px; padding: 12px 16px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--page) 60%, transparent); }
+.fl { display: grid; gap: 6px; }
+.fl > label, .fl > .lab { font-size: 11.5px; font-weight: 600; color: var(--ink2); }
+.fl .hint { font-size: 11.5px; color: var(--ink3); }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.amount { display: flex; align-items: baseline; gap: 4px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--input); }
+.amount:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.amount span { font: 700 22px 'JetBrains Mono', monospace; color: var(--ink3); }
+.amount input { flex: 1; min-width: 0; width: 100%; border: 0; outline: none; background: transparent; font: 700 26px 'JetBrains Mono', monospace; color: var(--ink); padding: 2px 0; }
+.firms { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 6px; }
+.fbtn { display: flex; align-items: center; gap: 7px; padding: 7px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--input); font-size: 12px; font-weight: 600; text-align: left; min-width: 0; }
+.fbtn span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fbtn.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--input); overflow: hidden; }
+.stepper button { width: 30px; height: 30px; border: 0; background: transparent; font-size: 15px; color: var(--ink2); }
+.stepper span { min-width: 34px; text-align: center; font: 700 13px 'JetBrains Mono', monospace; }
+.drop { border: 1.5px dashed var(--line); border-radius: 8px; padding: 18px; text-align: center; color: var(--ink2); font-size: 12.5px; display: grid; gap: 6px; place-items: center; background: color-mix(in srgb, var(--page) 50%, transparent); cursor: pointer; }
+.drop svg { width: 22px; height: 22px; color: var(--ink3); }
+.drop.has { padding: 6px; border-style: solid; }
+.drop.has img { display: block; width: 100%; max-height: 220px; object-fit: cover; border-radius: 5px; }
+.calc { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 12px; border-radius: 6px; background: color-mix(in srgb, var(--win) 10%, var(--input)); border: 1px solid color-mix(in srgb, var(--win) 25%, transparent); }
+.calc b { font: 700 20px 'JetBrains Mono', monospace; color: var(--win); }
+.acct-list { max-height: 180px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+.acct { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 0; border-bottom: 1px solid var(--line2); background: transparent; text-align: left; font-size: 12.5px; }
+.acct:last-child { border-bottom: 0; }
+.acct.on { background: var(--accent-soft); font-weight: 600; }
+.acct small { margin-left: auto; color: var(--ink3); font-size: 11px; }
+
+/* detail firmy */
+.fd-kpis { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.fd-kpis div { padding: 10px 12px; }
+.fd-kpis div + div { border-left: 1px solid var(--line); }
+.fd-kpis small { display: block; font-size: 11px; color: var(--ink2); font-weight: 600; }
+.fd-kpis b { display: block; margin-top: 3px; font: 700 16px 'JetBrains Mono', monospace; }
+.tl { display: grid; }
+.tl-item { display: grid; grid-template-columns: 74px 1fr auto; gap: 10px; align-items: center; padding: 8px 2px; border-bottom: 1px solid var(--line2); font-size: 12.5px; }
+.tl-item:last-child { border-bottom: 0; }
+.tl-item .d { color: var(--ink3); font-family: 'JetBrains Mono', monospace; font-size: 11.5px; }
+.tl-item .a { font: 700 12.5px 'JetBrains Mono', monospace; }
+.kind { display: inline-block; font-size: 10.5px; font-weight: 600; border-radius: 4px; padding: 1px 6px; margin-right: 6px; }
+.kind.p { background: color-mix(in srgb, var(--win) 15%, transparent); color: var(--win); }
+.kind.c { background: color-mix(in srgb, var(--loss) 12%, transparent); color: var(--loss); }
+
+@media (max-width: 900px) { .kpis { grid-template-columns: repeat(2, minmax(0,1fr)); } .kpi:nth-child(3) { border-left: 0; } .kpi:nth-child(n+3) { border-top: 1px solid var(--line); } .months { grid-template-columns: repeat(3, minmax(0,1fr)); } }
+@media (max-width: 640px) { .top h1 { display: block; } .kpi .v { font-size: 20px; } .bar-cell { display: none; } .firms { grid-template-columns: repeat(2, minmax(0,1fr)); } .row2 { grid-template-columns: 1fr; } .fd-kpis { grid-template-columns: repeat(2, 1fr); } .fd-kpis div:nth-child(3) { border-left: 0; } .fd-kpis div:nth-child(n+3) { border-top: 1px solid var(--line); } .scrim { padding-top: 16px; } }
+
+/* měsíc: plus i mínus, barva podle výsledku */
+.mcell .mrows { margin-top: 4px; display: grid; gap: 1px; font: 600 12px 'JetBrains Mono', monospace; white-space: nowrap; }
+.mcell .mrows .z { color: var(--ink3); font-weight: 500; }
+.mcell .mnet { margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink2); }
+.mcell .mnet b { font: 700 11.5px 'JetBrains Mono', monospace; }
+.mcell.up { background: color-mix(in srgb, var(--win) 13%, var(--input)); border-color: color-mix(in srgb, var(--win) 30%, var(--line)); }
+.mcell.down { background: color-mix(in srgb, var(--loss) 9%, var(--input)); border-color: color-mix(in srgb, var(--loss) 22%, var(--line)); }
+.months-wrap { position: relative; }
+.mpop { position: absolute; z-index: 20; width: 300px; max-width: calc(100% - 28px); border-radius: 8px; background: color-mix(in srgb, var(--base) 85%, white 15%); border: 1px solid var(--glass-border); box-shadow: 0 20px 50px -15px rgba(0,0,0,.4); display: none; }
+.dark .mpop { background: #0d1224; }
+.mpop.on { display: block; }
+.mpop::before { content: ''; position: absolute; top: -6px; left: var(--ax, 40px); width: 10px; height: 10px; transform: rotate(45deg); background: inherit; border-left: 1px solid var(--glass-border); border-top: 1px solid var(--glass-border); }
+.mpop .ph { display: flex; align-items: baseline; justify-content: space-between; padding: 11px 13px 8px; border-bottom: 1px solid var(--line); }
+.mpop .ph b { font-size: 13px; }
+.mpop .ph span { font: 700 13px 'JetBrains Mono', monospace; }
+.mpop .pg { padding: 8px 13px; border-bottom: 1px solid var(--line2); }
+.mpop .pg h5 { margin: 0 0 5px; font-size: 11px; font-weight: 600; color: var(--ink2); display: flex; justify-content: space-between; }
+.mpop .pr { display: flex; align-items: center; gap: 7px; font-size: 12px; padding: 2px 0; }
+.mpop .pr .logo { width: 16px; height: 16px; font-size: 8px; border-radius: 4px; }
+.mpop .pr .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mpop .pr .a { font: 600 11.5px 'JetBrains Mono', monospace; }
+.mpop .pr .d { color: var(--ink3); font: 500 10.5px 'JetBrains Mono', monospace; width: 34px; }
+.mpop .pf { display: flex; justify-content: space-between; padding: 8px 13px 10px; font-size: 11.5px; color: var(--ink2); }
+.mpop .pf b { font-family: 'JetBrains Mono', monospace; color: var(--ink); }
+
+/* velký obrázek výplaty */
+.lb { position: fixed; inset: 0; z-index: 60; background: rgba(2,6,23,.82); display: none; align-items: center; justify-content: center; padding: 20px; }
+.lb.on { display: flex; }
+.lb-in { display: grid; grid-template-columns: minmax(0,1fr) 260px; max-width: 1100px; width: 100%; max-height: 90vh; border-radius: 8px; overflow: hidden; background: #0b1020; border: 1px solid rgba(255,255,255,.1); }
+.lb-img { display: grid; place-items: center; background: #05070f; min-height: 0; }
+.lb-img img { max-width: 100%; max-height: 90vh; display: block; }
+.lb-side { padding: 16px; color: #e2e8f0; display: flex; flex-direction: column; gap: 12px; border-left: 1px solid rgba(255,255,255,.08); }
+.lb-side .amt { font: 800 28px 'JetBrains Mono', monospace; color: #6ee7b7; }
+.lb-side dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 12.5px; }
+.lb-side dt { color: #94a3b8; } .lb-side dd { margin: 0; text-align: right; font-weight: 600; }
+.lb-side .nav { margin-top: auto; display: flex; gap: 6px; }
+.lb-x { position: absolute; top: 14px; right: 14px; width: 34px; padding: 0; display: grid; place-items: center; }
+.lb .cnt { color: #94a3b8; font-size: 11.5px; }
+@media (max-width: 760px) { .lb-in { grid-template-columns: 1fr; } .lb-side { border-left: 0; border-top: 1px solid rgba(255,255,255,.08); } .lb-img img { max-height: 55vh; } }
+
+/* Okna ve stylu appky: skleněná dlaždice s vlastní výplní (Chrome bez blur),
+   lesk nahoře, skleněný okraj; pod tím ztmavení s rozmazáním. */
+:root { --modal-bg: rgba(248, 250, 253, .95); --sheen: rgba(255, 255, 255, .6); }
+.dark { --modal-bg: rgba(13, 18, 36, .95); --sheen: rgba(255, 255, 255, .05); }
+.modal, .mpop { background: var(--modal-bg) !important; background-image: linear-gradient(180deg, var(--sheen) 0%, transparent 38%) !important; border: 1px solid var(--glass-border); box-shadow: var(--shadow), 0 30px 80px -24px rgba(2, 6, 23, .45); backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%); }
+.mpop::before { background: var(--modal-bg); }
+.lb { background: rgba(2, 6, 23, .45); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.dark .lb { background: rgba(0, 0, 0, .6); }
+.lb-in { position: relative; grid-template-columns: minmax(0, 1fr) 270px; gap: 10px; padding: 10px; background: var(--modal-bg); background-image: linear-gradient(180deg, var(--sheen) 0%, transparent 38%); border: 1px solid var(--glass-border); box-shadow: var(--shadow), 0 30px 80px -24px rgba(2, 6, 23, .5); backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%); color: var(--ink); }
+.lb-img { background: color-mix(in srgb, var(--ink) 4%, transparent); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.lb-img img { max-height: calc(90vh - 22px); }
+.lb-side { padding: 6px 6px 4px; color: var(--ink); border-left: 0; gap: 0; }
+.lb-side .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.lb .cnt { color: var(--ink2); font-size: 11.5px; font-weight: 600; }
+.lb-side .amt { color: var(--win); font-size: 26px; margin-top: 2px; }
+.lb-side dl { display: block; margin: 0; }
+.lb-side dl > div { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line2); font-size: 12.5px; }
+.lb-side dt { color: var(--ink2); } .lb-side dd { margin: 0; font-weight: 600; text-align: right; }
+.lb-side .nav { margin-top: auto; padding-top: 12px; display: flex; gap: 6px; }
+.lb-side .nav .btn { flex: 1; justify-content: center; }
+.lb-x { position: static; width: 30px; height: 30px; padding: 0; border-radius: 6px; border: 0; background: transparent; color: var(--ink2); display: grid; place-items: center; flex-shrink: 0; }
+.lb-x:hover { background: var(--page); color: var(--ink); }
+@media (max-width: 760px) { .lb-in { grid-template-columns: 1fr; } .lb-side { border-top: 0; } }
+
+/* Okno podle obrázku (ne přes celou šířku) + animace při listování a tažení. */
+.lb-in { width: auto; max-width: calc(100vw - 40px); grid-template-columns: auto 250px; }
+.lb-img { position: relative; overflow: hidden; touch-action: pan-y; cursor: grab; user-select: none; display: grid; place-items: center; }
+.lb-img.drag { cursor: grabbing; }
+.lb-img img { max-width: min(640px, calc(100vw - 330px)); max-height: 76vh; width: auto; height: auto; -webkit-user-drag: none; will-change: transform, opacity; }
+.lb-img img.anim { transition: transform .22s cubic-bezier(.2, .8, .2, 1), opacity .22s ease; }
+.lb-side .fade { transition: opacity .18s ease, transform .18s ease; }
+.lb-side .fade.out { opacity: 0; transform: translateY(4px); }
+.lb-dots { display: flex; gap: 4px; justify-content: center; padding-top: 10px; }
+.lb-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--line); transition: background .2s, width .2s; }
+.lb-dots i.on { width: 14px; border-radius: 3px; background: var(--accent); }
+@media (max-width: 760px) { .lb-in { grid-template-columns: 1fr; width: 100%; } .lb-img img { max-width: 100%; max-height: 55vh; } }
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></symbol>
+  <symbol id="i-gallery" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></symbol>
+  <symbol id="i-hist" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l4 2"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M2 4h7a3 3 0 0 1 3 3v14a2 2 0 0 0-2-2H2zM22 4h-7a3 3 0 0 0-3 3v14a2 2 0 0 1 2-2h8z"/></symbol>
+  <symbol id="i-brief" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="rail glass">
+    <div class="logo">AT</div>
+    <i><svg><use href="#i-grid"/></svg></i><i><svg><use href="#i-hist"/></svg></i><i><svg><use href="#i-book"/></svg></i><i class="on"><svg><use href="#i-brief"/></svg></i>
+    <div class="grow"></div><i><svg><use href="#i-gear"/></svg></i>
+  </aside>
+  <div>
+    <header class="top glass">
+      <h1>Byznys</h1>
+      <div class="grow"></div>
+      <button class="btn" data-open="expense"><svg><use href="#i-plus"/></svg>Náklad</button>
+      <button class="btn primary" data-open="payout"><svg><use href="#i-plus"/></svg>Výplata</button>
+      <button class="ibtn" id="themeBtn" title="Světlý / tmavý"><svg><use href="#i-moon"/></svg></button>
+    </header>
+
+    <div class="kpis glass">
+      <div class="kpi"><div class="k">Čistá hotovost</div><div class="v" id="kNet"></div><div class="s">výplaty − náklady</div></div>
+      <div class="kpi"><div class="k">Výplaty</div><div class="v pos" id="kPay"></div><div class="s" id="kPaySub"></div></div>
+      <div class="kpi"><div class="k">Náklady</div><div class="v" id="kCost"></div><div class="s" id="kCostSub"></div></div>
+      <div class="kpi"><div class="k">Návratnost</div><div class="v" id="kRoi"></div><div class="s" id="kRoiSub"></div></div>
+    </div>
+
+    <section class="sec glass" style="overflow:visible;position:relative;z-index:5">
+      <div class="sec-h"><h2>Měsíce</h2><span class="meta">klikni na měsíc pro rozpis</span></div>
+      <div class="months-wrap"><div class="months" id="months"></div><div class="mpop" id="mpop"></div></div>
+    </section>
+
+    <div class="two" style="margin-top:12px">
+      <section class="sec glass">
+        <div class="sec-h"><h2>Prop firmy</h2><span class="meta">klikni pro detail</span></div>
+        <table>
+          <thead><tr><th>Firma</th><th class="num">Náklady</th><th class="num">Výplaty</th><th class="num">Čistě</th><th class="bar-cell"></th><th style="width:28px"></th></tr></thead>
+          <tbody id="firmRows"></tbody>
+        </table>
+      </section>
+      <section class="sec glass">
+        <div class="sec-h"><h2>Výplaty</h2><span class="meta" id="payMeta"></span>
+          <span class="act"><div class="seg" id="payView"><button class="on" data-v="gal" title="Galerie důkazů"><svg><use href="#i-gallery"/></svg></button><button data-v="list" title="Seznam"><svg><use href="#i-list"/></svg></button></div></span></div>
+        <div class="scroll" id="payBody"></div>
+      </section>
+    </div>
+
+    <section class="sec glass" style="margin-top:12px" id="costSec">
+      <div class="sec-h"><h2>Náklady</h2><span class="meta" id="costMeta"></span>
+        <span class="act"><button class="btn ghost" id="expandAll">Rozbalit vše</button></span></div>
+      <table>
+        <thead><tr><th style="width:110px">Datum</th><th>Popis</th><th class="hide-sm">Firma</th><th class="hide-sm">Typ</th><th class="num">Částka</th></tr></thead>
+        <tbody id="costRows"></tbody>
+      </table>
+    </section>
+  </div>
+</div>
+
+<!-- Velký obrázek výplaty -->
+<div class="lb" id="lb">
+  <div class="lb-in" role="dialog" aria-label="Důkaz výplaty"><div class="lb-img"><img id="lbImg" alt="Důkaz výplaty"></div>
+    <div class="lb-side">
+      <div class="head"><div class="fade" id="lbHead"><div class="cnt" id="lbCnt"></div><div class="amt" id="lbAmt"></div></div><button class="lb-x" id="lbX" aria-label="Zavřít"><svg width="16" height="16"><use href="#i-x"/></svg></button></div>
+      <dl id="lbMeta" class="fade"></dl>
+      <div class="nav"><button class="btn" id="lbPrev">← Předchozí</button><button class="btn" id="lbNext">Další →</button></div><div class="lb-dots" id="lbDots"></div></div></div>
+</div>
+
+<!-- Nový náklad -->
+<div class="scrim" id="m-expense">
+  <div class="modal" role="dialog" aria-label="Nový náklad">
+    <div class="m-h"><h2>Nový náklad</h2><button class="x" data-close><svg width="16" height="16"><use href="#i-x"/></svg></button></div>
+    <div class="m-b">
+      <div class="fl"><span class="lab">Typ</span>
+        <div class="seg" data-seg id="exType"><button class="on" data-t="challenge">Challenge</button><button data-t="activation">Aktivace</button><button data-t="software">Software</button><button data-t="edu">Vzdělávání</button><button data-t="other">Ostatní</button></div></div>
+      <div class="fl" id="exFirmWrap"><span class="lab">Firma</span><div class="firms" id="exFirms"></div></div>
+      <div class="row2" id="exCountWrap">
+        <div class="fl"><span class="lab">Počet účtů</span><div class="stepper"><button data-step="-1">−</button><span id="exCount">5</span><button data-step="1">+</button></div></div>
+        <div class="fl"><span class="lab">Velikost účtu</span><div class="seg" data-seg id="exSize"><button>25k</button><button class="on">50k</button><button>100k</button><button>150k</button></div></div>
+      </div>
+      <div class="fl"><label for="exAmount">Částka celkem</label>
+        <div class="amount"><span>$</span><input id="exAmount" inputmode="decimal" value="387"></div>
+        <span class="hint" id="exPer"></span></div>
+      <div class="row2">
+        <div class="fl"><label for="exDesc">Popis</label><input class="field" id="exDesc"></div>
+        <div class="fl"><label for="exDate">Datum</label><input class="field" id="exDate" type="date" value="2026-10-04"></div>
+      </div>
+      <div class="fl"><span class="lab">Opakování</span><div class="seg" data-seg><button class="on">Jednorázově</button><button>Měsíčně</button><button>Ročně</button></div></div>
+    </div>
+    <div class="m-f"><button class="btn ghost" data-close>Zrušit</button><button class="btn primary" data-close>Přidat náklad</button></div>
+  </div>
+</div>
+
+<!-- Nová výplata -->
+<div class="scrim" id="m-payout">
+  <div class="modal" role="dialog" aria-label="Nová výplata">
+    <div class="m-h"><h2>Nová výplata</h2><button class="x" data-close><svg width="16" height="16"><use href="#i-x"/></svg></button></div>
+    <div class="m-b">
+      <div class="fl"><span class="lab">Důkaz výplaty</span>
+        <div class="drop" id="drop"><svg><use href="#i-upload"/></svg><b style="color:var(--ink)">Přetáhni screenshot sem</b><span>nebo ho vlož (⌘V) · klikni pro výběr souboru</span></div></div>
+      <div class="fl"><span class="lab">Účet</span><div class="acct-list" id="payAccts"></div></div>
+      <div class="row2">
+        <div class="fl"><label for="pyGross">Hrubý zisk</label><div class="amount"><span>$</span><input id="pyGross" inputmode="decimal" value="926"></div></div>
+        <div class="fl"><label for="pySplit">Profit split</label><div class="amount"><input id="pySplit" inputmode="decimal" value="90"><span>%</span></div></div>
+      </div>
+      <div class="calc"><span style="font-size:12px;font-weight:600;color:var(--ink2)">Čistá výplata</span><b id="pyNet"></b></div>
+      <div class="row2">
+        <div class="fl"><label for="pyDate">Datum</label><input class="field" id="pyDate" type="date" value="2026-10-04"></div>
+        <div class="fl"><label for="pyNote">Poznámka</label><input class="field" id="pyNote" placeholder="nepovinné"></div>
+      </div>
+    </div>
+    <div class="m-f"><button class="btn ghost" data-close>Zrušit</button><button class="btn primary" data-close>Uložit výplatu</button></div>
+  </div>
+</div>
+
+<!-- Detail firmy -->
+<div class="scrim" id="m-firm">
+  <div class="modal wide" role="dialog" aria-label="Detail firmy">
+    <div class="m-h" id="fdHead"></div>
+    <div class="m-b" id="fdBody"></div>
+  </div>
+</div>
+
+<script>
+const DATA = {"E": [{"d": "2026-09-28", "l": "5x funded next", "a": 387, "f": ["Funded Next"]}, {"d": "2026-09-18", "l": "5x funded next", "a": 411, "f": ["Funded Next"]}, {"d": "2026-09-10", "l": "4x lucid", "a": 360, "f": ["Lucid"]}, {"d": "2026-09-06", "l": "2x tradeify", "a": 140, "f": ["Tradeify"]}, {"d": "2026-08-25", "l": "1xlucid a 1x tradeify", "a": 177, "f": ["Lucid", "Tradeify"]}, {"d": "2026-08-18", "l": "1x lucid", "a": 90, "f": ["Lucid"]}, {"d": "2026-08-18", "l": "5.x tradeify", "a": 412, "f": ["Tradeify"]}, {"d": "2026-08-13", "l": "5x tradeify", "a": 412, "f": ["Tradeify"]}, {"d": "2026-08-03", "l": "3x funded next", "a": 176, "f": ["Funded Next"]}, {"d": "2026-07-27", "l": "Funded next 5x", "a": 350, "f": ["Funded Next"]}, {"d": "2026-07-24", "l": "Lucid 50k", "a": 45, "f": ["Lucid"]}, {"d": "2026-07-05", "l": "4x Lucid", "a": 392, "f": ["Lucid"]}, {"d": "2026-06-22", "l": "5x topstep", "a": 510, "f": ["Topstep"]}, {"d": "2026-06-08", "l": "2x tradeify", "a": 508, "f": ["Tradeify"]}, {"d": "2026-06-05", "l": "2x lucid", "a": 140, "f": ["Lucid"]}, {"d": "2026-06-02", "l": "Nákup účtu: 2.6. Tradeify 50k", "a": 99, "f": ["Tradeify"]}, {"d": "2026-06-01", "l": "Tradeify 50k", "a": 100, "f": ["Tradeify"]}, {"d": "2026-05-29", "l": "2x tradeify", "a": 200, "f": ["Tradeify"]}, {"d": "2026-05-18", "l": "Tradeify 50k", "a": 99, "f": ["Tradeify"]}, {"d": "2026-05-07", "l": "6x Lucid", "a": 570, "f": ["Lucid"]}, {"d": "2026-05-03", "l": "5x lucid", "a": 420, "f": ["Lucid"]}, {"d": "2026-04-26", "l": "5x tradeify", "a": 469, "f": ["Tradeify"]}, {"d": "2026-04-25", "l": "5x apex aktivace", "a": 600, "f": ["Apex"]}, {"d": "2026-04-20", "l": "4x apex", "a": 140, "f": ["Apex"]}, {"d": "2026-04-17", "l": "2xapex", "a": 70, "f": ["Apex"]}, {"d": "2026-04-17", "l": "6x apex", "a": 175, "f": ["Apex"]}, {"d": "2026-04-14", "l": "1x apex", "a": 35, "f": ["Apex"]}, {"d": "2026-04-07", "l": "5x apex", "a": 165, "f": ["Apex"]}, {"d": "2026-03-19", "l": "5x apex", "a": 150, "f": ["Apex"]}, {"d": "2026-03-19", "l": "5x apex", "a": 150, "f": ["Apex"]}, {"d": "2026-03-17", "l": "5x apex", "a": 150, "f": ["Apex"]}, {"d": "2026-03-16", "l": "5x Apex Aktivace", "a": 500, "f": ["Apex"]}, {"d": "2026-03-16", "l": "5x Apex", "a": 150, "f": ["Apex"]}, {"d": "2026-03-12", "l": "5x apex", "a": 150, "f": ["Apex"]}, {"d": "2026-03-10", "l": "5xapex", "a": 150, "f": ["Apex"]}, {"d": "2026-03-09", "l": "5x apex", "a": 150, "f": ["Apex"]}, {"d": "2026-03-04", "l": "2x Lucid + 5x Apex", "a": 280, "f": ["Lucid", "Apex"]}, {"d": "2026-02-14", "l": "5x 50k Lucid", "a": 364, "f": ["Lucid"]}, {"d": "2026-02-08", "l": "5x Tradeify 50k", "a": 555, "f": ["Tradeify"]}, {"d": "2026-02-03", "l": "4x Alpha 50k", "a": 270, "f": ["Alpha Futures"]}, {"d": "2026-01-20", "l": "6x MFFU 50k", "a": 462, "f": ["MFFU"]}, {"d": "2026-01-07", "l": "2x Alpha 50k", "a": 150, "f": ["Alpha Futures"]}, {"d": "2026-01-06", "l": "4x Alpha 50k", "a": 300, "f": ["Alpha Futures"]}, {"d": "2026-01-02", "l": "MFFU 50k", "a": 87, "f": ["MFFU"]}], "P": [{"d": "2026-07-24", "l": "Tradeify 5", "a": 834, "f": "Tradeify"}, {"d": "2026-07-24", "l": "Tradeify 1", "a": 833, "f": "Tradeify"}, {"d": "2026-07-24", "l": "Lucid Funded", "a": 890, "f": "Lucid"}, {"d": "2026-07-24", "l": "Tradeify 2", "a": 837, "f": "Tradeify"}, {"d": "2026-07-24", "l": "Tradeify 3", "a": 826, "f": "Tradeify"}, {"d": "2026-07-24", "l": "Tradeify 4", "a": 836, "f": "Tradeify"}, {"d": "2026-01-28", "l": "Alpha Futures 50K", "a": 1350, "f": "Alpha Futures"}, {"d": "2026-01-28", "l": "Alpha Futures 50K", "a": 1331, "f": "Alpha Futures"}, {"d": "2026-01-20", "l": "Alpha Futures 50k 2", "a": 627, "f": "Alpha Futures"}, {"d": "2026-01-19", "l": "Alpha Futures 50k 2", "a": 702, "f": "Alpha Futures"}, {"d": "2026-01-17", "l": "Alpha Futures 50K", "a": 753, "f": "Alpha Futures"}]};
+const root = document.documentElement;
+const fmt = v => (v < 0 ? '−' : '') + '$' + Math.round(Math.abs(v)).toLocaleString('cs-CZ');
+const MONTHS = ['leden','únor','březen','duben','květen','červen','červenec','srpen','září','říjen','listopad','prosinec'];
+const COLORS = { 'Alpha Futures': '#6366f1', 'Tradeify': '#10b981', 'Lucid': '#0ea5e9', 'Apex': '#f97316', 'Funded Next': '#a855f7', 'Topstep': '#64748b', 'MFFU': '#e11d48', 'Ostatní': '#94a3b8' };
+const ini = f => f.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+const logo = (f, cls = '') => `<span class="logo ${cls}" style="background:${COLORS[f] || '#94a3b8'}">${ini(f)}</span>`;
+const day = d => { const [, m, dd] = d.split('-'); return `${+dd}. ${+m}.`; };
+const E = DATA.E, P = DATA.P;
+const totalCost = E.reduce((s, e) => s + e.a, 0), totalPay = 9821;
+const monthsCount = new Set(E.map(e => e.d.slice(0, 7))).size;
+
+// Ukázkové „důkazy“ — v appce tu budou skutečné fotky výplat.
+const proof = p => 'data:image/svg+xml;utf8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${COLORS[p.f]}"/><stop offset="1" stop-color="#0f172a"/></linearGradient></defs><rect width="400" height="300" fill="url(#g)"/><rect x="28" y="28" width="344" height="244" rx="10" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="2"/><text x="200" y="118" font-family="Inter,Arial" font-size="18" fill="rgba(255,255,255,.75)" text-anchor="middle" letter-spacing="3">PAYOUT</text><text x="200" y="168" font-family="Arial" font-weight="700" font-size="40" fill="#fff" text-anchor="middle">$${p.a.toLocaleString('en-US')}</text><text x="200" y="208" font-family="Inter,Arial" font-size="15" fill="rgba(255,255,255,.75)" text-anchor="middle">${p.l}</text></svg>`);
+
+// KPI
+(() => {
+  const net = totalPay - totalCost;
+  const k = document.getElementById('kNet'); k.textContent = fmt(net); k.className = 'v ' + (net >= 0 ? 'pos' : 'neg');
+  document.getElementById('kPay').textContent = fmt(totalPay);
+  document.getElementById('kPaySub').innerHTML = `<b>${P.length}</b> výplat · poslední ${day(P[0].d)}`;
+  document.getElementById('kCost').textContent = fmt(totalCost);
+  document.getElementById('kCostSub').innerHTML = `<b>${E.length}</b> položek · Ø <b>${fmt(totalCost / monthsCount)}</b> / měsíc`;
+  const roi = totalPay / totalCost, r = document.getElementById('kRoi');
+  r.textContent = Math.round(roi * 100) + ' %'; r.className = 'v ' + (roi >= 1 ? 'pos' : 'neg');
+  document.getElementById('kRoiSub').innerHTML = `z každého <b>$1</b> nákladů se vrátilo <b>$${roi.toFixed(2).replace('.', ',')}</b>`;
+})();
+
+// měsíce
+const mk = new Map();
+E.forEach(e => { const m = e.d.slice(0, 7); mk.set(m, mk.get(m) || { pay: 0, cost: 0 }); mk.get(m).cost += e.a; });
+P.forEach(p => { const m = p.d.slice(0, 7); mk.set(m, mk.get(m) || { pay: 0, cost: 0 }); mk.get(m).pay += p.a; });
+const months = [...mk.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+const maxBar = Math.max(...months.map(([, v]) => Math.max(v.pay, v.cost)));
+const mEl = document.getElementById('months');
+mEl.style.setProperty('--n', months.length);
+let cum = 0;
+const cumAt = {};
+mEl.innerHTML = months.map(([m, v]) => {
+  const net = v.pay - v.cost; cum += net; cumAt[m] = cum;
+  return `<button class="mcell ${net >= 0 ? 'up' : 'down'}" data-m="${m}">
+    <div class="mn">${MONTHS[+m.slice(5) - 1]}</div>
+    <div class="mrows"><span class="${v.pay ? 'pos' : 'z'}">+${fmt(v.pay)}</span><span class="neg">${fmt(-v.cost)}</span></div>
+    <div class="mnet"><span>měsíc</span><b class="${net >= 0 ? 'pos' : 'neg'}">${net >= 0 ? '+' : ''}${fmt(net)}</b></div></button>`;
+}).join('');
+const pop = document.getElementById('mpop');
+function closePop() { pop.classList.remove('on'); mEl.querySelectorAll('.mcell').forEach(x => x.classList.remove('sel')); }
+mEl.addEventListener('click', e => {
+  const c = e.target.closest('.mcell'); if (!c) return;
+  if (c.classList.contains('sel')) { closePop(); return; }
+  const m = c.dataset.m, v = mk.get(m), net = v.pay - v.cost;
+  const pays = P.filter(p => p.d.startsWith(m)), costs = E.filter(x => x.d.startsWith(m));
+  const row = (d, f, t, a, cls) => `<div class="pr"><span class="d">${day(d)}</span>${logo(f)}<span class="t">${t}</span><span class="a ${cls}">${a}</span></div>`;
+  pop.innerHTML = `<div class="ph"><b>${MONTHS[+m.slice(5) - 1]} ${m.slice(0, 4)}</b><span class="${net >= 0 ? 'pos' : 'neg'}">${net >= 0 ? '+' : ''}${fmt(net)}</span></div>
+    <div class="pg"><h5><span>Výplaty · ${pays.length}</span><span class="pos">+${fmt(v.pay)}</span></h5>${pays.length ? pays.map(p => row(p.d, p.f, p.l, '+' + fmt(p.a), 'pos')).join('') : '<div class="pr" style="color:var(--ink3)">žádná výplata</div>'}</div>
+    <div class="pg"><h5><span>Náklady · ${costs.length}</span><span class="neg">${fmt(-v.cost)}</span></h5>${costs.map(x => row(x.d, x.f[0], x.l, fmt(-x.a), 'neg')).join('')}</div>
+    <div class="pf"><span>Hotovost po měsíci</span><b class="${cumAt[m] >= 0 ? 'pos' : 'neg'}">${fmt(cumAt[m])}</b></div>`;
+  mEl.querySelectorAll('.mcell').forEach(x => x.classList.toggle('sel', x === c));
+  const wrap = mEl.parentElement.getBoundingClientRect(), cr = c.getBoundingClientRect();
+  pop.classList.add('on');
+  const left = Math.max(14, Math.min(cr.left - wrap.left + cr.width / 2 - pop.offsetWidth / 2, wrap.width - pop.offsetWidth - 14));
+  pop.style.left = left + 'px'; pop.style.top = (cr.bottom - wrap.top + 8) + 'px';
+  pop.style.setProperty('--ax', (cr.left - wrap.left + cr.width / 2 - left - 5) + 'px');
+});
+document.addEventListener('click', e => { if (!e.target.closest('#mpop') && !e.target.closest('.mcell')) closePop(); });
+addEventListener('keydown', e => { if (e.key === 'Escape') closePop(); });
+
+// firmy
+const firmCost = {}, firmPay = {};
+E.forEach(e => e.f.forEach(f => firmCost[f] = (firmCost[f] || 0) + e.a / e.f.length));
+P.forEach(p => firmPay[p.f] = (firmPay[p.f] || 0) + p.a);
+const firms = [...new Set([...Object.keys(firmCost), ...Object.keys(firmPay)])].map(f => ({ f, c: firmCost[f] || 0, p: firmPay[f] || 0 })).map(x => ({ ...x, n: x.p - x.c })).sort((a, b) => b.n - a.n);
+const maxAbs = Math.max(...firms.map(x => Math.abs(x.n)));
+document.getElementById('firmRows').innerHTML = firms.map(x => `<tr class="click" data-f="${x.f}">
+  <td><span class="firm">${logo(x.f)}${x.f}</span></td>
+  <td class="num">${fmt(x.c)}</td><td class="num">${x.p ? fmt(x.p) : '<span class="dim">—</span>'}</td>
+  <td class="num ${x.n >= 0 ? 'pos' : 'neg'}" style="font-weight:700">${x.n >= 0 ? '+' : ''}${fmt(x.n)}</td>
+  <td class="bar-cell"><div class="nbar"><span class="mid"></span><i style="${x.n >= 0 ? `left:50%;width:${x.n / maxAbs * 50}%;background:var(--win)` : `right:50%;width:${-x.n / maxAbs * 50}%;background:var(--loss)`}"></i></div></td>
+  <td><svg class="go"><use href="#i-right"/></svg></td></tr>`).join('');
+document.getElementById('firmRows').addEventListener('click', e => { const r = e.target.closest('tr[data-f]'); if (r) openFirm(r.dataset.f); });
+
+function openFirm(f) {
+  const x = firms.find(i => i.f === f);
+  const costs = E.filter(e => e.f.includes(f)), pays = P.filter(p => p.f === f);
+  const count = l => { const m = l.match(/(\d+)\s*\.?\s*x/i) || l.match(/x\s*(\d+)/i); return m ? +m[1] : 1; };
+  const accounts = costs.reduce((s, e) => s + count(e.l) / (e.f.length > 1 ? 1 : 1), 0);
+  const roi = x.c ? Math.round(x.p / x.c * 100) : 0;
+  document.getElementById('fdHead').innerHTML = `${logo(f, 'lg')}<div><h2>${f}</h2><div class="dim" style="font-size:12px">${costs.length} nákupů · ${pays.length} výplat · ~${accounts} účtů</div></div><button class="x" data-close><svg width="16" height="16"><use href="#i-x"/></svg></button>`;
+  const events = [...costs.map(e => ({ d: e.d, t: 'c', l: e.l, a: -e.a / e.f.length })), ...pays.map(p => ({ d: p.d, t: 'p', l: p.l, a: p.a, p }))].sort((a, b) => b.d.localeCompare(a.d));
+  document.getElementById('fdBody').innerHTML = `
+    <div class="fd-kpis"><div><small>Náklady</small><b>${fmt(x.c)}</b></div><div><small>Výplaty</small><b class="pos">${fmt(x.p)}</b></div><div><small>Čistě</small><b class="${x.n >= 0 ? 'pos' : 'neg'}">${x.n >= 0 ? '+' : ''}${fmt(x.n)}</b></div><div><small>Návratnost</small><b class="${roi >= 100 ? 'pos' : 'neg'}">${roi} %</b></div></div>
+    ${pays.length ? `<div class="fl"><span class="lab">Důkazy výplat</span><div class="gal" style="padding:0">${pays.map(p => `<div class="shot" data-i="${P.indexOf(p)}"><img src="${proof(p)}" alt=""><div class="cap"><b>${fmt(p.a)}</b><span>${day(p.d)}<br>${p.l}</span></div></div>`).join('')}</div></div>` : `<div class="note-box" style="border:1px dashed var(--line);border-radius:6px">Od ${f} zatím žádná výplata.</div>`}
+    <div class="fl"><span class="lab">Historie</span><div class="tl">${events.map(ev => `<div class="tl-item"><span class="d">${day(ev.d)}</span><span><span class="kind ${ev.t}">${ev.t === 'p' ? 'výplata' : 'nákup'}</span>${ev.l}</span><span class="a ${ev.t === 'p' ? 'pos' : 'neg'}">${ev.a >= 0 ? '+' : ''}${fmt(ev.a)}</span></div>`).join('')}</div></div>`;
+  openModal('firm');
+}
+
+// výplaty
+let payView = 'gal';
+document.getElementById('payMeta').textContent = `${P.length} · ${fmt(totalPay)}`;
+function renderPays() {
+  const body = document.getElementById('payBody');
+  body.innerHTML = payView === 'gal'
+    ? `<div class="gal">${P.map(p => `<div class="shot" data-i="${P.indexOf(p)}" title="${p.l}"><img src="${proof(p)}" alt="Důkaz výplaty"><div class="cap"><b>${fmt(p.a)}</b><span>${day(p.d)}<br>${p.l}</span></div></div>`).join('')}</div>`
+    : `<table><thead><tr><th>Datum</th><th>Účet</th><th class="num">Částka</th><th style="width:56px">Důkaz</th></tr></thead><tbody>${P.map(p => `<tr class="click" data-i="${P.indexOf(p)}"><td class="dim">${day(p.d)}</td><td><span class="firm">${logo(p.f)}${p.l}</span></td><td class="num pos" style="font-weight:700">${fmt(p.a)}</td><td><span class="proof"><img src="${proof(p)}" alt=""></span></td></tr>`).join('')}</tbody></table>`;
+}
+document.getElementById('payView').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; payView = b.dataset.v; document.querySelectorAll('#payView button').forEach(x => x.classList.toggle('on', x === b)); renderPays(); });
+renderPays();
+let lbI = 0, lbBusy = false;
+const lbImg = () => document.getElementById('lbImg');
+function fillLb() {
+  const p = P[lbI];
+  document.getElementById('lbAmt').textContent = fmt(p.a);
+  document.getElementById('lbCnt').textContent = `Výplata ${lbI + 1} z ${P.length}`;
+  document.getElementById('lbMeta').innerHTML = `<div><dt>Účet</dt><dd><span class="firm">${logo(p.f)}${p.l}</span></dd></div><div><dt>Firma</dt><dd>${p.f}</dd></div><div><dt>Datum</dt><dd>${day(p.d)} ${p.d.slice(0, 4)}</dd></div>`;
+  document.getElementById('lbDots').innerHTML = P.map((_, i) => `<i class="${i === lbI ? 'on' : ''}"></i>`).join('');
+}
+function showLb(i) {
+  lbI = (i + P.length) % P.length;
+  const img = lbImg(); img.classList.remove('anim'); img.style.transform = ''; img.style.opacity = '';
+  img.src = proof(P[lbI]); fillLb();
+  document.getElementById('lb').classList.add('on');
+}
+// Posun na další/předchozí: obrázek odjede do strany, nový přijede z druhé.
+function slide(dir, fromX = 0) {
+  if (lbBusy) return; lbBusy = true;
+  const img = lbImg(), w = img.parentElement.clientWidth || 400;
+  const meta = [document.getElementById('lbHead'), document.getElementById('lbMeta')];
+  meta.forEach(m => m.classList.add('out'));
+  img.classList.add('anim');
+  img.style.transform = `translateX(${-dir * w * 0.6}px)`; img.style.opacity = '0';
+  setTimeout(() => {
+    lbI = (lbI + dir + P.length) % P.length;
+    img.classList.remove('anim');
+    img.src = proof(P[lbI]); fillLb();
+    img.style.transform = `translateX(${dir * w * 0.6}px)`;
+    void img.offsetWidth;
+    img.classList.add('anim');
+    img.style.transform = 'translateX(0)'; img.style.opacity = '1';
+    meta.forEach(m => m.classList.remove('out'));
+    setTimeout(() => { lbBusy = false; }, 230);
+  }, 200);
+}
+// Tažení prstem / myší: obrázek jde s prstem, po puštění buď přelistuje, nebo se vrátí.
+(() => {
+  const box = document.querySelector('.lb-img');
+  let x0 = null, dx = 0;
+  box.addEventListener('pointerdown', e => { if (lbBusy) return; x0 = e.clientX; dx = 0; box.setPointerCapture(e.pointerId); box.classList.add('drag'); lbImg().classList.remove('anim'); });
+  box.addEventListener('pointermove', e => {
+    if (x0 == null) return; dx = e.clientX - x0;
+    const img = lbImg(); img.style.transform = `translateX(${dx}px)`; img.style.opacity = String(Math.max(.35, 1 - Math.abs(dx) / 500));
+  });
+  const end = () => {
+    if (x0 == null) return; x0 = null; box.classList.remove('drag');
+    if (Math.abs(dx) > 60) slide(dx < 0 ? 1 : -1, dx);
+    else { const img = lbImg(); img.classList.add('anim'); img.style.transform = 'translateX(0)'; img.style.opacity = '1'; }
+  };
+  box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
+})();
+document.getElementById('payBody').addEventListener('click', e => { const t = e.target.closest('[data-i]'); if (t) showLb(+t.dataset.i); });
+document.getElementById('fdBody').addEventListener('click', e => { const t = e.target.closest('[data-i]'); if (t) showLb(+t.dataset.i); });
+document.getElementById('lbPrev').onclick = () => slide(-1);
+document.getElementById('lbNext').onclick = () => slide(1);
+document.getElementById('lbX').onclick = () => document.getElementById('lb').classList.remove('on');
+document.getElementById('lb').addEventListener('click', e => { if (e.target.id === 'lb') e.target.classList.remove('on'); });
+addEventListener('keydown', e => {
+  if (!document.getElementById('lb').classList.contains('on')) return;
+  if (e.key === 'Escape') document.getElementById('lb').classList.remove('on');
+  if (e.key === 'ArrowLeft') slide(-1);
+  if (e.key === 'ArrowRight') slide(1);
+});
+
+// náklady po měsících
+document.getElementById('costMeta').textContent = `${E.length} · ${fmt(totalCost)}`;
+const byMonth = new Map();
+E.forEach(e => { const m = e.d.slice(0, 7); if (!byMonth.has(m)) byMonth.set(m, []); byMonth.get(m).push(e); });
+const open = new Set([...byMonth.keys()].sort().reverse().slice(0, 2));
+function renderCosts(flash) {
+  document.getElementById('costRows').innerHTML = [...byMonth.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([m, rows]) => {
+    const sum = rows.reduce((s, e) => s + e.a, 0), isOpen = open.has(m);
+    return `<tr class="month-row ${isOpen ? 'open' : ''} ${flash === m ? 'flash' : ''}" data-m="${m}"><td colspan="5"><div class="mrow"><span class="mlabel"><svg class="chev"><use href="#i-right"/></svg>${MONTHS[+m.slice(5) - 1]} ${m.slice(0, 4)} <span class="dim" style="font-weight:500">· ${rows.length} ${rows.length === 1 ? 'položka' : rows.length < 5 ? 'položky' : 'položek'}</span></span><span class="msum">${fmt(sum)}</span></div></td></tr>`
+      + (isOpen ? rows.map(e => `<tr><td class="dim">${day(e.d)}</td><td>${e.l}</td><td class="hide-sm">${e.f.map(f => `<span class="firm" style="font-weight:500;margin-right:8px">${logo(f)}${f}</span>`).join('')}</td><td class="hide-sm dim">${/aktivac/i.test(e.l) ? 'Aktivace' : 'Challenge'}</td><td class="num">${fmt(e.a)}</td></tr>`).join('') : '');
+  }).join('');
+  document.querySelectorAll('.month-row').forEach(r => r.addEventListener('click', () => { const m = r.dataset.m; open.has(m) ? open.delete(m) : open.add(m); renderCosts(); }));
+  document.getElementById('expandAll').textContent = open.size === byMonth.size ? 'Sbalit vše' : 'Rozbalit vše';
+}
+document.getElementById('expandAll').addEventListener('click', () => { if (open.size === byMonth.size) open.clear(); else byMonth.forEach((_, m) => open.add(m)); renderCosts(); });
+renderCosts();
+
+// okna
+function openModal(id) { document.getElementById('m-' + id).classList.add('on'); }
+document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => openModal(b.dataset.open)));
+document.addEventListener('click', e => {
+  if (e.target.closest('[data-close]') || e.target.classList.contains('scrim')) e.target.closest('.scrim')?.classList.remove('on');
+});
+addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.scrim.on').forEach(s => s.classList.remove('on')); });
+document.querySelectorAll('[data-seg]').forEach(s => s.addEventListener('click', e => { const b = e.target.closest('button'); if (b) s.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); }));
+
+// náklad: firma + počet → popis a cena za účet
+const FIRM_LIST = ['Tradeify', 'Lucid', 'Apex', 'Alpha Futures', 'Funded Next', 'Topstep', 'MFFU', 'Ostatní'];
+let exFirm = 'Funded Next', exCount = 5;
+document.getElementById('exFirms').innerHTML = FIRM_LIST.map(f => `<button class="fbtn ${f === exFirm ? 'on' : ''}" data-f="${f}">${logo(f)}<span>${f === 'Ostatní' ? 'Jiná…' : f}</span></button>`).join('');
+const exSize = () => document.querySelector('#exSize .on')?.textContent || '50k';
+function exUpdate() {
+  const amt = parseFloat(document.getElementById('exAmount').value.replace(',', '.')) || 0;
+  document.getElementById('exCount').textContent = exCount;
+  document.getElementById('exPer').textContent = exCount > 1 && amt ? `= ${('$' + (amt / exCount).toFixed(2)).replace('.', ',')} za účet` : '';
+  const type = document.querySelector('#exType .on').dataset.t;
+  if (type === 'challenge' || type === 'activation') document.getElementById('exDesc').value = `${exCount}× ${exFirm} ${exSize()}${type === 'activation' ? ' aktivace' : ''}`;
+  document.getElementById('exFirmWrap').style.display = document.getElementById('exCountWrap').style.display = (type === 'challenge' || type === 'activation') ? '' : 'none';
+}
+document.getElementById('exFirms').addEventListener('click', e => { const b = e.target.closest('.fbtn'); if (!b) return; exFirm = b.dataset.f; document.querySelectorAll('#exFirms .fbtn').forEach(x => x.classList.toggle('on', x === b)); exUpdate(); });
+document.querySelectorAll('[data-step]').forEach(b => b.addEventListener('click', () => { exCount = Math.max(1, Math.min(20, exCount + +b.dataset.step)); exUpdate(); }));
+['exAmount'].forEach(id => document.getElementById(id).addEventListener('input', exUpdate));
+document.getElementById('exType').addEventListener('click', () => setTimeout(exUpdate));
+document.getElementById('exSize').addEventListener('click', () => setTimeout(exUpdate));
+exUpdate();
+
+// výplata: účet podle firem, čistá částka, důkaz
+const ACCTS = [['Tradeify', ['Tradeify 1', 'Tradeify 2', 'Tradeify 3', 'Tradeify 4', 'Tradeify 5']], ['Lucid', ['Lucid Funded']], ['Alpha Futures', ['Alpha Futures 50K', 'Alpha Futures 50k 2']]];
+let acct = 'Tradeify 1';
+function renderAccts() {
+  document.getElementById('payAccts').innerHTML = ACCTS.flatMap(([f, list]) => list.map(a => `<button class="acct ${a === acct ? 'on' : ''}" data-a="${a}">${logo(f)}${a}<small>${f}</small></button>`)).join('');
+}
+document.getElementById('payAccts').addEventListener('click', e => { const b = e.target.closest('.acct'); if (b) { acct = b.dataset.a; renderAccts(); } });
+renderAccts();
+function pyUpdate() {
+  const g = parseFloat(document.getElementById('pyGross').value.replace(',', '.')) || 0, s = parseFloat(document.getElementById('pySplit').value.replace(',', '.')) || 0;
+  document.getElementById('pyNet').textContent = '$' + (g * s / 100).toFixed(2).replace('.', ',');
+}
+['pyGross', 'pySplit'].forEach(id => document.getElementById(id).addEventListener('input', pyUpdate));
+pyUpdate();
+document.getElementById('drop').addEventListener('click', () => {
+  const d = document.getElementById('drop');
+  if (d.classList.contains('has')) return;
+  d.classList.add('has'); d.innerHTML = `<img src="${proof({ f: 'Tradeify', a: 834, l: 'Tradeify 1' })}" alt="Náhled důkazu">`;
+});
+
+// motiv
+document.getElementById('themeBtn').onclick = () => {
+  root.classList.toggle('dark');
+  document.querySelector('#themeBtn use').setAttribute('href', root.classList.contains('dark') ? '#i-sun' : '#i-moon');
+};
+</script>
+</body>
+</html>

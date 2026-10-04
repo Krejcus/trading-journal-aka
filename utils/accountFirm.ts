@@ -26,6 +26,8 @@ export const KNOWN_FIRMS: KnownFirm[] = [
   { key: 'LUCID', label: 'Lucid', logo: '/firms/lucid.jpg' },
   { key: 'MYFUNDEDFUTURES', label: 'MyFundedFutures', logo: '/firms/myfundedfutures.svg' },
   { key: 'FUNDEDNEXT', label: 'FundedNext', logo: '/firms/fundednext.svg' },
+  { key: 'APEX', label: 'Apex', logo: '/firms/apex.png' },
+  { key: 'ALPHAFUTURES', label: 'Alpha Futures', logo: '/firms/alphafutures.png' },
 ];
 
 // firma (uppercase klíč) → logo. Odvozeno z registru.

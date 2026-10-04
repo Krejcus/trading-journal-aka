@@ -258,6 +258,32 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-04 — Byznys přestavěn: měsíce, prop firmy, galerie výplat, nová okna (Claude)
+
+Podle náhledu `mockups/business-redesign.html` (Filip schvaloval po krocích).
+- **Pryč:** záložka Cíle (data `goals` v DB zůstávají, jen se nezobrazují) a
+  daňová rezerva — čistá hotovost = výplaty − náklady. Přepínač Finance/Cíle
+  v hlavičce App.tsx zrušen, nadpis „Byznys“.
+- **Stránka:** pás 4 čísel (hotovost, výplaty, náklady, návratnost), řádek
+  měsíců (plus i mínus, barva podle výsledku, klik = bublina s rozpisem),
+  tabulka Prop firmy (klik = detail firmy s důkazy a historií), výplaty jako
+  galerie důkazů / seznam, náklady seskupené po měsících (poslední 2 otevřené).
+- **Firma nákladu** nemá v DB pole → `lib/businessFirms.ts` ji pozná z popisu
+  („5x tradeify“, smíšený nákup se dělí rovným dílem); firma výplaty z účtu
+  (`accountFirmKey`, umí i Tradovate kódy FNFT…/LFF…/TDFY…). Nový formulář
+  nákladu popis skládá („5× Tradeify 50k“), takže to drží i dál. Testy
+  `tests/businessFirms.test.ts`.
+- **Okna** ve stylu appky (`.glass-modal`: skleněná dlaždice s ~95% výplní —
+  Filipův Chrome nekreslí backdrop-filter): `ExpenseModal` (nový),
+  `PayoutModal` (přetažení / ⌘V screenshotu, účty po firmách, funded první;
+  logika ukládání beze změny), `PayoutDetailModal` (šířka podle obrázku,
+  animace při listování a tažení, Upravit/Smazat; API beze změny — používá ho
+  i Dashboard).
+- Loga Apex a Alpha Futures staženy z oficiálních webů (512 px → 128 px) do
+  `public/firms/`, zapsány v `KNOWN_FIRMS`.
+- Důkazy výplat se načítají 10–30 s (base64 z `description`, stávající
+  chování) — dlaždice do té doby ukazují neutrální ikonu.
+
 ### 2026-10-03 — Styl Aurora v celé aplikaci + Nastavení → Vzhled, fáze 1 (Claude)
 
 Filip po dlouhém výběru (náhled `mockups/app-styles.html`: 5 stylů → 5 skel →

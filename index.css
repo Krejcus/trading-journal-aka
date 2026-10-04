@@ -3885,3 +3885,22 @@ html.aurora.light-theme .floating-glass-header.header-clear {
 html.aurora:not(.light-theme) .floating-glass-header.header-clear {
   background: linear-gradient(180deg, rgba(15, 20, 38, 0.74) 0%, rgba(8, 11, 22, 0.68) 100%) !important;
 }
+
+/* Okna ve stylu appky (Byznys a další): skleněná dlaždice s vlastní výplní —
+   Filipův Chrome backdrop-filter nekreslí, takže čitelnost nesmí stát na blur.
+   Lesk nahoře + skleněný okraj; ztmavení pod oknem rozmaže pravidlo pro scrimy. */
+.glass-modal {
+  background-color: var(--modal-bg, var(--bg-card));
+  background-image: linear-gradient(180deg, var(--modal-sheen, transparent) 0%, transparent 38%);
+  border: 1px solid var(--glass-border, var(--border-subtle));
+  border-radius: 8px;
+  box-shadow: var(--shadow-card), 0 30px 80px -24px rgba(2, 6, 23, 0.5);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
+}
+html.aurora.aurora.light-theme { --modal-bg: rgba(248, 250, 253, 0.95); --modal-sheen: rgba(255, 255, 255, 0.6); }
+html.aurora.aurora:not(.light-theme) { --modal-bg: rgba(13, 18, 36, 0.95); --modal-sheen: rgba(255, 255, 255, 0.05); }
+
+/* Listování důkazy výplat: obrázek odjede do strany, nový přijede z druhé. */
+.payout-slide { will-change: transform, opacity; }
+.payout-slide.is-animating { transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.22s ease; }

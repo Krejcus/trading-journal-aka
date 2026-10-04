@@ -1,32 +1,12 @@
-
-import React, { useState, useMemo } from 'react';
-import {
-    Briefcase,
-    DollarSign,
-    Target,
-    Layers,
-    Settings,
-    Plus,
-    Trash2,
-    TrendingUp,
-    TrendingDown,
-    PlusCircle,
-    ChevronRight,
-    Info,
-    ChevronDown,
-    LayoutGrid,
-    Zap,
-    PieChart as PieChartIcon,
-    ShieldCheck,
-    Calendar,
-    Wallet,
-    Maximize2,
-    X,
-    Trophy
-} from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { ChevronRight, Image as ImageIcon, LayoutGrid, List, Plus, Trash2, X } from 'lucide-react';
 import PayoutModal from './PayoutModal';
 import PayoutDetailModal from './PayoutDetailModal';
 import ConfirmationModal from './ConfirmationModal';
+import ExpenseModal from './ExpenseModal';
+import FirmMark from './FirmMark';
+import { SettingsSegment, btn, btnGhost, btnPrimary, revealOnHover, td, th } from './SettingsUi';
 import {
     Trade,
     Account,
@@ -43,8 +23,10 @@ import {
     WeeklyFocus
 } from '../types';
 import { currencyService, ExchangeRates } from '../services/currencyService';
-import { t } from '../services/translations';
-
+import {
+    accountCountInLabel, accountFirmKey, expenseFirmKeys, expenseMonth, firmDisplayName, firmSummaries, monthlyCashflow,
+    type FirmSummary,
+} from '../lib/businessFirms';
 
 interface BusinessHubProps {
     theme: 'dark' | 'light' | 'oled';
@@ -75,953 +57,397 @@ interface BusinessHubProps {
     onTabChange: (tab: 'financials' | 'goals') => void;
 }
 
+const isReceived = (p: BusinessPayout) => (p.status || 'Received') === 'Received';
+const isLegacyPayout = (p: BusinessPayout) => String(p.id).startsWith('legacy_');
+const CATEGORY_LABELS: Record<string, string> = {
+    Challenges: 'Challenge', Software: 'Software', Education: 'Vzdělávání', Hardware: 'Hardware', Taxes: 'Daně', Other: 'Ostatní',
+};
+const expenseKind = (e: BusinessExpense) => (e.category === 'Challenges' && /aktivac|activation/i.test(e.label) ? 'Aktivace' : CATEGORY_LABELS[e.category] ?? e.category);
+const monthName = (month: string, withYear = true) => {
+    const [y, m] = month.split('-').map(Number);
+    const name = new Date(y, m - 1, 1).toLocaleString('cs-CZ', { month: 'long' });
+    return withYear ? `${name} ${y}` : name;
+};
+const shortDate = (date: string) => {
+    const d = new Date(date);
+    return isNaN(d.getTime()) ? date : `${d.getDate()}. ${d.getMonth() + 1}.`;
+};
+const plural = (n: number, one: string, few: string, many: string) => (n === 1 ? one : n >= 2 && n <= 4 ? few : many);
+
+/**
+ * Byznys — kolik stojí účty a kolik se vrací. Čistá hotovost = výplaty − náklady;
+ * měsíce s rozpisem, prop firmy s detailem, galerie důkazů výplat, náklady po měsících.
+ */
 const BusinessHub: React.FC<BusinessHubProps> = ({
-    theme, user, exchangeRates, trades, accounts, expenses, payouts, playbook, goals, resources, settings,
-    onUpdateExpenses, onUpdatePayouts, onUpdatePlaybook, onUpdateGoals, onUpdateResources, onUpdateSettings, onUpdateAccounts,
-    constitutionRules, onUpdateConstitution, careerRoadmap, onUpdateRoadmap, dailyReviews, weeklyFocusList,
-    activeTab, onTabChange
+    theme, user, exchangeRates, trades, accounts, expenses, payouts, onUpdateExpenses, onUpdatePayouts,
 }) => {
-
-    const [isAddingExpense, setIsAddingExpense] = useState(false);
-    const [newExpense, setNewExpense] = useState<Partial<BusinessExpense>>({
-        label: '',
-        category: 'Challenges',
-        amount: 0,
-        date: new Date().toISOString().split('T')[0],
-        recurring: 'monthly'
-    });
-    const [isAddingGoal, setIsAddingGoal] = useState(false);
-    const [newGoal, setNewGoal] = useState<Partial<BusinessGoal>>({
-        type: 'Monthly',
-        metric: 'PnL',
-        label: '',
-        target: 0,
-        current: 0,
-        category: 'Financial',
-        deadline: new Date().toISOString().split('T')[0]
-    });
-    const [updatingGoalId, setUpdatingGoalId] = useState<string | null>(null);
-    const [incrementValue, setIncrementValue] = useState<number>(0);
-
-    const [payoutViewMode, setPayoutViewMode] = useState<'list' | 'grid'>('list');
-    const [isAddingPayout, setIsAddingPayout] = useState(false);
-    const [editingPayout, setEditingPayout] = useState<BusinessPayout | null>(null);
-    // Klik na výplatu otevře nejdřív kartu (čtení + listování šipkami); teprve
-    // tlačítko Upravit v ní pouští editační formulář.
-    const [detailPayoutId, setDetailPayoutId] = useState<string | null>(null);
-
-    const [itemToDelete, setItemToDelete] = useState<{ id: string, type: 'expense' | 'payout' | 'goal' | 'playbook' | 'resource' } | null>(null);
-    const [showMonthlyExpenseBreakdown, setShowMonthlyExpenseBreakdown] = useState(false);
-    const [showCashBreakdown, setShowCashBreakdown] = useState(false);
-
-    const isDark = theme !== 'light';
-    const lang = user.language || 'cs';
     const targetCurrency = user.currency || 'USD';
-
-    // Helper for formatting currency based on user preference
     const formatValue = (usdAmount: number) => {
         if (!exchangeRates) return currencyService.format(usdAmount, 'USD');
-        const converted = currencyService.convert(usdAmount, targetCurrency, exchangeRates);
-        return currencyService.format(converted, targetCurrency);
+        return currencyService.format(currencyService.convert(usdAmount, targetCurrency, exchangeRates), targetCurrency);
     };
+    const signed = (v: number) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${formatValue(Math.abs(v))}`;
 
-    const formatHubDate = (dateStr: string) => {
-        if (!dateStr) return '';
-        try {
-            const d = new Date(dateStr);
-            return d.toLocaleDateString(lang === 'cs' ? 'cs-CZ' : 'en-US', {
-                day: 'numeric',
-                month: 'long'
-            });
-        } catch {
-            return dateStr;
-        }
-    };
+    const [isAddingExpense, setIsAddingExpense] = useState(false);
+    const [isAddingPayout, setIsAddingPayout] = useState(false);
+    const [editingPayout, setEditingPayout] = useState<BusinessPayout | null>(null);
+    const [detailPayoutId, setDetailPayoutId] = useState<string | null>(null);
+    const [firmDetail, setFirmDetail] = useState<string | null>(null);
+    const [itemToDelete, setItemToDelete] = useState<{ id: string; type: 'expense' | 'payout' } | null>(null);
+    const [payoutView, setPayoutView] = useState<'gallery' | 'list'>('gallery');
+    const [monthPop, setMonthPop] = useState<{ month: string; left: number; top: number; arrow: number } | null>(null);
+    const monthsRef = useRef<HTMLDivElement>(null);
+    const popRef = useRef<HTMLDivElement>(null);
 
-    const handleAddGoal = () => {
-        if (!newGoal.label || !newGoal.target) return;
-        const goal: BusinessGoal = {
-            id: crypto.randomUUID(),
-            type: (newGoal.type as any) || 'Monthly',
-            metric: (newGoal.metric as any) || 'PnL',
-            label: newGoal.label,
-            target: Number(newGoal.target),
-            current: Number(newGoal.current) || 0,
-            category: (newGoal.category as any) || 'Financial',
-            deadline: newGoal.deadline || new Date().toISOString().split('T')[0]
+    const firmKeys = useMemo(() => accounts.map(acc => accountFirmKey(acc)), [accounts]);
+    const received = useMemo(() => payouts.filter(isReceived), [payouts]);
+    const totalPaid = useMemo(() => received.reduce((s, p) => s + (Number(p.amount) || 0), 0), [received]);
+    const totalCost = useMemo(() => expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0), [expenses]);
+    const net = totalPaid - totalCost;
+    const roi = totalCost > 0 ? totalPaid / totalCost : null;
+    const months = useMemo(() => monthlyCashflow(expenses, payouts), [expenses, payouts]);
+    const costMonths = useMemo(() => new Set(expenses.map(e => expenseMonth(e.date)).filter(Boolean)).size, [expenses]);
+    const firms = useMemo(() => firmSummaries(expenses, payouts, accounts), [expenses, payouts, accounts]);
+    const maxMonthBar = Math.max(1, ...months.map(m => Math.max(m.paid, m.cost)));
+
+    // Výplaty od nejnovější; detail listuje po tomhle pořadí.
+    const sortedPayouts = useMemo(() => [...payouts].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()), [payouts]);
+    const detailIndex = detailPayoutId ? sortedPayouts.findIndex(p => p.id === detailPayoutId) : -1;
+    const accountOf = (p: BusinessPayout) => accounts.find(a => a.id === p.accountId);
+
+    const expensesByMonth = useMemo(() => {
+        const map = new Map<string, BusinessExpense[]>();
+        [...expenses].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).forEach(e => {
+            const m = expenseMonth(e.date) || 'bez data';
+            if (!map.has(m)) map.set(m, []);
+            map.get(m)!.push(e);
+        });
+        return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+    }, [expenses]);
+    const [openMonths, setOpenMonths] = useState<Set<string> | null>(null);
+    const open = openMonths ?? new Set(expensesByMonth.slice(0, 2).map(([m]) => m));
+    const toggleMonth = (m: string) => setOpenMonths(() => { const next = new Set(open); if (next.has(m)) next.delete(m); else next.add(m); return next; });
+
+    // Bublina měsíce: zavře se klikem mimo nebo Escape.
+    useEffect(() => {
+        if (!monthPop) return;
+        const close = (e: MouseEvent) => {
+            const t = e.target as Node;
+            if (popRef.current?.contains(t) || (t instanceof Element && t.closest('[data-month-cell]'))) return;
+            setMonthPop(null);
         };
-        onUpdateGoals([...goals, goal]);
-        setIsAddingGoal(false);
-        setNewGoal({ type: 'Monthly', metric: 'PnL', label: '', target: 0, current: 0, category: 'Financial', deadline: new Date().toISOString().split('T')[0] });
+        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMonthPop(null); };
+        document.addEventListener('mousedown', close);
+        document.addEventListener('keydown', onKey);
+        return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', onKey); };
+    }, [monthPop]);
+
+    const openMonth = (month: string, el: HTMLElement) => {
+        if (monthPop?.month === month) { setMonthPop(null); return; }
+        const wrap = monthsRef.current?.getBoundingClientRect();
+        const cell = el.getBoundingClientRect();
+        if (!wrap) return;
+        const width = Math.min(300, wrap.width - 28);
+        const center = cell.left - wrap.left + cell.width / 2;
+        const left = Math.max(14, Math.min(center - width / 2, wrap.width - width - 14));
+        setMonthPop({ month, left, top: cell.bottom - wrap.top + 8, arrow: center - left - 5 });
     };
 
-    const getGoalColor = (category: string) => {
-        switch (category) {
-            case 'Financial': return 'text-emerald-500';
-            case 'Psychology': return 'text-purple-500';
-            case 'Technical': return 'text-blue-500';
-            default: return 'text-slate-500';
-        }
+    const kpi = 'min-w-0 px-4 py-3.5';
+    const kpiLabel = 'text-[11.5px] font-semibold text-[var(--text-secondary)]';
+    const kpiValue = 'mt-1.5 font-mono text-[22px] font-extrabold tracking-tight tabular-nums sm:text-2xl';
+    const kpiSub = 'mt-1 text-[11.5px] text-[var(--text-secondary)]';
+    const sectionHead = 'flex min-h-[46px] flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-[var(--border-subtle)] px-4 py-2.5';
+
+    const renderProof = (p: BusinessPayout, className = '') => p.image
+        ? <img src={p.image} alt="Důkaz výplaty" loading="lazy" draggable={false} className={`h-full w-full object-cover object-left ${className}`} />
+        : <span className="flex h-full w-full items-center justify-center text-[var(--text-muted)]" title="Důkaz se načítá nebo chybí"><ImageIcon size={18} className="opacity-40" /></span>;
+
+    const payoutTile = (p: BusinessPayout, onOpen: () => void = () => setDetailPayoutId(p.id)) => {
+        const acc = accountOf(p);
+        return (
+            <button key={p.id} type="button" onClick={onOpen} title={acc?.name}
+                className="group relative aspect-[4/3] overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)] text-left">
+                <span className="block h-full w-full transition-transform duration-300 group-hover:scale-[1.04]">{renderProof(p)}</span>
+                <span className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-1.5 bg-gradient-to-t from-slate-950/85 to-transparent px-2.5 pb-2 pt-5 text-white">
+                    <b className="font-mono text-[13px] text-emerald-300">{formatValue(p.amount)}</b>
+                    <span className="min-w-0 truncate text-right text-[10.5px] leading-tight opacity-90">{shortDate(p.date)}<br />{acc?.name || 'Neznámý účet'}</span>
+                </span>
+            </button>
+        );
     };
-
-    const getGoalBgColor = (category: string) => {
-        switch (category) {
-            case 'Financial': return 'bg-emerald-500/10';
-            case 'Psychology': return 'bg-purple-500/10';
-            case 'Technical': return 'bg-blue-500/10';
-            default: return 'bg-slate-500/10';
-        }
-    };
-
-    const getDaysRemaining = (deadline: string) => {
-        const diff = new Date(deadline).getTime() - new Date().getTime();
-        return Math.ceil(diff / (1000 * 60 * 60 * 24));
-    };
-
-    const handleUpdateGoalProgress = (goalId: string, amount: number) => {
-        const newGoals = goals.map(g => {
-            if (g.id === goalId) {
-                const logs = g.logs || [];
-                return {
-                    ...g,
-                    current: g.current + amount,
-                    logs: [...logs, { date: new Date().toISOString(), amount }]
-                };
-            }
-            return g;
-        });
-        onUpdateGoals(newGoals as BusinessGoal[]);
-        setUpdatingGoalId(null);
-        setIncrementValue(0);
-    };
-
-    const handleAddExpense = () => {
-        if (!newExpense.label || !newExpense.amount) return;
-        const exp: BusinessExpense = {
-            id: crypto.randomUUID(),
-            label: newExpense.label,
-            category: (newExpense.category as any) || 'Other',
-            amount: Number(newExpense.amount),
-            date: newExpense.date || new Date().toISOString().split('T')[0],
-            recurring: newExpense.recurring as any
-        };
-        onUpdateExpenses([...expenses, exp]);
-        setIsAddingExpense(false);
-        setNewExpense({ label: '', category: 'Challenges', amount: 0, date: new Date().toISOString().split('T')[0], recurring: 'monthly' });
-    };
-
-    const handleSavePayout = (payout: BusinessPayout) => {
-        const exists = payouts.find(p => p.id === payout.id);
-        if (exists) {
-            return onUpdatePayouts(payouts.map(p => p.id === payout.id ? payout : p));
-        } else {
-            return onUpdatePayouts([...payouts, payout]);
-        }
-    };
-
-    const handlePayoutImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-        // Moved to PayoutModal
-    };
-
-    // --- Financial Calculations (All in USD base) ---
-    const totalPnL = useMemo(() => trades.reduce((sum, t) => sum + t.pnl, 0), [trades]);
-    const normalizedTotalExpenses = useMemo(() => expenses.reduce((sum, e) => sum + e.amount, 0), [expenses]);
-    const expensesThisMonthValue = useMemo(() => {
-        const now = new Date();
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        return expenses.reduce((sum, e) => {
-            const expDate = new Date(e.date);
-            if (expDate >= startOfMonth) return sum + e.amount;
-            return sum;
-        }, 0);
-    }, [expenses]);
-
-    // Calculate total net payouts from the payouts history
-    const totalPayouts = useMemo(() =>
-        payouts.filter(p => p.status === 'Received').reduce((sum, p) => sum + p.amount, 0),
-        [payouts]);
-
-    const unifiedPayouts = useMemo(() => {
-        return [...payouts].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    }, [payouts]);
-
-    // Index v seznamu, ne uložený objekt — po uložení editace se karta sama
-    // překreslí čerstvými daty a šipky respektují aktuální řazení.
-    const detailPayoutIndex = detailPayoutId ? unifiedPayouts.findIndex(p => p.id === detailPayoutId) : -1;
-
-    const realizedTaxReserveValue = useMemo(() => (totalPayouts > 0 ? (totalPayouts * (settings.taxRatePct / 100)) : 0), [totalPayouts, settings.taxRatePct]);
-    const netBusinessCashValue = useMemo(() => totalPayouts - normalizedTotalExpenses - realizedTaxReserveValue, [totalPayouts, normalizedTotalExpenses, realizedTaxReserveValue]);
-
-    const monthlyRecurringOpExValue = useMemo(() => {
-        return expenses.reduce((sum, e) => {
-            if (e.recurring === 'monthly') return sum + e.amount;
-            if (e.recurring === 'yearly') return sum + (e.amount / 12);
-            return sum;
-        }, 0);
-    }, [expenses]);
-
-    const yearlyRecurringOpExValue = useMemo(() => {
-        return expenses.reduce((sum, e) => {
-            if (e.recurring === 'yearly') return sum + e.amount;
-            if (e.recurring === 'monthly') return sum + (e.amount * 12);
-            return sum;
-        }, 0);
-    }, [expenses]);
-
-    const expensesMonthlyBreakdown = useMemo(() => {
-        const groups: Record<string, number> = {};
-        expenses.forEach(e => {
-            const date = new Date(e.date);
-            const key = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-            groups[key] = (groups[key] || 0) + e.amount;
-        });
-        return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
-    }, [expenses]);
-
-    const unifiedMonthlyBreakdown = useMemo(() => {
-        const groups: Record<string, { expenses: number; payouts: number }> = {};
-
-        expenses.forEach(e => {
-            const date = new Date(e.date);
-            const key = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-            if (!groups[key]) groups[key] = { expenses: 0, payouts: 0 };
-            groups[key].expenses += e.amount;
-        });
-
-        payouts.forEach(p => {
-            if (p.status !== 'Received') return;
-            const date = new Date(p.date);
-            const key = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-            if (!groups[key]) groups[key] = { expenses: 0, payouts: 0 };
-            groups[key].payouts += p.amount;
-        });
-
-        return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
-    }, [expenses, payouts]);
-
-    // --- Render Helpers ---
-    const cardClass = `p-6 rounded-[24px] lg:rounded-[32px] border transition-all ${isDark ? 'bg-[var(--bg-card)]/80 border-[var(--border-subtle)] backdrop-blur-xl' : 'bg-white/80 border-slate-200 shadow-sm'}`;
-    const inputClass = `w-full px-4 py-3 rounded-xl border bg-transparent text-sm font-bold outline-none transition-all ${isDark ? 'border-[var(--border-subtle)] focus:border-blue-500 text-white' : 'border-slate-200 focus:border-blue-500 text-slate-900'}`;
 
     return (
-        <div className="space-y-8 pb-32 max-w-[1400px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-700 pt-4">
-
-            {/* Mobilní přepínač tabů */}
-            <div className="flex md:hidden w-full p-1 rounded-2xl border gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
-                {([
-                    { id: 'financials', label: 'Finance' },
-                    { id: 'goals', label: 'Cíle' }
-                ] as const).map(tab => (
-                    <button
-                        key={tab.id}
-                        onClick={() => onTabChange(tab.id)}
-                        className={`relative flex-1 py-2 rounded-xl text-xs font-semibold transition-all ${
-                            activeTab === tab.id
-                                ? (theme !== 'light' ? 'bg-slate-700/60 text-white shadow-sm' : 'bg-white text-slate-900 shadow-sm border border-slate-200/60')
-                                : (theme !== 'light' ? 'text-slate-500' : 'text-slate-400')
-                        }`}
-                    >
-                        {tab.label}
-                    </button>
-                ))}
+        <div className="mx-auto max-w-[1400px] space-y-3 pb-32 pt-2">
+            <div className="flex justify-end gap-1.5">
+                <button type="button" onClick={() => setIsAddingExpense(true)} className={btn}><Plus size={14} /> Náklad</button>
+                <button type="button" onClick={() => setIsAddingPayout(true)} className={btnPrimary}><Plus size={14} /> Výplata</button>
             </div>
 
-            {activeTab === 'financials' && (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-500">
-                    <div className="lg:col-span-12 space-y-6">
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            <div
-                                onClick={() => setShowCashBreakdown(!showCashBreakdown)}
-                                className={cardClass + ` border-blue-500/20 shadow-[0_0_20px_rgba(59,130,246,0.1)] cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] ${showCashBreakdown ? 'ring-2 ring-blue-500/50 bg-blue-500/5' : ''}`}
-                            >
-                                <div className="flex justify-between items-start mb-4">
-                                    <span className="text-[11px] font-semibold text-slate-500">{t('net_cash', lang)}</span>
-                                    <div className={`p-2 rounded-lg transition-colors ${showCashBreakdown ? 'bg-blue-600 text-white' : 'bg-emerald-500/10 text-emerald-500'}`}><Wallet size={16} /></div>
-                                </div>
-                                <div className={`text-3xl font-black tracking-tighter ${netBusinessCashValue >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                                    {formatValue(netBusinessCashValue)}
-                                </div>
-                                <div className="flex justify-between items-center mt-2">
-                                    <p className="text-[11px] font-bold text-slate-500 tracking-tight">Realizovaný zisk HQ</p>
-                                    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-md ${showCashBreakdown ? 'bg-blue-600 text-white' : 'bg-slate-500/10 text-slate-500'}`}>
-                                        {showCashBreakdown ? 'Zavřít detail' : 'Ukázat detail'}
-                                    </span>
-                                </div>
-                            </div>
-
-                            <div className={cardClass}>
-                                <div className="flex justify-between items-start mb-4">
-                                    <span className="text-[11px] font-semibold text-slate-500">{t('tax_reserve', lang)} ({settings.taxRatePct}%)</span>
-                                    <div className="p-2 bg-amber-500/10 text-amber-500 rounded-lg"><PieChartIcon size={16} /></div>
-                                </div>
-                                <div className={`text-3xl font-black tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                                    {formatValue(realizedTaxReserveValue)}
-                                </div>
-                                <div className="mt-4 flex items-center gap-2">
-                                    <input
-                                        type="range" min="0" max="50" value={settings.taxRatePct}
-                                        onChange={(e) => onUpdateSettings({ ...settings, taxRatePct: parseInt(e.target.value) })}
-                                        className={`flex-1 accent-blue-600 h-1 rounded-lg appearance-none cursor-pointer ${isDark ? 'bg-[var(--bg-input)]' : 'bg-slate-200'}`}
-                                    />
-                                </div>
-                            </div>
-
-                            <div className={cardClass}>
-                                <div className="flex justify-between items-start mb-4">
-                                    <span className="text-[11px] font-semibold text-slate-500">{t('realized_income', lang)}</span>
-                                    <div className="p-2 bg-blue-500/10 text-blue-500 rounded-lg"><DollarSign size={16} /></div>
-                                </div>
-                                <div className={`text-3xl font-black tracking-tighter text-blue-500`}>
-                                    {formatValue(totalPayouts)}
-                                </div>
-                                <p className="text-[11px] font-bold text-slate-500 mt-2 tracking-tight">Celkové obdržené výplaty</p>
-                            </div>
-                        </div>
-
-                        {showCashBreakdown && (
-                            <div className={`p-8 rounded-[40px] border animate-in slide-in-from-top-4 duration-500 mb-8 ${isDark ? 'bg-blue-600/5 border-blue-500/20 shadow-[0_0_40px_rgba(59,130,246,0.1)]' : 'bg-blue-50 border-blue-100 shadow-xl shadow-blue-500/10'}`}>
-                                <div className="flex justify-between items-center mb-8">
-                                    <div className="flex items-center gap-4">
-                                        <div className="p-3 bg-blue-600 rounded-2xl text-white shadow-lg shadow-blue-500/30">
-                                            <TrendingUp size={20} />
-                                        </div>
-                                        <div>
-                                            <h3 className="text-xl font-bold tracking-tight">Měsíční Cashflow Analýza</h3>
-                                            <p className="text-[11px] font-semibold text-slate-500">Podrobné rozdělení nákladů a příjmů</p>
-                                        </div>
-                                    </div>
-                                    <button
-                                        onClick={() => setShowCashBreakdown(false)}
-                                        className="p-3 rounded-full hover:bg-rose-500/10 text-slate-500 hover:text-rose-500 transition-all"
-                                    >
-                                        <X size={24} />
-                                    </button>
-                                </div>
-
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                                    {unifiedMonthlyBreakdown.map(([monthKey, data]) => {
-                                        const [year, month] = monthKey.split('-');
-                                        const monthLabel = new Date(Number(year), Number(month) - 1).toLocaleString(lang === 'cs' ? 'cs-CZ' : 'en-US', { month: 'long' });
-                                        const netMonth = data.payouts - data.expenses;
-
-                                        return (
-                                            <div key={monthKey} className={`p-6 rounded-3xl border transition-all hover:scale-[1.02] ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)]' : 'bg-[var(--bg-card)] border-[var(--border-subtle)] shadow-sm'}`}>
-                                                <div className="flex justify-between items-center mb-4">
-                                                    <p className="text-[11px] font-semibold text-slate-500">{monthLabel} {year}</p>
-                                                    <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${netMonth >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
-                                                        {netMonth >= 0 ? 'PROFIT' : 'BURN'}
-                                                    </span>
-                                                </div>
-                                                <div className="space-y-3">
-                                                    <div className="flex justify-between items-center">
-                                                        <span className="text-[11px] font-bold text-slate-500">Příjmy</span>
-                                                        <span className="text-xs font-mono font-black text-emerald-500">+{formatValue(data.payouts)}</span>
-                                                    </div>
-                                                    <div className="flex justify-between items-center">
-                                                        <span className="text-[11px] font-bold text-slate-500">Náklady</span>
-                                                        <span className="text-xs font-mono font-black text-rose-500">-{formatValue(data.expenses)}</span>
-                                                    </div>
-                                                    <div className={`mt-3 pt-3 border-t flex justify-between items-center ${isDark ? 'border-white/5' : 'border-slate-50'}`}>
-                                                        <span className="text-[11px] font-semibold text-slate-400">Čistý výsledek</span>
-                                                        <span className={`text-sm font-black font-mono tracking-tighter ${netMonth >= 0 ? 'text-white' : 'text-rose-500'}`}>
-                                                            {formatValue(netMonth)}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        )}
-
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-                            <div className={cardClass}>
-                                <div className="flex flex-col gap-3 mb-8">
-                                    <h3 className="text-xs font-semibold flex items-center gap-2">
-                                        <Layers size={16} className="text-blue-500" /> {t('operating_expenses', lang)}
-                                    </h3>
-                                    <div className="flex flex-wrap items-center gap-2">
-                                        <div className={`flex items-center gap-3 px-4 py-2.5 rounded-2xl border ${isDark ? 'bg-blue-500/5 border-blue-500/20 shadow-lg shadow-blue-500/5' : 'bg-blue-50 border-blue-100 shadow-sm'}`}>
-                                            <div className="p-2 bg-blue-500/20 text-blue-500 rounded-xl">
-                                                <Zap size={14} />
-                                            </div>
-                                            <div>
-                                                <p className="text-[11px] font-semibold text-slate-500">Tento měsíc</p>
-                                                <p className={`text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(expensesThisMonthValue)}</p>
-                                            </div>
-                                        </div>
-                                        <div
-                                            onClick={() => setShowMonthlyExpenseBreakdown(!showMonthlyExpenseBreakdown)}
-                                            className={`flex items-center gap-3 px-4 py-2.5 rounded-2xl border cursor-pointer transition-all hover:scale-105 active:scale-95 ${showMonthlyExpenseBreakdown ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/20' : (isDark ? 'bg-slate-500/5 border-slate-500/20' : 'bg-slate-50 border-slate-100')}`}
-                                        >
-                                            <div className={`p-2 rounded-xl ${showMonthlyExpenseBreakdown ? 'bg-white/20 text-white' : 'bg-slate-500/20 text-slate-500'}`}>
-                                                <Layers size={14} />
-                                            </div>
-                                            <div>
-                                                <p className={`text-[11px] font-semibold ${showMonthlyExpenseBreakdown ? 'text-blue-100' : 'text-slate-500'}`}>Dohromady</p>
-                                                <p className={`text-xs font-black`}>{formatValue(normalizedTotalExpenses)}</p>
-                                            </div>
-                                        </div>
-                                        <button
-                                            onClick={() => setIsAddingExpense(true)}
-                                            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-2xl text-[11px] font-semibold transition-all hover:bg-blue-500 hover:shadow-lg hover:shadow-blue-500/20 whitespace-nowrap"
-                                        >
-                                            <Plus size={16} /> {t('add_expense', lang)}
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {showMonthlyExpenseBreakdown && (
-                                    <div className={`mb-8 p-6 rounded-3xl border animate-in slide-in-from-top-4 duration-300 ${isDark ? 'bg-blue-500/5 border-blue-500/20 shadow-inner' : 'bg-blue-50/50 border-blue-100'}`}>
-                                        <div className="flex justify-between items-center mb-6">
-                                            <h4 className="text-[11px] font-semibold text-blue-500 flex items-center gap-2">
-                                                <Calendar size={14} /> Měsíční historie nákladů
-                                            </h4>
-                                            <button onClick={() => setShowMonthlyExpenseBreakdown(false)} className="text-slate-500 hover:text-rose-500 transition-all">
-                                                <X size={16} />
-                                            </button>
-                                        </div>
-                                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                                            {expensesMonthlyBreakdown.map(([monthKey, total]) => {
-                                                const [year, month] = monthKey.split('-');
-                                                const monthLabel = new Date(Number(year), Number(month) - 1).toLocaleString(lang === 'cs' ? 'cs-CZ' : 'en-US', { month: 'long' });
-                                                return (
-                                                    <div key={monthKey} className={`p-4 rounded-2xl border transition-all hover:scale-105 ${isDark ? 'bg-[var(--bg-page)]/60 border-white/5 hover:border-blue-500/30' : 'bg-white border-slate-100 shadow-sm hover:border-blue-200'}`}>
-                                                        <p className="text-[11px] font-semibold text-slate-500 mb-1">{monthLabel} {year}</p>
-                                                        <p className={`text-sm font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(total)}</p>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                )}
-
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-left">
-                                        <thead>
-                                            <tr className={`border-b ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-                                                <th className="pb-4 text-[11px] font-semibold text-slate-500">Datum</th>
-                                                <th className="pb-4 text-[11px] font-semibold text-slate-500">Popis</th>
-                                                <th className="pb-4 text-[11px] font-semibold text-slate-500">Kategorie</th>
-                                                <th className="pb-4 text-[11px] font-semibold text-slate-500">Částka</th>
-                                                <th className="pb-4"></th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className={`divide-y ${isDark ? 'divide-[var(--border-subtle)]' : 'divide-slate-50'}`}>
-                                            {expenses.length === 0 ? (
-                                                <tr>
-                                                    <td colSpan={5} className="py-8 text-center text-slate-500 text-xs font-bold font-mono">Zatím nebyly zaznamenány žádné náklady.</td>
-                                                </tr>
-                                            ) : (
-                                                [...expenses].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(exp => (
-                                                    <tr key={exp.id}>
-                                                        <td className={`py-4 text-[10px] font-bold ${isDark ? 'text-white' : 'text-slate-900'} italic`}>{formatHubDate(exp.date)}</td>
-                                                        <td className={`py-4 text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{exp.label}</td>
-                                                        <td className="py-4 text-[11px] font-bold text-slate-500">{exp.category}</td>
-                                                        <td className={`py-4 text-xs font-mono font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatValue(exp.amount)}</td>
-                                                        <td className="py-4 text-right">
-                                                            <button onClick={() => setItemToDelete({ id: exp.id, type: 'expense' })} className="p-2 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"><Trash2 size={14} /></button>
-                                                        </td>
-                                                    </tr>
-                                                ))
-                                            )}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-
-                            <div className={cardClass}>
-                                <div className="flex justify-between items-center mb-8">
-                                    <h3 className="text-xs font-semibold flex items-center gap-2">
-                                        <DollarSign size={16} className="text-emerald-500" /> {t('payout_history', lang)}
-                                    </h3>
-                                    <div className="flex items-center gap-4">
-                                        <div className={`flex p-1 rounded-xl border ${isDark ? 'bg-[var(--bg-page)]/40 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                                            <button
-                                                onClick={() => setPayoutViewMode('list')}
-                                                className={`p-1.5 rounded-lg transition-all ${payoutViewMode === 'list' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}
-                                            >
-                                                <Calendar size={14} />
-                                            </button>
-                                            <button
-                                                onClick={() => setPayoutViewMode('grid')}
-                                                className={`p-1.5 rounded-lg transition-all ${payoutViewMode === 'grid' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}
-                                            >
-                                                <LayoutGrid size={14} />
-                                            </button>
-                                        </div>
-                                        <button
-                                            onClick={() => setIsAddingPayout(true)}
-                                            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-[11px] font-semibold transition-all hover:bg-emerald-500"
-                                        >
-                                            <Plus size={14} /> {t('add_payout', lang) || 'Přidat výplatu'}
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <PayoutModal
-                                    isOpen={isAddingPayout || !!editingPayout}
-                                    onClose={() => { setIsAddingPayout(false); setEditingPayout(null); }}
-                                    onSave={handleSavePayout}
-                                    accounts={accounts}
-                                    payout={editingPayout}
-                                    theme={theme}
-                                    user={user}
-                                />
-
-                                {detailPayoutIndex >= 0 && (
-                                    <PayoutDetailModal
-                                        payouts={unifiedPayouts}
-                                        index={detailPayoutIndex}
-                                        onIndexChange={(i) => setDetailPayoutId(unifiedPayouts[i]?.id ?? null)}
-                                        accounts={accounts}
-                                        trades={trades}
-                                        theme={theme}
-                                        formatValue={formatValue}
-                                        onEdit={(p) => { setDetailPayoutId(null); setEditingPayout(p); }}
-                                        onDelete={(p) => { setDetailPayoutId(null); setItemToDelete({ id: p.id, type: 'payout' }); }}
-                                        onClose={() => setDetailPayoutId(null)}
-                                    />
-                                )}
-
-                                {payoutViewMode === 'list' ? (
-                                    <div className="overflow-x-auto">
-                                        <table className="w-full text-left">
-                                            <thead>
-                                                <tr className={`border-b ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-                                                    <th className="pb-4 text-[11px] font-semibold text-slate-500">Datum</th>
-                                                    <th className="pb-4 text-[11px] font-semibold text-slate-500">Účet</th>
-                                                    <th className="pb-4 text-[11px] font-semibold text-slate-500">Částka</th>
-                                                    <th className="pb-4 text-[11px] font-semibold text-slate-500">Důkaz</th>
-                                                    <th className="pb-4"></th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className={`divide-y ${isDark ? 'divide-[var(--border-subtle)]' : 'divide-slate-50'}`}>
-                                                {unifiedPayouts.length === 0 ? (
-                                                    <tr>
-                                                        <td colSpan={5} className="py-8 text-center text-slate-500 text-xs font-bold font-mono">Zatím nebyly zaznamenány žádné výplaty.</td>
-                                                    </tr>
-                                                ) : (
-                                                    unifiedPayouts.map(p => {
-                                                        const acc = accounts.find(a => a.id === p.accountId);
-                                                        const isLegacy = p.id.toString().startsWith('legacy_');
-                                                        return (
-                                                            <tr
-                                                                key={p.id}
-                                                                className="cursor-pointer hover:bg-white/[0.02] transition-colors"
-                                                                onClick={() => setDetailPayoutId(p.id)}
-                                                            >
-                                                                <td className={`py-4 text-[10px] font-bold ${isDark ? 'text-white' : 'text-slate-900'} italic`}>{formatHubDate(p.date)}</td>
-                                                                <td className={`py-4 text-xs font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{acc?.name || 'Neznámý'}</td>
-                                                                <td className={`py-4 text-xs font-mono font-black text-emerald-500`}>{formatValue(p.amount)}</td>
-                                                                {/* Status toggle (Čeká se / Obdrženo) odstraněn — výplata se zapisuje
-                                                                    až když reálně dorazí, takže byla vždy „Obdrženo". Zůstává jen
-                                                                    značka archivu a indikátor přiloženého důkazu. */}
-                                                                <td className="py-4">
-                                                                    <div className="flex items-center gap-3">
-                                                                        {isLegacy && (
-                                                                            <span className="px-3 py-1 rounded-lg text-[11px] font-semibold bg-emerald-500/10 text-emerald-500/60">ARCHIVOVÁNO</span>
-                                                                        )}
-                                                                        {/* Miniatura řekne na první pohled, co za důkaz je přiložený;
-                                                                            ikona trofeje zůstává jen jako fallback bez fotky. */}
-                                                                        {p.image ? (
-                                                                            <img
-                                                                                src={p.image}
-                                                                                alt="Důkaz výplaty"
-                                                                                title="Přiložen důkaz výplaty"
-                                                                                loading="lazy"
-                                                                                className={`w-10 h-10 rounded-lg object-cover border ${isDark ? 'border-white/10' : 'border-slate-200'}`}
-                                                                            />
-                                                                        ) : (
-                                                                            <div className="w-10 h-10 rounded-lg border border-dashed border-slate-500/25 flex items-center justify-center text-slate-600" title="Bez důkazu">
-                                                                                <Trophy size={12} />
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
-                                                                </td>
-                                                                <td className="py-4 text-right">
-                                                                    {!isLegacy && (
-                                                                        <button
-                                                                            onClick={(e) => { e.stopPropagation(); setItemToDelete({ id: p.id, type: 'payout' }); }}
-                                                                            className="p-2 text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"
-                                                                        >
-                                                                            <Trash2 size={14} />
-                                                                        </button>
-                                                                    )}
-                                                                </td>
-                                                            </tr>
-                                                        );
-                                                    })
-                                                )}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                ) : (
-                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 animate-in fade-in duration-500">
-                                        {unifiedPayouts.length === 0 ? (
-                                            <div className="col-span-full py-20 text-center opacity-30">
-                                                <LayoutGrid size={48} className="mx-auto text-slate-700 mb-4" />
-                                                <p className="text-slate-500 font-bold text-xs">Zatím nebyly zaznamenány žádné výplaty.</p>
-                                            </div>
-                                        ) : (
-                                            unifiedPayouts.map(p => {
-                                                const acc = accounts.find(a => a.id === p.accountId);
-                                                const isLegacy = p.id.toString().startsWith('legacy_');
-                                                return (
-                                                    <div
-                                                        key={p.id}
-                                                        onClick={() => setDetailPayoutId(p.id)}
-                                                        className={`aspect-square rounded-2xl border overflow-hidden relative group transition-all cursor-pointer hover:border-blue-500/50 hover:shadow-2xl hover:shadow-blue-500/10 border-[var(--border-subtle)] bg-[var(--bg-page)]`}
-                                                    >
-                                                        {p.image ? (
-                                                            <img src={p.image} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" alt="Payout proof" />
-                                                        ) : (
-                                                            <div className="w-full h-full flex flex-col items-center justify-center p-4">
-                                                                <DollarSign size={24} className="text-emerald-500/40 mb-2" />
-                                                                <span className="text-[11px] font-semibold text-slate-500">Bez fotky</span>
-                                                            </div>
-                                                        )}
-                                                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
-                                                            <p className="text-[11px] font-semibold text-white">{formatHubDate(p.date)}</p>
-                                                            <p className="text-[11px] font-black text-emerald-400 font-mono tracking-tighter">{formatValue(p.amount)}</p>
-                                                            <p className="text-[10px] font-semibold text-white truncate">{acc?.name || 'Neznámý'}</p>
-                                                        </div>
-                                                        {isLegacy && (
-                                                            <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-black/60 backdrop-blur-md text-[6px] font-semibold text-white/50 border border-white/5">ARCHIV</div>
-                                                        )}
-                                                    </div>
-                                                );
-                                            })
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
+            <div className="theme-card grid grid-cols-2 overflow-hidden rounded-lg lg:grid-cols-4 [&>div+div]:border-[var(--border-subtle)] [&>div:nth-child(2)]:border-l [&>div:nth-child(4)]:border-l [&>div:nth-child(n+3)]:border-t lg:[&>div:nth-child(3)]:border-l lg:[&>div:nth-child(n+3)]:border-t-0">
+                <div className={kpi}>
+                    <p className={kpiLabel}>Čistá hotovost</p>
+                    <p className={`${kpiValue} ${net >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{signed(net)}</p>
+                    <p className={kpiSub}>výplaty − náklady</p>
                 </div>
-            )}
+                <div className={kpi}>
+                    <p className={kpiLabel}>Výplaty</p>
+                    <p className={`${kpiValue} text-emerald-500`}>{formatValue(totalPaid)}</p>
+                    <p className={kpiSub}><b className="font-semibold text-[var(--text-primary)]">{received.length}</b> {plural(received.length, 'výplata', 'výplaty', 'výplat')}{sortedPayouts[0] ? ` · poslední ${shortDate(sortedPayouts[0].date)}` : ''}</p>
+                </div>
+                <div className={kpi}>
+                    <p className={kpiLabel}>Náklady</p>
+                    <p className={`${kpiValue} text-[var(--text-primary)]`}>{formatValue(totalCost)}</p>
+                    <p className={kpiSub}><b className="font-semibold text-[var(--text-primary)]">{expenses.length}</b> {plural(expenses.length, 'položka', 'položky', 'položek')}{costMonths ? <> · Ø <b className="font-semibold text-[var(--text-primary)]">{formatValue(totalCost / costMonths)}</b> / měsíc</> : null}</p>
+                </div>
+                <div className={kpi}>
+                    <p className={kpiLabel}>Návratnost</p>
+                    <p className={`${kpiValue} ${roi == null ? 'text-[var(--text-muted)]' : roi >= 1 ? 'text-emerald-500' : 'text-rose-500'}`}>{roi == null ? '—' : `${Math.round(roi * 100)} %`}</p>
+                    <p className={kpiSub}>{roi == null ? 'zatím žádné náklady' : <>z každého <b className="font-semibold text-[var(--text-primary)]">$1</b> nákladů se vrátilo <b className="font-semibold text-[var(--text-primary)]">${roi.toFixed(2).replace('.', ',')}</b></>}</p>
+                </div>
+            </div>
 
-            {activeTab === 'goals' && (
-                <div className="animate-in fade-in duration-500 space-y-8">
-                    <div className="flex justify-between items-center">
-                        <h3 className="text-xs font-semibold flex items-center gap-2">
-                            <Target size={16} className="text-blue-500" /> Strategické Cíle
-                        </h3>
-                        <button
-                            onClick={() => setIsAddingGoal(true)}
-                            className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-2xl text-[11px] font-semibold transition-all hover:bg-blue-500 shadow-lg shadow-blue-600/20"
-                        >
-                            <Plus size={16} /> Nový Cíl
-                        </button>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {goals.length === 0 ? (
-                            <div className={cardClass + " col-span-full py-20 text-center opacity-30"}>
-                                <Target size={48} className="mx-auto text-slate-700 mb-4" />
-                                <p className="text-slate-500 font-bold text-xs">Zatím nebyly nastaveny žádné cíle.</p>
-                            </div>
-                        ) : (
-                            goals.map((goal) => {
-                                const progress = Math.min(100, (goal.current / goal.target) * 100);
-                                const radius = 32;
-                                const circumference = 2 * Math.PI * radius;
-                                const strokeDashoffset = circumference - (progress / 100) * circumference;
-                                const colorClass = getGoalColor(goal.category);
-                                const bgColorClass = getGoalBgColor(goal.category);
-
+            {months.length > 0 && (
+                <section className="theme-card relative z-[5] rounded-lg">
+                    <header className={sectionHead}>
+                        <h2 className="text-[13.5px] font-bold text-[var(--text-primary)]">Měsíce</h2>
+                        <span className="text-xs text-[var(--text-muted)]">klikni na měsíc pro rozpis</span>
+                    </header>
+                    <div ref={monthsRef} className="relative">
+                        <div className="grid grid-cols-3 gap-1.5 p-3.5 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-[repeat(auto-fit,minmax(110px,1fr))]">
+                            {months.map(m => {
+                                const up = m.net >= 0;
+                                const selected = monthPop?.month === m.month;
                                 return (
-                                    <div key={goal.id} className={cardClass + ` relative group overflow-hidden pb-2 ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-                                        <button
-                                            onClick={() => setItemToDelete({ id: goal.id, type: 'goal' })}
-                                            className="absolute top-4 right-4 p-2 bg-rose-500/10 text-rose-500 rounded-lg opacity-0 group-hover:opacity-100 transition-all hover:bg-rose-500 hover:text-white z-10"
-                                        >
-                                            <Trash2 size={12} />
-                                        </button>
-
-                                        <div className="flex items-center gap-6 mb-4">
-                                            <div className="relative w-16 h-16 flex-shrink-0">
-                                                <svg className="w-full h-full transform -rotate-90">
-                                                    <circle
-                                                        cx="32" cy="32" r="28"
-                                                        stroke="currentColor" strokeWidth="6" fill="transparent"
-                                                        className={isDark ? 'text-[var(--bg-input)]' : 'text-slate-100'}
-                                                    />
-                                                    <circle
-                                                        cx="32" cy="32" r="28"
-                                                        stroke="currentColor" strokeWidth="6" fill="transparent"
-                                                        strokeDasharray={2 * Math.PI * 28}
-                                                        strokeDashoffset={(2 * Math.PI * 28) - (progress / 100) * (2 * Math.PI * 28)}
-                                                        className={`${colorClass} transition-all duration-1000 ease-out`}
-                                                        strokeLinecap="round"
-                                                    />
-                                                </svg>
-                                                <div className="absolute inset-0 flex items-center justify-center">
-                                                    <span className={`text-[10px] font-black tracking-tighter ${colorClass}`}>{Math.round(progress)}%</span>
-                                                </div>
-                                            </div>
-
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex items-center gap-2 mb-1">
-                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${bgColorClass} ${colorClass}`}>
-                                                        {goal.type}
-                                                    </span>
-                                                    <span className="text-[10px] font-bold text-slate-500 leading-none">
-                                                        {goal.deadline ? (() => {
-                                                            const days = getDaysRemaining(goal.deadline);
-                                                            return days > 0 ? `${days} dní zbývá` : 'Termín vypršel';
-                                                        })() : goal.category}
-                                                    </span>
-                                                </div>
-                                                <h4 className={`text-xs font-semibold truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>{goal.label}</h4>
-                                                <p className="text-[10px] font-mono font-black text-slate-400 mt-1">
-                                                    {goal.metric === 'PnL' ? formatValue(goal.current) : goal.current.toLocaleString()}
-                                                    <span className="text-slate-600 ml-1">/</span>
-                                                    {goal.metric === 'PnL' ? formatValue(goal.target) : goal.target.toLocaleString()}
-                                                </p>
-                                            </div>
-
-                                            <div className="flex-shrink-0">
-                                                <button
-                                                    onClick={() => setUpdatingGoalId(updatingGoalId === goal.id ? null : goal.id)}
-                                                    className={`p-2 rounded-xl transition-all ${updatingGoalId === goal.id ? 'bg-blue-600 text-white' : (isDark ? 'bg-[var(--bg-page)] border border-[var(--border-subtle)] text-slate-400 hover:text-white' : 'bg-slate-50 border border-slate-200 text-slate-400')}`}
-                                                >
-                                                    <Plus size={18} />
-                                                </button>
-                                            </div>
+                                    <button key={m.month} type="button" data-month-cell onClick={(e) => openMonth(m.month, e.currentTarget)} aria-expanded={selected}
+                                        className={`min-w-0 rounded-md border px-2.5 py-2 text-left transition-shadow ${up ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-rose-500/20 bg-rose-500/[0.07]'} ${selected ? 'ring-2 ring-indigo-500/40' : 'hover:ring-1 hover:ring-indigo-500/30'}`}>
+                                        <p className="text-[11px] font-semibold capitalize text-[var(--text-secondary)]">{monthName(m.month, false)}</p>
+                                        <p className={`mt-1 truncate font-mono text-xs font-semibold ${m.paid ? 'text-emerald-500' : 'text-[var(--text-muted)]'}`}>+{formatValue(m.paid)}</p>
+                                        <p className="truncate font-mono text-xs font-semibold text-rose-500">−{formatValue(m.cost)}</p>
+                                        <div className="mt-1.5 grid gap-[3px]" aria-hidden="true">
+                                            <span className="block h-1 rounded-sm bg-emerald-500" style={{ width: `${(m.paid / maxMonthBar) * 100}%` }} />
+                                            <span className="block h-1 rounded-sm bg-rose-500" style={{ width: `${(m.cost / maxMonthBar) * 100}%` }} />
                                         </div>
-
-                                        {updatingGoalId === goal.id && (
-                                            <div className={`mt-2 p-4 rounded-2xl border animate-in slide-in-from-top-2 duration-300 ${isDark ? 'bg-[var(--bg-input)]/50 border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-200'}`}>
-                                                <div className="flex gap-3">
-                                                    <input
-                                                        type="number"
-                                                        value={incrementValue || ''}
-                                                        onChange={(e) => setIncrementValue(Number(e.target.value))}
-                                                        className={`flex-1 rounded-xl px-4 py-2 text-xs font-mono font-black outline-none focus:ring-1 focus:ring-blue-500/50 ${isDark ? 'bg-[var(--bg-page)] border border-[var(--border-subtle)] text-white' : 'bg-white border border-slate-200 text-slate-900'}`}
-                                                        placeholder="Zadej částku..."
-                                                        autoFocus
-                                                    />
-                                                    <button
-                                                        onClick={() => handleUpdateGoalProgress(goal.id, incrementValue)}
-                                                        className="px-4 py-2 bg-blue-600 text-white rounded-xl text-[11px] font-semibold transition-all hover:bg-blue-500 active:scale-95"
-                                                    >
-                                                        Přidat
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        {goal.logs && goal.logs.length > 0 && (
-                                            <div className={`mt-4 pt-4 border-t ${isDark ? 'border-[var(--border-subtle)]' : 'border-slate-100'}`}>
-                                                <div className="flex items-center justify-between mb-2 px-1">
-                                                    <span className="text-[11px] font-semibold text-slate-500">Historie záznamů</span>
-                                                    <span className="text-[11px] font-bold text-slate-600">{goal.logs.length} zápisů</span>
-                                                </div>
-                                                <div className="max-h-[100px] overflow-y-auto space-y-1.5 pr-2 custom-scrollbar">
-                                                    {[...goal.logs].reverse().map((log, idx) => (
-                                                        <div key={idx} className={`flex items-center justify-between text-[9px] py-1.5 px-3 rounded-lg ${isDark ? 'bg-[var(--bg-page)]/40' : 'bg-slate-50'}`}>
-                                                            <span className="font-mono text-slate-400">
-                                                                {new Date(log.date).toLocaleDateString()}
-                                                            </span>
-                                                            <span className={`font-black ${colorClass}`}>
-                                                                +{goal.metric === 'PnL' ? formatValue(log.amount) : log.amount.toLocaleString()}
-                                                            </span>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
+                                        <p className="mt-1.5 flex justify-between gap-1 border-t border-[var(--border-subtle)] pt-1.5 text-[10.5px] text-[var(--text-secondary)]">
+                                            <span>měsíc</span><b className={`font-mono ${up ? 'text-emerald-500' : 'text-rose-500'}`}>{signed(m.net)}</b>
+                                        </p>
+                                    </button>
                                 );
-                            })
+                            })}
+                        </div>
+                        {monthPop && (() => {
+                            const m = months.find(x => x.month === monthPop.month);
+                            if (!m) return null;
+                            const monthPays = received.filter(p => expenseMonth(p.date) === m.month);
+                            const monthCosts = expenses.filter(e => expenseMonth(e.date) === m.month);
+                            const item = (key: string, date: string, firm: string, text: string, value: string, tone: string) => (
+                                <div key={key} className="flex items-center gap-2 py-0.5 text-xs">
+                                    <span className="w-11 shrink-0 whitespace-nowrap font-mono text-[10.5px] text-[var(--text-muted)]">{shortDate(date)}</span>
+                                    <FirmMark firm={firm} size={16} />
+                                    <span className="min-w-0 flex-1 truncate text-[var(--text-primary)]">{text}</span>
+                                    <span className={`font-mono text-[11.5px] font-semibold ${tone}`}>{value}</span>
+                                </div>
+                            );
+                            return (
+                                <div ref={popRef} role="dialog" aria-label={`Rozpis ${monthName(m.month)}`}
+                                    className="glass-modal absolute z-20 w-[300px] max-w-[calc(100%-28px)]" style={{ left: monthPop.left, top: monthPop.top }}>
+                                    <span aria-hidden="true" className="absolute -top-[6px] h-2.5 w-2.5 rotate-45 border-l border-t border-[var(--glass-border,var(--border-subtle))] bg-[var(--modal-bg,var(--bg-card))]" style={{ left: monthPop.arrow }} />
+                                    <div className="flex items-baseline justify-between border-b border-[var(--border-subtle)] px-3 py-2.5">
+                                        <b className="text-[13px] capitalize text-[var(--text-primary)]">{monthName(m.month)}</b>
+                                        <span className={`font-mono text-[13px] font-bold ${m.net >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{signed(m.net)}</span>
+                                    </div>
+                                    <div className="max-h-[50vh] overflow-y-auto">
+                                        <div className="border-b border-[var(--border-subtle)] px-3 py-2">
+                                            <p className="mb-1 flex justify-between text-[11px] font-semibold text-[var(--text-secondary)]"><span>Výplaty · {monthPays.length}</span><span className="text-emerald-500">+{formatValue(m.paid)}</span></p>
+                                            {monthPays.length ? monthPays.map(p => item(p.id, p.date, accountFirmKey(accountOf(p)), accountOf(p)?.name || 'Neznámý účet', `+${formatValue(p.amount)}`, 'text-emerald-500'))
+                                                : <p className="text-xs text-[var(--text-muted)]">žádná výplata</p>}
+                                        </div>
+                                        <div className="px-3 py-2">
+                                            <p className="mb-1 flex justify-between text-[11px] font-semibold text-[var(--text-secondary)]"><span>Náklady · {monthCosts.length}</span><span className="text-rose-500">−{formatValue(m.cost)}</span></p>
+                                            {monthCosts.map(e => item(e.id, e.date, expenseFirmKeys(e, firmKeys)[0], e.label, `−${formatValue(e.amount)}`, 'text-rose-500'))}
+                                        </div>
+                                    </div>
+                                    <div className="flex justify-between border-t border-[var(--border-subtle)] px-3 py-2 text-[11.5px] text-[var(--text-secondary)]">
+                                        <span>Hotovost po měsíci</span><b className={`font-mono ${m.cumulative >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{signed(m.cumulative)}</b>
+                                    </div>
+                                </div>
+                            );
+                        })()}
+                    </div>
+                </section>
+            )}
+
+            <div className="grid gap-3 lg:grid-cols-2">
+                <section className="theme-card min-w-0 overflow-hidden rounded-lg">
+                    <header className={sectionHead}>
+                        <h2 className="text-[13.5px] font-bold text-[var(--text-primary)]">Prop firmy</h2>
+                        <span className="text-xs text-[var(--text-muted)]">klikni pro detail</span>
+                    </header>
+                    {firms.length === 0 ? <p className="px-4 py-6 text-center text-xs text-[var(--text-secondary)]">Zatím žádné náklady ani výplaty.</p> : (
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-[12.5px] [&_tbody_tr:last-child_td]:border-b-0">
+                                <thead><tr>
+                                    <th className={th}>Firma</th>
+                                    <th className={`${th} text-right`}>Náklady</th>
+                                    <th className={`${th} text-right`}>Výplaty</th>
+                                    <th className={`${th} text-right`}>Čistě</th>
+                                    <th className={`${th} w-8`}><span className="sr-only">Detail</span></th>
+                                </tr></thead>
+                                <tbody>
+                                    {firms.map(f => (
+                                        <tr key={f.key} onClick={() => setFirmDetail(f.key)} className="cursor-pointer hover:bg-[var(--bg-page)]/60">
+                                            <td className={td}><span className="inline-flex items-center gap-2 font-semibold text-[var(--text-primary)]"><FirmMark firm={f.key} size={20} />{firmDisplayName(f.key)}</span></td>
+                                            <td className={`${td} text-right font-mono text-xs tabular-nums`}>{formatValue(f.cost)}</td>
+                                            <td className={`${td} text-right font-mono text-xs tabular-nums`}>{f.paid ? formatValue(f.paid) : <span className="text-[var(--text-muted)]">—</span>}</td>
+                                            <td className={`${td} text-right font-mono text-xs font-bold tabular-nums ${f.net >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{signed(f.net)}</td>
+                                            <td className={`${td} text-[var(--text-muted)]`}><ChevronRight size={14} /></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </section>
+
+                <section className="theme-card min-w-0 overflow-hidden rounded-lg">
+                    <header className={sectionHead}>
+                        <h2 className="text-[13.5px] font-bold text-[var(--text-primary)]">Výplaty</h2>
+                        <span className="text-xs text-[var(--text-muted)]">{received.length} · {formatValue(totalPaid)}</span>
+                        <div className="ml-auto">
+                            <SettingsSegment label="Zobrazení výplat" value={payoutView} onChange={setPayoutView}
+                                options={[{ value: 'gallery', label: <LayoutGrid size={13} aria-label="Galerie" />, title: 'Galerie důkazů' }, { value: 'list', label: <List size={13} aria-label="Seznam" />, title: 'Seznam' }]} />
+                        </div>
+                    </header>
+                    <div className="max-h-[460px] overflow-y-auto">
+                        {sortedPayouts.length === 0 ? (
+                            <p className="px-4 py-6 text-center text-xs text-[var(--text-secondary)]">Zatím žádná výplata.</p>
+                        ) : payoutView === 'gallery' ? (
+                            <div className="grid grid-cols-2 gap-2 p-3.5 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3">{sortedPayouts.map(p => payoutTile(p))}</div>
+                        ) : (
+                            <table className="w-full text-[12.5px] [&_tbody_tr:last-child_td]:border-b-0">
+                                <thead className="sticky top-0 z-[1] bg-[var(--bg-card)]"><tr>
+                                    <th className={th}>Datum</th><th className={th}>Účet</th><th className={`${th} text-right`}>Částka</th><th className={`${th} w-14`}>Důkaz</th>
+                                </tr></thead>
+                                <tbody>
+                                    {sortedPayouts.map(p => (
+                                        <tr key={p.id} onClick={() => setDetailPayoutId(p.id)} className="cursor-pointer hover:bg-[var(--bg-page)]/60">
+                                            <td className={`${td} text-[var(--text-secondary)]`}>{shortDate(p.date)}</td>
+                                            <td className={td}><span className="inline-flex items-center gap-2 font-semibold text-[var(--text-primary)]"><FirmMark firm={accountFirmKey(accountOf(p))} size={18} />{accountOf(p)?.name || 'Neznámý účet'}{isLegacyPayout(p) && <span className="text-[10.5px] font-medium text-[var(--text-muted)]">archiv</span>}</span></td>
+                                            <td className={`${td} text-right font-mono text-xs font-bold text-emerald-500`}>{formatValue(p.amount)}</td>
+                                            <td className={td}><span className="block h-[27px] w-9 overflow-hidden rounded border border-[var(--border-subtle)]">{p.image ? renderProof(p) : <span className="grid h-full place-items-center text-[var(--text-muted)]"><ImageIcon size={11} /></span>}</span></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
                         )}
                     </div>
+                </section>
+            </div>
 
-                    <div className={cardClass + " p-8"}>
-                        <div className="flex flex-col md:flex-row items-center justify-between gap-8">
-                            <div className="flex items-center gap-6">
-                                <div className="w-16 h-16 bg-blue-600 rounded-full flex items-center justify-center shadow-2xl shadow-blue-600/40">
-                                    <Trophy size={32} className="text-white" />
-                                </div>
-                                <div>
-                                    <h4 className={`text-lg font-semibold tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>Strategické Zaměření</h4>
-                                    <p className="text-xs text-slate-400 max-w-[400px] leading-relaxed">
-                                        Sledujete {goals.length} klíčových OKR.
-                                        {goals.length > 0 && ` Vaše průměrné plnění je ${Math.round(goals.reduce((acc, g) => acc + (g.current / g.target), 0) / (goals.length || 1) * 100)}%.`}
-                                    </p>
-                                </div>
-                            </div>
-                            <div className="flex gap-4">
-                                <div className={`px-6 py-3 rounded-2xl border text-center min-w-[120px] ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                                    <p className="text-[11px] font-semibold text-slate-500 mb-1">Celkem Cílů</p>
-                                    <p className={`text-xl font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{goals.length}</p>
-                                </div>
-                                <div className={`px-6 py-3 rounded-2xl border text-center min-w-[120px] ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)]' : 'bg-slate-50 border-slate-100'}`}>
-                                    <p className="text-[11px] font-semibold text-slate-500 mb-1">Splněno</p>
-                                    <p className={`text-xl font-black ${isDark ? 'text-emerald-500' : 'text-emerald-600'}`}>{goals.filter(g => g.current >= g.target).length}</p>
-                                </div>
-                            </div>
-                        </div>
+            <section className="theme-card overflow-hidden rounded-lg">
+                <header className={sectionHead}>
+                    <h2 className="text-[13.5px] font-bold text-[var(--text-primary)]">Náklady</h2>
+                    <span className="text-xs text-[var(--text-muted)]">{expenses.length} · {formatValue(totalCost)}</span>
+                    {expensesByMonth.length > 2 && (
+                        <button type="button" onClick={() => setOpenMonths(open.size === expensesByMonth.length ? new Set() : new Set(expensesByMonth.map(([m]) => m)))} className={`${btnGhost} ml-auto`}>
+                            {open.size === expensesByMonth.length ? 'Sbalit vše' : 'Rozbalit vše'}
+                        </button>
+                    )}
+                </header>
+                {expenses.length === 0 ? <p className="px-4 py-6 text-center text-xs text-[var(--text-secondary)]">Zatím žádné náklady.</p> : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-[12.5px]">
+                            <thead><tr>
+                                <th className={`${th} w-[90px]`}>Datum</th>
+                                <th className={th}>Popis</th>
+                                <th className={`${th} hidden sm:table-cell`}>Firma</th>
+                                <th className={`${th} hidden md:table-cell`}>Typ</th>
+                                <th className={`${th} text-right`}>Částka</th>
+                                <th className={`${th} w-10`}><span className="sr-only">Akce</span></th>
+                            </tr></thead>
+                            <tbody>
+                                {expensesByMonth.map(([month, rows]) => {
+                                    const isOpen = open.has(month);
+                                    const sum = rows.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+                                    return (
+                                        <React.Fragment key={month}>
+                                            <tr onClick={() => toggleMonth(month)} aria-expanded={isOpen} className="cursor-pointer bg-[var(--bg-page)]/50">
+                                                <td colSpan={6} className="h-9 border-b border-[var(--border-subtle)] px-4">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <span className="inline-flex items-center gap-1.5 font-semibold capitalize text-[var(--text-primary)]">
+                                                            <ChevronRight size={13} className={`text-[var(--text-muted)] transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+                                                            {month === 'bez data' ? month : monthName(month)}
+                                                            <span className="font-medium normal-case text-[var(--text-muted)]">· {rows.length} {plural(rows.length, 'položka', 'položky', 'položek')}</span>
+                                                        </span>
+                                                        <span className="font-mono text-xs font-bold text-[var(--text-primary)]">{formatValue(sum)}</span>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            {isOpen && rows.map(e => (
+                                                <tr key={e.id} className="group hover:bg-[var(--bg-page)]/60">
+                                                    <td className={`${td} text-[var(--text-secondary)]`}>{shortDate(e.date)}</td>
+                                                    <td className={`${td} text-[var(--text-primary)]`}>{e.label}</td>
+                                                    <td className={`${td} hidden sm:table-cell`}>
+                                                        <span className="inline-flex flex-wrap gap-x-2.5 gap-y-1">{expenseFirmKeys(e, firmKeys).map(k => <span key={k} className="inline-flex items-center gap-1.5 text-xs text-[var(--text-primary)]"><FirmMark firm={k} size={16} />{firmDisplayName(k)}</span>)}</span>
+                                                    </td>
+                                                    <td className={`${td} hidden text-xs text-[var(--text-secondary)] md:table-cell`}>{expenseKind(e)}</td>
+                                                    <td className={`${td} text-right font-mono text-xs font-semibold tabular-nums`}>{formatValue(e.amount)}</td>
+                                                    <td className={`${td} text-right`}>
+                                                        <button type="button" onClick={() => setItemToDelete({ id: e.id, type: 'expense' })} aria-label={`Smazat ${e.label}`} className={`inline-grid h-7 w-7 place-items-center rounded text-[var(--text-muted)] hover:text-rose-500 ${revealOnHover}`}><Trash2 size={13} /></button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </React.Fragment>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
                     </div>
-                </div>
+                )}
+            </section>
+
+            <ExpenseModal isOpen={isAddingExpense} onClose={() => setIsAddingExpense(false)} accounts={accounts}
+                onSave={(exp) => onUpdateExpenses([...expenses, exp])} />
+
+            <PayoutModal
+                isOpen={isAddingPayout || !!editingPayout}
+                onClose={() => { setIsAddingPayout(false); setEditingPayout(null); }}
+                onSave={(payout) => payouts.some(p => p.id === payout.id) ? onUpdatePayouts(payouts.map(p => p.id === payout.id ? payout : p)) : onUpdatePayouts([...payouts, payout])}
+                accounts={accounts}
+                payout={editingPayout}
+                theme={theme}
+                user={user}
+            />
+
+            {detailIndex >= 0 && (
+                <PayoutDetailModal
+                    payouts={sortedPayouts}
+                    index={detailIndex}
+                    onIndexChange={(i) => setDetailPayoutId(sortedPayouts[i]?.id ?? null)}
+                    accounts={accounts}
+                    trades={trades}
+                    theme={theme}
+                    formatValue={formatValue}
+                    onEdit={(p) => { setDetailPayoutId(null); setEditingPayout(p); }}
+                    onDelete={(p) => { setDetailPayoutId(null); setItemToDelete({ id: p.id, type: 'payout' }); }}
+                    onClose={() => setDetailPayoutId(null)}
+                />
             )}
 
-            {isAddingExpense && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-300">
-                    <div className={`w-full max-w-md p-8 rounded-[32px] border shadow-2xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
-                        <div className="flex justify-between items-center mb-6">
-                            <h3 className="text-xl font-bold tracking-tight">Přidat náklad</h3>
-                            <button onClick={() => setIsAddingExpense(false)} className="p-2 text-slate-500 hover:text-white transition-all"><X size={20} /></button>
-                        </div>
-
-                        <div className="space-y-6">
-                            <div className="space-y-2">
-                                <label className="text-[11px] font-semibold text-slate-500">Popis nákladu</label>
-                                <input
-                                    type="text" value={newExpense.label}
-                                    onChange={(e) => setNewExpense({ ...newExpense, label: e.target.value })}
-                                    className={inputClass} placeholder="např. Předplatné TradingView"
-                                />
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <label className="text-[11px] font-semibold text-slate-500">Částka (USD)</label>
-                                    <input
-                                        type="number" value={newExpense.amount}
-                                        onChange={(e) => setNewExpense({ ...newExpense, amount: Number(e.target.value) })}
-                                        className={inputClass}
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-[11px] font-semibold text-slate-500">Kategorie</label>
-                                    <select
-                                        value={newExpense.category}
-                                        onChange={(e) => setNewExpense({ ...newExpense, category: e.target.value as any })}
-                                        className={inputClass}
-                                    >
-                                        <option value="Software">Software</option>
-                                        <option value="Education">Vzdělávání</option>
-                                        <option value="Hardware">Hardware</option>
-                                        <option value="Taxes">Daně</option>
-                                        <option value="Challenges">Challenges</option>
-                                        <option value="Other">Ostatní</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <label className="text-[11px] font-semibold text-slate-500">Frekvence</label>
-                                    <select
-                                        value={newExpense.recurring}
-                                        onChange={(e) => setNewExpense({ ...newExpense, recurring: e.target.value as any })}
-                                        className={inputClass}
-                                    >
-                                        <option value="monthly">Měsíčně</option>
-                                        <option value="yearly">Ročně</option>
-                                        <option value="once">Jednorázově</option>
-                                    </select>
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-[11px] font-semibold text-slate-500">Datum</label>
-                                    <input
-                                        type="date" value={newExpense.date}
-                                        onChange={(e) => setNewExpense({ ...newExpense, date: e.target.value })}
-                                        className={inputClass}
-                                    />
-                                </div>
-                            </div>
-
-                            <button
-                                onClick={handleAddExpense}
-                                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-semibold text-xs transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]"
-                            >
-                                Uložit náklad
-                            </button>
-                        </div>
-                    </div>
-                </div>
+            {firmDetail && (
+                <FirmDetailModal
+                    summary={firms.find(f => f.key === firmDetail)}
+                    expenses={expenses.filter(e => expenseFirmKeys(e, firmKeys).includes(firmDetail))}
+                    payouts={sortedPayouts.filter(p => isReceived(p) && accountFirmKey(accountOf(p)) === firmDetail)}
+                    accountOf={accountOf}
+                    formatValue={formatValue}
+                    signed={signed}
+                    firmKeys={firmKeys}
+                    renderTile={(p) => payoutTile(p, () => { setFirmDetail(null); setDetailPayoutId(p.id); })}
+                    onClose={() => setFirmDetail(null)}
+                />
             )}
 
-            {isAddingGoal && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-300">
-                    <div className={`w-full max-w-md p-8 rounded-[32px] border shadow-2xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
-                        <div className="flex justify-between items-center mb-6">
-                            <h3 className="text-xl font-bold tracking-tight">Nový cíl</h3>
-                            <button onClick={() => setIsAddingGoal(false)} className="p-2 text-slate-500 hover:text-white transition-all"><X size={20} /></button>
-                        </div>
-
-                        <div className="space-y-6">
-                            <div className="space-y-2">
-                                <label className="text-[11px] font-semibold text-slate-500">Název Cíle</label>
-                                <input
-                                    type="text" value={newGoal.label}
-                                    onChange={(e) => setNewGoal({ ...newGoal, label: e.target.value })}
-                                    className={inputClass} placeholder="např. Měsíční PnL Cíl"
-                                />
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <label className="text-[11px] font-semibold text-slate-500">Typ</label>
-                                    <select
-                                        value={newGoal.type}
-                                        onChange={(e) => setNewGoal({ ...newGoal, type: e.target.value as any })}
-                                        className={inputClass}
-                                    >
-                                        <option value="Monthly">Měsíční</option>
-                                        <option value="Yearly">Roční</option>
-                                        <option value="Count">Počet</option>
-                                        <option value="Other">Ostatní</option>
-                                    </select>
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-[11px] font-semibold text-slate-500">Kategorie</label>
-                                    <select
-                                        value={newGoal.category}
-                                        onChange={(e) => setNewGoal({ ...newGoal, category: e.target.value as any })}
-                                        className={inputClass}
-                                    >
-                                        <option value="Financial">Finanční</option>
-                                        <option value="Psychology">Psychologie</option>
-                                        <option value="Technical">Technické</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <label className="text-[11px] font-semibold text-slate-500">Cílová Hodnota</label>
-                                    <input
-                                        type="number" value={newGoal.target}
-                                        onChange={(e) => setNewGoal({ ...newGoal, target: Number(e.target.value) })}
-                                        className={inputClass}
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-[11px] font-semibold text-slate-500">Termín</label>
-                                    <input
-                                        type="date" value={newGoal.deadline}
-                                        onChange={(e) => setNewGoal({ ...newGoal, deadline: e.target.value })}
-                                        className={inputClass}
-                                    />
-                                </div>
-                            </div>
-
-                            <button
-                                onClick={handleAddGoal}
-                                className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-semibold text-xs transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]"
-                            >
-                                Nastavit Cíl
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-            {/* Confirmation Modal */}
             <ConfirmationModal
                 isOpen={!!itemToDelete}
                 onClose={() => setItemToDelete(null)}
@@ -1029,21 +455,86 @@ const BusinessHub: React.FC<BusinessHubProps> = ({
                     if (!itemToDelete) return;
                     if (itemToDelete.type === 'expense') onUpdateExpenses(expenses.filter(x => x.id !== itemToDelete.id));
                     if (itemToDelete.type === 'payout') onUpdatePayouts(payouts.filter(x => x.id !== itemToDelete.id));
-                    if (itemToDelete.type === 'goal') onUpdateGoals(goals.filter(x => x.id !== itemToDelete.id));
-                    if (itemToDelete.type === 'playbook') onUpdatePlaybook(playbook.filter(x => x.id !== itemToDelete.id));
-                    if (itemToDelete.type === 'resource') onUpdateResources(resources.filter(x => x.id !== itemToDelete.id));
                 }}
-                title={
-                    itemToDelete?.type === 'expense' ? 'Smazat výdaj' :
-                        itemToDelete?.type === 'payout' ? 'Smazat výplatu' :
-                            itemToDelete?.type === 'goal' ? 'Smazat cíl' :
-                                itemToDelete?.type === 'playbook' ? 'Smazat položku' : 'Smazat zdroj'
-                }
+                title={itemToDelete?.type === 'expense' ? 'Smazat náklad' : 'Smazat výplatu'}
                 message="Opravdu chcete tuto položku trvale odstranit? Tato akce je nevratná."
                 theme={theme}
             />
         </div>
     );
 };
+
+/** Detail prop firmy: souhrn, důkazy výplat a historie nákupů a výplat. */
+function FirmDetailModal({ summary, expenses, payouts, accountOf, formatValue, signed, firmKeys, renderTile, onClose }: {
+    summary?: FirmSummary;
+    expenses: BusinessExpense[];
+    payouts: BusinessPayout[];
+    accountOf: (p: BusinessPayout) => Account | undefined;
+    formatValue: (v: number) => string;
+    signed: (v: number) => string;
+    firmKeys: string[];
+    renderTile: (p: BusinessPayout) => React.ReactNode;
+    onClose: () => void;
+}) {
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [onClose]);
+    if (!summary) return null;
+    const roi = summary.cost > 0 ? Math.round((summary.paid / summary.cost) * 100) : null;
+    const accountsBought = expenses.reduce((s, e) => s + accountCountInLabel(e.label), 0);
+    const events = [
+        ...expenses.map(e => ({ id: e.id, date: e.date, kind: 'cost' as const, text: e.label, value: -(Number(e.amount) || 0) / expenseFirmKeys(e, firmKeys).length })),
+        ...payouts.map(p => ({ id: p.id, date: p.date, kind: 'payout' as const, text: accountOf(p)?.name || 'Neznámý účet', value: Number(p.amount) || 0 })),
+    ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const stat = (label: string, value: React.ReactNode, tone = 'text-[var(--text-primary)]') => (
+        <div className="min-w-0 px-3 py-2.5"><p className="text-[11px] font-semibold text-[var(--text-secondary)]">{label}</p><p className={`mt-0.5 font-mono text-base font-bold ${tone}`}>{value}</p></div>
+    );
+
+    return createPortal(
+        <div className="fixed inset-0 z-[200] flex items-start justify-center overflow-y-auto bg-black/50 p-4 pt-[6vh]" onMouseDown={onClose}>
+            <div role="dialog" aria-modal="true" aria-label={firmDisplayName(summary.key)} className="glass-modal w-full max-w-[760px] overflow-hidden" onMouseDown={e => e.stopPropagation()}>
+                <header className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-4 py-3">
+                    <FirmMark firm={summary.key} size={36} />
+                    <div className="min-w-0">
+                        <h2 className="text-[15px] font-bold text-[var(--text-primary)]">{firmDisplayName(summary.key)}</h2>
+                        <p className="text-xs text-[var(--text-secondary)]">{summary.purchases} {plural(summary.purchases, 'nákup', 'nákupy', 'nákupů')} · {summary.payouts} {plural(summary.payouts, 'výplata', 'výplaty', 'výplat')} · ~{accountsBought} {plural(accountsBought, 'účet', 'účty', 'účtů')}</p>
+                    </div>
+                    <button type="button" onClick={onClose} aria-label="Zavřít" className={`${btnGhost} ml-auto w-[30px] px-0`}><X size={16} /></button>
+                </header>
+                <div className="grid gap-3.5 px-4 py-3.5">
+                    <div className="grid grid-cols-2 overflow-hidden rounded-md border border-[var(--border-subtle)] sm:grid-cols-4 [&>div:nth-child(2)]:border-l [&>div:nth-child(4)]:border-l [&>div:nth-child(n+3)]:border-t sm:[&>div:nth-child(3)]:border-l sm:[&>div:nth-child(n+3)]:border-t-0 [&>div]:border-[var(--border-subtle)]">
+                        {stat('Náklady', formatValue(summary.cost))}
+                        {stat('Výplaty', formatValue(summary.paid), 'text-emerald-500')}
+                        {stat('Čistě', signed(summary.net), summary.net >= 0 ? 'text-emerald-500' : 'text-rose-500')}
+                        {stat('Návratnost', roi == null ? '—' : `${roi} %`, roi == null ? 'text-[var(--text-muted)]' : roi >= 100 ? 'text-emerald-500' : 'text-rose-500')}
+                    </div>
+                    <div className="grid gap-1.5">
+                        <p className="text-[11.5px] font-semibold text-[var(--text-secondary)]">Důkazy výplat</p>
+                        {payouts.length ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{payouts.map(p => renderTile(p))}</div>
+                            : <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-3 text-xs text-[var(--text-secondary)]">Od {firmDisplayName(summary.key)} zatím žádná výplata.</p>}
+                    </div>
+                    <div className="grid gap-1.5">
+                        <p className="text-[11.5px] font-semibold text-[var(--text-secondary)]">Historie</p>
+                        <div className="max-h-[320px] overflow-y-auto">
+                            {events.map(ev => (
+                                <div key={`${ev.kind}-${ev.id}`} className="grid grid-cols-[52px_1fr_auto] items-center gap-2.5 border-b border-[var(--border-subtle)] py-2 text-[12.5px] last:border-b-0">
+                                    <span className="font-mono text-[11.5px] text-[var(--text-muted)]">{shortDate(ev.date)}</span>
+                                    <span className="min-w-0 truncate text-[var(--text-primary)]">
+                                        <span className={`mr-1.5 inline-block rounded px-1.5 text-[10.5px] font-semibold ${ev.kind === 'payout' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>{ev.kind === 'payout' ? 'výplata' : 'nákup'}</span>
+                                        {ev.text}
+                                    </span>
+                                    <span className={`font-mono text-xs font-bold ${ev.value >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>{signed(ev.value)}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>,
+        document.body,
+    );
+}
 
 export default BusinessHub;

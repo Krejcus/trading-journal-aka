@@ -1,8 +1,10 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Maximize2, MoreHorizontal, Pencil, Trash2, Trophy, X } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowLeft, ArrowRight, Pencil, Trash2, Trophy, X } from 'lucide-react';
 import { Account, BusinessPayout, Trade } from '../types';
-import { FIRM_LOGOS, firmInitials, firmOf } from '../utils/accountFirm';
 import ImageZoomModal from './ImageZoomModal';
+import FirmMark from './FirmMark';
+import { accountFirmKey, firmDisplayName } from '../lib/businessFirms';
+import { btn, btnDanger, btnGhost } from './SettingsUi';
 
 interface PayoutDetailModalProps {
     /** Výplaty ve stejném pořadí jako v seznamu — šipky se pohybují po tomto poli. */
@@ -67,11 +69,17 @@ const formatFullDate = (dateStr: string) => {
 };
 
 const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
-    payouts, index, onIndexChange, accounts, trades, theme, formatValue, onEdit, onDelete, onClose, readOnly = false,
+    payouts, index, onIndexChange, accounts, trades, formatValue, onEdit, onDelete, onClose, readOnly = false,
 }) => {
-    const isDark = theme !== 'light';
     const [zoomOpen, setZoomOpen] = useState(false);
-    const [actionsOpen, setActionsOpen] = useState(false);
+    // Posun obrázku: při listování odjede do strany a nový přijede z druhé;
+    // při tažení prstem/myší jde s ním.
+    const [offset, setOffset] = useState(0);
+    const [fade, setFade] = useState(1);
+    const [animating, setAnimating] = useState(false);
+    const busy = useRef(false);
+    const boxRef = useRef<HTMLDivElement>(null);
+    const drag = useRef<{ x0: number; dx: number; moved: boolean } | null>(null);
 
     const payout = payouts[index];
     const hasPrev = index > 0;
@@ -81,11 +89,22 @@ const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
         .filter((item): item is { payoutIndex: number; image: string } => Boolean(item.image));
     const zoomImageIndex = zoomPayouts.findIndex(item => item.payoutIndex === index);
 
-    const go = useCallback((dir: 1 | -1) => {
+    const snapBack = () => { setAnimating(true); setOffset(0); setFade(1); };
+    const slide = useCallback((dir: 1 | -1) => {
+        if (busy.current) return;
         const next = index + dir;
-        if (next < 0 || next >= payouts.length) return;
+        if (next < 0 || next >= payouts.length) { snapBack(); return; }
+        busy.current = true;
+        const width = boxRef.current?.clientWidth || 400;
         setZoomOpen(false);
-        onIndexChange(next);
+        setAnimating(true); setOffset(-dir * width * 0.6); setFade(0);
+        window.setTimeout(() => {
+            setAnimating(false); onIndexChange(next); setOffset(dir * width * 0.6);
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                setAnimating(true); setOffset(0); setFade(1);
+                window.setTimeout(() => { busy.current = false; }, 230);
+            }));
+        }, 200);
     }, [index, payouts.length, onIndexChange]);
 
     // Klávesnice: šipky listují, ESC zavírá. Když je otevřený zoom, ovládá si
@@ -94,20 +113,17 @@ const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
         if (zoomOpen) return;
         const onKey = (e: KeyboardEvent) => {
             if (e.key === 'Escape') { onClose(); return; }
-            if (e.key === 'ArrowRight') go(1);
-            if (e.key === 'ArrowLeft') go(-1);
+            if (e.key === 'ArrowRight') slide(1);
+            if (e.key === 'ArrowLeft') slide(-1);
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [zoomOpen, go, onClose]);
-
-    useEffect(() => setActionsOpen(false), [index]);
+    }, [zoomOpen, slide, onClose]);
 
     if (!payout) return null;
 
     const acc = accounts.find(a => a.id === payout.accountId);
-    const firm = acc ? firmOf(acc) : '';
-    const logo = firm ? FIRM_LOGOS[firm] : undefined;
+    const firm = accountFirmKey(acc);
     const legacy = isLegacyPayout(payout);
     const gross = payout.grossAmount || payout.amount;
     const split = payout.profitSplitUsed || 0;
@@ -134,136 +150,99 @@ const PayoutDetailModal: React.FC<PayoutDetailModalProps> = ({
         }
         : null;
 
-    const navBtn =`p-2 rounded-xl transition-all disabled:opacity-20 disabled:cursor-not-allowed ${isDark ? 'hover:bg-white/10 text-white' : 'hover:bg-slate-100 text-slate-900'}`;
+    const onPointerDown = (e: React.PointerEvent) => {
+        if (busy.current) return;
+        drag.current = { x0: e.clientX, dx: 0, moved: false };
+        setAnimating(false);
+        (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    };
+    const onPointerMove = (e: React.PointerEvent) => {
+        const d = drag.current; if (!d) return;
+        d.dx = e.clientX - d.x0;
+        if (Math.abs(d.dx) > 4) d.moved = true;
+        if (!d.moved) return;
+        setOffset(d.dx); setFade(Math.max(0.35, 1 - Math.abs(d.dx) / 500));
+    };
+    const onPointerUp = () => {
+        const d = drag.current; drag.current = null; if (!d) return;
+        if (!d.moved) { if (payout.image) setZoomOpen(true); return; }
+        if (Math.abs(d.dx) > 60) slide(d.dx < 0 ? 1 : -1); else snapBack();
+    };
 
-    const Stat: React.FC<{ label: string; value: React.ReactNode; accent?: string; hint?: string }> = ({ label, value, accent, hint }) => (
-        <div className={`px-4 py-3 rounded-2xl border bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
-            <p className="text-[11px] font-semibold text-slate-500">{label}</p>
-            <p className={`mt-1 text-sm font-mono font-black ${accent || (isDark ? 'text-white' : 'text-slate-900')}`}>{value}</p>
-            {hint && <p className="mt-0.5 text-[9px] font-bold text-slate-500 truncate">{hint}</p>}
+    const Row: React.FC<{ label: string; children: React.ReactNode; hint?: string }> = ({ label, children, hint }) => (
+        <div className="flex items-start justify-between gap-3 border-b border-[var(--border-subtle)] py-2 text-[12.5px] last:border-b-0">
+            <dt className="text-[var(--text-secondary)]">{label}</dt>
+            <dd className="text-right font-semibold text-[var(--text-primary)]">{children}{hint && <span className="block text-[11px] font-normal text-[var(--text-muted)]">{hint}</span>}</dd>
         </div>
     );
 
     return (
         <>
-            <div
-                className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-200"
-                onClick={onClose}
-            >
+            <div className="fixed inset-0 z-[200] flex items-center justify-center overflow-y-auto bg-black/50 p-4" onClick={onClose}>
                 <div
+                    role="dialog" aria-modal="true" aria-label="Detail výplaty"
                     onClick={(e) => e.stopPropagation()}
-                    className={`w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-[32px] border shadow-2xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}
+                    className="glass-modal grid max-h-[92vh] w-full max-w-[calc(100vw-32px)] gap-2.5 overflow-y-auto p-2.5 sm:w-auto lg:grid-cols-[auto_270px]"
                 >
-                    {/* Hlavička: identita výplaty + listování */}
-                    <div className={`sticky top-0 z-10 flex items-center gap-4 px-6 py-5 border-b backdrop-blur-xl bg-[var(--bg-card)] border-[var(--border-subtle)]`}>
-                        <div className={`w-11 h-11 shrink-0 rounded-2xl border overflow-hidden flex items-center justify-center bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
-                            {logo
-                                ? <img src={logo} alt={firm} className="w-full h-full object-contain p-1.5" />
-                                : <span className="text-[10px] font-black text-slate-500">{firmInitials(firm || '?')}</span>}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                            <p className={`text-sm font-black truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>{acc?.name || 'Neznámý účet'}</p>
-                            <p className="text-[11px] font-bold text-slate-500 italic">{formatFullDate(payout.date)}</p>
-                        </div>
-
-                        <div className="flex items-center gap-1">
-                            <button onClick={() => go(-1)} disabled={!hasPrev} aria-label="Předchozí výplata" className={navBtn}><ChevronLeft size={18} /></button>
-                            <span className="min-w-[52px] text-center text-[10px] font-black tabular-nums text-slate-500">{index + 1} / {payouts.length}</span>
-                            <button onClick={() => go(1)} disabled={!hasNext} aria-label="Další výplata" className={navBtn}><ChevronRight size={18} /></button>
-                            {!legacy && !readOnly && (
-                                <div className="relative ml-1">
-                                    <button
-                                        onClick={() => setActionsOpen(open => !open)}
-                                        aria-label="Akce výplaty"
-                                        aria-expanded={actionsOpen}
-                                        className={navBtn}
-                                    >
-                                        <MoreHorizontal size={19} />
-                                    </button>
-                                    {actionsOpen && (
-                                        <div className={`absolute right-0 top-full z-30 mt-2 w-44 overflow-hidden rounded-2xl border p-1.5 shadow-2xl border-[var(--border-subtle)] bg-[var(--bg-card)]`}>
-                                            <button
-                                                onClick={() => { setActionsOpen(false); onEdit(payout); }}
-                                                className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-[11px] font-semibold transition-colors ${isDark ? 'text-slate-200 hover:bg-white/10' : 'text-slate-700 hover:bg-slate-100'}`}
-                                            >
-                                                <Pencil size={14} /> Upravit
-                                            </button>
-                                            <button
-                                                onClick={() => { setActionsOpen(false); onDelete(payout); }}
-                                                className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-[11px] font-semibold text-rose-500 transition-colors hover:bg-rose-500/10"
-                                            >
-                                                <Trash2 size={14} /> Smazat
-                                            </button>
-                                        </div>
-                                    )}
+                    <div
+                        ref={boxRef}
+                        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
+                        className="relative grid cursor-grab touch-pan-y select-none place-items-center overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--text-primary)]/[0.04] active:cursor-grabbing"
+                        title={payout.image ? 'Klikni pro zvětšení · táhni pro další výplatu' : 'Táhni pro další výplatu'}
+                    >
+                        <div className={`payout-slide ${animating ? 'is-animating' : ''}`} style={{ transform: `translateX(${offset}px)`, opacity: fade }}>
+                            {payout.image ? (
+                                <img src={payout.image} alt="Důkaz výplaty" draggable={false} className="block max-h-[76vh] w-auto max-w-full lg:max-w-[640px]" />
+                            ) : (
+                                <div className="flex h-[260px] w-[min(420px,calc(100vw-64px))] flex-col items-center justify-center gap-2 text-[var(--text-muted)]">
+                                    <Trophy size={22} className="opacity-50" />
+                                    <span className="text-xs font-semibold">Bez důkazu</span>
                                 </div>
                             )}
-                            <button onClick={onClose} aria-label="Zavřít" className="ml-1 p-2 text-slate-500 hover:text-rose-500 transition-all"><X size={20} /></button>
                         </div>
                     </div>
 
-                    <div className="grid gap-5 p-5 sm:p-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)] lg:items-start">
-                        {/* Důkaz je na desktopu hlavní vizuál, na mobilu následuje až po souhrnu. */}
-                        <div className="order-2 space-y-2 lg:order-1">
-                            <p className="text-[11px] font-semibold text-slate-500">Důkaz výplaty</p>
-                            {payout.image ? (
-                                <button
-                                    onClick={() => setZoomOpen(true)}
-                                    className={`group relative flex min-h-64 w-full items-center justify-center overflow-hidden rounded-3xl border transition-all hover:border-blue-500/50 lg:min-h-[430px] border-[var(--border-subtle)] bg-[var(--bg-page)]`}
-                                >
-                                    <img src={payout.image} alt="Důkaz výplaty" className="max-h-[430px] w-full object-contain" />
-                                    <span className="absolute inset-0 flex items-center justify-center gap-2 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity text-white text-[11px] font-semibold">
-                                        <Maximize2 size={14} /> Zvětšit
-                                    </span>
-                                </button>
-                            ) : (
-                                <div className={`flex flex-col items-center justify-center gap-2 py-10 rounded-2xl border border-dashed ${isDark ? 'border-white/10 text-slate-600' : 'border-slate-200 text-slate-400'}`}>
-                                    <Trophy size={22} className="opacity-40" />
-                                    <span className="text-[11px] font-semibold">Bez důkazu</span>
-                                </div>
-                            )}
-                        </div>
-
-                        <div className="order-1 space-y-4 lg:order-2">
-                            {/* Čistá výplata — hlavní číslo */}
-                            <div className={`px-5 py-5 rounded-3xl border text-center ${isDark ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-emerald-50 border-emerald-200'}`}>
-                                <p className="text-[11px] font-semibold text-emerald-500">Čistá výplata</p>
-                                <p className="mt-1 text-3xl font-black font-mono tracking-tighter text-emerald-500">{formatValue(payout.amount)}</p>
+                    <div className="flex min-w-0 flex-col px-1.5 pb-1 pt-1.5 lg:w-[270px]">
+                        <div className="flex items-start justify-between gap-2 border-b border-[var(--border-subtle)] pb-3">
+                            <div key={payout.id} className="animate-in fade-in duration-200">
+                                <p className="text-[11.5px] font-semibold text-[var(--text-secondary)]">Výplata {index + 1} z {payouts.length}</p>
+                                <p className="mt-0.5 font-mono text-[26px] font-extrabold leading-tight text-emerald-500">{formatValue(payout.amount)}</p>
                                 {payoutProgress && (
-                                    <p className="mt-1 text-[11px] font-semibold text-emerald-600/70">
-                                        {payoutProgress.number}. výplata z účtu · celkem {formatValue(payoutProgress.cumulative)}
-                                    </p>
+                                    <p className="text-[11.5px] text-[var(--text-secondary)]">{payoutProgress.number}. výplata z účtu · celkem {formatValue(payoutProgress.cumulative)}</p>
                                 )}
                             </div>
+                            <button type="button" onClick={onClose} aria-label="Zavřít" className={`${btnGhost} w-[30px] px-0`}><X size={16} /></button>
+                        </div>
 
-                            <div className="grid grid-cols-2 gap-3">
-                                <Stat label="Hrubý zisk" value={formatValue(gross)} />
-                                <Stat label="Profit split" value={split ? `${split} %` : '—'} />
-                                <Stat
-                                    label="Obchodních dní"
-                                    value={run && run.days > 0 ? run.days : '—'}
-                                    hint={runHint}
-                                />
-                                <Stat
-                                    label="Obchodů"
-                                    value={run && run.tradeCount > 0 ? run.tradeCount : '—'}
-                                    hint={run?.from ? 'od předchozí výplaty' : 'od prvního obchodu'}
-                                />
-                            </div>
+                        <dl key={`meta-${payout.id}`} className="animate-in fade-in duration-200">
+                            <Row label="Účet"><span className="inline-flex items-center gap-2"><FirmMark firm={firm} size={18} />{acc?.name || 'Neznámý účet'}</span></Row>
+                            <Row label="Firma">{firmDisplayName(firm)}</Row>
+                            <Row label="Datum">{formatFullDate(payout.date)}</Row>
+                            <Row label="Hrubý zisk">{formatValue(gross)}</Row>
+                            <Row label="Profit split">{split ? `${split} %` : '—'}</Row>
+                            <Row label="Obchodních dní" hint={runHint}>{run && run.days > 0 ? run.days : '—'}</Row>
+                            <Row label="Obchodů" hint={run?.from ? 'od předchozí výplaty' : 'od prvního obchodu'}>{run && run.tradeCount > 0 ? run.tradeCount : '—'}</Row>
+                        </dl>
+                        {payout.notes && (
+                            <p className="mt-2 whitespace-pre-wrap rounded-md border border-[var(--border-subtle)] bg-[var(--bg-page)]/60 px-3 py-2 text-xs leading-relaxed text-[var(--text-primary)]">{payout.notes}</p>
+                        )}
+                        {legacy && <p className="mt-2 text-center text-[11.5px] text-[var(--text-muted)]">Archivovaná výplata — nelze upravovat</p>}
 
-                            {payout.notes && (
-                                <div className="space-y-2">
-                                    <p className="text-[11px] font-semibold text-slate-500">Poznámky</p>
-                                    <p className={`px-4 py-3 rounded-2xl border text-xs font-bold leading-relaxed whitespace-pre-wrap ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-300' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] text-slate-700'}`}>
-                                        {payout.notes}
-                                    </p>
+                        <div className="mt-auto grid gap-1.5 pt-3">
+                            {!legacy && !readOnly && (
+                                <div className="flex gap-1.5">
+                                    <button type="button" onClick={() => onEdit(payout)} className={`${btnGhost} flex-1`}><Pencil size={13} /> Upravit</button>
+                                    <button type="button" onClick={() => onDelete(payout)} className={`${btnDanger} flex-1`}><Trash2 size={13} /> Smazat</button>
                                 </div>
                             )}
-
-                            {legacy && (
-                                <p className="text-center text-[11px] font-semibold text-slate-500">
-                                    Archivovaná výplata — nelze upravovat
-                                </p>
+                            <div className="flex gap-1.5">
+                                <button type="button" onClick={() => slide(-1)} disabled={!hasPrev} className={`${btn} flex-1`}><ArrowLeft size={13} /> Předchozí</button>
+                                <button type="button" onClick={() => slide(1)} disabled={!hasNext} className={`${btn} flex-1`}>Další <ArrowRight size={13} /></button>
+                            </div>
+                            {payouts.length > 1 && payouts.length <= 24 && (
+                                <div className="flex justify-center gap-1 pt-1" aria-hidden="true">
+                                    {payouts.map((item, i) => <i key={item.id} className={`h-[5px] rounded-full transition-all ${i === index ? 'w-3.5 bg-indigo-500' : 'w-[5px] bg-[var(--border-subtle)]'}`} />)}
+                                </div>
                             )}
                         </div>
                     </div>

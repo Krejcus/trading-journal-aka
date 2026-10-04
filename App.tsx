@@ -124,8 +124,6 @@ import {
   Clock,
   Calendar,
   History,
-  DollarSign,
-  Target,
   Trophy,
   MessageSquare,
   Activity,
@@ -4012,7 +4010,7 @@ const App: React.FC = () => {
               {activePage === 'settings' && 'Nastavení'}
               {activePage === 'network' && 'Síť'}
               {activePage === 'live' && 'LIVE'}
-              {activePage === 'business' && 'Business Hub'}
+              {activePage === 'business' && 'Byznys'}
               {activePage === 'ai' && 'AI Coach'}
             </h2>
           </div>
@@ -4033,34 +4031,6 @@ const App: React.FC = () => {
                     {journalActiveTab === tab.id && (
                       <motion.div
                         layoutId="activeJournalTab"
-                        className={`absolute inset-0 rounded-lg shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
-                        transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
-                      />
-                    )}
-                    <span className="relative z-10 flex items-center gap-2">
-                      <tab.icon size={14} /> {tab.label}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {activePage === 'business' && (
-            <div className="hidden md:flex flex-1 justify-center relative z-10">
-              <div className="p-1 rounded-lg border flex gap-1 bg-[var(--bg-card)]/40 border-[var(--border-subtle)] backdrop-blur-md shadow-sm">
-                {[
-                  { id: 'financials', label: 'Finance', icon: DollarSign },
-                  { id: 'goals', label: 'Cíle', icon: Target }
-                ].map(tab => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setBusinessActiveTab(tab.id as any)}
-                    className={`relative flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${businessActiveTab === tab.id ? (theme !== 'light' ? 'text-white' : 'text-slate-900') : (theme !== 'light' ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')}`}
-                  >
-                    {businessActiveTab === tab.id && (
-                      <motion.div
-                        layoutId="activeBusinessTab"
                         className={`absolute inset-0 rounded-lg shadow-sm z-0 ${theme !== 'light' ? 'bg-slate-700/50' : 'bg-white border border-slate-200/60'}`}
                         transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                       />
