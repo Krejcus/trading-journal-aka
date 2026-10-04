@@ -16,12 +16,17 @@ const workerConnectionIds = (
   status: LocalCopierAgentStatus | null | undefined,
 ): Set<string> | null => {
   if (!status) return null;
+  // Propfirmy, které si spárovaný Mac načetl sám (owner scope, 4. 10. 2026).
+  const discovered = status.connectionDiscovery?.loadedConnectionIds ?? [];
   // `devices` is the installed manifest. An explicitly empty array is useful
   // evidence too: this worker has no loaded execution connection.
   if (Array.isArray(status.devices)) {
-    return new Set(status.devices
-      .filter(device => device.state === 'paired')
-      .map(device => device.connectionId));
+    return new Set([
+      ...status.devices
+        .filter(device => device.state === 'paired')
+        .map(device => device.connectionId),
+      ...discovered,
+    ]);
   }
   if (status.device) {
     return new Set(status.device.state === 'paired' ? [status.device.connectionId] : []);

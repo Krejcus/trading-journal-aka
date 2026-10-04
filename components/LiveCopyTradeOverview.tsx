@@ -63,6 +63,7 @@ import { copyTradeDailyLossPendingAccountIds, effectiveCopyTradeAccountEligibili
 import { readRetainedEligibility, resolveDisplayEligibility, writeRetainedEligibility } from '../lib/retainedEligibilityDisplay';
 import { stabilizeCopyGroups } from '../lib/stabilizeCopyGroups';
 import { copierCommandAllowedWithoutFreshStatus } from '../lib/copierSafetyControls';
+import type { CopierConnectionDiscoveryStatus } from '../lib/localCopierAgentProtocol';
 import { useCompactViewport } from '../utils/useCompactViewport';
 import { FIRM_LOGOS, firmColor, firmInitials } from '../utils/accountFirm';
 import {
@@ -482,6 +483,10 @@ interface Props {
   runtimeGroup?: CopyGroupConfig | null;
   /** Čerstvé spojení OAuth adresáře s manifestem Mac workeru; jen UI precheck. */
   workerAccountRoutes?: CopierWorkerAccountRoutes;
+  /** Načítání nových propfirem spárovaným Macem (4. 10. 2026); null = neověřeno. */
+  workerDiscovery?: CopierConnectionDiscoveryStatus | null;
+  /** Výslovný souhlas: Mac smí načítat všechny propfirmy vlastníka. */
+  onGrantWorkerOwnerScope?: () => Promise<void>;
   onGroupsChange?: (groups: CopyGroupConfig[]) => void;
 }
 
@@ -778,6 +783,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
   executionGroupId = null,
   runtimeGroup = null,
   workerAccountRoutes,
+  workerDiscovery = null,
+  onGrantWorkerOwnerScope,
   marketPrices = [],
   onGroupsChange,
 }) => {
@@ -2309,6 +2316,8 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           armedWarning={copierArmed && editorGroup.id === executionGroupId}
           accounts={snapshot.accounts}
           workerAccountRoutes={workerAccountRoutes}
+          workerDiscovery={workerDiscovery}
+          onGrantWorkerOwnerScope={onGrantWorkerOwnerScope}
           accountLabel={(accountId, role) => accountLabel(accountId, editorGroup.id, role)}
           onClose={() => setEditorGroup(null)}
           onSave={(group, onError) => saveGroup(group, message => onError(copyGroupLibraryErrorMessage(new Error(message))))}
@@ -5303,7 +5312,53 @@ export const CopierWorkerRouteBadge = ({ route }: { route: CopierWorkerAccountRo
   ) : null
 );
 
-export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLocked = false, armedWarning = false, accounts, workerAccountRoutes, accountLabel, saving, libraryState, libraryError, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
+/**
+ * Účty z propfirmy, kterou Mac worker ještě nemá (4. 10. 2026). Bez CLI:
+ * jednorázový souhlas dovolí spárovanému Macu načítat všechny propfirmy
+ * vlastníka; worker je pak načte sám po nejbližším bezpečném restartu.
+ */
+export const WorkerDiscoveryNotice = ({ discovery, missingAccounts, onGrant }: {
+  discovery: CopierConnectionDiscoveryStatus | null;
+  missingAccounts: number;
+  onGrant?: () => Promise<void>;
+}) => {
+  const [state, setState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
+  const [error, setError] = useState<string | null>(null);
+  const scope = discovery?.scope ?? null;
+  const pending = (discovery?.pendingConnectionIds.length ?? 0) > 0;
+  const text = scope === 'owner' || state === 'done'
+    ? pending
+      ? 'Mac worker nové propfirmy načte sám, jakmile bude kopírka vypnutá a bez otevřených pozic (obvykle do minuty).'
+      : 'Mac worker nové propfirmy načítá sám (kontrola každou minutu, když je kopírka vypnutá a bez otevřených pozic).'
+    : `${missingAccounts === 1 ? 'Jeden účet je' : `${missingAccounts} účtů je`} z propfirmy, kterou Mac worker zatím nenačítá. Povol Macu načítat všechny tvoje propfirmy — žádná instalace ani příkaz na Macu.`;
+  return (
+    <div role="status" className="mx-5 mb-2 flex flex-wrap items-center gap-2 rounded-md border border-indigo-500/25 bg-indigo-500/[0.06] px-3 py-2 text-[11px] font-bold text-indigo-600">
+      <span className="min-w-0 flex-1">{text}{error ? ` ${error}` : ''}</span>
+      {scope !== 'owner' && state !== 'done' && onGrant ? (
+        <button
+          type="button"
+          disabled={state === 'busy'}
+          onClick={async () => {
+            setState('busy');
+            setError(null);
+            try {
+              await onGrant();
+              setState('done');
+            } catch (reason) {
+              setState('error');
+              setError(reason instanceof Error ? `Nepodařilo se: ${reason.message}` : 'Nepodařilo se.');
+            }
+          }}
+          className="h-8 shrink-0 rounded-md bg-indigo-600 px-3 text-[11px] font-black text-white disabled:opacity-50"
+        >
+          {state === 'busy' ? 'Povoluji…' : 'Povolit Macu načítat propfirmy'}
+        </button>
+      ) : null}
+    </div>
+  );
+};
+
+export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLocked = false, armedWarning = false, accounts, workerAccountRoutes, workerDiscovery = null, onGrantWorkerOwnerScope, accountLabel, saving, libraryState, libraryError, onClose, onSave, onRemoveUnavailableFollowers, onDelete }: {
   /** Upravovaná skupina právě kopíruje: uložení ji vypne (worker odzbrojí před změnou). */
   armedWarning?: boolean;
   group: CopyGroupConfig;
@@ -5313,6 +5368,8 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLocked 
   multiplierLocked?: boolean;
   accounts: LiveAccount[];
   workerAccountRoutes?: CopierWorkerAccountRoutes;
+  workerDiscovery?: CopierConnectionDiscoveryStatus | null;
+  onGrantWorkerOwnerScope?: () => Promise<void>;
   accountLabel: (accountId: number, role?: CopyTradeAccountRole) => string;
   saving: boolean;
   libraryState: 'loading' | 'ready' | 'needs-import' | 'error';
@@ -5564,6 +5621,14 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLocked 
       ) : null}
     </>
   );
+  const missingWorkerAccountCount = accounts.filter(account => routeFor(account.id) === 'missing-worker').length;
+  const workerDiscoveryNotice = missingWorkerAccountCount > 0 ? (
+    <WorkerDiscoveryNotice
+      discovery={workerDiscovery}
+      missingAccounts={missingWorkerAccountCount}
+      onGrant={onGrantWorkerOwnerScope}
+    />
+  ) : null;
   const libraryNotice = (
     <>
     {libraryState !== 'ready' ? (
@@ -5838,6 +5903,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLocked 
             </>) : null}
           </div>
 
+          {workerDiscoveryNotice}
           {libraryNotice}
           <footer className="flex gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
             <button onClick={onClose} disabled={saving} className="h-11 w-24 shrink-0 rounded-xl border border-[var(--border-subtle)] text-[13px] font-bold text-[var(--text-secondary)]">Zrušit</button>
@@ -6036,6 +6102,7 @@ export const GroupEditorDialog = ({ group, isNew, tightenOnly, multiplierLocked 
           </div>
         </div>
 
+        {workerDiscoveryNotice}
         {libraryNotice}
         {armedWarning ? (
           <div role="status" className="mx-5 mb-2 rounded-md border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-[11px] font-bold text-amber-600">

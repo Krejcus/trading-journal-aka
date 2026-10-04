@@ -60,6 +60,7 @@ import {
   executeTradovateCopierRelayCommand,
   loadTradovateCopierRelayStatus,
   pairTradovateCopierDevice,
+  grantTradovateCopierDeviceOwnerScope,
   type TradovateOAuthStatus,
   type TradovatePreflightResult,
 } from '../services/tradovateOAuthConnection';
@@ -1316,6 +1317,12 @@ acceptAgentStatus((await executeAgent({
               executionGroupId={executionGroup?.id ?? null}
               runtimeGroup={agentStatus?.group ?? null}
               workerAccountRoutes={workerAccountRoutes}
+              workerDiscovery={agentStatusFresh ? agentStatus?.connectionDiscovery ?? null : null}
+              onGrantWorkerOwnerScope={agentStatus?.connectionDiscovery?.deviceId
+                ? async () => {
+                  await grantTradovateCopierDeviceOwnerScope(agentStatus.connectionDiscovery!.deviceId);
+                }
+                : undefined}
               onGroupsChange={setCopyGroups}
               onSwitchAndArm={armLiveGroup}
               onArmLive={executionGroup ? async () => armLiveGroup(executionGroup) : undefined}

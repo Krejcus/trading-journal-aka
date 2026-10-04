@@ -63,16 +63,15 @@ describe('group change rejection messages', () => {
       .toContain('Otevři Události');
   });
 
-  it('místo ID ukáže jméno a vysvětlí, že samotné Connections bez manifestu nestačí', () => {
+  it('místo ID ukáže jméno a poradí souhlas v editoru místo CLI (4. 10.)', () => {
     const message = formatCopierCommandError(
       new Error('Účty 67409592, 67409600 nejsou viditelné v žádném připojeném OAuth'),
       accountName,
     );
     expect(message).toContain('FundedNext 50K A, FundedNext 50K B');
     expect(message).toContain('nejsou ve Mac workeru');
-    expect(message).toContain('manifestu workeru');
-    expect(message).toContain('bezpečný reinstall');
+    expect(message).toContain('povol Macu načítat tvoje propfirmy');
+    expect(message).not.toContain('reinstall');
     expect(message).not.toContain('67409592');
-    expect(message).toContain('samotné připojení v Connections nestačí');
   });
 });

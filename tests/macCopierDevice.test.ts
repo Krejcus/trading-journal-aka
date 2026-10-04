@@ -122,7 +122,7 @@ describe('mac copier device', () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       if (String(url).endsWith('/copier-device')) {
         expect(init?.method).toBe('GET');
-        return new Response(JSON.stringify({ connections: [
+        return new Response(JSON.stringify({ scope: 'owner', connections: [
           { connectionId: deviceConnectionId }, { connectionId: otherConnectionId }, { connectionId: 'nope' },
         ] }), { status: 200 });
       }
@@ -135,7 +135,7 @@ describe('mac copier device', () => {
     });
 
     expect(await listMacCopierDeviceConnections({ config, secretStore, fetchImpl: fetchImpl as unknown as typeof fetch }))
-      .toEqual([deviceConnectionId, otherConnectionId]);
+      .toEqual({ scope: 'owner', connectionIds: [deviceConnectionId, otherConnectionId] });
 
     const provider = createMacCopierDeviceTokenProvider({
       config, connectionId: otherConnectionId, secretStore,

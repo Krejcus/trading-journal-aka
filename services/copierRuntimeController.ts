@@ -538,7 +538,7 @@ export interface CopierRuntimeController {
   noteArmPreparationInterest?(): void;
   /** Irreversibly freezes new ARM and durably clears restart-recovery exposure state. */
   beginShutdown(): Promise<void>;
-  disarm(trigger?: 'manual' | 'config-change'): void;
+  disarm(trigger?: 'manual' | 'config-change' | 'connection-removed'): void;
   /** Jednosměrná nouzová západka pro aktuální runtime session. */
   engageKillSwitch(reason?: string): void;
   /** Pilot hlásí rozdíl wall/monotonic hodin; nic nečte ani nezapisuje u brokera. */
@@ -14189,7 +14189,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           trigger,
           trigger === 'config-change'
             ? 'config-change: kopírka byla vypnuta kvůli uložení execution změny skupiny'
-            : 'Uživatel vypnul kopírku ručně',
+            : trigger === 'connection-removed'
+              ? 'OAuth připojení propfirmy bylo odpojeno; worker kopírku vypnul'
+              : 'Uživatel vypnul kopírku ručně',
           groupIsFlat() ? 'flat' : 'unknown',
         );
       }

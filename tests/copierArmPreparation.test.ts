@@ -95,10 +95,21 @@ describe('ARM preserves the session risk floor', () => {
 });
 
 describe('execution connection precheck', () => {
+
+  it('připojení načtené workerem přes souhlas (bez vlastního device) je zapojené; čekající poradí počkat', () => {
+    const conns = { lucid: { accounts: [{ id: 11 }] }, fn: { accounts: [{ id: 22 }] } };
+    const discovery = (loaded: string[], pending: string[] = []) => ({
+      scope: 'owner' as const, deviceId: 'lucid', loadedConnectionIds: loaded, pendingConnectionIds: pending, failedConnections: [],
+    });
+    const paired = { connectionId: 'lucid', state: 'paired' as const, deviceId: 'lucid', deviceName: 'Mac' };
+    expect(() => assertCopierArmConnections(group('fn', 0), { devices: [paired], connectionDiscovery: discovery(['lucid', 'fn']) }, conns)).not.toThrow();
+    expect(() => assertCopierArmConnections(group('fn', 0), { devices: [paired], connectionDiscovery: discovery(['lucid'], ['fn']) }, conns))
+      .toThrow('načte sám');
+  });
   const device = (connectionId: string) => ({ connectionId, state: 'paired' as const, deviceId: connectionId, deviceName: 'Mac' });
   const connections = { lucid: { accounts: [{ id: 11 }] }, fn: { accounts: [{ id: 22 }] } };
   it('requires a loaded paired worker route even when all accounts are OAuth-visible', () => {
-    expect(() => assertCopierArmConnections(group('fn', 0), { devices: [device('lucid')] }, connections)).toThrow('ještě není zapojené');
+    expect(() => assertCopierArmConnections(group('fn', 0), { devices: [device('lucid')] }, connections)).toThrow('ještě není v Mac workeru');
     expect(() => assertCopierArmConnections(group('fn', 0), { devices: [device('lucid'), device('fn')] }, connections)).not.toThrow();
   });
   it('rejects a pending pairing and ambiguous account ownership', () => {
@@ -110,7 +121,7 @@ describe('execution connection precheck', () => {
     requested.followers[0].mode = 'off';
     expect(() => assertCopierArmConnections(requested, { device: device('lucid') }, connections)).not.toThrow();
     expect(() => assertCopierArmConnections(group('main', 0), { device: device('lucid') }, connections, [22])).not.toThrow();
-    expect(() => assertCopierArmConnections(group('main', 0), { device: device('fn') }, connections, [11])).toThrow('ještě není zapojené');
+    expect(() => assertCopierArmConnections(group('main', 0), { device: device('fn') }, connections, [11])).toThrow('ještě není v Mac workeru');
   });
 });
 

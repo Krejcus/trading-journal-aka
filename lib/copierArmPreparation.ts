@@ -92,7 +92,7 @@ export function prepareCopierArmGroup(
 /** OAuth-visible accounts alone are not evidence of an installed execution route. */
 export function assertCopierArmConnections(
   group: CopyGroupConfig,
-  runtime: Pick<LocalCopierAgentStatus, 'device' | 'devices'>,
+  runtime: Pick<LocalCopierAgentStatus, 'device' | 'devices' | 'connectionDiscovery'>,
   connections: Record<string, { accounts: readonly { id: number }[] }>,
   excludedAccountIds: readonly number[] = [],
 ): void {
@@ -107,8 +107,14 @@ export function assertCopierArmConnections(
       throw new CopierArmBlockedError(`Nelze jednoznačně ověřit připojení účtu ${id}. Obnov data v Připojení.`);
     }
     const device = devices.find(candidate => candidate.connectionId === owners[0][0]);
-    if (!device || device.state !== 'paired') {
-      throw new CopierArmBlockedError(`Připojení účtu ${id} ještě není zapojené do běžící kopírky. Samotné přihlášení k Tradovate umožňuje načíst účty; pro kopírování je potřeba spárovat toto připojení s Mac workerem a bezpečně jej načíst do workeru.`);
+    const discovered = runtime.connectionDiscovery?.loadedConnectionIds.includes(owners[0][0]) === true;
+    if (!discovered && (!device || device.state !== 'paired')) {
+      const pending = runtime.connectionDiscovery?.pendingConnectionIds.includes(owners[0][0]) === true;
+      throw new CopierArmBlockedError(pending
+        ? `Připojení účtu ${id} si Mac worker načte sám, jakmile bude kopírka vypnutá a bez otevřených pozic (do minuty).`
+        : runtime.connectionDiscovery?.scope === 'owner'
+          ? `Připojení účtu ${id} Mac worker zatím nenačetl. Zkontroluj připojení v záložce Připojení; worker ho zkusí znovu sám.`
+          : `Připojení účtu ${id} ještě není v Mac workeru. V záložce Připojení povol Macu načítat tvoje propfirmy; worker ho pak načte sám.`);
     }
   }
 }

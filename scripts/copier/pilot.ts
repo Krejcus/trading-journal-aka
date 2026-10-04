@@ -66,16 +66,28 @@ import {
 } from '../../server/localCopierExecutionAgent';
 import {
   canSafelyRestartLocalCopierAgent,
+  copyGroupAccountIds,
   LOCAL_COPIER_AGENT_PORT,
   type CopierSnapshotHealth,
 } from '../../lib/localCopierAgentProtocol';
 import {
   createMacCopierDevice,
   createMacCopierDeviceTokenProvider,
+  listMacCopierDeviceConnections,
   loadMacCopierDevice,
   macCopierDevicePairing,
   markMacCopierDevicePaired,
+  type MacCopierDeviceConfig,
 } from '../../server/macCopierDevice';
+import {
+  connectionsToLoadAtStartup,
+  evaluateConnectionPoll,
+  loadConnectionDiscoveryState,
+  recordConnectionDiscoveryFailure,
+  recordConnectionDiscoverySuccess,
+  saveConnectionDiscoveryState,
+  type ConnectionDiscoveryState,
+} from './connectionDiscovery';
 import { retryTransient, type RetryTransientOptions } from '../../server/retryTransient';
 import { createHostSleepDetector } from '../../lib/hostSleepDetector';
 
@@ -144,6 +156,23 @@ interface PilotContext {
   /** Read-only probe used when pairing was approved in the cloud/QR flow. */
   refreshPairing?: () => Promise<boolean>;
   relay?: { apiOrigin: string; authorizationHeader: () => Promise<string> };
+  /**
+   * Připojení načtené ze serveru přes owner-scope device (ne z manifestu).
+   * Nemá vlastní device ani relay; doba běhu workeru se podle něj neřídí.
+   */
+  discovered?: boolean;
+}
+
+/** Hlídání nových/odpojených propfirem za běhu (4. 10. 2026). */
+interface ConnectionWatch {
+  device: MacCopierDeviceConfig;
+  statePath: string;
+  manifestConnectionIds: string[];
+  loadedConnectionIds: string[];
+  state: ConnectionDiscoveryState;
+  scope: 'owner' | 'connection' | null;
+  /** Účty načtené z adresáře každého připojení (pro odpojení za ARM). */
+  accountIdsByConnection: Map<string, number[]>;
 }
 
 interface PilotContextOptions {
@@ -287,17 +316,13 @@ async function main(selected: Exclude<Command, 'keygen'>): Promise<void> {
 }
 
 async function runMultiConnectionAgent(): Promise<void> {
-  const manifest = await loadMacCopierConnectionManifest(stringFlag('connections-manifest'));
-  const loaded = await Promise.all(manifest.connections.map(async entry => {
-    const context = await pilotContext({
-      deviceConfigPath: entry.deviceConfigPath,
-      leasePath: entry.leasePath,
-      privateKeyPath: entry.privateKeyPath,
-      connectionId: entry.connectionId,
-    });
-    if (context.connectionId !== entry.connectionId) {
-      throw new Error(`Manifest connection ${entry.connectionId} neodpovídá device/lease ${context.connectionId}`);
-    }
+  const manifestPath = stringFlag('connections-manifest');
+  const manifest = await loadMacCopierConnectionManifest(manifestPath);
+  const loadConnection = async (
+    context: PilotContext,
+    connectionId: string,
+    loadOptions: { strictDirectory?: boolean } = {},
+  ) => {
     // Startup reads are retried in-process: a slow or briefly failing
     // Tradovate/cloud read must not exit the worker and start a launchd loop.
     // A connection whose directory stays unreadable after the whole retry
@@ -311,10 +336,13 @@ async function runMultiConnectionAgent(): Promise<void> {
       accessToken: await context.getAccessToken(),
     }))(), {
       ...STARTUP_RETRY,
-      onRetry: (error, attempt, delayMs) => console.warn(`${new Date().toISOString()} STARTUP ${connectionLabel(entry.connectionId)} načtení účtů selhalo (pokus ${attempt}): ${error.message}; další pokus za ${Math.round(delayMs / 1_000)} s`),
+      onRetry: (error, attempt, delayMs) => console.warn(`${new Date().toISOString()} STARTUP ${connectionLabel(connectionId)} načtení účtů selhalo (pokus ${attempt}): ${error.message}; další pokus za ${Math.round(delayMs / 1_000)} s`),
     }).catch((error: unknown) => {
+      // Nově objevené připojení bez účtů by se tvářilo jako načtené a už by
+      // se nezkoušelo; selhání proto vrátíme a zkusí se po cooldownu znovu.
+      if (loadOptions.strictDirectory) throw error;
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`${new Date().toISOString()} STARTUP ${connectionLabel(entry.connectionId)} adresář účtů nedostupný, spojení startuje bez účtů (žádný účet se na něj nesměruje): ${message}`);
+      console.error(`${new Date().toISOString()} STARTUP ${connectionLabel(connectionId)} adresář účtů nedostupný, spojení startuje bez účtů (žádný účet se na něj nesměruje): ${message}`);
       return { accounts: [] as Awaited<ReturnType<typeof loadTradovateAccountData>>['accounts'] };
     });
     const accountSpecsByAccountId = Object.fromEntries(data.accounts.map(account => [account.id, account.name]));
@@ -327,30 +355,83 @@ async function runMultiConnectionAgent(): Promise<void> {
       getAccessToken: context.getAccessToken,
       // Do chybových hlášek: bez štítku nejde z logu poznat, které OAuth
       // spojení (propfirma) vypadlo.
-      connectionLabel: connectionLabel(entry.connectionId),
+      connectionLabel: connectionLabel(connectionId),
       onReconnectDiagnostic: logReconnectDiagnostic,
-      onSessionSuspect: sessionSuspectHandler(context, connectionLabel(entry.connectionId)),
+      onSessionSuspect: sessionSuspectHandler(context, connectionLabel(connectionId)),
       onAccountDataChange: change => context.displayFeed?.invalidate(change.accountId),
       onAccountDataConnectionChange: connected => context.displayFeed?.setStreamConnected(connected),
     });
     return { context, accounts: data.accounts, broker };
+  };
+  const loaded = await Promise.all(manifest.connections.map(async entry => {
+    const context = await pilotContext({
+      deviceConfigPath: entry.deviceConfigPath,
+      leasePath: entry.leasePath,
+      privateKeyPath: entry.privateKeyPath,
+      connectionId: entry.connectionId,
+    });
+    if (context.connectionId !== entry.connectionId) {
+      throw new Error(`Manifest connection ${entry.connectionId} neodpovídá device/lease ${context.connectionId}`);
+    }
+    return loadConnection(context, entry.connectionId);
   }));
+  // Propfirmy přidané v UI po instalaci (4. 10. 2026): spárovaný Mac se scope
+  // `owner` je načte sám. Selhání žádného z nich nesmí shodit start workeru.
+  const connectionWatch = await discoverOwnerConnections({
+    manifestPath,
+    manifest,
+    load: async (device, connectionId) => loadConnection(
+      await discoveredPilotContext(device, connectionId),
+      connectionId,
+      { strictDirectory: true },
+    ),
+    onLoaded: item => loaded.push(item),
+  });
+  if (connectionWatch) {
+    for (const item of loaded) {
+      connectionWatch.accountIdsByConnection.set(item.context.connectionId, item.accounts.map(account => account.id));
+    }
+  }
   const leaderId = integerFlag('leader');
   const followerId = integerFlag('follower');
-  const routingConnections: DynamicOAuthConnection[] = loaded.map(item => ({
-    connectionId: item.context.connectionId,
-    broker: item.broker,
-  }));
-  const initialSnapshots = new Map(loaded.map(item => [
-    item.context.connectionId,
-    item.accounts.map(account => ({
-      accountId: account.id,
-      accountSpec: account.name,
-      active: account.active,
-      canTrade: account.canTrade,
+  const routingFor = (items: typeof loaded) => ({
+    connections: items.map((item): DynamicOAuthConnection => ({
+      connectionId: item.context.connectionId,
+      broker: item.broker,
     })),
-  ]));
-  const initialRouting = resolveDynamicBrokerRoutes(routingConnections, initialSnapshots);
+    snapshots: new Map(items.map(item => [
+      item.context.connectionId,
+      item.accounts.map(account => ({
+        accountId: account.id,
+        accountSpec: account.name,
+        active: account.active,
+        canTrade: account.canTrade,
+      })),
+    ])),
+  });
+  let routing = routingFor(loaded);
+  let initialRouting: ReturnType<typeof resolveDynamicBrokerRoutes>;
+  try {
+    initialRouting = resolveDynamicBrokerRoutes(routing.connections, routing.snapshots);
+  } catch (error) {
+    // Nově objevená propfirma nesmí rozbít routing stávající skupiny (např.
+    // stejný účet viditelný ve dvou OAuth). Bez ní worker nastartuje jako
+    // dřív a připojení se zkusí znovu až po cooldownu.
+    const discovered = loaded.filter(item => item.context.discovered);
+    if (discovered.length === 0 || !connectionWatch) throw error;
+    console.error(`${new Date().toISOString()} DISCOVERY routing s novými připojeními selhal, startuji bez nich: ${error instanceof Error ? error.message : String(error)}`);
+    for (const item of discovered) {
+      connectionWatch.state = recordConnectionDiscoveryFailure(connectionWatch.state, item.context.connectionId, error, Date.now());
+      connectionWatch.loadedConnectionIds = connectionWatch.loadedConnectionIds
+        .filter(connectionId => connectionId !== item.context.connectionId);
+      item.context.displayFeed?.close();
+    }
+    await saveConnectionDiscoveryState(connectionWatch.statePath, connectionWatch.state).catch(() => undefined);
+    loaded.splice(0, loaded.length, ...loaded.filter(item => !item.context.discovered));
+    routing = routingFor(loaded);
+    initialRouting = resolveDynamicBrokerRoutes(routing.connections, routing.snapshots);
+  }
+  const routingConnections = routing.connections;
   const accounts = initialRouting.accounts;
   // Spojení nesoucí leader stream je kritické (výpadek = okamžitý DISARM);
   // follower-only propfirmy dostávají reconnect lhůtu, aby token cyklus
@@ -379,7 +460,97 @@ async function runMultiConnectionAgent(): Promise<void> {
       const preview = await previewDynamicBrokerRoutes(routingConnections, request);
       return { missingOptional: preview.missingOptional };
     },
+    connectionWatch ?? undefined,
   );
+}
+
+/**
+ * Najde spárovaný Mac device z manifestu (primární napřed) a se scope
+ * `owner` načte připojení vlastníka, která v manifestu nejsou. Chyba
+ * listování ani jednotlivého připojení start workeru neshodí.
+ */
+async function discoverOwnerConnections<T extends { context: PilotContext }>(options: {
+  manifestPath: string;
+  manifest: Awaited<ReturnType<typeof loadMacCopierConnectionManifest>>;
+  load: (device: MacCopierDeviceConfig, connectionId: string) => Promise<T>;
+  onLoaded: (item: T) => void;
+}): Promise<ConnectionWatch | null> {
+  const entries = [...options.manifest.connections].sort((left, right) => (
+    Number(right.connectionId === options.manifest.primaryConnectionId)
+    - Number(left.connectionId === options.manifest.primaryConnectionId)
+  ));
+  let device: MacCopierDeviceConfig | null = null;
+  for (const entry of entries) {
+    try {
+      const candidate = await loadMacCopierDevice(entry.deviceConfigPath);
+      if (candidate.paired) { device = candidate; break; }
+    } catch {
+      // Nečitelná device konfigurace jednoho připojení neblokuje ostatní.
+    }
+  }
+  if (!device) return null;
+  const statePath = resolve(dirname(options.manifestPath), 'connection-discovery.json');
+  const watch: ConnectionWatch = {
+    device,
+    statePath,
+    manifestConnectionIds: options.manifest.connections.map(entry => entry.connectionId),
+    loadedConnectionIds: options.manifest.connections.map(entry => entry.connectionId),
+    state: await loadConnectionDiscoveryState(statePath),
+    scope: null,
+    accountIdsByConnection: new Map(),
+  };
+  let listed: Awaited<ReturnType<typeof listMacCopierDeviceConnections>>;
+  try {
+    listed = await listMacCopierDeviceConnections({ config: device });
+  } catch (error) {
+    console.warn(`${new Date().toISOString()} DISCOVERY seznam připojení nedostupný, startuji jen z manifestu: ${error instanceof Error ? error.message : String(error)}`);
+    return watch;
+  }
+  watch.scope = listed.scope;
+  const pending = connectionsToLoadAtStartup({
+    serverConnectionIds: listed.connectionIds,
+    manifestConnectionIds: watch.manifestConnectionIds,
+    state: watch.state,
+    now: Date.now(),
+  });
+  for (const connectionId of pending) {
+    try {
+      const item = await options.load(device, connectionId);
+      options.onLoaded(item);
+      watch.loadedConnectionIds.push(connectionId);
+      watch.state = recordConnectionDiscoverySuccess(watch.state, connectionId);
+      console.log(`${new Date().toISOString()} DISCOVERY načteno nové připojení ${connectionLabel(connectionId)}`);
+    } catch (error) {
+      watch.state = recordConnectionDiscoveryFailure(watch.state, connectionId, error, Date.now());
+      const failure = watch.state.failures[connectionId];
+      console.error(`${new Date().toISOString()} DISCOVERY připojení ${connectionLabel(connectionId)} se nepodařilo načíst (pokus ${failure?.attempts}, další ${new Date(failure?.nextAttemptAt ?? 0).toISOString()}): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  await saveConnectionDiscoveryState(statePath, watch.state).catch(error => {
+    console.warn(`${new Date().toISOString()} DISCOVERY stav nejde uložit: ${error instanceof Error ? error.message : String(error)}`);
+  });
+  return watch;
+}
+
+/** Kontext dalšího připojení vlastníka přes stejný spárovaný Mac device. */
+async function discoveredPilotContext(device: MacCopierDeviceConfig, connectionId: string): Promise<PilotContext> {
+  const provider = createMacCopierDeviceTokenProvider({
+    config: device,
+    connectionId,
+    // Krátký retry: start workeru nesmí kvůli nové propfirmě dlouho čekat.
+    retry: { deadlineMs: 60_000, initialDelayMs: 5_000, maxDelayMs: 20_000 },
+  });
+  const payload = await provider.refresh();
+  return {
+    environment: 'demo',
+    connectionId,
+    accountSpec: payload.accountSpec,
+    expiresAt: payload.expiresAt,
+    renewable: true,
+    getAccessToken: provider.getAccessToken,
+    forceTokenRenewal: async () => { await provider.refresh({ forceRenewal: true }); },
+    discovered: true,
+  };
 }
 
 function makeDisplayFeed(context: PilotContext, accountIds: number[]) {
@@ -400,6 +571,7 @@ async function runLocalAgent(
   renewableBrokers: ReadonlyArray<{ broker: TradovateBrokerPort; label: string; connectionId: string }> = [],
   prepareGroupAccounts?: (request: PrepareGroupAccountsRequest) => Promise<PrepareGroupAccountsResult>,
   previewGroupAccounts?: (request: PrepareGroupAccountsRequest) => Promise<PrepareGroupAccountsResult>,
+  connectionWatch?: ConnectionWatch,
 ): Promise<void> {
   const context = contexts[0];
   if (!context) throw new Error('Lokální agent potřebuje alespoň jedno OAuth spojení');
@@ -416,7 +588,7 @@ async function runLocalAgent(
   const lifetime = resolveAgentLifetime({
     requestedMinutes: Number(minutesValue),
     serviceLifetime: stringFlag('service-lifetime', false),
-    contexts: contexts.map(candidate => ({
+    contexts: contexts.filter(candidate => !candidate.discovered).map(candidate => ({
       renewable: candidate.renewable,
       paired: candidate.device?.state === 'paired',
       relayAvailable: candidate.relay != null,
@@ -723,6 +895,8 @@ async function runLocalAgent(
   let pairingProbeTail: Promise<void> = Promise.resolve();
   let pairingRestartPending = false;
   let pairingRestartTimer: ReturnType<typeof setTimeout> | null = null;
+  let connectionWatchTimer: ReturnType<typeof setInterval> | null = null;
+  let connectionWatchPending: string[] = [];
   const writeAudit = async (entries: readonly CopierAuditEntry[]) => {
     if (entries.length === 0) return;
     await appendFile(auditPath, entries.map(entry => `${JSON.stringify(entry)}\n`).join(''), { mode: 0o600 });
@@ -736,6 +910,7 @@ async function runLocalAgent(
     agent?.beginShutdown();
     if (pairingProbeTimer) clearInterval(pairingProbeTimer);
     if (pairingRestartTimer) clearTimeout(pairingRestartTimer);
+    if (connectionWatchTimer) clearInterval(connectionWatchTimer);
     if (snapshotHealthTimer) clearInterval(snapshotHealthTimer);
     if (snapshotDeliveryTimer) clearInterval(snapshotDeliveryTimer);
     for (const cancel of tvBarsSchedules.values()) cancel();
@@ -1028,6 +1203,16 @@ async function runLocalAgent(
       }),
       marketPrices: () => marketPriceFeed?.current() ?? [],
       accountDisplay: () => contexts.flatMap(item => item.displayFeed ? [item.displayFeed.state()] : []),
+      ...(connectionWatch ? {
+        connectionDiscovery: () => ({
+          scope: connectionWatch.scope,
+          deviceId: connectionWatch.device.deviceId,
+          loadedConnectionIds: [...connectionWatch.loadedConnectionIds],
+          pendingConnectionIds: [...connectionWatchPending],
+          failedConnections: Object.entries(connectionWatch.state.failures)
+            .map(([connectionId, failure]) => ({ connectionId, ...failure })),
+        }),
+      } : {}),
       connectionUsage: () => renewableBrokers.map(item => ({ connectionId: item.connectionId, ...item.broker.usage() })),
       onSnapshotTest: (requestId, options) => {
         if (!snapshotsEnabled) throw new Error('snapshot-test-unavailable');
@@ -1149,6 +1334,54 @@ async function runLocalAgent(
       pairingProbeTimer = setInterval(() => { void probePairing(); }, 5_000);
       pairingProbeTimer.unref();
       void probePairing();
+    }
+    if (connectionWatch) {
+      // Nové/odpojené propfirmy za běhu (4. 10. 2026). Nová připojení načte
+      // až bezpečný restart (DISARMED, flat, reconciled — stejná brána jako
+      // po spárování); odpojené připojení s účty skupiny za ARM kopírku vypne.
+      let pollInFlight = false;
+      let lastPollWarningAt = 0;
+      const pollConnections = async () => {
+        if (pollInFlight || stopPromise) return;
+        pollInFlight = true;
+        try {
+          const listed = await listMacCopierDeviceConnections({ config: connectionWatch.device });
+          connectionWatch.scope = listed.scope;
+          const decision = evaluateConnectionPoll({
+            serverConnectionIds: listed.connectionIds,
+            loadedConnectionIds: connectionWatch.loadedConnectionIds,
+            manifestConnectionIds: connectionWatch.manifestConnectionIds,
+            state: connectionWatch.state,
+            now: Date.now(),
+          });
+          connectionWatchPending = decision.added;
+          if (decision.removed.length > 0) {
+            const groupAccounts = new Set(agent ? copyGroupAccountIds(agent.status().group) : []);
+            const carriesGroup = decision.removed.some(connectionId => (
+              (connectionWatch.accountIdsByConnection.get(connectionId) ?? []).some(accountId => groupAccounts.has(accountId))
+            ));
+            if (carriesGroup && controller?.status().armed) {
+              controller.disarm('connection-removed');
+              console.error(`${new Date().toISOString()} DISCOVERY odpojené připojení ${decision.removed.map(connectionLabel).join(',')} nese účty skupiny; kopírka vypnuta`);
+            }
+          }
+          if (decision.added.length > 0 || decision.removed.length > 0) {
+            if (!pairingRestartPending) {
+              console.log(`${new Date().toISOString()} DISCOVERY změna připojení +[${decision.added.map(connectionLabel).join(',')}] -[${decision.removed.map(connectionLabel).join(',')}]; restart, až bude kopírka vypnutá a flat`);
+            }
+            requestSafePairingRestart();
+          }
+        } catch (error) {
+          if (Date.now() - lastPollWarningAt > 30 * 60_000) {
+            lastPollWarningAt = Date.now();
+            console.warn(`${new Date().toISOString()} DISCOVERY seznam připojení nedostupný: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        } finally {
+          pollInFlight = false;
+        }
+      };
+      connectionWatchTimer = setInterval(() => { void pollConnections(); }, 60_000);
+      connectionWatchTimer.unref();
     }
     if (context.relay) {
       relay = startMacCopierCommandRelay({

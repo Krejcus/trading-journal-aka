@@ -305,7 +305,7 @@ export async function listMacCopierDeviceConnections(options: {
   secretStore?: MacCopierSecretStore;
   fetchImpl?: typeof fetch;
   requestTimeoutMs?: number;
-}): Promise<string[]> {
+}): Promise<{ scope: 'owner' | 'connection'; connectionIds: string[] }> {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   if (!fetchImpl) throw new Error('mac-copier-fetch-unavailable');
   const secret = await (options.secretStore ?? macOsKeychainCopierSecretStore).read(options.config.deviceId);
@@ -318,13 +318,19 @@ export async function listMacCopierDeviceConnections(options: {
       headers: { Accept: 'application/json', Authorization: `Device ${options.config.deviceId}.${secret}` },
       signal: abort.signal,
     });
-    const body = await response.json() as { connections?: Array<{ connectionId?: unknown }>; error?: string };
+    const body = await response.json() as {
+      scope?: unknown; connections?: Array<{ connectionId?: unknown }>; error?: string;
+    };
     if (!response.ok || !Array.isArray(body.connections)) {
       throw new Error(body.error || `mac-copier-connections-http-${response.status}`);
     }
-    return [...new Set(body.connections
-      .map(item => item.connectionId)
-      .filter((id): id is string => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id)))];
+    return {
+      // Starší server bez scope = jen vlastní připojení zařízení.
+      scope: body.scope === 'owner' ? 'owner' : 'connection',
+      connectionIds: [...new Set(body.connections
+        .map(item => item.connectionId)
+        .filter((id): id is string => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id)))],
+    };
   } finally {
     clearTimeout(timeout);
   }

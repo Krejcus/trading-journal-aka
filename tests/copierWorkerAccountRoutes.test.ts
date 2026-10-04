@@ -33,6 +33,17 @@ describe('copier worker account routes', () => {
     expect(result.routes.get(44)).toBe('unknown');
   });
 
+  it('připojení, které si worker načetl sám přes souhlas, je routable (4. 10.)', () => {
+    const result = buildCopierWorkerAccountRoutes(status({
+      devices: [{ state: 'paired', deviceId: 'd1', deviceName: 'Mac', connectionId: 'lucid' }],
+      connectionDiscovery: {
+        scope: 'owner', deviceId: 'd1', loadedConnectionIds: ['lucid', 'fn'], pendingConnectionIds: ['tradeify'], failedConnections: [],
+      },
+    }), true, connections);
+    expect(result.routes.get(22)).toBe('routable');
+    expect(result.routes.get(33)).toBe('missing-worker');
+  });
+
   it('starší worker může doložit obsluhované spojení přes connectionUsage', () => {
     const result = buildCopierWorkerAccountRoutes(status({
       connectionUsage: [{ connectionId: 'fn' } as LocalCopierAgentStatus['connectionUsage'][number]],
