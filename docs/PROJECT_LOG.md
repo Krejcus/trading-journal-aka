@@ -258,6 +258,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-05 — Mac patří uživateli, ne propfirmě (Claude, konzultace s Codexem)
+
+Filip: „připojit/odpojit propfirmu i zvolit leadera má být jedno, kromě firmy,
+jejíž účty zrovna kopíruju“. Dosud byl Mac „ukotvený“ k OAuth připojení, přes
+které byl spárován (identita zařízení, relay pokynů, start workeru).
+
+Rozhodnutí a proč:
+- **Worker startuje bez původní firmy**: manifest přes `allSettled`, stačí jedno
+  funkční připojení + relay nesený spárovaným zařízením. Durable soubory dál
+  pod `manifest.primaryConnectionId` (stabilní namespace, žádné přejmenování).
+  Odpojená firma = trvalá 409 z pilot-lease (ne 10 min retry).
+- **Relay**: claim/ACK/realtime už byly per device; UI dál adresuje přes
+  connectionId, server ho kompatibilním shimem (`resolveCopierRelayConnectionId`)
+  mapuje na připojení zařízení s nejčerstvějším runtime. Přechod UI na
+  `relayDeviceId` je odložený (Codex: cílová architektura).
+- **Odpojení firmy s účty v ARMED skupině** blokuje server (409) i appka;
+  účty firmy podle skutečného routingu workeru (`connectionDiscovery.connectionAccounts`),
+  neznámé = blokovat. Worker za ARM vypne jen při odpojení firmy skupiny a těsně
+  před ARM ověří u serveru, že žádný povinný účet není na odpojené firmě.
+- **Migrace**: FK `connection_id` u devices/commands/runtime → `ON DELETE SET NULL`.
+- Widget/Live Activity berou tokeny jen připojených firem.
+
+Odloženo: atomická DB brána ARM↔odpojení (worker zavírá okno na ms), párování
+nového uživatele bez CLI (Mac aplikace), UI adresování přímo podle zařízení.
+
 ### 2026-10-04 — Nová propfirma bez CLI: Mac worker ji načte sám (Claude, konzultace s Codexem)
 
 Filip přidal FundedNext a nešlo ji dát do skupiny („není ve Mac workeru“);
