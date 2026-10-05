@@ -56,3 +56,22 @@ end;
 $$;
 revoke all on function public.append_tradovate_journal_evidence(uuid, uuid, uuid, jsonb) from public, anon, authenticated;
 grant execute on function public.append_tradovate_journal_evidence(uuid, uuid, uuid, jsonb) to service_role;
+
+-- Mac patří uživateli, ne propfirmě (5. 10. 2026). Smazání OAuth připojení
+-- (dnes jen soft-disconnect, ale pro jistotu) nesmí smazat spárovaný Mac,
+-- jeho příkazy ani runtime stav — jen se odpojí kotva. Claim/ACK i realtime
+-- jsou klíčované device_id, connection_id je u nich jen provenance.
+alter table public.tradovate_copier_devices alter column connection_id drop not null;
+alter table public.tradovate_copier_devices drop constraint if exists tradovate_copier_devices_connection_id_fkey;
+alter table public.tradovate_copier_devices add constraint tradovate_copier_devices_connection_id_fkey
+  foreign key (connection_id) references public.tradovate_oauth_connections(id) on delete set null;
+
+alter table public.tradovate_copier_commands alter column connection_id drop not null;
+alter table public.tradovate_copier_commands drop constraint if exists tradovate_copier_commands_connection_id_fkey;
+alter table public.tradovate_copier_commands add constraint tradovate_copier_commands_connection_id_fkey
+  foreign key (connection_id) references public.tradovate_oauth_connections(id) on delete set null;
+
+alter table public.tradovate_copier_device_runtime alter column connection_id drop not null;
+alter table public.tradovate_copier_device_runtime drop constraint if exists tradovate_copier_device_runtime_connection_id_fkey;
+alter table public.tradovate_copier_device_runtime add constraint tradovate_copier_device_runtime_connection_id_fkey
+  foreign key (connection_id) references public.tradovate_oauth_connections(id) on delete set null;

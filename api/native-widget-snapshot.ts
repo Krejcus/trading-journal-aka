@@ -8,7 +8,7 @@ import { buildNativeWidgetRemoteSnapshot, type NativeWidgetCopierTradeRow } from
 import { hashNativeWidgetToken, NATIVE_WIDGET_BUNDLE_ID, normalizeNativeWidgetToken } from '../server/nativeWidgetRegistration.js';
 import { listTradovateAccountProfiles } from '../server/tradovateAccountProfiles.js';
 import { tradovateApiBaseUrl } from '../server/tradovateOAuth.js';
-import { getValidTradovateAccessToken, readTradovateServerConfig } from '../server/tradovateOAuthStore.js';
+import { getValidTradovateAccessToken, listConnectedTradovateConnectionIds, readTradovateServerConfig } from '../server/tradovateOAuthStore.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (handleNativeCors(req, res, ['GET'])) return;
@@ -44,14 +44,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const accountIds = liveActivityAccountIds(runtime);
     if (accountIds.length === 0) return res.status(503).json({ error: 'copier-accounts-unavailable' });
 
-    const [{ accessToken }, tradesResult, profiles] = await Promise.all([
-      getValidTradovateAccessToken({
+    // Skupina může ležet na více propfirmách a kotevní připojení runtime může
+    // být odpojené (Mac patří uživateli, 5. 10. 2026): tokeny všech připojených.
+    const connectedIds = await listConnectedTradovateConnectionIds({
+      db, userId: device.user_id, environment: config.environment,
+    });
+    if (connectedIds.length === 0) return res.status(503).json({ error: 'copier-accounts-unavailable' });
+    const [tokens, tradesResult, profiles] = await Promise.all([
+      Promise.all(connectedIds.map(connectionId => getValidTradovateAccessToken({
         db,
         config,
         userId: device.user_id,
-        connectionId: runtime.connection_id,
+        connectionId,
         minimumValidityMs: 180_000,
-      }),
+      }))),
       db.from('tradovate_copier_trades')
         .select('trade_id,symbol,side,quantity,realized_pnl_usd,closed_at')
         .eq('user_id', device.user_id)
@@ -64,7 +70,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const now = Date.now();
     const broker = await loadNativeLiveActivityBrokerSnapshot({
       baseUrl: tradovateApiBaseUrl(config.environment),
-      accessToken,
+      accessTokens: tokens.map(token => token.accessToken),
       accountIds,
       now,
     });

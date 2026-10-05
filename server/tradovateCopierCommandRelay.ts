@@ -129,6 +129,54 @@ interface RelayDeviceTarget {
   lastSeenAt?: string;
 }
 
+/**
+ * Mac patří uživateli, ne propfirmě (5. 10. 2026). UI adresuje worker přes
+ * libovolné připojení, které zrovna vidí; runtime i příkazy owner-scope
+ * zařízení ale zůstávají vedené pod připojením, přes které byl Mac spárován
+ * (i když je dnes odpojené). Vrátí to připojení, pod kterým worker opravdu je:
+ * - existuje zařízení přímo pro `connectionId` → beze změny,
+ * - jinak, pokud `connectionId` patří uživateli, nejčerstvější neodvolané
+ *   owner-scope zařízení uživatele → jeho kotevní připojení.
+ */
+export async function resolveCopierRelayConnectionId(options: {
+  db: SupabaseClient;
+  userId: string;
+  connectionId: string;
+}): Promise<string> {
+  const { data: direct, error: directError } = await options.db.from('tradovate_copier_devices')
+    .select('id')
+    .eq('user_id', options.userId)
+    .eq('connection_id', options.connectionId)
+    .is('revoked_at', null)
+    .limit(1);
+  if (directError) throw new Error(`copier-relay-device-lookup-failed: ${directError.message}`);
+  if ((direct ?? []).length > 0) return options.connectionId;
+  const { data: owned, error: ownedError } = await options.db.from('tradovate_oauth_connections')
+    .select('id')
+    .eq('id', options.connectionId)
+    .eq('user_id', options.userId)
+    .maybeSingle<{ id: string }>();
+  if (ownedError) throw new Error(`copier-relay-connection-lookup-failed: ${ownedError.message}`);
+  if (!owned) return options.connectionId;
+  // Před migrací scope tento dotaz selže — pak platí původní chování.
+  const { data: ownerDevices, error: ownerError } = await options.db.from('tradovate_copier_devices')
+    .select('id,connection_id')
+    .eq('user_id', options.userId)
+    .eq('scope', 'owner')
+    .is('revoked_at', null);
+  if (ownerError || !ownerDevices?.length) return options.connectionId;
+  const { data: runtime } = await options.db.from('tradovate_copier_device_runtime')
+    .select('connection_id,last_seen_at')
+    .eq('user_id', options.userId)
+    .in('device_id', ownerDevices.map((device: { id: string }) => device.id))
+    .order('last_seen_at', { ascending: false })
+    .limit(1)
+    .maybeSingle<{ connection_id: string | null; last_seen_at: string }>();
+  return runtime?.connection_id
+    ?? (ownerDevices[0] as { connection_id: string | null }).connection_id
+    ?? options.connectionId;
+}
+
 /** Selects the freshest runtime only among non-revoked devices. */
 const selectRelayDeviceTarget = async (options: {
   db: SupabaseClient;
@@ -882,4 +930,48 @@ export async function readTradovateCopierDeviceRuntime(options: { db: SupabaseCl
     ? Math.max(0, Date.now() - parsedLastSeenAt)
     : 10_000;
   return { status: data.status, lastSeenAt: data.last_seen_at, ageMs, connected: ageMs < 10_000 };
+}
+
+/** Jak čerstvý musí být stav workeru, aby jeho ARM blokoval odpojení propfirmy. */
+export const COPIER_DISCONNECT_GUARD_STALE_MS = 10 * 60_000;
+
+/**
+ * Propfirmu nejde odpojit, když její účty právě kopíruje zapnutá kopírka
+ * (5. 10. 2026). Fail-closed: zapnutá kopírka, která připojení načetla, ale
+ * jeho účty nehlásí, odpojení také blokuje. Stav starší než 10 min neblokuje
+ * (worker neběží); worker sám za ARM odpojení zjistí a kopírku vypne.
+ */
+export async function assertConnectionNotInArmedCopy(options: {
+  db: SupabaseClient;
+  userId: string;
+  connectionId: string;
+  now?: number;
+}): Promise<void> {
+  const { data, error } = await options.db.from('tradovate_copier_device_runtime')
+    .select('status,last_seen_at')
+    .eq('user_id', options.userId);
+  if (error) throw new Error(`copier-disconnect-guard-lookup-failed: ${error.message}`);
+  const now = options.now ?? Date.now();
+  for (const row of (data ?? []) as Array<{ status: LocalCopierAgentStatus | null; last_seen_at: string }>) {
+    const seenAt = Date.parse(row.last_seen_at);
+    if (!Number.isFinite(seenAt) || now - seenAt > COPIER_DISCONNECT_GUARD_STALE_MS) continue;
+    const status = row.status;
+    if (!status?.controller?.armed) continue;
+    const group = status.group;
+    const groupAccounts = new Set([group?.leaderAccountId, ...(group?.followers ?? [])
+      .filter(follower => follower.mode !== 'off' && follower.enabled !== false)
+      .map(follower => follower.accountId)].filter((id): id is number => typeof id === 'number'));
+    const display = status.accountDisplay?.find(item => item.connectionId === options.connectionId);
+    const loadedByWorker = display != null
+      || status.devices?.some(device => device.connectionId === options.connectionId) === true
+      || status.device?.connectionId === options.connectionId
+      || status.connectionDiscovery?.loadedConnectionIds.includes(options.connectionId) === true;
+    if (!loadedByWorker) continue;
+    const connectionAccounts = display
+      ? [...display.snapshots.map(snapshot => snapshot.accountId), ...display.pendingAccountIds]
+      : null;
+    if (connectionAccounts == null || connectionAccounts.some(accountId => groupAccounts.has(accountId))) {
+      throw new Error('copier-armed-connection-in-use');
+    }
+  }
 }

@@ -414,6 +414,10 @@ async function runMultiConnectionAgent(): Promise<void> {
     await saveConnectionDiscoveryState(connectionWatch.statePath, connectionWatch.state).catch(() => undefined);
   }
   if (loaded.length === 0) {
+    // Žádná propfirma: zpomalit, ať launchd (restart po 10 s) nebombarduje
+    // server ani Tradovate; worker by stejně nic kopírovat nemohl.
+    console.error(`${new Date().toISOString()} STARTUP žádné OAuth připojení nejde načíst; další pokus za 5 min`);
+    await delay(5 * 60_000);
     const reason = failedManifest[0]?.reason;
     throw reason instanceof Error ? reason : new Error('Žádné OAuth připojení workeru nejde načíst');
   }
@@ -1439,10 +1443,24 @@ async function runLocalAgent(
           });
           connectionWatchPending = decision.added;
           if (decision.removed.length > 0 && controller?.status().armed) {
-            // Odpojená propfirma: kopírka se za ARM vypne vždy. Účty se mohly
-            // objevit až po startu, takže nespoléháme na seznam z adresáře.
-            controller.disarm('connection-removed');
-            console.error(`${new Date().toISOString()} DISCOVERY připojení ${decision.removed.map(connectionLabel).join(',')} bylo odpojeno; kopírka vypnuta`);
+            // Za ARM vypne kopírku jen odpojená propfirma, jejíž účty skupina
+            // používá (5. 10. 2026). Účty se berou z živého display feedu
+            // připojení; neznámé připojení se bere jako nesoucí skupinu.
+            const group = agent?.status().group;
+            const groupAccounts = new Set(group ? [group.leaderAccountId, ...group.followers
+              .filter(follower => follower.mode !== 'off' && follower.enabled !== false)
+              .map(follower => follower.accountId)] : []);
+            const carriesGroup = decision.removed.some(connectionId => {
+              const owner = contexts.find(candidate => candidate.connectionId === connectionId);
+              const feed = owner?.displayFeed?.state();
+              if (!feed) return true;
+              return [...feed.snapshots.map(snapshot => snapshot.accountId), ...feed.pendingAccountIds]
+                .some(accountId => groupAccounts.has(accountId));
+            });
+            if (carriesGroup) {
+              controller.disarm('connection-removed');
+              console.error(`${new Date().toISOString()} DISCOVERY připojení ${decision.removed.map(connectionLabel).join(',')} se účty skupiny bylo odpojeno; kopírka vypnuta`);
+            }
           }
           const removedDiscovered = decision.removed
             .filter(connectionId => !connectionWatch.manifestConnectionIds.includes(connectionId));

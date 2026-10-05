@@ -1206,6 +1206,20 @@ acceptAgentStatus((await executeAgent({
               live.setProfileSetupOpen(true);
             }}
             onDisconnect={connectionId => void (async () => {
+              // Propfirmu s účty v zapnuté kopírce nejde odpojit (5. 10. 2026);
+              // server to hlídá taky, tady jen dřív a srozumitelně.
+              const armedGroup = agentStatus?.controller?.armed ? agentStatus.group : null;
+              const groupAccounts = new Set(armedGroup ? [armedGroup.leaderAccountId, ...armedGroup.followers
+                .filter(follower => follower.mode !== 'off' && follower.enabled !== false)
+                .map(follower => follower.accountId)] : []);
+              if ((live.connectionData[connectionId]?.accounts ?? []).some(account => groupAccounts.has(account.id))) {
+                await confirmAction({
+                  title: 'Propfirmu teď nejde odpojit',
+                  message: 'Její účty právě kopíruje zapnutá kopírka. Nejdřív kopírku vypni, pak propfirmu odpoj.',
+                  confirmLabel: 'Rozumím',
+                });
+                return;
+              }
               if (await confirmAction({
                 title: 'Odpojit Tradovate připojení',
                 message: 'Odpojit toto Tradovate připojení? Uložené názvy a pravidla účtů zůstanou zachované.',

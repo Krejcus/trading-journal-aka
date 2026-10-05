@@ -409,12 +409,16 @@ async function liveActivityConnectionIds(options: {
   config: TradovateServerConfig;
   runtime: NativeLiveActivityRuntimeRow;
 }): Promise<string[]> {
-  const others = await listConnectedTradovateConnectionIds({
+  const connected = await listConnectedTradovateConnectionIds({
     db: options.db,
     userId: options.runtime.user_id,
     environment: options.config.environment,
   });
-  return [...new Set([options.runtime.connection_id, ...others])];
+  // Mac patří uživateli (5. 10. 2026): kotevní připojení runtime může být
+  // odpojené; pak by jeho token celý snapshot shodil. Bereme jen připojená.
+  return connected.includes(options.runtime.connection_id)
+    ? [...new Set([options.runtime.connection_id, ...connected])]
+    : connected;
 }
 
 export function createNativeBrokerSnapshotLoader(options: {

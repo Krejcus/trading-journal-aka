@@ -5,6 +5,7 @@ import {
   claimTradovateCopierCommand, completeTradovateCopierCommand, enqueueTradovateCopierCommand,
   copierRelayValidationErrorStatus,
   heartbeatTradovateCopierDevice, readTradovateCopierCommand, readTradovateCopierDeviceRuntime,
+  resolveCopierRelayConnectionId,
 } from '../../../server/tradovateCopierCommandRelay.js';
 import { createTradovateAdminClient, readTradovateServerConfig, requireSupabaseUserId } from '../../../server/tradovateOAuthStore.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
@@ -311,8 +312,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const userId = await requireSupabaseUserId(req.headers.authorization, config);
-    const connectionId = String(req.method === 'GET' ? req.query.connectionId ?? '' : req.body?.connectionId ?? '').trim();
-    if (!connectionId) return res.status(400).json({ error: 'missing-connection-id' });
+    const requestedConnectionId = String(req.method === 'GET' ? req.query.connectionId ?? '' : req.body?.connectionId ?? '').trim();
+    if (!requestedConnectionId) return res.status(400).json({ error: 'missing-connection-id' });
+    // Libovolné připojení uživatele najde jeho Mac worker (owner scope).
+    const connectionId = await resolveCopierRelayConnectionId({ db, userId, connectionId: requestedConnectionId });
     if (req.method === 'GET') {
       const commandId = typeof req.query.commandId === 'string' ? req.query.commandId : '';
       if (commandId) return res.status(200).json(await readTradovateCopierCommand({ db, userId, commandId }));

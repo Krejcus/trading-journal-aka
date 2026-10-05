@@ -8,6 +8,7 @@ import {
   requireSupabaseUserId,
 } from '../../../server/tradovateOAuthStore.js';
 import { handleNativeCors } from '../../../server/nativeCors.js';
+import { assertConnectionNotInArmedCopy } from '../../../server/tradovateCopierCommandRelay.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Capacitor appka vola tyto endpointy z capacitor://localhost — bez CORS
@@ -37,6 +38,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === 'DELETE') {
       const connectionId = typeof req.query.connectionId === 'string' ? req.query.connectionId : '';
       if (!connectionId) return res.status(400).json({ error: 'missing-connection-id' });
+      try {
+        await assertConnectionNotInArmedCopy({ db, userId, connectionId });
+      } catch (reason) {
+        if (reason instanceof Error && reason.message === 'copier-armed-connection-in-use') {
+          return res.status(409).json({ error: reason.message });
+        }
+        throw reason;
+      }
       await disconnectTradovateConnection(db, userId, connectionId);
       return res.status(200).json({ connected: false });
     }
