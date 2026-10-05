@@ -1912,6 +1912,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       open.map(order => [order.brokerOrderId, connectionSyncGeneration]),
     ));
   };
+  /** Leader příkaz je podle order streamu zrušený (i s částečným plněním). */
+  const leaderOrderCanceled = (leaderOrderId: string): boolean => (
+    group.leaderAccountId != null
+    && observedOrderStatusesByAccount.get(group.leaderAccountId)?.get(leaderOrderId) === 'canceled'
+  );
   let cooldownPending = false;
   /** Čekající auto day-lock; zamyká se výhradně existující cestou po flat. */
   let dayLockPending: { trigger: DayLockTrigger; reason: string; until?: number } | null = null;
@@ -10192,6 +10197,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (observedFill >= pending.followerQuantity && freshNet === expectedPreNet) {
           return { kind: 'filled-synced', freshNet, order };
         }
+        // Incident 5. 10. 2026: leader zrušil zbytek částečně vyplněného vstupu
+        // a copier zbytek zrušil i followerovi. Ukončená kopie s částečným
+        // plněním je srovnaná jen tehdy, když je leaderův příkaz zrušený a
+        // čerstvá pozice followera přesně odpovídá leaderovi před exitem.
+        if (observedFill > 0 && observedFill < pending.followerQuantity
+          && order.status === 'canceled'
+          && leaderOrderCanceled(pending.leaderOrderId)
+          && freshNet === expectedPreNet) {
+          return { kind: 'filled-synced', freshNet, order };
+        }
         if (observedFill === 0 && freshNet === 0
           && (order.status === 'canceled' || order.status === 'rejected')) {
           return {
@@ -10598,6 +10613,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         && (pending.side === 'Buy' ? 1 : -1) !== Math.sign(expectedPreNet)
       ))
       .map(pending => pending.followerBrokerOrderId);
+    // Zbytek kopie, jejíž leader příkaz je už zrušený: o jejím konci rozhodne
+    // stejné autoritativní čtení příkazu a pozice, ne pořadí stream eventů.
+    const canceledLeaderCandidates = pendingExposure.net !== 0
+      ? [...currentRuntimePendingExposure.values()]
+        .filter(pending => (
+          pending.accountId === follower.accountId
+          && pending.symbol === event.symbol
+          && pending.orderType !== 'Market'
+          && !pending.evidenceInvalid
+          && pending.tradeEpochGeneration === tradeEpochGeneration
+          && pending.connectionSyncGeneration === connectionSyncGeneration
+          && leaderOrderCanceled(pending.leaderOrderId)
+        ))
+        .map(pending => pending.followerBrokerOrderId)
+      : [];
     return {
       followerNet,
       expectedPreNet,
@@ -10605,6 +10635,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       candidates: [...new Set([
         ...filledLeaderCandidates,
         ...oppositePendingCandidates,
+        ...canceledLeaderCandidates,
       ])],
     };
   };
@@ -12165,6 +12196,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             scheduleFollowerMagnitudeCheck(follower.accountId, event.position.symbol);
           } else {
             clearPendingFollowerMagnitudeCheck(follower.accountId, event.position.symbol);
+          }
+          // Incident 5. 10.: Position followera téhož přírůstku dorazila dřív
+          // než leaderova a tehdy se nedala potvrdit. Teď, když leader
+          // dorovnal, se ověří stejná přesná lineage znovu (nic se neoslabuje).
+          if (event.position.netQuantity !== 0 && followerNet === expected) {
+            await strengthenLeaderFlatLineage(follower.accountId, event.position.symbol, followerNet);
           }
         }
         if (event.position.netQuantity !== 0) {
