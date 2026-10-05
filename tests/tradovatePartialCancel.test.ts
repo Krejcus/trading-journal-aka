@@ -72,4 +72,33 @@ describe('Tradovate zrušený zbytek částečně vyplněné objednávky', () =>
       } });
     await expect.poll(() => latest(wire, id)?.status).toBe('filled');
   });
+
+  it('Completed report Cancelu bez cumQty (Fill ještě nedorazil) zůstává filled', async () => {
+    const { wire, id } = await setup();
+    wire.commands.set(80_100, { id: 80_100, orderId: id, commandType: 'Cancel' });
+    const raw = { ...wire.orders.get(id)!, ordStatus: 'Filled' };
+    wire.orders.set(id, raw);
+    wire.props({ entityType: 'command', entity: wire.commands.get(80_100)! }, { entityType: 'order', entity: raw },
+      { entityType: 'executionReport', entity: {
+        id: 90_003, commandId: 80_100, orderId: id, accountId: 100, contractId: 7, execType: 'Completed', ordStatus: 'Filled', action: 'Buy',
+      } });
+    await expect.poll(() => latest(wire, id)?.status).toBe('filled');
+    wire.fill(id, 18, 31_241.5);
+    await expect.poll(() => latest(wire, id)?.filledQuantity).toBe(18);
+    expect(latest(wire, id)?.status).toBe('filled');
+  });
+
+  it('důkaz zrušení zbytku se po ztrátě streamu doplní z REST (findOrderById)', async () => {
+    const { wire, id } = await setup();
+    wire.fill(id, 6, 31_241.5);
+    await expect.poll(() => latest(wire, id)?.filledQuantity).toBe(6);
+    // Broker zrušil zbytek, ale stream to už nedoručil.
+    const commandId = 80_200;
+    wire.commands.set(commandId, { id: commandId, orderId: id, commandType: 'Cancel' });
+    wire.orders.set(id, { ...wire.orders.get(id)!, ordStatus: 'Filled' });
+    wire.reports.set(90_004, { id: 90_004, commandId, orderId: id, accountId: 100, contractId: 7,
+      execType: 'Completed', ordStatus: 'Filled', action: 'Buy', cumQty: 6 });
+    const lookup = await wire.broker.findOrderById(100, String(id));
+    expect(lookup.order).toMatchObject({ status: 'canceled', filledQuantity: 6, quantity: 18 });
+  });
 });

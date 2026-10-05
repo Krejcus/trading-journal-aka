@@ -3186,7 +3186,36 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     ));
   };
 
-  const leaderFlatFollowersAt = (symbol: string, leaderNet: number): LeaderFlatFollowerOwnership[] =>
+  /** Součet copied-entry fillů podle follower broker orderu (dedupe podle fillId). */
+  const copierEntryFillTotals = new Map<string, number>();
+  const copierEntryFillIds = new Set<string>();
+  /**
+   * Přísnější lineage pro dodatečné potvrzení (leader Position dorovnala až
+   * po followerovi): celá pozice followera musí pocházet z fillů jediného
+   * copier entry orderu navázaného na vstup aktuální leader epochy. Cizí nebo
+   * ruční přírůstek, starší epocha i více vstupů zůstávají neprokázané.
+   */
+  const exactCopiedEntryNet = (accountId: number, symbol: string, netQuantity: number): boolean => {
+    if (!copiedEntryLineage(accountId, symbol, netQuantity)) return false;
+    const cause = recentFollowerFillCauses.get(`${accountId}:${symbol}`);
+    const epoch = leaderExposureEpoch(symbol);
+    if (!cause || !epoch) return false;
+    const live = currentRuntime();
+    const leaderOrderIds = new Set(epoch.leaderEntryOrderIds);
+    const boundToEpoch = [...live.outbox.values()].some(entry => (
+      entry.brokerOrderId === cause.brokerOrderId
+      && entry.request.accountId === accountId
+      && leaderOrderIds.has(entry.leaderOrderId)
+    )) || [...live.osoOutbox.values()].some(entry => (
+      entry.entryBrokerOrderId === cause.brokerOrderId
+      && entry.request.accountId === accountId
+      && leaderOrderIds.has(entry.leaderEntryOrderId)
+    ));
+    if (!boundToEpoch) return false;
+    return (copierEntryFillTotals.get(cause.brokerOrderId) ?? 0) * cause.sign === netQuantity;
+  };
+
+  const leaderFlatFollowersAt =(symbol: string, leaderNet: number): LeaderFlatFollowerOwnership[] =>
     group.followers.map(follower => {
       const eligibleAtOpen = follower.enabled !== false && follower.mode !== 'off'
         && !currentIneligibleAccounts().has(follower.accountId)
@@ -3210,6 +3239,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     accountId: number,
     symbol: string,
     netQuantity: number,
+    requireExactEntryFills = false,
   ) => {
     const epoch = leaderExposureEpoch(symbol);
     if (!epoch || epoch.phase !== 'open' || netQuantity === 0) return;
@@ -3220,7 +3250,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const expectedNet = Math.trunc(leaderNet * follower.multiplier);
     if (
       netQuantity !== expectedNet
-      || !copiedEntryLineage(accountId, symbol, netQuantity)
+      || !(requireExactEntryFills
+        ? exactCopiedEntryNet(accountId, symbol, netQuantity)
+        : copiedEntryLineage(accountId, symbol, netQuantity))
     ) return;
     const participant = epoch.followers.find(item => item.accountId === accountId);
     if (!participant || !participant.eligibleAtOpen) return;
@@ -4767,6 +4799,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const rememberFollowerFillCause = (fill: BrokerFill, observedAt: number) => {
     const role = followerFillRole(fill.accountId, fill.brokerOrderId);
     if (!role) return;
+    if (copierEntryFillIds.size > 10_000) {
+      // Omezená paměť: ztráta součtů jen znemožní dodatečné potvrzení lineage.
+      copierEntryFillIds.clear();
+      copierEntryFillTotals.clear();
+    }
+    if (role === 'copied-entry' && !copierEntryFillIds.has(fill.fillId)) {
+      copierEntryFillIds.add(fill.fillId);
+      copierEntryFillTotals.set(
+        fill.brokerOrderId,
+        (copierEntryFillTotals.get(fill.brokerOrderId) ?? 0) + fill.quantity,
+      );
+    }
     const key = followerTransitionKey(fill.accountId, fill.symbol);
     const sign = fill.side === 'Buy' ? 1 : -1;
     const cause: RecentFollowerFillCause = {
@@ -12198,10 +12242,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             clearPendingFollowerMagnitudeCheck(follower.accountId, event.position.symbol);
           }
           // Incident 5. 10.: Position followera téhož přírůstku dorazila dřív
-          // než leaderova a tehdy se nedala potvrdit. Teď, když leader
-          // dorovnal, se ověří stejná přesná lineage znovu (nic se neoslabuje).
+          // než leaderova a tehdy se nedala potvrdit. Dodatečné potvrzení
+          // vyžaduje přísnější důkaz: celá pozice z fillů jediného copier
+          // entry orderu aktuální epochy (cizí přírůstek nic nepotvrdí).
           if (event.position.netQuantity !== 0 && followerNet === expected) {
-            await strengthenLeaderFlatLineage(follower.accountId, event.position.symbol, followerNet);
+            await strengthenLeaderFlatLineage(follower.accountId, event.position.symbol, followerNet, true);
           }
         }
         if (event.position.netQuantity !== 0) {

@@ -148,4 +148,41 @@ describe('incident 5. 10. 2026 — částečně vyplněný OSO vstup', () => {
       controller.stop();
     }
   });
+
+  it('cizí přírůstek po copier fillu lineage při dorovnání leadera nepotvrdí', async () => {
+    const { broker, store, controller, group, position, order } = await setup(1);
+    try {
+      broker.setConnected(true); await controller.waitForIdle(); await controller.reconcile(); controller.arm();
+      broker.emitEvent({ type: 'order', order: order('entry') });
+      broker.emitEvent({ type: 'order', order: order('stop', {
+        parentOrderId: 'entry', side: 'Sell', orderType: 'Stop', limitPrice: undefined, stopPrice: 31230.5,
+      }) });
+      broker.emitEvent({ type: 'order', order: order('target', { parentOrderId: 'entry', side: 'Sell', limitPrice: 31282 }) });
+      await controller.waitForIdle();
+      const follower = group.followers[0];
+      const entry = broker.orders().find(o => o.accountId === follower.accountId && o.side === 'Buy')!;
+      // Copier fill +1 u followera i leadera.
+      entry.filledQuantity = 1;
+      broker.emitEvent({ type: 'fill', fill: { fillId: 'f-copy-1', tag: '', brokerOrderId: entry.brokerOrderId,
+        accountId: follower.accountId, symbol, side: 'Buy', quantity: 1, price: 31241.5, filledAt: 1 } });
+      position(follower.accountId, 1);
+      broker.emitEvent({ type: 'fill', fill: { fillId: 'f-lead-1', tag: '', brokerOrderId: 'entry',
+        accountId: 100, symbol, side: 'Buy', quantity: 1, price: 31241.5, filledAt: 2 } });
+      position(100, 1);
+      await controller.waitForIdle();
+      // Ruční/cizí +5 na followerovi, pak leader dorovná na 6 vlastním fillem.
+      broker.emitEvent({ type: 'fill', fill: { fillId: 'f-manual-5', tag: '', brokerOrderId: 'manual-order',
+        accountId: follower.accountId, symbol, side: 'Buy', quantity: 5, price: 31241.5, filledAt: 3 } });
+      position(follower.accountId, 6);
+      broker.emitEvent({ type: 'fill', fill: { fillId: 'f-lead-5', tag: '', brokerOrderId: 'entry',
+        accountId: 100, symbol, side: 'Buy', quantity: 5, price: 31241.5, filledAt: 4 } });
+      position(100, 6);
+      await controller.waitForIdle();
+      const participant = (await store.load()).safety!.leaderExposureEpochs![0].followers
+        .find(item => item.accountId === follower.accountId);
+      expect(participant?.confirmedNetQuantity ?? 0).not.toBe(6);
+    } finally {
+      controller.stop();
+    }
+  });
 });

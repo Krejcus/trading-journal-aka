@@ -898,7 +898,11 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       && item.commandStatus !== 'ExecutionStopped'
     ));
     if (unresolvedModify) return null;
-    const filled = Math.max(fillTotals.get(orderId) ?? 0, report.cumQty ?? 0);
+    // Bez brokerova cumQty v reportu nejde odlišit zrušený zbytek od plného
+    // fillu, jehož Fill entita ještě nedorazila: zůstává dosavadní význam.
+    if (typeof report.cumQty !== 'number' || !Number.isFinite(report.cumQty)) return null;
+    const filled = report.cumQty;
+    if ((fillTotals.get(orderId) ?? 0) > filled) return null;
     if (!(filled < orderQty)) return null;
     return { filled, commandId: report.commandId };
   };
@@ -1297,7 +1301,15 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       && !confirmedCommands.has(commandId)
       && !rejectedCommands.has(commandId)
     ));
-    const reports = (await Promise.all(modifyCommandIds.map(commandId => (
+    // Po restartu/ztrátě streamu se musí dát znovu doložit i zrušený zbytek
+    // částečně vyplněné objednávky (raw Filled + Completed report Cancelu).
+    const cancelCommandIds = raw && (raw.ordStatus === 'Filled' || raw.ordStatus === 'Completed')
+      ? (dependentCommands ?? [])
+        .filter(command => command.orderId === orderId && command.commandType === 'Cancel')
+        .map(command => command.id)
+        .filter(commandId => completedCommandReports.get(orderId)?.commandId !== commandId)
+      : [];
+    const reports = (await Promise.all([...modifyCommandIds, ...cancelCommandIds].map(commandId => (
       request<TradovateExecutionReportEntity[]>(`/executionReport/deps?masterid=${commandId}`)
     )))).flat().sort((left, right) => left.id - right.id);
     for (const report of reports) {
