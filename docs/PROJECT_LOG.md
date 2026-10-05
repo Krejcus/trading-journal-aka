@@ -281,7 +281,14 @@ skupiny; účty nové skupiny a účty s kopií kopírky dál musí být flat.
 - Codex 5. kolo: žádný kritický/vysoký nález, „nasaditelné, bezpečnostně lepší
   než b642f094^“; jeho poslední liveness nález (OCO/OSO reject) opraven.
   Testy: tests/copierSwitchLeavingManualPositions.test.ts (12), celá sada
-  4916 passed. Nenasazeno — čeká na „nasaď“.
+  4916 passed.
+- NASAZENO 5. 10. (Filip „nasaď“): main fast-forward 3bf189cb → 5e9822a0
+  (lokální neodeslané commity jiné session v Documents 48b4c0a0/2d972036
+  nedotčeny). Read-only reconcile čistý → `mac-reinstall-safe.sh` (bundle
+  ccc6634a…, commit 5e9822a0) → reconcile čistý. Breached Tradeify 65333343
+  a 65333277 odebrány ze skupiny „Hlavní“ (`update-group` přes lokálního
+  agenta); skupina: leader 68356274, followeři 68356280, 64503883, 68356277,
+  68356271. DISARMED, connected, bez divergence; FundedNext načten discovery.
 
 ### 2026-10-05 — Mac patří uživateli, ne propfirmě (Claude, konzultace s Codexem)
 
