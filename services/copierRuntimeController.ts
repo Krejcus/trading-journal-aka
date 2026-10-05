@@ -731,7 +731,16 @@ export interface BootstrapCopierOptions {
   leaderFlatInflightRetryMs?: number;
   /** Deadline jednoho read-only broker čtení leader-flat guardu. */
   leaderFlatReadTimeoutMs?: number;
+  /** Odstup mezi dvěma REST koly při usazení kopie na flat účtu (test override). */
+  copierSettlementQuietMs?: number;
+  /** Minimální stáří položky outboxu před usazením (test override). */
+  copierSettlementMinAgeMs?: number;
+  /** Minimální doba od ukončení nohy kopie před usazením (test override). */
+  copierSettlementTerminalAgeMs?: number;
 }
+
+/** Prefix důvodu, kterým reconciliation přepisuje potvrzený konečný reject na waived. */
+const TERMINAL_REJECT_WAIVE_REASON = 'Konečný reject potvrzen následnou autoritativní reconciliation';
 
 const errorOf = (reason: unknown) => reason instanceof Error ? reason : new Error(String(reason));
 
@@ -2774,7 +2783,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     await processor.mutate(async current => {
       const now = clock();
       const reason = (original?: string) => [
-        'Konečný reject potvrzen následnou autoritativní reconciliation',
+        TERMINAL_REJECT_WAIVE_REASON,
         original,
       ].filter(Boolean).join(': ');
       const outbox = new Map(current.outbox);
@@ -3407,6 +3416,286 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return { ...current, state, revision: committed.revision };
     });
   };
+
+  type CopierOwnershipEntry = {
+    id: string;
+    accountId: number;
+    symbol: string;
+    status: string;
+    updatedAt: number;
+    legIds: string[];
+    /** Tagy, podle kterých jde u brokera najít i příkaz bez známého ID. */
+    tags: string[];
+    /** Definitivní reject (broker/policy) — přežije i pozdější „waived“. */
+    rejected?: boolean;
+  };
+  /**
+   * Vlastnictví kopírky se odvozuje od durable outboxu: položka se zapíše
+   * dřív, než příkaz odejde k brokerovi, takže ji nepřeskočí pád procesu ani
+   * pořadí Order/Fill/Position eventů. Outbox se maže jen přepnutím skupiny.
+   */
+  const copierOwnershipEntries = (): CopierOwnershipEntry[] => {
+    const live = currentRuntime();
+    const entries: CopierOwnershipEntry[] = [];
+    for (const entry of live.outbox.values()) {
+      entries.push({
+        id: `o:${entry.key}`, accountId: entry.request.accountId, symbol: entry.request.symbol,
+        status: entry.status, updatedAt: entry.updatedAt,
+        legIds: entry.brokerOrderId ? [entry.brokerOrderId] : [],
+        tags: [entry.tag],
+        rejected: entry.status === 'rejected' || entry.rejectedBy != null,
+      });
+    }
+    for (const entry of live.bracketOutbox.values()) {
+      entries.push({
+        id: `b:${entry.key}`, accountId: entry.request.accountId, symbol: entry.request.symbol,
+        status: entry.status, updatedAt: entry.updatedAt,
+        legIds: [entry.firstBrokerOrderId, entry.secondBrokerOrderId].filter((id): id is string => !!id),
+        tags: [entry.tag],
+        rejected: entry.status === 'rejected' || (entry.reason?.startsWith(TERMINAL_REJECT_WAIVE_REASON) ?? false),
+      });
+    }
+    for (const entry of live.osoOutbox.values()) {
+      entries.push({
+        id: `s:${entry.key}`, accountId: entry.request.accountId, symbol: entry.request.symbol,
+        status: entry.status, updatedAt: entry.updatedAt,
+        legIds: [entry.entryBrokerOrderId, entry.firstBrokerOrderId, entry.secondBrokerOrderId]
+          .filter((id): id is string => !!id),
+        tags: [entry.tag],
+        rejected: entry.status === 'rejected' || (entry.reason?.startsWith(TERMINAL_REJECT_WAIVE_REASON) ?? false),
+      });
+    }
+    return entries;
+  };
+
+  /**
+   * Kandidát na usazení: konečný stav outboxu, dost starý, aby ho broker
+   * REST už znal, a žádná jeho noha lokálně nepracuje. Samotné usazení
+   * rozhoduje až autoritativní broker čtení, ne pořadí stream eventů.
+   */
+  const COPIER_SETTLEMENT_MIN_AGE_MS = options.copierSettlementMinAgeMs ?? 10_000;
+  const COPIER_SETTLEMENT_QUIET_MS = options.copierSettlementQuietMs ?? 1_000;
+  /**
+   * Jak dlouho musí být noha kopie lokálně známá jako ukončená, než flat
+   * účet smí kopii usadit. Kryje opožděnou Position projekci už provedeného
+   * fillu (REST order „Filled“, REST pozice ještě flat).
+   */
+  const COPIER_SETTLEMENT_TERMINAL_AGE_MS = options.copierSettlementTerminalAgeMs ?? 30_000;
+  const COPIER_SETTLEMENT_SWEEP_MS = 5 * 60_000;
+  /** Položka bez známého broker ID: jen definitivní reject nebo stavem potvrzená likvidace. */
+  const leglessEntryFinished = (entry: CopierOwnershipEntry) => (
+    entry.status === 'rejected' || entry.status === 'confirmed-by-state'
+    // Reconciliation potvrzený reject se přepíše na waived; ruční waive
+    // nejasného odeslání (bez rejectedBy) dál zůstává „možná kopie“.
+    || (entry.status === 'waived' && entry.rejected === true)
+  );
+  const copierSettlementCandidate = (entry: CopierOwnershipEntry, now: number): boolean => (
+    (entry.legIds.length === 0
+      ? leglessEntryFinished(entry)
+      : entry.status === 'acknowledged' || entry.status === 'confirmed-by-state'
+        || entry.status === 'rejected' || entry.status === 'waived')
+    && entry.updatedAt <= now - COPIER_SETTLEMENT_MIN_AGE_MS
+    && !entry.legIds.some(orderId => liveOrdersByAccount.get(entry.accountId)?.has(orderId))
+  );
+
+  const unsettledCopierEntries = (accountId: number): CopierOwnershipEntry[] => {
+    const settled = new Set(currentRuntime().state.safety.settledCopierEntries ?? []);
+    return copierOwnershipEntries().filter(entry => entry.accountId === accountId && !settled.has(entry.id));
+  };
+  /** Symboly účtu, kde kopírka od posledního ověřeného flat odeslala příkaz. */
+  const unsettledCopierSymbols = (accountId: number): Set<string> => new Set(
+    unsettledCopierEntries(accountId).map(entry => entry.symbol),
+  );
+
+  /** Lokální čas, kdy jsme nohu kopie poprvé viděli ukončenou (event nebo REST). */
+  const copierLegTerminalSeenAt = new Map<string, number>();
+  const noteCopierLegTerminal = (orderId: string, at: number) => {
+    if (!copierLegTerminalSeenAt.has(orderId)) copierLegTerminalSeenAt.set(orderId, at);
+  };
+
+  const copierSettlementTimers = new Set<ReturnType<typeof setTimeout>>();
+  const copierSettlementWaiters = new Set<() => void>();
+  const settlementPause = (ms: number) => new Promise<void>(resolve => {
+    if (stopped) { resolve(); return; }
+    const done = () => { copierSettlementWaiters.delete(done); clearTimeout(timer); copierSettlementTimers.delete(timer); resolve(); };
+    const timer = setTimeout(done, ms);
+    copierSettlementTimers.add(timer);
+    copierSettlementWaiters.add(done);
+  });
+  const stopCopierSettlement = () => {
+    for (const timer of copierSettlementTimers) clearTimeout(timer);
+    copierSettlementTimers.clear();
+    for (const done of [...copierSettlementWaiters]) done();
+    copierSettlementPendingAccounts.clear();
+  };
+
+  /**
+   * Usazení kopií jednoho účtu (5. 10. 2026). Jen za DISARM — za ARM ho
+   * přepnutí skupiny nepotřebuje a REST čtení by zbytečně zatěžovala route.
+   * Dvě autoritativní kola s odstupem musí ukázat flat symboly kandidátů bez
+   * otevřeného příkazu kopírky (ID i tag), každá noha musí být ukončená
+   * aspoň COPIER_SETTLEMENT_TERMINAL_AGE_MS a mezi začátkem a commitem nesmí
+   * na účet dorazit obchodní událost. Commit se po zápisu ještě jednou
+   * ověří a při změně vrátí. Selhání = neusazeno (konzervativně „kopie“).
+   */
+  const verifyAndSettleCopierAccount = async (accountId: number): Promise<'done' | 'retry'> => {
+    const settlementAllowed = () => !stopped && gate.connected && !gate.armed;
+    if (!settlementAllowed()) return 'done';
+    const now = clock();
+    const candidates = unsettledCopierEntries(accountId)
+      .filter(entry => copierSettlementCandidate(entry, now));
+    if (candidates.length === 0) return 'done';
+    const symbols = new Set(candidates.map(entry => entry.symbol));
+    // Podle streamu ne-flat: žádné REST čtení. Flat event to spustí znovu.
+    if ([...symbols].some(symbol => (positionsByAccount.get(accountId)?.get(symbol) ?? 0) !== 0)) return 'done';
+    const versionAtStart = tradeObservationVersionByAccount.get(accountId) ?? 0;
+    const generationAtStart = connectionSyncGeneration;
+    const legIds = new Set(candidates.flatMap(entry => entry.legIds));
+    const legsByEntry = new Map(candidates.map(entry => [entry.id, new Set(entry.legIds)]));
+    const quiet = async (): Promise<boolean> => {
+      const [positions, orders] = await Promise.all([
+        withLeaderEpochDeadline(`copier settlement positions ${accountId}`, broker.listPositions(accountId)),
+        withLeaderEpochDeadline(`copier settlement orders ${accountId}`, broker.listOrders(accountId, { fresh: true })),
+      ]);
+      const readAt = clock();
+      const flat = positions
+        .filter(position => symbols.has(position.symbol))
+        .every(position => position.netQuantity === 0);
+      let copierOrderOpen = false;
+      for (const order of orders) {
+        const tagMatch = candidates.find(entry => entry.tags.some(tag => tag.length > 0 && order.tag.startsWith(tag)));
+        if (!legIds.has(order.brokerOrderId) && !tagMatch) continue;
+        if (tagMatch) legsByEntry.get(tagMatch.id)?.add(order.brokerOrderId);
+        if (isOpenOrderStatus(order.status)) copierOrderOpen = true;
+        else noteCopierLegTerminal(order.brokerOrderId, readAt);
+      }
+      // Noha, kterou broker v order grafu dne už nevrací, je dávno ukončená.
+      const listed = new Set(orders.map(order => order.brokerOrderId));
+      for (const orderId of legIds) if (!listed.has(orderId)) noteCopierLegTerminal(orderId, readAt);
+      return flat && !copierOrderOpen;
+    };
+    // Ne-flat nebo pracující příkaz: další Position/Order event to spustí
+    // znovu; chybu čtení dožene periodický sweep. Opakuje se jen čekání na stáří.
+    try {
+      if (!await quiet() || !settlementAllowed()) return 'done';
+      await settlementPause(COPIER_SETTLEMENT_QUIET_MS);
+      if (!settlementAllowed() || !await quiet()) return 'done';
+    } catch {
+      return 'done';
+    }
+    const decidedAt = clock();
+    const settleable = candidates.filter(entry => [...(legsByEntry.get(entry.id) ?? [])].every(orderId => {
+      const seenAt = copierLegTerminalSeenAt.get(orderId);
+      return seenAt != null && seenAt <= decidedAt - COPIER_SETTLEMENT_TERMINAL_AGE_MS;
+    }));
+    const unchanged = () => settlementAllowed()
+      && (tradeObservationVersionByAccount.get(accountId) ?? 0) === versionAtStart
+      && connectionSyncGeneration === generationAtStart
+      && !pendingTradeEventsFor([accountId]);
+    if (!unchanged()) return 'done';
+    if (settleable.length === 0) return 'retry';
+    const commitSettled = async (current: CopierRuntime, ids: ReadonlySet<string>) => {
+      const state = {
+        ...current.state,
+        safety: { ...current.state.safety, settledCopierEntries: [...ids] },
+      };
+      const committed = await durableStore.commit(
+        toSnapshot(
+          state,
+          current.outbox.values(),
+          current.cancelOutbox.values(),
+          current.revision,
+          current.bracketOutbox.values(),
+          current.osoOutbox.values(),
+        ),
+        current.revision,
+      );
+      return { ...current, state, revision: committed.revision };
+    };
+    try {
+      await processor.mutate(async current => {
+        if (!unchanged()) return current;
+        const existing = new Set(copierOwnershipEntries().map(entry => entry.id));
+        const previous = new Set((current.state.safety.settledCopierEntries ?? [])
+          .filter(id => existing.has(id)));
+        const next = new Set(previous);
+        for (const entry of settleable) if (existing.has(entry.id)) next.add(entry.id);
+        const settled = await commitSettled(current, next);
+        // Event přijatý během zápisu: usazení vrátit, ne spoléhat na stáří nohou.
+        if (unchanged()) return settled;
+        return commitSettled(settled, previous);
+      });
+    } catch {
+      return 'done';
+    }
+    return settleable.length === candidates.length ? 'done' : 'retry';
+  };
+
+  const copierSettlementPendingAccounts = new Set<number>();
+  let copierSettlementDraining = false;
+  const drainCopierSettlement = async () => {
+    if (copierSettlementDraining) return;
+    copierSettlementDraining = true;
+    const retry = new Set<number>();
+    try {
+      // Po jednom účtu s odstupem: žádný REST burst přes celou skupinu.
+      while (!stopped && !gate.armed && copierSettlementPendingAccounts.size > 0) {
+        const [accountId] = copierSettlementPendingAccounts;
+        copierSettlementPendingAccounts.delete(accountId!);
+        if (await verifyAndSettleCopierAccount(accountId!) === 'retry') retry.add(accountId!);
+        await settlementPause(COPIER_SETTLEMENT_QUIET_MS);
+      }
+    } finally {
+      copierSettlementDraining = false;
+    }
+    if (retry.size > 0 && !stopped) {
+      const timer = setTimeout(() => {
+        copierSettlementTimers.delete(timer);
+        for (const accountId of retry) requestCopierSettlement(accountId);
+      }, Math.max(COPIER_SETTLEMENT_TERMINAL_AGE_MS, COPIER_SETTLEMENT_QUIET_MS) + COPIER_SETTLEMENT_QUIET_MS);
+      (timer as { unref?: () => void }).unref?.();
+      copierSettlementTimers.add(timer);
+    }
+  };
+  const requestCopierSettlement = (accountId: number) => {
+    if (stopped) return;
+    copierSettlementPendingAccounts.add(accountId);
+    if (!gate.armed) void drainCopierSettlement();
+  };
+  /** Zachytí pozdní terminální stav, restart i starší snapshot bez usazení. */
+  const sweepCopierSettlement = () => {
+    if (stopped) return;
+    const settled = new Set(currentRuntime().state.safety.settledCopierEntries ?? []);
+    const unsettledLegs = new Set(copierOwnershipEntries()
+      .filter(entry => !settled.has(entry.id))
+      .flatMap(entry => entry.legIds));
+    for (const orderId of copierLegTerminalSeenAt.keys()) {
+      if (!unsettledLegs.has(orderId)) copierLegTerminalSeenAt.delete(orderId);
+    }
+    for (const accountId of new Set(copierOwnershipEntries()
+      .filter(entry => !settled.has(entry.id))
+      .map(entry => entry.accountId))) {
+      requestCopierSettlement(accountId);
+    }
+  };
+  const scheduleCopierSettlementSweep = () => {
+    if (stopped) return;
+    const timer = setTimeout(() => {
+      copierSettlementTimers.delete(timer);
+      sweepCopierSettlement();
+    }, COPIER_SETTLEMENT_QUIET_MS);
+    copierSettlementTimers.add(timer);
+  };
+  const runCopierSettlementSweepLoop = () => {
+    const timer = setTimeout(() => {
+      copierSettlementTimers.delete(timer);
+      sweepCopierSettlement();
+      runCopierSettlementSweepLoop();
+    }, COPIER_SETTLEMENT_SWEEP_MS);
+    (timer as { unref?: () => void }).unref?.();
+    copierSettlementTimers.add(timer);
+  };
+  runCopierSettlementSweepLoop();
 
   const maybeActivateCooldown = async (now: number, symbol: string) => {
     const cooldownMinutes = group.safety?.entryCooldownMinutes ?? 0;
@@ -11508,6 +11797,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         }
       }
     }
+    if (
+      event.type === 'order' && !isOpenOrderStatus(event.order.status)
+      && controllerCopyOrderIds(event.order.accountId).includes(event.order.brokerOrderId)
+    ) {
+      noteCopierLegTerminal(event.order.brokerOrderId, now);
+      requestCopierSettlement(event.order.accountId);
+    }
     // Tradovate může poslat Order=Filled před odpovídajícím Fill/Position.
     // Rezervaci proto uvolní až fill; okamžitě ji ruší jen definitivně
     // neprovedené příkazy.
@@ -11701,6 +11997,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }
     }
     if (event.type === 'position') {
+      // Flat je jen podnět: usazení kopie ověří broker REST mimo eventTail.
+      if (event.position.netQuantity === 0) requestCopierSettlement(event.position.accountId);
       const accountPositions = positionsByAccount.get(event.position.accountId) ?? new Map<string, number>();
       const previousAccountNet = accountPositions.get(event.position.symbol) ?? 0;
       const transitionKey = followerTransitionKey(event.position.accountId, event.position.symbol);
@@ -13656,7 +13954,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           && !pendingIsolationCommandForAccount(accountId)
           && !followerCutBackgroundAccounts.has(accountId)
           && !stuckAccountIds.has(accountId)
+          // Každá kopie na účtu musí být ověřeně usazená (flat po ukončení
+          // všech jejích nohou). Jinak může být fill na cestě a účet musí
+          // být flat jako každý jiný účet s kopií.
+          && unsettledCopierEntries(accountId).length === 0
         )));
+      const leavingAccountIds = [...currentTopology]
+        .filter((accountId): accountId is number => accountId != null)
+        .filter(accountId => !nextAccountIds.has(accountId));
+      let leavingVersionsAtCommit: Map<number, number> | null = null;
+      const awaitingSettlementAccountIds = [...currentTopology]
+        .filter((accountId): accountId is number => accountId != null)
+        .filter(accountId => !nextAccountIds.has(accountId) && !copierFreeLeavingAccountIds.has(accountId)
+          && unsettledCopierEntries(accountId).length > 0);
       const requiredAccountIds = accountIds.filter(accountId => !optionalFollowerIds.has(accountId)
         && !retiredAccountIds.has(accountId)
         && !copierFreeLeavingAccountIds.has(accountId));
@@ -13673,7 +13983,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (stopped || shutdownRequested || gate.armed || gate.killSwitch || !gate.connected
           || safetyGeneration !== generationAtStart || groupRevision !== revisionAtStart
           || brokerObservationVersion !== observationAtStart
-          || pendingTradeEventsFor(requiredAccountIds)) {
+          || pendingTradeEventsFor([...requiredAccountIds, ...copierFreeLeavingAccountIds])) {
           throw new Error(`${operation}: stav se změnil během kontroly; opakuj ověření`);
         }
       };
@@ -13699,14 +14009,43 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           throw new Error(`${operation} blokují neaktivní/read-only účty: ${unavailable.join(',')}`);
         }
 
-        const readRound = async () => Promise.all(requiredAccountIds.map(async accountId => {
+        const readAccounts = (checkedAccountIds: readonly number[]) => Promise.all(checkedAccountIds.map(async accountId => {
           const [positions, orders] = await Promise.all([
             withLeaderEpochDeadline(`leader position preflight ${accountId}`, broker.listPositions(accountId)),
             withLeaderEpochDeadline(`leader order preflight ${accountId}`, broker.listOrders(accountId)),
           ]);
           return { accountId, positions, orders };
         }));
-        const assertFlatSnapshots = (checked: Awaited<ReturnType<typeof readRound>>) => {
+        const readRound = async () => {
+          const [required, leaving] = await Promise.all([
+            readAccounts(requiredAccountIds),
+            readAccounts([...copierFreeLeavingAccountIds]),
+          ]);
+          return { required, leaving };
+        };
+        // Odcházející účet: pozice smí zůstat jen na symbolu, kde kopírka od
+        // posledního ověřeného flat nic neodeslala (durable outbox přežije
+        // DISARM, pád i restart). Pracovní příkaz kopírky blokuje vždy.
+        const assertLeavingSnapshots = (checked: Awaited<ReturnType<typeof readRound>>['leaving']) => {
+          const problems: string[] = [];
+          for (const snapshot of checked) {
+            const marked = unsettledCopierSymbols(snapshot.accountId);
+            const copied = snapshot.positions
+              .filter(position => position.netQuantity !== 0 && marked.has(position.symbol))
+              .map(position => position.symbol);
+            if (copied.length > 0) {
+              problems.push(`účet ${snapshot.accountId} drží pozici z kopírky (${[...new Set(copied)].join(',')})`);
+            }
+            const copierOrders = new Set(controllerCopyOrderIds(snapshot.accountId));
+            if (snapshot.orders.some(order => isOpenOrderStatus(order.status) && copierOrders.has(order.brokerOrderId))) {
+              problems.push(`účet ${snapshot.accountId} má pracovní příkaz kopírky`);
+            }
+          }
+          if (problems.length > 0) {
+            throw new Error(`${operation} blokuje odcházející účet: ${problems.join('; ')}. Zavři kopii, nebo účet nech ve skupině`);
+          }
+        };
+        const assertFlatSnapshots = (checked: Awaited<ReturnType<typeof readRound>>['required']) => {
           const nonFlat = checked.filter(snapshot =>
             snapshot.positions.some(position => position.netQuantity !== 0));
           const withWorkingOrders = checked.filter(snapshot =>
@@ -13718,21 +14057,16 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
               ? `working=${withWorkingOrders.map(item => item.accountId).join(',')}`
               : '',
           ].filter(Boolean).join(' ');
-          throw new Error(`${operation} vyžaduje účty nové skupiny a účty s kopií kopírky flat a bez příkazů: ${details}`);
+          const blockedLeaving = awaitingSettlementAccountIds.filter(accountId => (
+            nonFlat.some(item => item.accountId === accountId)
+            || withWorkingOrders.some(item => item.accountId === accountId)
+          ));
+          const hint = blockedLeaving.length > 0
+            ? `. Účty ${blockedLeaving.join(',')} opouštějí skupinu, ale kopírka na nich má neověřenou kopii; `
+              + 'po vypnutí ji ověří zhruba do minuty od zavření kopií — pokud jsou zavřené, zkus to znovu'
+            : '';
+          throw new Error(`${operation} vyžaduje účty nové skupiny a účty s kopií kopírky flat a bez příkazů: ${details}${hint}`);
         };
-        // Odcházející účet bez záznamu kopírky: u brokera ještě ověř, že žádný
-        // jeho pracovní příkaz není kopií (přepnutí zahodí linky i outbox).
-        for (const accountId of copierFreeLeavingAccountIds) {
-          const orders = await withLeaderEpochDeadline(
-            `leaving account order preflight ${accountId}`,
-            broker.listOrders(accountId),
-          );
-          const copierOrders = new Set(controllerCopyOrderIds(accountId));
-          if (orders.some(order => isOpenOrderStatus(order.status) && copierOrders.has(order.brokerOrderId))) {
-            throw new Error(`${operation} blokuje pracovní příkaz kopírky na odcházejícím účtu ${accountId}`);
-          }
-        }
-        assertFreshPreflight();
         if (copierFreeLeavingAccountIds.size > 0) {
           options.onAudit?.([{
             at: clock(),
@@ -13745,16 +14079,41 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // koly není žádný broker write a fence odmítne skutečný stream event.
         let snapshots = await readRound();
         assertFreshPreflight();
-        assertFlatSnapshots(snapshots);
+        assertFlatSnapshots(snapshots.required);
+        assertLeavingSnapshots(snapshots.leaving);
         snapshots = await readRound();
         assertFreshPreflight();
-        assertFlatSnapshots(snapshots);
+        assertFlatSnapshots(snapshots.required);
+        assertLeavingSnapshots(snapshots.leaving);
+        const leavingSnapshots = snapshots.leaving;
+        // Flat odcházející účet s neusazenou kopií: přepnutí smaže outbox, takže
+        // opožděná Position projekce právě ukončené nohy by z kopie udělala
+        // „ruční“ pozici. Nohy musí být ukončené aspoň TERMINAL_AGE.
+        {
+          const checkedAt = clock();
+          const freshLegAccounts = awaitingSettlementAccountIds.filter(accountId => (
+            unsettledCopierEntries(accountId).some(entry => (
+              entry.legIds.length === 0
+                ? !leglessEntryFinished(entry)
+                : entry.legIds.some(orderId => {
+                  const seenAt = copierLegTerminalSeenAt.get(orderId);
+                  return seenAt == null || seenAt > checkedAt - COPIER_SETTLEMENT_TERMINAL_AGE_MS;
+                })
+            ))
+          ));
+          if (freshLegAccounts.length > 0) {
+            for (const accountId of freshLegAccounts) requestCopierSettlement(accountId);
+            throw new Error(`${operation}: účty ${freshLegAccounts.join(',')} opouštějí skupinu s právě ukončenou kopií; `
+              + 'kopírka ještě ověřuje její konec, zkus to znovu za minutu');
+          }
+        }
         const pendingCutClosures = tightenedCutClosures(group, nextGroup);
 
         const apply = eventTail.then(async () => {
         // Všechny eventy přijaté během REST čtení jsou už před námi. Skutečná
         // obchodní/connection změna proto konfiguraci odmítne; heartbeat ne.
         assertFreshPreflight();
+        assertLeavingSnapshots(leavingSnapshots);
 
       if (ownershipRisks.length > 0) {
         options.onAudit?.(ownershipRisks.map(item => ({
@@ -13770,6 +14129,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const {
           liveCopyOpenSince: _dropOpenFlag,
           leaderExposureEpochs: _dropLeaderExposureEpochs,
+          // Nová skupina začíná ověřeně: účty zůstávající/nové jsou flat a
+          // odcházející pozice bez stopy kopírky patří uživateli.
+          settledCopierEntries: _dropSettledCopierEntries,
           ...preservedSafety
         } = current.state.safety;
         // A current broker snapshot settles exposure, not the missing exit price.
@@ -13793,12 +14155,36 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         // proto dokončíme přepnutí group v DISARMED stavu místo kombinace
         // stará group + vyčištěný durable runtime.
         assertFreshPreflight();
+        leavingVersionsAtCommit = new Map(leavingAccountIds.map(accountId => [
+          accountId, tradeObservationVersionByAccount.get(accountId) ?? 0,
+        ]));
         const committed = await durableStore.commit(
           toSnapshot(cleanState, [], [], current.revision, [], []),
           current.revision,
         );
         return createRuntime(cleanState, [], [], committed.revision, [], []);
       });
+      copierLegTerminalSeenAt.clear();
+      // Obchodní událost odcházejícího účtu přijatá během samotného zápisu už
+      // nejde odmítnout (stará evidence je pryč). Nesmí ale zapadnout: nová
+      // skupina zůstane DISARMED s povinnou reconciliací a hlášením.
+      const changedDuringCommit = leavingAccountIds.filter(accountId => (
+        (tradeObservationVersionByAccount.get(accountId) ?? 0) !== (leavingVersionsAtCommit?.get(accountId) ?? 0)
+      ));
+      const commitIngressError = changedDuringCommit.length > 0
+        ? new Error(
+          `Během přepnutí skupiny dorazila obchodní změna na odcházejících účtech ${changedDuringCommit.join(',')}; `
+          + 'zkontroluj jejich pozice — kopírka je už nespravuje',
+        )
+        : null;
+      if (commitIngressError) {
+        options.onAudit?.([{
+          at: clock(),
+          leaderEventId: `switch-commit-ingress:${group.id}:${nextGroup.id}:${clock()}`,
+          kind: 'blocked',
+          reason: commitIngressError.message,
+        }]);
+      }
       // Audit smí tvrdit retirement až po úspěšném durable CAS. Při
       // selhání commit() se sem tok nedostane a chyba se propaguje.
       if (retirement) {
@@ -13861,12 +14247,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       leaderPositionSnapshotComplete = false;
       flatReconciledLeaderEpochIds.clear();
       leaderFillAheadOfPosition.clear();
-      for (const snapshot of snapshots) {
+      for (const snapshot of snapshots.required) {
         positionsByAccount.set(snapshot.accountId, new Map(
           snapshot.positions.map(position => [position.symbol, position.netQuantity]),
         ));
       }
-      for (const snapshot of snapshots) rememberLiveOrderSnapshot(snapshot.accountId, snapshot.orders);
+      for (const snapshot of snapshots.required) rememberLiveOrderSnapshot(snapshot.accountId, snapshot.orders);
       lastAuthoritativeReadAt = clock();
       lastBrokerPositionAt = lastAuthoritativeReadAt;
       untrackedTradeSymbols.clear();
@@ -13888,7 +14274,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       recoveryInFlight = false;
       bootRecoveryChecked = true;
       invalidateReconciliation();
-      lastError = null;
+      // Nová skupina startuje bez staré chyby; změna během zápisu ale zůstane vidět.
+      lastError = commitIngressError;
       gate = {
         ...gate,
         armed: false,
@@ -14243,6 +14630,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // leader později zavře, smí dokončit jen prokázanou existující kopii
       // přes přesný account/symbol guard.
       void syncLiveCopyExposureFlag('clear').catch(() => undefined);
+      // Odmítnuté a ukončené kopie na flat účtech se usadí hned, ne až sweepem.
+      scheduleCopierSettlementSweep();
     },
     engageKillSwitch(reason = 'Ruční nouzové zastavení') {
       if (stopped) return;
@@ -14371,6 +14760,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (changed) await persistEligibility();
     },
     async reconcile(reconciliationOptions = {}) {
+      scheduleCopierSettlementSweep();
       // Správa otevřených kopií (management-only) se nesmí vypnout ruční
       // Kontrolou pozic — odmítnutí musí přijít dřív než auditovaný DISARM.
       const managementOnly = currentRuntime().state.safety.managementOnly;
@@ -15160,6 +15550,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     stop() {
       if (stopped) return;
       stopped = true;
+      stopCopierSettlement();
       gate = { ...gate, armed: false, connected: false };
       cancelFollowerCutBackgroundLanes('stop');
       for (const timer of pendingBracketTimers.values()) clearTimeout(timer);

@@ -181,6 +181,9 @@ function cloneSafety(safety: CopierSnapshot['safety']): NonNullable<CopierSnapsh
         },
       } : {}),
     })) ?? [],
+    ...(base.settledCopierEntries
+      ? { settledCopierEntries: [...base.settledCopierEntries] }
+      : {}),
     ...(base.seenTerminalRejects
       ? { seenTerminalRejects: base.seenTerminalRejects.map(entry => ({ ...entry })) }
       : {}),

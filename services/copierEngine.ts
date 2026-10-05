@@ -270,6 +270,13 @@ export interface CopierState {
      * znovu neposílá stejný liquidation pokus.
      */
     leaderExposureEpochs?: LeaderFlatEpoch[];
+    /**
+     * Položky outboxu (o:/b:/s: + key), jejichž příkazy jsou ukončené a účet
+     * po nich prošel flat. Neusazená položka = možná kopie na účtu+symbolu;
+     * přepnutí skupiny podle toho nepustí odcházející účet s kopií. Chybějící
+     * pole (starší snapshot) = nic usazeno, tedy konzervativně.
+     */
+    settledCopierEntries?: string[];
     /** Durable eligibility západky účtů; chybějící položka znamená active. */
     accountEligibility?: CopierAccountEligibility[];
     /** Bounded durable dedupe přímé controller větve pro async/leader rejecty. */

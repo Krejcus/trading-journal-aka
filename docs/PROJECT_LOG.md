@@ -258,6 +258,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-05 — Přepnutí skupiny a ruční pozice na odcházejících účtech (Claude, 5 kol review s Codexem)
+Cíl (Filip): ruční obchod na účtu vypnuté skupiny nesmí blokovat zapnutí jiné
+skupiny; účty nové skupiny a účty s kopií kopírky dál musí být flat.
+- Vlastnictví kopie = durable outbox (outbox/bracket/oso; zapisuje se PŘED
+  odesláním k brokerovi, maže ho jen přepnutí skupiny). Značky podle fillů
+  byly zamítnuty: Order(Filled, 0) → Position bez Fill, pád před commitem
+  i starý snapshot by je obešly.
+- `safety.settledCopierEntries`: položka je „usazená“, když jen za DISARM
+  dvě REST kola (s odstupem) ukážou flat symbol bez otevřeného příkazu kopírky
+  (ID i tag), každá noha je lokálně známá jako ukončená ≥ 30 s a mezi začátkem
+  a commitem nepřišla obchodní událost účtu (po commitu se ověří znovu, při
+  změně se usazení vrátí). Běží sériově po účtech, bez REST, když stream ukazuje
+  ne-flat. Chybějící pole = nic usazeno (konzervativně).
+- Odcházející účet je vyjmut z flat kontroly jen bez neusazené položky; flat
+  odcházející účet s čerstvě ukončenou kopií čeká 30 s. Obchodní událost
+  odcházejícího účtu během zápisu přepnutí se detekuje: nová skupina zůstane
+  DISARMED s povinnou reconciliací, `lastError` a auditem.
+- Známé meze: ruční obchod otevřený < ~30 s po zavření kopie na stejném
+  symbolu blokuje do svého zavření; teoretická broker projekce opožděná > 30 s
+  je jen detekována, ne zabráněna (okno commitu existovalo i dřív pro všechny účty).
+- Codex 5. kolo: žádný kritický/vysoký nález, „nasaditelné, bezpečnostně lepší
+  než b642f094^“; jeho poslední liveness nález (OCO/OSO reject) opraven.
+  Testy: tests/copierSwitchLeavingManualPositions.test.ts (12), celá sada
+  4916 passed. Nenasazeno — čeká na „nasaď“.
+
 ### 2026-10-05 — Mac patří uživateli, ne propfirmě (Claude, konzultace s Codexem)
 
 Filip: „připojit/odpojit propfirmu i zvolit leadera má být jedno, kromě firmy,
