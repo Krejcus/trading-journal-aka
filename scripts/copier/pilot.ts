@@ -514,8 +514,16 @@ async function runMultiConnectionAgent(): Promise<void> {
       // Závod ARM ↔ odpojení propfirmy (5. 10. 2026): těsně před ARM / změnou
       // skupiny ověř u serveru, že žádné povinné připojení není odpojené.
       // Platný token by jinak dovolil kopírovat ještě až minutu po odpojení.
-      if (connectionWatch?.scope === 'owner' && request.required.length > 0) {
-        const listed = await listMacCopierDeviceConnections({ config: connectionWatch.device });
+      if (connectionWatch && connectionWatch.scope !== 'connection' && request.required.length > 0) {
+        // Fail-closed: když scope ještě neznáme nebo je owner, bez odpovědi
+        // serveru se ARM ani změna skupiny neprovede.
+        let listed: Awaited<ReturnType<typeof listMacCopierDeviceConnections>>;
+        try {
+          listed = await listMacCopierDeviceConnections({ config: connectionWatch.device });
+        } catch (error) {
+          throw new Error(`Nelze ověřit připojení propfirem u serveru: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        connectionWatch.scope = listed.scope;
         if (listed.scope === 'owner') {
           const connectedIds = new Set(listed.connectionIds);
           const required = new Set(request.required);
@@ -725,6 +733,18 @@ async function runLocalAgent(
   // Durable stav patří leaderovi/runtime, ne konkrétnímu seznamu followerů.
   // Jinak by pouhé přidání účtu založilo nový outbox a ztratilo recovery.
   const stateConnection = stateConnectionId ?? context.connectionId;
+  // Checkpoint relay patří zařízení, které relay drží; stejné zařízení má
+  // vždy stejný soubor (i když se primární propfirma mezitím odpojí/vrátí),
+  // jinak by po pádu nedokončil rozpracovaný claim DISARM/Flatten.
+  const relayDeliveryFileName = () => {
+    const relayDeviceId = context.device?.deviceId ?? connectionWatch?.device.deviceId ?? null;
+    const primaryDeviceId = connectionWatch?.device.connectionId === stateConnection
+      ? connectionWatch.device.deviceId
+      : context.connectionId === stateConnection ? context.device?.deviceId ?? null : null;
+    return relayDeviceId == null || primaryDeviceId == null || relayDeviceId === primaryDeviceId
+      ? `${key}.relay-delivery.json`
+      : `${key}.relay-${relayDeviceId}.json`;
+  };
   const key = copierPilotStateKey(stateConnection, leaderId);
   await migrateLegacyPilotState(root, `${key}-${followerIdsKey}`, key);
   const auditPath = resolve(root, `${key}.audit.jsonl`);
@@ -1553,9 +1573,7 @@ async function runLocalAgent(
         agent,
         // Checkpoint patří zařízení, které relay drží. Když relay nese jiné
         // zařízení než primární propfirma, nesmí převzít jeho rozpracovaný stav.
-        deliveryStore: fileRelayDeliveryStore(resolve(root, context.connectionId === stateConnection
-          ? `${key}.relay-delivery.json`
-          : `${key}.relay-${context.device?.deviceId ?? connectionWatch?.device.deviceId ?? context.connectionId}.json`)),
+        deliveryStore: fileRelayDeliveryStore(resolve(root, relayDeliveryFileName())),
         // Realtime budíček: příkaz z UI dorazí za ~100–300 ms místo čekání
         // na poll interval. Kanál nese jen „kick", data jdou dál přes
         // autentizovaný REST relay; poll zůstává jako záloha.

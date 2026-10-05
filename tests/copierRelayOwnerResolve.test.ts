@@ -83,6 +83,22 @@ describe('resolveCopierRelayConnectionId', () => {
     expect(await resolveCopierRelayConnectionId({ db: fakeDb(stale), userId: 'u', connectionId: 'tradeify' })).toBe('lucid');
   });
 
+  it('živý přímý worker připojení má přednost i před čerstvějším Macem', async () => {
+    const iso = (agoMs: number) => new Date(Date.now() - agoMs).toISOString();
+    const twoWorkers = {
+      ...base,
+      tradovate_copier_devices: [
+        ...base.tradovate_copier_devices,
+        { id: 'direct', user_id: 'u', connection_id: 'tradeify', scope: 'connection', revoked_at: null },
+      ],
+      tradovate_copier_device_runtime: [
+        { device_id: 'mac', user_id: 'u', connection_id: 'lucid', last_seen_at: iso(1_000) },
+        { device_id: 'direct', user_id: 'u', connection_id: 'tradeify', last_seen_at: iso(5_000) },
+      ],
+    };
+    expect(await resolveCopierRelayConnectionId({ db: fakeDb(twoWorkers), userId: 'u', connectionId: 'tradeify' })).toBe('tradeify');
+  });
+
   it('databáze bez migrace scope zachová původní chování', async () => {
     expect(await resolveCopierRelayConnectionId({ db: fakeDb(base, ['scope']), userId: 'u', connectionId: 'tradeify' })).toBe('tradeify');
   });

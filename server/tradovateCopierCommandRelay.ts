@@ -165,17 +165,21 @@ export async function resolveCopierRelayConnectionId(options: {
     .is('revoked_at', null);
   const candidates = [...(direct ?? []), ...(ownerError ? [] : ownerDevices ?? [])] as Array<{ id: string; connection_id: string | null }>;
   if (candidates.length === 0) return options.connectionId;
-  // Rozhoduje zařízení, které opravdu běží: nejčerstvější runtime mezi
-  // kandidáty (deterministicky), ne pouhá existence starého device řádku.
-  const { data: runtime, error: runtimeError } = await options.db.from('tradovate_copier_device_runtime')
+  const { data: runtimes, error: runtimeError } = await options.db.from('tradovate_copier_device_runtime')
     .select('device_id,connection_id,last_seen_at')
     .eq('user_id', options.userId)
     .in('device_id', [...new Set(candidates.map(device => device.id))])
-    .order('last_seen_at', { ascending: false })
-    .limit(1)
-    .maybeSingle<{ device_id: string; connection_id: string | null; last_seen_at: string }>();
+    .order('last_seen_at', { ascending: false });
   if (runtimeError) throw new Error(`copier-relay-runtime-status-failed: ${runtimeError.message}`);
-  return runtime?.connection_id ?? options.connectionId;
+  const rows = (runtimes ?? []) as Array<{ device_id: string; connection_id: string | null; last_seen_at: string }>;
+  // Přednost má živé zařízení přímo tohoto připojení (beze změny proti
+  // dřívějšku); owner-scope Mac jen tehdy, když přímé neběží. Mrtvý starý
+  // device řádek tak Mac nepřebije, ale živý přímý worker ani není obejit.
+  const directIds = new Set((direct ?? []).map((device: { id: string }) => device.id));
+  const fresh = (row: { last_seen_at: string }) => Date.now() - Date.parse(row.last_seen_at) < 60_000;
+  const liveDirect = rows.find(row => directIds.has(row.device_id) && fresh(row));
+  if (liveDirect) return liveDirect.connection_id ?? options.connectionId;
+  return rows[0]?.connection_id ?? options.connectionId;
 }
 
 /** Selects the freshest runtime only among non-revoked devices. */
