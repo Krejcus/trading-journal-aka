@@ -133,24 +133,15 @@ interface RelayDeviceTarget {
  * Mac patří uživateli, ne propfirmě (5. 10. 2026). UI adresuje worker přes
  * libovolné připojení, které zrovna vidí; runtime i příkazy owner-scope
  * zařízení ale zůstávají vedené pod připojením, přes které byl Mac spárován
- * (i když je dnes odpojené). Vrátí to připojení, pod kterým worker opravdu je:
- * - existuje zařízení přímo pro `connectionId` → beze změny,
- * - jinak, pokud `connectionId` patří uživateli, nejčerstvější neodvolané
- *   owner-scope zařízení uživatele → jeho kotevní připojení.
+ * (i když je dnes odpojené). Vrátí připojení, pod kterým worker opravdu
+ * hlásí stav: mezi přímými zařízeními připojení a owner-scope zařízeními
+ * uživatele vyhraje nejčerstvější runtime. Cizí připojení se nepřesměruje.
  */
 export async function resolveCopierRelayConnectionId(options: {
   db: SupabaseClient;
   userId: string;
   connectionId: string;
 }): Promise<string> {
-  const { data: direct, error: directError } = await options.db.from('tradovate_copier_devices')
-    .select('id')
-    .eq('user_id', options.userId)
-    .eq('connection_id', options.connectionId)
-    .is('revoked_at', null)
-    .limit(1);
-  if (directError) throw new Error(`copier-relay-device-lookup-failed: ${directError.message}`);
-  if ((direct ?? []).length > 0) return options.connectionId;
   const { data: owned, error: ownedError } = await options.db.from('tradovate_oauth_connections')
     .select('id')
     .eq('id', options.connectionId)
@@ -158,23 +149,33 @@ export async function resolveCopierRelayConnectionId(options: {
     .maybeSingle<{ id: string }>();
   if (ownedError) throw new Error(`copier-relay-connection-lookup-failed: ${ownedError.message}`);
   if (!owned) return options.connectionId;
-  // Před migrací scope tento dotaz selže — pak platí původní chování.
+  // Kandidáti: neodvolaná zařízení uživatele přímo pro toto připojení a
+  // owner-scope zařízení (Mac pro všechny propfirmy). Před migrací scope
+  // dotaz na `scope` selže — pak zůstávají jen přímá zařízení.
+  const { data: direct, error: directError } = await options.db.from('tradovate_copier_devices')
+    .select('id,connection_id')
+    .eq('user_id', options.userId)
+    .eq('connection_id', options.connectionId)
+    .is('revoked_at', null);
+  if (directError) throw new Error(`copier-relay-device-lookup-failed: ${directError.message}`);
   const { data: ownerDevices, error: ownerError } = await options.db.from('tradovate_copier_devices')
     .select('id,connection_id')
     .eq('user_id', options.userId)
     .eq('scope', 'owner')
     .is('revoked_at', null);
-  if (ownerError || !ownerDevices?.length) return options.connectionId;
-  const { data: runtime } = await options.db.from('tradovate_copier_device_runtime')
-    .select('connection_id,last_seen_at')
+  const candidates = [...(direct ?? []), ...(ownerError ? [] : ownerDevices ?? [])] as Array<{ id: string; connection_id: string | null }>;
+  if (candidates.length === 0) return options.connectionId;
+  // Rozhoduje zařízení, které opravdu běží: nejčerstvější runtime mezi
+  // kandidáty (deterministicky), ne pouhá existence starého device řádku.
+  const { data: runtime, error: runtimeError } = await options.db.from('tradovate_copier_device_runtime')
+    .select('device_id,connection_id,last_seen_at')
     .eq('user_id', options.userId)
-    .in('device_id', ownerDevices.map((device: { id: string }) => device.id))
+    .in('device_id', [...new Set(candidates.map(device => device.id))])
     .order('last_seen_at', { ascending: false })
     .limit(1)
-    .maybeSingle<{ connection_id: string | null; last_seen_at: string }>();
-  return runtime?.connection_id
-    ?? (ownerDevices[0] as { connection_id: string | null }).connection_id
-    ?? options.connectionId;
+    .maybeSingle<{ device_id: string; connection_id: string | null; last_seen_at: string }>();
+  if (runtimeError) throw new Error(`copier-relay-runtime-status-failed: ${runtimeError.message}`);
+  return runtime?.connection_id ?? options.connectionId;
 }
 
 /** Selects the freshest runtime only among non-revoked devices. */
@@ -962,15 +963,21 @@ export async function assertConnectionNotInArmedCopy(options: {
       .filter(follower => follower.mode !== 'off' && follower.enabled !== false)
       .map(follower => follower.accountId)].filter((id): id is number => typeof id === 'number'));
     const display = status.accountDisplay?.find(item => item.connectionId === options.connectionId);
-    const loadedByWorker = display != null
+    const reported = status.connectionDiscovery?.connectionAccounts
+      ?.find(item => item.connectionId === options.connectionId);
+    const loadedByWorker = display != null || reported != null
       || status.devices?.some(device => device.connectionId === options.connectionId) === true
       || status.device?.connectionId === options.connectionId
       || status.connectionDiscovery?.loadedConnectionIds.includes(options.connectionId) === true;
     if (!loadedByWorker) continue;
-    const connectionAccounts = display
-      ? [...display.snapshots.map(snapshot => snapshot.accountId), ...display.pendingAccountIds]
-      : null;
-    if (connectionAccounts == null || connectionAccounts.some(accountId => groupAccounts.has(accountId))) {
+    const connectionAccounts = [...new Set([
+      ...(reported?.accountIds ?? []),
+      ...(display?.snapshots.map(snapshot => snapshot.accountId) ?? []),
+      ...(display?.pendingAccountIds ?? []),
+    ])];
+    // Prázdný seznam (feed ještě nic nenačetl) není důkaz, že firma nemá účty
+    // skupiny: za ARM fail-closed blokuje.
+    if (connectionAccounts.length === 0 || connectionAccounts.some(accountId => groupAccounts.has(accountId))) {
       throw new Error('copier-armed-connection-in-use');
     }
   }

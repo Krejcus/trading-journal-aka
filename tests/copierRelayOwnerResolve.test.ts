@@ -57,6 +57,32 @@ describe('resolveCopierRelayConnectionId', () => {
     expect(await resolveCopierRelayConnectionId({ db: fakeDb(connectionScope), userId: 'u', connectionId: 'tradeify' })).toBe('tradeify');
   });
 
+  it('starší per-connection zařízení bez runtime nepřebije Mac, který hlásí stav', async () => {
+    const withLegacyDevice = {
+      ...base,
+      tradovate_copier_devices: [
+        ...base.tradovate_copier_devices,
+        { id: 'legacy', user_id: 'u', connection_id: 'tradeify', scope: 'connection', revoked_at: null },
+      ],
+    };
+    expect(await resolveCopierRelayConnectionId({ db: fakeDb(withLegacyDevice), userId: 'u', connectionId: 'tradeify' })).toBe('lucid');
+  });
+
+  it('mrtvé přímé zařízení se starým runtime prohraje s běžícím Macem', async () => {
+    const stale = {
+      ...base,
+      tradovate_copier_devices: [
+        ...base.tradovate_copier_devices,
+        { id: 'old', user_id: 'u', connection_id: 'tradeify', scope: 'connection', revoked_at: null },
+      ],
+      tradovate_copier_device_runtime: [
+        ...base.tradovate_copier_device_runtime,
+        { device_id: 'old', user_id: 'u', connection_id: 'tradeify', last_seen_at: '2026-09-30T10:00:00Z' },
+      ],
+    };
+    expect(await resolveCopierRelayConnectionId({ db: fakeDb(stale), userId: 'u', connectionId: 'tradeify' })).toBe('lucid');
+  });
+
   it('databáze bez migrace scope zachová původní chování', async () => {
     expect(await resolveCopierRelayConnectionId({ db: fakeDb(base, ['scope']), userId: 'u', connectionId: 'tradeify' })).toBe('tradeify');
   });
@@ -88,6 +114,23 @@ describe('assertConnectionNotInArmedCopy', () => {
     await expect(check([runtime({})], 'tradeify')).resolves.toBeUndefined();
     await expect(check([runtime({ controller: { armed: false } })], 'lucid')).resolves.toBeUndefined();
     await expect(check([{ ...runtime({}), last_seen_at: '2026-10-05T09:00:00Z' }], 'lucid')).resolves.toBeUndefined();
+  });
+
+  it('prázdný feed hned po restartu není důkaz, že firma nemá účty skupiny', async () => {
+    await expect(check([runtime({
+      accountDisplay: [{ connectionId: 'lucid', snapshots: [], pendingAccountIds: [] }],
+    })], 'lucid')).rejects.toThrow('copier-armed-connection-in-use');
+  });
+
+  it('účty hlášené workerem z adresáře rozhodnou i bez feedu', async () => {
+    const discovery = (accountIds: number[]) => ({
+      scope: 'owner', deviceId: 'mac', loadedConnectionIds: ['fn'], pendingConnectionIds: [], failedConnections: [],
+      connectionAccounts: [{ connectionId: 'fn', accountIds }],
+    });
+    await expect(check([runtime({ accountDisplay: [], connectionDiscovery: discovery([2]) })], 'fn'))
+      .rejects.toThrow('copier-armed-connection-in-use');
+    await expect(check([runtime({ accountDisplay: [], connectionDiscovery: discovery([77]) })], 'fn'))
+      .resolves.toBeUndefined();
   });
 
   it('načtené připojení bez známých účtů za ARM blokuje (fail-closed)', async () => {

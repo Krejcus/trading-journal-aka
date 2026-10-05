@@ -170,6 +170,8 @@ interface ConnectionWatch {
   loadedConnectionIds: string[];
   state: ConnectionDiscoveryState;
   scope: 'owner' | 'connection' | null;
+  /** Účty z adresáře každého připojení při startu (pro guard odpojení). */
+  accountIdsByConnection: Map<string, number[]>;
 }
 
 interface PilotContextOptions {
@@ -399,6 +401,7 @@ async function runMultiConnectionAgent(): Promise<void> {
   if (connectionWatch) {
     for (const item of loaded) {
       connectionWatch.state = recordConnectionDiscoverySuccess(connectionWatch.state, item.context.connectionId);
+      connectionWatch.accountIdsByConnection.set(item.context.connectionId, item.accounts.map(account => account.id));
     }
   }
   if (connectionWatch && failedManifest.length > 0) {
@@ -420,15 +423,6 @@ async function runMultiConnectionAgent(): Promise<void> {
     await delay(5 * 60_000);
     const reason = failedManifest[0]?.reason;
     throw reason instanceof Error ? reason : new Error('Žádné OAuth připojení workeru nejde načíst');
-  }
-  if (failedManifest.length > 0 && !loaded.some(item => item.context.relay)) {
-    // Command relay (DISARM/kill z appky) nese spárovaný Mac, ne lease
-    // primární propfirmy; bez relay by worker nešel ovládat na dálku.
-    throw failedManifest[0].reason instanceof Error ? failedManifest[0].reason : new Error('Worker nemá command relay');
-  }
-  if (failedManifest.length > 0 && !loaded[0].context.relay) {
-    const withRelay = loaded.findIndex(item => item.context.relay);
-    loaded.unshift(...loaded.splice(withRelay, 1));
   }
   const leaderId = integerFlag('leader');
   const followerId = integerFlag('follower');
@@ -473,6 +467,25 @@ async function runMultiConnectionAgent(): Promise<void> {
       loaded.splice(0, loaded.length, ...routedItems);
     }
   }
+  if (failedManifest.length > 0 && !loaded.some(item => item.context.relay)) {
+    // Command relay (DISARM/kill z appky) nese spárovaný Mac, ne lease
+    // primární propfirmy; bez relay by worker nešel ovládat na dálku.
+    console.error(`${new Date().toISOString()} STARTUP žádné načtené připojení nenese command relay; další pokus za 5 min`);
+    await delay(5 * 60_000);
+    throw failedManifest[0].reason instanceof Error ? failedManifest[0].reason : new Error('Worker nemá command relay');
+  }
+  if (!loaded[0].context.relay) {
+    // Po vypadlé primární propfirmě i po routingu: relay musí nést contexts[0].
+    const withRelay = loaded.findIndex(item => item.context.relay);
+    if (withRelay > 0) loaded.unshift(...loaded.splice(withRelay, 1));
+  }
+  if (connectionWatch) {
+    // Účet → připojení podle skutečného routingu (ne jen adresáře ze startu).
+    for (const account of initialRouting.accounts) {
+      const known = connectionWatch.accountIdsByConnection.get(account.connectionId) ?? [];
+      if (!known.includes(account.id)) connectionWatch.accountIdsByConnection.set(account.connectionId, [...known, account.id]);
+    }
+  }
   const routingConnections = routing.connections;
   const accounts = initialRouting.accounts;
   // Spojení nesoucí leader stream je kritické (výpadek = okamžitý DISARM);
@@ -491,6 +504,29 @@ async function runMultiConnectionAgent(): Promise<void> {
     loaded.map(item => ({ broker: item.broker, label: `conn:${item.context.connectionId.slice(0, 8)}`, connectionId: item.context.connectionId })),
     async request => {
       const refreshed = await refreshDynamicBrokerRoutes(routingConnections, broker, request);
+      if (connectionWatch) {
+        // Jen přidávat: účet, který kdy patřil připojení, guard odpojení hlídá dál.
+        for (const account of refreshed.accounts) {
+          const known = connectionWatch.accountIdsByConnection.get(account.connectionId) ?? [];
+          if (!known.includes(account.id)) connectionWatch.accountIdsByConnection.set(account.connectionId, [...known, account.id]);
+        }
+      }
+      // Závod ARM ↔ odpojení propfirmy (5. 10. 2026): těsně před ARM / změnou
+      // skupiny ověř u serveru, že žádné povinné připojení není odpojené.
+      // Platný token by jinak dovolil kopírovat ještě až minutu po odpojení.
+      if (connectionWatch?.scope === 'owner' && request.required.length > 0) {
+        const listed = await listMacCopierDeviceConnections({ config: connectionWatch.device });
+        if (listed.scope === 'owner') {
+          const connectedIds = new Set(listed.connectionIds);
+          const required = new Set(request.required);
+          const disconnected = refreshed.accounts
+            .filter(account => required.has(account.id) && !connectedIds.has(account.connectionId))
+            .map(account => account.id);
+          if (disconnected.length > 0) {
+            throw new Error(`Propfirma účtu ${disconnected.join(', ')} je v aplikaci odpojená; znovu ji připoj nebo účty odeber ze skupiny`);
+          }
+        }
+      }
       for (const accountId of refreshed.missingOptional) {
         console.warn(
           `${new Date().toISOString()} ROUTING OPTIONAL SKIP účet=${accountId} důvod=účet není viditelný v žádném připojeném OAuth adresáři`,
@@ -540,6 +576,7 @@ async function discoverOwnerConnections<T extends { context: PilotContext }>(opt
     loadedConnectionIds: options.manifest.connections.map(entry => entry.connectionId),
     state: await loadConnectionDiscoveryState(statePath),
     scope: null,
+    accountIdsByConnection: new Map(),
   };
   let listed: Awaited<ReturnType<typeof listMacCopierDeviceConnections>>;
   try {
@@ -644,8 +681,11 @@ async function runLocalAgent(
     serviceLifetime: stringFlag('service-lifetime', false),
     contexts: (contexts.some(candidate => !candidate.discovered)
       ? contexts.filter(candidate => !candidate.discovered)
-      // Primární propfirma odpojená: identitu i relay nese spárovaný Mac.
-      : contexts.slice(0, 1)
+      // Primární propfirma odpojená: identitu i relay nese spárovaný Mac
+      // (owner scope), obnovitelný device lease — trvalý běh zůstává.
+      : connectionWatch?.device.paired
+        ? [{ renewable: true, device: { state: 'paired' }, relay: contexts[0]?.relay } as unknown as PilotContext]
+        : contexts.slice(0, 1)
     ).map(candidate => ({
       renewable: candidate.renewable,
       paired: candidate.device?.state === 'paired',
@@ -1294,6 +1334,13 @@ async function runLocalAgent(
           loadedConnectionIds: connectionWatch.loadedConnectionIds
             .filter(connectionId => !connectionWatch.manifestConnectionIds.includes(connectionId)),
           pendingConnectionIds: [...connectionWatchPending],
+          connectionAccounts: contexts.map(candidate => ({
+            connectionId: candidate.connectionId,
+            accountIds: [...new Set([
+              ...(connectionWatch.accountIdsByConnection.get(candidate.connectionId) ?? []),
+              ...(candidate.displayFeed?.state().snapshots.map(snapshot => snapshot.accountId) ?? []),
+            ])],
+          })),
           failedConnections: Object.entries(connectionWatch.state.failures)
             .map(([connectionId, failure]) => ({ connectionId, ...failure })),
         }),
@@ -1453,9 +1500,14 @@ async function runLocalAgent(
             const carriesGroup = decision.removed.some(connectionId => {
               const owner = contexts.find(candidate => candidate.connectionId === connectionId);
               const feed = owner?.displayFeed?.state();
-              if (!feed) return true;
-              return [...feed.snapshots.map(snapshot => snapshot.accountId), ...feed.pendingAccountIds]
-                .some(accountId => groupAccounts.has(accountId));
+              const accounts = [
+                ...(connectionWatch.accountIdsByConnection.get(connectionId) ?? []),
+                ...(feed?.snapshots.map(snapshot => snapshot.accountId) ?? []),
+                ...(feed?.pendingAccountIds ?? []),
+              ];
+              // Neznámé účty (prázdný adresář i feed) = fail-closed.
+              if (accounts.length === 0) return true;
+              return accounts.some(accountId => groupAccounts.has(accountId));
             });
             if (carriesGroup) {
               controller.disarm('connection-removed');
@@ -1499,7 +1551,11 @@ async function runLocalAgent(
       relay = startMacCopierCommandRelay({
         ...context.relay,
         agent,
-        deliveryStore: fileRelayDeliveryStore(resolve(root, `${key}.relay-delivery.json`)),
+        // Checkpoint patří zařízení, které relay drží. Když relay nese jiné
+        // zařízení než primární propfirma, nesmí převzít jeho rozpracovaný stav.
+        deliveryStore: fileRelayDeliveryStore(resolve(root, context.connectionId === stateConnection
+          ? `${key}.relay-delivery.json`
+          : `${key}.relay-${context.device?.deviceId ?? connectionWatch?.device.deviceId ?? context.connectionId}.json`)),
         // Realtime budíček: příkaz z UI dorazí za ~100–300 ms místo čekání
         // na poll interval. Kanál nese jen „kick", data jdou dál přes
         // autentizovaný REST relay; poll zůstává jako záloha.

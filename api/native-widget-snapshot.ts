@@ -50,8 +50,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       db, userId: device.user_id, environment: config.environment,
     });
     if (connectedIds.length === 0) return res.status(503).json({ error: 'copier-accounts-unavailable' });
-    const [tokens, tradesResult, profiles] = await Promise.all([
-      Promise.all(connectedIds.map(connectionId => getValidTradovateAccessToken({
+    const [tokenResults, tradesResult, profiles] = await Promise.all([
+      // Jedna vadná propfirma nesmí shodit celý widget.
+      Promise.allSettled(connectedIds.map(connectionId => getValidTradovateAccessToken({
         db,
         config,
         userId: device.user_id,
@@ -67,6 +68,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       listTradovateAccountProfiles(db, device.user_id, config.environment),
     ]);
     if (tradesResult.error) throw new Error(`widget-trades-query-failed: ${tradesResult.error.message}`);
+    const tokens = tokenResults.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
+    if (tokens.length === 0) return res.status(503).json({ error: 'copier-accounts-unavailable' });
     const now = Date.now();
     const broker = await loadNativeLiveActivityBrokerSnapshot({
       baseUrl: tradovateApiBaseUrl(config.environment),

@@ -120,6 +120,8 @@ export interface CopierConnectionDiscoveryStatus {
   loadedConnectionIds: string[];
   /** Připojení čekající na bezpečný restart (kopírka vypnutá, flat). */
   pendingConnectionIds: string[];
+  /** Účty každého načteného připojení (adresář při startu + živý feed); guard odpojení. */
+  connectionAccounts?: Array<{ connectionId: string; accountIds: number[] }>;
   failedConnections: Array<{ connectionId: string; attempts: number; nextAttemptAt: number; lastError: string }>;
 }
 
