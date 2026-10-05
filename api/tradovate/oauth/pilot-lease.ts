@@ -98,6 +98,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (message.includes('public-key') || message.includes('PEM')) {
       return res.status(400).json({ error: 'invalid-pilot-public-key' });
     }
+    // Odpojená nebo neautorizovaná propfirma není přechodná chyba: worker ji
+    // má hned přeskočit (start s ostatními), ne 10 minut opakovat.
+    if (message === 'tradovate-reauthorization-required') {
+      return res.status(409).json({ error: 'tradovate-connection-not-connected' });
+    }
     console.error('[tradovate-pilot-lease] Failed without exposing token:', message);
     return res.status(502).json({ error: 'tradovate-pilot-lease-failed' });
   }

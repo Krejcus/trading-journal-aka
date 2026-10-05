@@ -287,6 +287,14 @@ describe('Tradovate pilot lease API', () => {
     });
   });
 
+  it('odpojenou propfirmu hlásí jako trvalou chybu 409, ne přechodnou 502 (5. 10.)', async () => {
+    oauthStore.getValidTradovateAccessToken.mockRejectedValueOnce(new Error('tradovate-reauthorization-required'));
+    const harness = responseHarness();
+    await handler(request(), harness.res);
+    expect(harness.status()).toBe(409);
+    expect(harness.body()).toEqual({ error: 'tradovate-connection-not-connected' });
+  });
+
   it('maps invalid public keys to a non-sensitive client error', async () => {
     pilotLease.sealTradovatePilotLease.mockImplementation(() => {
       throw new Error('pilot-public-key-must-be-rsa-3072');

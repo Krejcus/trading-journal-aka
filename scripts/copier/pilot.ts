@@ -362,7 +362,7 @@ async function runMultiConnectionAgent(): Promise<void> {
     });
     return { context, accounts: data.accounts, broker };
   };
-  const loaded = await Promise.all(manifest.connections.map(async entry => {
+  const manifestResults = await Promise.allSettled(manifest.connections.map(async entry => {
     const context = await pilotContext({
       deviceConfigPath: entry.deviceConfigPath,
       leasePath: entry.leasePath,
@@ -374,6 +374,16 @@ async function runMultiConnectionAgent(): Promise<void> {
     }
     return loadConnection(context, entry.connectionId);
   }));
+  // Mac patří uživateli, ne propfirmě (5. 10. 2026): odpojená manifestová
+  // propfirma (i ta, se kterou byl Mac spárován) start neshodí, pokud worker
+  // má aspoň jedno jiné funkční připojení. Bez jediného se start nezdaří.
+  const loaded = manifestResults.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
+  const failedManifest = manifestResults.flatMap((result, index) => (
+    result.status === 'rejected' ? [{ entry: manifest.connections[index], reason: result.reason as unknown }] : []
+  ));
+  for (const failure of failedManifest) {
+    console.error(`${new Date().toISOString()} STARTUP ${connectionLabel(failure.entry.connectionId)} připojení nejde načíst, pokračuji bez něj: ${failure.reason instanceof Error ? failure.reason.message : String(failure.reason)}`);
+  }
   // Propfirmy přidané v UI po instalaci (4. 10. 2026): spárovaný Mac se scope
   // `owner` je načte sám. Selhání žádného z nich nesmí shodit start workeru.
   const connectionWatch = await discoverOwnerConnections({
@@ -386,6 +396,36 @@ async function runMultiConnectionAgent(): Promise<void> {
     ),
     onLoaded: item => loaded.push(item),
   });
+  if (connectionWatch) {
+    for (const item of loaded) {
+      connectionWatch.state = recordConnectionDiscoverySuccess(connectionWatch.state, item.context.connectionId);
+    }
+  }
+  if (connectionWatch && failedManifest.length > 0) {
+    // Nenačtená manifestová propfirma: až ji server znovu nabídne, poll ji
+    // vrátí bezpečným restartem — ale s backoffem, ne restartem každou minutu.
+    for (const failure of failedManifest) {
+      connectionWatch.loadedConnectionIds = connectionWatch.loadedConnectionIds
+        .filter(connectionId => connectionId !== failure.entry.connectionId);
+      connectionWatch.state = recordConnectionDiscoveryFailure(
+        connectionWatch.state, failure.entry.connectionId, failure.reason, Date.now(),
+      );
+    }
+    await saveConnectionDiscoveryState(connectionWatch.statePath, connectionWatch.state).catch(() => undefined);
+  }
+  if (loaded.length === 0) {
+    const reason = failedManifest[0]?.reason;
+    throw reason instanceof Error ? reason : new Error('Žádné OAuth připojení workeru nejde načíst');
+  }
+  if (failedManifest.length > 0 && !loaded.some(item => item.context.relay)) {
+    // Command relay (DISARM/kill z appky) nese spárovaný Mac, ne lease
+    // primární propfirmy; bez relay by worker nešel ovládat na dálku.
+    throw failedManifest[0].reason instanceof Error ? failedManifest[0].reason : new Error('Worker nemá command relay');
+  }
+  if (failedManifest.length > 0 && !loaded[0].context.relay) {
+    const withRelay = loaded.findIndex(item => item.context.relay);
+    loaded.unshift(...loaded.splice(withRelay, 1));
+  }
   const leaderId = integerFlag('leader');
   const followerId = integerFlag('follower');
   const routingFor = (items: typeof loaded) => ({
@@ -459,6 +499,7 @@ async function runMultiConnectionAgent(): Promise<void> {
       return { missingOptional: preview.missingOptional };
     },
     connectionWatch ?? undefined,
+    manifest.primaryConnectionId,
   );
 }
 
@@ -575,6 +616,12 @@ async function runLocalAgent(
   prepareGroupAccounts?: (request: PrepareGroupAccountsRequest) => Promise<PrepareGroupAccountsResult>,
   previewGroupAccounts?: (request: PrepareGroupAccountsRequest) => Promise<PrepareGroupAccountsResult>,
   connectionWatch?: ConnectionWatch,
+  /**
+   * Stabilní identita durable stavu (primární připojení z manifestu). Musí
+   * zůstat stejná, i když primární propfirma právě není připojená a worker
+   * jede jen s ostatními — jinak by nenašel durable skupinu, outbox a audit.
+   */
+  stateConnectionId?: string,
 ): Promise<void> {
   const context = contexts[0];
   if (!context) throw new Error('Lokální agent potřebuje alespoň jedno OAuth spojení');
@@ -591,7 +638,11 @@ async function runLocalAgent(
   const lifetime = resolveAgentLifetime({
     requestedMinutes: Number(minutesValue),
     serviceLifetime: stringFlag('service-lifetime', false),
-    contexts: contexts.filter(candidate => !candidate.discovered).map(candidate => ({
+    contexts: (contexts.some(candidate => !candidate.discovered)
+      ? contexts.filter(candidate => !candidate.discovered)
+      // Primární propfirma odpojená: identitu i relay nese spárovaný Mac.
+      : contexts.slice(0, 1)
+    ).map(candidate => ({
       renewable: candidate.renewable,
       paired: candidate.device?.state === 'paired',
       relayAvailable: candidate.relay != null,
@@ -629,10 +680,11 @@ async function runLocalAgent(
   const followerIdsKey = followers.map(item => item.accountId).join('-');
   // Durable stav patří leaderovi/runtime, ne konkrétnímu seznamu followerů.
   // Jinak by pouhé přidání účtu založilo nový outbox a ztratilo recovery.
-  const key = copierPilotStateKey(context.connectionId, leaderId);
+  const stateConnection = stateConnectionId ?? context.connectionId;
+  const key = copierPilotStateKey(stateConnection, leaderId);
   await migrateLegacyPilotState(root, `${key}-${followerIdsKey}`, key);
   const auditPath = resolve(root, `${key}.audit.jsonl`);
-  const groupPath = copierPilotGroupPath(root, context.connectionId, leaderId);
+  const groupPath = copierPilotGroupPath(root, stateConnection, leaderId);
   const groupStore = createFileCopyGroupStore(groupPath);
   const cooldownMinutes = numberFlag('cooldown-min', false) ?? 0;
   if (!Number.isFinite(cooldownMinutes) || cooldownMinutes < 0 || cooldownMinutes > 720) {
