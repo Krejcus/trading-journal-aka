@@ -258,6 +258,24 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-05 — Incident 15:05 UTC: zrušený zbytek částečně vyplněného vstupu (Claude + Codex)
+- Leader OSO Limit Buy 18, vyplněno 6 (1+5). Tradovate Exit zrušil zbytek vstupu: broker to
+  hlásí jako ordStatus Filled + execType Completed reportu Cancel commandu (cumQty 6/18).
+  Copier to bral jako plný fill, zbytek 12 followerům nezrušil, leader Market exit 6 skončil
+  „nevysvětlenou divergencí" u všech 9 followerů a fail-closed. Guard zavřel 5 FundedNext,
+  4 Lucid (lineage 1 místo 6 — jejich Fill+Position dorazily před leaderovými) ručně.
+  Blocked epocha uzavřena operátorským `activate-group` s waiverem (skript spustil Filip;
+  klasifikátor mi ho nepovolil).
+- Oprava (větev claude/copier-partial-cancel-20261005, b1fd5892…b84a86e9):
+  adaptér normalizuje přesný důkaz (Cancel command + Completed report s cumQty < potvrzená
+  orderQty, bez nevyřešeného Modify) na `canceled` s filledQuantity; REST targeted load
+  dotahuje Cancel reporty; cancel recovery při status-only Filled čte celý graf. Market exit:
+  pending kopie se zrušeným leader orderem jde do autoritativního čtení; canceled kopie s
+  částečným plněním je synced jen při zrušeném leaderovi a čerstvé pozici == expected.
+  Lineage se při dorovnání leadera potvrdí jen přísně (celá pozice z fillů jediného copier
+  entry orderu aktuální epochy). Auto-sync NE (Filipovo rozhodnutí).
+- Codex: 3 kola review, poslední „nasaditelné ANO“. Celá sada 4930 testů. Čeká na „nasaď“.
+
 ### 2026-10-05 — Přepnutí skupiny a ruční pozice na odcházejících účtech (Claude, 5 kol review s Codexem)
 Cíl (Filip): ruční obchod na účtu vypnuté skupiny nesmí blokovat zapnutí jiné
 skupiny; účty nové skupiny a účty s kopií kopírky dál musí být flat.
