@@ -161,17 +161,20 @@ async function resolveBrokerLifecycleEntry(
 ): Promise<CancelOutboxEntry> {
   if (entry.operation === 'cancel' && broker.findOrderStatusById) {
     const lookup = await broker.findOrderStatusById(entry.accountId, entry.brokerOrderId);
-    if (lookup.status !== 'rejected' || lookup.completeness !== 'authoritative') {
+    if ((lookup.status !== 'rejected' && lookup.status !== 'filled')
+      || lookup.completeness !== 'authoritative') {
       return resolveCancelStatusLookup(entry, lookup.status, lookup.completeness, now);
     }
     // Rejected is terminal, but status-only cannot prove zero partial fills.
-    // Pay for the full Order+Fill graph only on this uncommon path.
+    // Raw Filled may be Tradovate's partial cancel (incident 5. 10. 2026:
+    // Cancel Completed with cumQty 6/18); only the full graph tells them apart.
+    // Pay for the full Order+Fill graph only on these terminal paths.
     const full = await broker.findOrderById(entry.accountId, entry.brokerOrderId);
     if (full.completeness !== 'authoritative'
       || !full.order
       || full.order.brokerOrderId !== entry.brokerOrderId
       || full.order.accountId !== entry.accountId) {
-      return markCancelUnknown(entry, 'rejected cancel nemá autoritativní Order+Fill důkaz', now);
+      return markCancelUnknown(entry, `${lookup.status} cancel nemá autoritativní Order+Fill důkaz`, now);
     }
     return resolveCancelLookup(entry, full.order, full.completeness, now);
   }
