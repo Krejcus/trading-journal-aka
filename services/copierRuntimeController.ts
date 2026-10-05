@@ -13637,8 +13637,29 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       if (pendingReasons.length > 0) {
         throw new Error(`${operation} blokuje rozpracovaný lifecycle: ${pendingReasons.join(', ')}`);
       }
+      // Účty, které ze skupiny odcházejí a na kterých kopírka prokazatelně nic
+      // svého nemá (5. 10. 2026): žádná nedokončená epizoda s kopií, žádný
+      // rozpracovaný příkaz/izolace/cut ani stuck operace. Ruční obchod na
+      // takovém účtu je věc uživatele a přepnutí skupiny neblokuje. Zbytek
+      // (nová skupina, účty s kopií) dál musí být autoritativně flat.
+      const stuckAccountIds = new Set(currentStuckOperations().map(operation => operation.accountId));
+      // Durable značka živých kopií (pád za ARM bez dokončené recovery) = bez
+      // výjimek: jejich vlastnictví nejde spolehlivě vyloučit.
+      const liveCopyTrace = (currentRuntime().state.safety.liveCopyOpenSince ?? 0) > 0;
+      const copierFreeLeavingAccountIds = new Set(liveCopyTrace ? [] : [...currentTopology]
+        .filter((accountId): accountId is number => accountId != null)
+        .filter(accountId => (
+          !nextAccountIds.has(accountId)
+          && !retiredAccountIds.has(accountId)
+          && !optionalFollowerIds.has(accountId)
+          && unverifiableFollowerOwnership(new Set([accountId])).length === 0
+          && !pendingIsolationCommandForAccount(accountId)
+          && !followerCutBackgroundAccounts.has(accountId)
+          && !stuckAccountIds.has(accountId)
+        )));
       const requiredAccountIds = accountIds.filter(accountId => !optionalFollowerIds.has(accountId)
-        && !retiredAccountIds.has(accountId));
+        && !retiredAccountIds.has(accountId)
+        && !copierFreeLeavingAccountIds.has(accountId));
       for (const accountId of requiredAccountIds) {
         configurationFenceAccountRefs.set(
           accountId,
@@ -13697,8 +13718,29 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
               ? `working=${withWorkingOrders.map(item => item.accountId).join(',')}`
               : '',
           ].filter(Boolean).join(' ');
-          throw new Error(`${operation} vyžaduje všechny staré i nové účty flat a bez příkazů: ${details}`);
+          throw new Error(`${operation} vyžaduje účty nové skupiny a účty s kopií kopírky flat a bez příkazů: ${details}`);
         };
+        // Odcházející účet bez záznamu kopírky: u brokera ještě ověř, že žádný
+        // jeho pracovní příkaz není kopií (přepnutí zahodí linky i outbox).
+        for (const accountId of copierFreeLeavingAccountIds) {
+          const orders = await withLeaderEpochDeadline(
+            `leaving account order preflight ${accountId}`,
+            broker.listOrders(accountId),
+          );
+          const copierOrders = new Set(controllerCopyOrderIds(accountId));
+          if (orders.some(order => isOpenOrderStatus(order.status) && copierOrders.has(order.brokerOrderId))) {
+            throw new Error(`${operation} blokuje pracovní příkaz kopírky na odcházejícím účtu ${accountId}`);
+          }
+        }
+        assertFreshPreflight();
+        if (copierFreeLeavingAccountIds.size > 0) {
+          options.onAudit?.([{
+            at: clock(),
+            leaderEventId: `leaving-accounts-without-copies:${group.id}:${nextGroup.id}:${clock()}`,
+            kind: 'skipped',
+            reason: `účty ${[...copierFreeLeavingAccountIds].sort((a, b) => a - b).join(',')} opouštějí skupinu bez kopie kopírky; jejich ruční pozice/příkazy přepnutí neblokují`,
+          }]);
+        }
         // Dvě autoritativní kola, tedy pod bezpečnostním stropem tří. Mezi
         // koly není žádný broker write a fence odmítne skutečný stream event.
         let snapshots = await readRound();

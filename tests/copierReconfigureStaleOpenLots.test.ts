@@ -86,7 +86,8 @@ describe('brána změny skupiny a durable openLots', () => {
     } finally { controller.stop(); }
   });
 
-  it.each([100, 200, 201])('skutečná pozice účtu %s stále blokuje obnovu', async accountId => {
+  // 201 skupinu opouští bez kopie kopírky: jeho ruční pozice od 5. 10. neblokuje.
+  it.each([100, 200])('skutečná pozice účtu %s stále blokuje obnovu', async accountId => {
     const now = Date.UTC(2026, 8, 3, 7);
     const { controller, broker, store } = await harness(now + 3_600_000, now);
     broker.setPosition(accountId, 'MNQU6', -3);

@@ -535,7 +535,7 @@ describe('account eligibility — DLL incident', () => {
     controller.stop();
   });
 
-  it('odebrání aktivního followera dál fail-closed vyžaduje dostupný broker účet', async () => {
+  it('odebrání followera bez kopie kopírky nepotřebuje jeho capability (5. 10.)', async () => {
     const nextGroup: CopyGroupConfig = {
       ...group,
       followers: group.followers.filter(follower => follower.accountId !== 205),
@@ -553,8 +553,7 @@ describe('account eligibility — DLL incident', () => {
     broker.setConnected(true);
     await controller.waitForIdle();
 
-    await expect(controller.reconfigureGroup(nextGroup))
-      .rejects.toThrow('neaktivní/read-only účty: 205');
+    await expect(controller.reconfigureGroup(nextGroup)).resolves.toBeUndefined();
     controller.stop();
   });
 
