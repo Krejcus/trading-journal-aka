@@ -4708,37 +4708,42 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     await sweepFollowerProtectiveLegs(accountId, symbol, now);
   };
 
-  /** Symbol ochranné nohy kopírky podle durable OSO/bracket/standalone outboxu. */
-  const protectiveLegSymbol = (accountId: number, brokerOrderId: string): string | null => {
+  /**
+   * Ochranná noha kopírky z nativního OSO nebo bracketu: symbol a leader
+   * entry order, ke kterému patří. Samostatné stopy se nepřiřazují (bez
+   * vazby na vstup nejde doložit epochu) — zůstávají fail-closed.
+   */
+  const protectiveLegOwner = (
+    accountId: number,
+    brokerOrderId: string,
+  ): { symbol: string; leaderEntryOrderId: string } | null => {
     const live = currentRuntime();
-    for (const entry of live.osoOutbox.values()) {
+    for (const entry of [...live.osoOutbox.values(), ...live.bracketOutbox.values()]) {
       if (entry.request.accountId !== accountId) continue;
       if (entry.firstBrokerOrderId === brokerOrderId || entry.secondBrokerOrderId === brokerOrderId) {
-        return entry.request.symbol;
+        return { symbol: entry.request.symbol, leaderEntryOrderId: entry.leaderEntryOrderId };
       }
-    }
-    for (const entry of live.bracketOutbox.values()) {
-      if (entry.request.accountId !== accountId) continue;
-      if (entry.firstBrokerOrderId === brokerOrderId || entry.secondBrokerOrderId === brokerOrderId) {
-        return entry.request.symbol;
-      }
-    }
-    for (const entry of live.outbox.values()) {
-      if (entry.request.accountId === accountId && entry.brokerOrderId === brokerOrderId
-        && isStandaloneProtective(entry)) return entry.request.symbol;
     }
     return null;
+  };
+
+  type ProtectiveFillCandidate = {
+    accountId: number;
+    symbol: string;
+    key: string;
+    brokerOrderId: string;
+    epochId: string;
+    leaderEntryOrderId: string;
+    confirmedNet: number;
   };
 
   /**
    * Incident 6. 10. 2026: leader posunul stop, ochranná noha followera se
    * mezitím vyplnila na původní ceně. Modify skončil `filled`; follower je
-   * risk-redukčně venku dřív než leader. Je-li to přesně ochranná noha kopie
-   * aktuální epochy, nikoli neznámý stav, kritický audit nevypíná skupinu.
+   * risk-redukčně venku dřív než leader. Kandidát jen pro přesnou ochrannou
+   * nohu kopie aktuální epochy s potvrzenou copier lineage.
    */
-  const protectiveFilledDuringModify = (
-    item: CopierAuditEntry,
-  ): { accountId: number; symbol: string; key: string } | null => {
+  const protectiveFilledDuringModify = (item: CopierAuditEntry): ProtectiveFillCandidate | null => {
     if (item.kind !== 'cancel-failed' || !item.key || item.accountId == null) return null;
     const lifecycle = currentRuntime().cancelOutbox.get(item.key);
     if (
@@ -4747,49 +4752,112 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       || lifecycle.status !== 'abandoned'
       || lifecycle.outcome !== 'filled'
       || lifecycle.accountId !== item.accountId
+      || (item.brokerOrderId != null && item.brokerOrderId !== lifecycle.brokerOrderId)
       || followerFillRole(lifecycle.accountId, lifecycle.brokerOrderId) !== 'protective'
     ) return null;
-    const symbol = protectiveLegSymbol(lifecycle.accountId, lifecycle.brokerOrderId);
-    if (!symbol || leaderExposureEpoch(symbol)?.phase !== 'open') return null;
-    return { accountId: lifecycle.accountId, symbol, key: lifecycle.key };
+    const owner = protectiveLegOwner(lifecycle.accountId, lifecycle.brokerOrderId);
+    if (!owner) return null;
+    const epoch = leaderExposureEpoch(owner.symbol);
+    if (!epoch || epoch.phase !== 'open' || !epoch.leaderEntryOrderIds.includes(owner.leaderEntryOrderId)) return null;
+    const participant = epoch.followers.find(follower => follower.accountId === lifecycle.accountId);
+    if (
+      !participant
+      || !participant.eligibleAtOpen
+      || participant.copyLineage !== 'confirmed'
+      || !participant.confirmedNetQuantity
+    ) return null;
+    return {
+      accountId: lifecycle.accountId,
+      symbol: owner.symbol,
+      key: lifecycle.key,
+      brokerOrderId: lifecycle.brokerOrderId,
+      epochId: epoch.id,
+      leaderEntryOrderId: owner.leaderEntryOrderId,
+      confirmedNet: participant.confirmedNetQuantity,
+    };
   };
 
   /**
-   * Vyřadí followera z aktuální epizody po vyplnění jeho ochranné nohy během
-   * modify. Jen s autoritativním důkazem flat bez pracovních příkazů; bez něj
-   * výjimka (volající fail-closed). Žádný kompenzační obchod se neposílá.
+   * První fáze izolace (bez durable zápisu): autoritativně ověří, že vyplněná
+   * ochranná noha přesně uzavřela potvrzenou kopii (množství i směr), follower
+   * je flat bez pracovních příkazů a leader během ověření nezměnil stav.
+   * Úspěch nechá suppression pro epochu; selhání ji odstraní a vyhodí.
    */
-  const isolateProtectiveFilledFollower = async (
+  const restoreSuppression = (
     accountId: number,
     symbol: string,
-    lifecycleKeys: readonly string[],
-  ): Promise<void> => {
-    const epoch = leaderExposureEpoch(symbol);
-    const entryOrderId = epoch?.phase === 'open' ? epoch.leaderEntryOrderIds[0] : undefined;
-    if (!epoch || !entryOrderId) {
-      throw new Error(`Copier fail-closed: follower ${accountId} nemá otevřenou epochu pro izolaci po ochranném fillu`);
+    previous: IntentionalEntrySuppression | undefined,
+  ) => {
+    const key = intentionalSuppressionKey(accountId, symbol);
+    if (previous) intentionalEntrySuppressions.set(key, previous);
+    else intentionalEntrySuppressions.delete(key);
+  };
+  const prepareProtectiveIsolation = async (
+    candidate: ProtectiveFillCandidate,
+  ): Promise<IntentionalEntrySuppression | undefined> => {
+    const leaderAccountId = group.leaderAccountId;
+    const previous = intentionalEntrySuppressions.get(intentionalSuppressionKey(candidate.accountId, candidate.symbol));
+    const fail = (reason: string): never => {
+      restoreSuppression(candidate.accountId, candidate.symbol, previous);
+      throw new Error(`Copier fail-closed: follower ${candidate.accountId} — ${reason}`);
+    };
+    if (leaderAccountId == null) fail('chybí leader');
+    const leaderVersionAtStart = tradeObservationVersionByAccount.get(leaderAccountId!) ?? 0;
+    if ((leaderPositions.get(candidate.symbol) ?? 0) === 0) fail('leader už není v pozici');
+    const lookup = await broker.findOrderById(candidate.accountId, candidate.brokerOrderId);
+    const order = lookup.order;
+    const expectedSide = candidate.confirmedNet > 0 ? 'Sell' : 'Buy';
+    if (
+      lookup.completeness !== 'authoritative'
+      || !order
+      || order.status !== 'filled'
+      || order.side !== expectedSide
+      || order.filledQuantity !== Math.abs(candidate.confirmedNet)
+    ) {
+      fail(`vyplněná ochranná noha ${candidate.brokerOrderId} přesně nevysvětluje potvrzenou kopii ${candidate.confirmedNet}`);
     }
     let confirmed = false;
     for (let attempt = 0; attempt < 2 && !confirmed; attempt += 1) {
       if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 300));
-      confirmed = await authoritativelyConfirmSuppression(accountId, symbol, entryOrderId);
-    }
-    if (!confirmed) {
-      throw new Error(
-        `Copier fail-closed: follower ${accountId} po vyplnění ochranné nohy během modify nemá autoritativní flat/no-working důkaz`,
+      confirmed = await authoritativelyConfirmSuppression(
+        candidate.accountId,
+        candidate.symbol,
+        candidate.leaderEntryOrderId,
       );
     }
-    for (const [key, timer] of pendingFollowerMagnitudeChecks) {
-      if (!key.startsWith(`${accountId}:`)) continue;
-      clearTimeout(timer);
-      pendingFollowerMagnitudeChecks.delete(key);
+    if (!confirmed) fail('po vyplnění ochranné nohy během modify nemá autoritativní flat/no-working důkaz');
+    if (
+      (tradeObservationVersionByAccount.get(leaderAccountId!) ?? 0) !== leaderVersionAtStart
+      || pendingTradeEventsFor([leaderAccountId!])
+      || leaderExposureEpoch(candidate.symbol)?.id !== candidate.epochId
+      || (leaderPositions.get(candidate.symbol) ?? 0) === 0
+    ) {
+      fail('leader během ověření změnil stav');
     }
-    for (const [key, pending] of pendingFollowerTransitions) {
-      if (pending.accountId !== accountId) continue;
-      clearPendingFollowerTransition(key);
+    return previous;
+  };
+
+  /**
+   * Druhá fáze: všechny kandidáty dávky prošly. Jedním commitem prominout
+   * přesné cancel-outbox položky; zrušit čekající kontroly jen pro přesný
+   * účet+symbol. Žádný kompenzační obchod se neposílá.
+   */
+  const commitProtectiveIsolation = async (candidates: readonly ProtectiveFillCandidate[]): Promise<void> => {
+    for (const candidate of candidates) {
+      const transitionKey = followerTransitionKey(candidate.accountId, candidate.symbol);
+      const timer = pendingFollowerMagnitudeChecks.get(transitionKey);
+      if (timer) {
+        clearTimeout(timer);
+        pendingFollowerMagnitudeChecks.delete(transitionKey);
+      }
+      for (const [key, pending] of pendingFollowerTransitions) {
+        if (pending.accountId === candidate.accountId && pending.symbol === candidate.symbol) {
+          clearPendingFollowerTransition(key);
+        }
+      }
     }
     const now = clock();
-    const keys = new Set(lifecycleKeys);
+    const keys = new Set(candidates.map(candidate => candidate.key));
     await processor.mutate(async current => {
       const cancelOutbox = new Map(current.cancelOutbox);
       let changed = false;
@@ -4816,13 +4884,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       );
       return { ...current, cancelOutbox, revision: committed.revision };
     });
-    options.onAudit?.([{
+    options.onAudit?.([...new Set(candidates.map(candidate => candidate.accountId))].map(accountId => ({
       at: now,
       leaderEventId: `follower-protective-filled-isolated:${accountId}:${now}`,
-      kind: 'skipped',
+      kind: 'skipped' as const,
       accountId,
       reason: `follower ${accountId} vyřazen z této epizody — jeho ochranná noha se vyplnila dřív než leaderova (během posunu); je flat, kopírka pokračuje pro ostatní followery`,
-    }]);
+    })));
   };
 
   const verifyFollowerMagnitude = async (accountId: number, symbol: string) => {
@@ -5280,30 +5348,48 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     // vyplnily během modify. Každého takového followera vyřadíme z epizody
     // (s autoritativním flat důkazem); jakákoli jiná nejistota = fail-closed.
     const protectiveFilled = critical.map(protectiveFilledDuringModify);
-    if (protectiveFilled.every((item): item is NonNullable<typeof item> => item != null)) {
-      const byAccount = new Map<string, { accountId: number; symbol: string; keys: string[] }>();
-      for (const item of protectiveFilled) {
-        const groupKey = `${item.accountId}:${item.symbol}`;
-        const existing = byAccount.get(groupKey) ?? { accountId: item.accountId, symbol: item.symbol, keys: [] };
-        existing.keys.push(item.key);
-        byAccount.set(groupKey, existing);
+    if (protectiveFilled.every((item): item is ProtectiveFillCandidate => item != null)) {
+      const prepared: ProtectiveFillCandidate[] = [];
+      const previousSuppressions: Array<IntentionalEntrySuppression | undefined> = [];
+      let failure: Error | null = null;
+      // Jeden účet+symbol = jedna izolace. Dvě různé vyplněné nohy téhož
+      // followera (OCO to nedovolí) jsou nevysvětlený stav → fail-closed.
+      const byFollower = new Map<string, ProtectiveFillCandidate>();
+      for (const candidate of protectiveFilled) {
+        const followerKey = `${candidate.accountId}:${candidate.symbol}`;
+        const existing = byFollower.get(followerKey);
+        if (existing && existing.brokerOrderId !== candidate.brokerOrderId) {
+          failure = new Error(`Copier fail-closed: follower ${candidate.accountId} má víc vyplněných ochranných noh`);
+          break;
+        }
+        if (!existing) byFollower.set(followerKey, candidate);
       }
-      let isolated = true;
-      for (const item of byAccount.values()) {
+      for (const candidate of failure ? [] : byFollower.values()) {
         try {
-          await isolateProtectiveFilledFollower(item.accountId, item.symbol, item.keys);
+          previousSuppressions.push(await prepareProtectiveIsolation(candidate));
+          prepared.push(candidate);
         } catch (reason) {
-          // Bez důkazu platí beze změny původní cesta níže (fail-closed
-          // včetně terminal-fill reconciliation / auto-close).
-          isolated = false;
-          options.onAudit?.([{
-            at: clock(), leaderEventId: `follower-protective-filled-isolation-failed:${item.accountId}:${clock()}`,
-            kind: 'blocked', accountId: item.accountId, reason: errorOf(reason).message,
-          }]);
+          failure = errorOf(reason);
           break;
         }
       }
-      if (isolated) return;
+      if (!failure) {
+        try {
+          await commitProtectiveIsolation(protectiveFilled);
+          return;
+        } catch (reason) {
+          failure = errorOf(reason);
+        }
+      }
+      // Dávka buď celá, nebo vůbec: vrátit všechny suppression této dávky a
+      // pokračovat beze změny původní cestou (cancel outbox zůstal netknutý).
+      for (let index = prepared.length - 1; index >= 0; index -= 1) {
+        restoreSuppression(prepared[index].accountId, prepared[index].symbol, previousSuppressions[index]);
+      }
+      options.onAudit?.([{
+        at: clock(), leaderEventId: `follower-protective-filled-isolation-failed:${clock()}`,
+        kind: 'blocked', reason: failure?.message ?? 'izolace po ochranném fillu selhala',
+      }]);
     }
     if (await enterManagementOnlyAfterProtectedTargetFailure(critical)) return;
     const reconcileAfterTerminalFill = criticalAuditAllowsTerminalFillRecovery(
