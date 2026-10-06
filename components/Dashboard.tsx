@@ -31,8 +31,6 @@ import {
   Calendar as CalendarIcon,
   Search,
   ChevronRight,
-  ChevronDown,
-  ChevronUp,
   LineChart,
   ArrowUp,
   ArrowDown,
@@ -51,7 +49,8 @@ import {
   Flag,
   Flame,
   Sparkles,
-  Droplets
+  Droplets,
+  Undo2,
 } from 'lucide-react';
 import { fmtUsd as labFmtUsd, type LeakFinding } from '../services/labAnalytics';
 import DailyInsightWidget from './DailyInsightWidget';
@@ -94,6 +93,8 @@ interface DashboardProps {
   onAnalyzeWithAI?: (prompt: string) => void;
   /** Naviguje do Settings tabu — pro "Spravovat" tlačítka ve widgetech. */
   onNavigateToSettings?: () => void;
+  /** Výchozí rozložení aktuálního světa — tlačítko „Obnovit výchozí“ v úpravách. */
+  defaultLayouts?: DashboardLayouts;
 }
 
 // ... existing imports ...
@@ -103,8 +104,14 @@ interface DashboardProps {
 // ... MASTER_WIDGET_LIST update ...
 import TradeDetailModal from './TradeDetailModal';
 import WidgetEditOverlay from './WidgetEditOverlay';
+import DashboardWidgetLibrary, { type LibraryWidget } from './DashboardWidgetLibrary';
+import DashboardPhoneEditor from './DashboardPhoneEditor';
+import {
+  arrangeDuringDrag, firstFreeSpot, packMidLayout, phoneLayoutFromRows, phoneRows, PHONE_LAYOUT_KEY, type PhoneRow,
+} from '../lib/dashboardLayoutEdit';
 import MonteCarloLab from './MonteCarloLab';
-import { Responsive as ResponsiveGridLayout, useContainerWidth } from 'react-grid-layout';
+import { Responsive as ResponsiveGridLayout, useContainerWidth, verticalCompactor } from 'react-grid-layout';
+import type { Compactor } from 'react-grid-layout/core';
 import type { Layout, LayoutItem } from 'react-grid-layout';
 
 // react-grid-layout configuration
@@ -834,6 +841,37 @@ const BACKTEST_WIDGET_IDS = new Set<string>([
 // Widgety, které patří VÝHRADNĚ do backtest světa (mimo něj se nenabízí ani nerenderují).
 // bt_monte_carlo zde NENÍ — Monte Carlo je užitečné i pro live ("je živá edge reálná?").
 const BACKTEST_ONLY_IDS = new Set<string>(['bt_avg_r', 'bt_confluence_wr', 'bt_sample_size']);
+
+/** Výchozí konfigurace nového widgetu pro breakpoint (malé KPI vs. velké karty). */
+function newWidgetConfig(id: string, bp: string): DashboardWidgetConfig | null {
+  const template = MASTER_WIDGET_LIST.find(m => m.id === id);
+  if (!template) return null;
+  const isKpi = (template as { defaultRowSpan?: number }).defaultRowSpan === 1;
+  const isXxl = bp === 'xxl';
+  return {
+    id: template.id,
+    label: template.label,
+    visible: true,
+    x: 0,
+    y: Infinity,
+    w: isKpi ? (isXxl ? 4 : 2) : (isXxl ? 12 : 6),
+    h: isKpi ? 2 : 4,
+    minW: isKpi ? (isXxl ? 3 : 2) : (isXxl ? 6 : 4),
+    minH: isKpi ? 2 : 3,
+    maxW: isKpi ? (isXxl ? 8 : 6) : (isXxl ? 24 : 12),
+    maxH: isKpi ? 4 : 8,
+  };
+}
+
+// Na telefonu stojí ve dvojici vedle sebe jen čisté číselné karty (jedno číslo
+// + popisek); složitější malé widgety jdou výchozí přes celou šířku.
+const PAIRABLE_KPI_IDS = new Set([
+  'kpi_pnl', 'kpi_winrate', 'kpi_profit_factor', 'kpi_day_winrate',
+  'kpi_max_drawdown', 'kpi_execution_rate', 'discipline_streak',
+]);
+const canHalfOnPhone = (id: string) => (MASTER_WIDGET_LIST.find(m => m.id === id) as { defaultRowSpan?: number } | undefined)?.defaultRowSpan === 1;
+const halfOnPhoneByDefault = (id: string) => PAIRABLE_KPI_IDS.has(id);
+const EDITABLE_BREAKPOINTS = new Set(['xxl', 'lg', 'md']);
 
 // Module-level mouse tracker — no re-renders, just reads position at tooltip render time
 let _mx = 0, _my = 0;
@@ -1646,6 +1684,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   isMobileEditing: isMobileEditingProp = false, setIsMobileEditing: setIsMobileEditingProp,
   onAnalyzeWithAI,
   onNavigateToSettings,
+  defaultLayouts,
 }) => {
   const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' ? window.innerWidth < 1024 : false);
   const isMobileEditing = isMobileEditingProp;
@@ -1657,7 +1696,6 @@ const Dashboard: React.FC<DashboardProps> = ({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
-  const isDark = theme !== 'light';
   const lang = user?.language || 'cs';
   const targetCurrency = user?.currency || 'USD';
 
@@ -1684,12 +1722,24 @@ const Dashboard: React.FC<DashboardProps> = ({
     return layouts[currentBreakpoint] || layouts.lg || [];
   }, [layouts, currentBreakpoint]);
 
-  // Helper: update layout for a specific breakpoint
-  const updateBreakpointLayout = useCallback((bp: string, updater: (prev: DashboardWidgetConfig[]) => DashboardWidgetConfig[]) => {
-    const current = layouts[bp] || [];
-    const updated = updater(current);
-    onUpdateLayouts({ ...layouts, [bp]: updated });
-  }, [layouts, onUpdateLayouts]);
+  // Úpravy: každá změna během editace jde do historie (Zpět / ⌘Z), stav při
+  // otevření úprav drží „Zrušit změny“.
+  const [layoutHistory, setLayoutHistory] = useState<DashboardLayouts[]>([]);
+  const editSnapshotRef = useRef<DashboardLayouts | null>(null);
+  const applyLayouts = useCallback((next: DashboardLayouts) => {
+    if (isEditing) setLayoutHistory(history => [...history.slice(-30), layouts]);
+    onUpdateLayouts(next);
+  }, [isEditing, layouts, onUpdateLayouts]);
+  useEffect(() => {
+    if (isEditing) {
+      editSnapshotRef.current = layouts;
+      setLayoutHistory([]);
+    } else {
+      editSnapshotRef.current = null;
+    }
+    // Snímek jen při otevření úprav, ne při každé změně rozložení.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditing]);
 
   // Helper: update layout for ALL breakpoints (used for add/remove/toggle visible)
   const updateAllBreakpointLayouts = useCallback((updater: (prev: DashboardWidgetConfig[], bp: string) => DashboardWidgetConfig[]) => {
@@ -1697,8 +1747,8 @@ const Dashboard: React.FC<DashboardProps> = ({
     for (const bp of Object.keys(layouts)) {
       result[bp] = updater(layouts[bp] || [], bp);
     }
-    onUpdateLayouts(result);
-  }, [layouts, onUpdateLayouts]);
+    applyLayouts(result);
+  }, [layouts, applyLayouts]);
 
   // Check if we need to auto-inject the Challenge widget when in Challenge mode
   useEffect(() => {
@@ -1765,26 +1815,8 @@ const Dashboard: React.FC<DashboardProps> = ({
       if (exists) {
         return bpLayout.map(w => w.id === id ? { ...w, visible } : w);
       } else if (visible) {
-        const template = MASTER_WIDGET_LIST.find(m => m.id === id);
-        if (template) {
-          const isKpi = (template as any).defaultRowSpan === 1;
-          const isXxl = bp === 'xxl';
-          const defaultW = isKpi ? (isXxl ? 4 : 2) : (isXxl ? 12 : 6);
-          const defaultH = isKpi ? 2 : 4;
-          return [...bpLayout, {
-            id: template.id,
-            label: template.label,
-            visible: true,
-            x: 0,
-            y: Infinity,
-            w: defaultW,
-            h: defaultH,
-            minW: isKpi ? (isXxl ? 3 : 2) : (isXxl ? 6 : 4),
-            minH: isKpi ? 2 : 3,
-            maxW: isKpi ? (isXxl ? 8 : 6) : (isXxl ? 24 : 12),
-            maxH: isKpi ? 4 : 8,
-          }];
-        }
+        const config = newWidgetConfig(id, bp);
+        if (config) return [...bpLayout, config];
       }
       return bpLayout;
     });
@@ -1795,24 +1827,6 @@ const Dashboard: React.FC<DashboardProps> = ({
       if (w.id === id) return { ...w, showDisciplinedCurve: !w.showDisciplinedCurve };
       return w;
     }));
-  };
-
-  const moveMobileWidget = (id: string, direction: 'up' | 'down') => {
-    updateBreakpointLayout(currentBreakpoint, (bpLayout) => {
-      const sorted = [...bpLayout].filter(w => w.visible).sort((a, b) => (a.y - b.y) || (a.x - b.x));
-      const idx = sorted.findIndex(w => w.id === id);
-      const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
-      if (swapIdx < 0 || swapIdx >= sorted.length) return bpLayout;
-      const aY = sorted[idx].y;
-      const bY = sorted[swapIdx].y;
-      const newY = aY === bY ? (direction === 'up' ? aY - 1 : aY + 1) : bY;
-      const swapNewY = aY === bY ? aY : aY;
-      return bpLayout.map(w => {
-        if (w.id === sorted[idx].id) return { ...w, y: newY };
-        if (w.id === sorted[swapIdx].id) return { ...w, y: swapNewY };
-        return w;
-      });
-    });
   };
 
   // react-grid-layout: width measurement
@@ -1841,7 +1855,9 @@ const Dashboard: React.FC<DashboardProps> = ({
       xxl: xxlItems.length > 0 ? xxlItems : lgItems, // fallback to lg if xxl empty
       lg: lgItems,
       md: lgItems,
-      sm: lgItems.map(item => ({ ...item, w: Math.min(item.w, 6) })),
+      // 6 sloupců: dopočítané z širokého (malé po třech, velké přes celou
+      // šířku). Jen oříznutá šířka dřív skládala pravou půlku do sloupce.
+      sm: packMidLayout(lgItems, 6).map(item => ({ ...item, static: true })),
       xs: lgItems.map(item => ({ ...item, w: Math.min(item.w, 4), static: true })),
       xxs: lgItems.map(item => ({ ...item, x: 0, w: 2, static: true })),
     };
@@ -1911,6 +1927,157 @@ const Dashboard: React.FC<DashboardProps> = ({
   const handleBreakpointChange = useCallback((newBreakpoint: string) => {
     setCurrentBreakpoint(newBreakpoint);
   }, []);
+
+  // ── Úpravy mřížky: náhled během tažení, přidávání, odebírání, Zpět ──────────
+  // Střední a úzká šířka se skládá automaticky; úprava tam by se uložila do
+  // rozložení pro široké okno a rozbila ho.
+  const editableBreakpoint = EDITABLE_BREAKPOINTS.has(currentBreakpoint);
+  const canEditGrid = isEditing && editableBreakpoint;
+  const storageKey = currentBreakpoint === 'xxl' ? 'xxl' : 'lg';
+  const storageCols = storageKey === 'xxl' ? GRID_COLS.xxl : GRID_COLS.lg;
+  const movingRef = useRef<string | null>(null);
+  const dragStartRef = useRef<Layout>([]);
+  const swapRef = useRef<string | null>(null);
+  const dropWidgetRef = useRef<LibraryWidget | null>(null);
+  const [swapId, setSwapId] = useState<string | null>(null);
+  const [resizeBadge, setResizeBadge] = useState<{ id: string; w: number; h: number; atMin: boolean } | null>(null);
+  const [freshWidget, setFreshWidget] = useState<string | null>(null);
+  const [leavingWidget, setLeavingWidget] = useState<string | null>(null);
+  const [editToast, setEditToast] = useState<{ text: string; undo?: boolean } | null>(null);
+  useEffect(() => { if (!freshWidget) return; const t = setTimeout(() => setFreshWidget(null), 1600); return () => clearTimeout(t); }, [freshWidget]);
+  useEffect(() => { if (!editToast) return; const t = setTimeout(() => setEditToast(null), 3400); return () => clearTimeout(t); }, [editToast]);
+
+  // Mřížka volá skládání při každém posunu; během tahu vrátíme náhled výsledku
+  // (prohození stejně velkých / uvolnění místa) a ostatní widgety do něj
+  // plynule dojedou. Mimo tah běžné svislé skládání.
+  const editCompactor = useMemo<Compactor>(() => ({
+    type: 'vertical',
+    get allowOverlap() { return movingRef.current != null; },
+    compact(layout: Layout, cols: number) {
+      const id = movingRef.current;
+      const moving = id ? layout.find(item => item.i === id) : undefined;
+      if (!moving) return verticalCompactor.compact(layout, cols);
+      const result = arrangeDuringDrag(dragStartRef.current, moving, cols);
+      if (swapRef.current !== result.swapWith) {
+        swapRef.current = result.swapWith;
+        const next = result.swapWith;
+        queueMicrotask(() => setSwapId(next));
+      }
+      return result.layout;
+    },
+  }), []);
+
+  const endMove = () => {
+    movingRef.current = null;
+    swapRef.current = null;
+    setSwapId(null);
+  };
+
+  const undoLayout = useCallback(() => {
+    setLayoutHistory(history => {
+      if (!history.length) return history;
+      onUpdateLayouts(history[history.length - 1]);
+      setEditToast({ text: 'Vráceno' });
+      return history.slice(0, -1);
+    });
+  }, [onUpdateLayouts]);
+
+  useEffect(() => {
+    if (!isEditing) return;
+    const key = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, [contenteditable="true"]')) return;
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        undoLayout();
+      }
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [isEditing, undoLayout]);
+
+  const cancelEdit = () => {
+    if (editSnapshotRef.current) onUpdateLayouts(editSnapshotRef.current);
+    onCloseEdit?.();
+  };
+
+  const resetToDefault = () => {
+    if (!defaultLayouts) return;
+    applyLayouts({ ...layouts, lg: defaultLayouts.lg, xxl: defaultLayouts.xxl });
+    setEditToast({ text: 'Obnoveno výchozí rozložení', undo: true });
+  };
+
+  const removeWidget = (id: string, label: string) => {
+    setLeavingWidget(id);
+    setTimeout(() => {
+      setLeavingWidget(null);
+      updateWidgetStatus(id, false);
+      setEditToast({ text: `${label} odebrán`, undo: true });
+    }, 190);
+  };
+
+  /** Přidá widget na místo (z knihovny tažením) nebo do prvního volného místa. */
+  const addWidget = (id: string, at?: { x: number; y: number }) => {
+    const keys = new Set([...Object.keys(layouts), 'lg', 'xxl']);
+    const result: DashboardLayouts = {};
+    for (const bp of keys) {
+      const bpLayout = layouts[bp] || [];
+      const existing = bpLayout.find(w => w.id === id);
+      const base = existing ?? newWidgetConfig(id, bp);
+      if (!base) { result[bp] = bpLayout; continue; }
+      if (bp !== storageKey) {
+        result[bp] = existing ? bpLayout.map(w => w.id === id ? { ...w, visible: true } : w) : [...bpLayout, base];
+        continue;
+      }
+      const placed = bpLayout.filter(w => w.visible && w.id !== id && Number.isFinite(w.y));
+      const spot = at ?? firstFreeSpot(placed, base.w, base.h, storageCols);
+      const arranged = arrangeDuringDrag(
+        placed.map(w => ({ i: w.id, x: w.x, y: w.y, w: w.w, h: w.h })),
+        { i: id, x: spot.x, y: spot.y, w: base.w, h: base.h },
+        storageCols,
+      ).layout;
+      const position = new Map(arranged.map(item => [item.i, item]));
+      const withWidget = existing ? bpLayout : [...bpLayout, base];
+      result[bp] = withWidget.map(w => {
+        const item = position.get(w.id);
+        if (w.id === id) return { ...w, visible: true, x: item?.x ?? spot.x, y: item?.y ?? spot.y };
+        return item ? { ...w, x: item.x, y: item.y } : w;
+      });
+    }
+    applyLayouts(result);
+    setFreshWidget(id);
+    const label = MASTER_WIDGET_LIST.find(m => m.id === id)?.label ?? 'Widget';
+    setEditToast({ text: `${label} přidán`, undo: true });
+  };
+
+  const libraryWidgets = useMemo<LibraryWidget[]>(() => visibleMaster
+    .filter(master => !activeLayout.find(w => w.id === master.id)?.visible)
+    .map(master => {
+      const config = newWidgetConfig(master.id, 'lg');
+      return {
+        id: master.id,
+        label: master.label,
+        description: master.description,
+        category: master.category === 'KPIs' ? 'Čísla' : master.category ?? 'Ostatní',
+        icon: master.icon,
+        w: config?.w ?? 2,
+        h: config?.h ?? 2,
+      };
+    }), [visibleMaster, activeLayout]);
+
+  // Telefon: vlastní pořadí a šířky (klíč `phone`), mřížku počítače nemění.
+  const phoneOrder = useMemo(() => phoneRows(layouts, canHalfOnPhone, halfOnPhoneByDefault)
+    .filter(row => visibleMaster.some(master => master.id === row.id)), [layouts, visibleMaster]);
+  const savePhoneOrder = (rows: PhoneRow[]) => {
+    const catalog = [...(layouts.lg || [])];
+    for (const row of rows) if (!catalog.some(w => w.id === row.id)) { const config = newWidgetConfig(row.id, 'lg'); if (config) catalog.push(config); }
+    applyLayouts({ ...layouts, [PHONE_LAYOUT_KEY]: phoneLayoutFromRows(rows, catalog) });
+    setIsMobileEditing(false);
+  };
+
+  const gridCols = (GRID_COLS as Record<string, number>)[currentBreakpoint] ?? GRID_COLS.lg;
+  const colWidth = (containerWidth - 12 * (gridCols + 1)) / gridCols;
+  const spanPx = (units: number, unit: number) => units * unit + Math.max(0, units - 1) * 12;
 
   // Jeden průchod přes obchody pro všechny KPI widgety. Dřív renderWidget dělal pro každý
   // widget vlastní sadu .filter()/.reduce() přes stats.trades přímo v render path (kpi_winrate
@@ -2115,12 +2282,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   return (
     <div className={`relative min-h-screen transition-all duration-700 max-w-full overflow-x-hidden ${isEditing ? 'canvas-grid' : ''}`}>
-      {/* Subtle dim overlay for non-widget content during edit */}
-      {isEditing && (
-        <div className="fixed inset-0 z-0 bg-slate-900/10 dark:bg-black/40 pointer-events-none transition-opacity duration-500" />
-      )}
-
-      <div className={`space-y-6 lg:space-y-10 pb-40 relative z-10 w-full mx-auto transition-all duration-500 ${isEditing ? 'scale-[0.98] transform origin-top' : ''}`}>
+      <div className={`space-y-6 lg:space-y-10 relative z-10 w-full mx-auto transition-[padding] duration-500 ${isEditing ? 'pb-[420px]' : 'pb-40'}`}>
         <div className={`flex justify-between items-center px-4 pt-4 ${!isEditing ? 'hidden lg:flex' : ''}`}>
           <div>
             <div className="flex items-center gap-4">
@@ -2128,15 +2290,26 @@ const Dashboard: React.FC<DashboardProps> = ({
             </div>
           </div>
           {isEditing && (
-            <div className="flex gap-2">
-              <button onClick={onCloseEdit} className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-full font-semibold text-xs shadow-xl shadow-emerald-500/20 active:scale-95 transition-all flex items-center gap-2">
-                <CheckCircle2 size={16} /> Hotovo
+            <div className="dbe-editbar">
+              <button type="button" className="dbe-btn" onClick={undoLayout} disabled={!layoutHistory.length} title="Zpět (⌘Z)">
+                <Undo2 size={14} /> Zpět
+              </button>
+              {defaultLayouts ? <button type="button" className="dbe-btn" onClick={resetToDefault}>Obnovit výchozí</button> : null}
+              <button type="button" className="dbe-btn" onClick={cancelEdit}>Zrušit změny</button>
+              <button type="button" className="dbe-btn dbe-btn-ok" onClick={onCloseEdit}>
+                <CheckCircle2 size={14} /> Hotovo
               </button>
             </div>
           )}
         </div>
 
         <div ref={containerRef} className={`w-full p-2 md:px-6 rounded-[32px] ${isEditing ? 'pt-6' : ''}`}>
+          {isEditing && !editableBreakpoint && !isMobile ? (
+            <p className="dbe-note">
+              Na téhle šířce okna se rozložení skládá automaticky z toho širokého — malé widgety po třech, velké přes celou šířku.
+              Upravovat ho jde na širším okně, aby se úpravy neuložily do rozložení pro velkou obrazovku.
+            </p>
+          ) : null}
           {/* Mobile: jednoduchý vertikální seznam, KPI widgety ve dvojicích vedle sebe */}
           {isMobile && !isEditing && (() => {
             const chartHeights: Record<string, number> = {
@@ -2153,22 +2326,15 @@ const Dashboard: React.FC<DashboardProps> = ({
               ? 'ring-2 ring-emerald-500/40 rounded-2xl shadow-[0_0_16px_rgba(16,185,129,0.15)]'
               : '';
 
-            // Only pure ProKpiCard widgets (single number + label) can be paired side-by-side.
-            // Complex widgets (streak has 2 circles, avg_win_loss has bar chart, etc.) stay full-width.
-            const PAIRABLE_KPI_IDS = new Set([
-              'kpi_pnl', 'kpi_winrate', 'kpi_profit_factor', 'kpi_day_winrate',
-              'kpi_max_drawdown', 'kpi_execution_rate', 'discipline_streak',
-            ]);
-
-            // Pre-compute visible items with their metadata
-            const items = currentLayout.flatMap(widget => {
+            // Pořadí a šířky z telefonního rozložení (nebo odvozené ze širokého).
+            const layoutById = new Map(currentLayout.map(widget => [widget.id, widget]));
+            const items = phoneOrder.flatMap(row => {
+              const widget = layoutById.get(row.id) ?? activeLayout.find(w => w.id === row.id)
+                ?? newWidgetConfig(row.id, 'lg');
+              if (!widget) return [];
               const content = renderWidget(widget.id, widget);
               if (content == null) return [];
-              const master = MASTER_WIDGET_LIST.find(m => m.id === widget.id);
-              const rowSpan = master?.defaultRowSpan ?? 2;
-              // isKpi = can be paired: only simple ProKpiCard widgets, not complex ones
-              const isKpi = rowSpan === 1 && PAIRABLE_KPI_IDS.has(widget.id);
-              return [{ widget, content, isKpi }];
+              return [{ widget, content, isKpi: row.half }];
             });
 
             // Global KPI pairing: collect all pairable KPI indices first, pair them up globally.
@@ -2233,213 +2399,124 @@ const Dashboard: React.FC<DashboardProps> = ({
           {/* Desktop: react-grid-layout */}
           {(!isMobile || isEditing) && widthMounted && (
             <ResponsiveGridLayout
-              className={`layout ${isEditing ? 'editing' : ''}`}
+              className={`layout dbe-grid ${isEditing ? 'editing' : ''} ${canEditGrid ? 'dbe-editing' : ''}`}
               width={containerWidth}
               layouts={rglLayouts}
               breakpoints={GRID_BREAKPOINTS}
               cols={GRID_COLS}
               rowHeight={GRID_ROW_HEIGHT}
               margin={[12, 12] as [number, number]}
-              dragConfig={{ enabled: isEditing }}
-              resizeConfig={{ enabled: isEditing, handles: ['se'] }}
-              onDragStop={handleDragOrResizeStop}
-              onResizeStop={handleDragOrResizeStop}
+              compactor={editCompactor}
+              dragConfig={{ enabled: canEditGrid, cancel: '.dbe-no-drag' }}
+              resizeConfig={{ enabled: canEditGrid, handles: ['se'] }}
+              dropConfig={{
+                enabled: canEditGrid,
+                defaultItem: { w: 2, h: 2 },
+                onDragOver: () => (dropWidgetRef.current ? { w: dropWidgetRef.current.w, h: dropWidgetRef.current.h } : false),
+              }}
+              droppingItem={{ i: '__dbe_drop__', x: 0, y: 0, w: 2, h: 2 }}
+              onDragStart={(layout, oldItem) => {
+                dragStartRef.current = layout.map(item => ({ ...item }));
+                movingRef.current = oldItem?.i ?? null;
+              }}
+              onDragStop={(layout) => { endMove(); handleDragOrResizeStop(layout); }}
+              onResize={(_layout, _old, item) => {
+                if (item) setResizeBadge({ id: item.i, w: item.w, h: item.h, atMin: item.w <= (item.minW ?? 1) && item.h <= (item.minH ?? 1) });
+              }}
+              onResizeStop={(layout) => { setResizeBadge(null); handleDragOrResizeStop(layout); }}
+              onDrop={(_layout, item) => {
+                const widget = dropWidgetRef.current;
+                dropWidgetRef.current = null;
+                endMove();
+                if (widget && item) addWidget(widget.id, { x: item.x, y: item.y });
+              }}
               onBreakpointChange={handleBreakpointChange}
               autoSize
             >
-              {currentLayout.map(widget => (
-                <div key={widget.id} className={`h-full ${isEditing ? 'group relative' : ''}`}>
-                  {isEditing && (
-                    <WidgetEditOverlay
-                      id={widget.id}
-                      label={widget.label}
-                      showDisciplinedCurve={widget.showDisciplinedCurve}
-                      onRemove={() => updateWidgetStatus(widget.id, false)}
-                      onToggleDisciplinedCurve={widget.id === 'equity' ? () => toggleDisciplinedCurve(widget.id) : undefined}
-                    />
-                  )}
-                  <div className={`dashboard-widget-shell ${isEditing ? 'h-full opacity-60 pointer-events-none select-none' : 'h-full'}`}>
-                    {renderWidget(widget.id, widget)}
+              {currentLayout.map(widget => {
+                const grid = (rglLayouts as Record<string, { i: string; minW?: number; minH?: number; maxW?: number; maxH?: number }[]>)[currentBreakpoint]
+                  ?.find(item => item.i === widget.id);
+                // Minimum i maximum drží i během tažení rohu: mřížka by jinak
+                // widget vizuálně zmenšila až na 1×1 a po puštění skočil zpět.
+                const clamp = canEditGrid && grid ? {
+                  minWidth: spanPx(grid.minW ?? 1, colWidth), minHeight: spanPx(grid.minH ?? 1, GRID_ROW_HEIGHT),
+                  maxWidth: spanPx(Math.min(grid.maxW ?? gridCols, gridCols), colWidth), maxHeight: spanPx(grid.maxH ?? 99, GRID_ROW_HEIGHT),
+                } : undefined;
+                return (
+                  <div
+                    key={widget.id}
+                    style={clamp}
+                    className={[
+                      'h-full',
+                      isEditing ? 'group relative' : '',
+                      swapId === widget.id ? 'dbe-swap' : '',
+                      freshWidget === widget.id ? 'dbe-new' : '',
+                      leavingWidget === widget.id ? 'dbe-out' : '',
+                    ].join(' ')}
+                  >
+                    {canEditGrid && (
+                      <WidgetEditOverlay
+                        id={widget.id}
+                        label={widget.label}
+                        showDisciplinedCurve={widget.showDisciplinedCurve}
+                        onRemove={() => removeWidget(widget.id, widget.label)}
+                        onToggleDisciplinedCurve={widget.id === 'equity' ? () => toggleDisciplinedCurve(widget.id) : undefined}
+                      />
+                    )}
+                    <div className={`dashboard-widget-shell dbe-shell ${isEditing ? 'h-full pointer-events-none select-none' : 'h-full'}`}>
+                      {renderWidget(widget.id, widget)}
+                    </div>
+                    {resizeBadge?.id === widget.id ? (
+                      <span className={`dbe-size${resizeBadge.atMin ? ' dbe-size-min' : ''}`}>
+                        {resizeBadge.w} × {resizeBadge.h}{resizeBadge.atMin ? ' · minimum' : ''}
+                      </span>
+                    ) : null}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </ResponsiveGridLayout>
           )}
         </div>
       </div>
 
 
-      {/* Mobile Edit Bottom Sheet */}
+      {/* Telefon: úpravy pořadí, šířky a výběru widgetů */}
       <AnimatePresence>
         {isMobileEditing && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm lg:hidden"
-              onClick={() => setIsMobileEditing(false)}
-            />
-            <motion.div
-              initial={{ y: '100%' }}
-              animate={{ y: 0 }}
-              exit={{ y: '100%' }}
-              transition={{ type: 'spring', stiffness: 350, damping: 30 }}
-              className={`native-bottom-sheet fixed bottom-0 left-0 right-0 z-[110] rounded-t-3xl border-t max-h-[85vh] flex flex-col lg:hidden bg-[var(--bg-card)] border-[var(--border-subtle)] backdrop-blur-2xl`}
-            >
-              {/* Header */}
-              <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-white/5 shrink-0">
-                <div>
-                  <h3 className="text-sm font-semibold">Upravit dashboard</h3>
-                  <p className="text-[10px] text-slate-500 mt-0.5">Zapni/vypni widgety a změň pořadí</p>
-                </div>
-                <button
-                  onClick={() => setIsMobileEditing(false)}
-                  className="px-4 py-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-xl text-[11px] font-semibold"
-                >
-                  Hotovo
-                </button>
-              </div>
-
-              {/* Widget list */}
-              <div className="overflow-y-auto flex-1 px-4 py-3 flex flex-col gap-2">
-                <AnimatePresence initial={false}>
-                {[...activeLayout].filter(w => w.visible !== false).sort((a, b) => (a.y - b.y) || (a.x - b.x)).map((widget, idx, arr) => {
-                  const master = MASTER_WIDGET_LIST.find(m => m.id === widget.id);
-                  const isVisible = true; // jsme už filtrovaní jen na visible
-                  const visibleArr = arr;
-                  const visibleIdx = visibleArr.findIndex(w => w.id === widget.id);
-                  return (
-                    <motion.div
-                      key={widget.id}
-                      layout
-                      layoutId={`medit-${widget.id}`}
-                      initial={{ opacity: 0, scale: 0.96 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.96 }}
-                      transition={{ type: 'spring', stiffness: 500, damping: 40 }}
-                      className={`flex items-center gap-3 px-4 py-3 rounded-2xl border ${isVisible ? (isDark ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200') : (isDark ? 'bg-transparent border-white/5 opacity-50' : 'bg-transparent border-slate-100 opacity-50')}`}
-                    >
-                      {/* Toggle */}
-                      <button
-                        onClick={() => updateWidgetStatus(widget.id, !isVisible)}
-                        className={`w-10 h-6 rounded-full border transition-all flex items-center shrink-0 ${isVisible ? 'bg-emerald-500 border-emerald-500 justify-end' : (isDark ? 'bg-white/10 border-white/20 justify-start' : 'bg-slate-200 border-slate-300 justify-start')}`}
-                      >
-                        <div className="w-4 h-4 rounded-full bg-white mx-1 shadow-sm" />
-                      </button>
-
-                      {/* Icon + Label */}
-                      <div className={`p-1.5 rounded-lg ${isDark ? 'bg-white/10' : 'bg-slate-200'}`}>
-                        {master && React.cloneElement(master.icon as React.ReactElement<any>, { size: 14 })}
-                      </div>
-                      <span className="text-xs font-bold flex-1">{widget.label}</span>
-
-                      {/* Up/Down */}
-                      {isVisible && (
-                        <div className="flex gap-1 shrink-0">
-                          <button
-                            onClick={() => moveMobileWidget(widget.id, 'up')}
-                            disabled={visibleIdx === 0}
-                            className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all ${visibleIdx === 0 ? 'opacity-20' : (isDark ? 'bg-white/10 hover:bg-white/20 active:scale-90' : 'bg-slate-100 hover:bg-slate-200 active:scale-90')}`}
-                          >
-                            <ChevronUp size={14} />
-                          </button>
-                          <button
-                            onClick={() => moveMobileWidget(widget.id, 'down')}
-                            disabled={visibleIdx === visibleArr.length - 1}
-                            className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all ${visibleIdx === visibleArr.length - 1 ? 'opacity-20' : (isDark ? 'bg-white/10 hover:bg-white/20 active:scale-90' : 'bg-slate-100 hover:bg-slate-200 active:scale-90')}`}
-                          >
-                            <ChevronDown size={14} />
-                          </button>
-                        </div>
-                      )}
-                    </motion.div>
-                  );
-                })}
-                </AnimatePresence>
-
-                {/* Vypnuté + nikdy-nepřidané widgety → přidat */}
-                {(() => {
-                  const missingWidgets = visibleMaster.filter(m => {
-                    const inLayout = activeLayout.find(w => w.id === m.id);
-                    return !inLayout || inLayout.visible === false;
-                  });
-                  if (missingWidgets.length === 0) return null;
-                  return (
-                    <>
-                      <div className="px-1 pt-4 pb-2">
-                        <p className="text-[11px] font-semibold text-slate-500">Přidat další</p>
-                      </div>
-                      {missingWidgets.map(master => (
-                        <button
-                          key={`add-${master.id}`}
-                          onClick={() => updateWidgetStatus(master.id, true)}
-                          className={`flex items-center gap-3 px-4 py-3 rounded-2xl border border-dashed transition-all active:scale-95 ${isDark ? 'border-white/15 hover:bg-white/5 hover:border-emerald-500/40' : 'border-slate-300 hover:bg-slate-50 hover:border-emerald-500/40'}`}
-                        >
-                          <div className={`w-10 h-6 rounded-full border flex items-center justify-start shrink-0 bg-[var(--bg-page)] border-[var(--border-subtle)]`}>
-                            <div className="w-4 h-4 rounded-full bg-emerald-500 mx-1 shadow-sm" />
-                          </div>
-                          <div className={`p-1.5 rounded-lg bg-[var(--bg-page)]`}>
-                            {React.cloneElement(master.icon as React.ReactElement<any>, { size: 14 })}
-                          </div>
-                          <div className="flex-1 text-left">
-                            <span className="text-xs font-bold block">{master.label}</span>
-                            <span className="text-[9px] text-slate-500 line-clamp-1">{master.description}</span>
-                          </div>
-                          <span className="text-[11px] font-semibold text-emerald-500 shrink-0">Přidat</span>
-                        </button>
-                      ))}
-                    </>
-                  );
-                })()}
-              </div>
-            </motion.div>
-          </>
+          <DashboardPhoneEditor
+            rows={phoneOrder}
+            catalog={visibleMaster.map(master => ({
+              id: master.id,
+              label: master.label,
+              description: master.description,
+              icon: React.cloneElement(master.icon as React.ReactElement<{ size?: number }>, { size: 16 }),
+              canHalf: canHalfOnPhone(master.id),
+            }))}
+            onSave={savePhoneOrder}
+            onCancel={() => setIsMobileEditing(false)}
+          />
         )}
       </AnimatePresence>
 
-      {/* FLOATING PRO DOCK (Replaces Sidebar) */}
-      <AnimatePresence>
-        {isEditing && (
-          <motion.div
-            initial={{ y: 100, opacity: 0, scale: 0.95 }}
-            animate={{ y: 0, opacity: 1, scale: 1 }}
-            exit={{ y: 100, opacity: 0, scale: 0.95 }}
-            transition={{ type: "spring", stiffness: 400, damping: 30 }}
-            className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[150] w-[95%] max-w-4xl p-3 md:p-4 rounded-3xl border shadow-2xl backdrop-blur-3xl flex items-center gap-4 bg-[var(--bg-card)] border-[var(--border-subtle)] ${isDark ? 'shadow-black/80' : 'shadow-slate-300/50'}`}
-          >
-            <div className="flex-1 overflow-x-auto no-scrollbar flex items-center gap-3 snap-x px-2">
-              {visibleMaster.filter(master => !activeLayout.find(w => w.id === master.id)?.visible).length === 0 && (
-                <div className="w-full text-center text-xs font-bold text-slate-500 py-3">Všechny moduly jsou aktivní</div>
-              )}
-              {visibleMaster.filter(master => !activeLayout.find(w => w.id === master.id)?.visible).map(master => (
-                <motion.button
-                  whileHover={{ y: -4, scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  key={master.id}
-                  onClick={(e) => { e.stopPropagation(); updateWidgetStatus(master.id, true); }}
-                  className={`snap-center shrink-0 flex flex-col items-center justify-center p-3 w-24 h-24 rounded-2xl border transition-colors group cursor-pointer ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] hover:bg-white/10 hover:border-white/10' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] hover:bg-white hover:shadow-md'}`}
-                  title={master.description}
-                >
-                  <div className={`p-2.5 rounded-xl border mb-2 transition-colors ${isDark ? 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-slate-400 group-hover:text-blue-400' : 'bg-[var(--bg-card)] shadow-sm border-[var(--border-subtle)] text-slate-500 group-hover:text-blue-500'}`}>
-                    {React.cloneElement(master.icon as React.ReactElement<any>, { size: 18 })}
-                  </div>
-                  <span className={`text-[11px] font-semibold tracking-tight text-center leading-tight line-clamp-2 ${isDark ? 'text-slate-400 group-hover:text-white' : 'text-slate-600 group-hover:text-slate-900'}`}>{master.label}</span>
-                </motion.button>
-              ))}
-            </div>
-
-            <div className="shrink-0 w-px h-16 bg-linear-to-b from-transparent via-slate-500/20 to-transparent block" />
-
-            <div className="shrink-0 pl-2">
-              <button onClick={onCloseEdit} className="w-16 h-16 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-lg shadow-emerald-500/20 flex flex-col items-center justify-center gap-1 hover:scale-105 active:scale-95 transition-all">
-                <CheckCircle2 size={24} />
-                <span className="text-[11px] font-semibold">Hotovo</span>
-              </button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Knihovna widgetů (místo doku) + hláška s Vrátit */}
+      {isEditing && canEditGrid && !isMobile ? (
+        <DashboardWidgetLibrary
+          widgets={libraryWidgets}
+          onAdd={id => addWidget(id)}
+          onDragStartWidget={widget => {
+            dropWidgetRef.current = widget;
+            dragStartRef.current = ((rglLayouts as Record<string, Layout>)[currentBreakpoint] ?? []).map(item => ({ ...item }));
+            movingRef.current = '__dbe_drop__';
+          }}
+          onDragEndWidget={() => { dropWidgetRef.current = null; endMove(); }}
+        />
+      ) : null}
+      {editToast ? (
+        <div className="dbe-toast" key={editToast.text} role="status">
+          {editToast.text}
+          {editToast.undo && layoutHistory.length ? <button type="button" onClick={undoLayout}>Vrátit</button> : null}
+        </div>
+      ) : null}
 
 
       {

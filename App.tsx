@@ -4349,6 +4349,7 @@ const App: React.FC = () => {
                       preps={dailyPreps}
                       reviews={dailyReviews}
                       layouts={dashboardMode === 'backtesting' ? backtestDashboardLayouts : dashboardLayouts}
+                      defaultLayouts={dashboardMode === 'backtesting' ? DEFAULT_BACKTEST_LAYOUTS : DEFAULT_LAYOUTS}
                       sessions={activeSessions}
                       ironRules={ironRules}
                       onUpdateLayouts={(v: DashboardLayouts) => {

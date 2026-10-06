@@ -448,6 +448,38 @@ primární připojení.
   přes relay není změřená; offline test prokazuje vynechaná čtení, nikoli
   konkrétní zrychlení v sekundách. OFF transport se sám touto změnou nezrychlí.
 
+### 2026-10-06 — Úpravy dashboardu: prohození, uvolnění místa, knihovna, telefon (Claude)
+
+Podle náhledu `mockups/dashboard-edit-preview.html` (odsouhlasen Filipem).
+- Mřížka (`Dashboard.tsx`): vlastní `Compactor` během tažení počítá náhled od
+  stavu před tahem (`lib/dashboardLayoutEdit.ts` `arrangeDuringDrag`) —
+  stejně velké widgety se prohodí (cíl odjede na místo taženého), jinak
+  tažený odtlačí ostatní dolů. Ostatní dojedou CSS přechody (`.dbe-*`).
+  Dřív `transition: none` v úpravách a odtlačení bez prohození.
+- Minimum/maximum velikosti drží i vizuálně během tažení rohu (inline
+  `min/max-width/height` na položce; RGL pouští vizuálně až 1×1 buňku),
+  štítek „6 × 4“ / „· minimum“. Úchyt v úpravách vidět vždy.
+- Úpravy bez `scale-[0.98]` (knihovna o transformaci nevěděla → ujíždění
+  od kurzoru) a bez `opacity-60`. Lišta Zpět (⌘Z, historie po dobu úprav),
+  Obnovit výchozí (nový prop `defaultLayouts` z App), Zrušit změny (snímek
+  při otevření), Hotovo. Odebrání s animací a „Vrátit“.
+- Knihovna widgetů (`DashboardWidgetLibrary.tsx`) místo doku s posuvníkem:
+  hledání, kategorie, poloviční miniatury vzhledu, tažení na plochu
+  (`dropConfig` + náhled uvolnění místa) nebo klik → první volné místo.
+- Střední šířka (`sm`, 6 sloupců): `packMidLayout` místo oříznuté šířky
+  (pravá půlka se skládala do sloupce). Úpravy na `sm/xs` vypnuté s
+  poznámkou — `handleDragOrResizeStop` by uložil 6sloupcové souřadnice do `lg`.
+- Telefon: vlastní rozložení pod klíčem `phone` (y = pořadí, nové pole
+  `mobileHalf`), mřížku počítače nemění; bez něj odvozené z `lg` a dvojice
+  KPI jako dřív. `DashboardPhoneEditor.tsx` (pořadí tažením přes
+  framer-motion `Reorder`, ½ / celá šířka, odebrání, přidání nahoru) místo
+  sheetu se šipkami (`moveMobileWidget` psal do `lg`). iPhone appka to
+  uvidí až po rebuildu nativního bundlu.
+- Ověřeno: testy logiky (`tests/dashboardLayoutEdit.test.ts`), náhled se
+  skutečnou mřížkou; v appce jen vykreslení (úpravy, knihovna, střední
+  šířka, editor telefonu) — tažením se v appce nezkoušelo, ukládá do
+  Filipova skutečného rozložení.
+
 ### 2026-10-06 — Plány účtů: okno seskupené podle propky (Claude)
 
 - `TradovateAccountProfileSetup` (LIVE → Přiřadit plán) přestavěn podle
