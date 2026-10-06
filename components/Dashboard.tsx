@@ -872,6 +872,20 @@ const PAIRABLE_KPI_IDS = new Set([
 const canHalfOnPhone = (id: string) => (MASTER_WIDGET_LIST.find(m => m.id === id) as { defaultRowSpan?: number } | undefined)?.defaultRowSpan === 1;
 const halfOnPhoneByDefault = (id: string) => PAIRABLE_KPI_IDS.has(id);
 const EDITABLE_BREAKPOINTS = new Set(['xxl', 'lg', 'md']);
+/** Kde widget „držíš“ při tažení z knihovny (od levého horního rohu). */
+const DRAG_GRAB = { x: 48, y: 22 };
+
+/** Štítek „6 × 4“ v rohu měněného widgetu — přímo v DOM, ne přes stav. */
+function showResizeBadge(element: HTMLElement, w: number, h: number, atMin: boolean) {
+  let badge = element.querySelector<HTMLSpanElement>(':scope > .dbe-size');
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'dbe-size';
+    element.appendChild(badge);
+  }
+  badge.classList.toggle('dbe-size-min', atMin);
+  badge.textContent = `${w} × ${h}${atMin ? ' · minimum' : ''}`;
+}
 
 // Module-level mouse tracker — no re-renders, just reads position at tooltip render time
 let _mx = 0, _my = 0;
@@ -1943,7 +1957,8 @@ const Dashboard: React.FC<DashboardProps> = ({
   const swapRef = useRef<string | null>(null);
   const dropWidgetRef = useRef<LibraryWidget | null>(null);
   const [swapId, setSwapId] = useState<string | null>(null);
-  const [resizeBadge, setResizeBadge] = useState<{ id: string; w: number; h: number; atMin: boolean } | null>(null);
+  const [libraryDrag, setLibraryDrag] = useState<LibraryWidget | null>(null);
+  const dragGhostRef = useRef<HTMLDivElement>(null);
   const [freshWidget, setFreshWidget] = useState<string | null>(null);
   const [leavingWidget, setLeavingWidget] = useState<string | null>(null);
   const [editToast, setEditToast] = useState<{ text: string; undo?: boolean } | null>(null);
@@ -2081,6 +2096,26 @@ const Dashboard: React.FC<DashboardProps> = ({
   const gridCols = (GRID_COLS as Record<string, number>)[currentBreakpoint] ?? GRID_COLS.lg;
   const colWidth = (containerWidth - 12 * (gridCols + 1)) / gridCols;
   const spanPx = (units: number, unit: number) => units * unit + Math.max(0, units - 1) * 12;
+
+  // Náhled taženého widgetu jede za kurzorem přímo přes styl (bez Reactu).
+  useEffect(() => {
+    if (!libraryDrag) return;
+    const move = (event: DragEvent) => {
+      const ghost = dragGhostRef.current;
+      if (!ghost || (event.clientX === 0 && event.clientY === 0)) return;
+      ghost.style.transform = `translate(${event.clientX - DRAG_GRAB.x}px, ${event.clientY - DRAG_GRAB.y}px)`;
+      ghost.style.opacity = '1';
+    };
+    const end = () => setLibraryDrag(null);
+    window.addEventListener('dragover', move);
+    window.addEventListener('drop', end);
+    window.addEventListener('dragend', end);
+    return () => {
+      window.removeEventListener('dragover', move);
+      window.removeEventListener('drop', end);
+      window.removeEventListener('dragend', end);
+    };
+  }, [libraryDrag]);
 
   // Jeden průchod přes obchody pro všechny KPI widgety. Dřív renderWidget dělal pro každý
   // widget vlastní sadu .filter()/.reduce() přes stats.trades přímo v render path (kpi_winrate
@@ -2415,7 +2450,9 @@ const Dashboard: React.FC<DashboardProps> = ({
               dropConfig={{
                 enabled: canEditGrid,
                 defaultItem: { w: 2, h: 2 },
-                onDragOver: () => (dropWidgetRef.current ? { w: dropWidgetRef.current.w, h: dropWidgetRef.current.h } : false),
+                onDragOver: () => (dropWidgetRef.current
+                  ? { w: dropWidgetRef.current.w, h: dropWidgetRef.current.h, dragOffsetX: DRAG_GRAB.x, dragOffsetY: DRAG_GRAB.y }
+                  : false),
               }}
               droppingItem={{ i: '__dbe_drop__', x: 0, y: 0, w: 2, h: 2 }}
               onDragStart={(layout, oldItem) => {
@@ -2423,14 +2460,17 @@ const Dashboard: React.FC<DashboardProps> = ({
                 movingRef.current = oldItem?.i ?? null;
               }}
               onDragStop={(layout) => { endMove(); handleDragOrResizeStop(layout); }}
-              onResize={(_layout, _old, item) => {
-                if (item) setResizeBadge({ id: item.i, w: item.w, h: item.h, atMin: item.w <= (item.minW ?? 1) && item.h <= (item.minH ?? 1) });
+              // Štítek velikosti se píše rovnou do prvku: přes React stav by každý
+              // pohyb myši překreslil celý dashboard i s grafy (sekalo se to).
+              onResize={(_layout, _old, item, _placeholder, _event, element) => {
+                if (item && element) showResizeBadge(element, item.w, item.h, item.w <= (item.minW ?? 1) && item.h <= (item.minH ?? 1));
               }}
-              onResizeStop={(layout) => { setResizeBadge(null); handleDragOrResizeStop(layout); }}
+              onResizeStop={(layout, _old, _item, _placeholder, _event, element) => { element?.querySelector('.dbe-size')?.remove(); handleDragOrResizeStop(layout); }}
               onDrop={(_layout, item) => {
                 const widget = dropWidgetRef.current;
                 dropWidgetRef.current = null;
                 endMove();
+                setLibraryDrag(null);
                 if (widget && item) addWidget(widget.id, { x: item.x, y: item.y });
               }}
               onBreakpointChange={handleBreakpointChange}
@@ -2469,11 +2509,6 @@ const Dashboard: React.FC<DashboardProps> = ({
                     <div className={`dashboard-widget-shell dbe-shell ${isEditing ? 'h-full pointer-events-none select-none' : 'h-full'}`}>
                       {renderWidget(widget.id, widget)}
                     </div>
-                    {resizeBadge?.id === widget.id ? (
-                      <span className={`dbe-size${resizeBadge.atMin ? ' dbe-size-min' : ''}`}>
-                        {resizeBadge.w} × {resizeBadge.h}{resizeBadge.atMin ? ' · minimum' : ''}
-                      </span>
-                    ) : null}
                   </div>
                 );
               })}
@@ -2506,13 +2541,27 @@ const Dashboard: React.FC<DashboardProps> = ({
         <DashboardWidgetLibrary
           widgets={libraryWidgets}
           onAdd={id => addWidget(id)}
+          dragging={!!libraryDrag}
           onDragStartWidget={widget => {
+            // Až po startu tahu: změna DOM přímo v dragstart umí v Chromu tah zrušit.
+            setTimeout(() => setLibraryDrag(widget), 0);
             dropWidgetRef.current = widget;
             dragStartRef.current = ((rglLayouts as Record<string, Layout>)[currentBreakpoint] ?? []).map(item => ({ ...item }));
             movingRef.current = '__dbe_drop__';
           }}
-          onDragEndWidget={() => { dropWidgetRef.current = null; endMove(); }}
+          onDragEndWidget={() => { dropWidgetRef.current = null; setLibraryDrag(null); endMove(); }}
         />
+      ) : null}
+      {/* Tažený widget z knihovny: skutečný vzhled ve velikosti, kterou na ploše zabere. */}
+      {libraryDrag ? (
+        <div
+          ref={dragGhostRef}
+          className="dbe-drag-ghost dashboard-widget-shell"
+          style={{ width: spanPx(libraryDrag.w, colWidth), height: spanPx(libraryDrag.h, GRID_ROW_HEIGHT) }}
+          aria-hidden
+        >
+          {renderWidget(libraryDrag.id, newWidgetConfig(libraryDrag.id, 'lg') ?? undefined)}
+        </div>
       ) : null}
       {editToast ? (
         <div className="dbe-toast" key={editToast.text} role="status">

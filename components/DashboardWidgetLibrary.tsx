@@ -72,10 +72,17 @@ export const MiniWidget = ({ widget }: { widget: LibraryWidget }) => {
   );
 };
 
+// Prohlížeč by jinak táhl malý obrázek karty; náhled celého widgetu kreslí dashboard.
+const EMPTY_DRAG_IMAGE = typeof Image !== 'undefined' ? Object.assign(new Image(), {
+  src: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+}) : null;
+
 const normalize = (value: string) => value.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 
-export default function DashboardWidgetLibrary({ widgets, onAdd, onDragStartWidget, onDragEndWidget }: {
+export default function DashboardWidgetLibrary({ widgets, dragging = false, onAdd, onDragStartWidget, onDragEndWidget }: {
   widgets: LibraryWidget[];
+  /** Právě se táhne widget z knihovny — panel ustoupí, ať je vidět plocha. */
+  dragging?: boolean;
   onAdd: (id: string) => void;
   onDragStartWidget: (widget: LibraryWidget) => void;
   onDragEndWidget: () => void;
@@ -88,7 +95,7 @@ export default function DashboardWidgetLibrary({ widgets, onAdd, onDragStartWidg
     && (!query || normalize(`${widget.label} ${widget.description}`).includes(normalize(query))));
 
   return (
-    <div className={`dbe-lib${open ? ' dbe-lib-open' : ''}`}>
+    <div className={`dbe-lib${open ? ' dbe-lib-open' : ''}${dragging ? ' dbe-lib-dragging' : ''}`}>
       <div className="dbe-lib-panel" aria-hidden={!open}>
         <div>
           <div className="dbe-lib-in">
@@ -116,7 +123,12 @@ export default function DashboardWidgetLibrary({ widgets, onAdd, onDragStartWidg
                   style={{ animationDelay: `${index * 0.025}s` }}
                   draggable
                   title="Přetáhni na místo na ploše, nebo klikni — přidá se do prvního volného místa"
-                  onDragStart={event => { onDragStartWidget(widget); event.dataTransfer.setData('text/plain', widget.id); event.dataTransfer.effectAllowed = 'move'; }}
+                  onDragStart={event => {
+                    event.dataTransfer.setData('text/plain', widget.id);
+                    event.dataTransfer.effectAllowed = 'move';
+                    if (EMPTY_DRAG_IMAGE) event.dataTransfer.setDragImage(EMPTY_DRAG_IMAGE, 0, 0);
+                    onDragStartWidget(widget);
+                  }}
                   onDragEnd={onDragEndWidget}
                   onClick={() => onAdd(widget.id)}
                   onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onAdd(widget.id); } }}
