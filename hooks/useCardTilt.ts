@@ -44,7 +44,12 @@ export function useCardTilt(
   wrapRef: RefObject<HTMLElement | null>,
   cardRef: RefObject<HTMLElement | null>,
   disabled = false,
+  /** Rozpětí náklonu okraj–okraj ve stupních. Širší karta potřebuje menší úhel. */
+  degrees: { hover?: number; press?: number; gyro?: number } = {},
 ): void {
+  const hoverDeg = degrees.hover ?? 30;
+  const pressDeg = degrees.press ?? 30;
+  const gyroDeg = degrees.gyro ?? 20;
   // Náklon a odlesk jako u Spotify. Konstanty jsou rozpětí okraj–okraj, na
   // kraji karty je tedy polovina. Myš: už najetí nakloní kartu výrazně
   // (±15°), stisk ji navíc lehce zamáčkne. Dotyk: zhoupnutí k místu prstu
@@ -54,9 +59,9 @@ export function useCardTilt(
     const wrap = wrapRef.current;
     const card = cardRef.current;
     if (!wrap || !card || reducedMotion() || disabled) return;
-    const HOVER_DEG = 30;
-    const PRESS_DEG = 30;
-    const GYRO_DEG = 20;
+    const HOVER_DEG = hoverDeg;
+    const PRESS_DEG = pressDeg;
+    const GYRO_DEG = gyroDeg;
     let pressed = false;
     let hovering = false;
     let gyro: { x: number; y: number } | null = null;
@@ -162,5 +167,5 @@ export function useCardTilt(
       wrap.removeEventListener('pointerleave', leave);
       window.removeEventListener('deviceorientation', orient);
     };
-  }, [cardRef, disabled, wrapRef]);
+  }, [cardRef, disabled, gyroDeg, hoverDeg, pressDeg, wrapRef]);
 }

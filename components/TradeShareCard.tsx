@@ -91,7 +91,9 @@ const TradeShareCard: React.FC<TradeShareCardProps> = ({
 }) => {
     const wrapRef = useRef<HTMLDivElement>(null);
     const cardRef = useRef<HTMLDivElement>(null);
-    useCardTilt(wrapRef, cardRef, captureMode);
+    // Karta obchodu je skoro dvakrát širší než Karta dne — stejný úhel by ji
+    // na okrajích prohnul příliš, proto zhruba poloviční rozpětí.
+    useCardTilt(wrapRef, cardRef, captureMode, { hover: 12, press: 16, gyro: 12 });
 
     const pnl = Number(trade.pnl || 0);
     const r = tradeShareR(trade);
