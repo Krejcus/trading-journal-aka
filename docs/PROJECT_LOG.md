@@ -258,6 +258,19 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-06 — Ranní incidenty a nasazení (Claude + Codex)
+- 07:31 UTC: leader posunul stop, stopy followerů vyplnily na původní ceně ~90 ms před potvrzením
+  modify → modify→filled ×9 → celá skupina fail-closed. 08:19 NQ obchody na FundedNext byly Filipovy
+  ruční. FundedNext účty breached (adresář `account/list = []`), odebrány ze skupiny.
+- Nasazeno 08:40 UTC 8318dd6e (partial-cancel fix z 5. 10.) a 10:19 UTC da683ebb:
+  izolace followera, jehož ochranná noha OSO/bracket aktuální epochy vyplnila během modify (přesné
+  množství/strana vs confirmed lineage, flat/no-working, leader fence, dávka all-or-nothing, jinak
+  původní fail-closed); prázdný adresář nově objeveného připojení = discovery failure s backoffem.
+  Codex 2 kola, poslední „nasaditelné ANO“.
+- Filip: model „fail-closed celé skupiny + ruční odblokování“ působí neprofesionálně. Další směr:
+  problém účtu = pauza jen účtu, automatický návrat při flat, ARM si sám ověří stav (neblokuje
+  historie), leader flat → prokázané kopie flat; automatické přikupování (Auto-Sync) NE.
+
 ### 2026-10-05 — Incident 15:05 UTC: zrušený zbytek částečně vyplněného vstupu (Claude + Codex)
 - Leader OSO Limit Buy 18, vyplněno 6 (1+5). Tradovate Exit zrušil zbytek vstupu: broker to
   hlásí jako ordStatus Filled + execType Completed reportu Cancel commandu (cumQty 6/18).
