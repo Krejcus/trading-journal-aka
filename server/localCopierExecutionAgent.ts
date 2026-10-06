@@ -90,7 +90,7 @@ export interface PrepareGroupAccountsResult {
 
 interface LocalCopierExecutionAgentOptions {
   controller: CopierRuntimeController;
-  /** Automatické zapnutí po vypnutí kvůli výpadku spojení (výchozí zapnuto). */
+  /** Automatické zapnutí po vypnutí kvůli výpadku spojení (výchozí vypnuto do serverové fronty). */
   autoRearmAfterTransport?: boolean;
   /** Interval kontroly automatického zapnutí (test override). */
   autoRearmTickMs?: number;
@@ -1183,7 +1183,9 @@ export async function startLocalCopierExecutionAgent(
   const AUTO_REARM_MAX_ATTEMPTS = 40;
   const autoRearmLog = (message: string) => console.log(`${new Date().toISOString()} AUTO-REARM ${message}`);
   const autoRearmTick = async () => {
-    if (shuttingDown || autoRearmRunning || options.autoRearmAfterTransport === false) return;
+    // Výchozí VYPNUTO (6. 10. 2026): bez serverové atomické fronty (ARM vs.
+    // brzda z telefonu) zůstává sub-sekundové okno; zapne se až s ní.
+    if (shuttingDown || autoRearmRunning || options.autoRearmAfterTransport !== true) return;
     const current = options.controller.status();
     const disarm = current.lastDisarm;
     if (!autoRearm) {
