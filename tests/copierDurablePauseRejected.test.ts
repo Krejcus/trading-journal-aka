@@ -142,3 +142,52 @@ describe('etapa 2 — stará nevázaná pauza', () => {
     }
   });
 });
+
+describe('etapa 2 — auto-close a pozastavený účet', () => {
+  it('zavření po vypršení zapnutí se ruční pozice na pozastaveném účtu nedotkne', async () => {
+    let now = 1_000_000;
+    const leader = createLeaderMockBroker({ clock: () => now, behavior: r => r.orderType === 'Market' ? { kind: 'fill', price: 30_500 } : { kind: 'working' } });
+    const follower = createMockBroker({ clock: () => now, nativeLiquidate: true, behavior: request => {
+      if (request.accountId === 200 && request.side === 'Buy') return { kind: 'reject', reason: 'Exceeds max position size' };
+      return request.orderType === 'Market' ? { kind: 'fill', price: 30_500 } : { kind: 'working' };
+    } } as never);
+    const router = createBrokerRouter([
+      { broker: leader, accountIds: [100], critical: true },
+      { broker: follower, accountIds: [200, 300], critical: false },
+    ], { reconnectGraceMs: 10_000 });
+    const controller = await bootstrapCopierRuntime({
+      broker: router, store: createMemoryCopierStore(), group, clock: () => now,
+      flattenConfirmationAttempts: 2, flattenConfirmationPollMs: 0, wait: async () => undefined,
+    } as never);
+    try {
+      leader.setConnected(true); follower.setConnected(true);
+      await controller.waitForIdle(); await controller.reconcile();
+      controller.arm({ ttlMs: 60_000 });
+      const entry = order({ brokerOrderId: 'e1' });
+      leader.emitEvent({ type: 'order', order: entry });
+      await controller.waitForIdle();
+      leader.emitEvent({ type: 'order', order: { ...entry, status: 'filled', filledQuantity: 1, sourceVersion: 'f' } });
+      leader.emitEvent({ type: 'fill', fill: { fillId: 'e1f', tag: '', brokerOrderId: 'e1', accountId: 100, symbol: SYM, side: 'Buy', quantity: 1, price: 30_500, filledAt: 1 } });
+      leader.setPosition(100, SYM, 1);
+      leader.emitEvent({ type: 'position', position: { accountId: 100, symbol: SYM, netQuantity: 1 } });
+      await controller.waitForIdle(); await sleep(50); await controller.waitForIdle();
+      expect(controller.status().accountSyncPauses).toEqual([expect.objectContaining({ accountId: 200 })]);
+      // Ruční pozice na pozastaveném účtu.
+      follower.setPosition(200, SYM, 1);
+      follower.emitEvent({ type: 'position', position: { accountId: 200, symbol: SYM, netQuantity: 1 } });
+      await controller.waitForIdle();
+      // Vypršení zapnutí → auto-close followerů.
+      now += 120_000;
+      leader.emitEvent({ type: 'heartbeat', at: now } as never);
+      await controller.waitForIdle(); await sleep(50); await controller.waitForIdle();
+      expect(controller.status().armed).toBe(false);
+      const liquidations = follower.liquidateRequests();
+      expect(liquidations.some(request => request.accountId === 200)).toBe(false);
+      expect(follower.placedRequests().filter(request => request.accountId === 200 && request.side === 'Sell')).toEqual([]);
+      expect((await follower.listPositions(200)).find(p => p.symbol === SYM)?.netQuantity).toBe(1);
+    } finally {
+      controller.stop();
+    }
+  });
+});
+

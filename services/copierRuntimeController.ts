@@ -6025,6 +6025,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const copiedPositionSymbols = new Set<string>();
     for (const position of positions) {
       if (position.netQuantity === 0) continue;
+      // Etapa 2: na pozastaveném symbolu kopírka v epizodě nic nevlastní;
+      // případná pozice je ruční a cut ji nesmí brát jako kopii.
+      if (activeAccountSyncPause(accountId, position.symbol)) continue;
       const leaderNet = leaderExposureReferenceNet(position.symbol);
       const expected = Math.trunc(leaderNet * follower.multiplier);
       if (leaderNet === 0 || position.netQuantity !== expected) continue;
@@ -6310,7 +6313,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         .map(link => link.brokerOrderId),
     );
     for (const [symbol, netQuantity] of positions) {
-      if (netQuantity === 0) continue;
+      if (netQuantity === 0 || activeAccountSyncPause(accountId, symbol)) continue;
       const ownedSinceCandidates: number[] = [];
       for (const epoch of live.state.safety.leaderExposureEpochs ?? []) {
         if (
@@ -8111,7 +8114,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const participatingFollowerIds = group.followers
       .filter(follower => follower.enabled !== false)
       .map(follower => follower.accountId);
-    const accountIds = scope === 'group'
+    let accountIds = scope === 'group'
       ? [group.leaderAccountId, ...participatingFollowerIds]
       : participatingFollowerIds;
     const targets = accountIds.flatMap(accountId => (
@@ -8127,12 +8130,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       symbols.add(target.symbol);
       targetSymbolsByAccount.set(target.accountId, symbols);
     }
+    // Etapa 2: účet s aktivní pauzou bez jiného cíle se do auto-close vůbec
+    // nezařadí — jinak by flatten bez targetu spadl na celý účet a zavřel
+    // ruční pozici. Pozice na pozastaveném symbolu není ani „unscoped“.
+    const pausedSymbol = (accountId: number, symbol: string) => activeAccountSyncPause(accountId, symbol) != null;
+    accountIds = accountIds.filter(accountId => (
+      targetSymbolsByAccount.has(accountId)
+      || ![...(positionsByAccount.get(accountId) ?? [])]
+        .some(([symbol, quantity]) => quantity !== 0 && pausedSymbol(accountId, symbol))
+    ));
     const participatingFollowerIdSet = new Set(participatingFollowerIds);
     const unscopedExposure = accountIds.flatMap(accountId => {
       if (!participatingFollowerIdSet.has(accountId) || !targetSymbolsByAccount.has(accountId)) return [];
       const scopedSymbols = targetSymbolsByAccount.get(accountId)!;
       return [...(positionsByAccount.get(accountId) ?? [])]
-        .filter(([symbol, quantity]) => quantity !== 0 && !scopedSymbols.has(symbol))
+        .filter(([symbol, quantity]) => quantity !== 0 && !scopedSymbols.has(symbol) && !pausedSymbol(accountId, symbol))
         .map(([symbol, quantity]) => ({ accountId, symbol, quantity }));
     });
     const reportUnscopedExposure = () => {
@@ -13998,7 +14010,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const divergent = new Set<number>(conditionalRefreshUnverifiedAccounts);
       workingOrderAccounts = new Set(
         snapshots.filter(item => (
-          item.orders.some(order => isOpenOrderStatus(order.status))
+          // Etapa 2: ruční příkaz na pozastaveném symbolu je observe-only.
+          item.orders.some(order => isOpenOrderStatus(order.status)
+            && activeAccountSyncPause(item.accountId, order.symbol) == null)
         )).map(item => item.accountId),
       );
       // Reaktivace eligibility: JEDINÉ místo, kde se DLL/unverifiable vrací
