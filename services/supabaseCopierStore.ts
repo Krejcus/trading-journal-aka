@@ -239,6 +239,18 @@ function validSafety(value: unknown): boolean {
     && value.settledCopierEntries.every(id => string(id) && id.length > 0)
     && unique(value.settledCopierEntries as string[])
   );
+  const validSyncPauses = value.accountSyncPauses == null || (
+    Array.isArray(value.accountSyncPauses)
+    && value.accountSyncPauses.length <= 200
+    && value.accountSyncPauses.every(pause => isRecord(pause)
+      && integer(pause.accountId) && Number(pause.accountId) > 0
+      && string(pause.symbol) && pause.symbol.length > 0
+      && string(pause.leaderEntryOrderId) && pause.leaderEntryOrderId.length > 0
+      && (pause.epochId === null || (string(pause.epochId) && pause.epochId.length > 0))
+      && (pause.reasonCode === 'entry-rejected' || pause.reasonCode === 'protective-filled-early')
+      && string(pause.reason)
+      && finite(pause.pausedAt) && Number(pause.pausedAt) >= 0)
+  );
   const validManagementOnly = value.managementOnly == null || (
     isRecord(value.managementOnly)
     && finite(value.managementOnly.at)
@@ -260,6 +272,7 @@ function validSafety(value: unknown): boolean {
       && value.leaderExposureEpochs.every(validLeaderExposureEpoch)))
     && validEligibility
     && validSettledEntries
+    && validSyncPauses
     && validSeenRejects;
 }
 

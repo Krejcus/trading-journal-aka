@@ -54,7 +54,7 @@ import {
 } from './copierOutbox';
 import { stuckBracketEntries, waiveBracketOutboxEntry } from './copierBracketOutbox';
 import { stuckOsoEntries, waiveOsoOutboxEntry, type OsoOutboxEntry } from './copierOsoOutbox';
-import { applyResolved, type LeaderEvent } from './copierEngine';
+import { applyResolved, type CopierAccountSyncPause, type LeaderEvent } from './copierEngine';
 import { COPIER_LEADER_DAILY_STATS_LABEL } from '../lib/copierDailyStatsLabels';
 import { cancelLifecycleHaltReason, createRiskGateContext, haltReason, type RiskGateContext } from './copierRiskGate';
 import {
@@ -191,6 +191,14 @@ export interface CopierControllerStatus {
     blockedBy: CopierArmPreparationBlocker | null;
     manualRecoveryRequired: boolean;
   };
+  /** Účty vyřazené z aktuální leader epizody („mimo synchron“); vrátí se samy u dalšího obchodu. */
+  accountSyncPauses?: Array<{
+    accountId: number;
+    symbol: string;
+    reasonCode: 'entry-rejected' | 'protective-filled-early';
+    reason: string;
+    pausedAt: number;
+  }>;
   divergentAccounts: number[];
   workingOrderAccounts: number[];
   stuckOutbox: boolean;
@@ -4673,7 +4681,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     }
     await processor.mutate(async current => {
       const outbox = new Map(current.outbox);
-      let changed = false;
       for (const [key, entry] of outbox) {
         // Jen konkrétní odmítnuté vstupy této epizody, nic jiného téhož účtu.
         if (!rejectedKeys.has(key) || entry.status !== 'rejected') continue;
@@ -4682,12 +4689,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           `${entry.reason?.trim() || reason} — follower vyřazen z této epizody, kopírka pokračuje pro ostatní`,
           now,
         ));
-        changed = true;
       }
-      if (!changed) return current;
+      // Etapa 2: vyřazení je durable a přežije restart (stejný CAS commit).
+      const epoch = leaderExposureEpoch(symbol);
+      const state = {
+        ...current.state,
+        safety: withAccountSyncPauses(current.state.safety, [{
+          accountId,
+          symbol,
+          leaderEntryOrderId: leaderOrderId,
+          epochId: epoch?.phase === 'open' && epoch.leaderEntryOrderIds.includes(leaderOrderId) ? epoch.id : null,
+          reasonCode: 'entry-rejected',
+          reason,
+          pausedAt: now,
+        }]),
+      };
       const committed = await durableStore.commit(
         toSnapshot(
-          current.state,
+          state,
           outbox.values(),
           current.cancelOutbox.values(),
           current.revision,
@@ -4696,7 +4715,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ),
         current.revision,
       );
-      return { ...current, outbox, revision: committed.revision };
+      return { ...current, state, outbox, revision: committed.revision };
     });
     options.onAudit?.([{
       at: now,
@@ -4860,7 +4879,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const keys = new Set(candidates.map(candidate => candidate.key));
     await processor.mutate(async current => {
       const cancelOutbox = new Map(current.cancelOutbox);
-      let changed = false;
       for (const [key, entry] of cancelOutbox) {
         if (!keys.has(key) || entry.status !== 'abandoned' || entry.outcome !== 'filled') continue;
         cancelOutbox.set(key, waiveCancelEntry(
@@ -4868,12 +4886,28 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           `${entry.reason?.trim() || 'modify skončil filled'} — ochranná noha vyplnila dřív než leader; follower vyřazen do konce epizody`,
           now,
         ));
-        changed = true;
       }
-      if (!changed) return current;
+      // Etapa 2: vyřazení je durable a přežije restart (stejný CAS commit).
+      const seen = new Set<string>();
+      const pauses: CopierAccountSyncPause[] = [];
+      for (const candidate of candidates) {
+        const pauseKey = `${candidate.accountId}:${candidate.symbol}`;
+        if (seen.has(pauseKey)) continue;
+        seen.add(pauseKey);
+        pauses.push({
+          accountId: candidate.accountId,
+          symbol: candidate.symbol,
+          leaderEntryOrderId: candidate.leaderEntryOrderId,
+          epochId: candidate.epochId,
+          reasonCode: 'protective-filled-early',
+          reason: 'ochranná noha se vyplnila dřív než leaderova (během posunu)',
+          pausedAt: now,
+        });
+      }
+      const state = { ...current.state, safety: withAccountSyncPauses(current.state.safety, pauses) };
       const committed = await durableStore.commit(
         toSnapshot(
-          current.state,
+          state,
           current.outbox.values(),
           cancelOutbox.values(),
           current.revision,
@@ -4882,7 +4916,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         ),
         current.revision,
       );
-      return { ...current, cancelOutbox, revision: committed.revision };
+      return { ...current, state, cancelOutbox, revision: committed.revision };
     });
     options.onAudit?.([...new Set(candidates.map(candidate => candidate.accountId))].map(accountId => ({
       at: now,
@@ -9351,13 +9385,64 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ))
       && !pendingIsolationCommandForAccount(accountId);
   };
+  const pauseBelongsToEpoch = (
+    pause: Pick<CopierAccountSyncPause, 'epochId' | 'leaderEntryOrderId'>,
+    epoch: LeaderFlatEpoch,
+  ) => pause.epochId === epoch.id
+    || (pause.epochId == null && epoch.leaderEntryOrderIds.includes(pause.leaderEntryOrderId));
+  /** Durable pauza účtu platná pro aktuální otevřenou epochu symbolu. */
+  const activeAccountSyncPause = (accountId: number, symbol: string): CopierAccountSyncPause | null => {
+    const epoch = leaderExposureEpoch(symbol);
+    if (!epoch || epoch.phase !== 'open') return null;
+    return (currentRuntime().state.safety.accountSyncPauses ?? []).find(pause => (
+      pause.accountId === accountId && pause.symbol === symbol && pauseBelongsToEpoch(pause, epoch)
+    )) ?? null;
+  };
+  /**
+   * Přidá pauzy a zahodí ty, které už nemohou platit (jejich epocha není
+   * mezi uloženými otevřenými epochami, ani nečekají na otevření).
+   */
+  const withAccountSyncPauses = (
+    safety: CopierRuntime['state']['safety'],
+    added: readonly CopierAccountSyncPause[],
+  ): CopierRuntime['state']['safety'] => {
+    const openEpochs = (safety.leaderExposureEpochs ?? []).filter(epoch => epoch.phase === 'open');
+    const stillRelevant = (pause: CopierAccountSyncPause) => (
+      pause.epochId == null
+        ? pause.pausedAt > clock() - 24 * 60 * 60_000
+        : openEpochs.some(epoch => epoch.id === pause.epochId)
+    );
+    const addedKeys = new Set(added.map(pause => `${pause.accountId}:${pause.symbol}`));
+    const kept = (safety.accountSyncPauses ?? [])
+      .filter(pause => stillRelevant(pause) && !addedKeys.has(`${pause.accountId}:${pause.symbol}`));
+    const next = [...kept, ...added].slice(-200);
+    const { accountSyncPauses: _previous, ...rest } = safety;
+    return next.length > 0 ? { ...rest, accountSyncPauses: next } : rest;
+  };
   const currentIntentionalSuppression = (
     accountId: number,
     symbol: string,
   ): IntentionalEntrySuppression | null => {
     const key = intentionalSuppressionKey(accountId, symbol);
-    const suppression = intentionalEntrySuppressions.get(key);
+    let suppression = intentionalEntrySuppressions.get(key);
     const epoch = leaderExposureEpoch(symbol);
+    if (!suppression && epoch?.phase === 'open') {
+      // Etapa 2 (6. 10. 2026): po restartu workeru se vyřazení z epizody
+      // obnoví z durable pauzy — jen pro tutéž otevřenou epochu a jen když
+      // je follower autoritativně flat bez pracovních příkazů.
+      const durable = activeAccountSyncPause(accountId, symbol);
+      if (durable && hasAuthoritativeFlatNoWorking(accountId, symbol)) {
+        suppression = {
+          allowedNet: 0,
+          createdAt: durable.pausedAt,
+          leaderOrderId: durable.leaderEntryOrderId,
+          epochId: epoch.id,
+          observationVersion: tradeObservationVersionByAccount.get(accountId) ?? 0,
+          zeroEvidence: true,
+        };
+        intentionalEntrySuppressions.set(key, suppression);
+      }
+    }
     if (!suppression || !epoch || epoch.phase !== 'open') return null;
     const belongsToEpoch = suppression.epochId === epoch.id
       || (suppression.epochId == null
@@ -14450,6 +14535,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           // Nová skupina začíná ověřeně: účty zůstávající/nové jsou flat a
           // odcházející pozice bez stopy kopírky patří uživateli.
           settledCopierEntries: _dropSettledCopierEntries,
+          accountSyncPauses: _dropAccountSyncPauses,
           ...preservedSafety
         } = current.state.safety;
         // A current broker snapshot settles exposure, not the missing exit price.
@@ -15615,6 +15701,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         shadowMode: gate.shadowMode,
         connected: gate.connected,
         reconciliationRequired: source.needsReconciliation() || !positionCheckComplete,
+        accountSyncPauses: (currentRuntime().state.safety.accountSyncPauses ?? [])
+          .filter(pause => activeAccountSyncPause(pause.accountId, pause.symbol) === pause)
+          .map(({ accountId, symbol, reasonCode, reason, pausedAt }) => ({ accountId, symbol, reasonCode, reason, pausedAt })),
         armPreparation: (() => {
           const blocker = armPreparationBlocker();
           return {

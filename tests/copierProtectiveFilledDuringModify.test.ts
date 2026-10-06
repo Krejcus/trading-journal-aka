@@ -42,7 +42,12 @@ async function setup(onFollowerStopModify: FillDuringModify | null, count = 2) {
     tag: '', brokerOrderId: id, accountId: 100, symbol, side: 'Buy', orderType: 'Limit', quantity: 19,
     filledQuantity: 0, limitPrice: 31_376, status: 'working', sourceVersion: '1', updatedAt: 100, ...patch,
   });
-  return { broker, store, controller, group, position, order, audits };
+  const restart = async () => bootstrapCopierRuntime({
+    broker, store, group, clock: () => ++time,
+    leaderFlatGraceMs: 60000, followerTransitionCorrelationWindowMs: 60000, osoCorrelationWindowMs: 5,
+    onAudit: entries => { for (const entry of entries) audits.push(entry.reason ?? entry.kind); },
+  });
+  return { broker, store, controller, group, position, order, audits, restart };
 }
 
 async function openTrade(ctx: Awaited<ReturnType<typeof setup>>) {
@@ -203,6 +208,69 @@ describe('incident 6. 10. 2026 — ochranná noha followera vyplní během posun
       // Cancel outbox zůstal neprominutý (žádná položka waived kvůli izolaci).
       const stuck = controller.status().stuckOperations ?? [];
       expect(stuck.some(item => item.accountId === 200 && item.status === 'abandoned')).toBe(true);
+    } finally {
+      controller.stop();
+    }
+  });
+});
+
+describe('etapa 2 — vyřazení z epizody přežije restart workeru', () => {
+  it('po restartu uprostřed obchodu vyřazený follower není divergence a pauza zůstává', async () => {
+    const ctx = await setup(fillStopBeforeModify);
+    const { broker, store, order, restart } = ctx;
+    await openTrade(ctx);
+    broker.emitEvent({ type: 'order', order: order('stop', {
+      parentOrderId: 'entry', side: 'Sell', orderType: 'Stop', limitPrice: undefined, stopPrice: 31_357, sourceVersion: '2',
+    }) });
+    await ctx.controller.waitForIdle();
+    expect(ctx.controller.status()).toMatchObject({ armed: true, lastError: null });
+    expect((await store.load()).safety?.accountSyncPauses).toEqual([
+      expect.objectContaining({ accountId: 200, symbol, reasonCode: 'protective-filled-early' }),
+    ]);
+    ctx.controller.stop();
+
+    const restarted = await restart();
+    try {
+      broker.setConnected(false);
+      broker.setConnected(true);
+      await restarted.waitForIdle();
+      const check = await restarted.reconcile();
+      // Follower 200 (flat, vyřazený) není divergence. Pracovní ochranné
+      // příkazy otevřené kopie 201 jsou dnešní omezení obnovy uprostřed
+      // obchodu (řeší až etapa 4), proto kontrola sama čistá není.
+      expect(check.divergentAccounts).toEqual([]);
+      expect(check.workingOrderAccounts).toEqual([201]);
+      expect(restarted.status().accountSyncPauses).toEqual([
+        expect.objectContaining({ accountId: 200, symbol, reasonCode: 'protective-filled-early' }),
+      ]);
+    } finally {
+      restarted.stop();
+    }
+  });
+
+  it('pauza platí jen pro tutéž epizodu: u dalšího obchodu follower kopíruje znovu', async () => {
+    const ctx = await setup(fillStopBeforeModify);
+    const { broker, controller, order, position } = ctx;
+    try {
+      await openTrade(ctx);
+      broker.emitEvent({ type: 'order', order: order('stop', {
+        parentOrderId: 'entry', side: 'Sell', orderType: 'Stop', limitPrice: undefined, stopPrice: 31_357, sourceVersion: '2',
+      }) });
+      await controller.waitForIdle();
+      broker.emitEvent({ type: 'order', order: order('exit', { side: 'Sell', orderType: 'Market', limitPrice: undefined, quantity: 19 }) });
+      await controller.waitForIdle();
+      broker.emitEvent({ type: 'fill', fill: { fillId: 'lead-exit', tag: '', brokerOrderId: 'exit', accountId: 100,
+        symbol, side: 'Sell', quantity: 19, price: 31_356, filledAt: 4 } });
+      position(100, 0);
+      await controller.waitForIdle();
+      expect(controller.status().accountSyncPauses ?? []).toEqual([]);
+      // Nový obchod: Market vstup se zkopíruje oběma followerům, i 200.
+      const placedBefore = broker.placedRequests().length;
+      broker.emitEvent({ type: 'order', order: order('entry-2', { orderType: 'Market', limitPrice: undefined, quantity: 2, sourceVersion: '1' }) });
+      await controller.waitForIdle();
+      const entries = broker.placedRequests().slice(placedBefore).filter(request => request.side === 'Buy');
+      expect(entries.map(request => request.accountId).sort()).toEqual([200, 201]);
+      expect(controller.status()).toMatchObject({ armed: true, lastError: null });
     } finally {
       controller.stop();
     }

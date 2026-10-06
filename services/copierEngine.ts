@@ -160,6 +160,17 @@ export interface CopierSeenTerminalReject {
   at: number;
 }
 
+export interface CopierAccountSyncPause {
+  accountId: number;
+  symbol: string;
+  /** Leader entry order epizody; před otevřením epochy jediná vazba. */
+  leaderEntryOrderId: string;
+  epochId: string | null;
+  reasonCode: 'entry-rejected' | 'protective-filled-early';
+  reason: string;
+  pausedAt: number;
+}
+
 export interface CopierState {
   /**
    * Klíče replikací, které jsou u brokera vyřízené (potvrzené nebo
@@ -277,6 +288,13 @@ export interface CopierState {
      * pole (starší snapshot) = nic usazeno, tedy konzervativně.
      */
     settledCopierEntries?: string[];
+    /**
+     * Účty vyřazené z jedné leader epizody („mimo synchron“): odmítnutý vstup
+     * nebo ochranná noha vyplněná dřív než leaderova. Durable, aby restart
+     * workeru nezapomněl, že flat follower během otevřeného obchodu je záměr.
+     * Platí jen pro tutéž epochu; nový obchod pauzu automaticky ukončí.
+     */
+    accountSyncPauses?: CopierAccountSyncPause[];
     /** Durable eligibility západky účtů; chybějící položka znamená active. */
     accountEligibility?: CopierAccountEligibility[];
     /** Bounded durable dedupe přímé controller větve pro async/leader rejecty. */
