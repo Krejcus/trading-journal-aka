@@ -35,6 +35,12 @@ export interface MacCopierCommandRelay {
   }): Promise<{ devices: number; sent: number }>;
   /** Předběžné 1m svíčky z TradingView pro graf hodnocení (jen zobrazení). */
   uploadBars(capture: TvBarsCapture): Promise<void>;
+  /**
+   * Začátek posledního úspěšného vyzvednutí, při kterém server neměl žádný
+   * čekající příkaz (0 = zatím žádné). Automatické zapnutí po výpadku podle
+   * něj prokáže, že ve frontě nečeká brzda z telefonu.
+   */
+  lastEmptyPollStartedAt(): number;
   close(): Promise<void>;
 }
 
@@ -233,14 +239,17 @@ export function startMacCopierCommandRelay(options: {
     isActive: () => !stopped,
     onComplete: id => { completedNotifications.add(id); publishBackground(); },
   }) : null;
+  let lastEmptyPollStartedAt = 0;
   const loop = async () => {
     let failures = 0;
     while (!stopped) {
       try {
+        const pollStartedAt = Date.now();
         if (delivery) {
           const response = await delivery();
           await maybeSubscribeKick(response.realtime);
           failures = 0;
+          if (response.command == null) lastEmptyPollStartedAt = pollStartedAt;
         } else {
           const sentCopyEventsRevision = copyEventsRevision;
           const notifyCopyEvents = sentCopyEventsRevision !== acknowledgedCopyEventsRevision;
@@ -273,6 +282,7 @@ export function startMacCopierCommandRelay(options: {
             createdAt?: string;
             expiresAt?: string;
           } | null;
+          if (!remote) lastEmptyPollStartedAt = pollStartedAt;
           if (remote?.id && remote.command) {
             // createdAt je autoritativní pro telemetrii i workerový brake fence;
             // z expiresAt už enqueue čas odvodit nelze, protože brzdy mají delší TTL.
@@ -322,6 +332,7 @@ export function startMacCopierCommandRelay(options: {
   publishBackground();
   publishStatus();
   return {
+    lastEmptyPollStartedAt: () => lastEmptyPollStartedAt,
     nudgeCopyEvents() {
       copyEventsRevision += 1;
       publishBackground();

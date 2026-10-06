@@ -146,6 +146,12 @@ export interface LocalCopierExecutionAgent {
   execute(command: LocalCopierAgentCommand, context?: LocalCopierAgentExecutionContext): Promise<LocalCopierAgentCommandResult>;
   /** Synchronně odmítne nový/pending command ingress před graceful drainem. */
   beginShutdown(): void;
+  /**
+   * Napojí relay: čas začátku posledního prázdného vyzvednutí fronty. Bez
+   * něj se kopírka po výpadku sama nikdy nezapne (brzda z telefonu by mohla
+   * čekat ve frontě).
+   */
+  setRemoteQueueProbe?(probe: () => number): void;
   close(): Promise<void>;
 }
 
@@ -315,6 +321,7 @@ export async function startLocalCopierExecutionAgent(
     connectedSince: number | null;
   } | null = null;
   let autoRearmHandledDisarmAt = 0;
+  let remoteQueueProbe: (() => number) | null = null;
   let autoRearmRunning = false;
   let serverClosePromise: Promise<void> | null = null;
   const shutdownError = () => new Error('Lokální execution agent se právě bezpečně ukončuje');
@@ -1219,10 +1226,13 @@ export async function startLocalCopierExecutionAgent(
       pending.connectedSince = null;
       return;
     }
-    // Po obnovení spojení chvíli počkat: brzda z telefonu/relay, která
-    // během výpadku čekala ve frontě, musí stihnout dorazit dřív.
     pending.connectedSince ??= Date.now();
-    if (Date.now() - pending.connectedSince < (options.autoRearmGraceMs ?? 20_000)) return;
+    if (Date.now() - pending.connectedSince < (options.autoRearmGraceMs ?? 0)) return;
+    // Pojistka proti brzdě z telefonu, která během výpadku čekala ve frontě:
+    // relay musí po obnovení spojení dokončit vyzvednutí, při kterém server
+    // neměl žádný čekající příkaz. Bez relay se kopírka sama nezapne.
+    if (!remoteQueueProbe) return cancel('relay nehlásí stav fronty příkazů');
+    if (remoteQueueProbe() <= Math.max(pending.connectedSince, pending.disarmAt)) return;
     if (Date.now() < pending.nextAttemptAt) return;
     autoRearmRunning = true;
     pending.attempts += 1;
@@ -1257,6 +1267,9 @@ export async function startLocalCopierExecutionAgent(
     status,
     execute: dispatch,
     beginShutdown,
+    setRemoteQueueProbe(probe) {
+      remoteQueueProbe = probe;
+    },
     async close() {
       beginShutdown();
       await tail;

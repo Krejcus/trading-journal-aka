@@ -1652,6 +1652,10 @@ async function runLocalAgent(
           }
         },
       });
+      // Automatické zapnutí po výpadku smí proběhnout jen po prázdném
+      // vyzvednutí fronty (žádná čekající brzda z telefonu).
+      const queueRelay = relay;
+      agent.setRemoteQueueProbe?.(() => queueRelay.lastEmptyPollStartedAt());
     }
     console.log(`LOCAL AGENT ${agent.origin} leader=${leaderId} followers=${group.followers.map(item => `${item.accountId}@${item.multiplier}${item.maxContracts != null ? `@max${item.maxContracts}` : ''}`).join(',')}`);
     console.log('Stav je DISARMED. ARM, Flatten, Flatten All a násobek vyžadují explicitní akci v AlphaTrade LIVE UI.');
