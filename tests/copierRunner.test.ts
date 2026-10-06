@@ -2527,6 +2527,103 @@ describe('zrušení objednávky u leadera', () => {
     expect(canceled.runtime.state.lastSequence).toBe(1);
   });
 
+  it('status-only Filled vyžádá celý graf: zrušený zbytek částečně vyplněné kopie se potvrdí (incident 5. 10.)', async () => {
+    const inner = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    let fullLookups = 0;
+    const broker = {
+      ...inner,
+      async findOrderStatusById() {
+        return { status: 'filled' as const, completeness: 'authoritative' as const, observedAt: 9 };
+      },
+      async findOrderById(accountId: number, brokerOrderId: string) {
+        fullLookups += 1;
+        return inner.findOrderById(accountId, brokerOrderId);
+      },
+    };
+    const clock = stepClock();
+    const opened = await processLeaderEvent({
+      event: event({ orderType: 'Limit', limitPrice: 29_500 }), group: soloGroup,
+      runtime: createRuntime(createCopierState()), context: liveGate(), broker, clock,
+    });
+    // Adaptér po rekonstrukci Cancel proofu vrátí canceled s částečným plněním.
+    inner.orders()[0].status = 'canceled';
+    inner.orders()[0].filledQuantity = 1;
+    const canceled = await processLeaderEvent({
+      event: event({ id: 'partial-cancel', kind: 'canceled', sequence: 2,
+        orderType: 'Limit', limitPrice: 29_500 }),
+      group: soloGroup, runtime: opened.runtime, context: liveGate(), broker, clock,
+    });
+    expect(fullLookups).toBe(1);
+    expect(canceled.runtime.cancelOutbox.values().next().value).toMatchObject({
+      status: 'confirmed', outcome: 'canceled',
+    });
+  });
+
+  it('restart: recoverOutbox u nejasného cancelu se status-only Filled potvrdí zrušený zbytek přes celý graf', async () => {
+    const inner = createMockBroker({
+      behavior: () => ({ kind: 'working' }),
+      cancelBehavior: () => 'timeout-before-cancel',
+    });
+    let fullLookups = 0;
+    const broker = {
+      ...inner,
+      async findOrderStatusById() {
+        return { status: 'filled' as const, completeness: 'authoritative' as const, observedAt: 9 };
+      },
+      async findOrderById(accountId: number, brokerOrderId: string) {
+        fullLookups += 1;
+        return inner.findOrderById(accountId, brokerOrderId);
+      },
+    };
+    const clock = stepClock();
+    const opened = await processLeaderEvent({
+      event: event({ orderType: 'Limit', limitPrice: 29_500 }), group: soloGroup,
+      runtime: createRuntime(createCopierState()), context: liveGate(), broker, clock,
+    });
+    const pending = await processLeaderEvent({
+      event: event({ id: 'cancel-before-restart', kind: 'canceled', sequence: 2,
+        orderType: 'Limit', limitPrice: 29_500 }),
+      group: soloGroup, runtime: opened.runtime, context: liveGate(), broker, clock,
+    });
+    expect(pending.runtime.cancelOutbox.values().next().value?.status).toBe('unknown');
+    // Broker mezitím zrušil zbytek po částečném plnění (Tradovate raw Filled).
+    inner.orders()[0].status = 'canceled';
+    inner.orders()[0].filledQuantity = 1;
+    fullLookups = 0;
+    const recovered = await recoverOutbox({ runtime: pending.runtime, broker, clock });
+    expect(fullLookups).toBe(1);
+    expect(recovered.runtime.cancelOutbox.values().next().value).toMatchObject({
+      status: 'confirmed', outcome: 'canceled',
+    });
+    expect(inner.cancelRequestCount(inner.orders()[0].brokerOrderId)).toBe(1);
+  });
+
+  it('status-only Filled s plně vyplněnou kopií zůstane fail-closed bez opakování cancelu', async () => {
+    const inner = createMockBroker({ behavior: () => ({ kind: 'working' }) });
+    const broker = {
+      ...inner,
+      async findOrderStatusById() {
+        return { status: 'filled' as const, completeness: 'authoritative' as const, observedAt: 9 };
+      },
+    };
+    const clock = stepClock();
+    const opened = await processLeaderEvent({
+      event: event({ orderType: 'Limit', limitPrice: 29_500 }), group: soloGroup,
+      runtime: createRuntime(createCopierState()), context: liveGate(), broker, clock,
+    });
+    inner.orders()[0].status = 'filled';
+    inner.orders()[0].filledQuantity = inner.orders()[0].quantity;
+    const canceled = await processLeaderEvent({
+      event: event({ id: 'full-fill-cancel', kind: 'canceled', sequence: 2,
+        orderType: 'Limit', limitPrice: 29_500 }),
+      group: soloGroup, runtime: opened.runtime, context: liveGate(), broker, clock,
+    });
+    expect(canceled.runtime.cancelOutbox.values().next().value).toMatchObject({
+      status: 'abandoned', outcome: 'filled',
+    });
+    expect(inner.cancelRequestCount(inner.orders()[0].brokerOrderId)).toBeLessThanOrEqual(1);
+  });
+
   it('timeout před cancellem zůstane unknown a neposune sekvenci', async () => {
     const store = createMemoryCopierStore();
     const broker = createMockBroker({

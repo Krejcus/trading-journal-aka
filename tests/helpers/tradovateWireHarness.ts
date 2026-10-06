@@ -56,6 +56,26 @@ export const createTradovateWireHarness = (accountIds = [100, 200]) => {
     if (shape.orderType === 'Market' && executeMarket) fill(id);
     return id;
   };
+  /** Skutečné Tradovate chování (incident 5. 10. 2026): Cancel zbytku částečně
+   * vyplněné objednávky končí ordStatus Filled + execType Completed s cumQty. */
+  let partialCancelAsFilled = false;
+  const setPartialCancelAsFilled = (value: boolean) => { partialCancelAsFilled = value; };
+  const cancelLikeTradovate = (orderId: number, commandId = nextId++): boolean => {
+    const raw = orders.get(orderId)!;
+    const shape = [...versions.values()].filter(row => row.orderId === orderId).at(-1)!;
+    const cumQty = [...fills.values()].filter(row => row.orderId === orderId).reduce((sum, row) => sum + Number(row.qty), 0);
+    if (cumQty <= 0 || cumQty >= Number(shape.orderQty)) return false;
+    const command = { id: commandId, orderId, commandType: 'Cancel', commandStatus: 'AtExecution' };
+    commands.set(commandId, command);
+    const updated = { ...raw, ordStatus: 'Filled' };
+    orders.set(orderId, updated);
+    const report = { id: nextId++, commandId, orderId, accountId: raw.accountId, contractId: 7,
+      execType: 'Completed', ordStatus: 'Filled', action: raw.action, cumQty };
+    reports.set(report.id, report);
+    props({ entityType: 'command', entity: command }, { entityType: 'order', entity: updated },
+      { entityType: 'executionReport', entity: report });
+    return true;
+  };
   const replace = (orderId: number, changes: Record<string, unknown>, order: 'version-first' | 'report-first' = 'version-first') => {
     const commandId = nextId++;
     const shape = { ...[...versions.values()].filter(row => row.orderId === orderId).at(-1)!, ...changes, id: commandId, orderId };
@@ -88,6 +108,10 @@ export const createTradovateWireHarness = (accountIds = [100, 200]) => {
       }
       if (path === '/order/cancelorder') {
         const commandId = nextId++;
+        if (partialCancelAsFilled) {
+          const handled = cancelLikeTradovate(Number(body.orderId), commandId);
+          if (handled) return Response.json({ commandId, failureReason: 'Success' });
+        }
         const raw = { ...orders.get(body.orderId)!, ordStatus: 'Canceled' };
         orders.set(body.orderId, raw);
         props({ entityType: 'order', entity: raw });
@@ -121,5 +145,5 @@ export const createTradovateWireHarness = (accountIds = [100, 200]) => {
   const stop = broker.subscribe(event => events.push(event));
   const sync = () => socket.onmessage?.({ data: 'a[{"i":1,"s":200,"d":[]}]' });
   const drain = async () => { for (let i = 0; i < 80; i++) await Promise.resolve(); };
-  return { broker, socket, events, orders, versions, commands, reports, fills, positions, requests, props, place, fill, replace, position, sync, drain, stop, clock, advance, setModifyOutcome };
+  return { broker, socket, events, orders, versions, commands, reports, fills, positions, requests, props, place, fill, replace, position, sync, drain, stop, clock, advance, setModifyOutcome, setPartialCancelAsFilled, cancelLikeTradovate };
 };

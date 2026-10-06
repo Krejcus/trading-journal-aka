@@ -119,6 +119,8 @@ interface TradovateExecutionReportEntity {
   linkedId?: number;
   rejectReason?: string;
   text?: string;
+  /** Kumulativní plnění objednávky v okamžiku reportu. */
+  cumQty?: number;
 }
 interface TradovateFillEntity {
   id: number;
@@ -369,6 +371,12 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   const confirmedVersionIds = new Map<number, number>();
   const confirmedCommands = new Set<number>();
   const latestExecutionReports = new Map<number, TradovateExecutionReportEntity>();
+  /**
+   * Incident 5. 10. 2026: Cancel zbytku částečně vyplněné objednávky Tradovate
+   * hlásí jako ordStatus Filled + execType Completed (cumQty 6 z 18). Report
+   * dokončeného commandu si držíme zvlášť, aby ho nepřepsal pozdější Trade.
+   */
+  const completedCommandReports = new Map<number, TradovateExecutionReportEntity>();
   const rejectedCommands = new Set<number>();
   const commandRejectReasons = new Map<number, string>();
   const orderTags = new Map<number, string>();
@@ -739,6 +747,10 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
   };
 
   const rememberExecutionReport = (report: TradovateExecutionReportEntity): boolean => {
+    if (report.commandId != null && ['Completed', 'Canceled'].includes(report.execType ?? '')) {
+      const known = completedCommandReports.get(report.orderId);
+      if (!known || report.id > known.id) completedCommandReports.set(report.orderId, report);
+    }
     const previous = latestExecutionReports.get(report.orderId);
     const priorConfirmedId = confirmedVersionIds.get(report.orderId);
     if (report.commandId != null && ['New', 'Replaced'].includes(report.execType ?? '')
@@ -860,6 +872,41 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     return true;
   };
 
+  /**
+   * Množství vyplněné před zrušením zbytku, nebo null. Důkaz musí být přesný:
+   * dokončený report patří Cancel commandu téže objednávky, plnění je menší
+   * než potvrzená verze a žádný novější Modify není nevyřešený. Bez důkazu
+   * zůstává status jako dřív (OSO nohy zmenšené venue se nepřepisují).
+   */
+  const partialCancelFilledQuantity = (
+    orderId: number,
+    rawStatus: string,
+    orderQty: number,
+  ): { filled: number; commandId: number } | null => {
+    if (rawStatus !== 'Filled' && rawStatus !== 'Completed') return null;
+    const report = completedCommandReports.get(orderId);
+    if (!report || report.commandId == null || rejectedCommands.has(report.commandId)) return null;
+    const command = commands.get(report.commandId);
+    if (command?.commandType !== 'Cancel' || command.orderId !== orderId) return null;
+    const confirmedVersion = confirmedVersionIds.get(orderId) ?? 0;
+    const unresolvedModify = [...commands.values()].some(item => (
+      item.orderId === orderId
+      && item.commandType === 'Modify'
+      && item.id > confirmedVersion
+      && !confirmedCommands.has(item.id)
+      && !rejectedCommands.has(item.id)
+      && item.commandStatus !== 'ExecutionStopped'
+    ));
+    if (unresolvedModify) return null;
+    // Bez brokerova cumQty v reportu nejde odlišit zrušený zbytek od plného
+    // fillu, jehož Fill entita ještě nedorazila: zůstává dosavadní význam.
+    if (typeof report.cumQty !== 'number' || !Number.isFinite(report.cumQty)) return null;
+    const filled = report.cumQty;
+    if ((fillTotals.get(orderId) ?? 0) > filled) return null;
+    if (!(filled < orderQty)) return null;
+    return { filled, commandId: report.commandId };
+  };
+
   const composeOrder = async (orderId: number): Promise<BrokerOrder | null> => {
     const raw = rawOrders.get(orderId);
     const version = orderVersions.get(orderId);
@@ -882,6 +929,16 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
     };
     const order = fromOrderEntity(entity, contracts.get(raw.contractId) as string);
     order.sourceVersion = `${version.id}:${raw.ordStatus}`;
+    const partialCancel = orderRejectReasons.has(orderId)
+      ? null
+      : partialCancelFilledQuantity(orderId, raw.ordStatus, version.orderQty);
+    if (partialCancel) {
+      // Zrušený zbytek je pro copier cancel, ne plné vyplnění: zbytek se
+      // musí zrušit i followerům. Provedené množství zůstává.
+      order.status = 'canceled';
+      order.filledQuantity = partialCancel.filled;
+      order.sourceVersion += `:partial-cancel:${partialCancel.commandId}:${partialCancel.filled}`;
+    }
     orders.set(order.brokerOrderId, order);
     for (const waiter of orderWaiters.get(orderId) ?? []) waiter(order);
     return order;
@@ -1244,7 +1301,15 @@ export function createTradovateBroker(config: TradovateBrokerConfig): TradovateB
       && !confirmedCommands.has(commandId)
       && !rejectedCommands.has(commandId)
     ));
-    const reports = (await Promise.all(modifyCommandIds.map(commandId => (
+    // Po restartu/ztrátě streamu se musí dát znovu doložit i zrušený zbytek
+    // částečně vyplněné objednávky (raw Filled + Completed report Cancelu).
+    const cancelCommandIds = raw && (raw.ordStatus === 'Filled' || raw.ordStatus === 'Completed')
+      ? (dependentCommands ?? [])
+        .filter(command => command.orderId === orderId && command.commandType === 'Cancel')
+        .map(command => command.id)
+        .filter(commandId => completedCommandReports.get(orderId)?.commandId !== commandId)
+      : [];
+    const reports = (await Promise.all([...modifyCommandIds, ...cancelCommandIds].map(commandId => (
       request<TradovateExecutionReportEntity[]>(`/executionReport/deps?masterid=${commandId}`)
     )))).flat().sort((left, right) => left.id - right.id);
     for (const report of reports) {
