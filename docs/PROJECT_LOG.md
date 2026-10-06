@@ -448,6 +448,27 @@ primární připojení.
   přes relay není změřená; offline test prokazuje vynechaná čtení, nikoli
   konkrétní zrychlení v sekundách. OFF transport se sám touto změnou nezrychlí.
 
+### 2026-10-06 — Plány účtů: okno seskupené podle propky (Claude)
+
+- `TradovateAccountProfileSetup` (LIVE → Přiřadit plán) přestavěn podle
+  `mockups/account-plans.html`: místo tabulky se 13 sloupci a společného
+  řádku „Použít na všechny“ (propisoval plán i do jiných propek) jsou účty
+  seskupené podle propky, hromadné nastavení plán + fáze má každá propka
+  zvlášť. Řádek: účet, plán (jen plány propky, rodiny pohromadě), fáze
+  Eval/Funded/Live, přehled pravidel; čísla se rozbalí pod řádkem.
+- Logika přesunuta beze změny do `lib/tradovateProfileSetup.ts`
+  (`profileFormFromAccount`, `identityPatch` = dřívější `changeIdentity`,
+  `profileFormToInput`), nově `profileSetupMissing` (stejná kritéria jako
+  `tradovateAccountProfileNeedsPlan`), `profileRuleSummary`, `groupProfilesByFirm`.
+  Ukládání (`saveTradovateAccountProfiles`) beze změny.
+- Animace (`.aps-*` v index.css): nájezd okna, rozbalení mřížkou 0fr→1fr,
+  jezdec fáze, výměna přehledu, bliknutí řádků po „Použít“; reduced-motion vypíná.
+- Aurora: dialogy (`role="dialog"`/`aria-modal`, ne `inset-0`) s výplní
+  `bg-card` dostaly plnou výplň `--modal-bg` — okno skupiny v LIVE, nastavení
+  tabulky, šablony, knihovna workspace a backtest dialogy prosvítaly.
+- Sdílecí karta obchodu: náklon zmírněn (`useCardTilt` přijímá úhly, karta
+  obchodu 12/16/12°, Karta dne beze změny 30/30/20°).
+
 ### 2026-10-04 — Sdílecí karta obchodu ve stylu Karty dne + plovoucí menu (Claude)
 
 - `TradeShareCard` přepsána podle `mockups/trade-share.html` (varianta A):
