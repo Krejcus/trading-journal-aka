@@ -872,9 +872,8 @@ const PAIRABLE_KPI_IDS = new Set([
 const canHalfOnPhone = (id: string) => (MASTER_WIDGET_LIST.find(m => m.id === id) as { defaultRowSpan?: number } | undefined)?.defaultRowSpan === 1;
 const halfOnPhoneByDefault = (id: string) => PAIRABLE_KPI_IDS.has(id);
 const EDITABLE_BREAKPOINTS = new Set(['xxl', 'lg', 'md']);
-/** Kde widget „držíš“ při tažení z knihovny (od levého horního rohu). */
-const DRAG_GRAB = { x: 48, y: 22 };
-
+/** ID místa dopadu widgetu taženého z knihovny (mřížka ho vkládá do rozložení). */
+const DROP_ITEM_ID = '__dbe_drop__';
 /** Štítek „6 × 4“ v rohu měněného widgetu — přímo v DOM, ne přes stav. */
 function showResizeBadge(element: HTMLElement, w: number, h: number, atMin: boolean) {
   let badge = element.querySelector<HTMLSpanElement>(':scope > .dbe-size');
@@ -2097,23 +2096,26 @@ const Dashboard: React.FC<DashboardProps> = ({
   const colWidth = (containerWidth - 12 * (gridCols + 1)) / gridCols;
   const spanPx = (units: number, unit: number) => units * unit + Math.max(0, units - 1) * 12;
 
-  // Náhled taženého widgetu jede za kurzorem přímo přes styl (bez Reactu).
+  // Náhled taženého widgetu jede za kurzorem (střed widgetu pod kurzorem)
+  // přímo přes styl, bez Reactu. Poslouchá se v capture fázi: mřížka nad
+  // plochou volá stopPropagation, takže by k oknu nic nedošlo a náhled by
+  // zůstal neviditelný — zbyl by jen prázdný obrys místa dopadu.
   useEffect(() => {
     if (!libraryDrag) return;
     const move = (event: DragEvent) => {
       const ghost = dragGhostRef.current;
       if (!ghost || (event.clientX === 0 && event.clientY === 0)) return;
-      ghost.style.transform = `translate(${event.clientX - DRAG_GRAB.x}px, ${event.clientY - DRAG_GRAB.y}px)`;
+      ghost.style.transform = `translate(${event.clientX - ghost.offsetWidth / 2}px, ${event.clientY - ghost.offsetHeight / 2}px)`;
       ghost.style.opacity = '1';
     };
     const end = () => setLibraryDrag(null);
-    window.addEventListener('dragover', move);
-    window.addEventListener('drop', end);
-    window.addEventListener('dragend', end);
+    window.addEventListener('dragover', move, true);
+    window.addEventListener('drop', end, true);
+    window.addEventListener('dragend', end, true);
     return () => {
-      window.removeEventListener('dragover', move);
-      window.removeEventListener('drop', end);
-      window.removeEventListener('dragend', end);
+      window.removeEventListener('dragover', move, true);
+      window.removeEventListener('drop', end, true);
+      window.removeEventListener('dragend', end, true);
     };
   }, [libraryDrag]);
 
@@ -2450,12 +2452,16 @@ const Dashboard: React.FC<DashboardProps> = ({
               dropConfig={{
                 enabled: canEditGrid,
                 defaultItem: { w: 2, h: 2 },
-                onDragOver: () => (dropWidgetRef.current
-                  ? { w: dropWidgetRef.current.w, h: dropWidgetRef.current.h, dragOffsetX: DRAG_GRAB.x, dragOffsetY: DRAG_GRAB.y }
-                  : false),
+                // Mřížka umístí dopad podle středu widgetu pod kurzorem — stejně
+                // jako náhled taženého widgetu, takže obrys sedí pod ním.
+                onDragOver: () => (dropWidgetRef.current ? { w: dropWidgetRef.current.w, h: dropWidgetRef.current.h } : false),
               }}
-              droppingItem={{ i: '__dbe_drop__', x: 0, y: 0, w: 2, h: 2 }}
+              droppingItem={{ i: DROP_ITEM_ID, x: 0, y: 0, w: 2, h: 2 }}
               onDragStart={(layout, oldItem) => {
+                // Widget z knihovny: mřížka pro něj spustí vlastní tah. Výchozí stav
+                // už je uložený (bez něj) — jinak by se „prohazoval“ s widgety na ploše
+                // místo toho, aby jim udělal místo.
+                if (oldItem?.i === DROP_ITEM_ID) return;
                 dragStartRef.current = layout.map(item => ({ ...item }));
                 movingRef.current = oldItem?.i ?? null;
               }}
@@ -2546,8 +2552,10 @@ const Dashboard: React.FC<DashboardProps> = ({
             // Až po startu tahu: změna DOM přímo v dragstart umí v Chromu tah zrušit.
             setTimeout(() => setLibraryDrag(widget), 0);
             dropWidgetRef.current = widget;
-            dragStartRef.current = ((rglLayouts as Record<string, Layout>)[currentBreakpoint] ?? []).map(item => ({ ...item }));
-            movingRef.current = '__dbe_drop__';
+            dragStartRef.current = ((rglLayouts as Record<string, Layout>)[currentBreakpoint] ?? [])
+              .filter(item => item.i !== DROP_ITEM_ID)
+              .map(item => ({ ...item }));
+            movingRef.current = DROP_ITEM_ID;
           }}
           onDragEndWidget={() => { dropWidgetRef.current = null; setLibraryDrag(null); endMove(); }}
         />
