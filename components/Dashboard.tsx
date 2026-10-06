@@ -353,43 +353,52 @@ const StreakWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'ole
   const dayStreak = stats.currentDayStreak || 0;
   const tradeStreak = stats.currentTradeStreak || 0;
 
-  const tone = (val: number) => val > 0 ? COLORS.textProfit : val < 0 ? COLORS.textLoss : 'text-[var(--text-secondary)]';
-  const signed = (val: number) => `${val > 0 ? '+' : val < 0 ? '−' : ''}${Math.abs(val)}`;
-  // Kroužek: číslo série uvnitř, oblouk = jak blízko je současná série rekordu
-  // (zisková k nejlepší, ztrátová k nejhorší).
-  const Ring = ({ value, record }: { value: number; record: number }) => {
-    const r = 23;
-    const length = 2 * Math.PI * r;
-    const share = record > 0 ? Math.min(1, Math.abs(value) / record) : value !== 0 ? 1 : 0;
-    const stroke = value > 0 ? COLORS.profit : value < 0 ? COLORS.loss : 'var(--text-muted)';
-    return (
-      <div className="relative w-14 h-14 shrink-0">
-        <svg viewBox="0 0 56 56" className="w-14 h-14 -rotate-90">
-          <circle cx="28" cy="28" r={r} fill="none" stroke="var(--border-subtle)" strokeWidth="4" />
-          <circle cx="28" cy="28" r={r} fill="none" stroke={stroke} strokeWidth="4" strokeLinecap="round"
-            strokeDasharray={`${share * length} ${length}`} className="transition-[stroke-dasharray] duration-700" />
-        </svg>
-        <span className={`absolute inset-0 grid place-items-center text-lg font-bold tabular-nums ${tone(value)}`}>{signed(value)}</span>
-      </div>
-    );
-  };
-  const Column = ({ value, unit, best, worst, label }: { value: number; unit: string; best: number; worst: number; label: string }) => (
-    <SmartTooltip text={label} subtext={`Nejlepší série ${best} · nejhorší ${worst}`} theme={theme} className="flex-1 min-w-0">
-      <div className="flex items-center justify-center gap-2.5 cursor-help">
-        <Ring value={value} record={value >= 0 ? best : worst} />
-        <div className="min-w-0 text-left">
-          <p className="text-[11px] font-medium text-[var(--text-secondary)]">{unit}</p>
-          <p className="text-[10.5px] text-[var(--text-muted)] mt-0.5 tabular-nums">rekord +{best} / −{worst}</p>
-        </div>
-      </div>
-    </SmartTooltip>
-  );
+  const getStreakColor = (val: number) => val > 0 ? 'text-emerald-500 border-emerald-500' : val < 0 ? 'text-rose-500 border-rose-500' : 'text-slate-500 border-slate-700';
+
+  // Kroužky a štítky rekordů zůstávají původní (Filipovi se líbí víc), jen
+  // rámeček a nadpis jsou společné s ostatními KPI kartami.
   return (
-    <KpiShell label="Aktuální série" info="Kolik ziskových (+) nebo ztrátových (−) dní a obchodů máš teď v řadě. Pod tím nejdelší série." theme={theme}>
-      <div className="w-full flex items-center justify-center gap-4">
-        <Column value={dayStreak} unit="dní v řadě" best={stats.maxWinningDayStreak} worst={stats.maxLosingDayStreak} label="Denní série" />
-        <div className="w-px self-stretch bg-[var(--border-subtle)]" />
-        <Column value={tradeStreak} unit="obchodů v řadě" best={stats.maxConsecutiveWins} worst={stats.maxConsecutiveLosses} label="Obchodní série" />
+    <KpiShell label="Aktuální série" info="Aktuální série ziskových/ztrátových dnů a obchodů." theme={theme}>
+      <div className="grid w-full grid-cols-2 gap-4 flex-1 content-center">
+        {/* DAYS STREAK */}
+        <div className="flex items-center gap-3">
+          <SmartTooltip text="Denní série" subtext={dayStreak > 0 ? `${dayStreak} ziskových dní v řadě` : `${Math.abs(dayStreak)} ztrátových dní v řadě`} theme={theme}>
+            <div className={`w-14 h-14 rounded-full border-[6px] flex items-center justify-center text-xl font-black ${getStreakColor(dayStreak)} cursor-pointer hover:scale-110 transition-transform duration-300`}>
+              {Math.abs(dayStreak)}
+            </div>
+          </SmartTooltip>
+          <div className="flex flex-col gap-1">
+            <span className="text-[11px] font-semibold text-slate-500">DAYS</span>
+            <div className="flex flex-col gap-1 text-[9px] font-bold">
+              <SmartTooltip text="Nejhorší série" subtext="Nejvíce ztrátových dní v řadě" theme={theme} color={COLORS.loss}>
+                <span className="bg-rose-500/20 text-rose-500 px-1.5 py-0.5 rounded w-fit cursor-pointer hover:opacity-80 transition-opacity">{stats.maxLosingDayStreak} days</span>
+              </SmartTooltip>
+              <SmartTooltip text="Nejlepší série" subtext="Nejvíce ziskových dní v řadě" theme={theme} color={COLORS.profit}>
+                <span className="bg-emerald-500/20 text-emerald-500 px-1.5 py-0.5 rounded w-fit cursor-pointer hover:opacity-80 transition-opacity">{stats.maxWinningDayStreak} days</span>
+              </SmartTooltip>
+            </div>
+          </div>
+        </div>
+
+        {/* TRADES STREAK */}
+        <div className="flex items-center gap-3">
+          <SmartTooltip text="Obchodní série" subtext={tradeStreak > 0 ? `${tradeStreak} ziskových obchodů v řadě` : `${Math.abs(tradeStreak)} ztrátových obchodů v řadě`} theme={theme}>
+            <div className={`w-14 h-14 rounded-full border-[6px] flex items-center justify-center text-xl font-black ${getStreakColor(tradeStreak)} cursor-pointer hover:scale-110 transition-transform duration-300`}>
+              {Math.abs(tradeStreak)}
+            </div>
+          </SmartTooltip>
+          <div className="flex flex-col gap-1">
+            <span className="text-[11px] font-semibold text-slate-500">TRADES</span>
+            <div className="flex flex-col gap-1 text-[9px] font-bold">
+              <SmartTooltip text="Nejhorší série" subtext="Nejvíce ztrát v řadě" theme={theme} color={COLORS.loss}>
+                <span className="bg-rose-500/20 text-rose-500 px-1.5 py-0.5 rounded w-fit cursor-pointer hover:opacity-80 transition-opacity">{stats.maxConsecutiveLosses} trades</span>
+              </SmartTooltip>
+              <SmartTooltip text="Nejlepší série" subtext="Nejvíce výher v řadě" theme={theme} color={COLORS.profit}>
+                <span className="bg-emerald-500/20 text-emerald-500 px-1.5 py-0.5 rounded w-fit cursor-pointer hover:opacity-80 transition-opacity">{stats.maxConsecutiveWins} trades</span>
+              </SmartTooltip>
+            </div>
+          </div>
+        </div>
       </div>
     </KpiShell>
   );
@@ -1165,7 +1174,7 @@ const ProKpiCard: React.FC<{
   );
 };
 
-const MobileKpiCarousel: React.FC<{ widgets: DashboardWidgetConfig[], renderWidget: (id: string, config?: DashboardWidgetConfig) => React.ReactNode, theme: 'dark' | 'light' | 'oled' }> = ({ widgets, renderWidget, theme }) => {
+const MobileKpiCarousel: React.FC<{ widgets: DashboardWidgetConfig[], renderWidget: (id: string, config?: DashboardWidgetConfig) => React.ReactNode, theme: 'dark' | 'light' | 'oled' }> = ({ widgets, renderWidget, theme: _theme }) => {
   const [index, setIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const autoRotateInterval = 5000;
