@@ -8523,10 +8523,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (currentRuntime().state.safety.liveCopyOpenSince != null) {
       return 'durable stopa otevřených kopií';
     }
+    // Etapa 1 (6. 10. 2026): epocha, kterou čistá autoritativní Kontrola
+    // pozic potvrdila flat (všechny účty skupiny flat bez příkazů), zapnutí
+    // nebrzdí. Durable záznam se nemění (unresolved markery se nemažou).
     const unfinishedEpoch = currentRuntime().state.safety.leaderExposureEpochs?.some(epoch => (
       epoch.groupId === group.id
       && epoch.leaderAccountId === group.leaderAccountId
       && unfinishedLeaderFlatPhase(epoch.phase)
+      && !flatReconciledLeaderEpochIds.has(epoch.id)
     )) === true;
     if (unfinishedEpoch) return 'nedokončená leader exposure epocha';
     if (
@@ -15137,6 +15141,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             reason: 'management-only ukončen po autoritativně potvrzeném flat/no-active stavu',
           }]);
         }
+        await syncLiveCopyExposureFlag('update');
       }
       if (
         result.authoritativelyClean
