@@ -4,7 +4,9 @@ export type CopierDisarmTrigger =
   | 'config-change'
   | 'arm-expiry'
   | 'kill-switch'
-  | 'transport';
+  | 'transport'
+  /** OAuth připojení propfirmy zmizelo ze serveru za běhu (odpojeno/odvoláno). */
+  | 'connection-removed';
 
 export type CopierCopiesOutcome =
   | 'guard-flattened'
@@ -16,6 +18,7 @@ export type CopierCopiesOutcome =
 
 export type CopierDisarmCode =
   | 'config-change'
+  | 'connection-removed'
   | 'reconcile-request'
   | 'prop-reserve'
   | 'route-gap-divergence'
@@ -65,6 +68,10 @@ export interface CopierDisarmRecord {
 export const COPIER_DISARM_HISTORY_LIMIT = 20;
 
 const COPY_BY_CODE: Record<CopierDisarmCode, { title: string; nextStep: string }> = {
+  'connection-removed': {
+    title: 'Kopírka se vypnula, protože bylo odpojeno připojení propfirmy.',
+    nextStep: 'Připoj propfirmu znovu v Připojeních, nebo její účty odeber ze skupiny; potom spusť Kontrolu pozic.',
+  },
   'config-change': {
     title: 'Kopírka se vypnula kvůli uložení změny skupiny.',
     nextStep: 'Zkontroluj uložené účty a pravidla; nový ARM zapni až po ověření skupiny.',
@@ -214,6 +221,7 @@ export function classifyCopierDisarmReason(
   if (/\bhost-sleep\b|Mac neodpovídal od/i.test(text)) return 'host-sleep';
   if (trigger === 'manual') return 'manual';
   if (trigger === 'config-change') return 'config-change';
+  if (trigger === 'connection-removed') return 'connection-removed';
   if (trigger === 'arm-expiry') return 'arm-expired';
   if (trigger === 'kill-switch') return 'kill-switch';
   if (trigger === 'transport') return 'transport-lost';

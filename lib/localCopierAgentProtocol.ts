@@ -105,6 +105,24 @@ export interface LocalCopierAgentStatus {
   accountDisplay?: TradovateAccountDisplayFeedState[];
   /** Využití Tradovate API a stav session každého OAuth spojení workeru; jen zobrazení. */
   connectionUsage?: CopierConnectionUsage[];
+  /**
+   * Nové propfirmy bez CLI (4. 10. 2026): scope spárovaného Macu a připojení,
+   * která worker načte po nejbližším bezpečném restartu. Jen zobrazení.
+   */
+  connectionDiscovery?: CopierConnectionDiscoveryStatus;
+}
+
+export interface CopierConnectionDiscoveryStatus {
+  /** null = seznam připojení se zatím nepodařilo načíst. */
+  scope: 'owner' | 'connection' | null;
+  deviceId: string;
+  /** Připojení načtená přes souhlas (mimo manifest); manifestová určují `devices`. */
+  loadedConnectionIds: string[];
+  /** Připojení čekající na bezpečný restart (kopírka vypnutá, flat). */
+  pendingConnectionIds: string[];
+  /** Účty každého načteného připojení (adresář při startu + živý feed); guard odpojení. */
+  connectionAccounts?: Array<{ connectionId: string; accountIds: number[] }>;
+  failedConnections: Array<{ connectionId: string; attempts: number; nextAttemptAt: number; lastError: string }>;
 }
 
 /** Co worker dělá s jedním Tradovate loginem: kolik volá a jak na tom je jeho session (18. 9. 2026). */

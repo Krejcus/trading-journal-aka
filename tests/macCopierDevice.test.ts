@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import {
   createMacCopierDevice,
   createMacCopierDeviceTokenProvider,
+  listMacCopierDeviceConnections,
   loadMacCopierDevice,
   macCopierDevicePairing,
   markMacCopierDevicePaired,
@@ -100,6 +101,55 @@ describe('mac copier device', () => {
     await provider.refresh({ forceRenewal: true });
     expect(await provider.getAccessToken()).toBe('token-2');
     expect(bodies).toEqual(['{}', '{"forceRenewal":true}']);
+  });
+
+  it('jedním spárovaným Macem si vyžádá lease i pro další připojení vlastníka (4. 10.)', async () => {
+    root = await mkdtemp(resolve(tmpdir(), 'alphatrade-mac-device-'));
+    const secrets = new Map<string, string>();
+    const secretStore: MacCopierSecretStore = {
+      read: async id => secrets.get(id) ?? Promise.reject(new Error('missing')),
+      write: async (id, value) => { secrets.set(id, value); },
+    };
+    const deviceConnectionId = crypto.randomUUID();
+    const otherConnectionId = crypto.randomUUID();
+    const now = Date.parse('2026-10-04T08:00:00.000Z');
+    const config = await createMacCopierDevice({
+      configPath: resolve(root, 'device.json'), connectionId: deviceConnectionId,
+      apiOrigin: 'https://alpha.example', deviceName: 'Test Mac', secretStore, now,
+    });
+    const publicKey = await readFile(config.publicKeyPath, 'utf8');
+    let leaseConnectionId = otherConnectionId;
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith('/copier-device')) {
+        expect(init?.method).toBe('GET');
+        return new Response(JSON.stringify({ scope: 'owner', connections: [
+          { connectionId: deviceConnectionId }, { connectionId: otherConnectionId }, { connectionId: 'nope' },
+        ] }), { status: 200 });
+      }
+      expect(JSON.parse(String(init?.body))).toEqual({ connectionId: otherConnectionId });
+      const envelope = sealTradovatePilotLease({
+        version: 1, environment: 'demo', connectionId: leaseConnectionId, accessToken: 'fn-token',
+        issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 60 * 60_000).toISOString(),
+      }, publicKey, now);
+      return new Response(JSON.stringify({ envelope }), { status: 200 });
+    });
+
+    expect(await listMacCopierDeviceConnections({ config, secretStore, fetchImpl: fetchImpl as unknown as typeof fetch }))
+      .toEqual({ scope: 'owner', connectionIds: [deviceConnectionId, otherConnectionId] });
+
+    const provider = createMacCopierDeviceTokenProvider({
+      config, connectionId: otherConnectionId, secretStore,
+      fetchImpl: fetchImpl as unknown as typeof fetch, clock: () => now, retry: { deadlineMs: 0 },
+    });
+    expect(await provider.getAccessToken()).toBe('fn-token');
+
+    // Lease pro jiné připojení, než o které worker žádal, se odmítne.
+    leaseConnectionId = deviceConnectionId;
+    const mismatched = createMacCopierDeviceTokenProvider({
+      config, connectionId: otherConnectionId, secretStore,
+      fetchImpl: fetchImpl as unknown as typeof fetch, clock: () => now, retry: { deadlineMs: 0 },
+    });
+    await expect(mismatched.getAccessToken()).rejects.toThrow('lease-connection-mismatch');
   });
 
   it('rejects a non-TLS remote API origin', async () => {

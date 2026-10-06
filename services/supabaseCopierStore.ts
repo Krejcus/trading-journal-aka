@@ -234,6 +234,11 @@ function validSafety(value: unknown): boolean {
       return `${receipt.accountId}:${receipt.brokerOrderId}`;
     }))
   );
+  const validSettledEntries = value.settledCopierEntries == null || (
+    Array.isArray(value.settledCopierEntries)
+    && value.settledCopierEntries.every(id => string(id) && id.length > 0)
+    && unique(value.settledCopierEntries as string[])
+  );
   const validManagementOnly = value.managementOnly == null || (
     isRecord(value.managementOnly)
     && finite(value.managementOnly.at)
@@ -254,6 +259,7 @@ function validSafety(value: unknown): boolean {
     && (value.leaderExposureEpochs == null || (Array.isArray(value.leaderExposureEpochs)
       && value.leaderExposureEpochs.every(validLeaderExposureEpoch)))
     && validEligibility
+    && validSettledEntries
     && validSeenRejects;
 }
 

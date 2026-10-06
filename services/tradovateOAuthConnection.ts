@@ -287,6 +287,15 @@ export function pairTradovateCopierDevice(input: {
   });
 }
 
+/** Souhlas: spárovaný Mac smí načítat i další propfirmy vlastníka (4. 10. 2026). */
+export function grantTradovateCopierDeviceOwnerScope(deviceId: string): Promise<{ scope: 'owner' }> {
+  return authenticatedRequest('/api/tradovate/oauth/copier-device', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'grant-owner-scope', deviceId }),
+  });
+}
+
 export function revokeTradovateCopierDevice(deviceId: string): Promise<{ revoked: true }> {
   return authenticatedRequest('/api/tradovate/oauth/copier-device', {
     method: 'DELETE',

@@ -17,7 +17,15 @@ interface CopierDeviceRow {
   secret_hash: string;
   public_key: string;
   revoked_at: string | null;
+  scope?: TradovateCopierDeviceScope | null;
 }
+
+/**
+ * `connection` = lease jen pro připojení, se kterým byl Mac spárován.
+ * `owner` = po výslovném souhlasu i pro další připojená demo připojení
+ * vlastníka (nová propfirma bez dalšího párování, 4. 10. 2026).
+ */
+export type TradovateCopierDeviceScope = 'connection' | 'owner';
 
 export interface AuthorizedTradovateCopierDevice {
   id: string;
@@ -25,6 +33,8 @@ export interface AuthorizedTradovateCopierDevice {
   connectionId: string;
   publicKey: string;
   deviceName: string;
+  /** Chybí = 'connection' (starší řádek nebo databáze bez migrace scope). */
+  scope?: TradovateCopierDeviceScope;
 }
 
 export const hashTradovateCopierDeviceSecret = (secret: string): string =>
@@ -98,7 +108,8 @@ export async function authorizeTradovateCopierDevice(options: {
   const [, deviceId, secret] = match;
   const { data, error } = await options.db
     .from('tradovate_copier_devices')
-    .select('id,user_id,connection_id,environment,device_name,secret_hash,public_key,revoked_at')
+    // `*` záměrně: web nasazený dřív než migrace scope nesmí rozbít device auth.
+    .select('*')
     .eq('id', deviceId)
     .maybeSingle<CopierDeviceRow>();
   if (error) throw new Error(`copier-device-auth-lookup-failed: ${error.message}`);
@@ -122,7 +133,28 @@ export async function authorizeTradovateCopierDevice(options: {
     connectionId: data.connection_id,
     publicKey: data.public_key,
     deviceName: data.device_name,
+    scope: data.scope === 'owner' ? 'owner' : 'connection',
   };
+}
+
+/** Výslovný souhlas vlastníka: Mac smí načítat i jeho další propfirmy. */
+export async function grantTradovateCopierDeviceOwnerScope(options: {
+  db: SupabaseClient;
+  userId: string;
+  deviceId: string;
+  now?: number;
+}): Promise<boolean> {
+  if (!UUID.test(options.deviceId)) throw new Error('invalid-copier-device-id');
+  const { data, error } = await options.db
+    .from('tradovate_copier_devices')
+    .update({ scope: 'owner', owner_scope_granted_at: new Date(options.now ?? Date.now()).toISOString() })
+    .eq('id', options.deviceId)
+    .eq('user_id', options.userId)
+    .is('revoked_at', null)
+    .select('id')
+    .maybeSingle<{ id: string }>();
+  if (error) throw new Error(`copier-device-scope-failed: ${error.message}`);
+  return Boolean(data);
 }
 
 export async function revokeTradovateCopierDevice(options: {

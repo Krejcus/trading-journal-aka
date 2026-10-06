@@ -1,7 +1,33 @@
 # Příprava ON/OFF kopírky — 4. října 2026
 
-Lokální implementace. Produkce, nainstalovaný worker a iPhone zůstávají na
-dosavadní verzi; nasazení a instalace jsou samostatné kroky.
+Nasazeno 4. 10. 2026 na web i Mac execution worker po výslovném souhlasu
+uživatele. Commit `bd02de3963c65949487dd53f9721b763d34c3316`.
+Nainstalovaná nativní iPhone aplikace tímto webovým nasazením aktualizovaná není.
+
+## Nasazení
+
+- Čistá release kopie: `npm ci --offline --no-audit --no-fund`, TypeScript,
+  build a 4 869 testů / 523 souborů PASS; 1 soubor skipped, 1 test todo.
+- Preview `dpl_GVVv3RCpMCQ2Qb9YGH3sQBEFHk35` READY. Přístupový odkaz
+  k chráněnému preview automatická kontrola odmítla; ochrana zůstala zapnutá.
+  Vykreslení ověřeno v místním LIVE a následně přímo na produkci.
+- Produkce `dpl_4LH8Asv4xuWFCqdDXDFQ7tuyyCbp` READY, alias
+  `https://alphatrade-mentor-15.vercel.app`. Publikovaný LIVE bundle obsahuje
+  nové zrušení ON a `manualRecoveryRequired`; přihlášené LIVE vykreslené,
+  žádné console errors. Cílené runtime logy po nasazení obsahují úspěšné
+  odpovědi relay 200, žádné error události v přečteném vzorku.
+- Worker instalován z čistého stejného commitu, `dirty=false`, capability
+  `arm-preparation-v1`. SHA-256 bundle:
+  `7b724218739e52f76c13569c5bc6da070a824bfc6106e68434de9062ae528c69`.
+  Stav po instalaci: connected, DISARMED, groupFlat, žádné working orders,
+  divergence, stuck outbox nebo lastError; automatická příprava `ready`.
+  Uložená skupina je přesně shodná s předinstalačním stavem.
+- Návratová záloha původního bundle, instalačního manifestu, plist,
+  routování a durable stavu: `.copier-pilot/release-backups/20261004-arm-preparation/`
+  (ignorováno Gitem, soukromá oprávnění). Původní worker commit
+  `acdbafce2768eb82265bd17ee3f6bfbbcefdccfc`, web `6f9dd4d9`.
+- Bez ARM, Flatten nebo testovacího obchodu. Skutečná latence kliknutí ON
+  zůstává nezměřená; potvrzena je automatická read-only připravenost.
 
 ## Chování
 

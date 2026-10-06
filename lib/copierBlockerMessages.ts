@@ -98,7 +98,7 @@ export function formatCopierCommandError(
   }
   if (/ne(?:ní|jsou) viditeln(?:ý|é) v žádném připojeném OAuth|není zapojené do běžící kopírky|neaktivní\/read-only účty/i.test(message)) {
     const multiple = names.length > 1;
-    return `${namedAccounts} ${multiple ? 'nejsou' : 'není'} ve Mac workeru. Přidej ${multiple ? 'jejich' : 'jeho'} OAuth připojení do manifestu workeru a proveď bezpečný reinstall; samotné připojení v Connections nestačí.`;
+    return `${namedAccounts} ${multiple ? 'nejsou' : 'není'} ve Mac workeru. V editoru skupiny povol Macu načítat tvoje propfirmy; worker ${multiple ? 'je' : 'ho'} pak načte sám, jakmile bude kopírka vypnutá a bez otevřených pozic.`;
   }
   if (/^[a-z][a-z0-9-]*(?::[a-z0-9-]+)*$/i.test(message)) {
     return 'Mac worker změnu odmítl. Otevři Události, zkontroluj konkrétní blokaci a změnu zopakuj až po jejím vyřešení.';

@@ -16,6 +16,7 @@ vi.mock('../server/tradovateCopierCommandRelay', () => ({
   completeTradovateCopierCommand: mocks.complete,
   enqueueTradovateCopierCommand: mocks.enqueue, readTradovateCopierCommand: mocks.read,
   copierRelayValidationErrorStatus: () => null,
+  resolveCopierRelayConnectionId: async ({ connectionId }: { connectionId: string }) => connectionId,
 }));
 vi.mock('../server/nativeCopierStatePush', () => ({ sendImmediateCopyEventPushes: mocks.push }));
 vi.mock('../server/tvAlertNotifications', () => ({ loadPendingTvAlertSnapshotRequests: mocks.snapshots }));

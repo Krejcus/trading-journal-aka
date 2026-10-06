@@ -27,10 +27,17 @@ export function validateJournalBatch(input: unknown, connectionId: string, envir
 }
 
 export async function storeJournalBatch(db: SupabaseClient, device: AuthorizedTradovateCopierDevice, input: unknown) {
+  // Owner-scope Mac (4. 10. 2026) zapisuje evidenci i pro další připojení
+  // vlastníka; RPC znovu ověří scope, vlastnictví a že batch je jednoho připojení.
+  const requested = Array.isArray(input) && input.length > 0
+    && typeof (input[0] as { connectionId?: unknown })?.connectionId === 'string'
+    ? (input[0] as { connectionId: string }).connectionId
+    : device.connectionId;
+  const connectionId = device.scope === 'owner' ? requested : device.connectionId;
   // Existing device authentication is DEMO-only. Do not trust an environment from the payload.
-  const events = validateJournalBatch(input, device.connectionId, 'demo');
+  const events = validateJournalBatch(input, connectionId, 'demo');
   const { data, error } = await db.rpc('append_tradovate_journal_evidence', {
-    p_user_id: device.userId, p_connection_id: device.connectionId, p_device_id: device.id, p_events: events,
+    p_user_id: device.userId, p_connection_id: connectionId, p_device_id: device.id, p_events: events,
   });
   if (error) throw new Error(`journal-evidence-write-failed: ${error.message}`);
   if (data?.accepted !== true || !Array.isArray(data.ids) || data.ids.length !== events.length

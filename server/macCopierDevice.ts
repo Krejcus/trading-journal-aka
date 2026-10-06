@@ -142,6 +142,11 @@ export async function markMacCopierDevicePaired(configPath: string): Promise<Mac
 
 export function createMacCopierDeviceTokenProvider(options: {
   config: MacCopierDeviceConfig;
+  /**
+   * Jiné OAuth připojení téhož vlastníka než to, se kterým byl Mac spárován
+   * (nová propfirma bez dalšího párování, 4. 10. 2026). Default = device.
+   */
+  connectionId?: string;
   secretStore?: MacCopierSecretStore;
   fetchImpl?: typeof fetch;
   clock?: () => number;
@@ -153,6 +158,7 @@ export function createMacCopierDeviceTokenProvider(options: {
 }) {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const clock = options.clock ?? Date.now;
+  const targetConnectionId = options.connectionId ?? options.config.connectionId;
   const fallbackMinimumValidityMs = Math.max(60_000, options.fallbackMinimumValidityMs ?? 5 * 60_000);
   const minimumValidityMs = Math.max(
     fallbackMinimumValidityMs,
@@ -170,7 +176,7 @@ export function createMacCopierDeviceTokenProvider(options: {
   const hasUsableToken = () => payload != null && Date.parse(payload.expiresAt) - clock() > fallbackMinimumValidityMs;
   const providerError = (phase: string, reason: unknown): Error => {
     const error = reason instanceof Error ? reason : new Error(String(reason));
-    const label = options.config.connectionId.slice(0, 8);
+    const label = targetConnectionId.slice(0, 8);
     if (!error.message.includes('phase=')) error.message = `connection=conn:${label} phase=${phase} ${error.message}`;
     return error;
   };
@@ -212,7 +218,10 @@ export function createMacCopierDeviceTokenProvider(options: {
               Authorization: `Device ${options.config.deviceId}.${secret}`,
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify(forceRenewal ? { forceRenewal: true } : {}),
+            body: JSON.stringify({
+              ...(targetConnectionId !== options.config.connectionId ? { connectionId: targetConnectionId } : {}),
+              ...(forceRenewal ? { forceRenewal: true } : {}),
+            }),
             signal: requestAbort.signal,
           });
         } catch (reason) {
@@ -238,7 +247,7 @@ export function createMacCopierDeviceTokenProvider(options: {
         } catch (reason) {
           throw providerError('decrypt-or-expiry', reason);
         }
-        if (opened.connectionId !== options.config.connectionId) {
+        if (opened.connectionId !== targetConnectionId) {
           throw providerError('lease-identity', new Error('mac-copier-lease-connection-mismatch'));
         }
         payload = opened;
@@ -285,4 +294,44 @@ export function createMacCopierDeviceTokenProvider(options: {
     },
     current: () => payload,
   };
+}
+
+/**
+ * OAuth připojení vlastníka spárovaného Macu (GET copier-device s Device
+ * auth). Worker podle nich načte i propfirmy přidané až po instalaci.
+ */
+export async function listMacCopierDeviceConnections(options: {
+  config: MacCopierDeviceConfig;
+  secretStore?: MacCopierSecretStore;
+  fetchImpl?: typeof fetch;
+  requestTimeoutMs?: number;
+}): Promise<{ scope: 'owner' | 'connection'; connectionIds: string[] }> {
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  if (!fetchImpl) throw new Error('mac-copier-fetch-unavailable');
+  const secret = await (options.secretStore ?? macOsKeychainCopierSecretStore).read(options.config.deviceId);
+  const abort = new AbortController();
+  const timeout = setTimeout(() => abort.abort(new Error('mac-copier-connections-timeout')), options.requestTimeoutMs ?? 30_000);
+  timeout.unref?.();
+  try {
+    const response = await fetchImpl(`${options.config.apiOrigin}/api/tradovate/oauth/copier-device`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', Authorization: `Device ${options.config.deviceId}.${secret}` },
+      signal: abort.signal,
+    });
+    const body = await response.json() as {
+      scope?: unknown; connections?: Array<{ connectionId?: unknown }>; error?: string;
+    };
+    if (!response.ok || !Array.isArray(body.connections)) {
+      throw new Error(body.error || `mac-copier-connections-http-${response.status}`);
+    }
+    return {
+      // Starší server bez scope = jen vlastní připojení zařízení.
+      scope: body.scope === 'owner' ? 'owner' : 'connection',
+      connectionIds: [...new Set(body.connections
+        .map(item => item.connectionId)
+        .filter((id): id is string => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id)))],
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }

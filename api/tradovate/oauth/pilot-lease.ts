@@ -33,19 +33,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? await authorizeTradovateCopierDevice({ db, authorization: req.headers.authorization })
       : null;
     const userId = device?.userId ?? await requireSupabaseUserId(req.headers.authorization, config);
-    const connectionId = device?.connectionId
-      ?? (typeof req.body?.connectionId === 'string' ? req.body.connectionId.trim() : '');
+    const requestedConnectionId = typeof req.body?.connectionId === 'string' ? req.body.connectionId.trim() : '';
+    // Spárovaný Mac worker smí brát lease pro kterékoli připojené demo OAuth
+    // připojení svého vlastníka (nová propfirma bez dalšího párování). Lease
+    // zůstává krátký, per připojení a zapečetěný public key toho zařízení.
+    const connectionId = device
+      ? (requestedConnectionId || device.connectionId)
+      : requestedConnectionId;
+    // Jiné připojení jen se scope 'owner' (výslovný souhlas vlastníka v LIVE).
+    if (device && connectionId !== device.connectionId && device.scope !== 'owner') {
+      return res.status(403).json({ error: 'copier-device-scope-required' });
+    }
     const publicKey = device?.publicKey
       ?? (typeof req.body?.publicKey === 'string' ? req.body.publicKey.trim() : '');
     if (!connectionId || !publicKey) return res.status(400).json({ error: 'missing-pilot-lease-input' });
     // Device auth already binds this request to one owned connection. Avoid an
     // additional full connection-list round trip on every worker renewal; the
     // targeted token lookup below still rejects missing/disconnected rows.
-    const connection = device
+    const connection = device && connectionId === device.connectionId
       ? null
       : (await listTradovateConnectionStatuses(db, userId, 'demo'))
         .find(item => item.id === connectionId && item.connected);
-    if (!device && !connection) return res.status(404).json({ error: 'tradovate-connection-not-found' });
+    if ((!device || connectionId !== device.connectionId) && !connection) {
+      return res.status(404).json({ error: 'tradovate-connection-not-found' });
+    }
     let token = await getValidTradovateAccessToken({
       db,
       config,
@@ -86,6 +97,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     if (message.includes('public-key') || message.includes('PEM')) {
       return res.status(400).json({ error: 'invalid-pilot-public-key' });
+    }
+    // Odpojená nebo neautorizovaná propfirma není přechodná chyba: worker ji
+    // má hned přeskočit (start s ostatními), ne 10 minut opakovat.
+    if (message === 'tradovate-reauthorization-required') {
+      return res.status(409).json({ error: 'tradovate-connection-not-connected' });
     }
     console.error('[tradovate-pilot-lease] Failed without exposing token:', message);
     return res.status(502).json({ error: 'tradovate-pilot-lease-failed' });

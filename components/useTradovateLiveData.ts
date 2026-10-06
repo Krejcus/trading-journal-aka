@@ -742,7 +742,10 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       await disconnectTradovateOAuth(connectionId);
       await refreshStatus();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Připojení se nepodařilo odpojit.');
+      const message = reason instanceof Error ? reason.message : '';
+      setError(/copier-armed-connection-in-use/.test(message)
+        ? 'Propfirmu teď nejde odpojit: její účty kopíruje zapnutá kopírka. Nejdřív kopírku vypni.'
+        : message || 'Připojení se nepodařilo odpojit.');
       setBusy(null);
     }
   }, [refreshStatus]);

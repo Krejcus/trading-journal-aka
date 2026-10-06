@@ -258,6 +258,108 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-05 — Přepnutí skupiny a ruční pozice na odcházejících účtech (Claude, 5 kol review s Codexem)
+Cíl (Filip): ruční obchod na účtu vypnuté skupiny nesmí blokovat zapnutí jiné
+skupiny; účty nové skupiny a účty s kopií kopírky dál musí být flat.
+- Vlastnictví kopie = durable outbox (outbox/bracket/oso; zapisuje se PŘED
+  odesláním k brokerovi, maže ho jen přepnutí skupiny). Značky podle fillů
+  byly zamítnuty: Order(Filled, 0) → Position bez Fill, pád před commitem
+  i starý snapshot by je obešly.
+- `safety.settledCopierEntries`: položka je „usazená“, když jen za DISARM
+  dvě REST kola (s odstupem) ukážou flat symbol bez otevřeného příkazu kopírky
+  (ID i tag), každá noha je lokálně známá jako ukončená ≥ 30 s a mezi začátkem
+  a commitem nepřišla obchodní událost účtu (po commitu se ověří znovu, při
+  změně se usazení vrátí). Běží sériově po účtech, bez REST, když stream ukazuje
+  ne-flat. Chybějící pole = nic usazeno (konzervativně).
+- Odcházející účet je vyjmut z flat kontroly jen bez neusazené položky; flat
+  odcházející účet s čerstvě ukončenou kopií čeká 30 s. Obchodní událost
+  odcházejícího účtu během zápisu přepnutí se detekuje: nová skupina zůstane
+  DISARMED s povinnou reconciliací, `lastError` a auditem.
+- Známé meze: ruční obchod otevřený < ~30 s po zavření kopie na stejném
+  symbolu blokuje do svého zavření; teoretická broker projekce opožděná > 30 s
+  je jen detekována, ne zabráněna (okno commitu existovalo i dřív pro všechny účty).
+- Codex 5. kolo: žádný kritický/vysoký nález, „nasaditelné, bezpečnostně lepší
+  než b642f094^“; jeho poslední liveness nález (OCO/OSO reject) opraven.
+  Testy: tests/copierSwitchLeavingManualPositions.test.ts (12), celá sada
+  4916 passed.
+- NASAZENO 5. 10. (Filip „nasaď“): main fast-forward 3bf189cb → 5e9822a0
+  (lokální neodeslané commity jiné session v Documents 48b4c0a0/2d972036
+  nedotčeny). Read-only reconcile čistý → `mac-reinstall-safe.sh` (bundle
+  ccc6634a…, commit 5e9822a0) → reconcile čistý. Breached Tradeify 65333343
+  a 65333277 odebrány ze skupiny „Hlavní“ (`update-group` přes lokálního
+  agenta); skupina: leader 68356274, followeři 68356280, 64503883, 68356277,
+  68356271. DISARMED, connected, bez divergence; FundedNext načten discovery.
+
+### 2026-10-05 — Mac patří uživateli, ne propfirmě (Claude, konzultace s Codexem)
+
+Filip: „připojit/odpojit propfirmu i zvolit leadera má být jedno, kromě firmy,
+jejíž účty zrovna kopíruju“. Dosud byl Mac „ukotvený“ k OAuth připojení, přes
+které byl spárován (identita zařízení, relay pokynů, start workeru).
+
+Rozhodnutí a proč:
+- **Worker startuje bez původní firmy**: manifest přes `allSettled`, stačí jedno
+  funkční připojení + relay nesený spárovaným zařízením. Durable soubory dál
+  pod `manifest.primaryConnectionId` (stabilní namespace, žádné přejmenování).
+  Odpojená firma = trvalá 409 z pilot-lease (ne 10 min retry).
+- **Relay**: claim/ACK/realtime už byly per device; UI dál adresuje přes
+  connectionId, server ho kompatibilním shimem (`resolveCopierRelayConnectionId`)
+  mapuje na připojení zařízení s nejčerstvějším runtime. Přechod UI na
+  `relayDeviceId` je odložený (Codex: cílová architektura).
+- **Odpojení firmy s účty v ARMED skupině** blokuje server (409) i appka;
+  účty firmy podle skutečného routingu workeru (`connectionDiscovery.connectionAccounts`),
+  neznámé = blokovat. Worker za ARM vypne jen při odpojení firmy skupiny a těsně
+  před ARM ověří u serveru, že žádný povinný účet není na odpojené firmě.
+- **Migrace**: FK `connection_id` u devices/commands/runtime → `ON DELETE SET NULL`.
+- Widget/Live Activity berou tokeny jen připojených firem.
+
+Odloženo: atomická DB brána ARM↔odpojení (worker zavírá okno na ms), párování
+nového uživatele bez CLI (Mac aplikace), UI adresování přímo podle zařízení.
+
+### 2026-10-04 — Nová propfirma bez CLI: Mac worker ji načte sám (Claude, konzultace s Codexem)
+
+Filip přidal FundedNext a nešlo ji dát do skupiny („není ve Mac workeru“);
+dřív to chtělo `copier:mac add-connection`, párování a reinstall — nepoužitelné
+pro veřejnost. Konkurence (Tradesyncer, Tradecopia, PickMyTrade) kopíruje
+v cloudu, účet přidá jen OAuth loginem.
+
+Rozhodnutí a proč:
+- **Výslovný souhlas, ne tichý rozšířený přístup** (Codex): nový sloupec
+  `tradovate_copier_devices.scope` (`connection` default / `owner`). Tlačítko
+  „Povolit Macu načítat propfirmy“ v editoru skupiny. Jen `owner` smí brát
+  krátké lease (zapečetěné klíčem zařízení) i pro další připojená demo
+  připojení vlastníka a zapisovat jejich evidenci (RPC journalu rozšířeno).
+- **Bezpečný restart místo hot-add do routeru**: router má pevnou sadu brokerů;
+  worker při startu načte připojení navíc k manifestu, poll 60 s při změně
+  volá existující `requestSafePairingRestart` (DISARMED, flat, reconciled).
+- **Nikdy crash loop**: selhání nové propfirmy (lease, adresář, kolize účtů,
+  nesynchronizovaný stream při startu) jde do perzistentního backoffu
+  (`connection-discovery.json`, 5 min → 6 h); načítání je souběžné s 60s
+  rozpočtem, takže mrtvá firma start nezdrží o 10 min.
+- **Odpojení za ARM** (i primárního připojení se scope owner) nebo odvolaný
+  Mac (401) → `disarm('connection-removed')`; restart se kvůli odpojenému
+  manifestovému připojení neplánuje (spadl by na jeho lease).
+- Device auth čte `select('*')`, takže web nasazený před migrací nerozbije
+  lease workeru. Pořadí nasazení: migrace → web → worker → iPhone.
+
+Známé limity: odpojení nesouvisející propfirmy za ARM vypne kopírku (fail-safe);
+souhlas přežije re-pair stejného device id; command relay běží dál jen přes
+primární připojení.
+
+### 2026-10-04 — Nasazení oprav review přípravy ON/OFF (Claude)
+
+- Filip „ano nasaď a nainstaluj do telefonu“. `6f0e9b9c` fast-forward na main
+  (4 875 testů + build PASS), Vercel READY.
+- Mac worker přeinstalován `scripts/copier/mac-reinstall-safe.sh` z čistého
+  release worktree na `6f0e9b9c`; brána prošla (DISARMED, connected, bez
+  reconciliation/divergence/working/stuck/lastError), `--adopt-durable-group`
+  zachovalo skupinu Hlavní (leader 65333277, follower 65333343). Po startu
+  `armPreparation.state=ready`, `blockedBy=null`.
+- Zátěž API naměřená ve workeru (`connectionUsage`, Tradeify login): před
+  opravou 18 REST/min (~1 080/h, ~22 % z 5 000/h), po opravě 48 za 5 min
+  klidu (~9,6/min, ~12 %) včetně krátkého aktivního režimu vyvolaného měřicím
+  čtením `/v1/status` (každé čtení = „zájem“). Zbytek jsou risk/display čtení.
+- iPhone: čistá reinstalace z `6f0e9b9c` (bundle ověřen na Supabase URL).
+
 ### 2026-10-04 — Opravy review přípravy ON/OFF kopírky (Codex)
 
 - P2 API zátěž: DISARMED background preflight zůstává 20s jen v aktivním
@@ -276,6 +378,39 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   (1 soubor skipped, 1 todo); produkční build PASS. `npx tsc --noEmit` hlásí
   pouze očekávané worktree chyby v `extension/` kvůli chybějícím `chrome`
   typům a `@crxjs/vite-plugin`.
+
+### 2026-10-04 — Nasazení předběžné přípravy kopírky na web i worker (Codex)
+
+- Filip výslovně schválil „dobře,udělej to i nasaď“. Oprava oddělena na
+  `codex/copier-arm-preparation-20261004`; commit `bd02de3963c65949487dd53f9721b763d34c3316`
+  zahrnuje jen 8 souborů této opravy. Cizí `.claude/launch.json`, mockupy
+  a review brief zachovány mimo vydání. Main aktualizován fast-forwardem.
+- Čisté vydání znovu ověřeno: instalace z lockfile, tsc, produkční build,
+  **4 869 testů / 523 souborů PASS**, 1 soubor skipped a 1 test todo.
+- Preview `dpl_GVVv3RCpMCQ2Qb9YGH3sQBEFHk35` READY; dočasný přístupový
+  odkaz automatická kontrola odmítla kvůli změně přístupu k chráněné aplikaci.
+  Ochrana nezměněna, UI ověřeno na localhost LIVE a následně na produkci.
+- Před instalací read-only reconciliation autoritativně potvrdila DISARMED,
+  connected, flat, bez pozic/příkazů/divergence/stuck outbox/chyby.
+  Návratová záloha: `.copier-pilot/release-backups/20261004-arm-preparation/`
+  (soukromá, gitignored; obsahuje starý bundle, manifest, plist, durable stav
+  a routování). Neobsahuje vzdálenou DB, která se při vydání neměnila.
+- Mac worker instalován z čistého stejného commitu, bez downgrade výjimky.
+  `--adopt-durable-group` zachovalo přesně uloženou skupinu Hlavní;
+  původní CLI bootstrap účty nepřepsaly aktuální skupinu. Nová capability
+  `arm-preparation-v1`, `dirty=false`, instalovaný bundle SHA-256
+  `7b724218739e52f76c13569c5bc6da070a824bfc6106e68434de9062ae528c69`.
+  Po instalaci connected, DISARMED, groupFlat, bez chyb a pracovních příkazů;
+  příprava automaticky `ready` a její čas se dále obnovuje na pozadí.
+- Produkce `dpl_4LH8Asv4xuWFCqdDXDFQ7tuyyCbp` READY na
+  `https://alphatrade-mentor-15.vercel.app`. Publikovaný LIVE bundle obsahuje
+  zrušení ON i novou přípravu. Přihlášené LIVE ověřeno, kopírka vypnutá,
+  bez console errors. Cílený vzorek runtime logů po deployi: relay 200,
+  žádné error události; historické ranní DB chyby nejsou nový regresní nález.
+  Screenshot: `/private/tmp/alphatrade-copier-production-20261004.png`.
+- Bez ARM, Flatten, brokerových obchodních příkazů nebo instalace iPhonu.
+  Reálná latence ON stále neměřena; ověřená je nasazená automatická příprava.
+  Podrobnosti: `docs/COPIER_ARM_PREPARATION_20261004.md`.
 
 ### 2026-10-04 — Předběžná read-only příprava ON/OFF kopírky (Codex)
 

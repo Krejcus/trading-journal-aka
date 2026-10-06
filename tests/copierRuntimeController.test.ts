@@ -836,7 +836,7 @@ describe('bootstrapCopierRuntime', () => {
     controller.stop();
   });
 
-  it('reconfigure dál přísně kontroluje odebíraného followera, kterého OAuth vrací', async () => {
+  it('odebíraný follower s ruční pozicí bez kopie kopírky změnu neblokuje (5. 10.)', async () => {
     const connection = createMockBroker({ behavior: () => ({ kind: 'fill', price: 29_500 }) });
     await connection.placeOrder({
       tag: 'existing-removed-follower-position',
@@ -856,8 +856,9 @@ describe('bootstrapCopierRuntime', () => {
     await expect(controller.reconfigureGroup({
       ...group,
       followers: [{ accountId: 300, mode: 'on-submit', multiplier: 1 }],
-    })).rejects.toThrow('nonFlat=200');
+    })).resolves.toBeUndefined();
     expect(controller.status()).toMatchObject({ armed: false });
+    expect((await connection.listPositions(200))[0]?.netQuantity).toBe(1);
     controller.stop();
   });
 
