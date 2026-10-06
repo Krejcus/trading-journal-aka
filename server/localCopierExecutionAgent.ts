@@ -94,6 +94,8 @@ interface LocalCopierExecutionAgentOptions {
   autoRearmAfterTransport?: boolean;
   /** Interval kontroly automatického zapnutí (test override). */
   autoRearmTickMs?: number;
+  /** Prodleva po obnovení spojení před automatickým zapnutím (test override). */
+  autoRearmGraceMs?: number;
   /**
    * B1: jak dlouho po durable přijetí čekat na potvrzené zavření followera,
    * než příkaz vrátí `pending`. Relay i FIFO agenta jsou sériové; dřív tu
@@ -291,14 +293,27 @@ export async function startLocalCopierExecutionAgent(
   let armPending = false;
   let shuttingDown = false;
   /** Poslední úspěšné ostré zapnutí (bez změny skupiny) pro automatický návrat po výpadku. */
-  let lastSuccessfulArm: { command: Extract<LocalCopierAgentCommand, { type: 'arm-live' }>; at: number } | null = null;
+  let lastSuccessfulArm: {
+    command: Extract<LocalCopierAgentCommand, { type: 'arm-live' }>;
+    at: number;
+    /** Brzda po tomto zapnutí (i ještě před tickem) automatický návrat zruší. */
+    brakeEpoch: number;
+    /** Automatický návrat smí zapnout jen tutéž skupinu, která byla ručně zapnutá. */
+    groupFingerprint: string;
+  } | null = null;
   /**
    * Čekající automatické zapnutí po vypnutí kvůli výpadku spojení (Filip
    * 6. 10. 2026). Zruší ho jakákoli brzda, kill switch, nové vypnutí,
    * konec session nebo uplynutí okna; samotné zapnutí jde přes stejnou
    * bránu `arm-live` včetně vestavěné Kontroly pozic.
    */
-  let autoRearm: { brakeEpoch: number; disarmAt: number; attempts: number; nextAttemptAt: number } | null = null;
+  let autoRearm: {
+    brakeEpoch: number;
+    disarmAt: number;
+    attempts: number;
+    nextAttemptAt: number;
+    connectedSince: number | null;
+  } | null = null;
   let autoRearmHandledDisarmAt = 0;
   let autoRearmRunning = false;
   let serverClosePromise: Promise<void> | null = null;
@@ -847,6 +862,11 @@ export async function startLocalCopierExecutionAgent(
         // Etapa 1 (6. 10. 2026): Zapnout si samo provede Kontrolu pozic.
         // Dřívější incident ani chybějící ruční kontrola zapnutí neblokují;
         // rozhoduje jen aktuální autoritativní stav u brokera.
+        if (context.source === 'internal' && options.controller.status().armPreparation?.manualRecoveryRequired) {
+          // Automatický návrat po výpadku nesmí vestavěnou kontrolou smazat
+          // nový incident, který vznikl až po výpadku; ten zůstává ruční.
+          throw new Error('Automatické zapnutí zastaveno: po výpadku vznikl incident, který vyžaduje ruční Kontrolu pozic');
+        }
         if (armNeedsSelfCheck(options.controller.status())) {
           const check = await awaitArmDeadline(options.controller.reconcile(), deadlineAt);
           assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
@@ -892,7 +912,12 @@ export async function startLocalCopierExecutionAgent(
         // Pro automatické zapnutí po výpadku spojení: stejné parametry bez
         // změny skupiny (ta se po výpadku znovu neaplikuje).
         const { group: _appliedGroup, ...repeatable } = command;
-        lastSuccessfulArm = { command: repeatable, at: Date.now() };
+        lastSuccessfulArm = {
+          command: repeatable,
+          at: Date.now(),
+          brakeEpoch: admittedBrakeEpoch,
+          groupFingerprint: JSON.stringify(group),
+        };
         return;
       }
       case 'shadow': {
@@ -1163,7 +1188,15 @@ export async function startLocalCopierExecutionAgent(
         || disarm.at === autoRearmHandledDisarmAt
       ) return;
       autoRearmHandledDisarmAt = disarm.at;
-      autoRearm = { brakeEpoch, disarmAt: disarm.at, attempts: 0, nextAttemptAt: Date.now() };
+      // Brzdová epocha se bere z okamžiku ručního zapnutí, ne z ticku: brzda
+      // poslaná kdykoli po zapnutí (i těsně po výpadku) návrat zruší.
+      autoRearm = {
+        brakeEpoch: lastSuccessfulArm.brakeEpoch,
+        disarmAt: disarm.at,
+        attempts: 0,
+        nextAttemptAt: Date.now(),
+        connectedSince: null,
+      };
       autoRearmLog('čeká na obnovu spojení; zapne se samo, pokud kontrola u brokera vyjde čistě');
     }
     const pending = autoRearm;
@@ -1173,12 +1206,24 @@ export async function startLocalCopierExecutionAgent(
     };
     if (brakeEpoch !== pending.brakeEpoch) return cancel('přišla ruční brzda');
     if (current.killSwitch) return cancel('kill switch');
+    if (current.armPreparation?.manualRecoveryRequired) return cancel('po výpadku vznikl incident, který vyžaduje ruční kontrolu');
+    if (!lastSuccessfulArm || JSON.stringify(group) !== lastSuccessfulArm.groupFingerprint) {
+      return cancel('skupina se od posledního ručního zapnutí změnila');
+    }
     if (current.armed) return cancel('kopírka už je zapnutá');
     if (current.lastDisarm && current.lastDisarm.at !== pending.disarmAt) return cancel('nové vypnutí');
     if (Date.now() - pending.disarmAt > AUTO_REARM_WINDOW_MS) return cancel('vypršelo okno 30 min');
     if (tradovateSessionEndAt(pending.disarmAt) !== tradovateSessionEndAt(Date.now())) return cancel('skončila obchodní session');
     if (pending.attempts >= AUTO_REARM_MAX_ATTEMPTS) return cancel('vyčerpány pokusy');
-    if (!current.connected || Date.now() < pending.nextAttemptAt || !lastSuccessfulArm) return;
+    if (!current.connected) {
+      pending.connectedSince = null;
+      return;
+    }
+    // Po obnovení spojení chvíli počkat: brzda z telefonu/relay, která
+    // během výpadku čekala ve frontě, musí stihnout dorazit dřív.
+    pending.connectedSince ??= Date.now();
+    if (Date.now() - pending.connectedSince < (options.autoRearmGraceMs ?? 20_000)) return;
+    if (Date.now() < pending.nextAttemptAt) return;
     autoRearmRunning = true;
     pending.attempts += 1;
     try {

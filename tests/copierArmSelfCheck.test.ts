@@ -48,6 +48,12 @@ const controller = (overrides: Partial<CopierControllerStatus> = {}) => {
     prepareArm: vi.fn(async () => {
       if (status.armPreparation?.state !== 'ready') throw new Error(`ARM blokován: ${status.armPreparation?.reason}`);
     }),
+    preflightGroupChange: vi.fn(),
+    updateGroup: vi.fn(),
+    updateGroupMetadata: vi.fn(),
+    updateGroupRiskInPlace: vi.fn(async () => undefined),
+    reconfigureGroup: vi.fn(async () => undefined),
+    activateGroup: vi.fn(async () => undefined),
     status: vi.fn(() => status),
     waitForIdle: vi.fn(async () => undefined),
     stop: vi.fn(),
@@ -110,7 +116,7 @@ describe('etapa 1 — automatické zapnutí po výpadku spojení', () => {
 
   it('po obnovení spojení a čisté kontrole se zapne samo', async () => {
     const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20 });
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20, autoRearmGraceMs: 0 });
     await running.execute({ type: 'arm-live' });
     expect(runtime.arm).toHaveBeenCalledTimes(1);
     transportDisarm(runtime);
@@ -124,7 +130,7 @@ describe('etapa 1 — automatické zapnutí po výpadku spojení', () => {
 
   it('nečistá kontrola po obnovení nechá kopírku vypnutou', async () => {
     const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20 });
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20, autoRearmGraceMs: 0 });
     await running.execute({ type: 'arm-live' });
     transportDisarm(runtime);
     runtime.setNextCheck({ ...clean, authoritativelyClean: false, workingOrderAccounts: [22] });
@@ -137,7 +143,7 @@ describe('etapa 1 — automatické zapnutí po výpadku spojení', () => {
 
   it('ruční vypnutí po výpadku automatické zapnutí zruší', async () => {
     const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20 });
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20, autoRearmGraceMs: 0 });
     await running.execute({ type: 'arm-live' });
     transportDisarm(runtime);
     await new Promise(resolve => setTimeout(resolve, 60));
@@ -147,9 +153,49 @@ describe('etapa 1 — automatické zapnutí po výpadku spojení', () => {
     expect(runtime.arm).toHaveBeenCalledTimes(1);
   });
 
+  it('vypnutí hned po výpadku, ještě před prvním tickem, návrat zruší', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 50, autoRearmGraceMs: 0 });
+    await running.execute({ type: 'arm-live' });
+    transportDisarm(runtime);
+    await running.execute({ type: 'disarm' });
+    runtime.setStatus({ connected: true });
+    await new Promise(resolve => setTimeout(resolve, 250));
+    expect(runtime.arm).toHaveBeenCalledTimes(1);
+  });
+
+  it('změna skupiny během výpadku návrat zruší (zapnula by se jiná konfigurace)', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20, autoRearmGraceMs: 0 });
+    await running.execute({ type: 'arm-live' });
+    transportDisarm(runtime);
+    await running.execute({ type: 'copy-command', command: { type: 'update-group', group: {
+      ...group(), followers: [{ accountId: 22, mode: 'on-submit', multiplier: 2 }],
+    } } });
+    expect(running.status().group.followers[0].multiplier).toBe(2);
+    runtime.setStatus({ connected: true });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(runtime.arm).toHaveBeenCalledTimes(1);
+  });
+
+  it('nový incident po výpadku automatický návrat zastaví a nesmaže ho', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20, autoRearmGraceMs: 0 });
+    await running.execute({ type: 'arm-live' });
+    transportDisarm(runtime);
+    runtime.setStatus({
+      connected: true,
+      lastError: 'Copier fail-closed: store CAS',
+      armPreparation: { state: 'blocked', verifiedAt: null, reason: 'incident', blockedBy: 'incident', manualRecoveryRequired: true },
+    });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(runtime.arm).toHaveBeenCalledTimes(1);
+    expect(runtime.reconcile).not.toHaveBeenCalled();
+  });
+
   it('ruční vypnutí (ne výpadek) se nikdy samo nezapne', async () => {
     const runtime = controller();
-    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20 });
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmTickMs: 20, autoRearmGraceMs: 0 });
     await running.execute({ type: 'arm-live' });
     runtime.setStatus({
       armed: false,
