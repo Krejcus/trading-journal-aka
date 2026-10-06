@@ -3545,6 +3545,412 @@ html.native-shell .compact-sheet {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
+   Sdílecí karta obchodu
+
+   Stojí na třídách Karty dne (rámeček, sklo, světla, náklon, ovládání
+   v rohu, světlý motiv), tady je jen to, co má obchod navíc: číslo vlevo,
+   graf nebo cenová dráha vpravo a patička s QR. Ztrátový obchod přebarví
+   rámeček a záři z tyrkysovo-zelené do tyrkysovo-růžové.
+   ───────────────────────────────────────────────────────────────────────── */
+.trade-card-loss .live-day-card {
+  background: linear-gradient(140deg, rgba(34, 211, 238, 0.3), rgba(255, 255, 255, 0.05) 40%, rgba(244, 63, 94, 0.26));
+}
+
+.trade-card-loss .live-day-inner {
+  background:
+    radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34, 211, 238, 0.12) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 60% at 100% 100%, rgba(244, 63, 94, 0.1) 0%, transparent 60%),
+    #000;
+}
+
+.light-theme .trade-card-loss .live-day-card {
+  background: linear-gradient(140deg, rgba(8, 145, 178, 0.45), rgba(15, 23, 42, 0.1) 40%, rgba(244, 63, 94, 0.38));
+}
+
+.light-theme .trade-card-loss .live-day-inner {
+  background:
+    radial-gradient(ellipse 100% 100% at 50% 45%, transparent 40%, rgba(15, 23, 42, 0.07) 100%),
+    radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34, 211, 238, 0.18) 0%, transparent 62%),
+    radial-gradient(ellipse 60% 60% at 100% 100%, rgba(244, 63, 94, 0.12) 0%, transparent 62%),
+    #fbfdff;
+}
+
+.trade-card-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+
+@media (min-width: 760px) {
+  .trade-card-body { grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); }
+}
+
+.trade-card-total {
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+.trade-card-sym { display: flex; align-items: center; gap: 10px; }
+
+.trade-card-sym b {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.trade-card-dir {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.trade-card-long { color: #34d399; background: rgba(16, 185, 129, 0.14); border: 1px solid rgba(16, 185, 129, 0.35); }
+.trade-card-short { color: #fb7185; background: rgba(244, 63, 94, 0.14); border: 1px solid rgba(244, 63, 94, 0.35); }
+.light-theme .trade-card-long { color: #047857; }
+.light-theme .trade-card-short { color: #be123c; }
+
+.trade-card-note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.72);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.trade-card-note::before { content: '„'; }
+.trade-card-note::after { content: '“'; }
+.light-theme .trade-card-note { color: rgba(15, 23, 42, 0.72); }
+
+.trade-card-result { margin-top: auto; }
+.trade-card-big { font-size: 60px; }
+
+.trade-card-meta {
+  margin-top: 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.light-theme .trade-card-meta { color: rgba(15, 23, 42, 0.6); }
+
+/* Graf je vidět celý (contain) — snímky z kopírky jsou skoro čtvercové
+   a `cover` by z nich nechal jen pruh kolem ceny. Volné místo po stranách
+   vyplní rozmazaná kopie téhož snímku, takže nevzniknou prázdné pruhy. */
+.trade-card-media {
+  min-width: 0;
+  min-height: 300px;
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Snímek grafu má poměr 16:9 — v nízkém širokém panelu by ho `cover`
+   ořízl na pruh kolem ceny. Levý panel se výšce přizpůsobí (řádek mřížky). */
+.trade-card-media-shot { padding: 8px; aspect-ratio: 16 / 9; min-height: 0; }
+
+.trade-card-shot {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #0b0f19;
+}
+
+.light-theme .trade-card-shot { background: #fff; border-color: rgba(15, 23, 42, 0.08); }
+
+.trade-card-shot img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.trade-card-shot-img { object-fit: contain; }
+
+.trade-card-shot-fill {
+  object-fit: cover;
+  filter: blur(18px) saturate(1.2);
+  transform: scale(1.15);
+  opacity: 0.55;
+}
+
+.trade-card-shot-zoom { cursor: zoom-in; }
+
+.trade-card-cap {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  gap: 6px;
+}
+
+.trade-card-cap span {
+  padding: 4px 8px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: rgba(2, 6, 23, 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.trade-card-zoom-hint {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: rgba(2, 6, 23, 0.6);
+  opacity: 0;
+  transition: opacity 0.16s;
+}
+
+.trade-card-shot-zoom:hover .trade-card-zoom-hint { opacity: 1; }
+
+/* Přepínač snímků (ruční screenshot / vstup / výstup z kopírky). Jen v appce. */
+.trade-card-imgnav {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  color: #fff;
+  background: rgba(2, 6, 23, 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  cursor: default;
+}
+
+.trade-card-imgnav span {
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.trade-card-imgnav button {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.trade-card-imgnav button:hover { color: #fff; background: rgba(255, 255, 255, 0.14); }
+
+/* Cenová dráha: čáry v SVG (natažené na panel), popisky v HTML, aby se
+   písmo nedeformovalo s poměrem stran. */
+.trade-card-path {
+  position: relative;
+  flex: 1;
+  min-height: 150px;
+  margin: 6px 0;
+}
+
+.trade-card-path svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.trade-card-path-line { stroke-width: 1.5; }
+.trade-card-path-line.trade-card-path-tp { stroke: #34d399; stroke-dasharray: 5 5; }
+.trade-card-path-line.trade-card-path-sl { stroke: #fb7185; stroke-dasharray: 5 5; }
+.trade-card-path-line.trade-card-path-entry { stroke: rgba(255, 255, 255, 0.7); }
+.trade-card-path-line.trade-card-path-exit { stroke: currentColor; }
+.trade-card-path-run { fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; }
+.trade-card-path-fill { fill: currentColor; opacity: 0.16; }
+.trade-card-path-win { color: #34d399; }
+.trade-card-path-loss { color: #fb7185; }
+.trade-card-path-flat { color: rgba(255, 255, 255, 0.6); }
+
+.trade-card-path-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 999px;
+}
+
+.trade-card-path-dot-entry { background: #fff; }
+.trade-card-path-dot-exit { background: currentColor; box-shadow: 0 0 0 2px #000; }
+
+.trade-card-path-label {
+  position: absolute;
+  left: 67%;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  transform: translateY(-50%);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.trade-card-path-label b { font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; font-size: 10px; }
+.trade-card-path-label span { color: rgba(255, 255, 255, 0.75); }
+.trade-card-path-label.trade-card-path-tp b { color: #34d399; }
+.trade-card-path-label.trade-card-path-sl b { color: #fb7185; }
+.trade-card-path-label.trade-card-path-entry b { color: rgba(255, 255, 255, 0.85); }
+.trade-card-path-label.trade-card-path-exit b { color: currentColor; }
+
+.light-theme .trade-card-path-line.trade-card-path-tp { stroke: #059669; }
+.light-theme .trade-card-path-line.trade-card-path-sl { stroke: #e11d48; }
+.light-theme .trade-card-path-line.trade-card-path-entry { stroke: rgba(15, 23, 42, 0.6); }
+.light-theme .trade-card-path-win { color: #059669; }
+.light-theme .trade-card-path-loss { color: #e11d48; }
+.light-theme .trade-card-path-flat { color: rgba(15, 23, 42, 0.55); }
+.light-theme .trade-card-path-dot-entry { background: #0f172a; }
+.light-theme .trade-card-path-dot-exit { box-shadow: 0 0 0 2px #fff; }
+.light-theme .trade-card-path-label span { color: rgba(15, 23, 42, 0.7); }
+.light-theme .trade-card-path-label.trade-card-path-tp b { color: #059669; }
+.light-theme .trade-card-path-label.trade-card-path-sl b { color: #e11d48; }
+.light-theme .trade-card-path-label.trade-card-path-entry b { color: rgba(15, 23, 42, 0.8); }
+
+.trade-card-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.trade-card-empty b {
+  font-size: 54px;
+  font-weight: 200;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.16);
+}
+
+.light-theme .trade-card-empty { color: rgba(15, 23, 42, 0.45); }
+.light-theme .trade-card-empty b { color: rgba(15, 23, 42, 0.14); }
+
+.trade-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.light-theme .trade-card-foot { color: rgba(15, 23, 42, 0.45); }
+
+.trade-card-qr { display: inline-flex; align-items: center; gap: 10px; }
+
+.trade-card-qr-code {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.trade-card-qr-code svg { display: block; }
+
+/* Export: pevné plátno 1200×630, karta uprostřed ve stejném rozložení jako
+   na širokém displeji bez ohledu na šířku okna, ze kterého se sdílí. */
+.trade-card-export {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 26px 50px;
+}
+
+.trade-card-export > .trade-card { width: 1100px; }
+.trade-card-capture .trade-card-body { grid-template-columns: 370px minmax(0, 1fr); height: 392px; }
+.trade-card-capture .trade-card-media { min-height: 0; aspect-ratio: auto; }
+.trade-card-capture .live-day-card { box-shadow: 0 30px 60px -34px rgba(0, 0, 0, 0.9); }
+
+/* Ovládání sdílení v bublině: přepínače vypadají jako řádky bubliny. */
+.trade-card-sharepop { min-width: 210px; }
+
+.trade-card-sharepop-sep {
+  height: 1px;
+  margin: 2px 0;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.light-theme .trade-card-sharepop-sep { background: rgba(15, 23, 42, 0.08); }
+
+.trade-card-toggle { font-weight: 700; }
+.live-day-sharepop button:disabled { opacity: 0.55; cursor: default; }
+
+.trade-card-switch {
+  position: relative;
+  flex: none;
+  width: 24px;
+  height: 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  transition: background 0.15s;
+}
+
+.trade-card-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #fff;
+  transition: transform 0.15s;
+}
+
+.trade-card-switch-on { background: #10b981; }
+.trade-card-switch-on::after { transform: translateX(10px); }
+.light-theme .trade-card-switch { background: rgba(15, 23, 42, 0.2); }
+.light-theme .trade-card-switch-on { background: #10b981; }
+
+@media (max-width: 759px) {
+  .trade-card-media { min-height: 0; }
+  .trade-card-path { min-height: 170px; }
+}
+
+@media (max-width: 480px) {
+  .trade-card-big { font-size: 44px; }
+  .trade-card-total { padding: 18px; gap: 14px; }
+  .trade-card-foot { font-size: 10px; }
+  /* Ceny úrovní by se do úzkého panelu nevešly — vstup a výstup stojí
+     hned nad ním v řádku čísel, u dráhy zůstanou jen názvy. */
+  .trade-card-path-label { justify-content: flex-start; }
+  .trade-card-path-label span { display: none; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
    Karta dne → prosvítající deska (jen veřejná sdílená stránka)
 
    Za kartou tam běží graf svíček, který byl dosud úplně zakrytý. Deska se
@@ -3898,8 +4304,32 @@ html.aurora:not(.light-theme) .floating-glass-header.header-clear {
   -webkit-backdrop-filter: blur(18px) saturate(140%);
   backdrop-filter: blur(18px) saturate(140%);
 }
-html.aurora.aurora.light-theme { --modal-bg: rgba(248, 250, 253, 0.95); --modal-sheen: rgba(255, 255, 255, 0.6); }
-html.aurora.aurora:not(.light-theme) { --modal-bg: rgba(13, 18, 36, 0.95); --modal-sheen: rgba(255, 255, 255, 0.05); }
+html.aurora.aurora.light-theme { --modal-bg: rgba(248, 250, 253, 0.95); --menu-bg: rgba(250, 251, 253, 0.985); --modal-sheen: rgba(255, 255, 255, 0.6); }
+html.aurora.aurora:not(.light-theme) { --modal-bg: rgba(13, 18, 36, 0.95); --menu-bg: rgba(15, 20, 38, 0.985); --modal-sheen: rgba(255, 255, 255, 0.05); }
+
+/* Plovoucí menu, popovery a tooltipy (absolute/fixed se stínem) stojí nad
+   obsahem — s 10% Aurora výplní karty pod nimi prosvítal text tabulky.
+   Dostanou plnou skleněnou výplň jako okna, jen ještě hustší — malé menu
+   leží přímo na textu a bez blur by čísla pod ním prosvítala. */
+html.aurora :is(.absolute, .fixed):is(.shadow-lg, .shadow-xl, .shadow-2xl):is([class*="bg-[var(--bg-card)]"], .bg-theme-card) {
+  background-color: var(--menu-bg);
+  background-image: linear-gradient(180deg, var(--modal-sheen, transparent) 0%, transparent 38%);
+  border-color: var(--glass-border, var(--border-subtle));
+}
+/* Ve světlém čiré sklo, ne mléčný papír: ~80 % bílé s leskem nahoře,
+   pod tím rozmazání a saturace pozadí (barvy Aurory prosvítají, text ne). */
+html.aurora.light-theme :is(.absolute, .fixed):is(.shadow-lg, .shadow-xl, .shadow-2xl):is([class*="bg-[var(--bg-card)]"], .bg-theme-card) {
+  background-color: rgba(255, 255, 255, 0.8);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0) 45%);
+  border-color: rgba(255, 255, 255, 0.9);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  backdrop-filter: blur(22px) saturate(180%);
+  box-shadow:
+    0 0 0 1px rgba(15, 23, 42, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 4px 10px -4px rgba(30, 41, 80, 0.08),
+    0 18px 40px -12px rgba(30, 41, 80, 0.18);
+}
 
 /* Listování důkazy výplat: obrázek odjede do strany, nový přijede z druhé. */
 .payout-slide { will-change: transform, opacity; }

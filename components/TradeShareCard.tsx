@@ -1,371 +1,261 @@
 /**
- * TradeShareCard — Production komponent pro generování shareable trade cards.
+ * TradeShareCard — sdílecí karta obchodu ve stejné rodině jako Karta dne z LIVE:
+ * černé (ve světlém motivu bílé) sklo, běžící světla po okraji, náklon za
+ * myší/prstem a ovládání v pravém horním rohu, které se odhalí po najetí.
  *
- * Renderuje 1600×900 kartu s AlphaTrade brandingem, glass-morphism layoutem,
- * real trade daty + QR kódem na public trade URL.
- *
- * Použití:
- *   <TradeShareCard trade={trade} username="@filipkrejca" shareUrl="https://..." />
- *
- * Card má fixed dimensions (1600×900) takže `html-to-image` ji exportuje
- * v exact pixel perfect kvalitě bez ohledu na viewport.
+ * Stejná komponenta kreslí kartu v dialogu, na veřejné stránce /share/:id
+ * i do PNG — export ji vykreslí v `captureMode` (bez animací) do plátna
+ * 1200×630, což je poměr náhledů odkazů na X, Discordu i v iMessage.
  */
-import React from 'react';
-import { ArrowUpRight, ArrowDownRight, Target, Timer, Calendar, Image as ImageIcon } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ArrowDownRight, ArrowUpRight, ChevronLeft, ChevronRight, Maximize2 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import type { Trade } from '../types';
-import { formatRMultiple } from '../utils/formatPnL';
+import { reducedMotion, useCardTilt } from '../hooks/useCardTilt';
+import {
+    contractsLabel, exitReasonLabel, shareMoney, sharePrice, shareR, tradePricePath,
+    tradeShareHold, tradeShareR, tradeShareStamp, tradeShareWindow, type PricePath,
+} from '../lib/tradeShareCard';
 
-interface Props {
+const AT_LOGO = '/logos/at_logo_light_clean.png';
+
+export interface TradeShareCardProps {
     trade: Trade;
-    username?: string;
-    /** URL na uživatelův avatar — pokud chybí, vyrenderuje se gradient kruh s iniciálkou. */
-    avatarUrl?: string;
+    owner: { name: string; avatar?: string | null };
+    /** Odkaz pro QR v patičce. Bez něj se QR nekreslí (např. na samotné veřejné stránce). */
     shareUrl?: string;
-    /** Pokud true, ukáže "Scan for full detail" + QR. Default true. */
-    showQR?: boolean;
-    /** Pokud true a trade má poznámku, vyrenderuje ji jako kartu. Default false (soukromí). */
     showNotes?: boolean;
-    /** Klik na chart screenshot (např. otevři zoom). Když není, chart není klikací (PNG/export beze změny). */
+    /** Místo dolarů jen R — sdílení bez prozrazení velikosti účtu. */
+    hideAmount?: boolean;
+    /** Stabilní export: bez náklonu, dopočítávání čísla a vstupních animací. */
+    captureMode?: boolean;
+    /** Ovládání v pravém horním rohu (sdílení, zavření). Do exportu se nepředává. */
+    toolsSlot?: React.ReactNode;
     onScreenshotClick?: () => void;
+    /** Obrázek místo `trade.screenshot` — např. podepsaný snímek z kopírky. */
+    screenshotUrl?: string;
+    /** Přepínání mezi snímky obchodu přímo na kartě (jen v appce, ne v exportu). */
+    imageNav?: { label: string; index: number; total: number; onPrev: () => void; onNext: () => void };
 }
 
-/** Formátuje datum trade do "DD. MM. YYYY · HH:MM" */
-function formatTradeDate(trade: Trade): string {
-    try {
-        const d = new Date(trade.entryTime || trade.timestamp || trade.date);
-        if (isNaN(d.getTime())) return '—';
-        const date = d.toLocaleDateString('cs-CZ', { day: '2-digit', month: '2-digit', year: 'numeric' });
-        const time = d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
-        return `${date} · ${time}`;
-    } catch { return '—'; }
-}
+const initials = (name: string): string => {
+    const words = name.trim().split(/\s+/).filter(Boolean);
+    if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+    return name.trim().slice(0, 2).toUpperCase() || '?';
+};
 
-/** Formátuje hold time z duration string nebo durationMinutes */
-function formatHoldTime(trade: Trade): string {
-    if (trade.duration) return trade.duration;
-    if (trade.durationMinutes) {
-        const m = Math.round(Number(trade.durationMinutes));
-        if (m < 60) return `${m}m`;
-        return `${Math.floor(m / 60)}h ${m % 60}m`;
-    }
-    return '—';
-}
+const toneClass = (value: number): string =>
+    value > 0 ? 'live-day-win' : value < 0 ? 'live-day-loss' : 'live-day-flat';
 
-/** R-multiple z pnl / riskAmount */
-function calcR(trade: Trade): number | null {
-    if (!trade.riskAmount || trade.riskAmount <= 0) return null;
-    return trade.pnl / trade.riskAmount;
-}
+const LEVEL_LABEL: Record<string, string> = { tp: 'TP', sl: 'SL', entry: 'Vstup', exit: 'Výstup' };
 
-const TradeShareCard: React.FC<Props> = ({ trade, username = '@trader', avatarUrl, shareUrl, showQR = true, showNotes = false, onScreenshotClick }) => {
-    const notes = (showNotes && trade.notes) ? String(trade.notes).trim() : '';
+/** SL / vstup / výstup / TP na svislé ose a dráha od vstupu k výstupu. */
+const TradePricePath: React.FC<{ path: PricePath; pnl: number }> = ({ path, pnl }) => {
+    const y = (p: number) => ((path.high - p) / (path.high - path.low)) * 100;
+    const yEntry = y(path.entry);
+    const yExit = y(path.exit);
+    const tone = pnl > 0 ? 'win' : pnl < 0 ? 'loss' : 'flat';
+    const bend = pnl >= 0 ? 6 : -6;
+    return (
+        <div className={`trade-card-path trade-card-path-${tone}`}>
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
+                <rect x="6" y={Math.min(yEntry, yExit)} width="56" height={Math.max(0.6, Math.abs(yExit - yEntry))} className="trade-card-path-fill" />
+                {path.levels.map(level => (
+                    <line
+                        key={level.kind}
+                        x1="0" x2="64" y1={y(level.price)} y2={y(level.price)}
+                        className={`trade-card-path-line trade-card-path-${level.kind}`}
+                        vectorEffect="non-scaling-stroke"
+                    />
+                ))}
+                <path
+                    d={`M6 ${yEntry} C 26 ${yEntry + bend}, 40 ${yExit - bend}, 62 ${yExit}`}
+                    className="trade-card-path-run"
+                    vectorEffect="non-scaling-stroke"
+                />
+            </svg>
+            <span className="trade-card-path-dot trade-card-path-dot-entry" style={{ left: '6%', top: `${yEntry}%` }} />
+            <span className="trade-card-path-dot trade-card-path-dot-exit" style={{ left: '62%', top: `${yExit}%` }} />
+            {path.levels.map(level => (
+                <span key={level.kind} className={`trade-card-path-label trade-card-path-${level.kind}`} style={{ top: `${y(level.price)}%` }}>
+                    <b>{level.kind === 'exit' || level.price !== path.exit ? LEVEL_LABEL[level.kind] : `${LEVEL_LABEL[level.kind]} · výstup`}</b>
+                    <span>{sharePrice(level.price)}</span>
+                </span>
+            ))}
+        </div>
+    );
+};
+
+const TradeShareCard: React.FC<TradeShareCardProps> = ({
+    trade, owner, shareUrl, showNotes = false, hideAmount = false, captureMode = false, toolsSlot, onScreenshotClick, screenshotUrl, imageNav,
+}) => {
+    const wrapRef = useRef<HTMLDivElement>(null);
+    const cardRef = useRef<HTMLDivElement>(null);
+    useCardTilt(wrapRef, cardRef, captureMode);
+
     const pnl = Number(trade.pnl || 0);
-    const isWin = pnl > 0;
+    const r = tradeShareR(trade);
     const isLong = String(trade.direction || '').toLowerCase() === 'long';
-    const r = calcR(trade);
-    const accentColor = isWin ? '#22c55e' : '#f87171';
-    const directionColor = isLong ? '#22c55e' : '#f87171';
+    const notes = showNotes && trade.notes ? String(trade.notes).trim() : '';
+    const screenshot = screenshotUrl || trade.screenshot || trade.screenshots?.[0] || '';
+    const path = screenshot ? null : tradePricePath(trade);
+    const timeWindow = tradeShareWindow(trade);
+    const contracts = Number(trade.positionSize);
+    const reason = exitReasonLabel(trade.exitReason);
+    // Skrytá částka: hlavní číslo je R. Bez R by nezbylo nic — pak jen směr výsledku.
+    const headline = hideAmount ? (r != null ? shareR(r) : pnl > 0 ? 'Zisk' : pnl < 0 ? 'Ztráta' : 'Break-even') : shareMoney(pnl);
+    const meta = [
+        !hideAmount && r != null ? shareR(r) : null,
+        Number.isFinite(contracts) && contracts > 0 ? contractsLabel(contracts) : null,
+        reason,
+    ].filter(Boolean) as string[];
 
-    const htfTags = (trade.htfConfluence || []).slice(0, 3);
-    const ltfTags = (trade.ltfConfluence || []).slice(0, 4);
-
-    // Get screenshot from trade
-    const screenshot = trade.screenshot || (trade.screenshots && trade.screenshots[0]);
+    // Číslo se dopočítá jako na Kartě dne. Text (R, „Zisk“) se nedopočítává.
+    const target = hideAmount ? null : pnl;
+    const [shown, setShown] = useState<number | null>(() => (target == null || captureMode || reducedMotion() ? target : 0));
+    useEffect(() => {
+        if (target == null || captureMode || reducedMotion()) { setShown(target); return; }
+        const start = performance.now();
+        let frame = 0;
+        const tick = (now: number) => {
+            const progress = Math.min(1, (now - start) / 850);
+            setShown(target * (1 - Math.pow(1 - progress, 3)));
+            if (progress < 1) frame = requestAnimationFrame(tick);
+        };
+        frame = requestAnimationFrame(tick);
+        return () => cancelAnimationFrame(frame);
+    }, [captureMode, target]);
 
     return (
         <div
-            id="trade-share-card"
-            style={{
-                width: 1600,
-                height: 900,
-                fontFamily: '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
-                background: 'radial-gradient(ellipse at top left, rgba(34,211,238,0.08) 0%, transparent 50%), radial-gradient(ellipse at bottom right, rgba(16,185,129,0.06) 0%, transparent 50%), linear-gradient(180deg, #0a0e1a 0%, #050810 100%)',
-                color: 'white',
-                padding: 56,
-                position: 'relative',
-                overflow: 'hidden',
-                display: 'flex',
-                flexDirection: 'column',
-            }}
+            ref={wrapRef}
+            className={`live-day-tilt trade-card${captureMode ? ' live-day-capture trade-card-capture' : ''}${pnl < 0 ? ' trade-card-loss' : ''}`}
+            data-testid="trade-share-card"
         >
-            {/* Grid pattern */}
-            <div style={{
-                position: 'absolute', inset: 0,
-                backgroundImage: 'linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px)',
-                backgroundSize: '48px 48px',
-                pointerEvents: 'none',
-            }} />
-            {/* Cyan aurora glow */}
-            <div style={{
-                position: 'absolute',
-                top: -100, left: '50%', transform: 'translateX(-50%)',
-                width: 800, height: 300,
-                background: 'radial-gradient(ellipse, rgba(34,211,238,0.12) 0%, transparent 70%)',
-                pointerEvents: 'none',
-                filter: 'blur(40px)',
-            }} />
+            <div className="live-day-card" ref={cardRef}>
+                <div className="live-day-inner">
+                    <span className="live-day-aurora" aria-hidden />
+                    <span className="live-day-sheen" aria-hidden />
+                    <span className="live-day-edge live-day-edge-t" aria-hidden />
+                    <span className="live-day-edge live-day-edge-b" aria-hidden />
+                    <span className="live-day-edge live-day-edge-r" aria-hidden />
+                    <span className="live-day-edge live-day-edge-l" aria-hidden />
 
-            {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 40, position: 'relative', zIndex: 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-                    <img
-                        src="/logos/at_logo_light_clean.png"
-                        alt="Alpha Trade"
-                        crossOrigin="anonymous"
-                        style={{
-                            width: 64, height: 64,
-                            objectFit: 'contain',
-                            filter: 'drop-shadow(0 0 20px rgba(34,211,238,0.4))',
-                        }}
-                    />
-                    <h1 style={{
-                        fontSize: 28, fontWeight: 200, letterSpacing: '0.5em',
-                        textTransform: 'uppercase', margin: 0, lineHeight: 1,
-                    }}>
-                        ALPHA <span style={{ color: '#22d3ee', fontWeight: 400 }}>TRADE</span>
-                    </h1>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                    <span style={{ fontSize: 11, fontWeight: 800, color: 'rgba(34,211,238,0.7)', textTransform: 'uppercase', letterSpacing: '0.4em' }}>EXECUTED</span>
-                    <span style={{ fontSize: 18, fontWeight: 500, color: 'rgba(255,255,255,0.85)', fontFamily: 'ui-monospace, monospace', marginTop: 4 }}>
-                        {formatTradeDate(trade)}
-                    </span>
-                </div>
-            </div>
+                    <div className="live-day-head">
+                        <div className="live-day-brand">
+                            <img src={AT_LOGO} alt="" crossOrigin="anonymous" />
+                            <span className="live-day-wordmark">Alpha <i>Trade</i></span>
+                        </div>
+                        <div className="live-day-stamp">
+                            <div className="live-day-owner">
+                                {owner.avatar
+                                    ? <img className="live-day-avatar-img" src={owner.avatar} alt="" crossOrigin="anonymous" />
+                                    : <span className="live-day-avatar">{initials(owner.name)}</span>}
+                                <span>
+                                    <span className="live-day-who">{owner.name}</span>
+                                    <span className="live-day-date">{tradeShareStamp(trade)}</span>
+                                </span>
+                            </div>
+                            {toolsSlot ? <div className="live-day-tools"><span>{toolsSlot}</span></div> : null}
+                        </div>
+                    </div>
 
-            {/* Main grid */}
-            <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '380px 1fr', gap: 24, position: 'relative', zIndex: 1, minHeight: 0 }}>
-                {/* LEFT: stat cards */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-                    {/* Instrument */}
-                    <div style={{
-                        padding: 28, borderRadius: 24,
-                        background: 'rgba(255,255,255,0.025)',
-                        backdropFilter: 'blur(20px)',
-                        border: '1px solid rgba(34,211,238,0.12)',
-                    }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: 10 }}>Instrument</div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                            <span style={{ fontSize: 48, fontWeight: 500, letterSpacing: '-0.03em' }}>{trade.instrument || '—'}</span>
-                            <div style={{
-                                padding: '6px 14px', borderRadius: 999,
-                                background: isLong ? 'rgba(34,197,94,0.2)' : 'rgba(248,113,113,0.2)',
-                                border: `1px solid ${directionColor}66`,
-                                color: directionColor,
-                                fontSize: 14, fontWeight: 800,
-                                display: 'flex', alignItems: 'center', gap: 6,
-                                letterSpacing: '0.1em',
-                            }}>
-                                {isLong ? <ArrowUpRight size={14} strokeWidth={3} /> : <ArrowDownRight size={14} strokeWidth={3} />}
-                                {(trade.direction || '').toUpperCase()}
+                    <div className="trade-card-body">
+                        <div className="live-day-glass trade-card-total">
+                            <div className="trade-card-sym">
+                                <b>{trade.instrument || trade.symbol || '—'}</b>
+                                <span className={`trade-card-dir ${isLong ? 'trade-card-long' : 'trade-card-short'}`}>
+                                    {isLong ? <ArrowUpRight size={12} strokeWidth={3} /> : <ArrowDownRight size={12} strokeWidth={3} />}
+                                    {isLong ? 'Long' : 'Short'}
+                                </span>
+                            </div>
+                            {notes ? <p className="trade-card-note">{notes}</p> : null}
+                            <div className="trade-card-result">
+                                <div className="live-day-k">{hideAmount ? 'Výsledek' : 'P&L'}</div>
+                                <div className={`live-day-big trade-card-big ${toneClass(pnl)}`}>
+                                    {shown == null ? headline : shareMoney(shown)}
+                                </div>
+                                {meta.length ? <div className="trade-card-meta">{meta.join(' · ')}</div> : null}
+                            </div>
+                            <div className="live-day-split">
+                                <div>
+                                    <div className="live-day-kk">Vstup</div>
+                                    <div className="live-day-vv">{sharePrice(trade.entryPrice)}</div>
+                                </div>
+                                <div>
+                                    <div className="live-day-kk">Výstup</div>
+                                    <div className="live-day-vv">{sharePrice(trade.exitPrice)}</div>
+                                </div>
+                                <div>
+                                    <div className="live-day-kk">Držení</div>
+                                    <div className="live-day-vv">{tradeShareHold(trade)}</div>
+                                </div>
                             </div>
                         </div>
-                    </div>
 
-                    {/* PnL */}
-                    <div style={{
-                        padding: 28, borderRadius: 24,
-                        background: 'rgba(255,255,255,0.025)',
-                        backdropFilter: 'blur(20px)',
-                        border: '1px solid rgba(34,211,238,0.12)',
-                    }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: 10 }}>Profit / Loss</div>
-                        <div style={{
-                            fontSize: 64, fontWeight: 500,
-                            color: accentColor,
-                            fontFamily: 'ui-monospace, monospace',
-                            letterSpacing: '-0.03em', lineHeight: 1,
-                        }}>
-                            {pnl >= 0 ? '+' : ''}${Math.abs(Math.round(pnl)).toLocaleString()}
-                        </div>
-                    </div>
-
-                    {/* R/R */}
-                    <div style={{
-                        padding: 28, borderRadius: 24,
-                        background: 'rgba(255,255,255,0.025)',
-                        backdropFilter: 'blur(20px)',
-                        border: '1px solid rgba(34,211,238,0.12)',
-                    }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: 10 }}>Reward / Risk</div>
-                        <div style={{
-                            fontSize: 44, fontWeight: 500,
-                            color: r != null && r >= 0 ? '#22c55e' : '#f87171',
-                            fontFamily: 'monospace',
-                        }}>
-                            {r != null ? `${r >= 0 ? '+' : ''}${formatRMultiple(r, 1)}R` : '—'}
-                        </div>
-                    </div>
-
-                    {/* Notes — jen když showNotes && trade.notes (default skryto, soukromí).
-                        overflow:hidden + clamp → nikdy nepřeteče do patičky, i u dlouhé poznámky. */}
-                    {notes && (
-                        <div style={{
-                            flex: 1, minHeight: 0,
-                            padding: 22, borderRadius: 24,
-                            background: 'rgba(255,255,255,0.025)',
-                            backdropFilter: 'blur(20px)',
-                            border: '1px solid rgba(34,211,238,0.12)',
-                            display: 'flex', flexDirection: 'column',
-                            overflow: 'hidden',
-                        }}>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.2em', marginBottom: 8, flexShrink: 0 }}>Poznámka</div>
-                            <div style={{
-                                fontSize: 15, fontWeight: 400, lineHeight: 1.45,
-                                color: 'rgba(255,255,255,0.82)',
-                                overflow: 'hidden',
-                                display: '-webkit-box',
-                                WebkitLineClamp: 4,
-                                WebkitBoxOrient: 'vertical',
-                                minHeight: 0,
-                            }}>{notes}</div>
-                        </div>
-                    )}
-                </div>
-
-                {/* RIGHT: confluence + chart + stats */}
-                <div style={{
-                    padding: 32, borderRadius: 24,
-                    background: 'rgba(255,255,255,0.025)',
-                    backdropFilter: 'blur(20px)',
-                    border: '1px solid rgba(34,211,238,0.12)',
-                    display: 'flex', flexDirection: 'column',
-                    minHeight: 0,
-                }}>
-                    {/* Confluence tags */}
-                    {(htfTags.length > 0 || ltfTags.length > 0) && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
-                            {htfTags.length > 0 && (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                                    <span style={{ fontSize: 10, fontWeight: 800, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.25em', minWidth: 30 }}>HTF</span>
-                                    {htfTags.map(tag => (
-                                        <span key={tag} style={{
-                                            padding: '5px 11px', borderRadius: 8,
-                                            background: 'rgba(34,211,238,0.12)',
-                                            border: '1px solid rgba(34,211,238,0.3)',
-                                            color: '#67e8f9',
-                                            fontSize: 12, fontWeight: 800,
-                                            textTransform: 'uppercase', letterSpacing: '0.08em',
-                                        }}>{tag}</span>
-                                    ))}
+                        <div className={`live-day-glass trade-card-media${screenshot ? ' trade-card-media-shot' : ''}`}>
+                            {screenshot ? (
+                                <div
+                                    className={`trade-card-shot${onScreenshotClick && !captureMode ? ' trade-card-shot-zoom' : ''}`}
+                                    onClick={captureMode ? undefined : onScreenshotClick}
+                                    role={onScreenshotClick && !captureMode ? 'button' : undefined}
+                                    title={onScreenshotClick && !captureMode ? 'Zvětšit graf' : undefined}
+                                >
+                                    <img src={screenshot} alt="" aria-hidden crossOrigin="anonymous" className="trade-card-shot-fill" />
+                                    <img src={screenshot} alt="Graf obchodu" crossOrigin="anonymous" className="trade-card-shot-img" />
+                                    {trade.session || timeWindow ? (
+                                        <div className="trade-card-cap">
+                                            {trade.session ? <span>{trade.session}</span> : null}
+                                            {timeWindow ? <span>{timeWindow}</span> : null}
+                                        </div>
+                                    ) : null}
+                                    {onScreenshotClick && !captureMode ? <span className="trade-card-zoom-hint"><Maximize2 size={13} /></span> : null}
+                                    {imageNav && imageNav.total > 1 && !captureMode ? (
+                                        <div className="trade-card-imgnav" onClick={event => event.stopPropagation()}>
+                                            <button type="button" onClick={imageNav.onPrev} aria-label="Předchozí snímek"><ChevronLeft size={14} /></button>
+                                            <span>{imageNav.label} · {imageNav.index + 1}/{imageNav.total}</span>
+                                            <button type="button" onClick={imageNav.onNext} aria-label="Další snímek"><ChevronRight size={14} /></button>
+                                        </div>
+                                    ) : null}
                                 </div>
-                            )}
-                            {ltfTags.length > 0 && (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                                    <span style={{ fontSize: 10, fontWeight: 800, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.25em', minWidth: 30 }}>LTF</span>
-                                    {ltfTags.map(tag => (
-                                        <span key={tag} style={{
-                                            padding: '5px 11px', borderRadius: 8,
-                                            background: 'rgba(245,158,11,0.18)',
-                                            border: '1px solid rgba(245,158,11,0.3)',
-                                            color: '#fcd34d',
-                                            fontSize: 12, fontWeight: 800,
-                                            textTransform: 'uppercase', letterSpacing: '0.08em',
-                                        }}>{tag}</span>
-                                    ))}
+                            ) : path ? (
+                                <>
+                                    <div className="live-day-k">Cenová dráha</div>
+                                    <TradePricePath path={path} pnl={pnl} />
+                                    <div className="live-day-split">
+                                        <div>
+                                            <div className="live-day-kk">Čas</div>
+                                            <div className="live-day-vv">{timeWindow ?? '—'}</div>
+                                        </div>
+                                        <div>
+                                            <div className="live-day-kk">Držení</div>
+                                            <div className="live-day-vv">{tradeShareHold(trade)}</div>
+                                        </div>
+                                        <div>
+                                            <div className="live-day-kk">Session</div>
+                                            <div className="live-day-vv">{trade.session || '—'}</div>
+                                        </div>
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="trade-card-empty">
+                                    <b>{trade.instrument || trade.symbol || '—'}</b>
+                                    <span>{timeWindow ?? tradeShareStamp(trade)}</span>
                                 </div>
                             )}
                         </div>
-                    )}
-
-                    {/* Chart / Screenshot */}
-                    <div style={{
-                        flex: 1,
-                        borderRadius: 16,
-                        background: 'rgba(0,0,0,0.2)',
-                        border: '1px solid rgba(255,255,255,0.06)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        overflow: 'hidden',
-                        position: 'relative',
-                        minHeight: 0,
-                    }}>
-                        {screenshot ? (
-                            <img
-                                src={screenshot}
-                                crossOrigin="anonymous"
-                                onClick={onScreenshotClick}
-                                style={{ width: '100%', height: '100%', objectFit: 'contain', cursor: onScreenshotClick ? 'zoom-in' : 'default' }}
-                                alt="Trade chart"
-                            />
-                        ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, color: 'rgba(255,255,255,0.3)' }}>
-                                <ImageIcon size={64} strokeWidth={1.5} />
-                                <span style={{ fontSize: 14, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.2em' }}>No screenshot</span>
-                            </div>
-                        )}
                     </div>
 
-                    {/* Bottom stats row */}
-                    <div style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(4, 1fr)',
-                        gap: 12,
-                        marginTop: 20,
-                    }}>
-                        {[
-                            { label: 'Entry', value: trade.entryPrice ? Number(trade.entryPrice).toLocaleString() : '—', icon: <Target size={12} /> },
-                            { label: 'Exit', value: trade.exitPrice ? Number(trade.exitPrice).toLocaleString() : '—', icon: isLong ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} /> },
-                            { label: 'Hold', value: formatHoldTime(trade), icon: <Timer size={12} /> },
-                            { label: 'Session', value: trade.session || '—', icon: <Calendar size={12} /> },
-                        ].map(s => (
-                            <div key={s.label} style={{
-                                padding: '12px 14px',
-                                borderRadius: 12,
-                                background: 'rgba(0,0,0,0.2)',
-                                border: '1px solid rgba(255,255,255,0.05)',
-                            }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'rgba(255,255,255,0.5)', marginBottom: 4 }}>
-                                    {s.icon}
-                                    <span style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.2em' }}>{s.label}</span>
-                                </div>
-                                <div style={{ fontSize: 18, fontWeight: 500, color: 'white', fontFamily: 'monospace' }}>{s.value}</div>
-                            </div>
-                        ))}
+                    <div className="trade-card-foot">
+                        <span>Obchodní deník · alphatrade.app</span>
+                        {shareUrl ? (
+                            <span className="trade-card-qr">
+                                <span>Celý obchod</span>
+                                <span className="trade-card-qr-code"><QRCodeSVG value={shareUrl} size={34} level="M" /></span>
+                            </span>
+                        ) : null}
                     </div>
                 </div>
-            </div>
-
-            {/* Footer */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 32, position: 'relative', zIndex: 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                    {avatarUrl ? (
-                        <img
-                            src={avatarUrl}
-                            crossOrigin="anonymous"
-                            alt={username}
-                            style={{
-                                width: 48, height: 48,
-                                borderRadius: 999,
-                                objectFit: 'cover',
-                                border: '2px solid rgba(34,211,238,0.3)',
-                            }}
-                        />
-                    ) : (
-                        <div style={{
-                            width: 48, height: 48,
-                            borderRadius: 999,
-                            background: 'linear-gradient(135deg, #8b5cf6, #ec4899)',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            fontSize: 22, fontWeight: 700,
-                        }}>{username.charAt(1)?.toUpperCase() || 'T'}</div>
-                    )}
-                    <div>
-                        <div style={{ fontSize: 20, fontWeight: 700 }}>{username}</div>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>Shared via AlphaTrade</div>
-                    </div>
-                </div>
-                {showQR && shareUrl && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                        <div style={{ textAlign: 'right' }}>
-                            <div style={{ fontSize: 14, fontWeight: 700 }}>Scan for full detail</div>
-                            <div style={{ fontSize: 10, fontWeight: 600, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.2em' }}>alphatrade.app</div>
-                        </div>
-                        <div style={{ padding: 6, background: 'white', borderRadius: 10 }}>
-                            <QRCodeSVG value={shareUrl} size={60} level="M" />
-                        </div>
-                    </div>
-                )}
             </div>
         </div>
     );

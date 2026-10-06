@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sdílení obchodu — návrhy</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --page:#eef2f7; --ink:#0f172a; --ink2:#475569; --ink3:#94a3b8; --line:rgba(15,23,42,.08);
+  --glass:rgba(255,255,255,.62); --glass-border:rgba(255,255,255,.75);
+  --win:#10b981; --loss:#f43f5e; --accent:#2563eb;
+  --modal-bg:rgba(248,250,253,.95); --sheen:rgba(255,255,255,.6);
+}
+* { box-sizing:border-box; }
+html, body { margin:0; height:100%; }
+body { font-family:Inter,-apple-system,system-ui,sans-serif; color:var(--ink); background:var(--page); overflow:hidden; }
+button { font:inherit; cursor:pointer; }
+
+/* ── pozadí appky (Hlubiny) + atrapa stránky ── */
+.bg { position:fixed; inset:0; background:
+  radial-gradient(ellipse 60% 50% at 10% 0%, rgba(34,211,238,.22), transparent 60%),
+  radial-gradient(ellipse 50% 50% at 95% 90%, rgba(16,185,129,.18), transparent 60%),
+  radial-gradient(ellipse 50% 60% at 70% 10%, rgba(99,102,241,.12), transparent 60%), #eef2f7; }
+.fake { position:fixed; inset:0; display:grid; grid-template-columns:64px 1fr; gap:16px; padding:16px; }
+.fake .rail, .fake .blk { background:var(--glass); border:1px solid var(--glass-border); border-radius:8px; }
+.fake .col { display:grid; gap:12px; align-content:start; }
+.fake .blk { height:120px; }
+
+/* ── přepínače návrhu (mimo okno) ── */
+.dev { position:fixed; top:12px; left:50%; transform:translateX(-50%); z-index:60; display:flex; gap:6px; flex-wrap:wrap; justify-content:center;
+  padding:6px; border-radius:10px; background:rgba(15,23,42,.86); color:#fff; font-size:11px; max-width:calc(100% - 24px); }
+.dev .g { display:flex; align-items:center; gap:3px; padding:0 4px; }
+.dev .g + .g { border-left:1px solid rgba(255,255,255,.14); }
+.dev b { font-weight:600; color:rgba(255,255,255,.5); margin-right:3px; }
+.dev button { border:0; background:transparent; color:rgba(255,255,255,.75); padding:5px 9px; border-radius:6px; font-weight:600; }
+.dev button.on { background:#fff; color:#0f172a; }
+
+/* ── okno sdílení ── */
+.scrim { position:fixed; inset:0; z-index:50; background:rgba(15,23,42,.22); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:64px 16px 16px; }
+.stage { position:relative; }
+.stage > .scale { position:absolute; top:0; left:0; transform-origin:top left; }
+.dock { display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:center; padding:8px; border-radius:10px;
+  background:var(--modal-bg); background-image:linear-gradient(180deg,var(--sheen),transparent 40%);
+  border:1px solid var(--glass-border); box-shadow:0 1px 0 rgba(255,255,255,.8) inset, 0 20px 50px -20px rgba(15,23,42,.35); }
+.dock .sep { width:1px; height:22px; background:var(--line); margin:0 2px; }
+.chip { display:inline-flex; align-items:center; gap:7px; height:32px; padding:0 11px; border-radius:7px; border:1px solid var(--line);
+  background:rgba(255,255,255,.7); color:var(--ink2); font-size:12.5px; font-weight:600; }
+.chip .sw { width:26px; height:15px; border-radius:99px; background:#cbd5e1; position:relative; transition:background .15s; }
+.chip .sw::after { content:''; position:absolute; top:2px; left:2px; width:11px; height:11px; border-radius:99px; background:#fff; transition:transform .15s; box-shadow:0 1px 2px rgba(0,0,0,.2); }
+.chip.on .sw { background:var(--win); }
+.chip.on .sw::after { transform:translateX(11px); }
+.seg { display:inline-flex; padding:2px; border-radius:7px; background:rgba(15,23,42,.05); border:1px solid var(--line); }
+.seg button { border:0; background:transparent; height:26px; padding:0 10px; border-radius:5px; font-size:12px; font-weight:600; color:var(--ink2); }
+.seg button.on { background:#fff; color:var(--ink); box-shadow:0 1px 2px rgba(15,23,42,.12); }
+.btn { display:inline-flex; align-items:center; gap:7px; height:32px; padding:0 13px; border-radius:7px; border:1px solid var(--line);
+  background:rgba(255,255,255,.75); color:var(--ink); font-size:12.5px; font-weight:600; }
+.btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; box-shadow:0 6px 16px -6px rgba(37,99,235,.6); }
+.btn svg, .chip svg { width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.x { position:fixed; top:58px; right:18px; z-index:55; width:36px; height:36px; border-radius:8px; border:1px solid var(--glass-border);
+  background:var(--modal-bg); display:grid; place-items:center; color:var(--ink2); }
+.x svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; }
+.toast { position:absolute; bottom:calc(100% + 8px); left:50%; transform:translateX(-50%); padding:6px 12px; border-radius:7px; font-size:12px; font-weight:600;
+  background:#ecfdf5; color:#047857; border:1px solid #a7f3d0; white-space:nowrap; opacity:0; transition:opacity .2s; pointer-events:none; }
+.toast.on { opacity:1; }
+.hint { font-size:11.5px; color:var(--ink2); text-align:center; max-width:640px; }
+
+/* ═════════════ KARTA 1200×630 — jazyk Karty dne ═════════════ */
+.tc { width:1200px; height:630px; font-family:Inter,-apple-system,system-ui,sans-serif; }
+.tc .card { position:relative; width:100%; height:100%; overflow:hidden; border-radius:22px; padding:1.5px;
+  background:linear-gradient(140deg, rgba(34,211,238,.34), rgba(255,255,255,.06) 38%, rgba(16,185,129,.26));
+  box-shadow:0 40px 90px -40px rgba(0,0,0,.9); }
+.tc.loss .card { background:linear-gradient(140deg, rgba(34,211,238,.3), rgba(255,255,255,.06) 40%, rgba(244,63,94,.28)); }
+.tc .inner { position:relative; width:100%; height:100%; overflow:hidden; border-radius:21px; padding:34px 40px; color:#fff; display:flex; flex-direction:column;
+  background:radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34,211,238,.14), transparent 60%),
+             radial-gradient(ellipse 60% 60% at 100% 100%, rgba(16,185,129,.11), transparent 60%), #000; }
+.tc.loss .inner { background:radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34,211,238,.12), transparent 60%),
+             radial-gradient(ellipse 60% 60% at 100% 100%, rgba(244,63,94,.1), transparent 60%), #000; }
+.tc .inner::before { content:''; position:absolute; inset:0; pointer-events:none;
+  background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);
+  background-size:48px 48px; -webkit-mask-image:radial-gradient(ellipse 80% 80% at 50% 0%,#000 40%,transparent 100%); mask-image:radial-gradient(ellipse 80% 80% at 50% 0%,#000 40%,transparent 100%); }
+.tc .aurora { position:absolute; top:-170px; left:50%; width:900px; height:340px; transform:translateX(-50%); filter:blur(50px); pointer-events:none;
+  background:radial-gradient(ellipse, rgba(34,211,238,.17), transparent 70%); }
+.tc .inner > *:not(.aurora):not(.edge):not(.full):not(.abs) { position:relative; z-index:2; }
+.tc .abs { z-index:2; }
+.tc .edge { position:absolute; pointer-events:none; z-index:3; }
+.tc .e-t { top:0; height:2px; width:55%; background:linear-gradient(90deg,transparent,rgba(255,255,255,.85),transparent); animation:rx 3.4s linear infinite; }
+.tc .e-r { right:0; width:2px; height:55%; background:linear-gradient(180deg,transparent,rgba(34,211,238,.9),transparent); animation:ry 3.4s linear infinite 1.7s; }
+@keyframes rx { from { left:-55%; } to { left:100%; } }
+@keyframes ry { from { top:-55%; } to { top:100%; } }
+
+.tc .head { display:flex; align-items:center; justify-content:space-between; margin-bottom:26px; }
+.tc .brand { display:flex; align-items:center; gap:15px; }
+.tc .brand img { width:48px; height:48px; object-fit:contain; filter:drop-shadow(0 0 22px rgba(45,212,191,.65)); }
+.tc .word { font-size:15px; font-weight:200; letter-spacing:.44em; text-transform:uppercase;
+  background:linear-gradient(180deg,#fff,rgba(255,255,255,.62)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+.tc .word i { font-style:normal; font-weight:500; color:#22d3ee; -webkit-text-fill-color:#22d3ee; }
+.tc .owner { display:flex; align-items:center; gap:12px; text-align:right; }
+.tc .ava { width:40px; height:40px; border-radius:12px; display:grid; place-items:center; font-size:14px; font-weight:800; color:#04121a;
+  background:linear-gradient(145deg,#67e8f9,#10b981); box-shadow:0 0 18px rgba(34,211,238,.28); order:2; }
+.tc .who { font-size:15px; font-weight:600; color:rgba(255,255,255,.92); }
+.tc .when { margin-top:3px; font-size:13px; font-weight:500; letter-spacing:.04em; color:rgba(255,255,255,.48); font-variant-numeric:tabular-nums; }
+
+.tc .glass { border-radius:18px; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.03); }
+.tc .k { font-size:11px; font-weight:700; letter-spacing:.2em; text-transform:uppercase; color:rgba(255,255,255,.5); }
+.tc .kk { font-size:10px; font-weight:800; letter-spacing:.15em; text-transform:uppercase; color:rgba(255,255,255,.4); }
+.tc .vv { margin-top:5px; font-size:19px; font-weight:500; font-variant-numeric:tabular-nums; color:rgba(255,255,255,.92); }
+.tc .sym { display:flex; align-items:center; gap:12px; }
+.tc .sym b { font-size:30px; font-weight:600; letter-spacing:-.02em; }
+.tc .dir { display:inline-flex; align-items:center; gap:5px; height:26px; padding:0 11px; border-radius:99px; font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+.tc .dir.long { color:#34d399; background:rgba(16,185,129,.14); border:1px solid rgba(16,185,129,.35); }
+.tc .dir.short { color:#fb7185; background:rgba(244,63,94,.14); border:1px solid rgba(244,63,94,.35); }
+.tc .dir svg { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
+.tc .big { font-size:84px; font-weight:300; line-height:1; letter-spacing:-.04em; font-variant-numeric:tabular-nums; }
+.tc .win { color:#34d399; } .tc .los { color:#fb7185; }
+.tc .rpill { display:inline-flex; align-items:center; gap:8px; height:32px; padding:0 13px; border-radius:9px; font-size:15px; font-weight:600; font-variant-numeric:tabular-nums;
+  background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1); color:rgba(255,255,255,.9); }
+.tc .rpill small { font-size:12px; font-weight:500; color:rgba(255,255,255,.45); }
+.tc .split { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; padding-top:18px; border-top:1px solid rgba(255,255,255,.07); }
+.tc .note { font-size:14px; line-height:1.5; color:rgba(255,255,255,.75); display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.tc .note::before { content:'„'; } .tc .note::after { content:'“'; }
+.tc .foot { margin-top:auto; padding-top:20px; display:flex; align-items:center; justify-content:space-between; font-size:12px; color:rgba(255,255,255,.4); letter-spacing:.04em; }
+.tc .foot .qr { display:flex; align-items:center; gap:10px; }
+.tc .foot .qr i { width:38px; height:38px; border-radius:6px; background:#fff; display:block; position:relative; }
+.tc .foot .qr i::after { content:''; position:absolute; inset:5px; background:
+  conic-gradient(#000 25%,#fff 0 50%,#000 0 75%,#fff 0) 0 0/8px 8px; opacity:.9; }
+
+/* screenshot rám */
+.tc .shot { position:relative; overflow:hidden; border-radius:14px; background:#0b0f19; border:1px solid rgba(255,255,255,.08); }
+.tc .shot img { width:100%; height:100%; object-fit:cover; display:block; }
+.tc .shot .cap { position:absolute; left:12px; bottom:12px; display:flex; gap:6px; }
+.tc .shot .cap span { padding:5px 9px; border-radius:7px; font-size:11.5px; font-weight:600; color:#fff; background:rgba(2,6,23,.72); border:1px solid rgba(255,255,255,.12); font-variant-numeric:tabular-nums; }
+
+/* cenová dráha (bez screenshotu) */
+.tc .path { position:relative; }
+.tc .path svg { width:100%; height:100%; display:block; overflow:visible; }
+
+/* ── A: sourozenec karty dne ── */
+.va .body { flex:1; min-height:0; display:grid; grid-template-columns:400px 1fr; gap:22px; }
+.va .total { padding:26px 28px; display:flex; flex-direction:column; gap:18px; }
+.va .total .big { margin-top:auto; }
+.va .right { padding:12px; display:flex; }
+.va .right > * { flex:1; }
+
+/* ── B: graf jako plakát ── */
+.vb .inner { padding:0; }
+.vb .full { position:absolute; inset:0; z-index:0; }
+.vb .full img { width:100%; height:100%; object-fit:cover; display:block; filter:saturate(1.05); }
+.vb .full::after { content:''; position:absolute; inset:0; background:
+  linear-gradient(90deg, rgba(0,0,0,.9) 0%, rgba(0,0,0,.55) 38%, rgba(0,0,0,.05) 70%),
+  linear-gradient(0deg, rgba(0,0,0,.75) 0%, transparent 40%), linear-gradient(180deg, rgba(0,0,0,.6) 0%, transparent 22%); }
+.vb .head { padding:30px 36px 0; }
+.vb .panel { position:absolute; left:36px; bottom:34px; width:430px; padding:26px 28px; border-radius:18px;
+  background:rgba(8,12,24,.72); border:1px solid rgba(255,255,255,.14); box-shadow:inset 0 1px 0 rgba(255,255,255,.08); display:flex; flex-direction:column; gap:16px; }
+.vb .chips { position:absolute; right:36px; bottom:34px; display:flex; gap:8px; }
+.vb .chips > div { padding:10px 14px; border-radius:12px; background:rgba(8,12,24,.72); border:1px solid rgba(255,255,255,.14); }
+.vb .foot { position:absolute; right:36px; top:96px; padding:0; }
+
+/* ── C: bez screenshotu, cenová dráha ── */
+.vc .body { flex:1; min-height:0; display:grid; grid-template-columns:1fr 520px; gap:22px; }
+.vc .lead { display:flex; flex-direction:column; justify-content:center; gap:20px; padding:0 6px; }
+.vc .lead .big { font-size:110px; }
+.vc .right { padding:22px 26px; display:flex; flex-direction:column; }
+
+/* ── světlý motiv karty (jako Karta dne ve světlém) ── */
+.tc.light .card { background:linear-gradient(140deg, rgba(8,145,178,.5), rgba(15,23,42,.1) 38%, rgba(16,185,129,.38)); box-shadow:0 40px 90px -40px rgba(15,23,42,.45); }
+.tc.light.loss .card { background:linear-gradient(140deg, rgba(8,145,178,.45), rgba(15,23,42,.1) 40%, rgba(244,63,94,.38)); }
+.tc.light .inner { color:#0f172a; background:
+  radial-gradient(ellipse 100% 100% at 50% 45%, transparent 40%, rgba(15,23,42,.07) 100%),
+  radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34,211,238,.2), transparent 62%),
+  radial-gradient(ellipse 60% 60% at 100% 100%, rgba(16,185,129,.16), transparent 62%), #fbfdff; }
+.tc.light.loss .inner { background:
+  radial-gradient(ellipse 100% 100% at 50% 45%, transparent 40%, rgba(15,23,42,.07) 100%),
+  radial-gradient(ellipse 70% 60% at 12% 0%, rgba(34,211,238,.18), transparent 62%),
+  radial-gradient(ellipse 60% 60% at 100% 100%, rgba(244,63,94,.12), transparent 62%), #fbfdff; }
+.tc.light .inner::before { background-image:none; }
+.tc.light .aurora { background:radial-gradient(ellipse, rgba(34,211,238,.3), transparent 70%); opacity:.7; }
+.tc.light .e-t { background:linear-gradient(90deg,transparent,rgba(6,182,212,.95),transparent); }
+.tc.light .e-r { background:linear-gradient(180deg,transparent,rgba(6,182,212,.95),transparent); }
+.tc.light .brand img { filter:saturate(3.2) brightness(.72) contrast(1.15) drop-shadow(0 3px 7px rgba(15,23,42,.28)); }
+.tc.light .word { background-image:linear-gradient(180deg,#0f172a,rgba(15,23,42,.6)); }
+.tc.light .word i { color:#0891b2; -webkit-text-fill-color:#0891b2; }
+.tc.light .who { color:#0f172a; } .tc.light .when { color:rgba(15,23,42,.52); }
+.tc.light .glass { border-color:rgba(15,23,42,.09); background:rgba(255,255,255,.66); }
+.tc.light .k { color:rgba(15,23,42,.55); } .tc.light .kk { color:rgba(15,23,42,.45); } .tc.light .vv { color:#0f172a; }
+.tc.light .split { border-top-color:rgba(15,23,42,.09); }
+.tc.light .rpill { background:rgba(15,23,42,.04); border-color:rgba(15,23,42,.1); color:#0f172a; }
+.tc.light .rpill small { color:rgba(15,23,42,.5); }
+.tc.light .win { color:#059669; } .tc.light .los { color:#e11d48; }
+.tc.light .dir.long { color:#047857; } .tc.light .dir.short { color:#be123c; }
+.tc.light .note { color:rgba(15,23,42,.72); }
+.tc.light .foot { color:rgba(15,23,42,.45); }
+.tc.light .shot { background:#fff; border-color:rgba(15,23,42,.08); }
+.tc.light.vb .full::after { background:
+  linear-gradient(90deg, rgba(251,253,255,.96) 0%, rgba(251,253,255,.7) 38%, rgba(251,253,255,0) 70%),
+  linear-gradient(0deg, rgba(251,253,255,.8) 0%, transparent 40%), linear-gradient(180deg, rgba(251,253,255,.75) 0%, transparent 22%); }
+.tc.light.vb .panel, .tc.light.vb .chips > div { background:rgba(255,255,255,.82); border-color:rgba(15,23,42,.08); box-shadow:0 10px 30px -14px rgba(15,23,42,.3); }
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<div class="fake"><div class="rail"></div><div class="col"><div class="blk" style="height:64px"></div><div class="blk"></div><div class="blk" style="height:300px"></div></div></div>
+
+<div class="dev">
+  <div class="g"><b>Varianta</b><button data-k="v" data-v="a" class="on">A · jako Karta dne</button><button data-k="v" data-v="b">B · graf jako plakát</button><button data-k="v" data-v="c">C · cenová dráha</button></div>
+  <div class="g"><b>Obchod</b><button data-k="res" data-v="win" class="on">Zisk</button><button data-k="res" data-v="loss">Ztráta</button></div>
+  <div class="g"><b>Screenshot</b><button data-k="shot" data-v="1" class="on">Má</button><button data-k="shot" data-v="0">Nemá</button></div>
+</div>
+
+<button class="x" title="Zavřít"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+
+<div class="scrim">
+  <div class="stage" id="stage"><div class="scale" id="scale"><div id="card"></div></div></div>
+  <div class="dock" style="position:relative">
+    <span class="toast" id="toast">Zkopírováno</span>
+    <div class="seg" title="Motiv obrázku"><button data-k="theme" data-v="dark" class="on">Tmavá</button><button data-k="theme" data-v="light">Světlá</button></div>
+    <button class="chip" data-t="amount" title="Bez dolarů — jen R násobek"><span class="sw"></span>Skrýt částku</button>
+    <button class="chip" data-t="note"><span class="sw"></span>Poznámka</button>
+    <span class="sep"></span>
+    <button class="btn" data-a="Odkaz zkopírován"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>Kopírovat odkaz</button>
+    <button class="btn" data-a="Obrázek zkopírován — vlož ⌘V"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>Kopírovat obrázek</button>
+    <button class="btn primary" data-a="Staženo"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>Stáhnout PNG</button>
+  </div>
+  <div class="hint" id="hint"></div>
+</div>
+
+<script>
+const S = { v:'a', res:'win', shot:'1', theme:'dark', amount:false, note:false };
+const T = {
+  win:  { pnl:291,  r:1.98, exit:'31 042,50', exitN:31042.5, reason:'TP', hold:'12m', out:'09:59' },
+  loss: { pnl:-147, r:-1.0, exit:'31 006,00', exitN:31006,   reason:'SL', hold:'7m',  out:'09:54' },
+};
+const base = { sym:'MNQ', dir:'long', entry:'31 018,25', entryN:31018.25, sl:31006, tp:31048, qty:6, session:'NY AM', date:'02. 10. 2026', time:'09:47', note:'Reakce na PDH + VWAP, vstup po sweepu londýnského low. Částečný výstup jsem neudělal, příště 50 % na 1R.' };
+const money = v => (v > 0 ? '+' : v < 0 ? '−' : '') + '$' + Math.abs(Math.round(v)).toLocaleString('cs-CZ');
+const rTxt = v => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(2).replace('.', ',') + 'R';
+const arrow = '<svg viewBox="0 0 24 24"><path d="M7 17 17 7M8 7h9v9"/></svg>';
+const LOGO = '/logos/at_logo_light_clean.png';
+
+function head() {
+  return `<div class="head">
+    <div class="brand"><img src="${LOGO}" alt=""><span class="word">Alpha <i>Trade</i></span></div>
+    <div class="owner"><span class="ava">F</span><div><div class="who">Filip</div><div class="when">${base.date} · ${base.time}</div></div></div>
+  </div>`;
+}
+function sym() { return `<div class="sym"><b>${base.sym}</b><span class="dir long">${arrow}Long</span></div>`; }
+function bigNum(t) {
+  const cls = t.pnl > 0 ? 'win' : 'los';
+  return S.amount ? `<div class="big ${cls}">${rTxt(t.r)}</div>` : `<div class="big ${cls}">${money(t.pnl)}</div>`;
+}
+function rLine(t) {
+  return S.amount
+    ? `<span class="rpill">${base.qty} kontraktů <small>· ${t.reason}</small></span>`
+    : `<span class="rpill">${rTxt(t.r)} <small>· ${base.qty} kontraktů · ${t.reason}</small></span>`;
+}
+function stats(t) {
+  return `<div class="split">
+    <div><div class="kk">Vstup</div><div class="vv">${base.entry}</div></div>
+    <div><div class="kk">Výstup</div><div class="vv">${t.exit}</div></div>
+    <div><div class="kk">Držení</div><div class="vv">${t.hold}</div></div>
+  </div>`;
+}
+function foot() {
+  return `<div class="foot"><span>Obchodní deník · alphatrade.app</span><span class="qr"><span>Celý obchod</span><i></i></span></div>`;
+}
+function shot(t) {
+  return `<div class="shot"><img src="share-shots/mnq.jpg" alt=""><div class="cap"><span>${base.session}</span><span>${base.time} → ${t.out}</span></div></div>`;
+}
+/* Cenová dráha: SL / vstup / výstup / TP na svislé ose, pruh od vstupu k výstupu. */
+function path(t, light) {
+  const lo = Math.min(base.sl, t.exitN) - 4, hi = Math.max(base.tp, t.exitN) + 4;
+  const H = 300, y = p => H - (p - lo) / (hi - lo) * H;
+  const ink = light ? 'rgba(15,23,42,' : 'rgba(255,255,255,';
+  const g = light ? '#059669' : '#34d399', r = light ? '#e11d48' : '#fb7185';
+  const col = t.pnl > 0 ? g : r;
+  const lvl = (p, label, c, dash, val) => `
+    <line x1="0" x2="330" y1="${y(p)}" y2="${y(p)}" stroke="${c}" stroke-width="1.5" ${dash ? 'stroke-dasharray="5 5"' : ''}/>
+    <text x="345" y="${y(p) + 4}" font-size="12" font-weight="700" fill="${c}" letter-spacing=".12em">${label}</text>
+    <text x="468" y="${y(p) + 4}" font-size="13" font-weight="500" fill="${ink}.75)" text-anchor="end" font-family="Inter">${val}</text>`;
+  const y1 = y(base.entryN), y2 = y(t.exitN);
+  return `<div class="path" style="flex:1"><svg viewBox="0 0 470 ${H}" preserveAspectRatio="none">
+    <defs><linearGradient id="pg" x1="0" x2="0" y1="${t.pnl > 0 ? 1 : 0}" y2="${t.pnl > 0 ? 0 : 1}"><stop offset="0" stop-color="${col}" stop-opacity=".05"/><stop offset="1" stop-color="${col}" stop-opacity=".35"/></linearGradient></defs>
+    <rect x="40" y="${Math.min(y1, y2)}" width="250" height="${Math.abs(y2 - y1)}" rx="6" fill="url(#pg)"/>
+    ${lvl(base.tp, 'TP', g, true, '31 048,00')}
+    ${lvl(base.sl, 'SL', r, true, '31 006,00')}
+    ${lvl(base.entryN, 'VSTUP', ink + '.85)', false, base.entry)}
+    ${t.exitN === base.sl ? '' : lvl(t.exitN, 'VÝSTUP', col, false, t.exit)}
+    <circle cx="40" cy="${y1}" r="5" fill="${light ? '#0f172a' : '#fff'}"/>
+    <circle cx="290" cy="${y2}" r="6" fill="${col}" stroke="${light ? '#fff' : '#000'}" stroke-width="2"/>
+    <path d="M40 ${y1} C 140 ${y1 + (t.pnl > 0 ? 30 : -10)}, 190 ${y2 + (t.pnl > 0 ? 20 : -20)}, 290 ${y2}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linecap="round"/>
+  </svg></div>
+  <div class="split" style="margin-top:14px"><div><div class="kk">Čas</div><div class="vv">${base.time} → ${t.out}</div></div><div><div class="kk">Držení</div><div class="vv">${t.hold}</div></div><div><div class="kk">Session</div><div class="vv">${base.session}</div></div></div>`;
+}
+
+function render() {
+  const t = T[S.res], light = S.theme === 'light', hasShot = S.shot === '1';
+  const cls = `tc v${S.v} ${S.res === 'loss' ? 'loss' : ''} ${light ? 'light' : ''}`;
+  const note = S.note ? `<div class="note">${base.note}</div>` : '';
+  let html;
+  if (S.v === 'a') {
+    html = `${head()}<div class="body">
+      <div class="glass total">${sym()}${note}${bigNum(t)}<div>${rLine(t)}</div>${stats(t)}</div>
+      <div class="glass right" style="${hasShot ? '' : 'flex-direction:column;padding:22px 26px'}">${hasShot ? shot(t) : path(t, light)}</div>
+    </div>${foot()}`;
+  } else if (S.v === 'b') {
+    html = hasShot
+      ? `<div class="full"><img src="share-shots/mnq.jpg" alt=""></div>${head()}
+         <div class="panel abs">${sym()}${bigNum(t)}<div>${rLine(t)}</div>${note}</div>
+         <div class="chips abs"><div><div class="kk">Vstup</div><div class="vv">${base.entry}</div></div><div><div class="kk">Výstup</div><div class="vv">${t.exit}</div></div><div><div class="kk">Držení</div><div class="vv">${t.hold}</div></div></div>`
+      : `<div style="padding:34px 40px;display:flex;flex-direction:column;height:100%">${head()}<div class="body" style="flex:1;display:grid;grid-template-columns:400px 1fr;gap:22px;min-height:0">
+         <div class="glass" style="padding:26px 28px;display:flex;flex-direction:column;gap:18px">${sym()}${note}<div style="margin-top:auto">${bigNum(t)}</div><div>${rLine(t)}</div></div>
+         <div class="glass" style="padding:22px 26px;display:flex;flex-direction:column">${path(t, light)}</div></div></div>`;
+  } else {
+    html = `${head()}<div class="body">
+      <div class="lead">${sym()}${bigNum(t)}<div>${rLine(t)}</div>${note}</div>
+      <div class="glass right">${hasShot ? shot(t) : path(t, light)}</div>
+    </div>${foot()}`;
+  }
+  document.getElementById('card').innerHTML =
+    `<div class="${cls}"><div class="card"><div class="inner"><span class="aurora"></span><span class="edge e-t"></span><span class="edge e-r"></span>${html}</div></div></div>`;
+  const hints = {
+    a: 'A — stejná rodina jako Karta dne z kopírky: černé sklo, běžící světla po okraji, číslo vlevo, graf vpravo v rámu. Bez screenshotu se vpravo nakreslí cenová dráha.',
+    b: 'B — screenshot přes celou kartu, údaje ve skleněném panelu nad grafem. Nejvíc „na Twitter“. Bez screenshotu spadne na rozložení A.',
+    c: 'C — číslo je hrdina (110 px), graf nebo cenová dráha je doplněk. Nejčistší, funguje i když obchod žádný obrázek nemá.',
+  };
+  document.getElementById('hint').textContent = hints[S.v];
+  fit();
+}
+function fit() {
+  const st = document.getElementById('stage'), sc = document.getElementById('scale');
+  const s = Math.min(0.82, (innerWidth - 40) / 1200, (innerHeight - 64 - 150) / 630);
+  sc.style.transform = `scale(${s})`; st.style.width = 1200 * s + 'px'; st.style.height = 630 * s + 'px';
+}
+document.querySelectorAll('[data-k]').forEach(b => b.addEventListener('click', () => {
+  S[b.dataset.k] = b.dataset.v;
+  document.querySelectorAll(`[data-k="${b.dataset.k}"]`).forEach(x => x.classList.toggle('on', x === b));
+  render();
+}));
+document.querySelectorAll('[data-t]').forEach(b => b.addEventListener('click', () => {
+  S[b.dataset.t] = !S[b.dataset.t]; b.classList.toggle('on', S[b.dataset.t]); render();
+}));
+document.querySelectorAll('[data-a]').forEach(b => b.addEventListener('click', () => {
+  const t = document.getElementById('toast'); t.textContent = b.dataset.a; t.classList.add('on'); setTimeout(() => t.classList.remove('on'), 1400);
+}));
+addEventListener('resize', fit);
+render();
+</script>
+</body>
+</html>

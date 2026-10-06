@@ -313,6 +313,31 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   přes relay není změřená; offline test prokazuje vynechaná čtení, nikoli
   konkrétní zrychlení v sekundách. OFF transport se sám touto změnou nezrychlí.
 
+### 2026-10-04 — Sdílecí karta obchodu ve stylu Karty dne + plovoucí menu (Claude)
+
+- `TradeShareCard` přepsána podle `mockups/trade-share.html` (varianta A):
+  stojí na třídách `live-day-*` (rámeček, sklo, světla, světlý motiv,
+  ovládání v rohu), vlevo P&L/R/kontrakty/vstup–výstup, vpravo graf, bez
+  grafu cenová dráha (SL/vstup/výstup/TP z `lib/tradeShareCard.ts`). Ztráta
+  má konečně mínus (dřív `$1 727` jen červeně), ztrátový obchod růžový lem.
+- Náklon karty vyčleněn do `hooks/useCardTilt.ts` (Karta dne beze změny
+  chování, `primeDeviceTilt` dál exportuje `LiveDayCard`).
+- `TradeShareModal`: portál se světlým blurem, sdílení v bublině v rohu karty
+  (odkaz, obrázek do schránky, PNG, v nativu systémový list), přepínače
+  Skrýt částku (jen R — jen obrázek, stránka za odkazem částku ukazuje dál)
+  a Poznámka. Export z neviditelné kopie 1200×630 v motivu appky.
+  **Obchod se zveřejní (`markTradeAsPublic`) až první akcí sdílení**, dřív
+  hned otevřením náhledu. Sloučený obchod (víc účtů, ID není UUID) jde
+  sdílet jen obrázkem.
+- Obrázek karty: ruční screenshot, jinak podepsaný snímek z kopírky (výstup)
+  z detailu; přepínač snímků na kartě. Snímky z kopírky jsou soukromé —
+  veřejná stránka /share ukáže místo nich cenovou dráhu. Snímek se kreslí
+  celý (`contain`) s rozmazanou výplní (snímky kopírky jsou ~čtvercové).
+- `SharedTradeView` používá stejnou kartu (bez ovládání).
+- Aurora: plovoucí menu/popovery (absolute/fixed + shadow + `bg-card`)
+  dostaly plnou výplň `--menu-bg` (ve světlém čiré sklo 80 % + blur) — přes
+  10% kartu prosvítala tabulka (menu skupiny v LIVE).
+
 ### 2026-10-04 — Profil: okno ve stylu appky, karta v panelu bez odhlášení (Claude)
 
 - Karta profilu v bočním panelu: bez ikony odhlášení a bez blikajícího
