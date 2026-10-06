@@ -1845,7 +1845,10 @@ const Dashboard: React.FC<DashboardProps> = ({
         minH: widget.minH,
         maxW: widget.maxW,
         maxH: widget.maxH,
-        static: !isEditing,
+        // Ne `static`: zamčené položky mřížka nesesouvá, takže by mimo úpravy
+        // stály i s mezerami a v úpravách (kde se sesunou) vypadaly jinak.
+        // Tažení a velikost vypíná dragConfig/resizeConfig.
+        static: false,
       }));
 
     const xxlItems = makeLayoutItems(layouts.xxl || []);
@@ -1861,7 +1864,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       xs: lgItems.map(item => ({ ...item, w: Math.min(item.w, 4), static: true })),
       xxs: lgItems.map(item => ({ ...item, x: 0, w: 2, static: true })),
     };
-  }, [layouts, isEditing]);
+  }, [layouts]);
 
   // react-grid-layout: handle layout changes ONLY when drag or resize completes (avoids lag and breakpoint overwrite bugs)
   const handleDragOrResizeStop = useCallback((newLayout: Layout) => {
