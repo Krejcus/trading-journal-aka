@@ -7801,8 +7801,22 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         exitEvidence: leaderFlatExitEvidence(epoch, row.accountId, row.orders),
       }
       : { accountId: row.accountId, ok: false, error: row.error });
+    // Etapa 2: pozastavený follower nemá v epizodě žádnou kopii kopírky
+    // (pauza vzniká nad autoritativně flat účtem). Guard ho proto nesmí
+    // zavírat jako vlastněnou kopii — případná pozice je ruční.
+    const pausedInEpoch = new Set((currentRuntime().state.safety.accountSyncPauses ?? [])
+      .filter(pause => pause.symbol === epoch.symbol && pauseBelongsToEpoch(pause, epoch))
+      .map(pause => pause.accountId));
+    const guardEpoch: LeaderFlatEpoch = pausedInEpoch.size === 0 ? epoch : {
+      ...epoch,
+      followers: epoch.followers.map(participant => (
+        pausedInEpoch.has(participant.accountId)
+          ? { ...participant, copyLineage: 'unproven' as const, confirmedNetQuantity: undefined }
+          : participant
+      )),
+    };
     const evaluation = evaluateLeaderFlatBatch({
-      epoch,
+      epoch: guardEpoch,
       snapshot: { observedAt: clock(), accounts: batchAccounts },
       autoCloseFollowerPositions: (
         group.safety?.autoCloseFollowerPositions
@@ -9385,11 +9399,19 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ))
       && !pendingIsolationCommandForAccount(accountId);
   };
+  const UNBOUND_PAUSE_MAX_AGE_MS = 24 * 60 * 60_000;
   const pauseBelongsToEpoch = (
-    pause: Pick<CopierAccountSyncPause, 'epochId' | 'leaderEntryOrderId'>,
+    pause: Pick<CopierAccountSyncPause, 'epochId' | 'leaderEntryOrderId' | 'pausedAt'>,
     epoch: LeaderFlatEpoch,
   ) => pause.epochId === epoch.id
-    || (pause.epochId == null && epoch.leaderEntryOrderIds.includes(pause.leaderEntryOrderId));
+    || (
+      pause.epochId == null
+      && epoch.leaderEntryOrderIds.includes(pause.leaderEntryOrderId)
+      // Pauza z doby před otevřením epochy (on-submit reject) patří jen
+      // k epoše otevřené krátce po ní; nikdy se nevzkřísí po dnech.
+      && pause.pausedAt > clock() - UNBOUND_PAUSE_MAX_AGE_MS
+      && pause.pausedAt >= epoch.openedAt - 60 * 60_000
+    );
   /** Durable pauza účtu platná pro aktuální otevřenou epochu symbolu. */
   const activeAccountSyncPause = (accountId: number, symbol: string): CopierAccountSyncPause | null => {
     const epoch = leaderExposureEpoch(symbol);
@@ -9415,7 +9437,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const addedKeys = new Set(added.map(pause => `${pause.accountId}:${pause.symbol}`));
     const kept = (safety.accountSyncPauses ?? [])
       .filter(pause => stillRelevant(pause) && !addedKeys.has(`${pause.accountId}:${pause.symbol}`));
-    const next = [...kept, ...added].slice(-200);
+    // Žádný cap nad relevantními pauzami: jejich počet omezují followeři ×
+    // otevřené symboly. Neplatné se výše zahazují.
+    const next = [...kept, ...added];
     const { accountSyncPauses: _previous, ...rest } = safety;
     return next.length > 0 ? { ...rest, accountSyncPauses: next } : rest;
   };
@@ -11016,17 +11040,30 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     exitOnlyAccounts: number[];
   }> => {
     const at = event.receivedAt;
+    // Etapa 2 (6. 10. 2026): durable pauza je tvrdá brána. Pozastavenému
+    // účtu kopírka v této epizodě neposílá nic — vstup, scale-in, exit ani
+    // lifecycle. Případná pozice na něm je ruční (pauza vzniká jen nad
+    // autoritativně flat účtem) a kopírka se jí nedotkne.
+    const withSyncPauses = (base: ReadonlyMap<number, string>): Map<number, string> => {
+      const map = new Map(base);
+      for (const follower of dispatchBaseGroup.followers) {
+        if (activeAccountSyncPause(follower.accountId, event.symbol)) {
+          map.set(follower.accountId, 'account-sync-paused');
+        }
+      }
+      return map;
+    };
     if (event.kind !== 'submitted' && event.kind !== 'filled') {
       return {
         dispatchGroup: dispatchBaseGroup,
-        ineligibleAccounts: increasesExposure
+        ineligibleAccounts: withSyncPauses(increasesExposure
           ? currentEntryIneligibleAccounts(at)
-          : currentExitIneligibleAccounts(at),
+          : currentExitIneligibleAccounts(at)),
         unsafeDivergenceAccounts: [],
         exitOnlyAccounts: [],
       };
     }
-    const ineligibleAccounts = new Map(
+    const ineligibleAccounts = withSyncPauses(
       increasesExposure ? currentEntryIneligibleAccounts(at) : currentExitIneligibleAccounts(at),
     );
     const preNet = leaderPreFillNetByEventId.get(event.id) ?? 0;
@@ -11269,6 +11306,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }));
     }
     const followers = dispatchBaseGroup.followers.map(follower => {
+      if (activeAccountSyncPause(follower.accountId, event.symbol)) {
+        // Pozastavený účet se nehodnotí ani jako divergence: kopírka na něm
+        // nic nevlastní a nic na něj nepošle.
+        return { ...follower, mode: 'off' as const };
+      }
       const cut = activeFollowerCut(follower.accountId, at);
       const letRunCut = cut != null && effectiveFollowerCutAction(cut, follower) === 'let-run';
       const modeAcceptsEvent = (event.kind === 'filled' && follower.mode === 'on-fill')
