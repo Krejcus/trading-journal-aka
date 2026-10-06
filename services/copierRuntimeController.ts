@@ -4708,6 +4708,123 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     await sweepFollowerProtectiveLegs(accountId, symbol, now);
   };
 
+  /** Symbol ochranné nohy kopírky podle durable OSO/bracket/standalone outboxu. */
+  const protectiveLegSymbol = (accountId: number, brokerOrderId: string): string | null => {
+    const live = currentRuntime();
+    for (const entry of live.osoOutbox.values()) {
+      if (entry.request.accountId !== accountId) continue;
+      if (entry.firstBrokerOrderId === brokerOrderId || entry.secondBrokerOrderId === brokerOrderId) {
+        return entry.request.symbol;
+      }
+    }
+    for (const entry of live.bracketOutbox.values()) {
+      if (entry.request.accountId !== accountId) continue;
+      if (entry.firstBrokerOrderId === brokerOrderId || entry.secondBrokerOrderId === brokerOrderId) {
+        return entry.request.symbol;
+      }
+    }
+    for (const entry of live.outbox.values()) {
+      if (entry.request.accountId === accountId && entry.brokerOrderId === brokerOrderId
+        && isStandaloneProtective(entry)) return entry.request.symbol;
+    }
+    return null;
+  };
+
+  /**
+   * Incident 6. 10. 2026: leader posunul stop, ochranná noha followera se
+   * mezitím vyplnila na původní ceně. Modify skončil `filled`; follower je
+   * risk-redukčně venku dřív než leader. Je-li to přesně ochranná noha kopie
+   * aktuální epochy, nikoli neznámý stav, kritický audit nevypíná skupinu.
+   */
+  const protectiveFilledDuringModify = (
+    item: CopierAuditEntry,
+  ): { accountId: number; symbol: string; key: string } | null => {
+    if (item.kind !== 'cancel-failed' || !item.key || item.accountId == null) return null;
+    const lifecycle = currentRuntime().cancelOutbox.get(item.key);
+    if (
+      !lifecycle
+      || lifecycle.operation !== 'modify'
+      || lifecycle.status !== 'abandoned'
+      || lifecycle.outcome !== 'filled'
+      || lifecycle.accountId !== item.accountId
+      || followerFillRole(lifecycle.accountId, lifecycle.brokerOrderId) !== 'protective'
+    ) return null;
+    const symbol = protectiveLegSymbol(lifecycle.accountId, lifecycle.brokerOrderId);
+    if (!symbol || leaderExposureEpoch(symbol)?.phase !== 'open') return null;
+    return { accountId: lifecycle.accountId, symbol, key: lifecycle.key };
+  };
+
+  /**
+   * Vyřadí followera z aktuální epizody po vyplnění jeho ochranné nohy během
+   * modify. Jen s autoritativním důkazem flat bez pracovních příkazů; bez něj
+   * výjimka (volající fail-closed). Žádný kompenzační obchod se neposílá.
+   */
+  const isolateProtectiveFilledFollower = async (
+    accountId: number,
+    symbol: string,
+    lifecycleKeys: readonly string[],
+  ): Promise<void> => {
+    const epoch = leaderExposureEpoch(symbol);
+    const entryOrderId = epoch?.phase === 'open' ? epoch.leaderEntryOrderIds[0] : undefined;
+    if (!epoch || !entryOrderId) {
+      throw new Error(`Copier fail-closed: follower ${accountId} nemá otevřenou epochu pro izolaci po ochranném fillu`);
+    }
+    let confirmed = false;
+    for (let attempt = 0; attempt < 2 && !confirmed; attempt += 1) {
+      if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 300));
+      confirmed = await authoritativelyConfirmSuppression(accountId, symbol, entryOrderId);
+    }
+    if (!confirmed) {
+      throw new Error(
+        `Copier fail-closed: follower ${accountId} po vyplnění ochranné nohy během modify nemá autoritativní flat/no-working důkaz`,
+      );
+    }
+    for (const [key, timer] of pendingFollowerMagnitudeChecks) {
+      if (!key.startsWith(`${accountId}:`)) continue;
+      clearTimeout(timer);
+      pendingFollowerMagnitudeChecks.delete(key);
+    }
+    for (const [key, pending] of pendingFollowerTransitions) {
+      if (pending.accountId !== accountId) continue;
+      clearPendingFollowerTransition(key);
+    }
+    const now = clock();
+    const keys = new Set(lifecycleKeys);
+    await processor.mutate(async current => {
+      const cancelOutbox = new Map(current.cancelOutbox);
+      let changed = false;
+      for (const [key, entry] of cancelOutbox) {
+        if (!keys.has(key) || entry.status !== 'abandoned' || entry.outcome !== 'filled') continue;
+        cancelOutbox.set(key, waiveCancelEntry(
+          entry,
+          `${entry.reason?.trim() || 'modify skončil filled'} — ochranná noha vyplnila dřív než leader; follower vyřazen do konce epizody`,
+          now,
+        ));
+        changed = true;
+      }
+      if (!changed) return current;
+      const committed = await durableStore.commit(
+        toSnapshot(
+          current.state,
+          current.outbox.values(),
+          cancelOutbox.values(),
+          current.revision,
+          current.bracketOutbox.values(),
+          current.osoOutbox.values(),
+        ),
+        current.revision,
+      );
+      return { ...current, cancelOutbox, revision: committed.revision };
+    });
+    options.onAudit?.([{
+      at: now,
+      leaderEventId: `follower-protective-filled-isolated:${accountId}:${now}`,
+      kind: 'skipped',
+      accountId,
+      reason: `follower ${accountId} vyřazen z této epizody — jeho ochranná noha se vyplnila dřív než leaderova (během posunu); je flat, kopírka pokračuje pro ostatní followery`,
+    }]);
+  };
+
   const verifyFollowerMagnitude = async (accountId: number, symbol: string) => {
     const key = followerTransitionKey(accountId, symbol);
     if (!pendingFollowerMagnitudeChecks.has(key) || stopped) return;
@@ -5158,6 +5275,35 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         }
       }
       return;
+    }
+    // 6. 10. 2026: všechny kritické položky jsou ochranné nohy kopií, které se
+    // vyplnily během modify. Každého takového followera vyřadíme z epizody
+    // (s autoritativním flat důkazem); jakákoli jiná nejistota = fail-closed.
+    const protectiveFilled = critical.map(protectiveFilledDuringModify);
+    if (protectiveFilled.every((item): item is NonNullable<typeof item> => item != null)) {
+      const byAccount = new Map<string, { accountId: number; symbol: string; keys: string[] }>();
+      for (const item of protectiveFilled) {
+        const groupKey = `${item.accountId}:${item.symbol}`;
+        const existing = byAccount.get(groupKey) ?? { accountId: item.accountId, symbol: item.symbol, keys: [] };
+        existing.keys.push(item.key);
+        byAccount.set(groupKey, existing);
+      }
+      let isolated = true;
+      for (const item of byAccount.values()) {
+        try {
+          await isolateProtectiveFilledFollower(item.accountId, item.symbol, item.keys);
+        } catch (reason) {
+          // Bez důkazu platí beze změny původní cesta níže (fail-closed
+          // včetně terminal-fill reconciliation / auto-close).
+          isolated = false;
+          options.onAudit?.([{
+            at: clock(), leaderEventId: `follower-protective-filled-isolation-failed:${item.accountId}:${clock()}`,
+            kind: 'blocked', accountId: item.accountId, reason: errorOf(reason).message,
+          }]);
+          break;
+        }
+      }
+      if (isolated) return;
     }
     if (await enterManagementOnlyAfterProtectedTargetFailure(critical)) return;
     const reconcileAfterTerminalFill = criticalAuditAllowsTerminalFillRecovery(

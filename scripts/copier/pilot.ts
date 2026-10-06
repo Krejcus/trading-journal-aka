@@ -346,6 +346,12 @@ async function runMultiConnectionAgent(): Promise<void> {
       console.error(`${new Date().toISOString()} STARTUP ${connectionLabel(connectionId)} adresář účtů nedostupný, spojení startuje bez účtů (žádný účet se na něj nesměruje): ${message}`);
       return { accounts: [] as Awaited<ReturnType<typeof loadTradovateAccountData>>['accounts'] };
     });
+    // 6. 10. 2026: FundedNext po breachi vracel autentizovaně `account/list = []`
+    // a discovery to brala jako zdravé načtení (bez dalších pokusů). Prázdný
+    // adresář nově objeveného připojení je selhání s backoffem, ne úspěch.
+    if (loadOptions.strictDirectory && data.accounts.length === 0) {
+      throw new Error('adresář účtů je prázdný (propfirma účty skryla nebo zavřela)');
+    }
     const accountSpecsByAccountId = Object.fromEntries(data.accounts.map(account => [account.id, account.name]));
     context.displayFeed = makeDisplayFeed(context, data.accounts.map(account => account.id));
     const broker = createTradovateBroker({
