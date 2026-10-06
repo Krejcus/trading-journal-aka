@@ -275,4 +275,56 @@ describe('etapa 2 — vyřazení z epizody přežije restart workeru', () => {
       controller.stop();
     }
   });
+
+  it('další posun stopu po vyřazení: vyřazený follower nedostane modify a skupina jede dál', async () => {
+    let modifyAttemptsFor200 = 0;
+    const ctx = await setup((broker, leg) => {
+      if (leg.accountId === 200) modifyAttemptsFor200 += 1;
+      fillStopBeforeModify(broker, leg);
+    });
+    const { broker, controller, order } = ctx;
+    try {
+      await openTrade(ctx);
+      broker.emitEvent({ type: 'order', order: order('stop', {
+        parentOrderId: 'entry', side: 'Sell', orderType: 'Stop', limitPrice: undefined, stopPrice: 31_357, sourceVersion: '2',
+      }) });
+      await controller.waitForIdle();
+      expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+      const attemptsBefore = modifyAttemptsFor200;
+      broker.emitEvent({ type: 'order', order: order('stop', {
+        parentOrderId: 'entry', side: 'Sell', orderType: 'Stop', limitPrice: undefined, stopPrice: 31_365, sourceVersion: '3',
+      }) });
+      await controller.waitForIdle();
+      // Na pozastavený účet nesmí odejít ani pokus o modify (žádný broker write).
+      expect(modifyAttemptsFor200).toBe(attemptsBefore);
+      expect(broker.modifyRequests().some(request => request.accountId === 201 && request.changes.stopPrice === 31_365)).toBe(true);
+      expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    } finally {
+      controller.stop();
+    }
+  });
+
+  it('OSO přikoupení ve stejném obchodu vyřazenému followerovi nic nepošle', async () => {
+    const ctx = await setup(fillStopBeforeModify);
+    const { broker, controller, order } = ctx;
+    try {
+      await openTrade(ctx);
+      broker.emitEvent({ type: 'order', order: order('stop', {
+        parentOrderId: 'entry', side: 'Sell', orderType: 'Stop', limitPrice: undefined, stopPrice: 31_357, sourceVersion: '2',
+      }) });
+      await controller.waitForIdle();
+      const osoBefore = broker.placedOsoRequests().filter(request => request.accountId === 200).length;
+      broker.emitEvent({ type: 'order', order: order('entry-2', { quantity: 2, limitPrice: 31_370 }) });
+      broker.emitEvent({ type: 'order', order: order('stop-2', {
+        parentOrderId: 'entry-2', side: 'Sell', orderType: 'Stop', limitPrice: undefined, stopPrice: 31_350, quantity: 2,
+      }) });
+      broker.emitEvent({ type: 'order', order: order('target-2', { parentOrderId: 'entry-2', side: 'Sell', limitPrice: 31_420, quantity: 2 }) });
+      await controller.waitForIdle();
+      expect(broker.placedOsoRequests().filter(request => request.accountId === 200).length).toBe(osoBefore);
+      expect(broker.placedOsoRequests().some(request => request.accountId === 201 && request.quantity === 2)).toBe(true);
+      expect(controller.status()).toMatchObject({ armed: true, lastError: null });
+    } finally {
+      controller.stop();
+    }
+  });
 });

@@ -4936,7 +4936,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       || follower.enabled === false
       || follower.mode === 'off'
       || currentIneligibleAccounts().has(accountId)
-      || activeFollowerCut(accountId)) return;
+      || activeFollowerCut(accountId)
+      // Etapa 2: pozastavený účet je v epizodě jen pozorovaný.
+      || activeAccountSyncPause(accountId, symbol)) return;
 
     try {
       const [leaderSnapshot, followerSnapshot] = await Promise.all([
@@ -8113,7 +8115,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ? [group.leaderAccountId, ...participatingFollowerIds]
       : participatingFollowerIds;
     const targets = accountIds.flatMap(accountId => (
-      [...copierFootprintSymbols(accountId)].map(symbol => ({ accountId, symbol }))
+      [...copierFootprintSymbols(accountId)]
+        // Etapa 2: pozastavený účet nemá v epizodě kopii; případná pozice
+        // je ruční a auto-close se jí nedotkne.
+        .filter(symbol => activeAccountSyncPause(accountId, symbol) == null)
+        .map(symbol => ({ accountId, symbol }))
     ));
     const targetSymbolsByAccount = new Map<number, Set<string>>();
     for (const target of targets) {
@@ -9420,6 +9426,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       pause.accountId === accountId && pause.symbol === symbol && pauseBelongsToEpoch(pause, epoch)
     )) ?? null;
   };
+  /** Followeři s aktivní pauzou na symbolu — kopírka jim v epizodě nic nepošle. */
+  const syncPausedAccountIds = (symbol: string): Set<number> => new Set(group.followers
+    .filter(follower => activeAccountSyncPause(follower.accountId, symbol) != null)
+    .map(follower => follower.accountId));
   /**
    * Přidá pauzy a zahodí ty, které už nemohou platit (jejich epocha není
    * mezi uloženými otevřenými epochami, ani nečekají na otevření).
@@ -12926,7 +12936,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           sequenceBroken: gate.sequenceBroken || source.needsReconciliation(),
           stuckOutbox: gate.stuckOutbox || hasDispatchBlockingStuckOutbox(),
           nonBlockingOutboxKeys: backgroundNonBlockingOutboxKeys(),
-          ineligibleAccounts: currentBracketIneligibleAccounts(bracketPair.entryOrderId),
+          ineligibleAccounts: (() => {
+            const ineligible = new Map(currentBracketIneligibleAccounts(bracketPair.entryOrderId));
+            for (const accountId of syncPausedAccountIds(leaderEvent.symbol)) {
+              ineligible.set(accountId, 'account-sync-paused');
+            }
+            return ineligible;
+          })(),
         },
         broker: dispatchBroker(admissionGeneration, leaderEvent),
         clock,
@@ -13209,7 +13225,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         await failClosedOnCriticalAudit(exitResult.audit);
         if (!gate.armed) return;
       }
-      const openingExcluded = new Set([...previouslyExcluded, ...exitOnlyAccounts]);
+      const openingExcluded = new Set([
+        ...previouslyExcluded,
+        ...exitOnlyAccounts,
+        // Etapa 2: pozastavený účet nedostane ani OSO scale-in.
+        ...syncPausedAccountIds(pair.symbol),
+      ]);
       if (blockedLeaderEntryOrderIds.has(pair.entryOrderId)) {
         for (const follower of group.followers) openingExcluded.add(follower.accountId);
       }
@@ -14055,8 +14076,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
                 && Math.sign(actual) === Math.sign(leaderNet)
                 && Math.abs(actual) <= Math.abs(expected))
             );
-          const allowedPausePosition = pauseSuppression != null
-            && actual === pauseSuppression.allowedNet;
+          const allowedPausePosition = (pauseSuppression != null
+            && actual === pauseSuppression.allowedNet)
+            // Etapa 2: pozastavený účet je v epizodě observe-only (ruční
+            // pozice na něm není divergence skupiny).
+            || activeAccountSyncPause(follower.accountId, symbol) != null;
           const isolationEvidence = followerSnapshot == null
             ? null
             : episodeIsolationFromSnapshot({

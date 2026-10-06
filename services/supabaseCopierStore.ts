@@ -241,7 +241,7 @@ function validSafety(value: unknown): boolean {
   );
   const validSyncPauses = value.accountSyncPauses == null || (
     Array.isArray(value.accountSyncPauses)
-    && value.accountSyncPauses.length <= 200
+    && value.accountSyncPauses.length <= 2_000
     && value.accountSyncPauses.every(pause => isRecord(pause)
       && integer(pause.accountId) && Number(pause.accountId) > 0
       && string(pause.symbol) && pause.symbol.length > 0
