@@ -134,6 +134,40 @@ const COLORS = {
 };
 
 // --- NEW WIDGET: DISTANCE TO TARGET ---
+/**
+ * Společný rámeček malých widgetů — stejný jako ProKpiCard: nadpis 11 px s
+ * info ikonou, vpravo volitelný štítek, tělo uprostřed. Všechny KPI karty na
+ * ploše tak mají stejnou hierarchii (nadpis → jedno hlavní číslo → detail).
+ */
+const KpiShell: React.FC<{
+  label: string;
+  info?: string;
+  theme: 'dark' | 'light' | 'oled';
+  badge?: React.ReactNode;
+  children: React.ReactNode;
+}> = ({ label, info, theme, badge, children }) => (
+  <div className="p-4 rounded-lg flex flex-col h-full relative overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-card)] transition-colors">
+    <div className="flex justify-between items-start gap-2 mb-2">
+      <div className="text-[11px] font-semibold text-[var(--text-secondary)] flex items-center gap-1.5 min-w-0">
+        <span className="truncate">{label}</span>
+        {info && <SmartTooltip text="Info" subtext={info} theme={theme}><div className="p-1 -m-1 cursor-help"><Info size={13} className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors" /></div></SmartTooltip>}
+      </div>
+      {badge}
+    </div>
+    <div className="flex-1 min-h-0 flex flex-col items-center justify-center">{children}</div>
+  </div>
+);
+
+const KPI_VALUE = 'text-2xl lg:text-[28px] font-bold tracking-tight tabular-nums leading-none';
+/** Velké částky zkráceně ($149k, $1.65M), aby se vešly do malé karty. */
+const compactMoney = (value: number, format: (v: number) => string) => {
+  const abs = Math.abs(value);
+  const sign = value < 0 ? '−' : '';
+  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(abs >= 10_000_000 ? 1 : 2)}M`;
+  if (abs >= 100_000) return `${sign}$${Math.round(abs / 1000)}k`;
+  return format(value);
+};
+
 const DistanceToTargetWidget: React.FC<{ stats: TradeStats, accounts: Account[], theme: 'dark' | 'light' | 'oled', currency: 'USD' | 'CZK' | 'EUR', rates: any, payouts?: BusinessPayout[] }> = ({ stats, accounts, theme, currency, rates, payouts = [] }) => {
   const isDark = theme !== 'light';
   const format = (val: number) => formatCurrency(val, currency, rates);
@@ -189,49 +223,21 @@ const DistanceToTargetWidget: React.FC<{ stats: TradeStats, accounts: Account[],
   const currentRGB = `${r}, ${g}, ${b}`;
 
   return (
-    <div className="p-6 rounded-[32px] glass-panel relative overflow-visible h-full flex flex-col justify-between">
-      <div className="flex justify-between items-start mb-4">
-        <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)]">
-          <Flag size={16} className="text-blue-500" /> Challenge Cíl
-        </h3>
-        <div className={`px-2 py-1 rounded-lg text-[11px] font-semibold ${isPassed ? 'bg-emerald-500 text-white' : (isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-100 text-slate-600')}`}>
-          {isPassed ? 'Splněno' : 'In Progress'}
+    <KpiShell
+      label="Challenge cíl"
+      info={`Postup k profit targetu ${targetPctLabel} %. Start ${format(initial)}, cíl ${format(target)}; výplaty se odečítají.`}
+      theme={theme}
+      badge={<span className={`shrink-0 px-1.5 py-0.5 rounded-md text-[10.5px] font-semibold tabular-nums ${isPassed ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-[var(--bg-page)] text-[var(--text-secondary)]'}`}>{isPassed ? 'Splněno' : `${progress.toFixed(0)} %`}</span>}
+    >
+      <div className="w-full text-center">
+        <p className={`${KPI_VALUE} ${isPassed ? COLORS.textProfit : ''}`}>{isPassed ? 'Hotovo' : compactMoney(Math.max(0, remaining), format)}</p>
+        <p className="text-[11px] font-medium text-[var(--text-secondary)] mt-1.5">{isPassed ? `cíl ${compactMoney(target, format)} splněn` : 'zbývá do cíle'}</p>
+        <div className="mt-3 h-1.5 w-full rounded-full bg-[var(--bg-page)] overflow-hidden">
+          <div className="h-full rounded-full transition-all duration-700" style={{ width: `${progress}%`, background: `rgb(${currentRGB})` }} />
         </div>
+        <p className="mt-1.5 text-[10.5px] text-[var(--text-muted)] tabular-nums truncate">cíl {compactMoney(target, format)} · {targetPctLabel} %</p>
       </div>
-
-      <div className="flex-1 flex flex-col justify-center">
-        <div className="flex justify-between items-end mb-2">
-          <span className={`text-3xl font-black tracking-tighter ${isDark ? 'text-white' : 'text-slate-900'}`}>{format(current)}</span>
-          <div className="text-right">
-            <span className="text-[11px] font-bold text-slate-500 block">Cíl ({targetPctLabel}%)</span>
-            <span className={`text-sm font-black ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{format(target)}</span>
-          </div>
-        </div>
-        
-        <div className="relative w-full h-5 my-2">
-          {/* Track and Progress Fill */}
-          <div className={`h-full w-full rounded-full overflow-hidden relative border ${isDark ? 'bg-[var(--bg-page)] border-[var(--border-subtle)] shadow-[inset_0_2px_4px_rgba(0,0,0,0.6)]' : 'bg-[var(--bg-page)] border-[var(--border-subtle)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.1)]'}`}>
-            <div 
-              className="absolute top-0 bottom-0 left-0 transition-all duration-1000 ease-out flex items-center justify-end pr-3" 
-              style={{ 
-                width: `${progress}%`,
-                background: `linear-gradient(to right, rgb(239, 68, 68), rgb(${currentRGB}))`
-              }}
-            >
-              {progress > 15 && <span className="text-[10px] font-black text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]">{progress.toFixed(1)}%</span>}
-            </div>
-            
-            {/* 50% Milestone indicator */}
-            <div className={`absolute top-0 bottom-0 w-px left-[50%] border-l border-dashed ${isDark ? 'border-white/20' : 'border-slate-400/30'}`}></div>
-          </div>
-        </div>
-
-        <div className="mt-3 flex justify-between items-center text-[10px] font-bold text-slate-500">
-          <span>Start: {format(initial)}</span>
-          <span>Zbývá: <span className={isDark ? 'text-white' : 'text-slate-900'}>{format(Math.max(0, remaining))}</span></span>
-        </div>
-      </div>
-    </div>
+    </KpiShell>
   );
 };
 
@@ -320,50 +326,25 @@ const AvgWinLossWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 
   const total = (shownWin ?? 0) + (shownLoss ?? 0);
   const winPct = total > 0 ? ((shownWin ?? 0) / total) * 100 : 50;
 
+  const ratio = hasRiskComparison && (shownLoss ?? 0) > 0 ? (shownWin ?? 0) / (shownLoss as number) : null;
   return (
-    <div className="p-6 rounded-[32px] glass-panel h-full flex flex-col justify-between">
-      <div className="flex justify-between items-start mb-2">
-        <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)]">
-          Avg win/loss trade <InfoIcon text="Poměr průměrného zisku a ztráty. V režimu R se každý obchod přepočítá podle vlastního původního risku." theme={theme} />
-        </h3>
-      </div>
-
-      <div className="flex-1 flex flex-col justify-center gap-4">
-        <div className="w-full">
-          <div className="w-full h-3 bg-slate-800 rounded-full flex items-center">
-            <SmartTooltip
-              text="Průměrný zisk"
-              subtext={formatVal(avgWin, pnlDisplayMode, initialBalance, riskStats.avgWin)}
-              theme={theme}
-              color={COLORS.profit}
-              style={{ width: `${winPct}%` }}
-              className="h-full"
-            >
-              <div
-                className={`${hasRiskComparison ? 'bg-emerald-500' : 'bg-slate-500'} w-full h-full rounded-l-full cursor-pointer hover:scale-y-125 transition-transform duration-300 origin-left`}
-              />
-            </SmartTooltip>
-            <SmartTooltip
-              text="Průměrná ztráta"
-              subtext={formatVal(-avgLoss, pnlDisplayMode, initialBalance, riskStats.avgLoss)}
-              theme={theme}
-              color={COLORS.loss}
-              style={{ width: `${100 - winPct}%` }}
-              className="h-full"
-            >
-              <div
-                className={`${hasRiskComparison ? 'bg-rose-500' : 'bg-slate-500'} w-full h-full rounded-r-full cursor-pointer hover:scale-y-125 transition-transform duration-300 origin-right`}
-              />
-            </SmartTooltip>
-          </div>
+    <KpiShell label="Avg win/loss" info="Poměr průměrného zisku a ztráty. V režimu R se každý obchod přepočítá podle vlastního původního risku." theme={theme}>
+      <div className="w-full text-center">
+        <p className={KPI_VALUE}>{ratio == null ? '—' : ratio.toFixed(2)}</p>
+        <div className="mt-3 w-full h-1.5 rounded-full flex overflow-hidden bg-[var(--bg-page)]">
+          <SmartTooltip text="Průměrný zisk" subtext={formatVal(avgWin, pnlDisplayMode, initialBalance, riskStats.avgWin)} theme={theme} color={COLORS.profit} style={{ width: `${winPct}%` }} className="h-full">
+            <div className={`${hasRiskComparison ? 'bg-emerald-500' : 'bg-slate-400'} w-full h-full cursor-help`} />
+          </SmartTooltip>
+          <SmartTooltip text="Průměrná ztráta" subtext={formatVal(-avgLoss, pnlDisplayMode, initialBalance, riskStats.avgLoss)} theme={theme} color={COLORS.loss} style={{ width: `${100 - winPct}%` }} className="h-full">
+            <div className={`${hasRiskComparison ? 'bg-rose-500' : 'bg-slate-400'} w-full h-full cursor-help`} />
+          </SmartTooltip>
         </div>
-
-        <div className="flex justify-between items-center text-xs font-black">
-          <span className={shownWin === null ? 'text-slate-400' : COLORS.textProfit}>{formatVal(avgWin, pnlDisplayMode, initialBalance, riskStats.avgWin)}</span>
-          <span className={shownLoss === null ? 'text-slate-400' : COLORS.textLoss}>{formatVal(-avgLoss, pnlDisplayMode, initialBalance, riskStats.avgLoss)}</span>
+        <div className="mt-1.5 flex justify-between text-[11px] font-semibold tabular-nums">
+          <span className={shownWin === null ? 'text-[var(--text-muted)]' : COLORS.textProfit}>{formatVal(avgWin, pnlDisplayMode, initialBalance, riskStats.avgWin)}</span>
+          <span className={shownLoss === null ? 'text-[var(--text-muted)]' : COLORS.textLoss}>{formatVal(-avgLoss, pnlDisplayMode, initialBalance, riskStats.avgLoss)}</span>
         </div>
       </div>
-    </div>
+    </KpiShell>
   );
 };
 
@@ -372,63 +353,49 @@ const StreakWidget: React.FC<{ stats: TradeStats, theme: 'dark' | 'light' | 'ole
   const dayStreak = stats.currentDayStreak || 0;
   const tradeStreak = stats.currentTradeStreak || 0;
 
-  const getStreakColor = (val: number) => val > 0 ? 'text-emerald-500 border-emerald-500' : val < 0 ? 'text-rose-500 border-rose-500' : 'text-slate-500 border-slate-700';
-
+  const tone = (val: number) => val > 0 ? COLORS.textProfit : val < 0 ? COLORS.textLoss : 'text-[var(--text-secondary)]';
+  const signed = (val: number) => `${val > 0 ? '+' : val < 0 ? '−' : ''}${Math.abs(val)}`;
+  // Kroužek: číslo série uvnitř, oblouk = jak blízko je současná série rekordu
+  // (zisková k nejlepší, ztrátová k nejhorší).
+  const Ring = ({ value, record }: { value: number; record: number }) => {
+    const r = 23;
+    const length = 2 * Math.PI * r;
+    const share = record > 0 ? Math.min(1, Math.abs(value) / record) : value !== 0 ? 1 : 0;
+    const stroke = value > 0 ? COLORS.profit : value < 0 ? COLORS.loss : 'var(--text-muted)';
+    return (
+      <div className="relative w-14 h-14 shrink-0">
+        <svg viewBox="0 0 56 56" className="w-14 h-14 -rotate-90">
+          <circle cx="28" cy="28" r={r} fill="none" stroke="var(--border-subtle)" strokeWidth="4" />
+          <circle cx="28" cy="28" r={r} fill="none" stroke={stroke} strokeWidth="4" strokeLinecap="round"
+            strokeDasharray={`${share * length} ${length}`} className="transition-[stroke-dasharray] duration-700" />
+        </svg>
+        <span className={`absolute inset-0 grid place-items-center text-lg font-bold tabular-nums ${tone(value)}`}>{signed(value)}</span>
+      </div>
+    );
+  };
+  const Column = ({ value, unit, best, worst, label }: { value: number; unit: string; best: number; worst: number; label: string }) => (
+    <SmartTooltip text={label} subtext={`Nejlepší série ${best} · nejhorší ${worst}`} theme={theme} className="flex-1 min-w-0">
+      <div className="flex items-center justify-center gap-2.5 cursor-help">
+        <Ring value={value} record={value >= 0 ? best : worst} />
+        <div className="min-w-0 text-left">
+          <p className="text-[11px] font-medium text-[var(--text-secondary)]">{unit}</p>
+          <p className="text-[10.5px] text-[var(--text-muted)] mt-0.5 tabular-nums">rekord +{best} / −{worst}</p>
+        </div>
+      </div>
+    </SmartTooltip>
+  );
   return (
-    <div className="p-6 rounded-[32px] glass-panel flex flex-col h-full">
-      <div className="flex justify-between items-start mb-4">
-        <h3 className="text-[13px] font-bold flex items-center gap-2 text-[var(--text-primary)]">
-          Current streak <InfoIcon text="Aktuální série ziskových/ztrátových dnů a obchodů." theme={theme} />
-        </h3>
+    <KpiShell label="Aktuální série" info="Kolik ziskových (+) nebo ztrátových (−) dní a obchodů máš teď v řadě. Pod tím nejdelší série." theme={theme}>
+      <div className="w-full flex items-center justify-center gap-4">
+        <Column value={dayStreak} unit="dní v řadě" best={stats.maxWinningDayStreak} worst={stats.maxLosingDayStreak} label="Denní série" />
+        <div className="w-px self-stretch bg-[var(--border-subtle)]" />
+        <Column value={tradeStreak} unit="obchodů v řadě" best={stats.maxConsecutiveWins} worst={stats.maxConsecutiveLosses} label="Obchodní série" />
       </div>
-
-      <div className="grid grid-cols-2 gap-4 flex-1 content-center">
-        {/* DAYS STREAK */}
-        <div className="flex items-center gap-3">
-          <SmartTooltip text="Denní série" subtext={dayStreak > 0 ? `${dayStreak} ziskových dní v řadě` : `${Math.abs(dayStreak)} ztrátových dní v řadě`} theme={theme}>
-            <div className={`w-14 h-14 rounded-full border-[6px] flex items-center justify-center text-xl font-black ${getStreakColor(dayStreak)} cursor-pointer hover:scale-110 transition-transform duration-300`}>
-              {Math.abs(dayStreak)}
-            </div>
-          </SmartTooltip>
-          <div className="flex flex-col gap-1">
-            <span className="text-[11px] font-semibold text-slate-500">DAYS</span>
-            <div className="flex flex-col gap-1 text-[9px] font-bold">
-              <SmartTooltip text="Nejhorší série" subtext="Nejvíce ztrátových dní v řadě" theme={theme} color={COLORS.loss}>
-                <span className="bg-rose-500/20 text-rose-500 px-1.5 py-0.5 rounded w-fit cursor-pointer hover:opacity-80 transition-opacity">{stats.maxLosingDayStreak} days</span>
-              </SmartTooltip>
-              <SmartTooltip text="Nejlepší série" subtext="Nejvíce ziskových dní v řadě" theme={theme} color={COLORS.profit}>
-                <span className="bg-emerald-500/20 text-emerald-500 px-1.5 py-0.5 rounded w-fit cursor-pointer hover:opacity-80 transition-opacity">{stats.maxWinningDayStreak} days</span>
-              </SmartTooltip>
-            </div>
-          </div>
-        </div>
-
-        {/* TRADES STREAK */}
-        <div className="flex items-center gap-3">
-          <SmartTooltip text="Obchodní série" subtext={tradeStreak > 0 ? `${tradeStreak} ziskových obchodů v řadě` : `${Math.abs(tradeStreak)} ztrátových obchodů v řadě`} theme={theme}>
-            <div className={`w-14 h-14 rounded-full border-[6px] flex items-center justify-center text-xl font-black ${getStreakColor(tradeStreak)} cursor-pointer hover:scale-110 transition-transform duration-300`}>
-              {Math.abs(tradeStreak)}
-            </div>
-          </SmartTooltip>
-          <div className="flex flex-col gap-1">
-            <span className="text-[11px] font-semibold text-slate-500">TRADES</span>
-            <div className="flex flex-col gap-1 text-[9px] font-bold">
-              <SmartTooltip text="Nejhorší série" subtext="Nejvíce ztrát v řadě" theme={theme} color={COLORS.loss}>
-                <span className="bg-rose-500/20 text-rose-500 px-1.5 py-0.5 rounded w-fit cursor-pointer hover:opacity-80 transition-opacity">{stats.maxConsecutiveLosses} trades</span>
-              </SmartTooltip>
-              <SmartTooltip text="Nejlepší série" subtext="Nejvíce výher v řadě" theme={theme} color={COLORS.profit}>
-                <span className="bg-emerald-500/20 text-emerald-500 px-1.5 py-0.5 rounded w-fit cursor-pointer hover:opacity-80 transition-opacity">{stats.maxConsecutiveWins} trades</span>
-              </SmartTooltip>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+    </KpiShell>
   );
 };
 
 const DisciplineStreakWidget: React.FC<{ trades: Trade[], theme: 'dark' | 'light' | 'oled' }> = ({ trades, theme }) => {
-  const isDark = theme !== 'light';
 
   const { currentStreak, bestStreak } = useMemo(() => {
     // Group trades by date, sorted descending
@@ -469,48 +436,16 @@ const DisciplineStreakWidget: React.FC<{ trades: Trade[], theme: 'dark' | 'light
     return { currentStreak: current, bestStreak: best };
   }, [trades]);
 
-  // Color tiers
-  const getColor = (days: number) => {
-    if (days >= 30) return { ring: 'border-purple-500', text: 'text-purple-400', glow: 'shadow-purple-500/20' };
-    if (days >= 14) return { ring: 'border-amber-500', text: 'text-amber-400', glow: 'shadow-amber-500/20' };
-    if (days >= 7) return { ring: 'border-emerald-500', text: 'text-emerald-400', glow: 'shadow-emerald-500/20' };
-    return { ring: 'border-blue-500', text: 'text-blue-400', glow: 'shadow-blue-500/20' };
-  };
-
-  const color = getColor(currentStreak);
-  const fireCount = currentStreak >= 30 ? 3 : currentStreak >= 14 ? 2 : currentStreak >= 7 ? 1 : 0;
-
+  const days = (n: number) => (n === 1 ? 'den' : n >= 2 && n <= 4 ? 'dny' : 'dní');
+  const record = currentStreak > 0 && currentStreak >= bestStreak;
   return (
-    <div className="p-5 rounded-[24px] flex flex-col justify-between h-full relative overflow-hidden glass-panel">
-      <div className="flex justify-between items-start mb-2">
-        <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5 whitespace-nowrap">
-          Discipline Streak
-          <SmartTooltip text="Info" subtext="Počet po sobě jdoucích obchodních dní bez nevalidního obchodu (isValid = false)." theme={theme}>
-            <div className="p-1 -m-1 cursor-help"><Info size={14} className="text-slate-500 opacity-40 hover:opacity-100 transition-opacity" /></div>
-          </SmartTooltip>
-        </div>
+    <KpiShell label="Discipline streak" info="Počet po sobě jdoucích obchodních dní bez nevalidního obchodu (isValid = false)." theme={theme}>
+      <div className="text-center">
+        <p className={`${KPI_VALUE} ${currentStreak > 0 ? COLORS.textProfit : ''}`}>{currentStreak}</p>
+        <p className="text-[11px] font-medium text-[var(--text-secondary)] mt-1.5">{days(currentStreak)} bez porušení</p>
+        <p className="text-[10.5px] text-[var(--text-muted)] mt-0.5 tabular-nums">{record ? 'nový rekord' : `nejdéle ${bestStreak} ${days(bestStreak)}`}</p>
       </div>
-      <div className="flex-1 flex flex-col items-center justify-center gap-2">
-        <div className={`w-20 h-20 rounded-full border-[5px] ${color.ring} flex items-center justify-center shadow-lg ${color.glow} transition-all duration-500`}>
-          <div className="flex flex-col items-center">
-            <span className={`text-2xl font-black leading-none ${isDark ? 'text-white' : 'text-slate-900'}`}>{currentStreak}</span>
-            <span className="text-[10px] font-semibold text-slate-500 mt-0.5">
-              {currentStreak === 1 ? 'den' : currentStreak >= 2 && currentStreak <= 4 ? 'dny' : 'dní'}
-            </span>
-          </div>
-        </div>
-        {fireCount > 0 && (
-          <div className="flex gap-0.5">
-            {Array.from({ length: fireCount }).map((_, i) => (
-              <span key={i} className="text-sm animate-pulse" style={{ animationDelay: `${i * 150}ms` }}>🔥</span>
-            ))}
-          </div>
-        )}
-        <p className="text-[9px] font-bold text-slate-500">
-          Rekord: <span className={`font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{bestStreak}</span> {bestStreak === 1 ? 'den' : bestStreak >= 2 && bestStreak <= 4 ? 'dny' : 'dní'}
-        </p>
-      </div>
-    </div>
+    </KpiShell>
   );
 };
 
@@ -1233,7 +1168,6 @@ const ProKpiCard: React.FC<{
 const MobileKpiCarousel: React.FC<{ widgets: DashboardWidgetConfig[], renderWidget: (id: string, config?: DashboardWidgetConfig) => React.ReactNode, theme: 'dark' | 'light' | 'oled' }> = ({ widgets, renderWidget, theme }) => {
   const [index, setIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
-  const isDark = theme !== 'light';
   const autoRotateInterval = 5000;
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
