@@ -247,6 +247,9 @@ export function startMacCopierCommandRelay(options: {
       try {
         if (delivery) {
           const pollStartedAt = Date.now();
+          // Starý důkaz prázdné fronty neplatí, dokud tento poll neskončí
+          // prázdný (chyba nebo claim ho nesmí nechat platit).
+          lastEmptyPollStartedAt = null;
           deliveryBusy = true;
           let response: Awaited<ReturnType<typeof delivery>>;
           try {

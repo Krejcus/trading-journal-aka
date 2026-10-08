@@ -402,10 +402,10 @@ export async function startLocalCopierExecutionAgent(
       const candidates = repair ?? previousIds.filter(accountId => !nextIds.has(accountId));
       if (candidates.length > 0) {
         // Fail-closed: selhání dry-runu přepnutí odmítne.
-        // Jen účty, které Tradovate vůbec nevrací. Viditelný, ale neaktivní
-        // účet může mít pozici — ten nabízet k vyřazení nesmíme (resolver
-        // na něm sám selže s jasnou hláškou).
-        const probe = await previewAccounts({ required: [], optional: candidates, inactiveOptionalAsMissing: false });
+        // Mimo režim opravy jen účty, které Tradovate vůbec nevrací (viditelný
+        // neaktivní účet může mít pozici). Režim opravy drží klasifikaci ze
+        // startu (chybějící i neaktivní) — jinak by z něj nebyla cesta ven.
+        const probe = await previewAccounts({ required: [], optional: candidates, inactiveOptionalAsMissing: repair != null });
         const missing = new Set(probe.missingOptional);
         const unavailable = candidates.filter(accountId => missing.has(accountId));
         if (unavailable.length > 0) {
@@ -413,7 +413,7 @@ export async function startLocalCopierExecutionAgent(
             ? unavailable.length === repair.length && !unavailable.some(accountId => nextIds.has(accountId))
             : unavailable.length === previousIds.length;
           throw new Error(retirable
-            ? `Stará skupina „${group.name || group.id}“ má účty ${unavailable.join(', ')}, které v Tradovate už nejsou. `
+            ? `Stará skupina „${group.name || group.id}“ má účty ${unavailable.join(', ')}, které v Tradovate už nejsou${repair ? ' nebo jsou neaktivní' : ''}. `
               + `Potvrď jejich vyřazení a přepnutí. ${retireMissingMarker(group.id, unavailable)}`
             : `Účty ${unavailable.join(', ')} staré skupiny už v Tradovate nejsou. `
               + 'Worker to za chvíli sám zachytí a restartuje se; přepnutí pak půjde. Zkus to znovu za pár minut.');
@@ -489,9 +489,10 @@ export async function startLocalCopierExecutionAgent(
       ? {
         required: copyGroupAccountIds(next),
         optional: previousIds.filter(accountId => !copyGroupAccountIds(next).includes(accountId)),
-        // 8. 10. 2026 (review): vyřadit bez flat důkazu jde jen účet, který
-        // Tradovate vůbec nevrací. Viditelný neaktivní účet může mít pozici.
-        inactiveOptionalAsMissing: false,
+        // 8. 10. 2026 (review): mimo režim opravy jde bez flat důkazu vyřadit
+        // jen účet, který Tradovate vůbec nevrací (neaktivní může mít pozici).
+        // Režim opravy (E1) zachovává klasifikaci ze startu včetně neaktivních.
+        inactiveOptionalAsMissing: startupRepair?.groupId === previous.id,
       }
       : accountsForRoutingChange(previous, next);
     if ((mode === 'activate' || topologyChanged) && options.controller.status().armed) {

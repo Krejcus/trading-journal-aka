@@ -88,7 +88,7 @@ describe('režim opravy po startu: navazující opravy', () => {
     running = await startLocalCopierExecutionAgent({ controller: runtime, group: brokenGroup(), port: 0, ...routing });
     await running.execute({ type: 'copy-command', command: { type: 'update-group', group: keepFollower() } });
     expect(routing.prepareGroupAccounts).toHaveBeenCalledWith({
-      required: [200, 400], optional: [100, 300], inactiveOptionalAsMissing: false,
+      required: [200, 400], optional: [100, 300], inactiveOptionalAsMissing: true,
     });
     expect(runtime.activateGroup).toHaveBeenCalledWith(
       expect.objectContaining({ leaderAccountId: 400 }),

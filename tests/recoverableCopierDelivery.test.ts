@@ -89,7 +89,8 @@ describe('recoverable copier delivery', () => {
     expect(f.options.request).toHaveBeenCalledTimes(3);
   });
   it.each(['polling', 'executing', 'completed'] as const)('never executes a persisted %s command after restart', async phase => {
-    const f = fixture(); f.saved = { version: 1, session: randomUUID(), deliveryId: randomUUID(), phase,
+    const f = fixture(); f.remote.command = { type: 'reconcile' };
+    f.saved = { version: 1, session: randomUUID(), deliveryId: randomUUID(), phase,
       ...(phase !== 'polling' ? { commandId: f.remote.id, result: { armed: true } } : {}) };
     await recoverableCopierDelivery(f.options)();
     expect(f.options.agent.execute).not.toHaveBeenCalled();
@@ -110,7 +111,8 @@ describe('recoverable copier delivery', () => {
     expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
   });
   it('will not execute after its intent could not be synced to disk', async () => {
-    const f = fixture(); const step = recoverableCopierDelivery(f.options);
+    // Neidempotentní příkaz; DISARM/kill switch se smí zopakovat (jen zpřísňují).
+    const f = fixture(); f.remote.command = { type: 'reconcile' }; const step = recoverableCopierDelivery(f.options);
     const write = f.options.store.write; let fail = true;
     f.options.store.write = async row => { if (row?.phase === 'executing' && fail) { fail = false; throw new Error('disk'); } await write(row); };
     await expect(step()).rejects.toThrow('disk'); await step();
@@ -125,6 +127,16 @@ describe('recoverable copier delivery', () => {
     if (kind === 'old') f.remote.createdAt = new Date(999).toISOString();
     if (kind === 'invalid') f.remote.expiresAt = 'invalid';
     await recoverableCopierDelivery(f.options)(); expect(f.options.agent.execute).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['disarm', 'polling'], ['disarm', 'executing'], ['kill-switch', 'polling'], ['kill-switch', 'executing'],
+  ] as const)('claim brzdy %s z předchozí session (%s) se po restartu provede', async (type, phase) => {
+    const f = fixture(); f.remote.command = { type };
+    f.saved = { version: 1, session: randomUUID(), deliveryId: randomUUID(), phase,
+      ...(phase !== 'polling' ? { commandId: f.remote.id } : {}) };
+    await recoverableCopierDelivery(f.options)();
+    expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
+    expect(f.options.request.mock.calls[1][0]).not.toMatchObject({ error: 'command-outcome-unknown-worker-session-changed' });
   });
   it.each(['disarm', 'kill-switch'] as const)('brzda %s zadaná před restartem workeru se provede', async type => {
     const f = fixture();

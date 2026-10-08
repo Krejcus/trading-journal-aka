@@ -45,13 +45,17 @@ export function recoverableCopierDelivery(options: {
       await persist(null); return response;
     }
     if (remote.status !== 'claimed') throw new Error('relay-delivery-status-invalid');
+    // DISARM / kill switch jsou idempotentní a jen zpřísňují: claim z předchozí
+    // session (ztracená odpověď při restartu) se proto provede, ne ACKne jako
+    // neznámý. Obchodní a konfigurační příkazy se nikdy neopakují.
+    const idempotentBrake = remote.command.type === 'disarm' || remote.command.type === 'kill-switch';
     if (current.phase === 'completed') {
       // Výsledek už je durable (i z předchozí session): jen ho znovu
       // potvrdíme, nepřepisujeme na „neznámý“ (8. 10. 2026).
-    } else if (current.session !== session || current.phase === 'executing') {
+    } else if ((current.session !== session || current.phase === 'executing') && !idempotentBrake) {
       await persist({ ...current, phase: 'completed', commandId: remote.id, result: null,
         error: 'command-outcome-unknown-worker-session-changed' });
-    } else if (current.phase === 'polling') {
+    } else if (current.phase === 'polling' || idempotentBrake) {
       const serverNow = typeof response.serverNow === 'string' ? Date.parse(response.serverNow) : NaN;
       const localMidpoint = pollStartedAt + ((pollReceivedAt - pollStartedAt) / 2);
       const serverClockOffsetMs = Number.isFinite(serverNow) ? serverNow - localMidpoint : 0;
