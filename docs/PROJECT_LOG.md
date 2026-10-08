@@ -270,6 +270,13 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   všechny citované source symboly a konkrétní test/doc soubory existují,
   `git diff --check` je čistý. Bez změny kódu, instalace závislostí, broker
   příkazu, ARM/Flatten, deploye, workeru nebo pushnutí.
+- Dovětek po nezávislém review: opraveny zavádějící symboly a testové odkazy,
+  přesně popsány terminal-cancel/Flatten výjimky, account-wide auto-close
+  fallback, UI display grace a relay idempotency. Nově jsou výslovně vedeny
+  tři mezery: SHADOW/legacy ARM volají veřejné `reconcile()` a mohou smazat
+  incident, relay negarantuje stejný klíč napříč novým klientským pokusem a
+  mrtvý `planReconciliation` by po zapojení porušil zákaz Auto-Sync. Jen
+  dokumentace; runtime kód se neměnil.
 
 ### 2026-10-06 — Ranní incidenty a nasazení (Claude + Codex)
 - 07:31 UTC: leader posunul stop, stopy followerů vyplnily na původní ceně ~90 ms před potvrzením

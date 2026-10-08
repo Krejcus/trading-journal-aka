@@ -122,33 +122,47 @@ existující ochranu.
   starý stav jako historický. Nebezpečné je po restartu „pokračovat tam, kde
   se skončilo“, bez syncu, reconciliation a nového ARM.
 
-### INV-DEFAULT-02: Neznámý nebo chybový stav zastaví nové riziko; auto-close smí zasáhnout jen prokázané kopie podle explicitní politiky
+### INV-DEFAULT-02: Neznámý nebo chybový stav zastaví nové riziko; auto-close se řídí explicitní politikou a má vědomý account-wide fallback
 
-- Proč: Obecný account-wide close by mohl zavřít ruční pozici; pouhé DISARM
-  bez správy prokázané otevřené kopie by naopak mohl nechat orphan expozici.
+- Proč: Obecný account-wide close může zavřít ruční pozici; pouhé DISARM bez
+  správy otevřené kopie může naopak nechat orphan expozici. Aktuální politika
+  mezi těmito riziky vědomě volí fail-safe account-wide fallback, pokud má
+  zapojený účet lokálně známou expozici, ale runtime pro něj nezná žádný
+  symbol copier stopy.
 - Vynucuje: `services/copierRuntimeController.ts:failClosed`,
   `autoFlattenCopies`, `services/copierLeaderFlatGuard.ts:evaluateLeaderFlatBatch`.
 - Hlídá test: `tests/copierAutoCloseV9V4.test.ts`,
   `tests/copierLeaderFlatGuard.test.ts`, `tests/copierChaosScenarios.test.ts`.
-- Nikdy: Nevykládat fail-closed jako povolení k libovolnému Flatten All ani
-  jako důkaz, že účet je flat.
-- Bezpečné změny vs. nebezpečné: Bezpečné je disarmovat, uložit incident a
-  použít přesný `{accountId, symbol}` ownership guard. Nebezpečné je rozšířit
-  scope podle shody symbolu, historie účtu nebo pouhé konfigurace followera.
+- Nikdy: Nevykládat fail-closed jako obecné povolení k libovolnému Flatten All
+  ani jako důkaz, že účet je flat. Výjimkou je pouze popsaný fallback uvnitř
+  `autoFlattenCopies`: bez targetů předá účet do `flatten()` bez symbolového
+  omezení (`cleanupScope` pak fakticky zůstane account-wide).
+- Bezpečné změny vs. nebezpečné: Bezpečné je disarmovat, uložit incident a,
+  když stopa existuje, použít přesný `{accountId, symbol}` target. Nebezpečné
+  je account-wide fallback tiše rozšířit do ručního DISARMu nebo tvrdit, že
+  nemůže zasáhnout ruční pozici.
 
-### INV-DEFAULT-03: Ne-transportní incident přežije restart a odstraní jej jen čistá veřejná kontrola pozic
+### INV-DEFAULT-03: Ne-transportní incident má přežít restart a odstranit jej smí jen čistá ruční kontrola; dvě agentní cesty to dnes porušují
 
 - Proč: Background preflight nebo benigní reconnect nesmí schovat incident,
   který má vidět člověk.
 - Vynucuje: `services/copierRuntimeController.ts:bootstrapCopierRuntime`,
   `failClosed`, `performReconciliation`; durable
-  `safety.manualRecoveryRequired`.
-- Hlídá test: `tests/copierWorkerArmPreparation.test.ts`.
+  `safety.manualRecoveryRequired`. **ZNÁMÉ PORUŠENÍ:**
+  `server/localCopierExecutionAgent.ts:execute` volá veřejné `reconcile()` pro
+  SHADOW a pro kompatibilní ARM bez `prepareArm`; čistý výsledek proto smaže
+  `lastError` i `manualRecoveryRequired`, přestože uživatel nespustil
+  „Kontrolu pozic“.
+- Hlídá test: `tests/copierWorkerArmPreparation.test.ts` kryje restart,
+  preparation a reconnect; **chybí regrese pro zachování incidentu přes SHADOW
+  a kompatibilní ARM bez `prepareArm`**.
 - Nikdy: Nemazat `lastError` ani manual-recovery marker při přípravě ON,
   heartbeatu, interním reconnect recovery nebo pouhém restartu.
 - Bezpečné změny vs. nebezpečné: Bezpečné je odstranit marker po
-  `authoritativelyClean` veřejném `reconcile()`. Nebezpečné je volat veřejné
-  `reconcile()` automaticky jen proto, aby se ON zrychlilo.
+  `authoritativelyClean` veřejném `reconcile()` vyvolaném explicitním příkazem
+  uživatele. SHADOW a kompatibilní ARM mají sdílet jen interní read-only
+  reconciliation bez `clearLastError`; současné volání veřejné metody je
+  nebezpečná mezera, ne schválená výjimka.
 
 ### ARM brány
 
@@ -166,8 +180,11 @@ existující ochranu.
   `dayLockUntil`; čas je uvnitř trading window; skončil cooldown;
   `positionCheckComplete`; všechny zapojené účty jsou autoritativně flat;
   leader je eligible; existuje alespoň jeden enabled, ne-`off`, eligible a
-  nevyřazený follower. `services/copierRiskGate.ts:haltReason` stejné zásady
-  znovu hlídá před dispatchí.
+  nevyřazený follower. `services/copierRiskGate.ts:haltReason` před dispatchí
+  znovu hlídá jen kill, ARM, TTL, connection/heartbeat, environment, sequence,
+  stuck outbox a group divergence. Trading window, cooldown, day lock,
+  management-only, flat stav a eligibility vynucuje controller dříve; risk
+  gate není jejich druhá úplná kopie.
 - Hlídá test: `tests/copierRuntimeController.test.ts`,
   `tests/copierRiskGate.test.ts`, `tests/copierArmPreparation.test.ts`,
   `tests/copierPreflightDisarmedReconcile.test.ts`.
@@ -187,8 +204,7 @@ existující ochranu.
   observation, connection sync generation, serializovanou konfiguraci,
   eligibility, account IDs a per-account route epoch, `positionCheckComplete`
   a risk proof; platí nejvýše 30 s a čtení mají 10s deadline.
-- Hlídá test: `tests/copierWorkerArmPreparation.test.ts`,
-  `tests/copierArmPreparation.test.ts`.
+- Hlídá test: `tests/copierWorkerArmPreparation.test.ts`.
 - Nikdy: Nepublikovat receipt z pozdního čtení, z missing optional followera
   ani z jiné route/session; preparation nesmí volat veřejné `reconcile()`.
 - Bezpečné změny vs. nebezpečné: Bezpečné je sdílet právě probíhající
@@ -202,24 +218,30 @@ existující ochranu.
   `dispatchBroker`; `server/localCopierExecutionAgent.ts:execute` a
   `executeCopyCommand` používají brake epoch a deadline.
 - Hlídá test: `tests/copierWorkerArmPreparation.test.ts`,
-  `tests/localCopierExecutionAgent.test.ts`,
-  `tests/liveCopyGroupPowerInteraction.test.ts`.
+  `tests/localCopierExecutionAgent.test.ts`.
 - Nikdy: Nedovolit, aby timeoutovaný nebo zrušený ARM doběhl po novějším
-  DISARM/kill příkazu.
+  DISARM/kill příkazu. Úzká výjimka je terminální cancel již známé follower
+  objednávky popsaný níže; ten nesmí založit novou expozici.
 - Bezpečné změny vs. nebezpečné: Bezpečné je monotónně zvyšovat generation a
   před každým write ji znovu porovnat. Nebezpečné je kontrolovat ji jen při
   začátku příkazu.
 
-### INV-ARM-04: Shadow mode nesmí nikdy dispatchovat broker write
+### INV-ARM-04: Shadow mode nesmí dispatchovat risk-zvyšující broker write; terminální lifecycle cancel je úzká výjimka
 
-- Proč: Shadow slouží k pozorování a plánování bez finančního side effectu.
+- Proč: Shadow slouží k pozorování a plánování bez nové expozice. Pokud ale
+  leader terminálně zruší nebo odmítne již zkopírovanou neochrannou follower
+  objednávku, její přesný cancel snižuje riziko osiření.
 - Vynucuje: `services/copierRiskGate.ts:evaluateRiskGate` vrací `dispatch=false`
   v shadow; `services/copierRuntimeController.ts:dispatchBroker` shadow znovu
-  odmítá.
+  odmítá kromě `terminalCancel`, který používá
+  `services/copierRiskGate.ts:cancelLifecycleHaltReason`. Výjimka platí pouze
+  pro cancel známého broker orderu z durable vazby a výslovně vylučuje
+  bracket/OSO protective nohy.
 - Hlídá test: `tests/copierRiskGate.test.ts`, `tests/copierRunner.test.ts`,
   `tests/copierRuntimeController.test.ts`.
-- Nikdy: Nevykládat `armed=true, shadowMode=true` jako live ARM. Některé live
-  ARM brány jsou pro shadow úmyslně volnější, protože write je zakázaný.
+- Nikdy: Nevykládat `armed=true, shadowMode=true` jako live ARM ani výjimku
+  nerozšířit na place/modify/OSO nebo protective cancel. Některé live ARM brány
+  jsou pro shadow úmyslně volnější, protože risk-zvyšující write je zakázaný.
 - Bezpečné změny vs. nebezpečné: Bezpečné je přidat read-only audit. Nebezpečné
   je povolit write „jen do dema“ uvnitř shadow větve.
 
@@ -239,15 +261,20 @@ existující ochranu.
   přesné lifecycle guardy. Nebezpečné je buď zavřít celý účet, nebo zahodit
   vlastnictví rozpracované kopie.
 
-### INV-BRAKE-02: Kill switch je jednosměrná západka pro daný runtime a nesmí spustit pozdější automatiku
+### INV-BRAKE-02: Kill switch je jednosměrná západka pro nové riziko; ponechává jen přesně vymezené risk-reducing akce
 
-- Proč: Nouzový freeze musí přebít fronty, recovery i resume nabídky.
+- Proč: Nouzový freeze musí přebít fronty, recovery i resume nabídky, ale
+  nesmí znemožnit uživateli ruční Flatten ani osiřit již známou neochrannou
+  follower objednávku po terminálním cancelu leadera.
 - Vynucuje: `services/copierRuntimeController.ts:engageKillSwitch`;
   `services/copierRiskGate.ts:haltReason`; kill lze resetovat jen novým
   bootstrapem, který opět startuje DISARMED a vyžaduje kontrolu.
 - Hlídá test: `tests/copierRuntimeController.test.ts`,
   `tests/copierChaosScenarios.test.ts`, `tests/localCopierExecutionAgent.test.ts`.
 - Nikdy: Nepřidávat „unlock kill“ za běhu ani automatický re-ARM po reconnectu.
+  `dispatchBroker` smí přes kill pustit jen úzký `terminalCancel` hlídaný
+  `cancelLifecycleHaltReason`; ruční Flatten je samostatná výslovná safety
+  akce. Ani jedna výjimka nesmí vytvořit nebo zvětšit expozici.
 - Bezpečné změny vs. nebezpečné: Bezpečné je zpřesnit audit a doručení brzdy.
   Nebezpečné je zaměnit kill za dočasný boolean ovládaný posledním poll response.
 
@@ -267,12 +294,16 @@ existující ochranu.
 - Bezpečné změny vs. nebezpečné: Bezpečné je použít poslední ověřenou route a
   výsledek dál sledovat. Nebezpečné je odstranit tlačítko při unknown statusu.
 
-### INV-BRAKE-04: Day lock čeká na flat, platí do konce Tradovate session a ručně se neodemyká
+### INV-BRAKE-04: Day lock čeká na flat a ručně se neodemyká; relay příkaz jej fixuje na konec session
 
 - Proč: Zamknutí uprostřed obchodu nesmí opustit kopie; ruční odemknutí by
   obešlo anti-revenge pojistku.
 - Vynucuje: `services/copierRuntimeController.ts:maybeEngageDayLock`, `lockUntil`,
-  `unlockDay`; `services/copierArmSession.ts:msUntilTradovateSessionEnd`.
+  `unlockDay`; `server/localCopierExecutionAgent.ts:execute` pro
+  `lock-until-session-end` počítá `tradovateSessionEndAt(commandCreatedAt)`.
+  Samotné controller API `lockUntil(until, reason)` přijme libovolný platný
+  budoucí čas; session-end omezení tedy garantuje protokolový příkaz, ne typ
+  ani controller metoda.
 - Hlídá test: `tests/copierDayRuleActions.test.ts`,
   `tests/copierArmSession.test.ts`, `tests/copierRuntimeController.test.ts`.
 - Nikdy: Neaktivovat lock jako důvod k account-wide close uprostřed expozice a
@@ -280,18 +311,26 @@ existující ochranu.
 - Bezpečné změny vs. nebezpečné: Bezpečné je uložit pending lock a aplikovat ho
   po potvrzeném flat. Nebezpečné je počítat konec pevnými 24 hodinami bez DST.
 
-### INV-BRAKE-05: Expirace ARM nejprve odzbrojí a podle `armExpiryFlatten` risk-redukčně zavře jen prokázané kopie; shadow nikdy neobchoduje
+### INV-BRAKE-05: Expirace ARM nejprve odzbrojí a podle `armExpiryFlatten` spustí přesně cílený close nebo vědomý account-wide fallback; shadow jej nespouští
 
-- Proč: Samotná expirace nesmí nechat vlastněné kopie bez dozoru, ale nesmí se
-  změnit v account-wide zásah do ručních pozic.
+- Proč: Samotná expirace nesmí nechat vlastněné kopie bez dozoru. Kde runtime
+  zná copier stopu, zavírá konkrétní účty a symboly; kde u zapojeného účtu vidí
+  expozici, ale nezná ani jeden cílový symbol, volí fail-safe account-wide
+  fallback, který může zasáhnout i ruční pozici.
 - Vynucuje: `services/copierRuntimeController.ts:maybeHandleArmExpiry` a
   `autoFlattenCopies`; scope pochází z
   `services/liveCopyTrading.ts:DEFAULT_COPY_GROUP_SAFETY.armExpiryFlatten`.
+  `copierFootprintSymbols` zahrne pro followera každý symbol, který právě drží
+  leader, a durable epoch/outbox/pending/cut stopy. `armExpiryFlatten: 'group'`
+  zahrnuje také leader účet. Bez jakékoli stopy se `flatten()` volá bez targetů
+  a `cleanupScope: 'target-symbol-or-account'` přejde pro daný účet na
+  account-wide úklid.
 - Hlídá test: `tests/copierAutoCloseV9V4.test.ts`,
   `tests/copierRuntimeController.test.ts`, `tests/copierChaosScenarios.test.ts`.
-- Nikdy: Neprovádět expiry close v shadow režimu, při policy `off` ani mimo
-  přesný ownership/scope; nečekat s DISARM na dokončení close. Policy `off`
-  vypíná broker close, nikoli povinnou read-only kontrolu po reconnectu.
+- Nikdy: Neprovádět expiry close v shadow režimu ani při policy `off`; nečekat
+  s DISARM na dokončení close. Policy `off` vypíná broker close, nikoli
+  povinnou read-only kontrolu po reconnectu. Account-wide fallback nesmí být
+  dokumentován jako přesný ownership důkaz.
 - Bezpečné změny vs. nebezpečné: Bezpečné je nejprve durable zaznamenat
   `arm-expiry`, vypnout gate a teprve potom spustit ohraničený close. Nebezpečné
   je prodloužit ARM kvůli tomu, že auto-close právě běží.
@@ -319,10 +358,16 @@ existující ochranu.
   `performReconciliation({clearLastError:true})`; interní volání používají
   výchozí `clearLastError=false`; `runReconciliation` maže chybu jen při
   `authoritativelyClean`, nezměněné generation a neaktivním kill switchi.
+  **ZNÁMÉ PORUŠENÍ HRANICE:** SHADOW a kompatibilní ARM bez `prepareArm` v
+  `server/localCopierExecutionAgent.ts:execute` volají právě veřejnou metodu,
+  takže čistý automatický výsledek má stejnou autoritu jako ruční kontrola a
+  může smazat incident. Je-li runtime v tu chvíli ARMED, veřejná metoda jej
+  navíc auditovaně DISARMuje.
 - Hlídá test: `tests/copierPreflightDisarmedReconcile.test.ts`,
   `tests/copierWorkerArmPreparation.test.ts`, `tests/copierRuntimeController.test.ts`.
-- Nikdy: Nevolat veřejné `reconcile()` z background preflightu nebo jako
-  vedlejší efekt zobrazení stránky.
+- Nikdy: Nevolat veřejné `reconcile()` z background preflightu, SHADOW,
+  kompatibilního ARM nebo jako vedlejší efekt zobrazení stránky. První dvě
+  cesty jsou současný defect evidovaný v sekci 5, ne povolená výjimka.
 - Bezpečné změny vs. nebezpečné: Bezpečné je sdílet nízkoúrovňové read-only
   funkce. Nebezpečné je sdílet i `clearLastError`/manual recovery side effect.
 
@@ -386,19 +431,27 @@ existující ochranu.
 
 ### Divergence
 
-### INV-DIVERGENCE-01: Divergence je `halt-group`, ne příležitost k automatickému dorovnávacímu obchodu
+### INV-DIVERGENCE-01: Divergence není příležitost k dorovnávacímu obchodu; default je `halt-group`, důkazně izolovaný follower je úzká výjimka
 
 - Proč: Bez spolehlivé kauzality nelze poznat, zda rozdíl pochází z ručního
   obchodu, chybějícího eventu nebo neznámého fillu.
-- Vynucuje: `services/copierRiskGate.ts:haltReason`,
-  `services/copierEngine.ts:planReconciliation`,
-  `services/copierRuntimeController.ts:performReconciliation`.
-- Hlídá test: `tests/copierEngine.test.ts`, `tests/copierRiskGate.test.ts`,
-  `tests/copierRuntimeController.test.ts`.
+- Vynucuje: `services/copierRiskGate.ts:haltReason` a
+  `services/copierRuntimeController.ts:performReconciliation`. V16 dovoluje
+  místo haltu izolovat konkrétního ineligible followera jen s episode-bound
+  důkazem přes `authoritativelyIsolateFollowerForEpisode` /
+  `episodeIsolationFromSnapshot`: přesná lineage, flat/no-working a žádný
+  nejasný zbytek. Incident 6. 10. má obdobně úzkou all-or-nothing izolaci
+  followera, jehož protective order se vyplnil během modify.
+- Hlídá test: `tests/copierRiskGate.test.ts`,
+  `tests/copierRuntimeController.test.ts`,
+  `tests/copierV16EpisodeIsolation.test.ts`,
+  `tests/copierProtectiveFilledDuringModify.test.ts`.
 - Nikdy: Neopravovat rozdíl Market příkazem ani „Auto-Syncem“.
 - Bezpečné změny vs. nebezpečné: Bezpečné je disarmovat, ukázat účty a po
-  ručním zásahu autoritativně zkontrolovat flat. Nebezpečné je odvodit cíl jen
-  z leader quantity a automaticky followera dorovnat.
+  ručním zásahu autoritativně zkontrolovat flat, případně použít výše uvedenou
+  důkazní izolaci jednoho followera. `services/copierEngine.ts:planReconciliation`
+  je nevolaný mrtvý export, který plánuje Market dorovnání; pravidlo nevynucuje
+  a jeho zapojení by je porušilo.
 
 ### Pořadí a čerstvost stavu
 
@@ -407,10 +460,15 @@ existující ochranu.
 - Proč: Kontrola provedená pouze na vstupu do async operace zastará během
   čekání na broker/store.
 - Vynucuje: `services/copierRuntimeController.ts:dispatchBroker`,
-  `invalidateReconciliation`, `performReconciliation`.
+  `invalidateReconciliation`, `performReconciliation`. Výjimkou je pouze
+  `terminalCancel`: u přesného cancelu známé neochranné follower objednávky
+  `dispatchBroker` záměrně nepoužije kill/DISARM/generation/shadow brány a
+  kontroluje jen `cancelLifecycleHaltReason` (živé čerstvé spojení a správné
+  prostředí).
 - Hlídá test: `tests/copierRuntimeController.test.ts`,
   `tests/copierV12Staleness.probe.test.ts`, `tests/copierRouteGapV6.test.ts`.
-- Nikdy: Nepřesouvat finální generation check před await broker callu.
+- Nikdy: Nepřesouvat finální generation check před await broker callu ani
+  výjimku nerozšířit mimo terminální cancel z durable vazby.
 - Bezpečné změny vs. nebezpečné: Bezpečné je přidat další monotónní epochu.
   Nebezpečné je použít wall-clock timestamp jako jediný fence.
 
@@ -421,7 +479,7 @@ existující ochranu.
   `CopierStatusAckFence`, `shouldAcceptCopierStatus`;
   `components/TradovateLiveDesk.tsx:acceptAgentStatus`.
 - Hlídá test: `tests/copierStatusPollFence.test.ts`,
-  `tests/copierRelayStatusPoll.test.ts`, `tests/liveCopyGroupPowerInteraction.test.ts`.
+  `tests/copierRelayStatusPoll.test.ts`.
 - Nikdy: Neřadit status pouze podle arrival time nebo stejné `revision` napříč
   restarty.
 - Bezpečné změny vs. nebezpečné: Bezpečné je kombinovat `startedAt` a
@@ -433,7 +491,9 @@ existující ochranu.
   hodnoty vypadají věrohodně.
 - Vynucuje: `lib/copierForegroundPoller.ts:isCopierStatusFresh`,
   `lib/copierSafetyControls.ts:copierAgentCommandAllowedWhileRestored`,
-  `components/TradovateLiveDesk.tsx:executeAgent`.
+  `components/TradovateLiveDesk.tsx:armStatusRef` a jednotlivé ARM/config
+  brány. `executeAgent` sám kontroluje pouze příznak restored stavu, nikoli
+  15sekundové stáří; obecné copy-commandy mají další fresh kontrolu v adapteru.
 - Hlídá test: `tests/copierForegroundPoller.test.ts`,
   `tests/copierSafetyControls.test.ts`, `tests/copierPowerDisplay.test.ts`.
 - Nikdy: Nepoužít localStorage/restored status pro ARM, změnu skupiny,
@@ -444,19 +504,24 @@ existující ochranu.
 
 ### Relay příkazy
 
-### INV-RELAY-01: Relay příkaz má stabilní idempotency key, konečné TTL a jeden durable výsledek
+### INV-RELAY-01: Jeden relay enqueue má idempotency key, konečné TTL a jeden durable výsledek; nový klientský pokus dnes dostane nový klíč
 
-- Proč: Opakované kliknutí nebo ztracená HTTP odpověď nesmí založit druhou
-  execution.
+- Proč: Retry stejného HTTP záměru nemá založit druhou execution. Současný
+  klient ale při každém volání `executeTradovateCopierRelayCommand` generuje
+  nový `randomUUID()`, takže klíč chrání jen opakování požadavku se zachovaným
+  payloadem/klíčem, nikoli dvojklik nebo nové volání po nejisté odpovědi.
 - Vynucuje: `server/tradovateCopierCommandRelay.ts:enqueueTradovateCopierCommand`,
   `findInFlightFlatten`, `findInFlightArm`, `coalesceInsertedArm`; brzdy mají
-  TTL 10 min, běžné příkazy 30 s a durable pole `idempotencyKey`.
+  TTL 10 min, běžné příkazy 30 s a durable pole `idempotencyKey`. In-flight
+  Flatten a ARM mají navíc serverové coalescing; DISARM, reconcile a ostatní
+  copy-commandy se s novým klíčem mohou zařadit vícekrát.
 - Hlídá test: `tests/tradovateCopierCommandRelay.test.ts`,
   `tests/copierRelayDetailedReview.test.ts`.
-- Nikdy: Nevytvářet nový command ID při pouhém timeoutu čekání na starý
-  výsledek; odlišný současný ARM payload nesmí být deduplikován jako shodný.
-- Bezpečné změny vs. nebezpečné: Bezpečné je dohledat původní command podle
-  idempotency key. Nebezpečné je automaticky znovu enqueueovat mutaci.
+- Nikdy: Vydávat současný náhodný klíč per call za ochranu proti dvojkliku;
+  odlišný současný ARM payload naopak nesmí být deduplikován jako shodný.
+- Bezpečné změny vs. nebezpečné: Bezpečné je při transportním retry zachovat
+  původní klíč a dohledat původní command. Nebezpečné je po nejisté odpovědi
+  automaticky znovu enqueueovat mutaci s novým UUID.
 
 ### INV-RELAY-02: Obnovuje se transport a ACK, nikoli execution, která už začala
 
@@ -508,7 +573,7 @@ existující ochranu.
   přijímá jen `dll-locked`/`breached`, porovnává severity a před změnou DISARMuje;
   aktivaci řeší reconciliation/session logika.
 - Hlídá test: `tests/copierAccountEligibility.test.ts`,
-  `tests/copierRuntimeCommandAdapter.test.ts`.
+  `tests/localCopierExecutionAgent.test.ts`.
 - Nikdy: Neposílat z UI exclusion `active` a neoslabit `breached` na DLL.
 - Bezpečné změny vs. nebezpečné: Bezpečné je zpřísnit stav s konkrétním
   důvodem. Nebezpečné je použít zelený LIVE badge jako worker unlock.
@@ -600,7 +665,7 @@ existující ochranu.
 - Vynucuje: `services/copierArmSession.ts:tradovateSessionEndAt`,
   `msUntilTradovateSessionEnd`; controller přes session end resetuje denní
   paměť a expiruje ARM/locky.
-- Hlídá test: `tests/copierArmSession.test.ts`, `tests/copierDailyRules.test.ts`.
+- Hlídá test: `tests/copierArmSession.test.ts`.
 - Nikdy: Nepočítat konec session jako `now + 24h` ani jako konstantní UTC čas.
 - Bezpečné změny vs. nebezpečné: Bezpečné je používat jedinou sdílenou helper
   funkci. Nebezpečné jsou lokální kopie časové logiky v UI/relay.
@@ -612,7 +677,9 @@ existující ochranu.
 - Proč: Při neúplném lifecycle je bezpečnější udržet SL/TP/exit známé kopie než
   celý runtime vypnout; režim ale nesmí rozšířit riziko.
 - Vynucuje: `services/copierRuntimeController.ts:enterManagementOnlyAfterProtectedTargetFailure`,
-  `services/copierRiskGate.ts:haltReason`, `arm` a `reconcile`.
+  `blockDuringPause`, `entryRestrictionActive`, `arm` a `reconcile`. Obecný
+  `services/copierRiskGate.ts:haltReason` management-only nezná; nové entry
+  blokuje controller ještě před dispatchí.
 - Hlídá test: `tests/copierManagementOnly.test.ts`.
 - Nikdy: Nevstupovat do management-only bez přesného targetu a obou working
   protective orders; nevypínat ho ruční kontrolou, dokud skupina není známě flat.
@@ -656,11 +723,13 @@ existující ochranu.
   navzdory outboxu uloženému odděleně v každém procesu.
 - Vynucuje: `services/copierWorkerLease.ts:acquireWorkerLease`,
   `startLeaseRenewal`; `services/supabaseCopierStore.ts:createSupabaseCopierStore`
-  odmítá stale fence. **NEOVĚŘENO V RUNTIME:** vyhledání volajících potvrzuje,
-  že lease nemá worker entry; Mac používá `scripts/copier/pilot.ts` +
-  `fileCopierStore`.
-- Hlídá test: `tests/supabaseCopierStore.test.ts`; **žádný přímý test lease API
-  ani end-to-end test reálného VPS entry**, protože entry neexistuje.
+  překládá stale fence/expired/missing lease na terminální
+  `CopierFenceStaleError`. **NEOVĚŘENO V RUNTIME:** vyhledání volajících
+  potvrzuje, že lease nemá worker entry; Mac používá `scripts/copier/pilot.ts`
+  + `fileCopierStore`.
+- Hlídá test: `tests/supabaseCopierStore.test.ts` kryje CAS a validaci store;
+  **žádný přímý test nekryje překlad stale fence na `CopierFenceStaleError`,
+  lease API ani end-to-end reálného VPS entry**, protože entry neexistuje.
 - Nikdy: Nespouštět druhou execution instanci jen s předpokladem, že relay
   vybere jednu; heartbeat routing není fencing.
 - Bezpečné změny vs. nebezpečné: Bezpečné pořadí je acquire lease → store s
@@ -671,7 +740,7 @@ existující ochranu.
 
 - Proč: Párování chrání přístup, nikoli jedinečnost execution vlastníka.
 - Vynucuje: `server/tradovateCopierDevice.ts:registerTradovateCopierDevice`,
-  `authenticateTradovateCopierDevice`; `server/macCopierDevice.ts` Keychain
+  `authorizeTradovateCopierDevice`; `server/macCopierDevice.ts` Keychain
   helpers; `server/tradovateCopierCommandRelay.ts:selectRelayDeviceTarget`.
 - Hlídá test: `tests/tradovateCopierDevice.test.ts`,
   `tests/macCopierDevice.test.ts`, `tests/copierRelayOwnerResolve.test.ts`.
@@ -721,7 +790,8 @@ existující ochranu.
   `services/tradovateBroker.ts:commandCorrelationTag`; skutečnou ochranu vynucují
   outboxy a lookup-before-retry.
 - Hlídá test: `tests/tradovateMapping.test.ts`, `tests/copierOutbox.test.ts`,
-  `tests/tradovateBrokerRequestDedup.test.ts`.
+  **žádný přímý test neprokazuje, že `clOrdId` na venue deduplikuje — právě
+  proto se za takový důkaz nepovažuje**.
 - Nikdy: Neposílat Tag50 bez broker registrace a nepoužít shodný `clOrdId` jako
   důvod k blind retry.
 - Bezpečné změny vs. nebezpečné: Bezpečné je zachovat legacy lookup jen pro
@@ -775,21 +845,24 @@ existující ochranu.
 
 ### UI pravidla
 
-### INV-UI-01: Neznámý, stale nebo obnovený stav se zobrazuje neutrálně a nesmí se tvářit jako ON, connected nebo flat
+### INV-UI-01: Obnovený stav může krátce stabilizovat zobrazení, ale neautorizuje příkaz; po grace je stale/unknown neutrální
 
-- Proč: Prezentační cache přežívá worker a její kladná hodnota by jinak
-  vytvořila falešnou autoritu.
+- Proč: Prezentační cache přežívá worker a její kladná hodnota nesmí vytvořit
+  execution autoritu. UI ale záměrně až 1,2 s zobrazuje obnovený status starý
+  nejvýše 10 minut jako dostupný, aby při návratu na LIVE neproblikávalo;
+  tento krátký stav proto může vizuálně zachovat poslední ON/connected hodnotu.
 - Vynucuje: `components/TradovateLiveDesk.tsx:agentStatusDisplayFresh` a
-  `runtimeAvailable`,
+  `runtimeAvailable`, `restoredDisplayGrace` a `armStatusRef`,
   `lib/copierPowerDisplay.ts:readCopierPowerDisplay`,
   `lib/copierAgentStatusStore.ts:readCopierAgentStatusSnapshot`.
 - Hlídá test: `tests/copierPowerDisplay.test.ts`,
   `tests/copierForegroundPoller.test.ts`, `tests/liveCopyCompactRender.test.ts`.
-- Nikdy: Neukazovat cached ON zeleně jako aktuální worker stav a nedoplňovat
-  missing positions nulou.
-- Bezpečné změny vs. nebezpečné: Bezpečné je „načítám/neověřeno/obnoveno“ se
-  zachovanou poslední hodnotou pro kontext. Nebezpečné je skrýt unknown za
-  optimistický přepínač.
+- Nikdy: Použít display grace jako důkaz pro ARM/config/reconcile nebo
+  doplňovat missing positions nulou. Po 1,2 s bez čerstvého pollu musí grace
+  skončit; `armStatusRef.fresh` zůstává pro restored stav false po celou dobu.
+- Bezpečné změny vs. nebezpečné: Bezpečné je krátké, výslovně prezentační
+  zachování poslední hodnoty se samostatnou autorizační branou. Nebezpečné je
+  odvodit povolení příkazu z `runtimeAvailable` nebo display grace.
 
 ### INV-UI-02: DISARM a kill jsou vždy dosažitelné; ostatní mutace vyžadují čerstvý worker status
 
@@ -828,7 +901,7 @@ existující ochranu.
 - Vynucuje: `server/copierIncidentWatchdog.ts:evaluateCopierIncidents` a
   `planCopyEventNotifications` vracejí popis akcí, samy nezapisují brokerovi;
   `DEFAULT_STALE_AFTER_MS` je 90 s.
-- Hlídá test: `tests/copierIncidentWatchdog.test.ts`, `tests/copierWatchdog.test.ts`.
+- Hlídá test: `tests/copierIncidentWatchdog.test.ts`.
 - Nikdy: Nepřidávat do watchdogu ARM, auto-reconcile nebo broker Flatten.
 - Bezpečné změny vs. nebezpečné: Bezpečná je notifikace opened/resolved s
   dedupe. Nebezpečné je z nepřítomnosti heartbeat odvodit flat nebo poslat
@@ -928,7 +1001,9 @@ Agent-oponent má před schválením změny výslovně odpovědět na každou ot
   modelem. Viz `docs/reviews/copier-deployed-review-20260930.md`, D1.
 - **4. 10. — návrh automatického veřejného reconcile by schoval incident.**
   ARM preparation proto používá jen interní read-only preflight a durable
-  manual-recovery marker. Viz `docs/COPIER_ARM_PREPARATION_20261004.md`.
+  manual-recovery marker. Review 8. 10. ale našlo stejnou starší chybu stále v
+  SHADOW a kompatibilní ARM cestě; viz slabé místo 12 níže a
+  `docs/COPIER_ARM_PREPARATION_20261004.md`.
 - **5. 10. — Cancel Completed s `cumQty 6/18` vypadal jako plný Fill.** Zbytek
   entry se followerům nezrušil a Market exit skončil divergencí. Terminální
   status proto na nejasné cestě vyžaduje celý Order+Fill graph. Viz PROJECT_LOG
@@ -983,6 +1058,25 @@ Agent-oponent má před schválením změny výslovně odpovědět na každou ot
     posledních změnách.** Offline testy potvrzují vynechaná čtení a zachované
     brány; neprokazují konkrétní telefon→relay→worker latenci ani celý nový
     DEMO/LIVE trade cycle.
+12. **SLABÉ MÍSTO — SHADOW a kompatibilní ARM mohou smazat incident.** Obě
+    cesty v `localCopierExecutionAgent` volají veřejné `reconcile()`, které má
+    `clearLastError:true` a po čistém výsledku odstraní také
+    `manualRecoveryRequired`. Oprava má oddělit interní read-only preflight od
+    explicitní uživatelské recovery a přidat regrese pro obě cesty; do té doby
+    nelze tvrdit, že incident smaže výhradně tlačítko „Kontrola pozic“.
+13. **SLABÉ MÍSTO — relay idempotency nekryje nový klientský pokus.** Webový
+    klient generuje UUID při každém volání. Server coalescuje Flatten a ARM,
+    ale opakovaný DISARM, reconcile nebo set-konfigurace s novým klíčem založí
+    další durable command. Downstream brány a outbox brání blind broker retry,
+    takže nejde samo o sobě o důkaz duplicitního obchodu; je to ale porušení
+    vazby „jeden uživatelský záměr = jeden command“ a může opakovat preflight,
+    audit či mutaci. Oprava má držet operation key přes retry/dvojklik nebo
+    zavést přesně definované serverové coalescing i pro tyto příkazy.
+14. **MRTVÝ NEBEZPEČNÝ EXPORT — `planReconciliation`.** Funkci volají jen její
+    unit testy; runtime ji nepoužívá. Plánuje Market order k dorovnání follower
+    pozice a její budoucí zapojení by porušilo zákaz Auto-Sync. Doporučení je
+    export i testy odstranit, případně jej přesunout mimo execution kód tak,
+    aby jej nešlo omylem připojit bez nového explicitního safety rozhodnutí.
 
 ## Minimální předávací důkazy po změně
 
