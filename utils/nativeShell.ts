@@ -27,6 +27,9 @@ export interface NativeShellBridge {
   review: (request?: NativeReviewRequest) => void;
   toggleWorld: () => void;
   refresh: () => void;
+  /** Nativní menu Více se otevřelo: přednačti stránku, na kterou se asi půjde.
+   * Jen read-only příprava; nikdy nenaviguje. Přijímá pouze 'live'. */
+  prepare?: (page: string) => void;
 }
 
 declare global {
