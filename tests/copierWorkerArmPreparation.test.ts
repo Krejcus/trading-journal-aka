@@ -264,7 +264,7 @@ describe('worker read-only ARM preparation', () => {
     expect(() => runtime.arm({ requirePreparation: true })).toThrow('zneplatněno');
   });
 
-  it('an incident cannot be cleared by background preparation or a reconnect; ON clears it only via its own clean check', async () => {
+  it('an incident cannot be cleared by background preparation or a reconnect; ON clears it only when acknowledged', async () => {
     const broker = await boot();
     runtime.reportHostSleep({ unresponsiveSince: now - 1_000, detectedAt: now, sleepDurationMs: 1_000 });
     await runtime.waitForIdle();
@@ -275,13 +275,17 @@ describe('worker read-only ARM preparation', () => {
     broker.setConnected(true);
     await runtime.waitForIdle();
     expect(runtime.status().armPreparation?.manualRecoveryRequired).toBe(true);
-    // Etapa 1 (6. 10. 2026): ON si samo provede autoritativní Kontrolu
-    // pozic; historický incident ho při čistém stavu nebrzdí.
+    // 8. 10. 2026: ON si kontrolu udělá samo, ale durable incident smaže
+    // jen s výslovným potvrzením právě tohoto incidentu.
     const reconcile = vi.spyOn(runtime, 'reconcile');
     agent = await startLocalCopierExecutionAgent({ controller: runtime, group: group(), port: 0, autoRearmAfterTransport: false });
-    await agent.execute({ type: 'arm-live' });
+    await expect(agent.execute({ type: 'arm-live' })).rejects.toThrow('[ack-incident:');
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(runtime.status().lastError).toBe(incident);
+    const acknowledgeIncidentAt = runtime.status().manualRecovery!.at;
+    await agent.execute({ type: 'arm-live', acknowledgeIncidentAt });
     expect(reconcile).toHaveBeenCalledTimes(1);
-    expect(runtime.status()).toMatchObject({ armed: true, lastError: null });
+    expect(runtime.status()).toMatchObject({ armed: true, lastError: null, manualRecovery: null });
   });
 
   it('keeps an incident blocked across restart until a clean manual reconciliation', async () => {

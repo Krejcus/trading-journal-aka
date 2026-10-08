@@ -69,6 +69,9 @@ export const armSelfCheckFailureMessage = (check: {
   return `Zapnutí zastaveno kontrolou u brokera: ${parts.join('; ') || 'stav se nepodařilo autoritativně ověřit'}.`;
 };
 
+/** Strojově čitelná značka pro UI: který incident uživatel potvrzuje. */
+export const incidentAckMarker = (at: number) => `[ack-incident:${at}]`;
+
 export const boundedLocalArmDeadline = (rawDeadline: unknown, receivedAt = Date.now()): number => {
   const parsed = typeof rawDeadline === 'string' ? Number(rawDeadline) : NaN;
   return Number.isFinite(parsed)
@@ -874,8 +877,20 @@ export async function startLocalCopierExecutionAgent(
           // nový incident, který vznikl až po výpadku; ten zůstává ruční.
           throw new Error('Automatické zapnutí zastaveno: po výpadku vznikl incident, který vyžaduje ruční Kontrolu pozic');
         }
-        if (armNeedsSelfCheck(options.controller.status())) {
-          const check = await awaitArmDeadline(options.controller.reconcile(), deadlineAt);
+        // 8. 10. 2026: tlačítko Kontrola pozic zmizelo; durable incident smí
+        // ON smazat jen s výslovným potvrzením právě tohoto incidentu
+        // (INV-DEFAULT-03). Zvykové kliknutí ho nepřejde.
+        const incident = options.controller.status().manualRecovery ?? null;
+        if (incident && command.acknowledgeIncidentAt !== incident.at) {
+          throw new Error(
+            `Zapnutí po incidentu vyžaduje tvoje potvrzení: ${incident.reason} ${incidentAckMarker(incident.at)}`,
+          );
+        }
+        if (incident || armNeedsSelfCheck(options.controller.status())) {
+          const check = await awaitArmDeadline(
+            options.controller.reconcile(incident ? { acknowledgedIncidentAt: incident.at } : {}),
+            deadlineAt,
+          );
           assertArmAdmissible(deadlineAt, admittedBrakeEpoch, commandCreatedAt, context.clockSkewReserveMs);
           if (!check.authoritativelyClean) throw new Error(armSelfCheckFailureMessage(check));
         }
@@ -892,7 +907,8 @@ export async function startLocalCopierExecutionAgent(
           await awaitArmDeadline(options.controller.prepareArm(), deadlineAt);
         } else {
           // Compatibility for controller adapters without preparation support.
-          const reconciliation = await awaitArmDeadline(options.controller.reconcile(), deadlineAt);
+          // Interní kontrola: incident nemaže (INV-RECON-02).
+          const reconciliation = await awaitArmDeadline(options.controller.reconcile({ internal: true }), deadlineAt);
           if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
             throw new Error('ARM odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
           }
@@ -933,7 +949,8 @@ export async function startLocalCopierExecutionAgent(
           validatedAccountEligibilityExclusions(command.accountEligibilityExclusions),
         );
         await prepareAccounts(allAccountsRequired(copyGroupAccountIds(group)));
-        const reconciliation = await options.controller.reconcile();
+        // Interní kontrola: SHADOW incident nemaže (INV-DEFAULT-03).
+        const reconciliation = await options.controller.reconcile({ internal: true });
         if (reconciliation.divergentAccounts.length > 0 || reconciliation.workingOrderAccounts.length > 0) {
           throw new Error('SHADOW odmítnut: účty nejsou flat/synchronní nebo mají pracovní příkazy');
         }

@@ -175,6 +175,11 @@ export type LocalCopierAgentCommand =
       type: 'arm-live';
       group?: CopyGroupConfig;
       accountEligibilityExclusions?: LocalCopierAccountExclusion[];
+      /**
+       * Uživatel v dialogu potvrdil tento durable incident (`manualRecovery.at`).
+       * Bez shody worker ON po incidentu odmítne (8. 10. 2026).
+       */
+      acknowledgeIncidentAt?: number;
     }
   /** Bezpečně vybere jedinou execution skupinu; vždy zůstane DISARMED. */
   | {

@@ -11,7 +11,7 @@ const status = (overrides: Partial<CopierControllerStatus> = {}): CopierControll
   ...overrides,
 });
 const render = (value: CopierControllerStatus, known = true) => renderToStaticMarkup(
-  React.createElement(CopierMaintenancePanel, { status: value, known, onReconcile: async () => undefined }),
+  React.createElement(CopierMaintenancePanel, { status: value, known }),
 );
 
 describe('CopierMaintenancePanel', () => {
@@ -19,10 +19,8 @@ describe('CopierMaintenancePanel', () => {
     expect(render(status())).toBe('');
   });
 
-  it('nabídne Kontrolu pozic, když worker čeká na reconciliation', () => {
-    const html = render(status({ reconciliationRequired: true }));
-    expect(html).toContain('Zkontrolovat pozice');
-    expect(html).toContain('read-only');
+  it('čekající reconciliation bez incidentu panel nerozsvítí (kontrolu dělá Zapnout)', () => {
+    expect(render(status({ reconciliationRequired: true }))).toBe('');
   });
 
   it('zastaralý snapshot pro zapnutí vypnutého followera panel nerozsvítí', () => {
@@ -35,8 +33,8 @@ describe('CopierMaintenancePanel', () => {
     expect(html).toBe('');
   });
 
-  it('za ARM tlačítko nenabízí (Kontrola by kopírku vypnula)', () => {
-    expect(render(status({ armed: true, reconciliationRequired: true }))).toBe('');
+  it('za ARM nic nezobrazí', () => {
+    expect(render(status({ armed: true, manualRecovery: { at: 1, reason: 'x' } }))).toBe('');
   });
 
   it('v režimu opravy vysvětlí nedostupné účty a tlačítko neukáže', () => {
@@ -72,12 +70,15 @@ describe('CopierMaintenancePanel', () => {
     },
   );
 
-  it('po incidentu zachová ruční obnovu i s podporou automatické přípravy', () => {
+  it('po incidentu ukáže důvod a že se ověří při zapnutí; tlačítko Kontrola pozic už neexistuje', () => {
     const html = render(status({ reconciliationRequired: true,
+      manualRecovery: { at: 1_791_000_000_000, reason: 'leader-flat guard: follower 200 nesedí' },
       armPreparation: { state: 'blocked', verifiedAt: null,
         reason: 'Po incidentu je potřeba ruční Kontrola pozic', blockedBy: 'incident',
         manualRecoveryRequired: true } }));
-    expect(html).toContain('Po incidentu');
-    expect(html).toContain('Zkontrolovat pozice');
+    expect(html).toContain('Po incidentu: leader-flat guard: follower 200 nesedí');
+    expect(html).toContain('Ověří se při zapnutí');
+    expect(html).not.toContain('Zkontrolovat pozice');
+    expect(html).not.toContain('<button');
   });
 });

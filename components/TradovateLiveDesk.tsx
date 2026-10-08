@@ -837,6 +837,20 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         }
       }
     }
+    // 8. 10. 2026: Kontrola pozic je součástí Zapnout. Durable incident
+    // ale smaže jen výslovné potvrzení — zvykové kliknutí ho nepřejde.
+    const incident = armStatusRef.current.status?.controller.manualRecovery ?? null;
+    let acknowledgeIncidentAt: number | undefined;
+    if (incident) {
+      const acknowledged = await confirmAction({
+        title: 'Zapnout po incidentu?',
+        message: `Po incidentu: ${incident.reason} Ověřím účty u brokera a zapnu jen při čistém stavu. Když nesedí, kopírka zůstane vypnutá a vypíše účty — srovnáš je ručně v Tradovate.`,
+        confirmLabel: 'Ověřit a zapnout',
+        cancelLabel: 'Zrušit',
+      });
+      if (!acknowledged) return;
+      acknowledgeIncidentAt = incident.at;
+    }
     await runConfigMutation(async () => {
       // Re-read after any camera dialog/repair; the worker still rejects any
       // concurrent tightening that happened after this UI snapshot.
@@ -845,6 +859,7 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
         type: 'arm-live',
         group: prepared.group,
         accountEligibilityExclusions: exclusions,
+        ...(acknowledgeIncidentAt != null ? { acknowledgeIncidentAt } : {}),
       });
       acceptConfigAck(result.status);
       if (prepared.preservedRules.length) {
@@ -1315,17 +1330,6 @@ acceptAgentStatus((await executeAgent({
                   ?.find(entry => entry.accountId === accountId && entry.state !== 'active');
                 if (remaining) {
                   throw new Error(`Broker účet stále nepotvrdil jako způsobilý: ${remaining.reason ?? remaining.state}`);
-                }
-              }}
-              onReconcile={copierUiDemo ? undefined : async () => {
-                const result = await executeAgent({ type: 'reconcile' });
-                acceptAgentStatus(result.status);
-                await live.refreshData();
-                const controller = result.status.controller;
-                if (controller.reconciliationRequired || controller.divergentAccounts.length > 0
-                  || controller.workingOrderAccounts.length > 0) {
-                  throw new Error(controller.lastError
-                    ?? 'Kontrola pozic nepotvrdila čistý stav: účty nejsou flat nebo mají pracovní příkazy.');
                 }
               }}
               executionGroupId={executionGroup?.id ?? null}
