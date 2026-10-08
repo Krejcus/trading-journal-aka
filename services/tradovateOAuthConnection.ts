@@ -253,13 +253,29 @@ export function runTradovateReadOnlyPreflight(
   connectionId: string,
   mode: 'bootstrap' | 'full' = 'full',
   signal?: AbortSignal,
+  options: { historicalProbe?: boolean } = {},
 ): Promise<TradovatePreflightResult> {
   return authenticatedRequest('/api/tradovate/oauth/preflight', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ connectionId, mode }),
+    body: JSON.stringify({
+      connectionId,
+      mode,
+      ...(options.historicalProbe === false ? { historicalProbe: false } : {}),
+    }),
     ...(signal ? { signal } : {}),
   }, mode === 'bootstrap' ? TRADOVATE_READ_TIMEOUT_MS : TRADOVATE_FULL_READ_TIMEOUT_MS);
+}
+
+/** Jen probe historických reportů (read-only definice), bez čtení účtů. */
+export function runTradovateHistoricalProbe(
+  connectionId: string,
+): Promise<{ connectionId: string; historicalSync: TradovatePreflightResult['historicalSync'] }> {
+  return authenticatedRequest('/api/tradovate/oauth/preflight', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ connectionId, mode: 'historical-probe' }),
+  }, TRADOVATE_READ_TIMEOUT_MS);
 }
 
 export function createTradovatePilotLease(

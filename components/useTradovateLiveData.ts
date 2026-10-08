@@ -21,6 +21,7 @@ import {
   setTradovateOAuthConnectionArchived,
   loadTradovateAccountProfiles,
   loadTradovateOAuthStatus,
+  runTradovateHistoricalProbe,
   runTradovateReadOnlyPreflight,
   runTradovateHistoricalBackfill,
   runTradovateLivePnlAnchor,
@@ -33,8 +34,10 @@ import {
 import {
   applyTradovateConnectionDataRefresh,
   buildTradovateConnectionSummaries,
+  readTradovateConnectionHint,
   readTradovateConnectionShell,
   type TradovateConnectionDataRefreshMode,
+  writeTradovateConnectionHint,
   writeTradovateConnectionShell,
 } from '../lib/tradovateLiveConnectionCache';
 import {
@@ -252,7 +255,8 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
         if (Date.now() < until) {
           return Promise.reject(new TradovateRequestError('Tradovate rate limit stále platí.', 429, until - Date.now()));
         }
-        return runTradovateReadOnlyPreflight(connectionId, 'bootstrap').catch(reason => {
+        // Přednačtení studeného startu čte rovnou úplná data (viz refreshStatus).
+        return runTradovateReadOnlyPreflight(connectionId, 'full', undefined, { historicalProbe: false }).catch(reason => {
           if (reason instanceof TradovateRequestError && reason.status === 429) {
             rateLimitUntilByConnectionRef.current[connectionId] = Math.max(
               rateLimitUntilByConnectionRef.current[connectionId] ?? 0,
@@ -270,8 +274,11 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
   const prefetch = useCallback(() => {
     if (enabled || !userId || activeUserIdRef.current !== userId || Object.keys(connectionDataRef.current).length > 0) return;
     if (refreshStatusInFlightRef.current?.userId === userId && refreshStatusInFlightRef.current.epoch === identityEpochRef.current.epoch) return;
-    intentPrefetchRef.current?.prefetch((statusRef.current?.connections ?? [])
-      .filter(connection => connection.connected).map(connection => connection.id));
+    const shellIds = (statusRef.current?.connections ?? [])
+      .filter(connection => connection.connected).map(connection => connection.id);
+    intentPrefetchRef.current?.prefetch(shellIds.length > 0
+      ? shellIds
+      : readTradovateConnectionHint(userId, typeof window === 'undefined' ? undefined : window.localStorage));
   }, [enabled, userId]);
   const [busy, setBusy] = useState<BusyState>('status');
   const [error, setError] = useState<string | null>(null);
@@ -395,6 +402,13 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     );
   }, [connectionSummaries, status, userId]);
 
+  useEffect(() => {
+    // Jen z potvrzeného statusu (ne ze session shellu), ať nápověda nepřežívá
+    // odpojení: čerstvý status bez připojení ji smaže.
+    if (!status || status === persisted?.status) return;
+    writeTradovateConnectionHint(userId, status, typeof window === 'undefined' ? undefined : window.localStorage);
+  }, [persisted?.status, status, userId]);
+
   const advanceHistoricalBackfill = useCallback(async (datasets: TradovatePreflightResult[]) => {
     datasets = datasets.filter(dataset => Date.now() >= (rateLimitUntilByConnectionRef.current[dataset.connectionId] ?? 0));
     if (historyBusyRef.current || datasets.length === 0) return;
@@ -439,6 +453,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     detail: 'bootstrap' | 'full' = 'full',
     prestarted?: PrestartedTradovatePreflights,
     prestartedProfiles?: Promise<TradovateAccountProfilesResult | null>,
+    readOptions: { historicalProbe?: boolean } = {},
   ) => {
     const healthRequestedAt = Date.now();
     const requestedUserId = activeUserIdRef.current;
@@ -540,7 +555,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       // no longer holds back the first usable card from a faster connection.
       const preflights = await consumeTradovatePreflights(
         eligibleConnectionIds,
-        connectionId => runTradovateReadOnlyPreflight(connectionId, detail),
+        connectionId => runTradovateReadOnlyPreflight(connectionId, detail, undefined, readOptions),
         dataset => {
           if (!isCurrent() || !statusRef.current?.connections.some(connection => connection.id === dataset.connectionId && connection.connected)) return;
           const limitedFor = datasetRateLimitMs(dataset);
@@ -628,6 +643,30 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
     }
   }, [updateEnrichment]);
 
+  /** Doplní probe historických reportů, který studený start vynechal. Mění jen
+   *  `historicalSync` (záložka Připojení), nikdy účty, pozice ani risk. */
+  const refreshHistoricalProbe = useCallback(async (connectionIds: string[]) => {
+    const requestedUserId = activeUserIdRef.current;
+    const requestedEpoch = identityEpochRef.current.epoch;
+    const requestedConnectionEpoch = connectionEpochRef.current;
+    const isCurrent = () => activeUserIdRef.current === requestedUserId
+      && identityEpochRef.current.epoch === requestedEpoch
+      && connectionEpochRef.current === requestedConnectionEpoch;
+    await Promise.all(connectionIds.map(async connectionId => {
+      if (connectionDataRef.current[connectionId]?.historicalSync.status !== 'not-checked') return;
+      try {
+        const { historicalSync } = await runTradovateHistoricalProbe(connectionId);
+        const current = connectionDataRef.current[connectionId];
+        if (!isCurrent() || !current || current.historicalSync.status !== 'not-checked') return;
+        const next = { ...connectionDataRef.current, [connectionId]: { ...current, historicalSync } };
+        connectionDataRef.current = next;
+        setConnectionData(next);
+      } catch {
+        // Bez výsledku zůstane „ověřuji“; další úplné načtení probe obsahuje.
+      }
+    }));
+  }, []);
+
   const refreshStatus = useCallback((): Promise<TradovateOAuthStatus | null> => {
     if (!userId || activeUserIdRef.current !== userId) return Promise.resolve(null);
     const epoch = identityEpochRef.current.epoch;
@@ -639,16 +678,26 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       const warmed = await intentPrefetchRef.current?.claim(userId);
       if (!isCurrent()) return null;
       const hasConfirmedData = Object.keys(connectionDataRef.current).length > 0;
+      const shellConnectionIds = (statusRef.current?.connections ?? [])
+        .filter(connection => connection.connected)
+        .map(connection => connection.id);
+      // Bez session shellu (iPhone po ukončení, nový tab) použijeme trvalou
+      // nápovědu, ať preflight nečeká na OAuth status (+0,6–1,2 s).
       const cachedConnectionIds = hasConfirmedData
         ? []
-        : (statusRef.current?.connections ?? [])
-          .filter(connection => connection.connected)
-          .map(connection => connection.id);
+        : shellConnectionIds.length > 0
+          ? shellConnectionIds
+          : readTradovateConnectionHint(userId, typeof window === 'undefined' ? undefined : window.localStorage);
       // The cached shell contains IDs only. Start read-only work immediately,
       // but do not apply any result until fresh OAuth status confirms the ID.
-      const prestartedBootstrap = warmed?.bootstrap ?? startTradovatePreflights(
-        cachedConnectionIds.filter(id => Date.now() >= (rateLimitUntilByConnectionRef.current[id] ?? 0)),
-        connectionId => runTradovateReadOnlyPreflight(connectionId, 'bootstrap'),
+      // Studený start čte rovnou úplná data (DLL, denní P&L, risk) místo
+      // bootstrap → full: přehled se odkryje jednou, už kompletní. Probe
+      // historických reportů jde zvlášť, aby nedržel první data (až 8 s).
+      // Připojení, jehož úplné čtení už běží (např. retry), se nespouští znovu.
+      const prestartedFull = warmed?.bootstrap ?? startTradovatePreflights(
+        cachedConnectionIds.filter(id => Date.now() >= (rateLimitUntilByConnectionRef.current[id] ?? 0)
+          && !fullRefreshInFlightRef.current.has(id)),
+        connectionId => runTradovateReadOnlyPreflight(connectionId, 'full', undefined, { historicalProbe: false }),
       );
       const profilesPromise = warmed?.profiles ?? loadTradovateAccountProfiles().catch(() => null);
       try {
@@ -682,17 +731,17 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
               activeConnectionIds,
               true,
               'replace',
-              'bootstrap',
-              prestartedBootstrap,
+              'full',
+              prestartedFull,
               profilesPromise,
+              { historicalProbe: false },
             );
             if (!isCurrent()) return null;
             if (activeConnectionIds.every(id => Date.now() < (rateLimitUntilByConnectionRef.current[id] ?? 0))) {
               setError('Tradovate omezuje četnost požadavků. Další načtení počká na konec limitu.');
             }
-            // Historie, fees a risk detail se doplní bez blokování první karty.
             // Neúspěšná připojení mají vlastní 15/30/60s retry a nezadržují ostatní.
-            void refreshData(activeConnectionIds, true, 'merge', 'full', undefined, profilesPromise);
+            void refreshHistoricalProbe(activeConnectionIds);
           }
         } else {
           connectionDataRef.current = {};
@@ -722,7 +771,7 @@ export function useTradovateLiveData(userId: string, journalOptions?: {
       if (refreshStatusInFlightRef.current?.promise === promise) refreshStatusInFlightRef.current = null;
     }).catch(() => {});
     return promise;
-  }, [refreshData, updateEnrichment, userId]);
+  }, [refreshData, refreshHistoricalProbe, updateEnrichment, userId]);
 
   const connect = useCallback(async (connectionId?: string) => {
     setBusy('connect');

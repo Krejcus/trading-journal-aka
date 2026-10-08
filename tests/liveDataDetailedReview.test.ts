@@ -49,7 +49,7 @@ const harness = vi.hoisted(() => {
 });
 const api = vi.hoisted(() => ({
   loadTradovateOAuthStatus: vi.fn(), loadTradovateAccountProfiles: vi.fn(),
-  runTradovateReadOnlyPreflight: vi.fn(), runTradovateHistoricalBackfill: vi.fn(),
+  runTradovateReadOnlyPreflight: vi.fn(), runTradovateHistoricalBackfill: vi.fn(), runTradovateHistoricalProbe: vi.fn(),
   runTradovateLivePnlAnchor: vi.fn(), runTradovateLivePnlTick: vi.fn(),
   saveTradovateAccountProfiles: vi.fn(), beginTradovateOAuth: vi.fn(), disconnectTradovateOAuth: vi.fn(),
   TradovateRequestError: class extends Error { constructor(message: string, public status: number, public retryAfterMs: number | null = null) { super(message); } },
@@ -93,6 +93,7 @@ const view = (userId: string, enabled = false) => {
   if (harness.dirty()) throw new Error('Hook state did not stabilize within 20 renders.');
   return value;
 };
+let local: Map<string, string>;
 let timers: Array<{ callback: () => void; delay: number; cleared: boolean; id: number }> = [];
 let nextTimerId = 1;
 let listeners: Record<string, Array<() => void>> = {};
@@ -101,6 +102,7 @@ beforeEach(() => {
   vi.spyOn(Date, 'now').mockReturnValue(now);
   harness.reset();
   const storage = new Map<string, string>();
+  local = new Map<string, string>();
   timers = [];
   listeners = {};
   vi.stubGlobal('document', {
@@ -122,7 +124,12 @@ beforeEach(() => {
     addEventListener: (type: string, listener: () => void) => { (listeners[`window:${type}`] ??= []).push(listener); },
     removeEventListener: vi.fn(),
     location: { search: '', pathname: '/', hash: '' }, history: { replaceState: vi.fn() },
-    sessionStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) } });
+    sessionStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) },
+    localStorage: {
+      getItem: (key: string) => local.get(key) ?? null,
+      setItem: (key: string, value: string) => { local.set(key, value); },
+      removeItem: (key: string) => { local.delete(key); },
+    } });
   api.loadTradovateAccountProfiles.mockResolvedValue({ profiles: [] });
 });
 afterEach(() => { harness.reset(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
@@ -141,11 +148,12 @@ describe('detailed LIVE data reliability regressions', () => {
     expect(Object.keys(view('review-prune').connectionData)).toEqual(['keep']);
   });
 
-  it('honors a bootstrap 429 instead of immediately retrying the full read', async () => {
+  it('honors a cold-start 429 instead of immediately retrying the full read', async () => {
     api.loadTradovateOAuthStatus.mockResolvedValue(status(['c']));
     api.runTradovateReadOnlyPreflight.mockRejectedValue(new api.TradovateRequestError('rate limited', 429, 60_000));
     await view('review-rate-limit').refreshStatus();
-    expect(api.runTradovateReadOnlyPreflight.mock.calls.map(call => call[1])).toEqual(['bootstrap']);
+    // Studený start čte rovnou úplná data, bez probe historie; po 429 nic dalšího.
+    expect(api.runTradovateReadOnlyPreflight.mock.calls.map(call => [call[1], call[3]])).toEqual([['full', { historicalProbe: false }]]);
   });
 
   it('does not expose the previous users data in the identity-change render', async () => {
@@ -171,7 +179,7 @@ describe('detailed LIVE data reliability regressions', () => {
     expect(api.runTradovateReadOnlyPreflight).toHaveBeenCalledTimes(2);
   });
 
-  it('retains a successful connection but skips full retry when another bootstrap is rate limited', async () => {
+  it('retains a successful connection but skips full retry when another cold read is rate limited', async () => {
     api.loadTradovateOAuthStatus.mockResolvedValue(status(['keep', 'gone']));
     const keep = await dataset('keep');
     api.runTradovateReadOnlyPreflight.mockImplementation(async id => {
@@ -181,7 +189,7 @@ describe('detailed LIVE data reliability regressions', () => {
     await view('review-partial-429').refreshStatus();
     await settle();
     expect(Object.keys(view('review-partial-429').connectionData)).toEqual(['keep']);
-    expect(api.runTradovateReadOnlyPreflight.mock.calls.filter(call => call[0] === 'gone').map(call => call[1])).toEqual(['bootstrap']);
+    expect(api.runTradovateReadOnlyPreflight.mock.calls.filter(call => call[0] === 'gone').map(call => call[1])).toEqual(['full']);
     expect(api.runTradovateReadOnlyPreflight.mock.calls.some(call => call[0] === 'keep' && call[1] === 'full')).toBe(true);
     expect(view('review-partial-429').dataEnrichmentByConnection.keep.pending).toBe(false);
     expect(view('review-partial-429').dataEnrichmentByConnection.gone.pending).toBe(false);
@@ -419,5 +427,65 @@ describe('detailed LIVE data reliability regressions', () => {
   it('keeps an explicit failed cash read unverified', async () => {
     const result = await dataset('c', { errorText: 'unavailable' });
     expect(isLiveAccountReadVerified(tradovateCopyTradeSnapshot(result, []).accounts[0], 'cash', now)).toBe(false);
+  });
+});
+
+describe('studený start LIVE: jedno úplné čtení a trvalá nápověda připojení', () => {
+  const hintKey = (userId: string) => `alphatrade_tradovate_live_hint_v1_${userId}`;
+
+  it('bez session shellu spustí úplné čtení z nápovědy dřív, než odpoví OAuth status', async () => {
+    local.set(hintKey('cold-hint'), JSON.stringify({ version: 1, ids: ['c'] }));
+    const pendingStatus = deferred<ReturnType<typeof status>>();
+    api.loadTradovateOAuthStatus.mockReturnValue(pendingStatus.promise);
+    api.runTradovateReadOnlyPreflight.mockResolvedValue(await dataset('c'));
+    const refreshing = view('cold-hint').refreshStatus();
+    await settle();
+    expect(api.runTradovateReadOnlyPreflight.mock.calls).toEqual([['c', 'full', undefined, { historicalProbe: false }]]);
+    pendingStatus.resolve(status(['c']));
+    await refreshing;
+    await settle();
+    expect(view('cold-hint').data?.accounts).toHaveLength(1);
+    // Žádné druhé (bootstrap → full) čtení.
+    expect(api.runTradovateReadOnlyPreflight).toHaveBeenCalledTimes(1);
+  });
+
+  it('nápověda nic nezveřejní, dokud ji čerstvý status nepotvrdí', async () => {
+    local.set(hintKey('cold-stale-hint'), JSON.stringify({ version: 1, ids: ['gone'] }));
+    api.loadTradovateOAuthStatus.mockResolvedValue(status(['c']));
+    api.runTradovateReadOnlyPreflight.mockImplementation(async id => dataset(id));
+    await view('cold-stale-hint').refreshStatus();
+    await settle();
+    expect(Object.keys(view('cold-stale-hint').connectionData)).toEqual(['c']);
+  });
+
+  it('nápověda se zapíše z potvrzeného statusu a status bez připojení ji smaže', async () => {
+    api.loadTradovateOAuthStatus.mockResolvedValueOnce(status(['c'])).mockResolvedValue(status([]));
+    api.runTradovateReadOnlyPreflight.mockResolvedValue(await dataset('c'));
+    await view('cold-write-hint').refreshStatus();
+    await settle();
+    view('cold-write-hint');
+    expect(JSON.parse(local.get(hintKey('cold-write-hint')) ?? 'null')).toEqual({ version: 1, ids: ['c'] });
+    await view('cold-write-hint').refreshStatus();
+    await settle();
+    view('cold-write-hint');
+    expect(local.has(hintKey('cold-write-hint'))).toBe(false);
+  });
+
+  it('probe historických reportů doplní jen historicalSync, po úplném čtení a mimo kritickou cestu', async () => {
+    api.loadTradovateOAuthStatus.mockResolvedValue(status(['c']));
+    const unchecked = { ...await dataset('c'), historicalSync: { status: 'not-checked' } } as TradovatePreflightResult;
+    api.runTradovateReadOnlyPreflight.mockResolvedValue(unchecked);
+    const probe = deferred<{ connectionId: string; historicalSync: TradovatePreflightResult['historicalSync'] }>();
+    api.runTradovateHistoricalProbe.mockReturnValue(probe.promise);
+    await view('cold-probe').refreshStatus();
+    await settle();
+    // Data jsou venku, i když probe ještě visí.
+    expect(view('cold-probe').connectionData.c.historicalSync.status).toBe('not-checked');
+    expect(view('cold-probe').data?.accounts).toHaveLength(1);
+    probe.resolve({ connectionId: 'c', historicalSync: { status: 'available' } as TradovatePreflightResult['historicalSync'] });
+    await settle();
+    const after = view('cold-probe').connectionData.c;
+    expect(after.historicalSync.status).toBe('available');
+    expect(after.accounts).toEqual(unchecked.accounts);
   });
 });

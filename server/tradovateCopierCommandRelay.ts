@@ -142,27 +142,37 @@ export async function resolveCopierRelayConnectionId(options: {
   userId: string;
   connectionId: string;
 }): Promise<string> {
-  const { data: owned, error: ownedError } = await options.db.from('tradovate_oauth_connections')
-    .select('id')
-    .eq('id', options.connectionId)
-    .eq('user_id', options.userId)
-    .maybeSingle<{ id: string }>();
-  if (ownedError) throw new Error(`copier-relay-connection-lookup-failed: ${ownedError.message}`);
-  if (!owned) return options.connectionId;
+  // Tři nezávislé dotazy (všechny omezené na user_id) běží souběžně: každý
+  // round trip Vercel ↔ Supabase stojí ~100 ms a status relay se čte každé 2 s.
+  // Výsledky se vyhodnocují ve stejném pořadí jako dřív — cizí připojení se
+  // nepřesměruje a chyba zařízení se uplatní jen u vlastního připojení.
   // Kandidáti: neodvolaná zařízení uživatele přímo pro toto připojení a
   // owner-scope zařízení (Mac pro všechny propfirmy). Před migrací scope
   // dotaz na `scope` selže — pak zůstávají jen přímá zařízení.
-  const { data: direct, error: directError } = await options.db.from('tradovate_copier_devices')
-    .select('id,connection_id')
-    .eq('user_id', options.userId)
-    .eq('connection_id', options.connectionId)
-    .is('revoked_at', null);
+  const [
+    { data: owned, error: ownedError },
+    { data: direct, error: directError },
+    { data: ownerDevices, error: ownerError },
+  ] = await Promise.all([
+    options.db.from('tradovate_oauth_connections')
+      .select('id')
+      .eq('id', options.connectionId)
+      .eq('user_id', options.userId)
+      .maybeSingle<{ id: string }>(),
+    options.db.from('tradovate_copier_devices')
+      .select('id,connection_id')
+      .eq('user_id', options.userId)
+      .eq('connection_id', options.connectionId)
+      .is('revoked_at', null),
+    options.db.from('tradovate_copier_devices')
+      .select('id,connection_id')
+      .eq('user_id', options.userId)
+      .eq('scope', 'owner')
+      .is('revoked_at', null),
+  ]);
+  if (ownedError) throw new Error(`copier-relay-connection-lookup-failed: ${ownedError.message}`);
+  if (!owned) return options.connectionId;
   if (directError) throw new Error(`copier-relay-device-lookup-failed: ${directError.message}`);
-  const { data: ownerDevices, error: ownerError } = await options.db.from('tradovate_copier_devices')
-    .select('id,connection_id')
-    .eq('user_id', options.userId)
-    .eq('scope', 'owner')
-    .is('revoked_at', null);
   const candidates = [...(direct ?? []), ...(ownerError ? [] : ownerDevices ?? [])] as Array<{ id: string; connection_id: string | null }>;
   if (candidates.length === 0) return options.connectionId;
   const { data: runtimes, error: runtimeError } = await options.db.from('tradovate_copier_device_runtime')

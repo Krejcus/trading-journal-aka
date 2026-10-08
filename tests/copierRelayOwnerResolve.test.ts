@@ -40,6 +40,33 @@ const base = {
 };
 
 describe('resolveCopierRelayConnectionId', () => {
+  it('vlastnictví a obě skupiny zařízení čte souběžně, ne po sobě', async () => {
+    const db = fakeDb(base);
+    const started: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const from = db.from.bind(db);
+    (db as unknown as { from: (table: string) => unknown }).from = (table: string) => {
+      started.push(table);
+      const query = from(table) as unknown as Record<string, unknown>;
+      const maybeSingle = query.maybeSingle as () => Promise<unknown>;
+      query.maybeSingle = async () => { await gate; return maybeSingle(); };
+      return query;
+    };
+    const resolving = resolveCopierRelayConnectionId({ db, userId: 'u', connectionId: 'tradeify' });
+    await Promise.resolve();
+    // Dokud vlastnictví neodpoví, oba dotazy na zařízení už běží.
+    expect(started).toEqual(['tradovate_oauth_connections', 'tradovate_copier_devices', 'tradovate_copier_devices']);
+    release();
+    expect(await resolving).toBe('lucid');
+  });
+
+  it('chyba dotazu na zařízení u cizího připojení nic nezmění', async () => {
+    expect(await resolveCopierRelayConnectionId({ db: fakeDb(base, ['connection_id']), userId: 'u', connectionId: 'foreign' })).toBe('foreign');
+    await expect(resolveCopierRelayConnectionId({ db: fakeDb(base, ['connection_id']), userId: 'u', connectionId: 'tradeify' }))
+      .rejects.toThrow('copier-relay-device-lookup-failed');
+  });
+
   it('připojení se zařízením zůstává beze změny', async () => {
     expect(await resolveCopierRelayConnectionId({ db: fakeDb(base), userId: 'u', connectionId: 'lucid' })).toBe('lucid');
   });

@@ -8,6 +8,7 @@ import {
 import { tradovateApiBaseUrl } from '../../../server/tradovateOAuth.js';
 import { loadTradovateAccountData, TradovateAccountDataError } from '../../../server/tradovateAccountData.js';
 import {
+  notCheckedTradovateHistoricalSync,
   probeTradovateHistoricalSync,
   unavailableTradovateHistoricalSync,
 } from '../../../server/tradovateHistoricalProbe.js';
@@ -49,6 +50,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const userId = await requireSupabaseUserId(req.headers.authorization, config);
     const connectionId = typeof req.body?.connectionId === 'string' ? req.body.connectionId : '';
     const bootstrap = req.body?.mode === 'bootstrap';
+    const probeOnly = req.body?.mode === 'historical-probe';
+    // Probe report hostu (timeout až 8 s) nesmí držet první úplná data LIVE.
+    // Studený start ho vynechá a zeptá se zvlášť (mode 'historical-probe').
+    const skipProbe = req.body?.historicalProbe === false;
     if (!connectionId) return res.status(400).json({ error: 'missing-connection-id' });
     const { accessToken } = await getValidTradovateAccessToken({
       db: createTradovateAdminClient(config),
@@ -56,9 +61,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       userId,
       connectionId,
     });
+    if (probeOnly) {
+      const historicalSync = await probeTradovateHistoricalSync({ environment: config.environment, accessToken });
+      return res.status(200).json({ connectionId, environment: config.environment, historicalSync });
+    }
     const baseUrl = tradovateApiBaseUrl(config.environment);
     const [result, historicalSync] = await coalescePreflight(
-      `${userId}:${connectionId}:${bootstrap ? 'bootstrap' : 'full'}`,
+      `${userId}:${connectionId}:${bootstrap ? 'bootstrap' : skipProbe ? 'full-no-probe' : 'full'}`,
       Date.now(),
       () => Promise.all([
         loadTradovateAccountData({
@@ -68,7 +77,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }),
         bootstrap
           ? Promise.resolve(unavailableTradovateHistoricalSync({ environment: config.environment }))
-          : probeTradovateHistoricalSync({ environment: config.environment, accessToken }),
+          : skipProbe
+            ? Promise.resolve(notCheckedTradovateHistoricalSync({ environment: config.environment }))
+            : probeTradovateHistoricalSync({ environment: config.environment, accessToken }),
       ]),
     );
     return res.status(200).json({
