@@ -5927,10 +5927,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     options.onCopyEvent?.(event);
   };
 
+  /** Cut účtu s pozastaveným symbolem smí zavřít jen tyto symboly. */
+  const followerCutTargetSymbols = new Map<number, Set<string>>();
   const followerHasCopyToClose = async (
     accountId: number,
     readBroker: Pick<BrokerPort, 'listPositions' | 'listOrders'> = broker,
   ): Promise<boolean> => {
+    followerCutTargetSymbols.delete(accountId);
     const live = currentRuntime();
     const confirmedEpochParticipants = new Map(
       (live.state.safety.leaderExposureEpochs ?? [])
@@ -6014,7 +6017,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       : undefined;
     const hasUnownedFillSince = (symbol: string, ownedSince: number) => orders.some(order => (
       order.symbol === symbol
-      && order.filledQuantity > 0
+      // Tradovate umí hlásit Order(Filled, filledQuantity: 0) — i to je
+      // cizí fill (neznámé velikosti), ne důkaz jeho absence.
+      && (order.filledQuantity > 0 || order.status === 'filled')
       && !ownedBrokerOrderIds.has(order.brokerOrderId)
       && (
         !Number.isFinite(order.updatedAt)
@@ -6091,6 +6096,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     if (!hasConfirmedCopy) {
       const staleLineageDivergence = positions.some(position => (
         position.netQuantity !== 0
+        && activeAccountSyncPause(accountId, position.symbol) == null
         && (
           confirmedEpochParticipants.has(position.symbol)
           || copiedEntryRequests.some(request => request.symbol === position.symbol)
@@ -6102,10 +6108,21 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return false;
     }
 
+    // Etapa 2 (kolo 4): ruční expozice na pozastaveném symbolu cut jiných
+    // symbolů neblokuje — cut se pak omezí jen na vlastněné symboly
+    // (target-symbol), takže se pozastaveného symbolu nedotkne.
+    const pausedExposure = positions.some(position => (
+      position.netQuantity !== 0 && activeAccountSyncPause(accountId, position.symbol) != null
+    )) || openOrders.some(order => activeAccountSyncPause(accountId, order.symbol) != null);
     const unrelatedPositions = positions.filter(position => (
-      position.netQuantity !== 0 && !copiedPositionSymbols.has(position.symbol)
+      position.netQuantity !== 0
+      && !copiedPositionSymbols.has(position.symbol)
+      && activeAccountSyncPause(accountId, position.symbol) == null
     ));
-    const unrelatedWorkingOrders = openOrders.filter(order => !ownedBrokerOrderIds.has(order.brokerOrderId));
+    const unrelatedWorkingOrders = openOrders.filter(order => (
+      !ownedBrokerOrderIds.has(order.brokerOrderId)
+      && activeAccountSyncPause(accountId, order.symbol) == null
+    ));
     if (unrelatedPositions.length > 0 || unrelatedWorkingOrders.length > 0) {
       const details = [
         ...unrelatedPositions.map(position => `${position.symbol}:${position.netQuantity}`),
@@ -6114,6 +6131,18 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       throw new Error(
         `účet obsahuje expozici bez potvrzené copier lineage (${details}); account-wide close není bezpečný`,
       );
+    }
+    if (pausedExposure) {
+      const ownedSymbols = new Set(copiedPositionSymbols);
+      for (const order of openOrders) {
+        if (ownedBrokerOrderIds.has(order.brokerOrderId)) ownedSymbols.add(order.symbol);
+      }
+      if ([...ownedSymbols].some(symbol => activeAccountSyncPause(accountId, symbol) != null)) {
+        throw new Error('vlastněná expozice sdílí symbol s pozastaveným účtem; cílený close není bezpečný');
+      }
+      followerCutTargetSymbols.set(accountId, ownedSymbols);
+    } else {
+      followerCutTargetSymbols.delete(accountId);
     }
     return true;
   };
@@ -6801,9 +6830,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           live.bracketOutbox.values(),
           live.osoOutbox.values(),
         ));
-        const ownedSymbols = Object.keys(
-          followerCutExecutionProvenance.get(accountId)?.copiedExposureBySymbol ?? {},
-        );
+        const pausedScope = followerCutTargetSymbols.get(accountId);
+        const ownedSymbols = pausedScope
+          ? [...pausedScope]
+          : Object.keys(followerCutExecutionProvenance.get(accountId)?.copiedExposureBySymbol ?? {});
         const flattenOperationId = cut.operationId
           ?? `cut-${accountId}-${Math.floor(cut.until / 86_400_000)}`;
         const backgroundStore = createBackgroundFlattenStore(flattenOperationId);
@@ -6861,10 +6891,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         workingOrderAccounts.delete(accountId);
         positionsByAccount.set(accountId, new Map());
       } else {
+        // Etapa 2 (kolo 4): účet s ruční expozicí na pozastaveném symbolu
+        // se zavírá jen na vlastněných symbolech, nikdy account-wide.
+        const pausedScope = followerCutTargetSymbols.get(accountId);
         flattenResult = await flatten(
           [accountId],
           cut.operationId ?? `cut-${accountId}-${Math.floor(cut.until / 86_400_000)}`,
-          { preserveArm: true, scopedFailure },
+          {
+            preserveArm: true,
+            scopedFailure,
+            ...(pausedScope ? {
+              targets: [...pausedScope].map(symbol => ({ accountId, symbol })),
+              cleanupScope: 'target-symbol' as const,
+            } : {}),
+          },
         );
         if (!flattenResult.flat) {
           const detail = flattenResult.accounts
@@ -7577,6 +7617,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
     const accountIds = [...new Set([
       epoch.leaderAccountId,
       ...epoch.followers.map(follower => follower.accountId),
+      // Pozastavené účty se čtou jen jako důkaz pro uvolnění pauzy; do
+      // vyhodnocení guardu nevstupují.
+      ...(currentRuntime().state.safety.accountSyncPauses ?? [])
+        .filter(pause => pause.symbol === epoch.symbol)
+        .map(pause => pause.accountId),
     ])];
     const rows = await Promise.all(accountIds.map(async accountId => {
       const maxSnapshotAttempts = 3;
@@ -7795,32 +7840,33 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       return;
     }
 
-    const batchAccounts: LeaderFlatAccountBatchSnapshot[] = evaluationRows.map(row => row.ok
-      ? {
-        accountId: row.accountId,
-        ok: true,
-        positions: row.positions.map(position => ({
-          symbol: position.symbol,
-          netQuantity: position.netQuantity,
-        })),
-        exitEvidence: leaderFlatExitEvidence(epoch, row.accountId, row.orders),
-      }
-      : { accountId: row.accountId, ok: false, error: row.error });
-    // Etapa 2: pozastavený follower nemá v epizodě žádnou kopii kopírky
-    // (pauza vzniká nad autoritativně flat účtem). Guard ho proto nesmí
-    // zavírat jako vlastněnou kopii — případná pozice je ruční.
+    // Etapa 2 (kolo 4): pozastavený follower v guardu vůbec není — jeho
+    // případná pozice je ruční, guard ji nesmí zavírat ani kvůli ní shodit
+    // celou skupinu. Do durable epochy se vrací beze změny jako 'unproven'.
     const pausedInEpoch = new Set((currentRuntime().state.safety.accountSyncPauses ?? [])
-      .filter(pause => pause.symbol === epoch.symbol && pauseBelongsToEpoch(pause, epoch))
+      .filter(pause => pause.symbol === epoch.symbol)
       .map(pause => pause.accountId));
-    const guardEpoch: LeaderFlatEpoch = pausedInEpoch.size === 0 ? epoch : {
+    const pausedParticipants = epoch.followers
+      .filter(participant => pausedInEpoch.has(participant.accountId))
+      .map(participant => ({ ...participant, copyLineage: 'unproven' as const, confirmedNetQuantity: undefined }));
+    const batchAccounts: LeaderFlatAccountBatchSnapshot[] = evaluationRows
+      .filter(row => !pausedInEpoch.has(row.accountId))
+      .map(row => row.ok
+        ? {
+          accountId: row.accountId,
+          ok: true,
+          positions: row.positions.map(position => ({
+            symbol: position.symbol,
+            netQuantity: position.netQuantity,
+          })),
+          exitEvidence: leaderFlatExitEvidence(epoch, row.accountId, row.orders),
+        }
+        : { accountId: row.accountId, ok: false, error: row.error });
+    const guardEpoch: LeaderFlatEpoch = pausedParticipants.length === 0 ? epoch : {
       ...epoch,
-      followers: epoch.followers.map(participant => (
-        pausedInEpoch.has(participant.accountId)
-          ? { ...participant, copyLineage: 'unproven' as const, confirmedNetQuantity: undefined }
-          : participant
-      )),
+      followers: epoch.followers.filter(participant => !pausedInEpoch.has(participant.accountId)),
     };
-    const evaluation = evaluateLeaderFlatBatch({
+    const evaluated = evaluateLeaderFlatBatch({
       epoch: guardEpoch,
       snapshot: { observedAt: clock(), accounts: batchAccounts },
       autoCloseFollowerPositions: (
@@ -7830,6 +7876,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       exitSettlementGraceMs: leaderFlatExitSettlementGraceMs,
       inflightRetryMs: leaderFlatInflightRetryMs,
     });
+    const evaluation = pausedParticipants.length === 0 ? evaluated : {
+      ...evaluated,
+      epoch: { ...evaluated.epoch, followers: [...evaluated.epoch.followers, ...pausedParticipants] },
+    };
     await persistLeaderExposureEpoch(evaluation.epoch);
 
     if (evaluation.kind === 'resolved') {
@@ -7840,13 +7890,31 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       }]);
       await syncLiveCopyExposureFlag('clear');
       await resolveRejectedExecutions({
-        accountIds: epoch.followers.map(follower => follower.accountId),
+        accountIds: guardEpoch.followers.map(follower => follower.accountId),
         kind: 'follower-flat',
         at: clock(),
         symbol: epoch.symbol,
         detail: 'leader-flat guard autoritativně potvrdil followera flat',
       });
       updateDisarmOutcome(disarmAtForEpisode(epoch.id), 'flat');
+      if (pausedInEpoch.size > 0) {
+        // Leader je guardem autoritativně flat; pozastavený follower se
+        // uvolní jen podle téhož čerstvého snapshotu (flat, bez příkazů).
+        const cleanPaused = new Set(evaluationRows
+          .filter(row => row.ok
+            && pausedInEpoch.has(row.accountId)
+            && row.positions.every(position => position.symbol !== epoch.symbol || position.netQuantity === 0)
+            && row.orders.every(order => order.symbol !== epoch.symbol || !isOpenOrderStatus(order.status)))
+          .map(row => row.accountId));
+        if (cleanPaused.size > 0) {
+          await releaseAccountSyncPausesSafely((pause, state) => (
+            pause.symbol === epoch.symbol
+            && cleanPaused.has(pause.accountId)
+            && !symbolHasOpenEpoch(state, pause.symbol)
+            && !pendingIsolationCommandForAccount(pause.accountId)
+          ));
+        }
+      }
       return;
     }
 
@@ -9417,53 +9485,117 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       ))
       && !pendingIsolationCommandForAccount(accountId);
   };
-  const UNBOUND_PAUSE_MAX_AGE_MS = 24 * 60 * 60_000;
-  const pauseBelongsToEpoch = (
-    pause: Pick<CopierAccountSyncPause, 'epochId' | 'leaderEntryOrderId' | 'pausedAt'>,
-    epoch: LeaderFlatEpoch,
-  ) => pause.epochId === epoch.id
-    || (
-      pause.epochId == null
-      && epoch.leaderEntryOrderIds.includes(pause.leaderEntryOrderId)
-      // Pauza z doby před otevřením epochy (on-submit reject) patří jen
-      // k epoše otevřené krátce po ní; nikdy se nevzkřísí po dnech.
-      && pause.pausedAt > clock() - UNBOUND_PAUSE_MAX_AGE_MS
-      && pause.pausedAt >= epoch.openedAt - 60 * 60_000
-    );
-  /** Durable pauza účtu platná pro aktuální otevřenou epochu symbolu. */
-  const activeAccountSyncPause = (accountId: number, symbol: string): CopierAccountSyncPause | null => {
-    const epoch = leaderExposureEpoch(symbol);
-    if (!epoch || epoch.phase !== 'open') return null;
-    return (currentRuntime().state.safety.accountSyncPauses ?? []).find(pause => (
-      pause.accountId === accountId && pause.symbol === symbol && pauseBelongsToEpoch(pause, epoch)
-    )) ?? null;
-  };
-  /** Followeři s aktivní pauzou na symbolu — kopírka jim v epizodě nic nepošle. */
+  /**
+   * Durable pauza účtu na symbolu. Platí, dokud ji výslovně neuvolní
+   * `releaseCleanAccountSyncPauses` — flat leadera ani nová epocha ji samy
+   * neukončí (kolo 4: předčasné smazání = nový vstup na ruční pozici).
+   */
+  const activeAccountSyncPause = (accountId: number, symbol: string): CopierAccountSyncPause | null => (
+    (currentRuntime().state.safety.accountSyncPauses ?? []).find(pause => (
+      pause.accountId === accountId && pause.symbol === symbol
+    )) ?? null
+  );
+  /** Followeři s aktivní pauzou na symbolu — kopírka jim nic nepošle. */
   const syncPausedAccountIds = (symbol: string): Set<number> => new Set(group.followers
     .filter(follower => activeAccountSyncPause(follower.accountId, symbol) != null)
     .map(follower => follower.accountId));
-  /**
-   * Přidá pauzy a zahodí ty, které už nemohou platit (jejich epocha není
-   * mezi uloženými otevřenými epochami, ani nečekají na otevření).
-   */
+  /** Přidá pauzy; existující pauza téhož (účet, symbol) se nahradí. */
   const withAccountSyncPauses = (
     safety: CopierRuntime['state']['safety'],
     added: readonly CopierAccountSyncPause[],
+    removedKeys: ReadonlySet<string> = new Set(),
   ): CopierRuntime['state']['safety'] => {
-    const openEpochs = (safety.leaderExposureEpochs ?? []).filter(epoch => epoch.phase === 'open');
-    const stillRelevant = (pause: CopierAccountSyncPause) => (
-      pause.epochId == null
-        ? pause.pausedAt > clock() - 24 * 60 * 60_000
-        : openEpochs.some(epoch => epoch.id === pause.epochId)
-    );
     const addedKeys = new Set(added.map(pause => `${pause.accountId}:${pause.symbol}`));
-    const kept = (safety.accountSyncPauses ?? [])
-      .filter(pause => stillRelevant(pause) && !addedKeys.has(`${pause.accountId}:${pause.symbol}`));
-    // Žádný cap nad relevantními pauzami: jejich počet omezují followeři ×
-    // otevřené symboly. Neplatné se výše zahazují.
+    // Žádný cap ani časové vypršení: počet omezují followeři × symboly a
+    // pauza končí jen autoritativním důkazem čistého účtu.
+    const kept = (safety.accountSyncPauses ?? []).filter(pause => {
+      const key = `${pause.accountId}:${pause.symbol}`;
+      return !addedKeys.has(key) && !removedKeys.has(key);
+    });
     const next = [...kept, ...added];
     const { accountSyncPauses: _previous, ...rest } = safety;
     return next.length > 0 ? { ...rest, accountSyncPauses: next } : rest;
+  };
+  const symbolHasOpenEpoch = (state: CopierRuntime['state'], symbol: string) => (
+    (state.safety.leaderExposureEpochs ?? []).some(epoch => (
+      epoch.groupId === group.id
+      && epoch.leaderAccountId === group.leaderAccountId
+      && epoch.symbol === symbol
+      && epoch.phase === 'open'
+    ))
+  );
+  /**
+   * Pauza je uvolnitelná jen s čerstvým autoritativním důkazem (Kontrola
+   * pozic nebo vyřešený leader-flat guard): na symbolu neběží otevřená
+   * epizoda a leader i pozastavený follower jsou flat bez pracovních příkazů
+   * a bez nevyřešeného outboxu. Streamová cache sama nestačí — mezi leader
+   * fillem a jeho Position událostí vypadá leader flat. Účet se pak vrátí
+   * od dalšího vstupu leadera.
+   */
+  const accountSyncPauseReleasableFromCache = (
+    pause: CopierAccountSyncPause,
+    state: CopierRuntime['state'],
+  ): boolean => (
+    group.leaderAccountId != null
+    && !symbolHasOpenEpoch(state, pause.symbol)
+    && hasAuthoritativeFlatNoWorking(group.leaderAccountId, pause.symbol)
+    && hasAuthoritativeFlatNoWorking(pause.accountId, pause.symbol)
+  );
+  /** Selhání uvolnění pauzu jen ponechá (fail-safe), skupinu nevypíná. */
+  const releaseAccountSyncPausesSafely = async (
+    releasable: (pause: CopierAccountSyncPause, state: CopierRuntime['state']) => boolean,
+  ): Promise<void> => {
+    try {
+      await releaseAccountSyncPauses(releasable);
+    } catch (reason) {
+      options.onAudit?.([{
+        at: clock(),
+        leaderEventId: `account-sync-pause-release-failed:${clock()}`,
+        kind: 'skipped',
+        reason: `uvolnění pozastavených účtů se nepovedlo, zůstávají pozastavené: ${errorOf(reason).message}`,
+      }]);
+    }
+  };
+  const releaseAccountSyncPauses = async (
+    isReleasable: (pause: CopierAccountSyncPause, state: CopierRuntime['state']) => boolean,
+  ): Promise<void> => {
+    if (stopped || (currentRuntime().state.safety.accountSyncPauses ?? []).length === 0) return;
+    const released: CopierAccountSyncPause[] = [];
+    await processor.mutate(async current => {
+      const releasable = (current.state.safety.accountSyncPauses ?? [])
+        .filter(pause => isReleasable(pause, current.state));
+      if (releasable.length === 0) return current;
+      const state = {
+        ...current.state,
+        safety: withAccountSyncPauses(
+          current.state.safety,
+          [],
+          new Set(releasable.map(pause => `${pause.accountId}:${pause.symbol}`)),
+        ),
+      };
+      const committed = await durableStore.commit(
+        toSnapshot(
+          state,
+          current.outbox.values(),
+          current.cancelOutbox.values(),
+          current.revision,
+          current.bracketOutbox.values(),
+          current.osoOutbox.values(),
+        ),
+        current.revision,
+      );
+      released.push(...releasable);
+      return { ...current, state, revision: committed.revision };
+    });
+    if (released.length > 0) {
+      options.onAudit?.(released.map(pause => ({
+        at: clock(),
+        leaderEventId: `account-sync-pause-release:${pause.accountId}:${pause.symbol}`,
+        kind: 'recovered' as const,
+        accountId: pause.accountId,
+        reason: `follower ${pause.accountId} je na ${pause.symbol} znovu čistý (leader i účet flat bez příkazů) — od dalšího vstupu leadera se kopíruje`,
+      })));
+    }
   };
   const currentIntentionalSuppression = (
     accountId: number,
@@ -15279,6 +15411,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // Pouze její čistý výsledek smí odstranit starou chybu; automatické
       // reconnect/terminal-fill kontroly incident uživateli neschovávají.
       const result = await performReconciliation({ ...reconciliationOptions, clearLastError: true });
+      // Čistá Kontrola pozic = čerstvý autoritativní snapshot všech účtů.
+      if (result.authoritativelyClean) await releaseAccountSyncPausesSafely(accountSyncPauseReleasableFromCache);
       if (result.authoritativelyClean) {
         await persistSafetyUpdate(current => {
           const { manualRecoveryRequired: _cleared, ...rest } = current;

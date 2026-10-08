@@ -248,7 +248,7 @@ describe('etapa 2 — vyřazení z epizody přežije restart workeru', () => {
     }
   });
 
-  it('pauza platí jen pro tutéž epizodu: u dalšího obchodu follower kopíruje znovu', async () => {
+  it('pauza přežije flat leadera; po autoritativní kontrole čistého účtu follower u dalšího obchodu kopíruje znovu', async () => {
     const ctx = await setup(fillStopBeforeModify);
     const { broker, controller, order, position } = ctx;
     try {
@@ -263,7 +263,12 @@ describe('etapa 2 — vyřazení z epizody přežije restart workeru', () => {
         symbol, side: 'Sell', quantity: 19, price: 31_356, filledAt: 4 } });
       position(100, 0);
       await controller.waitForIdle();
+      // Kolo 4: samotný flat leadera pauzu neuvolní (stream cache není důkaz).
+      expect(controller.status().accountSyncPauses).toEqual([expect.objectContaining({ accountId: 200 })]);
+      // Čistá Kontrola pozic (leader i 200 flat bez příkazů) ji uvolní.
+      await controller.reconcile();
       expect(controller.status().accountSyncPauses ?? []).toEqual([]);
+      controller.arm();
       // Nový obchod: Market vstup se zkopíruje oběma followerům, i 200.
       const placedBefore = broker.placedRequests().length;
       broker.emitEvent({ type: 'order', order: order('entry-2', { orderType: 'Market', limitPrice: undefined, quantity: 2, sourceVersion: '1' }) });

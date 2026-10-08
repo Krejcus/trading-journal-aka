@@ -50,6 +50,7 @@ describe('A1: synchronní reject vstupu followera po dřívějším obchodu', ()
     const controller = await bootstrapCopierRuntime({
       broker, store: createMemoryCopierStore(), group, clock,
       onAudit: entries => audit.push(...entries),
+      leaderFlatGraceMs: 10, leaderFlatInflightRetryMs: 10,
     });
     const tick = async (ms: number) => {
       now += ms;
@@ -94,6 +95,13 @@ describe('A1: synchronní reject vstupu followera po dřívějším obchodu', ()
       expect(await pos(300)).toBe(0);
       expect(await pos(200)).toBe(0);
       expect(controller.status().armed).toBe(true);
+      // Etapa 2 (kolo 4): pauza 200 se uvolní až autoritativním leader-flat
+      // guardem (leader i 200 flat bez příkazů), ne samotným flatem leadera.
+      for (let i = 0; i < 5; i += 1) {
+        await new Promise(r => setTimeout(r, 30));
+        await tick(2_000);
+      }
+      expect(controller.status().accountSyncPauses ?? []).toEqual([]);
 
       // Další obchod: vyřazení platilo jen pro minulou epizodu.
       await leaderTrade(broker, controller, order({ brokerOrderId: 'e3' }), 1, 'e3f');
