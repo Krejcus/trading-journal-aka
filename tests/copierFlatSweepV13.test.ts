@@ -241,7 +241,7 @@ function streamFirstStatusLookupFromMock(
   ): Promise<BrokerOrderStatusLookup> => {
     const streamed = broker.orders().find(item => item.accountId === accountId && item.brokerOrderId === orderId);
     if (streamed) {
-      return { status: streamed.status, completeness: 'authoritative', observedAt: Date.now() };
+      return { status: streamed.status, completeness: 'authoritative', observedAt: Date.now(), filledQuantity: streamed.filledQuantity };
     }
     if (options?.streamOnly) return { status: null, completeness: 'eventual', observedAt: Date.now() };
     await onRest?.(accountId, orderId);
@@ -445,6 +445,29 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
       };
       await harness.controller.waitForIdle();
       expect(flipped).toBe(true);
+      expect(harness.controller.status().armed).toBe(false);
+      expect(harness.controller.status().lastError).toContain('pozici');
+    } finally {
+      harness.controller.stop();
+    }
+  }, 10_000);
+
+  it('partial cancel (canceled s fillem) neprojde rychlou cestou: čerstvá pozice odhalí otevřenou pozici', async () => {
+    const harness = await armedOsoHarness(baseGroup);
+    try {
+      const ids = harness.protectiveIdsByAccount.get(200)!;
+      const targetId = ids[0];
+      const realCancel = harness.broker.cancelOrder.bind(harness.broker);
+      harness.broker.cancelOrder = async (accountId, orderId) => {
+        if (orderId !== targetId) return realCancel(accountId, orderId);
+        // Část nohy se vyplnila, zbytek zrušen — Tradovate hlásí canceled s fillem.
+        const leg = harness.broker.orders().find(order => order.brokerOrderId === targetId)!;
+        leg.status = 'canceled';
+        leg.filledQuantity = 1;
+        harness.broker.setPosition(200, 'MNQU6', -1);
+      };
+      emitFollowerFlat(harness);
+      await harness.controller.waitForIdle();
       expect(harness.controller.status().armed).toBe(false);
       expect(harness.controller.status().lastError).toContain('pozici');
     } finally {

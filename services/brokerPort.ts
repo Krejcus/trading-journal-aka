@@ -312,6 +312,11 @@ export interface BrokerOrderStatusLookup {
   status: OrderStatus | null;
   completeness: 'authoritative' | 'eventual';
   observedAt: number;
+  /**
+   * Vyplněné množství, je-li známé. Terminální `canceled`/`rejected` může mít
+   * částečný fill (Tradovate partial cancel); `undefined` = neznámé.
+   */
+  filledQuantity?: number;
 }
 
 export interface BrokerPort {

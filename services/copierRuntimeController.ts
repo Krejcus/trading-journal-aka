@@ -2310,12 +2310,37 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const hasStreamOpenParent = osoParentIds.some(id => (
         isOpenOrderStatus(streamStatuses.get(id)?.status ?? null)
       ));
-      // Vyplněná noha mohla otevřít pozici: rychlý návrat jen bez fillu,
-      // jinak projde čerstvou kontrolou pozice níže (review 8. 10.).
+      // Terminální status neříká, zda order nebyl částečně vyplněn (Tradovate
+      // hlásí partial cancel jako canceled s fillem). Návrat bez cancelu proto
+      // při fillu nebo neznámém množství potvrdí čerstvou nulovou pozici —
+      // až po důkazu z orderů. Bez fillu zůstává čistě in-memory (P6/V5a).
+      const mayHaveFilled = (lookup: BrokerOrderStatusLookup | undefined) => (
+        lookup == null
+        || lookup.status === 'filled'
+        || lookup.filledQuantity == null
+        || lookup.filledQuantity > 0
+      );
+      const confirmFreshFlat = async (label: string) => {
+        const fresh = await withFlatSweepBudget(
+          budget,
+          label + ' ' + accountId + '/' + symbol,
+          () => broker.listPositions(accountId),
+        );
+        const freshNet = fresh.find(position => position.symbol === symbol)?.netQuantity ?? 0;
+        if (freshNet !== 0) {
+          followerFlatConfirmed = false;
+          throw new Error('ochranná noha skončila a broker hlásí pozici ' + freshNet);
+        }
+      };
       if (!hasStreamOpenParent && candidateIds.every(id => {
         const status = streamStatuses.get(id)?.status;
-        return status != null && !isOpenOrderStatus(status) && status !== 'filled';
-      })) return;
+        return status != null && !isOpenOrderStatus(status);
+      })) {
+        if (candidateIds.some(id => mayHaveFilled(streamStatuses.get(id)))) {
+          await confirmFreshFlat('kontrola pozice po terminálních nohách');
+        }
+        return;
+      }
 
       const osoParentByLeg = new Map<string, string>();
       for (const entry of osoEntries) {
@@ -2540,23 +2565,14 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
         if (attemptedIds.length === 0) {
           if (classificationFailures.length > 0) throw new Error(classificationFailures.join(', '));
-          const filledLeg = candidateIds.some(id => preferredSweepStatus(
-            streamStatuses.get(id)?.status,
-            byId.get(id)?.status,
-          ) === 'filled');
-          if (filledLeg) {
-            // Pozice čtená před cancelem je starší než důkaz fillu z orderů.
-            const freshPositions = await withFlatSweepBudget(
-              budget,
-              'kontrola pozice po fillu ochranné nohy ' + accountId + '/' + symbol,
-              () => broker.listPositions(accountId),
-            );
-            const freshNet = freshPositions.find(position => position.symbol === symbol)?.netQuantity ?? 0;
-            if (freshNet !== 0) {
-              followerFlatConfirmed = false;
-              throw new Error('ochranná noha se vyplnila a broker hlásí pozici ' + freshNet);
-            }
-          }
+          // Pozice čtená před cancelem je starší než důkaz z orderů.
+          const filledEvidence = candidateIds.some(id => {
+            const order = byId.get(id);
+            return order != null
+              ? order.status === 'filled' || order.filledQuantity > 0
+              : mayHaveFilled(streamStatuses.get(id));
+          });
+          if (filledEvidence) await confirmFreshFlat('kontrola pozice po terminálních nohách');
           return;
         }
 
@@ -2577,7 +2593,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         for (const delayMs of TOO_LATE_STREAM_SETTLE_DELAYS_MS) {
           const pending = tooLateOpen();
           if (pending.length === 0) break;
-          if (flatSweepRemainingMs(budget) < delayMs + FLAT_SWEEP_SETTLE_RESERVE_MS) break;
+          // Rezerva počítá i s visícím stream lookupem po spánku.
+          if (flatSweepRemainingMs(budget) < delayMs + STREAM_SWEEP_READ_TIMEOUT_MS + FLAT_SWEEP_SETTLE_RESERVE_MS) break;
           await (options.wait ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms))))(delayMs);
           for (const [id, lookup] of await streamSweepStatuses(accountId, pending)) postStreamStatuses.set(id, lookup);
         }
@@ -2585,10 +2602,12 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           const status = streamOutcome(id);
           return status != null && !isOpenOrderStatus(status);
         });
-        // Vyplněná ochranná noha může otevřít pozici: rychlá cesta jen pro
-        // čisté zrušení, fill vždy projde postkontrolou pozice.
-        const anyAttemptFilled = attemptedIds.some(id => streamOutcome(id) === 'filled');
-        if (allAttemptsTerminalInStream && !anyAttemptFilled && classificationFailures.length === 0) {
+        if (allAttemptsTerminalInStream && classificationFailures.length === 0) {
+          // Zrušení s (částečným) fillem nebo neznámým množstvím: nejdřív
+          // čerstvá pozice. Čisté zrušení zůstává bez dalšího čtení.
+          if (attemptedIds.some(id => mayHaveFilled(postStreamStatuses.get(id) ?? streamStatuses.get(id)))) {
+            await confirmFreshFlat('postkontrola pozice');
+          }
           for (const brokerOrderId of attemptedIds) {
             const outcome = streamOutcome(brokerOrderId);
             recordTerminalSweepState(accountId, brokerOrderId, outcome);
