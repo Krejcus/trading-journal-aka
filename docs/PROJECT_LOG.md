@@ -83,10 +83,11 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       správně routuje na nejčerstvější heartbeat, ale není to fencing.
       Budoucí oprava má odmítnout ARM při více čerstvých workerech a brzdu
       fan-outovat na všechna nerevokovaná zařízení connection.
-- [ ] **N10 day-lock snapshot race v controlleru** — `maybeEngageDayLock`
-      má ukládat funkčním `persistSafetyUpdate(current => ...)`, aby
-      nepřepsal souběžnou novější safety hodnotu. Balíček 7a-2 soubor
-      `services/copierRuntimeController.ts` podle dělby práce neměnil.
+- [x] **N10 day-lock snapshot race v controlleru** — VYŘEŠENO 29. 9. v
+      controller balíčku 5c: `maybeEngageDayLock` používá funkční
+      `persistSafetyUpdate(current => ...)`; deterministická regrese
+      `N10 day-lock functional update preserves a concurrent sessionArmedAt commit`
+      zachovává oba souběžné zápisy.
 - [x] **Zápis venue risk limitů / skutečný broker-side day lock** — UZAVŘENO
       3. 9. rozhodnutím uživatele: nepokračovat. Fáze 1 (read-only sonda,
       `docs/TRADOVATE_RISK_LIMITS_CAPABILITY_20260903.md`) prokázala jen read
@@ -242,13 +243,10 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       ochranný posun SL nesmí zamítnout jen kvůli stáří a neodeslaný ochranný
       posun se musí po čerstvém lookupu znovu prosadit. Runner 5b-2 tyto body
       záměrně nemění bez controller kontraktu.
-- [ ] **ST6 pending okno musí běžet od přijetí leader eventu** — balíček 11b
-      odstranil serializovanou REST hydrataci před doručením eventu, ale timer
-      v `copierRuntimeController.ts` se stále zakládá až po zpracování eventu
-      na plných `pendingWindowMs() + 50`. Navazující controller změna má počítat
-      jen zbývající rozpočet z `leaderEvent.receivedAt`, včetně testu, kde
-      brokerová hydratace spotřebuje celé okno. Soubor je záměrně beze změny,
-      protože ho v této worktree vlastní paralelní Codex.
+- [x] **ST6 pending okno musí běžet od přijetí leader eventu** — VYŘEŠENO
+      29. 9. v controller balíčku 5c: bracket/OSO timeouts počítají jen
+      zbývající rozpočet z `leaderEvent.receivedAt`; cílená stale-ingress/ST6
+      regrese před opravou padala a po opravě prošla.
 - [ ] **ST17 baseline množiny účtů pro session tighten-only** — balíček 8b
       sjednotil relay/loopback podle P-B pro ruční re-enable followera a změnu
       on-submit/on-fill, ale záměrně nerozhodl, zda má session držet zvláštní
@@ -257,6 +255,21 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
       zůstává fail-closed.
 
 ## Deník
+
+### 2026-10-08 — Předání invariantů jádra kopírky (Codex)
+
+- Přidán `docs/COPIER_INVARIANTS.md`: mapa execution/durable/relay/UI vrstev,
+  tok leader eventu a 48 očíslovaných invariantů. Každý má důvod, konkrétní
+  místo vynucení v aktuálním kódu, testovou oporu, zákaz zjednodušení a hranici
+  bezpečných změn. Samostatně jsou ARM brány, checklist pro oponenta, incidenty
+  a otevřené mezery včetně N6, nezapojeného VPS lease a distribuovaného ACK.
+- Při ověření proti aktuálnímu kódu byly jako zastaralé opraveny dvě položky
+  výše: N10 už používá funkční `persistSafetyUpdate` a ST6 počítá bracket/OSO
+  budget z `leaderEvent.receivedAt`; obě mají deterministické regrese.
+- Ověření dokumentu: všech 48 pravidel obsahuje všech pět povinných polí,
+  všechny citované source symboly a konkrétní test/doc soubory existují,
+  `git diff --check` je čistý. Bez změny kódu, instalace závislostí, broker
+  příkazu, ARM/Flatten, deploye, workeru nebo pushnutí.
 
 ### 2026-10-06 — Ranní incidenty a nasazení (Claude + Codex)
 - 07:31 UTC: leader posunul stop, stopy followerů vyplnily na původní ceně ~90 ms před potvrzením
