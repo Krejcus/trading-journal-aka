@@ -2042,8 +2042,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   /** Horní mez skutečně pracovních noh v jedné okamžité sweep dávce. */
   const SWEEP_MAX_LEGS_PER_CALL = 6;
   const STREAM_SWEEP_READ_TIMEOUT_MS = 250;
-  /** Rezerva rozpočtu sweepu na závěrečné čtení pozice po čekání na doběhnutí orderů. */
-  const FLAT_SWEEP_SETTLE_RESERVE_MS = 1_000;
+  /** TooLate cancel: krátké čtení streamu, než order u brokera doběhne. */
+  const TOO_LATE_STREAM_SETTLE_DELAYS_MS = [250, 500, 750] as const;
+  /** Rezerva rozpočtu sweepu na závěrečnou postkontrolu (orders + pozice). */
+  const FLAT_SWEEP_SETTLE_RESERVE_MS = 2_000;
 
   interface FlatSweepBudget {
     startedAt: number;
@@ -2544,11 +2546,30 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           postStreamStatuses.get(brokerOrderId)?.status,
           streamStatuses.get(brokerOrderId)?.status,
         );
+        // 8. 10. 2026 (produkce, účet 68931462): cancel dostal TooLate, protože
+        // order už rušil dřívější cancel; stream doručil Canceled ~0,8 s po
+        // odmítnutí a sweep mezitím kopírku zbytečně vypnul. Jen pro TooLate
+        // proto krátce (≤ 1,5 s) čteme levný stream status — žádné REST grafy,
+        // žádný další cancel ani jiný write.
+        const tooLateOpen = () => attemptedIds.filter(id => (
+          /TooLate/i.test(cancelErrors.get(id)?.message ?? '')
+          && (streamOutcome(id) == null || isOpenOrderStatus(streamOutcome(id)!))
+        ));
+        for (const delayMs of TOO_LATE_STREAM_SETTLE_DELAYS_MS) {
+          const pending = tooLateOpen();
+          if (pending.length === 0) break;
+          if (flatSweepRemainingMs(budget) < delayMs + FLAT_SWEEP_SETTLE_RESERVE_MS) break;
+          await (options.wait ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms))))(delayMs);
+          for (const [id, lookup] of await streamSweepStatuses(accountId, pending)) postStreamStatuses.set(id, lookup);
+        }
         const allAttemptsTerminalInStream = attemptedIds.every(id => {
           const status = streamOutcome(id);
           return status != null && !isOpenOrderStatus(status);
         });
-        if (allAttemptsTerminalInStream && classificationFailures.length === 0) {
+        // Vyplněná ochranná noha může otevřít pozici: rychlá cesta jen pro
+        // čisté zrušení, fill vždy projde postkontrolou pozice.
+        const anyAttemptFilled = attemptedIds.some(id => streamOutcome(id) === 'filled');
+        if (allAttemptsTerminalInStream && !anyAttemptFilled && classificationFailures.length === 0) {
           for (const brokerOrderId of attemptedIds) {
             const outcome = streamOutcome(brokerOrderId);
             recordTerminalSweepState(accountId, brokerOrderId, outcome);
@@ -2573,18 +2594,24 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           return;
         }
 
+        const positions = await withFlatSweepBudget(
+          budget,
+          'postkontrola pozice ' + accountId + '/' + symbol,
+          () => broker.listPositions(accountId),
+        );
         const needsPostOrderGraph = attemptedIds.some(id => {
           const lookup = postStreamStatuses.get(id);
           return lookup == null || isOpenOrderStatus(lookup.status);
         });
-        let postOrders = needsPostOrderGraph
+        const postOrders = needsPostOrderGraph
           ? await withFlatSweepBudget(
             budget,
             'postkontrola orderů ' + accountId,
             () => broker.listOrders(accountId),
           )
           : [];
-        let postById = new Map([
+        const netQuantity = positions.find(position => position.symbol === symbol)?.netQuantity ?? 0;
+        const postById = new Map([
           ...orders.map(order => [order.brokerOrderId, order] as const),
           ...postOrders.map(order => [order.brokerOrderId, order] as const),
         ]);
@@ -2595,40 +2622,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             streamStatuses.get(brokerOrderId)?.status,
           )
         );
-        // 8. 10. 2026: Tradovate odmítne cancel jako TooLate, když už order
-        // končí jinou cestou (dřívější cancel, OCO, fill); REST i stream ho pak
-        // ještě ~1–2 s hlásí jako Working. Místo okamžitého fail-closed proto
-        // jen čteme (žádný další cancel ani jiný write), dokud nedoběhne,
-        // v rámci zbytku rozpočtu sweepu s rezervou na postkontrolu pozice.
-        const settleDelays = [250, 500, 750, 1_000, 1_000];
-        for (const delayMs of settleDelays) {
-          const stillOpen = attemptedIds.filter(id => {
-            const status = postStatus(id);
-            return status != null && isOpenOrderStatus(status);
-          });
-          if (stillOpen.length === 0) break;
-          if (flatSweepRemainingMs(budget) < delayMs + FLAT_SWEEP_SETTLE_RESERVE_MS) break;
-          await (options.wait ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms))))(delayMs);
-          const settledStream = await streamSweepStatuses(accountId, stillOpen);
-          for (const [id, lookup] of settledStream) postStreamStatuses.set(id, lookup);
-          postOrders = await withFlatSweepBudget(
-            budget,
-            'opakovaná postkontrola orderů ' + accountId,
-            () => broker.listOrders(accountId),
-          );
-          postById = new Map([
-            ...orders.map(order => [order.brokerOrderId, order] as const),
-            ...postOrders.map(order => [order.brokerOrderId, order] as const),
-          ]);
-        }
-        // Pozice se čte až po doběhnutí orderů: vyplněná ochranná noha by
-        // jinak zůstala neodhalená.
-        const positions = await withFlatSweepBudget(
-          budget,
-          'postkontrola pozice ' + accountId + '/' + symbol,
-          () => broker.listPositions(accountId),
-        );
-        const netQuantity = positions.find(position => position.symbol === symbol)?.netQuantity ?? 0;
         const failures: string[] = [...classificationFailures];
         const checkedIds = [...new Set([...allLegIds, ...parentIds])];
         for (const brokerOrderId of checkedIds) {

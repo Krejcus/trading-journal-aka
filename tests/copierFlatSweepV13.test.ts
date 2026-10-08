@@ -363,9 +363,12 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
       const ids = harness.protectiveIdsByAccount.get(200)!;
       const targetId = ids[0];
       const realCancel = harness.broker.cancelOrder.bind(harness.broker);
+      let cancelCalls = 0;
+      const graphReads = vi.spyOn(harness.broker, 'listOrders');
       harness.broker.cancelOrder = async (accountId, orderId) => {
         if (orderId !== targetId) return realCancel(accountId, orderId);
         // Dřívější cancel doběhne u brokera až za chvíli; tenhle je TooLate.
+        cancelCalls += 1;
         setTimeout(() => {
           const leg = harness.broker.orders().find(order => order.brokerOrderId === targetId)!;
           leg.status = 'canceled';
@@ -379,7 +382,34 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
       await harness.controller.waitForIdle();
 
       expect(harness.controller.status()).toMatchObject({ armed: true, lastError: null });
-      expect(harness.broker.cancelRequestCount(targetId)).toBe(0);
+      expect(cancelCalls).toBe(1);
+      // Čeká se jen na levný stream status, ne opakovaná REST čtení.
+      expect(graphReads.mock.calls.length).toBeLessThanOrEqual(1);
+    } finally {
+      harness.controller.stop();
+    }
+  }, 10_000);
+
+  it('TooLate a noha se místo zrušení vyplnila: projde postkontrolou pozice (žádná rychlá cesta)', async () => {
+    const harness = await armedOsoHarness(baseGroup);
+    try {
+      const ids = harness.protectiveIdsByAccount.get(200)!;
+      const targetId = ids[0];
+      const realCancel = harness.broker.cancelOrder.bind(harness.broker);
+      harness.broker.cancelOrder = async (accountId, orderId) => {
+        if (orderId !== targetId) return realCancel(accountId, orderId);
+        const leg = harness.broker.orders().find(order => order.brokerOrderId === targetId)!;
+        leg.status = 'filled';
+        leg.filledQuantity = leg.quantity;
+        harness.broker.setPosition(200, 'MNQU6', -1);
+        throw new Error('cancelOrder rejected: TooLate');
+      };
+      const positionReads = vi.spyOn(harness.broker, 'listPositions');
+      emitFollowerFlat(harness);
+      await harness.controller.waitForIdle();
+      expect(positionReads.mock.calls.some(([accountId]) => accountId === 200)).toBe(true);
+      expect(harness.controller.status().armed).toBe(false);
+      expect(harness.controller.status().lastError).toContain('pozici');
     } finally {
       harness.controller.stop();
     }
