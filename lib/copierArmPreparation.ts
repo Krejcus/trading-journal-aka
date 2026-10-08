@@ -119,6 +119,20 @@ export function assertCopierArmConnections(
   }
 }
 
+/** Značka workeru `[retire-missing:<groupId>:<ids>]` → co nabídnout k potvrzení. */
+export function retireMissingFromError(reason: unknown): { groupId: string; accountIds: number[] } | null {
+  const message = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : '';
+  const match = /\[retire-missing:([^:\]]+):([0-9,]+)\]/.exec(message);
+  if (!match) return null;
+  const accountIds = match[2].split(',').map(Number).filter(id => Number.isSafeInteger(id) && id > 0);
+  if (accountIds.length === 0) return null;
+  try {
+    return { groupId: decodeURIComponent(match[1]), accountIds };
+  } catch {
+    return null;
+  }
+}
+
 export function copierArmRejection(reason: unknown): string | null {
   if (reason instanceof CopierArmBlockedError) return reason.message;
   if (!(reason instanceof Error)) return null;

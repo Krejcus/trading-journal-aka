@@ -19,6 +19,7 @@ import {
 import { startLocalCopierExecutionAgent, type LocalCopierExecutionAgent } from '../server/localCopierExecutionAgent';
 import type { CopierControllerStatus, CopierRuntimeController } from '../services/copierRuntimeController';
 import type { CopyGroupConfig } from '../services/liveCopyTrading';
+import { retireMissingFromError } from '../lib/copierArmPreparation';
 
 describe('hlídání adresáře účtů', () => {
   it('změnu potvrdí až druhé shodné čtení (jednorázový výpadek nespustí restart)', () => {
@@ -95,47 +96,71 @@ let running: LocalCopierExecutionAgent | null = null;
 afterEach(async () => { await running?.close(); running = null; });
 
 describe('přepnutí na novou skupinu, když stará má breachnuté účty', () => {
-  it('všechny staré účty zmizely: stará skupina se vyřadí a nová aktivuje', async () => {
+  it('všechny staré účty zmizely: worker sám nic nevyřadí, vrátí značku k potvrzení', async () => {
     const runtime = controller();
-    const previewGroupAccounts = vi.fn(async (request: { optional: readonly number[] }) => ({ missingOptional: [...request.optional] }));
     running = await startLocalCopierExecutionAgent({
       controller: runtime, group: oldGroup(), port: 0,
-      previewGroupAccounts,
+      previewGroupAccounts: async request => ({ missingOptional: [...request.optional] }),
       prepareGroupAccounts: async request => ({ missingOptional: [...request.optional] }),
     });
-    await running.execute({ type: 'activate-group', group: newGroup() });
+    const error = await running.execute({ type: 'activate-group', group: newGroup() }).catch(reason => reason as Error);
+    expect(error).toBeInstanceOf(Error);
+    expect(retireMissingFromError(error)).toEqual({ groupId: 'old', accountIds: [100, 200, 300] });
+    expect(runtime.activateGroup).not.toHaveBeenCalled();
+  });
+
+  it('po potvrzení uživatelem (explicitní retireMissingOldGroup) se stará vyřadí a nová aktivuje', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: oldGroup(), port: 0,
+      previewGroupAccounts: async request => ({ missingOptional: [...request.optional] }),
+      prepareGroupAccounts: async request => ({ missingOptional: [...request.optional] }),
+    });
+    await running.execute({
+      type: 'activate-group', group: newGroup(),
+      retireMissingOldGroup: { groupId: 'old', accountIds: [100, 200, 300], reason: 'Uživatel v appce potvrdil vyřazení účtů 100, 200, 300' },
+    });
     expect(runtime.activateGroup).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'new', leaderAccountId: 500 }),
-      expect.objectContaining({
-        retireMissingOldGroup: expect.objectContaining({ groupId: 'old', accountIds: [100, 200, 300] }),
-      }),
+      expect.objectContaining({ retireMissingOldGroup: expect.objectContaining({ groupId: 'old', accountIds: [100, 200, 300] }) }),
     );
   });
 
-  it('část starých účtů ještě existuje: odmítne s vysvětlením, nic nevyřadí', async () => {
+  it('ARM jiné skupiny se zmizelými starými účty nic nevyřadí ani nezapne', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({
+      controller: runtime, group: oldGroup(), port: 0,
+      previewGroupAccounts: async request => ({ missingOptional: [...request.optional] }),
+      prepareGroupAccounts: async request => ({ missingOptional: [...request.optional] }),
+    });
+    const error = await running.execute({ type: 'arm-live', group: newGroup() }).catch(reason => reason as Error);
+    expect(retireMissingFromError(error)).toEqual({ groupId: 'old', accountIds: [100, 200, 300] });
+    expect(runtime.activateGroup).not.toHaveBeenCalled();
+    expect(runtime.arm).not.toHaveBeenCalled();
+  });
+
+  it('část starých účtů ještě existuje: odmítne s vysvětlením bez značky', async () => {
     const runtime = controller();
     running = await startLocalCopierExecutionAgent({
       controller: runtime, group: oldGroup(), port: 0,
       previewGroupAccounts: async () => ({ missingOptional: [100] }),
       prepareGroupAccounts: async () => ({ missingOptional: [] }),
     });
-    await expect(running.execute({ type: 'activate-group', group: newGroup() }))
-      .rejects.toThrow('Worker to za chvíli sám zachytí');
+    const error = await running.execute({ type: 'activate-group', group: newGroup() }).catch(reason => reason as Error);
+    expect(String(error)).toContain('Worker to za chvíli sám zachytí');
+    expect(retireMissingFromError(error)).toBeNull();
     expect(runtime.activateGroup).not.toHaveBeenCalled();
   });
 
-  it('režim opravy po startu: vyřadí jen účty nedostupné při startu', async () => {
+  it('režim opravy po startu: značka nabídne jen účty nedostupné při startu', async () => {
     const runtime = controller({ groupId: 'old', unavailableAccountIds: [100] });
     running = await startLocalCopierExecutionAgent({
       controller: runtime, group: oldGroup(), port: 0,
       previewGroupAccounts: async () => ({ missingOptional: [100] }),
       prepareGroupAccounts: async request => ({ missingOptional: request.optional.filter(id => id === 100) }),
     });
-    await running.execute({ type: 'activate-group', group: newGroup() });
-    expect(runtime.activateGroup).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'new' }),
-      expect.objectContaining({ retireMissingOldGroup: expect.objectContaining({ groupId: 'old', accountIds: [100] }) }),
-    );
+    const error = await running.execute({ type: 'activate-group', group: newGroup() }).catch(reason => reason as Error);
+    expect(retireMissingFromError(error)).toEqual({ groupId: 'old', accountIds: [100] });
   });
 
   it('nedostupný dry-run přepnutí odmítne (fail-closed)', async () => {
@@ -147,5 +172,16 @@ describe('přepnutí na novou skupinu, když stará má breachnuté účty', () 
     });
     await expect(running.execute({ type: 'activate-group', group: newGroup() })).rejects.toThrow('tradovate down');
     expect(runtime.activateGroup).not.toHaveBeenCalled();
+  });
+
+  it('agent hlásí rozpracované a nedávno dokončené příkazy (brána údržbového restartu)', async () => {
+    const runtime = controller();
+    running = await startLocalCopierExecutionAgent({ controller: runtime, group: oldGroup(), port: 0 });
+    expect(running.commandActivity?.()).toEqual({ pending: 0, lastSettledAt: 0 });
+    const done = running.execute({ type: 'disarm' });
+    expect(running.commandActivity?.().pending).toBe(1);
+    await done;
+    expect(running.commandActivity?.().pending).toBe(0);
+    expect(running.commandActivity?.().lastSettledAt).toBeGreaterThan(0);
   });
 });

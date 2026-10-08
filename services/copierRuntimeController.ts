@@ -619,6 +619,12 @@ export interface CopierRuntimeController {
   }): Promise<void>;
   /** Důvod, proč teď nesmí začít plánovaná obměna broker socketu. */
   connectionRenewalBlocker(): string | null;
+  /**
+   * Proč teď nejde worker bezpečně restartovat kvůli údržbě (nové účty):
+   * rozpracovaný lifecycle, nedokončená epocha/cut, durable stopa kopií
+   * nebo cokoli z `connectionRenewalBlocker`. `null` = klid.
+   */
+  maintenanceRestartBlocker(): string | null;
   status(): CopierControllerStatus;
   waitForIdle(): Promise<void>;
   stop(): void;
@@ -14753,6 +14759,9 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   });
 
   return {
+    maintenanceRestartBlocker() {
+      return readOnlyRecoveryBlocker() ?? this.connectionRenewalBlocker();
+    },
     connectionRenewalBlocker() {
       if (autoCloseInFlight) return 'auto-close';
       if (recoveryInFlight || pendingConnectionRecovery || pendingReadOnlyConnectionRecovery

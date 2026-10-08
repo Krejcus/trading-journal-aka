@@ -113,6 +113,8 @@ export interface LocalCopierExecutionAgent {
   execute(command: LocalCopierAgentCommand, context?: LocalCopierAgentExecutionContext): Promise<LocalCopierAgentCommandResult>;
   /** Synchronně odmítne nový/pending command ingress před graceful drainem. */
   beginShutdown(): void;
+  /** Rozpracované příkazy a čas posledního dokončeného (údržbový restart). */
+  commandActivity?(): { pending: number; lastSettledAt: number };
   close(): Promise<void>;
 }
 
@@ -182,6 +184,11 @@ const sameCopyGroupConfig = (left: CopyGroupConfig, right: CopyGroupConfig): boo
   JSON.stringify(canonicalConfig(left)) === JSON.stringify(canonicalConfig(right));
 
 const SNAPSHOT_TEST_REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Strojově čitelná značka pro UI: kterou skupinu a účty potvrdit k vyřazení. */
+export const retireMissingMarker = (groupId: string, accountIds: readonly number[]) => (
+  `[retire-missing:${encodeURIComponent(groupId)}:${accountIds.join(',')}]`
+);
 
 const accountsForRoutingChange = (
   previous: CopyGroupConfig,
@@ -383,49 +390,30 @@ export async function startLocalCopierExecutionAgent(
       };
     }
     if (next.id !== group.id && mode === 'activate' && !reconfigurationRequest.retireMissingOldGroup
-      // Bez read-only dry-runu nejde absenci doložit — beze změny chování.
+      // Bez read-only dry-runu nejde chybějící účty zjistit — beze změny chování.
       && options.previewGroupAccounts) {
       // 8. 10. 2026: přepnutí na JINOU skupinu, když stará má účty, které už
-      // v Tradovate nejsou (breach). Dřív přepnutí vyžadovalo i staré účty
-      // a uživatel novou skupinu bez ručního zásahu nezapnul. Vyřadí se jen
-      // účty, které read-only dry-run teď v OAuth nenajde; nová topologie je
-      // nesmí obsahovat a sama projde plným flat preflightem.
+      // v Tradovate nejsou (breach). Worker je sám NEvyřadí (nemá broker flat
+      // důkaz, E6); odmítne s přesným seznamem a UI nabídne potvrzení
+      // uživatelem — pak pošle activate-group s retireMissingOldGroup.
       const nextIds = new Set(copyGroupAccountIds(next));
       const previousIds = copyGroupAccountIds(group);
-      const candidates = startupRepair?.groupId === group.id
-        ? [...startupRepair.unavailableAccountIds]
-        : previousIds.filter(accountId => !nextIds.has(accountId));
+      const repair = startupRepair?.groupId === group.id ? [...startupRepair.unavailableAccountIds].sort((x, y) => x - y) : null;
+      const candidates = repair ?? previousIds.filter(accountId => !nextIds.has(accountId));
       if (candidates.length > 0) {
         // Fail-closed: selhání dry-runu přepnutí odmítne.
         const probe = await previewAccounts({ required: [], optional: candidates, inactiveOptionalAsMissing: true });
         const missing = new Set(probe.missingOptional);
         const unavailable = candidates.filter(accountId => missing.has(accountId));
-        const partial = startupRepair?.groupId === group.id;
-        if (partial && unavailable.length !== candidates.length) {
-          throw new Error(
-            `Účty ${candidates.filter(accountId => !missing.has(accountId)).join(', ')} staré skupiny jsou v Tradovate znovu dostupné; worker se za chvíli sám restartuje a načte je. Zkus to znovu za pár minut.`,
-          );
-        }
-        if (unavailable.some(accountId => nextIds.has(accountId))) {
-          throw new Error(`Nová skupina obsahuje nedostupné účty ${unavailable.filter(accountId => nextIds.has(accountId)).join(', ')}; odeber je.`);
-        }
-        const fullRetirement = !partial && unavailable.length === previousIds.length;
-        if (!partial && unavailable.length > 0 && !fullRetirement) {
-          // Mix dostupných a zmizelých účtů mimo režim opravy: worker zmizelé
-          // účty zachytí hlídáním adresáře a po bezpečném restartu je vyřadí.
-          throw new Error(
-            `Účty ${unavailable.join(', ')} staré skupiny už v Tradovate nejsou. Worker to za chvíli sám zachytí a restartuje se; přepnutí pak půjde. Zkus to znovu za pár minut.`,
-          );
-        }
-        if (partial || fullRetirement) {
-          reconfigurationRequest = {
-            ...reconfigurationRequest,
-            retireMissingOldGroup: {
-              groupId: group.id,
-              accountIds: unavailable,
-              reason: `Přepnutí na skupinu ${next.name || next.id}: účty ${unavailable.join(', ')} staré skupiny nejsou v Tradovate (breached/odpojené); vyřazeny bez broker flat důkazu`.slice(0, 500),
-            },
-          };
+        if (unavailable.length > 0) {
+          const retirable = repair
+            ? unavailable.length === repair.length && !unavailable.some(accountId => nextIds.has(accountId))
+            : unavailable.length === previousIds.length;
+          throw new Error(retirable
+            ? `Stará skupina „${group.name || group.id}“ má účty ${unavailable.join(', ')}, které v Tradovate už nejsou nebo jsou neaktivní. `
+              + `Potvrď jejich vyřazení a přepnutí. ${retireMissingMarker(group.id, unavailable)}`
+            : `Účty ${unavailable.join(', ')} staré skupiny už v Tradovate nejsou nebo jsou neaktivní. `
+              + 'Worker to za chvíli sám zachytí a restartuje se; přepnutí pak půjde. Zkus to znovu za pár minut.');
         }
       }
     }
@@ -1066,6 +1054,22 @@ export async function startLocalCopierExecutionAgent(
     tail = pending.then(() => undefined, () => undefined);
     return pending;
   };
+  // Aktivita příkazů pro údržbový restart (8. 10. 2026): restart nesmí
+  // přerušit rozpracovaný ani právě dokončený příkaz, jehož ACK ještě letí.
+  let pendingCommands = 0;
+  let lastCommandSettledAt = 0;
+  const dispatchTracked: typeof dispatch = (...args) => {
+    pendingCommands += 1;
+    const settle = () => { pendingCommands -= 1; lastCommandSettledAt = Date.now(); };
+    let result: ReturnType<typeof dispatch>;
+    try {
+      result = dispatch(...args);
+    } catch (error) {
+      settle();
+      throw error;
+    }
+    return result.finally(settle);
+  };
 
   const server: Server = createServer((request, response) => {
     const origin = request.headers.origin ?? '';
@@ -1117,7 +1121,7 @@ export async function startLocalCopierExecutionAgent(
         }
         const rawDeadline = request.headers['x-alphatrade-command-deadline'];
         const localDeadline = boundedLocalArmDeadline(rawDeadline, requestCreatedAt);
-        const payload = await dispatch(command, command.type === 'arm-live'
+        const payload = await dispatchTracked(command, command.type === 'arm-live'
           ? { source: 'loopback', createdAt: requestCreatedAt, deadlineAt: localDeadline }
           : { source: 'loopback', createdAt: requestCreatedAt }, admittedBrakeEpoch);
         json(response, 200, payload);
@@ -1153,7 +1157,8 @@ export async function startLocalCopierExecutionAgent(
   return {
     origin: `http://${host}:${address.port}`,
     status,
-    execute: dispatch,
+    execute: dispatchTracked,
+    commandActivity: () => ({ pending: pendingCommands, lastSettledAt: lastCommandSettledAt }),
     beginShutdown,
     async close() {
       beginShutdown();

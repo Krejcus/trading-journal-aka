@@ -317,6 +317,23 @@ const validatedRelayGroup = (value: unknown): CopyGroupConfig => {
   return groups[0];
 };
 
+/**
+ * Operátorem potvrzené vyřazení účtů staré skupiny, které už v Tradovate nejsou
+ * (8. 10. 2026). Worker ho znovu validuje proti své skupině a OAuth.
+ */
+const validatedRetirement = (value: unknown): { groupId: string; accountIds: number[]; reason: string } | undefined => {
+  if (value === undefined) return undefined;
+  const candidate = value as { groupId?: unknown; accountIds?: unknown; reason?: unknown } | null;
+  if (!candidate || typeof candidate !== 'object'
+    || typeof candidate.groupId !== 'string' || candidate.groupId.length === 0 || candidate.groupId.length > 200
+    || !Array.isArray(candidate.accountIds) || candidate.accountIds.length === 0 || candidate.accountIds.length > 100
+    || candidate.accountIds.some(id => !Number.isSafeInteger(id) || (id as number) <= 0)
+    || typeof candidate.reason !== 'string' || candidate.reason.trim().length < 20 || candidate.reason.length > 500) {
+    throw new Error('invalid-relay-command-payload');
+  }
+  return { groupId: candidate.groupId, accountIds: [...candidate.accountIds] as number[], reason: candidate.reason };
+};
+
 const validatedEligibilityExclusions = (value: unknown) => {
   if (value == null) return [];
   if (!Array.isArray(value) || value.length > 100) throw new Error('invalid-relay-command-payload');
@@ -367,9 +384,11 @@ const commandPayload = (command: LocalCopierAgentCommand): Record<string, unknow
     const waiver = (command as { waiveUnverifiableFollowerOwnership?: unknown })
       .waiveUnverifiableFollowerOwnership;
     if (waiver !== undefined && waiver !== true) throw new Error('invalid-relay-command-payload');
+    const retirement = validatedRetirement((command as { retireMissingOldGroup?: unknown }).retireMissingOldGroup);
     return {
       group: validatedRelayGroup((command as { group?: unknown }).group),
       ...(waiver === true ? { waiveUnverifiableFollowerOwnership: true } : {}),
+      ...(retirement ? { retireMissingOldGroup: retirement } : {}),
     };
   }
   if (command.type === 'shadow') {
@@ -422,10 +441,12 @@ const rowCommand = (row: CommandRow): LocalCopierAgentCommand => {
   if (row.command_type === 'activate-group') {
     const waiver = row.payload?.waiveUnverifiableFollowerOwnership;
     if (waiver !== undefined && waiver !== true) throw new Error('invalid-relay-command-payload');
+    const retirement = validatedRetirement(row.payload?.retireMissingOldGroup);
     return {
       type: 'activate-group',
       group: validatedRelayGroup(row.payload?.group),
       ...(waiver === true ? { waiveUnverifiableFollowerOwnership: true } : {}),
+      ...(retirement ? { retireMissingOldGroup: retirement } : {}),
     };
   }
   if (row.command_type === 'shadow') {

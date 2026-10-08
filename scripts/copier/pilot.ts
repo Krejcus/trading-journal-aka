@@ -1117,20 +1117,28 @@ async function runLocalAgent(
   /**
    * Restart kvůli novým/zmizelým účtům (8. 10. 2026). Po breachi worker
    * typicky čeká na Kontrolu pozic a má „divergentní“ zmizelé účty, takže
-   * přísná brána párování (flat + reconciled) by restart nikdy nepustila
-   * a nové účty by nenačetl. Restart DISARMED workeru ale nic neztrácí:
-   * incident, outbox i skupina jsou durable a start je read-only. Stačí
-   * proto vypnutá kopírka a klidový stav (žádný broker write, recovery,
-   * auto-close ani rozpracovaná událost).
+   * přísná brána párování (reconciled, bez divergence) by restart nikdy
+   * nepustila a nové účty by nenačetl. Tyhle dva stavy jsou durable a
+   * restart je nezahodí. Všechno ostatní zůstává: vypnutá kopírka bez kill
+   * switche (ten durable není), flat bez pracovních příkazů, žádný
+   * rozpracovaný lifecycle/epocha/cut a žádný UI příkaz posledních 30 s.
    */
   const canRestartForDiscovery = () => {
     const status = controller?.status();
+    const activity = agent?.commandActivity?.();
     return status != null
       && status.started
       && !status.armed
+      && !status.killSwitch
+      && status.connected
+      && status.groupFlat === true
+      && status.workingOrderAccounts.length === 0
       && !status.stuckOutbox
       && status.stuckOperations.length === 0
-      && controller?.connectionRenewalBlocker() == null;
+      && controller?.maintenanceRestartBlocker() == null
+      && activity != null
+      && activity.pending === 0
+      && Date.now() - activity.lastSettledAt >= 30_000;
   };
   let restartGate: () => boolean = () => canSafelyRestartLocalCopierAgent(controller?.status());
   const requestSafePairingRestart = (gate: 'pairing' | 'discovery' = 'pairing') => {
@@ -1532,20 +1540,26 @@ async function runLocalAgent(
        * Read-only sonda adresáře účtů připojení (8. 10. 2026). Nic se z ní
        * nesměruje — slouží jen k rozhodnutí, zda má smysl bezpečný restart.
        */
-      const readDirectoryAccountIds = async (
+      /** Jediný GET /account/list — žádné per-account dotazy (zátěž Tradovate). */
+      const readAccountListIds = async (
         getAccessToken: () => Promise<string>,
         environment: PilotContext['environment'],
       ): Promise<number[]> => {
-        const data = await loadTradovateAccountData({
-          baseUrl: tradovateApiBaseUrl(environment),
-          accessToken: await getAccessToken(),
+        const response = await fetch(`${tradovateApiBaseUrl(environment)}/account/list`, {
+          headers: { Authorization: `Bearer ${await getAccessToken()}`, Accept: 'application/json' },
+          signal: AbortSignal.timeout(15_000),
         });
-        return data.accounts.map(account => account.id);
+        if (!response.ok) throw new Error(`account/list HTTP ${response.status}`);
+        const body = await response.json() as unknown;
+        if (!Array.isArray(body)) throw new Error('account/list nevrátil seznam');
+        return body
+          .map(item => (item as { id?: unknown })?.id)
+          .filter((id): id is number => typeof id === 'number' && Number.isSafeInteger(id) && id > 0);
       };
       const probeEmptyDirectoryConnection = async (connectionId: string): Promise<boolean> => {
         try {
           const probe = await discoveredPilotContext(connectionWatch.device, connectionId);
-          const accountIds = await readDirectoryAccountIds(probe.getAccessToken, probe.environment);
+          const accountIds = await readAccountListIds(probe.getAccessToken, probe.environment);
           if (accountIds.length === 0) throw new Error(EMPTY_DIRECTORY_ERROR);
           connectionWatch.state = recordConnectionDiscoverySuccess(connectionWatch.state, connectionId);
           console.log(`${new Date().toISOString()} DISCOVERY připojení ${connectionLabel(connectionId)} má znovu účty (${accountIds.length}); restart, až bude kopírka vypnutá`);
@@ -1562,12 +1576,13 @@ async function runLocalAgent(
         // kopírky, ať zbytečně nezatěžujeme Tradovate.
         if (controller?.status().armed !== false) return false;
         let changed = false;
-        for (const candidate of contexts) {
+        for (const candidate of renewableBrokers) {
           const known = connectionWatch.accountIdsByConnection.get(candidate.connectionId);
           if (!known) continue;
           let current: number[];
           try {
-            current = await readDirectoryAccountIds(candidate.getAccessToken, candidate.environment);
+            // Týž jediný /account/list, který používá routing při ARM.
+            current = (await candidate.broker.refreshAccountDirectory()).map(account => account.accountId);
           } catch {
             continue; // Chyba čtení není změna adresáře.
           }
