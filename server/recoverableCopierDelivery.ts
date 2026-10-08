@@ -19,13 +19,10 @@ export function recoverableCopierDelivery(options: {
   const startedAt = now();
   let loaded = false;
   let checkpoint: RelayDelivery | null = null;
-  const armSequenceAtClaim = new Map<string, number>();
   const persist = async (next: RelayDelivery | null) => {
     // Update memory first, even if fsync fails after execution. A later attempt
     // must persist this same state before sending any request or doing work.
     checkpoint = next;
-    // Doručení skončilo: další claim si stav ARM zaznamená znovu.
-    if (next === null) armSequenceAtClaim.clear();
     await options.store.write(next);
   };
   return async () => {
@@ -54,10 +51,7 @@ export function recoverableCopierDelivery(options: {
     // neopakují.
     const idempotentBrake = remote.command.type === 'disarm' || remote.command.type === 'kill-switch'
       || remote.command.type === 'lock-until-session-end';
-    // Stav ARM v okamžiku, kdy tato session brzdu poprvé převzala.
-    if (!armSequenceAtClaim.has(current.deliveryId)) {
-      armSequenceAtClaim.set(current.deliveryId, options.agent.armSequence?.() ?? 0);
-    }
+
     if (current.phase === 'completed') {
       // Výsledek už je durable (i z předchozí session): jen ho znovu
       // potvrdíme, nepřepisujeme na „neznámý“ (8. 10. 2026).
@@ -74,13 +68,20 @@ export function recoverableCopierDelivery(options: {
       );
       const created = Date.parse(remote.createdAt) - serverClockOffsetMs;
       const expires = Date.parse(remote.expiresAt) - serverClockOffsetMs;
+      // Denní zámek blízko hranice session (17:00 CT) nejde bez hodin přiřadit
+      // ke správnému dni; odhad posunu by mohl zamknout celý další den.
+      const dayLockSessionAmbiguous = remote.command.type === 'lock-until-session-end'
+        && Number.isFinite(created)
+        && tradovateSessionEndAt(created - clockSkewReserveMs) !== tradovateSessionEndAt(created + clockSkewReserveMs);
       const validPrestartDayLock = remote.command.type === 'lock-until-session-end'
         && Number.isFinite(created)
+        && !dayLockSessionAmbiguous
         && tradovateSessionEndAt(created) > now();
       // Brzda zadaná před restartem workeru se provede i v nové session:
       // jen zpřísňuje (DISARM / kill switch) a nesmí se ztratit (8. 10. 2026).
       const validPrestartBrake = remote.command.type === 'kill-switch' || remote.command.type === 'disarm';
       if (!Number.isFinite(created) || !Number.isFinite(expires) || expires <= now()
+        || dayLockSessionAmbiguous
         || (created < startedAt && !validPrestartDayLock && !validPrestartBrake)) {
         await persist({ ...current, phase: 'completed', commandId: remote.id, result: null,
           error: 'command-expired-or-predates-worker-session' });
@@ -93,13 +94,9 @@ export function recoverableCopierDelivery(options: {
         // Recheck TTL after durable disk writes, immediately before execution.
         if (options.isActive?.() === false) executionError = 'command-cancelled-worker-shutdown';
         else if (expires <= now()) executionError = 'command-expired-before-execution';
-        // DISARM převzatý dřív, než uživatel úspěšně zapnul (ARM proběhl
-        // až PO claimu — tedy je prokazatelně novější, bez hodin), novější
-        // záměr nepřebije. Kill switch ani denní zámek se nikdy nezahazují.
-        else if (remote.command.type === 'disarm'
-          && (options.agent.armSequence?.() ?? 0) > (armSequenceAtClaim.get(current.deliveryId) ?? Number.POSITIVE_INFINITY)) {
-          executionError = 'superseded-by-newer-arm';
-        }
+        // Brzdy se nikdy nezahazují (8. 10. 2026, review kola 4–6): pořadí
+        // záměrů nejde bez hodin spolehlivě doložit. Pozdě doručený DISARM
+        // novějšího ARM je fail-safe — kopírka zůstane vypnutá a ukáže důvod.
         else {
           try {
             result = await options.agent.execute(remote.command, {

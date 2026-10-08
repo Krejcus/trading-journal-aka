@@ -115,8 +115,6 @@ export interface LocalCopierExecutionAgent {
   beginShutdown(): void;
   /** Rozpracované příkazy a čas posledního dokončeného (údržbový restart). */
   commandActivity?(): { pending: number; lastSettledAt: number };
-  /** Počet úspěšných ARM v této session (monotónní, bez hodin). */
-  armSequence?(): number;
   close(): Promise<void>;
 }
 
@@ -264,11 +262,6 @@ export async function startLocalCopierExecutionAgent(
     throw new Error('Lokální execution agent dostal více zařízení pro stejné OAuth připojení');
   }
   let tail = Promise.resolve();
-  /**
-   * Počet úspěšných ARM v této session (i idempotentních). Lokální pořadí bez
-   * hodin: relay ho porovná se stavem v okamžiku claimu brzdy (8. 10. 2026).
-   */
-  let armSequence = 0;
   let brakeEpoch = 0;
   let lastBrakeCreatedAt = Number.NEGATIVE_INFINITY;
   let armPending = false;
@@ -1081,10 +1074,7 @@ export async function startLocalCopierExecutionAgent(
       settle();
       throw error;
     }
-    return result.then(value => {
-      if (args[0].type === 'arm-live') armSequence += 1;
-      return value;
-    }).finally(settle);
+    return result.finally(settle);
   };
 
   const server: Server = createServer((request, response) => {
@@ -1175,7 +1165,6 @@ export async function startLocalCopierExecutionAgent(
     status,
     execute: dispatchTracked,
     commandActivity: () => ({ pending: pendingCommands, lastSettledAt: lastCommandSettledAt }),
-    armSequence: () => armSequence,
     beginShutdown,
     async close() {
       beginShutdown();

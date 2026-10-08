@@ -533,8 +533,12 @@ async function runMultiConnectionAgent(): Promise<void> {
           const known = connectionWatch.accountIdsByConnection.get(account.connectionId) ?? [];
           if (!known.includes(account.id)) connectionWatch.accountIdsByConnection.set(account.connectionId, [...known, account.id]);
           // Nově nasměrovaný účet je v routingu: výchozí stav hlídání se
-          // znovu sestaví z ID (bez zbytečného restartu).
+          // znovu sestaví z ID; jeho tehdejší použitelnost se zapamatuje, ať se
+          // pozdější přechod na neaktivní nevstřebá (review kola 6).
           connectionWatch.directoryBaselineByConnection.delete(account.connectionId);
+          const startupUsable = connectionWatch.startupUsableByConnection.get(account.connectionId) ?? new Map<number, boolean>();
+          startupUsable.set(account.id, account.active && account.canTrade);
+          connectionWatch.startupUsableByConnection.set(account.connectionId, startupUsable);
         }
       }
       // Závod ARM ↔ odpojení propfirmy (5. 10. 2026): těsně před ARM / změnou

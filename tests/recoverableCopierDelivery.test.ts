@@ -138,38 +138,26 @@ describe('recoverable copier delivery', () => {
     expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
     expect(f.options.request.mock.calls[1][0]).not.toMatchObject({ error: 'command-outcome-unknown-worker-session-changed' });
   });
-  it('DISARM převzatý před úspěšným lokálním ARM se po retry nevykoná (novější záměr vyhrává)', async () => {
-    const f = fixture(); f.remote.command = { type: 'disarm' };
-    let arms = 0;
-    (f.options.agent as { armSequence?: () => number }).armSequence = () => arms;
+  it.each(['disarm', 'kill-switch'] as const)('brzda %s se po neúspěšném zápisu checkpointu provede (nikdy se nezahodí)', async type => {
+    const f = fixture(); f.remote.command = { type };
     const write = f.options.store.write; let fail = true;
     f.options.store.write = async row => { if (row?.phase === 'executing' && fail) { fail = false; throw new Error('disk'); } await write(row); };
     const step = recoverableCopierDelivery(f.options);
     await expect(step()).rejects.toThrow('disk');
-    arms += 1; // uživatel mezitím lokálně úspěšně zapnul
+    await step();
+    expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
+  });
+  it('denní zámek těsně u hranice session (17:00 CT) se odmítne, ať nezamkne další den', async () => {
+    const f = fixture();
+    f.remote.command = { type: 'lock-until-session-end', reason: 'test' } as never;
+    // 16:59:59.900 Chicago; nejistota posunu hodin přesahuje hranici session.
+    f.remote.createdAt = '2026-10-08T21:59:59.900Z';
+    f.remote.expiresAt = '2026-10-08T22:10:00.000Z';
+    f.setNow(Date.parse('2026-10-08T21:59:58.000Z')); // worker běží už před vznikem zámku
+    const step = recoverableCopierDelivery(f.options);
+    f.setNow(Date.parse('2026-10-08T21:59:59.950Z'));
     await step();
     expect(f.options.agent.execute).not.toHaveBeenCalled();
-    expect(f.options.request.mock.calls.find(([body]) => body.action === 'complete-v2')?.[0])
-      .toMatchObject({ error: 'superseded-by-newer-arm' });
-  });
-  it.each(['kill-switch', 'lock-until-session-end'] as const)('%s se nikdy nezahodí, ani po novějším ARM', async type => {
-    const f = fixture();
-    f.remote.command = type === 'kill-switch' ? { type } : { type, reason: 'test' } as never;
-    let arms = 0;
-    (f.options.agent as { armSequence?: () => number }).armSequence = () => arms;
-    const write = f.options.store.write; let fail = true;
-    f.options.store.write = async row => { if (row?.phase === 'executing' && fail) { fail = false; throw new Error('disk'); } await write(row); };
-    const step = recoverableCopierDelivery(f.options);
-    await expect(step()).rejects.toThrow('disk');
-    arms += 1;
-    await step();
-    expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
-  });
-  it('ARM provedený před claimem DISARM ho nezahodí (žádné hodiny)', async () => {
-    const f = fixture(); f.remote.command = { type: 'disarm' };
-    (f.options.agent as { armSequence?: () => number }).armSequence = () => 7;
-    await recoverableCopierDelivery(f.options)();
-    expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
   });
   it.each(['disarm', 'kill-switch'] as const)('brzda %s zadaná před restartem workeru se provede', async type => {
     const f = fixture();
