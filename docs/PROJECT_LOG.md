@@ -256,6 +256,38 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
 
 ## Deník
 
+### 2026-10-08 — Kopírka: nové účty bez restartu, ON s potvrzením incidentu, TooLate (Claude + Codex)
+
+Release `claude/copier-release-20261008` = tři Codexem schválené větve:
+
+- **Autodiscovery** (`claude/copier-account-autodiscovery-20261008`, 9 kol): prázdný
+  adresář po breachi se ověřuje levnou sondou každé 3 min (dřív backoff až 6 h);
+  při vypnuté kopírce worker každou minutu porovná `/account/list` (ID + použitelnost)
+  a po dvou shodných čteních se bezpečně restartuje (max 1×/10 min; brána: vypnuto,
+  bez kill switche, flat, bez lifecycle/epochy, prázdná relay fronta, 30 s od
+  příkazu). Breachnuté účty staré skupiny worker NIKDY nevyřadí sám — vrátí
+  `[retire-missing:…]`, UI se zeptá a pošle `activate-group` s `retireMissingOldGroup`.
+  Brzdy (DISARM, kill, day-lock) se po restartu vždy přehrají a nikdy nezahazují
+  (pravidlo „superseded“ zrušeno: pořadí záměrů nejde bez hodin doložit).
+  Incident 8. 10.: worker v režimu opravy uvízl (recovery čekala na breachnutého
+  leadera) → ruční přepis durable `group.json` (postup v paměti worker-deploy-policy).
+- **ON s potvrzením incidentu** (`claude/copier-on-acknowledge-incident-20261008`,
+  na etapě 1): tlačítko „Zkontrolovat pozice“ zmizelo. Durable incident má UUID;
+  smaže ho jen ON s `acknowledgeIncidentId` přesně tohoto incidentu, potvrzení se
+  zapíše do `safety.lastIncidentAcknowledgement` ve stejném durable zápisu.
+  SHADOW i kompatibilní ARM jen interní kontrola (INV-DEFAULT-03). Capability
+  `incident-ack-v1`; web se starším workerem po incidentu ON odmítne. Relay
+  `reconcile` odebrán (DB check ho stejně nepouštěl). iPhone appku nutno přebuildit.
+- **TooLate** (`claude/copier-sweep-toolate-20261008`, 7 kol): flat sweep po
+  `cancelOrder rejected: TooLate` čeká ≤1,5 s jen na stream status (incident
+  14:06 UTC, účet 68931462: order rušil dřívější cancel, stream Canceled za ~0,8 s);
+  známý fill vždy vynutí čerstvou pozici, pozice se čte až po order grafu.
+  Předexistující dluh (důkaz nulového fillu ve fast-path, freshness sdíleného
+  `/position/list`, A5) je samostatný úkol.
+
+Etapa 2 (durable per-account pauza) nasazena NENÍ — po 6. kole Codexe zbývají
+nálezy (DISARM vs. uvolnění pauzy, cache po cut, reporting).
+
 ### 2026-10-08 — LIVE studený start: kostra → úplná data bez probliknutí (Claude)
 - Měřeno na produkci: obsah → prázdná plocha 315 ms → přehled. Příčina: lazy
   `LiveJournalHistory` suspendoval stránkovou Suspense hranici a React 19 drží
