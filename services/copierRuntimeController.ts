@@ -2046,8 +2046,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const TOO_LATE_STREAM_SETTLE_DELAYS_MS = [250, 500, 750] as const;
   /** Rezerva rozpočtu sweepu na závěrečnou postkontrolu (orders + pozice). */
   const FLAT_SWEEP_SETTLE_RESERVE_MS = 2_000;
-  /** Nepovinné čtení pozice po terminálních nohách jen s tímto zbytkem rozpočtu. */
-  const FLAT_SWEEP_OPTIONAL_POSITION_MIN_MS = 1_000;
 
   interface FlatSweepBudget {
     startedAt: number;
@@ -2316,19 +2314,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // hlásí partial cancel jako canceled s fillem). Návrat bez cancelu proto
       // při fillu nebo neznámém množství potvrdí čerstvou nulovou pozici —
       // až po důkazu z orderů. Bez fillu zůstává čistě in-memory (P6/V5a).
-      // Známý fill (filled / filledQuantity > 0) vyžaduje čerstvou pozici vždy.
-      // Nula ze streamu není důkaz (Fill entita může dorazit až po terminálním
-      // orderu), proto se pozice čte i tehdy — jen když na to zbývá rozpočet;
-      // vyčerpaný rozpočet ponechá dosavadní in-memory důkaz (P6/V5a).
+      // Známý fill (filled / filledQuantity > 0) vyžaduje čerstvou pozici.
+      // Čisté zrušení zůstává in-memory beze změny proti produkci (P6/V5a,
+      // žádné REST ani zdržení eventTail); důkaz nulového fillu u
+      // canceled/rejected s nulou je evidovaný samostatný dluh.
       const knownFill = (lookup: BrokerOrderStatusLookup | undefined) => (
         lookup != null && (lookup.status === 'filled' || (lookup.filledQuantity ?? 0) > 0)
       );
       const confirmFlatAfterTerminal = async (label: string, lookups: Array<BrokerOrderStatusLookup | undefined>) => {
-        if (lookups.some(knownFill)) {
-          await confirmFreshFlat(label);
-          return;
-        }
-        if (flatSweepRemainingMs(budget) >= FLAT_SWEEP_OPTIONAL_POSITION_MIN_MS) await confirmFreshFlat(label);
+        if (lookups.some(knownFill)) await confirmFreshFlat(label);
       };
       const confirmFreshFlat = async (label: string) => {
         const fresh = await withFlatSweepBudget(
@@ -2616,7 +2610,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           return status != null && !isOpenOrderStatus(status);
         });
         if (allAttemptsTerminalInStream && classificationFailures.length === 0) {
-          // Zrušení: čerstvá pozice (povinně při známém fillu).
+          // Zrušení se známým fillem: nejdřív čerstvá pozice.
           await confirmFlatAfterTerminal(
             'postkontrola pozice',
             attemptedIds.map(id => postStreamStatuses.get(id) ?? streamStatuses.get(id)),

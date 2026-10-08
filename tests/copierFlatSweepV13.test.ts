@@ -301,7 +301,7 @@ function makePendingOso(harness: ArmedOsoHarness, accountId = 200): void {
 }
 
 describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
-  it('dnešní terminální stav ze streamu stačí bez čtení orderů, cancelu a DISARM (pozice se ověří jedním čtením)', async () => {
+  it('dnešní terminální stav ze streamu stačí bez REST, cancelu a DISARM', async () => {
     const harness = await armedOsoHarness();
     let restReads = 0;
     try {
@@ -324,8 +324,8 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
 
       expect(restReads).toBe(0);
       expect(listOrders).not.toHaveBeenCalled();
-      // 8. 10. 2026: nula fillu ve streamu není důkaz → jedno čtení pozice.
-      expect(listPositions.mock.calls.filter(([accountId]) => accountId === 200).length).toBe(1);
+      // Čisté zrušení bez fillu: žádné čtení pozice navíc (beze změny proti produkci).
+      expect(listPositions.mock.calls.filter(([accountId]) => accountId === 200).length).toBe(0);
       expect(findOrderById).not.toHaveBeenCalled();
       expect(ids.map(id => harness.broker.cancelRequestCount(id))).toEqual([0, 0]);
       expect(harness.controller.status()).toMatchObject({ armed: true, lastError: null });
@@ -468,28 +468,6 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
         leg.status = 'canceled';
         leg.filledQuantity = 1;
         harness.broker.setPosition(200, 'MNQU6', -1);
-      };
-      emitFollowerFlat(harness);
-      await harness.controller.waitForIdle();
-      expect(harness.controller.status().armed).toBe(false);
-      expect(harness.controller.status().lastError).toContain('pozici');
-    } finally {
-      harness.controller.stop();
-    }
-  }, 10_000);
-
-  it('terminální zrušení s dočasnou nulou (Fill entita ještě nedorazila): čerstvá pozice ho odhalí', async () => {
-    const harness = await armedOsoHarness(baseGroup);
-    try {
-      const ids = harness.protectiveIdsByAccount.get(200)!;
-      const targetId = ids[0];
-      const realCancel = harness.broker.cancelOrder.bind(harness.broker);
-      harness.broker.cancelOrder = async (accountId, orderId) => {
-        if (orderId !== targetId) return realCancel(accountId, orderId);
-        const leg = harness.broker.orders().find(order => order.brokerOrderId === targetId)!;
-        leg.status = 'canceled';
-        leg.filledQuantity = 0; // stream zatím nezná fill
-        harness.broker.setPosition(200, 'MNQU6', -1); // broker už pozici má
       };
       emitFollowerFlat(harness);
       await harness.controller.waitForIdle();
