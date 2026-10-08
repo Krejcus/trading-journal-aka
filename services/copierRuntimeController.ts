@@ -2046,6 +2046,8 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
   const TOO_LATE_STREAM_SETTLE_DELAYS_MS = [250, 500, 750] as const;
   /** Rezerva rozpočtu sweepu na závěrečnou postkontrolu (orders + pozice). */
   const FLAT_SWEEP_SETTLE_RESERVE_MS = 2_000;
+  /** Nepovinné čtení pozice po terminálních nohách jen s tímto zbytkem rozpočtu. */
+  const FLAT_SWEEP_OPTIONAL_POSITION_MIN_MS = 1_000;
 
   interface FlatSweepBudget {
     startedAt: number;
@@ -2314,12 +2316,20 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       // hlásí partial cancel jako canceled s fillem). Návrat bez cancelu proto
       // při fillu nebo neznámém množství potvrdí čerstvou nulovou pozici —
       // až po důkazu z orderů. Bez fillu zůstává čistě in-memory (P6/V5a).
-      const mayHaveFilled = (lookup: BrokerOrderStatusLookup | undefined) => (
-        lookup == null
-        || lookup.status === 'filled'
-        || lookup.filledQuantity == null
-        || lookup.filledQuantity > 0
+      // Známý fill (filled / filledQuantity > 0) vyžaduje čerstvou pozici vždy.
+      // Nula ze streamu není důkaz (Fill entita může dorazit až po terminálním
+      // orderu), proto se pozice čte i tehdy — jen když na to zbývá rozpočet;
+      // vyčerpaný rozpočet ponechá dosavadní in-memory důkaz (P6/V5a).
+      const knownFill = (lookup: BrokerOrderStatusLookup | undefined) => (
+        lookup != null && (lookup.status === 'filled' || (lookup.filledQuantity ?? 0) > 0)
       );
+      const confirmFlatAfterTerminal = async (label: string, lookups: Array<BrokerOrderStatusLookup | undefined>) => {
+        if (lookups.some(knownFill)) {
+          await confirmFreshFlat(label);
+          return;
+        }
+        if (flatSweepRemainingMs(budget) >= FLAT_SWEEP_OPTIONAL_POSITION_MIN_MS) await confirmFreshFlat(label);
+      };
       const confirmFreshFlat = async (label: string) => {
         const fresh = await withFlatSweepBudget(
           budget,
@@ -2336,9 +2346,10 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         const status = streamStatuses.get(id)?.status;
         return status != null && !isOpenOrderStatus(status);
       })) {
-        if (candidateIds.some(id => mayHaveFilled(streamStatuses.get(id)))) {
-          await confirmFreshFlat('kontrola pozice po terminálních nohách');
-        }
+        await confirmFlatAfterTerminal(
+          'kontrola pozice po terminálních nohách',
+          candidateIds.map(id => streamStatuses.get(id)),
+        );
         return;
       }
 
@@ -2566,13 +2577,15 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
         if (attemptedIds.length === 0) {
           if (classificationFailures.length > 0) throw new Error(classificationFailures.join(', '));
           // Pozice čtená před cancelem je starší než důkaz z orderů.
-          const filledEvidence = candidateIds.some(id => {
-            const order = byId.get(id);
-            return order != null
-              ? order.status === 'filled' || order.filledQuantity > 0
-              : mayHaveFilled(streamStatuses.get(id));
-          });
-          if (filledEvidence) await confirmFreshFlat('kontrola pozice po terminálních nohách');
+          await confirmFlatAfterTerminal(
+            'kontrola pozice po terminálních nohách',
+            candidateIds.map(id => {
+              const order = byId.get(id);
+              return order != null
+                ? { status: order.status, completeness: 'authoritative' as const, observedAt: clock(), filledQuantity: order.filledQuantity }
+                : streamStatuses.get(id);
+            }),
+          );
           return;
         }
 
@@ -2603,11 +2616,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           return status != null && !isOpenOrderStatus(status);
         });
         if (allAttemptsTerminalInStream && classificationFailures.length === 0) {
-          // Zrušení s (částečným) fillem nebo neznámým množstvím: nejdřív
-          // čerstvá pozice. Čisté zrušení zůstává bez dalšího čtení.
-          if (attemptedIds.some(id => mayHaveFilled(postStreamStatuses.get(id) ?? streamStatuses.get(id)))) {
-            await confirmFreshFlat('postkontrola pozice');
-          }
+          // Zrušení: čerstvá pozice (povinně při známém fillu).
+          await confirmFlatAfterTerminal(
+            'postkontrola pozice',
+            attemptedIds.map(id => postStreamStatuses.get(id) ?? streamStatuses.get(id)),
+          );
           for (const brokerOrderId of attemptedIds) {
             const outcome = streamOutcome(brokerOrderId);
             recordTerminalSweepState(accountId, brokerOrderId, outcome);

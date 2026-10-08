@@ -475,6 +475,28 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
     }
   }, 10_000);
 
+  it('terminální zrušení s dočasnou nulou (Fill entita ještě nedorazila): čerstvá pozice ho odhalí', async () => {
+    const harness = await armedOsoHarness(baseGroup);
+    try {
+      const ids = harness.protectiveIdsByAccount.get(200)!;
+      const targetId = ids[0];
+      const realCancel = harness.broker.cancelOrder.bind(harness.broker);
+      harness.broker.cancelOrder = async (accountId, orderId) => {
+        if (orderId !== targetId) return realCancel(accountId, orderId);
+        const leg = harness.broker.orders().find(order => order.brokerOrderId === targetId)!;
+        leg.status = 'canceled';
+        leg.filledQuantity = 0; // stream zatím nezná fill
+        harness.broker.setPosition(200, 'MNQU6', -1); // broker už pozici má
+      };
+      emitFollowerFlat(harness);
+      await harness.controller.waitForIdle();
+      expect(harness.controller.status().armed).toBe(false);
+      expect(harness.controller.status().lastError).toContain('pozici');
+    } finally {
+      harness.controller.stop();
+    }
+  }, 10_000);
+
   it('TooLate cancel: order zůstane working i po čekání → dál fail-closed (žádný další cancel)', async () => {
     const harness = await armedOsoHarness(baseGroup, { flatSweepBudgetMs: 3_000 });
     try {
