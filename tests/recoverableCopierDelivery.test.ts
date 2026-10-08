@@ -138,6 +138,15 @@ describe('recoverable copier delivery', () => {
     expect(f.options.agent.execute).toHaveBeenCalledTimes(1);
     expect(f.options.request.mock.calls[1][0]).not.toMatchObject({ error: 'command-outcome-unknown-worker-session-changed' });
   });
+  it.each(['disarm', 'kill-switch'] as const)('stará brzda %s nepřebije novější úspěšný ARM uživatele', async type => {
+    const f = fixture(); f.remote.command = { type };
+    f.remote.createdAt = new Date(999).toISOString();
+    (f.options.agent as { lastArmAcceptedAt?: () => number }).lastArmAcceptedAt = () => 5_000;
+    await recoverableCopierDelivery(f.options)();
+    expect(f.options.agent.execute).not.toHaveBeenCalled();
+    expect(f.options.request.mock.calls.find(([body]) => body.action === 'complete-v2')?.[0])
+      .toMatchObject({ error: 'superseded-by-newer-arm' });
+  });
   it.each(['disarm', 'kill-switch'] as const)('brzda %s zadaná před restartem workeru se provede', async type => {
     const f = fixture();
     f.remote.command = { type };

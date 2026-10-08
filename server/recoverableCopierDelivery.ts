@@ -84,6 +84,11 @@ export function recoverableCopierDelivery(options: {
         // Recheck TTL after durable disk writes, immediately before execution.
         if (options.isActive?.() === false) executionError = 'command-cancelled-worker-shutdown';
         else if (expires <= now()) executionError = 'command-expired-before-execution';
+        // Brzda zadaná dřív než uživatelův úspěšný ARM (např. replay po
+        // restartu, ARM mezitím lokálně) novější záměr nepřebije (8. 10. 2026).
+        else if (idempotentBrake && (options.agent.lastArmAcceptedAt?.() ?? 0) > created) {
+          executionError = 'superseded-by-newer-arm';
+        }
         else {
           try {
             result = await options.agent.execute(remote.command, {

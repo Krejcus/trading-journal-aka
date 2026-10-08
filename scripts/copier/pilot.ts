@@ -83,6 +83,7 @@ import {
   createAccountDirectoryWatch,
   directoryRestartAllowed,
   EMPTY_DIRECTORY_ERROR,
+  directoryKey,
   evaluateAccountDirectory,
   evaluateConnectionPoll,
   failedWithEmptyDirectory,
@@ -177,6 +178,12 @@ interface ConnectionWatch {
   scope: 'owner' | 'connection' | null;
   /** Účty z adresáře každého připojení při startu (pro guard odpojení). */
   accountIdsByConnection: Map<string, number[]>;
+  /**
+   * Výchozí stav adresáře z posledního shodného čtení hlídání (8. 10. 2026):
+   * klíče `directoryKey` (ID + použitelnost). Bez něj se srovnávají jen ID ze
+   * startu; přechod stejného ID na neaktivní se pozná mezi čteními.
+   */
+  directoryBaselineByConnection: Map<string, string[]>;
 }
 
 interface PilotContextOptions {
@@ -520,6 +527,9 @@ async function runMultiConnectionAgent(): Promise<void> {
         for (const account of refreshed.accounts) {
           const known = connectionWatch.accountIdsByConnection.get(account.connectionId) ?? [];
           if (!known.includes(account.id)) connectionWatch.accountIdsByConnection.set(account.connectionId, [...known, account.id]);
+          // Nově nasměrovaný účet je v routingu: výchozí stav hlídání se
+          // znovu sestaví z ID (bez zbytečného restartu).
+          connectionWatch.directoryBaselineByConnection.delete(account.connectionId);
         }
       }
       // Závod ARM ↔ odpojení propfirmy (5. 10. 2026): těsně před ARM / změnou
@@ -596,6 +606,7 @@ async function discoverOwnerConnections<T extends { context: PilotContext }>(opt
     state: await loadConnectionDiscoveryState(statePath),
     scope: null,
     accountIdsByConnection: new Map(),
+    directoryBaselineByConnection: new Map(),
   };
   let listed: Awaited<ReturnType<typeof listMacCopierDeviceConnections>>;
   try {
@@ -1588,20 +1599,28 @@ async function runLocalAgent(
         if (controller?.status().armed !== false) return false;
         let changed = false;
         for (const candidate of renewableBrokers) {
-          const known = connectionWatch.accountIdsByConnection.get(candidate.connectionId);
-          if (!known) continue;
-          let current: number[];
+          const startupIds = connectionWatch.accountIdsByConnection.get(candidate.connectionId);
+          if (!startupIds) continue;
+          let read: Awaited<ReturnType<typeof candidate.broker.refreshAccountDirectory>>;
           try {
             // Týž jediný /account/list, který používá routing při ARM.
-            current = (await candidate.broker.refreshAccountDirectory()).map(account => account.accountId);
+            read = await candidate.broker.refreshAccountDirectory();
           } catch {
             continue; // Chyba čtení není změna adresáře.
           }
+          const usable = new Map(read.map(account => [account.accountId, account.active && account.canTrade]));
+          const current = read.map(account => directoryKey(account.accountId, account.active && account.canTrade));
+          // První srovnání: jen ID ze startu (použitelnost bere z tohoto čtení,
+          // ať rozdílná sémantika startovního loaderu nespustí falešný restart).
+          const knownKeys = connectionWatch.directoryBaselineByConnection.get(candidate.connectionId)
+            ?? startupIds.map(accountId => directoryKey(accountId, usable.get(accountId) ?? true));
+          const sameAsKnown = knownKeys.length === current.length && knownKeys.every(key => current.includes(key));
+          if (sameAsKnown) connectionWatch.directoryBaselineByConnection.set(candidate.connectionId, current);
           const result = evaluateAccountDirectory({
             watch: directoryWatch,
             connectionId: candidate.connectionId,
-            knownAccountIds: known,
-            currentAccountIds: current,
+            knownKeys,
+            currentKeys: current,
           });
           if (!result.changed) continue;
           changed = true;

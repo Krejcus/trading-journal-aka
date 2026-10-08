@@ -91,21 +91,24 @@ export interface AccountDirectoryWatch {
 
 export const createAccountDirectoryWatch = (): AccountDirectoryWatch => ({ pending: new Map() });
 
+/** Klíč účtu v adresáři: ID a zda je použitelný (active && canTrade). */
+export const directoryKey = (accountId: number, usable: boolean): string => `${accountId}${usable ? '' : ':inactive'}`;
+
 export function evaluateAccountDirectory(options: {
   watch: AccountDirectoryWatch;
   connectionId: string;
-  knownAccountIds: readonly number[];
-  currentAccountIds: readonly number[];
-}): { changed: false } | { changed: true; added: number[]; removed: number[] } {
-  const known = new Set(options.knownAccountIds);
-  const current = new Set(options.currentAccountIds);
-  const added = [...current].filter(id => !known.has(id)).sort((a, b) => a - b);
-  const removed = [...known].filter(id => !current.has(id)).sort((a, b) => a - b);
+  knownKeys: readonly string[];
+  currentKeys: readonly string[];
+}): { changed: false } | { changed: true; added: string[]; removed: string[] } {
+  const known = new Set(options.knownKeys);
+  const current = new Set(options.currentKeys);
+  const added = [...current].filter(key => !known.has(key)).sort();
+  const removed = [...known].filter(key => !current.has(key)).sort();
   if (added.length === 0 && removed.length === 0) {
     options.watch.pending.delete(options.connectionId);
     return { changed: false };
   }
-  const signature = [...current].sort((a, b) => a - b).join(',');
+  const signature = [...current].sort().join(',');
   if (options.watch.pending.get(options.connectionId) !== signature) {
     options.watch.pending.set(options.connectionId, signature);
     return { changed: false };

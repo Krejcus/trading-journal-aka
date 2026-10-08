@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   createAccountDirectoryWatch,
   DIRECTORY_RESTART_MIN_INTERVAL_MS,
+  directoryKey,
   directoryRestartAllowed,
   EMPTY_DIRECTORY_ERROR,
   EMPTY_DIRECTORY_RETRY_MS,
@@ -22,20 +23,29 @@ import type { CopyGroupConfig } from '../services/liveCopyTrading';
 import { retireMissingFromError } from '../lib/copierArmPreparation';
 
 describe('hlídání adresáře účtů', () => {
+  const keys = (...ids: number[]) => ids.map(id => directoryKey(id, true));
   it('změnu potvrdí až druhé shodné čtení (jednorázový výpadek nespustí restart)', () => {
     const watch = createAccountDirectoryWatch();
-    const read = (current: number[]) => evaluateAccountDirectory({ watch, connectionId: 'c', knownAccountIds: [1, 2], currentAccountIds: current });
+    const read = (current: string[]) => evaluateAccountDirectory({ watch, connectionId: 'c', knownKeys: keys(1, 2), currentKeys: current });
     expect(read([])).toEqual({ changed: false });
-    expect(read([1, 2])).toEqual({ changed: false });
-    expect(read([1, 2, 3])).toEqual({ changed: false });
-    expect(read([1, 2, 3])).toEqual({ changed: true, added: [3], removed: [] });
+    expect(read(keys(1, 2))).toEqual({ changed: false });
+    expect(read(keys(1, 2, 3))).toEqual({ changed: false });
+    expect(read(keys(1, 2, 3))).toEqual({ changed: true, added: ['3'], removed: [] });
   });
 
   it('nové účty místo breachnutých: přidané i zmizelé', () => {
     const watch = createAccountDirectoryWatch();
-    const read = () => evaluateAccountDirectory({ watch, connectionId: 'c', knownAccountIds: [10, 11], currentAccountIds: [20, 21] });
+    const read = () => evaluateAccountDirectory({ watch, connectionId: 'c', knownKeys: keys(10, 11), currentKeys: keys(20, 21) });
     read();
-    expect(read()).toEqual({ changed: true, added: [20, 21], removed: [10, 11] });
+    expect(read()).toEqual({ changed: true, added: ['20', '21'], removed: ['10', '11'] });
+  });
+
+  it('stejné ID přejde na neaktivní (breach bez zmizení) = změna', () => {
+    const watch = createAccountDirectoryWatch();
+    const current = [directoryKey(1, true), directoryKey(2, false)];
+    const read = () => evaluateAccountDirectory({ watch, connectionId: 'c', knownKeys: keys(1, 2), currentKeys: current });
+    read();
+    expect(read()).toEqual({ changed: true, added: ['2:inactive'], removed: ['2'] });
   });
 
   it('prázdný adresář se zkouší znovu za 3 min, ne za hodiny', () => {

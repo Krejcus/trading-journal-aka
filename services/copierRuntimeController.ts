@@ -14514,7 +14514,7 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           leaderEventId: `manual-group-retirement:${group.id}:${retiredAt}`,
           kind: 'blocked',
           accountId: group.leaderAccountId,
-          reason: `operator-attested retirement of OAuth-missing group ${group.id}; accounts=${[...retiredAccountIds].sort((a, b) => a - b).join(',')}; reason=${retirement.reason.trim()}; no broker flat proof for retired accounts`,
+          reason: `operator-attested retirement of OAuth-missing or inactive accounts of group ${group.id}; accounts=${[...retiredAccountIds].sort((a, b) => a - b).join(',')}; reason=${retirement.reason.trim()}; no broker flat proof for retired accounts`,
         }]);
       }
 
