@@ -524,6 +524,67 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // Data, příznaky a rozpracované synchronizace patří jednomu uživateli. Volá
+  // se při odhlášení i při přímém přepnutí A→B (bez SIGNED_OUT): data A se nesmí
+  // ukázat pod session B ani na okamžik, ani se pod B uložit.
+  const resetUserScopedState = () => {
+    // Reset all data states to prevent leakage to next user
+    setTrades([]);
+    setAccounts([]);
+    setActiveAccountId('');
+    setCurrentUser(DEFAULT_USER);
+    setIsUserFromDb(false);
+    setDailyPreps([]);
+    setDailyReviews([]);
+    setWeeklyFocusList([]);
+    setBusinessExpenses([]);
+    setBusinessPayouts([]);
+    setBusinessGoals([]);
+    setBusinessResources([]);
+    setPlaybookItems([]);
+    setArchivedAccounts([]);
+    setIsArchivedLoaded(false);
+    setBusinessLoadedUserId(null);
+    setLabExperiments([]);
+    setIsLabExpLoaded(false);
+    setTradeToast(null);
+    setAiChatTrade(null);
+    setCopierImportReport(null);
+    setCopierImportError(false);
+    setCopierImportRunning(false);
+    copierImportAbortRef.current?.abort();
+    copierJournalLastSyncRef.current = 0;
+    journalVerifiedReadsRef.current = new Map();
+    copierJournalSyncBusyRef.current = false;
+    setOfflineSnapshotAt(null);
+    setSyncError(null);
+    setAppError(null);
+
+    // Reset flags
+    isPrepsDirty.current = false;
+    isAccountsDirty.current = false;
+    accountsDirtyOwnerRef.current = null;
+    isReviewsDirty.current = false;
+    isWeeklyFocusDirty.current = false;
+    isPreferencesDirty.current = false;
+    isSyncedWithDbRef.current = false;
+    isFetchingRef.current = false;
+    isSyncingAccounts.current = false;
+    prefsAppliedRef.current = false;
+    isApplyingPrefsRef.current = false;
+  };
+  /** Přímé přepnutí na jiného uživatele: zahodit data předchozího a držet
+   * načítací obrazovku, dokud load() nenačte data nového. */
+  const beginUserSwitch = () => {
+    resetUserScopedState();
+    setCurrentUser(DEFAULT_USER);
+    setIsUserFromDb(false);
+    setIsInitialLoadDone(false);
+    setLoading(true);
+    lastLoadedSessionId.current = null;
+    setLoadedUserId(null);
+  };
+
   useEffect(() => {
 
     setInitStatus("Kontrola přihlášení...");
@@ -535,6 +596,7 @@ const App: React.FC = () => {
           authEpochRef.current += 1;
           // Stav kopírky předchozího uživatele se nesmí ukázat ani na okamžik.
           clearCopierAgentStatusStore();
+          if (sessionRef.current) beginUserSwitch();
         }
         sessionRef.current = activeSession;
         setSession(activeSession);
@@ -580,6 +642,7 @@ const App: React.FC = () => {
           authEpochRef.current += 1;
           // Stav kopírky předchozího uživatele se nesmí ukázat ani na okamžik.
           clearCopierAgentStatusStore();
+          if (sessionRef.current) beginUserSwitch();
         }
         sessionRef.current = activeSession;
         // Only trigger session update if it's actually different to avoid loops
@@ -608,50 +671,7 @@ const App: React.FC = () => {
         lastLoadedSessionId.current = null;
         setLoadedUserId(null);
 
-        // Reset all data states to prevent leakage to next user
-        setTrades([]);
-        setAccounts([]);
-        setActiveAccountId('');
-        setCurrentUser(DEFAULT_USER);
-        setIsUserFromDb(false);
-        setDailyPreps([]);
-        setDailyReviews([]);
-        setWeeklyFocusList([]);
-        setBusinessExpenses([]);
-        setBusinessPayouts([]);
-        setBusinessGoals([]);
-        setBusinessResources([]);
-        setPlaybookItems([]);
-        setArchivedAccounts([]);
-        setIsArchivedLoaded(false);
-        setBusinessLoadedUserId(null);
-        setLabExperiments([]);
-        setIsLabExpLoaded(false);
-        setTradeToast(null);
-        setAiChatTrade(null);
-        setCopierImportReport(null);
-        setCopierImportError(false);
-        setCopierImportRunning(false);
-        copierImportAbortRef.current?.abort();
-        copierJournalLastSyncRef.current = 0;
-        journalVerifiedReadsRef.current = new Map();
-        copierJournalSyncBusyRef.current = false;
-        setOfflineSnapshotAt(null);
-        setSyncError(null);
-        setAppError(null);
-
-        // Reset flags
-        isPrepsDirty.current = false;
-        isAccountsDirty.current = false;
-        accountsDirtyOwnerRef.current = null;
-        isReviewsDirty.current = false;
-        isWeeklyFocusDirty.current = false;
-        isPreferencesDirty.current = false;
-        isSyncedWithDbRef.current = false;
-        isFetchingRef.current = false;
-        isSyncingAccounts.current = false;
-        prefsAppliedRef.current = false;
-        isApplyingPrefsRef.current = false;
+        resetUserScopedState();
 
         clearAppStorage();
       }
@@ -3936,7 +3956,10 @@ const App: React.FC = () => {
   // Show loader during initial auth check OR when logged in but data not yet loaded.
   // Také DRŽÍME loader dokud nedoběhne DB user s rolí — eliminuje flash locked tabů
   // pro ownery (instant user z JWT má dočasnou role='friend' než DB přepíše).
-  if (loading || (session && !isInitialLoadDone) || (session && !isUserFromDb)) {
+  // Data jiného uživatele než aktuální session se nikdy nevykreslí (pojistka
+  // k beginUserSwitch pro jakýkoli zbývající mezisnímek přepnutí A→B).
+  const renderedUserMismatch = Boolean(session && currentUser.id !== DEFAULT_USER.id && currentUser.id !== session.user.id);
+  if (loading || (session && !isInitialLoadDone) || (session && !isUserFromDb) || renderedUserMismatch) {
     return <QuantumLoader theme={theme} />;
   }
 
