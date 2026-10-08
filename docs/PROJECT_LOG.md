@@ -274,7 +274,8 @@ kontext — soukromá paměť jednotlivých nástrojů se sem nedostane.
   `docs/reviews/live-cold-start-20261008.md`.
 - Localhost: kostra 0,94 s → kompletní přehled 1,53 s bez prázdné plochy. Serverová
   část (probe mimo full) se na localhostu neověří (proxy na produkci), kryjí ji testy.
-  Nezměřeno: fyzický iPhone, více účtů na připojení. Nenasazeno.
+  Nezměřeno: fyzický iPhone, více účtů na připojení. Web nasazen 8. 10. (push na
+  main na Filipovo „nasaď“); iPhone build čeká na připojení telefonu.
 
 ### 2026-10-08 — Předání invariantů jádra kopírky (Codex)
 
