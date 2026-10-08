@@ -231,6 +231,8 @@ export interface TradovateAccountDataResult {
 }
 
 export type TradovateHistoricalSyncStatus =
+  /** Preflight probe vynechal (studený start LIVE); dorazí samostatně. */
+  | 'not-checked'
   | 'available'
   | 'unauthorized'
   | 'forbidden'

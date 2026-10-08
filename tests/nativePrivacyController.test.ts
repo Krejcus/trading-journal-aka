@@ -2,6 +2,18 @@ import { describe, it, expect, vi } from 'vitest';
 import { createNativePrivacyController } from '../services/nativePrivacyController';
 
 describe('native privacy lifecycle', () => {
+  it('stays covered but unknown until the first native read, then knows the lock state', async () => {
+    const controller = createNativePrivacyController({ read: async () => ({ enabled: false, generation: 0 }), authenticate: vi.fn() });
+    // Zakryto (locked) i bez znalosti stavu: data nesmí být vidět dřív než po čtení.
+    expect(controller.state).toMatchObject({ locked: true, known: false, error: false });
+    await controller.refresh();
+    expect(controller.state).toMatchObject({ locked: false, known: true });
+  });
+  it('a failed first read reports an error so the gate shows the lock, never uncovers', async () => {
+    const controller = createNativePrivacyController({ read: async () => { throw new Error('bridge'); }, authenticate: vi.fn() });
+    await controller.refresh();
+    expect(controller.state).toMatchObject({ locked: true, known: false, error: true });
+  });
   it('retries cancel → background → resume even though React remains locked', async () => {
     let generation = 0;
     const authenticate = vi.fn().mockResolvedValue(false);

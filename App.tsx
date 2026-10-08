@@ -52,9 +52,11 @@ const Dashboard = React.lazy(() => import('./components/Dashboard'));
 const TradeReview = React.lazy(() => import('./components/TradeReview'));
 const TradeHistory = React.lazy(() => import('./components/TradeHistory'));
 const JournalReviewInbox = React.lazy(() => import('./components/JournalReviewInbox'));
-const LiveJournalHistory = React.lazy(() => import('./components/LiveJournalHistory'));
-const JournalImportStatus = React.lazy(() => import('./components/JournalImportStatus'));
-const JournalSourceStatus = React.lazy(() => import('./components/JournalSourceStatus'));
+// LIVE je skládá do přehledu staticky: lazy komponenta by při prvním vykreslení
+// přehledu suspendovala celou stránku a React by ji držel prázdnou ≥ 300 ms.
+import LiveJournalHistory from './components/LiveJournalHistory';
+import JournalImportStatus from './components/JournalImportStatus';
+import JournalSourceStatus from './components/JournalSourceStatus';
 const HistoryPanelModal = React.lazy(() => import('./components/HistoryPanelModal'));
 const Settings = React.lazy(() => import('./components/Settings'));
 import type { SettingsTab } from './components/Settings';
@@ -67,8 +69,19 @@ const BacktestSessionsManager = React.lazy(() => import('./components/BacktestSe
 const BacktestWorkspace = React.lazy(() => import('./components/BacktestWorkspace'));
 const UserProfileModal = React.lazy(() => import('./components/UserProfileModal'));
 const NetworkHub = React.lazy(() => import('./components/NetworkHub'));
-const loadLiveDesk = () => import('./components/TradovateLiveDesk');
-const LiveDesk = React.lazy(loadLiveDesk);
+type LiveDeskModule = typeof import('./components/TradovateLiveDesk');
+let loadedLiveDesk: LiveDeskModule | null = null;
+const loadLiveDesk = () => import('./components/TradovateLiveDesk').then(module => {
+  loadedLiveDesk = module;
+  return module;
+});
+const LazyLiveDesk = React.lazy(loadLiveDesk);
+/** Přednačtený LIVE se vykreslí hned, bez Suspense; jinak jako dřív přes lazy.
+ * Volba platí po celou dobu připojení, jinak by změna typu LIVE remountovala. */
+const LiveDesk: React.FC<React.ComponentProps<LiveDeskModule['default']>> = props => {
+  const [Desk] = React.useState(() => loadedLiveDesk?.default ?? LazyLiveDesk);
+  return <Desk {...props} />;
+};
 const BusinessHub = React.lazy(() => import('./components/BusinessHub'));
 
 const AICoachPage = React.lazy(() => import('./components/AICoachPage'));
@@ -629,6 +642,8 @@ const App: React.FC = () => {
 
         // Reset flags
         isPrepsDirty.current = false;
+        isAccountsDirty.current = false;
+        accountsDirtyOwnerRef.current = null;
         isReviewsDirty.current = false;
         isWeeklyFocusDirty.current = false;
         isPreferencesDirty.current = false;
@@ -708,6 +723,18 @@ const App: React.FC = () => {
 
   const [trades, setTrades] = useState<Trade[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  // Automatické uložení účtů jen po úpravě v aplikaci. Načtení z mezipaměti,
+  // obnova z DB ani realtime nic neukládají: starší mezipaměť (třeba z jiného
+  // zařízení) by jinak po startu přepsala archivaci nebo OAuth vazby v DB.
+  // Příznak nese vlastníka: úprava uživatele A se nikdy neuloží pod B (přímé
+  // přepnutí účtu nebo odhlášení v jiném okně bez reloadu).
+  const isAccountsDirty = useRef(false);
+  const accountsDirtyOwnerRef = useRef<string | null>(null);
+  const updateAccountsLocally = useCallback((next: React.SetStateAction<Account[]>) => {
+    isAccountsDirty.current = true;
+    accountsDirtyOwnerRef.current = sessionRef.current?.user.id ?? null;
+    setAccounts(next);
+  }, []);
   const [activeAccountId, setActiveAccountId] = useState<string>('');
   // Tradovate import modal
 
@@ -1201,11 +1228,13 @@ const App: React.FC = () => {
   }, [isInitialLoadDone, session?.user?.id, copierImportRunning, copierImportError, copierImportReport, runCopierJournalSync]);
   const [liveIntentPending, setLiveIntentPending] = useState(false);
   const prefetchLiveData = tradovateLive.prefetch;
-  const prepareLiveNavigation = useCallback(() => {
+  const prepareLiveNavigation = useCallback((options?: { speculative?: boolean }) => {
     if (tradovateLiveEnabled || !canAccess('live', currentUser.role)) return;
     void loadLiveDesk().catch(() => { /* Normal navigation handles a failed chunk load. */ });
     prefetchLiveData();
-    if (!tradovateLive.data) setLiveIntentPending(true);
+    // Otevření menu Více ještě není volba LIVE: neodkládat kvůli němu čtení
+    // ostatních stránek.
+    if (!tradovateLive.data && !options?.speculative) setLiveIntentPending(true);
   }, [currentUser.role, prefetchLiveData, tradovateLive.data, tradovateLiveEnabled]);
   useEffect(() => {
     if (!liveIntentPending) return;
@@ -1345,8 +1374,8 @@ const App: React.FC = () => {
   const handleReviewDirty = useCallback((dirty: boolean) => { reviewDirtyRef.current = dirty; }, []);
   // Stránka, na kterou chtěla nativní lišta přejít během rozepsaného hodnocení.
   const [pendingReviewNav, setPendingReviewNav] = useState<string | null>(null);
-  const nativeActions = useRef({ navigate: navigateTo, review: openReview, toggleWorld: toggleBacktestMode });
-  nativeActions.current = { navigate: navigateTo, review: openReview, toggleWorld: toggleBacktestMode };
+  const nativeActions = useRef({ navigate: navigateTo, review: openReview, toggleWorld: toggleBacktestMode, prepareLive: prepareLiveNavigation });
+  nativeActions.current = { navigate: navigateTo, review: openReview, toggleWorld: toggleBacktestMode, prepareLive: prepareLiveNavigation };
   useEffect(
     () =>
       registerNativeShellBridge({
@@ -1367,6 +1396,11 @@ const App: React.FC = () => {
         review: (request) => nativeActions.current.review(request),
         toggleWorld: () => nativeActions.current.toggleWorld(),
         refresh: () => window.dispatchEvent(new Event('alphatrade:native-refresh')),
+        // Na iPhonu se na LIVE jde přes menu Více; čas mezi otevřením menu a
+        // klepnutím stačí na rozjetí read-only čtení (na webu to dělá hover).
+        prepare: (page) => {
+          if (page === 'live') nativeActions.current.prepareLive({ speculative: true });
+        },
       }),
     []
   );
@@ -2705,9 +2739,17 @@ const App: React.FC = () => {
       return;
     }
     if (!sharedTrade && session && isInitialLoadDone && accounts.length > 0 && !isSyncingAccounts.current) {
+      if (!isAccountsDirty.current) return;
+      if (accountsDirtyOwnerRef.current !== session.user.id) {
+        // Úprava patřila jinému uživateli: zahodit, nikdy neukládat pod tohoto.
+        isAccountsDirty.current = false;
+        accountsDirtyOwnerRef.current = null;
+        return;
+      }
       const isCurrentSession = captureSessionRequest(session.user.id);
       const timer = setTimeout(() => {
-        if (!isCurrentSession()) return;
+        if (!isCurrentSession() || !isAccountsDirty.current || accountsDirtyOwnerRef.current !== session.user.id) return;
+        isAccountsDirty.current = false;
         isSyncingAccounts.current = true;
         storageService.saveAccounts(accounts, session.user.id).then(updatedAccounts => {
           if (!isCurrentSession()) return;
@@ -2738,6 +2780,7 @@ const App: React.FC = () => {
           setSyncError(null);
         }).catch(err => {
           if (!isCurrentSession()) return;
+          isAccountsDirty.current = true;
           console.error("Account sync failed", err);
           setSyncError(`Chyba synchronizace účtů: ${err.message || 'Neznámá chyba'}`);
         }).finally(() => {
@@ -4556,7 +4599,7 @@ const App: React.FC = () => {
                       accounts={accounts.filter(isBacktestAccount)}
                       trades={trades}
                       // Merge zpět live účty, ať je BacktestSessionsManager nesmaže.
-                      onUpdate={(next) => setAccounts([...accounts.filter(a => !isBacktestAccount(a)), ...next])}
+                      onUpdate={(next) => updateAccountsLocally([...accounts.filter(a => !isBacktestAccount(a)), ...next])}
                       onDelete={handleDeleteAccount}
                       onOpenRun={setActiveBacktestRun}
                     />
@@ -4569,7 +4612,7 @@ const App: React.FC = () => {
                         activeAccountId={activeAccountId}
                         setActiveAccountId={setActiveAccountId}
                         // Merge zpět Backtest účty, ať je AccountsManager nesmaže.
-                        onUpdate={(next) => setAccounts([...next, ...accounts.filter(isBacktestAccount)])}
+                        onUpdate={(next) => updateAccountsLocally([...next, ...accounts.filter(isBacktestAccount)])}
                         onDelete={handleDeleteAccount}
                         oauthLiveStates={oauthAccountLiveStates}
                         tradovateProfiles={tradovateLive.profiles}
@@ -4640,22 +4683,22 @@ const App: React.FC = () => {
                       onCopierJournalRefresh={handleCopierJournalRefresh}
                       journalHistory={<LiveJournalHistory trades={baseFilteredTrades} accounts={allAccountsWithArchived}
                         mode={viewMode} onMode={setViewMode} onSelect={setAiChatTrade} onHistory={() => setActivePage('history')} />}
+                      /* Stav podkladů historie je na LIVE doplňková informace, ne to
+                         první, co chceš vidět — proto až za obsahem a až s daty
+                         (pod kostrou by se ukázal a pak skočil dolů). Na Historii
+                         zůstává nahoře, tam se váže přímo k obsahu stránky. */
+                      journalStatus={dashboardMode !== 'backtesting' ? (
+                        <div className="mx-auto mt-4 max-w-[1500px]">
+                          <JournalImportStatus report={copierImportReport} running={copierImportRunning} error={copierImportError}
+                            onRetry={() => void runCopierJournalSync(true)} onAccounts={() => setActivePage('accounts')} />
+                          <JournalSourceStatus key={currentUser.id} connections={journalSourceConnections([...accounts, ...archivedAccounts], copierImportReport?.connections.map(row => row.connectionId))} />
+                        </div>
+                      ) : null}
                       requestedTab={requestedLiveTab}
                       onRequestedTabHandled={handleRequestedLiveTabHandled}
                       macCompanionPairingIntent={macCompanionPairingIntent}
                       onMacCompanionPairingIntentHandled={handleMacCompanionPairingIntentHandled}
                     />
-                  )}
-
-                  {/* Stav podkladů historie je na LIVE doplňková informace, ne to
-                      první, co chceš vidět — proto až za skupinami. Na Historii
-                      zůstává nahoře, tam se váže přímo k obsahu stránky. */}
-                  {activePage === 'live' && dashboardMode !== 'backtesting' && (
-                    <div className="mx-auto mt-4 max-w-[1500px]">
-                      <JournalImportStatus report={copierImportReport} running={copierImportRunning} error={copierImportError}
-                        onRetry={() => void runCopierJournalSync(true)} onAccounts={() => setActivePage('accounts')} />
-                      <JournalSourceStatus key={currentUser.id} connections={journalSourceConnections([...accounts, ...archivedAccounts], copierImportReport?.connections.map(row => row.connectionId))} />
-                    </div>
                   )}
 
                   {activePage === 'settings' && (
@@ -4689,7 +4732,7 @@ const App: React.FC = () => {
                       appearance={appearance}
                       onAppearanceChange={(next) => { setAppearance(normalizeAppearance(next)); markPreferencesDirty(); }}
                       onThemeChange={setTheme}
-                      onCreateAccount={(account) => setAccounts(prev => [...prev, account])}
+                      onCreateAccount={(account) => updateAccountsLocally(prev => [...prev, account])}
 
                     />
                   )}
@@ -4715,7 +4758,7 @@ const App: React.FC = () => {
                       onUpdateGoals={handleUpdateGoals}
                       onUpdateResources={handleUpdateResources}
                       onUpdateSettings={(v) => { setBusinessSettings(v); markPreferencesDirty(); }}
-                      onUpdateAccounts={setAccounts}
+                      onUpdateAccounts={updateAccountsLocally}
                       constitutionRules={constitutionRules}
                       onUpdateConstitution={(v) => { setConstitutionRules(v); markPreferencesDirty(); }}
                       careerRoadmap={careerRoadmap}

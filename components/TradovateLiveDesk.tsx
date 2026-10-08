@@ -3,6 +3,7 @@ import { createCopierForegroundPoller, isCopierStatusFresh } from '../lib/copier
 import { copierRelayObservedAt, newestCopierRelaySnapshot } from '../lib/copierRelayStatusPoll';
 import { CopierRelayInFlight, runCopierRelayStatusRound } from '../lib/copierRelayPollSources';
 import { readCopyGroupCache } from '../services/copyGroupLibrary';
+import { LIVE_COLD_REVEAL_CAP_MS, liveColdReadsPending } from '../lib/liveColdReveal';
 import { isAppForeground, subscribeAppForeground } from '../lib/appForeground';
 import { clearCopierAgentStatusStore, copierRelayFeedSourcesFor, readCopierAgentStatusSnapshot, writeCopierAgentStatusSnapshot } from '../lib/copierAgentStatusStore';
 import { shouldProbeLocalCopierAgent } from '../lib/localCopierProbePolicy';
@@ -120,6 +121,8 @@ import {
 
 interface TradovateLiveDeskProps {
   journalHistory?: React.ReactNode;
+  /** Stav podkladů historie; vykreslí se až s daty, ne pod kostrou. */
+  journalStatus?: React.ReactNode;
   userId: string;
   /** Jméno a avatar pro kartu dne; ta se posílá dál, takže nesmí být anonymní. */
   cardOwner?: { name: string; avatar?: string | null };
@@ -244,6 +247,7 @@ const LiveDashboardSkeleton = () => (
 
 const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   journalHistory,
+  journalStatus,
   userId,
   cardOwner,
   live,
@@ -518,12 +522,14 @@ const TradovateLiveDesk: React.FC<TradovateLiveDeskProps> = ({
   const selectedAccount = liveData?.accounts.find(account => account.id === selectedAccountId) ?? null;
   const [profileSetupAccountIds, setProfileSetupAccountIds] = useState<Set<string> | null>(null);
   const accountsWithoutPlan = useMemo(() => {
-    if (!liveData) return [];
+    // Dokud plány účtů nedorazily, „nemá plán“ nevíme — banner by se ukázal
+    // a po načtení zase zmizel a posunul celý přehled.
+    if (!liveData || live.profilesLoaded === false) return [];
     const profilesById = profileMap(live.profiles);
     return liveData.accounts.filter(account => (
       tradovateAccountProfileNeedsPlan(profilesById.get(String(account.id)), account.name)
     ));
-  }, [liveData, live.profiles]);
+  }, [liveData, live.profiles, live.profilesLoaded]);
   const copyTradeSnapshot = useMemo(
     () => liveData ? tradovateCopyTradeSnapshot(liveData, live.profiles) : null,
     [liveData, live.profiles],
@@ -1130,6 +1136,23 @@ acceptAgentStatus((await executeAgent({
   ];
 
   const checkingConnection = live.status == null;
+  // Studený start: přehled se odkryje jednou, až doběhne první úplné čtení
+  // všech připojení — jinak by účty pomalejšího připojení na chvíli svítily
+  // jako „nedostupný“ a pak naskočily. Strop 2,5 s od prvních dat, ať pomalé
+  // nebo visící připojení nedrží zbytek. Návrat na LIVE s daty nečeká nikdy.
+  const coldRevealDoneRef = useRef(liveData != null);
+  const [coldRevealCapReached, setColdRevealCapReached] = useState(false);
+  const coldReadsPending = liveColdReadsPending(
+    coldRevealDoneRef.current, liveData != null, connectedConnectionIds, live.dataEnrichmentByConnection,
+  );
+  if (liveData != null && (!coldReadsPending || coldRevealCapReached)) coldRevealDoneRef.current = true;
+  // Zapnutá kopírka: přehled s vypnutím (OFF, kill) se nedrží ani chvíli.
+  const holdColdReveal = coldReadsPending && !coldRevealCapReached && agentStatus?.controller.armed !== true;
+  useEffect(() => {
+    if (!holdColdReveal) return;
+    const timer = window.setTimeout(() => setColdRevealCapReached(true), LIVE_COLD_REVEAL_CAP_MS);
+    return () => window.clearTimeout(timer);
+  }, [holdColdReveal]);
 
   // Dev háček (at:dev:live-copy-fixture): ukázková skupina bez Tradovate dat,
   // jen pro ladění vizuálu LIVE přehledu. Prod build větev neobsahuje.
@@ -1167,7 +1190,7 @@ acceptAgentStatus((await executeAgent({
         snapshotHealth={agentStatus?.snapshotHealth}
         journalHealth={agentStatus?.journalHealth}
         onRepairSnapshots={repairSnapshots}
-        hideDisarmNotice={tab === 'overview' && !checkingConnection && !requiresConnection
+        hideDisarmNotice={tab === 'overview' && !checkingConnection && !requiresConnection && !holdColdReveal
           && !!liveData && !!copyTradeSnapshot && !!executionGroup?.id && !copierUiDemo}
         quiet
       />
@@ -1293,7 +1316,7 @@ acceptAgentStatus((await executeAgent({
         <LiveDashboardSkeleton />
       ) : requiresConnection ? (
         <ConnectionRequired onConnect={() => setAddConnectionOpen(true)} />
-      ) : !liveData ? (
+      ) : !liveData || holdColdReveal ? (
         <LiveDashboardSkeleton />
       ) : (
         <>
@@ -1426,6 +1449,11 @@ acceptAgentStatus((await executeAgent({
           ) : null}
         </>
       )}
+      {/* Stav podkladů historie: všude kromě kostry studeného startu (tam by
+          se ukázal dřív než data a pak skočil dolů). Při chybě nebo bez
+          připojení zůstává i s tlačítkem Zkusit znovu. Jedno místo ve stromu,
+          ať se při přepnutí záložky nepřipojuje znovu. */}
+      {tab === 'connections' || requiresConnection || renderedLiveError || (!checkingConnection && liveData && !holdColdReveal) ? journalStatus : null}
 
       {confirmState ? (
         <ConfirmActionDialog
@@ -1582,10 +1610,11 @@ const EmptyConnection = ({ onAdd }: { onAdd: () => void }) => <div className="fl
 const ConnectionAccounts = ({ data, profilesById }: { data: TradovatePreflightResult; profilesById: Map<string, TradovateAccountProfile> }) => {
   const historical = data.historicalSync;
   const historicalAvailable = historical.status === 'available';
+  const historicalChecking = historical.status === 'not-checked';
   const diagnostic = historical.status === 'invalid-response'
     ? `Struktura: ${historical.responseShape.kind}${historical.responseShape.topLevelKeys.length ? ` · ${historical.responseShape.topLevelKeys.join(', ')}` : ''}`
     : null;
-  return <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-page)]"><div className={`flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-4 py-2 text-[10px] ${historicalAvailable ? 'text-emerald-600' : historical.status === 'unauthorized' || historical.status === 'forbidden' ? 'text-amber-600' : 'text-[var(--text-secondary)]'}`}><span className="font-bold">Historický sync: {historicalAvailable ? `dostupný · ${historical.definitionCount} reportů` : `${historical.status}${historical.httpStatus ? ` · HTTP ${historical.httpStatus}` : ''}`}</span><span>{historicalAvailable ? [historical.supportsPerformance && 'Performance', historical.supportsOrders && 'Orders', historical.supportsCashHistory && 'Cash History', historical.supportsAccountBalanceHistory && 'Account Balance History'].filter(Boolean).join(' · ') || 'Report definitions dostupné' : diagnostic || 'Fallback: průběžné ukládání + CSV import'}</span></div>{historicalAvailable ? <details className="border-b border-[var(--border-subtle)] px-4 py-2 text-[10px] text-[var(--text-secondary)]"><summary className="cursor-pointer font-bold text-[var(--text-primary)]">Parametry historických reportů</summary><div className="mt-2 grid gap-1 md:grid-cols-2">{historical.reports.map(report => <div key={report.name}><b>{report.name}</b>: {report.parameters.length ? report.parameters.map(parameter => `${parameter.name}${parameter.paramType ? ` (${parameter.paramType})` : ''}${parameter.optional === false ? '*' : ''}`).join(', ') : 'bez parametrů'}</div>)}</div></details> : null}{data.accounts.length === 0 ? <div className="px-4 py-4 text-xs font-bold text-amber-600">API nevrátilo žádný viditelný účet.</div> : <div className="overflow-x-auto"><div className="min-w-[850px]"><div className="grid grid-cols-[1.4fr_1.1fr_.8fr_1fr_.55fr_.55fr] gap-3 border-b border-[var(--border-subtle)] px-4 py-2 text-[11px] font-semibold text-[var(--text-secondary)]"><span>Account</span><span>Organization / plan</span><span>Status</span><span>Net liq</span><span>Positions</span><span>Working</span></div>{data.accounts.map(account => { const profile = profilesById.get(String(account.id)); return <div key={account.id} className="grid grid-cols-[1.4fr_1.1fr_.8fr_1fr_.55fr_.55fr] items-center gap-3 border-b border-[var(--border-subtle)] px-4 py-2.5 text-xs last:border-0"><b>{profile?.displayName || account.name}</b><span className="text-[var(--text-secondary)]">{[tradovateAccountFirm(profile, account.name), profile?.planName].filter(Boolean).join(' · ') || '—'}</span><span className={account.active ? 'font-bold text-emerald-500' : 'font-bold text-amber-500'}>{account.active ? 'Active' : 'Inactive'}</span><b>{optionalMoney(account.balance.netLiq)}</b><span>{account.netPositionCount}</span><span>{account.workingOrderCount}</span></div>; })}</div></div>}</div>;
+  return <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-page)]"><div className={`flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-4 py-2 text-[10px] ${historicalAvailable ? 'text-emerald-600' : historical.status === 'unauthorized' || historical.status === 'forbidden' ? 'text-amber-600' : 'text-[var(--text-secondary)]'}`}><span className="font-bold">Historický sync: {historicalAvailable ? `dostupný · ${historical.definitionCount} reportů` : historicalChecking ? 'zatím neověřeno' : `${historical.status}${historical.httpStatus ? ` · HTTP ${historical.httpStatus}` : ''}`}</span><span>{historicalAvailable ? [historical.supportsPerformance && 'Performance', historical.supportsOrders && 'Orders', historical.supportsCashHistory && 'Cash History', historical.supportsAccountBalanceHistory && 'Account Balance History'].filter(Boolean).join(' · ') || 'Report definitions dostupné' : historicalChecking ? '' : diagnostic || 'Fallback: průběžné ukládání + CSV import'}</span></div>{historicalAvailable ? <details className="border-b border-[var(--border-subtle)] px-4 py-2 text-[10px] text-[var(--text-secondary)]"><summary className="cursor-pointer font-bold text-[var(--text-primary)]">Parametry historických reportů</summary><div className="mt-2 grid gap-1 md:grid-cols-2">{historical.reports.map(report => <div key={report.name}><b>{report.name}</b>: {report.parameters.length ? report.parameters.map(parameter => `${parameter.name}${parameter.paramType ? ` (${parameter.paramType})` : ''}${parameter.optional === false ? '*' : ''}`).join(', ') : 'bez parametrů'}</div>)}</div></details> : null}{data.accounts.length === 0 ? <div className="px-4 py-4 text-xs font-bold text-amber-600">API nevrátilo žádný viditelný účet.</div> : <div className="overflow-x-auto"><div className="min-w-[850px]"><div className="grid grid-cols-[1.4fr_1.1fr_.8fr_1fr_.55fr_.55fr] gap-3 border-b border-[var(--border-subtle)] px-4 py-2 text-[11px] font-semibold text-[var(--text-secondary)]"><span>Account</span><span>Organization / plan</span><span>Status</span><span>Net liq</span><span>Positions</span><span>Working</span></div>{data.accounts.map(account => { const profile = profilesById.get(String(account.id)); return <div key={account.id} className="grid grid-cols-[1.4fr_1.1fr_.8fr_1fr_.55fr_.55fr] items-center gap-3 border-b border-[var(--border-subtle)] px-4 py-2.5 text-xs last:border-0"><b>{profile?.displayName || account.name}</b><span className="text-[var(--text-secondary)]">{[tradovateAccountFirm(profile, account.name), profile?.planName].filter(Boolean).join(' · ') || '—'}</span><span className={account.active ? 'font-bold text-emerald-500' : 'font-bold text-amber-500'}>{account.active ? 'Active' : 'Inactive'}</span><b>{optionalMoney(account.balance.netLiq)}</b><span>{account.netPositionCount}</span><span>{account.workingOrderCount}</span></div>; })}</div></div>}</div>;
 };
 
 const ConnectionRequired = ({ onConnect }: { onConnect: () => void }) => <section className="flex min-h-[45vh] flex-col items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-6 text-center"><Link2 size={28} className="text-indigo-500" /><h2 className="mt-4 text-lg font-black text-[var(--text-primary)]">Nejdřív připoj Tradovate</h2><p className="mt-2 max-w-md text-sm text-[var(--text-secondary)]">Všechny LIVE záložky používají přímo naše Tradovate OAuth data.</p><button type="button" onClick={onConnect} className="mt-5 flex h-9 items-center gap-2 rounded-md bg-indigo-600 px-4 text-xs font-black text-white"><Plus size={15} /> Add connection</button></section>;

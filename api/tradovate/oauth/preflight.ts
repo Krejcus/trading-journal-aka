@@ -8,6 +8,7 @@ import {
 import { tradovateApiBaseUrl } from '../../../server/tradovateOAuth.js';
 import { loadTradovateAccountData, TradovateAccountDataError } from '../../../server/tradovateAccountData.js';
 import {
+  notCheckedTradovateHistoricalSync,
   probeTradovateHistoricalSync,
   unavailableTradovateHistoricalSync,
 } from '../../../server/tradovateHistoricalProbe.js';
@@ -21,12 +22,14 @@ import { handleNativeCors } from '../../../server/nativeCors.js';
  * výsledek, dokud není starší než PREFLIGHT_COALESCE_MS.
  */
 const PREFLIGHT_COALESCE_MS = 20_000;
-const recentPreflights = new Map<string, { at: number; result: Promise<unknown> }>();
+const recentPreflights = new Map<string, { at: number; result: Promise<unknown>; settled?: boolean }>();
 function coalescePreflight<T>(key: string, now: number, read: () => Promise<T>): Promise<T> {
   const cached = recentPreflights.get(key);
   if (cached && now - cached.at < PREFLIGHT_COALESCE_MS) return cached.result as Promise<T>;
   const result = read();
-  recentPreflights.set(key, { at: now, result });
+  const entry: { at: number; result: Promise<unknown>; settled?: boolean } = { at: now, result };
+  recentPreflights.set(key, entry);
+  result.then(() => { entry.settled = true; }, () => undefined);
   result.catch(() => { if (recentPreflights.get(key)?.result === result) recentPreflights.delete(key); });
   if (recentPreflights.size > 200) {
     for (const [candidate, entry] of recentPreflights) if (now - entry.at >= PREFLIGHT_COALESCE_MS) recentPreflights.delete(candidate);
@@ -49,6 +52,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const userId = await requireSupabaseUserId(req.headers.authorization, config);
     const connectionId = typeof req.body?.connectionId === 'string' ? req.body.connectionId : '';
     const bootstrap = req.body?.mode === 'bootstrap';
+    const probeOnly = req.body?.mode === 'historical-probe';
+    // Probe report hostu (timeout až 8 s) nesmí držet první úplná data LIVE.
+    // Studený start ho vynechá a zeptá se zvlášť (mode 'historical-probe').
+    const skipProbe = !bootstrap && req.body?.historicalProbe === false;
     if (!connectionId) return res.status(400).json({ error: 'missing-connection-id' });
     const { accessToken } = await getValidTradovateAccessToken({
       db: createTradovateAdminClient(config),
@@ -56,21 +63,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       userId,
       connectionId,
     });
+    if (probeOnly) {
+      const historicalSync = await coalescePreflight(
+        `${userId}:${connectionId}:historical-probe`,
+        Date.now(),
+        () => probeTradovateHistoricalSync({ environment: config.environment, accessToken }),
+      );
+      return res.status(200).json({ connectionId, environment: config.environment, historicalSync });
+    }
     const baseUrl = tradovateApiBaseUrl(config.environment);
-    const [result, historicalSync] = await coalescePreflight(
-      `${userId}:${connectionId}:${bootstrap ? 'bootstrap' : 'full'}`,
-      Date.now(),
-      () => Promise.all([
-        loadTradovateAccountData({
-          baseUrl,
-          accessToken,
-          detail: bootstrap ? 'bootstrap' : 'full',
-        }),
-        bootstrap
-          ? Promise.resolve(unavailableTradovateHistoricalSync({ environment: config.environment }))
+    const fullKey = `${userId}:${connectionId}:full`;
+    // Úplné čtení s probe je nadmnožina čtení bez něj: běžící nebo čerstvé
+    // `full` se sdílí, ať starší klient (iPhone) a nový studený start
+    // nepouštějí dvě dávky na stejný login. Opačně ne — starý klient by bez
+    // samostatného probe zůstal u „not-checked“.
+    // Jen hotové `full`: běžící čeká i na probe (až 8 s), na který studený
+    // start čekat nemá.
+    const recentFull = skipProbe && !bootstrap ? recentPreflights.get(fullKey) : undefined;
+    const sharedFull = recentFull?.settled && Date.now() - recentFull.at < PREFLIGHT_COALESCE_MS
+      ? recentFull.result as ReturnType<typeof readPreflight>
+      : null;
+    const readPreflight = () => Promise.all([
+      loadTradovateAccountData({
+        baseUrl,
+        accessToken,
+        detail: bootstrap ? 'bootstrap' : 'full',
+      }),
+      bootstrap
+        ? Promise.resolve(unavailableTradovateHistoricalSync({ environment: config.environment }))
+        : skipProbe
+          ? Promise.resolve(notCheckedTradovateHistoricalSync({ environment: config.environment }))
           : probeTradovateHistoricalSync({ environment: config.environment, accessToken }),
-      ]),
-    );
+    ]);
+    const [result, historicalSync] = await (sharedFull ?? coalescePreflight(
+      `${userId}:${connectionId}:${bootstrap ? 'bootstrap' : skipProbe ? 'full-no-probe' : 'full'}`,
+      Date.now(),
+      readPreflight,
+    ));
     return res.status(200).json({
       connectionId,
       environment: config.environment,

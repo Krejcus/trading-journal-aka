@@ -1,4 +1,6 @@
 export type TradovateHistoricalSyncStatus =
+  /** Tento preflight probe záměrně vynechal; výsledek dorazí samostatně. */
+  | 'not-checked'
   | 'available'
   | 'unauthorized'
   | 'forbidden'
@@ -135,6 +137,17 @@ export const unavailableTradovateHistoricalSync = (options: {
   now?: number;
 }): TradovateHistoricalSyncCapability => result({
   status: 'unavailable',
+  httpStatus: null,
+  reportBaseUrl: tradovateReportBaseUrl(options.environment),
+  now: options.now,
+});
+
+/** Preflight bez probe: neznámý výsledek, ne „nedostupné“. */
+export const notCheckedTradovateHistoricalSync = (options: {
+  environment: 'demo' | 'live';
+  now?: number;
+}): TradovateHistoricalSyncCapability => result({
+  status: 'not-checked',
   httpStatus: null,
   reportBaseUrl: tradovateReportBaseUrl(options.environment),
   now: options.now,

@@ -106,9 +106,9 @@ const BottomNav: React.FC<BottomNavProps> = ({ activePage, onNavigate, onLiveInt
                   <button
                     key={item.id}
                     onClick={() => handleNavigate(item.id)}
-                    onPointerEnter={item.id === 'live' && !locked && !isActive ? onLiveIntent : undefined}
-                    onFocus={item.id === 'live' && !locked && !isActive ? onLiveIntent : undefined}
-                    onPointerDown={item.id === 'live' && !locked && !isActive ? onLiveIntent : undefined}
+                    onPointerEnter={item.id === 'live' && !locked && !isActive && onLiveIntent ? () => onLiveIntent() : undefined}
+                    onFocus={item.id === 'live' && !locked && !isActive && onLiveIntent ? () => onLiveIntent() : undefined}
+                    onPointerDown={item.id === 'live' && !locked && !isActive && onLiveIntent ? () => onLiveIntent() : undefined}
                     className={`flex items-center gap-3 w-full px-5 py-4 text-sm font-bold transition-colors ${locked ? 'opacity-50' : ''} ${
                       isActive && !locked
                         ? isDark ? 'text-white bg-white/10' : 'text-slate-900 bg-slate-100'

@@ -2049,7 +2049,15 @@ export const LiveCopyTradeOverview: React.FC<Props> = ({
           </div>
         </header>
 
-        {groups.length === 0 ? (
+        {groups.length === 0 && groupLibraryState === 'loading' ? (
+          // Knihovna se teprve načítá: „Žádné skupiny“ by byla nepravda, která
+          // za chvíli zmizí. Držíme místo jako kostra, dokud není jasno.
+          <div className="space-y-2 px-3 pb-3 pt-1" aria-label="Načítání kopírovacích skupin" aria-busy="true" data-testid="group-library-loading">
+            {[0, 1].map(index => (
+              <div key={index} className="h-14 animate-pulse rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)]" />
+            ))}
+          </div>
+        ) : groups.length === 0 ? (
           <div className="px-6 pb-8 pt-2 text-center">
             <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center mx-auto mb-3">
               <Inbox size={22} />

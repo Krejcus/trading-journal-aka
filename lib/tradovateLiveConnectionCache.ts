@@ -139,3 +139,43 @@ export const writeTradovateConnectionShell = (
     // Storage may be blocked or full. The in-memory cache remains the fallback.
   }
 };
+
+/**
+ * Trvalá nápověda pro studený start (iPhone po ukončení appky, nový tab):
+ * jen ID připojených připojení, nic dalšího. Slouží výhradně k dřívějšímu
+ * spuštění read-only preflightu; výsledek se použije až po potvrzení ID
+ * čerstvým OAuth statusem. Klíč s `alphatrade_` a userId maže odhlášení
+ * i přepnutí uživatele.
+ */
+const HINT_PREFIX = 'alphatrade_tradovate_live_hint_v1_';
+const CONNECTION_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+interface StorageLike extends SessionStorageLike {
+  removeItem(key: string): void;
+}
+
+export const readTradovateConnectionHint = (userId: string, storage?: StorageLike): string[] => {
+  if (!userId || !storage) return [];
+  try {
+    const parsed = JSON.parse(storage.getItem(`${HINT_PREFIX}${userId}`) ?? 'null') as { version?: number; ids?: unknown } | null;
+    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.ids)) return [];
+    return parsed.ids.filter((id): id is string => typeof id === 'string' && CONNECTION_ID_PATTERN.test(id)).slice(0, 20);
+  } catch {
+    return [];
+  }
+};
+
+export const writeTradovateConnectionHint = (
+  userId: string,
+  status: TradovateOAuthStatus | null,
+  storage?: StorageLike,
+): void => {
+  if (!userId || !status || !storage) return;
+  try {
+    const ids = status.connections.filter(connection => connection.connected).map(connection => connection.id);
+    if (ids.length === 0) storage.removeItem(`${HINT_PREFIX}${userId}`);
+    else storage.setItem(`${HINT_PREFIX}${userId}`, JSON.stringify({ version: 1, ids }));
+  } catch {
+    // Blokované úložiště: studený start jen počká na OAuth status jako dřív.
+  }
+};
