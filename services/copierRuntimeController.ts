@@ -2310,9 +2310,11 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
       const hasStreamOpenParent = osoParentIds.some(id => (
         isOpenOrderStatus(streamStatuses.get(id)?.status ?? null)
       ));
+      // Vyplněná noha mohla otevřít pozici: rychlý návrat jen bez fillu,
+      // jinak projde čerstvou kontrolou pozice níže (review 8. 10.).
       if (!hasStreamOpenParent && candidateIds.every(id => {
         const status = streamStatuses.get(id)?.status;
-        return status != null && !isOpenOrderStatus(status);
+        return status != null && !isOpenOrderStatus(status) && status !== 'filled';
       })) return;
 
       const osoParentByLeg = new Map<string, string>();
@@ -2538,6 +2540,23 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
 
         if (attemptedIds.length === 0) {
           if (classificationFailures.length > 0) throw new Error(classificationFailures.join(', '));
+          const filledLeg = candidateIds.some(id => preferredSweepStatus(
+            streamStatuses.get(id)?.status,
+            byId.get(id)?.status,
+          ) === 'filled');
+          if (filledLeg) {
+            // Pozice čtená před cancelem je starší než důkaz fillu z orderů.
+            const freshPositions = await withFlatSweepBudget(
+              budget,
+              'kontrola pozice po fillu ochranné nohy ' + accountId + '/' + symbol,
+              () => broker.listPositions(accountId),
+            );
+            const freshNet = freshPositions.find(position => position.symbol === symbol)?.netQuantity ?? 0;
+            if (freshNet !== 0) {
+              followerFlatConfirmed = false;
+              throw new Error('ochranná noha se vyplnila a broker hlásí pozici ' + freshNet);
+            }
+          }
           return;
         }
 
@@ -2594,11 +2613,6 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
           return;
         }
 
-        const positions = await withFlatSweepBudget(
-          budget,
-          'postkontrola pozice ' + accountId + '/' + symbol,
-          () => broker.listPositions(accountId),
-        );
         const needsPostOrderGraph = attemptedIds.some(id => {
           const lookup = postStreamStatuses.get(id);
           return lookup == null || isOpenOrderStatus(lookup.status);
@@ -2610,6 +2624,13 @@ export async function bootstrapCopierRuntime(options: BootstrapCopierOptions): P
             () => broker.listOrders(accountId),
           )
           : [];
+        // Pozice až po orderech: kdyby graf ukázal Filled, pozice je novější
+        // než tento důkaz a otevřená pozice se neschová (review 8. 10.).
+        const positions = await withFlatSweepBudget(
+          budget,
+          'postkontrola pozice ' + accountId + '/' + symbol,
+          () => broker.listPositions(accountId),
+        );
         const netQuantity = positions.find(position => position.symbol === symbol)?.netQuantity ?? 0;
         const postById = new Map([
           ...orders.map(order => [order.brokerOrderId, order] as const),

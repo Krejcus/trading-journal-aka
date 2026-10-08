@@ -415,6 +415,43 @@ describe('V13: konzervativní flat sweep uvnitř eventTail', () => {
     }
   }, 10_000);
 
+  it('fill mezi čtením orderů a pozice: pozice se čte až po orderech a otevřenou pozici odhalí', async () => {
+    const harness = await armedOsoHarness(baseGroup);
+    try {
+      const ids = harness.protectiveIdsByAccount.get(200)!;
+      const targetId = ids[0];
+      const realCancel = harness.broker.cancelOrder.bind(harness.broker);
+      harness.broker.cancelOrder = async (accountId, orderId) => {
+        if (orderId !== targetId) return realCancel(accountId, orderId);
+        throw new Error('cancelOrder rejected: TooLate');
+      };
+      emitFollowerFlat(harness);
+      // Ochranná noha se vyplní přesně během postkontroly orderů (po TooLate čekání).
+      const realListOrders = harness.broker.listOrders.bind(harness.broker);
+      let flipped = false;
+      harness.broker.listOrders = async accountId => {
+        const result = await realListOrders(accountId);
+        if (!flipped && accountId === 200 && harness.broker.cancelRequestCount(targetId) === 0) {
+          const leg = harness.broker.orders().find(order => order.brokerOrderId === targetId)!;
+          if (leg.status === 'working' && result.some(order => order.brokerOrderId === targetId)) {
+            flipped = true;
+            leg.status = 'filled';
+            leg.filledQuantity = leg.quantity;
+            harness.broker.setPosition(200, 'MNQU6', -1);
+            return result.map(order => order.brokerOrderId === targetId ? { ...order, status: 'filled' as const, filledQuantity: order.quantity } : order);
+          }
+        }
+        return result;
+      };
+      await harness.controller.waitForIdle();
+      expect(flipped).toBe(true);
+      expect(harness.controller.status().armed).toBe(false);
+      expect(harness.controller.status().lastError).toContain('pozici');
+    } finally {
+      harness.controller.stop();
+    }
+  }, 10_000);
+
   it('TooLate cancel: order zůstane working i po čekání → dál fail-closed (žádný další cancel)', async () => {
     const harness = await armedOsoHarness(baseGroup, { flatSweepBudgetMs: 3_000 });
     try {
