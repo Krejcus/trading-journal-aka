@@ -80,7 +80,12 @@ import {
 } from '../../server/macCopierDevice';
 import {
   connectionsToLoadAtStartup,
+  createAccountDirectoryWatch,
+  directoryRestartAllowed,
+  EMPTY_DIRECTORY_ERROR,
+  evaluateAccountDirectory,
   evaluateConnectionPoll,
+  failedWithEmptyDirectory,
   loadConnectionDiscoveryState,
   recordConnectionDiscoveryFailure,
   recordConnectionDiscoverySuccess,
@@ -350,7 +355,7 @@ async function runMultiConnectionAgent(): Promise<void> {
     // a discovery to brala jako zdravé načtení (bez dalších pokusů). Prázdný
     // adresář nově objeveného připojení je selhání s backoffem, ne úspěch.
     if (loadOptions.strictDirectory && data.accounts.length === 0) {
-      throw new Error('adresář účtů je prázdný (propfirma účty skryla nebo zavřela)');
+      throw new Error(EMPTY_DIRECTORY_ERROR);
     }
     const accountSpecsByAccountId = Object.fromEntries(data.accounts.map(account => [account.id, account.name]));
     context.displayFeed = makeDisplayFeed(context, data.accounts.map(account => account.id));
@@ -1109,13 +1114,35 @@ async function runLocalAgent(
     controller?.stop();
     return true;
   };
-  const requestSafePairingRestart = () => {
+  /**
+   * Restart kvůli novým/zmizelým účtům (8. 10. 2026). Po breachi worker
+   * typicky čeká na Kontrolu pozic a má „divergentní“ zmizelé účty, takže
+   * přísná brána párování (flat + reconciled) by restart nikdy nepustila
+   * a nové účty by nenačetl. Restart DISARMED workeru ale nic neztrácí:
+   * incident, outbox i skupina jsou durable a start je read-only. Stačí
+   * proto vypnutá kopírka a klidový stav (žádný broker write, recovery,
+   * auto-close ani rozpracovaná událost).
+   */
+  const canRestartForDiscovery = () => {
+    const status = controller?.status();
+    return status != null
+      && status.started
+      && !status.armed
+      && !status.stuckOutbox
+      && status.stuckOperations.length === 0
+      && controller?.connectionRenewalBlocker() == null;
+  };
+  let restartGate: () => boolean = () => canSafelyRestartLocalCopierAgent(controller?.status());
+  const requestSafePairingRestart = (gate: 'pairing' | 'discovery' = 'pairing') => {
+    // Párování (nová identita zařízení) vyžaduje dál přísnou bránu.
+    if (gate === 'pairing') restartGate = () => canSafelyRestartLocalCopierAgent(controller?.status());
+    else if (!pairingRestartPending) restartGate = canRestartForDiscovery;
     if (pairingRestartPending) return;
     pairingRestartPending = true;
     const check = () => {
       pairingRestartTimer = null;
       if (stopPromise) return;
-      if (!canSafelyRestartLocalCopierAgent(controller?.status())) {
+      if (!restartGate()) {
         pairingRestartTimer = setTimeout(check, 1_000);
         pairingRestartTimer.unref();
         return;
@@ -1125,7 +1152,7 @@ async function runLocalAgent(
         delayMs: 750,
         restart: () => {
           if (stopPromise) return;
-          if (!canSafelyRestartLocalCopierAgent(controller?.status())) {
+          if (!restartGate()) {
             pairingRestartTimer = setTimeout(check, 1_000);
             pairingRestartTimer.unref();
             return;
@@ -1500,6 +1527,62 @@ async function runLocalAgent(
       let pollInFlight = false;
       let lastPollWarningAt = 0;
       let manifestRemovalLogged = false;
+      const directoryWatch = createAccountDirectoryWatch();
+      /**
+       * Read-only sonda adresáře účtů připojení (8. 10. 2026). Nic se z ní
+       * nesměruje — slouží jen k rozhodnutí, zda má smysl bezpečný restart.
+       */
+      const readDirectoryAccountIds = async (
+        getAccessToken: () => Promise<string>,
+        environment: PilotContext['environment'],
+      ): Promise<number[]> => {
+        const data = await loadTradovateAccountData({
+          baseUrl: tradovateApiBaseUrl(environment),
+          accessToken: await getAccessToken(),
+        });
+        return data.accounts.map(account => account.id);
+      };
+      const probeEmptyDirectoryConnection = async (connectionId: string): Promise<boolean> => {
+        try {
+          const probe = await discoveredPilotContext(connectionWatch.device, connectionId);
+          const accountIds = await readDirectoryAccountIds(probe.getAccessToken, probe.environment);
+          if (accountIds.length === 0) throw new Error(EMPTY_DIRECTORY_ERROR);
+          connectionWatch.state = recordConnectionDiscoverySuccess(connectionWatch.state, connectionId);
+          console.log(`${new Date().toISOString()} DISCOVERY připojení ${connectionLabel(connectionId)} má znovu účty (${accountIds.length}); restart, až bude kopírka vypnutá`);
+          return true;
+        } catch (error) {
+          connectionWatch.state = recordConnectionDiscoveryFailure(connectionWatch.state, connectionId, error, Date.now());
+          return false;
+        } finally {
+          await saveConnectionDiscoveryState(connectionWatch.statePath, connectionWatch.state).catch(() => undefined);
+        }
+      };
+      const pollAccountDirectories = async (): Promise<boolean> => {
+        // Za ARM se restart stejně neprovede; adresář se čte jen u vypnuté
+        // kopírky, ať zbytečně nezatěžujeme Tradovate.
+        if (controller?.status().armed !== false) return false;
+        let changed = false;
+        for (const candidate of contexts) {
+          const known = connectionWatch.accountIdsByConnection.get(candidate.connectionId);
+          if (!known) continue;
+          let current: number[];
+          try {
+            current = await readDirectoryAccountIds(candidate.getAccessToken, candidate.environment);
+          } catch {
+            continue; // Chyba čtení není změna adresáře.
+          }
+          const result = evaluateAccountDirectory({
+            watch: directoryWatch,
+            connectionId: candidate.connectionId,
+            knownAccountIds: known,
+            currentAccountIds: current,
+          });
+          if (!result.changed) continue;
+          changed = true;
+          console.log(`${new Date().toISOString()} DISCOVERY účty připojení ${connectionLabel(candidate.connectionId)} se změnily +[${result.added.join(',')}] -[${result.removed.join(',')}]; restart, až bude kopírka vypnutá`);
+        }
+        return changed;
+      };
       const pollConnections = async () => {
         if (pollInFlight || stopPromise) return;
         pollInFlight = true;
@@ -1514,6 +1597,14 @@ async function runLocalAgent(
             state: connectionWatch.state,
             now: Date.now(),
           });
+          // Připojení s prázdným adresářem se nejdřív ověří sondou; restart
+          // jen když propfirma účty zase ukazuje (žádná smyčka restartů).
+          const added: string[] = [];
+          for (const connectionId of decision.added) {
+            if (!failedWithEmptyDirectory(connectionWatch.state, connectionId)
+              || await probeEmptyDirectoryConnection(connectionId)) added.push(connectionId);
+          }
+          decision.added = added;
           connectionWatchPending = decision.added;
           if (decision.removed.length > 0 && controller?.status().armed) {
             // Za ARM vypne kopírku jen odpojená propfirma, jejíž účty skupina
@@ -1550,9 +1641,15 @@ async function runLocalAgent(
           }
           if (decision.added.length > 0 || removedDiscovered.length > 0) {
             if (!pairingRestartPending) {
-              console.log(`${new Date().toISOString()} DISCOVERY změna připojení +[${decision.added.map(connectionLabel).join(',')}] -[${removedDiscovered.map(connectionLabel).join(',')}]; restart, až bude kopírka vypnutá a flat`);
+              console.log(`${new Date().toISOString()} DISCOVERY změna připojení +[${decision.added.map(connectionLabel).join(',')}] -[${removedDiscovered.map(connectionLabel).join(',')}]; restart, až bude kopírka vypnutá`);
             }
-            requestSafePairingRestart();
+            requestSafePairingRestart('discovery');
+          } else if (!pairingRestartPending
+            && directoryRestartAllowed(connectionWatch.state, Date.now())
+            && await pollAccountDirectories()) {
+            connectionWatch.state = { ...connectionWatch.state, directoryRestartAt: Date.now() };
+            await saveConnectionDiscoveryState(connectionWatch.statePath, connectionWatch.state).catch(() => undefined);
+            requestSafePairingRestart('discovery');
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

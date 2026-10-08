@@ -382,6 +382,53 @@ export async function startLocalCopierExecutionAgent(
         },
       };
     }
+    if (next.id !== group.id && mode === 'activate' && !reconfigurationRequest.retireMissingOldGroup
+      // Bez read-only dry-runu nejde absenci doložit — beze změny chování.
+      && options.previewGroupAccounts) {
+      // 8. 10. 2026: přepnutí na JINOU skupinu, když stará má účty, které už
+      // v Tradovate nejsou (breach). Dřív přepnutí vyžadovalo i staré účty
+      // a uživatel novou skupinu bez ručního zásahu nezapnul. Vyřadí se jen
+      // účty, které read-only dry-run teď v OAuth nenajde; nová topologie je
+      // nesmí obsahovat a sama projde plným flat preflightem.
+      const nextIds = new Set(copyGroupAccountIds(next));
+      const previousIds = copyGroupAccountIds(group);
+      const candidates = startupRepair?.groupId === group.id
+        ? [...startupRepair.unavailableAccountIds]
+        : previousIds.filter(accountId => !nextIds.has(accountId));
+      if (candidates.length > 0) {
+        // Fail-closed: selhání dry-runu přepnutí odmítne.
+        const probe = await previewAccounts({ required: [], optional: candidates, inactiveOptionalAsMissing: true });
+        const missing = new Set(probe.missingOptional);
+        const unavailable = candidates.filter(accountId => missing.has(accountId));
+        const partial = startupRepair?.groupId === group.id;
+        if (partial && unavailable.length !== candidates.length) {
+          throw new Error(
+            `Účty ${candidates.filter(accountId => !missing.has(accountId)).join(', ')} staré skupiny jsou v Tradovate znovu dostupné; worker se za chvíli sám restartuje a načte je. Zkus to znovu za pár minut.`,
+          );
+        }
+        if (unavailable.some(accountId => nextIds.has(accountId))) {
+          throw new Error(`Nová skupina obsahuje nedostupné účty ${unavailable.filter(accountId => nextIds.has(accountId)).join(', ')}; odeber je.`);
+        }
+        const fullRetirement = !partial && unavailable.length === previousIds.length;
+        if (!partial && unavailable.length > 0 && !fullRetirement) {
+          // Mix dostupných a zmizelých účtů mimo režim opravy: worker zmizelé
+          // účty zachytí hlídáním adresáře a po bezpečném restartu je vyřadí.
+          throw new Error(
+            `Účty ${unavailable.join(', ')} staré skupiny už v Tradovate nejsou. Worker to za chvíli sám zachytí a restartuje se; přepnutí pak půjde. Zkus to znovu za pár minut.`,
+          );
+        }
+        if (partial || fullRetirement) {
+          reconfigurationRequest = {
+            ...reconfigurationRequest,
+            retireMissingOldGroup: {
+              groupId: group.id,
+              accountIds: unavailable,
+              reason: `Přepnutí na skupinu ${next.name || next.id}: účty ${unavailable.join(', ')} staré skupiny nejsou v Tradovate (breached/odpojené); vyřazeny bez broker flat důkazu`.slice(0, 500),
+            },
+          };
+        }
+      }
+    }
     const requested = next;
     const normalized = sanitizeCopyGroups([next]);
     if (!normalized || normalized.length !== 1) {
